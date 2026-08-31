@@ -1,5 +1,5 @@
 ---
-title: The envel  type/payload only determines the validation range, and the rest is the reservation name
+title: The envelope  type/payload only determines the validation range, and the rest is the reservation name
 status: accepted
 date: 2026-06-11
 opened: 2026-06-04
@@ -23,9 +23,9 @@ open-question protocol-precisification, 2026-06-04
 
 Considered Options:
 
-|||Japanese term|
+|||the relevant entry|
 |----|------|------|
-| A |Only the extent demonstrated by real consumers, and the rest are reserved names|Contact Us|
+| A |Only the extent demonstrated by real consumers, and the rest are reserved names|permission|
 | B |Completed on the desk first|The actual situation of the SDK/implementation and the risk of being created (same as “on-desk precedence” rejected at the time of vote)|
 | C |See the confirmation and proceed with provisional|waiver of Phase 1.5|
 
@@ -38,7 +38,7 @@ A real consumer (Clients client) in a varette, actually flowing wire
 ## Decision
 
 `type`**close enum**and payload type only for proven `state_change`
-Contact Us `log` / `permission_request` / `result`**Reservation**and
+permission `log` / `permission_request` / `result`**Reservation**and
 payload adds to the implementation of the use phase.
 - 3 types of messages (wrapper →   `envelope`,
 `snapshot` / `envelope`)
@@ -61,13 +61,13 @@ The purpose (protocol confirmation by real consumers) is completed.
 ### Negative
 
 `log`/`permission_request`/`result`
-Leave undecided right, and try to repairJapanese termーHome at each phase.
+Leave undecided right, and try to repairthe relevant entry-Note at each phase.
 
 ### Neutral
 
 - Transport layer (Channels V2)
 ([ADR-0009](0009-client-transport.md)) This ADR version is
-App layer envel..
+App layer envelope..
 
 ## Alternatives Considered
 

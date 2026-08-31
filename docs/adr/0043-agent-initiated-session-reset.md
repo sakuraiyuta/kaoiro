@@ -15,9 +15,9 @@ related_adrs: [21, 22, 33, 36, 44, 55]
 
 Accepted (2026-07-28,[#158 comment-5384365227](https://github.com/sakuraiyuta/kaoiro/issues/158#issuecomment-5384365227)
 [#158 comment-5384365348](https://github.com/sakuraiyuta/kaoiro/issues/158#issuecomment-5384365348)
-Phase B)Home
+Phase B)Note
 [Phase-28-agent-initiated-session-ops](../plans/phase-28-agent-initiated-session-ops.md#phase-c--自発-newclear-詳細化-2026-07-28クロエ裁定)
-Contact Us
+permission
 
 ## Context
 
@@ -57,7 +57,7 @@ control is another route.
 
 Agent A does not introduce the dedicated protocol / tool that directly requires the agent B reset. Standing
 director I don't make it. operator nominates director according to required and instructed agent
-Home**Home**call the tool and add it to the existing separation that the operator approves each time.
+Note**Note**call the tool and add it to the existing separation that the operator approves each time.
 
 ### D3 — F6 for self-initiated reset deferred execution
 
@@ -88,10 +88,10 @@ Each time a dialog appears.
 
 Master Resolution (2026 -28):**Authorization depends on the permission mode of the agent**
 It is a formal specification. D4's "auto-agent, Persistent, and Agent Self-approved"
-"Does not have a unique auto-Japanese term mechanism that the kaoiro side bypasses mode"
+"Does not have a unique auto-the relevant entry mechanism that the kaoiro side bypasses mode"
 the meaning. auto-approval given by mode itself is the agent
 The agent is valid as a part of the autonomy given to and requires strict approvals.
-The operator restores gate by setting mode to `default`. Japanese term
+The operator restores gate by setting mode to `default`. the relevant entry
 Semantics canUseTool including `request_compact` / `send_to_agent`
 Common to all tools via.
 
@@ -122,7 +122,7 @@ I know.
 
 ### Neutral
 
-- Codex does notJapanese term `request_session_reset`. wrapper
+- Codex does notthe relevant entry `request_session_reset`. wrapper
 MCP tool path.
 - 2026 2028 Update: Keep the above private by actual survey of issue #246. `codex exec`
 approval axis does not have a per-request approval path in `never` fixed

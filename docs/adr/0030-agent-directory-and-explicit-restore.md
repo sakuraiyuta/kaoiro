@@ -59,14 +59,14 @@ Complete before. spawn wrapper
 read entry as `nil` and take off the first race
 Structurally closed order warranty (`SessionPointers` / `PermissionModes`)
 of fire-and-forget).
-  - **envel  upon arrival**update `last_seen` to (Agent s.put).
+  - **envelope  upon arrival**update `last_seen` to (Agent s.put).
 `persona_id` does not change during the session. canonical persona
 `name` / `sprite_set`, injected personality prompt)
 Don’t save to this store — every time `persona_id` is present `PersonaAssets`
 restore / directory projection
 wrapper startup payload).DE0
 by rename(issue #187 step 3, `AgentDirectory.rename/2`)
-overwrite** — this is not an implicit  with envel  arrival
+overwrite** — this is not an implicit  with envelope  arrival
 ADR-0029 F9 is an explicit mu  by the operator operation.
 If you change the target (zip update origin personality prompt),
 
@@ -80,7 +80,7 @@ Do not send to viewer (D10). "offline display" on client side is directory-only
 (Agent entrys entry, = server restart) and disconnected
 (the state=disconnected, = wrapper alone, due to hot reload)
 integration and provide a restore UI in one offline section — of failure
-Don’tUX UX on the way out (appended 2026 ). Home
+Don’tUX UX on the way out (appended 2026 ). Note
 - **D5 (Restore UX)**: dashboard two buttons in dashboard:
   - ****: "Restore previous state" in the header or setting menu — offline entry
 Each resume-spawn is fired se tially.
@@ -90,7 +90,7 @@ Each resume-spawn is fired se tially.
 No wire.
 - **D6(entry lifecycle)**:
 - Added: spawn only.
-- Update: only last seen when envel  arrives.
+- Update: only last seen when envelope  arrives.
 - Delete: only remove the agent from the ledger on Dashboard
 operation). Auto GC is not in the initial scope (in the future: last seen is not exceeded N days,
 Delete by explicit approval).**2026  **`delete_agent` handler
@@ -111,12 +111,12 @@ to `host_id_of/1`, so host id is not required.
 AgentDirectory does not store.
 - **D8 (Restore failure handling)**: Unrecoverable factors (host   offline /
 persona pack missing / session JSONL missing = ADR-0014
-Return to client with existing `spawn_result` envel . B  Restoration is Best
+Return to client with existing `spawn_result` envelope . B  Restoration is Best
 Error display on each tile. Special ag ation API
 Don't make it. **Restore button display is `envelope.state === "disconnected"` on client side
 not gate with session id.
 existence) is assigned to determining the debug side, and fail is spawn re t → sticky icon
-surface (appended 2026. ). Home
+surface (appended 2026. ). Note
 
   **Fresh-restore (phase-25, 2026 -23)**: SessionPointer
 cwd / engine / snapshot
@@ -150,7 +150,7 @@ Add to another ADR when config occurs.
 
 - The agent list is not empty even after the server/ server restart, and the operator is
 It can be restored to the whole/  by explicit operation.
-- ADR-0014 A4 "JSONL Japanese term" is maintained and goal is achieved (history permanently unnecessary).
+- ADR-0014 A4 "JSONL the relevant entry" is maintained and goal is achieved (history permanently unnecessary).
 - Implemented with the same DETS pattern as the existing `SessionPointers` / `PermissionModes`
 Low cost (store added + spawn   + reference change + client delivery +
   dashboard UI).
@@ -177,7 +177,7 @@ merge.
 | Option | Why rejected |
 |--------|--------------|
 | `SessionPointers`extension to include persona + last seen|pointer The concept bulges up to identity. ADR-0014 is not compatible with "pointer only, without history"|
-|Persistent Agent s|Contrary to ADR-0014 A4, including up to volatile envel s and history|
+|Persistent Agent s|Contrary to ADR-0014 A4, including up to volatile envelope s and history|
 |Auto resume from server crash|Double-connection risk, deprived of operator decisions, contrary to user policies|
 |New wire for b  restoration`bulk_restore`)Add|Redundant to just call existing restore / resume disconnected one body|
 |entry Auto GC (Remove in N-day)|In the initial scope, the operator may be confusing. Future Options|
@@ -185,7 +185,7 @@ merge.
 
 ## Implementing phase (cut out at roadmap, plan)
 
-- **phase-0**: `AgentDirectory` GenServer + DETS Additional, spawn / envel  arrival
+- **phase-0**: `AgentDirectory` GenServer + DETS Additional, spawn / envelope  arrival
 , `agent_persona/1` replacement, test (`SessionPointers` test template
 
 - **phase-1**: AgentDirectory to join role snapshot

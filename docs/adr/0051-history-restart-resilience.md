@@ -13,7 +13,7 @@ related_adrs: [12, 14, 30, 36]
 
 ## Status
 
-Accepted(2026.08) Home Specification Review 2 patrol (10 m -fix)
+Accepted(2026.08) Note Specification Review 2 patrol (10 m -fix)
 Approve, Master Final Approved
 
 ## Context
@@ -87,7 +87,7 @@ Because there is a spill.
 `in_flight(replay_id, channel_owner)` / `hydrated` boot time
 `unhydrated`
 - **join handshake**wrapper channel join
-Home hydration control)
+Note hydration control)
 `replay_id`** wrapper for the new server.
 Start replay after receiving verdict (current startup unconditional)
 replay does not go to new server opponents — "Unconditional startup replay"
@@ -105,7 +105,7 @@ capability absent) wrapper scoring ID
 replay.
 - **Complete transition CAS**: `history_replay_complete`
 channel owner matches `in_flight`
-Contact Us `in_flight` if the channel of the owner is cut
+permission `in_flight` if the channel of the owner is cut
 Return to `unhydrated` and re-request at reconnection. connectionle old connection
 / complete is ignored in CAS and new connection
 not rewind attempt.
@@ -115,7 +115,7 @@ wrapper replay(`history_reset`)
 Yes.
 - **wrapper side single-flight**: 1 attempt only execution and separate during execution
 When the request comes, it responds with the completion of attempts during the execution.
-- **hydrated disable conditions**(2026 08) Home Q1. Original Edition
+- **hydrated disable conditions**(2026 08) Note Q1. Original Edition
 hole: server**transition with resume session id at the starting point**
 (restore binary session id  ・resume session)
 switch / disconnected resume)
@@ -126,7 +126,7 @@ not. Crash-restart
 The same session does not invalidate because it is already positive.
 
 replay only for current session. `/new``/clear`
-Previous) Reconstruction is not scoped (receptedHomeーHome, D7). Both engine
+Previous) Reconstruction is not scoped (receptedHome-Note, D7). Both engine
 transcript replay
 `wrapper/codex/src/history.ts` + `rollout.ts`).
 
@@ -134,7 +134,7 @@ transcript replay
 
 #### D3-1 per-pane projection contract
 
-Server IA Volatile Index**per-pane projection/upsert API**Home
+Server IA Volatile Index**per-pane projection/upsert API**Note
 replayinglive(D3-3)
 `replay_ia`) shares the same contract. Live display /
 F5 Restoration is responsible for the current "Agentgents sender history +
@@ -143,14 +143,14 @@ DETS fan-out
 - **Live Accept**server**ing  stamp** →
 sender pane + receiver pane
 (peer push)
-`route_inter_agent`**Home**Home
+`route_inter_agent`**Note**Note
 fixed). routing, etc.
 All tests that can be confirmed by **reject, including preflight
 Added to ** before upsert. routing after upsert is onlyerer push
 and the protocol statement that the rejected IA does not remain in pane
-(30-2) and server test pin (Home 2 patrol approve)
+(30-2) and server test pin (Note 2 patrol approve)
 non-blocking note).
-- server envel (`agent_id: "server"`)
+- server envelope (`agent_id: "server"`)
 recipient pane
 - clear filter(D3-4) and final pane cap(D6) are also applied on this route,
 live / replay
@@ -163,15 +163,15 @@ To cause multiple occurrences of the same conversation and the same pane
 
 #### D3-2 Record (append to sidecar)
 
-wrapper envel  `inter_agent_message`
+wrapper envelope  `inter_agent_message`
 append to local sidecar file per ing  stamp (
 `<session-id>.ia.jsonl`
 path Schema is determined by the protocol-inter-agent revision).
 
 - **Receiver pane**: At the time of delivery from server (before S  injection)
-append. The delivery envel  contains the D3-1 numbered stamps
-Home Only sidecar remains phantom when injection failure is accepted ( buted
-as a record of the facts). server Syn  envel  is also received
+append. The delivery envelope  contains the D3-1 numbered stamps
+Note Only sidecar remains phantom when injection failure is accepted ( buted
+as a record of the facts). server Syn  envelope  is also received
 Likewise recorded.
 - **pane**: **transport push**
 record. server is server → stamp number → per-pane projection
@@ -181,8 +181,8 @@ MCP tool result(`send_to_agent` response) is server ack
 not used — the current implementation tool result is a local generation string,
 `wait_for_response=true` does not return toerer reply / timeout
 so if you delay append, you can cross the session generation
-(Home 2 patrol must-fix 3). MCP'serer reply wait is another promise
-Contact Us reject / timeout / ack Loss does not record to sidecar,
+(Note 2 patrol must-fix 3). MCP'serer reply wait is another promise
+permission reject / timeout / ack Loss does not record to sidecar,
 display the result (loss is acceptable, exposed by stderr warn).
 - skip + stderr warn(fail-soft) fsync
 Not required. transcript directory
@@ -193,8 +193,8 @@ session id does not follow sanitize Splink.
 Restore sidecar**Display replay**and usually
 `envelope` `route_inter_agent`
 Re-push to the destination wrapper → cause the SDK re-infusion and not history restore
-To become a conversation reexecution (Home 1 patrol must-fix 1). Also save the receiver
-The sender name envel  cannot be sent to the guard.
+To become a conversation reexecution (Note 1 patrol must-fix 1). Also save the receiver
+The sender name envelope  cannot be sent to the guard.
 
 - New message (name is determined by the protocol revision.) Example: `replay_ia`)
 replay stream`{pane_agent_id, original_envelope,
@@ -263,8 +263,8 @@ Not only Agent s, but also non-consolidated crashes.
 epoch is the same, but there is no lie (the limit is D7 (d)). Restart
 No collision or time.
 - **client**(not simple subst tion — join  , history
-to not drop a legitimate live envel  to reach new connections earlier than push):
-1. Join**live envelJapanese term**Home
+to not drop a legitimate live envelope  to reach new connections earlier than push):
+1. Join**live envelthe relevant entry**Note
 baseline and separation buffer.
 2. `history` push epoch is unmatched with the retention value → destroy the old baseline
 (Target: display log, clearWatermarks, resume replay marker,
@@ -293,7 +293,7 @@ Envel. transcript 200 + sidecar 200
 not 400. The same cap is added to the receiver pane. IA
 cap exemption (issue #102) is abolished.
 - **rollout**: Change over server / wrapper / client
-(Combination 8),**deploy order is not optional**Home Main when mixed
+(Combination 8),**deploy order is not optional**Note Main when mixed
 Deterioration: The new wrapper + old server does not have stamps on ack and is on sidecar
 Unable to record (this window IA is not restored), new server(DETS)
 decommissioned) + old wrapper does not have sidecar
@@ -338,7 +338,7 @@ loss/received failure phantom (without fsync).
 wrapper channel join
 replay   + server   `replay_id`(D2)
 2. W→S replay IA ing  (`replay_ia` temporary, D3-3)
-3. ing st stamp: grant to envel
+3. ing st stamp: grant to envelope
 (Phoenix push reply)
 4. `history` push projection epoch(D4)
 5. `history_reset` `preserve_inter_agent`: Meaning and compatibility period is
@@ -394,21 +394,21 @@ Meta operator Limited delivery (T2) is unchanged.
 |--------|--------------|
 |A:display displayhistory on the server side (#24 reopen)|Replication of transcript becomes the second one, and new drift matching problem with /clear,cap, and replay. The advantage is "offline agent", "history display" and "past session retention" only.|
 |Draft C: Current Status + GhostSpiritification Only|The history disappears after restarting and does not meet the master requirements (the same display of all terminals over restart)|
-|B-1: Injectamaming Text  IA Restore|Long-lasting  ttle handling of text for display and model as serialization format (with format change, past history can not be read, error parsing,   separate tool use shape difference)|
+|B-1: Injectamaming Text  IA Restore|Long-lasting  fragile handling of text for display and model as serialization format (with format change, past history can not be read, error parsing,   separate tool use shape difference)|
 |IA DETS|The implementation cost is zero, but there are exceptions in the "Minimizing State" principle. Select the option to remove the exception at the cost of sidecar (small to medium)|
-|IA replay`envelope`Retransmission by route| `route_inter_agent`re-press to the destination wrapper → re-inject the SDK and re-execution history.`agent_id != topic`guard and also collision (Home 1 patrol must-fix 1)|
-|replay trigger = "displayhistory 0"|After partial replay, unfinished, unfinished, and permanentized the take-off (Home 1 patrol must-fix 2)|
-|startup Unconditional replay maintenance (join ver)|If hydrated, the pairing of the wrapper scoring ID and server scoring ID remains ambiguous (Home 2 must-fix 2)|
-|MCP tool result Used for server ack of sidecar|tool result is a local generation string,`wait_for_response=true`append crosses the session generation (Home 2 must-fix 3)|
-| dedup identity = conversation_id\|turn_number\|pane |server pane notification occurs multiple times in the same conversation and the same pane with turn number=0 fixed (Home 2 patrol must-fix 4)|
-| `preserve_inter_agent`Instant field removal|Old dashboard omitted`true`The old IA remains in the new server reset (Home 2 must-fix 5)|
-|clear wrapper`ts`Comparison|Re clocked clock-skew problem (Home 1 patrol must-fix 3)|
-|epoch Disruption of local|join  live・history Loss to a legitimate live envel  that arrived in the new connection before arrival (Home 1 patrol must-fix 4)|
+|IA replay`envelope`Retransmission by route| `route_inter_agent`re-press to the destination wrapper → re-inject the SDK and re-execution history.`agent_id != topic`guard and also collision (Note 1 patrol must-fix 1)|
+|replay trigger = "displayhistory 0"|After partial replay, unfinished, unfinished, and permanentized the take-off (Note 1 patrol must-fix 2)|
+|startup Unconditional replay maintenance (join ver)|If hydrated, the pairing of the wrapper scoring ID and server scoring ID remains ambiguous (Note 2 must-fix 2)|
+|MCP tool result Used for server ack of sidecar|tool result is a local generation string,`wait_for_response=true`append crosses the session generation (Note 2 must-fix 3)|
+| dedup identity = conversation_id\|turn_number\|pane |server pane notification occurs multiple times in the same conversation and the same pane with turn number=0 fixed (Note 2 patrol must-fix 4)|
+| `preserve_inter_agent`Instant field removal|Old dashboard omitted`true`The old IA remains in the new server reset (Note 2 must-fix 5)|
+|clear wrapper`ts`Comparison|Re clocked clock-skew problem (Note 1 patrol must-fix 3)|
+|epoch Disruption of local|join  live・history Loss to a legitimate live envelope  that arrived in the new connection before arrival (Note 1 patrol must-fix 4)|
 
 ## Related
 
 - Revisedss / ADR: See D8.
--Japanese term plan: [phase-30](../plans/phase-30-history-restart-resilience.md).
+-the relevant entry plan: [phase-30](../plans/phase-30-history-restart-resilience.md).
 -: issue:
   [#24](https://github.com/sakuraiyuta/kaoiro/issues/24)
 (Unadopt),
@@ -418,5 +418,5 @@ Meta operator Limited delivery (T2) is unchanged.
 (replay path),
   [#102](https://github.com/sakuraiyuta/kaoiro/issues/102)
 (Idealed by IA DETS, book ADR)
-- Specification review: Home 1 patrol 2 patrol 2026 2008 (conversation)
+- Specification review: Note 1 patrol 2 patrol 2026 2008 (conversation)
   0b5c31a4).

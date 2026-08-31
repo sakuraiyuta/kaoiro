@@ -60,7 +60,7 @@ subdirectory structure.
 <pack-name>.zip
 ├── manifest.json         # id / name / sprite_set / version / license /
 │                          #  min_kaoiro_version / states[] / …
-├── personality.md        # Personality Prompt
+├── personality.md        # 人格プロンプト本文
 └── sprites/
     ├── idle.png
     ├── thinking.png
@@ -107,21 +107,21 @@ No binding logic just by injecting. common footer
 ADR Appendix D5 (formerly open-question `persona-common-footer`)
 absorbed).
 
-**LINK0 [0045-footer-file-externalization](0045-footer-file-externalization.md)
+**related-link [0045-footer-file-externalization](0045-footer-file-externalization.md)
 implemented)**: `personality + system-footer + user-footer`
 SoT on the footer statement is directly under the footer installation directory (`KAOIRO_FOOTER_DIR`)
 `system-footer.md` / `user-footer.md` When not set, use the built-in default,
-user footer Contact Us
+user footer permission
 "Combination is the responsibility of the server side, wrapper injects the receipt string as it is"
 Attribution does not change.
 
-### F6: auto-watch Home xir FileSystem library
+### F6: auto-watch Note: Elixir FileSystem library
 
 extract cache
 [ADR-0046](0046-persona-cache-relocation.md)
 (accepted).
 
-watchxir `FileSystem` library
+watcher `FileSystem` library
 (fs.notify wrapper.Linux inotify / macOS FSEvents / Windows
 ReadDirectoryChangesW) to event-driven. polling
 Not used. Run manifest rebuild without manual restart.
@@ -147,7 +147,7 @@ extension.
 ### F10: dev/local always assumes minimal server
 
 dev/local
-(auto-start with scripts/dev.sh etc.). CODELINK0 [0002-local-wrapper-websocket-topology](0002-local-wrapper-websocket-topology.md)
+(auto-start with scripts/dev.sh etc.). related-link [0002-local-wrapper-websocket-topology](0002-local-wrapper-websocket-topology.md)
 "wrapper works locally" reads the meaning of "local + local server"
 
 
@@ -160,7 +160,7 @@ Close
 
 ### D5 Appendix: common footer
 
-Japanese term open-question `persona-common-footer`
+the relevant entry open-question `persona-common-footer`
 1 sentence) to be adopted and determined by the ADR (open-question itself is the ADR
 merged into `git rm`:
 
@@ -188,7 +188,7 @@ spawn wrapper is rejected when connecting.
 - 4 Operations that touch three layers per body addition (deposited by fuji)
 
 - The creator can make a persona pack without touching the wrapper repo.
-Since it can be handled as a whole distribution, the distribution Japanese termdle to the ex  creator is lowered.
+Since it can be handled as a whole distribution, the distribution the relevant entrydle to the ex  creator is lowered.
 
 ### Negative
 

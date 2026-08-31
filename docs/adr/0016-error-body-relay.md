@@ -27,13 +27,13 @@ Only display a fixed string. I can not deal with the cause.
 ## Decision
 
 - `result` to payload**`error_message?: string`**Add the wrapper
-Error body**Home**Relay to the client via the command line.
+Error body**Note**Relay to the client via the command line.
 - In addition to (a) SDK/API level error body (500 Overloaded, etc.),
   (b) **End of wrapper process**"Send the last error just before it falls"
 Cover.
 - Client pane `error_message`**Always display**(Typement, summary, etc.)
 not masking).
-- The new envel  type for error is not built (the extension of `result`).
+- The new envelope  type for error is not built (the extension of `result`).
 - Like `result`**operator**
   ([ADR-0012](0012-response-display-and-dashboard-scope.md)).
 
@@ -49,8 +49,8 @@ End subtype (`error_max_turns` / `error_during_execution` /
 `error_max_budget_usd` / `error_max_structured_output_retries`)
 For the body.
 - "Send the last error just before the wrapper process crashes" (b)
-  **Unmounted**Home No process finishes.
-- `error_detail` cuts to 16,384 UTF-8 bytes according to envel  limit
+  **Unmounted**Note No process finishes.
+- `error_detail` cuts to 16,384 UTF-8 bytes according to envelope  limit
 Send The principle of summarizing and masking is kept.
 
 `result` `result` [protocol](../specs/protocol.md)
@@ -79,7 +79,7 @@ Comment
 
 | Option | Why rejected |
 |--------|--------------|
-|New envel  type for error| `result`Extensible, Excess|
+|New envelope  type for error| `result`Extensible, Excess|
 |Display by formatting and abstracting the error body|You can check the cause. Shaper scrapes information|
 |SDK error only.|The main cause of "fall and end"|
 

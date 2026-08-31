@@ -42,7 +42,7 @@ Rust
 `websockets` Lua(neovim)
 The WebSocket layer itself is not standard.
 - Determination: Lua's burden body is WebSocket layer (RFC 6455 client net Lua
-Home**WebSocket**Home WS
+Note**WebSocket**Note WS
 Design the specification of reconnection, heartbeat, request, response correlation (ref), and topic subscription
 and reinvent the channels lifecycle.
 
@@ -53,7 +53,7 @@ There is no endpoint.
 - Wire format**V2 serializer fixed**`vsn=2.0.0`
 [protocol](../specs/protocol.md)
 Refer to the guide + describe the unique topic/event definition.
-- Read-only SSE****(No library maintained onixxir side)
+- Read-only SSE****(No library maintained Elixir side)
 for handwriting). re-issued as open-question when required occurs.
 - Non-JS client is a WebSocket library + Channels V2 frame for each language
 Connection by implementation (see the above library).
@@ -87,4 +87,4 @@ Determine (but the WS layer is equivalent).
 |--------|--------------|
 |Channels (included) + WS WS (2 routes)|Specifications 2 system maintenance burden. Lifecycle specification reinvention is required on the WS side. There is almost no impact on non-JS clients|
 |WebSocket only|Reconnection・Presence・PubSub integration join ref/ref/topic/heartbeat|
-|Read-only SSE|There is no library on theJapanese termxir side. If the demand is unconfirmed, re-issued when required|
+|Read-only SSE|There is no library on theElixir side. If the demand is unconfirmed, re-issued when required|

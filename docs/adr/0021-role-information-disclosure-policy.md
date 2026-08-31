@@ -1,5 +1,5 @@
 ---
-title: viewer / operator Information disclosure of roles — allow-list approach and envel  separate matrix
+title: viewer / operator Information disclosure of roles — allow-list approach and envelope  separate matrix
 status: accepted
 date: 2026-06-22
 opened: 2026-06-22
@@ -30,7 +30,7 @@ ef7b606. remove `ext` for all types in catch-all.
 
 This seamless approach has three structural problems:
 
-1. **New envel  type viewer delivery default unknown**— catch-all
+1. **New envelope  type viewer delivery default unknown**— catch-all
 so the new additional type will include a sub-field in **viewer
 Delivered**. Unless the developer is actively determined to be "this is only operator"
 Fail-open
@@ -53,7 +53,7 @@ issue #46 “viewer role permission”
 ADR-0050
 >
 > This is because only F1 is covered. F2 or later
-> The allow-list approach and envel  separate matrix are active, even after 3 determining
+> The allow-list approach and envelope  separate matrix are active, even after 3 determining
 > Just add:
 >
 > - **This ADR delivers "operator only" to admin.**
@@ -72,23 +72,23 @@ Original Description: Middle roll (admin etc.) is  NI. `operator` = All rights a
 
 ### F2: viewer delivery is allowed-list approach (default for operator only)
 
-server**all envel Alls**explicitly
+server**all envelope Alls**explicitly
 viewer Only the ones viewd are delivered to viewer. viewer
-**Complete removal**(envel  is not pushed, it is removed from snapshot).
+**Complete removal**(envelope  is not pushed, it is removed from snapshot).
 
 `sanitize_envelope_for/2` `agents_channel.ex`
 `:viewer` clause is specified for each type
-Determine). Developers who add a new envel  type are required to viewer
+Determine). Developers who add a new envelope  type are required to viewer
 **Active judgment**(fail-closed).
 
-### F3: envel: type × role matrix
+### F3: envelope: type × role matrix
 
-`agents:lobby` Viewer visibility of events (including envel ) to be delivered on the topic
+`agents:lobby` Viewer visibility of events (including envelope ) to be delivered on the topic
 Defining:
 
 | event / envelope.type | operator | viewer ||
 |---|---|---|---|
-| `envelope` `state_change` |✓ As it is| ✓ `ext`Remove|The origin of grid drawing.`ext`Home`cwd`Remove viewer (automatic cover for future ext items with c -all)`state`fields are required to viewer(`waiting_permission`grid display)|
+| `envelope` `state_change` |✓ As it is| ✓ `ext`Remove|The origin of grid drawing.`ext`Note`cwd`Remove viewer (automatic cover for future ext items with c -all)`state`fields are required to viewer(`waiting_permission`grid display)|
 | `envelope` `permission_request` |✓ As it is|✓ Syn `state_change(waiting_permission)`|viewer`input` / `tool_name` / `request_id`grid presence`state_change`Rewrite`payload={}` / `ext`wrapperbution by removal (from the previous wrapper)`state_change(waiting_permission)`Duplicate with idemic etc.)|
 | `envelope` `log` | ✓ |- Complete removal|ADR-0012|
 | `envelope` `result` | ✓ |- Complete removal|ADR-0012|
@@ -98,10 +98,10 @@ Defining:
 | `history_cleared`(broadcast) | ✓ | ✗ |viewer doesn't see log itself. allow-list Intercept and operator push|
 | `agent_deleted`(broadcast) | ✓ | ✓ |required(Only agent id)|
 
-`permission_request` Syn  subst tion of envel : wrapper
+`permission_request` Syn  subst tion of envelope : wrapper
 `waiting_permission` emit `state_change(waiting_permission)` when transition
 (`host.ts:#apply({kind: "permission_request"})`) viewer
-`state_change` But snapshot is the latest envel
+`state_change` But snapshot is the latest envelope
 `permission_request` overwrites later with a single option
 view subst tion is required for viewer to lose the agent.
 
@@ -113,13 +113,13 @@ Book ADR**Delivery direction only**Target
 
 ### F5: Roll Extension Instructions
 
-To add a new envel  type:
+To add a new envelope  type:
 
 1. In the specification PR, specify whether or not the displayer of the type.
 2. The operator limit is default. viewer `sanitize_envelope_for/2`
 explicitly add a clause to the `:viewer` clause and test the visibility of both rolls
 
-3. If the Japanese term field is on the ext, it will continue to be protected by catch-all ext removal
+3. If the the relevant entry field is on the ext, it will continue to be protected by catch-all ext removal
 (ext is not delivered to viewer even if it is view type).
 
 ### F6: agenter directory
@@ -137,7 +137,7 @@ the request that the agent reads and delegates the status of the agenter,
 One allow-list does not protect the other. Both judge independently.
 
 **F  — directoryer directory is also a allow-list approach.**`directory_entry/4`
-Only the specified field will appear between the agent. envel  `ext`
+Only the specified field will appear between the agent. envelope  `ext`
 Dispensing implementation is prohibited (F2 fail-closed). allow-list
 **Apply to nested hierarchy**`ext`
 Assemble new map projected only canonical key and unknown nested key
@@ -181,7 +181,7 @@ identifiers exceed their scope. It is a judgment that it does not come out becau
 conversation id Don’t have concluded here about confidentiality. Trust
 Reassessment of the boundary itself is included in the future item of F6-6.
 
-**F6-6 — the basis and re-evaluation of validity (issue #187).**Japanese term
+**F6-6 — the basis and re-evaluation of validity (issue #187).**the relevant entry
 Originally, kaoiro is a closed system under a single operator, anderer is
 Interdisciplinary visualization of operation status based on the same human-started agent
 The risk of exposure is smaller than the convenience of reducing intervention
@@ -193,8 +193,8 @@ Phase A (identity + admin role, issue #187 / #188)
 Part — start to break down — the premise of “the same human-started agent”.
 principal is type-separation to user / agent (D1), user side contains viewer
 has multiple roles. Context of ADR-0050
-Japanese termose that condition is fired, and issue #187Japanese term clause is
-Contact Us Therefore, the book section does not write an exception, but actually
+the relevant entryose that condition is fired, and issue #187the relevant entry clause is
+permission Therefore, the book section does not write an exception, but actually
 Re-evaluate.
 
 **Reassessment conclusions.** [ADR-0050](0050-principal-model-and-graded-access-control.md)
@@ -253,15 +253,15 @@ F6-3 / F6-8 Enumeration → Test to cover the visibility of both sides.
 
 ### F7: HTTP endpoint gate role (issue #232, 2026 28)
 
-F1 to F6 is supported by `agents:lobby` (WS envel ) anderer directory.
+F1 to F6 is supported by `agents:lobby` (WS envelope ) anderer directory.
 **HTTP endpoint also follows the same fail-closed principle**: New endpoint
 If you can return subtle information, you can set the operator/admin only by default and viewer
 Disclosing is expressly determined separately (F2's "New output is the default operator only"
-WS envel
+WS envelope
 
 Current target: `GET /api/personas/:id` (persona pack manifest.json)
 All metadata + personality.md .). custom pack personality.md
-system prompt to getJapanese termrietary operation instructions
+system prompt to getthe relevant entryrietary operation instructions
 operator/admin (director decision, 202628)28). Viewer
 In the future, the byte limit of personality.md (as S-232-1)
 (issue #232)
@@ -283,9 +283,9 @@ Anonymous/viewer/operator/admin
 
 ### Positive
 
-- viewer**fail-closed**Home New type Accident in addition
+- viewer**fail-closed**Note New type Accident in addition
 Prevent structure.
-- `permission_request` envel  `tool_name` / `request_id` viewer
+- `permission_request` envelope  `tool_name` / `request_id` viewer
 A leak (blocks the guess path of the tool used by operator).
 - The specification of the viewer roll can be read in the list (threat-model.md / protocol.md
 also reflected).
@@ -312,8 +312,8 @@ including).
 | Option | Why rejected |
 |--------|--------------|
 |Keep current catch-all connections|The viewer leak continues when new type is added. Structural problems that do not notice until an accident occurs|
-| `permission_request`envel `input`(current)| `tool_name` / `request_id`Def -in-depth|
-|Viewer`permission_request`Home**Completely**Remove from snapshot|Recent Posts`permission_request`The agent disappears from the grid of the viewer. `state_change`adopt to keep grid consistency in subst tion|
+| `permission_request`envelope `input`(current)| `tool_name` / `request_id`Def -in-depth|
+|Viewer`permission_request`Note**Completely**Remove from snapshot|Recent Posts`permission_request`The agent disappears from the grid of the viewer. `state_change`adopt to keep grid consistency in subst tion|
 |3 Rolling (admin / operator / viewer)|.NI 2 rolls in the current function. ADR~~**With) rejected (2026 (2014, issue #188).**[ADR-0050](0050-principal-model-and-graded-access-control.md) D2 decided to 3 value. See  F1 revisions|
 
 ## Related

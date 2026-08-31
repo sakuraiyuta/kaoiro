@@ -39,7 +39,7 @@ Have a look (asset). server agent undependent is maintained.
 Content  + Version)+**content-addressed static file**.
 ed URLs are unchanged and cache indefinite, and the client is different
 Synchronize increment.
-- Bulk archive**Japanese termーHomerate once when uploading**Save
+- Bulk archive**the relevant entry-Homerate once when uploading**Save
 (No on-demand compression).
 - **Step Introduction**: The first step is directly placed by the administrator to the left data directory
 (Deliverybution only) Upload API (verification: zip-slip / size limit / MIME
@@ -61,7 +61,7 @@ None
 - Responsibilities for asset storage, manifest generation and upload verification on server
 Close
 - Upload API is a roll design of RBAC (with ADR  API)
-Contact Us
+permission
 
 ### Neutral
 

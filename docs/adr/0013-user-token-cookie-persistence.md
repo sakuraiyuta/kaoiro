@@ -19,10 +19,10 @@ Accepted
 
 Dashboard (`dashboard/`, Svelte) is a user  (ADR-0011)
 `history.replaceState` to receive and receive the URL with `?token=…`
-The address bar has been removed, and it has been kept only in JS memory.  Japanese term
-Home**Reloading the browser loses both URL and memory s**,
+The address bar has been removed, and it has been kept only in JS memory.  the relevant entry
+Note**Reloading the browser loses both URL and memory s**,
 `Auth.client_role/1` fail-closed(ADR-0011,
-Issue #28) ThePetsーKung Layer layer was unmounted state (issue #45).
+Issue #28) ThePets-Kung Layer layer was unmounted state (issue #45).
 
 :
 
@@ -46,12 +46,12 @@ httpOnly・SameSite=Lax has already been configured. No new cookies or manual pa
 2. **Storage = Add the session to the session and encrypt the session**(`encryption_salt`
 Add). `connect/3` and `/session/refresh` are `Auth.client_role/1`
 To reverify**Revocation reflects in the following connection/refresh**Cookies by encryption
-ThePetsーJapanese term is hidden even on the jar (the limit below is the immediate elimination of the active socket).
-3. **Expiry Date = `max_age` 3 Day Riding Window**Home Open SPA
+ThePets-the relevant entry is hidden even on the jar (the limit below is the immediate elimination of the active socket).
+3. **Expiry Date = `max_age` 3 Day Riding Window**Note Open SPA
 `GET /session/refresh` is reissued by tapping on the regular (12h) → **Open
 Not expired**. After closing/cutting, expire in 3 days from last update.  limit
 Not available.
-4. **2 paths to exchangecookies to cookies**Home (a) prod = `GET /?token=…`
+4. **2 paths to exchangecookies to cookies**Note (a) prod = `GET /?token=…`
 `RootRedirect` (P .Session) → `put_session` → Clean
 `/index.html` to 302 (the SPA does not remain in SPA or address bar).
 (b) SPA is not via RootRedirect because dev = Vite( 73) delivers SPA
@@ -69,9 +69,9 @@ Review).**The  itself does not appear in JS**(Cannot be restored from the ticket
 The first load (`?token=` Yes) is connected withion param, and the cookie is
 Set. prod is the same origin directly connected to the cookie to take the WS session
 Fallback is also effective.
-6. **secure flag = prod only**Home Existing`force_ssl`(`rewrite_on:
-   [:x_forwarded_proto]`)Japanese term,`Application.compile_env(:kaoiro_server,
-   :session_secure, false)`Home`prod.exs`Home`true`Home dev(http localhost)
+6. **secure flag = prod only**Note Existing`force_ssl`(`rewrite_on:
+   [:x_forwarded_proto]`)the relevant entry,`Application.compile_env(:kaoiro_server,
+   :session_secure, false)`Note`prod.exs`Note`true`Note dev(http localhost)
 false. CSRF is `check_origin` (`url` host default) of SameSite=Lax + prod
 .
 
@@ -114,4 +114,4 @@ No existing sessions.
 |cookie httpOnly cookies| `connect_info: [:x_headers]`Manual parsing. Existing session|
 |only role in session (token non-retention)|The expired cookie does not expire. Prioritize immediate revalidation|
 |Only sign  (no encryption)|You can read plain s from the cookie jar. operator is encrypted and confidential|
-|limit expiration date|Contrary to the operational requirements of "Un.ed"  Japanese term only adopt|
+|limit expiration date|Contrary to the operational requirements of "Un.ed"  the relevant entry only adopt|

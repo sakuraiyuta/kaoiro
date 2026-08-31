@@ -20,7 +20,7 @@ Accepted (2026-16-16, Master Resolution → Fuji orchestration).
 
 `ext.context` (`{used_tokens, max_tokens, used_percentage}`) is #16
 Claude Code adapter derives from `Query.getContextUsage()` and stamps
-Home `AgentDetail.svelte` `ctx` lines to placeholders to reach the SDK response
+Note `AgentDetail.svelte` `ctx` lines to placeholders to reach the SDK response
 Fixed display of "acquired after initial response".
 
 The following breakdown was confirmed in Fuji review (2026 -16, conversation `f4834340`):
@@ -54,7 +54,7 @@ Add the UI to determine the following:
 
 - **absent**non-display (rolling upgrade)
 prevent; do not confuse absent and `false`)
-- **explicit `false`**(adapterJapanese terms non-response) → "unsupported" display
+- **explicit `false`**(adapterthe relevant entrys non-response) → "unsupported" display
 - **explicit `true`**+ `ext.context` Unarrival → "Acquired" placeholder
 - **explicit `true`**+ `ext.context` Arrival → Existing meter
 
@@ -102,8 +102,8 @@ Not supported by grep 0.
 - Added `SessionCapabilitiesExt.supports_context_usage?: boolean`
 (protocol/src/index.ts). The same open-schema extension as the existing 5 field.
 `ext.context`
-`used_percentage`)**No change**Home Backward compatibility.
-- framexir (`wrapper_channel.ex` frame inspection / `agents_channel.ex`)
+`used_percentage`)**No change**Note Backward compatibility.
+- frame (`wrapper_channel.ex` frame inspection / `agents_channel.ex`)
 viewer secrecy) does not change to treat ext to opaque. Existing viewer hidden test
 (`agents_channel_test.exs:1041-1085`) is non-re  with shape change.
 
@@ -158,12 +158,12 @@ Rolling upgrade
 path to projection. Current status   Not confirmed.
 - Manual refresh path for context usage (current fire-and-forget only). UI
 The request to add the refresh button is out of scope phase-21 (Fuji review S10).
-- envel  contract test / JSON schema introduced. scope For expansion
+- envelope  contract test / JSON schema introduced. scope For expansion
 (Fuji review O11)
 
 ## References
 
-- Original conversation: `f4834340` (kuroe ↔ Home kickoff), `fb40967b` (implementation orch)
+- Original conversation: `f4834340` (kuroe ↔ Note kickoff), `fb40967b` (implementation orch)
 pending-permission authoritative source
 Example of pattern)
 - ADR-0034 F3: Principle that does not use the engine name to determine function availability

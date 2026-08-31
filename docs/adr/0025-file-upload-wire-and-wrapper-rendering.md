@@ -20,7 +20,7 @@ Accepted
 [ADR-0020](0020-dashboard-battery-included-client.md)(battery-included)
 Adding new public protocol surfaces from the dashboard
 File attachment (image / text / PDF / Office) to Claude Code
-Contact Us #52 issue The body has four decisions
+permission #52 issue The body has four decisions
 14 F decisions in my-spec-elicitation.
 
 Design Center:
@@ -72,7 +72,7 @@ OQ5
 #### #108 Supplement (2026 -23, Master approval): Codex`local_image`s
 
 Codex SDK 0.144.1
-`local_image` block codex wrapper**Image only**Home
+`local_image` block codex wrapper**Image only**Note
 wrapper-wrapper temp directory
 directory includes `mkdtemp` (0700), file is 0600, prefix is `agent_id`,
 Start only orphan at the next startup. `image/*` does not have allow-list,
@@ -125,20 +125,20 @@ execution file system — attack surface increase / SDK non-compliant / no appli
 rejected: client-side pre-block(`ext.capabilities` publish)— wrapper knowledge
 with overlapping, wrapper centralization. OQ2
 
-### F9: reject route = new envel  type 2 pieces
+### F9: reject route = new envelope  type 2 pieces
 
 - `attach_rejected { upload_id, reason, detail? }`
 - `instruction_rejected { attachment_ids?, reason, detail? }`
 
 reason enum is a [file-upload spec](../specs/file-upload.md).
-Both envel s are only available
+Both envelope s are only available
 ([ADR-0021](0021-role-information-disclosure-policy.md)).
 
 rejected:
 
 | |Reason|
 |--|--|
-|Existing`result.is_error`Contact Us|Do not use it to keep the meaning of "error at completion of turns"|
+|Existing`result.is_error`permission|Do not use it to keep the meaning of "error at completion of turns"|
 |push reply with reply|current kaoiro does not match fire-and-forget   with server|
 
 ### F10: wrapper fit-to-S  responsibility
@@ -207,8 +207,8 @@ not.
 - protocol is wire neutral (API terminology non-dependent) and the third-party client implementation is wide.
 - Server Basic Principles and Channels
   ([ADR-0009](0009-client-transport.md) / ADR-0020 F3).
-- The rejection at failure is expressed in the new envel  and does not stain the semantics of the existing result.
-- Supports a wide variety of files (sJapanese term / design / large paper) with a tolerance of 128 MB.
+- The rejection at failure is expressed in the new envelope  and does not stain the semantics of the existing result.
+- Supports a wide variety of files (sthe relevant entry / design / large paper) with a tolerance of 128 MB.
 - Enhanced "kaoiro MUST" as per-arch translation layer.
 
 ### Negative
@@ -231,7 +231,7 @@ Details are aggregated in each F rejected line. Main Features:
 - transport design (containing / separation / binary) — hybrid Adopt in F2
 - buffer place (memory / FS) — memory adopt with F3
 - High-end policy (per type / one unit) — A flat adopt in F4, fit-to-S  completion in F10
-- refusal route (existing result flow / new envel ) — new envel  Adopt in F9
+- refusal route (existing result flow / new envelope ) — new envelope  Adopt in F9
 - cancel UX (ex  op / interrupt extension) — extended adopt with F11
 
 ## Followups

@@ -20,7 +20,7 @@ partially revise F5/D5 (not supersede).
 When drafting
 [#165](https://github.com/sakuraiyuta/kaoiro/issues/165)
 [ADR-0044](0044-coordination-injection-hitl.md)
-Home****I used to accept the tuning, but the s ical trial
+Note****I used to accept the tuning, but the s ical trial
 Because it was a mutual wait that the ADR mechanism was required, the mechanism and
 I separate the sentence and confirm it only. Built-in default
 It is current at the time of drafting, and the statement of the cooperative guidance is the same issue
@@ -30,7 +30,7 @@ Comment
 ## Context
 
 Common footer is always on the system prompt end of all agents
-HomeーJapanese termxir's module attribute when drafting while being a parameter
+Note-Elixir's module attribute when drafting while being a parameter
 `@common_footer`
 was hardcoded. Rebuild and redepro  server for changing one character
 is required.
@@ -82,7 +82,7 @@ View this file with the repository or release and check the default statement.
 
 footer `user-footer.md` in footer prompt
 **Close**to link.
-`preset + personality → system-footer → user-footer` Contact Us
+`preset + personality → system-footer → user-footer` permission
 personal is the same empty line (`\n\n`) as the existing personality / footer binding.
 When it is empty or missing, it will be re ed to "not enough". read error
 Follow (cold start shrinks and keeps the normal value before running).
@@ -114,7 +114,7 @@ cold start is fail-soft (built-in version only + warn) and watch remains invalid
 Start. server does not mkdir (`:ro` premise). Create a directory
 Reboot is required for activation.
 
-### F5:   results always visualize with rebuildJapanese term
+### F5:   results always visualize with rebuildthe relevant entry
 
 Each layer of rebuild
 `input_state=file|missing|empty|read_error` /
@@ -124,7 +124,7 @@ SHA-256 to log at info level
 effective source=built-in). read error adds an absolute path
 (not silent failure). Length warn threshold cannot be set
 (No ground threshold, always warn is ignored). With a notice to hypertrophy
-3-layerJapanese term delivery string tracking (negative below) isJapanese term by number of characters + hash
+3-layerthe relevant entry delivery string tracking (negative below) isthe relevant entry by number of characters + hash
 The theory of length collateral is determined by this
 (The point of the sentence was used asionion-footer-scope at the time of drafting,
 #165
@@ -189,7 +189,7 @@ close).
 |Commit the footer file to the repository|It becomes a collision source because the content changes according to the environment. same as env|
 |Hot-swapping to connection medium-session|ADR-0029 F9 collision with F9|
 |server Only when restarting|Impairs the main purpose of ex ation without the trial and error cost of the sentence|
-|Default Text:`system-footer.md.example`Distribution|Double control of the built-in version and example, resulting in misunderstanding ofJapanese termhronization. F1`priv/`If you embed a real file, you can show the real thing itself|
+|Default Text:`system-footer.md.example`Distribution|Double control of the built-in version and example, resulting in misunderstanding ofthe relevant entryhronization. F1`priv/`If you embed a real file, you can show the real thing itself|
 |Default Text: Reprint to docs|The source is md internal code block, and it collapses and reprints drift|
 |Default Text: Dump with the mix task|execution environment premise (container operation)`docker exec`).`priv/`Alternative to real files|
 |length guard: server warn (L2)|No threshold ground. Always warn is ignored. Alternative to F5 log visualization|

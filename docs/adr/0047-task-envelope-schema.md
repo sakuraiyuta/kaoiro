@@ -1,5 +1,5 @@
 ---
-title: task envel  official name and payload schema
+title: task envelope  official name and payload schema
 status: accepted
 date: 2026-08-04
 opened: 2026-06-16
@@ -9,17 +9,17 @@ related_specs: [protocol, subagent-tasks, agent-sdk-events]
 related_adrs: [10, 15, 19, 48, 49]
 ---
 
-# ADR-0047 — task envel  official name and payload schema
+# ADR-0047 — task envelope  official name and payload schema
 
 ## Status
 
 Accepted (2026.04) kaoiro issue #170).
 [ADR-0019](0019-subagent-workflow-entity-and-task-envelope.md) F2
-. envel. type
+. envelope. type
 
 ## Context
 
-ADR-0019 Home subagent / workflow
+ADR-0019 Note subagent / workflow
 The policy (transport=(i)) to be notified by type has been determined. type
 It was the form of the official name and payload schema. Add to protocol
 [ADR-0010](0010-protocol-precisification.md)
@@ -43,7 +43,7 @@ Start / Update / Complete does not separate type, single type `task`
 The following four must fields are common.
 
 - `agent_id` — parent agent reference (ADR-0019 F1 child entity link).
-envel  A scene that matches `agent_id` of the outer frame, but is taken by payload alone
+envelope  A scene that matches `agent_id` of the outer frame, but is taken by payload alone
 payload to be self-contained with   consolidation and snapshot.
 - `task_id` — unique task ID within the parent session. ing  Length limit
 (256 byte) is part of the wire contract, but the
@@ -63,7 +63,7 @@ Different fields for each kind SDK
 
 ### F4: `task_type`expandable enum
 
-Initial value`subagent` | `workflow`Home Add value in addition to closed enum
+Initial value`subagent` | `workflow`Note Add value in addition to closed enum
 `tasklist` [0049-tasklist-on-task-envelope](0049-tasklist-on-task-envelope.md)
 Additional decision).
 The receiver does not destroy the unknown `task_type` and fallback to the general-purpose task display
@@ -76,7 +76,7 @@ The receiver does not destroy the unknown `task_type` and fallback to the genera
 - The "type and payload" table of the protocol can be supplemented with the formal line, step 1
 (wrapper + protocol)
 - Single type, so the reception side has a touch panel, and the existing type group is designed.
-- #178 (Tasklist) is placed in the same envel  by the extension of `task_type`.
+- #178 (Tasklist) is placed in the same envelope  by the extension of `task_type`.
 
 ### Negative
 
@@ -107,7 +107,7 @@ Does not affect existing clients.
 [0048](0048-task-aggregation-delivery.md)
   [0010](0010-protocol-precisification.md) /
 [0015](0015-protocol-version-stamping.md)
-- Origin: open-question subagent-task-envel -schema (2026-06-16)
+- Origin: open-question subagent-task-envelope -schema (2026-06-16)
 ADR
 
 ## Addendum (issue #170, 2026 2009): F4, non-routed + prompt/output file
@@ -126,28 +126,28 @@ I judged that there is no real benefit just by adding an un. state.
 undocumented `prompt` (instructed to subagent, the contents themselves),
 `output_file` (local file path)
 found to exist. F2/F3
-`task` does not wiring to payload of envel
+`task` does not wiring to payload of envelope
 (`sdkMessageToTask` does not explicitly read both fields). Reason: `prompt`
 `output_file` is
 Expose wrapper host-specific information in the local file system path.
 In the future, this ADR must be revised.
 
-**Home**: kaoiro issue #170 implementation session (Home, 2026.09).
+**Note**: kaoiro issue #170 implementation session (Note, 2026.09).
 
 ## Addendum (issue #170, 2026-08-09): `task_notification`terminal fallback
 
 **Background**F2 `status` `running` / `completed` / `failed` /
 `stopped`, but `task_notification` actually carries the SDK raw
 `status` There is no guarantee that the string fits in this 4 value (S  version difference·
-future value added). External review (Home round1 M2)
+future value added). External review (Note round1 M2)
 Noted that `status` was simply defeated `null` (=ignored) ——
-`task_notification` is the only three kind of F1**End notification**Home
+`task_notification` is the only three kind of F1**End notification**Note
 `started`/`updated`
 `tasks` Continue to remain on the table, and the number of simultaneous execution count is not lowered (zHomee
 task). "`task_notification` is the end of the ADR first F2"
 Contradicts the premise itself.
 
-**Contact Us**`task_notification` `status` always ends (`kind: "completed"`)
+**permission**`task_notification` `status` always ends (`kind: "completed"`)
 Handle as: `completed`/`failed`/`stopped`
 If it is used as it is, otherwise (unknown string / non string) is
 `status: "failed"` fallback — fail-visible
@@ -164,5 +164,5 @@ No wire required schema (F2)
 `task_notification`
 not applicable (the plan side is corrected according to this addendum).
 
-**Home**: kaoiro issue #170 external review compatible (Home, 2026 09,
-Home round1 M2)
+**Note**: kaoiro issue #170 external review compatible (Note, 2026 09,
+Note round1 M2)

@@ -49,7 +49,7 @@ agent id connection overwrites with last-write-wins →   local lock,
 is a ** process lifecycle (spawn / stop / restart / monitoring) and session
 Enumeration**Become a management layer. wrapper**`wrapper:<agent_id>`
 Directly connect to the server, and the data path (common event) does not pass ..
-**[ADR-0002](0002-local-wrapper-websocket-topology.md)**Home
+**[ADR-0002](0002-local-wrapper-websocket-topology.md)**Note
 This ADR is a supervisory layer****(not supersede).
 
 D1=B is a case where wrapper ends connection and multiplexes the wrapper group.
@@ -65,7 +65,7 @@ Don’t get it because it requires a large refurbishment of AgentHost.
 ### D3 — Implementing Language / Form = TypeScript / Node, Single `kaoiro-runner`
 
 If D1=A/D2=A, wrapper is only supervised by the Node child.
-config / control envel **Share Mold**High gain. Distribution
+config / control envelope **Share Mold**High gain. Distribution
 [ADR-0018](0018-runner-distribution.md)
 etc.) `kaoiro-runner` Go/R
 Avoid loss of introduction and type sharing.
@@ -99,13 +99,13 @@ The agent binding under the cwd**Validation**(T1/T2/T3,ADR-0014 F6).
 [protocol](../specs/protocol.md)
 Messages, book ADR records decisions).
 
-- ****:Japanese termーJapanese term `runner:<host_id>` (data path `wrapper:<agent_id>` and separate lines).
+- ****:the relevant entry-the relevant entry `runner:<host_id>` (data path `wrapper:<agent_id>` and separate lines).
 `wrapper:` `wrapper:`
 rejected to complicate.
-- **Type**: Same as existing control**Channels**Home envel  `type`
+- **Type**: Same as existing control**Channels**Note envelope  `type`
 rejected to use the data frame to control.
 - ****: Host-specific s (env `host_id:token`,
-[ADR-0011](0011-phase3-reliability-and-auth.md) extended per-entityJapanese termism).
+[ADR-0011](0011-phase3-reliability-and-auth.md) extended per-entitythe relevant entryism).
 host id is fixed. 1 sharedHost is rejected because all host exchanges are required when leaking
 (ADR-0011).
 - **version**: Add new message type to `"0"`
@@ -118,23 +118,23 @@ host id is fixed. 1 sharedHost is rejected because all host exchanges are requir
 
 D3's wrapper and type sharing**wrapper**Body wrapper
 Claude Code CLI version only, but future codex version, host state acquisition / client version
-Home**Package**as an additional plan. TS consumer speaks the same protocol / envel
-For more than three implementations, each implementation starts from protocol.md**Copy**Contact Us
+Note**Package**as an additional plan. TS consumer speaks the same protocol / envelope
+For more than three implementations, each implementation starts from protocol.md**Copy**permission
 (wrapper / dashboard keeps each) breaks the SSOT type-level without drift linear.
 
 Determination:
 
-- Minimum to the repository root**pnpm workspace**Japanese termーHome and sharing packages
-  **`@kaoiro/protocol`**Cut out. Internal = envel / / control message / state agent type
-  - **All wrapper common spawn / CLI contract**Home This is the TS side SSOT.
+- Minimum to the repository root**pnpm workspace**the relevant entry-Note and sharing packages
+  **`@kaoiro/protocol`**Cut out. Internal = envelope / / control message / state agent type
+  - **All wrapper common spawn / CLI contract**Note This is the TS side SSOT.
 - current `@kaoiro/wrapper`(= Claude version) is transferred to a shared package
 Switch to reference.**Rename is added to codex version**(Now only type extraction, no behavior).
   → **2026 -10 Update**: Codex adapter added to [ADR-0032](0032-codex-adapter.md) F1 and rename (`@kaoiro/wrapper` → `@kaoiro/claude-code`) is [phase-13-wrapper-multipackage-restructure](../plans/phase-13-wrapper-multipackage-restructure.md)**execution**(completed)
 - wrapper (`@kaoiro/runner`) and future wrappers consume this shared package.
-- **Limited to Node**Home dashboard(`dashboard/`)
+- **Limited to Node**Note dashboard(`dashboard/`)
 In this work, set up (in the future).
 - Multiple wrapper bundles to a single binary ([ADR-0018](0018-runner-distribution.md))
-The approach is packed in the distribution phase ([#70](https://github.com/sakuraiyuta/kaoiro/issues/70)) as aJapanese termacent point. This decision is only type/package structure.
+The approach is packed in the distribution phase ([#70](https://github.com/sakuraiyuta/kaoiro/issues/70)) as athe relevant entryacent point. This decision is only type/package structure.
 
 ## Consequences
 
@@ -142,14 +142,14 @@ The approach is packed in the distribution phase ([#70](https://github.com/sakur
 
 - Current transport No refurbishment,   keeps it pure management layer (no bottleneck).
 - Crash iso  (others are safe even if one body falls). Use existing wrapper code.
-- wrapper and type (config / control envel.) can be shared and the implementation cost is low.
-- ADRJapanese termーJapanese term2 does not break, so the decision of the direct connection data path remains in one place.
+- wrapper and type (config / control envelope.) can be shared and the implementation cost is low.
+- ADRthe relevant entry-the relevant entry2 does not break, so the decision of the direct connection data path remains in one place.
 
 ### Negative
 
-- server owner fen  +   local lock**Japanese term**
+- server owner fen  +   local lock**the relevant entry**
 - Memory per Memory process is large for 1:1 model.
-- control envel)(spawn / stop / restart / enumerate-sessions)
+- control envelope)(spawn / stop / restart / enumerate-sessions)
 [protocol](../specs/protocol.md)
 
 ### Neutral
@@ -165,7 +165,7 @@ CLI only).
 |--------|--------------|
 |D1=B: pr finishes and multiplexes connection (proxy)|A single point of failure of the data path, transport, large refurbishment, agent, non-dependent principles and tension|
 |D2=B: In  multiple agents into one process|1 Great Renovation and Isolation Loss of AgentHost|
-|D3=b:Japanese termxir|BEAM Overloaded host resident|
+|D3=b:Elixir|BEAM Overloaded host resident|
 |D3=c: Implemented with Go / Rust|No code-based third-language wrapper and type-sharing (rethinkable if the first priority is indirect)|
 |Name`supervisor` |OTP Supervisor|
 |ADR 2 supersede|Since direct topology is maintained with D1=A, supersede refers to the rejected draft D1=B. amend|
@@ -174,12 +174,12 @@ CLI only).
 
 - Revised subject: [ADR-0002](0002-local-wrapper-websocket-topology.md)
 Topology maintains and adds the supervision layer in this ADR).
--Japanese term ADR: [0014](0014-session-resume-and-restore.md)
+-the relevant entry ADR: [0014](0014-session-resume-and-restore.md)
 resume / Summon, [0018](0018-runner-distribution.md) (CO distribution).
 -CO:s: [architecture](../specs/architecture.md),
 [protocol](../specs/protocol.md)(control message),
   [threat-model](../specs/threat-model.md).
 - control schema: #66 ( above "control message schema",
-[protocol](../specs/protocol.md)"eーHome control message".
+[protocol](../specs/protocol.md)"e-Note control message".
 - Phase: Phase 4 ([phase-4-host-runner](../plans/phase-4-host-runner.md)).
 - Origin: issue [#23](https://github.com/sakuraiyuta/kaoiro/issues/23).

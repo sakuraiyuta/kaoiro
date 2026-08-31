@@ -1,5 +1,5 @@
 ---
-title: Added envel (question request / question response) and state waiting question for AskUsertionstion
+title: Added envelope (question request / question response) and state waiting question for AskUsertionstion
 status: accepted
 date: 2026-07-03
 opened: 2026-07-03
@@ -9,7 +9,7 @@ related_specs: [protocol, protocol-inter-agent, agent-sdk-events, threat-model]
 related_adrs: [10, 11, 12, 21, 22]
 ---
 
-# ADR-0027 — dedicated envel  and state for AskUsertionstion`waiting_question`
+# ADR-0027 — dedicated envelope  and state for AskUsertionstion`waiting_question`
 
 ## Status
 
@@ -38,9 +38,9 @@ The return route is confirmed in the technical survey:
 
 ||||
 |---|---|---|
-| A |Existing`permission_request` / `permission_decision`Extend questions and answers|rejected:Structure/deny and structured answers are semantics. 1 In case of a different type, dashboardJapanese terms the drawing in the field sniff, and the meaning of the permission is muddy and drift becomes warmer|
-| B |envel `question_request` / `question_response`and dedicated state`waiting_question`Open| **Contact Us**: Existing protocol`waiting_permission`())`waiting_input`Consistent with the design concept that makes the waiting type* separate state. kaoiro's "state=character" is also chewed and reusable for inter-agent escalate-to-user|
-| C |wire is a special type, but state is`waiting_permission`Contact Us|Partial adopt: state misalignment with existing stateseparation (separate permission/input). However, the part of the “Broker’s plum ” (F  below is included in this ADR)|
+| A |Existing`permission_request` / `permission_decision`Extend questions and answers|rejected:Structure/deny and structured answers are semantics. 1 In case of a different type, dashboardthe relevant entrys the drawing in the field sniff, and the meaning of the permission is muddy and drift becomes warmer|
+| B |envelope `question_request` / `question_response`and dedicated state`waiting_question`Open| **permission**: Existing protocol`waiting_permission`())`waiting_input`Consistent with the design concept that makes the waiting type* separate state. kaoiro's "state=character" is also chewed and reusable for inter-agent escalate-to-user|
+| C |wire is a special type, but state is`waiting_permission`permission|Partial adopt: state misalignment with existing stateseparation (separate permission/input). However, the part of the “Broker’s plum ” (F  below is included in this ADR)|
 
 ## Decision
 
@@ -59,7 +59,7 @@ Add to `wrapper/src/state.ts`. The direction of expression
 
 The truth of the question in pending is `state_change.ext.pending_question`.
 `null` / No pending if not set. Shape
-`{ request_id, questions, ts }` (equivalent to payload of `question_request` envel ).
+`{ request_id, questions, ts }` (equivalent to payload of `question_request` envelope ).
 
 ```json
 {
@@ -71,12 +71,12 @@ The truth of the question in pending is `state_change.ext.pending_question`.
       "request_id": "q-abc-123",
       "questions": [
         {
-          "question": "WhatapproachHomeadoptJapanese term?",
-          "header": "approach",
+          "question": "どの方式を採用しますか?",
+          "header": "方式",
           "multiSelect": false,
           "options": [
-            { "label": "REST", "description": "Redundant" },
-            { "label": "gRPC", "description": "High speed but low cost" }
+            { "label": "REST", "description": "素直だが冗長" },
+            { "label": "gRPC", "description": "高速だが導入コスト" }
           ]
         }
       ],
@@ -86,16 +86,16 @@ The truth of the question in pending is `state_change.ext.pending_question`.
 }
 ```
 
-### F3: `question_request`envel
+### F3: `question_request`envelope
 
 protocol-compatible consistency (same as permission request) and new pending
-`question_request`(envel. `type`) The truth of state
+`question_request`(envelope. `type`) The truth of state
 `ext.pending_question` Both guarantee hronization with wrapper
 `request_id` / `questions` / `ts`). dashboard reads ext.
 
 ### F4: answer`question_response`Channel Events
 
-client → server → wrapper channel event (not envel  `type`)
+client → server → wrapper channel event (not envelope  `type`)
 `permission_decision` Shape:
 
 - client → server: `{ agent_id, request_id, answers, cancelled? }`(operator only)
@@ -105,7 +105,7 @@ client → server → wrapper channel event (not envel  `type`)
 `label` multiSelect is a string that client joins in `", "`. "Other"
 The string is the same. `cancelled: true` is rejected (equivalent to deny).
 
-### F5: wrapper`#canUseTool`brokerJapanese term
+### F5: wrapper`#canUseTool`brokerthe relevant entry
 
 `host.ts #canUseTool`
 Drop to the flow. `AskUserQuestionInput`
@@ -121,7 +121,7 @@ Same as permission, it is invisible from protocol/UX.
 ### F6: viewer delivery follows ADR-0021 allow-list
 
 `question_request` is only available for the operator, and the viewer is completely removed and the grid matching
-Japanese term to `state_change(waiting_question)` (`payload={}` / `ext`)
+the relevant entry to `state_change(waiting_question)` (`payload={}` / `ext`)
 (same as `permission_request`). `ext.pending_question` to ride ext
 "viewer is automatically protected by ext removal in all types" (no additional guard required).
 `question_request` / `question_response`
@@ -130,7 +130,7 @@ Add.
 ### F7: Snapshot Restore
 
 `question_request` does not match state change, but the truth
-`ext.pending_question` to get the latest state change envel
+`ext.pending_question` to get the latest state change envelope
 Restored in the client's snapshot (same as ADR-0022 F5). DETS
 None
 

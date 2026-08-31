@@ -1,5 +1,5 @@
 ---
-title: envel  advertising on session capabilities
+title: envelope  advertising on session capabilities
 status: accepted
 date: 2026-07-11
 opened: 2026-07-11
@@ -9,7 +9,7 @@ related_specs: [protocol, plugin-model, file-upload]
 related_adrs: [22, 25, 32, 33, 35, 36, 37, 40]
 ---
 
-# ADR-0034 — envel advertisement advertising on session capabilities
+# ADR-0034 — envelope advertisement advertising on session capabilities
 
 ## Status
 
@@ -19,13 +19,13 @@ Accepted ([phase-15-wrapper-ux-parity](../plans/phase-15-wrapper-ux-parity.md))
 
 In the actual operation verification after the codex adapter is accepted in [phase-14](../plans/phase-14-codex-adapter.md), it was found that there are multiple "code movement lines that tend to branch function availability with the engine name" on the UI side. Example:
 
-- Composer Attachment (file upload) button: The codex adapter at the time was an accessory open, but if the Code name is "Codex disable", it will be false negative when the codex implements attachments such as image input in the future (SJapanese term side implementation will not be obstructed with old UI only). In the actual phase-14, Codex corresponds to image attachment, and this concern was real.
-- Availability of AskUsertionstion (`ask_user_question` MCP tool): Codex is provided via MCP bridge, but the actual operational plan tier (Free / Go) session and other implementation sessions may cause "not fire in dialog" (Home operation perspective, 2026-11-11 behavior confirmation).
+- Composer Attachment (file upload) button: The codex adapter at the time was an accessory open, but if the Code name is "Codex disable", it will be false negative when the codex implements attachments such as image input in the future (Sthe relevant entry side implementation will not be obstructed with old UI only). In the actual phase-14, Codex corresponds to image attachment, and this concern was real.
+- Availability of AskUsertionstion (`ask_user_question` MCP tool): Codex is provided via MCP bridge, but the actual operational plan tier (Free / Go) session and other implementation sessions may cause "not fire in dialog" (Note operation perspective, 2026-11-11 behavior confirmation).
 -Unable to express variable items in the session unit (the difference between the auth mode / plan tier / wrapper implementation status) only with the engine name.
 
 The risk of false negative/positive that the engine name determining is brought in will always occur as long as the engine evolution continues. Subst tion of the judgment axis from the engine name to the design that judges the function availability by seeing only the capability capability.
 
-The envel  schema ([ADR-0033](0033-permission-model-dual-axis.md)) of phase-14 has already established a pattern to neutralize the engine (`ext.permission`), which extends functionality availability in the same pattern.
+The envelope  schema ([ADR-0033](0033-permission-model-dual-axis.md)) of phase-14 has already established a pattern to neutralize the engine (`ext.permission`), which extends functionality availability in the same pattern.
 
 ## Decision
 
@@ -56,7 +56,7 @@ When not stamp (not provided), the UI is conservatively interpreted as "un ed" (
 
 ### F2 — Initial field
 
-Add the following to `@kaoiro/protocol` envel  type:
+Add the following to `@kaoiro/protocol` envelope  type:
 
 | field |Type||
 |---|---|---|
@@ -65,7 +65,7 @@ Add the following to `@kaoiro/protocol` envel  type:
 | `supports_user_input_dialog` | `boolean` | `ask_user_question`(MCP tool / SDK Special ) When false the AgentDetail question UI system is "unsupported" display|
 | `user_input_modes` | `string[]` (optional) |Permission mode / sandbox`["plan"]`= dialog will fire only in plan mode). empty/unspecified = unconditional|
 
-`supports_model_switch` / `supports_effort_switch` in the additional field has been implemented in Codex with [ADR-0035](0035-codex-model-catalog-and-mid-session-switch.md) F4 and phase-16, and `supports_effort_switch` was also implemented in Claude with #105. `supports_session_reset` / `session_reset_modes` is implemented in [ADR-0036](0036-session-lifecycle-commands.md) F5 and phase-17. The future field (e.g. `supports_cwd_tracking`) can also be added by following the envel  schema + agent-common type in the frame of this ADR.
+`supports_model_switch` / `supports_effort_switch` in the additional field has been implemented in Codex with [ADR-0035](0035-codex-model-catalog-and-mid-session-switch.md) F4 and phase-16, and `supports_effort_switch` was also implemented in Claude with #105. `supports_session_reset` / `session_reset_modes` is implemented in [ADR-0036](0036-session-lifecycle-commands.md) F5 and phase-17. The future field (e.g. `supports_cwd_tracking`) can also be added by following the envelope  schema + agent-common type in the frame of this ADR.
 
 ### F3 — UI Principles
 
@@ -74,11 +74,11 @@ UI does not determine function availability in engine name (`ext.engine`). Suppo
 - Composer attachment button: enabled only when `ext.session_capabilities.supports_attachments === true`
 - AgentDetail / Composer's question UI: `ext.session_capabilities.supports_user_input_dialog === true` only when active, `user_input_modes` is specified and the current mode is not included in the set "Conditional unsupported" display
 
-`ext.engine` remains on envel , but the application is limited to display and log/telemetry only. The engine name is used to determine function availability.
+`ext.engine` remains on envelope , but the application is limited to display and log/telemetry only. The engine name is used to determine function availability.
 
 ### F4 — engine adapter
 
-The `EngineAdapter` interface of `@kaoiro/agent-common` does not add a function  , each adapter constructs a `session_capabilities` directly with the state stamp path (equivalent to `#statusExt`). Reason: Capability is not a “Facts fact” over the session-lifetime, but it is a result of apter implementation + spawn time selection + auth mode, so it is close to the actual form that assembles in the adapter internal and flows to envel..
+The `EngineAdapter` interface of `@kaoiro/agent-common` does not add a function  , each adapter constructs a `session_capabilities` directly with the state stamp path (equivalent to `#statusExt`). Reason: Capability is not a “Facts fact” over the session-lifetime, but it is a result of apter implementation + spawn time selection + auth mode, so it is close to the actual form that assembles in the adapter internal and flows to envelope..
 
 Initial implementation:
 
@@ -87,7 +87,7 @@ Initial implementation:
 
 ### F5 — deprecation / migration
 
-The engine name judgment is prohibited at the time of review, and if the engine name is specified in the existing code, it will be replaced with the ADR judgment when implementing phase-15. There is no unstamp period of `ext.session_capabilities` on envel  (the same PR of phase-15 implements both adapter adapters, so that the fail-closed default on the UI is only the middle state in development).
+The engine name judgment is prohibited at the time of review, and if the engine name is specified in the existing code, it will be replaced with the ADR judgment when implementing phase-15. There is no unstamp period of `ext.session_capabilities` on envelope  (the same PR of phase-15 implements both adapter adapters, so that the fail-closed default on the UI is only the middle state in development).
 
 ### F6 — #108 attachment type addendum (2026-07-23)
 
@@ -100,7 +100,7 @@ urgency low) OQ
 The following two proposals are given, "where the wrapper and client do not have the norm"
 It was undecided.
 
-|||Japanese term|
+|||the relevant entry|
 |--|--|--|
 |A (tentative policy at the time)|If the wrapper is rejected, the client is only an error display. capability does not publish|Knowledge is centralized to the wrapper and there is no addition to the protocol, but UX is "rejected within 1 second"|
 | B |Acceptable type`ext.capabilities`as publish, and client is reflected in disable UI|UX Good and Third-Party Clients are also available, but publish knowledge into two systems to ignore wrapper centralization, and the protocol face is not|
@@ -108,7 +108,7 @@ It was undecided.
 **Decision: Adopted real B.**However, OQ assumed independent fields
 Part of the `ext.session_capabilities` of this ADR, not `ext.capabilities`
 (F2 `supports_attachments`, F6 `attachment_types`)
-Home
+Note
 
 **2 layers intentionally for A-side concerns that “publish knowledge to two systems”
 It is important to be separated. The ability is
@@ -142,7 +142,7 @@ Open-question is not tracked, and is treated as a supplement to F6 when required
 
 ### Negative
 
-- envel  size is slightly different (from several bytes to ten bytes, once per session + only when changing).
+- envelope  size is slightly different (from several bytes to ten bytes, once per session + only when changing).
 - The maintenance burden that implements adapter with each adapter is generated (the degree of additional field). Cover by required stamp detection.
 
 ### Neutral
@@ -154,7 +154,7 @@ Open-question is not tracked, and is treated as a supplement to F6 when required
 
 | Option | Why rejected |
 |--------|--------------|
-|engine by engine name|Codex Evo  false negative / positive, non-expression of session unit difference (the core of Home operation pointing out)|
+|engine by engine name|Codex Evo  false negative / positive, non-expression of session unit difference (the core of Note operation pointing out)|
 |engine registration`HostInfo.engines[]`host-static|session Unable to express unit difference (auth mode / plan tier / spawn time selection).   returns a fixed value at host startup, and deviates from the actual session behavior|
 |Features`EngineAdapter`to interface`capabilities(): CapSet`) Have as|The interface is enlarged. capability is part of the session state, so you want toRoutehronize with the path of state stamp (source-of-truth)|
 |Open with "true equivalent" when not stamp (fail-open)|The adapter implementation leak is "supported" on the UI, and the actual behavior is broken. fail-closed default|

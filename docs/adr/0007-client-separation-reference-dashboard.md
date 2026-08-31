@@ -27,14 +27,14 @@ lose value.
 ## Decision
 
 - Client implementation**separation as another project (repos y)**Server ↔
-Client API**Home and versioning as a public protocol**
-- Main body**Includes a simple dashboard (br er) for reference**Home
+Client API**Note and versioning as a public protocol**
+- Main body**Includes a simple dashboard (br er) for reference**Note
 Svelte 5 + Vite
 Not available Protocol layer (connection, subscription, instructions, approval response) is Svelte non-dependent
 separation to the plain TS module.
 - The simple dashboard is not LiveView, but is the same as the **ex  client.
 Consuming APIs** (dogfooding = protocol reference implementation and calibration validation).
-- Simple dashboard in server settings**Static delivery only off**Contact Us
+- Simple dashboard in server settings**Static delivery only off**permission
 (Channel/API is always valid) Default is ON.
 - The scope is fixed to the minimum (state list, expression, approval, instructions)
   ([non-goals](../specs/non-goals.md)).
@@ -44,7 +44,7 @@ Consuming APIs** (dogfooding = protocol reference implementation and calibration
 ### Positive
 
 - It can be used only by browser and the installation is low.
-- The public API is alwaysJapanese termd with the included client (reference implementation and conformity test).
+- The public API is alwaysthe relevant entryd with the included client (reference implementation and conformity test).
 - The client becomes clear as the third extension following the adapter/filter.
 
 ### Negative
@@ -54,7 +54,7 @@ Consuming APIs** (dogfooding = protocol reference implementation and calibration
 
 ### Neutral
 
-- Connectionapproach is determined by Japanese term Channels
+- Connectionapproach is determined by the relevant entry Channels
   ([ADR-0009](0009-client-transport.md)).
 - The source location of the included dashboard is `dashboard/` (issue #44) of the repo route.
 `server/assets/`, independent pnpm route + independent lockfile). "Included"
@@ -70,4 +70,4 @@ Become a client’s interest.
 |Dashboard implementation with LiveView|Apply to reference implementation without passing through public API|
 |Clients are included in the main unit (MonoRepo)|Unfamiliar with the growth of diverse clients, the core is hypertrophy|
 |Not Included Clients|High proto ing|
-|SvelteKit|Excess SSR/routing mechanism. Home Vite SPA|
+|SvelteKit|Excess SSR/routing mechanism. Note Vite SPA|

@@ -13,7 +13,7 @@ related_adrs: [32, 34, 35, 39, 40]
 
 ## Status
 
-Accepted (2026.-14, master decision).Home
+Accepted (2026.-14, master decision).Note
 [phase-18-claude-model-catalog-live](../plans/phase-18-claude-model-catalog-live.md).
 
 ## Context
@@ -23,7 +23,7 @@ Accepted (2026.-14, master decision).Home
 This is a static snapshot (equivalent to S  0.3.187).
 The role is the initial value of the Claude side catalog referenced in the following three locations:
 
-- `runner/src/config.ts:288` — `engines[].models` of Register envel .   boot
+- `runner/src/config.ts:288` — `engines[].models` of Register envelope .   boot
 When server (Elixir) to engine separate catalog
 - `wrapper/claude-code/src/host.ts:116` — presence `models` field
 - `wrapper/claude-code/src/host.ts:279` — initial value of `AgentHost.#models`. SDK init
@@ -47,7 +47,7 @@ It is effective and can not handle both.
 |Route|Call site|Is the SDK available?|
 |---|---|---|
 | **(i) register path** | `runner/src/config.ts:288` → `dashboard/src/lib/LaunchDialog.svelte` | **In principle impossible**— There is no wrapper process or SDK Query at host connection. You want to spawn to get a catalog, but you need a catalog before spawn (chicken and egg)|
-| **(ii) ext.models route** | `wrapper/claude-code/src/host.ts:116, 279` → `dashboard/src/lib/AgentDetail.svelte` | **Available**— init after`#refreshSupportedModels()`Japanese term|
+| **(ii) ext.models route** | `wrapper/claude-code/src/host.ts:116, 279` → `dashboard/src/lib/AgentDetail.svelte` | **Available**— init after`#refreshSupportedModels()`the relevant entry|
 
 (i) `supportedModels()` because the wrapper process is not yet alive
 There is no room to call. This hen and egg,s are accepted, and the maintenance burden is removed.
@@ -76,7 +76,7 @@ The source of truth of `AgentHost.#models` is completed after the SDK init
 `#refreshSupportedModels()` (`host.ts:1231-1249`) prev
 BOOTSTRAP is treated as "loading equivalent floor".
 Overwrite contract. `state_change.ext.models`
-Contact Us
+permission
 
 ### Codex catalog
 
@@ -107,7 +107,7 @@ is accepted trade-off. This is a new idle agent.
 The source (`AgentDetail.svelte:369` comment) is a thrust to not break and permanent
 Not the best solution. Observation after implementation
 [claude-effort-levels-init-transition](../open-questions/claude-effort-levels-init-transition.md)
-Japanese term
+the relevant entry
 
 ### F6 — retry policy: 3 times automatic + toast 1 degree + silent + manual button always
 
@@ -124,17 +124,17 @@ Recounting
 Auto retry failure does not emit toast
 
 Specific UI placement (retry button position, toast look) is implemented in phase-18-3 PR
-Contact Us
+permission
 
 ### F7 — BootSTRAP reduced PR after SDK upgrade
 
 `wrapper` package `@anthropic-ai/claude-agent-sdk` currently 0.3.162
 installed (`^0.3.162`, lockfile fixed). npm Latest 0.3.208
-SDK upgrade PR**Home**`supportedModels()`
+SDK upgrade PR**Note**`supportedModels()`
 Verify semantic for `model: "default"`. Based on this actual survey results
 BOOTSTRAP PR PR
 
-Avoid simultaneous PR implementation. Home SDK upgrade
+Avoid simultaneous PR implementation. Note SDK upgrade
 to differentiate the effects.
 
 ### F8 — fallback if persisted model identifier is not supported
@@ -169,7 +169,7 @@ is conditional defect based on  "
 `EngineModelInfo` adds `resolved_model?: string` to optional
 Change to 2-pass of `value` full matching → `resolved_model` matching.
 
-canonical**Multi-matching**Home `default` and `opus[1m]`
+canonical**Multi-matching**Note `default` and `opus[1m]`
 This is not an exception, but a default to solve canonical. pass (2)
 Returns all matching lines and folds for each application: membership / persist validation is valid for more than one
 effort domain is an intersection of matching lines (empty if `effort_levels` falls),
@@ -219,7 +219,7 @@ Close the range to the center of Claude wrapper.**Supplement (2026 -31,F9)**: Th
 `EngineModelInfo`Maintenance
 Add `resolved_model`, client is `modelsFrom` projection and model lines
 The display is changed. container type (F4) and server / codex
-Home
+Note
 - The `default` entry is kept safe and "model selection" both before and after init
 Zero state
 

@@ -1,5 +1,5 @@
 ---
-title: dashboard OAuth PersonalJapanese term (Google/GitHub/Nextcloud) + Permission List
+title: dashboard OAuth Personalthe relevant entry (Google/GitHub/Nextcloud) + Permission List
 status: accepted
 date: 2026-07-26
 opened: 2026-07-26
@@ -48,7 +48,7 @@ and `KAOIRO_OAUTH_NEXTCLOUD_BASE_URL`. id + secret
 base url) is only valid for the provider. endpoint
 `url` Configuration:
    `{scheme}://{host}[:{port}]/auth/{provider}/callback`.
-3. **Permission list = text file**Home path
+3. **Permission list = text file**Note path
 `KAOIRO_OAUTH_ALLOWLIST_PATH` Format 1 line 1 entry
 `provider:identifier[:role]`, `#` Comments, empty lines, role omitted
 viewer identifier is google = email (compare),
@@ -83,7 +83,7 @@ In dashboard side displays a word on the login screen.
 
 ### Positive
 
-- role and role grants per individual, andJapanese term removal of permission list is as follows:
+- role and role grants per individual, andthe relevant entry removal of permission list is as follows:
 connect/refresh (maximum 12h) + explicit revoke socket
 In addition to #148 (resolving every operation), #160 (does not operate any changes once)
 The passive socket is also change with change-driven — the ADR
@@ -130,10 +130,10 @@ Known gaps
 "It's right at the moment of operation" is approach, and do not operate the operator once after disqualification
 socket is available only for `AgentsChannel.handle_out` operator.
 etc.) #148 This is a fan-out hotpass every time
-envel  × intentionally because of the cost of reading permission list for each subscriber
-(Home judgment).
+envelope  × intentionally because of the cost of reading permission list for each subscriber
+(Note judgment).
 
-**Contact Us**As a result of re-verification of the view, another approach that does not contain a hot pass has been adopted:
+**permission**As a result of re-verification of the view, another approach that does not contain a hot pass has been adopted:
 
 - `KaoiroServer.OAuthAllowlistWatcher` changes the permission list file
 file system Events (fast path, bordered debounce) and periodic
@@ -164,7 +164,7 @@ The join itself is the last fort because there is a window thatHomes when fired.
 **crash timing is "reconcile"
 or "broadcast partial failure" is only
 checkpoint remains old, after restart (or following periodic reconcile)
-Home**only changed identities**GET OFF
+Note**only changed identities**GET OFF
 (broadcast is idempotent, so it is not working.
 harmless). not "to all sockets in operation" to "identified"
 If the condition is aligned, it can be duplicated.
@@ -187,5 +187,5 @@ may be over disconnected, including legitimate operators
 Editing with Editic rename is recommended, but this is guaranteed only by lowering the probability
 None
 
-Detailed design judgment (Home review, Home approval) is a comment history of issue #160,
+Detailed design judgment (Note review, Note approval) is a comment history of issue #160,
 See `KaoiroServer.OAuthAllowlistWatcher` module doc.

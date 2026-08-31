@@ -13,7 +13,7 @@ related_adrs: [21, 22, 29, 43, 45]
 
 ## Status
 
-Accepted (2026 -28 Weeds, 2026Japanese termー-29 Revised F2 at Master Resolving).
+Accepted (2026 -28 Weeds, 2026the relevant entry--29 Revised F2 at Master Resolving).
 kaoiro issue #87  phase
 
 
@@ -21,7 +21,7 @@ F2**Standing**director 2 hours later
 Submitted
 [#158 comment-5384365227](https://github.com/sakuraiyuta/kaoiro/issues/158#issuecomment-5384365227)
 P5 "Persistent director role is not defined. Every time operator instruction +
-permission broker Inconsistent with each approval. 2026Japanese termー-29 Master Resolved
+permission broker Inconsistent with each approval. 2026the relevant entry--29 Master Resolved
 by F2 to each agent under director whose operator nominates each time
 Revised to the form of "the responsibility is assigned, and the responsibility is autonomy, and the permanent act is
 P5 and not defined
@@ -30,7 +30,7 @@ F1 (futter injection) / F3 (passive dysfunction) does not change from starting p
 
 ## Context
 
-When multiple agents are operated inJapanese term on kaoiro, operator is collaborating each time
+When multiple agents are operated inthe relevant entry on kaoiro, operator is collaborating each time
 Autonomously looking at each other's situation without instructing the way
 (kaoiro issue #87)
 
@@ -51,7 +51,7 @@ Not established.
 
 "Observing the situation of other agents with `list_agents`, judge yourself,
 `send_to_agent`
-LINK0 [0029-persona-server-sot-and-pack-distribution](0029-persona-server-sot-and-pack-distribution.md)
+related-link [0029-persona-server-sot-and-pack-distribution](0029-persona-server-sot-and-pack-distribution.md)
 The server aggregated SoT common footer and launched on kaoiro
 auto-inject with system prompt append to agent**. engine non-dependent
 Claude skill (SKILL.md)
@@ -97,7 +97,7 @@ Adopt. first approve to server
 the `(conversation_id, to)`
 Automatically allow `send_to_agent` for later — only after canUseTool approval
 (server is not yet accepted or rejected/unknown)
-inexJapanese termー review,
+inexthe relevant entry- review,
   [#201](https://github.com/sakuraiyuta/kaoiro/issues/201)
 See — conversation id Alternately, the change of destination after rejection is dialog
 If the runaway guard is still weak,
@@ -119,10 +119,10 @@ issue ([#165](https://github.com/sakuraiyuta/kaoiro/issues/165))
 
 ### Positive
 
-- Operation of the agent group is established without the operator's instructions, andJapanese term operation
+- Operation of the agent group is established without the operator's instructions, andthe relevant entry operation
 The throughput rises.
-- Injection is an extension of the existing SoT mechanism of ADR-0029, and centralized control of theJapanese term side
-Contact Us Because of the passive type, there is noHome cost of the resident mechanism.
+- Injection is an extension of the existing SoT mechanism of ADR-0029, and centralized control of thethe relevant entry side
+permission Because of the passive type, there is noHome cost of the resident mechanism.
 
 ### Negative
 

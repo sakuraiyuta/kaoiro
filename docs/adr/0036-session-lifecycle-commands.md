@@ -26,11 +26,11 @@ Add the deferred reset with the agent's own permission while maintaining the exi
 kaoiro Composer can complement the slash command reported by com, but
 Not interpreted. `/new` and `/clear` reach the wrapper as normal `send_instruction`,
 Codex does not change thread ID or context by just one turn prompt.
-Home measured 2026-11-11. Claude/Codex
+Note measured 2026-11-11. Claude/Codex
 S /execintegration not via, so even if you pass a string to the left side, you can use session lifecycle operation.
 
 
-In Home's actual survey, kaoiro also sends `/new` to see past conversations in the same Codex session
+In Note's actual survey, kaoiro also sends `/new` to see past conversations in the same Codex session
 and session boundary did not occur. Disconnect -> resume
 Verified. Codex native `/new` (display holding + fresh task)
 The meaning difference between `Ctrl+L` and `/delete` is the official specification.
@@ -38,14 +38,14 @@ It is not actual measurement that execution of native command over kaoiro. In th
 The path to null the session ID and make the next turn `startThread()` is unrealized.
 It does not assume that it is established.
 
-### © 2019 Claude Agent SDK`/compact`Japanese term
+### © 2019 Claude Agent SDK`/compact`the relevant entry
 
 In [Phase-28 Track S](../plans/phase-28-agent-initiated-session-ops.md#track-s-実測結果-もも2026-07-28) conducted on 2026-28-28, the Claude Agent SDK 0.3.220 interpreted string `/compact` as CLI native slash command in streaming input mode. Therefore, the above “Claude/Codex does not pass CLI native slash command parser” is limited to the actual measurement of Codex. Claude does not apply this fault.
 
 In [phase-28](../plans/phase-28-agent-initiated-session-ops.md#実機受け入れ結果-あお2026-07-28) of the same day, manual compact via `request_compact` of the agent was also established in the production session. De  two additional points.
 
 - **`compact_metadata.post_tokens` is optional**(`post_tokens?: number`), and there is no guarantee that it always exists. In the actual aircraft, the `SDKCompactBoundaryMessage` of in-process was not the same event on the session jsonl written by CLI, but the expression is different by the fact (field name is different from snake case / camelCase). The implementation that handles compact reductions is correct in-process message and has a path to degrade when `post_tokens` falls.
-- **manual compact is contextual and can reach a few minutes**Home 13.7 sec @ ~22k s @ 168.8 sec @ ~293k s. The UI / tool description of the session lifecycle operation does not promise the required number of seconds, and the expression "running at the next turn boundary" and "complete observation with boundary event".
+- **manual compact is contextual and can reach a few minutes**Note 13.7 sec @ ~22k s @ 168.8 sec @ ~293k s. The UI / tool description of the session lifecycle operation does not promise the required number of seconds, and the expression "running at the next turn boundary" and "complete observation with boundary event".
 
 To start a new conversation while the operator is the same agent/persona/cwd, delete the current agent and
 respawn is required. not text input, but displayhistory, resume pointer,
@@ -76,7 +76,7 @@ arguments (`/new foo`), multiple lines, and attach are not interpreted as sessio
 However, since the error transmission of reserved command is silent, it does not flow to the left side,
 `send_instruction` handler also detects anexact `/new` and `/clear` without attachment,
 `reserved_session_command` For the former client, the upgrade to the dedicated event
-Contact Us Don't get a wrapper to reparse user text. protocol control and model input
+permission Don't get a wrapper to reparse user text. protocol control and model input
 It is because the meaning changes after mixing responsibilities and passing through client/ valid validation.
 
 If you want to send exact string to model for descriptive purposes, code block or escape the beginning
@@ -140,7 +140,7 @@ The difference between the display side is:
 
 - `/new` — keep display projection. `session_boundary` marker
 append at the end, followed by the SDK output. The old log and structured IA are
-- `/clear` — pane display of the agent**empty**Home Normal log and IA bubbles are not distinguished
+- `/clear` — pane display of the agent**empty**Note Normal log and IA bubbles are not distinguished
 all drops and leave only `session_boundary` marker. IA opponent pane #106
 durable ledger because per-pane `ClearWatermarks` hide
 (`InterAgentHistory` DETS) does not delete (the IA remains in the pane of the opponent agent).
@@ -154,7 +154,7 @@ Restore from the host sidecar to per-pane projection. server
 `InterAgentHistory` Remove DETS.
 
 `server` `AgentStates` is the SSOT of the display projection and only the client local store
-Don't getJapanese termd. reconnection. /clear
+Don't getthe relevant entryd. reconnection. /clear
 `SessionResets.confirm_connection/2` returns `SessionStarts.advance_transition/3`
 `{order, display}` to `ClearWatermarks.record/3`
 `adopt_session_start_watermark` and `AgentStates.clear_history_with_boundary/2`
@@ -180,7 +180,7 @@ is a merge semantics that stores the existing session ID, so it is aoperhronous 
 Normal record route updates the latest pointer.
 
 ses session and existing session picker/
-`resume_session` Don’t make a dedicated “ Japanese term” stack. history on server
+`resume_session` Don’t make a dedicated “ the relevant entry” stack. history on server
 Maintain ADR-0014 F2/F3/A4 to candidate SSOT for host session files without duplicate.
 You can add sh,cut only once from completion toast to `previous_session_id`.
 This is not pointer stack, it is treated as a shortcut to the existing `resume_session` and is not MVP.
@@ -188,13 +188,13 @@ This is not pointer stack, it is treated as a shortcut to the existing `resume_s
 After reset, the first instruction is the normal state even if the session ID is not specified. pointer=nil
 "reset and next turn to confirm fresh ID", and do not implicit fallback to the old pointer.
 
-### F5 — ProHomet Home with capability advertise
+### F5 — ProHomet Note with capability advertise
 
 [ADR-0034](0034-session-capabilities-advertisement.md) Extend F2:
 
 ```text
 supports_session_reset: boolean
-session_reset_modes: ("new" | "clear")[]  // supports=trueRequired・Non-empty
+session_reset_modes: ("new" | "clear")[]  // supports=true時は必須・非空
 ```
 
 `supports_session_reset=false` can be omitted. modes
@@ -305,7 +305,7 @@ implement.
 ### Handling of actual survey items (as of phase-17 chunk γ, 2026 -12)
 
 F2's "completion" and Codex thread only when checking fresh wrapperconnection
-ID lazy The behavior of gammaJapanese term-5/6)**assumption**
+ID lazy The behavior of gammathe relevant entry-5/6)**assumption**
 Include coded as follows: Composer intercept
 `/new``/clear` by operator
 If necessary, this ADR will be used for searching.
@@ -314,11 +314,11 @@ If necessary, this ADR will be used for searching.
 set `to_session_id` to optional / nullable, and the codex is fresh
 send `null` at spawn. `SessionResets`
 `broadcast_completed` payload `SessionResetCompleted.to_session_id`
-`null` The first envel  of the fresh session is session id
+`null` The first envelope  of the fresh session is session id
 The current `SessionPointers.record` path is the latest pointer when reported
 In order to update, the pointer side is determined naturally by the existing route. marker
 backward patch (δ 17-7 to `AgentStates` boundary marker
-`to_session_id` reflects the first envel  on the fresh side when implementing the UI
+`to_session_id` reflects the first envelope  on the fresh side when implementing the UI
 to add.
 - **Same process  generation**: vis supervisor takes child every time
 kill + fresh spawn `startThread()`
@@ -343,7 +343,7 @@ migration only (broadcast does not fire), `session_reset_completed` is
 `WrapperChannel.after_join` to `SessionResets.confirm_connection/2`
 Fire over. 60 sec timeout is spawn stage ( spa ok not received) and connection
 wrapper join unconfirmed
-`session_reset_failed { reason: "timeout" }`  Japanese term
+`session_reset_failed { reason: "timeout" }`  the relevant entry
 phase is only completed when confirming the fresh wrapper connection of this ADR F2
 `runner.ok=true` is misunderstood as completion
 completed if wrapper is dead on the fresh spawn

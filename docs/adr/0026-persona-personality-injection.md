@@ -40,8 +40,8 @@ Claude Agent SDK
 ## Decision
 
 - **D1 Injection approach**SDK`systemPrompt: { type: 'preset', preset:
-  'claude_code', append: ... }`Home`append`In "personality description + common footer"
-Contact Us Don't discard the preset and replace it with your own string.
+  'claude_code', append: ... }`Note`append`In "personality description + common footer"
+permission Don't discard the preset and replace it with your own string.
 - **D2 Stored approach**: `wrapper/personas/<persona.id>.md`
 as****`config.persona.personality_prompt_file?`
 Then override, if not, solve the included default (γ2 approach). via server
@@ -55,13 +55,13 @@ merged and closed as the provisional policy.
 - **D4 Language**: Add `language?: string` field to Persona (not specified)
 `"ja"` default). The dispatch logic is not included in phase-0.
 Multilingual dispatch [persona-language-dispatch](../open-questions/persona-language-dispatch.md)
-Contact Us
+permission
 - **D5 Maximum number of characters**:Please specify SHOULD (200-1000 characters) in . hard upper limit
 Not set.
-- **Infusion only when wrapper is launched**Home mid-session server
+- **Infusion only when wrapper is launched**Note mid-session server
 No overwrite routes ([threat-model](../specs/threat-model.md))
 allowed tools
-- **Envelope Non Exposure**: Change the character string to state change / log / result envel
+- **Envelope Non Exposure**: Change the character string to state change / log / result envelope
 Not available. dashboard ID is `persona.id` / `persona.name`
 only (pack-derived canonical, session-invariant). **Change in operation
 `display_name` field

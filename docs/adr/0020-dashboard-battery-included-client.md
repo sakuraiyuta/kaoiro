@@ -26,7 +26,7 @@ actual number display.
 [ADR-0012](0012-response-display-and-dashboard-scope.md) is already included in Dash
 The board has been upgraded from "minimum" to "information rich operator console". However,
 The linear pull is not the number of functions**Is it necessary to persist on a new public protocol surface / server?**」
-Home**The richness that requires the new protocol remains gated**.
+Note**The richness that requires the new protocol remains gated**.
 
 All of the above features**New Public Protocol Face**Required (disco ed, available)
 skill Publish list, upload forward, update control, select dialog relay). Current
@@ -41,10 +41,10 @@ Compatibility with the policy.
 ## Decision
 
 - **(F1) Included Dashboard with "battery-included minimum utility client"
-Contact Us Provides a state where minimum dialogue operation is completed by a single unit immediately after implementation.
+permission Provides a state where minimum dialogue operation is completed by a single unit immediately after implementation.
 - **(F2) Revise ADR-0012 line and allow adding new public protocol surfaces**.
 Required operation for minimum operation (sus , upload, skill completion, client update, etc.)
-New  eーHome / message for model / effort.) is acceptable. Protocol
+New  e-Note / message for model / effort.) is acceptable. Protocol
 Published and versioned
   ([ADR-0007](0007-client-separation-reference-dashboard.md) /
 [ADR-0015](0015-protocol-version-stamping.md))
@@ -63,7 +63,7 @@ upload) passes my-spec-elicitation before implementation.
 ### Positive
 
 - You can drive Claude Code on a single dashboard and dogfooding goes on.
-- An additional protocol surface is alwaysJapanese termd with the included client and theternal client
+- An additional protocol surface is alwaysthe relevant entryd with the included client and theternal client
 (e.g., kaoiro.nvim) is the foundation of implementation (conforming with ADR 7’s dogfooding spirit).
 
 ### Negative

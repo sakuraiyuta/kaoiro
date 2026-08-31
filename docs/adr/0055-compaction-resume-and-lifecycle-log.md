@@ -27,7 +27,7 @@ There is no time series, the problem occurs in memory and scatter log per sessio
 dependent (2026 31 operator request).
 
 The starting point of the review is the existing notification at the session restart (planned disconnect)
-`reconnecting` / `reconnected` Syn  envel )
+`reconnecting` / `reconnected` Syn  envelope )
 However, the existing mechanism is the direction of "inform others to reboot"
 compaction does not include cutting, so it lacks the premise of return detection. while compaction
 wrapper can be local observation with `compact_boundary` log.
@@ -37,7 +37,7 @@ Specification.
 
 separation requests to two layers.
 
-wrapper. Home
+wrapper. Note
 `request_compact` add optional `resume_prompt` and when booking
 (When full context is present) the agent itself. wrapper
 If `compact_boundary` is observation, the prefix template +
@@ -45,7 +45,7 @@ resume prompt serialization instruction queue same as threshold notification
 Inject as user turn via. When omitted, it is perfectly matched with the current situation (opt-in).
 Claude engine If the wrapper drops during compaction, the booking
 
-2. The server keeps the transition record in time series. Home
+2. The server keeps the transition record in time series. Note
 Event 1 `session_lifecycle` (CO / trigger / occurrence time)
 wrapper to observation (compact start/complete, session reset, threshold notification)
 ignition, resume fired
@@ -57,7 +57,7 @@ first cut).
 
 ## Rejected
 
-- **Delivery via resume server** (complete event + vel envel  return) —
+- **Delivery via resume server** (complete event + vel envelope  return) —
 Resume reliability depends on server reciprocating. Possible observation requires a record layer independently
 We will explain why you can ship to server.
 - **`reconnecting`/`reconnected` Direct flow of mechanism** — the direction of notification is reversed,

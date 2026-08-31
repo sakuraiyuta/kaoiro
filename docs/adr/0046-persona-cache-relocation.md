@@ -13,7 +13,7 @@ related_adrs: [29, 45]
 
 ## Status
 
-Accepted (2026.03, determined by master delegation ChJapanese term + Home consultation).
+Accepted (2026.03, determined by master delegation Chthe relevant entry + Note consultation).
 [ADR-0029](0029-persona-server-sot-and-pack-distribution.md) F2 / F6
 partially revise the cache description.
 
@@ -47,7 +47,7 @@ Reboot is required to enable the directory.
 reclaim only removes entry matching 16 key cache-key format. Error
 Protect the unrelated directory under the specified root
 
-**(issue #185 must-fix 2, 2026 05):**Japanese termging area orphan reclaim
+**(issue #185 must-fix 2, 2026 05):**the relevant entryging area orphan reclaim
 (see `reclaim_stage_orphans/1`, F9) also follows the same principles. F9
 charset `A-Za-z0-9_-`
 **Strictly matched**entry only and regular expressions
@@ -55,10 +55,10 @@ charset `A-Za-z0-9_-`
 It is not a loose condition). `.stage-important`
 `.stage-freshtest` does not match the exact shape
 entry is treated as persistence, and reclaim is never deleted. `\z` instead of `$`:
-xir/Erlang `re` is a P  style, and `$` without `/m` is just before the end of the string.
+Elixir/Erlang `re` is a P  style, and `$` without `/m` is just before the end of the string.
 `.stage-<22English>\n`
-shape is found inJapanese termー review
-(2026 05, the implementation side has been modified, Home left the description of this ADR old
+shape is found inthe relevant entry- review
+(2026 05, the implementation side has been modified, Note left the description of this ADR old
 round-3).
 
 ### F4: Separate cache failure contract
@@ -105,7 +105,7 @@ I can't write it.**cache failure**(as shown)
 
 slot-specific I/O failures andlele NFS handles leave root intact
 so, if only root probe is set to the condition, "pack is silent and missing manifest"
-Contact Us The errno table is limited to that.
+permission The errno table is limited to that.
 
 ### F5: Multiple process sharing of the same persona dir is not guaranteed
 
@@ -136,7 +136,7 @@ Preparation and deployment meet the following: (1) slot root and slot internal s
 There is no other way to read. (2) Create slots with exclusive mkdir
 (`mkdir_p` equivalent is not possible because it treats existing linklinks). (3) slot
 **Before**stenosis to owner-only(0700), and then enter mode
-normalize to owner-only — do not get the mode Japanese termーJapanese termd by the archive. These are
+normalize to owner-only — do not get the mode the relevant entry-the relevant entryd by the archive. These are
 It is a safety contract rather than implementation details, and mitigation requires revision of this ADR.
 
 ### F7: De  zip slip before deploying
@@ -156,7 +156,7 @@ Total size after pack deployment**1 GiB (1_073_741_824 byte)**Number of entries
 pack only skip (ADR-0029). The upper limit is not errno, but as an explicit test
 F4 errno class does not affect.
 
-The maximum value is 2026Japanese termー04. 1 GiB is a high resolution image and future extension
+The maximum value is 2026the relevant entry-04. 1 GiB is a high resolution image and future extension
 (e.g., 3D model, etc.), interpreted as 2-decimal prefix (1024^3). 4096 founded
 "Total size is small, but only a huge amount of pack"
 Unsuccessful pack (sprite hundreds of dozens to 3D)
@@ -185,7 +185,7 @@ I re the encryption bit and write it as it is, so it is not possible to stick. D
 Reject method values other than STORE.
 
 data descriptor (general purpose bit 3)
-Contact Us ** The entry with bit 3 is the size of the local header and OTP is
+permission ** The entry with bit 3 is the size of the local header and OTP is
 Read and deploy central directory comp size (stdlib 8.0.1 `zip.erl`)
 `get_z_file/9`: `GPFlag band 8 =:= 8 -> ZipFile#zip_file.comp_size`.
 Take a real reading span from there. local header
@@ -227,9 +227,9 @@ It is not possible to use it only in the direction of playing.
 
 |Name|Why bound|
 |---|---|
-|entry number| `get_central_dir/4`Home`N = EOCD#eocd.entries`Home`get_cd_loop/6`pass to loop count (stdlib 8.0.1)`zip.erl`1916-1921). Subtotal Declaration**Reduce**You can't add only (actual survey: 40,000 archives, but 10Japanese termーJapanese terms areHomed by 1ms.`list_dir`The return is 11 elements, but the breakdown is`:zip_file`10 Items +`:zip_comment`The number of entries is limited to the previous one. Excessive file declaration`bad_central_directory`throw|
-| `filesize - Japanese term central offset` | `get_cd_loop/6`is expected to return to offset and read forward, so the maximum number of bytes the enumeration can be touched. This span is offset**Close**If you want to throw a record first, it will be thrown.|
-|ZIP64 record| `find_eocd64/5`after reading locator previous 12 byte,**Before getting central offset**Read the number of declaring bytes`zip.erl`2121-2138). If you don't bound this step, you can put the record in front of the file and file a huge body offset, andJapanese term the central offset near the EOF. The read is already over when theInspection test passes|
+|entry number| `get_central_dir/4`Note`N = EOCD#eocd.entries`Note`get_cd_loop/6`pass to loop count (stdlib 8.0.1)`zip.erl`1916-1921). Subtotal Declaration**Reduce**You can't add only (actual survey: 40,000 archives, but 10the relevant entry-the relevant entrys areHomed by 1ms.`list_dir`The return is 11 elements, but the breakdown is`:zip_file`10 Items +`:zip_comment`The number of entries is limited to the previous one. Excessive file declaration`bad_central_directory`throw|
+| `filesize - the relevant entry central offset` | `get_cd_loop/6`is expected to return to offset and read forward, so the maximum number of bytes the enumeration can be touched. This span is offset**Close**If you want to throw a record first, it will be thrown.|
+|ZIP64 record| `find_eocd64/5`after reading locator previous 12 byte,**Before getting central offset**Read the number of declaring bytes`zip.erl`2121-2138). If you don't bound this step, you can put the record in front of the file and file a huge body offset, andthe relevant entry the central offset near the EOF. The read is already over when theInspection test passes|
 
 **No filed central directory size.**OTP
 Don’t read anywhere, don’t bound anything.
@@ -237,7 +237,7 @@ Don’t read anywhere, don’t bound anything.
 **Maximum budget 4 MiB (`@max_entries * 1024`).**sound pack central
 directory is about 800 KB (fixed 46 byte + name 100)
 extra 30) so there is a margin of about 5 times. central directory tail and ZIP64
-record**Contact Us**It fits to this one — the same as for each area
+record**permission**It fits to this one — the same as for each area
 The upper limit can be used double, and the question "how much it can be enumerated" is originally
 It is a question for the total.
 
@@ -251,7 +251,7 @@ Not touching the maximum of 4096 entries. span bound
 The same a ification rate for Mi MiB is about 66 MB.
 
 **The EOCD search procedure is shown in OTP.**adopt when decoy is inserted
-The location is different. OTP from `eof - window`**Contact Us**1 bytes
+The location is different. OTP from `eof - window`**permission**1 bytes
 Grab the first structural match and double the window (22 → 44 → ... →
 min(0xff+42, filesize). Inertial backward scanning is to collect the last record,
 EOCD `entries_on_disk`
@@ -280,7 +280,7 @@ local header (F7) → inflate With traversal that can be rejected by name
 zip bomb does not allow up to 1 GiB inflate CPU. F7
 Both are layers that do not write at all, and this unchanged condition does not depend on the order.
 
-### F9: Close preflight and deployment TOCTOU withgingging (issue #185, Home 2026 2005 )
+### F9: Close preflight and deployment TOCTOU withgingging (issue #185, Note 2026 2005 )
 
 F7/F8 preflight (`verify_archive/1`) and `:zip.unzip/2` both initially
 `zip_path` can be controlled by ingest writer.
@@ -298,7 +298,7 @@ Rejected because the window is narrowed but there is no blockage. (c) OTP `:zip.
 `zip_get`/`zip_list_dir` does not reopen only with the same fd pread/read
 `zip_get/1` (without memory option)
 Each entry is designed directly to the disk, and the contents are not preserved by measuring only the size after deployment.
-Not available. How to make F8 streaming inflateJapanese term via this API
+Not available. How to make F8 streaming inflatethe relevant entry via this API
 `:zip.unzip/2` severity of this issue
 (Low) is considered to be excessive, and is not allowed to reexamine if severity is up.
 
@@ -308,8 +308,8 @@ temporary dir + exclusive create 0600 files, basename is collision avoided
 only once source to a dedicated random value not a security boundary)
 open**fd to 64 KiB chunk**bound copy**
 byte — 1 byte to distinguish just the upper limit and the upper limit, not read more)
-SHA-256**staged side full digest**Home
-**full digest**Contact Us If it does not match "intake"
+SHA-256**staged side full digest**Note
+**full digest**permission If it does not match "intake"
 Determines that the source has changed, and the pack is**race as skip**(malformed
 log in a language that can be distinguished from archive) and to the next watcher-t ed rebuild
 Retry. F7/F8 preflight and `:zip.unzip/2` are
@@ -325,7 +325,7 @@ does not mean "fd guarantees snapshot at the point of source" —
 factfacts see the same preflight and expansion**.
 F7/F8 and `:zip.unzip/2` are
 staged factfact
-(If it is unfair form, it will only be disJapanese termed consistently if it is a legitimate form).
+(If it is unfair form, it will only be disthe relevant entryed consistently if it is a legitimate form).
 
 **This warranty is only established inside trust boundary.**cache root
 writer is not able to write (same as F6 trust boundary). F6
@@ -344,7 +344,7 @@ Defending line).
 
 `.stage-*`
 reclaim orphans of  ing patterns that are strictly matched to random suffix
-(issue #185 Home round-2 Review, 2026.05) Initially 10 minutes
+(issue #185 Note round-2 Review, 2026.05) Initially 10 minutes
 age-gate is protected, but there is no global lock in `rebuild/0`.
 To prevent other re rebuild from accidentally cleaning thegingging area still in use
 Comment**must-fix 1**`rebuild/0`
@@ -408,7 +408,7 @@ Don't auto-restart until restart.
 - Maximum F8 (1 GiB / 4096 / `@max_central_dir_bytes` 4 MiB)
 module attribute is a constant and cannot be changed by environment variable. Operational changes
 Issue #179 1 GiB and 4096
-Japanese termー MiB is a master decision (2026 (2004).
+the relevant entry- MiB is a master decision (2026 (2004).
 ed as a margin (2026 (2004).
 
 ## Alternatives Considered

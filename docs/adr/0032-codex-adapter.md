@@ -25,7 +25,7 @@ There were already three additional engine trays:
 - [ADR-0023](0023-host-runner-architecture.md) D3 indicates "`@kaoiro/wrapper`'s rename will be forwarded before the codex version is added."
 - open-questions/spawn- -ionion (completely merged and removed in this ADR) added `SpawnRequest`/`SpawnMessage` `engine`, wrapper launcher engine → wrapper solution, Launch engine engine select, model/effort/persona engine dependencies, and track checklists have already been developed. This ADR transfers its decision to execution.
 
-On the other hand, go to phase-12 and the postponement condition of ADR-0017 "The main function is complete" is filled (dashboard / persona pack / broker / subagent task /   all operation). Codex A natural window that performs three-layer reJapanese termation, rename, and Japanese term select wiring at once.
+On the other hand, go to phase-12 and the postponement condition of ADR-0017 "The main function is complete" is filled (dashboard / persona pack / broker / subagent task /   all operation). Codex A natural window that performs three-layer rethe relevant entryation, rename, and the relevant entry select wiring at once.
 
 Corres ence with the Claude Agent SDK for Codex SDK (as of 2026 , `@openai/codex-sdk` 0.144.1 / `@anthropic-ai/claude-agent-sdk` 0.3.162):
 
@@ -37,7 +37,7 @@ Corres ence with the Claude Agent SDK for Codex SDK (as of 2026 , `@openai/codex
 | Model | `claude-*` | `gpt-5.6-sol`(default) /`terra` / `luna` / `gpt-5.5` / `gpt-5.4(-mini)`etc. (Catalog is updated on server side, without enumeration API)|
 || `ANTHROPIC_API_KEY` / Claude subscription | `CODEX_API_KEY` env / ChatGPT login (`~/.codex/auth.json`).`OPENAI_API_KEY`is not used for execution authentication in 0.144 (for pipe to login)|
 |System prompt| `systemPrompt.append` | config `developer_instructions`AGENTS.md (append)|
-|Tools| `tool()` + Zod, in-process MCP | **No dynamicTools in the TS SDK**Home config override`mcp_servers.*`) in per-run|
+|Tools| `tool()` + Zod, in-process MCP | **No dynamicTools in the TS SDK**Note config override`mcp_servers.*`) in per-run|
 | Streaming | `SDKMessage` (system/assistant/result/stream_event) | `ThreadEvent`(thread.*/turn.*/item.*)| [codex-sdk-events](../specs/codex-sdk-events.md)
 | Hooks |PreToolUse / CwdChanged etc.|v0.116 introduced exes (unex  on exec/S )|
 
@@ -49,7 +49,7 @@ Corres ence with the Claude Agent SDK for Codex SDK (as of 2026 , `@openai/codex
 
 The wrapper directory is pnpm workspace and is divided into the following four packages:
 
-- **`wrapper/core` (`@kaoiro/wrapper-core`)**— Entity Independence. transport / envel  outer frame +version / identity / persona / connection / state reporting lifecycle / config / CLI frame (`cli.ts` engine non-dependent part).
+- **`wrapper/core` (`@kaoiro/wrapper-core`)**— Entity Independence. transport / envelope  outer frame +version / identity / persona / connection / state reporting lifecycle / config / CLI frame (`cli.ts` engine non-dependent part).
 - **`wrapper/agent-common` (`@kaoiro/agent-common`)**— AI Agent Common Layer. state machine (`state.ts`), `EngineAdapter` interface, common tool description layer (F , permission broker, instruction conversion, common event type. Claude / Codex
 - **`wrapper/claude-code` (`@kaoiro/claude-code`)**Claude Code CLI Transplant and rename existing `wrapper/src/host.ts`/`wrapper/src/adapter.ts`. Claude (fast mode / CwdChanged   / native AskUserFeaturesstion / permission single axis → biaxial image table) is closed here.
 - **`wrapper/codex` (`@kaoiro/codex`)**— Codex specific adapter (new).
@@ -83,20 +83,20 @@ register payload, `SpawnRequest.engine`, `SpawnMessage.engine`, and launch engin
 
 ```ts
 interface EngineCapability {
-  // engine Japanese term.capabilities Japanese termーSame value as the Lourdes
+  // engine 一意識別子。capabilities フィールドと同値
   id: "claude-code" | "codex";
-  // List of bootable models (dashboard Three-stage selection)
+  // 起動可能なモデル一覧 (dashboard の三段選択用)
   supportedModels(): ModelInfo[];
-  // effort Options (fast mode / reasoning_effort etc. engine Close tuning)
+  // effort オプション (fast mode / reasoning_effort 等の engine 固有 tuning)
   effortOptions?(): EffortInfo[];
 }
 ```
 
-`ext.model` / `ext.effort` of envel  remains the engine vocabulary (not mapping). Launch  is composed of three-tier options:   → model → optional effort.
+`ext.model` / `ext.effort` of envelope  remains the engine vocabulary (not mapping). Launch  is composed of three-tier options:   → model → optional effort.
 
 Codex initial implementation (2026 (20-11):
 
-- **`supportedModels()` is empty catalog (using account default model)**Home Initially
+- **`supportedModels()` is empty catalog (using account default model)**Note Initially
 bundled catalog catalog curated static list (`gpt-5.6-sol`, etc.)
 2026Chat-11 Verification of the actual machine **ChatGPT-plan Certification (First route of the project, F7)
 The specified model is rejected by 400/404 and the acceptable model set is the account
@@ -107,9 +107,9 @@ The value of the explicit model is reintro  at the time the reliable catalog sou
 (Former Q5 codex-model-effort-catalog is closed, and future support is
 [ADR-0035](0035-codex-model-catalog-and-mid-session-switch.md)
 mid-session switch Current status of Codex Ecosystem (model availability by plan,
-AJapanese termmetrical in two modes, the information particle size of `codex doctor`
+Athe relevant entrymetrical in two modes, the information particle size of `codex doctor`
 [codex-model-catalog](../specs/codex-model-catalog.md)
-- **effort is not displayed in the current UI by empty catalog**Home future model catalog
+- **effort is not displayed in the current UI by empty catalog**Note future model catalog
 `ext.models` `effort_levels`
 Maintain policy (E-B).
 
@@ -123,13 +123,13 @@ Keep empty catalog behavior.
 In the actual operation verification after phase-14 completion, if the resolved model / source is not visible to the UI / log, and the shared env leaked between the engine to become an accident. The priority of the model solution, the source display, and env separation are clarified as a supplement to this F4bc. [phase-15-wrapper-ux-parity](../plans/phase-15-wrapper-ux-parity.md) D1/D7
 
 - **Solution priority**`env` `config.model (kaoiro.config.json)` engine account / SDK default I re the lower if the top is specified.
-- **source Vocabulary**: envel  `ext.model source: "launch"| "env" | "config" | "default"` Home stamp Japanese term.UI (AgentDetail) Home「Account Default」Label judgment engine Name  (e89fa98 (private Gitea history) Home Codex Special) Home `ext.model source == "default" to remove the  .
+- **source Vocabulary**: envelope  `ext.model source: "launch"| "env" | "config" | "default"` Note stamp the relevant entry.UI (AgentDetail) Note「Account Default」Label judgment engine Name  (e89fa98 (private Gitea history) Note Codex Special) Note `ext.model source == "default" to remove the  .
 - **1 line stderr at startup**: Output `[wrapper resolved] engine=... model=<name>(source=...) ...` at CLI startup. Expose to the operator log in the tee route of  .
 - **en**: Single shared env `KAOIRO_WRAPPER_DEFAULT_MODEL` separation by engine:
 Claude CLI
 Codex CLI
 - The old `KAOIRO_WRAPPER_DEFAULT_MODEL` depre  (Claude CLI reads the value depre  warn to stderr, and Codex CLI is completely ignored) → removal in the next release (like [ADR-0031](0031-runner-persona-trust-mode.md) personas legacy / [ADR-0032](0032-codex-adapter.md) F4a `claude` legacy). rewrite dev.sh to env by engine
-- Source: Single-shared env flows to Codex spawn with `scripts/dev.sh` `KAOIRO_WRAPPER_DEFAULT_MODEL=claude-opus-4-7`, and is an accident source ([codex-model-catalog](../specs/codex-model-catalog.md) certification aJapanese termmetry) based on 400/404 in the ChatGPT-plan authentication path. engine separate env prevents structural
+- Source: Single-shared env flows to Codex spawn with `scripts/dev.sh` `KAOIRO_WRAPPER_DEFAULT_MODEL=claude-opus-4-7`, and is an accident source ([codex-model-catalog](../specs/codex-model-catalog.md) certification athe relevant entrymetry) based on 400/404 in the ChatGPT-plan authentication path. engine separate env prevents structural
 - **Handling unsolved models**(Both engine): If the specified model is denied by the engine side (400/404 of Codex ChatGPT-auth, invalid alias of Claude), and silent fallback are not booted loud fail. Don't confuse "Unspecified → default delegation" and "Expression → Deny".
 
 ### F5 — Common Tool Description Layer Delivers to Codex with MCP bridge (2026 (20-10)
@@ -147,7 +147,7 @@ The inter-agent tools (`mcp__kaoiro__send_to_agent` / `list_agents` / `whoami` a
 
 ### F6 — AskUser stion equivalent
 
-Claude continues to use the SDK native tool (current `wrapper/src/host.ts:762-765` is maintained on `wrapper/claude-code`). Codex provides `ask_user_question` via F5 MCP bridge. Since the MCP tool call blocks the turn to the response, the `waiting_question` state is established in Codex (it is important as a dialogue channel with the operator if the approval flow falls in [ADR-0033](0033-permission-model-dual-axis.md)). Normalize the tool call to `question_request` envel  with the wrapper. [0027-askuserquestion-envelope](0027-askuserquestion-envelope.md)
+Claude continues to use the SDK native tool (current `wrapper/src/host.ts:762-765` is maintained on `wrapper/claude-code`). Codex provides `ask_user_question` via F5 MCP bridge. Since the MCP tool call blocks the turn to the response, the `waiting_question` state is established in Codex (it is important as a dialogue channel with the operator if the approval flow falls in [ADR-0033](0033-permission-model-dual-axis.md)). Normalize the tool call to `question_request` envelope  with the wrapper. [0027-askuserquestion-envelope](0027-askuserquestion-envelope.md)
 
 ### F7 — authentication is currently attacked
 
@@ -190,7 +190,7 @@ The implementation is divided into two phases:
 
 ADR-0017 `wrapper/core` does not have an AI concept, and can be packaged trays for future non-AI entities ([plugin-model](../specs/plugin-model.md)).
 - The effect of adding the engine is closed in the adapter package and the core is not resurgical.
-- Codex adapter plug-in without changing existing state abstract / envel  schema / server / dashboard (two-axis permission extension is handled by independent [ADR-0033](0033-permission-model-dual-axis.md)).
+- Codex adapter plug-in without changing existing state abstract / envelope  schema / server / dashboard (two-axis permission extension is handled by independent [ADR-0033](0033-permission-model-dual-axis.md)).
 - The function field is actually consumed (Launch engine engine select, launch launcher solution).
 
 ### Negative
@@ -218,13 +218,13 @@ ADR-0017 `wrapper/core` does not have an AI concept, and can be packaged trays f
 | Option | Why rejected |
 |--------|--------------|
 |Act preset common abstract (`default/accept-edits/auto-shell/plan-only/yolo`Other|Codex The expression of the two axis is crushed into a single axis and the semantics mapping table will eventually become the openest of open-question|
-|engine Exposure to the UI|The dashboard display is a different set of permissions for each engine, and envel  schema / server validation is the engine|
+|engine Exposure to the UI|The dashboard display is a different set of permissions for each engine, and envelope  schema / server validation is the engine|
 
 ### F3 (persona shared)
 
 | Option | Why rejected |
 |--------|--------------|
-| `personality.md`Home`## for-claude` / `## for-codex`Section|Early agreement cost large, complication of package creator operation|
+| `personality.md`Note`## for-claude` / `## for-codex`Section|Early agreement cost large, complication of package creator operation|
 |engine separate pack (`kuroe-claude` / `kuroe-codex`) |pack The number of zips is doubled only for engine minutes, and maintenance collapse|
 
 ### F4a (capabilities name)
@@ -232,7 +232,7 @@ ADR-0017 `wrapper/core` does not have an AI concept, and can be packaged trays f
 | Option | Why rejected |
 |--------|--------------|
 | `anthropic-claude-code` / `openai-codex`prefix|Redundant, operator visual degradation, multiple engines in the same engine are not common|
-|Current value`claude`Contact Us|claude is a Meaning Axial Weight to read as an Anthropic LLM model family|
+|Current value`claude`permission|claude is a Meaning Axial Weight to read as an Anthropic LLM model family|
 
 ### F4bc (model / effort abstract)
 
@@ -268,7 +268,7 @@ ADR-0017 `wrapper/core` does not have an AI concept, and can be packaged trays f
 | Option | Why rejected |
 |--------|--------------|
 |engine prefix|Existing session id migration is required for all clients and prefix semantics are penetrated into all routes|
-|Codex does not support resume|ADR-0014 Engine AJapanese termmetric|
+|Codex does not support resume|ADR-0014 Engine Athe relevant entrymetric|
 
 ### F9 (cwd hook)
 
@@ -281,13 +281,13 @@ ADR-0017 `wrapper/core` does not have an AI concept, and can be packaged trays f
 
 | Option | Why rejected |
 |--------|--------------|
-|1 phase|Single PR hypertrophy, reJapanese termation and re  of codex implementation are simultaneously progressed to focus on risk|
+|1 phase|Single PR hypertrophy, rethe relevant entryation and re  of codex implementation are simultaneously progressed to focus on risk|
 |3+ phase|F2-F9 phase boundary becomes ambiguous and the number of reviews increased|
 
 ## Related
 
 - Origin: open-questions/spawn- -ionion (2026-06-26, fully merged and removed to the book ADR, and the "Resolved Action" checklist is written in [phase-14-codex-adapter](../plans/phase-14-codex-adapter.md) acceptance criteria.
 - : [phase-13-wrapper-multipackage-restructure](../plans/phase-13-wrapper-multipackage-restructure.md), [phase-14-codex-adapter](../plans/phase-14-codex-adapter.md), [phase-15-wrapper-ux-parity](../plans/phase-15-wrapper-ux-parity.md) (F4bc supplement implementation).
--CO ADR: [0017](0017-wrapper-multientity-packages.md) (materialise in this ADR), [0022](0022-pending-permission-authoritative-source.md) / [0033](0033-permission-model-dual-axis.md) (permission biaxial), [0023](0023-host-runner-architecture.md) D3 (rename execution), [0001](0001-agent-sdk-integration.md) (Claude SDK Adopt), [0027](0027-askuserquestion-envelope.md) (question envel.), [0014](0014-session-resume-and-restore.md) (resume), [0034](0034-session-capabilities-advertisement.md) (element of engine neutralization pattern by session capabilities).
+-CO ADR: [0017](0017-wrapper-multientity-packages.md) (materialise in this ADR), [0022](0022-pending-permission-authoritative-source.md) / [0033](0033-permission-model-dual-axis.md) (permission biaxial), [0023](0023-host-runner-architecture.md) D3 (rename execution), [0001](0001-agent-sdk-integration.md) (Claude SDK Adopt), [0027](0027-askuserquestion-envelope.md) (question envelope.), [0014](0014-session-resume-and-restore.md) (resume), [0034](0034-session-capabilities-advertisement.md) (element of engine neutralization pattern by session capabilities).
 -CO:s: [plugin-model](../specs/plugin-model.md), [protocol](../specs/protocol.md), [architecture](../specs/architecture.md), [personas](../specs/personas.md), [agent-sdk-events](../specs/agent-sdk-events.md) (Claude version), [codex-sdk-events](../specs/codex-sdk-events.md) (Codex version, new version).
-- Open questions (phase-14): [Q4 codex-cwd-extraction](../open-questions/codex-cwd-extraction.md), [codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md) (2026.-10 new). The former Q1 (personality infusion effectiveness) is close to 2026-11-11 actual machine validation, and the former Q2 (envel  schema) / Q3 (UI vocabulary) / Q5 (model catalog) / Q6 (compatible windows) resolved with 2026 SDK-10 real SDK validation + SDK-elicitation and close (requested to this ADR and [ADR-0033](0033-permission-model-dual-axis.md)).
+- Open questions (phase-14): [Q4 codex-cwd-extraction](../open-questions/codex-cwd-extraction.md), [codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md) (2026.-10 new). The former Q1 (personality infusion effectiveness) is close to 2026-11-11 actual machine validation, and the former Q2 (envelope  schema) / Q3 (UI vocabulary) / Q5 (model catalog) / Q6 (compatible windows) resolved with 2026 SDK-10 real SDK validation + SDK-elicitation and close (requested to this ADR and [ADR-0033](0033-permission-model-dual-axis.md)).

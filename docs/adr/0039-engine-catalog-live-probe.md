@@ -1,5 +1,5 @@
 ---
-title: Launch Japanese term model catalog with short-live SDK probe +   memory cache (Option E)
+title: Launch the relevant entry model catalog with short-live SDK probe +   memory cache (Option E)
 status: accepted
 date: 2026-07-15
 opened: 2026-07-15
@@ -13,7 +13,7 @@ related_adrs: [23, 32, 35, 37, 40]
 
 ## Status
 
-Accepted (2026.-15, master decision).Home
+Accepted (2026.-15, master decision).Note
 [phase-20-engine-catalog-live-probe](../plans/phase-20-engine-catalog-live-probe.md).
 
 ## Context
@@ -42,7 +42,7 @@ init+supportedModels ~1.4s, close after subprocess complete cleanup,
 phase-20-1).
 
 Accordingly, "in principle impossible" of ADR-0037 is exactly "register-only premise (query
-is not possible onrate**SDK Probe**Home
+is not possible onrate**SDK Probe**Note
 When running, the catalog of the register path can be richened.
 
 As :
@@ -52,9 +52,9 @@ Holding a static catalog of F1 (`codex doctor`)
 operator plan live probe
 Claude
 - SDK 0.3.208 `Options` does not find `settingsSources`
-Home turn-5 confirm), user settings are always loaded on probe subprocess.
+Note turn-5 confirm), user settings are always loaded on probe subprocess.
 Minimizing side effects is cwd isolation + `mcpServers: {}` / `tools: []` / `hooks: undefined`
-Contact Us `--bare` skips keychain reads to return OAuth
+permission `--bare` skips keychain reads to return OAuth
 Cannot be used for probes. (I have proposed incorrectly in the previous survey but has been withdrawn.)
 Codex `AGENTS.md`
 subprocess uses the auth context that   keeps.   auth and
@@ -74,7 +74,7 @@ not worth meeting complexity. `HostRegistry`
 ### F2 — short-lived probe CLI`@kaoiro/claude-code`Cut out
 
 `wrapper/claude-code/src/probe.ts`
-Contact Us   as child process`spawn(process.execPath,
+permission   as child process`spawn(process.execPath,
 [require.resolve('@kaoiro/claude-code/dist/probe.js'), ...])`start
 Close the direct dependency to `@anthropic-ai/claude-agent-sdk` to the wrapper side (
 package does not add dependency to the SDK. probe is one line JSON to stdout
@@ -213,7 +213,7 @@ Fixed an error). v2 adds:
 
 - **wrapper side short life probe (B)**: `wrapper/claude-code/src/probe-client.ts`
 extracted as reusable launcher without side effects (formerly `runner/src/claude_probe.ts`)
-= SoT uniformization, Home D1b) Probe CLI
+= SoT uniformization, Note D1b) Probe CLI
 entrypoint `probe.ts`
 The library import does not run main.
 - **host `refreshCatalogFor()`**: `#query!==null`
@@ -223,16 +223,16 @@ send ext.models immediately with update + `#modelsSucceeded=true` + `#emitState`
 Dynamic update of the same AgentDetail model/effort option. in-flight dedup
 concurrent manual refresh is 1 execution to coalesce, each caller is shared
 Receive outcomes.
-- **`refresh_models_result` envelope (D2a)**: New envel  type, payload =
+- **`refresh_models_result` envelope (D2a)**: New envelope  type, payload =
 `{request_id, ok, reason?, models_count?}` wrapper
 `refreshCatalogFor()` only (existing handle out)
 viewer allow-list automatically drop = fail-closed).
 - **`refresh_models` add request id for control payload**: Existing control
 Only agent id, client is UUIDv4 fire, wrapper→cli ack
-Corres s with the transmittance and wrapper side `refresh_models_result` envel .
+Corres s with the transmittance and wrapper side `refresh_models_result` envelope .
 - **client pending map**: `makeRefreshPendingStore` in instance scope
 `Promise<RefreshModelsResult>`
-Home unrelated request id ignore, client-side timeout (45s, wrapper) 35s
+Note unrelated request id ignore, client-side timeout (45s, wrapper) 35s
 top), disconnect/error.
 - **AHome  shape defensive validation**: `wrapper/core/src/persona.ts`
 per-field  + defensive
@@ -240,7 +240,7 @@ copy. malformed
 - **AgentDetail `refreshModels()`**: Promise.all + `refreshEngineCatalog`
 Abolished (the source of false induction). await single `connection.refreshModels(agent_id)`,
 result.ok=false is a UI display, button loading is
-Maintenance. Japanese term cache =
+Maintenance. the relevant entry cache =
   LaunchDialog/future spawn,wrapper #models = current agent).
 
 Side Effect Boundaries (v2):
@@ -292,7 +292,7 @@ Close
 pass to supervisor and getter in hot-reload `updateRuntimeConfig`
 Respecify.
 - `dashboard/src/lib/AgentDetail.svelte` `refreshModels()`
-Claude engine Determination extends to 2 routeJapanese term ignition: (i) Existing `refreshModels`
+Claude engine Determination extends to 2 routethe relevant entry ignition: (i) Existing `refreshModels`
 (real no-op for running wrapper, fresh-idle), (ii)
 `refreshEngineCatalog(hostId, "claude-code", true)`
 live update (reviewed with next restart/spawn). Codex does not ignite (static catalog).
@@ -315,10 +315,10 @@ Transmit the field. F3 projection (`probe.ts` `projectModel()`)
 `host.ts` `#executeManualRefresh()`
 2 places. `probe-client.ts` `parseProbeStdout()` passes object as object
 No need to change the implementation, but the re  test to prevent the future of whitelisting and
-Contact Us
+permission
 
 memory cache of F5 is unchanged because `EngineModelInfo[]` is used.
-F6 / F7 event / relay is unchanged and eventxir is `runner_channel.ex`
+F6 / F7 event / relay is unchanged and event is `runner_channel.ex`
 `%{"id", "models"}` is not touch because it only verifies the shape of the engine.
 
 wire and UI. `resolved_model`
@@ -335,8 +335,8 @@ to ex ation (for more details)
 ## Implementation
 
 [phase-20-engine-catalog-live-probe](../plans/phase-20-engine-catalog-live-probe.md).
-kaoiroJapanese termer delegation is implemented by kuroe and fuji makes a review and Git decision
-Home commit / push / branch
+kaoirothe relevant entryer delegation is implemented by kuroe and fuji makes a review and Git decision
+Note commit / push / branch
 
 Phase 20-1 empirical spike (2026 -15)
 prompt A short-lived probe was established in the SDK 0.3.208.

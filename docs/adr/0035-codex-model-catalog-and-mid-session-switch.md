@@ -13,7 +13,7 @@ related_adrs: [32, 34, 37, 39, 40]
 
 ## Status
 
-Accepted (2026.-11, master decision).Home
+Accepted (2026.-11, master decision).Note
 [phase-16-codex-model-switch](../plans/phase-16-codex-model-switch.md).phase-15
 initial Start after completion.
 
@@ -93,7 +93,7 @@ run (via doctor). failure (spawn ENOENT / JSON parse failure / mode unreported)
 If `"unknown"` to fail-closed, stderr warn (doctor stdout / stderr is
 relaydential-presence details
 and may contain the same JSON.
-4. **Implicit estimation from `chatgpt_plan` is prohibited**Home `chatgpt_plan`
+4. **Implicit estimation from `chatgpt_plan` is prohibited**Note `chatgpt_plan`
 to falsely determine the case that is left in config
 `chatgpt_plan` is not used for the auth mode decision.
 
@@ -181,7 +181,7 @@ The UI scope of phase-16 is now limited:
 - No model that can not be used for Free / Go, and no choice is returned in Plus or higher.
 - The model switch that maintains the session/history becomes a formal contract.
 - Use the same catalog for model and effort candidates, start-up options, and mid-session options.
-- entitlement driftJapanese termoses session with loud fail + rollback.
+- entitlement driftthe relevant entryoses session with loud fail + rollback.
 
 ### Negative
 
@@ -199,7 +199,7 @@ The UI scope of phase-16 is now limited:
 | Option | Decision |
 |--------|----------|
 | A': `auth-mode=chatgpt`If you present trio on Plus premise|Reject. Free/Go is the same auth mode, so make false positive structurally. No vague fail is an erroneous advertise|
-|B: operator returns a plan| **Adopt**Home There is a manual renewal cost, but it can be the most recent and fail-closed in the absence of enumeration API|
+|B: operator returns a plan| **Adopt**Note There is a manual renewal cost, but it can be the most recent and fail-closed in the absence of enumeration API|
 |probe each sort to endpoint and generate catalog|Reject. sesta/latency is consumed for each startup, and the probe itself generates a session. rate limit and temporary failure as entitlement|
 |permanent empty catalog|Reject. There is no convenience to continue to disabling existing switch transport routes, with the need for changing gating fact and operator through trio in Plus.|
 |fresh session|Reject. S, same-session resume|

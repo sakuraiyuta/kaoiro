@@ -1,5 +1,5 @@
 ---
-title: Agent instance identity and spawn authentication — persona = type / agent id = instance, Japanese term issuance authentication
+title: Agent instance identity and spawn authentication — persona = type / agent id = instance, the relevant entry issuance authentication
 status: accepted
 date: 2026-06-24
 opened: 2026-06-24
@@ -24,7 +24,7 @@ The arguments were manifested in the discussion (2026-06-24) of (the scope of co
 
 ### Current model
 
-- **agent id is a stable identifier for one instance**Home Face, mood, session pointer
+- **agent id is a stable identifier for one instance**Note Face, mood, session pointer
 restore unit ([ADR-0003](0003-persona-identity-persistence.md)),
   **Same restart**[ADR-0014](0014-session-resume-and-restore.md)
   [protocol](../specs/protocol.md)).
@@ -66,7 +66,7 @@ This converges into one trust:
 Host a host.
 - For spawn via authenticated  , **server will issue per-agentInformationdentials
 Inject**(D4).
-- **pre-registration of per-agent s is not required for spawn routes**Contact Us
+- **pre-registration of per-agent s is not required for spawn routes**permission
 
 ### D3 — agent id`<scope>.<rand>`Stabilizing, once generated, restart
 
@@ -81,9 +81,9 @@ Conform with the "Identification in Reboot" requirements of ADR-0014 (not separa
 
 current relay only removes client payload (`agents_channel.ex`)
 `handle_in("spawn")`. extend this and **CO is `server_url`
-Inject per-agentJapanese term into spawn payload and then relay to Japanese term.
+Inject per-agentthe relevant entry into spawn payload and then relay to the relevant entry.
 
-- The per-agentJapanese term remains within the Home and does not retain the operator/client.
+- The per-agentthe relevant entry remains within the Note and does not retain the operator/client.
 - This**#22 determining 1 = determining the completion of the program**
 
 ### D5 — Disable double join
@@ -101,7 +101,7 @@ Expand to all wrappers (equivalent to wrappers) and contrary to the security pri
 [#71](https://github.com/sakuraiyuta/kaoiro/issues/71)
 - **hand shake**`POST /agent/allocate`
 connection): separation is important, but the mechanism is to realize the same in
-Duplicate. Notes to #71 as a reference for Home-less.
+Duplicate. Notes to #71 as a reference for Note-less.
 - **Same agent id**Identification (ADR 3). rejected.
 
 ## Undetermined subst tion (defined at implementation)
@@ -123,7 +123,7 @@ Add as extension**.
 
 - **`KaoiroServer.TokenDenylist`**(New DETS store store):
 `agent_id => {revoked_at_iso, ...}`CO1
-the signature check**Home**`revoked?/2`
+the signature check**Note**`revoked?/2`
 `{:error, :unauthorized}` dev mode
 denylist is
 not override.
@@ -131,14 +131,14 @@ not override.
 revoke ack and `agent_deleted` / `revoked` broadcast after permanent confirmation
 ignition — revocation even if crash falls between revoke and disk
 Fuji #72 M2 review advisory `ClearWatermarks`
-Home #106 M7-a must-fix, 2026);-23);
-`PermissionModes` remains lazyJapanese term (operator)
+Note #106 M7-a must-fix, 2026);-23);
+`PermissionModes` remains lazythe relevant entry (operator)
 fsync (equivalent to semantics)
-- **store corruption**(Home #72 M2 must-fix,
-2026 -23): Init if DETS open error or malformedJapanese termー isJapanese term
+- **store corruption**(Note #72 M2 must-fix,
+2026 -23): Init if DETS open error or malformedthe relevant entry- isthe relevant entry
 `{:stop, ...}` removes the original file and does not delete it.
 The operator intentionally restarts rename + and starts with empty denylist.
-- **`delete_agent` auto-revoke path**(Home #72 M3 must-fix):
+- **`delete_agent` auto-revoke path**(Note #72 M3 must-fix):
 `agents_channel.purge_agent_records/1`
   `revoke + fsync → wrapper:<id> revoked broadcast → live cut-off →
   store purge` Linearization.revoke First crash But
@@ -169,7 +169,7 @@ and**Pre-registration of per-agent s is removed**
 - separation (per-agent does not leak / does not create a scope sharing secret).
 - **Revoked multiple instances of persona**(spawn).
 - Single binary one-shot distribution ([ADR-0018](0018-runner-distribution.md) / #70) and
-Contact Us Because it is unnecessary to resident, it is also according to the demand "Do not want to put daemon".
+permission Because it is unnecessary to resident, it is also according to the demand "Do not want to put daemon".
 - Fix #22 gap/url url supply gap with D4 (determined 1 = draft A).
 
 ### Negative
@@ -178,7 +178,7 @@ Contact Us Because it is unnecessary to resident, it is also according to the de
 Unnecessary・One shot available. friction is less than per-agent registration).
 - The `node wrapper` direct connection of the element disappears with first-class (conven  `agent_id:token`)
 Manual operation is still possible.  -less #71
-- Load to implement per-agentJapanese term issuance mechanism in server (life/reissue is the following dependent).
+- Load to implement per-agentthe relevant entry issuance mechanism in server (life/reissue is the following dependent).
 - Double live denied to join route (D. has increased).
 
 ### Neutral
@@ -195,7 +195,7 @@ Issued authentication**More**do not supersede D3).
 |hand shake`POST /agent/allocate`) |The   route (D2) is the same and the mechanism is duplicated.  -less Note to #71 as a full-fledged reference|
 |Same agent id|Iden  collision (ADR 3, face / mood / session / history)|
 |generate per-agent  locally|server does not control allocation, and revoke/exa  is weak. Issuance on the server side|
-|Random reJapanese terming agent id for each startup|restore(ADR-0014) The number is generated once|
+|Random rethe relevant entrying agent id for each startup|restore(ADR-0014) The number is generated once|
 
 ## Related
 

@@ -28,7 +28,7 @@ There was a need to confirm the concrete approach (user decision 2026-06-11).
 ## Decision
 
 1. **se seq**: wrapper `seq` (
-a single-point integer for each startup) to all envel s. Order
+a single-point integer for each startup) to all envelope s. Order
 `(agent_id, seq)` + `ts`. **server's latest state judgment
 Keep last-write-wins — seq with wrapper restart
 It is not used for overwriting judgment to move back. version remains "0"
@@ -48,7 +48,7 @@ Unmatched rejection. SQLite is not introduced (return policy 2026-06-11).
 4. **User access control stub is user  + role**: Server Settings
 Enumerate `token:role`. role is `viewer`(View only)/
 `operator` (2 steps) ADR 5
-The whitelist is linked to the OAuth installation (theJapanese term is the identifier of the present).
+The whitelist is linked to the OAuth installation (thethe relevant entry is the identifier of the present).
 
 ## Consequences
 

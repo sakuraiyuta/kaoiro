@@ -28,7 +28,7 @@ I recurred a mistake.
 The root cause is a solid-famous instruction, "to examine with ~", two different semantics
 primitive:
 
-| primitive |Home|Contact Us|
+| primitive |Note|permission|
 |---|---|---|
 |address existingerer|kaoiro er| `list_agents` → `send_to_agent` |
 |Create a new subcontractor|engine internal sub-agent (not registered)|engine specific spawn mechanism|
@@ -58,7 +58,7 @@ Add. Unspecified / `true` = valid (Codex default), `false` = disabled.  effectiv
 default. bot boolean and non boolean is
 (`runner/src/config.ts`, `wrapper/core/src/persona.ts`).
 
-### F2 — effective (= configured ?? true)`features.multi_agent`Contact Us
+### F2 — effective (= configured ?? true)`features.multi_agent`permission
 
 Codex per-run config
 `config.codex.internal_subagents`(file, nested)→   relay
@@ -77,7 +77,7 @@ precedence. Structural action that actually stops in  sub-agents `false`
 Respecting tri-state (unspecified = delegate to global) will not be collected this time
 key / contract required).
 
-**live reload**: config**Only for the next spawn**Contact Us In operation
+**live reload**: config**Only for the next spawn**permission In operation
 The wrapper process holds the value of launch and does not change immediately
 `Supervisor.updateRuntimeConfig` only runstime config for future spawn
 replace and kill existing child).
@@ -107,9 +107,9 @@ authoritative registry and routing contract.
 ### F5 — provenance backstop does not support existing mechanisms and implement new
 
 "Who is the conversation, and who is actually sent and received?"
-already meets the existing `inter_agent_message` envel :
+already meets the existing `inter_agent_message` envelope :
 
-- sender `agent_id` and `persona` envel  are stamp(`makeInterAgentMessage`)
+- sender `agent_id` and `persona` envelope  are stamp(`makeInterAgentMessage`)
 `conversation_id` / `turn_number`
 - Dashboard sends and receives by operator only observation path
 ([protocol-inter-agent](../specs/protocol-inter-agent.md) observation route)
@@ -117,7 +117,7 @@ already meets the existing `inter_agent_message` envel :
 `wrapper/agent-common/test/inter_agent.test.ts`: sender
 agent id / persona / conversation id / turn number
 The new provenance mechanism is not added, and you can use this ADR and test to “feed”
-Contact Us
+permission
 
 ## Consequences
 
@@ -151,7 +151,7 @@ block Appraisal when enabled.
 |materialise default=true when parse|Reject. parse maintains raw(undefined) and performs`?? true`reload chat is clean and consistent with chatgpt plan|
 |PreToolUse hard guard on kaoiro side|Reject. Codex 0.144.1 Codex Harness|
 |hard block|Reject. Allows the risk when the master is active. Default Disabling Existing Behavior|
-|stamp/display|Reject. Delicate implementation with existing envel  + observation path|
+|stamp/display|Reject. Delicate implementation with existing envelope  + observation path|
 
 ## Implementation
 

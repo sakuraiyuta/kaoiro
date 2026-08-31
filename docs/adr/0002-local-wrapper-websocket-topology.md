@@ -18,17 +18,17 @@ Accepted
 ## Context
 
 It was a problem where the wrapper was moved and how to connect with it. Agent SDK
-non-TSxir(TS,[ADR-0001](0001-agent-sdk-integration.md))
+non-TS(TS,[ADR-0001](0001-agent-sdk-integration.md))
 Yes, and there is a need to accompany the agent for the convenience of spawn and observation.
 Multiple hosts and programs are required.
 
 ## Decision
 
-The wrapper is the same as each agent**Local operation**Home Multiple host/process
-**Phoenix Channels**(WebSocket) connects to the center ofixxir. server
+The wrapper is the same as each agent**Local operation**Note Multiple host/process
+**Phoenix Channels**(WebSocket) connects to the center ofElixir. server
 1connection=1 Keep and deliver the latest state in GenServer.
 
-> **INK0**: wrapper [0023-host-runner-architecture](0023-host-runner-architecture.md)
+> **Supplement (ADR-0023)**: wrapper [0023-host-runner-architecture](0023-host-runner-architecture.md)
 > Directly connected to the server) sets one wrapper resident on each host and wrappers
 > spawn / Supervisor / Host registration etc.
 > wrapper does not end the data path, and the wrapper continues to be connected directly. Book ADR
@@ -39,12 +39,12 @@ The wrapper is the same as each agent**Local operation**Home Multiple host/proce
 ### Positive
 
 - The wrapper can directly observate the agent locally, and the distributed model is natural.
-- Matching with non-TSxir(TS) wrapper. Easy to pass and verify s.
+- Matching with non-TS(TS) wrapper. Easy to pass and verify s.
 - The server side utilizes OTP monitoring and PubSub.
 
 ### Negative
 
--PetsーJapanese term authentication + TLS + heartbeat per wrapper is required for public premise.
+-Pets-the relevant entry authentication + TLS + heartbeat per wrapper is required for public premise.
 - `disconnected` state management is required for connection disconnection.
 
 ### Neutral
@@ -56,5 +56,5 @@ The wrapper is the same as each agent**Local operation**Home Multiple host/proce
 
 | Option | Why rejected |
 |--------|--------------|
-|Distributed Erlang (All Hosts BEAM + Cookie Sharing)|Unmatched with non- xir wrappers|
+|Distributed Erlang (All Hosts BEAM + Cookie Sharing)|Unmatched with non- Elixir wrappers|
 |The wrapper is in the left|When the agent is another host, it is not established|

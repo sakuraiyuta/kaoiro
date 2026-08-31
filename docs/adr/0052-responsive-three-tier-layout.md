@@ -96,7 +96,7 @@ Close
 - breakpointtile with break and base, when changing the tile width and timeline width
 where to be recal d
 - composer is determined to keep all sizes in common (F6).
-The scroll position of text andJapanese term is preserved
+The scroll position of text andthe relevant entry is preserved
 
 ### Negative
 
@@ -111,7 +111,7 @@ Intuition and food
 ### Neutral
 
 - design.md is responsible for visual design (color,Homeography, motion),
-Dimensions and layoutJapanese term are divided into shapes responsive-layout.md has
+Dimensions and layoutthe relevant entry are divided into shapes responsive-layout.md has
 - design.md canonical source
 In the target description based on this ADR until the phase-31 is completed
 hronize with implementation after implementation completion

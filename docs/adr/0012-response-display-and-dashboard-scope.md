@@ -29,18 +29,18 @@ I didn't know. In light of the goal of "consolidation should be a minimum practi
 The answer to the instructions is semi-finished and the re-determining of the scope line is essential
 Comment
 
-2026-06-14,HomeーHome user and UI direction (my-spec-elicitation). Dark
+2026-06-14,Note-Note user and UI direction (my-spec-elicitation). Dark
 The theme, face, standing picture, etc. width font) remains fixed, screen transition, display item, function
 d.
 
 ## Decision
 
-- **(F1) Include response display in scope**Home Positioning the included dashboard
+- **(F1) Include response display in scope**Note Positioning the included dashboard
 Minimum**Information rich operator console**Revised to Line Pull
-Determination criteria is not "Number of functions" but "**New public protocol surface / serverJapanese term
+Determination criteria is not "Number of functions" but "**New public protocol surface / serverthe relevant entry
 * Public API Consuming and non-permanent richness is allowed
 [non-goals](../specs/non-goals.md)
-- **(F3) List of tiles by default**Home Click on the agent to transition animation
+- **(F3) List of tiles by default**Note Click on the agent to transition animation
   **Full screen details**display.
 - **(F2/F6) Grid card is the current display item**(face, name, state, agent id)
 Retention (rich card). Permission/rejection of approval is not placed on the card and is required
@@ -50,7 +50,7 @@ Sending instructions is only a detailed screen, and it is a policy that does not
 - **(F  response is a chat-like `log` stream**display. `assistant` text
 `tool_use`/`tool_result`
 Click to expand.
-- **(F  Blind Spot Indicator**Home All screen details are blind spots that overlook other agents
+- **(F  Blind Spot Indicator**Note All screen details are blind spots that overlook other agents
 To grow,**Other N body is required →**"Always display (color follows the emergency state:
 error > waiting permission)
 - **(F7) server is in-memory ring buffer history**snapshot at join

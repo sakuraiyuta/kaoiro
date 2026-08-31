@@ -64,7 +64,7 @@ monotonic timestamp in the same browser context.
 interface BrowserMeasurementTime {
   wall: string;          // new Date().toISOString()
   monotonic_ms: number;  // performance.now()
-  context_id: string;    // page lifecycle per random id
+  context_id: string;    // page lifecycle ごとの random id
 }
 ```
 
@@ -88,7 +88,7 @@ not the main indicator. NTP correction and host/br er clock skew
 presentation is not the time passed to the state,
 The time when the target dialog is visible after the dialog update is completed. Same
 `request_id` / `context_id` record only once for the same drawing
-Do not overwrite in reJapanese terming. pending after reload / navigation or reconnect
+Do not overwrite in rethe relevant entrying. pending after reload / navigation or reconnect
 If dialog is restored, add the first presentation to `presentations` instead.
 
 latency eligibility is determined by the following rules for the entire lifecycle:
@@ -202,7 +202,7 @@ type ObservationCondition =
 | `combined` |display|display|display|
 
 Specifically, only observe stimulation of AgentDetail. The following operator control is
-Contact Us
+permission
 
 deny permissions
 - How to use question / input dialogs, composer, interrupt, etc.
@@ -221,7 +221,7 @@ Do not change.
 `state_change.ext.pending_permission.request_id` with lifecycle correlation key
 Don't add a new ID.
 - `requested_at` duplicates existing `pending_permission.ts` as a normal value.
-legacy `permission_request` The outer frame of envel  `ts` is the same, but the dashboard is
+legacy `permission_request` The outer frame of envelope  `ts` is the same, but the dashboard is
 authoritative pending record
 - `permission_request` maintains the role of the first notification and presents authoritative
 Don't promote to source. after join/reconnect `ext.pending_permission` dialog
@@ -236,7 +236,7 @@ Let's differentiate and lose the decision itself because of unknown/fair measure
 inherit the existing policy role ([ADR-0021](0021-role-information-disclosure-policy.md)).
 - Codex exec does not generate lifecycle with `approval: "never"`
 ([ADR-0033](0033-permission-model-dual-axis.md) F3). record absent
-AJapanese termmetric of current engine capability.
+Athe relevant entrymetric of current engine capability.
 
 ### D6. Completion and Non-Goal
 

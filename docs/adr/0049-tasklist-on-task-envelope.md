@@ -1,5 +1,5 @@
 ---
-title: Task Tasklist (todo) to task envel
+title: Task Tasklist (todo) to task envelope
 status: accepted
 date: 2026-08-04
 opened: 2026-08-04
@@ -9,7 +9,7 @@ related_specs: [protocol, subagent-tasks, codex-sdk-events]
 related_adrs: [47]
 ---
 
-# ADR-0049 — Let the Tasklist (todo) task join envel
+# ADR-0049 — Let the Tasklist (todo) task join envelope
 
 ## Status
 
@@ -25,7 +25,7 @@ I want to see. #170
 "Agent's own todo item breakdown" instead of "Is child task running?"
 
 
-Material: Both engine**List-wide updates**Contact Us
+Material: Both engine**List-wide updates**permission
 (Claude Code todo update, Codex SDK 0.144.1 ThreadItem `todo_list`
 — `items[]: {text, completed}`,[codex-sdk-events](../specs/codex-sdk-events.md).
 current codex adapter is destroyed). ADR-0047 `task_type`
@@ -50,9 +50,9 @@ It is a route that leaves "heavy in v0" and follows the same judgment.
 
 ### F3: Claude Code / Codex
 
-Codex converts ThreadItem `todo_list` to the same envel .
+Codex converts ThreadItem `todo_list` to the same envelope .
 `completed` boolean maps to item status
-The particle size difference of item status betweenJapanese terms is acceptable).
+The particle size difference of item status betweenthe relevant entrys is acceptable).
 
 ### F4: The details are determined by the protocol
 
@@ -100,13 +100,13 @@ The whole-list LWW does not include the item difference to the server/dashboard.
 This directory is not a public SDK contract. directory missing
 read/JSON/schema will warn and fail-visible without sendinglele list.
 empty list only has 0 JSON task file in session session directory
-Contact Us The future unknown `Task*` warn once per name. background task `TaskOutput` /
+permission The future unknown `Task*` warn once per name. background task `TaskOutput` /
 `TaskStop`, `TaskGet` of tasklist read-only and `Task` are not known
 tool the si , once warn and sort the following tool rename
 not to miss.
 
 compact does not change the session id, but the session id changes with fork/rebind
-If you have a known tasklist, read the new session directory immediately. Contact Us
+If you have a known tasklist, read the new session directory immediately. permission
 If not re-Deliverybuted, otherwise replace it with empty list. If you do not read source,
 session the list of session to empty list and leave warning.
 not left in the display. Init resume restores effective settings
@@ -122,8 +122,8 @@ Tasklist is not redisplayed.
 
 | Option | Why rejected |
 |--------|--------------|
-|todo task entity per item|wrapper requires an item value calculation and is aJapanese termmetrical to Codex(completed only). Not suitable for source events|
-|New envel  type|type enum increases and reverses ADR-0047's single type policy|
+|todo task entity per item|wrapper requires an item value calculation and is athe relevant entrymetrical to Codex(completed only). Not suitable for source events|
+|New envelope  type|type enum increases and reverses ADR-0047's single type policy|
 |subagent todo|Heavy child transcript reading (as ADR-0019)|
 
 ## Related
@@ -131,7 +131,7 @@ Tasklist is not redisplayed.
 -Reservation: [protocol](../specs/protocol.md)
   [subagent-tasks](../specs/subagent-tasks.md),
 [codex-sdk-events](../specs/codex-sdk-events.md)
--sk ADR: [0047](0047-task-envelope-schema.md) (task envel  schema,
+-sk ADR: [0047](0047-task-envelope-schema.md) (task envelope  schema,
 `task_type` extension.
 - Origin: kaoiro issue #178
 UI decisions are recorded on the issue side.

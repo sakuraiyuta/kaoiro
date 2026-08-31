@@ -1,5 +1,5 @@
 ---
-title: Notification of subagent/workflow with parent entity and dedicated envel  type
+title: Notification of subagent/workflow with parent entity and dedicated envelope  type
 status: accepted
 date: 2026-06-16
 opened: 2026-06-16
@@ -9,7 +9,7 @@ related_specs: [protocol, agent-sdk-events, subagent-tasks]
 related_adrs: [10, 15, 47, 48]
 ---
 
-# ADR-0019 — subagent/workflow child entity and dedicated envel  type
+# ADR-0019 — subagent/workflow child entity and dedicated envelope  type
 
 ## Status
 
@@ -42,7 +42,7 @@ What entities do we handle?
 identity / transport**Child Entity**」
 Handle as: Each task is linked with parent `agent_id`, and the lifecycle is
 bound to the parent session.
-- **transport(F2)**: represent the task lifecycle**New envel  type**Home
+- **transport(F2)**: represent the task lifecycle**New envelope  type**Note
 Launch / update / complete with individual events. parent agent `state_change`
 `KaoiroState` keeps child task information together.
 - **state particle size (F3)**: Notify state**Rough lifecycle**(running / completed /
@@ -51,11 +51,11 @@ non-scope (expansion in the future `getSubagentMessages` path), not in the paren
 - **Notice Particle Size (F4)**: List of tasks running to clients (`task_id` + type/name +
 Pass `status` + progress meta). `task_started`(+1)/ `task_notification`
 (-1) Cal.d from top level flat ag.ation.
-- **Data Range (F Japanese termーJapanese term**`usage` / `last_tool_name` / `summary`
+- **Data Range (F the relevant entry-the relevant entry**`usage` / `last_tool_name` / `summary`
 - **Privacy Policy**: wrapper / server's responsibility to notify clients of presence and state.
 How to visually express subagent / workflow
 persona→sprite→the same style of expression ownership, [overview](../specs/overview.md) A/B separation).
-- New envel  type official name / Schema details
+- New envelope  type official name / Schema details
 [ADR-0047](0047-task-envelope-schema.md)
   `payload.kind`).**Repair of reservation type**
 ([ADR-0010](0010-protocol-precisification.md))
@@ -65,7 +65,7 @@ persona→sprite→the same style of expression ownership, [overview](../specs/o
 
 ### Positive
 
-- The AI team activity that the agent runs inJapanese termーGent is visualized and the goal (A) resolution is increased.
+- The AI team activity that the agent runs inthe relevant entry-Gent is visualized and the goal (A) resolution is increased.
 - A dedicated type prevents the meaning of `state_change` by keeping the parent state cohesion.
 
 ### Negative
@@ -84,9 +84,9 @@ persona→sprite→the same style of expression ownership, [overview](../specs/o
 | Option | Why rejected |
 |--------|--------------|
 |Independent top-level entities of Persona accord|Lifecycle is bound to parents`task_id`the parent local observationstate is rough and becomes an over promise|
-|Home`state_change`Home`ext`Include subagents array|Required to combine with parent state and prepare ignition at subagent alone update|
+|Note`state_change`Note`ext`Include subagents array|Required to combine with parent state and prepare ignition at subagent alone update|
 |execution number|Don’t leave “w) is running” and don’t meet the request (type/name identification)|
-|Particle size 8 state`getSubagentMessages`Contact Us|transcript reads in v0. Sufficient life cycle|
+|Particle size 8 state`getSubagentMessages`permission|transcript reads in v0. Sufficient life cycle|
 
 ## Related
 
@@ -114,7 +114,7 @@ wider (running/completed/failed/stopped)
 execution counts simultaneously when using intermediate state such as `status: killed`
 I had a concern that I would be crazy by taking the end event.
 
-**Contact Us**In the instruction of the master, instead of guessing from the type definition
+**permission**In the instruction of the master, instead of guessing from the type definition
 Script scripts were captured and measured.
 [agent-sdk-events](../specs/agent-sdk-events.md) Task
 (subagent/workflow) message. Results: Nature Complete / `stopTask()` /
@@ -132,4 +132,4 @@ The number of simultaneous execution count is not involved only in the log
 Revised to `task_progress`/`task_notification`
 not readable).
 
-**Home**: kaoiro issue #170 implementation session (Home, 2026.09).
+**Note**: kaoiro issue #170 implementation session (Note, 2026.09).

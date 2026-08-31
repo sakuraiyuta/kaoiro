@@ -9,7 +9,7 @@ related_specs: [protocol, threat-model]
 related_adrs: [10, 11, 12, 21, 27, 32, 33, 34, 40, 41, 43, 44]
 ---
 
-# authoritative source for pending permission`state_change.ext`Home
+# authoritative source for pending permission`state_change.ext`Note
 
 ## Status
 
@@ -18,21 +18,21 @@ Accepted
 ## Context
 
 The permission dialog introduced in Phase 3 is displayed on the display .
-`state_change` When envel  arrives**The dialog disappears and unoperable**and
+`state_change` When envelope  arrives**The dialog disappears and unoperable**and
 Auto deny with wrapper timeout after 600 seconds → fatal
 Issue #59)
 
 direct cause is client (`dashboard/src/App.svelte`,
-`dashboard/src/lib/AgentDetail.svelte`) is the latest envel  for each agent
-`permission_request` envel
+`dashboard/src/lib/AgentDetail.svelte`) is the latest envelope  for each agent
+`permission_request` envelope
 Lose persistence when overwritten with `state_change`.
 
 The revision policy was 3 proposals:
 
 ||||
 |---|---|---|
-| A |Client side`pendingPermissions`Set up a store envel  independently|rejected: short term is valid, but reigns with reload recovery, multiple operator observationhronization, viewer observation, history matching. Because protocol is not fully expressing state, it is not rooted in client-side local stores|
-| B |wrapper is waiting permission`state_change.ext`Home`pending_permission`and the client isHome from ext| **Contact Us**ADR-0012 / ADR-0021 Recoverable with snapshot, always hronize across multiple clients|
+| A |Client side`pendingPermissions`Set up a store envelope  independently|rejected: short term is valid, but reigns with reload recovery, multiple operator observationhronization, viewer observation, history matching. Because protocol is not fully expressing state, it is not rooted in client-side local stores|
+| B |wrapper is waiting permission`state_change.ext`Note`pending_permission`and the client isHome from ext| **permission**ADR-0012 / ADR-0021 Recoverable with snapshot, always hronize across multiple clients|
 | C |wait permission on the wrapper side`state_change`queue and permission resolved after flash|rejected: risky by fundamental changes in state machines. Client observation of advanced information is delayed|
 
 ## Decision
@@ -41,7 +41,7 @@ The revision policy was 3 proposals:
 
 The truth of the permission request in pending is `state_change.ext.pending_permission`.
 `null`/ No pending if not set. Shape`{ request_id, tool_name, input?,
-truncated?, ts }`(`permission_request`equivalent to payload of envel ).
+truncated?, ts }`(`permission_request`equivalent to payload of envelope ).
 
 ```json
 {
@@ -59,14 +59,14 @@ truncated?, ts }`(`permission_request`equivalent to payload of envel ).
 }
 ```
 
-### F2: `permission_request`envel **First notification**
+### F2: `permission_request`envelope **First notification**
 
 For the purpose of maintaining protocol compatibility and notifying events that "pending has been newly issued"
-`permission_request` leave envel , but the truth of state is no longer. More
+`permission_request` leave envelope , but the truth of state is no longer. More
 The client reads ext.
 
 `permission_request` payload and `state_change.ext.pending_permission`
-guaranteesJapanese termhronization on the wrapper side (the same `request_id` / `tool_name` /
+guaranteesthe relevant entryhronization on the wrapper side (the same `request_id` / `tool_name` /
 `input` / `truncated` / `ts`).
 
 ### F3: wrapper will last to ext
@@ -87,12 +87,12 @@ ext does not contain pending.
 
 ADR-0021
 "Remove ext" does not leak to viewer. No new guard required.
-`permission_request` The envel  itself is completely removed with ADR-0021
+`permission_request` The envelope  itself is completely removed with ADR-0021
 (subst ted to `state_change(waiting_permission)`).
 
 ### F5: Snapshot Restore
 
-`AgentStates` of the server puts state change as the latest envel .
+`AgentStates` of the server puts state change as the latest envelope .
 `ext.pending_permission`
 but unresolved permission is restored as it is. DETS, etc.
 No necessity (only the survival in the session is the purpose, another interest from #49).
@@ -114,7 +114,7 @@ The maintenance is another issue #60, and this ADR only changes the behavior of 
 ### F7: Clients switch to ext
 
 Do not leave any compatible fallback. in-tree
-`permission_request` does not read envel  directly. <1
+`permission_request` does not read envelope  directly. <1
 helper transfers the role to `pendingPermissionFrom`, such as AgentDetail.svelte
 Derivatives are also unified via `envelope.ext.pending_permission`.
 
@@ -144,8 +144,8 @@ state, but force deny at `close()` at the end of the wrapper.
 
 ### Neutral
 
-- `permission_request` envel  remains in protocol, so the
-This envel  is not broken even with a single dependency (but new clients via ext)
+- `permission_request` envelope  remains in protocol, so the
+This envelope  is not broken even with a single dependency (but new clients via ext)
 Recommended).
 - No need for DETS persistence. If long-term storage is required
 #49 (session id pointer)
@@ -154,7 +154,7 @@ Recommended).
 
 | Option | Why rejected |
 |--------|--------------|
-|A: New pendingPermissions store on client side|Reload recovery, multiple operators observationhronization, viewer observation, history, and reign. The local store stays in Japanese termptomatic therapy because protocol does not fully express state|
+|A: New pendingPermissions store on client side|Reload recovery, multiple operators observationhronization, viewer observation, history, and reign. The local store stays in the relevant entryptomatic therapy because protocol does not fully express state|
 |C: queue/flash the state change in waiting permission with wrapper|state The risk of fundamental changes in the machine. Client observation of advanced information is delayed. This ADR's F3 (sustained to ext) has wider changes|
 |2 phase transition (ext fallback Yes)|All clients are in-tree and non-ex  compatible. fallback Code is a maintenance debt. (#59 user)|
 |Fixed timeout (600 seconds)|If the root cause was pending disappeared, the auto deny for 10 minutes is misfired with a regular user's takeoff UX Mainly|
@@ -166,7 +166,7 @@ Recommended).
 ## Related
 
 - specs: [protocol](../specs/protocol.md)(`state_change.ext.pending_permission`
-`permission_request` envel
+`permission_request` envelope
 [threat-model](../specs/threat-model.md)
 via auto cover).
 - ADR: [0010](0010-protocol-precisification.md),

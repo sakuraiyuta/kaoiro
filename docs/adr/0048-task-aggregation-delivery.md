@@ -27,7 +27,7 @@ Snapshots were undecided.
 Determination material: `snapshot` (join   push, `agent_id`)
 last-write-wins, [protocol](../specs/protocol.md)). server only memory
 (no.), the premise that disappears by restart is the same as the existing one. AgentDetail
-dashboard There is a track record (kaoiro issue #174), and envel  quantity
+dashboard There is a track record (kaoiro issue #174), and envelope  quantity
 I want to avoid uncontrolled increase.
 
 ## Decision
@@ -45,21 +45,21 @@ destroy the task that is linked to when withdrawal.
 
 Prog  update (`kind=updated`) depends on a certain interval + difference threshold on the issue side of the wrapper
 Close `started` / `completed` will always be issued immediately. `usage`
-Increase envel  by frequent updates and suppress dashboard loads (#174 lessons) with sources.
+Increase envelope  by frequent updates and suppress dashboard loads (#174 lessons) with sources.
 The interval and threshold of the object are defined at stage 1.
 
 ### F3: Subs   to connection with existing snapshot frame
 
 `snapshot`(join   push)
 send the task's active set. Snapshot
-envel  The protocol add is minimal, and the last-write-wins
-Contact Us
+envelope  The protocol add is minimal, and the last-write-wins
+permission
 
 ## Consequences
 
 ### Positive
 
-- The implementation policy of retention and distribution can be determined, and can be set to stage 2 (Japanese term consolidation and relay).
+- The implementation policy of retention and distribution can be determined, and can be set to stage 2 (the relevant entry consolidation and relay).
 - Simultaneously reduce the load of both the client and the hassle of the intermittent.
 - Minimizes the addition of the protocol to use the existing framework of snapshot.
 
@@ -80,8 +80,8 @@ Delay (consuming to the final value with `completed`).
 | Option | Why rejected |
 |--------|--------------|
 |Child collection under the parent agent entity|Parent reconnection/deletion process and child life management combine. different`task_type`It is difficult to live|
-| `task_progress`every time|envel  is bulging in frequent update of usage and can reproduce the dashboard load (#174)|
-|Snapshot envel |Constant traffic increases. push + last-write-wins|
+| `task_progress`every time|envelope  is bulging in frequent update of usage and can reproduce the dashboard load (#174)|
+|Snapshot envelope |Constant traffic increases. push + last-write-wins|
 
 ## Related
 
@@ -96,9 +96,9 @@ ADR
 
 ## Addendum (issue #170, 2026 2009):
 
-**Contact Us**`task` envel  live streaming, and snapshot `tasks` keys
+**permission**`task` envelope  live streaming, and snapshot `tasks` keys
 (F3)****`viewer` will not be delivered to the roll.
-After consultation with the master, Home decides, and three of them:
+After consultation with the master, Note decides, and three of them:
 
 1. [ADR-0047](0047-task-envelope-schema.md) F3 progress meta
 `summary` / `last_tool_name`
@@ -113,10 +113,10 @@ Unfold it first and make it safer to leak.
 **.**
 
 - Live streaming: `AgentsChannel.sanitize_envelope_for/2` to `"task"` only
-**Not Added**Home `log`/`result`/`hosts`
+**Not Added**Note `log`/`result`/`hosts`
 same path — type without explicit viewer permission clause
 `:viewer, _ -> :drop` falls to the default value — to ride as it is,
-ments to zero line changes (N3 Correction, ChJapanese term 2026 09: This
+ments to zero line changes (N3 Correction, Chthe relevant entry 2026 09: This
 not "Fail-closed insurance for unknown type",
 same main path as hosts/log/re t — dependent on server gate
 result and not defensive fallback).
@@ -127,4 +127,4 @@ result and not defensive fallback).
 addendum or new ADR to expand task visualization for future viewer
 after the revision (not implicit extension on the sanitization side).
 
-**Home**: kaoiro issue #170 implementation session (Home, 2026.09).
+**Note**: kaoiro issue #170 implementation session (Note, 2026.09).

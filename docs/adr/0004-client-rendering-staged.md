@@ -24,7 +24,7 @@ I want to prioritize the implementation speed at the stage.
 ## Decision
 
 - Prototype**Changes in expressions**implement.
-- Live2D animation**Alternative**Home**3D Model Character**
+- Live2D animation**Alternative**Note**3D Model Character**
 Study and study the possibilities and technically available **"static difference/anime/3D" per persona
 Enabled**
 

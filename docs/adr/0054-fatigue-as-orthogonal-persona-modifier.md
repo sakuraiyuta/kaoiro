@@ -50,14 +50,14 @@ Change only.
 Only `idle` and `waiting_input` are used to replace the fatigue sprite.
 `disconnected`, while working, complete, and error keep the original state. `disconnected` Priority
 `FATIGUE_ELIGIBLE_STATES` allowlist
-Contact Us issue #162 Deleting early return with mu  in implementation is green
-Remove redundant early return with Home arbitration, and go toallowlist
+permission issue #162 Deleting early return with mu  in implementation is green
+Remove redundant early return with Note arbitration, and go toallowlist
 TB-7 is red.
 
 mana pack must be 7 state, plus optional sprite id
 `fatigued` server must include 7 in s and required to
 Verify both partial sets. `manifest.states`
-SoT andJapanese termd `fatigued.png` missing, re-extract or reject pack as incomplete
+SoT andthe relevant entryd `fatigued.png` missing, re-extract or reject pack as incomplete
 Undeclared extra PNG does not appear in manifest. Unknown id is rejected.
 
 `fatigued.png` is the responsibility of issue #163.

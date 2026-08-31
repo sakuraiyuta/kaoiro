@@ -44,13 +44,13 @@ kaoiro authorization is fixed to 2 roles (operator / viewer) and operator is rea
 All rights including: Single tenant premise
 - **Multi-tenant isolation**: All operators can operate all agents.
 Register agent owner boundaries
-- **Audit Log**: Fixed aJapanese term record of "whoever sent to the agent"
+- **Audit Log**: Fixed athe relevant entry record of "whoever sent to the agent"
 
 [ADR-0042](0042-oauth-allowlist-login.md)
 It was sent in the future. It was established between single users, but it is more than medium size
 In operation, it becomes real harm. kaoiro internal identity
 (OAuth identity (provider + uid) or shared  only)
-"Who" remains in the log and envel , and the AI agent is the source
+"Who" remains in the log and envelope , and the AI agent is the source
 Not recognized.
 
 In addition, ADR-0021 F6-6 is based on the validity of theerer directory.
@@ -72,31 +72,31 @@ not human or AI****.
 
 Reference:
 
-1. **Iden  SoT is different**Home `agent_id` is kaoiro
+1. **Iden  SoT is different**Note `agent_id` is kaoiro
    ([ADR-0024](0024-agent-instance-identity-and-spawn-auth.md) D3,
 `<scope>.<rand>`. The identity of user isternal fromternal IdP (OAuth provider + uid)
 SoT is outside of kaoiro. "Spawn user"
 Broken operation surfaces such as “Applying agent to permission list” can be constructed
-2. **AJapanese termmetric**Home The action of the agent is ultimately attributed to any user,
+2. **Athe relevant entrymetric**Note The action of the agent is ultimately attributed to any user,
 The behavior of the user is the end that is not attributable to anyone. If not expressed by type
 user → agent → agent’s responsibility chain is flattened and audit is not established
-3. **Example**Home [ADR-0028](0028-external-human-messaging.md) D3
+3. **Example**Note [ADR-0028](0028-external-human-messaging.md) D3
 external human tool to the dedicated type / tool instead of generalizing inter-agent
 separated. If the Route "trust model is in one route, the condition is leaked immediately
 Vulnerability Agent / internal user / external
 3 Pass the same   because each route is different
 
-Home rules:
+Note rules:
 
 - `kind` is a required field on wire. Agent forerer
 If it is not judged, it is not possible to determine whether there is a reception message
 - id space is single. charset `[A-Za-z0-9._-]`
 ([#61](https://github.com/sakuraiyuta/kaoiro/issues/61))
-- **`kind` does not derive from id**Home store attribute. id
+- **`kind` does not derive from id**Note store attribute. id
 If prefix has a meaning, the falsehood is effective for the permission judgment as it is
 
 **Status**: user side is issue #187 step 2`%{id, kind, display_name,
-role}`implemented. agent at issue #187`persona.name`Home
+role}`implemented. agent at issue #187`persona.name`Note
 `display_name`, `Principal`
 was not realized on the agent side.
 [issue #209](https://github.com/sakuraiyuta/kaoiro/issues/209)
@@ -112,7 +112,7 @@ independent from `persona` (pack-derived, session-invariant)
 
 | role ||
 |---|---|
-| admin |Author and full visibility of permission graphs.**Apply to cover concealment**Home Per-pair permission|
+| admin |Author and full visibility of permission graphs.**Apply to cover concealment**Note Per-pair permission|
 | operator |Make sure the agent can be operated. which agent can be operated by per- permissionpair|
 | viewer |Guest Default is only available on grid|
 
@@ -168,9 +168,9 @@ This decision is "multi-tenant iso  by ADR-0042"
 
 kaoiro is a virtual office for multi-AI agents.
 As a rule, the entity that is participating is a form that is visible in role. However,
-The scope of “visible” is**id / name / kind / role**Home
+The scope of “visible” is**id / name / kind / role**Note
 per-pair permission
-Contact Us
+permission
 
 "Who are you currently?" and "Who do you work?" are another problem, and the former is known
 Comment ADR-0028 D4 ex  human contact that the disclosure does not weaken the defense
@@ -195,10 +195,10 @@ The existence of the defamation itself does not get away because it breaks the c
 **As a result, "complete non-display" of user→user is not always established.**
 Even if user C is completely non-display for user B, B and C are the same agent A
 If you have a conversation, you can see a C statement via the A log. This nature is
-Contact Us
+permission
 
 "I want to hide a specific user" and "the boss see all"
-At first g ,**Resolve in hierarchy**Home It is an equal stand that hiding is established
+At first g ,**Resolve in hierarchy**Note It is an equal stand that hiding is established
 operators are not hiding from admin and higher operators (D2).
 In real-world office, "A is an intimate" is a human who is more than equal to A
 The same structure as the only one.
@@ -216,7 +216,7 @@ The permission setting itself is not credible due to divergence.
 
 ### D8 — Implement phase order: A → B-1 → B-2 → C
 
-| Phase ||Contact Us|
+| Phase ||permission|
 |---|---|---|
 | A |identification + admin role. Authorized SoT remains text| #187 / #188 |
 | B-1 |per-pair**Simultaneously inject behavior** | #189 / #190 |
@@ -267,21 +267,21 @@ auth-and-authz.md
 
 ## Future work
 
-- **Japanese termation between users**Home The agent prompts for another user
+- **the relevant entryation between users**Note The agent prompts for another user
 Supported extensions. D5 to disclose all user lists to agent
 I'm looking for this scalability. Sorry, this entry is only available in English.
 Not included in the implementation scope
-- **user grid list display and interactive chat**Home Agent and user on UI
+- **user grid list display and interactive chat**Note Agent and user on UI
 Shape that looks  . D1 mould separation can be realized with —— UI up UI
 The same type is another one, and the more the same type is expressed as kind
-Contact Us
+permission
 
 ## Consequences
 
 ### Positive
 
 - The entire authorization is consistent with fail-closed. If there is no explicit declaration,
-Follow the same principles from the envel  delivery (ADR-0021 F2) to the permission chart
+Follow the same principles from the envelope  delivery (ADR-0021 F2) to the permission chart
 - Audit is established. The user has identity, and the trail remains in the permission change
 - Medium-scale operation is possible. Separate agent that touches each operator
 -   Stone for public and business development. Security models are hard to reinforce,

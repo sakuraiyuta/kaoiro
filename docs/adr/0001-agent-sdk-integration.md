@@ -20,7 +20,7 @@ Accepted
 The method of observation and control of the CLI agent (Claude Code) was a problem. Terminal output
 PTY Scrape with TUI escape. CLI Headless
 (`claude -p --output-format stream-json`) can be observation, but one-shot.
-Injection (hole 1) to the session and ex  routing of permission is weak. Contact
+Injection (hole 1) to the session and ex  routing of permission is weak. permission
 The surface of permission is required.
 
 ## Decision
@@ -32,7 +32,7 @@ claude-agent-sdk`host
 derive the state from.
 - control (hole 1): Multi-turn control with resume / streaming input.
 - permission: `PreToolUse`   / `canUseTool`
-Contact Us
+permission
 
 ## Consequences
 
@@ -57,5 +57,5 @@ Contact Us
 | Option | Why rejected |
 |--------|--------------|
 | CLI stream-json |one-shot. permission is weak in theternal UI linkage only via MCP tool|
-|PTY|TUI escape  ttle and unstable|
-|portxir to port the CLI|in-process permission callback/multi-turn injection is not available|
+|PTY|TUI escape  fragile and unstable|
+|port to port the CLI|in-process permission callback/multi-turn injection is not available|

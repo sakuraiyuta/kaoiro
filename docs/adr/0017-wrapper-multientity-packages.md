@@ -18,7 +18,7 @@ Accepted (materialised: [phase-13-wrapper-multipackage-restructure](../plans/pha
 Implemented Package Boundaries (2026 -10):
 
 - `@kaoiro/wrapper-core` (`wrapper/core`) — transport (`ServerLink` + approval/question wire type) / config read/verify (`persona.ts`) / CLI argument analysis.
-- `@kaoiro/agent-common` (`wrapper/agent-common`) — state machine + envel  generation (`state.ts`), `EngineAdapter` interface, `PermissionBroker` / `QuestionBroker` (+ `PermissionDecision` / `QuestionDecision`), common tool description layer skeleton (`ToolDescriptor`), common event type (`AdapterEvent`, etc.).
+- `@kaoiro/agent-common` (`wrapper/agent-common`) — state machine + envelope  generation (`state.ts`), `EngineAdapter` interface, `PermissionBroker` / `QuestionBroker` (+ `PermissionDecision` / `QuestionDecision`), common tool description layer skeleton (`ToolDescriptor`), common event type (`AdapterEvent`, etc.).
 - `@kaoiro/claude-code` (`wrapper/claude-code`) — renamed the former `@kaoiro/wrapper` ([ADR-0023](0023-host-runner-architecture.md) D3 execution). `AgentHost` / SDK adapter / file upload / inter-agent tools / CLI body / biaxial image table ([ADR-0033](0033-permission-model-dual-axis.md) F2 placeholder).
 - `@kaoiro/codex` (`wrapper/codex`) — not implemented stub only scaffold (implemented in phase-14).
 
@@ -35,7 +35,7 @@ On the code. This ADR falls into a physical package structure.
 
 ## Decision
 
-`@kaoiro/wrapper`**Multi-package of pnpm workspace****3 layers**Home
+`@kaoiro/wrapper`**Multi-package of pnpm workspace****3 layers**Note
 Share:
 
 - `wrapper/core` — **Entity Independence**: Transport / Envel  Outer Frame +version /
@@ -43,7 +43,7 @@ identity / persona / connection / state report lifecycle / config / CLI frame.
 - AI agent common layer (e.g. `wrapper/agent-common`) — state machine, permission,
 streaming instruction. claude-code/codex
 `wrapper/claude-code``wrapper/codex`
-`wrapper/<Japanese term AI Home>`
+`wrapper/<the relevant entry AI Note>`
 
 The adapter takes the core as `workspace:` dependencies. The state machine, permission, and instruction
 AI-specific and not mixed into the core (because non-AI entities do not bear the AI concept).
@@ -79,7 +79,7 @@ package boundary and responsibility at materialise:
 
 | Option | Why rejected |
 |--------|--------------|
-|Only folder reJapanese termation remains single package|Independent build and distribution of adapters (ADR-001)|
+|Only folder rethe relevant entryation remains single package|Independent build and distribution of adapters (ADR-001)|
 |Apply AI state machine to core with two layers (core + adapter)|DB/Mon , etc. shoulder AI concept (state machine/permission/instruction)|
 |Get Started|Low priority. Prioritize Key Features|
 

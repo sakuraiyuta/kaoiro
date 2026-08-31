@@ -82,7 +82,7 @@ spawnable sets may be empty, but canary/preparation
 assumes a legal state as host. dashboard is explicitly UX with empty picker
 display (not handling exceptions).
 
-This adoptJapanese term**id space consistency**`inject_default/1`
+This adoptthe relevant entry**id space consistency**`inject_default/1`
 HostRegistry simplification** by removal of the program. The default is unique in the future
 "default-specific injects when shake in the direction with personality pack
 Functions as a base of tion counter s (but the current default is common)
@@ -123,7 +123,7 @@ Removing with this ADR to duplicate warnings.
 
 ## Consequences
 
-### Home
+### Note
 
 - When adding new pack, blacklist mode host does not need to change config automatically
 reflected (papercut when fuji is added is structurally disappeared)
@@ -140,9 +140,9 @@ server admin does not degrade, but multiple operators/shares
 In the case of server, the operator will run the persona prompt
 lose an explicit way to review (pack ishanChannel
 push to wrapper as persona prompt and prompt from personality.md
-injection risk may be pronounced within the allowed tools range). Japanese term
+injection risk may be pronounced within the allowed tools range). the relevant entry
 You can choose the mode in config (your policy) to the operator
-Home
+Note
 - Allowlist / blacklist 2 mode
 HostRegistry
 attrs format, dashboard empty picker UX)
@@ -195,7 +195,7 @@ Do not warning to be handled as a legal state (if you like it, issue)
 
 1. **`runner.config.json`**(with <CODE1):
 Up to the next release, depre  warnings are used as allowlist mode
-Contact Us lab admin
+permission lab admin
 - blacklist To be oriented → remove `personas` and start or
 `blocked_personas: []`
 - `personas: [...]`

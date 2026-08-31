@@ -27,7 +27,7 @@ Become another new session and lose the original conversation context.
 (`~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`)
 I can't resume.
 
-Both**Same mechanism (refer to existing session id and resume)**Contact Us
+Both**Same mechanism (refer to existing session id and resume)**permission
 This ADR is an old open-question `existing-agent-summon` (issued 2026-06-15)
 my-spec-elicitation
 
@@ -35,7 +35,7 @@ my-spec-elicitation
 
 - SDK**Cross-process resume**
 (`query({ options: { resume: "<session-id>" } })`) Ex-process die
-Contact Us
+permission
 - Conversation history is not process memory**Persistent on Local JSONL**
 (`~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`) resume
 Read this.
@@ -65,10 +65,10 @@ flowchart LR
   server --> store[("pointer Light Duty Standing")]
 ```
 
-- **Survival Unit =  **Home wrappers that are not resident will return the wrapper
+- **Survival Unit =  **Note wrappers that are not resident will return the wrapper
 Start/Restart. If the   is dead, return via client→  will give up.
 Hosts are non-ephemeral, and local JSONL remains plain.
-- **Manual return (operator client operation)**Home   crash
+- **Manual return (operator client operation)**Note   crash
 Auto resume is out of scope. Show crash detection and return operations
 server detects channel owner withdrawal and exits to UI (existing disconnected derive)
 
@@ -76,13 +76,13 @@ server detects channel owner withdrawal and exits to UI (existing disconnected d
 Light weight persists only pointers. All history does not persist.
 - **F2 List of candidates**: Default return pointer (last session id)
 Pre- . The list of candidates will be returned by   with the JSONL under the cwd
-(with the minimum meta of each JSONL), alsoJapanese terms pointer survival. session id
+(with the minimum meta of each JSONL), alsothe relevant entrys pointer survival. session id
 If you can't find / user choose another session id.
 - **F3 agent_id ↔ session_id**: agent id (host, cwd)
 retains "last session id" in 1:1. All candidates(1:N)
 get in the enumeration. The server does not have a session id history.
 - **F4 Double attach-proof**: server owner fen  (reverted during connection, UX)
-Early rejection) + Japanese term Local lock (simultaneous resume of the same session is physical blocked)
+Early rejection) + the relevant entry Local lock (simultaneous resume of the same session is physical blocked)
 resume always passes the same  , preventing the lock from being damaged.
 - **F5 Resume approach = resume**(same session id continued). continue
 forkSession (Options) is not collected (forkSession is the option to resume future processes).
@@ -90,8 +90,8 @@ forkSession (Options) is not collected (forkSession is the option to resume futu
 Exposure is limited to operator, minimum, T3 return target session id, the agent binding cwd
 Validation under distribution (other cwd/pass denied optional). More
   [threat-model](../specs/threat-model.md).
-- **F7 Protocol**: Add top-level `session_id`(optional) to envel
-wrapper reports real session id → server adds F1 pointer. Contact Us
+- **F7 Protocol**: Add top-level `session_id`(optional) to envelope
+wrapper reports real session id → server adds F1 pointer. permission
 #22 #23
 Definitions Protocol change is versioning (equivalent to #1), error body relay
 (equivalent to #2) and the same revision. [protocol](../specs/protocol.md)
@@ -119,7 +119,7 @@ resolved snapshot
 When switched, it is reflected in the latest snap snapshot after  (the intended switch is drift
 erroneous, director clarification 2026.-11).
 - **stamp route**: wrapper is sent as `state_change.ext.effective` and  is
-update `resolved_snapshot` field in pointer record path (envel
+update `resolved_snapshot` field in pointer record path (envelope
 same as the existing route of ingest.
 - **agent-scoped survival**: snapshot is linked to agent id and the **session boundary
 (/new/clear, [ADR-0036](0036-session-lifecycle-commands.md))
@@ -129,7 +129,7 @@ Retain ([ADR-0036](0036-session-lifecycle-commands.md) F2 fresh
 When snapshot is removed, the source of fresh relaunch disappears and depends on the consume order
 Retention is correct because it becomes  resetile reset design (director judgment 2026-12-12).
 - **Disposal**[ADR-0030](0030-agent-directory-and-explicit-restore.md)
-D6 4-store purge) at****Home The first state change of the fresh session
+D6 4-store purge) at****Note The first state change of the fresh session
 When `ext.effective` is delivered, snapshot is overwritten naturally (normal record path).
 - **persistence**: F1 DETS backing with snapshot (5-tuple)
 `{agent_id, session_id, cwd, engine, snapshot}`. load 3/4-tuple is loaded
@@ -145,7 +145,7 @@ Exposure to the operator with the drift badge.
 D8 snapshot was initially "display information for drift detection" at resume
 Previous privilege setting (danger-full-access / network / bypassPermissions, etc.)
 Fixed an accident in which the operator express consent was lost due to the demotion to engine default.
-Home**Restore snapshot with SSOT**to raise. ADR-0033 F3
+Note**Restore snapshot with SSOT**to raise. ADR-0033 F3
 "Codex biaxial fixed when spawn" / ADR-0036 F2 "/new/clear" last effective
 Consolidate with the two contracts of "Start with the set".
 
@@ -156,7 +156,7 @@ but apply to phase is handled by P1 (another phase). cli.ts
 `modelSource` / `effortSource` separation from P0 to intertwin with derivatives).
 - **-central**: All resume operations
 `applyResumeSnapshot(parsed, snapshot, engine)` pure helper**
-Overwrite the `ParsedSpawn` engineJapanese termーJapanese term field with snapshot-derived values.
+Overwrite the `ParsedSpawn` enginethe relevant entry-the relevant entry field with snapshot-derived values.
 server is `SwitchSessionMessage` / `ResetSessionCommand` / spawn path
 top-level project with snapshot**not**
 (to avoid double-expression of wire, SSOT single). ADR-0036 F2 "normal spawn"
@@ -171,7 +171,7 @@ rollback (retains `entry.parsed` applied when reset). Crash-restart
 If race deviates the latest snapshot and `entry.parsed`,
 if resume snapshot islele
 Possible**Crash-restart does not guarantee drift visualization**(Fuji D3).
-- **absent field semantics**(Home D2): snapshot object itself is absent → apply
+- **absent field semantics**(Note D2): snapshot object itself is absent → apply
 no-op. snapshot object present
   → **engine default** (Codex: `workspace-write` / `false`,
   Claude: `default`).**Existing danger No value retention**`entry.parsed`
@@ -212,7 +212,7 @@ This Relay route has been added.
 
 - **5-case pair rule** (`computePair` in `runner/src/resume_snapshot.ts`):
   1. **Both absent**→ pair whole unset. engine default
-Contact Us
+permission
   2. **value + source=default**→ pair whole unset. The previous session is the SDK
 Delegate the SDK without explicit pin.
 Retaining a non-consolidated means to lie the source stamp.
@@ -220,7 +220,7 @@ Retaining a non-consolidated means to lie the source stamp.
 . resume Respect the explicit selection before.
   4. **value only (source absent, legacy snapshot)** → value +
 stamp `source="config"` as transport provenance. Source
-Re es to honour DETS records before trackingJapanese termーHome.
+Re es to honour DETS records before trackingthe relevant entry-Note.
   5. **source only (value absent)**→ pair whole unset + stderr warn.
 semantics violations preventing both write-side gate and read-side sanitize
 So, when you reach the wrapper, you will doubt the mis-stamping bug.
@@ -272,7 +272,7 @@ Apply as**In the mean of launch pin** (config.model /
 config.effort does not appear in the wrapper, and S  will continue to revoke its default
 Select). However, wrapper's **display / catalog resolve is the last session
 'value' is required.`initialStatusExtFromCatalog(catalog,
-  model)`Home`this.#model=null`catalog.find()
+  model)`Note`this.#model=null`catalog.find()
 `supports_effort_switch=false` to stamp, Dashboard to switch
 The button is gated. Claude host is dashboard in `#model=null` state
 `effortLevels` `active = models.find(m.value === $currentModel)`
@@ -292,7 +292,7 @@ was (2026 -16).
 (information that the UI shows this value last time)
 **apply Case 2 unset is unset**(launch pin)
 `options.resumeSnapshot`
-Home (value, source="default") pair
+Note (value, source="default") pair
 `this.#model` / `this.#effort` Don't break the SDK delegation semantics
 Codex `#threadOptions`
 `source !== "default"`
@@ -306,7 +306,7 @@ re validation with `CLAUDE_EFFORT_LEVELS` as a counter , and value /
 drop + stderr warn
 ). Existing setModel / setEffort overwrites source to "config"
 For hint fallback Priority,liclicit choice is
-Contact Us
+permission
 
 - **effortLevels of three-tier lookup (phase-23 dogfood),
 2026-16-16, Fuji revised version policy 5)**: hint fallback is fired last time
@@ -329,14 +329,14 @@ If you have a real default alias entry entryd by entry
 return effort levels (if missing `[]`). Claude boots
 entry is "account-default effort domain" engined by engine,
 Haiku, etc. as a formal fallback even if non-compliant entry is present
-Contact Us**default entry** — real
+permission**default entry** — real
 default is the alias that the SDK / wrapper is officiallyHome, and the model switch menu is
 have meaning.
   3. **model Unreported (`model === null`)**and without real default
      ****→ catalog All entry efforts levels intersection
 `[]` fail-closed if one is missing.
 Codex account default path (this.#model=null)
-  4. **There is a concrete key, but there is exactly miss + real default.**(Home G1)
+  4. **There is a concrete key, but there is exactly miss + real default.**(Note G1)
 `[]` fail-closed. unknownle concrete model
 catalog There is no guarantee that it is one of the candidates, "intersection"
 not valid. Make button non-display on safety side
@@ -353,7 +353,7 @@ the same logic is applied.
 
   **default entry**: **real**
 wrapper boots engine
-catalog**Official alias**Home Select "default" on the SDK
+catalog**Official alias**Note Select "default" on the SDK
 If the account-recommended model is resolved and the model switch menu is
 Make meaningful choices.**synthetic**default entry
 Helper's hollow entry for fallback purposes.
@@ -397,7 +397,7 @@ In order to restore the following:
 
 - mitigate server `session_pointer/1` to "cwd required session id is nil tolerance".
 - `build_restore_payload` is used when session id is binary
-`resume_session_id` and `resume_session_id` whenilil**omit**Home
+`resume_session_id` and `resume_session_id` whenilil**omit**Note
   **`apply_resume_snapshot: true`**stamp (protocol.md spawn extension).
 - CO `handleSpawn` fresh   (resume session id missing)
   `apply_resume_snapshot`only when true`applyResumeSnapshot(parsed,
@@ -407,17 +407,17 @@ do not read the session file and there is no session id lock.
 `#launchSpawn`
 
 **SSOT remains  **: snapshot apply SSOT is the same as the resume route
-Japanese term `applyResumeSnapshot` snapshot on server
+the relevant entry `applyResumeSnapshot` snapshot on server
 top-level launch picks.
-stxir Duplicate implementation + `*_source` lying stamps are not allowed (F1 supplement above)
+state Duplicate implementation + `*_source` lying stamps are not allowed (F1 supplement above)
 phase-22 " relay is only relay, it maintains top-level double expression prohibition".
 
 **flag no fresh spawn re  pin**: `apply_resume_snapshot`
 When not specified or false, fresh spawn will snapshot as usual to the engine axis
 Apply not (D1 no-apply invariant). resume snapshot
 wrapper `config.resume_snapshot` for drift display
-The privilege axis is the top-level Japanese term of spawn payload
-Contact Us The operator express launch via Launch  has a fresh-restore route
+The privilege axis is the top-level the relevant entry of spawn payload
+permission The operator express launch via Launch  has a fresh-restore route
 Never overwrite silently.
 
 **fail-soft**: snapshot is nil pointer.
@@ -434,16 +434,16 @@ so completely unchanged.
 
 conversation history**wrapper host SDK JSONL**for display
 [ADR-0012](0012-response-display-and-dashboard-scope.md) F7
-From there**Rebuildable **Contact Us #24
+From there**Rebuildable **permission #24
 not dependent on disk persistence. resumedisplayhistory from JSONL
-How to rebuild and overwrite**Draft B (wrapper/wrapper has not read JSONL directly)**Home
+How to rebuild and overwrite**Draft B (wrapper/wrapper has not read JSONL directly)**Note
 (Q-A4, 2026-06-23). SDK resume to query()
 A (s  re-stream) is not established because it does not yield. Verification details
 [#50](https://github.com/sakuraiyuta/kaoiro/issues/50).
 
 As an exception, `inter_agent_message` is injected to S  from the preformed user text
 `to` / `kind` / `conversation_id` / `turn_number`
-I can't reverse the structured envel  from JSONL. Only this type
+I can't reverse the structured envelope  from JSONL. Only this type
 The server's DETS-backed `InterAgentHistory` is the same as the server's DETS-backed `InterAgentHistory`.
 Keep the dogfood/container restart overlap (#102). When pushing a history to the operator
 volatile `AgentStates` IA merge durable IA with existing dashboard fan-out
@@ -465,7 +465,7 @@ Rebuild.
 
 ### Negative
 
-- The full function waits for #22/#23 assuming the resident implementation of Japanese term(#23).
+- The full function waits for #22/#23 assuming the resident implementation of the relevant entry(#23).
 - Two-stage ( resume +  ) implementation is required for double resume prevention.
 - Reconstruction of displayhistory requires JSONL direct reading (draft B) and JSONL on wrapper/wrapper
 (Q-A4 solution, 2026-06-23)
@@ -484,7 +484,7 @@ Don't make it.
 |#24|Heavy, JSONL Full and Role Duplicate|
 |List of candidates fromstoryhistory|Real files and drift (show deleted), conflict with F1|
 |List of candidates   enumeration only|It is not possible to show the default immediately and it is necessary to return|
-|server fenJapanese term only|Prevent double startup when disconnected|
+|server fenthe relevant entry only|Prevent double startup when disconnected|
 |Lock Only|UX Shooting without early refusal|
 |continue|Vulnerable to explicitness|
 |forkSession|idFilectuation, file extension, and not in the same conversation (for future use)|
@@ -498,19 +498,19 @@ The   implementation is assumed.
 - **phase-0(#22/#23 non-dependent and ready)**: session id capture and pointer persistence.
 - wrapper `session_id: ""``host.ts`, SDK init/re t
 get real session id.
-- Add top-level `session_id` to the envel  (revised protocol.md equivalent to #1/#2).
+- Add top-level `session_id` to the envelope  (revised protocol.md equivalent to #1/#2).
 - wrapper reports session id → server keeps F1 pointers lightweight.
 - Validation of Q-A4 and resume + streaming
 - Verification goal: server remembers the current session id of each agent over the restart.
-  - **(#48, 2026-06-16)**: wrapper session id capture report and envel
+  - **(#48, 2026-06-16)**: wrapper session id capture report and envelope
 top-level `session_id` grants are implemented (log erasing function and
-server holds and distributes the envel  session id.
+server holds and distributes the envelope  session id.
   - **(#49, 2026-06-20)**: F1 pointer lightweight persistence implemented
-(`KaoiroServer.SessionPointers`, DETS back). envel  when importing
+(`KaoiroServer.SessionPointers`, DETS back). envelope  when importing
 Update `agent_id => {session_id, cwd}` and remember it over restart. `host`
 It is non-retained in   because it is wrapped in agent id (F3). File path
 `KAOIRO_SESSION_POINTERS_PATH`
-  - **Contact status (Q-A4, 2026-06-23)**: SDK resume
+  - **permission status (Q-A4, 2026-06-23)**: SDK resume
 Close (1)**streaming input + resume**After resume
 Response (phase-1 Clear = No phase-1 block due to SDKAbout Us). (2) (2)
     **historyThe supply form is determined to B**— resume returns past history to query() stream
@@ -524,7 +524,7 @@ T3 validation, client return UI (operator only, T2).
 JSONL(`~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`)
 `user`/`assistant`
 `last-prompt` / `mode` is excluded) time series extraction → ADR-0012 F7 ring buffer
-Copy to display type → Overwrite displayhistory (A4) to send envel  to rebuild history.
+Copy to display type → Overwrite displayhistory (A4) to send envelope  to rebuild history.
 Heavy reconstruction is placed on the wrapper/wrapper side and the wrapper is fastened to the receiver.
   - **Status(#50, 2026-06-25)**: wrapper. resume On startup
 `user`/`assistant`
@@ -539,10 +539,10 @@ non-dependent policy. `history_reset` is available only for operator (ADR-0021).
 200 based cap envelHome, and older `inter_agent_message` is SHome
 transcript is not reconstructed. More
     [protocol](../specs/protocol.md).
-  - **IA Restore (#102)**: display structured `inter_agent_message` envel
+  - **IA Restore (#102)**: display structured `inter_agent_message` envelope
 authoritative source IA aming injected when the SDK JSONL receives
 text remains as `user` turn, but this is
-`kind=user` Don't rede  log. durable IA envel  bubble
+`kind=user` Don't rede  log. durable IA envelope  bubble
 The same content is double-displayed as operator instruction.
   - **2026 08 Correction (#102):**`InterAgentHistory` is a positive or cap exemption
 [ADR-0051](0051-history-restart-resilience.md) D3
