@@ -1,42 +1,42 @@
 ---
-title: Phase 5 — 国際化(ベータ前 英訳工程)
-description: 外部公開へ向けてドキュメント・UI を全英訳する独立マイルストーン。
+title: Phase 5 — Internationalization (Pre-Beta English Translation)
+description: An independent milestone to translate all documentation and UI into English for external release.
 status: planned
 phase: 5
 depends_on: [phase-4-host-runner]
 last_updated: 2026-06-24
 ---
 
-# Phase 5 — 国際化(ベータ前 英訳工程)
+# Phase 5 — Internationalization (Pre-Beta English Translation)
 
 ## Goal
 
-ベータリリース前に、外部公開へ向けてドキュメント・UI を全英訳する。以降の主
-言語をどうするかをこの時点で判断する。決定は
-[ADR-0006](../adr/0006-doc-language-i18n.md)。
+Translate all documentation and UI into English for external release before the
+beta release. Decide the primary language from this point onward at this stage.
+The decision is [ADR-0006](../adr/0006-doc-language-i18n.md).
 
 ## Acceptance Criteria
 
-- [ ] ドキュメント(docs/ 一式)の英語版が揃う
-- [ ] UI 文言の英語化
-- [ ] 以降の主言語方針を決定
+- [ ] Complete the English version of the documentation (the entire docs/ set)
+- [ ] Translate UI text into English
+- [ ] Decide the primary-language policy from this point onward
 
 ## Tasks
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 5-1 | docs/ の英訳 | ⏳ | |
-| 5-2 | UI 文言の i18n 化 | ⏳ | |
+| 5-1 | Translate docs/ into English | ⏳ | |
+| 5-2 | Internationalize UI text | ⏳ | |
 
 Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blocked.
 
 ## Followups (in-phase but unfinished)
 
-なし。
+None.
 
 ## Open Questions Blocking This Phase
 
-なし。
+None.
 
 ## See Also
 
