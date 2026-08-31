@@ -218,7 +218,7 @@ measurement state into it would further multiply the put/append_log branches.
 
 Use the **server acceptance time / hook execution time**, not `ts`. `ts` is the
 wrapper host clock, and host-to-host clock skew must not enter the decision
-inputs (protocol.md “注意”).
+inputs (protocol.md “warning about clock skew across hosts”).
 
 #### Owner binding and transition identity (MUST)
 
