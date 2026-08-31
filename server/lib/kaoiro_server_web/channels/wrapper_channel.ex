@@ -1926,30 +1926,43 @@ defmodule KaoiroServerWeb.WrapperChannel do
             {:error, :peer_reconnecting_capacity}
 
           :noop ->
-            case ConversationStates.record_message(
-                   cid,
-                   from,
-                   to,
-                   body,
-                   turn_number,
-                   done?,
-                   new_conversation?
-                 ) do
-              # Within limits. `:both_done` means every participating agent
-              # has now signalled done; the tracker has already closed the
-              # entry into a tombstone atomically (issue #177; spec MUST: 両
-              # owner-side done で対話完了). No extra close needed.
-              ok when ok in [:ok, :both_done] ->
-                {:ok, {:accept, to, nil}}
+            # issue #257: `known?` alone does not mean reachable -- an
+            # unexpectedly disconnected target (no active planned intent,
+            # so track_bounce above returned :noop) would otherwise reach
+            # record_message and get accepted, but the disconnect event
+            # that could ever trigger claim_unreachable_targets already
+            # fired (or never will while it stays down), so no notice
+            # follows and the send silently drops. Reject here, before the
+            # message touches ConversationStates/DeliveryStates, so the
+            # sender's tool result is the only signal it needs.
+            if not AgentStates.connected?(to) do
+              {:error, :disconnected}
+            else
+              case ConversationStates.record_message(
+                     cid,
+                     from,
+                     to,
+                     body,
+                     turn_number,
+                     done?,
+                     new_conversation?
+                   ) do
+                # Within limits. `:both_done` means every participating agent
+                # has now signalled done; the tracker has already closed the
+                # entry into a tombstone atomically (issue #177; spec MUST: 両
+                # owner-side done で対話完了). No extra close needed.
+                ok when ok in [:ok, :both_done] ->
+                  {:ok, {:accept, to, nil}}
 
-              {:exceeded, reason} ->
-                {:ok, {:accept, to, {cid, from, to, reason}}}
+                {:exceeded, reason} ->
+                  {:ok, {:accept, to, {cid, from, to, reason}}}
 
-              # Cross-conversation pollution attempt, global cap reached,
-              # or an explicitly-named conversation_id with no entry at all
-              # (issue #262): reject at the routing boundary.
-              {:error, reason} ->
-                {:error, reason}
+                # Cross-conversation pollution attempt, global cap reached,
+                # or an explicitly-named conversation_id with no entry at all
+                # (issue #262): reject at the routing boundary.
+                {:error, reason} ->
+                  {:error, reason}
+              end
             end
         end
     end

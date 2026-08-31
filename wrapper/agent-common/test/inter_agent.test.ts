@@ -1846,6 +1846,58 @@ describe("send_to_agent の acceptance ack 連動 (ADR-0051 D3-2)", () => {
     expect((sent[1]!.payload as unknown as InterAgentMessagePayload).turn_number).toBe(1);
   });
 
+  it("disconnected (issue #257 preflight reject) は structured peer_error にし turn を rollback する", async () => {
+    const sent: Envelope[] = [];
+    let attempt = 0;
+    const tool = new InterAgentTool({
+      config: configFor("self.agent"),
+      getState: () => "tool_running",
+      send: () => {
+        throw new Error("acceptance-aware sink must be used");
+      },
+      sendInterAgent: (envelope) => {
+        sent.push(envelope);
+        attempt += 1;
+        return Promise.resolve(
+          attempt === 1
+            ? { kind: "rejected", reason: "disconnected" }
+            : { kind: "accepted", stamp: [1, 0] },
+        );
+      },
+      now: () => "2026-08-18T00:00:00Z",
+      newId: () => "cnv-unused",
+    });
+
+    const first = await tool.invoke({
+      to: "peer.agent",
+      conversation_id: "cnv-predisc",
+      body: "hi",
+      kind: "inform",
+    });
+
+    expect(first.isError).toBeUndefined();
+    expect(JSON.parse(first.content[0]!.text)).toEqual({
+      peer_error: {
+        code: "disconnected",
+        message: "the peer disconnected",
+        from: "peer.agent",
+      },
+    });
+
+    // A rejected send never advanced the turn — the retry reuses the same
+    // turn_number, same as the peer_reconnecting rollback above.
+    const second = await tool.invoke({
+      to: "peer.agent",
+      conversation_id: "cnv-predisc",
+      body: "retry after reconnect",
+      kind: "inform",
+    });
+
+    expect(second.isError).toBeUndefined();
+    expect((sent[0]!.payload as unknown as InterAgentMessagePayload).turn_number).toBe(1);
+    expect((sent[1]!.payload as unknown as InterAgentMessagePayload).turn_number).toBe(1);
+  });
+
   it("peer_reconnecting_capacity は待機契約を結ばない terminal tool error にする", async () => {
     const { tool, sent } = makeAckTool({
       kind: "rejected",

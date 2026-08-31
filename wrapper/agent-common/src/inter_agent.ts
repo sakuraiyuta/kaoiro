@@ -197,12 +197,14 @@ function classifyByDetailKeywords(detail: string): string | null {
 /** Fixed, safe notice text per error code (issue #131 must-fix 2): never the
  *  adapter's raw reason/detail, which may carry unstructured text (subprocess
  *  exception strings, SDK error text) unsafe to inject verbatim into a peer
- *  agent's LLM context. `disconnected` is documented for vocabulary parity
- *  with the server-synthesized notice even though this classifier never
- *  produces it (see classifyInterAgentError doc). `stale_turn` (issue #222
- *  欠陥3) is likewise never produced by `classifyInterAgentError` — it is
- *  built directly in `receiveInbound()`'s stale branch, not routed through
- *  that turn-failure classifier at all. */
+ *  agent's LLM context. `disconnected` keeps vocabulary parity with the
+ *  server-synthesized async notice; `classifyInterAgentError` (an engine
+ *  turn-failure classifier) never produces it, but the synchronous preflight
+ *  reject path in `#dispatch()`'s caller does (issue #257, via
+ *  `peerErrorResult`). `stale_turn` (issue #222 欠陥3) is likewise never
+ *  produced by `classifyInterAgentError` — it is built directly in
+ *  `receiveInbound()`'s stale branch, not routed through that turn-failure
+ *  classifier at all. */
 const ERROR_CODE_MESSAGE: Readonly<Record<string, string>> = {
   rate_limit: "the peer hit a rate limit",
   context_overflow: "the peer's context window overflowed",
@@ -1873,6 +1875,19 @@ export class InterAgentTool {
               return {
                 kind: "peer-error",
                 result: peerErrorResult(args.to, "reconnecting"),
+              };
+            }
+            // issue #257: the server now bounces a send to an unexpectedly
+            // disconnected target before acceptance, same shape as the
+            // async server-synthesized notice (protocol parity — see
+            // ERROR_CODE_MESSAGE's `disconnected` entry). Route it through
+            // the same structured peer_error path rather than the generic
+            // rejected-message fallback below, so the caller gets the one
+            // signal it needs without a second round-trip.
+            if (acceptance.reason === "disconnected") {
+              return {
+                kind: "peer-error",
+                result: peerErrorResult(args.to, "disconnected"),
               };
             }
             // issue #262: an actionable hint over the generic reason string —

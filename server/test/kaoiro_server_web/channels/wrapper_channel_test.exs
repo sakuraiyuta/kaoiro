@@ -1370,19 +1370,25 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       SP.record(agent_id, "sess-old", "/proj")
       _ = :sys.get_state(SP)
 
-      # IA は route_inter_agent で受信 agent の existence check を通る
-      # ので、peer を AgentStates に seed しておく (直接 put)。
+      # IA は route_inter_agent で受信 agent の existence/reachability check
+      # (known? / connected?, issue #257) を通るので、peer を AgentStates に
+      # seed しておく (直接 put)。owner: self() を渡さないと owning channel
+      # 不在 = connected? false と判定され、この IA 送信自体が :disconnected
+      # で reject されてしまう。
       :ok =
-        AgentStates.put(%{
-          "version" => "0",
-          "agent_id" => peer_id,
-          "persona" => %{"id" => "peer", "name" => "peer", "sprite_set" => "peer"},
-          "ts" => "2026-07-23T14:00:00Z",
-          "type" => "state_change",
-          "state" => "idle",
-          "payload" => %{},
-          "ext" => %{}
-        })
+        AgentStates.put(
+          %{
+            "version" => "0",
+            "agent_id" => peer_id,
+            "persona" => %{"id" => "peer", "name" => "peer", "sprite_set" => "peer"},
+            "ts" => "2026-07-23T14:00:00Z",
+            "type" => "state_change",
+            "state" => "idle",
+            "payload" => %{},
+            "ext" => %{}
+          },
+          owner: self()
+        )
 
       on_exit(fn ->
         SP.delete(agent_id)
@@ -2517,6 +2523,30 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       ref = push(from_socket, "envelope", env)
       assert_reply ref, :error, %{reason: "unknown_agent"}
       assert_panes_empty([from_id, "test.iam-unk-target"])
+    end
+
+    test "既に切断済みの to への新規送信は :disconnected で拒否する (issue #257)" do
+      # ChannelCase は channel process を test process と link するので、
+      # close/1 の {:shutdown, :closed} exit を trap して吸収する。
+      Process.flag(:trap_exit, true)
+
+      from_id = "test.iam-predisc-from"
+      to_id = "test.iam-predisc-to"
+      to_socket = seed_known(to_id)
+      from_socket = seed_known(from_id)
+
+      # to を先に切断させておく。会話がまだ無いので claim_unreachable_targets
+      # の disconnect トリガー (#131) は発火しない — issue #257 が問題にして
+      # いた、事前チェックが無ければ record_message まで素通りしてしまう経路
+      # そのもの。
+      :ok = close(to_socket)
+
+      env = inter_envelope(from_id, to_id)
+      ref = push(from_socket, "envelope", env)
+      assert_reply ref, :error, %{reason: "disconnected"}
+      assert_panes_empty([from_id, to_id])
+
+      on_exit(fn -> AgentStates.delete(to_id) end)
     end
 
     test "kind=reject で reject_reason 欠落の envelope を拒否する" do

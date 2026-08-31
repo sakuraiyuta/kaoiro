@@ -830,7 +830,7 @@ array; the wrapper narrows both cases to `users: []` because consumers
 
 | event (direction) | shape | server behavior |
 |---|---|---|
-| `envelope` (W→S, type=inter_agent_message) | Inner envelope above | Preserve causal order ([ADR-0051](../adr/0051-history-restart-resilience.md) D3-1): (1) **validate / preflight** participants, hard limits, planned intents (`peer_reconnecting` / `peer_reconnecting_capacity`), and conversation quota. `ConversationStates.record_message/5` checks and atomically updates turn/token/wallclock counters in one call, so **counter updates happen here** (splitting them opens a TOCTOU gap; fixed at implementation, 2026-08-08). Complete every check that could determine rejection before proceeding; return a planned reject before ConversationStates, pane, or delivery ledger. (2) **Allocate ingress stamp** (globally unique ingress-order domain, wire form `[us, seq]`). (3) Upsert sender and receiver panes with the same stamp (`identity = ingress_stamp\|pane_agent_id`). (4) Push the stamped envelope to `wrapper:<to>` and broadcast to `agents:lobby` (operator-only). (5) Return `{ingress_stamp}` to the sender wrapper as the **acceptance ack**, which triggers sender-side sidecar recording. Routing after upsert is only the peer push; rejected IA must not remain in a pane. |
+| `envelope` (W→S, type=inter_agent_message) | Inner envelope above | Preserve causal order ([ADR-0051](../adr/0051-history-restart-resilience.md) D3-1): (1) **validate / preflight** participants, hard limits, planned intents (`peer_reconnecting` / `peer_reconnecting_capacity`), an unexpectedly disconnected target (`disconnected`, issue #257), and conversation quota. `ConversationStates.record_message/5` checks and atomically updates turn/token/wallclock counters in one call, so **counter updates happen here** (splitting them opens a TOCTOU gap; fixed at implementation, 2026-08-08). Complete every check that could determine rejection before proceeding; return a planned reject before ConversationStates, pane, or delivery ledger. (2) **Allocate ingress stamp** (globally unique ingress-order domain, wire form `[us, seq]`). (3) Upsert sender and receiver panes with the same stamp (`identity = ingress_stamp\|pane_agent_id`). (4) Push the stamped envelope to `wrapper:<to>` and broadcast to `agents:lobby` (operator-only). (5) Return `{ingress_stamp}` to the sender wrapper as the **acceptance ack**, which triggers sender-side sidecar recording. Routing after upsert is only the peer push; rejected IA must not remain in a pane. |
 | synthesized `envelope` (S→W) | hard-limit exceeded | Push to both `wrapper:<id>` and `agents:lobby`. |
 | synthesized `envelope` (S→W) | wrapper disconnect / matching recovery | For each other participant in conversations of the wrapper, push `kind=inform` with `error.code=reconnecting` for planned disconnect, `error.code=disconnected` for unplanned disconnect, or error-free `kind=inform` (`reconnected`) after exact-token recovery (see “Unresponsive notices”). |
 | `directory_request` (W→S) | `{}` (empty payload) | wrapper-A receives all peer entries **except itself** in `{:ok, %{agents: [...], users: [...]}}`. Agent fields and omission rules follow “Peer-directory information boundary”; users follow “Exposed user fields” (issue #187 phase 2). Used by `list_agents` (below). |
@@ -840,12 +840,16 @@ Errors for unknown `to`, self-routing, participant mismatch, invalid
 conversation IDs (`unknown_agent`, `self_routing`, `participants_mismatch`,
 `invalid value: payload.turn_number`, `stale_turn`, `conversation_closed`
  (the latter three from issue #167), `unknown_conversation_id` (issue #252),
-`peer_reconnecting`, and `peer_reconnecting_capacity` (issue #256)) are
-returned in the `envelope` reply. Only `peer_reconnecting` is normalized by the
-wrapper to structured `peer_error.code=reconnecting`, distinct from a generic
-tool error. `peer_reconnecting_capacity` is a terminal tool error: the message
-was not accepted and no close notice was scheduled; fixed wording asks the
-sender to retry later with the same conversation_id.
+`peer_reconnecting`, `peer_reconnecting_capacity` (issue #256), and
+`disconnected` (issue #257, when `to` is known but not currently connected
+and no planned intent covers it)) are returned in the `envelope` reply.
+`peer_reconnecting` and `disconnected` are normalized by the wrapper to a
+structured `peer_error` (`code=reconnecting` / `code=disconnected`
+respectively), distinct from a generic tool error; either reject happens
+before `ConversationStates.record_message`, so it never mutates the delivery
+ledger or either pane. `peer_reconnecting_capacity` is a terminal tool error:
+the message was not accepted and no close notice was scheduled; fixed
+wording asks the sender to retry later with the same conversation_id.
 
 ### Approval flow (permission_broker integration)
 
@@ -1044,12 +1048,13 @@ added later. Treat an unknown code as `api_error`.
 | `disconnected` | peer wrapper disconnected | Retry is futile until it returns; escalate. |
 | `stale_turn` | receiver discarded a message whose turn_number was at or below its known maximum (AC9) | Send using a new conversation_id. |
 
-#### Sources (three paths)
+#### Sources (four paths)
 
 | source | trigger | path |
 |---|---|---|
 | peer wrapper | SDK turn ended with `is_error` while an inter-agent injection in that turn remained unanswered | Send directly through ServerLink to the conversation origin (no broker approval because it bypasses the model); route as a normal `inter_agent_message`. |
 | server | wrapper channel terminated | Synthesize `code=reconnecting` for a planned cycle or `code=disconnected` otherwise, then push to every other participant in each conversation of that wrapper. |
+| server (preflight) | `envelope` send addressed to a `to` that is known but unexpectedly disconnected, with no active planned intent | Reject the `envelope` push itself with `disconnected` before `ConversationStates.record_message` (issue #257) — without this, the disconnect that would ever trigger the notice above already fired (or never will while `to` stays down), so no notice follows and the send would silently drop. The sending wrapper maps the synchronous reject to the same structured `peer_error.code=disconnected` as the async notice. |
 | receiver wrapper | AC9 discarded a stale/duplicate turn (issue #212 defect 3) | Send directly through ServerLink to the discarded envelope's sender, except when that envelope is itself an error notice or the conversation is already closed (next section). |
 
 #### `stale_turn` notice structure (issue #212 defect 3)
