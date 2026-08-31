@@ -17,8 +17,8 @@ Accepted
 
 ## Context
 
-[design.md](../specs/design.md)
-It was not first-class, but it was not broken.、
+[design.md](../specs/design.md) Responsive clause is "mobile/narrow
+It was not first-class, but it was not broken.,
 The systematic breakpoint design is just two `@media (max-width: 640px)`
 Not existed.
 
@@ -37,17 +37,17 @@ rate limit / resume) scroll in with `.status-scroll`, but current
 I can't reach the conversation log.
 
 Work to define dashboard as explicit PWA
-(https://github.com/sakuraiyuta/kaoiro/issues/196))
+([#196](https://github.com/sakuraiyuta/kaoiro/issues/196))
 Requests to be established in 3 sizes as a practical application launched from the home screen
 "Narrow width is not first-class" is the premise itself.
 
 ## Decision
 
-Dashboard**PC / tablet / smartphone**。
+Dashboard**PC / tablet / smartphone**.
 design.md's "mobile/narrow is not first-class" with this ADR
 Details of dimensions and rules
 [responsive-layout.md](../specs/responsive-layout.md)
-[responsive-reachability.md](../specs/responsive-reachability.md) is canonical.
+[responsive-reachability.md](../specs/responsive-reachability.md) canonical.
 
 - **F1**: In the smartphone width, the lobby response timeline is the same screen bottom
 Remove the sheet and complete the grid
@@ -74,7 +74,7 @@ When the timeline is lying in this width, the tile is 122 to 160px, and the spri
 128px
 - **F8**:CO 500px `short` is an override that is incompatible with a width .
   **Vertical compression only**handle (header vertical padding / composer initial height /
-in-flow dock `max-block-size`). 
+in-flow dock `max-block-size`).
 layout (place timeline, place status, number of columns in grid) and width
 The maximum sheet height is not changed. dock**No expansion state**— implementation
 A contract to unfold for each new `request_id` (pending judgment old

@@ -13,15 +13,15 @@ related_adrs: [21, 22, 33, 36, 44, 55]
 
 ## Status
 
-Accepted (2026-07-28、[#158 comment-5384365227](https://github.com/sakuraiyuta/kaoiro/issues/158#issuecomment-5384365227)
+Accepted (2026-07-28,[#158 comment-5384365227](https://github.com/sakuraiyuta/kaoiro/issues/158#issuecomment-5384365227)
 [#158 comment-5384365348](https://github.com/sakuraiyuta/kaoiro/issues/158#issuecomment-5384365348)
 Phase B)Home
-[Phase C of Phase-28-agent-initiated-session-ops](./plans/phase-28-agent-initiated-session-ops.md#phase-c---spontaneous-newclear-Details-2026-28-28)
+[Phase-28-agent-initiated-session-ops](../plans/phase-28-agent-initiated-session-ops.md#phase-c--自発-newclear-詳細化-2026-07-28クロエ裁定)
 Contact Us
 
 ## Context
 
-[ADR-0036](0036-session-lifecycle-commands.md)
+[ADR-0036](0036-session-lifecycle-commands.md) `/new` `/clear`
 Determined as first class control operation of operator-only. F1 is user text
 wrapper does not reparse and client/cli protects exact command
 Adopt, and F6 does not get auto-interrupt and queue by specifying the busy agent reset.
@@ -142,9 +142,9 @@ Not disclosed.
 
 ## References
 
-[issue #158 comment-5384365227] (https://github.com/sakuraiyuta/kaoiro/issues/158#issuecomment-5384365227)
-[issue #158 comment-5384365348]
--phase plan: [phase-28 Phase C](../plans/phase-28-agent-initiated-session-ops.md#phase-c---spontaneous-newclear-information-2026-28-28Japanese term)
-- Source: [ADR-0036] (0036-session-lifecycle-commands.md) F1, F2, F6
+[issue #158 comment-5384365227](https://github.com/sakuraiyuta/kaoiro/issues/158#issuecomment-5384365227)
+- Phase B: [issue #158 comment-5384365348](https://github.com/sakuraiyuta/kaoiro/issues/158#issuecomment-5384365348)
+[phase-28 Phase C](../plans/phase-28-agent-initiated-session-ops.md#phase-c--自発-newclear-詳細化-2026-07-28クロエ裁定)
+- Source: [ADR-0036](0036-session-lifecycle-commands.md) F1, F2, F6
 ADR-0022
 - viewer information boundary: ADR-0021

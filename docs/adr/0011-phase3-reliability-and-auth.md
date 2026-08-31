@@ -21,13 +21,13 @@ Phase 3
 protocol-reliability open-question(issue #4) 2 Items are promoted to ADR
 2 items (seq/event ID, permission request)
 and timeout default)
-wrapper([ADR)2](0002-local-wrapper-websocket-topology.md))
-User access control stub([ADR 5](0005-access-control-oauth-stub.md))
+[ADR-0002](0002-local-wrapper-websocket-topology.md)
+[ADR-0005](0005-access-control-oauth-stub.md)
 There was a need to confirm the concrete approach (user decision 2026-06-11).
 
 ## Decision
 
-1. **se seq**: wrapper `seq` ( 
+1. **se seq**: wrapper `seq` (
 a single-point integer for each startup) to all envel s. Order
 `(agent_id, seq)` + `ts`. **server's latest state judgment
 Keep last-write-wins — seq with wrapper restart
@@ -41,7 +41,7 @@ Same as the SDK for unlimited wait** (Promise hold until response)
 default to migration). opt timeouts can be opt-in in the wrapper setting, in which case
 fail-closed deny. The session will continue when deny. state in pending
 The truth is given to `state_change.ext.pending_permission`
-   ([ADR-0022](0022-pending-permission-authoritative-source.md))。
+   ([ADR-0022](0022-pending-permission-authoritative-source.md)).
 3. **wrapper authentication is an agent id **: Server Settings
 `agent_id:token` wrapper presents when connection
 Unmatched rejection. SQLite is not introduced (return policy 2026-06-11).

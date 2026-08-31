@@ -89,8 +89,8 @@ forkSession (Options) is not collected (forkSession is the option to resume futu
 - **F6 threat-model**: T1 resume/spawn RCE inherited from #22 and T2 JSONL meta
 Exposure is limited to operator, minimum, T3 return target session id, the agent binding cwd
 Validation under distribution (other cwd/pass denied optional). More
-  [threat-model](../specs/threat-model.md)。
-- **F7 Protocol**: Add top-level `session_id`(optional) to envel 
+  [threat-model](../specs/threat-model.md).
+- **F7 Protocol**: Add top-level `session_id`(optional) to envel
 wrapper reports real session id → server adds F1 pointer. Contact Us
 #22 #23
 Definitions Protocol change is versioning (equivalent to #1), error body relay
@@ -98,8 +98,8 @@ Definitions Protocol change is versioning (equivalent to #1), error body relay
 
 #### F3 supplementation — explicit detach at session reset (ADR-0036)
 
-[ADR-0036](0036-session-lifecycle-commands.md)`/new``/clear`
-"。 retains only one latest pointer, and all candidates will be enumerated by 。."
+`/new``/clear``/clear` [0036-session-lifecycle-commands](0036-session-lifecycle-commands.md)
+". retains only one latest pointer, and all candidates will be enumerated by .."
 When reset, do not implicitly resume to the old session ID, detach only the session ID toilil,
 Add dedicated operation to `SessionPointers` to hold cwd/oper. old session stack
 Resume with the existing picker and host session enumeration, not in the server. fresh session ID
@@ -113,18 +113,18 @@ resolved snapshot
 
 - **Snapshot**: `ext.resume_snapshot` / `ext.effective`
   `ResolvedSnapshotExt` (`{model, model_source, effort, effort_source,
-  permission_mode, sandbox, network_access}`、`@kaoiro/protocol`)。
-- **semantics**: Not “spawn time”**"The last value in session"**。
+  permission_mode, sandbox, network_access}`,`@kaoiro/protocol`).
+- **semantics**: Not “spawn time”**"The last value in session"**.
 `set_model` / `set_effort` / `set_permission_mode`
 When switched, it is reflected in the latest snap snapshot after  (the intended switch is drift
-erroneous, director clarification 2026。-11).
+erroneous, director clarification 2026.-11).
 - **stamp route**: wrapper is sent as `state_change.ext.effective` and  is
-update `resolved_snapshot` field in pointer record path (envel 
+update `resolved_snapshot` field in pointer record path (envel
 same as the existing route of ingest.
 - **agent-scoped survival**: snapshot is linked to agent id and the **session boundary
-(/new/clear, [ADR-0036] (0036-session-lifecycle-commands.md))))**
+(/new/clear, [ADR-0036](0036-session-lifecycle-commands.md))
 When detach (F3 supplement) is session id only nil, and **snapshot / cwd / engine is
-[ADR-0036](0036-session-lifecycle-commands.md) F2 fresh
+Retain ([ADR-0036](0036-session-lifecycle-commands.md) F2 fresh
 "Re-applying from the last effective snapshot" detach
 When snapshot is removed, the source of fresh relaunch disappears and depends on the consume order
 Retention is correct because it becomes  resetile reset design (director judgment 2026-12-12).
@@ -163,8 +163,8 @@ top-level project with snapshot**not**
 "Re-apply from the route" in this supplement, "Cooperate with reset broadcast +  "
 applyResumeSnapshot
 - **Apply**: disconnected restore (`spawn` with
-  `resume_session_id`)、live switch (`switch_session`)、reset
-  (`reset_session`)。**Apply Not Route**: Fresh Spawn (snapshot)
+  `resume_session_id`),live switch (`switch_session`),reset
+  (`reset_session`).**Apply Not Route**: Fresh Spawn (snapshot)
 `config.resume_snapshot` passthrough but only drift display),
 crash-restart (not via  ),
 rollback (retains `entry.parsed` applied when reset). Crash-restart
@@ -173,8 +173,8 @@ if resume snapshot islele
 Possible**Crash-restart does not guarantee drift visualization**(Fuji D3).
 - **absent field semantics**(Home D2): snapshot object itself is absent → apply
 no-op. snapshot object present
-  → **engine default** (Codex: `workspace-write` / `false`、
-  Claude: `default`)。**Existing danger No value retention**`entry.parsed`
+  → **engine default** (Codex: `workspace-write` / `false`,
+  Claude: `default`).**Existing danger No value retention**`entry.parsed`
 overwrite the privileged value from snapshot). **licit
 `false` does not hold ** (COthy-drop, `is_boolean` / `!== undefined`)
 All routes
@@ -185,7 +185,7 @@ not known key/malformed value
 warn. read-side is also available if the past DETS record was partial malformed
 Save fresh spawn `resume_snapshot`
 wrapper `config.resume_snapshot` only sanitized
-  passthrough)。
+  passthrough).
 - **security trust boundary**: closed-enum validation malformed attack
 authenticated wrapper
 `danger-full-access` is a path to false stamps.
@@ -202,7 +202,7 @@ eliminate the problem that the operator's explicit model / effortProblems is los
 semantic)
 
 - **Apply (P1)**: `model` /
-`model_source` / `effort` / `effort_source`  
+`model_source` / `effort` / `effort_source`
 `applyResumeSnapshot` is the same path as phase-22 P0 (initial restore /
 `ParsedSpawn.model` / `.modelSource` / `.effort` /
 `.effortSource`, `resolveWrapperConfig`
@@ -214,10 +214,10 @@ This Relay route has been added.
   1. **Both absent**→ pair whole unset. engine default
 Contact Us
   2. **value + source=default**→ pair whole unset. The previous session is the SDK
-Delegate the SDK without explicit pin. 
+Delegate the SDK without explicit pin.
 Retaining a non-consolidated means to lie the source stamp.
   3. **value + explicit source (launch / config / env)** → verbatim
-。 resume Respect the explicit selection before.
+. resume Respect the explicit selection before.
   4. **value only (source absent, legacy snapshot)** → value +
 stamp `source="config"` as transport provenance. Source
 Re es to honour DETS records before trackingJapanese termーHome.
@@ -283,7 +283,7 @@ fallback is not found `effortLevels=[]` and button is non-display
 `claudeBootstrapCatalog()`
 `effort_levels: [...FULL_EFFORT]` for boots  only
 fallback does not reproduce this re  —   catalog has passed
-production). Dogfood in "Codex resume  
+production). Dogfood in "Codex resume
 "Codex effort is not restored"
 resume   effort Switch button is not displayed as " 3 symptoms simultaneous observation
 was (2026 -16).
@@ -326,7 +326,7 @@ tier 2/3
 fallback not fail-fast). Normal route.
   2. **real `value="default"` entry**null
 If you have a real default alias entry entryd by entry
-return effort levels (if missing `[]`). Claude boots 
+return effort levels (if missing `[]`). Claude boots
 entry is "account-default effort domain" engined by engine,
 Haiku, etc. as a formal fallback even if non-compliant entry is present
 Contact Us**default entry** — real
@@ -359,7 +359,7 @@ Make meaningful choices.**synthetic**default entry
 Helper's hollow entry for fallback purposes.
 not supportedModels(). The former as the official fallback of tier 2
 Can be used, but the latter is prohibited — the operator goes out to the model switch menu
-`setModel("default")` can be explicitly sent, not intended by the 
+`setModel("default")` can be explicitly sent, not intended by the
 routing Becomes a responsibilities  to create a route. Codex catalog
 Codex is always resolved with tier 3.
 
@@ -381,7 +381,7 @@ button.
 `session_id: nil` (cwd / engine / snapshot)
 2 paths:
 
-- detach by `/clear` ([ADR-0036] (0036-session-lifecycle-commands.md) F3
+- detach by `/clear` ([ADR-0036](0036-session-lifecycle-commands.md) F3
 Compensation): `SessionPointers.detach_session/1` explicit session id to nil
 cwd / engine / snapshot
 - **Unexpected session**: The wrapper does not show init, so the
@@ -433,13 +433,13 @@ so completely unchanged.
 ### History (A4)
 
 conversation history**wrapper host SDK JSONL**for display
-Ring buffer ([ADR-0012](0012-response-display-and-dashboard-scope.md) F7)
+[ADR-0012](0012-response-display-and-dashboard-scope.md) F7
 From there**Rebuildable **Contact Us #24
 not dependent on disk persistence. resumedisplayhistory from JSONL
 How to rebuild and overwrite**Draft B (wrapper/wrapper has not read JSONL directly)**Home
 (Q-A4, 2026-06-23). SDK resume to query()
 A (s  re-stream) is not established because it does not yield. Verification details
-[#50](https://github.com/sakuraiyuta/kaoiro/issues/50)。
+[#50](https://github.com/sakuraiyuta/kaoiro/issues/50).
 
 As an exception, `inter_agent_message` is injected to S  from the preformed user text
 `to` / `kind` / `conversation_id` / `turn_number`
@@ -450,7 +450,7 @@ volatile `AgentStates` IA merge durable IA with existing dashboard fan-out
 also affects the receiver side. When deleting agent, purge the sender/cordeiver-related record.
 
 **2026 08 Correction:**This IA "inverted" exception and server
-[ADR 1](0051-history-restart-resilience.md)
+`InterAgentHistory` [ADR-0051](0051-history-restart-resilience.md)
 D3 was supersede. IA's main structure is the sidecar of the wrapper host,
 ingpane stamp of server number to per-pane projection and clear border
 Rebuild.
@@ -502,7 +502,7 @@ get real session id.
 - wrapper reports session id → server keeps F1 pointers lightweight.
 - Validation of Q-A4 and resume + streaming
 - Verification goal: server remembers the current session id of each agent over the restart.
-  - **(#48, 2026-06-16)**: wrapper session id capture report and envel 
+  - **(#48, 2026-06-16)**: wrapper session id capture report and envel
 top-level `session_id` grants are implemented (log erasing function and
 server holds and distributes the envel  session id.
   - **(#49, 2026-06-20)**: F1 pointer lightweight persistence implemented
@@ -516,7 +516,7 @@ Response (phase-1 Clear = No phase-1 block due to SDKAbout Us). (2) (2)
     **historyThe supply form is determined to B**— resume returns past history to query() stream
 not init without input. displayhistory
 Reconstruction is only established in a route where wrapper/wrapper reads JSONL directly. Verification details
-    [#50](https://github.com/sakuraiyuta/kaoiro/issues/50)。
+    [#50](https://github.com/sakuraiyuta/kaoiro/issues/50).
 - **phase-1**: Return body.
 - #22 spawn resume mode extension, spa candidate enumeration (F2), F4 double prevention,
 T3 validation, client return UI (operator only, T2).
@@ -528,7 +528,7 @@ Copy to display type → Overwrite displayhistory (A4) to send envel  to rebuild
 Heavy reconstruction is placed on the wrapper/wrapper side and the wrapper is fastened to the receiver.
   - **Status(#50, 2026-06-25)**: wrapper. resume On startup
 `user`/`assistant`
-`log` Envel 
+`log` Envel
 `user` echo of operator instruction is also complemented. `history_reset` to server
 Erase rebuildable lines and keep inter-agent lines structured → `history_reset`
 `log`
@@ -538,14 +538,14 @@ wrapper (reuse the image of the adapter and map to mapping),
 non-dependent policy. `history_reset` is available only for operator (ADR-0021). history
 200 based cap envelHome, and older `inter_agent_message` is SHome
 transcript is not reconstructed. More
-    [protocol](../specs/protocol.md)。
-  - **IA Restore (#102)**: display structured `inter_agent_message` envel 
+    [protocol](../specs/protocol.md).
+  - **IA Restore (#102)**: display structured `inter_agent_message` envel
 authoritative source IA aming injected when the SDK JSONL receives
 text remains as `user` turn, but this is
 `kind=user` Don't rede  log. durable IA envel  bubble
 The same content is double-displayed as operator instruction.
   - **2026 08 Correction (#102):**`InterAgentHistory` is a positive or cap exemption
-[ADR0051](0051-history-restart-resilience.md)
+[ADR-0051](0051-history-restart-resilience.md) D3
 supersede IA with ing  stamp from wrapper host sidecar
 replay and pane only retains volatile per-pane projection.
 
@@ -557,10 +557,10 @@ phase-2 / phase phase-0 (integration).
 - dependencies:
   [#22](https://github.com/sakuraiyuta/kaoiro/issues/22)
 (start via )),
-  [#23](https://github.com/sakuraiyuta/kaoiro/issues/23)(runner)、
+  [#23](https://github.com/sakuraiyuta/kaoiro/issues/23)(runner),
 [#24](https://github.com/sakuraiyuta/kaoiro/issues/24)
--spec:s: [protocol.md],
-  [threat-model](../specs/threat-model.md)。
--agent ADR: [0001] (0001-agent-sdk-integration.md),
-  [0011](0011-phase3-reliability-and-auth.md)、
-  [0012](0012-response-display-and-dashboard-scope.md)。
+-CO:s: [protocol](../specs/protocol.md),
+  [threat-model](../specs/threat-model.md).
+-CO ADR: [0001](0001-agent-sdk-integration.md)
+  [0011](0011-phase3-reliability-and-auth.md),
+  [0012](0012-response-display-and-dashboard-scope.md).

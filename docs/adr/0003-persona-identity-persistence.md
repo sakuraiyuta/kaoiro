@@ -27,11 +27,11 @@ Not growing
 - `persona`(id / solid name / standing picture set) is specified in the wrapper initial setting.
   **"display name" is the old**—— The `name` here defines pack
 canonical well-known and session during immutations
-  [ADR-0029](0029-persona-server-sot-and-pack-distribution.md) F9)。
+  [ADR-0029](0029-persona-server-sot-and-pack-distribution.md) F9).
 `display_name`
   ([issue #209](https://github.com/sakuraiyuta/kaoiro/issues/209)
-  D19)。
-- **The user ifies which host/process agent is responsible for**。
+  D19).
+- **The user ifies which host/process agent is responsible for**.
 - server/client lasts `agent_id`(+`persona.id`) to the key.
 
 ## Consequences
@@ -45,7 +45,7 @@ canonical well-known and session during immutations
 
 - Persona-defined schemas and set-up reference approach management is required.
 - Drawing type (static difference / animation / 3D)
-[ADR 4](0004-client-rendering-staged.md)
+[ADR-0004](0004-client-rendering-staged.md)
 
 ### Neutral
 

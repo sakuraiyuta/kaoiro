@@ -40,10 +40,10 @@ displayed as the original.
 wrapper host (wrapper transcript + ADR)
 IA sidecar
 
-[ADR-0014] (0014-session-resume-and-restore.md)
+[ADR-0014](0014-session-resume-and-restore.md) A4
 "Operation running" almost meets this requirement, but restart resistance is not scoped
-Comment All history server 
-(https://github.com/sakuraiyuta/kaoiro/issues/24)
+Comment All history server
+([#24](https://github.com/sakuraiyuta/kaoiro/issues/24))
 Keep it unadopted (not changed in book ADR).
 
 ### Description drift correction
@@ -65,12 +65,12 @@ not taken (see Alternatives).
 wrapper host**composite SSOT**Name:
 
 engine transcript
-  `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`、Codex =
-  rollout file)。
-- Structural IA: Same as engine transcript**IA sidecar**(D3)。
+  `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`,Codex =
+  rollout file).
+- Structural IA: Same as engine transcript**IA sidecar**(D3).
 
 The displayhistory of the server can be rebuilt from the wrapper host
-issue #24(。 All history persistence)
+issue #24(. All history persistence)
 `InterAgentHistory` in this ADR
 Remove DETS (D3), do not add durable display system state
 (`ClearWatermarks` remains existing, see D3-4).
@@ -128,7 +128,7 @@ The same session does not invalidate because it is already positive.
 replay only for current session. `/new``/clear`
 Previous) Reconstruction is not scoped (receptedHomeーHome, D7). Both engine
 transcript replay
-`wrapper/codex/src/history.ts` + `rollout.ts`)。
+`wrapper/codex/src/history.ts` + `rollout.ts`).
 
 ### IA sidecar`InterAgentHistory`DETS removal
 
@@ -143,7 +143,7 @@ DETS fan-out
 - **Live Accept**server**ing  stamp** →
 sender pane + receiver pane
 (peer push)
-`route_inter_agent`**Home**Home 
+`route_inter_agent`**Home**Home
 fixed). routing, etc.
 All tests that can be confirmed by **reject, including preflight
 Added to ** before upsert. routing after upsert is onlyerer push
@@ -164,8 +164,8 @@ To cause multiple occurrences of the same conversation and the same pane
 #### D3-2 Record (append to sidecar)
 
 wrapper envel  `inter_agent_message`
-append to local sidecar file per ing  stamp ( 
-`<session-id>.ia.jsonl` 
+append to local sidecar file per ing  stamp (
+`<session-id>.ia.jsonl`
 path Schema is determined by the protocol-inter-agent revision).
 
 - **Receiver pane**: At the time of delivery from server (before S  injection)
@@ -199,7 +199,7 @@ The sender name envel  cannot be sent to the guard.
 - New message (name is determined by the protocol revision.) Example: `replay_ia`)
 replay stream`{pane_agent_id, original_envelope,
   ingress_stamp, replay_id}`to carry.`replay_id`D2 server number
-  ID。
+  ID.
 - server verifies that the topic wrapper is the pane owner
 D3-1 projection contract to upsert: routing
 Conversation s・peer wrapper push・S  injection
@@ -219,7 +219,7 @@ Reference. field physical removal is another step after the old client tab disap
 #### D3-4 clear Matching with the border (ing  stamp)
 
 `/clear``clear_history`
-[ADR-0036](0036-session-lifecycle-commands.md) server as F3
+[ADR-0036](0036-session-lifecycle-commands.md) server
 ing -order sidecar new ing  to re-intake
 If the order is shaken, the cleared IA is revived:
 
@@ -278,7 +278,7 @@ remains compatible).
 
 - **Restore agent processes**(resume-spawn)
 [ADR-0030](0030-agent-directory-and-explicit-restore.md)
-  / issue #41)。
+  / issue #41).
 - **Restore displayHome**Automatic (D2). If wrapper is alive and reconnection
 timeline returns without the operator operation.
 - offline agent(when wrapper stops), the history of resume operation is empty. tile
@@ -289,7 +289,7 @@ offline display so there is no contradiction on UX, and the scene of history is 
 
 - **cap**: displayhistory cap pane IA transcript line and IA
 time series merge, dedup, filter**Final orientation**in Forum 200
-Envel。 transcript 200 + sidecar 200
+Envel. transcript 200 + sidecar 200
 not 400. The same cap is added to the receiver pane. IA
 cap exemption (issue #102) is abolished.
 - **rollout**: Change over server / wrapper / client
@@ -338,7 +338,7 @@ loss/received failure phantom (without fsync).
 wrapper channel join
 replay   + server   `replay_id`(D2)
 2. W→S replay IA ing  (`replay_ia` temporary, D3-3)
-3. ing st stamp: grant to envel 
+3. ing st stamp: grant to envel
 (Phoenix push reply)
 4. `history` push projection epoch(D4)
 5. `history_reset` `preserve_inter_agent`: Meaning and compatibility period is
@@ -346,15 +346,15 @@ replay   + server   `replay_id`(D2)
 
 amendment sweep for existing documents:
 
-- [ADR-0014] (0014-session-resume-and-restore.md) A4 IA "reverse
+- [ADR-0014](0014-session-resume-and-restore.md) A4 IA "Reverse"
 "Invalid" description and issue #102 supplement (refer to this ADR)
 - [ADR-0036](0036-session-lifecycle-commands.md) F3(IA visibility
 cutoff DETS ledger premise → sidecar + stamp approach)
-- [protocol](../specs/protocol.md) `preserve_inter_agent` /
+`preserve_inter_agent` [protocol](../specs/protocol.md)
 `InterAgentHistory` description, `delete_agent`, purge store number
-- [ADR-0030] (0030-agent-directory-and-explicit-restore.md) D6
+- [ADR-0030](0030-agent-directory-and-explicit-restore.md) D6
 store number description (already because drift is drhronized to this occasion)
-- [depmentment](../specs/dep ment.md)
+- [deployment](../specs/deployment.md) DETS path 8 → 7
 
 ## Consequences
 
@@ -419,4 +419,4 @@ Meta operator Limited delivery (T2) is unchanged.
   [#102](https://github.com/sakuraiyuta/kaoiro/issues/102)
 (Idealed by IA DETS, book ADR)
 - Specification review: Home 1 patrol 2 patrol 2026 2008 (conversation)
-  0b5c31a4)。
+  0b5c31a4).

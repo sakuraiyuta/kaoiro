@@ -46,7 +46,7 @@ Contact Us
 
 - The wrapper is limited to Python/TS. server(Elixir)
 - Details of the SDK (Streaming input / `Query.interrupt()` / `canUseTool` return value)
-  **d**([agent-sdk-events](../specs/agent-sdk-events.md), 2026-06 validation)
+  **d**([agent-sdk-events](../specs/agent-sdk-events.md), 2026-06 validation).
 
 ### Neutral
 

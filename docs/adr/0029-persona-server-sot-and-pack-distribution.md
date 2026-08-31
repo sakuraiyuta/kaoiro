@@ -13,8 +13,8 @@ related_adrs: [2, 3, 8, 24, 26, 31, 44, 45, 46]
 
 ## Status
 
-Accepted. [ADR)8](0008-persona-asset-Japanese termbution.md)
-and [ADR-0026] (0026-persona-personality-injection.md) (personal prompt injection)
+Accepted. [ADR-0008](0008-persona-asset-distribution.md)
+[ADR-0026](0026-persona-personality-injection.md)
 supersede both.
 
 ## Context
@@ -24,7 +24,7 @@ The current persona data is distributed to three layers:
 - `wrapper/personas/<id>.md` — Personality Prompt (wrapper loads itself,
   [ADR-0026](0026-persona-personality-injection.md))
 - `server/priv/personas/<id>/*.png` — with `/api/personas`
-[ADR)8] (0008-persona-asset-)bution.md)
+Delivery, [ADR-0008](0008-persona-asset-distribution.md)
 - `runner/runner.config.json` `personas[]` — spawnable id allowlist
 
 This dispersion produces three practical problems:
@@ -71,7 +71,7 @@ subdirectory structure.
     └── error.png
 ```
 
-[persona-pack-schema](../specs/persona-pack-schema.md)
+Detailed schema is [persona-pack-schema](../specs/persona-pack-schema.md)
 separation.
 
 ### F2: env integration of the import directory
@@ -107,7 +107,7 @@ No binding logic just by injecting. common footer
 ADR Appendix D5 (formerly open-question `persona-common-footer`)
 absorbed).
 
-[ADR-0045](0045-footer-file-ex ization.md)
+**LINK0 [0045-footer-file-externalization](0045-footer-file-externalization.md)
 implemented)**: `personality + system-footer + user-footer`
 SoT on the footer statement is directly under the footer installation directory (`KAOIRO_FOOTER_DIR`)
 `system-footer.md` / `user-footer.md` When not set, use the built-in default,
@@ -119,10 +119,10 @@ Attribution does not change.
 
 extract cache
 [ADR-0046](0046-persona-cache-relocation.md)
-(accepted)。
+(accepted).
 
 watchxir `FileSystem` library
-(fs.notify wrapper。Linux inotify / macOS FSEvents / Windows
+(fs.notify wrapper.Linux inotify / macOS FSEvents / Windows
 ReadDirectoryChangesW) to event-driven. polling
 Not used. Run manifest rebuild without manual restart.
 
@@ -147,7 +147,7 @@ extension.
 ### F10: dev/local always assumes minimal server
 
 dev/local
-(auto-start with scripts/dev.sh etc.). [ADR)2] (0002-local-wrapper-websocket-topology.md)
+(auto-start with scripts/dev.sh etc.). CODELINK0 [0002-local-wrapper-websocket-topology](0002-local-wrapper-websocket-topology.md)
 "wrapper works locally" reads the meaning of "local + local server"
 
 
@@ -168,10 +168,10 @@ merged into `git rm`:
 1 sentence.
 - Syn  order: `preset(claude_code) + personality + common footer`
 (personality is lower than footer).
-- Connected on the server side (F。. If you see a lack in dogfooding, you can use another ADR
+- Connected on the server side (F.. If you see a lack in dogfooding, you can use another ADR
 Expand.
 
-**Current**: [ADR-0045](0045-footer-file-ex ization.md)
+**Current**: [ADR-0045](0045-footer-file-externalization.md)
 SoT on the surface is directly under the footer installation directory (`KAOIRO_FOOTER_DIR`)
 `system-footer.md` / `user-footer.md` Built-in default D5 interim statement
 Only remain as content. The overwrite of the operator can be reflected only by editing the file.
@@ -187,12 +187,12 @@ Simple operation flow (zip drop 1 hand).
 spawn wrapper is rejected when connecting.
 - 4 Operations that touch three layers per body addition (deposited by fuji)
 
-- The creator can make a persona pack without touching the wrapper repo. 
+- The creator can make a persona pack without touching the wrapper repo.
 Since it can be handled as a whole distribution, the distribution Japanese termdle to the ex  creator is lowered.
 
 ### Negative
 
-- [ADR 3](0003-persona-identity-persistence.md)
+- [ADR-0003](0003-persona-identity-persistence.md)
 the " agent is a non-agent" principle. The composition`personality
   - common footer`The concat only does not include decision-making, but across borders
 explicit exception handling.
@@ -287,7 +287,7 @@ metadata such as attribution). Minimum keys.
 
 ## Follow-ups
 
-- [phase-10-persona-phase-sot](../plans/phase-10-persona- -sot.md)
+[phase-10-persona-server-sot](../plans/phase-10-persona-server-sot.md)
 Reference.
 - Work to move existing 4 bodies (ao / kuroe / momo / fuji) into pack
 Includes phase-10 completion conditions.
@@ -305,9 +305,9 @@ zip  between versioning(F7) and multi-host.
   [persona-personality-injection](../specs/persona-personality-injection.md),
   [setup-wizards](../specs/setup-wizards.md),
   [protocol](../specs/protocol.md), [threat-model](../specs/threat-model.md)
-- ADRs: [ADR 2] (0002-local-wrapper-websocket-topology.md),
-[ADR 3](0003-persona-identity-persistence.md),
+- ADRs: [ADR-0002](0002-local-wrapper-websocket-topology.md) (WS route),
+[ADR-0003](0003-persona-identity-persistence.md),
   [ADR-0008](0008-persona-asset-distribution.md)(supersedes),
-[ADR-0024](0024-agent-in -identity-and-spawn-auth.md)(spawn authentication),
+[ADR-0024](0024-agent-instance-identity-and-spawn-auth.md)(spawn authentication),
   [ADR-0026](0026-persona-personality-injection.md)(supersedes)
 - Plan: [phase-10-persona-server-sot](../plans/phase-10-persona-server-sot.md)

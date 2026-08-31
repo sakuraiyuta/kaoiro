@@ -13,13 +13,13 @@ related_adrs: [1, 18, 28, 32]
 
 ## Status
 
-Accepted (materialised: [phase-13-wrapper-multipackage-restructure] (completed), 2026。-10). ADR-0032 (code2-codex-adapter.md) F1 added to the materialise.
+Accepted (materialised: [phase-13-wrapper-multipackage-restructure](../plans/phase-13-wrapper-multipackage-restructure.md), 2026.-10 completed). When phase-12 is completed, materialise was added to [ADR-0032](0032-codex-adapter.md) F1.
 
 Implemented Package Boundaries (2026 -10):
 
 - `@kaoiro/wrapper-core` (`wrapper/core`) — transport (`ServerLink` + approval/question wire type) / config read/verify (`persona.ts`) / CLI argument analysis.
 - `@kaoiro/agent-common` (`wrapper/agent-common`) — state machine + envel  generation (`state.ts`), `EngineAdapter` interface, `PermissionBroker` / `QuestionBroker` (+ `PermissionDecision` / `QuestionDecision`), common tool description layer skeleton (`ToolDescriptor`), common event type (`AdapterEvent`, etc.).
-- `@kaoiro/claude-code` (`wrapper/claude-code`) — renamed the old `@kaoiro/wrapper` ([ADR-0023] (0023-host-arch-architecture.md) D3 execution). `AgentHost` / SDK adapter / file upload / inter-agent tools / CLI body / biaxial image table ([ADR-0033] (model3-permission-model-dual-axis.md) F2 placeholder.
+- `@kaoiro/claude-code` (`wrapper/claude-code`) — renamed the former `@kaoiro/wrapper` ([ADR-0023](0023-host-runner-architecture.md) D3 execution). `AgentHost` / SDK adapter / file upload / inter-agent tools / CLI body / biaxial image table ([ADR-0033](0033-permission-model-dual-axis.md) F2 placeholder).
 - `@kaoiro/codex` (`wrapper/codex`) — not implemented stub only scaffold (implemented in phase-14).
 
 Note: This ADR does not contain wrapper/pnpm-workspace.yaml at the time of drafting, and add 4 packages to the existing workspace of repo root (pnpm workspace is not nested). `wrapper/package.json` remains as fan-out shim of non-workspace members.
@@ -29,7 +29,7 @@ Note: This ADR does not contain wrapper/pnpm-workspace.yaml at the time of draft
 Current wrapper is a single package `@kaoiro/wrapper`. Claude Code
 (Codex, DB, host resource monitor, etc.)**Non-AI Entity**).
 The final goal is to “remote management of diverse entities and visualize state as a character”
-Comment [model-model](../specs/spec-model.md) is already adapter/
+Comment [plugin-model](../specs/plugin-model.md)
 The filter (agent-independent) is separation, and the `wrapper/src/adapter.ts` is also an abstract adapter
 On the code. This ADR falls into a physical package structure.
 
@@ -48,15 +48,15 @@ streaming instruction. claude-code/codex
 The adapter takes the core as `workspace:` dependencies. The state machine, permission, and instruction
 AI-specific and not mixed into the core (because non-AI entities do not bear the AI concept).
 
-**The start timing is the main function**[ADR-0032] (code2-codex-adapter.md) F1 phase-13)
+**The start timing is the main function**(Decided phase-13 implementation with [ADR-0032](0032-codex-adapter.md) F1).
 
-### [ADR-0032] (code2-codex-adapter.md) F1)
+### [ADR-0032](0032-codex-adapter.md) F1)
 
 package boundary and responsibility at materialise:
 
 - **`wrapper/core` (`@kaoiro/wrapper-core`)**— Entity Independence: Transport/Envel  Outer Frame+version/Identity/persona/connection/state Reporting Lifecycle/config/cli Framework ( CLI Independence).
-- **`wrapper/agent-common` (`@kaoiro/agent-common`)**— AI agent common layer: state machine, `EngineAdapter` interface, common tool description layer ([ADR-0032] ( AI2-codex-adapter.md) FEvents,missionper broker,instruction conversion, common event type. Claude / Codex
-- **`wrapper/claude-code` (`@kaoiro/claude-code`)**— Claude Code CLI specific adapter (currently `@kaoiro/wrapper` rename, [ADR-0023] (0023-host-host-architecture.md) D3).
+- **`wrapper/agent-common` (`@kaoiro/agent-common`)**— AI agent common layer: state machine, `EngineAdapter` interface, common tool description layer ([ADR-0032](0032-codex-adapter.md) F , permission broker, instruction conversion, common event type. Claude / Codex
+- **`wrapper/claude-code` (`@kaoiro/claude-code`)**[ADR-0023](0023-host-runner-architecture.md) D3
 - **`wrapper/codex` (`@kaoiro/codex`)**— Codex CLI specific adapter (implemented in phase-14).
 
 ## Consequences
@@ -68,7 +68,7 @@ package boundary and responsibility at materialise:
 
 ### Negative
 
-- Build/Distribution ([ADR-0018] (0018- - bution.md))) and import route reJapanese termation is required.
+- Re ation of build/ bution ([ADR-0018](0018-runner-distribution.md))/import route is required.
 
 ### Neutral
 
@@ -85,9 +85,9 @@ package boundary and responsibility at materialise:
 
 ## Related
 
-- spec: [plugin-model](../specs/plugin-model.md)。
--agent ADR: [0001] (0001-agent-sdk-integration.md)
-  [0018](0018-runner-distribution.md)。
+- spec: [plugin-model](../specs/plugin-model.md).
+-CO ADR: [0001](0001-agent-sdk-integration.md)
+  [0018](0018-runner-distribution.md).
 - Unresolved: Name the state vocabulary and package of the core line pull details and non-AI entities
 (when implemented). Vision /
 -elicitation

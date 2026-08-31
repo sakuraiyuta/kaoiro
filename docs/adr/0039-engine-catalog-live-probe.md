@@ -1,5 +1,5 @@
 ---
-title: Launch モデル model catalog with short-live SDK probe +   memory cache (Option E)
+title: Launch Japanese term model catalog with short-live SDK probe +   memory cache (Option E)
 status: accepted
 date: 2026-07-15
 opened: 2026-07-15
@@ -14,11 +14,11 @@ related_adrs: [23, 32, 35, 37, 40]
 ## Status
 
 Accepted (2026.-15, master decision).Home
-[phase-20-engine-catalog-live-probe](../plans/phase-20-engine-catalog-live-probe.md)。
+[phase-20-engine-catalog-live-probe](../plans/phase-20-engine-catalog-live-probe.md).
 
 ## Context
 
-[ADR-0037](0037-claude-model-catalog-live-refresh.md)
+[ADR-0037](0037-claude-model-catalog-live-refresh.md) F1 is Launch
 Reduced Claude model catalog to BOOTSTRAP for `default` 1 entry. Reason
 "register path is not wrapper Query, so the SDK.supportedModels() is
 It is a live of chicken and egg that can not be called, which is a live path of F2 (`ext.models`)
@@ -47,7 +47,7 @@ When running, the catalog of the register path can be richened.
 
 As :
 
-- Codex [ADR-0035] (0035-codex-model-catalog-and-mid-session-switch.md)
+[ADR-0035](0035-codex-model-catalog-and-mid-session-switch.md)
 Holding a static catalog of F1 (`codex doctor`)
 operator plan live probe
 Claude
@@ -76,7 +76,7 @@ not worth meeting complexity. `HostRegistry`
 `wrapper/claude-code/src/probe.ts`
 Contact Us   as child process`spawn(process.execPath,
 [require.resolve('@kaoiro/claude-code/dist/probe.js'), ...])`start
-Close the direct dependency to `@anthropic-ai/claude-agent-sdk` to the wrapper side ( 
+Close the direct dependency to `@anthropic-ai/claude-agent-sdk` to the wrapper side (
 package does not add dependency to the SDK. probe is one line JSON to stdout
 return the result, exit 0 = success / 1 = failure.
 
@@ -92,9 +92,9 @@ Don’t get the same control request wasted double (design pointed out of Rattan
 Start SDK query with the following options:
 
 - `cwd`: tmpdir (`os.tmpdir()/kaoiro-claude-probe-<pid>-<ts>`),
-Delete with finally. project settings / CLAUDE.md ignition / session file contain。.
+Delete with finally. project settings / CLAUDE.md ignition / session file contain..
 - `mcpServers: {}` / `tools: []` / `allowedTools: []` / `disallowedTools: []`
-  / `agents: {}` / `additionalDirectories: []` / `hooks: undefined`。
+  / `agents: {}` / `additionalDirectories: []` / `hooks: undefined`.
 - `env` Unspecified (S  inherits `process.env`) — keychain / OAuth / API-key
 auth Hold the route.
 - `settingsSources` is not found in the SDK 0.3.208 and user settings
@@ -102,15 +102,15 @@ Always loaded. No additional deter .
 
 `--bare`****skip keychain reads to return OAuth.
 
-### F5 — runner memory cache: TTL 1h、last-known-good、dedup
+### F5 — runner memory cache: TTL 1h,last-known-good,dedup
 
 `runner/src/claude_catalog_cache.ts` is the engine → `{ models, fetchedAt }`
-memory-only cache TTL Default 1 hour. TTL  
+memory-only cache TTL Default 1 hour. TTL
 only (client throws auto-refresh every time, and   is
-skip)。
+skip).
 
 - `force=false` (Launch  auto-refresh):
-`ok=true`Homele/ 
+`ok=true`Homele/
 - `force=true` (Launch  manual button): Probe execution with TTL ignore.
 -  -level Mutex + in-flight Promise Share 1 subprocess
 dedup.
@@ -125,10 +125,10 @@ I can challenge again.
 server host id is addressing (agents channel is
 topic from `host_id` of payload.
 - `EngineCatalogResult { version, host_id, engine, request_id, ok, reason?,
-  models_count? }` — runner → server → operators (agents:lobby, operator-only)。
+  models_count? }` — runner → server → operators (agents:lobby, operator-only).
 failure is closed vocabulary (`EngineCatalogFailReason` = `auth_failed` /
   `spawn_failed` / `cli_error` / `invalid_output` / `timeout` /
-  `unsupported_engine`)。
+  `unsupported_engine`).
 
 `models_count` is a size-only signal for toast, and does not include details such as model names
 `hosts`
@@ -188,7 +188,7 @@ risk (not generated with a single account host).
 ### Neutral
 
 - `default` fallback is preserved, so it can be probe failure environment (auth unset, etc.)
-Launch 
+Launch
 - ADR-0035 F1
 - Design without server-side cache is the same engine for future requirements (multiple  engines)
 re-evaluate if catalog is shared.
@@ -236,12 +236,12 @@ Home unrelated request id ignore, client-side timeout (45s, wrapper) 35s
 top), disconnect/error.
 - **AHome  shape defensive validation**: `wrapper/core/src/persona.ts`
 per-field  + defensive
-copy. malformed 
+copy. malformed
 - **AgentDetail `refreshModels()`**: Promise.all + `refreshEngineCatalog`
 Abolished (the source of false induction). await single `connection.refreshModels(agent_id)`,
 result.ok=false is a UI display, button loading is
 Maintenance. Japanese term cache =
-  LaunchDialog/future spawn、wrapper #models = current agent)。
+  LaunchDialog/future spawn,wrapper #models = current agent).
 
 Side Effect Boundaries (v2):
 
@@ -267,7 +267,7 @@ Cause: (a) `wrapper/claude-code/src/host.ts` `#models` initial value
 `claudeBootstrapCatalog()` Hardcode, (b) `AgentDetail`
 `connection.refreshModels(agent_id) → wrapper.retrySupportedModels()`
 running wrapper, but fresh-idle wrapper is `deferQueryUntilFirstInput`
-for `#query=null` `#refreshSupportedModels()` is no-op, (c)  
+for `#query=null` `#refreshSupportedModels()` is no-op, (c)
 `ClaudeCatalogCache` only supplies to register routes, and when spawn `WrapperConfig`
 I did not put it.
 
@@ -278,7 +278,7 @@ Contents:
 spawn/restart/relaunch
 - Shape-only validation + set with `wrapper/core/src/persona.ts`.
 - `wrapper/claude-code/src/host.ts` constructor
-  `#models = config.claude_engine_catalog ?? claudeBootstrapCatalog()`。
+  `#models = config.claude_engine_catalog ?? claudeBootstrapCatalog()`.
 When AgentDetail is started because it becomes rich from the first `state_change.ext.models`
 Multiple models + each effort levels can be surfaced. SDK
 `supportedModels()` success will continue to overwrite the existing route (F2).
@@ -286,7 +286,7 @@ Multiple models + each effort levels can be surfaced. SDK
 `getClaudeEngineCatalog?: () => EngineModelInfo[]| null | undefined`
 `claudeEngineCatalog`
 Pass cache getter on an additionalSite Map call site. engine == "claude-code" /
-null / undefined / empty array falls to boots 
+null / undefined / empty array falls to boots
 Close
 `getClaudeEngineCatalog: () => claudeCatalog.getStale()`
 pass to supervisor and getter in hot-reload `updateRuntimeConfig`
@@ -314,7 +314,7 @@ not flowing.
 Transmit the field. F3 projection (`probe.ts` `projectModel()`)
 `host.ts` `#executeManualRefresh()`
 2 places. `probe-client.ts` `parseProbeStdout()` passes object as object
-No need to change the implementation, but the re  test to prevent the future of whitelisting and 
+No need to change the implementation, but the re  test to prevent the future of whitelisting and
 Contact Us
 
 memory cache of F5 is unchanged because `EngineModelInfo[]` is used.
@@ -322,7 +322,7 @@ F6 / F7 event / relay is unchanged and eventxir is `runner_channel.ex`
 `%{"id", "models"}` is not touch because it only verifies the shape of the engine.
 
 wire and UI. `resolved_model`
-**Trans **(probe → cache → register payload) Launch 
+**Trans **(probe → cache → register payload) Launch
 not display in UI. cache's "last-successed probe point" resolution
 `default`
 The line is because the display value and the startup result are misaligned with account recommendation. If the shape of the consumer changes depending on the route, the consumer side is
@@ -330,11 +330,11 @@ The line is because the display value and the startup result are misaligned with
 
 [issue #166](https://github.com/sakuraiyuta/kaoiro/issues/166)
 to ex ation (for more details)
-[model-model](../specs/model-model.md)
+[plugin-model](../specs/plugin-model.md).
 
 ## Implementation
 
-[phase-20-engine-catalog-live-probe](../plans/phase-20-engine-catalog-live-probe.md)。
+[phase-20-engine-catalog-live-probe](../plans/phase-20-engine-catalog-live-probe.md).
 kaoiroJapanese termer delegation is implemented by kuroe and fuji makes a review and Git decision
 Home commit / push / branch
 

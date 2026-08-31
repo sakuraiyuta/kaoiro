@@ -14,25 +14,25 @@ related_adrs: [32, 34, 37, 39, 40]
 ## Status
 
 Accepted (2026.-11, master decision).Home
-[phase-16-codex-model-switch](../plans/phase-16-codex-model-switch.md)。phase-15
+[phase-16-codex-model-switch](../plans/phase-16-codex-model-switch.md).phase-15
 initial Start after completion.
 
 ## Context
 
-[ADR-0032] (code2-codex-adapter.md) F4bc is explicit in ChatGPT-account authentication
+[ADR-0032](0032-codex-adapter.md) F4bc explicit with ChatGPT-account authentication
 Codex based on the observation of 2026 20-11 that model has all 400/404
 `supportedModels()` This observation was before joining ChatGPT Plus
 was found. same persona rollout before and after joining account default
 `gpt-5.6-terra` to `gpt-5.6-sol`, the same session history continues
-(2026。-11). codex-cli 0.144.1
+(2026.-11). codex-cli 0.144.1
 Next:
 
 | slug |Result|
 |------|------|
-| `gpt-5.6-sol` | exit 0、`MODEL_OK` |
-| `gpt-5.6-terra` | exit 0、`MODEL_OK` |
-| `gpt-5.6-luna` | exit 0、`MODEL_OK` |
-| `gpt-5-codex` (negative control) | HTTP 400、`turn.failed`、exit 1 |
+| `gpt-5.6-sol` | exit 0,`MODEL_OK` |
+| `gpt-5.6-terra` | exit 0,`MODEL_OK` |
+| `gpt-5.6-luna` | exit 0,`MODEL_OK` |
+| `gpt-5-codex` (negative control) | HTTP 400,`turn.failed`,exit 1 |
 
 In Plus auth, curated trio explicit is specified and silent
 fallback to fail. `codex doctor --json`
@@ -63,7 +63,7 @@ cataloge the catalog.
 
 - auth mode `chatgpt` + plan Undeclared: empty catalog, account default delegation, stderr warn.
 - auth mode `chatgpt` + `free|go`: Terra only.
-- auth mode `chatgpt` + `plus|pro|business|enterprise`: Sol / Terra / Luna。
+- auth mode `chatgpt` + `plus|pro|business|enterprise`: Sol / Terra / Luna.
 - auth mode `apikey`: curated catalog for API-key. ChatGPT plan
 ignore stderr warn. Don’t break the game by simply  auth.
 - auth mode detection failure: fail closed to empty catalog and stderr warn. Don't guess.
@@ -125,7 +125,7 @@ Match the candidate group of AgentDetail.
 
 Codex SDK 0.144.1
 `effort_levels` The value set is reconfirmed by the CLI/S  type and actual machine at the start of implementation,
-Unverified values are not advertised. [ADR-0032] (code2-codex-adapter.md) F4bc E-B,
+Unverified values are not advertised. [ADR-0032](0032-codex-adapter.md) F4bc, E-B,
 execution of integration to model entry instead of independent effort catalog.
 
 ### F3 — mid-session model switch contract
@@ -153,7 +153,7 @@ Select or return the active value at the same time as above. I don't convert to 
 
 ### F4 — `supports_model_switch`
 
-[ADR-0034] (ses4-session-capabilities-advertisement.md) F2 reservation field
+[ADR-0034](0034-session-capabilities-advertisement.md) F2 reservation field
 `ext.session_capabilities.supports_model_switch` true
 codex catalog for session is non-empty and the wrapper is `set_model` and rollback
 Provide contracts. If not stamp/false, set the model switch UI to disabled.
@@ -202,7 +202,7 @@ The UI scope of phase-16 is now limited:
 |B: operator returns a plan| **Adopt**Home There is a manual renewal cost, but it can be the most recent and fail-closed in the absence of enumeration API|
 |probe each sort to endpoint and generate catalog|Reject. sesta/latency is consumed for each startup, and the probe itself generates a session. rate limit and temporary failure as entitlement|
 |permanent empty catalog|Reject. There is no convenience to continue to disabling existing switch transport routes, with the need for changing gating fact and operator through trio in Plus.|
-|fresh session|Reject. S、 same-session resume|
+|fresh session|Reject. S, same-session resume|
 
 ## Implementation
 

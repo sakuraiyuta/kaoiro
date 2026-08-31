@@ -37,7 +37,7 @@ Consuming APIs** (dogfooding = protocol reference implementation and calibration
 - Simple dashboard in server settings**Static delivery only off**Contact Us
 (Channel/API is always valid) Default is ON.
 - The scope is fixed to the minimum (state list, expression, approval, instructions)
-  ([non-goals](../specs/non-goals.md))。
+  ([non-goals](../specs/non-goals.md)).
 
 ## Consequences
 
@@ -55,12 +55,12 @@ Consuming APIs** (dogfooding = protocol reference implementation and calibration
 ### Neutral
 
 - Connectionapproach is determined by Japanese term Channels
-  ([ADR-0009](0009-client-transport.md))。
+  ([ADR-0009](0009-client-transport.md)).
 - The source location of the included dashboard is `dashboard/` (issue #44) of the repo route.
 `server/assets/`, independent pnpm route + independent lockfile). "Included"
 Keep the Resultfacts  during release build and don’t commit the  facts
 (`server/Dockerfile` node stage). Repos y is still unavailable.
-- Stage introduction ([ADR 4](0004-client-rendering-staged.md))
+- Introductory stage of drawing type ([ADR-0004](0004-client-rendering-staged.md)) is each
 Become a client’s interest.
 
 ## Alternatives Considered

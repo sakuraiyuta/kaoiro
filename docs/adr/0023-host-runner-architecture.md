@@ -17,7 +17,7 @@ Accepted
 
 ## Context
 
-Current topology ([ADR 2] (0002-local-wrapper-websocket-topology.md)) is "1 AI
+[ADR-0002](0002-local-wrapper-websocket-topology.md)
 Agent = 1 wrapper directly to kaoiro server. This is
 where to move the wrapper and how to connect (topology) only, and
 Lifecycle Management**. As a result:
@@ -28,7 +28,7 @@ Lifecycle Management**. As a result:
 
 Set one resident program (Host) for each host and host between wrapper and wrapper
 A lifecycle of agents.  issue
-[#23](https://github.com/sakuraiyuta/kaoiro/issues )
+[#23](https://github.com/sakuraiyuta/kaoiro/issues/23)
 Converged in the decision of this ADR (D1-D4).
 
 ### Current Code (Ground, 2026-06-23)
@@ -39,7 +39,7 @@ permission decision / interrupt / clear history / delete agent only).
 `agent_id => {session_id, cwd}`
 - **Multi-start prevention is incomplete**(owner fen  only when re-join, the same process
 agent id connection overwrites with last-write-wins →   local lock,
-  [ADR-0014](0014-session-resume-and-restore.md) F4)。
+  [ADR-0014](0014-session-resume-and-restore.md) F4).
 - **1 wrapper = 1 process**(AgentHost is a complete process private state).
 
 ## Decision
@@ -48,8 +48,8 @@ agent id connection overwrites with last-write-wins →   local lock,
 
 is a ** process lifecycle (spawn / stop / restart / monitoring) and session
 Enumeration**Become a management layer. wrapper**`wrapper:<agent_id>`
-Directly connect to the server, and the data path (common event) does not pass 。.  
-**[ADR 2](0002-local-wrapper-websocket-topology.md)**Home
+Directly connect to the server, and the data path (common event) does not pass ..
+**[ADR-0002](0002-local-wrapper-websocket-topology.md)**Home
 This ADR is a supervisory layer****(not supersede).
 
 D1=B is a case where wrapper ends connection and multiplexes the wrapper group.
@@ -66,32 +66,32 @@ Don’t get it because it requires a large refurbishment of AgentHost.
 
 If D1=A/D2=A, wrapper is only supervised by the Node child.
 config / control envel **Share Mold**High gain. Distribution
-[ADR-0018](0018- - SEAbution.md)
-etc.) `kaoiro-runner` Go/R 
+[ADR-0018](0018-runner-distribution.md)
+etc.) `kaoiro-runner` Go/R
 Avoid loss of introduction and type sharing.
 
-### D4 — NAME =  
+### D4 — NAME =
 
 `runner` `supervisor`
 Supervisor is not allowed to collide. `kaoirod`
 
 ### Liability of   (Specification)
 
-- Constant connection to the server, self-**Register a host**(Presen。 of survival and operable persona)
+- Constant connection to the server, self-**Register a host**(Presen. of survival and operable persona)
 - In the host agent with the operator instruction via server**spawn / stop / restart**
 execution.
 - wrapper / agent group in host****Let's show the state together.
 - wrapper continues to live even when hosts and wrappers fall,**Recovery**
-survival unit of [ADR-0014] (0014-session-resume-and-restore.md).
+([ADR-0014](0014-session-resume-and-restore.md)).
 - The session JSONL of the cwd substitute when returning or summoning****and start resume.
 - **Dual-start-proof local lock**physical inhibition of simultaneous resume of the same session
-  [ADR-0014](0014-session-resume-and-restore.md) F4)。
+  [ADR-0014](0014-session-resume-and-restore.md) F4).
 
-### Irregular conditions (threat-model) (../specs/threat-model.md)
+### Irregular conditions (threat-model) (../specs/threat-model.md) [threat-model](../specs/threat-model.md)
 
-Remote spawn from UI is real remote code execution(issue #22).  
+Remote spawn from UI is real remote code execution(issue #22).
 spawn / instructions****,resume The target session id is
-The agent binding under the cwd**Validation**(T1/T2/T3、ADR-0014 F6)。
+The agent binding under the cwd**Validation**(T1/T2/T3,ADR-0014 F6).
 
 ### Control message schema (#66, 2026-06-24)
 
@@ -105,20 +105,20 @@ rejected to complicate.
 - **Type**: Same as existing control**Channels**Home envel  `type`
 rejected to use the data frame to control.
 - ****: Host-specific s (env `host_id:token`,
-[ADR-0011](0011-phase3-reliability-and-auth.md).
+[ADR-0011](0011-phase3-reliability-and-auth.md) extended per-entityJapanese termism).
 host id is fixed. 1 sharedHost is rejected because all host exchanges are required when leaking
 (ADR-0011).
 - **version**: Add new message type to `"0"`
-  ([ADR-0015](0015-protocol-version-stamping.md))。
+  ([ADR-0015](0015-protocol-version-stamping.md)).
 - **Double startup**: server owner fen  +   local lock
-([ADR-0014](0014-session-resume-and-restore.md) F4). spawn conflicts
+([ADR-0014](0014-session-resume-and-restore.md) F4). spawn conflict
 `spawn_result.reason = already_running`
 
 ### TS Package Topology (for #68, 2026-06-24)
 
 D3's wrapper and type sharing**wrapper**Body wrapper
 Claude Code CLI version only, but future codex version, host state acquisition / client version
-Home**Package**as an additional plan. TS consumer speaks the same protocol / envel 
+Home**Package**as an additional plan. TS consumer speaks the same protocol / envel
 For more than three implementations, each implementation starts from protocol.md**Copy**Contact Us
 (wrapper / dashboard keeps each) breaks the SSOT type-level without drift linear.
 
@@ -129,12 +129,12 @@ Determination:
   - **All wrapper common spawn / CLI contract**Home This is the TS side SSOT.
 - current `@kaoiro/wrapper`(= Claude version) is transferred to a shared package
 Switch to reference.**Rename is added to codex version**(Now only type extraction, no behavior).
-  → **2026 -10 Update**: Codex adapter adds to [ADR-0032] (code2-codex-adapter.md) F1 and rename (`@kaoiro/wrapper` → `@kaoiro/claude-code`) is [phase-13-wrapper-multipackage-restructure] (../plans/phase-13-wrapper-multipackage-restructure.md)**execution**(completed)
+  → **2026 -10 Update**: Codex adapter added to [ADR-0032](0032-codex-adapter.md) F1 and rename (`@kaoiro/wrapper` → `@kaoiro/claude-code`) is [phase-13-wrapper-multipackage-restructure](../plans/phase-13-wrapper-multipackage-restructure.md)**execution**(completed)
 - wrapper (`@kaoiro/runner`) and future wrappers consume this shared package.
 - **Limited to Node**Home dashboard(`dashboard/`)
 In this work, set up (in the future).
-- Multiple wrapper bundles to a single binary ([ADR-0018] (0018- - bution.md)
-The approach is packed in the distribution phase ([#70] (https://github.com/sakuraiyuta/kaoiro/issues/70) as aJapanese termacent point. This decision is only type/package structure.
+- Multiple wrapper bundles to a single binary ([ADR-0018](0018-runner-distribution.md))
+The approach is packed in the distribution phase ([#70](https://github.com/sakuraiyuta/kaoiro/issues/70)) as aJapanese termacent point. This decision is only type/package structure.
 
 ## Consequences
 
@@ -142,7 +142,7 @@ The approach is packed in the distribution phase ([#70] (https://github.com/saku
 
 - Current transport No refurbishment,   keeps it pure management layer (no bottleneck).
 - Crash iso  (others are safe even if one body falls). Use existing wrapper code.
-- wrapper and type (config / control envel。) can be shared and the implementation cost is low.
+- wrapper and type (config / control envel.) can be shared and the implementation cost is low.
 - ADRJapanese termーJapanese term2 does not break, so the decision of the direct connection data path remains in one place.
 
 ### Negative
@@ -154,10 +154,10 @@ The approach is packed in the distribution phase ([#70] (https://github.com/saku
 
 ### Neutral
 
--   distribution and resident form follows [ADR-0018] (0018- -distribution.md)
+-   distribution and resident form follows [ADR-0018](0018-runner-distribution.md) (single
 CLI only).
 - Host non-ephemeral/agent id ↔ cwd depend on fixed premise
-  ([ADR-0014](0014-session-resume-and-restore.md))。
+  ([ADR-0014](0014-session-resume-and-restore.md)).
 
 ## Alternatives Considered
 
@@ -172,14 +172,14 @@ CLI only).
 
 ## Related
 
-- Added: [ADR 2](0002-local-wrapper-websocket-topology.md)
+- Revised subject: [ADR-0002](0002-local-wrapper-websocket-topology.md)
 Topology maintains and adds the supervision layer in this ADR).
--Japanese term ADR: [0014] (0014-session-resume-and-restore.md)
-resume / Summon, [0018] (0018- - bution.md) ( bution).
--archtures: [architecture](../specs/architecture.md)
+-Japanese term ADR: [0014](0014-session-resume-and-restore.md)
+resume / Summon, [0018](0018-runner-distribution.md) (CO distribution).
+-CO:s: [architecture](../specs/architecture.md),
 [protocol](../specs/protocol.md)(control message),
-  [threat-model](../specs/threat-model.md)。
+  [threat-model](../specs/threat-model.md).
 - control schema: #66 ( above "control message schema",
-[protocol](../specs/protocol.md)[eーHome control message]
-- : Phase 4 ([phase-4-host-host](../plans/phase-4-host-host.md)).
-- Origin: issue [#23] (https://github.com/sakuraiyuta/kaoiro/issues。).
+[protocol](../specs/protocol.md)"eーHome control message".
+- Phase: Phase 4 ([phase-4-host-runner](../plans/phase-4-host-runner.md)).
+- Origin: issue [#23](https://github.com/sakuraiyuta/kaoiro/issues/23).

@@ -36,7 +36,7 @@ Make a decision.
 ## Context
 
 kaoiro authorization is fixed to 2 roles (operator / viewer) and operator is real
-([ADR-0021](0021-role-information-dis。sure-policy.md) F1)
+([ADR-0021](0021-role-information-disclosure-policy.md) F1)
 `docs/specs/auth-and-authz.md`'s Known gaps make this structure a hole
 3 explicitly:
 
@@ -46,7 +46,7 @@ All rights including: Single tenant premise
 Register agent owner boundaries
 - **Audit Log**: Fixed aJapanese term record of "whoever sent to the agent"
 
-[ADR-0042](0042-oauth-004list-login.md)
+[ADR-0042](0042-oauth-allowlist-login.md)
 It was sent in the future. It was established between single users, but it is more than medium size
 In operation, it becomes real harm. kaoiro internal identity
 (OAuth identity (provider + uid) or shared  only)
@@ -68,19 +68,19 @@ Design as an integrated design.
 
 `User` and `Agent` are different types, and only common nodes in the permission graph
 `Principal` (`id` / `kind` / `display_name`) Axial separating
-not human or AI****。
+not human or AI****.
 
 Reference:
 
 1. **Iden  SoT is different**Home `agent_id` is kaoiro
-   ([ADR-0024](0024-agent-instance-identity-and-spawn-auth.md) D3、
+   ([ADR-0024](0024-agent-instance-identity-and-spawn-auth.md) D3,
 `<scope>.<rand>`. The identity of user isternal fromternal IdP (OAuth provider + uid)
 SoT is outside of kaoiro. "Spawn user"
 Broken operation surfaces such as “Applying agent to permission list” can be constructed
 2. **AJapanese termmetric**Home The action of the agent is ultimately attributed to any user,
 The behavior of the user is the end that is not attributable to anyone. If not expressed by type
 user → agent → agent’s responsibility chain is flattened and audit is not established
-3. **Example**Home [ADR-0028](0028-ex -human-messaging.md)
+3. **Example**Home [ADR-0028](0028-external-human-messaging.md) D3
 external human tool to the dedicated type / tool instead of generalizing inter-agent
 separated. If the Route "trust model is in one route, the condition is leaked immediately
 Vulnerability Agent / internal user / external
@@ -91,7 +91,7 @@ Home rules:
 - `kind` is a required field on wire. Agent forerer
 If it is not judged, it is not possible to determine whether there is a reception message
 - id space is single. charset `[A-Za-z0-9._-]`
-(https://github.com/sakuraiyuta/kaoiro/issues/61))
+([#61](https://github.com/sakuraiyuta/kaoiro/issues/61))
 - **`kind` does not derive from id**Home store attribute. id
 If prefix has a meaning, the falsehood is effective for the permission judgment as it is
 
@@ -107,7 +107,7 @@ independent from `persona` (pack-derived, session-invariant)
 
 ### D2 — role is admin / operator / viewer
 
-[ADR-0021] (0021-role-information-dis]sure-policy.md) F1 (2-roll fixed,
+[ADR-0021](0021-role-information-disclosure-policy.md) F1 (2-roll fixed,
 3 Rolling covers  NI).
 
 | role ||
@@ -118,7 +118,7 @@ independent from `persona` (pack-derived, session-invariant)
 
 The original intention of viewer is to say, "the guest who came to the office is working by the employee."
 It is about "to show" and not the disclosure of the conversation log. ADR-0021 F3
-Visibility is consistent with this intention**Not changed**。
+Visibility is consistent with this intention**Not changed**.
 
 **MUST — admin cannot be hidden.**Disable admin on permission graph
 No edges. The audit fails if it is lost. admin
@@ -148,7 +148,7 @@ If you close it, the environment of the existing user is broken
 
 **Syn  Rules**: global role squeezes only the ceiling and per-pair.
 Per-pair is not given to viewer.
-[ADR-0033] (model3-permission-model-dual-axis.md)
+[ADR-0033](0033-permission-model-dual-axis.md) dual-axis structure.
 
 ### D4 — auto-grant full edge to spawner when spawn (owner concept)
 
@@ -244,8 +244,8 @@ Phase B
 ### D9 — Graph editing tools make as independent clients
 
 permission Edit UI is not included in dashboard.
-。. Included dashboard is a reference implementation
-([ADR 7](0007-client-separation-reference-dashboard.md))
+.. Included dashboard is a reference implementation
+([ADR-0007](0007-client-separation-reference-dashboard.md))
 Operations where operators prepare dedicated clients to stop sending default dashboards
 To be in the design field.
 
@@ -259,10 +259,10 @@ to stop edge automatically when spawn.
 
 ### D10 — Audit permission changes itself
 
-“Whoever draws what edges” as audit trail. 
+“Whoever draws what edges” as audit trail.
 If the permission change itself can not be tracked, even if the permission is strictly in the model
 auth-and-authz.md
-([#146](https://github.com/sakuraiyuta/kaoiro/issues/146) and
+([#146](https://github.com/sakuraiyuta/kaoiro/issues/146))
 #190 determines whether to integrate or share it.
 
 ## Future work
@@ -324,17 +324,17 @@ Simply add the admin to the top, and the precipitation is Phase B
 -Maps: `auth-and-authz` (Boundary map, Known gaps, 3 items in book ADR
 starting point), `protocol` (Additional destination for permission editing),
 `protocol-inter-agent`, `threat-model`
--) ADR: [0007] (0007-client-separation-reference-dashboard.md)
+-> ADR: [0007](0007-client-separation-reference-dashboard.md)
 (Clients separation → D9),
-  [0013](0013-user-token-cookie-persistence.md) (cookie / ticket)、
+  [0013](0013-user-token-cookie-persistence.md) (cookie / ticket),
   [0021](0021-role-information-disclosure-policy.md)
-  (**Cover F1 / F6-6 Reassessment ignition**)、
-[0024](0024-agent-in -identity-and-spawn-auth.md),
-[0028](0028-ex)-human-messaging.md)
-Example → D1/D、,
-  [0030](0030-agent-directory-and-explicit-restore.md) (AgentDirectory、
+  (**Cover F1 / F6-6 Reassessment ignition**),
+[0024](0024-agent-instance-identity-and-spawn-auth.md) (agent id),
+[0028](0028-external-human-messaging.md)
+Example → D1/D,,
+  [0030](0030-agent-directory-and-explicit-restore.md) (AgentDirectory,
 Determination of persistence → #190 unresolved matters),
-[model3] (model3-permission-model-dual-axis.md) (dual-axis → D3 Japanese term rules),
+[0033](0033-permission-model-dual-axis.md)
   [0042](0042-oauth-allowlist-login.md) (**With  Out of scope**)
 -) issue: #187 / #188 / #189 / #190 / #191 (implemented),
   [#146](https://github.com/sakuraiyuta/kaoiro/issues/146)

@@ -1,5 +1,5 @@
 ---
-title: Task Tasklist (todo) to task envel 
+title: Task Tasklist (todo) to task envel
 status: accepted
 date: 2026-08-04
 opened: 2026-08-04
@@ -9,12 +9,12 @@ related_specs: [protocol, subagent-tasks, codex-sdk-events]
 related_adrs: [47]
 ---
 
-# ADR-0049 — Let the Tasklist (todo) task join envel 
+# ADR-0049 — Let the Tasklist (todo) task join envel
 
 ## Status
 
-Accepted (2026。04) kaoiro issue #178).
-[ADR-0047](0047-task-envel -schema.md) The `task_type` extension scheduled by F4
+Accepted (2026.04) kaoiro issue #178).
+[ADR-0047](0047-task-envelope-schema.md) `task_type`
 First application.
 
 ## Context
@@ -27,7 +27,7 @@ I want to see. #170
 
 Material: Both engine**List-wide updates**Contact Us
 (Claude Code todo update, Codex SDK 0.144.1 ThreadItem `todo_list`
-— `items[]: {text, completed}`、[codex-sdk-events](../specs/codex-sdk-events.md)。
+— `items[]: {text, completed}`,[codex-sdk-events](../specs/codex-sdk-events.md).
 current codex adapter is destroyed). ADR-0047 `task_type`
 Extendable enum and explicitly planned to supplement tasklist.
 
@@ -45,7 +45,7 @@ optional field `items`
 
 Limit to the extent that you can observation from the stream of the parent session. subagent
 todo does not pick up — child transcript reads
-[ADR-0019](0019-subagent-workflow-entity-and-task-envel .md)
+[ADR-0019](0019-subagent-workflow-entity-and-task-envelope.md)
 It is a route that leaves "heavy in v0" and follows the same judgment.
 
 ### F3: Claude Code / Codex
@@ -57,7 +57,7 @@ The particle size difference of item status betweenJapanese terms is acceptable)
 ### F4: The details are determined by the protocol
 
 `items`'s status vocabulary, `kind`'s usage (for overall replacement)
-`updated` Center), intermittent ([ADR-0048](0048-task-ag ation-delivery.md)
+`updated` Center, intermittent ([ADR-0048](0048-task-aggregation-delivery.md))
 Applying to tasklist of F2) to the `task` line of protocol
 (`version`) UI expression (display position/foldable)
 Register to issue #178
@@ -67,7 +67,7 @@ Register to issue #178
 ### Positive
 
 - The same server consolidation as #170
-([ADR-0048](0048-task-ag ation-delivery.md) Flat task table /
+([ADR-0048](0048-task-aggregation-delivery.md) Flat task table /
 snapshot
 - Both engine source events (whole list update) and wire shapes are matched to the wrapper
 Item value No calculation is required.
@@ -110,13 +110,13 @@ If you have a known tasklist, read the new session directory immediately. Contac
 If not re-Deliverybuted, otherwise replace it with empty list. If you do not read source,
 session the list of session to empty list and leave warning.
 not left in the display. Init resume restores effective settings
-not a tasklist restore contract, so after resume the task tool use  
+not a tasklist restore contract, so after resume the task tool use
 Tasklist is not redisplayed.
 
 ### Neutral
 
 - tasklist Entity life and cleaning follow the same detachment as other
-  (ADR-0048 F1)。
+  (ADR-0048 F1).
 
 ## Alternatives Considered
 
@@ -129,9 +129,9 @@ Tasklist is not redisplayed.
 ## Related
 
 -Reservation: [protocol](../specs/protocol.md)
-  [subagent-tasks](../specs/subagent-tasks.md)、
+  [subagent-tasks](../specs/subagent-tasks.md),
 [codex-sdk-events](../specs/codex-sdk-events.md)
--sk ADR: [0047](0047-task-envel -schema.md)(task envel  schema,
+-sk ADR: [0047](0047-task-envelope-schema.md) (task envel  schema,
 `task_type` extension.
 - Origin: kaoiro issue #178
 UI decisions are recorded on the issue side.

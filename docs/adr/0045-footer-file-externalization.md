@@ -13,18 +13,18 @@ related_adrs: [29, 44, 46]
 
 ## Status
 
-Accepted(2026。02 draft, 2026。03 master decision).
+Accepted(2026.02 draft, 2026.03 master decision).
 [ADR-0029](0029-persona-server-sot-and-pack-distribution.md)
 partially revise F5/D5 (not supersede).
 
 When drafting
 [#165](https://github.com/sakuraiyuta/kaoiro/issues/165)
-([ADR-0044](0044-coordination-injection-004l.md) implementation)
+[ADR-0044](0044-coordination-injection-hitl.md)
 Home****I used to accept the tuning, but the s ical trial
 Because it was a mutual wait that the ADR mechanism was required, the mechanism and
 I separate the sentence and confirm it only. Built-in default
 It is current at the time of drafting, and the statement of the cooperative guidance is the same issue
-([ADR-0044](0044-coordination-injection-004l.md) F1
+([ADR-0044](0044-coordination-injection-hitl.md) F1 supplement, draft A confirmed)
 Comment
 
 ## Context
@@ -46,7 +46,7 @@ The operator can edit. Only common footer is left on the code side.
 There are two s. `:ro`
 I can not design the premise to export files from the server side.  More
 Install directory extraction cache
-[ADR-0046](0046-persona-cache-relocation.md)
+[ADR-0046](0046-persona-cache-relocation.md) by persona dir
 `:ro` mount. footer
 Use a dedicated root (F1) for mana pack and separation.
 
@@ -55,7 +55,7 @@ Use a dedicated root (F1) for mana pack and separation.
 ### F1: The default footer is "built-in default + file priority"
 
 The default statement is built in the server binary, and in the footer installation directory
-`system-footer.md` is a built-in version.**Completely replace**。
+`system-footer.md` is a built-in version.**Completely replace**.
 Use the built-in version (fail-closed) if the file is returned / empty (trim)
 not
 
@@ -108,7 +108,7 @@ do not spread), rebuild without   restart. debounce window
 If you update the two files at the same time, you may temporarily have a new and old snapshot
 tolerant (to be astringent in the rebuild of the uterus). wrapper in connection
 does not work from the snapshot of the next connection wrapper
-([ADR-0029](0029-persona- -sot-and-pack-packbution.md) Maintain F9).
+([ADR-0029](0029-persona-server-sot-and-pack-distribution.md) Maintain F9).
 If the directory is missing or not read even if `KAOIRO_FOOTER_DIR` is set,
 cold start is fail-soft (built-in version only + warn) and watch remains invalid
 Start. server does not mkdir (`:ro` premise). Create a directory
@@ -191,5 +191,5 @@ close).
 |server Only when restarting|Impairs the main purpose of ex ation without the trial and error cost of the sentence|
 |Default Text:`system-footer.md.example`Distribution|Double control of the built-in version and example, resulting in misunderstanding ofJapanese termhronization. F1`priv/`If you embed a real file, you can show the real thing itself|
 |Default Text: Reprint to docs|The source is md internal code block, and it collapses and reprints drift|
-|Default Text: Dump with the mix task|execution environment premise (container operation)`docker exec`)。`priv/`Alternative to real files|
+|Default Text: Dump with the mix task|execution environment premise (container operation)`docker exec`).`priv/`Alternative to real files|
 |length guard: server warn (L2)|No threshold ground. Always warn is ignored. Alternative to F5 log visualization|

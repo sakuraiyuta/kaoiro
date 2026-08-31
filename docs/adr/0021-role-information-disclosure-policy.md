@@ -22,7 +22,7 @@ Accepted
 **What to see**The overall policy remains unsecided right, with individual patches whenever required
 deny-list:
 
-- `log` / `result` Delivery operator only ([ADR-0012] (0012-response-display-and-dashboard-scope.md)).
+- `log` / `result` Release to operator only ([ADR-0012](0012-response-display-and-dashboard-scope.md)).
 - Remove `permission_request.input` from viewer (preh ic history of this ADR).
 - `state_change.ext`(`cwd` / `model` / `context` / `rate_limits` /
 `slash_commands`) removed from viewer (#46 implementation phase, commit 9b32c34 /
@@ -48,7 +48,7 @@ issue #46 “viewer role permission”
 ### F1: 2-roll fixing (operator / viewer) — withdrawn
 
 > **Revised (2026 14, issue #188).**F1
-> [ADR-0050] (0050-principal-model-and-graded-access-control.md) D2 covered.
+> [ADR-0050](0050-principal-model-and-graded-access-control.md) D2 covered.
 > role**admin / operator / viewer**F1 "3 Roll"
 ADR-0050
 >
@@ -63,7 +63,7 @@ ADR-0050
 > - The viewer visibility (F3 or later) is not changed. ADR-0050 D2
 > Not changed because it matches the intention of
 >
-[issue #189]
+[issue #189](https://github.com/sakuraiyuta/kaoiro/issues/189)
 > When the operator starts to narrow down the receiving range, remove admin from that judgment
 > required The above MUST is broken when narrowed down.
 
@@ -101,7 +101,7 @@ Defining:
 `permission_request` Syn  subst tion of envel : wrapper
 `waiting_permission` emit `state_change(waiting_permission)` when transition
 (`host.ts:#apply({kind: "permission_request"})`) viewer
-`state_change` But snapshot is the latest envel 
+`state_change` But snapshot is the latest envel
 `permission_request` overwrites later with a single option
 view subst tion is required for viewer to lose the agent.
 
@@ -128,7 +128,7 @@ F1 to F5 is intended for `agents:lobby` delivery for client (dashboard).
 [issue #150](https://github.com/sakuraiyuta/kaoiro/issues/150)
 the request that the agent reads and delegates the status of the agenter,
 **Disabling `agent` as the third disclosure requirement**(2026 -28 Added,
-[phase-27](../plans/phase-27-list-agents-metadata.md))。
+[phase-27](../plans/phase-27-list-agents-metadata.md)).
 
 **F6-1 — `agent` is not part of `operator`.**operator
 `agents:lobby`
@@ -147,7 +147,7 @@ Not disclosed.
 `persona{id, name, sprite_set}` / `display_name` / `state` / `engine` /
 `model` / `effort` / `context` / `session_started_at` / `turns` /
 `last_activity_at` / `conversation` / `rate_limits` / `directory_only` /
-`last_seen`。
+`last_seen`.
 `persona{...}` to back 6 field(`context` to `rate_limits`)
 [#150](https://github.com/sakuraiyuta/kaoiro/issues/150)
 (phase-27) `display_name`(issue #209 D19)
@@ -161,16 +161,16 @@ identity + `last_seen`
 without operator-grade field. F6-7
 Issue #259 T7/W1-W3
 
-**F6-4 — explicit deny (co ous ex )**: `cwd`、`permission`(`sandbox` /
-`approval`)、`permission_mode` / `fast_mode`、`session_id`、
+**F6-4 — explicit deny (co ous ex )**: `cwd`,`permission`(`sandbox` /
+`approval`),`permission_mode` / `fast_mode`,`session_id`,
 `pending_permission`, `pending_question`,
-`slash_commands`、`models` catalog、`resume_snapshot` /
-`resume_drift`、`model_source` / `effort_source`、
+`slash_commands`,`models` catalog,`resume_snapshot` /
+`resume_drift`,`model_source` / `effort_source`,
 `session_capabilities`, `cost`. No need for delegation decisions or operator-specific
 To guess the work contents. `session_capabilities`
 `supports_context_usage` `context`
 only read in internal**, the value itself does not appear inerer
-([ADR-0040](0040-context-usage-capability.md) 3-state judgment of D1
+([ADR-0040](0040-context-usage-capability.md) D1 3-state judgment
 dashboard).
 
 **F6-5 — `conversation` discloses up to `agent_id`
@@ -200,7 +200,7 @@ Re-evaluate.
 **Reassessment conclusions.** [ADR-0050](0050-principal-model-and-graded-access-control.md)
 *identity (id / kind /
 **(F6-8) that explicitly accepts by display name / role.
-D5 is the scope of “visible” to identity and state and activities (w 
+D5 is the scope of “visible” to identity and state and activities (w
 per-pair (D3)
 Corres ence to being divided.
 
@@ -257,10 +257,10 @@ F1 to F6 is supported by `agents:lobby` (WS envel ) anderer directory.
 **HTTP endpoint also follows the same fail-closed principle**: New endpoint
 If you can return subtle information, you can set the operator/admin only by default and viewer
 Disclosing is expressly determined separately (F2's "New output is the default operator only"
-WS envel 
+WS envel
 
 Current target: `GET /api/personas/:id` (persona pack manifest.json)
-All metadata + personality.md 。). custom pack personality.md
+All metadata + personality.md .). custom pack personality.md
 system prompt to getJapanese termrietary operation instructions
 operator/admin (director decision, 202628)28). Viewer
 In the future, the byte limit of personality.md (as S-232-1)
@@ -271,7 +271,7 @@ see).
 Reuse `ClientSocket.role_for/1` and use session cookies
 request live revalidate — same as F1's 3 roll revision
 Determine admin). More
-[auth-and-authz](../specs/auth-and-authz.md)
+[auth-and-authz](../specs/auth-and-authz.md)"Operator limited HTTP
 endpoint
 
 How to add a new HTTP endpoint is the same as F5: viewer disclosure
@@ -314,18 +314,18 @@ including).
 |Keep current catch-all connections|The viewer leak continues when new type is added. Structural problems that do not notice until an accident occurs|
 | `permission_request`envel `input`(current)| `tool_name` / `request_id`Def -in-depth|
 |Viewer`permission_request`Home**Completely**Remove from snapshot|Recent Posts`permission_request`The agent disappears from the grid of the viewer. `state_change`adopt to keep grid consistency in subst tion|
-|3 Rolling (admin / operator / viewer)|。NI 2 rolls in the current function. ADR~~**With) rejected (2026 (2014, issue #188).**[ADR-0050](0050-principal-model-and-graded-access-control.md) D2 decided to 3 value. See  F1 revisions|
+|3 Rolling (admin / operator / viewer)|.NI 2 rolls in the current function. ADR~~**With) rejected (2026 (2014, issue #188).**[ADR-0050](0050-principal-model-and-graded-access-control.md) D2 decided to 3 value. See  F1 revisions|
 
 ## Related
 
--specs: [protocol](../specs/protocol.md)
+-COs: [protocol](../specs/protocol.md)
 Unified), [threat-model](../specs/threat-model.md) (cited matrix).
--phase ADR: [0011] (0011-phase3-reliability-and-auth.md) (role/token authentication)
-Mounting),[0012](0012-response-display-and-dashboard-scope.md)(log/re t
+-CO ADR: [0011](0011-phase3-reliability-and-auth.md)
+mounting),[0012](0012-response-display-and-dashboard-scope.md)(log/re t
 [0013](0013-user-token-cookie-persistence.md)
 (token)
-- F6 Origin: [issue #150] (https://github.com/sakuraiyuta/kaoiro/issues/150),
+- F6 Origin: [issue #150](https://github.com/sakuraiyuta/kaoiro/issues/150),
 [phase-27](../plans/phase-27-list-agents-metadata.md) Disclosure field
-[protocol-inter-agent](../specs/protocol-inter-agent.md)
+wire is [protocol-inter-agent](../specs/protocol-inter-agent.md)
 "peer directory information boundary"
-- Origin: [issue #46] (https://github.com/sakuraiyuta/kaoiro/issues/46).
+- Origin: [issue #46](https://github.com/sakuraiyuta/kaoiro/issues/46).

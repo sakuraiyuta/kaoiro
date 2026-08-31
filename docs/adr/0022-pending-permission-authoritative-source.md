@@ -24,7 +24,7 @@ Issue #59)
 
 direct cause is client (`dashboard/src/App.svelte`,
 `dashboard/src/lib/AgentDetail.svelte`) is the latest envel  for each agent
-`permission_request` envel 
+`permission_request` envel
 Lose persistence when overwritten with `state_change`.
 
 The revision policy was 3 proposals:
@@ -67,7 +67,7 @@ The client reads ext.
 
 `permission_request` payload and `state_change.ext.pending_permission`
 guaranteesJapanese termhronization on the wrapper side (the same `request_id` / `tool_name` /
-`input` / `truncated` / `ts`)。
+`input` / `truncated` / `ts`).
 
 ### F3: wrapper will last to ext
 
@@ -161,19 +161,19 @@ Recommended).
 
 ## Updates
 
-- 2026 -10: [ADR-0033] (model3-permission-model-dual-axis.md) has confirmed the supplement to add `sandbox`/`approval` biaxial fields to payload while maintaining the F1 (`state_change.ext.pending_permission` authoritative source principles) of this ADR. Extension of the permission model abstraction with the addition of the Codex CLI adapter ([ADR-0032] (code2-codex-adapter.md). This ADR is not supersede and is extended with ADR-0033 only.
+- 2026 -10: The [ADR-0033](0033-permission-model-dual-axis.md) tries to add `sandbox`/`approval` biaxial fields to payload while maintaining the F1 (`state_change.ext.pending_permission` authoritative source principle) of this ADR. Extension of the permission model abstract accompanying additional codex CLI adapter ([ADR-0032](0032-codex-adapter.md)). This ADR is not supersede and is extended with ADR-0033 only.
 
 ## Related
 
 - specs: [protocol](../specs/protocol.md)(`state_change.ext.pending_permission`
-`permission_request` envel 
+`permission_request` envel
 [threat-model](../specs/threat-model.md)
 via auto cover).
-- ADR: [0010] (0010-protocol-precisification.md),
+- ADR: [0010](0010-protocol-precisification.md),
 [0011](0011-phase3-reliability-and-auth.md)
 [0012](0012-response-display-and-dashboard-scope.md)
-(protocol = single source principle of truth), [0021] (0021-role-information-dis sure-policy.md)
+(protocol = single source principle of truth), [0021](0021-role-information-disclosure-policy.md)
 (base to protect the viewer leak with allow-list).
-- Origin: [issue #59] (https://github.com/sakuraiyuta/kaoiro/issues/59).
-Follow-up: [#60](https://github.com/sakuraiyuta/kaoiro/issues/60)
+- Origin: [issue #59](https://github.com/sakuraiyuta/kaoiro/issues/59).
+> follow-up: [#60](https://github.com/sakuraiyuta/kaoiro/issues/60)
 (broker timeout setting, low priority).

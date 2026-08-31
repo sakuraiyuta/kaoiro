@@ -14,7 +14,7 @@ related_adrs: [3, 6, 29]
 ## Status
 
 Superseded by [ADR-0029](0029-persona-server-sot-and-pack-distribution.md)
-(2026。-05). Injected approach via the SDK `systemPrompt.append` is inherited,
+(2026.-05). Injected approach via the SDK `systemPrompt.append` is inherited,
 First source of personality prompts from wrapper included md to server aggregate SoT
 Changed the delivery to the push of the WS hand shake. Common footer
 wrapper to server.
@@ -50,18 +50,18 @@ Do not distribute.
   common-footer`(Initial implementation provisional policy is "environment recognition 1 sentence"
 (This agent is operated over the kaoiro client)
 hardcode). This open-question is 2026 -05
-[ADR-0029](0029-persona- -sot-and-pack-packbution.md) D5
+[ADR-0029](0029-persona-server-sot-and-pack-distribution.md) D5
 merged and closed as the provisional policy.
 - **D4 Language**: Add `language?: string` field to Persona (not specified)
 `"ja"` default). The dispatch logic is not included in phase-0.
-[persona-language-disp ](../open-questions/persona-language-disp .md)
+Multilingual dispatch [persona-language-dispatch](../open-questions/persona-language-dispatch.md)
 Contact Us
 - **D5 Maximum number of characters**:Please specify SHOULD (200-1000 characters) in . hard upper limit
 Not set.
 - **Infusion only when wrapper is launched**Home mid-session server
-../specs/threat-model.md
+No overwrite routes ([threat-model](../specs/threat-model.md))
 allowed tools
-- **Envelope Non Exposure**: Change the character string to state change / log / result envel 
+- **Envelope Non Exposure**: Change the character string to state change / log / result envel
 Not available. dashboard ID is `persona.id` / `persona.name`
 only (pack-derived canonical, session-invariant). **Change in operation
 `display_name` field
@@ -73,7 +73,7 @@ Consistent with the purpose of
 ### Positive
 
 - The same `persona.id` responds with the same stand-up + the same tone
-[ADR 3](0003-persona-identity-persistence.md)
+[ADR-0003](0003-persona-identity-persistence.md)
 Persistents are extended from the appearance to the behavior.
 - Claude Code preset tool
 Minimal side effects on behavior.
@@ -95,7 +95,7 @@ The cost of replacement is left.
 ### Neutral
 
 - The character string is complete within the wrapper, and the Envel ,  , and dashboard side.
-No need to change schema. ADR。3
+No need to change schema. ADR.3
 - `default` The persona does not have a personality description, and only the common footer is appended.
 personas.md's "default = without standing painting /Face face" default and Namemetrical handling.
 

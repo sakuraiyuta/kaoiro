@@ -13,12 +13,12 @@ related_adrs: [12, 14, 20, 34, 43]
 
 ## Status
 
-Accepted (2026。-12, master decision). 
-[phase-17-session-lifecycle-commands](../plans/phase-17-session-lifecycle-commands.md)。
+Accepted (2026.-12, master decision).
+[phase-17-session-lifecycle-commands](../plans/phase-17-session-lifecycle-commands.md).
 phase-15 After initial completion, the master decides the implementation order with phase-16.
 
 **Supplement (2026 -28)**: F1 and F6 of this decision
-[ADR-0043] (0043-agent-initiated-session-reset.md) has been revised.  operator
+[ADR-0043](0043-agent-initiated-session-reset.md)  operator
 Add the deferred reset with the agent's own permission while maintaining the existing semantics of the origin.
 
 ## Context
@@ -40,9 +40,9 @@ It does not assume that it is established.
 
 ### © 2019 Claude Agent SDK`/compact`Japanese term
 
-[Claude Agent SDK 0.3.220 interprets `/compact` in streaming input mode as CLI native slash command and executes manual compact. Therefore, the above “Claude/Codex does not pass CLI native slash command parser” is limited to the actual measurement of Codex. Claude does not apply this fault.
+In [Phase-28 Track S](../plans/phase-28-agent-initiated-session-ops.md#track-s-実測結果-もも2026-07-28) conducted on 2026-28-28, the Claude Agent SDK 0.3.220 interpreted string `/compact` as CLI native slash command in streaming input mode. Therefore, the above “Claude/Codex does not pass CLI native slash command parser” is limited to the actual measurement of Codex. Claude does not apply this fault.
 
-In the same day [phase-28 real machine acceptance](../plans/phase-28-agent-initiated-session-ops.md# actual machine acceptance result-Home2026-28-28), manual compact via `request_compact` from the agent was also established in the main session. De  two additional points.
+In [phase-28](../plans/phase-28-agent-initiated-session-ops.md#実機受け入れ結果-あお2026-07-28) of the same day, manual compact via `request_compact` of the agent was also established in the production session. De  two additional points.
 
 - **`compact_metadata.post_tokens` is optional**(`post_tokens?: number`), and there is no guarantee that it always exists. In the actual aircraft, the `SDKCompactBoundaryMessage` of in-process was not the same event on the session jsonl written by CLI, but the expression is different by the fact (field name is different from snake case / camelCase). The implementation that handles compact reductions is correct in-process message and has a path to degrade when `post_tokens` falls.
 - **manual compact is contextual and can reach a few minutes**Home 13.7 sec @ ~22k s @ 168.8 sec @ ~293k s. The UI / tool description of the session lifecycle operation does not promise the required number of seconds, and the expression "running at the next turn boundary" and "complete observation with boundary event".
@@ -80,7 +80,7 @@ Contact Us Don't get a wrapper to reparse user text. protocol control and model 
 It is because the meaning changes after mixing responsibilities and passing through client/ valid validation.
 
 If you want to send exact string to model for descriptive purposes, code block or escape the beginning
-Use `\/new`/`\/clear` to avoid reserved exact。. phase-17
+Use `\/new`/`\/clear` to avoid reserved exact.. phase-17
 Don't make a special route that sends anexactRoute by removing it. Defending Command
 
 
@@ -109,9 +109,9 @@ streaming query and codex per-turn exec are implemented separately, and leave of
 hard to prove. Reuse vis supervisor as a process lifecycle SSOT.
 
 server takes the `session_reset_pending` lock of the agent unit at the start of reset, followed by
-instruction、model/effort switch、permission_mode switch、resume_session
+instruction,model/effort switch,permission_mode switch,resume_session
 (switch session), deny duplicate resets with `session_reset_pending`
-(**2026 -12 ε In the race analysis during implementation, Detect the leakage of resume session and repair**、
+(**2026 -12 ε In the race analysis during implementation, Detect the leakage of resume session and repair**,
 race to `AgentsChannel.handle_in("resume_session")`
 `guard_against_reset_pending`.
 broadcast `session_reset_completed` only when the connection of the fresh wrapper is confirmed,
@@ -131,7 +131,7 @@ wrapper is mana/developer instructions, lastly effective model/effort/permission
 Re  the sandbox/network and MCP config from the regular spawn route. Value SSOT Phase-15 D8
 The latest effective snapshot, including the mid-session model/effort switchsuccess value of phase-16.
 
-"Re-applying from ordinary spawn routes" const tes [ADR-0014 F1] (0014-session-resume-and-restore.md): `ResetSessionCommand.resume_snapshot?` is included by the server, and  server `applyResumeSnapshot` pure helper reflects P0 privileged three axis (Codex `sandbox` / `network_access`, Claude `permission_mode`) to a fresh DE5. `model` / `effort` is preserved in sanitized snapshot and is also included in drift calculation, but apply is P1.
+`ResetSessionCommand.resume_snapshot?` is included with the server, and the CO <CODE1 pure> helper reflects the P0 privilege triaxial (Codex `sandbox` / `network_access`, Claude `permission_mode`) to the `ParsedSpawn` equivalent of fresh. `model` / `effort` is preserved in sanitized snapshot and is also included in drift calculation, but apply is P1. [0014-session-resume-and-restore](0014-session-resume-and-restore.md)
 
 ### F3 — /new maintains display, /clear resets the display projection of the agent
 
@@ -148,7 +148,7 @@ The engine session file (JSONL/rollout) is not deleted and the old session is pi
 resume Leave it possible.
 
 **2026 08 Correction:**IA visibility cutoff
-[ADR0051](0051-history-restart-resilience.md) supersede was done in D3-4.
+[ADR-0051](0051-history-restart-resilience.md) was supersede in D3-4.
 `ClearWatermarks` defines the ing  stamp of the server
 Restore from the host sidecar to per-pane projection. server
 `InterAgentHistory` Remove DETS.
@@ -172,7 +172,7 @@ maintain the current API as the agent's pane marker + marker retention.
 
 ### F4 — SessionPointers add explicit detach, as it is the latest one
 
-[ADR-0014] (0014-session-resume-and-restore.md) Maintain the latest pointer contract of F3,
+[ADR-0014](0014-session-resume-and-restore.md) 1:1 latest pointer contract with F3,
 pointer stack After fresh relaunchsuccess, `SessionPointers` has the old session ID
 **explicitly update toachil**and cwd/  keep. Current `record(..., nil)`
 is a merge semantics that stores the existing session ID, so it is aoperhronous dedicated operation in phase-17
@@ -182,7 +182,7 @@ Normal record route updates the latest pointer.
 ses session and existing session picker/
 `resume_session` Don’t make a dedicated “ Japanese term” stack. history on server
 Maintain ADR-0014 F2/F3/A4 to candidate SSOT for host session files without duplicate.
-You can add sh、cut only once from completion toast to `previous_session_id`.
+You can add sh,cut only once from completion toast to `previous_session_id`.
 This is not pointer stack, it is treated as a shortcut to the existing `resume_session` and is not MVP.
 
 After reset, the first instruction is the normal state even if the session ID is not specified. pointer=nil
@@ -190,7 +190,7 @@ After reset, the first instruction is the normal state even if the session ID is
 
 ### F5 — ProHomet Home with capability advertise
 
-ses4-session-capabilities-advertisement.md
+[ADR-0034](0034-session-capabilities-advertisement.md) Extend F2:
 
 ```text
 supports_session_reset: boolean
@@ -203,7 +203,7 @@ Reject this combination with the adapter's stamp test.
 
 wrapper/wrapper/wrapper provides F2 fresh relaunch and completion handshake
 stamp true. unstamp/false disables UI command with fail-closed and typed exact
-command does not flow to 。 as `unsupported_session_reset`. dashboard with 4 people
+command does not flow to . as `unsupported_session_reset`. dashboard with 4 people
 Not judged.
 
 `/new``/clear` is another kaoiro local command from `ext.slash_commands`, but
@@ -245,7 +245,7 @@ server -> clients: session_reset_started | session_reset_completed | session_res
 ```
 
 `session_reset_started`Displays "New session" in the UI. Existing
-、- life lifecycle event
+,- life lifecycle event
 pending lock to SSOT. wrapper process to state machine
 not to mix.
 
@@ -256,7 +256,7 @@ SSOT Do not duplicate the same history or pointer stack on each layer.
 error reason closed vocabulary (`agent_busy`, `unsupported_session_reset`,
 `session_reset_pending`, `runner_unavailable`, `spawn_failed`, `rollback_failed`,
 `timeout`) returns to loud and silent to old session dressing fallback or success to ses prompt
-Pro。t resume. stderr
+Pro.t resume. stderr
 `[wrapper session] command=<mode> from=<id> to=<id|null> result=<ok|failed|rolled_back>`
 1 line.
 
@@ -273,7 +273,7 @@ hide to per-pane with watermark.
 
 ### Negative
 
-- control handshake crosses all layers of client/。/wrapper/wrapper.
+- control handshake crosses all layers of client/./wrapper/wrapper.
 - A short disconnected window occurs to restart the wrapper process at reset.
 - `SessionPointers` is required to add an explicit detach operation toilil.
 - If the codex fresh thread ID is lazy until the first turn, the boundary ID is confirmed two steps.
@@ -346,5 +346,5 @@ wrapper join unconfirmed
 `session_reset_failed { reason: "timeout" }`  Japanese term
 phase is only completed when confirming the fresh wrapper connection of this ADR F2
 `runner.ok=true` is misunderstood as completion
-completed if wrapper is dead on the fresh spawn  
+completed if wrapper is dead on the fresh spawn
 explicitly avoid risk.

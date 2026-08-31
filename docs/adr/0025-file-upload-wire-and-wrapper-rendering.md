@@ -17,7 +17,7 @@ Accepted
 
 ## Context
 
-[ADR-0020](0020-dashboard-battery-included-client.md)
+[ADR-0020](0020-dashboard-battery-included-client.md)(battery-included)
 Adding new public protocol surfaces from the dashboard
 File attachment (image / text / PDF / Office) to Claude Code
 Contact Us #52 issue The body has four decisions
@@ -34,7 +34,7 @@ Which layer can I apply?
 
 ## Decision
 
-### F1: rendering wrapper-in 
+### F1: rendering wrapper-in
 
 client / server is type-agnostic, protocol to Anthropic API terms
 (image block / document block / text block, etc.) wrapper
@@ -51,7 +51,7 @@ rejected:
 
 `attach_open` / `attach_chunk` (binary) / `attach_close` / `instruction` expansion
 4  configuration (see `attachment_ids`). wire
-[file-upload](../specs/file-upload.md) / [protocol](../specs/protocol.md)。
+[file-upload](../specs/file-upload.md) / [protocol](../specs/protocol.md).
 
 rejected:
 
@@ -83,7 +83,7 @@ Always delete file and directory when the turn is complete, including success, f
 The cleanup failure remains in the loud with the stderr warn, and is recovered with the next startup prefix-scoped failure.
 This temp file cleanup is included in the F11 interrupt drop semantics. SDK
 path Only accepts the input, the content of the conversation itself is already disk persisted by the SDK rollout
-This is a limited acceptance decision based on that, and the master approved 2026。-23.
+This is a limited acceptance decision based on that, and the master approved 2026.-23.
 
 ### F4: Maximum Individual File = 128 MB
 
@@ -109,7 +109,7 @@ rejected: unlimited — DoS defense and no valid range on UX.
 
 ### F7: MIME Permit List
 
-See [file-upload ](../specs/file-upload.md) for details.
+See [file-upload spec](../specs/file-upload.md) for details.
 
 rejected: zip/tar/ old Office(.doc/.xls/.ppt)
 execution file system — attack surface increase / SDK non-compliant / no application.
@@ -130,9 +130,9 @@ with overlapping, wrapper centralization. OQ2
 - `attach_rejected { upload_id, reason, detail? }`
 - `instruction_rejected { attachment_ids?, reason, detail? }`
 
-../specs/file-upload.md
+reason enum is a [file-upload spec](../specs/file-upload.md).
 Both envel s are only available
-([ADR-0021](0021-role-information-disclosure-policy.md))。
+([ADR-0021](0021-role-information-disclosure-policy.md)).
 
 rejected:
 
@@ -152,7 +152,7 @@ sharp-wasm32
 - PDF page-extract: **pdf-lib**(pure JS)
 - text truncate: `countTokens`
 window validation
-- Office → text: **officeparser**(pure JS、 docx/xlsx/pptx 1 lib)、
+- Office → text: **officeparser**(pure JS, docx/xlsx/pptx 1 lib),
 markitdown CLI is Q10 ([file-upload-markitdown-fallback](../open-questions/file-upload-markitdown-fallback.md))
 fallback room
 
@@ -163,7 +163,7 @@ Rejected. F9(`unfittable_image` / `unfittable_pdf` /
 
 >32 MB single file can be used with the Files API path (see `file_id`)
 (1 file up to 500 MB). Adopt Judge Q9
-([file-upload-files-api-route](../open-questions/file-upload-files-api-route.md))。
+([file-upload-files-api-route](../open-questions/file-upload-files-api-route.md)).
 
 rejected: "If S  is rejected, it will be returned as it is" — 128 MB cap and SDK
 UX collapse with a small-end gap.
@@ -206,7 +206,7 @@ not.
 - Dashboard attachments can be dogfooding (ADR-0020).
 - protocol is wire neutral (API terminology non-dependent) and the third-party client implementation is wide.
 - Server Basic Principles and Channels
-  ([ADR-0009](0009-client-transport.md) / ADR-0020 F3)。
+  ([ADR-0009](0009-client-transport.md) / ADR-0020 F3).
 - The rejection at failure is expressed in the new envel  and does not stain the semantics of the existing result.
 - Supports a wide variety of files (sJapanese term / design / large paper) with a tolerance of 128 MB.
 - Enhanced "kaoiro MUST" as per-arch translation layer.
@@ -239,7 +239,7 @@ Details are aggregated in each F rejected line. Main Features:
 | OQ |Slag|
 |--|--|
 | Q1 | [file-upload-fs-read-fallback](../open-questions/file-upload-fs-read-fallback.md) |
-| Q2 |—ed — [ADR-0034] ( 4-session-capabilities-advertisement.md) F7|
+| Q2 |—ed — [ADR-0034](0034-session-capabilities-advertisement.md) F7|
 | Q3 | [file-upload-json-fallback](../open-questions/file-upload-json-fallback.md) |
 | Q5 | [file-upload-spill-storage](../open-questions/file-upload-spill-storage.md) |
 | Q6 | [file-upload-exif-stripping](../open-questions/file-upload-exif-stripping.md) |
@@ -249,19 +249,19 @@ Details are aggregated in each F rejected line. Main Features:
 
 Phase 7 Stage A spike completed (see “Resultike Result” section in plan): Phase
 V2 binary serializer specification / phoenix.js Array push push API
-API limit (image 10 MB / PDF 32 MB / request 32 MB), fit-to-S 
+API limit (image 10 MB / PDF 32 MB / request 32 MB), fit-to-S
 pdf-lib / officeparser / Anthropic SDK
 `countTokens`. `max_frame_size` is the default `:infinity`.
 8 MB required (spec reflected).
 
 ## Related
 
--files: [file-upload](../specs/file-upload.md),
+-COs: [file-upload](../specs/file-upload.md)
 [protocol](../specs/protocol.md)(wire details),
 [non-goals](../specs/non-goals.md)
 - ADR
-[0009] (0009-client-transport.md) (Channels single, maintained in F2),
+[0009](0009-client-transport.md)
 [0015](0015-protocol-version-stamping.md)
 [0020](0020-dashboard-battery-included-client.md)
-[0021](0021-role-information-dis sure-policy.md)
+[0021](0021-role-information-disclosure-policy.md)
 - Origin: my-spec-elicitation(#52)

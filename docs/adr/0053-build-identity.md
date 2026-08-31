@@ -18,7 +18,7 @@ Accepted
 ## Context
 
 There was no means to say which commit is from factfact in operation
-([issue #218](https://github.com/sakuraiyuta/kaoiro/issues/218))。
+([issue #218](https://github.com/sakuraiyuta/kaoiro/issues/218)).
 `runner`
 `--version`  , `server/Dockerfile`, OCI label  ,
 build revision in register payload — all missing.
@@ -33,7 +33,7 @@ the runbook.
 I wrote the dirty mark to `VERSION`, but the unification of full SHA and dirty definition is
 required.
 
-[ADR-0015](0015-protocol-version-stamping.md)
+protocolLINK0 [0015-protocol-version-stamping](0015-protocol-version-stamping.md)
 wire protocol compatibility, not the identity of thefactfact. Home
 Both are a separate axis, and when conf , "docs-only commit causes compatibility errors"
 It becomes a wrong design.
@@ -42,13 +42,13 @@ It becomes a wrong design.
 
 `revision` / `dirty`
 Add `built_at`) only to  . `revision` and `dirty`
-identity。
+identity.
 
 **`built_at` is a diagnostic-only field on the Japanese term side and on the Japanese term side
 Issue #218 round 2 advisory 2, Home
 `BuildInfo`(TS type,
 `runner/src/build_info.ts`) means the identity of thevision side (revision/dirty
-the two fields only) indicate that they are separate. 
+the two fields only) indicate that they are separate.
 The implementation can be erroneous as "built at is required for Japanese term". `built_at`
 Don’t use it anywhere else — “w  commit comes from?”
 embody the central distinction of the book ADR that is only identity
@@ -105,7 +105,7 @@ to stderr.
 ### : build`dist`Burn (not calling git on startup)
 
 git is distributed as tarball without git
-([ADR-0018](0018-)-)bution.md)))   after distribution is launched
+([ADR-0018](0018-runner-distribution.md))   after distribution is launched
 `git rev-parse` repo-direct
 `dist` is normally going to `HEAD` with old commit —
 If you report `git rev-parse HEAD` at startup, factfact that is actually working
@@ -128,11 +128,11 @@ The build reads it So in Dockerfile
 `git rev-parse` is not possible and the `KAOIRO_BUILD_REVISION`/
 `KAOIRO_BUILD_DIRTY` is only available as build arg
 Pass `scripts/build-identity.mjs` output to `docker compose build` —
-`docs/specs/deployment.md` 4.3)。
+`docs/specs/deployment.md` 4.3).
 
 **round 1 is the same as `ARG` → `ENV` → `LABEL`
 pattern, but this was judged to be incorrect in round 2 (Home revert,
-MF-1)。**`ENV`**`docker run -e`
+MF-1).**`ENV`**`docker run -e`
 `docker-compose.yaml` `env_file: .env` can be overwritten — change the name
 "Reverted the same mistake as rejected in  server to the server side"
 exe: The identity that should be determined at build is to be another value when execution

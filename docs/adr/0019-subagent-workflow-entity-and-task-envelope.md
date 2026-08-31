@@ -23,7 +23,7 @@ not. `wrapper/src/adapter.ts` `sdkMessageToEvents` `type:"system"`
 All other than `subtype==="init"` are destroyed and the task-based message is thrown away.
 
 On the other hand, the SDK message column for the parent session has a dedicated message.
-Flow (verified, [agent-sdk-events](../specs/agent-sdk-events.md)):
+Flowing (verified, [agent-sdk-events](../specs/agent-sdk-events.md)):
 
 - `system/task_started` — start. `task_id`
   `task_type` / `workflow_name` / `tool_use_id` / `skip_transcript`
@@ -50,16 +50,16 @@ failed / stopped + progress meta) subagent state (such as thinking 8 state)
 non-scope (expansion in the future `getSubagentMessages` path), not in the parent stream.
 - **Notice Particle Size (F4)**: List of tasks running to clients (`task_id` + type/name +
 Pass `status` + progress meta). `task_started`(+1)/ `task_notification`
-(-1) Cal。d from top level flat ag。ation.
+(-1) Cal.d from top level flat ag.ation.
 - **Data Range (F Japanese termーJapanese term**`usage` / `last_tool_name` / `summary`
 - **Privacy Policy**: wrapper / server's responsibility to notify clients of presence and state.
 How to visually express subagent / workflow
-persona→sprite→A/B separation of overview(../specs/overview.md).
+persona→sprite→the same style of expression ownership, [overview](../specs/overview.md) A/B separation).
 - New envel  type official name / Schema details
-[ADR-0047](0047-task-envel -schema.md) Single type `task` +
-  `payload.kind`)。**Repair of reservation type**
-([ADR-0010](0010-protocol-precisification.md))))
-`version` ([ADR-0015] (0015-protocol-version-stamping.md)).
+[ADR-0047](0047-task-envelope-schema.md)
+  `payload.kind`).**Repair of reservation type**
+([ADR-0010](0010-protocol-precisification.md))
+`version` is set ([ADR-0015](0015-protocol-version-stamping.md)).
 
 ## Consequences
 
@@ -71,7 +71,7 @@ persona→sprite→A/B separation of overview(../specs/overview.md).
 ### Negative
 
 - server is responsible for maintaining and delivering active set of child tasks
-[ADR-0048]
+[ADR-0048](0048-task-aggregation-delivery.md).
 - Envel  type type increases.
 
 ### Neutral
@@ -90,13 +90,13 @@ persona→sprite→A/B separation of overview(../specs/overview.md).
 
 ## Related
 
--agent: [subagent-tasks](../specs/subagent-tasks.md)
+-CO: [subagent-tasks](../specs/subagent-tasks.md)
 [protocol](../specs/protocol.md)(type and payload),
 [agent-sdk-events](../specs/agent-sdk-events.md)
--  ADR: [0010](0010-protocol-precisification.md)(Reservation type policy),
+-CO ADR: [0010](0010-protocol-precisification.md)
 [0015](0015-protocol-version-stamping.md),
-[0047](0047-task-envel -schema.md),
-[0048](0048-task-ag。ation-delivery.md)
+[0047](0047-task-envelope-schema.md)
+[0048](0048-task-aggregation-delivery.md)
 - Origin: my-idea-efef
 ").
 
@@ -108,7 +108,7 @@ Context 3 subtype(`task_started` / `task_progress` /
 `task_notification`), the fourth subtype of undocumented
 `system/task_updated` `status` is a rough 4 value of F3
 wider (running/completed/failed/stopped)
-(pending/running/completed/failed/killed/paused)。
+(pending/running/completed/failed/killed/paused).
 
 `task_updated`
 execution counts simultaneously when using intermediate state such as `status: killed`
@@ -116,7 +116,7 @@ I had a concern that I would be crazy by taking the end event.
 
 **Contact Us**In the instruction of the master, instead of guessing from the type definition
 Script scripts were captured and measured.
-[agent-sdk-events](../specs/agent-sdk-events.md)
+[agent-sdk-events](../specs/agent-sdk-events.md) Task
 (subagent/workflow) message. Results: Nature Complete / `stopTask()` /
 all four routes of interrupt / `backgroundTasks()`
 `task_notification` must be

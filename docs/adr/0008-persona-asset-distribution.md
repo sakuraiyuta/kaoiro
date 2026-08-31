@@ -14,7 +14,7 @@ related_adrs: [3, 5, 7, 29]
 ## Status
 
 Superseded by [ADR-0029](0029-persona-server-sot-and-pack-distribution.md)
-(2026。-05). server inherits the policy of the asset, and distributes the unit.
+(2026.-05). server inherits the policy of the asset, and distributes the unit.
 "zip pack" from "Stand picture only manifest"
 auto-watch and enforce of “Nora persona”
 integration.
@@ -24,7 +24,7 @@ The following remains as historical circumstances:
 ## Context
 
 `persona.sprite_set` is a string and a separate projectedternal client
-([ADR)7](0007-client-separation-reference-dashboard.md))
+([ADR-0007](0007-client-separation-reference-dashboard.md))
 The way to solve the image was unsecided right. The only client already connected
 The component is useful. Compress and distribute archives for each request
 CPU and latency
@@ -33,10 +33,10 @@ CPU and latency
 
 - Persona Assets**Management**
 `persona.id`
-[ADR)3](0003-persona-identity-persistence.md)
+[ADR-0003](0003-persona-identity-persistence.md))
 Have a look (asset). server agent undependent is maintained.
 - Primary format of delivery**Manifest JSON**(persona.id → State image URL +
-Content  + Version)+**content-addressed static file**。
+Content  + Version)+**content-addressed static file**.
 ed URLs are unchanged and cache indefinite, and the client is different
 Synchronize increment.
 - Bulk archive**Japanese termーHomerate once when uploading**Save
@@ -44,7 +44,7 @@ Synchronize increment.
 - **Step Introduction**: The first step is directly placed by the administrator to the left data directory
 (Deliverybution only) Upload API (verification: zip-slip / size limit / MIME
 RBAC upload roll,
-[ADR。5](0005-access-control-oauth-stub.md)
+[ADR-0005](0005-access-control-oauth-stub.md))
 - Metadata SQLite, real files are added to the file system.
 
 ## Consequences
@@ -54,7 +54,7 @@ RBAC upload roll,
 - All clients have a consistent look and do not need to get an asset separately when trying.
 - Server burden is almost static file delivery and storage only (normal load of compression and conversion)
 None
-- An incremental。hronization and cash strategy will become self-evident by the manifest's nickname.
+- An incremental.hronization and cash strategy will become self-evident by the manifest's nickname.
 
 ### Negative
 

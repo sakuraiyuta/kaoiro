@@ -20,7 +20,7 @@ Accepted
 Dashboard (`dashboard/`, Svelte) is a user  (ADR-0011)
 `history.replaceState` to receive and receive the URL with `?token=…`
 The address bar has been removed, and it has been kept only in JS memory.  Japanese term
-Home**Reloading the browser loses both URL and memory s**、
+Home**Reloading the browser loses both URL and memory s**,
 `Auth.client_role/1` fail-closed(ADR-0011,
 Issue #28) ThePetsーKung Layer layer was unmounted state (issue #45).
 
@@ -28,7 +28,7 @@ Issue #28) ThePetsーKung Layer layer was unmounted state (issue #45).
 
 - Browser standard WebSocket does not include a custom `Authorization` header,
 cookiedentials that can be used in the WS are "cookietus" or "cookie".
-- Dashboard draws agent response-derived transcript / mer 
+- Dashboard draws agent response-derived transcript / mer
 (DOMPurify installed intercept). Web Storage approach is  from JS
 In order to read, XSS spreads damage to session theft. operator roll
 The remote tool execution/approves the cost of leaking.
@@ -41,7 +41,7 @@ my-spec-elicitation in issue #45.
 
 User **httpOnly + Encryption session cookie**
 
-1. **Equipment = session Reuse existing signature session cookies**(`_kaoiro_server_key`)。
+1. **Equipment = session Reuse existing signature session cookies**(`_kaoiro_server_key`).
 httpOnly・SameSite=Lax has already been configured. No new cookies or manual parsing.
 2. **Storage = Add the session to the session and encrypt the session**(`encryption_salt`
 Add). `connect/3` and `/session/refresh` are `Auth.client_role/1`
@@ -102,7 +102,7 @@ Instantly disconnect the working socket.
 
 ### Neutral
 
-- ADR。5 cookies only carry s.
+- ADR.5 cookies only carry s.
 -The session was absent (`put_session` not used), so it is broken by adding encryption
 No existing sessions.
 

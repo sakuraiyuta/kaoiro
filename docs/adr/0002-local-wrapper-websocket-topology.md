@@ -18,7 +18,7 @@ Accepted
 ## Context
 
 It was a problem where the wrapper was moved and how to connect with it. Agent SDK
-non-TSxir (TS, [ADR 1] (0001-agent-sdk-integration.md) to host
+non-TSxir(TS,[ADR-0001](0001-agent-sdk-integration.md))
 Yes, and there is a need to accompany the agent for the convenience of spawn and observation.
 Multiple hosts and programs are required.
 
@@ -28,7 +28,7 @@ The wrapper is the same as each agent**Local operation**Home Multiple host/proce
 **Phoenix Channels**(WebSocket) connects to the center ofixxir. server
 1connection=1 Keep and deliver the latest state in GenServer.
 
-> **[ADR-0023](0023-host-host-architecture.md)**: wrapper
+> **INK0**: wrapper [0023-host-runner-architecture](0023-host-runner-architecture.md)
 > Directly connected to the server) sets one wrapper resident on each host and wrappers
 > spawn / Supervisor / Host registration etc.
 > wrapper does not end the data path, and the wrapper continues to be connected directly. Book ADR
@@ -50,7 +50,7 @@ The wrapper is the same as each agent**Local operation**Home Multiple host/proce
 ### Neutral
 
 - Client ↔ Server user authentication is separate layer
-  ([ADR-0005](0005-access-control-oauth-stub.md))。
+  ([ADR-0005](0005-access-control-oauth-stub.md)).
 
 ## Alternatives Considered
 

@@ -18,7 +18,7 @@ Accepted
 ## Context
 
 There is already `version` in the envel , and the versioning policy is "reception key"
-[protocol](../specs/protocol.md)) However,
+[protocol](../specs/protocol.md) However,
 There is a lack of two points: (1) wrapper for the version → server envel ,
 `instruction` / `permission_decision` / `snapshot`
 No version. (2) Impairment is accepted silently and does not notice compatibility issues.
@@ -55,9 +55,9 @@ silently ignored).
 ### Neutral
 
 - version is current `"0"` single. Single value comparison.
-- Transport layer version (Channels `vsn`, [ADR 9] (0009-client-transport.md))
+- Transport layer version (Channels `vsn`, [ADR-0009](0009-client-transport.md))
 Independence
-- **build identity**([ADR 3](0053-build-identity.md), issue #218)
+- **build identity**([ADR-0053](0053-build-identity.md), issue #218)
   **Independence**Home This version is compatible with wire messages,
 gitfact(git / server image)
 If confusing, "docs-only commit causes compatibility errors"
@@ -74,8 +74,8 @@ If confusing, "docs-only commit causes compatibility errors"
 ## Related
 
 -Japanese term: [protocol](../specs/protocol.md) versioning policy.
--) ADR: [0010] (0010-protocol-precisification.md),
-  [0014](0014-session-resume-and-restore.md)。
+-CO ADR: [0010](0010-protocol-precisification.md)
+  [0014](0014-session-resume-and-restore.md).
 - Origin: my-idea-efef
 
 ## Addendum (issue #208 Home review MF-1, 2026 21):`attach_chunk`permanent carve-out
@@ -88,7 +88,7 @@ ADR status remains accepted.
 If you want to add version to binary header, you can change the destructive of the existing frame.
 Home of version. For implementationAbout Uss that cannot contain the same key as JSON frame
 Don’t admit because there is no cost-effectiveness. wire shape
-[protocol](../specs/protocol.md)
+[protocol](../specs/protocol.md)'s "version inventory" is a genuine book.
 
-**HOME**Home review of issue #208 must-fix 1. only lower 
+**HOME**Home review of issue #208 must-fix 1. only lower
 Revised to Decision of this ADR.

@@ -13,8 +13,8 @@ related_adrs: [21, 22, 32, 34, 35, 37, 39]
 
 ## Status
 
-Accepted (2026-16-16, Master Resolution → Fuji orchestration). 
-[phase-21-context-usage-capability](../plans/phase-21-context-usage-capability.md)。
+Accepted (2026-16-16, Master Resolution → Fuji orchestration).
+[phase-21-context-usage-capability](../plans/phase-21-context-usage-capability.md).
 
 ## Context
 
@@ -30,7 +30,7 @@ The following breakdown was confirmed in Fuji review (2026 -16, conversation `f4
 The implementation is only dead `threadEventToUsage`
 It was not called once. The UI side does not include the engine name.
 ed, and continued to deceive the operator.
-2. Re  `turn.completed.usage.input_tokens` as  
+2. Re  `turn.completed.usage.input_tokens` as
 semantic defence**: (a) per-turn Not cumulative,
 (b) to reduce the usage rate to the compaction method,
 (c) `max_tokens`
@@ -66,7 +66,7 @@ engine name (`ext.engine`) is not used for context display judgment
 - stamp `supports_context_usage: true` with `initialStatusExt()`.
 - `#refreshContextUsage()` trigger:
   - **init  **: New `#refreshContextUsageForInit()` in initial + 1 retry
-。ms backoff) transient race to reach re t
+.ms backoff) transient race to reach re t
 not empty the meter. bounded retry.
   - **Result**: Keep existing fire-and-forget.
   - **after model switch**: `#contextGeneration` bump + `#context = null` +
@@ -85,7 +85,7 @@ refresh is automatically re-kicked with `finally`.
 `#statusExt`
 Maintenance (the result of Fuji review S7).
 
-### D3. Codex adapter does not pass capability=false +  
+### D3. Codex adapter does not pass capability=false +
 
 - stamp `supports_context_usage: false` with `initialStatusExtFromCatalog`.
 - `ext.context` is absolutely not stamped.

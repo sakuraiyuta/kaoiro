@@ -18,7 +18,7 @@ Accepted
 ## Context
 
 Clients have determined separation and public protocol documentation
-([ADR。7] (0007-client-separation-reference-dashboard.md)). connectionapproach
+([ADR-0007](0007-client-separation-reference-dashboard.md)) connectionapproach
 Channel Channels or WebSocket with read-only SSE
 Channels is natural in the included reference dashboard (TS),
 Channels to non-JS clients (neovim plugin = Lua, terminal CUI, etc.)
@@ -34,8 +34,8 @@ Unchanged to 1.8 system. Added dependencies for internal implementation.
 - Supabase Realtime documents the same protocol as the public API,
 There is an example of establishing a multilingual client.
 - Non-JS language client library (as of 2026-06):
-C# is [PhoenixSha ](https://github.com/Mazyod/PhoenixSha )(active・V2),
-Go is [nshafer/phx](https://github.com/nshafer/phx)(V2/maintenance),
+C# [PhoenixSharp](https://github.com/Mazyod/PhoenixSharp)(live/V2),
+Go is [nshafer/phx](https://github.com/nshafer/phx) (V2),
 Rust
   [liveview-native/phoenix-channels-client](https://github.com/liveview-native/phoenix-channels-client)
 (Current V2, crates.io git dependencies). Python maintained V2
@@ -51,7 +51,7 @@ and reinvent the channels lifecycle.
 - Client Connection**Channel Channels**WebSocket
 There is no endpoint.
 - Wire format**V2 serializer fixed**`vsn=2.0.0`
-kaoiro public protocol document ([protocol](../specs/protocol.md))
+[protocol](../specs/protocol.md)
 Refer to the guide + describe the unique topic/event definition.
 - Read-only SSE****(No library maintained onixxir side)
 for handwriting). re-issued as open-question when required occurs.

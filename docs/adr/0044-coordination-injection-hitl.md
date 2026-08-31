@@ -25,7 +25,7 @@ permission broker Inconsistent with each approval. 2026Japanese termー-29 Maste
 by F2 to each agent under director whose operator nominates each time
 Revised to the form of "the responsibility is assigned, and the responsibility is autonomy, and the permanent act is
 P5 and not defined
-[ADR-0043] (0043-agent-initiated-session-reset.md) aligned with D2.
+[ADR-0043](0043-agent-initiated-session-reset.md)
 F1 (futter injection) / F3 (passive dysfunction) does not change from starting point.
 
 ## Context
@@ -40,7 +40,7 @@ return / last activity at / conversation / rate  s).
 On the other hand, there is no infusion mechanism of action guidelines, and `send_to_agent` is
 [ADR-0022](0022-pending-permission-authoritative-source.md)
 `canUseTool` Each time the operator approves
-[protocol-inter-agent]
+[protocol-inter-agent](../specs/protocol-inter-agent.md)
 auto-  is "Phase 2 or later". "Work allocation" on operational rules
 Promises are escalate targets (2026 -21) and autonomous work sharing is
 Not established.
@@ -51,7 +51,7 @@ Not established.
 
 "Observing the situation of other agents with `list_agents`, judge yourself,
 `send_to_agent`
-[ADR-0029](0029-persona- -sot-and-pack-packbution.md)
+LINK0 [0029-persona-server-sot-and-pack-distribution](0029-persona-server-sot-and-pack-distribution.md)
 The server aggregated SoT common footer and launched on kaoiro
 auto-inject with system prompt append to agent**. engine non-dependent
 Claude skill (SKILL.md)
@@ -62,7 +62,7 @@ The text and length of the guideline are determined by the draft A (sh  principl
 
 **Does not define permanent director roles.**The operator is working for each unit.
 Nominate director every time
-([ADR-0043](0043-agent-initiated-session-reset.md) with D2 and #158 P5
+([ADR-0043](0043-agent-initiated-session-reset.md) D2 and #158 P5 and
 same shape). The nominated director acts as a subdivision agent.
 Assignment, each agent is responsible without operator approval
 `send_to_agent` should cooperate (agreement, adjustment, post-report).
@@ -103,16 +103,16 @@ See — conversation id Alternately, the change of destination after rejection i
 If the runaway guard is still weak,
 Decision that automatic permission of narrow range is safe. Detailed implementation behavior (disp  waiting
 (including resistance to the receiving race)
-[protocol-inter-agent.md]
+[protocol-inter-agent](../specs/protocol-inter-agent.md) Automatic approval
 
 - **coordination-footer-scope**: adopt the draft A (sh  principle only).
 The details of procedures such as usage and reporting of kind are not included in the footer.
 Expand after operation measurement if the lack is found. Length collateral mechanism
-[ADR-0045](0045-footer-file-ex。ization.md)
+[ADR-0045](0045-footer-file-externalization.md) F5
 
-Both open-question reflected and closed. 
+Both open-question reflected and closed.
 issue ([#165](https://github.com/sakuraiyuta/kaoiro/issues/165))
-[protocol-inter-agent](../specs/protocol-inter-agent.md)
+([protocol-inter-agent](../specs/protocol-inter-agent.md))
 "Approval flow" section,   side `priv/footers/system-footer.md`).
 
 ## Consequences
@@ -146,7 +146,7 @@ denied) mechanically closed
 ### Neutral
 
 - dashboard's observation path (inter-agent message operator only),
-[ADR-0021] (0021-role-information-dis sure-policy.md) is unchanged.
+[ADR-0021](0021-role-information-disclosure-policy.md)) is unchanged.
 Autonomousization is the approval of transmission and not the scope of disclosure.
 - `send_to_agent`
 require operator approval. Autonomously works within the scope of no  and obligation assignment

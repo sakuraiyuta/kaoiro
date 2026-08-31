@@ -27,7 +27,7 @@ multiSelect) does not reach dashboard and can not return the answer (issue #78).
 The return route is confirmed in the technical survey:
 
 - Input `AskUserQuestionInput`: `questions[1-4]` each
-  `{ question, header, options[2-4]{ label, description, preview? }, multiSelect }`。
+  `{ question, header, options[2-4]{ label, description, preview? }, multiSelect }`.
 - Response from `canUseTool`
   `{ behavior: "allow", updatedInput: { ...questions, answers: { [Questions]: Pets label }, annotations? } }`
 `sdk-tools.d.ts:2991`
@@ -44,7 +44,7 @@ The return route is confirmed in the technical survey:
 
 ## Decision
 
-Design [ADR-0022](0022-pending-permission-authoritative-source.md)(pending
+Design [ADR-0022](0022-pending-permission-authoritative-source.md)(pending)
 `state_change.ext`**Same type applies to question side**
 
 ### F1: New state`waiting_question`
@@ -86,10 +86,10 @@ The truth of the question in pending is `state_change.ext.pending_question`.
 }
 ```
 
-### F3: `question_request`envel 
+### F3: `question_request`envel
 
 protocol-compatible consistency (same as permission request) and new pending
-`question_request`(envel。 `type`) The truth of state
+`question_request`(envel. `type`) The truth of state
 `ext.pending_question` Both guarantee hronization with wrapper
 `request_id` / `questions` / `ts`). dashboard reads ext.
 
@@ -130,8 +130,8 @@ Add.
 ### F7: Snapshot Restore
 
 `question_request` does not match state change, but the truth
-`ext.pending_question` to get the latest state change envel 
-Restored in the client's snapshot (same as ADR-0022 F5). DETS 
+`ext.pending_question` to get the latest state change envel
+Restored in the client's snapshot (same as ADR-0022 F5). DETS
 None
 
 ## Consequences
@@ -174,12 +174,12 @@ Extendable with backward compatible rearing (`version` installation).
 
 - specs: [protocol](../specs/protocol.md)(`question_request` type・
 `ext.pending_question`·`question_response` Message/state by direction
-[protocol-inter-agent](../specs/protocol-inter-agent.md)
+`waiting_question`, [protocol-inter-agent](../specs/protocol-inter-agent.md)
 (Escalate-to-user's "Existing AskUserBodystion-based UI" refers to the actual ADR),
-[agent-sdk-events](../specs/agent-sdk-events.md)
-AskUsermodelstion   and return), [threat-model](../specs/threat-model.md)
+[agent-sdk-events](../specs/agent-sdk-events.md)(canUseTool path)
+AskUser stion   and return), [threat-model](../specs/threat-model.md)
 (viewer leakage is automatically covered via ADR-0021).
-- ADR: [0021](0021-role-information-dis sure-policy.md)
-allow-list base), [0022] (0022-pending-permission-authoritative-source.md)
+- ADR: [0021](0021-role-information-disclosure-policy.md)
+allow-list base), [0022](0022-pending-permission-authoritative-source.md)
 (ext = pending)
-- Origin: [issue #78] (https://github.com/sakuraiyuta/kaoiro/issues/78).
+- Origin: [issue #78](https://github.com/sakuraiyuta/kaoiro/issues/78).

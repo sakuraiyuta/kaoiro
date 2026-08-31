@@ -13,7 +13,7 @@ related_adrs: [12, 20, 21, 22, 33]
 
 ## Status
 
-Pro。 kaoiro has completed a collision with the measurement definition of the paper project,
+Pro. kaoiro has completed a collision with the measurement definition of the paper project,
 The implementation and the change of the protocol schema are not yet supported.
 
 ## Context
@@ -80,7 +80,7 @@ latency_ms = t_decision.monotonic_ms - t_presented.monotonic_ms
 ```
 
 The value must be 0  and 0 or higher. clock owner
-`t_request → t_presented`、`t_decision → t_resolved`、`t_request →
+`t_request → t_presented`,`t_decision → t_resolved`,`t_request →
 t_resolved` for diagnosis wall-clock interval can be retained,operator Time
 not the main indicator. NTP correction and host/br er clock skew
 
@@ -233,9 +233,9 @@ Not recal d.
 The wrapper is also included in the decision relay.
 Let's differentiate and lose the decision itself because of unknown/fair measurement values.
 - Don't send permission payload / measurement to viewer. operator-only
-inherit the existing policy role ([ADR-0021](0021-role-information-dis sure-policy.md)).
+inherit the existing policy role ([ADR-0021](0021-role-information-disclosure-policy.md)).
 - Codex exec does not generate lifecycle with `approval: "never"`
-([ADR-0033] (model3-permission-model-dual-axis.md) F3). record absent
+([ADR-0033](0033-permission-model-dual-axis.md) F3). record absent
 AJapanese termmetric of current engine capability.
 
 ### D6. Completion and Non-Goal

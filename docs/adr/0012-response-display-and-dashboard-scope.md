@@ -22,8 +22,8 @@ not display (to dashboard or wrapper terminal). First day of verification
 (2026-06-11) to be pronounced, "instructions are not answered, but what is invisible"
 (formerly open-question `response-display`).
 
-[non-goals](../specs/non-goals.md) and
-[ADR 7](0007-client-separation-reference-dashboard.md)
+[non-goals](../specs/non-goals.md)
+[ADR-0007](0007-client-separation-reference-dashboard.md)
 Fixed to the minimum of "state list, expression, approval, and instruction input", and the response display is displayed on this list.
 I didn't know. In light of the goal of "consolidation should be a minimum practical use"
 The answer to the instructions is semi-finished and the re-determining of the scope line is essential
@@ -39,7 +39,7 @@ d.
 Minimum**Information rich operator console**Revised to Line Pull
 Determination criteria is not "Number of functions" but "**New public protocol surface / serverJapanese term
 * Public API Consuming and non-permanent richness is allowed
-(Updated ../specs/non-goals.md).
+[non-goals](../specs/non-goals.md)
 - **(F3) List of tiles by default**Home Click on the agent to transition animation
   **Full screen details**display.
 - **(F2/F6) Grid card is the current display item**(face, name, state, agent id)
@@ -58,14 +58,14 @@ error > waiting permission)
 (Reboot disappears) issue (re-depro  resistance) to issue #24 with specification formulation.
 history**wrapper host SDK JSONL**and this ring buffer is
 Reconstruction via resume
-  [ADR-0014](0014-session-resume-and-restore.md))。
+  [ADR-0014](0014-session-resume-and-restore.md)).
 - **(F9) Return log (`log`/`result`, especially tool input/output) only to operator role
 Delivery viewer is up to the grid. viewer = overview / operator = operation + details
-../specs/threat-model.md)
+[threat-model](../specs/threat-model.md)
 
 Protocol details (`log`/`result` payload, distribution control, history resynchronization)
 [protocol](../specs/protocol.md)
-[plans/response-display](../plans/phase-3.5-response-display.md)。
+[plans/response-display](../plans/phase-3.5-response-display.md).
 
 ## Consequences
 
@@ -93,7 +93,7 @@ Working (issue #21).
 |--------|--------------|
 |Implemented only response relay, display delegates to ex  client (formerly C)|Operational verification does not complete only with the bundle|
 |Keep Dashboards Minimized|Half-finished|
-|Result only display (last response 1、old draft A)|I can't see the course in the middle of the turn|
+|Result only display (last response 1,old draft A)|I can't see the course in the middle of the turn|
 |Full chat conversation pane (old D)|Excessive conversation authoring environment|
 |Always master-  2 pane|Compression of a large number of faces to a narrow list|
 |Move the list outside the screen with modal/s |Lose listability (goal A)|
@@ -105,11 +105,11 @@ Working (issue #21).
 ## Related
 
 - : issue #13, old open-question `response-display`
-- [plans/response-display](../plans/phase-3.5-response-display.md)
+- : [plans/response-display](../plans/phase-3.5-response-display.md)
 (phase-0 MVP / phase-1)
 - Future: issue #24 (history disk persistence), #25 (3 s + response timeline),
 #16(Visualizeken/context with `ext`)
--cli ADR: [0007-client-separation-reference-dashboard.md],
-  [0010](0010-protocol-precisification.md)、
-  [0011](0011-phase3-reliability-and-auth.md)、
+-CO ADR: [0007](0007-client-separation-reference-dashboard.md)
+  [0010](0010-protocol-precisification.md),
+  [0011](0011-phase3-reliability-and-auth.md),
   [0014](0014-session-resume-and-restore.md)

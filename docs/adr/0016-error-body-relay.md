@@ -35,14 +35,14 @@ Cover.
 not masking).
 - The new envel  type for error is not built (the extension of `result`).
 - Like `result`**operator**
-  ([ADR-0012](0012-response-display-and-dashboard-scope.md))。
+  ([ADR-0012](0012-response-display-and-dashboard-scope.md)).
 
 ## Implementation status (2026 03 added)
 
 This ADR policy "Relay to operator without formatting error body" is alive,
-**The field type specified by decision was not implemented as it is**。
+**The field type specified by decision was not implemented as it is**.
 
-- The `error_message` field does not exist in the codebase. 
+- The `error_message` field does not exist in the codebase.
 `error_subtype` and `error_detail` in issue #123
 2 Add field. S  to enable UI to sort by error type
 End subtype (`error_max_turns` / `error_during_execution` /
@@ -53,7 +53,7 @@ For the body.
 - `error_detail` cuts to 16,384 UTF-8 bytes according to envel  limit
 Send The principle of summarizing and masking is kept.
 
-[protocol](../specs/protocol.md)
+`result` `result` [protocol](../specs/protocol.md)
 
 ## Consequences
 
@@ -67,12 +67,12 @@ Send The principle of summarizing and masking is kept.
 - Implementing wrapper crashes to ensure "de ed last minute transmission"
 Finish ).
 - The error body can be mixed (operator limited delivery,
-  [threat-model](../specs/threat-model.md))。
+  [threat-model](../specs/threat-model.md)).
 
 ### Neutral
 
-- #1(version、[ADR-0015](0015-protocol-version-stamping.md))・#3(session_id、
-[ADR-0014](0014-session-resume-and-restore.md)
+- #1(version,[ADR-0015](0015-protocol-version-stamping.md))・#3(session_id,
+[ADR-0014](0014-session-resume-and-restore.md)) with the same protocol.md revision
 Comment
 
 ## Alternatives Considered
@@ -85,8 +85,8 @@ Comment
 
 ## Related
 
-- spec: [protocol](../specs/protocol.md) result payload、
-  [threat-model](../specs/threat-model.md)。
--) ADR: [0010] (0010-protocol-precisification.md),
-  [0012](0012-response-display-and-dashboard-scope.md)。
+- spec: [protocol](../specs/protocol.md) result payload,
+  [threat-model](../specs/threat-model.md).
+-CO ADR: [0010](0010-protocol-precisification.md)
+  [0012](0012-response-display-and-dashboard-scope.md).
 - Origin: my-idea-efef

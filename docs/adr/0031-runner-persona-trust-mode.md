@@ -13,20 +13,20 @@ related_adrs: [23, 29]
 
 ## Status
 
-Accepted (completed 2026) — — [phase-12] (../plans/phase-12-phase-persona-trust-mode.md),
+Accepted (completed 2026 — — — [phase-12](../plans/phase-12-runner-persona-trust-mode.md),
 `/my-code-review-cycle` 1 round clean convergence, 2 in dev dogfooding
 Jason encode / setPermissionMode race
 
 ## Context
 
-[ADR-0029] (0029-persona- -sot-and-pack- bution.md)
+[ADR-0029](0029-persona-server-sot-and-pack-distribution.md)
 server SoT + zip pack is integrated to distribute, but can be launched with the host
 `personas[]`
-(。list) left the structure. This produces two types of friction:
+(.list) left the structure. This produces two types of friction:
 
 1. **allowlist**: Even if the new pack is placed on the server, the host
 If `runner.config.json` is not added by hand, it will not appear in dashboard "+ Start".
-fuji addedpack(2026 -05)Although pack is ingested,  
+fuji addedpack(2026 -05)Although pack is ingested,
 recursive papercuts in the same form that fuji cannot be started because the allowlist is used.
 `scripts/dev.sh` gitignored
 `git pull`
@@ -50,7 +50,7 @@ Handles as a separate ADR (see Non-Goals) when the expression is required in rea
 
 ## Decision
 
-### F1: Select from two modes, both modes mutual ex 
+### F1: Select from two modes, both modes mutual ex
 
 `runner/runner.config.json`
 `blocked_personas` config
@@ -118,7 +118,7 @@ The `personas` field is removed at the time of transition completion (the next m
 
 current `scheduleAllowlistCheck` (cli/src/cli.ts, after startup 3s
 `/api/personas` and warn the difference between config)
-depre 
+depre
 Removing with this ADR to duplicate warnings.
 
 ## Consequences

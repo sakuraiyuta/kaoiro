@@ -19,7 +19,7 @@ Accepted
 
 How to control client ↔ server user access was a problem. In the future
 Multi-person access and permission are required, but it is necessary to set up full authentication and authorization at the prototype stage.
-heavy. wrapper([ADR)2](0002-local-wrapper-websocket-topology.md)
+heavy. [ADR-0002](0002-local-wrapper-websocket-topology.md)
 It is a separate layer.
 
 ## Decision

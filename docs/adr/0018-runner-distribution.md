@@ -9,7 +9,7 @@ related_specs: [setup-wizards]
 related_adrs: [17, 23, 24]
 ---
 
-# ADR-0018 — Distribution of wrapper/ 
+# ADR-0018 — Distribution of wrapper/
 
 ## Status
 
@@ -36,7 +36,7 @@ Override the wizard command. systemd / launchd
 If the dialogue prompt rises in a given non-interactive session, the TTY will not be responded
 to stop. (ii)
 - Distribution channels**release (binary assets)**GitHub
-  GitHub releases。
+  GitHub releases.
 
 **The start timing is the main function**(low priority)
 
@@ -56,15 +56,15 @@ Even in binary, the runtime premise of the destination does not disappear —**H
 **Correction by actual measurement**: Engine CLI entities with platformpm package by platform
 `@anthropic-ai/claude-agent-sdk-<os>-<arch>` 245 MB /
 `@openai/codex-<os>-<arch>` 297 MB). For tarball distribution **host to distribute
-Claude Code / codex CLI  
+Claude Code / codex CLI
 **OS/arch because all canvas and both CLIs are optional dependent on platform
 A separate archive is required.
 
 Revised decisions:
 
-- [`scripts/build-runner-tarball.sh`](../../scripts/build- -tarball.sh)
+- rate [`scripts/build-runner-tarball.sh`](../../scripts/build-runner-tarball.sh)
 (`pnpm deploy --legacy`)
-- For actual demand**2 arch(`darwin-arm64` / `linux-x64`)**Home 4 
+- For actual demand**2 arch(`darwin-arm64` / `linux-x64`)**Home 4
 Don’t make it
 - Cross-build only injects `supportedArchitectures` of pnpm
 (check that you can generate both from one darwin host)
@@ -78,13 +78,13 @@ Become a brother)
 `extractFromBunfs` helper for Bun single-file executable
 so theContact side solution is prerequisite
 
-tar.gz:**darwin-arm64 256 MB / linux-x64 368 MB**。
+tar.gz:**darwin-arm64 256 MB / linux-x64 368 MB**.
 The mus version also includes musl variants, so instead of glibc / musl
 (`supportedArchitectures.libc` could notType musl variants).
 
 ### Revised (202616)16)—Unify the installation form to immutable release +  ic switch
 
-[issue #219](https://github.com/sakuraiyuta/kaoiro/issues/219)。
+[issue #219](https://github.com/sakuraiyuta/kaoiro/issues/219).
 tarball**rate****After installation**Home
 Not decided. The blank is not written anywhere in the document.
 Include — resident **repos y checkout with live path,
@@ -102,7 +102,7 @@ or grab the new and old mixed module graph between packages.
 partial module graph "Stop → Build → Start"
 It was avoided by observing it, but it will be recurred once.
 
-#### 
+####
 
 **The directory is immutable and live path is livelink.
 Only 1 (`current`). Home
@@ -156,13 +156,13 @@ Home **Re-derive input is `package.json` in the same tree, so this is
 Not resistant** — closed builder bugs and partial corruption after distribution,tree
 It is not a defense to the uterus that is rewriting the whole. signature / tree outer digest is separate
 *service* unit
-。   If the agent under the   is tapping the update script directly,  
+.   If the agent under the   is tapping the update script directly,
 When I stopped, I disappeared and I can't continue
 
 #### not process group
 
 `systemd.kill(5)` defaults to `KillMode=control-group` — "all remaining
-processes in the control group of this unit will be killed on unit stop」。
+processes in the control group of this unit will be killed on unit stop」.
 ** Even if you get out of the caller process group, leave it in the cgroup of the service service
 Dying with the road if you are. transient *service* unit
 `systemd-run(1)` will run in a clean and deta  execution environment,
@@ -205,15 +205,15 @@ Cannot be expressed.
 
 #### release identity
 
-[ADR0053] (0053-build-identity.md) identity is `revision` + `dirty`
+[ADR-0053](0053-build-identity.md)
 HOME**`dirty` says, "This SHA does not have a medium."**Home In other words
-dirty build**different content while id crashes**。
+dirty build**different content while id crashes**.
 `current` is the name of determining what hosts are doing, so you can forgive it
 The question of “What is actually doing?” is to come back to the top.
 
 |||
 |---|---|
-| **activation** (`current`id)| **Clean 40 digits   only**。`-dirty` / `unknown`Home`--allow-dirty`to the dev host|
+| **activation** (`current`id)| **Clean 40 digits   only**.`-dirty` / `unknown`Home`--allow-dirty`to the dev host|
 | **Clean release** | **No replacement**Home reinstall is no-op because content-addressed. No flags to replace|
 | **Dirty / Unknown Re install** |Deny by default.`--allow-dirty`can be replaced. However,`current` / `previous`Cannot be pointed|
 | **rollback** |Don't use gate.`previous`is   once, and the rejection only tied the host to a broken release|
@@ -250,7 +250,7 @@ back is the above-mentioned retention rule — if you prune the running release
 |---|---|
 | release layout (`releases/<id>/` + `current` / `previous`) | **OS Common** |
 |install / switch script and Splink +`rename(2)`atomicity| **OS Common Contract**Home Linux**macOS** |
-| service-manager orchestration (stop → pointer swap → start、self-stop-safe updater) | **Linux / systemd** |
+| service-manager orchestration (stop → pointer swap → start,self-stop-safe updater) | **Linux / systemd** |
 
 `rename(2)` atomicity is a POSIX request and is not Linux-specific.
 `mv` is not in BSD/macOS.
@@ -360,10 +360,10 @@ This premise remains
 
 ### Neutral
 
-- Distribution unit is divided into [ADR-0017] (0017-wrapper-multientity-packages.md) package
+- The distribution unit is divided into [ADR-0017](0017-wrapper-multientity-packages.md)
 dependency.   resident daemon specifications
-[ADR-0023](0023-host-host-architecture.md)
-[ADR-0014](0014-session-resume-and-restore.md)
+[ADR-0023](0023-host-runner-architecture.md)
+`kaoiro-runner`) [0014-session-resume-and-restore](0014-session-resume-and-restore.md)
 Contact resume
 
 ## Alternatives Considered
@@ -377,9 +377,9 @@ Contact resume
 
 ## Related
 
-- spec: [setup-wizards](../specs/setup-wizards.md)。
--wrapper ADR: [0017] (0017-wrapper-multientity-packages.md),
-  [0014](0014-session-resume-and-restore.md)。
+- spec: [setup-wizards](../specs/setup-wizards.md).
+-CO ADR: [0017](0017-wrapper-multientity-packages.md)
+  [0014](0014-session-resume-and-restore.md).
 - Unresolved (as of 2026 -25): Re-evaluation of single binary tool
 Waiting (R  version stable, approx. 2027-01).  /wrapper to 1 binary
 single binary prerequisite, so hold — both in one archive

@@ -13,10 +13,10 @@ related_adrs: [19, 47]
 
 ## Status
 
-Accepted (2026。04) kaoiro issue #170).
-[ADR-0019](0019-subagent-workflow-entity-and-task-envel .md)
+Accepted (2026.04) kaoiro issue #170).
+[ADR-0019](0019-subagent-workflow-entity-and-task-envelope.md)
 "active set maintenance and delivery of child tasks"
-([subagent-tasks](../specs/subagent-tasks.md) Assumption of Phase 2)
+[subagent-tasks](../specs/subagent-tasks.md)
 
 ## Context
 
@@ -25,8 +25,8 @@ ADR-0019 informs subagent / workflow as parent child entity
 Snapshots were undecided.
 
 Determination material: `snapshot` (join   push, `agent_id`)
-last-write-wins, [protocol](../specs/protocol.md). server only memory
-(no。), the premise that disappears by restart is the same as the existing one. AgentDetail
+last-write-wins, [protocol](../specs/protocol.md)). server only memory
+(no.), the premise that disappears by restart is the same as the existing one. AgentDetail
 dashboard There is a track record (kaoiro issue #174), and envel  quantity
 I want to avoid uncontrolled increase.
 
@@ -37,7 +37,7 @@ I want to avoid uncontrolled increase.
 server is not a parent agent entity collection,
 Keep it as a flat task table, and each task refers to the parent `agent_id`.
 Tasksly handles the life span management of parents and children, and tasks with different `task_type` (the future tasklist,
-[ADR-0047](0047-task-envel。-schema.md)
+[ADR-0047](0047-task-envelope-schema.md) F4)
 Parent agent for lifecycles (ADR-0019 F1)
 destroy the task that is linked to when withdrawal.
 
@@ -67,7 +67,7 @@ Contact Us
 
 - The progress meta (usage, etc.) of the client is from the latest value
 Delay (consuming to the final value with `completed`).
-- The pulling parameter is an implementation item on the wrapper side and between 
+- The pulling parameter is an implementation item on the wrapper side and between
 (claude-code / codex)
 
 ### Neutral
@@ -85,10 +85,10 @@ Delay (consuming to the final value with `completed`).
 
 ## Related
 
--agent: [subagent-tasks](../specs/subagent-tasks.md)(step 2),
+-Stage: [subagent-tasks](../specs/subagent-tasks.md) (stage 2),
 [protocol](../specs/protocol.md)
--work ADR: [0019](0019-subagent-workflow-entity-and-task-envel).md)
-[0047-task-envel -schema.md]
+-> ADR: [0019](0019-subagent-workflow-entity-and-task-envelope.md)
+[0047](0047-task-envelope-schema.md)
   [0021](0021-role-information-disclosure-policy.md)(viewer/operator
 Information disclosure polycy — this addendum fail-closed default).
 - Origin: open-question subagent-task-ag ation(2026-06-16)
@@ -100,9 +100,9 @@ ADR
 (F3)****`viewer` will not be delivered to the roll.
 After consultation with the master, Home decides, and three of them:
 
-1. [ADR-0047](0047-task-envel -schema.md) F3 progress meta
+1. [ADR-0047](0047-task-envelope-schema.md) F3 progress meta
 `summary` / `last_tool_name`
-[ADR-0021](0021-role-information-dis sure-policy.md)
+[ADR-0021](0021-role-information-disclosure-policy.md)
 `log`/`result`
 2. The purpose of issue #170 itself is "operator understands inActivities activity",
 No requests for viewer.

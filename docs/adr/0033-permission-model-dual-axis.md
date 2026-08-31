@@ -13,13 +13,13 @@ related_adrs: [22, 32, 34, 38, 41, 43]
 
 ## Status
 
-Accepted ([phase-14-codex-adapter](../plans/phase-14-codex-adapter.md))) The envel  schema and Claude image table and UI vocabulary have been confirmed with 2026 SDK-10 real SDK validation andlic-elicitation (previous open-questions Q2/Q3 is resolved and closed).
+Accepted ([phase-14-codex-adapter](../plans/phase-14-codex-adapter.md)) The envel  schema and Claude image table and UI vocabulary have been confirmed with 2026 SDK-10 real SDK validation andlic-elicitation (previous open-questions Q2/Q3 is resolved and closed).
 
 ## Context
 
-The permission model abstract of the current wrapper / server / dashboard is a single axis that follows the `permissionMode` (default/acceptEdits/bypassPermissions/plan/dontAsk/auto) of the Claude Agent SDK and exposed to `ext.permission_mode` of [protocol](../specs/protocol.md), and `ext.pending_permission` authoritative source was established in [ADR-0022] (0022-pending-permission-authoritative-source.md).
+The permission model abstract of the current wrapper / server / dashboard is a single axis that follows the `permissionMode` (default/acceptEdits/bypassPermissions/plan/dontAsk/auto) of the Claude Agent SDK, exposed to `ext.permission_mode` of [protocol](../specs/protocol.md), and authoritative source of `ext.pending_permission` was established in `state_change.ext`. [0022-pending-permission-authoritative-source](0022-pending-permission-authoritative-source.md)
 
-[ADR-0032] (code2-codex-adapter.md) adds a codex CLI adapter, and there is a need to match the common abstract to the fact that the Permission model of Codex is biaxial (expected in the type definition of `@openai/codex-sdk` 0.144.1):
+When adding a codex CLI adapter with [ADR-0032](0032-codex-adapter.md), there is a required that matches the common abstract to the fact that the Permission model of Codex is biaxial (the value set is demonstrated in the type definition of `@openai/codex-sdk` 0.144.1):
 
 - **sandbox_mode**: `read-only` | `workspace-write` | `danger-full-access`— writeability and scope to file system (OS level sandbox).
 - **approval_policy**: `untrusted` | `on-request` | `on-failure` | `never`— A policy to request approval for each operation. Initial ADR`granular`does not exist in the SDK.
@@ -58,11 +58,11 @@ Enumeration (without a copy layer):
 kaoiro wrapper does not emit, but for compatibility with the SDK type
 left in enum)
 
-**depre  plan (D-A)**: `ext.permission_mode` sends `ext.permission` between the release window and deletes it in the next release ([ADR-0031] (the same style as the personas legacy field of CO1-CO-persona-trust-mode.md)). dashboard only reads `ext.permission` from this phase.
+**depre  plan (D-A)**: `ext.permission_mode` sends `ext.permission` between the release window and deletes it in the next release (same as the personas legacy field of [ADR-0031](0031-runner-persona-trust-mode.md)). dashboard only reads `ext.permission` from this phase.
 
 ### wrapper/claude-code
 
-The `permissionMode` 6 value of the Claude Agent SDK → the image to the two-axis has the image table in the `wrapper/claude-code` adapter. By normalizing the SDK output with wrapper, and then putting it in envel。, wrapper and dashboard should be handled only two axis without conscious of the engine vocabulary. Photo**approximation for display**The value passed to the SDK is the mode itself:
+The `permissionMode` 6 value of the Claude Agent SDK → the image to the two-axis has the image table in the `wrapper/claude-code` adapter. By normalizing the SDK output with wrapper, and then putting it in envel., wrapper and dashboard should be handled only two axis without conscious of the engine vocabulary. Photo**approximation for display**The value passed to the SDK is the mode itself:
 
 | Claude mode | sandbox | approval |S  doc|
 |---|---|---|---|
@@ -77,7 +77,7 @@ The `permissionMode` 6 value of the Claude Agent SDK → the image to the two-ax
 
 The `wrapper/codex` adapterJapanese termifies the `sandbox_mode` selected when spawn. `approval`**`never` Fixed**— `codex exec` forces approval policy to `never` with harness override (`-c approval_policy=...` is also disabled), and the path to which the authorization is applied via SDK does not exist, so put the fact in envel . `set_permission_mode` is not supported by Codex.
 
-The `sandbox` / `network_access` recovery route at resume is aggregated to [ADR-0014 F1 supplement: privilege triaxial reapplication at resume] (0014-session-resume-and-restore.md). This F3’s “spawn time-fixed” principle is maintained, and the value determined when fresh spawn is bound to restore/switch/reset resume operations via snapshot, not to switch to mid-session (Codex adapter throws `setPermissionMode`).
+`sandbox` / `network_access` restore path is aggregated to [ADR-0014 F1 Supplementary supplement “Three-axis reapplication at resume”](0014-session-resume-and-restore.md). This F3’s “spawn time-fixed” principle is maintained, and the value determined when fresh spawn is bound to restore/switch/reset resume operations via snapshot, not to switch to mid-session (Codex adapter throws `setPermissionMode`).
 
 #### F3: Effective`network_access`normalization (phase-22 dogfood Home audit)
 
@@ -106,24 +106,24 @@ Host's `#threadOptions()` (S enforcement enforcement route) was unchanged becaus
 
 - **display**(AgentCard / AgentDetail): Unified by engine in a biaxial badgeBadge from `ext.permission`.
 - ****(Launch engine / AgentDetail) Claude = mode select (6 value), Codex = sandbox select (3 value) + network access toggle at workspace-write. Labels for each option are biaxially converted (e.g. "acceptEdits — write: workspace / approval: on-request equivalent").
-- initial cross- edit preset shortcut (default / edit-friendly / yolo, etc.)****: There are only 3-6 combinations for each engine, and the preset layer can be increased only for image maintenance (2026。-10。-elicitation, the former Q3 close).
+- initial cross- edit preset shortcut (default / edit-friendly / yolo, etc.)****: There are only 3-6 combinations for each engine, and the preset layer can be increased only for image maintenance (2026.-10.-elicitation, the former Q3 close).
 
 #### F4 supplement (2026-11-11, Namemetrical for phase-15)
 
 It was found that the permission UX remains aNamemetric between the engine in the actual operation verification after phase-14 was completed. As Home (Codex agent), there are two points that "Codex biaxial efficacy and host-fixed modes can not be read by UI" and "Plan mode and sandbox are mixed, and it is not distinguished from work intentions and efficacy". Enhance the F4 UI contract with the following items: [phase-15-wrapper-ux-parity](../plans/phase-15-wrapper-ux-parity.md)
 
 - **AgentDetail Claude switcher**: The Claude mode select of F4 has already been displayed in `PERMISSION_MODE_AXES` to the candidate (`.axes-hint` of `AgentDetail.svelte`).  **mode label**Permanently set a valid badge (`Contact: sandbox / Application: approval`). Allow operators to see the current valid permission without opening the candidate menu.
-- **Codex “Approval: never” permanent badge**: The AgentDetail of the Codex agent does not emit the current mode switcher (reject ADR-0033 F3, set permission mode), and the operator cannot determine whether it is unchanged or not implemented. In addition, "Approval: never (host-fixed, upstreamLabelss)" is permanently set as an explicit label on the permission display of the Codex agent. link [codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md).
+- **Codex “Approval: never” permanent badge**: The AgentDetail of the Codex agent does not emit the current mode switcher (reject ADR-0033 F3, set permission mode), and the operator cannot determine whether it is unchanged or not implemented. In addition, "Approval: never (host-fixed, upstreamLabelss)" is permanently set as an explicit label on the permission display of the Codex agent. link [codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md)
 - **Launch  Home Claude permission mode**: The current Launch  can only select the sandbox select for Codex, and you can only select the mode on the AgentDetail side after Claude. Added mode select (default / plan / acceptEdits / dontAsk / auto / bypassPermissions) when mode=claude-code. Allows you to specify the desired mode at startup, and establishes the Sexmetry that "you can decide the permission at startup".
 - **Plan mode and sandbox**: Current Claude's Plan mode expresses "work intention (plan only, tool execution)", but the two-axis projection can be crushed to `sandbox: read-only / approval: on-request`. As a supplement, the permission frame of AgentDetail**Two-frame s of work intention (mode) and sandbox**display. When the operator selects Plan mode, the effective sandbox becomes read-only.
 
 #### F4 Compensation: Reference to difference detection at resume
 
-In phase-15 D8, the resolved snapshot (model / sandbox / approval / network access / effort) of the previous session at resume and the value that host is forced to envel., and if there is a difference, the framework that is exposed with the stderr warn + AgentDetail badge is introduced. The envel  schema extension covers both the ADR and the ADR-0032 (code2-codex-adapter.md) F4bc, so the detailed design is handled in phase-15 plan. This F4 supplement is determined only in the principle of “Display of differences is done in the same frame as the permission biaxial UI and unified by the Principle neutral badge”.
+In phase-15 D8, the resolved snapshot (model / sandbox / approval / network access / effort) of the previous session at resume and the value that host is forced to envel., and if there is a difference, the framework that is exposed with the stderr warn + AgentDetail badge is introduced. The envel  schema extension crosses both this ADR and [ADR-0032](0032-codex-adapter.md) F4bc, so the detailed design is handled by phase-15 plan. This F4 supplement is determined only in the principle of “Display of differences is done in the same frame as the permission biaxial UI and unified by the Principle neutral badge”.
 
 ### F5 — ADR-0022
 
-`state_change.ext.pending_permission` of [ADR-0022] (0022-pending-permission-authoritative-source.md) maintains the principle of authoritative source in this ADR. This ADR does not supersede ADR-0022 by adding `sandbox`/`approval` to its payload shape.
+`state_change.ext.pending_permission` maintains authoritative source principles in this ADR. This ADR does not supersede ADR-0022 by adding `sandbox`/`approval` to its payload shape. [0022-pending-permission-authoritative-source](0022-pending-permission-authoritative-source.md)
 
 ## Consequences
 
@@ -137,7 +137,7 @@ In phase-15 D8, the resolved snapshot (model / sandbox / approval / network acce
 
 - The `ext.permission_mode` 1 release windowHome period, the wrapper sends both fields.
 - Claude 6 mode → biaxial mapping for display**Close**and mode's subtle semantics (such as auto classifier approval) will not fall into two axis. Compensate with labels.
-- Codex authorization experience does not exist until `exec_permission_approvals` of upstream is stable ([open-questions/codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md)).
+- Codex authorization experience does not exist until `exec_permission_approvals` of upstream is stable (tracked with [open-questions/codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md)).
 
 ### Neutral
 
@@ -157,9 +157,9 @@ In phase-15 D8, the resolved snapshot (model / sandbox / approval / network acce
 
 ## Related
 
-- Source: [ADR-0022] (0022-pending-permission-authoritative-source.md) (ext extension while maintaining authoritative source principles).
-- Origin: [ADR-0032] (Code2-codex-adapter.md) F2 (Extension of the permission abstract accompanying Codex adapter).
-- [phase-14-codex-adapter] (../plans/phase-14-codex-adapter.md), [phase-15-wrapper-ux-parity] (../plans/phase-15-wrapper-ux-parity.md) (F4 supplementation and D8 resume differential detection).
-- Open questions: [codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md) (tracking upstream approval). Q2 (envel  schema) / Q3 (UI vocabulary) is resolved to 2026。-10.
-- engine ADR: [ADR-0034] ( engine4-session-capabilities-advertisement.md) attach / question dialog()
--modelmodels: [protocol](../specs/protocol.md) (`ext.permission` supplement), [model-model](../specs/model-model.md).
+- Source: [ADR-0022](0022-pending-permission-authoritative-source.md) (ext extension while maintaining authoritative source principles).
+- Origin: [ADR-0032](0032-codex-adapter.md) F2 (extension of the permission abstract accompanying Codex adapter).
+- : [phase-14-codex-adapter](../plans/phase-14-codex-adapter.md), [phase-15-wrapper-ux-parity](../plans/phase-15-wrapper-ux-parity.md) (F4 supplementation and D8 resume differential detection).
+- Open questions: [codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md) (tracking upstream approval). Q2 (envel  schema) / Q3 (UI vocabulary) is resolved to 2026.-10.
+- engine ADR: [ADR-0034](0034-session-capabilities-advertisement.md) (expansion of engine neutralization pattern by session capability). attach / question dialog()
+-CO:s: [protocol](../specs/protocol.md) (`ext.permission` supplement), [plugin-model](../specs/plugin-model.md).

@@ -37,7 +37,7 @@ Enabled**
 ### Negative
 
 - There is a required to have a drawing type in `persona` for future drawing type addition
-  ([ADR-0003](0003-persona-identity-persistence.md))。
+  ([ADR-0003](0003-persona-identity-persistence.md)).
 
 ### Neutral
 

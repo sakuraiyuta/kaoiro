@@ -1,5 +1,5 @@
 ---
-title: external humanング — humancord channel participation, one direction, discord-wrapper topology
+title: external humanJapanese term — humancord channel participation, one direction, discord-wrapper topology
 status: accepted
 date: 2026-07-04
 opened: 2026-07-04
@@ -17,7 +17,7 @@ Accepted
 
 ## Context
 
-Japanese termーGent between agents (inter-agent, phase-8) (../plans/phase-8-inter-agent-messaging.md)
+Japanese termーGent between agents (inter-agent, [phase-8](../plans/phase-8-inter-agent-messaging.md))
 Same as implemented), the AI agent is in Discord etc.**external**Home
 I want to throw a message and receive a reply (kaoiro subject: myself/laboratory)
 Office operation).
@@ -25,7 +25,7 @@ Office operation).
 inter-agent is managed by kaoiro, but the exHome human is outside of kaoiro.
 kaoiro,
 (3) Treat untrusted ex  inputs and slice them. Specifications
-[protocol-external-human](../specs/protocol-external-human.md)。
+[protocol-external-human](../specs/protocol-external-human.md).
 
 ## Decision
 
@@ -67,13 +67,13 @@ verbatim Relay. Injection Surface Zero. fail-soft.
 grant (the first application of the plugin-model filter mechanism),
 responder generates a limited reply. Non-injected to working agent. atim
 The same opponent fixed as MUST and the final adopt is confirmed with red-team spike before implementation
-  ([external-human-inbound-llm-tier](../open-questions/external-human-inbound-llm-tier.md))。
+  ([external-human-inbound-llm-tier](../open-questions/external-human-inbound-llm-tier.md)).
 
 ### D6: Safety valve and retention
 
 1. Force the conversation 3 turn limit to `ConversationStates` on the server. Conversation content
 ephemeral (config non-permanent), only contact list config. `external_message`
-([ADR-0021](0021-role-information-dis sure-policy.md)))
+Both direction and operator limited delivery ([ADR-0021](0021-role-information-disclosure-policy.md)).
 
 ## Consequences
 
@@ -93,15 +93,15 @@ Issue #18(Message filter)
 Close Added bot  management and always connection operation.
 - Tier B has injection face and requires a gate process called spike before implementation.
 - discord-wrapper Lost inbound during unconnection
-  [external-human-inbound-loss](../open-questions/external-human-inbound-loss.md))。
+  [external-human-inbound-loss](../open-questions/external-human-inbound-loss.md)).
 
 ### Neutral
 
 - v1 is Discord only. e-mail / Slack will be in the future issue + docs.
 - Instruction from external humans (with permission) is a future issue
-  ([external-human-recv-permission-model](../open-questions/external-human-recv-permission-model.md))。
+  ([external-human-recv-permission-model](../open-questions/external-human-recv-permission-model.md)).
 - GUI for contact management
-  ([external-human-contact-management-ux](../open-questions/external-human-contact-management-ux.md))。
+  ([external-human-contact-management-ux](../open-questions/external-human-contact-management-ux.md)).
 
 ## Alternatives Considered
 
@@ -117,10 +117,10 @@ Close Added bot  management and always connection operation.
 
 ## Related
 
--Japanese terms: [protocol-ex)-human]
-[protocol](../specs/protocol.md)
-[protocol-inter-agent](../specs/protocol-inter-agent.md)(superset original).
+-COs: [protocol-external-human](../specs/protocol-external-human.md),
+[protocol](../specs/protocol.md),
+[protocol-inter-agent](../specs/protocol-inter-agent.md)
 - ADR: [0010](0010-protocol-precisification.md)
-  [0017](0017-wrapper-multientity-packages.md)(multientity)、
-[0021](0021-role-information-dis。sure-policy.md)
+  [0017](0017-wrapper-multientity-packages.md)(multientity),
+[0021](0021-role-information-disclosure-policy.md)
 - kaoiro issue #18

@@ -14,7 +14,7 @@ related_adrs: [32, 34, 35, 39, 40]
 ## Status
 
 Accepted (2026.-14, master decision).Home
-[phase-18-claude-model-catalog-live](../plans/phase-18-claude-model-catalog-live.md)。
+[phase-18-claude-model-catalog-live](../plans/phase-18-claude-model-catalog-live.md).
 
 ## Context
 
@@ -50,7 +50,7 @@ It is effective and can not handle both.
 | **(ii) ext.models route** | `wrapper/claude-code/src/host.ts:116, 279` → `dashboard/src/lib/AgentDetail.svelte` | **Available**— init after`#refreshSupportedModels()`Japanese term|
 
 (i) `supportedModels()` because the wrapper process is not yet alive
-There is no room to call. This hen and egg、s are accepted, and the maintenance burden is removed.
+There is no room to call. This hen and egg,s are accepted, and the maintenance burden is removed.
 There is a required to decide.
 
 `wrapper/codex/src/catalog.ts`
@@ -68,7 +68,7 @@ codex.
 `claude-fable-5[1m]`, `sonnet`, `sonnet[1m]`, `haiku`, `claude-opus-4-7`
 Delete the entry and leave the `default` entry only. In the "All Model Enumeration" part of ten
 `default` alias refers to "account recommended model" as semantic on the SDK
-It is a name solution, so it does not。 permanently.
+It is a name solution, so it does not. permanently.
 
 ### F2 — centralize the Claude live path to the SDK
 
@@ -181,7 +181,7 @@ not selected). Send/Retention remains as input expressions are preserved regardl
 The first match adopt was rejected. decisive but meaningless, pinned
 `opus[1m]` is displayed as `default`.
 The same meaning breakdown as rejected will be committed in the display route rather than the transmission route.
-[model-model](../specs/model-model.md)
+[plugin-model](../specs/plugin-model.md)
 
 F4
 `EngineCatalogEntry`
@@ -199,7 +199,7 @@ canonical ID is both pre-init `Options.model` and live `Query.setModel()`
 `model` is undetermined because observation requires billing, either alias / canonical
 I put it in a shape that pins the test even if it is returned.
 
-[model-model](../specs/model-model.md)
+[plugin-model](../specs/plugin-model.md)
 [agent-sdk-events](../specs/agent-sdk-events.md) Launch  to canonical
 The display has a precision difference (register path is last-known-good cache)
 If the probe point value is not applicable for the reason, it may be placed even after the TTL exceeds
@@ -226,11 +226,11 @@ Zero state
 ### Negative
 
 - Selected effort before init will disappear from the option after init
-  (F5、[claude-effort-levels-init-transition](../open-questions/claude-effort-levels-init-transition.md))
+  (F5,[claude-effort-levels-init-transition](../open-questions/claude-effort-levels-init-transition.md))
 - In launch dialog, init will only show "Default", like Sonnet 5
 pre-Model is not possible before init. mid-session after completion
-Switch **S、ule (2026、-31)
-[ADR-0039](0039-cata-catalog-live-probe.md)**: ThisAbout Us has been eliminated.  
+Switch **S,ule (2026,-31)
+[ADR-0039](0039-engine-catalog-live-probe.md))**: ThisHome has been resolved.
 Short life probe + memory cache, usually live-probe
 You can pre-Model a specific model in launch dialog. "Default"
 If you don't have a success cache (cold start / initial probe failure)

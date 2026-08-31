@@ -13,17 +13,17 @@ related_adrs: [10, 15, 19, 48, 49]
 
 ## Status
 
-Accepted (2026。04) kaoiro issue #170).
-[ADR-0019](0019-subagent-workflow-entity-and-task-envel .md) F2
-。 envel。 type
+Accepted (2026.04) kaoiro issue #170).
+[ADR-0019](0019-subagent-workflow-entity-and-task-envelope.md) F2
+. envel. type
 
 ## Context
 
 ADR-0019 Home subagent / workflow
 The policy (transport=(i)) to be notified by type has been determined. type
 It was the form of the official name and payload schema. Add to protocol
-([ADR-0010](0010-protocol-precisification.md)), `version` is not set
-([ADR-0015](0015-protocol-version-stamping.md))。
+[ADR-0010](0010-protocol-precisification.md)
+([ADR-0015](0015-protocol-version-stamping.md)).
 
 Determination material: existing type(state change / log / request / result)
 Both are single type design, and the subtype value is thin. protocol versioning
@@ -52,19 +52,19 @@ Line (CO `WrapperChannel.@max_task_id_field_bytes`) — here
 Do not overlap.
 - `task_type` — task type (F4).
 - `status` —Life lifecycle state
-  (`running` / `completed` / `failed` / `stopped`、ADR-0019 F3)。
+  (`running` / `completed` / `failed` / `stopped`,ADR-0019 F3).
 
 ### F3: Prog  meta is optional
 
 `subagent_type` / `workflow_name` / `description` / `usage` /
 `last_tool_name` / `summary` / `skip_transcript` with optional progress meta
 Different fields for each kind SDK
-[agent-sdk-events](../specs/agent-sdk-events.md))
+([agent-sdk-events](../specs/agent-sdk-events.md))
 
 ### F4: `task_type`expandable enum
 
 Initial value`subagent` | `workflow`Home Add value in addition to closed enum
-[ADR-0049](0049-tasklist-on-task-envel .md)
+`tasklist` [0049-tasklist-on-task-envelope](0049-tasklist-on-task-envelope.md)
 Additional decision).
 The receiver does not destroy the unknown `task_type` and fallback to the general-purpose task display
 (forward compatibility).
@@ -102,9 +102,9 @@ Does not affect existing clients.
 -type: [protocol](../specs/protocol.md)(type and payload table),
 [subagent-tasks](../specs/subagent-tasks.md)
 [agent-sdk-events](../specs/agent-sdk-events.md)
--work ADR: [0019](0019-subagent-workflow-entity-and-task-envel).md)
+-> ADR: [0019](0019-subagent-workflow-entity-and-task-envelope.md)
 (entity model and transport deter ),
-[0048](0048-task-ag ation-delivery.md)
+[0048](0048-task-aggregation-delivery.md)
   [0010](0010-protocol-precisification.md) /
 [0015](0015-protocol-version-stamping.md)
 - Origin: open-question subagent-task-envel -schema (2026-06-16)
@@ -120,13 +120,13 @@ ADR
 Since it is stated "fallback", it does not sandwich the rename layer to the S  raw value
 `wrapper/claude-code/src/adapter.ts`
 `sdkMessageToTask`. Renamed to "Unknown value already allowed by F4"
-I judged that there is no real benefit just by adding an un。 state.
+I judged that there is no real benefit just by adding an un. state.
 
 **`prompt` / `output_file`**`task_started`
 undocumented `prompt` (instructed to subagent, the contents themselves),
 `output_file` (local file path)
 found to exist. F2/F3
-`task` does not wiring to payload of envel 
+`task` does not wiring to payload of envel
 (`sdkMessageToTask` does not explicitly read both fields). Reason: `prompt`
 `output_file` is
 Expose wrapper host-specific information in the local file system path.

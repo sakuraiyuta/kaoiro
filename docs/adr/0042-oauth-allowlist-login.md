@@ -1,5 +1,5 @@
 ---
-title: dashboard OAuth Personalリスト (Google/GitHub/Nextcloud) + Permission List
+title: dashboard OAuth PersonalJapanese term (Google/GitHub/Nextcloud) + Permission List
 status: accepted
 date: 2026-07-26
 opened: 2026-07-26
@@ -35,10 +35,10 @@ There is no OAuth library, HTTP client, or Ecto in the current server.
 
 ## Decision
 
-1. **library = assent** (pow-auth/assent) + HTTP client (Req)。
+1. **library = assent** (pow-auth/assent) + HTTP client (Req).
 Google / GitHub is built-in strategy, Nextcloud is
 `Assent.Strategy.OAuth2.Base`
-   (authorize `/apps/oauth2/authorize`、token
+   (authorize `/apps/oauth2/authorize`,token
 `/apps/oauth2/api/v1/token`, identity is OCS
 `/ocs/v2.php/cloud/user?format=json`. ueberauth with plug binding
 dependent thickness.
@@ -47,7 +47,7 @@ dependent thickness.
 and `KAOIRO_OAUTH_NEXTCLOUD_BASE_URL`. id + secret
 base url) is only valid for the provider. endpoint
 `url` Configuration:
-   `{scheme}://{host}[:{port}]/auth/{provider}/callback`。
+   `{scheme}://{host}[:{port}]/auth/{provider}/callback`.
 3. **Permission list = text file**Home path
 `KAOIRO_OAUTH_ALLOWLIST_PATH` Format 1 line 1 entry
 `provider:identifier[:role]`, `#` Comments, empty lines, role omitted
@@ -104,7 +104,7 @@ Login is not available. GitHub / Nextcloud
 
 - The role particle size of ~~RBAC maintains the current value of operator / viewer. More
   **With al (2026 (2014, issue #188).**admin / viewer
-ADR-0050
+[ADR-0050](0050-principal-model-and-graded-access-control.md)
 D2). Allow list text format remains `provider:identifier[:role]`
 role = `admin`
 watcher The following are descriptions before withdrawal: subdivision

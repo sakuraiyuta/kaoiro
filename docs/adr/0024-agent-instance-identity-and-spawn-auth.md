@@ -1,5 +1,5 @@
 ---
-title: Agent instance identity and spawn authentication — persona = type / agent id = instance, 認証 issuance authentication
+title: Agent instance identity and spawn authentication — persona = type / agent id = instance, Japanese term issuance authentication
 status: accepted
 date: 2026-06-24
 opened: 2026-06-24
@@ -25,14 +25,14 @@ The arguments were manifested in the discussion (2026-06-24) of (the scope of co
 ### Current model
 
 - **agent id is a stable identifier for one instance**Home Face, mood, session pointer
-restore unit ([ADR 3](0003-persona-identity-persistence.md)),
-  **Same restart**[ADR-0014](0014-session-resume-and-restore.md),
-  [protocol](../specs/protocol.md))。
+restore unit ([ADR-0003](0003-persona-identity-persistence.md)),
+  **Same restart**[ADR-0014](0014-session-resume-and-restore.md)
+  [protocol](../specs/protocol.md)).
 - Double connection of the same agent id is collapsed in one state layer (last-write-wins +)
-owner fen。, `agent_states.ex`). ** Using the same agent id for two bodies
+owner fen., `agent_states.ex`). ** Using the same agent id for two bodies
 Identification and not possible**.
 - wrapper authentication**agent id another pre-registration **(`:wrapper_tokens` =
-`agent_id:token` 1:1phase, [ADR-0011] (0011-phase3-reliability-and-auth.md)
+`agent_id:token`, 1:1 , [ADR-0011](0011-phase3-reliability-and-auth.md)
 D3). Token registration is required for each new agent.
 - Results,**"How to connect unregistered agent id's wrapper with the qualification"**That's
 The only failure of multiple instances. dashboard from spawn(#22)
@@ -57,12 +57,12 @@ register is already established on the data model, which has both Remaining fail
 
 **Unify all spawns via   launch**"  = resident daemon" assumes
 like `kaoiro-runner spawn --persona … --cwd …`**One Shot**
-([ADR-0018](0018- -runnerbution.md)
+[ADR-0018](0018-runner-distribution.md)
 Single binary distribution and matching).
 
 This converges into one trust:
 
-- **per-host   Token**(`:runner_tokens`, [ADR-0023] (0023-host-host-architecture.md))
+- **per-host   Token**(`:runner_tokens`, [ADR-0023](0023-host-runner-architecture.md))
 Host a host.
 - For spawn via authenticated  , **server will issue per-agentInformationdentials
 Inject**(D4).
@@ -73,7 +73,7 @@ Inject**(D4).
 `"<scope>.<rand>"` `"<scope>.<rand>"`
 unique suffix). `.`
 
-- Number**server/ server "only once when instantiate"**。
+- Number**server/ server "only once when instantiate"**.
 -  **Supervised Restart**For
 Conform with the "Identification in Reboot" requirements of ADR-0014 (not separating with crash reconnection).
 
@@ -96,24 +96,24 @@ Visualize with explicit errors without overwriting the startup as invisible.
 
 - **Wildcard wrapper **(`host-1.*:token` etc.):  -less
 In case of “all agents in scope” (`*.*`) from “1 agent”
-Expand to all wrappers (equivalent to wrappers) and contrary to the security priority policy.****。
+Expand to all wrappers (equivalent to wrappers) and contrary to the security priority policy.****.
 -less As a consideration item when direct connection demand is noticeable
 [#71](https://github.com/sakuraiyuta/kaoiro/issues/71)
 - **hand shake**`POST /agent/allocate`
-connection): separation is important, but the mechanism is to realize the same in 
+connection): separation is important, but the mechanism is to realize the same in
 Duplicate. Notes to #71 as a reference for Home-less.
 - **Same agent id**Identification (ADR 3). rejected.
 
 ## Undetermined subst tion (defined at implementation)
 
 - **per-agentLifetime issuance approach and lifetime**: Signed short-lived  (at stateless due date)
-Is it possible to revoke stateful or explicit stateful?  
+Is it possible to revoke stateful or explicit stateful?
 supervised restart reboots the child without returning back to the  , soken will restart
 must be enabled (e.g. re-acquired via control channel)
 Reissue mechanism). Book ADR**server is issued and delivered by  **"Determine the way
 and the mechanism details are packed with #22 reroutes in phase-4.
 
-## D4 supplement — per-agent id revoke path (2026-23-23, #72) (https://github.com/sakuraiyuta/kaoiro/issues/72))
+## D4 supplement — per-agent id revoke path (2026-23-23, #72) (https://github.com/sakuraiyuta/kaoiro/issues/72)) [72](https://github.com/sakuraiyuta/kaoiro/issues/72)
 
 `Phoenix.Token` signing approach with D4 is secret key base in stateless
 Rotation was the only revoke means (full b  revoke weight)
@@ -168,7 +168,7 @@ The gap table of `docs/specs/auth-and-authz.md` has also been updated to "implem
 and**Pre-registration of per-agent s is removed**
 - separation (per-agent does not leak / does not create a scope sharing secret).
 - **Revoked multiple instances of persona**(spawn).
-- Single binary one-shot distribution ([ADR-0018] (0018- -Shotbution.md) / #70)
+- Single binary one-shot distribution ([ADR-0018](0018-runner-distribution.md) / #70) and
 Contact Us Because it is unnecessary to resident, it is also according to the demand "Do not want to put daemon".
 - Fix #22 gap/url url supply gap with D4 (determined 1 = draft A).
 
@@ -179,11 +179,11 @@ Unnecessary・One shot available. friction is less than per-agent registration).
 - The `node wrapper` direct connection of the element disappears with first-class (conven  `agent_id:token`)
 Manual operation is still possible.  -less #71
 - Load to implement per-agentJapanese term issuance mechanism in server (life/reissue is the following dependent).
-- Double live denied to join route (D。 has increased).
+- Double live denied to join route (D. has increased).
 
 ### Neutral
 
--   distribution and resident form follows [ADR-0018] (0018- -distribution.md).
+- CO distribution and resident form follows [ADR-0018](0018-runner-distribution.md).
 - Manual Directly connected existing spa operation (ADR-0011 D3) is installed (this ADR is spawn route)
 Issued authentication**More**do not supersede D3).
 
@@ -199,16 +199,16 @@ Issued authentication**More**do not supersede D3).
 
 ## Related
 
-[ADR-0011](0011-phase3-reliability-and-auth.md) D3(per-agent id)
+- Compensation: [ADR-0011](0011-phase3-reliability-and-auth.md) D3(per-agent id)
 Pre-registration  with  **Type**Added authentication route. supersede).
--  ADR: [0003] (0003-persona-identity-persistence.md) (persona/agent id identity),
-[0014](0014-session-resume-and-restore.md)(restart stability / F4 local lock),
-[0018](0018-runner-Shotbution.md)
-[0023](0023-host-host-architecture.md)
+-CO ADR: [0003](0003-persona-identity-persistence.md)
+[0014](0014-session-resume-and-restore.md) (restart stability / F4 local lock),
+[0018](0018-runner-distribution.md)
+[0023](0023-host-runner-architecture.md) (CO architecture / host ).
 - server servers: [protocol](../specs/protocol.md)
-control message), [threat-model](../specs/threat-model.md)(spawn = RCE face,
-[architecture](../specs/architecture.md)
-[#71](https://github.com/sakuraiyuta/kaoiro/issues/71)
-(Wild Card Token /。).
-- Implement: #22 re-route of Phase 4 ([phase-4-host-host](../plans/phase-4-host-host.md).
-- Origin: issue [#22] (https://github.com/sakuraiyuta/kaoiro/issues/22) Decision 1 (2026-06-24).
+control message), [threat-model](../specs/threat-model.md) (spawn = RCE plane,
+operator only), [architecture](../specs/architecture.md).
+- Shelf raised / Reference: [#71](https://github.com/sakuraiyuta/kaoiro/issues/71)
+(Wild Card Token /.).
+- Implement: #22 re-route of Phase 4 ([phase-4-host-runner](../plans/phase-4-host-runner.md)).
+- Origin: issue [#22](https://github.com/sakuraiyuta/kaoiro/issues/22) Decision 1 (2026-06-24).

@@ -20,13 +20,13 @@ Accepted
 dogfooding(kaoiro drives Claude Code on a daily basis)
 The included dashboard corresponds to claude.ai / Claude Code GUI
 There is a required function. Main operations that are missing in the current situation: interrupts during generation, files
-Upload, skip completion, client update, model / effort , 
+Upload, skip completion, client update, model / effort ,
 actual number display.
 
-[ADR-0012](0012-response-display-and-dashboard-scope.md) is already included
+[ADR-0012](0012-response-display-and-dashboard-scope.md) is already included in Dash
 The board has been upgraded from "minimum" to "information rich operator console". However,
 The linear pull is not the number of functions**Is it necessary to persist on a new public protocol surface / server?**」
-Home**The richness that requires the new protocol remains gated**。
+Home**The richness that requires the new protocol remains gated**.
 
 All of the above features**New Public Protocol Face**Required (disco ed, available)
 skill Publish list, upload forward, update control, select dialog relay). Current
@@ -35,19 +35,19 @@ ADR-0012 ADR-0012
 Publish Policy: kaoiro can be done quickly ( ing initial settings)
 "battery included" If you need more / customer custom, your own client
 to kaoiro.nvim.
-[ADR 7](0007-client-separation-reference-dashboard.md)
+[ADR-0007](0007-client-separation-reference-dashboard.md) Client separation
 Compatibility with the policy.
 
 ## Decision
 
 - **(F1) Included Dashboard with "battery-included minimum utility client"
 Contact Us Provides a state where minimum dialogue operation is completed by a single unit immediately after implementation.
-- **(F2) Revise ADR-0012 line and allow adding new public protocol surfaces**。
+- **(F2) Revise ADR-0012 line and allow adding new public protocol surfaces**.
 Required operation for minimum operation (sus , upload, skill completion, client update, etc.)
 New  eーHome / message for model / effort.) is acceptable. Protocol
 Published and versioned
   ([ADR-0007](0007-client-separation-reference-dashboard.md) /
-[ADR-0015] (0015-protocol-version-stamping.md)
+[ADR-0015](0015-protocol-version-stamping.md))
 dogfooding
 - **(F3) Still non-scope**ADR-0012
 - Conversation Authoring Environment (Full Chat).
@@ -56,7 +56,7 @@ File**wrapper-local**Principle.
 - High functionality of external client class.
 - **(F4)Body feature by individual issue**Heavy specification (file)
 upload) passes my-spec-elicitation before implementation.
-- [non-goals](../specs/non-goals.md)
+- Update [non-goals](../specs/non-goals.md) according to this decision.
 
 ## Consequences
 
@@ -87,13 +87,13 @@ Re-priority.
 
 ## Related
 
--gos: [non-goals](../specs/non-goals.md),
-  [overview](../specs/overview.md)、[architecture](../specs/architecture.md)、
+-COs: [non-goals](../specs/non-goals.md),
+  [overview](../specs/overview.md),[architecture](../specs/architecture.md),
 [protocol](../specs/protocol.md)
--) ADR: [0007] (0007-client-separation-reference-dashboard.md)
+-> ADR: [0007](0007-client-separation-reference-dashboard.md)
 (client separation/consolidation policy),
 [0012](0012-response-display-and-dashboard-scope.md)
 -  issue: Suspended / Upload / skill Completion (#Clients/ Client Update /
 Model・effortFile / Token quantity / Operation file confirmation.
 - Origin: my-idea- ef
-  dogfooding」)。
+  dogfooding」).

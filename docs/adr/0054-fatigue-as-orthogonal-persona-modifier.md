@@ -41,7 +41,7 @@ Pass `fatigued` to the sprite solution only when fatigue, and `data-fatigued` to
 sprite itself does not stack sp modifier.
 
 Fatigue judgment is closed to `isFatigued(envelope)`. At present
-`supports_context_usage` is explicitly true and 
+`supports_context_usage` is explicitly true and
 `ext.context.used_percentage >= 60` Features
 Fail-closed to false, missing, or non-numeric. More
 Even if `work_budget_percentage` is changed to the judgment, the body of this function and its test

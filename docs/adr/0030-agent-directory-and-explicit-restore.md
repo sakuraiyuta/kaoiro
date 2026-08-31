@@ -17,7 +17,7 @@ Accepted (completed 2026 -06 — phase-11 phase-0..2, manual dogfooding inspecti
 
 ## Context
 
-[ADR-0014](0014-session-resume-and-restore.md)
+[ADR-0014](0014-session-resume-and-restore.md) is the agent's session recovery mechanism.
 (client → server →   spawn-with-resume)
 (`agent_id → {session_id, cwd}`) was persisted with DETS. implemented
 `restore` / `resume_disconnected`
@@ -32,13 +32,13 @@ The resume route that straddles the reboot is broken.
 - **Specify "known agent list" acquisition method from client side**:
 If you need to reboot, the Agentdisplays is empty = 0  /wrapper
 Until the auto reconnection comes, the operator cannot be able to restore operations.
-- [ADR-0014 A4] (0014-session-resume-and-restore.md)
-Res ing ([#24](https://github.com/sakuraiyuta/kaoiro/issues/24))) is no longer required. Only identity and existence facts should be persistent.
+- [ADR-0014 A4](0014-session-resume-and-restore.md)by JSONL
+[#24](https://github.com/sakuraiyuta/kaoiro/issues/24) Only identity and existence facts should be persistent.
 
 goal: **cli and   are restarted at the same time, and then client's last
 "Restore state" button operation (b  / individual), each agen that moved to the last minute
 You can resume-spawn with last session id**. restore only the operator explicitly,
-(https://github.com/sakuraiyuta/kaoiro/issues/41))
+[#41](https://github.com/sakuraiyuta/kaoiro/issues/41)
 
 ## Decision
 
@@ -85,8 +85,8 @@ Don’tUX UX on the way out (appended 2026 ). Home
   - ****: "Restore previous state" in the header or setting menu — offline entry
 Each resume-spawn is fired se tially.
   - **Individual**: offline only one from the agent tile (or details) in the display
-    resume-spawn。
-- Both call existing `resume_disconnected` wire one by one. B 
+    resume-spawn.
+- Both call existing `resume_disconnected` wire one by one. B
 No wire.
 - **D6(entry lifecycle)**:
 - Added: spawn only.
@@ -100,11 +100,11 @@ directory-only entry
 `AgentStates.delete/1`
 (unchanged) z e agent (`no_session`)
 The operator can explicitly clean the restore spawn (the case where the failure is repeated).
-  - **2026 08 Note:**The current purge contract is [protocol](../specs/protocol.md)
+  - **2026 08 Note:**[protocol](../specs/protocol.md)
 to `delete_agent`. `AgentStates`, `AgentDirectory`,
-    `SessionPointers`、`PermissionModes`、`SessionResets`、`SessionStarts`、
+    `SessionPointers`,`PermissionModes`,`SessionResets`,`SessionStarts`,
 `ClearWatermarks`
-[ADR0051](0051-history-restart-resilience.md) For permanent revoke
+[ADR-0051](0051-history-restart-resilience.md) For permanent revoke
 `TokenDenylist` does not purge.
 - **D7(host id non-permanent)**: Agent id
 to `host_id_of/1`, so host id is not required.
@@ -116,7 +116,7 @@ Error display on each tile. Special ag ation API
 Don't make it. **Restore button display is `envelope.state === "disconnected"` on client side
 not gate with session id.
 existence) is assigned to determining the debug side, and fail is spawn re t → sticky icon
-surface (appended 2026。 ). Home
+surface (appended 2026. ). Home
 
   **Fresh-restore (phase-25, 2026 -23)**: SessionPointer
 cwd / engine / snapshot
@@ -127,15 +127,15 @@ This route**fresh-restore**Save as: server is `resume_session_id`
 stamp `apply_resume_snapshot: true` to spawn payload
 reapply snapshot with fresh  .
 Please set permission as fresh session. More
-[ADR-0014 F1 Supplement: pointer fresh-restore without session id](0014-session-resume-and-restore.md)
-and [phase-25 plan](../plans/phase-25-fresh-restore-without-session.md).
+  [ADR-0014 F1 supplement "sesion id no pointer fresh-restore"](0014-session-resume-and-restore.md)
+and [phase-25 Plan](../plans/phase-25-fresh-restore-without-session.md).
 D8 "Restore button disconnected only gate" policy is unchanged,
 The principle of not displaycontrol with or without session id is fresh-restore
 Maintained as it is.
 - **D9(double connection prevention)**: Reuse existing `require_disconnected/1` (ADR-0014 F4).
 The live agent is excluded from the restore object.
 - **D10(permission)**: List/Restore operation and operator only
-([ADR-0021](0021-role-information-dis sure-policy.md)
+[ADR-0021](0021-role-information-disclosure-policy.md)
 viewer does not return the AgentDirectory-derived offline list.
 - **D11(rate limit)**: B  Restoration spawn is spahronously fired ( spa side)
 for-loop, broadcast only). No special rate limit — real spawn execution
@@ -153,7 +153,7 @@ It can be restored to the whole/  by explicit operation.
 - ADR-0014 A4 "JSONL Japanese term" is maintained and goal is achieved (history permanently unnecessary).
 - Implemented with the same DETS pattern as the existing `SessionPointers` / `PermissionModes`
 Low cost (store added + spawn   + reference change + client delivery +
-  dashboard UI)。
+  dashboard UI).
 - session id / cwd(SessionPointers) / permission mode
 (PermissionModes) is already permanent and only one persona item is added.
 
@@ -197,11 +197,11 @@ UI of button (header) and `spawn_result` error.
 ## Related
 
 - Dependent ADR: [0014](0014-session-resume-and-restore.md)(resume mechanism body,
-pointer ), [0024] (0024-agent-in -identity-and-spawn-auth.md)
+pointer persistence), [0024](0024-agent-instance-identity-and-spawn-auth.md)
 (host id calculation from the agent id  ing convention)
-- Reference ADR: [0012](0012-response-display-and-dashboard-scope.md)(A4 JSONL
-[0021-role-information-dis sure-policy.md]
-role gate), [0023](0023-host-host-architecture.md)(host is spawn
+- Reference ADR: [0012](0012-response-display-and-dashboard-scope.md)(A4 JSONL)
+[0021](0021-role-information-disclosure-policy.md)(operator)
+role gate), [0023](0023-host-runner-architecture.md)
 )
 -: issue:
 [#41](https://github.com/sakuraiyuta/kaoiro/issues/41)
@@ -210,5 +210,5 @@ Close
 
 [#88](https://github.com/sakuraiyuta/kaoiro/issues/88)
 per-personaType pattern)
-- resume:s: [protocol](../specs/protocol.md)(spawn / resume route),
+-CO:s: [protocol](../specs/protocol.md) (spawn / resume route),
   [architecture](../specs/architecture.md)

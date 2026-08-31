@@ -13,9 +13,9 @@ related_adrs: [32, 33]
 
 ## Status
 
-Accepted (2026。-15, Master decision. delegation between kaoiro er,
-Fuji is in charge of review. 
-[phase-19-codex-internal-subagents-toggle](../plans/phase-19-codex-internal-subagents-toggle.md)。
+Accepted (2026.-15, Master decision. delegation between kaoiro er,
+Fuji is in charge of review.
+[phase-19-codex-internal-subagents-toggle](../plans/phase-19-codex-internal-subagents-toggle.md).
 
 ## Context
 
@@ -36,7 +36,7 @@ primitive:
 `list_agents` because internal sub-agent is not registered to kaoiro server
 Don’t appear, and Dashboard can’t directly reflect fakes. So kaoiro is the only
 authoritative registry(`list_agents`)
-[protocol-inter-agent]
+[protocol-inter-agent](../specs/protocol-inter-agent.md)
 “Guide  for Addressing” has already been written as MUST. Recurrence is only the "prompt terms"
 It is a proof that it cannot be protected.
 
@@ -51,7 +51,7 @@ side issues).
 
 ## Decision
 
-### F1 — runner config `codex.internal_subagents`(boolean、effective default true)
+### F1 — runner config `codex.internal_subagents`(boolean,effective default true)
 
 `internal_subagents`(boolean)
 Add. Unspecified / `true` = valid (Codex default), `false` = disabled.  effective
@@ -63,7 +63,7 @@ default. bot boolean and non boolean is
 Codex per-run config
 `config.codex.internal_subagents`(file, nested)→   relay
 (`resolveWrapperConfig`, `configured ?? true` is solved by codex engine)→
-WrapperConfig `codex_internal_subagents`(wire、flat)→
+WrapperConfig `codex_internal_subagents`(wire,flat)→
 `wrapper/codex/src/host.ts` per-run `config`. host**Always**
 `features.multi_agent` `internal_subagents`
 `true` is explicitly enabled (force-enable) and `false` is disabled and not specified
@@ -112,7 +112,7 @@ already meets the existing `inter_agent_message` envel :
 - sender `agent_id` and `persona` envel  are stamp(`makeInterAgentMessage`)
 `conversation_id` / `turn_number`
 - Dashboard sends and receives by operator only observation path
-[protocol-inter-agent]
+([protocol-inter-agent](../specs/protocol-inter-agent.md) observation route)
 
 `wrapper/agent-common/test/inter_agent.test.ts`: sender
 agent id / persona / conversation id / turn number
@@ -155,7 +155,7 @@ block Appraisal when enabled.
 
 ## Implementation
 
-[phase-19-codex-internal-subagents-toggle](../plans/phase-19-codex-internal-subagents-toggle.md)。
+[phase-19-codex-internal-subagents-toggle](../plans/phase-19-codex-internal-subagents-toggle.md).
 kaoiro repo
 settings repo(`dotfiles/codex` tracked source + `install.codex.sh`)
 Implement with responsibility separation.

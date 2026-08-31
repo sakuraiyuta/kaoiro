@@ -14,7 +14,7 @@ related_adrs: [29, 45]
 ## Status
 
 Accepted (2026.03, determined by master delegation ChJapanese term + Home consultation).
-[ADR-0029](0029-persona- -sot-and-pack-packbution.md) F2 / F6
+[ADR-0029](0029-persona-server-sot-and-pack-distribution.md) F2 / F6
 partially revise the cache description.
 
 ## Context
@@ -166,7 +166,7 @@ I had enough space. directory entry.
 local header
 The central directory's declaring value can be freely written by the attacker. `:zip.unzip/2`
 Expand real data to the end without any reference — OTP 29.0.2 in real-time, both headers
-10,000,000 byte without an error.  
+10,000,000 byte without an error.
 The size limit is actually inflate the raw deflate stream before deploying. Output
 byte count is only calculated by destroying the fixed chunk of 64 KiB.
 Memory is constant even in a single giant entry. As soon as the limit is reached, the deployment time
@@ -187,7 +187,7 @@ Reject method values other than STORE.
 data descriptor (general purpose bit 3)
 Contact Us ** The entry with bit 3 is the size of the local header and OTP is
 Read and deploy central directory comp size (stdlib 8.0.1 `zip.erl`)
-`get_z_file/9`: `GPFlag band 8 =:= 8 -> ZipFile#zip_file.comp_size`.  
+`get_z_file/9`: `GPFlag band 8 =:= 8 -> ZipFile#zip_file.comp_size`.
 Take a real reading span from there. local header
 0 byte and count to make the upper limit test simple — write true value to csize 0 and central
 0 byte, `:zip.unzip/2` 10,000,000 byte
@@ -275,7 +275,7 @@ bit 3 entry comp size is
 
 
 **The inspection order is preferred.**archive size → central metadata
-preflight (entry number / span / ZIP64 body。. `:zip.list_dir/1`
+preflight (entry number / span / ZIP64 body.. `:zip.list_dir/1`
 local header (F7) → inflate With traversal that can be rejected by name
 zip bomb does not allow up to 1 GiB inflate CPU. F7
 Both are layers that do not write at all, and this unchanged condition does not depend on the order.
@@ -291,7 +291,7 @@ F7/F8
 (Old Negative)
 
 **Considered deal.**(a) Pass binary once to both preflight and deployment —
-If the upper limit is 1 GiB or higher, b  read will present 64 KiB streaming design (F 
+If the upper limit is 1 GiB or higher, b  read will present 64 KiB streaming design (F
 rejected because it breaks itself becomes a new memory DoS. (b) retargeting the preflight   —
 Rejected because the window is narrowed but there is no blockage. (c) OTP `:zip.zip_open/2` fd retention API
 `zip_open` `file:open`

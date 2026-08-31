@@ -13,11 +13,11 @@ related_adrs: [22, 25, 32, 33, 35, 36, 37, 40]
 
 ## Status
 
-Accepted ([phase-15-wrapper-ux-parity](../plans/phase-15-wrapper-ux-parity.md)))
+Accepted ([phase-15-wrapper-ux-parity](../plans/phase-15-wrapper-ux-parity.md))
 
 ## Context
 
-In [phase-14](../plans/phase-14-codex-adapter.md), the actual operation verification after the codex adapter has been promoted, and it was found that the UI has multiple "code movement lines that tend to branch function availability with the engine name". Example:
+In the actual operation verification after the codex adapter is accepted in [phase-14](../plans/phase-14-codex-adapter.md), it was found that there are multiple "code movement lines that tend to branch function availability with the engine name" on the UI side. Example:
 
 - Composer Attachment (file upload) button: The codex adapter at the time was an accessory open, but if the Code name is "Codex disable", it will be false negative when the codex implements attachments such as image input in the future (SJapanese term side implementation will not be obstructed with old UI only). In the actual phase-14, Codex corresponds to image attachment, and this concern was real.
 - Availability of AskUsertionstion (`ask_user_question` MCP tool): Codex is provided via MCP bridge, but the actual operational plan tier (Free / Go) session and other implementation sessions may cause "not fire in dialog" (Home operation perspective, 2026-11-11 behavior confirmation).
@@ -25,7 +25,7 @@ In [phase-14](../plans/phase-14-codex-adapter.md), the actual operation verifica
 
 The risk of false negative/positive that the engine name determining is brought in will always occur as long as the engine evolution continues. Subst tion of the judgment axis from the engine name to the design that judges the function availability by seeing only the capability capability.
 
-The envel  schema ([ADR-0033] (model3-permission-model-dual-axis.md) of phase-14 has already established a pattern that "property value (`ext.permission`) can be placed in the engine neutral", so the function availability is also extended in the same pattern.
+The envel  schema ([ADR-0033](0033-permission-model-dual-axis.md)) of phase-14 has already established a pattern to neutralize the engine (`ext.permission`), which extends functionality availability in the same pattern.
 
 ## Decision
 
@@ -33,7 +33,7 @@ The envel  schema ([ADR-0033] (model3-permission-model-dual-axis.md) of phase-14
 
 wrapper**spawn from the first state change**stamping `state_change.ext.session_capabilities` (assembling capability when constructing a adapter, and sending it with initial state change). The same ext is maintained in the subsequent state change, and the value that can change in the session will be updated when it changes.
 
-session init related events (Claude `SDKSystemMessage(init)`, Codex `thread.started`)**Not waiting**`thread.started` does not reach the first turn, and if set to fail-closed default at the end, the codex agent will be "unsupported" error display ([phase-15](../plans/phase-15-wrapper-ux-parity.md), the same as the .../plans/phase-15-wrapper-ux-parity.md).
+session init related events (Claude `SDKSystemMessage(init)`, Codex `thread.started`)**Not waiting**— Codex is a process model ([codex-sdk-events](../specs/codex-sdk-events.md)) that creates a new spawn of `codex exec` every turn, so `thread.started` does not reach the first turn, and if the end fail-closed default is set, the codex agent of the startup becomes "unsupported" error display (currently in the same path as the [phase-15](../plans/phase-15-wrapper-ux-parity.md) movement stamp principle):
 
 ```json
 {
@@ -65,7 +65,7 @@ Add the following to `@kaoiro/protocol` envel  type:
 | `supports_user_input_dialog` | `boolean` | `ask_user_question`(MCP tool / SDK Special ) When false the AgentDetail question UI system is "unsupported" display|
 | `user_input_modes` | `string[]` (optional) |Permission mode / sandbox`["plan"]`= dialog will fire only in plan mode). empty/unspecified = unconditional|
 
-[ADR-0035](0035-codex-model-catalog-and-mid-session-switch.md) F4 and phase-16 have been implemented in Codex, and `supports_effort_switch` was implemented in Claude with #105. `supports_session_reset` / `session_reset_modes` implemented in [ADR-0036] (0036-session-lifecycle-commands.md) F5 and phase-17. The future field (e.g. `supports_cwd_tracking`) can also be added by following the envel  schema + agent-common type in the frame of this ADR.
+`supports_model_switch` / `supports_effort_switch` in the additional field has been implemented in Codex with [ADR-0035](0035-codex-model-catalog-and-mid-session-switch.md) F4 and phase-16, and `supports_effort_switch` was also implemented in Claude with #105. `supports_session_reset` / `session_reset_modes` is implemented in [ADR-0036](0036-session-lifecycle-commands.md) F5 and phase-17. The future field (e.g. `supports_cwd_tracking`) can also be added by following the envel  schema + agent-common type in the frame of this ADR.
 
 ### F3 — UI Principles
 
@@ -83,7 +83,7 @@ The `EngineAdapter` interface of `@kaoiro/agent-common` does not add a function 
 Initial implementation:
 
 - `wrapper/claude-code` (Claude adapter): `supports_attachments: true` / `supports_user_input_dialog: true` (unconditional). If the SDK has a condition in the future, please add it in this location.
-- `wrapper/codex` (Codex adapter): `supports_attachments: true, attachment_types: ["image"]` / `supports_user_input_dialog: true`. `"image"` converts the SDK to `local_image` path input in the adapter and does not leak the SDK term to the protocol. Claude does not advertise `attachment_types`, so there is no type limit as existing. The plan tier judgment is because the plan tier itself is not acquired because it wants to beHome from the `codex doctor` information of [codex-model-catalog](../specs/codex-model-catalog.md). When dialog is not available in Free/Go plan, it will be reHomeed to `user_input_modes`.
+- `wrapper/codex` (Codex adapter): `supports_attachments: true, attachment_types: ["image"]` / `supports_user_input_dialog: true`. `"image"` converts the SDK to `local_image` path input in the adapter and does not leak the SDK term to the protocol. Claude does not advertise `attachment_types`, so there is no type limit as existing. The plan tier judgment is true unconditional because the plan tier itself is not acquired because it wants to beHome from the `codex doctor` information of [codex-model-catalog](../specs/codex-model-catalog.md). When dialog is not available in Free/Go plan, it will be reHomeed to `user_input_modes`.
 
 ### F5 — deprecation / migration
 
@@ -97,7 +97,6 @@ The engine name judgment is prohibited at the time of review, and if the engine 
 
 Old open-question `file-upload-capability-publish` (2026-06-27 votes,
 urgency low) OQ
-[ADR-0025](0025-file-upload-wire-and-wrapper-rendering.md) F8 (A4-α)
 The following two proposals are given, "where the wrapper and client do not have the norm"
 It was undecided.
 
@@ -114,13 +113,14 @@ Home
 **2 layers intentionally for A-side concerns that “publish knowledge to two systems”
 It is important to be separated. The ability is
 *exact MIME
-([ADR-0025](0025-file-upload-wire-and-wrapper-rendering.md))
+[ADR-0025](0025-file-upload-wire-and-wrapper-rendering.md) F8 (A4-α)
+[ADR-0025](0025-file-upload-wire-and-wrapper-rendering.md)
 F8 A4-α). The client reads is a preliminary tip, not a final decision.
 There is no erosion that A wanted to avoid because there is no double norm.
 
 The current codex adapter advertises `attachment_types: ["image"]`,
 Composer is limited to attach and picker / paste / drop images.
-This field is used only. Now**non-image category is pre-ex d**。
+This field is used only. Now**non-image category is pre-ex d**.
 However, the UI can be SVG/BMP UI stage to allow `image/*`, and wrapper
 exact MIME allow-list can be rejected as `mime_denied` — the
 The "reject" path is not disappeared, but at the category level
@@ -147,8 +147,8 @@ Open-question is not tracked, and is treated as a supplement to F6 when required
 
 ### Neutral
 
-- viewer delivery automatically covers the ext allow-list of [ADR-0021] (0021-role-information-dis sure-policy.md). session capabilities
-- [ADR-0022] (0022-pending-permission-authoritative-source.md) authoritative source principles (`state_change.ext` to SoT) follow the same pattern in this ADR and do not supersede.
+- viewer delivery automatically covers [ADR-0021](0021-role-information-disclosure-policy.md) ext allow-list (ext is completely removed). session capabilities
+- The authoritative source principle of [ADR-0022](0022-pending-permission-authoritative-source.md) (`state_change.ext` to SoT) has the same pattern in this ADR and does not supersede.
 
 ## Alternatives Considered
 
@@ -161,8 +161,8 @@ Open-question is not tracked, and is treated as a supplement to F6 when required
 
 ## Related
 
-- Origin: [phase-14-codex-adapter](../plans/phase-14-codex-adapter.md) The engine name determining risk (design conversion of D4/D5) seen in actual operation verification.
-- [phase-15-wrapper-ux-parity](../plans/phase-15-wrapper-ux-parity.md).
-- engine ADR: [ADR-0022] (0022-pending-permission-authoritative-source.md) (authoritative source pattern attack), [ADR-0032] ( engine2-codex-adapter.md) (additional starting point of Codex adapter), [ADR-0033] (model3-permission-model-dual-axis.md) (precedent example of neutralization pattern by ext).
--modelmodels: [protocol](../specs/protocol.md) (`ext.session_capabilities` supplement), [model-model](../specs/model-model.md) (relationship with EngineAdapter).
--git issue: [#99](https://github.com/sakuraiyuta/kaoiro/issues/99) — lister information enhancement of list agents ( model/model/ effort). Review of the "directory" decision of phase-8. TheHandmade is expected to inherit the same principle (state stamp = SoT) because it is affinity with the session capability capability pattern of this ADR.
+- Origin: [phase-14-codex-adapter](../plans/phase-14-codex-adapter.md) engine name deter  risk (D4/D5 design conversion), which is seen in actual operation verification.
+- : [phase-15-wrapper-ux-parity](../plans/phase-15-wrapper-ux-parity.md).
+-Code ADR: [ADR-0022](0022-pending-permission-authoritative-source.md) (authoritative source pattern attack), [ADR-0032](0032-codex-adapter.md) (Codex adapter engine additional point), [ADR-0033](0033-permission-model-dual-axis.md) (precedent engine of ext).
+-Engine s: [protocol](../specs/protocol.md) (`ext.session_capabilities` supplement), [plugin-model](../specs/plugin-model.md) (relationship with EngineAdapter).
+- model issue: [#99](https://github.com/sakuraiyuta/kaoiro/issues/99) — lister information enhancement of list agents ( model / model / effort, etc.). Review of the "directory" decision of phase-8. TheHandmade is expected to inherit the same principle (state stamp = SoT) because it is affinity with the session capability capability pattern of this ADR.

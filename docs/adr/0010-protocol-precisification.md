@@ -17,7 +17,7 @@ Accepted
 
 ## Context
 
-[protocol](../specs/protocol.md) is fixed as v0,
+[protocol](../specs/protocol.md) is fixed as v0 only.
 `type`/`payload` type system, directional message type, and versioning policy are not confirmed
 open-question protocol-precisification, 2026-06-04
 
@@ -30,7 +30,7 @@ Considered Options:
 | C |See the confirmation and proceed with provisional|waiver of Phase 1.5|
 
 Judgment Material: The event specification of the SDK is confirmed
-[agent-sdk-events](../specs/agent-sdk-events.md) Phase 1.5 Tracer
+([agent-sdk-events](../specs/agent-sdk-events.md)) Phase 1.5 Tracer
 A real consumer (Clients client) in a varette, actually flowing wire
 `type: state_change` Envel s and Clients
 `snapshot`/`envelope` Events only (Phase 2/3 features still exist).
@@ -41,7 +41,7 @@ A real consumer (Clients client) in a varette, actually flowing wire
 Contact Us `log` / `permission_request` / `result`**Reservation**and
 payload adds to the implementation of the use phase.
 - 3 types of messages (wrapper →   `envelope`,
-`snapshot` / `envelope`)  
+`snapshot` / `envelope`)
 (Instruction and approval: Client →   → wrapper) will be added to Phase 3
 - Versioning Policy: The receiving side is**I re unknown keys**(forward compatibility). Add Key
 The order of the reservation type remains the same version. Change or delete existing keys
@@ -66,8 +66,8 @@ Leave undecided right, and try to repairJapanese termーHome at each phase.
 ### Neutral
 
 - Transport layer (Channels V2)
-([ADR。9](0009-client-transport.md)). This ADR version is
-App layer envel。.
+([ADR-0009](0009-client-transport.md)) This ADR version is
+App layer envel..
 
 ## Alternatives Considered
 

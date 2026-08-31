@@ -22,9 +22,9 @@ Initial Japanese is faster. On the other hand, if you look at the ex  release, y
 
 ## Decision
 
-- Prototype period is both document and UI**English**。
+- Prototype period is both document and UI**English**.
 - **English translation before beta release**Independent Milestone
-([plans/phase-5-i18n](../plans/phase-5-i18n.md)))
+([plans/phase-5-i18n](../plans/phase-5-i18n.md))
 at that time.
 
 ## Consequences
