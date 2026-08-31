@@ -1,21 +1,21 @@
 # docs
 
-kaoiro のドキュメント。各サブフォルダに README index がある。
+kaoiro documentation. Each subfolder has a README index.
 
-| フォルダ | 内容 |
+| Folder | Content |
 |--------|------|
-| [specs/](specs/) | 機能仕様(トピック別) |
-| [plans/](plans/) | フェーズ別の実装計画とステータス |
-| [open-questions/](open-questions/) | 未決の論点 |
-| [adr/](adr/) | アーキテクチャ決定記録 |
+| [specs/](specs/) | Feature specifications (by topic) |
+| [plans/](plans/) | Phase-based implementation plans and status |
+| [open-questions/](open-questions/) | Unresolved issues |
+| [adr/](adr/) | Architecture decision records |
 
-## はじめに読む
+## What to read first
 
-1. [specs/overview.md](specs/overview.md) — kaoiro とは
-2. [plans/README.md](plans/README.md) — 現在のフェーズと残作業
-3. [open-questions/README.md](open-questions/README.md) — 要決定事項
+1. [specs/overview.md](specs/overview.md) — What kaoiro is
+2. [plans/README.md](plans/README.md) — Current phases and remaining work
+3. [open-questions/README.md](open-questions/README.md) — Items requiring decisions
 
-## ADR 索引
+## ADR Index
 
 <!-- adr-index:start -->
 | # | Title | Status |
@@ -77,11 +77,11 @@ kaoiro のドキュメント。各サブフォルダに README index がある�
 | [0055](adr/0055-compaction-resume-and-lifecycle-log.md) | Automatic resume after compaction and retaining a session-lifecycle timeline | accepted |
 <!-- adr-index:end -->
 
-再生成: `scripts/build-adr-index.sh docs` (skill `my-docs-restructure`)。マーカー間は手で書き換えない。
+Regenerate: `scripts/build-adr-index.sh docs` (skill `my-docs-restructure`). Do not edit inside the markers manually.
 
-## 更新フロー
+## Update flow
 
-- 仕様変更 → `specs/<slug>.md` を編集、`status` を更新
-- 仕様の曖昧点 → `open-questions/<slug>.md` を追加
-- 重要な決定 → `adr/NNNN-<slug>.md` を作成、参照 spec を更新
-- フェーズ進捗 → `plans/phase-N-<slug>.md` の表を更新
+- Specification change → edit `specs/<slug>.md` and update `status`
+- Specification ambiguity → add `open-questions/<slug>.md`
+- Important decision → create `adr/NNNN-<slug>.md` and update the referenced spec
+- Phase progress → update the table in `plans/phase-N-<slug>.md`
