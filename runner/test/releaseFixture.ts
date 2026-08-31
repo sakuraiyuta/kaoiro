@@ -126,6 +126,7 @@ export interface ReleaseTreeOptions {
   /** Overrides the VERSION file's content — used for the id value-domain
    *  cases, where VERSION must NOT match the revision. */
   version?: string;
+  buildVersion?: string;
   dirty?: boolean;
   channel?: "dev" | "release";
   /** Makes the stub cli's `--version` report this instead of the tree's own
@@ -200,7 +201,7 @@ export function writeReleaseTree(
       revision,
       dirty,
       built_at: "2026-08-16T00:00:00.000Z",
-      version: "2026.9.0",
+      version: options.buildVersion ?? "2026.9.0",
       channel: options.channel ?? "dev",
     }),
   );

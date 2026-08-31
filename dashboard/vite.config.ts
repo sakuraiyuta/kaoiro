@@ -4,6 +4,8 @@ import { computeBuildIdentity } from "../scripts/build-identity.mjs";
 // `vite build` / `vite dev` read it identically.
 import { defineConfig } from "vitest/config";
 
+declare const process: { env: Record<string, string | undefined> };
+
 const BUILD_REVISION_RE = /^[0-9a-f]{40}$/;
 const BUILD_VERSION_RE = /^\d{4}\.(?:[1-9]|1[0-2])\.\d+$/;
 
@@ -14,13 +16,15 @@ const UNKNOWN_BUILD_IDENTITY = {
   dirty: false,
 } as const;
 
-function buildIdentity() {
+export function buildIdentity(
+  environment: Record<string, string | undefined> = process.env,
+) {
   const {
     KAOIRO_BUILD_VERSION,
     KAOIRO_BUILD_CHANNEL,
     KAOIRO_BUILD_REVISION,
     KAOIRO_BUILD_DIRTY,
-  } = process.env;
+  } = environment;
 
   const explicitValues = [
     KAOIRO_BUILD_VERSION,
