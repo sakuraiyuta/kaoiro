@@ -1,5 +1,5 @@
 ---
-title: ファイルアップロードの wire と wrapper-internal レンダリング
+title: Wire and wrapper-in  rendering of file upload
 status: accepted
 date: 2026-06-27
 opened: 2026-06-27
@@ -9,7 +9,7 @@ related_specs: [file-upload, protocol, non-goals]
 related_adrs: [9, 15, 20, 21, 34]
 ---
 
-# ADR-0025 — ファイルアップロードの wire と wrapper-internal レンダリング
+# ADR-0025 — file upload wire and wrapper-in  rendering
 
 ## Status
 
@@ -17,229 +17,229 @@ Accepted
 
 ## Context
 
-[ADR-0020](0020-dashboard-battery-included-client.md)(battery-included)が
-許容した「新たな公開プロトコル面の追加」枠で、 ダッシュボードからの
-ファイル添付(画像 / テキスト / PDF / Office)を Claude Code に渡せる機構を
-導入する。 #52 issue 本文は 4 つの意思決定点を残しており、
-my-spec-elicitation で 14 件の F 決定として確定した。
+[ADR-0020](0020-dashboard-battery-included-client.md)
+Adding new public protocol surfaces from the dashboard
+File attachment (image / text / PDF / Office) to Claude Code
+Contact Us #52 issue The body has four decisions
+14 F decisions in my-spec-elicitation.
 
-設計の中心問:
+Design Center:
 
-1. レンダリング(SDK の content block 選択・ Office 変換)の責任を
-   どの層に置くか?
-2. ファイル bytes をどのように client → server → wrapper に運ぶか?
-3. wrapper はバイト列をどこに保持するか?
-4. ファイルの上限・ MIME 規範 / 弾く場所 / reject 通知経路は?
-5. cancel / interrupt のセマンティクスは?
+1. Responsibilities for rendering (S  content block Office and Office conversion)
+Which layer can I apply?
+2. How to transport files bytes to client → server → wrapper?
+3. Where do wrappers hold byte columns?
+4. What is the limit of the file / MIME norm / where to play / reject notification path?
+5. What is semantics for cancel / interrupt?
 
 ## Decision
 
-### F1: rendering は wrapper-internal
+### F1: rendering wrapper-in 
 
-client / server は type-agnostic、 protocol に Anthropic API 用語
-(image_block / document_block / text_block 等)を出さない。 wrapper が
-SDK と active model を知る唯一の層であり、 ここでレンダリング種別を決める。
+client / server is type-agnostic, protocol to Anthropic API terms
+(image block / document block / text block, etc.) wrapper
+The only layer to know the SDK and the active model.
 
 rejected:
 
-| | 理由 |
+| |Reason|
 |--|--|
-| client がレンダリング種別を決める | 「状態導出は wrapper、 server は agent 非依存」MUST(architecture.md)に反する。 client にモデル知識が必要 |
-| server がレンダリングを決める | server agent 非依存原則違反 |
+|client determines rendering type|"statederive is against wrapper, server is not agent" MUST(architecture.md). client needs model knowledge|
+|server determines rendering|agent non-dependent principle violation|
 
-### F2: 転送 wire = (c)+(d) ハイブリッド
+### F2: Transfer wire = (c)+(d) Hy d
 
-`attach_open` / `attach_chunk`(binary)/ `attach_close` / `instruction` 拡張
-(`attachment_ids` 参照)の 4 op 構成。 wire 詳細は
+`attach_open` / `attach_chunk` (binary) / `attach_close` / `instruction` expansion
+4  configuration (see `attachment_ids`). wire
 [file-upload](../specs/file-upload.md) / [protocol](../specs/protocol.md)。
 
 rejected:
 
-| 案 | 理由 |
+||Reason|
 |--|--|
-| (a) `instruction` 同梱 | text-only モデルが汚れる / 1 フレーム上限到達 / リトライ粒度粗い / 第三者クライアントへの間口狭い |
-| (b) `instruction_with_attachments` 新 event 同梱 | (a) と同じ frame サイズ問題、 メリット小 |
-| (d) 単独 binary frame 直送 | id 参照なしでは instruction との突合が脆い |
-| 別 socket / HTTP POST upload | ADR-0009 一本化を侵食 |
+| (a) `instruction`|text-only The model gets dirty / 1 frame maximum reach / Retry grain size coarse / narrow gap to a third party client|
+| (b) `instruction_with_attachments`New event included|(a) Same frame size problem, Merit small|
+|(d) binary|id without reference instructionile|
+|socket / HTTP POST upload|ADRHome9 erosion|
 
-### F3: wrapper の assembly buffer = 純メモリ完結
+### F3: wrapper assembly buffer = full memory
 
-`pending_uploads` は wrapper 内のメモリのみ。 ディスク不到達。
+`pending_uploads` is the only memory in the wrapper. Disk unattended.
 
-rejected: spill-to-temp-FS / 常時 temp FS — MVP 不要、 ディスク到達原則違反。
-OQ5 で将来余地。
+rejected: spill-to-temp-FS / constant temp FS — MVP no longer required, non-disk Principles violation.
+OQ5
 
-#### #108 追補 (2026-07-23、マスター承認): Codex `local_image` 限定例外
+#### #108 Supplement (2026 -23, Master approval): Codex`local_image`s
 
-Codex SDK 0.144.1 の画像入力は bytes / base64 ではなく path を受け取る
-`local_image` block だけである。このため Codex wrapper に限り、**画像のみ**を
-instruction 受理後に wrapper-private temp directory へ materialize して SDK に渡す。
-directory は `mkdtemp` (0700)、file は 0600、prefix に `agent_id` を含め、自分の
-orphan だけを次回起動時に sweep する。`image/*` の形式細別 allow-list は持たず、
-SDK が不受理なら既存 turn error 経路で表面化する。上限は F4 の一律 128 MB をその
-まま適用し、種別別 cap を導入しない。
+Codex SDK 0.144.1
+`local_image` block codex wrapper**Image only**Home
+wrapper-wrapper temp directory
+directory includes `mkdtemp` (0700), file is 0600, prefix is `agent_id`,
+Start only orphan at the next startup. `image/*` does not have allow-list,
+If the SDK is unreceptable, it will be superficial by the existing turn error path. Maximum F4 is 128 MB
+Do not apply any type of cap.
 
-成功・失敗・interrupt を含む turn 完了時に file と directory を必ず削除する。
-cleanup 失敗は stderr warn で loud に残し、次回起動時の prefix-scoped sweep で回収する。
-F11 の interrupt drop semantics にはこの temp file cleanup も含む。これは SDK が
-path 入力しか受理しないこと、会話内容自体は SDK rollout により既に disk 永続される
-ことを踏まえた限定的な受容判断であり、マスターが 2026-07-23 に承認した。
+Always delete file and directory when the turn is complete, including success, failure, and interrupt.
+The cleanup failure remains in the loud with the stderr warn, and is recovered with the next startup prefix-scoped failure.
+This temp file cleanup is included in the F11 interrupt drop semantics. SDK
+path Only accepts the input, the content of the conversation itself is already disk persisted by the SDK rollout
+This is a limited acceptance decision based on that, and the master approved 2026。-23.
 
-### F4: 個別ファイル上限 = 一律 128 MB
+### F4: Maximum Individual File = 128 MB
 
-UI スクショ・ デザインデータ・ 大物論文等の多種多様な入力を「リソース
-ぎりぎりまで」受け止める。 SDK の硬い上限とのギャップは F10 (fit-to-SDK)
-が吸収する。
+"Resources" various inputs such as UI, design data, large articles, etc.
+"Receive" to the girth. F10 (fit-to-S )
+is absorbed.
 
-rejected: 種別ごと上限(image 5MB / PDF 32MB / text 1MB / Office 10MB)—
-API 上限の事務的写しでユーザ意図と不整合。
+rejected: maximum per type (image 5MB / PDF 32MB / text 1MB / Office 10MB) —
+Unmatched with user intentions in administrative copy of the API limit.
 
-### F5: 1 instruction 合計サイズ cap = 撤廃
+### F5: 1 instruction Total size cap = removal
 
-wrapper の fit-to-SDK と RSS が事実上の上限。
+wrapper fit-to-S  and RSS are virtually the upper limit.
 
-rejected: 512 MB 等の数値 cap — F8 (A4-α)と矛盾、 wrapper 一元化を侵食。
+rejected: Inconsistent with 512 MB, etc. cap — F8 (A4-α), ignore wrapper centralization.
 
-### F6: 点数 / in-flight cap
+### F6: Point number / in-flight cap
 
-- 添付 10 / instruction
+- Attach 10 / instruction
 - in-flight 20 / wrapper
 
-rejected: 無制限 — DoS 防衛と UX 上の妥当な範囲を設けない。
+rejected: unlimited — DoS defense and no valid range on UX.
 
-### F7: MIME 許可リスト
+### F7: MIME Permit List
 
-詳細は [file-upload spec](../specs/file-upload.md) を参照。
+See [file-upload ](../specs/file-upload.md) for details.
 
-rejected: 圧縮(zip/tar)/ 旧 Office(.doc/.xls/.ppt)/ 動画音声 /
-実行ファイル系 — 攻撃面増 / SDK 非対応 / 用途なし。
+rejected: zip/tar/ old Office(.doc/.xls/.ppt)
+execution file system — attack surface increase / SDK non-compliant / no application.
 
-### F8: 弾く場所
+### F8: Playing place
 
-| 層 | 役割 |
+||Function|
 |--|--|
-| client | 規範を持たない(任意で UX hint) |
-| server | transport DoS 防衛(frame 8 MB + in-flight cap 20 + operator 認可) |
-| wrapper | 規範最終判定(F4-F7)+ fit-to-SDK |
+| client |UX hint|
+| server |Transport DoS Defending (frame 8 MB + in-flight cap 20 operator + authorization)|
+| wrapper |Final judgment (F4-F7) + fit-to-S |
 
-rejected: client 側 pre-block(`ext.capabilities` publish)— wrapper 知識
-との重複、 wrapper 一元化を侵食。 OQ2 で将来余地。
+rejected: client-side pre-block(`ext.capabilities` publish)— wrapper knowledge
+with overlapping, wrapper centralization. OQ2
 
-### F9: reject 経路 = 新 envelope type 2 個
+### F9: reject route = new envel  type 2 pieces
 
 - `attach_rejected { upload_id, reason, detail? }`
 - `instruction_rejected { attachment_ids?, reason, detail? }`
 
-reason enum は [file-upload spec](../specs/file-upload.md) を正本とする。
-両 envelope は operator 限定配信
+../specs/file-upload.md
+Both envel s are only available
 ([ADR-0021](0021-role-information-disclosure-policy.md))。
 
 rejected:
 
-| | 理由 |
+| |Reason|
 |--|--|
-| 既存 `result.is_error` に乗せる | 「ターン完了時のエラー」の意味論を保つため流用しない |
-| push 同期 reply で返す | 現状 kaoiro は fire-and-forget 主体、 server 素通し設計と整合しない |
+|Existing`result.is_error`Contact Us|Do not use it to keep the meaning of "error at completion of turns"|
+|push reply with reply|current kaoiro does not match fire-and-forget   with server|
 
-### F10: wrapper の fit-to-SDK 責任
+### F10: wrapper fit-to-S  responsibility
 
-128 MB の protocol 上限と SDK の硬い上限(image 10 MB / PDF 32 MB /
-**リクエスト合計 32 MB がハード上限**、 Phase 7 Stage A spike 結果)の
-ギャップを吸収する best-effort:
+128 MB protocol upper and hard upper limit of the SDK (image 10 MB / PDF 32 MB /
+**32 MB hard limit**Phase 7
+best-effort to absorb gaps:
 
-- 画像 downsize: **sharp**(`ImageDownsizer` 抽象経由、 ADR-0018 対応時に
-  sharp-wasm32 / jimp に差替え可能)
+- Image downsize:**sharp**ADR-0018
+sharp-wasm32
 - PDF page-extract: **pdf-lib**(pure JS)
-- text truncate: 自前 + `@anthropic-ai/sdk` の `countTokens` で context
-  window 検証
+- text truncate: `countTokens`
+window validation
 - Office → text: **officeparser**(pure JS、 docx/xlsx/pptx 1 lib)、
-  markitdown CLI は Q10([file-upload-markitdown-fallback](../open-questions/file-upload-markitdown-fallback.md))で
-  fallback 余地
+markitdown CLI is Q10 ([file-upload-markitdown-fallback](../open-questions/file-upload-markitdown-fallback.md))
+fallback room
 
-合計 32 MB 超は `instruction_rejected{reason="total_request_over"}` で
-拒否。 個別不能は F9 の専用 reason(`unfittable_image` / `unfittable_pdf` /
-`text_too_large`)で reject。 表詳細は
-[file-upload](../specs/file-upload.md) を参照。
+Total 32 MB in `instruction_rejected{reason="total_request_over"}`
+Rejected. F9(`unfittable_image` / `unfittable_pdf` /
+`text_too_large`) Details
+[file-upload](../specs/file-upload.md)
 
->32 MB 単独ファイルの実用は Files API 経路(`file_id` 参照)で実現可能
-(1 file 500 MB まで)。 採用判断は Q9
+>32 MB single file can be used with the Files API path (see `file_id`)
+(1 file up to 500 MB). Adopt Judge Q9
 ([file-upload-files-api-route](../open-questions/file-upload-files-api-route.md))。
 
-rejected: 「SDK が reject したらそのまま返す」のみ — 128 MB cap と SDK
-小上限のギャップで UX 破綻。
+rejected: "If S  is rejected, it will be returned as it is" — 128 MB cap and SDK
+UX collapse with a small-end gap.
 
-### F11: `interrupt` の意味拡張
+### F11: `interrupt`Meaning extension
 
-既存 `interrupt` が次も担う:
+`interrupt`
 
-- 当該 agent の pending_uploads 全 drop
-- 直前 instruction が SDK 内処理中なら staged attachment bytes drop
-- drop した upload_id ごとに `attach_rejected{reason="interrupted"}` を発火
-- turn 進行中でなくとも uploads があれば作動
-- uploads / staged が無ければ従来通り(前方互換維持)
+- pending uploads of the agent
+- Last minute instruction is in the SDK.
+- `attach_rejected{reason="interrupted"}` is fired per drop upload id
+- turn If the uploads are not in progress
+- uploads / staged
 
-rejected: 別 op `attach_cancel` 追加 — `interrupt` 拡張で必要なくなった。
+rejected: Add `attach_cancel` to `interrupt`.
 
-### F12: UI モデル = 遅延 upload
+### F12: UI model = delay upload
 
-protocol 不変の client 規範。 詳細は file-upload spec を参照。
+protocol Unchanged client norm. See file-upload  for details.
 
-rejected: 即時 upload(picker 選択 = 即転送)— 取り消しでの帯域浪費、
-TTL 依存。
+rejected: instant upload(picker upload = instant transfer)—band wasting on cancellation,
+TTL dependency.
 
-### F13: TTL = 5 分
+### F13: TTL = 5 minutes
 
-`pending_uploads` の未参照・ 不完全エントリを 5 分で破棄。 explicit cancel
-は F11、 TTL は fail-safe。
+`pending_uploads` is destroyed in 5 minutes. Close
+F11, TTL fail-safe.
 
-rejected: TTL なし — メモリ leak リスク。
+rejected: TTL None — memory leak risk.
 
-### F14: チャンクサイズ・並列度 = 推奨値のみ
+### F14: Chunk size/parallelity = Recommended value only
 
-MVP: 1 chunk 64 KB、 並列度 client 任意。 「間口を広げる」路線で MUST に
-しない。
+MVP: 1 chunk 64 KB, Parallelity client optional. To MUST on a route that extends the mouth
+not.
 
 ## Consequences
 
 ### Positive
 
-- ダッシュボードからの添付が dogfooding 可能になる(ADR-0020 の意図実現)。
-- protocol が wire 中立(API 用語非依存)で第三者クライアント実装の間口が広い。
-- server 素通し原則と Channels 一本化を維持
+- Dashboard attachments can be dogfooding (ADR-0020).
+- protocol is wire neutral (API terminology non-dependent) and the third-party client implementation is wide.
+- Server Basic Principles and Channels
   ([ADR-0009](0009-client-transport.md) / ADR-0020 F3)。
-- 失敗時の reject が新 envelope で明示され、 既存 result のセマンティクスを汚さない。
-- 128 MB の寛容な上限で多種多様なファイル(スクショ / デザイン / 大物論文)に対応。
-- wrapper を per-engine 翻訳層とする「kaoiro の MUST」を強化(architecture.md)。
+- The rejection at failure is expressed in the new envel  and does not stain the semantics of the existing result.
+- Supports a wide variety of files (sJapanese term / design / large paper) with a tolerance of 128 MB.
+- Enhanced "kaoiro MUST" as per-arch translation layer.
 
 ### Negative
 
-- 公開プロトコル面が 4 op + envelope 2 種類増える(ADR-0020 が許容)。
-- wrapper の責任が増える(pending_uploads / fit-to-SDK / Office 変換)。
-- 実装着手前に Phoenix V2 binary frame と phoenix.js ArrayBuffer push API の
-  spike が必須(plan Stage A 参照)。
+- Two types of public protocols (ADR-0020 is acceptable)
+- More wrapper responsibilities (pending uploads / fit-to-S Office / Office conversion).
+- binary V2 binary frame and phoenix.js Array push push API
+spike (see Plan Stage A).
 
 ### Neutral
 
-- 大ファイル送信は client の chunker と server frame 上限調整(8 MB 既定)に依存。
-- fit-to-SDK の細部(downsize アルゴリズム / page-extract 戦略)は実装で決まる。
+- Large file transmission depends on client chunker and server frame upper limit adjustment (8 MB default).
+- The details of fit-to-S  (downsize algorithm / page-extract strategy) will be implemented.
 
 ## Alternatives Considered
 
-詳細は各 F の rejected 行に集約。 主な分岐:
+Details are aggregated in each F rejected line. Main Features:
 
-- レンダリング層分散 vs 集中 — F1 で集中(wrapper)を採用
-- transport 設計(同梱 / 分離 / バイナリ)— F2 で hybrid 採用
-- バッファ置き場(memory / FS)— F3 でメモリ採用
-- 上限ポリシー(種別ごと / 一律)— F4 で一律採用、 F10 で fit-to-SDK 補完
-- 拒否経路(既存 result 流用 / 新 envelope)— F9 で新 envelope 採用
-- cancel UX(別 op / interrupt 拡張)— F11 で拡張採用
+- Rendering Layer Dispersion vs Concentration — adopt wrapper
+- transport design (containing / separation / binary) — hybrid Adopt in F2
+- buffer place (memory / FS) — memory adopt with F3
+- High-end policy (per type / one unit) — A flat adopt in F4, fit-to-S  completion in F10
+- refusal route (existing result flow / new envel ) — new envel  Adopt in F9
+- cancel UX (ex  op / interrupt extension) — extended adopt with F11
 
 ## Followups
 
-| OQ | スラグ |
+| OQ |Slag|
 |--|--|
 | Q1 | [file-upload-fs-read-fallback](../open-questions/file-upload-fs-read-fallback.md) |
-| Q2 | 解決済 — [ADR-0034](0034-session-capabilities-advertisement.md) F7 |
+| Q2 |—ed — [ADR-0034] ( 4-session-capabilities-advertisement.md) F7|
 | Q3 | [file-upload-json-fallback](../open-questions/file-upload-json-fallback.md) |
 | Q5 | [file-upload-spill-storage](../open-questions/file-upload-spill-storage.md) |
 | Q6 | [file-upload-exif-stripping](../open-questions/file-upload-exif-stripping.md) |
@@ -247,21 +247,21 @@ MVP: 1 chunk 64 KB、 並列度 client 任意。 「間口を広げる」路線�
 | Q9 | [file-upload-files-api-route](../open-questions/file-upload-files-api-route.md) |
 | Q10 | [file-upload-markitdown-fallback](../open-questions/file-upload-markitdown-fallback.md) |
 
-Phase 7 Stage A spike 完了(plan の「Spike 結果」セクション参照): Phoenix
-V2 binary serializer 仕様 / phoenix.js ArrayBuffer push API 確証、 Claude
-API 上限値確定(image 10 MB / PDF 32 MB / リクエスト 32 MB)、 fit-to-SDK
-ライブラリ採用確定(sharp / pdf-lib / officeparser / Anthropic SDK
-`countTokens`)。 `max_frame_size` は既定 `:infinity` のため運用設定で
-8 MB 程度に明示する必要あり(spec 反映済)。
+Phase 7 Stage A spike completed (see “Resultike Result” section in plan): Phase
+V2 binary serializer specification / phoenix.js Array push push API
+API limit (image 10 MB / PDF 32 MB / request 32 MB), fit-to-S 
+pdf-lib / officeparser / Anthropic SDK
+`countTokens`. `max_frame_size` is the default `:infinity`.
+8 MB required (spec reflected).
 
 ## Related
 
-- specs: [file-upload](../specs/file-upload.md)(本仕様の集約)、
-  [protocol](../specs/protocol.md)(wire 詳細)、
-  [non-goals](../specs/non-goals.md)(AV スキャン非対応)
-- 関連 ADR:
-  [0009](0009-client-transport.md)(Channels 一本化、 F2 で維持)、
-  [0015](0015-protocol-version-stamping.md)(version 規約、 追補は version 据え置き)、
-  [0020](0020-dashboard-battery-included-client.md)(本決定の上位枠 F2 / F3)、
-  [0021](0021-role-information-disclosure-policy.md)(配信ポリシ、 attach_* は operator 限定)
-- 由来: my-spec-elicitation(#52)
+-files: [file-upload](../specs/file-upload.md),
+[protocol](../specs/protocol.md)(wire details),
+[non-goals](../specs/non-goals.md)
+- ADR
+[0009] (0009-client-transport.md) (Channels single, maintained in F2),
+[0015](0015-protocol-version-stamping.md)
+[0020](0020-dashboard-battery-included-client.md)
+[0021](0021-role-information-dis sure-policy.md)
+- Origin: my-spec-elicitation(#52)
