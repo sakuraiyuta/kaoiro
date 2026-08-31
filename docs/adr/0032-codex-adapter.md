@@ -1,5 +1,5 @@
 ---
-title: Additional codex adapter and materialise of wrapper multi-package structure
+title: Codex アダプタ追加と wrapper マルチパッケージ構造の materialise
 status: accepted
 date: 2026-07-10
 opened: 2026-06-26
@@ -9,77 +9,77 @@ related_specs: [plugin-model, protocol, architecture, personas, codex-sdk-events
 related_adrs: [17, 22, 23, 33, 34, 35, 37, 38, 39, 40]
 ---
 
-# ADR-0032 — Materialise of codex adapter and wrapper multipackage structure
+# ADR-0032 — Codex アダプタ追加と wrapper マルチパッケージ構造の materialise
 
 ## Status
 
-Accepted (2 steps from [phase-13-wrapper-multipackage-restructure](../plans/phase-13-wrapper-multipackage-restructure.md) to [phase-14-codex-adapter](../plans/phase-14-codex-adapter.md)).
+Accepted (実装は [phase-13-wrapper-multipackage-restructure](../plans/phase-13-wrapper-multipackage-restructure.md) → [phase-14-codex-adapter](../plans/phase-14-codex-adapter.md) の 2 段階)。
 
 ## Context
 
-The wrapper is now a Claude implementation that imports `@anthropic-ai/claude-agent-sdk` directly in a single `@kaoiro/wrapper` package (`wrapper/src/host.ts:7`). OpenAI codex CLI (`@openai/codex-sdk` 0.144.1, Node ≥ 18)
+wrapper は現在 `@kaoiro/wrapper` 単一パッケージで `@anthropic-ai/claude-agent-sdk` を直接 import する Claude 専用の実装 (`wrapper/src/host.ts:7`)。ここに OpenAI の Codex CLI (`@openai/codex-sdk` 0.144.1、Node ≥ 18) を第二エンジンとして追加したい。
 
-There were already three additional engine trays:
+エンジン追加の受け皿は既に 3 つ揃っていた:
 
-- [ADR-0017](0017-wrapper-multientity-packages.md) is set to accept pnpm workspace for `wrapper/core` + AI agent common layer + concrete adapter.
-- [ADR-0023](0023-host-runner-architecture.md) D3 indicates "`@kaoiro/wrapper`'s rename will be forwarded before the codex version is added."
-- open-questions/spawn- -ionion (completely merged and removed in this ADR) added `SpawnRequest`/`SpawnMessage` `engine`, wrapper launcher engine → wrapper solution, Launch engine engine select, model/effort/persona engine dependencies, and track checklists have already been developed. This ADR transfers its decision to execution.
+- [ADR-0017](0017-wrapper-multientity-packages.md) が `wrapper/core` + AI エージェント共通層 + 具体アダプタの 3 層 pnpm ワークスペース化を Accepted で planning 済 (「主要機能が出揃ってから」と着手延期)。
+- [ADR-0023](0023-host-runner-architecture.md) D3 が「`@kaoiro/wrapper` のリネームは codex 版追加時まで先送り」と明記。
+- open-questions/spawn-engine-selection (2026-06-26 opened、本 ADR に完全マージし削除) が `SpawnRequest`/`SpawnMessage` に `engine` 追加、runner launcher の engine → wrapper 解決、LaunchDialog の engine セレクト、model/effort/persona の engine 依存、の配線チェックリストを既に整備していた。本 ADR はその決定を実行に移す。
 
-On the other hand, go to phase-12 and the postponement condition of ADR-0017 "The main function is complete" is filled (dashboard / persona pack / broker / subagent task /   all operation). Codex A natural window that performs three-layer rethe relevant entryation, rename, and the relevant entry select wiring at once.
+一方 phase-12 まで進み ADR-0017 の延期条件「主要機能が出揃ってから」は満たされた (dashboard / persona pack / permission broker / subagent タスク / runner 全て稼働)。Codex 追加が発生した本タイミングが 3 層再編・リネーム・engine セレクト配線を一括で行う自然な窓。
 
-Corres ence with the Claude Agent SDK for Codex SDK (as of 2026 , `@openai/codex-sdk` 0.144.1 / `@anthropic-ai/claude-agent-sdk` 0.3.162):
+Codex SDK の Claude Agent SDK との対応 (2026-07 時点、`@openai/codex-sdk` 0.144.1 / `@anthropic-ai/claude-agent-sdk` 0.3.162):
 
-|| Claude Agent SDK | Codex SDK |
+| 概念 | Claude Agent SDK | Codex SDK |
 |---|---|---|
-|Main API| `query()`async generator| `Codex().startThread()` → `thread.run()` / `thread.runStreamed()` (**New spawn with every turn `codex exec`**After the second turn`exec resume <id>`) |
+| メイン API | `query()` async generator (常駐 session) | `Codex().startThread()` → `thread.run()` / `thread.runStreamed()` (**毎ターン `codex exec` を新規 spawn**、2 ターン目以降は `exec resume <id>`) |
 | Resume | `resume: sessionId` | `codex.resumeThread(id)` |
-|Pets allowed| `permissionMode`(default/acceptEdits/bypassPermissions/plan/dontAsk/auto)| `sandbox_mode` × `approval_policy`Biaxial. approval policy`never`forced to**No path to caller to request approval** ([ADR-0033](0033-permission-model-dual-axis.md) Context) |
-| Model | `claude-*` | `gpt-5.6-sol`(default) /`terra` / `luna` / `gpt-5.5` / `gpt-5.4(-mini)`etc. (Catalog is updated on server side, without enumeration API)|
-|| `ANTHROPIC_API_KEY` / Claude subscription | `CODEX_API_KEY` env / ChatGPT login (`~/.codex/auth.json`).`OPENAI_API_KEY`is not used for execution authentication in 0.144 (for pipe to login)|
-|System prompt| `systemPrompt.append` | config `developer_instructions`AGENTS.md (append)|
-|Tools| `tool()` + Zod, in-process MCP | **No dynamicTools in the TS SDK**Note config override`mcp_servers.*`) in per-run|
-| Streaming | `SDKMessage` (system/assistant/result/stream_event) | `ThreadEvent`(thread.*/turn.*/item.*)| [codex-sdk-events](../specs/codex-sdk-events.md)
-| Hooks |PreToolUse / CwdChanged etc.|v0.116 introduced exes (unex  on exec/S )|
+| 権限 | `permissionMode` 単軸 (default/acceptEdits/bypassPermissions/plan/dontAsk/auto) | `sandbox_mode` × `approval_policy` 二軸。ただし exec 経由は approval_policy が `never` に強制され、**caller へ承認要求を返す経路なし** ([ADR-0033](0033-permission-model-dual-axis.md) Context) |
+| Model | `claude-*` | `gpt-5.6-sol` (既定) / `terra` / `luna` / `gpt-5.5` / `gpt-5.4(-mini)` 等 (カタログは server 側で更新、列挙 API なし) |
+| 認証 | `ANTHROPIC_API_KEY` / Claude subscription | `CODEX_API_KEY` env / ChatGPT login (`~/.codex/auth.json`)。`OPENAI_API_KEY` は 0.144 では実行時認証に使われない (login への pipe 専用) |
+| System prompt 相当 | `systemPrompt.append` | config `developer_instructions` (developer role メッセージとして append、実証済み) / AGENTS.md (append) |
+| ツール | `tool()` + Zod, in-process MCP | **TS SDK に dynamicTools は無い**。外部 MCP server を config override (`mcp_servers.*`) で per-run 登録可 |
+| Streaming | `SDKMessage` (system/assistant/result/stream_event) | `ThreadEvent` (thread.*/turn.*/item.*)、詳細は [codex-sdk-events](../specs/codex-sdk-events.md) |
+| Hooks | PreToolUse / CwdChanged 等 | v0.116 で hooks 導入 (exec/SDK 面には未露出) |
 
-(2026 -10 Added: `@openai/codex-sdk` 0.144.1 We have revised F5/F6. )
+(2026-07-10 追記: 上表は `@openai/codex-sdk` 0.144.1 の型定義・実装・同梱バイナリ、および upstream `rust-v0.144.1` ソースで検証済み。起草時の想定から dynamicTools 不在・承認フロー不可の 2 点が覆り、F5/F6 を改訂した。)
 
 ## Decision
 
-### F1 — Split wrapper into 4 packages (ADR-0017 material)
+### F1 — wrapper を 4 パッケージに分割 (ADR-0017 materialise)
 
-The wrapper directory is pnpm workspace and is divided into the following four packages:
+wrapper ディレクトリを pnpm ワークスペース化し、次の 4 パッケージに分ける:
 
-- **`wrapper/core` (`@kaoiro/wrapper-core`)**— Entity Independence. transport / envelope  outer frame +version / identity / persona / connection / state reporting lifecycle / config / CLI frame (`cli.ts` engine non-dependent part).
-- **`wrapper/agent-common` (`@kaoiro/agent-common`)**— AI Agent Common Layer. state machine (`state.ts`), `EngineAdapter` interface, common tool description layer (F , permission broker, instruction conversion, common event type. Claude / Codex
-- **`wrapper/claude-code` (`@kaoiro/claude-code`)**Claude Code CLI Transplant and rename existing `wrapper/src/host.ts`/`wrapper/src/adapter.ts`. Claude (fast mode / CwdChanged   / native AskUserFeaturesstion / permission single axis → biaxial image table) is closed here.
-- **`wrapper/codex` (`@kaoiro/codex`)**— Codex specific adapter (new).
+- **`wrapper/core` (`@kaoiro/wrapper-core`)** — エンティティ非依存。transport / エンベロープ外枠+version / 同一性・persona / 接続・状態報告ライフサイクル / config / CLI 枠 (`cli.ts` のエンジン非依存部分)。
+- **`wrapper/agent-common` (`@kaoiro/agent-common`)** — AI エージェント共通層。状態機械 (`state.ts`)、`EngineAdapter` interface、共通 Tool 記述層 (F5)、permission broker、instruction 変換、共通イベント型。Claude / Codex が共有。
+- **`wrapper/claude-code` (`@kaoiro/claude-code`)** — Claude Code CLI 具体アダプタ。既存の `wrapper/src/host.ts` / `wrapper/src/adapter.ts` を移植・改名。Claude 独自機能 (fast mode / CwdChanged hook / native AskUserQuestion / permission 単軸 → 二軸写像 table) はここに閉じる。
+- **`wrapper/codex` (`@kaoiro/codex`)** — Codex 具体アダプタ (新設)。
 
-Current `@kaoiro/wrapper` renames to `@kaoiro/claude-code` ([ADR-0023](0023-host-runner-architecture.md) D3 declarationexecution). As an existing `wrapper/src/adapter.ts` predetermined engine boundary, it is promoted as `EngineAdapter` interface of `wrapper/agent-common`, and the Claude implementation is transferred to the Claude adapter package.
+現 `@kaoiro/wrapper` の名称は `@kaoiro/claude-code` にリネームする ([ADR-0023](0023-host-runner-architecture.md) D3 の宣言実行)。既存の `wrapper/src/adapter.ts` が事実上のエンジン境界を先取りしているため、これを `wrapper/agent-common` の `EngineAdapter` interface として昇格させ、Claude 実装は Claude アダプタパッケージに移す。
 
-### F2 — extended to two-axis permission model
+### F2 — 権限モデル共通抽象を二軸へ拡張
 
-[ADR-0033](0033-permission-model-dual-axis.md) Added `sandbox` (read-only/workspace-write/danger-full-access) and `approval` (untrusted/on-request/granular/never) fields to `state_change.ext.pending_permission`. UI (Launchdisplay / AgentDetail) The `wrapper/claude-code` adapter holds the image table to the two-axis. ADR-0033
+[ADR-0033](0033-permission-model-dual-axis.md) で確定。`state_change.ext.pending_permission` に `sandbox` (read-only/workspace-write/danger-full-access) と `approval` (untrusted/on-request/granular/never) の 2 フィールドを追加。UI (LaunchDialog / AgentDetail) も二軸表示。Claude 4 mode → 二軸への写像 table は `wrapper/claude-code` アダプタが保持。詳細は ADR-0033。
 
-### F3 — persona is not engine
+### F3 — persona は engine 非依存で共有
 
-`personality.md` and stand-up (7 state expressions) are shared with both engines. In Claude, injected to the SDK `systemPrompt.append` ([ADR-0029](0026-persona-personality-injection.md) via [ADR-0026](0029-persona-server-sot-and-pack-distribution.md)), and in Codex, config key**`developer_instructions`**Pass to (2026 -10:: Demonstrate the actual behavior appended to base instructions as a developer role message in the rollout file. base instructions****`instructions` / `model_instructions_file` engine separate persona pack (`kuroe-claude` / `kuroe-codex` etc.) and `personality.md` engine separate sections are not available for the first time.
+`personality.md` と 立ち絵 (7 状態表情) を両 engine で共有する。Claude では従来通り SDK `systemPrompt.append` に注入 ([ADR-0026](0026-persona-personality-injection.md) 経由 [ADR-0029](0029-persona-server-sot-and-pack-distribution.md))、Codex では config key **`developer_instructions`** に渡す (2026-07-10 確定: developer role メッセージとして base instructions に append される実挙動を rollout ファイルで実証。base instructions を**置換**してしまう `instructions` / `model_instructions_file` は使わない)。engine 別 persona pack (`kuroe-claude` / `kuroe-codex` 等) や `personality.md` 内の engine 別セクションは初回では持たない。
 
-Codex has a built-in `personality` config (none/friendly/pragmatic, exec default pragmatic) that can interfere with the persona tone. Q1 Check the `none` specification when validating.
+なお Codex には built-in の `personality` config (none/friendly/pragmatic、exec 既定 pragmatic) があり persona 口調と干渉し得る。Q1 検証時に `none` 指定の要否を確認する。
 
-Codex-side injections have been verified by 2026 20-11 (formerly Q1 close): kuroe (master-called, secretary-tuning) and ao (first-person, “my”, normal-concise) are clearly differentiated on Codex adapter, and `developer_instructions` injections are faithful to persona separately. The built with built-in `personality` config (exec default pragmatic) was not observation, and the `none` specification was unnecessary.
+Codex 側 injection の実効性 (口調・態度の再現度) は 2026-07-11 の実機検証で確認済み (旧 Q1 close): kuroe (「マスター」呼び・秘書口調) と ao (一人称「わたし」・常体・簡潔) が Codex adapter 上でも明確に差別化され、`developer_instructions` 注入がペルソナ別に忠実に効いた。built-in `personality` config (exec 既定 pragmatic) との干渉は観測されず、`none` 指定は不要だった。
 
-### F4a — capabilities field values
+### F4a — capabilities フィールド値
 
-register payload, `SpawnRequest.engine`, `SpawnMessage.engine`, and launch engine engine select to determine the value set:
+runner の register payload、`SpawnRequest.engine`、`SpawnMessage.engine`、LaunchDialog の engine セレクトで使う値集合を確定する:
 
-`claude-code`
-`codex` — Codex CLI Adapter
+- `claude-code` — Claude Code CLI アダプタ
+- `codex` — Codex CLI アダプタ
 
-`capabilities: ["claude"]` is renamed to `claude-code`. Compatible windows (2026 -10 confirmed, old Q6 close): The old value `claude` is**1 Release window**In the server side register handler, the `claude-code` is normalized and depre  warn is issued. Remove the normalization case in the next release and switch to strict rejection (the same style as the persona legacy window of [ADR-0031](0031-runner-persona-trust-mode.md)).
+現状 register payload に載っている `capabilities: ["claude"]` は `claude-code` にリネームする (実消費 UI がまだ無いため低コスト)。互換窓 (2026-07-10 確定、旧 Q6 close): 旧値 `claude` は **1 リリース窓**の間 server 側 register handler で `claude-code` にサイレント正規化し deprecation warn を出す。次リリースで正規化 case を撤去し厳格 reject に切り替える ([ADR-0031](0031-runner-persona-trust-mode.md) の persona legacy 窓と同じ流儀)。
 
 ### F4bc — EngineCapability interface
 
-`wrapper/agent-common` sets the following interface:
+`wrapper/agent-common` に次の interface を置く:
 
 ```ts
 interface EngineCapability {
@@ -92,202 +92,202 @@ interface EngineCapability {
 }
 ```
 
-`ext.model` / `ext.effort` of envelope  remains the engine vocabulary (not mapping). Launch  is composed of three-tier options:   → model → optional effort.
+envelope の `ext.model` / `ext.effort` は engine 語彙のまま (mapping しない)。LaunchDialog は「engine → model → optional effort」の三段選択で構成する。
 
-Codex initial implementation (2026 (20-11):
+Codex 側の初期実装 (2026-07-11 実機検証で改訂、旧 Q5 close):
 
-- **`supportedModels()` is empty catalog (using account default model)**Note Initially
-bundled catalog catalog curated static list (`gpt-5.6-sol`, etc.)
-2026Chat-11 Verification of the actual machine **ChatGPT-plan Certification (First route of the project, F7)
-The specified model is rejected by 400/404 and the acceptable model set is the account
-Dependently, the SDK is not enumerated** (bundled catalog is for API keys).
-If it is empty catalog, Launch  does not provide model select, and wrapper is
-`model` is used (reliably working with both authentication).
-The value of the explicit model is reintro  at the time the reliable catalog source appears by authentication
-(Former Q5 codex-model-effort-catalog is closed, and future support is
-[ADR-0035](0035-codex-model-catalog-and-mid-session-switch.md)
-mid-session switch Current status of Codex Ecosystem (model availability by plan,
-Athe relevant entrymetrical in two modes, the information particle size of `codex doctor`
-[codex-model-catalog](../specs/codex-model-catalog.md)
-- **effort is not displayed in the current UI by empty catalog**Note future model catalog
-`ext.models` `effort_levels`
-Maintain policy (E-B).
+- **`supportedModels()` は空カタログ (アカウント既定 model を使う)**。当初は
+  bundled catalog 準拠の curated 静的リスト (`gpt-5.6-sol` 等) を予定したが、
+  2026-07-11 の実機検証で **ChatGPT-plan 認証 (本プロジェクトの一次経路、F7)
+  では明示 model 指定が全て 400/404 で拒否され、許容 model 集合はアカウント
+  依存で SDK からは列挙不能**と判明した (bundled catalog は API キー向け)。
+  空カタログにすると LaunchDialog は model セレクトを出さず、wrapper は
+  `model` を送らず、アカウント既定 model が使われる (両認証で確実に動作)。
+  明示 model 選択は、認証別に信頼できる catalog 供給元が現れた時点で再導入
+  する (旧 Q5 codex-model-effort-catalog は close 済み、将来対応は
+  [ADR-0035](0035-codex-model-catalog-and-mid-session-switch.md) で復活方式と
+  mid-session switch契約を決定)。判断根拠となるCodexエコシステム側の現状 (プラン別model可用性、
+  認証 2 モードの非対称、`codex doctor` の情報粒度) は
+  [codex-model-catalog](../specs/codex-model-catalog.md) に記録。
+- **effort は空カタログにより現状 UI では非表示**。将来 model カタログが
+  復活した際は Claude 側と同じ `ext.models` の `effort_levels` に統合する
+  方針 (E-B) を維持する。
 
-[ADR-0035](0035-codex-model-catalog-and-mid-session-switch.md)
-This F4bc because the hostlicit specification success of curated trio was included in the host actual machine verification
-Revise the empty catalog to catalog filed in phase-16. until phase-16 is completed
-Keep empty catalog behavior.
+[ADR-0035](0035-codex-model-catalog-and-mid-session-switch.md) は、Plus加入後の
+host実機検証でcurated trioのexplicit指定成功が確認されたため、本F4bcの
+空catalogをphase-16でplan申告型catalogへ改訂する。phase-16完了までは本節の
+空catalog挙動を維持する。
 
-#### F4bc supplement (2026-11-11, model solution path for phase-15)
+#### F4bc 追補 (2026-07-11、phase-15 に向けた model 解決経路の明文化)
 
-In the actual operation verification after phase-14 completion, if the resolved model / source is not visible to the UI / log, and the shared env leaked between the engine to become an accident. The priority of the model solution, the source display, and env separation are clarified as a supplement to this F4bc. [phase-15-wrapper-ux-parity](../plans/phase-15-wrapper-ux-parity.md) D1/D7
+phase-14 完了後の実運用検証で、resolved model / source が UI / ログに見えず operator が現在状態を誤認するケース、および共有 env が engine 間で漏れて事故になるケースが顕在化した。model 解決の優先度・source 表示・env 分離を本 F4bc の追補として明文化する。実装は [phase-15-wrapper-ux-parity](../plans/phase-15-wrapper-ux-parity.md) D1/D7 で行う。
 
-- **Solution priority**`env` `config.model (kaoiro.config.json)` engine account / SDK default I re the lower if the top is specified.
-- **source Vocabulary**: envelope  `ext.model source: "launch"| "env" | "config" | "default"` Note stamp the relevant entry.UI (AgentDetail) Note「Account Default」Label judgment engine Name  (e89fa98 (private Gitea history) Note Codex Special) Note `ext.model source == "default" to remove the  .
-- **1 line stderr at startup**: Output `[wrapper resolved] engine=... model=<name>(source=...) ...` at CLI startup. Expose to the operator log in the tee route of  .
-- **en**: Single shared env `KAOIRO_WRAPPER_DEFAULT_MODEL` separation by engine:
-Claude CLI
-Codex CLI
-- The old `KAOIRO_WRAPPER_DEFAULT_MODEL` depre  (Claude CLI reads the value depre  warn to stderr, and Codex CLI is completely ignored) → removal in the next release (like [ADR-0031](0031-runner-persona-trust-mode.md) personas legacy / [ADR-0032](0032-codex-adapter.md) F4a `claude` legacy). rewrite dev.sh to env by engine
-- Source: Single-shared env flows to Codex spawn with `scripts/dev.sh` `KAOIRO_WRAPPER_DEFAULT_MODEL=claude-opus-4-7`, and is an accident source ([codex-model-catalog](../specs/codex-model-catalog.md) certification athe relevant entrymetry) based on 400/404 in the ChatGPT-plan authentication path. engine separate env prevents structural
-- **Handling unsolved models**(Both engine): If the specified model is denied by the engine side (400/404 of Codex ChatGPT-auth, invalid alias of Claude), and silent fallback are not booted loud fail. Don't confuse "Unspecified → default delegation" and "Expression → Deny".
+- **解決優先度** (両 engine 共通): `launch (SpawnMessage.model / CLI 位置引数)` > `env` > `config.model (kaoiro.config.json)` > engine account / SDK default。上位が指定されていれば下位は無視。
+- **source 語彙**: envelope の `ext.model_source: "launch" | "env" | "config" | "default"` を stamp する。UI (AgentDetail) の「アカウント既定」ラベル判定は engine 名分岐 (e89fa98 (private Gitea history) の Codex 特例) から `ext.model_source === "default"` 判定へ置換し、engine 分岐を撤去する。
+- **起動時 stderr 1 行**: `[wrapper resolved] engine=... model=<name>(source=...) ...` を CLI 起動時に出力する。runner の tee 経路で operator log にも露出する。
+- **env 分離**: 単一共有 env `KAOIRO_WRAPPER_DEFAULT_MODEL` は engine 別に分離する:
+  - `KAOIRO_CLAUDE_CODE_DEFAULT_MODEL` — Claude CLI のみ読む
+  - `KAOIRO_CODEX_DEFAULT_MODEL` — Codex CLI のみ読む
+  - 旧 `KAOIRO_WRAPPER_DEFAULT_MODEL` は 1 リリース窓の deprecation (Claude CLI が値を読み deprecation warn を stderr へ、Codex CLI は完全無視) → 次リリースで撤去 ([ADR-0031](0031-runner-persona-trust-mode.md) の personas legacy / [ADR-0032](0032-codex-adapter.md) F4a の `claude` legacy と同パターン)。dev.sh も engine 別 env に書き換える
+  - 根拠: 単一共有 env は `scripts/dev.sh` の `KAOIRO_WRAPPER_DEFAULT_MODEL=claude-opus-4-7` が Codex spawn に流れ、ChatGPT-plan 認証経路で 400/404 を踏む事故源 ([codex-model-catalog](../specs/codex-model-catalog.md) の認証非対称)。engine 別 env は構造的に防ぐ
+- **解決不能 model の扱い** (両 engine): 明示指定された model が engine 側で拒否された場合 (Codex ChatGPT-auth の 400/404、Claude の invalid alias)、silent fallback せず起動時 loud fail する。「未指定 → default 委任」と「明示指定 → 拒否」を混同しない。
 
-### F5 — Common Tool Description Layer Delivers to Codex with MCP bridge (2026 (20-10)
+### F5 — 共通 Tool 記述層は MCP bridge で Codex へ届ける (2026-07-10 改訂)
 
-"JSON Schema (definition) + handler function" pair in `wrapper/agent-common` is unchanged. Revise the transport route:
+`wrapper/agent-common` に「JSON Schema (definition) + handler 関数」の pair を SSOT として置く点は不変。輸送路を改訂する:
 
-- **Claude Adapter**— Zod conversion + `createSdkMcpServer` in-process registration (as usual).
-- **Codex Adapter**`dynamicTools`**TS SDK**`@kaoiro/codex`**stdio MCP bridge**Contains the execution body. The wrapper registers bridge with config override (`mcp_servers.kaoiro.command` + `env`, authentic binary-certified) for each spawn, and the bridge forwards connection and tool calls to the parent wrapper process via unix socket passed by env to the common handler on the wrapper side. `codex exec` is a process for each turn, so codex is spawn for each turn and reconnection to socket every time.
+- **Claude アダプタ** — Zod 変換 + `createSdkMcpServer` で in-process 登録 (従来どおり)。
+- **Codex アダプタ** — 起草時に想定した `dynamicTools` は **TS SDK に存在しない**ことが判明したため、`@kaoiro/codex` に小さな **stdio MCP bridge** 実行体を同梱する。wrapper は spawn 毎に config override (`mcp_servers.kaoiro.command` + `env`、実バイナリで受理検証済み) で bridge を登録し、bridge は env で渡された unix socket 経由で親 wrapper プロセスへ接続、tool 呼び出しを wrapper 側の共通 handler に転送する。`codex exec` はターンごとの process なので bridge もターンごとに codex が spawn し、都度 socket へ再接続する。
 
-The inter-agent tools (`mcp__kaoiro__send_to_agent` / `list_agents` / `whoami` and `wrapper/src/inter_agent.ts`) that are currently provided in the Claude SDK are transferred to the common layer and provided in a single implementation to both engines.
+現在 Claude SDK 内で提供している inter-agent tools (`mcp__kaoiro__send_to_agent` / `list_agents` / `whoami`、`wrapper/src/inter_agent.ts`) は本共通層に移植し、両 engine に単一の実装で提供する。
 
-"Codex is another process MCP server" that was rejected in the first article, is adopted in the bridge form because the premise (dynamicTools is in the SDK) was broken. However, the first article is repelled, "Dualize tool implementation" does not occur — bridge is only transferred, and the handler body remains the agent-common SSOT. The future SDK contains dynamicTools, which can be directly connected with the bridge.
+初稿で rejected とした「Codex は別 process MCP server 経由」は、その前提 (dynamicTools が SDK にある) が崩れたため bridge 形態で採用する。ただし初稿が忌避した「tool 実装の二重化」は発生しない — bridge は転送のみで、handler 本体は agent-common の SSOT のままである。将来 SDK に dynamicTools が入れば bridge を外して直結できる (handler SSOT は流用)。
 
-**Automatic approval of MCP tool (2026 -11)**: `codex exec` forces approval policy to `never` ([ADR-0033](0033-permission-model-dual-axis.md)), so MCP tool calls are automatically denied as "user cancel MCP tool call" by default. The wrapper auto-approves only the kaoiro tool with `mcp_servers.kaoiro.default_tools_approval_mode: "approve"` (reception value is 4 values of `auto` / `prompt` / `writes` / `approve`, only `approve` to execution tool). The kaoiro tool will gate the operator with the wrapper provided (per-call approval on the Claude side, ask user question is the operator prompt itself), so this auto-approving is not allowed to expand any code execution.
+**MCP tool の自動承認 (2026-07-11 実機検証)**: `codex exec` は approval_policy を `never` に強制する ([ADR-0033](0033-permission-model-dual-axis.md)) ため、MCP tool 呼び出しは既定で「user cancelled MCP tool call」として自動拒否される。wrapper は `mcp_servers.kaoiro.default_tools_approval_mode: "approve"` を付与して kaoiro ツールのみ自動承認する (受理値は `auto` / `prompt` / `writes` / `approve` の 4 値で、tool を実行させるのは `approve` のみ)。kaoiro ツールは wrapper 提供で別途 operator が gate する (Claude 側の per-call 承認、ask_user_question は operator prompt そのもの) ため、この自動承認は任意コード実行の拡大には当たらない。
 
-### F6 — AskUser stion equivalent
+### F6 — AskUserQuestion 相当
 
-Claude continues to use the SDK native tool (current `wrapper/src/host.ts:762-765` is maintained on `wrapper/claude-code`). Codex provides `ask_user_question` via F5 MCP bridge. Since the MCP tool call blocks the turn to the response, the `waiting_question` state is established in Codex (it is important as a dialogue channel with the operator if the approval flow falls in [ADR-0033](0033-permission-model-dual-axis.md)). Normalize the tool call to `question_request` envelope  with the wrapper. [0027-askuserquestion-envelope](0027-askuserquestion-envelope.md)
+Claude は SDK native tool を継続利用 (現行 `wrapper/src/host.ts:762-765` の特別分岐は `wrapper/claude-code` 側に維持)。Codex は F5 の MCP bridge 経由で `ask_user_question` を提供する。MCP tool 呼び出しは応答までターンをブロックするため、Codex でも `waiting_question` 状態が成立する ([ADR-0033](0033-permission-model-dual-axis.md) で承認フローが落ちた分、operator との対話チャネルとして重要)。両者の tool 呼び出しを wrapper が共通 `question_request` envelope へ正規化する ([ADR-0027](0027-askuserquestion-envelope.md) と整合、schema 変更なし)。
 
-### F7 — authentication is currently attacked
+### F7 — 認証は現行踏襲
 
-Codex authentication reads the wrapper process from the parent environment (2026 -10):
+Codex の認証は wrapper プロセスが親環境から読む (2026-07-10 実挙動確認で経路を修正):
 
-- ChatGPT login session — `codex login` looks natural with `~/.codex/auth.json` cache, parent home inheritance. Primary route of this project.
-- `CODEX_API_KEY` — the operator is exported to the parent shell (env takes precedence over auth.json). `OPENAI_API_KEY` is used for execution authentication in 0.144**Not Used**( pipe name only for pipe input to `codex login --with-api-key`).
+- ChatGPT login セッション — `codex login` が `~/.codex/auth.json` にキャッシュ、親 home 継承で自然に見える。本プロジェクトの一次経路。
+- `CODEX_API_KEY` — operator が親 shell に export (env が auth.json より優先)。なお `OPENAI_API_KEY` は 0.144 では実行時認証に**使われない** (`codex login --with-api-key` への pipe 入力にのみ使う慣習名)。
 
-config RunnerConfig does not fill any config JSON (`/tmp/kaoiro-runner-*/`) on spawn. Fix temp file leak risk at SIGKILL with the same treatment as the existing Claude side.
+runner の RunnerConfig、runner が spawn 時に書く config JSON (`/tmp/kaoiro-runner-*/`)、いずれにも一切埋めない。既存 Claude 側と同じ扱いで、SIGKILL 時の temp file leak リスクを回避する。
 
-### engine separation
+### F8 — resume の engine 分離
 
-`SessionPointers` on the server side continues to hold as the engine-opaque string ([ADR-0014](0014-session-resume-and-restore.md) schema unchanged). engine adapter interprets and resumes your session id:
+session_id は engine-opaque な文字列として server 側の `SessionPointers` は保持のみを続ける ([ADR-0014](0014-session-resume-and-restore.md) スキーマ不変)。engine adapter が自分の session_id を解釈し resume する:
 
-Claude adapter
+- Claude adapter — 既存 SDK `resume: sessionId`
 - Codex adapter — `codex.resumeThread(id)`
 
-'s cwd subdivision session enumeration ([ADR-0014](0014-session-resume-and-restore.md) F6) is also implemented by engine:
+runner の cwd 配下 session 列挙 ([ADR-0014](0014-session-resume-and-restore.md) F6) も engine 別実装:
 
-Claude adapter
-- Codex adapter — scan `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl` and match with `cwd` of the first line `session_meta` (2026-10-10 confirmed: check the layout and the presence of `session_meta.cwd` in real files. `state_5.sqlite` index does not depend on internal). The scan traces async filesystem API in the new order of the fixed depth date tree, and the presence confirmation returns earlier at the same time, and the enumeration does not block the loop event (#97).
+- Claude adapter — 既存 `~/.claude/projects/` JSONL 列挙
+- Codex adapter — `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl` を走査し、先頭行 `session_meta` の `cwd` で照合する (2026-07-10 確定: レイアウトと `session_meta.cwd` の存在を実ファイルで確認。`state_5.sqlite` の index は internal 扱いのため依存しない)。走査は固定深度の日付 tree を新しい順に async filesystem API で辿り、存在確認は一致時点で早期 return、列挙も event loop を block しない (#97)。
 
-### F9 — cwd notification contract
+### F9 — cwd 通知契約
 
-`wrapper/agent-common` `EngineAdapter` interface has a `onCwdChanged(newCwd)` equivalent   contract. Engine:
+`wrapper/agent-common` の `EngineAdapter` interface に `onCwdChanged(newCwd)` 相当の hook 契約を持たせる。実装は engine 側都合:
 
-- Claude adapter — Existing CwdChanged   co ity (actually unstable with the [issue #92](https://github.com/sakuraiyuta/kaoiro/issues/92) SDK bug wait).
-- Codex adapter — Fixed cwd display that is not implemented in MVP and is temporarily launched. Extraction approach candidates are tracked by [open-questions/codex-cwd-extraction](../open-questions/codex-cwd-extraction.md).
+- Claude adapter — 既存 CwdChanged hook 継続 ([issue #92](https://github.com/sakuraiyuta/kaoiro/issues/92) の SDK バグ待ちで実動不安定)。
+- Codex adapter — MVP では未実装、暫定的に起動 cwd 固定表示。抽出方式候補は [open-questions/codex-cwd-extraction](../open-questions/codex-cwd-extraction.md) で追跡。
 
-### F10 — 2 phase split
+### F10 — 2 phase 分割
 
-The implementation is divided into two phases:
+実装は次の 2 phase に分ける:
 
-- **[phase-13-wrapper-multipackage-restructure](../plans/phase-13-wrapper-multipackage-restructure.md)**— materialise only this ADR F1. Fully maintaining existing Claude behavior (Codex implementation zero, boundary only).
-- **[phase-14-codex-adapter](../plans/phase-14-codex-adapter.md)**— F2-F9 [ADR-0033](0033-permission-model-dual-axis.md) schema change, common tool description layer construction, Codex adapter implementation, engine solution of launcher, dashboard engine select activation and model/effort three-stage selection, capacity rename. open-questions Q1-Q5
+- **[phase-13-wrapper-multipackage-restructure](../plans/phase-13-wrapper-multipackage-restructure.md)** — 本 ADR F1 のみを materialise。既存 Claude 動作を完全維持 (Codex 実装ゼロ、境界のみ整備)。
+- **[phase-14-codex-adapter](../plans/phase-14-codex-adapter.md)** — F2-F9 全実装。[ADR-0033](0033-permission-model-dual-axis.md) の schema 変更、共通 Tool 記述層構築、Codex アダプタ実装、runner launcher の engine 解決、dashboard の engine セレクト有効化と model/effort 三段選択、capabilities リネーム。open-questions Q1-Q5 の解決を伴う。
 
 ## Consequences
 
 ### Positive
 
-ADR-0017 `wrapper/core` does not have an AI concept, and can be packaged trays for future non-AI entities ([plugin-model](../specs/plugin-model.md)).
-- The effect of adding the engine is closed in the adapter package and the core is not resurgical.
-- Codex adapter plug-in without changing existing state abstract / envelope  schema / server / dashboard (two-axis permission extension is handled by independent [ADR-0033](0033-permission-model-dual-axis.md)).
-- The function field is actually consumed (Launch engine engine select, launch launcher solution).
+- ADR-0017 の 3 層構造が物理境界として実現。`wrapper/core` は AI 概念を持たず、将来の非 AI エンティティ ([plugin-model](../specs/plugin-model.md)) 追加時のパッケージ受け皿ができる。
+- engine 追加時のインパクトが adapter パッケージ内に閉じ、共通層と core を再手術しなくて済む。
+- Codex adapter が既存の状態抽象 / envelope schema / server / dashboard の変更なしにプラグイン (二軸 permission 拡張は独立の [ADR-0033](0033-permission-model-dual-axis.md) で扱う)。
+- capabilities フィールドが実消費される (LaunchDialog の engine セレクト、runner launcher の解決)。
 
 ### Negative
 
-- Package rephaseation (phase-13) increases PR units due to existing behavioral immutations (full movement of import routes and package names).
-- Codex adapter (F2-F9) The acceptance of phase-14 is included until the actual behavior confirmation of the representative persona × main functions.
-- Codex persona injection is not validation (Q1). phase-14 Q1 solution is included.
+- パッケージ再編 (phase-13) は既存挙動不変で PR 単位は大きくなる (import 経路と package 名の全面移動)。
+- Codex adapter の実装項目が広い (F2-F9)。phase-14 の acceptance は代表 persona × 主要機能の実挙動確認まで含める。
+- Codex 側 persona injection の実効性が未検証 (Q1)。phase-14 完了判定に Q1 解決が含まれる。
 
 ### Neutral
 
-- The current `wrapper/src/adapter.ts` predetermined the virtual adapter interface, so the gradient cost to the EngineAdapter interface is small.
-- Distribution ([ADR-0018](0018-runner-distribution.md)) is an existing argument that handles multiple wrapper bundles approach with issue #70, and does not include new arguments in this ADR.
+- 現状の `wrapper/src/adapter.ts` が事実上の adapter interface を先取りしていたため、EngineAdapter interface への昇格コストは小さい。
+- 配布 ([ADR-0018](0018-runner-distribution.md)) は複数 wrapper バンドル方式を issue #70 で扱う既存論点で、本 ADR で新規論点は増えない。
 
 ## Alternatives Considered
 
-### F1 (Granularity of engine abstraction)
+### F1 (エンジン抽象の粒度)
 
 | Option | Why rejected |
 |--------|--------------|
-|Only the AgentAdapter interface is cut in the current wrapper and the package split is postponed|The Claude dependency of the AI common layer (permission broker / instruction) remains intact, such as the Permission biaxial of Codex`state.ts`Easy to dye. Resurgical when peeling off to three layers later. ADR-0017 postponement conditions are already filled|
-|another PoC lipo codex single precedence|Double mounting costs when importing and abstraction of mainstream|
+| 現 wrapper 内に AgentAdapter interface のみ切り、パッケージ分割は延期 | AI 共通層 (permission broker / state machine / instruction) の Claude 依存が実質そのまま残り、Codex の権限二軸などが `state.ts` に染み込みやすい。後で 3 層に剥がす時に再手術。ADR-0017 の延期条件は既に満たされている |
+| 別 PoC リポで codex 単体先行 | 本流の抽象を回避、取り込み時に二重実装コスト |
 
-### F2 (permission model abstract)
-
-| Option | Why rejected |
-|--------|--------------|
-|Act preset common abstract (`default/accept-edits/auto-shell/plan-only/yolo`Other|Codex The expression of the two axis is crushed into a single axis and the semantics mapping table will eventually become the openest of open-question|
-|engine Exposure to the UI|The dashboard display is a different set of permissions for each engine, and envelope  schema / server validation is the engine|
-
-### F3 (persona shared)
+### F2 (権限モデル抽象)
 
 | Option | Why rejected |
 |--------|--------------|
-| `personality.md`Note`## for-claude` / `## for-codex`Section|Early agreement cost large, complication of package creator operation|
-|engine separate pack (`kuroe-claude` / `kuroe-codex`) |pack The number of zips is doubled only for engine minutes, and maintenance collapse|
+| 行為プリセット共通抽象 (`default/accept-edits/auto-shell/plan-only/yolo` 等) | Codex 二軸の表現力を単軸に潰し、意味論マッピング table が結局 open-question の巣になる |
+| engine 別語彙をそのまま UI に露出 | dashboard の permission 表示が engine ごとに違う集合になり、envelope schema / server validation が engine 分岐だらけ |
 
-### F4a (capabilities name)
-
-| Option | Why rejected |
-|--------|--------------|
-| `anthropic-claude-code` / `openai-codex`prefix|Redundant, operator visual degradation, multiple engines in the same engine are not common|
-|Current value`claude`permission|claude is a Meaning Axial Weight to read as an Anthropic LLM model family|
-
-### F4bc (model / effort abstract)
+### F3 (persona 共有)
 
 | Option | Why rejected |
 |--------|--------------|
-|tuning abstract (`speed / balanced / deep-reasoning`) |fast mode and reasoning effort unimageable, table is open-questionHomeest|
-|engine|Preset Definition Maintenance Cost + SDK Compensation|
+| `personality.md` に `## for-claude` / `## for-codex` セクション | 早期合意コスト大、pack 作成者運用複雑化 |
+| engine 別 pack (`kuroe-claude` / `kuroe-codex`) | pack zip 数が engine 分だけ倍増、maintenance 破綻 |
 
-### F5 (MCP provided)
+### F4a (capabilities 命名)
 
 | Option | Why rejected |
 |--------|--------------|
-|Pass directly to the dynamicTools of the Codex SDK| ****— DynamicTools does not exist in the TS SDK 0.144.1 (2026ation-10 type definition and implementation). The choice to wait for the SDK addition is unknown, and the bridge asset can be used for every handler SSOT after direct connection, so it is less profit to wait|
-|engine tool|tool Make sure to touch two places when adding|
-|Codex MVP with no tools|Codex agent is not able to interact with questions and inter-agents. If the approval flow falls, ask user question is the lifeline of the dialogue and is not acceptable|
+| `anthropic-claude-code` / `openai-codex` の vendor prefix | 冗長、operator 目視性低下、同一 vendor 内複数 engine は当面ない |
+| 現状値 `claude` 据え置き | claude は Anthropic LLM モデル族とも読めるため意味軸重 |
+
+### F4bc (model / effort 抽象)
+
+| Option | Why rejected |
+|--------|--------------|
+| tuning 抽象 (`speed / balanced / deep-reasoning`) | fast mode と reasoning_effort の写像不能、テーブルが open-question の巣 |
+| engine 別推奨プリセット | プリセット定義 maintenance コスト + SDK 追従負担 |
+
+### F5 (MCP 提供)
+
+| Option | Why rejected |
+|--------|--------------|
+| Codex SDK の dynamicTools に直接渡す (初稿の採用案) | **前提が崩れた** — TS SDK 0.144.1 に dynamicTools は存在しない (2026-07-10 型定義・実装で確認)。SDK 追加を待つ選択も時期不明で、bridge 資産は直結化後も handler SSOT ごと流用できるため待つ利益が薄い |
+| engine 別 tool 実装並置 | tool 追加時に必ず二箇所触る、divergence 発生確定 |
+| Codex はツール無しで MVP | Codex agent が質問も inter-agent 対話もできず engine 非対称。承認フローが落ちた分 ask_user_question が対話の生命線であり許容不能 |
 
 ### F6 (AskUserQuestion)
 
 | Option | Why rejected |
 |--------|--------------|
-|Both engines are also provided for self-delivery.|Claude SDK|
-|Codex does not support AskUser stion|Degrading the ability to revise Codex agent without question to operator|
+| 両 engine とも自前提供 (Claude native も捨てる) | Claude SDK 更新恩恵喪失 |
+| Codex は AskUserQuestion 未対応 | operator への質問不可で Codex agent の改訂能力低下 |
 
-### F7 (Certified)
-
-| Option | Why rejected |
-|--------|--------------|
-|enginedentials storage by engine|config config is a secret storage, multiple host operation complexity|
-|config JSON|SIGKILL at rmSync before leak risk|
-
-### F8 (resume separation)
+### F7 (認証)
 
 | Option | Why rejected |
 |--------|--------------|
-|engine prefix|Existing session id migration is required for all clients and prefix semantics are penetrated into all routes|
-|Codex does not support resume|ADR-0014 Engine Athe relevant entrymetric|
+| runner が engine 別 credentials 保管 | runner config が secret 保管庫化、複数ホスト運用複雑化 |
+| config JSON 埋め込み | SIGKILL 時 rmSync 前 leak リスク |
+
+### F8 (resume 分離)
+
+| Option | Why rejected |
+|--------|--------------|
+| session_id に engine prefix | 既存 session_id migration が全 client に必要、prefix 意味論を全経路に浸透 |
+| Codex は resume 未対応 | ADR-0014 復旧体験が engine 非対称 |
 
 ### F9 (cwd hook)
 
 | Option | Why rejected |
 |--------|--------------|
-|wrapper/claude-code|UI UI|
-|Remove cwd tracking functionality from the specification|Claude No rationality of side operation |
+| cwd を Claude 独自機能として wrapper/claude-code に封入 | UI 分岐増 |
+| cwd 追跡機能を仕様から削除 | Claude 側動作凍結の合理性なし |
 
-### F10 (phase split)
+### F10 (phase 分割)
 
 | Option | Why rejected |
 |--------|--------------|
-|1 phase|Single PR hypertrophy, rethe relevant entryation and re  of codex implementation are simultaneously progressed to focus on risk|
-|3+ phase|F2-F9 phase boundary becomes ambiguous and the number of reviews increased|
+| 1 phase 一括 | 単一 PR 肥大化、再編と codex 実装の regression が同時進行してリスク集中 |
+| 3+ phase 細分割 | F2-F9 の phase 境界が曖昧化、レビュー回数増 |
 
 ## Related
 
-- Origin: open-questions/spawn- -ionion (2026-06-26, fully merged and removed to the book ADR, and the "Resolved Action" checklist is written in [phase-14-codex-adapter](../plans/phase-14-codex-adapter.md) acceptance criteria.
-- : [phase-13-wrapper-multipackage-restructure](../plans/phase-13-wrapper-multipackage-restructure.md), [phase-14-codex-adapter](../plans/phase-14-codex-adapter.md), [phase-15-wrapper-ux-parity](../plans/phase-15-wrapper-ux-parity.md) (F4bc supplement implementation).
--CO ADR: [0017](0017-wrapper-multientity-packages.md) (materialise in this ADR), [0022](0022-pending-permission-authoritative-source.md) / [0033](0033-permission-model-dual-axis.md) (permission biaxial), [0023](0023-host-runner-architecture.md) D3 (rename execution), [0001](0001-agent-sdk-integration.md) (Claude SDK Adopt), [0027](0027-askuserquestion-envelope.md) (question envelope.), [0014](0014-session-resume-and-restore.md) (resume), [0034](0034-session-capabilities-advertisement.md) (element of engine neutralization pattern by session capabilities).
--CO:s: [plugin-model](../specs/plugin-model.md), [protocol](../specs/protocol.md), [architecture](../specs/architecture.md), [personas](../specs/personas.md), [agent-sdk-events](../specs/agent-sdk-events.md) (Claude version), [codex-sdk-events](../specs/codex-sdk-events.md) (Codex version, new version).
-- Open questions (phase-14): [Q4 codex-cwd-extraction](../open-questions/codex-cwd-extraction.md), [codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md) (2026.-10 new). The former Q1 (personality infusion effectiveness) is close to 2026-11-11 actual machine validation, and the former Q2 (envelope  schema) / Q3 (UI vocabulary) / Q5 (model catalog) / Q6 (compatible windows) resolved with 2026 SDK-10 real SDK validation + SDK-elicitation and close (requested to this ADR and [ADR-0033](0033-permission-model-dual-axis.md)).
+- 由来: open-questions/spawn-engine-selection (2026-06-26 opened、本 ADR に完全マージし削除、「解決時のアクション」チェックリストは [phase-14-codex-adapter](../plans/phase-14-codex-adapter.md) の acceptance criteria に転記)。
+- 実装: [phase-13-wrapper-multipackage-restructure](../plans/phase-13-wrapper-multipackage-restructure.md)、[phase-14-codex-adapter](../plans/phase-14-codex-adapter.md)、[phase-15-wrapper-ux-parity](../plans/phase-15-wrapper-ux-parity.md) (F4bc 追補の実装)。
+- 関連 ADR: [0017](0017-wrapper-multientity-packages.md) (本 ADR で materialise)、[0022](0022-pending-permission-authoritative-source.md) / [0033](0033-permission-model-dual-axis.md) (権限二軸)、[0023](0023-host-runner-architecture.md) D3 (リネーム実行)、[0001](0001-agent-sdk-integration.md) (Claude SDK 採用)、[0027](0027-askuserquestion-envelope.md) (question envelope)、[0014](0014-session-resume-and-restore.md) (resume)、[0034](0034-session-capabilities-advertisement.md) (session capabilities による engine 中立化パターンの拡張)。
+- 関連 specs: [plugin-model](../specs/plugin-model.md)、[protocol](../specs/protocol.md)、[architecture](../specs/architecture.md)、[personas](../specs/personas.md)、[agent-sdk-events](../specs/agent-sdk-events.md) (Claude 版)、[codex-sdk-events](../specs/codex-sdk-events.md) (Codex 版、新設)。
+- Open questions (phase-14 期): [Q4 codex-cwd-extraction](../open-questions/codex-cwd-extraction.md)、[codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md) (2026-07-10 新設)。旧 Q1 (personality 注入実効性) は 2026-07-11 実機検証で close、旧 Q2 (envelope schema) / Q3 (UI 語彙) / Q5 (model カタログ) / Q6 (互換窓) は 2026-07-10 の実 SDK 検証 + spec-elicitation で解決し close (決定内容は本 ADR と [ADR-0033](0033-permission-model-dual-axis.md) に追補済み)。

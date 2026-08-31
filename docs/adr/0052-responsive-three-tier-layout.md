@@ -1,5 +1,5 @@
 ---
-title: Turn dashboard into three-size responsive layouts
+title: dashboard を 3 サイズ対等のレスポンシブレイアウトへ転換する
 status: accepted
 date: 2026-08-09
 opened: 2026-08-09
@@ -9,7 +9,7 @@ related_specs: [design, responsive-layout, responsive-reachability]
 related_adrs: [12]
 ---
 
-# ADR 2 — switch dashboard to responsive layout for three sizes
+# ADR-0052 — dashboard を 3 サイズ対等のレスポンシブレイアウトへ転換する
 
 ## Status
 
@@ -17,119 +17,119 @@ Accepted
 
 ## Context
 
-[design.md](../specs/design.md) Responsive clause is "mobile/narrow
-It was not first-class, but it was not broken.,
-The systematic breakpoint design is just two `@media (max-width: 640px)`
-Not existed.
+[design.md](../specs/design.md) の Responsive 節は「モバイル/狭幅は
+first-class ではないが、破綻はしない」と定めていた。実装もこれに沿い、
+`@media (max-width: 640px)` が 2 箇所あるだけで、体系的な breakpoint 設計は
+存在しなかった。
 
-**This "not broken" is already true.**2026 response-24
-The wide gate (`min-width: 1600px`) is removed and the operator session is fully
-timeline is now displayed. The policy at that time is "not to hide pine in narrow width,
-"I want to accept tiles with small size, but if I measure the currentTiles withiumium,
-In viewport 640px, the grid remains only 136px, and the three-row tile is 32.5px.
-`minmax(15rem, 1fr)` The lower limit is 240px.
-Not established.
+**この「破綻はしない」は既に事実でない。** 2026-07-24 に response timeline の
+wide ゲート (`min-width: 1600px`) が撤廃され、operator セッションでは全幅で
+timeline が表示されるようになった。当時の方針は「狭幅ではペインを隠さず、
+タイルを小さくして受け入れる」だったが、現行 CSS を Chromium で実測すると
+viewport 640px では grid が 136px しか残らず、3 列 tile は約 32.5px になる。
+`minmax(15rem, 1fr)` の下限 240px を大きく割り込んでおり、レイアウトとして
+成立していない。
 
-AgentDetail has reached its limit. `.status` Sidebar
-15 or more `cc-row` (model switch permission / mode / context meter /
-rate limit / resume) scroll in with `.status-scroll`, but current
-640px media query only makes `.body` `column`, so scroll outside and
-I can't reach the conversation log.
+あわせて AgentDetail の狭幅挙動も限界に達している。`.status` サイドバーは
+15 以上の `cc-row` (モデル切替 / permission モード / context メーター /
+rate limit / resume) を持ち `.status-scroll` で内部スクロールするが、現行の
+640px media query は `.body` を `column` にするだけなので、外側スクロールと
+二重になり会話ログへ到達できない。
 
-Work to define dashboard as explicit PWA
-([#196](https://github.com/sakuraiyuta/kaoiro/issues/196))
-Requests to be established in 3 sizes as a practical application launched from the home screen
-"Narrow width is not first-class" is the premise itself.
+さらに dashboard を明示的な PWA として定義する作業
+([#196](https://github.com/sakuraiyuta/kaoiro/issues/196)) により、
+ホーム画面から起動した実用的なアプリとして 3 サイズで成立させたいという要求が
+生じた。「狭幅は first-class ではない」という前提そのものを見直す必要がある。
 
 ## Decision
 
-Dashboard**PC / tablet / smartphone**.
-design.md's "mobile/narrow is not first-class" with this ADR
-Details of dimensions and rules
-[responsive-layout.md](../specs/responsive-layout.md)
-[responsive-reachability.md](../specs/responsive-reachability.md) canonical.
+dashboard を **PC / tablet / smartphone の 3 サイズで対等に成立させる**。
+design.md の「モバイル/狭幅は first-class ではない」は本 ADR をもって撤回
+する。寸法と規則の詳細は
+[responsive-layout.md](../specs/responsive-layout.md)、到達経路の網羅表は
+[responsive-reachability.md](../specs/responsive-reachability.md) が canonical。
 
-- **F1**: In the smartphone width, the lobby response timeline is the same screen bottom
-Remove the sheet and complete the grid
-- **F2**: The `.status` of the AgentDetail is removed from the bottom sheet.
-Pull out with handle
-- **F3**: The bottom sheet only opens with the user's explicit operation, and the AgentDetail docks
-global on the front (back from global dialog / drawer). However, the sheet is expanded
-pending / question and other agents
-Put the indicator and handle on the attention badge itself "Revert to the list"
-ADR-0012 F8 is always display of the blind spot indicator
-It is not only decided to return to the list by click, but it is only possible to realize
-to not meet that decision
-- **F4**: Tasklist float and question-dock
-same behavior as desktop (tentative)
-- **F5**: response timeline track from `minmax(22rem, 26rem)`
-  **`22rem` Fixed**breakpoint is not a framework
-kaoiro using the reversed value from the mounting dimension (desktop lower limit 1199px / tablet lower limit)
-px / low back 500px)
-- **F6**: The layout switch is centered on media media query, and theOM structure is all sizes
-Keep common. Svelte only opens and closes the sheet
-- **F7**: tablet width (11〜1198px) leaves the timeline of the lobby side by side.
-  **iPhone 844px** —
-When the timeline is lying in this width, the tile is 122 to 160px, and the sprite alone is
-128px
-- **F8**:CO 500px `short` is an override that is incompatible with a width .
-  **Vertical compression only**handle (header vertical padding / composer initial height /
-in-flow dock `max-block-size`).
-layout (place timeline, place status, number of columns in grid) and width
-The maximum sheet height is not changed. dock**No expansion state**— implementation
-A contract to unfold for each new `request_id` (pending judgment old
-If you have aview state) and change the initial state by viewport dependency
-To counter F6
+- **F1**: smartphone 幅では lobby の response timeline を同一画面内のボトム
+  シートへ退避し、grid を全幅化する
+- **F2**: tablet 幅以下では AgentDetail の `.status` をボトムシートへ退避し、
+  handle で引き出す
+- **F3**: ボトムシートはユーザの明示操作でのみ開き、AgentDetail の dock 類
+  より前面に置く (global dialog / drawer よりは背面)。ただし**シート展開中も
+  pending permission / question と他エージェントの要対応件数に気づける
+  インジケータを出し、かつ handle 上の attention バッジ自体を「一覧へ戻す」
+  操作とすることを MUST とする** — ADR-0012 F8 は盲点インジケータの常時表示
+  だけでなくクリックで一覧へ戻すことまで決定しており、気づかせるだけでは
+  その決定を満たさないため
+- **F4**: Tasklist float と question-dock の折りたたみ/詳細表示は、当面
+  desktop と同一挙動とする (暫定)
+- **F5**: response timeline の track を `minmax(22rem, 26rem)` から
+  **`22rem` 固定へ変更**し、breakpoint はフレームワークの慣習値ではなく
+  kaoiro の実装寸法から逆算した値を使う (desktop 下限 1199px / tablet 下限
+  940px / 低背 500px)
+- **F6**: レイアウト切り替えは CSS media query 中心とし、DOM 構造は全サイズ
+  共通に保つ。Svelte の状態として持つのはシートの開閉のみ
+- **F7**: tablet 幅 (940〜1198px) では lobby の timeline を横並びで残す。
+  **iPad 縦 (768px) とスマートフォン横向き (844px) は smartphone 帯に入る** —
+  この幅で timeline を横並びにすると tile が 122〜160px となり、sprite 単体の
+  128px すら確保できないため
+- **F8**: 高さ 500px 以下の `short` は幅トークンと直交する override とし、
+  **縦方向の圧縮のみ**を扱う (header の縦 padding / composer の初期高 /
+  in-flow dock 類の高さ上限 / dialog・drawer の `max-block-size`)。横方向の
+  レイアウト (timeline の配置、status の配置、grid の列数) と、幅によらず
+  一定であるシート最大高は変更しない。dock の**展開状態も変えない** — 実装が
+  新しい `request_id` ごとに折りたたみを解除する契約 (pending な判断を古い
+  折りたたみ状態で隠さない) を持ち、viewport 依存で初期状態を変えると
+  F6 に反するため
 
-What is "interest"?**All features and information available**refers to the size of the route
-tolerances that are different for each. smartphone on smartphone / Send instruction / permission
-composerments to apply until approve, and to composer even during software keyboard display
-including what can be reached.
+「対等」とは **全機能・全情報へ到達可能**であることを指し、到達経路がサイズ
+ごとに異なることは許容する。smartphone でも 確認 / 指示送信 / permission
+承認 まで行えることを要件とし、ソフトウェアキーボード表示中も composer へ
+到達できることを含む。
 
 ## Consequences
 
 ### Positive
 
-- You can turn the agent from your smartphone, and theHome and profit of PWA
-Close
-- AgentDetail eliminates double scrolling, and the conversation log becomes the main feature even narrower
-- breakpointtile with break and base, when changing the tile width and timeline width
-where to be recal d
-- composer is determined to keep all sizes in common (F6).
-The scroll position of text andthe relevant entry is preserved
+- smartphone から実際にエージェントを回せるようになり、PWA 化の動機と実利が
+  一致する
+- AgentDetail の二重スクロールが解消し、狭幅でも会話ログが主役になる
+- breakpoint の値に内訳と根拠が伴い、tile 幅や timeline 幅を変えたときに
+  再計算すべき箇所が明示される
+- DOM を全サイズ共通に保つ決定 (F6) により、画面回転時に composer の入力途中
+  テキストとログのスクロール位置が保持される
 
 ### Negative
 
-- The timeline display density on a wide screen is fixed to `22rem`.
-(up to 416px → 352px)
-- Both lobby and AgentDetail are required as a new implementation
-This depends
-- "tablet" and "tablet" are called as the actual device because the iPad vertical enters the smartphone band
-Intuition and food
-- Validated iOS/iPadOS Safari and Android Chrome
+- timeline track を `22rem` 固定にするため、広い画面での timeline 表示密度が
+  従来より下がる (最大 416px → 352px)
+- ボトムシート機構が新規実装として必要になり、lobby と AgentDetail の双方が
+  これに依存する
+- iPad 縦が smartphone 帯に入るため、「tablet」という呼称と実際の端末の
+  対応が直感と食い違う
+- 検証対象が iOS/iPadOS Safari と Android Chrome の実機 2 系統に増える
 
 ### Neutral
 
-- design.md is responsible for visual design (color,Homeography, motion),
-Dimensions and layoutthe relevant entry are divided into shapes responsive-layout.md has
-- design.md canonical source
-In the target description based on this ADR until the phase-31 is completed
-hronize with implementation after implementation completion
+- design.md は視覚デザイン (色・タイポグラフィ・モーション) に責務を絞り、
+  寸法とレイアウト切り替えは responsive-layout.md が持つ形に分かれる
+- design.md は `format: stitch-design-md` で「実装を canonical source として
+  追認する」性格を持つが、phase-31 完了までは本 ADR に基づく target 記述に
+  なる。実装完了後に実装との同期を取り直す
 
 ## Alternatives Considered
 
 | Option | Why rejected |
 |--------|--------------|
-|vertically stacking timeline under grid with narrow width|The value of "always observation" is lost without scrolling. Virtually unreachable if the number of agents is large|
-|Leave timeline with narrow width (wide gate revival)|Contrary from the front to the premise that "All functions and information can be reached"|
-|Agent AgentDetail with conversation/status tab|Cannot see log and context meter simultaneously|
-|Folding AgentDetail vertical loading|Double scrolling remains at the time of deployment, consuming the height of the header even if it is folded|
-|adopt framework conventional (768/1024/1280) to breakpoint|Break in the boundary without matching the actual size. 768px tile is only added to 122px|
-|Keep timeline track current and return the boundary to 1263px|desktop too low, 1200px class window drops to tablet|
-|In addition to width`pointer: coarse`) Also used for judgment|Doubles the test axis and doubles the validation cost because there are two layouts in the same width.|
-| `matchMedia` + `{#if}`return  by size|Re-mount when the screen rotates to lose composer input and scroll position|
-|container query center|The whole viewport element (header / sheet / safe area) has many advantages|
-|Split the tablet band in pxpx and set to 4|The combination of implementation and testing is swelling when the judgment is not 4|
-|Fix the approval UI on the front of the sheet|Cover the previous operation intentions, more than the sheet is opened by explicit operation. Alternate with the MUSTization of the indicator|
-| `short`Leave the lobby timeline to the sheet|By making the lower limit of the width to 390px, the lower terminal (844×390, etc.) is already in the smartphone belt only with width. desktop / tablet The width of the lower back has a horizontal line, and the reverse is narrowed up to 300px (500×60%)|
-|Alternate blind spot indicator with badge display only|ADR-0012 F8 decides to return to the list by click, and the decision is not met just by notifying the existence|
+| 狭幅で timeline を grid の下へ縦積み | スクロールしないと到達できず「常時観測」の価値が失われる。エージェント数が多いと事実上到達不能 |
+| 狭幅で timeline を出さない (wide ゲート復活) | 「全機能・全情報に到達可能」という前提に正面から反する |
+| AgentDetail を会話/ステータスのタブで排他切り替え | log と context メーターを同時に見られない |
+| AgentDetail の縦積みを折りたたみ可能にする | 展開時に二重スクロールが残り、畳んでもヘッダ分の高さを消費する |
+| breakpoint にフレームワーク慣習値 (768/1024/1280) を採用 | 実寸と一致せず境界で壊れる。実測では 768px の tile が 122px にしかならない |
+| timeline track を現行のまま維持し境界を 1263px に置く | desktop 下限が上がりすぎ、1200px 級のウィンドウが tablet に落ちる |
+| 幅に加えて入力手段 (`pointer: coarse`) も判定に使う | 判定軸が二重になり、同じ幅で 2 種類のレイアウトが存在しうるため検証コストが倍増する |
+| `matchMedia` + `{#if}` でサイズ別に DOM を分岐 | 画面回転時の再マウントで composer の入力とスクロール位置が失われる |
+| container query 中心 | viewport 全体で決まる要素 (ヘッダ / シート / セーフエリア) が多く利点が効かない |
+| tablet 帯を 940px で 2 分割して 4 段にする | 判定が 4 通りに増え、実装とテストの組み合わせが膨らむ |
+| 承認 UI をシートより前面に固定 | シートが明示操作で開くものである以上、直前の操作意図を覆す。インジケータの MUST 化で代替する |
+| `short` で lobby timeline をシートへ退避させる | 幅の下限を 940px にしたことで、低背端末 (844×390 等) は幅だけで既に smartphone 帯に入る。desktop / tablet 幅の低背では横並びが成立しており、退避すると逆に最大 300px (500×60%) まで狭める |
+| 盲点インジケータをバッジ表示のみで代替 | ADR-0012 F8 はクリックで一覧へ戻す操作までを決定しており、存在を知らせるだけでは決定を満たさない |

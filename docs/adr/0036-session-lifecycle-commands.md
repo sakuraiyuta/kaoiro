@@ -1,5 +1,5 @@
 ---
-title: /new/clear as primary session lifecycle command
+title: /new・/clear を第一級 session lifecycle command として扱う
 status: accepted
 date: 2026-07-12
 opened: 2026-07-12
@@ -9,233 +9,233 @@ related_specs: [protocol, architecture, threat-model]
 related_adrs: [12, 14, 20, 34, 43]
 ---
 
-# ADR-0036 — treating /new/clear as first class session lifecycle command
+# ADR-0036 — /new・/clear を第一級 session lifecycle command として扱う
 
 ## Status
 
-Accepted (2026.-12, master decision).
-[phase-17-session-lifecycle-commands](../plans/phase-17-session-lifecycle-commands.md).
-phase-15 After initial completion, the master decides the implementation order with phase-16.
+Accepted (2026-07-12、マスター決裁)。実装は
+[phase-17-session-lifecycle-commands](../plans/phase-17-session-lifecycle-commands.md)。
+phase-15 initial完了後に着手し、phase-16との実装順は着手時にマスターが決める。
 
-**Supplement (2026 -28)**: F1 and F6 of this decision
-[ADR-0043](0043-agent-initiated-session-reset.md)  operator
-Add the deferred reset with the agent's own permission while maintaining the existing semantics of the origin.
+**追補 (2026-07-28)**: 本決定の F1 と F6 は
+[ADR-0043](0043-agent-initiated-session-reset.md) により一部改訂された。operator
+起点の既存意味論を維持したまま、agent 自身の permission 付き deferred reset を追加する。
 
 ## Context
 
-kaoiro Composer can complement the slash command reported by com, but
-Not interpreted. `/new` and `/clear` reach the wrapper as normal `send_instruction`,
-Codex does not change thread ID or context by just one turn prompt.
-Note measured 2026-11-11. Claude/Codex
-S /execintegration not via, so even if you pass a string to the left side, you can use session lifecycle operation.
+kaoiro Composerはengineが報告したslash commandを補完できるが、command自体を
+解釈しない。`/new`・`/clear`は通常の`send_instruction`としてwrapperへ届き、
+Codexでは単なる1 turn promptになってthread IDもcontextも変化しないことを
+2026-07-11にももが実測した。Claude/CodexともCLI native slash command parserを
+経由しないSDK/exec統合なので、文字列をengineへ渡してもsession lifecycle操作に
+ならない。
 
+ももの実測では、kaoiroから`/new`送信直後も同じCodex sessionで過去会話を参照
+でき、session boundaryは発生しなかった。一方disconnect -> resumeではhistory継続を
+確認済み。Codex native `/new` (表示保持 + fresh task)、`/clear` (端末表示消去 +
+fresh task)、`Ctrl+L` (表示だけ消去)、`/delete` (恒久削除)の意味差は公式仕様で
+確認したが、kaoiro越しにnative commandを実行した実測ではない。また、同一processで
+session IDをnull化して次turnを`startThread()`にする経路も未実測であり、本ADRは
+その成立を前提にしない。
 
-In Note's actual survey, kaoiro also sends `/new` to see past conversations in the same Codex session
-and session boundary did not occur. Disconnect -> resume
-Verified. Codex native `/new` (display holding + fresh task)
-The meaning difference between `Ctrl+L` and `/delete` is the official specification.
-It is not actual measurement that execution of native command over kaoiro. In the same process
-The path to null the session ID and make the next turn `startThread()` is unrealized.
-It does not assume that it is established.
+### 追補 (2026-07-28 — Claude Agent SDK `/compact` 実測)
 
-### © 2019 Claude Agent SDK`/compact`the relevant entry
+2026-07-28 に実施した [phase-28 の Track S 実測結果](../plans/phase-28-agent-initiated-session-ops.md#track-s-実測結果-もも2026-07-28)では、Claude Agent SDK 0.3.220 は streaming input mode でも文字列 `/compact` を CLI native slash command として解釈し、manual compact を実行した。したがって、上記の「Claude/CodexともCLI native slash command parserを経由しない」という断定は、Codex 側の実測に限る。Claude 側にはこの断定を適用しない。
 
-In [Phase-28 Track S](../plans/phase-28-agent-initiated-session-ops.md#track-s-実測結果-もも2026-07-28) conducted on 2026-28-28, the Claude Agent SDK 0.3.220 interpreted string `/compact` as CLI native slash command in streaming input mode. Therefore, the above “Claude/Codex does not pass CLI native slash command parser” is limited to the actual measurement of Codex. Claude does not apply this fault.
+同日の [phase-28 実機受け入れ](../plans/phase-28-agent-initiated-session-ops.md#実機受け入れ結果-あお2026-07-28)で、agent 発の `request_compact` 経由の manual compact も本番 session で成立した。追加で判明した 2 点を記録する。
 
-In [phase-28](../plans/phase-28-agent-initiated-session-ops.md#実機受け入れ結果-あお2026-07-28) of the same day, manual compact via `request_compact` of the agent was also established in the production session. De  two additional points.
+- **`compact_metadata.post_tokens` は SDK 型上 optional** (`post_tokens?: number`) であり、常に載る保証はない。実機では in-process の `SDKCompactBoundaryMessage` に載っていたが、CLI が書き出す session jsonl 上の同 event には無く、artifact により表現が異なった (field 名も snake_case / camelCase で相違)。compact の削減量を扱う実装は in-process message を正とし、`post_tokens` 欠落時に degrade する経路を持つこと。
+- **manual compact の所要は文脈量依存で、数分に達し得る**。実測は 13.7 秒 @ ~22k tokens に対し 168.8 秒 @ ~293k tokens。session lifecycle 操作の UI / tool description は所要秒数を約束せず、「次のターン境界で走る」「完了は boundary event で観測する」という表現に留めること。
 
-- **`compact_metadata.post_tokens` is optional**(`post_tokens?: number`), and there is no guarantee that it always exists. In the actual aircraft, the `SDKCompactBoundaryMessage` of in-process was not the same event on the session jsonl written by CLI, but the expression is different by the fact (field name is different from snake case / camelCase). The implementation that handles compact reductions is correct in-process message and has a path to degrade when `post_tokens` falls.
-- **manual compact is contextual and can reach a few minutes**Note 13.7 sec @ ~22k s @ 168.8 sec @ ~293k s. The UI / tool description of the session lifecycle operation does not promise the required number of seconds, and the expression "running at the next turn boundary" and "complete observation with boundary event".
+operatorが同じagent/persona/cwdのまま新しい会話を始めるには、現状agent削除と
+再spawnが必要である。必要なのは文章入力ではなく、表示履歴、resume pointer、
+wrapper process、新しいSDK sessionを協調して切り替える第一級control operationで
+ある。
 
-To start a new conversation while the operator is the same agent/persona/cwd, delete the current agent and
-respawn is required. not text input, but displayhistory, resume pointer,
-wrapper process, the first-class control operation to switch the new SDK session
-Comment
+本ADRは次を決める:
 
-This ADR determines:
-
-1. How to intercept slash command?
-2. How to generate fresh session in both directions?
-3. Display difference between `/new` and `/clear`.
-4. Handling of the old sessionses route and `SessionPointers`.
-5. Common protocol and session capability boundary.
-6. Behavior during turnexecution.
+1. slash commandをどの層でinterceptするか。
+2. 両engineでfresh sessionをどう生成するか。
+3. `/new`と`/clear`の表示差。
+4. 旧sessionへ戻る経路と`SessionPointers`の扱い。
+5. 共通protocolとsession capabilityの境界。
+6. turn実行中の挙動。
 
 ## Decision
 
-### F1 — client first class control + server protection reject
+### F1 — client第一級control + server防御reject
 
-dashboard input after trim**Close**`/new` or `/clear` only when attaching
-send operator-only control event:
+dashboardはtrim後の入力が**exactに**`/new`または`/clear`で、attachmentが無い時だけ
+通常instructionを送らず、operator-only control eventを送る:
 
 ```text
 session_reset { agent_id, mode: "new" | "clear" }
 ```
 
-arguments (`/new foo`), multiple lines, and attach are not interpreted as session reset.
-However, since the error transmission of reserved command is silent, it does not flow to the left side,
-`send_instruction` handler also detects anexact `/new` and `/clear` without attachment,
-`reserved_session_command` For the former client, the upgrade to the dedicated event
-permission Don't get a wrapper to reparse user text. protocol control and model input
-It is because the meaning changes after mixing responsibilities and passing through client/ valid validation.
+引数付き (`/new foo`)、複数行、attachment付きはsession resetとして解釈しない。
+ただしreserved commandの誤送信を黙ってengineへ流さないため、serverの
+`send_instruction` handlerもattachment無しのexact `/new`・`/clear`を検出し、
+`reserved_session_command`でloud rejectする。旧clientには専用eventへのupgradeを
+促す。wrapperがuser textを再parseする案は採らない。protocol controlとmodel入力の
+責務を混ぜ、client/server validationを通過した後で意味が変わるためである。
 
-If you want to send exact string to model for descriptive purposes, code block or escape the beginning
-Use `\/new`/`\/clear` to avoid reserved exact.. phase-17
-Don't make a special route that sends anexactRoute by removing it. Defending Command
+exact文字列をmodelへ説明目的で送りたい場合はcode block、または先頭をescapeした
+`\/new` / `\/clear`を用い、reserved exact tokenを避ける。phase-17はescape文字を
+除去してexact tokenを送る特別経路を作らない。reserved command防御を迂回する裏口に
+なるためである。
 
+**追補 (2026-07-28、ADR-0043)**: F1 の起点は operator に加えて agent 自身へ拡張する。
+agent 起点は `request_session_reset` MCP tool と wrapper→server control event を通るため、
+user text の再 parse と reserved command 防御の意味論は変更しない。
 
-**Supplement (2026 -28, ADR-0043)**: The starting point of F1 is extended to the agent itself in addition to the operator.
-`request_session_reset` MCP tool and wrapper→ event control event
-user text reparse and the meaning of the command defense are not changed.
+serverはoperator role、agent存在、live owner、capability、現在stateを検証し、
+reset requestを一意`request_id`付きでrunnerへrelayする。client pushの`:ok`は受付
+のみで、表示変更は後述のauthoritative completion broadcastを待つ。
 
-server verifies operator role, agent existence, live owner, capability, current state,
-relay the reset request with `request_id`. client push`:ok`
-only, the display change waits for the authoritative completion broadcast described below.
+### F2 — fresh relaunchで両engineを共通化
 
-### F2 — Sharing both slices with fresh relaunch
+session resetは既存`resume_session`のrunner supervisor経路を拡張し、同じagent
+entryを**kill + fresh relaunch** (resume_session_idなし)する。これにより:
 
-session reset extends the CO supervisor route of the existing `resume_session` and the same agent
-Entry**kill + fresh relaunch**(without resume session id) By:
+- Claudeは`resume` optionなしの新しい`query()`を開始する。
+- Codexは`resumeThread()`でなく`startThread()`から始める。
+- agent_id、persona、cwd、engineを維持し、model、effort、permission mode、sandbox、
+  network access等はphase-15 D8のsnapshotと同じ**最後に実効だった設定**で開始する。
+  launch時値へ巻き戻さない。
+- 旧SDK processのin-memory context/queue/tool stateを新sessionへ混入させない。
 
-- Claude starts a new `query()` without `resume` option.
-- Codex starts with `startThread()` instead of `resumeThread()`.
-- Agent id, personala, cwd, maintain your business, model, effort, permission mode, sandbox,
-network accessphasephase-15 Same as D8 snapshot**Lastly, it was effective**Start
-Don't rewind to launch value.
-- Don't mix the old SDK process in-memory context/queue/tool state into the new session.
+reset専用に各adapterの長寿命loopを内部再初期化する実装は採らない。Claudeの
+streaming queryとCodexのper-turn execで別実装になり、queue/pending toolの残留を
+証明しにくい。runner supervisorをprocess lifecycleのSSOTとして再利用する。
 
-For reset only, the implementation of reinitializing the long-life loop of each adapter is not collected. Claude
-streaming query and codex per-turn exec are implemented separately, and leave of queue/pending tool
-hard to prove. Reuse vis supervisor as a process lifecycle SSOT.
+serverはreset開始時にagent単位の`session_reset_pending` lockを取り、後続の
+instruction、model/effort switch、permission_mode switch、resume_session
+(switch_session)、重複resetを`session_reset_pending`で拒否する
+(**2026-07-12 ε 実装時の race 分析で resume_session の列挙漏れを検出し追補**、
+race 塞ぎとして `AgentsChannel.handle_in("resume_session")` にも
+`guard_against_reset_pending` を挿入)。
+runnerがfresh wrapperの接続を確認した時だけ`session_reset_completed`をbroadcastし、
+lockを解放する。Codexのthread/rollout IDが最初のturnまで採番されない場合、fresh
+wrapper接続を「context reset成立」としてcompletionし、`to_session_id`はnullableで
+markerへ載せ、最初のID報告で同じrequest IDのmarker/pointerを確定する。
 
-server takes the `session_reset_pending` lock of the agent unit at the start of reset, followed by
-instruction,model/effort switch,permission_mode switch,resume_session
-(switch session), deny duplicate resets with `session_reset_pending`
-(**2026 -12 ε In the race analysis during implementation, Detect the leakage of resume session and repair**,
-race to `AgentsChannel.handle_in("resume_session")`
-`guard_against_reset_pending`.
-broadcast `session_reset_completed` only when the connection of the fresh wrapper is confirmed,
-Release lock. If the codex thread/rollout ID is not counted until the first turn, fresh
-`to_session_id` is nullable
-Marker/pointer of the same request ID in the first ID report.
+fresh spawn/timeout失敗時は、runnerが保存した旧session IDで旧sessionを明示resume
+してatomic rollbackを試みる。rollback成功後に`session_reset_failed`をloud broadcast
+し、UI history/boundary/pointerを変更せずlockを解放する。これは成功を装うsilent
+fallbackではなく、失敗したtransactionの復元である。rollback自体も失敗した場合のみ
+agentをdisconnectedとし、両errorを表示する。
 
-When fresh spawn/timeoutfailure, the old session ID saved by ses expresses the old session.
-tryicic rollback. loud broadcast after rollbacksuccess
-UI history/boundary/pointer This is a silent dressing success
-instead of fallback, it is a restoration of the failed transaction. only if the rollback itself fails
-Disconnected agent and display both errors.
+reset requestごとにgeneration/epochを進め、旧wrapper/旧rolloutから遅れて届いたevent、
+tool/question/permission correlation、stale completionを新sessionへ混ぜない。fresh
+wrapperはpersona/developer instructions、最後に実効だったmodel/effort/permission、
+sandbox/network、MCP configを通常のspawn経路から再適用する。値のSSOTはphase-15 D8
+の最新effective snapshotとし、phase-16のmid-session model/effort switch成功値も含む。
 
-wrapper/previous rollout
-tool/question/permission correlation andlele completion are not mixed to new session. Freshness
-wrapper is mana/developer instructions, lastly effective model/effort/permission,
-Re  the sandbox/network and MCP config from the regular spawn route. Value SSOT Phase-15 D8
-The latest effective snapshot, including the mid-session model/effort switchsuccess value of phase-16.
+「通常のspawn経路から再適用」の具体化は [ADR-0014 F1 追補「resume 時の privilege 三軸再適用」](0014-session-resume-and-restore.md) に集約する: `ResetSessionCommand.resume_snapshot?` を server が同梱し、runner の `applyResumeSnapshot` pure helper が P0 の privilege 三軸 (Codex `sandbox` / `network_access`、Claude `permission_mode`) を fresh 相当の `ParsedSpawn` に反映する。`model` / `effort` は sanitized snapshot に保持され drift 計算にも入るが実 apply は P1。
 
-`ResetSessionCommand.resume_snapshot?` is included with the server, and the CO <CODE1 pure> helper reflects the P0 privilege triaxial (Codex `sandbox` / `network_access`, Claude `permission_mode`) to the `ParsedSpawn` equivalent of fresh. `model` / `effort` is preserved in sanitized snapshot and is also included in drift calculation, but apply is P1. [0014-session-resume-and-restore](0014-session-resume-and-restore.md)
+### F3 — /new は表示維持、/clear は当該 agent の表示 projection を reset
 
-### F3 — /new maintains display, /clear resets the display projection of the agent
+両 mode とも新しい SDK session を作り、旧 session file (host JSONL/rollout) は保持
+する。表示側の差は次のとおり:
 
-Both modes create a new SDK session, and the old session file (host JSONL/rollout) holds
-The difference between the display side is:
+- `/new` — 表示 projection を維持する。`session_boundary` marker を既存 history の
+  末尾に append し、以降の SDK 出力が続く。旧 log と structured IA はそのまま。
+- `/clear` — 当該 agent の pane 表示を **空にする**。通常 log も IA バブルも区別せず
+  全て drop し、`session_boundary` marker 1 行だけを残す。IA の相手 pane は #106 の
+  per-pane `ClearWatermarks` で hide するので、durable ledger
+  (`InterAgentHistory` DETS) は削除しない (相手 agent の pane では IA が残る)。
+  engine 側 session file (JSONL/rollout) は削除せず、旧 session は picker から
+  resume 可能のままとする。
 
-- `/new` — keep display projection. `session_boundary` marker
-append at the end, followed by the SDK output. The old log and structured IA are
-- `/clear` — pane display of the agent**empty**Note Normal log and IA bubbles are not distinguished
-all drops and leave only `session_boundary` marker. IA opponent pane #106
-durable ledger because per-pane `ClearWatermarks` hide
-(`InterAgentHistory` DETS) does not delete (the IA remains in the pane of the opponent agent).
-The engine session file (JSONL/rollout) is not deleted and the old session is picker.
-resume Leave it possible.
+**2026-08-08 訂正:** IA visibility cutoff の durable ledger 前提は
+[ADR-0051](0051-history-restart-resilience.md) D3-4 で supersede された。
+`ClearWatermarks` は server 採番の ingress stamp と比較し、IA は wrapper
+ホストの sidecar から per-pane projection へ復元する。server 側の
+`InterAgentHistory` DETS は撤廃する。
 
-**2026 08 Correction:**IA visibility cutoff
-[ADR-0051](0051-history-restart-resilience.md) was supersede in D3-4.
-`ClearWatermarks` defines the ing  stamp of the server
-Restore from the host sidecar to per-pane projection. server
-`InterAgentHistory` Remove DETS.
+`server` 側 `AgentStates` を表示 projection の SSOT とし、client local store だけを
+消す実装は採らない。再接続で消した log が復活するためである。/clear 完了時、
+`SessionResets.confirm_connection/2` は `SessionStarts.advance_transition/3` が返す
+`{order, display}` を `ClearWatermarks.record/3` に採用 (operator `clear_history`
+の `adopt_session_start_watermark` と同型) し、`AgentStates.clear_history_with_boundary/2`
+で history を marker 1 行だけに絞る。fsync-gated な `ClearWatermarks` を先に通し、
+crash 時にも watermark を durable に残す (`M7-a` と同じポリシー)。
 
-`server` `AgentStates` is the SSOT of the display projection and only the client local store
-Don't getthe relevant entryd. reconnection. /clear
-`SessionResets.confirm_connection/2` returns `SessionStarts.advance_transition/3`
-`{order, display}` to `ClearWatermarks.record/3`
-`adopt_session_start_watermark` and `AgentStates.clear_history_with_boundary/2`
-squeezing history to one line. fsync-gated `ClearWatermarks`
-leave watermark even if it crashes (same as `M7-a`).
+marker は `{mode, previous_session_id?, to_session_id?, request_id, ts}` を
+operator 向け payload に持つ。`to_session_id` は ID 確定後に追記し、lazy 采番時
+は一時 null を許す。`session_reset_completed` broadcast の payload には `/clear`
+時のみ `clear_watermark`(ISO ts)を追加で載せ、live client が reload を待たず
+watermark map を更新できるようにする。viewer への通知は ADR-0021 の allow-list
+で operator に限定し、session ID を含む payload を漏らさない。operator `clear_history`
+(#48) と /clear は **別機能**(前者は現行 session の他 session ログ purge、後者は
+当該 agent の pane 全消去 + marker 保持)としてそれぞれ現状 API を維持する。
 
-marker `{mode, previous_session_id?, to_session_id?, request_id, ts}`
-payload for operator. `to_session_id` is added after ID is confirmed and lazy
-null. `session_reset_completed` `/clear`
-Add `clear_watermark`(ISO ts) only when live client does not wait for reload
-update watermark map. ADR-0021
-limits to the operator and does not leak the payload containing the session ID. operator `clear_history`
-(#48) and /clear**Features**(The former is the other session log purge of the current session, the latter is
-maintain the current API as the agent's pane marker + marker retention.
+### F4 — SessionPointersは最新1件のまま、明示detachを追加
 
-### F4 — SessionPointers add explicit detach, as it is the latest one
+[ADR-0014](0014-session-resume-and-restore.md) F3の1:1最新pointer契約を維持し、
+pointer stackは追加しない。fresh relaunch成功後、`SessionPointers`は旧session IDを
+**明示的にdetachしてnilへ更新**し、cwd/engineは保持する。現在の`record(..., nil)`
+は既存session IDを保存するmerge semanticsなので、phase-17で同期的な専用operation
+(`detach_session/1`等)を追加する。fresh wrapperが新session IDを報告した時点で
+通常のrecord経路が最新pointerを更新する。
 
-[ADR-0014](0014-session-resume-and-restore.md) 1:1 latest pointer contract with F3,
-pointer stack After fresh relaunchsuccess, `SessionPointers` has the old session ID
-**explicitly update toachil**and cwd/  keep. Current `record(..., nil)`
-is a merge semantics that stores the existing session ID, so it is aoperhronous dedicated operation in phase-17
-(`detach_session/1`, etc.) When fresh wrapper reports a new session ID
-Normal record route updates the latest pointer.
+旧sessionはrunnerのcwd配下session列挙と既存session picker/
+`resume_session`で再開できる。専用「直前へ戻る」stackは作らない。serverに履歴を
+複製せずhost session filesを候補SSOTとするADR-0014 F2/F3/A4を維持する。
+completion toastから`previous_session_id`へ一度だけ戻るshortcutは将来追加可能だが、
+pointer stackではなく既存`resume_session`へのUI shortcutとして扱い、MVP外とする。
 
-ses session and existing session picker/
-`resume_session` Don’t make a dedicated “ the relevant entry” stack. history on server
-Maintain ADR-0014 F2/F3/A4 to candidate SSOT for host session files without duplicate.
-You can add sh,cut only once from completion toast to `previous_session_id`.
-This is not pointer stack, it is treated as a shortcut to the existing `resume_session` and is not MVP.
+reset後、最初のinstruction前はsession ID未採番でも正常な状態である。pointer=nilを
+「reset済み・次turnでfresh ID確定」と扱い、旧pointerへ暗黙fallbackしない。
 
-After reset, the first instruction is the normal state even if the session ID is not specified. pointer=nil
-"reset and next turn to confirm fresh ID", and do not implicit fallback to the old pointer.
+### F5 — capability advertiseでengine分岐を禁止
 
-### F5 — ProHomet Note with capability advertise
-
-[ADR-0034](0034-session-capabilities-advertisement.md) Extend F2:
+[ADR-0034](0034-session-capabilities-advertisement.md) F2を次で拡張する:
 
 ```text
 supports_session_reset: boolean
 session_reset_modes: ("new" | "clear")[]  // supports=true時は必須・非空
 ```
 
-`supports_session_reset=false` can be omitted. modes
-If not specified or empty, fail-closed as invalid advertising and disable the UI.
-Reject this combination with the adapter's stamp test.
+`supports_session_reset=false`時だけ`session_reset_modes`を省略できる。trueなのにmodesが
+未指定または空ならinvalid advertisementとしてfail-closedし、UIをdisableする。
+adapterのstamp testでもこの組合せをrejectする。
 
-wrapper/wrapper/wrapper provides F2 fresh relaunch and completion handshake
-stamp true. unstamp/false disables UI command with fail-closed and typed exact
-command does not flow to . as `unsupported_session_reset`. dashboard with 4 people
-Not judged.
+wrapper/runner/serverがF2のfresh relaunchとcompletion handshakeを提供するsessionだけ
+trueをstampする。未stamp/falseはfail-closedでUI commandをdisableし、typed exact
+commandも`unsupported_session_reset`としてengineへ流さない。dashboardはengine名で
+判定しない。
 
-`/new``/clear` is another kaoiro local command from `ext.slash_commands`, but
-function=true and merge to the completion candidate only when the corresponding mode enumeration. This is the same name
-Even if command is reported, the meaning of kaoiro control is priority, and it does not duplicate display.
+`/new`・`/clear`はengineの`ext.slash_commands`とは別のkaoiro local commandだが、
+capability=trueかつ該当mode列挙時だけ補完候補へmergeする。これによりengineが同名
+commandを報告してもkaoiro controlの意味を優先し、重複表示しない。
 
-### F6 — refused when busy. Do not auto interrupt・queue
+### F6 — busy時は拒否。自動interrupt・queueはしない
 
-Only `idle` or `waiting_input` are allowed to accept reset. `thinking`
-`tool_running`, `waiting_permission`, `waiting_question`, `sending`, etc.
-`agent_busy`
+resetを受理できるstateは`idle`または`waiting_input`のみとする。`thinking`、
+`tool_running`、`waiting_permission`、`waiting_question`、`sending`その他実行中stateは
+`agent_busy`でloud rejectする。
 
-`error` There is a demand for resetting and partitioning the agent of the state, but with other non-idle state in MVP
-reject. after realizing old process/rollback semantics
-Become an extension candidate.
+`error` stateのagentをresetして仕切り直す需要はあるが、MVPでは他の非idle stateと
+同様にrejectする。errorからのreset受理は、旧process/rollback semanticsを実測した後の
+将来拡張候補とする。
 
-No reset after auto interrupt. tool When the write interruption and context destruction are bundled in one operation
-High impact on errors. queue If it is delayed after long turn completion,
-The operator misidentifies the following destinations: If required, the operator expresses the existing interrupt,
-`waiting_input` Check return and resend reset.
+自動interrupt後のresetは採らない。tool write中断とcontext破棄を一操作に束ねると
+誤操作の影響が大きい。queue待機も採らない。長いturn完了後に遅れてresetされると、
+operatorが次の入力先を誤認する。必要ならoperatorが既存interruptを明示実行し、
+`waiting_input`復帰を確認してresetを再送する。
 
-server acquires F2 pending lock at the same time as state verification and prevents TOCTOU with new instruction.
-wrapper/wrapper also verifies the reset request's generation/request ID andlele completion
-ignore.
+serverはstate検証と同時にF2のpending lockを獲得し、新instructionとのTOCTOUを防ぐ。
+runner/wrapperもreset requestのgeneration/request IDを検証し、stale completionを
+無視する。
 
-**Supplement (2026 -28, ADR-0043)**: If the agent itself requires an approved reset,
-When the tool call, only the reservation is accepted, and it fires after the completion of the turn. operator
-busy denial, auto interrupt adopt, queue adopt is not changed.
+**追補 (2026-07-28、ADR-0043)**: agent 自身が承認済みの reset を要求する場合は、
+tool call 時には予約だけを受理し、当該 turn の完了後に発火する。operator 起点の
+busy 拒否・自動 interrupt 不採用・queue 不採用は変更しない。
 
-### F7 — SSOT protocol event and failure
+### F7 — protocol eventとfailureをSSOT化
 
-control flow:
+control flowは次の一組とする:
 
 ```text
 client -> server: session_reset {agent_id, mode}
@@ -244,107 +244,107 @@ runner -> server: session_reset_result {agent_id, mode, request_id, ok, reason?}
 server -> clients: session_reset_started | session_reset_completed | session_reset_failed
 ```
 
-`session_reset_started`Displays "New session" in the UI. Existing
-,- life lifecycle event
-pending lock to SSOT. wrapper process to state machine
-not to mix.
+`session_reset_started`受信中はUIに「新しいsessionを開始中」と表示する。既存の
+coarse `KaoiroState`へ`starting_new_session`を追加せず、server-owned lifecycle eventと
+pending lockをSSOTにする。wrapper processが入れ替わる操作をengine state machineへ
+混ぜないためである。
 
-server pending lock, Agentdisplaysdisplay change, SessionPointers detach, client broadcast
-SSOT wrapper/S  session file of process lifecycle
-SSOT Do not duplicate the same history or pointer stack on each layer.
+serverがpending lock、AgentStates表示変更、SessionPointers detach、client broadcastの
+SSOTである。runnerはprocess lifecycleのSSOT、wrapper/SDK session fileは会話履歴の
+SSOTである。各層に同じ履歴やpointer stackを複製しない。
 
-error reason closed vocabulary (`agent_busy`, `unsupported_session_reset`,
+error reasonはclosed vocabulary (`agent_busy`, `unsupported_session_reset`,
 `session_reset_pending`, `runner_unavailable`, `spawn_failed`, `rollback_failed`,
-`timeout`) returns to loud and silent to old session dressing fallback or success to ses prompt
-Pro.t resume. stderr
+`timeout`)でloudに返し、engine promptへのfallbackや成功を装う旧sessionへのsilent
+resumeを禁止する。stderrにも
 `[wrapper session] command=<mode> from=<id> to=<id|null> result=<ok|failed|rolled_back>`
-1 line.
+を1行出す。
 
 ## Consequences
 
 ### Positive
 
-- The same agent/persona/cwd can be replaced with the equivalent conversation partition.
-- Close Claude/Codex difference to fresh relaunch, and client only see capability.
-- After `/clear`, the old session can be resume from the picker.
-Don't delete it. reset only the pane display of the agent, and the IA opponent pane
-hide to per-pane with watermark.
-- busy operation is immediately rejected, no delay reset or implicit interrupt occur.
+- 同じagent/persona/cwdのまま、CLI相当の会話仕切り直しができる。
+- Claude/Codex差をrunnerのfresh relaunchへ閉じ、clientはcapabilityだけを見る。
+- `/clear`後も旧sessionをpickerからresumeでき、session file (JSONL/rollout) は
+  削除しない。当該 agent の pane 表示だけを reset し、IA の相手 pane は
+  watermark で per-pane に hide する。
+- busy操作は即時rejectされ、遅延resetや暗黙interruptが起きない。
 
 ### Negative
 
-- control handshake crosses all layers of client/./wrapper/wrapper.
-- A short disconnected window occurs to restart the wrapper process at reset.
-- `SessionPointers` is required to add an explicit detach operation toilil.
-- If the codex fresh thread ID is lazy until the first turn, the boundary ID is confirmed two steps.
+- control handshakeがclient/server/runner/wrapperの全層に跨る。
+- reset時にwrapper processを再起動するため短いdisconnected窓が生じる。
+- `SessionPointers`にnilへの明示detach operationを追加する必要がある。
+- Codexのfresh thread IDが初turnまでlazyな場合、boundaryのID確定が二段階になる。
 
 ### Neutral
 
-- pointer remains the latest one, and the previous session list continues to enumerate.
-- `/clear` does not delete the SDK session file. The full removal function is out of scope of this ADR.
+- pointerは最新1件のままで、旧session一覧はrunner列挙を継続する。
+- `/clear`はSDK session fileを削除しない。完全削除機能は本ADRのscope外。
 
 ## Alternatives Considered
 
 | Option | Why rejected |
 |--------|--------------|
-|wrapper`user_message`Interpreting slash with top matching|mix of model input and control responsibilities, drift for literal text and chattament|
-|client only|Exact command of old/ex client is attached to the command line. server defense reject required|
-|Change only sessionId to null with adapterinHome|Codex is close to but is a.metrical to Claude long life query. It is difficult to prove the complete set of queue/tool/pending state|
-| `/clear`delete host session file|It is destructive operation which is not resumeable, and it is difficult to predict from the name. Reset only the pane display of the agent and hold the host session file (JSONL/rollout)|
-|Save previous session stack on server|Duplicate with ADR-0014 F3/A4 last pointer + host enumeration SSOT. Return with existing picker|
-|reset when busy|write/tool interruption and context destruction occur by one click. Request the explicit interrupt of the operator|
-|queue reset when busy|Delaying after execution is difficult to predict and misunderstand the following destination|
-|Resetfailure does not restore the old session and stops with disconnected|The UI can be changed toicic transaction, and the old session can be resume safely with idle. Only disconnected when the rollback fails|
-|Features`lifecycle_commands`object AgHomeated into one|The display policy is fixed by mode on protocol. ADR-0034 boolean + optional modes pattern can reuse existing UI judgment and fail-closed semantics|
+| wrapperが`user_message`先頭一致でslashを解釈 | model入力とcontrol責務が混ざり、literal textやattachmentの扱いがadapterごとにdriftする |
+| clientだけでintercept | 旧/外部clientのexact commandがengineへ素通しされる。server防御rejectが必要 |
+| adapter内部でsessionIdだけnullへ変更 | Codexには近いがClaude長寿命queryと非対称。queue/tool/pending stateの完全resetを証明しにくい |
+| `/clear`でhost session fileも削除 | resume不能なdestructive operationになり、名称から予想しにくい。当該 agent の pane 表示だけを reset し、host session file (JSONL/rollout) は保持する |
+| serverにprevious session stackを保存 | ADR-0014 F3/A4のlatest pointer + host列挙SSOTと重複。既存pickerで戻れる |
+| busy時にinterruptしてreset | write/tool中断とcontext破棄が一clickで起きる。operatorの明示interruptを要求する |
+| busy時にresetをqueue | 実行完了後の遅延破棄が予測困難で、次の入力先を誤認する |
+| reset失敗時に旧sessionを復元せずdisconnectedで止める | UIを変えないatomic transactionにでき、旧sessionはidleで安全にresume可能。rollbackも失敗した時だけdisconnectedでよい |
+| capabilityを`lifecycle_commands` object 1個に集約 | display policyはprotocol上modeで固定済み。ADR-0034のboolean + optional modes patternに揃えた方が既存UI判定とfail-closed semanticsを再利用できる |
 
 ## Implementation
 
 [phase-17-session-lifecycle-commands](../plans/phase-17-session-lifecycle-commands.md)
-implement.
+で実装する。
 
-### Handling of actual survey items (as of phase-17 chunk γ, 2026 -12)
+### 実測項目の扱い (phase-17 chunk γ 時点、2026-07-12)
 
-F2's "completion" and Codex thread only when checking fresh wrapperconnection
-ID lazy The behavior of gammathe relevant entry-5/6)**assumption**
-Include coded as follows: Composer intercept
-`/new``/clear` by operator
-If necessary, this ADR will be used for searching.
+F2 の「fresh wrapper接続を確認した時だけcompletion」と Codex の thread
+ID lazy 採番を巡る挙動は、γ (17-5/6) 実装時点では**実装 assumption**
+として下記の形で coded に組み込んだ。実機での実測は Composer intercept
+と boundary UI が入る δ (17-7/8/9) 完了後、operator による `/new`・`/clear`
+の実操作で行い、必要ならこの ADR に findings を追補する。
 
-- **Codex thread ID**:   `session_reset_result`
-set `to_session_id` to optional / nullable, and the codex is fresh
-send `null` at spawn. `SessionResets`
-`broadcast_completed` payload `SessionResetCompleted.to_session_id`
-`null` The first envelope  of the fresh session is session id
-The current `SessionPointers.record` path is the latest pointer when reported
-In order to update, the pointer side is determined naturally by the existing route. marker
-backward patch (δ 17-7 to `AgentStates` boundary marker
-`to_session_id` reflects the first envelope  on the fresh side when implementing the UI
-to add.
-- **Same process  generation**: vis supervisor takes child every time
-kill + fresh spawn `startThread()`
-→ The route to switch `resumeThread()` is not collected in this ADR (F2 "fresh"
-The policy to integrate the SDK difference in relaunch. In-process
-If it is determined that it can be fully iso  even with a switch, it will be a cost reduction candidate, but at γ point,
-Unverified and unadopted.
-- **Old event iso **: Three-stage protection. (a)   supervisor
-Stop the old wrapper process with child kill (former rollout / tool response /
-permission requests are not delivered to the fresh process), (b) wrapper
-`AgentStates`
-dedupe, (c) server `SessionResets` in latest session id
-request id / phase mismatch
-(F7) Prevents any of the three-stages in two other steps.   side generation
-counter is not introduced, and the child process layer kill is the main defense.
+- **Codex thread ID 確定タイミング**: runner の `session_reset_result`
+  は `to_session_id` を optional / nullable にし、Codex 側は fresh
+  spawn 時点で `null` を送出する。server (`SessionResets`) の
+  `broadcast_completed` payload は `SessionResetCompleted.to_session_id`
+  を `null` で載せる。fresh session の初回 envelope が session_id を
+  報告した時点で既存の `SessionPointers.record` 経路が最新 pointer を
+  更新するため、pointer 側の確定は既存経路で自然に達成される。marker
+  側の後追い patch (δ 17-7 の `AgentStates` boundary marker への
+  `to_session_id` 反映) は UI 実装時に fresh 側の初回 envelope を hook
+  する形で追加する。
+- **同 process 連続生成**: runner supervisor は reset のたびに child を
+  kill + fresh spawn する (別 process)。同 process 内で `startThread()`
+  → `resumeThread()` を切り替える経路は本 ADR では採らない (F2 「fresh
+  relaunch」で SDK adapter 差を統合する方針)。実測で「同 process 内
+  切替でも十分に隔離できる」と判ればコスト削減候補になるが、γ 時点では
+  未検証・不採用。
+- **旧 event 隔離**: 三段防御で担保する。(a) runner supervisor の
+  child kill で旧 wrapper process を停止 (旧 rollout / tool 応答 /
+  permission 要求は fresh 側 process に届かない)、(b) wrapper が
+  envelope に session_id を stamp するので server 側 `AgentStates` が
+  latest session_id で dedupe、(c) server `SessionResets` は
+  request_id / phase mismatch の resolve / confirm を silent drop
+  (F7)。三段のどれかが壊れても他 2 段で防ぐ。runner 側の generation
+  counter は導入せず、child プロセス層の kill を主防御とする。
 
-### F2 "connection confirmation" implementation sharing (chunk γ two-phase completion)
+### F2 「接続確認」の実装分担 (chunk γ two-phase completion)
 
-`SessionResets`:spawning|:awaiting connect`
-`:awaiting_connect`
-migration only (broadcast does not fire), `session_reset_completed` is
-`WrapperChannel.after_join` to `SessionResets.confirm_connection/2`
-Fire over. 60 sec timeout is spawn stage ( spa ok not received) and connection
-wrapper join unconfirmed
-`session_reset_failed { reason: "timeout" }`  the relevant entry
-phase is only completed when confirming the fresh wrapper connection of this ADR F2
-`runner.ok=true` is misunderstood as completion
-completed if wrapper is dead on the fresh spawn
-explicitly avoid risk.
+`SessionResets` に lock の `phase: :spawning | :awaiting_connect` を導入
+し、runner の `session_reset_result { ok=true }` は `:awaiting_connect`
+移行のみ (broadcast は発火せず)、`session_reset_completed` は fresh
+wrapper の `WrapperChannel.after_join` から `SessionResets.confirm_connection/2`
+経由で発火する。60 秒 timeout は spawn 段階 (runner ok 未受信) と接続
+段階 (wrapper join 未確認) の両方を通算するので、いずれの段階で止まっ
+ても `session_reset_failed { reason: "timeout" }` に落ちる。この two-
+phase は本 ADR F2 の「fresh wrapper 接続を確認した時だけ completion」
+文言を文字通りに実装したもので、`runner.ok=true` を completion と誤解
+する近似実装 (fresh spawn 直後に wrapper が死んだ場合の completed 偽装
+リスク) を明示的に避ける。

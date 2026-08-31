@@ -1,5 +1,5 @@
 ---
-title: treats fatigue as a persona modifier with protocol state and separation
+title: 疲労を protocol state と分離したペルソナ modifier として扱う
 status: accepted
 date: 2026-08-21
 opened: 2026-08-21
@@ -9,7 +9,7 @@ related_specs: [persona-pack-schema, personas, protocol]
 related_adrs: [29, 40]
 ---
 
-# ADR 4 — treat fatigue as protocol state and parsona modifier
+# ADR-0054 — 疲労を protocol state と分離したペルソナ modifier として扱う
 
 ## Status
 
@@ -17,57 +17,57 @@ Accepted
 
 ## Context
 
-issue #162 is an agent with a high context usage and an existing working state.
-I want to show with a fatigue expression without changing the reading. `fatigued` to `state` vocabulary
-Adding the wrapper, wrapper, and dashboard state transitions, existing expressions, and rolling
-upgrade the upgrade compatibility. On the other hand, fatigue is important as `thinking` and `done`
-not executionstate.
+issue #162 は context 使用率が高いエージェントを、既存の稼働 state を
+読み替えずに疲労表情で示したい。`fatigued` を protocol の `state` 語彙へ
+追加すると、wrapper・server・dashboard の状態遷移、既存の表情網羅性、rolling
+upgrade の互換性までを巻き込む。一方で疲労は `thinking` や `done` と排他的な
+実行状態ではない。
 
-sprite of persona pack was only 7 state. pack with picture for fatigue
-Unsupported pack andFace face fallback without breaking the unknown state id
-is required.
+persona pack の sprite は従来の必須 7 状態だけだった。疲労用の絵を持つ pack
+を受け入れつつ、未対応 pack と CSS 顔フォールバックを壊さず、未知の state id
+を許容しない必要がある。
 
-Fatigue signal is `ext.context.used_percentage >= 60` in  with the predetermined P2/P4.
-issue #254 returns `ext.context_budget.work_budget_percentage` to wire
-This is the ratio of the soft work budget, and it is another thing from the initial fatigue signal.
-Even if it changes in the future, make sure to dissipate the decision to the caller.
+疲労信号は先行決定 P2/P4 に従い `ext.context.used_percentage >= 60` とする。
+issue #254 は後から `ext.context_budget.work_budget_percentage` を wire に
+追加したが、これは soft 作業予算の比率であり、当初の疲労信号とは別物である。
+将来どちらを採るかが変わっても、呼び出し側へ判断を散らしてはならない。
 
 ## Decision
 
-`fatigued`**modifier**wire on
-`state` does not appear `fatigued`, and `KnownState`/`expressionFor` vocabulary
-Not added. dashboard keeps the original state as label/CSS variant,
-Pass `fatigued` to the sprite solution only when fatigue, and `data-fatigued` to theFace face.
-sprite itself does not stack sp modifier.
+`fatigued` は **protocol state ではなく直交 modifier** とする。wire 上の
+`state` に `fatigued` は現れず、`KnownState` / `expressionFor` の語彙にも
+追加しない。dashboard は元の state を label・CSS variant として保ったまま、
+疲労時だけ sprite 解決に `fatigued` を渡し、CSS 顔には `data-fatigued` を付ける。
+sprite 自体には CSS modifier を重ねない。
 
-Fatigue judgment is closed to `isFatigued(envelope)`. At present
-`supports_context_usage` is explicitly true and
-`ext.context.used_percentage >= 60` Features
-Fail-closed to false, missing, or non-numeric. More
-Even if `work_budget_percentage` is changed to the judgment, the body of this function and its test
-Change only.
+疲労判定は `isFatigued(envelope)` 一箇所に閉じる。現時点では capability
+`supports_context_usage` が明示的 true で、有限な
+`ext.context.used_percentage >= 60` のときだけ true とする。capability の
+欠落・false、context の欠落、非数値は false に fail-closed する。将来
+`work_budget_percentage` を採る裁定に変わる場合も、この関数の本体とそのテスト
+だけを差し替える。
 
-Only `idle` and `waiting_input` are used to replace the fatigue sprite.
-`disconnected`, while working, complete, and error keep the original state. `disconnected` Priority
-`FATIGUE_ELIGIBLE_STATES` allowlist
-permission issue #162 Deleting early return with mu  in implementation is green
-Remove redundant early return with Note arbitration, and go toallowlist
-TB-7 is red.
+疲労 sprite への差し替え対象は `idle` と `waiting_input` だけとする。
+`disconnected`、作業中、完了、error は元 state を保つ。`disconnected` 優先を
+別の early return で重ねず、`FATIGUE_ELIGIBLE_STATES` allowlist を唯一の判定
+機構にする。issue #162 実装中の mutation で early return の削除が green の
+ままだったため、こはく裁定で冗長な early return を削除し、allowlist へ
+`disconnected` を混入する mutation が TB-7 を red にすることを確認した。
 
-mana pack must be 7 state, plus optional sprite id
-`fatigued` server must include 7 in s and required to
-Verify both partial sets. `manifest.states`
-SoT andthe relevant entryd `fatigued.png` missing, re-extract or reject pack as incomplete
-Undeclared extra PNG does not appear in manifest. Unknown id is rejected.
+persona pack は必須 7 state に加え、allowlist 済み optional sprite id
+`fatigued` を宣言できる。server は必須 7 の包含と required ∪ optional への
+部分集合を両方検証する。収集・キャッシュ完全性判定は `manifest.states` を
+SoT とし、宣言済みの `fatigued.png` 欠落は pack を不完全として再展開/拒否し、
+未宣言の余分な PNG は manifest に公開しない。未知 id は reject する。
 
-`fatigued.png` is the responsibility of issue #163.
-This decision defines schema, acceptance, and display path only.
+実ペルソナの `fatigued.png` 生成と provenance は issue #163 の責務であり、
+本決定は schema・受け入れ・表示経路だけを定義する。
 
 ## Consequences
 
-- Unsupported pack uses an existing idle sprite fallback and default persona
-Get minimal facial fatigue expression.
-- wrapper context notice threshold and dashboard fatigue threshold are the same
-60 But it is an independent constant of another host and another purpose, and it is not mutual derive.
-- If you need to spread fatigue to state transition or chip/timeline,
-set follow-up to determine the display scope.
+- 未対応 pack は既存の idle sprite フォールバックを使い、default persona は
+  CSS 顔の最小限の疲労表現を得る。
+- wrapper の context notice threshold と dashboard の fatigue threshold は同じ
+  60 だが、別ホスト・別目的の独立定数であり、相互導出しない。
+- fatigue を state 遷移や chip/timeline へ広げる必要が生じた場合は、別途
+  表示スコープを決める follow-up とする。

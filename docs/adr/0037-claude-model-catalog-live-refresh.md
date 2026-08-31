@@ -1,5 +1,5 @@
 ---
-title: Claude model catalog live path SDK realization and launch boots  default floor reduction
+title: Claude モデル catalog live 経路の SDK 実測一元化と launch bootstrap の default floor 縮小
 status: accepted
 date: 2026-07-14
 opened: 2026-07-14
@@ -9,258 +9,258 @@ related_specs: [plugin-model, protocol]
 related_adrs: [32, 34, 35, 39, 40]
 ---
 
-# ADR-0037 — Claude model catalog live path SDK Demonstration and launch boots  default floor reduction
+# ADR-0037 — Claude モデル catalog live 経路の SDK 実測一元化と launch bootstrap の default floor 縮小
 
 ## Status
 
-Accepted (2026.-14, master decision).Note
-[phase-18-claude-model-catalog-live](../plans/phase-18-claude-model-catalog-live.md).
+Accepted (2026-07-14、マスター決裁)。実装は
+[phase-18-claude-model-catalog-live](../plans/phase-18-claude-model-catalog-live.md)。
 
 ## Context
 
-`wrapper/claude-code/src/catalog.ts` `BOOTSTRAP` constant
-`@anthropic-ai/claude-agent-sdk` `supportedModels()` to 2026-13-13
-This is a static snapshot (equivalent to S  0.3.187).
-The role is the initial value of the Claude side catalog referenced in the following three locations:
+`wrapper/claude-code/src/catalog.ts` の `BOOTSTRAP` 定数は、
+`@anthropic-ai/claude-agent-sdk` の `supportedModels()` を 2026-07-13 に
+撮影した静的スナップショットである (SDK 0.3.187 相当、コメント記載)。
+役割は次の 3 箇所で参照される Claude 側 catalog の initial 値:
 
-- `runner/src/config.ts:288` — `engines[].models` of Register envelope .   boot
-When server (Elixir) to engine separate catalog
-- `wrapper/claude-code/src/host.ts:116` — presence `models` field
-- `wrapper/claude-code/src/host.ts:279` — initial value of `AgentHost.#models`. SDK init
-`#refreshSupportedModels()` (`host.ts:1231`)
+- `runner/src/config.ts:288` — Register envelope の `engines[].models`。runner boot
+  時に server (Elixir) へ engine 別 catalog を advertise する経路
+- `wrapper/claude-code/src/host.ts:116` — presence 初期送信の `models` フィールド
+- `wrapper/claude-code/src/host.ts:279` — `AgentHost.#models` の初期値。SDK init
+  完了後、`#refreshSupportedModels()` (`host.ts:1231`) が SDK の実測結果で上書き
 
-2026 -14 Now Anthropic includes Claude Sonnet 5 (`claude-sonnet-5`)
-BOOTSTRAP snapshot
-None The operation to manually update the BOOTSTRAP snapshot every time the model adds
+2026-07-14 現在、Anthropic は Claude Sonnet 5 (`claude-sonnet-5`) を含む
+新モデル世代を出しているが、BOOTSTRAP snapshot は Sonnet 4.6 のままで追従して
+いない。モデル追加のたびに BOOTSTRAP snapshot を手動更新する運用は現実的で
+なくなった。
 
+Phase 18-2 の実測 (SDK 0.3.208 での `query.supportedModels()` dump、2026-07-14)
+で本 ADR の前提を追認した: (a) `value: "default"` の row は SDK 側で
+`resolvedModel: "claude-opus-4-8[1m]"` (現時点の account 推奨モデル) に解決され、
+「`default` alias は永久に腐らない」前提が成立、(b) 実測配列に `sonnet[1m]` と
+`claude-opus-4-7` が既に存在せず、`sonnet` は `claude-sonnet-5` に解決 —
+BOOTSTRAP snapshot の drift が実データで確認された。
 
-Phase 18-2 (`query.supportedModels()` dump in S  0.3.208, 2026-14-14)
-`value: "default"`
-resolved to `resolvedModel: "claude-opus-4-8[1m]"` (current account recommended model)
-`default` alias does notHome permanently. (b) `sonnet[1m]`
-`claude-opus-4-7` does not already exist, `sonnet` resolves to `claude-sonnet-5` —
-drift of BOOTSTRAP snapshot was confirmed with real data.
+一方で「BOOTSTRAP 完全廃止」には構造的な障害がある: BOOTSTRAP は次の 2 経路で
+効いており、両者を一律に扱えない。
 
-"BOOTSTRAP Complete Abolition" has structural disorders: BOOTSTRAP is the following two routes
-It is effective and can not handle both.
-
-|Route|Call site|Is the SDK available?|
+| 経路 | 対応する call site | SDK 実測可能か |
 |---|---|---|
-| **(i) register path** | `runner/src/config.ts:288` → `dashboard/src/lib/LaunchDialog.svelte` | **In principle impossible**— There is no wrapper process or SDK Query at host connection. You want to spawn to get a catalog, but you need a catalog before spawn (chicken and egg)|
-| **(ii) ext.models route** | `wrapper/claude-code/src/host.ts:116, 279` → `dashboard/src/lib/AgentDetail.svelte` | **Available**— init after`#refreshSupportedModels()`the relevant entry|
+| **(i) register 経路** | `runner/src/config.ts:288` → `dashboard/src/lib/LaunchDialog.svelte` | **原理的に不可能** — host 接続時点で wrapper プロセスも SDK Query も存在しない。catalog を得るために spawn したいが、spawn の前に catalog が要る (鶏と卵) |
+| **(ii) ext.models 経路** | `wrapper/claude-code/src/host.ts:116, 279` → `dashboard/src/lib/AgentDetail.svelte` | **可能** — init 後 `#refreshSupportedModels()` が実測に置換 |
 
-(i) `supportedModels()` because the wrapper process is not yet alive
-There is no room to call. This hen and egg,s are accepted, and the maintenance burden is removed.
-There is a required to decide.
+(i) は wrapper プロセスがまだ生きていない状態のため、`supportedModels()` を
+呼ぶ余地が構造的にない。この鶏と卵制約を受け入れつつ、保守負担を消す形を
+決める必要がある。
 
-`wrapper/codex/src/catalog.ts`
-[ADR-0035](0035-codex-model-catalog-and-mid-session-switch.md) F1
-"catalog advertisement is not dependent on the runtime probe".
-`codex doctor --json` returns only to auth mode,
-Real-time implementation is not technically possible because it does not return a set. Claude side catalog
-codex.
+同時に、codex 側 catalog (`wrapper/codex/src/catalog.ts`) は
+[ADR-0035](0035-codex-model-catalog-and-mid-session-switch.md) F1 で
+「catalog advertisement は runtime probe に依存しない」ことを確定判断済み。
+`codex doctor --json` は auth mode までしか返さず、plan tier と entitled model
+集合を返さないため、実測実装は技術的にも不可能。本 ADR の判断は Claude 側 catalog
+に限定し、codex 側は退行させない。
 
 ## Decision
 
-### F1 — BOOTSTRAP`default`minify to the minimum floor for only one entry
+### F1 — BOOTSTRAP を `default` 1 エントリのみの最小 floor に縮小する
 
-`BOOTSTRAP` to `opus[1m]`,
-`claude-fable-5[1m]`, `sonnet`, `sonnet[1m]`, `haiku`, `claude-opus-4-7`
-Delete the entry and leave the `default` entry only. In the "All Model Enumeration" part of ten
-`default` alias refers to "account recommended model" as semantic on the SDK
-It is a name solution, so it does not. permanently.
+`wrapper/claude-code/src/catalog.ts` の `BOOTSTRAP` から `opus[1m]`、
+`claude-fable-5[1m]`、`sonnet`、`sonnet[1m]`、`haiku`、`claude-opus-4-7` の全 6
+エントリを削除し、`default` エントリのみを残す。腐るのは「全モデル列挙」部分で
+あり、`default` alias は SDK 側の semantic として "account 推奨モデル" を指す
+名前解決であるため永久に腐らない。
 
-### F2 — centralize the Claude live path to the SDK
+### F2 — Claude live 経路を SDK 実測に一元化する
 
-The source of truth of `AgentHost.#models` is completed after the SDK init
-`#refreshSupportedModels()` (`host.ts:1231-1249`) prev
-BOOTSTRAP is treated as "loading equivalent floor".
-Overwrite contract. `state_change.ext.models`
-permission
+`AgentHost.#models` の source of truth は SDK init 完了後の
+`#refreshSupportedModels()` (`host.ts:1231-1249`) 結果を単一とする。init 前の
+BOOTSTRAP は "loading 相当の floor" として扱い、init 完了後は必ず実測結果で
+上書きされる契約とする。`state_change.ext.models` の advertise も同じ実測結果を
+反映する。
 
-### Codex catalog
+### F3 — codex catalog は据え置き
 
-[ADR-0035](0035-codex-model-catalog-and-mid-session-switch.md) F1
-(operator plan static catalog, runtime probe non-dependent)
-`wrapper/codex/src/catalog.ts` and `resolveCodexCatalog`
-Don’t ask for actual codex implementation for unification (Technicalically `codex doctor`)
-entitled
+[ADR-0035](0035-codex-model-catalog-and-mid-session-switch.md) F1 の確定判断
+(operator plan 申告に基づく静的 catalog、runtime probe 非依存) を保持する。
+`wrapper/codex/src/catalog.ts` および `resolveCodexCatalog` には手を入れない。
+統一を理由に codex 側の実測実装を求めることはしない (技術的にも `codex doctor`
+は entitled model を返さず不可能)。
 
-### F4 — protocol schema
+### F4 — protocol schema は現状維持
 
-`protocol/src/index.ts` `EngineCatalogEntry.models`
-`EngineModelInfo[]` `models?` (optional)
-Do not add the readiness flag. The following two points:
+`protocol/src/index.ts` の `EngineCatalogEntry.models` は現状通り
+`EngineModelInfo[]` (配列・空可) のままとする。`models?` (optional) 化や
+readiness フラグ追加は行わない。理由は次の 2 点:
 
-1. Return `[]` in unknown auth / no plan
-ADR-0035 F1) and Claude confusing "unload" flag fail-closed
-De  default
-2. `LaunchDialog.svelte:127` has already allowed an empty array (`?? []`)
-client side loading UI no need to add
+1. codex 側の「意味ある空 catalog」 (unknown auth / no plan で `[]` を返す
+   ADR-0035 F1) と、Claude 側の「未ロード」を混同させるフラグは fail-closed
+   default を破壊する
+2. `LaunchDialog.svelte:127` は既に空配列を許容している (`?? []`) ため、
+   client 側の loading UI 追加も不要
 
-### F5 — `default`Entry`effort_levels`FULL EFFORT
+### F5 — `default` エントリの `effort_levels` は FULL_EFFORT を仮出しする
 
-`effort_levels` of `default` entry after reduction is
-`["low", "medium", "high", "xhigh", "max"]` options before and after init
-Changed UX Z e (init prev 5 steps → init may be reduced depending on the actual default model)
-is accepted trade-off. This is a new idle agent.
-The source (`AgentDetail.svelte:369` comment) is a thrust to not break and permanent
-Not the best solution. Observation after implementation
+縮小後の `default` エントリの `effort_levels` は現行同様
+`["low", "medium", "high", "xhigh", "max"]` を仮出しする。init 前後で選択肢が
+変わる UX ズレ (init 前 5 段階 → init 後は実測 default モデル次第で減る可能性)
+は受容する trade-off とする。この判断は現行 fresh idle agent の effort switcher
+供給源 (`AgentDetail.svelte:369` コメント) を壊さないための踏襲であり、恒久
+最適解ではない。実装後の観察は
 [claude-effort-levels-init-transition](../open-questions/claude-effort-levels-init-transition.md)
-the relevant entry
+で追跡する。
 
-### F6 — retry policy: 3 times automatic + toast 1 degree + silent + manual button always
+### F6 — retry policy: 3 回自動 + toast 1 度 + silent + 手動ボタン常時
 
-`#refreshSupportedModels()` explicitly contracts recovery design during failure. Current
-Only return to `#modelsRequested = false` with silent fire-and-forget (`host.ts:1247`)
-for lacking retry trigger. The following two steps:
+`#refreshSupportedModels()` の失敗時の回復設計を明示的に契約化する。現行は
+silent fire-and-forget で `#modelsRequested = false` に戻すのみ (`host.ts:1247`)
+のため、確実な再試行 trigger を欠く。次の 2 段構えとする:
 
-1. **Automatic bound retry**: Next turn Max auto retry when receiving**3 times**Close
-Test silent (no banner)
-2. **Manual retry**: "Re  model list" button is always on the model switcher UI
-You can explicitly trigger the operator. Button trigger limits
-Recounting
-3. **Notice**: Notice failure with toast as long as one time at the maximum reach (dis able). Next
-Auto retry failure does not emit toast
+1. **自動 bounded retry**: 次 turn 受信時に自動 retry を最大 **3 回**まで
+   試行する。上限到達後は silent (バナー常時表示しない)
+2. **手動 retry**: モデル switcher UI に「モデル一覧を再取得」ボタンを常時
+   提供し、operator が明示的に trigger できる。ボタン trigger は上限を
+   再カウントし直す
+3. **通知**: 上限到達時に 1 度限り toast で失敗を通知 (dismissable)。以降の
+   自動 retry 失敗では toast を出さない
 
-Specific UI placement (retry button position, toast look) is implemented in phase-18-3 PR
-permission
+具体的な UI 配置 (retry ボタンの位置、toast の見た目) は phase-18-3 の実装 PR で
+確定する。
 
-### F7 — BootSTRAP reduced PR after SDK upgrade
+### F7 — SDK upgrade を先行 PR、以降に BOOTSTRAP 縮小 PR
 
-`wrapper` package `@anthropic-ai/claude-agent-sdk` currently 0.3.162
-installed (`^0.3.162`, lockfile fixed). npm Latest 0.3.208
-SDK upgrade PR**Note**`supportedModels()`
-Verify semantic for `model: "default"`. Based on this actual survey results
-BOOTSTRAP PR PR
+`wrapper` package の `@anthropic-ai/claude-agent-sdk` は現在 0.3.162 が
+インストールされている (`^0.3.162` 指定、lockfile 固定)。npm 最新は 0.3.208
+相当。SDK upgrade PR を **先行** させ、`supportedModels()` の実測結果と
+`model: "default"` の SDK 解決 semantic を検証する。この実測結果を根拠として
+BOOTSTRAP 縮小 PR を後続で実施する。
 
-Avoid simultaneous PR implementation. Note SDK upgrade
-to differentiate the effects.
+同 PR での同時実施は避ける。理由は SDK upgrade に伴う挙動変化と BOOTSTRAP 縮小
+の影響を切り分けるため。
 
-### F8 — fallback if persisted model identifier is not supported
+### F8 — persist された model identifier が SDK 実測に含まれない場合の fallback
 
-`model` identifier persist in session state / config, etc. (e.g.:
-`sonnet[1m]`) If the SDK is not supported after startup, it will be used to `default` in startup verification.
-fallback and issue a notification event to the UI. notification particle size (toast 1 degree / session log /
-The explicit dialog) is determined by the implementation PR of phase-18-3.
+session state / config 等に persist された `model` identifier (例:
+`sonnet[1m]`) が起動後の SDK 実測に含まれない場合、起動時検証で `default` に
+fallback し、UI に通知 event を発行する。通知の粒度 (toast 1 度 / session log /
+明示ダイアログ) は phase-18-3 の実装 PR で確定する。
 
-When this ADR was established (2026 -14), the persist value was assumed to be alias only.
-alias / canonical `value`
-`resolved_model` Do with 2-pass matching, and only those that do not win either
-fallback If canonical matches more than one line,
-not rollback as valid** — persist validation asks:
-"Is it possible to belong to any line?" `switch_error.reason`
-The wire value must be `"persist_alias_unknown"` because it is compatible.
+本 ADR 制定時 (2026-07-14) は persist 値を alias のみと想定していたが、F9 追補
+以降は alias / canonical のいずれもありうる。判定は `value` 完全一致 →
+`resolved_model` 一致の 2-pass で行い、どちらにも当たらないものだけを
+fallback 対象とする。canonical が複数行に一致した場合も **1 件以上あれば
+valid** として rollback しない — persist 検証が問うのは「その識別子が catalog に
+存在するか」であって、どの行に帰属するかではないため。`switch_error.reason` の
+wire 値は互換のため `"persist_alias_unknown"` のまま据え置く。
 
-### F9 (2026 —-31 supplementation) — Transmit canonical ID to catalog catalog and 2-pass collision
+### F9 (2026-07-31 追補) — catalog row に canonical ID を透過し、突合を 2-pass 化する
 
-`resolvedModel` (`default` → `claude-opus-4-8[1m]`,
-`sonnet` → `claude-sonnet-5`) was dropped in projection and was not wired.
-This produced two real harms:
+Context 節で実測した `resolvedModel` (`default` → `claude-opus-4-8[1m]`、
+`sonnet` → `claude-sonnet-5`) は projection で落とされ、wire に出ていなかった。
+これが 2 つの実害を生んでいた:
 
-1. F8 persist validation only for `value` full matching, persist canonical
-alias not in catalog, and rollback to `default`
-2. If `#model` is canonical (init / status reports canonical),
-operator canonical directly `setModel` via resume snapshot
-next start) The catalog projection will miss all routes. `system/init` `model`
-This is because it is not observation (see below) which expression is actually
-is conditional defect based on  "
+1. F8 の persist 検証は `value` 完全一致のみのため、persist された canonical を
+   「catalog にない alias」と誤判定して `default` へ rollback していた
+2. `#model` が canonical になった場合 (init / status が canonical を報告する、
+   operator が canonical を直接 `setModel` する、その値が resume snapshot 経由で
+   次回起動に渡る) catalog 突合が全経路で miss する。`system/init` の `model` が
+   実際どちらの表現かは未観測 (後述) のため、これは「canonical が入りうる経路が
+   存在する」ことに基づく条件付きの defect である
 
-`EngineModelInfo` adds `resolved_model?: string` to optional
-Change to 2-pass of `value` full matching → `resolved_model` matching.
+`EngineModelInfo` に `resolved_model?: string` を optional 追加し、突合を
+「`value` 完全一致 → `resolved_model` 一致」の 2-pass に変更する。
 
-canonical**Multi-matching**Note `default` and `opus[1m]`
-This is not an exception, but a default to solve canonical. pass (2)
-Returns all matching lines and folds for each application: membership / persist validation is valid for more than one
-effort domain is an intersection of matching lines (empty if `effort_levels` falls),
-`supports_effort_switch` `false` if the intersection is empty, the UI matches
-alias lord + canonical vice, and raw canonical when multiplex
-`aria-selected` of the main display and model menu is set to `false`.
-not selected). Send/Retention remains as input expressions are preserved regardless of the number of matches.
+canonical 側は**多重一致しうる**。実 probe は `default` と `opus[1m]` を同じ
+canonical に解決するため、これは例外ではなく既定である。したがって pass (2) は
+全一致行を返し、用途ごとに畳む: membership / persist 有効性は 1 件以上で valid、
+effort domain は一致行の intersection (1 行でも `effort_levels` 欠落があれば空)、
+`supports_effort_switch` はその intersection が空なら `false`、UI は一致が
+ちょうど 1 件のときだけ alias 主 + canonical 副で、多重一致時は raw canonical を
+主表示し model menu の `aria-selected` を全行 `false` にする (属性は付くが
+どの行も選択済みにしない)。送信 / 保持は一致件数に関わらず入力表現保存のまま。
 
-The first match adopt was rejected. decisive but meaningless, pinned
-`opus[1m]` is displayed as `default`.
-The same meaning breakdown as rejected will be committed in the display route rather than the transmission route.
-[plugin-model](../specs/plugin-model.md)
+先頭一致の採用は却下した。決定論的ではあるが意味的根拠がなく、pin された
+`opus[1m]` を浮動の `default` として表示してしまう — 下で normalization を
+却下したのと同じ意味破壊を、送信経路ではなく表示経路で犯すことになる。
+規則の詳細は [plugin-model](../specs/plugin-model.md) の該当節。
 
-F4
-`EngineCatalogEntry`
-and optional field addition to optional does not conflict with this. Old
-The producer does not emit a field, and the old consumer is only dropped, so it can be kept backward compatible.
+F4 の
+「protocol schema は現状維持」は `EngineCatalogEntry` の形 (配列・空可) に
+ついての判断であり、row への optional field 追加はこれに抵触しない。旧
+producer は field を出さず、旧 consumer は落とすだけなので後方互換は保たれる。
 
-Close**Input**Make a contract. catalog of effort domain
-Use only for deter  and unknown model deter , the value to send to S  and the value to be retained from the caller
-Save the string as it is. alias ↔ canonical
-canonical → alias is non-single, and if normalized, `opus` pin is `default` float
-To become a pet.
+あわせて**入力表現保存**を契約として明文化する。catalog 突合は effort domain の
+決定と未知モデル判定にのみ使い、SDK へ送る値・保持する値は呼出元から受け取った
+文字列をそのまま保存する。alias ↔ canonical のいずれの方向にも正規化しない —
+canonical → alias は非単射で、正規化すると `opus` の pin が `default` の浮動
+選択に化けるため。
 
-canonical ID is both pre-init `Options.model` and live `Query.setModel()`
-2026 20-31 `system/init`
-`model` is undetermined because observation requires billing, either alias / canonical
-I put it in a shape that pins the test even if it is returned.
+canonical ID が pre-init `Options.model` と live `Query.setModel()` の双方で
+受理されることは 2026-07-31 に tokenless で実測済み。一方 `system/init` の
+`model` の表現は観測に課金を要するため未確定で、alias / canonical どちらを
+返されても壊れないことをテストで pin する形に留めた。
 
-[plugin-model](../specs/plugin-model.md)
-[agent-sdk-events](../specs/agent-sdk-events.md) Launch  to canonical
-The display has a precision difference (register path is last-known-good cache)
-If the probe point value is not applicable for the reason, it may be placed even after the TTL exceeds
+仕様の正本は [plugin-model](../specs/plugin-model.md) の該当節、実測の生値は
+[agent-sdk-events](../specs/agent-sdk-events.md)。LaunchDialog への canonical
+表示は精度差 (register 経路は last-known-good cache が持つ最後に成功した
+probe 時点値で、TTL 超過後も据え置かれうる) を理由に対象外とし、Gitea
 [issue #166](https://github.com/sakuraiyuta/kaoiro/issues/166)
-to ex .
+へ外部化した。
 
 ## Consequences
 
 ### Positive
 
-- BOOTSTRAP snapshot manual update disappears every time the model addition (Sonnet 5, etc.)
-- The source of truth of the Claude live path is centralized to the SDK
-Dependency resolution (plan / team / model) is accurately reflected
-- protocol schema / server / client / codex
-Close the range to the center of Claude wrapper.**Supplement (2026 -31,F9)**: This
-"localized" was partially broken with F9. current status is server unchanged / codex unchanged
-`EngineModelInfo`Maintenance
-Add `resolved_model`, client is `modelsFrom` projection and model lines
-The display is changed. container type (F4) and server / codex
-Note
-- The `default` entry is kept safe and "model selection" both before and after init
-Zero state
+- モデル追加 (Sonnet 5 等) のたびの BOOTSTRAP snapshot 手動更新が消える
+- Claude live 経路の source of truth が SDK 実測に一元化され、account
+  依存の解決 (plan / team / entitled model) が正確に反映される
+- protocol schema / server / client / codex を触らない localized 改修に留まり、
+  改修範囲が Claude wrapper 中心に閉じる。**追補 (2026-07-31、F9)**: この
+  「localized」は F9 で一部崩れた。現在の実態は server 無変更 / codex 無変更を
+  維持しつつ、protocol は `EngineModelInfo` row に optional field 1 個
+  (`resolved_model`) を追加、client は `modelsFrom` の projection と model 行の
+  表示・突合を変更、である。container 形 (F4) と server / codex 非改修は保たれて
+  いる
+- `default` エントリという安全牌が保たれ、init 前後どちらでも "モデル選択が
+  ゼロ" 状態にはならない
 
 ### Negative
 
-- Selected effort before init will disappear from the option after init
-  (F5,[claude-effort-levels-init-transition](../open-questions/claude-effort-levels-init-transition.md))
-- In launch dialog, init will only show "Default", like Sonnet 5
-pre-Model is not possible before init. mid-session after completion
-Switch **S,ule (2026,-31)
-[ADR-0039](0039-engine-catalog-live-probe.md))**: ThisHome has been resolved.
-Short life probe + memory cache, usually live-probe
-You can pre-Model a specific model in launch dialog. "Default"
-If you don't have a success cache (cold start / initial probe failure)
-Limited
-- Increases the complexity of the wrapper side only for additional retry implementation (F6)
+- init 前に選んだ effort が init 後に選択肢から消える UX ズレを受容する
+  (F5、[claude-effort-levels-init-transition](../open-questions/claude-effort-levels-init-transition.md))
+- launch dialog では init 前は "Default" のみの提示となり、Sonnet 5 のような
+  特定モデルを init 前に pre-select はできない。init 完了後の mid-session
+  switch で選ぶ運用となる。**追補 (2026-07-31、
+  [ADR-0039](0039-engine-catalog-live-probe.md))**: この制約は解消済み。runner の
+  短命 probe + memory cache により、通常は live-probe 実測の rich catalog が
+  launch dialog に出て特定モデルを pre-select できる。"Default" のみの提示に
+  なるのは、成功 cache を一度も持たない場合 (cold start / 初回 probe 失敗) に
+  限られる
+- retry 実装の追加分だけ wrapper 側の複雑度が増す (F6)
 
 ### Neutral
 
-- The codex side catalog does not change (ADR-0035 F1 retention)
-- protocol schema (`EngineCatalogEntry`) is unchanged and backward compatibility is completely maintained
-- BOOTSTRAP reduction is based on the SDK upgrade premise (F7) and the SDK 5 support.
+- codex 側 catalog の挙動は変わらない (ADR-0035 F1 保持)
+- protocol schema (`EngineCatalogEntry`) は不変で、後方互換は完全に保たれる
+- BOOTSTRAP 縮小は SDK upgrade 前提 (F7)、Sonnet 5 対応は SDK 側の追従次第
 
 ## Alternatives Considered
 
 | Option | Decision |
 |--------|----------|
-|BOOTSTRAP Completely disco ed + loading UI|Reject. (i) register path is not generated by the SDK Query, so it is impossible to measure (chicken and egg), loading soft-lock risk,`default`The effort levels developed into 7 layers of source loss, protocol / server / client / tests / docs.**Supplement (2026 -15, ADR-0039)**: This "invalid" is not possible with "register-only premise (premises not to generate query)". runner generates a short-lived SDK probe (query) in streaming input mode, and then runs supportedModels() → close after init completes, catalog catalog richness of the register path. adopt this route (Option E) on ADR-0039 and BOOTSTRAP minimum floor is not set|
-|BootSTRAP snapshot|Reject. Manual updates are notreality every time the model is added (e.g., the failure of Sonnet 5  )|
-| `EngineCatalogEntry.models?`Optional or readiness flag added|Reject. confuse codex's meaningless sky and Claude's unload to destroy fail-closed default.`LaunchDialog.svelte:127`is not required because the empty is already allowed|
-|Codex uniformity|Reject. ADR-0035 Leave the final decision of F1.`codex doctor --json`It is technically impossible to return model|
-|SDK upgrade and BOOTSTRAP|Reject. It is difficult to cut influence by mixed behavior|
-| `default`Empty entry effort levels (init pre effort switcher disabled)|Reject. fresh idle agent switcher source disappears|
-| `default`Low/levelum/high 3-step fixing effort levels for entries|Reject. init does not touch xhigh/max before sacrificing expressiveness|
-|retry No limit|Reject. Infinite call risk when the SDK bug occurs|
-|always display banner when failure|Reject. idle agent|
-|Completely silent at failure|Reject. Not noticed that user is broken|
+| BOOTSTRAP 完全廃止 + loading UI 全面導入 | Reject。(i) register 経路は SDK Query 未生成のため実測不能 (鶏と卵)、loading soft-lock リスク、`default` の effort_levels 供給源喪失、protocol / server / client / tests / docs の 7 レイヤ改修に発展。**追補 (2026-07-15、ADR-0039)**: この「実測不能」は正確には「register-only 前提 (query を一切生成しない前提)」での不可能。runner 上で短命 SDK probe (query を streaming input mode で生成し、init 完了後 supportedModels() → close) を走らせれば register 経路の catalog リッチ化は可能。ADR-0039 でこの路線 (Option E) を採用し BOOTSTRAP 最小 floor は据え置く |
+| 現状維持 (BOOTSTRAP snapshot を手動更新) | Reject。モデル追加のたびの手動更新が現実的でない (Sonnet 5 直後の破綻が実例) |
+| `EngineCatalogEntry.models?` を optional 化 or readiness フラグ追加 | Reject。codex の「意味ある空」と Claude の「未ロード」を混同させ、fail-closed default を破壊する。`LaunchDialog.svelte:127` が既に空を許容しているため実質不要 |
+| codex 側も含めて実測一元化 | Reject。ADR-0035 F1 の確定判断を退行させる。`codex doctor --json` は entitled model を返さず技術的にも不可能 |
+| SDK upgrade と BOOTSTRAP 縮小を同 PR で実施 | Reject。挙動変化混在で影響切り分けが困難 |
+| `default` エントリの effort_levels を空 (init 前 effort switcher 無効化) | Reject。init 前に効率設定できない不便、fresh idle agent の switcher 供給源が消える |
+| `default` エントリの effort_levels を low/medium/high 3 段階固定 | Reject。init 前に xhigh/max を触れず、表現力の犠牲が大きい |
+| retry 上限なし | Reject。SDK bug 発生時に無限呼び出しリスク |
+| 失敗時バナー常時表示 | Reject。idle agent に過剰、誤解を招く |
+| 失敗時完全 silent | Reject。user が壊れていることに気付かない |
 
 ## Implementation
 
 [phase-18-claude-model-catalog-live](../plans/phase-18-claude-model-catalog-live.md)
-3 phase (S  upgrade + real-time verification / wrapper refurbishment / client UI)
-. `default` alias
-`claude-opus-4-8[1m]` has been confirmed to be resolved (see Context section of this ADR for details).
+で 3 phase (SDK upgrade + 実測検証 / wrapper 改修 / client UI 対応) に分けて
+実装する。Phase 18-2 の実測 (2026-07-14) で `default` alias が
+`claude-opus-4-8[1m]` に解決されることを確認済み (詳細は本 ADR の Context 節)。

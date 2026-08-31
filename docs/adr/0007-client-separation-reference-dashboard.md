@@ -1,5 +1,5 @@
 ---
-title: Clients include separate project separation and reference dashboard
+title: クライアントは別プロジェクト分離、リファレンスダッシュボードを同梱
 status: accepted
 date: 2026-06-10
 opened: 2026-06-10
@@ -9,7 +9,7 @@ related_specs: [architecture, non-goals, protocol]
 related_adrs: [4, 5, 8, 9, 12, 20]
 ---
 
-# ADR 7 — client includes separate project separation and reference dashboard
+# ADR-0007 — クライアントは別プロジェクト分離、リファレンスダッシュボードを同梱
 
 ## Status
 
@@ -17,57 +17,57 @@ Accepted
 
 ## Context
 
-The client’s offering was a problem. Electron-based Rich GUI Terminal
-CUI/neovim Plug-in
-On the other hand, if you don’t prepare a client separately, you can’t try it. More
-If you make a reference implementation in LiveView, you can directly consumein's PubSub andternal
-Not passing through public APIs used by clients, so as to verify reference implementation and conformity
-lose value.
+クライアントの提供形態が問題だった。Electron ベースのリッチ GUI・ターミナル
+CUI・neovim プラグインなど多様なクライアントをユーザが選べるようにしたい。
+一方、クライアントを別途用意しないと試せない形は導入の敷居が高い。また、
+リファレンス実装を LiveView で作るとサーバ内部の PubSub を直接消費し、外部
+クライアントが使う公開 API を通らないため、参照実装・適合性検証としての
+価値を失う。
 
 ## Decision
 
-- Client implementation**separation as another project (repos y)**Server ↔
-Client API**Note and versioning as a public protocol**
-- Main body**Includes a simple dashboard (br er) for reference**Note
-Svelte 5 + Vite
-Not available Protocol layer (connection, subscription, instructions, approval response) is Svelte non-dependent
-separation to the plain TS module.
-- The simple dashboard is not LiveView, but is the same as the **ex  client.
-Consuming APIs** (dogfooding = protocol reference implementation and calibration validation).
-- Simple dashboard in server settings**Static delivery only off**permission
-(Channel/API is always valid) Default is ON.
-- The scope is fixed to the minimum (state list, expression, approval, instructions)
-  ([non-goals](../specs/non-goals.md)).
+- クライアント実装は**別プロジェクト(リポジトリ)として分離**する。サーバ ↔
+  クライアント API は**公開プロトコルとして文書化・バージョニング**する。
+- 本体には**リファレンス用の簡易ダッシュボード(ブラウザ)を同梱**し、
+  Phoenix で配信する。実装は **Svelte 5 + Vite(素の SPA、SvelteKit
+  不使用)**。プロトコル層(接続・購読・指示・承認応答)は Svelte 非依存の
+  素の TS モジュールに分離する。
+- 簡易ダッシュボードは LiveView ではなく、**外部クライアントと同一の公開
+  API を消費**する(dogfooding = プロトコルの参照実装・適合性検証)。
+- サーバ設定で簡易ダッシュボードの**静的配信のみオフ**にできる
+  (チャネル/API は常時有効)。既定はオン。
+- スコープは最小限(状態一覧・表情・承認・指示入力)に固定する
+  ([non-goals](../specs/non-goals.md))。
 
 ## Consequences
 
 ### Positive
 
-- It can be used only by browser and the installation is low.
-- The public API is alwaysthe relevant entryd with the included client (reference implementation and conformity test).
-- The client becomes clear as the third extension following the adapter/filter.
+- ブラウザだけで試用でき、導入の敷居が低い。
+- 公開 API が同梱クライアントで常時検証される(参照実装・適合性テスト)。
+- クライアントがアダプタ/フィルタに続く第3の拡張面として明確になる。
 
 ### Negative
 
-- The backward compatibility of the public API is responsible.
-- The server repository has a TS build (Vite).
+- 公開 API の後方互換維持が責務になる。
+- サーバリポジトリに TS ビルド(Vite)が同居する。
 
 ### Neutral
 
-- Connectionapproach is determined by the relevant entry Channels
-  ([ADR-0009](0009-client-transport.md)).
-- The source location of the included dashboard is `dashboard/` (issue #44) of the repo route.
-`server/assets/`, independent pnpm route + independent lockfile). "Included"
-Keep the Resultfacts  during release build and don’t commit the  facts
-(`server/Dockerfile` node stage). Repos y is still unavailable.
-- Introductory stage of drawing type ([ADR-0004](0004-client-rendering-staged.md)) is each
-Become a client’s interest.
+- 接続方式は Phoenix Channels に一本化で決定済み
+  ([ADR-0009](0009-client-transport.md))。
+- 同梱ダッシュボードのソース位置は repo ルートの `dashboard/`(issue #44 で
+  `server/assets/` から移出、独立 pnpm ルート + 独立 lockfile)。「同梱」は
+  リリースビルド時に成果物を焼き込む形で維持し、成果物はコミットしない
+  (`server/Dockerfile` の node ステージ)。別リポジトリ化は依然未着手。
+- 描画種別の段階導入([ADR-0004](0004-client-rendering-staged.md))は各
+  クライアントの関心事になる。
 
 ## Alternatives Considered
 
 | Option | Why rejected |
 |--------|--------------|
-|Dashboard implementation with LiveView|Apply to reference implementation without passing through public API|
-|Clients are included in the main unit (MonoRepo)|Unfamiliar with the growth of diverse clients, the core is hypertrophy|
-|Not Included Clients|High proto ing|
-|SvelteKit|Excess SSR/routing mechanism. Note Vite SPA|
+| LiveView でダッシュボード実装 | 公開 API を通らず参照実装にならない |
+| クライアントも本体に同梱(モノレポ) | 多様なクライアントの増殖に不向き、コアが肥大 |
+| 同梱クライアントなし | 試用の敷居が高い |
+| SvelteKit 採用 | SSR/ルーティング機構が過剰。素の Vite SPA で足りる |

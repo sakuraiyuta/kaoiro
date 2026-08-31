@@ -1,5 +1,5 @@
 ---
-title: The wrapper is local, WebSocket is centralized
+title: ラッパーはローカル動作、WebSocket で中央サーバへ集約
 status: accepted
 date: 2026-06-04
 opened: 2026-06-04
@@ -9,7 +9,7 @@ related_specs: [architecture]
 related_adrs: [1, 11, 23, 29]
 ---
 
-# ADR 2 — wrappers are local, WebSocket is centralized
+# ADR-0002 — ラッパーはローカル動作、WebSocket で中央サーバへ集約
 
 ## Status
 
@@ -17,44 +17,44 @@ Accepted
 
 ## Context
 
-It was a problem where the wrapper was moved and how to connect with it. Agent SDK
-non-TS(TS,[ADR-0001](0001-agent-sdk-integration.md))
-Yes, and there is a need to accompany the agent for the convenience of spawn and observation.
-Multiple hosts and programs are required.
+ラッパーをどこで動かし、サーバとどう繋ぐかが問題だった。ラッパーは Agent SDK
+をホストするため非 Elixir(TS、[ADR-0001](0001-agent-sdk-integration.md))で
+あり、かつエージェントを spawn・観測する都合上エージェントと同居する必要がある。
+複数ホスト/プロセスを跨ぐ構成も求められる。
 
 ## Decision
 
-The wrapper is the same as each agent**Local operation**Note Multiple host/process
-**Phoenix Channels**(WebSocket) connects to the center ofElixir. server
-1connection=1 Keep and deliver the latest state in GenServer.
+ラッパーは各エージェントと同居して**ローカル動作**。複数ホスト/プロセスが
+**Phoenix Channels**(WebSocket)で中央サーバ(Elixir)へ接続する。サーバは
+1接続=1 GenServer で最新状態を保持・配信する。
 
-> **Supplement (ADR-0023)**: wrapper [0023-host-runner-architecture](0023-host-runner-architecture.md)
-> Directly connected to the server) sets one wrapper resident on each host and wrappers
-> spawn / Supervisor / Host registration etc.
-> wrapper does not end the data path, and the wrapper continues to be connected directly. Book ADR
-> is supersede.
+> **追補([ADR-0023](0023-host-runner-architecture.md))**: 本トポロジ(wrapper の
+> サーバ直結)は維持したまま、各ホストに常駐 runner を 1 つ置き、wrapper の
+> spawn / 監督 / ホスト登録などライフサイクル管理を担わせる監督層を追加した。
+> runner はデータ経路を終端せず、wrapper は引き続き直結する(直結は不変)。本 ADR
+> は supersede されておらず accepted のまま。
 
 ## Consequences
 
 ### Positive
 
-- The wrapper can directly observate the agent locally, and the distributed model is natural.
-- Matching with non-TS(TS) wrapper. Easy to pass and verify s.
-- The server side utilizes OTP monitoring and PubSub.
+- ラッパーがローカルでエージェントを直接観測でき、分散モデルが自然。
+- 非 Elixir(TS)ラッパーと整合。ファイアウォール越え・認証が容易。
+- サーバ側は OTP の監視・PubSub が活きる。
 
 ### Negative
 
--Pets-the relevant entry authentication + TLS + heartbeat per wrapper is required for public premise.
-- `disconnected` state management is required for connection disconnection.
+- 公開前提のため、ラッパーごとのトークン認証 + TLS + ハートビートが必須。
+- 接続断を表す `disconnected` 状態の管理が必要。
 
 ### Neutral
 
-- Client ↔ Server user authentication is separate layer
-  ([ADR-0005](0005-access-control-oauth-stub.md)).
+- クライアント ↔ サーバのユーザ認証は別レイヤ
+  ([ADR-0005](0005-access-control-oauth-stub.md))。
 
 ## Alternatives Considered
 
 | Option | Why rejected |
 |--------|--------------|
-|Distributed Erlang (All Hosts BEAM + Cookie Sharing)|Unmatched with non- Elixir wrappers|
-|The wrapper is in the left|When the agent is another host, it is not established|
+| 分散 Erlang(全ホスト BEAM + cookie 共有) | 結合が強すぎ、非 Elixir ラッパーと不整合 |
+| ラッパーをサーバ内に同居 | エージェントが別ホストのとき成立しない |

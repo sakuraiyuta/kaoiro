@@ -1,5 +1,5 @@
 ---
-title: viewer / operator Information disclosure of roles — allow-list approach and envelope  separate matrix
+title: viewer / operator ロールの情報公開ポリシ — allow-list 方式と envelope 別マトリクス
 status: accepted
 date: 2026-06-22
 opened: 2026-06-22
@@ -9,7 +9,7 @@ related_specs: [protocol, threat-model, protocol-inter-agent]
 related_adrs: [11, 12, 13, 22, 25, 27, 28, 30, 40, 41, 42, 43, 44, 50]
 ---
 
-# ADR-0021 — viewer / operator
+# ADR-0021 — viewer / operator ロールの情報公開ポリシ
 
 ## Status
 
@@ -18,314 +18,314 @@ Accepted
 ## Context
 
 [ADR-0011](0011-phase3-reliability-and-auth.md) / [ADR-0012](0012-response-display-and-dashboard-scope.md)
-"Instructions, approvals, and responseHome are limited to operators", but the viewer role
-**What to see**The overall policy remains unsecided right, with individual patches whenever required
-deny-list:
+で「指示・承認・返答ログは operator 限定」とは決めたが、viewer ロールが
+**何を見られるか** の全体方針は未定義のまま、必要が出るたびに個別パッチで
+deny-list を継ぎ足してきた:
 
-- `log` / `result` Release to operator only ([ADR-0012](0012-response-display-and-dashboard-scope.md)).
-- Remove `permission_request.input` from viewer (preh ic history of this ADR).
+- `log` / `result` 配信を operator 限定([ADR-0012](0012-response-display-and-dashboard-scope.md))。
+- `permission_request.input` を viewer から除去(本 ADR の前史)。
 - `state_change.ext`(`cwd` / `model` / `context` / `rate_limits` /
-`slash_commands`) removed from viewer (#46 implementation phase, commit 9b32c34 /
-ef7b606. remove `ext` for all types in catch-all.
+  `slash_commands`)を viewer から除去(#46 実装フェーズ、コミット 9b32c34 /
+  ef7b606。catch-all で全 type の `ext` を削除)。
 
-This seamless approach has three structural problems:
+この継ぎ足し方式には 3 つの構造的問題がある:
 
-1. **New envelope  type viewer delivery default unknown**— catch-all
-so the new additional type will include a sub-field in **viewer
-Delivered**. Unless the developer is actively determined to be "this is only operator"
-Fail-open
-2. **The "right look" of viewer is not documented**— the grid
-It is implicit that you can draw or show the detail panel. I can't judge by readingRead.
-3. **`permission_request` `input`**(`tool_name` /
-`request_id` / `truncated`) is connected to the viewer and the operator is
-You can guess what tools you want to use (partial leak).
+1. **新 envelope type の viewer 配信デフォルトが不明** — catch-all は素通し
+   なので、新規追加の type は機微フィールドを含んでいても **viewer に
+   配信される**。開発者が能動的に「これは operator 限定」と判断しない限り
+   漏洩が起きる(fail-open)。
+2. **viewer の「正しい見え方」が文書化されていない** — どこまで grid を
+   描けるか、詳細パネルは何を見せるかが暗黙。spec を読んでも判断できない。
+3. **`permission_request` envelope の `input` 以外**(`tool_name` /
+   `request_id` / `truncated`)が viewer に素通ししており、operator が
+   何のツールを使おうとしているか viewer から推測できる(部分的 leak)。
 
-issue #46 “viewer role permission”
-''' is the real thing. This is a culture of the polycy.
+issue #46 はそもそも「viewer ロールの権限・情報公開範囲を **spec-elicitation
+でしっかり詰める**」が本旨だった。そのポリシをここで明文化する。
 
 ## Decision
 
-### F1: 2-roll fixing (operator / viewer) — withdrawn
+### F1: 2 ロール固定(operator / viewer) — 撤回済み
 
-> **Revised (2026 14, issue #188).**F1
-> [ADR-0050](0050-principal-model-and-graded-access-control.md) D2 covered.
-> role**admin / operator / viewer**F1 "3 Roll"
-ADR-0050
+> **改訂 (2026-08-14、issue #188)。** F1 は
+> [ADR-0050](0050-principal-model-and-graded-access-control.md) D2 が覆した。
+> role は **admin / operator / viewer の 3 値**である。F1 自身が「3 ロール
+> 化は別 ADR を要する」と定めており、ADR-0050 がその別 ADR にあたる。
 >
-> This is because only F1 is covered. F2 or later
-> The allow-list approach and envelope  separate matrix are active, even after 3 determining
-> Just add:
+> 本 ADR を supersede しないのは、覆ったのが F1 だけだからである。F2 以降
+> の allow-list 方式と envelope 別マトリクスは現役で、3 値化後も次の 1 点を
+> 加えるだけで成立する:
 >
-> - **This ADR delivers "operator only" to admin.**
-> admin is all visible at the top of the operator, by MUST of ADR-0050 D2
-> Suitable for concealment. `AgentsChannel`
-> `@operator_capable_roles` Determines one location
-> - The viewer visibility (F3 or later) is not changed. ADR-0050 D2
-> Not changed because it matches the intention of
+> - **本 ADR が「operator 限定」と書く配信は、すべて admin にも届く。**
+>   admin は operator の上位で 全可視 であり、ADR-0050 D2 の MUST により
+>   隠蔽の対象にならない。実装は `AgentsChannel` の
+>   `@operator_capable_roles` 1 箇所が判定する
+> - viewer の可視性 (F3 以降) は変更しない。ADR-0050 D2 が「viewer の元々
+>   の意図と一致しているため変更しない」と明示している
 >
-[issue #189](https://github.com/sakuraiyuta/kaoiro/issues/189)
-> When the operator starts to narrow down the receiving range, remove admin from that judgment
-> required The above MUST is broken when narrowed down.
+> per-pair 権限 ([issue #189](https://github.com/sakuraiyuta/kaoiro/issues/189))
+> が operator の受信範囲を絞り始めた時点で、admin をその判定から切り離す
+> 必要がある。まとめて絞られると上記 MUST が壊れる。
 
-Original Description: Middle roll (admin etc.) is  NI. `operator` = All rights as administrator,
-`viewer` = View only. 3. Rolling requires another ADR.
+当初の記述: 中間ロール(admin 等)は YAGNI。`operator` = 管理者として全権、
+`viewer` = 閲覧専用。3 ロール化は別 ADR を要する。
 
-### F2: viewer delivery is allowed-list approach (default for operator only)
+### F2: viewer 配信は allow-list 方式(operator 限定がデフォルト)
 
-server**all envelope Alls**explicitly
-viewer Only the ones viewd are delivered to viewer. viewer
-**Complete removal**(envelope  is not pushed, it is removed from snapshot).
+サーバ → クライアント方向の **すべての envelope / event** は、明示的に
+viewer 配信が宣言されたものだけが viewer へ届く。それ以外は viewer から
+**完全除去**(envelope は push しない、snapshot からも外す)。
 
-`sanitize_envelope_for/2` `agents_channel.ex`
-`:viewer` clause is specified for each type
-Determine). Developers who add a new envelope  type are required to viewer
-**Active judgment**(fail-closed).
+実装は `agents_channel.ex` の `sanitize_envelope_for/2` を allow-list 構造
+へ書き換える(catch-all で素通しせず、`:viewer` 句が type ごとに明示
+判定する)。新しい envelope type を追加する開発者は viewer 配信の要否を
+**能動的に判断** することを強制される(fail-closed)。
 
-### F3: envelope: type × role matrix
+### F3: envelope type × role マトリクス
 
-`agents:lobby` Viewer visibility of events (including envelope ) to be delivered on the topic
-Defining:
+`agents:lobby` トピックで配信する events(envelope 含む)の viewer 可視性を
+定義する:
 
-| event / envelope.type | operator | viewer ||
+| event / envelope.type | operator | viewer | 備考 |
 |---|---|---|---|
-| `envelope` `state_change` |✓ As it is| ✓ `ext`Remove|The origin of grid drawing.`ext`Note`cwd`Remove viewer (automatic cover for future ext items with c -all)`state`fields are required to viewer(`waiting_permission`grid display)|
-| `envelope` `permission_request` |✓ As it is|✓ Syn `state_change(waiting_permission)`|viewer`input` / `tool_name` / `request_id`grid presence`state_change`Rewrite`payload={}` / `ext`wrapperbution by removal (from the previous wrapper)`state_change(waiting_permission)`Duplicate with idemic etc.)|
-| `envelope` `log` | ✓ |- Complete removal|ADR-0012|
-| `envelope` `result` | ✓ |- Complete removal|ADR-0012|
-| `envelope` `task`(Reservation)| TBD |- Default deny|Re-determined (ADR-0019) at the time of specification confirmation, unless express declaration viewer non-delivery|
-| `snapshot`(join)|sanitize all agents / all types|Same left`permission_request``state_change`)|grid starting point|
-| `history`(join)| ✓ |- Push not| ADR-0012 |
-| `history_cleared`(broadcast) | ✓ | ✗ |viewer doesn't see log itself. allow-list Intercept and operator push|
-| `agent_deleted`(broadcast) | ✓ | ✓ |required(Only agent id)|
+| `envelope` `state_change` | ✓ そのまま | ✓ `ext` を除去 | grid 描画の起点。`ext` は `cwd` 等の機微を含むため viewer 除去(catch-all で将来 ext 追加項目も自動カバー)。`state` フィールドは viewer に必要(`waiting_permission` 等の grid 表示) |
+| `envelope` `permission_request` | ✓ そのまま | ✓ 合成 `state_change(waiting_permission)` に置換 | viewer は `input` / `tool_name` / `request_id` を一切受け取らない。grid presence は保つため、type を `state_change` に書き換え `payload={}` / `ext` 除去で配信(直前の wrapper 発の `state_change(waiting_permission)` と重複するが冪等) |
+| `envelope` `log` | ✓ | ✗ 完全除去 | ADR-0012、シークレット混入の主経路 |
+| `envelope` `result` | ✓ | ✗ 完全除去 | ADR-0012、同上 |
+| `envelope` `task`(予約) | TBD | ✗ デフォルト deny | 仕様確定時に再判断(ADR-0019)、明示宣言なき限り viewer 非配信 |
+| `snapshot`(join 時) | 全 agent / 全 type を sanitize 適用 | 同左(`permission_request` は合成 `state_change` に置換) | grid 起点 |
+| `history`(join 時) | ✓ | ✗ push しない | ADR-0012 |
+| `history_cleared`(broadcast) | ✓ | ✗ | viewer は log 自体見られないので意味なし。allow-list 方針に合わせて intercept して operator 限定 push |
+| `agent_deleted`(broadcast) | ✓ | ✓ | grid 整合のため必要(agent_id のみで機微なし) |
 
-`permission_request` Syn  subst tion of envelope : wrapper
-`waiting_permission` emit `state_change(waiting_permission)` when transition
-(`host.ts:#apply({kind: "permission_request"})`) viewer
-`state_change` But snapshot is the latest envelope
-`permission_request` overwrites later with a single option
-view subst tion is required for viewer to lose the agent.
+`permission_request` envelope の合成置換について: wrapper は
+`waiting_permission` 遷移時に `state_change(waiting_permission)` も emit する
+(`host.ts:#apply({kind: "permission_request"})`)。よって viewer は
+`state_change` 経由で既に状態を知っている。だが snapshot は **最新 envelope
+1 件** を返す仕様で、`permission_request` が後で上書きするため、snapshot で
+viewer が当該 agent を見失わないよう合成置換が必要。
 
-### F4: The role gate of the input direction (client → server) is set
+### F4: 入力方向(client → server)の role gate は据置
 
 `instruction` / `permission_decision` / `interrupt` / `clear_history` /
-`delete_agent` is already available ([protocol](../specs/protocol.md)).
-Book ADR**Delivery direction only**Target
+`delete_agent` は既に operator 限定([protocol](../specs/protocol.md))。
+本 ADR は **配信方向のみ** を対象とする。
 
-### F5: Roll Extension Instructions
+### F5: ロール拡張の手順
 
-To add a new envelope  type:
+新 envelope type を追加するときは:
 
-1. In the specification PR, specify whether or not the displayer of the type.
-2. The operator limit is default. viewer `sanitize_envelope_for/2`
-explicitly add a clause to the `:viewer` clause and test the visibility of both rolls
+1. 仕様 PR で当該 type の viewer 配信要否を明記。
+2. operator 限定がデフォルト。viewer 配信したい場合は `sanitize_envelope_for/2`
+   の `:viewer` 句に明示的に句を追加し、テストで両ロールの可視性を
+   covering する。
+3. 機微フィールドが ext に乗る場合は引き続き catch-all の ext 除去で守られる
+   (allow した type でも viewer には ext は届かない)。
 
-3. If the the relevant entry field is on the ext, it will continue to be protected by catch-all ext removal
-(ext is not delivered to viewer even if it is view type).
+### F6: agent 間開示 (peer directory)
 
-### F6: agenter directory
-
-F1 to F5 is intended for `agents:lobby` delivery for client (dashboard).
+F1〜F5 は client (dashboard) 向けの `agents:lobby` 配信を対象とする。
 [issue #150](https://github.com/sakuraiyuta/kaoiro/issues/150)
-the request that the agent reads and delegates the status of the agenter,
-**Disabling `agent` as the third disclosure requirement**(2026 -28 Added,
-[phase-27](../plans/phase-27-list-agents-metadata.md)).
+で agent が peer の稼働状況を読んで委任判断を行う要求が生じたため、
+**第 3 の開示主体として `agent` を定義する**(2026-07-28 追記、
+[phase-27](../plans/phase-27-list-agents-metadata.md))。
 
-**F6-1 — `agent` is not part of `operator`.**operator
-`agents:lobby`
-`wrapper:<id>` /
-`WrapperChannel.handle_in("directory_request", …)`)
-One allow-list does not protect the other. Both judge independently.
+**F6-1 — `agent` は `operator` の部分集合ではない。** operator が
+見る経路(`agents:lobby` / `AgentsChannel.sanitize_envelope_for/2`)と
+agent が見る経路(`wrapper:<id>` /
+`WrapperChannel.handle_in("directory_request", …)`)は別実装であり、
+片方の allow-list がもう片方を守らない。両者は独立に判断する。
 
-**F  — directoryer directory is also a allow-list approach.**`directory_entry/4`
-Only the specified field will appear between the agent. envelope  `ext`
-Dispensing implementation is prohibited (F2 fail-closed). allow-list
-**Apply to nested hierarchy**`ext`
-Assemble new map projected only canonical key and unknown nested key
-Not disclosed.
+**F6-2 — peer directory も allow-list 方式。** `directory_entry/4` が
+明示列挙した field だけが agent 間に出る。envelope の `ext` を丸ごと
+流し込む実装は禁止する(F2 と同じ fail-closed)。allow-list は
+**nested 階層まで適用** する — `ext` 由来の構造体を載せる場合も
+canonical key だけを写した新しい map を組み立て、未知の nested key は
+開示しない。
 
-**F6-3 — current allow set**: `agent_id` /
+**F6-3 — 現時点の allow 集合**: `agent_id` /
 `persona{id, name, sprite_set}` / `display_name` / `state` / `engine` /
 `model` / `effort` / `context` / `session_started_at` / `turns` /
 `last_activity_at` / `conversation` / `rate_limits` / `directory_only` /
-`last_seen`.
-`persona{...}` to back 6 field(`context` to `rate_limits`)
+`last_seen`。
+`persona{...}` から後ろ 6 field(`context`〜`rate_limits`)は
 [#150](https://github.com/sakuraiyuta/kaoiro/issues/150)
-(phase-27) `display_name`(issue #209 D19)
-Independent mutable commonly known — `persona.name` canonical from pack
-`display_name`
-De  rename in operation. `directory_only` / `last_seen`
+(phase-27)で追加。`display_name`(issue #209 D19)は `persona.name` と
+独立した mutable な通称 — `persona.name` は pack 由来の canonical
+name として rename の影響を受けず不変のまま、`display_name` のみが
+稼働中の rename を反映する。`directory_only` / `last_seen`
 ([#259](https://github.com/sakuraiyuta/kaoiro/issues/259))
-`AgentDirectory`
-identity + `last_seen`
-`directory_only` entry `cwd`
-without operator-grade field. F6-7
-Issue #259 T7/W1-W3
+は `AgentStates` に live envelope を持たない `AgentDirectory` 由来
+entry にのみ付き、identity + `last_seen` を超える開示は追加しない
+(F6-4 の deny 集合はそのまま — `directory_only` entry も `cwd` 等の
+operator-grade field を持たない)。テストによる covering は F6-7 の
+拡張手順どおり(server/wrapper 両側、issue #259 T7/W1-W3)。
 
-**F6-4 — explicit deny (co ous ex )**: `cwd`,`permission`(`sandbox` /
-`approval`),`permission_mode` / `fast_mode`,`session_id`,
-`pending_permission`, `pending_question`,
-`slash_commands`,`models` catalog,`resume_snapshot` /
-`resume_drift`,`model_source` / `effort_source`,
-`session_capabilities`, `cost`. No need for delegation decisions or operator-specific
-To guess the work contents. `session_capabilities`
-`supports_context_usage` `context`
-only read in internal**, the value itself does not appear inerer
-([ADR-0040](0040-context-usage-capability.md) D1 3-state judgment
-dashboard).
+**F6-4 — 明示 deny(継続除外)**: `cwd`、`permission`(`sandbox` /
+`approval`)、`permission_mode` / `fast_mode`、`session_id`、
+`pending_permission`(特に `input`)、`pending_question`、
+`slash_commands`、`models` catalog、`resume_snapshot` /
+`resume_drift`、`model_source` / `effort_source`、
+`session_capabilities`、`cost`。委任判断に不要か、operator 固有の
+作業内容を推測させるため。`session_capabilities` は
+`supports_context_usage` を `context` 投影の gate 入力として **server
+内部で読むだけ** で、値そのものは peer に出さない
+([ADR-0040](0040-context-usage-capability.md) D1 の 3-state 判定を
+dashboard と揃えるため)。
 
-**F6-5 — `conversation` discloses up to `agent_id`
-`conversation_id` does not disclose. ** The scope of disclosure is determined
-"active conversation + opponent agent id list" (#150 decision 4)
-identifiers exceed their scope. It is a judgment that it does not come out because it is out of range,
-[#17](https://github.com/sakuraiyuta/kaoiro/issues/17)
-conversation id Don’t have concluded here about confidentiality. Trust
-Reassessment of the boundary itself is included in the future item of F6-6.
+**F6-5 — `conversation` は相手 `agent_id` までを開示し、
+`conversation_id` は開示しない。** 開示範囲として決定されたのが
+「active な会話の有無 + 相手 agent_id 一覧」(#150 決定 4)であり、
+識別子はその範囲を超えるため。範囲外だから出さないという判断であって、
+[#17](https://github.com/sakuraiyuta/kaoiro/issues/17) の
+conversation_id 機密性についてここで結論を出したわけではない。信頼
+境界そのものの再評価は F6-6 の将来項目に含める。
 
-**F6-6 — the basis and re-evaluation of validity (issue #187).**the relevant entry
-Originally, kaoiro is a closed system under a single operator, anderer is
-Interdisciplinary visualization of operation status based on the same human-started agent
-The risk of exposure is smaller than the convenience of reducing intervention
-Concluded, the trust boundary between “ex  inbound” or agent is the operator
-The condition of "revaluation at the time when the unit disappears.
+**F6-6 — 妥当性の根拠と再評価 (issue #187 段階2 で実施)。** 本節は
+もともと「現状 kaoiro は単一 operator 配下の閉じた系であり、peer は
+同一の人間が起動した agent に限られる」を根拠に、稼働状況の相互可視化
+による露出リスクは小さく operator 介在の削減という便益が上回ると
+結論し、「外部 inbound 導入時、または agent 間の信頼境界が operator
+単位でなくなった時点で再評価する」という条件を置いていた。
 
-[ADR-0050](0050-principal-model-and-graded-access-control.md)
-Phase A (identity + admin role, issue #187 / #188)
-Part — start to break down — the premise of “the same human-started agent”.
-principal is type-separation to user / agent (D1), user side contains viewer
-has multiple roles. Context of ADR-0050
-the relevant entryose that condition is fired, and issue #187the relevant entry clause is
-permission Therefore, the book section does not write an exception, but actually
-Re-evaluate.
+[ADR-0050](0050-principal-model-and-graded-access-control.md) の
+Phase A (identity 化 + admin role、issue #187 / #188) はこの根拠の
+一部 — 「同一の人間が起動した agent」という前提 — を崩し始める。
+principal は user / agent に型分離され (D1)、user 側は viewer を含む
+複数の role を持つ。ADR-0050 の Context 自身が「本 ADR の決定はまさに
+その条件を発火させる」と明記しており、issue #187 の制約節もこれを
+引き継いでいる。したがって本節は例外を書き足す形を採らず、実際に
+再評価する。
 
-**Reassessment conclusions.** [ADR-0050](0050-principal-model-and-graded-access-control.md)
-*identity (id / kind /
-**(F6-8) that explicitly accepts by display name / role.
-D5 is the scope of “visible” to identity and state and activities (w
-per-pair (D3)
-Corres ence to being divided.
+**再評価の結論。** [ADR-0050](0050-principal-model-and-graded-access-control.md)
+D5 を根拠として、agent への user 開示を **identity (id / kind /
+display_name / role) までに限定した上で明示的に受容する**(F6-8)。
+D5 が「原則見える」の範囲を identity までとし、state と活動 (何を
+しているか、誰とやり取り中か) を per-pair 権限 (D3) の対象と切り
+分けているのに対応する。
 
-**role is not an agent's authorization basis, but the
-description metadata. ** With the word D5, you know that “agent is role”
-the server side to force the agent
-not recognized. With this position, the scope of disclosure is narrowed down to identity
-The authorization decision itself remains consistently on the server side while minimizing the exposure surface —
-Even if the agent side misreads and mis s role, the actual permission exercise is
-allow-list / per-pair permission
+**role は agent の authorization 根拠ではなく、server enforcement の
+説明 metadata である。** D5 の言葉を借りれば「agent が role を知って
+も authority は変わらない。強制するのは server 側であって agent の
+認識ではない」。この位置づけにより、開示範囲を identity に絞って
+露出面を最小化しつつ、認可判断そのものは一貫して server 側に残る —
+agent 側が role を誤読・悪用しても、実際の権限行使は server の
+allow-list / per-pair 権限が別途強制するため直接の脆弱性にはならない。
 
-Please note that disclosure of state/activity is not subject to this section. per-pair permission
-It is not the introduction of itself — the edge of the addition model, the graph editing tool, etc.
-D3/D9 is the scope of Phase B (#189).
-Do not step into the implementation. ADR-0050 Phase B
-refilter the same per-pair permission table. F6-8 allow
-Max.
+state / 活動の開示は本節の対象外のまま据え置く。これは per-pair 権限
+そのものの導入ではない — 加算モデルの edge 判定・グラフ編集ツール等
+D3/D9 の設計変更は Phase B (#189) のスコープであり、本 ADR はここで
+実装に踏み込まない。ADR-0050 Phase B が導入されたら、user 側の開示も
+同じ per-pair 権限テーブルで再フィルタする。それまでは F6-8 の allow
+集合が上限。
 
-**Next Reassessment**: external inbound
+**次の再評価条件**: 外部 inbound
 ([#95](https://github.com/sakuraiyuta/kaoiro/issues/95))
-ADR-0050 permission B (per-pair, #189)
+導入時、または ADR-0050 Phase B (per-pair 権限、#189) の実装時。
 
-**F6-7 — extension procedure.**F5
-like viewer judgment**Determine whether or not to disclose agent**F6-3 / F6-4
-After enumerating on the command line, the test covers the visibility of both sides.
+**F6-7 — 拡張手順。** peer directory に新 field を足すときは、F5 の
+viewer 判断と同様に **agent 開示の要否を明示判断** し、F6-3 / F6-4 の
+どちらかに列挙してからテストで両主体の可視性を covering する。
 
-**F6-8 — allow group of user disclosure (issue #187 step 2).**Agent
-user disclosure is independent of F6-3 (agent entry allow set)
-F6-1
-If you manage the agent directory (payload separately for the same route) with the same set,
-loosen the allow-list of the other.
+**F6-8 — user 開示の allow 集合 (issue #187 段階2)。** agent への
+user 開示は F6-3 (agent entry の allow 集合) とは独立の allow-list
+とする。理由は F6-1 と同型 — user directory (`wrapper:<id>` 経由) と
+agent directory (同じ経路の別 payload) を同じ集合で管理すると、片方
+向けに緩めた判断がもう片方の allow-list をも緩めてしまう。
 
-current allow set: `id` / `kind` (always literal `"user"`) /
+現時点の allow 集合: `id` / `kind`(常に literal `"user"`) /
 `display_name` / `role`(`"admin"` \| `"operator"` \| `"viewer"` —
-issue #188 wire contract
-[protocol-inter-agent](../specs/protocol-inter-agent.md)
-`wrapper/core/src/transport.ts` `USER_ROLES` when type and execution
-derive from one place. F6-6 Reassessment
-The conclusion is only 4 field equivalent to identity. state/activity
-not user, but disclose
-It is also suitable for
+issue #188 で 3 値化。wire contract の正本は本 ADR と
+[protocol-inter-agent](../specs/protocol-inter-agent.md) であり、
+`wrapper/core/src/transport.ts` の `USER_ROLES` はその実装側で型と実行時
+narrow を 1 箇所から導出するための手段にすぎない)。F6-6 の再評価
+結論が言う identity 相当の 4 field に限る。state・活動 (現在何を
+しているか、誰とやり取り中か) に相当する概念は user には無く、開示
+対象にもならない。
 
-unsolving roles (configs revoked from config-list are unknown)
-(e.g.) The user is omitted by entry. `role` is wire required field
-agent F6-3 agent entry, per-field's "unknown" is expressed.
-To save the space.
+role を解決できない (allow-list から revoke された、config が未知に
+なった等) user は entry ごと省略する。`role` は wire 必須 field で
+あり、F6-3 の agent entry と異なり per-field の「不明」を表現する
+余地が無いため。
 
-Same as F6-7 when adding new field.
-F6-3 / F6-8 Enumeration → Test to cover the visibility of both sides.
+新 field を足すときの手順は F6-7 と同じ(agent 開示の要否判断 →
+F6-3 / F6-8 いずれかへ列挙 → 両主体の可視性を covering するテスト)。
 
-### F7: HTTP endpoint gate role (issue #232, 2026 28)
+### F7: HTTP endpoint の role gate(issue #232、2026-08-28 追記)
 
-F1 to F6 is supported by `agents:lobby` (WS envelope ) anderer directory.
-**HTTP endpoint also follows the same fail-closed principle**: New endpoint
-If you can return subtle information, you can set the operator/admin only by default and viewer
-Disclosing is expressly determined separately (F2's "New output is the default operator only"
-WS envelope
+F1〜F6 は `agents:lobby`(WS envelope 配信)と peer directory を対象と
+する。**HTTP endpoint も同じ fail-closed 原則に従う**: 新規 endpoint が
+機微情報を返し得る場合、operator/admin 限定をデフォルトとし、viewer
+開示は別途明示判断する(F2 の「新規出力面は operator 限定がデフォルト」
+という考え方を WS envelope 以外の出力面にも一般化したもの)。
 
-Current target: `GET /api/personas/:id` (persona pack manifest.json)
-All metadata + personality.md .). custom pack personality.md
-system prompt to getthe relevant entryrietary operation instructions
-operator/admin (director decision, 202628)28). Viewer
-In the future, the byte limit of personality.md (as S-232-1)
-(issue #232)
-see).
+現時点の対象: `GET /api/personas/:id`(persona pack の manifest.json
+全メタデータ + personality.md 全文)。custom pack の personality.md は
+system prompt であり、proprietary な運用指示を含み得るため
+operator/admin 限定とした(director 決裁、2026-08-28)。viewer への
+開示を将来検討する際は、personality.md の byte 上限 (S-232-1 として
+見送り) も合わせて決裁する必要がある(issue #232 クローズコメント
+参照)。
 
-`KaoiroServerWeb.RequireOperatorPlug`
-Reuse `ClientSocket.role_for/1` and use session cookies
-request live revalidate — same as F1's 3 roll revision
-Determine admin). More
-[auth-and-authz](../specs/auth-and-authz.md)"Operator limited HTTP
-endpoint
+実装は `KaoiroServerWeb.RequireOperatorPlug`(WS 側の
+`ClientSocket.role_for/1` をそのまま再利用し、session cookie の
+credential を毎リクエスト live revalidate — F1 の 3 ロール改訂と同じ
+判定で admin も通す)。詳細は
+[auth-and-authz](../specs/auth-and-authz.md)「Operator 限定 HTTP
+endpoint」節。
 
-How to add a new HTTP endpoint is the same as F5: viewer disclosure
-By default, the viewer disclosure is
-`RequireOperatorPlug` is specified as an option and in the test
-Anonymous/viewer/operator/admin
+新規 HTTP endpoint を追加するときの手順は F5 と同型: viewer 開示の
+要否を明示判断し、operator 限定がデフォルト、viewer 開示は
+`RequireOperatorPlug` を通さない選択として明示し、テストで
+匿名/viewer/operator・admin の可視性を covering する。
 
 ## Consequences
 
 ### Positive
 
-- viewer**fail-closed**Note New type Accident in addition
-Prevent structure.
-- `permission_request` envelope  `tool_name` / `request_id` viewer
-A leak (blocks the guess path of the tool used by operator).
-- The specification of the viewer roll can be read in the list (threat-model.md / protocol.md
-also reflected).
-- F6 toerer directory
-The judgment procedure for adding field is set as viewer (#150).
+- viewer 漏洩の **fail-closed** 化。新 type 追加時の見落とし事故が
+  構造的に防げる。
+- `permission_request` envelope の `tool_name` / `request_id` の viewer
+  漏洩が止まる(operator が使っているツールの推測経路を塞ぐ)。
+- viewer ロールの仕様が一覧表で読める(threat-model.md / protocol.md
+  にも反映)。
+- F6 で agent 間開示も同じ allow-list 規律に載り、peer directory へ
+  field を足すときの判断手順が viewer と揃った(#150)。
 
 ### Negative
 
-- Syn  `state_change` for viewer (snapshot/broadcast)
-converting costs minor to hot path.
-- Increases the number of new functions to explicitly determine whether to appear in viewer when adding new types.
-However, tolerance is the intention of allow-list.
+- viewer 用の合成 `state_change` 変換が一段挟まる(snapshot/broadcast の
+  hot path に minor な変換コスト)。
+- 新 type 追加時に「viewer に出すか」を明示判断する手間が増える。
+  ただし allow-list の意図そのものなので許容。
 
 ### Neutral
 
-- Existing operator delivery is unchanged (operator clause is bound to `envelope`).
-- ext catch-all removal (F3 `state_change` clause is `Map.delete("ext")`
-including).
-- `agent_deleted` also receives viewer (specified to allow-list for grid matching)
-
+- 既存の operator 配信は無変更(operator 句は `envelope` を素通し)。
+- ext の catch-all 除去は据置(F3 の `state_change` 句は `Map.delete("ext")`
+  を含む)。
+- `agent_deleted` は viewer も受信(grid 整合のため allow-list に明示
+  列挙)。
 
 ## Alternatives Considered
 
 | Option | Why rejected |
 |--------|--------------|
-|Keep current catch-all connections|The viewer leak continues when new type is added. Structural problems that do not notice until an accident occurs|
-| `permission_request`envelope `input`(current)| `tool_name` / `request_id`Def -in-depth|
-|Viewer`permission_request`Note**Completely**Remove from snapshot|Recent Posts`permission_request`The agent disappears from the grid of the viewer. `state_change`adopt to keep grid consistency in subst tion|
-|3 Rolling (admin / operator / viewer)|.NI 2 rolls in the current function. ADR~~**With) rejected (2026 (2014, issue #188).**[ADR-0050](0050-principal-model-and-graded-access-control.md) D2 decided to 3 value. See  F1 revisions|
+| 現状の catch-all 素通し(deny-list 継ぎ足し)を維持 | 新 type 追加時に viewer 漏洩が継続。事故が起きるまで気づけない構造的問題が残る |
+| `permission_request` envelope を viewer にも素通しで `input` だけ落とす(現状)| `tool_name` / `request_id` から operator の作業状況が推測でき、Defense-in-depth として不十分 |
+| viewer から `permission_request` を **完全に** 除去(snapshot からも外す)| 最新が `permission_request` のとき viewer の grid から agent が消える。合成 `state_change` への置換で grid 整合を保つ方を採用 |
+| 3 ロール化(admin / operator / viewer)| ~~YAGNI。現状の機能では 2 ロールで足りる。必要になった時点で別 ADR~~ **却下を撤回 (2026-08-14、issue #188)。** その「必要になった時点」が来て、[ADR-0050](0050-principal-model-and-graded-access-control.md) D2 が 3 値化を決めた。上記 F1 の改訂を参照 |
 
 ## Related
 
--COs: [protocol](../specs/protocol.md)
-Unified), [threat-model](../specs/threat-model.md) (cited matrix).
--CO ADR: [0011](0011-phase3-reliability-and-auth.md)
-mounting),[0012](0012-response-display-and-dashboard-scope.md)(log/re t
-[0013](0013-user-token-cookie-persistence.md)
-(token)
-- F6 Origin: [issue #150](https://github.com/sakuraiyuta/kaoiro/issues/150),
-[phase-27](../plans/phase-27-list-agents-metadata.md) Disclosure field
-wire is [protocol-inter-agent](../specs/protocol-inter-agent.md)
-"peer directory information boundary"
-- Origin: [issue #46](https://github.com/sakuraiyuta/kaoiro/issues/46).
+- specs: [protocol](../specs/protocol.md)(配信先表記を本 ADR に合わせて
+  統一)、[threat-model](../specs/threat-model.md)(マトリクスを引用)。
+- 関連 ADR: [0011](0011-phase3-reliability-and-auth.md)(role/token 認証の
+  土台)、[0012](0012-response-display-and-dashboard-scope.md)(log/result の
+  operator 限定の出発点)、[0013](0013-user-token-cookie-persistence.md)
+  (token 保管)。
+- F6 の由来: [issue #150](https://github.com/sakuraiyuta/kaoiro/issues/150)、
+  実装は [phase-27](../plans/phase-27-list-agents-metadata.md)。開示 field の
+  wire は [protocol-inter-agent](../specs/protocol-inter-agent.md)
+  「peer directory の情報境界」が正本。
+- 由来: [issue #46](https://github.com/sakuraiyuta/kaoiro/issues/46)。

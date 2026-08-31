@@ -1,5 +1,5 @@
 ---
-title: Codex internal sub-agent's   toggle and hard-knownerer-routing contract
+title: Codex internal sub-agent の runner toggle と固有名 peer-routing contract
 status: accepted
 date: 2026-07-15
 opened: 2026-07-15
@@ -9,153 +9,153 @@ related_specs: [protocol-inter-agent, plugin-model]
 related_adrs: [32, 33]
 ---
 
-# ADR-0038 — Codex internal sub-agent's   toggle and solid nameerer-routing contract
+# ADR-0038 — Codex internal sub-agent の runner toggle と固有名 peer-routing contract
 
 ## Status
 
-Accepted (2026.-15, Master decision. delegation between kaoiro er,
-Fuji is in charge of review.
-[phase-19-codex-internal-subagents-toggle](../plans/phase-19-codex-internal-subagents-toggle.md).
+Accepted (2026-07-15、マスター決裁。kaoiro peer 間 delegation でクロエへ委任、
+藤がレビュー担当)。実装は
+[phase-19-codex-internal-subagents-toggle](../plans/phase-19-codex-internal-subagents-toggle.md)。
 
 ## Context
 
-A well-known and collaborative agent (Codex engine)
-kaoiro er (`send_to_agent` / `list_agents`)
-**inCode with Codex `collaboration.spawn_agent`
-**rate sub-agents** andHomeer’s same solid name (`kuroe`)
-I recurred a mistake.
+固有名で共同作業を指示されたエージェント(Codex engine)が、既存の
+kaoiro peer(`send_to_agent` / `list_agents` で到達する別プロセスの
+エージェント)を呼ばず、Codex の `collaboration.spawn_agent` で**内部
+サブエージェント**を生成し、しかもそれに peer と同じ固有名(`kuroe`)を
+付ける取り違えが再発した。
 
-The root cause is a solid-famous instruction, "to examine with ~", two different semantics
-primitive:
+根本原因は、「〜と一緒に調べて」という固有名指示が、意味論の異なる 2 つの
+primitive に写像し得ることにある:
 
-| primitive |Note|permission|
+| primitive | 実体 | 到達手段 |
 |---|---|---|
-|address existingerer|kaoiro er| `list_agents` → `send_to_agent` |
-|Create a new subcontractor|engine internal sub-agent (not registered)|engine specific spawn mechanism|
+| 既存 peer を address する | 別プロセスの kaoiro peer(登録済み) | `list_agents` → `send_to_agent` |
+| 新しい下請けを create する | engine 内部のサブエージェント(未登録) | engine 固有の spawn 機構 |
 
-`list_agents` because internal sub-agent is not registered to kaoiro server
-Don’t appear, and Dashboard can’t directly reflect fakes. So kaoiro is the only
-authoritative registry(`list_agents`)
-[protocol-inter-agent](../specs/protocol-inter-agent.md)
-“Guide  for Addressing” has already been written as MUST. Recurrence is only the "prompt terms"
-It is a proof that it cannot be protected.
+内部サブエージェントは kaoiro server に登録されないため、`list_agents` に
+現れず、dashboard も偽物を直接は映せない。したがって kaoiro が唯一の
+authoritative registry(`list_agents`)を持ち、固有名の解決はそこを起点に
+すべき、という [protocol-inter-agent](../specs/protocol-inter-agent.md)
+「宛先解決の指針」が既に MUST として存在する。再発は「prompt 規約だけでは
+守られない」ことの実証である。
 
-On the other hand, the master is the in  sub-agent itself, and the
-Risks showed acceptable decisions. "Default remains valid and the operator is
-option can be explicitly disabled. Structure only when disabled
-Soft guard(prompt / provenance)
+一方でマスターは、内部サブエージェント自体は有用であり、有効時の取り違え
+リスクは許容する判断を示した。よって「既定は有効のまま維持し、operator が
+runner option で明示的に無効化できる」形が求められる。無効化時のみ構造的に
+止め、有効時は soft guard(prompt / provenance)で抑止する。
 
-Codes PreToolUse in Codex 0.144.1 cannot block the tool call,
-kaoiro doesn't implement hard guard on the side.
-side issues).
+Codex 0.144.1 の hooks PreToolUse は tool 呼び出しを block できないため、
+kaoiro 側では hard guard を実装しない(責務分担: hard guard は Codex harness
+側の課題)。
 
 ## Decision
 
-### F1 — runner config `codex.internal_subagents`(boolean,effective default true)
+### F1 — runner config `codex.internal_subagents`(boolean、effective default true)
 
-`internal_subagents`(boolean)
-Add. Unspecified / `true` = valid (Codex default), `false` = disabled.  effective
-default. bot boolean and non boolean is
-(`runner/src/config.ts`, `wrapper/core/src/persona.ts`).
+`runner.config.json` の `codex` ブロックに `internal_subagents`(boolean)を
+追加する。未指定 / `true` = 有効(Codex 既定)、`false` = 無効。effective
+default は true。厳密な boolean 検証を行い、非 boolean は loud config error に
+する(`runner/src/config.ts`、`wrapper/core/src/persona.ts`)。
 
-### F2 — effective (= configured ?? true)`features.multi_agent`permission
+### F2 — effective(= configured ?? true)を常に `features.multi_agent` へ注入
 
-Codex per-run config
-`config.codex.internal_subagents`(file, nested)→   relay
-(`resolveWrapperConfig`, `configured ?? true` is solved by codex engine)→
-WrapperConfig `codex_internal_subagents`(wire,flat)→
-`wrapper/codex/src/host.ts` per-run `config`. host**Always**
-`features.multi_agent` `internal_subagents`
-`true` is explicitly enabled (force-enable) and `false` is disabled and not specified
-explicitly inject `true` of effective default.
+runner の設定を Codex per-run config へ反映する経路:
+`config.codex.internal_subagents`(file、nested)→ runner の relay
+(`resolveWrapperConfig`、codex engine で `configured ?? true` を解決)→
+WrapperConfig `codex_internal_subagents`(wire、flat)→
+`wrapper/codex/src/host.ts` の per-run `config`。host は effective を **常に**
+`features.multi_agent` へ注入する。`internal_subagents` は正の boolean で
+あり、`true` は明示的な有効化(force-enable)、`false` は無効化、未指定は
+effective default の `true` を明示注入する。
 
-**precedence**: config option is SoT and user-global
-`[features] multi_agent`**Top Page**
-By always writing effective to per-run config, it is not based on global configuration
-precedence. Structural action that actually stops in  sub-agents `false`
-`true` is also explicitly injected for the establishment of precedence. Global Settings
-Respecting tri-state (unspecified = delegate to global) will not be collected this time
-key / contract required).
+**precedence**: runner option を SoT とし、user-global な Codex config
+(`~/.codex/config.toml` の `[features] multi_agent` 等)より **上位** とする。
+effective を常に per-run config へ書き込むことで、global 設定に依らず runner
+の意図が優先される。実際に内部サブエージェントを止める構造的作用は `false`
+のときだけだが、`true` も precedence 確立のため明示注入する。グローバル設定を
+尊重する tri-state(未指定=global に委ねる)は今回採らない(採る場合は別
+key / 契約が必要)。
 
-**live reload**: config**Only for the next spawn**permission In operation
-The wrapper process holds the value of launch and does not change immediately
-`Supervisor.updateRuntimeConfig` only runstime config for future spawn
-replace and kill existing child).
+**live reload**: config 変更は**次回以降の spawn にのみ**反映する。稼働中の
+wrapper プロセスは launch 時の値を保持し、即時変更しない
+(`Supervisor.updateRuntimeConfig` は将来の spawn 用 runtime config だけを
+差し替え、既存 child を kill しない)。
 
-### F3 — soft guard: hard-known guarder-routing contract
+### F3 — 有効時の soft guard: 固有名 peer-routing contract
 
-In order to prevent mistakes even if internal sub-agent is enabled, the following three aspects are
-Sync a short routing contract (soft guard):
+内部サブエージェントが有効なままでも取り違えを抑止するため、次の 3 面に
+短い routing contract を同期する(soft guard):
 
-- **common footer**(`persona_assets.ex`) — all persona (including default)
-system prompt `list_agents`
-1 send / multiple operator confirmation / 0 absence report), 0 same name internal
-Don't generate an alternative, in  will be created by the role name when explicitly indicated, jointly before sending and receiving
-Don’t report it.
-- **inter-agent tool description**`list_agents` /
-`send_to_agent`) — the same contract is expressed in the description that the model reads.
-- **spec**(`protocol-inter-agent.md`"Guide  for Addressing")—Mechanical of the same contract
+- **common footer**(`persona_assets.ex`)— 全ペルソナ(default 含む)の
+  system prompt 末尾。固有名指示は既存 peer として `list_agents` で解決
+  (1件 send / 複数 operator 確認 / 0件 不在報告)、0件でも同名 internal を
+  代替生成しない、internal は明示指示時に役割名で作る、実送受信前に共同
+  作業済みと報告しない。
+- **inter-agent tool description**(`inter_agent.ts` の `list_agents` /
+  `send_to_agent`)— 同契約を model が読む description に明示。
+- **spec**(`protocol-inter-agent.md`「宛先解決の指針」)— 同契約を機械的
+  仕様に追補。
 
+### F4 — hard guard(PreToolUse block)は kaoiro 側に実装しない
 
-### F4 — hard guard(PreToolUse block) does not implement to kaoiro
+Codex 0.144.1 の hooks PreToolUse は tool 呼び出しを block できないため、
+「spawn 前の予約名照合で hard reject」する構造 guard は kaoiro repo では
+実装しない。これは Codex harness 側の課題として責務分離する(kaoiro は
+authoritative registry と routing contract の供給に留まる)。
 
-Codes PreToolUse in Codex 0.144.1 cannot block the tool call,
-kaoiro repo
-Not implemented. This is a codex harness-side issue.
-authoritative registry and routing contract.
+### F5 — provenance backstop は既存機構で充足、新規実装しない
 
-### F5 — provenance backstop does not support existing mechanisms and implement new
+「誰が・どの conversation で・実際に送受信したか」を後追いできる provenance
+は、既存の `inter_agent_message` envelope が既に満たす:
 
-"Who is the conversation, and who is actually sent and received?"
-already meets the existing `inter_agent_message` envelope :
+- sender の `agent_id` と `persona` を envelope が stamp(`makeInterAgentMessage`)
+- `conversation_id` / `turn_number` で対話を全順序リンク
+- operator 限定の observation path で dashboard が送受信を両側に表示
+  ([protocol-inter-agent](../specs/protocol-inter-agent.md) 観測経路)
 
-- sender `agent_id` and `persona` envelope  are stamp(`makeInterAgentMessage`)
-`conversation_id` / `turn_number`
-- Dashboard sends and receives by operator only observation path
-([protocol-inter-agent](../specs/protocol-inter-agent.md) observation route)
-
-`wrapper/agent-common/test/inter_agent.test.ts`: sender
-agent id / persona / conversation id / turn number
-The new provenance mechanism is not added, and you can use this ADR and test to “feed”
-permission
+これらは既存 test(`wrapper/agent-common/test/inter_agent.test.ts`: sender
+agent_id / persona / conversation_id / turn_number の採番・単調性)で証明
+済み。よって新規 provenance 機構は追加せず、本 ADR と test で「充足」を記録
+するに留める。
 
 ## Consequences
 
 ### Positive
 
-- operator can disable codex internal sub-agent in one   option,
-(`false`).
-- Do not leave existing behavior because the default is set.
-- soft guard(footer / description / description)
-Identify the resolution path of the solid-famous instructions.
-- kaoiro repo is the same route as the existing chatgpt plan.
-Relay + host + close to the description layer.
+- operator が runner option 一つで Codex 内部サブエージェントを無効化でき、
+  取り違えを構造的に断てる(`false` 時)。
+- 既定(有効)は据え置きのため、既存挙動を退行させない。
+- soft guard(footer / description / spec)が全 engine・全ペルソナに一様に
+  効き、固有名指示の解決経路を明示する。
+- kaoiro repo は既存の chatgpt_plan と同一経路に相乗りし、改修が config
+  中継 + host + 記述層に閉じる。
 
 ### Negative
 
-- Only soft guard is allowed.
-- common footer is slightly longer to all prompts.
+- 有効時の取り違えリスクは soft guard のみで残る(マスター許容済み)。
+- common footer が全 prompt にわずかに長くなる。
 
 ### Neutral
 
-- Hard guard is the responsibility of Codex harness. Codex
-block Appraisal when enabled.
-- No new implementation (F )
+- hard guard は Codex harness 側の責務として棚上げ(F4)。Codex hooks が
+  block 可能になった時点で別途評価する。
+- provenance は新規実装なし(F5)。
 
 ## Alternatives Considered
 
 | Option | Decision |
 |--------|----------|
-|host`false`Only when`features.multi_agent=false`Inject (true/unspecified is non-injected and delegate to Codex default)|Reject. positive boolean`true`is no-op. Constantly injecting effective for global higher ranks (Fuji Review, 2026 -15)|
-|global tri-state (unspecified = delegate to global / false = invalid / true = valid)|Reject. The positive boolean precedence becomes ambiguous. global Respect requires separate key/contract (adopt)|
-|materialise default=true when parse|Reject. parse maintains raw(undefined) and performs`?? true`reload chat is clean and consistent with chatgpt plan|
-|PreToolUse hard guard on kaoiro side|Reject. Codex 0.144.1 Codex Harness|
-|hard block|Reject. Allows the risk when the master is active. Default Disabling Existing Behavior|
-|stamp/display|Reject. Delicate implementation with existing envelope  + observation path|
+| host は `false` のときだけ `features.multi_agent=false` を注入(true/未指定は非注入で Codex 既定に委ねる) | Reject。正の boolean `true` が no-op になり意味論が不整合。runner を global より上位にするため effective を常時注入する(藤レビュー、2026-07-15) |
+| global 設定尊重の tri-state(未指定=global に委ねる / false=無効 / true=有効) | Reject。正の boolean の precedence が曖昧になる。global 尊重が要るなら別 key / 契約とする(今回不採用) |
+| parse 時に default=true を materialise | Reject。parse は raw(undefined)維持、effective は relay で `?? true` 解決とする方が reload diff がきれいで chatgpt_plan と一貫 |
+| kaoiro 側に PreToolUse hard guard(予約名照合で block) | Reject。Codex 0.144.1 の hooks は block 不能。Codex harness 側の責務 |
+| 固有名指示を常に internal 禁止で hard block | Reject。マスターが有効時リスクを許容。既定無効化は既存挙動退行 |
+| provenance を新規に stamp/表示実装 | Reject。既存 envelope + observation path で充足済み、重複実装 |
 
 ## Implementation
 
-[phase-19-codex-internal-subagents-toggle](../plans/phase-19-codex-internal-subagents-toggle.md).
-kaoiro repo
-settings repo(`dotfiles/codex` tracked source + `install.codex.sh`)
-Implement with responsibility separation.
+[phase-19-codex-internal-subagents-toggle](../plans/phase-19-codex-internal-subagents-toggle.md)。
+kaoiro repo(runner config 中継 + host features + routing contract + test)と
+settings repo(`dotfiles/codex` tracked source + `install.codex.sh`)を
+責務分離して実装する。
