@@ -153,7 +153,8 @@
       // the very next effect re-run (including the one that reconnects
       // and starts the fresh fetch) runs this SAME cleanup again
       // first, clearing that leaked write before the new fetch's
-      // result could ever render alongside it.
+      // result could ever render alongside it. `usersError` closes the
+      // same way for a stale REJECT landing during the same window.
       users = null;
       usersError = null;
       // issue #207: mirrors the confirm-close-modal reset below — a

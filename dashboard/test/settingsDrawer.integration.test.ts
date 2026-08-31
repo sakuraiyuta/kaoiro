@@ -1308,6 +1308,79 @@ describe("SettingsDrawer", () => {
       );
     });
 
+    // issue #207 round 5 (ふじ round4 計測): the test above pins the
+    // SUCCESS half of this race (`users`) but not the REJECT half
+    // (`usersError`) -- with the cleanup-side usersRefreshSeq bump gone
+    // (round 4), `usersError = null` is now the ONLY thing closing a
+    // stale REJECT landing while connection is falsy; removing it alone
+    // left the full suite green. Same fixture shape as above, but the
+    // pre-loss request REJECTS instead of resolving.
+    it("connection 消失中に着地した古い listUsers 応答(失敗)は、再接続直後に stale error として表示されない (stale-leak race guard, reject 側)", async () => {
+      const rejectors: Array<(err: Error) => void> = [];
+      const resolvers: Array<(v: UserSummary[]) => void> = [];
+      let call = 0;
+      const conn = makeConnection(
+        async () => [],
+        undefined,
+        () => {
+          call += 1;
+          if (call === 1) {
+            return new Promise<UserSummary[]>((_resolve, reject) =>
+              rejectors.push(reject),
+            );
+          }
+          return new Promise<UserSummary[]>((resolve) =>
+            resolvers.push(resolve),
+          );
+        },
+      );
+
+      const target = document.createElement("div");
+      document.body.append(target);
+      const props = makeReactiveSettingsDrawerProps({
+        onClose: vi.fn(),
+        connection: conn,
+      });
+      const component = mount(SettingsDrawer, { target, props });
+      mounted.push(component);
+      await tick();
+      expect(rejectors).toHaveLength(1);
+
+      props.connection = undefined;
+      await tick();
+      expect(target.querySelector(".users")).toBeNull();
+
+      // The pre-loss request REJECTS while connection is undefined --
+      // with the bug this silently writes into `usersError` (invisible
+      // right now since the section is hidden).
+      rejectors[0]!(new Error("leaked-error-while-disconnected"));
+      await Promise.resolve();
+      await tick();
+
+      // Reconnect, before the fresh fetch (call 2) resolves.
+      props.connection = conn;
+      await tick();
+      expect(resolvers).toHaveLength(1);
+
+      // Must show the loading state, NOT the leaked error, while the
+      // fresh reconnect fetch is still pending.
+      expect(target.querySelector(".user-status")?.textContent).toContain(
+        "読み込み中",
+      );
+      expect(target.textContent).not.toContain(
+        "leaked-error-while-disconnected",
+      );
+
+      resolvers[0]!([
+        { id: "fresh", kind: "user", displayName: "fresh", role: "operator" },
+      ]);
+      await Promise.resolve();
+      await tick();
+      expect(target.querySelector(".user-id")?.textContent).toContain(
+        "fresh",
+      );
+    });
+
     it("名前を変更ボタンで編集モードに入り、現在の表示名が入力欄の初期値になる", async () => {
       const conn = makeConnection(
         async () => [],
