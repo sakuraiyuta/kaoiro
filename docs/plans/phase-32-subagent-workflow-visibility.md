@@ -1,139 +1,141 @@
 ---
-title: Phase 32 — 内部 subagent/workflow 稼働の可視化
-description: Task ツールで起動する subagent/workflow の存在・状態を wrapper が検知し、server 集約を経て dashboard の頭上リングとして可視化する。
+title: Phase 32 — Visibility into internal subagent/workflow activity
+description: Detect the existence and state of subagents/workflows started by Task tools in the wrapper, aggregate them through the server, and visualize them as a ring above the dashboard's agent.
 status: in_progress
 phase: 32
 depends_on: []
 last_updated: 2026-08-10
 ---
 
-# Phase 32 — 内部 subagent/workflow 稼働の可視化
+# Phase 32 — Visibility into internal subagent/workflow activity
 
 ## Goal
 
-[issue #170](https://github.com/sakuraiyuta/kaoiro/issues/170)
-を実装する。エージェントが Task ツールで起動する subagent / ローカル
-workflow の活動を、wrapper が SDK メッセージから検知し、専用 envelope
-`task` で server 集約・operator 限定配信を経て、dashboard の
-`AgentCard`/`AgentDetail`(32-5)に「頭上リング」(CSS-only の光点周回アニメーション)として
-可視化する。決定の正本は [ADR-0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md)
-(エンティティモデル・transport)、[ADR-0047](../adr/0047-task-envelope-schema.md)
-(envelope スキーマ)、[ADR-0048](../adr/0048-task-aggregation-delivery.md)
-(server 集約・配信、operator 限定)。フィーチャ仕様は
-[subagent-tasks](../specs/subagent-tasks.md)。
+Implement [issue #170](https://github.com/sakuraiyuta/kaoiro/issues/170).
+The wrapper detects subagent / local-workflow activity started by an agent's
+Task tool from SDK messages, then sends it through server aggregation and
+operator-only delivery using the dedicated `task` envelope. The dashboard
+visualizes it as a “ring above the agent” (a CSS-only orbiting light-point
+animation) on `AgentCard`/`AgentDetail` (32-5). The decision sources of truth
+are [ADR-0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md)
+(entity model / transport), [ADR-0047](../adr/0047-task-envelope-schema.md)
+(envelope schema), and [ADR-0048](../adr/0048-task-aggregation-delivery.md)
+(server aggregation / delivery, operator-only). The feature specification is
+[subagent-tasks](../specs/subagent-tasks.md).
 
 ## Tasks
 
 | # | Task | Owner | Status | Notes |
 |---|------|-------|--------|-------|
-| 32-1 | wrapper: `task_started`/`task_progress`/`task_notification` の解釈 + `task` envelope 発行 | あお | ✅ | `wrapper/claude-code/src/adapter.ts` の `sdkMessageToTask`(純粋関数)、`wrapper/agent-common` の `makeTask`。`kind=updated` は host.ts で 3 秒 + トークン差分 500/tool 名変化のいずれかで間引き。未知 subtype(`task_updated`)は fail-visible に warn ログのみで同時実行数カウントには一切関与させない(ADR-0019 addendum、変更なし)。`task_notification` の未知 status は M2 fix-round(2026-08-09、ふじ round1)で terminal fallback へ変更 — 既知 3 値(completed/failed/stopped)以外は status="failed" として扱い、生の値は raw_status にログ用途のみで保持する(wire には出さない)。この経路は completed 相当としてカウントに反映される(-1)ため、当初の「カウントに一切関与させない」は task_notification の未知 status には当てはまらない |
-| 32-2 | server: `TaskStates` GenServer(フラット task テーブル) + wrapper_channel/agents_channel 配線 | あお | ✅ | `server/lib/kaoiro_server/task_states.ex` 新規。`WrapperChannel.terminate/2` が `AgentStates.disconnect/3` の owner-check 成立時のみ `TaskStates.discard_for_agent/1` を呼ぶ(ADR-0048 F1)。`AgentsChannel` の snapshot push へ `tasks` キーを追加、operator のみ非空(viewer は既存 fail-closed キャッチオールで `type: "task"` そのものも drop、ADR-0021) |
-| 32-3 | dashboard: `task` envelope 受信 + `AgentCard` 頭上リング | あお | ✅ | `protocol.ts` に `TaskPayload`/`taskOf`/`parseTasks`/`applyTaskEnvelope`。`App.svelte` は `tasks` を `agents` とは別の accumulator として保持(ADR-0019 F2: 親の state_change slot を上書きしない)。`AgentCard.svelte` は `.sprite`/`.face` を包む `.sprite-slot`(position: relative)+ `.task-ring`(`translate` ベース 12 段 keyframes で楕円軌道を周回、画像アセット無し。32-5 で共有コンポーネント `TaskRing.svelte` へ抽出)。`prefers-reduced-motion` は `app.css` の既存グローバル規則(`animation-duration: 0.01ms !important` 等)でカバーされ、per-component override 不要。activeTaskCount は on/off のみに使い、数値表示はしない(こはくスコープ判断) |
-| 32-4 | docs: spec/ADR addendum・protocol.md 確定化・本 plan | あお | ✅ | [subagent-tasks](../specs/subagent-tasks.md) の段階1〜3 を実装済みへ更新、[agent-sdk-events](../specs/agent-sdk-events.md) に実測フィールド(`prompt`/`output_file`/`task_updated`)と終端通知保証の実測記録を追補、ADR-0019/0047/0048 に addendum(それぞれ task_updated 対象外・task_type 実測値と prompt/output_file 非配線・operator 限定配信) |
-| 32-5 | follow-up: `AgentDetail` への頭上リング追加(マスター指摘、取りこぼし修正) | あお | 🔄 | 詳細は下記「Follow-up」節。指揮 クロエ、レビュー ふじ、実装 あお。レビュー中 |
+| 32-1 | wrapper: interpret `task_started`/`task_progress`/`task_notification` + emit `task` envelopes | あお | ✅ | `wrapper/claude-code/src/adapter.ts` provides pure function `sdkMessageToTask`, and `wrapper/agent-common` provides `makeTask`. `kind=updated` is throttled in host.ts by 3 seconds + either a 500-token delta or a tool-name change. An unknown subtype (`task_updated`) only emits a fail-visible warning and never affects the concurrent-task count (ADR-0019 addendum, unchanged). Unknown `task_notification` statuses were changed to terminal fallback in the M2 fix round (2026-08-09, ふじ round 1): values other than the known 3 (completed/failed/stopped) are treated as status="failed"; the raw value is retained only as raw_status for logging and is not sent on the wire. This path counts as completed (-1), so the original “never affect the count” rule does not apply to unknown task_notification statuses |
+| 32-2 | server: `TaskStates` GenServer (flat task table) + wrapper_channel/agents_channel wiring | あお | ✅ | New `server/lib/kaoiro_server/task_states.ex`. `WrapperChannel.terminate/2` calls `TaskStates.discard_for_agent/1` only when the owner check of `AgentStates.disconnect/3` succeeds (ADR-0048 F1). Add a `tasks` key to the `AgentsChannel` snapshot push; it is non-empty only for operators (viewers use the existing fail-closed catch-all, which drops even `type: "task"` itself, ADR-0021) |
+| 32-3 | dashboard: receive `task` envelopes + ring above `AgentCard` | あお | ✅ | `protocol.ts` adds `TaskPayload`/`taskOf`/`parseTasks`/`applyTaskEnvelope`. `App.svelte` retains `tasks` as an accumulator separate from `agents` (ADR-0019 F2: do not overwrite the parent's state_change slot). `AgentCard.svelte` wraps `.sprite`/`.face` in `.sprite-slot` (position: relative) + `.task-ring` (elliptical orbit using 12-step `translate`-based keyframes, no image asset; extract to shared `TaskRing.svelte` in 32-5). `prefers-reduced-motion` is covered by the existing global rules in `app.css` (`animation-duration: 0.01ms !important`, etc.); no per-component override. Use activeTaskCount only for on/off and do not display a number (こはく scope decision) |
+| 32-4 | docs: finalize spec/ADR addendum, protocol.md, and this plan | あお | ✅ | Update stages 1–3 of [subagent-tasks](../specs/subagent-tasks.md) to implementation complete; add measured fields (`prompt`/`output_file`/`task_updated`) and the measured record of terminal-notification guarantees to [agent-sdk-events](../specs/agent-sdk-events.md); add addenda to ADR-0019/0047/0048 (task_updated out of scope / measured task_type values and no prompt/output_file wiring / operator-only delivery) |
+| 32-5 | follow-up: add the ring above `AgentDetail` (マスター finding, recover the missed scope) | あお | 🔄 | Details are in the “Follow-up” section below. Direction: クロエ; review: ふじ; implementation: あお. Under review |
 
-**未完了(status を `done` に上げない理由)**: 32-1〜32-4 の実装・単体テストは
-完了しているが、issue #170 全体としてはこはくへの完了報告・外部レビュー
-(ふじ = wrapper/server、クロエ = UI の要否はこはく判断)・commit 承認・
-push が未了。
+**Why status is not raised to `done`:** implementation and unit tests for 32-1–32-4
+are complete, but for issue #170 as a whole the completion report to こはく,
+external review (ふじ = wrapper/server; whether クロエ needs UI review is a
+decision for こはく), commit approval, and push are still pending.
 
-## 実測で確定した設計判断(ADR 本文と併記、要参照)
+## Design decisions confirmed by measurement (recorded with the ADR; read it)
 
-段階1 実装時、実 SDK(`@anthropic-ai/claude-agent-sdk@0.3.220`)を実測し
-確認した 3 点。詳細と根拠は各 ADR addendum を正本とする(ここでは要約の
-み、内容の重複記載はしない):
+During stage-1 implementation, 3 points were measured against the real SDK
+(`@anthropic-ai/claude-agent-sdk@0.3.220`). The addenda to the respective ADRs
+are the source of truth for details and evidence; this section is only a summary
+and does not duplicate their content:
 
-1. `task_started.prompt` / `task_notification.output_file` は未文書化
-   フィールドとして実在するが、`task` envelope へは配線しない
-   ([ADR-0047](../adr/0047-task-envelope-schema.md) addendum)。
-2. `task_type` の実測値は `local_agent`/`local_workflow`/`local_bash`
-   (ADR-0047 F4 の例示値とは異なる)。リネームせず SDK 生値をそのまま
-   通す(同 addendum)。
-3. 未文書化の 4 番目の subtype `task_updated` は v1 の対象外
+1. `task_started.prompt` / `task_notification.output_file` exist as undocumented
+   fields, but are not wired into the `task` envelope
+   ([ADR-0047](../adr/0047-task-envelope-schema.md) addendum).
+2. Measured `task_type` values are `local_agent`/`local_workflow`/`local_bash`
+   (different from the example in ADR-0047 F4). Do not rename them; pass SDK raw
+   values through unchanged (same addendum).
+3. The fourth undocumented subtype, `task_updated`, is outside v1
    ([ADR-0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md)
-   addendum)。`task_notification` は自然完了 / `stopTask()` / interrupt
-   / `backgroundTasks()` の 4 経路すべてで終端に必ず発行されることを
-   実測済み(SDK 0.3.220、2026-08-09 capture、
-   [agent-sdk-events](../specs/agent-sdk-events.md))。
+   addendum). `task_notification` was measured to be emitted at termination on
+   all 4 paths: natural completion, `stopTask()`, interrupt, and
+   `backgroundTasks()` (SDK 0.3.220, 2026-08-09 capture,
+   [agent-sdk-events](../specs/agent-sdk-events.md)).
 
-## Non-Goals(#170 スコープ外、こはく判断)
+## Non-Goals (outside #170 scope, こはく decision)
 
-- Codex エンジンでの同等対応: 実測(`@openai/codex-sdk@0.144.1` の型
-  定義に subagent/task lifecycle 相当のイベントが存在しないことを確認)
-  のみ行い、実装はしない。
-- 活性タスク数の数値表示: 将来の別提案とし今回は対象外。
-- `AgentDetail` への追加表示: 当初 32-3 実装時にスコープ外としたが、
-  マスター未承認の判断だったことが判明し 32-5(下記 Follow-up)で追加
-  した。
-- workflow が spawn する子エージェントが別 `task_started` として出るか
-  の検証([subagent-tasks](../specs/subagent-tasks.md)「要検証」節)は
-  未着手のまま残る。
+- Equivalent support in the Codex engine: only measure that the type definition
+  for `@openai/codex-sdk@0.144.1` has no subagent/task-lifecycle equivalent
+  events; do not implement it.
+- Numeric display of the active-task count: leave it for a future proposal.
+- Additional display on `AgentDetail`: it was initially excluded from scope in
+  the 32-3 implementation, but that decision was found not to have マスター
+  approval and was added in 32-5 (the Follow-up below).
+- Verification of whether child agents spawned by a workflow appear as separate
+  `task_started` events (the “needs verification” section of
+  [subagent-tasks](../specs/subagent-tasks.md)) remains unstarted.
 
-## Follow-up: `AgentDetail` 頭上リング追加 (2026-08-10)
+## Follow-up: add the ring above `AgentDetail` (2026-08-10)
 
-`AgentCard`(グリッド表示)には 32-3 で頭上リングを実装したが、
-`AgentDetail`(ペルソナ画像の詳細パネル)には実装されず、上記 Non-Goals
-に「将来の別提案」として記載されていた。しかしこの除外はマスターの承認
-を得たものではなかった: issue #170 の
-[2026-08-04 コメント](https://github.com/sakuraiyuta/kaoiro/issues/170#issuecomment-5384483995)
-でマスター自身が「AgentDetail にも出すか」を優先検討事項として明記して
-いたが、同日 ADR へ昇格した open question 2 件(ADR-0047/0048)には
-含まれず、2026-08-09 の実装(32-1〜32-4)にも取り込まれないまま
-Non-Goals へ回った。2026-08-10、マスターが実機確認でこの欠落に気付き
-「そんな仕様にした覚えがない」と指摘 — issue コメント履歴を追跡した結果、
-取りこぼしと判断し追加した(仕様変更ではなく、当初スコープの回収)。
+32-3 implemented the ring on `AgentCard` (grid display), but not on
+`AgentDetail` (the detailed persona-image panel), and the Non-Goals section had
+called it “a separate future proposal.” That exclusion did not have マスター
+approval: in the [2026-08-04 issue comment](https://github.com/sakuraiyuta/kaoiro/issues/170#issuecomment-5384483995),
+マスター itself listed “whether to show it on AgentDetail too” as a priority
+to consider. It was not included in the 2 open questions promoted to ADRs that
+day (ADR-0047/0048), nor in the 2026-08-09 implementation (32-1–32-4), and was
+instead moved to Non-Goals. On 2026-08-10, マスター noticed the omission in
+live verification and said “I do not remember specifying that”; tracing the
+issue comment history identified this as a missed scope item, so it was added
+(scope recovery, not a specification change).
 
-体制: 指揮 クロエ(direction/軽微な意思決定)、レビュー ふじ、実装 あお。
+Structure: direction クロエ (direction / minor decisions), review ふじ,
+implementation あお.
 
-実装: `TaskRing.svelte` を新設し `AgentCard`/`AgentDetail` で共有(CSS
-`@keyframes` の複製を避ける、クロエ 2026-08-10)。軌道半径は
-`AgentDetail` 側は `.portrait` の可変幅に追随させるため `cqw`
-(container query width)で指定し、`.portrait` に
-`container-type: inline-size` を付与。`activeTaskCount` は
-`App.svelte` から `protocol.ts` の新規純関数 `activeTaskCountForDetail()`
-経由で配線し、disconnected/directory-only なタイルでは強制的に 0 にする
-(クロエ 2026-08-10: 素通し配線だと切断済みエージェントの stale `tasks`
-エントリが漏れる経路がある)。
+Implementation: create `TaskRing.svelte` and share it between `AgentCard` and
+`AgentDetail` (avoid duplicating CSS `@keyframes`, クロエ 2026-08-10). In
+`AgentDetail`, specify the orbital radius with `cqw` (container query width) so
+it follows the variable width of `.portrait`, and add
+`container-type: inline-size` to `.portrait`. Wire `activeTaskCount` from
+`App.svelte` through the new pure function
+`activeTaskCountForDetail()` in `protocol.ts`; force it to 0 on disconnected /
+directory-only tiles (クロエ 2026-08-10: transparent wiring would leak stale
+`tasks` entries from disconnected agents).
 
-**追加修正 (マスター実機確認、2026-08-10)**: デスクトップは `.status`
-の幅可変(`flex: 0 0 20%`)により `.portrait` の実測幅が 8rem を大きく
-超えることがあり、`cqw` だけだと軌道が AgentCard の想定サイズより肥大
-して「グリッドへ戻る」ボタンにまで到達してしまう不具合を発見。
-`min(cqw値, AgentCard絶対値)` で上限キャップし、8rem 以下の狭い
-`.portrait` では引き続き cqw で比例縮小、8rem を超えるデスクトップでは
-AgentCard と同じ絶対サイズ(sprite: 2rem/0.72rem、face: 1.35rem/0.49rem)
-に頭打ちさせる。
+**Additional fix (マスター live verification, 2026-08-10):** On desktop, `.status`
+can vary in width (`flex: 0 0 20%`), making the measured `.portrait` width much
+larger than 8rem. With only `cqw`, the orbit grew beyond the AgentCard's assumed
+size and reached the “return to grid” button. Cap it with
+`min(cqw値, AgentCard絶対値)`: a narrow `.portrait` at or below
+8rem continues to scale proportionally with cqw, while desktop above 8rem caps
+at the same absolute sizes as AgentCard (sprite: 2rem/0.72rem, face:
+1.35rem/0.49rem).
 
-キャップ後も実測でわずかにはみ出しが残った(`.portrait` の padding
-0.8rem が AgentCard の `.card` の 1.4rem ほど広くないため)。
-`TaskRing.svelte` に新規 `topOffset` prop(既定は AgentCard 既存の
-`-2%`)を追加し、AgentDetail からは `topOffset="6%"` を渡して頭上退避の
-アンカーを下(顔寄り)へシフトすることで解消した(顔に多少かかるのは
-マスター了承済み)。Playwright e2e に T11(1600px 幅広デスクトップ、
-sprite/face 両分岐)を新設し、CSS アニメーションを Web Animations API
-で最遠点(0%/100% キーフレーム)に静止させ、box-shadow の 6px ブラー
-込みで `.bar`(戻るボタン)に重ならないことを固定(修正前の値に戻すと
-実際に失敗することも確認済み)。
+A slight overflow remained after the cap (the `.portrait` padding of 0.8rem is
+not as wide as the AgentCard `.card`'s approximately 1.4rem). Add a new
+`topOffset` prop to `TaskRing.svelte` (default is AgentCard's existing `-2%`),
+and pass `topOffset="6%"` from AgentDetail to shift the above-head anchor downward
+toward the face. This resolves it; the slight overlap with the face was approved
+by マスター. Add Playwright e2e T11 (1600px wide desktop, both sprite/face
+branches), freeze the CSS animation at the farthest point (0%/100% keyframes)
+with the Web Animations API, and pin that the ring does not overlap `.bar` (the
+return button), including the 6px box-shadow blur. Confirmed that reverting the
+fix actually fails.
 
-**狭幅側の検証 (クロエ round2 指摘、2026-08-10)**: `topOffset` の絶対
-寄与(6% × portrait 高さ)は portrait が大きいほど効く一方、
-`orbitRy` はキャップで一定(0.72rem)なので、`.portrait` が
-`max-width: 8rem` になる BottomSheet モードは理論上ワースト側になり
-うる。「広い方で安全だから比例して安全」と実測せず結論しない方針
-(クロエ自身が cqw の上限を実測せず判断したことが今回の不具合の原因、
-という自己指摘あり)で 844px sheet-open でも同じ幾何チェックを T11 へ
-追加。実測では `.bar` はページ最上部固定、`.portrait` は BottomSheet
-として画面下部にオーバーレイされ 300px 超のマージンがあり、
-8rem キャップと `.bar` 隣接は同一レイアウトで同時に起こらないことを
-確認(8rem キャップは常に BottomSheet モード側でのみ有効)。
+**Narrow-side verification (クロエ round-2 finding, 2026-08-10):** The absolute
+contribution of `topOffset` (6% × portrait height) grows with portrait size,
+whereas `orbitRy` is capped at a constant (0.72rem), so BottomSheet mode, where
+`.portrait` has `max-width: 8rem`, could theoretically be the worst case. Do not
+conclude “safe at the wide side means proportionally safe” without measuring
+(クロエ identified the unmeasured cqw cap as the cause of this bug). Add the same
+geometry check to T11 at 844px sheet-open. Measurement confirmed that `.bar` is
+fixed at the top of the page, `.portrait` overlays the bottom as a BottomSheet,
+and there is over 300px of margin; the 8rem cap and adjacency to `.bar` cannot
+occur in the same layout. The 8rem cap is enabled only in BottomSheet mode.
 
 ## Related
 
-- spec: [subagent-tasks](../specs/subagent-tasks.md)、
-  [protocol](../specs/protocol.md)、
-  [agent-sdk-events](../specs/agent-sdk-events.md)。
-- ADR: [0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md)、
-  [0047](../adr/0047-task-envelope-schema.md)、
-  [0048](../adr/0048-task-aggregation-delivery.md)、
+- Specs: [subagent-tasks](../specs/subagent-tasks.md),
+  [protocol](../specs/protocol.md),
+  [agent-sdk-events](../specs/agent-sdk-events.md).
+- ADRs: [0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md),
+  [0047](../adr/0047-task-envelope-schema.md),
+  [0048](../adr/0048-task-aggregation-delivery.md),
   [0021](../adr/0021-role-information-disclosure-policy.md)
-  (operator 限定配信が適用する fail-closed 既定)。
+  (operator-only delivery uses the fail-closed default).

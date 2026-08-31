@@ -1,52 +1,56 @@
 ---
-title: compaction resume と lifecycle log
-description: request_compact の resume_prompt (wrapper 局所) と session_lifecycle 時系列保持・operator query の実装
+title: Compaction resume and lifecycle log
+description: Implement the wrapper-local resume_prompt for request_compact and retention of the session_lifecycle timeline with an operator query.
 status: in_progress
 phase: 33
 depends_on: []
 last_updated: 2026-08-31
 ---
 
-# Phase 33 — compaction resume と lifecycle log
+# Phase 33 — Compaction resume and lifecycle log
 
-[ADR-0055](../adr/0055-compaction-resume-and-lifecycle-log.md) の実装。
-issue #200 が親。段階は feature-local に A/B/C とする (project-wide の
-phase 番号との衝突回避)。
+Implement [ADR-0055](../adr/0055-compaction-resume-and-lifecycle-log.md).
+Issue #200 is the parent. Use feature-local stages A/B/C (to avoid collision
+with the project-wide phase numbering).
 
-## Stage A — wrapper 局所 resume (issue #200 の原初要求)
+## Stage A — wrapper-local resume (the original request for issue #200)
 
-- [x] `request_compact` に optional `resume_prompt` パラメータを追加
-      (Claude wrapper のみ。承認ダイアログには reason 同様 echo)
-- [x] `compact_boundary` 観測時、固定前置テンプレート + resume_prompt
-      逐語を直列化 instruction queue へ user turn として注入
-- [x] 省略時の挙動が現状と完全一致することの回帰テスト
-- [x] 注入経路 MUST (固定テンプレート、model 由来逐語は resume_prompt
-      本文のみ) の反映とテスト
+- [x] Add an optional `resume_prompt` parameter to `request_compact` (Claude
+      wrapper only; echo it in the approval dialog like reason)
+- [x] When observing `compact_boundary`, serialize and inject the fixed prefix
+      template + the verbatim resume_prompt into the instruction queue as a user
+      turn
+- [x] Regression test that omission behaves exactly as it does now
+- [x] Implement and test the injection-path MUST (fixed template; model-derived
+      verbatim content is limited to the resume_prompt body)
 
-受け入れ: resume_prompt 付き compact 承認 → 圧縮完了後に agent が
-自動で作業再開する実機確認。server 変更ゼロ。実装・自動テストは完了
-(2026-08-31)。実機確認 (実際の compact_boundary 発火での再開) は
-未実施。
+Acceptance: live verification that an approved compact with resume_prompt
+automatically resumes the agent's work after compaction completes. Zero server
+changes. Implementation and automated tests are complete (2026-08-31). Live
+verification (resumption on an actual compact_boundary) has not been performed.
 
-## Stage B — session_lifecycle 記録
+## Stage B — session_lifecycle recording
 
-- [ ] wrapper→server `session_lifecycle` イベント新設
-      (kind / trigger / 発生時刻)
-- [ ] wrapper 側 producer: compact 開始/完了 (trigger: request_compact /
-      sdk_auto)、閾値通知発火、resume_reserved / resume_fired
-- [ ] server 側で disconnect / reconnect / session reset を同一時系列へ
-      合流
-- [ ] DETS 保持 (agent ごと既定 10,000 件・古い順破棄、
-      `SESSION_LIFECYCLE_MAX_EVENTS_PER_AGENT` で変更可)
+- [ ] Add a wrapper→server `session_lifecycle` event (kind / trigger / occurrence
+      time)
+- [ ] Wrapper producer: compact start/complete (trigger: request_compact /
+      sdk_auto), threshold-notice firing, resume_reserved / resume_fired
+- [ ] Merge server-side disconnect / reconnect / session reset into the same
+      timeline
+- [ ] Retain in DETS (10,000 entries per agent by default; discard oldest;
+      configurable with `SESSION_LIFECYCLE_MAX_EVENTS_PER_AGENT`)
 
 ## Stage C — operator query
 
-- [ ] operator 向け pull query イベント (`require_operator` gate、
-      `list_conversations` と同型)
-- [ ] protocol.md のイベント表更新 (実装と同時)
+- [ ] Add an operator pull-query event (`require_operator` gate, same shape as
+      `list_conversations`)
+- [ ] Update the event table in protocol.md (together with the implementation)
 
 ## Out of scope
 
-- dashboard タイムライン UI ([lifecycle-timeline-ui](../open-questions/lifecycle-timeline-ui.md)、別 issue)
-- codex engine の compact 観測 ([codex-lifecycle-observability](../open-questions/codex-lifecycle-observability.md)、deferred)
-- 自動 compaction の発動 (既存 P2 決定の維持)
+- Dashboard timeline UI ([lifecycle-timeline-ui](../open-questions/lifecycle-timeline-ui.md),
+  separate issue)
+- Compact observation for the Codex engine
+  ([codex-lifecycle-observability](../open-questions/codex-lifecycle-observability.md),
+  deferred)
+- Triggering automatic compaction (retain the existing P2 decision)

@@ -1,122 +1,134 @@
 ---
-title: Phase 31 — dashboard の 3 サイズ対等レスポンシブ化 (ADR-0052)
-description: timeline track 変更と breakpoint / シート機構の基盤を敷き、lobby / AgentDetail / 周辺 UI を PC / tablet / smartphone の 3 サイズで成立させる。
+title: Phase 31 — Equal three-tier responsive layout for the dashboard (ADR-0052)
+description: Lay the foundation for the timeline-track change and breakpoint / sheet mechanism, and make the lobby / AgentDetail / surrounding UI work at PC / tablet / smartphone sizes.
 status: in_progress
 phase: 31
 depends_on: []
 last_updated: 2026-08-09
 ---
 
-# Phase 31 — dashboard の 3 サイズ対等レスポンシブ化 (ADR-0052)
+# Phase 31 — Equal three-tier responsive layout for the dashboard (ADR-0052)
 
 ## Goal
 
-[ADR-0052](../adr/0052-responsive-three-tier-layout.md) を実装する:
-dashboard を PC / tablet / smartphone のどの画面サイズでも実用に足る UI に
-し、smartphone からでも 確認 / 指示送信 / permission 承認 まで行えるように
-する。寸法と規則の正本は
-[responsive-layout.md](../specs/responsive-layout.md)、要素ごとの表示条件と
-到達経路は [responsive-reachability.md](../specs/responsive-reachability.md)。
+Implement [ADR-0052](../adr/0052-responsive-three-tier-layout.md): make the
+dashboard usable at PC / tablet / smartphone sizes, including confirmation,
+instruction sending, and permission approval from a smartphone. The source of
+truth for dimensions and rules is [responsive-layout.md](../specs/responsive-layout.md);
+display conditions and reachability for each element are in
+[responsive-reachability.md](../specs/responsive-reachability.md).
 
-本フェーズは 4 段階で進める。段階は本ファイル内の Stage として持ち、
-`plans/` のファイルは分割しない。
+This phase proceeds in 4 stages. The stages live as Stages in this file; do not
+split them into files under `plans/`.
 
 ## Acceptance Criteria
 
-- [ ] responsive-reachability.md の全要素が、表示条件成立時に 3 サイズから
-      到達可能 (Tasklist float の行は #178 実装後に適用のため対象外)
-- [ ] 「常時」と記された要素が、表示条件成立中はスクロール位置によらず視界にある
-- [ ] lobby grid の列が role と timeline 配置に従う (viewer と offline は
-      常に `auto-fill`、固定列は timeline 横並び時の operator のみ)
-- [ ] smartphone で 確認 / 指示送信 / permission 承認 が行える
-- [ ] ソフトウェアキーボード表示中も composer の入力欄と送信操作へ到達できる
-- [ ] シート展開中も pending permission / question に気づけ、handle の
-      attention バッジから一覧へ戻れる (ADR-0012 F8 の操作を維持)
-- [ ] ページの主縦スクロール領域が入れ子にならない。シートは wrapper と
-      content のどちらか一方のみが縦スクロール所有者
-- [ ] 画面回転で composer の入力途中テキストとログのスクロール位置が保持される
-- [ ] PWA standalone 起動時に、header / composer / シート / handle /
-      dialog / drawer がセーフエリアを侵さない
-- [ ] `short` (高さ 500px 以下) で縦圧縮の override が効き、低背でも
-      dialog / drawer / dock が切れない
-- [ ] iOS/iPadOS Safari と Android Chrome (Pixel 6a) の実機で確認済み
-- [ ] `design.md` のデザイントークンに変更が入っていない
+- [ ] Every element in responsive-reachability.md is reachable from all 3 sizes
+      when its display condition holds (Tasklist float rows are excluded until
+      the #178 implementation)
+- [ ] Elements marked “always” remain in view regardless of scroll position while
+      their display condition holds
+- [ ] lobby grid columns follow role and timeline placement (`auto-fill` always
+      for viewer and offline; fixed columns only for operator when the timeline
+      is side-by-side)
+- [ ] Confirmation / instruction sending / permission approval work on a
+      smartphone
+- [ ] The composer input and send operation remain reachable while the software
+      keyboard is visible
+- [ ] Pending permission / question remains noticeable while a sheet is open,
+      and the attention badge on the handle returns to the list (retain ADR-0012
+      F8 behavior)
+- [ ] The page's main vertical scroll area is not nested. The sheet has exactly
+      one vertical-scroll owner, either the wrapper or the content
+- [ ] In-progress composer text and log scroll position survive screen rotation
+- [ ] When launched as a PWA standalone, header / composer / sheet / handle /
+      dialog / drawer do not intrude into the safe area
+- [ ] At `short` (height 500px or less), vertical-compression overrides work and
+      dialog / drawer / dock do not get clipped even at low height
+- [ ] Confirmed on real iOS/iPadOS Safari and Android Chrome (Pixel 6a)
+- [ ] No design tokens in `design.md` have changed
 
 ## Tasks
 
-### Stage A — 基盤 + lobby
+### Stage A — foundation + lobby
 
 | # | Task | Owner | Status | Notes |
 |---|------|-------|--------|-------|
-| 31-1 | timeline track を `22rem` 固定へ変更し、breakpoint トークンを定義 | こはく | ✅ | desktop 1199px / tablet 940px / short 500px。内訳は responsive-layout.md の表が正本。`1rem = 16px` 前提。トークン一覧は `app.css` 冒頭コメント |
-| 31-2 | viewport meta に `viewport-fit=cover` を追加し、セーフエリアを織り込む | こはく | ✅ | 対象は header / composer / シート / handle / fixed dialog / drawer。inset は加算でなく floor 扱いで、floor 値は要素ごとの既存 edge padding (`max(<既存 padding>, env(...))`)。本体 inline なら `max(2rem, env(...))` |
-| 31-3 | ボトムシート機構の共通コンポーネント化 | こはく | ✅ | 契約 (開閉手段・最大高 60%・単一 scroll owner・フォーカス・breakpoint 跨ぎ・重なり順) は responsive-layout.md が正本。実装は `BottomSheet.svelte` (非シートサイズでは display:contents) |
-| 31-4 | lobby (AgentGridShell + ResponseTimeline) の 3 サイズ適用 | こはく | ✅ | smartphone で timeline をシートへ退避。列の固定は operator かつ timeline 横並び時のみ (smartphone 帯は `.three-cols` を auto-fill へ上書き) |
+| 31-1 | Change the timeline track to a fixed `22rem` and define breakpoint tokens | こはく | ✅ | desktop 1199px / tablet 940px / short 500px. The breakdown is the table in responsive-layout.md. Assumes `1rem = 16px`. The token list is in the opening comment of `app.css` |
+| 31-2 | Add `viewport-fit=cover` to viewport meta and incorporate the safe area | こはく | ✅ | Applies to header / composer / sheet / handle / fixed dialog / drawer. Treat inset as a floor, not an addition: the floor is each element's existing edge padding (`max(<既存 padding>, env(...))`). For body inline use `max(2rem, env(...))` |
+| 31-3 | Make the bottom-sheet mechanism a shared component | こはく | ✅ | The contract (open/close methods, maximum height 60%, single scroll owner, focus, crossing breakpoints, stacking order) is defined by responsive-layout.md. Implementation is `BottomSheet.svelte` (display:contents at non-sheet sizes) |
+| 31-4 | Apply all 3 sizes to lobby (AgentGridShell + ResponseTimeline) | こはく | ✅ | On smartphone, move the timeline into a sheet. Fix columns only for operator when the timeline is side-by-side (the smartphone band overrides `.three-cols` to auto-fill) |
 
-**Stage A 完了判定**: 3 サイズで lobby が成立し timeline へ到達できる /
-viewer と offline が `auto-fill` のまま / viewport meta が反映され standalone
-でセーフエリアを侵さない / handle がシート化されるサイズでのみ表示される。
+**Stage A completion:** lobby works at all 3 sizes and the timeline is reachable /
+viewer and offline remain `auto-fill` / viewport meta is reflected and the
+standalone view does not intrude into the safe area / the handle appears only at
+the sizes where it becomes a sheet.
 
 ### Stage B — AgentDetail
 
 | # | Task | Owner | Status | Notes |
 |---|------|-------|--------|-------|
-| 31-5 | `.status` のシート化と二重スクロール解消 | こはく | ✅ | tablet 幅以下が対象。シート内は `.status` 自身を単一 scroll owner とし、identity header ごとスクロールさせる (pinned head + `.status-scroll` 分割は landscape 帯で実効高 0 になる — 外部レビュー実測)。desktop は従来どおり `.status-scroll` が owner。sheet panel は `overflow: hidden` の wrapper、portrait は 8rem にキャップ |
-| 31-6 | シートと in-flow dock 類の重なり解決、attention バッジの操作化 | こはく | ✅ | バッジは `button.blindspot` と同じ「一覧へ戻す」を実行する (ADR-0052 F3)。handle はコンテナとし、開閉トグルとバッジを兄弟の `button` にする (interactive 要素の入れ子を避ける)。加えて handle に現 agent の pending lamp を出す |
+| 31-5 | Turn `.status` into a sheet and eliminate double scrolling | こはく | ✅ | Applies at tablet width and below. Inside the sheet, `.status` itself is the single scroll owner and the identity header scrolls with it (splitting into pinned head + `.status-scroll` has effective height 0 in the landscape band — measured in external review). On desktop, `.status-scroll` remains the owner. The sheet panel is an `overflow: hidden` wrapper; cap portrait at 8rem |
+| 31-6 | Resolve overlap between the sheet and in-flow docks, and make the attention badge interactive | こはく | ✅ | The badge performs the same “return to list” action as `button.blindspot` (ADR-0052 F3). Make the handle a container and make the open/close toggle and badge sibling `button` elements (avoid nested interactive elements). Also show the current agent's pending lamp on the handle |
 
-**Stage B 完了判定**: status の全情報・全操作へ到達できる / 二重スクロールが
-ない / シート展開中も pending に気づけ、バッジから一覧へ戻れる。
+**Stage B completion:** all status information and operations are reachable / no
+double scrolling / pending remains noticeable while the sheet is open and the
+badge returns to the list.
 
-### Stage C — 周辺 UI と short
-
-| # | Task | Owner | Status | Notes |
-|---|------|-------|--------|-------|
-| 31-7 | header / SettingsDrawer / LaunchDialog / offline 一覧の 3 サイズ対応 | こはく | ✅ | smartphone ではログアウトを SettingsDrawer へ移した (drawer 側の行は全サイズで表示、header 側を CSS で隠す — DOM 共通維持)。層尺度は backdrop 40 / panel 41 に共通化 (`app.css` の z-index scale コメント) |
-| 31-8 | `short` の縦圧縮 override を適用 | こはく | ✅ | header の縦 padding / composer の初期高 (1 行、focus で拡張) / dock 類の高さ上限 45% + 内部スクロール (permission dock は question dock と同じ shell+scroll 構造へ変更) / dialog・drawer の `max-block-size` と scroll owner。横方向のレイアウト・シート最大高・dock の展開状態は変更しない。`main` の block padding は 0.5rem/2.6rem へ縮退 (bottom は handle の逃げ幅を確保) |
-
-**Stage C 完了判定**: header / drawer / dialog / offline の挙動が
-responsive-reachability.md の表と一致する / 低背で dialog・drawer・dock が
-切れず内部スクロールする / 高さ 390px で、展開状態の permission dock と選択肢の
-多い question dock、1 行 composer、handle が共存し、ログの表示高が 0 にならず
-スクロールできる / dock の最小化操作と composer の送信が handle に覆われない。
-
-### Stage D — 検証
+### Stage C — surrounding UI and short
 
 | # | Task | Owner | Status | Notes |
 |---|------|-------|--------|-------|
-| 31-9 | 実機確認 (iOS/iPadOS Safari + Android Chrome) | | ⏳ | Android は Pixel 6a。ソフトウェアキーボード表示中の composer 到達を必ず確認する。[#198](https://github.com/sakuraiyuta/kaoiro/issues/198) |
-| 31-10 | Playwright による viewport 回帰の固定 | こはく | ✅ | 下記シナリオ。`dashboard/e2e/` (fixture ハーネス + `pnpm exec playwright test`、Phoenix 不要)。T1-T10 + landscape 到達回帰の 26 テスト green |
+| 31-7 | Support 3 sizes for header / SettingsDrawer / LaunchDialog / offline list | こはく | ✅ | On smartphone, move logout into SettingsDrawer (the drawer row is shown at all sizes; hide the header row with CSS — keep the shared DOM). Share the layer scale as backdrop 40 / panel 41 (`app.css` z-index scale comment) |
+| 31-8 | Apply vertical-compression overrides for `short` | こはく | ✅ | Header vertical padding / composer's initial height (1 line, expands on focus) / dock maximum height 45% + internal scroll (permission dock changes to the same shell+scroll structure as question dock) / dialog and drawer `max-block-size` and scroll owner. Do not change horizontal layout, sheet maximum height, or dock expanded state. Collapse `main` block padding to 0.5rem/2.6rem (reserve bottom escape space for the handle) |
 
-**テストシナリオ** (31-10)。軸の直積ではなく、成立する組のみを列挙する。
+**Stage C completion:** header / drawer / dialog / offline behavior matches the
+responsive-reachability.md table / dialog, drawer, and dock are not clipped at
+low height and scroll internally / at height 390px, an expanded permission dock,
+a question dock with many choices, a one-line composer, and the handle coexist,
+with nonzero log display height and scrolling / dock minimize and composer send
+are not covered by the handle.
 
-| # | シナリオ | 固定する内容 |
+### Stage D — verification
+
+| # | Task | Owner | Status | Notes |
+|---|------|-------|--------|-------|
+| 31-9 | Real-device verification (iOS/iPadOS Safari + Android Chrome) | | ⏳ | Android is Pixel 6a. Be sure to verify composer reachability while the software keyboard is visible. [#198](https://github.com/sakuraiyuta/kaoiro/issues/198) |
+| 31-10 | Pin viewport regressions with Playwright | こはく | ✅ | Scenarios below. `dashboard/e2e/` (fixture harness + `pnpm exec playwright test`, no Phoenix required). T1–T10 + landscape reachability regression: 26 tests green |
+
+**Test scenarios** (31-10). List only combinations that work, rather than the
+Cartesian product of axes.
+
+| # | Scenario | What is pinned |
 |---|---|---|
-| T1 | operator / lobby / 939 と 940 | timeline が sheet ⇔ 横並びで切り替わり、grid の列が追随する |
-| T2 | operator / lobby / 1198 と 1199 | 2 列 ⇔ 3 列が切り替わり tile が 240px を下回らない |
-| T3 | viewer / lobby / 全帯 | 常に `auto-fill` で timeline も handle も出ない |
-| T4 | operator / detail / 1198 と 1199 | status が sheet ⇔ sidebar で切り替わる (tablet 以下は常に sheet) |
-| T5 | operator / detail / sheet open | 背景がスクロールせず、scroll owner が 1 つ |
-| T6 | operator / detail / permission 到着 (sheet open / closed) | 応答導線へ到達できる |
-| T7 | operator / detail / question 到着 (sheet open / closed) | 同上 |
-| T8 | operator / detail / 他エージェント要対応 + sheet open | handle バッジから一覧へ戻れる |
-| T9 | 高さ 500 と 501 | header 縦 padding / composer 初期高 / dock 高さ上限 / dialog・drawer の `max-block-size` が切り替わる (シート最大高と横レイアウトは不変) |
-| T10 | 低背 + dialog / drawer 展開 | 上下が切れず内部スクロールする |
+| T1 | operator / lobby / 939 and 940 | Timeline switches sheet ⇔ side-by-side and grid columns follow |
+| T2 | operator / lobby / 1198 and 1199 | 2 columns ⇔ 3 columns switch and tiles do not fall below 240px |
+| T3 | viewer / lobby / all bands | Always `auto-fill`; neither timeline nor handle appears |
+| T4 | operator / detail / 1198 and 1199 | Status switches sheet ⇔ sidebar (always sheet at tablet and below) |
+| T5 | operator / detail / sheet open | Background does not scroll and there is 1 scroll owner |
+| T6 | operator / detail / permission arrives (sheet open / closed) | Response path is reachable |
+| T7 | operator / detail / question arrives (sheet open / closed) | Same as above |
+| T8 | operator / detail / another agent needs action + sheet open | Return to the list from the handle badge |
+| T9 | heights 500 and 501 | Header vertical padding / composer initial height / dock maximum height / dialog and drawer `max-block-size` switch (sheet maximum height and horizontal layout stay unchanged) |
+| T10 | low height + dialog / drawer open | No clipping; scroll internally |
 
 Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blocked.
 
 ## Followups (in-phase but unfinished)
 
-- Tasklist float の狭幅挙動は当面 desktop と同一 (ADR-0052 F4 の暫定決定)。
-  [#178](https://github.com/sakuraiyuta/kaoiro/issues/178) が
-  未実装のため本フェーズの検収対象外。実装後に実挙動を見て見直す
-- timeline track を `22rem` 固定にしたことで広い画面の表示密度が下がる。
-  実運用で不足を感じた場合、desktop 帯の上端でのみ上限を戻す案を検討する
-- breakpoint を px で持つため、ブラウザの既定フォントサイズ変更に追随しない。
-  破綻が観測されたら rem 表記へ移す
+- Keep Tasklist float behavior at narrow widths the same as desktop for now
+  (ADR-0052 F4 provisional decision). Since [#178](https://github.com/sakuraiyuta/kaoiro/issues/178)
+  is not implemented, it is outside this phase's acceptance scope. Reconsider it
+  after implementation based on actual behavior
+- Fixing the timeline track at `22rem` reduces display density on wide screens.
+  If real use reveals a shortfall, consider restoring the upper limit only at the
+  top of the desktop band
+- Because breakpoints are held in px, they do not follow a browser's default font
+  size change. If a break occurs, move them to rem notation
 
 ## Open Questions Blocking This Phase
 
-なし。
+None.
 
 ## See Also
 
@@ -124,8 +136,8 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
   [responsive-reachability](../specs/responsive-reachability.md),
   [design](../specs/design.md)
 - ADR: [0052-responsive-three-tier-layout](../adr/0052-responsive-three-tier-layout.md)
-- 実装 issue: [#197](https://github.com/sakuraiyuta/kaoiro/issues/197)
-  (Stage A-C + 31-10 Playwright)
-- 実機検証 issue: [#198](https://github.com/sakuraiyuta/kaoiro/issues/198)
-  (Stage D 31-9、運用者作業)
+- Implementation issue: [#197](https://github.com/sakuraiyuta/kaoiro/issues/197)
+  (Stage A–C + 31-10 Playwright)
+- Real-device verification issue: [#198](https://github.com/sakuraiyuta/kaoiro/issues/198)
+  (Stage D 31-9, operator task)
 - Previous phase: [phase-30-history-restart-resilience](phase-30-history-restart-resilience.md)
