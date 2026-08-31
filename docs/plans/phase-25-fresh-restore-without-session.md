@@ -1,118 +1,121 @@
 ---
-title: Phase 25 — session_id なし offline agent の fresh-restore
-description: /clear 直後・未発話のまま全再起動 (dogfood.sh) したエージェントが offline 復元候補に出るのに restore が :no_session で弾かれ ⚠ になる問題を解消。SessionPointer に session_id が無くても cwd/engine/persona/snapshot から fresh spawn + resume snapshot 再適用で「同じ model/effort/engine/permission 設定」のエージェントとして復元する。
+title: Phase 25 — Fresh-restore of an offline agent without session_id
+description: Resolve the issue where an agent restarted entirely (dogfood.sh) immediately after /clear or before speaking appears as an offline restore candidate but restore is rejected as :no_session and becomes ⚠. Even without session_id, fresh-spawn it from cwd/engine/persona/snapshot and reapply the resume snapshot so it returns as an agent with the same model/effort/engine/permission settings.
 status: done
 phase: 25
 depends_on: [22, 23]
 last_updated: 2026-07-23
 ---
 
-# Phase 25 — session_id なし offline agent の fresh-restore
+# Phase 25 — Fresh-restore of an offline agent without session_id
 
 ## Goal
 
-dogfood.sh 等で runner/wrapper/server/client を全再起動した際、`/clear`
-直後または未発話のまま (session_id 未報告のまま) だったエージェントも、
-dashboard の復元操作で **前回と同じ model / effort / engine /
-permission 設定の fresh session として復元できる**ようにする。
+When runner/wrapper/server/client are all restarted with dogfood.sh or similar,
+allow an agent that was immediately after `/clear` or had not spoken yet
+(without reporting a session_id) to be restored from the dashboard as a
+**fresh session with the same model / effort / engine / permission settings as
+before**.
 
-## 症状と根本原因 (2026-07-23 調査確定)
+## Symptoms and root cause (confirmed by investigation 2026-07-23)
 
-症状: 全再起動後、`/clear` 等で新規セッションを立ち上げただけの
-エージェントが offline 復元候補に表示されるが、復元ボタンを押しても
-⚠ (spawn_error sticky icon) が出て復元できない。
+Symptom: after a full restart, an agent that only started a new session through
+`/clear` appears as an offline restore candidate, but clicking restore shows ⚠
+(sticky spawn_error icon) and cannot restore it.
 
-原因連鎖:
+Cause chain:
 
-1. `/clear` は ADR-0036 F3 追補どおり `SessionPointers.detach_session`
-   で session_id を **明示 nil** にする (cwd / engine / snapshot は保持)。
-   また未発話セッションは SDK が init を出さないため session_id が
-   一度も報告されない (ADR-0014 Q-A4)。どちらも pointer は
-   `%{session_id: nil, cwd, engine, snapshot}` の形になる。
-2. 全再起動後、当該 agent は AgentDirectory 由来の offline tile として
-   表示され、復元ボタンは ADR-0030 D8 どおり無条件表示される。
-3. server の restore handler が使う `session_pointer/1`
-   (`agents_channel.ex`) が `is_binary(session_id)` を要求するため
-   `{:error, :no_session}` で reject → `spawn_result` error → ⚠。
-   復元手段が delete + 手動再 launch しかない。
+1. `/clear` explicitly sets session_id to **nil** through
+   `SessionPointers.detach_session`, as required by the ADR-0036 F3 addendum
+   (retain cwd / engine / snapshot). An unspoken session also never reports a
+   session_id because the SDK does not emit init (ADR-0014 Q-A4). Both pointers
+   therefore have the shape `%{session_id: nil, cwd, engine, snapshot}`.
+2. After a full restart, the agent is shown as an offline tile from
+   AgentDirectory, and the restore button is unconditionally shown as required
+   by ADR-0030 D8.
+3. The server restore handler's `session_pointer/1`
+   (`agents_channel.ex`) requires `is_binary(session_id)`, so it rejects with
+   `{:error, :no_session}` → `spawn_result` error → ⚠. The only recovery path
+   is deletion followed by a manual relaunch.
 
-復元に必要な情報は全て永続済み: persona (AgentDirectory)、cwd / engine
-(SessionPointers)、model / model_source / effort / effort_source /
-permission_mode / sandbox / network_access (pointer の resolved
-snapshot — wrapper は初回 state_change から `ext.effective` を
-optimistic stamp する (phase-15 15-4b) ため未発話でも記録される)。
-欠けているのは「session_id なしの pointer を fresh spawn + snapshot
-再適用で復元する経路」のみ。
+All information needed for restore is already persisted: persona
+(AgentDirectory), cwd / engine (SessionPointers), and model / model_source /
+effort / effort_source / permission_mode / sandbox / network_access (the
+pointer's resolved snapshot—the wrapper optimistically stamps `ext.effective`
+from the first state_change (phase-15 15-4b), so it is recorded even before a
+conversation). The only missing piece is a path that restores a pointer without
+session_id through fresh spawn + snapshot reapplication.
 
 ## Decision (design)
 
-**fresh-restore**: restore 対象の pointer が `session_id: nil` かつ
-cwd を持つ場合、`resume_session_id` を積まない spawn payload に新規
-optional flag `apply_resume_snapshot: true` を立てて runner へ relay
-する。runner は flag が立った fresh spawn に限り、resume 経路と同一の
-`applyResumeSnapshot` (5-case pair rule 含む) を ParsedSpawn に適用して
-launch する。
+**fresh-restore**: When the target pointer has `session_id: nil` and has cwd,
+put a new optional flag `apply_resume_snapshot: true` in a spawn payload without
+`resume_session_id` and relay it to runner. Only for this flagged fresh spawn,
+runner applies the same `applyResumeSnapshot` as the resume path (including the
+5-case pair rule) to ParsedSpawn before launching.
 
-- **snapshot apply の SSOT は runner のまま** (ADR-0014 F1 追補
-  phase-22「server は relay のみ、top-level 二重表現禁止」を維持)。
-  server 側で snapshot を top-level launch picks に展開する案は、
-  5-case pair rule の Elixir 重複実装 + `*_source` の嘘 stamp を招く
-  ため不採用。
-- **T3 / F4 は不要**: session file を読まないので existence check も
-  same-session lock も対象外。`#launchSpawn` へ直行する。
-- **LaunchDialog の fresh spawn は不変**: flag なし fresh spawn は
-  従来どおり snapshot を apply しない (藤 D1、operator の launch 選択
-  を黙って上書きしない原則)。
-- **後方互換**: 旧 runner は未知 field を無視 → engine default の
-  fresh spawn に degrade (復元自体は成功、設定は default)。旧 server
-  - 新 runner は flag が来ないので完全不変。
-- snapshot が nil の pointer (きわめて古い record 等) は
-  `resume_snapshot` 自体が payload に乗らず、runner apply は no-op →
-  engine default で fresh 復元 (fail-soft、復元不能よりよい)。
+- **Runner remains the SSOT for snapshot application** (retain the Phase 22
+  section of the ADR-0014 F1 addendum: the server is only a relay and must not
+  duplicate top-level representations). Do not expand the snapshot into
+  top-level launch picks on the server; that would duplicate the 5-case pair
+  rule in Elixir and cause `*_source` stamps to lie.
+- **T3 / F4 are unnecessary**: no session file is read, so no existence check or
+  same-session lock is involved. Go directly to `#launchSpawn`.
+- **LaunchDialog fresh spawn is unchanged**: an unflagged fresh spawn still does
+  not apply a snapshot (Fuji D1; do not silently overwrite an operator's launch
+  choice).
+- **Backward compatibility**: an old runner ignores the unknown field and
+  degrades to a fresh spawn with engine defaults (restore succeeds, settings are
+  defaults). An old server → new runner is completely unchanged because no flag
+  arrives.
+- A pointer with a nil snapshot (very old records, for example) omits
+  `resume_snapshot` from the payload; runner application is a no-op and fresh
+  restore uses engine defaults (fail-soft, preferable to being unable to
+  restore).
 
-## Scope / タスク
+## Scope / Tasks
 
-| # | task | file | status |
-|---|------|------|--------|
-| 25-1 | protocol: `SpawnMessage.apply_resume_snapshot?: boolean` 追加、`resume_snapshot` の doc comment を「resume_session_id または apply_resume_snapshot と併走」に更新 | `protocol/src/index.ts` | done |
-| 25-2 | server: `session_pointer/1` を「cwd 必須・session_id は nil 許容」の形に緩和 (返値 `{:ok, session_id_or_nil, cwd, engine}`)。pointer 不在 / cwd なしは従来どおり `:no_session` | `server/lib/kaoiro_server_web/channels/agents_channel.ex` | done |
-| 25-3 | server: `build_restore_payload` — session_id nil のとき `resume_session_id` を omit し `"apply_resume_snapshot" => true` を put (binary のときは現行どおり) | 同上 | done |
-| 25-4 | server: `resume_disconnected` (operator 明示 session pick) は cwd/engine のみ pointer から取るよう修正 — pointer session_id が nil でも explicit resume が通るように | 同上 | done (session_pointer/1 の緩和で自動的に通るようになったため個別修正なし) |
-| 25-5 | server tests: (a) nil-session pointer への restore が resume_session_id なし + apply_resume_snapshot + resume_snapshot 付き spawn を broadcast する (b) pointer 不在 / cwd なしは :no_session 維持 (c) resume_disconnected が nil-session pointer + explicit sid で通る | `server/test/kaoiro_server_web/channels/agents_channel_test.exs` | done (5 case 追加、server 全 433 tests 全緑) |
-| 25-6 | runner: `parseSpawn` に optional boolean `apply_resume_snapshot` → `ParsedSpawn.applyResumeSnapshot`。`handleSpawn` の fresh 分岐で flag 時のみ `applyResumeSnapshot(parsed, parsed.resumeSnapshot, engine)` 適用後 `#launchSpawn` (T3/F4 なし) | `runner/src/supervisor.ts` | done |
-| 25-7 | runner tests: (a) flag + snapshot 付き fresh spawn で model/effort/permission_mode/sandbox/network_access が snapshot 由来で launch される (b) flag なし fresh spawn は従来どおり apply されない regression pin (c) flag + snapshot なしは engine default | `runner/test/supervisor.test.ts` | done (4 case 追加、runner 全 236 tests 全緑) |
-| 25-8 | docs: `docs/specs/protocol.md` spawn message に field 追記、ADR-0030 (D8) / ADR-0014 (F1 追補) に fresh-restore 追補 | docs | done |
-| 25-9 | 手動 dogfood 検証 (下記) | — | done (2026-07-23 マスター環境で検収、問題なし) |
+| # | Task | File | Status |
+|---|---|---|---|
+| 25-1 | Add `SpawnMessage.apply_resume_snapshot?: boolean` to the protocol and update the `resume_snapshot` doc comment to say it accompanies resume_session_id or apply_resume_snapshot | `protocol/src/index.ts` | done |
+| 25-2 | Relax session_pointer/1 to require cwd while allowing nil session_id (return `{:ok, session_id_or_nil, cwd, engine}`). Keep `:no_session` for a missing pointer / missing cwd | `server/lib/kaoiro_server_web/channels/agents_channel.ex` | done |
+| 25-3 | In `build_restore_payload`, omit `resume_session_id` and put `"apply_resume_snapshot" => true` when session_id is nil (retain current behavior for a binary) | same | done |
+| 25-4 | Adjust `resume_disconnected` (explicit operator session pick) to obtain only cwd/engine from the pointer, so explicit resume works with a nil pointer session_id | same | done (the `session_pointer/1` relaxation makes a separate change unnecessary) |
+| 25-5 | Server tests: (a) restore of a nil-session pointer broadcasts spawn with no resume_session_id + apply_resume_snapshot + resume_snapshot, (b) preserve :no_session for missing pointer / missing cwd, (c) allow resume_disconnected with nil-session pointer + explicit sid | `server/test/kaoiro_server_web/channels/agents_channel_test.exs` | done (5 cases added, all 433 server tests green) |
+| 25-6 | Runner: `parseSpawn` optional boolean `apply_resume_snapshot` into `ParsedSpawn.applyResumeSnapshot`; in the fresh branch of `handleSpawn`, apply `applyResumeSnapshot(parsed, parsed.resumeSnapshot, engine)` only when flagged, then `#launchSpawn` (no T3/F4) | `runner/src/supervisor.ts` | done |
+| 25-7 | Runner tests: (a) flagged fresh spawn with snapshot launches model/effort/permission_mode/sandbox/network_access from snapshot, (b) unflagged fresh spawn does not apply it (regression), (c) flag without snapshot uses engine defaults | `runner/test/supervisor.test.ts` | done (4 cases added, all 236 runner tests green) |
+| 25-8 | Docs: add the field to the spawn message in `docs/specs/protocol.md` and add fresh-restore supplements to ADR-0030 (D8) / ADR-0014 (F1 addendum) | docs | done |
+| 25-9 | Manual dogfood verification (below) | — | done (master acceptance 2026-07-23, no issues) |
 
-**scope 外**:
+**Out of scope**:
 
-- client 変更なし (復元ボタンは既に無条件表示、成功すれば ⚠ は既存
-  ロジックで消える)。
-- 「session_id はあるが JSONL が消えている」T3 失敗時の fresh-restore
-  fallback (今回の repro には含まれない。必要になったら別 phase)。
-- host runner が offline のままの復元失敗 (既存挙動のまま)。
+- No client changes (the restore button is already unconditional; on success,
+  existing logic removes ⚠).
+- Fresh-restore fallback after a T3 failure where session_id exists but JSONL is
+  gone (not in this reproduction; use another phase if needed).
+- Restore failure while the host runner remains offline (existing behavior).
 
-## 検証 (25-9 dogfood)
+## Verification (25-9 dogfood)
 
-1. Claude agent を明示 model/effort/permission で launch → 未発話のまま
-   dogfood.sh 全再起動 → 復元 → 同設定で live になること (dashboard の
-   model / effort / permission 表示と `ext.effective` を確認)。
-2. 会話済み agent に `/clear` → 未発話のまま全再起動 → 復元 → `/clear`
-   前と同じ実効設定 (snapshot は detach を跨いで保持) で live に
-   なること。
-3. Codex agent でも 1 を実施 (sandbox / network_access が snapshot
-   どおり)。
-4. 回帰: session_id ありの通常 restore、LaunchDialog fresh spawn、
-   reset (/new, /clear)、switch_session が不変であること
-   (test suite + 目視)。
+1. Launch a Claude agent with explicit model/effort/permission → restart all
+   services with dogfood.sh before it speaks → restore → confirm it is live
+   with the same settings (dashboard model / effort / permission and
+   `ext.effective`).
+2. Run `/clear` on an agent with conversation history → restart everything
+   before it speaks → restore → confirm it is live with the same effective
+   settings as before `/clear` (the snapshot survives detach).
+3. Perform step 1 with a Codex agent (sandbox / network_access match snapshot).
+4. Regression: confirm ordinary restore with session_id, LaunchDialog fresh
+   spawn, reset (/new, /clear), and switch_session remain unchanged (test suite
+   + visual check).
 
 ## Risks
 
-- wrapper が初回 state_change で stamp する `ext.effective` の内容が
-  engine / タイミングにより sparse な場合、fresh-restore は sparse な
-  分だけ engine default に落ちる (安全側)。25-5/25-7 のテストで
-  「snapshot に入っている値は必ず復元される」ことのみ保証する。
-- `apply_resume_snapshot` を悪用しても snapshot は server 側 write-side
-  - runner 側 read-side の二重 sanitize 済みで、既存の resume 経路と
-  同じ trust boundary (ADR-0014 F1 追補) の内側。新規の権限昇格面は
-  増えない。
+- If the `ext.effective` stamped by the wrapper on the first state_change is
+  sparse for an engine or timing reason, fresh-restore demotes only those
+  missing values to the engine default (safe side). 25-5/25-7 guarantee only
+  that values present in the snapshot are restored.
+- Even if `apply_resume_snapshot` is abused, the snapshot has already passed
+  server write-side + runner read-side double sanitization and uses the same
+  trust boundary as the existing resume path (ADR-0014 F1 addendum). It does
+  not add a new privilege-escalation surface.
