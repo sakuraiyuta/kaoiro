@@ -1,5 +1,5 @@
 ---
-title: ユーザトークンの httpOnly cookie 永続化(リロード耐性)
+title: Persist the user token in an httpOnly cookie (reload resilience)
 status: accepted
 date: 2026-06-15
 opened: 2026-06-15
@@ -9,7 +9,7 @@ related_specs: [protocol, architecture, threat-model]
 related_adrs: [5, 11, 21, 42]
 ---
 
-# ADR-0013 — ユーザトークンの httpOnly cookie 永続化(リロード耐性)
+# ADR-0013 — Persist the User Token in an httpOnly Cookie (Reload Resilience)
 
 ## Status
 
@@ -17,101 +17,117 @@ Accepted
 
 ## Context
 
-ダッシュボード(`dashboard/`, Svelte)はユーザトークン(ADR-0011)を
-URL の `?token=…` で受け取り、受領直後に `history.replaceState` で
-アドレスバーから消し、以降は JS のメモリにしか保持していなかった。その
-ため**ブラウザをリロードすると URL 側もメモリ側も両方トークンを失い**、
-再接続は空 params となって `Auth.client_role/1` が fail-closed(ADR-0011,
-issue #28)で拒否する。トークン永続化層が未実装の状態だった(issue #45)。
+The dashboard (`dashboard/`, Svelte) received the user token (ADR-0011) in the
+URL as `?token=…`, removed it from the address bar immediately with
+`history.replaceState`, and then kept it only in JS memory. As a result,
+**reloading the browser lost the token from both the URL and memory**; the
+reconnection had empty params and was rejected fail-closed by
+`Auth.client_role/1` (ADR-0011, issue #28). The token-persistence layer was
+unimplemented (issue #45).
 
-制約:
+Constraints:
 
-- ブラウザ標準の WebSocket はカスタム `Authorization` ヘッダを付けられず、
-  WS で使える資格情報は実質「クエリ(現状)」か「cookie」の二択。
-- ダッシュボードは agent 応答由来の transcript / mermaid を描画する XSS 面
-  を持つ(DOMPurify 導入済みが傍証)。Web Storage 方式はトークンが JS から
-  読めるため、XSS でセッション窃取まで被害が広がる。operator ロールは
-  リモートのツール実行・承認ができ漏洩コストが高い。
-- **確立済みの WebSocket 上では `Set-Cookie` できない**(cookie は HTTP
-  レスポンスヘッダでしか更新できない)。
+- A browser-standard WebSocket cannot attach a custom `Authorization` header,
+  so credentials usable by WS are effectively limited to the two choices of
+  "query (current)" or "cookie".
+- The dashboard has an XSS surface because it renders agent-response-derived
+  transcript / mermaid (the installed DOMPurify is supporting evidence). With
+  Web Storage, the token is readable from JS, allowing an XSS to extend its
+  impact to session theft. The operator role can execute and approve remote
+  tools, so the cost of leakage is high.
+- **`Set-Cookie` cannot be performed on an established WebSocket** (a cookie can
+  be updated only with an HTTP response header).
 
-issue #45 にて my-spec-elicitation で方式を収束(2026-06-15 ユーザ決定)。
+The approach was settled through my-spec-elicitation for issue #45 (user
+decision on 2026-06-15).
 
 ## Decision
 
-ユーザトークンを **httpOnly + 暗号化 session cookie** で永続化する。
+Persist the user token in an **httpOnly + encrypted session cookie**.
 
-1. **器 = Phoenix 既存の署名付き session cookie を再利用**(`_kaoiro_server_key`)。
-   httpOnly・SameSite=Lax は既に構成済み。新規 cookie や手動パースを足さない。
-2. **格納 = トークンを session に入れ、session を暗号化**(`encryption_salt`
-   を追加)。`connect/3` と `/session/refresh` は毎回 `Auth.client_role/1` で
-   再検証するため**失効が次の接続/refresh で反映**され、暗号化により cookie
-   jar 上でもトークンが秘匿される(稼働中ソケットの即時排除は下記の限界)。
-3. **有効期限 = `max_age` 3 日のスライディングウィンドウ**。開いている SPA が
-   `GET /session/refresh` を定期(12h)に叩いて cookie を再発行 → **開いている
-   限り失効しない**。閉じた/切断後は最後の更新から 3 日で失効。絶対上限は
-   設けない。
-4. **トークン→cookie の交換は 2 経路**。(a) prod = `GET /?token=…` を
-   `RootRedirect`(Plug.Session 後段)で検証 → `put_session` → クリーンな
-   `/index.html` へ 302(トークンは SPA にもアドレスバーにも残らない)。
-   (b) dev = Vite(:5173)が SPA を配信し RootRedirect を経由しないため、SPA が
-   受け取った `?token=` を `POST /session/new`(Vite proxy 経由。cookie は HTTP
-   なら proxy を通る)へ投げて cookie をセットする(クライアント駆動)。
-5. **WS 認証は短命チケット経由**(`connect/3` は ticket → token param →
-   session の順で解決)。**Vite の proxy は WS upgrade に Cookie を転送せず、
-   :4000 直結(cross-port)でもブラウザは cookie を送らないため、cookie を WS に
-   乗せられない**(検証で確定)。そこでリロード時は SPA が `GET /session/ticket`
-   (cookie 付き HTTP=proxy を通る)で `Phoenix.Token` **暗号化**の**短命
-   チケット**(30 秒)を取得し、WS を `?ticket=`(param は proxy を通る)で
-   接続する。`connect/3` がチケットを復号してトークンへ戻す。署名のみだと
-   ticket を持つ者がトークンを Base64 復元できてしまうため暗号化必須(#47
-   レビュー)。**トークン自体は JS に出ない**(チケットからも復元不可)。
-   初回ロード(`?token=` あり)は token param で接続しつつ cookie を
-   セットする。prod は同一 origin 直結で cookie が WS に乗るため session
-   フォールバックも効く。
-6. **secure フラグ = prod のみ**。既存 `force_ssl`(`rewrite_on:
-   [:x_forwarded_proto]`)前提で、`Application.compile_env(:kaoiro_server,
-   :session_secure, false)` を `prod.exs` で `true` に。dev(http localhost)
-   は false。CSRF は SameSite=Lax + prod の `check_origin`(`url` host 既定)で
-   抑止する。
+1. **Container = reuse Phoenix's existing signed session cookie**
+   (`_kaoiro_server_key`). httpOnly and SameSite=Lax are already configured.
+   Do not add a new cookie or manual parsing.
+2. **Storage = put the token in the session and encrypt the session** (add
+   `encryption_salt`). `connect/3` and `/session/refresh` revalidate with
+   `Auth.client_role/1` each time, so **revocation is reflected on the next
+   connection/refresh**; encryption keeps the token confidential in the cookie
+   jar (the limitation on immediately removing an active socket is below).
+3. **Expiry = a three-day sliding window with `max_age`**. The open SPA
+   periodically (12h) calls `GET /session/refresh` to reissue the cookie → **it
+   does not expire while open**. After it is closed/disconnected, it expires
+   three days after the last update. There is no absolute upper limit.
+4. **There are two token-to-cookie exchange paths**. (a) prod = validate
+   `GET /?token=…` in `RootRedirect` (after Plug.Session) → `put_session` → 302
+   to clean `/index.html` (the token remains neither in the SPA nor the address
+   bar). (b) dev = Vite (:5173) serves the SPA and does not go through
+   RootRedirect, so the SPA sends the received `?token=` to `POST /session/new`
+   (through the Vite proxy; cookies pass through the proxy over HTTP) to set the
+   cookie (client-driven).
+5. **WS authentication uses a short-lived ticket** (`connect/3` resolves in the
+   order ticket → token param → session). **The Vite proxy does not forward
+   Cookie on a WS upgrade, and the browser does not send cookies even on a direct
+   cross-port connection to :4000, so a cookie cannot be carried over WS**
+   (confirmed by verification). On reload, the SPA therefore obtains a
+   **short-lived encrypted** `Phoenix.Token` **ticket** (30 seconds) with
+   `GET /session/ticket` (HTTP with the cookie goes through the proxy), then
+   connects the WS with `?ticket=` (the param goes through the proxy).
+   `connect/3` decrypts the ticket back into the token. Encryption is required
+   because with signing only, a ticket holder could Base64-decode the token (#47
+   review). **The token itself never appears in JS** (nor can it be recovered
+   from the ticket). On the initial load (with `?token=`), connect with the token
+   param while setting the cookie. In prod, the same-origin direct connection
+   sends the cookie over WS, so the session fallback also works.
+6. **The secure flag is prod only**. Based on the existing `force_ssl`
+   (`rewrite_on: [:x_forwarded_proto]`), set
+   `Application.compile_env(:kaoiro_server, :session_secure, false)` to `true`
+   in `prod.exs`. It is false in dev (http localhost). CSRF is mitigated by
+   SameSite=Lax + prod's `check_origin` (default `url` host).
 
 ## Consequences
 
 ### Positive
 
-- リロード・ブラウザ再起動でも再接続が維持され、運用・開発の摩擦が消える。
-- httpOnly + 暗号化でトークンは JS にも cookie jar の平文にも出ない。XSS が
-  取れるのは短命チケット(数十秒)止まりで、再利用可能なトークンは窃取できない。
-- 失効は接続・`/session/refresh` ごとの再検証で反映される(refresh が 401 を
-  返すと正規クライアントは自発的に切断する)。
+- Reconnection is maintained across reloads and browser restarts, removing
+  operational and development friction.
+- With httpOnly + encryption, the token appears neither in JS nor as plaintext
+  in the cookie jar. An XSS can obtain only the short-lived ticket (tens of
+  seconds), and cannot steal a reusable token.
+- Revocation is reflected by revalidation on each connection and
+  `/session/refresh` (when refresh returns 401, a standard client disconnects
+  itself).
 
 ### Negative
 
-- 開いている間の失効防止に SPA からの定期 HTTP heartbeat が要る(WS 上では
-  cookie 更新不可のため)。
-- cookie を WS に乗せられない(Vite proxy 非転送 + cross-port 非送出)ため、
-  リロード認証に「HTTP でチケット取得 → param 接続」の一手間が要る。`connect/3`
-  は ticket / token param / session の 3 経路を持つ。
-- **稼働中ソケットの即時強制切断**: 当初は不可だったが issue #47 で解決済み。
-  当初 `ClientSocket` は connect 時のみ token を検証し `id/1` が `nil`
-  (`Endpoint.disconnect` 経路なし)で、失効は次接続まで反映されなかった。
-  #47 で `id/1` を token 由来の socket id(`Auth.socket_id/1` = token の
-  SHA-256、生 token は非保持)にし、明示ログアウト(`DELETE /session`)と
-  refresh の 401(失効)で `Endpoint.broadcast(id, "disconnect", %{})` により
-  稼働中ソケットを即時切断する。
+- Preventing revocation while the SPA is open requires a periodic HTTP heartbeat
+  from the SPA (cookies cannot be updated over WS).
+- Because a cookie cannot be carried over WS (not forwarded by the Vite proxy and
+  not sent cross-port), reload authentication requires the extra step of
+  "obtain a ticket over HTTP → connect with a param." `connect/3` has three
+  paths: ticket / token param / session.
+- **Immediate forced disconnection of an active socket**: This was initially
+  impossible, but was resolved by issue #47. Initially, `ClientSocket` validated
+  the token only on connect and `id/1` was `nil` (there was no
+  `Endpoint.disconnect` path), so revocation was not reflected until the next
+  connection. In #47, `id/1` was changed to a token-derived socket ID
+  (`Auth.socket_id/1` = SHA-256 of the token; the raw token is not retained),
+  and explicit logout (`DELETE /session`) and refresh 401 (revocation) now
+  immediately disconnect active sockets through
+  `Endpoint.broadcast(id, "disconnect", %{})`.
 
 ### Neutral
 
-- OAuth 本実装(ADR-0005 本線)は引き続き将来。cookie はトークンを運ぶだけ。
-- session は従来休眠していた(`put_session` 未使用)ため、暗号化追加で壊れる
-  既存セッションはない。
+- The full OAuth implementation (the main line of ADR-0005) remains future work.
+  The cookie only carries the token.
+- The session was previously dormant (`put_session` was unused), so there are no
+  existing sessions that can be broken by adding encryption.
 
 ## Alternatives Considered
 
 | Option | Why rejected |
 |--------|--------------|
-| Web Storage(localStorage)にトークン保持 | JS から可読 → XSS でセッション窃取。operator 漏洩コストが高い |
-| 専用 httpOnly cookie を新設 | `connect_info: [:x_headers]` で手動パース。既存 session 再利用で足りる |
-| session に role のみ格納(token 非保持) | 失効が cookie 有効期限まで効かない。token 再検証の即時失効を優先 |
-| token を署名のみ(暗号化なし)で格納 | cookie jar から平文トークンが読める。operator は暗号化で秘匿 |
-| 絶対上限つき有効期限 | 「開いている限り無期限」の運用要件と相反。スライディングのみ採用 |
+| Store the token in Web Storage (localStorage) | Readable from JS → session theft through XSS; the operator's leakage cost is high |
+| Add a dedicated httpOnly cookie | Requires manual parsing with `connect_info: [:x_headers]`; reusing the existing session is sufficient |
+| Store only the role in the session (do not retain the token) | Revocation does not take effect until the cookie expires; immediate revocation through token revalidation is prioritized |
+| Store the token with signing only (without encryption) | Plaintext tokens can be read from the cookie jar; encryption keeps the operator's token confidential |
+| Expiry with an absolute upper limit | Conflicts with the operational requirement of "no expiry while open"; only sliding expiry is adopted |
