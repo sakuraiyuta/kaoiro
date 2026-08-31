@@ -1,5 +1,5 @@
 ---
-title: サーバ再起動越しの agent identity 永続と client 明示復元(一括/個別)
+title: server reboot agent identity persistent and client explicit recovery (b)/individual)
 status: accepted
 date: 2026-07-06
 opened: 2026-07-06
@@ -9,206 +9,206 @@ related_specs: [protocol, architecture]
 related_adrs: [12, 14, 21, 23, 24]
 ---
 
-# ADR-0030 — サーバ再起動越しの agent identity 永続と client 明示復元(一括/個別)
+# ADR-0030 — server reboot transceiver agent identity persistence and client explicit recovery (b /individual)
 
 ## Status
 
-Accepted(実装完了 2026-07-06 — phase-11 phase-0..2、手動 dogfooding 検収済)
+Accepted (completed 2026 -06 — phase-11 phase-0..2, manual dogfooding inspection)
 
 ## Context
 
-[ADR-0014](0014-session-resume-and-restore.md) は agent の session 復元機構
-(client → server → runner の spawn-with-resume)を定義し、`SessionPointers`
-(`agent_id → {session_id, cwd}`)を DETS で永続化した。実装済みの
+[ADR-0014](0014-session-resume-and-restore.md)
+(client → server →   spawn-with-resume)
+(`agent_id → {session_id, cwd}`) was persisted with DETS. implemented
 `restore` / `resume_disconnected`
 ([agents_channel.ex](../../server/lib/kaoiro_server_web/channels/agents_channel.ex))
-は disconnected agent を対象に spawn + `resume_session_id` を
-`runner:<host_id>` へ broadcast する。しかし現状:
+spawn + `resume_session_id`
+`runner:<host_id>` However:
 
-- **agent identity(persona)が揮発**:
-  `agents_channel.ex agent_persona/1` は `AgentStates.snapshot()` から persona
-  を読む。server 再起動で AgentStates は消えるため、restore の spawn payload
-  に persona を積めなくなり、再起動を跨いだ resume 経路が壊れる。
-- **client 側からの「知られているエージェント一覧」取得手段が無い**:
-  再起動直後は AgentStates が空 = エージェント 0 台の表示。runner/wrapper が
-  自発再接続してくるまで、operator が復元操作する対象すら見えない。
-- [ADR-0014 A4](0014-session-resume-and-restore.md)「JSONL 正本」により
-  返答ログの永続化([#24](https://github.com/sakuraiyuta/kaoiro/issues/24))は不要と確定。永続すべきは identity(persona)と存在事実のみ。
+- **Agent identity (persona) volatile**:
+`agents_channel.ex agent_persona/1` from `AgentStates.snapshot()` to persona
+Read More The agent spas disappears in the server restart, so the restore spawn payload
+The resume route that straddles the reboot is broken.
+- **Specify "known agent list" acquisition method from client side**:
+If you need to reboot, the Agentdisplays is empty = 0  /wrapper
+Until the auto reconnection comes, the operator cannot be able to restore operations.
+- [ADR-0014 A4] (0014-session-resume-and-restore.md)
+Res ing ([#24](https://github.com/sakuraiyuta/kaoiro/issues/24))) is no longer required. Only identity and existence facts should be persistent.
 
-goal: **server と runner が同時ダウン・再起動した後、client 側の「前回の
-状態を復元」ボタン操作(一括 / 個別)によって、直前まで動いていた各エージェ
-ントを最後の session_id で resume-spawn できる**。復元は operator 明示のみ、
-自動は行わない([#41](https://github.com/sakuraiyuta/kaoiro/issues/41))。
+goal: **cli and   are restarted at the same time, and then client's last
+"Restore state" button operation (b  / individual), each agen that moved to the last minute
+You can resume-spawn with last session id**. restore only the operator explicitly,
+(https://github.com/sakuraiyuta/kaoiro/issues/41))
 
 ## Decision
 
-- **D1(store 分割)**: 新規 DETS store `KaoiroServer.AgentDirectory` を追加し
-  `agent_id → %{persona, last_seen}` を保持する。`SessionPointers`(resume
-  ポインタ、ADR-0014 F1)は据置。identity 台帳と resume ポインタは概念が別
-  なので独立させる。
-- **D2(書き込みタイミング、issue #209 D19 で改訂 — canonical persona は
-  そもそも本 store に保存しない)**:
-  - **spawn 時**(`agents_channel.ex handle_in("spawn", ...)`)に `persona_id`
-    (pack への stable reference)と `display_name`(spawn custom name、
-    未指定なら record 時点の canonical name のコピー — 作成時
-    永続化)を `AgentDirectory.record/4` する。**同期呼び出し
-    (`GenServer.call`、issue #209 D22 corollary — 以前は fire-and-forget
-    な `GenServer.cast` だった)であり、runner への spawn broadcast より
-    前に完了させる。** spawn 直後に join した wrapper が
-    `wrapper_channel.ex` の after-join `push_persona_sync/2` で未コミット
-    の entry を `nil` として読み、初回 sync を静かに取りこぼす race を
-    構造的に閉じるための順序保証(`SessionPointers` / `PermissionModes`
-    の fire-and-forget パターンとは異なる)。
-  - **envelope 到着時**(AgentStates.put)に `last_seen` を更新する。
-    `persona_id` は session 中不変。canonical persona(pack 由来の
-    `name` / `sprite_set`、注入済み personality prompt)はそもそも
-    本 store に保存しない — 都度 `persona_id` を現在の `PersonaAssets`
-    manifest へ join して解決する(restore / directory projection /
-    wrapper 起動 payload、いずれも共通)。**`display_name` のみ、稼働中
-    の明示 rename(issue #187 段階3、`AgentDirectory.rename/2`)により
-    上書きされ得る** — これは envelope 到着に伴う暗黙の同期ではなく
-    operator 操作による明示的な mutation であり、ADR-0029 F9 が固定
-    する対象(zip 更新由来の personality prompt)を変更するものでは
-    ない。
-- **D3(読み替え)**: `agent_persona/1` を `AgentDirectory.get(agent_id)` の
-  persona 参照に切替。AgentStates 依存を除去して再起動耐性を得る。既存
-  restore / resume_disconnected の wire は変更しない。
-- **D4(client への一覧提供)**: server は operator role の join snapshot 経路
-  を拡張し、AgentDirectory の全 entry を配信する(新規 topic は増やさない)。
-  client 側は AgentStates.snapshot() と merge して live/offline を判定する。
-  viewer には配信しない(D10)。**client 側の「offline 表示」は directory-only
-  (AgentStates に entry が無い、= サーバ再起動起因)と live disconnected
-  (entry はあるが state=disconnected、= wrapper 単独切断・ホットリロード起因)
-  の両者を統合し、1 か所のオフラインセクションで復元 UI を提供する — 障害の
-  出方で UX を分岐させない(2026-07-07 追記)。**
-- **D5(復元 UX)**: dashboard に 2 系統のボタンを配置する:
-  - **一括**: ヘッダ or 設定メニューに「前回の状態を復元」— offline entry
-    全件に対して個別 resume-spawn を順次発火。
-  - **個別**: offline 表示中の agent tile(または詳細)から 1 体のみ
-    resume-spawn。
-  - どちらも既存 `resume_disconnected` wire を 1 体ずつ呼ぶ。バッチ専用の
-    wire は作らない。
-- **D6(entry ライフサイクル)**:
-  - 追加: spawn 時のみ。
-  - 更新: envelope 到着時に last_seen のみ。
-  - 削除: operator 明示削除のみ(dashboard に「エージェントを台帳から削除」
-    操作)。自動 GC は初回スコープ外(将来: last_seen が N 日超過で候補入り、
-    明示承認で削除)。**2026-07-07 実装**: `delete_agent` handler が
-    directory-only entry (`AgentStates` 不在で `AgentDirectory` のみ)も
-    受け付けるよう拡張し、`AgentStates` (memory) + `AgentDirectory` +
-    `SessionPointers` + `PermissionModes` の 4 store を一括 purge する。
-    live agent への削除は既存 `AgentStates.delete/1` の disconnected guard
-    がそのまま効く(不変)。復元不可なゾンビ agent(`no_session` 等で
-    復元 spawn が繰り返し失敗するケース)を operator が明示掃除できる。
-  - **2026-08-08 注記:** 現行の purge 契約は [protocol](../specs/protocol.md)
-    の `delete_agent` に同期する。対象は `AgentStates`、`AgentDirectory`、
-    `SessionPointers`、`PermissionModes`、`SessionResets`、`SessionStarts`、
-    `ClearWatermarks` の 7 store であり、`InterAgentHistory` は
-    [ADR-0051](0051-history-restart-resilience.md) で撤廃済み。恒久 revoke 用の
-    `TokenDenylist` は purge しない。
-- **D7(host_id 非永続)**: agent_id の命名規約(ADR-0024 D3 `<host_id>.<rand>`)
-  から `host_id_of/1` で常時算出可能なため、host_id 単独の永続は不要。
-  AgentDirectory には格納しない。
-- **D8(復元失敗のハンドリング)**: 復元不可要因(host runner offline /
-  persona pack missing / session JSONL missing = ADR-0014 T3 検証失敗)は
-  既存 `spawn_result` エンベロープで個別に client へ返る。一括復元はベスト
-  エフォート(部分成功可)、client は各 tile に error 表示。特別な集計 API は
-  作らない。**復元ボタンの表示は client 側で `envelope.state === "disconnected"`
-  のみで判定し、session_id の有無で gate しない — 実復元可否(SessionPointer
-  の存在)はサーバ側判定に一任し、失敗は spawn_result → sticky icon で
-  surface する(2026-07-07 追記)。**
+- **D1(store split)**: Add new DETS store `KaoiroServer.AgentDirectory`
+`agent_id → %{persona, last_seen}` `SessionPointers`
+ADR-0014 F1) identity ledger and resume pointer separate concept
+so independent.
+- **Revised by D2 (written timing, issue #209 D19) — canonical persona
+not in this store)**:
+  - **spawn time**`persona_id`
+(spawn custom name,
+Copy of canonical name at record if not specified — when created
+`AgentDirectory.record/4`. **Sync call
+(`GenServer.call`, issue #209 D22 corollary — Previously fire-and-forget
+and spawn broadcast to spa
+Complete before. spawn wrapper
+`wrapper_channel.ex` `push_persona_sync/2`
+read entry as `nil` and take off the first race
+Structurally closed order warranty (`SessionPointers` / `PermissionModes`)
+of fire-and-forget).
+  - **envel  upon arrival**update `last_seen` to (Agent s.put).
+`persona_id` does not change during the session. canonical persona
+`name` / `sprite_set`, injected personality prompt)
+Don’t save to this store — every time `persona_id` is present `PersonaAssets`
+restore / directory projection
+wrapper startup payload).DE0
+by rename(issue #187 step 3, `AgentDirectory.rename/2`)
+overwrite** — this is not an implicit  with envel  arrival
+ADR-0029 F9 is an explicit mu  by the operator operation.
+If you change the target (zip update origin personality prompt),
 
-  **fresh-restore 追補(phase-25, 2026-07-23)**: SessionPointer は
-  cwd / engine / snapshot を保持しつつ session_id だけが nil のケース
-  (`/clear` detach = ADR-0036 F3 追補 / 未発話 session = ADR-0014 Q-A4)が
-  ある。以前は server の `session_pointer/1` が binary session_id を
-  要求していたため復元ボタンが `no_session` → ⚠ で必ず失敗した。phase-25
-  でこの経路を **fresh-restore** として救済する: server は `resume_session_id`
-  を omit した spawn payload に `apply_resume_snapshot: true` を stamp し、
-  runner は fresh 分岐で snapshot を再適用して同 model / effort / engine /
-  permission 設定の fresh session として立ち上げ直す。詳細は
-  [ADR-0014 F1 追補「session_id なし pointer の fresh-restore」](0014-session-resume-and-restore.md)
-  および [phase-25 計画](../plans/phase-25-fresh-restore-without-session.md)。
-  なお D8 本体の「復元ボタンは disconnected のみで gate」ポリシーは不変で、
-  session_id の有無で表示制御しないという原則は fresh-restore 導入後も
-  そのまま維持される。
-- **D9(二重接続防止)**: 既存 `require_disconnected/1`(ADR-0014 F4)を再利用。
-  live agent は復元対象から除外される。
-- **D10(権限)**: 一覧・復元操作とも operator 限定
-  ([ADR-0021](0021-role-information-disclosure-policy.md) の role gate 流用)。
-  viewer には AgentDirectory 由来の offline 一覧を返さない。
-- **D11(rate limit)**: 一括復元の spawn は同期順次で発火(server 側の
-  for-loop、broadcast のみ)。特別な rate limit は不要 — 実際の spawn 実行は
-  runner 側 in-flight lock で守られる。実運用で問題化したら本 ADR を改訂する。
-- **D12(グローバル設定)**: 現状サーバは mutable な global config を持たない
-  (すべて env 外出し)。本 ADR はスコープに含めない。将来 dashboard-driven
-  config が発生した時点で別 ADR で追加する。
+- **D3**`agent_persona/1`
+persona Switch to reference. Remove Agent s dependencies and get restart resistance. Existing
+restore / resume disconnected
+- **D4**: server is a role operator join snapshot path
+expands and distributes all entries of AgentDirectory (not adding new topics).
+client is merged with Agent lives.snapshot() to determine live/offline.
+Do not send to viewer (D10). "offline display" on client side is directory-only
+(Agent entrys entry, = server restart) and disconnected
+(the state=disconnected, = wrapper alone, due to hot reload)
+integration and provide a restore UI in one offline section — of failure
+Don’tUX UX on the way out (appended 2026 ). Home
+- **D5 (Restore UX)**: dashboard two buttons in dashboard:
+  - ****: "Restore previous state" in the header or setting menu — offline entry
+Each resume-spawn is fired se tially.
+  - **Individual**: offline only one from the agent tile (or details) in the display
+    resume-spawn。
+- Both call existing `resume_disconnected` wire one by one. B 
+No wire.
+- **D6(entry lifecycle)**:
+- Added: spawn only.
+- Update: only last seen when envel  arrives.
+- Delete: only remove the agent from the ledger on Dashboard
+operation). Auto GC is not in the initial scope (in the future: last seen is not exceeded N days,
+Delete by explicit approval).**2026  **`delete_agent` handler
+directory-only entry
+`AgentStates`
+`SessionPointers` + `PermissionModes`
+`AgentStates.delete/1`
+(unchanged) z e agent (`no_session`)
+The operator can explicitly clean the restore spawn (the case where the failure is repeated).
+  - **2026 08 Note:**The current purge contract is [protocol](../specs/protocol.md)
+to `delete_agent`. `AgentStates`, `AgentDirectory`,
+    `SessionPointers`、`PermissionModes`、`SessionResets`、`SessionStarts`、
+`ClearWatermarks`
+[ADR0051](0051-history-restart-resilience.md) For permanent revoke
+`TokenDenylist` does not purge.
+- **D7(host id non-permanent)**: Agent id
+to `host_id_of/1`, so host id is not required.
+AgentDirectory does not store.
+- **D8 (Restore failure handling)**: Unrecoverable factors (host   offline /
+persona pack missing / session JSONL missing = ADR-0014
+Return to client with existing `spawn_result` envel . B  Restoration is Best
+Error display on each tile. Special ag ation API
+Don't make it. **Restore button display is `envelope.state === "disconnected"` on client side
+not gate with session id.
+existence) is assigned to determining the debug side, and fail is spawn re t → sticky icon
+surface (appended 2026。 ). Home
+
+  **Fresh-restore (phase-25, 2026 -23)**: SessionPointer
+cwd / engine / snapshot
+(`/clear` detach = ADR-0036 F3 supplementary / unissued session = ADR-0014 Q-A4)
+Comment `session_pointer/1` of server is binary session id.
+The recovery button is always failing with `no_session` → ⚠. phase-25
+This route**fresh-restore**Save as: server is `resume_session_id`
+stamp `apply_resume_snapshot: true` to spawn payload
+reapply snapshot with fresh  .
+Please set permission as fresh session. More
+[ADR-0014 F1 Supplement: pointer fresh-restore without session id](0014-session-resume-and-restore.md)
+and [phase-25 plan](../plans/phase-25-fresh-restore-without-session.md).
+D8 "Restore button disconnected only gate" policy is unchanged,
+The principle of not displaycontrol with or without session id is fresh-restore
+Maintained as it is.
+- **D9(double connection prevention)**: Reuse existing `require_disconnected/1` (ADR-0014 F4).
+The live agent is excluded from the restore object.
+- **D10(permission)**: List/Restore operation and operator only
+([ADR-0021](0021-role-information-dis sure-policy.md)
+viewer does not return the AgentDirectory-derived offline list.
+- **D11(rate limit)**: B  Restoration spawn is spahronously fired ( spa side)
+for-loop, broadcast only). No special rate limit — real spawn execution
+in-flight lock Revise this ADR if it is an actual operation problem.
+- **D12 (Global Settings)**: The current value does not have mutable global config
+(All env out). This ADR is not included in the scope. Future dashboard-driven
+Add to another ADR when config occurs.
 
 ## Consequences
 
 ### Positive
 
-- サーバ・runner 再起動後もエージェント一覧が空にならず、operator が
-  明示操作で全体/個別に復元可能になる。
-- ADR-0014 A4「JSONL 正本」を維持したまま goal 達成(履歴永続不要)。
-- 既存 `SessionPointers` / `PermissionModes` と同型 DETS パターンで実装
-  コストが低い(store 追加 + spawn hook + 参照差替え + client 配信 +
+- The agent list is not empty even after the server/ server restart, and the operator is
+It can be restored to the whole/  by explicit operation.
+- ADR-0014 A4 "JSONL Japanese term" is maintained and goal is achieved (history permanently unnecessary).
+- Implemented with the same DETS pattern as the existing `SessionPointers` / `PermissionModes`
+Low cost (store added + spawn   + reference change + client delivery +
   dashboard UI)。
-- resume path のうち session_id / cwd(SessionPointers)・permission_mode
-  (PermissionModes)は既に永続、追加は persona 1 項目のみ。
+- session id / cwd(SessionPointers) / permission mode
+(PermissionModes) is already permanent and only one persona item is added.
 
 ### Negative
 
-- AgentDirectory entry のライフサイクル(削除)を operator に委ねるため、
-  長期運用で古い entry が溜まる可能性がある。将来 GC 検討(D6)。
-- 一括復元時は多数の runner に spawn broadcast が走る。実運用で問題化したら
-  D11 に rate limit を追加する。
+- To delegate the AgentDirectory entry lifecycle (remove) to the operator,
+Long-term operation may yield old entry. Future GC review (D6).
+- spawn broadcast runs on many  broadcasts at once. If it is a problem with actual operation
+Add rate limit to D11.
 
 ### Neutral
 
-- 「前回の状態」とは persona + session_id + cwd + permission_mode の 4 点のみ
-  で、返答ログや agent 内部状態(idle/thinking 等)は復元されない — ADR-0014
-  A4 との整合。
-- Client 側の live/offline 判定は AgentDirectory と AgentStates.snapshot の
-  merge で行う(server は両方を素直に配信)。
+- "Last state" is only 4 points of persona + session id + cwd + permission mode
+ADR-0014
+A4
+- AgentDirectory and Agentshots.snapshot
+merge.
 
 ## Alternatives Considered
 
 | Option | Why rejected |
 |--------|--------------|
-| `SessionPointers` を拡張して persona + last_seen を含める | pointer 概念が identity 領域まで膨らむ。ADR-0014 の書きぶり(「pointer のみ、履歴なし」)と相性が悪い |
-| AgentStates 全体を永続 | 揮発でよいエンベロープ・履歴まで含まれ ADR-0014 A4 に反する |
-| サーバ crash からの自動 resume | 二重接続リスク、operator の意思決定を奪う、user 方針(明示操作)に反する |
-| 一括復元用の新規 wire(`bulk_restore`)を追加 | 既存 restore / resume_disconnected を 1 体ずつ呼ぶだけで済むため冗長 |
-| entry の自動 GC(N 日で削除) | 初回スコープでは operator 混乱を招く可能性。将来オプション |
-| ADR-0014 の phase-3 として組み込む | 0014 は resume 機構本体、本件は identity 永続 + UX で概念が別 |
+| `SessionPointers`extension to include persona + last seen|pointer The concept bulges up to identity. ADR-0014 is not compatible with "pointer only, without history"|
+|Persistent Agent s|Contrary to ADR-0014 A4, including up to volatile envel s and history|
+|Auto resume from server crash|Double-connection risk, deprived of operator decisions, contrary to user policies|
+|New wire for b  restoration`bulk_restore`)Add|Redundant to just call existing restore / resume disconnected one body|
+|entry Auto GC (Remove in N-day)|In the initial scope, the operator may be confusing. Future Options|
+|ADR-0014|0014 is the main body of the resume mechanism, the concept is separate with identity persistence + UX|
 
-## 実装フェーズ(ロードマップ、plan 化時に切り出す)
+## Implementing phase (cut out at roadmap, plan)
 
-- **phase-0**: `AgentDirectory` GenServer + DETS 追加、spawn / envelope 到着
-  hook、`agent_persona/1` 差替え、テスト(`SessionPointers` テスト template
-  流用)。
-- **phase-1**: operator role join snapshot への AgentDirectory 配信、
-  dashboard 側で AgentStates と merge して live/offline 判定するロジック。
-- **phase-2**: dashboard に個別復元ボタン(offline agent tile)、一括復元
-  ボタン(ヘッダ)、`spawn_result` エラーの UI 反映。
-- **phase-3**(将来): entry 削除 UI、last_seen による GC の是非を issue で追う。
+- **phase-0**: `AgentDirectory` GenServer + DETS Additional, spawn / envel  arrival
+, `agent_persona/1` replacement, test (`SessionPointers` test template
+
+- **phase-1**: AgentDirectory to join role snapshot
+dashboard logic to merge with Agent s to determine live/offline.
+- **phase-2**:Dealer button (offline tile agent)
+UI of button (header) and `spawn_result` error.
+- **phase-3**Sorry, this entry is only available in Japanese.
 
 ## Related
 
-- 依存 ADR: [0014](0014-session-resume-and-restore.md)(resume 機構本体、
-  pointer 永続)、[0024](0024-agent-instance-identity-and-spawn-auth.md)
-  (agent_id 命名規約から host_id 算出)
-- 参照 ADR: [0012](0012-response-display-and-dashboard-scope.md)(A4 JSONL
-  正本方針)、[0021](0021-role-information-disclosure-policy.md)(operator
-  role gate)、[0023](0023-host-runner-architecture.md)(runner が spawn
-  実行主体)
-- 関連 issue:
-  [#41](https://github.com/sakuraiyuta/kaoiro/issues/41)(本 ADR
-  で解消)、
-  [#24](https://github.com/sakuraiyuta/kaoiro/issues/24)(諦め
-  方針)、
-  [#88](https://github.com/sakuraiyuta/kaoiro/issues/88)(将来の
-  per-persona 設定永続化と同型パターン)
-- 関連 specs: [protocol](../specs/protocol.md)(spawn / resume 経路)、
+- Dependent ADR: [0014](0014-session-resume-and-restore.md)(resume mechanism body,
+pointer ), [0024] (0024-agent-in -identity-and-spawn-auth.md)
+(host id calculation from the agent id  ing convention)
+- Reference ADR: [0012](0012-response-display-and-dashboard-scope.md)(A4 JSONL
+[0021-role-information-dis sure-policy.md]
+role gate), [0023](0023-host-host-architecture.md)(host is spawn
+)
+-: issue:
+[#41](https://github.com/sakuraiyuta/kaoiro/issues/41)
+Close
+[#24](https://github.com/sakuraiyuta/kaoiro/issues/24)
+
+[#88](https://github.com/sakuraiyuta/kaoiro/issues/88)
+per-personaType pattern)
+- resume:s: [protocol](../specs/protocol.md)(spawn / resume route),
   [architecture](../specs/architecture.md)
