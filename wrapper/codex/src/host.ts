@@ -1151,6 +1151,13 @@ export class CodexHost implements EngineAdapter {
         for (const adapterEvent of threadEventToEvents(event)) {
           this.#apply(adapterEvent);
         }
+        // The terminal event is the SDK turn boundary. Do not ask the
+        // underlying CLI generator for another item: a stream can remain
+        // open after reporting completion, and that would block the next
+        // queued turn (and its delivery acknowledgement) behind EOF.
+        if (event.type === "turn.completed" || event.type === "turn.failed") {
+          break;
+        }
       }
       if (!sawResult) {
         // Stream ended without a terminal turn event (abort, stream error
