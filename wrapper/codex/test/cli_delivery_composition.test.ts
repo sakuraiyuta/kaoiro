@@ -163,4 +163,50 @@ describe("Codex CLI delivery composition (issue #247)", () => {
       stderr.mockRestore();
     }
   });
+
+  it("runCodexCli の実組成が watchdog を turn-start に接続し、attribution failure を host へ返す", async () => {
+    let hostOptions!: Record<string, any>;
+    let fallbackStops = 0;
+    const link = {
+      close: () => {},
+      currentSessionId: () => null,
+      send: () => {},
+    };
+    const host = {
+      state: "idle",
+      statusExtSnapshot: () => ({}),
+      requestInterruptForTurn: () => true,
+      failStopTurnForWatchdog: () => true,
+      failStopForWatchdogAttributionUnknown: () => {
+        fallbackStops += 1;
+        return true;
+      },
+      run: async () => {
+        hostOptions.onTurnStart({ turnToken: "composition-a" });
+        // A second active token is an attribution invariant failure. The
+        // production CLI must route that failure to the real host callback.
+        hostOptions.onTurnStart({ turnToken: "composition-b" });
+      },
+    };
+
+    await runCodexCli({
+      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      loadConfig: () => ({ ...config }),
+      createServerLink: (_url, _agentId, options) => {
+        queueMicrotask(() => {
+          (options.onPersonaPrompt as (prompt: string) => void)("system prompt");
+        });
+        return link as never;
+      },
+      createHost: (_config, options) => {
+        hostOptions = options as unknown as Record<string, any>;
+        return host as never;
+      },
+      prepareStartup: async () => {},
+    });
+
+    expect(hostOptions.onTurnProgress).toBeTypeOf("function");
+    expect(hostOptions.onWatchdogFailStop).toBeTypeOf("function");
+    expect(fallbackStops).toBe(1);
+  });
 });
