@@ -44,7 +44,7 @@ for it.
 
 None (undecided).
 
-## 解決時のアクション
+## Actions upon resolution
 
 - [ ] Finalize the reporting convention (the coordination-guidance footer is
       already settled as option A, so express procedural detail in a reference

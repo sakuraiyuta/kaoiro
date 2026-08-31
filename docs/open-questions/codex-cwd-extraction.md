@@ -50,7 +50,7 @@ Complete phase-14's MVP with option D (fixed launch-cwd display). Wait for the
 resolution of Claude-side [#92](https://github.com/sakuraiyuta/kaoiro/issues/92),
 reconsider the kaoiro-side policy then, and choose among A / B / C at that time.
 
-## 解決時のアクション
+## Actions upon resolution
 
 - [ ] When Claude-side [#92](https://github.com/sakuraiyuta/kaoiro/issues/92) is
       resolved, reconsider the kaoiro-side tracking policy

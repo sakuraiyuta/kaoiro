@@ -58,7 +58,7 @@ Proceed with ADR-0037 F5 under option A (accept). After Phase 18 implementation,
 consider moving to option B if issue reports or user feedback identify the
 friction as a problem.
 
-## 解決時のアクション
+## Actions upon resolution
 
 - [ ] After Phase 18 implementation, establish a UX observation period (roughly
       2–4 weeks)

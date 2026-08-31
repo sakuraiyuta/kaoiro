@@ -49,7 +49,7 @@ Wait for option A. On each Codex SDK version update, check `codex features list`
 and the SDK changelog; when an approval path is published, promote this open
 question to an ADR and redesign.
 
-## 解決時のアクション
+## Actions upon resolution
 
 - [ ] Create an ADR revising [ADR-0033](../adr/0033-permission-model-dual-axis.md)
       F3 (approval fixed to never)

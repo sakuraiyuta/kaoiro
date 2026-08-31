@@ -41,7 +41,7 @@ external human's answer while working autonomously.
 future. Close the loop by having the operator give the answer as a new
 instruction in the dashboard.
 
-## 解決時のアクション
+## Actions upon resolution
 
 - [ ] Record the decision in an ADR (decision to relax one-way authority)
 - [ ] Revise the core principles in `../specs/protocol-external-human.md`
