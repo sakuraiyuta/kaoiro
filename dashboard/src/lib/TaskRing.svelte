@@ -1,6 +1,6 @@
 <script lang="ts">
   import {
-    readDevTaskRingOffset,
+    readTaskRingOffset,
     taskRingTopWithDevOffset,
   } from "./taskRingOffset";
 
@@ -49,16 +49,15 @@
     count?: number;
   } = $props();
 
-  // This is intentionally read at component creation so reloading the dev
-  // URL is enough to dial the live geometry. `import.meta.env.DEV` makes the
-  // knob unavailable in production builds; with no knob the existing inline
-  // top (or the CSS fallback) is left untouched.
-  const devTaskRingOffset = readDevTaskRingOffset(
+  // Read at component creation so a URL edit plus reload dials the geometry.
+  // This temporary knob must also work in the production bundle because the
+  // dogfood server serves that bundle; remove it after issue #231's value is
+  // chosen. With no knob the existing inline top (or CSS fallback) is kept.
+  const taskRingOffset = readTaskRingOffset(
     typeof window === "undefined" ? "" : window.location.search,
-    import.meta.env.DEV,
   );
   const resolvedTopOffset = $derived(
-    taskRingTopWithDevOffset(topOffset, devTaskRingOffset),
+    taskRingTopWithDevOffset(topOffset, taskRingOffset),
   );
 
   // Must equal @keyframes task-ring-orbit's `animation` duration below —
@@ -222,8 +221,10 @@
      問題を起こした 12% との差分 (sprite ケースで約 17.9px 相当) の半分
      未満であり、6 時相のグレア同化を再現しない範囲と判断。
 
-     Dev Vite では `?taskRingOffset=N` でこの pixel 項だけを一時的に
-     差し替えられる。パラメータ無しの既定値と production build は不変。 */
+     Dev Vite または dogfood の production bundle では
+     `?taskRingOffset=N` でこの pixel 項だけを一時的に差し替えられる。
+     パラメータ無しの既定値は不変。値の決定後、issue #231 の 2nd delta
+     でこの調整穴を削除する。 */
   .task-ring {
     position: absolute;
     left: 50%;

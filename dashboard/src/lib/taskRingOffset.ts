@@ -1,16 +1,12 @@
 const TASK_RING_OFFSET_PARAM = "taskRingOffset";
 
 /**
- * Read the temporary TaskRing tuning knob without ever accepting it in a
- * production build. The numeric conversion also prevents a query value from
- * becoming part of a CSS declaration verbatim.
+ * Read the temporary TaskRing tuning knob. The numeric conversion prevents a
+ * query value from becoming part of a CSS declaration verbatim. This remains
+ * deliberately usable in the release-style dogfood bundle; the knob is
+ * removed after issue #231's visual value is chosen.
  */
-export function readDevTaskRingOffset(
-  search: string,
-  isDev: boolean,
-): number | null {
-  if (!isDev) return null;
-
+export function readTaskRingOffset(search: string): number | null {
   const raw = new URLSearchParams(search).get(TASK_RING_OFFSET_PARAM);
   if (raw === null || raw.trim() === "") return null;
 

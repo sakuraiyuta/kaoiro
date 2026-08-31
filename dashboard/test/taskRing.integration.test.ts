@@ -8,7 +8,7 @@ import { mount, tick, unmount } from "svelte";
 import { afterEach, describe, expect, it } from "vitest";
 import TaskRing from "../src/lib/TaskRing.svelte";
 import {
-  readDevTaskRingOffset,
+  readTaskRingOffset,
   taskRingTopWithDevOffset,
 } from "../src/lib/taskRingOffset";
 
@@ -147,9 +147,10 @@ describe("TaskRing (issue #233)", () => {
     }
   });
 
-  it("taskRingOffset は production 判定では無視する", () => {
-    expect(readDevTaskRingOffset("?taskRingOffset=14", false)).toBeNull();
-    expect(readDevTaskRingOffset("?taskRingOffset=bad", true)).toBeNull();
+  it("taskRingOffset は有限な数値だけを受け付ける", () => {
+    expect(readTaskRingOffset("?taskRingOffset=14")).toBe(14);
+    expect(readTaskRingOffset("?taskRingOffset=bad")).toBeNull();
+    expect(readTaskRingOffset("?taskRingOffset=")).toBeNull();
     expect(taskRingTopWithDevOffset("calc(6% + 8px)", null)).toBe(
       "calc(6% + 8px)",
     );
