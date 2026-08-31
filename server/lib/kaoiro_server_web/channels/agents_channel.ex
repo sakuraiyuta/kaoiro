@@ -94,6 +94,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   alias KaoiroServer.HostRegistry
   alias KaoiroServer.PersonaAssets
   alias KaoiroServer.PlannedDisconnects
+  alias KaoiroServer.SessionLifecycleEvents
   alias KaoiroServer.SessionPointers
   alias KaoiroServer.SessionResets
   alias KaoiroServer.TaskStates
@@ -694,6 +695,14 @@ defmodule KaoiroServerWeb.AgentsChannel do
         "agents:lobby",
         "session_reset_started",
         started_payload(agent_id, mode, request_id, prev_sid, "operator")
+      )
+
+      # ADR-0055 phase-33 Stage B.
+      SessionLifecycleEvents.append(
+        agent_id,
+        "session_reset_started",
+        nil,
+        DateTime.utc_now() |> DateTime.to_iso8601()
       )
 
       KaoiroServerWeb.Endpoint.broadcast(

@@ -10,6 +10,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
   alias KaoiroServer.ConversationStates
   alias KaoiroServer.DeliveryStates
   alias KaoiroServer.PlannedDisconnects
+  alias KaoiroServer.SessionLifecycleEvents
   alias KaoiroServer.SessionPointers
   alias KaoiroServer.TaskStates
   alias KaoiroServer.TokenDenylist
@@ -427,6 +428,28 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
     assert owner == socket.channel_pid
     assert is_binary(started_at)
+  end
+
+  # ADR-0055 phase-33 Stage B (director裁定 2026-08-31): a reset-driven
+  # rejoin records ONLY session_reset_completed — never also reconnected,
+  # even though the same PeerConnectivity.confirm_connection call underlies
+  # both. Same setup as "after_join は confirm→Activity pending→activate…"
+  # above, checked against the recorded timeline instead of AgentActivity.
+  test "reset 起因の rejoin は session_lifecycle へ session_reset_completed だけを記録する" do
+    agent_id = "test.lifecycle-reset-completed-#{System.unique_integer([:positive])}"
+    on_exit(fn -> KaoiroServer.SessionStarts.delete(agent_id) end)
+
+    assert {:ok, request_id, _} =
+             KaoiroServer.SessionResets.check_and_acquire(agent_id, "new", "idle", "old")
+
+    :ok = KaoiroServer.SessionResets.resolve(agent_id, request_id, true, nil, "new")
+    :sys.get_state(KaoiroServer.SessionResets)
+
+    _socket = join_wrapper(agent_id, "default", %{"transition_id" => request_id})
+    :sys.get_state(KaoiroServer.AgentActivity)
+
+    assert [%{kind: "session_reset_completed", trigger: nil}] =
+             SessionLifecycleEvents.list_for_agent(agent_id)
   end
 
   describe "persona_sync push on join (issue #197 段階3, D14 acceptance 1, revised issue #219 D22)" do
@@ -1774,6 +1797,85 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
           }
         }
       }
+    end
+
+    # ADR-0055 phase-33 Stage B: the same planned disconnect -> matching
+    # join cycle as the test above, checked against the recorded timeline
+    # instead of the peer-facing broadcast.
+    test "planned 切断 -> matching join は session_lifecycle へ reconnecting -> reconnected の順で記録する" do
+      agent_id = "test.lifecycle-planned-cycle"
+      old_socket = seed_known(agent_id)
+
+      assert :ok = PlannedDisconnects.begin(agent_id, "transition-lifecycle", :restart)
+
+      Process.unlink(old_socket.channel_pid)
+      :ok = close(old_socket)
+
+      assert [%{kind: "reconnecting", trigger: nil}] =
+               SessionLifecycleEvents.list_for_agent(agent_id)
+
+      _new_socket =
+        join_wrapper(agent_id, "default", %{"transition_id" => "transition-lifecycle"})
+
+      assert [
+               %{kind: "reconnected", trigger: nil},
+               %{kind: "reconnecting", trigger: nil}
+             ] = SessionLifecycleEvents.list_for_agent(agent_id)
+    end
+
+    test "予告なし切断は session_lifecycle へ disconnected を記録する" do
+      agent_id = "test.lifecycle-unplanned-disconnect"
+      socket = seed_known(agent_id)
+
+      Process.unlink(socket.channel_pid)
+      :ok = close(socket)
+
+      assert [%{kind: "disconnected", trigger: nil}] =
+               SessionLifecycleEvents.list_for_agent(agent_id)
+    end
+
+    test "session_lifecycle inbound event は kind/trigger/at を記録する (well-formed)" do
+      agent_id = "test.lifecycle-inbound-wellformed"
+      socket = seed_known(agent_id)
+
+      ref =
+        push(socket, "session_lifecycle", %{
+          "kind" => "compact_boundary",
+          "trigger" => "request_compact",
+          "at" => "2026-08-31T00:00:00Z"
+        })
+
+      assert_reply ref, :ok
+
+      assert [
+               %{
+                 kind: "compact_boundary",
+                 trigger: "request_compact",
+                 at: "2026-08-31T00:00:00Z"
+               }
+             ] = SessionLifecycleEvents.list_for_agent(agent_id)
+    end
+
+    test "session_lifecycle inbound event は trigger 省略時 nil で記録する" do
+      agent_id = "test.lifecycle-inbound-no-trigger"
+      socket = seed_known(agent_id)
+
+      ref = push(socket, "session_lifecycle", %{"kind" => "compacting", "at" => "T"})
+
+      assert_reply ref, :ok
+
+      assert [%{kind: "compacting", trigger: nil}] =
+               SessionLifecycleEvents.list_for_agent(agent_id)
+    end
+
+    test "session_lifecycle inbound event は malformed payload を無視して落とさない" do
+      agent_id = "test.lifecycle-inbound-malformed"
+      socket = seed_known(agent_id)
+
+      ref = push(socket, "session_lifecycle", %{"kind" => 42, "at" => "T"})
+
+      assert_reply ref, :ok
+      assert SessionLifecycleEvents.list_for_agent(agent_id) == []
     end
 
     test "planned window 中は IA を preflight bounce し pane・conversation・ledger を変更しない" do
@@ -4109,6 +4211,10 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
       assert %{transition_id: ^request_id, kind: :reset, phase: :announced} =
                PlannedDisconnects.get(agent_id)
+
+      # ADR-0055 phase-33 Stage B.
+      assert [%{kind: "session_reset_started", trigger: nil}] =
+               SessionLifecycleEvents.list_for_agent(agent_id)
     end
 
     test "busy agent の self request は agent_busy で拒否する" do

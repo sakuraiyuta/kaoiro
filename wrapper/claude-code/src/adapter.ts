@@ -387,6 +387,16 @@ export interface CompactNotice {
    *  for every kind except `compact_boundary`, and `post` is absent whenever
    *  the boundary omitted it (the SDK declares it optional). */
   tokens?: { pre?: number; post?: number };
+  /** The SDK's own `compact_metadata.trigger` ("auto" | "manual"), present
+   *  only for `compact_boundary` (ADR-0055 phase-33 Stage B). This is the
+   *  SDK's account of whether IT decided to compact or something queued
+   *  `/compact` — it cannot distinguish request_compact from an operator
+   *  typing `/compact` directly, both of which read "manual". The host
+   *  combines this with its own FIFO reservation state (which DOES know
+   *  request_compact specifically) to derive the recorded lifecycle
+   *  trigger; this field alone is not that final value. Absent when the
+   *  metadata omitted or malformed it. */
+  sdkTrigger?: "auto" | "manual";
 }
 
 /** Reads `compact_metadata` defensively: the SDK type declares
@@ -429,6 +439,19 @@ function compactBoundaryTokens(
   return tokens;
 }
 
+/** Same defensive read as `compactBoundaryText`, but returning the raw
+ *  `"auto" | "manual"` value rather than a rendered word (ADR-0055 phase-33
+ *  Stage B). Any other value (missing, malformed, a future SDK addition) is
+ *  simply omitted — the caller must not guess a lifecycle trigger from an
+ *  unrecognized value. */
+function compactBoundaryTrigger(
+  metadata: unknown,
+): "auto" | "manual" | undefined {
+  if (!isRecord(metadata)) return undefined;
+  const { trigger } = metadata;
+  return trigger === "auto" || trigger === "manual" ? trigger : undefined;
+}
+
 /** Maps one SDK message to its compaction / reset notice, or null when it
  *  carries none. Pure, like the other sdkMessageTo* mappers; the host owns
  *  the emit and the follow-up context refresh. Deliberately kept out of
@@ -453,10 +476,12 @@ export function sdkMessageToCompactNotice(
     const metadata = (message as { compact_metadata?: unknown })
       .compact_metadata;
     const tokens = compactBoundaryTokens(metadata);
+    const sdkTrigger = compactBoundaryTrigger(metadata);
     return {
       kind: "compact_boundary",
       text: compactBoundaryText(metadata),
       ...(tokens !== undefined ? { tokens } : {}),
+      ...(sdkTrigger !== undefined ? { sdkTrigger } : {}),
     };
   }
   if (message.subtype !== "status") return null;

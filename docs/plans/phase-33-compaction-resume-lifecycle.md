@@ -31,14 +31,22 @@ verification (resumption on an actual compact_boundary) has not been performed.
 
 ## Stage B — session_lifecycle recording
 
-- [ ] Add a wrapper→server `session_lifecycle` event (kind / trigger / occurrence
+- [x] Add a wrapper→server `session_lifecycle` event (kind / trigger / occurrence
       time)
-- [ ] Wrapper producer: compact start/complete (trigger: request_compact /
-      sdk_auto), threshold-notice firing, resume_reserved / resume_fired
-- [ ] Merge server-side disconnect / reconnect / session reset into the same
-      timeline
-- [ ] Retain in DETS (10,000 entries per agent by default; discard oldest;
+- [x] Wrapper producer: compact start/complete/failed (trigger: request_compact,
+      resolved from the wrapper's own FIFO reservation queue; falls back to the
+      SDK's own account — `sdk_auto` / `manual`, director裁定 2026-08-31 —
+      when the queue has no entry for this boundary), threshold-notice firing,
+      resume_reserved / resume_fired, conversation_reset
+- [x] Merge server-side disconnect / reconnecting / reconnected / session_reset
+      started / completed into the same timeline (a reset-driven rejoin
+      records only `session_reset_completed`, never also `reconnected`)
+- [x] Retain in DETS (10,000 entries per agent by default; discard oldest;
       configurable with `SESSION_LIFECYCLE_MAX_EVENTS_PER_AGENT`)
+
+Acceptance: `docs/specs/protocol.md`'s `session_lifecycle` row documents the
+finalized `kind`/`trigger` enumeration. Implementation and automated tests
+(wrapper + server) are complete (2026-08-31).
 
 ## Stage C — operator query
 

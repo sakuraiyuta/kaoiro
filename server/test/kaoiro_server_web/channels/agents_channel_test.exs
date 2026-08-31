@@ -5119,6 +5119,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       assert %{transition_id: ^request_id, kind: :reset, phase: :announced} =
                PlannedDisconnects.get(agent_id)
+
+      # ADR-0055 phase-33 Stage B.
+      assert [%{kind: "session_reset_started", trigger: nil}] =
+               KaoiroServer.SessionLifecycleEvents.list_for_agent(agent_id)
     end
 
     test "envelope に session_id が無ければ reset_session payload に previous_session_id を載せない" do

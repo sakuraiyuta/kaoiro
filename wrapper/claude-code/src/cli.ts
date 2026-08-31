@@ -26,6 +26,10 @@ import { fileURLToPath } from "node:url";
 import { parseCliArgs } from "@kaoiro/wrapper-core";
 import { readSessionHistory, sessionSidecarPath } from "./history.js";
 import { AgentHost, CLAUDE_EFFORT_LEVELS } from "./host.js";
+import type {
+  SessionLifecycleKind,
+  SessionLifecycleTrigger,
+} from "./host.js";
 import { handleInterAgentMessage } from "./inter_agent_message_handler.js";
 import {
   InterAgentIngressGate,
@@ -391,6 +395,17 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
    *  Both are aggregation data, not this agent's console transcript. */
   const onTask = (envelope: Envelope): void => {
     link?.send(envelope);
+  };
+
+  /** Reports one `session_lifecycle` event (ADR-0055, phase-33 Stage B).
+   *  Recording only — no console echo, no reply expected, same
+   *  fire-and-forget shape as `delivery_ack`. */
+  const onSessionLifecycle = (
+    kind: SessionLifecycleKind,
+    trigger: SessionLifecycleTrigger | undefined,
+    at: string,
+  ): void => {
+    link?.reportSessionLifecycle(kind, trigger, at);
   };
 
   /** Wrapper-authored operator line (phase-28 A1's `system` log kind). */
@@ -795,6 +810,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     onState,
     onLog,
     onTask,
+    onSessionLifecycle,
     // phase-28 BR MF2: the B1 threshold notice is an injection like any
     // other, so it queues on the one chain instead of racing it.
     enqueueInjection: enqueueInstruction,

@@ -29,6 +29,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   alias KaoiroServer.IngressOrder
   alias KaoiroServer.PersonaAssets
   alias KaoiroServer.PlannedDisconnects
+  alias KaoiroServer.SessionLifecycleEvents
   alias KaoiroServer.SessionPointers
   alias KaoiroServer.SessionResets
   alias KaoiroServer.SessionStarts
@@ -97,6 +98,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
     "history_replay_complete" => :versioned,
     "replay_ia" => :versioned,
     "session_reset_request" => :versioned,
+    "session_lifecycle" => :versioned,
     "envelope" => :envelope_frame
   }
 
@@ -251,7 +253,35 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
       push_persona_sync(socket, agent_id)
       broadcast_delivery_status(agent_id)
-      _ = PeerConnectivity.confirm_connection(agent_id, transition_id)
+
+      # ADR-0055 phase-33 Stage B (director裁定 2026-08-31): a reset-driven
+      # rejoin (reset_result matched/legacy_absent) is recorded ONLY as
+      # session_reset_completed, never also as reconnected — the same
+      # `PeerConnectivity.confirm_connection` call underneath both would
+      # otherwise double-count one physical rejoin as two timeline entries.
+      if reset_result in [:matched, :legacy_absent] do
+        _ = PeerConnectivity.confirm_connection(agent_id, transition_id)
+
+        SessionLifecycleEvents.append(
+          agent_id,
+          "session_reset_completed",
+          nil,
+          DateTime.utc_now() |> DateTime.to_iso8601()
+        )
+      else
+        case PeerConnectivity.confirm_connection(agent_id, transition_id) do
+          :reconnected ->
+            SessionLifecycleEvents.append(
+              agent_id,
+              "reconnected",
+              nil,
+              DateTime.utc_now() |> DateTime.to_iso8601()
+            )
+
+          _ ->
+            :ok
+        end
+      end
 
       :ok
     end
@@ -516,6 +546,23 @@ defmodule KaoiroServerWeb.WrapperChannel do
     {:reply, :ok, socket}
   end
 
+  # ADR-0055 phase-33 Stage B: recording only, no reply payload and no
+  # peer notification (matching delivery_ack's fire-and-forget shape —
+  # the wrapper never attaches a receiver). `trigger` is optional per
+  # protocol.md; a malformed/missing `kind` or `at` falls through to the
+  # no-op clause below rather than crashing the channel.
+  defp handle_wrapper_in("session_lifecycle", %{"kind" => kind, "at" => at} = payload, socket)
+       when is_binary(kind) and is_binary(at) do
+    trigger = Map.get(payload, "trigger")
+    trigger = if is_binary(trigger), do: trigger, else: nil
+    SessionLifecycleEvents.append(socket.assigns.agent_id, kind, trigger, at)
+    {:reply, :ok, socket}
+  end
+
+  defp handle_wrapper_in("session_lifecycle", _payload, socket) do
+    {:reply, :ok, socket}
+  end
+
   # Resume history reconstruction (ADR-0014 phase-2, issue #50): the wrapper
   # is about to replay its JSONL-derived transcript as `log` envelopes, so it
   # first asks the server to drop the agent's current ring buffer (overwrite,
@@ -653,6 +700,14 @@ defmodule KaoiroServerWeb.WrapperChannel do
         "agents:lobby",
         "session_reset_started",
         started_reset_payload(agent_id, mode, request_id, prev_sid, reason)
+      )
+
+      # ADR-0055 phase-33 Stage B.
+      SessionLifecycleEvents.append(
+        agent_id,
+        "session_reset_started",
+        nil,
+        DateTime.utc_now() |> DateTime.to_iso8601()
       )
 
       KaoiroServerWeb.Endpoint.broadcast(
@@ -1449,7 +1504,14 @@ defmodule KaoiroServerWeb.WrapperChannel do
         KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
         # Only on an adopted disconnect: a stale terminate that lost the
         # entry to a reconnect must not tell peers the agent is gone.
-        _ = PeerConnectivity.disconnect(agent_id, ts)
+        # ADR-0055 phase-33 Stage B: merge server-known disconnect into the
+        # same timeline as wrapper-observed compact/resume events. `:planned`
+        # means `reconnecting` was the peer-facing notice (a reconnect is
+        # expected); `:unexpected` means the terminal `disconnected` was.
+        case PeerConnectivity.disconnect(agent_id, ts) do
+          :planned -> SessionLifecycleEvents.append(agent_id, "reconnecting", nil, ts)
+          :unexpected -> SessionLifecycleEvents.append(agent_id, "disconnected", nil, ts)
+        end
 
       :noop ->
         :ok

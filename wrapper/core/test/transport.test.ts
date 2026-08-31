@@ -1271,19 +1271,25 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
     history_replay_complete: (link) => link.sendHistoryReplayComplete("r"),
     directory_request: (link) => void link.requestDirectory(),
     session_reset_request: (link) => void link.requestSessionReset("new").catch(() => {}),
+    session_lifecycle: (link) =>
+      link.reportSessionLifecycle(
+        "threshold_notice",
+        undefined,
+        "2026-08-31T00:00:00Z",
+      ),
   };
 
   it("T1-1: fire 表は production policy の versioned 集合と完全一致する", () => {
     expect(Object.keys(fire).sort()).toEqual(versioned());
   });
 
-  it("T1-2: 7種すべてを実際に送る", () => {
+  it("T1-2: 8種すべてを実際に送る", () => {
     const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
     for (const trigger of Object.values(fire)) trigger(link);
     expect(mock.pushes.map((push) => push.event).sort()).toEqual(versioned());
   });
 
-  it("T1-3: 7種すべての payload に flat version を stamp する", () => {
+  it("T1-3: 8種すべての payload に flat version を stamp する", () => {
     const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
     for (const trigger of Object.values(fire)) trigger(link);
     for (const push of mock.pushes) expect(push.payload).toMatchObject({ version: "0" });

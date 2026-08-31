@@ -202,6 +202,7 @@ export const WRAPPER_CONTROL_EVENT_POLICY = {
   history_replay_complete: "versioned",
   directory_request: "versioned",
   session_reset_request: "versioned",
+  session_lifecycle: "versioned",
   envelope: "envelopeFrame",
 } as const satisfies Record<string, "versioned" | "envelopeFrame">;
 
@@ -1171,6 +1172,25 @@ export class ServerLink {
   acknowledgeInterAgentDelivery(deliverySeq: number): void {
     if (!Number.isSafeInteger(deliverySeq) || deliverySeq <= 0) return;
     this.#pushVersioned("delivery_ack", { delivery_seq: deliverySeq });
+  }
+
+  /** Reports one `session_lifecycle` event (ADR-0055, phase-33 Stage B;
+   *  protocol.md "session_lifecycle"). `kind`/`trigger` stay plain strings
+   *  here — `core` is engine-agnostic and does not know the Claude-specific
+   *  compact/resume vocabulary the caller (claude-code's host.ts) produces.
+   *  Fire-and-forget: recording only, no reply is awaited (same shape as
+   *  `acknowledgeInterAgentDelivery` above). */
+  reportSessionLifecycle(
+    kind: string,
+    trigger: string | undefined,
+    at: string,
+  ): void {
+    if (kind === "" || at === "") return;
+    this.#pushVersioned("session_lifecycle", {
+      kind,
+      ...(trigger !== undefined ? { trigger } : {}),
+      at,
+    });
   }
 
   /** Reads this wrapper's ledger independently of directory peers. */

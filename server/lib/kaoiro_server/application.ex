@@ -42,6 +42,9 @@ defmodule KaoiroServer.Application do
       # Session-transition start records are intentionally independent from
       # visibility: only clear_history adopts one into ClearWatermarks (#109).
       KaoiroServer.SessionStarts,
+      # Restart-surviving per-agent session_lifecycle timeline (ADR-0055,
+      # phase-33 Stage B) — recording only, no peer notification.
+      KaoiroServer.SessionLifecycleEvents,
       # Recipient-local dispatch-confirmation watermarks (#247).  This is
       # observational state only: no payloads and no retransmission queue.
       KaoiroServer.DeliveryStates,

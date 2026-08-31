@@ -52,7 +52,12 @@ describe("Claude CLI request_compact -> resume_prompt composition (issue #200 St
       signalNoteSeen = resolve;
     });
 
-    const link = { close: () => {}, currentSessionId: () => null, send: () => {} };
+    const link = {
+      close: () => {},
+      currentSessionId: () => null,
+      send: () => {},
+      reportSessionLifecycle: () => {},
+    };
 
     const secretReason = "SECRET-REASON-must-not-leak-into-resume-text";
     // Leading newline, an embedded sentence impersonating the real fixed

@@ -227,6 +227,9 @@ describe("sdkMessageToCompactNotice", () => {
       // BR MF1-R: host は表示文字列ではなく数値そのものを要る。undeclared
       // な extras (cumulative_dropped_tokens) は載せない。
       tokens: { pre: 22315, post: 882 },
+      // ADR-0055 phase-33 Stage B: raw trigger も host が要る (session_lifecycle
+      // の trigger 判定材料)。
+      sdkTrigger: "manual",
     });
   });
 
@@ -245,6 +248,7 @@ describe("sdkMessageToCompactNotice", () => {
       kind: "compact_boundary",
       text: "手動コンテキスト圧縮が完了しました (前 293221 tokens)",
       tokens: { pre: 293221 },
+      sdkTrigger: "manual",
     });
   });
 
@@ -262,6 +266,21 @@ describe("sdkMessageToCompactNotice", () => {
       }),
     );
     expect(notice?.text).toBe("自動コンテキスト圧縮が完了しました (前 100 tokens)");
+    expect(notice?.sdkTrigger).toBe("auto");
+  });
+
+  // ADR-0055 phase-33 Stage B: an unrecognized trigger value (future SDK
+  // addition, or a malformed field) must not be guessed into "auto" or
+  // "manual" — omit it rather than mislabel the lifecycle record.
+  it("未知の trigger 値は sdkTrigger を省略する", () => {
+    const notice = sdkMessageToCompactNotice(
+      msg({
+        type: "system",
+        subtype: "compact_boundary",
+        compact_metadata: { trigger: "scheduled", pre_tokens: 100 },
+      }),
+    );
+    expect(notice).not.toHaveProperty("sdkTrigger");
   });
 
   it("compact_metadata が欠けても通知は落とさない", () => {

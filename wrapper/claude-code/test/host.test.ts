@@ -12,7 +12,11 @@ import {
   CONTEXT_NOTICE_THRESHOLD_PERCENT,
   initialStatusExt,
 } from "../src/host.js";
-import type { AgentHostOptions } from "../src/host.js";
+import type {
+  AgentHostOptions,
+  SessionLifecycleKind,
+  SessionLifecycleTrigger,
+} from "../src/host.js";
 import { INTER_AGENT_TOOL_FQN, makeStateChange } from "@kaoiro/agent-common";
 import {
   REQUEST_COMPACT_TOOL_FQN,
@@ -1542,6 +1546,171 @@ describe("AgentHost — query injection", () => {
       // boundary 1 — a FIFO that dropped the null marker would shift this
       // entry to fire one boundary early with the exact same text.
       expect(firedAtBoundary).toEqual([2]);
+    });
+  });
+
+  describe("session_lifecycle 発火 (ADR-0055 phase-33 Stage B)", () => {
+    type LifecycleEvent = {
+      kind: SessionLifecycleKind;
+      trigger?: SessionLifecycleTrigger;
+      at: string;
+    };
+
+    function lifecycleQueryFn(
+      messages: SDKMessage[],
+    ): { queryFn: QueryFn; events: LifecycleEvent[] } {
+      const events: LifecycleEvent[] = [];
+      return {
+        queryFn: scriptedQuery(messages),
+        events,
+      };
+    }
+
+    function makeHost(
+      events: LifecycleEvent[],
+      queryFn: QueryFn,
+    ): AgentHost {
+      return new AgentHost(config, {
+        onState: () => {},
+        onSessionLifecycle: (kind, trigger, at) => {
+          events.push(
+            trigger === undefined ? { kind, at } : { kind, trigger, at },
+          );
+        },
+        queryFn,
+        now: () => "T",
+        enqueueInjection: (task) => task(),
+      });
+    }
+
+    const boundary = (metadata: Record<string, unknown> = {}): SDKMessage =>
+      msg({
+        type: "system",
+        subtype: "compact_boundary",
+        compact_metadata: { trigger: "manual", pre_tokens: 1000, ...metadata },
+      });
+
+    it("compacting 観測で kind=compacting を trigger 無しで報告する", async () => {
+      const { queryFn, events } = lifecycleQueryFn([
+        msg({ type: "system", subtype: "status", status: "compacting" }),
+      ]);
+      await makeHost(events, queryFn).run();
+      expect(events).toEqual([{ kind: "compacting", at: "T" }]);
+    });
+
+    it("compact_failed 観測で kind=compact_failed を trigger 無しで報告する", async () => {
+      const { queryFn, events } = lifecycleQueryFn([
+        msg({
+          type: "system",
+          subtype: "status",
+          status: null,
+          compact_result: "failed",
+        }),
+      ]);
+      await makeHost(events, queryFn).run();
+      expect(events).toEqual([{ kind: "compact_failed", at: "T" }]);
+    });
+
+    it("conversation_reset 観測で kind=conversation_reset を trigger 無しで報告する", async () => {
+      const { queryFn, events } = lifecycleQueryFn([
+        msg({ type: "conversation_reset", new_conversation_id: "c-2" }),
+      ]);
+      await makeHost(events, queryFn).run();
+      expect(events).toEqual([{ kind: "conversation_reset", at: "T" }]);
+    });
+
+    it("FIFO に対応する予約があれば trigger=request_compact (SDK trigger は無視)", async () => {
+      const { queryFn, events } = lifecycleQueryFn([
+        boundary({ trigger: "auto" }), // SDK says auto; our own FIFO wins.
+        result("success", { result: "ok" }),
+      ]);
+      const host = makeHost(events, queryFn);
+      host.reserveResume(null); // request_compact call with no resume_prompt
+      await host.run();
+      expect(events[0]).toMatchObject({
+        kind: "compact_boundary",
+        trigger: "request_compact",
+      });
+    });
+
+    it("FIFO が空なら SDK trigger=auto を trigger=sdk_auto として報告する", async () => {
+      const { queryFn, events } = lifecycleQueryFn([
+        boundary({ trigger: "auto" }),
+        result("success", { result: "ok" }),
+      ]);
+      await makeHost(events, queryFn).run();
+      expect(events[0]).toEqual({
+        kind: "compact_boundary",
+        trigger: "sdk_auto",
+        at: "T",
+      });
+    });
+
+    it("FIFO が空なら SDK trigger=manual を trigger=manual として報告する (operator 直接 /compact 等)", async () => {
+      const { queryFn, events } = lifecycleQueryFn([
+        boundary({ trigger: "manual" }),
+        result("success", { result: "ok" }),
+      ]);
+      await makeHost(events, queryFn).run();
+      expect(events[0]).toEqual({
+        kind: "compact_boundary",
+        trigger: "manual",
+        at: "T",
+      });
+    });
+
+    it("FIFO が空かつ SDK trigger も無ければ trigger を省略する", async () => {
+      const { queryFn, events } = lifecycleQueryFn([
+        boundary({ trigger: undefined }),
+        result("success", { result: "ok" }),
+      ]);
+      await makeHost(events, queryFn).run();
+      expect(events[0]).toEqual({ kind: "compact_boundary", at: "T" });
+    });
+
+    it("resume_prompt 付き予約は resume_reserved を報告し、null 予約は報告しない", async () => {
+      const { queryFn, events } = lifecycleQueryFn([]);
+      const host = makeHost(events, queryFn);
+      host.reserveResume(null);
+      host.reserveResume("続きはここから");
+      await host.run();
+      expect(events).toEqual([{ kind: "resume_reserved", at: "T" }]);
+    });
+
+    it("compact_boundary で実発火すると compact_boundary の直後に resume_fired を報告する", async () => {
+      const { queryFn, events } = lifecycleQueryFn([
+        boundary({ trigger: "auto" }),
+        result("success", { result: "ok" }),
+      ]);
+      const host = makeHost(events, queryFn);
+      host.reserveResume("続きはここから");
+      await host.run();
+      expect(events.map((e) => e.kind)).toEqual([
+        "resume_reserved",
+        "compact_boundary",
+        "resume_fired",
+      ]);
+      expect(events[1]).toMatchObject({ trigger: "request_compact" });
+    });
+
+    it("閾値通知の発火で kind=threshold_notice を trigger 無しで報告する", async () => {
+      const events: LifecycleEvent[] = [];
+      const queryFn = makeQueryFn(() => {
+        async function* gen(): AsyncGenerator<SDKMessage, void> {
+          yield result("success", { result: "ok" });
+        }
+        return asQuery(
+          gen(),
+          async () => {},
+          async () => ({
+            totalTokens: 180_000,
+            maxTokens: 200_000,
+            percentage: 90,
+          }),
+        );
+      });
+      await makeHost(events, queryFn).run();
+      expect(events).toEqual([{ kind: "threshold_notice", at: "T" }]);
     });
   });
 
