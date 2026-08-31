@@ -1,5 +1,5 @@
 ---
-title: Claude Agent SDK を統合方式に採用
+title: Adopt Claude Agent SDK as the integration approach
 status: accepted
 date: 2026-06-04
 opened: 2026-06-04
@@ -9,7 +9,7 @@ related_specs: [architecture, plugin-model, protocol, agent-sdk-events]
 related_adrs: [2, 14, 17]
 ---
 
-# ADR-0001 — Claude Agent SDK を統合方式に採用
+# ADR-0001 — Adopt Claude Agent SDK as the Integration Approach
 
 ## Status
 
@@ -17,45 +17,50 @@ Accepted
 
 ## Context
 
-CLI エージェント(Claude Code)を観測・制御する手段が問題だった。端末出力を
-PTY スクレイプするのは TUI エスケープで脆い。CLI ヘッドレス
-(`claude -p --output-format stream-json`)は観測はできるが one-shot で、実行中
-セッションへの指示注入(穴1)と権限承認の外部ルーティングが弱い。観測・制御・
-権限を1機構で扱える surface が必要だった。
+The means of observing and controlling CLI agents (Claude Code) was a problem.
+Scraping terminal output via PTY is brittle because of TUI escapes. The CLI
+headless mode (`claude -p --output-format stream-json`) allows observation but
+is one-shot; the injection of instructions into a running session (hole 1) and
+the external routing of permission approvals are weak. A surface that could handle
+observation, control, and permissions in a single mechanism was needed.
 
 ## Decision
 
-ラッパーは公式 **Claude Agent SDK**(TypeScript: `@anthropic-ai/
-claude-agent-sdk`)をホストする。
+The wrapper will host the official **Claude Agent SDK** (TypeScript:
+`@anthropic-ai/claude-agent-sdk`).
 
-- 観測: 型付きメッセージ列(`SystemMessage`/`AssistantMessage`/`ResultMessage`)
-  から状態を導出。
-- 制御(穴1): セッション resume / ストリーミング入力で多ターン制御。
-- 権限: `PreToolUse` フック / `canUseTool` コールバックで承認を保留し、外部 UI へ
-  回す。
+- Observation: Derive state from typed message sequences
+  (`SystemMessage`/`AssistantMessage`/`ResultMessage`).
+- Control (hole 1): Multi-turn control through session resume / streaming
+  input.
+- Permissions: Hold approvals with `PreToolUse` hooks / `canUseTool` callbacks
+  and route them to the external UI.
 
 ## Consequences
 
 ### Positive
 
-- 観測・制御・権限ルーティングが1つのインプロセス機構に統合、PTY 不要。
-- 穴1(指示注入)が同一機構で解決。
-- 型安全で、権限承認をクライアント UI へ回せる。
+- Observation, control, and permission routing are integrated into a single
+  in-process mechanism, eliminating the need for PTY.
+- Hole 1 (instruction injection) is resolved by the same mechanism.
+- It is type-safe, and permission approvals can be routed to the client UI.
 
 ### Negative
 
-- ラッパーは Python/TS に限定(Elixir 不可)。サーバ(Elixir)と2言語構成になる。
-- SDK の細部(ストリーミング入力 / `Query.interrupt()` / `canUseTool` 戻り値)は
-  **確定済み**([agent-sdk-events](../specs/agent-sdk-events.md)、2026-06 検証)。
+- The wrapper is limited to Python/TS (Elixir cannot be used). This results in
+  a two-language configuration with the server (Elixir).
+- The SDK details (streaming input / `Query.interrupt()` / `canUseTool` return
+  values) are **confirmed** ([agent-sdk-events](../specs/agent-sdk-events.md),
+  verified in 2026-06).
 
 ### Neutral
 
-- クライアントも TS のため、ラッパー+クライアントが同言語になる。
+- Since the client is also TS, the wrapper and client use the same language.
 
 ## Alternatives Considered
 
 | Option | Why rejected |
 |--------|--------------|
-| CLI stream-json | one-shot。権限は MCP ツール経由のみで外部 UI 連携が弱い |
-| PTY スクレイプ | TUI エスケープで脆く、パースが不安定 |
-| Elixir で CLI を port 起動 | in-process の権限コールバック/多ターン注入が使えない |
+| CLI stream-json | One-shot. Permissions are available only through MCP tools, making external UI integration weak |
+| PTY scraping | Brittle due to TUI escapes, with unstable parsing |
+| Launching the CLI as a port from Elixir | In-process permission callbacks / multi-turn injection are unavailable |

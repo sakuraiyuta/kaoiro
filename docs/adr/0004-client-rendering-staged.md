@@ -1,5 +1,5 @@
 ---
-title: 描画は静的差分から、将来アニメ/3D を選択制
+title: Rendering starts with static variants; animation/3D selectable in the future
 status: accepted
 date: 2026-06-04
 opened: 2026-06-04
@@ -9,7 +9,7 @@ related_specs: [architecture]
 related_adrs: [3, 7]
 ---
 
-# ADR-0004 — 描画は静的差分から、将来アニメ/3D を選択制
+# ADR-0004 — Rendering Starts with Static Variants; Animation/3D Selectable in the Future
 
 ## Status
 
@@ -17,35 +17,39 @@ Accepted
 
 ## Context
 
-クライアントのキャラ描画技術をどこまで作り込むかが問題だった。Live2D 的な
-アニメや 3D は表現力が高いが、コストが大きく OSS 代替の調査も未了。プロトタイプ
-段階では実装速度を優先したい。
+How far to develop the client's character-rendering technology was a problem.
+Live2D-style animation and 3D are highly expressive, but costly, and research
+into OSS alternatives is incomplete. At the prototype stage, implementation
+speed should be prioritized.
 
 ## Decision
 
-- プロトタイプは**静的な表情差分の切り替え**で実装する。
-- 将来、Live2D 的 2D アニメーションの **OSS 代替**や **3D モデルキャラ**の実装
-  可能性を調査・検討し、技術的に可能なら**ペルソナごとに「静的差分/アニメ/3D」を
-  選択可能**にする。
+- The prototype will be implemented with **switching static expression
+  variants**.
+- In the future, investigate and consider the implementation possibilities of
+  **OSS alternatives** for Live2D-style 2D animation and **3D model characters**.
+  If technically possible, make **"static variants/animation/3D" selectable per
+  persona**.
 
 ## Consequences
 
 ### Positive
 
-- 早期に実装可能。表情差分素材は手持ちの ComfyUI で量産できる。
+- Implementable early. Expression-variant assets can be mass-produced with the
+  available ComfyUI setup.
 
 ### Negative
 
-- 将来の描画種別追加に備え、`persona` に描画種別を持たせる必要がある
-  ([ADR-0003](0003-persona-identity-persistence.md))。
+- To prepare for adding drawing types in the future, `persona` must carry the
+  drawing type ([ADR-0003](0003-persona-identity-persistence.md)).
 
 ### Neutral
 
-- 描画種別の選択はペルソナ単位なので、段階的に拡張できる。
+- Drawing-type selection is per persona, so it can be extended incrementally.
 
 ## Alternatives Considered
 
 | Option | Why rejected |
 |--------|--------------|
-| 最初から Live2D/3D | コスト過大、OSS 代替・3D 手段の調査が未了 |
-| 静的差分のみで固定 | 将来の表現拡張余地を塞ぐ |
+| Live2D/3D from the start | Cost is too high, and research into OSS alternatives and 3D approaches is incomplete |
+| Fixed to static variants only | It closes off room for future expression expansion |
