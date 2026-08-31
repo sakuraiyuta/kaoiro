@@ -603,9 +603,14 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
           ? { terminalSeen: event.terminalSeen }
           : {}),
       });
-      if (event.kind === "stream_eof") {
-        lifecycleRanges.delete(event.turnToken);
+      if (event.kind === "terminal" && event.authoritative) {
+        // The first authoritative terminal is the watchdog boundary. End it
+        // before a failed turn's persistence await can keep its timer alive.
+        turnWatchdog.end(event.turnToken);
       }
+    },
+    onTurnFinalized: ({ turnToken }) => {
+      lifecycleRanges.delete(turnToken);
     },
     onTurnProgress: ({ turnToken }) => {
       turnWatchdog.progress(turnToken);
@@ -634,6 +639,9 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
         interAgentTurns.settle(turnToken);
         return;
       }
+      // Covers terminal-less EOF/rejection. A terminal event ends the same
+      // token earlier; TurnWatchdog.end is exact-token and idempotent.
+      turnWatchdog.end(turnToken);
       const classified = error ? classifyInterAgentError(error) : undefined;
       for (const envelope of interAgent?.resolveTurnEnd(
         turnToken,

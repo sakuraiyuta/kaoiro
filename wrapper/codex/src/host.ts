@@ -265,6 +265,9 @@ export interface CodexHostOptions {
   /** Wrapper-local lifecycle evidence for the Codex stream. This is kept out
    * of transcript envelopes because it exists to diagnose SDK wedges. */
   onLifecycle?: (event: CodexLifecycleEvent) => void;
+  /** Invoked after this host turn has fully left the stream path. Unlike
+   * stream_eof, this also covers timeout cleanup and stream rejection. */
+  onTurnFinalized?: (info: { turnToken: string }) => void;
   /** Invoked for every SDK frame while the exact turn is active. */
   onTurnProgress?: (info: { turnToken: string }) => void;
   /** Called when watchdog grace expires. The active token is deliberately not
@@ -534,6 +537,9 @@ export class CodexHost implements EngineAdapter {
   #activeTurnConversationIds: readonly string[] = [];
   #closed = false;
   #watchdogFailStopped = false;
+  /** Fail-stop cleanup is started synchronously with queue removal, then
+   * awaited by recovery/tests without ever including the active turn. */
+  #watchdogQueuedCleanup: Promise<void> = Promise.resolve();
   /** Invalidates an older turn's asynchronous account-default refresh. */
   #modelResolutionGeneration = 0;
   /** tool_use_id -> tool_name for tool_result backfill (protocol.md #40). */
@@ -852,6 +858,7 @@ export class CodexHost implements EngineAdapter {
     // when they belong to inter-agent batches, must settle as cancellations so
     // the caller can report the drop without touching the active token.
     const queuedTurns = this.#queue.splice(0);
+    this.#watchdogQueuedCleanup = this.#cleanupWatchdogQueuedTurns(queuedTurns);
     const error = {
       detail:
         attribution === "exact"
@@ -876,6 +883,12 @@ export class CodexHost implements EngineAdapter {
     });
     this.#wake?.();
     return true;
+  }
+
+  /** Waits for local-image directories belonging to fail-stopped queued
+   * turns. The active turn's directory is intentionally outside this set. */
+  async waitForWatchdogCleanup(): Promise<void> {
+    await this.#watchdogQueuedCleanup;
   }
 
   close(): void {
@@ -1096,6 +1109,7 @@ export class CodexHost implements EngineAdapter {
       this.#gcTimer = null;
       this.#dropPendingUploads("interrupted");
       await this.#dropQueuedTempTurns();
+      await this.#watchdogQueuedCleanup;
       toolHost?.close();
     }
   }
@@ -1571,6 +1585,9 @@ export class CodexHost implements EngineAdapter {
       this.#activeTurnToken = null;
       this.#activeTurnConversationIds = [];
       if (tempDir !== undefined) await this.#cleanupTempDir(tempDir);
+      if (!retryAfterRepair) {
+        this.#options.onTurnFinalized?.({ turnToken });
+      }
     }
   }
 
@@ -1617,6 +1634,14 @@ export class CodexHost implements EngineAdapter {
     }
     this.#queue.length = 0;
     this.#queue.push(...retained);
+  }
+
+  async #cleanupWatchdogQueuedTurns(
+    turns: ReadonlyArray<{ tempDir?: string }>,
+  ): Promise<void> {
+    for (const turn of turns) {
+      if (turn.tempDir !== undefined) await this.#cleanupTempDir(turn.tempDir);
+    }
   }
 
   async #cleanupTempDir(dir: string): Promise<void> {

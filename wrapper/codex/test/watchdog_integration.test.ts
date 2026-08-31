@@ -1,3 +1,6 @@
+import { mkdtemp, rm, stat } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import type { ThreadEvent } from "@openai/codex-sdk";
 import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
@@ -34,6 +37,26 @@ function clientFor(events: () => AsyncIterable<ThreadEvent>): CodexClientLike {
   };
 }
 
+function imageChunk(uploadId: string): Uint8Array {
+  const id = new TextEncoder().encode(uploadId);
+  const payload = new Uint8Array(4 + id.byteLength + 4 + 1);
+  const view = new DataView(payload.buffer);
+  view.setUint32(0, id.byteLength, false);
+  payload.set(id, 4);
+  view.setUint32(4 + id.byteLength, 0, false);
+  payload[payload.byteLength - 1] = 1;
+  return payload;
+}
+
+async function exists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 describe("Codex watchdog host boundary", () => {
   it("fail-stop retains the active token and consumes a late terminal without settling it", async () => {
     const activeStarted = deferred<void>();
@@ -41,6 +64,7 @@ describe("Codex watchdog host boundary", () => {
     const turnEnds: Array<Record<string, unknown>> = [];
     const states: string[] = [];
     const lifecycle: Array<Record<string, unknown>> = [];
+    const finalized: string[] = [];
 
     const client = clientFor(async function* events() {
       yield { type: "thread.started", thread_id: "watchdog-session" };
@@ -57,6 +81,7 @@ describe("Codex watchdog host boundary", () => {
       onTurnStart: () => activeStarted.resolve(),
       onTurnEnd: (info) => turnEnds.push(info as Record<string, unknown>),
       onLifecycle: (event) => lifecycle.push(event as Record<string, unknown>),
+      onTurnFinalized: ({ turnToken }) => finalized.push(turnToken),
       appendSystemPrompt: "p",
       codexFactory: () => client,
       now: () => "T",
@@ -91,6 +116,7 @@ describe("Codex watchdog host boundary", () => {
     // the active token after the watchdog has made its outcome unknown.
     expect(turnEnds).toHaveLength(1);
     expect(states).toEqual(["sending", "error"]);
+    expect(finalized).toEqual(["turn-first"]);
     expect(lifecycle).toEqual([
       { kind: "turn_start", turnToken: "turn-first" },
       { kind: "sdk_event", turnToken: "turn-first", type: "thread.started" },
@@ -113,6 +139,7 @@ describe("Codex watchdog host boundary", () => {
     const ended = deferred<void>();
     const lifecycle: Array<Record<string, unknown>> = [];
     const turnEnds: Array<Record<string, unknown>> = [];
+    const finalized: string[] = [];
     const client = clientFor(async function* events() {
       yield { type: "thread.started", thread_id: "eof-session" };
     });
@@ -123,6 +150,7 @@ describe("Codex watchdog host boundary", () => {
         ended.resolve();
       },
       onLifecycle: (event) => lifecycle.push(event as Record<string, unknown>),
+      onTurnFinalized: ({ turnToken }) => finalized.push(turnToken),
       appendSystemPrompt: "p",
       codexFactory: () => client,
       now: () => "T",
@@ -134,6 +162,7 @@ describe("Codex watchdog host boundary", () => {
     await running;
 
     expect(turnEnds).toHaveLength(1);
+    expect(finalized).toEqual([lifecycle[0]!.turnToken as string]);
     expect(lifecycle.at(-1)).toEqual({
       kind: "stream_eof",
       turnToken: expect.any(String),
@@ -166,5 +195,59 @@ describe("Codex watchdog host boundary", () => {
     await running;
 
     expect(turnEnds).toEqual([]);
+  });
+
+  it("fail-stop cleans queued image directories but retains the active directory", async () => {
+    const activeStarted = deferred<void>();
+    const releaseActive = deferred<void>();
+    const activeDir = await mkdtemp(join(tmpdir(), "momo-284-active-"));
+    const queuedDir = await mkdtemp(join(tmpdir(), "momo-284-queued-"));
+    let materialization = 0;
+    const client = clientFor(async function* events() {
+      yield { type: "thread.started", thread_id: "watchdog-image-session" };
+      await releaseActive.promise;
+    });
+    const host = new CodexHost(CONFIG, {
+      onState: () => {},
+      onTurnStart: () => activeStarted.resolve(),
+      onTurnEnd: () => {},
+      appendSystemPrompt: "p",
+      codexFactory: () => client,
+      materializeImages: async (_agentId, _uploads, lifecycle) => {
+        const dir = materialization++ === 0 ? activeDir : queuedDir;
+        lifecycle.onDirectoryCreated(dir);
+        return { dir, paths: [`${dir}/image.png`] };
+      },
+      now: () => "T",
+    });
+
+    host.attachOpen({ upload_id: "active", filename: "a.png", mime: "image/png", size: 1, chunks: 1 });
+    host.attachChunk(imageChunk("active"));
+    host.attachClose("active");
+    host.attachOpen({ upload_id: "queued", filename: "q.png", mime: "image/png", size: 1, chunks: 1 });
+    host.attachChunk(imageChunk("queued"));
+    host.attachClose("queued");
+
+    const running = host.run();
+    try {
+      await host.send("active", ["active"], ["cid-active"], "turn-active");
+      await host.send("queued", ["queued"], ["cid-queued"], "turn-queued");
+      await activeStarted.promise;
+
+      expect(host.failStopTurnForWatchdog("turn-active")).toBe(true);
+      await host.waitForWatchdogCleanup();
+
+      expect(await exists(activeDir)).toBe(true);
+      expect(await exists(queuedDir)).toBe(false);
+      releaseActive.resolve();
+      await running;
+      expect(await exists(activeDir)).toBe(false);
+    } finally {
+      releaseActive.resolve();
+      host.close();
+      await running;
+      await rm(activeDir, { recursive: true, force: true });
+      await rm(queuedDir, { recursive: true, force: true });
+    }
   });
 });

@@ -9,7 +9,11 @@ const config: WrapperConfig = {
   server_url: "ws://localhost:4000/wrapper",
 };
 
-function inboundEnvelope(deliverySeq: number, turnNumber = 1): Envelope {
+function inboundEnvelope(
+  deliverySeq: number,
+  turnNumber = 1,
+  body = "hello",
+): Envelope {
   return {
     version: "0",
     agent_id: "peer.agent",
@@ -23,7 +27,7 @@ function inboundEnvelope(deliverySeq: number, turnNumber = 1): Envelope {
       conversation_id: `c-${deliverySeq}`,
       turn_number: turnNumber,
       kind: "inform",
-      body: "hello",
+      body,
     },
     delivery_seq: deliverySeq,
   } as unknown as Envelope;
@@ -110,7 +114,7 @@ describe("Codex CLI delivery composition (issue #247)", () => {
       inboundEnvelope(2, 0),
     );
     await (linkOptions.onInterAgentMessage as (envelope: Envelope) => Promise<void>)(
-      inboundEnvelope(3),
+      inboundEnvelope(3, 1, "INBOUND_BODY_SENTINEL"),
     );
 
       await vi.waitFor(() => expect(acknowledgements).toEqual([2, 3]));
@@ -159,10 +163,108 @@ describe("Codex CLI delivery composition (issue #247)", () => {
           }),
         ]),
       );
+      const expectedKeys: Record<string, string[]> = {
+        dispatch_queued: ["at", "event", "seq_first", "seq_last", "turn_token"],
+        delivery_ack: ["at", "event", "seq"],
+        turn_start: ["at", "event", "seq_first", "seq_last", "turn_token"],
+        sdk_event: ["at", "event", "seq_first", "seq_last", "turn_token", "type"],
+        terminal: [
+          "at",
+          "authoritative",
+          "event",
+          "seq_first",
+          "seq_last",
+          "turn_token",
+          "type",
+        ],
+        stream_eof: [
+          "at",
+          "event",
+          "seq_first",
+          "seq_last",
+          "terminal_seen",
+          "turn_token",
+        ],
+      };
+      for (const record of lifecycleLines) {
+        const expected =
+          record.event === "delivery_ack" && record.turn_token !== undefined
+            ? ["at", "event", "seq", "seq_first", "seq_last", "turn_token"]
+            : expectedKeys[record.event as string];
+        expect(expected).toBeDefined();
+        expect(Object.keys(record).sort()).toEqual(expected!.slice().sort());
+        expect(JSON.stringify(record)).not.toContain("INBOUND_BODY_SENTINEL");
+      }
     } finally {
       stderr.mockRestore();
     }
   });
+
+  it.each([
+    {
+      label: "authoritative terminal",
+      finish: (options: Record<string, any>, token: string) => {
+        options.onLifecycle({
+          kind: "terminal",
+          turnToken: token,
+          type: "turn.completed",
+          authoritative: true,
+        });
+        options.onTurnEnd({ turnToken: token, conversationIds: [] });
+      },
+    },
+    {
+      label: "terminal-less error",
+      finish: (options: Record<string, any>, token: string) => {
+        options.onTurnEnd({
+          turnToken: token,
+          conversationIds: [],
+          error: { detail: "stream rejected" },
+        });
+      },
+    },
+  ])(
+    "$label の後に次 turn を watchdog attribution failure なしで開始できる",
+    async ({ finish }) => {
+      let hostOptions!: Record<string, any>;
+      let fallbackStops = 0;
+      const link = { close: () => {}, currentSessionId: () => null, send: () => {} };
+      const host = {
+        state: "idle",
+        statusExtSnapshot: () => ({}),
+        requestInterruptForTurn: () => true,
+        failStopTurnForWatchdog: () => true,
+        failStopForWatchdogAttributionUnknown: () => {
+          fallbackStops += 1;
+          return true;
+        },
+        run: async () => {
+          hostOptions.onTurnStart({ turnToken: "normal-a" });
+          finish(hostOptions, "normal-a");
+          hostOptions.onTurnStart({ turnToken: "normal-b" });
+          finish(hostOptions, "normal-b");
+        },
+      };
+
+      await runCodexCli({
+        parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+        loadConfig: () => ({ ...config }),
+        createServerLink: (_url, _agentId, options) => {
+          queueMicrotask(() => {
+            (options.onPersonaPrompt as (prompt: string) => void)("system prompt");
+          });
+          return link as never;
+        },
+        createHost: (_config, options) => {
+          hostOptions = options as unknown as Record<string, any>;
+          return host as never;
+        },
+        prepareStartup: async () => {},
+      });
+
+      expect(fallbackStops).toBe(0);
+    },
+  );
 
   it("runCodexCli の実組成が watchdog を turn-start に接続し、attribution failure を host へ返す", async () => {
     let hostOptions!: Record<string, any>;
