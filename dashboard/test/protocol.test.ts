@@ -1750,6 +1750,44 @@ describe("parseHosts (#22)", () => {
     expect(host!.build_revision).toBe("0123456789abcdef0123456789abcdef01234567");
     expect(host!.build_dirty).toBe(true);
   });
+
+  it("build_version/build_channel も valid な pair なら保持する", () => {
+    const [host] = parseHosts({
+      "lab-pc-1": {
+        personas: [mio],
+        cwd_allowlist: ["/p"],
+        build_revision: "0123456789abcdef0123456789abcdef01234567",
+        build_dirty: false,
+        build_version: "2026.9.0",
+        build_channel: "release",
+      },
+    });
+    expect(host?.build_version).toBe("2026.9.0");
+    expect(host?.build_channel).toBe("release");
+  });
+
+  it("build_version/build_channel の pair が不完全または不正なら両方落とす", () => {
+    const [partial] = parseHosts({
+      "partial-host": {
+        personas: [mio],
+        cwd_allowlist: ["/p"],
+        build_version: "2026.9.0",
+      },
+    });
+    expect("build_version" in partial!).toBe(false);
+    expect("build_channel" in partial!).toBe(false);
+
+    const [invalid] = parseHosts({
+      "invalid-host": {
+        personas: [mio],
+        cwd_allowlist: ["/p"],
+        build_version: "not-calver",
+        build_channel: "release",
+      },
+    });
+    expect("build_version" in invalid!).toBe(false);
+    expect("build_channel" in invalid!).toBe(false);
+  });
 });
 
 describe("parseDirectory (ADR-0030, revised issue #219 D19/D21)", () => {

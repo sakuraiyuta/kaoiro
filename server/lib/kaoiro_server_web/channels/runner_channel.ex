@@ -338,38 +338,44 @@ defmodule KaoiroServerWeb.RunnerChannel do
     end
   end
 
-  # Build identity (issue #228), distinct from ADR-0015's protocol
-  # version. Both fields optional — absent means a pre-#228 runner build.
-  # Shape/domain-checked (KaoiroServer.BuildIdentity, issue #228 round 2
-  # MF-3 差し戻し — shares its revision format with HealthController's own
-  # build-info.json read) and stored as-is for the operator `hosts` push;
-  # the dashboard compares `build_revision` against the server's own (GET
-  # /api/health) to warn on mismatch — this boundary never REJECTS a
-  # register over the SHA's VALUE, only over a type/shape breach (same
-  # posture as parse_engines above).
-  #
-  # MF-3 also closes an asymmetry round 1 missed: a register carrying only
-  # ONE of the pair (e.g. `build_revision` present, `build_dirty` absent)
-  # is rejected rather than silently accepted as a partial identity — a
-  # well-formed runner always sends both or neither (RunnerRegister's own
-  # doc comment), so a lone field is itself a structural shape breach, not
-  # a legitimate pre-#228 compat case.
+  # Build identity (issues #228/#288), distinct from ADR-0015's protocol
+  # version. Each pair is optional so old runners remain compatible, but a
+  # pair must be complete and each value must be in its domain. The values
+  # are stored as-is for the operator `hosts` push; the dashboard renders
+  # the CalVer identity without making it a connection gate.
   defp parse_build_info(payload) do
     has_revision = Map.has_key?(payload, "build_revision")
     has_dirty = Map.has_key?(payload, "build_dirty")
+    has_version = Map.has_key?(payload, "build_version")
+    has_channel = Map.has_key?(payload, "build_channel")
 
     cond do
-      not has_revision and not has_dirty ->
-        {:ok, %{}}
-
-      has_revision and has_dirty ->
-        with {:ok, revision} <- parse_build_revision(payload["build_revision"]),
-             {:ok, dirty} <- parse_build_dirty(payload["build_dirty"]) do
-          {:ok, %{build_revision: revision, build_dirty: dirty}}
-        end
+      has_revision != has_dirty or has_version != has_channel ->
+        {:error, :incomplete_build_info}
 
       true ->
-        {:error, :incomplete_build_info}
+        with {:ok, revision_attrs} <- parse_revision_pair(payload, has_revision),
+             {:ok, version_attrs} <- parse_version_pair(payload, has_version) do
+          {:ok, Map.merge(revision_attrs, version_attrs)}
+        end
+    end
+  end
+
+  defp parse_revision_pair(_payload, false), do: {:ok, %{}}
+
+  defp parse_revision_pair(payload, true) do
+    with {:ok, revision} <- parse_build_revision(payload["build_revision"]),
+         {:ok, dirty} <- parse_build_dirty(payload["build_dirty"]) do
+      {:ok, %{build_revision: revision, build_dirty: dirty}}
+    end
+  end
+
+  defp parse_version_pair(_payload, false), do: {:ok, %{}}
+
+  defp parse_version_pair(payload, true) do
+    with {:ok, version} <- parse_build_version(payload["build_version"]),
+         {:ok, channel} <- parse_build_channel(payload["build_channel"]) do
+      {:ok, %{build_version: version, build_channel: channel}}
     end
   end
 
@@ -383,6 +389,22 @@ defmodule KaoiroServerWeb.RunnerChannel do
 
   defp parse_build_dirty(dirty) when is_boolean(dirty), do: {:ok, dirty}
   defp parse_build_dirty(_), do: {:error, :invalid_build_dirty}
+
+  defp parse_build_version(version) do
+    if BuildIdentity.valid_version?(version) do
+      {:ok, version}
+    else
+      {:error, :invalid_build_version}
+    end
+  end
+
+  defp parse_build_channel(channel) do
+    if BuildIdentity.valid_channel?(channel) do
+      {:ok, channel}
+    else
+      {:error, :invalid_build_channel}
+    end
+  end
 
   defp forward_to_operators(event, payload, socket) do
     with :ok <- check_size(payload),

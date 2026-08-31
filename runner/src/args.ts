@@ -5,7 +5,7 @@ import { parseArgs } from "node:util";
 
 export interface RunnerCliArgs {
   configPath: string;
-  /** issue #228: `--version` prints the build revision and exits, without
+  /** issue #228/#288: `--version` prints the build identity and exits, without
    *  touching config / network. */
   version: boolean;
 }

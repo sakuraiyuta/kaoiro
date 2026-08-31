@@ -41,7 +41,7 @@ const DEPLOY_SCRIPTS = [
 ];
 
 /** Mimics ONLY the `--version` contract cli.ts implements (read the sibling
- *  build-info.json, print the canonical `<rev>[-dirty]` form, exit 0). The
+ *  build-info.json, print the canonical project identity, exit 0). The
  *  real cli.ts behaviour is pinned separately by args.test.ts /
  *  build_info.test.ts.
  *
@@ -70,8 +70,12 @@ if (process.argv.includes("--version")) {
   const info = JSON.parse(
     readFileSync(join(import.meta.dirname, "build-info.json"), "utf8"),
   );
+  const revision = typeof info.revision === "string" ? info.revision : "unknown";
+  const version = typeof info.version === "string" ? info.version : "unknown";
+  const channel = info.channel === "release" ? "release" : "dev";
+  const shortHash = revision === "unknown" ? "unknown" : revision.slice(0, 7);
   process.stdout.write(
-    (override || (info.dirty ? \`\${info.revision}-dirty\` : info.revision)) +
+    (override || \`kaoiro \${channel} runner v\${version} / \${shortHash}\`) +
       "\\n",
   );
   process.exit(0);
@@ -195,6 +199,8 @@ export function writeReleaseTree(
       revision,
       dirty,
       built_at: "2026-08-16T00:00:00.000Z",
+      version: "2026.9.0",
+      channel: "dev",
     }),
   );
   // The wrappers are real PACKAGES here, not two lone files, and a shared

@@ -321,8 +321,26 @@ start_failed=no
 # through. Comparing against what we installed is what turns "the commands
 # exited 0" into "the host is serving the release we meant".
 running=$("$root/current/deploy/kaoiro-runner-launch.sh" --version 2>/dev/null || true)
+node_bin=$(kaoiro_node)
+expected=$(
+  "$node_bin" --input-type=module -e '
+    import { readFileSync } from "node:fs";
+    const info = JSON.parse(readFileSync(process.argv[1], "utf8"));
+    const version = typeof info.version === "string" ? info.version : "unknown";
+    const channel = info.channel === "release" ? "release" : "dev";
+    const revision = typeof info.revision === "string" ? info.revision : "unknown";
+    const shortHash = revision === "unknown" ? "unknown" : revision.slice(0, 7);
+    process.stdout.write(`kaoiro ${channel} runner v${version} / ${shortHash}\n`);
+  ' "$root/current/dist/build-info.json" 2>/dev/null || true
+)
 
-if [ "$start_failed" = yes ] || [ "$running" != "$id" ]; then
+# `$id` is the release-directory identity (`<revision>[-dirty]`) and remains
+# the compatibility fallback for pre-#288 artifacts. New runners report the
+# canonical project identity instead; derive its expected label from the same
+# build-info file the running CLI reads, through the `current` path.
+if [ "$start_failed" = yes ] || {
+  [ "$running" != "$id" ] && [ "$running" != "$expected" ];
+}; then
   printf '%s: update did NOT reach a good state\n' "$prog" >&2
   printf '%s:   requested release: %s\n' "$prog" "$id" >&2
   printf '%s:   current reports:   %s\n' "$prog" "${running:-<unreadable>}" >&2

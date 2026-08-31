@@ -4,8 +4,9 @@
 // 4-4a/4-4b), plus session enumeration / resume (4-5).
 //
 // Usage: node dist/cli.js [configPath] [--version]
-//   configPath defaults to runner.config.json. --version prints the build
-//   revision (issue #228) and exits without touching config or network.
+//   configPath defaults to runner.config.json. --version prints the canonical
+//   build identity (issues #228/#288) and exits without touching config or
+//   network.
 //   The auth token is read from KAOIRO_RUNNER_TOKEN. Leaving it unset only
 //   disables the server's runner auth in :dev / :test — :prod is
 //   fail-closed and rejects every runner, since runners have no
@@ -13,7 +14,11 @@
 
 import type { EngineCatalogResult } from "@kaoiro/protocol";
 import { parseRunnerArgs } from "./args.js";
-import { formatBuildRevision, loadBuildInfo } from "./build_info.js";
+import {
+  formatBuildIdentity,
+  formatBuildRevision,
+  loadBuildInfo,
+} from "./build_info.js";
 import { ClaudeCatalogCache } from "./claude_catalog_cache.js";
 import { makeRefreshEngineCatalogHandler } from "./engine_catalog_refresh.js";
 import { type CodexAuthMode, resolveCodexAuthMode } from "./codex-auth.js";
@@ -63,7 +68,7 @@ async function main(): Promise<void> {
   // --version, and it must never touch the network.
   const buildInfo = loadBuildInfo();
   if (version) {
-    process.stdout.write(`${formatBuildRevision(buildInfo)}\n`);
+    process.stdout.write(`${formatBuildIdentity(buildInfo)}\n`);
     return;
   }
   // KAOIRO_RUNNER_SERVER_URL outranks the file (issue #140) — applied here

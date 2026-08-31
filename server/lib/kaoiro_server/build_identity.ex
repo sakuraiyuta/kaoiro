@@ -26,8 +26,9 @@ defmodule KaoiroServer.BuildIdentity do
   def valid_revision?(v) when is_binary(v), do: Regex.match?(@revision_re, v)
   def valid_revision?(_), do: false
 
-  @doc "True for a CalVer project version in YYYY.M.PATCH form."
+  @doc "True for a CalVer project version in YYYY.M.PATCH form or unknown."
   @spec valid_version?(term()) :: boolean()
+  def valid_version?("unknown"), do: true
   def valid_version?(v) when is_binary(v), do: Regex.match?(@version_re, v)
   def valid_version?(_), do: false
 

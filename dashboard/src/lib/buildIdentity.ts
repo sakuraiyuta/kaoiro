@@ -23,3 +23,23 @@ export function formatBuildIdentity(
     identity.revision === "unknown" ? "unknown" : identity.revision.slice(0, 7);
   return `kaoiro ${identity.channel} ${component} v${identity.version} / ${shortHash}`;
 }
+
+export function formatRunnerHostLabel(host: {
+  host_id: string;
+  build_version?: string;
+  build_channel?: BuildChannel;
+  build_revision?: string;
+}): string {
+  if (
+    host.build_version === undefined ||
+    host.build_channel === undefined ||
+    host.build_revision === undefined
+  ) {
+    return host.host_id;
+  }
+  return `${host.host_id} — ${formatBuildIdentity("runner", {
+    version: host.build_version,
+    channel: host.build_channel,
+    revision: host.build_revision,
+  })}`;
+}

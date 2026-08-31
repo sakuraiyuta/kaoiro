@@ -1499,6 +1499,10 @@ export interface HostInfo {
    *  operator of a mismatch, never to block anything. */
   build_revision?: string;
   build_dirty?: boolean;
+  /** CalVer project version and channel from issue #288's runner register.
+   *  Optional as a pair for pre-#288 runner compatibility. */
+  build_version?: string;
+  build_channel?: "dev" | "release";
 }
 
 /** Operator launch request (案A, ADR-0024). The client sends only these; the
@@ -2107,6 +2111,13 @@ export function parseHosts(value: unknown): HostInfo[] {
         // present and individually valid, or neither is copied.
         ...(isValidBuildRevision(e.build_revision) && typeof e.build_dirty === "boolean"
           ? { build_revision: e.build_revision, build_dirty: e.build_dirty }
+          : {}),
+        ...(isValidBuildVersion(e.build_version) &&
+        isValidBuildChannel(e.build_channel)
+          ? {
+              build_version: e.build_version,
+              build_channel: e.build_channel,
+            }
           : {}),
       });
     }

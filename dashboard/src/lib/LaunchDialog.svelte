@@ -9,6 +9,7 @@
     RunnerSessions,
   } from "./protocol";
   import { PERMISSION_MODE_AXES, resolveLaunchDefaultEffort } from "./protocol";
+  import { formatRunnerHostLabel } from "./buildIdentity";
   import Modal from "./Modal.svelte";
 
   let {
@@ -532,7 +533,7 @@
         ホスト
         <select bind:value={hostId}>
           {#each hosts as h (h.host_id)}
-            <option value={h.host_id}>{h.host_id}</option>
+            <option value={h.host_id}>{formatRunnerHostLabel(h)}</option>
           {/each}
         </select>
       </label>

@@ -378,7 +378,16 @@ export function buildRegister(
     engines,
     ...(buildInfo === undefined
       ? {}
-      : { build_revision: buildInfo.revision, build_dirty: buildInfo.dirty }),
+      : {
+          build_revision: buildInfo.revision,
+          build_dirty: buildInfo.dirty,
+          ...(buildInfo.version === undefined || buildInfo.channel === undefined
+            ? {}
+            : {
+                build_version: buildInfo.version,
+                build_channel: buildInfo.channel,
+              }),
+        }),
   };
 }
 

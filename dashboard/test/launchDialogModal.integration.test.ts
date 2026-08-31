@@ -78,13 +78,13 @@ function makeConnection(): KaoiroConnection {
   } as unknown as KaoiroConnection;
 }
 
-async function render(onClose = vi.fn()) {
+async function render(onClose = vi.fn(), hosts: HostInfo[] = [claudeHost()]) {
   const target = document.createElement("div");
   document.body.append(target);
   const component = mount(LaunchDialog, {
     target,
     props: {
-      hosts: [claudeHost()],
+      hosts,
       connection: makeConnection(),
       sessions: null,
       onClose,
@@ -96,6 +96,21 @@ async function render(onClose = vi.fn()) {
 }
 
 describe("LaunchDialog on Modal.svelte (issue #277)", () => {
+  it("host selector は runner の CalVer identity を host_id の後ろに表示する", async () => {
+    const { target } = await render(vi.fn(), [
+      {
+        ...claudeHost(),
+        build_version: "2026.9.0",
+        build_channel: "dev",
+        build_revision: "0123456789abcdef0123456789abcdef01234567",
+      },
+    ]);
+
+    expect(target.querySelector("select option")?.textContent?.trim()).toBe(
+      "host-a — kaoiro dev runner v2026.9.0 / 0123456",
+    );
+  });
+
   it("Modal.svelte 経由で dialog を開く(独自 backdrop ではない)", async () => {
     const { target } = await render();
 

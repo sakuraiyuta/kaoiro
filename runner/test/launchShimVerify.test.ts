@@ -210,6 +210,24 @@ describe("kaoiro-runner-launch.sh の verify-only 起動 (issue #229)", () => {
     expect(result.stderr).not.toContain("pnpm -C wrapper build");
   });
 
+  it("build-info.json の CalVer/channel が不正なら exit 78 で起動しない", () => {
+    writeFileSync(
+      join(tree, "dist", "build-info.json"),
+      JSON.stringify({
+        revision: REVISION,
+        dirty: false,
+        built_at: "2026-08-16T00:00:00.000Z",
+        version: "2026.99.0",
+        channel: "release",
+      }),
+    );
+
+    const result = launch();
+
+    expect(result.status).toBe(78);
+    expect(result.stdout).not.toContain("stub cli.js started");
+  });
+
   it("nested な build output の中間ディレクトリが dangling symlink なら build shortage ではない (内部レビュー指摘)", () => {
     // 内部review: checkBuildOutputLeaf は leafRel の先頭segment (dist) と
     // 最終leafしか型検査しておらず、3段以上ネストした manifest entry

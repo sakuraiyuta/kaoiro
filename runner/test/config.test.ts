@@ -376,6 +376,19 @@ describe("buildRegister", () => {
     expect(register.build_dirty).toBe(false);
   });
 
+  it("buildInfo の version/channel も register に載る", () => {
+    const config = parseRunnerConfig(valid);
+    const register = buildRegister(config, "unknown", undefined, {
+      revision: "0123456789abcdef0123456789abcdef01234567",
+      dirty: false,
+      built_at: "2026-08-12T00:00:00.000Z",
+      version: "2026.9.0",
+      channel: "release",
+    });
+    expect(register.build_version).toBe("2026.9.0");
+    expect(register.build_channel).toBe("release");
+  });
+
   it("dirty な buildInfo は build_dirty=true として載る", () => {
     const config = parseRunnerConfig(valid);
     const register = buildRegister(config, "unknown", undefined, {

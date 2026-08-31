@@ -2,7 +2,11 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { formatBuildRevision, loadBuildInfo } from "../src/build_info.js";
+import {
+  formatBuildIdentity,
+  formatBuildRevision,
+  loadBuildInfo,
+} from "../src/build_info.js";
 
 describe("loadBuildInfo (issue #228)", () => {
   let tmpDir: string | undefined;
@@ -43,6 +47,64 @@ describe("loadBuildInfo (issue #228)", () => {
       }),
     );
     expect(loadBuildInfo(tmpDir).dirty).toBe(true);
+  });
+
+  it("CalVer version/channel を持つ生成済み build-info を読み取る", () => {
+    tmpDir = mkdtempSync(join(tmpdir(), "kaoiro-build-info-"));
+    writeFileSync(
+      join(tmpDir, "build-info.json"),
+      JSON.stringify({
+        revision: "0123456789abcdef0123456789abcdef01234567",
+        dirty: false,
+        built_at: "2026-08-12T00:00:00.000Z",
+        version: "2026.9.0",
+        channel: "release",
+      }),
+    );
+    expect(loadBuildInfo(tmpDir)).toEqual({
+      revision: "0123456789abcdef0123456789abcdef01234567",
+      dirty: false,
+      built_at: "2026-08-12T00:00:00.000Z",
+      version: "2026.9.0",
+      channel: "release",
+    });
+  });
+
+  it("version/channel が片方だけの build-info は unknown へ fail-soft する", () => {
+    tmpDir = mkdtempSync(join(tmpdir(), "kaoiro-build-info-"));
+    writeFileSync(
+      join(tmpDir, "build-info.json"),
+      JSON.stringify({
+        revision: "0123456789abcdef0123456789abcdef01234567",
+        dirty: false,
+        built_at: "2026-08-12T00:00:00.000Z",
+        version: "2026.9.0",
+      }),
+    );
+    expect(loadBuildInfo(tmpDir)).toEqual({
+      revision: "unknown",
+      dirty: false,
+      built_at: "unknown",
+    });
+  });
+
+  it("version/channel が値域外の build-info は unknown へ fail-soft する", () => {
+    tmpDir = mkdtempSync(join(tmpdir(), "kaoiro-build-info-"));
+    writeFileSync(
+      join(tmpDir, "build-info.json"),
+      JSON.stringify({
+        revision: "0123456789abcdef0123456789abcdef01234567",
+        dirty: false,
+        built_at: "2026-08-12T00:00:00.000Z",
+        version: "2026.99.0",
+        channel: "release",
+      }),
+    );
+    expect(loadBuildInfo(tmpDir)).toEqual({
+      revision: "unknown",
+      dirty: false,
+      built_at: "unknown",
+    });
   });
 
   // ファイルが無い経路 (tarball 配布外・pnpm build を経ていない dev 実行)
@@ -211,5 +273,29 @@ describe("formatBuildRevision (issue #228)", () => {
         built_at: "2026-08-12T00:00:00.000Z",
       }),
     ).toBe("unknown-dirty");
+  });
+});
+
+describe("formatBuildIdentity (issue #288)", () => {
+  it("runner の CalVer identity は short hash を含む", () => {
+    expect(
+      formatBuildIdentity({
+        revision: "0123456789abcdef0123456789abcdef01234567",
+        dirty: false,
+        built_at: "2026-08-12T00:00:00.000Z",
+        version: "2026.9.0",
+        channel: "release",
+      }),
+    ).toBe("kaoiro release runner v2026.9.0 / 0123456");
+  });
+
+  it("legacy build-info は unknown/dev として明示する", () => {
+    expect(
+      formatBuildIdentity({
+        revision: "unknown",
+        dirty: false,
+        built_at: "unknown",
+      }),
+    ).toBe("kaoiro dev runner vunknown / unknown");
   });
 });

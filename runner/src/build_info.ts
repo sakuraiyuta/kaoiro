@@ -26,9 +26,14 @@ export interface BuildInfo {
   /** ISO-8601 build timestamp. Diagnostic ONLY (issue #228, decided round
    *  1) — never compared for equality, never part of identity. Answers
    *  "how stale is this artifact", not "what commit is it". Not sent over
-   *  the wire (register / --version) since those are identity surfaces;
-   *  read this file directly for build time. */
+   *  the wire or included in the canonical `--version` label; read this file
+   *  directly for build time. */
   built_at: string;
+  /** CalVer project version from the monorepo VERSION file. Optional for
+   *  pre-#288 artifacts; generated builds carry it with `channel`. */
+  version?: string;
+  /** Build channel derived from git state and the matching release tag. */
+  channel?: "dev" | "release";
 }
 
 const UNKNOWN_BUILD_INFO: BuildInfo = {
@@ -46,6 +51,7 @@ const UNKNOWN_BUILD_INFO: BuildInfo = {
  *  pnpm-deploy-pruned package boundary at runtime (see the module doc
  *  comment above). */
 const BUILD_REVISION_RE = /^[0-9a-f]{40}$/;
+const BUILD_VERSION_RE = /^\d{4}\.(?:[1-9]|1[0-2])\.\d+$/;
 
 /** Value domain for `built_at` (issue #228 round 4, ふじ 差し戻し): the
  *  exact `new Date().toISOString()` value generate-build-info.mjs
@@ -63,15 +69,28 @@ function isValidBuiltAt(value: string): boolean {
   return Number.isFinite(parsed.getTime()) && parsed.toISOString() === value;
 }
 
+function isValidBuildVersion(value: unknown): value is string {
+  return value === "unknown" || (typeof value === "string" && BUILD_VERSION_RE.test(value));
+}
+
+function isValidBuildChannel(value: unknown): value is "dev" | "release" {
+  return value === "dev" || value === "release";
+}
+
 function isBuildInfoShape(value: unknown): value is BuildInfo {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;
+  const hasVersion = Object.hasOwn(v, "version");
+  const hasChannel = Object.hasOwn(v, "channel");
   return (
     typeof v.revision === "string" &&
     (v.revision === "unknown" || BUILD_REVISION_RE.test(v.revision)) &&
     typeof v.dirty === "boolean" &&
     typeof v.built_at === "string" &&
-    isValidBuiltAt(v.built_at)
+    isValidBuiltAt(v.built_at) &&
+    hasVersion === hasChannel &&
+    (!hasVersion ||
+      (isValidBuildVersion(v.version) && isValidBuildChannel(v.channel)))
   );
 }
 
@@ -101,8 +120,8 @@ export function loadBuildInfo(
   return isBuildInfoShape(parsed) ? parsed : UNKNOWN_BUILD_INFO;
 }
 
-/** The human-facing canonical string form of a revision — `--version`
- *  output and the startup log line both use this. The register payload
+/** The human-facing string form of a revision — the startup log line uses
+ *  this for backwards-compatible provenance output. The register payload
  *  does NOT (issue #228 round 2 advisory 1, ふじ 差し戻し: this doc
  *  previously claimed it did) — `buildRegister` (config.ts) sends
  *  `build_revision`/`build_dirty` as two SEPARATE wire fields (the raw
@@ -113,4 +132,15 @@ export function loadBuildInfo(
  *  file, since both now read the same dist/build-info.json (issue #228). */
 export function formatBuildRevision(info: BuildInfo): string {
   return info.dirty ? `${info.revision}-dirty` : info.revision;
+}
+
+/** Canonical human-facing runner identity (issue #288). Keep the raw
+ *  revision/dirty fields available separately for machine consumers; this
+ *  label is for `--version` and operator-facing build information only. */
+export function formatBuildIdentity(info: BuildInfo): string {
+  const version = info.version ?? "unknown";
+  const channel = info.channel ?? "dev";
+  const shortHash =
+    info.revision === "unknown" ? "unknown" : info.revision.slice(0, 7);
+  return `kaoiro ${channel} runner v${version} / ${shortHash}`;
 }

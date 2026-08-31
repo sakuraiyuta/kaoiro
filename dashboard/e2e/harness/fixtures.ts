@@ -309,6 +309,9 @@ export function launchHosts() {
         { id: "momo", name: "momo", sprite_set: "momo" },
       ],
       cwd_allowlist: ["/home/e2e/project", "/home/e2e/other"],
+      build_version: "2026.9.0",
+      build_channel: "dev",
+      build_revision: "0123456789abcdef0123456789abcdef01234567",
     },
   ];
 }

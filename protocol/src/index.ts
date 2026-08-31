@@ -895,6 +895,10 @@ export interface RunnerRegister {
    *  already carries the actual compatibility contract. */
   build_revision?: string;
   build_dirty?: boolean;
+  /** CalVer project version and derived build channel (issue #288). Both
+   *  are optional as a pair for pre-#288 runner compatibility. */
+  build_version?: string;
+  build_channel?: "dev" | "release";
 }
 
 /** runner -> server liveness ping; the topic carries the host_id, but it is

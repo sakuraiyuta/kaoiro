@@ -9,6 +9,17 @@ const DIALOG =
   "/e2e/harness/index.html?view=overlay&overlay=dialog-triggered";
 
 test.describe("LaunchDialog a11y (issue #277)", () => {
+  test("host selector shows the runner build identity after host_id", async ({
+    page,
+  }) => {
+    await page.goto(DIALOG);
+    await page.locator("#dialog-trigger").click();
+
+    await expect(page.locator("dialog select").first().locator("option")).toHaveText(
+      "e2e-host — kaoiro dev runner v2026.9.0 / 0123456",
+    );
+  });
+
   test("開くと「新規」タブに初期フォーカスが当たる", async ({ page }) => {
     await page.goto(DIALOG);
     await page.locator("#dialog-trigger").click();
