@@ -69,6 +69,10 @@
     requestNotificationPermission,
   } from "./lib/notify";
   import { RELATIVE_TIME_TICK_MS } from "./lib/relativeTime";
+  import {
+    clientBuildIdentity,
+    formatBuildIdentity,
+  } from "./lib/buildIdentity";
 
   let agents = $state<Record<string, Envelope>>({});
   let snapshotIncomplete = $state(false);
@@ -1435,7 +1439,26 @@
   </main>
 {:else if authChecked}
 <header>
-  <h1>kaoiro</h1>
+  <div class="brand">
+    <h1>kaoiro</h1>
+    <div class="build-identities" aria-label="ビルド情報">
+      <span data-component="server">
+        {formatBuildIdentity(
+          "server",
+          serverHealth === null
+            ? { version: "unknown", channel: "dev", revision: "unknown" }
+            : {
+                version: serverHealth.build_version,
+                channel: serverHealth.build_channel,
+                revision: serverHealth.build_revision,
+              },
+        )}
+      </span>
+      <span data-component="client">
+        {formatBuildIdentity("client", clientBuildIdentity)}
+      </span>
+    </div>
+  </div>
   {#if selectedEnvelope && sorted.length > 1}
     <nav class="agent-strip" aria-label="エージェント一覧">
       {#each sorted as envelope (envelope.agent_id)}
@@ -1785,6 +1808,12 @@
     border-bottom: 1px solid var(--line);
   }
 
+  .brand {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+
   /* short (max-height 500px): 縦圧縮 override — header の縦 padding のみ。
      横方向のレイアウトは幅トークンが決めるので触らない (ADR-0052 F8). */
   @media (max-height: 500px) {
@@ -1808,6 +1837,16 @@
     letter-spacing: 0;
     color: var(--fg-dim);
     font-size: 0.8em; /* em-relative to parent h1; do not tokenize */
+  }
+
+  .build-identities {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.8rem;
+    color: var(--fg-dim);
+    font-size: var(--fs-micro);
+    letter-spacing: 0;
+    line-height: 1.2;
   }
 
   .conn {

@@ -75,6 +75,7 @@ kaoiro documentation. Each subfolder has a README index.
 | [0053](adr/0053-build-identity.md) | Introduce build identity and separate it from the protocol version | accepted |
 | [0054](adr/0054-fatigue-as-orthogonal-persona-modifier.md) | Treat fatigue as a persona modifier separate from protocol state | accepted |
 | [0055](adr/0055-compaction-resume-and-lifecycle-log.md) | Automatic resume after compaction and retaining a session-lifecycle timeline | accepted |
+| [0056](adr/0056-project-calver-build-version.md) | Adopt one lockstep CalVer project version and explicit build channels | accepted |
 <!-- adr-index:end -->
 
 Regenerate: `scripts/build-adr-index.sh docs` (skill `my-docs-restructure`). Do not edit inside the markers manually.

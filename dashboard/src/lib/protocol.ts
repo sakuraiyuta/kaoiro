@@ -1402,12 +1402,23 @@ export async function fetchAuthMethods(
  *  were a real revision (spoofing prevention, same posture as the
  *  `typeof` guards elsewhere in this file). */
 const BUILD_REVISION_RE = /^[0-9a-f]{40}$/;
+const BUILD_VERSION_RE = /^\d{4}\.(?:[1-9]|1[0-2])\.\d+$/;
 
 function isValidBuildRevision(value: unknown): value is string {
   return value === "unknown" || (typeof value === "string" && BUILD_REVISION_RE.test(value));
 }
 
-/** Server's own build identity (issue #228), served at GET /api/health.
+function isValidBuildVersion(value: unknown): value is string {
+  return value === "unknown" || (typeof value === "string" && BUILD_VERSION_RE.test(value));
+}
+
+function isValidBuildChannel(value: unknown): value is "dev" | "release" {
+  return value === "dev" || value === "release";
+}
+
+/** Server's own build identity (issues #228/#288), served at GET /api/health.
+ *  `build_version` / `build_channel` identify the lockstep CalVer project
+ *  artifact; `build_channel` is a controlled `dev`/`release` value.
  *  `protocol_version` is ADR-0015's wire compatibility stamp — a
  *  DIFFERENT concept from `build_revision` (the git SHA the running image
  *  was built from); see HostInfo.build_revision's own doc for why the two
@@ -1416,6 +1427,8 @@ function isValidBuildRevision(value: unknown): value is string {
  *  し), never part of the server's own identity response. */
 export interface ServerHealth {
   status: string;
+  build_version: string;
+  build_channel: "dev" | "release";
   build_revision: string;
   build_dirty: boolean;
   protocol_version: string;
@@ -1444,6 +1457,8 @@ export async function fetchServerHealth(base = ""): Promise<ServerHealth | null>
       typeof body !== "object" ||
       body === null ||
       typeof (body as ServerHealth).status !== "string" ||
+      !isValidBuildVersion((body as ServerHealth).build_version) ||
+      !isValidBuildChannel((body as ServerHealth).build_channel) ||
       !isValidBuildRevision((body as ServerHealth).build_revision) ||
       typeof (body as ServerHealth).build_dirty !== "boolean" ||
       typeof (body as ServerHealth).protocol_version !== "string"

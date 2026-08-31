@@ -24,19 +24,20 @@ services:
         # from .env so build and runtime always get the same value —
         # the release raises at boot when they disagree.
         KAOIRO_PLAIN_HTTP: ${KAOIRO_PLAIN_HTTP:-false}
-        # Build identity (issue #228). `.dockerignore` excludes `.git` from
-        # the build context (nothing in the Dockerfile reads it), so this
-        # MUST come from the environment of whoever runs `docker compose
-        # build` — e.g. `eval "$(node scripts/build-identity.mjs)"; docker
-        # compose build` (docs/specs/deployment.md 4.3). Left unset ->
-        # "unknown"/"false", which GET /api/health then reports honestly
-        # rather than silently claiming a revision nobody actually built.
+        # Build identity (issues #228/#288). `.dockerignore` excludes `.git`
+        # from the build context, so these MUST come from the environment of
+        # whoever runs `docker compose build` — e.g. `eval "$(node
+        # scripts/build-identity.mjs)"; docker compose build` (deployment.md
+        # 4.3). Left unset -> unknown/dev, which /api/health reports honestly
+        # rather than silently claiming an identity nobody actually built.
         # KAOIRO_BUILD_DIRTY joined the single revision-only arg in round 2
         # (ふじ MF-2 差し戻し): round 1 baked revision alone, so a dirty
         # checkout's image could claim the same identity as a clean one at
         # the same commit.
         KAOIRO_BUILD_REVISION: ${KAOIRO_BUILD_REVISION:-unknown}
         KAOIRO_BUILD_DIRTY: ${KAOIRO_BUILD_DIRTY:-false}
+        KAOIRO_BUILD_VERSION: ${KAOIRO_BUILD_VERSION:-unknown}
+        KAOIRO_BUILD_CHANNEL: ${KAOIRO_BUILD_CHANNEL:-dev}
     image: kaoiro-server:latest
     # Loopback-only by default. Auth (issue #28): KAOIRO_CLIENT_TOKENS
     # unset REJECTS all dashboard connections (fail-closed) — set it even

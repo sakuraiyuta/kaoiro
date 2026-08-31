@@ -4,6 +4,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 const OPERATOR = "/e2e/harness/index.html?view=lobby&role=operator";
 const VIEWER = "/e2e/harness/index.html?view=lobby&role=viewer";
+const APP = "/e2e/harness/index.html?view=app";
 
 async function gridColumnCount(page: Page): Promise<number> {
   return page
@@ -12,6 +13,18 @@ async function gridColumnCount(page: Page): Promise<number> {
       (el) => getComputedStyle(el).gridTemplateColumns.split(" ").length,
     );
 }
+
+test("app header shows server and client build identities", async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await page.goto(APP);
+  await expect(page.locator("header")).toBeVisible();
+  await expect(page.locator('[data-component="server"]')).toHaveText(
+    "kaoiro release server v2026.9.0 / 0123456",
+  );
+  await expect(page.locator('[data-component="client"]')).toHaveText(
+    /^kaoiro (?:dev|release) client v2026\.9\.0 \/ (?:[0-9a-f]{7}|unknown)$/,
+  );
+});
 
 test.describe("T1: operator lobby 939/940 — timeline sheet ⇔ side pane", () => {
   test("940px: timeline side-by-side, 2 columns, no handle", async ({ page }) => {

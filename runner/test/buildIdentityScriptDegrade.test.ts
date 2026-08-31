@@ -40,6 +40,8 @@ describe("computeBuildIdentity degrade rule (issue #228 round 2 MF-2)", () => {
     expect(identity).toEqual({
       revision: "unknown",
       dirty: false,
+      version: "unknown",
+      channel: "dev",
       degraded: true,
       degradeReason: expect.stringContaining("status"),
     });

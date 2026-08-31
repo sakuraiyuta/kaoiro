@@ -490,17 +490,19 @@ target SHA / backup destination / archive SHA-256**. Rollback uses the pair
 The old container keeps running with its old image ID; failure here has **zero
 impact on the live system**.
 
-**Pass `KAOIRO_BUILD_REVISION` / `KAOIRO_BUILD_DIRTY` explicitly** (build identity,
-issue #218, [ADR-0053](../adr/0053-build-identity.md)). Because `.dockerignore`
+**Pass `KAOIRO_BUILD_VERSION` / `KAOIRO_BUILD_CHANNEL` /
+`KAOIRO_BUILD_REVISION` / `KAOIRO_BUILD_DIRTY` explicitly** (build identity,
+issues #218/#288, [ADR-0053](../adr/0053-build-identity.md),
+[ADR-0056](../adr/0056-project-calver-build-version.md)). Because `.dockerignore`
 excludes `.git` from the build context, the Dockerfile cannot read git; forgetting
-these values makes `GET /api/health` return `build_revision: "unknown"` (the build
-still succeeds, affecting observability only). Obtain both from
+these values makes `GET /api/health` return an unknown development identity (the
+build still succeeds, affecting observability only). Obtain all four from
 `scripts/build-identity.mjs` (the same calculation that generates runner
 `dist/build-info.json`; issue #218 round 2 avoids two dirty definitions). Do not
 write them to `.env`; pass them as one-shot build environment variables (ADR-0053
 Alternatives Considered).
 
-**Do not forget `set -a`.** `scripts/build-identity.mjs` prints two plain
+**Do not forget `set -a`.** `scripts/build-identity.mjs` prints four plain
 `KEY=VALUE` lines without `export`. `eval` alone creates non-exported variables
 in the caller shell, and `docker compose build` is a separate process that does
 not inherit them. Running `eval` under `set -a` auto-exports subsequent

@@ -2,8 +2,9 @@ defmodule KaoiroServer.BuildIdentity do
   @moduledoc """
   Shared value-domain validation for build identity (issue #228 round 2,
   ふじ MF-3 差し戻し): `revision` is either the literal `"unknown"` or a
-  lowercase 40-hex-digit git SHA; `dirty` is a plain boolean. Distinct from
-  ADR-0015's protocol `version` — see docs/adr/0053-build-identity.md.
+  lowercase 40-hex-digit git SHA; `dirty` is a plain boolean; `version` is
+  the CalVer project version and `channel` is `"dev"` or `"release"`.
+  Distinct from ADR-0015's protocol `version` — see docs/adr/0053-build-identity.md.
 
   Used both when `HealthController` reads the build-time-baked
   `build-info.json` (server's own identity) and when `RunnerChannel` parses
@@ -17,10 +18,21 @@ defmodule KaoiroServer.BuildIdentity do
   """
 
   @revision_re ~r/\A[0-9a-f]{40}\z/
+  @version_re ~r/\A\d{4}\.(?:[1-9]|1[0-2])\.\d+\z/
 
   @doc "True for the literal \"unknown\" or a lowercase 40-hex-digit SHA."
   @spec valid_revision?(term()) :: boolean()
   def valid_revision?("unknown"), do: true
   def valid_revision?(v) when is_binary(v), do: Regex.match?(@revision_re, v)
   def valid_revision?(_), do: false
+
+  @doc "True for a CalVer project version in YYYY.M.PATCH form."
+  @spec valid_version?(term()) :: boolean()
+  def valid_version?(v) when is_binary(v), do: Regex.match?(@version_re, v)
+  def valid_version?(_), do: false
+
+  @doc "True for a supported build channel."
+  @spec valid_channel?(term()) :: boolean()
+  def valid_channel?(channel) when channel in ["dev", "release"], do: true
+  def valid_channel?(_), do: false
 end

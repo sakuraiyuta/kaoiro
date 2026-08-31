@@ -38,6 +38,16 @@ function mockAppFetch(): void {
           ? input.toString()
           : input.url;
     if (url.includes("/session/ticket")) return json({ ticket: "e2e" });
+    if (url.includes("/api/health")) {
+      return json({
+        status: "ok",
+        build_version: "2026.9.0",
+        build_channel: "release",
+        build_revision: "0123456789abcdef0123456789abcdef01234567",
+        build_dirty: false,
+        protocol_version: "0",
+      });
+    }
     if (url.includes("/session/auth-methods")) {
       return json({ token: true, oauth: [] });
     }

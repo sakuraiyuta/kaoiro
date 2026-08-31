@@ -6,7 +6,7 @@ opened: 2026-08-12
 supersedes: []
 superseded_by: null
 related_specs: [deployment, protocol]
-related_adrs: [15, 18, 23]
+related_adrs: [15, 18, 23, 56]
 ---
 
 # ADR-0053 — Introduce build identity and separate it from the protocol version
@@ -43,6 +43,10 @@ causes a compatibility error”.
 Introduce a build identity separate from the protocol version
 (only `revision` / `dirty`, plus `built_at` for the
 runner). `revision` and `dirty` are the identity.
+
+The project-version and release-channel extension is recorded separately in
+[ADR-0056](0056-project-calver-build-version.md); it does not change this
+ADR's protocol-version distinction.
 
 **`built_at` is a runner-only diagnostic field and is not carried by the
 server** (issue #218 round 2 advisory 2, ふじ's rejection — the wording

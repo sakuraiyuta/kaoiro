@@ -4,15 +4,19 @@
 # was moved out to /dashboard while server/Dockerfile still bundles it in
 # a node stage (issue #44). See server/docker-compose.yaml `build:`.
 #
-# Strategy: whitelist — deny everything, re-admit only the two trees the
+# Strategy: whitelist — deny everything, re-admit the two trees and the
 # server image needs, then drop the heavy / generated / secret bits back
 # out. Adding a new top-level dir therefore does NOT silently bloat the
-# context. Note `.git` stays excluded (nothing in the build reads it).
+# context. Build identity inputs are re-admitted explicitly below. Note
+# `.git` stays excluded (nothing in the build reads it).
 #
 # https://docs.docker.com/engine/reference/builder/#dockerignore-file
 *
 !server/
 !dashboard/
+!VERSION
+!scripts/
+!scripts/build-identity.mjs
 
 # Node deps (dashboard/node_modules must be rebuilt inside the image so
 # the lockfile install stays the single source of truth).

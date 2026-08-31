@@ -1,13 +1,34 @@
 import { svelte } from "@sveltejs/vite-plugin-svelte";
+import { computeBuildIdentity } from "../scripts/build-identity.mjs";
 // vitest/config re-exports Vite's defineConfig with the `test` field typed;
 // `vite build` / `vite dev` read it identically.
 import { defineConfig } from "vitest/config";
+
+function buildIdentity() {
+  const { KAOIRO_BUILD_VERSION, KAOIRO_BUILD_CHANNEL, KAOIRO_BUILD_REVISION } =
+    process.env;
+  if (KAOIRO_BUILD_VERSION && KAOIRO_BUILD_CHANNEL && KAOIRO_BUILD_REVISION) {
+    return {
+      version: KAOIRO_BUILD_VERSION,
+      channel: KAOIRO_BUILD_CHANNEL,
+      revision: KAOIRO_BUILD_REVISION,
+    };
+  }
+  return computeBuildIdentity();
+}
+
+const identity = buildIdentity();
 
 // Builds straight into the Phoenix server's priv/static (output is
 // gitignored; `mix dashboard.build` from server/ runs this). emptyOutDir
 // stays false so favicon and robots.txt survive.
 export default defineConfig({
   plugins: [svelte()],
+  define: {
+    "import.meta.env.VITE_KAOIRO_BUILD_VERSION": JSON.stringify(identity.version),
+    "import.meta.env.VITE_KAOIRO_BUILD_CHANNEL": JSON.stringify(identity.channel),
+    "import.meta.env.VITE_KAOIRO_BUILD_REVISION": JSON.stringify(identity.revision),
+  },
   // Component integration tests mount Svelte into jsdom. Without the browser
   // condition Vitest resolves `svelte` to index-server.js, where mount() is
   // intentionally unavailable.

@@ -27,7 +27,9 @@
 //                                               own directory, i.e. repo
 //                                               root); print
 //                                               KAOIRO_BUILD_REVISION= /
-//                                               KAOIRO_BUILD_DIRTY= lines
+//                                               KAOIRO_BUILD_DIRTY= /
+//                                               KAOIRO_BUILD_VERSION= /
+//                                               KAOIRO_BUILD_CHANNEL= lines
 //                                               (shell-sourceable, e.g.
 //                                               `eval "$(node
 //                                               scripts/build-identity.mjs)"`)
@@ -38,10 +40,10 @@
 //                                               string
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const repoRoot = dirname(fileURLToPath(import.meta.url));
+const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 
 /** Runs a git subcommand from `cwd`; returns trimmed stdout, or `null` if
  *  git is unavailable, `cwd` is not a checkout, or the command otherwise
@@ -74,11 +76,14 @@ function gitOutput(args, cwd) {
  * benefit here — see docs/adr/0053-build-identity.md.
  */
 export function computeBuildIdentity(cwd = repoRoot) {
+  const version = readProjectVersion(cwd);
   const rawRevision = gitOutput(["rev-parse", "HEAD"], cwd);
   if (rawRevision === null) {
     return {
       revision: "unknown",
       dirty: false,
+      version,
+      channel: "dev",
       degraded: true,
       degradeReason: "git rev-parse HEAD failed (no git, or not a checkout)",
     };
@@ -88,17 +93,51 @@ export function computeBuildIdentity(cwd = repoRoot) {
     return {
       revision: "unknown",
       dirty: false,
+      version,
+      channel: "dev",
       degraded: true,
       degradeReason:
         "git status --porcelain failed after a successful rev-parse HEAD",
     };
   }
+  const dirty = statusOutput.length > 0;
   return {
     revision: rawRevision,
-    dirty: statusOutput.length > 0,
+    dirty,
+    version,
+    channel: determineBuildChannel(cwd, rawRevision, dirty, version),
     degraded: false,
     degradeReason: null,
   };
+}
+
+const PROJECT_VERSION_RE = /^\d{4}\.(?:[1-9]|1[0-2])\.\d+$/;
+
+/** Reads the one project version file. A malformed or unavailable value is
+ *  intentionally visible as `unknown`; it must never become a plausible
+ *  release label through a fallback in one component. */
+export function readProjectVersion(cwd = repoRoot) {
+  try {
+    const version = readFileSync(join(cwd, "VERSION"), "utf8").trim();
+    return PROJECT_VERSION_RE.test(version) ? version : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+/** A release requires a clean tree, a commit reachable from `main`, and the
+ *  exact tag for VERSION. Detached CI checkouts remain eligible because
+ *  branch containment, rather than the current ref name, proves main. */
+function determineBuildChannel(cwd, revision, dirty, version) {
+  if (dirty || revision === "unknown" || version === "unknown") return "dev";
+  const branches = gitOutput(
+    ["branch", "--contains", revision, "--format=%(refname:short)"],
+    cwd,
+  );
+  const tags = gitOutput(["tag", "--points-at", revision], cwd);
+  const onMain = branches?.split("\n").some((branch) => branch === "main");
+  const hasVersionTag = tags?.split("\n").some((tag) => tag === `v${version}`);
+  return onMain && hasVersionTag ? "release" : "dev";
 }
 
 /** The single canonical `<revision>[-dirty]` string form. Formula-identical
@@ -208,6 +247,8 @@ function main() {
   }
   process.stdout.write(`KAOIRO_BUILD_REVISION=${identity.revision}\n`);
   process.stdout.write(`KAOIRO_BUILD_DIRTY=${identity.dirty}\n`);
+  process.stdout.write(`KAOIRO_BUILD_VERSION=${identity.version}\n`);
+  process.stdout.write(`KAOIRO_BUILD_CHANNEL=${identity.channel}\n`);
 }
 
 // Only run the CLI when invoked directly (`node build-identity.mjs`), not

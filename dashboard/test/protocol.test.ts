@@ -235,6 +235,8 @@ describe("fetchServerHealth (issue #228)", () => {
   it("health JSON を返す (no-store でフェッチする)", async () => {
     const health = {
       status: "ok",
+      build_version: "2026.9.0",
+      build_channel: "release",
       build_revision: "0123456789abcdef0123456789abcdef01234567",
       build_dirty: false,
       protocol_version: "0",
@@ -274,6 +276,8 @@ describe("fetchServerHealth (issue #228)", () => {
         ok: true,
         json: async () => ({
           status: "ok",
+          build_version: "2026.9.0",
+          build_channel: "release",
           build_revision: "0123456789abcdef0123456789abcdef01234567",
           protocol_version: "0",
         }),
@@ -292,6 +296,24 @@ describe("fetchServerHealth (issue #228)", () => {
         json: async () => ({
           status: "ok",
           build_revision: "not-a-real-sha",
+          build_dirty: false,
+          protocol_version: "0",
+        }),
+      })),
+    );
+    expect(await fetchServerHealth()).toBeNull();
+  });
+
+  it("build_channel が値域外なら null", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          status: "ok",
+          build_version: "2026.9.0",
+          build_channel: "main",
+          build_revision: "0123456789abcdef0123456789abcdef01234567",
           build_dirty: false,
           protocol_version: "0",
         }),

@@ -38,4 +38,32 @@ defmodule KaoiroServer.BuildIdentityTest do
       refute BuildIdentity.valid_revision?(true)
     end
   end
+
+  describe "valid_version?/1" do
+    test "CalVer YYYY.M.PATCH は valid" do
+      assert BuildIdentity.valid_version?("2026.9.0")
+    end
+
+    test "月 0 / 13 は invalid" do
+      refute BuildIdentity.valid_version?("2026.0.0")
+      refute BuildIdentity.valid_version?("2026.13.0")
+    end
+
+    test "文字列以外は invalid" do
+      refute BuildIdentity.valid_version?(nil)
+      refute BuildIdentity.valid_version?(2026)
+    end
+  end
+
+  describe "valid_channel?/1" do
+    test "dev と release は valid" do
+      assert BuildIdentity.valid_channel?("dev")
+      assert BuildIdentity.valid_channel?("release")
+    end
+
+    test "それ以外は invalid" do
+      refute BuildIdentity.valid_channel?("main")
+      refute BuildIdentity.valid_channel?(nil)
+    end
+  end
 end
