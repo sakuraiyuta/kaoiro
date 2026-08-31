@@ -253,6 +253,28 @@ function contextNoticeText(
   );
 }
 
+/** The turn injected once a `request_compact` `resume_prompt` reservation
+ *  fires on `compact_boundary` (ADR-0055, phase-33 Stage A). The prefix is a
+ *  FIXED literal — matching the `/compact` MUST just above it in the spec —
+ *  so the only agent-authored text in the injected turn is `resumePrompt`
+ *  itself, appended verbatim and unparsed. Two things the prefix has to
+ *  state (protocol-inter-agent.md "resume_prompt の発火規約"): where the
+ *  note came from (this agent's own past self, not the operator or another
+ *  agent), and that resuming is not urgent (P3 register, same as
+ *  `contextNoticeText` above) — a demand to "resume immediately at full
+ *  speed" would be exactly the kind of pressure #158 P3 already rejected for
+ *  the threshold notice, and there is no reason resume_prompt should differ. */
+export function resumeInjectionText(resumePrompt: string): string {
+  return (
+    "[kaoiro] Compaction has finished. Before requesting it, you left " +
+    "yourself the resume note below (via request_compact's resume_prompt) " +
+    "to pick up where you left off. There is no need to resume at full " +
+    "speed right away — get your bearings first, then continue at " +
+    "whatever pace the current state actually calls for.\n\n" +
+    resumePrompt
+  );
+}
+
 // PermissionDecision / QuestionDecision moved to @kaoiro/agent-common with
 // the brokers (phase-13); re-exported here so the host's public surface is
 // unchanged.
@@ -669,6 +691,13 @@ export class AgentHost implements EngineAdapter {
    *    this cap such an epoch would be muted for its whole life. */
   #contextEpochGate: { atOrBelow: number | null; readings: number } | null =
     null;
+  /** `request_compact`'s optional `resume_prompt`, held until the next
+   *  `compact_boundary` observation fires it (ADR-0055, phase-33 Stage A).
+   *  Wrapper-local memory only, per spec — a wrapper crash mid-compaction
+   *  loses it, and nothing re-derives it from anywhere else. A second
+   *  reservation before the boundary replaces the first (same "later call
+   *  is the current intent" rule as `SessionResetCoordinator#reserve`). */
+  #resumeReservation: string | null = null;
   readonly #rateLimits = new Map<
     string,
     { status?: string; utilization?: number; resets_at?: number }
@@ -1748,8 +1777,23 @@ export class AgentHost implements EngineAdapter {
               // ResultMessage or stream EOF opens the input barrier. This avoids
               // letting a buffered A result settle a newly-yielded B (#246).
               await this.#reconcilePendingTasklistRefreshes("conversation_reset");
+              // ADR-0055 Stage A (code-review-assessment round 1): a
+              // reservation made before this reset was written for a
+              // conversation that no longer exists. Left uncleared, it would
+              // sit and fire on some LATER, unrelated compact_boundary —
+              // injecting a note claiming "you left yourself this" into a
+              // context that never wrote it. Symmetric with
+              // #invalidateContextEpoch just below, which already treats
+              // compact_boundary and conversation_reset alike.
+              this.#resumeReservation = null;
             }
             this.#invalidateContextEpoch(compact.tokens);
+            // ADR-0055 Stage A: fires ONLY on an actual compaction boundary,
+            // never on conversation_reset (see #maybeFireResumeReservation's
+            // own doc for why).
+            if (compact.kind === "compact_boundary") {
+              this.#maybeFireResumeReservation();
+            }
           }
         }
         const result = sdkMessageToResult(message);
@@ -2516,6 +2560,40 @@ export class AgentHost implements EngineAdapter {
     this.#contextNoticeSent = false;
     if (hadReading) this.#emitState(this.#machine.state);
     void this.#refreshContextUsage();
+  }
+
+  /** Records a `request_compact` `resume_prompt` reservation (ADR-0055,
+   *  phase-33 Stage A). Public: wired from cli.ts's `requestCompactDescriptor`
+   *  option, called only after the tool's own `send(COMPACT_COMMAND)` has
+   *  already succeeded — a reservation for a compaction that was never
+   *  actually queued would fire on some LATER, unrelated boundary instead. */
+  reserveResume(prompt: string): void {
+    this.#resumeReservation = prompt;
+  }
+
+  /** Fires a pending `resume_prompt` reservation, if any, on THIS
+   *  `compact_boundary` observation (ADR-0055, phase-33 Stage A — the
+   *  original problem this closes: an agent does not return to work on its
+   *  own after compaction). Consumed immediately so a later boundary with no
+   *  fresh reservation stays silent, matching the B1 notice's one-shot
+   *  budget just below. Deliberately NOT called for `conversation_reset`:
+   *  that is a full session wipe, not a compaction, and a resume note
+   *  written for "after compacting" would misdescribe what just happened. */
+  #maybeFireResumeReservation(): void {
+    const prompt = this.#resumeReservation;
+    if (prompt === null) return;
+    this.#resumeReservation = null;
+    const text = resumeInjectionText(prompt);
+    void this.#enqueueInjection(async () => {
+      if (this.#closed) return;
+      await this.send(text);
+    }).catch((err: unknown) => {
+      // Closed or full queue. The reservation is already consumed above —
+      // unlike the B1 notice, there is no budget to re-arm: a fired-but-
+      // undelivered resume note re-injected later would land detached from
+      // the boundary it was meant to follow.
+      process.stderr.write(`resume_prompt injection not queued: ${String(err)}\n`);
+    });
   }
 
   /** Queues the one threshold notice this context epoch is allowed

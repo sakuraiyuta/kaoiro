@@ -1208,6 +1208,203 @@ describe("AgentHost — query injection", () => {
     expect(notices.some((t) => t.includes("80%"))).toBe(false);
   });
 
+  // ADR-0055 phase-33 Stage A (issue #200): `request_compact`'s optional
+  // `resume_prompt` fires on the wrapper's own next `compact_boundary`
+  // observation. Stage A scope is wrapper-local only (no server change).
+  describe("resume_prompt 発火 (ADR-0055 phase-33 Stage A)", () => {
+    /** Same shape as contextQueryFn above: the background IIFE drains
+     *  args.prompt into `injected` and signals `sync.injection()` once a
+     *  "[kaoiro] Compaction"-prefixed turn lands, so a `script` that expects
+     *  one can await it instead of guessing when the query may safely end
+     *  (ending it too early would close the host before a delayed send —
+     *  the MF2-style test below — ever reaches args.prompt). A `script`
+     *  that expects NOTHING (the negative-case tests) simply never awaits
+     *  it and returns on its own terms, same as contextQueryFn's TC-2. */
+    function resumeQueryFn(
+      script: (sync: {
+        injection: () => Promise<void>;
+      }) => AsyncGenerator<SDKMessage, void>,
+    ): { queryFn: QueryFn; injected: string[] } {
+      const injected: string[] = [];
+      const injections = signalQueue();
+      const queryFn = makeQueryFn((args: QueryArgs) => {
+        void (async () => {
+          for await (const turn of args.prompt) {
+            const content = turn.message.content;
+            if (typeof content !== "string") continue;
+            injected.push(content);
+            if (content.startsWith("[kaoiro] Compaction")) {
+              injections.signal();
+            }
+          }
+        })();
+        return asQuery(
+          script({ injection: injections.wait }),
+          async () => {},
+          async () => ({ totalTokens: 9000, maxTokens: 200000, percentage: 5 }),
+        );
+      });
+      return { queryFn, injected };
+    }
+
+    const boundary = (preTokens: number): SDKMessage =>
+      msg({
+        type: "system",
+        subtype: "compact_boundary",
+        compact_metadata: { trigger: "manual", pre_tokens: preTokens },
+      });
+
+    it("reserveResume 済みなら compact_boundary で固定前置 + 逐語を注入する", async () => {
+      const { queryFn, injected } = resumeQueryFn(async function* (sync) {
+        yield boundary(22315);
+        yield result("success", { result: "ok" });
+        await sync.injection();
+      });
+      const host = new AgentHost(config, {
+        onState: () => {},
+        queryFn,
+        now: () => "T",
+        enqueueInjection: (task) => task(),
+      });
+      host.reserveResume("issue #200 Stage A の続き。次は cli.ts の配線。");
+      await host.run();
+      const notes = injected.filter((t) => t.startsWith("[kaoiro] Compaction"));
+      expect(notes).toHaveLength(1);
+      // 逐語 (agent 自筆の resume_prompt 本文) が丸ごと残っている。
+      expect(notes[0]).toContain(
+        "issue #200 Stage A の続き。次は cli.ts の配線。",
+      );
+      // 固定前置の MUST 2 点: 出所の明示、即時全力再開を強制しない中立な文言。
+      expect(notes[0]).toContain("resume note");
+      expect(notes[0]).toContain("resume_prompt");
+      expect(notes[0]).toContain("no need to resume at full speed");
+    });
+
+    it("reserveResume していなければ compact_boundary は何も注入しない (回帰: 省略時は現状と完全一致)", async () => {
+      const { queryFn, injected } = resumeQueryFn(async function* () {
+        yield boundary(22315);
+        yield result("success", { result: "ok" });
+      });
+      const host = new AgentHost(config, {
+        onState: () => {},
+        queryFn,
+        now: () => "T",
+        enqueueInjection: (task) => task(),
+      });
+      await host.run();
+      expect(
+        injected.filter((t) => t.startsWith("[kaoiro] Compaction")),
+      ).toEqual([]);
+    });
+
+    it("conversation_reset では発火しない — compact_boundary だけの契約", async () => {
+      const { queryFn, injected } = resumeQueryFn(async function* () {
+        yield msg({ type: "conversation_reset", new_conversation_id: "c-2" });
+        yield result("success", { result: "ok" });
+      });
+      const host = new AgentHost(config, {
+        onState: () => {},
+        queryFn,
+        now: () => "T",
+        enqueueInjection: (task) => task(),
+      });
+      host.reserveResume("この予約は conversation_reset では発火してはいけない");
+      await host.run();
+      expect(
+        injected.filter((t) => t.startsWith("[kaoiro] Compaction")),
+      ).toEqual([]);
+    });
+
+    // code-review-assessment round 1 (BUG, survives 2/2): 上のテストは
+    // conversation_reset "そのもの" で発火しないことしか見ておらず、
+    // reset を挟んだ後の別の compact_boundary で予約が生き残って誤発火
+    // することを見逃していた。reset の対象と無関係な note が、reset 後の
+    // 会話へ「あなたが自分で残したメモです」と注入されるのを防ぐ。
+    it("conversation_reset を挟むと予約は消え、直後の無関係な boundary でも発火しない", async () => {
+      const { queryFn, injected } = resumeQueryFn(async function* () {
+        yield msg({ type: "conversation_reset", new_conversation_id: "c-2" });
+        yield result("success", { result: "1" });
+        yield boundary(9000);
+        yield result("success", { result: "2" });
+      });
+      const host = new AgentHost(config, {
+        onState: () => {},
+        queryFn,
+        now: () => "T",
+        enqueueInjection: (task) => task(),
+      });
+      host.reserveResume(
+        "reset より前の予約 — reset 後の無関係な boundary で誤発火してはいけない",
+      );
+      await host.run();
+      expect(
+        injected.filter((t) => t.startsWith("[kaoiro] Compaction")),
+      ).toEqual([]);
+    });
+
+    it("一度発火したら消費される — 新しい予約が無い 2 回目の boundary では再発火しない", async () => {
+      const { queryFn, injected } = resumeQueryFn(async function* (sync) {
+        yield boundary(22315);
+        yield result("success", { result: "1" });
+        await sync.injection();
+        yield boundary(9000);
+        yield result("success", { result: "2" });
+      });
+      const host = new AgentHost(config, {
+        onState: () => {},
+        queryFn,
+        now: () => "T",
+        enqueueInjection: (task) => task(),
+      });
+      host.reserveResume("1 回目の boundary だけで消費される予約");
+      await host.run();
+      expect(
+        injected.filter((t) => t.startsWith("[kaoiro] Compaction")),
+      ).toHaveLength(1);
+    });
+
+    // BR MF2 と同じ懸念 (B1 の閾値通知に対する既存テストの裏取り) を
+    // resume_prompt にも適用する: 先に積まれた遅い send を追い越して
+    // SDK 入力ストリームへ出てはいけない。
+    it("先行する遅い send を追い越さない (MF2 と同型)", async () => {
+      const priorStarted = deferred<void>();
+      const releasePrior = deferred<void>();
+      let chain: Promise<void> = Promise.resolve();
+      const enqueueInjection = (task: () => Promise<void>): Promise<void> => {
+        const queued = chain.then(task);
+        chain = queued.catch(() => {});
+        return queued;
+      };
+      let host!: AgentHost;
+      const { queryFn, injected } = resumeQueryFn(async function* (sync) {
+        yield boundary(22315);
+        yield result("success", { result: "ok" });
+        await sync.injection();
+      });
+      host = new AgentHost(config, {
+        onState: () => {},
+        queryFn,
+        now: () => "T",
+        enqueueInjection,
+      });
+      host.reserveResume("追い越してはいけない予約");
+      void enqueueInjection(async () => {
+        priorStarted.resolve();
+        await releasePrior.promise;
+        await host.send("prior instruction");
+      });
+      const done = host.run();
+      await priorStarted.promise;
+      releasePrior.resolve();
+      await done;
+      const noteAt = injected.findIndex((t) =>
+        t.startsWith("[kaoiro] Compaction"),
+      );
+      expect(noteAt).toBeGreaterThan(-1);
+      expect(injected.indexOf("prior instruction")).toBeLessThan(noteAt);
+    });
+  });
+
   // 藤 review S1: compact_error は SDK 由来の任意長文字列。log 上限を
   // 素通りしないことを path 全体で pin する。
   it("巨大な compact_error は system log として clip される (S1)", async () => {

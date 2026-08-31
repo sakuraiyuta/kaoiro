@@ -938,6 +938,11 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
               // a closed or full queue instead of claiming a reservation it
               // never made.
               send: (text) => enqueueInstruction(() => host.send(text)),
+              // ADR-0055 phase-33 Stage A: `host` is not constructed yet at
+              // this point (same deferred-closure reason `send` above uses
+              // `enqueueInstruction`, not `host.send`, directly) — this
+              // closure is only ever CALLED after `createHost` below returns.
+              reserveResume: (prompt) => host.reserveResume(prompt),
             }),
             inputShape: REQUEST_COMPACT_INPUT_SHAPE,
           },

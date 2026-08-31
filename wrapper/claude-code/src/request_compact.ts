@@ -34,7 +34,7 @@ export const REQUEST_COMPACT_TOOL_FQN = "mcp__kaoiro__request_compact";
 export const COMPACT_COMMAND = "/compact";
 
 const REQUEST_COMPACT_DESCRIPTION =
-  "Ask the operator to approve compacting this session's context. On approval the wrapper queues `/compact`, which runs at the next turn boundary and replaces the older conversation with a summary; the call returns as soon as the compaction is RESERVED, not when it finishes. How long it then takes scales with how much context there is to compact and can run to several minutes; the transcript reports completion with whatever token counts the engine provides. Use this when you have judged that context headroom is actually limiting the work — after a long session, or before taking on a large task — not as routine hygiene. The operator may decline, in which case carry on as you were. Anything you still need after the compaction should be written down first (a file, an issue, a message to a peer): a compaction summarizes and drops detail, and nothing restores it.";
+  "Ask the operator to approve compacting this session's context. On approval the wrapper queues `/compact`, which runs at the next turn boundary and replaces the older conversation with a summary; the call returns as soon as the compaction is RESERVED, not when it finishes. How long it then takes scales with how much context there is to compact and can run to several minutes; the transcript reports completion with whatever token counts the engine provides. Use this when you have judged that context headroom is actually limiting the work — after a long session, or before taking on a large task — not as routine hygiene. The operator may decline, in which case carry on as you were. Anything you still need after the compaction should be written down first (a file, an issue, a message to a peer): a compaction summarizes and drops detail, and nothing restores it. Optionally, resume_prompt lets you write yourself a note now, while full context is still available, that will be redelivered verbatim as your own next turn once compaction finishes — the mechanism this tool offers for picking work back up on your own, without the operator having to notice and wake you.";
 
 const REQUEST_COMPACT_INPUT_SCHEMA: Record<string, unknown> = {
   type: "object",
@@ -43,6 +43,11 @@ const REQUEST_COMPACT_INPUT_SCHEMA: Record<string, unknown> = {
       type: "string",
       description:
         "One sentence on why compaction is warranted now. Shown to the operator in the approval dialog.",
+    },
+    resume_prompt: {
+      type: "string",
+      description:
+        "Optional note to your own post-compaction self: what you were doing, what's next, anything to watch out for. Written now, while full context is still present, so it can be the highest-quality instruction you can give yourself. Redelivered verbatim (behind a fixed explanatory prefix) as a turn once compaction actually completes. Omit it and nothing fires automatically — exactly today's behavior. Shown to the operator in the approval dialog, same as reason.",
     },
   },
   additionalProperties: false,
@@ -53,6 +58,7 @@ const REQUEST_COMPACT_INPUT_SCHEMA: Record<string, unknown> = {
  *  in one file rather than across two. */
 export const REQUEST_COMPACT_INPUT_SHAPE = {
   reason: z.string().optional(),
+  resume_prompt: z.string().optional(),
 };
 
 export interface RequestCompactOptions {
@@ -60,6 +66,14 @@ export interface RequestCompactOptions {
    *  Its own serialization is what keeps the injected `/compact` from
    *  landing mid-turn (ADR-0036 F6: no automatic interrupt). */
   send: (text: string) => Promise<void>;
+  /** Records a `resume_prompt` reservation, normally
+   *  `AgentHost#reserveResume` (ADR-0055, phase-33 Stage A). Called only
+   *  after `send` above has already succeeded — see the handler below.
+   *  Omitted = a given resume_prompt is accepted (still echoed to the
+   *  operator) but never delivered; unit tests and embedders that do not
+   *  care about resume delivery can leave it out. Production always wires
+   *  it. */
+  reserveResume?: (prompt: string) => void;
 }
 
 /** The `request_compact` descriptor. Registered by the Claude adapter's
@@ -74,15 +88,30 @@ export function requestCompactDescriptor(
     handler: async (input) => {
       const reason =
         typeof input.reason === "string" ? input.reason.trim() : "";
+      const resumePrompt =
+        typeof input.resume_prompt === "string"
+          ? input.resume_prompt.trim()
+          : "";
       try {
         await options.send(COMPACT_COMMAND);
       } catch (err) {
         // The queue is closed or full. Fail loudly rather than reporting a
         // reservation the wrapper did not make — the model would otherwise
-        // wait for a compaction that is never coming.
+        // wait for a compaction that is never coming. A resume_prompt is
+        // NOT reserved on this path either: a note for a compaction that
+        // was never actually queued would sit and fire on some later,
+        // unrelated boundary instead.
         return errorResult(`request_compact failed: ${String(err)}`);
       }
+      if (resumePrompt !== "") {
+        options.reserveResume?.(resumePrompt);
+      }
       const because = reason === "" ? "" : ` (reason: ${reason})`;
+      const resumeNote =
+        resumePrompt === ""
+          ? ""
+          : " A resume note is reserved and will be redelivered to you " +
+            "once compaction finishes.";
       return {
         content: [
           {
@@ -91,7 +120,7 @@ export function requestCompactDescriptor(
               `compaction reserved${because}. It runs at the next turn ` +
               "boundary and can take several minutes on a large context; " +
               "the transcript reports completion. Nothing further is " +
-              "needed from you.",
+              `needed from you.${resumeNote}`,
           },
         ],
       };

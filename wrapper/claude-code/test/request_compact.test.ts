@@ -86,6 +86,96 @@ describe("request_compact descriptor", () => {
     expect(result.isError).toBe(true);
     expect(result.content[0]?.text).toContain("agent host is closed");
   });
+
+  // ADR-0055 phase-33 Stage A: resume_prompt が省略された既存の呼び出し
+  // パターンは何も変わらない (opt-in の回帰テスト)。
+  describe("resume_prompt (issue #200 Stage A)", () => {
+    it("省略時は reserveResume を一切呼ばず、tool result にも何も足さない", async () => {
+      const reserved: string[] = [];
+      const tool = requestCompactDescriptor({
+        send: async () => {},
+        reserveResume: (prompt) => reserved.push(prompt),
+      });
+      const result = await tool.handler({});
+      expect(reserved).toEqual([]);
+      expect(result.content[0]?.text).not.toContain("resume note");
+    });
+
+    it("reserveResume を渡さなくても動作する (テスト/embedder 向けの省略可)", async () => {
+      const tool = requestCompactDescriptor({ send: async () => {} });
+      const result = await tool.handler({ resume_prompt: "続きはここから" });
+      expect(result.isError).toBeUndefined();
+    });
+
+    it("承認後、send 成功後に resume_prompt を逐語で reserveResume へ渡す", async () => {
+      const sent: string[] = [];
+      const reserved: string[] = [];
+      const tool = requestCompactDescriptor({
+        send: async (text) => {
+          sent.push(text);
+        },
+        reserveResume: (prompt) => reserved.push(prompt),
+      });
+      const result = await tool.handler({
+        resume_prompt: "issue #200 Stage A の実装中。次は cli.ts の配線。",
+      });
+      expect(sent).toEqual([COMPACT_COMMAND]);
+      expect(reserved).toEqual([
+        "issue #200 Stage A の実装中。次は cli.ts の配線。",
+      ]);
+      expect(result.content[0]?.text).toContain("resume note is reserved");
+    });
+
+    it("前後の空白は trim してから reserveResume へ渡す", async () => {
+      const reserved: string[] = [];
+      const tool = requestCompactDescriptor({
+        send: async () => {},
+        reserveResume: (prompt) => reserved.push(prompt),
+      });
+      await tool.handler({ resume_prompt: "  続きはここから  \n" });
+      expect(reserved).toEqual(["続きはここから"]);
+    });
+
+    it("空文字列/空白のみは reserveResume を呼ばない", async () => {
+      const reserved: string[] = [];
+      const tool = requestCompactDescriptor({
+        send: async () => {},
+        reserveResume: (prompt) => reserved.push(prompt),
+      });
+      const result = await tool.handler({ resume_prompt: "   " });
+      expect(reserved).toEqual([]);
+      expect(result.content[0]?.text).not.toContain("resume note");
+    });
+
+    it("resume_prompt が文字列でなければ黙って無視する", async () => {
+      const reserved: string[] = [];
+      const tool = requestCompactDescriptor({
+        send: async () => {},
+        reserveResume: (prompt) => reserved.push(prompt),
+      });
+      const result = await tool.handler({ resume_prompt: 42 });
+      expect(reserved).toEqual([]);
+      expect(result.content[0]?.text).not.toContain("42");
+    });
+
+    // send() が失敗する = compaction 自体が queue されていない。この
+    // resume_prompt を後から届いた別の compact_boundary で誤発火させない
+    // ため、send 失敗時は reserveResume を呼んではいけない。
+    it("send が失敗したら reserveResume を呼ばない", async () => {
+      const reserved: string[] = [];
+      const tool = requestCompactDescriptor({
+        send: async () => {
+          throw new Error("agent host is closed");
+        },
+        reserveResume: (prompt) => reserved.push(prompt),
+      });
+      const result = await tool.handler({
+        resume_prompt: "この予約は成立してはいけない",
+      });
+      expect(reserved).toEqual([]);
+      expect(result.isError).toBe(true);
+    });
+  });
 });
 
 describe("kaoiro MCP server registration", () => {
