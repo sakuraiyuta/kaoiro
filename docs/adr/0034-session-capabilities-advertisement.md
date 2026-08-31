@@ -1,5 +1,5 @@
 ---
-title: セッション機能 (session capabilities) の envelope advertisement
+title: Envelope advertisement of session capabilities
 status: accepted
 date: 2026-07-11
 opened: 2026-07-11
@@ -9,31 +9,57 @@ related_specs: [protocol, plugin-model, file-upload]
 related_adrs: [22, 25, 32, 33, 35, 36, 37, 40]
 ---
 
-# ADR-0034 — セッション機能 (session capabilities) の envelope advertisement
+# ADR-0034 — Envelope advertisement of session capabilities
 
 ## Status
 
-Accepted (実装は [phase-15-wrapper-ux-parity](../plans/phase-15-wrapper-ux-parity.md))。
+Accepted (implementation is [phase-15-wrapper-ux-parity](../plans/phase-15-wrapper-ux-parity.md)).
 
 ## Context
 
-[phase-14](../plans/phase-14-codex-adapter.md) で Codex adapter が accepted 昇格した後の実運用検証で、UI 側で「機能可用性を engine 名で分岐しがちなコード動線」が複数箇所存在することが判明した。具体例:
+After the Codex adapter was promoted to accepted in [phase-14](../plans/phase-14-codex-adapter.md),
+operational verification found several UI paths where “feature availability is
+often branched on engine name”. Specific examples:
 
-- Composer の添付 (file upload) ボタン: 当時の Codex adapter は attach_open を wholesale reject していたが、engine 名で「Codex なら disable」判定を入れると、将来 Codex が画像入力等の attachment を実装した際 false negative になる (SDK 側実装は追随せず UI だけ古い判定で塞ぐ)。実際 phase-14 で Codex は画像添付に対応し、この懸念は現実になった。
-- AskUserQuestion (`ask_user_question` MCP tool) の可用性: Codex では MCP bridge 経由で提供しているが、実運用上 plan tier (Free / Go) や別の実装制約で「その session で dialog が発火しない」ケースが起こりうる (もも実運用視点、2026-07-11 挙動確認)。
-- session 単位で可変な項目 (auth mode / plan tier / wrapper 実装状況の差) を engine 名だけでは表現不能。
+- Composer’s attachment (file upload) button: the Codex adapter at that time
+  wholesale-rejected attach_open, but adding an engine-name rule “disable for
+  Codex” would create a false negative when Codex later implemented image input
+  (the SDK implementation would advance while the UI alone stayed blocked). In
+  fact, phase-14 made this concern real when Codex gained image attachment support.
+- AskUserQuestion (`ask_user_question` MCP tool) availability: Codex provides it
+  through the MCP bridge, but in operation there can be cases where the dialog
+  does not fire in that session because of the plan tier (Free / Go) or another
+  implementation constraint (behavior confirmed from もも’s operational view on
+  2026-07-11).
+- Values that vary per session (auth mode / plan tier / differences in wrapper
+  implementation) cannot be represented by engine name alone.
 
-engine 名判定が持ち込む false negative/positive のリスクは、engine 進化が続く限り恒常的に発生する。判定軸を engine 名から「その session が advertise する機能集合」に置換し、UI は capability advertise のみを見て機能可用性を判断する設計へ寄せる。
+The false-negative / false-positive risk introduced by engine-name checks will
+continue as engines evolve. Replace engine name as the decision axis with the set
+of features advertised by each session, and make the UI determine availability
+only from advertised capabilities.
 
-phase-14 の envelope schema ([ADR-0033](0033-permission-model-dual-axis.md)) が既に「実効値 (`ext.permission`) を engine 中立に載せる」パターンを確立しているため、機能可用性も同じパターンで拡張する自然な延長。
+The phase-14 envelope schema ([ADR-0033](0033-permission-model-dual-axis.md))
+already established the pattern of putting effective values (`ext.permission`)
+into the envelope in an engine-neutral form. Feature availability is a natural
+extension of the same pattern.
 
 ## Decision
 
-### F1 — envelope schema `ext.session_capabilities` の追加
+### F1 — Add envelope schema `ext.session_capabilities`
 
-wrapper は **spawn 直後の最初の state_change から** `state_change.ext.session_capabilities` を stamp する (adapter 構築時に capability を組み立て、初回 state_change で送出)。以降の state_change でも同じ ext を維持し、session 中に変化しうる値は変化時に更新する。
+The wrapper stamps `state_change.ext.session_capabilities` **starting with the
+first state_change immediately after spawn** (assemble capabilities when building
+the adapter and send them on the first state_change). Keep the same ext on later
+state_changes, updating values that can change during the session when they change.
 
-session_init 相当のイベント (Claude の `SDKSystemMessage(init)`、Codex の `thread.started`) を**待たない** — Codex は毎ターン `codex exec` を新規 spawn する process モデル ([codex-sdk-events](../specs/codex-sdk-events.md)) のため `thread.started` は初ターン発生まで到達せず、末尾の fail-closed default と組むと起動直後の Codex agent が「未対応」誤表示になる ([phase-15](../plans/phase-15-wrapper-ux-parity.md) の楽観 stamp 原則と同じ path で流す):
+**Do not wait** for a session_init-equivalent event (Claude’s
+`SDKSystemMessage(init)` or Codex’s `thread.started`): Codex spawns a new
+`codex exec` process for every turn ([codex-sdk-events](../specs/codex-sdk-events.md)),
+so `thread.started` is not reached until the first turn. Combined with the
+fail-closed default at the end, waiting would incorrectly display a Codex agent
+that has just started as “unsupported” (pass it through the same optimistic-stamp
+principle as [phase-15](../plans/phase-15-wrapper-ux-parity.md)):
 
 ```json
 {
@@ -52,117 +78,163 @@ session_init 相当のイベント (Claude の `SDKSystemMessage(init)`、Codex 
 }
 ```
 
-未 stamp (フィールド未提供) 時、UI は保守的に「機能なし」と解釈する (false 相当。attach ボタン disabled、質問 dialog 系 UI は「未対応」表示)。fail-closed。
+When not stamped (the field is not provided), the UI conservatively interprets it
+as “no features” (false equivalent: disable the attach button and display question
+dialog UI as “unsupported”). Fail-closed.
 
-### F2 — 初期 field 集合
+### F2 — Initial field set
 
-`@kaoiro/protocol` の envelope 型に次を追加:
+Add the following to the envelope type in `@kaoiro/protocol`:
 
-| field | 型 | 意味 |
+| field | type | meaning |
 |---|---|---|
-| `supports_attachments` | `boolean` | 添付ファイル (file upload) を受け入れるか。false のとき Composer の attach ボタンは disabled + tooltip「このセッションでは未対応」 |
-| `attachment_types` | `("image")[]` (optional) | 添付の種類制限。**absent = 種類制限なし**で既存 `supports_attachments` の意味を維持し、present = 列挙された型のみ許可する。初期 vocabulary は engine-neutral な `"image"` のみ。 |
-| `supports_user_input_dialog` | `boolean` | `ask_user_question` (MCP tool / SDK 特別分岐 いずれでも) が使えるか。false のとき AgentDetail の質問 UI 系は「未対応」表示 |
-| `user_input_modes` | `string[]` (optional) | dialog が使える権限 mode / sandbox の条件集合 (例: `["plan"]` = plan mode でのみ dialog が発火する)。空/未指定 = 無条件 |
+| `supports_attachments` | `boolean` | Whether the session accepts attachments (file upload). When false, disable the Composer attach button + show the tooltip “unsupported in this session”. |
+| `attachment_types` | `("image")[]` (optional) | Attachment-type restriction. **Absent = no type restriction**, preserving the existing meaning of `supports_attachments`; present = allow only enumerated types. The initial engine-neutral vocabulary contains only `"image"`. |
+| `supports_user_input_dialog` | `boolean` | Whether `ask_user_question` (MCP tool / special SDK branch either way) can be used. When false, display question UI in AgentDetail as “unsupported”. |
+| `user_input_modes` | `string[]` (optional) | The permission mode / sandbox conditions under which the dialog can be used (for example, `["plan"]` = the dialog fires only in plan mode). Empty / unspecified = unconditional. |
 
-追加 field の `supports_model_switch` / `supports_effort_switch` は [ADR-0035](0035-codex-model-catalog-and-mid-session-switch.md) F4 とphase-16で Codex に実装済みで、`supports_effort_switch` は #105 で Claude にも実装した。`supports_session_reset` / `session_reset_modes` は [ADR-0036](0036-session-lifecycle-commands.md) F5とphase-17で実装済み。将来の field (例: `supports_cwd_tracking`) も本 ADR の枠内で envelope schema + agent-common 型を追補して追加できる。
+Additional fields `supports_model_switch` / `supports_effort_switch` were already
+implemented for Codex by [ADR-0035](0035-codex-model-catalog-and-mid-session-switch.md) F4
+and phase-16, and `supports_effort_switch` was also implemented for Claude under
+#105. `supports_session_reset` / `session_reset_modes` were implemented under
+[ADR-0036](0036-session-lifecycle-commands.md) F5 and phase-17. Future fields
+(for example, `supports_cwd_tracking`) can be added within this ADR by extending
+the envelope schema + agent-common type.
 
-### F3 — UI 判定原則
+### F3 — UI decision principle
 
-UI は engine 名 (`ext.engine`) では機能可用性を判定しない。以下の対応:
+The UI does not determine feature availability from the engine name
+(`ext.engine`). Use these mappings:
 
-- Composer 添付ボタン: `ext.session_capabilities.supports_attachments === true` のときのみ enabled
-- AgentDetail / Composer の質問 UI: `ext.session_capabilities.supports_user_input_dialog === true` のときのみ活性、`user_input_modes` が指定されていて現在の mode がその集合に含まれないときは「条件付き未対応」表示
+- Composer attachment button: enabled only when
+  `ext.session_capabilities.supports_attachments === true`
+- AgentDetail / Composer question UI: active only when
+  `ext.session_capabilities.supports_user_input_dialog === true`; when
+  `user_input_modes` is specified and the current mode is not in the set, display
+  “conditionally unsupported”
 
-`ext.engine` は依然 envelope 上に残るが、その用途は表示 (engine バッジ) と log/telemetry のみに限定する。機能可用性の判定に engine 名を使ってはならない (レビュー時に検出)。
+Keep `ext.engine` in the envelope, but limit it to display (engine badge) and
+log/telemetry. Do not use engine name to determine feature availability (detect
+this during review).
 
-### F4 — engine adapter 側の advertise 実装
+### F4 — Advertisement implementation in engine adapters
 
-`@kaoiro/agent-common` の `EngineAdapter` interface に capability 取得 hook を追加せず、各 adapter が state stamp 経路 (`#statusExt` 相当) で直接 `session_capabilities` を組み立てる。理由: capability は session-lifetime にわたる「静的な事実」ではなく、adapter 実装 + spawn 時選択 + auth mode の合成結果なので、adapter 内部で組み立てて envelope に流す形が実態に近い。
+Do not add a capability-retrieval hook to the `EngineAdapter` interface in
+`@kaoiro/agent-common`; each adapter builds `session_capabilities` directly in
+the state-stamp path (equivalent to `#statusExt`). The reason is that capability
+is not a “static fact” over the session lifetime, but a composition of adapter
+implementation + spawn-time selection + auth mode; assembling it inside the
+adapter and passing it into the envelope reflects reality more closely.
 
-初期実装:
+Initial implementation:
 
-- `wrapper/claude-code` (Claude adapter): `supports_attachments: true` / `supports_user_input_dialog: true` (無条件)。将来 SDK 側で条件が付いた際は本箇所で追加分岐。
-- `wrapper/codex` (Codex adapter): `supports_attachments: true, attachment_types: ["image"]` / `supports_user_input_dialog: true`。`"image"` は adapter 内で SDK の `local_image` path input へ変換し、SDK 用語を protocol に漏らさない。Claude は `attachment_types` を advertise しないため、既存どおり種類制限なし。plan tier 判定は [codex-model-catalog](../specs/codex-model-catalog.md) の `codex doctor` 情報から派生させたいが plan tier 自体が取得不能なため、MVP は無条件 true。Free/Go plan で dialog が使えない挙動が観測されたら、その時点で `user_input_modes` を advertise する形へ縮退。
+- `wrapper/claude-code` (Claude adapter): `supports_attachments: true` /
+  `supports_user_input_dialog: true` (unconditional). Add a branch here if the
+  SDK later imposes conditions.
+- `wrapper/codex` (Codex adapter): `supports_attachments: true, attachment_types: ["image"]` / `supports_user_input_dialog: true`. The adapter
+  translates `"image"` into the SDK’s `local_image` path input without leaking SDK
+  terminology into the protocol. Claude does not advertise `attachment_types`,
+  so it retains the existing unrestricted type behavior. We would like to derive
+  plan-tier checks from `codex doctor` information in [codex-model-catalog](../specs/codex-model-catalog.md),
+  but plan tier itself cannot be obtained, so MVP is unconditionally true. If
+  dialog unavailability is observed on Free/Go plans, then advertise
+  `user_input_modes` at that point.
 
-### F5 — deprecation / migration
+### F5 — Deprecation / migration
 
-engine 名判定はレビュー時に禁止し、既存コードで engine 名分岐しているものは phase-15 実装時に本 ADR の判定へ置換する。envelope 上 `ext.session_capabilities` の未 stamp 期間はない (phase-15 の同一 PR で両 adapter の advertise を実装するため、UI 側の fail-closed default が実効果を持つのは開発中の中間状態のみ)。
+Prohibit engine-name checks during review, and replace existing engine-name
+branches during phase-15 implementation with this ADR’s checks. There is no period
+where `ext.session_capabilities` is intentionally unstamped (both adapters
+advertise it in the same phase-15 PR), so the UI’s fail-closed default has an
+observable effect only in an intermediate development state.
 
-### F6 — #108 attachment type addendum (2026-07-23)
+### F6 — #108 attachment-type addendum (2026-07-23)
 
-`attachment_types` は engine 名分岐を増やさず、session が受け入れる添付の種類を UI と wrapper に伝える。初期 closed vocabulary は `"image"` のみで、将来 `"text"` / `"pdf"` 等を追加する場合も protocol vocabulary を先に拡張する。field absent を unrestricted とすることで、既存 Claude wrapper と rolling upgrade の互換性を保つ。
+`attachment_types` communicates the attachment types accepted by the session to
+the UI and wrapper without adding engine-name branches. The initial closed
+vocabulary contains only `"image"`; if future values such as `"text"` / `"pdf"`
+are added, expand the protocol vocabulary first. Treating an absent field as
+unrestricted preserves compatibility with existing Claude wrappers and rolling
+upgrades.
 
-### F7 — 添付 capability の publish 判断を吸収 (2026-08-03)
+### F7 — Absorb the attachment-capability publish decision (2026-08-03)
 
-旧 open-question `file-upload-capability-publish` (2026-06-27 起票、
-urgency low) をここへ畳んだ。同 OQ は
-[ADR-0025](0025-file-upload-wire-and-wrapper-rendering.md) F8 (A4-α)
-「弾く場所は wrapper、client は規範を持たない」を受けて、次の 2 案を
-未決としていた。
+The old open-question `file-upload-capability-publish` (opened 2026-06-27,
+urgency low) is folded into this ADR. That OQ received the following two unresolved
+options from [ADR-0025](0025-file-upload-wire-and-wrapper-rendering.md) F8 (A4-α),
+“the wrapper rejects; the client does not carry the policy”:
 
-| 案 | 内容 | 評価 |
+| Option | Content | Evaluation |
 |--|--|--|
-| A (当時の暫定方針) | wrapper が reject し client は error 表示のみ。capability は publish しない | 知識が wrapper に一元化され protocol 面の追加もないが、UX は「送って 1 秒以内に reject」 |
-| B | 受理可種別を `ext.capabilities` として publish し、client が disable UI に反映 | UX 良・第三者 client も利用可だが、知識を 2 系統に publish して wrapper 一元化を侵食し protocol 面が +1 |
+| A (temporary policy at the time) | The wrapper rejects and the client only displays an error; do not publish capability | Knowledge is centralised in the wrapper and protocol does not grow, but UX is “send and reject within one second” |
+| B | Publish accepted types as `ext.capabilities` and have the client reflect them in disabled UI | Good UX and usable by third-party clients, but knowledge is published in two places, eroding wrapper centralisation and adding one protocol surface |
 
-**決定: 実質 B を採用した。** ただし OQ が想定した独立フィールド
-`ext.capabilities` ではなく、本 ADR の `ext.session_capabilities` の一部
-(F2 の `supports_attachments`、F6 の `attachment_types`) として実現して
-いる。
+**Decision: effectively adopt B.** However, rather than the independent
+`ext.capabilities` field assumed by the OQ, implement it as part of this ADR’s
+`ext.session_capabilities` (`supports_attachments` from F2 and `attachment_types`
+from F6).
 
-「知識を 2 系統に publish」という A 側の懸念については、**2 層は意図的に
-分けたまま**である点が重要。capability が authority を持つのは
-「添付が使えるか」と「どの category を受けるか」までで、**exact MIME の
-規範は wrapper 側にある** ([ADR-0025](0025-file-upload-wire-and-wrapper-rendering.md)
-F8 の A4-α を維持)。client が読むのは事前ヒントであり、最終判定ではない。
-規範を二重に持たないので、A が避けたかった侵食は起きていない。
+Regarding A’s concern about “publishing knowledge in two places”, it is important
+that **the two layers remain intentionally separate**. Capabilities are authoritative
+only for “whether attachments can be used” and “which categories are accepted”; the
+**exact MIME policy remains in the wrapper** ([ADR-0025](0025-file-upload-wire-and-wrapper-rendering.md)
+F8 A4-α remains). The client reads a preflight hint, not the final decision. Since
+the policy is not duplicated, the erosion A sought to avoid does not occur.
 
-現に Codex アダプタは `attachment_types: ["image"]` を advertise し、
-Composer は attach ボタンの disable と picker / paste / drop の画像限定を
-この field だけで判定している。これで**非画像 category は事前に除外される**。
-ただし UI は `image/*` を許すため SVG / BMP 等は stage でき、wrapper の
-exact MIME allow-list で `mime_denied` として reject されうる — 案 A の
-「reject を見て送り直す」経路が消えたわけではなく、category レベルで
-起きなくなった、が正しい。
+The Codex adapter currently advertises `attachment_types: ["image"]`, and Composer
+uses only this field to disable the attach button and limit picker / paste / drop
+to images. This **pre-excludes non-image categories** in advance. However, the UI
+allows `image/*`, so SVG / BMP and similar files can be staged and may still be
+rejected as `mime_denied` by the wrapper’s exact MIME allow-list — the path in A
+where “see the rejection and resend” is possible has not disappeared; it simply
+no longer occurs at the category level. That is the accurate interpretation.
 
-**残る余地**: `attachment_types` の closed vocabulary を `"image"` 以外
-(`"text"` / `"pdf"` 等) へ広げるか。F6 のとおり拡張時は protocol
-vocabulary を先に広げる手順が既に定まっているため、独立した
-open-question としては追跡せず、必要になった時点で F6 の追補として扱う。
+**Remaining room**: expand the closed vocabulary of `attachment_types` beyond
+`"image"` (for example, `"text"` / `"pdf"`). As F6 states, the process for
+expanding protocol vocabulary first is already defined, so do not track this as a
+separate open question; handle it as an F6 addendum when needed.
 
 ## Consequences
 
 ### Positive
 
-- 機能可用性判定が engine 名から解放され、engine 進化 (Codex の画像入力対応等) で UI 側判定を追随修正しなくてよくなる。
-- session 単位で可変な条件 (plan tier / auth mode / wrapper 実装差) を第一級表現できる。
-- UI の engine 分岐が減る (engine 名は表示専用に一本化)。
-- 未 stamp 時 fail-closed により、adapter 実装漏れが「機能表示だけ生きて実挙動が壊れる」形にならず、UI 上も明示的に「未対応」表示になる。
+- Feature availability is freed from engine names, so UI decision code does not
+  need follow-up fixes as engines evolve (such as Codex image-input support).
+- Session-varying conditions (plan tier / auth mode / wrapper implementation
+  differences) can be represented as first-class values.
+- UI engine branches decrease (engine name becomes display-only).
+- The fail-closed default when unstamped prevents an adapter omission from leaving
+  the UI displaying “supported” while runtime behavior is broken; the UI explicitly
+  displays “unsupported”.
 
 ### Negative
 
-- envelope size がわずかに増える (数バイト〜数十バイト、session ごと 1 回 + 変化時のみ)。
-- 各 adapter で advertise を漏れなく実装する保守負担が発生 (追加 field の度)。テストで未 stamp 検出を必須化することでカバー。
+- Envelope size increases slightly (a few to a few dozen bytes, once per session
+  plus changes only when values change).
+- Maintaining advertisement in every adapter creates a maintenance burden for each
+  added field; require tests to detect missing stamps.
 
 ### Neutral
 
-- viewer 配信は [ADR-0021](0021-role-information-disclosure-policy.md) の ext allow-list で自動カバー (ext は viewer 完全除去)。session_capabilities も operator-only。
-- [ADR-0022](0022-pending-permission-authoritative-source.md) の authoritative source 原則 (`state_change.ext` を SoT とする) は本 ADR で同じパターンを踏襲、supersede しない。
+- Viewer delivery is automatically covered by the ext allow-list in
+  [ADR-0021](0021-role-information-disclosure-policy.md) (ext is completely
+  removed for viewers). session_capabilities is operator-only as well.
+- The authoritative-source principle in [ADR-0022](0022-pending-permission-authoritative-source.md)
+  (`state_change.ext` is SoT) follows the same pattern here; it is not superseded.
 
 ## Alternatives Considered
 
 | Option | Why rejected |
 |--------|--------------|
-| engine 名で分岐 (現行実装の暗黙前提) | Codex 進化で false negative / positive、session 単位差を表現不能 (もも実運用指摘の中核) |
-| capability を engine registration (`HostInfo.engines[]`) に載せる (host-static) | session 単位差 (auth mode / plan tier / spawn 時選択) を表現不能。runner が host 起動時に固定値を返す形になり、実際の session 挙動から乖離する |
-| capability を `EngineAdapter` interface に hook (`capabilities(): CapSet`) として持たせる | interface 面が肥大化。capability は session state の一部なので、state stamp の経路と同期させたい (envelope を source-of-truth 化) |
-| 未 stamp 時に「true 相当」で開放 (fail-open) | adapter 実装漏れが UI 上「対応」表示のまま実挙動が壊れる形になる。fail-closed default が安全 |
+| Branch on engine name (implicit assumption in the current implementation) | Codex evolution creates false negatives / positives, and per-session differences cannot be represented (the core of もも’s operational observation). |
+| Put capabilities in engine registration (`HostInfo.engines[]`) (host-static) | Cannot represent per-session differences (auth mode / plan tier / spawn-time selection). The runner would return a fixed value at host startup, diverging from actual session behavior. |
+| Add a hook to the `EngineAdapter` interface (`capabilities(): CapSet`) | Bloats the interface. Capability is part of session state, so synchronise it with the state-stamp path (make the envelope the source of truth). |
+| Fail-open when unstamped (“true equivalent”) | An adapter omission leaves the UI displaying “supported” while runtime behavior is broken. Fail-closed is safer. |
 
 ## Related
 
-- 由来: [phase-14-codex-adapter](../plans/phase-14-codex-adapter.md) の実運用検証で見えた engine 名判定リスク (D4/D5 の設計転換)。
-- 実装: [phase-15-wrapper-ux-parity](../plans/phase-15-wrapper-ux-parity.md)。
-- 関連 ADR: [ADR-0022](0022-pending-permission-authoritative-source.md) (authoritative source パターン踏襲)、[ADR-0032](0032-codex-adapter.md) (Codex adapter の engine 追加起点)、[ADR-0033](0033-permission-model-dual-axis.md) (ext による engine 中立化パターンの先行例)。
-- 関連 specs: [protocol](../specs/protocol.md) (`ext.session_capabilities` 追補)、[plugin-model](../specs/plugin-model.md) (EngineAdapter との関係)。
-- 関連 issue: [#99](https://github.com/sakuraiyuta/kaoiro/issues/99) — list_agents の peer 情報充実 (engine / model / effort 等)。phase-8 の「directory は名前解決の最小限」判断の見直し。着手は phase-15 の envelope schema 確定後、本 ADR の session capability advertise パターンと親和的なので同じ原則 (state stamp = SoT) を継承する見込み。
+- Origin: operational verification of [phase-14-codex-adapter](../plans/phase-14-codex-adapter.md), where the risk of engine-name checks became visible (the design shift in D4/D5).
+- Implementation: [phase-15-wrapper-ux-parity](../plans/phase-15-wrapper-ux-parity.md).
+- Related ADRs: [ADR-0022](0022-pending-permission-authoritative-source.md) (authoritative-source pattern), [ADR-0032](0032-codex-adapter.md) (origin of adding the Codex engine), and [ADR-0033](0033-permission-model-dual-axis.md) (prior engine-neutralisation example through ext).
+- Related specs: [protocol](../specs/protocol.md) (`ext.session_capabilities` addendum), [plugin-model](../specs/plugin-model.md) (relationship with EngineAdapter).
+- Related issue: [#99](https://github.com/sakuraiyuta/kaoiro/issues/99) — richer peer information in list_agents (engine / model / effort, etc.). Reconsider the phase-8 decision that “the directory is the minimum needed for name resolution”. Since it is compatible with this ADR’s session capability advertisement pattern, the same principle (state stamp = SoT) is expected to be inherited once work begins after the phase-15 envelope schema is fixed.

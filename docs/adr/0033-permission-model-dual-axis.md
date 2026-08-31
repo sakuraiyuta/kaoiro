@@ -1,5 +1,5 @@
 ---
-title: 権限モデルの共通抽象を sandbox × approval の二軸へ拡張
+title: Extend the common permission-model abstraction to two axes: sandbox × approval
 status: accepted
 date: 2026-07-10
 opened: 2026-07-10
@@ -9,30 +9,58 @@ related_specs: [protocol, plugin-model]
 related_adrs: [22, 32, 34, 38, 41, 43]
 ---
 
-# ADR-0033 — 権限モデル共通抽象を sandbox × approval の二軸へ拡張
+# ADR-0033 — Extend the common permission-model abstraction to two axes: sandbox × approval
 
 ## Status
 
-Accepted (実装は [phase-14-codex-adapter](../plans/phase-14-codex-adapter.md))。envelope schema・Claude 写像 table・UI 語彙は 2026-07-10 の実 SDK 検証と spec-elicitation で確定済み (旧 open-questions Q2/Q3 は解決・close)。
+Accepted (implementation is [phase-14-codex-adapter](../plans/phase-14-codex-adapter.md)).
+The envelope schema, Claude mapping table, and UI vocabulary were finalised by
+real SDK verification and spec elicitation on 2026-07-10 (old open-questions Q2/Q3
+resolved and closed).
 
 ## Context
 
-現状 wrapper / server / dashboard の権限モデル抽象は Claude Agent SDK の `permissionMode` (default/acceptEdits/bypassPermissions/plan/dontAsk/auto) を直接踏襲した単軸で、[protocol](../specs/protocol.md) の `ext.permission_mode` に露出、`ext.pending_permission` の authoritative source は [ADR-0022](0022-pending-permission-authoritative-source.md) で `state_change.ext` に確立された。
+The current permission-model abstraction in wrapper / server / dashboard directly
+follows the Claude Agent SDK’s single-axis `permissionMode`
+(default/acceptEdits/bypassPermissions/plan/dontAsk/auto), exposed as
+`ext.permission_mode` in [protocol](../specs/protocol.md). [ADR-0022](0022-pending-permission-authoritative-source.md)
+established `state_change.ext` as the authoritative source for
+`ext.pending_permission`.
 
-[ADR-0032](0032-codex-adapter.md) で Codex CLI アダプタを追加するにあたり、Codex の権限モデルが二軸である事実に共通抽象を合わせる必要がある (値集合は `@openai/codex-sdk` 0.144.1 の型定義で実証済み):
+Adding a Codex CLI adapter in [ADR-0032](0032-codex-adapter.md) requires aligning
+the common abstraction with the fact that Codex has two permission axes (the value
+set was demonstrated in the type definitions of `@openai/codex-sdk` 0.144.1):
 
-- **sandbox_mode**: `read-only` | `workspace-write` | `danger-full-access` — file system への書き込み可否と範囲 (OS レベル sandbox)。
-- **approval_policy**: `untrusted` | `on-request` | `on-failure` | `never` — 各操作について都度承認を求めるかの方針。初期 ADR 起草時に想定していた `granular` は実 SDK に存在しない。
+- **sandbox_mode**: `read-only` | `workspace-write` | `danger-full-access` —
+  whether and how far the file system may be written (OS-level sandbox).
+- **approval_policy**: `untrusted` | `on-request` | `on-failure` | `never` —
+  whether to request approval for each operation. The `granular` assumed in the
+  initial ADR draft does not exist in the actual SDK.
 
-Claude は単軸 mode で「shell も勝手にやってよいか」と「file edit を勝手にやってよいか」を区別できないため、二軸で表現するほうが表現力が広い。単軸プリセット (`default / accept-edits / yolo` 等) に潰すと Codex 二軸の表現力を失うため、共通抽象自体を二軸へ拡張する。
+Claude’s single-axis mode cannot distinguish whether shell commands and file edits
+may be performed without asking, so two axes provide greater expressiveness.
+Flattening the model into single-axis presets (`default / accept-edits / yolo`,
+etc.) would lose Codex’s two-axis expressiveness; therefore extend the common
+abstraction itself to two axes.
 
-**制約 (2026-07-10 実証)**: `@openai/codex-sdk` は毎ターン `codex exec` を新規 spawn し stdin を prompt 書込直後に close するため、**実行中に operator の承認を SDK へ返す経路が存在しない** (feature flag `exec_permission_approvals` は under development = 未リリース、exec の既定 approval_policy は `never`)。したがって Codex agent の二軸は spawn 時に固定され、`waiting_permission` 状態は Codex では発生しない。upstream の承認対応は [open-questions/codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md) で追跡する。
+**Constraint (verified 2026-07-10)**: `@openai/codex-sdk` starts a new
+`codex exec` process for every turn and closes stdin immediately after writing the
+prompt, so **there is no path to return an operator approval to the SDK while it is
+running** (feature flag `exec_permission_approvals` is under development = not
+released; the default approval_policy for exec is `never`). Therefore, the Codex
+agent’s two axes are fixed at spawn, and `waiting_permission` never occurs for
+Codex. Track upstream approval support in [open-questions/codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md).
 
 ## Decision
 
-### F1 — envelope schema の二軸拡張 (`ext.permission`)
+### F1 — Extend the envelope schema to two axes (`ext.permission`)
 
-agent-level の `ext.permission = {sandbox, approval}` を新設し、現行 `ext.permission_mode` の後継とする。`pending_permission` (承認要求ごとの record) 内への軸複製は**しない** — Codex は pending_permission を発行せず (Context の制約)、Claude では同じ `state_change.ext` に `permission` と `pending_permission` が並んで載るため複製は冗長:
+Create agent-level `ext.permission = {sandbox, approval}` as the successor to
+current `ext.permission_mode`. **Do not duplicate the axes** inside
+`pending_permission` (the record for each approval request). Codex emits no
+pending_permission due to the constraint in Context, and for Claude the same
+`state_change.ext` carries `permission` and `pending_permission` side by side, so
+duplication would be redundant:
 
 ```json
 {
@@ -50,116 +78,230 @@ agent-level の `ext.permission = {sandbox, approval}` を新設し、現行 `ex
 }
 ```
 
-列挙値 (Codex 語彙そのまま、写像レイヤなし):
+Enum values (Codex vocabulary as-is, with no mapping layer):
 
 - `sandbox`: `read-only` | `workspace-write` | `danger-full-access`
 - `approval`: `untrusted` | `on-request` | `on-failure` | `never`
-  (`on-failure` は upstream 0.144 で `on-request` の deprecated alias に格下げ
-  済み。kaoiro の wrapper が emit することはないが、SDK 型との互換のため
-  enum には残す)
+  (`on-failure` was downgraded to a deprecated alias of `on-request` in upstream
+  0.144. The kaoiro wrapper will not emit it, but it remains in the enum for
+  compatibility with the SDK type.)
 
-**deprecation プラン (D-A)**: `ext.permission_mode` は 1 リリース窓の間 `ext.permission` と並置して送出し、次リリースで削除する ([ADR-0031](0031-runner-persona-trust-mode.md) の personas legacy フィールドと同じ流儀)。dashboard は本 phase から `ext.permission` のみを読む。
+**Deprecation plan (D-A)**: Emit `ext.permission_mode` alongside
+`ext.permission` for one release window, then remove it in the next release (the
+same convention as the personas legacy field in [ADR-0031](0031-runner-persona-trust-mode.md)).
+The dashboard reads only `ext.permission` starting in this phase.
 
-### F2 — Claude 6 mode の二軸写像は wrapper/claude-code に閉じる
+### F2 — Keep the Claude six-mode mapping inside wrapper/claude-code
 
-Claude Agent SDK の `permissionMode` 全 6 値 → 二軸への写像は `wrapper/claude-code` アダプタ内に写像 table として持つ。SDK 出力を wrapper で正規化してから envelope へ載せることで、server と dashboard は engine 語彙を意識せず二軸だけ扱えばよい。写像は**表示用の近似**であり、SDK へ渡す値は従来どおり mode そのもの:
+Keep the mapping from all six Claude Agent SDK `permissionMode` values to the two
+axes as a mapping table inside the `wrapper/claude-code` adapter. Normalise SDK
+output in the wrapper before putting it in the envelope, so server and dashboard
+handle only the two axes without knowing engine vocabulary. The mapping is an
+**approximation for display**; pass the mode itself to the SDK as before:
 
-| Claude mode | sandbox | approval | 根拠 (SDK doc) |
+| Claude mode | sandbox | approval | Rationale (SDK doc) |
 |---|---|---|---|
-| `default` | workspace-write | untrusted | 危険操作は都度確認 ("prompts for dangerous operations") |
-| `acceptEdits` | workspace-write | on-request | file edit 自動承認、他はモデル要求時に確認 |
-| `plan` | read-only | on-request | ツール実行なし・読み取りのみ |
-| `bypassPermissions` | danger-full-access | never | 全バイパス |
-| `dontAsk` | workspace-write | never | 聞かずに事前承認外は拒否 ("deny if not pre-approved") |
-| `auto` | workspace-write | on-request | 分類器が承認を代行 (要求自体は発生する) |
+| `default` | workspace-write | untrusted | Prompts for dangerous operations |
+| `acceptEdits` | workspace-write | on-request | Automatically approves file edits; asks when the model requests other actions |
+| `plan` | read-only | on-request | No tool execution; read-only |
+| `bypassPermissions` | danger-full-access | never | Bypasses everything |
+| `dontAsk` | workspace-write | never | Rejects anything not pre-approved without asking |
+| `auto` | workspace-write | on-request | A classifier performs approval (a request itself still occurs) |
 
-### F3 — Codex は二軸を直接使う (approval は `never` 固定)
+### F3 — Codex uses the two axes directly (`approval` fixed to `never`)
 
-`wrapper/codex` アダプタは spawn 時に選択された `sandbox_mode` をそのまま `ext.permission.sandbox` に投影する。`approval` は **`never` 固定** — `codex exec` は harness override で approval_policy を `never` に強制し (`-c approval_policy=...` も無効)、SDK 経由で承認を返す経路が存在しないため、事実をそのまま envelope に載せる。mid-session の権限変更 (`set_permission_mode` 相当) も Codex では非対応。
+The `wrapper/codex` adapter projects the `sandbox_mode` selected at spawn directly
+to `ext.permission.sandbox`. `approval` is **fixed to `never`** — `codex exec`
+forces approval_policy to `never` through a harness override (even
+`-c approval_policy=...` is ineffective), and no path exists to return approval
+through the SDK, so report the fact as-is in the envelope. Mid-session permission
+changes (the equivalent of `set_permission_mode`) are also unsupported in Codex.
 
-resume 時の `sandbox` / `network_access` 復元経路は [ADR-0014 F1 追補「resume 時の privilege 三軸再適用」](0014-session-resume-and-restore.md) に集約する。本 F3 の「spawn 時固定」原則は維持され、fresh spawn 時に決めた値は snapshot 経由で restore / switch / reset の各 resume 操作にも波及するだけで、mid-session に切り替わる訳ではない (Codex adapter は `setPermissionMode` を throw する)。
+The resume path for restoring `sandbox` / `network_access` is consolidated in
+[ADR-0014 F1 addendum “reapply three privilege axes on resume”](0014-session-resume-and-restore.md).
+The F3 principle of “fixed at spawn” remains: values decided at fresh spawn only
+propagate through the snapshot to restore / switch / reset resume operations; they
+do not switch mid-session (the Codex adapter throws from `setPermissionMode`).
 
-#### F3 追補: effective `network_access` の正規化 (phase-22 dogfood 藤 audit)
+#### F3 Addendum: normalise effective `network_access` (phase-22 dogfood 藤 audit)
 
-phase-22 の dogfood 検証中、restart / resume 後の dashboard で Codex agent (`sandbox=danger-full-access`) の `network_access` が `false` と表示されていた事象を契機に監査を実施 (藤 audit)。旧 `runner.log` を確認すると当該 restart 以前から `false` が続いており、**今回の restore relay が `true` を落とした直接証拠はない**。root cause は「raw toggle が effective として伝播していた **semantic mismatch**」で、`WrapperConfig.network_access` の raw toggle を sandbox 分岐なしに `ext.effective.network_access` / whoami / server DETS snapshot へそのまま載せていた実装上の意味論不整合が発現していた。Codex SDK は `networkAccessEnabled` を `sandbox="workspace-write"` のときだけ enforcement に渡すため、`danger-full-access` では network が sandbox に内包され (実効有効)、`read-only` では常に不許可となる。両モードで raw toggle を報告すると**実効状態と矛盾**した表示・永続化になる。
+During phase-22 dogfood verification, a dashboard incident showed
+`network_access` as `false` for a Codex agent (`sandbox=danger-full-access`) after
+restart / resume, triggering an audit (藤 audit). The old `runner.log` showed that
+`false` had already continued from before that restart, and **there is no direct
+evidence that the current restore relay dropped `true`**. The root cause was a
+**semantic mismatch** in which the raw toggle was propagated as effective:
+`WrapperConfig.network_access` was copied without a sandbox branch into
+`ext.effective.network_access` / whoami / the server DETS snapshot. The Codex SDK
+passes `networkAccessEnabled` to enforcement only for `sandbox="workspace-write"`;
+with `danger-full-access`, network is included in the sandbox (effectively enabled),
+and with `read-only` it is always disallowed. Reporting the raw toggle in both
+modes produced display and persistence that contradicted the effective state.
 
-追補として、`network_access` を次の 2 概念に**分離**する:
+As an addendum, separate `network_access` into two concepts:
 
-- **spawn config raw toggle** (`WrapperConfig.network_access`) — operator が指定した希望値。`workspace-write` サンドボックスのみ意味を持つ
-- **effective 実効値** (`ResolvedSnapshotExt.network_access`, `ext.effective.network_access`, whoami, サーバ DETS snapshot) — sandbox-aware に正規化された、実際に enforce されている network 状態
+- **Spawn-config raw toggle** (`WrapperConfig.network_access`) — the value desired
+  by the operator; meaningful only for the `workspace-write` sandbox
+- **Effective value** (`ResolvedSnapshotExt.network_access`,
+  `ext.effective.network_access`, whoami, and the server DETS snapshot) — the
+  sandbox-aware normalised network state that is actually enforced
 
-正規化ルールは pure helper `effectiveNetworkAccess(sandbox, toggle)` として `wrapper/codex/src/network_access.ts` に単一実装し、Host の effective-status snapshot と CLI 起動時 resolved log の両 callsite が同じ helper を通す (SSoT):
+Implement the normalisation rule as one pure helper
+`effectiveNetworkAccess(sandbox, toggle)` in `wrapper/codex/src/network_access.ts`,
+and route both Host effective-status snapshots and the CLI startup resolved log
+through the same helper (SSoT):
 
 | sandbox | effective network_access |
 |---|---|
-| `danger-full-access` | `true` (network は full access に内包) |
-| `read-only` | `false` (network 不可) |
-| `workspace-write` | `configured` (raw toggle をそのまま反映、default `false`) |
+| `danger-full-access` | `true` (network is included in full access) |
+| `read-only` | `false` (network unavailable) |
+| `workspace-write` | `configured` (reflect the raw toggle, default `false`) |
 
-Host の `#threadOptions()` (SDK enforcement 経路) は元々 workspace-write のみ `networkAccessEnabled` を SDK に渡す実装で正しかったため無変更 — 本追補は**表示 / 永続化 layer の是正のみ**で、runtime 挙動 (実際に許可される network 呼び出し集合) は変わらない。
+Host `#threadOptions()` (the SDK enforcement path) already correctly passes
+`networkAccessEnabled` to the SDK only for workspace-write, so leave it unchanged.
+This addendum corrects only the display / persistence layer; runtime behavior (the
+actual set of permitted network calls) does not change.
 
-**Legacy 自己修復契約**: 追補導入前に永続化された誤 snapshot (`{sandbox:danger-full-access, network_access:false}`) は次回 resume 時に wrapper 側で `effective=true` に正規化され、`ext.resume_drift` に `{field:network_access, prev:false, now:true}` が**一度だけ**出る。次の `record_snapshot` でサーバ DETS が `true` に更新され、以降 drift は解消。runner / server 側の Phase22 precedence (snapshot の explicit boolean を engine default より優先) および fresh spawn / crash restart / rollback の no-apply 契約は**変更しない** (是正は wrapper layer に閉じる)。
+**Legacy self-healing contract**: A persisted incorrect snapshot from before the
+addendum (`{sandbox:danger-full-access, network_access:false}`) is normalised to
+`effective=true` by the wrapper on the next resume, and `ext.resume_drift` emits
+`{field:network_access, prev:false, now:true}` **once**. The next
+`record_snapshot` updates the server DETS to `true`, resolving the drift thereafter.
+Do not change runner / server Phase22 precedence (an explicit boolean in the
+snapshot takes priority over the engine default) or the no-apply contracts for
+fresh spawn / crash restart / rollback (the correction stays in the wrapper layer).
 
-**関連実装**: `wrapper/codex/src/network_access.ts` (helper、SSoT)、`wrapper/codex/src/host.ts` `#effectiveStatusSnapshot()` (置換)、`wrapper/codex/src/cli.ts` 起動時 resolved log (置換)、`protocol/src/index.ts` `ResolvedSnapshotExt` (doc comment 追補)。test は `wrapper/codex/test/network_access.test.ts` (3 sandbox matrix) と `wrapper/codex/test/host.test.ts` (danger-full 正規化 / legacy self-heal drift 各 1 case)。
+**Related implementation**: `wrapper/codex/src/network_access.ts` (helper, SSoT),
+`wrapper/codex/src/host.ts` `#effectiveStatusSnapshot()` (replacement),
+`wrapper/codex/src/cli.ts` startup resolved log (replacement), and
+`protocol/src/index.ts` `ResolvedSnapshotExt` (doc-comment addendum). Tests are
+`wrapper/codex/test/network_access.test.ts` (three-sandbox matrix) and
+`wrapper/codex/test/host.test.ts` (one danger-full normalisation case / one legacy
+self-heal drift case).
 
-### F4 — dashboard UI は engine-native 操作 + 二軸バッジ表示
+### F4 — Dashboard UI: engine-native operations + two-axis badge display
 
-- **表示** (AgentCard / AgentDetail): `ext.permission` 由来の二軸バッジで engine 非依存に統一。
-- **操作** (LaunchDialog / AgentDetail): engine-native なセレクトを出す。Claude = mode セレクト (6 値)、Codex = sandbox セレクト (3 値) + workspace-write 時の network access toggle。各選択肢のラベルには二軸換算を併記する (例:「acceptEdits — 書込: workspace / 承認: on-request 相当」)。
-- 当初検討した cross-engine preset ショートカット (default / edit-friendly / yolo 等) は**採らない**: 選べる組合せが engine ごとに 3-6 個しかなく、preset 層は写像保守だけ増やす (2026-07-10 spec-elicitation で決定、旧 Q3 close)。
+- **Display** (AgentCard / AgentDetail): unify on two-axis badges sourced from
+  `ext.permission`, independent of engine.
+- **Operations** (LaunchDialog / AgentDetail): show an engine-native selector.
+  Claude = mode selector (six values); Codex = sandbox selector (three values) +
+  network-access toggle when workspace-write. Include the two-axis conversion in
+  each option label (for example, “acceptEdits — write: workspace / approval:
+  on-request equivalent”).
+- Do **not** adopt the initially considered cross-engine preset shortcuts
+  (default / edit-friendly / yolo, etc.): there are only 3–6 selectable
+  combinations per engine, and the preset layer would only increase mapping
+  maintenance (decided in 2026-07-10 spec elicitation, old Q3 closed).
 
-#### F4 追補 (2026-07-11、phase-15 に向けた対称化)
+#### F4 Addendum (2026-07-11, symmetry for phase-15)
 
-phase-14 完了後の実運用検証で、権限 UX が engine 間で非対称なまま残っていることが判明した。もも (Codex agent) の実感として「Claude の単軸 mode に対して Codex 二軸の実効値と host-fixed 制約が UI で読めない」「Plan mode と sandbox が混ざって表示され作業意図と実効書込範囲が区別できない」の 2 点が特に大きい。F4 の UI 契約を次の項目で強化する。実装は [phase-15-wrapper-ux-parity](../plans/phase-15-wrapper-ux-parity.md) D2 で行う。
+Operational verification after phase-14 found that the permission UX remained
+asymmetric between engines. From the experience of もも (Codex agent), the two
+most significant issues were that the Codex effective values and host-fixed
+constraint were unreadable in the UI next to Claude’s single-axis mode, and that
+Plan mode and sandbox were displayed together so work intent and effective write
+scope could not be distinguished. Strengthen the F4 UI contract as follows.
+Implement it in [phase-15-wrapper-ux-parity](../plans/phase-15-wrapper-ux-parity.md) D2.
 
-- **AgentDetail の Claude switcher に実効値併記**: F4 の Claude mode セレクトは既に `PERMISSION_MODE_AXES` で二軸換算を候補側に表示済み (`AgentDetail.svelte` の `.axes-hint`)。追補として、**選択後の現行 mode label** にも実効値バッジ (`書込: sandbox / 承認: approval`) を常設する。operator が現在の実効権限を「候補メニューを開かずに」把握できるようにする。
-- **Codex 側「承認: never (ホスト制約で変更不可)」常設バッジ**: Codex agent の AgentDetail は現状 mode switcher を出さないのみ (ADR-0033 F3、set_permission_mode 拒否) で、operator から見て「変更不可なのか実装漏れなのか」が判別できない。追補として、Codex agent の permission 表示に「承認: never (host-fixed, upstream 制約)」を明示的なラベルとして常設する。link は [codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md)。
-- **LaunchDialog に Claude 用 permission_mode セレクトを新設**: 現行 LaunchDialog は Codex 時のみ sandbox セレクトを出し、Claude 時は起動後の AgentDetail 側でしか mode を選べない。追補として、engine=claude-code 選択時に mode セレクト (default / plan / acceptEdits / dontAsk / auto / bypassPermissions) を追加し、選択候補には二軸換算 tooltip を併記する。起動時に希望 mode を渡せるようにし、engine 間で「起動時に権限を決められる」対称性を成立させる。
-- **Plan mode と sandbox の 2 枠並列**: 現行 Claude の Plan mode は「作業意図 (計画のみ、tool 実行しない)」を表現するが、二軸写像上は `sandbox: read-only / approval: on-request` に潰れる。追補として、AgentDetail の権限枠を **「作業意図 (mode)」と「実効書込範囲 (sandbox)」の 2 枠並列**で表示する。operator が「Plan mode を選ぶと実効 sandbox は read-only になる」という展開結果を明示的に理解できる形にする。
+- **Show effective values in the Claude switcher in AgentDetail**: the F4 Claude
+  mode selector already displays two-axis conversion on candidates through
+  `PERMISSION_MODE_AXES` (`AgentDetail.svelte` `.axes-hint`). Also keep an effective
+  value badge (`書込: sandbox / 承認: approval`) permanently on the current
+  mode label after selection, so the operator can understand current effective
+  permissions without opening the candidate menu.
+- **Permanent “approval: never (host-fixed, upstream constraint)” badge on Codex**:
+  AgentDetail currently only omits the mode switcher for Codex (ADR-0033 F3,
+  set_permission_mode rejected), leaving the operator unable to tell whether this
+  is unchangeable or an implementation omission. Add the explicit permanent label
+  to Codex permission display. Link it to [codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md).
+- **Add a Claude permission_mode selector to LaunchDialog**: currently only
+  Codex shows a sandbox selector and Claude can select a mode only after launch in
+  AgentDetail. Add a mode selector (default / plan / acceptEdits / dontAsk / auto /
+  bypassPermissions) when engine=claude-code, with a two-axis conversion tooltip
+  on each candidate. Pass the desired mode at launch to make “choose permissions
+  at launch” symmetric between engines.
+- **Display Plan mode and sandbox in two parallel frames**: current Claude Plan
+  mode represents work intent (planning only, no tool execution), but its two-axis
+  mapping collapses to `sandbox: read-only / approval: on-request`. Display
+  AgentDetail permissions in parallel frames for **“work intent (mode)”** and
+  **“effective write scope (sandbox)”**, so the operator understands that selecting
+  Plan mode makes the effective sandbox read-only.
 
-#### F4 追補: resume 時の設定差分検出への言及
+#### F4 Addendum: mention configuration-diff detection on resume
 
-phase-15 D8 として、resume 時に前回 session の resolved snapshot (model / sandbox / approval / network_access / effort) と今回 host が強制した値を envelope に載せ、差があれば stderr warn + AgentDetail バッジで露出する枠組みを導入する。envelope schema 拡張は本 ADR と [ADR-0032](0032-codex-adapter.md) F4bc の両方に跨るため、詳細な設計は phase-15 plan で扱う。本 F4 追補は「差分表示は権限二軸 UI と同じ枠内で行い、engine 中立バッジで統一する」原則のみ確定する。
+As phase-15 D8, introduce a framework that puts the previous session’s resolved
+snapshot (model / sandbox / approval / network_access / effort) and the values
+forced by the current host into the envelope on resume; if they differ, expose an
+stderr warning + AgentDetail badge. Since the envelope schema extension spans both
+this ADR and [ADR-0032](0032-codex-adapter.md) F4bc, handle detailed design in the
+phase-15 plan. This F4 addendum fixes only the principle that diff display uses the
+same frame as the two-axis permission UI and an engine-neutral badge.
 
-### F5 — ADR-0022 との関係
+### F5 — Relationship to ADR-0022
 
-[ADR-0022](0022-pending-permission-authoritative-source.md) の「`state_change.ext.pending_permission` が authoritative source」原則は本 ADR で維持する。本 ADR はその payload 形状に `sandbox` / `approval` を追加する追補で、ADR-0022 を supersede しない。
+Preserve the principle from [ADR-0022](0022-pending-permission-authoritative-source.md)
+that `state_change.ext.pending_permission` is the authoritative source. This ADR
+adds `sandbox` / `approval` to that payload shape as an addendum; it does not
+supersede ADR-0022.
 
 ## Consequences
 
 ### Positive
 
-- Codex 二軸の表現力を失わず、Claude / Codex の権限概念を単一の envelope schema (`ext.permission`) で表現できる。
-- dashboard の権限**表示**が engine 分岐なしに一本化 (二軸バッジだけを実装すればよい)。操作 UI は engine-native だが、選択肢集合は engine adapter が返すため dashboard に engine 知識は染み込まない。
-- Codex の OS レベル sandbox が envelope 上で第一級表現になり、「承認なしでも sandbox で抑える」という Codex の安全モデルが operator に見える。
+- Preserve Codex’s two-axis expressiveness while representing Claude / Codex
+  permission concepts in one engine-neutral envelope schema (`ext.permission`).
+- Dashboard permission **display** is unified without engine branches (implement
+  only two-axis badges). Operation UI remains engine-native, but the engine
+  adapter returns the option set, so engine knowledge does not leak into the
+  dashboard.
+- Codex’s OS-level sandbox becomes a first-class envelope value, making its safety
+  model — “sandbox can constrain actions even without approval” — visible to the
+  operator.
 
 ### Negative
 
-- `ext.permission_mode` の 1 リリース窓並置期間、wrapper は両フィールドを送出する。
-- Claude 6 mode → 二軸 mapping は表示用の**近似**であり、mode の細かな意味論 (auto の分類器承認など) は二軸に落ちない。ラベル併記で補う。
-- Codex の承認体験は upstream の `exec_permission_approvals` が stable になるまで存在しない ([open-questions/codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md) で追跡)。
+- During the one-release parallel period for `ext.permission_mode`, the wrapper
+  sends both fields.
+- The Claude six-mode → two-axis mapping is a **display approximation**; detailed
+  mode semantics (such as classifier approval in auto) do not fit on two axes.
+  Labels provide the context.
+- Codex’s approval experience does not exist until upstream
+  `exec_permission_approvals` becomes stable (tracked in
+  [open-questions/codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md)).
 
 ### Neutral
 
-- `permission_request` envelope の役割 (ADR-0022 F2 で初出通知に降格済) は本 ADR で変わらない。二軸フィールドは envelope 内にも同期する。
-- viewer 配信は ADR-0021 の allow-list で自動カバー (ext は viewer 完全除去)。
+- The role of the `permission_request` envelope (downgraded to an initial
+  notification in ADR-0022 F2) does not change here. The two-axis fields are also
+  synchronised inside the envelope.
+- Viewer delivery is automatically covered by ADR-0021’s allow-list (ext is
+  completely removed for viewers).
 
 ## Alternatives Considered
 
 | Option | Why rejected |
 |--------|--------------|
-| 行為プリセット共通抽象 (`default / accept-edits / auto-shell / plan-only / yolo`) を単軸で維持 | Codex 二軸の表現力を単軸に潰し、意味論マッピング table が結局 open-question の巣になる。preset 命名合意コストも大 |
-| engine 別語彙をそのまま UI に露出 (Claude 6 mode 側と Codex 二軸を並置) | dashboard の permission **表示**が engine ごとに違う集合になり、envelope schema / server validation が engine 分岐だらけ (操作 UI の engine-native 化とは別問題 — 表示は二軸で統一する) |
-| Codex 側を単軸に丸めて既存 `permissionMode` schema を据置き | Codex 二軸の表現力を失い、OS sandbox という Codex の安全モデルが envelope 上で見えなくなる |
-| `sandbox` / `approval` を pending_permission 内に置く (本 ADR 初稿の形) | Codex は pending_permission を発行しない (承認フロー自体が exec で提供不能) ため、Codex の権限状態の置き場所が消える。agent-level `ext.permission` に一本化 |
-| cross-engine preset ショートカット層 (旧 Q3 暫定方針) | 選べる組合せが engine ごとに 3-6 個しかなく、preset → engine 写像の保守だけ増える。Codex では大半の preset が同一設定に潰れる |
-| `codex app-server` (JSON-RPC) 直叩きで承認を配線 | published SDK を捨てて experimental protocol に依存。実装コスト大・upstream 変更で壊れやすい。MVP は起動時固定二軸で足りる |
+| Maintain a common action-preset abstraction (`default / accept-edits / auto-shell / plan-only / yolo`) as one axis | It flattens Codex’s two-axis expressiveness into one axis, and the semantic mapping table becomes an open-question sink. Preset naming also has a high agreement cost. |
+| Expose engine-specific vocabulary directly in the UI (Claude six modes beside Codex’s two axes) | Dashboard permission **display** becomes a different set per engine, and envelope schema / server validation fills with engine branches (a separate issue from making operation UI engine-native — display is unified on two axes). |
+| Flatten Codex to one axis and keep the existing `permissionMode` schema | Loses Codex’s two-axis expressiveness and hides its OS sandbox safety model from the envelope. |
+| Put `sandbox` / `approval` inside pending_permission (the initial ADR draft) | Codex emits no pending_permission (the approval flow cannot be provided through exec), leaving nowhere to put Codex’s permission state. Unify it at agent-level `ext.permission`. |
+| Cross-engine preset shortcut layer (old Q3 temporary policy) | Only 3–6 combinations are selectable per engine, so it adds mapping maintenance; most presets collapse to the same setting in Codex. |
+| Wire approvals by calling `codex app-server` (JSON-RPC) directly | Abandons the published SDK for an experimental protocol. High implementation cost and fragile against upstream changes; startup-fixed two axes are sufficient for the MVP. |
 
 ## Related
 
-- 追補元: [ADR-0022](0022-pending-permission-authoritative-source.md) (authoritative source 原則を維持しつつ ext 拡張)。
-- 由来: [ADR-0032](0032-codex-adapter.md) F2 (Codex adapter 追加に伴う権限抽象の拡張)。
-- 実装: [phase-14-codex-adapter](../plans/phase-14-codex-adapter.md)、[phase-15-wrapper-ux-parity](../plans/phase-15-wrapper-ux-parity.md) (F4 追補と D8 resume 差分検出)。
-- Open questions: [codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md) (upstream 承認対応の追跡)。旧 Q2 (envelope schema) / Q3 (UI 語彙) は 2026-07-10 に解決済み・close。
-- 関連 ADR: [ADR-0034](0034-session-capabilities-advertisement.md) (session capabilities による engine 中立化パターンの拡張。attach / question dialog の可用性は engine 名でなく session capability で判定する)。
-- 関連 specs: [protocol](../specs/protocol.md) (`ext.permission` 追補)、[plugin-model](../specs/plugin-model.md)。
+- Source addendum: [ADR-0022](0022-pending-permission-authoritative-source.md)
+  (preserve the authoritative-source principle while extending ext).
+- Origin: [ADR-0032](0032-codex-adapter.md) F2 (permission abstraction extension
+  for adding the Codex adapter).
+- Implementation: [phase-14-codex-adapter](../plans/phase-14-codex-adapter.md),
+  [phase-15-wrapper-ux-parity](../plans/phase-15-wrapper-ux-parity.md) (F4 addendum
+  and D8 resume diff detection).
+- Open questions: [codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md)
+  (upstream approval tracking). Old Q2 (envelope schema) / Q3 (UI vocabulary)
+  were resolved and closed on 2026-07-10.
+- Related ADR: [ADR-0034](0034-session-capabilities-advertisement.md) (extend the
+  engine-neutralisation pattern through session capabilities; determine attach /
+  question-dialog availability from session capabilities rather than engine name).
+- Related specs: [protocol](../specs/protocol.md) (`ext.permission` addendum),
+  [plugin-model](../specs/plugin-model.md).

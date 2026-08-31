@@ -1,5 +1,5 @@
 ---
-title: runner の persona 受け入れは allowlist/blacklist の 2 モードから選択
+title: Choose between two runner persona acceptance modes: allowlist or blacklist
 status: accepted
 date: 2026-07-07
 opened: 2026-07-07
@@ -9,211 +9,212 @@ related_specs: [personas, persona-pack-schema, protocol]
 related_adrs: [23, 29]
 ---
 
-# ADR-0031 — runner の persona 受け入れは allowlist/blacklist の 2 モードから選択
+# ADR-0031 — Choose between two runner persona acceptance modes: allowlist or blacklist
 
 ## Status
 
-Accepted(実装完了 2026-07-07 — [phase-12](../plans/phase-12-runner-persona-trust-mode.md)、
-`/my-code-review-cycle` 1 round clean 収束、dev dogfooding で 2 件の
-副次バグ(Jason encode / setPermissionMode race)を検出・修正済)。
+Accepted (implementation complete 2026-07-07 — [phase-12](../plans/phase-12-runner-persona-trust-mode.md),
+one clean round of `/my-code-review-cycle`, and two secondary bugs (Jason encode /
+setPermissionMode race) detected and fixed through dev dogfooding).
 
 ## Context
 
-[ADR-0029](0029-persona-server-sot-and-pack-distribution.md) でペルソナは
-server SoT + zip pack 配布に統合されたが、「そのホストで起動できる
-persona」の最終判定は `runner/runner.config.json` の `personas[]`
-(allowlist)が握る構造が残った。運用でこれが 2 種類の摩擦を生む:
+[ADR-0029](0029-persona-server-sot-and-pack-distribution.md) integrated personas
+with server SoT + zip-pack distribution, but the final decision about which
+“personas can be launched on this host” remained with `personas[]` (allowlist) in
+`runner/runner.config.json`. In operation, this creates two kinds of friction:
 
-1. **allowlist 同期漏れ**: 新 pack を server に置いても、稼働ホストの
-   `runner.config.json` に手で追記しないと dashboard「+ 起動」に出ない。
-   fuji 追加直後(2026-07-05)にも、pack が ingest 済みなのに runner の
-   allowlist に fuji が無いため起動不可、という同じ形の papercut が再発。
-   `scripts/dev.sh` は「初回のみ生成」で以後は上書きしない gitignored
-   ファイルのため、`git pull` でも解消しない。
-2. **モードが固定**: allowlist しか選べないため、ラボ規模のように
-   「server に置いたものは基本すべて使ってよい」用途では冗長な二重管理。
-   一方で研究室外への配布や共有 server で「特定ホストではこの pack を
-   使わせない」ような opt-out はそもそも表現手段が無い(pack 削除しか
-   ない)。
+1. **Allowlist synchronization omissions**: even after placing a new pack on the
+   server, it does not appear in the dashboard “+ Launch” until it is manually
+   added to the active host’s `runner.config.json`. Immediately after fuji was
+   added (2026-07-05), the same papercut recurred: the pack had been ingested,
+   but it could not launch because fuji was absent from the runner allowlist.
+   `scripts/dev.sh` generates the gitignored file “only on first use” and does
+   not overwrite it thereafter, so `git pull` does not resolve this either.
+2. **The mode is fixed**: because only an allowlist can be selected, it creates
+   redundant double management for lab-scale use cases where “everything placed
+   on the server is basically allowed”. Conversely, distribution outside the
+   lab or a shared server has no way to express an opt-out such as “do not allow
+   this pack on a particular host” (other than deleting the pack).
 
-これらは「runner が server の persona カタログをどこまで信じるか」の
-トラスト方針が単一値でしか表現できないことに起因する。**信頼軸を config
-で明示的に選べる**ようにすれば、小規模運用の摩擦解消と、大規模運用に
-向けた表現力の下地が同時に得られる。
+These issues result from being able to express the trust policy “how far the
+runner trusts the server’s persona catalog” only as one value. Making the trust
+axis explicitly selectable in config addresses small-scale operational friction
+and lays the foundation for the expressiveness needed at larger scale.
 
-**信頼軸のスコープ**: 本 ADR が扱うのは **runner → server 方向の信頼**
-(runner が server の persona 集合をどこまで受け入れるか)の 1 軸のみ。
-逆方向(server が runner の申告をどこまで信じるか、per-token に spawn
-可能 persona を制限するなど)は WS 認証・cwd_allowlist の server 側
-検証・per-token persona ACL 等の別レイヤに属し、本 ADR のスコープ外。
-実運用でその表現力が要求された時点で別 ADR として扱う(Non-Goals 参照)。
+**Scope of the trust axis**: This ADR covers only **trust from runner → server**
+(how much of the server’s persona set the runner accepts). The reverse direction
+(how much the server trusts the runner’s declaration, such as restricting
+spawnable personas per token) belongs to other layers such as WS authentication,
+server-side cwd_allowlist validation, and per-token persona ACLs, and is outside
+this ADR’s scope. Treat it as a separate ADR when operational use requires that
+expressiveness (see Non-Goals).
 
 ## Decision
 
-### F1: 2 モードから選択、両モード相互排他
+### F1: Choose one of two mutually exclusive modes
 
-`runner/runner.config.json` に **`allowed_personas` または
-`blocked_personas` のいずれか一方**を書ける。両方を書いた config は
-起動時に fail-loud で reject する(意味論の曖昧さを残さない)。
+`runner/runner.config.json` may contain **either `allowed_personas` or
+`blocked_personas`**. A config containing both is rejected fail-loud at startup
+(do not leave the semantics ambiguous).
 
-- **`allowed_personas: string[]`** — allowlist モード。列挙された id
-  のみを spawn 可能とする(現行 `personas[]` 相当)。
-- **`blocked_personas: string[]`** — blacklist モード。server の
-  persona 集合(`PersonaAssets` に ingest されたもの + 予約 `default`)
-  から、列挙された id を除いたものが spawn 可能となる。
-- **両フィールド省略** — accept-all(空 blacklist と同義)。**小規模
-  運用の既定**として、新規 host は persona 宣言ゼロで全 persona を
-  受け入れる。
+- **`allowed_personas: string[]`** — allowlist mode. Only the listed ids may be
+  spawned (equivalent to the current `personas[]`).
+- **`blocked_personas: string[]`** — blacklist mode. The spawnable set is the
+  server’s persona set (ingested into `PersonaAssets` + the reserved `default`)
+  with the listed ids removed.
+- **Both fields omitted** — accept-all (equivalent to an empty blacklist).
+  **The default for small-scale operation** is that a new host accepts every
+  persona without declaring any personas.
 
-id は persona pack の `manifest.json` の id と完全一致。versioning
-(`fuji@1.0.0` など)、ワイルドカード、名前空間の類はサポートしない
-(将来必要になった段階で拡張)。
+Ids must exactly match the ids in a persona pack’s `manifest.json`. Versioning
+(`fuji@1.0.0`, etc.), wildcards, and namespaces are not supported (extend this
+when they become necessary in the future).
 
-### F2: `default` persona を特別扱いしない
+### F2: Do not treat the `default` persona specially
 
-予約 persona id `default`(ADR-0029, #35, HostRegistry.inject_default/1)
-も他の id と同様に `allowed_personas` / `blocked_personas` に列挙可能
-とする。`HostRegistry.inject_default/1` の「必ず注入」ロジックは撤去し、
-「宣言セットに default が含まれる(allowlist)/含まれない(blacklist)
-場合のみ注入」に変更する。
+The reserved persona id `default` (ADR-0029, #35, HostRegistry.inject_default/1)
+can be listed in `allowed_personas` / `blocked_personas` like any other id. Remove
+the “always inject” logic from `HostRegistry.inject_default/1` and change it to
+inject default only when default is included in the declared set (allowlist)
+or not included (blacklist).
 
-結果として `default` を blocked し他 pack も列挙外/未 ingest の場合、
-spawnable セットが空になる host が発生しうるが、これを canary/準備中
-host として合法状態とする。dashboard 側は空 picker を明示的に UX で
-表示する(例外扱いはしない)。
+As a result, a host that blocks `default` while other packs are either not listed
+or not ingested can have an empty spawnable set. Treat this as a legal canary /
+preparation state rather than an error. The dashboard explicitly displays an
+empty picker as UX (do not handle it as an exception).
 
-この採用理由は主に **id 空間の一貫性**と **`inject_default/1` の
-分岐撤去による HostRegistry 単純化**。副次的に、将来 default が固有の
-personality pack を持つ方向に振ったときの「default 固有のインジェク
-ション対策」の下地としても機能する(ただし現状の default は common
-footer のみを持ち personality を持たないため、footer 由来のインジェク
-ションへの緩和にはならない — 全 persona に共通適用のため。footer 側の
-lever が必要になった場合は別 ADR で扱う)。
+The main reasons for this decision are **consistency of the id space** and
+**simplification of HostRegistry by removing the `inject_default/1` branch**.
+Secondarily, it provides groundwork for handling “default-specific injection” if
+default later moves toward having its own personality pack (though current
+default has only the common footer and no personality, so this does not mitigate
+footer-derived injection — it applies to all personas in common. Handle any need
+for a footer-side lever in a separate ADR).
 
-### F3: 判定は server 側で完結
+### F3: Complete the decision on the server side
 
-blacklist モードのときは、runner が register 時に `blocked_personas` を
-申告 → server の `AgentsChannel.resolve_persona/2` は `PersonaAssets` の
-集合(+ default 予約)から blocked を除いたセットで判定する。この設計に
-より、稼働中の server に新 pack が ingest されても runner の再登録は
-不要となり、ADR-0029 の watcher による live 反映がホスト側にも自然に
-波及する。
+In blacklist mode, the runner declares `blocked_personas` during register → the
+server’s `AgentsChannel.resolve_persona/2` determines the set by removing blocked
+ids from the `PersonaAssets` set (+ the reserved default). This means that when
+a new pack is ingested into a running server, the runner does not need to register
+again; live propagation by the ADR-0029 watcher naturally reaches the host as well.
 
-allowlist モードは現行どおり `HostRegistry` の personas 参照で継続。
-分岐が入るのは `AgentsChannel.resolve_persona/2` の判定元と、
-`HostRegistry` の `attrs` 保持形式のみ。
+Allowlist mode continues to use the `HostRegistry` persona reference as before.
+The branch affects only the decision source in `AgentsChannel.resolve_persona/2`
+and the form in which `HostRegistry` retains `attrs`.
 
-### F4: 既存 `personas[]` フィールドの後方互換
+### F4: Backward compatibility for the existing `personas[]` field
 
-既存 `runner.config.json` が `personas: [{id, name, sprite_set}, ...]`
-形式を持つ場合、次の 1 リリースサイクルは **allowlist モードとして
-受理**し、deprecation 警告を stderr に出す。id のみを利用し、name /
-sprite_set は server 側 manifest を優先する(host ローカルの表示名
-上書きは撤去、ADR-0029 の SoT 方針と整合)。
+When an existing `runner.config.json` has the form
+`personas: [{id, name, sprite_set}, ...]`, accept it as **allowlist mode for the
+next one-release cycle** and emit a deprecation warning to stderr. Use only the
+ids; prefer the server-side manifest for name / sprite_set (remove host-local
+display-name overrides, consistent with ADR-0029’s SoT policy).
 
-移行完了(次期 major)の時点で `personas` フィールドは撤去し、
-`allowed_personas: string[]` に完全置換する。
+At migration completion (the next major), remove the `personas` field and replace
+it completely with `allowed_personas: string[]`.
 
-### F5: 起動時 fetch と cli 突合の撤去
+### F5: Remove startup fetch and CLI comparison
 
-現行の `scheduleAllowlistCheck`(runner/src/cli.ts、起動 3s 後に
-`/api/personas` を叩いて config との差分を warn)は blacklist モードで
-は不要(判定が server 側完結のため)、allowlist モードでは deprecation
-警告と重複するため、本 ADR で撤去する。
+The current `scheduleAllowlistCheck` (runner/src/cli.ts, which calls
+`/api/personas` three seconds after startup and warns about differences from the
+config) is unnecessary in blacklist mode because the decision is completed on
+the server, and duplicates the deprecation warning in allowlist mode. Remove it
+under this ADR.
 
 ## Consequences
 
-### 正の帰結
+### Positive consequences
 
-- 新 pack 追加時、blacklist モード host では config 変更不要で自動
-  反映される(fuji 追加時の papercut が構造的に消滅)
-- runner の初期セットアップから persona 宣言が省略可能となり、ラボ
-  規模の初期セットアップコストが下がる
-- `runner.config.json` のスキーマから persona display metadata(name /
-  sprite_set)が消え、SoT が manifest.json に完全集約される
+- When a new pack is added, a blacklist-mode host reflects it automatically with
+  no config change (the papercut from adding fuji disappears structurally).
+- Persona declarations can be omitted from runner initial setup, reducing the
+  initial setup cost for lab-scale deployments.
+- Persona display metadata (name / sprite_set) disappears from the
+  `runner.config.json` schema, and the manifest becomes the complete SoT.
 
-### 負の帰結・トレードオフ
+### Negative consequences / trade-offs
 
-- **信頼委譲の方向転換**: blacklist モードでは「server に ingest された
-  pack = ホスト上で実行される system prompt」となる。単一 operator =
-  server admin のラボ用途では実質劣化なしだが、複数 operator / 共有
-  server の場合は、operator は自分のマシンで走る persona prompt を
-  事前レビューする明示的な手段を失う(pack は WrapperChannel が
-  persona_prompt として wrapper に push、personality.md 由来のプロンプト
-  インジェクションリスクは allowed_tools の範囲で顕在化しうる)。この
-  トレードオフは config でモードを選べる(乙方針)ことで operator に
-  委ねる。
-- allowlist / blacklist 2 モード分岐のテストサーフェスは増える
-  (`AgentsChannel.resolve_persona/2` の判定分岐、HostRegistry の
-  attrs 形式、dashboard 側の空 picker UX)
-- `default` を block した host で spawnable ゼロになる状態は許容する
-  ため、dashboard は空 picker を意図した空状態として表示する必要が
-  ある(エラーではなく)
+- **A change in the direction of delegated trust**: in blacklist mode, “a pack
+  ingested into the server = a system prompt executed on the host”. For a
+  single-operator = server-admin lab this is effectively no degradation, but in
+  a multi-operator / shared-server setup the operator loses an explicit way to
+  review the persona prompt that will run on their machine beforehand (the pack
+  is pushed to the wrapper as persona_prompt by WrapperChannel, and
+  personality.md-derived prompt injection risks can surface within the scope of
+  allowed_tools). Delegate this trade-off to the operator by making the mode
+  selectable in config (the second policy).
+- The test surface grows for the allowlist / blacklist branches
+  (`AgentsChannel.resolve_persona/2` decision branches, HostRegistry attrs form,
+  and dashboard empty-picker UX).
+- A host that blocks `default` may have zero spawnable personas; the dashboard
+  must display this as an intentional empty state, not an error.
 
-### 変更影響領域
+### Areas affected
 
-- `runner/src/cli.ts` — config parse に mode 判定を追加、
-  `scheduleAllowlistCheck` 撤去、blacklist モード時は
-  `blocked_personas` を register payload に含める
-- `server/lib/kaoiro_server/host_registry.ex` — attrs に mode と
-  blocked/allowed セットを保持、`inject_default/1` 撤去
-- `server/lib/kaoiro_server_web/channels/runner_channel.ex` —
-  `parse_register/1` を新フィールド対応に拡張、旧 `personas` の
-  deprecation 警告
-- `server/lib/kaoiro_server_web/channels/agents_channel.ex` —
-  `resolve_persona/2` を mode 別分岐
-- `scripts/dev.sh` — 生成テンプレートを新スキーマ(mode 省略で
-  accept-all)へ更新
-- `docs/specs/personas.md` — runner 側の persona 受け入れ仕様を
-  2 モード対応で書き換え
-- `wrapper/kaoiro.config.{claude-code,codex}.example.json` — 影響なし
-  (persona は server から降ってくる、ADR-0029 F3。ファイル名は phase-15
-  15-17 で engine 別に分割)
+- `runner/src/cli.ts` — add mode selection to config parsing, remove
+  `scheduleAllowlistCheck`, and include `blocked_personas` in the register
+  payload in blacklist mode
+- `server/lib/kaoiro_server/host_registry.ex` — retain mode and blocked/allowed
+  sets in attrs, remove `inject_default/1`
+- `server/lib/kaoiro_server_web/channels/runner_channel.ex` — extend
+  `parse_register/1` for the new fields and warn about legacy `personas`
+- `server/lib/kaoiro_server_web/channels/agents_channel.ex` — branch
+  `resolve_persona/2` by mode
+- `scripts/dev.sh` — update the generated template to the new schema (mode
+  omitted means accept-all)
+- `docs/specs/personas.md` — rewrite runner-side persona acceptance for the two
+  modes
+- `wrapper/kaoiro.config.{claude-code,codex}.example.json` — no impact (personas
+  come from the server, ADR-0029 F3; filenames are split by engine in phase-15
+  15-17)
 
 ## Non-Goals
 
-以下は本 ADR のスコープ外とし、必要性が実運用で顕在化した時点で
-別 ADR として扱う:
+The following are outside this ADR’s scope and should be handled as separate ADRs
+when their need becomes apparent in operation:
 
-1. **per-token persona ACL(server → runner 方向の信頼)** — server が
-   「このトークンではこの persona しか起動不可」という制限を持つ機構。
-   組織/共有 server 運用で必要になるが、本 ADR は runner → server 方向
-   の信頼のみを扱う。
-2. **id の versioning / ワイルドカード / 名前空間** — `fuji@1.0.0` 単位
-   の許可、`sakurai/*` のような author 単位の制限など。id 完全一致の
-   ミニマルな意味論から始める。
-3. **common footer 側の lever** — footer 由来のプロンプトインジェクション
-   への緩和(footer 版別選択、footer 無効化オプションなど)。本 ADR の
-   `default` 扱いはこの問題を解決しない。
-4. **動的なモード切替** — 運用中に allowlist ↔ blacklist を切り替える
-   ような UX / API。config 編集 + runner 再起動で足りるため対象外。
-5. **spawnable ゼロ host に対する明示的なアラート** — canary/準備中の
-   合法状態として扱うため、warning を出さない(気になれば別途 issue
-   化)。
+1. **Per-token persona ACL (trust from server → runner)** — a mechanism for the
+   server to restrict a token so that it can launch only specific personas. This
+   is needed for organization / shared-server operation, but this ADR covers only
+   trust from runner → server.
+2. **Id versioning / wildcards / namespaces** — allowing `fuji@1.0.0` units,
+   author-based restrictions such as `sakurai/*`, and similar features. Start
+   with the minimal semantics of exact id matching.
+3. **A lever on the common footer** — mitigation for footer-derived prompt
+   injection (selecting footer versions, disabling the footer, etc.). The
+   treatment of `default` in this ADR does not solve this problem.
+4. **Dynamic mode switching** — UX / API for switching allowlist ↔ blacklist while
+   in operation. Config editing + runner restart is sufficient, so it is out of
+   scope.
+5. **Explicit alerts for hosts with zero spawnable personas** — treat this as a
+   legal canary / preparation state, so do not warn (file a separate issue if it
+   becomes a concern).
 
 ## Migration
 
-1. **既存 lab の `runner.config.json`**(`personas: [...]` を持つ):
-   次期リリースまでは deprecation 警告つきで allowlist モードとして
-   動作。lab admin は都合の良いタイミングで:
-   - blacklist 志向にする場合 → `personas` を削除して起動、または
-     `blocked_personas: []` を明示
-   - allowlist 志向を維持する場合 → `personas: [...]` を
-     `allowed_personas: ["<id>", ...]`(id のみの string 配列)へ
-     書き換え(name/sprite_set は server 側 SoT に委ねる)
-2. **`scripts/dev.sh` の生成テンプレート**: 新規生成は accept-all
-   (両フィールド省略、`blocked_personas: []` をコメントヒントとして
-   例示)に更新。既存 lab の生成済み config は上書きしない現行挙動を
-   維持。
-3. **次期 major**: `personas` フィールドと deprecation 警告を撤去。
-   `HostRegistry` の attrs 形式も 2 モード前提に統一。
+1. **Existing lab `runner.config.json`** (with `personas: [...]`): operate in
+   allowlist mode with a deprecation warning until the next release. At a
+   convenient time, the lab admin can:
+   - To adopt blacklist behavior → delete `personas` and start, or explicitly
+     set `blocked_personas: []`
+   - To retain allowlist behavior → rewrite `personas: [...]` as
+     `allowed_personas: ["<id>", ...]` (an id-only string array; delegate
+     name/sprite_set to the server-side SoT)
+2. **Generated template in `scripts/dev.sh`**: update new generation to
+   accept-all (omit both fields; show `blocked_personas: []` as a commented hint).
+   Preserve the current behavior of not overwriting config already generated for
+   an existing lab.
+3. **Next major**: remove the `personas` field and deprecation warning. Unify
+  the `HostRegistry` attrs form around the two-mode model.
 
-## 未確認 / 参考
+## Unverified / reference
 
-- footer 版別選択 / 無効化 lever は未検討。footer 由来の injection
-  リスクが顕在化した時点で別 ADR として扱う。
-- server 側で pack manifest の署名検証(誰が pack を作ったか)は
-  本 ADR とは独立の課題。ingest 時点でのハッシュチェック
-  (`server/priv/persona-packs/.cache/`、当時の位置)は ADR-0029 で既に
-  導入済み。現行の extraction cache は ADR-0046 により persona dir 外へ
-  移設済み。
+- Footer version selection / disable levers have not been considered. Handle
+  footer-derived injection risk in a separate ADR if it becomes apparent.
+- Server-side signature verification for pack manifests (who created a pack) is
+  an independent concern. Hash checking at ingest time
+  (`server/priv/persona-packs/.cache/`, its location at the time) was already
+  introduced by ADR-0029. The current extraction cache has been moved outside
+  the persona directory by ADR-0046.
