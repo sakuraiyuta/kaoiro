@@ -2276,6 +2276,43 @@ describe("CodexHost", () => {
       expect(turnEnds[0]).toHaveProperty("turnToken", expect.any(String));
     });
 
+    it("terminal boundary hook は failed persistence より先に exact token を終える", async () => {
+      const persistenceStarted = deferred<void>();
+      const releasePersistence = deferred<void>();
+      const boundaries: string[] = [];
+      const persist = vi
+        .spyOn(CodexTurnDiagnostics.prototype, "writeFailure")
+        .mockImplementation(async () => {
+          persistenceStarted.resolve();
+          await releasePersistence.promise;
+          return "/tmp/synthetic-codex-trace.jsonl";
+        });
+      const { client } = makeClient([[
+        { type: "thread.started", thread_id: "boundary-before-persist" },
+        { type: "turn.failed", error: { message: "persist-late" } },
+      ]]);
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        onTurnBoundary: ({ turnToken }) => boundaries.push(turnToken),
+        now: () => "T",
+      });
+
+      const running = host.run("hi");
+      try {
+        await persistenceStarted.promise;
+        expect(boundaries).toHaveLength(1);
+        releasePersistence.resolve();
+        await client.waitForTurn(0);
+      } finally {
+        releasePersistence.resolve();
+        host.close();
+        await running;
+        persist.mockRestore();
+      }
+    });
+
     it.each([
       {
         label: "completed→failed",
@@ -2608,6 +2645,7 @@ describe("CodexHost", () => {
 
     it("終端イベント無しでストリームが終わると detail 無しの error で onTurnEnd を呼ぶ", async () => {
       const turnEnds: unknown[] = [];
+      const boundaries: string[] = [];
       const turnEnded = deferred<void>();
       const { client } = makeClient([
         [{ type: "thread.started", thread_id: "uuid-err-2" }],
@@ -2616,6 +2654,7 @@ describe("CodexHost", () => {
         onState: () => {},
         appendSystemPrompt: "p",
         codexFactory: () => client,
+        onTurnBoundary: ({ turnToken }) => boundaries.push(turnToken),
         onTurnEnd: (info) => {
           turnEnds.push(info);
           turnEnded.resolve();
@@ -2626,6 +2665,7 @@ describe("CodexHost", () => {
       await runOneTurn(host, "hi", client, turnEnded.promise);
 
       expect(turnEnds).toHaveLength(1);
+      expect(boundaries).toEqual([(turnEnds[0] as { turnToken: string }).turnToken]);
       expect(turnEnds[0]).toMatchObject({ conversationIds: [], error: {} });
       expect(turnEnds[0]).toHaveProperty("turnToken", expect.any(String));
     });
@@ -2818,12 +2858,14 @@ describe("CodexHost", () => {
         conversationIds: readonly string[];
         error?: { reason?: string; detail?: string };
       }[] = [];
+      const boundaries: string[] = [];
       const turnEnded = deferred<void>();
       const { client } = makeClient([new Error("exec exited 1")]);
       const host = new CodexHost(CONFIG, {
         onState: () => {},
         appendSystemPrompt: "p",
         codexFactory: () => client,
+        onTurnBoundary: ({ turnToken }) => boundaries.push(turnToken),
         onTurnEnd: (info) => {
           turnEnds.push(info);
           turnEnded.resolve();
@@ -2834,6 +2876,7 @@ describe("CodexHost", () => {
       await runOneTurn(host, "hi", client, turnEnded.promise);
 
       expect(turnEnds).toHaveLength(1);
+      expect(boundaries).toEqual([turnEnds[0]!.turnToken]);
       expect(turnEnds[0]?.conversationIds).toEqual([]);
       expect(turnEnds[0]?.error?.detail).toContain("exec exited 1");
     });

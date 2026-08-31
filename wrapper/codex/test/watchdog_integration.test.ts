@@ -116,7 +116,7 @@ describe("Codex watchdog host boundary", () => {
     // the active token after the watchdog has made its outcome unknown.
     expect(turnEnds).toHaveLength(1);
     expect(states).toEqual(["sending", "error"]);
-    expect(finalized).toEqual(["turn-first"]);
+    expect(finalized).toEqual(["turn-second", "turn-first"]);
     expect(lifecycle).toEqual([
       { kind: "turn_start", turnToken: "turn-first" },
       { kind: "sdk_event", turnToken: "turn-first", type: "thread.started" },
@@ -202,6 +202,7 @@ describe("Codex watchdog host boundary", () => {
     const releaseActive = deferred<void>();
     const activeDir = await mkdtemp(join(tmpdir(), "momo-284-active-"));
     const queuedDir = await mkdtemp(join(tmpdir(), "momo-284-queued-"));
+    const finalized: string[] = [];
     let materialization = 0;
     const client = clientFor(async function* events() {
       yield { type: "thread.started", thread_id: "watchdog-image-session" };
@@ -211,6 +212,7 @@ describe("Codex watchdog host boundary", () => {
       onState: () => {},
       onTurnStart: () => activeStarted.resolve(),
       onTurnEnd: () => {},
+      onTurnFinalized: ({ turnToken }) => finalized.push(turnToken),
       appendSystemPrompt: "p",
       codexFactory: () => client,
       materializeImages: async (_agentId, _uploads, lifecycle) => {
@@ -239,6 +241,7 @@ describe("Codex watchdog host boundary", () => {
 
       expect(await exists(activeDir)).toBe(true);
       expect(await exists(queuedDir)).toBe(false);
+      expect(finalized).toEqual(["turn-queued"]);
       releaseActive.resolve();
       await running;
       expect(await exists(activeDir)).toBe(false);

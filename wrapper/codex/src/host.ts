@@ -265,8 +265,12 @@ export interface CodexHostOptions {
   /** Wrapper-local lifecycle evidence for the Codex stream. This is kept out
    * of transcript envelopes because it exists to diagnose SDK wedges. */
   onLifecycle?: (event: CodexLifecycleEvent) => void;
-  /** Invoked after this host turn has fully left the stream path. Unlike
-   * stream_eof, this also covers timeout cleanup and stream rejection. */
+  /** Exact SDK boundary, before lifecycle telemetry or failure persistence.
+   * This is intentionally separate from the fail-soft observation sink. */
+  onTurnBoundary?: (info: { turnToken: string }) => void;
+  /** Invoked after this host turn has fully left or been dropped from the
+   * stream path. Unlike stream_eof, this also covers timeout cleanup, stream
+   * rejection, and queued fail-stop cancellation. */
   onTurnFinalized?: (info: { turnToken: string }) => void;
   /** Invoked for every SDK frame while the exact turn is active. */
   onTurnProgress?: (info: { turnToken: string }) => void;
@@ -858,7 +862,15 @@ export class CodexHost implements EngineAdapter {
     // when they belong to inter-agent batches, must settle as cancellations so
     // the caller can report the drop without touching the active token.
     const queuedTurns = this.#queue.splice(0);
-    this.#watchdogQueuedCleanup = this.#cleanupWatchdogQueuedTurns(queuedTurns);
+    this.#watchdogQueuedCleanup = this.#cleanupWatchdogQueuedTurns(
+      queuedTurns,
+    ).then(() => {
+      for (const turn of queuedTurns) {
+        if (turn.turnToken !== undefined) {
+          this.#options.onTurnFinalized?.({ turnToken: turn.turnToken });
+        }
+      }
+    });
     const error = {
       detail:
         attribution === "exact"
@@ -1254,6 +1266,12 @@ export class CodexHost implements EngineAdapter {
     // later terminal-less EOF has the best available local classification.
     let recordedThreadError: string | null = null;
     let sawResult = false;
+    let sdkBoundaryEnded = false;
+    const endSdkBoundary = (): void => {
+      if (sdkBoundaryEnded) return;
+      sdkBoundaryEnded = true;
+      this.#options.onTurnBoundary?.({ turnToken });
+    };
     try {
       const { events } = await thread.runStreamed(input, {
         signal: this.#abort.signal,
@@ -1288,6 +1306,9 @@ export class CodexHost implements EngineAdapter {
           next = outcome.result;
         }
         if (next.done) {
+          if (!terminalEventSeen && !this.#watchdogFailStopped) {
+            endSdkBoundary();
+          }
           this.#options.onLifecycle?.({
             kind: "stream_eof",
             turnToken,
@@ -1296,6 +1317,15 @@ export class CodexHost implements EngineAdapter {
           break;
         }
         const event = next.value;
+        const isUsable = isUsableThreadEvent(event);
+        const isTerminalEvent =
+          isUsable &&
+          (event.type === "turn.completed" || event.type === "turn.failed");
+        const firstTerminalEvent = isTerminalEvent && !terminalEventSeen;
+        if (firstTerminalEvent) {
+          terminalEventSeen = true;
+          if (!this.#watchdogFailStopped) endSdkBoundary();
+        }
         diagnostics.recordEvent(event);
         this.#options.onLifecycle?.({
           kind: "sdk_event",
@@ -1305,12 +1335,8 @@ export class CodexHost implements EngineAdapter {
             : "unknown",
         });
         this.#options.onTurnProgress?.({ turnToken });
-        if (!isUsableThreadEvent(event)) continue;
-        const isTerminalEvent =
-          event.type === "turn.completed" || event.type === "turn.failed";
-        if (terminalEventSeen) continue;
-        if (isTerminalEvent) {
-          terminalEventSeen = true;
+        if (!isUsable || (terminalEventSeen && !firstTerminalEvent)) continue;
+        if (firstTerminalEvent) {
           this.#options.onLifecycle?.({
             kind: "terminal",
             turnToken,
@@ -1422,6 +1448,7 @@ export class CodexHost implements EngineAdapter {
     } catch (err) {
       // runStreamed rejection or mid-stream throw (exec exited non-zero).
       if (this.#watchdogFailStopped) return;
+      if (!sawResult) endSdkBoundary();
       let terminalError: unknown = err;
       if (!sawResult) {
         // A repair retry shares this marker with its original turn. Once the
