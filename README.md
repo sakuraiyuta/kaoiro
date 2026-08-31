@@ -37,6 +37,8 @@ Agents are launched and tuned from the same screen:
             options">
 </p>
 
+The dashboard interface is currently Japanese-only.
+
 ## Features
 
 - **State as a face** — each agent's state (`thinking`, `waiting_permission`,
