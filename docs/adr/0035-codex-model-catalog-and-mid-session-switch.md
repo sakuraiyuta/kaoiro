@@ -98,7 +98,7 @@ reload):
    not relay doctor stdout / stderr at all — it may contain credential-presence
    details in the same JSON as stored auth mode.
 4. **Do not infer implicitly from `chatgpt_plan`**. An API-key runner may retain
-   `chatgpt_plan` during an auth switch, and using it as the basis for auth_mode
+   `chatgpt_plan` during an auth switch, and using `chatgpt_plan` as the basis for auth_mode
    would misclassify that transition.
 
 Hot reload uses the same priority, and the helper handles all five transitions

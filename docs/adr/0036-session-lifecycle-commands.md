@@ -191,10 +191,9 @@ was superseded by [ADR-0051](0051-history-restart-resilience.md) D3-4.
 restored from the wrapper host sidecar into the per-pane projection. Remove the
 server-side `InterAgentHistory` DETS.
 
-Keep server-side `AgentStates` as the SSOT for the display projection. Do not merely
+Keep `server`-side `AgentStates` as the SSOT for the display projection. Do not merely
 clear the client-local store, because reconnect would resurrect the deleted log.
-On /clear completion, `SessionResets.confirm_connection/2` adopts the `{order,
-display}` returned by `SessionStarts.advance_transition/3` in
+On /clear completion, `SessionResets.confirm_connection/2` adopts the `{order, display}` returned by `SessionStarts.advance_transition/3` in
 `ClearWatermarks.record/3` (the same form as operator `clear_history`’s
 `adopt_session_start_watermark`), and reduce history to one marker line with
 `AgentStates.clear_history_with_boundary/2`. Pass fsync-gated `ClearWatermarks`
@@ -222,7 +221,7 @@ updates the latest pointer.
 
 Resume the old session through the runner’s session enumeration under cwd and the
 existing session picker / `resume_session`. Do not create a dedicated “go back one
-step” stack. Keep [ADR-0014](0014-session-resume-and-restore.md) F2/F3/A4’s policy
+step” stack. Keep ADR-0014 F2/F3/A4’s policy
 of using host session files as candidate SSOT without duplicating history on the
 server. A one-time shortcut from the completion toast to `previous_session_id` may
 be added later, but treat it as a UI shortcut to existing `resume_session`, not a

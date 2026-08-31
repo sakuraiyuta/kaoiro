@@ -108,7 +108,7 @@ handle only the two axes without knowing engine vocabulary. The mapping is an
 | `dontAsk` | workspace-write | never | Rejects anything not pre-approved without asking |
 | `auto` | workspace-write | on-request | A classifier performs approval (a request itself still occurs) |
 
-### F3 — Codex uses the two axes directly (`approval` fixed to `never`)
+### F3 — Codex uses the two axes directly (approval fixed to `never`)
 
 The `wrapper/codex` adapter projects the `sandbox_mode` selected at spawn directly
 to `ext.permission.sandbox`. `approval` is **fixed to `never`** — `codex exec`
