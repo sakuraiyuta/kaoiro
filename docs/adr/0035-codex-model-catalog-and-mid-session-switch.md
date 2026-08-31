@@ -1,5 +1,5 @@
 ---
-title: Codex model catalog 復活と mid-session switch 契約
+title: Restore the Codex model catalog and define the mid-session switch contract
 status: accepted
 date: 2026-07-11
 opened: 2026-07-11
@@ -9,46 +9,47 @@ related_specs: [protocol, plugin-model, codex-model-catalog, codex-sdk-events]
 related_adrs: [32, 34, 37, 39, 40]
 ---
 
-# ADR-0035 — Codex model catalog 復活と mid-session switch 契約
+# ADR-0035 — Restore the Codex model catalog and define the mid-session switch contract
 
 ## Status
 
-Accepted (2026-07-11、マスター決裁)。実装は
-[phase-16-codex-model-switch](../plans/phase-16-codex-model-switch.md)。phase-15
-initial 完了後に着手する。
+Accepted (2026-07-11, approved by マスター). Implementation is
+[phase-16-codex-model-switch](../plans/phase-16-codex-model-switch.md), to begin
+after phase-15 initial completion.
 
 ## Context
 
-[ADR-0032](0032-codex-adapter.md) F4bc は、ChatGPT-account 認証で explicit
-model が全て 400/404 になった 2026-07-11 の観測を根拠に Codex の
-`supportedModels()` を空にした。後に、この観測は ChatGPT Plus 加入前だった
-ことが判明した。加入前後の同一 persona rollout では account default が
-`gpt-5.6-terra` から `gpt-5.6-sol` へ変化し、同じ session history が継続した
-(2026-07-11)。Plus 加入後、codex-cli 0.144.1 を host terminal から実行し、
-次を確認した:
+[ADR-0032](0032-codex-adapter.md) F4bc emptied Codex’s `supportedModels()` based on
+the observation on 2026-07-11 that every explicit model under ChatGPT-account
+authentication returned 400/404. It was later found that this observation was
+from before ChatGPT Plus enrollment. In the same-persona rollout before and after
+enrollment, the account default changed from `gpt-5.6-terra` to `gpt-5.6-sol`,
+while the same session history continued (2026-07-11). After Plus enrollment,
+running codex-cli 0.144.1 from a host terminal confirmed the following:
 
-| slug | 結果 |
+| slug | Result |
 |------|------|
-| `gpt-5.6-sol` | exit 0、`MODEL_OK` |
-| `gpt-5.6-terra` | exit 0、`MODEL_OK` |
-| `gpt-5.6-luna` | exit 0、`MODEL_OK` |
-| `gpt-5-codex` (negative control) | HTTP 400、`turn.failed`、exit 1 |
+| `gpt-5.6-sol` | exit 0, `MODEL_OK` |
+| `gpt-5.6-terra` | exit 0, `MODEL_OK` |
+| `gpt-5.6-luna` | exit 0, `MODEL_OK` |
+| `gpt-5-codex` (negative control) | HTTP 400, `turn.failed`, exit 1 |
 
-Plus auth では curated trio の explicit 指定が通り、非 entitled slug は silent
-fallback せず loud fail する。一方 `codex doctor --json` は auth mode までは
-返すが、ChatGPT plan tier と entitled model 集合を返さない。この制約下で、
-UI が提示する catalog をどう truthful にするかを決める必要がある。
+With Plus auth, explicit selection of the curated trio succeeds, and a
+non-entitled slug fails loudly without silent fallback. Meanwhile,
+`codex doctor --json` reports auth mode but not ChatGPT plan tier or the entitled
+model set. Under this constraint, we need to decide how to make the catalog shown
+by the UI truthful.
 
-model switch の輸送路は既に存在する。`setModel(value)` が次 turn 用の値を保持し、
-各 turn は同一 `sessionId` を fresh `ThreadOptions` で `resumeThread()` する。
-不足しているのは catalog、capability advertisement、失敗時 rollback の正式契約、
-および Codex effort の UI 統合である。
+The model-switch transport already exists. `setModel(value)` retains the value for
+the next turn, and each turn calls `resumeThread()` with a fresh `ThreadOptions` and
+the same `sessionId`. What is missing is a formal contract for the catalog,
+capability advertisement, failure rollback, and Codex-effort UI integration.
 
 ## Decision
 
-### F1 — operator plan 申告 (案 B) を採用する
+### F1 — Adopt operator plan declaration (Option B)
 
-`runner.config.json` に optional な Codex 固有設定を追加する:
+Add optional Codex-specific configuration to `runner.config.json`:
 
 ```json
 {
@@ -56,154 +57,170 @@ model switch の輸送路は既に存在する。`setModel(value)` が次 turn �
 }
 ```
 
-`chatgpt_plan` は `free | go | plus | pro | business | enterprise` の closed enum。
-runner は `codex.auth_mode` (Phase-24 で追加) の明示宣言、または
-`codex doctor --json` の stored auth mode 検出 (fallback) とこの申告を
-組み合わせて catalog を構成する。
+`chatgpt_plan` is a closed enum: `free | go | plus | pro | business | enterprise`.
+The runner combines this declaration with an explicit `codex.auth_mode` (added in
+Phase-24), or with stored auth-mode detection from `codex doctor --json` (fallback),
+to construct the catalog.
 
-- auth mode `chatgpt` + plan 未申告: 空 catalog、account default 委任、stderr warn。
-- auth mode `chatgpt` + `free|go`: Terra のみ。
-- auth mode `chatgpt` + `plus|pro|business|enterprise`: Sol / Terra / Luna。
-- auth mode `apikey`: API-key 用 curated catalog。残置された ChatGPT plan 申告は
-  stderr warnを出して無視する。auth切替だけでrunner起動を壊さない。
-- auth mode 検出失敗: 空 catalogへ fail closedし、stderr warn。推測しない。
+- auth mode `chatgpt` + plan undeclared: empty catalog, delegate to account default,
+  stderr warning.
+- auth mode `chatgpt` + `free|go`: Terra only.
+- auth mode `chatgpt` + `plus|pro|business|enterprise`: Sol / Terra / Luna.
+- auth mode `apikey`: curated catalog for API keys. Warn to stderr and ignore a
+  leftover ChatGPT plan declaration. Do not break runner startup merely by switching
+  auth.
+- auth-mode detection failure: fail closed to an empty catalog and warn to stderr.
+  Do not guess.
 
-#### auth mode 決定の priority (Phase-24 追補、2026-07-16)
+#### Auth-mode decision priority (Phase-24 addendum, 2026-07-16)
 
-runner が catalog resolve に使う `codexAuthMode` は以下 priority で確定
-する (実装は `runner/src/codex-auth.ts::resolveCodexAuthMode` の
-injectable policy resolver に集約、startup と hot reload の両方から
-呼ばれる):
+Fix the `codexAuthMode` used by the runner to resolve the catalog to this priority
+(implementation is consolidated in the injectable policy resolver
+`runner/src/codex-auth.ts::resolveCodexAuthMode`, called from both startup and hot
+reload):
 
-1. **Codex disabled** (`capabilities` に `"codex"` 無し) → `"unknown"`。
-   doctor は絶対に呼ばれない。
-2. **explicit `codex.auth_mode`** (`"chatgpt"` / `"apikey"` の closed enum
-   を config で明示宣言) → その値を verbatim 採用、doctor は呼ばれない。
-   runner 環境 PATH に `codex` binary が無いホスト (dogfood 環境依存の
-   典型) でも catalog を正しく resolve する。auth_mode は catalog
-   selection 用の宣言 metadata のみで、runner は credential (OAuth token
-   / API key 等、Codex 側の credential store / environment) を付与も変更
-   もしない — その意味で escalation にならない。誤宣言時は catalog が
-   実 entitlement からずれ、unsupported な model / effort の explicit
-   request が SDK 側で loud fail → 既存 switch_error rollback に到達し
-   うる (auth 実体の invalid credentials エラーになるかどうかは runtime
-   の credential store / SDK 実装依存で、config だけからは断定しない)。
-3. **absent + Codex enabled** (旧 config 互換 fallback) → `detectCodexAuthMode`
-   (doctor 経由) を run。失敗 (spawn ENOENT / JSON parse 失敗 / mode 未報告)
-   なら `"unknown"` へ fail-closed、stderr warn (doctor stdout / stderr は
-   絶対に relay しない — credential-presence details を stored auth mode
-   と同一 JSON に含む可能性があるため)。
-4. **`chatgpt_plan` からの暗黙推定は禁止**。API-key runner でも `chatgpt_plan`
-   を config に残置しているケース (auth 切替の途中経過) を誤判定するため、
-   auth_mode 決定に `chatgpt_plan` を根拠として使わない。
+1. **Codex disabled** (no `"codex"` in `capabilities`) → `"unknown"`. Never call
+   doctor.
+2. **Explicit `codex.auth_mode`** (the closed enum `"chatgpt"` / `"apikey"` is
+   declared in config) → adopt that value verbatim; do not call doctor. Catalog can
+   be resolved correctly even on a host whose runner environment PATH lacks the
+   `codex` binary (a typical dogfood environment dependency). auth_mode is only
+   declaration metadata for catalog selection; the runner neither supplies nor
+   changes credentials (OAuth token / API key, etc.) in the Codex credential store /
+   environment — it is therefore not an escalation. If misdeclared, the catalog can
+   diverge from actual entitlement and an unsupported explicit model / effort request
+   may loudly fail in the SDK and reach the existing switch_error rollback (whether
+   the actual credential store / SDK instead reports invalid credentials depends on
+   runtime state and cannot be asserted from config alone).
+3. **Absent + Codex enabled** (legacy-config compatibility fallback) → run
+   `detectCodexAuthMode` (through doctor). On failure (spawn ENOENT / JSON parse
+   failure / mode not reported), fail closed to `"unknown"` and warn to stderr. Do
+   not relay doctor stdout / stderr at all — it may contain credential-presence
+   details in the same JSON as stored auth mode.
+4. **Do not infer implicitly from `chatgpt_plan`**. An API-key runner may retain
+   `chatgpt_plan` during an auth switch, and using it as the basis for auth_mode
+   would misclassify that transition.
 
-hot reload では priority は同じで、以下 5 遷移すべてが helper 側で一貫
-処理される (詳細は phase-24 plan を参照):
+Hot reload uses the same priority, and the helper handles all five transitions
+consistently (see the phase-24 plan for details):
 
-- next disabled → `"unknown"` (prev mode 破棄、doctor 非呼出)
-- next explicit → 即採用 (doctor 非呼出、値は verbatim)
-- prev explicit → next absent → doctor 再走 (operator が pin を外した)
-- prev off → next on (absent) → doctor 走る (off から復帰した初回検出)
-- prev on (absent) → next on (absent) → prev mode 維持 (doctor 非呼出)
+- next disabled → `"unknown"` (discard previous mode, do not call doctor)
+- next explicit → adopt immediately (do not call doctor; value is verbatim)
+- previous explicit → next absent → run doctor again (the operator removed the pin)
+- previous off → next on (absent) → run doctor (first detection after returning from off)
+- previous on (absent) → next on (absent) → retain previous mode (do not call doctor)
 
-案 A' の「chatgpt auth なら Plus とみなして trio を出す」は採らない。Free / Go
-にも Sol / Luna を提示して capability advertisement を偽るためである。非 entitled
-slug の loud fail は安全弁として必要だが、既知の誤選択肢を提示する第一防衛線の
-代替にはしない。
+Do not adopt Option A’, “assume Plus and show the trio when auth is ChatGPT”. It
+would advertise Sol / Luna to Free / Go users and make capability advertisement
+untruthful. Loud failure for a non-entitled slug is necessary as a safety net, but
+is not a substitute for the first line of defence: not showing known-wrong choices.
 
-operator の申告が stale、workspace admin 制約、rollout drift 等で catalog と
-実 entitlement がずれる可能性は残る。そこで explicit 指定失敗時の F3 を第二
-防衛線とする。catalog は availability の保証ではなく、operator申告と現在の
-curated snapshotに基づく候補集合であることを UI tooltip と docs に明記する。
+The catalog may still diverge from actual entitlement because of a stale operator
+declaration, workspace-admin constraints, rollout drift, and so on. Therefore use
+F3 on explicit-selection failure as the second line of defence. State in UI tooltips
+and docs that the catalog is a candidate set based on operator declaration and the
+current curated snapshot, not a guarantee of availability.
 
-### F2 — catalog と effort を `ext.models` に統合する
+### F2 — Integrate catalog and effort into `ext.models`
 
-`CODEX_MODELS` の global constant を、auth mode + operator plan から構成する
-resolver に置換する。runner register の engine catalog と、spawn後の
-`state_change.ext.models` は同じ resolver 出力を使い、LaunchDialog と
-AgentDetail の候補集合を一致させる。
+Replace the global `CODEX_MODELS` constant with a resolver that constructs the
+catalog from auth mode + operator plan. Use the same resolver output for the runner
+register engine catalog and post-spawn `state_change.ext.models`, keeping the
+candidate sets in LaunchDialog and AgentDetail consistent.
 
-Sol / Terra / Luna の各 entry に、Codex SDK 0.144.1 が受理する reasoning effort
-を `effort_levels` として付ける。値集合は実装開始時に CLI/SDK 型と実機で再確認し、
-未検証値は advertise しない。[ADR-0032](0032-codex-adapter.md) F4bc の E-B、
-すなわち独立 effort catalog ではなく model entry への統合を実行する。
+Attach the reasoning effort accepted by Codex SDK 0.144.1 to each Sol / Terra / Luna
+entry as `effort_levels`. Recheck the value set against CLI/SDK types and a real
+machine when implementation begins; do not advertise unverified values. Execute
+the E-B decision from [ADR-0032](0032-codex-adapter.md) F4bc: integrate effort into
+model entries rather than maintaining an independent effort catalog.
 
-### F3 — mid-session model switch contract
+### F3 — Mid-session model switch contract
 
-operator の `set_model` は次の契約に従う:
+The operator’s `set_model` follows this contract:
 
-1. **turn boundary**: 実行中 turn は変更しない。選択は次 turn から適用する。
-   実行中に即時変更したい場合は interrupt 後、新しい instruction を送る。
-2. **continuity**: 同一 `sessionId` を `resumeThread(sessionId, options)` し、history
-   を維持する。model変更のためだけに fresh sessionを作らない。
-3. **pending と effective の分離**: UI は選択直後に pending 値を表示できるが、
-   `ext.model` と server snapshot は成功した turn が報告した実効値でのみ確定する。
-4. **loud fail**: 400/404その他の明示指定拒否を失敗として表示し、別modelや
-   account defaultへ silent fallbackしない。
-5. **rollback**: wrapper は最後に成功した model を保持する。switch turn が失敗
-   したら pending値を破棄し、次 instruction は旧modelで同一sessionをresumeする。
-   operatorが明示的に再試行するまでは失敗modelを再送しない。
-6. **drift semantics**: operator-requested switch は意図した変更であり
-   `resume_drift` にしない。phase-15 の resume snapshot は最後に成功した実効値を
-   保存する。失敗した pending値はsnapshotへ書かない。
+1. **Turn boundary**: do not change an executing turn. Apply the selection starting
+   with the next turn. To change immediately during execution, interrupt and send
+   a new instruction.
+2. **Continuity**: call `resumeThread(sessionId, options)` with the same `sessionId`
+   and preserve history. Do not create a fresh session merely to change the model.
+3. **Separate pending and effective**: the UI may show the pending value immediately
+   after selection, but confirm `ext.model` and the server snapshot only with the
+   effective value reported by a successful turn.
+4. **Loud fail**: display 400/404 and other explicit-selection rejection as a
+   failure; do not silently fall back to another model or the account default.
+5. **Rollback**: the wrapper retains the last successful model. If the switch turn
+   fails, discard the pending value and resume the next instruction in the same
+   session with the old model. Do not resend the failed model until the operator
+   explicitly retries.
+6. **Drift semantics**: an operator-requested switch is intentional and is not
+   `resume_drift`. The phase-15 resume snapshot stores the last successful effective
+   value. Do not write a failed pending value to the snapshot.
 
-effort switch も turn boundary、effective確定、loud fail、rollback、drift の同じ
-契約に従う。model変更時に現在effortが新modelの `effort_levels` 外なら、UIでmodel
-選択と同時に有効値を選ばせるか既定へ戻す。黙って近似levelへ変換しない。
+Effort switching follows the same contract for turn boundary, effective-value
+confirmation, loud failure, rollback, and drift. If the current effort is outside
+the new model’s `effort_levels` when changing models, have the UI choose an effort
+at the same time or return to the default. Do not silently convert it to an
+approximate level.
 
-### F4 — `supports_model_switch` を実装する
+### F4 — Implement `supports_model_switch`
 
-[ADR-0034](0034-session-capabilities-advertisement.md) F2 の予約field
-`ext.session_capabilities.supports_model_switch` を実装する。true の条件は、その
-sessionで使用する Codex catalog が非空であり、wrapperが `set_model` と rollback
-契約を提供すること。未stamp/falseなら model switch UI をdisabledにする。
+Implement the reserved field `ext.session_capabilities.supports_model_switch` from
+[ADR-0034](0034-session-capabilities-advertisement.md) F2. It is true only when the
+Codex catalog used by the session is non-empty and the wrapper provides `set_model`
+and the rollback contract. Disable model-switch UI when it is unstamped or false.
 
-同時に `supports_effort_switch` を追加し、active model に非空の
-`effort_levels` がある場合のみtrueとする。dashboardは engine名ではなくこの
-capabilityでmid-session操作を判定する。LaunchDialogの起動時model選択はrunner
-engine catalogを用い、session capabilityはspawn後の操作に用いる。
+Also add `supports_effort_switch`, true only when the active model has non-empty
+`effort_levels`. The dashboard determines mid-session operations from this
+capability, not the engine name. Use the runner engine catalog for launch-time model
+selection, and session capabilities for post-spawn operations.
 
-### F5 — phase-15 との境界
+### F5 — Boundary with phase-15
 
-phase-15 task 15-4 が AgentDetail の「アカウント既定」Codex特例を
-`model_source` 判定へ置換するため、phase-16では同特例を再度触らない。
-phase-16のUI scopeは次に限定する:
+Phase-15 task 15-4 replaces the Codex-specific “account default” handling in
+AgentDetail with a `model_source` check, so do not touch that special case again in
+phase-16. Limit the phase-16 UI scope to:
 
-- LaunchDialog の Codex model / effort select復帰。
-- AgentDetail のmid-session model / effort switch有効化。
-- pending / effective / failure / rollback表示。
-- capabilityによるenable/disable。
+- Restoring the Codex model / effort selects in LaunchDialog.
+- Enabling mid-session model / effort switches in AgentDetail.
+- Displaying pending / effective / failure / rollback states.
+- Enabling/disabling through capabilities.
 
 ## Consequences
 
 ### Positive
 
-- Free / Go に使えないmodelを一律提示せず、Plus以上では選択自由度が戻る。
-- session/historyを維持したmodel切替が正式な契約になる。
-- modelとeffortの候補、起動時選択、mid-session選択が同じcatalogを使う。
-- entitlement driftはloud fail + rollbackでsessionを壊さず露出する。
+- Do not show models unavailable to Free / Go users indiscriminately, while restoring
+  selection freedom for Plus and above.
+- Formalise model switching while preserving the session/history.
+- Use the same catalog for model and effort candidates, launch-time selection, and
+  mid-session selection.
+- Expose entitlement drift through loud failure + rollback without breaking the
+  session.
 
 ### Negative
 
-- ChatGPT plan変更時にoperatorがrunner configを更新する必要がある。
-- plan申告だけではworkspace admin制約や段階rolloutを完全には表現できない。
-- auth検出とcatalog resolverがrunner起動時の外部状態に依存する。
+- The operator must update runner config when the ChatGPT plan changes.
+- A plan declaration cannot fully represent workspace-admin restrictions or staged
+  rollouts.
+- Auth detection and catalog resolution depend on external state at runner startup.
 
 ### Neutral
 
-- plan未申告時の既存挙動 (空catalog + account default) は維持される。
-- API-key用catalogはChatGPT plan catalogと別branchであり、entitlement推測を共有しない。
+- Preserve existing behavior when no plan is declared (empty catalog + account
+  default).
+- The API-key catalog is a separate branch from the ChatGPT plan catalog and does
+  not share entitlement inference.
 
 ## Alternatives Considered
 
 | Option | Decision |
 |--------|----------|
-| A': `auth-mode=chatgpt` ならPlus前提でtrioを提示 | Reject。Free/Goでも同じauth modeなのでfalse positiveを構造的に作る。loud failは誤advertiseの免罪符ではない |
-| B: operatorがplanを申告 | **Adopt**。手動更新コストはあるが、列挙API不在で最もtruthfulかつfail-closedにできる |
-| endpointへ各slugをprobeしてcatalog生成 | Reject。起動ごとにquota/latencyを消費し、probe自体がsessionを生成する。rate limitと一時障害をentitlementと誤認する |
-| 永久に空catalog | Reject。Plusでtrioが通るgating factとoperatorの切替要求が成立し、既存switch輸送路を無効化し続ける便益がない |
-| model切替ごとにfresh session | Reject。history喪失が不要で、SDKのsame-session resume経路が既にある |
+| A’: Assume Plus and show the trio when `auth-mode=chatgpt` | Reject. Free / Go use the same auth mode, so this structurally creates false positives. Loud failure is not an exemption for false advertisement. |
+| B: Operator declares the plan | **Adopt**. It has manual update cost, but with no enumeration API it is the most truthful and can fail closed. |
+| Probe each slug at the endpoint and generate a catalog | Reject. It consumes quota/latency on every startup, and the probe itself creates a session. It can mistake rate limits and transient failures for entitlement. |
+| Keep the catalog empty permanently | Reject. The gating fact that the trio works on Plus and the request to switch are established; there is no benefit in keeping the existing switch transport disabled. |
+| Create a fresh session for every model switch | Reject. It needlessly loses history, and the SDK already has a same-session resume path. |
 
 ## Implementation
 
-[phase-16-codex-model-switch](../plans/phase-16-codex-model-switch.md) で実装する。
+Implement this in [phase-16-codex-model-switch](../plans/phase-16-codex-model-switch.md).
