@@ -1,5 +1,5 @@
 ---
-title: ペルソナは server 集約 SoT、zip pack で配布し auto-watch で反映
+title: Server-aggregated persona SoT, distributed as zip packs and applied with auto-watch
 status: accepted
 date: 2026-07-05
 opened: 2026-07-05
@@ -9,52 +9,35 @@ related_specs: [personas, persona-pack-schema, persona-personality-injection, se
 related_adrs: [2, 3, 8, 24, 26, 31, 44, 45, 46]
 ---
 
-# ADR-0029 — ペルソナは server 集約 SoT、zip pack で配布し auto-watch で反映
+# ADR-0029 — Server-Aggregated Persona SoT, Distributed as Zip Packs and Applied with Auto-Watch
 
 ## Status
 
-Accepted。[ADR-0008](0008-persona-asset-distribution.md)(アセット配信)
-と [ADR-0026](0026-persona-personality-injection.md)(人格プロンプト注入)
-の両方を supersede する。
+Accepted. Supersedes both [ADR-0008](0008-persona-asset-distribution.md) (asset distribution) and [ADR-0026](0026-persona-personality-injection.md) (personality-prompt injection).
 
 ## Context
 
-現状ペルソナに関するデータは 3 層に分散している:
+Persona-related data is currently distributed across three layers:
 
-- `wrapper/personas/<id>.md` — 人格プロンプト(wrapper が自ロード、
-  [ADR-0026](0026-persona-personality-injection.md))
-- `server/priv/personas/<id>/*.png` — 立ち絵(server が `/api/personas` で
-  配信、[ADR-0008](0008-persona-asset-distribution.md))
-- `runner/runner.config.json` の `personas[]` — spawn 可能 id の allowlist
+- `wrapper/personas/<id>.md` — personality prompt (the wrapper loads it itself, [ADR-0026](0026-persona-personality-injection.md))
+- `server/priv/personas/<id>/*.png` — persona sprites (the server delivers them through `/api/personas`, [ADR-0008](0008-persona-asset-distribution.md))
+- `personas[]` in `runner/runner.config.json` — allow-list of spawnable ids
 
-この分散は 3 つの実務問題を生む:
+This distribution creates three practical problems:
 
-1. **作成 → 配布 → 運用の摩擦**: 1 ペルソナ追加のたびに wrapper repo と
-   server repo と runner config を人手で揃える。fuji ペルソナ追加時
-   (2026-07-05)にも、`runner.config.json` の personas 配列を触り忘れて
-   起動ダイアログに出てこない、という取りこぼしが発生した。
-2. **SoT の欠如**: どれが「正本」か曖昧。作成者が md を編集しても、
-   server / runner が知らなければ効かない。管理者が spawn 制御したくても
-   握るべきレイヤーが複数ある。
-3. **野良 persona を封じられない**: 手元で任意の `persona.id` を書いた
-   wrapper を起動すれば、server はそれをそのまま受け入れて画像だけ
-   fallback する。管理者が把握していない persona が野に出うる。
+1. **Friction from creation → distribution → operation**: every time one persona is added, the wrapper repo, server repo, and runner config must be aligned by hand. When the fuji persona was added (2026-07-05), `runner.config.json`’s personas array was forgotten, so it did not appear in the startup dialog.
+2. **No SoT**: it is unclear which is the “source of truth.” Editing the md has no effect if the server / runner do not know about it. Even when an administrator wants to control spawn, multiple layers must be handled.
+3. **Cannot prevent rogue personas**: start a wrapper locally with an arbitrary `persona.id`, and the server accepts it as-is and only falls back for the image. A persona unknown to the administrator can appear in the wild.
 
-これら 3 点を同時に解決するには、**server にペルソナデータを集約して
-唯一の SoT** とし、作成者は 1 単位(zip pack)で配布・管理者は所定
-ディレクトリに置くだけで有効化される仕組みが要る。
+Resolving all three at once requires **aggregating persona data on the server as the sole SoT**, with a mechanism where the creator distributes one unit (a zip pack) and the administrator activates it simply by placing it in a designated directory.
 
-これは server の「愚直にデータを届ける」設計思想(ADR-0003 系、
-threat-model)に対しては、**人格プロンプト(テキスト)の配送および
-common footer の結合という限定的な組成を許す例外**となる。純粋な静的
-配信を守るために SoT の欠如を放置するより、SoT を優先する。
+Against the server’s design principle of “delivering data straightforwardly” (the ADR-0003 family, threat-model), this is an exception allowing limited composition: delivery of the personality prompt (text) and composition of the common footer. Prioritise the SoT rather than leaving the missing SoT in place to preserve pure static delivery.
 
 ## Decision
 
-### F1: persona pack (zip) 内部スキーマ
+### F1: Internal schema of a persona pack (zip)
 
-zip 内部は `manifest.json` + `personality.md` + `sprites/<state>.png` の
-サブディレクトリ構造とする。
+The zip has the subdirectory structure `manifest.json` + `personality.md` + `sprites/<state>.png`.
 
 ```text
 <pack-name>.zip
@@ -71,243 +54,174 @@ zip 内部は `manifest.json` + `personality.md` + `sprites/<state>.png` の
     └── error.png
 ```
 
-詳細スキーマは [persona-pack-schema](../specs/persona-pack-schema.md) に
-分離。
+The detailed schema is separated into [persona-pack-schema](../specs/persona-pack-schema.md).
 
-### F2: 取り込みディレクトリの env 統合
+### F2: Integrate the ingestion directory with env
 
-現行の overlay 機構(env `KAOIRO_PERSONA_DIR` で外部ディレクトリを優先)
-と zip 取り込み先を統合する。**env 一つで指定する取り込みディレクトリ
-が唯一の SoT**。bundled `server/priv/personas/` は空にする(既存 4 体
-も pack として取り込みディレクトリへ移送)。
+Integrate the current overlay mechanism (prioritise an external directory through env `KAOIRO_PERSONA_DIR`) with the zip ingestion destination. **The ingestion directory specified by one env is the sole SoT**. Leave bundled `server/priv/personas/` empty (move the existing four personas into the ingestion directory as packs).
 
-### F3: server 到達不能時の wrapper spawn = fail-closed
+### F3: Wrapper spawn fails closed when the server is unreachable
 
-server から人格プロンプトを受信できない場合、wrapper spawn は明示的に
-失敗する。default persona へのフォールバックも、wrapper 側キャッシュ
-の温存もしない。dev/local でも server は必須(下記 F10)。
+If the personality prompt cannot be received from the server, wrapper spawn explicitly fails. Do not fall back to the default persona or retain a wrapper-side cache. The server is required even in dev/local (F10 below).
 
-### F4: zip 検証はスキーマ + 完全性の基本
+### F4: Zip verification is basic schema + completeness
 
-server は zip 展開時に以下だけ検証する:
+On extracting a zip, the server verifies only:
 
-- `manifest.json` の必須フィールド(id/name/sprite_set/version/…)の
-  存在と型
-- `sprites/` に 7 状態(idle/thinking/tool_running/waiting_input/
-  waiting_permission/done/error)すべての PNG がある
-- `manifest.id` の unique 性(既登録との衝突がない)
+- Presence and types of required fields in `manifest.json` (id/name/sprite_set/version/…)
+- All seven state PNGs in `sprites/` (idle/thinking/tool_running/waiting_input/waiting_permission/done/error)
+- Uniqueness of `manifest.id` (no collision with an already registered id)
 
-hash 検証・作成者署名は将来拡張(下記 Follow-ups)。
+Hash verification and creator signatures are future extensions (see Follow-ups below).
 
-### F5: common footer は server 側で結合
+### F5: Compose the common footer on the server side
 
-wrapper に渡す最終 prompt は **`personality + common footer` を server
-側で結合して配送**する。wrapper は受け取った文字列をそのまま SDK に
-注入するだけで、結合ロジックを持たない。common footer 自体の中身は
-本 ADR の付録節 D5 で確定する(旧 open-question `persona-common-footer`
-を吸収)。
+The final prompt passed to the wrapper is **`personality + common footer`, composed and delivered by the server**. The wrapper only injects the received string into the SDK as-is and has no composition logic. The common footer’s contents are fixed in this ADR’s D5 appendix (absorbing the old open question `persona-common-footer`).
 
-**[ADR-0045](0045-footer-file-externalization.md) による改訂(accepted・
-実装済み)**: 結合対象を `personality + system-footer + user-footer` とする。
-footer 文面の SoT は footer 設置ディレクトリ(`KAOIRO_FOOTER_DIR`)直下の
-`system-footer.md` / `user-footer.md` である。未設定時は内蔵既定を使い、
-user footer は加えない。いずれにせよ
-「結合は server 側の責務、wrapper は受領文字列をそのまま注入」という本節の
-帰属は変わらない。
+**Revision by [ADR-0045](0045-footer-file-externalization.md) (accepted, implemented)**: compose `personality + system-footer + user-footer`. The footer text’s SoT is `system-footer.md` / `user-footer.md` directly under the footer installation directory (`KAOIRO_FOOTER_DIR`). Use the built-in default when unset, and do not add the user footer when unset. In all cases, the ownership in this section remains: “composition is the server’s responsibility; the wrapper injects the received string as-is.”
 
-### F6: auto-watch は Elixir FileSystem library
+### F6: Auto-watch uses the Elixir FileSystem library
 
-extraction cache の物理位置は
-[ADR-0046](0046-persona-cache-relocation.md) で persona dir 外へ移設
-(accepted)。
+The physical location of the extraction cache was moved outside the persona directory by [ADR-0046](0046-persona-cache-relocation.md) (accepted).
 
-取り込みディレクトリの watch は Elixir の `FileSystem` library
-(fs.notify wrapper。Linux inotify / macOS FSEvents / Windows
-ReadDirectoryChangesW を抽象化)で event-driven に行う。polling は
-使わない。手動 restart なしで manifest 再構築が走る。
+Watch the ingestion directory event-driven with Elixir’s `FileSystem` library (an fs.notify wrapper abstracting Linux inotify / macOS FSEvents / Windows ReadDirectoryChangesW). Do not poll. Rebuild the manifest without a manual restart.
 
-### F7: schema versioning は semver + `min_kaoiro_version`
+### F7: Schema versioning is semver + `min_kaoiro_version`
 
-`manifest.version` は semver。`min_kaoiro_version` で server 側の下限
-バージョンを宣言する(下回れば取り込み拒否)。初期は緩めの運用で
-始め、必要になった時点で strict な API version 分岐を検討する。
+`manifest.version` is semver. Declare the minimum server version with `min_kaoiro_version` (reject ingestion below it). Start with a permissive operation, and consider strict API-version branching when it becomes necessary.
 
-### F8: zip / persona 削除の意味論 = persona 廃止(fail-closed 準拠)
+### F8: Zip / persona deletion means persona retirement (consistent with fail-closed)
 
-取り込みディレクトリから zip 相当が消えた場合、manifest からも消え、
-以降その id での spawn は不可。接続中の wrapper は次回接続時に fail-
-closed で失敗する(archive 扱いはしない、F3 と一貫)。
+When the zip equivalent disappears from the ingestion directory, remove it from the manifest and prohibit future spawn with that id. A connected wrapper fails closed at its next connection (do not treat it as archived, consistent with F3).
 
-### F9: 接続中 wrapper への concurrent update = 次回接続時のみ反映
+### F9: Concurrent updates to a connected wrapper apply only at the next connection
 
-zip が更新されても接続中 wrapper には影響しない(接続時にスナップ
-ショットで確定した prompt を session 中固定)。hot-swap は phase-1 以降
-の拡張。
+Updating a zip does not affect a connected wrapper (the prompt fixed in a connection-time snapshot remains fixed during the session). Hot-swap is a post-phase-1 extension.
 
-### F10: dev/local は minimal server を常に前提
+### F10: Dev/local always assumes a minimal server
 
-fail-closed の帰結として、dev/local でも server を立てる運用を確立する
-(scripts/dev.sh 等で自動起動)。[ADR-0002](0002-local-wrapper-websocket-topology.md)
-の「wrapper はローカルでも動く」は「local + local server」の意味に読み
-替える。
+As a consequence of fail-closed, establish an operation where the server is also started in dev/local (auto-start through scripts/dev.sh, etc.). Read [ADR-0002](0002-local-wrapper-websocket-topology.md)’s “the wrapper works locally” as “local + local server.”
 
-### F11: 作業ツリーは wrapper 外、`wrapper/personas/*.md` は完全撤廃
+### F11: Work outside the wrapper; abolish `wrapper/personas/*.md` completely
 
-作成者は wrapper repo の外(初期案: `persona-packs/<id>/{manifest.json,
-personality.md, sprites/}`)で編集し、build スクリプトで zip 化する。
-`wrapper/personas/*.md` は完全に撤去して wrapper の責務を「動かす側」
-に絞る。
+Creators edit outside the wrapper repo (initial proposal: `persona-packs/<id>/{manifest.json,
+personality.md, sprites/}`) and package it as a zip with a build script. Remove `wrapper/personas/*.md` completely, narrowing the wrapper’s responsibility to “running” it.
 
-### D5 付録: common footer の暫定内容
+### D5 appendix: Provisional contents of the common footer
 
-旧 open-question `persona-common-footer` の暫定方針(案 B = 環境認識
-1 文)をそのまま採用し、本 ADR で確定する(open-question 自体は本 ADR
-に merge され `git rm` 済):
+Adopt and fix in this ADR the provisional policy from the old open question `persona-common-footer` (option B = one sentence recognising the environment) as-is (the open question itself was merged into this ADR and `git rm`-ed):
 
-- 中身:「このエージェントは kaoiro クライアント越しに操作されて
-  います」相当の 1 文。
-- 合成順:`preset(claude_code) + personality + common footer`
-  (personality が上、footer が下)。
-- 結合は server 側で実施(F5)。dogfooding で不足が見えたら別 ADR で
-  拡張する。
+- Contents: one sentence equivalent to “This agent is operated through the kaoiro client.”
+- Composition order: `preset(claude_code) + personality + common footer` (personality above, footer below).
+- Compose on the server side (F5). If dogfooding reveals a deficiency, extend it in a separate ADR.
 
-**現行**: [ADR-0045](0045-footer-file-externalization.md) の実装により、
-文面の SoT は footer 設置ディレクトリ(`KAOIRO_FOOTER_DIR`)直下の
-`system-footer.md` / `user-footer.md` へ移った。D5 の暫定文面は内蔵既定の
-内容としてのみ残る。運用者の上書きはファイル編集だけで反映でき、server
-実装の変更を伴わない。
+**Current**: through the implementation of [ADR-0045](0045-footer-file-externalization.md), the text SoT moved to `system-footer.md` / `user-footer.md` directly under the footer installation directory (`KAOIRO_FOOTER_DIR`). D5’s provisional wording remains only as the built-in default content. An operator’s override takes effect by editing files alone, without changing the server implementation.
 
 ## Consequences
 
 ### Positive
 
-- ペルソナ SoT が唯一(取り込みディレクトリ)になり、作成 → 配布 →
-  運用のフローが単純化する(zip drop 1 手)。
-- 「野良 persona」は自然に不可能になる(server の manifest にない id
-  で spawn した wrapper は接続時に reject される)。
-- 4 体の追加ごとに 3 層を触る運用(fuji で顕在化した取りこぼし)が
-  なくなる。
-- 作成者は wrapper repo に触らずに persona pack を作れる。作成物を
-  丸ごと配布物として扱えるので、外部作成者への配布ハードルが下がる。
+- Persona SoT becomes singular (the ingestion directory), simplifying the creation → distribution → operation flow (one zip-drop step).
+- “Rogue personas” naturally become impossible (a wrapper spawned with an id not in the server manifest is rejected at connection time).
+- The operation of touching three layers for every addition of four personas (the omission exposed by fuji) disappears.
+- Creators can make persona packs without touching the wrapper repo. Treating the whole creation as a distributable package lowers the barrier to distribution by external creators.
 
 ### Negative
 
-- server が「テキスト組成」に踏み込むため、[ADR-0003](0003-persona-identity-persistence.md)
-  の「サーバは agent 非依存」原則にわずかに反する。組成は `personality
-  - common footer` の concat のみで、意思決定は含まないが、境界を跨ぐ
-  ことは明示的な例外扱いにする。
-- fail-closed により dev/local で server を立てる必要が常態化する。
-  dev 手順が「wrapper 単体で動く」から「minimal server も同時に立てる」
-  に変わる。
-- 既存 4 体(ao/kuroe/momo/fuji)を pack 化して移行する初期コスト。
-- 接続中 wrapper への hot-swap は phase-1 まで先送り。zip を更新して
-  すぐに反映させたい dev フローで手数が増える(接続断→再接続)。
+- The server now enters “text composition,” slightly violating [ADR-0003](0003-persona-identity-persistence.md)’s “server is agent-independent” principle. Composition is only a `personality
+  - common footer` concat and contains no decision-making, but crossing the boundary is explicitly treated as an exception.
+- Fail-closed makes running a server in dev/local routine. The dev procedure changes from “run the wrapper alone” to “also run a minimal server.”
+- Initial cost of packaging and migrating the existing four personas (ao/kuroe/momo/fuji).
+- Hot-swap for connected wrappers is deferred until phase-1. A dev workflow that expects a zip update to apply immediately requires extra work (disconnect → reconnect).
 
 ### Neutral
 
-- runner の `runner.config.json` の `personas[]` は「per-host 制限」の
-  allowlist として存続する(廃止しない)。目的は「野良禁止」ではなく
-  「このホストで使わせる persona を絞る」の運用ポリシー。server SoT
-  との差分は運用時警告で示す。
-- persona pack schema には将来的な拡張余地(license / provenance /
-  attribution 等のメタデータ)がある。初期は最小 keys で開始。
+- `personas[]` in the runner’s `runner.config.json` remains as a “per-host restriction” allow-list (it is not abolished). Its purpose is not “forbid rogue personas” but the operational policy of narrowing which personas can be used on this host. Differences from the server SoT are shown as an operational warning.
+- The persona pack schema has room for future extensions (metadata such as license / provenance / attribution). Start with the minimum keys.
 
 ## Alternatives Considered
 
-### F1: zip 内部スキーマ
+### F1: Internal zip schema
 
 | Option | Why rejected |
 |---|---|
-| フラット root 配置(root に全ファイル並置) | 将来ファイル追加で汚くなる。sprites/ が肥大する意匠変更に耐えない |
-| YAML frontmatter に集約(manifest.json 廃止) | personality.md が「本文 + メタ」の二役になり tooling とリーダビリティが両方悪化 |
+| Flat root layout (place all files side by side at root) | Becomes messy when files are added in the future. Cannot withstand design changes that make sprites/ larger |
+| Consolidate in YAML frontmatter (abolish manifest.json) | personality.md takes two roles, “body + metadata,” worsening both tooling and readability |
 
-### F2: overlay 統合 vs 二層存続
-
-| Option | Why rejected |
-|---|---|
-| bundled + overlay の二層存続 | SoT 純度が下がる(どちらが正本か曖昧) |
-| overlay 撤廃し bundled のみ | bundled は release 内 read-only。docker で writable ディレクトリを確保できない |
-
-### F3: server 到達不能時の挙動
+### F2: Overlay integration vs keeping two layers
 
 | Option | Why rejected |
 |---|---|
-| default persona で起動(素の AI) | 純粋 SoT に穴を作る。dev/local を保護できるが、user は SoT 純度を優先 |
-| wrapper 側キャッシュを fallback に使う | 「一度キャッシュされた古い prompt が生き続ける」現象で SoT が侵害される |
+| Keep bundled + overlay as two layers | Lowers SoT purity (which is the source of truth becomes ambiguous) |
+| Abolish overlay and keep bundled only | Bundled is read-only inside the release. Cannot secure a writable directory with docker |
 
-### F4: zip 検証レベル
-
-| Option | Why rejected |
-|---|---|
-| hash 検証を追加(transit 破損検知) | 内輪プロジェクトには過剰。ネット越し配布が定着した時点で拡張 |
-| 作成者署名を要求 | 鍵管理・運用負荷が enterprise 用途向け。内輪の信頼域では不要 |
-
-### F5: common footer の帰属
+### F3: Behaviour when the server is unreachable
 
 | Option | Why rejected |
 |---|---|
-| wrapper 側で結合(現行踏襲) | server SoT を損なう。「wrapper に人格ロジックが残る」→ SoT が二重管理化 |
-| footer 廃止し personality に埋込 | 共通仕様変更のたびに全 pack を作り直す。運用負荷大 |
+| Start with the default persona (plain AI) | Creates a hole in the pure SoT. Protects dev/local, but the user prioritises SoT purity |
+| Use the wrapper-side cache as fallback | SoT is compromised by the phenomenon that “an old prompt once cached continues to live” |
 
-### F6: watch 実装
-
-| Option | Why rejected |
-|---|---|
-| polling(5〜30 秒間隔) | レイテンシとリソースの trade-off。event-driven が既に成熟している以上、選ぶ理由なし |
-
-### F7: schema versioning
+### F4: Zip verification level
 
 | Option | Why rejected |
 |---|---|
-| 最初から strict API version 分岐(v1/v2) | 内輪では過剰。breaking change 発生時に拡張すればよい |
+| Add hash verification (detect transit corruption) | Excessive for an internal project. Extend it once network distribution is established |
+| Require creator signatures | Key management and operational load suit enterprise use. Unnecessary in an internal trust domain |
 
-### F8: 削除の意味論
-
-| Option | Why rejected |
-|---|---|
-| 削除 = archive 扱い(接続中は継続) | F3(fail-closed)と不整合。「消えた persona で会話が続く」状態は SoT の意味を薄める |
-
-### F9: concurrent update
+### F5: Ownership of the common footer
 
 | Option | Why rejected |
 |---|---|
-| WS メッセージで live push(hot-swap) | 実装・デバッグ困難。会話中に persona が変わる挙動は不確実性大。将来必要になった時点で拡張(phase-1) |
+| Compose on the wrapper side (carry over the current form) | Damages the server SoT. “Personality logic remains in the wrapper” → SoT becomes double-managed |
+| Abolish the footer and embed it in personality | Requires rebuilding every pack for each common-spec change. High operational load |
 
-### F10: dev/local
-
-| Option | Why rejected |
-|---|---|
-| wrapper に `--dev-mode`(dummy prompt 注入) | F3(fail-closed)に例外の穴を作る。dev だけとはいえ SoT 純度が下がる |
-
-### F11: 作業ツリー
+### F6: Watch implementation
 
 | Option | Why rejected |
 |---|---|
-| `wrapper/personas/*.md` を作業ツリーとして残す | wrapper の責務が「動かす + 作る」に肥大。sprites を別位置に置く必要も残る |
+| Polling (every 5–30 seconds) | Latency and resource trade-off. Since event-driven operation is already mature, there is no reason to choose it |
+
+### F7: Schema versioning
+
+| Option | Why rejected |
+|---|---|
+| Strict API-version branching (v1/v2) from the start | Excessive for an internal project. Extend it when a breaking change occurs |
+
+### F8: Semantics of deletion
+
+| Option | Why rejected |
+|---|---|
+| Treat deletion as archive (continue connected sessions) | Inconsistent with F3 (fail-closed). “A conversation continues with a deleted persona” weakens the meaning of the SoT |
+
+### F9: Concurrent update
+
+| Option | Why rejected |
+|---|---|
+| Live push/hot-swap with WS messages | Difficult to implement and debug. Behaviour where a persona changes during a conversation is highly uncertain. Extend when it becomes necessary in the future (phase-1) |
+
+### F10: Dev/local
+
+| Option | Why rejected |
+|---|---|
+| `--dev-mode` on the wrapper (inject a dummy prompt) | Creates an exception hole in F3 (fail-closed). Even if dev-only, it lowers SoT purity |
+
+### F11: Work tree
+
+| Option | Why rejected |
+|---|---|
+| Keep `wrapper/personas/*.md` as the work tree | The wrapper’s responsibility grows into “run + create.” The need to place sprites elsewhere also remains |
 
 ## Follow-ups
 
-- 実装計画は [phase-10-persona-server-sot](../plans/phase-10-persona-server-sot.md)
-  参照。
-- 既存 4 体(ao / kuroe / momo / fuji)を pack 化して移行する作業は
-  phase-10 の完了条件に含まれる。
-- 旧 ADR-0008 / ADR-0026 は本 ADR にて supersede。retire 対応は phase-
-  10 完了時に確定。
-- Phase-1(将来): hot-swap(F9)、concurrent update 挙動の精緻化、watch
-  debounce チューニング。
-- Phase-2(deferred): hash / 署名検証(F4)、schema strict API
-  versioning(F7)、multi-host 間の zip 同期。
+- See the implementation plan [phase-10-persona-server-sot](../plans/phase-10-persona-server-sot.md).
+- Packaging and migration of the existing four personas (ao / kuroe / momo / fuji) is included in phase-10’s completion conditions.
+- Old ADR-0008 / ADR-0026 are superseded by this ADR. The retirement work is fixed at phase-10 completion.
+- Phase-1 (future): hot-swap (F9), refinement of concurrent-update behaviour, and watch-debounce tuning.
+- Phase-2 (deferred): hash / signature verification (F4), strict API versioning (F7), and zip synchronisation between multiple hosts.
 
 ## See Also
 
-- Related specs: [personas](../specs/personas.md),
-  [persona-pack-schema](../specs/persona-pack-schema.md),
-  [persona-personality-injection](../specs/persona-personality-injection.md),
-  [setup-wizards](../specs/setup-wizards.md),
-  [protocol](../specs/protocol.md), [threat-model](../specs/threat-model.md)
-- ADRs: [ADR-0002](0002-local-wrapper-websocket-topology.md)(WS 経路),
-  [ADR-0003](0003-persona-identity-persistence.md)(persona 同一性),
-  [ADR-0008](0008-persona-asset-distribution.md)(supersedes),
-  [ADR-0024](0024-agent-instance-identity-and-spawn-auth.md)(spawn 認証),
-  [ADR-0026](0026-persona-personality-injection.md)(supersedes)
+- Related specs: [personas](../specs/personas.md), [persona-pack-schema](../specs/persona-pack-schema.md), [persona-personality-injection](../specs/persona-personality-injection.md), [setup-wizards](../specs/setup-wizards.md), [protocol](../specs/protocol.md), and [threat-model](../specs/threat-model.md)
+- ADRs: [ADR-0002](0002-local-wrapper-websocket-topology.md) (WS path), [ADR-0003](0003-persona-identity-persistence.md) (persona identity), [ADR-0008](0008-persona-asset-distribution.md) (superseded), [ADR-0024](0024-agent-instance-identity-and-spawn-auth.md) (spawn authentication), and [ADR-0026](0026-persona-personality-injection.md) (superseded)
 - Plan: [phase-10-persona-server-sot](../plans/phase-10-persona-server-sot.md)

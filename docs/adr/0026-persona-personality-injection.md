@@ -1,5 +1,5 @@
 ---
-title: 人格プロンプト注入 — SDK systemPrompt.append + wrapper 同梱 md
+title: Persona prompt injection — SDK systemPrompt.append + wrapper-bundled md
 status: superseded
 date: 2026-07-02
 opened: 2026-07-02
@@ -9,123 +9,85 @@ related_specs: [persona-personality-injection, personas, threat-model]
 related_adrs: [3, 6, 29]
 ---
 
-# ADR-0026 — 人格プロンプト注入 — SDK systemPrompt.append + wrapper 同梱 md
+# ADR-0026 — Persona Prompt Injection — SDK systemPrompt.append + Wrapper-Bundled md
 
 ## Status
 
-Superseded by [ADR-0029](0029-persona-server-sot-and-pack-distribution.md)
-(2026-07-05)。SDK `systemPrompt.append` 経由での注入方式は継承しつつ、
-人格プロンプトの一次ソースを wrapper 同梱 md から server 集約 SoT に
-移し、配送を WS ハンドシェイクの push で行う形に転換した。共通フッター
-の結合は wrapper 側から server 側に移動した。
+Superseded by [ADR-0029](0029-persona-server-sot-and-pack-distribution.md) (2026-07-05). The injection method through SDK `systemPrompt.append` is retained, but the primary source of the personality prompt moves from wrapper-bundled md to a server-aggregated SoT, with delivery by a WS handshake push. The common footer’s composition also moves from the wrapper side to the server side.
 
-以下は歴史的経緯として残す。
+The following is retained as historical background.
 
 ## Context
 
-[personas](../specs/personas.md) はペルソナ立ち絵の性格付け (ao/momo/kuroe)
-を保持してきたが、口調・一人称等の会話設定は「消費する機能が現行仕様に無い」
-という理由で明示的に非対象としていた。kaoiro が dogfooding 可能な段階に
-入り、実行時の会話にも一貫したキャラクター性を持たせる価値が生じたため、
-人格記述を Claude Agent SDK に注入する仕組みを設計する。
+[personas](../specs/personas.md) has kept the personality of the persona sprites (ao/momo/kuroe), while explicitly treating conversation settings such as speech style and first person as out of scope because “there is currently no functionality to consume them.” Now that kaoiro has reached a dogfoodable stage, it is valuable to give runtime conversations a consistent character, so design a mechanism for injecting the personality description into the Claude Agent SDK.
 
-主な設計問:
+The main design questions:
 
-1. Claude Agent SDK への注入経路(preset.append か完全置換か)
-2. 人格文字列の格納方式(config 内べた書きか、外部 md 参照か、同梱パックか)
-3. 共通フッターの中身と合成順
-4. 多言語対応の下地
-5. 文字数上限の扱い
+1. Injection path into the Claude Agent SDK (preset.append or complete replacement)
+2. Storage method for the personality string (inline in config, external md reference, or bundled pack)
+3. Contents and composition order of the common footer
+4. Foundation for multilingual support
+5. Handling the character-count limit
 
 ## Decision
 
-- **D1 注入方式**: SDK の `systemPrompt: { type: 'preset', preset:
-  'claude_code', append: ... }` の `append` に「人格記述 + 共通フッター」
-  を差し込む。preset を捨てて自作 string に置換しない。
-- **D2 格納方式**: wrapper リポジトリに `wrapper/personas/<persona.id>.md`
-  として**同梱**する。`config.persona.personality_prompt_file?` があれば
-  それで override、無ければ同梱デフォルトを解決する(γ2 方式)。サーバ経由
-  の配信は行わない。
-- **D3 共通フッター**: 中身と合成順は当初 open-question として `persona-
-  common-footer` に委ねる方針だった(初期実装の暫定方針は「環境認識 1 文
-  (このエージェントは kaoiro クライアント越しに操作されています相当)を
-  ハードコード」)。この open-question は 2026-07-05 に
-  [ADR-0029](0029-persona-server-sot-and-pack-distribution.md) D5 に
-  merge され、暫定方針そのまま確定として close された。
-- **D4 言語**: Persona に `language?: string` フィールドを追加(未指定は
-  `"ja"` 既定)。phase-0 では読み込みのみで dispatch ロジックは持たず、
-  多言語 dispatch は [persona-language-dispatch](../open-questions/persona-language-dispatch.md)
-  で追う。
-- **D5 文字数上限**: spec に SHOULD 目安 (200-1000 字) を明記。hard 上限は
-  置かない。
-- **注入は wrapper 起動時のみ**。mid-session の差し替えは不可。サーバ側
-  からの上書き経路も用意しない([threat-model](../specs/threat-model.md) の
-  allowed_tools と同じ扱い)。
-- **Envelope 非露出**: 人格文字列を state_change / log / result envelope に
-  載せない。dashboard に流れる ID は従来通り `persona.id` / `persona.name`
-  のみ(pack 由来の canonical、session 中不変)。**稼働中に変わり得る
-  表示名は別の top-level `display_name` field が担う**(issue #209
-  D19/D23) — `persona.name` 自体を rename の対象にしない、という本節
-  の趣旨とも一貫する。
+- **D1 Injection method**: insert “personality description + common footer” into the SDK `systemPrompt: { type: 'preset', preset:
+  'claude_code', append: ... }` `append`. Do not discard the preset and replace it with a custom string.
+- **D2 Storage method**: **bundle** it in the wrapper repository as `wrapper/personas/<persona.id>.md`. If `config.persona.personality_prompt_file?` exists, use it as an override; otherwise resolve the bundled default (method γ2). Do not deliver it through the server.
+- **D3 Common footer**: the contents and composition order were initially to be left to `persona-
+  common-footer` as an open question (the provisional initial implementation hard-coded “one sentence recognising the environment,” equivalent to “this agent is operated through the kaoiro client”). This open question was merged into D5 of [ADR-0029](0029-persona-server-sot-and-pack-distribution.md) on 2026-07-05, and closed with the provisional policy confirmed as-is.
+- **D4 Language**: add an optional `language?: string` field to Persona (default `"ja"` when unspecified). In phase-0, only read it and do not implement dispatch logic; track multilingual dispatch in [persona-language-dispatch](../open-questions/persona-language-dispatch.md).
+- **D5 Character-count limit**: state a SHOULD guideline (200–1000 characters) in the spec. Do not impose a hard limit.
+- **Inject only at wrapper startup**. Do not permit replacement mid-session. Do not provide an overwrite path from the server ([threat-model](../specs/threat-model.md) treats this like allowed_tools).
+- **Do not expose it in envelopes**: do not put the personality string in state_change / log / result envelopes. IDs sent to the dashboard remain only `persona.id` / `persona.name` (canonical values from the pack, unchanged during the session). **A display name that can change while running is handled by a separate top-level `display_name` field** (issues #209 D19/D23)—consistent with this section’s intent not to make `persona.name` subject to renaming.
 
 ## Consequences
 
 ### Positive
 
-- 同一 `persona.id` は再起動をまたいで同じ立ち絵 + 同じ口調で応答する
-  ようになり、[ADR-0003](0003-persona-identity-persistence.md) の同一性
-  永続化が「見た目」から「振る舞い」まで拡張される。
-- Claude Code preset の tool 使用マナー・安全指示が保持されるため、既存
-  挙動への副作用が最小。
-- 人格記述は wrapper リポジトリ内で管理でき、サーバ・dashboard を触らずに
-  試作・調整が回せる。dogfooding フェーズの反復コストが低い。
-- `language` フィールドを先に敷いたことで、後で多言語 dispatch を足す
-  ときの型変更が要らない。
+- The same `persona.id` responds with the same sprites and speaking style across restarts, extending the identity persistence of [ADR-0003](0003-persona-identity-persistence.md) from appearance to behaviour.
+- Because Claude Code preset tool-use etiquette and safety instructions are retained, side effects on existing behaviour are minimised.
+- Personality descriptions can be managed in the wrapper repository, allowing prototypes and tuning without touching the server or dashboard. Iteration cost is low during dogfooding.
+- Laying down the `language` field early avoids a type change when multilingual dispatch is added later.
 
 ### Negative
 
-- Claude Code preset の指示(簡潔さ・事実確認等)と人格記述(口調上書き等)
-  が競合する余地。判別可能性は SHOULD 止まりとし、問題化を待つ運用に
-  なる。
-- 人格文字列を wrapper に同梱するため、人格更新のたびに wrapper 再起動が
-  要る(mid-session 差し替え不可)。
-- 共通フッターの中身が未決のまま phase-0 に入るため、暫定ハードコードを
-  後で差し替えるコストが残る。
+- The Claude Code preset instructions (conciseness, fact checking, etc.) can conflict with the personality description (speech-style overrides, etc.). Disambiguation remains only a SHOULD, and the operation waits until it becomes a problem.
+- Because the personality string is bundled in the wrapper, the wrapper must be restarted for each personality update (no mid-session replacement).
+- The common footer enters phase-0 with its contents still undecided, leaving the cost of replacing the provisional hard code later.
 
 ### Neutral
 
-- 人格文字列は wrapper 内で完結し、Envelope・サーバ・dashboard 側の
-  スキーマ変更は不要。ADR-0003(サーバは agent 非依存)を破らない。
-- `default` ペルソナは人格記述を持たず、共通フッターのみ append される。
-  personas.md の「default = 立ち絵なし・CSS 顔」既定と対称的な扱い。
+- The personality string is self-contained in the wrapper, so no schema changes are needed on the Envelope, server, or dashboard side. This does not break ADR-0003 (the server is agent-independent).
+- The `default` persona has no personality description and receives only the common footer appended, symmetrically with the “default = no sprite, CSS face” default in personas.md.
 
 ## Alternatives Considered
 
-### D1 注入方式
+### D1 Injection method
 
 | Option | Why rejected |
 |--------|--------------|
-| B: `systemPrompt` を string で完全置換 | Claude Code preset の大量の tool 使用マナー・安全指示を自作する必要があり dogfooding 段階では非現実的 |
-| C: 制御メッセージで mid-session 差し込み | SDK に該当機能なし(`systemPrompt` は query 開始時のみ有効) |
+| B: Completely replace `systemPrompt` with a string | Would require recreating the large set of Claude Code preset tool-use etiquette and safety instructions; unrealistic at the dogfooding stage |
+| C: Insert mid-session through a control message | The SDK has no such functionality (`systemPrompt` is effective only when a query starts) |
 
-### D2 格納方式
-
-| Option | Why rejected |
-|--------|--------------|
-| α: config JSON にべた書き | 長文編集時の JSON エスケープが dogfooding の摩擦になる。数行〜数十行の md を JSON 内 string で扱うのは辛い |
-| β: config で個別ファイル参照を必須 | 同梱デフォルトがないので、初期 3 体が「箱を開けたら動かない」状態になる |
-| γ1: server/priv 経由の配信 | サーバが人格文字列の一次ソース化してしまい、「サーバから上書き不可」方針と衝突する |
-
-### D4 言語
+### D2 Storage method
 
 | Option | Why rejected |
 |--------|--------------|
-| η: 日本語想定固定(将来 open-question 化) | 検討時の推奨案だったが、future-proof を先に敷く判断で不採用 |
-| ι: 何も決めない | 「日本語で書いていいの?」の実装迷子リスク |
+| α: Inline in config JSON | JSON escaping creates friction when editing long text. Handling an md of several to dozens of lines as a JSON string is painful |
+| β: Require an individual file reference in config | With no bundled default, the initial three instances would be “open the box and it does not work” |
+| γ1: Deliver through server/priv | The server would become the primary source of the personality string, conflicting with the “cannot be overwritten from the server” policy |
 
-### D5 文字数上限
+### D4 Language
 
 | Option | Why rejected |
 |--------|--------------|
-| μ: hard 上限 8KiB でエラー | SHOULD 止まりで判別可能性を追求しない今回のスコープ方針と整合しない。fail-fast は将来問題化してから追加でよい |
-| λ: 上限なし・目安も書かない | 初期執筆時の指針不足。SHOULD 目安を書くだけで済む |
+| η: Assume Japanese (make it an open question in the future) | It was the recommended option during consideration, but was rejected in favour of laying down a future-proof foundation first |
+| ι: Decide nothing | Risk of implementation confusion: “Is it okay to write in Japanese?” |
+
+### D5 Character-count limit
+
+| Option | Why rejected |
+|--------|--------------|
+| μ: Error at a hard 8 KiB limit | Inconsistent with this scope’s policy of leaving disambiguation at SHOULD without pursuing it. Fail-fast can be added after it becomes a future problem |
+| λ: No limit and no guideline | Provides insufficient guidance when writing the initial descriptions. Writing only a SHOULD guideline is enough |
