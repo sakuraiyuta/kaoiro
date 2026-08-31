@@ -217,6 +217,34 @@ test.describe("T11: 頭上リング (AgentDetail, issue #180 follow-up)", () => 
   }
 });
 
+// T12 (issue #231): compare the rendered apex against the pre-fix anchor in
+// the same layout, so the assertion measures pixels rather than CSS strings.
+test.describe("T12: 頭上リングの apex 移動 (AgentDetail, issue #231)", () => {
+  for (const [label, query] of [
+    ["face fallback", ""],
+    ["sprite", "&sprite=1"],
+  ] as const) {
+    test(`1920x1080 ${label}: apex が旧位置から 8px 下がる`, async ({ page }) => {
+      await page.setViewportSize({ width: 1920, height: 1080 });
+      await page.goto(`${DETAIL}&taskRing=1${query}`);
+      const ring = page.locator("aside.status .portrait .task-ring");
+      await expect(ring).toBeVisible();
+      await freezeRingAtApex(ring);
+
+      const afterBox = (await ring.boundingBox())!;
+      const oldAnchor = await page.addStyleTag({
+        content: ".task-ring { top: 6% !important; }",
+      });
+      const beforeBox = (await ring.boundingBox())!;
+      await oldAnchor.evaluate((el) => el.remove());
+
+      const apexDrop = afterBox.y - beforeBox.y;
+      expect(apexDrop).toBeGreaterThan(7);
+      expect(apexDrop).toBeLessThan(9);
+    });
+  }
+});
+
 test("T8: handle attention badge returns to the grid while the sheet is open", async ({ page }) => {
   await page.setViewportSize({ width: 844, height: 900 });
   await page.goto(`${DETAIL}&attention=1`);
