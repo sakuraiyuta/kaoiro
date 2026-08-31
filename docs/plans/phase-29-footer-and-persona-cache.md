@@ -1,36 +1,36 @@
 ---
-title: Phase 29 — footer 外部化と persona cache 外出し
-description: footer のファイル外部化と persona extraction cache の分離を実装する。
+title: Phase 29 — Footer externalization and persona cache relocation
+description: Implement externalization of the footer file and separation of the persona extraction cache.
 status: done
 phase: 29
 depends_on: []
 last_updated: 2026-08-03
 ---
 
-# Phase 29 — footer 外部化と persona cache 外出し
+# Phase 29 — Footer externalization and persona cache relocation
 
 ## Goal
 
-[ADR-0045](../adr/0045-footer-file-externalization.md) の footer 外部化を
-実装し、[ADR-0046](../adr/0046-persona-cache-relocation.md) と kaoiro
-issue #173 による persona cache の `:ro` 対応を完了する。
+Implement footer externalization from [ADR-0045](../adr/0045-footer-file-externalization.md),
+and complete the `:ro` persona-cache support specified by
+[ADR-0046](../adr/0046-persona-cache-relocation.md) and kaoiro issue #173.
 
 ## Tasks
 
 | # | Task | Owner | Status | Notes |
 |---|------|-------|--------|-------|
-| 29-1 | footer 機構実装 | あお | ✅ 完了 | ADR-0045 |
-| 29-2 | cache 外出し | あお | ✅ 完了 | ADR-0046 / #173 |
-| 29-3 | docs 整合 sweep | もも | ✅ 完了 | 第 1・第 2 弾 |
-| 29-4 | レビュー | ふじ | ✅ 完了 | 3 巡 (must-fix 計 3) → approve |
+| 29-1 | Implement footer mechanism | あお | ✅ completed | ADR-0045 |
+| 29-2 | Relocate cache | あお | ✅ completed | ADR-0046 / #173 |
+| 29-3 | Documentation consistency sweep | もも | ✅ completed | Waves 1 and 2 |
+| 29-4 | Review | ふじ | ✅ completed | 3 rounds (3 must-fixes total) → approve |
 
 Status legend: ✅ done, 🟡 in progress, ⚠ partial, ⏳ not started, ⛔ blocked.
 
 ## Acceptance Criteria
 
-- [x] `mix test` が green (749 passed)
-- [x] `:ro` の persona dir で cold start が成功する (chmod 0500 test)
-- [x] footer ファイルの編集が再起動なしで次の接続に反映される (inotify 実機検証)
+- [x] `mix test` is green (749 passed)
+- [x] Cold start succeeds with a `:ro` persona directory (chmod 0500 test)
+- [x] Editing the footer file takes effect on the next connection without a restart (inotify live verification)
 
 ## See Also
 

@@ -1,199 +1,208 @@
 ---
-title: Phase 30 — 表示履歴の再起動耐性 (ADR-0051)
-description: hydration handshake による reconnect 時 replay・IA sidecar と per-pane projection contract による DETS 撤廃・projection epoch による client 再同期を実装する。
+title: Phase 30 — Restart resilience for display history (ADR-0051)
+description: Implement replay on reconnect through the hydration handshake, remove DETS through the IA sidecar and per-pane projection contract, and resynchronize clients through the projection epoch.
 status: done
 phase: 30
 depends_on: []
 last_updated: 2026-08-08
 ---
 
-# Phase 30 — 表示履歴の再起動耐性 (ADR-0051)
+# Phase 30 — Restart resilience for display history (ADR-0051)
 
 ## Goal
 
-[ADR-0051](../adr/0051-history-restart-resilience.md) を実装する:
-server 再起動を跨いでも全 operator 端末が同一の timeline を見られる
-状態にし、`InterAgentHistory` DETS を撤廃して server の durable 状態を
-削減する。
+Implement [ADR-0051](../adr/0051-history-restart-resilience.md) so that every
+operator terminal sees the same timeline even across a server restart. Remove
+the server's `InterAgentHistory` DETS and reduce its durable state.
 
 ## Tasks
 
 | # | Task | Owner | Status | Notes |
 |---|------|-------|--------|-------|
-| 30-1 | ADR-0051 仕様レビュー | ふじ | ✅ | 2 巡 (must-fix 計 10 件、全反映) → approve。マスター承認で accepted 化済み (2026-08-08) |
-| 30-2 | ADR 確定 + specs 改訂 | クロエ | ✅ | wire 確定: hydration verdict は wrapper join 応答 `hydration: {replay_required, replay_id?}` (専用 S→W event なし)、`replay_ia {replay_id, items:[{envelope, ingress_stamp}]}` は topic bind、送信 ack は envelope push reply `{ingress_stamp}`。 protocol.md (ADR D8 の 5 点: join hydration verdict / `replay_ia` / ingress stamp (配信 + acceptance ack) / projection epoch / `preserve_inter_agent` false 明示)、protocol-inter-agent.md (sidecar schema・pending journal namespace・generation・live projection の因果順)、architecture.md |
-| 30-3 | 既存文書 amendment sweep | もも | ✅ | 完了 2026-08-08。ADR D8 の対象: ADR-0014 A4 / ADR-0036 F3 / ADR-0030 D6 store 数 / protocol.md `preserve_inter_agent`・purge store 数 / deployment.md DETS 8 種 → 7 種。phase-17 / 19 の旧 DETS 前提にも dated note を追補 |
-| 30-4 | server: per-pane projection contract | あお | ✅ | 2026-08-08 完了 (1493eb4)。 live/replay 共用の volatile per-pane upsert API。live accept 時の validate → stamp 採番 → 両 pane upsert → routing の因果順、server 合成 IA は recipient pane のみ、identity = `ingress_stamp\|pane_agent_id`、clear filter + 最終 200 cap 同経路 (ADR D3-1/D6) |
-| 30-5 | wrapper: IA sidecar 記録 | あお | ✅ | 2026-08-08 完了 (186f542)。 agent-common 共通化、両 engine。受信 = 注入前 append (stamp 付き配信) / 送信 = transport acceptance ack (`{ingress_stamp}` reply) 到着時 append、pending journal ({agent_id, reset_generation} namespace) → session bind、/new・/clear generation 切替 (ADR D3-2/D3-5) |
-| 30-6 | wrapper: hydration handshake + IA replay 送出 | あお | ✅ | 2026-08-08 完了 (186f542)。 join verdict (要否 + server replay_id) を待って replay 開始、legacy fallback (verdict absent → 従来 startup replay)、single-flight、fresh session の empty-complete、sidecar → `replay_ia` 送出 (ADR D2/D3-3) |
-| 30-7 | server: hydration 状態管理 + replay ingress + DETS 撤廃 | あお | ✅ | 2026-08-08 完了 (1493eb4)。 hydrated の無効化条件は ADR D2 追補 (あお Q1)。 AgentStates に hydration state (in_flight は replay_id + channel_owner の CAS)、join 応答 verdict、`replay_ia` の pane 所有権検証 + 投影 upsert、stamp と ClearWatermarks 比較、InterAgentHistory と purge 経路の除去、`preserve_inter_agent: false` 明示送信 (ADR D2/D3-3/D3-4) |
-| 30-8 | dashboard: projection epoch 再同期 | あお | ✅ | 2026-08-08 完了 (150b3a2)。 新接続 buffer の分離、epoch 不一致時の baseline 破棄 (logs / clearWatermarks / replay marker / 未読 state) + history と新接続 buffer のみ merge、epoch absent fallback (ADR D4) |
-| 30-9 | docs 整合 sweep | もも | ✅ | 完了 2026-08-08。README / plan index を実装・レビュー完了 / dogfood 待ちへ同期。specs に replay 1MB chunk・oversize drop と接続 generation の live buffer 窓を明記。`KAOIRO_INTER_AGENT_HISTORY_PATH` は未読化済みだが compose / dev.sh に unused export が残るため deployment 注記で追跡 |
-| 30-10 | 実装レビュー | ふじ | ✅ | 3 巡で完了 2026-08-08 (1 巡目 must-fix 5 → 2 巡目残 3 (R1-R3) → 最終確認 approve、残指摘なし)。独立実測 green、specs 追補 3 点も実装と一致を確認。経緯と対応は下記「30-10 レビュー観点」「30-10 must-fix 対応」 |
-| 30-11 | dogfood 検証 + atomic rollout 実施 | デフォルトくん + マスター | ✅ | 2026-08-08 完了。マスター手動で 3 層更新 + 全タブ reload を実施し、server 再起動後の transcript / IA 復元・端末表示一致を目視確認。IA sidecar 疎通は実弾テストで送受信双方の stamp 付き記録を確認 (クロエ)。更新前 IA が復元されないのは移行カットオーバーの仕様どおり。未使用 export 2 行 (compose / dev.sh) はクローズ時に削除 |
+| 30-1 | ADR-0051 specification review | ふじ | ✅ | 2 rounds (10 must-fixes total, all incorporated) → approve. Accepted with マスター approval (2026-08-08) |
+| 30-2 | Finalize ADR + revise specs | クロエ | ✅ | Wire finalized: the hydration verdict is `hydration: {replay_required, replay_id?}` in the wrapper join reply (no dedicated S→W event); `replay_ia {replay_id, items:[{envelope, ingress_stamp}]}` is topic-bound; the send acknowledgment is `{ingress_stamp}` in the envelope push reply. protocol.md (the 5 ADR D8 points: join hydration verdict / `replay_ia` / ingress stamp (delivery + acceptance ack) / projection epoch / explicit `preserve_inter_agent` false), protocol-inter-agent.md (sidecar schema / pending journal namespace / generation / live-projection causal order), architecture.md |
+| 30-3 | Existing-document amendment sweep | もも | ✅ | Completed 2026-08-08. ADR D8 targets: ADR-0014 A4 / ADR-0036 F3 / ADR-0030 D6 store count / protocol.md `preserve_inter_agent` and purge-store count / deployment.md DETS 8 kinds → 7 kinds. Added dated notes for the old DETS assumptions in phase-17 / 19 |
+| 30-4 | server: per-pane projection contract | あお | ✅ | Completed 2026-08-08 (1493eb4). Volatile per-pane upsert API shared by live/replay. Live accept causal order is validate → assign stamp → upsert both panes → route; server-synthesized IA goes only to the recipient pane; identity = `ingress_stamp\|pane_agent_id`; clear filtering + final 200 cap use the same path (ADR D3-1/D6) |
+| 30-5 | wrapper: record IA sidecar | あお | ✅ | Completed 2026-08-08 (186f542). Shared in agent-common for both engines. Receive = append before injection (with delivery stamp) / send = append when the transport acceptance ack (`{ingress_stamp}` reply) arrives; pending journal ({agent_id, reset_generation} namespace) → session bind; switch generation on /new and /clear (ADR D3-2/D3-5) |
+| 30-6 | wrapper: hydration handshake + send IA replay | あお | ✅ | Completed 2026-08-08 (186f542). Wait for the join verdict (whether required + server replay_id) before starting replay; legacy fallback (verdict absent → existing startup replay); single-flight; empty-complete for a fresh session; sidecar → `replay_ia` send (ADR D2/D3-3) |
+| 30-7 | server: hydration state management + replay ingress + DETS removal | あお | ✅ | Completed 2026-08-08 (1493eb4). Hydration invalidation conditions follow the ADR D2 addition (あお Q1). Added hydration state to AgentStates (in_flight uses replay_id + channel_owner CAS), join-reply verdict, pane-ownership validation + projection upsert for `replay_ia`, stamp vs. ClearWatermarks comparison, removal of InterAgentHistory and purge paths, and explicit `preserve_inter_agent: false` send (ADR D2/D3-3/D3-4) |
+| 30-8 | dashboard: projection epoch resynchronization | あお | ✅ | Completed 2026-08-08 (150b3a2). Separate the new-connection buffer; on epoch mismatch discard the baseline (logs / clearWatermarks / replay marker / unread state) and merge only history and the new-connection buffer; epoch-absent fallback (ADR D4) |
+| 30-9 | Documentation consistency sweep | もも | ✅ | Completed 2026-08-08. Synchronized README / plan index with implementation and review complete / awaiting dogfood. Documented replay 1MB chunks, oversize drop, and the live-buffer window for connection generations in specs. `KAOIRO_INTER_AGENT_HISTORY_PATH` is already unread, but an unused export remains in compose / dev.sh and is tracked in a deployment note |
+| 30-10 | Implementation review | ふじ | ✅ | Completed in 3 rounds 2026-08-08 (round 1: 5 must-fixes → round 2: 3 remaining (R1–R3) → final confirmation approve, no remaining findings). Independent green verification; 3 spec additions also confirmed to match implementation. See “30-10 review points” and “30-10 must-fix responses” below for history and actions |
+| 30-11 | Dogfood verification + atomic rollout | デフォルトくん + マスター | ✅ | Completed 2026-08-08. マスター manually performed the 3-layer update + reload of all tabs and visually confirmed transcript / IA restoration and matching displays after a server restart. Live IA sidecar connectivity was verified with stamped records on both send and receive (クロエ). The fact that pre-update IA is not restored is by migration cutover design. The 2 unused export lines (compose / dev.sh) are removed at close |
 
 Status legend: ✅ done, 🟡 in progress, ⚠ partial, ⏳ not started,
 ⛔ blocked.
 
 ## Acceptance Criteria
 
-基本要件:
+Basic requirements:
 
-- [x] server 再起動後、live wrapper の agent timeline が operator
-      操作なしで現 session 分復元される(claude-code / codex 両方)
-- [x] **server を再起動せずに** live IA を送受信 → F5 で sender /
-      receiver 両 pane が一致して復元される(DETS 撤廃後の live
-      経路、ADR D3-1)
-- [x] IA バブルが sidecar + `replay_ia` 経由で復元され、replay が
-      IA の再配送(peer への再 push・SDK 再注入)を一切起こさない
-- [x] `InterAgentHistory` DETS の server 実装は撤廃済みで、deployment doc の
-      runtime 設定は 7 種。unused な `KAOIRO_INTER_AGENT_HISTORY_PATH` export が
-      compose / dev.sh に残るため、30-9 の deployment 注記で追跡する
-- [x] 再起動前から開いていたタブが再起動前ログを表示し続けない。
-      複数端末で同一表示になる
-- [x] server 稼働中の F5 全復元・端末間一致が従来どおり成立する
-      (回帰なし)
-- [x] 全テスト green(server `mix test` / wrapper `pnpm test` /
+- [x] After a server restart, the live wrapper's agent timeline restores the
+      current session without operator action (both claude-code / codex)
+- [x] **Without restarting the server**, send and receive live IA → F5 restores
+      matching sender / receiver panes (live path after DETS removal, ADR D3-1)
+- [x] IA bubbles restore through the sidecar + `replay_ia`, and replay never
+      redistributes IA (no re-push to the peer or SDK reinjection)
+- [x] The server implementation of `InterAgentHistory` DETS is removed and the
+      deployment document has 7 runtime settings. The unused
+      `KAOIRO_INTER_AGENT_HISTORY_PATH` export remains in compose / dev.sh and
+      is tracked in the 30-9 deployment note
+- [x] Tabs that were open before the restart do not continue showing pre-restart
+      logs. Multiple terminals show the same display
+- [x] Full F5 restoration and cross-terminal consistency while the server is
+      running continue to work as before (no regression)
+- [x] All tests are green (server `mix test` / wrapper `pnpm test` /
       dashboard `pnpm test`)
 
-failure matrix(ふじレビュー由来。(a)-(e)・(h)・(i)・(k) は
-**deterministic automated test 必須**、(f)(g) と全体 UX は dogfood
-併用):
+Failure matrix (from ふじ's review; (a)–(e), (h), (i), and (k) require
+**deterministic automated tests**; (f), (g), and overall UX also use dogfood):
 
-- [x] (a) replay 途中(reset 後 partial)で wrapper 切断 → 再接続で
-      再要求され完全な timeline に到達する [test]
-- [x] (b) join verdict handshake: `required: true` の replay_id が
-      reset / `replay_ia` / complete で一貫し、hydration 遷移が CAS
-      で行われる。startup replay との二重実行が起きない [test]
-- [x] (c) server 生存中の wrapper 再接続では verdict
-      `required: false` が返り、無駄 replay が走らない [test]
-- [x] (d) fresh session(session_id nil / transcript 無し)は
-      empty-complete で hydrated になる [test]
-- [x] (e) `/new`・`/clear`・rollback・旧 session resume・
-      `clear_history` の各操作後に clear 済み IA が復活しない
-      (ingress stamp 比較) [test]
-- [x] (f) sender / receiver の片方 offline でも他方の pane が独立に
-      復元される [test + dogfood] — 済 (30-11 完了)
-- [x] (g) server 合成 IA(エラー直送通知)が受信側 sidecar 経由で
-      復元され、同一 conversation の複数回通知が識別・共存する
-      (`ingress_stamp|pane` identity) [test + dogfood] — 済 (30-11 完了)
-- [x] (h) transcript + IA 合算で 200 件超のとき最終投影が newest 200
-      に cap される(201 件・400 件境界) [test]
-- [x] (i) epoch 不一致 + history 到着前の live envelope 到着で、
-      live 行を失わず亡霊だけ消える [test]
-- [x] (j) atomic maintenance rollout の運用条件(IA 停止・3 層同時
-      更新・全タブ reload)が手順書どおり実施され、旧 client 向け
-      `preserve_inter_agent: false` 明示送信が確認できる [dogfood]
-- [x] (k) sidecar の途中切れ・破損行が skip され replay が継続する
+- [x] (a) Wrapper disconnects during partial replay (after reset) → reconnect
+      requests it again and reaches a complete timeline [test]
+- [x] (b) Join-verdict handshake: a `required: true` replay_id remains
+      consistent across reset / `replay_ia` / complete, and hydration transitions
+      use CAS. Startup replay does not run twice [test]
+- [x] (c) Wrapper reconnect while the server is alive returns
+      `required: false` and does not run unnecessary replay [test]
+- [x] (d) A fresh session (session_id nil / no transcript) becomes hydrated via
+      empty-complete [test]
+- [x] (e) Cleared IA does not return after each of `/new` / `/clear` / rollback /
+      old-session resume / `clear_history` (ingress-stamp comparison) [test]
+- [x] (f) Even if one of sender / receiver is offline, the other pane restores
+      independently [test + dogfood] — completed (30-11)
+- [x] (g) Server-synthesized IA (direct error notification) restores through
+      the receiving sidecar, and multiple notifications in one conversation are
+      identified and coexist (`ingress_stamp|pane` identity) [test + dogfood] —
+      completed (30-11)
+- [x] (h) When transcript + IA exceeds 200 items, the final projection is capped
+      at the newest 200 (201-item and 400-item boundaries) [test]
+- [x] (i) With an epoch mismatch and a live envelope arriving before history,
+      live rows are preserved and only ghosts disappear [test]
+- [x] (j) Atomic maintenance rollout conditions (IA stop, simultaneous 3-layer
+      update, reload all tabs) are performed as documented, and explicit
+      `preserve_inter_agent: false` sending to old clients is confirmed [dogfood]
+- [x] (k) Truncated or corrupt sidecar rows are skipped and replay continues
       [test]
 
-## 30-10 レビュー観点 (あお申し送り、2026-08-08)
+## 30-10 review points (handoff from あお, 2026-08-08)
 
-実装者が「ここは判断が入った / 見てほしい」と挙げた点。詳細は各 commit
-メッセージと該当箇所のコード注釈にある。
+These are the points the implementer identified as involving judgment and worth
+checking. Details are in the relevant commit messages and code annotations.
 
-1. **`replay_ia` 受理行の `agents:lobby` broadcast** (追補 1、150b3a2)。
-   ADR/spec に記述が無かった欠落への対処なので、設計判断として最優先で
-   見てほしい。`history_reset` が `preserve_inter_agent: false` を送る
-   ため接続中タブは IA を落とすが、`replay_ia` は投影 upsert のみで live
-   通知が無く、F5 まで IA バブルが戻らなかった。既知の粗さ: peer が
-   offline で replay しない場合、live タブでは peer の pane にもその IA が
-   見える (client は `agent_id ∪ payload.to` で fanout する) が reload で
-   消える。厳密化には pane を指す wire field が要る。
-2. **Q1 の invalidate trigger set の網羅性** (1493eb4)。`restore` の
-   resume 分岐と `resume_session` の 2 経路のみ。runner 起点の relaunch
-   (crash-restart / `reset_session`) は意図的に非対象。
-3. **因果順の実装分割** (1493eb4)。`WrapperChannel.preflight_inter_agent/2`
-   が reject 判定を全部引き受け、`accept_inter_agent/6` 以降は upsert →
-   peer push → broadcast → ack だけ、という分割が spec どおりか。
-4. **`replay_ia` の pane 注入面**。受信側 pane は peer 名義の envelope を
-   持つため `agent_id == topic` 検査を掛けられず、wrapper は自 pane に
-   任意の `agent_id` の envelope を注入できる。影響は当該 pane の operator
-   表示のみ (ADR の threat model 評価どおり) だが明示確認したい。
-5. **`AgentStates` の state 形変更** (1493eb4)。`%{agents, hydration,
-   epoch}` へ。`:sys.replace_state` を使う既存 test は追随済みだが、他に
-   生の state 形へ依存する箇所が無いか。
-6. **送信側 sidecar の記録契機** (186f542)。ack 到着時のみなので
-   reject / timeout / ack 喪失では記録されない (D7 (e) 受容)。stamp 無し
-   ack (旧 server) も記録せず stderr warn。
-7. **dashboard `liveSinceJoin` の窓** (150b3a2)。join → `history` push の
-   間だけを覆い、push 処理後に空にする。この窓の定義が D4 step 1 の意図と
-   合っているか。
+1. **`replay_ia` acceptance-line `agents:lobby` broadcast** (addition 1,
+   150b3a2). This addresses an omission not described in the ADR/spec and is the
+   highest-priority design judgment. `history_reset` sends
+   `preserve_inter_agent: false`, so connected tabs drop IA, while `replay_ia`
+   only upserts the projection and had no live notification; IA bubbles did not
+   return until F5. Known rough edge: when a peer is offline and does not replay,
+   a live tab also shows that IA in the peer's pane (the client fans out using
+   `agent_id ∪ payload.to`) but reload removes it. Strict handling requires a wire
+   field identifying the pane.
+2. **Coverage of Q1's invalidate-trigger set** (1493eb4). Only the resume branch
+   of `restore` and `resume_session` are covered. Runner-originated relaunch
+   (crash-restart / `reset_session`) is intentionally out of scope.
+3. **Implementation split for causal order** (1493eb4).
+   `WrapperChannel.preflight_inter_agent/2` handles all rejection decisions;
+   from `accept_inter_agent/6` onward the path only does upsert → peer push →
+   broadcast → ack. Is that split faithful to the spec?
+4. **`replay_ia` pane-injection surface**. Since the receiving pane contains an
+   envelope in the peer's name, it cannot enforce `agent_id == topic`; the
+   wrapper can inject an arbitrary `agent_id` envelope into its own pane. The
+   impact is display in that pane only (as evaluated in the ADR threat model),
+   but it should be explicitly confirmed.
+5. **`AgentStates` state-shape change** (1493eb4). It is now
+   `%{agents, hydration,
+   epoch}`. Existing tests using `:sys.replace_state` were
+   updated, but are there other dependencies on the raw state shape?
+6. **When the sending sidecar records** (186f542). It records only when the ack
+   arrives, so reject / timeout / lost ack are not recorded (accepted by D7 (e)).
+   An ack without a stamp (old server) is also not recorded and emits an stderr
+   warning.
+7. **Dashboard `liveSinceJoin` window** (150b3a2). It covers only join → the
+   `history` push and is emptied after push handling. Does that window match the
+   intent of D4 step 1?
 
-補足: hydration tracker が cap (1000) に達したときも verdict は
-`replay_required: true` を返す (4f26cda)。`:not_required` は「投影は無事」
-という嘘になり timeline が永久に空になるため。記録なしでも transcript
-replay は成立し、`replay_ia` は stale で弾かれ、complete の CAS も外れる
-ので次の join で再要求される。
+Additional note: even when the hydration tracker reaches its cap (1000), the
+verdict returns `replay_required: true` (4f26cda). `:not_required` would falsely
+claim that projection is safe and leave the timeline permanently empty. A
+transcript replay works even without records; `replay_ia` is rejected as stale,
+and the complete CAS also fails, so the next join requests it again.
 
-## 30-10 must-fix 対応 (あお、2026-08-08)
+## 30-10 must-fix responses (あお, 2026-08-08)
 
-1 巡目 must-fix 5 + should 2 を修正済み。差分再レビュー用の要点。
+Five must-fixes + two should-fixes from round 1 were addressed. Key points for
+the delta review:
 
-| 項目 | commit | 修正の要 |
+| Item | Commit | Fix |
 |---|---|---|
-| M1 | c8ceec8 | `liveSinceJoin` の窓を「接続 generation の join → その接続の history push」へ。`onJoined` (lobby join 応答) で generation を進めて buffer を捨て、`awaitingHistory` の間だけ積む。`history_reset` / `history_cleared` / `agent_deleted` を buffer へ mirror。replay marker に generation を持たせ、epoch 破棄では旧世代のみ落とす |
-| M2 | 2428304 / c8ceec8 | 復元行を `history_replay_envelope {pane_agent_id, envelope}` (operator 限定) で broadcast。pane は channel assign 由来。client は指定 pane にのみ注入し fan-out しない |
-| M3 | c2f8a2a | sidecar `read()` を `ingress_stamp` 昇順 sort + 同 stamp dedupe の後に newest 200 |
-| M4 | c2f8a2a | `sendReplayIa` を JSON 実 byte 長 1MB で chunk。同一 `replay_id` の複数 push を complete 前に送る |
-| M5 | c2f8a2a | `ServerLink#sendInterAgent` が acceptance を Promise で返し、`send_to_agent` が await。reject = error result、timeout/ack 喪失 = 配送不明、いずれも reply waiter を解除 |
-| S1 | 2428304 | reject 5 種に sender/receiver 両 pane 不変の assert |
-| S2 | 2428304 | (a) を partial 残渣が次 attempt の全量で置換されるところまで pin |
+| M1 | c8ceec8 | Define `liveSinceJoin` as the connection-generation window from join to that connection's history push. Advance the generation and discard the buffer in `onJoined` (lobby join reply); accumulate only while `awaitingHistory`. Mirror `history_reset` / `history_cleared` / `agent_deleted` into the buffer. Put generation on the replay marker; on epoch discard, drop only the old generation |
+| M2 | 2428304 / c8ceec8 | Broadcast restored rows as `history_replay_envelope {pane_agent_id, envelope}` (operator-only). The pane comes from the channel assign. The client injects only into the specified pane and does not fan out |
+| M3 | c2f8a2a | Sort sidecar `read()` by `ingress_stamp` ascending, dedupe identical stamps, then take the newest 200 |
+| M4 | c2f8a2a | Chunk `sendReplayIa` at 1MB of actual JSON byte length. Send multiple pushes for one `replay_id` before complete |
+| M5 | c2f8a2a | `ServerLink#sendInterAgent` returns acceptance as a Promise and `send_to_agent` awaits it. Reject = error result; timeout / lost ack = delivery unknown; both release the reply waiter |
+| S1 | 2428304 | Assert that both sender and receiver panes remain unchanged for 5 reject types |
+| S2 | 2428304 | Pin (a) through replacement of partial residue with the complete next attempt |
 
-test の作り直し (M1/M3 の「前提を手渡ししていた」型への対応):
+Test reconstruction (response to the M1/M3 tests that had been handed their
+assumptions as fixtures):
 
-- `dashboard/test/projectionEpochWindow.integration.test.ts` — App.svelte を
-  mount し、`connectKaoiro` だけ差し替えて **実 handler 列**を駆動する。
-  「旧 live → disconnect → 新 live → epoch 不一致 history」を含む 6 本 +
-  M2 の pane 限定 2 本。各 fix を 1 つずつ戻す mutation で落ちることを確認済み。
-- `dashboard/test/replayEnvelopeWire.integration.test.ts` — 実 phoenix client
-  で join 応答 → `onJoined`、`history_replay_envelope` → 専用 handler の
-  結線を pin。
-- `wrapper/agent-common/test/ia_sidecar.test.ts` — stamp 2..201 append 後に
-  stamp 1 を追いつかせる逆順 fixture。
-- `wrapper/core/test/transport.test.ts` — 200 行 × 60KB で分割前が 8MB を
-  超えることを前提 assert した上で、各 chunk が 8MB 未満・全行保持を確認。
+- `dashboard/test/projectionEpochWindow.integration.test.ts` — mount App.svelte,
+  replace only `connectKaoiro`, and drive the **real handler sequence**. Includes
+  6 cases for “old live → disconnect → new live → epoch-mismatch history” plus 2
+  pane-scoped M2 cases. Confirmed by reverting each fix once and observing the
+  corresponding test fail.
+- `dashboard/test/replayEnvelopeWire.integration.test.ts` — pin the wiring from
+  join reply → `onJoined` and `history_replay_envelope` → dedicated handler using
+  the real Phoenix client.
+- `wrapper/agent-common/test/ia_sidecar.test.ts` — reverse-order fixture that
+  catches up stamp 1 after appending stamps 2..201.
+- `wrapper/core/test/transport.test.ts` — assert as a premise that 200 × 60KB
+  rows exceed 8MB before splitting, then confirm every chunk is below 8MB and all
+  rows are retained.
 
-S3 (既知の制約、対応不要): sidecar は replay のたびに全量を同期 read する。
-長期 session では read コストが線形に伸びる。将来課題として
-[#192](https://github.com/sakuraiyuta/kaoiro/issues/192) に
-起票済み (2026-08-08、priority/low)。
+S3 (known constraint, no action needed): the sidecar synchronously reads the full
+set on every replay. Read cost grows linearly for long sessions. Filed as a
+future task in [#192](https://github.com/sakuraiyuta/kaoiro/issues/192)
+(2026-08-08, priority/low).
 
-### 2 巡目 must-fix 対応 (あお、2026-08-08)
+### Round-2 must-fix responses (あお, 2026-08-08)
 
-ふじ 2 巡目で M2/M3/M4/S1/S2 は確認済み。残 3 件 + should 1 を修正。
+ふじ confirmed M2/M3/M4/S1/S2 in round 2. The remaining 3 items + 1 should-fix
+were addressed.
 
-| 項目 | 修正の要 |
+| Item | Fix |
 |---|---|
-| R1 | `onSessionResetCompleted(mode="clear")` の「この reset の `request_id` を持つ session_boundary 1 行だけ残す」変換を helper 化し、`logs` と `mirrorIntoLiveBuffer` の双方へ適用。mirror 経路は clear を含む 4 経路になった |
-| R2 | `#pendingInjections.delete` を acceptance 確定後に移し、**rejected では消さない**。accepted / unknown は消す (配送済みだった場合に #127 通知を重ねると相手に矛盾する 2 通が届く) |
-| R3 | acceptance が unknown でも、waiter が既に settle していれば `await` して reply を取り出し、reply があれば通常の `sent + reply` を返す。reply の到着自体が配送の証拠。waiter がまだ active な unknown は従来どおり即解除 + 配送不明 |
-| should | `chunkReplayIaItems` は単独で budget に収まらない行を **落とす** (対応した)。送れば frame reject → complete 未達 → 再 join の loop に戻るだけで、D3-2 の破損行 policy と同じ fail-closed。guard 1 行 + `sendReplayIa` の warn + test 2 本で収まったため今回入れた |
+| R1 | Extract the conversion that retains only the one session_boundary row carrying this reset's `request_id` for `onSessionResetCompleted(mode="clear")` into a helper, and apply it to both `logs` and `mirrorIntoLiveBuffer`. The mirror path now has 4 routes including clear |
+| R2 | Move `#pendingInjections.delete` until acceptance is confirmed; do not delete on rejected. Delete on accepted / unknown (if delivery happened, sending a second #127 notice would give the peer contradictory messages) |
+| R3 | Even for unknown acceptance, `await` a waiter that has already settled and extract its reply; if a reply exists, return the normal `sent + reply`. Arrival of the reply is evidence of delivery. An unknown with an active waiter follows the existing immediate-release + delivery-unknown path |
+| should | `chunkReplayIaItems` **drops** a row that cannot fit within the budget by itself (sending it would only reject the frame, miss complete, and loop back to rejoin, matching D3-2's corrupt-row policy). Added because one guard line + a warning in `sendReplayIa` + 2 tests fit |
 
-test はいずれも mutation で実効性を確認済み (R1: mirror 呼び出しを外す /
-R2: delete を無条件に戻す / R3: settledReply 分岐を外す → それぞれ対応する
-1 本だけが落ちる)。
+All tests were confirmed effective by mutation (R1: remove the mirror call / R2:
+restore unconditional delete / R3: remove the settledReply branch → only the
+corresponding test fails in each case).
 
-## Dogfood 検証シナリオ (30-11)
+## Dogfood verification scenario (30-11)
 
-0. deploy: ADR D6 の maintenance 手順(全 agent 停止 → server /
-   wrapper / dashboard 同時更新 → 全タブ reload)。
-1. 稼働中: 端末 2 台で同一 agent を表示 → 双方 F5 → 同一表示。
-2. live IA: agent 間で数往復 → **再起動せず** F5 → 両 pane 一致。
-3. 再起動: 片方のタブを開いたまま server container を再起動 →
-   wrapper 再接続後、開きっぱなしタブ・新規タブとも現 session 分が
-   同一表示(亡霊なし)。
-4. IA 復元: IA 往復後に再起動 → IA バブルが両 pane で復元され、
-   peer に重複メッセージが届いていない。
-5. clear: IA を含む session を `/clear` → 再起動 → clear 済み IA が
-   復活しない。
-6. offline: wrapper を停止した agent は再起動後 offline tile +
-   空 timeline → resume 操作で履歴復元(既存経路の回帰確認)。
+0. Deploy: ADR D6 maintenance procedure (stop all agents → update server /
+   wrapper / dashboard together → reload all tabs).
+1. While running: show the same agent on 2 terminals → F5 on both → same display.
+2. Live IA: exchange several messages between agents → F5 **without restarting**
+   → matching panes.
+3. Restart: restart the server container while leaving one tab open → after the
+   wrapper reconnects, the open tab and a new tab show the same current-session
+   portion (no ghosts).
+4. IA restoration: restart after an IA exchange → IA bubbles restore in both
+   panes, with no duplicate messages delivered to the peer.
+5. Clear: `/clear` a session containing IA → restart → cleared IA does not return.
+6. Offline: an agent whose wrapper is stopped shows an offline tile + empty
+   timeline after restart → resume restores history (regression check of the
+   existing path).
 
 ## See Also
 
 - ADR: [0051](../adr/0051-history-restart-resilience.md)
-- 前提 ADR: [0014](../adr/0014-session-resume-and-restore.md),
+- Prerequisite ADRs: [0014](../adr/0014-session-resume-and-restore.md),
   [0030](../adr/0030-agent-directory-and-explicit-restore.md),
   [0036](../adr/0036-session-lifecycle-commands.md)
 - Specs: [protocol](../specs/protocol.md),

@@ -1,494 +1,530 @@
 ---
-title: Phase 28 — コンテキスト疲労の自己認識と自発 session 操作 (issue #158)
-description: エージェントが自身の context 使用量を認識し、/compact・/new・/clear 相当の回復操作を自発できるようにする。本 plan は Phase A (可視化) と spike を実装粒度に落とす。Phase B (自発 compact) / C (自発 new・clear) は spike と Phase A の結果を受けて追補する。
+title: Phase 28 — Self-awareness of context fatigue and agent-initiated session operations (issue #158)
+description: Enable an agent to recognize its own context usage and initiate recovery operations equivalent to /compact, /new, and /clear. This plan reduces Phase A (visualization) and the spike to implementation detail. Phase B (agent-initiated compact) / C (agent-initiated new and clear) are supplements based on the spike and Phase A results.
 status: done
 phase: 28
 depends_on: [21, 27]
 last_updated: 2026-08-21
 ---
 
-# Phase 28 — コンテキスト疲労の自己認識と自発 session 操作
+# Phase 28 — Self-awareness of context fatigue and agent-initiated session operations
 
 ## Goal
 
-[issue #158](https://github.com/sakuraiyuta/kaoiro/issues/158)
-を実装する。設計判断はマスター決裁済み
-([#158 issuecomment-5384365227](https://github.com/sakuraiyuta/kaoiro/issues/158#issuecomment-5384365227))。
-本 plan はその決定を実装可能な粒度に落としたもので、決定そのものは
-変更しない。
+Implement [issue #158](https://github.com/sakuraiyuta/kaoiro/issues/158).
+The design decisions have been approved by マスター
+([#158 issuecomment-5384365227](https://github.com/sakuraiyuta/kaoiro/issues/158#issuecomment-5384365227)).
+This plan reduces those decisions to an implementable level of detail; it does
+not change the decisions themselves.
 
-## 確定済み前提 (変更禁止)
+## Confirmed premises (do not change)
 
-| # | 決定 | 出典 |
+| # | Decision | Source |
 |---|---|---|
-| P1 | SDK に `compact()` control API は無い。発動は prompt 文字列 `/compact` (slash command 解釈)。完了検知は `SDKCompactBoundaryMessage` | #158 comment-5384365227 (1) |
-| P2 | permission は二軸写像を採らず、初期形は「compact = 軽 / new・clear = 重、全て permission_broker 都度承認」 | 同 (2) |
-| P3 | 疲労判定はハイブリッド (wrapper 機械判定で閾値超過時のみ通知 → agent 判断)。常時 context 表示は不採用 (context anxiety)。閾値は Phase A 後の実測で決定 | 同 (3) |
-| P4 | 自発 new/clear は deferred reset (turn 境界発火)。ADR-0036 F6 の自動 interrupt / queue 却下は維持 | 同 (4) |
-| P5 | 永続 director 役は定義しない。都度 operator 指示 + permission_broker 都度承認 | 同 (5) |
-| P6 | handoff summary は機構化しない。compact は要約内蔵、new/clear は事前に agent 自身が外部化する運用指針 | 同 (6) |
+| P1 | The SDK has no `compact()` control API. Trigger it with the `/compact` prompt string (slash-command interpretation). Detect completion with `SDKCompactBoundaryMessage` | #158 comment-5384365227 (1) |
+| P2 | Do not use a two-axis permission mapping. The initial form is “compact = light / new and clear = heavy; permission_broker approves every request” | same (2) |
+| P3 | Fatigue detection is hybrid (the wrapper sends a notice only when its mechanical threshold is exceeded → the agent decides). Do not display context continuously (context anxiety). Set the threshold from measurements after Phase A | same (3) |
+| P4 | Agent-initiated new/clear is a deferred reset (fires at the turn boundary). Retain ADR-0036 F6's automatic-interrupt / queue rejection | same (4) |
+| P5 | Do not define a permanent director role. Use an operator instruction each time + permission_broker approval each time | same (5) |
+| P6 | Do not mechanize a handoff summary. Compact includes summarization; for new/clear, the operating guideline is that the agent externalizes it beforehand | same (6) |
 
-## Track 構成
+## Track structure
 
-| Track | 内容 | 担当 | 状態 |
+| Track | Content | Owner | Status |
 |---|---|---|---|
-| S | spike: Claude wrapper 経路 (SDK streaming input) で `/compact` が slash command として解釈されるか実測 | もも | 完了 (解釈される — 下記「Track S 実測結果」) |
-| A1 | compact 可視化: `compact_boundary` / `status(compacting, compact_result)` / `conversation_reset` を wrapper で処理し operator に見せる | あお | 完了 (6941f3e + 1c57045 + ae2c3b5、レビュー通過) |
-| A2 | whoami に `context` を追加 (自己認識の最小実装) | あお | 完了 (同上) |
-| R | 設計レビュー (本 plan + 決定記録) / A1+A2 diff レビュー | ふじ | 完了 (must-fix 1 件 MF1 検出→ae2c3b5 で修正確認、push 可判定) |
-| B | 自発 compact (閾値通知 + agent 判断 + 発動経路) | 未割当 | Phase A 後に詳細化 |
-| C | 自発 new/clear (ADR-0036 F1/F6 改訂 + 新 control event + deferred reset) | 未割当 | Phase B 後に詳細化 |
+| S | spike: measure whether `/compact` is interpreted as a slash command on the Claude wrapper path (SDK streaming input) | もも | completed (it is interpreted — see “Track S measurement results”) |
+| A1 | Compact visualization: process `compact_boundary` / `status(compacting, compact_result)` / `conversation_reset` in the wrapper and show them to the operator | あお | completed (6941f3e + 1c57045 + ae2c3b5, review passed) |
+| A2 | Add `context` to whoami (minimum self-awareness implementation) | あお | completed (same) |
+| R | Design review (this plan + decision record) / A1+A2 diff review | ふじ | completed (MF1 detected as one must-fix → confirmed fixed by ae2c3b5, approved for push) |
+| B | Agent-initiated compact (threshold notice + agent decision + trigger path) | unassigned | Detail after Phase A |
+| C | Agent-initiated new/clear (ADR-0036 F1/F6 revision + new control event + deferred reset) | unassigned | Detail after Phase B |
 
 ## Track S — /compact spike (もも)
 
-ADR-0036 Context の「CLI native slash command parser を経由しない」は
-Codex 側実測のみで、SDK 公式ガイドは `query({prompt: "/compact"})` が
-slash command として実行されると明記している (矛盾)。Claude 側を実測する。
+ADR-0036 Context says “does not go through the CLI native slash-command
+parser” based only on Codex measurements, while the official SDK guide clearly
+says that `query({prompt: "/compact"})` runs as a slash command (a conflict).
+Measure the Claude side.
 
-- 手順: scratch スクリプト (リポジトリ外 or 未 track 領域) で
-  `@anthropic-ai/claude-agent-sdk` の `query()` を streaming input mode で
-  起動し、通常メッセージ数往復で context を積んでから `/compact` を送る。
-- 観測点: `SDKCompactBoundaryMessage` (`type:"system"`,
-  `subtype:"compact_boundary"`) が届くか。`compact_metadata.trigger` /
-  `pre_tokens` の実値。`SDKStatusMessage` の `compacting` /
-  `compact_result` の有無。`/compact` が普通の user turn として model に
-  渡ってしまわないか (応答内容で判別)。
-- 追加観測 (余力があれば): `getContextUsage()` を compact 前後で呼び、
-  used_tokens が減るか。
-- 成果物: 実測ログ + 判定 (解釈される / されない / 条件付き) を私へ報告。
-  コードは commit しない。
+- Procedure: use a scratch script (outside the repository or in an untracked
+  area) to start `query()` from `@anthropic-ai/claude-agent-sdk` in streaming
+  input mode, build context through several ordinary message round trips, and
+  then send `/compact` on the same stream.
+- Observation points: whether `SDKCompactBoundaryMessage` (`type:"system"`,
+  `subtype:"compact_boundary"`) arrives; actual values of
+  `compact_metadata.trigger` / `pre_tokens`; whether `SDKStatusMessage` has
+  `compacting` / `compact_result`; and whether `/compact` is passed to the model
+  as an ordinary user turn (determine from the response).
+- Additional observation (if time permits): call `getContextUsage()` before and
+  after compact and see whether used_tokens decreases.
+- Deliverable: report the measurement log + judgment (interpreted / not
+  interpreted / conditional) to me. Do not commit the code.
 
-## Track A1 — compact 可視化 (あお)
+## Track A1 — compact visualization (あお)
 
-現状 `wrapper/claude-code/src/adapter.ts:91-93` は system 系 message を
-`init` しか処理せず、`:321` 付近の status 読み取りも permissionMode /
-fast_mode 用のみ。compaction が起きても kaoiro には何も出ない。
+Currently `wrapper/claude-code/src/adapter.ts:91-93` handles only `init` among
+system messages, and status reading around `:321` is limited to permissionMode /
+fast_mode. Compaction therefore produces nothing in kaoiro.
 
-- `SDKCompactBoundaryMessage` (`subtype:"compact_boundary"`,
-  `compact_metadata.trigger/pre_tokens`) を受けたら operator に見える形で
-  log event を emit する (既存の log emit パターンに従う。wire 変更が
-  必要なら `docs/specs/protocol.md` も更新)。
-- **決定 (2026-07-28, あお の提起で確定)**: `LogKind` が閉じた 4 値の
-  ため、`protocol/src/index.ts` と dashboard に log kind `"system"` を
-  追加する (C 案)。既存 kind の流用 (assistant/tool_result への偽装) は
-  Phase B で同経路を使う際に意味論の誤りが増幅するため不採用。server は
-  kind を検証せず素通しのため変更不要。commit は (i) protocol/dashboard
-  の語彙追加、(ii) wrapper の可視化実装 + A2、の 2 本に分割する。
-- log event には boundary metadata の実値 (pre_tokens / post_tokens) を
-  載せる。compact 成否・削減量の正は boundary metadata (Track S 実測:
-  直後の `getContextUsage()` は減少を反映しない)。
-  **ただし `post_tokens` は SDK 型上 optional (`post_tokens?: number`) で
-  あり、常に載る保証はない。表示は「前 N → 後 M」を前提にせず、存在する
-  field だけを条件付きで組み立てる** (欠落時は `前 N tokens` のみを出す
-  degrade)。2026-07-28 の実機受け入れでは in-process の
-  `SDKCompactBoundaryMessage` に `post_tokens` が載り、dashboard に
-  `前 293221 tokens → 後 9187 tokens` として表示された。欠落ケース自体は
-  未観測 (下記「実機受け入れ結果」の artifact 差異も参照)。
-- **log 規約 (ふじ suggestion 採用)**: success は `compact_boundary` を
-  正として 1 行 (`trigger`, `pre_tokens`, 任意で `post_tokens` /
-  `duration_ms`)。`compact_result:'success'` で別の成功行を出して二重
-  表示しない。failure は `compact_error` を既存 log 上限で clip。
-  `conversation_reset` は `new_conversation_id` を operator-only log に
-  含める。内部 `preserved_*` 等の未知 metadata は載せない。
-- `SDKStatusMessage` の `compact_result: 'failed'` + `compact_error` は
-  エラーとして log する。`SDKStatus = 'compacting'` の state 反映は
-  任意 (state 語彙の追加が要るなら今回は見送り、log のみで可)。
-- compact_boundary 受信後に `#refreshContextUsage()` を kick し、
-  `ext.context` の meter が compact 後の実値へ更新されるようにする
-  (既存 guard — inflight / generation / dedup — の流儀に従う)。
-- `SDKConversationResetMessage` (`type:'conversation_reset'`) も同様に
-  log へ (発生条件はまれだが drop しない)。
+- When `SDKCompactBoundaryMessage` (`subtype:"compact_boundary"`,
+  `compact_metadata.trigger/pre_tokens`) arrives, emit a log event visible to
+  the operator (follow the existing log-emission pattern; update
+  `docs/specs/protocol.md` if a wire change is needed).
+- **Decision (2026-07-28, confirmed after あお's proposal):** Because `LogKind`
+  is a closed set of 4 values, add log kind `"system"` to
+  `protocol/src/index.ts` and the dashboard (option C). Reusing an existing kind
+  (pretending to be assistant/tool_result) was rejected because it would amplify
+  semantic errors when the same path is used in Phase B. The server passes kinds
+  through without validation, so it needs no change. Split commits into (i)
+  protocol/dashboard vocabulary and (ii) wrapper visualization + A2.
+- Put actual boundary metadata (pre_tokens / post_tokens) on the log event. The
+  boundary metadata is authoritative for compact success and reduction amount
+  (Track S measurement: `getContextUsage()` immediately afterward does not
+  reflect the reduction).
+  **However, `post_tokens` is optional in the SDK type (`post_tokens?: number`)
+  and is not guaranteed to be present. Do not assume “before N → after M” in the
+  display; construct it conditionally from fields that exist** (when absent,
+  degrade to only `前 N tokens`). In the 2026-07-28 live acceptance,
+  `post_tokens` was present on the in-process `SDKCompactBoundaryMessage`, and
+  the dashboard displayed `前 293221 tokens → 後 9187 tokens`. The missing case
+  itself was not observed (see the artifact difference in “Live acceptance
+  results” below).
+- **Log convention (ふじ suggestion adopted):** For success, treat
+  `compact_boundary` as authoritative and emit one line (`trigger`, `pre_tokens`,
+  optionally `post_tokens` / `duration_ms`). Do not emit a second success line
+  for `compact_result:'success'`. For failure, clip `compact_error` using the
+  existing log limit. Include `new_conversation_id` in an operator-only log for
+  `conversation_reset`. Do not include unknown internal metadata such as
+  `preserved_*`.
+- Log `compact_result: 'failed'` + `compact_error` from `SDKStatusMessage` as an
+  error. Reflecting `SDKStatus = 'compacting'` in state is optional (if adding a
+  state vocabulary is required, defer it and use logs only for now).
+- After receiving compact_boundary, kick `#refreshContextUsage()` so the
+  `ext.context` meter updates to the post-compact value (follow the existing
+  guard conventions — inflight / generation / dedup).
+- Process `SDKConversationResetMessage` (`type:'conversation_reset'`) into logs
+  as well (do not drop it even though it is rare).
 
-## Track A2 — whoami に context を追加 (あお)
+## Track A2 — add context to whoami (あお)
 
-現状 `WhoamiSnapshot` (`wrapper/agent-common/src/inter_agent.ts:40-55`)
-に `context` が無く、agent は自分の context を見られない (peer のは
-`list_agents` で見えるという非対称)。
+Currently `WhoamiSnapshot` (`wrapper/agent-common/src/inter_agent.ts:40-55`)
+has no `context`, so an agent cannot see its own context (the peer's is visible
+through `list_agents`, creating an asymmetry).
 
-- `WhoamiSnapshot` に `context?: {used_tokens, max_tokens,
-  used_percentage}` を追加 (wire 3 field は ADR-0040 D4 のまま)。
-- claude-code host の snapshot 生成 (`claude-code/src/host.ts:487-497`
-  付近) で保持中の `#context` を載せる。null なら omit
-  (absent = unknown の語彙を維持)。
-- codex host は載せない (supports_context_usage=false、omit のまま)。
-- `WHOAMI_DESCRIPTION` (tool 説明) に context field の説明を追記。
-  常時参照を促す文言にはしない (P3: context anxiety 回避。「委任判断や
-  operator への報告で必要なときに見る」程度)。
-- **(ふじ suggestion 採用)** 返す値は last successful snapshot であり
-  whoami 自体は refresh しない旨を description と spec に明記する
-  ("cached last successful measurement; whoami itself does not refresh")。
-  false precision の防止。on-demand refresh は追加しない。
-- `docs/specs/protocol-inter-agent.md` の whoami 節を更新。
+- Add `context?: {used_tokens, max_tokens,
+  used_percentage}` to `WhoamiSnapshot` (the 3 wire fields remain as in ADR-0040
+  D4).
+- In snapshot generation on the claude-code host
+  (`claude-code/src/host.ts:487-497` vicinity), include the retained `#context`.
+  Omit it when null (retain the absent = unknown vocabulary).
+- Do not include it on the codex host (supports_context_usage=false, so keep
+  omitting it).
+- Add an explanation of the context field to `WHOAMI_DESCRIPTION` (the tool
+  description). Do not encourage constant checking (P3: avoid context anxiety;
+  say roughly to inspect it when needed for delegation decisions or operator
+  reports).
+- **(ふじ suggestion adopted):** State in the description and spec that the
+  returned value is the last successful snapshot and whoami itself does not
+  refresh it ("cached last successful measurement; whoami itself does not
+  refresh"). This prevents false precision. Do not add on-demand refresh.
+- Update the whoami section of `docs/specs/protocol-inter-agent.md`.
 
-## Track A 共通の完了条件
+## Common Track A completion conditions
 
-- `cd wrapper && pnpm test && pnpm typecheck` green (既存 suite に
-  合わせてテスト追加)。
-- **(ふじ must-fix, 2026-07-28)** C 案で protocol/dashboard に触れるため
-  `protocol`: `pnpm typecheck`、`dashboard`: `pnpm check && pnpm test`
-  も green にする (system kind の render test 追加を含む)。
-- 変更は上記 scope に限定 (閾値通知・MCP tool 追加・server 変更は
-  Phase B/C。scope creep 禁止)。
-- commit は日本語 conventional 形式、path 指定 add。push は
-  レビュー (Track R) 通過後にクロエが指示。
+- `cd wrapper && pnpm test && pnpm typecheck` is green (add tests alongside the
+  existing suite).
+- **(ふじ must-fix, 2026-07-28)** Since option C touches protocol/dashboard,
+  also make `protocol`: `pnpm typecheck` and `dashboard`: `pnpm check && pnpm test`
+  green (including a render test for the system kind).
+- Limit changes to the scope above (threshold notice, MCP tool addition, and
+  server changes belong to Phase B/C; no scope creep).
+- Use Japanese conventional commits and add explicit paths. クロエ instructs the
+  push after Track R review passes.
 
-## Track R — レビュー (ふじ)
+## Track R — review (ふじ)
 
-- 前段: 本 plan と #158 comment-5384365227 の決定記録を読み、設計上の穴
-  (特に P3 の anxiety 回避と A2 の開示範囲、A1 の log 粒度) を指摘。
-- 後段: A1+A2 の diff レビュー (小径。must-fix / suggestion を区別して
-  クロエへ報告)。
+- First: read this plan and the decision record in #158 comment-5384365227, and
+  identify design gaps (especially P3's anxiety avoidance, A2's disclosure
+  scope, and A1's log granularity).
+- Second: review the A1+A2 diff (small scope), distinguishing must-fixes from
+  suggestions, and report to クロエ.
 
-## Track S 実測結果 (もも、2026-07-28)
+## Track S measurement results (もも, 2026-07-28)
 
-環境: SDK 0.3.220 / Claude Code CLI 2.1.220、streaming input mode
-(`persistSession:false`, model haiku, tools 空)。通常 3 turn 後に
-文字列 `/compact` を同 stream へ送信。スクリプトは repo 外 (未 commit)。
+Environment: SDK 0.3.220 / Claude Code CLI 2.1.220, streaming input mode
+(`persistSession:false`, model haiku, tools empty). After 3 ordinary turns, send
+the string `/compact` on the same stream. The script was outside the repository
+(uncommitted).
 
-- **`/compact` は slash command として解釈される** (streaming input でも)。
-  model への通常 user turn として渡った痕跡なし。
-- イベント順序: `system/status {status:'compacting'}` →
+- **`/compact` is interpreted as a slash command** (also in streaming input).
+  There was no sign that it was passed to the model as an ordinary user turn.
+- Event order: `system/status {status:'compacting'}` →
   `system/status {status:null, compact_result:'success'}` →
-  `system/compact_boundary` → 空文字の `result (success)`。
-- `compact_metadata` 実値: `{trigger:'manual', pre_tokens:22315,
-  post_tokens:882, cumulative_dropped_tokens:21433, duration_ms:13692}`
-  (SDK 型定義より field が多い)。manual compact で所要 ~13.7 秒。
-  **所要は文脈量依存で、この 13.7 秒は ~22k tokens という小さい文脈での
-  値である** (下記「実機受け入れ結果」では ~293k tokens で 168.8 秒)。
-- **caveat**: compact 直後の `getContextUsage()` は totalTokens
-  23,247/200,000 を返し減少を反映しなかった (boundary は post_tokens
-  882 を報告)。**compact 成否・削減量の根拠は boundary metadata を正**
-  とし、`getContextUsage()` 直後値に依存しない — A1 の refresh kick は
-  meter の eventual な更新用と位置づける。
-- `compact_result:'failed'` / `compact_error` は未再現 (失敗系は実装時に
-  型定義準拠で防御)。
-- 帰結: ADR-0036 Context の「CLI native slash command parser を経由
-  しない」は Codex 限定の記述へ要修正 (Phase B 着手時に ADR 追補)。
+  `system/compact_boundary` → an empty `result (success)`.
+- Actual `compact_metadata`: `{trigger:'manual', pre_tokens:22315,
+  post_tokens:882, cumulative_dropped_tokens:21433, duration_ms:13692}` (more
+  fields than the SDK type definition). Manual compact took about 13.7 seconds.
+  **Duration depends on context size; this 13.7 seconds was for the small
+  context of about 22k tokens** (the live acceptance below used about 293k
+  tokens and took 168.8 seconds).
+- **Caveat:** immediately after compact, `getContextUsage()` returned totalTokens
+  23,247/200,000 and did not reflect the reduction (the boundary reported
+  post_tokens 882). **Use boundary metadata as the authority for compact success
+  and reduction; do not depend on the immediate `getContextUsage()` value** —
+  A1's refresh kick is for eventual meter update.
+- `compact_result:'failed'` / `compact_error` were not reproduced (the
+  implementation should defend according to the type definition).
+- Consequence: revise ADR-0036 Context's “does not go through the CLI native
+  slash-command parser” to a Codex-only statement (add an ADR supplement when
+  starting Phase B).
 
-## Phase B — 自発 compact (詳細化 2026-07-28、クロエ裁定)
+## Phase B — agent-initiated compact (detailed 2026-07-28, クロエ ruling)
 
-設計方針: **wrapper + docs に閉じる** (server / protocol wire 変更なし)。
+Design direction: **keep it within wrapper + docs** (no server / protocol-wire
+change).
 
-| Track | 内容 | 担当 |
+| Track | Content | Owner |
 |---|---|---|
-| B1 | 閾値通知: `#context` 更新時に wrapper が機械判定し、既定 70% 超過で agent へ通知を 1 回注入 | あお (完了: f772277、未 push) |
-| B2 | MCP tool `request_compact`: permission_broker 都度承認 → 承認後 wrapper が instruction queue へ `/compact` を投入 | あお (完了: 7748a2f、未 push) |
-| B3 | ADR-0036 Context の「CLI native slash command parser を経由しない」を Codex 限定へ追補 (Track S 実測を根拠に) | もも (完了: 879db29、未 push) |
-| BR | B1-B3 の diff レビュー | ふじ (完了: must-fix 3 群 + suggestion 2 件 → 下記「BR 指摘と修正」) |
+| B1 | Threshold notice: when `#context` updates, the wrapper mechanically detects it and injects one notice to the agent above the default 70% threshold | あお (completed: f772277, not pushed) |
+| B2 | MCP tool `request_compact`: permission_broker approval each time → after approval the wrapper puts `/compact` into the instruction queue | あお (completed: 7748a2f, not pushed) |
+| B3 | Supplement ADR-0036 Context's “does not go through the CLI native slash-command parser” as Codex-only, based on Track S measurement | もも (completed: 879db29, not pushed) |
+| BR | B1–B3 diff review | ふじ (completed: 3 groups of must-fixes + 2 suggestions → see “BR findings and fixes” below) |
 
-実装時の確定判断 (2026-07-28、クロエ承認):
+Confirmed implementation decisions (2026-07-28, クロエ approval):
 
-- descriptor は `claude-code/src/request_compact.ts` に配置 (inter_agent.ts
-  同居だと codex の stdio bridge に露出するため。Claude 限定を条件分岐で
-  なく構造で担保)。
-- tool の `reason` は承認ダイアログ / tool result のみに使い、投入
-  テキストへは連結しない (固定リテラル `/compact` のみ。model からの
-  入力ストリーム injection を遮断。テストで pin)。
-- 承認は canUseTool 経路 (`READ_ONLY_TOOLS` 非登録) で既存
-  permission_broker に乗せる。broker を直接叩く新経路は作らない。
-- 閾値は定数 + TODO (config 化は `WrapperConfig` = protocol wire に
-  触れるため見送り)。
-- 既知の限界: 「承認→実行 / 拒否→不実行」の分岐自体は SDK が
-  canUseTool を呼ぶことに依存し unit test で踏めない (send_to_agent と
-  同じ既存制約)。実機受け入れで確認する。
+- Place the descriptor in `claude-code/src/request_compact.ts` (co-location with
+  inter_agent.ts would expose it to the codex stdio bridge; structure, rather
+  than a Claude-only conditional, enforces the engine boundary).
+- Use the tool's `reason` only in the approval dialog / tool result; do not
+  concatenate it into the injected text (only the fixed literal `/compact`;
+  block input-stream injection from the model; pin this in tests).
+- Use the canUseTool path (`READ_ONLY_TOOLS` is not registered) with the existing
+  permission_broker. Do not create a new path that calls the broker directly.
+- Make the threshold a constant + TODO (configuration wiring touches
+  `WrapperConfig` = protocol wire, so defer it).
+- Known limitation: the “approve → execute / reject → do not execute” branch
+  itself depends on the SDK calling canUseTool and cannot be exercised by unit
+  tests (the same existing limitation as send_to_agent). Confirm it in live
+  acceptance.
 
-### BR 指摘と修正 (ふじ、2026-07-28。判定: push 不可 → 全採用で修正)
+### BR findings and fixes (ふじ, 2026-07-28; decision: do not push → adopt all)
 
-- **MF1 — 境界直後の stale 値による誤通知**。`#invalidateContextEpoch()`
-  直後の refresh は圧縮前の値を返し得る (Track S 実測)。その値が新 epoch の
-  閾値判定に流れ、compact した直後に 2 通目を出せた。既存テストが**この
-  誤動作の方を pin していた**ため、テストごと書き換えた。
-  対処: 下記 MF1-R で再設計 (初回対処の「直前 epoch の最終 reading を
-  baseline に使う」案は不成立だった)。
-- **MF2 — B1 通知が直列化を迂回**。operator / inter-agent / B2 は cli.ts の
-  instruction chain に乗るが、B1 だけ `host.send` を直接叩いていた。
-  対処: `AgentHostOptions.enqueueInjection` を追加し cli.ts の単一 chain
-  (`enqueueInstruction`) を注入。chain が届いた時点で epoch を再確認して
-  drop、re-arm は**同 generation の失敗のみ** (旧 epoch の遅延 reject が
-  新 epoch の budget を巻き戻さない)。
-- **MF3 — 実測と矛盾する文言**。`request_compact` の description /
-  tool result から「~十数秒」「before/after token counts」の約束を撤去し、
-  「文脈量により数分に達し得る」「完了は boundary log で観測」へ。
-  `protocol-inter-agent.md` の「実測 ~13.7 秒」も文脈量依存の表現へ直し、
-  ADR-0036 への broken link を修正した。
-- **S1** — `READ_ONLY_TOOLS` を `read_only_tools.ts` へ分離し (cli.ts は
-  import 時に `main()` が走るためテストから読めない)、
-  `REQUEST_COMPACT_TOOL_FQN` が含まれないことを直接 pin。承認ゲートの
-  実体は「auto-allow 既定に載っていないこと」そのものなので、不在自体を
-  テストで固定する。
-- **S2** — 実機受け入れ節の「whoami 値のみで」を、B1 も whoami と同じ
-  cached context measurement を読む旨の記述へ修正。
+- **MF1 — false notice from a stale value immediately after the boundary.** A
+  refresh immediately after `#invalidateContextEpoch()` can return a pre-compact
+  value (Track S measurement). That value reached the new epoch's threshold
+  decision, allowing a second notice immediately after compact. Existing tests
+  had **pinned this incorrect behavior**, so the tests were rewritten too.
+  Response: redesign in MF1-R below (the initial “use the previous epoch's final
+  reading as baseline” response was invalid).
+- **MF2 — the B1 notice bypassed serialization.** Operator / inter-agent / B2 use
+  cli.ts's instruction chain, but B1 called `host.send` directly. Response: add
+  `AgentHostOptions.enqueueInjection` and inject through cli.ts's single chain
+  (`enqueueInstruction`). Recheck the epoch when the chain arrives and drop it;
+  re-arm only on failure in **the same generation** (a delayed rejection from an
+  old epoch must not roll back the new epoch's budget).
+- **MF3 — wording contradicted measurement.** Remove promises of “about a dozen
+  seconds” and “before/after token counts” from `request_compact`'s description /
+  tool result, and say that it may take minutes depending on context size and
+  completion is observed in the boundary log. Also change
+  `protocol-inter-agent.md`'s “measured ~13.7 seconds” to context-dependent
+  wording and fix its broken ADR-0036 link.
+- **S1** — Move `READ_ONLY_TOOLS` to `read_only_tools.ts` (importing cli.ts runs
+  `main()` and prevents tests from reading it), and directly pin that
+  `REQUEST_COMPACT_TOOL_FQN` is absent. The actual approval gate is precisely
+  absence from the auto-allow default, so pin that absence in a test.
+- **S2** — Replace the live-acceptance wording “using only the whoami value” with
+  the fact that B1 also reads the same cached context measurement as whoami.
 
-#### MF1-R — baseline gate の再設計 (ふじ 再レビュー、2026-07-28)
+#### MF1-R — baseline-gate redesign (ふじ re-review, 2026-07-28)
 
-初回対処の「直前 epoch の最終 `used_tokens` を baseline とし、それを下回る
-reading で確定」は safety / liveness の**どちらも満たしていなかった**。
-ふじ が示した反例 2 列:
+The initial response, “use the previous epoch's final `used_tokens` as baseline
+and confirm with a reading below it,” satisfied neither **safety nor liveness**.
+ふじ demonstrated two counterexample sequences:
 
-1. **null baseline の誤通知** — 直前 epoch に成功 reading が無ければ
-   baseline は null になり確定扱いになるが、境界直後の fresh call が
-   pre-boundary の stale high を返す可能性は消えていない。gate が無い。
-2. **飛び越しによる永久 mute** — 観測は離散なので、境界後の reading が
-   一度も baseline を下回らない列 (大きな turn / attachment が挟まる、
-   reset 後の初期 context が baseline 以上) は普通に成立する。
-   「再び上回るには一度下回る必要がある」という初回の主張は誤り。
-   その epoch の正当な通知が永久に出なくなる。
+1. **False notice with a null baseline** — if there was no successful reading in
+   the previous epoch, baseline is null and treated as confirmed, but a fresh call
+   immediately after the boundary can still return a stale pre-boundary high
+   value. There is no gate.
+2. **Permanent mute by jumping over the baseline** — observations are discrete,
+   so a sequence where no post-boundary reading ever falls below baseline is
+   ordinary (a large turn / attachment may intervene, or initial context after a
+   reset may be at least baseline). The initial claim that it must fall below
+   baseline before it can rise again was wrong. A valid notice in that epoch would
+   be muted forever.
 
-再設計 (`#contextEpochGate`)。**大小比較だけを確定条件にしない**:
+Redesign (`#contextEpochGate`). **Do not make a magnitude comparison alone the
+confirmation condition**:
 
-- 基準は cached reading ではなく **boundary metadata**。`post_tokens` が
-  あればそれ (新 epoch の正確な総量なので `<=` で確定)、無ければ
-  `pre_tokens - 1` (pre 以上は stale と区別できないため)。どちらも無い
-  event (`conversation_reset` 等) では null。
-- 上記を満たさなくても、その epoch で `CONTEXT_EPOCH_SETTLE_READINGS`
-  (= 3) 回目の reading に達したら確定する。これが liveness の担保で、
-  反例 2 を塞ぐ。3 は Track S の「境界直後の stale reading は 1 回」に
-  1 turn 分の余裕を足した値。誤通知は「1 turn 遅れで 1 回」に上界され、
-  承認ダイアログ 1 回で済む側へ倒している。
-- gate は `#invalidateContextEpoch()` でのみ張られる。確定後に再び
-  mute されることはない。
+- The basis is boundary metadata, not a cached reading. If `post_tokens` exists,
+  use it (it is the exact total for the new epoch, so confirm with `<=`); otherwise
+  use `pre_tokens - 1` (a value at least pre cannot be distinguished from stale).
+  Use null for events with neither, such as `conversation_reset`.
+- Even without the above, confirm when the epoch reaches its
+  `CONTEXT_EPOCH_SETTLE_READINGS` (= 3rd) reading. This provides liveness and
+  closes counterexample 2. Three adds one turn of slack to Track S's “one stale
+  reading immediately after the boundary.” False notices are bounded to one at a
+  one-turn delay, favoring one approval dialog.
+- Establish the gate only in `#invalidateContextEpoch()`. Do not mute again after
+  confirmation.
 
-mutation 確認: 初回案の semantics へ戻すと反例 2 本が落ち、metadata
-fast path を潰すと post_tokens テストが落ちる。
+Mutation check: reverting to the initial semantics makes both counterexample
+tests fail; disabling the metadata fast path makes the post_tokens test fail.
 
-### B1 — 閾値通知
+### B1 — threshold notice
 
-- 判定点: `#context` が更新される箇所 (refresh 成功時)。既定閾値 60%
-  (`used_percentage >= 60`)。issue #162 P4 のマスター決裁 (2026-07-29) により
-  Phase B の 70% 指定は撤回された。設定で上書き可能なら configurable に、
-  config 配線が重ければ定数 + TODO で可。
-- 注入は **epoch 毎に 1 回** (dedup。`#invalidateContextEpoch` で解除)。
-  毎 turn の再注入や常時表示は禁止 (P3: context anxiety 回避)。
-- 通知文言は「context が N% に達した。回復するなら request_compact を
-  使える。作業の切りが良いところで判断せよ」程度の中立なもの。
-  切迫を煽らない。
-- 注入経路は既存 instruction queue を使い、operator instruction と衝突
-  しない直列化を維持。**BR MF2 で cli.ts の単一 chain
-  (`enqueueInjection`) 経由へ是正**。
-- **BR MF1 / MF1-R**: epoch 境界直後の未確定 reading では判定しない。確定は
-  boundary metadata (`post_tokens`、無ければ `pre_tokens`) を基準にした
-  判定か、境界後 3 回目の reading に達したことのいずれか。大小比較だけを
-  条件にすると永久 mute が起こり得る。
+- Decision point: where `#context` is updated (after a successful refresh).
+  Default threshold 60% (`used_percentage >= 60`). The Phase B 70% value was
+  withdrawn by the マスター ruling for issue #162 P4 (2026-07-29). Make it
+  configurable if override wiring is light; otherwise a constant + TODO is fine.
+- Inject **once per epoch** (dedup; release it in `#invalidateContextEpoch`).
+  Prohibit reinjection on every turn and continuous display (P3: avoid context
+  anxiety).
+- Use neutral wording such as “Context reached N%. You can use request_compact
+  for recovery; decide at a natural stopping point.” Do not create urgency.
+- Use the existing instruction queue and preserve serialization without colliding
+  with operator instructions. **BR MF2 corrected this to cli.ts's single chain
+  (`enqueueInjection`).**
+- **BR MF1 / MF1-R:** do not decide from an unconfirmed reading immediately after
+  an epoch boundary. Confirm based on boundary metadata (`post_tokens`, or
+  `pre_tokens` when absent), or upon the third reading after the boundary. A
+  magnitude comparison alone can cause permanent mute.
 
 ### B2 — request_compact tool
 
-- wrapper-local MCP tool (`inter_agent.ts` の 3 tool と同居)。入力なし
-  (または任意の reason 文字列)。
-- フロー: tool call → permission_broker で operator に承認要求
-  (ADR-0028 D4 のパターン、P2 準拠) → 承認なら `/compact` を instruction
-  queue へ投入 (queue が turn 境界を自然に保証、ADR-0036 F6 と非衝突)
-  → tool result は「予約受理」を返す (compact 完了は boundary log で観測)。
-- 拒否なら tool result にその旨。timeout は permission_broker の既存
-  規約 (未設定なら無期限待機) に従う。
-- 85% 自動 fallback は kaoiro 側では実装しない。SDK native の
-  autoCompact を最終防衛線とする (P2 の全承認原則と矛盾させない)。
-- codex wrapper には tool を出さない (compact 経路なし、engine 側
-  auto-compaction 前提)。
-- `docs/specs/protocol-inter-agent.md` に tool 仕様を追記 (B2 内で実施。
-  B3 の ADR とはファイル非重複)。
+- A wrapper-local MCP tool (co-located with the 3 tools in `inter_agent.ts`). No
+  input, or an optional reason string.
+- Flow: tool call → request operator approval through permission_broker (the
+  ADR-0028 D4 pattern, P2-compliant) → on approval, put `/compact` into the
+  instruction queue (the queue naturally guarantees the turn boundary and does
+  not conflict with ADR-0036 F6) → return “reservation accepted” in the tool
+  result (observe completion in the boundary log).
+- On rejection, say so in the tool result. Follow the existing
+  permission_broker convention for timeout (wait indefinitely if unset).
+- Do not implement an 85% automatic fallback on the kaoiro side. Use the SDK
+  native autoCompact as the final defense (without contradicting P2's all-request
+  approval principle).
+- Do not expose the tool on the codex wrapper (no compact path; assume engine-side
+  auto-compaction).
+- Add the tool specification to `docs/specs/protocol-inter-agent.md` (do this in
+  B2; avoid overlapping files with B3's ADR).
 
-### B 共通の完了条件
+### Common Phase B completion conditions
 
-- wrapper test/typecheck green (B1 の dedup、B2 の承認/拒否/投入をテスト)。
-- manual compact の所要は文脈量依存 (実測: 13.7 秒 @ ~22k tokens /
-  168.8 秒 @ ~293k tokens)。実運用の文脈規模では数分に達し得る。発動中は
-  既存の `status:compacting` log (Phase A) で観測可能なため、追加の state
-  語彙は導入しない。`request_compact` の tool description も所要秒数を
-  約束していない (「次のターン境界で走る」のみ) — この表現を維持する。
-- push は BR 通過後。2026-07-28 の BR は **push 不可**判定 (must-fix 3 群)。
-  修正差分の再レビューを通すまで unpushed 保持。
+- Wrapper tests/typecheck are green (test B1 dedup and B2 approval / rejection /
+  injection).
+- Manual compact duration depends on context size (measurements: 13.7 seconds @
+  ~22k tokens / 168.8 seconds @ ~293k tokens). In production-sized contexts it
+  may take several minutes. During execution it is observable through the
+  existing `status:compacting` log (Phase A), so do not introduce new state
+  vocabulary. `request_compact`'s tool description also makes no duration promise
+  (only “runs at the next turn boundary”); retain that wording.
+- Push after BR passes. The 2026-07-28 BR decision was **do not push** (3 groups
+  of must-fixes). Keep it unpushed until the fix delta passes re-review.
 
-## 実機受け入れ結果 (あお、2026-07-28)
+## Live acceptance results (あお, 2026-07-28)
 
-B2 の「承認→実行 / 拒否→不実行」分岐は unit test で踏めない (上記「既知の
-限界」) ため、あお 自身の本番 session で end-to-end を実施した。
+The end-to-end B2 “approval → execute / rejection → do not execute” branch was
+performed in あお's production session because unit tests cannot exercise it (the
+“known limitation” above).
 
-- **B2 全区間成立**: `mcp__kaoiro__request_compact` 呼び出し → canUseTool →
-  permission_broker → operator (マスター) 承認 → handler が instruction
-  queue へ `/compact` 投入 → 予約受理を tool result で返却 → 次のターン
-  境界で compact 実行 → 完了。`reason` は tool result に echo されたが投入
-  テキストには連結されていない (設計どおり)。
-- **context の実測**: whoami で compact 前 269,858 / 1,000,000 (27%)、
-  compact 後 **52,887 / 1,000,000 (5%)**。cached snapshot は旧値のままでは
-  なく更新されていた = **MF1 の epoch 無効化 + refresh kick が実機で機能**。
-- **A1 の表示 (マスターが dashboard 目視・スクリーンショット確認)**:
+- **All B2 stages succeeded:** `mcp__kaoiro__request_compact` call → canUseTool →
+  permission_broker → operator (マスター) approval → handler puts `/compact` into
+  the instruction queue → returns reservation accepted in the tool result →
+  compact executes at the next turn boundary → completes. `reason` was echoed in
+  the tool result but was not concatenated into injected text (as designed).
+- **Measured context:** whoami showed 269,858 / 1,000,000 (27%) before compact,
+  and **52,887 / 1,000,000 (5%)** after. The cached snapshot was updated rather
+  than retaining the old value = **MF1 epoch invalidation + refresh kick worked
+  in live acceptance**.
+- **A1 display (マスター visually checked the dashboard and screenshot):** one line
   `手動コンテキスト圧縮が完了しました（前 293221 tokens → 後 9187 tokens）
-  168.8 秒` の 1 行。meter の 27%→5% 更新も同時に確認。
-- **B1 は非発火** (27% < 閾値 70%)。期待どおり。
-- **所要 168.8 秒** (~293k tokens)。Track S の 13.7 秒 (~22k tokens) の
-  12 倍で、所要が文脈量依存であることの根拠 (P-b)。
-- **artifact による metadata 表現差**: in-process の SDK message には
-  `post_tokens` が載っていた一方、CLI の session jsonl (ディスク上の別
-  artifact) の同 event には `postTokens` が無く `preTokens` /
-  `durationMs` のみだった。field 名も snake_case / camelCase で異なる。
-  観測事実のみ記す — jsonl は resume 用に CLI が別途書き出す永続表現で、
-  SDK が consumer へ渡す in-process message とは生成経路が別、というのが
-  当たりだが確証はない。**wrapper が読むべきは in-process message であり
-  jsonl ではない** (Phase C で reset 系 event を扱う際も同じ)。
-- **whoami の lag が定量化された**: whoami の compact 前値 269,858 に対し
-  boundary の `pre_tokens` は 293,221 で 23,363 の乖離。A2 の "cached last
-  successful measurement; whoami itself does not refresh" が実測で裏付け
-  られた。B1 の閾値判定も whoami と同じ cached context measurement を
-  読むため、同じだけ過小評価し得る。70% という閾値には十分な余裕があり
-  実害はない。
+  168.8 秒`. The meter update from 27%→5% was also confirmed.
+- **B1 did not fire** (27% < 70% threshold), as expected.
+- **Duration: 168.8 seconds** (~293k tokens). This is 12 times Track S's 13.7
+  seconds (~22k tokens), supporting the context-size dependence of duration (P-b).
+- **Artifact metadata representation differed:** the in-process SDK message had
+  `post_tokens`, while the same event in the CLI session jsonl (a separate
+  on-disk artifact) had no `postTokens`, only `preTokens` / `durationMs`. Field
+  names also differed as snake_case / camelCase. Record only the observation —
+  jsonl is a persistent representation separately written by the CLI for resume,
+  and its generation path is separate from the in-process SDK message delivered
+  to the consumer; that is the likely explanation but is unconfirmed. **The
+  wrapper must read the in-process message, not jsonl** (the same applies when
+  handling reset events in Phase C).
+- **whoami lag was quantified:** whoami's pre-compact value was 269,858, while
+  boundary `pre_tokens` was 293,221, a gap of 23,363. A2's “cached last
+  successful measurement; whoami itself does not refresh” was supported by live
+  measurement. B1's threshold decision also reads the same cached context
+  measurement as whoami, so it can be underestimated by the same amount. The 70%
+  threshold provides enough margin and caused no practical harm.
 
-## Phase C — 自発 new/clear (詳細化 2026-07-28、クロエ裁定)
+## Phase C — agent-initiated new/clear (detailed 2026-07-28, クロエ ruling)
 
-設計方針: B2 (`request_compact`) と同型の tool 経路 + 新 wrapper→server
-event。reset の実行系 (kill + relaunch) は ADR-0036 F2 の既存機構に
-完全に乗り、runner / 実行 flow は変更しない。
+Design direction: a tool path of the same type as B2 (`request_compact`) + a new
+wrapper→server event. Reset execution (kill + relaunch) uses the existing
+ADR-0036 F2 mechanism completely; do not change the runner / execution flow.
 
-| Track | 内容 | 担当 |
+| Track | Content | Owner |
 |---|---|---|
-| C1 | 改訂 ADR 起草 (ADR-0036 F1/F6 を改訂する新 ADR) | もも (完了: ADR-0043, 5b24a6f) |
-| C2 | wrapper: `request_session_reset` tool + turn 境界での server への要求送信 | あお (完了: 040145e + 678a1c6 + CR 修正群) |
-| C3 | server: `session_reset_request` 受理経路 + origin 追加 + threat-model / protocol.md 更新 | もも (完了: 416c2da + 9f6b7ca) |
-| CR | C2+C3 の diff レビュー | ふじ (完了: must-fix 4 群 + CR-MF2-R 検出→全解消、2026-07-28 push 可判定) |
+| C1 | Draft revised ADR (new ADR revising ADR-0036 F1/F6) | もも (completed: ADR-0043, 5b24a6f) |
+| C2 | wrapper: `request_session_reset` tool + send the request to the server at the turn boundary | あお (completed: 040145e + 678a1c6 + CR fix group) |
+| C3 | server: accept `session_reset_request` + add origin + update threat-model / protocol.md | もも (completed: 416c2da + 9f6b7ca) |
+| CR | C2+C3 diff review | ふじ (completed: 4 groups of must-fixes + CR-MF2-R detected → all resolved, approved for push 2026-07-28) |
 
-### 設計決定 (C1 の ADR に落とす内容)
+### Design decisions (content to record in C1's ADR)
 
-- **F1 改訂**: session_reset の起点に「agent 自身 (self-initiated)」を
-  追加する。発動は MCP tool 経由であり、「wrapper が user text を再
-  parse しない」原則は維持 (text parse は導入しない)。reserved command
-  防御 (`/new` `/clear` の instruction reject) も維持。
-- **他 agent 起点の経路は設けない** (P5)。operator が都度 director を
-  指名し、指示された agent が自分の tool で要求 → operator 承認、で
-  成立するため専用機構は不要。
-- **F6 追補**: 自発 reset は turn 境界発火 (deferred)。tool call 時は
-  「予約受理」を返し、当該 turn の完了後に wrapper が server へ要求を
-  送る。operator 発 reset の busy 拒否・自動 interrupt 却下・queue
-  却下は全て維持。
-- **permission**: `request_session_reset` は P2 の「重」— permission_broker
-  都度承認 (canUseTool 経路、B2 と同型)。承認は tool call 時、実行は
-  turn 境界 — この時間差は P4 (deferred) の織り込み済み挙動とする。
-- **handoff**: P6 のとおり機構化しない。tool description に「実行前に
-  WORKLOG 等へ引き継ぎを外部化してから呼ぶ」ことを明記する。
+- **F1 revision:** add “the agent itself (self-initiated)” as a session_reset
+  origin. Trigger it through an MCP tool and retain the rule that “the wrapper
+  does not reparse user text” (do not add text parsing). Retain reserved-command
+  protection (reject `/new` `/clear` instructions).
+- Do not provide an agent-initiated path for another agent (P5). The operator
+  names a director each time, and the instructed agent requests through its own
+  tool → operator approval, so a dedicated mechanism is unnecessary.
+- **F6 supplement:** agent-initiated reset fires at the turn boundary (deferred).
+  At tool-call time return “reservation accepted”; after that turn completes,
+  the wrapper sends the request to the server. Retain all operator-origin reset
+  behavior: busy rejection, automatic-interrupt rejection, and queue rejection.
+- **Permission:** `request_session_reset` is “heavy” under P2 —
+  permission_broker approval each time (canUseTool path, same as B2). Approval is
+  at tool-call time and execution is at the turn boundary; this time gap is the
+  intended P4 (deferred) behavior.
+- **Handoff:** do not mechanize it as P6 requires. State in the tool description
+  that the agent should externalize the handoff to WORKLOG or similar before
+  execution and then call the tool.
 
 ### C2 — wrapper (あお)
 
-- `request_session_reset` tool: 入力 `mode: "new" | "clear"` + 任意
-  `reason`。B2 と同じ構造 (claude-code 限定配置 / canUseTool 承認 /
-  reason は server への要求 payload にのみ載せ、どこにも連結しない)。
-- 承認後は「予約」を保持し、**当該 turn の result 処理後** (wrapper が
-  自分の turn 境界を確定できた時点) に新 event
-  `session_reset_request {mode, reason?}` を WrapperChannel へ送る。
-- server から reject (agent_busy / cooldown 等) が返った場合は 1 回だけ
-  短い delay 後に再送、それでも駄目なら次 turn で agent に失敗を通知
-  (log にも出す)。
-- 観測は in-process SDK message / server reply のみ (session jsonl 禁止
-  — 実機受け入れで確定した原則)。
-- codex には露出しない。
+- `request_session_reset` tool: input `mode: "new" | "clear"` + optional `reason`.
+  Same structure as B2 (Claude-only placement / canUseTool approval / put reason
+  only in the server request payload and concatenate it nowhere).
+- After approval, retain a “reservation” and, **after processing the result of
+  that turn** (when the wrapper can establish its own turn boundary), send the
+  new `session_reset_request {mode, reason?}` event to WrapperChannel.
+- When the server rejects it (agent_busy / cooldown, etc.), resend once after a
+  short delay; if it still fails, notify the agent of failure on the next turn
+  (also log it).
+- Observe only in-process SDK messages / server replies (session jsonl
+  prohibited — established by live acceptance).
+- Do not expose it to codex.
 
-実装時の確定判断 (2026-07-28):
+Confirmed implementation decisions (2026-07-28):
 
-- 予約の保持と turn 境界での送信は `SessionResetCoordinator` に切り出し、
-  cli.ts の `onTurnEnd` から呼ぶ。cli.ts は import 時に `main()` が走り
-  テストできないため、判断ロジックを外に置く (S1 と同じ理由)。
-- `buildKaoiroMcpServer` / `kaoiroToolDescriptors` の第 2 引数を
-  「Claude 限定 tool の配列 (`{descriptor, inputShape}`)」へ変更した。
-  B2 の形 (optional な単一 descriptor) は 2 本目で破綻し、Zod shape を
-  この file に書き足し続けることになるため。shape は各 tool の file が
-  持つ。
-- 再送は 1 回、delay 2.5 秒 (`SESSION_RESET_RETRY_DELAY_MS`)。server の
-  dispatch cooldown が 2 秒で、turn 境界直後に最も起きやすい `agent_busy`
-  はこれで解ける。**再送するのは `agent_busy` だけ** (下記 CR-MF2)。
-- server の error reason は closed vocabulary (ADR-0036 F7) だが、
-  wrapper 側は未知の値を echo せず `unknown_error` に潰す。reason は
-  operator log と agent への注入 turn に載るため。
+- Extract reservation retention and turn-boundary sending into
+  `SessionResetCoordinator`, called from cli.ts's `onTurnEnd`. Importing cli.ts
+  runs `main()` and prevents testing, so keep the decision logic outside (same
+  reason as S1).
+- Change the second argument of `buildKaoiroMcpServer` /
+  `kaoiroToolDescriptors` to an array of “Claude-only tools
+  (`{descriptor, inputShape}`)”. B2's optional-single-descriptor form breaks as
+  soon as there is a second tool and would keep appending Zod shapes to this
+  file. Each tool owns its shape.
+- Retry once after 2.5 seconds (`SESSION_RESET_RETRY_DELAY_MS`). The server's
+  dispatch cooldown is 2 seconds, so this resolves the most likely
+  `agent_busy` immediately after a turn boundary. **Retry only `agent_busy`** (see
+  CR-MF2 below).
+- The server's error reason is a closed vocabulary (ADR-0036 F7), but the wrapper
+  must not echo unknown values; collapse them to `unknown_error`. The reason is
+  included in the operator log and the injected turn for the agent.
 
-### CR 指摘と修正 (ふじ、2026-07-28。判定: push 不可 → 全採用)
+### CR findings and fixes (ふじ, 2026-07-28; decision: do not push → adopt all)
 
-server 側 (もも 担当) を除く 3.5 群。
+Three and a half groups, excluding the server side handled by もも.
 
-- **MF1-R2 — settle counter が「値の変化」を数えていた**。equality dedup が
-  先に return するため、圧縮後も使用量が同じ高い値に貼り付いた列では
-  counter が一度も進まず、MF1-R で入れた liveness bound が成立しなかった。
-  対処: dedup は `#emitState` にのみ効かせ、freshness の計数と閾値判定は
-  成功 reading ごとに走らせる。counter は**計測回数**であって値の変化回数
-  ではない。
-- **CR-MF1 — `unknown_error` への潰し込みが未実装だった**。申告と plan と
-  コメントには書いたのに、`sessionResetErrorReason()` は任意 string を
-  素通ししていた。対処: この endpoint の合意語彙 4 値
-  (`agent_busy` / `session_reset_pending` / `unsupported_session_reset` /
-  `runner_unavailable`。もも の 9f6b7ca で server 側も同じ 4 値へ正規化
-  済み) を明示 whitelist し、それ以外は `unknown_error`。`timeout` は
-  payload 値ではなく transport 自身が起こすので whitelist には入れない。
-  transport test で pin。
-- **CR-MF2 — timeout / pending を「未実行」と断定していた**。Phoenix の
-  push timeout は不受理を意味しない。反例: 1 回目受理 + reply 落ち →
-  再送が `session_reset_pending` → 「実行されなかった」と通知、しかし
-  reset は進行中。対処: 拒否理由を 3 分類する。
-  `retryable` (`agent_busy` のみ — 再送する) /
-  `refused` (capability・形式・authz・runner 不在 — 再送しないが断定して
-  よい) / `unconfirmed` (timeout・`session_reset_pending`・`spawn_failed`・
-  `unknown_error` 等 — 再送せず、断定もしない)。既定は `unconfirmed`。
-  正直な文言のコストは agent の慎重さ、断定のコストは誤った前提での行動。
-- **CR-MF2-R — 未確定通知に時限断定が残っていた**。「次の turn の終わり
-  までに何も起きなければ実行されていない」と書いていたが、server の reset
-  transaction は `SessionResets.@timeout_ms` = 60 秒で wrapper の turn 境界
-  とは無関係。短い turn の直後に受理済み reset が process を置換する列は
-  普通に成立する。対処: 時限文を削除し、確定は process 置換 / operator
-  lifecycle event のみとする。通知は「再要求しない」「どちらの結果でも
-  安全なよう durable state を保つ」までに留め、断定文言 (`was not carried
-  out` / `it did not run` / `next turn` 等) が含まれないことを negative
-  pin で固定した。
-- **suggestion 3 件 (全採用)**: `requestSessionReset` の JSDoc を 4 値契約へ
-  同期 / transport test の既知 reason を 4 値の table pin へ /
-  `DETERMINED_REFUSALS` から到達不能な 3 値を落とし 4 値契約へ整理。
-- **CR-MF3 — `SessionResetStarted` の TS 型が wire と未同期**。
-  `origin: "operator" | "agent_self"` と `reason?` を protocol と dashboard
-  parser に追加。表示はまだ無いが parser が保持する。**不正 origin は
-  event ごと捨てず `operator` へ degrade** — 捨てると composer が disable
-  のまま対応する Completed を待ち続ける。旧 server の payload には origin
-  が無く、そこでは全 reset が operator 起点だった。
+- **MF1-R2 — the settle counter counted “value changes”.** Equality dedup returned
+  first, so with a sequence stuck at the same high usage after compression, the
+  counter never advanced and the liveness bound added by MF1-R did not hold.
+  Response: dedup only in `#emitState`; count freshness and evaluate the
+  threshold for every successful reading. The counter is a **measurement count**,
+  not a value-change count.
+- **CR-MF1 — collapse to `unknown_error` was not implemented.** Although it was
+  stated in the report, plan, and comment, `sessionResetErrorReason()` passed
+  through arbitrary strings. Response: explicitly whitelist this endpoint's four
+  agreed values (`agent_busy` / `session_reset_pending` /
+  `unsupported_session_reset` / `runner_unavailable`; the server side was also
+  normalized to those 4 by もも's 9f6b7ca), and map everything else to
+  `unknown_error`. `timeout` is produced by the transport, not a payload value,
+  so it is not in the whitelist. Pin it in a transport test.
+- **CR-MF2 — timeout / pending was asserted to mean “not executed”.** A Phoenix
+  push timeout does not mean rejection. Counterexample: first request accepted +
+  reply lost → retry returns `session_reset_pending` → report “it did not run”,
+  while reset is in progress. Classify rejection reasons into three groups:
+  `retryable` (`agent_busy` only — retry) / `refused` (capability, format,
+  authorization, runner unavailable — do not retry but may assert) /
+  `unconfirmed` (timeout, `session_reset_pending`, `spawn_failed`,
+  `unknown_error`, etc. — do not retry and do not assert). Default to
+  `unconfirmed`. The cost of honest wording is agent caution; the cost of an
+  assertion is action based on a false premise.
+- **CR-MF2-R — a timed assertion remained in the unconfirmed notice.** It said
+  “if nothing happens by the end of the next turn, it was not executed,” but the
+  server reset transaction uses `SessionResets.@timeout_ms` = 60 seconds and is
+  independent of the wrapper's turn boundary. A sequence where an accepted reset
+  replaces the process immediately after a short turn is normal. Response: remove
+  the timed wording; establish completion only from process replacement / an
+  operator lifecycle event. Keep the notice to “do not request again” and “keep
+  durable state safe for either outcome”; pin negatively that it contains no
+  assertion such as `was not carried
+  out` / `it did not run` / `next turn`.
+- **Three suggestions (all adopted):** synchronize `requestSessionReset`'s JSDoc
+  with the 4-value contract / pin the known reasons in a 4-value transport-test
+  table / remove 3 unreachable values from `DETERMINED_REFUSALS` and organize it
+  around the 4-value contract.
+- **CR-MF3 — `SessionResetStarted`'s TS type was out of sync with the wire.** Add
+  `origin: "operator" | "agent_self"` and `reason?` to the protocol and
+  dashboard parser. It is not displayed yet, but the parser retains it.
+  **Degrade an invalid origin to `operator` rather than dropping the event** —
+  dropping it leaves the composer disabled while waiting for the corresponding
+  Completed event. Old servers have no origin in the payload, and there every
+  reset is operator-originated.
 
 ### C3 — server (もも)
 
-- `WrapperChannel.handle_in("session_reset_request")` を新設し、
-  capability 検証 + `SessionResets.check_and_acquire` の既存 gate
-  (pending lock / state / cooldown) を通して既存の runner push 経路へ
-  合流させる。**実行系は一切変更しない**。
-- `SessionResets` に origin (`:operator` / `:agent_self`) を追加し、
-  `session_reset_started` broadcast に載せる (dashboard 表示は最小限、
-  なくても可 — 判断は実装時に軽い方へ)。
-- `docs/specs/threat-model.md` の 6 段防御と `docs/specs/protocol.md` の
-  「operator のみ」記述を改訂 ADR に整合させる。
-- viewer への情報境界 (ADR-0021) は現行のまま。
+- Add `WrapperChannel.handle_in("session_reset_request")`, pass capability
+  validation and the existing `SessionResets.check_and_acquire` gate (pending
+  lock / state / cooldown), and merge into the existing runner-push path.
+  **Do not change the execution path.**
+- Add origin (`:operator` / `:agent_self`) to `SessionResets` and include it in
+  the `session_reset_started` broadcast (dashboard display can be minimal or
+  absent — choose the lighter implementation).
+- Align the six-layer defense in `docs/specs/threat-model.md` and the
+  “operator-only” wording in `docs/specs/protocol.md` with the revised ADR.
+- Keep the information boundary for viewers (ADR-0021) unchanged.
 
-### C 共通の完了条件
+### Common Phase C completion conditions
 
-- wrapper: test/typecheck green。server: `mix test` green +
-  `mix format` 済み。
-- reserved command 防御・operator 経路の既存テストが全て green のまま
-  (回帰なし) であること。
-- push は CR 通過後。実機受け入れ (マスター) を最終 gate とする。
-- C: wrapper→server 新 control event + 新 MCP tool + deferred reset
-  (turn 境界発火)。ADR-0036 F1 (operator-only) / F6 (busy 拒否) の改訂
-  を伴う。permission は全承認から開始 (P2)。
+- Wrapper: tests/typecheck green. Server: `mix test` green + `mix format` done.
+- Keep all existing reserved-command protection and operator-path tests green (no
+  regression).
+- Push after CR passes. マスター live acceptance is the final gate.
+- C consists of a new wrapper→server control event + new MCP tool + deferred
+  reset (turn-boundary trigger), with revisions to ADR-0036 F1 (operator-only) /
+  F6 (busy rejection). Begin with all-request approval (P2).
 
-## Phase C 実機受け入れ結果 (あお + マスター、2026-07-28)
+## Phase C live acceptance results (あお + マスター, 2026-07-28)
 
-dogfood 再起動後、`request_session_reset (mode:"new", reason:"phase-28
-実機受け入れ")` の全区間が成立した。
+After a dogfood restart, every stage of
+`request_session_reset (mode:"new", reason:"phase-28
+実機受け入れ")` succeeded.
 
-- tool call → 予約受理 (CR-MF2-R の非断定文言を実機で確認) → turn 終了 →
-  `session_reset_request` → server 受理 → kill + fresh relaunch。
-- reset 前 context 311,986 tokens (31%) が relaunch 後に完全消失
-  (stale 値の残留なし)。agent_id / persona / model / effort は snapshot
-  復元 (ADR-0036 F2)。マスターが pane の boundary marker と composer
-  復帰を目視確認。
-- D5 の引き継ぎ外部化 (WORKLOG) も運用どおり実施された。
+- Tool call → reservation accepted (the non-assertive wording from CR-MF2-R was
+  confirmed live) → turn ends → `session_reset_request` → server accepts → kill
+  + fresh relaunch.
+- The pre-reset context of 311,986 tokens (31%) disappeared completely after
+  relaunch (no stale value remained). agent_id / persona / model / effort were
+  restored from the snapshot (ADR-0036 F2). マスター visually confirmed the
+  pane boundary marker and composer recovery.
+- D5's externalized handoff (WORKLOG) was also performed as operated.
 
-### 承認セマンティクスの確定 (マスター決裁、2026-07-28)
+### Approval semantics confirmed (マスター ruling, 2026-07-28)
 
-受け入れ中に「承認ダイアログが operator に出ない」ことが判明した。
-原因は dogfood の Claude persona が `permission_mode=auto` で起動して
-おり、SDK が mode の意味論として tool を自動承認するため
-canUseTool → permission_broker 経路が発火しないこと。wrapper の gate
-実装自体は正しい (default 系 mode ではダイアログが出る)。
+During acceptance it was discovered that the approval dialog did not appear for
+the operator. The cause was that the dogfood Claude persona started with
+`permission_mode=auto`; the SDK automatically approves tools under that mode's
+semantics, so the canUseTool → permission_broker path did not fire. The wrapper's
+gate implementation itself is correct (the dialog appears in default modes).
 
-マスター決裁: **承認は agent の permission mode に従属する**ことを正式
-仕様とする (auto 系 = mode が承認を包含 / default 系 = 都度ダイアログ)。
-`request_compact` / `request_session_reset` / `send_to_agent` に共通適用。
-正本は ADR-0043 の追補、spec は protocol-inter-agent.md の注記を参照。
-P2 の「全て permission_broker 都度承認」はこの意味で読み替える。
+マスター ruling: **approval depends on the agent's permission mode** is now formal
+specification (auto modes include approval in the mode / default modes show a
+dialog each time). Apply this to `request_compact` / `request_session_reset` /
+`send_to_agent`. The source of truth is the ADR-0043 supplement; see the note in
+  protocol-inter-agent.md for the spec. Interpret P2's “permission_broker
+approves every request” in this sense.
