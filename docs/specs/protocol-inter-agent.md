@@ -1296,6 +1296,9 @@ Rules:
 - Reservations live only in wrapper memory. If the wrapper dies during
   compaction, the reservation may disappear (timeline remains distinguishable
   as Stage-B `resume_reserved` without `resume_fired`).
+- **MUST**: `resume_prompt` is capped at 8,192 UTF-8 bytes, checked before
+  `/compact` is queued; exceeding it fails the whole `request_compact` call
+  rather than truncating, which would break the verbatim guarantee above.
 - Engine is **Claude only**, as for `request_compact`
   ([codex-lifecycle-observability](../open-questions/codex-lifecycle-observability.md)).
 

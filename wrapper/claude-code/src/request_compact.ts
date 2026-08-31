@@ -26,6 +26,16 @@ import { z } from "zod";
 /** Full SDK-side tool name once mcpServers register the kaoiro server. */
 export const REQUEST_COMPACT_TOOL_FQN = "mcp__kaoiro__request_compact";
 
+/** Byte cap on `resume_prompt`, checked before `/compact` is even queued
+ *  (ADR-0055 phase-33 Stage A round1 fix, turn7 #4 — director decision).
+ *  Half of PermissionBroker's approval-payload ceiling
+ *  (`MAX_INPUT_BYTES` = 16,384 bytes, agent-common/src/permission.ts),
+ *  leaving room for `reason` and JSON overhead so a `resume_prompt` at the
+ *  cap still fits whole inside the payload the operator actually reads —
+ *  above the broker's own ceiling it would be silently dropped from the
+ *  approval dialog and approved unread. */
+export const RESUME_PROMPT_MAX_BYTES = 8_192;
+
 /** The exact text queued on the SDK input stream. A fixed literal: the
  *  model's `reason` is shown to the operator in the approval dialog and
  *  echoed in the tool result, but never concatenated into the injected turn
@@ -66,14 +76,17 @@ export interface RequestCompactOptions {
    *  Its own serialization is what keeps the injected `/compact` from
    *  landing mid-turn (ADR-0036 F6: no automatic interrupt). */
   send: (text: string) => Promise<void>;
-  /** Records a `resume_prompt` reservation, normally
-   *  `AgentHost#reserveResume` (ADR-0055, phase-33 Stage A). Called only
-   *  after `send` above has already succeeded — see the handler below.
-   *  Omitted = a given resume_prompt is accepted (still echoed to the
-   *  operator) but never delivered; unit tests and embedders that do not
-   *  care about resume delivery can leave it out. Production always wires
-   *  it. */
-  reserveResume?: (prompt: string) => void;
+  /** Records a `request_compact` reservation, normally
+   *  `AgentHost#reserveResume` (ADR-0055, phase-33 Stage A; FIFO round1
+   *  fix, turn7 #2/#3). Called exactly once for every `/compact` that
+   *  `send` above actually queued — `prompt` when `resume_prompt` was
+   *  given, `null` when it was omitted/blank — so the host's FIFO queue
+   *  stays 1:1 with real `/compact` calls regardless of whether each one
+   *  carried a resume note. Required (not optional): a caller that leaves
+   *  this out would have request_compact report a reservation it never
+   *  actually made, which is exactly the "success" the round1 review
+   *  found silently backed by nothing. */
+  reserveResume: (prompt: string | null) => void;
 }
 
 /** The `request_compact` descriptor. Registered by the Claude adapter's
@@ -88,27 +101,51 @@ export function requestCompactDescriptor(
     handler: async (input) => {
       const reason =
         typeof input.reason === "string" ? input.reason.trim() : "";
-      const resumePrompt =
-        typeof input.resume_prompt === "string"
-          ? input.resume_prompt.trim()
-          : "";
+      // Verbatim contract (round1 fix, turn7 #1): a resume_prompt that is
+      // actually reserved/injected must be byte-for-byte what the model
+      // wrote — leading newlines, trailing whitespace and all. `.trim()`
+      // is used ONLY to decide "is this blank", never on the value that
+      // gets carried forward.
+      const resumePromptRaw =
+        typeof input.resume_prompt === "string" ? input.resume_prompt : "";
+      const resumePromptIsBlank = resumePromptRaw.trim() === "";
+      const resumePrompt = resumePromptIsBlank ? null : resumePromptRaw;
+      if (resumePrompt !== null) {
+        // Byte cap (round1 fix, turn7 #4): validated BEFORE `/compact` is
+        // queued, so an oversized resume_prompt fails the whole call
+        // rather than reserving a note the operator's approval dialog
+        // cannot show in full. Truncating instead of failing would break
+        // the verbatim contract above, so overflow is never truncated.
+        const byteLength = Buffer.byteLength(resumePrompt, "utf8");
+        if (byteLength > RESUME_PROMPT_MAX_BYTES) {
+          return errorResult(
+            `request_compact failed: resume_prompt is ${byteLength} UTF-8 ` +
+              `bytes, over the ${RESUME_PROMPT_MAX_BYTES} byte cap. ` +
+              "Shorten it and retry — it is not truncated automatically, " +
+              "which would corrupt the verbatim delivery contract.",
+          );
+        }
+      }
       try {
         await options.send(COMPACT_COMMAND);
       } catch (err) {
         // The queue is closed or full. Fail loudly rather than reporting a
         // reservation the wrapper did not make — the model would otherwise
-        // wait for a compaction that is never coming. A resume_prompt is
-        // NOT reserved on this path either: a note for a compaction that
-        // was never actually queued would sit and fire on some later,
-        // unrelated boundary instead.
+        // wait for a compaction that is never coming. Nothing is reserved
+        // on this path either: a note for a compaction that was never
+        // actually queued would sit and fire on some later, unrelated
+        // boundary instead.
         return errorResult(`request_compact failed: ${String(err)}`);
       }
-      if (resumePrompt !== "") {
-        options.reserveResume?.(resumePrompt);
-      }
+      // FIFO 1:1 (round1 fix, turn7 #2/#3): every /compact that `send`
+      // above actually queued gets exactly one reservation slot, prompt or
+      // null, so the host can consume its own queue in the same order
+      // compactions actually happen instead of trusting a single shared
+      // slot to still mean the right thing later.
+      options.reserveResume(resumePrompt);
       const because = reason === "" ? "" : ` (reason: ${reason})`;
       const resumeNote =
-        resumePrompt === ""
+        resumePrompt === null
           ? ""
           : " A resume note is reserved and will be redelivered to you " +
             "once compaction finishes.";

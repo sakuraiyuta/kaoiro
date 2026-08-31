@@ -1403,6 +1403,90 @@ describe("AgentHost — query injection", () => {
       expect(noteAt).toBeGreaterThan(-1);
       expect(injected.indexOf("prior instruction")).toBeLessThan(noteAt);
     });
+
+    // ふじ round1 must-fix #2b (real defect, reproduced): a singleton slot
+    // let a second reservation silently overwrite the first, misdelivering
+    // it to the wrong compaction. FIFO must keep two in-flight /compact
+    // reservations distinct and deliver each to its own boundary in order.
+    it("多重予約は上書きされず、FIFO でそれぞれの boundary に届く (round1 fix #2b)", async () => {
+      const { queryFn, injected } = resumeQueryFn(async function* (sync) {
+        yield boundary(22315);
+        yield result("success", { result: "1" });
+        await sync.injection();
+        yield boundary(9000);
+        yield result("success", { result: "2" });
+        await sync.injection();
+      });
+      const host = new AgentHost(config, {
+        onState: () => {},
+        queryFn,
+        now: () => "T",
+        enqueueInjection: (task) => task(),
+      });
+      host.reserveResume("1本目の /compact の予約 A");
+      host.reserveResume("2本目の /compact の予約 B");
+      await host.run();
+      const notes = injected.filter((t) => t.startsWith("[kaoiro] Compaction"));
+      expect(notes).toHaveLength(2);
+      expect(notes[0]).toContain("1本目の /compact の予約 A");
+      expect(notes[0]).not.toContain("2本目の /compact の予約 B");
+      expect(notes[1]).toContain("2本目の /compact の予約 B");
+      expect(notes[1]).not.toContain("1本目の /compact の予約 A");
+    });
+
+    // ふじ round1 must-fix #2a (real defect, reproduced): a failed
+    // compact_result never reaches compact_boundary, so a singleton slot
+    // stayed set and fired on the NEXT, unrelated successful boundary. The
+    // failed slot must be retired silently, and a reservation queued
+    // behind it must still reach its own (later) boundary.
+    it("compact_result: failed は先頭を無発火で consume し、後続の予約は生き残る (round1 fix #2a)", async () => {
+      const { queryFn, injected } = resumeQueryFn(async function* (sync) {
+        yield msg({
+          type: "system",
+          subtype: "status",
+          status: null,
+          compact_result: "failed",
+        });
+        yield result("success", { result: "1" });
+        yield boundary(9000);
+        yield result("success", { result: "2" });
+        await sync.injection();
+      });
+      const host = new AgentHost(config, {
+        onState: () => {},
+        queryFn,
+        now: () => "T",
+        enqueueInjection: (task) => task(),
+      });
+      host.reserveResume("失敗した /compact の予約 — 発火してはいけない");
+      host.reserveResume("成功した2本目の /compact の予約 — これは発火する");
+      await host.run();
+      const notes = injected.filter((t) => t.startsWith("[kaoiro] Compaction"));
+      expect(notes).toHaveLength(1);
+      expect(notes[0]).toContain("成功した2本目の /compact の予約");
+      expect(notes[0]).not.toContain("失敗した /compact の予約");
+    });
+
+    it("conversation_reset は先頭だけでなく queue 全体を破棄する (round1 fix #2)", async () => {
+      const { queryFn, injected } = resumeQueryFn(async function* () {
+        yield msg({ type: "conversation_reset", new_conversation_id: "c-2" });
+        yield result("success", { result: "1" });
+        yield boundary(9000);
+        yield result("success", { result: "2" });
+      });
+      const host = new AgentHost(config, {
+        onState: () => {},
+        queryFn,
+        now: () => "T",
+        enqueueInjection: (task) => task(),
+      });
+      host.reserveResume("reset 前の予約 A — 破棄されるべき");
+      host.reserveResume("reset 前の予約 B — これも破棄されるべき");
+      await host.run();
+      expect(
+        injected.filter((t) => t.startsWith("[kaoiro] Compaction")),
+      ).toEqual([]);
+    });
   });
 
   // 藤 review S1: compact_error は SDK 由来の任意長文字列。log 上限を

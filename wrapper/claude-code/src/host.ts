@@ -691,13 +691,20 @@ export class AgentHost implements EngineAdapter {
    *    this cap such an epoch would be muted for its whole life. */
   #contextEpochGate: { atOrBelow: number | null; readings: number } | null =
     null;
-  /** `request_compact`'s optional `resume_prompt`, held until the next
-   *  `compact_boundary` observation fires it (ADR-0055, phase-33 Stage A).
-   *  Wrapper-local memory only, per spec — a wrapper crash mid-compaction
-   *  loses it, and nothing re-derives it from anywhere else. A second
-   *  reservation before the boundary replaces the first (same "later call
-   *  is the current intent" rule as `SessionResetCoordinator#reserve`). */
-  #resumeReservation: string | null = null;
+  /** FIFO queue of `request_compact` reservations, one entry per
+   *  SUCCESSFUL `/compact` it actually queued (ADR-0055, phase-33 Stage A;
+   *  round1 fix, turn7 #2 — a singleton dropped the 1:1 correspondence
+   *  between a reservation and the specific compaction it was made for).
+   *  `null` means that `/compact` carried no `resume_prompt`. Consumption:
+   *  `compact_boundary` shifts the head and fires it if non-null;
+   *  `compact_result:"failed"` shifts the head with no fire — the
+   *  compaction never happened, but the slot must still be retired or it
+   *  would fire on some LATER, unrelated boundary; `conversation_reset`
+   *  discards the whole queue — every entry was written for a
+   *  conversation that no longer exists. Wrapper-local memory only, per
+   *  spec — a wrapper crash mid-compaction loses it, and nothing
+   *  re-derives it from anywhere else. */
+  readonly #resumeReservations: (string | null)[] = [];
   readonly #rateLimits = new Map<
     string,
     { status?: string; utilization?: number; resets_at?: number }
@@ -1777,15 +1784,18 @@ export class AgentHost implements EngineAdapter {
               // ResultMessage or stream EOF opens the input barrier. This avoids
               // letting a buffered A result settle a newly-yielded B (#246).
               await this.#reconcilePendingTasklistRefreshes("conversation_reset");
-              // ADR-0055 Stage A (code-review-assessment round 1): a
-              // reservation made before this reset was written for a
-              // conversation that no longer exists. Left uncleared, it would
-              // sit and fire on some LATER, unrelated compact_boundary —
-              // injecting a note claiming "you left yourself this" into a
-              // context that never wrote it. Symmetric with
-              // #invalidateContextEpoch just below, which already treats
-              // compact_boundary and conversation_reset alike.
-              this.#resumeReservation = null;
+              // ADR-0055 Stage A (code-review-assessment round 1; FIFO
+              // round1 fix, turn7 #2): every reservation still queued was
+              // written for a conversation that no longer exists. Left
+              // uncleared, the head would sit and fire on some LATER,
+              // unrelated compact_boundary — injecting a note claiming "you
+              // left yourself this" into a context that never wrote it.
+              // The WHOLE queue is discarded, not just the head: a reset
+              // ends every outstanding reservation's conversation alike.
+              // Symmetric with #invalidateContextEpoch just below, which
+              // already treats compact_boundary and conversation_reset
+              // alike.
+              this.#resumeReservations.length = 0;
             }
             this.#invalidateContextEpoch(compact.tokens);
             // ADR-0055 Stage A: fires ONLY on an actual compaction boundary,
@@ -1794,6 +1804,14 @@ export class AgentHost implements EngineAdapter {
             if (compact.kind === "compact_boundary") {
               this.#maybeFireResumeReservation();
             }
+          } else if (compact.kind === "compact_result") {
+            // ADR-0055 round1 fix (turn7 #2): a failed compaction never
+            // reaches compact_boundary, so its FIFO slot has to be retired
+            // here instead — otherwise it would fire on some later,
+            // unrelated SUCCESSFUL boundary. Does not touch the context
+            // epoch: nothing was discarded (藤 review MF1, same reasoning
+            // as `compacting` just above).
+            this.#consumeFailedResumeReservation();
           }
         }
         const result = sdkMessageToResult(message);
@@ -2562,27 +2580,33 @@ export class AgentHost implements EngineAdapter {
     void this.#refreshContextUsage();
   }
 
-  /** Records a `request_compact` `resume_prompt` reservation (ADR-0055,
-   *  phase-33 Stage A). Public: wired from cli.ts's `requestCompactDescriptor`
-   *  option, called only after the tool's own `send(COMPACT_COMMAND)` has
-   *  already succeeded — a reservation for a compaction that was never
-   *  actually queued would fire on some LATER, unrelated boundary instead. */
-  reserveResume(prompt: string): void {
-    this.#resumeReservation = prompt;
+  /** Records one `request_compact` reservation as the new FIFO tail
+   *  (ADR-0055, phase-33 Stage A; round1 fix, turn7 #2/#3). Public: wired
+   *  from cli.ts's `requestCompactDescriptor` option, called exactly once
+   *  per `/compact` the tool actually queued via its own
+   *  `send(COMPACT_COMMAND)` — never for a compaction that was never
+   *  queued, which would let this entry fire on some LATER, unrelated
+   *  boundary instead. `null` records "this /compact carried no
+   *  resume_prompt" so the queue stays 1:1 with real compactions even when
+   *  most of them are silent. */
+  reserveResume(prompt: string | null): void {
+    this.#resumeReservations.push(prompt);
   }
 
-  /** Fires a pending `resume_prompt` reservation, if any, on THIS
-   *  `compact_boundary` observation (ADR-0055, phase-33 Stage A — the
+  /** Fires the head `resume_prompt` reservation, if any and if non-null, on
+   *  THIS `compact_boundary` observation (ADR-0055, phase-33 Stage A — the
    *  original problem this closes: an agent does not return to work on its
-   *  own after compaction). Consumed immediately so a later boundary with no
-   *  fresh reservation stays silent, matching the B1 notice's one-shot
-   *  budget just below. Deliberately NOT called for `conversation_reset`:
-   *  that is a full session wipe, not a compaction, and a resume note
-   *  written for "after compacting" would misdescribe what just happened. */
+   *  own after compaction). The head is shifted off unconditionally so a
+   *  later boundary with an empty queue, or a null head, stays silent —
+   *  matching the B1 notice's one-shot budget just below. Deliberately NOT
+   *  called for `conversation_reset`: that is a full session wipe, not a
+   *  compaction, and a resume note written for "after compacting" would
+   *  misdescribe what just happened (its reservations are discarded
+   *  wholesale where `conversation_reset` is handled instead). */
   #maybeFireResumeReservation(): void {
-    const prompt = this.#resumeReservation;
+    if (this.#resumeReservations.length === 0) return;
+    const prompt = this.#resumeReservations.shift() ?? null;
     if (prompt === null) return;
-    this.#resumeReservation = null;
     const text = resumeInjectionText(prompt);
     void this.#enqueueInjection(async () => {
       if (this.#closed) return;
@@ -2594,6 +2618,18 @@ export class AgentHost implements EngineAdapter {
       // the boundary it was meant to follow.
       process.stderr.write(`resume_prompt injection not queued: ${String(err)}\n`);
     });
+  }
+
+  /** Retires the head FIFO reservation with no fire, on a `compact_result`
+   *  `"failed"` observation (ADR-0055 round1 fix, turn7 #2). The `/compact`
+   *  that made this reservation WAS queued 1:1 by `reserveResume`, but a
+   *  failure never reaches `compact_boundary` — leaving the slot in place
+   *  would let it fire on some later, unrelated SUCCESSFUL boundary
+   *  instead, misattributing that note to a compaction it was never
+   *  written for. No-op when the queue is empty (a failure observed with
+   *  no outstanding reservation, e.g. an operator-typed `/compact`). */
+  #consumeFailedResumeReservation(): void {
+    this.#resumeReservations.shift();
   }
 
   /** Queues the one threshold notice this context epoch is allowed
