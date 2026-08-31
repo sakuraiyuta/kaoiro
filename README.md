@@ -37,6 +37,47 @@ Agents are launched and tuned from the same screen:
             options">
 </p>
 
+## Features
+
+- **State as a face** — each agent's state (`thinking`, `waiting_permission`,
+  `error`, …) is derived from engine SDK events and drawn as a character
+  expression, not inferred from the text it writes
+  ([protocol.md](docs/specs/protocol.md)).
+- **Launch and supervise from the browser** — choose host, persona, engine,
+  working directory and permission mode, then stop, restart, restore or resume
+  an earlier session without touching a terminal.
+- **Permission approval in the UI** — a tool call waiting for approval is
+  routed to the client and answered there, so an agent never blocks on an
+  unattended terminal ([threat-model.md](docs/specs/threat-model.md)).
+- **Questions become dialogs** — when an agent asks a multiple-choice question,
+  it arrives as a dialog on the same routing path as permissions.
+- **Agents message each other** — a delegation, a review request or an approval
+  between agents is a first-class message, grouped into conversations the
+  operator can list and close
+  ([protocol-inter-agent.md](docs/specs/protocol-inter-agent.md)).
+- **One merged timeline** — every agent's replies and their messages to each
+  other in a single time-ordered pane, with unread marks and click-through to
+  the full transcript.
+- **Tuning mid-session** — model, reasoning effort and permission mode are
+  changeable while an agent runs; prompts, interrupts and file attachments
+  travel the same channel.
+- **Multi-host** — one runner per machine registers that host, declares which
+  engines it can spawn, and supervises the wrapper processes living there
+  ([deployment.md](docs/specs/deployment.md)).
+- **Two engines, one protocol** — Claude Code and Codex sit behind the same
+  adapter boundary, and the UI branches on declared capabilities rather than on
+  engine names ([plugin-model.md](docs/specs/plugin-model.md)).
+- **Personas as zip packs** — characters are versioned, hash-checked packs read
+  from an ingest directory, with a bundled set as the default
+  ([persona-pack-schema.md](docs/specs/persona-pack-schema.md)).
+- **Operator and viewer roles** — sign in with a token or through OAuth; reply
+  logs, controls and persona internals are operator-only and fail closed
+  ([auth-and-authz.md](docs/specs/auth-and-authz.md)).
+- **Notifications, and a layout that folds** — a desktop notification and a
+  per-state sound when an agent hands control back, and a dashboard that
+  collapses down to a phone
+  ([responsive-layout.md](docs/specs/responsive-layout.md)).
+
 ## Install & Quick start
 
 Requirements: Node.js 22 or later, [pnpm](https://pnpm.io/) (`10.20.0` is
