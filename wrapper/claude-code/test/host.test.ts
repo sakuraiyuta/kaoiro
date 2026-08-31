@@ -4415,36 +4415,59 @@ describe("AgentHost — send_to_agent auto-allow (issue #175, ADR-0044 F2 追補
   // ADR-0055 phase-33 Stage A: an oversized request_compact input must
   // never reach the operator's approval dialog at all — PermissionBroker
   // would drop the payload past its own serialized ceiling and the
-  // operator could approve a call whose body they cannot read.
-  it("request_compact の入力が cap 超えなら decidePermission を経由せず deny する", async () => {
-    let decideCalled = false;
-    const oversized = "a".repeat(RESUME_PROMPT_MAX_BYTES + 1);
-    const queryFn = makeQueryFn((args: QueryArgs) => {
-      async function* gen(): AsyncGenerator<SDKMessage, void> {
-        const decision = (await args.options.canUseTool!(
-          REQUEST_COMPACT_TOOL_FQN,
-          { resume_prompt: oversized },
-          {} as never,
-        ))!;
-        expect(decision.behavior).toBe("deny");
-        yield result("success", { result: "ok" });
-      }
-      return asQuery(gen());
-    });
+  // operator could approve a call whose body they cannot read. Two
+  // independent fixtures, because the guard runs validateRequestCompactInput
+  // (raw cap, THEN serialized ceiling) as a whole: a raw-only check alone
+  // would already deny fixture 1 while missing fixture 2 entirely, which a
+  // single raw-only fixture cannot distinguish.
+  const REQUEST_COMPACT_DENY_FIXTURES: {
+    label: string;
+    input: Record<string, unknown>;
+  }[] = [
+    {
+      label: "raw resume_prompt 自体が cap を超える (whitespace-only)",
+      input: { resume_prompt: " ".repeat(RESUME_PROMPT_MAX_BYTES + 1) },
+    },
+    {
+      label:
+        "raw は cap 内だが JSON escape 後の serialized ceiling を超える",
+      input: { resume_prompt: "\\".repeat(RESUME_PROMPT_MAX_BYTES) },
+    },
+  ];
+  for (const fixture of REQUEST_COMPACT_DENY_FIXTURES) {
+    it(`request_compact の入力が deny 条件(${fixture.label})なら decidePermission を経由せず deny する`, async () => {
+      let decideCalled = false;
+      const states: string[] = [];
+      const queryFn = makeQueryFn((args: QueryArgs) => {
+        async function* gen(): AsyncGenerator<SDKMessage, void> {
+          const decision = (await args.options.canUseTool!(
+            REQUEST_COMPACT_TOOL_FQN,
+            fixture.input,
+            {} as never,
+          ))!;
+          expect(decision.behavior).toBe("deny");
+          yield result("success", { result: "ok" });
+        }
+        return asQuery(gen());
+      });
 
-    const host = new AgentHost(config, {
-      onState: () => {},
-      decidePermission: () => {
-        decideCalled = true;
-        return { allow: true };
-      },
-      queryFn,
-      now: () => "T",
-    });
-    await host.run();
+      const host = new AgentHost(config, {
+        onState: (e) => states.push(e.state),
+        decidePermission: () => {
+          decideCalled = true;
+          return { allow: true };
+        },
+        queryFn,
+        now: () => "T",
+      });
+      await host.run();
 
-    expect(decideCalled).toBe(false);
-  });
+      expect(decideCalled).toBe(false);
+      // The gate denies before the broker dialog would even open — no
+      // waiting_permission transition, not just no decidePermission call.
+      expect(states).not.toContain("waiting_permission");
+    });
+  }
 
   it("cap 内の request_compact 入力は通常どおり decidePermission を経由する", async () => {
     let decideCalled = false;
