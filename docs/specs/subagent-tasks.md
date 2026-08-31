@@ -57,7 +57,7 @@ schema is settled in [ADR-0047](../adr/0047-task-envelope-schema.md):
 - One type, `task`, plus `payload.kind` (`started` / `updated` / `completed`).
 - Required: parent `agent_id` / `task_id` / `task_type` / `status`.
 - Optional progress metadata: `subagent_type` / `workflow_name` / `description` /
-  `usage` / `last_tool_name` / `summary` / `skip_transcript`。
+  `usage` / `last_tool_name` / `summary` / `skip_transcript`.
 - `task_type` is an extensible enum. Measured SDK values are `local_agent` /
   `local_workflow` / `local_bash` (they differ from ADR-0047 F4's illustrative
   `subagent`/`workflow`, but raw SDK values pass through without a renaming layer;
@@ -152,7 +152,7 @@ policy can be reconsidered.
 - **MUST**: The dedicated envelope type is a reserved extension; leave the
   protocol `version` unchanged
   ([ADR-0010](../adr/0010-protocol-precisification.md) /
-  [ADR-0015](../adr/0015-protocol-version-stamping.md))。
+  [ADR-0015](../adr/0015-protocol-version-stamping.md)).
 - **SHOULD**: Make `skip_transcript` tasks distinguishable by their flag.
 
 ## See Also

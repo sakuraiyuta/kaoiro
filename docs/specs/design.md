@@ -269,7 +269,7 @@ internal body scrolling, and a bottom-pinned composer (#33).
 ```mermaid
 flowchart TB
   root["#app (flex column, height 100%)"]
-  header["header (固定高: padding 1.6rem 2rem, border-bottom)"]
+  header["header (fixed height: padding 1.6rem 2rem, border-bottom)"]
   main["main (flex 1, overflow-y auto, padding 1.6rem 2rem 3rem)"]
   grid[".agents (grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)), gap 1.2rem)"]
   detail[".detail (max-width 72rem, margin 0 auto)"]
@@ -277,7 +277,7 @@ flowchart TB
   body[".main (flex 1)"]
   log[".log (overflow-y auto)"]
   composer[".composer (bottom-pinned, drop-zone)"]
-  dock[".permission-dock / .question-dock (in-flow, log と composer の間)"]
+  dock[".permission-dock / .question-dock (in-flow, between log and composer)"]
 
   root --> header
   root --> main

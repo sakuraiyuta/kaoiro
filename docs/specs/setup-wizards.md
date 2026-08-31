@@ -159,12 +159,12 @@ startup**.
   (`wrapper/kaoiro.config.claude-code.example.json`, etc.) exist for that. It is
   deferred as **development-only and low priority**.
 - **Non-interactive mode** (flags in bulk)—
-  [#141](https://github.com/sakuraiyuta/kaoiro/issues/141)。
+  [#141](https://github.com/sakuraiyuta/kaoiro/issues/141).
 - **Automatic token handoff between the two wizards**—independent operation
   (manually align tokens based on
   [ADR-0011](../adr/0011-phase3-reliability-and-auth.md)'s token scheme).
 - **Uploading artifacts to Gitea releases**—
-  [#140](https://github.com/sakuraiyuta/kaoiro/issues/140)。
+  [#140](https://github.com/sakuraiyuta/kaoiro/issues/140).
 
 ## See Also
 
