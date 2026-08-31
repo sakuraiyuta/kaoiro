@@ -128,7 +128,6 @@
     }
     return () => {
       refreshSeq += 1;
-      usersRefreshSeq += 1;
       connectionGeneration += 1;
       // issue #276 review follow-up (こはく advisory, round4): the seq
       // bump above invalidates an in-flight REPLY, but leaves whatever
@@ -143,9 +142,18 @@
       // visible while refreshing" behaviour.
       conversations = null;
       conversationsError = null;
-      // issue #207: same reasoning as the conversations reset just
-      // above, applied to the users list (a separate fetch, same
-      // generation).
+      // issue #207 round 4 (こはく判定, ふじ round3 計測を受けて撤回):
+      // unlike conversations above, this reset does NOT pair with a
+      // cleanup-side usersRefreshSeq bump — that line was removed as
+      // redundant. A reply from BEFORE this generation is still
+      // rejected by refreshUsers()'s own per-call `++usersRefreshSeq`
+      // on whichever fetch actually runs next; this reset alone still
+      // has to cover a reply that lands and briefly sets `users` WHILE
+      // connection is falsy (invisible, since the section is hidden) —
+      // the very next effect re-run (including the one that reconnects
+      // and starts the fresh fetch) runs this SAME cleanup again
+      // first, clearing that leaked write before the new fetch's
+      // result could ever render alongside it.
       users = null;
       usersError = null;
       // issue #207: mirrors the confirm-close-modal reset below — a

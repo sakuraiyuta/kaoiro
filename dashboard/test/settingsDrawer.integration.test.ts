@@ -1242,6 +1242,72 @@ describe("SettingsDrawer", () => {
       expect(target.querySelector(".user-id")?.textContent).toContain("u2");
     });
 
+    // issue #207 round 4 (ふじ round3 計測を受けた usersRefreshSeq bump
+    // 除去の裏付け): mirrors the conversations section's own
+    // "connection 消失中に着地した古い応答は、再接続直後の表示に漏れ出さない"
+    // test above -- this exact scenario had NO users-side equivalent
+    // before this round, so it was the untested premise behind removing
+    // the cleanup-side usersRefreshSeq bump. Confirms the users=null
+    // reset alone (unconditional on every effect re-run, including the
+    // reconnect) closes it without that bump.
+    it("connection 消失中に着地した古い listUsers 応答は、再接続直後の表示に漏れ出さない (stale-leak race guard)", async () => {
+      const resolvers: Array<(v: UserSummary[]) => void> = [];
+      const conn = makeConnection(
+        async () => [],
+        undefined,
+        () => new Promise<UserSummary[]>((resolve) => resolvers.push(resolve)),
+      );
+
+      const target = document.createElement("div");
+      document.body.append(target);
+      const props = makeReactiveSettingsDrawerProps({
+        onClose: vi.fn(),
+        connection: conn,
+      });
+      const component = mount(SettingsDrawer, { target, props });
+      mounted.push(component);
+      await tick();
+      expect(resolvers).toHaveLength(1);
+
+      props.connection = undefined;
+      await tick();
+      expect(target.querySelector(".users")).toBeNull();
+
+      resolvers[0]!([
+        {
+          id: "leaked",
+          kind: "user",
+          displayName: "leaked-while-disconnected",
+          role: "operator",
+        },
+      ]);
+      await Promise.resolve();
+      await tick();
+
+      props.connection = conn;
+      await tick();
+      expect(resolvers).toHaveLength(2);
+
+      expect(target.querySelector(".user-status")?.textContent).toContain(
+        "読み込み中",
+      );
+      expect(target.textContent).not.toContain("leaked-while-disconnected");
+
+      resolvers[1]!([
+        {
+          id: "fresh",
+          kind: "user",
+          displayName: "fresh-after-reconnect",
+          role: "operator",
+        },
+      ]);
+      await Promise.resolve();
+      await tick();
+      expect(target.querySelector(".user-id")?.textContent).toContain(
+        "fresh",
+      );
+    });
+
     it("名前を変更ボタンで編集モードに入り、現在の表示名が入力欄の初期値になる", async () => {
       const conn = makeConnection(
         async () => [],
