@@ -159,7 +159,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     parseArgs(process.argv.slice(2));
   const config = readConfig(configPath);
   const buildInfo = loadWrapperBuildInfo(
-    fileURLToPath(new URL("../dist", import.meta.url)),
+    fileURLToPath(new URL("../dist/build-info.json", import.meta.url)),
   );
   // Operational safety valve, deliberately wrapper-local rather than a
   // dashboard/server/runner configuration surface (issue #248).

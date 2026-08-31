@@ -124,7 +124,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   );
   const config = readConfig(configPath);
   const buildInfo = loadWrapperBuildInfo(
-    fileURLToPath(new URL("../dist", import.meta.url)),
+    fileURLToPath(new URL("../dist/build-info.json", import.meta.url)),
   );
   const turnWatchdogSettings = readTurnWatchdogSettings(
     process.env,

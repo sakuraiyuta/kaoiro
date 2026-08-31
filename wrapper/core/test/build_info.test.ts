@@ -7,9 +7,10 @@ import { loadWrapperBuildInfo } from "../src/build_info.js";
 describe("loadWrapperBuildInfo", () => {
   it("reads the wrapper artifact's complete build identity", () => {
     const dir = mkdtempSync(join(tmpdir(), "kaoiro-wrapper-build-info-test-"));
+    const file = join(dir, "build-info.json");
     try {
       writeFileSync(
-        join(dir, "build-info.json"),
+        file,
         JSON.stringify({
           revision: "0123456789012345678901234567890123456789",
           dirty: true,
@@ -19,7 +20,7 @@ describe("loadWrapperBuildInfo", () => {
         }),
       );
 
-      expect(loadWrapperBuildInfo(dir)).toEqual({
+      expect(loadWrapperBuildInfo(file)).toEqual({
         revision: "0123456789012345678901234567890123456789",
         dirty: true,
         version: "2026.9.0",
@@ -32,13 +33,14 @@ describe("loadWrapperBuildInfo", () => {
 
   it("fails closed to unknown when the artifact is malformed", () => {
     const dir = mkdtempSync(join(tmpdir(), "kaoiro-wrapper-build-info-test-"));
+    const file = join(dir, "build-info.json");
     try {
       writeFileSync(
-        join(dir, "build-info.json"),
+        file,
         JSON.stringify({ revision: "not-a-revision", dirty: false }),
       );
 
-      expect(loadWrapperBuildInfo(dir)).toEqual({
+      expect(loadWrapperBuildInfo(file)).toEqual({
         revision: "unknown",
         dirty: false,
         version: "unknown",

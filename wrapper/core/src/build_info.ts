@@ -47,11 +47,11 @@ function validBuildInfo(value: unknown): value is WrapperBuildInfo & { built_at:
 /** Reads the wrapper artifact's own build info. Missing, malformed, or
  * partially generated artifacts are visible as one bounded unknown identity. */
 export function loadWrapperBuildInfo(
-  dir: string = dirname(fileURLToPath(import.meta.url)),
+  file = join(dirname(fileURLToPath(import.meta.url)), "build-info.json"),
 ): WrapperBuildInfo {
   let raw: string;
   try {
-    raw = readFileSync(join(dir, "build-info.json"), "utf8");
+    raw = readFileSync(file, "utf8");
   } catch {
     return UNKNOWN_WRAPPER_BUILD_INFO;
   }

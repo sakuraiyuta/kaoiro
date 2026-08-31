@@ -28,7 +28,8 @@
   },
   "kaoiro": {
     "runtimeAssets": [
-      "dist/probe.js"
+      "dist/probe.js",
+      "dist/build-info.json"
     ]
   },
   "scripts": {
