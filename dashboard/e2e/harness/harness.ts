@@ -2,7 +2,7 @@
 // scenario from query params and mounts PRODUCTION components with fixture
 // data — no Phoenix server, no WebSocket round-trips.
 //
-//   ?view=lobby&role=operator|viewer[&taskRing=N]
+//   ?view=lobby&role=operator|viewer[&taskRing=N][&sprites=1][&demo=1]
 //   ?view=detail[&pending=permission|question][&attention=1]
 //     [&mountDelay=ms][&expandOrigin=1][&taskRing=N]
 //   ?view=overlay&overlay=dialog|drawer|persona|dialog-triggered|drawer-triggered
@@ -138,6 +138,7 @@ if (view === "app") {
       taskRing: Number(params.get("taskRing") ?? 0),
       manifest:
         params.get("sprites") === "1" ? personaSpriteManifest() : null,
+      demo: params.get("demo") === "1",
     },
   });
 }

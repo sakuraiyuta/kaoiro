@@ -186,6 +186,78 @@ export function lobbyLogs(): Record<string, Envelope[]> {
   };
 }
 
+/** Opt-in (`?demo=1`) card labels for the README screenshot. A production
+ *  agent always carries a `display_name` (ADR-0050 D1); without one the
+ *  card falls back to `agent_id` and renders the same id twice, which
+ *  reads as a defect in a public screenshot. Names come from the bundled
+ *  persona packs' own `manifest.json`, so the label matches the sprite.
+ *  Ids, states and ordering stay exactly as `lobbyAgents` built them. */
+export function demoLobbyAgents(pending: boolean): Record<string, Envelope> {
+  const names: Record<string, string> = {
+    ao: "あお", momo: "もも", kuroe: "クロエ", fuji: "ふじ",
+  };
+  return Object.fromEntries(
+    Object.entries(lobbyAgents(pending)).map(([id, env]) => {
+      const persona = env.persona ?? { id, name: id, sprite_set: id };
+      const name = names[persona.id] ?? persona.name;
+      return [
+        id,
+        { ...env, display_name: name, persona: { ...persona, name } },
+      ];
+    }),
+  );
+}
+
+/** Opt-in (`?demo=1`) timeline content for the README screenshot. The pane
+ *  otherwise renders `e2e fixture reply`, which says nothing about what
+ *  kaoiro does; this is a short synthetic hand-off (operator prompt →
+ *  delegation → review → approval request) using placeholder ids only.
+ *  Timestamps are relative to mount so the rows read as a live session.
+ *  No spec passes `demo=1`, so `lobbyLogs()` stays byte-identical. */
+export function demoLobbyLogs(): Record<string, Envelope[]> {
+  const base = Date.now();
+  const logs: Record<string, Envelope[]> = {
+    "host.ao": [], "host.momo": [], "host.kuroe": [], "host.fuji": [],
+  };
+  let seq = 0;
+  const row = (
+    from: string, minutesAgo: number, type: string,
+    payload: Record<string, unknown>,
+  ): void => {
+    logs[from].push({
+      version: "0",
+      agent_id: from,
+      ts: new Date(base - minutesAgo * 60_000).toISOString(),
+      seq: ++seq,
+      type,
+      state: "thinking",
+      payload,
+    });
+  };
+  const say = (from: string, ago: number, kind: string, text: string) =>
+    row(from, ago, "log", { kind, text });
+  const relay = (from: string, ago: number, to: string, body: string) =>
+    row(from, ago, "inter_agent_message", { to, body });
+
+  say("host.ao", 14, "user",
+    "ログイン後 30 分でセッションが切れる不具合を直してほしい");
+  say("host.ao", 12, "assistant",
+    "再現しました。トークンの再発行が抜けています。修正方針をまとめます");
+  relay("host.ao", 11, "host.momo",
+    "リフレッシュ処理の回帰テストを頼む。期限切れの直前と直後の 2 ケースだ");
+  relay("host.ao", 9, "host.kuroe",
+    "ステージングへ先に入れたい。デプロイ手順の確認をお願いします");
+  relay("host.ao", 7, "host.fuji",
+    "修正差分のレビューを頼む。3 ファイル、90 行ほどだ");
+  relay("host.fuji", 5, "host.ao",
+    "1 件だけ指摘。期限判定の境界が 1 秒ずれる。ほかは問題ない");
+  say("host.ao", 3, "assistant",
+    "指摘を反映しました。テストの結果を待っています");
+  say("host.momo", 1, "assistant",
+    "テストを 2 件追加しました。実行の許可をお願いします");
+  return logs;
+}
+
 export function detailEnvelope(scenario: DetailScenario): Envelope {
   const extra: Record<string, unknown> = {};
   let state = "idle";

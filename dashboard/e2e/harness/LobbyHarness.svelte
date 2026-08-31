@@ -7,22 +7,29 @@
   import AgentCard from "../../src/lib/AgentCard.svelte";
   import AgentGridShell from "../../src/lib/AgentGridShell.svelte";
   import type { PersonaManifest } from "../../src/lib/protocol";
-  import { lobbyAgents, lobbyLogs } from "./fixtures";
+  import {
+    demoLobbyAgents,
+    demoLobbyLogs,
+    lobbyAgents,
+    lobbyLogs,
+  } from "./fixtures";
 
   let {
     operator,
     pending = false,
     taskRing = 0,
     manifest = null,
+    demo = false,
   }: {
     operator: boolean;
     pending?: boolean;
     taskRing?: number;
     manifest?: PersonaManifest | null;
+    demo?: boolean;
   } = $props();
 
-  const agents = lobbyAgents(pending);
-  const logs = lobbyLogs();
+  const agents = demo ? demoLobbyAgents(pending) : lobbyAgents(pending);
+  const logs = demo ? demoLobbyLogs() : lobbyLogs();
   const sorted = Object.values(agents).sort((a, b) =>
     a.agent_id.localeCompare(b.agent_id),
   );

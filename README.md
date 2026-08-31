@@ -17,13 +17,16 @@ they can be difficult to relate to. kaoiro represents each agent as a character
 with changing expressions so that people can see what is happening and grow
 attached to them while running several agents at once.
 
-![kaoiro dashboard: four agents rendered as character cards, each labelled
-with its current state](docs/images/agent-grid.png)
+![kaoiro dashboard: four agents rendered as character cards next to a
+conversation timeline, one card badged as waiting for
+permission](docs/images/agent-grid.png)
 
 Every running agent becomes a card with its own character and a state label
 (`thinking`, `idle`, `permission?` …), and the badge marks the one waiting on
-an answer — a glance is enough to see who needs you. Agents are launched and
-tuned from the same screen:
+an answer — a glance is enough to see who needs you. The timeline beside the
+grid merges what every agent said with the messages they send each other, so a
+hand-off ("あお → ふじ: review this diff") is visible without opening anyone.
+Agents are launched and tuned from the same screen:
 
 <p>
   <img src="docs/images/launch-dialog.png" height="360"
