@@ -1,20 +1,20 @@
-// ADR-0055 phase-33 Stage A round1 fix (issue #200, ふじ round1 #1 / #3).
+// ADR-0055 phase-33 Stage A (issue #200).
 //
-// #3: a unit test that hand-builds RequestCompactOptions, or calls
+// A unit test that hand-builds RequestCompactOptions, or calls
 // AgentHost#reserveResume() directly, cannot catch a wiring regression in
 // cli.ts itself — removing the single `reserveResume: (prompt) =>
-// host.reserveResume(prompt),` line left all 430 existing tests green,
+// host.reserveResume(prompt),` line left the rest of the suite green,
 // while request_compact still reported "reservation accepted" (a promise
 // the wrapper never actually made). This test drives the REAL
 // runClaudeCli() entrypoint end to end: real request_compact handler ->
 // real `send`/`reserveResume` closures -> a real AgentHost -> a real
 // compact_boundary observation -> the actual text landing on the SDK
 // input stream. `reserveResume` is also required (not optional) at the
-// type level now, so deleting the wiring line is additionally a compile
+// type level, so deleting the wiring line is additionally a compile
 // error; this test still catches the softer regression of wiring it to a
 // type-correct no-op.
 //
-// #1 (verbatim contract): reused here, the only place `reason` and the
+// It also pins the verbatim contract, the only place `reason` and the
 // fired injection text are both observable through the real call chain.
 // An adversarial resume_prompt (leading newline, an embedded sentence
 // impersonating the real fixed prefix, trailing whitespace) must survive
@@ -43,7 +43,7 @@ const config: WrapperConfig = {
 
 type QueryFn = NonNullable<AgentHostOptions["queryFn"]>;
 
-describe("Claude CLI request_compact -> resume_prompt composition (issue #200 Stage A round1)", () => {
+describe("Claude CLI request_compact -> resume_prompt composition (issue #200 Stage A)", () => {
   it("real cli.ts wiring reserves + fires an adversarial resume_prompt verbatim on a real compact_boundary", async () => {
     let capturedRequestCompact: ClaudeOnlyTool["descriptor"] | undefined;
     const injected: string[] = [];

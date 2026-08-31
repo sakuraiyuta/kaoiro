@@ -50,8 +50,8 @@ describe("request_compact descriptor", () => {
     expect(sent).toEqual([COMPACT_COMMAND]);
     expect(result.isError).toBeUndefined();
     expect(result.content[0]?.text).toContain("compaction reserved");
-    // FIFO 1:1 (round1 fix #2/#3): every queued /compact gets a slot even
-    // when no resume_prompt was given.
+    // FIFO 1:1: every queued /compact gets a slot even when no
+    // resume_prompt was given.
     expect(reserved).toEqual([null]);
   });
 
@@ -101,7 +101,7 @@ describe("request_compact descriptor", () => {
   // ADR-0055 phase-33 Stage A: resume_prompt が省略された既存の呼び出し
   // パターンは何も変わらない (opt-in の回帰テスト)。
   describe("resume_prompt (issue #200 Stage A)", () => {
-    it("省略時は reserveResume を null で呼ぶ (FIFO 1:1 — round1 fix #2)", async () => {
+    it("省略時は reserveResume を null で呼ぶ (FIFO 1:1)", async () => {
       const reserved: (string | null)[] = [];
       const tool = requestCompactDescriptor({
         send: async () => {},
@@ -131,13 +131,11 @@ describe("request_compact descriptor", () => {
       expect(result.content[0]?.text).toContain("resume note is reserved");
     });
 
-    // round1 fix #1 (verbatim contract): only a pure-blank value collapses
-    // to null. Anything else — leading/trailing whitespace and newlines
-    // included — must reach reserveResume byte-for-byte, since it is
-    // redelivered verbatim as the agent's own next turn (host.ts
-    // resumeInjectionText). The old behavior (trim before reserving) is
-    // exactly the defect this pins against regressing.
-    it("前後の空白・改行を含む値は trim せず逐語で reserveResume へ渡す (verbatim contract, round1 fix #1)", async () => {
+    // Verbatim contract: only a pure-blank value collapses to null.
+    // Anything else — leading/trailing whitespace and newlines included —
+    // must reach reserveResume byte-for-byte, since it is redelivered
+    // verbatim as the agent's own next turn (host.ts resumeInjectionText).
+    it("前後の空白・改行を含む値は trim せず逐語で reserveResume へ渡す (verbatim contract)", async () => {
       const reserved: (string | null)[] = [];
       const tool = requestCompactDescriptor({
         send: async () => {},
@@ -191,11 +189,13 @@ describe("request_compact descriptor", () => {
     });
   });
 
-  // round1 fix #4 (director decision): 8,192 UTF-8 byte cap, checked
-  // BEFORE /compact is queued so an oversized resume_prompt fails the
-  // whole call rather than reserving a note the operator's approval
-  // dialog cannot show in full.
-  describe("resume_prompt byte cap (issue #200 round1 fix #4)", () => {
+  // 8,192 UTF-8 byte raw cap on resume_prompt, PLUS the full serialized
+  // input fitting PermissionBroker's own 16,384 byte approval-payload
+  // ceiling (agent-common/src/permission.ts) — two independent limits,
+  // both checked before /compact is queued so an oversized call fails the
+  // whole request rather than reserving a note the operator's approval
+  // dialog cannot show in full (director decision, issue #200).
+  describe("resume_prompt byte cap", () => {
     it(`ちょうど ${RESUME_PROMPT_MAX_BYTES} bytes は通す`, async () => {
       const sent: string[] = [];
       const reserved: (string | null)[] = [];
@@ -251,6 +251,74 @@ describe("request_compact descriptor", () => {
       const result2 = await tool.handler({ resume_prompt: atCapMultiByte });
       expect(result2.isError).toBeUndefined();
       expect(reserved).toEqual([atCapMultiByte]);
+    });
+
+    // The raw cap applies to the RAW value, before the blank/whitespace
+    // collapse — a whitespace-only value that is itself oversized must
+    // not slip through as "empty" just because it collapses to null.
+    it("空白のみでも raw byte 数が cap 超なら fail する (blank collapse の前に適用)", async () => {
+      const sent: string[] = [];
+      const reserved: (string | null)[] = [];
+      const overCapWhitespace = " ".repeat(RESUME_PROMPT_MAX_BYTES + 1);
+      const tool = requestCompactDescriptor({
+        send: async (text) => {
+          sent.push(text);
+        },
+        reserveResume: (prompt) => reserved.push(prompt),
+      });
+      const result = await tool.handler({
+        resume_prompt: overCapWhitespace,
+      });
+      expect(result.isError).toBe(true);
+      expect(result.content[0]?.text).toContain("byte cap");
+      expect(sent).toEqual([]);
+      expect(reserved).toEqual([]);
+    });
+
+    // A raw value under RESUME_PROMPT_MAX_BYTES can still push the FULL
+    // serialized input over PermissionBroker's own ceiling: JSON escaping
+    // (backslashes here) roughly doubles the content's size, independent
+    // of the raw-byte check above.
+    it("raw cap 内でも JSON escape で serialized ceiling を超えたら fail する", async () => {
+      const sent: string[] = [];
+      const reserved: (string | null)[] = [];
+      const heavyEscape = "\\".repeat(RESUME_PROMPT_MAX_BYTES);
+      expect(Buffer.byteLength(heavyEscape, "utf8")).toBe(
+        RESUME_PROMPT_MAX_BYTES,
+      );
+      const tool = requestCompactDescriptor({
+        send: async (text) => {
+          sent.push(text);
+        },
+        reserveResume: (prompt) => reserved.push(prompt),
+      });
+      const result = await tool.handler({ resume_prompt: heavyEscape });
+      expect(result.isError).toBe(true);
+      expect(result.content[0]?.text).toContain("approval-payload ceiling");
+      expect(sent).toEqual([]);
+      expect(reserved).toEqual([]);
+    });
+
+    // resume_prompt alone can be well within its own cap while `reason`
+    // (sharing the SAME serialized input the broker measures) pushes the
+    // total over — the resume_prompt-only raw check cannot catch this.
+    it("resume_prompt は cap 内でも 長い reason で serialized ceiling を超えたら fail する", async () => {
+      const sent: string[] = [];
+      const reserved: (string | null)[] = [];
+      const tool = requestCompactDescriptor({
+        send: async (text) => {
+          sent.push(text);
+        },
+        reserveResume: (prompt) => reserved.push(prompt),
+      });
+      const result = await tool.handler({
+        reason: "r".repeat(20_000),
+        resume_prompt: "ok",
+      });
+      expect(result.isError).toBe(true);
+      expect(result.content[0]?.text).toContain("approval-payload ceiling");
+      expect(sent).toEqual([]);
+      expect(reserved).toEqual([]);
     });
   });
 });

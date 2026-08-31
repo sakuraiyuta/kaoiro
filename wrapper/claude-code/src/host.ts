@@ -91,6 +91,10 @@ import type {
 import { PERMISSION_MODE_AXES } from "./permission_axes.js";
 import { claudeBootstrapCatalog, type SupportedModel } from "./catalog.js";
 import { runClaudeProbe, type ProbeOutcome } from "./probe-client.js";
+import {
+  REQUEST_COMPACT_TOOL_FQN,
+  validateRequestCompactInput,
+} from "./request_compact.js";
 import type { ContentBlock, PendingUpload, UploadMeta } from "./upload.js";
 import {
   MAX_ATTACHMENTS_PER_INSTRUCTION,
@@ -692,10 +696,10 @@ export class AgentHost implements EngineAdapter {
   #contextEpochGate: { atOrBelow: number | null; readings: number } | null =
     null;
   /** FIFO queue of `request_compact` reservations, one entry per
-   *  SUCCESSFUL `/compact` it actually queued (ADR-0055, phase-33 Stage A;
-   *  round1 fix, turn7 #2 — a singleton dropped the 1:1 correspondence
-   *  between a reservation and the specific compaction it was made for).
-   *  `null` means that `/compact` carried no `resume_prompt`. Consumption:
+   *  SUCCESSFUL `/compact` it actually queued (ADR-0055, phase-33 Stage A
+   *  — a singleton here would drop the 1:1 correspondence between a
+   *  reservation and the specific compaction it was made for). `null`
+   *  means that `/compact` carried no `resume_prompt`. Consumption:
    *  `compact_boundary` shifts the head and fires it if non-null;
    *  `compact_result:"failed"` shifts the head with no fire — the
    *  compaction never happened, but the slot must still be retired or it
@@ -1784,17 +1788,16 @@ export class AgentHost implements EngineAdapter {
               // ResultMessage or stream EOF opens the input barrier. This avoids
               // letting a buffered A result settle a newly-yielded B (#246).
               await this.#reconcilePendingTasklistRefreshes("conversation_reset");
-              // ADR-0055 Stage A (code-review-assessment round 1; FIFO
-              // round1 fix, turn7 #2): every reservation still queued was
-              // written for a conversation that no longer exists. Left
-              // uncleared, the head would sit and fire on some LATER,
-              // unrelated compact_boundary — injecting a note claiming "you
-              // left yourself this" into a context that never wrote it.
-              // The WHOLE queue is discarded, not just the head: a reset
-              // ends every outstanding reservation's conversation alike.
-              // Symmetric with #invalidateContextEpoch just below, which
-              // already treats compact_boundary and conversation_reset
-              // alike.
+              // ADR-0055 Stage A (code-review-assessment round 1): every
+              // reservation still queued was written for a conversation
+              // that no longer exists. Left uncleared, the head would sit
+              // and fire on some LATER, unrelated compact_boundary —
+              // injecting a note claiming "you left yourself this" into a
+              // context that never wrote it. The WHOLE queue is discarded,
+              // not just the head: a reset ends every outstanding
+              // reservation's conversation alike. Symmetric with
+              // #invalidateContextEpoch just below, which already treats
+              // compact_boundary and conversation_reset alike.
               this.#resumeReservations.length = 0;
             }
             this.#invalidateContextEpoch(compact.tokens);
@@ -1805,8 +1808,8 @@ export class AgentHost implements EngineAdapter {
               this.#maybeFireResumeReservation();
             }
           } else if (compact.kind === "compact_result") {
-            // ADR-0055 round1 fix (turn7 #2): a failed compaction never
-            // reaches compact_boundary, so its FIFO slot has to be retired
+            // ADR-0055 Stage A: a failed compaction never reaches
+            // compact_boundary, so its FIFO slot has to be retired
             // here instead — otherwise it would fire on some later,
             // unrelated SUCCESSFUL boundary. Does not touch the context
             // epoch: nothing was discarded (藤 review MF1, same reasoning
@@ -1873,6 +1876,18 @@ export class AgentHost implements EngineAdapter {
         autoAllow(conversationId, to)
       ) {
         return { behavior: "allow", updatedInput: input };
+      }
+    }
+    // ADR-0055 phase-33 Stage A: an oversized request_compact input would
+    // otherwise reach the broker's approval dialog, which silently drops
+    // the payload past its own serialized ceiling — the operator would be
+    // approving a call whose body they cannot actually read. Denying here,
+    // before decide() runs, means that dialog never appears at all rather
+    // than appearing truncated.
+    if (toolName === REQUEST_COMPACT_TOOL_FQN) {
+      const validation = validateRequestCompactInput(input);
+      if (!validation.ok) {
+        return { behavior: "deny", message: validation.message };
       }
     }
     const decide = this.#options.decidePermission;
@@ -2581,8 +2596,8 @@ export class AgentHost implements EngineAdapter {
   }
 
   /** Records one `request_compact` reservation as the new FIFO tail
-   *  (ADR-0055, phase-33 Stage A; round1 fix, turn7 #2/#3). Public: wired
-   *  from cli.ts's `requestCompactDescriptor` option, called exactly once
+   *  (ADR-0055, phase-33 Stage A). Public: wired from cli.ts's
+   *  `requestCompactDescriptor` option, called exactly once
    *  per `/compact` the tool actually queued via its own
    *  `send(COMPACT_COMMAND)` — never for a compaction that was never
    *  queued, which would let this entry fire on some LATER, unrelated
@@ -2621,7 +2636,7 @@ export class AgentHost implements EngineAdapter {
   }
 
   /** Retires the head FIFO reservation with no fire, on a `compact_result`
-   *  `"failed"` observation (ADR-0055 round1 fix, turn7 #2). The `/compact`
+   *  `"failed"` observation (ADR-0055, phase-33 Stage A). The `/compact`
    *  that made this reservation WAS queued 1:1 by `reserveResume`, but a
    *  failure never reaches `compact_boundary` — leaving the slot in place
    *  would let it fire on some later, unrelated SUCCESSFUL boundary

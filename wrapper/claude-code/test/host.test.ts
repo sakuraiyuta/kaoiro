@@ -14,6 +14,11 @@ import {
 } from "../src/host.js";
 import type { AgentHostOptions } from "../src/host.js";
 import { INTER_AGENT_TOOL_FQN, makeStateChange } from "@kaoiro/agent-common";
+import {
+  REQUEST_COMPACT_TOOL_FQN,
+  requestCompactDescriptor,
+  RESUME_PROMPT_MAX_BYTES,
+} from "../src/request_compact.js";
 import type {
   Envelope,
   TasklistSourceItem,
@@ -1404,11 +1409,11 @@ describe("AgentHost — query injection", () => {
       expect(injected.indexOf("prior instruction")).toBeLessThan(noteAt);
     });
 
-    // ふじ round1 must-fix #2b (real defect, reproduced): a singleton slot
-    // let a second reservation silently overwrite the first, misdelivering
-    // it to the wrong compaction. FIFO must keep two in-flight /compact
-    // reservations distinct and deliver each to its own boundary in order.
-    it("多重予約は上書きされず、FIFO でそれぞれの boundary に届く (round1 fix #2b)", async () => {
+    // A singleton slot would let a second reservation silently overwrite
+    // the first, misdelivering it to the wrong compaction. FIFO must keep
+    // two in-flight /compact reservations distinct and deliver each to
+    // its own boundary in order.
+    it("多重予約は上書きされず、FIFO でそれぞれの boundary に届く", async () => {
       const { queryFn, injected } = resumeQueryFn(async function* (sync) {
         yield boundary(22315);
         yield result("success", { result: "1" });
@@ -1434,12 +1439,12 @@ describe("AgentHost — query injection", () => {
       expect(notes[1]).not.toContain("1本目の /compact の予約 A");
     });
 
-    // ふじ round1 must-fix #2a (real defect, reproduced): a failed
-    // compact_result never reaches compact_boundary, so a singleton slot
-    // stayed set and fired on the NEXT, unrelated successful boundary. The
-    // failed slot must be retired silently, and a reservation queued
-    // behind it must still reach its own (later) boundary.
-    it("compact_result: failed は先頭を無発火で consume し、後続の予約は生き残る (round1 fix #2a)", async () => {
+    // A failed compact_result never reaches compact_boundary, so a
+    // singleton slot would stay set and fire on the NEXT, unrelated
+    // successful boundary. The failed slot must be retired silently, and
+    // a reservation queued behind it must still reach its own (later)
+    // boundary.
+    it("compact_result: failed は先頭を無発火で consume し、後続の予約は生き残る", async () => {
       const { queryFn, injected } = resumeQueryFn(async function* (sync) {
         yield msg({
           type: "system",
@@ -1467,7 +1472,7 @@ describe("AgentHost — query injection", () => {
       expect(notes[0]).not.toContain("失敗した /compact の予約");
     });
 
-    it("conversation_reset は先頭だけでなく queue 全体を破棄する (round1 fix #2)", async () => {
+    it("conversation_reset は先頭だけでなく queue 全体を破棄する", async () => {
       const { queryFn, injected } = resumeQueryFn(async function* () {
         yield msg({ type: "conversation_reset", new_conversation_id: "c-2" });
         yield result("success", { result: "1" });
@@ -1486,6 +1491,57 @@ describe("AgentHost — query injection", () => {
       expect(
         injected.filter((t) => t.startsWith("[kaoiro] Compaction")),
       ).toEqual([]);
+    });
+
+    // The tests above call host.reserveResume() directly, bypassing the
+    // real request_compact handler's own null/prompt distinction — a
+    // mutation that pushes reservations conditionally (e.g. skipping the
+    // null marker for an omitted resume_prompt) would still leave them
+    // green, since each only ever queues non-null entries. Drive the same
+    // omitted-then-given sequence through the REAL handler instead, and
+    // pin WHICH boundary the fire is attributed to (not just the final
+    // text, which a shifted-by-one FIFO can still reproduce byte-for-byte
+    // at the wrong boundary).
+    it("実 handler 経由の省略予約→prompt予約は、対応する boundary にだけ発火する", async () => {
+      let currentBoundary = 0;
+      const { queryFn, injected } = resumeQueryFn(async function* (sync) {
+        currentBoundary = 1;
+        yield boundary(22315);
+        yield result("success", { result: "1" });
+        currentBoundary = 2;
+        yield boundary(9000);
+        yield result("success", { result: "2" });
+        await sync.injection();
+      });
+      const firedAtBoundary: number[] = [];
+      const enqueueInjection = (
+        task: () => Promise<void>,
+      ): Promise<void> => {
+        firedAtBoundary.push(currentBoundary);
+        return task();
+      };
+      let host!: AgentHost;
+      const tool = requestCompactDescriptor({
+        send: async () => {},
+        reserveResume: (prompt) => host.reserveResume(prompt),
+      });
+      host = new AgentHost(config, {
+        onState: () => {},
+        queryFn,
+        now: () => "T",
+        enqueueInjection,
+      });
+      await tool.handler({}); // reservation for /compact #1: omitted
+      await tool.handler({ resume_prompt: "2本目の予約の本文" }); // /compact #2
+      await host.run();
+      const notes = injected.filter((t) => t.startsWith("[kaoiro] Compaction"));
+      expect(notes).toHaveLength(1);
+      expect(notes[0]).toContain("2本目の予約の本文");
+      // The discriminating assertion: the fire must be attributed to
+      // boundary 2 (the /compact that actually carried this prompt), not
+      // boundary 1 — a FIFO that dropped the null marker would shift this
+      // entry to fire one boundary early with the exact same text.
+      expect(firedAtBoundary).toEqual([2]);
     });
   });
 
@@ -4348,6 +4404,69 @@ describe("AgentHost — send_to_agent auto-allow (issue #175, ADR-0044 F2 追補
         return { allow: true };
       },
       interAgentAutoAllow: () => true,
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+
+    expect(decideCalled).toBe(true);
+  });
+
+  // ADR-0055 phase-33 Stage A: an oversized request_compact input must
+  // never reach the operator's approval dialog at all — PermissionBroker
+  // would drop the payload past its own serialized ceiling and the
+  // operator could approve a call whose body they cannot read.
+  it("request_compact の入力が cap 超えなら decidePermission を経由せず deny する", async () => {
+    let decideCalled = false;
+    const oversized = "a".repeat(RESUME_PROMPT_MAX_BYTES + 1);
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        const decision = (await args.options.canUseTool!(
+          REQUEST_COMPACT_TOOL_FQN,
+          { resume_prompt: oversized },
+          {} as never,
+        ))!;
+        expect(decision.behavior).toBe("deny");
+        yield result("success", { result: "ok" });
+      }
+      return asQuery(gen());
+    });
+
+    const host = new AgentHost(config, {
+      onState: () => {},
+      decidePermission: () => {
+        decideCalled = true;
+        return { allow: true };
+      },
+      queryFn,
+      now: () => "T",
+    });
+    await host.run();
+
+    expect(decideCalled).toBe(false);
+  });
+
+  it("cap 内の request_compact 入力は通常どおり decidePermission を経由する", async () => {
+    let decideCalled = false;
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        const decision = (await args.options.canUseTool!(
+          REQUEST_COMPACT_TOOL_FQN,
+          { resume_prompt: "続きはここから" },
+          {} as never,
+        ))!;
+        expect(decision.behavior).toBe("allow");
+        yield result("success", { result: "ok" });
+      }
+      return asQuery(gen());
+    });
+
+    const host = new AgentHost(config, {
+      onState: () => {},
+      decidePermission: () => {
+        decideCalled = true;
+        return { allow: true };
+      },
       queryFn,
       now: () => "T",
     });

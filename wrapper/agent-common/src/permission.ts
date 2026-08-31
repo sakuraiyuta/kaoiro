@@ -14,8 +14,22 @@ import { makePermissionRequest } from "./state.js";
 import type { Envelope, PendingPermissionExt, WrapperConfig } from "./types.js";
 
 /** Tool input above this serialized size is dropped from the request
- *  payload (specs/protocol.md, specs/threat-model.md). */
-const MAX_INPUT_BYTES = 16_384;
+ *  payload (specs/protocol.md, specs/threat-model.md). Exported so a
+ *  caller that wants to fail closed on an oversized input BEFORE it ever
+ *  reaches an approval dialog can compare against the same ceiling
+ *  {@link fitsApprovalPayload} enforces here. */
+export const MAX_INPUT_BYTES = 16_384;
+
+/** Whether a tool `input` would still carry its payload once `decide()`
+ *  serializes it — the exact arithmetic below, exported so a caller
+ *  outside this class can reuse it instead of re-deriving a ceiling that
+ *  could silently drift from the broker's own. Raw byte counts on
+ *  individual fields are not a substitute: JSON escaping (quotes,
+ *  backslashes, newlines) can inflate the serialized size well past the
+ *  sum of the fields' own UTF-8 lengths. */
+export function fitsApprovalPayload(input: Record<string, unknown>): boolean {
+  return Buffer.byteLength(JSON.stringify(input), "utf8") <= MAX_INPUT_BYTES;
+}
 
 /** The broker's answer handed back to the engine host (engine-agnostic;
  *  the Claude adapter forwards it to canUseTool). */
@@ -82,9 +96,7 @@ export class PermissionBroker {
     };
     // Oversized input is dropped rather than partially serialized: a
     // cut JSON string would be unparseable and may split a secret.
-    // Measured in UTF-8 bytes — .length counts UTF-16 units and would
-    // under-count multibyte text.
-    if (Buffer.byteLength(JSON.stringify(input), "utf8") <= MAX_INPUT_BYTES) {
+    if (fitsApprovalPayload(input)) {
       payload.input = input;
       pending.input = input;
     } else {

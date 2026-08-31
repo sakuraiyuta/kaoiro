@@ -72,7 +72,11 @@ export type {
   EffectiveStatusSnapshot,
   EffectiveWhoamiFields,
 } from "./snapshot.js";
-export { PermissionBroker } from "./permission.js";
+export {
+  fitsApprovalPayload,
+  MAX_INPUT_BYTES,
+  PermissionBroker,
+} from "./permission.js";
 export type {
   PermissionBrokerOptions,
   PermissionDecision,

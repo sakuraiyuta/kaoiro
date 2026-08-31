@@ -20,20 +20,23 @@
 // awaiting it, and promises no duration. Completion is observed through the
 // Phase A `compact_boundary` log line, not here.
 
+import {
+  fitsApprovalPayload,
+  MAX_INPUT_BYTES,
+} from "@kaoiro/agent-common";
 import type { ToolDescriptor, ToolResult } from "@kaoiro/agent-common";
 import { z } from "zod";
 
 /** Full SDK-side tool name once mcpServers register the kaoiro server. */
 export const REQUEST_COMPACT_TOOL_FQN = "mcp__kaoiro__request_compact";
 
-/** Byte cap on `resume_prompt`, checked before `/compact` is even queued
- *  (ADR-0055 phase-33 Stage A round1 fix, turn7 #4 — director decision).
- *  Half of PermissionBroker's approval-payload ceiling
- *  (`MAX_INPUT_BYTES` = 16,384 bytes, agent-common/src/permission.ts),
- *  leaving room for `reason` and JSON overhead so a `resume_prompt` at the
- *  cap still fits whole inside the payload the operator actually reads —
- *  above the broker's own ceiling it would be silently dropped from the
- *  approval dialog and approved unread. */
+/** Byte cap on the raw `resume_prompt` value itself, checked before
+ *  `/compact` is even queued (ADR-0055 phase-33 Stage A — director
+ *  decision). This is independent of, and smaller than, the
+ *  `fitsApprovalPayload` check below: a raw value under this cap can
+ *  still push the FULL serialized input (this field plus `reason` plus
+ *  JSON quoting/escaping overhead) past PermissionBroker's own ceiling,
+ *  so both checks run. */
 export const RESUME_PROMPT_MAX_BYTES = 8_192;
 
 /** The exact text queued on the SDK input stream. A fixed literal: the
@@ -77,16 +80,61 @@ export interface RequestCompactOptions {
    *  landing mid-turn (ADR-0036 F6: no automatic interrupt). */
   send: (text: string) => Promise<void>;
   /** Records a `request_compact` reservation, normally
-   *  `AgentHost#reserveResume` (ADR-0055, phase-33 Stage A; FIFO round1
-   *  fix, turn7 #2/#3). Called exactly once for every `/compact` that
-   *  `send` above actually queued — `prompt` when `resume_prompt` was
-   *  given, `null` when it was omitted/blank — so the host's FIFO queue
-   *  stays 1:1 with real `/compact` calls regardless of whether each one
-   *  carried a resume note. Required (not optional): a caller that leaves
-   *  this out would have request_compact report a reservation it never
-   *  actually made, which is exactly the "success" the round1 review
-   *  found silently backed by nothing. */
+   *  `AgentHost#reserveResume` (ADR-0055, phase-33 Stage A). Called
+   *  exactly once for every `/compact` that `send` above actually queued
+   *  — `prompt` when `resume_prompt` was given, `null` when it was
+   *  omitted/blank — so the host's FIFO queue stays 1:1 with real
+   *  `/compact` calls regardless of whether each one carried a resume
+   *  note. Required (not optional): a caller that leaves this out would
+   *  have request_compact report a reservation it never actually made. */
   reserveResume: (prompt: string | null) => void;
+}
+
+/** Validates a `request_compact` tool input against the two independent
+ *  size limits it must fit, BEFORE anything is queued or reserved:
+ *
+ *  1. `resume_prompt`'s own raw byte length against
+ *     {@link RESUME_PROMPT_MAX_BYTES} — checked on the RAW value, before
+ *     any blank/whitespace collapse, so a whitespace-only value that is
+ *     itself oversized cannot slip through as "empty".
+ *  2. the FULL input object (this field plus `reason` plus JSON
+ *     quoting/escaping overhead) against PermissionBroker's own
+ *     serialized-payload ceiling ({@link fitsApprovalPayload}) — a raw
+ *     value under (1) can still push the serialized total over, since
+ *     JSON escaping (quotes, backslashes, newlines) inflates size well
+ *     past the field's own UTF-8 length, and `reason` shares the same
+ *     budget.
+ *
+ *  Exported so `#canUseTool` (host.ts) can deny an oversized call before
+ *  the operator's approval dialog is even shown, using the exact same
+ *  check the handler below runs. */
+export function validateRequestCompactInput(
+  input: Record<string, unknown>,
+): { ok: true } | { ok: false; message: string } {
+  const resumePromptRaw =
+    typeof input.resume_prompt === "string" ? input.resume_prompt : "";
+  const rawByteLength = Buffer.byteLength(resumePromptRaw, "utf8");
+  if (rawByteLength > RESUME_PROMPT_MAX_BYTES) {
+    return {
+      ok: false,
+      message:
+        `resume_prompt is ${rawByteLength} UTF-8 bytes, over the ` +
+        `${RESUME_PROMPT_MAX_BYTES} byte cap. Shorten it and retry — it ` +
+        "is not truncated automatically, which would corrupt the " +
+        "verbatim delivery contract.",
+    };
+  }
+  if (!fitsApprovalPayload(input)) {
+    return {
+      ok: false,
+      message:
+        "the full request_compact input (reason + resume_prompt + JSON " +
+        `overhead) is over PermissionBroker's ${MAX_INPUT_BYTES} byte ` +
+        "approval-payload ceiling once serialized. Shorten reason and/or " +
+        "resume_prompt and retry.",
+    };
+  }
+  return { ok: true };
 }
 
 /** The `request_compact` descriptor. Registered by the Claude adapter's
@@ -101,31 +149,22 @@ export function requestCompactDescriptor(
     handler: async (input) => {
       const reason =
         typeof input.reason === "string" ? input.reason.trim() : "";
-      // Verbatim contract (round1 fix, turn7 #1): a resume_prompt that is
-      // actually reserved/injected must be byte-for-byte what the model
-      // wrote — leading newlines, trailing whitespace and all. `.trim()`
-      // is used ONLY to decide "is this blank", never on the value that
-      // gets carried forward.
+      // Validated BEFORE /compact is queued: an oversized call fails the
+      // whole request rather than reserving a note the operator's
+      // approval dialog cannot show in full.
+      const validation = validateRequestCompactInput(input);
+      if (!validation.ok) {
+        return errorResult(`request_compact failed: ${validation.message}`);
+      }
+      // Verbatim contract: a resume_prompt that is actually
+      // reserved/injected must be byte-for-byte what the model wrote —
+      // leading newlines, trailing whitespace and all. `.trim()` is used
+      // ONLY to decide "is this blank", never on the value carried
+      // forward.
       const resumePromptRaw =
         typeof input.resume_prompt === "string" ? input.resume_prompt : "";
       const resumePromptIsBlank = resumePromptRaw.trim() === "";
       const resumePrompt = resumePromptIsBlank ? null : resumePromptRaw;
-      if (resumePrompt !== null) {
-        // Byte cap (round1 fix, turn7 #4): validated BEFORE `/compact` is
-        // queued, so an oversized resume_prompt fails the whole call
-        // rather than reserving a note the operator's approval dialog
-        // cannot show in full. Truncating instead of failing would break
-        // the verbatim contract above, so overflow is never truncated.
-        const byteLength = Buffer.byteLength(resumePrompt, "utf8");
-        if (byteLength > RESUME_PROMPT_MAX_BYTES) {
-          return errorResult(
-            `request_compact failed: resume_prompt is ${byteLength} UTF-8 ` +
-              `bytes, over the ${RESUME_PROMPT_MAX_BYTES} byte cap. ` +
-              "Shorten it and retry — it is not truncated automatically, " +
-              "which would corrupt the verbatim delivery contract.",
-          );
-        }
-      }
       try {
         await options.send(COMPACT_COMMAND);
       } catch (err) {
@@ -137,11 +176,11 @@ export function requestCompactDescriptor(
         // boundary instead.
         return errorResult(`request_compact failed: ${String(err)}`);
       }
-      // FIFO 1:1 (round1 fix, turn7 #2/#3): every /compact that `send`
-      // above actually queued gets exactly one reservation slot, prompt or
-      // null, so the host can consume its own queue in the same order
-      // compactions actually happen instead of trusting a single shared
-      // slot to still mean the right thing later.
+      // Every /compact that `send` above actually queued gets exactly one
+      // reservation slot, prompt or null, so the host can consume its own
+      // FIFO queue in the same order compactions actually happen instead
+      // of trusting a single shared slot to still mean the right thing
+      // later.
       options.reserveResume(resumePrompt);
       const because = reason === "" ? "" : ` (reason: ${reason})`;
       const resumeNote =
