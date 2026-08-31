@@ -45,7 +45,7 @@ Ship phase-0 with **Tier A**. Enable **Tier B** (A) after it passes the pre-
 implementation red-team spike. Original text verbatim / same recipient fixed /
 zero-tool / no injection into the working agent are MUSTs for Tier B.
 
-## 解決時のアクション
+## Actions upon resolution
 
 - [ ] Record the decision in `adr/NNNN-<slug>.md` (or as an ADR-0028 supplement)
 - [ ] Finalize the Tier B section of `../specs/protocol-external-human.md`

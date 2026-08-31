@@ -40,7 +40,7 @@ Neutral). Allowing intake would also connect to
 
 **A (reject all intake).** Retain one-way authority for the foreseeable future.
 
-## 解決時のアクション
+## Actions upon resolution
 
 - [ ] Record the decision in an ADR (introduce an intake-permission model)
 - [ ] Add the intake-permission specification to

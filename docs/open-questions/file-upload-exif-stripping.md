@@ -42,7 +42,7 @@ unchanged (wrapper-internal implementation).
 A — Do not strip in the MVP. Consider B (opt-out available) if sensitive-image
 operation becomes necessary.
 
-## 解決時のアクション
+## Actions upon resolution
 
 - [ ] Specify EXIF stripping (opt-out flag location / default)
 - [ ] Add a stripping step before wrapper fit-to-SDK

@@ -40,7 +40,7 @@ passing through the server in flight.
 
 **A (config file).** Defer a GUI. Keep the client focused on visual presentation.
 
-## 解決時のアクション
+## Actions upon resolution
 
 - [ ] Record the decision (decision to add a GUI)
 - [ ] If adopting B, add the contact CRUD wire to

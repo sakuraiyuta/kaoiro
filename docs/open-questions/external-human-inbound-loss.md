@@ -37,7 +37,7 @@ while discord-wrapper is stopped (restart or failure) are lost as-is
 **A (best-effort).** Low priority. Because the operator can check missed replies
 in Discord itself, practical harm is small.
 
-## 解決時のアクション
+## Actions upon resolution
 
 - [ ] Record the decision (ADR / spec supplement if it becomes necessary)
 - [ ] If adopting B, reflect the backfill policy in
