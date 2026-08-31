@@ -1,5 +1,5 @@
 ---
-title: ペルソナアセットはサーバ管理、マニフェスト + content-addressed 配信
+title: Persona Assets Managed, Manifest + content-addressed Delivery
 status: superseded
 date: 2026-06-10
 opened: 2026-06-10
@@ -9,69 +9,69 @@ related_specs: [protocol, architecture]
 related_adrs: [3, 5, 7, 29]
 ---
 
-# ADR-0008 — ペルソナアセットはサーバ管理、マニフェスト + content-addressed 配信
+# ADR 8 — Persona Asset Management, Manifest + content-addressed Delivery
 
 ## Status
 
 Superseded by [ADR-0029](0029-persona-server-sot-and-pack-distribution.md)
-(2026-07-05)。サーバがアセットを持つ方針は継承しつつ、配布単位を
-「立ち絵のみのマニフェスト」から「zip pack(人格プロンプト + 立ち絵)」
-に拡張し、auto-watch による自動反映と「野良 persona 禁止」の enforce を
-統合した。
+(2026。-05). server inherits the policy of the asset, and distributes the unit.
+"zip pack" from "Stand picture only manifest"
+auto-watch and enforce of “Nora persona”
+integration.
 
-以下は歴史的経緯として残す。
+The following remains as historical circumstances:
 
 ## Context
 
-`persona.sprite_set` は文字列であり、別プロジェクト化した外部クライアント
-([ADR-0007](0007-client-separation-reference-dashboard.md))がこれを実際の
-画像へ解決する手段が未定義だった。全クライアントが既に接続している唯一の
-コンポーネントはサーバである。リクエスト毎にアーカイブを圧縮して配信する
-案は CPU とレイテンシを毎回払う。
+`persona.sprite_set` is a string and a separate projectedternal client
+([ADR)7](0007-client-separation-reference-dashboard.md))
+The way to solve the image was unsecided right. The only client already connected
+The component is useful. Compress and distribute archives for each request
+CPU and latency
 
 ## Decision
 
-- ペルソナアセット(立ち絵・表情差分)の**正本はサーバが管理**する。
-  ラッパーは同一性(`persona.id`、
-  [ADR-0003](0003-persona-identity-persistence.md))のみを持ち、サーバが
-  見た目(アセット)を持つ。サーバの agent 非依存は維持される。
-- 配信の一次形式は**マニフェスト JSON**(persona.id → 状態別画像 URL +
-  コンテンツハッシュ + バージョン)+ **content-addressed な静的ファイル**。
-  ハッシュ付き URL は不変でキャッシュ無期限、クライアントはハッシュ差分で
-  増分同期する。
-- 一括アーカイブは**アップロード受付時に1回生成**して保存する
-  (オンデマンド圧縮はしない)。
-- **段階導入**: 第1段階は管理者がサーバのデータディレクトリへ直接配置
-  (配信のみ実装)。アップロード API(検証: zip-slip / サイズ上限 / MIME
-  制限・SVG 除外、認可: RBAC のアップロードロール、
-  [ADR-0005](0005-access-control-oauth-stub.md))は後段。
-- メタデータは SQLite、実ファイルはファイルシステムに置く。
+- Persona Assets**Management**
+`persona.id`
+[ADR)3](0003-persona-identity-persistence.md)
+Have a look (asset). server agent undependent is maintained.
+- Primary format of delivery**Manifest JSON**(persona.id → State image URL +
+Content  + Version)+**content-addressed static file**。
+ed URLs are unchanged and cache indefinite, and the client is different
+Synchronize increment.
+- Bulk archive**Japanese termーHomerate once when uploading**Save
+(No on-demand compression).
+- **Step Introduction**: The first step is directly placed by the administrator to the left data directory
+(Deliverybution only) Upload API (verification: zip-slip / size limit / MIME
+RBAC upload roll,
+[ADR。5](0005-access-control-oauth-stub.md)
+- Metadata SQLite, real files are added to the file system.
 
 ## Consequences
 
 ### Positive
 
-- 全クライアントで見た目が一貫し、試用時にアセットの別途入手が不要。
-- サーバ負担はほぼ静的ファイル配信とストレージのみ(圧縮・変換の常時負荷
-  なし)。
-- マニフェストのハッシュにより増分同期・キャッシュ戦略が自明になる。
+- All clients have a consistent look and do not need to get an asset separately when trying.
+- Server burden is almost static file delivery and storage only (normal load of compression and conversion)
+None
+- An incremental。hronization and cash strategy will become self-evident by the manifest's nickname.
 
 ### Negative
 
-- サーバにアセット保管・マニフェスト生成・(後段)アップロード検証の責務が
-  増える。
-- アップロード API は RBAC のロール設計(ADR-0005)と連動して後段に
-  持ち越し。
+- Responsibilities for asset storage, manifest generation and upload verification on server
+Close
+- Upload API is a roll design of RBAC (with ADR  API)
+Contact Us
 
 ### Neutral
 
-- クライアントのローカル上書き(オフライン利用・カスタムスキン)は
-  マニフェスト仕様で許す余地を残す。
+- Client local overwrite (offline use/custom skin)
+Leave the room for the manifest specification.
 
 ## Alternatives Considered
 
 | Option | Why rejected |
 |--------|--------------|
-| オンデマンド圧縮アーカイブ配信(原案) | リクエスト毎に CPU・レイテンシを払う |
-| 外部静的ホスト委譲(Nextcloud 等) | 可用性の結合と CORS の手間が増え、ラボ規模で利なし |
-| クライアント側アセットパック | 試用の敷居と表示の一貫性を損なう |
+|On-demand compression archive distribution (original)|Pay CPU latency for each request|
+|external static host delegation (such as Nextcloud)|Convergence of availability and increased CORS sampling, gained in lab scale|
+|Client-side Asset Pack|Impairs the consistency of trial laying and display|

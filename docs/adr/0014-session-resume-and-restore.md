@@ -1,5 +1,5 @@
 ---
-title: セッション resume による wrapper 復帰・既存セッション召喚
+title: wrapper recovery and existing sessions summoned by resume
 status: accepted
 date: 2026-06-16
 opened: 2026-06-15
@@ -9,7 +9,7 @@ related_specs: [protocol, threat-model, architecture]
 related_adrs: [1, 11, 12, 15, 23, 24, 30, 36]
 ---
 
-# ADR-0014 — セッション resume による wrapper 復帰・既存セッション召喚
+# ADR-0014 — wrapper recovery and pre-existing session summoning by session resume
 
 ## Status
 
@@ -17,550 +17,550 @@ Accepted
 
 ## Context
 
-wrapper(エージェント本体)は現状つねに新規セッションを開始する
-(`wrapper/src/host.ts` で `session_id: ""` を送り、SDK が新規発行)。
-このため2つの要求が満たせない:
+wrapper starts a new session
+(`wrapper/src/host.ts` sends `session_id: ""` and new SDK is issued).
+For this reason, two requests cannot be met:
 
-- **復帰**: wrapper のエージェント本体プロセスが落ちて再起動したとき、
-  別の新規セッションになり、元の会話文脈を失う。
-- **召喚**: wrapper を動かすマシンに残る既存セッション
-  (`~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`)を呼び出して
-  続きを再開できない。
+- **Back**: When the agent body process of wrapper drops and restarts,
+Become another new session and lose the original conversation context.
+- **Summon**: Existing sessions that remain on the machine to move the wrapper
+(`~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`)
+I can't resume.
 
-両者は **同一の機構(既存 session_id を指定して resume する)** で解ける。
-本 ADR は旧 open-question `existing-agent-summon`(2026-06-15 起票)を
-my-spec-elicitation で収束させ、ここへ昇格したもの。
+Both**Same mechanism (refer to existing session id and resume)**Contact Us
+This ADR is an old open-question `existing-agent-summon` (issued 2026-06-15)
+my-spec-elicitation
 
-### 技術前提(Claude Agent SDK 公式ドキュメントで確認)
+### Claude Agent SDK
 
-- SDK はセッションを **クロスプロセスで resume 可能**
-  (`query({ options: { resume: "<session-id>" } })`)。元プロセスが死んで
-  いても可。
-- 会話履歴はプロセスメモリではなく **ローカル JSONL に永続**
-  (`~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`)。resume は
-  これを読む。
-- 制約: **同一ホスト・同一 cwd** が必須(session ファイルがそのホストに
-  実在する必要)。session_id は `ResultMessage` / init メッセージから取得。
+- SDK**Cross-process resume**
+(`query({ options: { resume: "<session-id>" } })`) Ex-process die
+Contact Us
+- Conversation history is not process memory**Persistent on Local JSONL**
+(`~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`) resume
+Read this.
+- Constraints:**Same host and same cwd**must (session file to the host
+Required). session id is retrieved from `ResultMessage` / init message.
 
-### 関連する未実装機能
+### Relevant unmounted features
 
-- **#22**(クライアントからのサーバ経由起動、設計決定済み): 起動経路は
-  `client -> server -> 当該ホストの runner(boot service)-> wrapper 起動`。
-  本機能はこの経路に「resume モード」を足したもの。
-- **#23**(ホスト常駐 runner の仕様): 復帰の生存単位。
-- **#24**(履歴のディスク永続化、future): 後述の通り本決定で依存が緩む。
+- **#22**(starting via the command line from the client, design-defined): The startup route is
+  `client -> server -> The host runner(boot service)-> wrapper Start`.
+This function adds "resume mode" to this route.
+- **#23**(host resident Host specification): return survival unit.
+- **#24**(history disk persistence, future): This decision will loosen dependencies as described below.
 
 ## Decision
 
-復帰・召喚は、既存 session_id を指定して **resume** する単一機構で実現する。
-制御経路は #22 の spawn 経路を再利用し、`client -> server -> runner -> wrapper`
-で「resume モード」として起動する(独立機構を作らない)。
+To return or summon the existing session id**resume**A single mechanism is realized.
+The control route reuses the #22 spawn route and `client -> server -> runner -> wrapper`
+and start as "resume mode".
 
 ```mermaid
 flowchart LR
   client["client UI (operator)"] --> server
-  server --> runner["host runner (常駐)"]
+  server --> runner["host   (Resident)"]
   runner -->|"spawn with resume session_id"| wrapper["wrapper agent"]
   wrapper -->|"envelope (top-level session_id)"| server
-  server --> store[("pointer 軽量永続")]
+  server --> store[("pointer Light Duty Standing")]
 ```
 
-- **生存単位 = runner**。常駐し落ちない前提の runner が復帰対象の wrapper を
-  起動/再起動する。runner ごと死んだら client→server 経由の復帰は諦める。
-  ホストは非 ephemeral(常設)前提で、ローカル JSONL は平常時残る。
-- **復帰は手動(operator のクライアント操作)**。runner によるクラッシュ
-  自動 resume はスコープ外(将来)。クラッシュ検知と「復帰」操作の提示は、
-  サーバが channel owner 離脱を検知して UI に出す(既存 disconnected 導出を
-  流用)。
-- **F1 サーバ側 session_id 永続化**: `(agent_id, host, cwd, session_id)` の
-  ポインタのみを軽量永続する。全履歴は永続化しない。
-- **F2 候補一覧**: 既定の復帰先はサーバのポインタ(最後の session_id)を
-  事前選択。実候補一覧は runner が当該 cwd 配下の JSONL を列挙して返し
-  (各 JSONL の最小メタ付き)、ポインタの生存も検証する。session_id が
-  見つからない/ユーザが別を選んだ場合は別 session_id へ。
-- **F3 agent_id ↔ session_id**: agent_id(安定ペルソナ、固定 (host, cwd) に
-  紐づく)に対しサーバは「最後の session_id」を 1:1 で保持。全候補(1:N)は
-  runner 列挙で得る。サーバに session_id 履歴は持たない。
-- **F4 二重アタッチ防止**: サーバ owner フェンシング(接続中は復帰拒否、UX
-  早期拒否)+ runner ローカルロック(同一 session の同時 resume を物理阻止)
-  の二段。resume は常に同一 runner を通るため、ロックが破損防止の本体。
-- **F5 再開方式 = resume**(同一 session_id 継続)。continue(暗黙)・
-  forkSession(分岐)は採らない(forkSession は将来の分岐再開オプション)。
-- **F6 threat-model**: T1 resume/spawn の RCE は #22 から継承、T2 JSONL メタの
-  露出は operator 限定・最小限、T3 復帰対象 session_id を当該 agent 束縛 cwd
-  配下に実在検証(他 cwd/任意パス拒否)。詳細は
+- **Survival Unit =  **Home wrappers that are not resident will return the wrapper
+Start/Restart. If the   is dead, return via client→  will give up.
+Hosts are non-ephemeral, and local JSONL remains plain.
+- **Manual return (operator client operation)**Home   crash
+Auto resume is out of scope. Show crash detection and return operations
+server detects channel owner withdrawal and exits to UI (existing disconnected derive)
+
+- **F1 server session id Persistent**: `(agent_id, host, cwd, session_id)`
+Light weight persists only pointers. All history does not persist.
+- **F2 List of candidates**: Default return pointer (last session id)
+Pre- . The list of candidates will be returned by   with the JSONL under the cwd
+(with the minimum meta of each JSONL), alsoJapanese terms pointer survival. session id
+If you can't find / user choose another session id.
+- **F3 agent_id ↔ session_id**: agent id (host, cwd)
+retains "last session id" in 1:1. All candidates(1:N)
+get in the enumeration. The server does not have a session id history.
+- **F4 Double attach-proof**: server owner fen  (reverted during connection, UX)
+Early rejection) + Japanese term Local lock (simultaneous resume of the same session is physical blocked)
+resume always passes the same  , preventing the lock from being damaged.
+- **F5 Resume approach = resume**(same session id continued). continue
+forkSession (Options) is not collected (forkSession is the option to resume future processes).
+- **F6 threat-model**: T1 resume/spawn RCE inherited from #22 and T2 JSONL meta
+Exposure is limited to operator, minimum, T3 return target session id, the agent binding cwd
+Validation under distribution (other cwd/pass denied optional). More
   [threat-model](../specs/threat-model.md)。
-- **F7 プロトコル**: エンベロープに top-level `session_id`(optional)を追加
-  し wrapper が実 session_id を報告 → サーバが F1 ポインタ更新。resume 制御
-  (spawn-with-resume + セッション列挙)は #22 制御経路の拡張として #23 と
-  併せて定義。プロトコル変更はバージョニング(#1 相当)・エラー本文リレー
-  (#2 相当)と同一改訂でまとめる。詳細は [protocol](../specs/protocol.md)。
+- **F7 Protocol**: Add top-level `session_id`(optional) to envel 
+wrapper reports real session id → server adds F1 pointer. Contact Us
+#22 #23
+Definitions Protocol change is versioning (equivalent to #1), error body relay
+(equivalent to #2) and the same revision. [protocol](../specs/protocol.md)
 
-#### F3 追補 — session reset時の明示detach (ADR-0036)
+#### F3 supplementation — explicit detach at session reset (ADR-0036)
 
-[ADR-0036](0036-session-lifecycle-commands.md)の`/new`・`/clear`でもF3の
-「serverは最新pointer 1件だけを保持し、全候補はrunnerが列挙する」契約を維持する。
-reset時は旧session IDへ暗黙resumeしないよう、session IDだけをnilへ明示detachし、
-cwd/engineを保持する専用operationを`SessionPointers`へ追加する。旧sessionのstackは
-serverに持たず、既存pickerとhost session列挙でresumeする。fresh session IDが報告
-された時点で通常のrecord経路により最新pointerを更新する。
+[ADR-0036](0036-session-lifecycle-commands.md)`/new``/clear`
+"。 retains only one latest pointer, and all candidates will be enumerated by 。."
+When reset, do not implicitly resume to the old session ID, detach only the session ID toilil,
+Add dedicated operation to `SessionPointers` to hold cwd/oper. old session stack
+Resume with the existing picker and host session enumeration, not in the server. fresh session ID
+update the latest pointer by normal record route at the time of being.
 
-#### F1 追補 — resolved snapshot の agent-scoped 永続 ([phase-15 D8](../plans/phase-15-wrapper-ux-parity.md))
+#### F1 supplement — resolved snapshot agent-scoped persistence ([phase-15 D8](../plans/phase-15-wrapper-ux-parity.md))
 
-phase-15 の resume drift detection (D8) のため、F1 の pointer に **agent-scoped
-の resolved snapshot** を追加する。「保持のみ」原則を「保持 + agent-scoped
-resolved snapshot」に拡張する:
+phase-15 dr resumeift detection (D  for F1 pointer **agent-scoped
+Add resolved snapshot**. "Retention Only" Principles + Agent-scoped
+resolved snapshot
 
-- **snapshot 内容**: `ext.resume_snapshot` / `ext.effective` に載る
+- **Snapshot**: `ext.resume_snapshot` / `ext.effective`
   `ResolvedSnapshotExt` (`{model, model_source, effort, effort_source,
   permission_mode, sandbox, network_access}`、`@kaoiro/protocol`)。
-- **semantics**: 「spawn 時の値」ではなく **「session 中に最後に実効だった値」**。
-  mid-session で operator が `set_model` / `set_effort` / `set_permission_mode` で
-  切り替えた場合、切替後の最新値が snapshot に反映される (意図した切替を drift
-  誤爆させない、director 明確化 2026-07-11)。
-- **stamp 経路**: wrapper が `state_change.ext.effective` として送出、server が
-  pointer の record 経路で `resolved_snapshot` field を更新する (envelope
-  ingest の既存経路と同じ)。
-- **agent-scoped 生存**: snapshot は agent_id に紐づき、**session 境界
-  (/new・/clear、[ADR-0036](0036-session-lifecycle-commands.md)) を跨いで生存**する。
-  detach 時 (F3 追補) は session_id のみ nil に、**snapshot / cwd / engine は
-  保持**する ([ADR-0036](0036-session-lifecycle-commands.md) F2 の fresh
-  relaunch が「最後の実効 snapshot から再適用」する契約と整合)。detach で
-  snapshot を消すと fresh relaunch の供給源が消え、consume 順序に依存する
-  fragile な reset 設計になるため保持が正 (director 判断確定 2026-07-12)。
-- **破棄**: agent 削除 ([ADR-0030](0030-agent-directory-and-explicit-restore.md)
-  D6 の 4-store purge) 時**のみ**。fresh session の初回 state_change の
-  `ext.effective` が届けば snapshot は自然に上書きされる (通常の record 経路)。
-- **persistence**: F1 の DETS backing に snapshot も乗せる (5-tuple
-  `{agent_id, session_id, cwd, engine, snapshot}`)。旧 3/4-tuple は load 時に
-  snapshot=nil として扱われ、次 record insert で 5-tuple に置換される。
-- **resume 復元**: spawn (with resume_session_id) 時に server が pointer の
-  snapshot を wrapper に返し、wrapper が **`ext.resume_snapshot`** として初回
-  state_change に stamp、今回強制値 (`ext.effective`) との差分を
-  **`ext.resume_drift`** で並置 (`ResumeDriftExt`)。stderr warn + AgentDetail
-  drift バッジで operator に露出。
+- **semantics**: Not “spawn time”**"The last value in session"**。
+`set_model` / `set_effort` / `set_permission_mode`
+When switched, it is reflected in the latest snap snapshot after  (the intended switch is drift
+erroneous, director clarification 2026。-11).
+- **stamp route**: wrapper is sent as `state_change.ext.effective` and  is
+update `resolved_snapshot` field in pointer record path (envel 
+same as the existing route of ingest.
+- **agent-scoped survival**: snapshot is linked to agent id and the **session boundary
+(/new/clear, [ADR-0036] (0036-session-lifecycle-commands.md))))**
+When detach (F3 supplement) is session id only nil, and **snapshot / cwd / engine is
+[ADR-0036](0036-session-lifecycle-commands.md) F2 fresh
+"Re-applying from the last effective snapshot" detach
+When snapshot is removed, the source of fresh relaunch disappears and depends on the consume order
+Retention is correct because it becomes  resetile reset design (director judgment 2026-12-12).
+- **Disposal**[ADR-0030](0030-agent-directory-and-explicit-restore.md)
+D6 4-store purge) at****Home The first state change of the fresh session
+When `ext.effective` is delivered, snapshot is overwritten naturally (normal record path).
+- **persistence**: F1 DETS backing with snapshot (5-tuple)
+`{agent_id, session_id, cwd, engine, snapshot}`. load 3/4-tuple is loaded
+This is treated as snapshot=nil and replaced by 5-tuple with the next record insert.
+- **resume**: spawn (with resume session id)
+return snapshot to wrapper and wrapper**`ext.resume_snapshot`**First time
+stamp to state change, the difference between force value (`ext.effective`)
+  **`ext.resume_drift`**`ResumeDriftExt` stderr warn
+Exposure to the operator with the drift badge.
 
-#### F1 追補 — resume 時の privilege 三軸再適用 (phase-22 藤 D1/D2, 2026-07-16)
+#### F1 Supplementary — Three-axis reapplication at resume (phase-22 Fuji D1/D2, 2026-16-16)
 
-D8 の snapshot は当初「drift 検出のための表示情報」だったが、resume 時に
-前回の privilege 設定 (danger-full-access / network / bypassPermissions 等)
-が engine default へ降格し operator の明示同意が失われる事故が確認された。
-本追補で **snapshot を実効設定復元の SSOT** に格上げする。ADR-0033 F3 の
-「Codex 二軸は spawn 時固定」/ ADR-0036 F2 の「/new・/clear で最後に実効
-だった設定で開始」の 2 契約と整合する。
+D8 snapshot was initially "display information for drift detection" at resume
+Previous privilege setting (danger-full-access / network / bypassPermissions, etc.)
+Fixed an accident in which the operator express consent was lost due to the demotion to engine default.
+Home**Restore snapshot with SSOT**to raise. ADR-0033 F3
+"Codex biaxial fixed when spawn" / ADR-0036 F2 "/new/clear" last effective
+Consolidate with the two contracts of "Start with the set".
 
-- **apply 対象 (P0)**: Codex は `sandbox` / `network_access`、Claude は
-  `permission_mode`。`model` / `effort` / `*_source` は sanitize 後の
-  snapshot に保持され drift 計算・wrapper `config.resume_snapshot` にも
-  乗るが、engine への apply は P1 (別 phase で取り扱う。cli.ts の
-  `modelSource` / `effortSource` 派生と絡むため P0 から分離)。
-- **apply 経路 (runner-central)**: 全 resume 操作で **runner の
-  `applyResumeSnapshot(parsed, snapshot, engine)` pure helper** が
-  `ParsedSpawn` の engine 関連フィールドを snapshot 由来値で上書きする。
-  server は `SwitchSessionMessage` / `ResetSessionCommand` / spawn 経路
-  で snapshot を relay するだけで top-level project は**しない**
-  (wire の二重表現を避ける、SSOT 一本化)。ADR-0036 F2 の「通常の spawn
-  経路から再適用」文言は本追補で「reset broadcast に相乗り + runner の
-  applyResumeSnapshot」として具体化される。
-- **apply する経路**: disconnected restore (`spawn` with
+- **Apply (P0)**: Codex `sandbox` / `network_access`, Claude
+`permission_mode` `model` / `effort` / `*_source` after sanitize
+wrapper `config.resume_snapshot`
+but apply to phase is handled by P1 (another phase). cli.ts
+`modelSource` / `effortSource` separation from P0 to intertwin with derivatives).
+- **-central**: All resume operations
+`applyResumeSnapshot(parsed, snapshot, engine)` pure helper**
+Overwrite the `ParsedSpawn` engineJapanese termーJapanese term field with snapshot-derived values.
+server is `SwitchSessionMessage` / `ResetSessionCommand` / spawn path
+top-level project with snapshot**not**
+(to avoid double-expression of wire, SSOT single). ADR-0036 F2 "normal spawn"
+"Re-apply from the route" in this supplement, "Cooperate with reset broadcast +  "
+applyResumeSnapshot
+- **Apply**: disconnected restore (`spawn` with
   `resume_session_id`)、live switch (`switch_session`)、reset
-  (`reset_session`)。**apply しない経路**: fresh spawn (snapshot は
-  `config.resume_snapshot` へ passthrough されるが drift 表示のみ)、
-  crash-restart (server 経由しないので `entry.parsed` の適用済み値継承)、
-  rollback (reset 時に適用済みの `entry.parsed` を保持)。crash-restart
-  race で最新 snapshot と `entry.parsed` が乖離する場合、drift として
-  operator に露出するが、resume_snapshot が stale なら drift 空になる
-  可能性もあり **crash-restart の drift 可視化は保証しない** (藤 D3)。
-- **absent field semantics** (藤 D2): snapshot object 自体が absent → apply
-  は no-op。snapshot object present + 当該 engine 関連 field absent / invalid
-  → **engine default へ安全側降格** (Codex: `workspace-write` / `false`、
-  Claude: `default`)。**旧 danger 値保持は禁止** (`entry.parsed` に残って
-  いた privileged 値を snapshot 由来 default が上書きする)。**explicit
-  `false` は保持** (truthy-drop 禁止、`is_boolean` / `!== undefined` 判定を
-  全経路で厳守)。
-- **validation の二重防御**: server 側 `SessionPointers.record_snapshot`
-  の write-side sanitize + runner 側 `validateResolvedSnapshot` の
-  read-side sanitize。closed-enum / boolean / non-empty-string guard を
-  known 7 field に対して行い、unknown key / malformed 値は drop + stderr
-  warn。過去 DETS record が partial malformed だった場合も read-side が
-  救う。fresh spawn の `resume_snapshot` に unknown key が混じっても
-  wrapper `config.resume_snapshot` には known 7 field のみ届く (sanitized
+  (`reset_session`)。**Apply Not Route**: Fresh Spawn (snapshot)
+`config.resume_snapshot` passthrough but only drift display),
+crash-restart (not via  ),
+rollback (retains `entry.parsed` applied when reset). Crash-restart
+If race deviates the latest snapshot and `entry.parsed`,
+if resume snapshot islele
+Possible**Crash-restart does not guarantee drift visualization**(Fuji D3).
+- **absent field semantics**(Home D2): snapshot object itself is absent → apply
+no-op. snapshot object present
+  → **engine default** (Codex: `workspace-write` / `false`、
+  Claude: `default`)。**Existing danger No value retention**`entry.parsed`
+overwrite the privileged value from snapshot). **licit
+`false` does not hold ** (COthy-drop, `is_boolean` / `!== undefined`)
+All routes
+- **validation double protection**: Server side `SessionPointers.record_snapshot`
+of write-side sanitize +   side `validateResolvedSnapshot`
+read-side sanitize. closed-enum / non-empty-string guard
+not known key/malformed value
+warn. read-side is also available if the past DETS record was partial malformed
+Save fresh spawn `resume_snapshot`
+wrapper `config.resume_snapshot` only sanitized
   passthrough)。
-- **security trust boundary**: closed-enum validation は malformed 攻撃を
-  塞ぐが、compromised authenticated wrapper が valid な
-  `danger-full-access` を偽 stamp する経路は本設計の外 (kaoiro が既存で
-  持つ「wrapper effective snapshot を server が信頼する」設計選択を継承
-  するだけで、本 phase で新規に導入する脆弱性ではない)。上位対策は
-  wrapper 実行ホストの完全性 (specs/threat-model.md T1 と同じ責務境界)。
+- **security trust boundary**: closed-enum validation malformed attack
+authenticated wrapper
+`danger-full-access` is a path to false stamps.
+wrapper effective snapshot is trusted by server.
+not a new vulnerability in this phase). Top Counter s
+wrapper execution host integrity (same asHomes/threat-model.md T1).
 
-#### F1 追補 — P1 pair-aware apply for model / effort (phase-23, 2026-07-16)
+#### P1 pair-aware apply for model / effort (phase-23, 2026-16-16)
 
-phase-22 F1 追補で P1 として punt した `model` / `effort` / `*_source`
-の resume 再適用を、両 engine に対して確定する。engine default 降格で
-operator の明示的な model / effort 選択が失われる問題を解消しつつ、
-`ext.model_source` / `ext.effort_source` に嘘を stamp しない (pair の
-semantic を破らない) ことを両立する。
+phase-22 F1 `model` / `effort` / `*_source`
+Reapply resume to both engines. engine default
+eliminate the problem that the operator's explicit model / effortProblems is lost,
+`ext.model_source` / `ext.effort_source` does not stamp a lie (pair)
+semantic)
 
-- **apply 対象 (P1)**: 両 engine (`claude-code` / `codex`) で `model` /
-  `model_source` / `effort` / `effort_source`。runner の
-  `applyResumeSnapshot` が phase-22 P0 と同じ経路 (initial restore /
-  switch / reset) で `ParsedSpawn.model` / `.modelSource` / `.effort` /
-  `.effortSource` を上書きし、`resolveWrapperConfig` が `config.model` /
-  `.model_source` / `.effort` / `.effort_source` として wrapper へ relay
-  する。protocol の `WrapperConfig` に `model_source?` / `effort_source?`
-  が追加されたのはこの relay 経路のため。
+- **Apply (P1)**: `model` /
+`model_source` / `effort` / `effort_source`  
+`applyResumeSnapshot` is the same path as phase-22 P0 (initial restore /
+`ParsedSpawn.model` / `.modelSource` / `.effort` /
+`.effortSource`, `resolveWrapperConfig`
+`.model_source` / `.effort` / `.effort_source`
+`model_source?` / `effort_source?`
+This Relay route has been added.
 
 - **5-case pair rule** (`computePair` in `runner/src/resume_snapshot.ts`):
-  1. **Both absent** → pair 全体 unset。fresh session は engine default を
-     継承。
-  2. **value + source=default** → pair 全体 unset。前回 session は SDK 側
-     default に委ねていたため、次回も explicit pin せず SDK 委任する。値
-     単体を retain すると source を嘘 stamp することになり不整合。
+  1. **Both absent**→ pair whole unset. engine default
+Contact Us
+  2. **value + source=default**→ pair whole unset. The previous session is the SDK
+Delegate the SDK without explicit pin. 
+Retaining a non-consolidated means to lie the source stamp.
   3. **value + explicit source (launch / config / env)** → verbatim
-     preserve。resume 前の明示的な選択を尊重する。
+。 resume Respect the explicit selection before.
   4. **value only (source absent, legacy snapshot)** → value +
-     `source="config"` を transport provenance として stamp。source
-     tracking が landing する前の DETS レコードを honour するための救済。
-  5. **source only (value absent)** → pair 全体 unset + stderr warn。
-     write-side gate と read-side sanitize の両方が防ぐ semantics 違反
-     なので、到達時は wrapper の mis-stamping バグを疑う。
+stamp `source="config"` as transport provenance. Source
+Re es to honour DETS records before trackingJapanese termーHome.
+  5. **source only (value absent)**→ pair whole unset + stderr warn.
+semantics violations preventing both write-side gate and read-side sanitize
+So, when you reach the wrapper, you will doubt the mis-stamping bug.
 
-- **cli source priority (wrapper 側)**: 両 wrapper の cli.ts で
-  `config.model_source` が set のときはそれを最優先で `resolvedModelSource`
-  に採用する (resume 由来 Case 3 の source が「config」に潰れないよう)。
-  次点は `config.model` set → `"config"` (Case 4 の legacy fallback と
-  fresh spawn の transport provenance を兼ねる)、`env` tier default set
-  → `"env"`、いずれも absent → `undefined` (host が SDK 確認後に
-  `"default"` を stamp)。effort も同じ pattern。
+- **cli source priority**: Both wrapper cli.ts
+`resolvedModelSource` is the first priority when `config.model_source` is set.
+adopt (to prevent the source from resume-derived Case 3 from configing to config).
+`config.model` set → `"config"` (Case 4 legacy fallback)
+fresh spawn, tier default set
+→ `"env"`, both absent → `undefined` (after host confirms the SDK)
+`"default"`. The same pattern.
 
-- **Codex catalog compatibility (constructor reset、resume 経路限定)**:
-  Codex host の constructor で **`this.#resumeSnapshot !== null` (resume
-  launch であること)** かつ `this.#model` と `this.#effort` が両方 set、
-  かつ `catalog` に該当 model の `effort_levels` が存在し
-  `this.#effort` を含まない場合、既存の setModel コードパスと同じ挙動
-  を再利用する (`#effortPending = null` / `#effortResetPending = true` /
-  `#effortResetOnce = true`)。`#finishTurn` が turn 成功時に
-  `default_effort` へ落とし `ext.effort_reset=true` を one-shot stamp
-  する既存 mechanism にそのまま繋がる。model 不在 / `effort_levels`
-  不明の場合は SDK 委任 (reset を engage しない) — genuine な mismatch
-  は SDK 側 error が `#finishTurn` の switch_error rollback で捕捉する。
-  **fresh spawn 経路 (`#resumeSnapshot === null`) は本 reset の対象外**:
-  launch-time の operator 選択を dashboard 経由でない黙示 reset で上書
-  きしないよう、従来通り SDK 側 error / 既存 switch_error rollback に
-  委ねる (fresh spawn incompatible effort でも constructor 時点では
-  effort_reset を engage しない、regression pin は
-  `wrapper/codex/test/host.test.ts` 側)。
+- **Codex catalog compatibility (constructor reset, resume route only)**:
+Codex host's constructor
+set both `this.#model` and `this.#effort`
+`effort_levels` of `catalog`
+If `this.#effort` is not included, the same behavior as the existing setModel code path
+reuse (`#effortPending = null` / `#effortResetPending = true` /
+`#effortResetOnce = true`. `#finishTurn` on turn success
+`default_effort` drop `ext.effort_reset=true` to one-shot stamp
+to the existing mechanism. `effort_levels`
+SDK delegation (reset not engaged) — genuine mismatch
+`#finishTurn`
+  **The fresh spawn route (`#resumeSnapshot === null`) is not eligible for this reset**:
+The launch-time operator dashboard is not silent reset via dashboard.
+SDK error / Existing switch error rollback
+fresh spawn incompatible effort
+effort reset does not engage, re  pin is
+`wrapper/codex/test/host.test.ts`
 
-- **Claude invalid effort pair drop (cli filter)**: Claude cli.ts で
-  `config.effort` が `CLAUDE_EFFORT_LEVELS` 外の場合、pair rule の意図を
-  wrapper 境界でも守るため **value / source を同時 drop** する (source
-  だけ残ると Claude host に「effort_source は set だが effort は null」
-  という Case 5 相当の状態が生まれてしまう)。stderr warn を書いて次回
-  resume で正しい effort を pin し直せるよう operator に露出する。
-  runner は engine の effort 語彙を知らないので、この filter は wrapper
-  側で行う (cross-package 依存の増加を避ける設計選択)。
+- **Claude invalid effort pair drop (cli filter)**Claude cli.ts
+If `config.effort` is not `CLAUDE_EFFORT_LEVELS`,
+To protect the wrapper boundary**drop/source**(source)
+"effort source is set but effort is null"
+Case 5 write stderr warn next time
+resumeose the operator to redo the correct effort with resume.
+engine doesn't know engine effort vocabulary.
+do on the side (design selection to avoid cross-package dependencies).
 
-- **既存 P0 との統合**: pair-aware apply は phase-22 P0 の Codex sandbox /
-  network_access / Claude permission_mode 再適用ロジックと同一の apply
-  経路上で動作する。「absent → engine default」の safe fallback semantics
-  も P0 と同じ。P0 と P1 は個別に評価され、片方 apply 済みでも他方に
-  drift 表示は影響しない (`ext.resume_drift` は field 単位で独立)。
+- **integration with existing P0**: pair-aware apply for phase-22 P0
+network access / Claude permission mode
+Works on the route. "absent → engine default" safe fallback semantics
+P0 P0 and P1 are evaluated individually, even if applied one way
+drift display does not affect (`ext.resume_drift` is independent in field).
 
-- **launch pin vs display hint の責務分離 (phase-23 dogfood 回帰対策,
-  2026-07-16)**: 上記 Case 2 (value + source=default) の unset は runner
-  apply として **launch pin の意味では正しい** (config.model /
-  config.effort を wrapper に載せず、SDK が委任継続で自ら default を再
-  選択する)。しかし wrapper の **display / catalog resolve は前回セッション
-  の value を必要とする** — Codex host の `initialStatusExtFromCatalog(catalog,
-  model)` は `this.#model=null` だと catalog.find() で undefined になり
-  `supports_effort_switch=false` を stamp、dashboard 側 effort switch
-  ボタンが gate される。Claude host は `#model=null` の状態で dashboard の
-  `effortLevels` 派生が `active = models.find(m.value === $currentModel)`
-  を解けない。runner-transported live catalog
-  (`config.claude_engine_catalog`, ADR-0039 F9 追補) が default alias を
-  含まない現実的な shape の場合、`models.find(m.value === "default")`
-  fallback も見つからず `effortLevels=[]` になり button が非表示になる
-  (`claudeBootstrapCatalog()` の default entry には
-  `effort_levels: [...FULL_EFFORT]` があるため、bootstrap のみへの
-  fallback ではこの回帰は再現しない — runner catalog が渡っている
-  production 相当の shape で成立する)。dogfood で "Codex resume 直後
-  model が『確認待ち』" "Codex effort が復元されない" "両 engine で
-  resume 直後 effort 切替ボタンが表示されない" として 3 症状同時観測
-  された (2026-07-16)。
+- "launch pin vs display hint"
+2026 -16)**:   Case 2 (value + source=default) unset
+Apply as**In the mean of launch pin** (config.model /
+config.effort does not appear in the wrapper, and S  will continue to revoke its default
+Select). However, wrapper's **display / catalog resolve is the last session
+'value' is required.`initialStatusExtFromCatalog(catalog,
+  model)`Home`this.#model=null`catalog.find()
+`supports_effort_switch=false` to stamp, Dashboard to switch
+The button is gated. Claude host is dashboard in `#model=null` state
+`effortLevels` `active = models.find(m.value === $currentModel)`
+Don't solve it.  -transported live catalog
+default alias
+`models.find(m.value === "default")`
+fallback is not found `effortLevels=[]` and button is non-display
+`claudeBootstrapCatalog()`
+`effort_levels: [...FULL_EFFORT]` for boots  only
+fallback does not reproduce this re  —   catalog has passed
+production). Dogfood in "Codex resume  
+"Codex effort is not restored"
+resume   effort Switch button is not displayed as " 3 symptoms simultaneous observation
+was (2026 -16).
 
-  **修正方針**: launch pin (SDK に explicit pass するか) と display hint
-  (UI が「前回はこの値だった」を見せるための情報) の 2 責務を明確に分離
-  する。**runner apply の Case 2 unset は無変更** (launch pin 責務のみ
-  引き続き担う); **wrapper host constructor で `options.resumeSnapshot`
-  の (value, source="default") pair を display hint として consume** し、
-  `this.#model` / `this.#effort` に反映する。SDK 委任 semantics を壊さない
-  ため、Codex `#threadOptions` の effort gate と Claude Query Options の
-  model / effort gate に対称の `source !== "default"` 条件を追加し、
-  hint 復元でも source="default" 時は SDK に pin しない。protocol 変更なし
-  (config.resume_snapshot は既に sanitize 通過して wrapper に届いている)。
+  **ification Policy**: launch pin (or explicit pass toDK) and display hint
+(information that the UI shows this value last time)
+**apply Case 2 unset is unset**(launch pin)
+`options.resumeSnapshot`
+Home (value, source="default") pair
+`this.#model` / `this.#effort` Don't break the SDK delegation semantics
+Codex `#threadOptions`
+`source !== "default"`
+If source="default" is used for hint recovery, the SDK does not pin. protocol No change
+(config.resume snapshot has already passed sanitize and arrived in wrapper).
 
-  **pair 整合 invariant**: hint fallback は **value と source="default" が
-  両方揃った pair のみ**を対象にする (source-only / explicit source pair
-  は runner apply の管轄外)。Claude effort hint は SDK 側 catalog drift
-  対策として `CLAUDE_EFFORT_LEVELS` で再 validation し、外れなら value /
-  source ともに drop + stderr warn (wrapper 境界でも pair drop invariant
-  を維持)。既存 setModel / setEffort は source を "config" に上書きする
-  ため hint fallback より優先、explicit choice も従来通り SDK Options に
-  載る。
+  **pair matching invariant**: hint fallback is
+Only pairs are available.
+is   apply. Claude Help hint
+re validation with `CLAUDE_EFFORT_LEVELS` as a counter , and value /
+drop + stderr warn
+). Existing setModel / setEffort overwrites source to "config"
+For hint fallback Priority,liclicit choice is
+Contact Us
 
-- **effortLevels の three-tier lookup (phase-23 dogfood 再回帰対策,
-  2026-07-16, 藤 修正版方針 5)**: hint fallback が発火するのは前回
-  セッションで snapshot に (value, source="default") pair が書かれていた
-  場合のみ。**前回セッションが turn 未完了 (initial idle のまま dogfood
-  restart)** で snapshot 未 stamp、あるいは Claude で **runner probe が
-  返す specific id ("claude-opus-4-7") と bootstrap "default" alias が
-  完全一致しない** 場合、dashboard の effortLevels 派生が完全一致 miss で
-  空 → effort switch button 非表示になる回帰が再 dogfood で観測された
-  (2026-07-16、症状: Codex account default / Claude 全域)。
+- **effortLevels of three-tier lookup (phase-23 dogfood),
+2026-16-16, Fuji revised version policy 5)**: hint fallback is fired last time
+a snapshot (value, source="default") pair
+if only. **Previous session is not completed (initial idle remains dogfood
+  restart)**in snapshot unstamp or in Claude**probe
+boots boot "default" alias
+Don’t match** if Dashboard’s effortLevels derivative is completely matched with miss
+empty → effort switch button non-display reserved with dogfood
+Codex account default
 
-  修正: **effort_levels の three-tier lookup を wrapper 側 catalog helper
-  と dashboard 派生の両方で採用**する (藤 G1 で concrete miss fail-closed
-  も追加):
-  1. **concrete key exact hit** — `model` が set され catalog に該当 entry
-     があれば、その effort_levels を返す (欠落なら `[]`、tier 2/3 に
-     fallback しない、fail-fast)。通常経路。
-  2. **real `value="default"` entry** — exact miss または model=null の
-     場合、engine が宣言した実在の default alias entry があればその
-     effort_levels を返す (欠落なら `[]`)。Claude bootstrap の default
-     entry は engine が宣言した「account-default effort domain」なので、
-     Haiku 等の effort 非対応 entry が同居していても正式 fallback として
-     使える。**synthetic default entry (ローカル合成) とは異なる** — real
-     default は SDK / wrapper が正式に返す alias で、model 切替 menu にも
-     意味を持つ。
-  3. **model 未報告 (`model === null`)** かつ real default 無しの場合
-     **のみ** → catalog 全 entry の effort_levels の intersection を
-     first entry の順で返す (1 件でも欠落あれば `[]` fail-closed)。
-     Codex account default 経路 (this.#model=null) が対象。
-  4. **concrete key があるが exact miss + real default 無し** (藤 G1)
-     → `[]` fail-closed。unknown / future / stale concrete model が
-     catalog 候補のいずれかである保証がなく、intersection を「現在 model
-     に必ず valid」と主張できない。安全側で button を非表示にする
-     (intersection にはフォールバックしない)。
+Fix: wrapper helper for three-tier lookup of **effort levels
+and dashboard adopt** in both derivatives
+Added:
+  1. **concrete key exact hit**`model`
+tier 2/3
+fallback not fail-fast). Normal route.
+  2. **real `value="default"` entry**null
+If you have a real default alias entry entryd by entry
+return effort levels (if missing `[]`). Claude boots 
+entry is "account-default effort domain" engined by engine,
+Haiku, etc. as a formal fallback even if non-compliant entry is present
+Contact Us**default entry** — real
+default is the alias that the SDK / wrapper is officiallyHome, and the model switch menu is
+have meaning.
+  3. **model Unreported (`model === null`)**and without real default
+     ****→ catalog All entry efforts levels intersection
+`[]` fail-closed if one is missing.
+Codex account default path (this.#model=null)
+  4. **There is a concrete key, but there is exactly miss + real default.**(Home G1)
+`[]` fail-closed. unknownle concrete model
+catalog There is no guarantee that it is one of the candidates, "intersection"
+not valid. Make button non-display on safety side
+(not fallback).
 
-  Codex は `wrapper/codex/src/catalog.ts` に pure helper
-  `effortLevelsForModel(catalog, model)` を追加、`initialStatusExtFromCatalog`
-  の `supports_effort_switch` 判定にこの helper を経由させる。Claude 側は
-  wrapper catalog を弄らず、dashboard 側の effortLevels 派生でのみ
-  3-tier lookup が発火 (Claude bootstrap の real default entry で tier 2
-  解決、runner live specific catalog で exact match tier 1 解決)。
-  engine 名分岐禁止 — models 配列だけで判定するので Codex / Claude 双方
-  に同一ロジックが適用される。
+Codex is a pure helper
+`effortLevelsForModel(catalog, model)`, `initialStatusExtFromCatalog`
+`supports_effort_switch` Determination via this helper. Claude
+wrapper catalog is not tampered with Dashboard's effortLevels derivative
+3-tier lookup fires (Claude boots 's real default entry in tier 2
+liveed live specific catalog with exact match tier 1 solution).
+engine name engine — codex / Claude because only models array
+the same logic is applied.
 
-  **real default entry と synthetic default の違い (重要)**: **real**
-  default entry は engine の `supportedModels()` 応答や wrapper bootstrap
-  catalog に含まれる **正式 alias**。SDK 側で "default" を選択すれば
-  account-recommended model が resolve され、model 切替 menu に出しても
-  意味のある選択肢になる。**synthetic** default entry はローカル catalog
-  helper がフォールバック目的で合成する「架空 entry」で、engine 側の
-  supportedModels() には存在しない。前者は tier 2 の正式 fallback として
-  使えるが、後者は禁止 — model 切替 menu にも出て operator が
-  `setModel("default")` を明示送信し得るため、engine 側の意図しない
-  routing 経路を作り込む責務汚染になる。Codex catalog は現在 real default
-  entry を持たず、synthetic 追加も禁止なので、Codex は必ず tier 3 で解決。
+  **default entry**: **real**
+wrapper boots engine
+catalog**Official alias**Home Select "default" on the SDK
+If the account-recommended model is resolved and the model switch menu is
+Make meaningful choices.**synthetic**default entry
+Helper's hollow entry for fallback purposes.
+not supportedModels(). The former as the official fallback of tier 2
+Can be used, but the latter is prohibited — the operator goes out to the model switch menu
+`setModel("default")` can be explicitly sent, not intended by the 
+routing Becomes a responsibilities  to create a route. Codex catalog
+Codex is always resolved with tier 3.
 
-  **union は不採用**: 「どれかの model が accept する effort」を UI に
-  提示すると、現在の model にとって invalid な pair を選択させることに
-  なり ADR-0035 の silent downgrade 禁止に反する。intersection で「どの
-  model でも accept される安全域」だけを提示する。ultra 等の上位 effort
-  は該当 model が exact match されているときだけ表示可能。
+  **union is unadopt**: "Efforts for which model accepts" to UI
+to select an invalid pair for the current model
+ADR-0035, silent downgrade, contrary to . intersection
+Only the safety zone that is accepted by the model. Top-level efforts such as ultra
+can be displayed only when the model is exact match.
 
-  **fail-closed 継承**: auth mode="unknown" の空 catalog は intersection
-  も `[]` を維持 (既存の fail-closed 姿勢)。effort_levels 欠落 entry が
-  1 件でもあれば全体 `[]` — 部分的情報で invalid pair を提示するリスクを
-  排除する。tier 1 exact match の levels 欠落も tier 2/3 に fallback せず
-  `[]` (仕様の一貫性、operator が明示選択した model が実際 effort 未対応
-  なら button を出さない)。
+  **fail-closed inheritance**: auth mode="unknown"
+also maintain `[]` (existing fail-closed posture). effort levels missing entry
+`[]` — risk to present invalid pairs with partial information
+tier 1 exact match of levels missing tier 2/3 on fallback
+`[]` (Consistency of specification, model specified by operator is actually not supported
+button.
 
-#### F1 追補 — session_id なし pointer の fresh-restore (phase-25, 2026-07-23)
+#### F1 supplement — without session id pointer fresh-restore (phase-25, 2026 -23)
 
-F1 の pointer が `session_id: nil` (cwd / engine / snapshot は保持) と
-なるケースは 2 経路で発生する:
+`session_id: nil` (cwd / engine / snapshot)
+2 paths:
 
-- `/clear` による detach ([ADR-0036](0036-session-lifecycle-commands.md) F3
-  追補): `SessionPointers.detach_session/1` で session_id を明示 nil に
-  落とし、cwd / engine / snapshot は保持する仕様。
-- **未発話 session**: SDK が init を出さないため wrapper が session_id を
-  一度も報告しない (上記 Q-A4 の init 挙動)。
+- detach by `/clear` ([ADR-0036] (0036-session-lifecycle-commands.md) F3
+Compensation): `SessionPointers.detach_session/1` explicit session id to nil
+cwd / engine / snapshot
+- **Unexpected session**: The wrapper does not show init, so the
+Don’t report it once (init behavior of Q-A4 above).
 
-いずれも server 再起動後の offline tile として復元候補に出るが、phase-25
-以前は restore handler の `session_pointer/1` が binary session_id を要求
-していたため `{:error, :no_session}` で reject → `spawn_result` error → ⚠
-となり、削除 + 手動再 launch しか復元手段がなかった。
+Both of them appear as offline tile after server restart, but phase-25
+restore handler `session_pointer/1` requests binary session id
+`{:error, :no_session}`
+and there was no way to restore only delete + manual re launch.
 
-**fresh-restore (phase-25)**: session_id が nil でも cwd + snapshot が
-残っていれば復元できるよう、以下を運用する:
+**fresh-restore (phase-25)**: session id, cwd + snapshot
+In order to restore the following:
 
-- server `session_pointer/1` を「cwd 必須・session_id は nil 許容」に緩和。
-- `build_restore_payload` は session_id が binary のとき従来どおり
-  `resume_session_id` を積み、nil のときは `resume_session_id` を **omit** し
-  **`apply_resume_snapshot: true`** を stamp する (protocol.md の spawn 拡張)。
-- runner の `handleSpawn` fresh 分岐 (resume_session_id 不在) で
-  `apply_resume_snapshot` が true のときのみ `applyResumeSnapshot(parsed,
-  parsed.resumeSnapshot, engine)` を発火 (P0 privilege 三軸 + P1 model/effort
-  pair)。T3 (session file 実在) と F4 (同一 session lock) は対象外 —
-  session file を読まないし session id lock も存在しないため直接
-  `#launchSpawn` へ流れる。
+- mitigate server `session_pointer/1` to "cwd required session id is nil tolerance".
+- `build_restore_payload` is used when session id is binary
+`resume_session_id` and `resume_session_id` whenilil**omit**Home
+  **`apply_resume_snapshot: true`**stamp (protocol.md spawn extension).
+- CO `handleSpawn` fresh   (resume session id missing)
+  `apply_resume_snapshot`only when true`applyResumeSnapshot(parsed,
+  parsed.resumeSnapshot, engine)`P1 model/effort
+pair). T3 (session file existence) and F4 (same session lock) are not applicable —
+do not read the session file and there is no session id lock.
+`#launchSpawn`
 
-**SSOT は runner のまま**: snapshot apply の SSOT は resume 経路と同じく
-runner 側 `applyResumeSnapshot` に一本化する。server で snapshot を
-top-level launch picks に展開して runner へ渡す案は、5-case pair rule の
-Elixir 重複実装 + `*_source` の嘘 stamp を招くため不採用 (上記 F1 追補
-phase-22「server は relay のみ、top-level 二重表現禁止」を維持)。
+**SSOT remains  **: snapshot apply SSOT is the same as the resume route
+Japanese term `applyResumeSnapshot` snapshot on server
+top-level launch picks.
+stxir Duplicate implementation + `*_source` lying stamps are not allowed (F1 supplement above)
+phase-22 " relay is only relay, it maintains top-level double expression prohibition".
 
-**flag なし fresh spawn の regression pin**: `apply_resume_snapshot` が
-未指定 or false のときの fresh spawn は従来どおり snapshot を engine 軸へ
-apply しない (D1 no-apply invariant)。resume_snapshot が同じ payload に
-乗っていても drift display 用の wrapper `config.resume_snapshot` として
-passthrough されるだけで、privilege 軸は spawn payload の top-level 値が
-効く。LaunchDialog 経由の operator 明示 launch を fresh-restore 経路が
-黙って上書きすることはない。
+**flag no fresh spawn re  pin**: `apply_resume_snapshot`
+When not specified or false, fresh spawn will snapshot as usual to the engine axis
+Apply not (D1 no-apply invariant). resume snapshot
+wrapper `config.resume_snapshot` for drift display
+The privilege axis is the top-level Japanese term of spawn payload
+Contact Us The operator express launch via Launch  has a fresh-restore route
+Never overwrite silently.
 
-**fail-soft**: snapshot が nil の pointer (きわめて古い record 等) は
-`resume_snapshot` 自体が spawn payload に乗らず、runner の
-`applyResumeSnapshot` は no-op → engine default で fresh 復元される。
-削除 + 再 launch よりは常に良い挙動。
+**fail-soft**: snapshot is nil pointer.
+`resume_snapshot` itself does not get to spawn payload,
+`applyResumeSnapshot` is restored by no-op → engine default.
+Better behavior than delete + re launch.
 
-**後方互換**: 旧 runner は未知 `apply_resume_snapshot` field を parseSpawn
-の unknown key 経路で無視 → engine default での fresh spawn に degrade
-(復元自体は成功、設定は default)。旧 server + 新 runner は flag が来ない
-ので完全不変。
+**Backward compatibility**: Old   parseSpawn unknown `apply_resume_snapshot` field
+ignored in the unknown key path → degrade to fresh spawn in engine default
+(Success, default) The old server + new   does not come flag
+so completely unchanged.
 
-### 履歴の正本(A4)
+### History (A4)
 
-会話履歴の **正本は wrapper ホストの SDK JSONL** とし、サーバの表示用
-リングバッファ([ADR-0012](0012-response-display-and-dashboard-scope.md) F7)を
-そこから **再構築可能な投影** と位置づける。これにより本機能は #24(全履歴の
-ディスク永続化)に強く依存しない。resume 時にサーバ表示履歴を JSONL から
-再構築・上書きする手段は **案 B(runner/wrapper が JSONL を直読して投影)** に
-確定(Q-A4、2026-06-23 実検証)。SDK の resume は過去履歴を query() ストリームへ
-再 yield しないため、案 A(SDK 再 stream を拾う)は不成立。検証詳細は
+conversation history**wrapper host SDK JSONL**for display
+Ring buffer ([ADR-0012](0012-response-display-and-dashboard-scope.md) F7)
+From there**Rebuildable **Contact Us #24
+not dependent on disk persistence. resumedisplayhistory from JSONL
+How to rebuild and overwrite**Draft B (wrapper/wrapper has not read JSONL directly)**Home
+(Q-A4, 2026-06-23). SDK resume to query()
+A (s  re-stream) is not established because it does not yield. Verification details
 [#50](https://github.com/sakuraiyuta/kaoiro/issues/50)。
 
-例外として、`inter_agent_message` はSDKへ注入された整形済みuser textから
-元のrouting metadata (`to` / `kind` / `conversation_id` / `turn_number`)を
-逆算できず、JSONLからstructured envelopeを再構築できない。この型だけは
-serverのDETS-backed `InterAgentHistory`を正本とし、senderごと最新500件を
-dogfood/container再起動を跨いで保持する (#102)。operatorへのhistory push時は
-volatile `AgentStates` のIAを除いてdurable IAをmergeし、既存dashboard fan-outで
-receiver側にも投影する。agent削除時はsender/receiver関連recordを同期purgeする。
+As an exception, `inter_agent_message` is injected to S  from the preformed user text
+`to` / `kind` / `conversation_id` / `turn_number`
+I can't reverse the structured envel  from JSONL. Only this type
+The server's DETS-backed `InterAgentHistory` is the same as the server's DETS-backed `InterAgentHistory`.
+Keep the dogfood/container restart overlap (#102). When pushing a history to the operator
+volatile `AgentStates` IA merge durable IA with existing dashboard fan-out
+also affects the receiver side. When deleting agent, purge the sender/cordeiver-related record.
 
-**2026-08-08 訂正:** この IA の「逆算不能」例外と server の
-`InterAgentHistory` 正本化は [ADR-0051](0051-history-restart-resilience.md)
-D3 で supersede された。構造化 IA の正本は wrapper ホストの sidecar とし、
-server 採番の ingress stamp を用いて per-pane projection と clear 境界を
-再構築する。
+**2026 08 Correction:**This IA "inverted" exception and server
+[ADR 1](0051-history-restart-resilience.md)
+D3 was supersede. IA's main structure is the sidecar of the wrapper host,
+ingpane stamp of server number to per-pane projection and clear border
+Rebuild.
 
 ## Consequences
 
 ### Positive
 
-- 障害復帰・既存文脈の続きが、各ホストへ SSH せずクライアント操作で行える。
-- 履歴の正本を JSONL に置くことで #24 への依存が緩む。
-- 召喚と復帰を単一機構に統合(別経路を作らない)。
+- You can use client operation without SSH to each host.
+- Re  #24 dependencies by adding the history book to JSONL.
+- integration to a single mechanism for summoning and returning.
 
 ### Negative
 
-- runner(#23)の常駐実装が前提で、フル機能は #22/#23 待ち。
-- 二重 resume 防止に二段(サーバ + runner)の実装が要る。
-- 表示履歴の再構築は JSONL 直読(案 B)が必須で、runner/wrapper 側に JSONL
-  解析の実装負担が乗る(Q-A4 解決、2026-06-23)。
+- The full function waits for #22/#23 assuming the resident implementation of Japanese term(#23).
+- Two-stage ( resume +  ) implementation is required for double resume prevention.
+- Reconstruction of displayhistory requires JSONL direct reading (draft B) and JSONL on wrapper/wrapper
+(Q-A4 solution, 2026-06-23)
 
 ### Neutral
 
-- ホスト非 ephemeral・agent_id ↔ cwd 固定の前提に依存する。
-- 既存 disconnected 導出・operator role 配信制御を流用し、新規認可機構は
-  作らない。
+- Host non-ephemeral/agent id ↔ cwd depends on the premise of fixing.
+- Existing disconnected derive/operator role
+Don't make it.
 
 ## Alternatives Considered
 
 | Option | Why rejected |
 |--------|--------------|
-| サーバ session_id を揮発保持 | サーバ再起動で既定復帰先を喪失 |
-| #24(全履歴ディスク永続)を巻き取り | 重く、JSONL 正本と役割重複 |
-| 候補一覧をサーバ履歴から提供 | 実ファイルと drift(削除済みを提示)、F1 と矛盾 |
-| 候補一覧を runner 列挙のみ | 既定の即時提示ができず往復必須 |
-| サーバフェンシングのみ | 分断時に二重起動を防げない |
-| runner ロックのみ | UX 早期拒否がなく撃ってから弾かれる |
-| continue(直近継続) | 明示性に欠け脆弱 |
-| forkSession(分岐) | id 変動・ファイル増、「同じ会話」でなく分岐(将来用) |
-| 復帰用に独立した制御経路を新設 | #22 spawn 経路と二重実装 |
+|server session id|Loss of default return destination in server restart|
+|#24|Heavy, JSONL Full and Role Duplicate|
+|List of candidates fromstoryhistory|Real files and drift (show deleted), conflict with F1|
+|List of candidates   enumeration only|It is not possible to show the default immediately and it is necessary to return|
+|server fenJapanese term only|Prevent double startup when disconnected|
+|Lock Only|UX Shooting without early refusal|
+|continue|Vulnerable to explicitness|
+|forkSession|idFilectuation, file extension, and not in the same conversation (for future use)|
+|New independent control path for restoration|#22 spawn route and double implementation|
 
-## 実装フェーズ(ロードマップ)
+## Mounting phase (road map)
 
-線形プロジェクトフェーズとは別軸の機能内順序。phase-1 以降は #22/#23 の
-runner 実装が前提。
+The internal order of the function of another axis from the linear project phase. #22/#23
+The   implementation is assumed.
 
-- **phase-0(#22/#23 非依存・即着手可)**: session_id の捕捉とポインタ永続化。
-  - wrapper の `session_id: ""` ハードコード解消(`host.ts`)、SDK init/result
-    から実 session_id を取得。
-  - エンベロープに top-level `session_id` 追加(#1/#2 と同一 protocol.md 改訂)。
-  - wrapper が session_id を報告 → サーバが F1 ポインタを軽量永続。
-  - Q-A4(過去履歴取得手段)と「resume + streaming 入力継続の可否」を実検証。
-  - 検証ゴール: サーバが各 agent の現 session_id を再起動越しに記憶。
-  - **実装状況(#48, 2026-06-16)**: wrapper の session_id 捕捉・報告とエンベロープ
-    への top-level `session_id` 付与は実装済み(過去セッションのログ消去機能と
-    併せて)。サーバはエンベロープの session_id を保持・配信する。
-  - **実装状況(#49, 2026-06-20)**: F1 のポインタ軽量永続を実装済み
-    (`KaoiroServer.SessionPointers`、DETS バック)。envelope 取り込み時に
-    `agent_id => {session_id, cwd}` を更新し再起動越しに記憶する。`host` は
-    agent_id に内包される(F3)ためサーバでは非保持。ファイルパスは
-    `KAOIRO_SESSION_POINTERS_PATH` で上書き可。
-  - **実装状況(Q-A4 実検証, 2026-06-23)**: SDK resume 挙動を headless 実走行で
-    確定。(1) **streaming 入力 + resume は併存**し、resume 後も後続ターンを受理・
-    応答(phase-1 関門クリア = SDK 制約による phase-1 ブロックは無い)。(2)
-    **履歴供給形は案 B に確定** — resume は過去履歴を query() ストリームへ再 yield
-    しない(入力なしでは hook ライフサイクルのみで init すら出ない)。表示履歴の
-    再構築は runner/wrapper が JSONL を直読する経路でのみ成立。検証詳細は
+- **phase-0(#22/#23 non-dependent and ready)**: session id capture and pointer persistence.
+- wrapper `session_id: ""``host.ts`, SDK init/re t
+get real session id.
+- Add top-level `session_id` to the envel  (revised protocol.md equivalent to #1/#2).
+- wrapper reports session id → server keeps F1 pointers lightweight.
+- Validation of Q-A4 and resume + streaming
+- Verification goal: server remembers the current session id of each agent over the restart.
+  - **(#48, 2026-06-16)**: wrapper session id capture report and envel 
+top-level `session_id` grants are implemented (log erasing function and
+server holds and distributes the envel  session id.
+  - **(#49, 2026-06-20)**: F1 pointer lightweight persistence implemented
+(`KaoiroServer.SessionPointers`, DETS back). envel  when importing
+Update `agent_id => {session_id, cwd}` and remember it over restart. `host`
+It is non-retained in   because it is wrapped in agent id (F3). File path
+`KAOIRO_SESSION_POINTERS_PATH`
+  - **Contact status (Q-A4, 2026-06-23)**: SDK resume
+Close (1)**streaming input + resume**After resume
+Response (phase-1 Clear = No phase-1 block due to SDKAbout Us). (2) (2)
+    **historyThe supply form is determined to B**— resume returns past history to query() stream
+not init without input. displayhistory
+Reconstruction is only established in a route where wrapper/wrapper reads JSONL directly. Verification details
     [#50](https://github.com/sakuraiyuta/kaoiro/issues/50)。
-- **phase-1(#22/#23 runner 前提)**: 復帰本体。
-  - #22 spawn の resume モード拡張、runner の候補列挙(F2)、F4 の二重防止、
-    T3 検証、クライアント復帰 UI(operator 限定、T2)。
-- **phase-2(Q-A4 確定 = 案 B、2026-06-23)**: resume 起動時に runner/wrapper が
-  当該 session の JSONL(`~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`)を
-  直読し、`user`/`assistant` 行(内部簿記行 `queue-operation` / `attachment` /
-  `last-prompt` / `mode` は除外)を時系列抽出 → ADR-0012 F7 リングバッファの
-  表示形へ写像 → 履歴再構築 envelope を一括送出しサーバ表示履歴を上書き(A4)。
-  重い再構築は runner/wrapper 側に置き、サーバは受け口に留める。
-  - **実装状況(#50, 2026-06-25)**: wrapper 側で実装。resume 起動時
-    (`--resume <session_id>`)に自分の JSONL を直読し、`user`/`assistant` 行を
-    既存の adapter(`sdkMessageToLogs`)+ 共有 payload 生成で `log` エンベロープへ
-    写像(operator 指示の `user` echo も補完)。サーバへ `history_reset`(JSONLで
-    再構築可能な行を消去し、構造化 inter-agent 行は保持 → `history_reset`
-    broadcast)を送ってから `log` を再生し、
-    crash 後もサーバ生存時の同一 session 旧行と二重化させずに上書きする。再構築は
-    wrapper に置き(adapter の写像を再利用、runner への mapping 重複を回避)、
-    サーバは `reset_history` + broadcast の受け口に留めた(architecture の agent
-    非依存方針)。`history_reset` の配信は operator 限定(ADR-0021)。履歴は最新
-    200 envelopeを基底capとし、それより古い`inter_agent_message`はSDK
-    transcriptから再構築不能なため#102でcap免除とした。詳細は
+- **phase-1**: Return body.
+- #22 spawn resume mode extension, spa candidate enumeration (F2), F4 double prevention,
+T3 validation, client return UI (operator only, T2).
+- **phase-2(Q-A4 final = draft B, 2026-06-23)**:  /wrapper
+JSONL(`~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`)
+`user`/`assistant`
+`last-prompt` / `mode` is excluded) time series extraction → ADR-0012 F7 ring buffer
+Copy to display type → Overwrite displayhistory (A4) to send envel  to rebuild history.
+Heavy reconstruction is placed on the wrapper/wrapper side and the wrapper is fastened to the receiver.
+  - **Status(#50, 2026-06-25)**: wrapper. resume On startup
+`user`/`assistant`
+`log` Envel 
+`user` echo of operator instruction is also complemented. `history_reset` to server
+Erase rebuildable lines and keep inter-agent lines structured → `history_reset`
+`log`
+Identification of the same session during the survival of the fish even after crashing Overwrite with the old line. Reconstruction
+wrapper (reuse the image of the adapter and map to mapping),
+`reset_history` + broadcast
+non-dependent policy. `history_reset` is available only for operator (ADR-0021). history
+200 based cap envelHome, and older `inter_agent_message` is SHome
+transcript is not reconstructed. More
     [protocol](../specs/protocol.md)。
-  - **IA 復元の正本(#102)**: 構造化 `inter_agent_message` envelope を表示の
-    authoritative source とする。SDK JSONL にも受信時に inject した IA framing
-    text が `user` turn として残るが、resume reconstruction ではこれを
-    `kind=user` log へ再投影しない。そうしないと durable IA envelope の bubble
-    と同じ内容が operator instruction として二重表示される。
-  - **2026-08-08 訂正(#102):** `InterAgentHistory` を正本・cap 免除とする
-    この追補は [ADR-0051](0051-history-restart-resilience.md) D3 により
-    supersede された。IA は wrapper ホストの sidecar から ingress stamp 付きで
-    replay し、server は揮発 per-pane projection のみを保持する。
+  - **IA Restore (#102)**: display structured `inter_agent_message` envel 
+authoritative source IA aming injected when the SDK JSONL receives
+text remains as `user` turn, but this is
+`kind=user` Don't rede  log. durable IA envel  bubble
+The same content is double-displayed as operator instruction.
+  - **2026 08 Correction (#102):**`InterAgentHistory` is a positive or cap exemption
+[ADR0051](0051-history-restart-resilience.md)
+supersede IA with ing  stamp from wrapper host sidecar
+replay and pane only retains volatile per-pane projection.
 
 ## Related
 
-- 解消: 旧 open-question `existing-agent-summon`(本 ADR へ昇格)、
-  `resume-history-projection`(Q-A4、2026-06-23 実検証で案 B 確定 → 本 ADR
-  phase-2 / 上記 phase-0 実装状況へ統合)。
-- 依存 issue:
+- Solution: Old open-question `existing-agent-summon` (promoted to ADR),
+`resume-history-projection`(Q-A4, 2026-06-23 B Verification → This ADR
+phase-2 / phase phase-0 (integration).
+- dependencies:
   [#22](https://github.com/sakuraiyuta/kaoiro/issues/22)
-  (サーバ経由起動)、
+(start via )),
   [#23](https://github.com/sakuraiyuta/kaoiro/issues/23)(runner)、
-  [#24](https://github.com/sakuraiyuta/kaoiro/issues/24)(履歴永続)。
-- 関連 specs: [protocol](../specs/protocol.md)、
+[#24](https://github.com/sakuraiyuta/kaoiro/issues/24)
+-spec:s: [protocol.md],
   [threat-model](../specs/threat-model.md)。
-- 関連 ADR: [0001](0001-agent-sdk-integration.md)、
+-agent ADR: [0001] (0001-agent-sdk-integration.md),
   [0011](0011-phase3-reliability-and-auth.md)、
   [0012](0012-response-display-and-dashboard-scope.md)。
