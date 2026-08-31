@@ -17,5 +17,15 @@ export type {
   CodexClientLike,
   CodexHostOptions,
   CodexThreadLike,
+  CodexLifecycleEvent,
 } from "./host.js";
+export {
+  TurnWatchdog,
+  readTurnWatchdogSettings,
+} from "./turn_watchdog.js";
+export type {
+  TurnWatchdogOptions,
+  TurnWatchdogSettings,
+  TurnWatchdogWarning,
+} from "./turn_watchdog.js";
 export { ToolHost } from "./toolhost.js";
