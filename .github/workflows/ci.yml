@@ -89,7 +89,16 @@ jobs:
           # unnoticed.
           set -euo pipefail
           # RuntimeConfigTest also reads the repository's scripts/dev.sh.
+          #
+          # `-e CI` (issue #282 案a): `docker run` does not inherit the
+          # runner's environment automatically -- Actions sets `CI=true`
+          # on the JOB, not inside this container, so `mix test`
+          # (test_helper.exs) would never see it without this explicit
+          # pass-through. Value omitted so a local manual run of this same
+          # command (no CI var set) leaves it unset inside the container
+          # too, matching the local default.
           tar --no-xattrs -cf - server scripts | docker run --rm -i -w /w \
+            -e CI \
             docker.io/hexpm/elixir:1.20.1-erlang-29.0.2-debian-trixie-20260610-slim \
             sh -euc '
               tar -xf - -C /w
