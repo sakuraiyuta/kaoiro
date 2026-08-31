@@ -109,7 +109,7 @@ Additional candidates excluded after consideration:
    and it lacks liveness (immediate response to state). **An intermediate
    option when rich idle motion is wanted without a custom rig.**
 
-### 評価軸の重み
+### Weighting of evaluation criteria
 
 Within issue #20's scope (idle-centered + single-image reuse + pure OSS + low
 priority), "whether a single image can be reused" and "OSS purity" dominate.
@@ -133,7 +133,7 @@ intermediate option, and candidate 3 is an option if its cost is acceptable.
    legibility and cost in the actual screen. Make the final adoption decision
    separately based on this investigation (as scoped by issue #20).
 
-## 解決時のアクション
+## Actions upon resolution
 
 - Once the adoption policy is settled, **make it an ADR** (a new ADR
   supplementing ADR-0004, or an update to 0004), and add the persona's

@@ -53,7 +53,7 @@ also possible. Leave room to choose a combination when deciding.
 Undecided. Revisit the discussion when entering phase-1. Until then, implement
 only loading the language field in phase-0.
 
-## 解決時のアクション
+## Actions upon resolution
 
 - [ ] Decision recorded in `adr/NNNN-persona-language-dispatch.md`
 - [ ] Update the "Data model" and "Constraints" sections of Spec `../specs/persona-personality-injection.md`

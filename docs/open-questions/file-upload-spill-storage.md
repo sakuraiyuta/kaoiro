@@ -43,7 +43,7 @@ to disk" to "short-lived temp files are allowed."
 A — entirely memory-based for the MVP. Wait for measurements showing that RSS
 has become a problem.
 
-## 解決時のアクション
+## Actions upon resolution
 
 - [ ] Add RSS observation metrics to the plan
 - [ ] Specify the threshold and spill strategy

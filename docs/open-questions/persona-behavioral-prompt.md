@@ -48,7 +48,7 @@ Reserve how to handle this scope expansion in the future.
 
 **A** (hold as a future task). tag is "awaiting dogfooding observation."
 
-## 解決時のアクション
+## Actions upon resolution
 
 - [ ] Decision recorded in `adr/NNNN-persona-behavioral-prompt.md`
 - [ ] If expanding, update the "Scope" section of `../specs/persona-personality-injection.md`
