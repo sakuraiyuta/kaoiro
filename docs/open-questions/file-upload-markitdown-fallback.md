@@ -49,7 +49,7 @@ A — The MVP uses officeparser alone. Add B (explicit backend selection) if a
 quality requirement appears. Do not adopt C (automatic fallback) because its
 implementation is complex.
 
-## 解決時のアクション
+## Actions upon resolution
 
 - [ ] Aggregate examples of quality requirements
 - [ ] Add an `office_backend` field to wrapper config

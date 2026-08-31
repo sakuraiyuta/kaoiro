@@ -43,7 +43,7 @@ A — no action because there is no collision at the protocol level. Display
 disambiguation is the client's responsibility; adding a suffix at send time in
 the reference dashboard is sufficient.
 
-## 解決時のアクション
+## Actions upon resolution
 
 - [ ] Specify disambiguation rules (where and how to add a suffix)
 - [ ] Change the client / wrapper implementation

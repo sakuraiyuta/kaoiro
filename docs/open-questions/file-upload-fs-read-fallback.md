@@ -45,7 +45,7 @@ wrapper-internal principle).
 A — This is the default in the issue body. Set the switching threshold through
 operational observation after phase-1 (Stage C) completes.
 
-## 解決時のアクション
+## Actions upon resolution
 
 - [ ] Add observation metrics (memory / latency) to the plan
 - [ ] If adopting (2), record it in an ADR and change the wrapper internal

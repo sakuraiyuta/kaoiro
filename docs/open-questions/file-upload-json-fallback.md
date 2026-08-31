@@ -44,7 +44,7 @@ wrapper aggregates both ingress paths into the same pending_uploads.
 A — MVP uses one binary path. Add B (backward compatible) if requests become
 real.
 
-## 解決時のアクション
+## Actions upon resolution
 
 - [ ] Aggregate simple-client requests
 - [ ] Specify the `attach_chunk_b64` wire

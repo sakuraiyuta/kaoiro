@@ -52,7 +52,7 @@ matter; client/server remain unchanged at the protocol level).
 A — The MVP uses only the base64 inline path. If an operational need for over
 32 MB appears, run a spike and consider B.
 
-## 解決時のアクション
+## Actions upon resolution
 
 - [ ] Spike enabling the Files API beta header through the Agent SDK
 - [ ] Implement Files API client integration in the wrapper (use
