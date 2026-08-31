@@ -61,7 +61,7 @@ defmodule KaoiroServerWeb.HealthControllerTest do
              } = json_response(conn, 200)
     end
 
-    test "build-info.json が焼き込まれていればその値を返す", %{conn: conn} do
+    test "矛盾した release identity は unknown/dev へ fail-soft する", %{conn: conn} do
       dir = tmp_release_root!()
 
       write_build_info!(
@@ -73,10 +73,29 @@ defmodule KaoiroServerWeb.HealthControllerTest do
       conn = get(conn, "/api/health")
 
       assert %{
+               "build_version" => "unknown",
+               "build_channel" => "dev",
+               "build_revision" => "unknown",
+               "build_dirty" => false
+             } = json_response(conn, 200)
+    end
+
+    test "clean known release identity is returned", %{conn: conn} do
+      dir = tmp_release_root!()
+
+      write_build_info!(
+        dir,
+        ~s({"version":"2026.9.0","channel":"release","revision":"0123456789abcdef0123456789abcdef01234567","dirty":false})
+      )
+
+      System.put_env("RELEASE_ROOT", dir)
+      conn = get(conn, "/api/health")
+
+      assert %{
                "build_version" => "2026.9.0",
                "build_channel" => "release",
                "build_revision" => "0123456789abcdef0123456789abcdef01234567",
-               "build_dirty" => true
+               "build_dirty" => false
              } = json_response(conn, 200)
     end
 

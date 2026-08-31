@@ -35,12 +35,12 @@ Display formatting adds the leading `v`, for example `v2026.9.0`.
 
 Extend the build identity computation in
 [`scripts/build-identity.mjs`](../../scripts/build-identity.mjs) to read that
-version and derive a channel. The channel is `release` only for a clean
-artifact whose commit is reachable from `main` and has the exact matching
-`v<VERSION>` tag. Every other artifact, including `develop`, dirty, detached
-unproven, and unknown builds, is `dev`. Component build paths consume this
-single computation or its build-time outputs; they do not reimplement the
-version or channel rules.
+version and derive a channel. The channel is `release` only for a clean,
+non-shallow checkout with an attached local `main` branch and the exact
+matching `v<VERSION>` tag. Every other artifact, including `develop`, dirty,
+detached, shallow, and unknown builds, is unconditionally `dev`. Component
+build paths consume this single computation or its build-time outputs; they do
+not reimplement the version or channel rules.
 
 Expose the version and channel next to the existing revision and dirty fields
 in the server health response. Bake the same values into the dashboard at

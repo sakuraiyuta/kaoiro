@@ -389,6 +389,21 @@ describe("buildRegister", () => {
     expect(register.build_channel).toBe("release");
   });
 
+  it("release の矛盾した buildInfo は unknown/dev に fail-soft する", () => {
+    const config = parseRunnerConfig(valid);
+    const register = buildRegister(config, "unknown", undefined, {
+      revision: "unknown",
+      dirty: true,
+      built_at: "2026-08-12T00:00:00.000Z",
+      version: "2026.9.0",
+      channel: "release",
+    });
+    expect(register.build_revision).toBe("unknown");
+    expect(register.build_dirty).toBe(false);
+    expect(register.build_version).toBe("unknown");
+    expect(register.build_channel).toBe("dev");
+  });
+
   it("dirty な buildInfo は build_dirty=true として載る", () => {
     const config = parseRunnerConfig(valid);
     const register = buildRegister(config, "unknown", undefined, {

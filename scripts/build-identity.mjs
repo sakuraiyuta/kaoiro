@@ -125,19 +125,18 @@ export function readProjectVersion(cwd = repoRoot) {
   }
 }
 
-/** A release requires a clean tree, a commit reachable from `main`, and the
- *  exact tag for VERSION. Detached CI checkouts remain eligible because
- *  branch containment, rather than the current ref name, proves main. */
+/** A release requires an attached, non-shallow local `main` checkout, a clean
+ *  tree, and the exact tag for VERSION. Detached and shallow checkouts are
+ *  deliberately dev-only because their provenance is not the release build
+ *  path operated today. */
 function determineBuildChannel(cwd, revision, dirty, version) {
   if (dirty || revision === "unknown" || version === "unknown") return "dev";
-  const branches = gitOutput(
-    ["branch", "--contains", revision, "--format=%(refname:short)"],
-    cwd,
-  );
+  const branch = gitOutput(["symbolic-ref", "--short", "-q", "HEAD"], cwd);
+  const shallow = gitOutput(["rev-parse", "--is-shallow-repository"], cwd);
+  if (branch !== "main" || shallow !== "false") return "dev";
   const tags = gitOutput(["tag", "--points-at", revision], cwd);
-  const onMain = branches?.split("\n").some((branch) => branch === "main");
   const hasVersionTag = tags?.split("\n").some((tag) => tag === `v${version}`);
-  return onMain && hasVersionTag ? "release" : "dev";
+  return hasVersionTag ? "release" : "dev";
 }
 
 /** The single canonical `<revision>[-dirty]` string form. Formula-identical

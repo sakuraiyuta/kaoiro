@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { resolveCodexCatalog } from "@kaoiro/codex";
 import { claudeBootstrapCatalog } from "@kaoiro/claude-code/catalog";
 import type { CodexAuthMode } from "./codex-auth.js";
-import type { BuildInfo } from "./build_info.js";
+import { isBuildInfoConsistent, type BuildInfo } from "./build_info.js";
 import type {
   EngineCatalogEntry,
   EngineKind,
@@ -363,6 +363,16 @@ export function buildRegister(
       ),
     });
   }
+  const safeBuildInfo =
+    buildInfo !== undefined && !isBuildInfoConsistent(buildInfo)
+      ? {
+          revision: "unknown",
+          dirty: false,
+          built_at: "unknown",
+          version: "unknown",
+          channel: "dev" as const,
+        }
+      : buildInfo;
   return {
     version: "0",
     host_id: config.host_id,
@@ -376,16 +386,16 @@ export function buildRegister(
       : { blocked_personas: config.blocked_personas }),
     capabilities,
     engines,
-    ...(buildInfo === undefined
+    ...(safeBuildInfo === undefined
       ? {}
       : {
-          build_revision: buildInfo.revision,
-          build_dirty: buildInfo.dirty,
-          ...(buildInfo.version === undefined || buildInfo.channel === undefined
+          build_revision: safeBuildInfo.revision,
+          build_dirty: safeBuildInfo.dirty,
+          ...(safeBuildInfo.version === undefined || safeBuildInfo.channel === undefined
             ? {}
             : {
-                build_version: buildInfo.version,
-                build_channel: buildInfo.channel,
+                build_version: safeBuildInfo.version,
+                build_channel: safeBuildInfo.channel,
               }),
         }),
   };

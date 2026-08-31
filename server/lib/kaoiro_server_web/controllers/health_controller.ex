@@ -72,10 +72,7 @@ defmodule KaoiroServerWeb.HealthController do
             "revision" => revision,
             "dirty" => dirty
           }} <- Jason.decode(raw),
-         true <- BuildIdentity.valid_version?(version),
-         true <- BuildIdentity.valid_channel?(channel),
-         true <- BuildIdentity.valid_revision?(revision),
-         true <- is_boolean(dirty) do
+         true <- BuildIdentity.valid_identity?(revision, dirty, version, channel) do
       %{version: version, channel: channel, revision: revision, dirty: dirty}
     else
       _ -> %{version: "unknown", channel: "dev", revision: "unknown", dirty: false}

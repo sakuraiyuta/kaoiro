@@ -111,6 +111,7 @@ type AgentHostOptions = ConstructorParameters<typeof AgentHost>[1];
 export interface ClaudeCliDependencies {
   parseCliArgs?: typeof parseCliArgs;
   loadConfig?: typeof loadConfig;
+  loadWrapperBuildInfo?: typeof loadWrapperBuildInfo;
   createServerLink?: CreateServerLink;
   createHost?: CreateAgentHost;
   buildMcpServer?: typeof buildKaoiroMcpServer;
@@ -153,12 +154,13 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     dependencies.createServerLink ?? ((...args) => new ServerLink(...args));
   const createHost =
     dependencies.createHost ?? ((...args) => new AgentHost(...args));
+  const readBuildInfo = dependencies.loadWrapperBuildInfo ?? loadWrapperBuildInfo;
   let link: ServerLink | null = null;
   const buildMcpServer = dependencies.buildMcpServer ?? buildKaoiroMcpServer;
   const { configPath, prompt: promptArg, resume: resumeSessionId } =
     parseArgs(process.argv.slice(2));
   const config = readConfig(configPath);
-  const buildInfo = loadWrapperBuildInfo(
+  const buildInfo = readBuildInfo(
     fileURLToPath(new URL("../dist/build-info.json", import.meta.url)),
   );
   // Operational safety valve, deliberately wrapper-local rather than a

@@ -5,13 +5,23 @@ import { computeBuildIdentity } from "../scripts/build-identity.mjs";
 import { defineConfig } from "vitest/config";
 
 function buildIdentity() {
-  const { KAOIRO_BUILD_VERSION, KAOIRO_BUILD_CHANNEL, KAOIRO_BUILD_REVISION } =
-    process.env;
-  if (KAOIRO_BUILD_VERSION && KAOIRO_BUILD_CHANNEL && KAOIRO_BUILD_REVISION) {
+  const {
+    KAOIRO_BUILD_VERSION,
+    KAOIRO_BUILD_CHANNEL,
+    KAOIRO_BUILD_REVISION,
+    KAOIRO_BUILD_DIRTY,
+  } = process.env;
+  if (
+    KAOIRO_BUILD_VERSION &&
+    KAOIRO_BUILD_CHANNEL &&
+    KAOIRO_BUILD_REVISION &&
+    (KAOIRO_BUILD_DIRTY === "true" || KAOIRO_BUILD_DIRTY === "false")
+  ) {
     return {
       version: KAOIRO_BUILD_VERSION,
       channel: KAOIRO_BUILD_CHANNEL,
       revision: KAOIRO_BUILD_REVISION,
+      dirty: KAOIRO_BUILD_DIRTY === "true",
     };
   }
   return computeBuildIdentity();
@@ -28,6 +38,7 @@ export default defineConfig({
     "import.meta.env.VITE_KAOIRO_BUILD_VERSION": JSON.stringify(identity.version),
     "import.meta.env.VITE_KAOIRO_BUILD_CHANNEL": JSON.stringify(identity.channel),
     "import.meta.env.VITE_KAOIRO_BUILD_REVISION": JSON.stringify(identity.revision),
+    "import.meta.env.VITE_KAOIRO_BUILD_DIRTY": JSON.stringify(identity.dirty),
   },
   // Component integration tests mount Svelte into jsdom. Without the browser
   // condition Vitest resolves `svelte` to index-server.js, where mount() is

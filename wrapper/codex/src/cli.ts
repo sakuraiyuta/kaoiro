@@ -82,6 +82,7 @@ type CodexHostOptions = ConstructorParameters<typeof CodexHost>[1];
 export interface CodexCliDependencies {
   parseCliArgs?: typeof parseCliArgs;
   loadConfig?: typeof loadConfig;
+  loadWrapperBuildInfo?: typeof loadWrapperBuildInfo;
   createServerLink?: CreateServerLink;
   createHost?: CreateCodexHost;
   prepareStartup?: typeof prepareCodexStartup;
@@ -118,12 +119,13 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   const createHost =
     dependencies.createHost ?? ((...args) => new CodexHost(...args));
   const prepareStartup = dependencies.prepareStartup ?? prepareCodexStartup;
+  const readBuildInfo = dependencies.loadWrapperBuildInfo ?? loadWrapperBuildInfo;
   let link: ServerLink | null = null;
   const { configPath, prompt, resume: resumeSessionId } = parseArgs(
     process.argv.slice(2),
   );
   const config = readConfig(configPath);
-  const buildInfo = loadWrapperBuildInfo(
+  const buildInfo = readBuildInfo(
     fileURLToPath(new URL("../dist/build-info.json", import.meta.url)),
   );
   const turnWatchdogSettings = readTurnWatchdogSettings(

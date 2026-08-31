@@ -356,7 +356,24 @@ defmodule KaoiroServerWeb.RunnerChannel do
       true ->
         with {:ok, revision_attrs} <- parse_revision_pair(payload, has_revision),
              {:ok, version_attrs} <- parse_version_pair(payload, has_version) do
-          {:ok, Map.merge(revision_attrs, version_attrs)}
+          attrs = Map.merge(revision_attrs, version_attrs)
+
+          case attrs do
+            %{
+              build_revision: revision,
+              build_dirty: dirty,
+              build_version: version,
+              build_channel: channel
+            } ->
+              if BuildIdentity.valid_identity?(revision, dirty, version, channel),
+                do: {:ok, attrs},
+                else: {:error, :invalid_build_info}
+
+            _ ->
+              if Map.get(attrs, :build_channel) == "release",
+                do: {:error, :invalid_build_info},
+                else: {:ok, attrs}
+          end
         end
     end
   end

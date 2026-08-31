@@ -324,6 +324,24 @@ describe("fetchServerHealth (issue #228)", () => {
     expect(await fetchServerHealth()).toBeNull();
   });
 
+  it("release の矛盾した provenance は null", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          status: "ok",
+          build_version: "2026.9.0",
+          build_channel: "release",
+          build_revision: "unknown",
+          build_dirty: true,
+          protocol_version: "0",
+        }),
+      })),
+    );
+    expect(await fetchServerHealth()).toBeNull();
+  });
+
   it("ネットワークエラーは null", async () => {
     vi.stubGlobal(
       "fetch",
@@ -1790,6 +1808,34 @@ describe("parseHosts (#22)", () => {
     expect("build_version" in invalid!).toBe(false);
     expect("build_channel" in invalid!).toBe(false);
   });
+
+  it("release pair は完全な provenance が無ければ落とす", () => {
+    const [withoutProvenance] = parseHosts({
+      "release-without-provenance": {
+        personas: [mio],
+        cwd_allowlist: ["/p"],
+        build_version: "2026.9.0",
+        build_channel: "release",
+      },
+    });
+    expect("build_version" in withoutProvenance!).toBe(false);
+    expect("build_channel" in withoutProvenance!).toBe(false);
+
+    const [contradictory] = parseHosts({
+      "contradictory-release": {
+        personas: [mio],
+        cwd_allowlist: ["/p"],
+        build_revision: "unknown",
+        build_dirty: true,
+        build_version: "2026.9.0",
+        build_channel: "release",
+      },
+    });
+    expect("build_revision" in contradictory!).toBe(false);
+    expect("build_dirty" in contradictory!).toBe(false);
+    expect("build_version" in contradictory!).toBe(false);
+    expect("build_channel" in contradictory!).toBe(false);
+  });
 });
 
 describe("parseWrapperBuildInfo (#288)", () => {
@@ -1802,6 +1848,17 @@ describe("parseWrapperBuildInfo (#288)", () => {
 
   it("accepts a complete identity", () => {
     expect(parseWrapperBuildInfo(info)).toEqual(info);
+  });
+
+  it("drops a release identity with contradictory provenance", () => {
+    expect(
+      parseWrapperBuildInfo({
+        ...info,
+        build_revision: "unknown",
+        build_dirty: true,
+        build_channel: "release",
+      }),
+    ).toBeNull();
   });
 
   it("drops malformed identities and keeps valid snapshot siblings", () => {

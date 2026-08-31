@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatBuildIdentity,
   formatRunnerHostLabel,
+  normalizeDisplayBuildIdentity,
 } from "../src/lib/buildIdentity";
 
 describe("formatBuildIdentity (issue #288)", () => {
@@ -23,6 +24,22 @@ describe("formatBuildIdentity (issue #288)", () => {
         revision: "unknown",
       }),
     ).toBe("kaoiro dev server vunknown / unknown");
+  });
+
+  it("normalizes an impossible release identity to dev", () => {
+    expect(
+      normalizeDisplayBuildIdentity({
+        version: "unknown",
+        channel: "release",
+        revision: "unknown",
+        dirty: true,
+      }),
+    ).toEqual({
+      version: "unknown",
+      channel: "dev",
+      revision: "unknown",
+      dirty: true,
+    });
   });
 
   it("host list label appends the runner identity after host_id", () => {

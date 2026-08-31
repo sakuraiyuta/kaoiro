@@ -1416,6 +1416,18 @@ function isValidBuildChannel(value: unknown): value is "dev" | "release" {
   return value === "dev" || value === "release";
 }
 
+function isConsistentBuildIdentity(
+  revision: string,
+  dirty: boolean,
+  version: string,
+  channel: "dev" | "release",
+): boolean {
+  return (
+    channel !== "release" ||
+    (!dirty && revision !== "unknown" && version !== "unknown")
+  );
+}
+
 /** Server's own build identity (issues #228/#288), served at GET /api/health.
  *  `build_version` / `build_channel` identify the lockstep CalVer project
  *  artifact; `build_channel` is a controlled `dev`/`release` value.
@@ -1461,6 +1473,12 @@ export async function fetchServerHealth(base = ""): Promise<ServerHealth | null>
       !isValidBuildChannel((body as ServerHealth).build_channel) ||
       !isValidBuildRevision((body as ServerHealth).build_revision) ||
       typeof (body as ServerHealth).build_dirty !== "boolean" ||
+      !isConsistentBuildIdentity(
+        (body as ServerHealth).build_revision,
+        (body as ServerHealth).build_dirty,
+        (body as ServerHealth).build_version,
+        (body as ServerHealth).build_channel,
+      ) ||
       typeof (body as ServerHealth).protocol_version !== "string"
     ) {
       return null;
@@ -2096,6 +2114,19 @@ export function parseHosts(value: unknown): HostInfo[] {
       Array.isArray((entry as HostInfo).cwd_allowlist)
     ) {
       const e = entry as HostInfo;
+      const validRevisionPair =
+        isValidBuildRevision(e.build_revision) && typeof e.build_dirty === "boolean";
+      const validVersionPair =
+        isValidBuildVersion(e.build_version) && isValidBuildChannel(e.build_channel);
+      const validCompleteIdentity =
+        validRevisionPair &&
+        validVersionPair &&
+        isConsistentBuildIdentity(
+          e.build_revision!,
+          e.build_dirty!,
+          e.build_version!,
+          e.build_channel!,
+        );
       hosts.push({
         host_id: hostId,
         personas: e.personas,
@@ -2123,11 +2154,13 @@ export function parseHosts(value: unknown): HostInfo[] {
         // is confirmed clean" — the same trust-boundary invariant the
         // server enforces was NOT enforced here. Both fields must be
         // present and individually valid, or neither is copied.
-        ...(isValidBuildRevision(e.build_revision) && typeof e.build_dirty === "boolean"
+        ...(validRevisionPair && (!validVersionPair || validCompleteIdentity)
           ? { build_revision: e.build_revision, build_dirty: e.build_dirty }
           : {}),
-        ...(isValidBuildVersion(e.build_version) &&
-        isValidBuildChannel(e.build_channel)
+        ...(validVersionPair &&
+        (e.build_channel !== "release"
+          ? (!validRevisionPair || validCompleteIdentity)
+          : validCompleteIdentity)
           ? {
               build_version: e.build_version,
               build_channel: e.build_channel,
@@ -2149,7 +2182,13 @@ export function parseWrapperBuildInfo(value: unknown): WrapperBuildInfo | null {
     !isValidBuildVersion(raw.build_version) ||
     !isValidBuildChannel(raw.build_channel) ||
     !isValidBuildRevision(raw.build_revision) ||
-    typeof raw.build_dirty !== "boolean"
+    typeof raw.build_dirty !== "boolean" ||
+    !isConsistentBuildIdentity(
+      raw.build_revision,
+      raw.build_dirty,
+      raw.build_version,
+      raw.build_channel,
+    )
   ) {
     return null;
   }

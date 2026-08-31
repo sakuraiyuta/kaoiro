@@ -23,6 +23,21 @@ const UNKNOWN_WRAPPER_BUILD_INFO: WrapperBuildInfo = {
 const BUILD_REVISION_RE = /^[0-9a-f]{40}$/;
 const BUILD_VERSION_RE = /^\d{4}\.(?:[1-9]|1[0-2])\.\d+$/;
 
+/** A release label is valid only when its provenance fields prove it. */
+export function isWrapperBuildInfoConsistent(
+  info: Pick<WrapperBuildInfo, "revision" | "dirty" | "version" | "channel">,
+): boolean {
+  return (
+    info.channel !== "release" ||
+    (!info.dirty && info.revision !== "unknown" && info.version !== "unknown")
+  );
+}
+
+/** Fail-soft boundary for injected build metadata before it reaches wire. */
+export function normalizeWrapperBuildInfo(info: WrapperBuildInfo): WrapperBuildInfo {
+  return isWrapperBuildInfoConsistent(info) ? info : UNKNOWN_WRAPPER_BUILD_INFO;
+}
+
 function validBuiltAt(value: unknown): value is string {
   if (value === "unknown") return true;
   if (typeof value !== "string") return false;
@@ -40,7 +55,13 @@ function validBuildInfo(value: unknown): value is WrapperBuildInfo & { built_at:
     validBuiltAt(raw.built_at) &&
     typeof raw.version === "string" &&
     (raw.version === "unknown" || BUILD_VERSION_RE.test(raw.version)) &&
-    (raw.channel === "dev" || raw.channel === "release")
+    (raw.channel === "dev" || raw.channel === "release") &&
+    isWrapperBuildInfoConsistent({
+      revision: raw.revision,
+      dirty: raw.dirty,
+      version: raw.version,
+      channel: raw.channel,
+    })
   );
 }
 

@@ -107,6 +107,25 @@ describe("loadBuildInfo (issue #228)", () => {
     });
   });
 
+  it("release が unknown revision または dirty を伴う build-info は unknown へ fail-soft する", () => {
+    tmpDir = mkdtempSync(join(tmpdir(), "kaoiro-build-info-"));
+    writeFileSync(
+      join(tmpDir, "build-info.json"),
+      JSON.stringify({
+        revision: "unknown",
+        dirty: true,
+        built_at: "2026-08-12T00:00:00.000Z",
+        version: "2026.9.0",
+        channel: "release",
+      }),
+    );
+    expect(loadBuildInfo(tmpDir)).toEqual({
+      revision: "unknown",
+      dirty: false,
+      built_at: "unknown",
+    });
+  });
+
   // ファイルが無い経路 (tarball 配布外・pnpm build を経ていない dev 実行)
   // が "unknown" へ fail-soft することを pin する — 起動を止めてはならない。
   it("build-info.json が存在しない場合は unknown へ fail-soft する", () => {

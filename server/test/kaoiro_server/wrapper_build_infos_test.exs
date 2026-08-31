@@ -28,6 +28,23 @@ defmodule KaoiroServer.WrapperBuildInfosTest do
     assert WrapperBuildInfos.snapshot(store) == %{}
   end
 
+  test "rejects contradictory release provenance", %{store: store} do
+    assert {:error, :invalid_build_info} =
+             WrapperBuildInfos.put(
+               "agent-a",
+               %{
+                 "build_revision" => "unknown",
+                 "build_dirty" => true,
+                 "build_version" => "2026.9.0",
+                 "build_channel" => "release"
+               },
+               self(),
+               store
+             )
+
+    assert WrapperBuildInfos.snapshot(store) == %{}
+  end
+
   test "owner fencing keeps a newer connection's identity", %{store: store} do
     old_owner = spawn(fn -> Process.sleep(100) end)
     new_owner = spawn(fn -> Process.sleep(100) end)

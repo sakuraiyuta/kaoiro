@@ -70,4 +70,30 @@ defmodule KaoiroServer.BuildIdentityTest do
       refute BuildIdentity.valid_channel?(nil)
     end
   end
+
+  describe "valid_identity?/4" do
+    test "clean known release is valid" do
+      assert BuildIdentity.valid_identity?(
+               "0123456789abcdef0123456789abcdef01234567",
+               false,
+               "2026.9.0",
+               "release"
+             )
+    end
+
+    test "release with unknown revision or dirty state is invalid" do
+      refute BuildIdentity.valid_identity?("unknown", false, "2026.9.0", "release")
+
+      refute BuildIdentity.valid_identity?(
+               "0123456789abcdef0123456789abcdef01234567",
+               true,
+               "2026.9.0",
+               "release"
+             )
+    end
+
+    test "dev permits diagnostic unknown/dirty values" do
+      assert BuildIdentity.valid_identity?("unknown", true, "unknown", "dev")
+    end
+  end
 end

@@ -41,10 +41,7 @@ defmodule KaoiroServer.WrapperBuildInfos do
         "build_version" => version,
         "build_channel" => channel
       }) do
-    if is_boolean(dirty) and
-         BuildIdentity.valid_revision?(revision) and
-         BuildIdentity.valid_version?(version) and
-         BuildIdentity.valid_channel?(channel) do
+    if BuildIdentity.valid_identity?(revision, dirty, version, channel) do
       {:ok,
        Map.take(
          %{

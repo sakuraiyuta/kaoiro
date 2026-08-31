@@ -8,7 +8,7 @@
 // git call and lives in its own file (buildIdentityScriptDegrade.test.ts)
 // so that mock does not leak into these real-subprocess tests.
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,6 +26,18 @@ const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 function git(args: string[], cwd: string): void {
   execFileSync("git", args, { cwd, stdio: "pipe" });
+}
+
+function createTaggedMainRepo(root: string, tag = "v2026.9.0"): void {
+  git(["init", "--quiet", "-b", "main"], root);
+  writeFileSync(join(root, "VERSION"), "2026.9.0\n");
+  writeFileSync(join(root, "a.txt"), "hello\n");
+  git(["add", "VERSION", "a.txt"], root);
+  git(
+    ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-m", "x", "--quiet"],
+    root,
+  );
+  git(["tag", tag], root);
 }
 
 describe("computeBuildIdentity (issue #228 round 2)", () => {
@@ -69,6 +81,37 @@ describe("computeBuildIdentity (issue #228 round 2)", () => {
     git(["tag", "v2026.9.0"], tmpDir);
 
     expect(computeBuildIdentity(tmpDir).channel).toBe("release");
+  });
+
+  it.each([
+    ["dirty exact-tag main", (root: string) => writeFileSync(join(root, "a.txt"), "changed\n")],
+    ["previous tag main", (root: string) => {
+      git(["tag", "-d", "v2026.9.0"], root);
+      git(["tag", "v2026.8.0"], root);
+    }],
+    ["detached exact-tag checkout", (root: string) => git(["checkout", "--quiet", "--detach", "HEAD"], root)],
+  ])("release guard rejects %s", (_label, mutate) => {
+    tmpDir = mkdtempSync(join(tmpdir(), "kaoiro-build-identity-"));
+    createTaggedMainRepo(tmpDir);
+    mutate(tmpDir);
+
+    expect(computeBuildIdentity(tmpDir).channel).toBe("dev");
+  });
+
+  it("shallow な attached main でも exact tag を release にしない", () => {
+    tmpDir = mkdtempSync(join(tmpdir(), "kaoiro-build-identity-"));
+    const source = join(tmpDir, "source");
+    const shallow = join(tmpDir, "shallow");
+    mkdirSync(source);
+    createTaggedMainRepo(source);
+    execFileSync(
+      "git",
+      ["clone", "--quiet", "--depth", "1", "--branch", "main", `file://${source}`, shallow],
+      { stdio: "pipe" },
+    );
+    git(["tag", "-f", "v2026.9.0"], shallow);
+
+    expect(computeBuildIdentity(shallow).channel).toBe("dev");
   });
 
   it("tracked ファイルの未コミット変更を dirty: true として検出する", () => {

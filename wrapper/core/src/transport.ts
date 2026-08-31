@@ -23,7 +23,10 @@ import type {
   UserDirectoryEntry,
   UserRole,
 } from "@kaoiro/protocol";
-import type { WrapperBuildInfo } from "./build_info.js";
+import {
+  normalizeWrapperBuildInfo,
+  type WrapperBuildInfo,
+} from "./build_info.js";
 
 /** A client's permission decision relayed by the server (protocol.md).
  *  Defined here (the wire layer that parses it); the PermissionBroker in
@@ -1116,11 +1119,12 @@ export class ServerLink {
       .join()
       .receive("ok", (reply: unknown) => {
         if (options.buildInfo !== undefined) {
+          const buildInfo = normalizeWrapperBuildInfo(options.buildInfo);
           this.#pushVersioned("wrapper_build_info", {
-            build_revision: options.buildInfo.revision,
-            build_dirty: options.buildInfo.dirty,
-            build_version: options.buildInfo.version,
-            build_channel: options.buildInfo.channel,
+            build_revision: buildInfo.revision,
+            build_dirty: buildInfo.dirty,
+            build_version: buildInfo.version,
+            build_channel: buildInfo.channel,
           });
         }
         options.onHydration?.(hydrationVerdictFrom(reply));

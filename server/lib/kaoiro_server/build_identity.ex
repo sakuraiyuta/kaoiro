@@ -36,4 +36,15 @@ defmodule KaoiroServer.BuildIdentity do
   @spec valid_channel?(term()) :: boolean()
   def valid_channel?(channel) when channel in ["dev", "release"], do: true
   def valid_channel?(_), do: false
+
+  @doc "True when a release also has clean, known provenance."
+  @spec valid_identity?(term(), term(), term(), term()) :: boolean()
+  def valid_identity?(revision, dirty, version, channel) do
+    is_boolean(dirty) and
+      valid_revision?(revision) and
+      valid_version?(version) and
+      valid_channel?(channel) and
+      (channel != "release" or
+         (dirty == false and revision != "unknown" and version != "unknown"))
+  end
 end

@@ -77,6 +77,17 @@ function isValidBuildChannel(value: unknown): value is "dev" | "release" {
   return value === "dev" || value === "release";
 }
 
+/** A release label is meaningful only when its provenance fields prove it. */
+export function isBuildInfoConsistent(
+  info: Pick<BuildInfo, "revision" | "dirty" | "version" | "channel">,
+): boolean {
+  if (info.channel === undefined || info.version === undefined) return true;
+  return (
+    info.channel !== "release" ||
+    (!info.dirty && info.revision !== "unknown" && info.version !== "unknown")
+  );
+}
+
 function isBuildInfoShape(value: unknown): value is BuildInfo {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;
@@ -90,7 +101,14 @@ function isBuildInfoShape(value: unknown): value is BuildInfo {
     isValidBuiltAt(v.built_at) &&
     hasVersion === hasChannel &&
     (!hasVersion ||
-      (isValidBuildVersion(v.version) && isValidBuildChannel(v.channel)))
+      (isValidBuildVersion(v.version) &&
+        isValidBuildChannel(v.channel) &&
+        isBuildInfoConsistent({
+          revision: v.revision as string,
+          dirty: v.dirty as boolean,
+          version: v.version as string,
+          channel: v.channel as "dev" | "release",
+        })))
   );
 }
 

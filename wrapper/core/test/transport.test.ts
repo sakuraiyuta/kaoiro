@@ -1314,6 +1314,26 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
     for (const push of mock.pushes) expect(push.payload).toMatchObject({ version: "0" });
   });
 
+  it("矛盾した release buildInfo は wrapper_build_info で unknown/dev に落とす", () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      buildInfo: {
+        revision: "unknown",
+        dirty: true,
+        version: "2026.9.0",
+        channel: "release",
+      },
+    });
+    mock.joinReceivers.get("ok")!({});
+    const push = mock.pushes.find((entry) => entry.event === "wrapper_build_info");
+    expect(push?.payload).toMatchObject({
+      build_revision: "unknown",
+      build_dirty: false,
+      build_version: "unknown",
+      build_channel: "dev",
+    });
+  });
+
   it("T1-4: control call site は funnel を迂回しない", async () => {
     const source = await import("node:fs/promises").then((fs) => fs.readFile(new URL("../src/transport.ts", import.meta.url), "utf8"));
     expect((source.match(/this\.\#channel\.push\(/g) ?? [])).toHaveLength(2);

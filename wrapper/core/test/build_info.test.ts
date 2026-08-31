@@ -50,4 +50,30 @@ describe("loadWrapperBuildInfo", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("fails closed when release provenance is contradictory", () => {
+    const dir = mkdtempSync(join(tmpdir(), "kaoiro-wrapper-build-info-test-"));
+    const file = join(dir, "build-info.json");
+    try {
+      writeFileSync(
+        file,
+        JSON.stringify({
+          revision: "unknown",
+          dirty: true,
+          built_at: "2026-09-01T00:00:00.000Z",
+          version: "2026.9.0",
+          channel: "release",
+        }),
+      );
+
+      expect(loadWrapperBuildInfo(file)).toEqual({
+        revision: "unknown",
+        dirty: false,
+        version: "unknown",
+        channel: "dev",
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

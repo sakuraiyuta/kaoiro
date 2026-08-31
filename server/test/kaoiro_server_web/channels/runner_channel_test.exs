@@ -91,7 +91,7 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
       assert entry.build_dirty == true
     end
 
-    test "build_version/build_channel (issue #288) が保持される" do
+    test "release は provenance pair 無しでは受理しない" do
       host_id = "lab-pc-build-version"
       socket = join_runner(host_id)
 
@@ -105,10 +105,26 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
           })
         )
 
-      assert_reply ref, :ok
-      entry = HostRegistry.get(host_id)
-      assert entry.build_version == "2026.9.0"
-      assert entry.build_channel == "release"
+      assert_reply ref, :error, %{reason: "invalid_build_info"}
+    end
+
+    test "release の矛盾した provenance は invalid_build_info" do
+      host_id = "lab-pc-contradictory-build"
+      socket = join_runner(host_id)
+
+      ref =
+        push(
+          socket,
+          "register",
+          register_payload(%{
+            "build_revision" => "unknown",
+            "build_dirty" => true,
+            "build_version" => "2026.9.0",
+            "build_channel" => "release"
+          })
+        )
+
+      assert_reply ref, :error, %{reason: "invalid_build_info"}
     end
 
     test "build_version/build_channel は revision pair と同時に hosts push へ含まれる" do
