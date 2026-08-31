@@ -548,18 +548,24 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   # ADR-0055 phase-33 Stage B: recording only, no reply payload and no
   # peer notification (matching delivery_ack's fire-and-forget shape —
-  # the wrapper never attaches a receiver). `trigger` is optional per
-  # protocol.md; a malformed/missing `kind` or `at` falls through to the
-  # no-op clause below rather than crashing the channel. This clause only
-  # checks the wire SHAPE (both fields present and binary) — the
-  # protocol.md value vocabulary (closed kind/trigger sets, ISO-8601 `at`)
-  # is enforced once, centrally, by `SessionLifecycleEvents.append/5`
-  # (ふじ Stage B round 1 must-fix B3), so an unknown/forged value never
-  # reaches the durable store no matter which producer sent it.
+  # the wrapper never attaches a receiver). A malformed/missing `kind` or
+  # `at` falls through to the no-op clause below rather than crashing the
+  # channel. This clause only checks the wire SHAPE (both fields present
+  # and binary) — the protocol.md value vocabulary (closed kind/trigger
+  # sets, ISO-8601 `at`) is enforced once, centrally, by
+  # `SessionLifecycleEvents.append/5` (ふじ Stage B round 1 must-fix B3).
+  #
+  # `trigger` is passed through RAW, not sanitized here (ふじ Stage B
+  # round 2 must-fix B3-残り, 2026-08-31): `Map.get/2` already collapses
+  # both "key absent" and an explicit JSON `null` to `nil`, which
+  # `append/5` already treats as valid (no trigger). A wire value of the
+  # WRONG type (e.g. a JSON number) must reach `append/5` unchanged and be
+  # rejected as a whole event there — sanitizing it to `nil` here first
+  # would store it as a legitimate-looking "no trigger" event instead of
+  # dropping it.
   defp handle_wrapper_in("session_lifecycle", %{"kind" => kind, "at" => at} = payload, socket)
        when is_binary(kind) and is_binary(at) do
     trigger = Map.get(payload, "trigger")
-    trigger = if is_binary(trigger), do: trigger, else: nil
     SessionLifecycleEvents.append(socket.assigns.agent_id, kind, trigger, at)
     {:reply, :ok, socket}
   end

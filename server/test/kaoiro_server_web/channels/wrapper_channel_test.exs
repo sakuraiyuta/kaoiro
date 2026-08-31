@@ -1916,6 +1916,31 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert SessionLifecycleEvents.list_for_agent(agent_id) == []
     end
 
+    # ふじ Stage B round 2 must-fix B3-残り (2026-08-31): a wrong-TYPE
+    # `trigger` (a JSON number, not a string) previously got sanitized to
+    # `nil` by the channel handler before ever reaching
+    # `SessionLifecycleEvents.append/5` — recorded as a legitimate-looking
+    # "no trigger" event instead of the whole event being dropped. Distinct
+    # from the malformed-payload test above (kind=42, a MISSING/wrong-typed
+    # required field): here kind/at are well-formed and only trigger is
+    # wrong-typed, so the channel's own `is_binary(kind) and is_binary(at)`
+    # guard does not intercept it — this exercises `append/5`'s own
+    # `valid_event?/3` gate.
+    test "session_lifecycle inbound event は非 string trigger を sanitize せず no-op する" do
+      agent_id = "test.lifecycle-inbound-trigger-wrong-type"
+      socket = seed_known(agent_id)
+
+      ref =
+        push(socket, "session_lifecycle", %{
+          "kind" => "compacting",
+          "trigger" => 42,
+          "at" => "2026-08-31T00:00:00Z"
+        })
+
+      assert_reply ref, :ok
+      assert SessionLifecycleEvents.list_for_agent(agent_id) == []
+    end
+
     test "planned window 中は IA を preflight bounce し pane・conversation・ledger を変更しない" do
       from_id = "test.planned-bounce-from"
       to_id = "test.planned-bounce-to"

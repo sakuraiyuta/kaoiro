@@ -17,12 +17,17 @@ defmodule KaoiroServer.SessionLifecycleEvents do
   `kind`/`trigger`/`at` are validated against the closed vocabulary in
   `docs/specs/protocol.md` at every entry point — wrapper ingress, direct
   server-side `append/5` calls, and durable load at boot (ふじ Stage B
-  round 1 must-fix B3) — so a forged or corrupted value can never reach an
-  operator query. `append/5` and `list_for_agent/2` never raise or block
-  the caller on a store outage (must-fix B2): the store may be mid-restart
-  while `agents_channel.ex`'s session_reset flow appends between its
-  broadcast and the runner reset instruction, and that instruction must
-  still fire.
+  round 1/2 must-fix B3) — so a forged, wrong-typed, or corrupted value
+  can never reach an operator query; `append/5` itself is total over
+  `kind`/`trigger`/`at` (any Elixir term), never crashing on a bad shape.
+
+  `append/5` never raises OR BLOCKS the caller (must-fix B2, round 1/2):
+  the write rides `GenServer.cast`, so a store that is down, mid-restart,
+  or simply alive-but-slow to reply cannot stall a caller — notably
+  `agents_channel.ex`'s session_reset flow, which appends between its
+  broadcast and the runner reset instruction. `list_for_agent/2` is a
+  read, not a diagnostic side effect, so it stays a bounded
+  `GenServer.call` (default 5s timeout) with a `[]` fallback on failure.
   """
 
   use GenServer
@@ -68,14 +73,23 @@ defmodule KaoiroServer.SessionLifecycleEvents do
   @doc """
   Appends one event to `agent_id`'s timeline, or no-ops it — silently, but
   logged — when `kind`/`trigger`/`at` fails `valid_event?/3` or the store
-  is unreachable/times out. Always returns `:ok`: recording is diagnostic
-  only, so no caller branches on the result.
+  is unreachable. Always returns `:ok`: recording is diagnostic only, so
+  no caller branches on the result, and never blocks (see moduledoc).
+
+  `kind`/`trigger`/`at` are intentionally UNGUARDED here beyond
+  `valid_event?/3` itself (ふじ Stage B round 2 must-fix B3-残り,
+  2026-08-31): an earlier `is_binary` guard on `trigger` made this
+  function crash (`FunctionClauseError`) on a wrong-typed value instead of
+  rejecting it as a whole event — the same "sanitize instead of reject"
+  trap the wrapper-ingress fix (round 1 B3) closed at the channel layer,
+  reopened one layer down. `valid_kind?/1`/`valid_trigger?/2`/`valid_at?/1`
+  already start with their own `is_binary` check, so this function is now
+  total: no argument shape can crash it.
   """
   def append(agent_id, kind, trigger, at, server \\ __MODULE__)
-      when is_binary(agent_id) and is_binary(kind) and
-             (is_nil(trigger) or is_binary(trigger)) and is_binary(at) do
+      when is_binary(agent_id) do
     if valid_event?(kind, trigger, at) do
-      safe_call(server, {:append, agent_id, kind, trigger, at})
+      cast_append(server, agent_id, kind, trigger, at)
     else
       Logger.warning(
         "session_lifecycle event rejected (kind=#{inspect(kind)} " <>
@@ -115,24 +129,25 @@ defmodule KaoiroServer.SessionLifecycleEvents do
   end
 
   @impl true
-  def handle_call({:append, agent_id, kind, trigger, at}, _from, state) do
+  def handle_cast({:append, agent_id, kind, trigger, at}, state) do
     event = %{kind: kind, trigger: trigger, at: at}
     existing = Map.get(state.events, agent_id, [])
     updated = Enum.take([event | existing], state.cap)
 
     case write_record(state.table, agent_id, updated) do
       :ok ->
-        {:reply, :ok, %{state | events: Map.put(state.events, agent_id, updated)}}
+        {:noreply, %{state | events: Map.put(state.events, agent_id, updated)}}
 
       {:error, reason} ->
         Logger.warning(
           "session_lifecycle event store write failed (#{inspect(reason)}); event dropped"
         )
 
-        {:reply, :ok, state}
+        {:noreply, state}
     end
   end
 
+  @impl true
   def handle_call({:list_for_agent, agent_id}, _from, state) do
     {:reply, Map.get(state.events, agent_id, []), state}
   end
@@ -140,12 +155,39 @@ defmodule KaoiroServer.SessionLifecycleEvents do
   @impl true
   def terminate(_reason, state), do: :dets.close(state.table)
 
-  # Bounded `GenServer.call` (default 5s timeout) that turns a dead/slow
-  # store into a logged no-op instead of an `exit` propagating to the
-  # caller — a plain `rescue` cannot catch this: `GenServer.call` signals
-  # failure via `exit/1`, not a raised exception (ふじ Stage B round 1
-  # must-fix B2).
-  defp safe_call(server, msg, fallback \\ :ok) do
+  # `GenServer.cast/2` never blocks or raises for the CALLER, regardless
+  # of whether `server` is alive, mid-restart, or simply slow to process
+  # its mailbox (ふじ Stage B round 2 must-fix B2-残り, 2026-08-31): a
+  # bounded `GenServer.call` — round 1's fix — still stalls the caller for
+  # up to its full timeout (measured 5,010ms) against a store that is
+  # ALIVE but has not yet gotten to this message, which is exactly the
+  # instrumentation-changes-the-observed-outcome failure the moduledoc
+  # warns about. `cast/2` itself stays silent about a missing/dead name,
+  # so `store_alive?/1` checks first purely to keep the round 1 log line;
+  # the TOCTOU window between the check and the cast is harmless — a cast
+  # to a name that dies in between is still just as silently dropped.
+  defp cast_append(server, agent_id, kind, trigger, at) do
+    if store_alive?(server) do
+      GenServer.cast(server, {:append, agent_id, kind, trigger, at})
+    else
+      Logger.warning(
+        "SessionLifecycleEvents store unavailable (not running); event dropped, " <>
+          "agent_id=#{agent_id}"
+      )
+    end
+  end
+
+  defp store_alive?(server) when is_pid(server), do: Process.alive?(server)
+  defp store_alive?(server), do: Process.whereis(server) != nil
+
+  # Bounded `GenServer.call` (default 5s timeout) that turns a dead store
+  # into a logged no-op instead of an `exit` propagating to the caller — a
+  # plain `rescue` cannot catch this: `GenServer.call` signals failure via
+  # `exit/1`, not a raised exception (ふじ Stage B round 1 must-fix B2).
+  # `list_for_agent/2`'s only remaining caller; `append/5` casts instead
+  # (round 2 must-fix B2-残り, above) since a read tolerates staying
+  # bounded where a diagnostic write must never block its caller at all.
+  defp safe_call(server, msg, fallback) do
     GenServer.call(server, msg)
   catch
     :exit, reason ->

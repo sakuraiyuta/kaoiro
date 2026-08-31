@@ -186,9 +186,41 @@ defmodule KaoiroServer.SessionLifecycleEventsTest do
     assert SessionLifecycleEvents.list_for_agent("a.invalid", name) == []
   end
 
-  # must-fix B2: a dead/unregistered store must not crash or block the
-  # caller. `safe_call/3` catches the `exit` `GenServer.call` raises for
-  # a non-alive name — plain `rescue` cannot catch this.
+  # ふじ Stage B round 2 must-fix B3-残り (2026-08-31): append/5's own
+  # `is_binary(trigger)` guard made it CRASH (FunctionClauseError) on a
+  # wrong-typed trigger instead of rejecting it via valid_event?/3 — so
+  # even with the channel-side sanitize repair removed, a direct caller
+  # passing a non-binary/non-nil trigger would still not get a clean
+  # no-op. append/5 is now total over kind/trigger/at: no shape can crash
+  # it, only valid_event?/3 decides accept/reject.
+  test "append is total over trigger's type — a non-binary trigger no-ops rather than crashes",
+       %{name: name} do
+    assert :ok =
+             SessionLifecycleEvents.append(
+               "a.badtrigger",
+               "compacting",
+               42,
+               "2026-08-31T00:00:01Z",
+               name
+             )
+
+    assert :ok =
+             SessionLifecycleEvents.append(
+               "a.badtrigger",
+               "compacting",
+               %{},
+               "2026-08-31T00:00:01Z",
+               name
+             )
+
+    assert SessionLifecycleEvents.list_for_agent("a.badtrigger", name) == []
+  end
+
+  # must-fix B2: a dead/unregistered store must not crash or block either
+  # call. `append/5`'s `cast_append/5` checks `store_alive?/1` itself and
+  # logs rather than casting into the void (round 2 must-fix B2-残り);
+  # `list_for_agent/2`'s `safe_call/3` catches the `exit` `GenServer.call`
+  # raises for a non-alive name — plain `rescue` cannot catch this.
   test "append and list_for_agent return without raising when the store is not running" do
     dead_name = :"session_lifecycle_events_dead_#{System.unique_integer([:positive])}"
 
@@ -205,25 +237,29 @@ defmodule KaoiroServer.SessionLifecycleEventsTest do
   end
 
   # must-fix B2, the DETS-write-failure half: a fault the store's own
-  # `handle_call` cannot cleanly return from (here, its table reference
+  # `handle_cast` cannot cleanly return from (here, its table reference
   # replaced with one that was never opened — `:dets.insert` then raises
   # `ArgumentError` instead of returning `{:error, reason}`) must still
   # leave the CALLER unharmed. `:sys.replace_state/2` injects the fault
   # directly rather than via `:dets.close/1` from this test process: dets
   # tracks table users per opening process, so a close from a process
   # that never opened the table does not touch the real owner's (the
-  # store GenServer's) reference count. `safe_call/3`'s `catch :exit`
-  # covers this the same way it covers a never-alive name: `GenServer.call`
-  # surfaces any failure to reply — crash or absence alike — as an `exit`
-  # in the caller.
+  # store GenServer's) reference count.
+  #
+  # `append/5` casts (round 2 must-fix B2-残り), so it returns before the
+  # store has necessarily even looked at the message, let alone crashed on
+  # it — proving the call itself doesn't raise is now trivial by
+  # construction. `Process.monitor/1` + `assert_receive :DOWN` instead
+  # waits for the crash this fault injection is supposed to cause, so the
+  # test still exercises the write-failure path rather than only
+  # `cast/2`'s unconditional non-blocking guarantee.
   test "append does not crash the caller when the store crashes mid-write", %{name: name} do
     # This test's own `start_link` (in `setup`) links the test process to
     # the store — trap_exit keeps THAT link's signal from killing the test
-    # process itself; it does not affect `GenServer.call`'s own exit-raise,
-    # which `safe_call/3` catches below regardless (production callers are
-    # never link-connected to this store in the first place).
+    # process itself.
     Process.flag(:trap_exit, true)
     pid = Process.whereis(name)
+    ref = Process.monitor(pid)
     :sys.replace_state(pid, fn state -> %{state | table: :session_lifecycle_never_opened} end)
 
     ExUnit.CaptureLog.capture_log(fn ->
@@ -235,10 +271,53 @@ defmodule KaoiroServer.SessionLifecycleEventsTest do
                  "2026-08-31T00:00:01Z",
                  name
                )
+
+      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 1000
     end)
 
     refute Process.alive?(pid)
     assert Process.whereis(name) == nil
+  end
+
+  # ふじ Stage B round 2 must-fix B2-残り (2026-08-31): a bounded
+  # `GenServer.call` — round 1's fix — still SYNCHRONOUSLY stalls the
+  # caller for its full timeout against a store that is ALIVE but simply
+  # has not gotten to the message yet (ふじ measured 5,010ms). Concretely,
+  # `agents_channel.ex`'s agent-self session_reset flow appends
+  # `session_reset_started` between its broadcast and the runner
+  # `reset_session` instruction — a busy store must not delay that
+  # instruction. `:sys.suspend/1` makes the target genuinely unresponsive
+  # (it will not process ANY message, cast or call, until resumed) without
+  # crashing or unregistering it, isolating "busy" from the already-pinned
+  # "dead"/"crashing" cases above.
+  test "append does not wait for a suspended (busy-but-alive) store", %{name: name} do
+    pid = Process.whereis(name)
+    :sys.suspend(pid)
+    on_exit(fn -> if Process.alive?(pid), do: :sys.resume(pid) end)
+
+    {elapsed_us, result} =
+      :timer.tc(fn ->
+        SessionLifecycleEvents.append(
+          "a.suspended",
+          "compacting",
+          nil,
+          "2026-08-31T00:00:01Z",
+          name
+        )
+      end)
+
+    :sys.resume(pid)
+
+    assert result == :ok
+    # GenServer.call's default timeout is 5,000ms; a genuinely
+    # non-blocking cast returns in microseconds, so any threshold well
+    # below that ceiling (here 200ms) distinguishes "didn't wait" from
+    # "waited briefly" without being sensitive to CI scheduling noise.
+    assert elapsed_us < 200_000, "append blocked for #{elapsed_us}us on a suspended store"
+
+    # The cast queued while suspended and is processed on resume —
+    # confirms this measured a real append, not merely a fast reject.
+    assert [%{kind: "compacting"}] = SessionLifecycleEvents.list_for_agent("a.suspended", name)
   end
 
   describe "cap invariants (must-fix B6)" do
