@@ -1,5 +1,5 @@
 ---
-title: 全通信への version 付与と不一致時の警告(ベストエフォート受理)
+title: Add version to all communication and warn on mismatch (best-effort acceptance)
 status: accepted
 date: 2026-06-16
 opened: 2026-06-16
@@ -9,7 +9,7 @@ related_specs: [protocol]
 related_adrs: [10, 14, 19, 25, 47]
 ---
 
-# ADR-0015 — 全通信への version 付与と不一致時の警告
+# ADR-0015 — Add Version to All Communication and Warn on Mismatch
 
 ## Status
 
@@ -17,78 +17,90 @@ Accepted
 
 ## Context
 
-エンベロープには既に `version` があり、バージョニング方針は「受信側は未知キーを
-無視(無言の前方互換)」だった([protocol](../specs/protocol.md))。しかし
-2点の不足がある: (1) version が乗るのはラッパー → サーバのエンベロープのみで、
-`instruction` / `permission_decision` / `snapshot` 等の非エンベロープ payload は
-version を持たない。(2) 不一致は黙って受理され、互換性問題に気づけない。
-ラッパー/サーバ/クライアント3者間の不一致を検知したい。
+The envelope already has `version`, and the versioning policy was that the
+receiver "ignores unknown keys (silent forward compatibility)"
+([protocol](../specs/protocol.md)). However, two gaps remain: (1) version is
+present only on wrapper → server envelopes, while non-envelope payloads such as
+`instruction` / `permission_decision` / `snapshot` have no version; and (2) a
+mismatch is silently accepted, so compatibility problems cannot be noticed. A
+mismatch among the wrapper, server, and client needs to be detected.
 
 ## Decision
 
-- version を **3者すべてのメッセージにフラットな外枠キーとして付与**する
-  (案A)。非エンベロープ payload にも `version` を足す。エンベロープが既に
-  `version` / `ts` / `seq` をフラットな外枠キーとして持つ既存設計に揃える。
-- ただし `attach_chunk` は JSON オブジェクトではない binary transport frame の
-  ため、フラットなキーを置けない。**恒久 carve-out**として version 付与・検査の
-  対象外とする。binary header へ version を追加するには破壊的な wire 変更と
-  protocol version の bump が必要であり、得られる効果に見合わない。
-- 受信側は自分の version と **完全一致のみ正常**とみなし、不一致なら
-  **警告ログ**を出す。
-- ただし **ベストエフォートで受理して処理は継続**する(不一致でも止めない)。
-- 不明要素の切り捨ては現状維持(未知エンベロープキーは既存の前方互換方針で
-  黙って無視)。
-- 将来 `ts` 等の共通メタも同じ「共通フレームキー」枠組みで全メッセージに
-  追加できる(今回は version のみ)。
+- Add version as a **flat outer-frame key to messages in all three components**
+  (Option A). Add `version` to non-envelope payloads as well, matching the
+  existing envelope design, which already has `version` / `ts` / `seq` as flat
+  outer-frame keys.
+- However, `attach_chunk` is a binary transport frame rather than a JSON object,
+  so it cannot hold flat keys. As a **permanent carve-out**, exclude it from
+  version stamping and validation. Adding version to the binary header would
+  require a breaking wire change and a protocol-version bump, which is not worth
+  the benefit.
+- The receiver treats **exact equality with its own version as the only normal
+  case**, and emits a **warning log** on mismatch.
+- However, **accept and continue processing on a best-effort basis** (do not stop
+  on a mismatch).
+- Keep the current behavior for unknown elements (unknown envelope keys are
+  silently ignored under the existing forward-compatibility policy).
+- In the future, common metadata such as `ts` can also be added to every message
+  under the same "common frame key" framework (only version is added now).
 
 ## Consequences
 
 ### Positive
 
-- 互換性不一致が警告で可視化される。
-- version/ts 等の共通メタを全通信で一貫して扱える(既存エンベロープと同一流儀)。
+- Compatibility mismatches become visible through warnings.
+- Common metadata such as version/ts can be handled consistently across all
+  communication (the same convention as the existing envelope).
 
 ### Negative
 
-- 各メッセージの生成・受信箇所に version の付与/検査を足す必要がある。
+- Version stamping and validation must be added at every message-generation and
+  message-reception point.
 
 ### Neutral
 
-- version は現状 `"0"` 単一。完全一致判定は単一値比較。
-- トランスポート層 version(Channels `vsn` 交渉、[ADR-0009](0009-client-transport.md))
-  とは独立。
-- **build identity**([ADR-0053](0053-build-identity.md)、issue #218 追記)
-  **とも独立**。ここでの version は wire メッセージの形状互換性であり、
-  artifact(runner / server image)がどの git commit 由来かとは別軸 —
-  混同すると「docs-only commit で互換性エラーが出る」ような誤った設計に
-  なる。
+- version is currently a single value, `"0"`; exact matching is a comparison
+  against that single value.
+- It is independent of the transport-layer version (Channels `vsn` negotiation,
+  [ADR-0009](0009-client-transport.md)).
+- It is also independent of **build identity** ([ADR-0053](0053-build-identity.md),
+  issue #218 addendum). The version here is wire-message shape compatibility,
+  while the artifact (runner / server image)'s originating git commit is a
+  separate axis—confusing them would lead to an incorrect design in which a
+  docs-only commit causes a compatibility error.
 
 ## Alternatives Considered
 
 | Option | Why rejected |
 |--------|--------------|
-| 案B(全メッセージを `{version, kind, payload}` で統一エンベロープ化) | 既存エンベロープの `type` と二層化・冗長。確定済み v0 設計を作り替える churn が見合わない |
-| 不一致でも無言で受理(現状維持) | 互換性問題に気づけない |
-| 不一致を即エラーで拒否 | 運用が止まる。ベストエフォート受理を優先 |
+| Option B (unify all messages as `{version, kind, payload}` envelopes) | Two layers and redundancy with the existing envelope's `type`; the churn of reworking the settled v0 design is not worthwhile |
+| Silently accept mismatches (current behavior) | Compatibility problems cannot be noticed |
+| Immediately reject mismatches with an error | Operations stop; best-effort acceptance is prioritized |
 
 ## Related
 
-- spec: [protocol](../specs/protocol.md) バージョニング方針。
-- 関連 ADR: [0010](0010-protocol-precisification.md)、
-  [0014](0014-session-resume-and-restore.md)。
-- 由来: my-idea-brief(走り書き「通信プロトコルのバージョン情報付与」)。
+- Spec: versioning policy in [protocol](../specs/protocol.md).
+- Related ADRs: [0010](0010-protocol-precisification.md) and
+  [0014](0014-session-resume-and-restore.md).
+- Origin: my-idea-brief (rough note "adding version information to the
+  communication protocol").
 
-## Addendum (issue #208 ふじレビュー MF-1, 2026-08-21): `attach_chunk` の恒久 carve-out
+## Addendum (issue #208 Fuji review MF-1, 2026-08-21): Permanent `attach_chunk` carve-out
 
-**決定。** `attach_chunk` は固定長ヘッダと生バイト列からなる binary transport
-frame であり、JSON のフラット外枠キーを持てないため、version 付与・検査の
-恒久的な対象外とする。これは既存の Decision に明文化した carve-out であり、
-ADR の status は Accepted のまま維持する。
+**Decision.** `attach_chunk` is a binary transport frame made of a fixed-length
+header and raw bytes. Because it cannot have JSON flat outer-frame keys, it is
+permanently excluded from version stamping and validation. This is the carve-out
+already made explicit in the existing Decision, and the ADR's status remains
+Accepted.
 
-binary header へ version を追加する案は、既存 frame の破壊的変更と protocol
-version の bump を要する。JSON frame と同じキーを載せられない実装制約に対しては
-費用対効果が見合わないため採用しない。適用箇所と wire 形は
-[protocol](../specs/protocol.md) の「version 棚卸し」が正本である。
+Adding version to the binary header would require a breaking change to the
+existing frame and a protocol-version bump. It is not adopted because the cost
+does not justify the benefit for an implementation constraint that prevents the
+same keys as a JSON frame from being carried. The "version inventory" in
+[protocol](../specs/protocol.md) is authoritative for the application points and
+wire shape.
 
-**由来。** issue #208 のふじレビュー must-fix 1。下位 spec だけが例外を
-宣言していた不整合を、この ADR の Decision へ改訂して解消した。
+**Origin.** This is must-fix 1 from the Fuji review of issue #208. It resolves
+the inconsistency in which only the lower-level spec declared the exception, by
+revising this ADR's Decision.

@@ -1,5 +1,5 @@
 ---
-title: ラッパーエラー本文のクライアントへのリレー(result.error_message)
+title: Relay the wrapper error body to the client (result.error_message)
 status: accepted
 date: 2026-06-16
 opened: 2026-06-16
@@ -9,7 +9,7 @@ related_specs: [protocol, threat-model]
 related_adrs: [10, 12]
 ---
 
-# ADR-0016 — ラッパーエラー本文のクライアントへのリレー
+# ADR-0016 — Relay the Wrapper Error Body to the Client
 
 ## Status
 
@@ -17,76 +17,83 @@ Accepted
 
 ## Context
 
-wrapper(Claude Code アダプタ)でエラー(例 500 Overloaded)が起きても、その
-本文がクライアントへ届かない。`wrapper/src/host.ts` の `run()` は SDK エラーを
-catch せず、落ちると `cli.ts` の catch が stderr に出すだけ。`result` payload は
-`{text?, is_error?}` のみでエラー本文フィールドが無く、クライアント
-(`dashboard/src/lib/AgentDetail.svelte`)は `is_error` を見て「エラーで終了」
-固定文字列を表示するだけ。原因が分からず対処できない。
+Even when an error (for example, 500 Overloaded) occurs in the wrapper (Claude
+Code adapter), its body does not reach the client. `run()` in
+`wrapper/src/host.ts` does not catch SDK errors; when it crashes, `cli.ts`'s
+catch only writes to stderr. The `result` payload has only `{text?, is_error?}`
+and no error-body field, so the client (`dashboard/src/lib/AgentDetail.svelte`)
+only sees `is_error` and displays the fixed string "exited with an error." The
+cause cannot be understood or addressed.
 
 ## Decision
 
-- `result` payload に **`error_message?: string`** を追加し、wrapper が捕捉した
-  エラー本文を**生のまま**載せて、サーバ経由でクライアントへリレーする。
-- 対象は (a) SDK/API レベルのエラー本文(500 Overloaded 等)に加え、
-  (b) **wrapper プロセスの異常終了**も「落ちる直前に最後のエラーを送る」形で
-  カバーする。
-- クライアントは `error_message` を詳細ペインに**常時表示**(整形・要約・
-  マスキングしない)。
-- エラー専用の新 envelope type は新設しない(`result` の拡張で済ます)。
-- 配信は `result` 同様 **operator role 限定**
-  ([ADR-0012](0012-response-display-and-dashboard-scope.md))。
+- Add **`error_message?: string`** to the `result` payload, include the error
+  body caught by the wrapper **as-is**, and relay it to the client through the
+  server.
+- In addition to (a) SDK/API-level error bodies (such as 500 Overloaded), cover
+  (b) **abnormal wrapper-process termination** by sending the last error just
+  before the process falls.
+- The client **always displays** `error_message` in the detail pane (do not
+  format, summarize, or mask it).
+- Do not create a new error-specific envelope type (a `result` extension is
+  sufficient).
+- As with `result`, deliver it **only to the operator role**
+  ([ADR-0012](0012-response-display-and-dashboard-scope.md)).
 
-## Implementation status (2026-08-03 追記)
+## Implementation status (2026-08-03 addendum)
 
-本 ADR の方針「エラー本文を整形せず operator へリレーする」は生きているが、
-**decision が指定した field 形はそのまま実装されなかった**。
+This ADR's policy of "relaying the unformatted error body to the operator"
+remains, but **the field shape specified by the Decision was not implemented as
+written**.
 
-- `error_message` という field はコードベースに存在したことがない。実装は
-  issue #123 で `result` payload に `error_subtype` と `error_detail` の
-  2 field を追加する形になった。UI がエラー種別で分岐できるよう、SDK の
-  終了 subtype (`error_max_turns` / `error_during_execution` /
-  `error_max_budget_usd` / `error_max_structured_output_retries`) を
-  本文と分けたため。
-- 「wrapper プロセスの異常終了時に落ちる直前の最後のエラーを送る」(b) は
-  **未実装**。プロセス終了フックは無い。
-- `error_detail` は envelope 上限に合わせて 16,384 UTF-8 バイトへ切り詰めて
-  から送る。要約・マスキングはしないという原則は保たれている。
+- A field named `error_message` has never existed in the codebase. The
+  implementation instead added two fields, `error_subtype` and `error_detail`,
+  to the `result` payload in issue #123. The SDK termination subtypes
+  (`error_max_turns` / `error_during_execution` /
+  `error_max_budget_usd` / `error_max_structured_output_retries`) were separated
+  from the body so the UI can branch by error type.
+- (b), "send the last error just before abnormal wrapper-process termination,"
+  is **not implemented**. There is no process-exit hook.
+- `error_detail` is truncated to 16,384 UTF-8 bytes to match the envelope limit
+  before being sent. The principle of not summarizing or masking is preserved.
 
-現行の wire 仕様は [protocol](../specs/protocol.md) の `result` 行が正本。
+The current wire specification is the `result` row in
+[protocol](../specs/protocol.md).
 
 ## Consequences
 
 ### Positive
 
-- 「エラーで終了」固定文字列でなく実エラー内容が見え、原因究明・対処が可能。
-- wrapper クラッシュ時も最後のエラーが届く。
+- The actual error content is visible instead of the fixed "exited with an
+  error" string, allowing the cause to be investigated and addressed.
+- The last error also reaches the client when the wrapper crashes.
 
 ### Negative
 
-- wrapper クラッシュ時の「落ちる直前送信」を確実にする実装が要る(プロセス
-  終了フック)。
-- エラー本文に機微情報が混じり得る(operator 限定配信で緩和、
-  [threat-model](../specs/threat-model.md))。
+- An implementation is needed to reliably send just before a wrapper crash (a
+  process-exit hook).
+- Error bodies may contain sensitive information (mitigated by operator-only
+  delivery, [threat-model](../specs/threat-model.md)).
 
 ### Neutral
 
-- #1(version、[ADR-0015](0015-protocol-version-stamping.md))・#3(session_id、
-  [ADR-0014](0014-session-resume-and-restore.md))と同一の protocol.md 改訂で
-  まとめる。
+- Group it in the same protocol.md revision as #1 (version,
+  [ADR-0015](0015-protocol-version-stamping.md)) and #3 (session_id,
+  [ADR-0014](0014-session-resume-and-restore.md)).
 
 ## Alternatives Considered
 
 | Option | Why rejected |
 |--------|--------------|
-| エラー専用の新 envelope type を新設 | `result` 拡張で足り、過剰 |
-| エラー本文を整形・要約して表示 | 原因把握には生本文が有用。整形は情報を削る |
-| SDK エラーのみ対応(プロセス異常終了は対象外) | 「落ちて終了」の主因を取りこぼす |
+| Create a new error-specific envelope type | A `result` extension is sufficient and a new type is excessive |
+| Format or summarize the error body for display | The raw body is useful for understanding the cause; formatting removes information |
+| Handle only SDK errors (exclude abnormal process termination) | Misses a primary cause of "crashed and exited" |
 
 ## Related
 
-- spec: [protocol](../specs/protocol.md) result payload、
-  [threat-model](../specs/threat-model.md)。
-- 関連 ADR: [0010](0010-protocol-precisification.md)、
-  [0012](0012-response-display-and-dashboard-scope.md)。
-- 由来: my-idea-brief(走り書き「エラー本文をクライアントまでリレー」、高優先)。
+- Specs: the result payload in [protocol](../specs/protocol.md) and
+  [threat-model](../specs/threat-model.md).
+- Related ADRs: [0010](0010-protocol-precisification.md) and
+  [0012](0012-response-display-and-dashboard-scope.md).
+- Origin: my-idea-brief (rough note "relay the error body to the client," high
+  priority).
