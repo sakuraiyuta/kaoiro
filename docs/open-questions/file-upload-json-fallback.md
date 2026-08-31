@@ -1,6 +1,6 @@
 ---
-title: ファイルアップロード — `attach_chunk_b64` JSON ingress fallback の必要性
-description: binary frame 押下が重い simple-client(neovim Lua / Python 等)向けに JSON base64 ingress を fallback として用意するかの未決論点。
+title: File upload — need for the `attach_chunk_b64` JSON ingress fallback
+description: Open question on whether to provide JSON base64 ingress as a fallback for simple clients (neovim Lua / Python, etc.) where sending binary frames is expensive.
 status: open
 urgency: low
 blocks: []
@@ -10,39 +10,42 @@ decided: null
 
 ## 背景
 
-[ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md) F2 で
-転送 wire を binary frame chunked 単一経路に確定した(base64 膨張回避 /
-フレーム効率最大)。 一方、 simple-client(neovim Lua / Python 等で
-ArrayBuffer push が重い実装)が出てきた場合、 JSON ingress(`attach_chunk`
-の base64 同梱版)を fallback として併設するかは未決。
+[ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md) F2 finalized
+the transfer wire as one binary-frame chunked path (avoid base64 expansion /
+maximize frame efficiency). If a simple client (neovim Lua / Python, etc.) with
+an expensive ArrayBuffer push implementation appears, it remains undecided
+whether to add JSON ingress (a base64-attached version of `attach_chunk`) as a
+fallback.
 
 ## 選択肢
 
-| 案 | 内容 | メリット | デメリット |
+| Option | Content | Advantages | Disadvantages |
 |--|--|--|--|
-| A | 単一 binary 経路で MVP、 fallback なし | wire が 1 経路、 仕様明快、 「間口を広げる」も実装責任の方を客先に求める | 簡易実装の客先には敷居あり(Phoenix Channels V2 binary は実装可だが工数) |
-| B | simple-client から要望が出たら `attach_chunk_b64`(JSON `{upload_id, chunk_index, data_b64}`)を追加 | UX 良(simple-client 対応)、 wire の互換性は保てる(両経路) | protocol 面 +1、 ingress 2 系統、 spec の維持コスト |
+| A | MVP with one binary path and no fallback | One wire path; clear specification; “widening the entry point” remains an implementation responsibility for the customer | Higher barrier for customers with simple implementations (Phoenix Channels V2 binary is implementable, but takes work) |
+| B | If a simple-client requests it, add `attach_chunk_b64` (JSON `{upload_id, chunk_index, data_b64}`) | Good UX (simple-client support); wire compatibility remains possible (both paths) | Protocol surface +1; two ingress paths; ongoing spec cost |
 
 ## 影響
 
-A の場合は protocol 不変。 B 採用時は新 client→server event 1 個追加
-(version 据え置き、 ADR-0015 で前方互換維持)。 wrapper は両 ingress を
-同じ pending_uploads に集約。
+With A, the protocol is unchanged. With B, add one client→server event (keep
+the version unchanged and preserve forward compatibility through ADR-0015). The
+wrapper aggregates both ingress paths into the same pending_uploads.
 
 ## 判断材料
 
-- 第三者クライアント(kaoiro.nvim Lua / Python CLI 等)実装者からの要望
-- simple-client の実装難度実測(Phoenix Channels V2 binary を ArrayBuffer
-  なしで実装する場合のコード量)
-- 既存 Channels client ライブラリ(phoenix-elixir, websockex 等)のバイナリ
-  対応状況
+- Requests from third-party client implementers (kaoiro.nvim Lua / Python CLI,
+  etc.)
+- Measured implementation difficulty for a simple client (code volume when
+  implementing Phoenix Channels V2 binary without ArrayBuffer)
+- Binary support status of existing Channels client libraries (phoenix-elixir,
+  websockex, etc.)
 
 ## 暫定方針
 
-A — 単一 binary 経路で MVP。 要望が顕在化したら B を追加(後方互換)。
+A — MVP uses one binary path. Add B (backward compatible) if requests become
+real.
 
 ## 解決時のアクション
 
-- [ ] simple-client 要望の集約
-- [ ] `attach_chunk_b64` の wire 仕様化
-- [ ] ADR 昇格、 本ファイル削除
+- [ ] Aggregate simple-client requests
+- [ ] Specify the `attach_chunk_b64` wire
+- [ ] Promote to an ADR and delete this file
