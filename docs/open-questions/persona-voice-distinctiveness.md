@@ -50,7 +50,7 @@ policy for making it strict.
 **A** (keep it at SHOULD). If observation detects a problem, file a new issue
 and use it to bring this open question to a decision.
 
-## 解決時のアクション
+## Actions upon resolution
 
 - [ ] Decision recorded in `adr/NNNN-persona-voice-distinctiveness.md`
 - [ ] If making it strict, promote Constraints from SHOULD → MUST in

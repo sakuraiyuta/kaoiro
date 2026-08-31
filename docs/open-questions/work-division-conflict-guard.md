@@ -40,7 +40,7 @@ can start with no detection).
 
 Option A (observe with no detection initially).
 
-## 解決時のアクション
+## Actions upon resolution
 
 - [ ] Based on observation results, make the need for a detection mechanism an ADR or close this question
 - [ ] Close this open question (delete it)

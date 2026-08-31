@@ -49,7 +49,7 @@ bubble UI is introduced in the kaoiro dashboard in the future.
 **C** (decide together when creating the dialogue-bubble UI spec). Implement
 nothing at this time.
 
-## 解決時のアクション
+## Actions upon resolution
 
 - [ ] Decision recorded in `adr/NNNN-persona-personality-vs-dialogue.md`
       or integrated into the dialogue-bubble UI spec
