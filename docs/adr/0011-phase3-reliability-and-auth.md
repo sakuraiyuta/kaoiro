@@ -21,7 +21,7 @@ At the start of Phase 3 (bidirectional routing and multiple agents), the
 concrete approaches for the two items in the protocol-reliability open question
 (originating from issue #4; the two items were promoted to this ADR and the
 original file was deleted)—seq/event ID and the correlation ID and default
-timeout for `permission_request`—as well as wrapper authentication
+timeout for permission_request—as well as wrapper authentication
 ([ADR-0002](0002-local-wrapper-websocket-topology.md)) and the user access
 control stub ([ADR-0005](0005-access-control-oauth-stub.md)) needed to be
 settled (user decision on 2026-06-11).
@@ -33,9 +33,9 @@ settled (user decision on 2026-06-11).
    every envelope. The ordering/deduplication key is `(agent_id, seq)` + `ts`.
    **The server continues to determine the latest state by receive order
    (last-write-wins)**—because seq rolls back when the wrapper restarts, it is
-   not used for overwrite decisions. `version` remains "0" (a forward-compatible
+   not used for overwrite decisions. version remains "0" (a forward-compatible
    key addition).
-2. **Correlate `permission_request` with a correlation ID**: Put `request_id`
+2. **Correlate permission_request with a correlation ID**: Put `request_id`
    (wrapper-generated and unique within the session) in the request payload, and
    have the `permission_decision` response return the same `request_id`.
    **The default when there is no response is unlimited waiting, as with the
@@ -61,8 +61,8 @@ settled (user decision on 2026-06-11).
 ### Positive
 
 - The simplicity of the display path (receive-order last-write-wins) remains
-  unchanged while `seq` lays groundwork for audit logs and replay.
-- The approval flow is correctly correlated by `request_id` (the no-response
+  unchanged while seq lays groundwork for audit logs and replay.
+- The approval flow is correctly correlated by request_id (the no-response
   behavior has been migrated in [ADR-0022](0022-pending-permission-authoritative-source.md)
   to the SDK default of unlimited waiting).
 - An effective guard (the operator role) is placed at the entry point for

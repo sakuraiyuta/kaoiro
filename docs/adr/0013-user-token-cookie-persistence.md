@@ -79,8 +79,10 @@ Persist the user token in an **httpOnly + encrypted session cookie**.
    param while setting the cookie. In prod, the same-origin direct connection
    sends the cookie over WS, so the session fallback also works.
 6. **The secure flag is prod only**. Based on the existing `force_ssl`
-   (`rewrite_on: [:x_forwarded_proto]`), set
-   `Application.compile_env(:kaoiro_server, :session_secure, false)` to `true`
+   (`rewrite_on:
+   [:x_forwarded_proto]`), set
+   `Application.compile_env(:kaoiro_server,
+   :session_secure, false)` to `true`
    in `prod.exs`. It is false in dev (http localhost). CSRF is mitigated by
    SameSite=Lax + prod's `check_origin` (default `url` host).
 

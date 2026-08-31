@@ -26,8 +26,8 @@ observation, control, and permissions in a single mechanism was needed.
 
 ## Decision
 
-The wrapper will host the official **Claude Agent SDK** (TypeScript:
-`@anthropic-ai/claude-agent-sdk`).
+The wrapper will host the official **Claude Agent SDK** (TypeScript: `@anthropic-ai/
+claude-agent-sdk`).
 
 - Observation: Derive state from typed message sequences
   (`SystemMessage`/`AssistantMessage`/`ResultMessage`).

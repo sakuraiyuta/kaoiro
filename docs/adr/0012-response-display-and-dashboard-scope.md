@@ -108,7 +108,7 @@ implementation plan is [plans/response-display](../plans/phase-3.5-response-disp
 |--------|--------------|
 | Implement response relay only and delegate display to external clients (former Option C) | Operational verification would not be complete with the included dashboard alone |
 | Keep the dashboard "minimal" | The response to an instruction remains invisible and bidirectional functionality is half-finished |
-| Display only `result` (one final response, former Option A) | Progress during a turn is not visible |
+| Display only result (one final response, former Option A) | Progress during a turn is not visible |
 | Full chat conversation pane (former Option D) | Excessive; turns it into a conversation-authoring environment |
 | Always use a master-detail two-pane layout | Compresses a bird's-eye view (many faces) into a narrow list |
 | Move the list off-screen with a modal/slide | Loses list visibility (goal A) |
