@@ -2276,18 +2276,26 @@ describe("CodexHost", () => {
       expect(turnEnds[0]).toHaveProperty("turnToken", expect.any(String));
     });
 
-    it("terminal event 後に stream が EOF を遅延させても次 turn を開始する", async () => {
+    it("terminal event 後は通常の EOF と durability gate を待って次 turn を開始する", async () => {
       const firstEnded = deferred<void>();
-      const releaseFirstStream = deferred<void>();
+      const releaseDurability = deferred<void>();
+      const secondStarted = deferred<void>();
+      const secondEnded = deferred<void>();
       const starts: string[] = [];
       const ends: string[] = [];
+      let firstCleanupDone = false;
+      let cleanupDoneBeforeSecondStart = false;
       let runCount = 0;
       const thread: CodexThreadLike = {
         async runStreamed() {
           const current = ++runCount;
           async function* events(): AsyncGenerator<ThreadEvent> {
-            yield usageEvent();
-            if (current === 1) await releaseFirstStream.promise;
+            try {
+              yield usageEvent();
+              if (current === 1) await releaseDurability.promise;
+            } finally {
+              if (current === 1) firstCleanupDone = true;
+            }
           }
           return { events: events() };
         },
@@ -2300,10 +2308,17 @@ describe("CodexHost", () => {
         onState: () => {},
         appendSystemPrompt: "p",
         codexFactory: () => client,
-        onTurnStart: ({ turnToken }) => starts.push(turnToken),
+        onTurnStart: ({ turnToken }) => {
+          starts.push(turnToken);
+          if (turnToken === "turn-2") {
+            cleanupDoneBeforeSecondStart = firstCleanupDone;
+            secondStarted.resolve();
+          }
+        },
         onTurnEnd: ({ turnToken }) => {
           ends.push(turnToken);
           if (turnToken === "turn-1") firstEnded.resolve();
+          if (turnToken === "turn-2") secondEnded.resolve();
         },
         now: () => "T",
       });
@@ -2314,21 +2329,118 @@ describe("CodexHost", () => {
         await firstEnded.promise;
         await host.send("second", undefined, ["cnv-2"], "turn-2");
 
-        await vi.waitFor(
-          () => expect(starts).toEqual(["turn-1", "turn-2"]),
-          { timeout: 1_000 },
-        );
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(starts).toEqual(["turn-1"]);
+        releaseDurability.resolve();
+        await secondStarted.promise;
+        await secondEnded.promise;
       } finally {
-        // On the pre-fix path the assertion times out while the first
-        // generator is still open. Release it so cleanup remains deterministic
-        // and the test does not leave a host loop behind after a failure.
-        releaseFirstStream.resolve();
+        releaseDurability.resolve();
         host.close();
         await running;
       }
 
       expect(ends).toEqual(["turn-1", "turn-2"]);
+      expect(cleanupDoneBeforeSecondStart).toBe(true);
     });
+
+    it.each([
+      {
+        label: "turn.completed",
+        terminal: usageEvent(),
+        errorDetail: undefined,
+      },
+      {
+        label: "turn.failed",
+        terminal: { type: "turn.failed" as const, error: { message: "boom" } },
+        errorDetail: "boom",
+      },
+    ])(
+      "$label 後は bounded grace 超過時に cleanup 完了後の次 turn へ進み、terminal を一度だけ解決する",
+      async ({ terminal, errorDetail }) => {
+        const firstEnded = deferred<void>();
+        const secondStarted = deferred<void>();
+        const secondEnded = deferred<void>();
+        const starts: string[] = [];
+        let firstCleanupDone = false;
+        let cleanupDoneBeforeSecondStart = false;
+        const turnEnds: {
+          turnToken: string;
+          conversationIds: readonly string[];
+          error?: { reason?: string; detail?: string };
+        }[] = [];
+        let runCount = 0;
+        const thread: CodexThreadLike = {
+          async runStreamed(_input, turnOptions) {
+            const current = ++runCount;
+            const signal = turnOptions?.signal;
+            if (signal === undefined) throw new Error("probe requires abort signal");
+            const abort = new Promise<void>((resolve) => {
+              if (signal.aborted) {
+                resolve();
+                return;
+              }
+              signal.addEventListener("abort", () => resolve(), { once: true });
+            });
+            async function* events(): AsyncGenerator<ThreadEvent> {
+              try {
+                yield terminal;
+                if (current === 1) await abort;
+              } finally {
+                if (current === 1) firstCleanupDone = true;
+              }
+            }
+            return { events: events() };
+          },
+        };
+        const client: CodexClientLike = {
+          startThread: () => thread,
+          resumeThread: () => thread,
+        };
+        const host = new CodexHost(CONFIG, {
+          onState: () => {},
+          appendSystemPrompt: "p",
+          codexFactory: () => client,
+          terminalDrainGraceMs: 20,
+          onTurnStart: ({ turnToken }) => {
+            starts.push(turnToken);
+            if (turnToken === "turn-2") {
+              cleanupDoneBeforeSecondStart = firstCleanupDone;
+              secondStarted.resolve();
+            }
+          },
+          onTurnEnd: (info) => {
+            turnEnds.push(info);
+            if (info.turnToken === "turn-1") firstEnded.resolve();
+            if (info.turnToken === "turn-2") secondEnded.resolve();
+          },
+          now: () => "T",
+        });
+        const running = host.run();
+
+        try {
+          await host.send("first", undefined, ["cnv-1"], "turn-1");
+          await firstEnded.promise;
+          await host.send("second", undefined, ["cnv-2"], "turn-2");
+          await secondStarted.promise;
+          await secondEnded.promise;
+        } finally {
+          host.close();
+          await running;
+        }
+
+        expect(starts).toEqual(["turn-1", "turn-2"]);
+        expect(cleanupDoneBeforeSecondStart).toBe(true);
+        expect(turnEnds).toHaveLength(2);
+        const firstEnds = turnEnds.filter(({ turnToken }) => turnToken === "turn-1");
+        expect(firstEnds).toHaveLength(1);
+        if (errorDetail === undefined) {
+          expect(firstEnds[0]?.error).toBeUndefined();
+        } else {
+          expect(firstEnds[0]).toMatchObject({ error: { detail: errorDetail } });
+        }
+      },
+    );
 
     it("終端イベント無しでストリームが終わると detail 無しの error で onTurnEnd を呼ぶ", async () => {
       const turnEnds: unknown[] = [];

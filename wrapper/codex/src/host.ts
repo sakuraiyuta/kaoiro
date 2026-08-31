@@ -118,6 +118,55 @@ export interface CodexClientLike {
 
 type CodexCatalog = ReturnType<typeof resolveCodexCatalog>;
 
+const DEFAULT_CODEX_TERMINAL_DRAIN_GRACE_MS = 5_000;
+
+type NextEventOutcome<T> =
+  | { kind: "result"; result: IteratorResult<T> }
+  | { kind: "error"; error: unknown }
+  | { kind: "timeout"; pending: Promise<IteratorResult<T>> };
+
+/** Wait for one post-terminal item without allowing a perpetually open SDK
+ * iterator to hold the host's single-turn queue forever. The pending next()
+ * is retained so the caller can abort and await the SDK's cleanup path before
+ * admitting another process. */
+function nextEventBeforeDeadline<T>(
+  iterator: AsyncIterator<T>,
+  deadlineMs: number,
+): Promise<NextEventOutcome<T>> {
+  let pending: Promise<IteratorResult<T>>;
+  try {
+    pending = Promise.resolve(iterator.next());
+  } catch (error) {
+    return Promise.resolve({ kind: "error", error });
+  }
+  const remainingMs = deadlineMs - Date.now();
+  if (remainingMs <= 0) {
+    return Promise.resolve({ kind: "timeout", pending });
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve({ kind: "timeout", pending });
+    }, remainingMs);
+    pending.then(
+      (result) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve({ kind: "result", result });
+      },
+      (error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve({ kind: "error", error });
+      },
+    );
+  });
+}
+
 function initialStatusExtFromCatalog(
   catalog: CodexCatalog,
   model: string | null,
@@ -256,6 +305,8 @@ export interface CodexHostOptions {
   now?: () => string;
   /** Epoch clock for deterministic upload TTL tests. */
   nowMs?: () => number;
+  /** Maximum time to drain SDK output after a terminal event. */
+  terminalDrainGraceMs?: number;
   /** Test seam for deterministic materialization lifecycle races. */
   materializeImages?: (
     agentId: string,
@@ -450,6 +501,7 @@ export class CodexHost implements EngineAdapter {
    * materialization observe cancellation before it can enqueue a turn. */
   #lifecycleGeneration = 0;
   readonly #nowMs: () => number;
+  readonly #terminalDrainGraceMs: number;
   #gcTimer: ReturnType<typeof setInterval> | null = null;
   #wake: (() => void) | null = null;
   #abort: AbortController | null = null;
@@ -495,6 +547,10 @@ export class CodexHost implements EngineAdapter {
     );
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#nowMs = options.nowMs ?? Date.now;
+    this.#terminalDrainGraceMs = Math.max(
+      0,
+      options.terminalDrainGraceMs ?? DEFAULT_CODEX_TERMINAL_DRAIN_GRACE_MS,
+    );
     this.#model = config.model ?? null;
     this.#modelSource = options.modelSource ?? null;
     this.#effort = config.effort ?? null;
@@ -1086,7 +1142,36 @@ export class CodexHost implements EngineAdapter {
       const { events } = await thread.runStreamed(input, {
         signal: this.#abort.signal,
       });
-      for await (const event of events) {
+      const iterator = events[Symbol.asyncIterator]();
+      let terminalDrainDeadlineMs: number | null = null;
+      while (true) {
+        let next: IteratorResult<ThreadEvent>;
+        if (terminalDrainDeadlineMs === null) {
+          next = await iterator.next();
+        } else {
+          const outcome = await nextEventBeforeDeadline(
+            iterator,
+            terminalDrainDeadlineMs,
+          );
+          if (outcome.kind === "error") throw outcome.error;
+          if (outcome.kind === "timeout") {
+            // The SDK's iterator finally kills the child but does not await
+            // its exit. Abort the pending read, then await that read and the
+            // iterator close before the host admits the next process.
+            this.#abort?.abort();
+            await outcome.pending.catch(() => undefined);
+            try {
+              await iterator.return?.();
+            } catch {
+              // The terminal result is already settled; cleanup failure is
+              // not allowed to produce a duplicate turn result.
+            }
+            break;
+          }
+          next = outcome.result;
+        }
+        if (next.done) break;
+        const event = next.value;
         diagnostics.recordEvent(event);
         if (!isUsableThreadEvent(event)) continue;
         if (event.type === "error") recordedThreadError = event.message;
@@ -1151,12 +1236,12 @@ export class CodexHost implements EngineAdapter {
         for (const adapterEvent of threadEventToEvents(event)) {
           this.#apply(adapterEvent);
         }
-        // The terminal event is the SDK turn boundary. Do not ask the
-        // underlying CLI generator for another item: a stream can remain
-        // open after reporting completion, and that would block the next
-        // queued turn (and its delivery acknowledgement) behind EOF.
         if (event.type === "turn.completed" || event.type === "turn.failed") {
-          break;
+          // The terminal event is the SDK turn boundary, but upstream still
+          // flushes the rollout after publishing it. Drain normal EOF first;
+          // only a stuck tail may be aborted after this bounded grace.
+          terminalDrainDeadlineMs =
+            Date.now() + this.#terminalDrainGraceMs;
         }
       }
       if (!sawResult) {
