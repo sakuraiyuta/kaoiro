@@ -2532,6 +2532,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
       from_id = "test.iam-predisc-from"
       to_id = "test.iam-predisc-to"
+      cid = "cnv-predisc-#{System.unique_integer([:positive])}"
       to_socket = seed_known(to_id)
       from_socket = seed_known(from_id)
 
@@ -2541,10 +2542,17 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       # そのもの。
       :ok = close(to_socket)
 
-      env = inter_envelope(from_id, to_id)
+      env = inter_envelope(from_id, to_id, cid: cid)
       ref = push(from_socket, "envelope", env)
       assert_reply ref, :error, %{reason: "disconnected"}
       assert_panes_empty([from_id, to_id])
+
+      # ふじ round 1 blocking: reply の reason 一致・pane 空だけでは、
+      # connected? guard を record_message の後へ移す誤実装 (phantom
+      # conversation を作ってから同じ :disconnected を返す) を検出できない
+      # (placement mutation で実測済み)。reject が ConversationStates に
+      # 一切触れないという設計の核心を直接 pin する。
+      assert ConversationStates.get(cid) == nil
 
       on_exit(fn -> AgentStates.delete(to_id) end)
     end
