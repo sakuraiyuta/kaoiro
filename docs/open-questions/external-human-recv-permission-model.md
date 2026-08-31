@@ -1,6 +1,6 @@
 ---
-title: 外部人間からの指示受付の権限モデル(将来)
-description: 「このサービスのこのユーザだけ指示を受け付ける」等、外部人間ごと/サービスごとの受付権限を付与できるようにするか。
+title: Future permission model for accepting instructions from an external human
+description: Decide whether to grant per-human / per-service intake permissions such as “accept instructions only from this user of this service.”
 status: open
 urgency: low
 blocks: []
@@ -10,36 +10,38 @@ decided: null
 
 ## 背景
 
-v1 は外部人間の発言を一切実行しない(一方向 authority)。将来「特定の
-信頼できる外部ユーザからの指示は受け付ける」といった権限付与をしたい、
-という要望がある([ADR-0028](../adr/0028-external-human-messaging.md)
-Neutral)。受付を許すと
-[external-human-agent-consumes-input](external-human-agent-consumes-input.md)
-とも接続する。
+v1 never executes an external human's statement (one-way authority). There is a
+future request to grant permission such as “accept instructions from a specific
+trusted external user” ([ADR-0028](../adr/0028-external-human-messaging.md)
+Neutral). Allowing intake would also connect to
+[external-human-agent-consumes-input](external-human-agent-consumes-input.md).
 
 ## 選択肢
 
-| 案 | 内容 | メリット | デメリット |
+| Option | Content | Advantages | Disadvantages |
 |----|------|----------|-----------|
-| A | 当面すべて受付拒否(一方向 authority) | 最安全・実装なし | 外部から agent を動かせない |
-| B | contact 単位 / サービス単位で受付権限を付与 | 信頼済みの人からの delegation | 権限管理・なりすまし対策・injection 面の設計が要る |
+| A | Reject all intake for now (one-way authority) | Safest; no implementation | Cannot drive an agent from outside |
+| B | Grant intake permission per contact / service | Delegation from trusted people | Requires permission management, impersonation defenses, and an injection-surface design |
 
 ## 影響
 
-- 受付権限を認める場合、外部入力が authority を持つため firewall モデルの
-  再設計と [ADR-0028](../adr/0028-external-human-messaging.md) の追補/supersede
-  を伴う。
+- If intake permission is allowed, external input has authority, requiring a
+  redesign of the firewall model and a supplement / supersession of
+  [ADR-0028](../adr/0028-external-human-messaging.md).
 
 ## 判断材料
 
-- 誰を信頼するかの identity 検証(Discord user id の確度・なりすまし耐性)。
-- 権限の粒度(調査のみ / 非破壊 / 破壊)と operator 監査の必要度。
+- How to verify the identity of trusted people (confidence in Discord user IDs
+  and resistance to impersonation).
+- Permission granularity (read-only investigation / non-destructive /
+  destructive) and the level of operator auditing required.
 
 ## 暫定方針
 
-**A(すべて受付拒否)**。当面は一方向 authority を維持する。
+**A (reject all intake).** Retain one-way authority for the foreseeable future.
 
 ## 解決時のアクション
 
-- [ ] Decision recorded in ADR(受付権限モデルの導入)
-- [ ] `../specs/protocol-external-human.md` に受付権限の仕様を追加
+- [ ] Record the decision in an ADR (introduce an intake-permission model)
+- [ ] Add the intake-permission specification to
+      `../specs/protocol-external-human.md`
