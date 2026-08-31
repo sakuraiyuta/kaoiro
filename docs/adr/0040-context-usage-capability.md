@@ -1,5 +1,5 @@
 ---
-title: context-window 使用量表示を capability driven にし Codex の estimated 投影は行わない
+title: Make context-window usage display capability-driven without projecting estimated Codex usage
 status: accepted
 date: 2026-07-16
 opened: 2026-07-16
@@ -9,166 +9,184 @@ related_specs: [protocol, plugin-model, agent-sdk-events, codex-sdk-events]
 related_adrs: [21, 22, 32, 34, 35, 37, 39]
 ---
 
-# ADR-0040 — context-window 使用量表示を capability driven にし Codex の estimated 投影は行わない
+# ADR-0040 — Make context-window usage display capability-driven without projecting estimated Codex usage
 
 ## Status
 
-Accepted (2026-07-16、マスター決裁 → 藤 orchestration)。実装は
-[phase-21-context-usage-capability](../plans/phase-21-context-usage-capability.md)。
+Accepted (2026-07-16, decision by マスター → orchestration by 藤). Implementation is
+[phase-21-context-usage-capability](../plans/phase-21-context-usage-capability.md).
 
 ## Context
 
-`ext.context` (`{used_tokens, max_tokens, used_percentage}`) は #16 で
-Claude Code adapter が `Query.getContextUsage()` から derive して stamp して
-きた。`AgentDetail.svelte` の `ctx` 行は SDK 応答到達までのプレースホルダに
-「初回応答後に取得」を固定表示していた。
+`ext.context` (`{used_tokens, max_tokens, used_percentage}`) was derived by the
+Claude Code adapter from `Query.getContextUsage()` for #16 and stamped into the
+state. The `ctx` row in `AgentDetail.svelte` displayed the fixed placeholder
+「初回応答後に取得」 until the SDK response arrived.
 
-以下の破綻が藤 review (2026-07-16、conversation `f4834340`) で確定した:
+The following failures were confirmed in the 藤 review (2026-07-16,
+conversation `f4834340`):
 
-1. **Codex agent で永久 spinner**: Codex adapter は `ext.context` を stamp
-   する経路を持たない (`docs/specs/codex-sdk-events.md` L84 に「wrapper が
-   反映」と書かれていたが実装は dead `threadEventToUsage` のみで host から
-   一度も呼ばれていなかった)。UI 側は engine 名分岐なしに「初回応答後に
-   取得」を出しつづけ、operator を騙し続けていた。
-2. **`turn.completed.usage.input_tokens` を estimated として代替する案は
-   semantic 破綻**: (a) per-turn 入力のみで context 累積ではない、
-   (b) compaction 直後に減るため「使用率が下がった」誤情報を出す、
-   (c) reasoning / output tokens を含まない、(d) `max_tokens` の対応
-   経路が存在しない (静的 catalog にも `context_window` field なし)。
-3. **Claude 側の trigger 貧弱さ**: 従来は `SDKResultMessage` 到達時にのみ
-   fire-and-forget で `getContextUsage()` を呼び、init 直後 / model 切替
-   直後には呼ばれなかった。init 後の meter は初回 result まで空のまま。
-4. **UI が engine 名を見ないという contract が確立していない**: ADR-0034 F3
-   の「機能可用性は capability field で判定、engine 名で判定するな」を
-   context 表示だけ守っていなかった。
+1. **Permanent spinner on Codex agents**: The Codex adapter had no path that
+   stamped `ext.context` (the docs at `docs/specs/codex-sdk-events.md` L84 said
+   that the wrapper reflected it, but the implementation only had the dead
+   `threadEventToUsage` and was never called from the host). The UI kept showing
+   「初回応答後に取得」 without an engine-name branch, continuing to mislead the
+   operator.
+2. **Using `turn.completed.usage.input_tokens` as an estimate is a semantic
+   failure**: (a) it is per-turn input only, not cumulative context, (b) it
+   decreases immediately after compaction and therefore reports the false
+   information that usage has gone down, (c) it excludes reasoning / output
+   tokens, and (d) there is no path for `max_tokens` (the static catalog also has
+   no `context_window` field).
+3. **Weak trigger on the Claude side**: Previously, `getContextUsage()` was
+   called fire-and-forget only when an `SDKResultMessage` arrived; it was not
+   called immediately after init or immediately after a model switch. The meter
+   remained empty after init until the first result arrived.
+4. **The contract that the UI does not inspect engine names was not established**:
+   context display alone did not follow ADR-0034 F3's rule that “feature
+   availability is determined by a capability field, never by engine name.”
 
-対応の方向はマスター決裁で決まり、以降のレビューで骨格 + 詳細が確定した。
-本 ADR はその決定を記録する。
+The direction of the response was decided by マスター, and the skeleton and
+details were finalized in subsequent reviews. This ADR records that decision.
 
 ## Decision
 
-### D1. Capability-only gating (engine 名分岐禁止)
+### D1. Capability-only gating (no engine-name branch)
 
-`ext.session_capabilities.supports_context_usage: boolean` を optional で
-追加し、UI はこの field 単独で以下を判定する:
+Add optional `ext.session_capabilities.supports_context_usage: boolean`, and have
+the UI make the following determinations from this field alone:
 
-- **absent** (旧 wrapper) → ctx 行を非表示 (rolling upgrade 中の誤誘導を
-  防ぐ; absent と `false` を混同しない)
-- **explicit `false`** (adapter が非対応を宣言) → 「未対応」表示
-- **explicit `true`** + `ext.context` 未到着 → 「取得中」placeholder
-- **explicit `true`** + `ext.context` 到着 → 既存 meter
+- **absent** (old wrapper) → hide the ctx row (to prevent misleading information
+  during rolling upgrade; do not conflate absent with `false`)
+- **explicit `false`** (adapter declares that it is unsupported) → display
+  “unsupported”
+- **explicit `true`** + `ext.context` not yet received → display the “loading”
+  placeholder
+- **explicit `true`** + `ext.context` received → existing meter
 
-UI コードから engine 名 (`ext.engine`) を context 表示判定に使わない
-(ADR-0034 F3 遵守)。
+Do not use the engine name (`ext.engine`) in context display decisions in UI code
+(comply with ADR-0034 F3).
 
-### D2. Claude adapter は capability=true + trigger 拡張
+### D2. Claude adapter sets capability=true and expands triggers
 
-- `initialStatusExt()` で `supports_context_usage: true` を stamp。
-- `#refreshContextUsage()` の trigger:
-  - **init 直後**: 新設 `#refreshContextUsageForInit()` で initial + 1 retry
-    (100ms backoff)。transient race で init 時取得を諦めず、result 到達まで
-    meter を空にしない。close / generation を跨がない bounded retry。
-  - **result 毎**: 既存 fire-and-forget を維持。
-  - **model 切替成功後**: `#contextGeneration` bump + `#context = null` +
-    async re-fetch。異 model 間で `max_tokens` が変わるため stale snapshot
-    を認めない。
+- Stamp `supports_context_usage: true` in `initialStatusExt()`.
+- Triggers for `#refreshContextUsage()`:
+  - **Immediately after init**: use the new `#refreshContextUsageForInit()` for
+    the initial attempt plus one retry (100ms backoff). Do not give up on the
+    init-time fetch because of a transient race, and do not leave the meter empty
+    until a result arrives. The retry is bounded and does not cross close / a
+    generation boundary.
+  - **Every result**: keep the existing fire-and-forget behavior.
+  - **After a successful model switch**: bump `#contextGeneration`, set
+    `#context = null`, and asynchronously re-fetch. Since `max_tokens` can differ
+    between models, do not accept a stale snapshot.
 - Guards:
-  - **inflight guard** (`#contextInflight`): 並行 trigger を coalesce。
-  - **pending re-run** (`#contextRefreshPending`): guard で drop した caller
-    が `finally` で自動再 kick。次の natural trigger まで stall しない。
-  - **generation guard** (`#contextGeneration`): model 切替中の in-flight
-    refresh は captured generation mismatch で結果破棄。fresh generation の
-    refresh が `finally` で自動再 kick される。
-  - **dedup**: 前回と同値なら `emitState` を呼ばず余分な state_change を
-    出さない。
-  - **close guard**: `close()` 後は再 kick しない。
-- Authoritative stamp は既存 `#statusExt` の毎 state_change lazy stamp を
-  維持 (rate_limits / cost の規約は触らない、藤 review S7 の判断結果)。
+  - **inflight guard** (`#contextInflight`): coalesce concurrent triggers.
+  - **pending re-run** (`#contextRefreshPending`): a caller dropped by the guard
+    automatically kicks again in `finally`. It does not stall until the next
+    natural trigger.
+  - **generation guard** (`#contextGeneration`): discard an in-flight refresh
+    during a model switch when the captured generation mismatches. The fresh
+    generation's refresh automatically kicks again in `finally`.
+  - **dedup**: when the value is identical to the previous one, do not call
+    `emitState` and do not emit an unnecessary state_change.
+  - **close guard**: do not kick again after `close()`.
+- Keep the existing lazy stamp of `#statusExt` on every state_change as the
+  authoritative stamp (do not touch the rate_limits / cost conventions; this is
+  the result of the 藤 review S7 decision).
 
-### D3. Codex adapter は capability=false + estimated 投影しない
+### D3. Codex adapter sets capability=false and does not project estimates
 
-- `initialStatusExtFromCatalog` で `supports_context_usage: false` を stamp。
-- `ext.context` は絶対に stamp しない。
-- `turn.completed.usage.input_tokens` を estimated context として代替する
-  案は M-A に基づき採用しない (semantics 破綻、上記 Context §2)。
-- 実装されないまま残っていた `threadEventToUsage` helper と export、
-  `test/adapter.test.ts` の該当テストは削除 (dead code)。
-- 将来 upstream Codex の compaction telemetry (`token_count` event 等) が
-  確定した場合は本 ADR を supersede して exact 経路を検討する余地を残す。
-  現状 grep 0 件で未対応。
+- Stamp `supports_context_usage: false` in `initialStatusExtFromCatalog`.
+- Never stamp `ext.context`.
+- Do not adopt the proposal to substitute `turn.completed.usage.input_tokens` as
+  estimated context based on M-A (semantic failure, Context §2 above).
+- Delete the leftover, never-implemented `threadEventToUsage` helper and export,
+  as well as the corresponding test in `test/adapter.test.ts` (dead code).
+- If upstream Codex's compaction telemetry (`token_count` event, etc.) becomes
+  settled in the future, leave room to supersede this ADR and consider an exact
+  path. It is currently unsupported, with zero grep results.
 
-### D4. Wire schema と後方互換
+### D4. Wire schema and backward compatibility
 
-- `SessionCapabilitiesExt.supports_context_usage?: boolean` を optional 追加
-  (protocol/src/index.ts)。既存 5 field と同じ open-schema 拡張。
-- `ext.context` の既存 3-field wire shape (`used_tokens` / `max_tokens` /
-  `used_percentage`) は**変更なし**。後方互換保持。
-- Elixir 側 (`wrapper_channel.ex` の frame 検査 / `agents_channel.ex` の
-  viewer 秘匿) は ext を opaque に扱うため変更ゼロ。既存 viewer 秘匿 test
-  (`agents_channel_test.exs:1041-1085`) は shape 変更不感で non-regression。
+- Add optional `SessionCapabilitiesExt.supports_context_usage?: boolean`
+  (protocol/src/index.ts), as an open-schema extension alongside the existing
+  five fields.
+- Do not change the existing three-field wire shape of `ext.context`
+  (`used_tokens` / `max_tokens` / `used_percentage`). Preserve backward
+  compatibility.
+- Make zero changes on the Elixir side (`wrapper_channel.ex` frame validation /
+  `agents_channel.ex` viewer redaction), which treats ext as opaque. The existing
+  viewer-redaction test (`agents_channel_test.exs:1041-1085`) is insensitive to
+  the shape change and remains non-regression coverage.
 
-### D5. Spec docs 同期
+### D5. Synchronize the spec docs
 
-- `docs/specs/protocol.md` L134-145 の session_capabilities section に
-  `supports_context_usage` を追加。
-- `docs/specs/plugin-model.md` L32-37 に Codex の explicit false stamp と
-  ADR-0040 参照を追記。
-- `docs/specs/codex-sdk-events.md` L48 (`usage` field 説明) と L84
-  (`turn.completed` → 状態導出) から「usage (tokens) を ext に反映」を
-  撤回し、capability advertise に切替。
+- Add `supports_context_usage` to the session_capabilities section at
+  `docs/specs/protocol.md` L134-145.
+- Add Codex's explicit false stamp and a reference to ADR-0040 at
+  `docs/specs/plugin-model.md` L32-37.
+- Withdraw “reflect usage (tokens) into ext” from `docs/specs/codex-sdk-events.md`
+  L48 (description of the `usage` field) and L84 (`turn.completed` → state
+  derivation), and switch to advertising the capability.
 
-### D6. spike 済 / 未検証項目の切り分け
+### D6. Separate spiked / unverified items
 
-`getContextUsage()` について d.ts 実測で確定済 (`sdk.d.ts:2378, 2985-`):
+The following has been confirmed by d.ts inspection for `getContextUsage()`
+(`sdk.d.ts:2378, 2985-`):
 
 - signature: `Query.getContextUsage(): Promise<SDKControlGetContextUsageResponse>`
 - response shape: `totalTokens / maxTokens / rawMaxTokens / percentage /
   model / categories[]` etc
-- control_request 経由、SDK の `initialize` control_response 到達後から
-  成功する transport
+- transport succeeds through control_request after the SDK's `initialize`
+  control_response arrives
 
-**「init 直後 (turn 0) に呼ぶと `totalTokens > 0` が返る」は期待であって
-実測ではない**。system_prompt + tools + MCP + memory_files が既に context
-を消費するため合理的に非ゼロが返るはずだが、d.ts / sdk source からは断言
-できない。実機 dogfood での再検証は phase-21 完了後に別途行う。失敗時の
-挙動は best-effort として握り潰し、UI は「取得中」のまま滞留する
-(M-A、藤 review turn-3)。
+**“Calling it immediately after init (turn 0) returns `totalTokens > 0`” is an
+expectation, not an observation.** Since system_prompt + tools + MCP +
+memory_files already consume context, a non-zero value is reasonable to expect,
+but d.ts / SDK source cannot establish it. Re-verify on a real machine during
+dogfood separately after phase-21 completes. On failure, swallow the error as
+best-effort and leave the UI stuck at “loading” (M-A, 藤 review turn-3).
 
 ## Consequences
 
-### 好影響
+### Benefits
 
-- Codex agent の ctx 行が「未対応」で正しく表示され、operator を騙さない。
-- rolling upgrade 期の旧 wrapper でも誤情報を出さない (絶対 hide)。
-- Claude 側の init trigger + bounded retry で「初回 result 到達まで空」と
-  いう UX 破綻を修正。
-- capability-only gating が確立し、engine 追加時に UI 修正が不要になる。
+- The ctx row for Codex agents is correctly shown as “unsupported” and does not
+  mislead the operator.
+- The old wrapper during a rolling upgrade does not show misleading information
+  (it hides the row unconditionally).
+- The Claude-side init trigger plus bounded retry fixes the UX failure where the
+  meter remained empty until the first result.
+- Capability-only gating is established, so adding an engine does not require a
+  UI change.
 
-### コスト
+### Costs
 
-- Claude adapter の trigger 追加で SDK control_request が増える (init 直後
-  1〜2 回 + model 切替毎 1 回)。inflight guard + dedup で無駄な発火は防ぐ。
-- 旧 wrapper 稼働中は ctx 行が消える → operator に一時的な UX 差異。ただし
-  rolling upgrade 完了で自動解消。
-- Codex の future compaction telemetry 対応は本 ADR を再訪する追加コスト。
+- Adding Claude adapter triggers increases SDK control_requests (1–2 immediately
+  after init + 1 per model switch). The inflight guard + dedup prevent needless
+  firing.
+- The ctx row disappears while an old wrapper is running, causing a temporary UX
+  difference for the operator. It resolves automatically when the rolling upgrade
+  completes.
+- Supporting future Codex compaction telemetry costs another revisit of this ADR.
 
-### 未対応の余地 (out of scope)
+### Remaining scope (out of scope)
 
-- Codex 側 rollout の `token_count` イベント (upstream 追加時) を exact
-  projection に載せる経路。現状 spec 未確定のため見送り。
-- context 使用量の手動 refresh 経路 (現状 fire-and-forget のみ)。UI に
-  refresh ボタンを追加する要求は phase-21 スコープ外 (藤 review S10)。
-- envelope contract test / JSON schema 導入。scope 拡大のため見送り
-  (藤 review O11)。
+- A path to put Codex rollout's `token_count` events (when upstream adds them)
+  into an exact projection. Deferred because the current spec is unsettled.
+- A manual refresh path for context usage (currently fire-and-forget only). The
+  request for a refresh button in the UI is outside phase-21 scope (藤 review S10).
+- Introducing an envelope contract test / JSON schema. Deferred because it would
+  expand scope (藤 review O11).
 
 ## References
 
-- 元 conversation: `f4834340` (kuroe ↔ 藤 kickoff)、`fb40967b` (実装 orch)
-- ADR-0022: pending-permission authoritative source (毎 state_change stamp
-  pattern の先例)
-- ADR-0034 F3: 機能可用性の判定に engine 名を使わない原則
-- ADR-0037 F6: bounded retry + persistent state flag pattern の先例
+- Original conversations: `f4834340` (kuroe ↔ 藤 kickoff), `fb40967b` (implementation orch)
+- ADR-0022: pending-permission authoritative source (precedent for the every-state_change stamp pattern)
+- ADR-0034 F3: principle of not using engine names to determine feature availability
+- ADR-0037 F6: precedent for the bounded retry + persistent state flag pattern
 - Wire spec: [protocol](../specs/protocol.md) L134-145
 - Plugin routing: [plugin-model](../specs/plugin-model.md) L32-37
-- Codex event 契約: [codex-sdk-events](../specs/codex-sdk-events.md) L48, 84
+- Codex event contract: [codex-sdk-events](../specs/codex-sdk-events.md) L48, 84
 - Implementation plan: [phase-21-context-usage-capability](../plans/phase-21-context-usage-capability.md)
