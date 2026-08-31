@@ -11,6 +11,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
   alias KaoiroServer.DeliveryStates
   alias KaoiroServer.HostRegistry
   alias KaoiroServer.PlannedDisconnects
+  alias KaoiroServer.SessionLifecycleEvents
   alias KaoiroServer.SessionPointers
   alias KaoiroServer.TaskStates
   alias KaoiroServer.TokenDenylist
@@ -5888,6 +5889,115 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       assert_reply ref, :ok, %{"users" => users}
       assert is_list(users)
+    end
+  end
+
+  describe "list_session_events 経路 (issue #200 Stage C, ADR-0055, require_operator ゲート)" do
+    # A cast-based `SessionLifecycleEvents.append/4` (Stage B round 2
+    # must-fix B2-残り) returns before the store necessarily processed it.
+    # `:sys.get_state/1` forces a synchronous round trip through the SAME
+    # mailbox, so any append issued before it is guaranteed processed by
+    # the time this returns — a deterministic barrier instead of relying
+    # on the channel round-trip's own latency to win the race.
+    defp sync_lifecycle_store do
+      _ = :sys.get_state(KaoiroServer.SessionLifecycleEvents)
+    end
+
+    test "viewer は forbidden" do
+      socket = join_as(:viewer)
+
+      ref = push(socket, "list_session_events", %{"agent_id" => "test.lse-viewer"})
+
+      assert_reply ref, :error, %{reason: "forbidden"}
+    end
+
+    test "operator は agent の session_lifecycle timeline を newest-first で受け取る" do
+      agent_id = "test.lse-happy-#{System.unique_integer([:positive])}"
+
+      SessionLifecycleEvents.append(agent_id, "compacting", nil, "2026-08-31T00:00:01Z")
+
+      SessionLifecycleEvents.append(
+        agent_id,
+        "compact_boundary",
+        "request_compact",
+        "2026-08-31T00:00:02Z"
+      )
+
+      sync_lifecycle_store()
+
+      socket = join_as(:operator)
+      ref = push(socket, "list_session_events", %{"agent_id" => agent_id})
+
+      assert_reply ref, :ok, %{"events" => events}
+
+      assert events == [
+               %{
+                 "kind" => "compact_boundary",
+                 "trigger" => "request_compact",
+                 "at" => "2026-08-31T00:00:02Z"
+               },
+               %{"kind" => "compacting", "trigger" => nil, "at" => "2026-08-31T00:00:01Z"}
+             ]
+    end
+
+    test "admin も通る (require_operator は operator/admin いずれも許可)" do
+      socket = join_as(:admin)
+
+      ref = push(socket, "list_session_events", %{"agent_id" => "test.lse-admin"})
+
+      assert_reply ref, :ok, %{"events" => []}
+    end
+
+    test "agent_id 欠落は missing_agent_id" do
+      socket = join_as(:operator)
+
+      ref = push(socket, "list_session_events", %{})
+
+      assert_reply ref, :error, %{reason: "missing_agent_id"}
+    end
+
+    test "agent_id の charset 違反は invalid_agent_id" do
+      socket = join_as(:operator)
+
+      ref = push(socket, "list_session_events", %{"agent_id" => "bad id!"})
+
+      assert_reply ref, :error, %{reason: "invalid_agent_id"}
+    end
+
+    test "未知の agent_id は error ではなく空配列を返す (existence check 無し)" do
+      socket = join_as(:operator)
+
+      ref = push(socket, "list_session_events", %{"agent_id" => "test.lse-never-existed"})
+
+      assert_reply ref, :ok, %{"events" => []}
+    end
+
+    # 設計の核心 pin (director裁定 2026-08-31): delete_agent の
+    # purge_agent_records/1 は SessionLifecycleEvents を purge 対象に
+    # 含まないため履歴は残り、fetch_agent_id/fetch_restorable_agent_id
+    # と違い existence check を課さないこのクエリなら削除後も
+    # 問い合わせを継続できる — 事後デバッグ・監査という機能の狙いに
+    # 直結する挙動。
+    test "削除済み agent の履歴も問い合わせ可能 (delete_agent は SessionLifecycleEvents を purge しない)" do
+      agent_id = "test.lse-deleted-#{System.unique_integer([:positive])}"
+      put_disconnected(agent_id)
+      SessionLifecycleEvents.append(agent_id, "conversation_reset", nil, "2026-08-31T00:00:01Z")
+      sync_lifecycle_store()
+
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      ref = push(socket, "delete_agent", %{"agent_id" => agent_id})
+      assert_reply ref, :ok, %{}, @purge_reply_timeout
+      assert_broadcast "agent_deleted", %{"agent_id" => ^agent_id}
+      refute AgentStates.known?(agent_id)
+      assert AgentDirectory.get(agent_id) == nil
+
+      ref2 = push(socket, "list_session_events", %{"agent_id" => agent_id})
+
+      assert_reply ref2, :ok, %{
+        "events" => [%{"kind" => "conversation_reset", "trigger" => nil, "at" => _}]
+      }
     end
   end
 

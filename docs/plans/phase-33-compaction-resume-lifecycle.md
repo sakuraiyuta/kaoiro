@@ -1,7 +1,7 @@
 ---
 title: Compaction resume and lifecycle log
 description: Implement the wrapper-local resume_prompt for request_compact and retention of the session_lifecycle timeline with an operator query.
-status: in_progress
+status: completed
 phase: 33
 depends_on: []
 last_updated: 2026-08-31
@@ -50,9 +50,17 @@ finalized `kind`/`trigger` enumeration. Implementation and automated tests
 
 ## Stage C — operator query
 
-- [ ] Add an operator pull-query event (`require_operator` gate, same shape as
+- [x] Add an operator pull-query event (`require_operator` gate, same shape as
       `list_conversations`)
-- [ ] Update the event table in protocol.md (together with the implementation)
+- [x] Update the event table in protocol.md (together with the implementation)
+
+Acceptance: `list_session_events` returns one agent's `session_lifecycle`
+timeline (`{ agent_id }` request, format-validated only — no existence
+check, so a deleted agent's retained history stays queryable; see
+`docs/specs/protocol.md`'s row for the full schema and the retention
+rationale). No pagination in this first cut; wire egress size is issue
+#278's concern. Implementation and automated tests are complete
+(2026-08-31).
 
 ## Out of scope
 

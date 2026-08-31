@@ -935,6 +935,37 @@ defmodule KaoiroServerWeb.AgentsChannel do
     end
   end
 
+  # Operator-facing session_lifecycle timeline pull query (ADR-0055 phase-33
+  # Stage C, director裁定 2026-08-31). Same shape as `list_conversations`
+  # just above: pure read-time query, `require_operator` the one gate seam.
+  # `SessionLifecycleEvents.list_for_agent/2` already returns a bounded,
+  # newest-first list with a `[]` fallback (Stage B's fail-soft work) —
+  # this is that read path's first production caller.
+  #
+  # `fetch_lifecycle_query_agent_id/1` validates FORMAT ONLY (no
+  # existence check), deliberately looser than `fetch_agent_id/1` /
+  # `fetch_restorable_agent_id/1` elsewhere in this file: neither of those
+  # helpers' "known" definitions survive `delete_agent` (its
+  # `purge_agent_records/1` does not touch `SessionLifecycleEvents`), so
+  # gating on either would make a deleted agent's still-persisted history
+  # permanently unqueryable — defeating the audit/debugging purpose this
+  # query exists for. An unknown/never-existed agent_id simply returns
+  # `events: []`, matching `list_for_agent/2`'s own graceful semantics; the
+  # `require_operator` gate already bounds who can probe at all.
+  def handle_in("list_session_events", payload, socket) do
+    with :ok <- require_operator(socket, payload, "list_session_events"),
+         {:ok, agent_id} <- fetch_lifecycle_query_agent_id(payload) do
+      events =
+        for event <- SessionLifecycleEvents.list_for_agent(agent_id) do
+          %{"kind" => event.kind, "trigger" => event.trigger, "at" => event.at}
+        end
+
+      {:reply, {:ok, %{"events" => events}}, socket}
+    else
+      {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
+  end
+
   # Operator manual close (issue #276 decision): rides the SAME tombstone +
   # conversation_closed notification every hard-limit/GC closure already
   # uses — ConversationStates.close_by_operator/1 performs only the state
@@ -2530,6 +2561,19 @@ defmodule KaoiroServerWeb.AgentsChannel do
         resolved
     end
   end
+
+  # `list_session_events` (ADR-0055 phase-33 Stage C): format-only, no
+  # existence check — see that handler's comment for why `fetch_agent_id/1`
+  # / `fetch_restorable_agent_id/1` are the wrong fit here. A separate
+  # small helper rather than reusing `fetch_lifecycle_agent_id/1` above
+  # (planned-lifecycle intent, an unrelated feature with its own reason to
+  # stay format-only): coupling two features to one private helper risks
+  # a future change to one silently changing the other's contract.
+  defp fetch_lifecycle_query_agent_id(%{"agent_id" => agent_id}) when is_binary(agent_id) do
+    if AgentId.valid?(agent_id), do: {:ok, agent_id}, else: {:error, :invalid_agent_id}
+  end
+
+  defp fetch_lifecycle_query_agent_id(_payload), do: {:error, :missing_agent_id}
 
   defp fetch_agent_id(%{"agent_id" => agent_id} = _payload)
        when is_binary(agent_id) do
