@@ -1,5 +1,5 @@
 ---
-title: ペルソナアセットはサーバ管理、マニフェスト + content-addressed 配信
+title: Server-managed persona assets; manifest + content-addressed delivery
 status: superseded
 date: 2026-06-10
 opened: 2026-06-10
@@ -9,69 +9,73 @@ related_specs: [protocol, architecture]
 related_adrs: [3, 5, 7, 29]
 ---
 
-# ADR-0008 — ペルソナアセットはサーバ管理、マニフェスト + content-addressed 配信
+# ADR-0008 — Server-Managed Persona Assets; Manifest + Content-Addressed Delivery
 
 ## Status
 
 Superseded by [ADR-0029](0029-persona-server-sot-and-pack-distribution.md)
-(2026-07-05)。サーバがアセットを持つ方針は継承しつつ、配布単位を
-「立ち絵のみのマニフェスト」から「zip pack(人格プロンプト + 立ち絵)」
-に拡張し、auto-watch による自動反映と「野良 persona 禁止」の enforce を
-統合した。
+(2026-07-05). The policy of having the server hold the assets is retained,
+while the distribution unit is expanded from a "standing-pictures-only
+manifest" to a "zip pack (personality prompt + standing pictures)", integrating
+automatic application through auto-watch and enforcement of "no unregistered
+personas".
 
-以下は歴史的経緯として残す。
+The following remains as historical background.
 
 ## Context
 
-`persona.sprite_set` は文字列であり、別プロジェクト化した外部クライアント
-([ADR-0007](0007-client-separation-reference-dashboard.md))がこれを実際の
-画像へ解決する手段が未定義だった。全クライアントが既に接続している唯一の
-コンポーネントはサーバである。リクエスト毎にアーカイブを圧縮して配信する
-案は CPU とレイテンシを毎回払う。
+`persona.sprite_set` is a string, and the means for the external clients made
+separate projects ([ADR-0007](0007-client-separation-reference-dashboard.md)) to
+resolve it to actual images was undefined. The server is the only component to
+which all clients are already connected. Compressing and delivering an archive
+for each request would incur the CPU and latency cost every time.
 
 ## Decision
 
-- ペルソナアセット(立ち絵・表情差分)の**正本はサーバが管理**する。
-  ラッパーは同一性(`persona.id`、
-  [ADR-0003](0003-persona-identity-persistence.md))のみを持ち、サーバが
-  見た目(アセット)を持つ。サーバの agent 非依存は維持される。
-- 配信の一次形式は**マニフェスト JSON**(persona.id → 状態別画像 URL +
-  コンテンツハッシュ + バージョン)+ **content-addressed な静的ファイル**。
-  ハッシュ付き URL は不変でキャッシュ無期限、クライアントはハッシュ差分で
-  増分同期する。
-- 一括アーカイブは**アップロード受付時に1回生成**して保存する
-  (オンデマンド圧縮はしない)。
-- **段階導入**: 第1段階は管理者がサーバのデータディレクトリへ直接配置
-  (配信のみ実装)。アップロード API(検証: zip-slip / サイズ上限 / MIME
-  制限・SVG 除外、認可: RBAC のアップロードロール、
-  [ADR-0005](0005-access-control-oauth-stub.md))は後段。
-- メタデータは SQLite、実ファイルはファイルシステムに置く。
+- The server **manages the source of truth** for persona assets (standing
+  pictures and expression variants). The wrapper holds only identity
+  (`persona.id`, [ADR-0003](0003-persona-identity-persistence.md)); the server
+  holds the appearance (assets). The server remains agent-independent.
+- The primary delivery format is **manifest JSON** (persona.id → image URL by
+  state + content hash + version) + **content-addressed static files**. URLs
+  with hashes are immutable and cached indefinitely; the client performs
+  incremental synchronization based on hash differences.
+- Generate and save the bulk archive **once when the upload is accepted** (do
+  not compress on demand).
+- **Phased introduction**: In the first phase, an administrator places files
+  directly in the server's data directory (delivery only is implemented). The
+  upload API (validation: zip-slip / size limit / MIME restriction / SVG
+  exclusion; authorization: RBAC upload role,
+  [ADR-0005](0005-access-control-oauth-stub.md)) comes later.
+- Metadata is stored in SQLite, and actual files are stored on the filesystem.
 
 ## Consequences
 
 ### Positive
 
-- 全クライアントで見た目が一貫し、試用時にアセットの別途入手が不要。
-- サーバ負担はほぼ静的ファイル配信とストレージのみ(圧縮・変換の常時負荷
-  なし)。
-- マニフェストのハッシュにより増分同期・キャッシュ戦略が自明になる。
+- Appearance is consistent across all clients, and assets do not need to be
+  obtained separately when trying the system.
+- Server load is almost entirely static file delivery and storage (with no
+  constant compression or conversion load).
+- Manifest hashes make the incremental synchronization and caching strategy
+  straightforward.
 
 ### Negative
 
-- サーバにアセット保管・マニフェスト生成・(後段)アップロード検証の責務が
-  増える。
-- アップロード API は RBAC のロール設計(ADR-0005)と連動して後段に
-  持ち越し。
+- The server takes on responsibility for asset storage, manifest generation,
+  and (later) upload validation.
+- The upload API is deferred in coordination with the RBAC role design
+  (ADR-0005).
 
 ### Neutral
 
-- クライアントのローカル上書き(オフライン利用・カスタムスキン)は
-  マニフェスト仕様で許す余地を残す。
+- The manifest specification leaves room for client-local overrides (offline
+  use and custom skins).
 
 ## Alternatives Considered
 
 | Option | Why rejected |
 |--------|--------------|
-| オンデマンド圧縮アーカイブ配信(原案) | リクエスト毎に CPU・レイテンシを払う |
-| 外部静的ホスト委譲(Nextcloud 等) | 可用性の結合と CORS の手間が増え、ラボ規模で利なし |
-| クライアント側アセットパック | 試用の敷居と表示の一貫性を損なう |
+| On-demand compressed archive delivery (original proposal) | Pays the CPU and latency cost for each request |
+| Delegation to an external static host (such as Nextcloud) | Increases availability coupling and CORS work, with no benefit at lab scale |
+| Client-side asset pack | Harms the barrier to trying the system and consistency of its appearance |
