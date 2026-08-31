@@ -1,181 +1,185 @@
 ---
-title: Phase 8 — エージェント間メッセージング
-description: 複数 AI エージェントの直接対話を可能にする。Stage A 仕様整合→Stage B Phase 1 MVP(ユーザ明示指示)→Stage C Phase 2 permission gate 改善。Stage D Phase 3(自発判断)は #87 完了後。
+title: Phase 8 — Inter-Agent Messaging
+description: Enable direct interaction between multiple AI agents. Stage A specification alignment → Stage B Phase 1 MVP (explicit user instruction) → Stage C Phase 2 permission-gate improvements. Stage D Phase 3 (autonomous decisions) follows completion of #87.
 status: done
 phase: 8
 depends_on: [phase-3-server-multiagent, phase-4-host-runner]
 last_updated: 2026-08-09
 ---
 
-# Phase 8 — エージェント間メッセージング
+# Phase 8 — Inter-Agent Messaging
 
-複数 AI エージェントが kaoiro サーバを介して直接メッセージをやり取り
-できるようにする。kaoiro issue #17 の本実装、kaoiro issue #18
-(メッセージフィルタ)とセット、kaoiro issue #87(複数 AI エージェント
-間の協調コミュニケーション設計の調査)が前提整理を兼ねる傘 issue。
+Enable multiple AI agents to exchange messages directly through the kaoiro
+server. This is the implementation for kaoiro issue #17, paired with kaoiro
+issue #18 (message filtering), while kaoiro issue #87 (research into the design
+of cooperative communication among multiple AI agents) serves as the umbrella
+issue that also organizes prerequisites.
 
-envelope schema 等の機械的仕様は
-[protocol-inter-agent spec](../specs/protocol-inter-agent.md)(後続作業
-で起こす)に切り出し、本 plan は段階的実装計画のみを扱う。
+Mechanical specifications such as the envelope schema are split out into the
+[protocol-inter-agent spec](../specs/protocol-inter-agent.md) (to be created in
+follow-up work); this plan covers only the staged implementation plan.
 
 ## Goal
 
-ユーザの「@agent-a と @agent-b で X について議論して結論を出して」と
-いった明示指示を起点に、エージェント A・B が kaoiro サーバ経由で
-メッセージをやり取りし、相談・議論・依頼の 3 系統の対話を構造化された
-envelope で実現する。観測経路を二重化し、dashboard で対話の全過程を
-追えること。
+Starting from an explicit user instruction such as “Discuss X with @agent-a and
+@agent-b and reach a conclusion,” agents A and B exchange messages through the
+kaoiro server, implementing three kinds of interaction—consultation, discussion,
+and request—using structured envelopes. Duplicate the observation path so that
+the entire interaction can be followed in the dashboard.
 
-## Non-goals(本 Phase の外、#87 完了後の Stage D 以降)
+## Non-goals (outside this Phase, Stage D and later after #87)
 
-- エージェントが**自発的に**他エージェントへ問合せる経路(Phase 3)
-- 自動承認 + quota/cooldown による無人運用
-- 自然言語による「次の発話者選定」(AutoGen の動的 group chat 相当)
-- メッセージのフィルタ・検閲・変換(kaoiro issue #18 で別途扱う、
-  Phase 2 以降に検討)
+- A path for agents to **autonomously** query other agents (Phase 3)
+- Unattended operation using automatic approval + quota/cooldown
+- Natural-language “next speaker selection” (equivalent to AutoGen dynamic group chat)
+- Message filtering, censorship, and transformation (handled separately in kaoiro
+  issue #18 and considered from Phase 2 onward)
 
-## Stage A — pre-spike(仕様整合確認)
+## Stage A — pre-spike (specification alignment check)
 
-実装着手前に既存 envelope 規約・送信ツール経路・dashboard log 表示の
-現状を把握し、新規 envelope 種が違和感なく載るかを確認する。
+Before implementation begins, understand the current state of the existing
+envelope conventions, sending-tool path, and dashboard log display, and confirm
+that new envelope types can be added without inconsistency.
 
-| 項目 | 目的 | アウトプット |
+| Item | Purpose | Output |
 |--|--|--|
-| IN1 | 既存 envelope の命名規約(runner 制御 #66、 subagent-tasks 等)を読み、`from`/`to` の指す対象、 kind 文字列の case、 共通 base 型の有無を把握 | spec ドラフト着手時の整合ガイド |
-| IN2 | 送信ツールの実装場所(wrapper の MCP/in-process tool 注入経路) | `send_to_agent` ツールの設置場所決定 |
-| IN3 | dashboard log の表示経路と既存 log envelope 形状 | observation path での `inter_agent_message` 描画方針確定 |
+| IN1 | Read the naming conventions for existing envelopes (runner control #66, subagent-tasks, etc.) and understand what `from`/`to` refer to, the case of kind strings, and whether a common base type exists | Alignment guide when starting the spec draft |
+| IN2 | Location where the sending tool is implemented (wrapper MCP/in-process tool injection path) | Determine where to place the `send_to_agent` tool |
+| IN3 | Dashboard log display path and existing log envelope shape | Finalize the rendering policy for `inter_agent_message` on the observation path |
 
-完了基準: 上記 3 項目の調査結果を spec ドラフト
-`docs/specs/protocol-inter-agent.md`(新規)に反映し、 envelope schema
-を機械可読な形で確定する。
+Completion criterion: reflect the research results for the three items above in
+the new spec draft `docs/specs/protocol-inter-agent.md` and finalize the envelope
+schema in a machine-readable form.
 
-## Stage B — Phase 1: ユーザ明示指示による A→B(MVP)
+## Stage B — Phase 1: A→B by explicit user instruction (MVP)
 
-ユーザが明示的に「@agent-a → @agent-b」と指示した場合のみ
-エージェント間メッセージが流れる最小実装。 wire + ツール + routing +
-observation + 承認 + 安全弁の骨格を実証する。
+The minimum implementation in which inter-agent messages flow only when the user
+explicitly instructs “@agent-a → @agent-b.” Demonstrate the skeleton of wire +
+tool + routing + observation + approval + safety valve.
 
-**Phase 1 完了時点でユーザレビュー → コミット → push を挟む。**
-Stage C への進行は次セッション以降で判断。
+**Insert user review → commit → push when Phase 1 is complete.**
+Decide whether to proceed to Stage C in a subsequent session.
 
-### IN(含む)
+### IN (included)
 
-- `send_to_agent(agent_id, message, kind, meta)` ツール(wrapper)
-- envelope schema 9 種 kind(`request` / `response` / `query` /
+- `send_to_agent(agent_id, message, kind, meta)` tool (wrapper)
+- envelope schema with 9 kinds (`request` / `response` / `query` /
   `inform` / `propose` / `accept` / `reject` / `escalate-to-user` /
-  `done`)。 fields: `from` / `to` / `conversation_id` / `turn_number` /
+  `done`); fields: `from` / `to` / `conversation_id` / `turn_number` /
   `kind` / `payload` / `meta {done, propose_next, confidence?,
   reject_reason?}` / `owner {kind, id}`
-- server: envelope ルーティング(B のセッションへ deliver) +
-  observation broadcast(dashboard log stream へ複製)
-- dashboard: `kind: "inter_agent_message"` を A・B 両方の log 欄に
-  表示
-- wrapper: ツール呼び出しを既存 `permission_broker` の都度承認に
-  繋ぐ。 dialog に宛先 `agent_id` と payload 抜粋を表示
-- ハード制限 config: `max_turns` / `max_tokens` / `max_wallclock` /
-  `max_concurrent_agents` per conversation。 既定値は spec 側で確定。
-  超過時は server が conversation を強制終了、 dashboard に「未合意
-  打ち切り」ステータスを記録(issue #211 で `max_wallclock` はハード
-  制限から撤廃 — 現行の制限セットとメモリ回収用 TTL は
-  [protocol-inter-agent spec](../specs/protocol-inter-agent.md)
-  「ハード制限」節を正とする)
+- server: envelope routing (deliver to B's session) + observation broadcast
+  (duplicate to the dashboard log stream)
+- dashboard: display `kind: "inter_agent_message"` in both A and B's log fields
+- wrapper: connect tool calls to per-call approval through the existing
+  `permission_broker`. Display the destination `agent_id` and a payload excerpt
+  in the dialog
+- Hard-limit config per conversation: `max_turns` / `max_tokens` / `max_wallclock` /
+  `max_concurrent_agents`. Finalize defaults in the spec. When a limit is
+  exceeded, the server forcibly terminates the conversation and records an
+  “unagreed termination” status in the dashboard (issue #211 removed
+  `max_wallclock` from the hard limits—the current limit set and the memory-
+  reclamation TTL are defined by the “Hard limits” section of the
+  [protocol-inter-agent spec](../specs/protocol-inter-agent.md))
 
-### OUT(明示的に外す、Stage C 以降または将来)
+### OUT (explicitly excluded, Stage C onward or future)
 
-- 都度承認 dialog の UX 改善(まず素の dialog で動かす)
-- 自動承認 / quota / cooldown
-- 自発判断(LLM が自分で `send_to_agent` を選ぶ経路は許可するが、
-  permission_broker の都度承認で常にユーザに介入余地を残す)
-- メッセージフィルタ(kaoiro issue #18)
-- conversation の再開・履歴 resume(Phase 4 / ADR-0014 範疇)
-- リモート host 間ルーティング(まず同一 server 内のエージェント間)
+- Per-call approval dialog UX improvements (start with a plain dialog)
+- Automatic approval / quota / cooldown
+- Autonomous decisions (allow the path in which the LLM chooses
+  `send_to_agent` itself, but always preserve an opportunity for user
+  intervention through per-call approval by permission_broker)
+- Message filtering (kaoiro issue #18)
+- Conversation restart and history resume (within the scope of Phase 4 / ADR-0014)
+- Routing between remote hosts (start with agents within the same server)
 
-### 完了基準
+### Completion criteria
 
-- ユーザが dashboard から「@agent-a 〜 @agent-b と X について相談
-  して」と指示 → A が `send_to_agent` を呼ぶ → 都度承認後に B の
-  セッションに envelope が到達 → B が応答 → 同経路で A に返り、
-  両 dashboard log に対話履歴が観測できる
-- ハード制限(max_turns 等)が機械的に効き、 quota 超過で自動停止
-  する
-- spec の envelope schema と実装が一致(typecheck / lint パス)
+- The user instructs from the dashboard “Consult @agent-b about X with
+  @agent-a” → A calls `send_to_agent` → after per-call approval, the envelope
+  reaches B's session → B responds → it returns to A through the same path, and
+  the interaction history is observable in both dashboard logs
+- Hard limits (max_turns, etc.) take effect mechanically and automatically stop
+  on quota overrun
+- The implementation matches the spec's envelope schema (typecheck / lint pass)
 
-### 層別スライス(順序)
+### Layered slices (order)
 
-| 順 | 層 | 内容 |
+| Order | Layer | Contents |
 |--|--|--|
-| 1 | spec | `docs/specs/protocol-inter-agent.md` を確定(envelope / kind / meta / owner / ハード制限既定値) |
-| 2 | server | envelope routing + observation broadcast + hard limit 監視タイマー |
-| 3 | wrapper | `send_to_agent` ツール定義、 permission_broker への接続、 受信 envelope の SDK 入力注入 |
-| 4 | dashboard | `inter_agent_message` の log 表示、 permission dialog の宛先表示 |
-| 5 | config | `max_turns` / `max_tokens` / `max_wallclock` /`max_concurrent_agents` の設定項目化(issue #211 で `max_wallclock` は撤廃、spec 参照) |
-| 6 | E2E | 2 エージェント環境で相談 → 議論 → 合意 → done の 1 ラウンドを通す |
+| 1 | spec | Finalize `docs/specs/protocol-inter-agent.md` (envelope / kind / meta / owner / hard-limit defaults) |
+| 2 | server | Envelope routing + observation broadcast + hard-limit monitoring timer |
+| 3 | wrapper | Define the `send_to_agent` tool, connect it to permission_broker, and inject received envelopes into SDK input |
+| 4 | dashboard | Display `inter_agent_message` in logs and the destination in the permission dialog |
+| 5 | config | Add configuration items for `max_turns` / `max_tokens` / `max_wallclock` / `max_concurrent_agents` (`max_wallclock` was removed by issue #211; see the spec) |
+| 6 | E2E | Run one round of consultation → discussion → agreement → done in a two-agent environment |
 
-## Stage C — Phase 2: permission gate 改善 + リファクタ
+## Stage C — Phase 2: permission gate improvements + refactor
 
-Phase 1 の都度承認 dialog をエージェント間メッセージング用に磨き、
-Stage B で目立った重複・命名の整理を行う。 kaoiro issue #17 のゴールは
-Stage C 完了まで。
+Polish Phase 1's per-call approval dialog for inter-agent messaging and organize
+the duplication and naming issues that stand out in Stage B. The goal of kaoiro
+issue #17 extends through completion of Stage C.
 
-### IN(含む)
+### IN (included)
 
-- permission dialog の専用 UI(送り手 / 受け手 / kind / payload 全文 /
-  meta の構造化表示)
-- 「この conversation はこの先全部許可」のオプトイン(per
-  conversation_id の whitelist、 セッション内有効)
-- リファクタ: Stage B で重複した envelope バリデーション、 quota 監視
-  ロジックを sites of duplication で集約
-- kaoiro issue #18(メッセージフィルタ)着手要否の判断
+- Dedicated UI for the permission dialog (structured display of sender / receiver /
+  kind / full payload / meta)
+- Opt-in “allow everything from this point in this conversation” (a whitelist per
+  conversation_id, valid within the session)
+- Refactor: consolidate the envelope validation and quota-monitoring logic
+  duplicated in Stage B at the sites of duplication
+- Decide whether to begin kaoiro issue #18 (message filtering)
 
-### OUT(Stage D 以降)
+### OUT (Stage D onward)
 
-- 永続的な whitelist(プロセス再起動越え)
-- 完全自動承認(quota のみ機械ガード)
-- 自発判断による相手選定
+- Persistent whitelist (surviving process restarts)
+- Fully automatic approval (quota as the only mechanical guard)
+- Selecting the other party through autonomous decisions
 
-### 完了基準
+### Completion criteria
 
-- permission dialog でメッセージ内容を読まずに承認しないで済む
-  情報量を確保
-- 同一 conversation の連続承認が「都度クリック」から「最初の同意」
-  で進む
-- リファクタ後も Stage B の E2E が通る
+- Ensure enough information in the permission dialog that approval does not have
+  to be given without reading the message contents
+- Repeated approvals in the same conversation proceed from “click every time” to
+  “initial consent”
+- Stage B's E2E still passes after the refactor
 
-## 将来 — Stage D / Phase 3(#87 完了後)
+## Future — Stage D / Phase 3 (after #87)
 
-kaoiro issue #87(複数 AI エージェント間の協調コミュニケーション設計の
-調査)の結論待ち。観点:
+Await the conclusion of kaoiro issue #87 (research into the design of cooperative
+communication among multiple AI agents). Points of consideration:
 
-- 自動承認 + quota/cooldown による無人運用の境界
-- 自発判断(broker は人 / 自動 routing)
-- consensus / consent / 多数決 / tie-breaker の運用ルール
-- conversation owner 概念の自動エスカレーション規則
-- kaoiro issue #18(メッセージフィルタ)実装
+- Boundary of unattended operation using automatic approval + quota/cooldown
+- Autonomous decisions (human broker / automatic routing)
+- Operating rules for consensus / consent / majority vote / tie-breaker
+- Automatic escalation rules for the conversation owner concept
+- Implementation of kaoiro issue #18 (message filtering)
 
-Phase 3 着手は本 plan のスコープ外。 #87 の方針が固まった時点で
-別 plan(または本 plan の追補)として起こす。
+Beginning Phase 3 is outside this plan's scope. Once the policy for #87 is
+settled, create it as a separate plan (or an addendum to this plan).
 
-## 進捗ログ
+## Progress log
 
-- 2026-08-02: マスター判断により close (status: done)。根拠:
-  - Stage A/B は実装済で稼働中 (`send_to_agent` /
-    [protocol-inter-agent spec](../specs/protocol-inter-agent.md)、
-    起点 issue #17 は closed)
-  - Stage C の未実施分 (conversation whitelist 等の承認緩和) は
-    [ADR-0044](../adr/0044-coordination-injection-hitl.md) F2 に
-    前倒しで引き継ぎ済(2026-08-09 issue #165 で案 B 確定・実装)
-  - Stage D (自発判断以降) は本 plan の明示的スコープ外であり、
-    issue #87 (協調設計調査、open) / issue #18 (メッセージフィルタ、
-    open) / ADR-0044 で追跡される
+- 2026-08-02: Closed by the master's decision (status: done). Basis:
+  - Stages A/B are implemented and operating (`send_to_agent` /
+    [protocol-inter-agent spec](../specs/protocol-inter-agent.md); the originating
+    issue #17 is closed)
+  - The unfinished parts of Stage C (approval relaxation such as the conversation
+    whitelist) were carried forward early into F2 of
+    [ADR-0044](../adr/0044-coordination-injection-hitl.md) (option B finalized and
+    implemented in issue #165 on 2026-08-09)
+  - Stage D (autonomous decisions onward) is explicitly outside this plan's scope
+    and is tracked by issue #87 (cooperative-design research, open), issue #18
+    (message filtering, open), and ADR-0044
 
-## 参照
+## References
 
-- [protocol-inter-agent spec](../specs/protocol-inter-agent.md)(後続
-  作業で起こす envelope 機械的定義)
-- [protocol spec](../specs/protocol.md) — 既存 envelope 共通基盤
+- [protocol-inter-agent spec](../specs/protocol-inter-agent.md) (mechanical
+  envelope definition to be created in follow-up work)
+- [protocol spec](../specs/protocol.md) — Existing common envelope foundation
 - [ADR-0010 protocol-precisification](../adr/0010-protocol-precisification.md)
-- [ADR-0019 subagent/workflow entity and task envelope](../adr/0019-subagent-workflow-entity-and-task-envelope.md) — 既存 envelope 命名規約の参考
-- kaoiro issue #17 — エージェント間メッセージング本体(本 plan の起点)
-- kaoiro issue #18 — メッセージフィルタ(Stage C 以降の判断材料)
-- kaoiro issue #87 — 複数 AI エージェント間の協調コミュニケーション
-  設計の調査(Stage D 以降の前提整理)
+- [ADR-0019 subagent/workflow entity and task envelope](../adr/0019-subagent-workflow-entity-and-task-envelope.md) — Reference for existing envelope naming conventions
+- kaoiro issue #17 — Main inter-agent messaging work (origin of this plan)
+- kaoiro issue #18 — Message filtering (input for decisions from Stage C onward)
+- kaoiro issue #87 — Research into cooperative communication design among multiple
+  AI agents (organizing prerequisites for Stage D onward)

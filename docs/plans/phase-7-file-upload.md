@@ -1,212 +1,218 @@
 ---
-title: ファイルアップロード(添付の取り込み)
-description: ダッシュボードから画像/テキスト/PDF/Office を Claude Code に渡せるようにする — pre-spike + 単一画像 E2E + feature complete MVP の3段階。
+title: File Upload (Attachment Ingestion)
+description: Enable passing images/text/PDF/Office files from the dashboard to Claude Code — in three stages: pre-spike + single-image E2E + feature-complete MVP.
 status: done
 phase: 7
 depends_on: [phase-3.5-response-display, phase-4-host-runner]
 last_updated: 2026-07-03
 ---
 
-# Phase 7 — ファイルアップロード(添付の取り込み)
+# Phase 7 — File Upload (Attachment Ingestion)
 
-[file-upload spec](../specs/file-upload.md) と
-[ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md) を実装に
-落とす。 3 サブステージ(Stage A → B → C)で進める。
+Implement [file-upload spec](../specs/file-upload.md) and
+[ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md). Proceed in
+three substages (Stage A → B → C).
 
-## Stage A — pre-spike(着手前確証)
+## Stage A — pre-spike (pre-work confirmation)
 
-| 項目 | 目的 | アウトプット |
+| Item | Purpose | Output |
 |--|--|--|
-| IN1 | Phoenix V2 binary frame の wire 形式 / phoenix.js ArrayBuffer push API / `max_frame_size` 既定値 | spike ノート(本ファイル下部)、 wire 細部確定(header 形式: u32 vs varint 等) |
-| IN2 | Claude API の image_block / document_block 正確な上限 | fit-to-SDK 閾値の確定 |
-| IN3 | fit-to-SDK ライブラリ選定(image: sharp 候補 / PDF: pdf-lib 候補 / Office: markitdown CLI 連携) | 採用ライブラリ確定、 ライセンス・依存サイズ確認 |
+| IN1 | Phoenix V2 binary-frame wire format / phoenix.js ArrayBuffer push API / default `max_frame_size` | Spike notes (at the bottom of this file), wire details finalized (header format: u32 vs varint, etc.) |
+| IN2 | Exact limits for Claude API image_block / document_block | Fit-to-SDK thresholds finalized |
+| IN3 | Fit-to-SDK library selection (image: sharp candidate / PDF: pdf-lib candidate / Office: markitdown CLI integration) | Selected library finalized; license and dependency size confirmed |
 
-完了基準: 上記 3 項目の結論を本ファイルの「Spike 結果」に記録、 spec /
-ADR-0025 の数値・ wire 細部を必要に応じて更新。
+Completion criterion: record the conclusions for the three items above in “Spike
+Results” in this file, and update the numbers and wire details in the spec /
+ADR-0025 as needed.
 
-## Stage B — phase-0: 単一画像 end-to-end(最小 demonstrable slice)
+## Stage B — phase-0: Single-image end-to-end (minimal demonstrable slice)
 
-最小コードパスで wire / 認可 / 透過 relay / wrapper の pending_uploads /
-SDK content blocks 変換 の骨格を実証する。
+Demonstrate the skeleton of the wire / authorization / transparent relay / wrapper
+pending_uploads / SDK content-block conversion through the smallest code path.
 
-### IN(含む)
+### IN (included)
 
-- 画像 1 ファイル / instruction(PNG / JPEG / WebP / GIF、 5 MB 上限・
-  Stage A 確証後に数値調整)
-- 全 wire op 実装: `attach_open` / `attach_chunk`(binary)/ `attach_close`
-  / `instruction` 拡張(`attachment_ids`)/ `attach_rejected` /
-  `instruction_rejected`
-- wrapper: pending_uploads(純メモリ)、 image → image_block 直送、 reject
-  reason は `size_over` / `mime_denied` / `sdk_error` のみ
-- server: binary 透過 relay、 operator 認可ガード、 frame 上限(8 MB)、
-  in-flight cap(20)
-- client: 簡易 file picker(1 枚)、 送信ボタンで upload → instruction、
-  reject トースト表示
-- E2E 確認: dashboard 1 枚送信 → wrapper の SDK が image_block 受理 →
-  ターン応答が出る
+- One image file / instruction (PNG / JPEG / WebP / GIF, 5 MB limit; adjust the
+  number after Stage A confirmation)
+- Implement all wire operations: `attach_open` / `attach_chunk` (binary) /
+  `attach_close` / `instruction` extension (`attachment_ids`) /
+  `attach_rejected` / `instruction_rejected`
+- wrapper: pending_uploads (in-memory only), direct image → image_block delivery;
+  reject reasons are limited to `size_over` / `mime_denied` / `sdk_error`
+- server: transparent binary relay, operator authorization guard, frame limit (8 MB),
+  in-flight cap (20)
+- client: simple file picker (one file), upload → instruction from the send button,
+  reject toast display
+- E2E confirmation: dashboard sends one file → wrapper SDK accepts image_block →
+  turn response appears
 
-### OUT(明示的に外す)
+### OUT (explicitly excluded)
 
-- 複数ファイル、 PDF / text / code / Office
-- fit-to-SDK(downsize / page-extract / truncate)
-- 128 MB 一律 cap(MVP までの暫定)
-- `interrupt` 拡張(uploads drop)
-- TTL 5 分 GC
-- progress UI / 遅延 upload tray / 複数選択 UX
-- reject reason 全 enum
+- Multiple files, PDF / text / code / Office
+- Fit-to-SDK (downsize / page-extract / truncate)
+- Uniform 128 MB cap (provisional through the MVP)
+- `interrupt` extension (uploads drop)
+- Five-minute TTL GC
+- Progress UI / delayed upload tray / multi-select UX
+- The complete reject-reason enum
 
-### 層別スライス(順序)
+### Layered Slices (order)
 
-| 順 | 層 | 内容 |
+| Order | Layer | Contents |
 |--|--|--|
-| A | docs | spec / ADR / non-goals / 索引(本セッションで完了) |
-| B | wrapper | pending_uploads + image → image_block 変換 + reject 発火 |
-| C | server | binary 透過 relay + operator 認可 + transport 安全弁 |
-| D | client | file picker(1 枚)+ chunker + ArrayBuffer push + reject 表示 |
-| 検収 | E2E | dashboard 1 枚送信 → SDK 応答 確認 |
+| A | docs | spec / ADR / non-goals / index (complete in this session) |
+| B | wrapper | pending_uploads + image → image_block conversion + reject emission |
+| C | server | transparent binary relay + operator authorization + transport safety valve |
+| D | client | file picker (one file) + chunker + ArrayBuffer push + reject display |
+| Acceptance | E2E | dashboard sends one file → confirm SDK response |
 
-## Stage C — phase-1: feature complete MVP
+## Stage C — phase-1: Feature-complete MVP
 
-Stage B の wire を据え置きで機能を全面展開。 Session 1 (backend a-f) は
-2026-06-27 完了 (commit `245b927` 〜 `dc632e1`、 wrapper 197 tests + dashboard
-49 + server 215 green)。 Session 2 (UI g/h/i) も同日完了 (commit `ac6be01` 〜
-`3ea6224`、 dashboard 49 tests green、 svelte-check 0/0)。
+Fully expand the features while keeping Stage B's wire unchanged. Session 1 (backend
+a-f) was completed on 2026-06-27 (commits `245b927` through `dc632e1`, wrapper 197
+tests + dashboard 49 + server 215 green). Session 2 (UI g/h/i) was also completed
+the same day (commits `ac6be01` through `3ea6224`, dashboard 49 tests green,
+svelte-check 0/0).
 
-### 進捗
+### Progress
 
-| ID | 項目 | 状態 |
+| ID | Item | Status |
 |--|--|--|
-| (a) | 複数ファイル + multi-select picker | done (245b927) |
-| (b1) | text/code 種別追加 | done (5c405f3) |
-| (b2) | PDF 種別 + pdf-lib fit-to-SDK | done (e89ed5a) |
-| (d-image) | image fit-to-SDK + ImageDownsizer 抽象 + protocol cap 128MB | done (c2ddcd6) |
-| (b3) | Office 種別 + officeparser + fflate decompression-bomb 防御 | done (6231c26) |
-| (d-text) | text 末尾切り + 全リクエスト 32MB 事前検証 | done (b34d543) |
-| (e) | `interrupt` 拡張 (pending_uploads drop) | done (4dd835a) |
-| (f) | TTL 5 分 GC + timeout reject | done (dc632e1) |
-| (h) | 遅延 upload tray UX (chip コンテナ化 + 件数表示) | done (ac6be01) |
-| (g) | per-upload progress UI (chip 内 mini bar) | done (7cd8a26) |
-| (i) | D&D drop zone (composer 領域 + hover outline) | done (3ea6224) |
+| (a) | Multiple files + multi-select picker | done (245b927) |
+| (b1) | Add text/code types | done (5c405f3) |
+| (b2) | PDF type + pdf-lib fit-to-SDK | done (e89ed5a) |
+| (d-image) | Image fit-to-SDK + ImageDownsizer abstraction + protocol cap 128MB | done (c2ddcd6) |
+| (b3) | Office type + officeparser + fflate decompression-bomb protection | done (6231c26) |
+| (d-text) | Truncate text tail + pre-validate every request at 32MB | done (b34d543) |
+| (e) | `interrupt` extension (pending_uploads drop) | done (4dd835a) |
+| (f) | Five-minute TTL GC + timeout reject | done (dc632e1) |
+| (h) | Delayed upload-tray UX (chip containerization + count display) | done (ac6be01) |
+| (g) | Per-upload progress UI (mini bar inside chip) | done (7cd8a26) |
+| (i) | D&D drop zone (composer area + hover outline) | done (3ea6224) |
 
-### IN(含む)
+### IN (included)
 
-- 複数ファイル(10 / instruction、 in-flight 20)、 multi-select picker
-- 全種別: image + text / code + PDF + Office(docx / xlsx / pptx via
-  officeparser; markitdown CLI fallback は Q10 OQ)
-- 128 MB 一律上限(個別)、 合計 cap なし
-- wrapper の fit-to-SDK:
-  - 画像 = API 上限超は downsize、 不能は `unfittable_image` reject
-  - PDF = 上限超は先頭 N ページ抽出 or `unfittable_pdf` reject
-  - text/code = 1 MB 超は `truncated` 印付き切り詰め
-  - Office = officeparser AST → text 経路へ(fflate での decompression-bomb 防御を pre-flight、 出力 8 MB chars cap)
-- reject reason 全 enum(`size_over` / `mime_denied` / `count_over` /
+- Multiple files (10 / instruction, in-flight 20), multi-select picker
+- All types: image + text / code + PDF + Office (docx / xlsx / pptx via
+  officeparser; the markitdown CLI fallback is Q10 OQ)
+- Uniform 128 MB per-file limit, no total cap
+- Wrapper fit-to-SDK:
+  - Image = downsize above the API limit; reject as `unfittable_image` when impossible
+  - PDF = extract the first N pages above the limit or reject as `unfittable_pdf`
+  - Text/code = truncate above 1 MB with a `truncated` marker
+  - Office = officeparser AST → text path (pre-flight decompression-bomb protection with fflate, 8 MB character output cap)
+- Complete reject-reason enum (`size_over` / `mime_denied` / `count_over` /
   `timeout` / `interrupted` / `unfittable_image` / `unfittable_pdf` /
   `text_too_large` / `total_request_over` / `sdk_error`)
-- `interrupt` 拡張: pending_uploads drop + staged attachment drop +
-  `attach_rejected{reason="interrupted"}` 発火
-- TTL 5 分 GC(未参照 + chunk 不完全 upload)
-- per-upload progress UI
-- 遅延 upload tray UX(✕ で除去可)
-- D&D drop zone(AgentDetail のチャットボックス領域に限定、 hover 強調)
+- `interrupt` extension: pending_uploads drop + staged attachment drop + emit
+  `attach_rejected{reason="interrupted"}`
+- Five-minute TTL GC (unreferenced + incomplete-chunk uploads)
+- Per-upload progress UI
+- Delayed upload-tray UX (removable with ✕)
+- D&D drop zone (limited to the AgentDetail chat-box area, with hover emphasis)
 
-### OUT(Followups 候補)
+### OUT (follow-up candidates)
 
 - Q1 ([file-upload-fs-read-fallback](../open-questions/file-upload-fs-read-fallback.md)):
-  (1) でメモリ/速度に問題が出たら切替判断
-- Q2: 解決済 — 受理可種別の publish は
-  [ADR-0034](../adr/0034-session-capabilities-advertisement.md) F7 で
-  `ext.session_capabilities` に吸収された
+  decide whether to switch if (1) causes memory/speed problems
+- Q2: Resolved — publishing accepted types was absorbed into
+  `ext.session_capabilities` by F7 of
+  [ADR-0034](../adr/0034-session-capabilities-advertisement.md)
 - Q3 ([file-upload-json-fallback](../open-questions/file-upload-json-fallback.md)):
-  simple-client 要望が出たら
+  if a simple-client request arises
 - Q5 ([file-upload-spill-storage](../open-questions/file-upload-spill-storage.md)):
-  並列 upload で RSS が問題化したら
+  if parallel uploads make RSS a problem
 - Q6 ([file-upload-exif-stripping](../open-questions/file-upload-exif-stripping.md)):
-  機微画像運用が出たら
+  if sensitive-image operations arise
 - Q8 ([file-upload-name-collision](../open-questions/file-upload-name-collision.md)):
-  client disambiguate 要望が出たら
+  if the client requests disambiguation
 
-### 層別スライス
+### Layered Slices
 
-Stage B と同じ A→B→C→D の順、 機能を漸進的に追加。 1 機能 1 PR を目安に
-小スライスで進める。
+Use the same A→B→C→D order as Stage B and add features incrementally. Proceed in
+small slices, targeting one feature per PR.
 
-## Spike 結果(2026-06-27 完了)
+## Spike Results (completed 2026-06-27)
 
-3 並列 subagent でリサーチ完了。 spec / ADR-0025 / protocol.md に反映済。
+Research completed with three parallel subagents. Reflected in the spec / ADR-0025 /
+protocol.md.
 
 ### IN1: Phoenix V2 binary frame + phoenix.js ArrayBuffer push
 
-- V2 serializer は WebSocket binary opcode を受け、 `handle_in/3` に payload
-  を **`{:binary, data}` タプル**で渡す(生 binary でない点に注意。 V1 は
-  map 強制、 V2 は任意 JSON 値 + binary タプル)。
+- The V2 serializer receives the WebSocket binary opcode and passes the payload to
+  `handle_in/3` as a **`{:binary, data}` tuple** (note that it is not raw binary;
+  V1 requires a map, while V2 accepts any JSON value + binary tuple).
 - V2 binary wire frame:
   `<<kind::8, join_ref_size::8, ref_size::8, topic_size::8, event_size::8,
-  join_ref, ref, topic, event, data>>`。 各 size 1 バイトのため join_ref /
-  ref / topic / event は **各最大 255 バイト**。 kaoiro の `wrapper:<agent_id>`
-  / `attach_chunk` 等は十分余裕。
-- phoenix.js は **`ArrayBuffer` を `channel.push(event, payload)` 直接
-  サポート**(自動で binary frame 化)。 Blob は事前 `arrayBuffer()` 変換が
-  必要。 Phoenix 1.7 / 1.8 系同一挙動。
-- `max_frame_size` 既定 **`:infinity`**。 endpoint `socket/3` の
-  `:websocket` keyword に `max_frame_size: 8_000_000` を明示設定 必須
-  (OOM 防御)。 protocol.md に設定例反映済。
+  join_ref, ref, topic, event, data>>`. Since each size is one byte, join_ref /
+  ref / topic / event are **at most 255 bytes each**. kaoiro's
+  `wrapper:<agent_id>` / `attach_chunk`, etc. have ample room.
+- phoenix.js **directly supports `ArrayBuffer` in `channel.push(event, payload)`**
+  (automatically producing a binary frame). Blob must first be converted with
+  `arrayBuffer()`. Phoenix 1.7 / 1.8 behave identically.
+- The default `max_frame_size` is **`:infinity`**. Explicitly configure
+  `max_frame_size: 8_000_000` in the `:websocket` keyword of endpoint `socket/3`
+  (OOM protection). The example is reflected in protocol.md.
 
-### IN2: Claude API content block 上限
+### IN2: Claude API content block limits
 
-| 種別 | 実効上限 |
+| Type | Effective limit |
 |--|--|
-| image (base64 後) | **10 MB**(Bedrock/Vertex は 5 MB) |
-| image 解像度 | 長辺 8000 px、 20 枚超は各辺 2000 px に強制縮小 |
-| 画像枚数 / リクエスト | 200K context モデル(Haiku 4.5)100 枚、 他 600 枚 |
-| document (PDF) | **32 MB / 600 ページ**(200K context モデルは 100 ページ) |
-| **リクエスト合計** | **32 MB がハード上限** |
-| text | byte 上限なし(モデルの context window 依存) |
-| Files API 経由 (`file_id`) | 1 file **500 MB**、 org 全体 500 GB(beta header `files-api-2025-04-14` 必要) |
+| image (after base64) | **10 MB** (5 MB for Bedrock/Vertex) |
+| Image resolution | Long edge 8000 px; above 20 images, each edge is forcibly reduced to 2000 px |
+| Images / request | 100 for 200K-context models (Haiku 4.5), 600 for others |
+| document (PDF) | **32 MB / 600 pages** (100 pages for 200K-context models) |
+| **Request total** | **32 MB hard limit** |
+| text | No byte limit (depends on the model's context window) |
+| Via Files API (`file_id`) | **500 MB** per file, 500 GB for the entire organization (beta header `files-api-2025-04-14` required) |
 
-- 2026 年現在の active Claude モデル(Fable 5 / Mythos 5 / Opus 4.x /
-  Sonnet 4.6 / Haiku 4.5)はすべて image / document 対応。 image 非対応
-  モデルなし。
-- Agent SDK の `query()` content block 形:
+- As of 2026, all active Claude models (Fable 5 / Mythos 5 / Opus 4.x /
+  Sonnet 4.6 / Haiku 4.5) support image / document. There are no models
+  without image support.
+- Agent SDK `query()` content block shape:
   `{role: "user", content: [{type:"image", source:{type:"base64",
-  media_type, data}}, {type:"text", text}]}`。 `source.type` は
-  `base64` / `url` / `file_id`。
-- **判断**: D-A1 = (α) base64 inline のみ採用、 Files API は Q9 で
-  将来トリガ起票。 spec / ADR-0025 F10 の fit-to-SDK 章に SDK 上限値を
-  明示し、 wrapper は instruction 着信時に合計 32 MB を事前検証して
-  `instruction_rejected{reason="total_request_over"}` で拒否する経路を
-  追加(reason enum に追加済)。
+  media_type, data}}, {type:"text", text}]}`. `source.type` is
+  `base64` / `url` / `file_id`.
+- **Decision**: Adopt D-A1 = (α) base64 inline only; file the Files API as a
+  future trigger in Q9. Explicitly state the SDK limits in the fit-to-SDK
+  section of spec / ADR-0025 F10, and add a path for the wrapper to pre-validate
+  the 32 MB total when an instruction arrives and reject it with
+  `instruction_rejected{reason="total_request_over"}` (already added to the
+  reason enum).
 
-### IN3: fit-to-SDK ライブラリ採用
+### IN3: fit-to-SDK library selection
 
-| カテゴリ | 採用(MVP) | OQ(将来) |
+| Category | Adopted (MVP) | OQ (future) |
 |--|--|--|
-| 画像 downsize | **sharp** (Apache-2.0、 native libvips、 40-50x 高速)+ `ImageDownsizer` 抽象 | ADR-0018 単一バイナリ化対応で sharp-wasm32 / jimp へ差替え |
-| PDF page-extract | **pdf-lib** (MIT、 pure JS、 `copyPages`/`removePage`) | — |
-| Office (docx/xlsx/pptx) → text | **officeparser** (MIT、 pure JS、 1 lib で 3 形式) | Q10 で markitdown CLI fallback 余地 |
-| text 切り詰め | 自前 + `@anthropic-ai/sdk` の `countTokens`(billing-grade 正確) | gpt-tokenizer ローカル近似(必要なら) |
+| Image downsize | **sharp** (Apache-2.0, native libvips, 40–50x faster) + `ImageDownsizer` abstraction | Replace with sharp-wasm32 / jimp for ADR-0018 single-binary support |
+| PDF page extraction | **pdf-lib** (MIT, pure JS, `copyPages`/`removePage`) | — |
+| Office (docx/xlsx/pptx) → text | **officeparser** (MIT, pure JS, one library for all 3 formats) | Room for markitdown CLI fallback in Q10 |
+| Text truncation | In-house + `@anthropic-ai/sdk` `countTokens` (billing-grade accuracy) | Local approximation with gpt-tokenizer (if needed) |
 
-- bundle 増分: sharp 構成で +35-50 MB(native dep)/ jimp 構成で +5-7 MB
-  (pure JS)。 ADR-0018 単一バイナリ化のタイミングで差替え前提なので
-  `ImageDownsizer` interface を最初から噛ませる。
-- markitdown 経路は my-markitdown skill 資産あり、 Python 依存のため
-  ADR-0018 と相性悪く Q10 で fallback 余地として保留。
+- Bundle increase: +35–50 MB with sharp (native dependency) / +5–7 MB
+  with jimp (pure JS). Since replacement is assumed when implementing ADR-0018
+  single-binary support, put the `ImageDownsizer` interface in place from the
+  start.
+- The markitdown path has my-markitdown skill assets, but its Python dependency
+  does not fit ADR-0018, so retain it as fallback room in Q10.
 
-### 追加 OQ(spike 結果から派生)
+### Additional OQs (derived from spike results)
 
 - Q9: [file-upload-files-api-route](../open-questions/file-upload-files-api-route.md)
-  — 32 MB 超を扱う Files API 経路
+  — Files API path for handling over 32 MB
 - Q10: [file-upload-markitdown-fallback](../open-questions/file-upload-markitdown-fallback.md)
-  — Office 変換の markitdown fallback
+  — markitdown fallback for Office conversion
 
-### Stage A 完了基準
+### Stage A completion criteria
 
-- [x] IN1 / IN2 / IN3 spike 完了
-- [x] spec / ADR-0025 / protocol.md に数値・ wire 細部・ ライブラリ採用を反映
-- [x] Q9 / Q10 を open-questions に追加
-- [x] (Stage B 着手の go サイン)
+- [x] IN1 / IN2 / IN3 spikes completed
+- [x] Numbers, wire details, and library choices reflected in spec / ADR-0025 / protocol.md
+- [x] Q9 / Q10 added to open-questions
+- [x] (Go signal to begin Stage B)
 
 ## Followups
 
-各 OQ の起票判断: Stage C 完了時にユーザと確認、 必要分のみ個別 issue 化。
-Stage A〜C の実装は 2026-06-27 完了済で、この起票判断が本フェーズ唯一の
-残作業(実装外の curation)。
+Decision to file each OQ: confirm with the user when Stage C is complete, and
+create individual issues only for those needed. Implementation of Stages A–C
+was completed on 2026-06-27; this filing decision is the only remaining work in
+this phase (non-implementation curation).
