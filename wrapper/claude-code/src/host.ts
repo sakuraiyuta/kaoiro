@@ -2703,11 +2703,16 @@ export class AgentHost implements EngineAdapter {
     if (this.#resumeReservations.length === 0) return;
     const prompt = this.#resumeReservations.shift() ?? null;
     if (prompt === null) return;
-    this.#emitSessionLifecycle("resume_fired");
     const text = resumeInjectionText(prompt);
     void this.#enqueueInjection(async () => {
+      // ふじ Stage B round 1 must-fix B4 (2026-08-31): emit AFTER the
+      // closed guard and the actual `send()`, not before queueing — a
+      // queue reject, or the closed guard tripping once the queued task
+      // finally runs, previously left a `resume_fired` record with no
+      // injection ever delivered.
       if (this.#closed) return;
       await this.send(text);
+      this.#emitSessionLifecycle("resume_fired");
     }).catch((err: unknown) => {
       // Closed or full queue. The reservation is already consumed above —
       // unlike the B1 notice, there is no budget to re-arm: a fired-but-
@@ -2758,7 +2763,6 @@ export class AgentHost implements EngineAdapter {
     // Claim the budget BEFORE the async send so two refreshes resolving in
     // the same tick cannot both queue a notice.
     this.#contextNoticeSent = true;
-    this.#emitSessionLifecycle("threshold_notice");
     const generation = this.#contextGeneration;
     const text = contextNoticeText(
       reading.used_tokens,
@@ -2776,6 +2780,11 @@ export class AgentHost implements EngineAdapter {
       // the new one, which is exactly what the operator just fixed.
       if (this.#closed || generation !== this.#contextGeneration) return;
       await this.send(text);
+      // ふじ Stage B round 1 must-fix B4 (2026-08-31): emit AFTER the
+      // guards and the actual `send()`, not before queueing — see
+      // #maybeFireResumeReservation's identical fix for the false-
+      // positive this closes (a record with no injection delivered).
+      this.#emitSessionLifecycle("threshold_notice");
     }).catch((err: unknown) => {
       // Closed or full queue. Re-arm rather than burning the epoch's one
       // notice on a send that never reached the model — but only while the

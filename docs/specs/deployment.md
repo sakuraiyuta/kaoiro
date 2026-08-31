@@ -87,19 +87,24 @@ The bundled compose sets `KAOIRO_PERSONA_CACHE_DIR=/var/lib/kaoiro/persona-cache
 Keep the cache on writable persistent storage, separate from the persona-pack
 mount.
 
-The **nine DETS paths** (locations of DETS files that retain state across
+The **ten DETS paths** (locations of DETS files that retain state across
 restarts) are already configured by the bundled `docker-compose.yaml` through
 `environment:` and the named volume `kaoiro-state`; compose users need not put
 them in `.env`. When running a release directly on the host without compose,
-set all nine explicitly to writable persistent paths: `KAOIRO_SESSION_POINTERS_PATH` /
+set all ten explicitly to writable persistent paths: `KAOIRO_SESSION_POINTERS_PATH` /
 `KAOIRO_AGENT_DIRECTORY_PATH` / `KAOIRO_PERMISSION_MODES_PATH` /
 `KAOIRO_CLEAR_WATERMARKS_PATH` / `KAOIRO_SESSION_STARTS_PATH` /
 `KAOIRO_INGRESS_ORDER_PATH` / `KAOIRO_USERS_PATH` /
-`KAOIRO_TOKEN_DENYLIST_PATH` / `KAOIRO_DELIVERY_STATES_PATH`. Unset paths fall
+`KAOIRO_TOKEN_DENYLIST_PATH` / `KAOIRO_DELIVERY_STATES_PATH` /
+`KAOIRO_SESSION_LIFECYCLE_EVENTS_PATH`. Unset paths fall
 under a container-equivalent of `/tmp` and disappear after `docker compose down`
 (the offline-agent list is lost).
 
-**These nine are the canonical persistence set.** The preflight in section 4
+`SESSION_LIFECYCLE_MAX_EVENTS_PER_AGENT` (unprefixed, ADR-0055 phase-33
+Stage B) caps the per-agent event count the `session_lifecycle` DETS
+retains, oldest discarded first. Unset defaults to 10000.
+
+**These ten are the canonical persistence set.** The preflight in section 4
 checks that every path resolves under the named volume using this list. A DETS
 file not listed can **silently escape backup**—`KAOIRO_USERS_PATH` did exactly
 that, and the user ledger was lost when the container was recreated without it
@@ -385,7 +390,7 @@ Satisfy all of the following before starting.
 - **Ensure the server host's SSH host key is in `known_hosts`.** Do not bypass with
   `StrictHostKeyChecking=no`.
 - **Ensure every persistence path resolves under the named volume.** The source of
-  truth is the nine paths in 1.2. An unlisted DETS can **silently escape backup**
+  truth is the ten paths in 1.2. An unlisted DETS can **silently escape backup**
   (`KAOIRO_USERS_PATH` did so, losing the user ledger on container recreation;
   issue #217).
 - **Confirm there is no active work** (human judgment). Stopping a runner stops all
@@ -705,7 +710,7 @@ Inspect contents with a **separate command** from verification.
 ssh <server-host> 'tar tzf <backup-dir>/kaoiro-dets-<timestamp>.tar.gz | head -20'
 ```
 
-**Confirm that all nine paths in 1.2 are included.** Any missing DETS is outside
+**Confirm that all ten paths in 1.2 are included.** Any missing DETS is outside
 the volume and cannot be restored from this backup.
 
 **(6) Start the server with the prepared image**

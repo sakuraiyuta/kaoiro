@@ -550,7 +550,12 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # peer notification (matching delivery_ack's fire-and-forget shape —
   # the wrapper never attaches a receiver). `trigger` is optional per
   # protocol.md; a malformed/missing `kind` or `at` falls through to the
-  # no-op clause below rather than crashing the channel.
+  # no-op clause below rather than crashing the channel. This clause only
+  # checks the wire SHAPE (both fields present and binary) — the
+  # protocol.md value vocabulary (closed kind/trigger sets, ISO-8601 `at`)
+  # is enforced once, centrally, by `SessionLifecycleEvents.append/5`
+  # (ふじ Stage B round 1 must-fix B3), so an unknown/forged value never
+  # reaches the durable store no matter which producer sent it.
   defp handle_wrapper_in("session_lifecycle", %{"kind" => kind, "at" => at} = payload, socket)
        when is_binary(kind) and is_binary(at) do
     trigger = Map.get(payload, "trigger")

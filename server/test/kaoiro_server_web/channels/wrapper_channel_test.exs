@@ -1860,7 +1860,11 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       agent_id = "test.lifecycle-inbound-no-trigger"
       socket = seed_known(agent_id)
 
-      ref = push(socket, "session_lifecycle", %{"kind" => "compacting", "at" => "T"})
+      ref =
+        push(socket, "session_lifecycle", %{
+          "kind" => "compacting",
+          "at" => "2026-08-31T00:00:00Z"
+        })
 
       assert_reply ref, :ok
 
@@ -1873,6 +1877,40 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       socket = seed_known(agent_id)
 
       ref = push(socket, "session_lifecycle", %{"kind" => 42, "at" => "T"})
+
+      assert_reply ref, :ok
+      assert SessionLifecycleEvents.list_for_agent(agent_id) == []
+    end
+
+    # ふじ Stage B round 1 must-fix B3 (2026-08-31): the channel ingress
+    # end-to-end path, not only `SessionLifecycleEvents.valid_event?/3` in
+    # isolation — a well-SHAPED (binary kind/at) but out-of-vocabulary wire
+    # payload must no-op the whole event, not store a partially-repaired
+    # row.
+    test "session_lifecycle inbound event は未知の kind を no-op する" do
+      agent_id = "test.lifecycle-inbound-unknown-kind"
+      socket = seed_known(agent_id)
+
+      ref =
+        push(socket, "session_lifecycle", %{
+          "kind" => "bogus_kind",
+          "at" => "2026-08-31T00:00:00Z"
+        })
+
+      assert_reply ref, :ok
+      assert SessionLifecycleEvents.list_for_agent(agent_id) == []
+    end
+
+    test "session_lifecycle inbound event は compact_boundary 以外への trigger を no-op する" do
+      agent_id = "test.lifecycle-inbound-trigger-wrong-kind"
+      socket = seed_known(agent_id)
+
+      ref =
+        push(socket, "session_lifecycle", %{
+          "kind" => "compacting",
+          "trigger" => "request_compact",
+          "at" => "2026-08-31T00:00:00Z"
+        })
 
       assert_reply ref, :ok
       assert SessionLifecycleEvents.list_for_agent(agent_id) == []

@@ -1712,6 +1712,123 @@ describe("AgentHost — query injection", () => {
       await makeHost(events, queryFn).run();
       expect(events).toEqual([{ kind: "threshold_notice", at: "T" }]);
     });
+
+    // ふじ Stage B round 1 must-fix B4 (2026-08-31): resume_fired /
+    // threshold_notice previously emitted BEFORE #enqueueInjection, so a
+    // rejected queue or a closed-guard trip inside the queued task still
+    // left a "fired" record with no injection ever delivered. Emission now
+    // happens after the guard and the actual send() — pinned by both the
+    // negative cases here and the existing success-path tests above
+    // (exactly 1 record, only on delivery).
+    describe("記録は実送信の後にのみ発生する (queue reject / closed で残らない)", () => {
+      const onSessionLifecycleFor =
+        (events: LifecycleEvent[]) =>
+        (
+          kind: SessionLifecycleKind,
+          trigger: SessionLifecycleTrigger | undefined,
+          at: string,
+        ): void => {
+          events.push(
+            trigger === undefined ? { kind, at } : { kind, trigger, at },
+          );
+        };
+
+      it("resume_fired: queue reject 時は記録しない", async () => {
+        const { queryFn, events } = lifecycleQueryFn([
+          boundary({ trigger: "auto" }),
+          result("success", { result: "ok" }),
+        ]);
+        const host = new AgentHost(config, {
+          onState: () => {},
+          onSessionLifecycle: onSessionLifecycleFor(events),
+          queryFn,
+          now: () => "T",
+          enqueueInjection: () => Promise.reject(new Error("queue full")),
+        });
+        host.reserveResume("queue reject で消えるはずの予約");
+        await host.run();
+        expect(events.map((e) => e.kind)).not.toContain("resume_fired");
+      });
+
+      it("resume_fired: closed guard トリップ時は記録しない", async () => {
+        const { queryFn, events } = lifecycleQueryFn([
+          boundary({ trigger: "auto" }),
+          result("success", { result: "ok" }),
+        ]);
+        let host!: AgentHost;
+        host = new AgentHost(config, {
+          onState: () => {},
+          onSessionLifecycle: onSessionLifecycleFor(events),
+          queryFn,
+          now: () => "T",
+          enqueueInjection: (task) => {
+            host.close();
+            return task();
+          },
+        });
+        host.reserveResume("closed guard で消えるはずの予約");
+        await host.run();
+        expect(events.map((e) => e.kind)).not.toContain("resume_fired");
+      });
+
+      it("threshold_notice: queue reject 時は記録しない", async () => {
+        const events: LifecycleEvent[] = [];
+        const queryFn = makeQueryFn(() => {
+          async function* gen(): AsyncGenerator<SDKMessage, void> {
+            yield result("success", { result: "ok" });
+          }
+          return asQuery(
+            gen(),
+            async () => {},
+            async () => ({
+              totalTokens: 180_000,
+              maxTokens: 200_000,
+              percentage: 90,
+            }),
+          );
+        });
+        const host = new AgentHost(config, {
+          onState: () => {},
+          onSessionLifecycle: onSessionLifecycleFor(events),
+          queryFn,
+          now: () => "T",
+          enqueueInjection: () => Promise.reject(new Error("queue full")),
+        });
+        await host.run();
+        expect(events).toEqual([]);
+      });
+
+      it("threshold_notice: closed guard トリップ時は記録しない", async () => {
+        const events: LifecycleEvent[] = [];
+        const queryFn = makeQueryFn(() => {
+          async function* gen(): AsyncGenerator<SDKMessage, void> {
+            yield result("success", { result: "ok" });
+          }
+          return asQuery(
+            gen(),
+            async () => {},
+            async () => ({
+              totalTokens: 180_000,
+              maxTokens: 200_000,
+              percentage: 90,
+            }),
+          );
+        });
+        let host!: AgentHost;
+        host = new AgentHost(config, {
+          onState: () => {},
+          onSessionLifecycle: onSessionLifecycleFor(events),
+          queryFn,
+          now: () => "T",
+          enqueueInjection: (task) => {
+            host.close();
+            return task();
+          },
+        });
+        await host.run();
+        expect(events).toEqual([]);
+      });
+    });
   });
 
   // 藤 review S1: compact_error は SDK 由来の任意長文字列。log 上限を

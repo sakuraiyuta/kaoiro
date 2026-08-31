@@ -64,6 +64,7 @@ export KAOIRO_INGRESS_ORDER_PATH="${KAOIRO_INGRESS_ORDER_PATH:-$data_dir/ingress
 export KAOIRO_DELIVERY_STATES_PATH="${KAOIRO_DELIVERY_STATES_PATH:-$data_dir/delivery_states.dets}"
 export KAOIRO_USERS_PATH="${KAOIRO_USERS_PATH:-$data_dir/users.dets}"
 export KAOIRO_TOKEN_DENYLIST_PATH="${KAOIRO_TOKEN_DENYLIST_PATH:-$data_dir/token_denylist.dets}"
+export KAOIRO_SESSION_LIFECYCLE_EVENTS_PATH="${KAOIRO_SESSION_LIFECYCLE_EVENTS_PATH:-$data_dir/session_lifecycle_events.dets}"
 
 pids=()
 cleanup() {

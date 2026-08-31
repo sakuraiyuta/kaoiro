@@ -84,6 +84,11 @@ services:
       # the named volume — a lost entry silently re-grants a revoked
       # identity.
       KAOIRO_TOKEN_DENYLIST_PATH: /var/lib/kaoiro/token_denylist.dets
+      # session_lifecycle timeline (ADR-0055, phase-33 Stage B). Same
+      # rationale as the ledgers above: unset falls back to a tmp path
+      # wiped on container recreation, so the compaction/reconnect
+      # history an operator would review goes silently missing.
+      KAOIRO_SESSION_LIFECYCLE_EVENTS_PATH: /var/lib/kaoiro/session_lifecycle_events.dets
       # Persona pack extraction cache (ADR-0046). Kept off the ingest dir
       # so a `:ro` persona overlay still cold-starts. On the named volume
       # rather than /tmp only to skip re-extracting every pack after a

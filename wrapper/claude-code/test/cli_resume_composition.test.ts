@@ -30,7 +30,11 @@ import type {
 import type { WrapperConfig } from "@kaoiro/agent-common";
 import { runClaudeCli } from "../src/cli.js";
 import { AgentHost, resumeInjectionText } from "../src/host.js";
-import type { AgentHostOptions } from "../src/host.js";
+import type {
+  AgentHostOptions,
+  SessionLifecycleKind,
+  SessionLifecycleTrigger,
+} from "../src/host.js";
 import { buildKaoiroMcpServer } from "../src/inter_agent_sdk.js";
 import type { ClaudeOnlyTool } from "../src/inter_agent_sdk.js";
 
@@ -52,11 +56,29 @@ describe("Claude CLI request_compact -> resume_prompt composition (issue #200 St
       signalNoteSeen = resolve;
     });
 
+    // ふじ Stage B round 1 must-fix B5 (2026-08-31): removing cli.ts's
+    // `onSessionLifecycle,` wiring line left the rest of the suite green
+    // (no test drove `runClaudeCli` far enough to observe the link never
+    // receiving a report) — the same class as Stage A round 2's must-fix
+    // 2 (production `reserveResume` wiring unpinned). Capturing real calls
+    // through this same real-pipeline test closes it for this hook too.
+    const lifecycleEvents: Array<{
+      kind: SessionLifecycleKind;
+      trigger: SessionLifecycleTrigger | undefined;
+      at: string;
+    }> = [];
+
     const link = {
       close: () => {},
       currentSessionId: () => null,
       send: () => {},
-      reportSessionLifecycle: () => {},
+      reportSessionLifecycle: (
+        kind: SessionLifecycleKind,
+        trigger: SessionLifecycleTrigger | undefined,
+        at: string,
+      ) => {
+        lifecycleEvents.push({ kind, trigger, at });
+      },
     };
 
     const secretReason = "SECRET-REASON-must-not-leak-into-resume-text";
@@ -162,5 +184,18 @@ describe("Claude CLI request_compact -> resume_prompt composition (issue #200 St
     // hand-restating the prefix text (which would drift from host.ts).
     expect(notes[0]).toBe(resumeInjectionText(adversarialBody));
     expect(notes[0]).not.toContain(secretReason);
+
+    // must-fix B5: the real cli.ts `onSessionLifecycle` wiring reached the
+    // link exactly once per event this flow produces, in order — not just
+    // that AgentHost's own callback fired (host.test.ts already covers
+    // that in isolation).
+    expect(lifecycleEvents.map(({ kind, trigger }) => ({ kind, trigger }))).toEqual([
+      { kind: "resume_reserved", trigger: undefined },
+      { kind: "compact_boundary", trigger: "request_compact" },
+      { kind: "resume_fired", trigger: undefined },
+    ]);
+    expect(lifecycleEvents.every((e) => typeof e.at === "string" && e.at.length > 0)).toBe(
+      true,
+    );
   });
 });
