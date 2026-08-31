@@ -38,6 +38,30 @@ describe("CodexInterAgentTurnCoordinator lease ownership (issue #255)", () => {
     coordinator.receive(message, "reply-owed");
     expect(coordinator.deliverySequencesForTurn("not-started")).toEqual([]);
     expect(coordinator.deliverySequencesForTurn("turn-1")).toEqual([9]);
+    expect(coordinator.deliverySequenceRangeForTurn("turn-1")).toEqual({
+      first: 9,
+      last: 9,
+    });
+    expect(coordinator.turnTokenForDeliverySequence(9)).toBe("turn-1");
+  });
+
+  it("watchdog freeze retains only the active batch and closes future dispatch", () => {
+    const dispatched: DispatchedCodexInterAgentBatch[] = [];
+    const tokens = ["turn-active", "turn-other"];
+    const coordinator = new CodexInterAgentTurnCoordinator({
+      createTurnToken: () => tokens.shift()!,
+      onDispatch: (batch) => dispatched.push(batch),
+    });
+
+    coordinator.receive(inbound("active"), "reply-owed");
+    coordinator.receive(inbound("pending"), "reply-owed");
+    expect(dispatched).toHaveLength(1);
+    const frozen = coordinator.freezeForWatchdogFailStop("turn-active");
+    expect(frozen).toEqual({ droppedDispatched: 0, droppedPending: 1 });
+
+    coordinator.dispatchNextForPeer("peer.agent");
+    coordinator.receive(inbound("after-freeze"), "reply-owed");
+    expect(dispatched).toHaveLength(1);
   });
 
   it("same CID の stale token は active batch を settle できず後続を dispatch しない", () => {

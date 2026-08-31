@@ -29,13 +29,18 @@ import type {
   ModelSource,
 } from "@kaoiro/agent-common";
 import { ServerLink, loadConfig, parseCliArgs } from "@kaoiro/wrapper-core";
-import { CodexHost } from "./host.js";
+import { CodexHost, type CodexLifecycleEvent } from "./host.js";
 import { handleInterAgentMessage } from "./inter_agent_message_handler.js";
 import { CodexInterAgentTurnCoordinator } from "./inter_agent_turn_coordinator.js";
 import { readCodexHistory } from "./history.js";
 import { codexSidecarPath } from "./rollout.js";
 import { effectiveNetworkAccess } from "./network_access.js";
 import { prepareCodexStartup } from "./startup.js";
+import {
+  readTurnWatchdogSettings,
+  TurnWatchdog,
+} from "./turn_watchdog.js";
+import type { TurnWatchdogWarning } from "./turn_watchdog.js";
 import {
   applyEnvDefaultModel,
   resolveCodexSources,
@@ -113,6 +118,10 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     process.argv.slice(2),
   );
   const config = readConfig(configPath);
+  const turnWatchdogSettings = readTurnWatchdogSettings(
+    process.env,
+    (message) => process.stderr.write(message),
+  );
 
   // Codex CLI env source (ADR-0032 F4bc addendum, phase-15 15-3):
   // KAOIRO_CODEX_DEFAULT_MODEL is the env-tier default, applied when
@@ -206,6 +215,10 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   let questionBroker: QuestionBroker | null = null;
   let interAgent: InterAgentTool | null = null;
   let instructionChain: Promise<void> = Promise.resolve();
+  let watchdogFailStopped = false;
+  // Keep the batch range through terminal drain. onTurnEnd settles the
+  // coordinator at the first terminal, while stream_eof is logged later.
+  const lifecycleRanges = new Map<string, { seqFirst: number; seqLast: number }>();
   // The after_join display_name sync push
   // (WrapperChannel.after_join_handshake, issue #197 段階3, renamed
   // issue #219 D19/D23) can arrive before `host` is constructed below —
@@ -219,6 +232,20 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
    * exact class instead of copying queue state into their harness. */
   const interAgentTurns = new CodexInterAgentTurnCoordinator({
     onDispatch: (batch) => {
+      const range = interAgentTurns.deliverySequenceRangeForTurn(batch.turnToken);
+      if (range !== undefined) {
+        lifecycleRanges.set(batch.turnToken, {
+          seqFirst: range.first,
+          seqLast: range.last,
+        });
+      }
+      writeCodexLifecycle({
+        event: "dispatch_queued",
+        turnToken: batch.turnToken,
+        ...(range === undefined
+          ? {}
+          : { seqFirst: range.first, seqLast: range.last }),
+      });
       // Register exactly the batch entering the host queue, never a later
       // accepted arrival waiting behind it (issue #221 MF-1).
       for (const item of batch.items) {
@@ -246,6 +273,95 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
           }
         }),
       );
+    },
+  });
+
+  const lifecycleRange = (
+    turnToken: string | undefined,
+  ): { seqFirst: number; seqLast: number } | undefined => {
+    if (turnToken === undefined) return undefined;
+    const retained = lifecycleRanges.get(turnToken);
+    if (retained !== undefined) return retained;
+    const range = interAgentTurns.deliverySequenceRangeForTurn(turnToken);
+    return range === undefined
+      ? undefined
+      : { seqFirst: range.first, seqLast: range.last };
+  };
+
+  const writeCodexLifecycle = (event: {
+    event: string;
+    turnToken?: string;
+    type?: string;
+    authoritative?: boolean;
+    terminalSeen?: boolean;
+    seq?: number;
+    seqFirst?: number;
+    seqLast?: number;
+  }): void => {
+    const range = lifecycleRange(event.turnToken);
+    const record: Record<string, unknown> = {
+      at: new Date().toISOString(),
+      event: event.event,
+      ...(event.turnToken === undefined ? {} : { turn_token: event.turnToken }),
+      ...(event.type === undefined ? {} : { type: event.type }),
+      ...(event.authoritative === undefined
+        ? {}
+        : { authoritative: event.authoritative }),
+      ...(event.terminalSeen === undefined
+        ? {}
+        : { terminal_seen: event.terminalSeen }),
+      ...(event.seq === undefined ? {} : { seq: event.seq }),
+    } as Record<string, unknown>;
+    const first = event.seqFirst ?? range?.seqFirst;
+    const last = event.seqLast ?? range?.seqLast;
+    if (first !== undefined) record.seq_first = first;
+    if (last !== undefined) record.seq_last = last;
+    process.stderr.write(
+      `[kaoiro][codex-lifecycle] ${JSON.stringify(record)}\n`,
+    );
+  };
+
+  const describeTurnWatchdogWarning = (warning: TurnWatchdogWarning): string => {
+    switch (warning.kind) {
+      case "inactivity_timeout":
+        return (
+          `[kaoiro] turn watchdog inactivity timeout: token=${warning.turnToken} ` +
+          `idle=${warning.idleMs}ms threshold=${warning.inactivityMs}ms; requesting SDK interrupt`
+        );
+      case "abort_grace_expired":
+        return (
+          `[kaoiro] turn watchdog interrupt grace expired: token=${warning.turnToken} ` +
+          `grace=${warning.abortGraceMs}ms; stopping host admission pending operator recovery`
+        );
+      case "interrupt_unavailable":
+        return (
+          `[kaoiro] turn watchdog interrupt unavailable: token=${warning.turnToken}; ` +
+          "closing host admission through unattributed fail-stop"
+        );
+      case "fail_stop_unavailable":
+        return (
+          `[kaoiro] turn watchdog exact fail-stop unavailable: token=${warning.turnToken}; ` +
+          "closing host admission through unattributed fail-stop"
+        );
+      case "start_conflict":
+        return (
+          `[kaoiro] turn watchdog start attribution conflict: watched=${warning.watchedTurnToken} ` +
+          `started=${warning.startedTurnToken}; closing host admission through unattributed fail-stop`
+        );
+    }
+  };
+
+  // The callbacks close over host, but the watchdog has no timer until the
+  // real host turn-start callback runs after construction.
+  const turnWatchdog = new TurnWatchdog({
+    settings: turnWatchdogSettings,
+    onWarning: (warning) => {
+      process.stderr.write(`${describeTurnWatchdogWarning(warning)}\n`);
+    },
+    requestInterrupt: (turnToken) => host.requestInterruptForTurn(turnToken),
+    failStop: (turnToken) => host.failStopTurnForWatchdog(turnToken),
+    failStopUnattributed: () => {
+      host.failStopForWatchdogAttributionUnknown();
     },
   });
 
@@ -342,7 +458,17 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   });
 
   const deliveryAcknowledgementRuntime = createDeliveryAcknowledgementRuntime(
-    (deliverySeq) => link?.acknowledgeInterAgentDelivery(deliverySeq),
+    (deliverySeq) => {
+      const turnToken = interAgentTurns.turnTokenForDeliverySequence(deliverySeq);
+      const range = lifecycleRange(turnToken);
+      writeCodexLifecycle({
+        event: "delivery_ack",
+        ...(turnToken === undefined ? {} : { turnToken }),
+        seq: deliverySeq,
+        ...(range === undefined ? {} : range),
+      });
+      link?.acknowledgeInterAgentDelivery(deliverySeq);
+    },
     interAgentTurns,
   );
 
@@ -465,6 +591,25 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     onState,
     onLog,
     onTask,
+    onLifecycle: (event: CodexLifecycleEvent) => {
+      writeCodexLifecycle({
+        event: event.kind,
+        turnToken: event.turnToken,
+        ...(event.kind === "sdk_event" ? { type: event.type } : {}),
+        ...(event.kind === "terminal"
+          ? { type: event.type, authoritative: event.authoritative }
+          : {}),
+        ...(event.kind === "stream_eof"
+          ? { terminalSeen: event.terminalSeen }
+          : {}),
+      });
+      if (event.kind === "stream_eof") {
+        lifecycleRanges.delete(event.turnToken);
+      }
+    },
+    onTurnProgress: ({ turnToken }) => {
+      turnWatchdog.progress(turnToken);
+    },
     // issue #131: resolve exactly the conversation(s) this turn was tagged
     // with (must-fix 1 — turn-scoped, never a sweep of everything pending;
     // extended issue #221 段階3 for a coalesced turn's multiple cids). On
@@ -473,7 +618,22 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     // resulting notice envelope(s) straight through ServerLink — this
     // bypasses the model/tool path entirely since the turn just failed to
     // produce one, so no broker approval applies.
-    onTurnEnd: ({ turnToken, conversationIds, error }) => {
+    onTurnEnd: ({ turnToken, conversationIds, error, cancellation }) => {
+      if (cancellation !== undefined) {
+        // A watchdog cancellation is for a never-started token. Resolve its
+        // own peer notices, but never dispatch a successor; the active token
+        // is retained for supervisor recovery.
+        const classified = error ? classifyInterAgentError(error) : undefined;
+        for (const envelope of interAgent?.resolveTurnEnd(
+          turnToken,
+          conversationIds,
+          classified,
+        ) ?? []) {
+          link?.send(envelope);
+        }
+        interAgentTurns.settle(turnToken);
+        return;
+      }
       const classified = error ? classifyInterAgentError(error) : undefined;
       for (const envelope of interAgent?.resolveTurnEnd(
         turnToken,
@@ -486,9 +646,19 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       // pending CIDs above have resolved; a later same-CID batch can then be
       // dispatched without overwriting its predecessor's pending record.
       const settled = interAgentTurns.settle(turnToken);
-      if (settled !== undefined) {
+      if (settled !== undefined && !watchdogFailStopped) {
         interAgentTurns.dispatchNextForPeer(settled.peer);
       }
+    },
+    onWatchdogFailStop: ({ turnToken, attribution }) => {
+      watchdogFailStopped = true;
+      const frozen = interAgentTurns.freezeForWatchdogFailStop(turnToken);
+      process.stderr.write(
+        `[kaoiro] turn watchdog fail-stop: token=${turnToken ?? "<unknown>"} ` +
+          `attribution=${attribution}; discarded unstarted ` +
+          `dispatched=${frozen.droppedDispatched}, pending=${frozen.droppedPending}; ` +
+          "operator recovery is required\n",
+      );
     },
     appendSystemPrompt,
     onInstructionRejected: (envelope) => link?.send(envelope),
@@ -513,6 +683,8 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       ? { resumeSnapshot: config.resume_snapshot }
       : {}),
     ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
+  }, (turnToken) => {
+    turnWatchdog.start(turnToken);
   });
   host = createHost(config, hostOptions);
 
@@ -550,6 +722,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     replayer.markReady();
     await host.run(prompt);
   } finally {
+    turnWatchdog.dispose();
     questionBroker?.close();
     link?.close();
   }

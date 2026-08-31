@@ -120,6 +120,17 @@ type CodexCatalog = ReturnType<typeof resolveCodexCatalog>;
 
 const DEFAULT_CODEX_TERMINAL_DRAIN_GRACE_MS = 5_000;
 
+export type CodexLifecycleEvent =
+  | { kind: "turn_start"; turnToken: string }
+  | { kind: "sdk_event"; turnToken: string; type: string }
+  | {
+      kind: "terminal";
+      turnToken: string;
+      type: "turn.completed" | "turn.failed";
+      authoritative: boolean;
+    }
+  | { kind: "stream_eof"; turnToken: string; terminalSeen: boolean };
+
 type NextEventOutcome<T> =
   | { kind: "result"; result: IteratorResult<T> }
   | { kind: "error"; error: unknown }
@@ -246,10 +257,23 @@ export interface CodexHostOptions {
     turnToken: string;
     conversationIds: readonly string[];
     error?: { reason?: string; detail?: string };
+    cancellation?: { kind: "watchdog_fail_stop"; started: false };
   }) => void;
   /** The exact boundary at which an already-queued input begins an SDK turn.
    * Queue insertion intentionally does not count as dispatch (#247). */
   onTurnStart?: (info: { turnToken: string; conversationIds: readonly string[] }) => void;
+  /** Wrapper-local lifecycle evidence for the Codex stream. This is kept out
+   * of transcript envelopes because it exists to diagnose SDK wedges. */
+  onLifecycle?: (event: CodexLifecycleEvent) => void;
+  /** Invoked for every SDK frame while the exact turn is active. */
+  onTurnProgress?: (info: { turnToken: string }) => void;
+  /** Called when watchdog grace expires. The active token is deliberately not
+   * settled: its outcome remains owned by supervisor recovery. */
+  onWatchdogFailStop?: (info: {
+    turnToken?: string;
+    conversationIds: readonly string[];
+    attribution: "exact" | "unattributed";
+  }) => void;
   /** Server-composed personality + common footer (ADR-0029 F5), injected as
    *  a developer-role message via config.developer_instructions (ADR-0032
    *  F3, verified 2026-07-10). */
@@ -507,7 +531,9 @@ export class CodexHost implements EngineAdapter {
   #abort: AbortController | null = null;
   /** Present only while the SDK is executing one host turn. */
   #activeTurnToken: string | null = null;
+  #activeTurnConversationIds: readonly string[] = [];
   #closed = false;
+  #watchdogFailStopped = false;
   /** Invalidates an older turn's asynchronous account-default refresh. */
   #modelResolutionGeneration = 0;
   /** tool_use_id -> tool_name for tool_result backfill (protocol.md #40). */
@@ -776,6 +802,80 @@ export class CodexHost implements EngineAdapter {
     this.#dropPendingUploads("interrupted");
     await this.#dropQueuedTempTurns();
     this.#abort?.abort();
+  }
+
+  /** Requests an interrupt only while this exact token owns the SDK turn.
+   * The abort is a control signal, not a terminal acknowledgement. */
+  requestInterruptForTurn(turnToken: string): boolean {
+    if (
+      this.#activeTurnToken !== turnToken ||
+      this.#watchdogFailStopped ||
+      this.#closed
+    ) {
+      return false;
+    }
+    this.#abort?.abort();
+    return true;
+  }
+
+  /** Closes admission after an exact active token survives the watchdog
+   * interrupt grace. The active token is retained without a result or ack;
+   * supervisor recovery owns that uncertain outcome. */
+  failStopTurnForWatchdog(turnToken: string): boolean {
+    if (
+      this.#activeTurnToken !== turnToken ||
+      this.#watchdogFailStopped ||
+      this.#closed
+    ) {
+      return false;
+    }
+    return this.#failStopForWatchdog("exact");
+  }
+
+  /** Fail closed when the watchdog can no longer prove which token is active. */
+  failStopForWatchdogAttributionUnknown(): boolean {
+    if (this.#watchdogFailStopped) return false;
+    return this.#failStopForWatchdog("unattributed");
+  }
+
+  #failStopForWatchdog(
+    attribution: "exact" | "unattributed",
+  ): boolean {
+    this.#watchdogFailStopped = true;
+    this.#closed = true;
+    if (this.#gcTimer !== null) clearInterval(this.#gcTimer);
+    this.#gcTimer = null;
+    this.#machine = initialMachineState("error");
+    this.#emitState("error");
+
+    // These entries have not reached #runTurn. They are safe to discard and,
+    // when they belong to inter-agent batches, must settle as cancellations so
+    // the caller can report the drop without touching the active token.
+    const queuedTurns = this.#queue.splice(0);
+    const error = {
+      detail:
+        attribution === "exact"
+          ? "turn watchdog interrupt grace expired; host admission stopped pending operator recovery"
+          : "turn watchdog token attribution unavailable; host admission stopped pending operator recovery",
+    };
+    for (const turn of queuedTurns) {
+      if (turn.turnToken === undefined) continue;
+      this.#options.onTurnEnd?.({
+        turnToken: turn.turnToken,
+        conversationIds: turn.conversationIds ?? [],
+        error,
+        cancellation: { kind: "watchdog_fail_stop", started: false },
+      });
+    }
+    this.#options.onWatchdogFailStop?.({
+      ...(this.#activeTurnToken === null
+        ? {}
+        : { turnToken: this.#activeTurnToken }),
+      conversationIds: this.#activeTurnConversationIds,
+      attribution,
+    });
+    this.#wake?.();
+    return true;
   }
 
   close(): void {
@@ -1052,6 +1152,7 @@ export class CodexHost implements EngineAdapter {
     settled: { value: boolean } = { value: false },
   ): Promise<void> {
     this.#activeTurnToken = turnToken;
+    this.#activeTurnConversationIds = conversationIds;
     const diagnostics = new CodexTurnDiagnostics(this.#turnTraceCaptureDir);
     const persistFailure = async (
       input: Parameters<CodexTurnDiagnostics["writeFailure"]>[0],
@@ -1129,6 +1230,7 @@ export class CodexHost implements EngineAdapter {
     // before `runStreamed()` hands the input to Codex. Confirm #247 delivery
     // here, never when its coordinator merely accepted the queue item.
     if (!retryAfterRepair) {
+      this.#options.onLifecycle?.({ kind: "turn_start", turnToken });
       this.#options.onTurnStart?.({ turnToken, conversationIds });
     }
     this.#abort = new AbortController();
@@ -1171,14 +1273,44 @@ export class CodexHost implements EngineAdapter {
           }
           next = outcome.result;
         }
-        if (next.done) break;
+        if (next.done) {
+          this.#options.onLifecycle?.({
+            kind: "stream_eof",
+            turnToken,
+            terminalSeen: terminalEventSeen,
+          });
+          break;
+        }
         const event = next.value;
         diagnostics.recordEvent(event);
+        this.#options.onLifecycle?.({
+          kind: "sdk_event",
+          turnToken,
+          type: isRecord(event) && typeof event.type === "string"
+            ? event.type
+            : "unknown",
+        });
+        this.#options.onTurnProgress?.({ turnToken });
         if (!isUsableThreadEvent(event)) continue;
         const isTerminalEvent =
           event.type === "turn.completed" || event.type === "turn.failed";
         if (terminalEventSeen) continue;
-        if (isTerminalEvent) terminalEventSeen = true;
+        if (isTerminalEvent) {
+          terminalEventSeen = true;
+          this.#options.onLifecycle?.({
+            kind: "terminal",
+            turnToken,
+            type: event.type,
+            authoritative: !this.#watchdogFailStopped,
+          });
+        }
+        // A watchdog fail-stop makes the active outcome unknown. Continue to
+        // consume the SDK stream for cleanup, but never re-enter the normal
+        // result/state/ack path from a late frame.
+        if (this.#watchdogFailStopped) {
+          if (isTerminalEvent) sawResult = true;
+          continue;
+        }
         if (event.type === "error") recordedThreadError = event.message;
         const sessionId = threadEventToSessionId(event);
         if (sessionId !== null && sessionId !== this.#sessionId) {
@@ -1249,7 +1381,7 @@ export class CodexHost implements EngineAdapter {
             Date.now() + this.#terminalDrainGraceMs;
         }
       }
-      if (!sawResult) {
+      if (!sawResult && !this.#watchdogFailStopped) {
         // Stream ended without a terminal turn event (abort, stream error
         // event, or process death): fold into the error path so the agent
         // never wedges in thinking/tool_running.
@@ -1275,6 +1407,7 @@ export class CodexHost implements EngineAdapter {
       }
     } catch (err) {
       // runStreamed rejection or mid-stream throw (exec exited non-zero).
+      if (this.#watchdogFailStopped) return;
       let terminalError: unknown = err;
       if (!sawResult) {
         // A repair retry shares this marker with its original turn. Once the
@@ -1436,6 +1569,7 @@ export class CodexHost implements EngineAdapter {
     } finally {
       this.#abort = null;
       this.#activeTurnToken = null;
+      this.#activeTurnConversationIds = [];
       if (tempDir !== undefined) await this.#cleanupTempDir(tempDir);
     }
   }
