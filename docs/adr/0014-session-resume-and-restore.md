@@ -28,7 +28,7 @@ As a result, it cannot satisfy two requirements:
   where it left off.
 
 Both can be solved by **the same mechanism: resume with an existing
-`session_id`**. This ADR promotes the former open question
+session_id**. This ADR promotes the former open question
 `existing-agent-summon` (filed 2026-06-15), after it was settled through
 my-spec-elicitation.
 
@@ -41,13 +41,13 @@ my-spec-elicitation.
   memory (`~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`). Resume reads
   this file.
 - Constraint: **the same host and same cwd** are required (the session file must
-  exist on that host). `session_id` is obtained from `ResultMessage` /
+  exist on that host). session_id is obtained from `ResultMessage` /
   init messages.
 
 ### Related unimplemented features
 
 - **#22** (server-mediated launch from the client, design settled): the launch
-  path is `client -> server -> runner on the target host (boot service) -> wrapper`.
+  path is `client -> server -> 当該ホストの runner(boot service)-> wrapper 起動`.
   This feature adds a "resume mode" to that path.
 - **#23** (specification for the host-resident runner): the liveness unit for
   recovery.
@@ -57,7 +57,7 @@ my-spec-elicitation.
 ## Decision
 
 Recovery and summoning are implemented with one mechanism: **resume** with a
-specified existing `session_id`. Reuse the #22 spawn path and launch in
+specified existing session_id. Reuse the #22 spawn path and launch in
 "resume mode" through `client -> server -> runner -> wrapper` (do not create
 an independent mechanism).
 
@@ -76,16 +76,16 @@ flowchart LR
   (permanent), and local JSONL normally remains available.
 - **Recovery is manual (an operator's client action)**. Automatic resume by the
   runner after a crash is out of scope (future). The server detects the channel
-  owner's departure and presents crash detection and a "Recover" operation in
-  the UI, reusing the existing `disconnected` derivation.
-- **F1 server-side `session_id` persistence**: Persist only a lightweight
+  owner’s departure and presents crash detection and a "Recover" operation in
+  the UI, reusing the existing disconnected derivation.
+- **F1 server-side session_id persistence**: Persist only a lightweight
   pointer `(agent_id, host, cwd, session_id)`. Do not persist all history.
-- **F2 candidate list**: Preselect the server pointer (the last `session_id`) as
+- **F2 candidate list**: Preselect the server pointer (the last session_id) as
   the default recovery target. The runner enumerates JSONL files under the
   relevant cwd and returns the actual candidates (with minimal metadata for each
   JSONL), while also verifying that the pointer is still alive. If the
-  `session_id` cannot be found or the user chooses another one, use the other
-  `session_id`.
+  session_id cannot be found or the user chooses another one, use the other
+  session_id.
 - **F3 agent_id ↔ session_id**: For each agent_id (a stable persona tied to a
   fixed (host, cwd)), the server keeps the "last session_id" in a 1:1
   relationship. All candidates (1:N) come from runner enumeration. The server
@@ -95,12 +95,12 @@ flowchart LR
   local lock (physically prevent simultaneous resume of the same session).
   Because resume always goes through the same runner, the lock is the primary
   protection against corruption.
-- **F5 restart method = resume** (continue the same `session_id`). Do not use
-  continue (implicit) or `forkSession` (branching); `forkSession` remains a
+- **F5 restart method = resume** (continue the same session_id). Do not use
+  continue (implicit) or forkSession (branching); forkSession remains a
   future option for resuming a branch.
 - **F6 threat model**: RCE through T1 resume/spawn is inherited from #22; T2
   exposure of JSONL metadata is limited to operators and kept minimal; T3
-  verifies that the target `session_id` exists under the cwd bound to the
+  verifies that the target session_id exists under the cwd bound to the
   relevant agent (reject other cwds and arbitrary paths). See
   [threat-model](../specs/threat-model.md) for details.
 - **F7 protocol**: Add an optional top-level `session_id` to the envelope, so
@@ -113,7 +113,7 @@ flowchart LR
 
 #### F3 Addendum — Explicit detach at session reset (ADR-0036)
 
-The `/new` and `/clear` operations in [ADR-0036](0036-session-lifecycle-commands.md)
+The /new and /clear operations in [ADR-0036](0036-session-lifecycle-commands.md)
 also preserve the F3 contract: "the server retains only one latest pointer, and
 the runner enumerates all candidates." At reset, explicitly detach only the
 session ID by setting it to nil, so that the old session ID is not implicitly
@@ -130,7 +130,8 @@ agent-scoped resolved snapshot":
 
 - **Snapshot contents**: `ResolvedSnapshotExt` carried in
   `ext.resume_snapshot` / `ext.effective`
-  (`{model, model_source, effort, effort_source, permission_mode, sandbox, network_access}`,
+  (`{model, model_source, effort, effort_source,
+  permission_mode, sandbox, network_access}`,
   `@kaoiro/protocol`).
 - **Semantics**: Not the "value at spawn," but **the "last value that was
   effective during the session."** If an operator switches with `set_model` /
@@ -151,15 +152,15 @@ agent-scoped resolved snapshot":
   decision finalized 2026-07-12).
 - **Deletion**: Only when the agent is deleted (the four-store purge in D6 of
   [ADR-0030](0030-agent-directory-and-explicit-restore.md)). When the first
-  `state_change` of a fresh session arrives with `ext.effective`, the
+  state_change of a fresh session arrives with `ext.effective`, the
   snapshot is naturally overwritten through the normal record path.
 - **Persistence**: Store the snapshot in F1's DETS backing as well (the 5-tuple
   `{agent_id, session_id, cwd, engine, snapshot}`). Treat old 3/4-tuples as
-  `snapshot=nil` when loading, and replace them with a 5-tuple on the next
+  snapshot=nil when loading, and replace them with a 5-tuple on the next
   record insert.
-- **Resume restoration**: When spawning with `resume_session_id`, the server
+- **Resume restoration**: When spawning with resume_session_id, the server
   returns the pointer's snapshot to the wrapper. The wrapper stamps it as
-  **`ext.resume_snapshot`** on the first `state_change`, and places the
+  **`ext.resume_snapshot`** on the first state_change, and places the
   difference from the currently forced value (`ext.effective`) alongside it
   in **`ext.resume_drift`** (`ResumeDriftExt`). Expose it to the operator
   with an stderr warning + AgentDetail drift badge.
@@ -198,7 +199,7 @@ fixed at spawn" and ADR-0036 F2's "start with the last effective settings on
   `entry.parsed`), and rollback (retains the `entry.parsed` applied at
   reset). If the latest snapshot and `entry.parsed` diverge in a
   crash-restart race, expose it to the operator as drift, but if
-  `resume_snapshot` is stale drift may be empty; **drift visualization for
+  resume_snapshot is stale drift may be empty; **drift visualization for
   crash-restart is not guaranteed** (Fuji D3).
 - **Absent-field semantics** (Fuji D2): If the snapshot object itself is
   absent, apply is a no-op. If the snapshot object is present but an
@@ -262,14 +263,14 @@ defaults while avoiding false stamps in `ext.model_source` /
   `config.model_source` is set, adopt it as `resolvedModelSource` with the
   highest priority (so the source from resume Case 3 is not overwritten as
   "config"). Next, `config.model` set → `"config"` (both the Case 4 legacy
-  fallback and fresh-spawn transport provenance), an env-tier default set →
+  fallback and fresh-spawn transport provenance), an `env` tier default set →
   `"env"`, and both absent → `undefined` (the host stamps `"default"` after
   confirming with the SDK). Effort follows the same pattern.
 
 - **Codex catalog compatibility (constructor reset, resume path only)**: In the
   Codex host constructor, when **`this.#resumeSnapshot !== null`** (it is a
   resume launch), both `this.#model` and `this.#effort` are set, the catalog
-  has an `effort_levels` entry for the model, and it does not include
+  has an `effort_levels` entry for the model, and `catalog` does not include
   `this.#effort`, reuse the existing setModel code path's behavior
   (`#effortPending = null` / `#effortResetPending = true` /
   `#effortResetOnce = true`). The existing mechanism connects directly to
@@ -307,8 +308,9 @@ defaults while avoiding false stamps in `ext.model_source` /
   config.effort in the wrapper, allowing the SDK to continue delegating and
   choose its own default). However, wrapper **display/catalog resolution needs
   the previous session's value**. If Codex host's
-  `initialStatusExtFromCatalog(catalog, model)` sees `this.#model=null`,
-  `catalog.find()` returns undefined and it stamps
+  `initialStatusExtFromCatalog(catalog,
+  model)` sees `this.#model=null`,
+  catalog.find() returns undefined and it stamps
   `supports_effort_switch=false`, gating the dashboard effort-switch button.
   With `#model=null`, Claude host's dashboard `effortLevels` derivation
   cannot resolve `active = models.find(m.value === $currentModel)`. If a
@@ -334,7 +336,7 @@ defaults while avoiding false stamps in `ext.model_source` /
   symmetric `source !== "default"` conditions to the effort gate in Codex
   `#threadOptions` and to the model/effort gates in Claude Query Options; even
   when a hint is restored, do not pin to the SDK when source="default". No
-  protocol change is needed (`config.resume_snapshot` has already passed
+  protocol change is needed (config.resume_snapshot has already passed
   sanitization and reached the wrapper).
 
   **Pair-integrity invariant**: Hint fallback applies **only when both value and
@@ -374,7 +376,7 @@ defaults while avoiding false stamps in `ext.model_source` /
   3. **Unreported model (`model === null`)** and no real default: **only then**
      return the intersection of effort_levels across all catalog entries, in
      first-entry order (if even one is missing, `[]` fail-closed). This covers
-     the Codex account-default path (`this.#model=null`).
+     the Codex account-default path (this.#model=null).
   4. **Concrete key present but exact miss + no real default** (Fuji G1) →
      `[]` fail-closed. There is no guarantee that an unknown/future/stale
      concrete model is one of the catalog candidates, so intersection cannot be
@@ -397,7 +399,7 @@ defaults while avoiding false stamps in `ext.model_source` /
   "default" on the SDK resolves the account-recommended model, and showing it
   in the model switch menu is meaningful. A **synthetic** default entry is a
   "fictional entry" generated locally by a catalog helper for fallback; it
-  does not exist in the engine's `supportedModels()`. The former can be used
+  does not exist in the engine's supportedModels(). The former can be used
   as the official tier-2 fallback, but the latter is prohibited—if it appeared
   in the model switch menu, an operator could explicitly send
   `setModel("default")`, creating an unintended engine-side routing path and
@@ -446,7 +448,8 @@ session_id is nil as long as cwd + snapshot remain:
   `resume_session_id` and stamps **`apply_resume_snapshot: true`** (the
   spawn extension in protocol.md).
 - In runner `handleSpawn`'s fresh branch (no resume_session_id), fire
-  `applyResumeSnapshot(parsed, parsed.resumeSnapshot, engine)` only when
+  `applyResumeSnapshot(parsed,
+  parsed.resumeSnapshot, engine)` only when
   `apply_resume_snapshot` is true (the P0 three privilege axes + P1
   model/effort pair). T3 (session-file existence) and F4 (same-session lock) do
   not apply—the session file is not read and no session-ID lock exists—so flow
@@ -468,7 +471,7 @@ remain effective for privilege axes. A fresh-restore path never silently
 overwrites an operator-explicit launch made through LaunchDialog.
 
 **Fail-soft**: For a pointer with a nil snapshot (such as a very old record),
-`resume_snapshot` is not included in the spawn payload and runner
+resume_snapshot is not included in the spawn payload and runner
 `applyResumeSnapshot` is a no-op → fresh recovery uses engine defaults. This
 is always better than deletion + relaunch.
 
@@ -488,7 +491,7 @@ dependent on #24 (disk persistence of all history). The method for rebuilding
 and overwriting server display history from JSONL during resume is finalized as
 **Option B (runner/wrapper reads JSONL directly and creates the projection)**
 (Q-A4, verified 2026-06-23). SDK resume does not re-yield past history into the
-`query()` stream, so Option A (capture an SDK re-stream) does not work. See
+query() stream, so Option A (capture an SDK re-stream) does not work. See
 [#50](https://github.com/sakuraiyuta/kaoiro/issues/50) for verification details.
 
 As an exception, `inter_agent_message` cannot reconstruct the original routing
@@ -577,7 +580,7 @@ From phase-1 onward, the #22/#23 runner implementation is assumed.
     resume coexist**; subsequent turns are accepted and answered after resume
     (phase-1 gate cleared: there is no phase-1 block from SDK constraints). (2)
     **The history-supply form is finalized as Option B**—resume does not re-yield
-    past history into the `query()` stream (without input, only hook lifecycle
+    past history into the query() stream (without input, only hook lifecycle
     occurs and even init is absent). Rebuilding display history works only when
     runner/wrapper reads JSONL directly. See
     [#50](https://github.com/sakuraiyuta/kaoiro/issues/50) for verification

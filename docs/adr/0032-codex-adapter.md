@@ -200,8 +200,8 @@ and env separation explicit. Implement it in [phase-15-wrapper-ux-parity](../pla
   - Deprecate the old `KAOIRO_WRAPPER_DEFAULT_MODEL` for one release window
     (Claude CLI reads it and warns to stderr; Codex CLI completely ignores it) →
     remove it in the next release (same pattern as the personas legacy window in
-    [ADR-0031](0031-runner-persona-trust-mode.md) / the `claude` legacy value in
-    F4a). Rewrite dev.sh to use engine-specific env values too.
+    [ADR-0031](0031-runner-persona-trust-mode.md) / [ADR-0032](0032-codex-adapter.md)
+    F4a's `claude` legacy value). Rewrite dev.sh to use engine-specific env values too.
   - Rationale: the single shared env caused `KAOIRO_WRAPPER_DEFAULT_MODEL=claude-opus-4-7`
     in `scripts/dev.sh` to flow into Codex spawns, causing a 400/404 on the
     ChatGPT-plan authentication path ([codex-model-catalog](../specs/codex-model-catalog.md)
@@ -219,7 +219,7 @@ Keep the JSON Schema (definition) + handler-function pair in
 
 - **Claude adapter** — Zod conversion + in-process registration with
   `createSdkMcpServer`, as before.
-- **Codex adapter** — the dynamicTools assumed in the draft **does not exist in
+- **Codex adapter** — the `dynamicTools` assumed in the draft **does not exist in
   the TS SDK**, so bundle a small **stdio MCP bridge** executable in
   `@kaoiro/codex`. For each spawn, the wrapper registers the bridge with a config
   override (`mcp_servers.kaoiro.command` + `env`, verified as accepted by the real

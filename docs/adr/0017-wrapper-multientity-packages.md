@@ -22,7 +22,7 @@ Implemented package boundaries (2026-07-10):
 - `@kaoiro/claude-code` (`wrapper/claude-code`) — renames the old `@kaoiro/wrapper` ([ADR-0023](0023-host-runner-architecture.md) D3). `AgentHost` / SDK adapter / file upload / inter-agent tools / CLI implementation / permission two-axis mapping table (placeholder for [ADR-0033](0033-permission-model-dual-axis.md) F2).
 - `@kaoiro/codex` (`wrapper/codex`) — scaffold with only an unimplemented stub (implemented in phase-14).
 
-Note: The “new `wrapper/pnpm-workspace.yaml`” proposed when this ADR was drafted was not adopted; the four packages were added to the existing workspace at the repository root (because pnpm workspaces cannot be nested). `wrapper/package.json` remains as a workspace-external fan-out shim.
+Note: The “new wrapper/pnpm-workspace.yaml” proposed when this ADR was drafted was not adopted; the four packages were added to the existing workspace at the repository root (because pnpm workspaces cannot be nested). `wrapper/package.json` remains as a workspace-external fan-out shim.
 
 ## Context
 
