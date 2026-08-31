@@ -1144,6 +1144,7 @@ export class CodexHost implements EngineAdapter {
       });
       const iterator = events[Symbol.asyncIterator]();
       let terminalDrainDeadlineMs: number | null = null;
+      let terminalEventSeen = false;
       while (true) {
         let next: IteratorResult<ThreadEvent>;
         if (terminalDrainDeadlineMs === null) {
@@ -1174,6 +1175,10 @@ export class CodexHost implements EngineAdapter {
         const event = next.value;
         diagnostics.recordEvent(event);
         if (!isUsableThreadEvent(event)) continue;
+        const isTerminalEvent =
+          event.type === "turn.completed" || event.type === "turn.failed";
+        if (terminalEventSeen) continue;
+        if (isTerminalEvent) terminalEventSeen = true;
         if (event.type === "error") recordedThreadError = event.message;
         const sessionId = threadEventToSessionId(event);
         if (sessionId !== null && sessionId !== this.#sessionId) {
@@ -1236,7 +1241,7 @@ export class CodexHost implements EngineAdapter {
         for (const adapterEvent of threadEventToEvents(event)) {
           this.#apply(adapterEvent);
         }
-        if (event.type === "turn.completed" || event.type === "turn.failed") {
+        if (isTerminalEvent && terminalDrainDeadlineMs === null) {
           // The terminal event is the SDK turn boundary, but upstream still
           // flushes the rollout after publishing it. Drain normal EOF first;
           // only a stuck tail may be aborted after this bounded grace.

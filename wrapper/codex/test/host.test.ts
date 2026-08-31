@@ -2276,6 +2276,62 @@ describe("CodexHost", () => {
       expect(turnEnds[0]).toHaveProperty("turnToken", expect.any(String));
     });
 
+    it.each([
+      {
+        label: "completed→failed",
+        events: [
+          usageEvent(),
+          { type: "turn.failed" as const, error: { message: "late failure" } },
+        ],
+        expectedError: undefined,
+      },
+      {
+        label: "failed→completed",
+        events: [
+          { type: "turn.failed" as const, error: { message: "first failure" } },
+          usageEvent(),
+        ],
+        expectedError: "first failure",
+      },
+    ])(
+      "$label は最初の terminal だけを authoritative として onTurnEnd/result を一度だけ発火する",
+      async ({ events, expectedError }) => {
+        const turnEnds: {
+          turnToken: string;
+          conversationIds: readonly string[];
+          error?: { reason?: string; detail?: string };
+        }[] = [];
+        const logs: Envelope[] = [];
+        const { client } = makeClient([events]);
+        const host = new CodexHost(CONFIG, {
+          onState: () => {},
+          onLog: (envelope) => logs.push(envelope),
+          appendSystemPrompt: "p",
+          codexFactory: () => client,
+          onTurnEnd: (info) => turnEnds.push(info),
+          now: () => "T",
+        });
+
+        await runOneTurn(host, "hi", client);
+
+        expect(turnEnds).toHaveLength(1);
+        if (expectedError === undefined) {
+          expect(turnEnds[0]?.error).toBeUndefined();
+        } else {
+          expect(turnEnds[0]).toMatchObject({
+            error: { detail: expectedError },
+          });
+        }
+        const results = logs.filter((envelope) => envelope.type === "result");
+        expect(results).toHaveLength(1);
+        if (expectedError === undefined) {
+          expect(results[0]?.payload).not.toMatchObject({ is_error: true });
+        } else {
+          expect(results[0]?.payload).toMatchObject({ is_error: true });
+        }
+      },
+    );
+
     it("terminal event 後は通常の EOF と durability gate を待って次 turn を開始する", async () => {
       const firstEnded = deferred<void>();
       const releaseDurability = deferred<void>();
@@ -2441,6 +2497,114 @@ describe("CodexHost", () => {
         }
       },
     );
+
+    it("timeout cleanup は pending settlement → iterator.return() → 次 turn の順序を守る", async () => {
+      const firstEnded = deferred<void>();
+      const returnCalled = deferred<void>();
+      const secondStarted = deferred<void>();
+      const secondEnded = deferred<void>();
+      let returnCalledAfterPending = false;
+      let returnCompleted = false;
+      let returnCompletedBeforeSecondStart = false;
+      let runCount = 0;
+      let firstIteratorNextCalls = 0;
+      let resolvePending: ((result: IteratorResult<ThreadEvent>) => void) | null = null;
+      let pendingPromiseSettled = false;
+      const firstIterator: AsyncIterator<ThreadEvent> & AsyncIterable<ThreadEvent> = {
+        next() {
+          firstIteratorNextCalls += 1;
+          if (firstIteratorNextCalls === 1) {
+            return Promise.resolve({ value: usageEvent(), done: false });
+          }
+          if (firstIteratorNextCalls > 2) {
+            return Promise.resolve({ value: undefined, done: true });
+          }
+          const pending = new Promise<IteratorResult<ThreadEvent>>((resolve) => {
+            resolvePending = resolve;
+          });
+          pending.then(() => {
+            pendingPromiseSettled = true;
+          });
+          return pending;
+        },
+        return() {
+          returnCalledAfterPending = pendingPromiseSettled;
+          returnCalled.resolve();
+          return new Promise<IteratorResult<ThreadEvent>>((resolve) => {
+            setTimeout(() => {
+              returnCompleted = true;
+              resolve({ value: undefined, done: true });
+            }, 20);
+          });
+        },
+        [Symbol.asyncIterator]() {
+          return this;
+        },
+      };
+      const thread: CodexThreadLike = {
+        async runStreamed(_input, turnOptions) {
+          const current = ++runCount;
+          if (current === 1) {
+            const signal = turnOptions?.signal;
+            if (signal === undefined) throw new Error("probe requires abort signal");
+            signal.addEventListener(
+              "abort",
+              () => {
+                resolvePending?.({
+                  value: { type: "error", message: "late" },
+                  done: false,
+                });
+                resolvePending = null;
+              },
+              { once: true },
+            );
+            return { events: firstIterator };
+          }
+          async function* secondEvents(): AsyncGenerator<ThreadEvent> {
+            yield usageEvent();
+          }
+          return { events: secondEvents() };
+        },
+      };
+      const client: CodexClientLike = {
+        startThread: () => thread,
+        resumeThread: () => thread,
+      };
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        terminalDrainGraceMs: 20,
+        onTurnStart: ({ turnToken }) => {
+          if (turnToken === "turn-2") {
+            returnCompletedBeforeSecondStart = returnCompleted;
+            secondStarted.resolve();
+          }
+        },
+        onTurnEnd: ({ turnToken }) => {
+          if (turnToken === "turn-1") firstEnded.resolve();
+          if (turnToken === "turn-2") secondEnded.resolve();
+        },
+        now: () => "T",
+      });
+      const running = host.run();
+
+      try {
+        await host.send("first", undefined, ["cnv-1"], "turn-1");
+        await firstEnded.promise;
+        await host.send("second", undefined, ["cnv-2"], "turn-2");
+        await returnCalled.promise;
+        expect(returnCalledAfterPending).toBe(true);
+        await secondStarted.promise;
+        await secondEnded.promise;
+      } finally {
+        host.close();
+        await running;
+      }
+
+      expect(returnCompleted).toBe(true);
+      expect(returnCompletedBeforeSecondStart).toBe(true);
+    });
 
     it("終端イベント無しでストリームが終わると detail 無しの error で onTurnEnd を呼ぶ", async () => {
       const turnEnds: unknown[] = [];
