@@ -1,5 +1,5 @@
 ---
-title: subagent/workflow を親付き子エンティティとし専用 envelope type で通知
+title: Notification of subagent/workflow with parent entity and dedicated envel  type
 status: accepted
 date: 2026-06-16
 opened: 2026-06-16
@@ -9,7 +9,7 @@ related_specs: [protocol, agent-sdk-events, subagent-tasks]
 related_adrs: [10, 15, 47, 48]
 ---
 
-# ADR-0019 — subagent/workflow の子エンティティ化と専用 envelope type
+# ADR-0019 — subagent/workflow child entity and dedicated envel  type
 
 ## Status
 
@@ -17,119 +17,119 @@ Accepted
 
 ## Context
 
-ラップ対象の Claude Code は Task ツールで subagent / ローカル workflow を起動し、
-内部で「AI チーム」を動かすことがある。現状 kaoiro はこの内部活動を一切可視化
-していない。`wrapper/src/adapter.ts` の `sdkMessageToEvents` は `type:"system"` を
-`subtype==="init"` 以外すべて破棄しており、タスク系メッセージを捨てている。
+Claude Code is a task tool that starts subagent / local workflow.
+"AI Team" in internal. current kaoiro visualizes this inActivities activity
+not. `wrapper/src/adapter.ts` `sdkMessageToEvents` `type:"system"`
+All other than `subtype==="init"` are destroyed and the task-based message is thrown away.
 
-一方、親セッションの SDK メッセージ列には起動/進捗/終了が専用メッセージとして
-流れる(検証済み、[agent-sdk-events](../specs/agent-sdk-events.md)):
+On the other hand, the SDK message column for the parent session has a dedicated message.
+Flow (verified, [agent-sdk-events](../specs/agent-sdk-events.md)):
 
-- `system/task_started` — 起動。`task_id` / `description` / `subagent_type` /
+- `system/task_started` — start. `task_id`
   `task_type` / `workflow_name` / `tool_use_id` / `skip_transcript`
-- `system/task_progress` — 進捗。`subagent_type` / `usage` / `last_tool_name` /
+- `system/task_progress` — progress. `subagent_type`
   `summary`
-- `system/task_notification` — 終了。`status`(completed/failed/stopped) /
+- `system/task_notification` — End. `status`(completed/failed/stopped)
   `summary` / `usage`
 
-これを拾ってクライアントへ届け、ゴール (A)「進捗・状態把握」の解像度を上げたい
-(あるエージェントが今「何体・何を」走らせているかを見せる)。論点は (1) subagent を
-どんなエンティティとして扱うか、(2) protocol へどう載せるか。
+I want to pick up this and send it to the client and raise the resolution of the goal (A) “Prog  and state”
+(I show how many agents are running.) subagent
+What entities do we handle?
 
 ## Decision
 
-- **エンティティモデル(F1)**: subagent / workflow は「視覚表現としては独立した
-  別の存在」だが「identity / transport 上は親エージェントに紐づく**子エンティティ**」
-  として扱う。各タスクは親への参照(parent `agent_id`)でリンクし、ライフサイクルは
-  親セッションに束縛される。
-- **transport(F2)**: タスクのライフサイクルを表す**専用 envelope type を新設**し、
-  起動 / 更新 / 完了を個別イベントで流す。親エージェントの `state_change` は親自身の
-  `KaoiroState` のまま据え置き、子タスク情報を相乗りさせない。
-- **状態の粒度(F3)**: 通知する状態は**粗いライフサイクル**(running / completed /
-  failed / stopped + 進捗メタ)に限る。細粒度の subagent 状態(thinking など 8 状態)は
-  親 stream に出ず、非スコープ(将来 `getSubagentMessages` 経路で拡張余地)。
-- **通知粒度(F4)**: クライアントへは走っているタスク一覧(`task_id` + 種別/名前 +
-  `status` + 進捗メタ)を渡す。同時実行数は `task_started`(+1)/ `task_notification`
-  (-1)から算出し、トップレベルのみのフラット集計とする。
-- **データ範囲(F5)**: 進捗(`usage` / `last_tool_name` / `summary`)まで運ぶ。
-- **責務分離**: 「存在と状態をクライアントへ通知する」のが wrapper / server の責務。
-  subagent / workflow をどう視覚表現するかはクライアントが決める(既存の
-  persona→sprite→表情の所有と同じ流儀、[overview](../specs/overview.md) の A/B 分離)。
-- 新 envelope type の正式名称 / スキーマ詳細は
-  [ADR-0047](0047-task-envelope-schema.md) で確定した(単一 type `task` +
-  `payload.kind`)。**予約 type の追補**
-  ([ADR-0010](0010-protocol-precisification.md))にあたるため protocol の
-  `version` は据え置く([ADR-0015](0015-protocol-version-stamping.md))。
+- **Entity Model (F1)**: subagent / workflow
+identity / transport**Child Entity**」
+Handle as: Each task is linked with parent `agent_id`, and the lifecycle is
+bound to the parent session.
+- **transport(F2)**: represent the task lifecycle**New envel  type**Home
+Launch / update / complete with individual events. parent agent `state_change`
+`KaoiroState` keeps child task information together.
+- **state particle size (F3)**: Notify state**Rough lifecycle**(running / completed /
+failed / stopped + progress meta) subagent state (such as thinking 8 state)
+non-scope (expansion in the future `getSubagentMessages` path), not in the parent stream.
+- **Notice Particle Size (F4)**: List of tasks running to clients (`task_id` + type/name +
+Pass `status` + progress meta). `task_started`(+1)/ `task_notification`
+(-1) Cal。d from top level flat ag。ation.
+- **Data Range (F Japanese termーJapanese term**`usage` / `last_tool_name` / `summary`
+- **Privacy Policy**: wrapper / server's responsibility to notify clients of presence and state.
+How to visually express subagent / workflow
+persona→sprite→A/B separation of overview(../specs/overview.md).
+- New envel  type official name / Schema details
+[ADR-0047](0047-task-envel -schema.md) Single type `task` +
+  `payload.kind`)。**Repair of reservation type**
+([ADR-0010](0010-protocol-precisification.md))))
+`version` ([ADR-0015] (0015-protocol-version-stamping.md)).
 
 ## Consequences
 
 ### Positive
 
-- エージェントが内部で動かす AI チーム活動が可視化され、ゴール (A) の解像度が上がる。
-- 専用 type により親状態と疎結合に保て、`state_change` の意味がぶれない。
+- The AI team activity that the agent runs inJapanese termーGent is visualized and the goal (A) resolution is increased.
+- A dedicated type prevents the meaning of `state_change` by keeping the parent state cohesion.
 
 ### Negative
 
-- server が子タスクの active set を維持・配信する責務を負う(集約方法は
-  [ADR-0048](0048-task-aggregation-delivery.md) で確定)。
-- envelope の type 種別が増える。
+- server is responsible for maintaining and delivering active set of child tasks
+[ADR-0048]
+- Envel  type type increases.
 
 ### Neutral
 
-- 観測できるのは粗いライフサイクルのみ。細粒度状態は将来拡張の余地として残す。
-- protocol は予約追補のため同一 `version`。受信側は未知 type を無視(前方互換)。
+- Only the rough life cycle can be observed. The granularity state remains as a future expansion.
+- The protocol is the same `version` for the reservation. The receiver ignores the unknown type.
 
 ## Alternatives Considered
 
 | Option | Why rejected |
 |--------|--------------|
-| ペルソナ同格の独立トップレベルエンティティ | ライフサイクルが親に束縛・`task_id` が親内ローカル・観測状態が粗く、過剰約束になる |
-| 親 `state_change` の `ext` に subagents 配列を同梱 | 親状態と結合し、subagent 単独更新時の発火を別途用意する必要が生じる |
-| 同時実行数のみ通知 | 「どれが走っているか」を出せず、要求(種別/名前の識別)を満たさない |
-| 細粒度 8 状態を `getSubagentMessages` 経由で通知 | 各 transcript の読込が要り v0 では重い。粗いライフサイクルで足りる |
+|Independent top-level entities of Persona accord|Lifecycle is bound to parents`task_id`the parent local observationstate is rough and becomes an over promise|
+|Home`state_change`Home`ext`Include subagents array|Required to combine with parent state and prepare ignition at subagent alone update|
+|execution number|Don’t leave “w) is running” and don’t meet the request (type/name identification)|
+|Particle size 8 state`getSubagentMessages`Contact Us|transcript reads in v0. Sufficient life cycle|
 
 ## Related
 
-- spec: [subagent-tasks](../specs/subagent-tasks.md)(フィーチャ仕様)、
-  [protocol](../specs/protocol.md)(type と payload)、
-  [agent-sdk-events](../specs/agent-sdk-events.md)(源メッセージ)。
-- 関連 ADR: [0010](0010-protocol-precisification.md)(予約 type 方針)、
-  [0015](0015-protocol-version-stamping.md)(version 据え置き)、
-  [0047](0047-task-envelope-schema.md)(envelope スキーマ)、
-  [0048](0048-task-aggregation-delivery.md)(server 集約・配信)。
-- 由来: my-idea-brief(走り書き「subagent/workflow の起動・体数・種別をクライアントへ
-  通知」)。
+-agent: [subagent-tasks](../specs/subagent-tasks.md)
+[protocol](../specs/protocol.md)(type and payload),
+[agent-sdk-events](../specs/agent-sdk-events.md)
+-  ADR: [0010](0010-protocol-precisification.md)(Reservation type policy),
+[0015](0015-protocol-version-stamping.md),
+[0047](0047-task-envel -schema.md),
+[0048](0048-task-ag。ation-delivery.md)
+- Origin: my-idea-efef
+").
 
-## Addendum (issue #170, 2026-08-09): `task_updated` は F3 の対象外
+## Addendum (issue #170, 2026-08-09): `task_updated`is not eligible for F3
 
-**背景。** 段階1 実装時、実 SDK
-(`@anthropic-ai/claude-agent-sdk@0.3.220`)の型定義を読み直したところ、
-Context に記載した 3 subtype(`task_started` / `task_progress` /
-`task_notification`)に加え、未文書化の 4 番目の subtype
-`system/task_updated` が存在すると判明した。`status` は F3 の粗い 4 値
-(running/completed/failed/stopped)より広い
+**Background**Step 1: Real SDK
+(`@anthropic-ai/claude-agent-sdk@0.3.220`)
+Context 3 subtype(`task_started` / `task_progress` /
+`task_notification`), the fourth subtype of undocumented
+`system/task_updated` `status` is a rough 4 value of F3
+wider (running/completed/failed/stopped)
 (pending/running/completed/failed/killed/paused)。
 
-これは「終端通知(`task_notification`)が来る前に `task_updated` で
-`status: killed` 等の中間状態を経由した場合、同時実行数カウントが
-終端イベントを取りこぼして狂わないか」という懸念を生んだ。
+`task_updated`
+execution counts simultaneously when using intermediate state such as `status: killed`
+I had a concern that I would be crazy by taking the end event.
 
-**決定。** マスターの指示で、型定義からの推測ではなく実 stream を
-使い捨てスクリプトで capture し実測した(手順・生データは
-[agent-sdk-events](../specs/agent-sdk-events.md)「タスク
-(subagent/workflow)メッセージ」節)。結果: 自然完了 / `stopTask()` /
-interrupt / `backgroundTasks()` 経由の停止 の 4 経路すべてで、
-`task_updated` を経由するか否かに関わらず `task_notification` が必ず
-発行される(SDK 0.3.220、2026-08-09 capture)。この実測を根拠に:
+**Contact Us**In the instruction of the master, instead of guessing from the type definition
+Script scripts were captured and measured.
+[agent-sdk-events](../specs/agent-sdk-events.md)
+(subagent/workflow) message. Results: Nature Complete / `stopTask()` /
+all four routes of interrupt / `backgroundTasks()`
+`task_notification` must be
+Issued (S  0.3.220, 2026 09 capture). Based on this survey:
 
-- `task_updated` は v1 の対象外のまま維持する(F3 の粗い 4 値モデルを
-  拡張しない)。`wrapper/claude-code/src/adapter.ts` の
-  `sdkMessageToTask` は `task_updated` に対し `null` を返し、
-  呼び出し側(`AgentHost`)はそれを未知 subtype として
-  ログに残すのみで同時実行数カウントには一切関与させない
-  (fail-visible — 未知 shape でカウントが狂う経路を残さない)。
-- 将来 `task_updated` を取り込む場合は、この ADR か新規 ADR を
-  改訂してから行う(黙って `task_progress`/`task_notification` 相当に
-  読み替えない)。
+- `task_updated` keeps v1 unobjected (F3 coarse 4-value model)
+not extended). `wrapper/claude-code/src/adapter.ts`
+`sdkMessageToTask` returns `task_updated`,
+The caller (`AgentHost`) is not known as subtype
+The number of simultaneous execution count is not involved only in the log
+(fail-visible — Counting does not leave the path to madness with unknown shape).
+- This ADR or new ADR if you want to import `task_updated` in the future
+Revised to `task_progress`/`task_notification`
+not readable).
 
-**由来**: kaoiro issue #170 実装セッション(あお、2026-08-09)。
+**Home**: kaoiro issue #170 implementation session (Home, 2026.09).

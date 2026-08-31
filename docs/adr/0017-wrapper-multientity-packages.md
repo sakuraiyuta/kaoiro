@@ -1,5 +1,5 @@
 ---
-title: wrapper のマルチエンティティ・パッケージ構造(3層 pnpm ワークスペース)
+title: wrapper multi-entity package structure (3 layers pnpm workspace)
 status: accepted
 date: 2026-06-16
 opened: 2026-06-16
@@ -9,86 +9,86 @@ related_specs: [plugin-model, architecture]
 related_adrs: [1, 18, 28, 32]
 ---
 
-# ADR-0017 — wrapper のマルチエンティティ・パッケージ構造
+# ADR-0017 — wrapper multi-entity package structure
 
 ## Status
 
-Accepted (materialised: [phase-13-wrapper-multipackage-restructure](../plans/phase-13-wrapper-multipackage-restructure.md)、2026-07-10 実施完了)。着手条件「主要機能が出揃ってから」は phase-12 完了時点で満たされ、[ADR-0032](0032-codex-adapter.md) F1 で Codex adapter 追加と合わせて materialise した。
+Accepted (materialised: [phase-13-wrapper-multipackage-restructure] (completed), 2026。-10). ADR-0032 (code2-codex-adapter.md) F1 added to the materialise.
 
-実装済みパッケージ境界 (2026-07-10):
+Implemented Package Boundaries (2026 -10):
 
-- `@kaoiro/wrapper-core` (`wrapper/core`) — transport (`ServerLink` + 承認/質問 wire 型) / config 読込・検証 (`persona.ts`) / CLI 引数解析。
-- `@kaoiro/agent-common` (`wrapper/agent-common`) — 状態機械 + エンベロープ生成 (`state.ts`)、`EngineAdapter` interface、`PermissionBroker` / `QuestionBroker` (+ `PermissionDecision` / `QuestionDecision`)、共通 Tool 記述層骨格 (`ToolDescriptor`)、共通イベント型 (`AdapterEvent` ほか)。
-- `@kaoiro/claude-code` (`wrapper/claude-code`) — 旧 `@kaoiro/wrapper` をリネーム ([ADR-0023](0023-host-runner-architecture.md) D3 実行)。`AgentHost` / SDK adapter / file upload / inter-agent tools / CLI 本体 / 権限二軸写像 table ([ADR-0033](0033-permission-model-dual-axis.md) F2 のプレースホルダ)。
-- `@kaoiro/codex` (`wrapper/codex`) — 未実装 stub のみの scaffold (phase-14 で実装)。
+- `@kaoiro/wrapper-core` (`wrapper/core`) — transport (`ServerLink` + approval/question wire type) / config read/verify (`persona.ts`) / CLI argument analysis.
+- `@kaoiro/agent-common` (`wrapper/agent-common`) — state machine + envel  generation (`state.ts`), `EngineAdapter` interface, `PermissionBroker` / `QuestionBroker` (+ `PermissionDecision` / `QuestionDecision`), common tool description layer skeleton (`ToolDescriptor`), common event type (`AdapterEvent`, etc.).
+- `@kaoiro/claude-code` (`wrapper/claude-code`) — renamed the old `@kaoiro/wrapper` ([ADR-0023] (0023-host-arch-architecture.md) D3 execution). `AgentHost` / SDK adapter / file upload / inter-agent tools / CLI body / biaxial image table ([ADR-0033] (model3-permission-model-dual-axis.md) F2 placeholder.
+- `@kaoiro/codex` (`wrapper/codex`) — not implemented stub only scaffold (implemented in phase-14).
 
-注: 本 ADR 起草時の「wrapper/pnpm-workspace.yaml 新設」は採らず、repo root の既存 workspace に 4 パッケージを追加した (pnpm workspace はネスト不可のため。`wrapper/package.json` は workspace 非メンバの fan-out shim として残置)。
+Note: This ADR does not contain wrapper/pnpm-workspace.yaml at the time of drafting, and add 4 packages to the existing workspace of repo root (pnpm workspace is not nested). `wrapper/package.json` remains as fan-out shim of non-workspace members.
 
 ## Context
 
-現状 wrapper は単一パッケージ `@kaoiro/wrapper`。将来 Claude Code 以外
-(Codex、さらに DB・ホストリソースモニタ等の**非 AI エンティティ**)を足したい。
-最終目標は「多様なエンティティを遠隔管理し状態をキャラクターとして可視化」する
-こと。[plugin-model](../specs/plugin-model.md) は既にアダプタ(エージェント別)/
-フィルタ(agent 非依存)を分離しており、`wrapper/src/adapter.ts` でアダプタ抽象も
-コード上存在する。本 ADR はこれを物理パッケージ構造へ落とす。
+Current wrapper is a single package `@kaoiro/wrapper`. Claude Code
+(Codex, DB, host resource monitor, etc.)**Non-AI Entity**).
+The final goal is to “remote management of diverse entities and visualize state as a character”
+Comment [model-model](../specs/spec-model.md) is already adapter/
+The filter (agent-independent) is separation, and the `wrapper/src/adapter.ts` is also an abstract adapter
+On the code. This ADR falls into a physical package structure.
 
 ## Decision
 
-`@kaoiro/wrapper` を **pnpm ワークスペースの複数パッケージ**へ再編し、**3層**に
-分ける:
+`@kaoiro/wrapper`**Multi-package of pnpm workspace****3 layers**Home
+Share:
 
-- `wrapper/core` — **エンティティ非依存**: transport / エンベロープ外枠+version /
-  同一性・persona / 接続・状態報告ライフサイクル / config / CLI 枠。
-- AI エージェント共通層(例 `wrapper/agent-common`)— 状態機械・permission・
-  streaming 指示。claude-code/codex が共有。
-- 具体アダプタ — `wrapper/claude-code`・`wrapper/codex`、将来
-  `wrapper/<非 AI エンティティ>`(DB・ホストメトリクス等)。
+- `wrapper/core` — **Entity Independence**: Transport / Envel  Outer Frame +version /
+identity / persona / connection / state report lifecycle / config / CLI frame.
+- AI agent common layer (e.g. `wrapper/agent-common`) — state machine, permission,
+streaming instruction. claude-code/codex
+`wrapper/claude-code``wrapper/codex`
+`wrapper/<Japanese term AI Home>`
 
-アダプタはコアを `workspace:` 依存で取り込む。状態機械・permission・instruction は
-AI 固有でありコアに混ぜない(非 AI エンティティが AI 概念を背負わないため)。
+The adapter takes the core as `workspace:` dependencies. The state machine, permission, and instruction
+AI-specific and not mixed into the core (because non-AI entities do not bear the AI concept).
 
-**着手タイミングは主要機能が出揃ってから**(2026-07-10 に着手条件充足を確認、[ADR-0032](0032-codex-adapter.md) F1 で phase-13 実施を決定)。
+**The start timing is the main function**[ADR-0032] (code2-codex-adapter.md) F1 phase-13)
 
-### 具体パッケージ境界 (2026-07-10 追記、[ADR-0032](0032-codex-adapter.md) F1)
+### [ADR-0032] (code2-codex-adapter.md) F1)
 
-materialise 時点の package 境界と responsibility:
+package boundary and responsibility at materialise:
 
-- **`wrapper/core` (`@kaoiro/wrapper-core`)** — エンティティ非依存: transport / エンベロープ外枠+version / 同一性・persona / 接続・状態報告ライフサイクル / config / CLI 枠 (engine 非依存部分)。
-- **`wrapper/agent-common` (`@kaoiro/agent-common`)** — AI エージェント共通層: 状態機械、`EngineAdapter` interface、共通 Tool 記述層 ([ADR-0032](0032-codex-adapter.md) F5)、permission broker、instruction 変換、共通イベント型。Claude / Codex が共有。
-- **`wrapper/claude-code` (`@kaoiro/claude-code`)** — Claude Code CLI 具体アダプタ (現 `@kaoiro/wrapper` のリネーム、[ADR-0023](0023-host-runner-architecture.md) D3)。
-- **`wrapper/codex` (`@kaoiro/codex`)** — Codex CLI 具体アダプタ (phase-14 で実装)。
+- **`wrapper/core` (`@kaoiro/wrapper-core`)**— Entity Independence: Transport/Envel  Outer Frame+version/Identity/persona/connection/state Reporting Lifecycle/config/cli Framework ( CLI Independence).
+- **`wrapper/agent-common` (`@kaoiro/agent-common`)**— AI agent common layer: state machine, `EngineAdapter` interface, common tool description layer ([ADR-0032] ( AI2-codex-adapter.md) FEvents,missionper broker,instruction conversion, common event type. Claude / Codex
+- **`wrapper/claude-code` (`@kaoiro/claude-code`)**— Claude Code CLI specific adapter (currently `@kaoiro/wrapper` rename, [ADR-0023] (0023-host-host-architecture.md) D3).
+- **`wrapper/codex` (`@kaoiro/codex`)**— Codex CLI specific adapter (implemented in phase-14).
 
 ## Consequences
 
 ### Positive
 
-- 新エンティティ種別をアダプタ追加で足せる受け皿ができる。
-- コア=エンティティ非依存が物理境界として担保され、広い狙い(非 AI 管理)へ拡張可。
+- You can add new entities to your adapter.
+- Core-entity non-dependent is bound to physical boundary and can be extended to a wide target (non-AI management).
 
 ### Negative
 
-- ビルド/配布([ADR-0018](0018-runner-distribution.md))・import 経路の再編が要る。
+- Build/Distribution ([ADR-0018] (0018- - bution.md))) and import route reJapanese termation is required.
 
 ### Neutral
 
-- `wrapper/pnpm-workspace.yaml` が既にあり下地はある。
-- サーバは元々「中身を解釈せず保持・配信」でエンティティ非依存に近い。
+- `wrapper/pnpm-workspace.yaml` already exists.
+- The server is originally close to entities non-dependent in "Retention and delivery without interpreting the contents".
 
 ## Alternatives Considered
 
 | Option | Why rejected |
 |--------|--------------|
-| 単一パッケージのままフォルダ再編のみ | アダプタの独立ビルド・配布(ADR-0018)がしづらい |
-| 2層(core + アダプタ)で AI 状態機械を core に置く | DB・モニタ等が AI 概念(状態機械/permission/instruction)を背負う |
-| 今すぐ着手 | 低優先。主要機能を優先 |
+|Only folder reJapanese termation remains single package|Independent build and distribution of adapters (ADR-001)|
+|Apply AI state machine to core with two layers (core + adapter)|DB/Mon , etc. shoulder AI concept (state machine/permission/instruction)|
+|Get Started|Low priority. Prioritize Key Features|
 
 ## Related
 
 - spec: [plugin-model](../specs/plugin-model.md)。
-- 関連 ADR: [0001](0001-agent-sdk-integration.md)、配布は
+-agent ADR: [0001] (0001-agent-sdk-integration.md)
   [0018](0018-runner-distribution.md)。
-- 未解決: コア線引きの詳細・非 AI エンティティの状態語彙・パッケージ命名
-  (実装時)。広い狙い(エンティティ全般の管理・可視化)は将来 vision /
-  spec-elicitation で別途。
-- 由来: my-idea-brief(走り書き「wrapper を claude-code/codex 等に分割」)。
+- Unresolved: Name the state vocabulary and package of the core line pull details and non-AI entities
+(when implemented). Vision /
+-elicitation
+- Origin: my-idea-efef (run and write wrapper into claude-code/codex, etc.)
