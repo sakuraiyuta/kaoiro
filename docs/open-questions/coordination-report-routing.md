@@ -1,6 +1,6 @@
 ---
-title: 自律協調の事後報告の宛先・形式
-description: director 媒介で成立した作業分担・成果を、誰へどの形式で事後報告するか (director 経由でマスターへ、の現行運用との整合) を決める。
+title: Destination and format for post-hoc reports in autonomous coordination
+description: Decide to whom and in what format to report work division and results established through a director (whether this should remain aligned with the current operation of reporting to the master through the director).
 status: open
 urgency: medium
 blocks: []
@@ -10,39 +10,44 @@ decided: null
 
 ## 背景
 
-[ADR-0044](../adr/0044-coordination-injection-hitl.md) F2 は「都度
-指名された director のもとで、責務範囲内の作業分担は operator 承認
-不要 (事後報告)」と決めたが、事後報告の宛先と形式は未定。現行運用では
-「各エージェントの成果は
-director (クロエ) が巻き取り、マスター向け意思決定まとめを作る」
-(2026-07-11 マスター指示) が先行しており、これとの整合が論点。
+[ADR-0044](../adr/0044-coordination-injection-hitl.md) F2 decides that, under a
+director appointed for each task, work division within the assigned
+responsibility does not need operator approval (report afterward), but the
+destination and format of that report are undecided. The current operation is
+already that “each agent's results are collected by the director (クロエ), who
+creates a decision summary for マスター” (マスター instruction, 2026-07-11),
+so alignment with it is the issue.
 
 ## 選択肢
 
-| 案 | 内容 | メリット | デメリット |
+| Option | Content | Advantages | Disadvantages |
 |----|------|----------|-----------|
-| A | director への inter-agent 報告のみ (director がマスター向けに集約) | 現行運用と一致。報告経路が一本化 | director の context 消費が増える。director 不在時の報告先が宙に浮く |
-| B | director 報告 + dashboard 通知 (分担成立・完了を envelope で可視化) | operator が scrollback に頼らず把握できる (#87 の観測可能性論点) | 通知 envelope の新設が要る |
+| A | Report only to the director through inter-agent messaging (the director aggregates it for マスター) | Matches current operation; one reporting path | Consumes more of the director's context; destination is unclear when no director is present |
+| B | Director report + dashboard notice (make assignment and completion visible in an envelope) | Operator can understand it without relying on scrollback (#87 observability concern) | Requires a new notification envelope |
 
 ## 影響
 
-ブロックする実装はない。coordination-footer-scope は #165 で案 A
-(短い行動原則のみ、報告規約の手順詳細はフッターに含めない) として
-本問と独立に決着したため、本問の解決を待たない。
+There is no implementation that this blocks. coordination-footer-scope was
+settled independently in #165 as option A (only short action principles; do not
+put detailed reporting procedure in the footer), so this question need not wait
+for it.
 
 ## 判断材料
 
-- director が未指名の作業、および指名 director の疲労・離脱時の報告先
-  フォールバック (F2 の指名は都度・非永続)
-- dashboard 側の表示設計コスト (subagent-tasks の集約表示との関係)
+- A fallback destination when work has no appointed director, or when the
+  appointed director is fatigued or leaves (F2 appointments are per-task and
+  non-persistent)
+- Dashboard display-design cost (and its relationship to aggregated display in
+  subagent-tasks)
 
 ## 暫定方針
 
-なし (未決)。
+None (undecided).
 
 ## 解決時のアクション
 
-- [ ] 報告規約を確定する(協調指針フッターは案 A で確定済みのため、
-      手順詳細はフッターでなく参照文書側で表現する)
-- [ ] 必要なら通知 envelope を protocol spec に追記する
-- [ ] 本 open-question を close (削除)
+- [ ] Finalize the reporting convention (the coordination-guidance footer is
+      already settled as option A, so express procedural detail in a reference
+      document rather than the footer)
+- [ ] If needed, add a notification envelope to the protocol spec
+- [ ] Close (delete) this open question
