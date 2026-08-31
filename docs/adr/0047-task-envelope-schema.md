@@ -1,5 +1,5 @@
 ---
-title: task envelope の正式名称と payload スキーマ
+title: Formal name and payload schema for the task envelope
 status: accepted
 date: 2026-08-04
 opened: 2026-06-16
@@ -9,160 +9,162 @@ related_specs: [protocol, subagent-tasks, agent-sdk-events]
 related_adrs: [10, 15, 19, 48, 49]
 ---
 
-# ADR-0047 — task envelope の正式名称と payload スキーマ
+# ADR-0047 — Formal name and payload schema for the task envelope
 
 ## Status
 
-Accepted (2026-08-04、マスターとの相談で決定。kaoiro issue #170)。
-[ADR-0019](0019-subagent-workflow-entity-and-task-envelope.md) F2 の
-「専用 envelope type」の名称とスキーマを確定する追補。
+Accepted (2026-08-04, decided in consultation with マスター; kaoiro issue #170).
+This addendum finalizes the name and schema of the “dedicated envelope type” in
+F2 of [ADR-0019](0019-subagent-workflow-entity-and-task-envelope.md).
 
 ## Context
 
-ADR-0019 で subagent / workflow を親付き子エンティティとして専用 envelope
-type で通知する方針(transport=(i))は決定済み。残っていた論点は type の
-正式名称と payload スキーマの具体形だった。protocol への掲載は予約追補
-([ADR-0010](0010-protocol-precisification.md))であり、`version` は据え置く
-([ADR-0015](0015-protocol-version-stamping.md))。
+ADR-0019 has already decided to notify subagents / workflows as child entities
+with a parent, using a dedicated envelope type (transport=(i)). The remaining
+questions were the formal type name and the concrete payload schema. Adding it to
+the protocol is a reserved addendum ([ADR-0010](0010-protocol-precisification.md));
+keep `version` unchanged ([ADR-0015](0015-protocol-version-stamping.md)).
 
-判断材料: 既存 type(state_change / log / permission_request / result)は
-いずれも単一 type 設計で、subtype 分岐の前例は薄い。protocol のバージョニング
-方針は「予約 type の追補は同一 version」。将来、Claude Code の Tasklist
-(todo)可視化(kaoiro issue #178)を同じ枠に載せたい。
+The relevant precedent is that each existing type (state_change / log /
+permission_request / result) uses a single-type design, with little precedent for
+subtype branching. The protocol versioning policy is “a reserved type addendum
+uses the same version.” In the future, we want to carry Claude Code's Tasklist
+(todo) visualization (kaoiro issue #178) in the same frame.
 
 ## Decision
 
-### F1: 単一 type `task` + `payload.kind`
+### F1: One type, `task`, with `payload.kind`
 
-起動 / 更新 / 完了は type を分けず、単一 type `task` の
-`payload.kind`(`started` / `updated` / `completed`)で区別する。
-protocol で予約済みの名称 `task` をそのまま正式名称とする。
+Do not split start / update / completion into separate types. Distinguish them by
+`payload.kind` (`started` / `updated` / `completed`) within a single `task` type.
+Use the protocol-reserved name `task` as the formal name.
 
-### F2: payload の必須フィールド
+### F2: Required payload fields
 
-全 kind 共通の必須フィールドは次の 4 つとする。
+Require the following four fields for every kind:
 
-- `agent_id` — 親エージェント参照(ADR-0019 F1 の子エンティティリンク)。
-  envelope 外枠の `agent_id` と一致するが、payload 単体で取り回される場面
-  (server 集約・snapshot)で自己完結するよう payload にも持つ。
-- `task_id` — 親セッション内で一意なタスク ID。ingress 時の長さ上限
-  (256 byte)は wire 契約の一部だが、正本は
-  [protocol.md](../specs/protocol.md)「方向別メッセージ種別」の `task`
-  行(server `WrapperChannel.@max_task_id_field_bytes`)— ここでは
-  重複させない。
-- `task_type` — タスク種別(F4)。
-- `status` — 粗いライフサイクル状態
-  (`running` / `completed` / `failed` / `stopped`、ADR-0019 F3)。
+- `agent_id` — reference to the parent agent (the child-entity link of ADR-0019
+  F1). It matches the envelope's outer `agent_id`, but is also in the payload so
+  the payload is self-contained when handled independently (server aggregation /
+  snapshot).
+- `task_id` — task ID unique within the parent session. The ingress length limit
+  (256 byte) is part of the wire contract, but the source of truth is the `task`
+  row in [protocol.md](../specs/protocol.md)'s “message types by direction”
+  (`WrapperChannel.@max_task_id_field_bytes` on the server); do not duplicate it
+  here.
+- `task_type` — task type (F4).
+- `status` — coarse lifecycle state (`running` / `completed` / `failed` /
+  `stopped`, ADR-0019 F3).
 
-### F3: 進捗メタは optional
+### F3: Progress metadata is optional
 
-`subagent_type` / `workflow_name` / `description` / `usage` /
-`last_tool_name` / `summary` / `skip_transcript` は optional の進捗メタと
-する。kind ごとに SDK 側で得られるフィールドが異なる
-([agent-sdk-events](../specs/agent-sdk-events.md))ため、必須にしない。
+Treat `subagent_type` / `workflow_name` / `description` / `usage` /
+`last_tool_name` / `summary` / `skip_transcript` as optional progress metadata.
+The SDK-side fields available differ by kind
+([agent-sdk-events](../specs/agent-sdk-events.md)), so do not require them.
 
-### F4: `task_type` は拡張可能 enum
+### F4: `task_type` is an extensible enum
 
-初期値は `subagent` | `workflow`。閉じた enum にはせず、追補で値を追加
-できる(`tasklist` は [ADR-0049](0049-tasklist-on-task-envelope.md) で
-追加決定)。
-受信側は未知の `task_type` を破棄せず、汎用のタスク表示へフォールバック
-する(前方互換)。
+Initial values are `subagent` | `workflow`. Do not make it a closed enum; allow
+values to be added by addenda (`tasklist` was decided as an addition in
+[ADR-0049](0049-tasklist-on-task-envelope.md)).
+Receivers must not discard an unknown `task_type`; fall back to a generic task
+display (forward compatibility).
 
 ## Consequences
 
 ### Positive
 
-- protocol の「type と payload」表へ正式行を追補でき、段階1
-  (wrapper + protocol)の実装に着手できる。
-- 単一 type のため受信側の分岐が薄く、既存 type 群の設計と揃う。
-- `task_type` の拡張余地により #178(Tasklist)を同じ envelope に載せられる。
+- Add a formal row to the protocol's “type and payload” table and begin Phase 1
+  implementation (wrapper + protocol).
+- A single type keeps receiver branching thin and aligns with the design of the
+  existing types.
+- The extensibility of `task_type` allows #178 (Tasklist) to use the same envelope.
 
 ### Negative
 
-- kind により optional フィールドの有無が変わるため、受信側は
-  フィールド存在チェックが要る。
+- Because the presence of optional fields varies by kind, receivers must check
+  whether fields exist.
 
 ### Neutral
 
-- 予約追補のため protocol `version` は据え置き。未知 type を無視する
-  既存クライアントには影響しない。
+- Keep protocol `version` unchanged as this is a reserved addendum. Existing
+  clients that ignore unknown types are unaffected.
 
 ## Alternatives Considered
 
 | Option | Why rejected |
 |--------|--------------|
-| 起動/更新/完了を別 type に分ける | type enum が膨張し、既存の単一 type 設計と揃わない。受信側の分岐も増える |
-| type 名 `subagent` | workflow や将来の tasklist を包含できない名称 |
-| type 名 `agent_task` | 予約済み `task` からの改名利得がなく冗長 |
-| 進捗メタも必須にする | kind ごとに SDK から得られないフィールドがあり、wire を不必要に厚くする |
+| Split start/update/completion into separate types | The type enum grows and no longer matches the existing single-type design; receiver branching also increases |
+| Type name `subagent` | It cannot encompass workflows or future tasklists |
+| Type name `agent_task` | Renaming the reserved `task` provides no benefit and is redundant |
+| Make progress metadata required too | Some fields cannot be obtained from the SDK for each kind, unnecessarily thickening the wire |
 
 ## Related
 
-- spec: [protocol](../specs/protocol.md)(type と payload 表)、
-  [subagent-tasks](../specs/subagent-tasks.md)(フィーチャ仕様)、
-  [agent-sdk-events](../specs/agent-sdk-events.md)(源メッセージ)。
-- 関連 ADR: [0019](0019-subagent-workflow-entity-and-task-envelope.md)
-  (エンティティモデルと transport の決定元)、
-  [0048](0048-task-aggregation-delivery.md)(server 集約・配信)、
-  [0010](0010-protocol-precisification.md) /
-  [0015](0015-protocol-version-stamping.md)(予約追補・version 方針)。
-- 由来: open-question subagent-task-envelope-schema(2026-06-16 起票)を
-  本 ADR へ昇格。
+- Specs: [protocol](../specs/protocol.md) (type and payload table),
+  [subagent-tasks](../specs/subagent-tasks.md) (feature specification), and
+  [agent-sdk-events](../specs/agent-sdk-events.md) (source messages).
+- Related ADRs: [0019](0019-subagent-workflow-entity-and-task-envelope.md)
+  (source of the entity-model and transport decision),
+  [0048](0048-task-aggregation-delivery.md) (server aggregation and delivery),
+  and [0010](0010-protocol-precisification.md) /
+  [0015](0015-protocol-version-stamping.md) (reserved addenda and version policy).
+- Origin: promote the open question subagent-task-envelope-schema (filed
+  2026-06-16) to this ADR.
 
-## Addendum (issue #170, 2026-08-09): F4 の実測値 + prompt/output_file の非配線
+## Addendum (issue #170, 2026-08-09): measured F4 values + do not wire prompt/output_file
 
-**F4 実測値。** 段階1 実装時、実 SDK
-(`@anthropic-ai/claude-agent-sdk@0.3.220`)を実測したところ、
-`task_started.task_type` の実際の値は F4 の例示値
-(`subagent` | `workflow`)とは異なり `local_agent` / `local_workflow` /
-`local_bash` だった。F4 は「拡張可能 enum・未知値は汎用表示へ
-フォールバック」と明記しているため、SDK 生値へリネーム層を挟まず
-そのまま通す方針とした(`wrapper/claude-code/src/adapter.ts` の
-`sdkMessageToTask`)。リネームは「F4 が既に許容している未知値」に
-無用な状態を足すだけで、実益がないと判断した。
+**Measured F4 values.** During Phase 1 implementation, measurement of the real
+SDK (`@anthropic-ai/claude-agent-sdk@0.3.220`) found that the actual values of
+`task_started.task_type` were `local_agent` / `local_workflow` / `local_bash`,
+not the F4 example values (`subagent` | `workflow`). Because F4 explicitly says
+“extensible enum; fall back to generic display for unknown values,” pass the SDK
+raw values through without a renaming layer (`sdkMessageToTask` in
+`wrapper/claude-code/src/adapter.ts`). Renaming would add needless state for
+values that F4 already permits as unknown, with no practical benefit.
 
-**`prompt` / `output_file` の非配線。** 同じ実測で、`task_started` に
-未文書化の `prompt`(起動した subagent への指示全文、内容そのもの)、
-`task_notification` に未文書化の `output_file`(ローカルファイルパス)
-が存在すると判明した。いずれも F2/F3 の必須・optional フィールドに
-含めず、`task` envelope の payload には一切配線しない
-(`sdkMessageToTask` が両フィールドを明示的に読まない)。理由: `prompt`
-は内容そのもので F3 の「粗い進捗メタ」の粒度を超え、`output_file` は
-ローカルファイルシステムパスで wrapper ホスト固有の情報を露出する。
-将来これらを配線する場合は本 ADR の改訂が要る。
+**Do not wire `prompt` / `output_file`.** The same measurement found an
+undocumented `prompt` (the full instruction to the launched subagent, the content
+itself) on `task_started`, and an undocumented `output_file` (a local file path)
+on `task_notification`. Include neither in the required/optional fields of F2/F3,
+and do not wire either into the `task` envelope payload (as
+`sdkMessageToTask` explicitly does not read both fields). The reason is that
+`prompt` is the content itself and exceeds F3's granularity of “coarse progress
+metadata,” while `output_file` exposes a local filesystem path specific to the
+wrapper host. Wiring them in the future requires revising this ADR.
 
-**由来**: kaoiro issue #170 実装セッション(あお、2026-08-09)。
+**Origin**: kaoiro issue #170 implementation session (あお, 2026-08-09).
 
-## Addendum (issue #170, 2026-08-09): `task_notification` の未知 status は terminal fallback
+## Addendum (issue #170, 2026-08-09): unknown `task_notification` status falls back to terminal
 
-**背景。** F2 の `status` は `running` / `completed` / `failed` /
-`stopped` の粗い 4 値だが、`task_notification` が実際に運ぶ SDK 生の
-`status` 文字列がこの 4 値に収まる保証はない(SDK バージョン差異・
-将来の値追加)。外部レビュー(ふじ round1 M2)で、当初実装が未知の
-`status` を単に `null`(=無視)へ倒していた点が指摘された ——
-`task_notification` は F1 の 3 kind のうち唯一の**終端通知**であり、
-これを無視すると対応する `started`/`updated` の task がクライアント側
-`tasks` テーブルに残り続け、同時実行数カウントも下がらない(ゾンビ
-task)。これは同 ADR 冒頭 F2 の「`task_notification` は終端」という
-前提そのものと矛盾する。
+**Background.** F2's `status` has four coarse values, `running` / `completed` /
+`failed` / `stopped`, but there is no guarantee that the raw SDK `status` string
+carried by `task_notification` fits those four values (SDK version differences /
+future additions). External review (ふじ round1 M2) pointed out that the initial
+implementation simply turned an unknown `status` into `null` (= ignored).
+`task_notification` is the only **terminal notification** among F1's three kinds;
+ignoring it leaves the corresponding `started`/`updated` task in the client's
+`tasks` table and the concurrent-task count never falls (a zombie task). This
+contradicts the very premise at the beginning of F2 that `task_notification` is
+terminal.
 
-**決定。** `task_notification` の `status` は常に終端(`kind: "completed"`)
-として扱う。値が既知 3 値(`completed`/`failed`/`stopped`)のいずれかで
-あればそのまま使い、それ以外(未知の文字列・非文字列)は
-`status: "failed"` にフォールバックする — fail-visible(ゾンビ task の
-方が「未知 status を無視」より実害が大きいため、より安全な側へ倒す)。
-元の生値は `payload.raw_status` に保持するが、これはログ・デバッグ
-用途限定で wire の必須スキーマ(F2)には含めない
-(`wrapper/claude-code/src/adapter.ts` の `sdkMessageToTask`、
-`host.ts` の `#applyTaskEvent` が `raw_status` 存在時に warn ログを
-出す)。
+**Decision.** Always treat the `status` of `task_notification` as terminal
+(`kind: "completed"`). If its value is one of the three known values
+(`completed`/`failed`/`stopped`), use it unchanged; for anything else (an unknown
+string or a non-string), fall back to `status: "failed"` — fail-visible (a zombie
+task causes greater harm than ignoring an unknown status, so choose the safer
+side). Keep the original raw value in `payload.raw_status`, but limit it to logs
+and debugging and do not include it in the required wire schema (F2).
+`wrapper/claude-code/src/adapter.ts`'s `sdkMessageToTask` and `host.ts`'s
+`#applyTaskEvent` emit a warning log when `raw_status` is present.
 
-[phase-32 plan](../plans/phase-32-subagent-workflow-visibility.md)
-32-1 の当初記述「未知 subtype/status はカウントに一切関与させない」は
-この決定より前の実装を指しており、`task_updated`(未知 subtype、対象外
-のまま)には引き続き当てはまるが、`task_notification` の未知 status
-には当てはまらない(plan 側も本 addendum に合わせて訂正済み)。
+The original description in 32-1 of the
+[phase-32 plan](../plans/phase-32-subagent-workflow-visibility.md), “unknown
+subtype/status does not participate in counting at all,” referred to the
+implementation before this decision. It continues to apply to `task_updated`
+(unknown subtype, still out of scope), but does not apply to an unknown
+`task_notification` status; the plan has been corrected to match this addendum.
 
-**由来**: kaoiro issue #170 外部レビュー対応(あお、2026-08-09、
-ふじ round1 M2)。
+**Origin**: kaoiro issue #170 external-review response (あお, 2026-08-09,
+ふじ round1 M2).
