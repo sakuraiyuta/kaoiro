@@ -1,9 +1,4 @@
 <script lang="ts">
-  import {
-    readTaskRingOffset,
-    taskRingTopWithDevOffset,
-  } from "./taskRingOffset";
-
   let {
     faceOrbit = false,
     orbitRx,
@@ -48,17 +43,6 @@
      *  translate. */
     count?: number;
   } = $props();
-
-  // Read at component creation so a URL edit plus reload dials the geometry.
-  // This temporary knob must also work in the production bundle because the
-  // dogfood server serves that bundle; remove it after issue #231's value is
-  // chosen. With no knob the existing inline top (or CSS fallback) is kept.
-  const taskRingOffset = readTaskRingOffset(
-    typeof window === "undefined" ? "" : window.location.search,
-  );
-  const resolvedTopOffset = $derived(
-    taskRingTopWithDevOffset(topOffset, taskRingOffset),
-  );
 
   // Must equal @keyframes task-ring-orbit's `animation` duration below —
   // the phase-delay math needs the real period to convert an angular
@@ -132,7 +116,7 @@
     style:--phase-delay="{dot.delayMs}ms"
     style:--dot-x={dot.x}
     style:--dot-y={dot.y}
-    style:top={resolvedTopOffset}
+    style:top={topOffset}
   ></span>
 {/each}
 
@@ -219,12 +203,7 @@
      `calc(-2% + 8px)` の px 加算項で高さに依存せず一律 8px シフトさせる
      (top が増えると画面下方向に動く CSS の座標系どおり)。8px は過去に
      問題を起こした 12% との差分 (sprite ケースで約 17.9px 相当) の半分
-     未満であり、6 時相のグレア同化を再現しない範囲と判断。
-
-     Dev Vite または dogfood の production bundle では
-     `?taskRingOffset=N` でこの pixel 項だけを一時的に差し替えられる。
-     パラメータ無しの既定値は不変。値の決定後、issue #231 の 2nd delta
-     でこの調整穴を削除する。 */
+     未満であり、6 時相のグレア同化を再現しない範囲と判断。 */
   .task-ring {
     position: absolute;
     left: 50%;
