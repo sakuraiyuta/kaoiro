@@ -86,8 +86,13 @@ describe("computeBuildIdentity (issue #228 round 2)", () => {
   it.each([
     ["dirty exact-tag main", (root: string) => writeFileSync(join(root, "a.txt"), "changed\n")],
     ["previous tag main", (root: string) => {
-      git(["tag", "-d", "v2026.9.0"], root);
       git(["tag", "v2026.8.0"], root);
+      writeFileSync(join(root, "a.txt"), "advanced\n");
+      git(["add", "a.txt"], root);
+      git(
+        ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-m", "advance", "--quiet"],
+        root,
+      );
     }],
     ["detached exact-tag checkout", (root: string) => git(["checkout", "--quiet", "--detach", "HEAD"], root)],
   ])("release guard rejects %s", (_label, mutate) => {

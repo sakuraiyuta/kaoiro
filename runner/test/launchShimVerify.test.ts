@@ -228,6 +228,24 @@ describe("kaoiro-runner-launch.sh の verify-only 起動 (issue #229)", () => {
     expect(result.stdout).not.toContain("stub cli.js started");
   });
 
+  it("release build-info が dirty なら exit 78 で起動しない", () => {
+    const invalidTree = join(dir, "dirty-release");
+    writeReleaseTree(invalidTree, revisionOf("dirty-release"), {
+      dirty: true,
+      channel: "release",
+    });
+
+    const result = runScript(
+      join(invalidTree, "deploy", "kaoiro-runner-launch.sh"),
+      [],
+      { KAOIRO_RUNNER_DIR: confDir },
+    );
+
+    expect(result.status).toBe(78);
+    expect(result.stdout).not.toContain("stub cli.js started");
+    expect(result.stderr).toContain("build-identity shape");
+  });
+
   it("nested な build output の中間ディレクトリが dangling symlink なら build shortage ではない (内部レビュー指摘)", () => {
     // 内部review: checkBuildOutputLeaf は leafRel の先頭segment (dist) と
     // 最終leafしか型検査しておらず、3段以上ネストした manifest entry

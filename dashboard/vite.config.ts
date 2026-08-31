@@ -4,6 +4,16 @@ import { computeBuildIdentity } from "../scripts/build-identity.mjs";
 // `vite build` / `vite dev` read it identically.
 import { defineConfig } from "vitest/config";
 
+const BUILD_REVISION_RE = /^[0-9a-f]{40}$/;
+const BUILD_VERSION_RE = /^\d{4}\.(?:[1-9]|1[0-2])\.\d+$/;
+
+const UNKNOWN_BUILD_IDENTITY = {
+  version: "unknown",
+  channel: "dev",
+  revision: "unknown",
+  dirty: false,
+} as const;
+
 function buildIdentity() {
   const {
     KAOIRO_BUILD_VERSION,
@@ -11,20 +21,45 @@ function buildIdentity() {
     KAOIRO_BUILD_REVISION,
     KAOIRO_BUILD_DIRTY,
   } = process.env;
-  if (
-    KAOIRO_BUILD_VERSION &&
-    KAOIRO_BUILD_CHANNEL &&
-    KAOIRO_BUILD_REVISION &&
-    (KAOIRO_BUILD_DIRTY === "true" || KAOIRO_BUILD_DIRTY === "false")
-  ) {
-    return {
-      version: KAOIRO_BUILD_VERSION,
-      channel: KAOIRO_BUILD_CHANNEL,
-      revision: KAOIRO_BUILD_REVISION,
-      dirty: KAOIRO_BUILD_DIRTY === "true",
-    };
+
+  const explicitValues = [
+    KAOIRO_BUILD_VERSION,
+    KAOIRO_BUILD_CHANNEL,
+    KAOIRO_BUILD_REVISION,
+    KAOIRO_BUILD_DIRTY,
+  ];
+  if (explicitValues.every((value) => value === undefined)) {
+    return computeBuildIdentity();
   }
-  return computeBuildIdentity();
+
+  const validVersion =
+    KAOIRO_BUILD_VERSION === "unknown" ||
+    (typeof KAOIRO_BUILD_VERSION === "string" && BUILD_VERSION_RE.test(KAOIRO_BUILD_VERSION));
+  const validRevision =
+    KAOIRO_BUILD_REVISION === "unknown" ||
+    (typeof KAOIRO_BUILD_REVISION === "string" && BUILD_REVISION_RE.test(KAOIRO_BUILD_REVISION));
+  const validChannel = KAOIRO_BUILD_CHANNEL === "dev" || KAOIRO_BUILD_CHANNEL === "release";
+  const validDirty = KAOIRO_BUILD_DIRTY === "true" || KAOIRO_BUILD_DIRTY === "false";
+
+  if (!validVersion || !validRevision || !validChannel || !validDirty) {
+    return UNKNOWN_BUILD_IDENTITY;
+  }
+
+  const identity = {
+    version: KAOIRO_BUILD_VERSION,
+    channel: KAOIRO_BUILD_CHANNEL,
+    revision: KAOIRO_BUILD_REVISION,
+    dirty: KAOIRO_BUILD_DIRTY === "true",
+  };
+  if (
+    identity.channel === "release" &&
+    (identity.version === "unknown" ||
+      identity.revision === "unknown" ||
+      identity.dirty)
+  ) {
+    return UNKNOWN_BUILD_IDENTITY;
+  }
+  return identity;
 }
 
 const identity = buildIdentity();

@@ -118,6 +118,15 @@ function isValidBuildChannel(value) {
   return value === "dev" || value === "release";
 }
 
+function isBuildIdentityConsistent(value) {
+  return (
+    value.channel !== "release" ||
+    (value.dirty === false &&
+      value.revision !== "unknown" &&
+      value.version !== "unknown")
+  );
+}
+
 function isBuildInfoShape(value) {
   if (typeof value !== "object" || value === null) return false;
   const hasVersion = Object.hasOwn(value, "version");
@@ -130,7 +139,9 @@ function isBuildInfoShape(value) {
     isValidBuiltAt(value.built_at) &&
     hasVersion === hasChannel &&
     (!hasVersion ||
-      (isValidBuildVersion(value.version) && isValidBuildChannel(value.channel)))
+      (isValidBuildVersion(value.version) &&
+        isValidBuildChannel(value.channel) &&
+        isBuildIdentityConsistent(value)))
   );
 }
 

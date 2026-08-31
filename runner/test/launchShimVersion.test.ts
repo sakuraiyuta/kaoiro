@@ -73,7 +73,7 @@ describe("kaoiro-runner-launch.sh --version (issue #228 round 2 MF-5)", () => {
     tmpDir = mkdtempSync(join(tmpdir(), "kaoiro-shim-version-"));
     const buildInfo: BuildInfo = {
       revision: "0123456789abcdef0123456789abcdef01234567",
-      dirty: true,
+      dirty: false,
       built_at: "2026-08-12T00:00:00.000Z",
       version: "2026.9.0",
       channel: "release",

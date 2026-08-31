@@ -127,6 +127,7 @@ export interface ReleaseTreeOptions {
    *  cases, where VERSION must NOT match the revision. */
   version?: string;
   dirty?: boolean;
+  channel?: "dev" | "release";
   /** Makes the stub cli's `--version` report this instead of the tree's own
    *  identity — the only way left to stage a running artifact that disagrees
    *  with its release directory. */
@@ -200,7 +201,7 @@ export function writeReleaseTree(
       dirty,
       built_at: "2026-08-16T00:00:00.000Z",
       version: "2026.9.0",
-      channel: "dev",
+      channel: options.channel ?? "dev",
     }),
   );
   // The wrappers are real PACKAGES here, not two lone files, and a shared
