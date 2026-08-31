@@ -1,6 +1,6 @@
 ---
-title: 作業分担の重複・競合検出の要否
-description: 自律的な作業分担で起きうる同一ファイル同時作業などの競合を、検出機構で防ぐか観察に留めるかを決める。
+title: Whether to Detect Duplicate or Conflicting Work Division
+description: Decide whether to prevent conflicts that can occur in autonomous work division, such as multiple agents working on the same file simultaneously, with a detection mechanism or by limiting the approach to observation.
 status: open
 urgency: low
 blocks: []
@@ -10,34 +10,37 @@ decided: null
 
 ## 背景
 
-[ADR-0044](../adr/0044-coordination-injection-hitl.md) F2 により責務
-範囲内の作業分担が operator 承認なしで成立すると、複数エージェントが
-同一ファイル・同一課題へ同時に手を入れる競合が起きうる。kaoiro
-issue #87 の起票時 AI 意見も「最小 deterministic guard + 自由対話で
-観察し、破綻パターンをデータで見る」実験経済学的アプローチを推して
-いる。
+[ADR-0044](../adr/0044-coordination-injection-hitl.md) F2 allows work
+division within the scope of responsibility to be established without operator
+approval, so multiple agents may conflict by working on the same file and same
+task simultaneously. The AI opinion when filing kaoiro issue #87 also promotes
+an experimental-economics approach: "observe with a minimal deterministic
+guard + free dialogue, and see failure patterns in the data."
 
 ## 選択肢
 
-| 案 | 内容 | メリット | デメリット |
+| Option | Description | Advantages | Disadvantages |
 |----|------|----------|-----------|
-| A | 初期は検出なし (dashboard 観測で破綻パターンを収集してから設計) | 過剰設計を避け、実データで必要性を判断できる | 初期運用で重複作業の手戻りが起きうる |
-| B | 最小の宣言的 lock (分担合意時に対象範囲を server へ宣言し、重複時に警告) | 競合の早期警告 | 宣言の粒度設計が難しく、形骸化しやすい |
+| A | No detection initially (collect failure patterns through dashboard observation, then design) | Avoids over-design and allows necessity to be judged from real data | Rework from duplicate work may occur during initial operation |
+| B | Minimal declarative lock (declare the target scope to the server when agreeing on work division, and warn on overlap) | Early warning of conflicts | Declaration granularity is difficult to design and easily becomes nominal |
 
 ## 影響
 
-ブロックする実装はない (ADR-0044 の初期実装は検出なしで開始可能)。
+There is no implementation that blocks work (ADR-0044's initial implementation
+can start with no detection).
 
 ## 判断材料
 
-- 初期運用 (dogfooding) で観測される競合の頻度と実害
-- git worktree / ブランチ分離など既存の手段でどこまで吸収できるか
+- Frequency and actual harm of conflicts observed during initial operation
+  (dogfooding)
+- How far existing measures such as git worktree / branch separation can absorb
+  them
 
 ## 暫定方針
 
-案 A (初期は検出なしで観察)。
+Option A (observe with no detection initially).
 
 ## 解決時のアクション
 
-- [ ] 観測結果を踏まえ、検出機構の要否を ADR 化または本問 close
-- [ ] 本 open-question を close (削除)
+- [ ] Based on observation results, make the need for a detection mechanism an ADR or close this question
+- [ ] Close this open question (delete it)
