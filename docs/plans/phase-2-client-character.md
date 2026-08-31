@@ -1,52 +1,52 @@
 ---
-title: Phase 2 — クライアント + キャラ + 状態ベース表情
-description: Web クライアントでエージェントをキャラ表示し、状態を表情へマッピングする。
+title: Phase 2 — Client + Characters + State-Based Expressions
+description: Display agents as characters in the Web client and map their states to expressions.
 status: done
 phase: 2
 depends_on: [phase-1.5-minimal-server-client]
 last_updated: 2026-06-16
 ---
 
-# Phase 2 — クライアント + キャラ + 状態ベース表情
+# Phase 2 — Client + Characters + State-Based Expressions
 
 ## Goal
 
-Web クライアント(TS)でエージェントをキャラ絵表示し、Phase 1 の状態変化を
-表情として可視化する(感情 NLP はまだ無し)。
+Display agents as character art in the Web client (TS) and visualize the Phase 1
+state changes as expressions (emotion NLP is not included yet).
 
 ## Acceptance Criteria
 
-- [x] 状態 → 表情のマッピングが動作する
-- [x] ペルソナ(立ち絵セット)をクライアントに反映
-- [x] 描画はペルソナごとの静的差分切り替え
-- [x] 表情差分素材を ComfyUI で量産(状態別 + ペルソナ別)
-- [x] 手待ち(waiting_input / waiting_permission)遷移でクライアントが通知
-  (デスクトップ通知 + 音)を発火する(#7)
+- [x] State → expression mapping works
+- [x] Apply the persona (standing-art set) to the client
+- [x] Rendering switches between static variations for each persona
+- [x] Produce expression-variation assets in bulk with ComfyUI (by state + persona)
+- [x] The client triggers notifications (desktop notification + sound) on transitions
+  to waiting_input / waiting_permission (#7)
 
 ## Tasks
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 2-1 | クライアント雛形(状態購読 → 表示) | ✅ | リファレンスダッシュボード(Svelte 5 + Vite、`dashboard/`、issue #12)。プロトコル層は Svelte 非依存の `protocol.ts` |
-| 2-2 | 状態 → 表情マッピング | ✅ | スプライト版実装済(2026-06-11): [ADR-0008](../adr/0008-persona-asset-distribution.md) 第 1 段階のマニフェスト + 配信を実装し、カードはスプライト優先・CSS 顔フォールバック。`disconnected` は idle のグレースケール |
-| 2-3 | ComfyUI による表情差分の量産 | ✅ | 3 ペルソナ x 7 状態 = 21 枚完成。`server/priv/personas/` へ正式配置済み。方針・規格・provenance は [specs/personas](../specs/personas.md) |
-| 2-4 | 手待ち通知(デスクトップ通知 + 音) | ✅ | waiting_input / waiting_permission への遷移で `Notification` + 状態別 wav 音(`input.wav` / `permission.wav`、HTMLAudioElement)を発火(#7、`dashboard/src/lib/notify.ts`)。`onEnvelope` のライブ遷移のみで発火しスナップショットでは鳴らさない。音は autoplay ポリシー次第の best-effort |
+| 2-1 | Client scaffold (subscribe to state → display) | ✅ | Reference dashboard (Svelte 5 + Vite, `dashboard/`, issue #12). The protocol layer is the Svelte-independent `protocol.ts` |
+| 2-2 | State → expression mapping | ✅ | Sprite version implemented (2026-06-11): implemented the manifest + delivery from stage 1 of [ADR-0008](../adr/0008-persona-asset-distribution.md); cards prefer sprites and fall back to CSS faces. `disconnected` is idle in grayscale |
+| 2-3 | Bulk production of expression variations with ComfyUI | ✅ | 3 personas x 7 states = 21 images complete. Officially placed in `server/priv/personas/`. Policy, specification, and provenance are in [specs/personas](../specs/personas.md) |
+| 2-4 | Waiting notification (desktop notification + sound) | ✅ | On transitions to waiting_input / waiting_permission, trigger `Notification` + state-specific wav sounds (`input.wav` / `permission.wav`, HTMLAudioElement) (#7, `dashboard/src/lib/notify.ts`). Trigger only on live transitions in `onEnvelope`, not on snapshots. Sound is best-effort subject to autoplay policy |
 
 Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blocked.
 
 ## Followups (in-phase but unfinished)
 
-- アニメ/3D 描画の調査(将来、[ADR-0004](../adr/0004-client-rendering-staged.md))。
+- Investigate animation/3D rendering in the future ([ADR-0004](../adr/0004-client-rendering-staged.md)).
 
 ## Outcome notes
 
-- kuroe 混在タッチは実画面評価で採用確定(2026-06-11)。リファレンス
-  実装はカタログ的多様性に価値、統一はクライアント側の意思
-  ([specs/personas](../specs/personas.md) 基本方針に反映)。
+- The mixed kuroe touch was adopted based on actual-screen evaluation (2026-06-11).
+  The reference implementation values catalog-like diversity; unification is a
+  client-side decision (reflected in the basic policy of [specs/personas](../specs/personas.md)).
 
 ## Open Questions Blocking This Phase
 
-なし。
+None.
 
 ## See Also
 

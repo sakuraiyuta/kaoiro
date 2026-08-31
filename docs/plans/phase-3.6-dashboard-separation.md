@@ -1,67 +1,67 @@
 ---
-title: Phase 3.6 — ダッシュボード別ディレクトリ化 + 同梱整理
-description: 参照ダッシュボードを server/assets からトップレベル dashboard/ へ移出し、リリースビルド時に同梱する構成へ整理。完了。
+title: Phase 3.6 — Dashboard Directory Separation + Bundling Cleanup
+description: Move the reference dashboard from server/assets to the top-level dashboard/ and organize it to be bundled during release builds. Complete.
 status: done
 phase: 3.6
 depends_on: [phase-3.5-response-display]
 last_updated: 2026-07-25
 ---
 
-# Phase 3.6 — ダッシュボード別ディレクトリ化 + 同梱整理
+# Phase 3.6 — Dashboard Directory Separation + Bundling Cleanup
 
 ## Goal
 
-参照実装ダッシュボード(Svelte 5 + Vite、旧 `server/assets/`)を server 配下から
-独立ディレクトリへ移出し、ビルド・リリース時に成果物を同梱する構成へ整理する。
-依存・ビルド・CI を server 本体から切り離し、将来の外部クライアント分離
-([ADR-0007](../adr/0007-client-separation-reference-dashboard.md))への布石と
-する(対応 issue: #44)。
+Move the reference implementation dashboard (Svelte 5 + Vite, formerly
+`server/assets/`) from under server into an independent directory, and organize the
+build so its artifacts are bundled during build/release. Separate its dependencies,
+build, and CI from the server itself as groundwork for future external-client
+separation ([ADR-0007](../adr/0007-client-separation-reference-dashboard.md))
+(tracking issue: #44).
 
 ## Acceptance Criteria
 
-- [x] ダッシュボードを server/ 外の独立ディレクトリ(トップレベル `dashboard/`)
-      へ移出し、自己完結の `package.json` を持つ
-- [x] server は配信を維持しつつビルド成果物のみを同梱(`DashboardStatic` /
-      `Plug.Static` の `/` ・ `/assets` 配信は不変)
-- [x] リリースで同梱ビルドが走る経路を整備(`server/Dockerfile` の node
-      ステージ。`mix setup` からは意図的に外した — 下記 D-2)
-- [x] CI: ダッシュボードのビルド失敗が server ビルドと切り離される
-- [x] `:serve_dashboard` による静的配信オフの挙動を維持
+- [x] Move the dashboard to an independent directory outside server (top-level `dashboard/`) with a self-contained `package.json`
+- [x] Keep server delivery while bundling only build artifacts (`DashboardStatic` /
+      `Plug.Static` delivery of `/` and `/assets` is unchanged)
+- [x] Establish the release path that runs the bundled build (`server/Dockerfile` node
+      stage; intentionally excluded from `mix setup` — see D-2 below)
+- [x] CI: decouple dashboard build failures from the server build
+- [x] Preserve the behavior of disabling static delivery with `:serve_dashboard`
 
 ## Tasks
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| D-1 | 移出先ディレクトリ確定と移動(`server/assets/` → `dashboard/`) | ✅ | `git mv` で履歴保持。`vite.config.ts` の `outDir` を `../server/priv/static` へ |
-| D-2 | `mix.exs` の assets エイリアス見直し | ✅ | `assets.setup` / `assets.build` → `dashboard.setup` / `dashboard.build`(`--cd ../dashboard`)。`setup` から除外し server ビルドの Node 依存を排除 |
-| D-3 | 配信パス・`DashboardStatic` の維持確認 | ✅ | prod イメージ起動で `/assets/*` `/favicon.ico` = 200、`/` = 302(既存の RootRedirect)。`:serve_dashboard` off は `dashboard_toggle_test.exs` が継続 green |
-| D-4 | CI 分離(dashboard ビルドと server ビルド) | ✅ | `dashboard` job の `working-directory` / cache path のみ変更(既に別 job)。`dashboard/pnpm-workspace.yaml` 新設で単独 install が成立 |
-| D-5 | ドキュメント更新([ADR-0007](../adr/0007-client-separation-reference-dashboard.md) 整合) | ✅ | ADR-0007 Neutral に位置と同梱方式を追記。README / server README / docs のパス参照を更新 |
+| D-1 | Confirm and move the destination directory (`server/assets/` → `dashboard/`) | ✅ | Preserve history with `git mv`. Set `vite.config.ts` `outDir` to `../server/priv/static` |
+| D-2 | Review the assets aliases in `mix.exs` | ✅ | `assets.setup` / `assets.build` → `dashboard.setup` / `dashboard.build` (`--cd ../dashboard`). Exclude them from `setup` to remove the server build's Node dependency |
+| D-3 | Confirm delivery paths and preserve `DashboardStatic` | ✅ | In the production image, `/assets/*` and `/favicon.ico` = 200, `/` = 302 (existing RootRedirect). `:serve_dashboard` off remains green in `dashboard_toggle_test.exs` |
+| D-4 | Separate CI (dashboard build and server build) | ✅ | Change only the `dashboard` job's `working-directory` / cache path (already a separate job). A new `dashboard/pnpm-workspace.yaml` makes standalone install work |
+| D-5 | Update documentation (align with [ADR-0007](../adr/0007-client-separation-reference-dashboard.md)) | ✅ | Add the location and bundling method to ADR-0007 Neutral. Update path references in README / server README / docs |
 
 Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blocked.
 
 ## Decisions
 
-- **移出先**: トップレベル `dashboard/`。CI の既存 job 名と一致し、外部
-  クライアントが複数化する見込みが当面ないため `clients/` 階層は導入しない
-  (2026-07-25、#44 コメント)。
-- **同梱方式**: リリース時にビルド実行。`server/Dockerfile` の multi-stage
-  (node ステージで build → `priv/static` へ copy)を維持し、事前ビルド成果物の
-  コミットは行わない(同上)。
-- **Docker build context はリポジトリルート**。`dashboard/` が server/ の外に
-  出たため、`docker-compose.yaml` は `context: ..` + `dockerfile:
-  server/Dockerfile` を指定し、`.dockerignore` をルートへ移動(ホワイトリスト
-  方式で `server/` と `dashboard/` のみ投入)。素の `docker build` はルートから
-  `-f server/Dockerfile .` で叩く。
-- **`dashboard/pnpm-workspace.yaml`(`packages: []`)を新設**。これが無いと
-  pnpm がルートの `pnpm-workspace.yaml` まで遡り、非メンバの dashboard では
-  なくルート workspace を install してしまい `dashboard/node_modules` が空に
-  なる(移出前から同じ罠があり、CI の dashboard job も同状態だった)。
+- **Destination**: Top-level `dashboard/`. It matches the existing CI job name,
+  and a `clients/` hierarchy is not introduced because multiple external clients
+  are not expected in the near term (2026-07-25, #44 comment).
+- **Bundling method**: Run the build at release time. Keep the multi-stage
+  `server/Dockerfile` (build in the node stage → copy to `priv/static`) and do not
+  commit prebuilt artifacts (same source).
+- **The Docker build context is the repository root**. Since `dashboard/` moved
+  outside server/, `docker-compose.yaml` specifies `context: ..` + `dockerfile:
+  server/Dockerfile`, and `.dockerignore` moves to the root (whitelist mode includes
+  only `server/` and `dashboard/`). Run a plain `docker build` from the root with
+  `-f server/Dockerfile .`.
+- **Add `dashboard/pnpm-workspace.yaml` (`packages: []`)**. Without it, pnpm walks
+  up to the root `pnpm-workspace.yaml` and installs the root workspace instead of
+  the non-member dashboard, leaving `dashboard/node_modules` empty (the same trap
+  existed before the move, and the CI dashboard job was in the same state).
 
 ## Followups (in-phase but unfinished)
 
-- 完全な別リポジトリ化([ADR-0007](../adr/0007-client-separation-reference-dashboard.md)
-  の最終形)は本フェーズのスコープ外。本フェーズは同一リポジトリ内での移出に留める。
+- Complete separation into another repository (the final form in [ADR-0007](../adr/0007-client-separation-reference-dashboard.md))
+  is out of scope for this phase. This phase only moves it within the same repository.
 
 ## See Also
 

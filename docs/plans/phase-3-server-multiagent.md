@@ -1,49 +1,51 @@
 ---
-title: Phase 3 — サーバ集約 + 複数エージェント + 双方向
-description: Elixir/Phoenix サーバで複数ラッパーを集約し、指示・承認を双方向ルーティングする。
+title: Phase 3 — Server Aggregation + Multiple Agents + Bidirectional Routing
+description: Aggregate multiple wrappers in an Elixir/Phoenix server and route instructions and approvals bidirectionally.
 status: done
 phase: 3
 depends_on: [phase-2-client-character]
 last_updated: 2026-06-11
 ---
 
-# Phase 3 — サーバ集約 + 複数エージェント + 双方向
+# Phase 3 — Server Aggregation + Multiple Agents + Bidirectional Routing
 
 ## Goal
 
-サーバ(Elixir/Phoenix)で複数ラッパーを WebSocket 集約し、複数エージェントを
-同時可視化、特定エージェントへ指示・承認を送れるようにする。
+Aggregate multiple wrappers over WebSockets in the server (Elixir/Phoenix),
+visualize multiple agents simultaneously, and enable sending instructions and
+approvals to a specific agent.
 
 ## Acceptance Criteria
 
-- [x] 複数 Claude Code を並行運用し同時可視化(3 接続同時を実機検証)
-- [x] 「どれが何をしているか/どれが手待ちか」が一目で分かる
-- [x] 任意の1体に指示を送れる(双方向)
-- [x] 権限承認をクライアント UI から許可/拒否できる(relay 実機検証済。ask 経路の発火も SDK 実測で確認 — issue #1 解明、[agent-sdk-events](../specs/agent-sdk-events.md))
-- [x] ペルソナ割り当て(どのホスト/プロセスがどのペルソナか)をユーザが指定(wrapper config、Phase 1 から)
-- [x] 再起動をまたいでペルソナが維持される(安定 agent_id + config、[ADR-0003](../adr/0003-persona-identity-persistence.md))
-- [x] 接続断(`disconnected`)・トークン認証・TLS・ハートビート(TLS はプロキシ終端)
+- [x] Run multiple Claude Code instances concurrently and visualize them together (three simultaneous connections verified on real machines)
+- [x] Make it immediately clear “which one is doing what / which one is waiting”
+- [x] Send instructions to any one agent (bidirectionally)
+- [x] Allow/reject permission approvals from the client UI (relay verified on a real machine; the ask path was also confirmed through SDK measurement — issue #1 resolved, [agent-sdk-events](../specs/agent-sdk-events.md))
+- [x] Let the user specify persona assignment (which host/process has which persona) (wrapper config, since Phase 1)
+- [x] Preserve personas across restarts (stable agent_id + config, [ADR-0003](../adr/0003-persona-identity-persistence.md))
+- [x] Connection loss (`disconnected`), token authentication, TLS, and heartbeat (TLS terminates at the proxy)
 
 ## Tasks
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 3-1 | Phoenix Channels で複数ラッパー集約 | ✅ | 1接続=1 channel プロセス + `AgentStates`(owner 追跡で再接続レース防止)。実装は Phase 1.5 から、disconnected 導出で完結(2026-06-11) |
-| 3-2 | 指示・承認の双方向ルーティング | ✅ | `instruction` / `permission_decision` relay + 承認 UI + wrapper の `PermissionBroker`(600 秒 deny、[ADR-0011](../adr/0011-phase3-reliability-and-auth.md))実装・実機検証済。canUseTool ask 経路の発火条件も解明(issue #1、[agent-sdk-events](../specs/agent-sdk-events.md) 検証メモ) |
-| 3-3 | ラッパートークン認証 + TLS + ハートビート | ✅ | agent_id 別トークン([ADR-0011])。TLS はプロキシ終端(2026-06-11 決定)、ハートビートは Channels 組み込み。切断は terminate で `disconnected` をサーバ導出 |
-| 3-4 | ユーザアクセス制御 stub(ホワイトリスト) | ✅ | ユーザトークン + role(viewer/operator、[ADR-0011])。env 未設定は dev mode(全接続 operator) |
+| 3-1 | Aggregate multiple wrappers with Phoenix Channels | ✅ | One channel process per connection + `AgentStates` (owner tracking prevents reconnect races). Implemented since Phase 1.5, complete with disconnected derivation (2026-06-11) |
+| 3-2 | Bidirectional instruction/approval routing | ✅ | Implemented and verified on a real machine: `instruction` / `permission_decision` relay + approval UI + wrapper `PermissionBroker` (600-second deny, [ADR-0011](../adr/0011-phase3-reliability-and-auth.md)). Also resolved the trigger conditions for the canUseTool ask path (issue #1, verification note in [agent-sdk-events](../specs/agent-sdk-events.md)) |
+| 3-3 | Wrapper token authentication + TLS + heartbeat | ✅ | Per-agent_id tokens ([ADR-0011]). TLS terminates at the proxy (decided 2026-06-11), and heartbeat is built into Channels. Disconnect is derived by the server from terminate as `disconnected` |
+| 3-4 | User access-control stub (allowlist) | ✅ | User token + role (viewer/operator, [ADR-0011]). Unset env means dev mode (all connections are operators) |
 
 Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blocked.
 
 ## Followups (in-phase but unfinished)
 
-- 本格的な OAuth + RBAC は将来([ADR-0005](../adr/0005-access-control-oauth-stub.md))。
-- 実 Claude Code 複数台での運用検証(機能は fake wrapper 3 接続 +
-  SDK 実測で確認済み。実運用での長時間安定性は使いながら確認)。
+- Full OAuth + RBAC is future work ([ADR-0005](../adr/0005-access-control-oauth-stub.md)).
+- Operational verification with multiple real Claude Code instances (the feature
+  is verified with three fake-wrapper connections + SDK measurements; long-term
+  stability in real operation will be confirmed through use).
 
 ## Open Questions Blocking This Phase
 
-なし。
+None.
 
 ## See Also
 
