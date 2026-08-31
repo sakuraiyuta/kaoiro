@@ -6,13 +6,20 @@
   // handle clearance behave as in production.
   import AgentCard from "../../src/lib/AgentCard.svelte";
   import AgentGridShell from "../../src/lib/AgentGridShell.svelte";
+  import type { PersonaManifest } from "../../src/lib/protocol";
   import { lobbyAgents, lobbyLogs } from "./fixtures";
 
   let {
     operator,
     pending = false,
     taskRing = 0,
-  }: { operator: boolean; pending?: boolean; taskRing?: number } = $props();
+    manifest = null,
+  }: {
+    operator: boolean;
+    pending?: boolean;
+    taskRing?: number;
+    manifest?: PersonaManifest | null;
+  } = $props();
 
   const agents = lobbyAgents(pending);
   const logs = lobbyLogs();
@@ -27,7 +34,7 @@
     {agents}
     directory={{}}
     {logs}
-    manifest={null}
+    {manifest}
     now={Date.now()}
     onSelectAgent={() => {}}
   >
@@ -35,7 +42,7 @@
       <li>
         <AgentCard
           {envelope}
-          manifest={null}
+          {manifest}
           onSelect={() => {}}
           activeTaskCount={taskRing}
         />

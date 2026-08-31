@@ -14,6 +14,7 @@ import DetailHarness from "./DetailHarness.svelte";
 import LobbyHarness from "./LobbyHarness.svelte";
 import OverlayHarness from "./OverlayHarness.svelte";
 import type { DetailScenario } from "./fixtures";
+import { personaSpriteManifest } from "./fixtures";
 
 const params = new URLSearchParams(location.search);
 const view = params.get("view") ?? "lobby";
@@ -135,6 +136,8 @@ if (view === "app") {
       operator: params.get("role") !== "viewer",
       pending: params.get("pending") === "1",
       taskRing: Number(params.get("taskRing") ?? 0),
+      manifest:
+        params.get("sprites") === "1" ? personaSpriteManifest() : null,
     },
   });
 }

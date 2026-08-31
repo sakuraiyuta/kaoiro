@@ -17,6 +17,23 @@ they can be difficult to relate to. kaoiro represents each agent as a character
 with changing expressions so that people can see what is happening and grow
 attached to them while running several agents at once.
 
+![kaoiro dashboard: four agents rendered as character cards, each labelled
+with its current state](docs/images/agent-grid.png)
+
+Every running agent becomes a card with its own character and a state label
+(`thinking`, `idle`, `permission?` …), and the badge marks the one waiting on
+an answer — a glance is enough to see who needs you. Agents are launched and
+tuned from the same screen:
+
+<p>
+  <img src="docs/images/launch-dialog.png" height="360"
+       alt="Launch dialog: host, persona, working directory, permission mode
+            and an optional initial prompt">
+  <img src="docs/images/settings-drawer.png" height="360"
+       alt="Settings drawer: notification sound, volume and card display
+            options">
+</p>
+
 ## Install & Quick start
 
 Requirements: Node.js 22 or later, [pnpm](https://pnpm.io/) (`10.20.0` is

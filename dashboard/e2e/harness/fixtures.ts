@@ -114,6 +114,42 @@ export function detailManifest(scenario: DetailScenario): PersonaManifest | null
   };
 }
 
+/** Opt-in (`?sprites=1`) manifest for README screenshots. Points at the
+ *  REAL sprites Phoenix serves at `/personas/:sprite_set/:file` — that
+ *  route carries no auth pipeline, so a Vite dev server proxying
+ *  `/personas` renders characters with no token and no launched agent.
+ *  Every existing caller keeps passing `null`, so the specs are
+ *  unaffected. */
+export function personaSpriteManifest(): PersonaManifest {
+  const states = [
+    "done",
+    "error",
+    "fatigued",
+    "idle",
+    "thinking",
+    "tool_running",
+    "waiting_input",
+    "waiting_permission",
+  ];
+  const personas = Object.fromEntries(
+    ["ao", "momo", "kuroe", "fuji"].map((id) => [
+      id,
+      {
+        states: Object.fromEntries(
+          states.map((state) => [
+            state,
+            {
+              url: `/personas/${id}/${state}.png`,
+              hash: `sha256:harness-${id}-${state}`,
+            },
+          ]),
+        ),
+      },
+    ]),
+  );
+  return { version: "harness", personas };
+}
+
 export function lobbyAgents(pending = false): Record<string, Envelope> {
   const ids = ["ao", "momo", "kuroe", "fuji"];
   return Object.fromEntries(
