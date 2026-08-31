@@ -1,5 +1,5 @@
 ---
-title: ペルソナ同一性の永続化
+title: Persona Identification Persistence
 status: accepted
 date: 2026-06-04
 opened: 2026-06-04
@@ -9,7 +9,7 @@ related_specs: [protocol]
 related_adrs: [4, 8, 24, 26, 29]
 ---
 
-# ADR-0003 — ペルソナ同一性の永続化
+# ADR 3
 
 ## Status
 
@@ -17,43 +17,43 @@ Accepted
 
 ## Context
 
-複数エージェントを並行運用しても、再起動をまたいでキャラの同一性・機嫌を維持
-したい(マスト要件)。実行時生成の揮発 ID では再起動で同一性が失われ、愛着が
-育たない。
+Even if multiple agents are operated in , the character’s identity and mood are maintained over the restart.
+(mast requirements). In the volatile ID of execution generation, the identity is lost by restart, and the attachment is
+Not growing
 
 ## Decision
 
-- `agent_id` は**設定で固定する安定 ID**(実行時生成の揮発 ID は使わない)。
-- `persona`(id / 固有名 / 立ち絵セット)はラッパー初期設定で指定。
-  **「表示名」という呼称は旧いもの**——ここでの `name` は pack が定義する
-  canonical な固有名で、session 中不変(のちの
+`agent_id`**Stable ID fixed by setting**(Do not use volatile ID when execution is generated).
+- `persona`(id / solid name / standing picture set) is specified in the wrapper initial setting.
+  **"display name" is the old**—— The `name` here defines pack
+canonical well-known and session during immutations
   [ADR-0029](0029-persona-server-sot-and-pack-distribution.md) F9)。
-  稼働中に変わり得る通称は `display_name` という別 field が担う
+`display_name`
   ([issue #209](https://github.com/sakuraiyuta/kaoiro/issues/209)
   D19)。
-- **どのホスト/プロセスのエージェントがどのペルソナを担当するかはユーザが指定**。
-- サーバ/クライアントは `agent_id`(+ `persona.id`)をキーに表示・機嫌を持続。
+- **The user ifies which host/process agent is responsible for**。
+- server/client lasts `agent_id`(+`persona.id`) to the key.
 
 ## Consequences
 
 ### Positive
 
-- 再起動・複数運用をまたいで永続的な同一性と愛着。
-- 識別が容易で、どの担当がどのキャラか一目で分かる。
+- Reboot and multi-operation, permanent identity and attachment.
+- Easy to identify and understand which character you are in charge.
 
 ### Negative
 
-- ペルソナ定義のスキーマ・立ち絵セット参照方式の管理が必要。
-- 描画種別(静的差分/アニメ/3D)は
-  [ADR-0004](0004-client-rendering-staged.md) と連動。
+- Persona-defined schemas and set-up reference approach management is required.
+- Drawing type (static difference / animation / 3D)
+[ADR 4](0004-client-rendering-staged.md)
 
 ### Neutral
 
-- ペルソナはラッパー側設定なので、サーバは agent 非依存のまま。
+- Persona is a wrapper-side setting, so   remains agent-independent.
 
 ## Alternatives Considered
 
 | Option | Why rejected |
 |--------|--------------|
-| 実行時生成 ID | 再起動で同一性喪失、機嫌の持続ができない |
-| サーバ側で動的割り当て | ユーザが担当を指定できず、運用が直感に反する |
+|execution ID|Iden  loss and dist  cannot be maintained by restart|
+|Dynamic assignment on the server side|The user is unable to send a request and the operation is intuition|

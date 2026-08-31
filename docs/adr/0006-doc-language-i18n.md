@@ -1,5 +1,5 @@
 ---
-title: ドキュメント・UI は日本語、ベータ前に全英訳
+title: The document UI is translated in Japanese and beta
 status: accepted
 date: 2026-06-04
 opened: 2026-06-04
@@ -9,7 +9,7 @@ related_specs: []
 related_adrs: [26]
 ---
 
-# ADR-0006 — ドキュメント・UI は日本語、ベータ前に全英訳
+# ADR 6 — The document UI is in Japanese and English before beta
 
 ## Status
 
@@ -17,33 +17,33 @@ Accepted
 
 ## Context
 
-ドキュメント・UI の言語をどうするかが問題だった。当面の開発者は日本語話者で、
-初期は日本語の方が速い。一方、外部公開を見据えると英語化が要る。
+How to write a document UI? This developer is a Japanese speaker,
+Initial Japanese is faster. On the other hand, if you look at the ex  release, you need to English.
 
 ## Decision
 
-- プロトタイプ期はドキュメント・UI とも**日本語**。
-- **ベータリリース前に全英訳工程**を独立マイルストーン
-  ([plans/phase-5-i18n](../plans/phase-5-i18n.md))として実施し、以降の主言語を
-  その時点で判断する。
+- Prototype period is both document and UI**English**。
+- **English translation before beta release**Independent Milestone
+([plans/phase-5-i18n](../plans/phase-5-i18n.md)))
+at that time.
 
 ## Consequences
 
 ### Positive
 
-- 初期の開発速度を確保。
+-   development speed.
 
 ### Negative
 
-- ベータ前に一括翻訳のコストが発生する。
+- Reduce the cost of bulk translation before beta.
 
 ### Neutral
 
-- 主言語の最終方針は Phase 5 で決める。
+- The final policy of the main language is determined in Phase 5.
 
 ## Alternatives Considered
 
 | Option | Why rejected |
 |--------|--------------|
-| 最初から英語 | 初期の開発速度が落ちる |
-| 二言語を常時並行維持 | 維持コストが高い |
+|English|Recent development speed falls|
+|Two languages|High maintenance cost|
