@@ -34,7 +34,7 @@
 // sufficient: it says nothing about cgroups. It is kept because it would
 // catch a worker that died of a broken pipe or an inherited signal
 // disposition, not because it establishes self-stop safety.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -595,6 +595,66 @@ describe("kaoiro-runner-update.sh (issue #229)", () => {
     expect(result.stderr).toContain("--rollback");
   });
 
+  it("識別ラベルの表記が変わっても、revision を attest していれば成功する", () => {
+    // The verifier ALWAYS ships in the release being replaced, so an update
+    // that changes the operator-facing wording is checked by a script that
+    // has never seen it. #288 did exactly that and a correct rollout exited
+    // 70 with rollback instructions (issue #290). The wording below is one
+    // this script has no knowledge of; only the revision inside it matters.
+    const archive = makeReleaseTarball(work, B, {
+      cliVersionOverride: `kaoiro runner (build ${B.slice(0, 7)}, dev)`,
+    });
+
+    const result = runUpdate(["--tarball", archive], {
+      KAOIRO_SYSTEMCTL: systemctlStub({ execStart: goodExecStart() }),
+    });
+
+    expect(result.status).toBe(0);
+  });
+
+  it("pre-#288 の bare な revision 表記も受け入れる", () => {
+    // A downgrade lands an artifact whose --version predates the label.
+    const archive = makeReleaseTarball(work, B, { cliVersionOverride: B });
+
+    const result = runUpdate(["--tarball", archive], {
+      KAOIRO_SYSTEMCTL: systemctlStub({ execStart: goodExecStart() }),
+    });
+
+    expect(result.status).toBe(0);
+  });
+
+  it("同じ表記でも attest された revision が別なら失敗する", () => {
+    // The negative control for the tolerance above: same shape, same field
+    // positions, one wrong hash. Tolerating the WORDING must not tolerate
+    // the identity.
+    const other = revisionOf("something-else");
+    const archive = makeReleaseTarball(work, B, {
+      cliVersionOverride: `kaoiro dev runner v2026.9.0 / ${other.slice(0, 7)}`,
+    });
+
+    const result = runUpdate(["--tarball", archive], {
+      KAOIRO_SYSTEMCTL: systemctlStub({ execStart: goodExecStart() }),
+    });
+
+    expect(result.status).toBe(70);
+    expect(result.stderr).toContain("did NOT reach a good state");
+  });
+
+  it("revision を含まない表記は fail closed で拒否する", () => {
+    // A label that drops the hash leaves nothing to verify against, so the
+    // check must refuse rather than pass on the version number alone.
+    const archive = makeReleaseTarball(work, B, {
+      cliVersionOverride: "kaoiro dev runner v2026.9.0",
+    });
+
+    const result = runUpdate(["--tarball", archive], {
+      KAOIRO_SYSTEMCTL: systemctlStub({ execStart: goodExecStart() }),
+    });
+
+    expect(result.status).toBe(70);
+    expect(result.stderr).toContain("did NOT reach a good state");
+  });
+
   it("成功時に --keep まで prune し、current と previous は残す", () => {
     const old1 = revisionOf("old-1");
     const old2 = revisionOf("old-2");
@@ -682,5 +742,53 @@ describe("kaoiro-runner-update.sh (issue #229)", () => {
 
     expect(result.status).toBe(64);
     expect(result.stderr).toContain("must not begin with '-'");
+  });
+});
+
+describe("kaoiro_identity_attests_revision (issue #290)", () => {
+  const commonScript = fileURLToPath(
+    new URL("../deploy/kaoiro-runner-common.sh", import.meta.url),
+  );
+  const revision = "0123456789abcdef0123456789abcdef01234567";
+  const short = revision.slice(0, 7);
+
+  /** Calls the predicate in a real `sh`, the way its callers source it. */
+  const attests = (reported: string, id: string): boolean =>
+    spawnSync(
+      "sh",
+      [
+        "-c",
+        '. "$1" && kaoiro_identity_attests_revision "$2" "$3"',
+        "sh",
+        commonScript,
+        reported,
+        id,
+      ],
+      { encoding: "utf8" },
+    ).status === 0;
+
+  it("表記に依らず revision を名指すトークンを見つける", () => {
+    expect(attests(`kaoiro dev runner v2026.9.0 / ${short}`, revision)).toBe(true);
+    expect(attests(revision, revision)).toBe(true);
+    expect(attests(`kaoiro runner (build ${revision.slice(0, 12)})`, revision)).toBe(true);
+  });
+
+  it("別 revision・hash 無し・空出力はいずれも拒否する", () => {
+    expect(attests("kaoiro dev runner v2026.9.0 / fedcba9", revision)).toBe(false);
+    expect(attests("kaoiro dev runner v2026.9.0", revision)).toBe(false);
+    expect(attests("", revision)).toBe(false);
+    // Adjacency FUSES tokens, so a hex character written flush against the
+    // short hash is no longer a prefix of the revision. That is why the
+    // producer side (build_info.test.ts) asserts the delimiters rather than
+    // mere containment.
+    expect(attests(`kaoiro runner build b${short}`, revision)).toBe(false);
+  });
+
+  it("unknown な release は commit を名乗る報告を受け入れない", () => {
+    // formatBuildIdentity renders a missing VERSION as `vunknown` while the
+    // revision stays intact, so an artifact naming a real commit must not
+    // attest a directory that claims none.
+    expect(attests("kaoiro dev runner vunknown / unknown", "unknown")).toBe(true);
+    expect(attests(`kaoiro dev runner vunknown / ${short}`, "unknown")).toBe(false);
   });
 });

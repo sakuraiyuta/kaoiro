@@ -129,6 +129,50 @@ kaoiro_clean_release_id() {
   printf '%s' "$1" | LC_ALL=C grep -qE '^[0-9a-f]{40}$'
 }
 
+# Does a running artifact's SELF-REPORTED identity attest the revision its
+# release directory claims? Equality against the `--version` text cannot ask
+# that durably: the wording is operator-facing and has already changed shape
+# once (a bare `<revision>[-dirty]` before #288, `kaoiro <channel> runner
+# v<version> / <short>` after), while the script doing the comparing always
+# ships in the release being REPLACED — so each rewording fails the one
+# update that introduces it, printing rollback instructions for a host that
+# switched, started and registered correctly (issue #290). Matching on the
+# revision the text carries removes that coupling; build_info.ts's
+# formatBuildIdentity is pinned to keep carrying it.
+#
+# Non-hex characters are separators, so any token of at least 7 hex digits
+# that prefixes the revision counts as attestation — git's own abbreviation
+# floor, and shorter tokens are dropped because prose is full of two- and
+# three-letter hex runs. The label carries no dirty marker, so this cannot
+# tell a `-dirty` build from the clean commit it was built on; install
+# already rejects a tree whose directory and build-info disagree, leaving
+# that residual to `--allow-dirty` dev hosts.
+kaoiro_identity_attests_revision() {
+  _reported=$1
+  _revision=$2
+  [ "$_revision" = unknown ] || kaoiro_clean_release_id "$_revision" || return 1
+  _names_commit=no
+  for _token in $(printf '%s' "$_reported" | LC_ALL=C tr -c '0-9a-f' ' '); do
+    [ "${#_token}" -ge 7 ] || continue
+    _names_commit=yes
+    case $_revision in
+      "$_token"*) return 0 ;;
+    esac
+  done
+  # `unknown` names no commit, so there is nothing to match on and the
+  # artifact can only echo the same word back — but it must name no commit
+  # of its own either. A build whose VERSION was missing renders `vunknown`
+  # while its revision stays intact, so a bare substring test would attest a
+  # real, DIFFERENT commit against a directory that claims none.
+  if [ "$_revision" != unknown ] || [ "$_names_commit" = yes ]; then
+    return 1
+  fi
+  case $_reported in
+    *unknown*) return 0 ;;
+  esac
+  return 1
+}
+
 # Removes leftover staging dirs from a run that died before its EXIT trap
 # (SIGKILL, power loss). Without this they accumulate silently — up to
 # ~1.2 GB each, named after a dead pid, and nothing else ever revisits them.

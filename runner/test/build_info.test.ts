@@ -317,4 +317,29 @@ describe("formatBuildIdentity (issue #288)", () => {
       }),
     ).toBe("kaoiro dev runner vunknown / unknown");
   });
+
+  it("表記が変わっても revision の短縮形は必ず運ぶ (issue #290)", () => {
+    // kaoiro-runner-update.sh reads the revision back OUT of this label to
+    // decide whether the host is serving the release it just installed. The
+    // wording above is free to change — rewording it updates that exact
+    // string and nothing notices — but a label that stopped carrying the
+    // hash would leave the post-start check with nothing to verify, and it
+    // fails closed.
+    //
+    // The consumer splits on non-hex characters, so mere containment is not
+    // the property it needs: a hex character written flush against the short
+    // hash (`build b0123456`) fuses into one token that no longer prefixes
+    // the revision, and the check false-rejects a correct rollout. Assert the
+    // delimiters, not the substring.
+    const revision = "0123456789abcdef0123456789abcdef01234567";
+    expect(
+      formatBuildIdentity({
+        revision,
+        dirty: false,
+        built_at: "2026-08-12T00:00:00.000Z",
+        version: "2026.9.0",
+        channel: "dev",
+      }),
+    ).toMatch(new RegExp(`(^|[^0-9a-f])${revision.slice(0, 7)}([^0-9a-f]|$)`));
+  });
 });
