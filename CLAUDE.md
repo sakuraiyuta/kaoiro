@@ -53,6 +53,13 @@ issue #213 で導入。エージェントの permission gate が `main` 宛の g
 - `develop` → `main` は区切りごとに**オペレータが手動**で行う
 - worktree の base は `develop`
 
+### Remotes
+
+正本は GitHub (`origin`)。公開以前の self-hosted Gitea リポジトリは
+読み取り専用アーカイブとして現状のまま温存する (オペレータ決定
+2026-09-01)。clone に `gitea` remote が残っていても削除・push しない。
+旧系譜の branch は現履歴と互換がないため、fetch 先を混在させないこと。
+
 ## Workflow rules
 
 - コミットメッセージは日本語。git 操作はユーザ承認のもとで行う
