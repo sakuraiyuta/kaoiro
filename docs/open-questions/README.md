@@ -1,7 +1,8 @@
 # Open Questions
 
-未決の論点。各エントリは「背景 / 選択肢 / 影響 / 判断材料 / 暫定方針」構造で、
-`urgency` / `blocks` / `opened` の frontmatter を持つ。
+Unresolved issues. Each entry follows the "Background / Options / Impact /
+Basis for judgment / Provisional policy" structure and has `urgency` / `blocks`
+/ `opened` in its frontmatter.
 
 ## Open
 
@@ -32,9 +33,10 @@
 
 ## Recently decided
 
-`status` が決定したらファイルは `../adr/` へ昇格(または削除)。stale な
-`decided` をここに残さない。解決済みの決定は [../adr/](../adr/) を参照。
+Once `status` is decided, promote the file to `../adr/` (or delete it). Do not
+leave a stale `decided` entry here. See [../adr/](../adr/) for resolved decisions.
 
 ## Format
 
-各ファイル: 背景 / 選択肢 / 影響 / 判断材料 / 暫定方針 / 解決時のアクション。
+Each file: Background / Options / Impact / Basis for judgment / Provisional
+policy / Actions upon resolution.

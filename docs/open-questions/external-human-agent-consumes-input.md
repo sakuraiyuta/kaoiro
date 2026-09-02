@@ -1,6 +1,6 @@
 ---
-title: 外部人間のメッセージを agent が作業に取り扱う経路(将来)
-description: 一方向 authority を緩め、外部人間の返信を(operator 承認付きで)agent の作業判断に使えるようにするか。
+title: Future path for an agent to use messages from an external human in its work
+description: Decide whether to relax one-way authority so that an external human's reply can be used in an agent's work decisions (with operator approval).
 status: open
 urgency: low
 blocks: []
@@ -10,35 +10,38 @@ decided: null
 
 ## 背景
 
-v1 は一方向 authority([ADR-0028](../adr/0028-external-human-messaging.md)
-D1)で、外部人間の返信は agent の行動を駆動しない(operator への通知のみ)。
-このため v1 は「通知/依頼」止まりで「相談して回答を使う」ではない。将来、
-外部人間の回答を agent が自走に使いたくなる可能性がある。
+v1 uses one-way authority ([ADR-0028](../adr/0028-external-human-messaging.md)
+D1), so an external human's reply does not drive agent action (it only notifies
+the operator). Thus v1 stops at “notification/request” and does not yet support
+“consult and use the answer.” In the future, an agent may want to use an
+external human's answer while working autonomously.
 
 ## 選択肢
 
-| 案 | 内容 | メリット | デメリット |
+| Option | Content | Advantages | Disadvantages |
 |----|------|----------|-----------|
-| A | 導入しない(一方向 authority 堅持) | injection / 破壊操作面が最小 | agent は外部回答を自分で使えない(operator が中継) |
-| B | operator 承認付きで agent に注入する経路を設計 | 外部人間との真の delegation が可能 | untrusted 入力を agent 文脈へ入れる設計・承認 UX が要る |
+| A | Do not introduce it (retain one-way authority) | Minimize the injection / destructive-operation surface | The agent cannot use an external answer itself (the operator relays it) |
+| B | Design a path that injects it into the agent with operator approval | Enables genuine delegation with an external human | Requires a design for putting untrusted input into the agent context and an approval UX |
 
 ## 影響
 
-- 中核セキュリティ性質(一方向 authority)に触れるため、変更時は
-  [ADR-0028](../adr/0028-external-human-messaging.md) の supersede/追補を伴う。
+- Because this touches the core security property (one-way authority), any
+  change requires superseding or supplementing
+  [ADR-0028](../adr/0028-external-human-messaging.md).
 
 ## 判断材料
 
-- 実運用で「operator 中継」がどれだけ煩雑か。
-- [external-human-recv-permission-model](external-human-recv-permission-model.md)
-  の受付権限モデルと併せた設計。
+- How cumbersome operator relaying is in real operation.
+- Design together with the intake permission model in
+  [external-human-recv-permission-model](external-human-recv-permission-model.md).
 
 ## 暫定方針
 
-**A(導入しない)**。v1〜当面は一方向 authority を堅持。operator が dashboard
-で回答を改めて指示する形で loop を閉じる。
+**A (do not introduce).** Retain one-way authority from v1 for the foreseeable
+future. Close the loop by having the operator give the answer as a new
+instruction in the dashboard.
 
-## 解決時のアクション
+## Actions upon resolution
 
-- [ ] Decision recorded in ADR(一方向 authority を緩める判断)
-- [ ] `../specs/protocol-external-human.md` の中核原則を改訂
+- [ ] Record the decision in an ADR (decision to relax one-way authority)
+- [ ] Revise the core principles in `../specs/protocol-external-human.md`

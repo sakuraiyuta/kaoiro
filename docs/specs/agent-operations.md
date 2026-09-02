@@ -1,112 +1,150 @@
 ---
-title: エージェント運用則(multi-agent workflow)
-description: 複数のエージェントが同一 work tree で並行作業するときの運用則。実装を受けた側と dispatch する側(director)の双方。engine を問わず適用する。
+title: Agent operations (multi-agent workflow)
+description: Operating rules for multiple agents working concurrently in the same work tree. Applies to both implementation and dispatch (director) sides, regardless of engine.
 status: accepted
 related: [protocol-inter-agent, personas]
 ---
 
-# エージェント運用則(multi-agent workflow)
+# Agent operations (multi-agent workflow)
 
 ## Purpose
 
-kaoiro のバックログは、複数のエージェントが同一 work tree で並行して消化
-する。このファイルはそのときの運用則の**正本**で、**engine を問わず適用
-する**。Claude Code 勢は [CLAUDE.md](../../CLAUDE.md) から、Codex 勢は
-[AGENTS.md](../../AGENTS.md) から、それぞれここを指している。
+Multiple agents work through kaoiro's backlog concurrently in the same work
+tree. This file is the **source of truth** for the operating rules that apply
+then, **regardless of engine**. Claude Code users are directed here from
+[CLAUDE.md](../../CLAUDE.md), and Codex users from [AGENTS.md](../../AGENTS.md).
 
-ここに書くのは「複数のエージェントが同時に動くことに起因する」則に限る。
-プロジェクトの構成・コマンド・ブランチ運用は CLAUDE.md、inter-agent
-メッセージングのプロトコル仕様(envelope schema・ハード制限・turn 番号の
-契約)は [protocol-inter-agent](protocol-inter-agent.md) が正本。
+This file contains only rules that arise from multiple agents operating at the
+same time. CLAUDE.md is the source of truth for project structure, commands,
+and branch operation; [protocol-inter-agent](protocol-inter-agent.md) is the
+source of truth for the inter-agent messaging protocol (envelope schema, hard
+limits, and the turn-number contract).
 
-## 実装を受けた側
+## Implementation side
 
-- 判断を要すると告げられた点、および実装中に見つけた「タスクの実スコープを
-  変える食い違い」は独断で決めず、dispatch 元へ query を送る。往復は**実装の
-  前**に行う。完了報告と同時に出すと、相手に判断の余地が残らない。
-- 自分の変更が入れた不具合は in-scope。判定は「自分の diff を revert したら
-  この不具合も消えるか」。消えるなら直して報告する(query は往復が増える
-  だけで、director に決めることが残っていない)。消えないなら query 先行。
-  ただし修正が割り当てサブディレクトリの外へ出る場合は、下記のサブ
-  ディレクトリ則を優先して query する。
-- 割り当てられたサブディレクトリの外は触らない。見つけた問題は報告に留める。
-- 他エージェントの未 commit 変更を revert / stage しない。自分のスコープ外の
-  予期しない diff は進行中の作業とみなし、存在だけを報告する。
-- git: push 済み commit を amend しない。`git add -A` を使わず自分の変更
-  ファイルだけを明示 add する。peer の git 操作が pending の間は同一 branch
-  へ commit を差し込まない。
-- peer の作業 clone / worktree は共有 work tree と同じ扱い。読み取りだけの
-  git 操作(`show` / `log` / `diff` / `cat-file` / `for-each-ref`)に留め、
-  `checkout` / `fetch` / `branch` / `stash` など状態を変える操作は所有者
-  だけが行う。所有者の HEAD を動かすと未 merge の commit が detached HEAD
-  へ取り残され、所有者は reflog を辿るまで失ったことに気づけない。未
-  commit の変更の有無は所有者に確認する — `status` は index に stat 情報を
-  書き戻すので、外から打つ操作ではない。
-- 会話は双方が `done=true` を送って初めて終わる。相手が先に送っていても
-  自分からも返す。
-- flaky test は再実行の前に出力を保存する。テスト名・stack trace・seed は
-  再実行が green になった瞬間に失われる(ExUnit は失敗時に
-  `mix test --seed <N>` の再現行を出力する)。
-- 合意した修正が「どの成果物に入ったか」を成果物ごとに確認する。1 件の合意に
-  対し反映先が複数(コード / ADR / issue 本文 / 起案文面)あるとき、1 つで
-  確認して残りを推定しない。
+- Do not decide independently on points identified as requiring judgment, or on
+  discrepancies found while implementing that change the task's actual scope;
+  send a query to the dispatch source. Hold the exchange **before
+  implementation**. Raising it only with the completion report leaves the
+  recipient no opportunity to decide.
+- A defect introduced by your change is in scope. Ask: “Would reverting my diff
+  remove this defect?” If so, fix and report it (a query would only add an
+  exchange; nothing remains for the director to decide). If not, query first.
+  If the fix would leave the assigned subdirectory, however, prioritize the
+  subdirectory rule below and query.
+- Do not touch outside the assigned subdirectory. Report problems found there
+  only.
+- Do not revert or stage another agent's uncommitted changes. Treat an
+  unexpected diff outside your scope as work in progress and report only its
+  presence.
+- Git: do not amend a pushed commit. Do not use `git add -A`; explicitly add
+  only files you changed. Do not insert a commit into the same branch while a
+  peer's Git operation is pending.
+- Treat a peer's working clone or worktree like the shared work tree. Restrict
+  yourself to read-only Git operations (`show` / `log` / `diff` / `cat-file` /
+  `for-each-ref`); only its owner may run state-changing operations such as
+  `checkout` / `fetch` / `branch` / `stash`. Moving the owner's HEAD can leave
+  an unmerged commit behind on a detached HEAD, and the owner may not notice it
+  was lost until following the reflog. Ask the owner whether uncommitted changes
+  exist—`status` writes stat data back to the index, so it is not an operation
+  to run from outside.
+- A conversation ends only after both parties have sent `done=true`. Send it
+  yourself even if the other party sent it first.
+- Save flaky-test output before rerunning. The test name, stack trace, and seed
+  are lost the moment a rerun is green (on failure, ExUnit prints a
+  `mix test --seed <N>` reproduction command).
+- Confirm for each artifact where an agreed fix landed. When one agreement has
+  multiple destinations (code / ADR / issue body / proposal text), do not check
+  one and infer the rest.
 
-## dispatch する側 (director)
+## Worktree isolation for implementers
 
-- peer の engine で利用できない仕組みを完了条件に課さない。Claude Code の
-  custom skill と hook pipeline(`/my-code-review-cycle` 等)は
-  `engine: claude-code` の peer にしか無い。代わりに具体的な検査を dispatch
-  文面へ列挙する — diff の自己レビュー、該当範囲の typecheck / test、
-  bugfix なら mutation または negative control による修正の実効性の証明、
-  外部レビュー。
-- 自セッションの rate limit 使用率は `whoami` の `rate_limits` を読む
-  ([#244](https://github.com/sakuraiyuta/kaoiro/issues/244))。
-  `list_agents` は呼び出し元を除外するので、自己観測はここだけである。peer の
-  値を自分の代用にできるのは quota pool の共有が確認できている場合だけで、
-  engine 名が同じことは共有の証拠にならない。フィールドの読み方(absent は
-  unknown、snapshot は最終 turn 時点、`resets_at` 通過後は stale)は
-  `list_agents` の tool description が正本で、`whoami` 側も同じ規則。
-- 委任指示に自分の技術的前提を含めるときは「実測して判断し、判断と根拠を
-  報告に含めること」を明示する。断定形だけで渡すと、前提が誤っていても
-  そのまま実装される。
-- 委任は deliverable を**成果の単位**(「N 件 merge され checker green」)で
-  名指し、review round 予算を明記する。予算超過が生むのは追加 round では
-  なく報告義務である。
-- director は活動量でなく deliverable の前進を観測する。メッセージ数が
-  増えながら成果の単位が進まないことが、レビュー泥沼の最良の検知信号で
-  ある。
+- Do implementation work (assignments that edit files) in a dedicated Git
+  worktree at `<repo>/worktrees/<persona>[-<issue>]/`, never directly in the
+  shared work tree. Example:
+  `git worktree add worktrees/momo-210 -b issue-210-topic develop`. For
+  concurrent work, create one worktree per task using this `-<issue>` path
+  suffix, then remove it with `git worktree remove` when closed. `/worktrees/`
+  is gitignored.
+- The worktree resides inside the repository because an agent sandbox may write
+  only beneath its session cwd. An external path or separate clone would fail
+  on permissions.
+- Follow CLAUDE.md's branch strategy: create an `issue-NNN-*` branch from
+  develop, then fast-forward it back to develop when finished. Because Git
+  rejects a branch being checked out twice, worktree isolation entails branch
+  isolation.
+- Treat the shared work tree (repository root) as an integration, review, and
+  director-reading surface; do not introduce uncommitted implementation hunks.
+- After creating a worktree, each person runs `pnpm install` / `mix deps.get`
+  because dependencies are not copied. Remove an unneeded worktree with
+  `git worktree remove`.
+- Why: file-level staging while multiple writers' uncommitted hunks coexisted in
+  the same file pulled another person's hunks into commits twice (2026-08-28,
+  issue #232 / #203 `App.svelte`).
 
-## レビュー往復の統治(round budget)
+## Dispatch side (director)
 
-reviewer と implementer が peer 同士で回すレビューに適用する。深さ自体は
-正しい場面では価値がある — ここで縛るのは深さの配分と往復の上限で、
-判定は**数えるだけでできるもの**に限る。
+- Do not impose a mechanism unavailable to a peer's engine as a completion
+  criterion. Claude Code custom skills and hook pipelines (such as
+  `/my-code-review-cycle`) are available only to peers with
+  `engine: claude-code`. Instead, enumerate concrete checks in the dispatch:
+  self-review of the diff, typecheck/tests for the affected scope, proof that a
+  bugfix is effective through a mutation or negative control, and external
+  review.
+- Read the current session's rate-limit utilization from `whoami`'s
+  `rate_limits` ([#244](https://github.com/sakuraiyuta/kaoiro/issues/244)).
+  Since `list_agents` excludes its caller, this is the only self-observation
+  surface. A peer's value can stand in only when a shared quota pool is
+  confirmed; matching engine names do not prove sharing. The source of truth
+  for interpreting fields (absent means unknown, a snapshot is from the last
+  turn, and a value is stale after `resets_at` passes) is the `list_agents` tool
+  description, and `whoami` follows the same rules.
+- When a delegation instruction includes your technical premise, explicitly
+  require the recipient to measure and decide, and to report its decision and
+  evidence. Giving only a declarative premise risks implementing it unchanged
+  even when it is wrong.
+- Name a delegation's deliverable as a **unit of result** (“N items merged with
+  the checker green”), and state the review-round budget explicitly. Exceeding
+  the budget produces a reporting obligation, not another round.
+- Observe the deliverable's progress, not the volume of activity. A rising
+  message count while the unit of result stands still is the best available
+  signal of a review quagmire.
 
-| トリガ | 閾値 | 発火時の義務 |
+## Round budget for review cycles
+
+Applies to reviews run between peers, a reviewer and an implementer. Depth
+itself has value where it belongs—what is bounded here is how that depth is
+allocated and how many round trips it may take, and every trigger is judged by
+**something you can simply count**.
+
+| Trigger | Threshold | Obligation on firing |
 |---|---|---|
-| 同一 deliverable への must-fix round 通算 | 3 round 超 | reviewer / implementer 双方が director へ報告して停止 |
-| 指摘が「タスク中に作った道具の障害モード」のみ | 2 round 連続 | 停止し、道具の存否を director が裁定 |
-| review round 中の対象 / verifier の変更 | 0(freeze) | 変更は round 境界でのみ。破った round の evidence は無効 |
-| 同一 deliverable に関する会話のラリー通算 | 20 往復 | 会話を閉じ、要約を添えて director へ判断を上げる |
+| Cumulative must-fix rounds on one deliverable | more than 3 rounds | Both reviewer and implementer stop and report to the director |
+| Findings confined to failure modes of a tool built during the task | 2 consecutive rounds | Stop; the director rules on whether the tool should exist |
+| Change of the target or the verifier during a review round | 0 (freeze) | Change only at a round boundary. Evidence from a round that broke the freeze is void |
+| Cumulative conversation round trips on one deliverable | 20 round trips | Close the conversation and escalate the judgment to the director with a summary |
 
-- カウンタの母集団は deliverable であり、**当事者が再設定できない**。
-  artifact の差し替え・verifier の移動・conversation の張り直しでは 0 に
-  戻らない(round 境界での差し替えは正当な変更だが、カウントは引き継ぐ)。
-  通算は director が保持し、dispatch と round 開始時に現在値を明示する。
-  **review round の dispatch は台帳保持者 (director) 自身が行う** — 台帳と
-  dispatch が別の手に分かれると、通算の正確性が会話の突合に依存する。
-  artifact 単位で数えると、verifier が 3 回移動した M18 の泥沼でも通算は
-  1 のままだった — 母集団が動くカウンタは弁にならない。
-- 閾値到達は設計上の弁であって、誰の失点でもない。escalation は敗北では
-  なく義務である。permit・hash 束縛のような round 内の精緻な手続きが
-  整っていても、報告義務の代わりにならない — 手続きが整うほど、ループの
-  中に留まることが正当に見えるからだ。
-- 検証深度の配分(使い捨て道具を adversarial review の対象にしない)は
-  各エージェントのグローバル規則が正本(Claude: rules/verification.md
-  「Depth is set by blast radius」、Codex: AGENTS.md 検証節)。ここでは
-  重複させない。
+- The counter's population is the deliverable, and **the parties cannot reset
+  it**. Swapping the artifact, moving the verifier, or reopening the
+  conversation does not return it to 0 (a swap at a round boundary is a
+  legitimate change, but the count carries over). The director holds the
+  running total and states its current value at dispatch and at the start of
+  each round. **The ledger holder (the director) dispatches the review rounds
+  personally**—once the ledger and the dispatch sit in different hands, the
+  accuracy of the total depends on reconciling conversations. Counted per
+  artifact, the M18 quagmire, where the verifier moved three times, still read
+  as 1: a counter whose population moves is not a valve.
+- Reaching a threshold is a valve by design, not anyone's fault. Escalation is
+  an obligation, not a defeat. Precise in-round procedure such as permits and
+  hash binding is no substitute for the reporting obligation—the better the
+  procedure looks, the more legitimate staying inside the loop appears.
+- Allocation of verification depth (not subjecting a throwaway tool to
+  adversarial review) is governed by each agent's global rules (Claude:
+  rules/verification.md “Depth is set by blast radius”; Codex: the verification
+  section of AGENTS.md). It is not duplicated here.
 
-Why: 2026-08-24、issue #91 の翻訳 wave で、使い捨て merge script への
-must-fix が M18 まで達した(数十往復・deliverable 前進ゼロ・escalation
-なし)。各 round は局所的には規律に忠実で、外から観測できた異常は round
-数と成果の停滞だけだった。
+Why: during the translation wave for issue #91 on 2026-08-24, must-fix rounds
+on a throwaway merge script reached M18 (dozens of round trips, zero
+deliverable progress, no escalation). Each round was locally faithful to the
+discipline, and the only anomalies observable from outside were the round count
+and the stalled result.

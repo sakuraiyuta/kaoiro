@@ -1,172 +1,178 @@
 ---
-title: レスポンシブ時の到達経路インベントリ
-description: 3 サイズ対等の要件「全機能・全情報へ到達可能」を検証可能にするため、UI 要素ごとの表示条件・サイズ別到達経路・スクロール所有者を網羅する。
+title: Responsive reachability-path inventory
+description: Exhaustive display conditions, size-specific reachability paths, and scroll owners for each UI element, making the equal-three-sizes requirement that all functionality and information be reachable verifiable.
 status: provisional
 related: [responsive-layout, design]
 ---
 
-# レスポンシブ時の到達経路インベントリ
+# Responsive reachability-path inventory
 
 ## Purpose
 
-[responsive-layout.md](responsive-layout.md) は「全サイズから全機能・全情報へ
-到達可能でなければならない」と定めるが、総論のままでは検証できない。本仕様は
-UI 要素を列挙し、サイズごとの到達経路を確定させることでこの要件を検証可能に
-する。[phase-31](../plans/phase-31-responsive-ui.md) の受け入れ基準は本表を
-参照する。
+[responsive-layout.md](responsive-layout.md) requires all functionality and
+information to be reachable from every size, but that principle is not
+verifiable on its own. This specification makes it verifiable by enumerating UI
+elements and settling their reachability paths per size. The acceptance criteria
+of [phase-31](../plans/phase-31-responsive-ui.md) refer to this table.
 
-用語:
+Terminology:
 
-- **表示条件** — その要素が DOM に存在する条件 (role / view / state /
-  capability)。条件を満たさないときは存在しないのが正しく、欠落ではない
-- **常時** — 表示条件が成立している間、操作なしで視界にあること
-- **到達経路** — その要素を視界に出すまでにユーザが行う操作
+- **Display condition** — conditions under which the element is in the DOM
+  (role / view / state / capability). Its absence when they are not met is
+  correct, not a missing element.
+- **Always** — visible without an operation while its display condition holds.
+- **Reachability path** — user operations required to bring the element into view.
 
 ## Definition
 
 ### app chrome
 
-| 要素 | 表示条件 | desktop / tablet | smartphone |
+| Element | Display condition | desktop / tablet | smartphone |
 |---|---|---|---|
-| タイトル (`h1`) | 常 (ログイン画面にも在る) | 常時 | 常時 (ロゴのみに縮退可) |
-| エージェント一覧チップ (`nav.agent-strip`) | 認証済み かつ detail 表示中 かつ 2 体以上 | 常時 | 常時 (横スクロール) |
-| 接続状態 (`p.conn`) | 認証済み | 常時 | 常時 (ドットのみに縮退可) |
-| 設定 (`button.settings-toggle`) | 認証済み | 常時 | 常時 |
-| 起動 (`button.launch`) | 認証済み かつ operator かつ 接続中 | 常時 | 常時 |
-| ログアウト (`button.logout`) | 認証済み | 常時 | SettingsDrawer 内へ移してよい |
-| spawn notice (`p.spawn-notice`) | 認証済み かつ notice 発生時 | 常時 | 常時 |
-| ログイン画面 | 未認証時 | 常時 | 常時 (縦 1 カラム) |
+| Title (`h1`) | Always (also on the login screen) | Always | Always (may reduce to logo only) |
+| Agent-list chips (`nav.agent-strip`) | Authenticated, in detail view, and two or more agents | Always | Always (horizontal scroll) |
+| Connection state (`p.conn`) | Authenticated | Always | Always (may reduce to a dot only) |
+| Settings (`button.settings-toggle`) | Authenticated | Always | Always |
+| Launch (`button.launch`) | Authenticated, operator, and connected | Always | Always |
+| Logout (`button.logout`) | Authenticated | Always | May move into SettingsDrawer |
+| Spawn notice (`p.spawn-notice`) | Authenticated and a notice exists | Always | Always |
+| Login screen | Unauthenticated | Always | Always (one vertical column) |
 
 ### lobby
 
-grid の列制御は **role と timeline の配置に従属する**。列を固定するのは
-timeline を横並びに置くときだけで、それ以外は `auto-fill` が正となる。
+Grid-column control **depends on role and timeline placement**. Columns are
+fixed only when the timeline is side by side; otherwise `auto-fill` is correct.
 
-| grid | 表示条件 | 列 |
+| Grid | Display condition | Columns |
 |---|---|---|
-| live grid (timeline 横並び) | operator かつ desktop / tablet 幅 | desktop 3 列 / tablet 2 列 |
-| live grid (timeline シート) | operator かつ smartphone 幅 | `auto-fill` |
-| live grid | viewer | 全幅で `auto-fill` (timeline を持たない) |
-| offline grid (`details.offline` 内) | operator かつ offline 在り | 常に `auto-fill` |
+| live grid (side-by-side timeline) | operator at desktop / tablet width | three desktop columns / two tablet columns |
+| live grid (timeline sheet) | operator at smartphone width | `auto-fill` |
+| live grid | viewer | full-width `auto-fill` (no timeline) |
+| offline grid (within `details.offline`) | operator and offline agents exist | always `auto-fill` |
 
-| 要素 | 表示条件 | desktop / tablet | smartphone |
+| Element | Display condition | desktop / tablet | smartphone |
 |---|---|---|---|
-| カード → detail を開く | directory-only でない (directory-only は `disabled`) | カード本体 | 同左 |
-| カードの state 表示 | 常 | 常時 | 常時 |
-| カードの attention 表示 | state / pending 依存 | 常時 | 常時 |
-| カードの stats 表示 | stats に使える `ext` 値が 1 つ以上 かつ `settings.agentCardStatsEnabled` | 常時 | 常時 |
-| カードの stop / restore | agent state + connection | カード上 | 同左 |
-| カードの interrupt / delete | agent state + connection | カード上 | 同左 |
-| response timeline | operator | 常時 (右ペイン) | handle → シート |
-| timeline の既読操作 | operator かつ既読可能エントリ在り | 常時 | シート内 |
-| offline 一覧 (`details.offline`) | operator かつ offline 在り | 折りたたみ展開 | 同左 |
-| 一括復元 / 一括削除 | 同上 | offline 展開後 | 同左 |
+| Card → open detail | Not directory-only (directory-only is `disabled`) | Card itself | Same |
+| Card state display | Always | Always | Always |
+| Card attention display | Depends on state / pending | Always | Always |
+| Card stats display | At least one usable `ext` value for stats and `settings.agentCardStatsEnabled` | Always | Always |
+| Card stop / restore | Agent state + connection | On card | Same |
+| Card interrupt / delete | Agent state + connection | On card | Same |
+| Response timeline | Operator | Always (right pane) | handle → sheet |
+| Timeline read operation | Operator and a readable entry exists | Always | Within sheet |
+| Offline list (`details.offline`) | Operator and offline agents exist | Expand disclosure | Same |
+| Bulk restore / bulk delete | Same as above | After expanding offline | Same |
 
 ### AgentDetail
 
-| 要素 | 表示条件 | desktop | tablet | smartphone |
+| Element | Display condition | desktop | tablet | smartphone |
 |---|---|---|---|---|
-| グリッドへ戻る (`button.back`) | 常 | 常時 | 常時 | 常時 |
-| 盲点インジケータ (`button.blindspot`) | 他エージェントに要対応在り | 常時 | 常時 | 常時 (下記) |
-| 前後エージェント切替 | 2 体以上 | 常時 | 常時 | 常時 |
-| status (モデル / effort / permission mode) | 常 | 常時 (左サイドバー) | handle → シート | handle → シート |
-| context / rate limit メーター | capability 有り | 常時 (左サイドバー) | シート内 | シート内 |
-| resume (セッション再開) | 接続中 | 常時 (左サイドバー) | シート内 | シート内 |
-| stop / restore | 接続中 + agent state により排他 | 常時 (左サイドバー) | シート内 | シート内 |
-| clear history | 接続中 | 常時 (左サイドバー) | シート内 | シート内 |
-| resume セッション候補 (`ul.resume-menu`) | resume 操作時 | サイドバー内 | シート内 | シート内 |
-| 会話ログ | 常 | 常時 | 常時 | 常時 |
-| ログ内の折りたたみ展開 / load earlier / retry | 該当エントリ在り | ログ内 | 同左 | 同左 |
-| interrupt / delete | 接続中 + agent state により排他 | ログと composer の間 | 同左 | 同左 |
-| composer | 常 | 常時 (ボトム固定) | 常時 | 常時 |
-| 添付 / slash menu | composer から | composer 上 | 同左 | 同左 |
-| permission-dock / question-dock | pending 時 | ログと composer の間 | 同左 | 同左 |
-| Tasklist float | [#178](https://github.com/sakuraiyuta/kaoiro/issues/178) 実装後 | ログ右上 | 同左 | 同左 |
+| Back to grid (`button.back`) | Always | Always | Always | Always |
+| Blind-spot indicator (`button.blindspot`) | Another agent needs attention | Always | Always | Always (below) |
+| Previous/next agent switch | Two or more agents | Always | Always | Always |
+| Status (model / effort / permission mode) | Always | Always (left sidebar) | handle → sheet | handle → sheet |
+| Context / rate-limit meter | Capability exists | Always (left sidebar) | Within sheet | Within sheet |
+| Resume (session resume) | Connected | Always (left sidebar) | Within sheet | Within sheet |
+| Stop / restore | Connected + mutually exclusive by agent state | Always (left sidebar) | Within sheet | Within sheet |
+| Clear history | Connected | Always (left sidebar) | Within sheet | Within sheet |
+| Resume-session candidates (`ul.resume-menu`) | During resume operation | Within sidebar | Within sheet | Within sheet |
+| Conversation log | Always | Always | Always | Always |
+| In-log disclosure / load earlier / retry | Relevant entry exists | Within log | Same | Same |
+| Interrupt / delete | Connected + mutually exclusive by agent state | Between log and composer | Same | Same |
+| Composer | Always | Always (fixed to bottom) | Always | Always |
+| Attachment / slash menu | From composer | On composer | Same | Same |
+| Permission dock / question dock | Pending | Between log and composer | Same | Same |
+| Tasklist float | After [#178](https://github.com/sakuraiyuta/kaoiro/issues/178) is implemented | Upper right of log | Same | Same |
 
-`interrupt` / `delete` と 2 種の dock は、実装上 `.main` 内でログと composer の
-間に置かれた **in-flow 要素**であり、浮遊層ではない。シートはこれらより前面に
-来るため、シート展開中は覆われる。
+`interrupt` / `delete` and the two docks are **in-flow elements** placed between
+the log and composer within `.main`, not floating layers. A sheet is in front of
+them, so they are covered while it is open.
 
-Tasklist float は #178 が未実装のため、本表の行は同 issue 実装後に適用される
-条件付きの target であり、phase-31 の検収対象ではない。
+Because the Tasklist float remains unimplemented in #178, its row is a
+conditional target that applies after that issue is implemented and is not part
+of phase-31 acceptance.
 
-### 盲点インジケータの扱い
+### Handling the blind-spot indicator
 
-[ADR-0012](../adr/0012-response-display-and-dashboard-scope.md) F8 は、他
-エージェントの要対応を**常時表示**し、**クリックで一覧へ戻す**ところまでを
-決定している。シート展開中は `button.blindspot` がシートに覆われるため、
-**シートの handle 上に attention バッジを置き、それ自体を「一覧へ戻す」操作
-とする**。件数の表示とクリック先は `button.blindspot` と同一にする。
+[ADR-0012](../adr/0012-response-display-and-dashboard-scope.md) F8 settles that
+other agents needing attention are **always displayed** and that a **click
+returns to the list**. Because an open sheet covers `button.blindspot`, **place
+an attention badge on the sheet handle and make the badge itself the “return to
+list” operation**. Its displayed count and click destination match
+`button.blindspot`.
 
-### overlay の層
+### Overlay layers
 
-| 要素 | 表示条件 | 層 |
+| Element | Display condition | Layer |
 |---|---|---|
-| LaunchDialog / SettingsDrawer (backdrop 含む) | 起動時 | シートより前面 |
-| シートの handle | 当該領域がシート化されるサイズでは常時 (閉時も) | dock 類より前面 |
-| シートの panel / backdrop | 上記かつ展開時 | handle と同じ層 |
-| handle 上の attention バッジ | シート展開中 かつ 他エージェントに要対応在り | handle 内 |
-| handle 上の pending lamp | シート展開中 かつ 当該ビューに pending permission / question 在り (detail は当該 agent、lobby はいずれかの agent) | handle 内 (開閉トグル内の非対話表示) |
-| slash menu / switch menu (composer 由来) | 起動時 | ページ側 (シートより背面) |
-| resume menu (status 由来) | 起動時 | シート content 上 |
+| LaunchDialog / SettingsDrawer (including backdrop) | When open | In front of sheet |
+| Sheet handle | Always at sizes where its region is a sheet (also when closed) | In front of docks |
+| Sheet panel / backdrop | Above condition and open | Same layer as handle |
+| Attention badge on handle | Sheet open and another agent needs attention | Within handle |
+| Pending lamp on handle | Sheet open and the view has a pending permission / question (the relevant agent in detail; any agent in lobby) | Within handle (non-interactive display inside open/close toggle) |
+| Slash menu / switch menu (from composer) | When open | Page layer (behind sheet) |
+| Resume menu (from status) | When open | Above sheet content |
 
-handle は閉じている間も表示され続ける (シートを開く導線であるため)。
-attention バッジは handle の内側に置くが、**handle 自体を `button` にして
-バッジを入れ子にしてはならない** — interactive 要素の入れ子になる。handle は
-コンテナとし、開閉トグルとバッジを兄弟の `button` として並べる。
+The handle remains visible while closed because it opens the sheet. Put the
+attention badge inside the handle, but **do not make the handle itself a
+`button` and nest the badge inside it**: that would nest interactive elements.
+Use the handle as a container, with the open/close toggle and badge as sibling
+`button`s.
 
-global な overlay は LaunchDialog と SettingsDrawer のみで、その backdrop も
-シート全体より前面に置く。アンカー相対のメニューは、それを起動した要素と同じ
-層に属する。
+The only global overlays are LaunchDialog and SettingsDrawer; their backdrops
+also sit in front of the whole sheet. An anchor-relative menu belongs to the
+same layer as the element that opened it.
 
-### スクロール所有者
+### Scroll owners
 
-| 画面 | desktop | tablet | smartphone |
+| Screen | desktop | tablet | smartphone |
 |---|---|---|---|
-| lobby | grid と timeline が各自 | 同左 | grid のみ (timeline はシート内) |
-| AgentDetail | status と log が各自 | log のみ (status はシート内) | 同 tablet |
-| シート展開中 | — | シート内のみ (背景は固定) | シート内のみ (背景は固定) |
+| Lobby | Grid and timeline independently | Same | Grid only (timeline is within sheet) |
+| AgentDetail | Status and log independently | Log only (status is within sheet) | Same as tablet |
+| Sheet open | — | Sheet only (background fixed) | Sheet only (background fixed) |
 
-禁止するのは**ページの主縦スクロール領域が入れ子になること**であり、
-tool 出力の `pre`、アンカーメニュー、`question-dock` 内スクロールのような
-高さ上限を持つ局所スクロールは対象外。
+What is prohibited is **nesting the page's principal vertical scrolling areas**.
+Local scrolling with a height limit, such as tool-output `pre`, anchor menus,
+and scrolling within `question-dock`, is not covered.
 
-シート自体は、wrapper と content のどちらか一方だけを縦スクロール所有者と
-する。両方が持つと即座に二重になる。
+For a sheet itself, only either wrapper or content is the vertical scroll owner.
+If both own it, the scroll immediately duplicates.
 
-`.status` をシートへ入れる場合の採用形は **`.status` 自身を所有者**とし、
-identity header (`.head`) ごとスクロールさせる。desktop の分割
-(pinned `.head` + `.status-scroll` 所有) をシートへ持ち込んではならない —
-panel 高が浅い landscape 帯 (例 844x390 で panel 234px) では pinned head
-が所有者の viewport を食い潰し、実効スクロール高が 0 になって status の
-全操作へ到達不能になる (phase-31 外部レビュー実測)。
+When `.status` enters a sheet, the adopted form makes **`.status` itself the
+owner** and scrolls it together with the identity header (`.head`). Do not carry
+the desktop split (pinned `.head` plus `.status-scroll` ownership) into a sheet:
+in a shallow landscape panel (for example, a 234px panel at 844x390), the pinned
+head consumes the owner's viewport, leaving effective scroll height 0 and making
+all status operations unreachable (measured in phase-31 external review).
 
-### 常時固定される操作
+### Operations fixed at all times
 
-表示条件が成立している間、スクロール位置によらず到達できなければならない。
+While their display condition holds, these must remain reachable regardless of
+scroll position.
 
-- header の 接続状態 / 設定 / 起動
-- AgentDetail の グリッドへ戻る / 盲点インジケータ (シート展開中は handle 上)
-- composer の入力欄と送信 (ソフトウェアキーボード表示中を含む)
-- pending な permission / question への応答導線
+- Header connection state / settings / launch.
+- AgentDetail back-to-grid / blind-spot indicator (on the handle while the sheet
+  is open).
+- Composer input and send (including while the software keyboard is visible).
+- Paths to respond to pending permissions / questions.
 
 ## Constraints
 
-- 本表の全要素は、表示条件が成立していれば、どのサイズからも到達可能で
-  なければならない (MUST)
-- 「常時」と記した要素は、表示条件成立中は操作なしで視界になければ
-  ならない (MUST)
-- ページの主縦スクロール領域を入れ子にしてはならない (MUST NOT)。高さ上限を
-  持つ局所スクロールは対象外
-- シートは wrapper と content のどちらか一方のみを縦スクロール所有者と
-  しなければならない (MUST)
-- ソフトウェアキーボード表示中も composer と送信操作が隠れてはならない
-  (MUST NOT)
-- 新しい UI 要素を追加する際は本表へ行を足さなければならない (MUST)
+- **MUST**: Every element in this table is reachable from every size when its
+  display condition holds.
+- **MUST**: Elements marked “Always” are visible with no operation while their
+  display conditions hold.
+- **MUST NOT**: Nest the page's principal vertical scrolling areas. Local
+  height-limited scrolls are excluded.
+- **MUST**: A sheet has only either wrapper or content as its vertical scroll
+  owner.
+- **MUST NOT**: Hide the composer or send operation while the software keyboard
+  is visible.
+- **MUST**: Add a row to this table whenever adding a new UI element.
 
 ## Open Questions
 
-なし。
+None.
 
 ## See Also
 
@@ -174,4 +180,4 @@ panel 高が浅い landscape 帯 (例 844x390 で panel 234px) では pinned hea
   [design](design.md)
 - ADRs: [0052-responsive-three-tier-layout](../adr/0052-responsive-three-tier-layout.md),
   [0012-response-display-and-dashboard-scope](../adr/0012-response-display-and-dashboard-scope.md)
-- 実装計画: [phase-31-responsive-ui](../plans/phase-31-responsive-ui.md)
+- Implementation plan: [phase-31-responsive-ui](../plans/phase-31-responsive-ui.md)

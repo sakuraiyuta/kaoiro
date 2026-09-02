@@ -1,47 +1,47 @@
 ---
-title: Phase 6 — 感情フィルタ(味付け)
-description: 正規化イベントに感情 property を付与するフィルタを追加し、表情に情緒を重ねる。2026-08-02 のマスター判断で当分の間塩漬け(未着手のまま優先度を下げた状態)。
+title: Phase 6 — Emotion Filter (Flavoring)
+description: Add a filter that attaches an emotion property to normalized events and layers emotion onto expressions. Shelved for the time being by the master's decision on 2026-08-02 (priority lowered while untouched).
 status: planned
 phase: 6
 depends_on: [phase-3-server-multiagent]
 last_updated: 2026-08-02
 ---
 
-# Phase 6 — 感情フィルタ(味付け)
+# Phase 6 — Emotion Filter (Flavoring)
 
 ## Goal
 
-共通イベントに感情 property を付与するフィルタを追加し、状態ベースの表情に
-情緒のニュアンスを重ねる(ゴール B の味付け)。
+Add a filter that attaches an emotion property to common events and layers emotional
+nuance onto state-based expressions (the flavoring for Goal B).
 
 ## Acceptance Criteria
 
-- [ ] 感情フィルタが `ext.emotion` を付与する
-- [ ] クライアントが状態ベース表情に感情の味付けを重ねる
-- [ ] 感情フィルタが落ちても Phase 3 の実用性が保たれる
+- [ ] The emotion filter attaches `ext.emotion`
+- [ ] The client layers emotion flavoring onto state-based expressions
+- [ ] Phase 3 remains usable even if the emotion filter fails
 
 ## Tasks
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 6-1 | 感情推論フィルタ(ローカル、非同期) | ⏳ | ノンブロッキング |
-| 6-2 | クライアントの表情への味付け反映 | ⏳ | |
-| 6-3 | 「機嫌」(持続レイヤ)の spec 化 + 実装 | ⏳ | 採用は決定済み(2026-06-11、issue #5)。機嫌 = 感情イベント由来のゆっくり変化・永続する状態。変化速度・減衰・表情合成の詳細は着手時の方針相談で確定 |
+| 6-1 | Emotion-inference filter (local, asynchronous) | ⏳ | Non-blocking |
+| 6-2 | Apply flavoring to client expressions | ⏳ | |
+| 6-3 | Specify + implement “mood” (persistent layer) | ⏳ | Adoption decided (2026-06-11, issue #5). Mood = a slowly changing, persistent state derived from emotion events. Details of change speed, decay, and expression composition will be decided in the approach discussion when work begins |
 
 Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blocked.
 
 ## Followups (in-phase but unfinished)
 
-なし。
+None.
 
 ## Open Questions Blocking This Phase
 
-なし。
+None.
 
-## 進捗ログ
+## Progress Log
 
-- 2026-08-02: マスター判断により当分の間塩漬け (status: shelved)。
-  再開時期は未定、着手時に本 plan を再活性化する
+- 2026-08-02: Shelved for the time being by the master's decision (status: shelved).
+  The restart date is undecided; reactivate this plan when work begins.
 
 ## See Also
 

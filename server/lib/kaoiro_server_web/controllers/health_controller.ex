@@ -7,6 +7,8 @@ defmodule KaoiroServerWeb.HealthController do
     stamp. Every client/server/runner message carries this same literal
     "0" (see e.g. `KaoiroServerWeb.AgentsChannel`'s `warn_on_version_mismatch/3`);
     it changes only when the WIRE SHAPE changes.
+  - `build_version` / `build_channel` — the project CalVer and whether the
+    artifact is a tagged main release or a development build.
   - `build_revision` / `build_dirty` — the full 40-char git SHA the running
     image was built from ("unknown" when undeterminable), and whether that
     build had uncommitted changes. Changes on every commit, whether or not
@@ -43,30 +45,37 @@ defmodule KaoiroServerWeb.HealthController do
   @protocol_version "0"
 
   def status(conn, _params) do
-    {revision, dirty} = build_identity()
+    identity = build_identity()
 
     json(conn, %{
       status: "ok",
-      build_revision: revision,
-      build_dirty: dirty,
+      build_version: identity.version,
+      build_channel: identity.channel,
+      build_revision: identity.revision,
+      build_dirty: identity.dirty,
       protocol_version: @protocol_version
     })
   end
 
   # MF-3 (value domain): any read failure OR a malformed shape (missing
   # RELEASE_ROOT — bare `mix phx.server` dev, unreadable file, broken JSON,
-  # revision outside BuildIdentity's domain, dirty not a plain boolean)
-  # degrades to {"unknown", false} — the same fail-soft posture runner's
+  # any field outside BuildIdentity's domain)
+  # degrades to unknown values — the same fail-soft posture runner's
   # own loadBuildInfo takes on a malformed dist/build-info.json.
   defp build_identity do
     with root when is_binary(root) <- System.get_env("RELEASE_ROOT"),
          {:ok, raw} <- File.read(Path.join(root, "build-info.json")),
-         {:ok, %{"revision" => revision, "dirty" => dirty}} <- Jason.decode(raw),
-         true <- BuildIdentity.valid_revision?(revision),
-         true <- is_boolean(dirty) do
-      {revision, dirty}
+         {:ok,
+          %{
+            "version" => version,
+            "channel" => channel,
+            "revision" => revision,
+            "dirty" => dirty
+          }} <- Jason.decode(raw),
+         true <- BuildIdentity.valid_identity?(revision, dirty, version, channel) do
+      %{version: version, channel: channel, revision: revision, dirty: dirty}
     else
-      _ -> {"unknown", false}
+      _ -> %{version: "unknown", channel: "dev", revision: "unknown", dirty: false}
     end
   end
 end

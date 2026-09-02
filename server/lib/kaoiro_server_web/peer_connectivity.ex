@@ -92,7 +92,7 @@ defmodule KaoiroServerWeb.PeerConnectivity do
   def delete(agent_id) do
     case PlannedDisconnects.cancel(agent_id) do
       {:cancelled, intent} ->
-        deliver_disconnected(agent_id, now(), intent.targets)
+        deliver_disconnected(agent_id, now(), intent.targets, true)
         :disconnected
 
       :noop ->
@@ -158,19 +158,35 @@ defmodule KaoiroServerWeb.PeerConnectivity do
     :ok
   end
 
-  defp deliver_disconnected(agent_id, ts, required_targets \\ []) do
+  defp deliver_disconnected(agent_id, ts, required_targets \\ [], fill_remaining \\ false)
+
+  defp deliver_disconnected(agent_id, ts, required_targets, fill_remaining) do
     message = "peer #{agent_id} is unreachable: wrapper disconnected"
 
     {targets, unclaimed} =
-      if required_targets == [] do
-        # Preserve the ordinary unexpected-disconnect path exactly.
-        ConversationStates.claim_unreachable_targets(
-          agent_id,
-          PlannedDisconnects.max_unreachable_notices()
-        )
-      else
-        :ok = ConversationStates.mark_terminal_targets(agent_id, required_targets)
-        {required_targets, 0}
+      cond do
+        required_targets == [] ->
+          # Preserve the ordinary unexpected-disconnect path exactly.
+          ConversationStates.claim_unreachable_targets(
+            agent_id,
+            PlannedDisconnects.max_unreachable_notices()
+          )
+
+        fill_remaining ->
+          # Purge removes the agent before a later terminal transition can reclaim ordinary conversations.
+          :ok = ConversationStates.mark_terminal_targets(agent_id, required_targets)
+
+          {ordinary_targets, unclaimed} =
+            ConversationStates.claim_unreachable_targets(
+              agent_id,
+              PlannedDisconnects.max_unreachable_notices() - length(required_targets)
+            )
+
+          {required_targets ++ ordinary_targets, unclaimed}
+
+        true ->
+          :ok = ConversationStates.mark_terminal_targets(agent_id, required_targets)
+          {required_targets, 0}
       end
 
     for {cid, peers} <- targets, peer <- peers do

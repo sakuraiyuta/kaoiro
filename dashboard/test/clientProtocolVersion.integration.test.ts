@@ -145,6 +145,8 @@ function injectServerPush(ws: AckingWebSocket, event: string, payload: unknown):
 
 const SERVER_EVENT_PAYLOADS: Record<keyof typeof CLIENT_EVENT_VERSION_POLICY, Record<string, unknown>> = {
   snapshot: { agents: {} },
+  task_snapshot: { tasks: {} },
+  delivery_snapshot: { deliveries: {} },
   history: { agents: {} },
   hosts: { hosts: {} },
   directory: { entries: {} },
@@ -164,6 +166,16 @@ const SERVER_EVENT_PAYLOADS: Record<keyof typeof CLIENT_EVENT_VERSION_POLICY, Re
   spawn_result: { host_id: "h", agent_id: "a", ok: true },
   runner_sessions: { host_id: "h", cwd: "/workspace", sessions: [] },
   catalog_result: { host_id: "h", engine: "codex", request_id: "r", ok: true },
+  wrapper_build_info: {
+    builds: {
+      a: {
+        build_version: "2026.9.0",
+        build_channel: "dev",
+        build_revision: "0123456789012345678901234567890123456789",
+        build_dirty: false,
+      },
+    },
+  },
 };
 
 const AGENT_ID = "hostA.abc123";
@@ -265,6 +277,26 @@ const PUSH_CASES: ReadonlyArray<{
     method: "getLaunchDefaults",
     event: "launch_defaults",
     fire: (c) => c.getLaunchDefaults(),
+  },
+  {
+    method: "listConversations",
+    event: "list_conversations",
+    fire: (c) => c.listConversations(),
+  },
+  {
+    method: "closeConversation",
+    event: "close_conversation",
+    fire: (c) => void c.closeConversation("cid-1").catch(() => {}),
+  },
+  {
+    method: "listUsers",
+    event: "list_users",
+    fire: (c) => c.listUsers(),
+  },
+  {
+    method: "renameUser",
+    event: "rename_user",
+    fire: (c) => c.renameUser("u-1", "あお"),
   },
   {
     method: "enumerateSessions",
@@ -393,7 +425,7 @@ describe("server -> dashboard event bindings carry version checks (issue #270)",
   const events = (): Array<keyof typeof CLIENT_EVENT_VERSION_POLICY> =>
     Object.keys(CLIENT_EVENT_VERSION_POLICY).sort() as Array<keyof typeof CLIENT_EVENT_VERSION_POLICY>;
 
-  it("T3-1: policy の17種すべてで欠落をwarnし、受信を継続する", async () => {
+  it("T3-1: policy の20種すべてで欠落をwarnし、受信を継続する", async () => {
     const { ws } = await connectAndJoin();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
@@ -403,14 +435,14 @@ describe("server -> dashboard event bindings carry version checks (issue #270)",
       injectServerPush(ws, event, withoutVersion);
     }
 
-    expect(warn).toHaveBeenCalledTimes(17);
+    expect(warn).toHaveBeenCalledTimes(20);
     for (const event of events()) {
       expect(warn).toHaveBeenCalledWith(expect.stringContaining(`${event}: server declared protocol version (absent)`));
     }
     warn.mockRestore();
   });
 
-  it("T3-2: policy の17種すべてで一致versionは無警告", async () => {
+  it("T3-2: policy の20種すべてで一致versionは無警告", async () => {
     const { ws } = await connectAndJoin();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
@@ -422,7 +454,7 @@ describe("server -> dashboard event bindings carry version checks (issue #270)",
     warn.mockRestore();
   });
 
-  it("T3-3: policy の17種すべてで不一致versionをwarnし、受信を継続する", async () => {
+  it("T3-3: policy の20種すべてで不一致versionをwarnし、受信を継続する", async () => {
     const { ws } = await connectAndJoin();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
@@ -430,14 +462,14 @@ describe("server -> dashboard event bindings carry version checks (issue #270)",
       injectServerPush(ws, event, { ...SERVER_EVENT_PAYLOADS[event], version: "9" });
     }
 
-    expect(warn).toHaveBeenCalledTimes(17);
+    expect(warn).toHaveBeenCalledTimes(20);
     for (const event of events()) {
       expect(warn).toHaveBeenCalledWith(expect.stringContaining(`${event}: server declared protocol version "9"`));
     }
     warn.mockRestore();
   });
 
-  it("T3-4: policy の17種すべてを一回ずつだけ bind する", async () => {
+  it("T3-4: policy の20種すべてを一回ずつだけ bind する", async () => {
     const on = vi.spyOn(Channel.prototype, "on");
     const { conn } = await connectAndJoin();
     const registrations = on.mock.calls

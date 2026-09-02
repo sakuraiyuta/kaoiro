@@ -1,5 +1,5 @@
 ---
-title: ホスト常駐 runner — supervisor 専任・1 process=1 agent・TS/Node 単一バイナリ
+title: Host-resident runner — supervisor only, 1 process = 1 agent, TypeScript/Node single binary
 status: accepted
 date: 2026-06-24
 opened: 2026-06-23
@@ -9,7 +9,7 @@ related_specs: [architecture, protocol, threat-model, setup-wizards]
 related_adrs: [2, 14, 18, 24, 30, 31, 32, 39]
 ---
 
-# ADR-0023 — ホスト常駐 runner のアーキテクチャ
+# ADR-0023 — Architecture of the Host-Resident Runner
 
 ## Status
 
@@ -17,169 +17,113 @@ Accepted
 
 ## Context
 
-現行トポロジ([ADR-0002](0002-local-wrapper-websocket-topology.md))は「1 AI
-エージェント = 1 wrapper が各自で直接 kaoiro サーバへ WebSocket 接続」。これは
-wrapper をどこで動かしどう繋ぐか(トポロジ)だけを決めており、**ホスト単位の
-ライフサイクル管理は未定義**。結果として:
+The current topology ([ADR-0002](0002-local-wrapper-websocket-topology.md)) is “one AI agent = one wrapper, each connecting directly to the kaoiro server over WebSocket.” It decides only where and how to run and connect wrappers (the topology), and **does not define host-level lifecycle management**. As a result:
 
-- wrapper(エージェント)が落ちると UI は disconnected を見るだけで再起動手段がない。
-- 新しいエージェントを UI から追加起動する経路がない(人が手でホストに入る)。
-- ホスト単位で「今何体動いているか / 動かせるか」を取りまとめる主体が不在。
+- When a wrapper (agent) goes down, the UI only sees disconnected and has no way to restart it.
+- There is no path to start a new agent from the UI (a person must log into the host manually).
+- There is no entity that aggregates, at the host level, “how many are running now / can be run.”
 
-各ホストに常駐プログラム(runner)を 1 つ置き、サーバと wrapper の間でホスト内
-エージェント群のライフサイクルを担わせる。issue
-[#23](https://github.com/sakuraiyuta/kaoiro/issues/23) で複数案を比較し、
-本 ADR の決定(D1-D4)に収束した。
+Place one resident program (runner) on each host and make it responsible for the lifecycle of the host’s group of agents between the server and wrappers. The alternatives were compared in issue [#23](https://github.com/sakuraiyuta/kaoiro/issues/23), converging on the decisions (D1–D4) in this ADR.
 
-### 現行コードの実態(地盤、2026-06-23 調査)
+### Current code reality (baseline, investigated 2026-06-23)
 
-- spawn / stop / restart は**未実装**(server の client→wrapper 制御は instruction /
-  permission_decision / interrupt / clear_history / delete_agent のみ)。
-- サーバ側に「**ホスト**」**概念が無い**(管理は agent_id 単位、SessionPointers も
-  `agent_id => {session_id, cwd}` のみで host を捨象)。
-- **多重起動防止は不完全**(owner フェンシングは re-join 時のみ、別プロセスの同
-  agent_id 接続は last-write-wins で上書き → runner ローカルロックが本体、
-  [ADR-0014](0014-session-resume-and-restore.md) F4)。
-- **1 wrapper = 1 process が深く根付く**(AgentHost が完全プロセス私有状態)。
+- spawn / stop / restart are **not implemented** (server client→wrapper control currently includes only instruction / permission_decision / interrupt / clear_history / delete_agent).
+- The server has no concept of a **host** (management is per agent_id, and SessionPointers abstracts away the host with only `agent_id => {session_id, cwd}`).
+- **Prevention of duplicate starts is incomplete** (owner fencing applies only on re-join; a connection with the same agent_id from another process is overwritten by last-write-wins → a runner-local lock is the actual mechanism, [ADR-0014](0014-session-resume-and-restore.md) F4).
+- **1 wrapper = 1 process is deeply embedded** (AgentHost has fully process-private state).
 
 ## Decision
 
-### D1 — runner ↔ wrapper の関係 = supervisor 専任
+### D1 — Relationship between runner and wrapper = supervisor only
 
-runner は**プロセスのライフサイクル(spawn / stop / restart / 監視)と session
-列挙だけ**を担う管理層とする。wrapper は**従来どおり** `wrapper:<agent_id>` で
-サーバへ直結し、データ経路(共通イベント)は runner を通さない。すなわち
-**[ADR-0002](0002-local-wrapper-websocket-topology.md) の直結トポロジは維持**し、
-本 ADR はその上に監督層を**追補**する(supersede ではない)。
+The runner is a management layer responsible **only for process lifecycle (spawn / stop / restart / monitoring) and session enumeration**. Wrappers continue to connect directly to the server as before through `wrapper:<agent_id>`, and the data path (common events) does not pass through the runner. In other words, **the direct topology of [ADR-0002](0002-local-wrapper-websocket-topology.md) is maintained**, and this ADR adds a supervisory layer on top of it as an **addendum** (it does not supersede it).
 
-runner が接続を終端して wrapper 群を多重化(proxy)する案 D1=B は、runner が
-データ経路の単一障害点になり、agent 非依存原則・現行 transport と緊張するため
-採らない。
+Do not adopt option D1=B, in which the runner terminates connections and multiplexes wrappers (proxy): the runner would become a single point of failure for the data path, creating tension with the agent-independent principle and the current transport.
 
-### D2 — プロセスモデル = 1 wrapper = 1 agent = 1 process
+### D2 — Process model = 1 wrapper = 1 agent = 1 process
 
-runner は N 個の wrapper プロセスを spawn・監督する(CI runner 型)。1 体が
-クラッシュしても他は無事(隔離)。複数 agent を 1 プロセスに内包する案 D2=B は
-隔離を失い AgentHost の大改修を要するため採らない。
+The runner spawns and supervises N wrapper processes (like a CI runner). If one crashes, the others remain safe (isolation). Do not adopt option D2=B, which embeds multiple agents in one process: it loses isolation and requires a major AgentHost rewrite.
 
-### D3 — 実装言語 / 形態 = TypeScript / Node、単一バイナリ `kaoiro-runner`
+### D3 — Implementation language / form = TypeScript / Node, single binary `kaoiro-runner`
 
-D1=A / D2=A なら runner は「Node 子プロセスを監督するだけ」であり、wrapper と
-config / 制御 envelope の**型を共有**できる利得が大きい。配布は
-[ADR-0018](0018-runner-distribution.md) に従い OS 別単一バイナリ(bun / Node SEA
-等)。バイナリ名は `kaoiro-runner`。堅牢性最優先で Go/Rust も一案だが、三言語目の
-導入と型共有の喪失を避ける。
+With D1=A / D2=A, the runner “only supervises Node child processes,” so sharing **types for config / control envelopes** with the wrapper is a major benefit. Distribution follows [ADR-0018](0018-runner-distribution.md), as a single OS-specific binary (bun / Node SEA, etc.). The binary is named `kaoiro-runner`. Go/Rust is also an option when robustness is the top priority, but avoid introducing a third language and losing type sharing.
 
-### D4 — 命名 = runner
+### D4 — Name = runner
 
-仮称 `runner` を正式名称とする(doc 全体で既に浸透)。`supervisor` は OTP
-Supervisor と語が衝突するため不可。`kaoirod` は採らない。
+Adopt the provisional name `runner` as the formal name (already established throughout the documentation). `supervisor` cannot be used because it conflicts with OTP Supervisor. Do not use `kaoirod`.
 
-### runner の責務(仕様)
+### Runner responsibilities (specification)
 
-- サーバへ恒常接続し、自**ホストを登録**(生存・稼働可能ペルソナを束ねて提示)。
-- サーバ経由の operator 指示で、ホスト内エージェントの **spawn / stop / restart**
-  を実行。
-- ホスト内の wrapper / エージェント群を**取りまとめ**、状態をサーバへ束ねて見せる。
-- ホストや wrapper が落ちても runner は生き続け、**復旧の起点**になる
-  ([ADR-0014](0014-session-resume-and-restore.md) の生存単位)。
-- 復帰・召喚時に当該 cwd 配下の session JSONL を**列挙**し、resume 起動する。
-- **二重起動防止のローカルロック**(同一 session の同時 resume を物理阻止、
-  [ADR-0014](0014-session-resume-and-restore.md) F4)。
+- Maintain a persistent connection to the server and **register its own host** (present living and runnable personas as a group).
+- On operator instructions through the server, execute **spawn / stop / restart** for agents on the host.
+- **Aggregate** wrappers / agents on the host and present their state to the server as a group.
+- Keep running when the host or a wrapper goes down and become the **starting point for recovery** (the unit of survival in [ADR-0014](0014-session-resume-and-restore.md)).
+- When restoring / summoning, **enumerate** session JSONL files under the relevant cwd and start a resume.
+- Use a **local lock to prevent duplicate starts** (physically prevent concurrent resume of the same session, [ADR-0014](0014-session-resume-and-restore.md) F4).
 
-### 不変条件(脅威制約、[threat-model](../specs/threat-model.md))
+### Invariants (threat constraint, [threat-model](../specs/threat-model.md))
 
-UI からのリモート spawn は実質リモートコード実行(issue #22)。runner はその
-実行点となるため、spawn / 指示は **operator 限定**、resume 対象 session_id は
-当該 agent 束縛 cwd 配下に**実在検証**(T1/T2/T3、ADR-0014 F6)。
+Remote spawn from the UI is effectively remote code execution (issue #22). Since the runner is the execution point, spawn / instructions are **operator-only**, and the session_id targeted for resume must be **verified to exist under the cwd bound to that agent** (T1/T2/T3, ADR-0014 F6).
 
-### 制御メッセージスキーマ(#66、2026-06-24 追補)
+### Control-message schema (#66, 2026-06-24 addendum)
 
-[#66](https://github.com/sakuraiyuta/kaoiro/issues/66) で runner ↔ server
-制御メッセージを確定(schema 本体は [protocol](../specs/protocol.md)「runner 制御
-メッセージ」、本 ADR は決定の記録)。
+The runner ↔ server control messages were fixed in [#66](https://github.com/sakuraiyuta/kaoiro/issues/66) (the schema itself is in [protocol](../specs/protocol.md), “runner control messages”; this ADR records the decision).
 
-- **トピック**: 専用 `runner:<host_id>`(データ経路 `wrapper:<agent_id>` と別系統)。
-  既存 `wrapper:` 系への相乗りは role gate / `agents:lobby` 購読不変条件(#27)を
-  複雑化するため却下。
-- **形式**: 既存制御と同じ **Channels イベント方式**。envelope `type` 追加は観測
-  データ用の枠を制御へ流用することになり却下。
-- **認証**: ホスト別トークン(env `host_id:token`、
-  [ADR-0011](0011-phase3-reliability-and-auth.md) の per-entity トークン主義を拡張)。
-  host_id は設定固定。共有トークン 1 本は漏洩時に全ホスト交換が要るため却下
-  (ADR-0011 と同じ判断)。
-- **version**: 新メッセージ種別の追加は前方互換のため `"0"` 据え置き
-  ([ADR-0015](0015-protocol-version-stamping.md))。
-- **二重起動**: server owner フェンシング + runner ローカルロックの二段
-  ([ADR-0014](0014-session-resume-and-restore.md) F4)。spawn 競合は
-  `spawn_result.reason = already_running` で返す。
+- **Topic**: dedicated `runner:<host_id>` (separate from the data path `wrapper:<agent_id>`). Do not piggyback on the existing `wrapper:` family, because that would complicate the role gate / `agents:lobby` subscription invariant (#27).
+- **Format**: the same **Channels event scheme** as existing control. Do not repurpose the envelope `type` addition, which is for observed data, as control.
+- **Authentication**: a per-host token (env `host_id:token`, extending the per-entity token principle of [ADR-0011](0011-phase3-reliability-and-auth.md)). host_id is fixed in configuration. Reject one shared token because a leak would require replacing it on every host (the same judgement as ADR-0011).
+- **version**: keep `"0"` for forward compatibility when adding the new message type ([ADR-0015](0015-protocol-version-stamping.md)).
+- **Duplicate starts**: two stages, server owner fencing + runner-local lock ([ADR-0014](0014-session-resume-and-restore.md) F4). Return a spawn conflict as `spawn_result.reason = already_running`.
 
-### TS パッケージ・トポロジ(#68 着手前、2026-06-24 追補)
+### TS package topology (#68, before work started, 2026-06-24 addendum)
 
-D3 の「wrapper と型を共有」を、**複数 wrapper を前提**に具体化する。wrapper は
-当面 Claude Code CLI 版のみだが、将来 codex 版・ホスト状態取得 / クライアント提供版
-を**別パッケージ**として追加予定。同一 protocol / envelope を話す TS consumer が
-3 つ以上に増えるため、各実装が protocol.md から型を**自前コピー**する現行流儀
-(wrapper / dashboard が各々保持)は drift が線形に増え、SSOT を型レベルで破る。
+Make D3’s “share types with the wrapper” concrete **assuming multiple wrappers**. For now the wrapper is only the Claude Code CLI version, but a codex version and versions for host-state retrieval / client provision are planned as **separate packages**. Once there are three or more TS consumers speaking the same protocol / envelope, the current practice of copying types **manually** from protocol.md into each implementation (wrapper / dashboard each maintain their own) increases drift linearly and violates the SSOT at the type level.
 
-決定:
+Decision:
 
-- リポジトリルートに最小 **pnpm workspace** を導入し、共有パッケージ
-  **`@kaoiro/protocol`** を切り出す。中身 = envelope / 制御メッセージ / agent 状態型
-  - **全 wrapper 共通の spawn / CLI 契約**。これを TS 側の SSOT とする。
-- 現 `@kaoiro/wrapper`(= Claude 版)は protocol 関連型を共有パッケージへ移して
-  参照に切替。**リネームは codex 版追加時まで先送り**(今は型抽出のみ、挙動不変)。
-  → **2026-07-10 追記**: Codex adapter 追加が [ADR-0032](0032-codex-adapter.md) F1 で決まり、リネーム (`@kaoiro/wrapper` → `@kaoiro/claude-code`) は [phase-13-wrapper-multipackage-restructure](../plans/phase-13-wrapper-multipackage-restructure.md) で**実行済み** (同日完了)。
-- runner(`@kaoiro/runner`)および将来の wrapper 群はこの共有パッケージを consume。
-- **適用範囲は Node 側に限定**。dashboard(`dashboard/`)は別ビルド系のため
-  本作業では据え置き(独自 `protocol.ts` 継続、整合は将来別件)。
-- 単一バイナリ([ADR-0018](0018-runner-distribution.md))への複数 wrapper バンドル
-  方式は隣接論点として配布フェーズ([#70](https://github.com/sakuraiyuta/kaoiro/issues/70))で詰める。本決定は型 / パッケージ構造のみ。
+- Introduce a minimal **pnpm workspace** at the repository root and split out the shared package **`@kaoiro/protocol`**. Contents = envelope / control messages / agent state types — **the common spawn / CLI contract for every wrapper**. Make it the SSOT on the TS side.
+- Move protocol-related types from the current `@kaoiro/wrapper` (= the Claude version) into the shared package and switch to references. **Defer the rename until adding the codex version** (type extraction only for now, behaviour unchanged).
+  → **2026-07-10 addendum**: The Codex adapter was decided in [ADR-0032](0032-codex-adapter.md) F1, and the rename (`@kaoiro/wrapper` → `@kaoiro/claude-code`) was **carried out** in [phase-13-wrapper-multipackage-restructure](../plans/phase-13-wrapper-multipackage-restructure.md) (completed the same day).
+- The runner (`@kaoiro/runner`) and future wrapper family consume this shared package.
+- **Limit the scope to the Node side**. The dashboard (`dashboard/`) uses a separate build system, so leave it unchanged in this work (continue its own `protocol.ts`; alignment is a separate future task).
+- Bundling multiple wrappers into a single binary ([ADR-0018](0018-runner-distribution.md)) is an adjacent issue to work through in the distribution phase ([#70](https://github.com/sakuraiyuta/kaoiro/issues/70)). This decision covers only types / package structure.
 
 ## Consequences
 
 ### Positive
 
-- 現行 transport 無改修で済み、runner は純粋な管理層に保てる(ボトルネック無し)。
-- クラッシュ隔離(1 体落ちても他は無事)。wrapper の既存コードを活用できる。
-- wrapper と型(config / 制御 envelope)を共有でき、実装コストが低い。
-- ADR-0002 を壊さないため、直結データ経路の決定が一箇所に残る(記録の単純さ)。
+- No changes to the current transport are needed, keeping the runner a pure management layer (no bottleneck).
+- Crash isolation (the others survive if one goes down). Existing wrapper code can be reused.
+- Types (config / control envelope) can be shared between wrapper and runner, keeping implementation cost low.
+- Because ADR-0002 is not broken, the direct data-path decision remains in one place (simple records).
 
 ### Negative
 
-- 二重起動防止に server owner フェンシング + runner ローカルロックの**二段**が要る。
-- runner プロセスあたりメモリは 1:1 モデルのため大きめ。
-- 制御 envelope(spawn / stop / restart / enumerate-sessions)を新規定義する必要が
-  ある(#66 で確定、[protocol](../specs/protocol.md)「runner 制御メッセージ」)。
+- Duplicate-start prevention requires two layers: server owner fencing + runner-local lock.
+- Memory per runner process is relatively large because of the 1:1 model.
+- New control envelopes (spawn / stop / restart / enumerate-sessions) must be defined (#66 fixed them, in [protocol](../specs/protocol.md), “runner control messages”).
 
 ### Neutral
 
-- runner の配布・常駐形態は [ADR-0018](0018-runner-distribution.md) に従う(単一
-  バイナリ・CLI のみ)。
-- ホスト非 ephemeral・agent_id ↔ cwd 固定の前提に依存
-  ([ADR-0014](0014-session-resume-and-restore.md))。
+- Runner distribution and resident form follow [ADR-0018](0018-runner-distribution.md) (single binary, CLI only).
+- Depends on the assumptions that the host is non-ephemeral and agent_id ↔ cwd is fixed ([ADR-0014](0014-session-resume-and-restore.md)).
 
 ## Alternatives Considered
 
 | Option | Why rejected |
 |--------|--------------|
-| D1=B: runner が接続を終端・多重化(proxy) | データ経路の単一障害点・transport 大改修・agent 非依存原則と緊張 |
-| D2=B: 1 プロセスに複数 agent を内包 | 1 クラッシュで全滅・AgentHost の大改修・隔離喪失 |
-| D3=b: Elixir で実装 | BEAM 同梱が重くホスト常駐に過剰 |
-| D3=c: Go / Rust で実装 | コードベース三言語目・wrapper と型共有不可(堅牢性最優先なら再考余地) |
-| 命名 `supervisor` | OTP Supervisor と語が衝突 |
-| ADR-0002 を supersede | D1=A で直結トポロジは維持されるため、supersede は記録上ミスリード(却下案 D1=B を指す)。amend が正確 |
+| D1=B: runner terminates and multiplexes connections (proxy) | Single point of failure for the data path, major transport rewrite, and tension with the agent-independent principle |
+| D2=B: embed multiple agents in one process | One crash kills all, major AgentHost rewrite, and loss of isolation |
+| D3=b: implement in Elixir | Bundling BEAM is heavy and excessive for a resident host service |
+| D3=c: implement in Go / Rust | Third language in the codebase and no type sharing with the wrapper (reconsiderable if robustness is the top priority) |
+| Name it `supervisor` | Conflicts with OTP Supervisor |
+| Supersede ADR-0002 | D1=A maintains the direct topology, so superseding would be misleading in the record (it points to rejected option D1=B). An amend is accurate |
 
 ## Related
 
-- 改訂(追補)対象: [ADR-0002](0002-local-wrapper-websocket-topology.md)(直結
-  トポロジは維持、本 ADR で監督層を追加)。
-- 関連 ADR: [0014](0014-session-resume-and-restore.md)(runner を生存単位とする
-  resume / 召喚)、[0018](0018-runner-distribution.md)(runner の配布)。
-- 関連 specs: [architecture](../specs/architecture.md)、
-  [protocol](../specs/protocol.md)(制御メッセージ)、
-  [threat-model](../specs/threat-model.md)。
-- 制御スキーマ: #66 で確定(上記「制御メッセージスキーマ」、
-  [protocol](../specs/protocol.md)「runner 制御メッセージ」)。
-- 実装: Phase 4([phase-4-host-runner](../plans/phase-4-host-runner.md))。
-- 由来: issue [#23](https://github.com/sakuraiyuta/kaoiro/issues/23)。
+- ADR amended: [ADR-0002](0002-local-wrapper-websocket-topology.md) (maintains the direct topology and adds a supervisory layer in this ADR).
+- Related ADRs: [0014](0014-session-resume-and-restore.md) (runner as the unit of survival, resume / summoning), [0018](0018-runner-distribution.md) (runner distribution).
+- Related specs: [architecture](../specs/architecture.md), [protocol](../specs/protocol.md) (control messages), and [threat-model](../specs/threat-model.md).
+- Control schema: fixed in #66 (the “Control-message schema” section above, [protocol](../specs/protocol.md), “runner control messages”).
+- Implementation: phase 4 ([phase-4-host-runner](../plans/phase-4-host-runner.md)).
+- Origin: issue [#23](https://github.com/sakuraiyuta/kaoiro/issues/23).

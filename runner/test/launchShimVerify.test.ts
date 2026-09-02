@@ -210,6 +210,74 @@ describe("kaoiro-runner-launch.sh の verify-only 起動 (issue #229)", () => {
     expect(result.stderr).not.toContain("pnpm -C wrapper build");
   });
 
+  it("build-info.json の CalVer/channel が不正なら exit 78 で起動しない", () => {
+    writeFileSync(
+      join(tree, "dist", "build-info.json"),
+      JSON.stringify({
+        revision: REVISION,
+        dirty: false,
+        built_at: "2026-08-16T00:00:00.000Z",
+        version: "2026.99.0",
+        channel: "release",
+      }),
+    );
+
+    const result = launch();
+
+    expect(result.status).toBe(78);
+    expect(result.stdout).not.toContain("stub cli.js started");
+  });
+
+  it("release build-info が dirty なら exit 78 で起動しない", () => {
+    const invalidTree = join(dir, "dirty-release");
+    writeReleaseTree(invalidTree, revisionOf("dirty-release"), {
+      dirty: true,
+      channel: "release",
+    });
+
+    const result = runScript(
+      join(invalidTree, "deploy", "kaoiro-runner-launch.sh"),
+      [],
+      { KAOIRO_RUNNER_DIR: confDir },
+    );
+
+    expect(result.status).toBe(78);
+    expect(result.stdout).not.toContain("stub cli.js started");
+    expect(result.stderr).toContain("build-identity shape");
+  });
+
+  it("known revision + clean の release build-info は起動を許可する", () => {
+    const releaseTree = join(dir, "clean-release");
+    writeReleaseTree(releaseTree, REVISION, { channel: "release" });
+
+    const result = runScript(
+      join(releaseTree, "deploy", "kaoiro-runner-launch.sh"),
+      [],
+      { KAOIRO_RUNNER_DIR: confDir },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("stub cli.js started");
+  });
+
+  it.each<[string, string, { buildVersion?: string }]>([
+    ["unknown revision", "unknown", {}],
+    ["unknown version", REVISION, { buildVersion: "unknown" }],
+  ])("release build-info の %s は exit 78 で起動しない", (_label, revision, options) => {
+    const invalidTree = join(dir, `invalid-release-${_label.replaceAll(" ", "-")}`);
+    writeReleaseTree(invalidTree, revision, { channel: "release", ...options });
+
+    const result = runScript(
+      join(invalidTree, "deploy", "kaoiro-runner-launch.sh"),
+      [],
+      { KAOIRO_RUNNER_DIR: confDir },
+    );
+
+    expect(result.status).toBe(78);
+    expect(result.stdout).not.toContain("stub cli.js started");
+    expect(result.stderr).toContain("build-identity shape");
+  });
+
   it("nested な build output の中間ディレクトリが dangling symlink なら build shortage ではない (内部レビュー指摘)", () => {
     // 内部review: checkBuildOutputLeaf は leafRel の先頭segment (dist) と
     // 最終leafしか型検査しておらず、3段以上ネストした manifest entry

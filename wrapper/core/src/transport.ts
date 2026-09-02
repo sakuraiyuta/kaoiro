@@ -12,7 +12,21 @@
 
 import { Channel, Socket, type Push } from "phoenix";
 import { randomUUID } from "node:crypto";
-import type { Envelope } from "@kaoiro/protocol";
+import type {
+  DirectoryContext,
+  DirectoryConversation,
+  DirectoryEntry,
+  DirectoryRateLimitWindow,
+  DirectoryResult,
+  Envelope,
+  InterAgentDeliveryStatus,
+  UserDirectoryEntry,
+  UserRole,
+} from "@kaoiro/protocol";
+import {
+  normalizeWrapperBuildInfo,
+  type WrapperBuildInfo,
+} from "./build_info.js";
 
 /** A client's permission decision relayed by the server (protocol.md).
  *  Defined here (the wire layer that parses it); the PermissionBroker in
@@ -34,143 +48,16 @@ export interface QuestionResponseMessage {
   cancelled?: boolean;
 }
 
-/** context usage as it reaches a peer (phase-27, #160). Same three numbers
- *  the dashboard's ctx meter reads, so the two never disagree. The server
- *  only projects this when the reporting wrapper advertised
- *  `supports_context_usage: true`; an engine without the capability omits the
- *  field entirely rather than sending a null or an estimate (ADR-0040). */
-export interface DirectoryContext {
-  used_tokens: number;
-  max_tokens: number;
-  used_percentage: number;
-}
+const USER_ROLES = [
+  "operator",
+  "viewer",
+  "admin",
+] as const satisfies readonly UserRole[];
 
-/** One rate-limit window as it reaches a peer (phase-27, #160). Every field
- *  is optional because the engine reports what it knows; a window with none
- *  of them is dropped rather than sent empty. The snapshot is from the peer's
- *  LAST turn and is not refreshed while it idles — read `resets_at` against
- *  the current time and stop trusting `utilization` / `status` once it has
- *  passed. */
-export interface DirectoryRateLimitWindow {
-  status?: string;
-  utilization?: number;
-  resets_at?: number;
-}
-
-/** Active inter-agent conversation state of a peer (phase-27, #160). Always
- *  present on a current server (`{active: false, peers: []}` when idle), so
- *  an absent field means the server predates the feature — not "no
- *  conversation". `conversation_id` is deliberately not disclosed: the agreed
- *  disclosure scope is presence plus counterpart ids. */
-export interface DirectoryConversation {
-  active: boolean;
-  peers: string[];
-}
-
-/** Recipient-local dispatch confirmation watermark (issue #247).  It is an
- * observation ledger, not a retransmission guarantee.  An absent field is
- * deliberately `unknown` (legacy/disarmed capability), never zero. */
-export interface InterAgentDeliveryStatus {
-  issued_seq: number;
-  acked_seq: number;
-  pending_since?: string;
-}
-
-/** Single entry returned from `directory_request` (protocol-inter-agent
- * companion tool). Runtime traits are optional because an old/not-yet-init
- * wrapper may not have stamped them. Operator-grade cwd / permission /
- * session / capabilities / source fields remain excluded.
- *
- * phase-27 (#160) adds the situational fields below so an agent can pick a
- * delegate on its own. Every one of them is omitted rather than defaulted
- * when the server cannot vouch for it — **read an absent field as "unknown",
- * never as zero or "fine"**. `turns` in particular is omitted (not `0`) when
- * the server never observed this session's start. */
-export interface DirectoryEntry {
-  agent_id: string;
-  persona: { id?: string; name?: string; sprite_set?: string };
-  /** Mutable instance-scoped display name (issue #219 D19/D26, ADR-0021
-   *  F6-3) — `persona.name` above stays the pack's canonical name,
-   *  unaffected by rename; this is the current, possibly-renamed label.
-   *  Optional: an old server / not-yet-updated peer wrapper build omits
-   *  it, same discipline as every other situational field here. */
-  display_name?: string;
-  state: string;
-  engine?: string;
-  model?: string;
-  effort?: string;
-  context?: DirectoryContext;
-  /** ISO8601 UTC. The time the SERVER observed the session start, not a
-   *  wrapper-measured value. */
-  session_started_at?: string;
-  /** Reply round-trips counted in the current session. */
-  turns?: number;
-  /** ISO8601 UTC of the last envelope the server accepted from this peer.
-   *  Grades how stale `context` / `rate_limits` are. */
-  last_activity_at?: string;
-  conversation?: DirectoryConversation;
-  /** Keyed by window: `five_hour` / `seven_day` plus any engine-specific
-   *  ones. */
-  rate_limits?: Record<string, DirectoryRateLimitWindow>;
-  inter_agent_delivery?: InterAgentDeliveryStatus;
-  /** issue #269: この entry は AgentDirectory (永続 ledger) にしか存在せず、
-   *  AgentStates に live envelope が無いことを示す。**この field は他の
-   *  optional field と absent の意味が違う** — absent は unknown ではなく
-   *  「live directory 由来」。server は true のときだけ載せる (F6-2
-   *  fail-closed)。send_to_agent の宛先にはできない。 */
-  directory_only?: true;
-  /** issue #269: server が最後に envelope を受理した時刻。directory-only
-   *  entry でのみ載る (live entry は last_activity_at を持つ)。
-   *  AgentDirectory の memory-only hint 由来なので、server 再起動後は
-   *  絶対に取れない — absent は「unknown」であって「一度も動いていない」
-   *  ではない。 */
-  last_seen?: string;
-}
-
-/** Single entry in the peer directory's "users" projection (issue #197
- *  段階2, ADR-0021 F6-8). Server-side config default is OPEN
- *  (`KAOIRO_EXPOSE_USERS_TO_AGENTS` unset = disclosed, explicit
- *  `"false"` opts out — ふじ M1 レビュー指摘, protocol-inter-agent.md is
- *  the source of truth for the full default/opt-out contract). An old
- *  (pre-段階2) server omits the `users` key entirely; a 段階2+ server
- *  that opted OUT still returns the key with an empty array — the two
- *  are NOT the same wire shape, though both narrow to `[]` here (see
- *  `userDirectoryEntryFrom`'s own doc; the distinction does not matter
- *  to this narrow's caller either way, ふじ M4 レビュー指摘).
- *
- *  `kind`/`role` are the exact literal/enum values F6-8 allow-lists.
- *  An unrecognised value on either field drops the WHOLE entry rather
- *  than degrading to a passthrough string — forward-compat passthrough
- *  for these two fields was proposed and explicitly rejected (director
- *  review, issue #197 段階2 M2); issue #198 (admin role) extends both
- *  server (`role_string/1`) and this union/narrow together. */
-/** Single source for the role allow-list: the TYPE below and the runtime
- *  narrow in `userDirectoryEntryFrom` are both derived from this array,
- *  so they cannot drift apart. They previously could — the comment above
- *  had to instruct a future reader to extend "both together", and that is
- *  exactly the kind of paired edit issue #198 found half-done elsewhere.
- *  Adding a role is a one-line change here and nowhere else. */
-const USER_ROLES = ["operator", "viewer", "admin"] as const;
-
-export type UserRole = (typeof USER_ROLES)[number];
-
-export interface UserDirectoryEntry {
-  id: string;
-  kind: "user";
-  display_name: string;
-  role: UserRole;
-}
-
-/** `requestDirectory()`'s reply shape (issue #197 段階2). `agents` and
- *  `users` are deliberately two separate arrays, not one merged list —
- *  `users` are NOT valid `send_to_agent` destinations, and a caller that
- *  merged them for convenience would have to re-derive which entries are
- *  agents at every use site instead of it being structurally impossible
- *  to get wrong. */
-export interface DirectoryResult {
-  agents: DirectoryEntry[];
-  users: UserDirectoryEntry[];
-}
+type Assert<T extends true> = T;
+type _UserRolesCoverProtocol = Assert<
+  Exclude<UserRole, (typeof USER_ROLES)[number]> extends never ? true : false
+>;
 
 /** attach_open payload (protocol.md / file-upload spec, server -> wrapper
  *  relay). chunks is the advertised total chunk count for the upload. */
@@ -312,6 +199,7 @@ export const SERVER_EVENT_VERSION_POLICY = {
 export type ServerEventName = keyof typeof SERVER_EVENT_VERSION_POLICY;
 
 export const WRAPPER_CONTROL_EVENT_POLICY = {
+  wrapper_build_info: "versioned",
   delivery_ack: "versioned",
   delivery_status_request: "versioned",
   history_reset: "versioned",
@@ -319,6 +207,7 @@ export const WRAPPER_CONTROL_EVENT_POLICY = {
   history_replay_complete: "versioned",
   directory_request: "versioned",
   session_reset_request: "versioned",
+  session_lifecycle: "versioned",
   envelope: "envelopeFrame",
 } as const satisfies Record<string, "versioned" | "envelopeFrame">;
 
@@ -383,6 +272,9 @@ export interface ServerLinkOptions {
   transitionId?: string;
   /** Wrapper auth token (ADR-0011), sent as a connect param. */
   token?: string;
+  /** Build identity read from this wrapper artifact. It is announced once
+   *  after every successful channel join, including reconnects. */
+  buildInfo?: WrapperBuildInfo;
   /** The server-composed personality + common footer (ADR-0029 F5)
    *  pushed once after join over the WS handshake. cli.ts awaits this
    *  before opening the SDK session — the SDK's systemPrompt.append is
@@ -1226,6 +1118,15 @@ export class ServerLink {
     this.#channel
       .join()
       .receive("ok", (reply: unknown) => {
+        if (options.buildInfo !== undefined) {
+          const buildInfo = normalizeWrapperBuildInfo(options.buildInfo);
+          this.#pushVersioned("wrapper_build_info", {
+            build_revision: buildInfo.revision,
+            build_dirty: buildInfo.dirty,
+            build_version: buildInfo.version,
+            build_channel: buildInfo.channel,
+          });
+        }
         options.onHydration?.(hydrationVerdictFrom(reply));
         options.onInterAgentDeliveryStatus?.(
           isObject(reply) ? deliveryStatusFrom(reply.delivery) ?? null : null,
@@ -1288,6 +1189,25 @@ export class ServerLink {
   acknowledgeInterAgentDelivery(deliverySeq: number): void {
     if (!Number.isSafeInteger(deliverySeq) || deliverySeq <= 0) return;
     this.#pushVersioned("delivery_ack", { delivery_seq: deliverySeq });
+  }
+
+  /** Reports one `session_lifecycle` event (ADR-0055, phase-33 Stage B;
+   *  protocol.md "session_lifecycle"). `kind`/`trigger` stay plain strings
+   *  here — `core` is engine-agnostic and does not know the Claude-specific
+   *  compact/resume vocabulary the caller (claude-code's host.ts) produces.
+   *  Fire-and-forget: recording only, no reply is awaited (same shape as
+   *  `acknowledgeInterAgentDelivery` above). */
+  reportSessionLifecycle(
+    kind: string,
+    trigger: string | undefined,
+    at: string,
+  ): void {
+    if (kind === "" || at === "") return;
+    this.#pushVersioned("session_lifecycle", {
+      kind,
+      ...(trigger !== undefined ? { trigger } : {}),
+      at,
+    });
   }
 
   /** Reads this wrapper's ledger independently of directory peers. */

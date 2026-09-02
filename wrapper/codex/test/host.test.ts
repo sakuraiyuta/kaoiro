@@ -30,6 +30,7 @@ import {
 } from "../src/turn_diagnostics.js";
 import {
   codexRateLimitsFromRolloutIn,
+  repairRolloutCorruption,
   verifyRolloutCorruption,
   type CodexRateLimitSnapshot,
   type CodexRateLimitWindow,
@@ -545,14 +546,17 @@ describe("CodexHost", () => {
         return {
           async runStreamed() {
             async function* events(): AsyncGenerator<ThreadEvent> {
-              yield { type: "thread.started", thread_id: "boundary" };
-              yield { type: "turn.started" };
-              // This runs only after the host consumes turn.started, keeping
-              // setModel inside the active turn rather than after it settles.
-              firstTurnStarted.resolve();
-              await gate;
-              yield usageEvent();
-              turnConsumed[0]!.resolve();
+              try {
+                yield { type: "thread.started", thread_id: "boundary" };
+                yield { type: "turn.started" };
+                // This runs only after the host consumes turn.started, keeping
+                // setModel inside the active turn rather than after it settles.
+                firstTurnStarted.resolve();
+                await gate;
+                yield usageEvent();
+              } finally {
+                turnConsumed[0]!.resolve();
+              }
             }
             return { events: events() };
           },
@@ -563,8 +567,11 @@ describe("CodexHost", () => {
         return {
           async runStreamed() {
             async function* events(): AsyncGenerator<ThreadEvent> {
-              yield usageEvent();
-              turnConsumed[1]!.resolve();
+              try {
+                yield usageEvent();
+              } finally {
+                turnConsumed[1]!.resolve();
+              }
             }
             return { events: events() };
           },
@@ -1815,11 +1822,14 @@ describe("CodexHost", () => {
         resumeThread: () => ({
           async runStreamed() {
             async function* events(): AsyncGenerator<ThreadEvent> {
-              yield { type: "turn.started" };
-              turnStarted.resolve();
-              await releaseTerminal.promise;
-              yield usageEvent();
-              turnFinished.resolve();
+              try {
+                yield { type: "turn.started" };
+                turnStarted.resolve();
+                await releaseTerminal.promise;
+                yield usageEvent();
+              } finally {
+                turnFinished.resolve();
+              }
             }
             return { events: events() };
           },
@@ -1870,16 +1880,19 @@ describe("CodexHost", () => {
         startThread: () => ({
           async runStreamed() {
             async function* events(): AsyncGenerator<ThreadEvent> {
-              yield { type: "thread.started", thread_id: "uuid-fresh-rate-limits" };
-              yield { type: "turn.started" };
-              // This defensive case covers a rollout that already has a
-              // token_count at thread.started. Current observed rollouts
-              // usually write it later, after session metadata; the terminal
-              // refresh below remains the ordinary path for those sessions.
-              turnStarted.resolve();
-              await releaseTerminal.promise;
-              yield usageEvent();
-              turnFinished.resolve();
+              try {
+                yield { type: "thread.started", thread_id: "uuid-fresh-rate-limits" };
+                yield { type: "turn.started" };
+                // This defensive case covers a rollout that already has a
+                // token_count at thread.started. Current observed rollouts
+                // usually write it later, after session metadata; the terminal
+                // refresh below remains the ordinary path for those sessions.
+                turnStarted.resolve();
+                await releaseTerminal.promise;
+                yield usageEvent();
+              } finally {
+                turnFinished.resolve();
+              }
             }
             return { events: events() };
           },
@@ -2263,8 +2276,376 @@ describe("CodexHost", () => {
       expect(turnEnds[0]).toHaveProperty("turnToken", expect.any(String));
     });
 
+    it("terminal boundary hook は failed persistence より先に exact token を終える", async () => {
+      const persistenceStarted = deferred<void>();
+      const releasePersistence = deferred<void>();
+      const boundaries: string[] = [];
+      const persist = vi
+        .spyOn(CodexTurnDiagnostics.prototype, "writeFailure")
+        .mockImplementation(async () => {
+          persistenceStarted.resolve();
+          await releasePersistence.promise;
+          return "/tmp/synthetic-codex-trace.jsonl";
+        });
+      const { client } = makeClient([[
+        { type: "thread.started", thread_id: "boundary-before-persist" },
+        { type: "turn.failed", error: { message: "persist-late" } },
+      ]]);
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        onTurnBoundary: ({ turnToken }) => boundaries.push(turnToken),
+        now: () => "T",
+      });
+
+      const running = host.run("hi");
+      try {
+        await persistenceStarted.promise;
+        expect(boundaries).toHaveLength(1);
+        releasePersistence.resolve();
+        await client.waitForTurn(0);
+      } finally {
+        releasePersistence.resolve();
+        host.close();
+        await running;
+        persist.mockRestore();
+      }
+    });
+
+    it.each([
+      {
+        label: "completed→failed",
+        events: [
+          usageEvent(),
+          { type: "turn.failed" as const, error: { message: "late failure" } },
+        ],
+        expectedError: undefined,
+      },
+      {
+        label: "failed→completed",
+        events: [
+          { type: "turn.failed" as const, error: { message: "first failure" } },
+          usageEvent(),
+        ],
+        expectedError: "first failure",
+      },
+    ])(
+      "$label は最初の terminal だけを authoritative として onTurnEnd/result を一度だけ発火する",
+      async ({ events, expectedError }) => {
+        const turnEnds: {
+          turnToken: string;
+          conversationIds: readonly string[];
+          error?: { reason?: string; detail?: string };
+        }[] = [];
+        const logs: Envelope[] = [];
+        const { client } = makeClient([events]);
+        const host = new CodexHost(CONFIG, {
+          onState: () => {},
+          onLog: (envelope) => logs.push(envelope),
+          appendSystemPrompt: "p",
+          codexFactory: () => client,
+          onTurnEnd: (info) => turnEnds.push(info),
+          now: () => "T",
+        });
+
+        await runOneTurn(host, "hi", client);
+
+        expect(turnEnds).toHaveLength(1);
+        if (expectedError === undefined) {
+          expect(turnEnds[0]?.error).toBeUndefined();
+        } else {
+          expect(turnEnds[0]).toMatchObject({
+            error: { detail: expectedError },
+          });
+        }
+        const results = logs.filter((envelope) => envelope.type === "result");
+        expect(results).toHaveLength(1);
+        if (expectedError === undefined) {
+          expect(results[0]?.payload).not.toMatchObject({ is_error: true });
+        } else {
+          expect(results[0]?.payload).toMatchObject({ is_error: true });
+        }
+      },
+    );
+
+    it("terminal event 後は通常の EOF と durability gate を待って次 turn を開始する", async () => {
+      const firstEnded = deferred<void>();
+      const releaseDurability = deferred<void>();
+      const secondStarted = deferred<void>();
+      const secondEnded = deferred<void>();
+      const starts: string[] = [];
+      const ends: string[] = [];
+      let firstCleanupDone = false;
+      let cleanupDoneBeforeSecondStart = false;
+      let runCount = 0;
+      const thread: CodexThreadLike = {
+        async runStreamed() {
+          const current = ++runCount;
+          async function* events(): AsyncGenerator<ThreadEvent> {
+            try {
+              yield usageEvent();
+              if (current === 1) await releaseDurability.promise;
+            } finally {
+              if (current === 1) firstCleanupDone = true;
+            }
+          }
+          return { events: events() };
+        },
+      };
+      const client: CodexClientLike = {
+        startThread: () => thread,
+        resumeThread: () => thread,
+      };
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        onTurnStart: ({ turnToken }) => {
+          starts.push(turnToken);
+          if (turnToken === "turn-2") {
+            cleanupDoneBeforeSecondStart = firstCleanupDone;
+            secondStarted.resolve();
+          }
+        },
+        onTurnEnd: ({ turnToken }) => {
+          ends.push(turnToken);
+          if (turnToken === "turn-1") firstEnded.resolve();
+          if (turnToken === "turn-2") secondEnded.resolve();
+        },
+        now: () => "T",
+      });
+      const running = host.run();
+
+      try {
+        await host.send("first", undefined, ["cnv-1"], "turn-1");
+        await firstEnded.promise;
+        await host.send("second", undefined, ["cnv-2"], "turn-2");
+
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(starts).toEqual(["turn-1"]);
+        releaseDurability.resolve();
+        await secondStarted.promise;
+        await secondEnded.promise;
+      } finally {
+        releaseDurability.resolve();
+        host.close();
+        await running;
+      }
+
+      expect(ends).toEqual(["turn-1", "turn-2"]);
+      expect(cleanupDoneBeforeSecondStart).toBe(true);
+    });
+
+    it.each([
+      {
+        label: "turn.completed",
+        terminal: usageEvent(),
+        errorDetail: undefined,
+      },
+      {
+        label: "turn.failed",
+        terminal: { type: "turn.failed" as const, error: { message: "boom" } },
+        errorDetail: "boom",
+      },
+    ])(
+      "$label 後は bounded grace 超過時に cleanup 完了後の次 turn へ進み、terminal を一度だけ解決する",
+      async ({ terminal, errorDetail }) => {
+        const firstEnded = deferred<void>();
+        const secondStarted = deferred<void>();
+        const secondEnded = deferred<void>();
+        const starts: string[] = [];
+        let firstCleanupDone = false;
+        let cleanupDoneBeforeSecondStart = false;
+        const turnEnds: {
+          turnToken: string;
+          conversationIds: readonly string[];
+          error?: { reason?: string; detail?: string };
+        }[] = [];
+        let runCount = 0;
+        const thread: CodexThreadLike = {
+          async runStreamed(_input, turnOptions) {
+            const current = ++runCount;
+            const signal = turnOptions?.signal;
+            if (signal === undefined) throw new Error("probe requires abort signal");
+            const abort = new Promise<void>((resolve) => {
+              if (signal.aborted) {
+                resolve();
+                return;
+              }
+              signal.addEventListener("abort", () => resolve(), { once: true });
+            });
+            async function* events(): AsyncGenerator<ThreadEvent> {
+              try {
+                yield terminal;
+                if (current === 1) await abort;
+              } finally {
+                if (current === 1) firstCleanupDone = true;
+              }
+            }
+            return { events: events() };
+          },
+        };
+        const client: CodexClientLike = {
+          startThread: () => thread,
+          resumeThread: () => thread,
+        };
+        const host = new CodexHost(CONFIG, {
+          onState: () => {},
+          appendSystemPrompt: "p",
+          codexFactory: () => client,
+          terminalDrainGraceMs: 20,
+          onTurnStart: ({ turnToken }) => {
+            starts.push(turnToken);
+            if (turnToken === "turn-2") {
+              cleanupDoneBeforeSecondStart = firstCleanupDone;
+              secondStarted.resolve();
+            }
+          },
+          onTurnEnd: (info) => {
+            turnEnds.push(info);
+            if (info.turnToken === "turn-1") firstEnded.resolve();
+            if (info.turnToken === "turn-2") secondEnded.resolve();
+          },
+          now: () => "T",
+        });
+        const running = host.run();
+
+        try {
+          await host.send("first", undefined, ["cnv-1"], "turn-1");
+          await firstEnded.promise;
+          await host.send("second", undefined, ["cnv-2"], "turn-2");
+          await secondStarted.promise;
+          await secondEnded.promise;
+        } finally {
+          host.close();
+          await running;
+        }
+
+        expect(starts).toEqual(["turn-1", "turn-2"]);
+        expect(cleanupDoneBeforeSecondStart).toBe(true);
+        expect(turnEnds).toHaveLength(2);
+        const firstEnds = turnEnds.filter(({ turnToken }) => turnToken === "turn-1");
+        expect(firstEnds).toHaveLength(1);
+        if (errorDetail === undefined) {
+          expect(firstEnds[0]?.error).toBeUndefined();
+        } else {
+          expect(firstEnds[0]).toMatchObject({ error: { detail: errorDetail } });
+        }
+      },
+    );
+
+    it("timeout cleanup は pending settlement → iterator.return() → 次 turn の順序を守る", async () => {
+      const firstEnded = deferred<void>();
+      const returnCalled = deferred<void>();
+      const secondStarted = deferred<void>();
+      const secondEnded = deferred<void>();
+      let returnCalledAfterPending = false;
+      let returnCompleted = false;
+      let returnCompletedBeforeSecondStart = false;
+      let runCount = 0;
+      let firstIteratorNextCalls = 0;
+      let resolvePending: ((result: IteratorResult<ThreadEvent>) => void) | null = null;
+      let pendingPromiseSettled = false;
+      const firstIterator: AsyncIterator<ThreadEvent> & AsyncIterable<ThreadEvent> = {
+        next() {
+          firstIteratorNextCalls += 1;
+          if (firstIteratorNextCalls === 1) {
+            return Promise.resolve({ value: usageEvent(), done: false });
+          }
+          if (firstIteratorNextCalls > 2) {
+            return Promise.resolve({ value: undefined, done: true });
+          }
+          const pending = new Promise<IteratorResult<ThreadEvent>>((resolve) => {
+            resolvePending = resolve;
+          });
+          pending.then(() => {
+            pendingPromiseSettled = true;
+          });
+          return pending;
+        },
+        return() {
+          returnCalledAfterPending = pendingPromiseSettled;
+          returnCalled.resolve();
+          return new Promise<IteratorResult<ThreadEvent>>((resolve) => {
+            setTimeout(() => {
+              returnCompleted = true;
+              resolve({ value: undefined, done: true });
+            }, 20);
+          });
+        },
+        [Symbol.asyncIterator]() {
+          return this;
+        },
+      };
+      const thread: CodexThreadLike = {
+        async runStreamed(_input, turnOptions) {
+          const current = ++runCount;
+          if (current === 1) {
+            const signal = turnOptions?.signal;
+            if (signal === undefined) throw new Error("probe requires abort signal");
+            signal.addEventListener(
+              "abort",
+              () => {
+                resolvePending?.({
+                  value: { type: "error", message: "late" },
+                  done: false,
+                });
+                resolvePending = null;
+              },
+              { once: true },
+            );
+            return { events: firstIterator };
+          }
+          async function* secondEvents(): AsyncGenerator<ThreadEvent> {
+            yield usageEvent();
+          }
+          return { events: secondEvents() };
+        },
+      };
+      const client: CodexClientLike = {
+        startThread: () => thread,
+        resumeThread: () => thread,
+      };
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        terminalDrainGraceMs: 20,
+        onTurnStart: ({ turnToken }) => {
+          if (turnToken === "turn-2") {
+            returnCompletedBeforeSecondStart = returnCompleted;
+            secondStarted.resolve();
+          }
+        },
+        onTurnEnd: ({ turnToken }) => {
+          if (turnToken === "turn-1") firstEnded.resolve();
+          if (turnToken === "turn-2") secondEnded.resolve();
+        },
+        now: () => "T",
+      });
+      const running = host.run();
+
+      try {
+        await host.send("first", undefined, ["cnv-1"], "turn-1");
+        await firstEnded.promise;
+        await host.send("second", undefined, ["cnv-2"], "turn-2");
+        await returnCalled.promise;
+        expect(returnCalledAfterPending).toBe(true);
+        await secondStarted.promise;
+        await secondEnded.promise;
+      } finally {
+        host.close();
+        await running;
+      }
+
+      expect(returnCompleted).toBe(true);
+      expect(returnCompletedBeforeSecondStart).toBe(true);
+    });
+
     it("終端イベント無しでストリームが終わると detail 無しの error で onTurnEnd を呼ぶ", async () => {
       const turnEnds: unknown[] = [];
+      const boundaries: string[] = [];
       const turnEnded = deferred<void>();
       const { client } = makeClient([
         [{ type: "thread.started", thread_id: "uuid-err-2" }],
@@ -2273,6 +2654,7 @@ describe("CodexHost", () => {
         onState: () => {},
         appendSystemPrompt: "p",
         codexFactory: () => client,
+        onTurnBoundary: ({ turnToken }) => boundaries.push(turnToken),
         onTurnEnd: (info) => {
           turnEnds.push(info);
           turnEnded.resolve();
@@ -2283,6 +2665,7 @@ describe("CodexHost", () => {
       await runOneTurn(host, "hi", client, turnEnded.promise);
 
       expect(turnEnds).toHaveLength(1);
+      expect(boundaries).toEqual([(turnEnds[0] as { turnToken: string }).turnToken]);
       expect(turnEnds[0]).toMatchObject({ conversationIds: [], error: {} });
       expect(turnEnds[0]).toHaveProperty("turnToken", expect.any(String));
     });
@@ -2475,12 +2858,14 @@ describe("CodexHost", () => {
         conversationIds: readonly string[];
         error?: { reason?: string; detail?: string };
       }[] = [];
+      const boundaries: string[] = [];
       const turnEnded = deferred<void>();
       const { client } = makeClient([new Error("exec exited 1")]);
       const host = new CodexHost(CONFIG, {
         onState: () => {},
         appendSystemPrompt: "p",
         codexFactory: () => client,
+        onTurnBoundary: ({ turnToken }) => boundaries.push(turnToken),
         onTurnEnd: (info) => {
           turnEnds.push(info);
           turnEnded.resolve();
@@ -2491,6 +2876,7 @@ describe("CodexHost", () => {
       await runOneTurn(host, "hi", client, turnEnded.promise);
 
       expect(turnEnds).toHaveLength(1);
+      expect(boundaries).toEqual([turnEnds[0]!.turnToken]);
       expect(turnEnds[0]?.conversationIds).toEqual([]);
       expect(turnEnds[0]?.error?.detail).toContain("exec exited 1");
     });
@@ -2573,7 +2959,7 @@ describe("CodexHost", () => {
   });
 });
 
-describe("issue #263: rollout 破損の恒久失敗分類 (ふじ MF-1/MF-2: candidate は実ファイル検査で確定)", () => {
+describe("issue #262: rollout 破損の安全な自動修復", () => {
   // "あ" (U+3042、UTF-8 で E3 81 82 の3バイト) の最終バイトを欠いたまま
   // 行が終わる — issue #263 の実インシデントと同じ壊れ方 (ENOSPC が
   // マルチバイト文字の書き込み途中でディスクを使い切った形)。
@@ -2609,21 +2995,20 @@ describe("issue #263: rollout 破損の恒久失敗分類 (ふじ MF-1/MF-2: can
     await writeFile(join(root, `rollout-${sessionId}.jsonl`), content);
   }
 
-  it("candidate 文言 + 実 rollout 破損の一致で恒久分類し、以降のターンは resumeThread をスキップして根本 detail を保持する (貫通: fixture → verifyRolloutCorruption → 分類 → skip)", async () => {
+  it("candidate 文言 + 実 rollout 破損の一致で backup・修復・全行 verify を経て同じ入力の resume を回復する", async () => {
     const root = await mkdtemp(join(tmpdir(), "kaoiro-codex-corrupt-e2e-"));
     const sessionId = "corrupt-session-e2e";
     await writeFixtureRollout(root, sessionId, corruptedRolloutContent());
 
     const logs: Envelope[] = [];
     const turnEnds: unknown[] = [];
-    const turnSettled = [deferred<void>(), deferred<void>(), deferred<void>()];
+    const turnStarts: unknown[] = [];
+    const turnSettled = [deferred<void>(), deferred<void>()];
     const { client, calls } = makeClient([
       [{ type: "thread.started", thread_id: sessionId }, usageEvent()],
       new Error(
         "Codex Exec exited with code 1: stream did not contain valid UTF-8 (code -32603)",
       ),
-      // turn 3 は resumeThread 自体スキップされる想定なので、このスクリプト
-      // が消費されないこと自体が期待挙動 (calls.resume の長さで確認する)。
       [usageEvent()],
     ]);
     const host = new CodexHost(CONFIG, {
@@ -2634,6 +3019,57 @@ describe("issue #263: rollout 破損の恒久失敗分類 (ふじ MF-1/MF-2: can
       // 本物の verifyRolloutCorruption を fixture root へ向けるだけ — 検証
       // ロジック自体はモックしない (MF-2 の貫通要件)。
       rolloutCorruptionVerifier: (id) => verifyRolloutCorruption(id, root),
+      rolloutCorruptionRepairer: (id) => repairRolloutCorruption(id, root),
+      onTurnStart: (info) => turnStarts.push(info),
+      onTurnEnd: (info) => {
+        turnEnds.push(info);
+        turnSettled[turnEnds.length - 1]?.resolve();
+      },
+      now: () => "T",
+    });
+
+    const done = host.run("hi");
+    await turnSettled[0]!.promise;
+    await host.send("continue 1");
+    await turnSettled[1]!.promise;
+    host.close();
+    await done;
+
+    expect(calls.resume).toEqual([null, sessionId, sessionId]);
+    expect(calls.inputs).toEqual(["hi", "continue 1", "continue 1"]);
+    expect(turnStarts).toHaveLength(2);
+
+    const results = logs.filter((e) => e.type === "result");
+    expect(results).toHaveLength(2);
+    expect(results[0]?.payload).not.toMatchObject({ is_error: true });
+    expect(results[1]?.payload).not.toMatchObject({ is_error: true });
+    expect(verifyRolloutCorruption(sessionId, root)).toBe("clean");
+
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("0 有効行の repair は原本を置換せず error_rollout_corrupted を返して手動 fallback する", async () => {
+    const root = await mkdtemp(join(tmpdir(), "kaoiro-codex-corrupt-empty-e2e-"));
+    const sessionId = "corrupt-empty-session-e2e";
+    const path = join(root, `rollout-${sessionId}.jsonl`);
+    const original = Buffer.from(" \n\t\n", "utf8");
+    await writeFixtureRollout(root, sessionId, original);
+
+    const logs: Envelope[] = [];
+    const turnEnds: unknown[] = [];
+    const turnSettled = [deferred<void>(), deferred<void>(), deferred<void>()];
+    const { client, calls } = makeClient([
+      [{ type: "thread.started", thread_id: sessionId }, usageEvent()],
+      new Error("stream did not contain valid UTF-8 (code -32603)"),
+      [usageEvent()],
+    ]);
+    const host = new CodexHost(CONFIG, {
+      onState: () => {},
+      onLog: (e) => logs.push(e),
+      appendSystemPrompt: "p",
+      codexFactory: () => client,
+      rolloutCorruptionVerifier: (id) => verifyRolloutCorruption(id, root),
+      rolloutCorruptionRepairer: (id) => repairRolloutCorruption(id, root),
       onTurnEnd: (info) => {
         turnEnds.push(info);
         turnSettled[turnEnds.length - 1]?.resolve();
@@ -2650,30 +3086,233 @@ describe("issue #263: rollout 破損の恒久失敗分類 (ふじ MF-1/MF-2: can
     host.close();
     await done;
 
-    // resumeThread は turn 2 の1回だけ呼ばれ、turn 3 では skip される。
+    await expect(readFile(path)).resolves.toEqual(original);
     expect(calls.resume).toEqual([null, sessionId]);
-
     const results = logs.filter((e) => e.type === "result");
-    expect(results).toHaveLength(3);
-    expect(results[0]?.payload).not.toMatchObject({ is_error: true });
     expect(results[1]?.payload).toMatchObject({
       is_error: true,
       error_subtype: "error_rollout_corrupted",
+      error_detail: "Error: stream did not contain valid UTF-8 (code -32603)",
     });
-    expect(
-      (results[1]!.payload as { error_detail?: string }).error_detail,
-    ).toContain("stream did not contain valid UTF-8");
-    // turn 3: resumeThread 自体を試みず、同じ分類・同じ根本 detail
-    // (ふじ should-fix 1) を即座に返す(「無言の exit-1 ループ」根絶の本体)。
     expect(results[2]?.payload).toMatchObject({
       is_error: true,
       error_subtype: "error_rollout_corrupted",
+      error_detail: "Error: stream did not contain valid UTF-8 (code -32603)",
     });
-    expect(
-      (results[2]!.payload as { error_detail?: string }).error_detail,
-    ).toContain("stream did not contain valid UTF-8");
 
     await rm(root, { recursive: true, force: true });
+  });
+
+  it("修復後 retry の同期 throw でも onTurnEnd を一度だけ発火し、backup を stderr に出す", async () => {
+    const sessionId = "repair-retry-throws";
+    const turnEnds: {
+      conversationIds: readonly string[];
+      error?: { detail?: string };
+    }[] = [];
+    const turnSettled = [deferred<void>(), deferred<void>()];
+    const { client, calls } = makeClient([
+      [{ type: "thread.started", thread_id: sessionId }, usageEvent()],
+      new Error("stream did not contain valid UTF-8 (code -32603)"),
+    ]);
+    const resumeThread = client.resumeThread.bind(client);
+    let resumeAttempts = 0;
+    client.resumeThread = ((id, options) => {
+      resumeAttempts += 1;
+      if (id === sessionId && resumeAttempts === 2) {
+        throw new Error("retry resume construction failed");
+      }
+      return resumeThread(id, options);
+    }) as typeof client.resumeThread;
+    const stderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+    try {
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        rolloutCorruptionVerifier: () => "corrupted",
+        rolloutCorruptionRepairer: () => ({
+          repaired: true,
+          backupPath: "/tmp/rollout-repair.bak",
+        }),
+        onTurnEnd: (info) => {
+          turnEnds.push(info);
+          turnSettled[turnEnds.length - 1]?.resolve();
+        },
+        now: () => "T",
+      });
+
+      const done = host.run("hi");
+      await turnSettled[0]!.promise;
+      await host.send("continue", undefined, ["cnv-repair"]);
+      await turnSettled[1]!.promise;
+      host.close();
+      await done;
+
+      expect(calls.resume).toEqual([null, sessionId]);
+      expect(resumeAttempts).toBe(2);
+      expect(turnEnds).toEqual([
+        expect.objectContaining({ conversationIds: [] }),
+        expect.objectContaining({
+          conversationIds: ["cnv-repair"],
+          error: { detail: "Error: retry resume construction failed" },
+        }),
+      ]);
+      expect(stderr).toHaveBeenCalledWith(
+        `codex rollout repaired for session ${sessionId}; backup: /tmp/rollout-repair.bak\n`,
+      );
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  it("修復成功の stderr 診断が throw しても retry を続けて通常成功する", async () => {
+    const sessionId = "repair-stderr-throws";
+    const logs: Envelope[] = [];
+    const turnSettled = [deferred<void>(), deferred<void>()];
+    let resultCount = 0;
+    const { client, calls } = makeClient([
+      [{ type: "thread.started", thread_id: sessionId }, usageEvent()],
+      new Error("stream did not contain valid UTF-8 (code -32603)"),
+      [usageEvent()],
+    ]);
+    const stderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((message) => {
+        if (String(message).startsWith("codex rollout repaired")) {
+          throw new Error("broken stderr");
+        }
+        return true;
+      });
+    try {
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        onLog: (entry) => {
+          logs.push(entry);
+          if (entry.type === "result") resultCount += 1;
+        },
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        rolloutCorruptionVerifier: () => "corrupted",
+        rolloutCorruptionRepairer: () => ({
+          repaired: true,
+          backupPath: "/tmp/rollout-repair.bak",
+        }),
+        onTurnEnd: () => {
+          turnSettled[resultCount - 1]?.resolve();
+        },
+        now: () => "T",
+      });
+
+      const done = host.run("hi");
+      await turnSettled[0]!.promise;
+      await host.send("continue");
+      await turnSettled[1]!.promise;
+      host.close();
+      await done;
+
+      expect(calls.resume).toEqual([null, sessionId, sessionId]);
+      const results = logs.filter((entry) => entry.type === "result");
+      expect(results).toHaveLength(2);
+      expect(results[1]?.payload).not.toMatchObject({ is_error: true });
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  it("修復 retry の終結 callback が throw しても元 turn の result と peer 通知を重ねない", async () => {
+    const sessionId = "repair-settle-callback-throws";
+    const logs: Envelope[] = [];
+    const turnEnds: unknown[] = [];
+    const firstTurnSettled = deferred<void>();
+    const { client, calls } = makeClient([
+      [{ type: "thread.started", thread_id: sessionId }, usageEvent()],
+      new Error("stream did not contain valid UTF-8 (code -32603)"),
+      new Error("retry stream connection failed"),
+    ]);
+    const host = new CodexHost(CONFIG, {
+      onState: () => {},
+      onLog: (entry) => logs.push(entry),
+      appendSystemPrompt: "p",
+      codexFactory: () => client,
+      rolloutCorruptionVerifier: () => "corrupted",
+      rolloutCorruptionRepairer: () => ({
+        repaired: true,
+        backupPath: "/tmp/rollout-repair.bak",
+      }),
+      onTurnEnd: (info) => {
+        turnEnds.push(info);
+        if (turnEnds.length === 1) firstTurnSettled.resolve();
+        if (turnEnds.length === 2) throw new Error("peer callback failed");
+      },
+      now: () => "T",
+    });
+
+    const done = host.run("hi");
+    await firstTurnSettled.promise;
+    await host.send("continue", undefined, ["cnv-settle"]);
+    await client.waitForTurn(2);
+    host.close();
+    await done;
+
+    expect(calls.resume).toEqual([null, sessionId, sessionId]);
+    expect(turnEnds).toHaveLength(2);
+    expect(turnEnds[1]).toEqual(
+      expect.objectContaining({ conversationIds: ["cnv-settle"] }),
+    );
+    expect(logs.filter((entry) => entry.type === "result")).toHaveLength(2);
+  });
+
+  it("rollout verifier の throw は通常失敗へ fallback して turn を完結する", async () => {
+    const sessionId = "repair-verifier-throws";
+    const logs: Envelope[] = [];
+    const turnEnds: {
+      conversationIds: readonly string[];
+      error?: { detail?: string };
+    }[] = [];
+    const turnSettled = [deferred<void>(), deferred<void>()];
+    const { client, calls } = makeClient([
+      [{ type: "thread.started", thread_id: sessionId }, usageEvent()],
+      new Error("stream did not contain valid UTF-8 (code -32603)"),
+    ]);
+    const host = new CodexHost(CONFIG, {
+      onState: () => {},
+      onLog: (entry) => logs.push(entry),
+      appendSystemPrompt: "p",
+      codexFactory: () => client,
+      rolloutCorruptionVerifier: () => {
+        throw new Error("rollout inspection unavailable");
+      },
+      onTurnEnd: (info) => {
+        turnEnds.push(info);
+        turnSettled[turnEnds.length - 1]?.resolve();
+      },
+      now: () => "T",
+    });
+
+    const done = host.run("hi");
+    await turnSettled[0]!.promise;
+    await host.send("continue", undefined, ["cnv-verifier"]);
+    await turnSettled[1]!.promise;
+    host.close();
+    await done;
+
+    expect(calls.resume).toEqual([null, sessionId]);
+    expect(turnEnds).toEqual([
+      expect.objectContaining({ conversationIds: [] }),
+      expect.objectContaining({
+        conversationIds: ["cnv-verifier"],
+        error: {
+          detail: "Error: stream did not contain valid UTF-8 (code -32603)",
+        },
+      }),
+    ]);
+    const results = logs.filter((entry) => entry.type === "result");
+    expect(results[1]?.payload).toMatchObject({ is_error: true });
+    expect(
+      (results[1]?.payload as { error_subtype?: string }).error_subtype,
+    ).toBeUndefined();
   });
 
   it("candidate 文言にマッチしても rollout ファイルが正常なら恒久分類しない (negative control: 他依存関係の同文 stderr による false positive を防ぐ)", async () => {

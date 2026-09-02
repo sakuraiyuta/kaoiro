@@ -2,9 +2,11 @@
 // (phase-31 31-10). Pure data — no network, no Phoenix socket: the specs
 // pin CSS/layout behaviour, not transport.
 import type {
+  ConversationSummary,
   Envelope,
   KaoiroConnection,
   PersonaManifest,
+  UserSummary,
 } from "../../src/lib/protocol";
 
 function agent(
@@ -54,8 +56,10 @@ export interface DetailScenario {
    *  LobbyHarness's own `taskRing` prop so a real-browser Playwright pass
    *  can pin `.task-ring` visibility/animation for AgentDetail across the
    *  responsive breakpoints, the way LobbyHarness already does for
-   *  AgentCard. */
-  taskRing?: boolean;
+   *  AgentCard. issue #233: this is now the active dot COUNT rather than
+   *  an on/off flag — `1` preserves every existing single-dot geometry
+   *  case bit-for-bit. */
+  taskRing?: number;
   /** 頭上リング back-button overlap regression (issue #180 follow-up
    *  round 2, 2026-08-10, workflow-review QUALITY finding): DetailHarness
    *  always mounted with manifest=null before this, so every T11 case
@@ -88,6 +92,8 @@ export interface DetailScenario {
   /** ログ件数(既定 30)。#184 の LOG_WINDOW_SIZE(200)を超える値を
    *  指定すると window 拡張(ensureIndexVisible)込みの経路になる。 */
   logCount?: number;
+  /** Supply a connected wrapper build identity for the AgentDetail display. */
+  wrapperBuildInfo?: boolean;
 }
 
 /** Manifest with a resolved sprite for the "ao" persona, covering every
@@ -108,6 +114,42 @@ export function detailManifest(scenario: DetailScenario): PersonaManifest | null
       },
     },
   };
+}
+
+/** Opt-in (`?sprites=1`) manifest for README screenshots. Points at the
+ *  REAL sprites Phoenix serves at `/personas/:sprite_set/:file` — that
+ *  route carries no auth pipeline, so a Vite dev server proxying
+ *  `/personas` renders characters with no token and no launched agent.
+ *  Every existing caller keeps passing `null`, so the specs are
+ *  unaffected. */
+export function personaSpriteManifest(): PersonaManifest {
+  const states = [
+    "done",
+    "error",
+    "fatigued",
+    "idle",
+    "thinking",
+    "tool_running",
+    "waiting_input",
+    "waiting_permission",
+  ];
+  const personas = Object.fromEntries(
+    ["ao", "momo", "kuroe", "fuji"].map((id) => [
+      id,
+      {
+        states: Object.fromEntries(
+          states.map((state) => [
+            state,
+            {
+              url: `/personas/${id}/${state}.png`,
+              hash: `sha256:harness-${id}-${state}`,
+            },
+          ]),
+        ),
+      },
+    ]),
+  );
+  return { version: "harness", personas };
 }
 
 export function lobbyAgents(pending = false): Record<string, Envelope> {
@@ -144,6 +186,78 @@ export function lobbyLogs(): Record<string, Envelope[]> {
       },
     ],
   };
+}
+
+/** Opt-in (`?demo=1`) card labels for the README screenshot. A production
+ *  agent always carries a `display_name` (ADR-0050 D1); without one the
+ *  card falls back to `agent_id` and renders the same id twice, which
+ *  reads as a defect in a public screenshot. Names come from the bundled
+ *  persona packs' own `manifest.json`, so the label matches the sprite.
+ *  Ids, states and ordering stay exactly as `lobbyAgents` built them. */
+export function demoLobbyAgents(pending: boolean): Record<string, Envelope> {
+  const names: Record<string, string> = {
+    ao: "あお", momo: "もも", kuroe: "クロエ", fuji: "ふじ",
+  };
+  return Object.fromEntries(
+    Object.entries(lobbyAgents(pending)).map(([id, env]) => {
+      const persona = env.persona ?? { id, name: id, sprite_set: id };
+      const name = names[persona.id] ?? persona.name;
+      return [
+        id,
+        { ...env, display_name: name, persona: { ...persona, name } },
+      ];
+    }),
+  );
+}
+
+/** Opt-in (`?demo=1`) timeline content for the README screenshot. The pane
+ *  otherwise renders `e2e fixture reply`, which says nothing about what
+ *  kaoiro does; this is a short synthetic hand-off (operator prompt →
+ *  delegation → review → approval request) using placeholder ids only.
+ *  Timestamps are relative to mount so the rows read as a live session.
+ *  No spec passes `demo=1`, so `lobbyLogs()` stays byte-identical. */
+export function demoLobbyLogs(): Record<string, Envelope[]> {
+  const base = Date.now();
+  const logs: Record<string, Envelope[]> = {
+    "host.ao": [], "host.momo": [], "host.kuroe": [], "host.fuji": [],
+  };
+  let seq = 0;
+  const row = (
+    from: string, minutesAgo: number, type: string,
+    payload: Record<string, unknown>,
+  ): void => {
+    logs[from].push({
+      version: "0",
+      agent_id: from,
+      ts: new Date(base - minutesAgo * 60_000).toISOString(),
+      seq: ++seq,
+      type,
+      state: "thinking",
+      payload,
+    });
+  };
+  const say = (from: string, ago: number, kind: string, text: string) =>
+    row(from, ago, "log", { kind, text });
+  const relay = (from: string, ago: number, to: string, body: string) =>
+    row(from, ago, "inter_agent_message", { to, body });
+
+  say("host.ao", 14, "user",
+    "ログイン後 30 分でセッションが切れる不具合を直してほしい");
+  say("host.ao", 12, "assistant",
+    "再現しました。トークンの再発行が抜けています。修正方針をまとめます");
+  relay("host.ao", 11, "host.momo",
+    "リフレッシュ処理の回帰テストを頼む。期限切れの直前と直後の 2 ケースだ");
+  relay("host.ao", 9, "host.kuroe",
+    "ステージングへ先に入れたい。デプロイ手順の確認をお願いします");
+  relay("host.ao", 7, "host.fuji",
+    "修正差分のレビューを頼む。3 ファイル、90 行ほどだ");
+  relay("host.fuji", 5, "host.ao",
+    "1 件だけ指摘。期限判定の境界が 1 秒ずれる。ほかは問題ない");
+  say("host.ao", 3, "assistant",
+    "指摘を反映しました。テストの結果を待っています");
+  say("host.momo", 1, "assistant",
+    "テストを 2 件追加しました。実行の許可をお願いします");
+  return logs;
 }
 
 export function detailEnvelope(scenario: DetailScenario): Envelope {
@@ -209,6 +323,57 @@ export function stubConnection(): KaoiroConnection {
   ) as KaoiroConnection;
 }
 
+// issue #277 a11y spec: SettingsDrawer's confirm-close dialog is a Modal
+// nested INSIDE SettingsDrawer's own (now also Modal-based) chrome --
+// stubConnection()'s Proxy resolves every call to `{}`, which is not an
+// array and would break the {#each conversations} block, so this needs a
+// dedicated stub with one open conversation to actually render the
+// "閉じる" button that opens the nested confirm dialog.
+export function settingsDrawerConnection(): KaoiroConnection {
+  const conversations: ConversationSummary[] = [
+    {
+      conversationId: "e2e-conv-1",
+      participants: ["ao", "momo"],
+      turns: 3,
+      tokens: 50,
+      status: "open",
+      startedAt: "2026-08-29T00:00:00Z",
+    },
+  ];
+  // issue #207: same reasoning as `conversations` above -- without an
+  // explicit override this would fall through to the catch-all `{}`,
+  // which is not array-like and would break the users section's
+  // `{#each users}` the moment SettingsDrawer's mount effect resolves.
+  const users: UserSummary[] = [
+    {
+      id: "e2e-user-1",
+      kind: "user",
+      displayName: "ao",
+      role: "operator",
+    },
+  ];
+  return new Proxy(
+    {},
+    {
+      get: (_target, prop) => {
+        if (prop === "listConversations") {
+          return async () => conversations;
+        }
+        if (prop === "closeConversation") {
+          return async () => undefined;
+        }
+        if (prop === "listUsers") {
+          return async () => users;
+        }
+        if (prop === "renameUser") {
+          return async () => undefined;
+        }
+        return async () => ({});
+      },
+    },
+  ) as KaoiroConnection;
+}
+
 export function launchHosts() {
   return [
     {
@@ -218,6 +383,9 @@ export function launchHosts() {
         { id: "momo", name: "momo", sprite_set: "momo" },
       ],
       cwd_allowlist: ["/home/e2e/project", "/home/e2e/other"],
+      build_version: "2026.9.0",
+      build_channel: "dev",
+      build_revision: "0123456789abcdef0123456789abcdef01234567",
     },
   ];
 }

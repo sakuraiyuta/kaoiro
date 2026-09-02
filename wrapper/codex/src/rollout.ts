@@ -1,11 +1,17 @@
 import {
   closeSync,
+  constants as fsConstants,
+  copyFileSync,
   openSync,
   readFileSync,
   readSync,
   readdirSync,
+  renameSync,
+  rmSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
@@ -70,7 +76,9 @@ export type RolloutCorruptionVerdict = "corrupted" | "clean" | "unknown";
  *  corrupted line anywhere in the file, not just near the end, is grounds
  *  for the classification) and checks two things per non-empty line: it
  *  must fatally UTF-8-decode, and it must `JSON.parse`. Either failure on
- *  ANY line is enough to confirm real corruption.
+ *  ANY line is enough to confirm real corruption. A resume target must also
+ *  retain at least one non-empty entry: an empty or whitespace-only rollout
+ *  has lost all usable history and is therefore corrupted, not clean.
  *
  *  `"unknown"` (session id has no resolvable rollout, or the file could
  *  not be opened/read) is deliberately its own outcome, distinct from
@@ -89,12 +97,91 @@ export function verifyRolloutCorruption(
 ): RolloutCorruptionVerdict {
   const path = rolloutPathIn(root, sessionId);
   if (path === null) return "unknown";
+  return verifyRolloutPath(path);
+}
+
+function verifyRolloutPath(path: string): RolloutCorruptionVerdict {
   let raw: Buffer;
   try {
     raw = readFileSync(path);
   } catch {
     return "unknown";
   }
+  return verifyRolloutBuffer(raw);
+}
+
+export type RolloutRepairResult =
+  | { repaired: true; backupPath: string }
+  | { repaired: false };
+
+/** Repairs a confirmed corrupt rollout without ever replacing the source
+ * before an exclusive backup exists. Only physical lines that fail fatal
+ * UTF-8 decoding or JSON.parse are removed; the temporary replacement is
+ * read back and fully verified before its atomic rename. */
+export function repairRolloutCorruption(
+  sessionId: string,
+  root = codexRolloutsRoot(),
+  verifyReplacementPath: (path: string) => RolloutCorruptionVerdict =
+    verifyRolloutPath,
+): RolloutRepairResult {
+  const path = rolloutPathIn(root, sessionId);
+  if (path === null) return { repaired: false };
+
+  let current: Buffer;
+  try {
+    current = readFileSync(path);
+  } catch {
+    return { repaired: false };
+  }
+  if (verifyRolloutBuffer(current) !== "corrupted") {
+    return { repaired: false };
+  }
+
+  const backupPath = `${path}.bak-${randomUUID()}`;
+  try {
+    copyFileSync(path, backupPath, fsConstants.COPYFILE_EXCL);
+  } catch {
+    return { repaired: false };
+  }
+
+  const tempPath = `${path}.repair-${randomUUID()}.tmp`;
+  let replaced = false;
+  try {
+    const backup = readFileSync(backupPath);
+    const repaired = removeCorruptedRolloutLines(backup);
+    if (repaired === null) return { repaired: false };
+    const mode = statSync(path).mode & 0o777;
+    writeFileSync(tempPath, repaired, { flag: "wx", mode });
+    if (verifyReplacementPath(tempPath) !== "clean") {
+      return { repaired: false };
+    }
+    // Repair follows this host's failed resume, so another live writer is
+    // not expected; accept the remaining check-to-rename TOCTOU window.
+    if (!readFileSync(path).equals(backup)) {
+      return { repaired: false };
+    }
+    renameSync(tempPath, path);
+    replaced = true;
+    return { repaired: true, backupPath };
+  } catch {
+    return { repaired: false };
+  } finally {
+    try {
+      rmSync(tempPath, { force: true });
+    } catch {
+      // Temporary cleanup cannot make an untouched original unsafe.
+    }
+    if (!replaced) {
+      try {
+        rmSync(backupPath, { force: true });
+      } catch {
+        // The untouched original remains authoritative if backup cleanup fails.
+      }
+    }
+  }
+}
+
+function verifyRolloutBuffer(raw: Buffer): RolloutCorruptionVerdict {
   const decoder = new TextDecoder("utf-8", { fatal: true });
   let text: string;
   try {
@@ -102,6 +189,7 @@ export function verifyRolloutCorruption(
   } catch {
     return "corrupted";
   }
+  let entries = 0;
   for (const line of text.split("\n")) {
     if (line.trim() === "") continue;
     try {
@@ -109,8 +197,40 @@ export function verifyRolloutCorruption(
     } catch {
       return "corrupted";
     }
+    entries += 1;
   }
-  return "clean";
+  return entries === 0 ? "corrupted" : "clean";
+}
+
+function removeCorruptedRolloutLines(raw: Buffer): Buffer | null {
+  const kept: Buffer[] = [];
+  let validEntries = 0;
+  let removed = 0;
+  let offset = 0;
+
+  while (offset < raw.length) {
+    const newline = raw.indexOf(0x0a, offset);
+    const end = newline === -1 ? raw.length : newline;
+    const endWithNewline = newline === -1 ? raw.length : newline + 1;
+    const line = raw.subarray(offset, end);
+    let valid = false;
+    try {
+      const text = new TextDecoder("utf-8", { fatal: true }).decode(line);
+      if (text.trim() === "") {
+        valid = true;
+      } else {
+        JSON.parse(text);
+        validEntries += 1;
+        valid = true;
+      }
+    } catch {
+      removed += 1;
+    }
+    if (valid) kept.push(raw.subarray(offset, endWithNewline));
+    offset = endWithNewline;
+  }
+
+  return removed > 0 && validEntries > 0 ? Buffer.concat(kept) : null;
 }
 
 /** Finds one rollout by its validated opaque thread id. Shared by the tail

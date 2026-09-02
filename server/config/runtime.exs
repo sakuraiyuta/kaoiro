@@ -180,6 +180,18 @@ if path = System.get_env("KAOIRO_SESSION_STARTS_PATH") do
   config :kaoiro_server, :session_starts_path, path
 end
 
+if path = System.get_env("KAOIRO_SESSION_LIFECYCLE_EVENTS_PATH") do
+  config :kaoiro_server, :session_lifecycle_events_path, path
+end
+
+# ADR-0055 phase-33 Stage B — per-agent event cap for the session_lifecycle
+# timeline. Same idiom as the PORT parse above: String.to_integer/1 raises
+# (boot fails) on a non-numeric value rather than silently falling back,
+# since a wrong cap silently changes how much history operators can see.
+if cap = System.get_env("SESSION_LIFECYCLE_MAX_EVENTS_PER_AGENT") do
+  config :kaoiro_server, :session_lifecycle_max_events_per_agent, String.to_integer(cap)
+end
+
 # #247's ledger contains only recipient-local dispatch watermarks (no
 # messages), but it must survive a server restart or a real pending gap would
 # be silently forgotten. Point production at the same persistent volume as
@@ -207,7 +219,7 @@ end
 # the authoritative store of revoked agent_ids for fail-closed auth: a lost
 # entry silently re-grants a revoked identity. Point at a persistent volume
 # in production; unset falls back to KaoiroServer.TokenDenylist.default_path/0
-# (a shared `$TMPDIR/kaoiro_token_denylist.dets`) which does NOT survive a
+# (`$TMPDIR/kaoiro-dets/token_denylist.dets`) which does NOT survive a
 # container recreation.
 if path = System.get_env("KAOIRO_TOKEN_DENYLIST_PATH") do
   config :kaoiro_server, :token_denylist_path, path

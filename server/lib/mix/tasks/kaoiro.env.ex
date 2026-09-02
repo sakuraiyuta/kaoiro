@@ -36,6 +36,7 @@ defmodule Mix.Tasks.Kaoiro.Env do
       secret_key_base: ask_secret(),
       phx_host: ask_required("Public hostname (PHX_HOST)", "localhost"),
       port: ask_optional("HTTP port (PORT, blank = 4000)"),
+      plain_http: confirm("Use plain-HTTP deployment (KAOIRO_PLAIN_HTTP=true)?", false),
       bind_ip: ask_optional("Bind IP (KAOIRO_BIND_IP, blank = all interfaces)"),
       client_tokens: ask_client_tokens(),
       wrapper_tokens: ask_pair_tokens("wrapper", "agent_id"),
@@ -44,7 +45,7 @@ defmodule Mix.Tasks.Kaoiro.Env do
       oauth: ask_oauth()
     }
 
-    write(path, render(answers), answers.oauth)
+    write(path, render(answers), answers.oauth, answers)
   end
 
   # -- generation ------------------------------------------------------------
@@ -80,6 +81,11 @@ defmodule Mix.Tasks.Kaoiro.Env do
       "SECRET_KEY_BASE=#{answers.secret_key_base}",
       "PHX_HOST=#{answers.phx_host}",
       optional("PORT", answers[:port], "default 4000"),
+      optional(
+        "KAOIRO_PLAIN_HTTP",
+        if(answers[:plain_http], do: "true", else: nil),
+        "true = direct HTTP without a TLS proxy"
+      ),
       optional(
         "KAOIRO_BIND_IP",
         answers[:bind_ip],
@@ -117,7 +123,8 @@ defmodule Mix.Tasks.Kaoiro.Env do
       "#KAOIRO_INGRESS_ORDER_PATH=/var/lib/kaoiro/ingress_order.dets",
       "#KAOIRO_DELIVERY_STATES_PATH=/var/lib/kaoiro/delivery_states.dets",
       "#KAOIRO_TOKEN_DENYLIST_PATH=/var/lib/kaoiro/token_denylist.dets",
-      "#KAOIRO_USERS_PATH=/var/lib/kaoiro/users.dets"
+      "#KAOIRO_USERS_PATH=/var/lib/kaoiro/users.dets",
+      "#KAOIRO_SESSION_LIFECYCLE_EVENTS_PATH=/var/lib/kaoiro/session_lifecycle_events.dets"
     ]
     |> List.flatten()
     |> Enum.join("\n")
@@ -170,7 +177,8 @@ defmodule Mix.Tasks.Kaoiro.Env do
       "",
       "# Dashboard OAuth login (ADR-0042).",
       Enum.flat_map(providers, &provider_env_lines/1),
-      "KAOIRO_OAUTH_ALLOWLIST_PATH=/etc/kaoiro/oauth-allowlist.txt"
+      "KAOIRO_OAUTH_ALLOWLIST_PATH=/etc/kaoiro/oauth-allowlist.txt",
+      "# This path is inside docker compose. For `mix phx.server`, replace it with the allow-list's real file path."
     ]
   end
 
@@ -296,7 +304,7 @@ defmodule Mix.Tasks.Kaoiro.Env do
 
       :error ->
         Mix.shell().error(
-          "  expected provider:identifier[:role] (role: viewer, operator or admin)"
+          "  expected provider:identifier[:role] (google needs @; github/nextcloud cannot contain whitespace; role: viewer, operator or admin)"
         )
 
         ask_allowlist_entry(index)
@@ -307,7 +315,7 @@ defmodule Mix.Tasks.Kaoiro.Env do
     case value |> String.split(":") |> Enum.map(&String.trim/1) do
       [provider, identifier]
       when provider in ["google", "github", "nextcloud"] and identifier != "" ->
-        {:ok, "#{provider}:#{identifier}"}
+        normalize_allowlist_entry(provider, identifier, nil)
 
       # `admin` accepted since issue #198. This generator is the standard
       # bootstrap surface, and admin is declarable ONLY through config
@@ -317,11 +325,26 @@ defmodule Mix.Tasks.Kaoiro.Env do
       [provider, identifier, role]
       when provider in ["google", "github", "nextcloud"] and identifier != "" and
              role in ["viewer", "operator", "admin"] ->
-        {:ok, "#{provider}:#{identifier}:#{role}"}
+        normalize_allowlist_entry(provider, identifier, role)
 
       _ ->
         :error
     end
+  end
+
+  defp normalize_allowlist_entry(provider, identifier, role) do
+    if valid_allowlist_identifier?(provider, identifier) do
+      {:ok, Enum.join([provider, identifier, role] |> Enum.reject(&is_nil/1), ":")}
+    else
+      :error
+    end
+  end
+
+  defp valid_allowlist_identifier?("google", identifier), do: String.contains?(identifier, "@")
+
+  defp valid_allowlist_identifier?(provider, identifier)
+       when provider in ["github", "nextcloud"] do
+    not String.match?(identifier, ~r/\s/)
   end
 
   # `token:role` entries. Roles are a closed set server-side, so only those
@@ -405,18 +428,17 @@ defmodule Mix.Tasks.Kaoiro.Env do
 
   # -- output ----------------------------------------------------------------
 
-  defp write(path, body, oauth) do
+  defp write(path, body, oauth, answers) do
     # Default to NO here: overwriting a live .env destroys working tokens.
     if File.exists?(path) and
          not confirm("#{path} exists — overwrite?", false) do
       Mix.shell().info("\nKept #{path}; nothing written.")
     else
-      File.write!(path, body)
-      File.chmod!(path, 0o600)
+      write_private(path, body)
       Mix.shell().info("\nWrote #{path}\n")
 
       write_allowlist(path, oauth)
-      print_next_steps(path, oauth)
+      print_next_steps(path, oauth, answers)
     end
   end
 
@@ -429,27 +451,39 @@ defmodule Mix.Tasks.Kaoiro.Env do
     if File.exists?(path) and not confirm("#{path} exists — overwrite?", false) do
       Mix.shell().info("Kept #{path}; existing OAuth allow-list unchanged.\n")
     else
-      File.write!(path, render_allowlist(entries))
-      File.chmod!(path, 0o600)
+      write_private(path, render_allowlist(entries))
       Mix.shell().info("Wrote #{path}\n")
     end
   end
 
   defp allowlist_path(env_path), do: Path.join(Path.dirname(env_path), "oauth-allowlist.txt")
 
-  defp print_next_steps(path, oauth = %{providers: [_ | _]}) do
+  defp write_private(path, content) do
+    File.open!(path, [:write], fn file ->
+      # An attacker can grab the empty fd at open(2); accepted because secrets
+      # follow chmod to 0600 in an operator-owned config directory.
+      File.chmod!(path, 0o600)
+      IO.binwrite(file, content)
+    end)
+  end
+
+  defp print_next_steps(path, %{providers: [_ | _]} = oauth, answers) do
     allowlist_path = allowlist_path(path)
     mount_source = compose_mount_source(allowlist_path)
-    {google_steps, start_step, runner_step} = google_next_steps(oauth)
+    {google_steps, start_step, runner_step} = google_next_steps(oauth, answers)
 
     steps =
       [
         "1. Review #{path} (tokens and OAuth secrets are in plain text — keep it out of git).",
-        "2. Keep #{allowlist_path} out of git, then add this read-only mount under\n" <>
+        "2. Keep #{allowlist_path} out of git.\n" <>
+          "     If --path is outside server/, add it to that directory's\n" <>
+          "     .gitignore. Add this read-only mount under\n" <>
           "     docker-compose.yaml's service `volumes:`:\n" <>
           "       - #{mount_source}:/etc/kaoiro/oauth-allowlist.txt:ro",
-        "3. Register each provider's redirect URI in its console; see\n" <>
-          "     docs/specs/deployment.md section 1.6."
+        "3. Register each provider's redirect URI in its console:\n" <>
+          Enum.map_join(oauth.providers, "\n", fn %{provider: provider} ->
+            "     #{provider}: #{redirect_uri(answers, provider)}"
+          end) <> "\n     See docs/specs/deployment.md section 1.6."
       ] ++
         google_steps ++
         [
@@ -466,7 +500,7 @@ defmodule Mix.Tasks.Kaoiro.Env do
     """)
   end
 
-  defp print_next_steps(path, _oauth) do
+  defp print_next_steps(path, _oauth, _answers) do
     Mix.shell().info("""
     Next:
       1. Review #{path} (tokens are in plain text — keep it out of git).
@@ -484,8 +518,25 @@ defmodule Mix.Tasks.Kaoiro.Env do
     if Path.type(path) == :absolute, do: path, else: "./#{path}"
   end
 
-  defp google_next_steps(%{providers: providers}) do
-    if Enum.any?(providers, &(&1.provider == "google")) do
+  defp redirect_uri(answers, provider) do
+    host = answers.phx_host
+
+    if answers[:plain_http] do
+      port =
+        case answers[:port] do
+          value when value in [nil, ""] -> ":4000"
+          "80" -> ""
+          value -> ":#{value}"
+        end
+
+      "http://#{host}#{port}/auth/#{provider}/callback"
+    else
+      "https://#{host}/auth/#{provider}/callback"
+    end
+  end
+
+  defp google_next_steps(%{providers: providers}, answers) do
+    if answers[:plain_http] and Enum.any?(providers, &(&1.provider == "google")) do
       {[
          "4. Google OAuth cannot be used on a plain-HTTP deployment (localhost is the exception)."
        ], 5, 6}

@@ -1,5 +1,5 @@
 ---
-title: クライアント接続は Phoenix Channels に一本化
+title: Client connections unified on Phoenix Channels
 status: accepted
 date: 2026-06-11
 opened: 2026-06-10
@@ -9,7 +9,7 @@ related_specs: [protocol, architecture]
 related_adrs: [7, 10, 25]
 ---
 
-# ADR-0009 — クライアント接続は Phoenix Channels に一本化
+# ADR-0009 — Client Connections Unified on Phoenix Channels
 
 ## Status
 
@@ -17,74 +17,82 @@ Accepted
 
 ## Context
 
-クライアントは別プロジェクト分離・公開プロトコル文書化が決定済み
-([ADR-0007](0007-client-separation-reference-dashboard.md))。接続方式を
-Phoenix Channels にするか素の WebSocket(+読み取り専用 SSE 併設)にするかが
-未決だった。Channels は同梱リファレンスダッシュボード(TS)には自然だが、
-非 JS クライアント(neovim プラグイン = Lua、ターミナル CUI 等)に Channels
-ワイヤプロトコルの実装負担が生じ得る、というのが懸念だった(issue #11)。
+Separating the client into a separate project and documenting a public protocol
+were already decided ([ADR-0007](0007-client-separation-reference-dashboard.md)).
+It was undecided whether the connection method should be Phoenix Channels or
+plain WebSocket (with read-only SSE alongside it). Channels are natural for the
+included reference dashboard (TS), but there was concern that non-JS clients
+(neovim plugin = Lua, terminal CUI, etc.) would bear the burden of implementing
+the Channels wire protocol (issue #11).
 
-2026-06 の調査で以下が判明した:
+The following was found in the 2026-06 investigation:
 
-- Channels ワイヤプロトコル V2(`[join_ref, ref, topic, event, payload]` の
-  5 要素配列、接続時 `?vsn=2.0.0`)は公式ガイド
-  [Writing a Channels Client](https://hexdocs.pm/phoenix/writing_a_channels_client.html)
-  で文書化された公開プロトコルであり、Phoenix 1.3/1.4 期の導入以来
-  1.8 系まで形式不変。内部実装への依存にはならない。
-- Supabase Realtime が同プロトコルをそのまま公開 API として文書化し、
-  多言語クライアントを成立させている先例がある。
-- 非 JS 言語のクライアントライブラリ実態(2026-06 時点):
-  C# は [PhoenixSharp](https://github.com/Mazyod/PhoenixSharp)(活発・V2)、
-  Go は [nshafer/phx](https://github.com/nshafer/phx)(V2・保守中)、
-  Rust は
+- The Channels wire protocol V2 (a five-element array,
+  `[join_ref, ref, topic, event, payload]`, and `?vsn=2.0.0` on connection) is a
+  public protocol documented in the official guide
+  [Writing a Channels Client](https://hexdocs.pm/phoenix/writing_a_channels_client.html),
+  and its format has remained unchanged from its introduction in the Phoenix
+  1.3/1.4 era through the 1.8 series. This does not depend on internal
+  implementation details.
+- There is precedent for Supabase Realtime documenting the same protocol as its
+  public API and establishing multilingual clients.
+- Non-JS language client libraries (as of 2026-06): C# has
+  [PhoenixSharp](https://github.com/Mazyod/PhoenixSharp) (active, V2); Go has
+  [nshafer/phx](https://github.com/nshafer/phx) (V2, maintained); Rust has
   [liveview-native/phoenix-channels-client](https://github.com/liveview-native/phoenix-channels-client)
-  (現役 V2、crates.io 停滞のため git 依存)。Python は保守された V2
-  クライアント不在だが `websockets` 上の自作が容易。Lua(neovim)は
-  Channels クライアント皆無で、WebSocket 層自体が標準にない。
-- 決定打: Lua の負担の本体は WebSocket 層(RFC 6455 クライアントの純 Lua
-  自作)であり、**素の WebSocket 案でも同じだけかかる**。さらに素 WS 案は
-  再接続・heartbeat・要求/応答相関(ref)・トピック購読の仕様を自前設計する
-  ことになり、Channels のライフサイクル部分の再発明にしかならない。
+  (active V2, using a git dependency because crates.io is stagnant). Python
+  has no maintained V2 client, but writing one on top of `websockets` is easy.
+  Lua (neovim) has no Channels client at all, and the WebSocket layer itself is
+  not standard.
+- The decisive point is that Lua's main burden is the WebSocket layer (writing
+  an RFC 6455 client in pure Lua), and **the plain WebSocket option would incur
+  the same burden**. In addition, the plain WS option would require designing
+  reconnection, heartbeat, request/response correlation (ref), and topic
+  subscription specifications from scratch, which would only reinvent the
+  lifecycle part of Channels.
 
 ## Decision
 
-- クライアント向け接続は **Phoenix Channels に一本化**する。素の WebSocket
-  エンドポイントは併設しない。
-- ワイヤ形式は **V2 serializer 固定**(接続時 `vsn=2.0.0` を必須)とし、
-  kaoiro の公開プロトコル文書([protocol](../specs/protocol.md))には公式
-  ガイドへの参照 + kaoiro 固有のトピック/イベント定義を記載する。
-- 読み取り専用 SSE は**見送り**(Elixir 側に保守されたライブラリが無く
-  手書き前提のため)。必要が生じた時点で open-question として再起票する。
-- 非 JS クライアントは各言語の WebSocket ライブラリ + Channels V2 フレーム
-  実装で接続する(上記ライブラリ実態を参照)。
+- **Unify client connections on Phoenix Channels**. Do not provide a plain
+  WebSocket endpoint alongside it.
+- Fix the wire format to the **V2 serializer** (require `vsn=2.0.0` on
+  connection), and include a reference to the official guide plus kaoiro-specific
+  topic/event definitions in kaoiro's public protocol document
+  ([protocol](../specs/protocol.md)).
+- **Defer read-only SSE** (there is no maintained library on the Elixir side and
+  handwritten implementation would be required). Refile it as an open question
+  when a need arises.
+- Non-JS clients connect using each language's WebSocket library plus a Channels
+  V2 frame implementation (see the library status above).
 
 ## Consequences
 
 ### Positive
 
-- サーバ実装が最小(Channels の再接続・heartbeat・PubSub 統合・Presence を
-  そのまま使える)。
-- 仕様が 1 系統で、公開プロトコル文書は公式ガイド参照 + イベント定義のみで
-  済む。
-- リファレンスダッシュボード(ADR-0007)と外部クライアントが同一経路を通り、
-  適合性検証がそのまま機能する。
+- The server implementation is minimal (Channels reconnection, heartbeat, PubSub
+  integration, and Presence can be used as-is).
+- There is one specification, and the public protocol document only needs a
+  reference to the official guide and event definitions.
+- The reference dashboard (ADR-0007) and external clients use the same path, so
+  conformance verification works directly.
 
 ### Negative
 
-- Lua(neovim)クライアントは WebSocket 層 + Channels フレーミングの自作が
-  確定する(ただし素 WS 案でも WS 層の負担は同等)。
-- Python クライアントは小さな Channels V2 クライアントの自作・保守が必要。
+- For a Lua (neovim) client, writing the WebSocket layer and Channels framing is
+  unavoidable (the WS-layer burden would be equivalent with the plain WS
+  option).
+- A Python client requires writing and maintaining a small Channels V2 client.
 
 ### Neutral
 
-- ワイヤプロトコルのバージョンは Phoenix 側の serializer バージョン交渉
-  (`vsn`)に乗る。kaoiro エンベロープ自体のバージョニングは
-  [ADR-0010](0010-protocol-precisification.md) で確定。
+- The wire-protocol version is carried by Phoenix-side serializer version
+  negotiation (`vsn`). Versioning of the kaoiro envelope itself is settled in
+  [ADR-0010](0010-protocol-precisification.md).
 
 ## Alternatives Considered
 
 | Option | Why rejected |
 |--------|--------------|
-| Channels(同梱用)+ 素の WS 併設(2 経路) | 仕様 2 系統の保守負担。素 WS 側でライフサイクル仕様の再発明が必要。調査の結果、非 JS クライアントの負担軽減効果はほぼ無い |
-| 素の WebSocket のみ | Phoenix の再接続・Presence・PubSub 統合を自前化。join_ref/ref/topic/heartbeat 相当の再発明になり Channels に対する優位なし |
-| 読み取り専用 SSE 併設 | Elixir 側に保守されたライブラリ不在(手書き前提)。需要が未確認のため見送り、必要時に再起票 |
+| Channels (for the included client) + plain WS alongside it (two paths) | Maintenance burden of two specifications. The plain WS side would require reinventing the lifecycle specification. The investigation found almost no reduction in burden for non-JS clients |
+| Plain WebSocket only | Reimplements Phoenix reconnection, Presence, and PubSub integration. It would reinvent equivalents of join_ref/ref/topic/heartbeat, offering no advantage over Channels |
+| Read-only SSE alongside it | No maintained library on the Elixir side (handwritten implementation required). Deferred because demand is unconfirmed; refile when needed |

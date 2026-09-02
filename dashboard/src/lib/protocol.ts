@@ -1,7 +1,8 @@
 // kaoiro public-protocol client — plain TS, no Svelte dependency
 // (ADR-0007). Speaks Phoenix Channels (vsn=2.0.0 via the official client,
 // ADR-0009) and consumes the same API as any external client: join
-// "agents:lobby", receive one "snapshot" push, then "envelope" broadcasts.
+// "agents:lobby", receive agents/tasks/deliveries snapshot pushes, then
+// "envelope" broadcasts.
 // Reconnect/heartbeat belong to the phoenix client; every successful
 // (re)join yields a fresh snapshot (protocol.md re-sync rule).
 
@@ -1320,6 +1321,43 @@ export async function fetchPersonaManifest(
   }
 }
 
+/** Full persona pack detail served at GET /api/personas/:id (issue #232):
+ *  every manifest.json field the schema defines, plus the full
+ *  personality.md body. Static per-pack information, not an individual
+ *  agent's state. Optional fields are simply absent, not null, when the
+ *  pack's manifest.json omits them. */
+export interface PersonaPackDetail {
+  id: string;
+  name: string;
+  sprite_set: string;
+  version: string;
+  license: string;
+  min_kaoiro_version: string;
+  states: string[];
+  description?: string;
+  author?: string;
+  homepage?: string;
+  personality: string;
+}
+
+/** Fetches one persona pack's detail; null on any failure (unknown id,
+ *  network error) so callers can show a fallback message. On-demand only —
+ *  called when the operator opens the detail modal, not polled. */
+export async function fetchPersonaPackDetail(
+  personaId: string,
+  base = "",
+): Promise<PersonaPackDetail | null> {
+  try {
+    const res = await fetch(
+      `${base}/api/personas/${encodeURIComponent(personaId)}`,
+    );
+    if (!res.ok) return null;
+    return (await res.json()) as PersonaPackDetail;
+  } catch {
+    return null;
+  }
+}
+
 /** Which login paths the login screen should offer (issue #65 / ADR-0042). */
 export interface AuthMethods {
   token: boolean;
@@ -1364,12 +1402,35 @@ export async function fetchAuthMethods(
  *  were a real revision (spoofing prevention, same posture as the
  *  `typeof` guards elsewhere in this file). */
 const BUILD_REVISION_RE = /^[0-9a-f]{40}$/;
+const BUILD_VERSION_RE = /^\d{4}\.(?:[1-9]|1[0-2])\.\d+$/;
 
 function isValidBuildRevision(value: unknown): value is string {
   return value === "unknown" || (typeof value === "string" && BUILD_REVISION_RE.test(value));
 }
 
-/** Server's own build identity (issue #228), served at GET /api/health.
+function isValidBuildVersion(value: unknown): value is string {
+  return value === "unknown" || (typeof value === "string" && BUILD_VERSION_RE.test(value));
+}
+
+function isValidBuildChannel(value: unknown): value is "dev" | "release" {
+  return value === "dev" || value === "release";
+}
+
+function isConsistentBuildIdentity(
+  revision: string,
+  dirty: boolean,
+  version: string,
+  channel: "dev" | "release",
+): boolean {
+  return (
+    channel !== "release" ||
+    (!dirty && revision !== "unknown" && version !== "unknown")
+  );
+}
+
+/** Server's own build identity (issues #228/#288), served at GET /api/health.
+ *  `build_version` / `build_channel` identify the lockstep CalVer project
+ *  artifact; `build_channel` is a controlled `dev`/`release` value.
  *  `protocol_version` is ADR-0015's wire compatibility stamp — a
  *  DIFFERENT concept from `build_revision` (the git SHA the running image
  *  was built from); see HostInfo.build_revision's own doc for why the two
@@ -1378,6 +1439,8 @@ function isValidBuildRevision(value: unknown): value is string {
  *  し), never part of the server's own identity response. */
 export interface ServerHealth {
   status: string;
+  build_version: string;
+  build_channel: "dev" | "release";
   build_revision: string;
   build_dirty: boolean;
   protocol_version: string;
@@ -1406,8 +1469,16 @@ export async function fetchServerHealth(base = ""): Promise<ServerHealth | null>
       typeof body !== "object" ||
       body === null ||
       typeof (body as ServerHealth).status !== "string" ||
+      !isValidBuildVersion((body as ServerHealth).build_version) ||
+      !isValidBuildChannel((body as ServerHealth).build_channel) ||
       !isValidBuildRevision((body as ServerHealth).build_revision) ||
       typeof (body as ServerHealth).build_dirty !== "boolean" ||
+      !isConsistentBuildIdentity(
+        (body as ServerHealth).build_revision,
+        (body as ServerHealth).build_dirty,
+        (body as ServerHealth).build_version,
+        (body as ServerHealth).build_channel,
+      ) ||
       typeof (body as ServerHealth).protocol_version !== "string"
     ) {
       return null;
@@ -1446,6 +1517,10 @@ export interface HostInfo {
    *  operator of a mismatch, never to block anything. */
   build_revision?: string;
   build_dirty?: boolean;
+  /** CalVer project version and channel from issue #288's runner register.
+   *  Optional as a pair for pre-#288 runner compatibility. */
+  build_version?: string;
+  build_channel?: "dev" | "release";
 }
 
 /** Operator launch request (案A, ADR-0024). The client sends only these; the
@@ -1493,6 +1568,38 @@ export interface SpawnResult {
   reason?: string;
 }
 
+/** Operator-facing conversation-list entry (issue #276, admin-only first
+ *  cut). Wire shape from `ConversationStates.list_for_operator/1` — a
+ *  closed tombstone reports `tokens` as `null` (dropped server-side at
+ *  close), while `startedAt` is RETAINED across close (director decision
+ *  A, issue #276 review follow-up) so a closed row still shows when it
+ *  started. `startedAt` stays nullable in this type only for a server
+ *  reply that omits it (legacy/defensive fallback), not because the
+ *  conversation is closed. */
+export interface ConversationSummary {
+  conversationId: string;
+  participants: string[];
+  turns: number;
+  tokens: number | null;
+  status: "open" | "closed";
+  startedAt: string | null;
+}
+
+/** Operator-facing user-list entry (issue #207). Wire shape from
+ *  `Users.all_with_role/1` (id/kind/display_name/role) — the server
+ *  handler REUSES that shape's IMPLEMENTATION (it matches exactly), but
+ *  the decision that these 4 fields may cross this operator boundary
+ *  was made independently of ADR-0021 F6-8's separate, agent-facing
+ *  allow-list (`directory_request`'s `users` projection) — ADR-0021
+ *  F6-1: agent disclosure and operator disclosure are independent
+ *  decisions, not a shared allow-list. */
+export interface UserSummary {
+  id: string;
+  kind: "user";
+  displayName: string;
+  role: "viewer" | "operator" | "admin";
+}
+
 /** Canonical persona joined server-side against the CURRENT PersonaAssets
  *  manifest (issue #219 D19) — never a stored snapshot. `name` /
  *  `sprite_set` are present when the pack still resolves; absent
@@ -1527,6 +1634,16 @@ export interface InterAgentDeliveryStatus {
   pending_since?: string;
 }
 
+/** Build identity reported by a currently connected wrapper. The server
+ * derives `agent_id` from the wrapper topic and sends only this artifact
+ * identity to operator-capable dashboard sessions. */
+export interface WrapperBuildInfo {
+  build_version: string;
+  build_channel: "dev" | "release";
+  build_revision: string;
+  build_dirty: boolean;
+}
+
 /** A resume candidate under a cwd (ADR-0014 F2; minimal metadata, T2). */
 export interface RunnerSession {
   session_id: string;
@@ -1558,6 +1675,8 @@ export interface KaoiroHandlers {
   onJoined?: () => void;
   /** Full re-sync; replaces all known agents (last-write-wins). */
   onSnapshot: (agents: Record<string, Envelope>) => void;
+  /** Whether the bounded agent wire projection omitted entries on this join. */
+  onSnapshotIncomplete?: (incomplete: boolean) => void;
   /** Active subagent/workflow task snapshot (nested {@link TaskTable}),
    *  pushed once alongside the AgentStates snapshot on join (ADR-0048
    *  F3, issue #180). Operator-only: the server sends an empty map for a
@@ -1567,7 +1686,13 @@ export interface KaoiroHandlers {
    *  tasks. */
   onTaskSnapshot?: (tasks: TaskTable) => void;
   onDeliverySnapshot?: (deliveries: Record<string, InterAgentDeliveryStatus>) => void;
+  /** Whether the bounded delivery projection omitted watermarks on this join. */
+  onDeliverySnapshotIncomplete?: (incomplete: boolean) => void;
   onDeliveryStatus?: (agentId: string, status: InterAgentDeliveryStatus | null) => void;
+  /** Current wrapper artifact identities, sent only to operators/admins. */
+  onWrapperBuildInfoSnapshot?: (infos: Record<string, WrapperBuildInfo>) => void;
+  /** Live wrapper identity update; null means that wrapper disconnected. */
+  onWrapperBuildInfo?: (agentId: string, info: WrapperBuildInfo | null) => void;
   /** Single-agent update (any envelope type; caller routes by type). */
   onEnvelope: (envelope: Envelope) => void;
   /** Reply-log history per agent (operator-only, ADR-0012); pushed once
@@ -1861,6 +1986,35 @@ export interface KaoiroConnection {
    *  back to the model's own default_effort rather than block launch on
    *  this failing. */
   getLaunchDefaults: () => Promise<Record<string, string>>;
+  /** Operator-facing conversation list (issue #276, admin-only first
+   *  cut). Pure read-time query mirroring getLaunchDefaults — no push
+   *  event, the caller re-fetches on demand. Entries are defensively
+   *  parsed (a malformed entry is dropped, not the whole list). Rejects
+   *  on forbidden / transport disconnect / timeout. */
+  listConversations: () => Promise<ConversationSummary[]>;
+  /** Manual conversation close (issue #276): rides the same tombstone +
+   *  conversation_closed notification every hard-limit/GC closure
+   *  already uses — no new termination path. Resolves on server accept.
+   *  Rejects on forbidden / conversation_closed (idempotent double-close)
+   *  / unknown_conversation_id / transport disconnect / timeout; the
+   *  caller must re-fetch listConversations() to see the updated status
+   *  either way (no separate push). */
+  closeConversation: (conversationId: string) => Promise<void>;
+  /** Operator-facing user list (issue #207). Pure read-time query
+   *  mirroring listConversations — no push event, the caller re-fetches
+   *  on demand. Entries are defensively parsed (a malformed entry is
+   *  dropped, not the whole list). Rejects on forbidden / transport
+   *  disconnect / timeout. */
+  listUsers: () => Promise<UserSummary[]>;
+  /** Renames a user's `display_name` (server API from issue #197 段階3;
+   *  dashboard access added by issue #207). Operator-only, any existing
+   *  user — no self-service distinction (director's Q1 判定, issue #187
+   *  段階3). Rejects like sendInstruction, plus `unknown_user` /
+   *  `invalid_name`. The resolved entry is NOT surfaced here, same as
+   *  renameAgent — the caller re-fetches listUsers() to see the updated
+   *  name (issue #207 design decision: same refresh-on-mutation contract
+   *  closeConversation already uses). */
+  renameUser: (userId: string, name: string) => Promise<void>;
   /** Requests the resume candidates under (host, cwd) (#22 phase-1);
    * resolves when the server accepts the relay. The candidate list arrives
    * separately via onSessions. Rejects like sendInstruction. */
@@ -1960,6 +2114,19 @@ export function parseHosts(value: unknown): HostInfo[] {
       Array.isArray((entry as HostInfo).cwd_allowlist)
     ) {
       const e = entry as HostInfo;
+      const validRevisionPair =
+        isValidBuildRevision(e.build_revision) && typeof e.build_dirty === "boolean";
+      const validVersionPair =
+        isValidBuildVersion(e.build_version) && isValidBuildChannel(e.build_channel);
+      const validCompleteIdentity =
+        validRevisionPair &&
+        validVersionPair &&
+        isConsistentBuildIdentity(
+          e.build_revision!,
+          e.build_dirty!,
+          e.build_version!,
+          e.build_channel!,
+        );
       hosts.push({
         host_id: hostId,
         personas: e.personas,
@@ -1987,13 +2154,65 @@ export function parseHosts(value: unknown): HostInfo[] {
         // is confirmed clean" — the same trust-boundary invariant the
         // server enforces was NOT enforced here. Both fields must be
         // present and individually valid, or neither is copied.
-        ...(isValidBuildRevision(e.build_revision) && typeof e.build_dirty === "boolean"
+        ...(validRevisionPair && (!validVersionPair || validCompleteIdentity)
           ? { build_revision: e.build_revision, build_dirty: e.build_dirty }
+          : {}),
+        ...(validVersionPair &&
+        (e.build_channel !== "release"
+          ? (!validRevisionPair || validCompleteIdentity)
+          : validCompleteIdentity)
+          ? {
+              build_version: e.build_version,
+              build_channel: e.build_channel,
+            }
           : {}),
       });
     }
   }
   return hosts;
+}
+
+/** Parses one server-validated wrapper build identity. */
+export function parseWrapperBuildInfo(value: unknown): WrapperBuildInfo | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const raw = value as Record<string, unknown>;
+  if (
+    !isValidBuildVersion(raw.build_version) ||
+    !isValidBuildChannel(raw.build_channel) ||
+    !isValidBuildRevision(raw.build_revision) ||
+    typeof raw.build_dirty !== "boolean" ||
+    !isConsistentBuildIdentity(
+      raw.build_revision,
+      raw.build_dirty,
+      raw.build_version,
+      raw.build_channel,
+    )
+  ) {
+    return null;
+  }
+  return {
+    build_version: raw.build_version,
+    build_channel: raw.build_channel,
+    build_revision: raw.build_revision,
+    build_dirty: raw.build_dirty,
+  };
+}
+
+/** Parses the join-time agent_id => wrapper identity snapshot. */
+export function parseWrapperBuildInfoSnapshot(
+  value: unknown,
+): Record<string, WrapperBuildInfo> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return {};
+  }
+  const infos: Record<string, WrapperBuildInfo> = {};
+  for (const [agentId, raw] of Object.entries(value)) {
+    const parsed = parseWrapperBuildInfo(raw);
+    if (parsed !== null) infos[agentId] = parsed;
+  }
+  return infos;
 }
 
 /** Parses the `directory` map (agent_id => entry) into a
@@ -2697,6 +2916,95 @@ function parseLaunchDefaults(raw: unknown): Record<string, string> {
   return out;
 }
 
+/** Defensive parse of the list_conversations reply (issue #276):
+ *  fail-closed per entry — a malformed entry is dropped, not the whole
+ *  list. `tokens` is nullable on the wire (dropped server-side on
+ *  close); `started_at` is nullable only as a legacy/defensive fallback
+ *  -- a closed tombstone itself still carries its real value (director
+ *  decision A). `null` passes through as-is for both; anything else
+ *  non-numeric/non-string is treated as absent. */
+function parseConversationList(raw: unknown): ConversationSummary[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ConversationSummary[] = [];
+  for (const item of raw) {
+    if (typeof item !== "object" || item === null) continue;
+    const p = item as Record<string, unknown>;
+    if (
+      typeof p.conversation_id !== "string" ||
+      !Array.isArray(p.participants) ||
+      !p.participants.every((v) => typeof v === "string") ||
+      typeof p.turns !== "number" ||
+      (p.status !== "open" && p.status !== "closed")
+    ) {
+      continue;
+    }
+    out.push({
+      conversationId: p.conversation_id,
+      participants: p.participants as string[],
+      turns: p.turns,
+      tokens: typeof p.tokens === "number" ? p.tokens : null,
+      status: p.status,
+      startedAt: typeof p.started_at === "string" ? p.started_at : null,
+    });
+  }
+  return out;
+}
+
+// Same charset `AgentId.valid?/1` enforces server-side (`agent_id.ex`,
+// `^[A-Za-z0-9._-]{1,256}$`) -- user_id shares the SAME id space as
+// agent_id (ADR-0050 D1), and the server's `fetch_user_id/1` reuses
+// `AgentId.valid?/1` to validate it (`rename_user`'s own `invalid_user_id`
+// reject). Narrowing to it here is what makes `UserSummary.id` a value
+// this client can safely feed back into `renameUser(userId, ...)`.
+const USER_ID_PATTERN = /^[A-Za-z0-9._-]{1,256}$/;
+
+// Every role `Users.all_with_role/1` can resolve a user to -- the auth
+// SoT's closed role vocabulary (ADR-0050 D2: admin > operator > viewer).
+// A role outside this set cannot come from a genuine reply (an unknown
+// role is filtered out server-side, `Users.all_with_role/1`'s own doc),
+// so an entry claiming one is dropped rather than passed through typed
+// as `UserSummary["role"]` when it structurally cannot be one.
+const USER_ROLES = new Set(["viewer", "operator", "admin"]);
+
+/** Defensive parse of the list_users reply (issue #207): fail-closed per
+ *  entry, mirroring parseConversationList — a malformed entry is
+ *  dropped, not the whole list. `id`/`kind`/`role` are narrowed to their
+ *  actual value domains (see USER_ID_PATTERN/USER_ROLES above; `kind` is
+ *  narrowed to the literal `"user"` — every production `Users.get_or_create`
+ *  call site hardcodes it, `auth_controller.ex`/`session_controller.ex`).
+ *  `display_name` is DELIBERATELY left unnarrowed beyond "is a string"
+ *  (director decision, issue #207 round 2): this list is the admin
+ *  surface for FIXING an existing bad display_name, so narrowing the
+ *  parser here would hide the very row an operator needs to see and
+ *  correct. Input-side validation (trim/64-grapheme/control-char) is the
+ *  server's job on the way INTO Users, not this reply's job on the way
+ *  out (`rename_user`'s `invalid_name` reject already owns that). */
+function parseUserList(raw: unknown): UserSummary[] {
+  if (!Array.isArray(raw)) return [];
+  const out: UserSummary[] = [];
+  for (const item of raw) {
+    if (typeof item !== "object" || item === null) continue;
+    const p = item as Record<string, unknown>;
+    if (
+      typeof p.id !== "string" ||
+      !USER_ID_PATTERN.test(p.id) ||
+      p.kind !== "user" ||
+      typeof p.display_name !== "string" ||
+      typeof p.role !== "string" ||
+      !USER_ROLES.has(p.role)
+    ) {
+      continue;
+    }
+    out.push({
+      id: p.id,
+      kind: p.kind,
+      displayName: p.display_name,
+      role: p.role as UserSummary["role"],
+    });
+  }
+  return out;
+}
+
 /** LaunchDialog persona effort default resolution (issue #88). Pure helper
  *  isolated so the "a manual pick always wins" guard is unit-testable
  *  without mounting LaunchDialog.svelte (mirrors `shouldForceReconnectOnVisible`
@@ -2751,6 +3059,8 @@ export function warnOnServerVersionMismatch(event: string, payload: unknown): vo
  * egress funnel (issue #270). */
 export const CLIENT_EVENT_VERSION_POLICY = {
   snapshot: "checked",
+  task_snapshot: "checked",
+  delivery_snapshot: "checked",
   history: "checked",
   hosts: "checked",
   directory: "checked",
@@ -2767,6 +3077,7 @@ export const CLIENT_EVENT_VERSION_POLICY = {
   spawn_result: "checked",
   runner_sessions: "checked",
   catalog_result: "checked",
+  wrapper_build_info: "checked",
 } as const satisfies Record<string, "checked">;
 
 export type ClientEventName = keyof typeof CLIENT_EVENT_VERSION_POLICY;
@@ -3082,24 +3393,50 @@ export function connectKaoiro(
   }
 
   function setupChannelHandlers(c: Channel): void {
-    bindServerEvent(c, "snapshot", (payload: { agents?: unknown; tasks?: unknown; deliveries?: unknown }) => {
-    const agents: Record<string, Envelope> = {};
-    for (const value of Object.values(payload.agents ?? {})) {
-      if (isEnvelope(value)) agents[value.agent_id] = value;
-    }
-    handlers.onSnapshot(agents);
-    // ADR-0048 F3 (issue #180): "tasks" rides this same join-time push,
-    // keyed by task_id (matches the server's flat TaskStates table).
-    handlers.onTaskSnapshot?.(parseTasks(payload.tasks));
-    handlers.onDeliverySnapshot?.(parseDeliverySnapshot(payload.deliveries));
-  });
-  bindServerEvent(c, "delivery_status", (payload: unknown) => {
-    if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return;
-    const raw = payload as Record<string, unknown>;
-    if (typeof raw.agent_id !== "string") return;
-    handlers.onDeliveryStatus?.(raw.agent_id, parseDeliveryStatus(raw.delivery));
-  });
-  bindServerEvent(c, "envelope", (payload: unknown) => {
+    bindServerEvent(c, "snapshot", (payload: { agents?: unknown; snapshot_incomplete?: unknown }) => {
+      const agents: Record<string, Envelope> = {};
+      for (const value of Object.values(payload.agents ?? {})) {
+        if (isEnvelope(value)) agents[value.agent_id] = value;
+      }
+      handlers.onSnapshot(agents);
+      handlers.onSnapshotIncomplete?.(payload.snapshot_incomplete === true);
+    });
+    bindServerEvent(c, "task_snapshot", (payload: { tasks?: unknown }) => {
+      handlers.onTaskSnapshot?.(parseTasks(payload.tasks));
+    });
+    bindServerEvent(c, "delivery_snapshot", (payload: {
+      deliveries?: unknown;
+      snapshot_incomplete?: unknown;
+    }) => {
+      handlers.onDeliverySnapshot?.(parseDeliverySnapshot(payload.deliveries));
+      handlers.onDeliverySnapshotIncomplete?.(payload.snapshot_incomplete === true);
+    });
+    bindServerEvent(c, "delivery_status", (payload: unknown) => {
+      if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return;
+      const raw = payload as Record<string, unknown>;
+      if (typeof raw.agent_id !== "string") return;
+      handlers.onDeliveryStatus?.(raw.agent_id, parseDeliveryStatus(raw.delivery));
+    });
+    bindServerEvent(c, "wrapper_build_info", (payload: unknown) => {
+      if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+        return;
+      }
+      const raw = payload as Record<string, unknown>;
+      if (Object.prototype.hasOwnProperty.call(raw, "builds")) {
+        handlers.onWrapperBuildInfoSnapshot?.(
+          parseWrapperBuildInfoSnapshot(raw.builds),
+        );
+        return;
+      }
+      if (typeof raw.agent_id !== "string") return;
+      if (raw.cleared === true) {
+        handlers.onWrapperBuildInfo?.(raw.agent_id, null);
+        return;
+      }
+      const info = parseWrapperBuildInfo(raw);
+      if (info !== null) handlers.onWrapperBuildInfo?.(raw.agent_id, info);
+    });
+    bindServerEvent(c, "envelope", (payload: unknown) => {
     if (!isEnvelope(payload)) return;
     // ADR-0039 F9 v2 = 藤 review turn-10 must-fix 1: refresh_models_result
     // is a transient completion envelope, NOT a state. Special-dispatch it
@@ -3777,6 +4114,40 @@ export function connectKaoiro(
             reject(new Error(reason?.reason ?? "error")),
           )
           .receive("timeout", () => reject(new Error("timeout")));
+      }),
+    listConversations: () =>
+      new Promise((resolve, reject) => {
+        pushVersioned(channel, "list_conversations", {})
+          .receive("ok", (resp: { conversations?: unknown }) =>
+            resolve(parseConversationList(resp?.conversations)),
+          )
+          .receive("error", (reason: { reason?: string } | undefined) =>
+            reject(new Error(reason?.reason ?? "error")),
+          )
+          .receive("timeout", () => reject(new Error("timeout")));
+      }),
+    closeConversation: (conversationId) =>
+      pushAsync(channel, "close_conversation", {
+        conversation_id: conversationId,
+      }),
+    listUsers: () =>
+      new Promise((resolve, reject) => {
+        pushVersioned(channel, "list_users", {})
+          .receive("ok", (resp: { users?: unknown }) =>
+            resolve(parseUserList(resp?.users)),
+          )
+          .receive("error", (reason: { reason?: string } | undefined) =>
+            reject(new Error(reason?.reason ?? "error")),
+          )
+          .receive("timeout", () => reject(new Error("timeout")));
+      }),
+    // `display_name` (issue #219 D23 vocabulary, reused here per
+    // renameAgent's own doc: this client sends the canonical key, the
+    // server's extract_name_field/1 still accepts legacy `name` too).
+    renameUser: (userId, name) =>
+      pushAsync(channel, "rename_user", {
+        user_id: userId,
+        display_name: name,
       }),
     enumerateSessions: (hostId, cwd, engine) =>
       pushAsync(channel, "enumerate_sessions", {

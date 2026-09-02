@@ -1,36 +1,36 @@
 ---
-title: 用語集
-description: kaoiro のドメイン用語(ラッパー/サーバ/クライアント/アダプタ/フィルタ/ペルソナ/状態名)。
+title: Glossary
+description: kaoiro domain terminology (wrapper, server, client, adapter, filter, persona, and state names).
 status: accepted
 related: [overview, architecture, protocol]
 ---
 
-# 用語集
+# Glossary
 
 ## Purpose
 
-kaoiro のドメイン用語を統一する。
+Standardizes kaoiro domain terminology.
 
 ## Definition
 
-| 用語 | 意味 |
+| Term | Meaning |
 |---|---|
-| ラッパー(Wrapper) | エージェント1個を起動・観測し共通イベントへ翻訳する TS プロセス。engine の SDK(Claude Agent SDK / Codex SDK)をホストする |
-| エンジン(Engine) | wrapper がホストする AI エージェント CLI の種別。値は `claude-code` / `codex`([ADR-0032](../adr/0032-codex-adapter.md))。機能可否の判定には engine 名ではなく `ext.session_capabilities` を使う([ADR-0034](../adr/0034-session-capabilities-advertisement.md)) |
-| ランナー(Runner) | 各ホストに 1 つ常駐し、wrapper プロセスの spawn / stop / restart とホスト登録・session 列挙を担う監督層([ADR-0023](../adr/0023-host-runner-architecture.md))。データ経路は終端しない |
-| サーバ(Server) | 複数ラッパーを集約し状態を保持・配信する Elixir/Phoenix |
-| クライアント(Client) | 状態をキャラ+表情で可視化するフロントエンド。実装は別プロジェクト。本体同梱はリファレンス簡易ダッシュボードのみ([ADR-0007](../adr/0007-client-separation-reference-dashboard.md)) |
-| アダプタ(Adapter) | エージェント別の起動・翻訳・状態導出プラグイン([plugin-model](plugin-model.md)) |
-| フィルタ(Filter) | 共通イベントに property を足す付加処理プラグイン |
-| 共通イベント・エンベロープ | 1 イベントを包む共通 JSON。共通メタデータ(宛名)で `payload`(中身)を包む封筒のメタファ。定義と階層は [protocol](protocol.md)「用語と階層」 |
-| 外枠(フレームキー) | エンベロープ直下の固定キー集合(v0 固定)。[protocol](protocol.md) |
-| payload | エンベロープ内の `type` ごとのイベント本体。Channels フレームの payload スロットとは別物([protocol](protocol.md)) |
-| ext | フィルタが付加する拡張領域([protocol](protocol.md)) |
-| Channels フレーム | トランスポート層の `[join_ref, ref, topic, event, payload]`。payload スロットにエンベロープ全体を格納([protocol](protocol.md)、[ADR-0009](../adr/0009-client-transport.md)) |
-| ペルソナ(Persona) | エージェントに割り当てる固定の人格・立ち絵。安定 ID で永続([ADR-0003](../adr/0003-persona-identity-persistence.md)) |
-| 状態(State) | idle/sending/thinking/tool_running/waiting_permission/waiting_question/waiting_input/done/error/disconnected。`disconnected` だけはサーバ側で導出し、wrapper は送らない([protocol](protocol.md)) |
+| Wrapper | A TypeScript process that launches and observes one agent, then translates it into common events. It hosts the engine SDK (Claude Agent SDK or Codex SDK). |
+| Engine | The kind of AI-agent CLI hosted by a wrapper. The values are `claude-code` and `codex` ([ADR-0032](../adr/0032-codex-adapter.md)). Determine feature availability from `ext.session_capabilities`, not the engine name ([ADR-0034](../adr/0034-session-capabilities-advertisement.md)). |
+| Runner | A supervisory layer, one per host, that spawns, stops, and restarts wrapper processes; registers the host; and lists sessions ([ADR-0023](../adr/0023-host-runner-architecture.md)). It does not terminate the data path. |
+| Server | The Elixir/Phoenix component that aggregates multiple wrappers and retains and distributes state. |
+| Client | A frontend that visualizes state through characters and expressions. Its implementation is a separate project; this repository includes only a reference dashboard ([ADR-0007](../adr/0007-client-separation-reference-dashboard.md)). |
+| Adapter | An agent-specific plugin for launching, translation, and state derivation ([plugin-model](plugin-model.md)). |
+| Filter | An additive-processing plugin that adds properties to common events. |
+| Common event envelope | Common JSON that wraps one event. It is a metaphor for an envelope in which common metadata (the addressee) wraps the `payload` (the contents). Definitions and hierarchy: [protocol](protocol.md), “Terminology and hierarchy.” |
+| Outer frame (frame keys) | The fixed set of keys immediately below an envelope (fixed in v0). [protocol](protocol.md) |
+| payload | The event body for each `type` within an envelope. It is distinct from the payload slot of a Channels frame ([protocol](protocol.md)). |
+| ext | An extension area added by filters ([protocol](protocol.md)). |
+| Channels frame | The transport-layer `[join_ref, ref, topic, event, payload]`. Its payload slot contains the complete envelope ([protocol](protocol.md), [ADR-0009](../adr/0009-client-transport.md)). |
+| Persona | A persistent, fixed personality and standing illustration assigned to an agent, identified by a stable ID ([ADR-0003](../adr/0003-persona-identity-persistence.md)). |
+| State | idle/sending/thinking/tool_running/waiting_permission/waiting_question/waiting_input/done/error/disconnected. Only `disconnected` is derived on the server side and is never sent by wrappers ([protocol](protocol.md)). |
 
 ## See Also
 
-- 関連 specs: [overview](overview.md), [architecture](architecture.md),
+- Related specs: [overview](overview.md), [architecture](architecture.md),
   [protocol](protocol.md)

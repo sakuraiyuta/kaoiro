@@ -8,7 +8,9 @@
   import PersonaFace from "./PersonaFace.svelte";
   import TaskRing from "./TaskRing.svelte";
   import TasklistFloat from "./TasklistFloat.svelte";
+  import { settings } from "./settings.svelte";
   import { randomUUID } from "./uuid";
+  import { formatBuildIdentity } from "./buildIdentity";
   import {
     engineFrom,
     errorSubtypeLabel,
@@ -40,6 +42,7 @@
     SessionResetMode,
     TasklistSnapshot,
     InterAgentDeliveryStatus,
+    WrapperBuildInfo,
   } from "./protocol";
 
   let {
@@ -55,9 +58,11 @@
     activeTaskCount = 0,
     tasklist = null,
     deliveryStatus = null,
+    wrapperBuildInfo = null,
     onClose,
     onSelectAgent,
     onRename,
+    onOpenPersonaDetail,
   }: {
     envelope: Envelope;
     logs?: Envelope[];
@@ -94,6 +99,7 @@
      * ring. An empty list remains state but the float itself stays hidden. */
     tasklist?: TasklistSnapshot | null;
     deliveryStatus?: InterAgentDeliveryStatus | null;
+    wrapperBuildInfo?: WrapperBuildInfo | null;
     onClose: () => void;
     /** Switch the detail view to another agent (clicked peer link in an
      *  inter-agent message bubble). Omitted = peer name renders as static
@@ -116,6 +122,10 @@
      *  That structurally removes the stale-closure class of bug a test
      *  could only catch after the fact. */
     onRename?: ((agentId: string, name: string) => Promise<void>) | undefined;
+    /** Opens the persona pack detail modal (issue #232) for this agent's
+     *  persona; pass undefined to disable the portrait's click affordance
+     *  (e.g. no resolved persona id). */
+    onOpenPersonaDetail?: ((personaId: string) => void) | undefined;
   } = $props();
 
   // Expand the detail from the tile that opened it (#36): scale up from the
@@ -162,6 +172,9 @@
 
   const expression = $derived(expressionFor(display.shown));
   const name = $derived(envelope.display_name ?? envelope.agent_id);
+  // issue #232: the persona image's click opens the persona pack detail
+  // modal (manifest.json + personality.md for this envelope's persona).
+  const personaId = $derived(envelope.persona?.id);
   const fatigued = $derived(isFatigued(envelope));
   const spriteUrl = $derived(
     spriteUrlFor(
@@ -639,6 +652,7 @@
       effectiveNetworkAccess !== null ||
       ccRateRows.some((r) => r.pct !== null) ||
       models.length > 0 ||
+      wrapperBuildInfo !== null ||
       // Operator can always pick a permission mode (#58), even before init
       // lands ext.permission_mode — keep the panel open so the dropdown is
       // reachable without waiting for the first turn.
@@ -678,14 +692,50 @@
     });
   }
 
-  // Date-divider label per log index, recomputed only when logs changes (#38):
-  // a line gets a label when its calendar day differs from the previous line
-  // (and for the first line). Precomputing here avoids reconstructing the
-  // previous entry's Date on every render.
+  // issue #228: whether a log entry is hidden by the "非メッセージエントリ
+  // 非表示" setting. Only tool_use/tool_result are ever hidden — system,
+  // turn boundaries (`res`), session boundaries, and assistant/user text
+  // pass through regardless (this component's rendering below never
+  // consults the setting for those kinds; this is the single place that
+  // decides visibility for the ones that DO consult it).
+  function shouldHideLogEntry(env: Envelope, hide: boolean): boolean {
+    if (!hide) return false;
+    const kind = logOf(env)?.kind;
+    return kind === "tool_use" || kind === "tool_result";
+  }
+
+  // issue #228 round-1 must-fix (ふじ M1): hiding must happen BEFORE the
+  // window slice below, not by leaving a hidden row's outer
+  // `.transcript-entry` in the DOM and skipping only its inner content —
+  // that left (1) an empty flex-gap box per hidden row, (2) a tool-only
+  // day's date divider still rendered, and, critically, (3) a hidden row
+  // still consuming one of the LOG_WINDOW_SIZE slots the window below
+  // hands out: with the setting on, 201 consecutive tool entries could
+  // evict every readable assistant/user row from the render window even
+  // though none of them changed. Filtering the raw `logs[]` down to
+  // displayable rows first, then windowing THAT, keeps the window's
+  // capacity meaningful in message terms. Each entry keeps its original
+  // `logs[]` index (`absoluteIndex`) alongside it — `findPrecedingUserPrompt`
+  // and `ensureIndexVisible`'s callers (`scrollToTimelineEntry`/
+  // `jumpToTool`) key off positions in the ORIGINAL `logs[]`, not the
+  // filtered view, so that index must survive filtering intact.
+  const displayableLogs = $derived(
+    logs
+      .map((env, absoluteIndex) => ({ env, absoluteIndex }))
+      .filter(
+        ({ env }) => !shouldHideLogEntry(env, settings.hideNonMessageLogEntries),
+      ),
+  );
+
+  // Date-divider label per DISPLAYABLE-log index (#38, issue #228): a line
+  // gets a label when its calendar day differs from the previous VISIBLE
+  // line (and for the first visible line) — keyed against
+  // `displayableLogs`, not raw `logs[]`, so a tool-only day hidden by the
+  // setting above does not leave an orphaned divider with nothing under it.
   const dayDividers = $derived.by(() => {
     const labels = new Map<number, string>();
     let prev: string | null = null;
-    logs.forEach((env, i) => {
+    displayableLogs.forEach(({ env }, i) => {
       const dk = dayKey(env.ts);
       if (dk !== null && dk !== prev) labels.set(i, formatDate(env.ts));
       prev = dk;
@@ -732,18 +782,61 @@
   const LOG_WINDOW_SIZE = 200;
   let frozenWindow = $state<
     | {
+        // issue #228 R2 must-fix (ふじ round-2): a RAW `logs[]` absolute
+        // index, NOT a position in `displayableLogs`. It was a
+        // displayableLogs position through round 1, but that population
+        // can change SIZE when the hide setting toggles while frozen —
+        // ふじ's probe: freeze at displayableLogs position 800 (800
+        // tool_use entries hidden ahead of 200 assistant ones), then
+        // toggle hide on; displayableLogs shrinks to the 200 assistant
+        // entries alone, and the stale "800" — now read as a position in
+        // the NEW 200-entry population — clamped past its end and wiped
+        // the entire render. A raw `logs[]` index is stable across a
+        // toggle (the toggle does not change `logs` itself), so
+        // `effectiveWindowStart` below re-maps it into whatever
+        // `displayableLogs` currently is on every read instead of reusing
+        // a stale position. `anchorLength` stays a raw `logs.length` for
+        // the same reason it always has (shrink/history-reset detection
+        // tracks the real transcript, independent of the hide setting).
         start: number;
         mode: "reading-frozen" | "explicit-expanded";
         anchorLength: number;
       }
     | null
   >(null);
+  // Re-derived on every read (issue #228 R2): maps a raw `logs[]` boundary
+  // to its position in the CURRENT `displayableLogs`, rather than trusting
+  // a position captured under a possibly-different (pre-toggle)
+  // population. Falls forward to the nearest LATER displayable entry when
+  // the exact boundary index itself is hidden by the current setting
+  // (never collapses to "show nothing" — the failure mode this fixes).
+  //
+  // issue #228 R3 must-fix: no displayable entry AT OR PAST the boundary
+  // (findIndex returns -1) used to fall back to `displayableLogs.length` —
+  // a position past every entry, so the slice below is always empty. This
+  // is reachable with no hide toggle at all (a same-agent history
+  // reorganize can leave a preserved `frozenWindow.start` pointing past
+  // every entry now displayable, since the shrink guard only fires when
+  // `logs.length` goes down) as well as via a toggle whose boundary run is
+  // followed by nothing displayable. Falling back to the same tail window
+  // used when nothing is frozen keeps every input class (empty
+  // `displayableLogs`, a hidden boundary, or an outright invalid one)
+  // safe-side: show the most recent displayable entries instead of
+  // nothing.
+  function mapAbsoluteBoundaryToDisplayIndex(absoluteBoundary: number): number {
+    const index = displayableLogs.findIndex(
+      (d) => d.absoluteIndex >= absoluteBoundary,
+    );
+    return index === -1
+      ? Math.max(0, displayableLogs.length - LOG_WINDOW_SIZE)
+      : index;
+  }
   const effectiveWindowStart = $derived(
     frozenWindow !== null
-      ? Math.min(frozenWindow.start, logs.length)
-      : Math.max(0, logs.length - LOG_WINDOW_SIZE),
+      ? mapAbsoluteBoundaryToDisplayIndex(frozenWindow.start)
+      : Math.max(0, displayableLogs.length - LOG_WINDOW_SIZE),
   );
-  const visibleLogs = $derived(logs.slice(effectiveWindowStart));
+  const visibleLogs = $derived(displayableLogs.slice(effectiveWindowStart));
   const hiddenLogCount = $derived(effectiveWindowStart);
 
   // Expand the window to include `absoluteIndex` (a `logs[]` index) if it is
@@ -855,9 +948,23 @@
   // elsewhere (e.g. `display.dispose()` above).
   $effect(() => () => cancelSuppressFailsafe());
 
+  // `absoluteIndex` is a raw `logs[]` index (both callers — the timeline
+  // jump and the tool_use/tool_result partner jump — find it via
+  // `logs.findIndex`). issue #228: the window now counts displayable rows,
+  // so whether it is CURRENTLY hidden is checked via its position in
+  // `displayableLogs` — a target the hide setting has filtered out (e.g. a
+  // jump computed just before the operator flipped the toggle) has no such
+  // position, so this no-ops rather than mis-expanding the window to an
+  // unrelated row. issue #228 R2: `frozenWindow.start` itself stores the
+  // raw `absoluteIndex`, not the displayIndex — see its own doc comment
+  // for why a displayIndex position does not survive a later hide toggle.
   function ensureIndexVisible(absoluteIndex: number): number | null {
     const start = untrack(() => effectiveWindowStart);
-    if (absoluteIndex >= 0 && absoluteIndex < start) {
+    const displayIndex = untrack(() =>
+      displayableLogs.findIndex((d) => d.absoluteIndex === absoluteIndex),
+    );
+    if (displayIndex === -1) return null;
+    if (displayIndex >= 0 && displayIndex < start) {
       frozenWindow = {
         start: absoluteIndex,
         mode: "reading-frozen",
@@ -1652,8 +1759,17 @@
         // advancing `effectiveWindowStart` and silently evict the very rows
         // they are reading, with no scroll compensation (unlike the explicit
         // showEarlierLogs expand, which does compensate).
+        //
+        // issue #228 R2: `frozenWindow.start` stores the raw `logs[]`
+        // index, not the displayableLogs position `effectiveWindowStart`
+        // itself is — translate via the entry actually sitting at that
+        // position. `displayableLogs.length` (nothing displayable is at
+        // or past the boundary) falls back to `logs.length`, an absolute
+        // boundary past every entry — consistent with `hiddenLogCount`
+        // reading 0 in that state (nothing is currently hidden by the
+        // window boundary either).
         frozenWindow = {
-          start: effectiveWindowStart,
+          start: displayableLogs[effectiveWindowStart]?.absoluteIndex ?? logs.length,
           mode: "reading-frozen",
           anchorLength: logs.length,
         };
@@ -2373,17 +2489,33 @@
     <aside class="status">
       <header class="head">
         <div class="portrait">
-          {#key display.shown}
-            <PersonaFace
-              sprite={spriteUrl}
-              variant={expression.variant}
-              label={expression.label}
-              fatigued={fatigued}
-              size="detail"
-              imgAltLabelled={true}
-              faceLabelled={true}
-            />
-          {/key}
+          <!-- issue #232: wraps only the image, not `.lamp` beside it,
+               mirroring AgentCard's separate persona-detail affordance.
+               Unlike AgentCard, `.portrait` sits in plain flow (not
+               inside another <button>), so this can be its own <button>
+               directly instead of needing AgentCard's click-target
+               dispatch workaround. -->
+          <button
+            type="button"
+            class="portrait-open"
+            onclick={personaId && onOpenPersonaDetail
+              ? () => onOpenPersonaDetail(personaId)
+              : undefined}
+            disabled={!personaId || !onOpenPersonaDetail}
+            aria-label="{name} のペルソナ詳細を表示"
+          >
+            {#key display.shown}
+              <PersonaFace
+                sprite={spriteUrl}
+                variant={expression.variant}
+                label={expression.label}
+                fatigued={fatigued}
+                size="detail"
+                imgAltLabelled={true}
+                faceLabelled={true}
+              />
+            {/key}
+          </button>
           {#if activeTaskCount > 0}
             <!-- 頭上リング (issue #180 follow-up, 2026-08-10 — マスター
                  指摘: AgentCard にはあるが AgentDetail には無かった。
@@ -2427,12 +2559,19 @@
                  -2% より下げ、リング全体を少し下(顔寄り)へシフトした
                  (顔に多少かかるのは許容、マスター了承済み)。1600px 幅の
                  実測(e2e T11)で .bar から box-shadow の 6px ブラー込みで
-                 余裕を確認済み。 -->
+                 余裕を確認済み。
+
+                 issue #231: 頂点がグリッド/カード上端に接して見えるため
+                 1920x1080 で頂点を約 8px 下げる。TaskRing.svelte 側と
+                 同じ理由で `%` 単独では .portrait の可変高さに応じて
+                 px 換算が変わるため、`calc(6% + 8px)` の px 加算項で
+                 6% の位置から一律 8px 下方向へシフトする。 -->
             <TaskRing
               faceOrbit={!spriteUrl}
               orbitRx={spriteUrl ? "min(25cqw, 2rem)" : "min(17.5cqw, 1.35rem)"}
               orbitRy={spriteUrl ? "min(9cqw, 0.72rem)" : "min(6.3cqw, 0.49rem)"}
-              topOffset="6%"
+              topOffset="calc(6% + 8px)"
+              count={activeTaskCount}
             />
           {/if}
           <span class="lamp" title={expression.label}></span>
@@ -2610,6 +2749,18 @@
             <div class="cc-row">
               <dt>engine</dt>
               <dd>{agentEngine}</dd>
+            </div>
+          {/if}
+          {#if wrapperBuildInfo}
+            <div class="cc-row" data-testid="wrapper-build-info">
+              <dt>wrapper</dt>
+              <dd>
+                {formatBuildIdentity("wrapper", {
+                  version: wrapperBuildInfo.build_version,
+                  channel: wrapperBuildInfo.build_channel,
+                  revision: wrapperBuildInfo.build_revision,
+                })}
+              </dd>
             </div>
           {/if}
           {#if resumeDrift && resumeDrift.length > 0}
@@ -2929,13 +3080,18 @@
             以前のログを表示 ({hiddenLogCount} 件)
           </button>
         {/if}
-        {#each visibleLogs as env, i (env.ts + ":" + (env.seq ?? (effectiveWindowStart + i)))}
-          {@const absoluteIndex = effectiveWindowStart + i}
+        {#each visibleLogs as { env, absoluteIndex }, i (env.ts + ":" + (env.seq ?? absoluteIndex))}
+          <!-- issue #228: `absoluteIndex` (raw `logs[]` position, used by
+               findPrecedingUserPrompt below) now comes from displayableLogs
+               itself. `displayIndex` (this row's position within
+               displayableLogs) is the separate key dayDividers is built
+               against — see displayableLogs/dayDividers' own comments. -->
+          {@const displayIndex = effectiveWindowStart + i}
           {@const log = logOf(env)}
           {@const res = resultOf(env)}
           {@const iam = interAgentMessageOf(env)}
           {@const time = formatTime(env.ts)}
-          {@const dateLabel = i === 0 ? formatDate(env.ts) : dayDividers.get(absoluteIndex)}
+          {@const dateLabel = i === 0 ? formatDate(env.ts) : dayDividers.get(displayIndex)}
           <div
             class="transcript-entry"
             data-envelope-key={conversationEntryKey(env)}
@@ -3820,6 +3976,24 @@
         transparent 70%
       ),
       var(--bg-card);
+  }
+
+  /* issue #232: plain reset so the click target for the persona detail
+     modal does not visibly alter `.portrait`'s existing layout — the
+     button is a block wrapper around the image only, sized by its
+     PersonaFace child exactly as the unwrapped image was. */
+  .portrait-open {
+    display: block;
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: none;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .portrait-open:disabled {
+    cursor: default;
   }
 
   /* Sprite/CSS-face fallback rendering itself lives in PersonaFace.svelte

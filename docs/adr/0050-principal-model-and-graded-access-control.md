@@ -1,5 +1,5 @@
 ---
-title: principal モデル — user/agent の型分離・3 role 階層・per-pair 権限の加算モデル
+title: Principal model — separate user/agent types, three role levels, and additive per-pair permissions
 status: accepted
 date: 2026-08-11
 opened: 2026-08-05
@@ -9,335 +9,343 @@ related_specs: [auth-and-authz, protocol, protocol-inter-agent, threat-model]
 related_adrs: [7, 13, 21, 24, 28, 30, 33, 42]
 ---
 
-# ADR-0050 — principal モデルと段階的アクセス制御
+# ADR-0050 — Principal model and graded access control
 
 ## Status
 
-Accepted (2026-08-11、マスター決裁により `proposed` から昇格。Phase A
-(identity 化)が [issue #187](https://github.com/sakuraiyuta/kaoiro/issues/187)
-で実装完了したことによる)。
-実装 issue は [#187](https://github.com/sakuraiyuta/kaoiro/issues/187)
-(identity 化、実装完了) /
+Accepted (2026-08-11; マスター promoted it from `proposed` by decision. Phase A
+(identity) was completed in [issue #187](https://github.com/sakuraiyuta/kaoiro/issues/187)).
+Implementation issues are [#187](https://github.com/sakuraiyuta/kaoiro/issues/187)
+(identity, implementation complete) /
 [#188](https://github.com/sakuraiyuta/kaoiro/issues/188)
 (admin role) /
 [#189](https://github.com/sakuraiyuta/kaoiro/issues/189)
-(per-pair 権限) /
+(per-pair permissions) /
 [#190](https://github.com/sakuraiyuta/kaoiro/issues/190)
-(永続化基盤) /
+(persistence foundation) /
 [#191](https://github.com/sakuraiyuta/kaoiro/issues/191)
-(グラフ編集ツール)。
+(graph editing tool).
 
-Phase B 以降(#188-#191)の着手前に決めるべき論点 —— ADR-0021 を改訂
-するか supersede するか(#188)、agent→agent edge の既定(#189、加算
-モデルを素朴に適用すると inter-agent messaging が全面停止する)、スト
-アを DETS で足すか SQLite を導入するか(#190)—— は各 issue の着手時に
-個別に決着させる。
+The questions to settle before starting Phase B and later (#188-#191) — whether
+to revise or supersede ADR-0021 (#188), the default for agent→agent edges (#189;
+naively applying the additive model would stop inter-agent messaging entirely),
+and whether to add a DETS store or introduce SQLite (#190) — will be decided
+individually when each issue begins.
 
 ## Context
 
-kaoiro の認可は 2 role (operator / viewer) 固定で、operator は実質無制限の
-全権を持つ ([ADR-0021](0021-role-information-disclosure-policy.md) F1)。
-`docs/specs/auth-and-authz.md` の Known gaps は、この構造が抱える穴を
-3 つ明示している:
+kaoiro authorization is fixed at two roles (operator / viewer), and operators have
+effectively unlimited authority ([ADR-0021](0021-role-information-disclosure-policy.md)
+F1). The Known gaps in `docs/specs/auth-and-authz.md` explicitly identify three
+holes in this structure:
 
-- **operator role 細分**: operator は spawn / interrupt / approve / clear を
-  含む全権。単一テナント前提
-- **マルチテナント隔離**: 全 operator が全エージェントを操作可能。
-  エージェントの所有者境界が無い
-- **監査ログ**: 「誰がいつどの agent に何を送ったか」の永続記録が無い
+- **Operator-role granularity**: operators have all authority, including spawn /
+  interrupt / approve / clear. Assumes a single tenant.
+- **Multi-tenant isolation**: every operator can operate every agent. There is no
+  agent ownership boundary.
+- **Audit log**: there is no durable record of “who sent what to which agent and
+  when.”
 
-いずれも [ADR-0042](0042-oauth-allowlist-login.md) が Out of scope として
-将来送りにしたものである。単一利用者の間は成立していたが、中規模以上の
-運用ではいずれも実害になる。加えて、user は kaoiro 内部の identity を
-持たない (OAuth identity (provider + uid) か共有トークンのみ) ため、
-ログにも envelope にも「誰が」が残らず、AI エージェントも指示元を
-認識できない。
+All three were deferred as out of scope by [ADR-0042](0042-oauth-allowlist-login.md).
+They worked while there was one user, but all become harmful in medium-sized or
+larger operations. In addition, a user has no identity internal to kaoiro (only an
+OAuth identity (provider + uid) or a shared token), so “who” remains neither in
+logs nor envelopes, and an AI agent cannot identify the source of an instruction.
 
-さらに ADR-0021 F6-6 は peer directory の妥当性根拠を「現状 kaoiro は
-単一 operator 配下の閉じた系であり、peer は同一の人間が起動した agent に
-限られる」と置き、「**agent 間の信頼境界が operator 単位でなくなった
-時点で本節を再評価する**」という条件を明記している。本 ADR の決定は
-まさにその条件を発火させる。
+ADR-0021 F6-6 further grounds the peer directory's validity in the premise that
+“kaoiro is currently a closed system under a single operator, and peers are
+limited to agents started by the same human,” and explicitly says to
+“**re-evaluate this section when the trust boundary between agents is no longer
+per operator**.” This ADR's decision is exactly what triggers that condition.
 
-本 ADR は、これら 4 つ (identity / role 階層 / per-pair 権限 / 永続化) を
-一体の設計として決める。
+This ADR decides these four elements (identity / role hierarchy / per-pair
+permissions / persistence) as one integrated design.
 
 ## Decision
 
-### D1 — user と agent は型を分ける。共通抽象は `Principal` のみ
+### D1 — Separate user and agent types; the only shared abstraction is `Principal`
 
-`User` と `Agent` を別の型とし、権限グラフの node としてのみ共通の
-`Principal` (`id` / `kind` / `display_name`) 抽象を切る。分ける軸は
-「人間か AI か」ではなく **authority の出所**。
+Make `User` and `Agent` separate types, with a shared `Principal` (`id` / `kind` /
+`display_name`) abstraction used only as nodes in the permission graph. The axis of
+separation is **the source of authority**, not “human or AI.”
 
-根拠:
+Rationale:
 
-1. **同一性の SoT が違う**。`agent_id` は kaoiro が採番する
-   ([ADR-0024](0024-agent-instance-identity-and-spawn-auth.md) D3、
-   `<scope>.<rand>`)。user の同一性は外部 IdP (OAuth provider + uid) 由来で
-   SoT が kaoiro の外にある。統合型にすると「user を spawn する」
-   「agent を許可リストに書く」といった意味の壊れた操作面が構造的に生える
-2. **帰責が非対称**。agent の行動は最終的にどれかの user に帰責されるが、
-   user の行動は誰にも帰責されない終端である。型で表現しないと
-   user → agent → agent の責任連鎖が平坦化し、監査が成立しない
-3. **前例がある**。[ADR-0028](0028-external-human-messaging.md) D3 は
-   外部人間 messaging を inter-agent の一般化にせず専用 type / tool へ
-   分離した。理由は「trust model を 1 経路に同居させると条件分岐漏れが即
-   脆弱性になる」。将来 agent の送信先が agent / 内部 user / 外部人間の
-   3 経路になると authority がそれぞれ違うため、同じ罠を踏む
+1. **Their identity SoTs differ.** `agent_id` is assigned by kaoiro
+   ([ADR-0024](0024-agent-instance-identity-and-spawn-auth.md) D3,
+   `<scope>.<rand>`). A user's identity comes from an external IdP (OAuth
+   provider + uid), whose SoT is outside kaoiro. A unified type structurally creates
+   broken operations such as “spawn a user” and “put an agent on the allowlist.”
+2. **Accountability is asymmetric.** An agent's actions ultimately become
+   attributable to some user, while a user's actions terminate without attribution
+   to anyone. Without expressing this in types, the responsibility chain
+   user → agent → agent is flattened and auditing cannot work.
+3. **There is a precedent.** D3 of [ADR-0028](0028-external-human-messaging.md)
+   separated external-human messaging into a dedicated type / tool rather than
+   generalizing inter-agent messaging. The reason is that “putting trust models in
+   one path makes a missed branch immediately a vulnerability.” If future agent
+   destinations become agent / internal user / external human, authority differs
+   for each of the three paths and the same trap must be avoided.
 
-派生規則:
+Derived rules:
 
-- `kind` は wire 上の必須フィールドとする。agent が peer の人間 / AI を
-  判別できないと、受信メッセージに authority があるかを判定できない
-- id 空間は単一。既存 charset `[A-Za-z0-9._-]`
-  ([#61](https://github.com/sakuraiyuta/kaoiro/issues/61)) を守る
-- **`kind` は id から derive しない**。store の属性として持つ。id の
-  prefix に意味を持たせると、偽装がそのまま権限判定に効く
+- `kind` is a required wire field. If an agent cannot distinguish a human peer from
+  an AI peer, it cannot determine whether an incoming message has authority.
+- The ID space is unified. Preserve the existing charset `[A-Za-z0-9._-]`
+  ([#61](https://github.com/sakuraiyuta/kaoiro/issues/61)).
+- **Do not derive `kind` from the ID.** Store it as an attribute. Giving meaning to
+  an ID prefix would make spoofing directly affect authorization decisions.
 
-**実装状況**: user 側は issue #187 段階2 で `%{id, kind, display_name,
-role}` として実装済み。agent 側は issue #187 時点では `persona.name` で
-`display_name` を代用しており(ADR-0030 D2 の暫定 carve-out)、`Principal`
-抽象が agent 側では実現していなかった。
-[issue #209](https://github.com/sakuraiyuta/kaoiro/issues/209)
-で agent にも `persona`(pack 由来、session 中不変)から独立した
-`display_name` フィールドが実装され、`Principal` (`id` / `kind` /
-`display_name`) が user / agent 双方で本来の形どおり成立するように
-なった。
+**Implementation status**: The user side was implemented in Phase 2 of issue #187
+as `%{id, kind, display_name,
+role}`. At the time of issue #187, the agent side
+substituted `persona.name` for `display_name` (a temporary carve-out of ADR-0030
+D2), so the `Principal` abstraction was not realized on the agent side.
+[Issue #209](https://github.com/sakuraiyuta/kaoiro/issues/209) implemented an
+agent-side `display_name` independent of `persona` (from the pack, immutable during
+the session), allowing `Principal` (`id` / `kind` / `display_name`) to take its
+proper form on both user and agent sides.
 
-### D2 — role は admin / operator / viewer の 3 値
+### D2 — Three roles: admin / operator / viewer
 
-[ADR-0021](0021-role-information-disclosure-policy.md) F1 (2 ロール固定、
-3 ロール化は YAGNI) を覆す。
+Override F1 of [ADR-0021](0021-role-information-disclosure-policy.md) (fixed at two
+roles; three-role conversion was YAGNI).
 
-| role | 定義 |
+| role | definition |
 |---|---|
-| admin | 権限グラフの編集者かつ全可視。**隠蔽の対象にならない**。per-pair 権限の対象外で常に全権 |
-| operator | agent を操作できる主体。どの agent を操作できるかは per-pair 権限で決まる |
-| viewer | ゲスト。既定は grid 上の存在確認のみ |
+| admin | Editor of the permission graph and fully visible. **Not subject to concealment**. Always has full authority and is outside per-pair permissions |
+| operator | A principal that can operate agents. Which agents it can operate is determined by per-pair permissions |
+| viewer | Guest. By default, only confirmation of presence on the grid |
 
-viewer の元々の意図は「オフィスに来たゲストに、従業員が働いている様子を
-見せる」程度であって会話ログの開示ではない。現行 ADR-0021 F3 の viewer
-可視性はこの意図と一致しているため **変更しない**。
+The original intent of viewer was “show a guest who visits the office that the
+employees are working,” not disclose conversation logs. The current viewer
+visibility in ADR-0021 F3 matches this intent and is therefore **unchanged**.
 
-**MUST — admin は隠蔽できない。** 権限グラフ上で admin を非表示にする
-edge は引けない。引けてしまうと監査が破綻する。この帰結として、admin
-権限を持つ人間に対して何かを隠すことは原理的にできない。
+**MUST — admin cannot be concealed.** Do not draw an edge that hides an admin on
+the permission graph. If possible, auditing collapses. As a consequence, it is
+impossible in principle to hide anything from a human with admin permission.
 
-**MUST — ブートストラップ経路を残す。** kaoiro は fail-closed 設計
-(ADR-0042) であり、admin が 1 人も居ない状態では権限編集が永久にできない
-(lockout)。env / ファイル直編集による初期 admin 宣言が唯一の入口となる。
-D3 の加算モデルではこの経路が edge の初期投入手段も兼ねる。
+**MUST — retain a bootstrap path.** kaoiro is fail-closed (ADR-0042), and if there
+is no admin, permission editing becomes permanently impossible (lockout). Declaring
+the initial admin by editing env / files directly is the only entry point. In D3's
+additive model, this path also serves as the initial edge-ingestion path.
 
-### D3 — per-pair 権限は 4 段階・加算モデル
+### D3 — Four levels of per-pair permission, using an additive model
 
-権限を **プロンプト投入可 / 会話ログ閲覧可 / 一覧表示のみ / 完全非表示**
-の 4 段階とし、user→agent / user→user / agent→agent の組ごとに与える。
+Define four permission levels — **can submit prompts / can view conversation logs /
+list-only / completely hidden** — for each user→agent / user→user / agent→agent
+pair.
 
-**加算モデル** —— 明示的に与えた権限以外は持たない。edge が 0 本なら
-(admin を除き) 何も見えず何もできない。減算モデル (role が既定権限を
-与え、edge が絞る) を採らない理由は 3 つ:
+**Additive model** — a principal has no permissions other than those explicitly
+granted. With zero edges, it sees and can do nothing (except admin). Do not use a
+subtractive model (the role grants defaults and edges narrow them) for three reasons:
 
-1. kaoiro は既に ADR-0021 F2 の allow-list、ADR-0029 F3、OAuth 許可リストの
-   fail-closed と、「明示宣言がなければ届かない」を設計原則にしている。
-   ここだけ fail-open の島を作ると原則の一貫性が壊れる
-2. 減算 → 加算の移行は、実運用データがある状態では既存ユーザの権限が
-   消える破壊的変更になる。利用者 1 人の現時点なら移行コストがほぼゼロ
-3. OSS 公開とビジネス展開を視野に入れる以上、緩い既定で出荷した後に
-   締めると既存利用者の環境が壊れる
+1. kaoiro already makes ADR-0021 F2's allow-list, ADR-0029 F3, and the OAuth
+   allowlist fail-closed, with “nothing reaches the destination without an explicit
+   declaration” as a design principle. Creating a fail-open island only here would
+   break consistency.
+2. Moving from subtractive to additive in a system with real operational data would
+   be a destructive change that removes existing users' permissions. With one user
+   today, migration cost is nearly zero.
+3. Given OSS publication and business expansion, tightening after shipping with
+   loose defaults would break existing users' environments.
 
-**合成規則**: global role が天井、per-pair はその範囲内でのみ絞る。
-viewer に per-pair で「プロンプト投入可」は与えられない。
-[ADR-0033](0033-permission-model-dual-axis.md) の dual-axis と同型の構造。
+**Composition rule**: the global role is the ceiling, and per-pair permissions can
+   narrow only within that ceiling. Do not grant a viewer “can submit prompts” via
+   per-pair permission. This has the same structure as the dual-axis model of
+   [ADR-0033](0033-permission-model-dual-axis.md).
 
-### D4 — spawn 時に spawner へ full edge を自動付与する (所有者概念)
+### D4 — Automatically grant the spawner a full edge at spawn (ownership concept)
 
-加算モデルを素朴に適用すると、新しく spawn した agent は誰からも見えず
-誰も操作できない状態で生まれ、運用が成立しない。spawn 時に spawner へ
-full edge を自動付与する。
+Naively applying the additive model creates a newly spawned agent invisible to and
+uncontrollable by everyone, so operation cannot function. Automatically grant the
+spawner a full edge at spawn.
 
-これは D3 の「明示的に与えたもの以外は持たない」原則を破らない ——
-**spawn という行為自体が明示的な権限主張**だからである。Unix でプロセスを
-起動したユーザがその所有者になり、ファイルを作れば作成者に rw が付くのと
-同じ構造。
+This does not violate D3's principle that “nothing other than what was explicitly
+granted is held” — **the act of spawning itself is an explicit permission claim**.
+It has the same structure as a Unix user who starts a process becoming its owner,
+and a file receiving rw permissions for its creator when created.
 
-本決定は ADR-0042 が Out of scope とした「マルチテナント隔離
-(エージェントの所有者境界)」に踏み込む。
+This decision enters the “multi-tenant isolation (agent ownership boundary)” that
+ADR-0042 deferred as out of scope.
 
-### D5 — 可視性は 2 段。identity は原則開示、state と活動は per-pair
+### D5 — Two visibility layers: identity is generally disclosed; state and activity are per-pair
 
-kaoiro はマルチ AI エージェント参加型の仮想オフィスであり、その場に
-参加している entity は原則として role 込みで見える形にする。ただし
-「原則見える」の範囲は **identity (id / name / kind / role) まで**とし、
-state と活動 (何をしているか、誰とやり取り中か) は per-pair 権限の
-対象とする。
+kaoiro is a virtual office where multiple AI agents participate, so entities in the
+office are generally visible with their roles. However, the scope of “generally
+visible” is limited to **identity (id / name / kind / role)**; state and activity
+(what it is doing, and whom it is communicating with) are subject to per-pair
+permissions.
 
-「現在誰がいるか」と「誰に働きかけるか」は別問題であり、前者は知られて
-構わない。開示が防御を弱めないことは ADR-0028 D4 が外部人間の contact
-一覧について既に結論している (「一覧開示は防御を弱めない —— enforce が
-担保、office 比喩」)。agent が role を知っても authority は変わらない。
-強制するのは server 側であって agent の認識ではない。
+“Who is currently present” and “whom to approach” are separate questions, and it is
+fine for the former to be known. ADR-0028 D4 already concluded for an external
+human's contact list that disclosure does not weaken defense (“list disclosure does
+not weaken defense — enforce guarantees it, office metaphor”). Knowing a role does
+not change an agent's authority. Enforcement belongs on the server, not in an
+agent's perception.
 
-**実装レベルの fail-closed は維持する。** 「原則見える」は実装の
-デフォルト挙動ではなく **設定のデフォルト値**として実現する。実装既定を
-open にすると ADR-0021 F2 の allow-list 構造が壊れ、新 field 追加時の
-漏洩事故が復活する。
+**Retain fail-closed behavior at implementation level.** “Generally visible” is
+implemented as a **configuration default value**, not as the implementation's
+default behavior. Making the implementation default open would break ADR-0021 F2's
+allow-list structure and revive leaks when a new field is added.
 
-### D6 — 会話ログの可視性は agent 単位。transitive な隠蔽は保証しない
+### D6 — Conversation-log visibility is per agent; do not guarantee transitive concealment
 
-会話ログの閲覧権限は agent 単位で与える。ある agent のログを閲覧できる
-user は、**その agent と会話した全 user の発言**を見る。
+Grant conversation-log viewing permission per agent. A user who can view an agent's
+logs sees **the messages of every user who conversed with that agent**.
 
-根拠は「その agent の上司なら、当該 agent の作業はすべて確認できるのが
-当然」という運用要求。発言者単位のフィルタ (非表示 user の発言を伏せる)
-は文脈を壊す上に、伏せ字の存在自体が情報を漏らすため採らない。
+The rationale is the operational requirement that “a supervisor of the agent should
+naturally be able to inspect all of that agent's work.” Do not filter by speaker
+(redacting messages from hidden users): it breaks context, and the existence of the
+redaction itself leaks information.
 
-**帰結として、user→user の「完全非表示」は transitive には成立しない。**
-user B に対して user C を完全非表示にしても、B と C が同じ agent A と
-会話していれば、A のログ経由で C の発言が B に見える。この性質は仕様に
-明記する。
+**As a consequence, “completely hidden” user→user is not transitive.** Even if user
+C is completely hidden from user B, when B and C converse with the same agent A,
+C's messages are visible to B through A's log. State this property explicitly in
+the specification.
 
-「特定の user には隠したい」という要求と「上司は全部見える」という要求は
-一見矛盾するが、**階層で解決する**。隠蔽が成立するのは対等な立場の
-operator 同士であり、admin および上位の operator からは隠せない (D2)。
-現実のオフィスで「A には内緒で」と言えるのが A と対等以上の立場の人間
-だけであるのと同じ構造。
+The requirements “hide from a particular user” and “a supervisor sees everything”
+appear contradictory, but **resolve them hierarchically**. Concealment applies
+between operators of equal standing; admins and higher-level operators cannot be
+hidden from (D2). This has the same structure as the fact that in a real office,
+only someone equal or senior to A can say “keep it from A.”
 
-### D7 — dashboard 経路と agent 経路は同一の権限テーブルを引く (MUST)
+### D7 — Dashboard and agent paths read the same permission table (MUST)
 
-ADR-0021 F6-1 の通り、operator が見る経路 (`agents:lobby` /
-`AgentsChannel.sanitize_envelope_for/2`) と agent が見る経路
-(`wrapper:<id>` / `WrapperChannel` の directory 応答) は別実装であり、
-片方の allow-list が他方を守らない。
+As in ADR-0021 F6-1, the path seen by operators (`agents:lobby` /
+`AgentsChannel.sanitize_envelope_for/2`) and the path seen by agents
+(`wrapper:<id>` / directory responses from `WrapperChannel`) are separate
+implementations; one allow-list does not protect the other.
 
-per-pair 権限は **両経路が同じ権限テーブルを引く**構造とする。別々に
-判定すると「グラフ上は非表示にしたのに agent 側からは見えている」という
-乖離が生じ、権限設定そのものが信用できなくなる。
+Per-pair permissions must have **both paths read the same permission table**.
+Independent decisions create the divergence “hidden on the graph but visible from
+the agent side,” making the permission configuration itself untrustworthy.
 
-### D8 — 実装フェーズ順: A → B-1 → B-2 → C
+### D8 — Implementation phases: A → B-1 → B-2 → C
 
-| Phase | 内容 | 対応 issue |
+| Phase | content | issue |
 |---|---|---|
-| A | identity 化 + admin role。認可 SoT はテキストのまま | #187 / #188 |
-| B-1 | ストア + per-pair 権限の**振る舞いを同時に投入** | #189 / #190 |
-| B-2 | ブートストラップ経路で edge を手書き投入し、振る舞いを検証 | #189 |
-| C | グラフ編集ツール | #191 |
+| A | Identity + admin role. Authorization SoT remains text | #187 / #188 |
+| B-1 | Store + **simultaneous introduction of per-pair permission behavior** | #189 / #190 |
+| B-2 | Manually add edges through the bootstrap path and verify behavior | #189 |
+| C | Graph editing tool | #191 |
 
-**振る舞いを B-1 でストアと同時に入れる**のが要点。編集ツールを先に
-作って振る舞いを後回しにすると、編集ツールが何を編集しているのかを
-検証できず、D7 の経路間乖離もツール完成時まで露見しない。何より、
-enforce のない設定 UI は「設定したつもりで効いていない」という、
-セキュリティ機能として最悪の状態を生む。
+The key is to **introduce behavior simultaneously with the store in B-1**. If the
+editing tool is built first and behavior deferred, it is impossible to verify what
+the tool edits, and divergence between D7 paths stays hidden until the tool is
+complete. Above all, a configuration UI without enforcement creates the worst state
+for a security feature: “I thought I configured it, but it has no effect.”
 
-加算モデルでも admin は全権を保つ (D2) ため、B-1 投入時点で操作不能には
-ならない。B-2 の時点で「特定 operator を特定 agent から締め出す」という
-実運用価値が既に得られる。
+Admin retains full authority even under the additive model (D2), so B-1 does not
+make operation impossible. By B-2, there is already operational value in “exclude a
+particular operator from a particular agent.”
 
-**Phase B では OAuthAllowlistWatcher の watcher 機構を移行する。**
-[#160](https://github.com/sakuraiyuta/kaoiro/issues/160) は
-2026-08-05 に完了済み (commit `2d64000` / `8ef15fc`) で、許可リストの
-テキストファイルを認可 SoT として file_system イベント + periodic
-reconcile で watch する。構造化ストアへ移すとこの前提が変わるため、
-watcher を「ファイル watch」から「ストア変更通知」へ置き換える作業が
-Phase B に含まれる。
+**Phase B migrates the OAuthAllowlistWatcher mechanism.**
+[#160](https://github.com/sakuraiyuta/kaoiro/issues/160) completed on 2026-08-05
+(commits `2d64000` / `8ef15fc`) and watches the allowlist text file as authorization
+SoT through file_system events + periodic reconcile. Moving to a structured store
+changes this premise, so replacing the watcher from “file watch” to “store change
+notification” is included in Phase B.
 
-### D9 — グラフ編集ツールは独立クライアントとして作る
+### D9 — Build the graph editing tool as an independent client
 
-権限編集 UI は同梱 dashboard 内の画面ではなく、独立クライアントとして
-実装する。同梱 dashboard はあくまでリファレンス実装
-([ADR-0007](0007-client-separation-reference-dashboard.md)) であり、
-運用者が専用クライアントを用意して既定 dashboard の配信を停止する運用も
-設計上視野に入っているため。
+Implement the permission-editing UI as an independent client, not as a screen in
+the bundled dashboard. The bundled dashboard is only a reference implementation
+([ADR-0007](0007-client-separation-reference-dashboard.md)), and the design already
+allows an operator to provide a dedicated client and stop serving the default
+dashboard.
 
-副産物として、**権限編集の protocol surface を wire に定義する必要が
-生じる**。結果として運用者が独自の admin ツールを実装できるようになり、
-dashboard と同じ「リファレンス実装 + 差し替え可能」の構図が権限編集にも
-成立する。
+As a byproduct, **the permission-editing protocol surface must be defined on the
+wire**. This lets operators implement their own admin tools and establishes the
+same “reference implementation + replaceable” structure for permission editing as
+for the dashboard.
 
-グラフは live 反映とする (agent は spawn / stop で動的に増減し、D4 により
-spawn 時には edge も自動で増えるため)。
+Reflect graph changes live (agents dynamically increase/decrease through spawn /
+stop, and D4 automatically adds edges at spawn).
 
-### D10 — 権限変更そのものを監査する
+### D10 — Audit the permission changes themselves
 
-「誰がいつ誰に何の edge を引いたか」を監査証跡として永続化する。加算
-モデルで権限を厳密にしても、権限変更そのものが追跡できなければ意味が
-ない。auth-and-authz.md の Known gaps にある監査ログ
-([#146](https://github.com/sakuraiyuta/kaoiro/issues/146)) と
-合流する領域であり、統合するか分担するかは #190 で決める。
+Persist “who drew which edge to whom and when” as an audit trail. Even strict
+permissions under the additive model are meaningless if the permission changes
+themselves cannot be tracked. This overlaps the audit-log Known gap in
+auth-and-authz.md ([#146](https://github.com/sakuraiyuta/kaoiro/issues/146));
+whether to integrate or divide the work is decided in #190.
 
-## Future work (本 ADR では決めない)
+## Future work (not decided by this ADR)
 
-- **user 間の伝言取次ぎ**。agent が「他 user に伝言を頼む」プロンプトに
-  対応できるようにする拡張。D5 で全 user 一覧を agent に開示する方針を
-  採ったのは、この拡張性を見込んでのこと。ただし現状は展望に留め、
-  実装スコープには含めない
-- **user のグリッド一覧表示と相互チャット**。UI 上で agent と user が
-  並んで見える形。実現しても D1 の型分離は維持する —— UI 上で並ぶことと
-  型が同じであることは別物であり、同一性が高まるほど kind の明示は
-  重要になる
+- **Relay messages between users**. An extension to support a prompt where an agent
+  asks to relay a message to another user. The choice in D5 to disclose the full
+  user list to agents anticipates this extensibility. For now it remains a prospect
+  and is not in implementation scope.
+- **Grid display of users and mutual chat**. A UI where agents and users appear
+  side by side. Even if implemented, retain D1's type separation — appearing next
+  to each other in the UI and having the same type are different things, and the
+  more identity is shared, the more important explicit kind becomes.
 
 ## Consequences
 
 ### Positive
 
-- 認可の全域が fail-closed で一貫する。「明示宣言がなければ届かない」が
-  envelope 配信 (ADR-0021 F2) から権限グラフまで同じ原則で通る
-- 監査が成立する。user に identity が付き、権限変更にも証跡が残る
-- 中規模運用が可能になる。operator ごとに触れる agent を分けられる
-- OSS 公開・ビジネス展開への布石。セキュリティモデルは後から強化しにくく、
-  初期に厳しい側へ倒すのが正解
-- 権限編集が wire protocol になることで、運用者が独自 admin ツールを
-  作れる (D9)
+- Authorization is consistently fail-closed across the whole system. “Nothing
+  reaches the destination without an explicit declaration” applies from envelope
+  delivery (ADR-0021 F2) through the permission graph.
+- Auditing works: users have identities, and permission changes leave evidence.
+- Medium-sized operations become possible by dividing which agents each operator
+  can touch.
+- This lays groundwork for OSS publication and business expansion. Security models
+  are hard to strengthen later, so choosing the strict side at the start is right.
+- Making permission editing a wire protocol lets operators build custom admin tools
+  (D9).
 
 ### Negative
 
-- **ADR-0021 F1 を覆す。** 同 ADR の改訂または supersede が必要 (どちらに
-  するかは #188 で決定)。F3 / F4 / F6 も広範な書き換えが要る
-- 実装コストが大きい。特に per-pair 判定への移行 (`require_operator/1` を
-  通る operator-only inbound 約 22 種の分類)、`sanitize_envelope_for/2` の
-  fan-out hot path 変更、独立クライアントの新規開発
-- 加算モデルは agent の動的生成と相性が悪く、D4 の所有者概念で補わないと
-  運用が成立しない。agent→agent edge の既定は未解決 (#189)
-- 実装済みの OAuthAllowlistWatcher (#160) が前提とする「テキストファイルが
-  認可 SoT」が Phase B で変わり、watcher 機構の移行が要る
+- **This overturns ADR-0021 F1.** That ADR must be revised or superseded (which is
+  decided in #188), and F3 / F4 / F6 also require broad rewrites.
+- Implementation cost is large, especially migrating to per-pair checks
+  (classifying about 22 operator-only inbound paths through `require_operator/1`),
+  changing the `sanitize_envelope_for/2` fan-out hot path, and developing an
+  independent client.
+- The additive model fits poorly with dynamic agent creation; operation fails
+  without D4's ownership concept. The default for agent→agent edges is unresolved
+  (#189).
+- The implemented OAuthAllowlistWatcher (#160) assumes that the text file is
+  authorization SoT; that changes in Phase B and requires migrating the watcher.
 
 ### Neutral
 
-- Phase A の時点では既存の operator / viewer の挙動は変わらない。
-  admin を上位に足すだけで、降格の実体は Phase B
-- viewer の可視性 (ADR-0021 F3) は元の意図通りなので手を入れない
+- Existing operator / viewer behavior is unchanged during Phase A. Only admin is
+  added above them; the substance of demotion is Phase B.
+- Do not change viewer visibility (ADR-0021 F3), since it matches the original intent.
 
 ## Alternatives Considered
 
 | Option | Why rejected |
 |--------|--------------|
-| **減算モデル** (role が既定権限を与え、edge が絞る) | 移行は滑らかだが「明示的に与えたもの以外は外す」という安全側の原則を満たさない。kaoiro 他部位の fail-closed と不整合。利用者 1 人の今なら加算への移行コストがほぼゼロ |
-| **user / agent の統合型** | 同一性の SoT が違い (外部 IdP vs 内部採番)、帰責も非対称。統合すると監査の責任連鎖が平坦化する。ADR-0028 D3 が同型の判断で経路分離を選んだ前例もある |
-| **発言者単位のログフィルタ** | 会話の文脈が壊れる。伏せ字の存在自体が情報を漏らすため隠蔽も不完全。中途半端 |
-| **会話単位の権限** (自分が参加した会話だけ見える) | 最も厳密だが「その場が見える」仮想オフィスの思想と真っ向から衝突し、実装コストも最大。D6 の「上司は全部見える」要求も満たせない |
-| **dashboard 内の権限編集画面** | 実装コストは安いが、dashboard がリファレンス実装であり差し替え可能である以上、権限編集がそこに閉じると差し替え時に編集手段を失う |
-| **編集ツールを先に作り、振る舞いを後で実装** | 編集ツールの正しさを検証できず、D7 の経路間乖離も露見しない。enforce のない設定 UI は最も危険。加算モデルでも admin が全権を保つため、振る舞いを先に入れても操作不能にはならない |
-| **admin にも隠せる仕組み** | 実現したら監査が破綻する。root を持つことの帰結として原理的に諦める |
+| **Subtractive model** (role grants default permissions and edges narrow them) | Migration is smooth, but it does not satisfy the safer principle of removing everything not explicitly granted. It conflicts with fail-closed behavior elsewhere in kaoiro. With one user today, migration to additive costs nearly nothing |
+| **Unified user / agent type** | Their identity SoTs differ (external IdP vs internal assignment) and accountability is asymmetric. Unification flattens the audit responsibility chain. ADR-0028 D3 also provides a precedent for choosing path separation for the same judgment |
+| **Speaker-level log filtering** | Breaks conversation context, and the existence of redaction itself leaks information, making concealment incomplete. It is half-measure |
+| **Conversation-level permissions** (see only conversations one participated in) | Strictest, but directly conflicts with the virtual-office idea that “the place is visible,” and has the highest implementation cost. It also fails D6's requirement that supervisors see everything |
+| **Permission editor inside the dashboard** | Cheaper to implement, but because the dashboard is replaceable as a reference implementation, enclosing permission editing there loses the editing means when the dashboard is replaced |
+| **Build the editing tool first and implement behavior later** | The tool's correctness cannot be verified, and D7 path divergence remains hidden. A configuration UI without enforcement is most dangerous. Admin retains full authority even under the additive model, so implementing behavior first does not make operation impossible |
+| **A mechanism that can also hide from admin** | Auditing would collapse if realized. Accept this in principle as the consequence of holding root authority |
 
 ## Related
 
-- specs: `auth-and-authz` (境界の地図、Known gaps の 3 項目が本 ADR の
-  出発点)、`protocol` (権限編集 surface の追加先)、
-  `protocol-inter-agent` (peer directory の情報境界)、`threat-model`
-- 関連 ADR: [0007](0007-client-separation-reference-dashboard.md)
-  (クライアント分離 → D9)、
-  [0013](0013-user-token-cookie-persistence.md) (cookie / ticket)、
-  [0021](0021-role-information-disclosure-policy.md)
-  (**F1 を覆す / F6-6 の再評価条件が発火**)、
-  [0024](0024-agent-instance-identity-and-spawn-auth.md) (agent_id 採番)、
-  [0028](0028-external-human-messaging.md) (一方向 authority、経路分離の
-  前例 → D1 / D5)、
-  [0030](0030-agent-directory-and-explicit-restore.md) (AgentDirectory、
-  永続対象の決定 → #190 の未解決事項)、
-  [0033](0033-permission-model-dual-axis.md) (dual-axis → D3 の合成規則)、
-  [0042](0042-oauth-allowlist-login.md) (**Out of scope 記述を撤回**)
-- 関連 issue: #187 / #188 / #189 / #190 / #191 (実装)、
-  [#146](https://github.com/sakuraiyuta/kaoiro/issues/146)
-  (監査ログ)、
-  [#160](https://github.com/sakuraiyuta/kaoiro/issues/160)
-  (認可 SoT の watcher、実装済み・Phase B で移行対象)
+- Specs: `auth-and-authz` (map of boundaries; the three Known gaps are this ADR's
+  starting point), `protocol` (destination for the permission-editing surface),
+  `protocol-inter-agent` (peer-directory information boundary), and `threat-model`.
+- Related ADRs: [0007](0007-client-separation-reference-dashboard.md) (client
+  separation → D9), [0013](0013-user-token-cookie-persistence.md) (cookie /
+  ticket), [0021](0021-role-information-disclosure-policy.md) (**overturn F1 /
+  trigger the F6-6 re-evaluation condition**),
+  [0024](0024-agent-instance-identity-and-spawn-auth.md) (agent_id assignment),
+  [0028](0028-external-human-messaging.md) (one-way authority and path-separation
+  precedent → D1 / D5),
+  [0030](0030-agent-directory-and-explicit-restore.md) (AgentDirectory and the
+  persistence decision → #190 open questions),
+  [0033](0033-permission-model-dual-axis.md) (dual-axis → D3 composition rule),
+  [0042](0042-oauth-allowlist-login.md) (**withdraw the out-of-scope statement**).
+- Related issues: #187 / #188 / #189 / #190 / #191 (implementation),
+  [#146](https://github.com/sakuraiyuta/kaoiro/issues/146) (audit log), and
+  [#160](https://github.com/sakuraiyuta/kaoiro/issues/160) (authorization-SoT
+  watcher, implemented and a Phase B migration target).

@@ -1,6 +1,6 @@
 ---
-title: ファイルアップロード — 同一 instruction 内の同名ファイル UX
-description: 同一 instruction で同じ filename を持つ複数ファイルを添付した時の表示・ disambiguate の未決論点。protocol レベルでは衝突しない(upload_id ごと独立)。
+title: File Upload — UX for Same-Named Files within One Instruction
+description: Unresolved issue concerning display and disambiguation when multiple files with the same filename are attached in one instruction. There is no collision at the protocol level (independent per upload_id).
 status: open
 urgency: low
 blocks: []
@@ -10,40 +10,41 @@ decided: null
 
 ## 背景
 
-[ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md) F2 で
-upload は `upload_id`(client 採番)ごと独立を確定した。 filename は表示
-専用フィールドであり、 protocol レベルでは同名衝突は発生しない
-(wrapper / server は upload_id で識別)。 ただし client UI や wrapper の
-SDK content blocks に渡す時の filename 表示で衝突が見え、 ユーザ混乱に
-なりうる。
+[ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md) F2 established
+that uploads are independent per `upload_id` (assigned by the client). filename
+is a display-only field, so same-name collisions do not occur at the protocol
+level (the wrapper / server identifies uploads by upload_id). However, a
+collision may be visible when the filename is displayed in the client UI or
+when passing it to the wrapper's SDK content blocks, which could confuse users.
 
 ## 選択肢
 
-| 案 | 内容 | メリット | デメリット |
+| Option | Description | Advantages | Disadvantages |
 |--|--|--|--|
-| A | upload_id ごと独立、 filename は表示専用 — 衝突しない(protocol レベル)。 表示重複は client の disambiguate UX に任せる | protocol 不変、 wrapper も unchanged | client 実装ごとに UX 一貫性が無い |
-| B | wrapper / client で明示的に suffix 付与(例: `image.png` / `image (2).png`)| 表示一貫性 | 仕様面 +1、 wrapper / client 両方に実装 |
+| A | Independent per upload_id, with filename display-only — no collision (at the protocol level). Leave duplicate display handling to the client's disambiguation UX. | Protocol unchanged; wrapper also unchanged | UX is inconsistent across client implementations |
+| B | Explicitly add a suffix in the wrapper / client (for example: `image.png` / `image (2).png`) | Consistent display | Additional specification work; implementation required in both wrapper / client |
 
 ## 影響
 
-A の場合は protocol / 実装不変。 B 採用時は client 側の disambiguate
-ロジックを spec 化(wrapper 側はそのまま filename を SDK へ流す or
-wrapper で renaming するか別途決定)。
+With A, the protocol / implementation remains unchanged. If B is adopted, the
+client-side disambiguation logic must be specified (whether the wrapper passes
+filename to the SDK unchanged or renames it in the wrapper must be decided
+separately).
 
 ## 判断材料
 
-- 実際に同名複数添付の UX 不具合が報告されるか
-- SDK / モデルが filename をどれだけ参照するか(content block 内の filename
-  表示が応答に影響するか)
+- Whether a UX problem involving multiple same-named attachments is actually reported
+- How much the SDK / model refers to filename (whether displaying filename in
+  a content block affects the response)
 
 ## 暫定方針
 
-A — protocol レベルでは衝突しないので未対応。 表示の disambiguate は
-client の責務とし、 リファレンスダッシュボードでは送信時に suffix 付与
-する程度で十分。
+A — no action because there is no collision at the protocol level. Display
+disambiguation is the client's responsibility; adding a suffix at send time in
+the reference dashboard is sufficient.
 
-## 解決時のアクション
+## Actions upon resolution
 
-- [ ] disambiguate ルール(suffix 付与の場所と形式)を spec 化
-- [ ] client / wrapper の実装変更
-- [ ] ADR 昇格、 本ファイル削除
+- [ ] Specify disambiguation rules (where and how to add a suffix)
+- [ ] Change the client / wrapper implementation
+- [ ] Promote to an ADR and delete this file

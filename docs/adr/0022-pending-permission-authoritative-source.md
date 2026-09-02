@@ -1,5 +1,5 @@
 ---
-title: pending_permission の authoritative source を state_change.ext へ — permission_request envelope は初出通知に降格
+title: Make state_change.ext the authoritative source for pending_permission — demote the permission_request envelope to an initial notification
 status: accepted
 date: 2026-06-22
 opened: 2026-06-22
@@ -9,7 +9,7 @@ related_specs: [protocol, threat-model]
 related_adrs: [10, 11, 12, 21, 27, 32, 33, 34, 40, 41, 43, 44]
 ---
 
-# ADR-0022 — pending_permission の authoritative source を `state_change.ext` へ
+# ADR-0022 — Make `state_change.ext` the Authoritative Source for pending_permission
 
 ## Status
 
@@ -17,31 +17,24 @@ Accepted
 
 ## Context
 
-Phase 3 で導入された permission ダイアログには、表示直後に他の
-`state_change` envelope が届くと **ダイアログが消失して操作不能** になり、
-600 秒後にラッパーの broker タイムアウトで自動 deny → セッションが詰む致命的
-不具合がある(issue #59)。
+With the permission dialog introduced in phase 3, if another `state_change` envelope arrives immediately after the dialog is displayed, the **dialog disappears and becomes unusable**. After 600 seconds, the wrapper broker times out and automatically denies the request, leaving the session stuck—a critical defect (issue #59).
 
-直接原因はクライアント (`dashboard/src/App.svelte`,
-`dashboard/src/lib/AgentDetail.svelte`) が agent ごとに **最新 envelope
-1 件** をバケットに上書き保持しており、`permission_request` envelope が
-`state_change` で上書きされた瞬間に永続性を失うこと。
+The direct cause is that the clients (`dashboard/src/App.svelte`, `dashboard/src/lib/AgentDetail.svelte`) overwrite a bucket for each agent with the **latest single envelope**, so persistence is lost as soon as the `permission_request` envelope is overwritten by `state_change`.
 
-修正方針は 3 案あった:
+There were three possible fixes:
 
-| 案 | 概要 | 採否 |
+| Option | Summary | Decision |
 |---|---|---|
-| A | クライアント側に `pendingPermissions` ストアを設け envelope 単独依存を回避 | 却下: 短期は有効だがリロード復元・複数 operator 同期・viewer 観測・history 整合で再発火する。protocol が状態を完全表現していないことが構造的な原因なので、クライアント側のローカルストアでは根治しない |
-| B | wrapper が waiting_permission 中の `state_change.ext` に `pending_permission` を持続付与し、クライアントは ext から派生する | **採用**: protocol を真実の単一ソースとする ADR-0012 / ADR-0021 と整合する。snapshot で復元可能、複数クライアント間で常に同期する |
-| C | wrapper 側で waiting_permission 中の `state_change` を queue し permission_resolved 後にフラッシュ | 却下: state 機械の根本変更でリスク大。進行情報のクライアント観測が遅れる |
+| A | Add a `pendingPermissions` store on the client to avoid depending on a single envelope | Rejected: effective in the short term, but reload restoration, synchronisation across multiple operators, viewer observation, and history consistency would re-trigger the problem. The structural cause is that the protocol does not fully represent the state, so a local client store is not a fundamental fix |
+| B | The wrapper persistently attaches `pending_permission` to `state_change.ext` while waiting_permission, and the client derives it from ext | **Adopted**: consistent with ADR-0012 / ADR-0021, which make the protocol the single source of truth. It can be restored from a snapshot and is always synchronised across multiple clients |
+| C | Queue state_change on the wrapper while waiting_permission and flush it after permission_resolved | Rejected: a fundamental state-machine change with high risk. It delays the client’s observation of progress |
 
 ## Decision
 
-### F1: `state_change.ext.pending_permission` を authoritative source とする
+### F1: Make `state_change.ext.pending_permission` the authoritative source
 
-pending 中の許可要求の真実は `state_change.ext.pending_permission` に乗る。
-`null` / 未設定なら pending 無し。形状は `{ request_id, tool_name, input?,
-truncated?, ts }`(`permission_request` envelope の payload と同等)。
+The source of truth for a pending permission request is `state_change.ext.pending_permission`. `null` / unset means that nothing is pending. Its shape is `{ request_id, tool_name, input?,
+truncated?, ts }` (equivalent to the payload of the `permission_request` envelope).
 
 ```json
 {
@@ -59,121 +52,74 @@ truncated?, ts }`(`permission_request` envelope の payload と同等)。
 }
 ```
 
-### F2: `permission_request` envelope は **初出通知** に降格
+### F2: Demote the `permission_request` envelope to an **initial notification**
 
-protocol 互換維持と「pending が新たに出た」イベント通知の目的で
-`permission_request` envelope は残すが、状態の真実ではなくなる。今後は
-クライアントは ext を読むのが正解。
+Keep the `permission_request` envelope for protocol compatibility and to notify that a pending request has newly appeared, but it is no longer the source of truth. From now on, clients should read ext.
 
-`permission_request` envelope の payload と `state_change.ext.pending_permission`
-は wrapper 側で同期保証する(同一の `request_id` / `tool_name` /
-`input` / `truncated` / `ts`)。
+The wrapper guarantees synchronisation between the `permission_request` envelope payload and `state_change.ext.pending_permission` (the same `request_id` / `tool_name` / `input` / `truncated` / `ts`).
 
-### F3: wrapper が ext に持続付与する
+### F3: The wrapper persistently attaches it to ext
 
-- `wrapper/src/host.ts` に `#pendingPermission` 状態を持つ。
-- `wrapper/src/permission.ts` は decide() 開始時に `onPendingChange(pending)` で
-  host に通知、resolve / timeout / close 時に `onPendingChange(null)` で
-  クリアする。
-- host の `#statusExt()` が `#pendingPermission !== null` のとき
-  `ext.pending_permission` を含めて返す。`waiting_permission` 中に他の
-  state 変化(thinking / tool_running / session_init による idle 等)が
-  起きても ext は持続する。
-- `permission_resolved` で host は `#pendingPermission = null` を確認
-  (broker が先に通知済み)してから `state_change(tool_running)` を emit
-  する。ext は当然 pending を含まない。
+- Keep `#pendingPermission` state in `wrapper/src/host.ts`.
+- `wrapper/src/permission.ts` notifies the host with `onPendingChange(pending)` when decide() starts, and clears it with `onPendingChange(null)` on resolve / timeout / close.
+- When `#pendingPermission !== null`, the host’s `#statusExt()` includes `ext.pending_permission` in its return value. The ext persists even if another state change (thinking / tool_running / idle caused by session_init, etc.) occurs during `waiting_permission`.
+- On `permission_resolved`, the host confirms `#pendingPermission = null` (the broker has already notified it) and then emits `state_change(tool_running)`. The ext naturally contains no pending request.
 
-### F4: viewer 配信は ADR-0021 の allow-list で自動カバー
+### F4: Viewer delivery is automatically covered by ADR-0021’s allow-list
 
-`pending_permission` は ext に乗るため、ADR-0021 の「viewer は全 type で
-ext を除去」によって viewer へは漏れない。新規ガード不要。
-`permission_request` envelope 自体も ADR-0021 で viewer 完全除去
-(合成 `state_change(waiting_permission)` に置換)済み。
+Because `pending_permission` is in ext, ADR-0021’s rule that “viewers have ext removed for every type” prevents it from leaking to viewers. No new guard is needed. The `permission_request` envelope itself is also completely removed for viewers by ADR-0021 (replaced with a synthetic `state_change(waiting_permission)`).
 
-### F5: snapshot 復元
+### F5: Restore from a snapshot
 
-サーバの `AgentStates` は state_change を最新 envelope として put する。
-よって新規 join したクライアントの snapshot に `ext.pending_permission`
-が乗り、未解決の permission がそのまま復元される。DETS 等の永続化は
-不要(セッション中の生存性のみが目的、#49 とは別関心)。
+The server’s `AgentStates` stores state_change as the latest envelope. Therefore, a snapshot for a newly joined client contains `ext.pending_permission`, restoring an unresolved permission as-is. Persistence such as DETS is unnecessary (the goal is survival during a session only; this is a separate concern from #49).
 
-### F6: broker timeout は SDK デフォルト(無制限)へ移行
+### F6: Move the broker timeout to the SDK default (unlimited)
 
-ADR-0011 が「無応答 600 秒で deny」と規定していたが、根本原因が pending
-消失だった以上、10 分の自動 deny は **正規ユーザのキーボード離席で誤発火
-する UX 上の弊害** が主になる。SDK 本体は canUseTool に timeout を設けず
-応答受信まで待つので、broker のデフォルトもそれに合わせる:
+ADR-0011 specified denial after 600 seconds without a response, but once the root cause was identified as the disappearance of pending state, the ten-minute automatic denial became primarily a **UX problem that misfires when a real user leaves the keyboard**. The SDK itself sets no timeout on canUseTool and waits for a response, so the broker default should match it:
 
-- `wrapper/src/permission.ts` の `DEFAULT_PERMISSION_TIMEOUT_MS = 600_000`
-  を撤廃。`options.timeoutMs` / `config.permission_timeout_ms` が undefined
-  なら無制限待機。
-- 任意の有限タイムアウトは config / 環境変数で opt-in 可能とする(設定面
-  整備は別 issue #60、本 ADR ではコード側の挙動変更のみ)。
-- ADR-0011 の該当節は本 ADR への参照で更新する。
+- Remove `DEFAULT_PERMISSION_TIMEOUT_MS = 600_000` from `wrapper/src/permission.ts`. If `options.timeoutMs` / `config.permission_timeout_ms` is undefined, wait without a limit.
+- Permit any finite timeout to be opted into through configuration / environment variables (configuration-surface work is separate issue #60; this ADR changes only code-side behaviour).
+- Update the relevant section of ADR-0011 to refer to this ADR.
 
-### F7: クライアントは ext 経由へ一発切替
+### F7: Switch the client to ext in one step
 
-互換 fallback は残さない。すべてのクライアント(ダッシュボード)が in-tree
-で `permission_request` envelope を直接読まなくなる。`permissionRequestOf`
-helper は `pendingPermissionFrom` へ役割を移し、AgentDetail.svelte 等の
-派生も `envelope.ext.pending_permission` 経由に統一する。
+Do not retain a compatibility fallback. All clients (the dashboard) in-tree stop reading the `permission_request` envelope directly. The `permissionRequestOf` helper changes its role to `pendingPermissionFrom`, and derived views such as AgentDetail.svelte are unified around `envelope.ext.pending_permission`.
 
 ## Consequences
 
 ### Positive
 
-- waiting_permission 中の state_change(thinking / tool_running /
-  session_init 由来の idle 等)で **ダイアログが消失しない**(issue #59
-  根治)。
-- リロード・再接続時に snapshot 経由で pending が即座に復元される。
-- 別タブで開いた operator 間でも常に同じダイアログが表示・同期される。
-- viewer 漏洩は ADR-0021 の allow-list で自動的に守られる(追加ガード
-  不要)。
-- 600 秒の意図しない auto-deny が消え、長時間離席後の操作再開が UX 的に
-  自然になる。
+- The dialog **does not disappear** on a `state_change` during waiting_permission (thinking / tool_running / idle from session_init, etc.), fixing the root cause of issue #59.
+- Pending state is restored immediately through a snapshot after reload or reconnection.
+- Operators viewing the system in separate tabs always see and synchronise the same dialog.
+- Viewer leakage is automatically protected by ADR-0021’s allow-list (no additional guard).
+- The unintended 600-second auto-denial disappears, making it natural to resume work after a long absence.
 
 ### Negative
 
-- `state_change.ext` のサイズが pending 中だけ膨らむ(`input` を最大
-  16KB 含むため)。`pending_permission` 自体は viewer から除去されるので
-  漏洩リスクは ADR-0021 と同じ範囲。
-- broker timeout を無制限にしたことで、operator が決定を返さないまま
-  永続化されたセッションは canUseTool の Promise が解決されず、wrapper
-  側で当該ターンが進行しない。これは現状の deny と同じ「ターンが進まない」
-  状態だが、wrapper の終了で `close()` 時に強制 deny される。
+- `state_change.ext` grows only while a permission is pending (because it can include up to 16 KB of `input`). `pending_permission` is removed from viewers, so the leakage risk remains within the same scope as ADR-0021.
+- With the broker timeout unlimited, a persisted session for which the operator never responds leaves the canUseTool Promise unresolved and that turn does not advance on the wrapper side. This is the same “turn does not advance” state as the current denial, but wrapper shutdown forcibly denies it during `close()`.
 
 ### Neutral
 
-- `permission_request` envelope は protocol に残るので、外部クライアントが
-  当面 envelope 単独依存でも壊れない(ただし新クライアントは ext 経由を
-  推奨)。
-- DETS 永続化は不要(snapshot 復元で足りる)。長期保管が必要になったら
-  #49 (session_id ポインタ) と同じパターンで後追い可能。
+- The `permission_request` envelope remains in the protocol, so an external client that currently depends on the envelope alone does not break (although new clients should use ext).
+- DETS persistence is unnecessary (snapshot restoration is sufficient). If long-term storage becomes necessary, it can be added later using the same pattern as #49 (session_id pointer).
 
 ## Alternatives Considered
 
 | Option | Why rejected |
-|--------|--------------|
-| A: クライアント側で pendingPermissions ストア新設 | リロード復元・複数 operator 同期・viewer 観測・history 整合で再発火する。protocol が状態を完全表現しないことが構造原因なので、ローカルストアは対症療法に留まる |
-| C: wrapper で waiting_permission 中の state_change を queue/フラッシュ | state 機械の根本変更でリスク大。進行情報のクライアント観測が遅れる。本 ADR の F3 (ext に持続付与) より変更面が広い |
-| 2 段階移行 (ext fallback あり) | クライアントは全て in-tree で外部互換性なし。fallback コードは保守負債となる。一発切替で十分(#59 user 決定) |
-| broker timeout を据置(600 秒)| 根本原因が pending 消失だった以上、10 分の自動 deny は正規ユーザの離席で誤発火する UX 弊害が主になる |
+|---|---|
+| A: Add a pendingPermissions store on the client | Reload restoration, multiple-operator synchronisation, viewer observation, and history consistency would re-trigger the issue. The protocol’s incomplete state representation is the structural cause, so a local store would remain symptomatic treatment |
+| C: Queue/flush state_change on the wrapper during waiting_permission | A fundamental state-machine change with high risk. It delays the client’s observation of progress and has a broader change surface than this ADR’s F3 (persistent attachment to ext) |
+| Two-stage migration (with an ext fallback) | All clients are in-tree and there is no external compatibility requirement. Fallback code would become maintenance debt; a one-step switch is sufficient (#59 user decision) |
+| Keep the broker timeout at 600 seconds | Once the root cause was identified as disappearing pending state, ten-minute automatic denial mainly misfires when a real user is away from the keyboard, creating a UX problem |
 
 ## Updates
 
-- 2026-07-10: [ADR-0033](0033-permission-model-dual-axis.md) が本 ADR の F1 (`state_change.ext.pending_permission` の authoritative source 原則) を維持しつつ、payload に `sandbox` / `approval` の二軸フィールドを追加する追補を確定。Codex CLI アダプタ ([ADR-0032](0032-codex-adapter.md)) 追加に伴う権限モデル抽象の拡張。本 ADR は supersede されず、payload 形状のみ ADR-0033 で拡張される。
+- 2026-07-10: [ADR-0033](0033-permission-model-dual-axis.md) confirmed an addendum that preserves this ADR’s F1 (the principle that `state_change.ext.pending_permission` is the authoritative source) while adding the two-axis `sandbox` / `approval` fields to the payload. This extends the permission-model abstraction accompanying the addition of the Codex CLI adapter ([ADR-0032](0032-codex-adapter.md)). This ADR is not superseded; only the payload shape is extended by ADR-0033.
 
 ## Related
 
-- specs: [protocol](../specs/protocol.md)(`state_change.ext.pending_permission`
-  を追補、`permission_request` envelope を初出通知に降格)、
-  [threat-model](../specs/threat-model.md)(viewer 漏洩は ADR-0021
-  経由で自動カバー)。
-- ADR: [0010](0010-protocol-precisification.md)(段階的精緻化方針)、
-  [0011](0011-phase3-reliability-and-auth.md)(broker timeout 規約を
-  本 ADR で更新)、[0012](0012-response-display-and-dashboard-scope.md)
-  (protocol = 真実の単一ソース原則)、[0021](0021-role-information-disclosure-policy.md)
-  (viewer 漏洩を allow-list で守る基盤)。
-- 由来: [issue #59](https://github.com/sakuraiyuta/kaoiro/issues/59)。
-  関連 follow-up: [#60](https://github.com/sakuraiyuta/kaoiro/issues/60)
-  (broker timeout の設定項目化、低優先)。
+- specs: [protocol](../specs/protocol.md) (addendum for `state_change.ext.pending_permission`; demotes the `permission_request` envelope to an initial notification), [threat-model](../specs/threat-model.md) (viewer leakage is automatically covered through ADR-0021).
+- ADRs: [0010](0010-protocol-precisification.md) (progressive-precision policy), [0011](0011-phase3-reliability-and-auth.md) (updates the broker-timeout rule in this ADR), [0012](0012-response-display-and-dashboard-scope.md) (protocol = single source of truth), and [0021](0021-role-information-disclosure-policy.md) (foundation for protecting viewers with an allow-list).
+- Origin: [issue #59](https://github.com/sakuraiyuta/kaoiro/issues/59). Related follow-up: [#60](https://github.com/sakuraiyuta/kaoiro/issues/60) (make the broker timeout configurable; low priority).

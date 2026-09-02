@@ -11,11 +11,29 @@ defmodule KaoiroServerWeb.Router do
     plug :fetch_session
   end
 
+  # issue #232 MF-1: the session cookie's role gates persona pack detail
+  # (personality.md is a system prompt that may carry proprietary
+  # operating instructions for a custom pack — ADR-0021's fail-closed
+  # default: a new output surface starts operator-limited, viewer
+  # disclosure is a separate, explicit decision). Needs :fetch_session
+  # (RequireOperatorPlug reads the cookie), so this does not compose with
+  # the plain :api pipeline above — apply BOTH via pipe_through.
+  pipeline :operator_only do
+    plug :fetch_session
+    plug KaoiroServerWeb.RequireOperatorPlug
+  end
+
   scope "/api", KaoiroServerWeb do
     pipe_through :api
 
     get "/personas", PersonaController, :manifest
     get "/health", HealthController, :status
+  end
+
+  scope "/api", KaoiroServerWeb do
+    pipe_through [:api, :operator_only]
+
+    get "/personas/:id", PersonaController, :detail
   end
 
   # Sprite files referenced by the manifest (ADR-0008). Top-level (not

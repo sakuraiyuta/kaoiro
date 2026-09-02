@@ -698,4 +698,152 @@ defmodule KaoiroServer.ConversationStatesTest do
     assert {:exceeded, :max_turns} =
              ConversationStates.record_message("c", "a", "b", "y", 2, false, true, name)
   end
+
+  describe "list_for_operator/1 (issue #276)" do
+    test "open conversation を participants/turns/tokens/status/started_at 付きで返す" do
+      name = start_tracker(:cs_list_open)
+
+      assert :ok =
+               ConversationStates.record_message("c1", "b", "a", "hello", 1, false, true, name)
+
+      assert [
+               %{
+                 "conversation_id" => "c1",
+                 "participants" => ["a", "b"],
+                 "turns" => 1,
+                 "tokens" => tokens,
+                 "status" => "open",
+                 "started_at" => started_at
+               }
+             ] = ConversationStates.list_for_operator(name)
+
+      assert tokens > 0
+      # ISO8601 の疎な形状チェック — 正確な時刻は clock 注入と無関係の
+      # DateTime.utc_now() 由来なのでテストは形状だけを固定する。
+      assert {:ok, _, _} = DateTime.from_iso8601(started_at)
+    end
+
+    test "closed tombstone は turns=last_turn・tokens=nil だが started_at は open 時と同じ値を保持する (director決定A, issue #276)" do
+      name = start_tracker(:cs_list_closed, max_turns: 1)
+      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, true, name)
+
+      # started_at_wall は DateTime.utc_now() 由来で clock 注入の対象外
+      # (close_entry/3 のコメント参照)。real clock 値を capture して
+      # close 後に照合する方式だと「たまたま同じマイクロ秒に生成された」
+      # 可能性を理論上は排除できないので、:sys.replace_state で既知の
+      # sentinel 値へ固定し完全決定論にする(ふじ round3 advisory —
+      # 現行 pin 自体は既に accept 済みで、これは追加の硬化)。
+      pid = Process.whereis(name)
+
+      :sys.replace_state(pid, fn state ->
+        put_in(state.conversations["c"].started_at_wall, "2020-01-01T00:00:00.000000Z")
+      end)
+
+      assert {:exceeded, :max_turns} =
+               ConversationStates.record_message("c", "a", "b", "y", 2, false, true, name)
+
+      # last_turn は超過を検出したメッセージ自体もカウントした後の値
+      # (evaluate/5 は turns を先に加算してから max_turns 判定する) — 2。
+      assert [
+               %{
+                 "conversation_id" => "c",
+                 "participants" => ["a", "b"],
+                 "turns" => 2,
+                 "tokens" => nil,
+                 "status" => "closed",
+                 "started_at" => "2020-01-01T00:00:00.000000Z"
+               }
+             ] = ConversationStates.list_for_operator(name)
+    end
+
+    test "複数会話を conversation_id 順を問わず全件返す" do
+      name = start_tracker(:cs_list_multi)
+      assert :ok = ConversationStates.record_message("c1", "a", "b", "x", 1, false, true, name)
+      assert :ok = ConversationStates.record_message("c2", "a", "c", "y", 1, false, true, name)
+
+      cids =
+        name
+        |> ConversationStates.list_for_operator()
+        |> Enum.map(& &1["conversation_id"])
+        |> Enum.sort()
+
+      assert cids == ["c1", "c2"]
+    end
+
+    # issue #276 review follow-up (non-blocking, addressed): operator_turns/1's
+    # defensive catch-all. This module never actually produces a third
+    # `status` value today (see close_entry/3 and the entry-creation literal
+    # in handle_call({:record, ...})) — this test forces the unreachable
+    # shape via :sys.replace_state to pin the catch-all itself, since the
+    # public API cannot construct it.
+    test "未知の status 値でも list_for_operator は crash せず turns=0 を返す (防御的 catch-all)" do
+      name = start_tracker(:cs_list_unknown_status)
+      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, true, name)
+
+      pid = Process.whereis(name)
+
+      :sys.replace_state(pid, fn state ->
+        put_in(state.conversations["c"].status, :some_future_status)
+      end)
+
+      assert [%{"conversation_id" => "c", "turns" => 0}] =
+               ConversationStates.list_for_operator(name)
+    end
+  end
+
+  describe "close_by_operator/1 (issue #276)" do
+    test "open な会話を close し、reason=:operator_closed の tombstone にする" do
+      name = start_tracker(:cs_close_open)
+      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, true, name)
+
+      assert {:ok, agent_ids} = ConversationStates.close_by_operator("c", name)
+      assert Enum.sort(agent_ids) == ["a", "b"]
+
+      assert %{status: :closed, reason: :operator_closed} =
+               ConversationStates.get("c", name)
+    end
+
+    test "close 後の list_for_operator は status=closed かつ started_at が open 時と同じ値のまま残る (director決定A)" do
+      name = start_tracker(:cs_close_list)
+      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, false, true, name)
+
+      # 同じ理由(started_at_wall は clock 注入の対象外)で、既知の
+      # sentinel 値に固定して完全決定論にする(ふじ round3 advisory)。
+      pid = Process.whereis(name)
+
+      :sys.replace_state(pid, fn state ->
+        put_in(state.conversations["c"].started_at_wall, "2020-01-01T00:00:00.000000Z")
+      end)
+
+      assert {:ok, _} = ConversationStates.close_by_operator("c", name)
+
+      assert [
+               %{
+                 "conversation_id" => "c",
+                 "status" => "closed",
+                 "started_at" => "2020-01-01T00:00:00.000000Z"
+               }
+             ] = ConversationStates.list_for_operator(name)
+    end
+
+    test "既に closed な会話への再 close は :conversation_closed で拒否する (冪等、crash しない)" do
+      name = start_tracker(:cs_close_twice)
+      assert :ok = ConversationStates.record_message("c", "a", "b", "x", 1, true, true, name)
+
+      assert :both_done =
+               ConversationStates.record_message("c", "b", "a", "y", 2, true, true, name)
+
+      assert {:error, :conversation_closed} = ConversationStates.close_by_operator("c", name)
+
+      # 拒否された close は tombstone の reason を書き換えない。
+      assert %{status: :closed, reason: :both_done} = ConversationStates.get("c", name)
+    end
+
+    test "存在しない conversation_id への close は :unknown_conversation_id を返す (crash しない)" do
+      name = start_tracker(:cs_close_unknown)
+
+      assert {:error, :unknown_conversation_id} =
+               ConversationStates.close_by_operator("no-such-cid", name)
+    end
+  end
 end

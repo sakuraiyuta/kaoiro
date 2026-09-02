@@ -53,23 +53,49 @@ defmodule KaoiroServerWeb.HealthControllerTest do
       System.delete_env("RELEASE_ROOT")
       conn = get(conn, "/api/health")
 
-      assert %{"build_revision" => "unknown", "build_dirty" => false} = json_response(conn, 200)
+      assert %{
+               "build_version" => "unknown",
+               "build_channel" => "dev",
+               "build_revision" => "unknown",
+               "build_dirty" => false
+             } = json_response(conn, 200)
     end
 
-    test "build-info.json が焼き込まれていればその値を返す", %{conn: conn} do
+    test "矛盾した release identity は unknown/dev へ fail-soft する", %{conn: conn} do
       dir = tmp_release_root!()
 
       write_build_info!(
         dir,
-        ~s({"revision":"0123456789abcdef0123456789abcdef01234567","dirty":true})
+        ~s({"version":"2026.9.0","channel":"release","revision":"0123456789abcdef0123456789abcdef01234567","dirty":true})
       )
 
       System.put_env("RELEASE_ROOT", dir)
       conn = get(conn, "/api/health")
 
       assert %{
+               "build_version" => "unknown",
+               "build_channel" => "dev",
+               "build_revision" => "unknown",
+               "build_dirty" => false
+             } = json_response(conn, 200)
+    end
+
+    test "clean known release identity is returned", %{conn: conn} do
+      dir = tmp_release_root!()
+
+      write_build_info!(
+        dir,
+        ~s({"version":"2026.9.0","channel":"release","revision":"0123456789abcdef0123456789abcdef01234567","dirty":false})
+      )
+
+      System.put_env("RELEASE_ROOT", dir)
+      conn = get(conn, "/api/health")
+
+      assert %{
+               "build_version" => "2026.9.0",
+               "build_channel" => "release",
                "build_revision" => "0123456789abcdef0123456789abcdef01234567",
-               "build_dirty" => true
+               "build_dirty" => false
              } = json_response(conn, 200)
     end
 
@@ -89,7 +115,7 @@ defmodule KaoiroServerWeb.HealthControllerTest do
 
       write_build_info!(
         dir,
-        ~s({"revision":"0123456789abcdef0123456789abcdef01234567","dirty":false})
+        ~s({"version":"2026.9.0","channel":"dev","revision":"0123456789abcdef0123456789abcdef01234567","dirty":false})
       )
 
       System.put_env("RELEASE_ROOT", dir)
@@ -105,7 +131,12 @@ defmodule KaoiroServerWeb.HealthControllerTest do
       System.put_env("RELEASE_ROOT", dir)
       conn = get(conn, "/api/health")
 
-      assert %{"build_revision" => "unknown", "build_dirty" => false} = json_response(conn, 200)
+      assert %{
+               "build_version" => "unknown",
+               "build_channel" => "dev",
+               "build_revision" => "unknown",
+               "build_dirty" => false
+             } = json_response(conn, 200)
     end
 
     test "壊れた JSON も unknown/false へ fail-soft する", %{conn: conn} do
@@ -114,7 +145,12 @@ defmodule KaoiroServerWeb.HealthControllerTest do
       System.put_env("RELEASE_ROOT", dir)
       conn = get(conn, "/api/health")
 
-      assert %{"build_revision" => "unknown", "build_dirty" => false} = json_response(conn, 200)
+      assert %{
+               "build_version" => "unknown",
+               "build_channel" => "dev",
+               "build_revision" => "unknown",
+               "build_dirty" => false
+             } = json_response(conn, 200)
     end
 
     # issue #228 round 2 MF-3 (ふじ 差し戻し): 値域外の revision (40 桁 hex
@@ -125,7 +161,12 @@ defmodule KaoiroServerWeb.HealthControllerTest do
       System.put_env("RELEASE_ROOT", dir)
       conn = get(conn, "/api/health")
 
-      assert %{"build_revision" => "unknown", "build_dirty" => false} = json_response(conn, 200)
+      assert %{
+               "build_version" => "unknown",
+               "build_channel" => "dev",
+               "build_revision" => "unknown",
+               "build_dirty" => false
+             } = json_response(conn, 200)
     end
 
     test "dirty が boolean でなければ unknown/false へ fail-soft する", %{conn: conn} do
@@ -139,7 +180,42 @@ defmodule KaoiroServerWeb.HealthControllerTest do
       System.put_env("RELEASE_ROOT", dir)
       conn = get(conn, "/api/health")
 
-      assert %{"build_revision" => "unknown", "build_dirty" => false} = json_response(conn, 200)
+      assert %{
+               "build_version" => "unknown",
+               "build_channel" => "dev",
+               "build_revision" => "unknown",
+               "build_dirty" => false
+             } = json_response(conn, 200)
+    end
+
+    test "version が値域外なら unknown/dev へ fail-soft する", %{conn: conn} do
+      dir = tmp_release_root!()
+
+      write_build_info!(
+        dir,
+        ~s({"version":"2026.13.0","channel":"release","revision":"0123456789abcdef0123456789abcdef01234567","dirty":false})
+      )
+
+      System.put_env("RELEASE_ROOT", dir)
+      conn = get(conn, "/api/health")
+
+      assert %{"build_version" => "unknown", "build_channel" => "dev"} =
+               json_response(conn, 200)
+    end
+
+    test "channel が値域外なら unknown/dev へ fail-soft する", %{conn: conn} do
+      dir = tmp_release_root!()
+
+      write_build_info!(
+        dir,
+        ~s({"version":"2026.9.0","channel":"main","revision":"0123456789abcdef0123456789abcdef01234567","dirty":false})
+      )
+
+      System.put_env("RELEASE_ROOT", dir)
+      conn = get(conn, "/api/health")
+
+      assert %{"build_version" => "unknown", "build_channel" => "dev"} =
+               json_response(conn, 200)
     end
   end
 end

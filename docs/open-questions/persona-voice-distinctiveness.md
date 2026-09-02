@@ -1,6 +1,6 @@
 ---
-title: ペルソナ判別可能性の厳密化トリガ
-description: 口調から persona を識別できる程度(判別可能性)を SHOULD 止まりで放置するか、いつどんな条件で厳密化するかを予約する。
+title: Trigger for Strict Persona Distinguishability
+description: Reserve whether to leave the degree to which a persona can be identified from speech style (distinguishability) at SHOULD, or when and under what conditions to make it strict.
 status: open
 urgency: low
 blocks: []
@@ -10,44 +10,49 @@ decided: null
 
 ## 背景
 
-[persona-personality-injection](../specs/persona-personality-injection.md)
-は判別可能性を SHOULD 止まりとした。「並べたときに、応答口調から
-どのペルソナか一目で識別できる」ことを目標にはするが、機械的検証はしない。
-理由: dogfooding フェーズで検証の重さを避けたかったこと、SDK preset の
-指示と人格記述の相互作用を運用観察してから決めたかったこと
-([ADR-0026](../adr/0026-persona-personality-injection.md))。
+[persona-personality-injection](../specs/persona-personality-injection.md) leaves
+distinguishability at SHOULD. The goal is to "be able to identify at a glance
+which persona it is from the reply speech style when they are placed side by
+side," but there is no mechanical validation. The reasons were to avoid the
+burden of validation during the dogfooding phase and to decide after observing
+the interaction between SDK preset instructions and personality descriptions in
+operation ([ADR-0026](../adr/0026-persona-personality-injection.md)).
 
-問題化した時点で本 open-question を trigger にして厳密化方針を decide する。
+When it becomes a problem, use this open question as the trigger to decide a
+policy for making it strict.
 
 ## 選択肢
 
-| 案 | 内容 | メリット | デメリット |
+| Option | Description | Advantages | Disadvantages |
 |----|------|----------|-----------|
-| A | SHOULD 止まりを維持、問題化するまで何もしない | 追加コストゼロ。「動いてるうちは触らない」 | 問題化の判定が主観的で、決定を先延ばしにしがち |
-| B | 定期的な出力サンプリングと目視評価のワークフローを spec 化 | 主観だが定期的にチェックする姿勢を制度化できる | 運用負荷。dogfooding 段階では過剰の可能性 |
-| C | 自動判別テスト(別 LLM に「これはどの persona ?」と当てさせる)を追加 | 客観的な指標が得られる | 別 LLM 呼び出しのコスト・実装コスト・テストのブレ |
+| A | Keep it at SHOULD and do nothing until it becomes a problem | Zero additional cost; "do not touch it while it works" | The determination of whether it is a problem is subjective, so the decision tends to be postponed |
+| B | Specify a workflow for regular output sampling and visual evaluation | Institutionalizes the practice of checking regularly, even if subjective | Operational burden; may be excessive during dogfooding |
+| C | Add an automated distinguishability test (have another LLM guess "which persona is this?") | Provides an objective metric | Cost of calling another LLM, implementation cost, and test variability |
 
 ## 影響
 
-- 問題化するまで実装への影響なし。
-- 厳密化を採択した場合、SDK preset の指示強度と衝突する箇所の書き換えが
-  必要になる可能性(personality 側で強い上書きを書く等)。
+- No implementation impact until it becomes a problem.
+- If strictness is adopted, places that conflict with the strength of SDK preset
+  instructions may need to be rewritten (for example, by writing a strong
+  override on the personality side).
 
 ## 判断材料
 
-- 実運用で「どのペルソナが応答したか区別がつかない」場面が観察されるか。
-- 判別しづらいことが実害(愛着形成の失敗、状態把握の困難化)につながる
-  頻度。
-- Claude Code preset の「簡潔さ・事実確認」等の指示がどの程度支配的か。
+- Whether situations occur in actual operation where it is impossible to tell
+  which persona responded.
+- How often difficulty distinguishing them leads to actual harm (failure to
+  form attachment, difficulty understanding state).
+- How dominant instructions such as "conciseness and fact checking" in the
+  Claude Code preset are.
 
 ## 暫定方針
 
-**A**(SHOULD 止まりを維持)。observation で問題を検知したら新規 issue を
-起票し、そこから本 open-question を decide に持ち込む。
+**A** (keep it at SHOULD). If observation detects a problem, file a new issue
+and use it to bring this open question to a decision.
 
-## 解決時のアクション
+## Actions upon resolution
 
 - [ ] Decision recorded in `adr/NNNN-persona-voice-distinctiveness.md`
-- [ ] 厳密化する場合は `../specs/persona-personality-injection.md` の
-      Constraints を SHOULD → MUST に格上げ、検証手段を追記
+- [ ] If making it strict, promote Constraints from SHOULD → MUST in
+      `../specs/persona-personality-injection.md` and add the validation method
 - [ ] This file moved to ADR or deleted

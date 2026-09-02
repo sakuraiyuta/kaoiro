@@ -1,0 +1,16 @@
+{
+  "mode": "txt2img",
+  "prompt": "score_9, score_8_up, safe, 1girl, solo, upper body, young woman, wisteria purple hair, long hair, drill hair, ringlet curls, purple eyes, white blouse, purple ribbon tie, lavender purple tailored jacket, holding book, looking down at book, concentrated, closed mouth, simple background, white background, clean lineart, flat colors, an elegant intellectual young lady in her early twenties with soft wisteria-purple modest drill curls falling below her shoulders, a crisp white blouse with a violet ribbon tie under a fitted lavender-purple tailored jacket, composed and refined, reading through the open book with focused calm",
+  "negative": "worst quality, low quality, score_1, score_2, score_3, artist name, realistic, multiple views, logo, glowing, text, chibi, glasses",
+  "model": "animality_ap3.safetensors",
+  "architecture": "anima",
+  "seed": 218473265094718,
+  "steps": 30,
+  "width": 1024,
+  "height": 1024,
+  "cfg": 4.0,
+  "denoise": null,
+  "generated_at": "2026-07-05T13:49:02.056590+09:00",
+  "job_id": "b0a90aa9084140d2bccac9e87d69784a",
+  "source_job_id": null
+}

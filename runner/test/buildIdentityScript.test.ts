@@ -8,7 +8,7 @@
 // git call and lives in its own file (buildIdentityScriptDegrade.test.ts)
 // so that mock does not leak into these real-subprocess tests.
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,6 +28,18 @@ function git(args: string[], cwd: string): void {
   execFileSync("git", args, { cwd, stdio: "pipe" });
 }
 
+function createTaggedMainRepo(root: string, tag = "v2026.9.0"): void {
+  git(["init", "--quiet", "-b", "main"], root);
+  writeFileSync(join(root, "VERSION"), "2026.9.0\n");
+  writeFileSync(join(root, "a.txt"), "hello\n");
+  git(["add", "VERSION", "a.txt"], root);
+  git(
+    ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-m", "x", "--quiet"],
+    root,
+  );
+  git(["tag", tag], root);
+}
+
 describe("computeBuildIdentity (issue #228 round 2)", () => {
   let tmpDir: string | undefined;
 
@@ -40,9 +52,10 @@ describe("computeBuildIdentity (issue #228 round 2)", () => {
 
   it("clean な commit を実 SHA / dirty: false として返す", () => {
     tmpDir = mkdtempSync(join(tmpdir(), "kaoiro-build-identity-"));
-    git(["init", "--quiet"], tmpDir);
+    git(["init", "--quiet", "-b", "main"], tmpDir);
+    writeFileSync(join(tmpDir, "VERSION"), "2026.9.0\n");
     writeFileSync(join(tmpDir, "a.txt"), "hello\n");
-    git(["add", "a.txt"], tmpDir);
+    git(["add", "VERSION", "a.txt"], tmpDir);
     git(
       ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-m", "x", "--quiet"],
       tmpDir,
@@ -52,13 +65,66 @@ describe("computeBuildIdentity (issue #228 round 2)", () => {
     expect(identity.degraded).toBe(false);
     expect(identity.revision).toMatch(/^[0-9a-f]{40}$/);
     expect(identity.dirty).toBe(false);
+    expect(identity.version).toBe("2026.9.0");
+    expect(identity.channel).toBe("dev");
+  });
+
+  it("main の clean な VERSION 同版タグを release として返す", () => {
+    tmpDir = mkdtempSync(join(tmpdir(), "kaoiro-build-identity-"));
+    git(["init", "--quiet", "-b", "main"], tmpDir);
+    writeFileSync(join(tmpDir, "VERSION"), "2026.9.0\n");
+    git(["add", "VERSION"], tmpDir);
+    git(
+      ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-m", "x", "--quiet"],
+      tmpDir,
+    );
+    git(["tag", "v2026.9.0"], tmpDir);
+
+    expect(computeBuildIdentity(tmpDir).channel).toBe("release");
+  });
+
+  it.each([
+    ["dirty exact-tag main", (root: string) => writeFileSync(join(root, "a.txt"), "changed\n")],
+    ["previous tag main", (root: string) => {
+      git(["tag", "v2026.8.0"], root);
+      writeFileSync(join(root, "a.txt"), "advanced\n");
+      git(["add", "a.txt"], root);
+      git(
+        ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-m", "advance", "--quiet"],
+        root,
+      );
+    }],
+    ["detached exact-tag checkout", (root: string) => git(["checkout", "--quiet", "--detach", "HEAD"], root)],
+  ])("release guard rejects %s", (_label, mutate) => {
+    tmpDir = mkdtempSync(join(tmpdir(), "kaoiro-build-identity-"));
+    createTaggedMainRepo(tmpDir);
+    mutate(tmpDir);
+
+    expect(computeBuildIdentity(tmpDir).channel).toBe("dev");
+  });
+
+  it("shallow な attached main でも exact tag を release にしない", () => {
+    tmpDir = mkdtempSync(join(tmpdir(), "kaoiro-build-identity-"));
+    const source = join(tmpDir, "source");
+    const shallow = join(tmpDir, "shallow");
+    mkdirSync(source);
+    createTaggedMainRepo(source);
+    execFileSync(
+      "git",
+      ["clone", "--quiet", "--depth", "1", "--branch", "main", `file://${source}`, shallow],
+      { stdio: "pipe" },
+    );
+    git(["tag", "-f", "v2026.9.0"], shallow);
+
+    expect(computeBuildIdentity(shallow).channel).toBe("dev");
   });
 
   it("tracked ファイルの未コミット変更を dirty: true として検出する", () => {
     tmpDir = mkdtempSync(join(tmpdir(), "kaoiro-build-identity-"));
-    git(["init", "--quiet"], tmpDir);
+    git(["init", "--quiet", "-b", "main"], tmpDir);
+    writeFileSync(join(tmpDir, "VERSION"), "2026.9.0\n");
     writeFileSync(join(tmpDir, "a.txt"), "hello\n");
-    git(["add", "a.txt"], tmpDir);
+    git(["add", "VERSION", "a.txt"], tmpDir);
     git(
       ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-m", "x", "--quiet"],
       tmpDir,
@@ -72,9 +138,10 @@ describe("computeBuildIdentity (issue #228 round 2)", () => {
   // 判定をすり抜けた実例が、この untracked-counts-as-dirty 規約の根拠。
   it("untracked ファイルも dirty: true として検出する (issue #227 の実例)", () => {
     tmpDir = mkdtempSync(join(tmpdir(), "kaoiro-build-identity-"));
-    git(["init", "--quiet"], tmpDir);
+    git(["init", "--quiet", "-b", "main"], tmpDir);
+    writeFileSync(join(tmpDir, "VERSION"), "2026.9.0\n");
     writeFileSync(join(tmpDir, "a.txt"), "hello\n");
-    git(["add", "a.txt"], tmpDir);
+    git(["add", "VERSION", "a.txt"], tmpDir);
     git(
       ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-m", "x", "--quiet"],
       tmpDir,
@@ -91,6 +158,8 @@ describe("computeBuildIdentity (issue #228 round 2)", () => {
     expect(identity).toEqual({
       revision: "unknown",
       dirty: false,
+      version: "unknown",
+      channel: "dev",
       degraded: true,
       degradeReason: expect.stringContaining("rev-parse"),
     });
@@ -108,6 +177,17 @@ describe("formatIdentityString (issue #228 round 2)", () => {
     expect(
       formatIdentityString({ revision: "0123456789abcdef0123456789abcdef01234567", dirty: true }),
     ).toBe("0123456789abcdef0123456789abcdef01234567-dirty");
+  });
+});
+
+describe("build-identity.mjs default CLI (issue #288)", () => {
+  it("root VERSION を読み、version/channel を shell 出力へ含める", () => {
+    const out = execFileSync("node", [scriptPath], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    });
+    expect(out).toContain("KAOIRO_BUILD_VERSION=2026.9.0");
+    expect(out).toContain("KAOIRO_BUILD_CHANNEL=dev");
   });
 });
 

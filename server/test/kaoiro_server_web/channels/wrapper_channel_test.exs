@@ -10,9 +10,11 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
   alias KaoiroServer.ConversationStates
   alias KaoiroServer.DeliveryStates
   alias KaoiroServer.PlannedDisconnects
+  alias KaoiroServer.SessionLifecycleEvents
   alias KaoiroServer.SessionPointers
   alias KaoiroServer.TaskStates
   alias KaoiroServer.TokenDenylist
+  alias KaoiroServer.WrapperBuildInfos
   alias KaoiroServerWeb.WrapperChannel
 
   defp envelope(agent_id, state) do
@@ -143,6 +145,35 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     assert AgentStates.snapshot()[agent_id] == envelope
   end
 
+  test "wrapper_build_info を接続中マップへ保存し operator へ通知する" do
+    agent_id = "test.wrapper-build-info"
+    @endpoint.subscribe("agents:lobby")
+    socket = join_wrapper(agent_id)
+
+    info = %{
+      "version" => "0",
+      "build_revision" => "0123456789012345678901234567890123456789",
+      "build_dirty" => false,
+      "build_version" => "2026.9.0",
+      "build_channel" => "dev"
+    }
+
+    ref = push(socket, "wrapper_build_info", info)
+
+    assert_reply ref, :ok
+
+    assert_broadcast "wrapper_build_info", %{
+      "agent_id" => ^agent_id,
+      "build_revision" => "0123456789012345678901234567890123456789",
+      "build_dirty" => false,
+      "build_version" => "2026.9.0",
+      "build_channel" => "dev"
+    }
+
+    assert WrapperBuildInfos.snapshot()[agent_id]["build_version"] == "2026.9.0"
+    on_exit(fn -> WrapperBuildInfos.delete(agent_id, socket.channel_pid) end)
+  end
+
   describe "ADR-0015 stage 2 wrapper inbound funnel (issue #270)" do
     # T2-3 は「version 一致なら警告ゼロ」を log == "" で検証するが、7 種の
     # push には directory_request が含まれ、その directory-only 射影は
@@ -164,6 +195,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       history_replay_complete
       replay_ia
       session_reset_request
+      wrapper_build_info
     )
 
     defp control_payload(_event), do: %{}
@@ -186,7 +218,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert_control_reply(ref, event)
     end
 
-    test "T2-1: 7種の version 欠落は警告し、既存の返信を継続する" do
+    test "T2-1: 8種の version 欠落は警告し、既存の返信を継続する" do
       socket = join_wrapper("test.stage2-inbound-absent")
 
       log =
@@ -201,7 +233,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       end
     end
 
-    test "T2-2: 7種の version 不一致は警告し、既存の返信を継続する" do
+    test "T2-2: 8種の version 不一致は警告し、既存の返信を継続する" do
       socket = join_wrapper("test.stage2-inbound-mismatch")
 
       log =
@@ -216,7 +248,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       end
     end
 
-    test "T2-3: 7種の version 一致は警告しない" do
+    test "T2-3: 8種の version 一致は警告しない" do
       socket = join_wrapper("test.stage2-inbound-matched")
 
       log =
@@ -427,6 +459,28 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
     assert owner == socket.channel_pid
     assert is_binary(started_at)
+  end
+
+  # ADR-0055 phase-33 Stage B (director裁定 2026-08-31): a reset-driven
+  # rejoin records ONLY session_reset_completed — never also reconnected,
+  # even though the same PeerConnectivity.confirm_connection call underlies
+  # both. Same setup as "after_join は confirm→Activity pending→activate…"
+  # above, checked against the recorded timeline instead of AgentActivity.
+  test "reset 起因の rejoin は session_lifecycle へ session_reset_completed だけを記録する" do
+    agent_id = "test.lifecycle-reset-completed-#{System.unique_integer([:positive])}"
+    on_exit(fn -> KaoiroServer.SessionStarts.delete(agent_id) end)
+
+    assert {:ok, request_id, _} =
+             KaoiroServer.SessionResets.check_and_acquire(agent_id, "new", "idle", "old")
+
+    :ok = KaoiroServer.SessionResets.resolve(agent_id, request_id, true, nil, "new")
+    :sys.get_state(KaoiroServer.SessionResets)
+
+    _socket = join_wrapper(agent_id, "default", %{"transition_id" => request_id})
+    :sys.get_state(KaoiroServer.AgentActivity)
+
+    assert [%{kind: "session_reset_completed", trigger: nil}] =
+             SessionLifecycleEvents.list_for_agent(agent_id)
   end
 
   describe "persona_sync push on join (issue #197 段階3, D14 acceptance 1, revised issue #219 D22)" do
@@ -1347,19 +1401,25 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       SP.record(agent_id, "sess-old", "/proj")
       _ = :sys.get_state(SP)
 
-      # IA は route_inter_agent で受信 agent の existence check を通る
-      # ので、peer を AgentStates に seed しておく (直接 put)。
+      # IA は route_inter_agent で受信 agent の existence/reachability check
+      # (known? / connected?, issue #257) を通るので、peer を AgentStates に
+      # seed しておく (直接 put)。owner: self() を渡さないと owning channel
+      # 不在 = connected? false と判定され、この IA 送信自体が :disconnected
+      # で reject されてしまう。
       :ok =
-        AgentStates.put(%{
-          "version" => "0",
-          "agent_id" => peer_id,
-          "persona" => %{"id" => "peer", "name" => "peer", "sprite_set" => "peer"},
-          "ts" => "2026-07-23T14:00:00Z",
-          "type" => "state_change",
-          "state" => "idle",
-          "payload" => %{},
-          "ext" => %{}
-        })
+        AgentStates.put(
+          %{
+            "version" => "0",
+            "agent_id" => peer_id,
+            "persona" => %{"id" => "peer", "name" => "peer", "sprite_set" => "peer"},
+            "ts" => "2026-07-23T14:00:00Z",
+            "type" => "state_change",
+            "state" => "idle",
+            "payload" => %{},
+            "ext" => %{}
+          },
+          owner: self()
+        )
 
       on_exit(fn ->
         SP.delete(agent_id)
@@ -1776,6 +1836,148 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       }
     end
 
+    # ADR-0055 phase-33 Stage B: the same planned disconnect -> matching
+    # join cycle as the test above, checked against the recorded timeline
+    # instead of the peer-facing broadcast.
+    test "planned 切断 -> matching join は session_lifecycle へ reconnecting -> reconnected の順で記録する" do
+      agent_id = "test.lifecycle-planned-cycle"
+      old_socket = seed_known(agent_id)
+
+      assert :ok = PlannedDisconnects.begin(agent_id, "transition-lifecycle", :restart)
+
+      Process.unlink(old_socket.channel_pid)
+      :ok = close(old_socket)
+
+      assert [%{kind: "reconnecting", trigger: nil}] =
+               SessionLifecycleEvents.list_for_agent(agent_id)
+
+      _new_socket =
+        join_wrapper(agent_id, "default", %{"transition_id" => "transition-lifecycle"})
+
+      assert [
+               %{kind: "reconnected", trigger: nil},
+               %{kind: "reconnecting", trigger: nil}
+             ] = SessionLifecycleEvents.list_for_agent(agent_id)
+    end
+
+    test "予告なし切断は session_lifecycle へ disconnected を記録する" do
+      agent_id = "test.lifecycle-unplanned-disconnect"
+      socket = seed_known(agent_id)
+
+      Process.unlink(socket.channel_pid)
+      :ok = close(socket)
+
+      assert [%{kind: "disconnected", trigger: nil}] =
+               SessionLifecycleEvents.list_for_agent(agent_id)
+    end
+
+    test "session_lifecycle inbound event は kind/trigger/at を記録する (well-formed)" do
+      agent_id = "test.lifecycle-inbound-wellformed"
+      socket = seed_known(agent_id)
+
+      ref =
+        push(socket, "session_lifecycle", %{
+          "kind" => "compact_boundary",
+          "trigger" => "request_compact",
+          "at" => "2026-08-31T00:00:00Z"
+        })
+
+      assert_reply ref, :ok
+
+      assert [
+               %{
+                 kind: "compact_boundary",
+                 trigger: "request_compact",
+                 at: "2026-08-31T00:00:00Z"
+               }
+             ] = SessionLifecycleEvents.list_for_agent(agent_id)
+    end
+
+    test "session_lifecycle inbound event は trigger 省略時 nil で記録する" do
+      agent_id = "test.lifecycle-inbound-no-trigger"
+      socket = seed_known(agent_id)
+
+      ref =
+        push(socket, "session_lifecycle", %{
+          "kind" => "compacting",
+          "at" => "2026-08-31T00:00:00Z"
+        })
+
+      assert_reply ref, :ok
+
+      assert [%{kind: "compacting", trigger: nil}] =
+               SessionLifecycleEvents.list_for_agent(agent_id)
+    end
+
+    test "session_lifecycle inbound event は malformed payload を無視して落とさない" do
+      agent_id = "test.lifecycle-inbound-malformed"
+      socket = seed_known(agent_id)
+
+      ref = push(socket, "session_lifecycle", %{"kind" => 42, "at" => "T"})
+
+      assert_reply ref, :ok
+      assert SessionLifecycleEvents.list_for_agent(agent_id) == []
+    end
+
+    # ふじ Stage B round 1 must-fix B3 (2026-08-31): the channel ingress
+    # end-to-end path, not only `SessionLifecycleEvents.valid_event?/3` in
+    # isolation — a well-SHAPED (binary kind/at) but out-of-vocabulary wire
+    # payload must no-op the whole event, not store a partially-repaired
+    # row.
+    test "session_lifecycle inbound event は未知の kind を no-op する" do
+      agent_id = "test.lifecycle-inbound-unknown-kind"
+      socket = seed_known(agent_id)
+
+      ref =
+        push(socket, "session_lifecycle", %{
+          "kind" => "bogus_kind",
+          "at" => "2026-08-31T00:00:00Z"
+        })
+
+      assert_reply ref, :ok
+      assert SessionLifecycleEvents.list_for_agent(agent_id) == []
+    end
+
+    test "session_lifecycle inbound event は compact_boundary 以外への trigger を no-op する" do
+      agent_id = "test.lifecycle-inbound-trigger-wrong-kind"
+      socket = seed_known(agent_id)
+
+      ref =
+        push(socket, "session_lifecycle", %{
+          "kind" => "compacting",
+          "trigger" => "request_compact",
+          "at" => "2026-08-31T00:00:00Z"
+        })
+
+      assert_reply ref, :ok
+      assert SessionLifecycleEvents.list_for_agent(agent_id) == []
+    end
+
+    # ふじ Stage B round 2 must-fix B3-残り (2026-08-31): a wrong-TYPE
+    # `trigger` (a JSON number, not a string) previously got sanitized to
+    # `nil` by the channel handler before ever reaching
+    # `SessionLifecycleEvents.append/5` — recorded as a legitimate-looking
+    # "no trigger" event instead of the whole event being dropped. Distinct
+    # from the malformed-payload test above (kind=42, a MISSING/wrong-typed
+    # required field): here kind/at are well-formed and only trigger is
+    # wrong-typed, so the channel's own `is_binary(kind) and is_binary(at)`
+    # guard does not intercept it — this exercises `append/5`'s own
+    # `valid_event?/3` gate.
+    test "session_lifecycle inbound event は非 string trigger を sanitize せず no-op する" do
+      agent_id = "test.lifecycle-inbound-trigger-wrong-type"
+      socket = seed_known(agent_id)
+
+      ref =
+        push(socket, "session_lifecycle", %{
+          "kind" => "compacting",
+          "trigger" => 42,
+          "at" => "2026-08-31T00:00:00Z"
+        })
+
+      assert_reply ref, :ok
+      assert SessionLifecycleEvents.list_for_agent(agent_id) == []
+    end
+
     test "planned window 中は IA を preflight bounce し pane・conversation・ledger を変更しない" do
       from_id = "test.planned-bounce-from"
       to_id = "test.planned-bounce-to"
@@ -1812,14 +2014,19 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
       overflow_cid = "cnv-planned-cap-51"
 
-      ref =
-        push(
-          from_socket,
-          "envelope",
-          inter_envelope(from_id, to_id, cid: overflow_cid)
-        )
+      log =
+        capture_log(fn ->
+          ref =
+            push(
+              from_socket,
+              "envelope",
+              inter_envelope(from_id, to_id, cid: overflow_cid)
+            )
 
-      assert_reply ref, :error, %{reason: "peer_reconnecting_capacity"}
+          assert_reply ref, :error, %{reason: "peer_reconnecting_capacity"}
+        end)
+
+      assert log =~ "planned reconnecting target cap hit for #{to_id}"
       assert ConversationStates.get(overflow_cid) == nil
       assert_panes_empty([from_id, to_id])
 
@@ -2347,6 +2554,35 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       ref = push(from_socket, "envelope", env)
       assert_reply ref, :error, %{reason: "unknown_agent"}
       assert_panes_empty([from_id, "test.iam-unk-target"])
+    end
+
+    test "既に切断済みの to への新規送信は :disconnected で拒否する (issue #257)" do
+      # ChannelCase は channel process を test process と link するので、
+      # close/1 の {:shutdown, :closed} exit を trap して吸収する。
+      Process.flag(:trap_exit, true)
+
+      from_id = "test.iam-predisc-from"
+      to_id = "test.iam-predisc-to"
+      cid = "cnv-predisc-#{System.unique_integer([:positive])}"
+      to_socket = seed_known(to_id)
+      from_socket = seed_known(from_id)
+
+      # to を先に切断させておく。会話がまだ無いので claim_unreachable_targets
+      # の disconnect トリガー (#131) は発火しない — issue #257 が問題にして
+      # いた、事前チェックが無ければ record_message まで素通りしてしまう経路
+      # そのもの。
+      :ok = close(to_socket)
+
+      env = inter_envelope(from_id, to_id, cid: cid)
+      ref = push(from_socket, "envelope", env)
+      assert_reply ref, :error, %{reason: "disconnected"}
+      assert_panes_empty([from_id, to_id])
+
+      # pane が空なだけでは record_message 後の reject を検出できない。
+      # preflight を副作用フリーに保つため conversation store 自体を pin する。
+      assert ConversationStates.get(cid) == nil
+
+      on_exit(fn -> AgentStates.delete(to_id) end)
     end
 
     test "kind=reject で reject_reason 欠落の envelope を拒否する" do
@@ -4104,6 +4340,10 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
       assert %{transition_id: ^request_id, kind: :reset, phase: :announced} =
                PlannedDisconnects.get(agent_id)
+
+      # ADR-0055 phase-33 Stage B.
+      assert [%{kind: "session_reset_started", trigger: nil}] =
+               SessionLifecycleEvents.list_for_agent(agent_id)
     end
 
     test "busy agent の self request は agent_busy で拒否する" do
@@ -4186,6 +4426,34 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       }
 
       assert AgentStates.snapshot()[agent_id]["state"] == "disconnected"
+    end
+
+    test "state envelope 前に切断しても wrapper build identity を消去する" do
+      agent_id = "test.disc-wrapper-build"
+      @endpoint.subscribe("agents:lobby")
+      socket = join_wrapper(agent_id)
+
+      info = %{
+        "version" => "0",
+        "build_revision" => "0123456789012345678901234567890123456789",
+        "build_dirty" => false,
+        "build_version" => "2026.9.0",
+        "build_channel" => "dev"
+      }
+
+      ref = push(socket, "wrapper_build_info", info)
+      assert_reply ref, :ok
+      assert WrapperBuildInfos.snapshot()[agent_id]
+
+      Process.unlink(socket.channel_pid)
+      :ok = close(socket)
+
+      assert_broadcast "wrapper_build_info", %{
+        "agent_id" => ^agent_id,
+        "cleared" => true
+      }
+
+      refute Map.has_key?(WrapperBuildInfos.snapshot(), agent_id)
     end
 
     # issue #180, ADR-0048 F1: 親エージェントの切断でその task を破棄する。

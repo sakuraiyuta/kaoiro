@@ -1,163 +1,175 @@
 ---
-title: Phase 22 — resume 時の privilege 三軸再適用 (P0)
-description: SessionPointers.snapshot を SSOT に格上げし、Codex sandbox/network_access と Claude permission_mode を restore/switch/reset 経路で復元する。runner-central pure helper が engine 関連 field を authoritative に上書きし、fresh spawn/crash-restart/rollback は no-apply を維持。
+title: Phase 22 — Reapplying the Three Privilege Axes on resume (P0)
+description: Elevate SessionPointers.snapshot to the SSOT and restore Codex sandbox/network_access and Claude permission_mode through restore/switch/reset paths. A runner-central pure helper authoritatively overwrites engine-related fields, while fresh spawn/crash-restart/rollback retain no-apply semantics.
 status: done
 phase: 22
 depends_on: [15, 17, 21]
 last_updated: 2026-07-16
 ---
 
-# Phase 22 — resume 時の privilege 三軸再適用 (P0)
+# Phase 22 — Reapplying the Three Privilege Axes on resume (P0)
 
 ## Goal
 
-[ADR-0014 F1 追補](../adr/0014-session-resume-and-restore.md) の
-「resume 時の privilege 三軸再適用」を実装する。dogfood.sh 再起動後の
-Codex agent resume で `danger-full-access` / `network_access=true` が
-`workspace-write` / `false` に降格していた事故を含む gap を解消する。
-`SessionPointers.snapshot` を drift 表示専用から**実効設定復元の SSOT**
-に格上げし、restore / switch_session / reset_session の全 resume 経路で
-runner-central pure helper が `ParsedSpawn` を snapshot 由来値に上書きする。
+Implement “reapplying the three privilege axes on resume” from the
+[ADR-0014 F1 addendum](../adr/0014-session-resume-and-restore.md). Resolve the
+gap that included the incident where, after restarting with dogfood.sh, a
+resumed Codex agent's `danger-full-access` / `network_access=true` was demoted
+to `workspace-write` / `false`. Elevate `SessionPointers.snapshot` from a
+drift-display-only artifact to the **SSOT for restoring effective settings**,
+and have a runner-central pure helper overwrite `ParsedSpawn` with snapshot
+values on every resume path: restore / switch_session / reset_session.
 
 ## Scope
 
-**P0 apply 対象**:
+**P0 apply targets**:
 
 - Codex: `sandbox` / `network_access`
 - Claude: `permission_mode`
 
-**P0 sanitize 対象** (drift 用に wrapper へ passthrough される known 7 field):
+**P0 sanitize targets** (the known 7 fields passed through to the wrapper for
+drift calculation):
 
 - `model` / `model_source` / `effort` / `effort_source` / `permission_mode`
   / `sandbox` / `network_access`
 
-**P1 punt**: `model` / `effort` / `*_source` の runner apply。cli.ts の
-`modelSource` / `effortSource` 派生と絡むため phase を分離。
+**P1 punt**: runner application of `model` / `effort` / `*_source`. This is
+separated into another phase because it involves cli.ts derivation of
+`modelSource` / `effortSource`.
 
-## Design decisions (藤 D1-D5, R1-R2)
+## Design decisions (Fuji D1-D5, R1-R2)
 
-- **D1 helper 形**: mode enum を設けず、単一 pure helper
-  `applyResumeSnapshot(parsed, snapshot, engine)`。fresh spawn /
-  crash restart / rollback では **apply しない** (呼び出し側が snapshot を
-  渡さない)。将来 explicit override UI を追加する際は priority API を
-  拡張する (今回は作らない)。
-- **D2 absent semantics**: snapshot object 自体が absent なら no-op (旧
-  server 互換、`entry.parsed` 維持)。snapshot present + 当該 engine 関連
-  field absent/invalid なら **engine default へ安全側降格** (Codex:
-  `workspace-write` / `false`、Claude: `default`)。**旧 danger 値保持
-  禁止**。**explicit `false` 保持** (truthy 判定禁止)。
-- **D3 crash-restart race**: P0 は `entry.parsed` 継続。resume_drift の
-  可視化は保証しない (runner の resumeSnapshot も stale なら drift 空に
-  なり得る)。Claude permission_mode は after_join PermissionModes push が
-  補正、Codex privilege は mid-session immutable のため今回対象上は
-  問題なし。model / effort race は P1。
-- **D4 drift semantics**: engine filter で apply しない field も
-  sanitized `resume_snapshot` には保持し、engine-neutral な drift 計算を
-  維持。Claude sandbox は permission_mode 写像として意味があるため drift
-  対象から除外しない。malformed / unknown は drop + stderr warn、operator
-  envelope 通知は scope 外。
-- **D5 field scope**: known 7 field だけ sanitized。P0 apply は Codex
-  sandbox/network、Claude permission_mode のみ。
-- **R1 canonical key normalization (藤 1 次 review 差戻し確定)**: server
-  sanitize は入力 map の enumeration 順に依存せず、known field を
-  fixed 順で走査。atom / string 両方の key が同一 field に来る場合は
-  **string key を優先** (wire canonical)、なければ atom key を読む。
-  両方存在で値が異なれば `Logger.warning` で片方採択を明示。出力 key は
-  **常に canonical string** — Phoenix JSON relay で `sandbox: ...` と
-  `"sandbox" => ...` が潰れて勝者不定になる穴を塞ぐ。priority は
-  string-first unconditional (string 側 invalid でも field 全体 drop、
-  atom fallback しない) — deterministic pin。
-- **R2 whole-malformed shape の閉じ方 (藤 1 次 review 差戻し確定)**:
-  `validateResolvedSnapshot(raw)` が null を返す present-but-non-object
-  shape に対し、旧 privileged 値を絶対に継承しない。
-  - **switch_session**: `#fail(agentId, "error")` で fail-loud reject。
-    F4 lock (`#activeSessions`) の delete/add 手前で validation する
-    順序に変更、reject 時に lock を変化させない。
-  - **reset_session**: 既存 `SessionResetErrorReason` closed vocab
+- **D1 helper shape**: Do not introduce a mode enum; use one pure helper,
+  `applyResumeSnapshot(parsed, snapshot, engine)`. **Do not apply** it to fresh
+  spawn / crash restart / rollback (the caller does not pass a snapshot). If an
+  explicit override UI is added in the future, extend the priority API (not in
+  this phase).
+- **D2 absent semantics**: If the snapshot object itself is absent, no-op
+  (backward compatibility with the old server; retain `entry.parsed`). If a
+  snapshot is present but an engine-related field is absent/invalid, **safely
+  demote to the engine default** (Codex: `workspace-write` / `false`, Claude:
+  `default`). **Do not retain the old danger value**. **Retain explicit
+  `false`** (do not use truthy checks).
+- **D3 crash-restart race**: P0 continues with `entry.parsed`. No guarantee is
+  made that resume_drift is visible (if runner's resumeSnapshot is also stale,
+  drift can be empty). Claude permission_mode is corrected by the after_join
+  PermissionModes push; Codex privilege is mid-session immutable, so there is
+  no issue for the current target. Model / effort race is P1.
+- **D4 drift semantics**: Keep fields not applied by the engine filter in the
+  sanitized `resume_snapshot` and preserve engine-neutral drift calculation.
+  Claude sandbox has meaning as a permission_mode mapping, so do not remove it
+  from drift targets. Drop malformed / unknown values + warn on stderr; an
+  operator envelope notification is out of scope.
+- **D5 field scope**: Sanitize only the known 7 fields. P0 applies only Codex
+  sandbox/network and Claude permission_mode.
+- **R1 canonical key normalization (confirmed as a Fuji first-review
+  return-to-author must-fix)**: Server sanitization must not depend on map
+  enumeration order; scan known fields in a fixed order. When both atom and
+  string keys for one field are present, **prefer the string key** (wire
+  canonical); otherwise read the atom key. If both values differ, explicitly
+  record the adopted side with `Logger.warning`. Output keys are **always
+  canonical strings**—close the hole where Phoenix JSON relay collapses
+  `sandbox: ...` and `"sandbox" => ...` and leaves the winner undefined. The
+  priority is unconditional string-first (if the string side is invalid, drop
+  the whole field and do not fall back to the atom)—a deterministic pin.
+- **R2 whole-malformed shape handling (confirmed as a Fuji first-review
+  return-to-author must-fix)**: Never inherit old privileged values when
+  `validateResolvedSnapshot(raw)` returns null for a present-but-non-object
+  shape.
+  - **switch_session**: fail-loud reject with `#fail(agentId, "error")`. Validate
+    before deleting/adding the F4 lock (`#activeSessions`), so a rejection does
+    not change the lock.
+  - **reset_session**: The existing `SessionResetErrorReason` closed vocabulary
     (`agent_busy` `unsupported_session_reset` `session_reset_pending`
-    `runner_unavailable` `spawn_failed` `rollback_failed` `timeout`) に
-    schema-level malformed 相当が無いため、**safe-default relaunch** で
-    降格 (`nextSnapshot = {}` → applyResumeSnapshot が engine default
-    降格) + stderr warn。旧 `entry.parsed` の privileged 値は継承されない。
-    藤 R2 の「API 上困難なら safe-default relaunch」許容範囲内から採択。
-    語義追加 (`invalid_snapshot` reason 等) が将来必要になれば別 phase。
+    `runner_unavailable` `spawn_failed` `rollback_failed` `timeout`) has no
+    schema-level malformed equivalent, so **demote through a safe-default
+  relaunch** (`nextSnapshot = {}` → applyResumeSnapshot demotes to the
+    engine default) + stderr warning. Do not inherit privileged values from
+    old `entry.parsed`. Adopt this within Fuji R2's allowance for a
+    “safe-default relaunch when the API makes a dedicated reason difficult.”
+    If semantic additions (`invalid_snapshot` reason, etc.) are needed later,
+    make them a separate phase.
 
 ## Acceptance Criteria
 
-- [x] `protocol/src/index.ts` の `ResetSessionCommand` に
-      `resume_snapshot?: ResolvedSnapshotExt` を optional 追加。
-      `SwitchSessionMessage` は既に relay 中なので変更不要。
-- [x] `server/lib/kaoiro_server/session_pointers.ex` の
-      `record_snapshot/2` に closed-enum + boolean sanitizer を追加。
-      known 7 field のみ保持、malformed field は drop + `Logger.warning`、
-      非 map snapshot は no-op (defensive drop)。**R1: canonical string
-      key に normalize** — fixed 順走査 + string 優先 + atom fallback、
-      値異なる dup は warn、priority は string-first unconditional。
-- [x] `server/lib/kaoiro_server_web/channels/agents_channel.ex` の
-      `handle_in("session_reset")` broadcast に
-      `|> maybe_put_resume_snapshot(agent_id)` を追加。既存 helper
-      (build_restore_payload / switch_session と同じ) を再利用。
-- [x] `runner/src/resume_snapshot.ts` を新設し
-      `validateResolvedSnapshot(raw)` と `applyResumeSnapshot(parsed,
-      snapshot, engine)` の pure helper を追加。
-      `validateResolvedSnapshot` は closed-enum / boolean / non-empty-string
-      guard、非 object は null。`applyResumeSnapshot` は snapshot=null
-      で no-op、engine 別に P0 field を SSOT 上書き、absent/invalid は
-      engine default 降格。
-- [x] `runner/src/supervisor.ts` の `parseSpawn` の resume_snapshot 経路を
-      `validateResolvedSnapshot` 経由に置換。非 object shape は spawn
-      全体を fail-loud reject 継続 (既存動作維持)。
-- [x] `runner/src/supervisor.ts` の `handleSpawn` の resume 分岐で
-      `applyResumeSnapshot(parsed, parsed.resumeSnapshot, parsed.engine)`
-      を fire。fresh spawn 分岐は apply しない。
-- [x] `runner/src/supervisor.ts` の `handleSwitchSession` の
-      `#completeSwitchSession` で payload.resume_snapshot を validate + apply
-      し `entry.parsed` を更新。payload に snapshot 無ければ既存
-      `entry.parsed.resumeSnapshot` にフォールバック。**R2: whole-malformed
-      shape は F4 lock 手前で `#fail(agentId, "error")` fail-loud reject**
-      (旧 privileged 値を継承しない)。
-- [x] `runner/src/supervisor.ts` の `handleResetSession` で
-      payload.resume_snapshot を validate + apply し `entry.parsed` を
-      更新してから resumeSessionId strip + child.kill。#relaunchForReset
-      は無変更で `entry.parsed` を consume。rollback は reset 時に
-      適用済みの `entry.parsed` を保持。**R2: whole-malformed shape は
-      safe-default relaunch** (`nextSnapshot = {}` → engine default 降格)
-      + stderr warn (旧 privileged 値を継承しない)。
-- [x] `runner/src/supervisor.ts` の `resolveWrapperConfig` は既存の
-      passthrough を維持。invariant を明示するコメントを追加 (upstream
-      で sanitize 済みが保証)。
-- [x] `runner/test/supervisor.test.ts` に統合 test を追加
-      (initial restore の Codex / Claude apply、fresh spawn 不 apply、
-      switch_session apply、reset_session apply、rollback / crash-restart
-      の entry.parsed 継承、`network_access=false` explicit 保持、empty
-      snapshot での engine default 降格、**R2 whole-malformed switch
-      fail-loud / reset safe-default、individual field malformed の
-      integration pin**)。関連 runner suite pass。
-- [x] `wrapper/codex/test/host.test.ts` に regression pin を追加
-      (danger-full-access → ThreadOptions、workspace-write + network=true、
-      network_access=false explicit、resume_drift 空)。関連 codex suite pass。
-- [x] `wrapper/claude-code/test/host.test.ts` に regression pin を追加
-      (permission_mode=bypassPermissions で allowDangerouslySkipPermissions、
-      resume_drift 空)。関連 claude-code suite pass。
-- [x] `server/test/kaoiro_server/session_pointers_test.exs` に write-side
-      sanitize test を追加 (**R1: canonical string key normalize / atom
-      + string dup priority / invalid-string 優先 drop / valid string +
-      invalid atom priority**)。関連 server suite pass。既存の atom-key
-      期待は canonical string key 期待に更新済。
-- [x] `server/test/kaoiro_server_web/channels/agents_channel_test.exs` に
-      reset broadcast の snapshot 同梱 test を追加 (snapshot 有無で
-      `resume_snapshot` 有無が切り替わる)。
-- [x] docs: ADR-0014 F1 追補 に「resume 時の privilege 三軸再適用」節を
-      追加、ADR-0033 F3 / ADR-0036 F2 は reference で ADR-0014 へ集約。
-      `docs/specs/protocol.md` の `reset_session` schema に
-      `resume_snapshot?` を追記。
-- [x] typecheck (protocol / runner / wrapper 4 pkg workspace) clean、
-      `mix format --check-formatted` 対象 file clean、
-      svelte-check 0 errors 0 warnings、`git diff --check` clean。
-- [x] end-to-end 手動検証 (dogfood): restart → Codex agent が
-      danger-full-access + network=true で復元、Claude agent が
-      bypassPermissions で復元、`ext.effective` と `ext.resume_snapshot`
-      が一致し `ext.resume_drift` が空。マスターによる実機確認で合格。
+- [x] Add optional `resume_snapshot?: ResolvedSnapshotExt` to
+      `ResetSessionCommand` in `protocol/src/index.ts`. No change is needed to
+      `SwitchSessionMessage`, which already relays it.
+- [x] Add a closed-enum + boolean sanitizer to `record_snapshot/2` in
+      `server/lib/kaoiro_server/session_pointers.ex`. Keep only the known 7
+      fields, drop malformed fields + `Logger.warning`, and no-op on a
+      non-map snapshot (defensive drop). **R1: normalize to canonical string
+      keys**—fixed-order scan + string priority + atom fallback, warn on
+      differing duplicates, and unconditional string-first priority.
+- [x] Add `|> maybe_put_resume_snapshot(agent_id)` to the
+      `handle_in("session_reset")` broadcast in
+      `server/lib/kaoiro_server_web/channels/agents_channel.ex`. Reuse the
+      existing helper (the same one as build_restore_payload / switch_session).
+- [x] Create `runner/src/resume_snapshot.ts` with the pure helpers
+      `validateResolvedSnapshot(raw)` and
+      `applyResumeSnapshot(parsed,
+      snapshot, engine)`.
+      `validateResolvedSnapshot` guards closed enums / booleans / non-empty
+      strings and returns null for non-objects. `applyResumeSnapshot` no-ops for
+      snapshot=null, overwrites P0 fields from the SSOT by engine, and demotes
+      absent/invalid values to the engine default.
+- [x] Route the resume_snapshot path in `parseSpawn` in
+      `runner/src/supervisor.ts` through `validateResolvedSnapshot`. Continue
+      to fail-loud reject the entire spawn for a non-object shape (preserve
+      existing behavior).
+- [x] Fire `applyResumeSnapshot(parsed, parsed.resumeSnapshot, parsed.engine)`
+      in the resume branch of `handleSpawn` in
+      `runner/src/supervisor.ts`. Do not apply it in the fresh-spawn branch.
+- [x] In `#completeSwitchSession` of `handleSwitchSession` in
+      `runner/src/supervisor.ts`, validate + apply payload.resume_snapshot and
+      update `entry.parsed`. If the payload has no snapshot, fall back to the
+      existing `entry.parsed.resumeSnapshot`. **R2: fail-loud reject a
+      whole-malformed shape with `#fail(agentId, "error")` before the F4 lock**
+      (do not inherit old privileged values).
+- [x] In `handleResetSession` in `runner/src/supervisor.ts`, validate + apply
+      payload.resume_snapshot, update `entry.parsed`, then strip
+      resumeSessionId + child.kill. Leave #relaunchForReset unchanged so it
+      consumes `entry.parsed`; rollback retains the `entry.parsed` already
+      applied at reset. **R2: use a safe-default relaunch for a whole-malformed
+      shape** (`nextSnapshot = {}` → engine-default demotion) + stderr warning
+      (do not inherit old privileged values).
+- [x] Preserve the existing passthrough in `resolveWrapperConfig` in
+      `runner/src/supervisor.ts`. Add a comment stating the invariant that
+      upstream sanitization is guaranteed.
+- [x] Add integration tests to `runner/test/supervisor.test.ts` (Codex / Claude
+      initial-restore apply, fresh-spawn no-apply, switch_session apply,
+      reset_session apply, entry.parsed inheritance on rollback / crash-restart,
+      explicit `network_access=false` retention, engine-default demotion with an
+      empty snapshot, **R2 whole-malformed switch fail-loud / reset
+      safe-default, and an integration pin for individually malformed fields**).
+      The related runner suite passes.
+- [x] Add a regression pin to `wrapper/codex/test/host.test.ts`
+      (danger-full-access → ThreadOptions, workspace-write + network=true,
+      explicit network_access=false, empty resume_drift). The related Codex
+      suite passes.
+- [x] Add a regression pin to `wrapper/claude-code/test/host.test.ts`
+      (permission_mode=bypassPermissions gives allowDangerouslySkipPermissions,
+      empty resume_drift). The related claude-code suite passes.
+- [x] Add a write-side sanitize test to
+      `server/test/kaoiro_server/session_pointers_test.exs` (**R1: canonical
+      string-key normalization / atom + string duplicate priority /
+      invalid-string priority drop / valid string + invalid atom priority**).
+      The related server suite passes. Update existing atom-key expectations to
+      canonical string-key expectations.
+- [x] Add a reset-broadcast snapshot-inclusion test to
+      `server/test/kaoiro_server_web/channels/agents_channel_test.exs` (the
+      presence of `resume_snapshot` switches with snapshot presence).
+- [x] Docs: add a “reapplying the three privilege axes on resume” section to
+      the ADR-0014 F1 addendum, and consolidate ADR-0033 F3 / ADR-0036 F2 as
+      references to ADR-0014. Add `resume_snapshot?` to the `reset_session`
+      schema in `docs/specs/protocol.md`.
+- [x] Typecheck (protocol / runner / 4 wrapper packages) clean,
+      `mix format --check-formatted` clean for the target files,
+      svelte-check with 0 errors and 0 warnings, and `git diff --check` clean.
+- [x] End-to-end manual verification (dogfood): after restart, the Codex agent
+      restores with danger-full-access + network=true, and the Claude agent with
+      bypassPermissions; `ext.effective` and `ext.resume_snapshot` match and
+      `ext.resume_drift` is empty. Passed master real-device verification.
 
 ## Tasks
 
@@ -165,63 +177,69 @@ runner-central pure helper が `ParsedSpawn` を snapshot 由来値に上書き�
 |---|---|---|---|
 | 22-1 | protocol: `ResetSessionCommand.resume_snapshot?` | ✅ | types-only |
 | 22-2 | server: SessionPointers.record_snapshot sanitizer | ✅ | Logger.warning per drop |
-| 22-3 | server: reset_session broadcast に snapshot 同梱 | ✅ | 既存 `maybe_put_resume_snapshot` 再利用 |
-| 22-4 | runner: `resume_snapshot.ts` (pure helper) | ✅ | 新規ファイル、pure helper table test |
-| 22-5 | runner: parseSpawn の resume_snapshot 経路を sanitize 経由に | ✅ | fail-loud reject 継続 |
-| 22-6 | runner: handleSpawn の resume 分岐で apply | ✅ | fresh 分岐は unchanged |
-| 22-7 | runner: handleSwitchSession で apply | ✅ | payload snapshot 有無で fallback |
-| 22-8 | runner: handleResetSession で apply | ✅ | pendingReset 前に entry.parsed 更新 |
-| 22-9 | runner: resolveWrapperConfig invariant コメント | ✅ | passthrough は無変更 |
-| 22-10 | runner: 統合 test | ✅ | 5 経路 + safety pin |
-| 22-11 | wrapper regression pin (Codex + Claude) | ✅ | ThreadOptions / SDK options / drift 空 |
-| 22-12 | docs: ADR-0014 F1 追補 + ADR-0033/0036 参照 + protocol.md | ✅ | ADR 集約 |
-| 22-R1 | server: SessionPointers sanitizer を canonical string key へ normalize | ✅ | 藤 1 次 review must-fix。fixed 順走査 + string 優先 + atom fallback、priority test 4 件追加、既存 atom-key 期待を canonical string に更新 |
-| 22-R2 | runner: switch/reset の whole-malformed snapshot 対応 | ✅ | 藤 1 次 review must-fix。switch は `#fail(error)` + F4 lock 手前 validate、reset は safe-default relaunch + stderr warn、旧 privileged 値継承なし。integration test 4 件追加 |
-| 22-13 | dogfood 手動検証 | ✅ | マスターによる実機確認で合格 |
+| 22-3 | server: include snapshot in the reset_session broadcast | ✅ | Reuse existing `maybe_put_resume_snapshot` |
+| 22-4 | runner: `resume_snapshot.ts` (pure helper) | ✅ | New file, pure-helper table test |
+| 22-5 | runner: route parseSpawn's resume_snapshot path through sanitization | ✅ | Keep fail-loud rejection |
+| 22-6 | runner: apply in handleSpawn's resume branch | ✅ | Fresh branch unchanged |
+| 22-7 | runner: apply in handleSwitchSession | ✅ | Fallback based on payload snapshot presence |
+| 22-8 | runner: apply in handleResetSession | ✅ | Update entry.parsed before pendingReset |
+| 22-9 | runner: resolveWrapperConfig invariant comment | ✅ | Passthrough unchanged |
+| 22-10 | runner: integration tests | ✅ | 5 paths + safety pins |
+| 22-11 | wrapper regression pins (Codex + Claude) | ✅ | ThreadOptions / SDK options / empty drift |
+| 22-12 | docs: ADR-0014 F1 addendum + ADR-0033/0036 references + protocol.md | ✅ | Consolidated ADRs |
+| 22-R1 | server: normalize SessionPointers sanitizer to canonical string keys | ✅ | Fuji first-review must-fix. Fixed-order scan + string priority + atom fallback, 4 priority tests added, existing atom-key expectations changed to canonical strings |
+| 22-R2 | runner: whole-malformed snapshot handling for switch/reset | ✅ | Fuji first-review must-fix. Switch: `#fail(error)` + validation before F4 lock; reset: safe-default relaunch + stderr warning, no old privileged-value inheritance. Added 4 integration tests |
+| 22-13 | manual dogfood verification | ✅ | Passed master real-device verification |
 
 Status legend: ⏳ not started, 🟡 mostly done, ⚠ partial, ✅ done.
 
 ## Risks
 
-- **privilege persistence の semantics 波及**: 従来は restart 後
-  engine default に降格していた挙動を「最後に実効だった値」で復元する
-  ように変える。ADR-0036 F2 が /new・/clear で既に採用している契約を
-  restore / switch / reset の全経路に波及させるだけで、新規の
-  privilege escalation は導入しない。ただし「一度でも danger を許可
-  した agent は再起動後も danger のまま」となる。operator UI は既存の
-  権限バッジで常時表示済みで、追加 UI 変更は不要。
-- **malformed snapshot escalation**: 二重 validation (server write + runner
-  read) で塞ぐ。closed-enum に該当しない値は drop + warn。
-- **compromised authenticated wrapper の偽 stamp**: closed-enum validation
-  は valid enum の偽装まで防げない。既存の「wrapper effective snapshot を
-  server が信頼する」設計選択を継承。上位対策は wrapper 実行ホストの
-  完全性 (specs/threat-model.md T1)。
-- **legacy DETS record (snapshot = nil)**: apply が no-op になり engine
-  default で spawn する。resume_drift は空 (両側 unset)。1 リリース
-  窓で自然に埋まる。
-- **crash-restart race**: crash 直前に mid-session set_permission_mode が
-  あり entry.parsed に届く前に crash した場合、次 restart は 1 世代前で
-  復元。resume_drift は runner の resumeSnapshot も stale なので保証
-  なし。既存の crash 意味論 (直前トランザクションはロス) と整合。
-- **atom / string key duplicate の勝者不定 (R1 で解消済み)**: Phoenix
-  JSON relay は atom key と string key を同一 output key に潰す一方で
-  勝者は enumeration 順依存で非決定的だった。R1 で **canonical string
-  key へ fixed 順 normalize + string 優先 priority** に変更し、
-  deterministic に。invalid string は field drop で fallback しないため
-  優先ルールは常に一方向。
-- **whole-malformed snapshot の旧 privileged 値継承 (R2 で解消済み)**:
-  validate=null 時に旧 entry.parsed の privileged 値を継承すると、
-  攻撃者制御・バグ payload で操作前の danger 値が復元される穴があった。
-  R2 で switch は fail-loud、reset は safe-default relaunch (empty
-  snapshot → engine default) に修正、旧値継承の経路を絶つ。
-- **`ResetSessionCommand` schema 変更の後方互換**: `resume_snapshot?` は
-  optional なので旧 runner は無視するだけ。破壊なし。
-- **`SessionResetErrorReason` に schema-level malformed reason なし**:
-  reset の whole-malformed 対応で `spawn_failed` 流用は語義がずれ、
-  silent-drop は timeout 誘発で藤 D3/D2 と矛盾する。safe-default
-  relaunch で降格し stderr warn する (藤 R2 明示許容)。将来 `invalid_snapshot`
-  等の reason 追加が必要になれば protocol type + server lock 処理 +
-  runner sendResetResult の 3 箇所改修を別 phase として起票。
-- **P1 model / effort 分離**: restore 直後は engine default (Codex account
-  default) に落ちる可能性。UI に「アカウント既定」ラベルが一時的に出る
-  ケースを operator に説明する必要 (P1 で解消)。
+- **Privilege-persistence semantic impact**: behavior that previously demoted to
+  the engine default after restart now restores the “last effective value.”
+  This only propagates the contract already adopted by ADR-0036 F2 for /new /
+  /clear to all restore / switch / reset paths; it does not introduce a new
+  privilege escalation. However, “an agent that once allowed danger remains in
+  danger after restart.” The operator UI already always shows the permission
+  badge, so no additional UI change is needed.
+- **Malformed snapshot escalation**: close it with double validation (server
+  write + runner read). Drop + warn values that do not belong to the closed
+  enums.
+- **False stamp from a compromised authenticated wrapper**: closed-enum
+  validation cannot prevent forgery of a valid enum. Inherit the existing
+  design choice that the server trusts the wrapper's effective snapshot. The
+  higher-level measure is integrity of the wrapper execution host
+  (specs/threat-model.md T1).
+- **Legacy DETS record (snapshot = nil)**: apply becomes a no-op and the spawn
+  uses the engine default. resume_drift is empty (both sides unset). It fills
+  naturally within one release window.
+- **Crash-restart race**: if a mid-session set_permission_mode occurs just
+  before a crash and does not reach entry.parsed, the next restart restores one
+  generation earlier. No resume_drift guarantee is made because runner's
+  resumeSnapshot is also stale. This is consistent with existing crash
+  semantics (the immediately preceding transaction is lost).
+- **Unspecified winner for atom/string duplicate keys (resolved in R1)**:
+  Phoenix JSON relay collapsed atom and string keys to one output key while the
+  winner depended on enumeration order. R1 changes this to **fixed-order
+  normalization to canonical string keys + string-first priority**, making it
+  deterministic. An invalid string drops the field rather than falling back,
+  so priority always points one way.
+- **Inheritance of old privileged values from a whole-malformed snapshot
+  (resolved in R2)**: if validate=null inherited privileged values from old
+  entry.parsed, attacker-controlled or buggy payloads could restore the danger
+  value from before the operation. R2 uses fail-loud for switch and a
+  safe-default relaunch (empty snapshot → engine default) for reset, cutting the
+  old-value inheritance path.
+- **Backward compatibility of the `ResetSessionCommand` schema change**:
+  `resume_snapshot?` is optional, so an old runner simply ignores it. No
+  breaking change.
+- **No schema-level malformed reason in `SessionResetErrorReason`**: reusing
+  `spawn_failed` for a whole-malformed reset would misstate its meaning, while
+  silent dropping could induce a timeout and contradict Fuji D3/D2. Demote with
+  a safe-default relaunch and warn on stderr (explicitly allowed by Fuji R2).
+  If a reason such as `invalid_snapshot` is needed later, file a separate phase
+  for the three changes to the protocol type + server lock handling + runner
+  sendResetResult.
+- **P1 model / effort separation**: immediately after restore, the engine
+  default (Codex account default) may be used. Explain to the operator that an
+  “account default” label may temporarily appear in the UI; resolve it in P1.

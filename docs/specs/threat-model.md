@@ -1,168 +1,181 @@
 ---
-title: 脅威モデル(双方向ルーティング)
-description: クライアント → エージェントへの指示・承認がもたらす脅威と緩和策(issue #10)。
+title: Threat model (bidirectional routing)
+description: Threats and mitigations from client → agent instructions and approvals (issue #10).
 status: accepted
 related: [protocol, architecture]
 ---
 
-# 脅威モデル(双方向ルーティング)
+# Threat model (bidirectional routing)
 
 ## Purpose
 
-Phase 3 の双方向ルーティング(指示・承認)は、**設計上、クライアント
-からエージェント同居マシンでのツール実行を意味する**。本格運用・外部
-公開前に脅威と緩和策を一筆残す(issue #10)。
+Phase 3 bidirectional routing (instructions and approvals) **by design means
+tool execution on machines where agents reside, initiated by the client**. This
+records threats and mitigations before full operation or external release
+(issue #10).
 
 ## Definition
 
-### 前提(入口の防御)
+### Preconditions (ingress defenses)
 
-| レイヤ | 防御 | 出典 |
+| Layer | Defense | Source |
 |---|---|---|
-| 経路 | リバースプロキシ終端の TLS。VPN 内限定配備のみ例外として plain HTTP を許容(`KAOIRO_PLAIN_HTTP`、[deployment](deployment.md) 1.5 — token/cookie が VPN 内平文で流れるため、経路の秘匿は VPN(WireGuard)に委譲) | 2026-06-11 決定 / 2026-07-26 VPN 直結モード |
-| ラッパー接続 | agent_id 別トークン | [ADR-0011](../adr/0011-phase3-reliability-and-auth.md) |
-| クライアント接続 | ユーザトークン + role(指示・承認は operator のみ。token は httpOnly + 暗号化 cookie に保持) | 同上 / [ADR-0013](../adr/0013-user-token-cookie-persistence.md) |
+| Transport | TLS terminated at a reverse proxy. Plain HTTP is permitted only for VPN-limited deployments (`KAOIRO_PLAIN_HTTP`, [deployment](deployment.md) 1.5 — tokens/cookies travel unencrypted within the VPN, so transport secrecy is delegated to the VPN (WireGuard)) | Decision 2026-06-11 / VPN direct-connection mode 2026-07-26 |
+| Wrapper connection | Token per agent_id | [ADR-0011](../adr/0011-phase3-reliability-and-auth.md) |
+| Client connection | User token + role (only operators can instruct/approve; tokens are retained in httpOnly + encrypted cookies) | Same as above / [ADR-0013](../adr/0013-user-token-cookie-persistence.md) |
 
-### 脅威
+### Threats
 
-1. **指示 = リモートツール実行**: operator トークンを得た攻撃者は、
-   エージェントに任意の指示を送れる。エージェントの権限内で
-   ファイル読み書き・コマンド実行が起こり得る(開発マシンへの侵入と
-   同等の影響範囲)。
-2. **承認の悪用**: 攻撃者が `permission_decision` を allow で返すと、
-   本来人間が止めるはずだったツール実行が通る。
-3. **tool input 経由の情報漏えい**: `permission_request` の `input` には
-   コマンドライン・ファイルパス・環境値などシークレットが混入し得る。
-   閲覧権限(viewer)にも配信されるため、トークン管理が緩いと漏れる。
-4. **statusline メタ(`ext`)経由の情報漏えい**: state_change の `ext` に
-   付く cwd(作業ディレクトリの絶対パス = ファイルシステム構成・プロジェクト
-   名が露出)や model / context / rate_limits は、当初 catch-all で viewer にも
-   素通ししていた(#16 由来)。cwd は特に機微(#46)。
-5. **セッション resume/召喚 = リモート起動 + 履歴露出**: クライアントから
-   サーバ経由で wrapper を resume 起動する経路は脅威1(リモートツール実行)の
-   延長([ADR-0014](../adr/0014-session-resume-and-restore.md)、issue #22)。
-   さらに候補提示で runner が返す JSONL のメタ(先頭プロンプト要約等)は会話
-   断片の露出面となり、任意 session_id / 任意 cwd の resume 要求は他者の会話を
-   読む/継続する経路にもなり得る。
+1. **Instruction = remote tool execution**: An attacker who obtains an
+   operator token can send arbitrary instructions to an agent. The agent may
+   read/write files and execute commands within its authority (an impact scope
+   equivalent to compromising the development machine).
+2. **Approval abuse**: If an attacker returns allow for `permission_decision`,
+   tool execution that a human should have stopped can proceed.
+3. **Information leakage through tool input**: The `input` of
+   `permission_request` can contain secrets such as command lines, file paths,
+   and environment values. It is delivered to viewers as well, so lax token
+   management can leak it.
+4. **Information leakage through statusline metadata (`ext`)**: cwd (the
+   absolute working-directory path, exposing filesystem layout and project
+   names) and model / context / rate_limits in a state_change's `ext` initially
+   passed through a catch-all even to viewers (originating with #16). cwd is
+   especially sensitive (#46).
+5. **Session resume/summoning = remote startup + history exposure**: The path
+   that resumes a wrapper through the server from the client extends threat 1
+   (remote tool execution; [ADR-0014](../adr/0014-session-resume-and-restore.md),
+   issue #22). In addition, JSONL metadata returned by a runner when presenting
+   candidates (such as an initial-prompt summary) exposes conversation
+   fragments, and a resume request for an arbitrary session_id / cwd can become
+   a path to read/continue another party's conversation.
 
-### 緩和策
+### Mitigations
 
-| 緩和策 | 状態 |
+| Mitigation | Status |
 |---|---|
-| 指示・承認を operator role に限定 | Phase 3 で実装 |
-| `KAOIRO_CLIENT_TOKENS` 未設定時はトークン認証を fail-closed(そのトークン経路では全拒否)— 誤設定で operator が無防備に公開される事故を防ぐ(起動時に警告ログ)。OAuth 経路も許可リスト未設定・欠落・不一致で全拒否 | Phase 3.5([issue #28](https://github.com/sakuraiyuta/kaoiro/issues/28))/ OAuth 分は phase-26 |
-| `permission_request.input` のサイズ上限(16KB 切り詰め、`truncated` 明示) | Phase 3 で実装([protocol](protocol.md)) |
-| ラッパー側の `allowedTools` 上限 — 指示が来ても実行可能なツールは ラッパー設定が天井(サーバ・クライアントからは拡張不可) | ラッパー設計で担保(canUseTool はサーバ側から上書き不可) |
-| 指示の監査ログ(誰が・いつ・どの agent に何を送ったか) | 将来(SQLite 導入時) |
-| tool input のマスキング(シークレットパターンの伏字) | 将来 |
-| 返答ログ(`log`/`result`、tool 入出力含む)を operator 限定配信 | Phase 3.5([ADR-0012](../adr/0012-response-display-and-dashboard-scope.md)) |
-| envelope の `ext`(cwd / model / context / rate_limits / slash_commands / 将来追加分)を全 type で viewer 除去 | #46 で実装(コミット 9b32c34 / ef7b606) |
-| viewer 配信を **allow-list 方式** へ転換(operator 限定がデフォルト、viewer 配信は明示宣言)。`permission_request` envelope を viewer 完全除去(合成 `state_change(waiting_permission)` に置換し grid 整合保持) | #46 / [ADR-0021](../adr/0021-role-information-disclosure-policy.md) |
-| log/result 等 operator 限定 envelope は `agents:lobby` に平文 broadcast され `AgentsChannel.handle_out` が per-subscriber で絞り込む(購読時点 gate ではない)。`agents:lobby` の購読者を `AgentsChannel` のみに保つ不変条件で担保し、operator 専用トピック分離は採用しない | #27(評価の上 **現状維持** を決定。新規購読者は下記 MUST 参照) |
-| **agent 間開示**(peer directory)を viewer/operator とは別軸の第 3 主体として定義し、`directory_entry` の明示列挙 field のみ agent に出す allow-list とする。`ext` の nested key を素通しせず canonical key だけを写す。`cwd` / permission / `session_id` / `pending_permission` / `session_capabilities` 等は継続除外 | #150 / [ADR-0021](../adr/0021-role-information-disclosure-policy.md) F6([protocol-inter-agent](protocol-inter-agent.md)「peer directory の情報境界」が field の正本) |
-| ユーザトークンを httpOnly + 暗号化 session cookie に保持(XSS でも JS から読めず、cookie jar 上でも秘匿)。CSRF は SameSite=Lax + prod の `check_origin` で抑止 | Phase 3.5([ADR-0013](../adr/0013-user-token-cookie-persistence.md)) |
-| ブラウザ側の多層防御ヘッダ(CSP / `X-Content-Type-Options: nosniff` / `X-Frame-Options: DENY` / `Referrer-Policy: strict-origin-when-cross-origin`)を **endpoint の静的配信より前段**で付与(`KaoiroServerWeb.SecurityHeaders`)。`index.html` と built assets は router を通らないため `:browser` pipeline では SPA 本体に効かない。CSP は `script-src 'self'`(untrusted なエージェント出力を `{@html}` で描く経路の DOMPurify 単独依存を解消)、`frame-ancestors 'none'`(クリックジャッキング経由の operator 操作誘導)、`connect-src` は当該レスポンスのオリジンと一致する `check_origin` エントリだけを `ws:`/`wss:` へ写す(`check_origin` は「socket を開いてよい発信元」、`connect-src` は「このページが繋いでよい宛先」で信頼軸が違うため、全件は写さない)。TLS リバースプロキシ配備では `rewrite_on: [:x_forwarded_proto]` が scheme しか書き換えず `conn` の port が内部 port のまま残るので、外向き scheme/host が endpoint の `:url` 設定と一致する場合に限り port をそこから復元して突き合わせる。ヘッダに出るのは常に config 側の文字列で、リクエストの Host は照合にしか使わない。nginx を置かない VPN 内直結配備([deployment](deployment.md) 1.5)では付与主体がサーバしかない | #145 で実装 |
-| OAuth 個人認証 + 許可リスト(Google / GitHub / Nextcloud)。role は許可リストから接続・操作のたび再解決し、降格を稼働中 socket にも効かせる。**変更を一度も操作しない passive socket にも change-driven に効かせる**(許可リストファイルの変更を `OAuthAllowlistWatcher` が checkpoint 差分で検知し対象 identity だけ disconnect、periodic reconcile が event 取りこぼしを bound、`AgentsChannel.join/3` が connect-join 間の race を再検証で閉じる) | phase-26 で実装([ADR-0042](../adr/0042-oauth-allowlist-login.md) / [#148](https://github.com/sakuraiyuta/kaoiro/issues/148))。passive socket 分は [#160](https://github.com/sakuraiyuta/kaoiro/issues/160) で実装。role の細分(approver 等)とマルチテナント隔離は将来([ADR-0005](../adr/0005-access-control-oauth-stub.md)) |
-| セッション召喚時に runner が返す JSONL メタ(先頭プロンプト要約等)を operator role 限定・最小限に露出(T2、[ADR-0014](../adr/0014-session-resume-and-restore.md)) | Phase 4(4-5)で実装 |
-| resume 対象 session_id を当該 agent 束縛 cwd 配下に実在検証し、他 cwd/任意パスの resume を拒否(T3、runner が検証)。`switch_session` の差し替え先も同じ cwd で再検証 | Phase 4(4-5)で実装 |
-| 起動指示 UI(#22)は任意 cwd / 任意 repo clone を提示せず、選択可能 cwd を runner-config の allow-list に限定して RCE 面を bound(範囲=中、T1/T5) | Phase 4(4-8)で実装([ADR-0023](../adr/0023-host-runner-architecture.md)) |
-| spawn 認証を runner 起動経由(常駐 or ワンショット)に一本化し、per-host runner トークン + サーバ発行の per-agent token で認証(秘匿値はサーバ内に留め operator/クライアントへ出さない)。漏洩被害がスコープ全体へ広がるワイルドカード共有トークンは**不採用**(検討は #71 へ棚上げ) | Phase 4(4-10)で実装([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) D2/D4)。失効は agent_id 単位の denylist([#72](https://github.com/sakuraiyuta/kaoiro/issues/72)) |
+| Limit instructions and approvals to the operator role | Implemented in Phase 3 |
+| Fail closed for token authentication when `KAOIRO_CLIENT_TOKENS` is unset (reject all on that token path) — prevents an operator being defenselessly exposed by misconfiguration (warning log on startup). The OAuth path also rejects all on an unset, missing, or mismatched allowlist | Phase 3.5 ([issue #28](https://github.com/sakuraiyuta/kaoiro/issues/28)) / OAuth in phase-26 |
+| Size limit on `permission_request.input` (truncate at 16KB; mark `truncated`) | Implemented in Phase 3 ([protocol](protocol.md)) |
+| Wrapper-side `allowedTools` ceiling — even when instructions arrive, wrapper configuration is the ceiling on executable tools (not extensible by server/client) | Guaranteed by wrapper design (the server cannot override canUseTool) |
+| Instruction audit log (who sent what to which agent and when) | Future (when SQLite is introduced) |
+| Tool-input masking (redaction of secret patterns) | Future |
+| Deliver response logs (`log`/`result`, including tool I/O) to operators only | Phase 3.5 ([ADR-0012](../adr/0012-response-display-and-dashboard-scope.md)) |
+| Remove envelope `ext` (cwd / model / context / rate_limits / slash_commands / future additions) for viewers on every type | Implemented in #46 (commits 9b32c34 / ef7b606) |
+| Change viewer delivery to an **allow-list model** (operator-only is the default; viewer delivery requires an explicit declaration). Remove the `permission_request` envelope completely for viewers (replace with synthetic `state_change(waiting_permission)` to preserve grid consistency) | #46 / [ADR-0021](../adr/0021-role-information-disclosure-policy.md) |
+| Operator-only envelopes such as log/result are broadcast in plaintext to `agents:lobby` and `AgentsChannel.handle_out` filters them per subscriber (not a gate at subscription). Secure this with the invariant that `AgentsChannel` is the only subscriber to `agents:lobby`; do not adopt a separate operator-only topic | #27 (evaluated and **kept the current design**; see MUST below for new subscribers) |
+| Define **agent-to-agent disclosure** (the peer directory) as a third principal on an axis separate from viewers/operators; allow-list only explicitly enumerated fields in `directory_entry` to agents. Do not pass nested `ext` keys through; project only canonical keys. Continue excluding cwd / permission / `session_id` / `pending_permission` / `session_capabilities`, etc. | #150 / [ADR-0021](../adr/0021-role-information-disclosure-policy.md) F6 (“peer-directory information boundary” in [protocol-inter-agent](protocol-inter-agent.md) is field SoT) |
+| Retain user tokens in httpOnly + encrypted session cookies (unreadable by JS even under XSS, secret in the cookie jar). Mitigate CSRF with SameSite=Lax + production `check_origin` | Phase 3.5 ([ADR-0013](../adr/0013-user-token-cookie-persistence.md)) |
+| Add browser-side defense-in-depth headers (CSP / `X-Content-Type-Options: nosniff` / `X-Frame-Options: DENY` / `Referrer-Policy: strict-origin-when-cross-origin`) **before endpoint static delivery** (`KaoiroServerWeb.SecurityHeaders`). `index.html` and built assets bypass the router, so the `:browser` pipeline does not protect the SPA itself. CSP uses `script-src 'self'` (removes a route that relied solely on DOMPurify for untrusted agent output rendered with `{@html}`), `frame-ancestors 'none'` (operator-action inducement through clickjacking), and maps only `check_origin` entries matching the response origin to `ws:`/`wss:` in `connect-src` (`check_origin` means “origins permitted to open a socket”; `connect-src` means “destinations this page may connect to,” so their trust axes differ and not every entry is copied). In TLS reverse-proxy deployments, `rewrite_on: [:x_forwarded_proto]` rewrites only the scheme and leaves the internal port in conn; recover and compare the port from the endpoint's `:url` only when its external scheme/host match. Headers always contain configuration strings; the request Host is used only for comparison. In a VPN direct deployment without nginx ([deployment](deployment.md) 1.5), only the server can add them. | Implemented in #145 |
+| OAuth individual authentication + allowlist (Google / GitHub / Nextcloud). Re-resolve a role from the allowlist on every connection and operation, so demotion also applies to live sockets. **Apply changes in a change-driven way even to passive sockets that never operate** (`OAuthAllowlistWatcher` detects allowlist-file changes by checkpoint diff and disconnects only affected identities; periodic reconciliation bounds lost events; `AgentsChannel.join/3` closes the connect-join race by revalidation) | Implemented in phase-26 ([ADR-0042](../adr/0042-oauth-allowlist-login.md) / [#148](https://github.com/sakuraiyuta/kaoiro/issues/148)). Passive sockets in [#160](https://github.com/sakuraiyuta/kaoiro/issues/160). Role refinement (approver, etc.) and multi-tenant isolation are future work ([ADR-0005](../adr/0005-access-control-oauth-stub.md)) |
+| Expose JSONL metadata returned by the runner when summoning a session (such as an initial-prompt summary) only minimally and to operators (T2, [ADR-0014](../adr/0014-session-resume-and-restore.md)) | Implemented in Phase 4 (4-5) |
+| Verify that a resumed session_id exists under the cwd bound to its agent; reject resumes to another cwd/arbitrary path (T3, verified by runner). Re-verify the replacement target of `switch_session` under the same cwd | Implemented in Phase 4 (4-5) |
+| The startup-instruction UI (#22) does not present arbitrary cwd / arbitrary repository clones; restrict selectable cwd to the runner-config allowlist to bound the RCE surface (scope=medium, T1/T5) | Implemented in Phase 4 (4-8) ([ADR-0023](../adr/0023-host-runner-architecture.md)) |
+| Consolidate spawn authentication through runner startup (daemon or one shot); authenticate with per-host runner tokens + server-issued per-agent tokens (secrets remain in the server and do not reach operators/clients). **Do not adopt** a wildcard shared token whose leakage affects the entire scope (consideration deferred to #71) | Implemented in Phase 4 (4-10) ([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) D2/D4). Revocation uses an agent_id-scoped denylist ([#72](https://github.com/sakuraiyuta/kaoiro/issues/72)) |
 
 ## Constraints
 
-- MUST: 指示・承認の受理は operator role のみ([protocol](protocol.md))。
-- MUST: 返答ログ(`log`/`result`)の配信は operator role のみ
-  ([ADR-0012](../adr/0012-response-display-and-dashboard-scope.md))。
-- MUST: envelope の `ext`(statusline メタ: cwd / model / context /
-  rate_limits / slash_commands / 将来追加分)の配信は operator role のみ
-  (#46。viewer には全 type で除去)。
-- MUST: viewer 配信は **allow-list 方式**。`agents:lobby` の event /
-  envelope.type のうち、明示的に viewer 配信を宣言したものだけが viewer へ
-  届く。未宣言の type は viewer 完全除去(fail-closed、
-  [ADR-0021](../adr/0021-role-information-disclosure-policy.md))。
-- MUST: `permission_request` envelope は viewer 完全除去。grid 整合のため
-  合成 `state_change(waiting_permission)`(`payload={}` / `ext` なし)に
-  置換して viewer へ配信([ADR-0021](../adr/0021-role-information-disclosure-policy.md))。
-- MUST: **agent 間開示も allow-list 方式**。peer directory
-  (`directory_request`)は viewer 配信とは **別実装・別経路** であり、
-  片方の allow-list がもう片方を守らない。`directory_entry` が明示列挙
-  した field だけを出し、`ext` の未知 nested key は canonical key への
-  写し替えで落とす(ADR-0021 F6、#150)。peer directory に field を
-  足すときは viewer 配信の要否と同様に **agent 開示の要否も明示判断**
-  する。
-- MUST: `agents:lobby` を直接購読してよいのは `AgentsChannel` のみ
-  (#27)。`WrapperChannel` は log/result の tool I/O を含む全 envelope を
-  同トピックへ平文 broadcast し、role 絞り込みは `AgentsChannel.handle_out`
-  (`sanitize_envelope_for/2`)が per-subscriber で行う。よって同トピックを
-  新たに購読するプロセス(監視フック・将来機能・テスト)を足す場合は、必ず
-  同等の role gate を購読側で適用すること。operator 専用 PubSub トピック分離
-  は #27 で評価したが、現状購読者が `AgentsChannel` のみで実害がないため
-  不採用とし、この不変条件で defense-in-depth を代替する。
-- MUST: ラッパーはサーバから受けた指示で `allowedTools` /
-  `canUseTool` の設定を変更しない(実行能力の天井はローカル設定)。
-- MUST: resume 対象 session_id は当該 agent の束縛 cwd 配下に実在するものに
-  限定する(他 cwd/任意パスの resume を拒否、
-  [ADR-0014](../adr/0014-session-resume-and-restore.md))。
-- MUST: セッション召喚時の JSONL メタ配信は operator role のみ。
-- SHOULD: operator トークンは viewer と分け、配布範囲を最小にする。
+- MUST: Accept instructions and approvals only from the operator role
+  ([protocol](protocol.md)).
+- MUST: Deliver response logs (`log`/`result`) only to the operator role
+  ([ADR-0012](../adr/0012-response-display-and-dashboard-scope.md)).
+- MUST: Deliver envelope `ext` (statusline metadata: cwd / model / context /
+  rate_limits / slash_commands / future additions) only to the operator role
+  (#46; remove it for viewers on every type).
+- MUST: Viewer delivery uses an **allow-list model**. Of `agents:lobby` events
+  / envelope.types, only those explicitly declared for viewer delivery reach
+  viewers. Undeclared types are removed completely for viewers (fail closed;
+  [ADR-0021](../adr/0021-role-information-disclosure-policy.md)).
+- MUST: Remove the `permission_request` envelope completely for viewers.
+  Deliver a synthetic `state_change(waiting_permission)` (`payload={}`, no
+  `ext`) to viewers in its place for grid consistency
+  ([ADR-0021](../adr/0021-role-information-disclosure-policy.md)).
+- MUST: **Agent-to-agent disclosure also uses an allow-list model**. The peer
+  directory (`directory_request`) is a **separate implementation and path**
+  from viewer delivery; one allow list does not protect the other. Expose only
+  explicitly enumerated fields in `directory_entry`; drop unknown nested `ext`
+  keys by projecting to canonical keys (ADR-0021 F6, #150). When adding a peer
+  directory field, explicitly decide whether **agent disclosure is needed**, as
+  is done for viewer delivery.
+- MUST: Only `AgentsChannel` may subscribe directly to `agents:lobby` (#27).
+  `WrapperChannel` broadcasts every envelope, including log/result tool I/O,
+  in plaintext to that topic; `AgentsChannel.handle_out`
+  (`sanitize_envelope_for/2`) applies role filtering per subscriber. Therefore,
+  a process newly subscribing to that topic (a monitoring hook, future feature,
+  or test) must apply an equivalent role gate at the subscriber. #27 evaluated
+  a separate operator-only PubSub topic but rejected it because the current
+  sole subscriber is `AgentsChannel` and there is no practical harm; this
+  invariant substitutes for defense in depth.
+- MUST: A wrapper does not change its `allowedTools` / `canUseTool` settings in
+  response to a server instruction (the execution-capability ceiling is local
+  configuration).
+- MUST: Limit resume target session_id to one that exists beneath the cwd bound
+  to that agent (reject resume to another cwd/arbitrary path,
+  [ADR-0014](../adr/0014-session-resume-and-restore.md)).
+- MUST: Deliver JSONL metadata when summoning a session only to the operator
+  role.
+- SHOULD: Separate operator tokens from viewer tokens and minimize their
+  distribution.
 
-### Session-reset control (`/new`・`/clear`、phase-17)
+### Session-reset control (`/new` / `/clear`, phase-17)
 
-`session_reset` は operator、または permission_broker に都度承認された agent 自身が
-agent の実行環境を強制再起動できる
-高権限操作(fresh wrapper spawn + 旧 session 放棄、model / effort /
-permission_mode / sandbox / network_access は phase-15 D8 の最終
-effective 値で再適用)。乱発は work-in-progress の喪失や DoS 相当に
-なり得るため、**6 段防御**で権限境界を守る
-([ADR-0036](../adr/0036-session-lifecycle-commands.md))。
+`session_reset` is a high-privilege operation through which an operator, or an
+agent itself after per-request permission_broker approval, can forcibly restart
+an agent's execution environment (fresh wrapper spawn + discarding the old
+session; reapply model / effort / permission_mode / sandbox / network_access at
+their final effective values from phase-15 D8). Because overuse can lose work
+in progress or amount to DoS, **six layers of defense** protect the authority
+boundary ([ADR-0036](../adr/0036-session-lifecycle-commands.md)).
 
-- **起点・承認検証**: operator 起点の `AgentsChannel.handle_in("session_reset", ...)`
-  は従来どおり先頭で `require_operator/1` を通り、viewer は forbidden。agent 自身の
-  `WrapperChannel.handle_in("session_reset_request", ...)` は wrapper topic に bind された
-  自 agent にしか作用せず、Claude の `request_session_reset` tool に対する
-  permission_broker 都度承認後、当該 turn 完了時だけ送信される([ADR-0043](../adr/0043-agent-initiated-session-reset.md))。
-  他 agent 起点の専用経路は持たない。
-- **capability advertise**: `ext.session_capabilities.supports_session_reset`
-  - `session_reset_modes` を wrapper adapter が spawn 直後に stamp。
-  未 stamp / false / true+空 modes は fail-closed で dashboard の
-  Composer intercept が発火せず、server の relay も
-  `unsupported_session_reset` reject。engine 名判定を禁止して adapter
-  側の advertise を SSOT とする([ADR-0034](../adr/0034-session-capabilities-advertisement.md) F2 継承)。
-- **host binding (exact match)**: `RunnerChannel.session_reset_result` で
-  `AgentId.host_id_from(agent_id) == host_id` の完全一致を要求。
-  ADR-0024 D3 の `<host_id>.<rand>` allocation-inverse を厳格に
-  逆演算するため、host_id が dot を含む場合の **nested-prefix
-  spoof**(naive な `starts_with?` で通ってしまう別 host の
-  agent_id の詐称)を防ぐ。
-- **reserved_session_command reject**: 旧 / 外部 client が literal
-  `/new`・`/clear` を `send_instruction` に送ってきた場合、server 側
-  の handler の先頭で `reserved_session_command` として loud reject し、
-  engine に一度も渡さない(client-side intercept だけに頼らない多層
-  防御)。
-- **SessionResets pending lock**: `check_and_acquire/5` が単一
-  `handle_call` 内で lock 有無 + KaoiroState (`idle`/`waiting_input`)
-  - dispatch-cooldown を atomic に検証(ADR-0036 F6 の TOCTOU 芯)。
-  reset pending 中は instruction / set_model / set_effort /
-  set_permission_mode / **resume_session** をすべて
-  `session_reset_pending` で reject(2026-07-12 ε 実装時の race
-  分析で ADR-0036 F2 の列挙漏れとして resume_session を追加)。
-  2 秒の dispatch-cooldown は async state-report lag 保護 (instruction
-  dispatch と wrapper state_change 到達の race を塞ぐ)。
-- **viewer 情報境界**: `session_reset_started` / `session_reset_completed`
-  / `session_reset_failed` broadcast は `intercept` + `handle_out` で
-  operator-only (`session_reset_started` の origin / reason も viewer に流さない)。`session_boundary` envelope は viewer 側で payload を
-  `{"mode"}` のみに sanitize(request_id / previous_session_id /
-  to_session_id は viewer に不可視化、
-  [ADR-0021](../adr/0021-role-information-disclosure-policy.md) 継承 +
-  ADR-0036 F3)。
+- **Origin and approval verification**: An operator-originated
+  `AgentsChannel.handle_in("session_reset", ...)` begins, as before, with
+  `require_operator/1`, so a viewer is forbidden. An agent's own
+  `WrapperChannel.handle_in("session_reset_request", ...)` affects only that
+  agent bound to the wrapper topic and is sent only at completion of that turn,
+  after per-request permission_broker approval for Claude's
+  `request_session_reset` tool
+  ([ADR-0043](../adr/0043-agent-initiated-session-reset.md)). There is no
+  dedicated path originated by another agent.
+- **Capability advertisement**: The wrapper adapter stamps
+  `ext.session_capabilities.supports_session_reset` - `session_reset_modes`
+  directly after spawn. An unstamped / false / true+empty modes value fails
+  closed: the dashboard Composer intercept does not fire, and the server relay
+  rejects with `unsupported_session_reset`. Engine-name testing is forbidden;
+  the adapter's advertisement is SoT (inheriting
+  [ADR-0034](../adr/0034-session-capabilities-advertisement.md) F2).
+- **Host binding (exact match)**: In `RunnerChannel.session_reset_result`,
+  require exact `AgentId.host_id_from(agent_id) == host_id`. This strictly
+  inverse-computes ADR-0024 D3's `<host_id>.<rand>` allocation and prevents a
+  **nested-prefix spoof** where a host_id containing a dot lets a different
+  host's agent_id impersonate it through naïve `starts_with?`.
+- **reserved_session_command rejection**: If an old / external client sends
+  literal `/new` / `/clear` to `send_instruction`, the server handler rejects
+  it loudly as `reserved_session_command` at its start and never passes it to
+  the engine (defense in depth rather than relying only on client-side
+  interception).
+- **SessionResets pending lock**: `check_and_acquire/5` atomically verifies
+  lock existence + KaoiroState (`idle`/`waiting_input`) - dispatch-cooldown in
+  one `handle_call` (the TOCTOU core of ADR-0036 F6). While a reset is pending,
+  reject instruction / set_model / set_effort / set_permission_mode /
+  **resume_session** all with `session_reset_pending` (`resume_session` was
+  added after race analysis during the 2026-07-12 ε implementation found it
+  omitted from ADR-0036 F2's list). The two-second dispatch cooldown protects
+  against asynchronous state-report lag (closing the race from instruction
+  dispatch to the arrival of wrapper state_change).
+- **Viewer information boundary**: Broadcasts of `session_reset_started` /
+  `session_reset_completed` / `session_reset_failed` are operator-only through
+  `intercept` + `handle_out` (the origin / reason of `session_reset_started`
+  also does not reach viewers). On the viewer side, sanitize the
+  `session_boundary` envelope payload to `{"mode"}` only (request_id /
+  previous_session_id / to_session_id are invisible to viewers, inheriting
+  [ADR-0021](../adr/0021-role-information-disclosure-policy.md) + ADR-0036 F3).
 
 ## Open Questions
 
-なし(監査ログ・マスキングは上表の通り将来項目)。
+None (audit logging and masking are future items as shown in the table above).
 
 ## See Also
 
-- 関連 specs: [protocol](protocol.md), [architecture](architecture.md)
+- Related specs: [protocol](protocol.md), [architecture](architecture.md)
 - ADRs: [0002](../adr/0002-local-wrapper-websocket-topology.md),
   [0005](../adr/0005-access-control-oauth-stub.md),
   [0011](../adr/0011-phase3-reliability-and-auth.md),
@@ -174,4 +187,4 @@ effective 値で再適用)。乱発は work-in-progress の喪失や DoS 相当�
   [0036](../adr/0036-session-lifecycle-commands.md),
   [0042](../adr/0042-oauth-allowlist-login.md),
   [0043](../adr/0043-agent-initiated-session-reset.md)
-- 境界の実装マップ: [auth-and-authz](auth-and-authz.md)
+- Boundary implementation map: [auth-and-authz](auth-and-authz.md)

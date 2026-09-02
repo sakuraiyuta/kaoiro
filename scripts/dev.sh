@@ -44,7 +44,7 @@ fi
 
 # Isolate dev DETS stores under $root/tmp/dev-data/ (issue #121). Unset
 # envs would otherwise fall through to each store's default_path (a shared
-# $TMPDIR/kaoiro_*.dets), which is then read/written by both `mix test`
+# $TMPDIR/kaoiro-dets/*.dets), which is then read/written by both `mix test`
 # (test fixture rows leaking into the dev dashboard) and any other dev
 # instance on the same host. dogfood.sh already sits on a docker named
 # volume /var/lib/kaoiro; this is the dev.sh-side counterpart. Each var uses
@@ -54,6 +54,7 @@ fi
 # the same dev / test / OS-tmp isolation as the other DETS ledgers.
 data_dir="$root/tmp/dev-data"
 mkdir -p "$data_dir"
+chmod 700 "$data_dir"
 export KAOIRO_SESSION_POINTERS_PATH="${KAOIRO_SESSION_POINTERS_PATH:-$data_dir/session_pointers.dets}"
 export KAOIRO_AGENT_DIRECTORY_PATH="${KAOIRO_AGENT_DIRECTORY_PATH:-$data_dir/agent_directory.dets}"
 export KAOIRO_PERMISSION_MODES_PATH="${KAOIRO_PERMISSION_MODES_PATH:-$data_dir/permission_modes.dets}"
@@ -61,7 +62,9 @@ export KAOIRO_CLEAR_WATERMARKS_PATH="${KAOIRO_CLEAR_WATERMARKS_PATH:-$data_dir/c
 export KAOIRO_SESSION_STARTS_PATH="${KAOIRO_SESSION_STARTS_PATH:-$data_dir/session_starts.dets}"
 export KAOIRO_INGRESS_ORDER_PATH="${KAOIRO_INGRESS_ORDER_PATH:-$data_dir/ingress_order.dets}"
 export KAOIRO_DELIVERY_STATES_PATH="${KAOIRO_DELIVERY_STATES_PATH:-$data_dir/delivery_states.dets}"
+export KAOIRO_USERS_PATH="${KAOIRO_USERS_PATH:-$data_dir/users.dets}"
 export KAOIRO_TOKEN_DENYLIST_PATH="${KAOIRO_TOKEN_DENYLIST_PATH:-$data_dir/token_denylist.dets}"
+export KAOIRO_SESSION_LIFECYCLE_EVENTS_PATH="${KAOIRO_SESSION_LIFECYCLE_EVENTS_PATH:-$data_dir/session_lifecycle_events.dets}"
 
 pids=()
 cleanup() {

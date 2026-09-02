@@ -1,5 +1,5 @@
 ---
-title: 外部人間メッセージング — 人間を外部チャネルの participant 化・一方向 authority・discord-wrapper トポロジ
+title: External human messaging — make humans participants in an external channel, one-way authority, discord-wrapper topology
 status: accepted
 date: 2026-07-04
 opened: 2026-07-04
@@ -9,7 +9,7 @@ related_specs: [protocol-external-human, protocol, protocol-inter-agent]
 related_adrs: [10, 17, 21]
 ---
 
-# ADR-0028 — 外部人間メッセージング
+# ADR-0028 — External Human Messaging
 
 ## Status
 
@@ -17,110 +17,72 @@ Accepted
 
 ## Context
 
-エージェント間メッセージング(inter-agent、[phase-8](../plans/phase-8-inter-agent-messaging.md)
-実装済み)と同じノリで、AI エージェントが Discord 等で**外部の人間**へ
-メッセージを投げ、返信も受け取れるようにしたい(kaoiro の対象: 自分/研究室
-のオフィス的運用)。
+In the same spirit as inter-agent messaging (inter-agent, implemented in [phase-8](../plans/phase-8-inter-agent-messaging.md)), we want an AI agent to send messages to **external humans** through Discord and receive replies (kaoiro’s target: office-like operation for oneself / a laboratory).
 
-inter-agent は両端が kaoiro 管理下だが、外部人間は端点が kaoiro の外にある。
-これが (1) 双方向にするか、(2) kaoiro に実装するか外部 MCP にするか、
-(3) untrusted な外部入力の扱い、を分岐させる。仕様正本は
-[protocol-external-human](../specs/protocol-external-human.md)。
+Both ends of inter-agent messaging are managed by kaoiro, whereas the endpoint of an external human is outside kaoiro. This creates the branches (1) whether to make it bidirectional, (2) whether to implement it in kaoiro or an external MCP, and (3) how to handle untrusted external input. The specification source of truth is [protocol-external-human](../specs/protocol-external-human.md).
 
 ## Decision
 
-### D1: 双方向 transport / 一方向 authority
+### D1: Bidirectional transport / one-way authority
 
-transport は双方向(agent ↔ 外部人間)、authority は一方向。外部人間の
-発言は agent の行動を破壊的/非破壊的/調査問わず**一切駆動しない**。外部
-入力は operator への通知に留め、実行判断は operator と agent 自身の生成
-内容にのみ帰属させる。これが本機能の中核セキュリティ性質。
+Transport is bidirectional (agent ↔ external human), but authority is one-way. An external human’s messages **do not drive the agent’s actions at all**, whether destructive, non-destructive, or investigative. External input is limited to notification to the operator; execution decisions belong only to the operator and the agent’s own generated content. This is the core security property of the feature.
 
-### D2: discord-wrapper トポロジ(server は broker 堅持)
+### D2: discord-wrapper topology (server remains a broker)
 
-Discord 接続は専用 discord-wrapper(外部チャネル adapter entity)が保持し、
-bot token をそこに閉じる。server は `to` でルーティングするのみで broker に
-徹する。「末端は wrapper(agent)と client(operator)、server は橋渡し」の
-原則を保ち、既存 inter-agent の routing / observation / quota を再利用する。
+The dedicated discord-wrapper (an external-channel adapter entity) holds the Discord connection and keeps the bot token there. The server only routes with `to` and remains a broker. Preserve the principle “the endpoints are the wrapper (agent) and client (operator), and the server is the bridge,” and reuse the routing / observation / quota of existing inter-agent messaging.
 
-### D3: 専用 type・ツールで経路分離
+### D3: Separate the path with a dedicated type and tool
 
-untrusted-external 経路を trusted-agent 経路と**コード分離**するため、
-`external_message` type と `send_to_human` tool を新設する(inter-agent の
-一般化はしない)。trust model を 1 経路に同居させると条件分岐漏れが即
-脆弱性になるため。
+To **separate the code** of the untrusted-external path from the trusted-agent path, introduce `external_message` type and `send_to_human` tool (do not generalise inter-agent messaging). If the trust models share one path, an omitted condition branch immediately becomes a vulnerability.
 
-### D4: outbound = whitelist + 全文都度承認
+### D4: Outbound = whitelist + approval of the complete text every time
 
-宛先は operator が config ファイルで作る whitelist 内のみ。enforce は
-discord-wrapper。agent には論理 contact id + 表示名までしか開示せず、生の
-Discord ID / PII は wrapper 内に留める(一覧開示は防御を弱めない — enforce
-が担保、office 比喩)。送信は `permission_broker` で宛先 + 本文全文を operator
-に提示し都度承認。外部人間へは AI/kaoiro 発を明示する。
+Destinations are limited to the whitelist configured by the operator. Enforcement is in discord-wrapper. Expose to the agent only the logical contact id + display name, keeping raw Discord IDs / PII inside the wrapper (listing them does not weaken defence—the enforcement provides the guarantee, as in the office analogy). Use `permission_broker` to show the destination + complete body to the operator and obtain approval every time. Make clear to external humans that the message came from AI/kaoiro.
 
-### D5: inbound = Tier A(既定・安全)/ Tier B(spike gate)
+### D5: Inbound = Tier A (default, safe) / Tier B (spike gate)
 
-- **Tier A**(phase-0): LLM を使わず固定テンプレ返信 + 原文を operator へ
-  verbatim 中継。injection 面ゼロ。fail-soft の縮退先。
-- **Tier B**(phase-1): 「LLM を通す」≠「ツールを持つ agent を通す」を分離し、
-  **zero-tool の受付 LLM**(Haiku、text→text のみ)で要約を `ext.interpretation`
-  に付与(discord-wrapper のフィルタ列 = plugin-model フィルタ機構の初適用)、
-  responder が限定返信を生成。working agent には非注入。原文 verbatim 保持・
-  同一相手固定を MUST とし、最終採用は実装前 red-team spike で確定
-  ([external-human-inbound-llm-tier](../open-questions/external-human-inbound-llm-tier.md))。
+- **Tier A** (phase-0): use no LLM; reply with a fixed template and relay the original verbatim to the operator. Zero injection surface. This is the fail-soft fallback.
+- **Tier B** (phase-1): separate “pass through an LLM” from “pass through an agent with tools,” and use a **zero-tool intake LLM** (Haiku, text→text only) to attach a summary to `ext.interpretation` (the first application of the discord-wrapper filter chain—the plugin-model filter mechanism). Generate a limited reply with a responder. Do not inject it into the working agent. MUST preserve the original verbatim and fix the same counterpart; settle final adoption in a red-team spike before implementation ([external-human-inbound-llm-tier](../open-questions/external-human-inbound-llm-tier.md)).
 
-### D6: 安全弁・保持
+### D6: Safety valve and retention
 
-1 会話 3 turn 上限を server の `ConversationStates` で機械強制。会話内容は
-ephemeral(server 非永続)、contact 一覧 config のみ永続。`external_message`
-は両 direction とも operator 限定配信([ADR-0021](0021-role-information-disclosure-policy.md))。
+Enforce a three-turn limit per conversation mechanically in the server’s `ConversationStates`. Conversation content is ephemeral (not persisted by the server), and only the contact list in config is persistent. Deliver `external_message` only to operators in both directions ([ADR-0021](0021-role-information-disclosure-policy.md)).
 
 ## Consequences
 
 ### Positive
 
-- inter-agent の envelope routing / observation / quota / permission_broker を
-  再利用でき、実装が薄い。
-- server の broker 原則・operator 限定配信・agent 非依存を崩さない。
-- 一方向 authority + 経路分離で、外部からの prompt injection / 破壊操作 /
-  exfil を構造的に抑える。
-- 長らく未実装だった plugin-model のフィルタ機構の初適用(Tier B)になり、
-  issue #18(メッセージフィルタ)の初実体を兼ねる。
+- Reuse inter-agent envelope routing / observation / quota / permission_broker, keeping the implementation thin.
+- Do not break the server broker principle, operator-only delivery, or agent independence.
+- One-way authority + path separation structurally suppresses external prompt injection / destructive operations / exfiltration.
+- This is the first application of plugin-model’s long-unimplemented filter mechanism (Tier B), also serving as the first concrete form of issue #18 (message filters).
 
 ### Negative
 
-- 新エンティティ種別(discord-wrapper)と新 type / tool / config surface が
-  増える。bot token 管理・常時接続の運用が加わる。
-- Tier B は injection 面を持ち、実装前 spike というゲート工程を要する。
-- discord-wrapper 未接続中の inbound はロストする(容認、
-  [external-human-inbound-loss](../open-questions/external-human-inbound-loss.md))。
+- Adds a new entity type (discord-wrapper) and new type / tool / config surface. Bot-token management and always-on connection operations are added.
+- Tier B has an injection surface and requires the pre-implementation spike as a gate.
+- Inbound messages while discord-wrapper is disconnected are lost (accepted, [external-human-inbound-loss](../open-questions/external-human-inbound-loss.md)).
 
 ### Neutral
 
-- v1 は Discord のみ。email / Slack は将来 issue + docs に予定として残す。
-- 外部人間からの指示受付(権限付与)は将来課題
-  ([external-human-recv-permission-model](../open-questions/external-human-recv-permission-model.md))。
-- contact 管理の GUI 化は将来
-  ([external-human-contact-management-ux](../open-questions/external-human-contact-management-ux.md))。
+- v1 is Discord only. Email / Slack remain future issue + docs items.
+- Accepting instructions from external humans (granting authority) is a future concern ([external-human-recv-permission-model](../open-questions/external-human-recv-permission-model.md)).
+- GUI management of contacts is future work ([external-human-contact-management-ux](../open-questions/external-human-contact-management-ux.md)).
 
 ## Alternatives Considered
 
 | Option | Why rejected |
 |--------|--------------|
-| 片方向通知のみ | 「相手に聞いて返信を受ける」体験に届かない |
-| 外部入力を agent が指示として処理(Tier C) | フルツール + タスク文脈 + 秘密で破壊/exfil/lateral の危険 |
-| server 側 Discord adapter | 「末端は wrapper と client、server は broker」原則に違反 |
-| inter_agent_message を recipient type=agent\|human に一般化 | trust model が 1 経路に同居し条件分岐漏れが即脆弱性 |
-| contact 一覧を agent から隠す | enforce は wrapper で担保、開示しても防御は弱まらず利便のみ損なう |
-| contact 管理を dashboard UI で(v1) | client を視覚表現に集中させたい + raw Discord ID の server 経路を避ける。将来課題へ |
-| 外部会話の永続保存 | 新規永続面で非スコープ(将来 #24)抵触、第三者プライバシ懸念 |
+| Notifications in one direction only | Does not provide the experience of “ask the other party and receive a reply” |
+| Have the agent process external input as instructions (Tier C) | Full tools + task context + secrets create risks of destruction/exfiltration/lateral movement |
+| Discord adapter on the server side | Violates the principle “the endpoints are wrapper and client, and the server is a broker” |
+| Generalise inter_agent_message with recipient type = agent\|human | Sharing trust models in one path makes an omitted condition branch an immediate vulnerability |
+| Hide the contact list from the agent | Enforcement is guaranteed in the wrapper; disclosure does not weaken defence and only loses convenience |
+| Manage contacts in the dashboard UI (v1) | Want the client focused on visual representation and to avoid a raw Discord-ID server path. Leave it as future work |
+| Persist external conversations | A new persistence surface is out of scope (future #24) and raises third-party privacy concerns |
 
 ## Related
 
-- specs: [protocol-external-human](../specs/protocol-external-human.md)(正本)、
-  [protocol](../specs/protocol.md)(`external_message` type 追補)、
-  [protocol-inter-agent](../specs/protocol-inter-agent.md)(superset 元)。
-- ADR: [0010](0010-protocol-precisification.md)(予約 type 追補)、
-  [0017](0017-wrapper-multientity-packages.md)(multientity)、
-  [0021](0021-role-information-disclosure-policy.md)(operator 限定配信)。
-- kaoiro issue #18(メッセージフィルタ)。
+- specs: [protocol-external-human](../specs/protocol-external-human.md) (source of truth), [protocol](../specs/protocol.md) (addendum for `external_message` type), and [protocol-inter-agent](../specs/protocol-inter-agent.md) (source of the superset).
+- ADRs: [0010](0010-protocol-precisification.md) (reserved-type addendum), [0017](0017-wrapper-multientity-packages.md) (multi-entity), and [0021](0021-role-information-disclosure-policy.md) (operator-only delivery).
+- kaoiro issue #18 (message filters).

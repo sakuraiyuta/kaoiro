@@ -67,3 +67,21 @@ export function makeReactiveLaunchDialogProps(
   const state = $state(initial);
   return state;
 }
+
+// issue #276 review follow-up (ふじ round2 B2): reactive wrapper for
+// SettingsDrawer props so an integration test can flip `connection`
+// truthy -> undefined -> truthy on a MOUNTED instance, the transition a
+// static props object cannot exercise (mount() only sets props once).
+export interface ReactiveSettingsDrawerProps {
+  onClose: () => void;
+  // Explicit `| undefined` (not `?`) so a test can flip this field to
+  // undefined post-mount under `exactOptionalPropertyTypes: true`.
+  connection: KaoiroConnection | undefined;
+}
+
+export function makeReactiveSettingsDrawerProps(
+  initial: ReactiveSettingsDrawerProps,
+): ReactiveSettingsDrawerProps {
+  const state = $state(initial);
+  return state;
+}

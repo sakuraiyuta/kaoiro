@@ -56,4 +56,43 @@ describe("Claude CLI whoami composition (issue #254)", () => {
       },
     });
   });
+
+  it("actual composition passes the loaded build identity to ServerLink", async () => {
+    let linkOptions!: Record<string, unknown>;
+    const link = {
+      close: () => {},
+      currentSessionId: () => null,
+      send: () => {},
+    };
+    const host = {
+      state: "idle",
+      statusExtSnapshot: () => ({}),
+      statusSnapshot: () => ({
+        agent_id: config.agent_id,
+        persona: config.persona,
+        state: "idle" as const,
+      }),
+      run: async () => {},
+    };
+    const buildInfo = {
+      revision: "0123456789012345678901234567890123456789",
+      dirty: false,
+      version: "2026.9.0",
+      channel: "release" as const,
+    };
+
+    await runClaudeCli({
+      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      loadConfig: () => ({ ...config }),
+      loadWrapperBuildInfo: () => buildInfo,
+      createServerLink: (_url, _agentId, options) => {
+        linkOptions = options as unknown as Record<string, unknown>;
+        queueMicrotask(() => options.onPersonaPrompt?.("system prompt"));
+        return link as never;
+      },
+      createHost: () => host as never,
+    });
+
+    expect(linkOptions.buildInfo).toEqual(buildInfo);
+  });
 });

@@ -1,44 +1,47 @@
 ---
-title: マルチホスト配備手順書
-description: server (別ホスト・docker compose + nginx) と複数ホストの runner を実運用で配備する手動手順の正本。nginx location 例・env 一覧・DETS パス・認証 token 発行・wss 制約、および既存配備の更新手順 (暫定、自動化まで)。
+title: Multi-host deployment guide
+description: Canonical manual procedure for operating a server (separate host, docker compose + nginx) and runners on multiple hosts. Covers nginx locations, env variables, DETS paths, auth token issuance, wss constraints, and updating existing deployments (interim until automation).
 status: accepted
 related: [auth-and-authz, setup-wizards, threat-model]
 ---
 
-# マルチホスト配備手順書
+# Multi-host deployment guide
 
 ## Purpose
 
-デプロイ手順の正本が `server/docker-compose.yaml` のヘッダコメントと
-`server/README.md` の数行に散在し、任意ホスト公開(実運用)に必要な情報
-(nginx 設定・env 一覧・DETS パス・wss 制約)が欠落していた。本 doc が
-**手動手順の唯一の正本**。[setup-wizards](setup-wizards.md) は**初回配備**の
-env / config 生成を自動化するものであり、DETS パスや nginx 設定など wizard が
-扱わない領域は本 doc に完全記載する。**既存配備の更新(4 節)は wizard の
-対象外**で、自動化は issue #218 / #219 / #220 で進める。
+The canonical deployment procedure had been scattered across header comments in
+`server/docker-compose.yaml` and a few lines in `server/README.md`, omitting the
+information needed for public operation on an arbitrary host (nginx settings,
+env list, DETS paths, and wss constraints). This document is the **sole canonical
+manual procedure**. [setup-wizards](setup-wizards.md) automates env/config
+generation for **initial deployment**; this document fully records areas the
+wizard does not handle, such as DETS paths and nginx settings. **Updating an
+existing deployment (section 4) is outside the wizard** and is being automated in
+issues #218 / #219 / #220.
 
-## 全体構成
+## Overall architecture
 
 ```mermaid
 flowchart LR
-  U[Operator] -->|https/wss| N[nginx<br/>TLS 終端]
-  N -->|http/ws<br/>X-Forwarded-Proto| S["server (1台)<br/>docker compose"]
+  U[Operator] -->|https/wss| N["nginx<br/>TLS termination"]
+  N -->|http/ws<br/>X-Forwarded-Proto| S["server (1 host)<br/>docker compose"]
   R1[runner host A] -->|wss| N
   R2[runner host B] -->|wss| N
   S -.->|spawn| R1
   S -.->|spawn| R2
 ```
 
-server は 1 台、runner は host_id ごとに任意台数。TLS は nginx で終端し、
-server は plain HTTP のまま(2026-06-11 決定、`docker-compose.yaml` 参照)。
-VPN 内限定で公開する場合のみ、nginx を置かない直結配備(1.5)も選べる。
+Use one server and any number of runners per host ID. TLS terminates at nginx;
+the server remains plain HTTP (decision 2026-06-11, see `docker-compose.yaml`).
+Only deployments restricted to a VPN may use the direct, nginx-free option (1.5).
 
-## 1. server の配備
+## 1. Deploy the server
 
-### 1.1 認証 token の発行(3 種必須)
+### 1.1 Issue authentication tokens (three required)
 
-任意ホスト公開では 3 種すべて設定する([auth-and-authz](auth-and-authz.md))。
-生成は `openssl rand -hex 32`(32 バイト hex)。
+For public operation on an arbitrary host, configure all three
+([auth-and-authz](auth-and-authz.md)). Generate them with
+`openssl rand -hex 32` (32-byte hex).
 
 ```sh
 openssl rand -hex 32   # KAOIRO_CLIENT_TOKENS の token 部分に使う
@@ -46,88 +49,94 @@ openssl rand -hex 32   # KAOIRO_WRAPPER_TOKENS の token 部分に使う
 openssl rand -hex 32   # KAOIRO_RUNNER_TOKENS の token 部分に使う
 ```
 
-### 1.2 `.env` の作成
+### 1.2 Create `.env`
 
 ```sh
 cd server && cp .env.example .env
 ```
 
-| env | 必須 | 意味 |
+| env | Required | Meaning |
 |---|---|---|
-| `SECRET_KEY_BASE` | 必須 | `mix phx.gen.secret` で生成(64 文字)。`openssl rand -hex 32` では短い |
-| `PHX_HOST` | 必須 | 公開ホスト名。未設定は起動時 raise(fail-fast、issue #134) |
-| `PORT` | 任意 | 既定 4000 |
-| `KAOIRO_BIND_IP` | 任意 | :prod のみ有効。既定は全 IF。通常は既定のままで良い(issue #134) |
-| `KAOIRO_CLIENT_TOKENS` | 必須 | `<token>:<role>,...`(role = `operator`/`viewer`)。未設定は全 client 拒否 |
-| `KAOIRO_WRAPPER_TOKENS` | 任意 | `<agent_id>:<token>,...`(client と順序が逆)。spawn 経由のみの runner 配備では不要 — server-minted signed token で認証 (ADR-0024、2026-08-02 改訂)。固定 wrapper を pre-register する場合のみ設定 |
-| `KAOIRO_RUNNER_TOKENS` | 必須 | `<host_id>:<token>,...`。1.1 で発行した token を runner 側 `runner.env` の `KAOIRO_RUNNER_TOKEN` と対にする |
-| `KAOIRO_PERSONA_DIR` | 任意 | persona pack 取り込み用コンテナ内パス。読み取り専用 mount 可 |
-| `KAOIRO_FOOTER_DIR` | 任意 | footer 2 ファイルのコンテナ内 root |
-| | | 未設定時は内蔵既定のみ |
-| `KAOIRO_PERSONA_CACHE_DIR` | 任意 | zip extraction cache のコンテナ内 path |
-| | | compose 既定は `/var/lib/kaoiro/persona-cache` |
+| `SECRET_KEY_BASE` | Required | Generate with `mix phx.gen.secret` (64 characters); `openssl rand -hex 32` is too short |
+| `PHX_HOST` | Required | Public hostname. Unset raises at startup (fail-fast, issue #134) |
+| `PORT` | Optional | Defaults to 4000 |
+| `KAOIRO_BIND_IP` | Optional | Effective only in :prod; defaults to all interfaces, which is normally fine (issue #134) |
+| `KAOIRO_CLIENT_TOKENS` | Required | `<token>:<role>,...` (role = `operator`/`viewer`); unset rejects every client |
+| `KAOIRO_WRAPPER_TOKENS` | Optional | `<agent_id>:<token>,...` (reverse order from client). Not needed when runners deploy only through spawn—authenticate with server-minted signed tokens (ADR-0024, revised 2026-08-02). Set only to pre-register fixed wrappers |
+| `KAOIRO_RUNNER_TOKENS` | Required | `<host_id>:<token>,...`; pair the token issued in 1.1 with `KAOIRO_RUNNER_TOKEN` in the runner's `runner.env` |
+| `KAOIRO_PERSONA_DIR` | Optional | Container path for persona-pack import; may be mounted read-only |
+| `KAOIRO_FOOTER_DIR` | Optional | Container root for the two footer files |
+| | | When unset, use built-in defaults only |
+| `KAOIRO_PERSONA_CACHE_DIR` | Optional | Container path for the zip-extraction cache |
+| | | Compose default is `/var/lib/kaoiro/persona-cache` |
 
-3 種いずれも未設定時の挙動は env ごとに異なる(client = fail-closed、
-runner = :prod で fail-closed・dev/test のみ緩和、wrapper = :prod では
-signed token のみ受理・dev/test は緩和、issue #133 / 2026-08-02 改訂)。
+Unset behavior differs by env (client = fail-closed; runner = fail-closed in
+:prod and relaxed only in dev/test; wrapper = only signed tokens accepted in
+:prod and relaxed in dev/test; issue #133, revised 2026-08-02).
 
-persona pack 取り込みは [ADR-0046](../adr/0046-persona-cache-relocation.md)
-により extraction cache と分離済みであり、`KAOIRO_PERSONA_DIR` は `:ro`
-mount できる。footer を運用者が差し替える場合は、host 側の
-`/srv/kaoiro/footers` を次のように読み取り専用で mount する:
+Persona-pack import is separated from the extraction cache by
+[ADR-0046](../adr/0046-persona-cache-relocation.md), so `KAOIRO_PERSONA_DIR` may
+be mounted `:ro`. To replace footers, mount the host directory
+`/srv/kaoiro/footers` read-only:
 
 ```yaml
       - /srv/kaoiro/footers:/etc/kaoiro/footers:ro
 ```
 
-同梱 compose は `KAOIRO_PERSONA_CACHE_DIR=/var/lib/kaoiro/persona-cache`
-を設定する。cache は書き込み可能な永続領域に置き、persona pack の
-mount とは分離する。
+The bundled compose sets `KAOIRO_PERSONA_CACHE_DIR=/var/lib/kaoiro/persona-cache`.
+Keep the cache on writable persistent storage, separate from the persona-pack
+mount.
 
-**DETS パス 9 種**(restart 跨ぎで状態を残す DETS ファイルの格納先)は
-同梱 `docker-compose.yaml` が `environment:` + named volume `kaoiro-state`
-で設定済みのため、compose 運用では `.env` に書く必要はない。compose を
-使わずホストで直接 release を動かす場合のみ、この 9 種を書き込み可能な
-永続パスへ明示する: `KAOIRO_SESSION_POINTERS_PATH` /
+The **ten DETS paths** (locations of DETS files that retain state across
+restarts) are already configured by the bundled `docker-compose.yaml` through
+`environment:` and the named volume `kaoiro-state`; compose users need not put
+them in `.env`. When running a release directly on the host without compose,
+set all ten explicitly to writable persistent paths: `KAOIRO_SESSION_POINTERS_PATH` /
 `KAOIRO_AGENT_DIRECTORY_PATH` / `KAOIRO_PERMISSION_MODES_PATH` /
 `KAOIRO_CLEAR_WATERMARKS_PATH` / `KAOIRO_SESSION_STARTS_PATH` /
 `KAOIRO_INGRESS_ORDER_PATH` / `KAOIRO_USERS_PATH` /
-`KAOIRO_TOKEN_DENYLIST_PATH` / `KAOIRO_DELIVERY_STATES_PATH`。未設定はコンテナの `/tmp` 相当に落ち、
-`docker compose down` で消える(offline agent 一覧が失われる)。
+`KAOIRO_TOKEN_DENYLIST_PATH` / `KAOIRO_DELIVERY_STATES_PATH` /
+`KAOIRO_SESSION_LIFECYCLE_EVENTS_PATH`. Unset paths fall
+under a container-equivalent of `/tmp` and disappear after `docker compose down`
+(the offline-agent list is lost).
 
-**この 9 種が「永続化対象の正本」である**。更新手順(4 節)の preflight は
-この一覧を基準に、全 path が named volume 配下へ解決されることを確認する。
-一覧に載っていない DETS が増えると、**backup の対象から静かに漏れる** —
-`KAOIRO_USERS_PATH` は実際にこれを踏み、compose に無いまま container
-recreate で user ledger が失われた(issue #217)。
+`SESSION_LIFECYCLE_MAX_EVENTS_PER_AGENT` (unprefixed, ADR-0055 phase-33
+Stage B) caps the per-agent event count the `session_lifecycle` DETS
+retains, oldest discarded first. Unset defaults to 10000.
 
-**2026-08-08 注記:** phase 30-7 で `InterAgentHistory` DETS は撤廃し、
-`KAOIRO_INTER_AGENT_HISTORY_PATH` は server に読まれなくなった。同梱
-`docker-compose.yaml` と `scripts/dev.sh` の unused export も phase-30
-クローズ時に削除済み。ただし**撤廃前に作られた
-`inter_agent_history.dets` は既存 volume に残骸として残っている**ことが
-あり、backup にも含まれる(2026-08-12 に約 1.9MB を確認)。実行時に
-読まれないため害は無いが、archive のサイズと listing に現れる。
+**These ten are the canonical persistence set.** The preflight in section 4
+checks that every path resolves under the named volume using this list. A DETS
+file not listed can **silently escape backup**—`KAOIRO_USERS_PATH` did exactly
+that, and the user ledger was lost when the container was recreated without it
+in compose (issue #217).
 
-### 1.3 docker compose で起動
+**Note 2026-08-08:** Phase 30-7 removed the `InterAgentHistory` DETS, and the
+server no longer reads `KAOIRO_INTER_AGENT_HISTORY_PATH`. The unused exports in
+the bundled `docker-compose.yaml` and `scripts/dev.sh` were also removed when
+phase 30 closed. However, **`inter_agent_history.dets` created before removal
+may remain as debris in existing volumes** and is included in backups (about
+1.9 MB observed on 2026-08-12). It is harmless because runtime never reads it,
+but it appears in archive size and listings.
 
-**build context はリポジトリルート**(dashboard/ が server/ 外にあるため、
-issue #44)。`docker-compose.yaml` は `context: ..` を既に指定しているので
-`server/` から通常どおり起動すれば良い。手動 `docker build` を直接叩く
-場合はルートで `docker build -f server/Dockerfile .` とする。
+### 1.3 Start with docker compose
+
+**The build context is the repository root** because `dashboard/` is outside
+`server/` (issue #44). `docker-compose.yaml` already sets `context: ..`, so start
+normally from `server/`. For a manual `docker build`, run
+`docker build -f server/Dockerfile .` from the root.
 
 ```sh
 cd server
 docker compose up -d --build
 ```
 
-既定で `127.0.0.1:4000` のみに bind(compose の `ports` マッピング)。
-nginx からは同一ホストのループバック経由で到達させる。
+By default it binds only to `127.0.0.1:4000` (the compose `ports` mapping). nginx
+reaches it through the same host's loopback.
 
-### 1.4 nginx リバースプロキシ
+### 1.4 nginx reverse proxy
 
-TLS は nginx で終端し、WebSocket の Upgrade/Connection を転送、channel
-heartbeat(30 秒間隔)より長い `proxy_read_timeout` を設定する。
+Terminate TLS at nginx and forward the WebSocket Upgrade/Connection headers.
+Set `proxy_read_timeout` longer than the channel heartbeat (30 seconds).
 
 ```nginx
 server {
@@ -150,61 +159,61 @@ server {
 }
 ```
 
-**制約(必読)**: prod は `force_ssl` が有効(`server/config/prod.exs`)で、
-`X-Forwarded-Proto` が `https` でないリクエストを 301 で `https` へ
-リダイレクトする。これは WebSocket ハンドシェイクでは接続失敗になる —
-`proxy_set_header X-Forwarded-Proto $scheme;` を必ず設定し、**nginx を
-介さず `ws://<host>:4000` へ直結することはできない**(`PHX_HOST` が
-`localhost`/`127.0.0.1` の場合のみ `force_ssl` の対象外)。wrapper/runner
-は必ず nginx 経由の `wss://` で接続する。VPN 内直結配備(1.5)では
-`force_ssl` 自体をビルド時に無効化するため、この制約は掛からない。
+**Read this constraint:** prod enables `force_ssl` (`server/config/prod.exs`) and
+redirects requests whose `X-Forwarded-Proto` is not `https` to `https` with 301.
+That fails a WebSocket handshake. Always set
+`proxy_set_header X-Forwarded-Proto $scheme;`; **direct `ws://<host>:4000`
+connections that bypass nginx are not supported** (only `localhost`/`127.0.0.1`
+`PHX_HOST` values are exempt from `force_ssl`). Wrappers and runners must use
+`wss://` through nginx. The VPN direct deployment (1.5) disables `force_ssl` at
+build time, so this constraint does not apply.
 
-### 1.5 VPN 内直結配備(nginx なし・plain HTTP、2026-07-26)
+### 1.5 Direct VPN deployment (no nginx, plain HTTP, 2026-07-26)
 
-到達経路が VPN(WireGuard)内に閉じるホストでは、nginx を置かず
-`http://<host>:<port>` へ直結する配備を選べる。token・cookie が VPN 内を
-平文で流れるため、**経路の秘匿は VPN に委譲**する構成([threat-model](threat-model.md))。
-公開インターネットには決して使わない。
+For hosts reachable only inside a VPN (WireGuard), you may deploy without nginx
+and connect directly to `http://<host>:<port>`. Tokens and cookies travel in
+plaintext inside the VPN, so **the VPN is responsible for path confidentiality**
+([threat-model](threat-model.md)). Never expose this mode to the public Internet.
 
-`.env` に次の 2 つを追加する(それ以外の手順は 1.1〜1.3 と同じ):
+Add these two variables to `.env` (all other steps are the same as 1.1–1.3):
 
-| env | 値 | 意味 |
+| env | Value | Meaning |
 |---|---|---|
-| `KAOIRO_PLAIN_HTTP` | `true` | ビルド時: `force_ssl`・Secure cookie を無効化(compile-time)。実行時: URL 生成・check_origin を `http://PHX_HOST:PORT` に切替。compose が同じ値を build arg と実行 env の両方へ配線し、不一致はサーバが起動時 raise |
-| `KAOIRO_PUBLISH_IP` | ホストの VPN 側 IF の IP | compose の公開先(既定 `127.0.0.1`)。全 IF 公開ではなく VPN 側 IP に限定する |
+| `KAOIRO_PLAIN_HTTP` | `true` | Build time: disable `force_ssl` and Secure cookies (compile-time). Runtime: switch URL generation and `check_origin` to `http://PHX_HOST:PORT`. Compose wires the same value to both build arg and runtime env; mismatch raises at server startup |
+| `KAOIRO_PUBLISH_IP` | Host's VPN-side interface IP | Compose bind address (default `127.0.0.1`); restrict to the VPN interface rather than publishing on all interfaces |
 
-`check_origin` は `http://PHX_HOST:PORT` と loopback の 2 つだけを許可する
-(private Gitea issue 154 M1 — 既定の host のみ比較では同一ホストの別ポートから operator
-socket を奪える)。**それ以外の名前や IP 直打ちでダッシュボードを開くと
-画面は出るが client socket が 403 になる** ので、必ず `PHX_HOST` と同じ
-名前でアクセスする。
+`check_origin` allows only `http://PHX_HOST:PORT` and loopback (private Gitea
+issue 154 M1: comparing only the default host would let another port on the same
+host steal an operator socket). **Opening the dashboard with another name or a
+literal IP renders the page but the client socket receives 403**, so always use
+the same name as `PHX_HOST`.
 
-`PHX_HOST` は接続に使う FQDN(例 `linux-host.example`)。値を変えたら
-`docker compose up -d --build` で再ビルドする(compile-time フラグのため
-イメージ再利用不可)。runner の `server_url` は
-`ws://<PHX_HOST>:<PORT>/runner`、ダッシュボードは
-`http://<PHX_HOST>:<PORT>/?token=...` となる。
+`PHX_HOST` is the FQDN used for connections (for example,
+`linux-host.example`). Rebuild with `docker compose up -d --build` after changing
+it (compile-time flag; images cannot be reused). The runner `server_url` is
+`ws://<PHX_HOST>:<PORT>/runner`; the dashboard is
+`http://<PHX_HOST>:<PORT>/?token=...`.
 
-nginx が担うはずのセキュリティヘッダ(CSP / `nosniff` /
-`X-Frame-Options` / `Referrer-Policy`)は、この構成では付与主体が居なく
-なるためサーバ自身が全レスポンスに付ける(#145、
-`KaoiroServerWeb.SecurityHeaders`。狙いと内訳は
-[threat-model](threat-model.md) 緩和策)。CSP の `connect-src` は
-**そのレスポンスを返しているオリジンと一致する `check_origin` エントリ
-だけ**を `ws:`/`wss:` へ写すので、`PHX_HOST` / `PORT` を変えれば追随し、
-外部 host 向けのページに loopback の WS 宛先が載ることもない。逆に
-**ダッシュボードへ外部オリジンの script / style / 画像を持ち込む変更は
-CSP で落ちる**。
+Because nginx is absent in this mode, the server itself adds the security headers
+nginx normally supplies (CSP / `nosniff` / `X-Frame-Options` /
+`Referrer-Policy`) to every response (#145,
+`KaoiroServerWeb.SecurityHeaders`; intent and details are in the
+[threat-model](threat-model.md) mitigations). CSP `connect-src` copies to `ws:` /
+`wss:` **only the `check_origin` entry matching the origin serving that response**;
+changing `PHX_HOST` / `PORT` follows automatically and never puts a loopback WS
+target on an external-host page. Conversely, **CSP rejects changes that bring
+scripts, styles, or images from external origins into the dashboard**.
 
-### 1.6 OAuth ログイン(個人認証)の設定(任意、ADR-0042 / issue #65)
+### 1.6 Configure OAuth login (optional, ADR-0042 / issue #65)
 
-dashboard に Google / GitHub / Nextcloud の OAuth ログインを追加できる。
-仕組みと設計判断は [ADR-0042](../adr/0042-oauth-allowlist-login.md)、
-境界の地図は [auth-and-authz](auth-and-authz.md)。`KAOIRO_CLIENT_TOKENS`
-未設定なら token 認証は無効(OAuth のみ)、設定時は併存する。
+The dashboard can add Google / GitHub / Nextcloud OAuth login. See
+[ADR-0042](../adr/0042-oauth-allowlist-login.md) for mechanism and design
+decisions and [auth-and-authz](auth-and-authz.md) for the boundary map. If
+`KAOIRO_CLIENT_TOKENS` is unset, token auth is disabled (OAuth only); when set,
+the two paths coexist.
 
-**redirect URI**(全 provider 共通。server が endpoint `url` 設定から
-導出するため、登録値は必ずこの形):
+**Redirect URI** (common to all providers; the server derives it from the
+endpoint `url`, so register exactly this form):
 
 ```text
 {scheme}://{PHX_HOST}[:{PORT}]/auth/{provider}/callback
@@ -212,22 +221,22 @@ dashboard に Google / GitHub / Nextcloud の OAuth ログインを追加でき�
 #     http://localhost:4000/auth/google/callback   (dev)
 ```
 
-**provider ごとの client 登録**(経路は 2026-07 時点):
+**Register a client for each provider** (paths current as of 2026-07):
 
-| provider | 登録場所 | 注意 |
+| provider | Registration path | Notes |
 |---|---|---|
-| Google | [console.cloud.google.com](https://console.cloud.google.com) → Google Auth Platform(初回は Get started で Branding/Audience 設定、Testing なら Test users に対象アカウント追加)→ Clients → Create Client → Web application → Authorized redirect URIs | **redirect URI は https 必須(localhost のみ http 可)**。plain-HTTP 配備(1.5)では使えない |
-| GitHub | Settings → Developer settings → OAuth Apps → New OAuth App → Authorization callback URL。登録後 Generate a new client secret | **callback URL は 1 App につき 1 個**。環境ごとに別 App を作る |
-| Nextcloud | 対象インスタンスの 設定 → 管理 → セキュリティ → OAuth 2.0 クライアント → 名前 + Redirection URI を追加 | scope 非対応(token はフルアクセス)だが server は identity 取得後に token を破棄する(ADR-0042)。PKCE 非対応、CSRF 防御は state のみ |
+| Google | [console.cloud.google.com](https://console.cloud.google.com) → Google Auth Platform (first use: Get started to configure Branding/Audience; for Testing add the account under Test users) → Clients → Create Client → Web application → Authorized redirect URIs | **Redirect URI must use https (http only for localhost)**; unavailable in plain-HTTP deployment (1.5) |
+| GitHub | Settings → Developer settings → OAuth Apps → New OAuth App → Authorization callback URL; after registration, Generate a new client secret | **One callback URL per App**; create a separate App per environment |
+| Nextcloud | Target instance Settings → Administration → Security → OAuth 2.0 clients → add a name + Redirection URI | No scope support (tokens have full access), but the server discards the token after obtaining identity (ADR-0042). No PKCE; CSRF protection is state only |
 
-**設定の生成は `mix kaoiro.env` で自動化できる**(2026-07-27、
-[setup-wizards](setup-wizards.md))。ウィザードの OAuth 質問群が
-provider 選択 → id/secret 入力 → 許可リスト生成(最低 1 エントリを
-促す)→ compose mount 行の案内までを行い、生成物は 0600 で書き出す。
-以下は手動で設定する場合(およびウィザードが書く内容)の説明。
+**Generate settings automatically with `mix kaoiro.env`** (2026-07-27,
+[setup-wizards](setup-wizards.md)). The wizard's OAuth questions cover provider
+selection → ID/secret entry → allowlist generation (prompting for at least one
+entry) → a compose-mount line, and write generated files with mode 0600. The
+following describes manual configuration (and what the wizard writes).
 
-**`.env` への追記**(id + secret が揃った provider のみ有効化される。
-Nextcloud は base_url も必須):
+**Append to `.env`** (a provider is enabled only when both ID and secret exist;
+Nextcloud also requires `base_url`):
 
 ```sh
 KAOIRO_OAUTH_GOOGLE_CLIENT_ID=...
@@ -240,45 +249,45 @@ KAOIRO_OAUTH_NEXTCLOUD_BASE_URL=https://cloud.example.com
 KAOIRO_OAUTH_ALLOWLIST_PATH=/etc/kaoiro/oauth-allowlist.txt
 ```
 
-**許可リスト**(未設定・ファイル欠落・不一致はすべて認証拒否 =
-fail-closed。malformed 行は warn ログの上 skip):
+**Allowlist** (unset, missing, or mismatched values all reject authentication =
+fail-closed; malformed lines warn and skip):
 
 ```text
-# provider:identifier[:role]   role 省略時は viewer
-# identifier: google=email(小文字)/ github=login / nextcloud=user id
+# provider:identifier[:role]   omitted role means viewer
+# identifier: google=lowercase email / github=login / nextcloud=user id
 google:alice@example.com:operator
 github:octocat:viewer
 nextcloud:alice:operator
 ```
 
-compose 運用ではファイルを `server/` に置き、`docker-compose.yaml` の
-`volumes:` へ read-only mount を 1 行足す:
+For compose, put the file in `server/` and add one read-only mount under
+`volumes:` in `docker-compose.yaml`:
 
 ```yaml
       - ./oauth-allowlist.txt:/etc/kaoiro/oauth-allowlist.txt:ro
 ```
 
-**確認**:
+**Verify**:
 
 ```sh
 curl http://<PHX_HOST>:<PORT>/session/auth-methods
 # → {"token":true|false,"oauth":["github","nextcloud",...]}
 ```
 
-ログイン画面に有効 provider のボタンが並び、許可リスト外のアカウントは
-`auth_error=not_allowed` で拒否される。許可リストの行削除は次回接続 /
-refresh(最長 12h)で反映。**operator→viewer の「降格」は稼働中 socket
-に反映されない既知の穴がある(issue #148)**。拒否時の warn ログには
-`provider:uid` がそのまま出るため、許可リストへ写す識別子はログから
-確認できる。
+The login screen lists buttons for enabled providers; accounts outside the
+allowlist are rejected with `auth_error=not_allowed`. Removing a line applies on
+the next connection / refresh (up to 12h). **A known gap (issue #148) means an
+operator→viewer demotion does not reach an active socket.** Rejection WARN logs
+include `provider:uid`, so the identifier to copy into the allowlist can be read
+from the log.
 
-## 2. runner の配備(複数ホスト)
+## 2. Deploy runners (multiple hosts)
 
-現状は tarball 配布(issue #70、[ADR-0018](../adr/0018-runner-distribution.md)
-2026-07-25 改訂)。各エージェントホストへ個別に展開する。手順の全文・
-常駐化(systemd user unit / launchd LaunchAgent)は
-[runner/README.md](../../runner/README.md) が正本 — ここでは複数ホスト
-配備に固有の要点のみ書く。
+Distribution currently uses tarballs (issue #70, revised 2026-07-25 in
+[ADR-0018](../adr/0018-runner-distribution.md)); expand one on each agent host.
+The full procedure and service setup (systemd user unit / launchd LaunchAgent)
+are canonical in [runner/README.md](../../runner/README.md); this section covers
+only points specific to multi-host deployment.
 
 ```sh
 # ビルドホスト(1 台)で対象アーキテクチャごとに生成
@@ -291,19 +300,19 @@ refresh(最長 12h)で反映。**operator→viewer の「降格」は稼働中 s
 ./kaoiro-runner-switch.sh <rev>
 ```
 
-install / switch スクリプトは配布物の `deploy/` に入っている。初回だけは
-アーカイブを一度展開してそこから実行する(`tar xzf ... && cd ... &&
-./deploy/kaoiro-runner-install.sh ../<archive>`)。以後は
-`<install-root>/current/deploy/` のものを使う。レイアウト・更新・rollback は
-4.6 が正本。
+The install / switch scripts are in the package's `deploy/`. For the first
+installation, expand the archive once and run from there
+(`tar xzf ... && cd ... && ./deploy/kaoiro-runner-install.sh ../<archive>`).
+Afterward use `<install-root>/current/deploy/`. Section 4.6 is canonical for
+layout, updates, and rollback.
 
-### `runner.config.json` の実例(`wss://` 必須)
+### `runner.config.json` example (`wss://` required)
 
-nginx 越しの prod 配備では `server_url` は必ず `wss://` にする(1.4 の
-制約どおり `ws://` 直結は 301 で弾かれる)。VPN 内直結配備(1.5)のみ
-`ws://<PHX_HOST>:<PORT>/runner` とする。`host_id` はホストごとに
-一意にする(サーバ側 `HostRegistry` が host_id をキーに register するため、
-重複させると片方のホストが上書きされる)。
+For prod deployments through nginx, `server_url` must be `wss://` (`ws://`
+direct connections receive 301 under the 1.4 constraint). Only the direct VPN
+deployment (1.5) uses `ws://<PHX_HOST>:<PORT>/runner`. Make `host_id` unique per
+host: the server's `HostRegistry` registers by host ID, so duplicates overwrite
+one host with the other.
 
 ```json
 {
@@ -314,146 +323,148 @@ nginx 越しの prod 配備では `server_url` は必ず `wss://` にする(1.4 
 }
 ```
 
-`runner.env` に `KAOIRO_RUNNER_TOKEN=<1.1 で発行した token>` を設定し
-(サーバ側 `KAOIRO_RUNNER_TOKENS` の `<host_id>:<token>` と対にする)、
-`chmod 600` する。`server_url` は `runner.env` の
-`KAOIRO_RUNNER_SERVER_URL`(issue #135、env が config ファイルより優先)
-でも上書きできる。
+Set `KAOIRO_RUNNER_TOKEN=<token issued in 1.1>` in `runner.env` (pair it with
+`<host_id>:<token>` in server-side `KAOIRO_RUNNER_TOKENS`) and run `chmod 600`.
+Override `server_url` with `KAOIRO_RUNNER_SERVER_URL` in `runner.env` as well
+(issue #135; env takes precedence over the config file).
 
-### 常駐化
+### Run as a service
 
-systemd user unit(Linux)/ launchd LaunchAgent(macOS)のテンプレートは
-`runner/deploy/` に同梱。設置手順・終了コード・トラブルシュートは
-[runner/README.md](../../runner/README.md)の「常駐化」節を参照。
-release profile では `@@DEPLOY_DIR@@` に `<install-root>/current/deploy` を
-入れる — unit が symlink 越しに起動することが、切替を切替たらしめている。
-**runner の再起動(サービス再起動含む)は配下の wrapper を
-全停止させる**(SIGTERM 時の `supervisor.stopAll()`)— 稼働中エージェントがいる状態での
-`systemctl --user restart` / `launchctl kickstart -k` は、対象ホストの
-全エージェントが切断されることを意味する。
+Templates for systemd user units (Linux) and launchd LaunchAgents (macOS) ship
+in `runner/deploy/`. See the “Run as a service” section of
+[runner/README.md](../../runner/README.md) for installation, exit codes, and
+troubleshooting. In the release profile set `@@DEPLOY_DIR@@` to
+`<install-root>/current/deploy`; starting the unit through the symlink is what
+makes switching atomic. **Restarting a runner (including service restart) stops
+all wrappers beneath it** (`supervisor.stopAll()` on SIGTERM), so
+`systemctl --user restart` / `launchctl kickstart -k` with active agents
+disconnects every agent on that host.
 
-## 3. 疎通確認
+## 3. Connectivity checks
 
-1. server: `docker compose ps` で起動確認、`https://<host>/?token=<KAOIRO_CLIENT_TOKENS の token>` でダッシュボードが開く
-2. runner: 起動ログに `runner: host=<host_id> connecting to wss://...` が出て切断が続かない(認証失敗は `unauthorized` で即切断)
-3. ダッシュボードの host 一覧に該当 `host_id` が現れる
+1. server: verify with `docker compose ps`; open the dashboard at
+   `https://<host>/?token=<token from KAOIRO_CLIENT_TOKENS>`.
+2. runner: startup logs show `runner: host=<host_id> connecting to wss://...`
+   without repeated disconnects (auth failure disconnects immediately as
+   `unauthorized`).
+3. Confirm the host list in the dashboard contains the `host_id`.
 
-## 4. 既存配備の更新(暫定手順)
+## 4. Update an existing deployment (interim procedure)
 
-1〜2 節は**初回配備**の手順である。既に稼働している配備を新しいバージョンへ
-上げる手順は本節が正本。
+Sections 1–2 cover **initial deployment**. This section is canonical for moving
+an already-running deployment to a new version.
 
-> **本節は暫定手順(manual interim procedure)である。**自動化が入るまでの
-> 橋渡しとして書いており、完成形ではない。**「手順書があるから安全」ではない**
-> — 4.1 の限界は手順を守っても残る。経緯と置換条件は issue #217。
+> **This section is an interim manual procedure.** It bridges the period before
+> automation and is not the final form. **A runbook does not make the operation
+> safe**—the limits in 4.1 remain even when followed. History and replacement
+> criteria are in issue #217.
 
-### 4.1 既知の限界
+### 4.1 Known limits
 
-| 限界 | 内容 | 解消する issue |
+| Limit | Details | Resolving issue |
 |---|---|---|
-| **in-place build**(checkout 直挿しのホストのみ) | 稼働中の checkout の `dist` を直接上書きする。runner は wrapper を spawn するたびに on-disk の `dist` を解決する(`runner/src/spawn.ts` の `resolveWrapperLaunch()`)ため、build 中に spawn が起きると新旧の混ざった artifact を掴む。「停止中に build する」と手順で定めても、**順序を一度誤れば再発する** | #219(実装済み。**ホストを release profile へ移行するまで残る** — 4.6) |
-| **自動 rollback が無い** | 失敗時の復旧はすべて手作業(4.4) | #220 |
+| **In-place build** (checkout-direct hosts only) | Overwrites `dist` in the active checkout. Each wrapper spawn resolves on-disk `dist` (`resolveWrapperLaunch()` in `runner/src/spawn.ts`), so a spawn during build can capture a mixed old/new artifact. Even if the procedure says “build while stopped,” **one ordering mistake reproduces the failure** | #219 (implemented; **remains until the host moves to the release profile** — 4.6) |
+| **No automatic rollback** | All recovery after failure is manual (4.4) | #220 |
 
-**artifact provenance が無い(旧 #218)は解消済み**— build identity
-([ADR-0053](../adr/0053-build-identity.md))の導入により、full SHA を
-返す health endpoint と runner の register 情報で確認できる(4.5)。
+**Missing artifact provenance (former #218) is resolved**: build identity
+([ADR-0053](../adr/0053-build-identity.md)) exposes the full SHA through the
+health endpoint and runner registration data (4.5).
 
-**in-place build は release profile では解消済み**([ADR-0018](../adr/0018-runner-distribution.md)
-2026-08-16 改訂)。release は `releases/<revision>/` へ展開され、live path は
-`current` symlink 1 本になるため、**build も展開も稼働中の runner に触れない**。
-ただしこれは**ホストごとの設置形態の問題**であり、コードがマージされただけでは
-解消しない — repo checkout を直接 `ExecStart` に指しているホストは、4.6 の移行を
-済ませるまで上記の限界を抱えたままである。
+**In-place build is resolved in the release profile** ([ADR-0018](../adr/0018-runner-distribution.md),
+revised 2026-08-16). Releases expand to `releases/<revision>/` and the live path
+is one `current` symlink, so **build and expansion never touch a running runner**.
+This remains **a host installation-shape issue** rather than a code-only fix:
+hosts whose `ExecStart` points directly to a repo checkout retain the limit until
+they complete the 4.6 migration.
 
-### 4.2 事前条件
+### 4.2 Preconditions
 
-着手前に以下をすべて満たすこと。
+Satisfy all of the following before starting.
 
-- **target を full 40 桁 SHA で固定する。**`git pull` の結果に依存させない。
-  作業記録にもその SHA を残す
-- **server と runner の両方を同じ target へ進める**。片側だけを進めると、
-  同一 SHA という postcondition が崩れ、互換の保証がない組み合わせが動く
-- **source cleanliness を tracked / untracked の両方で判定する。**
-  `git diff --quiet` は untracked を見ないため、これだけでは不十分
-  (`git status --porcelain` の出力が空であることを確認する)
-- **server ホストの SSH host key が `known_hosts` に登録済みであること。**
-  `StrictHostKeyChecking=no` で迂回しない
-- **永続化対象の全 path が named volume 配下へ解決されることを確認する。**
-  正本は 1.2 節の 9 種。一覧に無い DETS が増えていると **backup から静かに
-  漏れる**(`KAOIRO_USERS_PATH` が実際にこれを踏んだ — issue #217)
-- **active な作業が無いことを確認する**(人間の判断)。runner の停止は配下の
-  wrapper をすべて止める(2 節「常駐化」)。会話状態は永続化されていないため、
-  進行中のやり取りは失われる
+- **Pin the target to a full 40-character SHA.** Do not depend on `git pull`; record
+  the SHA in the change log.
+- **Advance both server and runner to the same target.** Advancing one side alone
+  breaks the same-SHA postcondition and runs an unverified combination.
+- **Check source cleanliness for tracked and untracked files.** `git diff --quiet`
+  misses untracked files; require empty `git status --porcelain` output.
+- **Ensure the server host's SSH host key is in `known_hosts`.** Do not bypass with
+  `StrictHostKeyChecking=no`.
+- **Ensure every persistence path resolves under the named volume.** The source of
+  truth is the ten paths in 1.2. An unlisted DETS can **silently escape backup**
+  (`KAOIRO_USERS_PATH` did so, losing the user ledger on container recreation;
+  issue #217).
+- **Confirm there is no active work** (human judgment). Stopping a runner stops all
+  wrappers beneath it (section 2, “Run as a service”); conversation state is not
+  persisted, so in-progress exchanges are lost.
 
-### 4.3 更新手順
+### 4.3 Update procedure
 
-**prepare(無停止)と commit(停止窓)を分ける。**
+**Separate prepare (no downtime) from commit (the stop window).**
 
-**server image の build は server の停止時間に含めない**。旧 container が
-旧 image ID を保持したまま稼働を続けられるためである。
+**Do not count server-image build time as server downtime.** The old container can
+keep running with its old image ID.
 
-**runner の build 時間が停止時間になるかは、ホストの設置形態で決まる。**
+**Whether runner build time is downtime depends on the host installation shape.**
 
-- **release profile**(4.6 移行済み): build も展開も `releases/<revision>/`
-  の中だけで完結するため、**停止時間は `current` の切替と再起動だけ**。
-  build 時間は outage に入らない。手順は 4.6 の更新コマンドが一括で行う
-- **checkout 直挿し**(未移行): 4.1 の in-place build 制約により、
-  稼働中にビルドすると新旧の混ざった artifact を掴む。したがって
-  **runner の build 時間はそのまま runner の停止時間である**。outage を
-  見積もるときはこれを含めること。以下の (3) / (4) はこの形態の手順
+- **Release profile** (migrated in 4.6): build and expansion stay under
+  `releases/<revision>/`, so **downtime is only switching `current` and restarting**.
+  Build time is not outage; the 4.6 update command handles the sequence.
+- **Checkout-direct** (not migrated): the 4.1 in-place-build limit can capture a
+  mixed artifact when building while active. Therefore **runner build time is
+  runner downtime**; include it in outage estimates. Steps (3) / (4) below are
+  for this shape.
 
-特に **runner の build 成功を server の切替より前に確定させる** — 逆順に
-すると、build 失敗時に「新 server × 旧 runner」という互換の保証が
-ない組み合わせが残る。
+In particular, **confirm runner build success before switching the server**. The
+reverse order can leave an unverified “new server × old runner” combination when
+the build fails.
 
 ```mermaid
 flowchart TD
-  A[running container の image ID から retag<br/>旧 commit を記録] --> B[server image を prepare<br/>旧 container は稼働継続]
-  B -->|失敗| R0[abort cleanup 4.4 の 0<br/>remote source を旧へ戻す]
-  B -->|成功| C[runner 停止]
-  C --> D[local を target へ<br/>frozen install + build]
-  D -->|失敗| R1[abort cleanup 4.4 の 0<br/>local も旧 commit へ<br/>4.4 の 2]
-  D -->|成功| E[server graceful stop]
-  E --> S{正常停止か<br/>exit と oom を確認}
-  S -->|異常 or 判定不能| R5[同じ container を docker start で再開<br/>正常 open を確認し stop から取り直す<br/>不可なら中断]
-  S -->|正常| V[volume を解決し非空を確認<br/>4.3 の 5-a]
-  V --> M[初回のみ<br/>user ledger を migrate<br/>4.3 の 5-b]
-  M --> F[DETS archive + 完全検証<br/>4.3 の 5-c]
-  F -->|失敗| R2[abort cleanup 4.4 の 0<br/>旧 image で再起動<br/>4.4 の 1]
-  F -->|成功| G[prepared image で server 起動]
-  G -->|失敗| R3[state を開いたか判定<br/>停止してから restore し 0 を実行<br/>4.4 の 3]
-  G -->|成功| H[runner 起動]
-  H -->|失敗| R4[修復して 4.5 再実行<br/>または post-start rollback<br/>4.4 の 4]
-  H -->|成功| I{4.5 の operational<br/>success が揃うか}
-  I -->|揃わない| R6[修復して 4.5 再実行<br/>または post-start rollback<br/>4.4 の 5]
-  I -->|揃う| Z[完了]
+  A["Retag from running container image ID<br/>record old commit"] --> B["Prepare server image<br/>old container keeps running"]
+  B -->|failure| R0["Abort cleanup 4.4-0<br/>restore remote source to old"]
+  B -->|success| C["Stop runner"]
+  C --> D["Advance local to target<br/>frozen install + build"]
+  D -->|failure| R1["Abort cleanup 4.4-0<br/>restore local to old commit<br/>4.4-2"]
+  D -->|success| E["Gracefully stop server"]
+  E --> S{"Stopped cleanly?<br/>check exit and oom"}
+  S -->|abnormal or unknown| R5["Restart same container with docker start<br/>confirm clean open, retry stop<br/>abort if impossible"]
+  S -->|normal| V["Resolve volume and confirm non-empty<br/>4.3-5-a"]
+  V --> M["First time only<br/>migrate user ledger<br/>4.3-5-b"]
+  M --> F["DETS archive + full verification<br/>4.3-5-c"]
+  F -->|failure| R2["Abort cleanup 4.4-0<br/>restart with old image<br/>4.4-1"]
+  F -->|success| G["Start server with prepared image"]
+  G -->|failure| R3["Determine whether state was opened<br/>stop, restore, run 0<br/>4.4-3"]
+  G -->|success| H["Start runner"]
+  H -->|failure| R4["Repair and rerun 4.5<br/>or post-start rollback<br/>4.4-4"]
+  H -->|success| I{"Does 4.5 operational<br/>success hold?"}
+  I -->|no| R6["Repair and rerun 4.5<br/>or post-start rollback<br/>4.4-5"]
+  I -->|yes| Z["Complete"]
 ```
 
-**上図の C / D(runner 停止 → build)は checkout 直挿しホストの順序である。**
-release profile のホストでは build が B と並行して行え、runner の停止は
-`current` の切替の直前だけになる(4.6)。
+**C / D in the diagram (stop runner → build) apply to checkout-direct hosts.**
+Release-profile hosts can build in parallel with B; they stop the runner only just
+before switching `current` (4.6).
 
-**backup は server を停止してから取る**。稼働中に named volume を tar すると、
-複数の DETS ファイル間で状態が混ざりうる(2026-08-12 の反映ではこの誤りが
-あった)。バックアップは唯一のロールバック手段であるため、ここは省略できない。
+**Take the backup after stopping the server.** Tarring a live named volume can mix
+state across DETS files (this mistake occurred in the 2026-08-12 rollout).
+The backup is the only rollback path, so this step is mandatory.
 
-以下のプレースホルダは各環境の値に読み替える。
+Substitute each environment's values for the placeholders below.
 
 `<server-host>` / `<repo-path>` / `<backup-dir>` / `<container>` /
 `<volume>` / `<target-sha>` / `<old-sha>` / `<old-remote-sha>` /
 `<old-local-sha>` / `<running-image-id>` / `<timestamp>` / `<uid>` / `<gid>`
 
-**(1) 旧構成を退避し、記録する**
+**(1) Preserve and record the old configuration**
 
-`docker compose build` は `kaoiro-server:latest` を新 image へ付け替える。
-**build 前に旧 image へ別の tag を付けておかないと、rollback で指す先が
-なくなる。**
+`docker compose build` retags `kaoiro-server:latest` to the new image.
+**Tag the old image separately before building or rollback will have nowhere to
+point.**
 
-**retag の元は `latest` ではなく、running container が実際に使っている
-image ID である。**`latest` は prepare 済み / 失敗後 / retry の状態では
-既に新 image を指しており、**本 runbook 自身が (2) でその状態を作る**。
-`latest` から retag すると、最悪の場合 rollback tag まで新 image になり、
-**戻す先が消える**。
+**Retag from the image ID actually used by the running container, not `latest`.**
+After prepare, failure, or retry, `latest` may already point to the new image—the
+runbook itself creates that state in (2). Retagging from `latest` can make even
+the rollback tag point to the new image, **destroying the rollback target**.
 
 ```sh
 # running container の image ID を正本として取得する
@@ -470,35 +481,35 @@ ssh <server-host> 'cd <repo-path> && git rev-parse HEAD'   # 旧 remote commit
 git -C <repo-path> rev-parse HEAD                          # 旧 local commit
 ```
 
-作業記録に残すもの: **running image ID / rollback tag / 旧 remote commit /
-旧 local commit / target SHA / backup 先 / archive の SHA-256**。
-ロールバックは「**旧 image + 対応する DETS**」の**対**で行うため、これらが
-揃っていないと復旧できない。
+Record: **running image ID / rollback tag / old remote commit / old local commit /
+target SHA / backup destination / archive SHA-256**. Rollback uses the pair
+“**old image + its DETS**”; recovery is impossible without all of these.
 
-**(2) server image を prepare(無停止)**
+**(2) Prepare the server image (no downtime)**
 
-旧 container は旧 image ID を保持したまま動き続ける。ここで失敗しても
-**稼働系への影響はゼロ**である。
+The old container keeps running with its old image ID; failure here has **zero
+impact on the live system**.
 
-**`KAOIRO_BUILD_REVISION` / `KAOIRO_BUILD_DIRTY` を明示的に渡す**(build
-identity, issue #218, [ADR-0053](../adr/0053-build-identity.md))。
-`.dockerignore` が `.git` を build context から除外しているため、
-Dockerfile 側で git を読む手段が無く、渡し忘れると `GET /api/health` が
-`build_revision: "unknown"` を返す(build 自体は失敗しない —
-observability のみへの影響に留まる)。両方とも `scripts/build-identity.mjs`
-(runner の `dist/build-info.json` 生成と同じ計算 — issue #218 round 2、
-dirty 定義を二重実装させない)から得る。`.env` へは書かない — build
-実行のその場限りの環境変数として渡す(ADR-0053 Alternatives Considered)。
+**Pass `KAOIRO_BUILD_VERSION` / `KAOIRO_BUILD_CHANNEL` /
+`KAOIRO_BUILD_REVISION` / `KAOIRO_BUILD_DIRTY` explicitly** (build identity,
+issues #218/#288, [ADR-0053](../adr/0053-build-identity.md),
+[ADR-0056](../adr/0056-project-calver-build-version.md)). Because `.dockerignore`
+excludes `.git` from the build context, the Dockerfile cannot read git; forgetting
+these values makes `GET /api/health` return an unknown development identity (the
+build still succeeds, affecting observability only). Obtain all four from
+`scripts/build-identity.mjs` (the same calculation that generates runner
+`dist/build-info.json`; issue #218 round 2 avoids two dirty definitions). Do not
+write them to `.env`; pass them as one-shot build environment variables (ADR-0053
+Alternatives Considered).
 
-**`set -a` を忘れないこと。**`scripts/build-identity.mjs` の出力は
-`KEY=VALUE` の平文2行で、`export` は含まない。`eval` だけでは呼び出し元
-シェルの非 export 変数になるだけで、`docker compose build` は別コマンド
-(別プロセス)としてそれを継承しない — `set -a` の間に `eval` すれば以降の
-代入がすべて自動 export される(issue #218 round 2 差し戻しで実際に踏んだ
-回帰: `eval "$(...)"; docker compose build` のままだと常に既定値
-`unknown` / `false` へ fall back し、MF-2 の目的が達成されない。
-`bash -c 'eval "$(printf "X=1\\n")"; bash -c "echo [\\$X]"'` が `[]` を
-返すことで実測確認済み)。
+**Do not forget `set -a`.** `scripts/build-identity.mjs` prints four plain
+`KEY=VALUE` lines without `export`. `eval` alone creates non-exported variables
+in the caller shell, and `docker compose build` is a separate process that does
+not inherit them. Running `eval` under `set -a` auto-exports subsequent
+assignments (issue #218 round 2 observed this regression after a rollback:
+leaving `eval "$(...)"; docker compose build` fell back to `unknown` / `false`,
+defeating MF-2). The behavior was measured with
+`bash -c 'eval "$(printf "X=1\\n")"; bash -c "echo [\\$X]"'`, which returns `[]`.
 
 ```sh
 ssh <server-host> 'cd <repo-path> && git fetch origin \
@@ -507,23 +518,24 @@ ssh <server-host> 'cd <repo-path> && git fetch origin \
   && cd server && docker compose build'
 ```
 
-`up -d` はまだ実行しない。
+Do not run `up -d` yet.
 
-**(3) runner を停止**
+**(3) Stop the runner**
 
-> **release profile のホストでは (3) と (4) を手で行わない。** 代わりに
-> 4.6 の `kaoiro-runner-update.sh` を 1 回実行する — build・展開・停止・
-> 切替・起動・確認までを、稼働中の release に触れない順序で行う。停止する
-> のは切替の直前だけになる。以下は checkout 直挿しのホスト向け。
+> **Do not perform (3) and (4) manually on release-profile hosts.** Run
+> `kaoiro-runner-update.sh` from 4.6 once; it builds, expands, stops, switches,
+> starts, and verifies without touching the active release. It stops the runner
+> only immediately before switching. The following applies to checkout-direct
+> hosts.
 
 ```sh
 systemctl --user stop kaoiro-runner
 ```
 
-**(4) local を target へ進め、build する**
+**(4) Advance local to the target and build**
 
-**`--frozen-lockfile` は常に実行する**。target が依存を変えていた場合、
-stale な `node_modules` のままビルドすると実行時に落ちる。
+**Always use `--frozen-lockfile`.** If the target changed dependencies, building
+with stale `node_modules` fails at runtime.
 
 ```sh
 git -C <repo-path> fetch origin && git -C <repo-path> merge --ff-only <target-sha>
@@ -531,12 +543,12 @@ pnpm -C <repo-path> install --frozen-lockfile
 pnpm -C <repo-path>/wrapper build && pnpm -C <repo-path>/runner build
 ```
 
-**ここで失敗したら 4.4 の 2 へ**。server はまだ旧 container のままなので、
-local を旧 commit へ戻せば元の構成に戻る。
+**On failure, go to 4.4 (2).** The server is still the old container, so restoring
+local to the old commit returns the original configuration.
 
-**(5) server を停止し、停止の正常性を判定する**
+**(5) Stop the server and determine whether it stopped cleanly**
 
-graceful stop し、**正常に停止したことを確認する**。
+Gracefully stop and **verify a clean shutdown**.
 
 ```sh
 ssh <server-host> 'cd <repo-path>/server && docker compose stop -t 30'
@@ -544,28 +556,28 @@ ssh <server-host> 'docker inspect <container> \
   --format "running={{.State.Running}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}}"'
 ```
 
-**`running=false` だけでは正常停止と判定できない**。timeout(`-t 30`)を
-超えて SIGKILL された場合も `running=false` になる。`exit` と `oom` を併せて
-見る(正常終了時の終了コードは実装依存なので、**平常時の値を控えておき、
-それと異なるときは異常として扱う**)。判定に迷うときは `docker logs` の末尾で
-shutdown が完走しているかを確認する。
+**`running=false` alone does not prove a clean stop.** A timeout (`-t 30`) followed
+by SIGKILL also yields `running=false`. Inspect `exit` and `oom` together (normal
+exit codes are implementation-dependent; **record the normal value and treat any
+different value as abnormal**). When uncertain, inspect the end of `docker logs`
+to confirm shutdown completed.
 
-**強制終了・異常終了が疑われる場合、この archive を rollback backup へ
-昇格させてはならない。**本 runbook は backup を**唯一の rollback 手段**と
-定義しており、consistent でないと分かった snapshot をその正本にするのは、
-自らの不変条件に反する。次の順でやり直す。
+**Do not promote this archive to the rollback backup when forced or abnormal
+termination is suspected.** This runbook defines the backup as the **only rollback
+path**; making a known-inconsistent snapshot canonical violates its invariant.
+Retry in this order.
 
-1. forensic snapshot は取ってよい。ただし **rollback backup には昇格させない**
-2. **停止済みの同じ container を再開する。**`docker compose up` は使わない —
-   この時点で remote source は target、`latest` は新 image を指しているため、
-   **compose 経由では新 image が起動してしまう**
+1. You may take a forensic snapshot, but **do not promote it to the rollback backup**.
+2. **Restart the same stopped container.** Do not use `docker compose up`: remote
+   source is now target and `latest` points to the new image, so **compose would
+   start the new image**.
 
    ```sh
    ssh <server-host> 'docker start <container>'
-   ssh <server-host> 'docker logs --tail 50 <container>'   # DETS の open / recovery を確認
+   ssh <server-host> 'docker logs --tail 50 <container>'   # inspect DETS open / recovery
    ```
 
-3. 正常に open できたら、改めて graceful stop する
+3. If it opens cleanly, gracefully stop it again.
 
    ```sh
    ssh <server-host> 'docker stop -t 30 <container>'
@@ -573,35 +585,36 @@ shutdown が完走しているかを確認する。
      --format "running={{.State.Running}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}}"'
    ```
 
-4. 正常停止を確認してから consistent backup を取り直す
-5. 正常に open / stop できない場合は、**deploy を中断する**
+4. After confirming a clean stop, retake a consistent backup.
+5. If it cannot open or stop cleanly, **abort the deployment**.
 
-**同じ container を `docker start` で再開するのには、もう一つ理由がある。**
-この分岐は (5-b) の migration より前であり、container を作り直すと
-**migration の対象そのもの(旧 container 内の ledger)が消える**。
+**There is another reason to restart the same container with `docker start`.** This
+branch precedes migration (5-b); recreating the container would **destroy the
+migration source itself (the ledger inside the old container)**.
 
-**判定できないときも中断する。**「たぶん大丈夫」で先へ進まない。
+**Abort when you cannot determine the state.** Do not proceed on “probably fine.”
 
-**(5-a) volume を解決する**
+**(5-a) Resolve the volume**
 
-volume 名を **container の mount 先から解決する**(名前を決め打ちしない)。
-**この解決を先に行う** — 以降の migration も archive も、この値を使う。
+Resolve the volume name **from the container mount** (do not hard-code it).
+**Resolve it first**; all later migration and archive steps use this value.
 
 ```sh
 ssh <server-host> 'docker inspect <container> \
   --format "{{range .Mounts}}{{if eq .Destination \"/var/lib/kaoiro\"}}{{.Name}}{{end}}{{end}}"'
 ```
 
-**出力が空でないことを確認する**。空なら mount 構成が変わっており、この先の
-archive は何も取らずに成功し、migration は対象を取り違える。
+**Confirm the output is non-empty.** Empty output means the mount layout changed;
+the archive could then succeed with nothing and migration could target the wrong
+volume.
 
-**(5-b) 【初回のみ】user ledger の migration**
+**(5-b) Migrate the user ledger (first application only)**
 
-`KAOIRO_USERS_PATH` を compose へ追加した**最初の適用**では、**現在の
-ledger が volume に無い**。旧 container はこの env 無しで起動しており、
-`KaoiroServer.Users.default_path/0` の fallback(`System.tmp_dir!()` 配下の
-`kaoiro_users.dets`)を使っているためである。**このまま recreate すると、
-compose を直した当の deploy が現在の ledger を捨てる。**
+On the **first application** that adds `KAOIRO_USERS_PATH` to compose, the
+**current ledger is not in the volume**. The old container started without this
+env and used the fallback under `System.tmp_dir!()` (`kaoiro_users.dets`) from
+`KaoiroServer.Users.default_path/0`. **Recreating it as-is would make the
+deployment that fixes compose discard the current ledger.**
 
 ```sh
 # 1. running container の実効 path を確認する
@@ -609,8 +622,8 @@ ssh <server-host> 'docker inspect <container> \
   --format "{{range .Config.Env}}{{if eq (index (split . \"=\") 0) \"KAOIRO_USERS_PATH\"}}{{.}}{{end}}{{end}}"'
 ```
 
-出力が空なら未設定 = fallback path を使っている。**設定済みならこの step は
-不要**(以後の deploy も同じ)。
+Empty output means unset and that the fallback path is in use. **If configured,
+skip this step** (and all later deployments do the same).
 
 ```sh
 # 2. 停止済みの旧 container から ledger を退避し、checksum と numeric owner を記録する
@@ -639,160 +652,157 @@ ssh <server-host> 'docker run --rm -v <volume>:/data:ro alpine ls -n /data/users
 # → owner / group / mode が既存 DETS と揃っていること
 ```
 
-**copy が成功しただけでは、authority の bit 同一性を保証しない**。必ず
-SHA-256 で照合する。
+**A successful copy alone does not guarantee bit identity with the authority.**
+Always compare SHA-256.
 
-**両方に存在する場合は、running container が実際に参照していた path を
-authority とする**。推測で merge しない。
+**If both exist, the path actually referenced by the running container is the
+authority.** Do not merge by guesswork.
 
-**退避元のファイルが存在しない場合、ledger は既に失われている**。その旨を
-作業記録へ明記し、operator の判断で進む。**黙って空の ledger を新規作成
-しない** —「失われた」と「もともと無かった」は区別する。
+**If the source file is absent, the ledger is already lost.** Record this and let
+the operator decide. **Do not silently create an empty ledger**—distinguish
+“lost” from “never existed.”
 
-**rollback しても volume を指すよう、operator の `.env` にも同じ設定を残す。**
+**Keep the same setting in the operator's `.env` so rollback also points to the
+volume.**
 
-target の compose には `environment:` として入るが、**rollback 先の旧
-compose には入っていない**。旧 source へ戻して起動すると、server は
-restore した `/var/lib/kaoiro/users.dets` を読まず、**fallback path に空の
-ledger を作り直す** — 「旧 image + 対応する DETS を対で戻す」が Users だけ
-成立しなくなる。**compose 修正を適用する deploy の rollback が、修正対象の
-ledger をまた捨てる**という形になる。
+The target compose contains this under `environment:`, but **the old rollback
+compose does not**. Starting from the old source would make the server ignore the
+restored `/var/lib/kaoiro/users.dets` and **recreate an empty ledger at the
+fallback path**. The “old image + corresponding DETS” pair would no longer hold
+for Users; rollback of the compose fix would discard the ledger it fixes.
 
-`env_file: - .env` は新旧どちらの compose にもあり、`.env` は git 管理外
-なので source を旧 commit へ戻しても残る。ここへ置けば**両方向で volume を
-指す**。
+Both compose versions use `env_file: - .env`, and `.env` is outside git, so it
+survives restoring source to the old commit. Put the setting there to **point to
+the volume in both directions**.
 
 ```sh
 ssh <server-host> 'grep -q "^KAOIRO_USERS_PATH=" <repo-path>/server/.env \
   || printf "KAOIRO_USERS_PATH=/var/lib/kaoiro/users.dets\n" >> <repo-path>/server/.env'
 ```
 
-target 側は compose の `environment:` と重複するが、**値が同じなので影響
-しない**。**この外部設定も作業記録と rollback pair に含める** — 記録から
-漏れると、次の operator が「compose を戻したのに ledger が空になる」原因を
-追えない。
+The target duplicates the compose `environment:` entry, but **the identical value
+has no effect**. **Include this external setting in the change log and rollback
+pair**; otherwise the next operator cannot trace why restoring compose produced
+an empty ledger.
 
-この migration は**次の step で取る pre-deploy archive に含まれる**ため、
-以後の deploy では通常経路に乗る。
+This migration is **included in the pre-deploy archive taken in the next step**;
+later deployments use the normal path.
 
-**(5-c) DETS を archive し、検証する**
+**(5-c) Archive and verify DETS**
 
 ```sh
 ssh <server-host> 'docker run --rm -v <volume>:/data:ro -v <backup-dir>:/backup \
   alpine tar czf /backup/kaoiro-dets-<timestamp>.tar.gz -C /data .'
 ```
 
-**検証は完全走査で行う。**
+**Verify with a complete traversal.**
 
 ```sh
 ssh <server-host> 'tar tzf <backup-dir>/kaoiro-dets-<timestamp>.tar.gz >/dev/null \
   && sha256sum <backup-dir>/kaoiro-dets-<timestamp>.tar.gz'
 ```
 
-`tar tzf ... | head -20` と書いてはならない。**pipeline の終了ステータスは
-`head` 側になり、`tar` の失敗が握りつぶされる**。壊れた archive でもファイル
-自体は存在するので `sha256sum` は成功し、「検証した」ことになってしまう。
+Do not write `tar tzf ... | head -20`. **The pipeline status comes from `head`,
+masking a `tar` failure.** A corrupt archive still exists, so `sha256sum` succeeds
+and falsely appears to verify it.
 
-内容の目視は、検証とは**別のコマンド**で行う。
+Inspect contents with a **separate command** from verification.
 
 ```sh
 ssh <server-host> 'tar tzf <backup-dir>/kaoiro-dets-<timestamp>.tar.gz | head -20'
 ```
 
-**1.2 節の 9 種がすべて含まれることを確認する**。含まれない DETS は
-volume の外にあり、この backup では復元できない。
+**Confirm that all ten paths in 1.2 are included.** Any missing DETS is outside
+the volume and cannot be restored from this backup.
 
-**(6) prepared image で server を起動**
+**(6) Start the server with the prepared image**
 
 ```sh
 ssh <server-host> 'cd <repo-path>/server && docker compose up -d --no-build'
 ```
 
-`--no-build` を付ける。ここで再 build すると (2) で検証した image と別物に
-なりうる。
+Use `--no-build`; rebuilding here could produce an image different from the one
+verified in (2).
 
-**(7) runner を起動**
+**(7) Start the runner**
 
 ```sh
 systemctl --user start kaoiro-runner
 ```
 
-### 4.4 失敗時の対応
+### 4.4 Failure handling
 
-**(0) 中止時の共通クリーンアップ**
+**(0) Common abort cleanup**
 
-**実行するタイミングは、新 container を開始したかどうかで変わる。**
+**When to run it depends on whether a new container was started.**
 
-- **新 container の開始前に中止する場合**((1) / (2)):
-  **最初に (0) を実行する**
-- **新 container の開始後、または開始したか不明な場合**((3) / (4) / (5)):
-  **(3) の restore 手順を先に実行し、その後で (0) を実行する。**
-  (0) は `latest` を旧 image へ戻したうえで **running container との
-  image ID 一致を検査する**ため、新 container が稼働したまま先に実行すると、
-  この検査が意図どおり失敗する
+- **Abort before starting a new container** ((1) / (2)): **run (0) first**.
+- **After starting a new container, or when start status is unknown** ((3) / (4) /
+  (5)): **run the restore procedure in (3) first, then (0)**. Step (0) restores
+  `latest` to the old image and **checks its image ID against the running
+  container**; running it first while the new container is active intentionally
+  fails that check.
 
-process として旧 server が動き続けていても、**それだけでは「旧構成へ戻った」
-ことにならない**。prepare が成功していれば、その時点で:
+Even if the old server process keeps running, **that alone does not restore the old
+configuration**. After a successful prepare, the state is:
 
 - remote checkout = **target**
-- `kaoiro-server:latest` = **新 image**
-- running container だけが旧 image ID
+- `kaoiro-server:latest` = **new image**
+- only the running container has the old image ID
 
-という状態になっている。**放置すると、次に誰かが `docker compose up` を
-実行しただけで、未完了の deploy が本番へ切り替わる。**
+**Leaving this state unattended lets the next `docker compose up` switch an
+incomplete deployment into production.**
 
-実行中の container には触れずに、次を戻す。
+Restore the following without touching the running container.
 
 ```sh
-# 1. remote source を旧 commit へ戻す
+# 1. Restore remote source to the old commit
 ssh <server-host> 'cd <repo-path> && git checkout <old-remote-sha>'
 
-# 2. latest を旧 image へ戻す (prepare が成功していた場合)
+# 2. Restore latest to the old image (if prepare succeeded)
 ssh <server-host> 'docker tag <running-image-id> kaoiro-server:latest'
 
-# 3. latest と running container の image ID が一致することを確認する
+# 3. Confirm latest and the running container have the same image ID
 ssh <server-host> 'docker image inspect kaoiro-server:latest --format "{{.Id}}"'
 ssh <server-host> 'docker inspect <container> --format "{{.Image}}"'
 ```
 
-prepared な新 image を別の tag で保持しておくのは構わない。**`latest` と
-production checkout だけは旧構成へ戻す。**
+It is fine to retain the prepared new image under another tag. **Restore only
+`latest` and the production checkout to the old configuration.**
 
-**`git checkout <sha>` は detached HEAD を残す**。復旧そのものには使えるが、
-production checkout がどの branch を追っていたかという運用状態は失われる。
-**rollback 中は detached である前提で扱い、復旧後に operator が branch
-pointer を戻す**。source checkout を release として分離する #219 までは、
-この限界が残る。
+**`git checkout <sha>` leaves a detached HEAD.** It works for recovery but loses
+which branch the production checkout followed. **Treat rollback as detached and
+have the operator restore the branch pointer afterward.** This limit remains until
+the source checkout is separated as a release (#219).
 
-**(1) DETS の archive または検証に失敗した**(4.3 の 5)
+**(1) DETS archive or verification failed** (4.3 step 5)
 
-新 server へ**進まない**。**(0) を実行**したうえで、**同じ container を
-再開する**。
+**Do not proceed to the new server.** Run **(0)**, then **restart the same
+container**.
 
-**`--force-recreate` を使わない。**この時点では、初回 deploy なら authority
-である fallback path の ledger を持つ**元の container がまだ残っている**。
-recreate すると **migration 元そのものを失う**。
+**Do not use `--force-recreate`.** For an initial deployment, the **original
+container containing the fallback-path ledger—the authority—still exists**;
+recreating it would **destroy the migration source**.
 
 ```sh
 ssh <server-host> 'docker start <container>'
 ```
 
-local も旧 commit へ戻し、frozen install + build してから runner を起動する
-((2) と同じ手順)。バックアップが取れない状態での更新は、**ロールバック手段を
-持たない更新**になる。
+Restore local to the old commit, run frozen install + build, then start the runner
+(same procedure as (2)). An update without a backup is an **update without a
+rollback path**.
 
-**(2) build が失敗した**(4.3 の 4)
+**(2) Build failed** (4.3 step 4)
 
-server はまだ切り替えていないので、旧 container が動いたままである。
-**ただし (0) は必要**である — prepare が成功していれば `latest` は既に新
-image を指している。
+The server has not switched, so the old container is still running. **Still run
+(0)**—if prepare succeeded, `latest` already points to the new image.
 
-そのうえで local を戻す。**`dist` を退避してあれば戻す、という復旧は限定的に
-しか使えない。**`pnpm install` が `node_modules` を書き換えた場合、`dist` だけ
-戻しても実行時の依存が食い違う。**dist-only restore が成立するのは lockfile と
-`node_modules` を変更していない場合に限る。**
+Then restore local. **Restoring a saved `dist` is only a limited recovery**:
+if `pnpm install` changed `node_modules`, restoring only `dist` leaves runtime
+dependencies inconsistent. **A dist-only restore is valid only when lockfile and
+`node_modules` were unchanged.**
 
-通常の復旧の正本は、旧 commit とそのときの lockfile でやり直すことである。
+The canonical recovery is to redo the build from the old commit and its lockfile.
 
 ```sh
 git -C <repo-path> checkout <old-local-sha>
@@ -801,22 +811,22 @@ pnpm -C <repo-path>/wrapper build && pnpm -C <repo-path>/runner build
 systemctl --user start kaoiro-runner
 ```
 
-これも取れない場合、runner は停止したままにする。**中途半端な `dist` で
-起動しない。**
+If that is unavailable, leave the runner stopped. **Do not start it with a partial
+`dist`.**
 
-**(3) 新 server が起動しない**(4.3 の 6)
+**(3) New server does not start** (4.3 step 6)
 
-**「新 server が state を開いたか」を人の判断に委ねない**。次の observable な
-境界で分ける。
+**Do not leave “did the new server open state?” to human judgment.** Use these
+observable boundaries.
 
-- **`docker compose up -d` をまだ実行していない、または container process が
-  開始していないと証明できる**: DETS の restore は不要。**(0)** を実行して
-  旧 image で起動するだけでよい
-- **一度でも新 container の開始を試みた、または開始したか不明**:
-  **state を開いたものとして扱う**。新コードが書いた DETS を旧コードが読める
-  保証は無い(issue #209 で tuple が 3→4 要素になった前例がある)
+- **`docker compose up -d` has not run, or you can prove the container process
+  never started**: no DETS restore is needed; run **(0)** and start the old image.
+- **A new container was started even once, or start status is unknown**: **treat
+  state as opened**. There is no guarantee that old code can read DETS written by
+  new code (issue #209 previously changed a tuple from 3 to 4 elements).
 
-後者の手順は次のとおり。**restore は destructive なので、順序を守る。**
+For the latter case, follow these steps. **Restore is destructive; preserve this
+order.**
 
 ```sh
 # 1. failed / new container を停止し、非 running を確認する
@@ -851,155 +861,152 @@ ssh <server-host> 'docker run --rm -v <volume>:/data -v <backup-dir>:/backup \
 ssh <server-host> 'docker run --rm -v <volume>:/data:ro alpine ls -la /data/'
 ```
 
-そのうえで **(0)** を実行し、旧 image で起動する。**起動の前に、旧 compose
-でも `KAOIRO_USERS_PATH` が container env へ入ることを確認する**(5-b で
-`.env` へ入れた設定が効いているか)。
+Then run **(0)** and start the old image. **Before starting, verify that old
+compose also puts `KAOIRO_USERS_PATH` in the container environment** (the setting
+written to `.env` in 5-b).
 
 ```sh
 ssh <server-host> 'cd <repo-path>/server && docker compose config | grep KAOIRO_USERS_PATH'
 ssh <server-host> 'cd <repo-path>/server && docker compose up -d --no-build --force-recreate'
 ```
 
-**ここで env が入っていないと、restore した `users.dets` を読まずに fallback
-path へ空の ledger を作る。**post-start rollback では**元の container が既に
-置換されている**ため、5-b で `.env` へ残した設定が唯一の経路になる。
+**Without this env the server creates an empty ledger at the fallback path instead
+of reading restored `users.dets`.** In post-start rollback the **original container
+has already been replaced**, so the `.env` setting from 5-b is the only path.
 
-**restore する backup は、その image と対になったものでなければならない。**
-「旧 image だけ」「backup だけ」の片方では戻らない。
+**The backup you restore must correspond to that image.** “Old image only” or
+“backup only” cannot restore the deployment.
 
-**(4) runner が再起動しない**(4.3 の 7)
+**(4) Runner does not restart** (4.3 step 7)
 
-`systemctl --user status kaoiro-runner` と journal を確認する。終了コード 78
-(`EX_CONFIG`)は設定エラーで、再起動では直らない(2 節「再起動ポリシーと
-終了コード」)。`dist` の欠落もこのコードになるため、(2) の復旧手順を先に
-確認する。
+Check `systemctl --user status kaoiro-runner` and the journal. Exit code 78
+(`EX_CONFIG`) is a configuration error and restart will not fix it (section 2,
+“Restart policy and exit codes”). Missing `dist` also produces this code, so first
+check the recovery procedure in (2).
 
-**この時点で新 server は既に state を開いている**。調査だけで終わらせず、
-次のどちらかへ進む。
+**At this point the new server has already opened state.** Do not stop at
+investigation; choose one of the following.
 
-- **target 側で修復できる**: 修復して runner を起動し、**4.5 を再実行する**
-- **修復できない、または rollback すると判断した**: runner を停止し、
-  **(3) の post-start rollback を実行する**。local も旧 commit +
-  frozen install / build へ戻し、旧 runner を起動する
+- **Repairable on target**: repair, start the runner, and **rerun 4.5**.
+- **Not repairable or rollback chosen**: stop the runner and run **post-start
+  rollback in (3)**. Restore local to the old commit, frozen install / build, and
+  start the old runner.
 
-**(5) 適用確認が揃わない**
+**(5) Operational checks are incomplete**
 
-4.5 の operational success がすべて揃わない場合、**更新が成功したと見なさない。**
+When any 4.5 operational-success check is missing, **do not consider the update
+successful.**
 
-**ただし「中断」は「新 server を動かし続けること」ではない**。成功条件を
-満たさない構成を本番に置いたままにするのは中断ではない。(4) と同じ 2 つの
-出口へ進む。
+**“Abort” does not mean leaving the new server running.** Keeping a configuration
+that fails success criteria in production is not an abort. Use the same two exits
+as (4).
 
-- **修復できる**: 修復して **4.5 を再実行する**
-- **修復できない、または rollback 判断**: runner を停止し、**(3) の
-  post-start rollback を実行する**
+- **Repairable**: repair and **rerun 4.5**.
+- **Not repairable or rollback chosen**: stop the runner and perform **post-start
+  rollback in (3)**.
 
-判断そのものに時間を要する場合でも、**backup を保持したまま**という条件と、
-**状態を記録する**ことは守る。
+Even if the decision takes time, **retain the backup** and **record the state**.
 
-### 4.5 適用確認と、その限界
+### 4.5 Verification and its limits
 
-確認は 2 層に分かれる。**成功と判定してよいのは operational success が
-すべて揃ったときだけ**である。
+Verification has two layers. **Declare success only when every operational-success
+check is present.**
 
-#### operational success(これが成功条件)
+#### Operational success (the success criteria)
 
-| 項目 | 確認方法 |
+| Item | Verification |
 |---|---|
-| server の source が exact target | `ssh <server-host> 'cd <repo-path> && git rev-parse HEAD'` が target SHA と一致 |
-| local の source が exact target | `git -C <repo-path> rev-parse HEAD` が同上 |
-| build が成功した | 4.3 の 2 / 4 の各コマンドが exit 0 |
-| container が stable | 一定時間(目安 60 秒)経過後も restart しておらず `docker ps` で `Up` |
-| **3 節の疎通確認が通る** | **必須で再実行する** — dashboard が開く / runner の journal で接続が継続する / host 一覧に対象 `host_id` が出る |
+| Server source is exact target | `ssh <server-host> 'cd <repo-path> && git rev-parse HEAD'` equals target SHA |
+| Local source is exact target | `git -C <repo-path> rev-parse HEAD` equals the same |
+| Build succeeded | Every command in 4.3 steps 2 / 4 exits 0 |
+| Container is stable | No restart after a reasonable interval (about 60 seconds); `docker ps` shows `Up` |
+| **Connectivity checks in section 3 pass** | **Rerun them mandatorily** — dashboard opens, runner journal shows a sustained connection, and the target `host_id` appears in the host list |
 
-**3 節の再実行は省略しない。**`docker ps` と `git log` と `dist` の中身だけでは、
-server が restart loop せずリクエストを処理できるか、runner が認証と register に
-成功するか、dashboard と host projection が動くかを何ひとつ確認できない。
+**Do not skip section 3.** `docker ps`, `git log`, and the contents of `dist` do
+not verify that the server handles requests without a restart loop, that the runner
+authenticates and registers, or that dashboard host projection works.
 
-#### provenance の確認(build identity, issue #218, [ADR-0053](../adr/0053-build-identity.md))
+#### Provenance verification (build identity, issue #218, [ADR-0053](../adr/0053-build-identity.md))
 
-「実行中の JS / image が target commit 由来である」ことは、build identity
-導入により **full SHA を返す health endpoint と runner の register 情報**
-で確認できる。
+Build identity verifies that “the running JS / image derives from the target
+commit” through a health endpoint returning the **full SHA** and runner
+registration information.
 
-| 項目 | 確認方法 |
+| Item | Verification |
 |---|---|
-| server の build_revision が target SHA と一致 | `curl <server-url>/api/health` の `build_revision` |
-| server の build_dirty が意図通り | `curl <server-url>/api/health` の `build_dirty`(target SHA での clean build なら `false`) |
-| server の OCI label が target SHA と一致 | `docker inspect kaoiro-server:latest --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'` |
-| runner の build_revision が target SHA と一致 | dashboard の host 一覧(LaunchDialog)、または runner 起動ログの `rev=<full SHA>` 行 |
-| runner --version が target SHA を返す | release profile: `<install-root>/current/deploy/kaoiro-runner-launch.sh --version`(unit が起動に使うのと同じ path を通るため、`current` の切替漏れもここに出る)。checkout 直挿し: `<repo-path>/runner/dist/cli.js --version`。いずれも config 未設置でも動く |
+| Server `build_revision` equals target SHA | `build_revision` from `curl <server-url>/api/health` |
+| Server `build_dirty` is intentional | `build_dirty` from `curl <server-url>/api/health` (`false` for a clean build at target SHA) |
+| Server OCI label equals target SHA | `docker inspect kaoiro-server:latest --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'` |
+| Runner `build_revision` equals target SHA | Dashboard host list (LaunchDialog), or the `rev=<full SHA>` line in runner startup logs |
+| Runner `--version` returns target identity | Release profile: `<install-root>/current/deploy/kaoiro-runner-launch.sh --version` (same path the unit starts, so missed `current` switches surface). Checkout-direct: `<repo-path>/runner/dist/cli.js --version`. Both work without config and print `kaoiro {channel} runner v{version} / <short-hash>` |
 
-**mtime は依然として成功根拠にならない。**`dist` ディレクトリの mtime は
-ファイルの追加・削除が無ければ更新されない。2026-08-12 の反映では、実際には
-全パッケージが再ビルドされていたにもかかわらず、3 パッケージのディレクトリ
-mtime が 10 日前を指しており、誤読しかけた。build identity 導入後も
-mtime を成功根拠に使う理由は無い。
+**mtime is still not evidence of success.** A `dist` directory mtime does not
+change when files are only rebuilt in place. During the 2026-08-12 rollout, all
+packages had been rebuilt but three directory mtimes still pointed ten days back,
+nearly causing a false conclusion. Build identity removes any reason to use mtime.
 
-**これは暗号学的な証明ではない。**`KAOIRO_BUILD_REVISION` を build する
-側が実際に build した SHA として正直に渡すことに依存しており、改ざんされた
-値を渡されればそのまま「target SHA と一致」の判定を通す。署名付き
-attestation の導入は本 issue のスコープ外。SHA の不一致自体は deploy を
-reject する条件にしない(ADR-0053)— docs-only commit / backport /
-rolling window のいずれでも正当に食い違いうるため、あくまで**この runbook
-の成功判定**としての一致確認である。
+**This is not cryptographic proof.** It relies on the builder honestly passing the
+SHA it built as `KAOIRO_BUILD_REVISION`; a tampered value passes the “equals target
+SHA” check. Signed attestation is outside this issue. A SHA mismatch is not itself
+a deploy-rejection condition (ADR-0053)—docs-only commits, backports, and rolling
+windows can legitimately differ; equality is only the **success check for this
+runbook**.
 
-### 4.6 release profile への移行と、以後の更新(issue #219)
+### 4.6 Migrate to the release profile and update thereafter (issue #219)
 
-[ADR-0018](../adr/0018-runner-distribution.md)(2026-08-16 改訂)の
-immutable release + atomic switch。**4.1 の in-place build 制約を解消するのは
-コードのマージではなく、ホストごとのこの移行である。**
+[ADR-0018](../adr/0018-runner-distribution.md) (revised 2026-08-16) defines
+immutable releases with an atomic switch. **The 4.1 in-place-build limit is
+removed by this per-host migration, not by merging code.**
 
-#### レイアウト
+#### Layout
 
 ```text
 <install-root>/
-  releases/<revision>[-dirty]/   # tarball の展開先。以後不変
-  current  -> releases/<revision>   # unit の ExecStart はここを通る
-  previous -> releases/<revision>   # rollback 先
+  releases/<revision>[-dirty]/   # tarball expansion; immutable thereafter
+  current  -> releases/<revision>   # unit ExecStart goes through this
+  previous -> releases/<revision>   # rollback target
 ```
 
-`<install-root>` の既定は Linux `${XDG_DATA_HOME:-~/.local/share}/kaoiro`、
-macOS `~/Library/Application Support/kaoiro`。`KAOIRO_RUNNER_INSTALL_DIR`
-または各スクリプトの `--install-dir` で上書きできる。
+The default `<install-root>` is Linux `${XDG_DATA_HOME:-~/.local/share}/kaoiro`
+and macOS `~/Library/Application Support/kaoiro`. Override with
+`KAOIRO_RUNNER_INSTALL_DIR` or each script's `--install-dir`.
 
-**ディスクを見積もること**。展開後の release は **1 本あたり約 1.2 GB**
-(2026-08-16、linux-x64 を実測)。engine CLI の実体が約 920 MB を占める。
-既定の保持世代数は 3(`--keep`)なので、定常状態で 3〜4 GB を使う。
+**Estimate disk space.** An expanded release is **about 1.2 GB each** (measured
+linux-x64 on 2026-08-16); the engine CLI itself is about 920 MB. The default
+retention is three generations (`--keep`), using 3–4 GB in steady state.
 
-`.lock.*`(排他 lock)と `.staging.*`(展開・build の作業領域)も
-install root 直下に作られる。SIGKILL などで EXIT trap に到達しなかった run
-の staging は、**次の run が lock を取った直後に GC する**ため放置しても
-積み上がらない。
+`.lock.*` (exclusive locks) and `.staging.*` (expansion/build work areas) are
+created directly under the install root. Staging from a run that missed its EXIT
+trap (for example SIGKILL) is **garbage-collected immediately after the next run
+acquires the lock**, so it does not accumulate.
 
-**GC は prefix 単位で、各スクリプトが自分の作った分だけを対象にする** —
-install は `.staging.install.*`、update は `.staging.build.*` のみ。削除を
-正当化するのは「このスクリプトの他の run が走っていない」ことで、それは
-自分の lock が保証する範囲に限られる。install と update は別の lock を持ち、
-しかも update は install を呼ぶため、両方にまたがる glob では **nested install
-が update の使用中の build ディレクトリを消していた** (`--from-repo` が
-全滅していた。issue #219 レビュー round 2)。lock ディレクトリは `.lock.*` と
-接頭辞を分けてあり、どちらの glob にも掛からない。
+**GC is prefix-scoped; each script targets only what it created**—install only
+`.staging.install.*`, update only `.staging.build.*`. Deletion is justified only
+when no other run of that script is active, within the scope guaranteed by its
+lock. Install and update have separate locks, and update calls install; a glob
+spanning both once let a **nested install delete an update's in-use build
+directory** (`--from-repo` failed entirely; issue #219 review round 2). Lock
+directories use the `.lock.*` prefix and match neither glob.
 
-#### activation の契約(何が `current` になれるか)
+#### Activation contract (what may become `current`)
 
-| 対象 | 契約 |
+| Target | Contract |
 |---|---|
-| `current` になれる id | **clean な 40 桁 hex のみ**。`-dirty` / `unknown` は `--allow-dirty` を明示した dev ホストに限る |
-| clean release の再 install | **置き換え不可**(content-addressed なので再 install は no-op)。フラグも用意していない |
-| dirty / unknown の再 install | 既定で拒否。`--allow-dirty` で置換可。`current` / `previous` が指す間は不可 |
-| rollback | gate なし。`previous` は一度 activate 済みのため |
+| ID eligible for `current` | **Only a clean 40-digit hex**. `-dirty` / `unknown` require explicit `--allow-dirty` on a dev host |
+| Reinstall a clean release | **Cannot replace** (content-addressed; reinstall is a no-op and has no override flag) |
+| Reinstall dirty / unknown | Rejected by default; `--allow-dirty` permits replacement, but not while pointed to by `current` / `previous` |
+| Rollback | No gate; `previous` was activated once already |
 
-**本番更新の前に `git status --porcelain` が空であることを確認する。**
-dirty な tree から build すると id が `-dirty` になり、更新は
-**runner を停止する前に**拒否される([ADR-0018](../adr/0018-runner-distribution.md)
-の release identity の契約)。`--allow-dirty` は開発ホスト向けであり、
-本番で使うと `current` が「中身の決まらない名前」になる。
+**Before a production update, confirm `git status --porcelain` is empty.** A build
+from a dirty tree produces a `-dirty` ID and is rejected **before stopping the
+runner** (the release-identity contract in [ADR-0018](../adr/0018-runner-distribution.md)).
+`--allow-dirty` is for development hosts; in production it makes `current` a name
+whose contents are not fixed.
 
-#### 4.6.1 checkout 直挿しからの移行(オペレータ作業、ホストごとに 1 回)
+#### 4.6.1 Migrate from checkout-direct (operator action, once per host)
 
-**稼働中の runner に触れるのは (6) だけである**。エージェントが切断されるのも
-(6) の再起動のときだけ(2 節「常駐化」の注意がそのまま当てはまる)。
+**Only step (6) touches the running runner.** Agents disconnect only when it is
+restarted there (the warning in section 2 “Run as a service” applies).
 
 ```sh
 # 1. 現在の稼働状態を記録する。移行後に比較する基準になる
@@ -1033,15 +1040,15 @@ systemctl --user status kaoiro-runner
 "$install_root/current/deploy/kaoiro-runner-launch.sh" --version
 ```
 
-(7) の `--version` が (1) で記録した値と一致し、`status` が `active
-(running)` であること。3 節の疎通確認も再実行する。
+Confirm (7)'s `--version` matches the value recorded in (1) and `status` is
+`active (running)`. Rerun the connectivity checks in section 3.
 
-**移行後、repo の `dist` はもう live path ではない**。repo は build 元に
-なる。`pnpm -C runner build` を打っても稼働中の runner は影響を受けない。
+**After migration, the repo's `dist` is no longer the live path.** The repo is a
+build source; `pnpm -C runner build` does not affect the running runner.
 
-#### 4.6.2 以後の更新
+#### 4.6.2 Subsequent updates
 
-repo を target SHA へ進めてから、**1 コマンド**で行う。
+Advance the repo to the target SHA, then run the update as **one command**.
 
 ```sh
 install_root="${XDG_DATA_HOME:-$HOME/.local/share}/kaoiro"
@@ -1053,26 +1060,27 @@ git -C <repo-path> status --porcelain   # 空であること
   --from-repo <repo-path> --detach
 ```
 
-順に build → install → 停止 → 切替 → 起動 → identity 照合 → prune を行う。
-**停止するのは切替の直前だけ**で、build と展開は稼働中の release に触れない。
-build か展開に失敗した場合は**停止に到達せず**、旧 runner がそのまま動き続ける。
+It performs build → install → stop → switch → start → identity check → prune in
+order. **Stopping happens only immediately before switching**; build and expansion
+never touch the active release. If build or expansion fails, it **never reaches
+stop** and the old runner keeps running.
 
-`--detach` は、この更新を `systemd-run --user --no-block` の transient
-**service** unit へ queue する。**runner 配下のエージェントから実行するとき
-は必ず付けること** — 付けないと、停止した瞬間に実行者自身が消えて後続が
-走らない。
+`--detach` queues the update as a transient **service** unit via
+`systemd-run --user --no-block`. **Always use it when running from an agent under
+the runner**; without it, stopping the runner kills the caller and later steps
+never run.
 
-**効いているのは cgroup であって process group ではない。**
-`systemd.kill(5)` の既定は `KillMode=control-group` で、unit の停止時に
-その cgroup の全プロセスを殺す。逃れられるのは transient service unit が
-**service manager を親とする独立した cgroup** になるためで、`--scope` を
-付けるとこの性質が失われる(caller の実行環境を継承し、同期実行になる)。
+**The isolation is by cgroup, not process group.** The `systemd.kill(5)` default
+`KillMode=control-group` kills every process in a unit's cgroup when it stops. The
+transient service escapes because it gets an **independent cgroup whose parent is
+the service manager**; adding `--scope` removes this property (inherits the
+caller's environment and runs synchronously).
 
-**`--detach` は成功を報告しない。**`--no-block` は start request が
-「only verified and enqueued」された時点で返る(`systemd-run(1)`)ため、
-このコマンドが返った時点で更新は**開始すらしていない**。出力は enqueue した
-unit 名と確認コマンドだけで、終了ステータスは結果について何も語らない。
-**最終確認はオペレータが行う**。
+**`--detach` does not report success.** With `--no-block`, `systemd-run(1)` returns
+once the start request is “only verified and enqueued”; when this command returns,
+the update **may not have started**. Output contains only the enqueued unit name
+and check commands; its exit status says nothing about the result. **The operator
+performs final verification.**
 
 ```sh
 journalctl --user -u kaoiro-runner-update.service -f
@@ -1080,24 +1088,25 @@ systemctl --user status kaoiro-runner-update.service
 "$install_root/current/deploy/kaoiro-runner-launch.sh" --version
 ```
 
-主なオプション:
+Main options:
 
-| オプション | 既定 | 意味 |
+| Option | Default | Meaning |
 |---|---|---|
-| `--from-repo <path>` | — | repo から tarball を作って install する |
-| `--tarball <path>` | — | 既にある tarball を install する(配布ホスト向け) |
-| `--service <name>` | `kaoiro-runner` | 対象の systemd user unit |
-| `--keep <n>` | `3` | 保持世代数。`current` / `previous` は対象外 |
-| `--install-dir <dir>` | 上記の既定 | install root |
-| `--allow-dirty` | — | `-dirty` / `unknown` の activation を許す。**開発ホスト専用** |
+| `--from-repo <path>` | — | Build a tarball from the repo and install it |
+| `--tarball <path>` | — | Install an existing tarball (for distribution hosts) |
+| `--service <name>` | `kaoiro-runner` | Target systemd user unit |
+| `--keep <n>` | `3` | Generations to retain; excludes `current` / `previous` |
+| `--install-dir <dir>` | Above default | Install root |
+| `--allow-dirty` | — | Allow activation of `-dirty` / `unknown`; **development hosts only** |
 
-`current` / `previous` が指す release は `--keep` に関わらず削除しない。
-runner は codex wrapper を**初回 codex spawn まで解決しない**ため、稼働中の
-release は起動後もずっと読まれ続ける — 消すと、まだ起きていない spawn が壊れる。
+Never delete the release referenced by `current` / `previous`, regardless of
+`--keep`. The runner **does not resolve the Codex wrapper until the first Codex
+spawn**, so the active release continues to be read after startup; deleting it
+breaks a spawn that has not happened yet.
 
-#### 4.6.3 rollback
+#### 4.6.3 Rollback
 
-切替後に問題が出た場合、直前の release へ戻す。
+If a problem appears after switching, return to the previous release.
 
 ```sh
 install_root="${XDG_DATA_HOME:-$HOME/.local/share}/kaoiro"
@@ -1106,25 +1115,25 @@ systemctl --user stop kaoiro-runner
 systemctl --user start kaoiro-runner
 ```
 
-**スクリプトは `previous` 側から実行する。**`current` 側の release が壊れて
-いるからこそ戻すのであり、その中のスクリプトが動く保証はない。
+**Run the script from `previous`.** The `current` release is being rolled back
+because it may be broken, so its scripts are not trusted.
 
-更新中に切替そのものが失敗した場合、`kaoiro-runner-update.sh` は
-`current` を動かさないまま service を起動し直して非ゼロで終了する。この場合
-rollback は不要 — 既に旧 release で動いている。
+If switching itself fails during an update, `kaoiro-runner-update.sh` restarts the
+service without moving `current` and exits non-zero. No rollback is needed; it is
+already running the old release.
 
-#### 4.6.4 テストが担保しないこと(実機で 1 回確認する)
+#### 4.6.4 What tests do not guarantee (verify once on real hardware)
 
-決定論的なテストが pin しているのは、更新スクリプトが `systemd-run` へ渡す
-引数(`--user` / `--no-block` / 専用 unit 名 / **`--scope` を付けない** /
-`PartOf` を付けない / updater を絶対パスで渡す)と、worker 側の順序
-(stop → 切替 → start、および停止前に決着できる拒否は停止前に行う)である。
+Deterministic tests pin the arguments passed by the update script to `systemd-run`
+(`--user` / `--no-block` / a dedicated unit name / **no `--scope`** / no `PartOf` /
+an absolute updater path) and worker ordering (stop → switch → start, with
+rejections that can be decided before stopping handled before the stop).
 
-**pin していないのは「`systemd-run --user --no-block` が実際に caller と
-別の cgroup で unit を起こす」という systemd 側の挙動である。**これをテスト
-で確かめるにはホストの user systemd インスタンスを共有する必要があり、
-そこには稼働中の runner がいる。したがって**実機で 1 回、オペレータが確認
-する** — ただし**本番の runner は使わない**。使い捨ての probe unit で足りる。
+**Tests do not pin systemd's behavior that `systemd-run --user --no-block` starts
+the unit in a cgroup separate from the caller.** Testing it requires sharing the
+host user-systemd instance, which has the active runner. Therefore **an operator
+checks once on real hardware**, but **never use the production runner**; a
+disposable probe unit is sufficient.
 
 ```sh
 # 1. caller unit を作り、その中から updater と同じ形で worker を queue する
@@ -1157,25 +1166,27 @@ systemctl --user reset-failed kaoiro-selftest-caller.service \
 rm -f "$HOME/kaoiro-selftest.sentinel"
 ```
 
-(2) が「別 cgroup」、(4) が「caller の停止後も完走」を示す。この 2 つが
-`kaoiro-runner-update.sh --detach` の前提であり、上記の argv 契約テストが
-「同じ形で起動していること」を保証する。**本番の runner service にも
-`kaoiro-runner-update` unit にも触れない**ので、いつ実行してもよい。
+Step (2) proves a separate cgroup and (4) proves completion after stopping the
+caller. These are the prerequisites for `kaoiro-runner-update.sh --detach`; the
+argv contract tests above ensure it starts in the same form. **Neither the
+production runner service nor the `kaoiro-runner-update` unit is touched**, so run
+this check at any time.
 
-**実測記録(2026-08-16、linux-host / Linux 6.8.0-137-generic、systemd user
-instance)**: caller は
-`/user.slice/user-1000.slice/user@1000.service/app.slice/kaoiro-selftest-caller.service`、
-worker は同 `app.slice/kaoiro-selftest-worker.service` と**別 cgroup** に
-入り、caller を `systemctl --user stop` した後も worker は sentinel を書いて
-`Result=success` で終了した。稼働中の `kaoiro-runner` は `active` のまま
-影響を受けていない。**ホストが変われば再実測すること** — これはこの 1 台で
-観測した事実であって、systemd の全構成についての保証ではない。
+**Measurement record (2026-08-16, linux-host / Linux 6.8.0-137-generic, systemd
+user instance):** the caller entered
+`/user.slice/user-1000.slice/user@1000.service/app.slice/kaoiro-selftest-caller.service`,
+while the worker entered a **separate cgroup** at the same `app.slice/kaoiro-selftest-worker.service`.
+After `systemctl --user stop` stopped the caller, the worker wrote its sentinel and
+exited `Result=success`; the active `kaoiro-runner` remained unaffected. **Repeat
+the measurement when the host changes**—this is observed on one host, not a
+guarantee for every systemd configuration.
 
 ## See Also
 
-- [auth-and-authz](auth-and-authz.md) — 3 種トークンの未設定時挙動の詳細
-- [setup-wizards](setup-wizards.md) — **初回配備**の env / config 生成を自動化する
-  対話ウィザード。4 節の更新手順は対象外(自動化は #218 / #219 / #220)
-- [runner/README.md](../../runner/README.md) — 常駐化・tarball 配布の全文
-- [server/README.md](../../server/README.md) — ローカル開発・Docker の基本
-- [threat-model](threat-model.md) — dev fallback / token 未設定のリスク評価
+- [auth-and-authz](auth-and-authz.md) — details of unset behavior for the three tokens
+- [setup-wizards](setup-wizards.md) — interactive wizard automating env / config
+  generation for **initial deployment**; section 4 updates are out of scope
+  (automation in #218 / #219 / #220)
+- [runner/README.md](../../runner/README.md) — full service and tarball-distribution guide
+- [server/README.md](../../server/README.md) — local development and Docker basics
+- [threat-model](threat-model.md) — risk assessment for dev fallback / unset tokens

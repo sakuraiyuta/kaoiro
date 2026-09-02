@@ -12,6 +12,10 @@ export interface Settings {
    *  されない (ADR-0021) ので、この設定は operator 限定表示を別途判定せず
    *  自然に満たす。既定 on。 */
   agentCardStatsEnabled: boolean;
+  /** AgentDetail のログから tool_use/tool_result kind を隠す (issue #228)。
+   *  system・ターン境界・assistant/user 本文は対象外で常時表示 — この設定
+   *  では gate しない。既定 off (導入前の表示を変えない)。 */
+  hideNonMessageLogEntries: boolean;
 }
 
 export const SETTINGS_STORAGE_KEY = "kaoiro:settings:v1";
@@ -20,6 +24,7 @@ export const DEFAULT_SETTINGS: Settings = {
   notificationSoundEnabled: true,
   notificationSoundVolume: 0.7,
   agentCardStatsEnabled: true,
+  hideNonMessageLogEntries: false,
 };
 
 function clampVolume(value: number): number {
@@ -46,10 +51,15 @@ export function loadSettings(): Settings {
       typeof parsed.agentCardStatsEnabled === "boolean"
         ? parsed.agentCardStatsEnabled
         : DEFAULT_SETTINGS.agentCardStatsEnabled;
+    const hideNonMessageLogEntries =
+      typeof parsed.hideNonMessageLogEntries === "boolean"
+        ? parsed.hideNonMessageLogEntries
+        : DEFAULT_SETTINGS.hideNonMessageLogEntries;
     return {
       notificationSoundEnabled: enabled,
       notificationSoundVolume: volume,
       agentCardStatsEnabled,
+      hideNonMessageLogEntries,
     };
   } catch {
     return { ...DEFAULT_SETTINGS };
@@ -80,6 +90,9 @@ export function updateSettings(patch: Partial<Settings>): void {
   }
   if (patch.agentCardStatsEnabled !== undefined) {
     settings.agentCardStatsEnabled = patch.agentCardStatsEnabled;
+  }
+  if (patch.hideNonMessageLogEntries !== undefined) {
+    settings.hideNonMessageLogEntries = patch.hideNonMessageLogEntries;
   }
   saveSettings(settings);
 }

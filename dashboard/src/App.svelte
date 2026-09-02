@@ -4,6 +4,7 @@
   import AgentDetail from "./lib/AgentDetail.svelte";
   import AgentGridShell from "./lib/AgentGridShell.svelte";
   import LaunchDialog from "./lib/LaunchDialog.svelte";
+  import PersonaDetailDialog from "./lib/PersonaDetailDialog.svelte";
   import PersonaFace from "./lib/PersonaFace.svelte";
   import SettingsDrawer from "./lib/SettingsDrawer.svelte";
   import { adjacentAgentId } from "./lib/agentNavigation";
@@ -40,6 +41,7 @@
     SpawnResult,
     TaskTable,
     TicketRefreshResult,
+    WrapperBuildInfo,
   } from "./lib/protocol";
   import {
     connectKaoiro,
@@ -68,8 +70,14 @@
     requestNotificationPermission,
   } from "./lib/notify";
   import { RELATIVE_TIME_TICK_MS } from "./lib/relativeTime";
+  import {
+    clientBuildIdentity,
+    formatBuildIdentity,
+  } from "./lib/buildIdentity";
 
   let agents = $state<Record<string, Envelope>>({});
+  let snapshotIncomplete = $state(false);
+  let deliverySnapshotIncomplete = $state(false);
   // Active subagent/workflow tasks (ADR-0019/0047/0048, issue #180),
   // nested agent_id -> task_id -> latest task envelope (M1 fix-round
   // composite key, 2026-08-09). Operator-only, twin of `directory`'s
@@ -83,6 +91,7 @@
   // slot).
   let tasks = $state<TaskTable>({});
   let deliveries = $state<Record<string, InterAgentDeliveryStatus>>({});
+  let wrapperBuildInfos = $state<Record<string, WrapperBuildInfo>>({});
   // Restart-surviving identity ledger (ADR-0030) — every agent_id we have
   // ever spawned, with its persona. Merged with `agents` (live) below to
   // surface offline entries in their own section with a restore button.
@@ -194,6 +203,15 @@
   // Client-side settings drawer (#85, operator- and viewer-visible: it only
   // touches localStorage, no server round-trip).
   let showSettings = $state(false);
+  // Persona pack detail modal (issue #232): the persona id whose detail
+  // is open, or null. issue #232 MF-1 (director decision): the server
+  // endpoint (GET /api/personas/:id) is operator/admin only — a custom
+  // pack's personality.md is a system prompt that may carry proprietary
+  // operating instructions. The 3 `onOpenPersonaDetail` wiring sites
+  // below gate on `isOperator` so a viewer session never even shows the
+  // click affordance; viewer disclosure is a separate future decision
+  // (ADR-0021 F7).
+  let personaDetailId = $state<string | null>(null);
   let spawnNotice = $state<string | null>(null);
   let spawnNoticeTimer: ReturnType<typeof setTimeout> | undefined;
   // spawn の immediate reply は新 agent が state_change を出す前に届くため、
@@ -563,29 +581,66 @@
           // A fresh connection: everything the previous one buffered belongs
           // to a projection this connection has not been told about yet, and
           // its replay markers can never be completed (the wrapper restarts
-          // its own handshake per connection). Both go now, before the first
-          // envelope of the new window arrives.
+          // its own handshake per connection). The three independently pushed
+          // snapshot projections go with them, before the first new frame
+          // arrives, so a partial rejoin is absent rather than mixed-generation.
           connectionGeneration += 1;
+          agents = {};
+          tasks = {};
+          deliveries = {};
+          wrapperBuildInfos = {};
+          snapshotIncomplete = false;
+          deliverySnapshotIncomplete = false;
           awaitingHistory = true;
           liveSinceJoin = {};
           activeTimelineReplays = retainTimelineReplaysOfGeneration(
             activeTimelineReplays,
             connectionGeneration,
           );
+          // issue #276 review follow-up (ふじ round3 must-fix): `hosts`
+          // and the `isOperator` it implies were the ONE projection this
+          // reset list omitted. onHosts (below) is the only place that
+          // sets isOperator = true, so a role downgrade mid-session
+          // (server-side role drift disconnects the socket; agents_channel.ex
+          // only pushes "hosts" to an operator-capable role on join) means
+          // the rejoin as a viewer never fires onHosts again — isOperator
+          // stayed true from the PREVIOUS, since-revoked operator session.
+          // The server still rejects any operator-only call, so this was
+          // never a privilege escalation, but the client kept showing
+          // operator-only UI (launch dialog, SettingsDrawer's conversation
+          // list) and its state to a session that no longer qualifies.
+          // Reset here so only a genuine operator-capable rejoin (which
+          // DOES get a fresh "hosts" push) re-raises the flag.
+          hosts = [];
+          isOperator = false;
           // issue #228 round 2 MF-4: every (re)join can follow a server
           // redeploy, so the health snapshot fetched at mount may already
           // be stale by the time this fires.
           refreshServerHealth();
         },
         onSnapshot: (next) => (agents = next),
+        onSnapshotIncomplete: (incomplete) => (snapshotIncomplete = incomplete),
         onTaskSnapshot: (next) => (tasks = next),
         onDeliverySnapshot: (next) => (deliveries = next),
+        onDeliverySnapshotIncomplete: (incomplete) => (deliverySnapshotIncomplete = incomplete),
         onDeliveryStatus: (agentId, delivery) => {
           if (delivery === null) {
             const { [agentId]: _removed, ...remaining } = deliveries;
             deliveries = remaining;
           } else {
             deliveries = { ...deliveries, [agentId]: delivery };
+          }
+        },
+        onWrapperBuildInfoSnapshot: (next) => {
+          wrapperBuildInfos = next;
+          isOperator = true;
+        },
+        onWrapperBuildInfo: (agentId, info) => {
+          if (info === null) {
+            const { [agentId]: _removed, ...remaining } = wrapperBuildInfos;
+            wrapperBuildInfos = remaining;
+          } else {
+            wrapperBuildInfos = { ...wrapperBuildInfos, [agentId]: info };
           }
         },
         onEnvelope: (envelope) => {
@@ -889,6 +944,10 @@
           if (agentId in deliveries) {
             const { [agentId]: _drop, ...remaining } = deliveries;
             deliveries = remaining;
+          }
+          if (agentId in wrapperBuildInfos) {
+            const { [agentId]: _drop, ...remaining } = wrapperBuildInfos;
+            wrapperBuildInfos = remaining;
           }
           if (logs[agentId]) {
             logs = Object.fromEntries(
@@ -1228,6 +1287,7 @@
     // Don't keep the previous session's data behind the login form.
     agents = {};
     logs = {};
+    wrapperBuildInfos = {};
     liveSinceJoin = {};
     awaitingHistory = false;
     projectionEpoch = null;
@@ -1399,7 +1459,26 @@
   </main>
 {:else if authChecked}
 <header>
-  <h1>kaoiro</h1>
+  <div class="brand">
+    <h1>kaoiro</h1>
+    <div class="build-identities" aria-label="ビルド情報">
+      <span data-component="server">
+        {formatBuildIdentity(
+          "server",
+          serverHealth === null
+            ? { version: "unknown", channel: "dev", revision: "unknown" }
+            : {
+                version: serverHealth.build_version,
+                channel: serverHealth.build_channel,
+                revision: serverHealth.build_revision,
+              },
+        )}
+      </span>
+      <span data-component="client">
+        {formatBuildIdentity("client", clientBuildIdentity)}
+      </span>
+    </div>
+  </div>
   {#if selectedEnvelope && sorted.length > 1}
     <nav class="agent-strip" aria-label="エージェント一覧">
       {#each sorted as envelope (envelope.agent_id)}
@@ -1473,6 +1552,17 @@
   <p class="spawn-notice" role="status">{spawnNoticeText}</p>
 {/if}
 
+{#if snapshotIncomplete || deliverySnapshotIncomplete}
+  <p class="snapshot-notice" role="status">
+    {#if snapshotIncomplete}
+      一部のエージェントは snapshot の上限により表示されていません。
+    {/if}
+    {#if deliverySnapshotIncomplete}
+      一部の inter-agent 配送確認は snapshot の上限により表示されていません。
+    {/if}
+  </p>
+{/if}
+
 {#if showLaunch && connection}
   <LaunchDialog
     {hosts}
@@ -1485,7 +1575,18 @@
 {/if}
 
 {#if showSettings}
-  <SettingsDrawer onClose={() => (showSettings = false)} onLogout={logout} />
+  <SettingsDrawer
+    onClose={() => (showSettings = false)}
+    onLogout={logout}
+    connection={isOperator ? (connection ?? undefined) : undefined}
+  />
+{/if}
+
+{#if personaDetailId !== null}
+  <PersonaDetailDialog
+    personaId={personaDetailId}
+    onClose={() => (personaDetailId = null)}
+  />
 {/if}
 
 <main>
@@ -1520,6 +1621,7 @@
           )}
           tasklist={tasklistForDetail(selectedEnvelope, tasks)}
           deliveryStatus={deliveries[selectedEnvelope.agent_id] ?? null}
+          wrapperBuildInfo={wrapperBuildInfos[selectedEnvelope.agent_id] ?? null}
           onClose={() => {
             timelineScrollTarget = null;
             selected = null;
@@ -1536,6 +1638,7 @@
             }
           }}
           onRename={isOperator && connection ? connection.renameAgent : undefined}
+          onOpenPersonaDetail={isOperator ? (id) => (personaDetailId = id) : undefined}
         />
       </div>
       {#if nextAgentId}
@@ -1629,6 +1732,7 @@
                 onDelete={connection
                   ? () => connection!.deleteAgent(envelope.agent_id)
                   : undefined}
+                onOpenPersonaDetail={isOperator ? (id) => (personaDetailId = id) : undefined}
               />
             </li>
           {/each}
@@ -1695,6 +1799,7 @@
                   onDelete={connection
                     ? () => connection!.deleteAgent(tile.id)
                     : undefined}
+                  onOpenPersonaDetail={isOperator ? (id) => (personaDetailId = id) : undefined}
                 />
               </li>
             {/each}
@@ -1724,6 +1829,12 @@
     border-bottom: 1px solid var(--line);
   }
 
+  .brand {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+
   /* short (max-height 500px): 縦圧縮 override — header の縦 padding のみ。
      横方向のレイアウトは幅トークンが決めるので触らない (ADR-0052 F8). */
   @media (max-height: 500px) {
@@ -1747,6 +1858,16 @@
     letter-spacing: 0;
     color: var(--fg-dim);
     font-size: 0.8em; /* em-relative to parent h1; do not tokenize */
+  }
+
+  .build-identities {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.8rem;
+    color: var(--fg-dim);
+    font-size: var(--fs-micro);
+    letter-spacing: 0;
+    line-height: 1.2;
   }
 
   .conn {
@@ -2195,6 +2316,17 @@
       max(2rem, env(safe-area-inset-left));
     font-size: var(--fs-body-sm);
     color: var(--fg-dim);
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--line);
+  }
+
+  .snapshot-notice {
+    flex: 0 0 auto;
+    margin: 0;
+    padding: 0.4rem max(2rem, env(safe-area-inset-right)) 0.4rem
+      max(2rem, env(safe-area-inset-left));
+    font-size: var(--fs-body-sm);
+    color: var(--c-error);
     background: var(--bg-card);
     border-bottom: 1px solid var(--line);
   }

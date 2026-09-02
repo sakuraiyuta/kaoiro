@@ -1,6 +1,6 @@
 ---
-title: ファイルアップロード — EXIF / メタデータ stripping の必要性
-description: アップロード画像の EXIF / メタデータ(撮影位置・ 機器情報など)を wrapper で strip するかの未決論点。プライバシー観点。
+title: File upload — need for EXIF / metadata stripping
+description: Open question on whether the wrapper should strip EXIF / metadata (shooting location, device information, and so on) from uploaded images. Privacy concern.
 status: open
 urgency: low
 blocks: []
@@ -10,38 +10,40 @@ decided: null
 
 ## 背景
 
-[ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md) は MVP
-で添付バイト列を wrapper → SDK にそのまま通す方針。 画像の EXIF には
-撮影位置 / 機器 / 撮影時刻 等が含まれる場合があり、 機微画像運用が出てきた
-場合は wrapper で strip する必要が出る。 現状は dogfooding 中心のため
-未決。
+[ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md) specifies
+that the MVP passes attachment bytes directly from wrapper → SDK. Image EXIF
+may contain location / device / capture time and other data, so the wrapper may
+need to strip it if sensitive-image operation becomes common. It remains
+undecided because current use centers on dogfooding.
 
 ## 選択肢
 
-| 案 | 内容 | メリット | デメリット |
+| Option | Content | Advantages | Disadvantages |
 |--|--|--|--|
-| A | そのまま wrapper → SDK へ通す(MVP) | 実装最小、 元データ忠実性 | 機微 EXIF が漏れる |
-| B | wrapper で strip(opt-out 可)| プライバシー safe | strip 実装(sharp 等)が追加、 元情報が必要なケース(写真分析等)で困る |
-| C | client の picker で選択時に strip / そのまま を選ばせる UX | ユーザ意思反映 | UX 複雑化、 client / wrapper 両方に実装 |
+| A | Pass through wrapper → SDK unchanged (MVP) | Minimal implementation; fidelity to the original data | Sensitive EXIF may leak |
+| B | Strip in the wrapper (opt-out available) | Privacy-safe | Adds a stripping implementation (sharp, etc.); causes trouble where original information is needed (photo analysis, etc.) |
+| C | Let the user choose strip / unchanged in the client picker | Respects user intent | More complex UX; implementation in both client / wrapper |
 
 ## 影響
 
-A の場合は protocol / 実装不変。 B / C 採用時は wrapper の fit-to-SDK
-処理の前段に strip ステップが入る(画像のみ)。 protocol 不変
-(wrapper-internal 実装)。
+With A, the protocol / implementation is unchanged. With B / C, add a stripping
+step before the wrapper's fit-to-SDK processing (images only). The protocol is
+unchanged (wrapper-internal implementation).
 
 ## 判断材料
 
-- 機微 EXIF を含む画像を運用で扱う場面が出るか
-- 撮影位置等を残したい正当ユースケース(地理情報込みの画像分析)とのバランス
-- fit-to-SDK で採用予定の image ライブラリ(sharp 等)の EXIF API
+- Whether operation will involve images containing sensitive EXIF
+- Balance with legitimate use cases that need location and similar data retained
+  (image analysis including geographic information)
+- EXIF API of the image library planned for fit-to-SDK (sharp, etc.)
 
 ## 暫定方針
 
-A — MVP では strip しない。 機微画像運用が出たら B(opt-out 可)を検討。
+A — Do not strip in the MVP. Consider B (opt-out available) if sensitive-image
+operation becomes necessary.
 
-## 解決時のアクション
+## Actions upon resolution
 
-- [ ] EXIF strip 仕様(opt-out フラグの位置・ デフォルト)を spec 化
-- [ ] wrapper の fit-to-SDK 前段に strip ステップ追加
-- [ ] ADR 昇格、 本ファイル削除
+- [ ] Specify EXIF stripping (opt-out flag location / default)
+- [ ] Add a stripping step before wrapper fit-to-SDK
+- [ ] Promote to an ADR and delete this file

@@ -1,65 +1,66 @@
 ---
-title: 共通イベント・プロトコル
-description: ラッパー/サーバ/クライアント間の共通イベント・エンベロープ v0、状態機械、ペルソナ同一性。
+title: Common event protocol
+description: Common event envelopes v0, state machines, and persona identity shared by wrapper, server, and client.
 status: accepted
 related: [architecture, plugin-model, agent-sdk-events, personas, threat-model, subagent-tasks, protocol-inter-agent]
 ---
 <!-- markdownlint-disable MD033 -->
 
-# 共通イベント・プロトコル(v0)
+# Common event protocol (v0)
 
 ## Purpose
 
-ラッパー/サーバ/クライアント間でやり取りする共通イベントの**外枠**を定義する。
-**生きた仕様**であり、中身は各フェーズで詰める(完全確定は目指さない)。差し込み
-境界の背景は [plugin-model](plugin-model.md)。
+Define the **outer envelope** for common events exchanged among wrapper, server,
+and client. This is a **living specification** whose details are refined by
+phase rather than frozen all at once. The insertion boundary is described in
+[plugin-model](plugin-model.md).
 
 ## Definition
 
-### 用語と階層
+### Terms and hierarchy
 
-**エンベロープ**(envelope)とは、kaoiro の 1 イベントを包む共通の JSON
-オブジェクトのこと。封筒のメタファであり、「宛名書き」にあたる共通メタデータ
-(`agent_id`/`persona`/`ts`/`type`/`state` など)で「中身」(`payload`)を包む。
-ラッパー/サーバ/クライアントのどの区間でも同じ形で受け渡し、サーバは
-中身を解釈せずに保持・配信できる(agent 非依存)。
+An **envelope** is the shared JSON object wrapping one kaoiro event. Like an
+addressed letter, common metadata (`agent_id`/`persona`/`ts`/`type`/`state`,
+etc.) wraps the “contents” (`payload`). The same shape crosses wrapper, server,
+and client boundaries, and the server can retain and deliver it without
+interpreting contents (agent-independent).
 
-| 用語 | 意味 |
+| term | meaning |
 |---|---|
-| エンベロープ | 1 イベント全体を包む共通 JSON。下記の外枠キーを持つ |
-| 外枠(フレームキー) | エンベロープ直下の固定キー集合 `version`/`agent_id`/`session_id?`/`persona`/`display_name?`/`ts`/`type`/`state`/`payload`/`ext`。v0 で固定済み(`session_id?` は optional、後述)。`display_name`(issue #209 D19)は `persona.name` と独立した mutable な通称 — 稼働中の rename が書き換えるのはこちらのみ、`persona`(canonical、session 中不変)は触らない。旧 wrapper build との互換のため optional |
-| `payload` | `type` ごとのイベント本体(中身)。型体系は下記「type と payload」([ADR-0010](../adr/0010-protocol-precisification.md)) |
-| `ext` | フィルタが付加する拡張領域。コアは中身に依存しない |
+| envelope | Common JSON wrapping one complete event, with the outer keys below. |
+| outer frame keys | Fixed keys directly under the envelope: `version`/`agent_id`/`session_id?`/`persona`/`display_name?`/`ts`/`type`/`state`/`payload`/`ext`. Fixed in v0 (`session_id?` is optional). `display_name` (issue #209 D19) is a mutable name independent of canonical, session-stable `persona.name`; runtime rename changes only the former. Optional preserves old-wrapper compatibility. |
+| `payload` | Event contents for each `type`; see “Types and payload” ([ADR-0010](../adr/0010-protocol-precisification.md)). |
+| `ext` | Extension area added by filters; the core does not depend on its contents. |
 
-**トランスポート層との区別(重要)**: エンベロープはアプリケーション層の
-形式であり、ワイヤ上では Phoenix Channels V2 フレーム
-`[join_ref, ref, topic, event, payload]` の **payload スロットの中に
-丸ごと格納**されて運ばれる。Channels フレームの「payload」と
-エンベロープの「payload」は**別物**(前者の payload = エンベロープ全体、
-後者 = エンベロープ内のイベント本体)。
+**Transport-layer distinction (important)**: the envelope is an application-
+layer object. On the wire it is stored **whole in the payload slot** of a
+Phoenix Channels V2 frame `[join_ref, ref, topic, event, payload]`. The two
+“payload” terms differ: the frame payload is the complete envelope, while the
+envelope payload is the event body.
 
 ```mermaid
 flowchart LR
-  subgraph Frame["Channels V2 フレーム(トランスポート層)"]
+  subgraph Frame["Channels V2 frame (transport layer)"]
     direction LR
     meta["join_ref / ref / topic / event"]
-    subgraph Env["payload スロット = エンベロープ(アプリ層)"]
+    subgraph Env["payload slot = envelope (application layer)"]
       direction LR
       keys["version / agent_id / persona / ts / type / state / ext"]
-      body["payload(イベント本体)"]
+      body["payload (event body)"]
     end
   end
 ```
 
-### 設計意図
+### Design intent
 
-- このエンベロープはアダプタ/フィルタを差し込む境界そのもの。外枠を早めに固定
-  すると拡張が楽になる。
-- フィルタは `payload` / `ext` だけを触り、外枠には依存しすぎない。
-- 状態の**導出**はラッパー(アダプタ)が行い `state` を確定して送る。サーバは
-  受け取った `state` を保持・配信するだけ(agent 非依存)。
+- The envelope is the boundary where adapters and filters plug in; fixing the
+  outer shape early makes extension easier.
+- Filters touch only `payload` / `ext` and should not depend heavily on outer
+  keys.
+- The wrapper (adapter) **derives** state and sends a confirmed `state`; the
+  server only retains and delivers that value (agent-independent).
 
-### エンベロープ v0
+### Envelope v0
 
 ```json
 {
@@ -76,471 +77,469 @@ flowchart LR
 }
 ```
 
-| フィールド | 意味 | 備考 |
+| field | meaning | notes |
 |---|---|---|
-| `version` | エンベロープのバージョン | 文字列。後方互換の判断に使う |
-| `agent_id` | エージェントの**安定識別子** | 設定で固定。再起動をまたいで同一。文字種は `[A-Za-z0-9._-]`(topic/URL 安全のため `/` 等は不可) |
-| `session_id` | 実行中の SDK セッション ID(optional) | Claude Agent SDK の会話単位。wrapper が init/最初の result で得た実 ID を報告。agent_id とは別軸で 1 agent_id : N session_id。復帰・召喚時の resume 先([ADR-0014](../adr/0014-session-resume-and-restore.md))。未取得時は省略(未知キー追加なので同一 version) |
-| `persona` | 担当ペルソナ | id/表示名/立ち絵セット。ラッパー初期設定で指定 |
-| `ts` | イベント発生時刻 | ISO8601(UTC)。ホスト跨ぎの時刻ズレに注意 |
-| `seq` | ラッパー単調増分の連番 | プロセス起動ごと 1 起点の正整数([ADR-0011](../adr/0011-phase3-reliability-and-auth.md))。整列キーは `(agent_id, seq)` + `ts`。再起動で巻き戻るため、サーバの最新状態判定は**受信順**(last-write-wins)のまま |
-| `type` | イベント種別 | 閉じた enum。下記「type と payload」 |
-| `state` | 状態機械の現在状態 | 下記参照 |
-| `payload` | 種別ごとの本体 | 型は `type` に依存。下記「type と payload」 |
-| `ext` | フィルタが付ける拡張プロパティ | 例: `emotion`,`cost`,`danger`。実装済: `cost`(累計 USD、#8、Claude Code アダプタが result に付与)/ `model`・`cwd`・`context`(`{used_tokens,max_tokens,used_percentage}`)・`context_budget`(`{work_budget_tokens,work_budget_percentage}`。前者は生窓に対する設定済み soft 作業予算の token 分母、後者はその予算に対する使用率で 100% 超過可、issue #254)・`rate_limits`(`{<window>:{status,utilization,resets_at}}`、window=`five_hour`/`seven_day`…)・`slash_commands`(`string[]`、利用可能なスラッシュコマンド名、クライアントの `/` 補完用、#34)・`models`(`[{value, display_name, description, effort_levels?, default_effort?, resolved_model?}]`、選択可能なモデルと各モデルの effort 値域。bare `/model`・`/effort` 選択ダイアログをラウンドトリップ無しで構成するための前出し。`value` は `setModel` 用エイリアス、`effort_levels` は effort 非対応モデルで省略、`default_effort` は LaunchDialog / model 切替時に自動選択する候補で `effort_levels` の一値 (phase-16、[ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md))、`resolved_model` は upstream `ModelInfo.resolvedModel` を転記した canonical な wire model ID(`default` 等の alias が解決される先。read-only メタデータ、absent = 不明)、#54 / [ADR-0020](../adr/0020-dashboard-battery-included-client.md))・`permission_mode`(`'default'\|'acceptEdits'\|'bypassPermissions'\|'plan'\|'dontAsk'\|'auto'`、現在の Claude Code 許可モード、#57。init で確定、SDKStatusMessage 受信で上書き)・`fast_mode`(`'off'\|'cooldown'\|'on'`、Fast mode 状態、#57。init および各 result メッセージで上書き。`cooldown`は result でのみ観測される)・`models_error`(`boolean`、`supportedModels()` の bounded retry を使い切りキャッシュも無い状態を表すフラグ。`ext.models` は BOOTSTRAP floor で有効なままなので「カタログ取得を諦めた」の意であり「models が壊れた」ではない。`refresh_models` で retry counter ごと clear される、[ADR-0037](../adr/0037-claude-model-catalog-live-refresh.md) F6)を state_change に付与(#16/#34/#54/#57、Claude Code アダプタ。SDK が公開した時のみ・best-effort)。`context_budget` は既存の version 付き Envelope 内の未知キー追加であり、単独 message を新設しない(ADR-0015)。`pending_permission`(`{request_id, tool_name, input?, truncated?, ts}`、#59 / [ADR-0022](../adr/0022-pending-permission-authoritative-source.md))も state_change に付与し、`waiting_permission`中の許可要求の **authoritative source** となる。同様に`pending_question`(`{request_id, questions, ts}`、[ADR-0027](../adr/0027-askuserquestion-envelope.md))も state_change に付与し、`waiting_question`中の AskUserQuestion 質問の **authoritative source** となる。他は初期空。**`ext` は operator 限定配信**(viewer には全 type で除去。cwd / pending_permission.input 等の機微を含むため、#46、[threat-model](threat-model.md) / [ADR-0021](../adr/0021-role-information-disclosure-policy.md)) |
+| `version` | envelope version | String, used for backward-compatibility decisions |
+| `agent_id` | **stable agent identifier** | Fixed by configuration and stable across restarts; charset `[A-Za-z0-9._-]` (no `/` for topic/URL safety) |
+| `session_id` | running SDK session ID (optional) | Claude Agent SDK conversation unit; wrapper reports the real ID from init/first result. Separate from agent_id (one agent_id may have N session IDs); resume target ([ADR-0014](../adr/0014-session-resume-and-restore.md)). Omit when not yet known (new key, same version). |
+| `persona` | assigned persona | ID, display name, and sprite set configured by the wrapper. |
+| `ts` | event timestamp | ISO8601 (UTC); account for cross-host clock skew. |
+| `seq` | wrapper monotonic sequence | Positive integer starting at 1 per process ([ADR-0011](../adr/0011-phase3-reliability-and-auth.md)); ordering key `(agent_id, seq)` + `ts`. It resets on restart, so server latest-state selection remains **receive order** (last-write-wins). |
+| `type` | event type | Closed enum; see “Types and payload”. |
+| `state` | current state-machine state | See below. |
+| `payload` | body for the type | Shape depends on `type`; see “Types and payload”. |
+| `ext` | filter-added extension properties | Examples: `emotion`, `cost`, `danger`. Implemented fields include `cost` (cumulative USD, #8, attached to Claude Code results), `model`, `cwd`, `context` (`{used_tokens,max_tokens,used_percentage}`), `context_budget` (`{work_budget_tokens,work_budget_percentage}`; the first uses the configured soft-work-budget token denominator against the raw window, the second may exceed 100%, issue #254), `rate_limits` (`{<window>:{status,utilization,resets_at}}`, windows such as `five_hour`/`seven_day`), `slash_commands` (`string[]` of available slash-command names for client `/` completion, #34), and `models` (`[{value, display_name, description, effort_levels?, default_effort?, resolved_model?}]` for selectable models and effort ranges). `models.value` is the `setModel` alias; `effort_levels` is omitted for models without effort support; `default_effort` is an automatic candidate for LaunchDialog/model switching and one of `effort_levels` (phase-16, [ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md)); `resolved_model` copies upstream `ModelInfo.resolvedModel` as the canonical wire model ID (the target of aliases such as `default`, read-only metadata, absent = unknown; #54 / [ADR-0020](../adr/0020-dashboard-battery-included-client.md)). Also attach `permission_mode` (`'default'\|'acceptEdits'\|'bypassPermissions'\|'plan'\|'dontAsk'\|'auto'`, current Claude Code permission mode, #57), `fast_mode` (`'off'\|'cooldown'\|'on'`, #57), and `models_error` (boolean indicating bounded `supportedModels()` retries exhausted with no cache; `ext.models` remains valid at the bootstrap floor, and `refresh_models` clears the retry counter; [ADR-0037](../adr/0037-claude-model-catalog-live-refresh.md) F6). `context_budget` is an unknown-key addition within the versioned envelope, not a new message (ADR-0015). Attach `pending_permission` (`{request_id, tool_name, input?, truncated?, ts}`, #59 / [ADR-0022](../adr/0022-pending-permission-authoritative-source.md)) to `state_change` as the authoritative source while `waiting_permission`; likewise attach `pending_question` (`{request_id, questions, ts}`, [ADR-0027](../adr/0027-askuserquestion-envelope.md)) while `waiting_question`. Other fields are empty initially. **`ext` is operator-only** and removed for viewers because it can contain sensitive values (issue #46, [threat-model](threat-model.md) / [ADR-0021](../adr/0021-role-information-disclosure-policy.md)). |
 
-#### `ext.permission` 二軸表現 (2026-07-10、[ADR-0033](../adr/0033-permission-model-dual-axis.md))
+#### Two-axis `ext.permission` (2026-07-10, [ADR-0033](../adr/0033-permission-model-dual-axis.md))
 
-Codex アダプタ ([ADR-0032](../adr/0032-codex-adapter.md)) 追加に伴い、権限モデル
-の共通抽象を agent-level の `ext.permission` として二軸で表現する
-(`pending_permission` 内への軸複製はしない — ADR-0033 F1):
+With the Codex adapter ([ADR-0032](../adr/0032-codex-adapter.md)), represent the
+common permission abstraction at agent level as two-axis `ext.permission` (do
+not duplicate axes inside `pending_permission`; ADR-0033 F1):
 
-- `ext.permission`: `{ sandbox, approval }` — state_change に付与
+- `ext.permission`: `{ sandbox, approval }`, attached to `state_change`
   - `sandbox`: `"read-only" | "workspace-write" | "danger-full-access"`
   - `approval`: `"untrusted" | "on-request" | "on-failure" | "never"`
-    (`on-failure` は upstream deprecated alias、kaoiro wrapper は emit しない)
+    (`on-failure` is an upstream deprecated alias and kaoiro wrappers do not emit it)
 
-Claude adapter は 6 mode → 二軸への写像 table (ADR-0033 F2、表示用近似) を持ち、
-Codex adapter は spawn 時の sandbox_mode と `approval: "never"` 固定を投影する
-(exec 経由では承認フローが存在しないため。ADR-0033 F3)。
+The Claude adapter has a six-mode → two-axis mapping table (ADR-0033 F2,
+display approximation). The Codex adapter projects its spawn sandbox_mode and
+fixed `approval: "never"` because exec has no approval flow (ADR-0033 F3).
 
-**`ext.permission_mode` の deprecation**: `ext.permission` が後継。1 リリース窓の
-間は両フィールドを並置して送出し、次リリースで `permission_mode` を削除する
-(ADR-0033 F1、D-A)。新クライアントは `ext.permission` のみを読む。
+**Deprecation of `ext.permission_mode`**: `ext.permission` is the successor.
+Emit both fields for one release window, then remove `permission_mode` in the
+next release (ADR-0033 F1, D-A). New clients read only `ext.permission`.
 
-#### `ext.engine` (2026-07-10、[ADR-0032](../adr/0032-codex-adapter.md) F4a)
+#### `ext.engine` (2026-07-10, [ADR-0032](../adr/0032-codex-adapter.md) F4a)
 
-state_change に付与される engine 識別子:
+Engine identifier attached to `state_change`:
 
-- 値: `"claude-code" | "codex"` (host 側の `capabilities` と同じ値集合)
-- 誰が付与するか: engine adapter が起動時に付与し、以降 state_change すべてに含む
+- Value: `"claude-code" | "codex"` (same set as host `capabilities`).
+- Source: the engine adapter adds it at startup and includes it on every later
+  `state_change`.
 
-**注意**: `ext.engine` は表示 (engine バッジ) と log/telemetry の識別用途に限定する。**機能可用性の判定に engine 名を使ってはならない** ([ADR-0034](../adr/0034-session-capabilities-advertisement.md) F3)。add / remove の判定は `ext.session_capabilities` で行う。
+**Note**: Use `ext.engine` only for display (engine badge) and log/telemetry
+identity. **Never infer feature availability from the engine name** ([ADR-0034](../adr/0034-session-capabilities-advertisement.md) F3); use
+`ext.session_capabilities` for add/remove decisions.
 
-#### `ext.model_source` / `ext.effort_source` (2026-07-11、[ADR-0032](../adr/0032-codex-adapter.md) F4bc 追補、phase-15)
+#### `ext.model_source` / `ext.effort_source` (2026-07-11, [ADR-0032](../adr/0032-codex-adapter.md) F4bc addendum, phase 15)
 
-model / effort の値がどの経路で決まったかを示す source 語彙。値の由来を伝える field なので、SDK 確認後も**明示指定側の source は維持**する。
+Source vocabulary indicating how model/effort values were chosen. Because it
+communicates provenance, **preserve an explicit source even after SDK
+confirmation**.
 
-- 値: `"launch" | "env" | "config" | "default"` (`ModelSource` 型)
-  - `launch` — SpawnMessage.model / SpawnMessage.effort による指定
-  - `env` — engine 別 env (`KAOIRO_CLAUDE_CODE_DEFAULT_MODEL` / `KAOIRO_CODEX_DEFAULT_MODEL`) による指定
-  - `config` — kaoiro.config.json の `model` / `effort` による指定
-  - `default` — 未指定、engine account / SDK 既定に委任
-- 解決優先度: `launch > env > config > default`
-- 起動時 stamp: **明示指定時**は起動直後から `model` + `model_source=launch|env|config` を stamp (楽観 stamp、phase-15 の [15-4b/4c])。SDK 確認後は値のみ更新される可能性 (Claude の alias 展開等) があるが `model_source` は変えない — `default` に上書きすると「アカウント既定を使った」と嘘をつくため
-- **未指定時**: 起動直後は `model` / `model_source` とも stamp なし。SDK 報告受信で `model` + `model_source="default"` が初出現
-- effort も同 semantics (`ext.effort_source`)。効果的な違い: 起動時明示指定が無ければ wrapper は SDK 既定値を知らないため stamp しない (明示指定時のみ即表示、未指定は SDK 報告待ち)
+- Value: `"launch" | "env" | "config" | "default"` (`ModelSource` type)
+  - `launch` — SpawnMessage.model / SpawnMessage.effort.
+  - `env` — engine-specific environment (`KAOIRO_CLAUDE_CODE_DEFAULT_MODEL` /
+    `KAOIRO_CODEX_DEFAULT_MODEL`).
+  - `config` — `model` / `effort` in `kaoiro.config.json`.
+  - `default` — no explicit value; delegate to the engine account / SDK default.
+- Resolution priority: `launch > env > config > default`.
+- Startup stamp: **when explicitly supplied**, stamp `model` and
+  `model_source=launch|env|config` immediately (optimistic stamp, phase-15
+  [15-4b/4c]). SDK confirmation may update only the value (for example alias
+  expansion in Claude), never the source; replacing it with `default` would
+  falsely claim an account default.
+- **When unspecified**: stamp neither `model` nor `model_source` at startup;
+  the first SDK report emits `model` with `model_source="default"`.
+- Effort follows the same semantics (`ext.effort_source`): without an explicit
+  startup value the wrapper does not know the SDK default and waits for its
+  report.
 
-#### `ext.session_capabilities` (2026-07-11、[ADR-0034](../adr/0034-session-capabilities-advertisement.md) F1/F2)
+#### `ext.session_capabilities` (2026-07-11, [ADR-0034](../adr/0034-session-capabilities-advertisement.md) F1/F2)
 
-session 単位の機能可用性を第一級表現する envelope field。engine 名では表現できない差 (auth mode / plan tier / wrapper 実装差) を吸収する。
+An envelope field expressing feature availability per session. It absorbs
+differences (auth mode, plan tier, wrapper implementation) that engine names
+cannot represent.
 
-- shape (`SessionCapabilitiesExt` 型):
-  - `supports_attachments: boolean` — 添付ファイル受け入れ可否 (false 時 Composer attach ボタン disabled + tooltip「このセッションでは未対応」)
-  - `attachment_types?: ("image")[]` — 添付種類の任意の制限。**absent は従来互換で種類制限なし**、present 時は列挙型だけ許可する。SDK 固有の block 名はこの protocol に露出しない。Codex は `supports_attachments: true, attachment_types: ["image"]` を advertise し、UI は picker / paste / drop を画像に限定する。Claude は field を省略して従来どおり全対応種別を受け入れる。
-  - `supports_user_input_dialog: boolean` — `ask_user_question` 可用性
-  - `user_input_modes?: string[]` — dialog 発火が特定 mode / sandbox に限定される場合の条件集合 (空/未指定 = 無条件)
-- **stamp タイミング**: **spawn 直後の初回 state_change から** (session_init 相当のイベントを待たない。Codex `thread.started` は毎ターン発生モデルで初ターン発生まで到達しないため、待つと fail-closed default で誤表示になる)
-- 未 stamp = 保守的に「機能なし」解釈 (fail-closed)。UI は必ずこの field のみで判定
-- `supports_model_switch: boolean` — mid-session の `set_model` 受入可否 (phase-16、[ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) F4)
-- `supports_effort_switch: boolean` — mid-session の `set_effort` 受入可否 (同上)。UI は個別 boolean だけを見て model select / effort select ボタンを show/hide し、engine 名では判定しない (ADR-0034 F3 原則)
-- `supports_session_reset: boolean` / `session_reset_modes?: ("new" | "clear")[]` — operator が `session_reset` を実行できるかと、その mode の可用性。agent 自身の `request_session_reset` tool の公開可否とは別であり、後者は現状 Claude wrapper のみが提供する (ADR-0043)。
-- `supports_context_usage: boolean` — 当該 session が `ext.context` に authoritative な context-window 使用率 snapshot を提供するか (phase-21、[ADR-0040](../adr/0040-context-usage-capability.md))。UI 分岐は 3 状態:
-  - **absent** — capability 未 stamp = capability を知らない旧 wrapper (rolling upgrade 中)。UI は ctx 行そのものを非表示。absent を「未対応」扱いにすると旧 wrapper で誤表示になるため区別する
-  - **explicit `false`** — adapter が exact snapshot を提供できない (現状 Codex)。UI は「未対応」表示
-  - **explicit `true`** — adapter が `ext.context` を stamp する意思を宣言。UI は `ext.context` 到着で meter、未到着なら「取得中」placeholder
-- Claude は `true` (SDK の `getContextUsage()` control_request が exact `totalTokens`/`maxTokens`/`percentage` を返せる。init 直後の呼び出しでも system_prompt/tools/MCP/memory_files 分で非ゼロ snapshot が期待できるが best-effort。失敗は握り潰し UI は「取得中」のまま)、Codex は `false` (`turn.completed.usage.input_tokens` が per-turn 入力のみで compaction で縮み reasoning/output も含まず context 使用率にならない、詳細は [codex-sdk-events](codex-sdk-events.md))
+- Shape (`SessionCapabilitiesExt`):
+  - `supports_attachments: boolean` — whether attachments are accepted (false disables the Composer attach button and shows a “not supported in this session” tooltip).
+  - `attachment_types?: ("image")[]` — optional attachment restriction. **Absent preserves legacy behavior with no type restriction**; when present, only listed types are allowed. SDK block names are not exposed. Codex advertises `supports_attachments: true, attachment_types: ["image"]`, limiting picker/paste/drop to images; Claude omits the field and accepts all legacy types.
+  - `supports_user_input_dialog: boolean` — availability of `ask_user_question`.
+  - `user_input_modes?: string[]` — conditions when dialog firing is limited to a mode or sandbox (empty/absent = unconditional).
+- **Stamp timing**: from the first `state_change` immediately after spawn (do not wait for a session-init event; Codex `thread.started` may not occur before the first turn, so waiting would show a false fail-closed default).
+- Unstamped means conservatively “feature unavailable” (fail-closed); UI decisions use only this field.
+- `supports_model_switch: boolean` — whether mid-session `set_model` is accepted (phase 16, [ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) F4).
+- `supports_effort_switch: boolean` — whether mid-session `set_effort` is accepted. UI shows/hides model and effort selectors from each boolean, never from engine name (ADR-0034 F3).
+- `supports_session_reset: boolean` / `session_reset_modes?: ("new" | "clear")[]` — whether the operator can run `session_reset` and which modes are available. This is separate from exposing the agent's `request_session_reset` tool, currently Claude-only (ADR-0043).
+- `supports_context_usage: boolean` — whether this session provides an authoritative context-window snapshot in `ext.context` (phase 21, [ADR-0040](../adr/0040-context-usage-capability.md)). UI has three states:
+  - **absent** — unstamped capability from an old wrapper during rolling upgrade; hide the context row rather than treating it as unsupported.
+  - **explicit `false`** — adapter cannot provide an exact snapshot (currently Codex); show “unsupported”.
+  - **explicit `true`** — adapter promises to stamp `ext.context`; show a meter when it arrives and a loading placeholder before then.
+- Claude is `true`: SDK `getContextUsage()` can return exact `totalTokens`/`maxTokens`/`percentage` (best-effort even immediately after init; failures leave “loading”). Codex is `false`: `turn.completed.usage.input_tokens` is per-turn input only and shrinks on compaction, excluding reasoning/output, so it is not context usage (see [codex-sdk-events](codex-sdk-events.md)).
 
-#### `ext.resume_snapshot` / `ext.effective` / `ext.resume_drift` (2026-07-11、[ADR-0032](../adr/0032-codex-adapter.md) F4bc + [ADR-0033](../adr/0033-permission-model-dual-axis.md) F4 追補、phase-15)
+#### `ext.resume_snapshot` / `ext.effective` / `ext.resume_drift` (2026-07-11, [ADR-0032](../adr/0032-codex-adapter.md) F4bc + [ADR-0033](../adr/0033-permission-model-dual-axis.md) F4 addendum, phase 15)
 
-resume 経路で「意図しない model / 権限の差替え」を検知する D8 (resume drift detection) 用の envelope 拡張。
+Envelope extensions for D8 (resume drift detection), detecting unintended model
+or permission substitutions on the resume path.
 
-- `ext.resume_snapshot` (`ResolvedSnapshotExt` 型): 復帰元 session の**最後に実効だった値**。fields: `model` / `model_source` / `effort` / `effort_source` / `permission_mode` / `sandbox` / `network_access` (未設定は absent)
-  - **semantics 重要**: 「spawn 時の値」ではなく「session 中に最後に実効だった値」を取る (mid-session で operator が `set_model` / `set_effort` / `set_permission_mode` で切り替えた場合、切替後の最新実効値を snapshot に反映)。意図した切替が resume 時 drift 誤爆を起こさないため
-- `ext.effective` (`ResolvedSnapshotExt` 型): 今回 host が強制した値。同 shape
-- `ext.resume_drift` (`ResumeDriftExt` 型): `resume_snapshot` と `effective` の field ごと差分。`Array<{field, prev, now}>` 形式。空 array = 差分なし、absent = fresh spawn (resume ではない)
-- 差分検知時: wrapper が stderr warn、UI (AgentDetail) が drift バッジ表示
+- `ext.resume_snapshot` (`ResolvedSnapshotExt`): the **last effective values** in
+  the source session—`model`, `model_source`, `effort`, `effort_source`,
+  `permission_mode`, `sandbox`, and `network_access` (unset means absent).
+  **Important**: use the last effective values, not spawn values. If an operator
+  changed model, effort, or permission mode mid-session, snapshot the latest
+  values so an intentional change does not trigger a resume drift.
+- `ext.effective` (`ResolvedSnapshotExt`): values forced by this host, same shape.
+- `ext.resume_drift` (`ResumeDriftExt`): per-field differences between the two
+  snapshots as `Array<{field, prev, now}>`; an empty array means no difference,
+  absent means a fresh spawn rather than a resume.
+- On a difference, the wrapper warns on stderr and AgentDetail shows a drift badge.
 
-#### `ext.pending_model` / `ext.pending_effort` / `ext.switch_error` / `ext.effort_reset` (2026-07-13、[ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) F1〜F3、phase-16)
+#### `ext.pending_model` / `ext.pending_effort` / `ext.switch_error` / `ext.effort_reset` (2026-07-13, [ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) F1–F3, phase 16)
 
-mid-session model / effort 切替の pending / effective / rollback 3 段を envelope
-経路で表現する。**現 turn は不変、次 turn から適用** ([ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) F1)。
+Represent the pending/effective/rollback stages of a mid-session model or effort
+switch in the envelope. **The current turn is unchanged; apply from the next
+turn** ([ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) F1).
 
-- `ext.pending_model?: string` — operator が `set_model` を投げた後、まだ次
-  turn の `turn_context.model` として反映されていない値。次 turn 開始で
-  `ext.effective.model` に昇格し `pending_model` は消える。UI (AgentDetail) は
-  `pending: <display_name>` を表示
-- `ext.pending_effort?: string` — 同 semantics で effort 版
-- `ext.effective` の semantics 拡張 (phase-16): resume snapshot 用途と共に、
-  session 中の**現時点の実効 model / effort** を運ぶ。次 turn boundary で
-  pending → effective に昇格させ、以降の state_change でも維持する
-- `ext.effort_reset?: boolean` — model 切替時に旧 effort が新 model の
-  `effort_levels` に含まれない場合、silent downgrade せず `default_effort` へ
-  reset した事実を UI に伝えるフラグ ([ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) 完了条件)。UI は「新モデルで元の
-  effort が使えないため既定へ戻しました」を明示
-- `ext.switch_error?: {kind: "model" | "effort", requested: string, reason: string, rolled_back_to?: string}` — 切替後の turn で 400/404 等の loud fail が
-  発生した場合の 1 回性報告。次 turn boundary で clear する (**stamp 1 回性**、
-  [ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) F3)。`rolled_back_to` は前 pinned model (last-known-good、通常は前 turn の
-  effective) を示し、UI は「モデル切替に失敗 / <requested> は実効に反映されて
-  いません / 旧値 <rolled_back_to> に戻しました」を表示。silent fallback は
-  禁止 — effective / resume snapshot にも失敗値は入れない (phase-16 16-7)
+- `ext.pending_model?: string` — value requested by `set_model` but not yet
+  applied as the next turn's `turn_context.model`; promote it to
+  `ext.effective.model` and clear `pending_model` at the next turn. AgentDetail
+  shows `pending: <display_name>`.
+- `ext.pending_effort?: string` — same semantics for effort.
+- `ext.effective` (phase 16) also carries the **current effective model/effort**
+  during the session, promoting pending values at the next turn boundary and
+  retaining them on subsequent `state_change` events.
+- `ext.effort_reset?: boolean` — when the old effort is not in the new model's
+  `effort_levels`, report that it was reset to `default_effort` instead of
+  silently downgrading ([ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md)).
+  UI states that the old effort was unavailable.
+- `ext.switch_error?: {kind: "model" | "effort", requested: string, reason: string, rolled_back_to?: string}` — one-shot report when the post-switch turn
+  fails loudly (400/404, etc.); clear it at the next turn boundary (one stamp,
+  ADR-0035 F3). `rolled_back_to` is the previous pinned last-known-good value
+  (normally the prior turn's effective value). UI reports failure and rollback;
+  never put the failed value in effective or resume snapshots (phase-16 16-7).
 
-**resume_drift の operator drift filter** (phase-16 追補、[ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) F2):
-mid-session で operator が意図的に切り替えた model / effort は
-`ext.resume_drift` に載せない (operator 意図の切替 = drift ではない)。判定は
-adapter 側の `modelRollbackPinned` フラグと切替 history を参照して行い、
-resume 直後の意図しない差替えのみ drift として emit する。
+**Operator drift filter for `resume_drift`** (phase-16 addendum, [ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) F2): do not include
+model/effort changes intentionally made by an operator mid-session (intentional
+change is not drift). Consult the adapter's `modelRollbackPinned` flag and
+switch history; emit drift only for an unintended substitution immediately
+after resume.
 
-### type と payload(v0 確定)
+### Types and payload (v0 settled)
 
-`type` は閉じた enum。v0 の各種別の payload を下記に定義する(段階的精緻化の
-方針は [ADR-0010](../adr/0010-protocol-precisification.md))。
+`type` is a closed enum. The v0 payload for each type is defined below; details
+are refined incrementally ([ADR-0010](../adr/0010-protocol-precisification.md)).
 
-| type | 状態 | payload |
+| type | status | payload |
 |---|---|---|
-| `state_change` | **確定** | `{ label?: string, summary?: string }`。`label` は短い行先表示(例 `"Edit src/foo.ts"`)、`summary` は人間可読の説明。どちらも省略可 |
-| `log` | **確定** | `{ kind: "assistant" \| "tool_use" \| "tool_result" \| "user" \| "system", text?, tool_name?, tool_use_id?, input?, output?, truncated? }`。エージェント応答の逐次中継。`assistant`=モデル発話(`text`)、`tool_use`=ツール呼出(`tool_name`/`input`)、`tool_result`=実行結果(`tool_name`/`output`)、`user`=operator 指示を会話ログにエコー(`text`、#31。wrapper が instruction 受信時に発行し、履歴・operator 限定配信に乗る)、`system`=どちらの発話でもないセッション水準のイベントを wrapper が観測して発行(`text`。context 圧縮 / 会話リセット、phase-28 A1・#158)。`system` を `assistant` で代用しないこと — wrapper 由来の通知が operator の「最新の返答」タイムラインにモデル発話として載る。`tool_use_id` は `tool_use`/`tool_result` の対応付け用(#40。SDK が付与した時のみ)。tool 入出力はクライアント UI で折りたたみ既定。長文は wrapper が切り詰め(`truncated: true`)。**operator role のみへ配信**(viewer 非配信。シークレット混入の主経路、[threat-model](threat-model.md)、[ADR-0012](../adr/0012-response-display-and-dashboard-scope.md)) |
-| `permission_request` | **確定** | `{ request_id: string, tool_name: string, input?: object, truncated?: boolean }`。`request_id` はラッパー生成のセッション内一意 ID([ADR-0011](../adr/0011-phase3-reliability-and-auth.md))。`input` はツール入力(ラッパーが 16KB 程度に切り詰め、切り詰め時 `truncated: true`。シークレット混入リスクは [threat-model](threat-model.md))。state は `waiting_permission`。**初出通知に降格**: pending 状態の真実は `state_change.ext.pending_permission` ([ADR-0022](../adr/0022-pending-permission-authoritative-source.md))。本 envelope は protocol 互換維持と「新規 pending あり」イベント通知のために残るが、payload は ext と同期保証される(同一の `request_id` / `tool_name` / `input` / `truncated` / `ts`)。新クライアントは ext 経由を推奨。**operator 限定配信**: viewer には完全除去し、grid 整合のため合成 `state_change(waiting_permission)`(`payload={}` / `ext` なし)に置換して配信([ADR-0021](../adr/0021-role-information-disclosure-policy.md)) |
-| `question_request` | **確定** | `{ request_id: string, questions: [...] }`。SDK の `AskUserQuestion`(canUseTool 経路)の構造化質問。`request_id` はラッパー生成のセッション内一意 ID。`questions` は `[{ question, header, multiSelect, options: [{ label, description, preview? }] }]`(1〜4 問・各 2〜4 択)。state は `waiting_question`。**初出通知に降格**: pending の真実は `state_change.ext.pending_question`([ADR-0027](../adr/0027-askuserquestion-envelope.md))。互換一貫性と「新規 pending あり」通知のために送り、payload は ext と同期保証(同一の `request_id` / `questions` / `ts`)。回答は方向別メッセージ `question_response`(operator の選択回答)。**operator 限定配信**: viewer には完全除去し、grid 整合のため合成 `state_change(waiting_question)`(`payload={}` / `ext` なし)に置換([ADR-0021](../adr/0021-role-information-disclosure-policy.md)) |
-| `result` | **確定** | `{ text?: string, is_error?: boolean, error_subtype?: string, error_detail?: string }`。ターン完了時の最終応答。`is_error` でエラー終了を区別し、`error_subtype` に SDK の終了 subtype、`error_detail` に SDK が返した本文を載せてクライアントへリレーする(#123)。`error_subtype` の閉じた語彙は Claude Code アダプタでは `error_max_turns` / `error_during_execution` / `error_max_budget_usd` / `error_max_structured_output_retries` の 4 値で、これ以外の subtype は `error_during_execution` に丸める。`error_detail` は `SDKResultError.errors` を `"; "` 連結(無ければ `stop_reason`)したもので、**要約・マスキングはしないが無加工でもない** — envelope の上限に合わせて 16,384 UTF-8 バイトへ切り詰めてから送る(`log` 本文と同じ `clipText`。`truncated` フラグは付かない)。どちらも成功時は absent。エラー本文を生のままリレーする方針は [ADR-0016](../adr/0016-error-body-relay.md) 由来だが、同 ADR の単一 `error_message` 案は実装されず、UI 分岐可能な subtype と本文の 2 フィールドに置き換わった(ADR-0016 が併記した「wrapper プロセス異常終了時に落ちる直前のエラーを送る」も未実装)。**Codex アダプタは SDK 側にこの subtype の概念を持たないため通常は付与しないが、resume 失敗の detail が rollout 破損パターン(行途中の UTF-8 切断 / JSON 途切れ、issue #253)に一致したときだけ独自に `error_rollout_corrupted` を設定する** — 判定はエラー文字列依存で codex-sdk のバージョン更新により表現が変わりうるため閉じた保証ではなく、未知の resume 失敗では `error_subtype` を付与せず `is_error: true` のみの従来どおりの扱いに fall back する(該当セッションは以後の resume も同じ分類を即座に返し、`codex exec` の再スポーンを繰り返さない)。state は `done`/`error` の後 `waiting_input`。累計コスト USD は `ext.cost` に付与(#8)。`log` と同様 **operator 限定配信**([ADR-0012](../adr/0012-response-display-and-dashboard-scope.md)) |
-| `task` | **確定** | subagent/workflow の起動/更新/完了を通知する専用 type(実装済み — [subagent-tasks](subagent-tasks.md) 段階1〜3、issue #170)。`{ kind: "started" \| "updated" \| "completed", agent_id, task_id, task_type, status, subagent_type?, workflow_name?, description?, usage?, last_tool_name?, summary?, skip_transcript? }`。`kind` がライフサイクルイベント種別、`status` は粗い状態(`running`/`completed`/`failed`/`stopped`)、`task_type` は拡張可能 enum(SDK 実測値 `local_agent`/`local_workflow`/`local_bash` をリネームせずそのまま通す。`tasklist` を追加決定済み — エージェント自身の todo リスト全体を optional `items` で運ぶ単一エンティティ・全体置換、[ADR-0049](../adr/0049-tasklist-on-task-envelope.md)。受信側は未知値を汎用表示へフォールバック)。`task_id` は ingress 時 256 byte 以下に制限する(**正本**、server `WrapperChannel.@max_task_id_field_bytes`。M1 round-3 fix、issue #170 — snapshot wire 上で `task_id` は payload の値だけでなく `tasks` map の outer JSON key としても現れるため、長さ無制限だと少数の envelope でも snapshot 全体の byte 予算を圧迫しうる。ADR-0047 F2 はこの上限に言及せず、本行を参照する)。親 `state_change` とは独立し、親 `agent_id` 参照で紐づく子エンティティを運ぶ。`kind=updated` は wrapper 発行側で間引き(3 秒 + トークン差分 500 以上/tool 名変化のいずれか。`started`/`completed` は即時)。後続接続へは既存 `snapshot` 枠の `tasks` キーで active set を一括提供。**operator 限定配信**(viewer には配信せず、`snapshot` の `tasks` も viewer join では空。`log`/`result`/`hosts` 等の既存 operator 限定 type と同じ server gate 経路に乗るだけで新規分岐は無い、[ADR-0021](../adr/0021-role-information-disclosure-policy.md) + [ADR-0048](../adr/0048-task-aggregation-delivery.md) addendum)。([ADR-0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md) / [ADR-0047](../adr/0047-task-envelope-schema.md) / [ADR-0048](../adr/0048-task-aggregation-delivery.md))。確定追補のため `version` 据え置き |
-| `attach_rejected` | **確定** | `{ upload_id, reason, detail? }`。個別 upload の拒否(wrapper が attach_close 時の検査 / SDK エラー / interrupt で発火)。reason enum は [file-upload](file-upload.md) を正本(`size_over` / `mime_denied` / `count_over` / `timeout` / `interrupted` / `unfittable_image` / `unfittable_pdf` / `text_too_large` / `total_request_over` / `sdk_error`)。**operator 限定配信**(allow-list、 [ADR-0021](../adr/0021-role-information-disclosure-policy.md))。仕様集約は [file-upload](file-upload.md)、決定根拠は [ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md)。追補のため `version` 据え置き |
-| `instruction_rejected` | **確定** | `{ attachment_ids?, reason, detail? }`。instruction 全体の拒否(合計上限超 / SDK エラー / interrupt 等)。reason enum と配信ガードは `attach_rejected` と同じ。追補のため `version` 据え置き |
-| `inter_agent_message` | **確定** | エージェント A→B の対話メッセージ。payload に `to` / `conversation_id` / `turn_number` / `kind`(9 種 enum)/ `body` / `meta {done, propose_next, confidence?, reject_reason?}` / `owner {kind, id}` / `error? {code, message}` を持つ。`error` は相手が応答不能になったことを送信元エージェントへ返す optional 追補(`kind` は `inform` 流用、判別は `error` の有無、#127)。server は `to` でルーティング + observation broadcast を行う(意味論は解釈しない。carve-out として `error` の構造検証、wrapper 切断時の `code=reconnecting` / `code=disconnected` 合成、exact-token 復帰時の error なし `reconnected` inform 合成のみ行う)。仕様正本は [protocol-inter-agent](protocol-inter-agent.md)。**operator 限定配信**。追補のため `version` 据え置き |
-| `external_message`(予約) | **予約** | 外部人間との Discord メッセージ(`direction: outbound\|inbound`)。payload は `channel` / `to`\|`from` / `conversation_id` / `turn_number` / `body` / `meta` 等。server は `to` で discord-wrapper へルーティング(意味論は解釈しない)。inbound の `ext.interpretation` は discord-wrapper のフィルタが付与。仕様正本は [protocol-external-human](protocol-external-human.md)、実装は [phase-9](../plans/phase-9-external-human-messaging.md)。**operator 限定配信**。追補のため `version` 据え置き |
-| `session_boundary` | **確定** | `{ mode: "new" \| "clear", request_id: string, ts, previous_session_id?: string, to_session_id?: string \| null }`。`/new`・`/clear` の session lifecycle 遷移マーカー。通常 `envelope` 経路で broadcast し、`/new` は既存 history 末尾に append、`/clear` は当該 agent の history を marker 1 行だけに絞る（ADR-0036 F3 復元、2026-07-24）。`history_reset` は resume replay 専用でどちらも発火しない。Codex lazy 采番時は `to_session_id: null` を初回 envelope で後追い patch。viewer payload は `{ "mode" }` のみに sanitize。 |
-| `refresh_models_result` | **確定** | `{ request_id: string, ok: boolean, reason?: string, models_count?: number }`。operator の `refresh_models` に対する wrapper 側の完了報告([ADR-0039](../adr/0039-engine-catalog-live-probe.md) F9 v2)。`agent_id` は外枠が持つので payload には**複製しない**。`reason` は失敗時のみで、closed vocab は engine catalog probe と共通(`auth_failed` / `spawn_failed` / `cli_error` / `invalid_output` / `timeout` / `unsupported_engine`。Claude 以外のアダプタは control を no-op して `unsupported_engine` を返す)。`models_count` は成功時のみのサイズ signal で、更新後の catalog 本体は**直前に emit される** `state_change.ext.models` が運ぶ。本 envelope は transient — サーバは `AgentStates` に put せず、クライアントは通常の envelope 処理より前に special-dispatch する。**operator 限定配信** |
+| `state_change` | **settled** | `{ label?: string, summary?: string }`; optional short destination label (for example `"Edit src/foo.ts"`) and human-readable summary. |
+| `log` | **settled** | `{ kind: "assistant" \| "tool_use" \| "tool_result" \| "user" \| "system", text?, tool_name?, tool_use_id?, input?, output?, truncated? }`. Relays agent output: assistant model text; tool_use call; tool_result output; user echoes operator instructions (#31); system is a wrapper-observed session event such as compaction or reset (phase-28 A1, #158). Never substitute assistant for system or wrapper notices appear as model replies. `tool_use_id` links use/result when supplied by the SDK (#40). UI collapses tool I/O by default; wrapper truncates long text (`truncated: true`). **Operator role only** ([threat-model](threat-model.md), [ADR-0012](../adr/0012-response-display-and-dashboard-scope.md)). |
+| `permission_request` | **settled** | `{ request_id: string, tool_name: string, input?: object, truncated?: boolean }`. Wrapper-generated session-unique request ID ([ADR-0011](../adr/0011-phase3-reliability-and-auth.md)); tool input is clipped to about 16 KB with `truncated: true` and follows [threat-model](threat-model.md). State is `waiting_permission`. This is an initial notification only; authoritative pending state is `state_change.ext.pending_permission` ([ADR-0022](../adr/0022-pending-permission-authoritative-source.md)). Keep the envelope for compatibility and “new pending” notification, with payload/ext fields synchronized. New clients should read ext. Deliver operator-only; viewers receive a synthetic `state_change(waiting_permission)` with empty payload/ext ([ADR-0021](../adr/0021-role-information-disclosure-policy.md)). |
+| `question_request` | **settled** | `{ request_id: string, questions: [...] }` structured SDK `AskUserQuestion` data (one to four questions, each with two to four options). Authoritative pending state is `state_change.ext.pending_question` ([ADR-0027](../adr/0027-askuserquestion-envelope.md)); retain this initial notification for compatibility with synchronized `request_id`/`questions`/`ts`. Answers use directional `question_response`. Operator-only; viewers receive synthetic `state_change(waiting_question)` with empty payload/ext ([ADR-0021](../adr/0021-role-information-disclosure-policy.md)). |
+| `result` | **settled** | `{ text?: string, is_error?: boolean, error_subtype?: string, error_detail?: string }`. Final response when a turn completes. `is_error` distinguishes error termination; `error_subtype` carries the SDK termination subtype and `error_detail` relays the SDK body to the client (#123). Claude Code uses the closed vocabulary `error_max_turns` / `error_during_execution` / `error_max_budget_usd` / `error_max_structured_output_retries`; other values are rounded to `error_during_execution`. `error_detail` joins `SDKResultError.errors` with `"; "` (or `stop_reason` when absent); it is **not summarized or masked, but is not raw either**—clip to 16,384 UTF-8 bytes before sending (`clipText`, as for `log`; no `truncated` flag). Both fields are absent on success. Relaying the error body follows [ADR-0016](../adr/0016-error-body-relay.md); its single `error_message` proposal was not implemented, and the wire uses subtype plus body instead (the ADR's proposal to send the last error before wrapper process exit is also unimplemented). **The Codex adapter normally omits this subtype because its SDK has no such concept.** If resume failure detail matches a rollout-corruption candidate and full-file validation confirms it, create a backup, remove only invalid lines, validate every line with at least one non-empty entry, then atomically replace the file (issue #262). On repair success, retry the same resume immediately and return the successful result. If there are zero valid entries or backup/repair/revalidation fails, leave the original untouched, return `error_rollout_corrupted`, and skip later resume attempts until manual intervention. **When the candidate does not match, or the rollout is normal/unresolved, omit `error_subtype` and follow the normal `is_error: true` path.** State becomes `waiting_input` after `done`/`error`. Total USD cost is attached in `ext.cost` (#8). As with `log`, **operator-only delivery** ([ADR-0012](../adr/0012-response-display-and-dashboard-scope.md)). |
+| `task` | **settled** | Dedicated type notifying subagent/workflow start, update, and completion (implemented—[subagent-tasks](subagent-tasks.md) stages 1–3, issue #170). `{ kind: "started" \| "updated" \| "completed", agent_id, task_id, task_type, status, subagent_type?, workflow_name?, description?, usage?, last_tool_name?, summary?, skip_transcript? }`. `kind` is the lifecycle event; `status` is coarse (`running`/`completed`/`failed`/`stopped`); `task_type` is an extensible enum (SDK values `local_agent`/`local_workflow`/`local_bash` pass through unchanged). `tasklist` is an additional single entity carrying the agent's complete todo list in optional `items`, with whole-list replacement ([ADR-0049](../adr/0049-tasklist-on-task-envelope.md)); unknown values fall back to generic display. `task_id` is limited to 256 bytes at ingress (**source of truth**: server `WrapperChannel.@max_task_id_field_bytes`; M1 round-3 fix, issue #170). In the task snapshot wire, `task_id` appears both as the payload value and as the outer key of the `tasks` map, so an unlimited length could exhaust the snapshot byte budget with few envelopes; ADR-0047 F2 does not state this cap and this row is authoritative. Tasks are independent of the parent `state_change` and reference the parent `agent_id`. `kind=updated` is throttled by the wrapper (three seconds plus either a token delta of 500 or a tool-name change; `started`/`completed` are immediate). Later connections receive the active set under `task_snapshot.tasks`. **Operator-only**: viewers receive no task events and their join always has `tasks: {}`; this uses the existing server gate for operator-only types (`log`/`result`/`hosts`) and adds no new branch ([ADR-0021](../adr/0021-role-information-disclosure-policy.md) + [ADR-0048](../adr/0048-task-aggregation-delivery.md) addendum). ([ADR-0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md) / [ADR-0047](../adr/0047-task-envelope-schema.md) / [ADR-0048](../adr/0048-task-aggregation-delivery.md)). `version` remains unchanged for this addendum. |
+| `attach_rejected` | **settled** | `{ upload_id, reason, detail? }`. Rejection of one upload (wrapper validation at `attach_close`, SDK error, or interrupt). The reason enum is defined by [file-upload](file-upload.md): `size_over` / `mime_denied` / `count_over` / `timeout` / `interrupted` / `unfittable_image` / `unfittable_pdf` / `text_too_large` / `total_request_over` / `sdk_error`. **Operator-only delivery** (allow-list, [ADR-0021](../adr/0021-role-information-disclosure-policy.md)). The aggregate specification is [file-upload](file-upload.md), with rationale in [ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md). `version` remains unchanged for this addendum. |
+| `instruction_rejected` | **settled** | `{ attachment_ids?, reason, detail? }`. Rejection of the whole instruction (aggregate limit, SDK error, interrupt, etc.). The reason enum and delivery gate are the same as `attach_rejected`; `version` remains unchanged. |
+| `inter_agent_message` | **settled** | Conversation message from agent A to B. Payload has `to` / `conversation_id` / `turn_number` / `kind` (nine-value enum) / `body` / `meta {done, propose_next, confidence?, reject_reason?}` / `owner {kind, id}` / `error? {code, message}`. `error` is an optional addendum sent back to the sender when the peer cannot respond (`kind` reuses `inform`; presence of `error` distinguishes it, #127). The server routes by `to` and broadcasts observations without interpreting semantics; carve-outs are structural `error` validation, synthesizing `code=reconnecting` / `code=disconnected` on wrapper disconnect, and synthesizing an error-free `reconnected` inform after an exact-token return. The normative text is [protocol-inter-agent](protocol-inter-agent.md). **Operator-only delivery**; `version` remains unchanged. |
+| `external_message` (reserved) | **reserved** | Discord message with an external human (`direction: outbound\|inbound`). Payload may contain `channel` / `to`\|`from` / `conversation_id` / `turn_number` / `body` / `meta`, etc. The server routes by `to` to discord-wrapper without interpreting semantics. The inbound `ext.interpretation` is attached by the discord-wrapper filter. Normative text is [protocol-external-human](protocol-external-human.md), implementation [phase-9](../plans/phase-9-external-human-messaging.md). **Operator-only delivery**; `version` remains unchanged. |
+| `session_boundary` | **settled** | `{ mode: "new" \| "clear", request_id: string, ts, previous_session_id?: string, to_session_id?: string \| null }`. Session-lifecycle marker for `/new` and `/clear`. The normal `envelope` path broadcasts it; `/new` appends to existing history and `/clear` reduces that agent's history to one marker row (ADR-0036 F3 restoration, 2026-07-24). `history_reset` is resume-replay-only and neither command emits it. For lazy Codex allocation, `to_session_id: null` is patched in the first envelope. Viewer payload is sanitized to `{ "mode" }`. |
+| `refresh_models_result` | **settled** | `{ request_id: string, ok: boolean, reason?: string, models_count?: number }`. Wrapper completion report for the operator's `refresh_models` ([ADR-0039](../adr/0039-engine-catalog-live-probe.md) F9 v2). `agent_id` is in the outer envelope and is **not duplicated**. `reason` appears only on failure and shares the engine-catalog probe vocabulary (`auth_failed` / `spawn_failed` / `cli_error` / `invalid_output` / `timeout` / `unsupported_engine`; non-Claude adapters no-op the control and return `unsupported_engine`). `models_count` is a success-only size signal; the updated catalog is carried by the immediately preceding `state_change.ext.models`. This envelope is transient: the server does not put it into `AgentStates`, and the client special-dispatches it before normal envelope handling. **Operator-only delivery**. |
 
-### `task_type: "tasklist"` 追補 (issue #178, ADR-0049 F4)
+### `task_type: "tasklist"` addendum (issue #178, ADR-0049 F4)
 
-`task` の一般規則に加え、エージェント自身の todo は常に単一 entity
-`{ agent_id, task_id: "tasklist", task_type: "tasklist" }` とする。予約語は双方向である: `task_type` が `tasklist` なら `task_id` は必ず
-`tasklist`、`task_id` が `tasklist` なら `task_type` も必ず `tasklist`。
-server はどちらの不一致も reject する。この entity に child task の ID を
-使わせず、child task に予約 ID を使わせないためである。
+In addition to the general `task` rules, an agent's own todo is always the single entity
+`{ agent_id, task_id: "tasklist", task_type: "tasklist" }`. The reserved word is bidirectional:
+when `task_type` is `tasklist`, `task_id` must be `tasklist`, and vice versa.
+The server rejects either mismatch. This prevents child task IDs from being used for this
+entity and prevents child tasks from using the reserved ID.
 
-payload は `{ kind: "updated", status: "running", items, omitted? }`。
-`items` は `{ text: string, status: "pending" | "in_progress" | "completed" }`
-の whole-list snapshot で、後着を優先して全体置換する(LWW)。全項目が完了しても
-`kind: "completed"` は送らない。`items: []` も現在の todo が空であることを表す
-有効な置換であり、entity は親 wrapper の離脱まで保持する。dashboard は空 list の
-float を表示しない(意味のない `0/0` を避ける)が、state 上の entity を消してはいけない。
+The payload is `{ kind: "updated", status: "running", items, omitted? }`.
+`items` is a whole-list snapshot of `{ text: string, status: "pending" | "in_progress" | "completed" }`,
+with the latest snapshot replacing the whole list (LWW). Do not send `kind: "completed"`
+when all items are complete. `items: []` is a valid replacement meaning that the current
+todo is empty; retain the entity until its parent wrapper leaves. The dashboard must not
+show a float for an empty list (avoiding a meaningless `0/0`), but must not delete the
+entity from state.
 
-wrapper は source order の先頭から最大 50 items を送り、各 `text` は UTF-8 で
-256 bytes 以下、`items` JSON は 16,384 bytes 以下に正規化する。より後ろの source
-items があれば `omitted: { count, completed }` を必ず付け、operator は detail が一部
-だけであることと全体の完了数を確認できる。server は同じ上限を防御的に検証して
-reject するが、通常使用での超過は wrapper の正規化で表示可能な snapshot にする。
+The wrapper sends at most 50 items in source order, normalizing each `text` to at most
+256 UTF-8 bytes and the `items` JSON to at most 16,384 bytes. If later source items exist,
+it must include `omitted: { count, completed }`, so the operator can see that the detail is
+partial and how many items are complete overall. The server defensively validates the same
+limits and rejects violations; normal over-limit input is made displayable by wrapper normalization.
 
-tasklist は child task の `kind=updated` 用 3 秒/トークン/tool-name throttle の対象外。
-todo の変更には後で flush する token/tool signal が無いため、その throttle では更新を
-永続的に落としうる。wrapper は内容が完全一致する連続 snapshot だけを de-duplicate
-し、変更された snapshot は直ちに送る。Claude Code の `TodoWrite` は `content` と
-3 値 status を写す。`activeForm` は Claude のローカル UI 文言であり、ADR-0049 が
-確定した wire item は text + status のみなので送らない。将来これを表示したい場合は
-既存 field への暗黙追加ではなく protocol 拡張として決める。Codex の
-`todo_list.completed: boolean` は `false -> pending` / `true -> completed` に写す。
-いずれも親 thread の list のみを対象にする。wrapper transport は socket 再接続時に
-active `task` entity を fresh seq で再送する。これにより旧 channel の terminate が
-server の task table を purge した後も、tasklist の content dedupe に妨げられず復元される。
-再送用の wrapper cache は `5,000` entity / JSON `6,000,000` bytes を上限にする。`completed`
-を受けない crash/kill 済み child task を無限に残さないためで、超過時は最終更新が最も古い
-child entity から cache 外へ退避し、wrapper は stderr に警告する。`tasklist` は parent 自身の
-単一 snapshot なので他に退避対象がある限り保持する。これは再接続時の local memory bound であり、
-multi-wrapper をまたぐ server 側 TaskStates の ingress/byte bound に代わるものではない。
+`tasklist` is outside the three-second/token/tool-name throttle used for child-task
+`kind=updated`. Todo changes have no later token/tool signal to flush, so that throttle
+could permanently lose updates. The wrapper de-duplicates only consecutive snapshots with
+identical content and sends changed snapshots immediately. Claude Code `TodoWrite` maps
+`content` and the three-valued status. `activeForm` is Claude-local UI text; the wire item
+settled by ADR-0049 contains only text and status, so it is not sent. Showing it later
+requires a protocol extension rather than an implicit field addition. Codex
+`todo_list.completed: boolean` maps `false -> pending` and `true -> completed`.
+Both cover only the parent thread's list. On socket reconnect, wrapper transport resends
+active `task` entities with a fresh seq, so they can be restored even after the old channel
+terminates and purges the server task table, without tasklist content de-duplication blocking it.
+The resend cache is capped at `5,000` entities / JSON `6,000,000` bytes. This prevents
+crashed/killed child tasks that never send `completed` from remaining forever; on overflow,
+the least recently updated child entities leave the cache and the wrapper warns on stderr.
+The parent `tasklist` snapshot is retained while any other eviction target exists. This is
+a local-memory bound for reconnects, not a substitute for server-side TaskStates ingress/byte
+bounds across multiple wrappers.
 
-### 方向別メッセージ種別(v0 確定)
+### Directional message types (v0 settled)
 
-Channels のチャネルイベント名と内容。トピックは
-ラッパー側 `wrapper:<agent_id>`、クライアント側 `agents:lobby`。
+Channel event names and contents. Topics are `wrapper:<agent_id>` for wrappers and
+`agents:lobby` for clients.
 
-**段階1として充足したクライアント → サーバ / サーバ → ラッパー / サーバ →
-runner の各該当行では、`version` は共通のフラット外枠キーであり、各行の
-payload 欄には再掲しない**([ADR-0015](../adr/0015-protocol-version-stamping.md)。
-エンベロープの外枠キーを個々の `type` 行に再掲しないのと同じ扱い)。行の payload
-欄に `version` が明示されているのは、その値の producer や domain に固有の注記が
-ある場合だけで、明示が無いことは非付与を意味しない。全経路の充足状況と
-恒久例外(`attach_chunk`)は下記「version 棚卸し」が正本。
+**For the client → server, server → wrapper, and server → runner rows completed in stage 1,
+`version` is a common flat outer key and is not repeated in each payload column**
+([ADR-0015](../adr/0015-protocol-version-stamping.md)); this is the same treatment as not
+repeating envelope outer keys in every `type` row. A row explicitly mentioning `version`
+does so only for a producer/domain-specific note; omission does not mean the stamp is absent.
+The complete coverage and the permanent `attach_chunk` exception are normative in the
+"version inventory" below.
 
-| 方向 | イベント | 内容 |
+| Direction | Event | Contents |
 |---|---|---|
-| ラッパー → サーバ | `envelope` | エンベロープ全体。 `type=inter_agent_message` を受理したときだけ reply が `{ ingress_stamp: [us, seq] }` を返す (acceptance ack、[ADR-0051](../adr/0051-history-restart-resilience.md) D3-2。送信側 wrapper の sidecar 記録トリガ)。他の type は従来どおり空 reply。因果順は [protocol-inter-agent](protocol-inter-agent.md) が正本 |
-| ラッパー → サーバ | `delivery_ack` | `{ delivery_seq: positive integer }`。issue #237 の SDK-dispatch confirmation watermark。capability 未交渉、duplicate、future は no-op。再送要求ではない。 |
-| ラッパー → サーバ | `delivery_status_request` | `{}`。self の `{ delivery?: {issued_seq, acked_seq, pending_since?} }` を読む。absent は legacy/disarmed の unknown。 |
-| ラッパー → サーバ | `history_reset` | `{ replay_id }`。replay 開始境界。join 応答の hydration verdict で `replay_required: true` を受けた場合は **server 採番の `replay_id`** を用いる(verdict 不在 = 旧 server 相手の legacy startup replay のみ wrapper 採番)。サーバは当該 agent の表示投影(transcript 行 + IA pane)を消去し、`history_reset { agent_id, preserve_inter_agent: false, replay_id }` を broadcast する。IA は sidecar 由来の `replay_ia` で再投影されるため保持しない(意味論は [ADR-0051](../adr/0051-history-restart-resilience.md) D3-3。`preserve_inter_agent` field は旧 client 互換のため互換期間中 `false` を明示送信し、省略しない)。状態未確立(エントリ無し)は no-op で ack のみ。掃除は表示用履歴のみで wrapper の JSONL には触れない([ADR-0014](../adr/0014-session-resume-and-restore.md) phase-2、#50) |
-| ラッパー → サーバ | `history_replay_complete` | `{ replay_id }`。当該 `history_reset` 後の最後の再生(JSONL 由来 `log` および sidecar 由来 `replay_ia`)の直後に送る。サーバは `{ agent_id, replay_id }` を operator に broadcast し、`replay_id` と channel owner が `in_flight` 記録と一致する場合のみ hydration を `hydrated` へ CAS 遷移する([ADR-0051](../adr/0051-history-restart-resilience.md) D2)。再生 `envelope` と次の live assistant reply を決定的に区別する境界 (#121) |
-| ラッパー → サーバ | `replay_ia` | `{ replay_id, items: [{ envelope, ingress_stamp }] }`。**display replay 専用の IA ingress**([ADR-0051](../adr/0051-history-restart-resilience.md) D3-3)。wrapper が自分の IA sidecar から自 pane の表示行を復元するために送る。pane はチャネル topic の agent に bind され(payload で他 pane を指定できない)、サーバは per-pane projection へ `ingress_stamp\|pane_agent_id` identity で upsert **のみ**行う — routing・ConversationStates・peer wrapper push・SDK injection には一切触れない。`ingress_stamp` を durable `ClearWatermarks` と比較して clear 済み行は hide、stamp 欠落行は fail-closed で破棄。`replay_id` は進行中の hydration attempt と一致しない場合 `stale_replay` で reject。 `ingress_stamp` の wire 形は整数 2 要素配列 `[us, seq]`。 **追補 (実装時、2026-08-08)**: 受理した復元行は `agents:lobby` へ **`history_replay_envelope { pane_agent_id, envelope }`** として broadcast する — `history_reset` が `preserve_inter_agent: false` で接続中タブの IA を落とすため、投影 upsert だけでは F5 まで IA が戻らない。通常の `envelope` を使わないのは、その形が pane を持たず client 側で `agent_id ∪ payload.to` へ fan-out されるため、復元行が reload 後には表示されない peer の pane にも入ってしまうから (ふじ 30-10 must-fix M2、2026-08-08)。`pane_agent_id` は replay 中 wrapper の channel assign 由来で、wrapper の payload には pane 指定権を与えない。**operator 限定配信**。replay window 内なので client の reset/complete pairing が新着アニメーションから除外する。routing・ConversationStates・peer push・SDK 注入には依然として触れない。なお 1 push あたりの `items` は wrapper 側が JSON 実 byte 長で分割する (socket の `max_frame_size` 8MB に対し 200 行 × 64KiB envelope は約 12MB になり frame ごと reject される)。同一 `replay_id` の複数 push を `history_replay_complete` の前にすべて送る |
-| ラッパー → サーバ | `directory_request` | `{}`。inter-agent messaging で wrapper が persona 名 → agent_id 解決を行うための peer 一覧取得。 サーバは `AgentStates.snapshot()` の各 entry を allow-list で丸め、下記の `AgentDirectory` 合流後に **送信元 wrapper を 1 箇所で除外** して `{:ok, %{agents: [...]}}` で reply(#259 で除外タイミングを合流後の 1 箇所へ統一。詳細は [protocol-inter-agent](protocol-inter-agent.md)「peer directory の情報境界」)。宛先解決の `{agent_id, persona, state}` に加え、実行特性 `engine? / model? / effort?`(#99)と稼働状況 `context? / session_started_at? / turns? / last_activity_at? / conversation / rate_limits?`(#150)を載せる。**加えて `AgentStates` に live envelope を持たない `AgentDirectory` エントリ(サーバ再起動や #14 のエントリ削除で落ちた peer)を同じ `agents` 配列に合流し、`state: "disconnected"` + `directory_only: true` + `last_seen?` として返す(#259)。** 省略規則・projection・上限値・directory-only 合流の正本は [protocol-inter-agent](protocol-inter-agent.md)「peer directory の情報境界」、開示ポリシは [ADR-0021](../adr/0021-role-information-disclosure-policy.md) F6。 wrapper 側は `mcp__kaoiro__list_agents` ツールでこれを呼ぶ |
-| サーバ → クライアント | `snapshot` | `{ agents: { <agent_id>: envelope }, tasks: { <agent_id>: { <task_id>: envelope } }, deliveries: { <agent_id>: { issued_seq, acked_seq, pending_since? } } }`。join 直後に push。`tasks` は稼働中 subagent/workflow task の active set(段階2、issue #170)— `agents` とは別の、親 `agent_id` → `task_id` → `task` envelope の 2 段ネスト map(M1 fix-round、2026-08-09: `task_id` は ADR-0047 F2 上「親セッション内一意」の保証しか無く、`task_id` 単独キーのフラット map では別 agent の task が衝突しうるため複合キー化した — server の `TaskStates.snapshot/0`、client の `TaskTable` と同一形状)。`deliveries` は issue #237 の recipient-local dispatch confirmation watermark で、未確認 gap の観測用であり再送 queue ではない。**operator 限定**: viewer join は常に `tasks: {}` / `deliveries: {}` ([ADR-0048](../adr/0048-task-aggregation-delivery.md) addendum) |
-| サーバ → クライアント | `delivery_status` | `{ agent_id, delivery?: { issued_seq, acked_seq, pending_since? } }`。recipient の ledger 更新（capability を失った場合は `delivery` 不在）を送る。**operator 限定配信**。 |
-| サーバ → クライアント | `envelope` | エンベロープ全体(状態変化の都度 broadcast) |
-| サーバ → クライアント | `history_cleared` | `{ agent_id, session_id, clear_watermark }`。operator の `clear_history` (#48) 成功後に broadcast。非 IA は `session_id` 一致へ再 filter、IA は `clear_watermark`（現行 session 開始点を `SessionStarts` から fsync 採用した `ClearWatermarks`）以前を隠す。`/new`・`/clear` は本 event を使わず、それぞれ session_reset lifecycle broadcast (下記) 経由で表示を扱う。external switch も本 event を発火しない。開始点が無い場合は warning を出して watermark を更新せず IA を残す。**operator 限定配信**。既存 `ClearWatermarks` DETS row は migration で残置し、再露出を防ぐ。 |
-| サーバ → クライアント | `history_reset` | `{ agent_id, preserve_inter_agent: boolean, replay_id? }`。replay 再構築時のみ送る。[ADR-0051](../adr/0051-history-restart-resilience.md) D3-3 により IA も sidecar 経由で再投影されるため **`preserve_inter_agent` は意味論として廃止し、互換期間中は `false` を明示送信する**(省略は旧 server 後方互換のため `true` と解釈される規約が旧 client に残っており、単純省略・削除は不可。field の物理削除は旧 client 消滅後の別段階)。`/new` は表示を変えないので送らず、`/clear` は session_reset_completed 経由で当該 agent の pane を marker 1 行だけに絞るのでこの event は使わない。**operator 限定配信** |
-| サーバ → クライアント | `history_replay_complete` | `{ agent_id, replay_id }`。resume JSONL 再生の完了境界。`replay_id` が対応する `history_reset` と一致する間だけ、client は再生した assistant 行を新着アニメーションから除外する。**operator 限定配信** |
-| サーバ → クライアント | `history_replay_envelope` | `{ pane_agent_id, envelope }`。`replay_ia` で受理された復元 IA 行 1 件を、**それが属する pane を明示して** 配信する([ADR-0051](../adr/0051-history-restart-resilience.md) D3-3 追補、ふじ 30-10 must-fix M2)。client は指定 pane にだけ入れ、通常の `envelope` のように `agent_id ∪ payload.to` へ広げてはならない — 広げると offline peer の pane に、reload 後には現れない行が残る。`pane_agent_id` は server が replay 中 wrapper の channel assign から決める。**operator 限定配信** |
-| サーバ → クライアント | `agent_deleted` | `{ agent_id }`。`delete_agent` 成功後に broadcast。クライアントは当該 agent をグリッドと表示用ログから除去(#14)。viewer にも配信(grid 整合のため、[ADR-0021](../adr/0021-role-information-disclosure-policy.md)) |
-| クライアント → サーバ | `attach_open` | `{ agent_id, upload_id, filename, mime, size, chunks }`。**operator のみ**。ファイル添付の予告。upload_id は client 採番(セッション内一意)。該当ラッパーへ relay、未知 agent_id は `{:error, unknown_agent}`。詳細は下記「ファイルアップロード wire」 |
-| クライアント → サーバ | `attach_chunk` | **binary frame**(`<u32 upload_id_len><upload_id utf8><u32 chunk_index><chunk_bytes>`)。**operator のみ**。該当ラッパーへ透過 relay。詳細は下記「ファイルアップロード wire」。**`version` の唯一の恒久例外** — binary frame にキーを置く JSON オブジェクトが無いため(下記「version 棚卸し」) |
-| クライアント → サーバ | `attach_close` | `{ agent_id, upload_id }`。**operator のみ**。1 upload の完了通知(任意 = chunks 完走 ack)。詳細は下記「ファイルアップロード wire」 |
-| クライアント → サーバ | `instruction` | `{ agent_id, text, attachment_ids? }`。**operator のみ**。サーバは text / attachment_ids を解釈せず該当ラッパーへ relay。未知 agent_id は `{:error, unknown_agent}`。`attachment_ids` 指定時は wrapper が attach_close 完走済の upload を SDK content blocks へ render([file-upload](file-upload.md)、[ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md)) |
-| クライアント → サーバ | `permission_decision` | `{ agent_id, request_id, allow, message? }`。**operator のみ**。該当ラッパーへ relay |
-| クライアント → サーバ | `question_response` | `{ agent_id, request_id, answers, cancelled? }`。**operator のみ**。AskUserQuestion への選択回答([ADR-0027](../adr/0027-askuserquestion-envelope.md))。`answers` は `{ [質問文]: string }`(値は選択 option の `label`、multiSelect は `", "` join、"Other" は自由記述文字列)。`cancelled: true` は却下。該当ラッパーへ relay。未知 agent は `unknown_agent` |
-| クライアント → サーバ | `interrupt` | `{ agent_id }`。**operator のみ**。実行中ターンの中断要求(ESC 相当、ADR-0020、#51)。該当ラッパーへ fire-and-forget で relay。未知 agent は `unknown_agent`。中断後 SDK は `error_*` 系の `SDKResultMessage` を返し、既存の `error → waiting_input` 遷移に乗る(専用状態は持たない)。ラッパーは加えて pending_uploads / staged attachment bytes を drop し `attach_rejected{reason="interrupted"}` を発火する([ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md) F11、前方互換: uploads / staged 不在時は従来通り SDK の `Query.interrupt()` のみ) |
-| クライアント → サーバ | `set_model` | `{ agent_id, model }`。**operator のみ**。`model` は `ext.models[].value` のエイリアス。該当ラッパーへ fire-and-forget で relay。未知 agent は `unknown_agent`(#54 / [ADR-0020](../adr/0020-dashboard-battery-included-client.md)) |
-| クライアント → サーバ | `set_effort` | `{ agent_id, effort }`。**operator のみ**。`effort` は対象モデルの `effort_levels` の一値(`low`〜`max`)。該当ラッパーへ fire-and-forget で relay。未知 agent は `unknown_agent`(#54 / [ADR-0020](../adr/0020-dashboard-battery-included-client.md)) |
-| クライアント → サーバ | `refresh_models` | `{ agent_id }`。**operator のみ**。ラッパーの `supportedModels()` catalog fetch を手動で再試行させる ([ADR-0037](../adr/0037-claude-model-catalog-live-refresh.md) F6)。payload に field なし (topic が agent を addressing)。該当ラッパーへ fire-and-forget で relay。未知 agent は `unknown_agent`。session_reset pending 中は `session_reset_pending` |
-| クライアント → サーバ | `set_permission_mode` | `{ agent_id, mode }`。**operator のみ**。`mode` は SDK の `PermissionMode` 6 値 (`default`/`acceptEdits`/`bypassPermissions`/`plan`/`dontAsk`/`auto`)。該当ラッパーへ relay すると同時にサーバが agent_id 単位で永続化 (DETS)、次回 wrapper join 時に after_join で配信されて起動モードを復元する。未知 mode は `invalid value: mode`、未知 agent は `unknown_agent` (#58) |
-| クライアント → サーバ | `clear_history` | `{ agent_id }`。**operator のみ**。当該 agent の過去セッション(現在の `session_id` 以外/無し)の返答ログを**サーバのインメモリ・リングバッファ**から消去し `history_cleared` を broadcast。掃除するのは表示用履歴のみで wrapper の JSONL には触れない。未知 agent は `unknown_agent`、現在 `session_id` 不明は `no_current_session`(#48) |
-| クライアント → サーバ | `delete_agent` | `{ agent_id }`。**operator のみ**。当該 agent が `disconnected` の時のみ受理。処理順は `require_disconnected` 非破壊 pre-check (ふじ #72 R1 must-fix、2026-07-23; live 拒否時に revoke と revoked broadcast が走らないよう revoke より前に置く) → `TokenDenylist.revoke + fsync` → `wrapper:<id>` topic に `revoked` broadcast (`reason=agent_deleted`、live channel を force disconnect) → active `PlannedDisconnects` があれば tracked target union を terminal `disconnected` で閉じる → 全 store を purge (`AgentStates` / `AgentDirectory` / `SessionPointers` / `PermissionModes` / `SessionResets` / `PlannedDisconnects` / `SessionStarts` / `ClearWatermarks`。`InterAgentHistory` は [ADR-0051](../adr/0051-history-restart-resilience.md) で撤廃済み。wrapper ホスト側の transcript / IA sidecar は server から消えない = host local artifact 残置) → `agent_deleted` broadcast。auto-revoke は恒久 (denylist は purge から除外)。稼働中は `not_disconnected`、未知 agent は `unknown_agent`([#14](https://github.com/sakuraiyuta/kaoiro/issues/14) / [#72](https://github.com/sakuraiyuta/kaoiro/issues/72) 追補、2026-07-23) |
-| クライアント → サーバ | `revoke_wrapper_token` | `{ agent_id }`。**operator のみ**。当該 agent_id の per-agent 署名 wrapper token を per-agent_id denylist へ即時投入する ([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) D4 追補 / [#72](https://github.com/sakuraiyuta/kaoiro/issues/72))。live / disconnected どちらでも受理 (進行中の compromise を切る用途)。処理順は `TokenDenylist.revoke + fsync` → `wrapper:<id>` topic に `revoked` broadcast (`reason=operator_revoke`、live channel を force disconnect)。以後の再 join は `Auth.authorize_wrapper` の denylist gate で `unauthorized`。DETS 永続なので server restart を跨いで有効。未知 agent は `unknown_agent` |
-| クライアント → サーバ | `rename_agent` | `{ version, agent_id, display_name }`(issue #209 D23 でキーを `name` から改名 — 互換期間中は旧 `name` キーも受理するが、両キーが同時かつ不一致で来たら `invalid_name` で reject し、どちらか一方を黙って優先しない)。runner へは中継されないが ADR-0015 は「3 者すべてのメッセージ」を対象とし例外を設けないため、`version` は必須(issue #187 段階3 ふじ MF-1 レビュー指摘、`launch_defaults` と同じ扱い)。**operator のみ**(issue #187 段階3、#188 まで固定)。`display_name` は trim 後 non-empty / 64 grapheme cluster 以下 / 制御文字 (C0+DEL) 禁止 — spawn 時の `name?` (上記) と同じ規則。live / disconnected どちらの agent でも受理。`AgentDirectory.rename/2` が唯一の authoritative write (revision を単調 +1、canonical persona は一切変更しない — issue #209 D19)、成功で `{ display_name, revision }` を reply しつつ (a) `wrapper:<id>` topic へ `persona_sync` **と** `display_name_sync` を同一 revision で dual-emit relay (下記、issue #209 D22、fire-and-forget) と (b) 既 join operator 全員の `directory` push を live 更新 (`entries` フルスナップショット、`persona_id` を現在の PersonaAssets へ join した canonical + `display_name` の形、viewer には届かない)。未知 agent は `unknown_agent`、name 違反は `invalid_name`、対象 agent の revision が safe-integer 上限 (下記) に既に達している場合は `revision_exhausted`(fail-closed、書き込み・relay とも一切行わない、issue #187 段階3 ふじ MF-5 レビュー指摘) |
-| クライアント → サーバ | `rename_user` | `{ version, user_id, display_name }`(issue #209 D23、`rename_agent` と同じ `name`/`display_name` 互換規則)。`version` は `rename_agent` と同じ理由で必須(issue #187 段階3 ふじ MF-1 レビュー指摘)。**operator のみ、任意の既存 user が対象**(issue #187 段階3)。`display_name` の contract は `rename_agent` と同じ。`Users.rename/2` を synchronous に呼び、成功で更新後の `{ id, kind, display_name }` を reply。`directory_request` の `users` 投影 (issue #187 段階2) は毎回 live 読みのため、これ以外の broadcast は無い。未知 user は `unknown_user`、name 違反は `invalid_name`、user_id の charset 違反 (issue #61) は `invalid_user_id` |
-| サーバ → ラッパー | `attach_open` | `{ upload_id, filename, mime, size, chunks }`(relay)。wrapper は `pending_uploads[upload_id]` を作成、5 分 TTL で GC |
-| サーバ → ラッパー | `attach_chunk` | **binary**(relay)。wrapper は header(`<u32 upload_id_len><upload_id utf8><u32 chunk_index>`)をパースし当該 upload の chunk バッファに追加。**`version` の唯一の恒久例外**(下記「version 棚卸し」) |
-| サーバ → ラッパー | `attach_close` | `{ upload_id }`(relay)。wrapper は MIME / 個別サイズ(128 MB 上限)/ 点数(in-flight 20)を検査、不適は `attach_rejected` を発火 |
-| サーバ → ラッパー | `instruction` | `{ text, attachment_ids? }`(relay)。ラッパーは入力キューへ投入、`attachment_ids` 指定時は pending_uploads の bytes を SDK content blocks(image / document / text、Office は markitdown → text)へ render([file-upload](file-upload.md)、[ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md))。instruction 全体の拒否は `instruction_rejected` |
-| サーバ → ラッパー | `permission_decision` | `{ request_id, allow, message? }`(relay。`request_id` で保留中の承認と突合) |
-| サーバ → ラッパー | `question_response` | `{ request_id, answers, cancelled? }`(relay。`request_id` で保留中の質問と突合。allow 時は wrapper が `updatedInput.answers` に載せて SDK へ返却、`cancelled` は deny 相当。[ADR-0027](../adr/0027-askuserquestion-envelope.md)) |
-| サーバ → ラッパー | `interrupt` | `{}`(relay)。ラッパーは SDK の `Query.interrupt()` を呼ぶ。turn 進行中以外は SDK 側 no-op(#51)。加えて当該 agent の pending_uploads / staged attachment bytes を drop し、drop した upload_id ごとに `attach_rejected{reason="interrupted"}` を発火する(turn 進行中でなくとも uploads があれば作動、前方互換: uploads / staged 不在時は従来通り、[ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md) F11) |
-| サーバ → ラッパー | `set_model` | `{ model }`(relay。ラッパーは `Query.setModel(value)` を呼ぶ。以降のターンから適用=次メッセージ単位。session 未開始時は no-op。#54) |
-| サーバ → ラッパー | `set_effort` | `{ effort }`(relay。ラッパーは `Query.applyFlagSettings({ effortLevel })` を呼ぶ。以降のターンから適用=次メッセージ単位。session 未開始時は no-op。#54) |
-| サーバ → ラッパー | `refresh_models` | `{}`(relay。ラッパーは retry counter と succeeded flag を reset して `#refreshSupportedModels()` を kick する。cap 到達で silent 化した状態でも再 fetch される。session 未開始時は query 未存在で no-op。[ADR-0037](../adr/0037-claude-model-catalog-live-refresh.md) F6) |
-| サーバ → ラッパー | `set_permission_mode` | `{ mode }`(relay または after_join push)。ラッパーは session 開始済なら `Query.setPermissionMode(mode)` を呼ぶ。未開始時は内部状態のみ更新し、次回 `query()` 構築時の `permissionMode` に反映する (= after_join 経路で起動モードを復元する仕組み)。`bypassPermissions` は wrapper が起動時に `allowDangerouslySkipPermissions: true` で開いた場合のみ受理、mid-session の bypass 切替は session が non-bypass で開始されていれば SDK が拒否する (#58) |
-| サーバ → ラッパー | `persona_sync` | `{ version, name, revision }`(issue #187 段階3。issue #209 D22 で **legacy 扱いに変更** — 削除は follow-up issue / 明示した release boundary へ、本 issue では消さない)。`display_name_sync`(下記、新 event)と**同一 revision で dual-emit**され、ラッパーはどちらが先に届いても同じ `display_name` mutation として適用する(旧ラッパー build は `persona_sync` しか解釈しないため、互換のため両方送り続ける)。`version` は live relay・after-join push 両 producer が常に付与する(issue #187 段階3 ふじ MF-1 レビュー指摘)。ラッパー側は完全一致のみ正常とみなし、欠落/不一致は warn した上で name/revision が valid ならベストエフォートで受理継続する(ADR-0015 — ただし version stamp は shape drift を免責しない)。**join のたびに無条件で push**(fresh join・reconnect 問わず、`AgentDirectory` の現在値を after_join handshake から。subscribe 確立後に送るので join/3 内での早期 read には無い race が閉じている) に加え、`rename_agent` 成功時に live relay(fire-and-forget、`wrapper:<agent_id>` topic broadcast、offline wrapper には届かず after-join sync で追いつく)。`revision` は agent_id ごとの単調カウンタ (`AgentDirectory.rename/2` が発行) — ラッパーは自分が最後に適用した revision 以下の push を無視する(2 つの `rename_agent` が broadcast 順を入れ替えて届いても、古い方には巻き戻らない。dual-emit された `persona_sync`/`display_name_sync` の後着側もこの guard で no-op になる)。適用すると `display_name` のみ書き換え(issue #209 D19 — `persona.name`/`sprite_set` はそもそも本 event の対象ではない)、`persona.id` / `name` / `sprite_set` と注入済み personality prompt は不変のまま、直ちに `state_change` を再送する(次の自然発生イベントを待たない — idle/waiting_input は無期限に待たされ得るため)。ack の保証範囲は `AgentDirectory` への commit までで、ラッパー側の反映は eventual convergence(relay loss は rollback せず、次の実 reconnect 時の sync で回復する)。**wire 上の domain**(issue #187 段階3 ふじ MF-4/MF-5 レビュー指摘): `name` は `rename_agent`/`rename_user` と同じ trim/64 grapheme cluster/制御文字禁止の contract、`revision` は **0 以上 `Number.MAX_SAFE_INTEGER` (2^53-1) 以下の safe integer** — `AgentDirectory.rename/2` が実際に発行し得る値の範囲そのもの(上限に達した agent への rename は `revision_exhausted` で fail-closed に拒否され、この範囲を超える revision は発行されない)。ラッパー側 narrow (`transport.ts` の `persona_sync` ハンドラ)はこの両方を value-level で検証し、違反する push は丸ごと drop する。poisoning のリスクがあるのは safe-integer 上限を超える巨大な正数の側であって負数側ではない — server は authoritative な revision を発行しているのに、その値を wrapper 側が `Number.isSafeInteger` で drop し続けるため、reconnect を挟んでも当該 agent の表示名が永久に収束しなくなる。負の revision を drop するのは guard poisoning 対策ではなく、producer (`AgentDirectory.rename/2`、常に 0 以上しか発行しない) の domain 違反を検出しているだけであり、`host.renameDisplayName` の `revision <= 現在値` guard は baseline `0` から出発するため負値がそもそも植わることはない |
-| サーバ → ラッパー | `display_name_sync` | `{ version, display_name, revision }`(issue #209 D22、新 event)。`persona_sync`(上記、legacy)と同一 revision で dual-emit され、value-level の contract・revision guard・適用対象(`display_name` のみ、`persona` は不変)はすべて `persona_sync` と同一 — 唯一の違いは payload key が `name` ではなく `display_name` であること。新しいラッパー build は本 event と `persona_sync` の両方を同じ `renameDisplayName` 経路で受理する(`transport.ts`) |
-| クライアント → サーバ | `session_reset` | `{ agent_id, mode: "new" \| "clear" }`。**operator のみ**。attachment 無し exact `/new`・`/clear` を Composer が intercept して発火([ADR-0036](../adr/0036-session-lifecycle-commands.md) F1)。server は operator role + agent 存在 + mode 検証 + capability advertise (`ext.session_capabilities.supports_session_reset`) + KaoiroState (`idle`/`waiting_input` のみ)+ SessionResets の pending lock を単一 handle_call で atomic 検証(F6 TOCTOU 芯)、成功で `origin: "operator"` を含む `session_reset_started` broadcast + `runner:<host>` へ `reset_session` push。旧/外部 client の literal `/new`・`/clear` は `send_instruction` handler の先頭で `reserved_session_command` reject。close vocab reject reason: `agent_busy` / `unsupported_session_reset` / `session_reset_pending` / `invalid_mode` / `unknown_agent` / `forbidden` |
-| ラッパー → サーバ | `session_reset_request` | `{ mode: "new" \| "clear", reason?: string }`。[ADR-0043](../adr/0043-agent-initiated-session-reset.md) による agent 自身の deferred reset 要求。現状は Claude wrapper の broker 承認済み `request_session_reset` tool だけが**当該 turn の result 処理後**に、自身の wrapper channel から送る。`ext.session_capabilities.supports_session_reset` は operator の `session_reset` 実行可否であり、この agent-self tool の公開可否を表さない。server は agent_id を payload から受け取らず接続に bind し、capability / KaoiroState / dispatch-cooldown / pending lock を既存 `SessionResets.check_and_acquire` で atomic 検証して operator 経路と同じ runner flow へ合流させる。`reason` は string かつ既存 frame 上限内のみ受理し、runner payload へは渡さない。成功 reply は `{ request_id }`: **lock 取得の確認であって reset 完了ではない**。reject は既存 lifecycle 語彙 (`agent_busy` / `session_reset_pending` / `unsupported_session_reset` / `runner_unavailable` 等) を用い、新語彙を追加しない |
-| サーバ → クライアント | `session_reset_started` | `{ request_id, agent_id, mode, origin: "operator" \| "agent_self", previous_session_id?, reason? }`。**operator 限定配信**(session_id、origin、reason を含むため `intercept` + `handle_out` role gate、[ADR-0021](../adr/0021-role-information-disclosure-policy.md))。dashboard は「新しいsessionを開始中」progress banner + Composer disable。`reason` は agent_self 時だけの任意 field で、viewer には流さない |
-| サーバ → クライアント | `session_reset_completed` | `{ request_id, agent_id, mode, previous_session_id?, to_session_id: string \| null, clear_watermark?: string }`。**operator 限定配信**。fresh wrapper の `WrapperChannel.after_join` 時に `SessionResets.confirm_connection/2` が発火(F2 「接続確認した時だけ」の two-phase completion)。`to_session_id` は Claude なら init 到達で binary、Codex lazy 采番は `null`(後追い patch は AgentStates 側の marker で行い、broadcast は再送しない意図的決定)。`clear_watermark` は `/clear` 完了時のみ含み(ADR-0036 F3 復元、2026-07-24)、SessionStarts 由来の ISO ts。live client はこの ts で per-agent watermark map を更新し、marker 以外の pane 行を drop する |
-| サーバ → クライアント | `session_reset_failed` | `{ request_id, agent_id, mode, reason }`。**operator 限定配信**。close vocab reason: `agent_busy` / `unsupported_session_reset` / `session_reset_pending` / `runner_unavailable` / `spawn_failed` / `rollback_failed` / `timeout`。dashboard は loud notice で reason を表示 |
-| サーバ → ラッパー | `session_reset_failed` | `{ request_id, reason }`。同じ terminal failure の private wrapper-topic relay。self-initiated reset を予約した**旧** wrapper が runner の termination failure 後も生きている場合だけ、request_id 一致で固定の failure notice を注入する。fresh wrapper・別/stale request_id は無視する。`reason` は上記と同じ closed vocabulary |
-| サーバ → runner | `reset_session` | `{ version, agent_id, mode, request_id, previous_session_id?, resume_snapshot? }`。session_reset relay。runner supervisor は `handleResetSession` で同 agent entry を SIGTERM し、猶予後 SIGKILL してから exit を確認して fresh relaunch(resume_session_id なし、`resume_snapshot` は server が `SessionPointers` から同梱し runner の `applyResumeSnapshot` が P0 privilege 三軸を `ParsedSpawn` に反映)。両方の signal 後にも exit が無ければ fresh を二重起動せず `timeout` failure を返し、旧 child は supervision 下に残す。spawn 例外なら旧 `previous_session_id` で resume 再試行(rollback、reset 前に適用済みの `entry.parsed` を保持)、失敗で `rollback_failed` + entry drop(disconnected)([ADR-0036](../adr/0036-session-lifecycle-commands.md) F2、[ADR-0014 F1 追補](../adr/0014-session-resume-and-restore.md) resume 時 privilege 三軸再適用) |
-| runner → サーバ | `session_reset_result` | `{ version, host_id, agent_id, mode, request_id, ok, reason?, to_session_id?: string \| null }`。fresh spawn / rollback の結果。`RunnerChannel` は `AgentId.host_id_from(agent_id) == host_id` の exact match で **host binding** を検証(nested-prefix spoof 防止)、`SessionResets.resolve/6` へ cast。`ok=true` は `:awaiting_connect` 遷移(broadcast は fresh wrapper join まで待つ)、`ok=false` は close vocab reason を伴い即座に `session_reset_failed` broadcast + lock release |
+| wrapper → server | `envelope` | Full envelope. Only `inter_agent_message` receives an `{ ingress_stamp: [us, seq] }` acceptance ack; other types receive an empty reply. Causal ordering follows [protocol-inter-agent](protocol-inter-agent.md); sidecar recording uses [ADR-0051](../adr/0051-history-restart-resilience.md). |
+| wrapper → server | `delivery_ack` | `{ delivery_seq: positive integer }`, the SDK-dispatch confirmation watermark (issue #237); unnegotiated, duplicate, or future values are no-op, not resend requests. |
+| wrapper → server | `wrapper_build_info` | `{ build_revision, build_dirty, build_version, build_channel }` reports the wrapper artifact immediately after each successful channel join. The server derives `agent_id` from the topic, validates the complete identity pair, keeps only the latest connected value, and broadcasts it to operator-capable clients. The flat protocol `version` is added by the wrapper control-event funnel. |
+| wrapper → server | `delivery_status_request` | `{}`; reads the sender's `{ delivery?: {issued_seq, acked_seq, pending_since?} }`. Absence is legacy/disarmed unknown. |
+| wrapper → server | `history_reset` | `{ replay_id }` starts replay. Use the server ID when the join verdict requires replay, otherwise a legacy wrapper ID. Clear display projection, retain IA for `replay_ia`, and acknowledge an absent entry as no-op ([ADR-0051](../adr/0051-history-restart-resilience.md), [ADR-0014](../adr/0014-session-resume-and-restore.md)). |
+| wrapper → server | `history_replay_complete` | `{ replay_id }` follows the final JSONL/sidecar row. The server broadcasts it and CAS-transitions matching in-flight hydration ([ADR-0051](../adr/0051-history-restart-resilience.md)). |
+| wrapper → server | `replay_ia` | `{ replay_id, items: [{ envelope, ingress_stamp }] }` restores one pane from the sidecar. Bind to the topic agent, upsert only that pane, reject stale/malformed stamps, and broadcast `history_replay_envelope`; operator-only ([ADR-0051](../adr/0051-history-restart-resilience.md)). |
+| wrapper → server | `directory_request` | `{}` requests the peer directory. The server allow-lists AgentStates, merges AgentDirectory-only disconnected entries, removes the sending wrapper once, and replies with `{ agents: [...] }`; projection rules are normative in [protocol-inter-agent](protocol-inter-agent.md). |
+| server → client | `snapshot` | `{ agents: { <agent_id>: envelope }, snapshot_incomplete?: true }` is pushed after join. The TransportLimits-bounded projection marks omission with `snapshot_incomplete`; compact entries may lose display-only fields while control state is unchanged. |
+| server → client | `task_snapshot` | `{ tasks: { <agent_id>: { <task_id>: envelope } } }` is the active subagent/workflow set, separate from agents. Viewer joins always receive `tasks: {}` ([ADR-0048](../adr/0048-task-aggregation-delivery.md)). |
+| server → client | `delivery_snapshot` | `{ deliveries: { <agent_id>: { issued_seq, acked_seq, pending_since? } }, snapshot_incomplete?: true }` reports recipient-local confirmation gaps, not a resend queue. Connected or gapped entries are prioritized; viewers receive `{ deliveries: {} }` ([ADR-0048](../adr/0048-task-aggregation-delivery.md)). |
+| server → client | `delivery_status` | `{ agent_id, delivery?: { issued_seq, acked_seq, pending_since? } }` reports a ledger update; capability loss omits `delivery`. Operator-only. |
+| server → client | `wrapper_build_info` | Join snapshot is `{ builds: { "<agent_id>": { build_revision, build_dirty, build_version, build_channel } } }`; live update is the same flat identity plus `agent_id`, and disconnect is `{ agent_id, cleared: true }`. Only currently connected wrappers appear in the snapshot. Operator-only. |
+| server → client | `envelope` | The complete envelope, broadcast on each state change. |
+| server → client | `history_cleared` | `{ agent_id, session_id, clear_watermark }` follows operator `clear_history` and filters non-IA rows by session and IA rows by watermark. `/new` and `/clear` use session-reset lifecycle events instead. Missing start points warn and leave the watermark unchanged; operator-only. |
+| server → client | `history_reset` | `{ agent_id, preserve_inter_agent: boolean, replay_id? }` is sent only for replay reconstruction. `preserve_inter_agent` is explicitly `false` during compatibility; `/new` and `/clear` do not use this event. Operator-only ([ADR-0051](../adr/0051-history-restart-resilience.md)). |
+| server → client | `history_replay_complete` | `{ agent_id, replay_id }` marks the resume JSONL replay boundary; matching rows are excluded from new-message animation. Operator-only. |
+| server → client | `history_replay_envelope` | `{ pane_agent_id, envelope }` delivers one restored IA row to the named pane only; it must not fan out by `agent_id ∪ payload.to` ([ADR-0051](../adr/0051-history-restart-resilience.md), [protocol-inter-agent](protocol-inter-agent.md)). Operator-only. |
+| server → client | `agent_deleted` | `{ agent_id }` follows successful deletion and removes the agent from grid and display logs; viewers receive it for grid consistency ([ADR-0021](../adr/0021-role-information-disclosure-policy.md)). |
+| client → server | `attach_open` | `{ agent_id, upload_id, filename, mime, size, chunks }` announces an attachment. Operator-only; upload IDs are client-assigned and relayed to the wrapper, with unknown agents rejected. See the file-upload wire section. |
+| client → server | `attach_chunk` | Binary V2 frame `<u32 upload_id_len><upload_id utf8><u32 chunk_index><chunk_bytes>`, relayed opaquely to the wrapper. This is the permanent `version` carve-out because no JSON object exists. |
+| client → server | `attach_close` | `{ agent_id, upload_id }` completes one upload (optional chunk-complete acknowledgement). Operator-only; wrapper validates MIME, size, count, and TTL. |
+| client → server | `instruction` | `{ agent_id, text, attachment_ids? }` is relayed without interpretation. The wrapper renders completed uploads as SDK content blocks and rejects unknown agents or invalid attachments ([file-upload](file-upload.md), [ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md)). |
+| client → server | `permission_decision` | `{ agent_id, request_id, allow, message? }`, operator-only relay matched to the pending permission. |
+| client → server | `question_response` | `{ agent_id, request_id, answers, cancelled? }`, operator-only relay matched to AskUserQuestion; `cancelled` denies and answers use option labels ([ADR-0027](../adr/0027-askuserquestion-envelope.md)). |
+| client → server | `interrupt` | `{ agent_id }` requests an operator-only turn interrupt. Relay is fire-and-forget; SDK returns an error result and the wrapper drops pending upload bytes, emitting `attach_rejected{reason="interrupted"}` ([ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md)). |
+| client → server | `set_model` | `{ agent_id, model }` selects an `ext.models[].value` alias and is relayed fire-and-forget; unknown agents are rejected (#54, [ADR-0020](../adr/0020-dashboard-battery-included-client.md)). |
+| client → server | `set_effort` | `{ agent_id, effort }` selects one of the model's `effort_levels` and is relayed fire-and-forget; unknown agents are rejected (#54, [ADR-0020](../adr/0020-dashboard-battery-included-client.md), [ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md)). |
+| client → server | `refresh_models` | `{ agent_id }` asks the wrapper to retry its supported-model catalog fetch ([ADR-0037](../adr/0037-claude-model-catalog-live-refresh.md) F6). It is a no-op for an absent session and rejects while `session_reset` is pending. |
+| client → server | `set_permission_mode` | `{ agent_id, mode }` relays a six-value SDK mode and persists it per agent for the next wrapper join. Unknown mode/agent returns `invalid value: mode` / `unknown_agent` (#58). |
+| client → server | `clear_history` | `{ agent_id }` purges prior-session display logs from the server ring buffer and broadcasts `history_cleared`; it never touches wrapper JSONL. Unknown agent/current session returns `unknown_agent` / `no_current_session` (#48). |
+| client → server | `delete_agent` | `{ agent_id }` is accepted only for disconnected agents. Requiring the disconnected pre-check, revoking and fsyncing the token, broadcasting `revoked`, closing planned targets, purging all server stores, then broadcasting `agent_deleted` preserves fail-closed ordering ([ADR-0051](../adr/0051-history-restart-resilience.md), [#14](https://github.com/sakuraiyuta/kaoiro/issues/14), [#72](https://github.com/sakuraiyuta/kaoiro/issues/72)). |
+| client → server | `revoke_wrapper_token` | `{ agent_id }` immediately places the per-agent signed token on the denylist, fsyncs, and force-disconnects the wrapper. It is accepted for live or disconnected agents and survives restart ([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md), [#72](https://github.com/sakuraiyuta/kaoiro/issues/72)). |
+| client → server | `rename_agent` | `{ version, agent_id, display_name }` renames the instance; `AgentDirectory.rename/2` is the sole write, returns a monotonic revision, dual-emits `persona_sync`/`display_name_sync`, and updates operator directory projections. Invalid names/revisions fail closed (issue #209, [ADR-0021](../adr/0021-role-information-disclosure-policy.md)). |
+| client → server | `rename_user` | `{ version, user_id, display_name }` synchronously renames an existing user and returns `{ id, kind, display_name }`; unknown users and invalid names return `unknown_user` / `invalid_name`. |
+| client → server | `list_users` | `{ version }` is an operator-only read query returning an explicit `{ id, kind, display_name, role }` projection from `Users.all_with_role/1`; no live push or runner relay.  ([../adr/0021-role-information-disclosure-policy.md](../adr/0021-role-information-disclosure-policy.md)) |
+| server → wrapper | `attach_open` | `{ upload_id, filename, mime, size, chunks }` creates a five-minute pending upload. |
+| server → wrapper | `attach_chunk` | Binary relay parsed by the wrapper into the upload chunk buffer; the binary frame is the permanent `version` exception. |
+| server → wrapper | `attach_close` | `{ upload_id }` closes an upload; wrapper enforces MIME, 128 MB file size, 20 in-flight count, and emits `attach_rejected` when invalid. |
+| server → wrapper | `instruction` | `{ text, attachment_ids? }` enters the input queue; completed attachments render as image/document/text blocks (Office via markitdown), with whole-instruction rejection reported by `instruction_rejected` ([file-upload](file-upload.md), [ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md)). |
+| server → wrapper | `permission_decision` | `{ request_id, allow, message? }` relays to the matching pending approval. |
+| server → wrapper | `question_response` | `{ request_id, answers, cancelled? }` relays to the matching pending question; cancelled is deny and allowed answers are returned through SDK `updatedInput.answers` ([ADR-0027](../adr/0027-askuserquestion-envelope.md)). |
+| server → wrapper | `interrupt` | `{}` calls SDK `Query.interrupt()` and drops pending upload bytes, emitting interrupted attachment rejections when needed (#51, [ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md)). |
+| server → wrapper | `set_model` | `{ model }` calls `Query.setModel(value)` for subsequent turns; absent sessions are a no-op (#54). |
+| server → wrapper | `set_effort` | `{ effort }` calls `Query.applyFlagSettings({ effortLevel })` for subsequent turns; absent sessions are a no-op (#54). |
+| server → wrapper | `refresh_models` | `{}` resets retry state and kicks `#refreshSupportedModels()`; it remains usable after a silent cap and is a no-op without a session ([ADR-0037](../adr/0037-claude-model-catalog-live-refresh.md) F6). |
+| server → wrapper | `set_permission_mode` | `{ mode }` relays or pushes after join. Before a session it updates internal state for the next query; `bypassPermissions` is accepted only when startup enabled `allowDangerouslySkipPermissions` (#58). |
+| server → wrapper | `persona_sync` | `{ version, name, revision }` is the legacy half of the dual emit with `display_name_sync`; both update only display_name and guard monotonic safe revisions (issue #209). |
+| server → wrapper | `display_name_sync` | `{ version, display_name, revision }` is the new dual-emitted form with the same contract and revision guard; wrappers route both forms through `renameDisplayName`. |
+| client → server | `session_reset` | `{ agent_id, mode: "new" \| "clear" }` is operator-only. Validate role, agent, mode, capability, idle state, and pending lock atomically, then broadcast `session_reset_started` and push runner `reset_session`; reserved literal commands are rejected ([ADR-0036](../adr/0036-session-lifecycle-commands.md)). |
+| wrapper → server | `session_reset_request` | `{ mode: "new" \| "clear", reason?: string }` is the agent-self deferred reset request. Bind agent_id to the connection, reuse SessionResets checks, and return `{ request_id }` as lock confirmation only; use existing lifecycle rejection vocabulary ([ADR-0043](../adr/0043-agent-initiated-session-reset.md)). |
+| wrapper → server | `session_lifecycle` | `{ kind, trigger?, at }` records one session-lifecycle transition (phase-33, [ADR-0055](../adr/0055-compaction-resume-and-lifecycle-log.md)). `kind` — wrapper-produced: `compacting` \| `compact_boundary` \| `compact_failed` \| `resume_reserved` \| `resume_fired` \| `threshold_notice` \| `conversation_reset`; server-merged into the same per-agent timeline: `disconnected` \| `reconnecting` \| `reconnected` \| `session_reset_started` \| `session_reset_completed` (a reset-driven rejoin records only `session_reset_completed`, never also `reconnected`). `trigger` applies only to `compact_boundary`: `request_compact` when the wrapper's own FIFO reservation queue attributes this boundary to a `request_compact` call; otherwise the SDK's own account (`sdk_auto` for its `"auto"`, `manual` for its `"manual"` — which also covers an operator-typed `/compact` directly, indistinguishable from the SDK's side); omitted when neither is determinable. `at` is the wrapper's own observation timestamp, not server receipt time. Server retains up to `SESSION_LIFECYCLE_MAX_EVENTS_PER_AGENT` events per agent (default 10,000, oldest discarded first) and does not notify peers. |
+| client → server | `list_session_events` | `{ version, agent_id }` is an operator-only pull query for one agent's `session_lifecycle` timeline, with the same `require_operator` gate as `list_conversations` / `list_users` (phase-33, [ADR-0055](../adr/0055-compaction-resume-and-lifecycle-log.md)). `agent_id` is format-validated only (no existence check): `delete_agent` does not purge the `session_lifecycle` store, so a deleted agent's history stays queryable for post-hoc debugging — that retention is a deliberate decision, not an oversight, made together with this query (issue #200 closing note); an unknown/never-existed `agent_id` returns `{ "events": [] }`. Replies `{ events: [{ kind, trigger, at }, …] }`, newest first, the full retained list for that agent with no pagination — bounded already by `SESSION_LIFECYCLE_MAX_EVENTS_PER_AGENT`. Wire egress size for this query is issue #278's concern (directory/history egress bound), not re-litigated here. |
+| server → client | `session_reset_started` | `{ request_id, agent_id, mode, origin: "operator" \| "agent_self", previous_session_id?, reason? }` is operator-only; dashboard shows progress and disables Composer.  ([../adr/0021-role-information-disclosure-policy.md](../adr/0021-role-information-disclosure-policy.md)) |
+| server → client | `session_reset_completed` | `{ request_id, agent_id, mode, previous_session_id?, to_session_id: string \| null, clear_watermark?: string }` is emitted after fresh wrapper join confirms completion. `/clear` includes a SessionStarts-derived watermark used to filter panes. |
+| server → client | `session_reset_failed` | `{ request_id, agent_id, mode, reason }` is operator-only with closed lifecycle vocabulary; dashboard displays a loud reason notice. |
+| server → wrapper | `session_reset_failed` | `{ request_id, reason }` is a private relay only to the old wrapper that reserved the matching reset; stale IDs and fresh wrappers are ignored. |
+| server → runner | `reset_session` | `{ version, agent_id, mode, request_id, previous_session_id?, resume_snapshot? }` terminates the old child, then fresh-launches or rolls back. It never double-starts after timeout and uses SessionPointers to apply the resume snapshot ([ADR-0036](../adr/0036-session-lifecycle-commands.md), [ADR-0014](../adr/0014-session-resume-and-restore.md)). |
+| runner → server | `session_reset_result` | `{ version, host_id, agent_id, mode, request_id, ok, reason?, to_session_id?: string \| null }` reports fresh spawn/rollback after exact host binding. Success waits for wrapper join; failure broadcasts and releases the lock. |
 
-### 予告済み wrapper cycle (issue #256)
+### Planned wrapper cycle (issue #256)
 
-server は operator / agent-self `session_reset`、live `resume_session`
-(`switch_session`)、live agent の operator `restart` の 3 経路に限り、
-runner へ送る直前に in-memory `PlannedDisconnects` intent を確保する。
-形は agent ごとに 1 件の `{transition_id, kind, phase, timer,
-targets}` で、`targets` は disconnect 時 snapshot と planned window 中に
-`peer_reconnecting` で bounce した送信元の union を持つ。1 target は synth
-envelope 1 件に対応する `{conversation_id, peer_id}` pair で、union 全体を 50
-件に制限する。競合する lifecycle 操作は `agent_busy` で拒否する。
-intent 確保から runner 送信までに失敗した reset は、matching
-`SessionResets` lock も無通知で cancel する。
+The server reserves an in-memory `PlannedDisconnects` intent immediately before sending the
+runner command on only three paths: operator or agent-self `session_reset`, live
+`resume_session` (`switch_session`), and operator `restart` for a live agent. Each agent has
+one `{transition_id, kind, phase, timer, targets}` entry. `targets` is the union of the
+disconnect-time snapshot and senders bounced with `peer_reconnecting` during the planned
+window. One target is a `{conversation_id, peer_id}` pair for one synthetic envelope; the
+union is capped at 50. Conflicting lifecycle operations are rejected as `agent_busy`. A
+reset that fails between intent allocation and runner send silently cancels the matching
+`SessionResets` lock.
 
-owner-checked wrapper terminate で phase を `announced → disconnected` に進め、
-その時点の open conversation peer を read-only snapshot して IA
-`error.code=reconnecting` を配る。tracked bounce を優先し、snapshot は残り
-slot だけを採用する。採用しなかった snapshot pair は件数と
-対象を warning log に残す。phase が `announced` / `disconnected` のどちらでも、
-後続 join の non-empty `transition_id` が exact match したときだけ intent を閉じ、
-同じ target union へ error なし `reconnected` inform を配る。本文は物理的な再接続を
-断定せず「peer は到達可能」とする。不一致 token は復帰と見なさない。
-intent の timeout / terminal failure は、AgentStates がまだ
-`disconnected` なら、過去の ordinary 通知済み mark にかかわらず target
-union 全体へ `error.code=disconnected` を配る。旧 wrapper / rollback
-wrapper が live なら、既に bounce された送信元を無言で残さず、同じ union
-へ `reconnected` を配って planned window の中止を閉じる。`spawn_failed` は reset の
-rollback wrapper 起動成功を意味するため、issue #248 の failure 通知と
-connectivity 判定を分け、matching rollback join または timeout まで
-intent を保つ。`rollback_failed` は terminal として閉じる。
+An owner-checked wrapper terminate advances the phase `announced → disconnected`, takes a
+read-only snapshot of open-conversation peers, and sends IA `error.code=reconnecting`.
+Tracked bounces take priority and only remaining slots are filled from the snapshot; skipped
+pairs are recorded with their count and targets in a warning. In either phase, only a later
+join whose non-empty `transition_id` exactly matches closes the intent and sends an error-free
+`reconnected` inform to the same target union. The text says only that the peer is reachable,
+not that a physical reconnection occurred; a mismatched token is never a return.
+On intent timeout or terminal failure, if `AgentStates` is still `disconnected`, send
+`error.code=disconnected` to the entire target union regardless of prior ordinary marks.
+If an old or rollback wrapper is live, close the planned window with `reconnected` to the
+same union instead of silently leaving bounced senders. `spawn_failed` means the rollback
+wrapper started successfully, so keep the intent until a matching rollback join or timeout,
+separate from issue #248 failure notification and connectivity; `rollback_failed` closes it
+terminally.
 
-planned intent が active な宛先への IA は、ConversationStates、pane、
-delivery ledger より前の preflight で `peer_reconnecting` として bounce
-する。active 判定と `{conversation_id, sender}` の target union への追加は
-同じ GenServer call で atomic に行い、target 記録前には bounce を返さない。
-既登録 pair は slot を再消費しない。50 slot 到達後の新規 pair は state を
-変えず `peer_reconnecting_capacity` で reject し、close notice を待つ契約を
-結ばない。wrapper はこれを `isError=true` の terminal tool failure として
-「message は未受理、当該 attempt に close notice は来ない、同じ
-conversation_id で時間を置いて再送」と固定案内する。
-wrapper 共通層は収容済み `peer_reconnecting` だけを structured
-`peer_error.code=reconnecting` に写し、operator へ escalate せず
-`reconnected` を待たせる。planned window 外の delivery gap は issue #257
-の範囲である。
+IA to an active planned target is bounced as `peer_reconnecting` in preflight, before
+ConversationStates, panes, or the delivery ledger. Active detection and adding
+`{conversation_id, sender}` to the target union are atomic in one GenServer call; no bounce
+is returned before recording the target. A registered pair consumes no new slot. After 50
+slots, a new pair is rejected as `peer_reconnecting_capacity` without changing state and
+does not promise a close notice. The wrapper reports a terminal `isError=true` tool failure:
+the message was not accepted, no close notice will arrive for this attempt, and it may be
+resent later with the same `conversation_id`. The common wrapper layer maps only admitted
+`peer_reconnecting` to structured `peer_error.code=reconnecting` and waits for `reconnected`
+without escalating; delivery gaps outside the planned window are issue #257.
 
-planned terminal は bounded target union だけを mark / deliver し、後から
-ordinary target を追加 claim しない。unexpected disconnect の ordinary claim
-は従来どおり 50 conversation cap であり、planned-window 外の競合は issue #257
-の範囲である。
+Planned terminals mark and deliver only the bounded target union and never claim ordinary
+targets later. Ordinary claims for unexpected disconnect retain the 50-conversation cap;
+conflicts outside the planned window are issue #257.
 
-operator `stop` は planned cycle を開始せず、active intent にも
-`agent_busy` で阻まれない。role / size / host ownership guard 後に active
-intent を cancel し、その target union へ terminal `disconnected` を配って
-から stop を relay する。stop / restart は
-`AgentId.host_id_from(agent_id) == host_id` を intent mutation より先に検証し、
-不一致は `agent_not_owned` で拒否する。unexpected disconnect の ordinary
-claim 規則は変更しない。
+Operator `stop` does not start a planned cycle and is not blocked by an active intent as
+`agent_busy`. After role, size, and host-ownership guards it cancels the active intent,
+sends terminal `disconnected` to its target union, then relays stop. Stop/restart first
+validate `AgentId.host_id_from(agent_id) == host_id` before any intent mutation and reject a
+mismatch as `agent_not_owned`; ordinary unexpected-disconnect claim rules are unchanged.
 
-ローリング deploy は **runner / wrapper を先行し、server を後行**
-する。新 server が restart `request_id` と `peer_reconnecting` を発行する前に、
-runner は restart token の wrapper config への置換、wrapper は
-structured peer error guidance を解せる必要がある。逆順で server を先行
-すると、旧 runner が transition token を relaunch へ運べない間、当該 agent
-宛 IA が最大 60 秒 `peer_reconnecting` で bounce し、旧 wrapper は close
-notice を解釈できないため受信側の reconnecting 状態も解消されない。
+Rolling deploy proceeds **runner/wrapper first, server second**. Before the new server emits
+restart `request_id` and `peer_reconnecting`, the runner must replace the wrapper config's
+restart token and the wrapper must understand structured peer-error guidance. Reversing the
+order leaves IA to that agent bounced as `peer_reconnecting` for up to 60 seconds while the
+old runner cannot carry the transition token into relaunch and the old wrapper cannot clear
+the receiver's reconnecting state.
 
-**承認フロー**: ラッパーは `canUseTool` 発火で `state_change.ext.pending_permission`
-を立て同時に互換用の `permission_request` エンベロープ(上記 type 表)を
-送って Promise を保留し、`permission_decision` の受信で解決する。pending
-中の真実は ext 側で持続するため、別の `state_change`(thinking /
-tool_running / session_init 由来の idle 等)が間に挟まっても消失しない
-([ADR-0022](../adr/0022-pending-permission-authoritative-source.md))。
-無応答時の既定は SDK と同じく **無制限待機**(タイムアウトなし。
-有限タイムアウトはラッパー設定で opt-in 可、設定面の整備は別
-issue #60)。deny でもセッションは継続する。サーバは指示・承認の**中身を解釈せず
-relay するだけ**で、agent 非依存を維持する。配達保証はしない(未接続
-ラッパーへの relay は消失し、要求側は次回 join 時の snapshot で
-ext.pending_permission を復元する)。
+**Permission flow**: On `canUseTool`, the wrapper sets `state_change.ext.pending_permission`
+and sends a compatibility `permission_request` envelope (the type table above), keeping the
+Promise pending until `permission_decision`. The ext field remains authoritative, so it
+survives intervening `state_change` events (thinking, tool_running, or session-init idle)
+([ADR-0022](../adr/0022-pending-permission-authoritative-source.md)).
+No response means **wait indefinitely** by default, matching the SDK (no timeout; finite
+timeouts are wrapper opt-in, with configuration in issue #60). A deny still keeps the
+session alive. The server only relays instruction and approval **without interpreting their
+contents**, remaining agent-independent. Delivery is not guaranteed: relay to a disconnected
+wrapper is lost and the requester restores `ext.pending_permission` from the next join snapshot.
 
-**再接続時の再同期**: クライアントは切断後、チャネルへ再 join するだけで
-`snapshot` により全エージェントの最新状態へ再同期する。差分追跡や再送
-要求は不要(agent_id ごと last-write-wins)。順序保証・重複排除の整列
-キーは `seq`([ADR-0011](../adr/0011-phase3-reliability-and-auth.md))。
-join 時には最新状態に加え、直近の返答ログ履歴(サーバの**インメモリ・
-リングバッファ**、[ADR-0012](../adr/0012-response-display-and-dashboard-scope.md))も
-配信する(再読込・再接続で返答ログを復元)。履歴はインメモリのみだが、
-サーバ再起動後は wrapper の hydration handshake で自動再構築される
-(下記「投影 hydration と再起動耐性」、
-[ADR-0051](../adr/0051-history-restart-resilience.md)。server 側
-ディスク永続 issue #24 は不採用のまま)。
-返答履歴の**正本は wrapper ホストの composite SSOT**(engine
-transcript + IA sidecar)であり、リングバッファはそこから再構築可能な
-投影と位置づける。replay 時は wrapper が当該 session の transcript を
-直読して `user`/`assistant` 行を `log` エンベロープへ写像し、IA sidecar
-を `replay_ia` へ写像して、`history_reset` → 再生でサーバ表示履歴を
-上書きする([ADR-0014](../adr/0014-session-resume-and-restore.md)
-phase-2、#50。SDK は resume 時に過去履歴を query() ストリームへ再
-yield しないため直読が必須)。
+**Reconnect resynchronization**: After disconnect, the client simply rejoins the channel;
+`snapshot` / `task_snapshot` / `delivery_snapshot` resynchronize all projections. The three
+frames replace independently, and join start clears all three previous projections. If the
+connection breaks midway, old and new generations are not mixed; only the received prefix is
+shown. No diff tracking or resend request is needed (last-write-wins per agent_id). Ordering
+and de-duplication use `seq` ([ADR-0011](../adr/0011-phase3-reliability-and-auth.md)).
+At join, the latest state and recent reply-log history (the server's **in-memory ring buffer**,
+[ADR-0012](../adr/0012-response-display-and-dashboard-scope.md)) are sent, restoring logs on
+reload/reconnect. History is memory-only, but after a server restart the wrapper hydration
+handshake rebuilds it automatically (see "Projection hydration and restart resilience",
+[ADR-0051](../adr/0051-history-restart-resilience.md); server-side disk persistence issue #24
+remains rejected). The **source of truth for reply history is the wrapper host's composite
+SSOT** (engine transcript + IA sidecar); the ring buffer is a rebuildable projection. During
+replay, the wrapper reads the session transcript directly, maps `user`/`assistant` rows to
+`log` envelopes and the IA sidecar to `replay_ia`, then overwrites server display history via
+`history_reset` → replay ([ADR-0014](../adr/0014-session-resume-and-restore.md) phase-2, #50).
+The direct read is required because the SDK does not re-yield prior history into the
+`query()` stream on resume.
 
-#### 投影 hydration と再起動耐性([ADR-0051](../adr/0051-history-restart-resilience.md))
+#### Projection hydration and restart resilience ([ADR-0051](../adr/0051-history-restart-resilience.md))
 
-- **hydration verdict**: wrapper channel の **join 応答**に
-  `hydration: { replay_required: boolean, replay_id? }` を含める。
-  server は AgentStates 内の hydration 状態(`unhydrated` /
-  `in_flight(replay_id, channel_owner)` / `hydrated`、boot 毎に
-  揮発)から要否を決め、`replay_required: true` のとき server 採番の
-  `replay_id` を返す。wrapper は verdict を受けてから replay を開始
-  し、その `replay_id` を `history_reset` / `replay_ia` /
-  `history_replay_complete` で一貫使用する。verdict absent(旧
-  server)の場合のみ legacy startup replay(wrapper 採番 ID)へ
-  fallback する。専用の S→W event は設けない — 再接続 = 新 join で
-  あり、verdict は常に join 応答で届く。
-- **完了と再要求**: `history_replay_complete` の CAS 遷移(上記
-  event 表)。`in_flight` のまま channel が切れたら `unhydrated` へ
-  戻り、次回 join で再要求される。fresh session(session_id 未採番 /
-  transcript 不在)は空 replay(`history_reset` → 即 complete)。
-- **hydrated の無効化**: server は operator 起点で `resume_session_id`
-  を伴う遷移(`restore` の resume 分岐 / `resume_session`)でのみ
-  hydration を捨て、次回 join の verdict を `replay_required: true` に
-  する。`/new`・`/clear`・fresh-restore・runner 自律の crash-restart は
-  無効化しない。条件と根拠の正本は
-  [ADR-0051](../adr/0051-history-restart-resilience.md) D2。
-- **ingress stamp の wire 形**: server の ingress-order tuple は JSON
-  では **整数 2 要素配列 `[us, seq]`** で運ぶ。配信 envelope の
-  top-level `ingress_stamp`、acceptance ack reply、wrapper sidecar の
-  行、`replay_ia` の item すべてで同形。受信側は 2 要素整数であること
-  を厳格検証し、外れた値は fail-closed で破棄する。
-- **projection epoch**: join 時の `history` push payload に
-  `projection_epoch`(AgentStates init 時採番の opaque UUID)を追加
-  する。client は保持 epoch と不一致なら旧 baseline(表示ログ・
-  clearWatermarks・replay marker・未読 state)を破棄し、
-  authoritative history と「この接続で受信した live envelope」のみを
-  merge する。一致なら従来 merge、absent(旧 server)なら従来動作へ
-  fallback([ADR-0051](../adr/0051-history-restart-resilience.md)
-  D4)。
-  live buffer の窓は connection generation ごとの join から、その接続の
-  最初の `history` push までだけである。client は新 join ごとに前世代の
-  buffer と replay marker を捨て、窓が閉じた後の live envelope は buffer
-  へ蓄積しない。これにより切断済み接続の行が次の epoch mismatch で
-  baseline に復活しない(ふじ 30-10 must-fix M1)。
-- **`replay_ia` の batch 境界**: wrapper は 1 push を JSON 実 byte 長
-  **1,000,000 bytes** 以下に分割し、同じ `replay_id` の全 chunk を
-  `history_replay_complete` より前に送る。単独で上限に収まらない
-  sidecar 行は送らず fail-closed で drop する。送ると Phoenix frame が
-  reject して complete が届かず、再 join ごとに同じ行を再送する loop に
-  なるためである(ふじ 30-10 must-fix M4 / 2 巡目 should)。
-- **per-pane projection contract**: IA の live 表示と replay 復元は
-  同一の per-pane upsert API に載る。live accept 時の因果順は
-  validate(participant / quota 等 **reject が確定し得る検査を
-  すべて含む**)→ ingress stamp 採番 → sender / receiver 両 pane へ
-  upsert → peer push、で固定する。詳細は
-  [protocol-inter-agent](protocol-inter-agent.md)。
+- **Hydration verdict**: The wrapper channel **join response** contains
+  `hydration: { replay_required: boolean, replay_id? }`. The server decides from the
+  per-boot volatile AgentStates status (`unhydrated` / `in_flight(replay_id, channel_owner)` /
+  `hydrated`) and returns a server-generated `replay_id` when required. The wrapper starts
+  replay only after the verdict and uses that ID consistently for `history_reset`, `replay_ia`,
+  and `history_replay_complete`. Only an absent verdict (old server) falls back to legacy
+  startup replay with a wrapper-generated ID. There is no dedicated S→W event: reconnect is
+  a new join and the verdict always arrives in the join response.
+- **Completion and retry**: `history_replay_complete` performs the CAS transition (see the
+  event table). If the channel disconnects while `in_flight`, return to `unhydrated` and ask
+  again on the next join. A fresh session (no session ID or transcript) uses an empty replay
+  (`history_reset` followed immediately by complete).
+- **Invalidating hydrated state**: The server discards hydration only for operator-initiated
+  transitions carrying `resume_session_id` (`restore` resume branch or `resume_session`) and
+  sets the next verdict to `replay_required: true`. `/new`, `/clear`, fresh restore, and a
+  runner-autonomous crash restart do not invalidate it. See [ADR-0051](../adr/0051-history-restart-resilience.md) D2.
+- **Ingress-stamp wire shape**: The server ingress-order tuple is encoded in JSON as the
+  **two-integer array `[us, seq]`**. The same shape is used by top-level envelope
+  `ingress_stamp`, acceptance-ack replies, wrapper sidecar rows, and `replay_ia` items.
+  Receivers strictly validate two integers and discard out-of-shape values fail-closed.
+- **Projection epoch**: Join `history` push payloads carry `projection_epoch`, an opaque UUID
+  assigned at AgentStates initialization. On mismatch, the client discards its old baseline
+  (display logs, clearWatermarks, replay markers, unread state) and merges only authoritative
+  history with live envelopes received on this connection. Matching epochs retain the old
+  merge; absent (old server) falls back to legacy behavior ([ADR-0051](../adr/0051-history-restart-resilience.md) D4).
+  The live-buffer window runs only from each connection-generation join until that connection's
+  first `history` push. Each new join drops the prior buffer and replay marker; live envelopes
+  after the window closes are not buffered, preventing disconnected rows from reappearing on
+  the next epoch mismatch (Fujino 30-10 must-fix M1).
+- **`replay_ia` batch boundary**: The wrapper splits each push to **1,000,000 JSON bytes** or
+  less and sends all chunks for one `replay_id` before `history_replay_complete`. A sidecar row
+  that cannot fit alone is dropped fail-closed; otherwise Phoenix rejects the frame, complete
+  never arrives, and every join resends the same row (Fujino 30-10 must-fix M4 / round-two should).
+- **Per-pane projection contract**: Live IA display and replay restoration use the same per-pane
+  upsert API. Live acceptance is ordered as validate (including every check that can reject,
+  such as participant/quota) → assign ingress stamp → upsert both sender and receiver panes →
+  push to the peer. See [protocol-inter-agent](protocol-inter-agent.md).
 
-### Session visibility semantics (#106 / ADR-0036 F3 復元, 2026-07-24)
+### Session visibility semantics (#106 / ADR-0036 F3 restoration, 2026-07-24)
 
-`/new`・external session switch は `SessionStarts` に開始点を fsync 記録
-するだけで、ログ・IA の表示も `ClearWatermarks` も変更しない。`/clear` は
-SessionStarts 記録に加え、`SessionResets.confirm_connection/2` がその
-`{order, display}` を `ClearWatermarks.record/3` に採用し、当該 agent の
-`AgentStates` history を marker 1 行だけに絞る。IA の相手 pane は
-per-pane `ClearWatermarks` filter で hide される。cutoff の比較は IA に
-永続付与された ingress stamp と行う([ADR-0051](../adr/0051-history-restart-resilience.md)
-D3-4。durable ledger `InterAgentHistory` DETS は同 ADR で撤廃、正本は
-wrapper ホストの IA sidecar)。
-operator の `clear_history` (#48) は依然として現行 session の他 session
-ログ purge 用途で `history_cleared` を broadcast する別 API のまま。
+`/new` and an external session switch only fsync their start point in `SessionStarts`; they
+do not change log/IA display or `ClearWatermarks`. In addition to its SessionStarts record,
+`/clear` makes `SessionResets.confirm_connection/2` adopt `{order, display}` via
+`ClearWatermarks.record/3` and reduces that agent's `AgentStates` history to one marker row.
+The peer pane hides IA through a per-pane `ClearWatermarks` filter, comparing the cutoff
+with the ingress stamp persisted on IA ([ADR-0051](../adr/0051-history-restart-resilience.md)
+D3-4). The durable `InterAgentHistory` DETS ledger was removed by that ADR; the wrapper
+host's IA sidecar is authoritative. Operator `clear_history` (#48) remains a separate API
+that broadcasts `history_cleared` to purge logs from other sessions of the current session.
 
-/clear の live client 更新は `session_reset_completed.clear_watermark`
-で行い、reload 経路は server 側 `merged_histories` が SSOT。`/new` /
-`/clear` いずれも `history_reset` broadcast は使わない (resume replay
-専用)。開始点が無い場合、operator `clear_history` は warning を出して
-watermark を更新せず IA を残す（現行 session IA を誤って消す fallback を
-禁止）。既存 `ClearWatermarks` DETS row は migration で消さず、既に
-hidden の IA を再露出させない。pre-M6 ISO-only row も次の real clear まで
-維持する。
+Live clients update `/clear` from `session_reset_completed.clear_watermark`; the reload
+path uses server-side `merged_histories` as SSOT. Neither `/new` nor `/clear` broadcasts
+`history_reset` (resume replay only). Without a start point, operator `clear_history` warns,
+leaves the watermark unchanged, and retains IA (never fall back to deleting current-session
+IA). Existing `ClearWatermarks` DETS rows survive migration so hidden IA is not exposed
+again; pre-M6 ISO-only rows remain until the next real clear.
 
-### ファイルアップロード wire
+### File-upload wire
 
-ダッシュボードからの添付ファイル(画像 / テキスト / PDF / Office)を operator
-が agent に渡すための増分 op 群。 protocol surface の正本は上記の方向別
-メッセージ種別 +「`attach_rejected` / `instruction_rejected` envelope type
-(type と payload 表)」+ 下記 binary frame 形式。 機能仕様の集約は
-[file-upload](file-upload.md)、 決定の根拠は
-[ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md)。
+These incremental operations let an operator pass dashboard attachments (image, text, PDF,
+or Office) to an agent. The protocol surface of record is the directional message table
+above, the `attach_rejected` / `instruction_rejected` envelope types, and the binary frame
+layout below. Feature details are collected in [file-upload](file-upload.md), with rationale
+in [ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md).
 
-**transport**: 既存 Channels 一本化
-([ADR-0009](../adr/0009-client-transport.md))維持。 別 socket / HTTP POST
-upload を立てない。 server は upload bytes を解釈・永続せず
-`wrapper:<agent_id>` channel に透過 relay する(ディスク不到達、
-[ADR-0020](../adr/0020-dashboard-battery-included-client.md) F3)。
+**Transport**: Keep the existing single Channels transport
+([ADR-0009](../adr/0009-client-transport.md)); do not add another socket or HTTP POST upload.
+The server neither interprets nor persists upload bytes and transparently relays them to the
+`wrapper:<agent_id>` channel (no disk access, [ADR-0020](../adr/0020-dashboard-battery-included-client.md) F3).
 
-**順序**: `attach_open` × N → `attach_chunk*`(並列可) → `attach_close` × N
-→ `instruction(attachment_ids=[...])`。 wrapper は instruction 着信時に
-全 `attachment_ids` が attach_close 完走済であることを確認する(未完走時は
-`instruction_rejected{reason="timeout"}` 等で reject)。
+**Order**: `attach_open` × N → `attach_chunk*` (parallel allowed) → `attach_close` × N
+→ `instruction(attachment_ids=[...])`. On instruction receipt the wrapper verifies every
+`attachment_id` completed `attach_close`; incomplete uploads are rejected with
+`instruction_rejected{reason="timeout"}` or a corresponding reason.
 
-**`attach_chunk` payload 形式**(V2 binary frame の payload 内部レイアウト、 MVP):
+**`attach_chunk` payload format** (MVP layout inside a V2 binary-frame payload):
 
-Phoenix V2 binary serializer は WebSocket binary opcode のフレームを受け、
-サーバ側 `handle_in("attach_chunk", {:binary, payload}, socket)` の
-`payload` に下記バイト列を `{:binary, binary()}` タプルでラップして渡す
-(V2 はタプル形式、 V1 と混同しない)。 phoenix.js は `ArrayBuffer` を
-`channel.push("attach_chunk", arrayBuffer)` に直接渡せば自動で binary
-frame 化される(Blob は事前 `arrayBuffer()` 変換が必要)。
+The Phoenix V2 binary serializer receives a WebSocket binary-opcode frame and passes the
+bytes below to server `handle_in("attach_chunk", {:binary, payload}, socket)` as a
+`{:binary, binary()}` tuple (V2 tuple form; do not confuse with V1). phoenix.js automatically
+creates the binary frame when an `ArrayBuffer` is passed directly to
+`channel.push("attach_chunk", arrayBuffer)`; a Blob must first be converted with
+`arrayBuffer()`.
 
 ```text
 <u32 upload_id_len><upload_id utf8><u32 chunk_index><chunk_bytes>
 ```
 
-- `upload_id_len`: big-endian unsigned 32bit、 upload_id の UTF-8 バイト長
-- `upload_id`: UTF-8 文字列。 client 採番のセッション内一意 ID
-- `chunk_index`: big-endian unsigned 32bit、 0 起点
-- `chunk_bytes`: chunk のバイト列(残り全部)
+- `upload_id_len`: big-endian unsigned 32-bit UTF-8 byte length of `upload_id`.
+- `upload_id`: UTF-8 string, a client-assigned ID unique within the session.
+- `chunk_index`: big-endian unsigned 32-bit, zero-based.
+- `chunk_bytes`: remaining bytes of the chunk.
 
-並列度・ チャンクサイズは client 任意(MVP 推奨: 1 chunk 64 KB、
-[ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md) F14)。
+Concurrency and chunk size are client-defined (MVP recommendation: 64 KB per chunk,
+[ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md) F14).
 
-V2 frame ヘッダ(`<<kind::8, join_ref_size::8, ref_size::8, topic_size::8,
-event_size::8, ...>>`)は Phoenix が処理する範囲で、 各 size フィールドが
-8bit のため join_ref / ref / topic / event は各最大 255 バイト
-(kaoiro の `wrapper:<agent_id>` / `attach_chunk` 等は十分余裕)。
+The V2 frame header (`<<kind::8, join_ref_size::8, ref_size::8, topic_size::8,
+event_size::8, ...>>`) is handled by Phoenix. Each size field is 8-bit, so join_ref, ref,
+topic, and event are each at most 255 bytes (well above kaoiro's
+`wrapper:<agent_id>` / `attach_chunk`).
 
-**transport 安全弁**: server は 1 frame 上限 8 MB、 in-flight upload cap
-20 / wrapper を強制(DoS 防衛)。 Phoenix の `max_frame_size` 既定は
-`:infinity` のため、 endpoint config で明示する:
+**Transport safety**: The server enforces an 8 MB frame limit and 20 in-flight uploads per
+wrapper for DoS protection. Phoenix defaults `max_frame_size` to `:infinity`, so endpoint
+configuration sets it explicitly:
 
 ```elixir
 # lib/kaoiro_web/endpoint.ex
@@ -551,300 +550,274 @@ socket "/wrapper", KaoiroWeb.WrapperSocket,
   ]
 ```
 
-`:infinity` のまま 128 MB を 1 frame で受けると受信プロセス 1 つに 128 MB
-確保され OOM リスクが出る。 個別ファイル上限(一律 128 MB)・ MIME 許可・
-点数(10 / instruction)・ TTL(未参照 / chunk 不完全は 5 分で GC)等の
-規範は wrapper が最終判定する([file-upload](file-upload.md)、
-ADR-0025 F4 / F6 / F7 / F13)。
+Leaving `:infinity` would let one 128 MB frame allocate 128 MB in a receiving process and
+risk OOM. The wrapper makes the final decision on per-file size (128 MB), allowed MIME,
+count (10 per instruction), and TTL (unreferenced or incomplete chunks are GC'd after five
+minutes) ([file-upload](file-upload.md), ADR-0025 F4/F6/F7/F13).
 
-**配信ガード**: `attach_open` / `attach_chunk` / `attach_close` /
-`attach_rejected` / `instruction_rejected` はすべて **operator 限定**
-(allow-list 方式、 [ADR-0021](../adr/0021-role-information-disclosure-policy.md))。
-viewer には完全除去する。
+**Delivery gate**: `attach_open` / `attach_chunk` / `attach_close` /
+`attach_rejected` / `instruction_rejected` are all **operator-only** (allow-list,
+[ADR-0021](../adr/0021-role-information-disclosure-policy.md)); remove them entirely for viewers.
 
-**fit-to-SDK 責任**: wrapper は 128 MB の protocol 上限と SDK の硬い上限
-(image_block / document_block 等の正確な値は実装着手前 spike で確証)の
-ギャップを吸収する責任を持つ(画像 downsize / PDF page-extract / text
-truncate / Office → markitdown → text)。 不能時は専用 reason
-(`unfittable_image` / `unfittable_pdf` / `text_too_large`)で reject する。
+**Fit-to-SDK responsibility**: The wrapper absorbs the gap between the 128 MB protocol
+limit and hard SDK limits (exact image/document block values are confirmed by a pre-
+implementation spike) using image downsize, PDF page extraction, text truncation, and
+Office → markitdown → text. If fitting is impossible, reject with a dedicated reason
+(`unfittable_image` / `unfittable_pdf` / `text_too_large`).
 
-### セッション resume と復帰(召喚)
+### Session resume and restoration
 
-wrapper の復帰(プロセス落ち後の文脈継続)と既存セッションの召喚は、既存
-session_id を指定して **resume** する単一機構で行う
-([ADR-0014](../adr/0014-session-resume-and-restore.md))。制御は issue #22 の
-`client -> server -> runner(boot service)-> wrapper` 起動経路に「resume
-モード」を足したもので、復帰コマンド(spawn-with-resume)とセッション列挙
-クエリは issue #22 / runner 仕様([ADR-0023](../adr/0023-host-runner-architecture.md))
-と併せて定義する(下記「runner 制御メッセージ」で v0 確定、[#66](https://github.com/sakuraiyuta/kaoiro/issues/66))。
-先行する phase-0 の protocol 変更は**エンベロープへの top-level `session_id`
-追加のみ**(wrapper が報告 → サーバが `(agent_id, host, cwd, session_id)`
-ポインタを保持)。
+Wrapper restoration (continuing context after process loss) and recalling an existing session
+use one mechanism: **resume** with an existing `session_id` ([ADR-0014](../adr/0014-session-resume-and-restore.md)).
+This adds resume mode to issue #22's `client -> server -> runner (boot service) -> wrapper`
+path. Restore commands (spawn-with-resume) and session enumeration are defined with the
+issue #22 runner specification ([ADR-0023](../adr/0023-host-runner-architecture.md)) and
+settled in the runner table below ([#66](https://github.com/sakuraiyuta/kaoiro/issues/66)).
+The earlier phase-0 protocol change only added top-level `session_id` to the envelope; the
+wrapper reports it and the server stores the `(agent_id, host, cwd, session_id)` pointer.
 
-### runner 制御メッセージ(v0 確定、[#66](https://github.com/sakuraiyuta/kaoiro/issues/66))
+### Runner control messages (v0 settled, [#66](https://github.com/sakuraiyuta/kaoiro/issues/66))
 
-各ホストに常駐する runner([ADR-0023](../adr/0023-host-runner-architecture.md))は、
-データ経路(`wrapper:<agent_id>` 直結)とは**別系統**の専用トピック
-`runner:<host_id>` でサーバへ接続し、ホスト登録・生存通知と wrapper のライフ
-サイクル制御(spawn / stop / restart / セッション列挙)を行う(上記 resume も
-この制御経路の一機能)。メッセージは既存制御と同じ **Channels イベント方式**
-(envelope `type` は増やさない)。
+The runner resident on each host ([ADR-0023](../adr/0023-host-runner-architecture.md))
+connects to the server on the dedicated `runner:<host_id>` topic, separate from the direct
+`wrapper:<agent_id>` data path. It registers the host, reports liveness, and controls the
+wrapper lifecycle (spawn / stop / restart / session enumeration), including resume. Messages
+use the existing **Channels event** mechanism; no envelope `type` is added.
 
-| 方向 | イベント | payload |
+| Direction | Event | Payload |
 |---|---|---|
-| runner → サーバ | `register` | `{ host_id, cwd_allowlist, allowed_personas? \| blocked_personas? \| personas?, capabilities?, engines?, build_revision?, build_dirty? }`。接続時に 1 回。選択可能 cwd 許可リスト(#22)と persona 受け入れ方針を申告。persona 方針は `allowed_personas`(id allowlist)/ `blocked_personas`(id blocklist)/ 3 者とも未設定(accept-all)の**排他 1 択**で、複数設定は fail-loud な invalid register([ADR-0031](../adr/0031-runner-persona-trust-mode.md))。`personas`(`WirePersona[]`)は legacy・deprecated で `id` のみ allowlist として解釈され、`name` / `sprite_set` は server SoT([ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md))が持つため無視 + deprecation warn。`engines` は engine ごとの起動 catalog(`[{ id, models: [EngineModelInfo] }]`)で、LaunchDialog の engine → model → effort カスケードを wrapper プロセス不在のまま構成するために送る([ADR-0032](../adr/0032-codex-adapter.md) F4bc)。`capabilities` の値集合は `"claude-code" \| "codex"` ([ADR-0032](../adr/0032-codex-adapter.md) F4a)。旧値 `"claude"` は 1 リリース互換窓で `"claude-code"` にサイレント正規化して deprecation warn、次リリースで厳格 reject ([ADR-0032](../adr/0032-codex-adapter.md) F4a、2026-07-10 確定)。dashboard 側は 2 種以上のとき LaunchDialog に engine セレクトを出す。`build_revision`(値域: リテラル `"unknown"` またはロワーケース 40 桁 hex の git SHA)/ `build_dirty`(bool)は build identity(issue #218、[ADR-0053](../adr/0053-build-identity.md))— この `version` フィールドとは別軸。両方とも省略可(pre-#218 runner との互換)だが**片方だけの提示は invalid**(register 全体を reject、issue #218 round 2 MF-3)— 値域外・型崩れも同様に register 全体を reject する(fail-loud、spoofing 対策。値そのものが target と一致するかは一切検証しない — enforcement は issue #220 のスコープ) |
-| runner → サーバ | `heartbeat` | `{ host_id }`。生存通知 |
-| runner → サーバ | `sessions` | `{ host_id, cwd, sessions: [{ session_id, summary?, mtime? }], engine? }`。`enumerate_sessions` への応答。JSONL メタは最小・**operator 限定**(T2、[ADR-0014](../adr/0014-session-resume-and-restore.md))。`engine` は要求の engine をエコーし、別 engine の一覧を待っている dashboard が古い応答を捨てられるようにする([ADR-0032](../adr/0032-codex-adapter.md) F8) |
-| runner → サーバ | `spawn_result` | `{ host_id, agent_id, ok, reason?, request_id? }`。失敗時 `reason` = `already_running` / `cwd_not_found` / `session_not_found`(resume / `switch_session` の T3 実在検証が cwd 配下で失敗、[#101](https://github.com/sakuraiyuta/kaoiro/issues/101))/ `error`。`request_id` は `spawn` / `switch_session` の値をそのままエコーし、サーバは保持中の transition と一致する時だけ中断処理を行う(遅着 result が後続の transition を壊さないための CAS、phase-27 / [#150](https://github.com/sakuraiyuta/kaoiro/issues/150))。旧 runner は省略し、その場合サーバは相関を黙って捨てる |
-| サーバ → runner | `spawn` | `{ agent_id, persona, cwd, server_url?, token?, initial_prompt?, resume_session_id?, resume_snapshot?, apply_resume_snapshot?, engine?, model?, effort?, permission_mode?, sandbox?, network_access?, request_id? }`。**operator 限定**。`server_url` 省略時は runner が自分の config の wrapper socket URL を補う。`initial_prompt` は wrapper の最初のターン。`model` / `effort` は LaunchDialog カスケードの選択値([ADR-0032](../adr/0032-codex-adapter.md) F4bc)。`permission_mode` は Claude 専用の起動時モードで、サーバは spawn 時にこれを `PermissionModes` へ書き込み「明示 spawn が永続ストアに勝つ」を維持する(restore 経路は本 field を省略し永続値に落ちる、[ADR-0033](../adr/0033-permission-model-dual-axis.md) F4 追補)。`sandbox` / `network_access` は Codex 専用の起動固定権限(approval は `never` 固定、[ADR-0033](../adr/0033-permission-model-dual-axis.md) F3)。`request_id` はサーバ採番の session-transition 相関 id で、runner は wrapper config の `transition_id` として中継し `spawn_result` にもエコーする(phase-27)。`resume_session_id` 指定で resume 起動。`agent_id` と `token` はクライアント入力ではなく**サーバが採番・発行**する(案A、[ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) D3/D4)。`server_url` は**サーバが載せず runner が自 config から補う**(phase-4 4-10 で runner 供給へ変更)。`engine?: "claude-code" \| "codex"` は起動する wrapper パッケージを選択、省略時は runner が config の default engine を使う ([ADR-0032](../adr/0032-codex-adapter.md) F1)。server は register で申告された `capabilities` と照合して検証する。`apply_resume_snapshot?: true` は `resume_session_id` を積まない fresh spawn で snapshot だけ再適用する **fresh-restore** 経路の指示 (phase-25、[ADR-0030](../adr/0030-agent-directory-and-explicit-restore.md) D8 追補 / [ADR-0014](../adr/0014-session-resume-and-restore.md) F1 追補 fresh-restore)、`/clear`-detach 済み / 未発話で session_id を失った pointer からの復元用。両 flag を同時に立てても resume 経路の apply が優先されるため無害 |
-| サーバ → runner | `stop` | `{ agent_id }`。**operator 限定**。server は client payload の `host_id` が `AgentId.host_id_from(agent_id)` と一致することを intent mutation より前に検証する。active planned intent は stop を阻害せず、server が cancel + tracked peer への terminal `disconnected` を済ませてから relay する(issue #256) |
-| サーバ → runner | `restart` | `{ agent_id, request_id? }`。**operator 限定**。server は client payload の `host_id` が `AgentId.host_id_from(agent_id)` と一致することを intent mutation より前に検証する。新 server は live agent の予告済み再起動に non-empty `request_id` を採番する。新 runner はこれを relaunch 後 wrapper config の `transition_id` に置き換える。旧 server の省略を受けた新 runner は従来の restart 挙動を保つ(issue #256) |
-| サーバ → runner | `enumerate_sessions` | `{ agent_id?, cwd, engine? }`。**operator 限定**。当該 cwd 配下の resume 候補列挙を要求。`engine` は列挙対象の session ストアを 1 engine に絞る(省略時 `claude-code`、[ADR-0032](../adr/0032-codex-adapter.md) F8)。本行は**runner が受け取る形**で、クライアントが送った形とは異なる: サーバは `host_id` を剥がし、`cwd` 省略時は `agent_id` から SessionPointers を引いて `cwd` を**足してから**中継する。したがって runner 到達時点で `cwd` は常に存在し、`agent_id` は詳細画面経由のときだけ残る(LaunchDialog 経路は送らない)。クライアント側は 2 つのうち**少なくとも一方**が必要で、両方送るのも受理される(明示 `cwd` が優先) |
-| サーバ → runner | `switch_session` | `{ agent_id, resume_session_id, request_id?, resume_snapshot? }`。**operator 限定**。稼働中 agent の resume 先を差し替える(agent_id / cwd は不変)。runner は entry の resume ポインタを付替え、F4 ロックを旧→新へ移送してから wrapper を再起動(kill → relaunch)。T3(cwd 配下実在)と F4(同一 session を別 agent が resume 中でない)は runner が再検査。失敗は `spawn_result` で報告([ADR-0014](../adr/0014-session-resume-and-restore.md) resume-swap)。live switch は SDK session id を再利用するため、`request_id` が「この switch が生んだ接続」を旧接続と区別する唯一の手段になる(phase-27)。`resume_snapshot` はサーバが `SessionPointers` の**現在の** snapshot を同梱するもので、これが無いと再起動後の wrapper が spawn 時点の古い snapshot を保持したまま `ext.resume_snapshot` / `ext.resume_drift` を stamp してしまう(phase-15 D8) |
-| サーバ → runner | `refresh_engine_catalog` | `{ engine, request_id, force? }`。**operator 限定**。LaunchDialog の「モデル一覧を再取得」および cache-miss 時の自動更新から発火する engine catalog の再 probe 要求([ADR-0039](../adr/0039-engine-catalog-live-probe.md) Option E)。host_id はトピック由来、agent_id は**持たない**(catalog は agent 単位ではなく (host, engine) 単位)。実際に probe を走らせるかは runner が memory-only の last-known-good キャッシュを見て決め、`force: true` は TTL 判定を迂回する。現状 live probe が要るのは `claude-code` のみで、Codex は静的に advertise する([ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) F1) |
-| runner → サーバ | `catalog_result` | `{ host_id, engine, request_id, ok, reason?, models_count? }`。`refresh_engine_catalog` の完了報告で、サーバは operator へそのまま転送する。失敗時 `reason` の closed vocab は `auth_failed` / `spawn_failed` / `cli_error` / `invalid_output` / `timeout` / `unsupported_engine`。`models_count` は operator トースト用のサイズ signal にすぎず、**catalog 本体は runner の再 register が起こす通常の `hosts` broadcast で届く**([ADR-0039](../adr/0039-engine-catalog-live-probe.md)) |
+| runner → server | `register` | `{ host_id, cwd_allowlist, allowed_personas? \| blocked_personas? \| personas?, capabilities?, engines?, build_revision?, build_dirty?, build_version?, build_channel? }`. Sent once at connection to declare the cwd allowlist and persona trust mode. Exactly one of `allowed_personas`, `blocked_personas`, or none (accept-all) may be set; multiple values are invalid ([ADR-0031](../adr/0031-runner-persona-trust-mode.md)). Legacy `personas` is deprecated and interpreted as an ID allowlist; `name`/`sprite_set` are ignored because server SoT owns them ([ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)). `engines` carries per-engine launch catalogs for the LaunchDialog cascade ([ADR-0032](../adr/0032-codex-adapter.md) F4bc). Capabilities are `"claude-code" \| "codex"`; old `"claude"` is normalized for one release then rejected ([ADR-0032](../adr/0032-codex-adapter.md) F4a). `build_revision`/`build_dirty` identify the git artifact and `build_version`/`build_channel` identify its CalVer project version and channel (issue #288, [ADR-0056](../adr/0056-project-calver-build-version.md)); each pair may be omitted for pre-feature compatibility, but a pair must be complete and values must be in-domain. When the version/channel pair is present with `channel: "release"`, the revision/dirty pair is also required, and it must be a known 40-hex revision with `dirty: false`; the version must be a known CalVer value. Any incomplete, out-of-domain, or contradictory release identity is rejected as `invalid_build_info`. |
+| runner → server | `heartbeat` | `{ host_id }`. Liveness notification. |
+| runner → server | `sessions` | `{ host_id, cwd, sessions: [{ session_id, summary?, mtime? }], engine? }`. Response to `enumerate_sessions`; minimal JSONL metadata, **operator-only** (T2, [ADR-0014](../adr/0014-session-resume-and-restore.md)). Echoes the requested engine so dashboards discard stale results ([ADR-0032](../adr/0032-codex-adapter.md) F8). |
+| runner → server | `spawn_result` | `{ host_id, agent_id, ok, reason?, request_id? }`. Failure reasons are `already_running` / `cwd_not_found` / `session_not_found` (T3 validation under cwd failed, [#101](https://github.com/sakuraiyuta/kaoiro/issues/101)) / `error`. Echo `request_id` from `spawn`/`switch_session`; the server applies it only when matching the stored transition (phase-27 / [#150](https://github.com/sakuraiyuta/kaoiro/issues/150)). Old runners omit it and the server silently drops correlation. |
+| server → runner | `spawn` | `{ agent_id, persona, cwd, server_url?, token?, initial_prompt?, resume_session_id?, resume_snapshot?, apply_resume_snapshot?, engine?, model?, effort?, permission_mode?, sandbox?, network_access?, request_id? }`. **Operator-only**. The runner supplies `server_url` from its config when omitted; `initial_prompt` is the wrapper's first turn. `model`/`effort` are LaunchDialog values ([ADR-0032](../adr/0032-codex-adapter.md) F4bc). Claude `permission_mode` is persisted at spawn so explicit spawn wins; Codex `sandbox`/`network_access` are fixed launch permissions ([ADR-0033](../adr/0033-permission-model-dual-axis.md), [ADR-0033](../adr/0033-permission-model-dual-axis.md) F3). `request_id` is the server session-transition correlation echoed as wrapper `transition_id`; `resume_session_id` selects resume. `agent_id` and `token` are server-issued, not client input ([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) D3/D4). `engine?: "claude-code" \| "codex"` selects the wrapper package and is checked against registered capabilities ([ADR-0032](../adr/0032-codex-adapter.md) F1). `apply_resume_snapshot?: true` requests fresh-restore without a resume ID (phase-25, [ADR-0030](../adr/0030-agent-directory-and-explicit-restore.md) D8 / [ADR-0014](../adr/0014-session-resume-and-restore.md) F1). |
+| server → runner | `stop` | `{ agent_id }`. **Operator-only**. Validate the client host binding before intent mutation; cancel any planned intent and deliver terminal `disconnected` to tracked peers before relay (issue #256). |
+| server → runner | `restart` | `{ agent_id, request_id? }`. **Operator-only**. Validate host binding first. New servers assign a non-empty request ID for planned live-agent restarts; new runners map it to wrapper `transition_id` after relaunch, while omission preserves old behavior (issue #256). |
+| server → runner | `enumerate_sessions` | `{ agent_id?, cwd, engine? }`. **Operator-only**. Requests resume candidates under `cwd`, scoped to one engine (default `claude-code`, [ADR-0032](../adr/0032-codex-adapter.md) F8). The server strips `host_id`, fills `cwd` from SessionPointers when omitted, and forwards a runner shape where `cwd` always exists; `agent_id` remains only for detail-view requests. Client must provide at least `cwd` or `agent_id`; both are accepted, with explicit `cwd` taking precedence. |
+| server → runner | `switch_session` | `{ agent_id, resume_session_id, request_id?, resume_snapshot? }`. **Operator-only**. Replaces the resume target of a live agent without changing agent_id/cwd. Runner transfers the F4 lock and restarts the wrapper, rechecking T3 and F4; failures use `spawn_result` ([ADR-0014](../adr/0014-session-resume-and-restore.md)). `request_id` distinguishes the new connection; `resume_snapshot` carries the server's current SessionPointers snapshot (phase-15 D8). |
+| server → runner | `refresh_engine_catalog` | `{ engine, request_id, force? }`. **Operator-only** request to re-probe the LaunchDialog engine catalog ([ADR-0039](../adr/0039-engine-catalog-live-probe.md) Option E). It is keyed by `(host, engine)`, not agent; `force` bypasses TTL. Only Claude currently probes live; Codex advertises statically ([ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) F1). |
+| runner → server | `catalog_result` | `{ host_id, engine, request_id, ok, reason?, models_count? }`. Completion report for `refresh_engine_catalog`, forwarded to operators. Failure reasons are `auth_failed` / `spawn_failed` / `cli_error` / `invalid_output` / `timeout` / `unsupported_engine`; `models_count` is only a toast signal and the catalog arrives in the runner's normal `hosts` broadcast ([ADR-0039](../adr/0039-engine-catalog-live-probe.md)). |
 
-**認証**: runner はホスト別トークン(サーバ設定 env の `host_id:token` 列挙、
-[ADR-0011](../adr/0011-phase3-reliability-and-auth.md) の per-entity トークン主義を
-拡張)で接続する。host_id は設定固定(サーバ採番しない)。wrapper の agent_id
-別トークンとは別系統。
+**Authentication**: The runner connects with per-host tokens (a server-configured
+`host_id:token` list, extending ADR-0011's per-entity token principle). host_id is fixed in
+configuration and is not server-assigned; this is separate from per-agent wrapper tokens
+([ADR-0011](../adr/0011-phase3-reliability-and-auth.md)).
 
-**version**: runner メッセージにも `version`(現状 `"0"`)をフラット外枠キーで
-付与する([ADR-0015](../adr/0015-protocol-version-stamping.md))。新メッセージ種別の
-追加は前方互換のため version は据え置き。
+**Version**: Runner messages also carry flat outer `version` (currently `"0"`)
+([ADR-0015](../adr/0015-protocol-version-stamping.md)); adding message types keeps the same
+version for forward compatibility.
 
-`version` の**付与主体**は 2 通りある。サーバまたは runner が payload を
-**組み立てる**メッセージ(`register` / `heartbeat` / `sessions` / `spawn` /
-`spawn_result` / `switch_session` / `reset_session` /
-`session_reset_result` / `catalog_result`)は組み立て時に載せる。
-クライアント発の payload をサーバが `host_id` だけ剥がして**素通し**する
-経路 — `enumerate_sessions` / `refresh_engine_catalog` / `stop` /
-`restart` — では、`relay_to_runner/4` が client の申告値を warn したうえで
-`version` を `"0"` へ normalize する。dashboard 側も全 push に `version` を
-載せる(issue #208 以降は単一送出点 `pushVersioned` が行うので、event ごとの
-差は無い)。runner は受信した `version` を検査し、不一致(省略を含む)を warn
-したうえでベストエフォートに受理する(ADR-0015)。
+There are two `version` stamping authorities. Messages whose payload is **assembled** by
+server or runner (`register` / `heartbeat` / `sessions` / `spawn` / `spawn_result` /
+`switch_session` / `reset_session` / `session_reset_result` / `catalog_result`) are stamped
+at assembly. In pass-through routes where the server strips only `host_id` from client
+payload (`enumerate_sessions` / `refresh_engine_catalog` / `stop` / `restart`),
+`relay_to_runner/4` warns about the client value and normalizes `version` to `"0"`.
+Dashboard pushes also all carry `version` through the single `pushVersioned` funnel (issue
+#208 onward). Runners warn on mismatch, including omission, and accept best-effort (ADR-0015).
 
-`restart` は dashboard に push 呼び出し producer が未実装のまま残るが、実装時は
-上記の送出点を通るので version 付与は自動的に満たされる。経路全体の充足状況は
-下記「version 棚卸し」を参照。
+`restart` still lacks a dashboard push producer, but implementation will use the funnel above
+and therefore stamp `version` automatically. See "version inventory" below for coverage.
 
-**安全性**(spawn = 実質リモートコード実行): spawn / resume / resume_session /
-stop / restart の受理は **operator 限定**。resume 対象 session_id は当該 agent
-束縛 cwd 配下に**実在検証**(runner、T3)。`switch_session` の resume 先も
-同じ cwd で再検証(cwd は不変、runner)。cwd は runner の `cwd_allowlist` 内に
-限定(#22、T1)。
+**Safety** (spawn is effectively remote code execution): accepting spawn / resume /
+resume_session / stop / restart is **operator-only**. Runner T3 verifies that the resume
+session exists under the agent-bound cwd; `switch_session` rechecks the target in the same
+immutable cwd. The cwd is restricted to the runner `cwd_allowlist` (#22, T1).
 
-**二重起動防止**: server owner フェンシング(既存)+ runner ローカルロックの
-二段([ADR-0014](../adr/0014-session-resume-and-restore.md) F4)。spawn 競合は
-runner が弾き `spawn_result.reason = already_running` を返す。さらに、すでに
-live owner のいる `agent_id` の wrapper join はサーバが**明示拒否**する(従来の
-サイレント last-write-wins を改め偶発二重起動を可視化、[ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) D5)。
+**Duplicate-start prevention** uses two layers: existing server-owner fencing plus a
+runner-local lock ([ADR-0014](../adr/0014-session-resume-and-restore.md) F4). The runner
+rejects a spawn race with `spawn_result.reason = already_running`. A wrapper join for an
+`agent_id` that already has a live owner is also explicitly rejected, making accidental
+double starts visible instead of silently applying last-write-wins ([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) D5).
 
-### クライアント → サーバ 起動制御(#22、[ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md))
+### Client → server launch control (#22, [ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md))
 
-dashboard(operator)が起動 UI から出す要求。サーバは `runner:<host_id>` へ
-中継する(上記「runner 制御メッセージ」)。**persona = 型 / agent_id =
-インスタンス**であり、「同じ性質を複数 spawn」は同一 persona × 別 agent_id で
-表現する(D1)。
+Launch-UI requests from the dashboard operator are relayed by the server to
+`runner:<host_id>` (see the runner control table). **Persona is a type; agent_id is an
+instance**. Multiple spawns with the same character are represented by one persona and
+different agent IDs (D1).
 
-`version` の扱いは上記「方向別メッセージ種別」と同じ — 段階1として充足した
-クライアント → サーバ行では共通の外枠キーで、payload 欄への明示は producer
-固有の注記がある行だけ。全経路の充足状況は下記「version 棚卸し」が正本。
+`version` follows the directional-message rules above: in stage-1 client → server rows it is
+a common outer key, and appears in a payload column only for producer-specific notes. The
+version inventory below is normative for all routes.
 
-| 方向 | イベント | payload |
+| Direction | Event | Payload |
 |---|---|---|
-| クライアント → サーバ | `spawn` | `{ host_id, persona, cwd, name?, initial_prompt?, resume_session_id?, engine?, model?, effort?, permission_mode?, sandbox?, network_access? }`。**operator 限定**。`model` / `effort` / `permission_mode` / `sandbox` / `network_access` は LaunchDialog の選択値で、サーバ経由でそのまま `spawn`(runner 向け)へ渡る(engine 別の適用範囲は上記 runner 制御メッセージの `spawn` 行を参照)。`persona` は id 文字列で、サーバが host 申告の persona へ解決する。サーバが `agent_id` を採番して per-agent `token` を発行する(案A、D3/D4)。`server_url` はサーバが載せず runner が自 config から補う。`name?` は per-instance 表示名で persona.name を上書き(agent_id/persona.id は不変、64 文字上限・制御文字不可)。`resume_session_id` 指定で resume 起動。サーバは復帰用に cwd を SessionPointers へ seed する。`engine?` は LaunchDialog の engine セレクト値(host の `capabilities` に含まれる値)で、server は照合して runner へ転送する ([ADR-0032](../adr/0032-codex-adapter.md) F1、[phase-14-codex-adapter](../plans/phase-14-codex-adapter.md)) |
-| クライアント → サーバ | `launch_defaults` | `{ version }`。**operator 限定**([issue #88](https://github.com/sakuraiyuta/kaoiro/issues/88))。LaunchDialog がペルソナ単位の「前回 effort」を起動デフォルトとして提示するための要求。**runner には一切中継されない**(`spawn` の agent_id 採番と同様、サーバが同期的に計算して直接 reply する)イベントだが、ADR-0015 は「ラッパー/サーバ/クライアントの全メッセージ」に version を要求しており runner-relay かどうかで例外にはならない(この行が根拠として挙げていた「`restore` 等の既存イベントが version を持たない」既存 gap は issue #208 で解消済み — 上記「version 棚卸し」)。サーバは `warn_on_version_mismatch/3`(action="accepting")で不一致 / 欠落を warn した上でベストエフォート受理する。reply の Phoenix status は `ok`、response body は `{ defaults: { "<persona_id>": "<effort>" } }`(`{"ok": true, ...}` という形でワイヤに乗るわけではない — status と body は別枠)。サーバは新規 store を持たず、`AgentDirectory`(agent_id → persona)と `SessionPointers`(agent_id → snapshot + `effort_revision`)を read-time join して算出する — 2026-07-23 の scope 縮小決定により、起票時想定の `EffortLevels` 新設ストアは採用しない。ペルソナごとの選択規則: (1) `effort_revision` を持つ候補が1件以上あれば最大 revision の effort、(2) 無ければ候補が1件のみならそれ、(3) 複数だが全て同値ならその値、(4) 複数かつ不一致なら該当ペルソナを結果から除外(no preference)。`effort_revision` は `SessionPointers.record_snapshot/2` が sanitize 済み `{effort, effort_source}` pair が valid な新値へ変わったときのみ進める単調 counter(model/permission だけの変更や effort-less モデルへの切替では進まない — 進めない理由は「矛盾回避」ではなく、revision を「最後に有効な effort を選んだ地点」という意味に保つため。effort が一時的に消える遷移は read 側の defensive skip が拾うので、bump してもしなくても選択結果自体は変わらない)。クライアント側 parse は fail-closed — persona_id / effort が非空文字列でない entry は個別に drop し、他の entry は活かす。LaunchDialog は取得失敗時も既存の `default_effort` へ静かに縮退し、起動をブロックしない |
-| クライアント → サーバ | `stop` / `restart` | `{ version, host_id, agent_id }`。**operator 限定**。server は `AgentId.host_id_from(agent_id) == host_id` を exact match で検証し、不一致は `agent_not_owned`。`stop` は dashboard の「終了」ボタン由来(host_id は agent_id から導出)。restart の producer は未実装だが、実装時は dashboard 側の単一送出点 `pushVersioned` を通るため `version` は自動的に付く(issue #208) |
-| クライアント → サーバ | `restore` | `{ agent_id }`。**operator 限定**。切断済みエージェントを**同一 agent_id で resume 再 spawn**して復帰させる(ADR-0014 復帰)。サーバが SessionPointers の `{session_id, cwd}` と最後の persona を引いて runner へ `spawn` を中継。稼働中は `not_disconnected`、session pointer 無し(cwd 含む)は `no_session` |
-| クライアント → サーバ | `resume_session` | `{ agent_id, session_id }`。**operator 限定**。**同一 agent_id / cwd** のまま、resume 先を operator が選んだ `session_id` に切り替える(ADR-0014 resume-swap)。稼働中は `runner:<host_id>` へ `switch_session` を中継(kill→relaunch)、切断済みは `restore` と同経路で `spawn`(cwd は SessionPointers、`session_id` は payload)。`session_id` charset は `[A-Za-z0-9-]{1,128}`(欠落 `missing_session_id` / 不正 `invalid_session_id`)。切断済みで cwd 未記録なら `no_session` |
-| クライアント → サーバ | `enumerate_sessions` | `{ version, host_id, cwd }` または `{ version, host_id, agent_id }`。**operator 限定**。resume 候補の列挙要求。`cwd` 省略時は `agent_id` を SessionPointers に引き当てて server が cwd を補完(詳細画面から wrapper の ext.cwd を待たずに列挙できるようにするため)。`cwd` も `agent_id` も無ければ `invalid_cwd`、`agent_id` はあるが SessionPointers に cwd 記録が無ければ `no_session` |
-| クライアント → サーバ | `refresh_engine_catalog` | `{ version, host_id, engine, request_id, force? }`。**operator 限定**。LaunchDialog の「モデル一覧を再取得」。サーバが見るのは operator role・`host_id`・payload サイズだけで、`host_id` を剥がした残りは**中身を解釈せず** `runner:<host_id>` へ relay する。`engine` / `request_id` / `force` の妥当性検証は runner 側([ADR-0039](../adr/0039-engine-catalog-live-probe.md)) |
-| サーバ → クライアント | `hosts` | `{ hosts: { "<host_id>": { personas, cwd_allowlist, capabilities?, engines?, build_revision?, build_dirty?, registered_at } } }`。**host_id をキーとする map**(配列ではない)。host 登録の変化と join 直後に push。`personas` は host の trust policy([ADR-0031](../adr/0031-runner-persona-trust-mode.md))を server SoT の persona プールに適用した結果で、runner が申告した生の id 列ではない。`build_revision` / `build_dirty` は runner の `register` payload をそのまま転送(issue #218、[ADR-0053](../adr/0053-build-identity.md))— dashboard が GET `/api/health` の server 自身の `build_revision` と比較し、不一致または片方 `"unknown"` のとき LaunchDialog で operator へ警告する(observability のみ、接続や起動は一切阻害しない)。**operator 限定**(cwd 許可リスト等は機微、[ADR-0021](../adr/0021-role-information-disclosure-policy.md)) |
-| サーバ → クライアント | `runner_sessions` | `enumerate_sessions` 応答(runner の `sessions`)の転送。**operator 限定** |
-| サーバ → クライアント | `spawn_result` | `{ host_id, agent_id, ok, reason?, request_id? }` の転送。**operator 限定** |
-| サーバ → クライアント | `catalog_result` | runner の `catalog_result` の転送。**operator 限定**。成功時の catalog 本体は本 event ではなく、runner 再 register が起こす `hosts` broadcast で届く |
+| client → server | `spawn` | `{ host_id, persona, cwd, name?, initial_prompt?, resume_session_id?, engine?, model?, effort?, permission_mode?, sandbox?, network_access? }`. **Operator-only**. LaunchDialog values are passed through to runner; `persona` is an ID resolved against the host declaration. The server allocates `agent_id` and issues the per-agent token (plan A, D3/D4; [ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md)); runner supplies `server_url` from config. Optional `name` overrides the per-instance display name (agent_id/persona.id unchanged, 64 characters, no controls). `resume_session_id` selects resume and seeds cwd in SessionPointers. `engine` must be advertised by the host ([ADR-0032](../adr/0032-codex-adapter.md) F1, [ADR-0032](../adr/0032-codex-adapter.md) F1, [phase-14-codex-adapter](../plans/phase-14-codex-adapter.md)). |
+| client → server | `launch_defaults` | `{ version }`. **Operator-only** request for LaunchDialog's per-persona previous effort ([issue #88](https://github.com/sakuraiyuta/kaoiro/issues/88)); it is computed synchronously by the server and never relayed to runner. ADR-0015 still requires the version stamp, with mismatch/absence warned and accepted best-effort. Reply status is Phoenix `ok`, body `{ defaults: { "<persona_id>": "<effort>" } }`. The server joins AgentDirectory and SessionPointers at read time; for each persona choose the highest `effort_revision`, the sole candidate, or one common value, and omit conflicting preferences. Invalid entries are dropped fail-closed; LaunchDialog falls back silently to `default_effort`. |
+| client → server | `stop` / `restart` | `{ version, host_id, agent_id }`. **Operator-only**. Verify exact host binding and reject mismatches as `agent_not_owned`; stop comes from the dashboard end button and derives host_id from agent_id. A future restart producer will use `pushVersioned` and receive the stamp automatically (issue #208). |
+| client → server | `restore` | `{ agent_id }`. **Operator-only**. Re-spawn a disconnected agent with the same ID and resume pointer (ADR-0014). Missing pointer/cwd returns `no_session`; a live agent returns `not_disconnected`. |
+| client → server | `resume_session` | `{ agent_id, session_id }`. **Operator-only**. Select a resume target while retaining agent_id/cwd (ADR-0014 resume-swap). Live agents use runner `switch_session` (kill → relaunch); disconnected agents use `spawn`. Session IDs match `[A-Za-z0-9-]{1,128}`; missing/invalid values return `missing_session_id` / `invalid_session_id`, and missing cwd returns `no_session`. |
+| client → server | `enumerate_sessions` | `{ version, host_id, cwd }` or `{ version, host_id, agent_id }`. **Operator-only** request for resume candidates. The server fills cwd from SessionPointers when omitted; neither field returns `invalid_cwd`, and a pointer without cwd returns `no_session`. |
+| client → server | `refresh_engine_catalog` | `{ version, host_id, engine, request_id, force? }`. **Operator-only** LaunchDialog refresh. The server checks role, host_id, and payload size, then relays the remaining fields opaquely to `runner:<host_id>`; runner validates engine/request_id/force ([ADR-0039](../adr/0039-engine-catalog-live-probe.md)). |
+| server → client | `hosts` | `{ hosts: { "<host_id>": { personas, cwd_allowlist, capabilities?, engines?, build_revision?, build_dirty?, build_version?, build_channel?, registered_at } } }`. A **map keyed by host_id**, pushed on host changes and immediately after join. `personas` is the host trust policy applied to the server persona pool, not raw runner IDs ([ADR-0031](../adr/0031-runner-persona-trust-mode.md)). Build identity fields pass through runner `register` (issues #218/#288, [ADR-0053](../adr/0053-build-identity.md), [ADR-0056](../adr/0056-project-calver-build-version.md)); the dashboard shows the runner's CalVer/channel in the host selector and retains mismatch warnings without blocking. **Operator-only** ([ADR-0021](../adr/0021-role-information-disclosure-policy.md)). |
+| server → client | `runner_sessions` | Forwarded runner `sessions` response to `enumerate_sessions`. **Operator-only**. |
+| server → client | `spawn_result` | Forwarded `{ host_id, agent_id, ok, reason?, request_id? }`. **Operator-only**. |
+| server → client | `catalog_result` | Forwarded runner result. **Operator-only**; the successful catalog itself arrives in the runner's subsequent `hosts` broadcast. |
 
-**spawn 認証経路**: spawn は runner 起動経由に一本化する(常駐 or ワンショット
-`kaoiro-runner spawn …`)。信頼の起点は per-host runner トークン
-([ADR-0023](../adr/0023-host-runner-architecture.md))+ サーバが spawn 時に
-発行・注入する per-agent token であり、**per-agent トークンの事前登録は spawn
-経路では不要**([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md)
-D2/D4)。token の発行方式・寿命は ADR-0024 の従属点(実装時確定)。素の `node
-wrapper` 直結(runner-less)の本格対応は [#71](https://github.com/sakuraiyuta/kaoiro/issues/71)。
+**Spawn authentication path**: Spawn is unified through the runner (resident or one-shot
+`kaoiro-runner spawn …`). Trust starts with the per-host runner token
+([ADR-0023](../adr/0023-host-runner-architecture.md)) plus the per-agent token issued and
+injected by the server at spawn; pre-registering per-agent tokens is unnecessary
+([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) D2/D4). Token issuance
+and lifetime are defined by ADR-0024. Full runner-less direct `node wrapper` support is [#71](https://github.com/sakuraiyuta/kaoiro/issues/71).
 
-### バージョニング方針
+### Versioning policy
 
-- 受信側は**未知キーを無視**する(前方互換)。
-- ADR-0015 は version を**ラッパー/サーバ/クライアントの全メッセージ**へ
-  フラットな外枠キーとして付与する方針を定める。実装は段階化しており、段階1で
-  クライアント → サーバ / サーバ → ラッパー / サーバ → runner を充足した。
-  段階2を含む全経路の実装状況は下記「version 棚卸し」を正本とする。
-- 受信側は自分の version と**完全一致のみ正常**とみなし、不一致なら
-  **警告ログ**を出す。ただし**ベストエフォートで受理して処理は継続**する
-  (不一致でも止めない、[ADR-0015](../adr/0015-protocol-version-stamping.md))。
-- キーの追加・予約 type の追補は同一 `version` のまま行う。
-- 既存キーの意味変更・削除など破壊的変更のみ `version` を上げる。
-- `ext` はフィルタの名前空間であり、コアは解釈しない。
-- トランスポート層のバージョンは Channels の `vsn` 交渉
-  ([ADR-0009](../adr/0009-client-transport.md))が担い、本節とは独立。
+- Receivers **ignore unknown keys** for forward compatibility.
+- ADR-0015 requires a flat outer `version` on **every wrapper/server/client message**. The
+  implementation is staged; stage 1 covers client → server, server → wrapper, and server →
+  runner. The inventory below is normative for all routes, including stage 2.
+- A receiver treats only an exact version match as normal and logs a **warning** on mismatch,
+  while continuing best-effort processing ([ADR-0015](../adr/0015-protocol-version-stamping.md)).
+- Additive keys and reserved types keep the same `version`; only breaking semantic changes or
+  removals bump it.
+- `ext` is a filter namespace and is not interpreted by the core.
+- Transport version is negotiated independently by Channels `vsn`
+  ([ADR-0009](../adr/0009-client-transport.md)).
 
-### version 棚卸し(issue #208)
+### Version inventory (issue #208)
 
-ADR-0015 の「3 者すべてのメッセージ」要請に対する段階別の充足状況。段階1は
-クライアント → サーバ / サーバ → ラッパー / サーバ → runner を対象とし、
-issue #208 で充足した。棚卸し基準は `develop` の `8b1d287`(2026-08-21 時点)。issue [#88](https://github.com/sakuraiyuta/kaoiro/issues/88)
-と [#187](https://github.com/sakuraiyuta/kaoiro/issues/187) 段階3 で
-**同じ誤読 —「この message は runner に中継されないから version 不要」— が二度
-must-fix になった**。ADR-0015 は `attach_chunk` の明示 carve-out(ADR-0015
-Decision)を除き、message 経路による暗黙の例外を設けていないので、以下の表が
-判断の正本であり、「隣の message が持っていない」ことは前例にならない。
+This records staged fulfillment of ADR-0015's requirement for all three parties. Stage 1
+(client → server, server → wrapper, server → runner) was completed in issue #208; baseline
+is `develop` `8b1d287` (2026-08-21). The same misreading—"this message is not relayed to the
+runner, so it needs no version"—became a must-fix twice in [#88](https://github.com/sakuraiyuta/kaoiro/issues/88)
+and stage 3 of [#187](https://github.com/sakuraiyuta/kaoiro/issues/187). Except for the
+explicit `attach_chunk` carve-out in ADR-0015, no implicit route exception exists; the table
+below is authoritative and a neighboring message without a stamp is not precedent.
 
-**付与主体**は経路ごとに決まっている。producer が payload を組み立てる経路では
-組み立て時に、client 発の payload をサーバが素通しする経路ではサーバが
-**normalize**(`relay/5` / `relay_to_runner/4` が `version` を `"0"` で上書き)
-する。後者は client の申告を認証しているのではなく、送信元 build に依存せず
-受信側の保証を成立させるための正規化である。申告値そのものは normalize の前に
-warn される。
+The **stamping authority** is route-specific. A producer stamps when assembling its payload;
+for client payloads passed through by the server, the server **normalizes** (`relay/5` /
+`relay_to_runner/4` overwrites `version` with `"0"`). This is not authentication of the
+client claim but normalization that guarantees the receiver independent of sender build; the
+original claim is warned before normalization.
 
-#### クライアント → サーバ(段階1、#208 で充足)
+#### Client → server (stage 1, completed in #208)
 
-| 状況 | message |
+| Status | Message |
 |---|---|
-| 付与済み | `instruction` / `permission_decision` / `question_response` / `interrupt` / `set_model` / `set_effort` / `refresh_models` / `refresh_engine_catalog` / `set_permission_mode` / `rename_agent` / `clear_history` / `delete_agent` / `stop` / `restore` / `resume_session` / `session_reset` / `spawn` / `launch_defaults` / `enumerate_sessions` / `attach_open` / `attach_close` |
-| 恒久 carve-out | `attach_chunk`(下記) |
-| producer 未実装 | `restart`(dashboard に push 呼び出しが無い。実装時は `pushVersioned` を通るので自動的に付与される) |
+| Stamped | `instruction` / `permission_decision` / `question_response` / `interrupt` / `set_model` / `set_effort` / `refresh_models` / `refresh_engine_catalog` / `set_permission_mode` / `rename_agent` / `clear_history` / `delete_agent` / `stop` / `restore` / `resume_session` / `session_reset` / `spawn` / `launch_defaults` / `enumerate_sessions` / `attach_open` / `attach_close` |
+| Permanent carve-out | `attach_chunk` (below) |
+| Producer not implemented | `restart` (no dashboard push call; implementation will use `pushVersioned` and stamp automatically) |
 
-付与は dashboard の `pushVersioned`(`dashboard/src/lib/protocol.ts`)が単一の
-送出点として行う。call site ごとの規律ではなく funnel 化してあるのは、上記の
-誤読が再発する余地を構造的に消すため。producer 未実装だった
-`revoke_wrapper_token` / `rename_user` はサーバ受信側の検査のみ持つ。
+Dashboard stamps through the single `pushVersioned` send point (`dashboard/src/lib/protocol.ts`)
+rather than call-site discipline, eliminating the structural opportunity for the above error.
+`rename_user`/`list_users` producers (`connection.renameUser`/`connection.listUsers`) use the
+same funnel. The unimplemented `revoke_wrapper_token` has only server-side receive checks.
 
-#### サーバ → ラッパー(段階1、#208 で充足)
+#### Server → wrapper (stage 1, completed in #208)
 
-| 状況 | message |
+| Status | Message |
 |---|---|
-| サーバが normalize(`relay/5`) | `instruction` / `permission_decision` / `question_response` / `interrupt` / `set_model` / `set_effort` / `refresh_models` / `set_permission_mode` |
-| サーバが組み立て時に付与 | `attach_open` / `attach_close` / `revoked` / `session_reset_failed` / `delivery_status` / `persona_prompt` / `set_permission_mode`(join 後 push)/ `persona_sync` / `display_name_sync` |
-| エンベロープ由来 | `envelope`(IA 中継。frame key の `version` を持つ。合成分も `SynthEnvelope` が付与) |
-| 恒久 carve-out | `attach_chunk`(下記) |
+| Server normalizes (`relay/5`) | `instruction` / `permission_decision` / `question_response` / `interrupt` / `set_model` / `set_effort` / `refresh_models` / `set_permission_mode` |
+| Stamped during assembly | `attach_open` / `attach_close` / `revoked` / `session_reset_failed` / `delivery_status` / `persona_prompt` / join `set_permission_mode` / `persona_sync` / `display_name_sync` |
+| From envelope | `envelope` (IA relay; frame key carries `version`, including synthesized `SynthEnvelope`) |
+| Permanent carve-out | `attach_chunk` (below) |
 
-#### サーバ → runner(段階1、issue #171 / #172 で充足)
+#### Server → runner (stage 1, completed in issues #171/#172)
 
-`spawn` / `reset_session` / `switch_session` はサーバが組み立て時に付与。
-`stop` / `restart` / `enumerate_sessions` / `refresh_engine_catalog` は
-`relay_to_runner/4` が normalize する。
+`spawn` / `reset_session` / `switch_session` are stamped during server assembly.
+`stop` / `restart` / `enumerate_sessions` / `refresh_engine_catalog` are normalized by
+`relay_to_runner/4`.
 
-#### runner → サーバ(充足済み、#208 のスコープ外)
+#### Runner → server (complete; outside #208 scope)
 
 `register` / `heartbeat` / `sessions` / `spawn_result` / `catalog_result` /
-`session_reset_result` はいずれも runner が組み立て時に `version: "0"` を
-載せる。
+`session_reset_result` are all assembled by the runner with `version: "0"`.
 
-#### ラッパー → サーバ(段階2、issue #260 で充足)
+#### Wrapper → server (stage 2, completed in issue #260; wrapper identity in issue #288 Stage 3)
 
-`envelope` は frame key で充足する。`delivery_ack` /
-`delivery_status_request` / `history_reset` / `replay_ia` /
-`history_replay_complete` / `directory_request` / `session_reset_request` は
-`WRAPPER_CONTROL_EVENT_POLICY` に宣言され、wrapper の唯一の送出点
-`#pushVersioned` が flat `version` を付与する。server は
-`@wrapper_event_policy` と `handle_in/3` の単一 funnel で、欠落・不一致を
-warn した上でベストエフォート受理する。
+`envelope` is stamped by its frame key. `delivery_ack` / `delivery_status_request` /
+`history_reset` / `replay_ia` / `history_replay_complete` / `directory_request` /
+`session_reset_request` / `wrapper_build_info` are declared in `WRAPPER_CONTROL_EVENT_POLICY`;
+the wrapper's sole send point `#pushVersioned` adds flat `version`. The server's
+`@wrapper_event_policy` and single `handle_in/3` funnel warn on omission/mismatch and accept
+best-effort. `wrapper_build_info` is sent after every join/rejoin from the wrapper's own
+generated artifact; it is not inferred from runner identity.
 
-#### サーバ → クライアント(段階2、issue #260 で充足)
+#### Server → client (stage 2, completed in issue #260; wrapper identity in issue #288 Stage 3)
 
-`envelope` は frame key で充足する。残りの16種(`history_replay_envelope` /
-`snapshot` / `history` / `hosts` / `directory` / `history_cleared` /
-`history_reset` / `history_replay_complete` / `agent_deleted` /
-`delivery_status` / `session_reset_started` / `session_reset_completed` /
-`session_reset_failed` / `spawn_result` / `runner_sessions` / `catalog_result`)は、
-server の唯一の client 向け送出点 `push_versioned/3` が flat `version` を
-付与する。内部 PubSub broadcast と runner の申告値は wire の version SoT ではない。
-dashboard は `CLIENT_EVENT_VERSION_POLICY` と `bindServerEvent` の単一 funnel を通し、
-欠落・不一致を warn した上でベストエフォート受理する。
+`envelope` is stamped by its frame key. The remaining 19 events
+(`history_replay_envelope` / `snapshot` / `task_snapshot` / `delivery_snapshot` / `history` /
+`hosts` / `directory` / `history_cleared` / `history_reset` / `history_replay_complete` /
+`agent_deleted` / `delivery_status` / `session_reset_started` / `session_reset_completed` /
+`session_reset_failed` / `spawn_result` / `runner_sessions` / `catalog_result` /
+`wrapper_build_info`) receive flat
+`version` from server `push_versioned/3`. Internal PubSub and runner claims are not wire SoT.
+Dashboard's `CLIENT_EVENT_VERSION_POLICY` and `bindServerEvent` funnel warn and accept best-effort.
 
-#### 恒久 carve-out — `attach_chunk`
+#### Permanent carve-out — `attach_chunk`
 
-`attach_chunk` は V2 binary frame(固定長ヘッダ + 生バイト列、
-[file-upload](file-upload.md))であり、`version` キーを載せる JSON オブジェクト
-そのものが存在しない。付与には wire 変更(= protocol version の bump)が要り、
-それは #208 のスコープ外。**恒久的な対象外**として、送信側
-(`dashboard/src/lib/protocol.ts` の `attachChunk`)、サーバ受信側
-(`agents_channel.ex` の `handle_in("attach_chunk", {:binary, data}, ...)` —
-唯一 `require_operator_role/1` を直接呼ぶ経路)、ラッパー受信側
-(`transport.ts` の `SERVER_EVENT_VERSION_POLICY` で `binaryFrame`)の 3 箇所に
-同じ理由が記録されている。
+`attach_chunk` is a V2 binary frame (fixed header plus raw bytes, [file-upload](file-upload.md));
+there is no JSON object on which to place a `version` key. Adding one would change the wire
+(and bump the protocol version), outside #208. It is therefore a **permanent exception**;
+the same rationale is recorded at the sender (`dashboard/src/lib/protocol.ts` `attachChunk`),
+server receiver (`agents_channel.ex` `handle_in("attach_chunk", {:binary, data}, ...)`, the
+only path calling `require_operator_role/1` directly), and wrapper receiver (`transport.ts`
+`SERVER_EVENT_VERSION_POLICY` `binaryFrame`).
 
-#### 受信側の検査
+#### Receiver validation
 
-ADR-0015 の warn-then-accept(一致は無警告 / 欠落・不一致は警告しつつ処理継続)
-は全受信経路(server / wrapper / runner / dashboard)で実装済み。個別ハンドラの
-規律に頼らず、**検査を通す機構**と
-**迂回を検出するテスト**の 2 段で担保する。
+ADR-0015's warn-then-accept rule (no warning on match; warn and continue on omission or
+mismatch) is implemented on every receive path (server / wrapper / runner / dashboard).
+It is guaranteed in two layers: a **mechanism enforcing validation** and
+**tests detecting bypasses**, rather than handler-by-handler discipline.
 
-機構だけでは足りない — 検査を助長する形にはできても、別経路を書くこと自体は
-言語が禁じてくれない。だから各層に、迂回すると red になるテストを置く
-(ふじ #208 レビュー MF-3 / MF-4 の指摘)。
+The mechanism alone is insufficient: it can encourage validation but cannot prevent a new
+route from bypassing it. Each layer therefore has a test that turns red when bypassed
+(Fujino #208 review MF-3/MF-4).
 
-| 受信側 | 機構 | 迂回検出 |
+| Receiver | Mechanism | Bypass detection |
 |---|---|---|
-| サーバ | operator gate `require_operator/4` に `warn_on_version_mismatch/3` を溶接。検査は role check の**後**に走る(viewer が version を詐称してログを焚けない) | モジュール自身の AST から `handle_in` の event 名を列挙し、各 event へ不正 version を push して warn を確認する。テスト側に一覧を持たないので、新しい `handle_in` 節は自動で対象に入る |
-| ラッパー | `#bindServerEvent` が唯一の `channel.on` 呼び出し点。`event` の型が `SERVER_EVENT_VERSION_POLICY` のキーなので、表に載せずには bind できない | 実際に登録された event 集合が policy 表と一致すること、かつ**各 event の登録がちょうど 1 件**であることを assert する。Phoenix は同一 event の全 callback を呼ぶため、既存 event に素の `channel.on` を重ねる迂回は件数でしか見えない |
-| runner | `bindControlEvents` が event 表をループして bind する | — |
-| クライアント | `CLIENT_EVENT_VERSION_POLICY` と `bindServerEvent` が server → client の17種を受信時に検査する | integration test が policy 全件の欠落 / 一致 / 不一致と継続受理を通し、`c.on(` が bind 関数内の1箇所だけであることを検査する |
+| Server | `require_operator/4` invokes `warn_on_version_mismatch/3` after the role check (viewers cannot forge versions to create logs). | Enumerate `handle_in` event names from the module AST, push an invalid version to each, and assert warnings; new clauses are included automatically. |
+| Wrapper | `#bindServerEvent` is the sole `channel.on` call and its event type must be a `SERVER_EVENT_VERSION_POLICY` key. | Assert the registered event set equals policy and each event is registered exactly once; Phoenix invokes every callback, so a raw duplicate `channel.on` is visible by count. |
+| Runner | `bindControlEvents` loops over the event table to bind. | — |
+| Client | `CLIENT_EVENT_VERSION_POLICY` and `bindServerEvent` validate 19 server → client events on receipt. | Integration tests cover every policy omission/match/mismatch and continued acceptance, and check `c.on(` appears only in the bind function. |
 
-#### 非 map payload の扱い
+#### Non-map payload handling
 
-Phoenix のプロトコルを直接話すクライアントは、payload に任意の JSON 項を
-置ける。全ハンドラは map を前提にしているため、`AgentsChannel` は
-`handle_in/3` の先頭で **map でない payload を `missing_agent_id` で
-fail-closed に返す**(`attach_chunk` の binary frame は対象外 — payload が
-`{:binary, data}` で、そもそも map ではないのが正しい形)。
+Clients speaking Phoenix directly may place any JSON term in payload. Since handlers expect
+maps, `AgentsChannel` returns **non-map payloads fail-closed as `missing_agent_id`** at the
+start of `handle_in/3`. Binary `attach_chunk` frames are excluded because their correct
+payload is `{:binary, data}`.
 
-この shape gate は role 解決より前に走るので、viewer にも `forbidden` では
-なく shape 判定が返る。意図した優先順位で、role を gate 内で解決すると
-「1 メッセージにつき role 解決は 1 回」(issue #148)の性質が壊れるため。
-malformed payload への shape 判定は送信者自身の入力についての verdict で
-あり、サーバ側の状態を開示しない。
+The shape gate runs before role resolution, so viewers receive a shape verdict rather than
+`forbidden`. This preserves the intended priority and the one role resolution per message
+(issue #148). A malformed-payload verdict concerns the sender's own input and discloses no
+server state.
 
-### 同一性とペルソナ(マスト)
+### Identity and persona (must)
 
-- `agent_id` は設定で固定する安定 ID(実行時生成の揮発 ID は使わない)。
-- `session_id` は SDK の会話単位 ID で agent_id とは別軸(1 agent_id : N
-  session_id)。サーバは復帰の既定先として agent_id ごとに最後の session_id
-  のみ保持し、全候補はホストの runner が列挙する
-  ([ADR-0014](../adr/0014-session-resume-and-restore.md))。
-- `persona`(id/表示名/立ち絵)はラッパー初期設定で指定。どのホスト/プロセスが
-  どのペルソナを担当するかはユーザ指定。
-- サーバ/クライアントは `agent_id`(+ `persona.id`)をキーに表示・機嫌を持続。
-- 決定詳細は
-  [ADR-0003](../adr/0003-persona-identity-persistence.md)。将来 `persona` に
-  描画種別(静的差分/アニメ/3D)を持たせる
-  ([ADR-0004](../adr/0004-client-rendering-staged.md))。
+ - `agent_id` is a stable ID fixed in configuration; do not use volatile runtime IDs.
+ - `session_id` identifies an SDK conversation and is independent of agent_id (one agent to
+   many sessions). The server keeps only the last session_id per agent as the default resume
+   target; the host runner enumerates all candidates ([ADR-0014](../adr/0014-session-resume-and-restore.md)).
+ - `persona` (ID, display name, sprite) is selected by wrapper initial configuration; the user
+   assigns personas to hosts/processes.
+ - Server and client persist display and mood keyed by `agent_id` (and `persona.id`).
+ - Details are in [ADR-0003](../adr/0003-persona-identity-persistence.md); future rendering
+   kinds (static diff, animation, 3D) may be added to `persona` ([ADR-0004](../adr/0004-client-rendering-staged.md)).
 
-### 状態機械の状態セット v0(たたき台)
+### State-machine state set v0 (draft)
 
-実用ゴール (A) の中核。Agent SDK のメッセージから導出する。SDK の**確定済み
-メッセージ/コールバック仕様と導出マッピング**は
-[agent-sdk-events](agent-sdk-events.md) を参照。
+Core of practical goal (A), derived from Agent SDK messages. See [agent-sdk-events](agent-sdk-events.md)
+for the SDK's **settled message/callback contract and derivation mapping**.
 
-| 状態 | 意味 | 導出元(SDK) | 表情の方向性(将来) |
+| State | Meaning | Source (SDK) | Future expression |
 |---|---|---|---|
-| `idle` | 起動済み・未着手 | `SDKSystemMessage`(init) | 通常 |
-| `sending` | 指示送信済み・応答開始待ち | ラッパーが instruction 受理時に導出(SDK 外、#32) | 送った |
-| `thinking` | モデルが生成中 | `SDKAssistantMessage`(text/thinking) | 考え中 |
-| `tool_running` | ツール実行中 | `SDKAssistantMessage`(tool_use)〜 `SDKUserMessage`(tool_result) | 集中 |
-| `waiting_permission` | ツール許可待ち | `canUseTool` 呼び出し中(Promise 保留) | こちらを見て待つ |
-| `waiting_question` | AskUserQuestion 選択回答待ち | `canUseTool`(`toolName === "AskUserQuestion"`)呼び出し中(Promise 保留)、[ADR-0027](../adr/0027-askuserquestion-envelope.md) | 選択を差し出して待つ |
-| `waiting_input` | ターン完了・次の指示待ち | `SDKResultMessage` 後、ストリーミング入力待ち | こちらを見て待つ |
-| `done` | ターン完了(瞬間) | `SDKResultMessage`(success) | 喜ぶ(→ `waiting_input`) |
-| `error` | エラー/リトライ | `SDKResultMessage`(error_*/is_error) | 困り顔 |
-| `disconnected` | ラッパー接続断 | サーバ側で導出 | 不明/不在 |
+| `idle` | Started, no work yet | `SDKSystemMessage` (init) | Normal |
+| `sending` | Instruction sent, waiting for response | Wrapper-derived on instruction acceptance (outside SDK, #32) | Sent |
+| `thinking` | Model is generating | `SDKAssistantMessage` (text/thinking) | Thinking |
+| `tool_running` | Tool is running | `SDKAssistantMessage` (tool_use) → `SDKUserMessage` (tool_result) | Focused |
+| `waiting_permission` | Waiting for tool permission | `canUseTool` call with Promise pending | Waiting for operator |
+| `waiting_question` | Waiting for AskUserQuestion answer | `canUseTool` (`toolName === "AskUserQuestion"`) with Promise pending, [ADR-0027](../adr/0027-askuserquestion-envelope.md) | Offering choices |
+| `waiting_input` | Turn complete, waiting for next instruction | After `SDKResultMessage`, waiting for streaming input | Waiting |
+| `done` | Instant of turn completion | `SDKResultMessage` (success) | Happy (→ `waiting_input`) |
+| `error` | Error/retry | `SDKResultMessage` (error_*/is_error) | Concerned |
+| `disconnected` | Wrapper connection lost | Server-derived | Unknown/absent |
 
-制御(穴1)も確定: ストリーミング入力(`AsyncIterable<SDKUserMessage>`)+
-`Query.interrupt()` + `canUseTool` が同一 Query で完結する
-([agent-sdk-events](agent-sdk-events.md))。
+Control (gap 1) is also settled: streaming input (`AsyncIterable<SDKUserMessage>`),
+`Query.interrupt()`, and `canUseTool` complete within one Query ([agent-sdk-events](agent-sdk-events.md)).
 
 ```mermaid
 stateDiagram-v2
@@ -872,18 +845,16 @@ stateDiagram-v2
   disconnected --> idle
 ```
 
-### ペルソナアセット配信
+### Persona asset distribution
 
-`persona.sprite_set` を実画像へ解決する HTTP API。当初
-[ADR-0008](../adr/0008-persona-asset-distribution.md) で立ち絵のみを
-対象にしたが、[ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
-で「persona pack zip 単位で配布・server 集約 SoT・auto-watch」に拡張
-された(2026-07-05)。Channels とは独立で、`:serve_dashboard` トグルの
-対象外(公開 API)。アセットの配置・規格の正本は
-[personas](personas.md)、pack 内部スキーマは
-[persona-pack-schema](persona-pack-schema.md)。
+HTTP API resolving `persona.sprite_set` to images. [ADR-0008](../adr/0008-persona-asset-distribution.md)
+initially covered sprites only; [ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
+expanded it on 2026-07-05 to persona-pack zip distribution, a server aggregate SoT, and
+auto-watch. It is independent of Channels and not gated by `:serve_dashboard` (public API).
+Asset layout and format are defined by [personas](personas.md); the pack schema is
+[persona-pack-schema](persona-pack-schema.md).
 
-- `GET /api/personas` — マニフェスト JSON:
+- `GET /api/personas` — manifest JSON:
 
 ```json
 {
@@ -904,142 +875,114 @@ stateDiagram-v2
 }
 ```
 
-- `version` はアセット内容から導出した全体バージョン。クライアントは
-  これが変わった時だけスプライト URL を引き直す(増分同期)。
-- `name` / `pack_version` / `description` は persona pack `manifest.
-  json` から転記([persona-pack-schema](persona-pack-schema.md))。
-  personality.md 本文は API で露出しない(wrapper への配送は WS
-  ハンドシェイクの push のみ、下記「人格プロンプト配送」)。
-- `url` のハッシュ付き形は不変 — 応答は
-  `cache-control: public, max-age=31536000, immutable`。`?v=` なしは
-  `no-cache`。
-- 配信はマニフェスト掲載ファイルのみ(未知パスは 404)。
-- クライアントはスプライトのない状態を `idle` 画像へフォールバック
-  する。`disconnected` は画像を持たず(personas.md の MUST NOT)、
-  `idle` のグレースケール表示で表現する。マニフェスト未取得・未掲載
-  `sprite_set` はスプライトなし描画(リファレンス実装では CSS 顔)へ
-  フォールバックする。
-- **auto-watch**: server は取り込みディレクトリを Elixir `FileSystem`
-  library で watch し、zip の追加・更新・削除を検知して manifest を
-  再構築する([ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
-  F6)。手動 restart 不要。
+- `version` is the aggregate version derived from asset contents; clients refetch sprite URLs
+  only when it changes (incremental sync).
+- `name` / `pack_version` / `description` come from the persona pack `manifest.json`
+  ([persona-pack-schema](persona-pack-schema.md)). `personality.md` is not exposed by this API;
+  it is pushed only during the WS wrapper handshake (see "Personality prompt delivery").
+- Hashed `url` forms are immutable with `cache-control: public, max-age=31536000, immutable`;
+  URLs without `?v=` are `no-cache`.
+- Only files listed in the manifest are served; unknown paths return 404.
+- A missing sprite falls back to the `idle` image. `disconnected` has no image (MUST NOT in
+  personas.md) and is shown as grayscale idle. Missing manifests or unlisted sprite sets fall
+  back to sprite-less rendering (CSS face in the reference implementation).
+- **Auto-watch**: the server watches the intake directory with Elixir `FileSystem`, detects zip
+  additions/updates/deletions, and rebuilds the manifest ([ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md) F6); no manual restart is needed.
 
-### 人格プロンプト配送(ADR-0029)
+### Personality prompt delivery (ADR-0029)
 
-[ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md) に
-基づき、人格プロンプトは server 集約 SoT(persona pack の
-`personality.md`)から wrapper へ WS ハンドシェイクの push で配送する。
+Under [ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md), the personality
+prompt is pushed from the server aggregate SoT (`personality.md` in the persona pack) to the
+wrapper during the WS handshake.
 
-- **wrapper join 時の未知 persona.id は reject**: server は
-  `wrapper:<agent_id>` join を受け付ける時点で agent_id 別トークンの
-  マッピングから引いた `persona.id` を manifest と照合する。manifest
-  にない id は接続を拒否する(「野良 persona 禁止」の enforce、
+- **Reject unknown persona.id at wrapper join**: when accepting `wrapper:<agent_id>`, the server
+  checks the persona ID from the agent-token mapping against the manifest. IDs absent from the
+  manifest are refused (enforcing no stray personas,
   [ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
-  F3)。
-- **after_join push**: server → wrapper に次のメッセージを push:
+  F3).
+- **after_join push**: server pushes the following message to the wrapper:
 
-  | 方向 | type | payload | 備考 |
+  | Direction | Type | Payload | Notes |
   |---|---|---|---|
-  | サーバ → ラッパー | `persona_prompt` | `{ prompt }` | wrapper join 直後の after_join 経路で 1 度だけ配信。`prompt` は persona pack の `personality.md` 本文 + 共通フッター(server 側で結合、[ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md) F5)。wrapper は受信文字列をそのまま SDK の `systemPrompt.append` に注入する([persona-personality-injection](persona-personality-injection.md))。以降のセッション中に上書き push はしない(F9、hot-swap なし)|
+  | server → wrapper | `persona_prompt` | `{ prompt }` | Sent once after wrapper join. `prompt` is persona-pack `personality.md` plus the server-joined common footer ([ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md) F5). The wrapper injects it unchanged with SDK `systemPrompt.append` ([persona-personality-injection](persona-personality-injection.md)); no hot-swap push occurs during the session (F9). |
 
-- **server 到達不能時の wrapper spawn は fail-closed**: wrapper は
-  `persona_prompt` を受信できるまで spawn を完了できない。dev/local も
-  同様(minimal server を並行起動する運用、
+- **Fail-closed when server is unreachable**: the wrapper cannot complete spawn until it
+  receives `persona_prompt`, including dev/local operation where a minimal server runs in
   [ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
-  F10)。
+  F10).
 
-### クライアント向けトランスポート
+### Client transport
 
-クライアント ↔ サーバの接続は **Phoenix Channels に一本化**
-([ADR-0009](../adr/0009-client-transport.md))。素の WebSocket
-エンドポイントや SSE は併設しない。
+Client ↔ server connections use **Phoenix Channels exclusively**
+([ADR-0009](../adr/0009-client-transport.md)); no raw WebSocket endpoint or SSE is added.
 
-- ワイヤ形式は Channels V2 serializer 固定。接続時にクエリ
-  `vsn=2.0.0` を必須とする。フレーム形式
-  (`[join_ref, ref, topic, event, payload]`)は公式ガイド
+- The wire format is fixed to the Channels V2 serializer and requires query `vsn=2.0.0`.
+  Frame shape (`[join_ref, ref, topic, event, payload]`) follows the official guide
   [Writing a Channels Client](https://hexdocs.pm/phoenix/writing_a_channels_client.html)
-  に従う。
-- kaoiro 固有に定義するのはトピック設計とイベント名・payload のみ
-  (上記「type と payload」「方向別メッセージ種別」)。
+  as specified.
+- kaoiro defines only topics, event names, and payloads (the type/payload and directional
+  message tables above).
 
-### 接続認証(v0 確定、[ADR-0011](../adr/0011-phase3-reliability-and-auth.md))
+### Connection authentication (v0 settled, [ADR-0011](../adr/0011-phase3-reliability-and-auth.md))
 
-TLS はリバースプロキシ終端(2026-06-11 決定、Phoenix は平文 HTTP)。
-ハートビートは Channels 組み込み(クライアントライブラリ既定)を使う。
+TLS terminates at the reverse proxy (decision 2026-06-11; Phoenix uses plain HTTP).
+Heartbeats use the Channels built-in provided by the client library.
 
-| 接続 | 方式 | サーバ設定 |
+| Connection | Method | Server setting |
 |---|---|---|
-| ラッパー(`/wrapper`) | **agent_id 別トークン**。接続パラメータ `token` で提示し、`wrapper:<agent_id>` join 時に agent_id との組を検証 | `KAOIRO_WRAPPER_TOKENS`(`id:token,id:token` 形式) |
-| クライアント(`/client`) | **ユーザトークン + role**。接続パラメータ `token`。role は `viewer`(閲覧)/ `operator`(指示・承認可) | `KAOIRO_CLIENT_TOKENS`(`token:role,...` 形式) |
+| Wrapper (`/wrapper`) | **Per-agent token** presented as connection `token`; verify the pair on `wrapper:<agent_id>` join. | `KAOIRO_WRAPPER_TOKENS` (`id:token,id:token`) |
+| Client (`/client`) | **User token + role** in connection `token`; role is `viewer` or `operator`. | `KAOIRO_CLIENT_TOKENS` (`token:role,...`) |
 
-- トークン不一致・未知トークンは接続拒否。env 未設定時の挙動は socket と
-  `MIX_ENV` で異なる(issue #28 / #133、起動時に警告をログ出力):
-  - **`KAOIRO_CLIENT_TOKENS` 未設定は全 env で token 認証不能**。誤設定で
-    operator が無防備に公開される事故を防ぐため、無認証稼働はしない。token
-    を使わない運用は OAuth ログイン([ADR-0042](../adr/0042-oauth-allowlist-login.md))
-    が代替経路になる(詳細は [auth-and-authz](auth-and-authz.md))。
-  - **`KAOIRO_WRAPPER_TOKENS` 未設定は `:dev` / `:test` に限りラッパー認証を
-    無効化**(任意のラッパーが接続可、loopback 限定の開発利便)。**`:prod`
-    では fail-closed** — 事前登録ペア認証が存在しないだけで、spawn 経路の
-    サーバ署名トークン([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md))
-    は通るため、runner 一本化の配備ならペア登録は不要(#133)。
-  - **`KAOIRO_RUNNER_TOKENS` 未設定**も dev/test の緩和と prod fail-closed は
-    同じだが、runner には署名トークン経路が**無い**ため prod では全 runner が
-    拒否される(#133)。
-  - 運用環境では必ず client / wrapper / runner の env を設定する
-    ([threat-model](threat-model.md))。
-- **spawn 経由で起動する wrapper** は上表の事前登録トークンに加え、サーバが
-  spawn 時に発行・注入する per-agent token でも認証できる(runner 一本化の
-  発行型経路、[ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md)
-  D2/D4)。手動直結の事前登録トークン運用(上表)は据え置き。
-- `instruction` / `permission_decision` は operator role のみ受理。
-- ラッパー接続断はサーバが検知し、当該エージェントの状態を
-  `disconnected` へ**サーバ導出**する(状態セット表の通り)。サーバ
-  導出エンベロープは `seq` を持たない(`seq` はラッパー付与の系列)。
+- Token mismatch and unknown tokens reject the connection; unset env behavior differs by
+  socket and `MIX_ENV` (issues #28/#133, with a startup warning):
+  - **Unset `KAOIRO_CLIENT_TOKENS` disables token authentication in every env**. Unauthenticated
+    operation is never enabled; OAuth login is the alternative ([ADR-0042](../adr/0042-oauth-allowlist-login.md), [auth-and-authz](auth-and-authz.md)).
+  - **Unset `KAOIRO_WRAPPER_TOKENS` disables wrapper auth only in `:dev`/`:test`** (loopback
+    convenience). **`:prod` is fail-closed**; runner-issued server tokens still authenticate
+    spawn, so pre-registration is unnecessary in runner-only deployments (#133).
+  - **Unset `KAOIRO_RUNNER_TOKENS`** has the same dev/test relaxation and prod fail-closed
+    behavior, but runners have no signed-token path, so all runners are rejected in prod (#133).
+  - Production must set client, wrapper, and runner env values ([threat-model](threat-model.md)).
+- **Spawned wrappers** authenticate with the server-issued per-agent token in addition to the
+  pre-registered token ([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) D2/D4).
+  Direct manual pre-registration remains as above.
+- `instruction` / `permission_decision` are accepted only for operator role.
+- The server detects wrapper disconnect and derives the agent state as `disconnected`; its
+  derived envelope has no `seq` (the wrapper assigns the sequence).
 
 ## Constraints
 
-- MUST: `agent_id` は安定 ID。MUST: 状態導出はラッパー側。
-- MUST: `agent_id` の文字種は `[A-Za-z0-9._-]`(1〜256 文字)。
-- MUST: クライアント接続は Phoenix Channels(`vsn=2.0.0`)のみ。
-- MUST: 受信側はエンベロープの未知キーを無視する(前方互換)。
-- MUST: `instruction` / `permission_decision` / `interrupt` は operator role のみ。
-- MUST: permission の無応答既定は SDK と同じく **無制限待機**
-  (応答受信まで Promise 保留)。有限タイムアウトはラッパー設定で
-  opt-in 可で、その場合は fail-closed deny([ADR-0022](../adr/0022-pending-permission-authoritative-source.md)、
-  設定面の整備は別 issue #60)。
-- MUST: `waiting_permission` 中の pending 状態は `state_change.ext.pending_permission`
-  に持続付与され、これが authoritative source となる。`permission_request`
-  envelope は初出通知として並行発行されるが、状態の真実ではない
-  ([ADR-0022](../adr/0022-pending-permission-authoritative-source.md))。
-- MUST: `log` / `result` エンベロープは operator role のみへ配信する
-  ([ADR-0012](../adr/0012-response-display-and-dashboard-scope.md))。
-- MUST: `agents:lobby` の配信は **allow-list 方式**。`state_change`
-  (viewer は `ext` 除去)と `agent_deleted` のみ viewer に配信し、それ
-  以外の event / envelope.type は viewer 完全除去
-  ([ADR-0021](../adr/0021-role-information-disclosure-policy.md))。
-  `permission_request` は viewer 配信時に合成 `state_change(waiting_permission)`
-  へ置換し grid 整合を保つ。
-- MUST: ファイルアップロード関連 op(`attach_open` / `attach_chunk` /
-  `attach_close` / `attach_rejected` / `instruction_rejected` / `instruction`
-  の `attachment_ids` 拡張)は **operator 限定**(配信・受理双方、
-  [ADR-0021](../adr/0021-role-information-disclosure-policy.md) /
-  [ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md))。
-- MUST: server は upload bytes を解釈・永続しない(透過 relay、
-  ディスク不到達、[ADR-0020](../adr/0020-dashboard-battery-included-client.md) F3)。
-- MUST: 添付ファイルの rendering(image / document / text content block 選択・
-  Office 変換)は **wrapper-internal**。protocol / client / server は
-  Anthropic API 用語を持たない([file-upload](file-upload.md)、
-  [ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md) F1)。
+- MUST: `agent_id` is stable. MUST: state derivation is wrapper-side.
+- MUST: `agent_id` uses `[A-Za-z0-9._-]`, 1–256 characters.
+- MUST: client connections use only Phoenix Channels (`vsn=2.0.0`).
+- MUST: receivers ignore unknown envelope keys (forward compatibility).
+- MUST: `instruction` / `permission_decision` / `interrupt` are operator-only.
+- MUST: permission waits are **unlimited** by default, matching the SDK (Promise remains
+  pending). Finite timeout is wrapper opt-in and then fails closed with deny ([ADR-0022](../adr/0022-pending-permission-authoritative-source.md), issue #60).
+- MUST: while `waiting_permission`, pending state persists in `state_change.ext.pending_permission`,
+  the authoritative source; `permission_request` is only the initial notification
+  ([ADR-0022](../adr/0022-pending-permission-authoritative-source.md)).
+- MUST: `log` / `result` envelopes are delivered only to operator role ([ADR-0012](../adr/0012-response-display-and-dashboard-scope.md)).
+- MUST: `agents:lobby` uses an **allow-list**. Viewers receive only `state_change` (with `ext`
+  removed) and `agent_deleted`; all other events/types are removed ([ADR-0021](../adr/0021-role-information-disclosure-policy.md)).
+  `permission_request` is replaced for viewers by synthetic `state_change(waiting_permission)` to keep the grid consistent.
+- MUST: file-upload operations (`attach_open` / `attach_chunk` / `attach_close` /
+  `attach_rejected` / `instruction_rejected` / `instruction.attachment_ids`) are **operator-only**
+  for both delivery and acceptance ([ADR-0021](../adr/0021-role-information-disclosure-policy.md) /
+  [ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md)).
+- MUST: the server neither interprets nor persists upload bytes; it transparently relays them
+  without disk access ([ADR-0020](../adr/0020-dashboard-battery-included-client.md) F3).
+- MUST: attachment rendering (image/document/text block choice and Office conversion) is
+  **wrapper-internal**. Protocol, client, and server do not use Anthropic API terms
+  ([file-upload](file-upload.md), [ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md) F1).
 
 ## Open Questions
 
-なし(protocol-reliability は
-[ADR-0011](../adr/0011-phase3-reliability-and-auth.md) で解決済み)。
+None; protocol reliability was settled by [ADR-0011](../adr/0011-phase3-reliability-and-auth.md).
 
 ## See Also
 
-- 関連 specs: [architecture](architecture.md),
+- Related specs: [architecture](architecture.md),
   [plugin-model](plugin-model.md), [personas](personas.md),
   [subagent-tasks](subagent-tasks.md),
   [file-upload](file-upload.md)

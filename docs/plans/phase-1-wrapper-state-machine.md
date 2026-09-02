@@ -1,52 +1,54 @@
 ---
-title: Phase 1 — ラッパー1個 + 状態機械
-description: TS ラッパーで Agent SDK をホストし、1 エージェントの状態を導出・検証する。
+title: Phase 1 — Single Wrapper + State Machine
+description: Host the Agent SDK in a TypeScript wrapper and derive and verify the state of one agent.
 status: done
 phase: 1
 depends_on: [phase-0-project-setup]
 last_updated: 2026-06-04
 ---
-<!-- last_updated reflects SDK 仕様確定の反映 -->
+<!-- last_updated reflects the finalized SDK specification -->
 
-# Phase 1 — ラッパー1個 + 状態機械
+# Phase 1 — Single Wrapper + State Machine
 
 ## Goal
 
-TypeScript ラッパーで Claude Agent SDK をホストし、Claude Code 1 個の状態を
-[protocol](../specs/protocol.md) の状態機械へ確実に導出できることを検証する。
+Host the Claude Agent SDK in a TypeScript wrapper and verify that the state of one Claude Code
+agent can be reliably derived into the state machine defined by the
+[protocol](../specs/protocol.md).
 
 ## Acceptance Criteria
 
-- [x] SDK のメッセージ列から idle/thinking/tool_running/waiting_permission/
-      waiting_input/done/error を導出できる(実走行で確認)
-- [~] 権限待ちを `PreToolUse`/`canUseTool` で保留として捉えられる(配線・
-      ユニット検証済。ヘッドレスでの ask 経路実駆動は follow-up)
-- [x] ペルソナ・安定 ID をラッパー初期設定から読む
-- [x] 状態が実動作に追従(テキスト/色の最小表示で確認)
+- [x] Derive idle/thinking/tool_running/waiting_permission/waiting_input/done/error
+      from the SDK message sequence (confirmed in a live run)
+- [~] Treat permission waiting as pending through `PreToolUse`/`canUseTool` (wiring and
+      unit verification complete; driving the ask path in headless mode is a follow-up)
+- [x] Read the persona and stable ID from the wrapper's initial configuration
+- [x] Verify that state follows live behavior (confirmed with minimal text/color output)
 
 ## Tasks
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 1-1 | Agent SDK の細部を公式 docs で確定 | ✅ | [agent-sdk-events](../specs/agent-sdk-events.md) に確定 |
-| 1-2 | アダプタ(SDK メッセージ → 共通エンベロープ) | ✅ | `wrapper/src/adapter.ts`(`sdkMessageToEvents`)。実 SDK 型 → `AdapterEvent`。ユニットテスト済 |
-| 1-3 | 状態機械の実装 | ✅ | `wrapper/src/state.ts`(`deriveStates`/`reduceStates`)。ユニットテスト済 |
-| 1-4 | ペルソナ・安定 ID の設定読み込み | ✅ | `wrapper/src/persona.ts`(`loadConfig`/`parseConfig`)。ユニットテスト済 |
-| 1-5 | SDK ホスト配線 + 実走行確認 | 🟡 | `wrapper/src/host.ts`(`query`/streaming/`interrupt`/`canUseTool`)+ `cli.ts`。実走行で状態が実動作に追従するのを確認。`waiting_permission` の実駆動のみ未達(下記) |
+| 1-1 | Confirm SDK details from the official docs | ✅ | Finalized in [agent-sdk-events](../specs/agent-sdk-events.md) |
+| 1-2 | Adapter (SDK messages → common envelope) | ✅ | `wrapper/src/adapter.ts` (`sdkMessageToEvents`). Real SDK types → `AdapterEvent`. Unit-tested |
+| 1-3 | Implement the state machine | ✅ | `wrapper/src/state.ts` (`deriveStates`/`reduceStates`). Unit-tested |
+| 1-4 | Load persona and stable ID configuration | ✅ | `wrapper/src/persona.ts` (`loadConfig`/`parseConfig`). Unit-tested |
+| 1-5 | SDK host wiring + live-run confirmation | 🟡 | `wrapper/src/host.ts` (`query`/streaming/`interrupt`/`canUseTool`) + `cli.ts`. Confirmed in a live run that state follows behavior. Only live driving of `waiting_permission` remains incomplete (below) |
 
 Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blocked.
 
 ## Followups (in-phase but unfinished)
 
-- **`waiting_permission` の実駆動**: ヘッドレス SDK では `canUseTool` の ask
-  経路が自動起動せず、ツール許可は `allowedTools` で解決される(検証メモ:
-  [agent-sdk-events](../specs/agent-sdk-events.md))。配線・ユニット検証は済。
-  ask 経路の起動条件は要調査(my-trouble-shooter 候補)か、Phase 2/3 の承認 UI
-  実装時に確定。
+- **Live driving of `waiting_permission`**: In the headless SDK, the ask path of
+  `canUseTool` does not start automatically, and tool permission is resolved by
+  `allowedTools` (verification note: [agent-sdk-events](../specs/agent-sdk-events.md)).
+  Wiring and unit verification are complete. Investigate the conditions that start
+  the ask path (a candidate for my-trouble-shooter), or finalize them when the Phase
+  2/3 approval UI is implemented.
 
 ## Open Questions Blocking This Phase
 
-なし([ADR-0010](../adr/0010-protocol-precisification.md) で解消)。
+None (resolved by [ADR-0010](../adr/0010-protocol-precisification.md)).
 
 ## See Also
 

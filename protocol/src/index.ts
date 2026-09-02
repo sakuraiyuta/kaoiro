@@ -138,6 +138,14 @@ export interface WirePersona {
   sprite_set: string;
 }
 
+/** Flat build identity reported by a connected wrapper after channel join. */
+export interface WrapperBuildInfoPayload {
+  build_revision: string;
+  build_dirty: boolean;
+  build_version: string;
+  build_channel: "dev" | "release";
+}
+
 /** Assigned persona (protocol.md / ADR-0003). Under the server-集約 SoT
  *  model (ADR-0029) the wrapper carries only the wire-safe identifiers;
  *  the personality prompt is fetched from the server via WS handshake,
@@ -739,6 +747,94 @@ export interface InterAgentMessagePayload {
   new_conversation: boolean;
 }
 
+/** Context usage as it reaches a peer through `directory_request`. The server
+ * only projects this when the reporting wrapper advertised
+ * `supports_context_usage: true`; an engine without the capability omits the
+ * field entirely rather than sending a null or an estimate (ADR-0040). */
+export interface DirectoryContext {
+  used_tokens: number;
+  max_tokens: number;
+  used_percentage: number;
+}
+
+/** One rate-limit window as it reaches a peer through `directory_request`.
+ * Every field is optional because the engine reports what it knows; a window
+ * with none of them is dropped rather than sent empty. The snapshot is from
+ * the peer's last turn and is not refreshed while it idles — read `resets_at`
+ * against the current time and stop trusting `utilization` / `status` once it
+ * has passed. */
+export interface DirectoryRateLimitWindow {
+  status?: string;
+  utilization?: number;
+  resets_at?: number;
+}
+
+/** Active inter-agent conversation state of a peer. A current server always
+ * includes this (`{active: false, peers: []}` when idle); absence means the
+ * server predates the feature, not that there is no conversation. */
+export interface DirectoryConversation {
+  /** The server keeps `conversation_id` private; peers are enough to show
+   * the active relationship without making it a send target. */
+  active: boolean;
+  peers: string[];
+}
+
+/** Recipient-local dispatch confirmation watermark. It is an observation
+ * ledger, not a retransmission guarantee; absence is unknown, never zero. */
+export interface InterAgentDeliveryStatus {
+  issued_seq: number;
+  acked_seq: number;
+  pending_since?: string;
+}
+
+/** One agent in the `directory_request` response. Runtime traits are optional
+ * because an old or not-yet-initialized wrapper may not have stamped them.
+ * Omitted situational fields mean unknown, never zero or fine. */
+export interface DirectoryEntry {
+  agent_id: string;
+  persona: { id?: string; name?: string; sprite_set?: string };
+  /** Mutable, instance-scoped name; persona metadata remains the canonical
+   * pack identity. */
+  display_name?: string;
+  state: string;
+  engine?: string;
+  model?: string;
+  effort?: string;
+  context?: DirectoryContext;
+  /** ISO8601 UTC time the server observed the session start. */
+  session_started_at?: string;
+  /** Reply round-trips counted in the current session. */
+  turns?: number;
+  /** ISO8601 UTC time the server last accepted an envelope from this peer. */
+  last_activity_at?: string;
+  conversation?: DirectoryConversation;
+  rate_limits?: Record<string, DirectoryRateLimitWindow>;
+  inter_agent_delivery?: InterAgentDeliveryStatus;
+  /** Present only for a persistent entry with no live envelope; absence
+   * means live, rather than unknown. It cannot receive `send_to_agent`. */
+  directory_only?: true;
+  /** Server-observed timestamp, available only for `directory_only` entries. */
+  last_seen?: string;
+}
+
+export type UserRole = "operator" | "viewer" | "admin";
+
+/** One user in the `directory_request` response. Users and agents remain
+ * separate arrays because users are not `send_to_agent` destinations. */
+export interface UserDirectoryEntry {
+  id: string;
+  kind: "user";
+  display_name: string;
+  role: UserRole;
+}
+
+/** `directory_request` response. `agents` and `users` are intentionally
+ * separate arrays so callers cannot mistake a user for an agent destination. */
+export interface DirectoryResult {
+  agents: DirectoryEntry[];
+  users: UserDirectoryEntry[];
+}
+
 // Runner control messages (protocol.md "runner 制御メッセージ", #66 / ADR-0023).
 // A resident runner connects on topic `runner:<host_id>`, a separate system
 // from the wrapper data path. `version` is the flat outer key (ADR-0015), "0"
@@ -807,6 +903,10 @@ export interface RunnerRegister {
    *  already carries the actual compatibility contract. */
   build_revision?: string;
   build_dirty?: boolean;
+  /** CalVer project version and derived build channel (issue #288). Both
+   *  are optional as a pair for pre-#288 runner compatibility. */
+  build_version?: string;
+  build_channel?: "dev" | "release";
 }
 
 /** runner -> server liveness ping; the topic carries the host_id, but it is

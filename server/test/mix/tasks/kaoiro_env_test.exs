@@ -7,6 +7,7 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
     secret_key_base: "s3cret",
     phx_host: "kaoiro.example.com",
     port: "",
+    plain_http: false,
     bind_ip: "",
     client_tokens: ["ctok:operator"],
     wrapper_tokens: ["lab-pc-1.ao:wtok"],
@@ -79,6 +80,13 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
       refute body =~ "#PORT="
     end
 
+    test "plain-HTTP を選ぶと有効化フラグを書き出す" do
+      body = Env.render(%{@answers | plain_http: true})
+
+      assert body =~ "KAOIRO_PLAIN_HTTP=true"
+      refute body =~ "#KAOIRO_PLAIN_HTTP="
+    end
+
     test "DETS パスは常にコメントのみ (wizard 対象外)" do
       body = Env.render(@answers)
 
@@ -107,8 +115,11 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
       assert body =~ "CLIENT token unset"
     end
 
-    test "OAuth を設定しない場合は従来の .env 本文のまま" do
-      without_oauth = Env.render(@answers)
+    test "OAuth を設定しない場合は golden fixture と一致する" do
+      without_oauth =
+        Path.expand("../../fixtures/kaoiro_env/no_oauth.env.golden", __DIR__)
+        |> File.read!()
+
       no_provider_enabled = Env.render(Map.put(@answers, :oauth, nil))
 
       all_providers_disabled =
@@ -193,8 +204,9 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
         # SECRET_KEY_BASE を自動生成
         "",
         "kaoiro.example.com",
-        # port / bind IP は既定
+        # port / plain HTTP / bind IP は既定
         "",
+        "n",
         "",
         # Add client tokens?
         "y",
@@ -243,6 +255,7 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
         "",
         "kaoiro.example.com",
         "",
+        "n",
         "",
         "n",
         "n",
@@ -271,15 +284,62 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
       assert env =~ "KAOIRO_OAUTH_GITHUB_CLIENT_ID=github-id"
       assert env =~ "KAOIRO_OAUTH_GITHUB_CLIENT_SECRET=github-secret"
       assert env =~ "KAOIRO_OAUTH_ALLOWLIST_PATH=/etc/kaoiro/oauth-allowlist.txt"
+      assert env =~ "For `mix phx.server`, replace it with the allow-list's real file path."
       refute env =~ "KAOIRO_OAUTH_GOOGLE_CLIENT_ID="
       assert allowlist =~ "github:ao:admin"
       assert Bitwise.band(File.stat!(env_path).mode, 0o777) == 0o600
       assert Bitwise.band(File.stat!(allowlist_path).mode, 0o777) == 0o600
       assert output =~ "Keep #{allowlist_path} out of git"
+      assert output =~ "If --path is outside server/"
+      assert output =~ "github: https://kaoiro.example.com/auth/github/callback"
       assert output =~ "- #{allowlist_path}:/etc/kaoiro/oauth-allowlist.txt:ro"
       assert output =~ "docs/specs/deployment.md section 1.6"
-      refute output =~ "plain-HTTP deployment"
+      refute output =~ "Google OAuth cannot be used on a plain-HTTP deployment"
       refute output =~ "github-secret"
+    end
+
+    test "allowlist identifier の軽い書式違反を再入力させる" do
+      dir = Path.join(System.tmp_dir!(), "kaoiro_env_test_#{System.unique_integer([:positive])}")
+      env_path = Path.join(dir, ".env")
+      allowlist_path = Path.join(dir, "oauth-allowlist.txt")
+      File.mkdir_p!(dir)
+
+      on_exit(fn -> File.rm_rf!(dir) end)
+
+      [
+        "",
+        "kaoiro.example.com",
+        "",
+        "n",
+        "",
+        "n",
+        "n",
+        "n",
+        "",
+        "y",
+        "y",
+        "google-id",
+        "google-secret",
+        "y",
+        "github-id",
+        "github-secret",
+        "y",
+        "nextcloud-id",
+        "nextcloud-secret",
+        "https://cloud.example.com",
+        "google:not-an-email",
+        "github:has a space",
+        "nextcloud:has a space",
+        "google:master@example.com",
+        "n"
+      ]
+      |> Enum.each(&send(self(), {:mix_shell_input, :prompt, &1}))
+
+      Env.run(["--path", env_path])
+
+      assert File.read!(allowlist_path) =~ "google:master@example.com"
+      refute File.read!(allowlist_path) =~ "google:not-an-email"
+      assert shell_output() =~ "google needs @; github/nextcloud cannot contain whitespace"
     end
 
     test "既定の相対パスでは compose mount と OAuth の次の手順を正しく出す" do
@@ -293,6 +353,7 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
           "",
           "kaoiro.example.com",
           "",
+          "n",
           "",
           "n",
           "n",
@@ -317,11 +378,14 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
         assert shell_output() =~ """
                Next:
                  1. Review .env (tokens and OAuth secrets are in plain text — keep it out of git).
-                 2. Keep ./oauth-allowlist.txt out of git, then add this read-only mount under
+                 2. Keep ./oauth-allowlist.txt out of git.
+                    If --path is outside server/, add it to that directory's
+                    .gitignore. Add this read-only mount under
                     docker-compose.yaml's service `volumes:`:
                       - ./oauth-allowlist.txt:/etc/kaoiro/oauth-allowlist.txt:ro
-                 3. Register each provider's redirect URI in its console; see
-                    docs/specs/deployment.md section 1.6.
+                 3. Register each provider's redirect URI in its console:
+                    github: https://kaoiro.example.com/auth/github/callback
+                    See docs/specs/deployment.md section 1.6.
                  4. Start the stack: docker compose up -d --build
                  5. On each agent host, run the runner wizard
                     (deploy/kaoiro-runner-setup.sh) and pair its token with the
@@ -345,6 +409,7 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
         "",
         "kaoiro.example.com",
         "",
+        "y",
         "",
         "n",
         "n",
@@ -367,19 +432,24 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
       output = shell_output()
 
       assert File.read!(allowlist_path) == original_allowlist
+      assert File.read!(env_path) =~ "KAOIRO_PLAIN_HTTP=true"
       assert Bitwise.band(File.stat!(env_path).mode, 0o777) == 0o600
       assert output =~ "Kept #{allowlist_path}; existing OAuth allow-list unchanged."
       assert output =~ "Google OAuth cannot be used on a plain-HTTP deployment"
       assert output =~ "- #{allowlist_path}:/etc/kaoiro/oauth-allowlist.txt:ro"
+      assert output =~ "google: http://kaoiro.example.com:4000/auth/google/callback"
 
       assert output =~ """
              Next:
                1. Review #{env_path} (tokens and OAuth secrets are in plain text — keep it out of git).
-               2. Keep #{allowlist_path} out of git, then add this read-only mount under
+               2. Keep #{allowlist_path} out of git.
+                  If --path is outside server/, add it to that directory's
+                  .gitignore. Add this read-only mount under
                   docker-compose.yaml's service `volumes:`:
                     - #{allowlist_path}:/etc/kaoiro/oauth-allowlist.txt:ro
-               3. Register each provider's redirect URI in its console; see
-                  docs/specs/deployment.md section 1.6.
+               3. Register each provider's redirect URI in its console:
+                  google: http://kaoiro.example.com:4000/auth/google/callback
+                  See docs/specs/deployment.md section 1.6.
                4. Google OAuth cannot be used on a plain-HTTP deployment (localhost is the exception).
                5. Start the stack: docker compose up -d --build
                6. On each agent host, run the runner wizard
@@ -389,6 +459,42 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
              """
     end
 
+    test "plain-HTTP の PORT=80 は Endpoint.url と同じく redirect URI から省略する" do
+      dir = Path.join(System.tmp_dir!(), "kaoiro_env_test_#{System.unique_integer([:positive])}")
+      env_path = Path.join(dir, ".env")
+      File.mkdir_p!(dir)
+
+      on_exit(fn -> File.rm_rf!(dir) end)
+
+      [
+        "",
+        "kaoiro.example.com",
+        "80",
+        "y",
+        "",
+        "n",
+        "n",
+        "n",
+        "",
+        "y",
+        "y",
+        "google-id",
+        "google-secret",
+        "n",
+        "n",
+        "google:master@example.com:operator",
+        "n",
+        "n"
+      ]
+      |> Enum.each(&send(self(), {:mix_shell_input, :prompt, &1}))
+
+      Env.run(["--path", env_path])
+
+      output = shell_output()
+      assert output =~ "google: http://kaoiro.example.com/auth/google/callback"
+      refute output =~ "google: http://kaoiro.example.com:80/auth/google/callback"
+    end
+
     test "OAuth をスキップすると従来の生成物と次の手順を保つ" do
       dir = Path.join(System.tmp_dir!(), "kaoiro_env_test_#{System.unique_integer([:positive])}")
       env_path = Path.join(dir, ".env")
@@ -396,7 +502,7 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
 
       on_exit(fn -> File.rm_rf!(dir) end)
 
-      ["n", "s3cret", "kaoiro.example.com", "", "", "n", "n", "n", "", "n"]
+      ["n", "s3cret", "kaoiro.example.com", "", "n", "", "n", "n", "n", "", "n"]
       |> Enum.each(&send(self(), {:mix_shell_input, :prompt, &1}))
 
       Env.run(["--path", env_path])
@@ -406,6 +512,7 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
                  secret_key_base: "s3cret",
                  phx_host: "kaoiro.example.com",
                  port: "",
+                 plain_http: false,
                  bind_ip: "",
                  client_tokens: [],
                  wrapper_tokens: [],

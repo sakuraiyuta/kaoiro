@@ -20,6 +20,19 @@ defmodule KaoiroServer.PlannedDisconnectsTest do
              PlannedDisconnects.confirm_connection("pd.default", "tr-default", name)
   end
 
+  test "intent は disconnect 前から notice_targets を宣言する" do
+    name = start_tracker(:pd_declared_notice_targets)
+    assert :ok = PlannedDisconnects.begin("pd.declared", "tr-declared", :restart, name)
+
+    assert %PlannedDisconnects.Intent{notice_targets: nil} =
+             :sys.get_state(name).pending["pd.declared"]
+
+    assert %{notice_targets: nil} = PlannedDisconnects.get("pd.declared", name)
+
+    assert {:planned, %{notice_targets: []}} =
+             PlannedDisconnects.disconnect("pd.declared", name)
+  end
+
   test "one intent per agent; disconnect snapshots bounded targets and only exact join consumes it" do
     owner = self()
 

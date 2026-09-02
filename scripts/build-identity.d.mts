@@ -9,11 +9,15 @@
 export interface BuildIdentity {
   revision: string;
   dirty: boolean;
+  version: string;
+  channel: "dev" | "release";
   degraded: boolean;
   degradeReason: string | null;
 }
 
 export function computeBuildIdentity(cwd?: string): BuildIdentity;
+
+export function readProjectVersion(cwd?: string): string;
 
 export function formatIdentityString(identity: {
   revision: string;

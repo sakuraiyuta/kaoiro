@@ -1,5 +1,5 @@
 ---
-title: task の server 集約・進捗間引き・スナップショット
+title: Server aggregation, progress throttling, and snapshots for tasks
 status: accepted
 date: 2026-08-04
 opened: 2026-06-16
@@ -9,122 +9,132 @@ related_specs: [protocol, subagent-tasks]
 related_adrs: [19, 47]
 ---
 
-# ADR-0048 — task の server 集約・進捗間引き・スナップショット
+# ADR-0048 — Server aggregation, progress throttling, and snapshots for tasks
 
 ## Status
 
-Accepted (2026-08-04、マスターとの相談で決定。kaoiro issue #170)。
-[ADR-0019](0019-subagent-workflow-entity-and-task-envelope.md) が server に
-課した「子タスクの active set 維持・配信」の具体
-([subagent-tasks](../specs/subagent-tasks.md) 段階2 の前提)を確定する。
+Accepted (2026-08-04, decided in consultation with マスター; kaoiro issue #170).
+This settles the concrete details of the server requirement from
+[ADR-0019](0019-subagent-workflow-entity-and-task-envelope.md) to “maintain and
+deliver the active set of child tasks,” a prerequisite for Phase 2 of
+[subagent-tasks](../specs/subagent-tasks.md).
 
 ## Context
 
-ADR-0019 で subagent / workflow を親付き子エンティティとして通知する方針は
-決定済みだが、server 側の保持モデル・進捗更新の頻度・後続接続クライアント
-へのスナップショット提供は未決だった。
+ADR-0019 has already decided to notify subagents / workflows as child entities
+with a parent, but the server-side retention model, progress-update frequency,
+and snapshot delivery to clients connecting later were undecided.
 
-判断材料: 既存の再接続再同期は `snapshot`(join 直後 push、`agent_id` ごと
-last-write-wins、[protocol](../specs/protocol.md))。server はメモリ保持のみ
-(永続なし)で、再起動で消える前提は既存と同じ。また AgentDetail のログ肥大で
-dashboard 入力が重くなった実績(kaoiro issue #174)があり、envelope 量の
-無制御な増加は避けたい。
+The basis for the decision is the existing reconnection resynchronization:
+`snapshot` (pushed immediately after join, last-write-wins per `agent_id`,
+[protocol](../specs/protocol.md)). The server keeps data only in memory (no
+persistence), which has the same restart-loss premise as existing behavior. There
+is also a history of dashboard input becoming heavy because AgentDetail logs grew
+large (kaoiro issue #174); uncontrolled growth in the number of envelopes should
+be avoided.
 
 ## Decision
 
-### F1: フラットな task テーブル + 親 `agent_id` 参照
+### F1: Flat task table with a parent `agent_id` reference
 
-server は子タスクを親 agent エンティティ配下のコレクションではなく、
-フラットな task テーブルとして保持し、各 task が親 `agent_id` を参照する。
-親と子の寿命管理を独立に扱え、`task_type` の異なるタスク(将来の tasklist、
-[ADR-0047](0047-task-envelope-schema.md) F4)も同じテーブルに同居できる。
-ライフサイクルは親セッションに束縛される(ADR-0019 F1)ため、親エージェント
-の離脱時には紐づく task を破棄する。
+The server retains child tasks in a flat task table rather than as a collection
+under the parent agent entity, with each task referring to its parent `agent_id`.
+This keeps parent and child lifetime management independent and allows tasks with
+different `task_type` values (future tasklists and
+[ADR-0047](0047-task-envelope-schema.md) F4) to share one table. Because the
+lifecycle is bound to the parent session (ADR-0019 F1), discard linked tasks when
+the parent agent leaves.
 
-### F2: `kind=updated` は wrapper 発行側で間引く
+### F2: Throttle `kind=updated` at the wrapper publisher
 
-進捗更新(`kind=updated`)は wrapper の発行側で一定間隔 + 差分閾値により
-間引く。`started` / `completed` は間引かず常に即時発行する。`usage` の
-頻繁更新による envelope 増と dashboard 負荷(#174 の教訓)を発生源で抑える。
-具体の間隔・閾値は段階1 実装時に定める。
+Throttle progress updates (`kind=updated`) at the wrapper publisher using a fixed
+interval plus a change threshold. Do not throttle `started` / `completed`; always
+publish them immediately. Control envelope growth and dashboard load from
+frequent `usage` updates (#174's lesson) at the source. Set the concrete interval
+and threshold during Phase 1 implementation.
 
-### F3: 後続接続へは既存 snapshot 枠で接続時一括送信
+### F3: Send the current set to later connections in the existing snapshot frame
 
-後続接続クライアントへの現在集合の提供は、既存 `snapshot`(join 直後 push)
-の枠に task の active set を含めて一括送信する。定期スナップショット
-envelope は設けない。protocol 追加が最小で、last-write-wins の既存意味論に
-そのまま乗る。
+Provide the current set to clients connecting later by including the active task
+set in the existing `snapshot` frame (pushed immediately after join) and sending
+it in one batch. Do not create a periodic snapshot envelope. This minimizes
+protocol additions and rides directly on the existing last-write-wins semantics.
 
 ## Consequences
 
 ### Positive
 
-- 保持・配信の実装方針が確定し、段階2(server 集約・中継)に着手できる。
-- 間引きが発行側にあるため、server・クライアント双方の負荷を同時に抑える。
-- snapshot の既存枠を使うため protocol の追加が最小。
+- The implementation policy for retention and delivery is fixed, allowing Phase 2
+  (server aggregation and relay) to begin.
+- Because throttling occurs at the publisher, it reduces load on both server and
+  client at once.
+- Using the existing snapshot frame minimizes protocol additions.
 
 ### Negative
 
-- 間引きにより、クライアントの見る進捗メタ(usage 等)は最新値より
-  遅れうる(`completed` で最終値に収束する)。
-- 間引きパラメータは wrapper 側の実装事項となり、engine 間
-  (claude-code / codex)で発行粒度を揃える配慮が要る。
+- Because of throttling, progress metadata seen by the client (such as usage)
+  may lag the latest value (it converges to the final value at `completed`).
+- Throttling parameters become wrapper implementation details, requiring care to
+  align publication granularity across engines (claude-code / codex).
 
 ### Neutral
 
-- メモリ保持のみで再起動により消える — 既存エンティティと同じ前提。
-- task テーブルの掃除タイミングは親エージェントの離脱に従う。
+- Retention is memory-only and disappears on restart — the same premise as
+  existing entities.
+- Clean up the task table when the parent agent leaves.
 
 ## Alternatives Considered
 
 | Option | Why rejected |
 |--------|--------------|
-| 親 agent エンティティ配下の子コレクション | 親の再接続・削除処理と子の寿命管理が結合する。異なる `task_type` の同居も難しい |
-| `task_progress` を毎回そのまま流す | usage の頻繁更新で envelope が膨らみ、dashboard 負荷(#174)を再現しうる |
-| 定期スナップショット envelope | 定常トラフィックが増える。既存の join 時 push + last-write-wins で足りる |
+| Child collection under the parent agent entity | Couples parent reconnection/deletion handling to child lifetime management, and makes it harder to co-locate different `task_type` values |
+| Stream `task_progress` unchanged every time | Frequent usage updates inflate envelopes and can recreate dashboard load (#174) |
+| Periodic snapshot envelope | Increases steady-state traffic; the existing join-time push + last-write-wins is sufficient |
 
 ## Related
 
-- spec: [subagent-tasks](../specs/subagent-tasks.md)(段階2)、
-  [protocol](../specs/protocol.md)(snapshot の既存意味論)。
-- 関連 ADR: [0019](0019-subagent-workflow-entity-and-task-envelope.md)
-  (責務の決定元)、[0047](0047-task-envelope-schema.md)(envelope スキーマ)、
-  [0021](0021-role-information-disclosure-policy.md)(viewer/operator
-  情報公開ポリシ — 本 addendum が適用する fail-closed 既定)。
-- 由来: open-question subagent-task-aggregation(2026-06-16 起票)を
-  本 ADR へ昇格。
+- Specs: [subagent-tasks](../specs/subagent-tasks.md) (Phase 2) and
+  [protocol](../specs/protocol.md) (existing snapshot semantics).
+- Related ADRs: [0019](0019-subagent-workflow-entity-and-task-envelope.md)
+  (source of the responsibility decision),
+  [0047](0047-task-envelope-schema.md) (envelope schema), and
+  [0021](0021-role-information-disclosure-policy.md) (viewer/operator
+  disclosure policy — the fail-closed default applied by this addendum).
+- Origin: promote the open question subagent-task-aggregation (filed 2026-06-16)
+  to this ADR.
 
-## Addendum (issue #170, 2026-08-09): task の配信は operator 限定
+## Addendum (issue #170, 2026-08-09): task delivery is operator-only
 
-**決定。** `task` envelope のライブ配信、および snapshot の `tasks` キー
-(F3)は **operator 限定**とし、`viewer` ロールには一切配信しない。
-マスターとの相談を経てこはくが決定、理由は 3 つ:
+**Decision.** Live delivery of the `task` envelope and the `tasks` key (F3) in a
+snapshot are **operator-only**; never deliver them to the `viewer` role. The
+decision was made by こはく after consultation with マスター, for three reasons:
 
-1. [ADR-0047](0047-task-envelope-schema.md) F3 の進捗メタ
-   (`summary` / `last_tool_name` 等)は粗いライフサイクルを超えた
-   内容ベアリング情報であり、[ADR-0021](0021-role-information-disclosure-policy.md)
-   が operator 限定としてきた `log`/`result` 相当の粒度に近い。
-2. issue #170 自体の目的が「operator が内部活動を把握する」ことで、
-   viewer 向けの要求はそもそも無い。
-3. ADR-0021 F2 の fail-closed 既定(未知 type は viewer へ配信しない)
-   が既に narrow-by-default を志向しており、あとから広げる方が
-   先に広げて漏洩を起こすより安全に倒せる。
+1. The progress metadata in F3 of [ADR-0047](0047-task-envelope-schema.md)
+   (`summary` / `last_tool_name`, etc.) is content-bearing information beyond a
+   coarse lifecycle and is close to the granularity of `log` / `result`, which
+   [ADR-0021](0021-role-information-disclosure-policy.md) has restricted to
+   operators.
+2. The purpose of issue #170 itself is for “the operator to understand internal
+   activity”; there is no request for viewers.
+3. ADR-0021 F2's fail-closed default (do not deliver unknown types to viewers)
+   already favors narrow-by-default. Expanding later is safer than expanding
+   first and causing a leak.
 
-**実装。**
+**Implementation.**
 
-- ライブ配信: `AgentsChannel.sanitize_envelope_for/2` に `"task"` 専用の
-  分岐は**追加しない**。`log`/`result`/`hosts` など既存の operator 限定
-  type と同じ経路 — 明示的な viewer 許可節を持たない type は
-  `:viewer, _ -> :drop` の既定分岐へ落ちる — にそのまま乗るため、
-  ゼロ行の変更で要件を満たす(N3 訂正、クロエ 2026-08-09: これは
-  「未知 type に備えた fail-closed の保険」ではなく、
-  hosts/log/result と同じ主経路そのもの — server gate に依存した
-  結果であって、防御的フォールバックではない)。
-- snapshot: `AgentsChannel.handle_info(:after_join, socket)` が
-  `role == :operator` のときのみ `TaskStates.snapshot()` を
-  `tasks` キーへ積み、viewer join には常に `tasks: %{}` を返す。
+- Live delivery: **do not add** a `"task"`-specific branch to
+  `AgentsChannel.sanitize_envelope_for/2`. It follows the same path as existing
+  operator-only types such as `log` / `result` / `hosts`: types without an
+  explicit viewer-allow clause fall into the default `:viewer, _ -> :drop`
+  branch, so the requirement is met with zero changed lines (N3 correction,
+  クロエ 2026-08-09: this is not “a fail-closed safeguard for unknown types”; it
+  is the primary path itself, the same one as hosts/log/result — a result that
+  depends on the server gate, not a defensive fallback).
+- Snapshot: when `role == :operator`,
+  `AgentsChannel.handle_info(:after_join, socket)` puts `TaskStates.snapshot()`
+  under the `tasks` key; a viewer join always returns `tasks: %{}`.
 
-将来 viewer 向けに task 可視化を広げる場合は、この addendum か新規 ADR
-の改訂を経てから行う(サニタイズ側の暗黙拡張はしない)。
+If task visualization is expanded to viewers in the future, revise this addendum
+or create a new ADR first (do not implicitly broaden the sanitizer).
 
-**由来**: kaoiro issue #170 実装セッション(あお、2026-08-09)。
+**Origin**: kaoiro issue #170 implementation session (あお, 2026-08-09).

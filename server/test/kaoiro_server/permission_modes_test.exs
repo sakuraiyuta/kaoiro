@@ -8,7 +8,7 @@ defmodule KaoiroServer.PermissionModesTest do
   setup do
     # Isolated DETS file + table name per test so cases don't share state.
     name = :"pm_#{System.unique_integer([:positive])}"
-    path = Path.join(System.tmp_dir!(), "#{name}.dets")
+    path = Path.join([System.tmp_dir!(), "kaoiro_test_dets", "#{name}.dets"])
     File.rm(path)
     {:ok, pid} = PermissionModes.start_link(name: name, path: path)
 

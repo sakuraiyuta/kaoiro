@@ -38,4 +38,62 @@ defmodule KaoiroServer.BuildIdentityTest do
       refute BuildIdentity.valid_revision?(true)
     end
   end
+
+  describe "valid_version?/1" do
+    test "CalVer YYYY.M.PATCH は valid" do
+      assert BuildIdentity.valid_version?("2026.9.0")
+    end
+
+    test "unknown は build identity の fail-soft 値として valid" do
+      assert BuildIdentity.valid_version?("unknown")
+    end
+
+    test "月 0 / 13 は invalid" do
+      refute BuildIdentity.valid_version?("2026.0.0")
+      refute BuildIdentity.valid_version?("2026.13.0")
+    end
+
+    test "文字列以外は invalid" do
+      refute BuildIdentity.valid_version?(nil)
+      refute BuildIdentity.valid_version?(2026)
+    end
+  end
+
+  describe "valid_channel?/1" do
+    test "dev と release は valid" do
+      assert BuildIdentity.valid_channel?("dev")
+      assert BuildIdentity.valid_channel?("release")
+    end
+
+    test "それ以外は invalid" do
+      refute BuildIdentity.valid_channel?("main")
+      refute BuildIdentity.valid_channel?(nil)
+    end
+  end
+
+  describe "valid_identity?/4" do
+    test "clean known release is valid" do
+      assert BuildIdentity.valid_identity?(
+               "0123456789abcdef0123456789abcdef01234567",
+               false,
+               "2026.9.0",
+               "release"
+             )
+    end
+
+    test "release with unknown revision or dirty state is invalid" do
+      refute BuildIdentity.valid_identity?("unknown", false, "2026.9.0", "release")
+
+      refute BuildIdentity.valid_identity?(
+               "0123456789abcdef0123456789abcdef01234567",
+               true,
+               "2026.9.0",
+               "release"
+             )
+    end
+
+    test "dev permits diagnostic unknown/dirty values" do
+      assert BuildIdentity.valid_identity?("unknown", true, "unknown", "dev")
+    end
+  end
 end

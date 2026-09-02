@@ -20,7 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { formatBuildRevision, type BuildInfo } from "../src/build_info.js";
+import { formatBuildIdentity, type BuildInfo } from "../src/build_info.js";
 
 const shimSource = readFileSync(
   fileURLToPath(new URL("../deploy/kaoiro-runner-launch.sh", import.meta.url)),
@@ -28,20 +28,19 @@ const shimSource = readFileSync(
 );
 
 // Mimics ONLY the --version contract cli.ts actually implements (reads a
-// sibling build-info.json, prints formatBuildRevision's canonical form,
-// exits 0) — cli.ts's OWN --version behavior is pinned separately
-// (args.test.ts / build_info.test.ts); this stub exists so the SHIM's
-// forwarding logic can be tested without a real `pnpm -C runner build`.
+// sibling build-info.json, prints the canonical identity, exits 0) — cli.ts's
+// OWN behavior is pinned separately (args.test.ts / build_info.test.ts); this
+// stub exists so the SHIM's forwarding logic can be tested without a real
+// `pnpm -C runner build`.
 const STUB_CLI = `
 const fs = require("node:fs");
 const path = require("node:path");
-if (process.argv.includes("--version")) {
+  if (process.argv.includes("--version")) {
   const info = JSON.parse(
     fs.readFileSync(path.join(__dirname, "build-info.json"), "utf8"),
   );
-  process.stdout.write(
-    (info.dirty ? \`\${info.revision}-dirty\` : info.revision) + "\\n",
-  );
+  const shortHash = info.revision === "unknown" ? "unknown" : info.revision.slice(0, 7);
+  process.stdout.write(\`kaoiro \${info.channel ?? "dev"} runner v\${info.version ?? "unknown"} / \${shortHash}\\n\`);
   process.exit(0);
 }
 process.stdout.write("stub cli.js: no --version given\\n");
@@ -74,8 +73,10 @@ describe("kaoiro-runner-launch.sh --version (issue #228 round 2 MF-5)", () => {
     tmpDir = mkdtempSync(join(tmpdir(), "kaoiro-shim-version-"));
     const buildInfo: BuildInfo = {
       revision: "0123456789abcdef0123456789abcdef01234567",
-      dirty: true,
+      dirty: false,
       built_at: "2026-08-12T00:00:00.000Z",
+      version: "2026.9.0",
+      channel: "release",
     };
     buildFixture(tmpDir, buildInfo);
 
@@ -90,7 +91,7 @@ describe("kaoiro-runner-launch.sh --version (issue #228 round 2 MF-5)", () => {
       },
     );
 
-    expect(out.trim()).toBe(formatBuildRevision(buildInfo));
+    expect(out.trim()).toBe(formatBuildIdentity(buildInfo));
   });
 
   // Complementary regression pin: an ORDINARY launch (no --version) must

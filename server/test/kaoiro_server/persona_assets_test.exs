@@ -217,6 +217,71 @@ defmodule KaoiroServer.PersonaAssetsTest do
              "body-ao\n\n" <> FooterAssets.built_in_system_footer()
   end
 
+  # issue #232: GET /api/personas/:id を裏付ける full pack detail。
+  test "get_pack_detail は manifest.json の全メタデータと personality.md 全文を返す",
+       %{tmp_dir: tmp} do
+    manifest =
+      base_manifest("ao", %{
+        "author" => "author-ao",
+        "homepage" => "https://example.test/ao"
+      })
+
+    :ok = write_pack(tmp, "ao-1.0.0", manifest, "body-ao")
+    use_ingest(tmp)
+
+    assert PersonaAssets.get_pack_detail("ao") == %{
+             "id" => "ao",
+             "name" => "name-ao",
+             "sprite_set" => "ao",
+             "version" => "1.0.0",
+             "license" => "CC-BY-4.0",
+             "min_kaoiro_version" => "0.1.0",
+             "states" => @states,
+             "description" => "d-ao",
+             "author" => "author-ao",
+             "homepage" => "https://example.test/ao",
+             "personality" => "body-ao"
+           }
+  end
+
+  test "get_pack_detail は任意フィールド (author/homepage) 欠落時にそのキーを含めない",
+       %{tmp_dir: tmp} do
+    :ok = write_pack(tmp, "ao-1.0.0", base_manifest("ao"), "body-ao")
+    use_ingest(tmp)
+
+    detail = PersonaAssets.get_pack_detail("ao")
+    refute Map.has_key?(detail, "author")
+    refute Map.has_key?(detail, "homepage")
+  end
+
+  # allowlist ガードの pin: persona-pack-schema.md は manifest.json への
+  # 未知キー追加を forward-compatible として許容する (MAY) ため、生の
+  # manifest map をそのまま返すと将来の未知フィールドが無審査でクライアント
+  # へ漏れる。schema 既知フィールドの `Map.take/2` がその境界を保つことを
+  # 直接検査する — スキーマ外キーを混入させ、応答に現れないことを確認する。
+  test "get_pack_detail は manifest.json のスキーマ外キーを含めない", %{tmp_dir: tmp} do
+    manifest = base_manifest("ao", %{"unexpected_field" => "should-not-leak"})
+    :ok = write_pack(tmp, "ao-1.0.0", manifest, "body-ao")
+    use_ingest(tmp)
+
+    detail = PersonaAssets.get_pack_detail("ao")
+    refute Map.has_key?(detail, "unexpected_field")
+  end
+
+  test "get_pack_detail は未知の id で nil を返す", %{tmp_dir: tmp} do
+    :ok = write_pack(tmp, "ao-1.0.0", base_manifest("ao"), "body-ao")
+    use_ingest(tmp)
+
+    assert PersonaAssets.get_pack_detail("nope") == nil
+  end
+
+  test "get_pack_detail は予約済み default で nil を返す (pack を持たない)",
+       %{tmp_dir: tmp} do
+    use_ingest(tmp)
+
+    assert PersonaAssets.get_pack_detail("default") == nil
+  end
+
   test "fatigued を宣言した pack は sprite manifest に収集される", %{tmp_dir: tmp} do
     states = @states ++ ["fatigued"]
 

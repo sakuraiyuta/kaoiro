@@ -51,9 +51,8 @@ defmodule KaoiroServer.TaskStates do
 
   M1 fix-round (2026-08-09, ふじ round 2): `@max_tasks` alone bounds
   entry COUNT, not the resource the cap exists to protect — the join
-  snapshot's actual wire size (`AgentsChannel`'s
-  `push(socket, "snapshot", %{"tasks" => TaskStates.snapshot(), ...})`,
-  bounded by `Endpoint`'s `max_frame_size: 8_000_000`).
+  snapshot's actual wire size (`AgentsChannel`'s dedicated
+  `task_snapshot` frame, bounded by `TransportLimits.max_frame_bytes/0`).
   `WrapperChannel`'s `@max_envelope_bytes` (65_536) caps each INBOUND
   envelope by `:erlang.external_size/1`, but the outbound wire format is
   JSON (Jason) — ふじ's own measurement showed 62 individually
@@ -75,7 +74,7 @@ defmodule KaoiroServer.TaskStates do
   (`"<task_id>":<envelope>,`), which `task_id` has no length cap of its
   own to bound. ふじ's measurement: 96 individually ingress-cap-compliant
   envelopes produced an ACTUAL snapshot of 11.9MB — past the frame limit
-  again, despite a tracked `bytes` total safely under the 6MB budget.
+  again, despite a tracked `bytes` total safely under the old budget.
   `entry_wire_size/2` now charges each entry for the task_id key's own
   JSON form (plus its colon and a separator) on top of the leaf, so
   `bytes` tracks the real per-entry wire contribution instead of only
@@ -84,9 +83,8 @@ defmodule KaoiroServer.TaskStates do
   bounds the now-measured task_id key. `agent_id` needed no analogous
   NEW cap: it already inherits `KaoiroServerWeb.AgentId.valid?/1`'s
   (issue #61) pre-existing 1..256-char bound via the topic-match guard,
-  which `@max_task_snapshot_bytes`'s margin comment cites for the
-  per-AGENT key overhead this module still does NOT charge per-entry
-  (see that comment for the arithmetic). Reject-path log messages were
+  which bounds the per-AGENT key overhead charged on an inner-map's first
+  entry. Reject-path log messages were
   also changed to a bounded preview (`log_preview/1`) rather than
   interpolating `task_id`/`agent_id` directly — even with the new
   ingress cap, this module must not assume that cap is the only thing
@@ -111,7 +109,7 @@ defmodule KaoiroServer.TaskStates do
   terminate after a reconnect must not discard the NEW connection's
   active tasks) rather than duplicating that check here.
 
-  `snapshot/0` feeds the join-time `snapshot` push's `tasks` key
+  `snapshot/0` feeds the join-time `task_snapshot` push's `tasks` key
   (ADR-0048 F3 — no dedicated periodic snapshot envelope). The wire
   shape is `%{agent_id => %{task_id => envelope}}` (protocol.md);
   `snapshot/0` unwraps the internal `{wire_size, envelope}` tuples
@@ -139,6 +137,8 @@ defmodule KaoiroServer.TaskStates do
 
   require Logger
 
+  alias KaoiroServer.TransportLimits
+
   # S2 fix-round (2026-08-09): total (agent_id, task_id) pair cap across
   # the whole table. Sized above AgentStates' @max_agents (1000) since a
   # single agent may legitimately run several concurrent subagents/
@@ -146,46 +146,10 @@ defmodule KaoiroServer.TaskStates do
   # wrapper spamming distinct task_ids under its own agent_id.
   @max_tasks 5000
 
-  # M1 fix-round (2026-08-09, ふじ round 2/3): budget for THIS table's
-  # (the task subtree's) own total JSON-encoded byte size (see moduledoc
-  # M1 sections) — NOT a guarantee on the full `snapshot` push's overall
-  # size. 6_000_000, not 8_000_000 (Endpoint's max_frame_size): the ~2MB
-  # margin is reserved for two things THIS module does not directly
-  # account for per-entry:
-  #
-  # 1. AgentStates' own "agents" key riding the same snapshot push —
-  #    AgentStates has no byte budget of its own (unbounded per-entry
-  #    content — e.g. `log`/`result`/`state_change` text fields carry no
-  #    length cap on this path); bounding it is out of #180's scope. The
-  #    2MB margin below is sized only against THIS module's own known
-  #    per-agent-key overhead (item 2), not against AgentStates' size,
-  #    which this module cannot see or bound. Consequently this budget
-  #    caps the task subtree, not the combined `{agents, tasks}` push —
-  #    an unbounded AgentStates snapshot can still blow the 8MB frame
-  #    limit on its own regardless of what this module does. Tracked
-  #    separately: issue #213 (combined byte bound, enhancement/
-  #    priority-low; ふじ round-4 measurement: task subtree 7.23MB,
-  #    leaving only ~770KB margin before the 8MB frame limit).
-  # 2. THIS table's own per-AGENT outer key ("<agent_id>":{...},) —
-  #    round-3 fix: `entry_wire_size/2` now charges each entry for its
-  #    task_id key (the thing ふじ's round-3 measurement showed was
-  #    missing), but charging the AGENT-level key per-entry would
-  #    double-count it once per task instead of once per agent, so it is
-  #    NOT in `bytes` and must be justified here instead. Worst case:
-  #    @max_tasks (5000) pairs spread across 5000 DISTINCT agents (one
-  #    task each — the worst distribution for this specific overhead),
-  #    each `agent_id` at its PRE-EXISTING bound —
-  #    `KaoiroServerWeb.AgentId.valid?/1` (issue #61) already restricts
-  #    every agent_id to 1..256 chars of `[A-Za-z0-9._-]` at the wrapper
-  #    JOIN boundary, and a task envelope's `payload.agent_id` must equal
-  #    that topic-derived value (`WrapperChannel.validate_task_payload/2`),
-  #    so it inherits the same bound with no new cap needed. Per agent:
-  #    byte_size(Jason.encode!(agent_id)) <= 256 (content, no escaping
-  #    needed for this charset) + 2 (quotes) = 258, plus 1 (colon) + 2
-  #    (braces) + 1 (comma) = 262 bytes worst case. 5000 * 262 =
-  #    1,310,000 bytes (~1.25MB) — comfortably inside the 2MB margin even
-  #    stacked with (1) above.
-  @max_task_snapshot_bytes 6_000_000
+  # The task subtree now has its own frame. `snapshot_payload_budget/2`
+  # includes its Phoenix JSON envelope rather than borrowing unrelated
+  # subtrees' headroom.
+  @max_task_snapshot_bytes TransportLimits.snapshot_payload_budget("task_snapshot", "tasks")
 
   # S1 fix-round (2026-08-09, ふじ round 3): reject/drop log lines below
   # interpolate task_id/agent_id. `WrapperChannel.@max_task_id_field_bytes`
@@ -227,6 +191,9 @@ defmodule KaoiroServer.TaskStates do
 
   @doc "Returns the agent_id => %{task_id => envelope} map (ADR-0048 F3, join snapshot)."
   def snapshot(server \\ __MODULE__), do: GenServer.call(server, :snapshot)
+
+  @doc "The task snapshot's JSON-map budget inside its dedicated transport frame."
+  def snapshot_byte_budget, do: @max_task_snapshot_bytes
 
   @impl true
   def init(_opts), do: {:ok, %{tasks: %{}, count: 0, bytes: 0}}
@@ -275,7 +242,7 @@ defmodule KaoiroServer.TaskStates do
            state
            | tasks: tasks,
              count: state.count - map_size(removed),
-             bytes: state.bytes - removed_bytes
+             bytes: state.bytes - removed_bytes - agent_outer_wire_size(agent_id)
          }}
     end
   end
@@ -302,7 +269,8 @@ defmodule KaoiroServer.TaskStates do
   end
 
   defp upsert_new_task(state, agent_id, task_id, envelope, agent_tasks, new_size) do
-    prospective_bytes = state.bytes + new_size
+    agent_size = if agent_tasks == %{}, do: agent_outer_wire_size(agent_id), else: 0
+    prospective_bytes = state.bytes + new_size + agent_size
 
     cond do
       state.count >= @max_tasks ->
@@ -376,8 +344,11 @@ defmodule KaoiroServer.TaskStates do
                 Map.put(tasks, agent_id, agent_tasks)
               end
 
+            agent_size =
+              if map_size(agent_tasks) == 0, do: agent_outer_wire_size(agent_id), else: 0
+
             # Perf fix (code review): cached size, no re-encoding.
-            {tasks, count - 1, bytes - size}
+            {tasks, count - 1, bytes - size - agent_size}
         end
     end
   end
@@ -406,6 +377,10 @@ defmodule KaoiroServer.TaskStates do
   defp entry_wire_size(task_id, envelope) do
     byte_size(Jason.encode!(task_id)) + 1 + encoded_size(envelope) + 1
   end
+
+  # Charged only when an agent's inner map appears; charging it per task
+  # would double-count agents that own more than one task.
+  defp agent_outer_wire_size(agent_id), do: byte_size(Jason.encode!(agent_id)) + 1 + 2 + 1
 
   defp task_ref(%{
          "type" => "task",

@@ -90,7 +90,12 @@ describe("AgentDetail 頭上リング (issue #180 follow-up)", () => {
     const ring = target.querySelector(".task-ring");
     expect(ring).not.toBeNull();
     expect(ring?.getAttribute("role")).toBe("img");
-    expect(ring?.getAttribute("aria-label")).toBe("サブエージェント実行中");
+    // issue #233: count が TaskRing まで配線され、label に実際の件数を
+    // 含める(複数 dot 描画そのものの詳細は taskRing.integration.test.ts
+    // が担当)。
+    expect(ring?.getAttribute("aria-label")).toBe(
+      "サブエージェント/workflow実行中 (3件)",
+    );
     expect(target.querySelector(".portrait")?.textContent?.trim()).toBe("");
   });
 
@@ -123,9 +128,9 @@ describe("AgentDetail 頭上リング (issue #180 follow-up)", () => {
   // 下げて調整した(e2e T11 の 1600px 幅広テストが実際のはみ出し量を
   // 固定する。ここでは prop が正しく inline style へ反映されることのみ
   // 固定する)。
-  it("topOffset=6% が inline style の top へ反映される", async () => {
+  it("topOffset=calc(6% + 8px) が inline style の top へ反映される (issue #231)", async () => {
     const target = await render(1, manifestWithSprite);
     const ring = target.querySelector(".task-ring") as HTMLElement | null;
-    expect(ring?.style.top).toBe("6%");
+    expect(ring?.style.top).toBe("calc(6% + 8px)");
   });
 });

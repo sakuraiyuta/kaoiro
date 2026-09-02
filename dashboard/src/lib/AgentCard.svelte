@@ -25,6 +25,7 @@
     onStop,
     onRestore,
     onDelete,
+    onOpenPersonaDetail,
   }: {
     envelope: Envelope;
     manifest?: PersonaManifest | null;
@@ -62,12 +63,55 @@
     /** Remove a disconnected agent (#14); pass undefined to hide the
      *  button (e.g. no connection / viewer). */
     onDelete?: (() => Promise<void>) | undefined;
+    /** Opens the persona pack detail modal (issue #232) for this agent's
+     *  persona; pass undefined to disable the image's click affordance
+     *  (e.g. no resolved persona id). */
+    onOpenPersonaDetail?: ((personaId: string) => void) | undefined;
   } = $props();
+
+  // issue #232 MF-2 round-2 must-fix (MF-R2-1): the expand origin must be
+  // the CARD's centre regardless of which button the click landed on —
+  // `.open` no longer covers the whole card (the image sits outside it in
+  // `.card-media`), so `event.currentTarget`'s own rect would give a
+  // smaller/offset box depending on which sibling fired the click.
+  // `cardEl` (the <article> itself) is the one stable reference both
+  // `selectFrom` call sites below share.
+  let cardEl: HTMLElement | undefined = $state();
 
   // Hand the detail the tile's viewport centre so it grows from this tile.
   function selectFrom(event: MouseEvent): void {
-    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    const rect = (cardEl ?? (event.currentTarget as HTMLElement)).getBoundingClientRect();
     onSelect?.({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+  }
+
+  // issue #232 MF-2 (ふじ round-1 must-fix): the persona image's click
+  // opens the persona pack detail modal, as a SIBLING <button> to `.open`
+  // rather than nested inside it or reached by dispatching on click
+  // coordinates from `.open`'s own handler (the earlier pointer-only
+  // design — a keyboard user tabbing into `.open` and pressing
+  // Enter/Space had no way to land on the persona action; ふじ measured
+  // onSelect fired, onOpenPersonaDetail never did). `.card-media` (below)
+  // is the new position:relative wrapper carrying `.lamp`/`.error-icon`/
+  // etc.'s absolute positioning, unchanged in effect from when `.open`
+  // carried it.
+  const personaId = $derived(envelope.persona?.id);
+
+  // issue #232 MF-2 round-2 must-fix (MF-R2-1, ふじ probe): making
+  // `.persona-open` `disabled` whenever there is no persona action (no
+  // onOpenPersonaDetail — e.g. a viewer session, App.svelte's isOperator
+  // gate — or no resolved persona id) made the image's click a dead end.
+  // Before the sibling split, that same click fell through to
+  // `selectFrom` (the whole card was one `.open` button). Route it back
+  // there instead of disabling the click affordance outright —
+  // `directoryOnly` is the one condition that must still suppress it
+  // (an offline tile has no detail view to open at all, persona or
+  // otherwise).
+  function handlePersonaOpenClick(event: MouseEvent): void {
+    if (personaId && onOpenPersonaDetail) {
+      onOpenPersonaDetail(personaId);
+      return;
+    }
+    selectFrom(event);
   }
 
   // Displayed state lags the live state for min readability + crossfade (#43);
@@ -438,16 +482,17 @@
   }
 </script>
 
-<article class="card" data-state={expression.variant} class:directory-only={directoryOnly}>
-  <button
-    type="button"
-    class="open"
-    onclick={directoryOnly ? undefined : selectFrom}
-    aria-label={directoryOnly
-      ? `${name} (オフライン)`
-      : `${name} の詳細を開く`}
-    disabled={directoryOnly}
-  >
+<article
+  class="card"
+  data-state={expression.variant}
+  class:directory-only={directoryOnly}
+  bind:this={cardEl}
+>
+  <!-- issue #232 MF-2: position:relative wrapper for `.lamp`/
+       `.offline-label`/`.error-icon`/`.badge` — carries the same
+       absolute-positioning basis `.open` used to, now that `.open` no
+       longer wraps the image. -->
+  <div class="card-media">
     <span class="lamp" title={expression.label}></span>
     {#if directoryOnly}
       <span class="offline-label" aria-label="オフライン">offline</span>
@@ -459,25 +504,50 @@
       <span class="badge" data-state={expression.variant}>要対応</span>
     {/if}
     <div class="sprite-slot">
-      {#key display.shown}
-        <PersonaFace
-          sprite={spriteUrl}
-          variant={expression.variant}
-          label={expression.label}
-          fatigued={fatigued}
-          size="card"
-          imgAltLabelled={true}
-          faceLabelled={true}
-        />
-      {/key}
+      <!-- issue #232 MF-2: own <button>, sibling to `.open` below — a
+           keyboard user can now Tab to this action directly instead of
+           it being unreachable except by mouse. disabled when there is
+           nothing to open (directoryOnly / no resolved persona id / no
+           handler), mirroring AgentDetail's `.portrait-open`. -->
+      <button
+        type="button"
+        class="persona-open"
+        onclick={directoryOnly ? undefined : handlePersonaOpenClick}
+        disabled={directoryOnly}
+        aria-label={personaId && onOpenPersonaDetail
+          ? `${name} のペルソナ詳細を表示`
+          : `${name} の詳細を開く`}
+      >
+        {#key display.shown}
+          <PersonaFace
+            sprite={spriteUrl}
+            variant={expression.variant}
+            label={expression.label}
+            fatigued={fatigued}
+            size="card"
+            imgAltLabelled={true}
+            faceLabelled={true}
+          />
+        {/key}
+      </button>
       {#if activeTaskCount > 0}
         <!-- 頭上リング (issue #180, ADR-0019/0047/0048)。実装は
              TaskRing.svelte(AgentDetail と共有、issue #180 follow-up
              2026-08-10)。{#key} の外に置き、state 遷移(dissolve
              remount)の影響を受けず単独で回り続ける。 -->
-        <TaskRing faceOrbit={!spriteUrl} />
+        <TaskRing faceOrbit={!spriteUrl} count={activeTaskCount} />
       {/if}
     </div>
+  </div>
+  <button
+    type="button"
+    class="open"
+    onclick={directoryOnly ? undefined : selectFrom}
+    aria-label={directoryOnly
+      ? `${name} (オフライン)`
+      : `${name} の詳細を開く`}
+    disabled={directoryOnly}
+  >
     <h2>{name}</h2>
     {#key display.shown}
       <p class="state">{expression.label}</p>
@@ -659,13 +729,43 @@
      restarting its rotation on every state change. inline-block
      shrink-wraps to the child's own size (8rem sprite / 5.4rem face), so
      the ring's `inset` offset (below) matches either case without a
-     fixed size here; `.open`'s text-align: center centers it
-     horizontally, replacing the margin:auto the children used to carry
+     fixed size here; `.card`'s own text-align: center centers it
+     horizontally (issue #232 MF-2: moved out of `.open`, which no longer
+     wraps this), replacing the margin:auto the children used to carry
      directly. */
   .sprite-slot {
     position: relative;
     display: inline-block;
     margin-bottom: 1rem;
+  }
+
+  /* issue #232 MF-2: the click target for the persona detail modal, a
+     plain reset so it does not visibly alter `.sprite-slot`'s existing
+     size/position — sized entirely by its PersonaFace child, same as
+     when the image sat unwrapped. Mirrors AgentDetail's
+     `.portrait-open`. */
+  .persona-open {
+    display: block;
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: none;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .persona-open:disabled {
+    cursor: default;
+  }
+
+  /* issue #232 MF-2: position:relative wrapper for `.lamp`/
+     `.offline-label`/`.error-icon`/`.badge`, taking over the role `.open`
+     used to carry now that `.open` no longer wraps the image — same
+     block-level, full-width footprint at the same position in `.card`'s
+     flow, so their absolute coordinates are unchanged. */
+  .card-media {
+    position: relative;
+    width: 100%;
   }
 
   /* Sprite/CSS-face fallback rendering itself lives in PersonaFace.svelte

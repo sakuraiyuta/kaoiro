@@ -1,5 +1,5 @@
 ---
-title: LaunchDialog モデル catalog を短命 SDK probe + runner memory cache で live 化する (Option E)
+title: Make the LaunchDialog model catalog live with a short-lived SDK probe + runner memory cache (Option E)
 status: accepted
 date: 2026-07-15
 opened: 2026-07-15
@@ -9,341 +9,351 @@ related_specs: [protocol, plugin-model]
 related_adrs: [23, 32, 35, 37, 40]
 ---
 
-# ADR-0039 — LaunchDialog モデル catalog を短命 SDK probe + runner memory cache で live 化する (Option E)
+# ADR-0039 — Make the LaunchDialog model catalog live with a short-lived SDK probe + runner memory cache (Option E)
 
 ## Status
 
-Accepted (2026-07-15、マスター決裁)。実装は
-[phase-20-engine-catalog-live-probe](../plans/phase-20-engine-catalog-live-probe.md)。
+Accepted (2026-07-15, approved by マスター). Implementation is
+[phase-20-engine-catalog-live-probe](../plans/phase-20-engine-catalog-live-probe.md).
 
 ## Context
 
-[ADR-0037](0037-claude-model-catalog-live-refresh.md) F1 は LaunchDialog の
-Claude モデル catalog を `default` 1 エントリの BOOTSTRAP に縮小した。理由
-は「register 経路は wrapper Query 未生成のため SDK.supportedModels() を
-呼べない」という鶏と卵の制約であり、これは F2 の live 経路 (`ext.models` を
-`AgentHost.#refreshSupportedModels()` で SDK 実測) が per-agent にしか
-効かない事実と合わせて、fresh operator が開く LaunchDialog を常に "default"
-のみに固定していた。
+[ADR-0037](0037-claude-model-catalog-live-refresh.md) F1 reduced the Claude model
+catalog in LaunchDialog to a BOOTSTRAP containing only one `default` entry. The
+reason was the chicken-and-egg constraint that the Register path cannot call
+SDK.supportedModels() because no wrapper Query has been created. Combined with the
+fact that F2’s live path (`ext.models` measured by
+`AgentHost.#refreshSupportedModels()`) works only per agent, this fixed the
+LaunchDialog opened by a new operator to “default” alone.
 
-kaoiro peer 越しの調査 (2026-07-15) で以下が判明した:
+Investigation through kaoiro peers (2026-07-15) found the following:
 
-- `@anthropic-ai/claude-agent-sdk@0.3.208` の `Query` interface は
+- The `Query` interface of `@anthropic-ai/claude-agent-sdk@0.3.208` has
   `initializationResult(): Promise<SDKControlInitializeResponse>` /
-  `supportedModels(): Promise<ModelInfo[]>` / `close(): void` を持つ。
-- `SDKControlInitializeResponse.models` に catalog が既に含まれる。
-- `Query` は `prompt: string | AsyncIterable<SDKUserMessage>` を要求し、
-  control request は streaming input mode 限定 (`AsyncIterable` を渡した
-  場合のみ動作)。resolve しない AsyncIterable を渡せば user_message は
-  送られず、init 完了後に control request だけを叩いて close できる。
-- Empirical spike (phase-20-1) で prompt 未送信の短命 probe が成立する
-  ことを実測: init+supportedModels ~1.4s、close 後 subprocess 完全 cleanup、
-  `~/.claude/projects/` 差分 0、tmpdir 汚染 0、OAuth/keychain 認証成功 (詳細
-  は phase-20-1 の記録)。
+  `supportedModels(): Promise<ModelInfo[]>` / `close(): void`.
+- `SDKControlInitializeResponse.models` already contains the catalog.
+- `Query` requires `prompt: string | AsyncIterable<SDKUserMessage>`, and control
+  requests work only in streaming input mode (only when an `AsyncIterable` is
+  supplied). Passing an AsyncIterable that never resolves sends no user_message;
+  after init completes, only the control request can be issued and then closed.
+- An empirical spike (phase-20-1) measured that a short-lived probe without sending
+  a prompt works: init+supportedModels ~1.4s, complete subprocess cleanup after
+  close, zero `~/.claude/projects/` difference, no tmpdir contamination, and
+  OAuth/keychain authentication succeeds (details are in the phase-20-1 record).
 
-したがって ADR-0037 の「原理的に不可能」は正確には「register-only 前提 (query
-を一切生成しない前提) での不可能」であり、runner 上で **短命 SDK probe** を
-走らせれば register 経路の catalog リッチ化が可能。
+Therefore, ADR-0037’s “impossible in principle” is more precisely “impossible
+under the register-only premise (never create a query)”. A **short-lived SDK probe**
+on the runner can enrich the Register-path catalog.
 
-制約として:
+Constraints:
 
-- Codex 側は [ADR-0035](0035-codex-model-catalog-and-mid-session-switch.md)
-  F1 の静的 catalog 判断を保持する (`codex doctor` が entitled model を
-  返せない技術的不可能性、operator plan 申告で足りる)。live probe は
-  Claude 側にのみ適用する。
-- SDK 0.3.208 の `Options` に `settingsSources` は見つからず (実測、
-  藤 turn-5 確認)、user settings は probe subprocess でも常にロードされる。
-  副作用最小化は cwd 隔離 + `mcpServers: {}` / `tools: []` / `hooks: undefined`
-  等で対応する。`--bare` は keychain reads を skip して OAuth を切るため
-  probe には使えない (前段調査で誤って提案したが撤回済み)。
-- Codex `AGENTS.md` の peer-first routing (ADR-0038) と同様、probe の
-  subprocess は runner が保持する auth context を使う。runner の auth と
-  operator が spawn する wrapper の auth が同じ account を指す前提。
-  multi-account host では account mismatch のリスクが残る (ADR-0038 と同構造)。
+- Keep the Codex-side decision from [ADR-0035](0035-codex-model-catalog-and-mid-session-switch.md)
+  F1: a static catalog, based on operator plan declaration and independent of runtime
+  probes (technically impossible because `codex doctor` cannot return entitled
+  models). Apply the live probe only to Claude.
+- `settingsSources` was not found in SDK 0.3.208 `Options` (real measurement,
+  confirmed by 藤 turn-5), and user settings are always loaded even in the probe
+  subprocess. Minimise side effects with cwd isolation + `mcpServers: {}` /
+  `tools: []` / `hooks: undefined`, etc. Do not use `--bare`: it skips keychain
+  reads and disables OAuth (a previous proposal was withdrawn).
+- As with Codex `AGENTS.md` peer-first routing (ADR-0038), the probe subprocess
+  uses the auth context held by the runner. Assume that runner auth and the wrapper
+  auth used when the operator spawns an agent point to the same account. A
+  multi-account host retains the risk of account mismatch (the same structure as
+  ADR-0038).
 
 ## Decision
 
-### F1 — Option E: runner-only orchestration (server cache なし)
+### F1 — Option E: runner-only orchestration (no server cache)
 
-catalog SoT は runner の memory cache とする。server に per-host warm cache
-GenServer を追加する Option D は退ける (`(host, engine)` の precedence 判定 /
-TTL / probe と wrapper の consistency 判定 / envelope 経路への write が増え、
-複雑度に見合う価値がない)。既存 `HostRegistry` の engines 保持と
-`RunnerLink.updateRegister()` の register 再送信で完結する。
+Make the runner memory cache the catalog SoT. Reject Option D, which adds a
+per-host warm-cache GenServer to the server (it adds (host, engine) precedence
+decisions / TTL / probe-wrapper consistency checks / writes through the envelope
+path, without value matching the complexity). Complete the design with existing
+`HostRegistry` engine storage and register retransmission through
+`RunnerLink.updateRegister()`.
 
-### F2 — 短命 probe CLI を `@kaoiro/claude-code` に切り出す
+### F2 — Extract a short-lived probe CLI into `@kaoiro/claude-code`
 
-`wrapper/claude-code/src/probe.ts` を新設し `bin: kaoiro-claude-probe` として
-公開する。runner は child process として `spawn(process.execPath,
-[require.resolve('@kaoiro/claude-code/dist/probe.js'), ...])` で起動し、
-`@anthropic-ai/claude-agent-sdk` への直依存を wrapper 側に閉じる (runner
-package は SDK を dependency に加えない)。probe は stdout に 1 行 JSON で
-結果を返し、exit 0 = 成功 / 1 = 失敗。
+Create `wrapper/claude-code/src/probe.ts` and publish it as
+`bin: kaoiro-claude-probe`. The runner starts it as a child process with
+`spawn(process.execPath,
+[require.resolve('@kaoiro/claude-code/dist/probe.js'), ...])`,
+keeping the direct dependency on `@anthropic-ai/claude-agent-sdk` inside the
+wrapper side (the runner package does not add the SDK as a dependency). The probe
+returns one line of JSON on stdout and uses exit 0 = success / 1 = failure.
 
-### F3 — probe は init.models を第一取得源、supportedModels() を fallback
+### F3 — Use init.models as the primary probe source, supportedModels() as fallback
 
-`initializationResult()` の応答 `SDKControlInitializeResponse.models` に catalog
-が既に含まれるため、probe はまずこれを使う。init.models が空 / undefined / 欠落
-の場合のみ `supportedModels()` を追加で叩く (SDK 応答 shape 変化への耐性)。
-同じ control request を無駄に二重取得しない (藤 turn-5 の設計指摘)。
+Because the response from `initializationResult()` already includes the catalog in
+`SDKControlInitializeResponse.models`, use it first. Call `supportedModels()` only
+when init.models is empty / undefined / missing, providing resilience to changes in
+the SDK response shape. Do not fetch the same control request twice unnecessarily
+(the design point from 藤 turn-5).
 
-### F4 — probe Options: 副作用最小 + OAuth/keychain 保持
+### F4 — Probe Options: minimise side effects while retaining OAuth/keychain
 
-probe は以下の Options で SDK query を起動する:
+Start the SDK query with these Options:
 
-- `cwd`: 新規作成の隔離 tmpdir (`os.tmpdir()/kaoiro-claude-probe-<pid>-<ts>`)、
-  finally で削除。project settings / CLAUDE.md 発火 / session file 汚染を封じる。
+- `cwd`: a newly created isolated tmpdir
+  (`os.tmpdir()/kaoiro-claude-probe-<pid>-<ts>`), deleted in finally. Prevent
+  project settings / CLAUDE.md activation / session-file contamination.
 - `mcpServers: {}` / `tools: []` / `allowedTools: []` / `disallowedTools: []`
-  / `agents: {}` / `additionalDirectories: []` / `hooks: undefined`。
-- `env` 未指定 (SDK が `process.env` を継承) — keychain / OAuth / API-key の
-  auth 経路を保持する。
-- `settingsSources` は SDK 0.3.208 に見つからず (実測)、user settings は
-  常にロードされる。追加抑止手段なし。
+  / `agents: {}` / `additionalDirectories: []` / `hooks: undefined`.
+- Do not specify `env` (the SDK inherits `process.env`) to preserve keychain /
+  OAuth / API-key authentication paths.
+- `settingsSources` was not found in SDK 0.3.208 (measured); user settings are
+  always loaded. There is no additional suppression mechanism.
 
-`--bare` 相当は **採らない** (keychain reads を skip して OAuth を切るため)。
+Do **not** adopt the `--bare` equivalent (it skips keychain reads and disables
+OAuth).
 
-### F5 — runner memory cache: TTL 1h、last-known-good、dedup
+### F5 — Runner memory cache: TTL 1h, last-known-good, deduplication
 
-`runner/src/claude_catalog_cache.ts` は engine → `{ models, fetchedAt }` の
-memory-only cache (disk persist なし)。TTL 既定 1 時間。TTL 判定は runner
-のみが行う (client は毎回 auto-refresh を投げ、runner が cache 判定で
-skip)。
+`runner/src/claude_catalog_cache.ts` is a memory-only cache of engine →
+`{ models, fetchedAt }` (no disk persistence). The default TTL is one hour. Only
+the runner evaluates TTL (the client requests auto-refresh each time and the runner
+decides whether to skip).
 
-- `force=false` (LaunchDialog auto-refresh): cache fresh なら probe skip、
-  `ok=true` を即返す。stale/miss なら probe 実行。
-- `force=true` (LaunchDialog 手動 button): TTL 無視で probe 実行。
-- 同時 refresh は runner-level Mutex + in-flight Promise 共有で 1 subprocess
-  にまとめる (dedup)。
-- probe 失敗時は cache を更新しない (last-known-good を保持)。次の refresh 要求
-  で再挑戦できる。
+- `force=false` (LaunchDialog auto-refresh): skip the probe and immediately return
+  `ok=true` when the cache is fresh; run the probe on stale/missing cache.
+- `force=true` (LaunchDialog manual button): run the probe regardless of TTL.
+- Concurrent refreshes are consolidated into one subprocess through a runner-level
+  Mutex + shared in-flight Promise (deduplication).
+- Do not update the cache on probe failure (retain last-known-good). Retry on the
+  next refresh request.
 
-### F6 — protocol event: `refresh_engine_catalog` + `catalog_result`
+### F6 — Protocol events: `refresh_engine_catalog` + `catalog_result`
 
-`protocol/src/index.ts` に以下 2 型を追加:
+Add these two types to `protocol/src/index.ts`:
 
 - `RefreshEngineCatalog { version, engine, request_id, force? }` — client →
-  server → runner。host_id は topic で addressing (agents_channel は
-  payload の `host_id` から runner topic を決める)。
+  server → runner. Address host_id by topic (agents_channel determines the runner
+  topic from the payload’s `host_id`).
 - `EngineCatalogResult { version, host_id, engine, request_id, ok, reason?,
-  models_count? }` — runner → server → operators (agents:lobby, operator-only)。
-  失敗は closed vocabulary (`EngineCatalogFailReason` = `auth_failed` /
+  models_count? }` — runner → server → operators (agents:lobby, operator-only).
+  Failure uses the closed vocabulary (`EngineCatalogFailReason` = `auth_failed` /
   `spawn_failed` / `cli_error` / `invalid_output` / `timeout` /
-  `unsupported_engine`)。
+  `unsupported_engine`).
 
-`models_count` は toast 用の size-only 信号で、モデル名等の詳細は含めない
-(catalog 本体は既存 `hosts` broadcast で流れる)。
+`models_count` is a size-only signal for the toast and does not contain model names
+or other details (the catalog itself travels in the existing `hosts` broadcast).
 
-### F7 — server は薄い relay に留める
+### F7 — Keep the server as a thin relay
 
-`agents_channel.ex` に `handle_in("refresh_engine_catalog", ...)` を既存
-`relay_to_runner_guarded` パターンで追加 (operator-only、host_id 剥がして
-`runner:<host_id>` へ broadcast)。`runner_channel.ex` に
-`handle_in("catalog_result", ...)` を既存 `forward_to_operators` パターンで
-追加 (host_id stamp して `agents:lobby` へ broadcast)。engine の validation は
-runner に委ねる (Option E で runner が SoT、server は engine-agnostic)。
-`agents_channel` の `intercept` と `handle_out` に `catalog_result` を追加し
-operator-only 配信を保証する。
+Add `handle_in("refresh_engine_catalog", ...)` to `agents_channel.ex` using the
+existing `relay_to_runner_guarded` pattern (operator-only, strip host_id and
+broadcast to `runner:<host_id>`). Add `handle_in("catalog_result", ...)` to
+`runner_channel.ex` using the existing `forward_to_operators` pattern (stamp host_id
+and broadcast to `agents:lobby`). Delegate engine validation to the runner (Option E
+makes runner the SoT; server remains engine-agnostic). Add `catalog_result` to
+`agents_channel` `intercept` and `handle_out` to guarantee operator-only delivery.
 
-### F8 — client: 自動 refresh on open + Claude 限定 button + default fallback
+### F8 — Client: auto-refresh on open + Claude-only button + default fallback
 
-`LaunchDialog.svelte` は `engine === "claude-code" && hostId !== ""` に
-なった時点で自動的に `connection.refreshEngineCatalog(hostId, engine, false)`
-を発火する。手動 button は `force=true` で発火。button は Claude engine
-選択時のみ表示 (Codex は静的 catalog、Codex では意味がない)。probe 失敗
-時は既存の `default` 1 エントリ fallback を維持する (LaunchDialog は
-`engineModels ?? []` で描画済み)。
+When `engine === "claude-code" && hostId !== ""`, `LaunchDialog.svelte` fires
+`connection.refreshEngineCatalog(hostId, engine, false)` automatically. The manual
+button uses `force=true`. Show the button only when Claude is selected (Codex has a
+static catalog, so it has no meaning there). On probe failure, retain the existing
+one-entry `default` fallback (LaunchDialog already renders with
+`engineModels ?? []`).
 
-catalog 本体は runner が `updateRegister` を呼んだ結果の `hosts` broadcast
-で自然に repopulate される。`catalog_result` の toast (成功時 models_count /
-失敗時 reason) は parent 層で `onCatalogResult` を hook する形で扱えるが、
-本 phase では最小実装として LaunchDialog 内の error 表示に留める (詳細
-toast は future work)。
+The catalog naturally repopulates through the `hosts` broadcast produced when the
+runner calls `updateRegister`. A `catalog_result` toast (models_count on success /
+reason on failure) can be handled by hooking `onCatalogResult` at the parent layer,
+but keep this phase minimal and display errors inside LaunchDialog (a detailed toast
+is future work).
 
 ## Consequences
 
 ### Positive
 
-- LaunchDialog Claude モデル catalog が live 実測に追従する (Sonnet 5 等の
-  新モデルを手動更新なしで表示可能)。
-- Server-side cache を追加せず、既存 `RunnerLink.updateRegister()` +
-  `HostRegistry` upsert + `hosts` broadcast の枠内で完結する。
-- probe は SDK 直依存を wrapper package に閉じ、runner は engine-agnostic な
-  child process spawn だけを持つ。engine 追加時の runner 変更が最小。
-- OAuth / keychain / API-key の全 auth 経路が保持される (`--bare` を採らない
-  ことで実現)。
-- TTL / dedup を runner memory に閉じ、複雑度が最小 (server cache / disk
-  persist なし)。
-- session/history 汚染ゼロ (spike で 0 files 実測)、課金なし (control
-  request で REST 未呼び出し)。
+- The Claude model catalog in LaunchDialog follows live measurements, so new models
+  such as Sonnet 5 appear without manual updates.
+- Complete within the existing `RunnerLink.updateRegister()` + `HostRegistry`
+  upsert + `hosts` broadcast boundary, without adding a server-side cache.
+- Keep the SDK direct dependency in the wrapper package; the runner only spawns an
+  engine-agnostic child process, minimising runner changes when engines are added.
+- Preserve every authentication path (OAuth / keychain / API key) by not adopting
+  `--bare`.
+- Keep TTL / deduplication in runner memory with minimal complexity (no server cache
+  or disk persistence).
+- Zero session/history contamination (zero files measured in the spike), with no
+  cost (the control request does not call REST).
 
 ### Negative
 
-- Multi-account host では runner auth と operator が spawn する wrapper auth
-  が異なる account を指す可能性があり、probe と wrapper で catalog がずれる
-  リスクが残る (単一 account host では発生しない)。
-- Runner 起動時は cache 空。最初の LaunchDialog open で probe が走るため、
-  ~1.5s の待ち時間が発生する (auto-refresh の spinner で表示)。
-- SDK subprocess spawn の overhead (~1s) が cache miss 時に発生する。
+- A multi-account host may point runner auth and the wrapper auth used by the
+  operator to different accounts, so catalog mismatch remains possible (not on a
+  single-account host).
+- The cache is empty when the runner starts. The first LaunchDialog open runs the
+  probe and causes ~1.5s of waiting time (shown by the auto-refresh spinner).
+- SDK subprocess spawn overhead (~1s) occurs on cache misses.
 
 ### Neutral
 
-- `default` fallback は保たれるため、probe 失敗環境 (auth 未設定 etc.) でも
-  LaunchDialog は使える。
-- Codex 側 catalog は据え置き (ADR-0035 F1 保持)。
-- server-side cache を持たない設計は将来の要件 (複数 runner が同じ engine
-  catalog を共有する等) が生じたら再評価する。
+- Keep the `default` fallback, so LaunchDialog remains usable even when probing
+  fails (auth not configured, etc.).
+- Leave the Codex catalog unchanged (ADR-0035 F1 retained).
+- Re-evaluate the no-server-cache design if future requirements arise, such as
+  multiple runners sharing one engine catalog.
 
 ## Alternatives Considered
 
 | Option | Decision |
 |--------|----------|
-| Option A: runner 常駐 WarmQuery | Reject。startup() で subprocess を pre-warm しても Query 昇格は 1 回限りで、複数 refresh に使い回せない。常駐 subprocess の maintenance コストに見合わない |
-| Option C: server-side warm cache primary | Reject。(host, engine) precedence / TTL / probe と wrapper の consistency 判定 / envelope 経路への write が増え、複雑度に見合う価値なし (藤 turn-3)。runner cache の last-known-good で resilience は同等 |
-| Option D: hybrid (server cache primary + runner probe fallback) | Reject。上の C を primary にした複合案。C を退けた時点で不要 |
-| REST `/v1/models` (`@anthropic-ai/sdk`) | Reject。OAuth-only 環境で `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` 未設定なら不可。SDK subprocess のほうが auth 経路が広い |
-| `--bare` オプション相当を probe に採用 | Reject。keychain reads を skip して OAuth を切るため、マスター環境で probe が auth 失敗になる (藤 turn-5 訂正) |
-| probe を runner package に直実装 | Reject。runner が `@anthropic-ai/claude-agent-sdk` に直依存すると engine 境界が崩れる (ADR-0032 F1 分離を退行させる) |
-| server 側に engine validation | Reject。Option E で runner が SoT。server は agent-agnostic な relay に留める (ADR-0023 慣習) |
+| Option A: Resident WarmQuery in the runner | Reject. Even if subprocesses are pre-warmed in startup(), a Query can be promoted only once and cannot be reused for multiple refreshes. The maintenance cost of a resident subprocess is not justified. |
+| Option C: Server-side warm cache primary | Reject. `(host, engine)` precedence / TTL / probe-wrapper consistency checks / envelope-path writes add complexity without matching value (藤 turn-3). Runner-cache last-known-good provides equivalent resilience. |
+| Option D: Hybrid (server cache primary + runner probe fallback) | Reject. It is the combined proposal with C as primary; once C is rejected, it is unnecessary. |
+| REST `/v1/models` (`@anthropic-ai/sdk`) | Reject. It is unavailable in OAuth-only environments without `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`. The SDK subprocess has a broader auth path. |
+| Adopt the `--bare` equivalent for the probe | Reject. It skips keychain reads and disables OAuth, causing probe auth failure in マスター’s environment (藤 turn-5 correction). |
+| Implement the probe directly in the runner package | Reject. A direct runner dependency on `@anthropic-ai/claude-agent-sdk` breaks the engine boundary (regresses ADR-0032 F1 separation). |
+| Validate the engine on the server side | Reject. Under Option E the runner is SoT; the server remains an agent-agnostic relay (ADR-0023 convention). |
 
-### F9 v2 (2026-07-15、藤 review turn-5 で v1 は reject) — fresh-idle wrapper の即時 refresh
+### F9 v2 (2026-07-15, v1 rejected in 藤 review turn-5) — Immediate refresh for a fresh-idle wrapper
 
-v1 (下記) は initial spawn 経路 (A) のみでは AgentDetail ↻ 時に現画面が
-更新されない (`refresh_engine_catalog` は runner cache しか更新せず「次
-restart で反映」となり誤誘導) 問題があった。v2 で以下を追加:
+v1 (below) had a problem in which the initial-spawn path (A) did not refresh the
+current AgentDetail view on ↻ (`refresh_engine_catalog` updated only the runner
+cache and misleadingly meant “apply on next restart”). v2 adds:
 
-- **wrapper 側 短命 probe (B)**: `wrapper/claude-code/src/probe-client.ts`
-  を側効果なし reusable launcher として抽出 (旧 `runner/src/claude_probe.ts`
-  はここへ集約、runner は import で使う = SoT 一元化、藤 D1b)。probe CLI
-  entrypoint `probe.ts` は `import.meta.url === process.argv[1]` gate で
-  library import しても main が走らない構造に。
-- **host `refreshCatalogFor()`**: `#query!==null` は既存
-  `#refreshSupportedModels()` (SDK authoritative)、`#query===null` は
-  `runClaudeProbe()` (child subprocess) にフォールバック。成功時 `#models`
-  更新 + `#modelsSucceeded=true` + `#emitState` で ext.models を即時送出、
-  同じ AgentDetail の model/effort 選択肢が動的更新。in-flight dedup で
-  concurrent manual refresh は 1 execution に coalesce、各 caller は shared
-  outcome を受け取る。
-- **`refresh_models_result` envelope (D2a)**: 新 envelope type、payload =
-  `{request_id, ok, reason?, models_count?}`。wrapper が
-  `refreshCatalogFor()` 完了時に emit、operator-only (既存 handle_out の
-  viewer allow-list に含めず自動 drop = fail-closed)。
-- **`refresh_models` control payload の request_id 追加**: 既存 control は
-  agent_id のみ、client が UUIDv4 を付けて発火、wrapper→server ack は
-  透過、wrapper 側 `refresh_models_result` envelope で相関。
-- **client pending map**: `makeRefreshPendingStore` を instance scope で
-  作成、`connection.refreshModels()` の返り値を `Promise<RefreshModelsResult>`
-  に。unrelated request_id 無視、client-side timeout (45s、wrapper 側 35s
-  の上位)、disconnect/error で drain。
-- **A の row shape defensive validation**: `wrapper/core/src/persona.ts`
-  で `claude_engine_catalog` の各 row を per-field validate + defensive
-  copy。malformed row は loud reject。
-- **AgentDetail `refreshModels()`**: Promise.all + `refreshEngineCatalog`
-  廃止 (誤誘導の元)。単一 `connection.refreshModels(agent_id)` を await、
-  result.ok=false は reason を UI 表示、button loading は result 到着まで
-  維持。runner cache への同期は今回作らない (scope 分離: runner cache =
-  LaunchDialog/future spawn、wrapper #models = current agent)。
+- **Short-lived wrapper-side probe (B)**: extract
+  `wrapper/claude-code/src/probe-client.ts` as a side-effect-free reusable launcher
+  (consolidate the old `runner/src/claude_probe.ts` here; the runner uses it by
+  import = one SoT, 藤 D1b). Gate probe CLI entrypoint `probe.ts` with
+  `import.meta.url === process.argv[1]` so importing the library does not run main.
+- **`refreshCatalogFor()` on the host**: when `#query!==null`, use existing
+  `#refreshSupportedModels()` (SDK authoritative); when `#query===null`, fall back
+  to `runClaudeProbe()` (child subprocess). On success, update `#models`, set
+  `#modelsSucceeded=true`, and emit `#emitState` to send ext.models immediately,
+  dynamically updating model/effort choices in the same AgentDetail. Coalesce
+  concurrent manual refreshes into one execution through in-flight deduplication;
+  each caller receives the shared outcome.
+- **`refresh_models_result` envelope (D2a)**: add a new envelope type with payload
+  `{request_id, ok, reason?, models_count?}`. Emit it when wrapper
+  `refreshCatalogFor()` completes; make it operator-only (do not include it in the
+  existing handle_out viewer allow-list, so it is automatically dropped = fail-closed).
+- **Add request_id to the `refresh_models` control payload**: the existing control
+  has only agent_id; the client adds a UUIDv4 when firing it, the wrapper→server ack
+  passes it through, and the wrapper-side `refresh_models_result` envelope correlates it.
+- **Client pending map**: create `makeRefreshPendingStore` in instance scope and
+  make `connection.refreshModels()` return `Promise<RefreshModelsResult>`. Ignore
+  unrelated request_id values; use a client-side timeout (45s, above the wrapper’s
+  35s); drain on disconnect/error.
+- **Defensive validation of A’s row shape**: in `wrapper/core/src/persona.ts`,
+  validate each row per field and make a defensive copy of `claude_engine_catalog`.
+  Loudly reject malformed rows.
+- **AgentDetail `refreshModels()`**: remove Promise.all + `refreshEngineCatalog`
+  (the source of misleading behavior). Await one `connection.refreshModels(agent_id)` → wrapper.retrySupportedModels();
+  display reason when result.ok=false; keep button loading until the result arrives.
+  Do not synchronise to runner cache this time (separate scopes: runner cache =
+  LaunchDialog/future spawns, wrapper #models = current agent).
 
-副作用境界 (v2):
+Side-effect boundaries (v2):
 
-- wrapper→probe child subprocess は launch 直後 (~1s) にのみ 2 プロセス
-  同時稼働、close 後は完全 cleanup (spike + probe-client test で pin)。
-- SDK authoritative 契約 (#query 存在時) は非回帰、既存
-  `#refreshSupportedModels` を再利用。
-- runner cache は wrapper probe の副産物としての更新経路は作らない
-  (藤 turn-7)。runner cache は LaunchDialog manual refresh で独立更新。
-- Codex 非回帰: `refresh_models` control は Codex 側で unregister (host
-  に refreshCatalogFor がない、codex adapter は refresh_models を受けない)。
+- The wrapper→probe child subprocesses are the only two processes running together
+  immediately after launch (~1s); complete cleanup follows close (pinned by spike +
+  probe-client test).
+- The SDK-authoritative contract (when #query exists) is non-regressed and reuses
+  existing `#refreshSupportedModels`.
+- Do not create a runner-cache update path as a by-product of the wrapper probe
+  (藤 turn-7). Runner cache remains independently updated by LaunchDialog manual
+  refresh.
+- Codex non-regression: unregister the `refresh_models` control on Codex (no
+  refreshCatalogFor on the host; the Codex adapter does not accept refresh_models).
 
-### F9 v1 (2026-07-15) — fresh-idle wrapper への initial catalog 輸送
+### F9 v1 (2026-07-15) — Transport initial catalog to the fresh-idle wrapper
 
-初回 shipment 後の dogfood で以下 2 症状が観測された:
+After the initial shipment, dogfooding observed two symptoms:
 
-- AgentDetail 左 pane の model 切替が起動後も `default` 1 entry のまま
-  (LaunchDialog 側は F2-F8 で live 化済み)
-- 同画面の effort 切替 button が初回表示されない (rich model 群がなく
-  effort_levels 供給源が乏しいため)
+- The model switcher in the left AgentDetail pane remained at one `default` entry
+  after startup (LaunchDialog had already become live under F2-F8).
+- The effort-switch button on the same screen did not appear initially (without a
+  rich model set, the effort_levels source was too sparse).
 
-根因: (a) `wrapper/claude-code/src/host.ts` の `#models` 初期値が
-`claudeBootstrapCatalog()` ハードコード、(b) `AgentDetail` の既存 ↻ が
-`connection.refreshModels(agent_id) → wrapper.retrySupportedModels()` で
-running wrapper に届くが、fresh-idle wrapper は `deferQueryUntilFirstInput`
-で `#query=null` のため `#refreshSupportedModels()` が no-op、(c) runner の
-`ClaudeCatalogCache` は register 経路にのみ供給し、spawn 時 `WrapperConfig`
-へは載せていなかった。
+Root causes: (a) the initial `#models` in `wrapper/claude-code/src/host.ts` was
+hard-coded `claudeBootstrapCatalog()`, (b) the existing ↻ in `AgentDetail` reached
+the running wrapper through `connection.refreshModels(agent_id) → wrapper.retrySupportedModels()`; it did nothing for a fresh-idle wrapper because
+`deferQueryUntilFirstInput` left `#query=null`; `#refreshSupportedModels()` was a no-op, and (c) runner
+`ClaudeCatalogCache` supplied only the Register path and did not relay into
+`WrapperConfig` at spawn time.
 
-追補内容:
+Add:
 
-- `WrapperConfig.claude_engine_catalog?: EngineModelInfo[]` を追加
-  (`protocol/src/index.ts`)。runner の live cache last-known-good を
-  spawn/restart/relaunch 時に relay。
-- `wrapper/core/src/persona.ts` で shape-only 検証 + セット。
-- `wrapper/claude-code/src/host.ts` constructor で
-  `#models = config.claude_engine_catalog ?? claudeBootstrapCatalog()`。
-  初回 `state_change.ext.models` から rich になり AgentDetail が起動直後
-  から複数 model + 各 effort_levels を surface できる。SDK の
-  `supportedModels()` 成功後は既存経路 (F2) が引き続き上書き。
-- `runner/src/supervisor.ts` の `SupervisorOptions` / `SupervisorRuntimeUpdate`
-  に `getClaudeEngineCatalog?: () => EngineModelInfo[] | null | undefined`
-  (live getter)、`resolveWrapperConfig` に第 7 引数 `claudeEngineCatalog`
-  追加、4 呼出しサイトで cache getter を渡す。engine !== "claude-code" /
-  null / undefined / 空配列は WrapperConfig に載せず bootstrap にフォール
-  スルー。
-- `runner/src/cli.ts` で `getClaudeEngineCatalog: () => claudeCatalog.getStale()`
-  を supervisor に渡し、hot-reload の `updateRuntimeConfig` でも同 getter
-  を再指定。
-- `dashboard/src/lib/AgentDetail.svelte` の `refreshModels()` を
-  Claude engine 判定で 2 経路並行発火に拡張: (i) 既存 `refreshModels`
-  (running wrapper 向け、fresh-idle では実質 no-op)、(ii)
-  `refreshEngineCatalog(hostId, "claude-code", true)` で runner cache を
-  live 更新 (次 restart/spawn で反映)。Codex では発火しない (静的 catalog)。
+- Add `WrapperConfig.claude_engine_catalog?: EngineModelInfo[]`
+  (`protocol/src/index.ts`). Relay runner live-cache last-known-good at
+  spawn/restart/relaunch.
+- Validate shape only and set it in `wrapper/core/src/persona.ts`.
+- In the `wrapper/claude-code/src/host.ts` constructor, set
+  `#models = config.claude_engine_catalog ?? claudeBootstrapCatalog()`. Make the
+  initial `state_change.ext.models` rich so AgentDetail can surface multiple
+  models + each model’s effort_levels immediately after startup. Existing
+  `supportedModels()` success continues to overwrite it through F2.
+- Add `getClaudeEngineCatalog?: () => EngineModelInfo[] | null | undefined`
+  (live getter) to `SupervisorOptions` / `SupervisorRuntimeUpdate` in
+  `runner/src/supervisor.ts`; add `claudeEngineCatalog` as the seventh argument to
+  `resolveWrapperConfig`; pass the cache getter at all four call sites. For
+  engine !== "claude-code" / null / undefined / empty array, omit it from
+  WrapperConfig and fall through to bootstrap.
+- Pass `getClaudeEngineCatalog: () => claudeCatalog.getStale()` to the supervisor
+  in `runner/src/cli.ts`, and specify the same getter again in hot-reload
+  `updateRuntimeConfig`.
+- Extend `dashboard/src/lib/AgentDetail.svelte` `refreshModels()` to fire two paths
+  in parallel when the Claude engine is selected: (i) existing `refreshModels`
+  (for a running wrapper; effectively a no-op for fresh-idle), and (ii)
+  `refreshEngineCatalog(hostId, "claude-code", true)` to update runner cache live
+  (applied on the next restart/spawn). Do not fire it for Codex (static catalog).
 
-副作用 / 境界:
+Side effects / boundaries:
 
-- ADR-0039 SoT 契約 (runner が catalog SoT) は維持。cache の輸送だけで、
-  wrapper 側新規 probe / server-side warm cache は追加しない。
-- catalog 空 / cache miss (cold start) は bootstrap fallback で LaunchDialog
-  と同一の UX。
-- SDK 実測が成功したらそちらが authoritative (F2 契約変更なし、非回帰)。
-- Codex 非回帰: `parsed.engine === "claude-code"` gate で codex_engine_catalog
-  相当は流さない。
+- Preserve ADR-0039’s SoT contract (runner owns catalog SoT). Only transport cache;
+  do not add a new wrapper probe or server-side warm cache.
+- Empty catalog / cache miss (cold start) uses the bootstrap fallback for the same
+  UX as LaunchDialog.
+- Once SDK measurement succeeds, it is authoritative (no F2 contract change or
+  regression).
+- Codex non-regression: do not pass a codex_engine_catalog equivalent through the
+  `parsed.engine === "claude-code"` gate.
 
-### F10 (2026-07-31 追補) — probe 経路も canonical ID を透過する
+### F10 (2026-07-31 addendum) — Pass canonical IDs through the probe path too
 
-[ADR-0037](0037-claude-model-catalog-live-refresh.md) F9 で
-`EngineModelInfo.resolved_model` を追加したのに伴い、本 ADR の probe 経路でも
-同 field を透過する。対象は F3 の projection (`probe.ts` `projectModel()`) と、
-F9 v2 の fresh-idle 手動 refresh が使う `host.ts` `#executeManualRefresh()` の
-2 箇所。`probe-client.ts` の `parseProbeStdout()` は row を object のまま通す
-ため実装変更は不要だが、将来 whitelist 化されて静かに落ちるのを防ぐ回帰テストを
-置いた。
+Following the addition of `EngineModelInfo.resolved_model` in
+[ADR-0037](0037-claude-model-catalog-live-refresh.md) F9, pass the same field
+through this ADR’s probe path. The targets are F3’s projection (`probe.ts`
+`projectModel()`) and the `host.ts` `#executeManualRefresh()` used by F9 v2
+fresh-idle manual refresh. `probe-client.ts` `parseProbeStdout()` passes rows
+through as objects, so no implementation change is needed there; add a regression
+test to prevent a future whitelist from silently dropping the field.
 
-F5 の runner memory cache は `EngineModelInfo[]` を素通しするため無変更。
-F6 / F7 の event / relay も無変更で、server (Elixir) は `runner_channel.ex` が
-`%{"id", "models"}` の形だけを検証して engines を保持するため touch していない。
+The F5 runner memory cache passes `EngineModelInfo[]` through unchanged. F6 / F7
+event / relay paths are also unchanged, and the server (Elixir) is untouched because
+`runner_channel.ex` validates and retains engines only in the `%{"id", "models"}`
+shape.
 
-wire と UI を分けて扱う。register 経路の catalog row にも `resolved_model` は
-**透過される** (probe → cache → register payload)。そのうえで **LaunchDialog の
-UI では表示しない**。cache が持つ「最後に成功した probe 時点」の解決値
-(TTL 超過後も据え置かれうる) と init 後実測とで精度が異なり、特に `default`
-行は account 推奨に追随して表示値と起動結果がズレるため。透過を止めない理由は、経路ごとに row の形が変わると consumer 側が
-「absent = unknown」以外の分岐を持たされるから。表示是非は独立した UX 判断と
-して Gitea
-[issue #166](https://github.com/sakuraiyuta/kaoiro/issues/166)
-へ外部化した (理由の詳細は
-[plugin-model](../specs/plugin-model.md) の該当節)。
+Separate wire and UI. `resolved_model` is **passed through** even in catalog rows on
+the Register path (probe → cache → register payload). But **do not display it in
+LaunchDialog**. The cache’s value is from the last successful probe and can remain
+after TTL expiry, while init-after measurement has different precision; in
+particular the `default` row follows the account recommendation and can make the
+displayed value differ from the launched result. Do not stop passing it through:
+changing the row shape by path would force consumers to branch on anything other
+than “absent = unknown”. Make display a separate UX decision and externalise it to
+Gitea [issue #166](https://github.com/sakuraiyuta/kaoiro/issues/166) (details are in
+the relevant section of [plugin-model](../specs/plugin-model.md)).
 
 ## Implementation
 
-[phase-20-engine-catalog-live-probe](../plans/phase-20-engine-catalog-live-probe.md)。
-実装は kaoiro peer delegation で kuroe が実施、fuji がレビュー・Git 判断を
-担う。commit / push / branch は fuji 承認後。
+[phase-20-engine-catalog-live-probe](../plans/phase-20-engine-catalog-live-probe.md).
+Implement through kaoiro peer delegation by kuroe, with fuji responsible for review
+and Git decisions. Commit / push / branch require fuji approval.
 
-Phase 20-1 の empirical spike (2026-07-15) で本 ADR の前提を追認済み:
-prompt 未送信の短命 probe が SDK 0.3.208 で成立、session file 差分 0、
-tmpdir 汚染 0、close 後 subprocess 完全 cleanup、OAuth 認証成功。
+The empirical spike in Phase 20-1 (2026-07-15) reconfirmed this ADR’s premise:
+short-lived probing without sending a prompt works on SDK 0.3.208, with zero
+session-file difference, zero tmpdir contamination, complete subprocess cleanup
+after close, and successful OAuth authentication.
 
-kaoiro peer (fuji) の独立 real probe 実行でも同結果を追認 (redact 済み記録):
-PASS / exit 0 / elapsed ~1.59s / 6 models / `~/.claude/projects` ファイル数
-差分 0 / 個人情報出力なし / probe 残留プロセスなし。F4 の Options 構成
-(cwd 隔離 + `mcpServers: {}` / `tools: []` / OAuth 保持) が operator の
-実環境でも実測どおりに機能することを確認。
+An independent real probe run by the kaoiro peer fuji also reconfirmed the result
+(redacted record): PASS / exit 0 / elapsed ~1.59s / 6 models / zero file-count
+difference under `~/.claude/projects` / no personal-information output / no probe
+residual process. Confirmed that the F4 Options configuration (cwd isolation +
+`mcpServers: {}` / `tools: []` / retained OAuth) works in the operator’s real
+environment as measured.

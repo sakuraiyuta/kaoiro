@@ -4,6 +4,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 const OPERATOR = "/e2e/harness/index.html?view=lobby&role=operator";
 const VIEWER = "/e2e/harness/index.html?view=lobby&role=viewer";
+const APP = "/e2e/harness/index.html?view=app";
 
 async function gridColumnCount(page: Page): Promise<number> {
   return page
@@ -12,6 +13,18 @@ async function gridColumnCount(page: Page): Promise<number> {
       (el) => getComputedStyle(el).gridTemplateColumns.split(" ").length,
     );
 }
+
+test("app header shows server and client build identities", async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await page.goto(APP);
+  await expect(page.locator("header")).toBeVisible();
+  await expect(page.locator('[data-component="server"]')).toHaveText(
+    "kaoiro release server v2026.9.0 / 0123456",
+  );
+  await expect(page.locator('[data-component="client"]')).toHaveText(
+    /^kaoiro (?:dev|release) client v2026\.9\.0 \/ (?:[0-9a-f]{7}|unknown)$/,
+  );
+});
 
 test.describe("T1: operator lobby 939/940 — timeline sheet ⇔ side pane", () => {
   test("940px: timeline side-by-side, 2 columns, no handle", async ({ page }) => {
@@ -71,6 +84,94 @@ test.describe("T3: viewer lobby — always auto-fill, no timeline, no handle", (
       await expect(page.locator("ul.agents")).not.toHaveClass(/three-cols/);
       await expect(page.locator("aside.timeline")).toHaveCount(0);
       await expect(page.locator(".sheet .handle")).toHaveCount(0);
+    });
+  }
+});
+
+// T12 (issue #231, ふじ round-1 should-fix S1): the AgentCard side of the
+// 8px orbit-drop was only verified by geometry review, not measured in a
+// real browser — svelte-check/vitest cannot resolve `calc(-2% + 8px)`
+// against `.sprite-slot`'s actual rendered height (jsdom has no layout
+// engine). AgentDetail's own topOffset="calc(6% + 8px)" is a plain inline
+// style value that agentDetailTaskRing.integration.test.ts already pins
+// directly; AgentCard has no such inline style (TaskRing's base CSS rule
+// supplies it), so only a real layout engine can resolve the containing
+// block's height this asserts against.
+test.describe("T12: 頭上リング (AgentCard, issue #231)", () => {
+  test("1920x1080: TaskRing の top が .sprite-slot 高さ * -0.02 + 8px に解決される", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await page.goto(`${OPERATOR}&taskRing=1`);
+    const slot = page.locator(".sprite-slot").first();
+    const ring = page.locator(".task-ring").first();
+    await expect(ring).toBeVisible();
+
+    const slotBox = (await slot.boundingBox())!;
+    const topPx = await ring.evaluate((el) =>
+      parseFloat(getComputedStyle(el).top),
+    );
+
+    // Sub-pixel rounding (ふじ実測: 差 7.98px/8px) — 1px tolerance.
+    const expectedTop = slotBox.height * -0.02 + 8;
+    expect(Math.abs(topPx - expectedTop)).toBeLessThan(1);
+  });
+});
+
+// T13 (issue #233, validated design in issue #233 comment 5450038052):
+// count active subagent/workflow roots each get their own evenly-spaced
+// dot. taskRing.integration.test.ts (jsdom) already pins the CSS-variable
+// geometry (theta/phase-delay) directly; these confirm the browser
+// actually renders/animates the resulting DOM at real scale.
+test.describe("T13: TaskRing count (issue #233)", () => {
+  // LobbyHarness renders 4 fixture agents (lobbyAgents()), and `taskRing`
+  // applies the SAME count to every one of them — a bare `.task-ring`
+  // locator would therefore see count*4 elements. Scope to one tile.
+  function firstCardRings(page: Page) {
+    return page.locator("ul.agents > li").first().locator(".task-ring");
+  }
+
+  test("count>1 は count 個の .task-ring を描画する", async ({ page }) => {
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await page.goto(`${OPERATOR}&taskRing=5`);
+    await expect(firstCardRings(page)).toHaveCount(5);
+  });
+
+  // reduced motion: the global stylesheet shortens animation-duration to
+  // 0.01ms and iteration-count to 1, with no fill-mode — each dot falls
+  // back to its OWN base-rule rest state (--dot-x/--dot-y), which must
+  // differ per dot for the phases to stay visually separated (issue #233
+  // design note). If they collapsed to one shared position, this would
+  // observe far fewer than `count` distinct on-screen positions.
+  test("reduced motion 完了後、各 dot が別々の静的位置に留まる", async ({
+    page,
+  }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await page.goto(`${OPERATOR}&taskRing=4`);
+    const rings = firstCardRings(page);
+    await expect(rings).toHaveCount(4);
+    // Let the (near-instant) reduced-motion animation finish.
+    await page.waitForTimeout(100);
+
+    const positions = await rings.evaluateAll((els) =>
+      els.map((el) => {
+        const rect = el.getBoundingClientRect();
+        return `${Math.round(rect.x)},${Math.round(rect.y)}`;
+      }),
+    );
+    expect(new Set(positions).size).toBe(4);
+  });
+
+  // "no UI cap" is an explicit acceptance criterion (issue #233 comment
+  // 5450038052) — measuring rather than assuming it holds at scale.
+  for (const count of [50, 500]) {
+    test(`count=${count} でも全 dot を描画する (no UI cap)`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: 1920, height: 1080 });
+      await page.goto(`${OPERATOR}&taskRing=${count}`);
+      await expect(firstCardRings(page)).toHaveCount(count);
     });
   }
 });

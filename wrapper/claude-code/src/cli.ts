@@ -23,9 +23,13 @@
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseCliArgs } from "@kaoiro/wrapper-core";
+import { loadWrapperBuildInfo, parseCliArgs } from "@kaoiro/wrapper-core";
 import { readSessionHistory, sessionSidecarPath } from "./history.js";
 import { AgentHost, CLAUDE_EFFORT_LEVELS } from "./host.js";
+import type {
+  SessionLifecycleKind,
+  SessionLifecycleTrigger,
+} from "./host.js";
 import { handleInterAgentMessage } from "./inter_agent_message_handler.js";
 import {
   InterAgentIngressGate,
@@ -107,6 +111,7 @@ type AgentHostOptions = ConstructorParameters<typeof AgentHost>[1];
 export interface ClaudeCliDependencies {
   parseCliArgs?: typeof parseCliArgs;
   loadConfig?: typeof loadConfig;
+  loadWrapperBuildInfo?: typeof loadWrapperBuildInfo;
   createServerLink?: CreateServerLink;
   createHost?: CreateAgentHost;
   buildMcpServer?: typeof buildKaoiroMcpServer;
@@ -149,11 +154,15 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     dependencies.createServerLink ?? ((...args) => new ServerLink(...args));
   const createHost =
     dependencies.createHost ?? ((...args) => new AgentHost(...args));
+  const readBuildInfo = dependencies.loadWrapperBuildInfo ?? loadWrapperBuildInfo;
   let link: ServerLink | null = null;
   const buildMcpServer = dependencies.buildMcpServer ?? buildKaoiroMcpServer;
   const { configPath, prompt: promptArg, resume: resumeSessionId } =
     parseArgs(process.argv.slice(2));
   const config = readConfig(configPath);
+  const buildInfo = readBuildInfo(
+    fileURLToPath(new URL("../dist/build-info.json", import.meta.url)),
+  );
   // Operational safety valve, deliberately wrapper-local rather than a
   // dashboard/server/runner configuration surface (issue #248).
   const turnWatchdogSettings = readTurnWatchdogSettings(
@@ -393,6 +402,17 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     link?.send(envelope);
   };
 
+  /** Reports one `session_lifecycle` event (ADR-0055, phase-33 Stage B).
+   *  Recording only — no console echo, no reply expected, same
+   *  fire-and-forget shape as `delivery_ack`. */
+  const onSessionLifecycle = (
+    kind: SessionLifecycleKind,
+    trigger: SessionLifecycleTrigger | undefined,
+    at: string,
+  ): void => {
+    link?.reportSessionLifecycle(kind, trigger, at);
+  };
+
   /** Wrapper-authored operator line (phase-28 A1's `system` log kind). */
   const emitSystemLog = (text: string): void => {
     onLog(
@@ -570,6 +590,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     Omit<ServerLinkOptions, "onInterAgentDeliveryStatus">
   >({
     personaId: config.persona.id,
+    buildInfo,
     ...(config.transition_id === undefined
       ? {}
       : { transitionId: config.transition_id }),
@@ -795,6 +816,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     onState,
     onLog,
     onTask,
+    onSessionLifecycle,
     // phase-28 BR MF2: the B1 threshold notice is an injection like any
     // other, so it queues on the one chain instead of racing it.
     enqueueInjection: enqueueInstruction,
@@ -938,6 +960,11 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
               // a closed or full queue instead of claiming a reservation it
               // never made.
               send: (text) => enqueueInstruction(() => host.send(text)),
+              // ADR-0055 phase-33 Stage A: `host` is not constructed yet at
+              // this point (same deferred-closure reason `send` above uses
+              // `enqueueInstruction`, not `host.send`, directly) — this
+              // closure is only ever CALLED after `createHost` below returns.
+              reserveResume: (prompt) => host.reserveResume(prompt),
             }),
             inputShape: REQUEST_COMPACT_INPUT_SHAPE,
           },

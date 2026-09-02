@@ -1,90 +1,93 @@
 ---
-title: エージェント間メッセージング・プロトコル
-description: 複数 AI エージェントが kaoiro サーバ経由で直接対話するための envelope schema、9 種 kind、ハード制限、ルーティングと観測経路の仕様。
+title: Inter-agent messaging protocol
+description: Envelope schema, nine kinds, hard limits, routing, and observation paths for direct interaction between multiple AI agents through the kaoiro server.
 status: provisional
 related: [protocol, subagent-tasks, plugin-model, threat-model]
 ---
 <!-- markdownlint-disable MD033 -->
 
-# エージェント間メッセージング・プロトコル
+# Inter-agent messaging protocol
 
 ## Purpose
 
-複数 AI エージェントが kaoiro サーバを介して直接メッセージをやり取り
-できるようにするための protocol surface を定める。kaoiro issue #17
-本実装の機械的仕様であり、段階的実装計画は
-[phase-8-inter-agent-messaging](../plans/phase-8-inter-agent-messaging.md)、
-設計判断の背景は kaoiro issue #87 と #17 issuecomment-5384349594 を参照。
+Define the protocol surface that lets multiple AI agents exchange messages
+directly through the kaoiro server. This is the mechanical specification for
+issue #17; see [phase-8-inter-agent-messaging](../plans/phase-8-inter-agent-messaging.md)
+for the staged implementation plan and kaoiro issues #87 and #17
+issuecomment-5384349594 for design rationale.
 
-[protocol](protocol.md) の予約追補(同一 `version`)として envelope
-`type: "inter_agent_message"` を新設する([ADR-0010](../adr/0010-protocol-precisification.md))。
+Add envelope `type: "inter_agent_message"` as a reserved supplement to
+[protocol](protocol.md) (same `version`), per
+[ADR-0010](../adr/0010-protocol-precisification.md).
 
 ## Dispatch-confirmation ledger (issue #237)
 
-`ingress_stamp` は server acceptance であって、受信 wrapper が SDK turn として
-読んだ確認ではない。recipient ごとの `inter_agent_delivery = {issued_seq,
-acked_seq, pending_since?}` は後段の **dispatch confirmation** を観測するだけの
-ledger であり、payload 保存・再送保証・配送保証はしない。
+`ingress_stamp` records server acceptance, not confirmation that the receiving
+wrapper read an SDK turn. Per-recipient
+`inter_agent_delivery = {issued_seq, acked_seq, pending_since?}` is a ledger that
+observes later **dispatch confirmation** only; it does not retain payloads or
+guarantee retransmission or delivery.
 
-- `inter_agent_delivery_ack: "dispatch-v1"` capability を join した wrapper
-  宛の live/synthetic message には、server が outer envelope に recipient-local
-  正整数 `delivery_seq` を付けて `issued_seq` を進める。
-- wrapper は queue 追加や `receiveInbound` 到達では ack しない。inject は実 SDK
-  turn start、consumed/terminal/stale の意図的 non-injection は分類完了で、連続
-  prefix を `delivery_ack {delivery_seq}` として確認する。従ってその間の停滞は
-  `issued_seq > acked_seq` として残る。`pending_since` は最初の乖離時刻である。
-- `whoami`、`list_agents` entry、operator dashboard の `snapshot.deliveries` と
-  `delivery_status` は同じ server ledger を読む。field absent は **unknown**
-  （legacy/disarmed）であり、zero ではない。
+- For live/synthetic messages to a wrapper that joined with capability
+  `inter_agent_delivery_ack: "dispatch-v1"`, the server adds a recipient-local
+  positive `delivery_seq` to the outer envelope and advances `issued_seq`.
+- A wrapper does not ack queue insertion or `receiveInbound` arrival. It confirms
+  a contiguous prefix as `delivery_ack {delivery_seq}` when an actual SDK turn
+  starts, or when intentional non-injection (consumed/terminal/stale) is fully
+  classified. Until then, a gap remains as `issued_seq > acked_seq`;
+  `pending_since` is the timestamp of the first divergence.
+- `whoami`, `list_agents` entries, and the operator dashboard's
+  `snapshot.deliveries` / `delivery_status` all read the same server ledger. An
+  absent field is **unknown** (legacy/disarmed), not zero.
 
-`transition_id` は session transition 相関用であり、runner crash relaunch が同値を
-再利用し得るので process identity に使えない。ack-capable `ServerLink` は process
-ごとの random `delivery_generation` を join する。同 generation の websocket
-reconnect は gap を保持する。異 generation（reset/crash/explicit restart）は旧
-process の memory を失った境界なので server が `acked_seq := issued_seq` として
-旧 gap を atomically abandon する。sequence は単調に続くが、新 process への再送は
-しない。
+`transition_id` correlates session transitions and cannot identify a process because
+a runner crash relaunch may reuse it. An ack-capable `ServerLink` joins with a
+random per-process `delivery_generation`. WebSocket reconnects with the same
+generation retain gaps. A different generation (reset/crash/explicit restart) is a
+boundary that lost the old process memory, so the server atomically abandons old
+gaps with `acked_seq := issued_seq`. The sequence remains monotonic; nothing is
+resent to the new process.
 
 ## Definition
 
-### 全体像
+### Overview
 
-エージェント A の wrapper が `send_to_agent` ツールを呼ぶと、wrapper
-は通常の `envelope` イベントで `type: "inter_agent_message"` の
-envelope を server へ送る。server は次の 2 系統に分岐する:
+When agent A's wrapper calls `send_to_agent`, it sends an envelope with
+`type: "inter_agent_message"` to the server as a normal `envelope` event. The
+server splits it into two paths:
 
 ```mermaid
 flowchart LR
   WA[wrapper A] -->|envelope| S[server]
   S -->|"wrapper:to (routing path)"| WB[wrapper B]
   S -->|"agents:lobby (observation path)"| D[dashboard]
-  WB -->|SDK 入力注入| AgentB[Agent B]
+  WB -->|SDK input injection| AgentB[Agent B]
 ```
 
-- **routing path**: server は `payload.to` を読み、`wrapper:<to>`
-  channel に envelope を push する。受信した wrapper は SDK の次
-  ターン入力として注入する
-- **observation path**: server は通常の `agents:lobby` broadcast にも
-  同じ envelope を載せる(operator 限定配信、後述)。dashboard は
-  inter-agent message を A・B 両方の log 欄に表示できる
+- **routing path**: The server reads `payload.to` and pushes the envelope to the
+  `wrapper:<to>` channel. The receiving wrapper injects it as input for the next
+  SDK turn.
+- **observation path**: The server also includes the envelope in the normal
+  `agents:lobby` broadcast (operator-only delivery, below). The dashboard can
+  display the inter-agent message in both A and B log panes.
 
-server は payload の意味論(kind / payload テキスト / meta)を解釈
-しない。`to` フィールドのみをルーティング目的で参照する(agent 非依存
-の原則を保つ最小の構造的アクセス)。
+The server does not interpret payload semantics (kind / payload text / meta). It
+reads only `to` for routing, the minimum structural access that preserves the
+agent-independent principle.
 
 ### envelope.type: "inter_agent_message"
 
-[protocol.md](protocol.md) の envelope 共通外枠
+The common envelope outer shape in [protocol.md](protocol.md)
 (`version`/`agent_id`/`session_id?`/`persona`/`display_name?`/`ts`/`seq`/`type`/`state`/`payload`/`ext`)
-はそのまま継承。`agent_id` は送信側エージェント、`state` は当該 wrapper
-の現在状態(通常 `tool_running`)を据え置く。
+is inherited unchanged. `agent_id` is the sending agent and `state` remains the
+current state of that wrapper (normally `tool_running`).
 
-新規追加するのは `type` 値と `payload` schema のみ。
+Only the `type` value and `payload` schema are new.
 
-| フィールド | 意味 |
+| Field | Meaning |
 |---|---|
 | `type` | `"inter_agent_message"` |
-| `payload` | 下記 "Inner envelope" 参照 |
+| `payload` | See “Inner envelope” below |
 
 ### Inner envelope(`payload` schema)
 
@@ -108,894 +111,819 @@ server は payload の意味論(kind / payload テキスト / meta)を解釈
 }
 ```
 
-| フィールド | 必須 | 意味 |
+| Field | Required | Meaning |
 |---|---|---|
-| `to` | MUST | 宛先 `agent_id`。`[A-Za-z0-9._-]` 制約は protocol 全体と同じ |
-| `conversation_id` | MUST | 同一対話を紐付ける識別子。発起側 wrapper が採番(セッション内一意、UUIDv4 ベース) |
-| `new_conversation` | MUST(準拠 wrapper)。省略時は server が `true` とみなす(下記) | bool。送信元エージェントが `conversation_id` を省略し、この wrapper が新規採番した送信でのみ true(issue #252)。それ以外(明示指定・返信・通知)は false。server はこれを見て、未知の `conversation_id` が「省略による新規」か「明示指定の誤り」かを判定する — 詳細は下記「明示指定された conversation_id が未知のとき」 |
-| `turn_number` | MUST | 1 起点の正整数。同一 conversation 内で送信ごとに +1。`(conversation_id, turn_number)` で全順序 |
-| `kind` | MUST | 下記 9 種 enum |
-| `body` | MUST | メッセージ本文(自由テキスト)。意味論はエージェントに任せる |
-| `meta.done` | MUST | bool。当該エージェントが対話の終了を提案する場合 true。**両 owner 側エージェントから true で conversation 完了** |
-| `meta.propose_next` | MUST | string。次に何を期待するか(空文字可) |
-| `meta.confidence` | optional | 0.0〜1.0 |
-| `meta.reject_reason` | `kind=reject` 時 MUST | string。提案を拒否する具体的理由 |
-| `error.code` | optional | 相手が応答不能になったことを示すエラー種別コード(open string)。詳細は「応答不能エラーの通知」節 |
-| `error.message` | `error` 有時 MUST | string。人間可読の理由(秘匿情報マスク済・切り詰め済) |
-| `owner.kind` | MUST | `"user"` または `"agent"` |
-| `owner.id` | MUST | owner の識別子。user の場合は接続トークンに紐づく user_id、agent の場合は `agent_id` |
+| `to` | MUST | Destination `agent_id`; `[A-Za-z0-9._-]` constraint is shared by the protocol |
+| `conversation_id` | MUST | Identifier linking one conversation. The initiating wrapper assigns it (session-unique, UUIDv4-based) |
+| `new_conversation` | MUST (compliant wrapper); server treats omitted as `true` (below) | Boolean. True only when the sender omitted `conversation_id` and this wrapper assigned a new one (issue #252); false for explicit IDs, replies, and notices. The server uses it to distinguish an omitted new ID from an explicit unknown ID—see “Explicitly specified unknown conversation_id” |
+| `turn_number` | MUST | Positive integer starting at 1; increment per send in a conversation. `(conversation_id, turn_number)` defines total order |
+| `kind` | MUST | Nine-value enum below |
+| `body` | MUST | Free-text message body; agents define its semantics |
+| `meta.done` | MUST | Boolean. True when this agent proposes ending the conversation. **Both owner-side agents must send true to complete** |
+| `meta.propose_next` | MUST | String describing the next expectation (may be empty) |
+| `meta.confidence` | optional | 0.0–1.0 |
+| `meta.reject_reason` | MUST when `kind=reject` | String with the concrete reason for rejecting a proposal |
+| `error.code` | optional | Open-string error code indicating the peer became unable to respond (see “Unresponsive-error notices”) |
+| `error.message` | MUST when `error` exists | Human-readable reason with secrets masked and truncated |
+| `owner.kind` | MUST | `"user"` or `"agent"` |
+| `owner.id` | MUST | Owner identifier: user_id bound to the connection token for a user, or `agent_id` for an agent |
 
-### kind enum(9 種)
+### kind enum (nine values)
 
-意味論の出典・採否判断は kaoiro リポジトリ #17 issuecomment-5384349594。
+Semantics and adoption decisions are in kaoiro repository issue #17
+issuecomment-5384349594.
 
-| kind | 役割 | 典型ペア |
+| kind | Role | Typical pair |
 |---|---|---|
-| `request` | 作業依頼 | → `response` |
-| `response` | 依頼への結果報告 | `request` ← |
-| `query` | 問い(Yes/No・値・意見) | → `inform` |
-| `inform` | 情報共有・意見表明・query への回答 | `query` ← または独立 |
-| `propose` | 合意候補を出す | → `accept` または `reject` |
-| `accept` | propose への賛成 | `propose` ← |
-| `reject` | propose への反対(`meta.reject_reason` 必須) | `propose` ← |
-| `escalate-to-user` | 人間判断要請(tie-breaker)。hard limit 超過時の server 合成通知にも使う | → user |
-| `done` | 終了申告 | agent 発は両 owner-side で揃って完了。`open_conversation_ttl` 到達時の server 合成通知(issue #211 direction 2)もこの kind を使うが、agent-to-agent の相互合意とは別物(単発・片方向) |
+| `request` | Work request | → `response` |
+| `response` | Result report | `request` ← |
+| `query` | Question (yes/no, value, opinion) | → `inform` |
+| `inform` | Information, opinion, or answer to a query | `query` ← or standalone |
+| `propose` | Candidate agreement | → `accept` or `reject` |
+| `accept` | Agreement with propose | `propose` ← |
+| `reject` | Opposition to propose (`meta.reject_reason` required) | `propose` ← |
+| `escalate-to-user` | Request for human tie-breaker; also used for server-synthesized notices on hard-limit breach | → user |
+| `done` | Completion declaration | Agent-originated completion requires both owner sides. Server notices at `open_conversation_ttl` (issue #211 direction 2) also use this kind, but are one-shot, one-way events distinct from agent-to-agent agreement |
 
-カバーケース:
+Covered cases:
 
-- 依頼: `request` → `response`
-- 相談: `query` → `inform` のラリー
-- 議論: `propose` → `accept` / `reject` → 反対側が `propose`(対案)の
-  ラリー → 最終 `propose` に両 owner-side が `accept` + `done`
-- 結論不能: 任意の時点で `escalate-to-user`、または下記ハード制限
-  超過で自動打ち切り
+- Request: `request` → `response`
+- Consultation: `query` → `inform` exchange
+- Debate: `propose` → `accept` / `reject` → the other side proposes an alternative
+  → both owner sides `accept` + `done` on the final `propose`
+- No conclusion: `escalate-to-user` at any point, or automatic cutoff on a hard-limit breach
 
-### conversation owner と tie-breaker
+### Conversation owner and tie-breaker
 
-`owner` は対話を起動した主体。Phase 1 では常に user(operator が
-明示指示で起動するため)。Phase 3 でエージェント autonomously 起動を
-許可した場合のみ `owner.kind: "agent"` が現れる。
+`owner` is the subject that started the conversation. In Phase 1 it is always the
+user (the operator explicitly starts it). `owner.kind: "agent"` appears only if
+Phase 3 permits autonomous agent initiation.
 
-- 行き詰まり時の最終判断は owner に集約する
-- `owner.kind: "user"` の場合 → server は `escalate-to-user` を受け
-  たら dashboard に介入ダイアログを出す(AskUserQuestion 系の構造化
-  ダイアログを流用。実体は [ADR-0027](../adr/0027-askuserquestion-envelope.md)
-  の `question_request` / `waiting_question`)
-- `owner.kind: "agent"` の場合 → owner エージェントへ
-  `escalate-to-user` の代わりに `escalate-to-owner` ルーティング
-  (Phase 3 で確定、本 spec は Phase 1〜2 のみ機械強制)
-- 暴走時の停止権限も owner に帰属。owner は conversation 全体を
-  キャンセルできる(`cancel` イベント、Phase 2 以降)
+- The owner makes the final decision when discussion stalls.
+- For `owner.kind: "user"`, the server presents an intervention dialog in the
+  dashboard on `escalate-to-user` (reuse the AskUserQuestion structured dialog,
+  concretely `question_request` / `waiting_question` from
+  [ADR-0027](../adr/0027-askuserquestion-envelope.md)).
+- For `owner.kind: "agent"`, route `escalate-to-owner` to the owner agent instead
+  of `escalate-to-user` (settled in Phase 3; this spec mechanically enforces only
+  Phase 1–2).
+- The owner also has authority to stop a runaway conversation and can cancel the
+  whole conversation (`cancel` event, Phase 2 onward).
 
-### ハード制限(config + 機械強制)
+### Hard limits (config + mechanical enforcement)
 
-server は conversation 単位で以下の制限を機械的に監視し、超過時に
-自動打ち切りする。打ち切り時は当該 conversation の参加 wrapper
-全てに合成 envelope(`kind: "escalate-to-user"`、
-`body: "<理由>"`、`meta.done: true`)を broadcast し、両 wrapper
-は SDK 入力として注入する。
+The server mechanically monitors these limits per conversation and cuts off on
+breach. It broadcasts a synthetic envelope (`kind: "escalate-to-user"`,
+`body: "<reason>"`, `meta.done: true`) to every participating wrapper; both
+wrappers inject it as SDK input.
 
-| config キー | 単位 | 既定値(Phase 1) | 用途 |
+| Config key | Unit | Default (Phase 1) | Use |
 |---|---|---|---|
-| `max_turns` | turn(=メッセージ件数) | 20 | conversation 1 件の対話ターン総数 |
-| `max_tokens` | token | 100_000 | 全 body の累積トークン(server 側で粗く近似、`length(body)/3` 切り上げ) |
-| `max_concurrent_agents` | agent 数 | 2 | 同一 conversation_id に参加可能な agent 数(Phase 1 は 2 固定、Phase 3 で 3 以上検討) |
+| `max_turns` | turns (= message count) | 20 | Total turns in one conversation |
+| `max_tokens` | tokens | 100_000 | Cumulative body tokens (coarsely estimated server-side as ceil(`length(body)/3`)) |
+| `max_concurrent_agents` | agents | 2 | Agents allowed in one conversation_id (fixed at 2 in Phase 1; 3+ considered in Phase 3) |
 
-config は kaoiro server 設定で agent 単位 / global の二段。global を
-agent 単位で上書き可。
+Configure in two kaoiro-server layers, per-agent and global; per-agent values may
+override global.
 
-**旧 `max_wallclock` は issue #211 で撤廃した。** conversation 発生から
-の経過時間そのものを打ち切り条件にする方式は、暴走した高速 ping-pong
-より先に `max_turns` へ到達し(#167 のケース同様、短いメッセージの
-往復は秒〜分単位で 20 turn に達する)、逆に xhigh effort のレビューの
-ような**低速だが正当な**対話を優先的に打ち切るという選択性の逆転が
-2026-08-11 に実測された。撤廃の詳細と根拠は issue #211 本文を参照。
+**The former `max_wallclock` was removed in issue #211.** Cutting off based on
+elapsed conversation time reached `max_turns` before a runaway fast ping-pong
+(as in #167, short exchanges reach 20 turns in seconds to minutes), while
+preferentially cutting off **slow but valid** conversations such as xhigh-effort
+reviews. This reversal of selectivity was measured on 2026-08-11. See issue #211
+for details and rationale.
 
-### メモリ回収用 TTL(config、ハード制限ではない)
+### Memory-reclamation TTL (config, not a hard limit)
 
-以下はハード制限ではなく、conversation エントリのメモリ回収のみを
-目的とする GC 専用の config。`{:exceeded, reason}` を返さず、
-`escalate-to-user` も合成しない — 対話の長さそのものを理由に
-打ち切ることは一切しない。
+These GC-only settings reclaim memory from conversation entries; they are not hard
+limits. They return no `{:exceeded, reason}` and synthesize no
+`escalate-to-user`—conversation length alone never causes a cutoff.
 
-| config キー | 単位 | 既定値 | 用途 | 基準時刻 |
+| Config key | Unit | Default | Use | Reference time |
 |---|---|---|---|---|
-| `open_conversation_ttl_ms` | ms | 86_400_000(24 時間) | 応答が途絶えた OPEN entry の回収(memory-DoS 防御) | `started_at` |
-| `tombstone_ttl_ms` | ms | 86_400_000(24 時間) | CLOSED tombstone の削除、`conversation_id` 再利用の解禁 | `closed_at` |
+| `open_conversation_ttl_ms` | ms | 86_400_000 (24 hours) | Reclaim an OPEN entry whose replies stopped (memory-DoS defense) | `started_at` |
+| `tombstone_ttl_ms` | ms | 86_400_000 (24 hours) | Delete CLOSED tombstones and release their IDs | `closed_at` |
 
-`tombstone_ttl_ms` は wrapper 側の `CLOSED_TRACK_TTL_MS`(24 時間)と
-値を揃えている(下記「CID 再利用は契約にしない」参照)。
+`tombstone_ttl_ms` is aligned with the wrapper's `CLOSED_TRACK_TTL_MS` (24 hours;
+see “CID reuse is not a contract” below).
 
-### conversation のライフサイクルと終了後の扱い (issue #167)
+### Conversation lifecycle and post-close handling (issue #167)
 
-完了・打ち切り後の conversation は unknown/new と区別される状態
-(tombstone) として保持する。同じ `conversation_id` への遅延・重複・
-out-of-order message が新規 conversation として再受理され、done /
-escalate の ping-pong が止まらなくなる不具合(issue #167、2026-07-31
-observed)の再発防止。
+After completion or cutoff, retain the conversation as a state distinct from
+unknown/new (a tombstone). This prevents delayed, duplicate, or out-of-order
+messages for the same `conversation_id` from being accepted as a new conversation
+and restarting a done/escalate ping-pong (issue #167, observed 2026-07-31).
 
 ```mermaid
 stateDiagram-v2
-  [*] --> open: 最初の message
-  open --> half_closed: 片側 owner-side が done=true
-  half_closed --> closed: もう片側も done=true
-  open --> closed: hard limit 超過
-  half_closed --> closed: hard limit 超過
-  open --> closed: open_conversation_ttl_ms 経過(GC、escalate なし)
-  half_closed --> closed: open_conversation_ttl_ms 経過(GC、escalate なし)
-  closed --> [*]: tombstone_ttl_ms 経過後に GC
+  [*] --> open: first message
+  open --> half_closed: one owner side sends done=true
+  half_closed --> closed: other side also sends done=true
+  open --> closed: hard limit exceeded
+  half_closed --> closed: hard limit exceeded
+  open --> closed: open_conversation_ttl_ms elapsed (GC, no escalation)
+  half_closed --> closed: open_conversation_ttl_ms elapsed (GC, no escalation)
+  closed --> [*]: GC after tombstone_ttl_ms
 ```
 
-- **open**: 通常の対話中。turn / token を計測する(issue #211 で
-  wallclock 自体の計測・打ち切りは廃止)。
-- **half-closed(one-sided done)**: 一方の owner-side が
-  `meta.done=true` を送り、もう一方はまだの状態。受信側には「close
-  proposal」として注入する — 一般の返信 directive ではなく、「閉じる
-  なら一度だけ `done=true` で応答、続けるなら通常の応答」という専用
-  文言にする(wrapper 側、下記)。
-- **closed(terminal)**: 両 owner-side の done=true が揃った、hard
-  limit 超過、または `open_conversation_ttl_ms` 経過(下記)。server は
-  この時点で entry を tombstone(`status: closed`、`reason`、
-  `closed_at`、参加 agent 集合、`last_turn` を保持)へ遷移させ、削除
-  しない。同一 `conversation_id` への以後の message は relay・store・
-  通常 broadcast せず `{:error, :conversation_closed}` で拒否する。
-  wrapper 側の受信も terminal な inbound は **model への注入を一切
-  行わない**(issue #211 direction 1)— 旧仕様は「informational
-  only、send_to_agent を呼ぶな」という専用文言で SDK 入力へ注入して
-  いたが、返信不要な通知のために model turn を消費すること自体が
-  issue #211 の解消対象だった。track は `closed` を学習するのみで、
-  追加の send_to_agent はもとより誘発しない。
-- **open_conversation_ttl による closed(issue #211)**: periodic GC は
-  OPEN entry の `started_at` から `open_conversation_ttl_ms`
-  (既定 24 時間)経過したものを、message の到着を待たず tombstone
-  (`reason: :open_conversation_ttl`)へ遷移させる。**これはハード
-  制限ではなくメモリ回収専用**であり、`escalate-to-user` は合成しない
-  — 応答が途絶えたまま長時間残る entry を回収するだけで、対話が長い
-  こと自体を理由に打ち切りはしない。旧 `max_wallclock` ハード制限
-  (10 分)がこの遷移も兼ねていたが、issue #211 で用途を分離した。この
-  遷移は参加していた全 agent へ `kind: "done"`(`turn_number: 0`、
-  `agent_id: "server"`、`meta.done: true`)の合成 envelope を
-  broadcast する(issue #211 direction 2)— `escalate-to-user` では
-  ないので、受信側が新規 conversation を開いて継続するという無意味な
-  挙動を誘発しない。受信側 wrapper はこれを `isSynthetic` 判定
-  (下記)で server 発の closed 通知と認識し、track を `closed` に
-  更新するが、上記のとおり model へは注入しない。
-- **tombstone GC**: closed から `tombstone_ttl_ms` 以上経過した
-  tombstone は server の periodic GC が削除する。この TTL は
-  **UUID 衝突時のメモリ解放**であり、`conversation_id` を意図的に
-  再利用する運用パターンではない(下記「CID 再利用は契約にしない」
-  参照)。periodic GC は open entry も TTL 超過時に即削除せず、まず
-  `open_conversation_ttl` tombstone へ遷移させる — 削除してしまうと、
-  遅延到着した message が「新規」として再受理されてしまうため。
-- **turn_number の ingress 検証と stale_turn 拒否**(issue #167 review
-  M1): live ingress(通常の `envelope` push)は `payload.turn_number`
-  を正の整数のみ受理する — `0` は server 合成通知専用の予約値であり、
-  wrapper がこの経路で自称することはできない(server はこの経路を
-  経由する message を一切合成しないため、`0` はここでは常に不正)。
-  正の整数であっても、OPEN な conversation の `max_turn_number`
-  以下(重複・遅延到着)なら `{:error, :stale_turn}` で拒否し、
-  turns / tokens / max_turn_number を進めない。`replay_ia`(表示専用の
-  復元経路)は wrapper ホストの IA sidecar に記録された過去の
-  `turn_number=0` 行を正当に含むため、この live ingress 限定の
-  検証は適用しない。
+- **open**: Normal conversation; count turns and tokens (issue #211 removed
+  wall-clock measurement and cutoff).
+- **half-closed (one-sided done)**: One owner side sent `meta.done=true` and the
+  other has not. Inject a dedicated “close proposal” rather than a normal reply
+  directive: reply once with `done=true` to close, or use a normal response to
+  continue (wrapper behavior below).
+- **closed (terminal)**: Both owner sides sent done=true, a hard limit was
+  exceeded, or `open_conversation_ttl_ms` elapsed (below). The server transitions
+  the entry to a tombstone (`status: closed`, `reason`, `closed_at`, participating
+  agent set, `last_turn`) without deleting it. Later messages for the same
+  `conversation_id` are neither relayed, stored, nor normally broadcast; reject
+  with `{:error, :conversation_closed}`. Terminal inbound messages on wrappers
+  are **never injected into the model** (issue #211 direction 1). The old spec
+  injected an “informational only, do not call send_to_agent” prompt, but spending
+  a model turn on a no-reply notice was itself the issue #211 target. The track
+  only learns `closed` and cannot trigger another send_to_agent.
+- **Closed by `open_conversation_ttl` (issue #211)**: Periodic GC transitions an
+  OPEN entry whose `started_at` is older than `open_conversation_ttl_ms` (default
+  24 hours) to a tombstone (`reason: :open_conversation_ttl`) without waiting for
+  a message. **This is memory reclamation, not a hard limit**; it does not
+  synthesize `escalate-to-user` or cut off a conversation merely for being long.
+  The former 10-minute `max_wallclock` hard limit also performed this transition;
+  issue #211 separated the uses. Broadcast a synthetic `kind: "done"` envelope
+  (`turn_number: 0`, `agent_id: "server"`, `meta.done: true`) to every
+  participating agent (issue #211 direction 2). Because it is not
+  `escalate-to-user`, receivers do not open a meaningless new conversation.
+  Receiving wrappers recognize it as a server-originated closed notice via
+  `isSynthetic` (below) and update the track to `closed`, but do not inject it into
+  the model.
+ - **tombstone GC**: Periodic server GC deletes tombstones older than
+  `tombstone_ttl_ms`. This TTL is **memory reclamation for UUID collisions**, not
+  an operational pattern for intentionally reusing `conversation_id` (see “CID
+  reuse is not a contract”). Periodic GC does not immediately delete an expired
+  open entry; it first transitions it to an `open_conversation_ttl` tombstone, so
+  a delayed message cannot be accepted as new.
+ - **Ingress validation and stale_turn rejection** (issue #167 review M1): live
+  ingress (normal `envelope` push) accepts only positive integer
+  `payload.turn_number`. `0` is reserved for server-synthesized notices and a
+  wrapper cannot claim it on this path (the server synthesizes no live-ingress
+  messages, so `0` is always invalid here). Even a positive value at or below an
+  OPEN conversation's `max_turn_number` (duplicate or delayed) is rejected as
+  `{:error, :stale_turn}` without advancing turns, tokens, or the maximum.
+  `replay_ia` is a display-only restoration path that legitimately includes old
+  `turn_number=0` rows from the wrapper host IA sidecar, so this live-ingress-only
+  validation does not apply.
 
-wrapper 側(`agent-common`)も上記と対になるローカル状態
-(`localDone` / `remoteDone` / `closed`)を conversation_id ごとに持つ:
+The wrapper (`agent-common`) keeps corresponding local state
+(`localDone` / `remoteDone` / `closed`) per conversation_id:
 
-- 自分が既に `done=true` を送り、peer の `done=true` を受けたら
-  terminal。**加えて**、server 合成の closed 通知(`turn_number=0`、
-  `agent_id: "server"`、`meta.done=true` — hard limit 超過時の
-  `kind: "escalate-to-user"`、または `open_conversation_ttl` 到達時の
-  `kind: "done"`、issue #211 direction 2)を受けた時点でも、自分側の
-  done 送信有無に関わらず即 terminal にする — server 側は既にこの
-  conversation を tombstone 化して閉じており、ローカルだけ「相手から
-  の一方的な close 提案」と誤読すると、受信側 wrapper がその通知に
-  対して再度 `send_to_agent` を呼んでしまい(close-proposal の注入
-  文言が返信を誘う)、closed な conversation への送信として server に
-  往復拒否される無駄が起きる。以後同一 `conversation_id` を指定した
-  `send_to_agent` はローカルで即 tool error にする(server 往復なしで
-  完結する)。`conversation_id` を省略すれば新規 conversation を開始
-  できる。issue #211 direction 1: いずれの経路で terminal と判定
-  された inbound も SDK 入力へは一切注入しない(旧仕様は
-  「informational only」という専用文言で注入していたが、返信不要な
-  通知のために model turn を消費すること自体が issue #211 の解消
-  対象だった)。
-- **同一 conversation_id への並行 send_to_agent の直列化**(issue #167
-  review 2巡目 M1): 同じ conversation_id への `send_to_agent` 呼び出しが
-  並行に(例えば同一ターン内で複数回)行われた場合、採番から
-  server 応答の反映までを conversation_id 単位で直列化する
-  (`wait_for_response` の応答待ち自体は対象外 — 最大 300 秒他方を
-  塞いでしまうため)。直列化がないと、片方が reject された際の
-  ロールバックが、その間に accept されたもう片方の状態
-  (`localDone` / `closed`)を巻き戻してしまう競合が起きる。
-- **pending-done 中の受信分類の遅延**(issue #167 review 2巡目、ふじ
-  差し戻し): `done=true` の `send_to_agent` がまだ acceptance 未確定
-  (楽観的な `localDone` 反映のみ)の間に、同じ conversation_id への
-  inbound(peer 自身の done、または server 合成のハード制限通知)が
-  届いた場合、その inbound の分類・状態反映は pending 中の
-  acceptance が確定するまで待つ(`wait_for_response` の応答待ち全体
-  ではなく、その 1 件の送信の ack が着くまでの短い gate)。これが
-  ないと 2 通りの不具合が起きる: (1) 権威的な server 合成 CLOSED を
-  その inbound が正当に反映した直後、後着の(`conversation_closed`
-  以外の理由の)generic reject のロールバックがそれを OPEN に巻き戻す
-  ("server=closed、wrapper=open" split-brain、AC10 も破られる)。
-  (2) 楽観的な `localDone` を見て「両側 done で terminal」と確定した
-  disposition が engine アダプタへ渡り、SDK 入力へ注入せず(issue
-  #211 direction 1、track だけ closed へ更新)`notePendingInjection`
-  も skip した後でその送信が reject されると、実際には片側提案
-  (close-proposal) のままなのに返信経路が失われる(取り消し不能)。
-- **`conversation_closed` reject の学習**(issue #167 review 2巡目
-  M2): `send_to_agent` の送信が server から `conversation_closed`
-  で拒否された場合、その conversation_id をこの wrapper が事前に
-  一度も追跡していなかった(brand-new local track)場合でも、
-  ローカル track を closed として学習する。学習せずに track を
-  破棄すると、同じ `conversation_id` を指定した次回の試行が毎回
-  server へ往復し、server 側 tombstone TTL(既定 24 時間)が明けた
-  時点で受理されてしまい、下記「CID 再利用は契約にしない」の
-  wrapper 側 24 時間 guard が骨抜きになる。
-- **turn_number は accept された送信のみが消費する**(issue #212):
-  wrapper-local な `track.turnNumber` は送受信双方が共有する 1 個の
-  カウンタで、`send_to_agent` 呼び出しの `#dispatch()` 前に暫定採番
-  する。この暫定採番は server が実際に **accept** した場合にのみ
-  確定した消費として扱う契約であり、reject された採番は消費された
-  ことにしない。旧実装はこの契約を守れておらず、reject 後も
-  `track.turnNumber` が進んだままになる欠陥があった(欠陥 1、下記)。
-  **例外が 2 つある**(issue #212 段階2 差し戻し advisory2、ふじ指摘):
-  この accept-gated 契約は `send_to_agent`(`invoke()`)経由の通常送信
-  にのみ適用される。`stale_turn` notice(欠陥3、下記)と既存の
-  `resolveTurnEnd()` peer_error notice(issue #127)は、どちらも
-  `#dispatch()` を経由せず `ServerLink#send()` を直接呼ぶ
-  fire-and-forget 経路で、ack を待たず accept/reject を観測しない。
-  したがって、いずれも自身の採番を server の受理と結び付けられず、
-  常に「消費した」ものとして扱う(採番した `turn_number` を無条件に
-  使用済みとして進める)。これは送信前 turn 採番という設計そのものの
-  残存する非対称であり、恒久的な限界として受け入れている。
-- **reject 時の turnNumber ロールバック**(issue #212 欠陥1): `invoke()`
-  の reject 分岐は、`#dispatch()` 待機中に同じ conversation_id への
-  inbound 活動(`receiveInbound()` / `observeInbound()`)が割り込んで
-  いなかった場合に限り、暫定採番した `turnNumber` を 1 戻す。割り込みが
-  あった場合はその inbound 側の値が authoritative なので触らない
-  (`mutationGen` による検出、`inter_agent.ts` の該当コメント参照)。
-  `conversation_closed` reject は戻しても実害・利益ともに乏しい
-  (その cid はいずれにせよ二度と使えない) が、それ以外の reject 理由で
-  会話が継続するケースでは、戻さないと以後 peer の正当な turn が
-  下記の stale 判定に恒久的に引っかかり続ける。
-- **late / stale / duplicate turn の拒否**: 受信 `turn_number` が当該
-  conversation で既知の最大値以下なら、SDK 入力へ注入しない(返信待ち
-  の waiter も満たさない)。ただし server 合成 envelope(ハード制限
-  超過・応答不能通知)の `turn_number=0` は wrapper-origin の turn 系列
-  と別経路であり、この判定から除外する。**判定条件は `turn_number=0`
-  に加えて `agent_id === "server"` も必須**(issue #167 review M1)—
-  `turn_number` の値だけを見ると、peer wrapper 自身が(バグまたは
-  悪意で)`turn_number=0` を自称した message を送れてしまい、受信側が
-  それを server 合成通知と誤認して即座に自 track を closed
-  にしてしまう("server=open、受信側 wrapper だけ closed" という
-  split-brain)。この forge は live ingress の構造検証(下記)でも
-  server 側で拒否されるが、受信側 wrapper 自身も provenance を
-  検証することで二重に防ぐ。**issue #212 欠陥3 以降、この破棄は
-  完全な無言ではない** — 破棄した envelope の送信元へ `stale_turn`
-  notice を送る(例外条件と再同期の役割は「エラー種別コード」節
-  「stale_turn 通知の構造」参照)。
-- wrapper 側の closed track も TTL(24 時間)経過後に GC する(長寿命
-  wrapper のメモリリーク防止)。
-- **OPEN track の idle TTL と総数上限**(issue #167 review 2巡目
-  M3、「open track の unbounded 経路」): 上記の closed track TTL は
-  この wrapper 自身が CLOSED と学習した track にしか効かない。
-  server の periodic GC が自発的に tombstone 化したことは、
-  `open_conversation_ttl` 経由の遷移に限り issue #211 direction 2 で
-  peer へ伝播するようになった(上記「open_conversation_ttl による
-  closed」参照)が、この伝播は broadcast 一発の best-effort であり
-  配送を保証しない(受信側 wrapper がその瞬間切断していた等)。
-  したがって、通知が届かなかった場合(issue #199 の残存部分)や
-  closing turn を取りこぼした・peer が再接続なしにクラッシュした
-  等の経路では、wrapper が closed を学習できなかった track は
-  OPEN のまま残り続け、closed track TTL では prune されない。
-  これを塞ぐため、OPEN track にも最終アクティビティから 24 時間の
-  idle TTL を独立に適用し、さらに open + closed 合算の総数上限
-  (既定 20,000、最も古い track から evict)も設ける。issue #211 で
-  server 側の `max_wallclock` ハード制限は撤廃されたため、idle
-  対象になるほど長時間 open な conversation が「server 側で
-  打ち切り済み」である保証はもはや無い — server 側は今や
-  `open_conversation_ttl_ms`(既定 24 時間、この idle TTL と同じ
-  order of magnitude)で独立に同じ entry を回収しているはずなので、
-  evict は該当 conversation_id のローカル bookkeeping
-  (`turnNumber` / `localDone` / `remoteDone`)を破棄するだけで実害は
-  小さい — 以後同じ conversation_id を明示指定すれば新規 track として
-  再送でき、server からの正しい応答(`conversation_closed` なら
-  上記 M2 の学習で再度ローカルに反映される)を得られる。
+ - After sending `done=true` and receiving peer `done=true`, mark terminal.
+  **Also** mark terminal immediately on a server-synthesized closed notice
+  (`turn_number=0`, `agent_id: "server"`, `meta.done=true`—
+  `kind: "escalate-to-user"` for a hard-limit breach or `kind: "done"` when
+  `open_conversation_ttl` elapses, issue #211 direction 2), regardless of local
+  done. The server already tombstoned the conversation; misreading it locally as
+  a one-sided close proposal would prompt a reply and wastefully bounce a reject
+  for a closed conversation. Subsequent `send_to_agent` with that ID returns a
+  local tool error without a server round trip. Omitting `conversation_id` starts
+  a new conversation. Under issue #211 direction 1, no inbound classified as
+  terminal is injected into SDK input (the old “informational only” prompt
+  consumed a model turn for a no-reply notice).
+- **Serialize concurrent sends for one conversation_id** (issue #167 review
+  round 2 M1): If `send_to_agent` calls for the same ID run concurrently (for
+  example multiple calls in one turn), serialize numbering through application
+  of the server response per conversation_id. Do not serialize the
+  `wait_for_response` wait itself—it could block the other call for up to 300
+  seconds. Without serialization, rollback after one rejection can overwrite the
+  other call's accepted state (`localDone` / `closed`).
+- **Delay classification while done is pending** (issue #167 review round 2,
+  Fujino rework): If inbound for the same ID (peer done or a server hard-limit
+  notice) arrives while a `done=true` send has only optimistically set
+  `localDone` and acceptance is unconfirmed, delay classification and state
+  application until that send's ack arrives. This short gate covers only that
+  send, not the full `wait_for_response` wait. Without it: (1) a generic reject
+  arriving after an authoritative server CLOSED can roll it back to OPEN
+  ("server=closed, wrapper=open" split brain, violating AC10); or (2) a
+  disposition inferred from optimistic `localDone` can be marked terminal,
+  skip SDK injection and `notePendingInjection`, then lose the reply path when
+  the send is rejected even though the close proposal was only one-sided.
+- **Learn `conversation_closed` rejections** (issue #167 review round 2 M2):
+  When the server rejects a send with `conversation_closed`, learn the local
+  track as closed even if the wrapper never tracked that ID before (a brand-new
+  local track). Otherwise each retry round-trips to the server and becomes
+  accepted when the server's 24-hour tombstone TTL expires, bypassing the
+  wrapper's 24-hour guard described below.
+- **Only accepted sends consume `turn_number`** (issue #212): The wrapper-local
+  `track.turnNumber` is one counter shared by send and receive. A tentative value
+  is assigned before `#dispatch()` in `send_to_agent`; it is consumed only when
+  the server **accepts**. A rejected number is not consumed. The old
+  implementation advanced `track.turnNumber` after rejection (defect 1 below).
+  **Two exceptions** (issue #212 phase-2 advisory 2, Fujino): this accept-gated
+  contract applies only to normal sends through `send_to_agent` (`invoke()`).
+  `stale_turn` notices (defect 3) and existing `resolveTurnEnd()` peer_error
+  notices (issue #127) call `ServerLink#send()` directly in fire-and-forget paths
+  and observe no ack. Their numbers therefore cannot be tied to server
+  acceptance and are always treated as consumed. This residual asymmetry of
+  pre-send numbering is an accepted permanent limit.
+- **Rollback `turnNumber` on reject** (issue #212 defect 1): the
+  `invoke()` reject branch decrements the tentatively assigned `turnNumber`
+  by one only when no inbound activity (`receiveInbound()` /
+  `observeInbound()`) for the same conversation_id interrupted the wait for
+  `#dispatch()`. If an interruption occurred, the inbound value is
+  authoritative and is left unchanged (detected by `mutationGen`; see the
+  corresponding comment in `inter_agent.ts`). Rolling back a
+  `conversation_closed` reject has little practical value (that CID cannot be
+  reused anyway), but for other reject reasons where the conversation
+  continues, omitting the rollback would make every later peer turn fail the
+  stale check below forever.
+- **Reject late, stale, or duplicate turns**: when an incoming
+  `turn_number` is at or below the maximum already known for that
+  conversation, do not inject it into the SDK or satisfy a reply waiter. The
+  server-synthesized envelope (`turn_number=0` for hard-limit or
+  unresponsive notices) is a separate path from the wrapper-origin turn
+  sequence and is excluded from this check. **The condition must include
+  `agent_id === "server"` in addition to `turn_number=0`** (issue #167 review
+  M1): checking only the number would let a peer wrapper claim turn zero
+  (accidentally or maliciously), causing the receiver to mistake it for a
+  server notice and close its own track immediately ("server=open, receiver
+  wrapper=closed" split brain). Live-ingress structural validation (below)
+  also rejects this forge on the server, while the receiving wrapper checks
+  provenance as a second defense. **Since issue #212 defect 3 this discard is
+  not silent**: send a `stale_turn` notice to the envelope sender (see the
+  “Error codes” and “stale_turn notice structure” sections for exceptions and
+  resynchronization).
+- Garbage-collect wrapper-side closed tracks after a 24-hour TTL (to prevent
+  leaks in long-lived wrappers).
+- **OPEN-track idle TTL and total cap** (issue #167 review round 2 M3, “open
+  track unbounded path”): the closed-track TTL above applies only to tracks
+  that this wrapper has learned are CLOSED. The server's periodic GC now
+  propagates a self-created tombstone to peers through `open_conversation_ttl`
+  (issue #211 direction 2; see “closed by open_conversation_ttl” above), but
+  this is a single best-effort broadcast and delivery is not guaranteed (for
+  example, the receiving wrapper may be disconnected at that moment).
+  Therefore, when the notice is missed (the remaining part of issue #199), a
+  closing turn is lost, or a peer crashes without reconnecting, the wrapper
+  cannot learn that the track is closed; it remains OPEN and is not pruned by
+  the closed-track TTL. To close this path, apply an independent 24-hour idle
+  TTL from the last activity to OPEN tracks, and cap the combined open + closed
+  count (default 20,000), evicting the oldest tracks first. Because issue #211
+  removed the server-side `max_wallclock` hard limit, a conversation remaining
+  open long enough for idle eviction is no longer guaranteed to have been
+  stopped on the server. The server should independently reclaim the same
+  entry using `open_conversation_ttl_ms` (default 24 hours, the same order of
+  magnitude as this idle TTL), so eviction only discards local bookkeeping
+  (`turnNumber` / `localDone` / `remoteDone`) and has little practical impact.
+  Explicitly reusing the same conversation_id then creates a new local track
+  and can be sent again; a correct server response (including
+  `conversation_closed`) is learned locally as in M2 above.
 
-Claude Code / Codex いずれの engine アダプタも共通の `agent-common`
-判定(`InterAgentTool#receiveInbound` / `#invoke`)を経由するため、
-上記の状態機械はエンジンに依存しない。
+Both the Claude Code and Codex engine adapters use the shared `agent-common`
+logic (`InterAgentTool#receiveInbound` / `#invoke`), so the state machine
+above is engine-independent.
 
-#### CID 再利用は契約にしない(issue #167 review S2)
+#### CID reuse is not a contract (issue #167 review S2)
 
-server の tombstone TTL(`tombstone_ttl_ms`、既定 24 時間)だけを見ると
-「TTL 経過後は `conversation_id` を再利用できる」ように読めるが、
-これは server 単体の話であって system 全体の契約ではない。
-**wrapper 側の closed track TTL も 24 時間** であり、その `send_to_agent`
-/ `receiveInbound` を経由する限り、閉じた `conversation_id` は
-server 側 TTL が明けた後もローカルで「closed」のまま tool error を
-返し続けうる。同一 wrapper が生存または再接続していれば、server 側
-TTL 経過直後の再利用は失敗する。
+Looking only at the server tombstone TTL (`tombstone_ttl_ms`, default 24
+hours) may suggest that a `conversation_id` can be reused after the TTL, but
+that is a server-only detail, not a system-wide contract. **The wrapper-side
+closed-track TTL is also 24 hours**; while traffic goes through
+`send_to_agent` / `receiveInbound`, a closed `conversation_id` may remain
+locally marked “closed” and keep returning a tool error after the server TTL
+expires. If the same wrapper remains alive or reconnects, reuse immediately
+after the server TTL still fails.
 
-したがって:
+Therefore:
 
-- server の tombstone TTL は **UUID 衝突を想定したメモリ解放** に過ぎず、
-  「同じ `conversation_id` を意図的に使い回してよい」という設計ではない。
-  `conversation_id` は UUIDv4 で採番される前提上、同一値が偶然再送され
-  る確率は無視できるほど小さく、積極的な再利用は起こらない想定である。
-- 実効的な「この会話はもう終わった」guard は **wrapper 側の 24 時間
-  TTL** である。エージェント側が同じ相手と新しい対話を始めたい場合は、
-  常に `conversation_id` を省略して新規 UUID を採番させること。閉じた
-  `conversation_id` を明示的に指定して再送する経路は、フォールバック
-  としても正式な API 契約としても提供しない。
-- **server 側 `tombstone_ttl_ms` と wrapper 側 `CLOSED_TRACK_TTL_MS` は
-  issue #211 で同じ 24 時間へ揃えた**(旧 `max_wallclock_ms` は
-  10 分で、server 側だけ短い非対称構成だった)。揃えたのは、旧
-  `max_wallclock` ハード制限の撤廃で server 側が短命だったことの
-  積極的な理由(頻繁な hard-limit 打ち切りに追従した短い回収)が
-  消えたため — server が先に忘れて wrapper だけが guard を担う設計に
-  積極的な利点はなく、揃えた方が運用上のメンタルモデルが単純になる。
-  実効的な guard が wrapper 側 24 時間である点自体は変わらない。
+- The server tombstone TTL is only **memory reclamation assuming UUID
+  collisions**; it does not mean that intentionally reusing the same
+  `conversation_id` is supported. `conversation_id` values are assumed to be
+  UUIDv4, so accidental retransmission of the same value is negligibly likely
+  and deliberate reuse is not expected.
+- The effective “this conversation has ended” guard is the **wrapper's
+  24-hour TTL**. To start a new dialogue with the same peer, always omit
+  `conversation_id` and let a new UUID be allocated. Explicitly resending a
+  closed `conversation_id` is provided neither as a fallback nor as a formal
+  API contract.
+- **The server `tombstone_ttl_ms` and wrapper `CLOSED_TRACK_TTL_MS` were
+  aligned to 24 hours by issue #211** (the old `max_wallclock_ms` was 10
+  minutes, creating a shorter asymmetric server side). The alignment removed
+  the former reason for short server retention—frequent hard-limit stops—after
+  `max_wallclock` ceased to be a hard limit. Having the server forget first
+  while the wrapper alone guards reuse has no benefit; equal TTLs simplify the
+  operational mental model. The effective guard remains the wrapper's
+  24-hour TTL.
 
-### 明示指定された conversation_id が未知のとき (issue #252)
+### Explicitly supplied unknown conversation_id (issue #252)
 
-新規 conversation を開始する正規経路は `conversation_id` の省略のみ
-(上記)だが、issue #252 以前の server はこの区別を持たず、**明示指定
-された未知の `conversation_id` も同じく新規 conversation として無言で
-受理**していた。director の conversation_id 誤転記が 2026-08-16〜17 に
-3 回、エラーにならず紛れ込みスレッドとして成立した実害があり、これを
-fail fast and visible にする。
+The only canonical path for starting a new conversation is to omit
+`conversation_id` (above). Before issue #252, however, the server did not
+distinguish this case and **silently accepted an explicitly supplied unknown
+`conversation_id` as a new conversation**. Three director transcription errors
+on 2026-08-16–17 became apparently valid threads instead of errors. This path
+now fails fast and visibly.
 
-- **区別の伝達は `payload.new_conversation` (MUST) が担う**: 発起側
-  wrapper (`send_to_agent` の呼び出し元が `conversation_id` を省略し、
-  この wrapper が新規採番した)送信でのみ true。返信・通知
-  (peer_error / stale_turn)・エージェントが明示指定した送信は false。
-  server は cid そのものからは「省略による新規」と「明示指定の誤り」
-  を区別できない(採番も UUID の一意性もすべて wrapper 側の責務であり、
-  server はその結果の文字列しか見ない)ため、この bool が唯一の判断
-  材料になる。
-- **server の判定**(`ConversationStates.record_message/8`):
-  `conversation_id` に対応する entry が存在せず(open でも tombstone
-  でもない)、かつ `new_conversation? == false` のときに限り
-  `{:error, :unknown_conversation_id}` で拒否する。entry が存在する
-  場合(open・closed いずれも)はこのフラグを一切見ない —
-  `conversation_closed` / `participants_mismatch` / `stale_turn` は
-  従来どおり優先される。`new_conversation? == true` の cid が未知
-  なのは正常系そのものなので、このチェックには到達しない。
-- **送信側 wrapper の tool result**: 生の reason
-  (`unknown_conversation_id`)をそのまま返すのではなく、「正しい id
-  での再送か省略での新規開始を促す」専用文言を返す
-  (`send_to_agent failed: conversation_id=<id> is unknown to the
-  server — retry with the correct conversation_id, or omit it to
-  start a new conversation (this can also mean the server restarted
-  since this conversation began, which drops all of its state).`)。
-  後半の「server 再起動」の言及はレビュー (クロエ) 指摘: `ConversationStates`
-  は永続化を持たないため、server 再起動で進行中の全 conversation が
-  消え、以後その cid への明示送信は全て `unknown_conversation_id` に
-  なる。文言に候補を挙げないと、送信側エージェントは「自分の転記
-  ミス」とだけ解釈して 1 ターン浪費しかねない。ローカル track 側の
-  特別扱いは不要 — 明示指定した未知 cid のローカル track は
-  `wasBlank` 判定(「実質的な履歴が無い」)に自然に該当し、既存の
-  reject-cleanup がそのままリセットする。
-- **既知の反例**(意図的に許容する残余): `new_conversation? == false`
-  の送信が「既存 entry への正当な返信・継続」であるケースは、この
-  チェックが `existing != nil` で素通しするため一切影響を受けない —
-  対話の 2 通目以降は常にこの経路である。影響するのは「タイポ・古い
-  session のコピペ由来で、どの entry にも一致しない cid を明示指定
-  した」場合のみ。
-- **`payload.new_conversation` の欠落は拒否せず true 扱いにする**
-  (レビュー、issue #252 delta、クロエ M1): `validate_live_inter_agent_payload/1`
-  は key の存在を要求しない — bool 以外の値のときだけ拒否する。
-  issue #252 より前の wrapper はこの field を送らないが、Phoenix
-  client は reconnect/heartbeat を自前で持つため
-  (`wrapper/core/src/transport.ts`)、server だけ再デプロイしても旧
-  wrapper プロセスは再起動なしで生き残り送信を続ける。key を必須に
-  すると、そうした旧 wrapper の live send を全部
-  `missing key: payload.new_conversation` で弾いてしまい、
-  [ADR-0015](../adr/0015-protocol-version-stamping.md) が確立した
-  「version 不一致でも ACK して処理は継続する」というベストエフォート
-  受理の方針と矛盾する。`preflight_inter_agent/2` は欠落を `true`
-  として読み(`case payload do %{"new_conversation" => false} -> false;
-  %{"new_conversation" => true} -> true; _ -> ... end`)、欠落側では
-  `agents_channel.ex` の protocol version 警告と同型式の
-  `Logger.warning` をメッセージ 1 通ごとに出す(`inter_agent_message:
-  client declared new_conversation (absent); accepting as true (issue
-  #262 legacy best-effort accept)`)。代償として、旧 wrapper からの
-  明示指定・未知 cid はこの移行期間中 `unknown_conversation_id` で
-  拒否されず無言で新規 conversation を開くが、これは新 wrapper へ
-  更新されるまでの一時的な後退であり、恒久的な抜け道ではない。
-  - **warning が旧 wrapper からの送信ごとに出続けることは意図的**
-    (レビュー、クロエ): `refresh_engine_catalog` 等の既存 ADR-0015
-    警告は接続・カタログ更新時のみで頻度が低いが、この警告は旧
-    wrapper が更新されるまで**全 inter-agent 送信**で出る。頻度が
-    高いこと自体を「異常」と読まれるのを避けるため、この段落を
-    正本として残す — 移行期間が長引くほど log に占める割合が増える
-    のは設計どおりで、対処すべき異常ではない。
-  - **`ConversationStates.record_message/8` 自身は既定値を持たない**
-    (director 裁定、issue #252 delta 2巡目): 当初は `new_conversation?`
-    にも `\\ true` の既定値を与え、この channel 側の分岐を単に呼び出す
-    だけで済ませていたが、それは「渡し忘れたら黙って許可」という
-    #252 が閉じようとした欠陥そのものを、wire 層から内部 API 層へ
-    移しただけだった。既定値を廃し必須引数にしたことで、
-    `record_message/8` の将来の呼び出し元は全員この判断を明示しなけ
-    ればならず、`preflight_inter_agent/2` の上記 absent 分岐が
-    「合法的に許容側へ倒す唯一の場所」になる。コストは既存呼び出し
-    (主にテスト、約 90 箇所) への機械的な引数追加
-  - **廃止の目安**: この absent 分岐は永続の契約ではない。稼働中の
-    全 wrapper が issue #252 以降のビルドであると確認できた時点で、
-    `validate_live_inter_agent_payload/1` を key 必須に戻し、
-    `warn_legacy_new_conversation_absent/0` ごと削除してよい
-    (`CLOSED_TRACK_TTL_MS` のような固定 TTL ではなく、運用側が
-    「もう旧 wrapper はいない」と判断した時点が基準)
+- **Transmit the distinction with `payload.new_conversation` (MUST)**:
+  true only for an initiating wrapper send where the caller omitted
+  `conversation_id` and this wrapper allocated a new one. Replies and notices
+  (`peer_error` / `stale_turn`) and sends where the agent supplied an explicit
+  ID use false. The server cannot distinguish omission from an erroneous
+  explicit ID by the CID string alone (allocation and UUID uniqueness belong
+  entirely to the wrapper), so this boolean is the sole input to the check.
+- **Server decision** (`ConversationStates.record_message/8`): reject with
+  `{:error, :unknown_conversation_id}` only when no entry for the
+  `conversation_id` exists (neither open nor tombstoned) and
+  `new_conversation? == false`. If an entry exists (open or closed), ignore
+  this flag; `conversation_closed`, `participants_mismatch`, and `stale_turn`
+  retain their existing precedence. An unknown CID with
+  `new_conversation? == true` is the normal new-conversation path and never
+  reaches this check.
+- **Sender-wrapper tool result**: do not return the raw
+  `unknown_conversation_id` reason. Return wording that asks for a retry with
+  the correct ID or a new conversation by omission
+  (`send_to_agent failed: conversation_id=<id> is unknown to the server — retry
+  with the correct conversation_id, or omit it to start a new conversation
+  (this can also mean the server restarted since this conversation began,
+  which drops all of its state).`). The server has no persistence, so a
+  restart removes every in-flight conversation and makes subsequent explicit
+  sends unknown. Mentioning this possibility avoids wasting a turn while the
+  sender assumes only a transcription error. No special local-track handling
+  is needed: an explicitly supplied unknown CID naturally satisfies the
+  `wasBlank` (“no meaningful history”) test and existing reject cleanup resets
+  it.
+- **Known exception (intentionally accepted residual)**: a send with
+  `new_conversation? == false` that is a valid reply or continuation of an
+  existing entry is unaffected because `existing != nil` bypasses this check;
+  all messages after the first use this path. Only an explicitly supplied CID
+  from a typo or copied old session that matches no entry is affected.
+- **Treat missing `payload.new_conversation` as true rather than rejecting**
+  (review, issue #252 delta, Chloe M1):
+  `validate_live_inter_agent_payload/1` requires the key only when present and
+  rejects non-boolean values. Wrappers predating issue #252 omit the field,
+  while the Phoenix client keeps reconnect/heartbeat itself
+  (`wrapper/core/src/transport.ts`), so old processes can continue sending
+  after only the server is redeployed. Making the key mandatory would reject
+  all such live sends with `missing key: payload.new_conversation`, contrary to
+  [ADR-0015](../adr/0015-protocol-version-stamping.md)'s best-effort policy of
+  ACKing and processing version mismatches. `preflight_inter_agent/2` reads a
+  missing key as true (`case payload do %{"new_conversation" => false} ->
+  false; %{"new_conversation" => true} -> true; _ -> ... end`) and emits the
+  same style of protocol-version warning as `agents_channel.ex` for each such
+  message (`inter_agent_message: client declared new_conversation (absent);
+  accepting as true (issue #262 legacy best-effort accept)`). During migration,
+  an explicit unknown CID from an old wrapper therefore opens a new
+  conversation silently instead of being rejected; this temporary regression
+  disappears once wrappers are updated and is not a permanent bypass.
+  - **Per-message warnings from old wrappers are intentional** (review, Chloe):
+    existing ADR-0015 warnings such as `refresh_engine_catalog` occur only on
+    connection or catalog updates, whereas this warning appears on **every
+    inter-agent send** until the old wrapper is updated. The high frequency is
+    not itself an anomaly; this paragraph is normative so operators do not
+    misread the growing log share during a long migration.
+  - **`ConversationStates.record_message/8` has no default** (director ruling,
+    issue #252 delta round 2): the initial implementation gave
+    `new_conversation?` a `\\ true` default so channel callers could omit the
+    branch, merely moving the “silently allow when forgotten” defect from the
+    wire layer into the internal API. Making the argument mandatory forces
+    every future caller to state the decision explicitly; the absent branch in
+    `preflight_inter_agent/2` above is the only legal place to choose the
+    permissive side. The cost is mechanical argument updates for existing
+    callers (mostly tests, about 90 sites).
+  - **Removal criterion**: this absent-field branch is not permanent. Once
+    operations confirms that every running wrapper is built after issue #252,
+    make `validate_live_inter_agent_payload/1` require the key again and remove
+    `warn_legacy_new_conversation_absent/0`. The trigger is the operator's
+    confirmation that no old wrappers remain, not a fixed TTL such as
+    `CLOSED_TRACK_TTL_MS`.
 
-### 観測経路(dashboard 表示)
+### Observation path (dashboard display)
 
-server は inter_agent_message envelope を `agents:lobby` にも
-broadcast する。ただし `log` / `result` と同様に **operator 限定配信**
-([ADR-0021](../adr/0021-role-information-disclosure-policy.md))。
+The server also broadcasts each `inter_agent_message` envelope to
+`agents:lobby`, but, like `log` and `result`, delivery is **operator-only**
+([ADR-0021](../adr/0021-role-information-disclosure-policy.md)).
 
-dashboard は受信時、`agent_id`(送信側)と `payload.to`(受信側)の
-両 agent の log 欄に inter-agent message を表示する。表示形式は
-クライアント実装で確定するが、最小限以下を満たす:
+On receipt, the dashboard displays the message in the log panes of both
+`agent_id` (sender) and `payload.to` (recipient). The client defines the exact
+format, but it must at least provide:
 
-- 送信側エージェントの log: `→ to <to>: <body>(kind, conversation_id 抜粋)`
-- 受信側エージェントの log: `← from <agent_id>: <body>(kind, conversation_id 抜粋)`
-- conversation_id でグルーピング可能な視覚要素(同一対話を辿れる)
+- sender log: `→ to <to>: <body>(kind, conversation_id excerpt)`
+- recipient log: `← from <agent_id>: <body>(kind, conversation_id excerpt)`
+- a visual grouping by conversation_id so one dialogue can be followed.
 
-`log` envelope とは別 type なので、既存の log フィルタ・既読管理と
-は独立して扱う。
+Because this is a separate envelope type from `log`, existing log filters and
+read-state handling remain independent.
 
-server 側の表示保持は **per-pane projection**(sender pane /
-receiver pane それぞれの揮発投影)で行い、live 表示・F5 復元・
-再起動後の replay 復元がすべて同一の upsert contract に載る
-([ADR-0051](../adr/0051-history-restart-resilience.md) D3-1)。cap は
-transcript 行と IA を pane ごとに時系列 merge した**最終投影で newest
-200 envelope**(IA の cap 免除は廃止)。
+The server retains display state as a **per-pane projection** (volatile sender
+and receiver panes). Live display, F5 restoration, and replay after restart
+all use the same upsert contract ([ADR-0051](../adr/0051-history-restart-resilience.md)
+D3-1). The cap is the newest 200 envelopes in the final projection after
+transcript rows and IA are merged chronologically per pane; IA no longer gets
+an exemption from the cap.
 
-### IA sidecar と表示復元([ADR-0051](../adr/0051-history-restart-resilience.md))
+### IA sidecar and display restoration ([ADR-0051](../adr/0051-history-restart-resilience.md))
 
-構造化 IA の正本は server ではなく **wrapper ホストの IA sidecar**
-とする(`InterAgentHistory` DETS は撤廃)。
+The canonical store for structured IA is the **IA sidecar on the wrapper
+host**, not the server (`InterAgentHistory` DETS is retired).
 
-- **記録**: wrapper は IA を送受信した時点で、wire envelope 全体 +
-  server 採番の `ingress_stamp` を engine transcript と同じ
-  ディレクトリの sidecar file へ構造化のまま append する。1 行 =
-  `{"ingress_stamp": [us, seq], "envelope": {...}}` の JSONL。
-  - パス(実装時確定、2026-08-08): `<transcript dir>/<session-id>.ia.jsonl`。
-    claude-code は `~/.claude/projects/<encoded-cwd>/`、codex は当該
-    rollout ファイルと同じディレクトリ。
-  - 受信側: server からの配信受領時(SDK 注入の**前**)。server 合成
-    envelope(エラー直送通知)も同様に記録。注入失敗で sidecar だけ
-    残る phantom は受容。
-  - 送信側: `envelope` push への **acceptance ack reply
-    `{ingress_stamp}`** の到着時。MCP tool result は ack として
-    使わない(`wait_for_response=true` では peer reply まで返らない
-    ため)。reject / timeout / ack 喪失時は記録しない(loss 受容、
-    stderr warn)。
-  - **ack と tool result の関係**(ふじ 30-10 must-fix M5、2026-08-08。
-    issue #167 の Stage 3 が要求する「ack 経路の追加・reject の tool
-    error 化」はこの ADR-0051 実装で先行して満たされていた —
-    #167 は新規実装ではなく、`conversation_closed` を下記の reject
-    reason 一覧へ追加しただけ):
-    記録トリガは ack のままだが、`send_to_agent` の **tool result も
-    同じ ack で決まる**。accepted = 従来どおり `sent ...`、server の
-    明示 reject(`unknown_agent` / `self_routing` /
-    `participants_mismatch` / `conversation_closed`(issue #167)/
-    `unknown_conversation_id`(issue #252)等)は
-    **error result に reason を載せる**(`unknown_conversation_id` のみ、
-    正しい id での再送か省略での新規開始を促す専用文言 — 下記参照)、
-    timeout / ack 喪失は
-    「配送不明」— 再送が重複配送になり得るため error にはせず、その旨を
-    result 本文に明記する。reject / 配送不明では `wait_for_response`
-    の待ちも即座に解除する(誰も応答しない会話を timeout まで待たない)。
-    ただし **ack 喪失時に peer reply が既に着いていれば配送成功**として
-    扱い、通常の `sent + reply` を返す(reply の到着自体が配送の証拠。
-    ふじ 30-10 2 巡目 R3、2026-08-08)。
-  - **応答不能通知(#127)との関係**(ふじ 30-10 2 巡目 R2、2026-08-08):
-    注入された inbound に対する「返信済み」判定も acceptance で決まる。
-    accepted / 配送不明では pending injection を解消し、**reject では
-    解消しない** — 送信が成立していない以上、turn 終了時のエラー通知は
-    出さなければならない。配送不明で解消するのは、配送済みだった場合に
-    通知を重ねると相手に矛盾する 2 通が届くため。
-  - 破損・途中切れ行は skip + stderr warn。fsync は要求しない。
-    パスは transcript ディレクトリ固定・session_id サニタイズ・
-    symlink は辿らない。
-  - **読み出し順**(ふじ 30-10 must-fix M3、2026-08-08): 復元時の
-    「新しい 200 件」は **file の末尾 200 行ではなく `ingress_stamp`
-    昇順の末尾 200 件**。append 順は ingress 順と一致しない — quota
-    overshoot では server 合成通知(高い stamp)が先に届き、それを
-    起こした元 message(低い stamp)は ack 後に append されるため、
-    file 順で切ると古い方を落として新しい方を残すという逆転が起きる。
-    同一 stamp の重複行は 1 行に畳む(bind 時の追記由来)。
-- **session lifecycle**: session_id 未採番期間は
-  `{agent_id, reset_generation}` で namespace した pending journal へ
-  append し、session_id 確定時に当該 session の sidecar へ bind
-  (rename。bind 先が既にあれば追記)する。pending journal は
-  transcript ディレクトリには置けない — codex の rollout ディレクトリ
-  は日付ネストで session_id 確定まで解決できないため。パスは
-  `${KAOIRO_IA_PENDING_DIR:-~/.kaoiro/ia-pending}/<agent_id>__<generation>.ia.jsonl`
-  で、`generation` は launch 時の `transition_id`(runner が渡さない
-  場合はプロセス毎の乱数)(実装時確定、2026-08-08)。session_id が
-  途中で再採番された場合も同じ bind 処理で現行 sidecar を新パスへ移す
-  (replay 対象が現 session 分のみのため、移さないと当該会話の IA が
-  落ちる)。bind 前に crash した orphan journal は replay
-  対象外で次回起動時に GC(fail-closed)。`/new`・`/clear` は旧
-  generation への append を即停止して新 generation へ切り替え、
-  reset rollback 時のみ旧 generation へ戻る。agent 削除では host
-  local artifact(transcript / sidecar)は残置。
-- **復元**: hydration verdict で replay を指示された wrapper が
-  sidecar を読み、`replay_ia` イベント([protocol](protocol.md)
-  イベント表)で自 pane の表示行を再投影する。routing・SDK 注入は
-  発生しない。clear 済み行は保存された `ingress_stamp` と durable
-  `ClearWatermarks` の比較で hide、stamp 欠落行は fail-closed で
-  破棄。受理された復元行は `agents:lobby` へ
-  **`history_replay_envelope { pane_agent_id, envelope }`** として
-  broadcast する(接続中タブの IA を戻すための display fan-out)。
-  通常の `envelope` を使わないのは、その形が pane を持たず client 側で
-  `agent_id ∪ payload.to` へ広がるため、復元行が reload 後には表示され
-  ない peer の pane にも残ってしまうから(ふじ 30-10 must-fix M2、
-  2026-08-08)。`pane_agent_id` は replay 中 wrapper の channel assign
-  由来で、wrapper の payload には pane 指定権を与えない。
-  1 回の `replay_ia` push は wrapper 側が JSON 実 byte 長 **1,000,000 bytes**
-  を上限に分割する
-  (socket の `max_frame_size` 8MB に対し 200 行 × 64KiB envelope は
-  約 12MB になり frame ごと reject され、complete が届かず永久に
-  unhydrated になるため)。同一 `replay_id` の複数 push を
-  `history_replay_complete` の前にすべて送る。単独で分割上限に収まらない
-  行は **送らずに落とす**(送れば frame reject → complete 未達 → 再 join
-  で同じ行、の loop に戻るだけで、破損 sidecar 行と同じ fail-closed 判断。
-  ふじ 30-10 2 巡目 should、2026-08-08)。詳細は
-  [protocol](protocol.md) の `replay_ia` 行を参照。
-- **resume reconstruction との関係**: SDK transcript 内の IA 注入
-  framing テキストは従来どおり `kind=user` log へ再投影**しない**
-  (structured 表示は sidecar 由来の `replay_ia` が担う。二重表示
-  防止)。
+- **Recording**: when a wrapper sends or receives IA, append the complete wire
+  envelope and the server-assigned `ingress_stamp` in structured form to a
+  sidecar file beside the engine transcript. Each JSONL line is
+  `{"ingress_stamp": [us, seq], "envelope": {...}}`.
+  - Path (fixed at implementation, 2026-08-08): `<transcript dir>/<session-id>.ia.jsonl`.
+    claude-code uses `~/.claude/projects/<encoded-cwd>/`; codex uses the
+    directory containing the rollout file.
+  - Receiver: record when delivery from the server is received, **before** SDK
+    injection. Server-synthesized envelopes (direct error notices) are also
+    recorded. A phantom sidecar row left by failed injection is accepted.
+  - Sender: record when the **acceptance ack reply `{ingress_stamp}`** for the
+    `envelope` push arrives. Do not use the MCP tool result as the ack
+    (`wait_for_response=true` waits for the peer reply). Do not record rejects,
+    timeouts, or lost acks (loss is accepted; warn on stderr).
+  - **Ack and tool-result relationship** (Fujino 30-10 must-fix M5,
+    2026-08-08. The ack path and reject-as-tool-error requested by issue #167
+    Stage 3 were already satisfied by this ADR-0051 implementation; #167 only
+    added `conversation_closed` to the reject-reason list): the recording
+    trigger remains the ack, and the `send_to_agent` **tool result is decided
+    by the same ack**. Accepted sends keep returning `sent ...`; explicit
+    server rejects (`unknown_agent`, `self_routing`, `participants_mismatch`,
+    `conversation_closed` (issue #167), `unknown_conversation_id` (issue #252),
+    etc.) return an **error result carrying the reason**. Only
+    `unknown_conversation_id` includes the special wording that asks for a
+    correct-ID retry or a new conversation by omission (below). A timeout or
+    lost ack is “delivery unknown”: do not call it an error because retrying
+    might duplicate delivery, and state this in the result body. Rejects and
+    unknown delivery release `wait_for_response` immediately instead of waiting
+    for a peer that cannot answer. If a peer reply has already arrived when the
+    ack is lost, treat delivery as successful and return normal `sent + reply`
+    (the reply itself proves delivery; Fujino 30-10 round-2 R3,
+    2026-08-08).
+  - **Relation to unresponsive notices (#127)** (Fujino 30-10 round-2 R2,
+    2026-08-08): the “replied” decision for an injected inbound is also based
+    on acceptance. Clear the pending injection for accepted or unknown
+    delivery, but **not for a reject**—the send did not happen, so an error
+    notice must be emitted at turn end. Unknown delivery clears it because a
+    notice would otherwise contradict a message that may have been delivered.
+  - Skip corrupt or truncated rows and warn on stderr; fsync is not required.
+    Keep paths inside the transcript directory, sanitize session_id, and never
+    follow symlinks.
+  - **Read order** (Fujino 30-10 must-fix M3, 2026-08-08): the newest 200 rows
+    on restore are the last 200 by ascending `ingress_stamp`, **not the last
+    200 file lines**. Append order can differ from ingress order: on quota
+    overshoot a server notice (high stamp) arrives first, while the triggering
+    message (low stamp) is appended after its ack. Cutting by file order would
+    keep the old notice and drop the new message. Collapse duplicate rows with
+    the same stamp into one row (from bind-time appends).
+- **Session lifecycle**: before a session_id is assigned, append to a pending
+  journal namespaced by `{agent_id, reset_generation}`; once the session_id is
+  known, bind it to that session's sidecar (rename, or append when the target
+  already exists). Pending journals cannot live in the transcript directory:
+  codex rollout paths are date-nested and cannot be resolved before the
+  session_id exists. Use
+  `${KAOIRO_IA_PENDING_DIR:-~/.kaoiro/ia-pending}/<agent_id>__<generation>.ia.jsonl`,
+  where `generation` is the launch `transition_id` (or a per-process random
+  value when the runner does not provide one; fixed at implementation,
+  2026-08-08). If a session_id is allocated again mid-session, bind the
+  current sidecar to its new path as well; replay covers only the current
+  session, so skipping this would lose that conversation's IA. Orphan journals
+  from a crash before bind are excluded from replay and garbage-collected on
+  next startup (fail-closed). `/new` and `/clear` stop appending to the old
+  generation immediately and switch to the new one; only reset rollback returns
+  to the old generation. Agent deletion leaves host-local artifacts
+  (transcript/sidecar) in place.
+ - **Restore**: a wrapper instructed to replay by the hydration verdict reads
+  its sidecar and reprojects its pane's display rows through the `replay_ia`
+  event ([protocol](protocol.md) event table). No routing or SDK injection
+  occurs. Hide cleared rows by comparing their stored `ingress_stamp` with
+  durable `ClearWatermarks`; discard rows without a stamp (fail-closed).
+  Accepted restored rows are broadcast to `agents:lobby` as
+  **`history_replay_envelope { pane_agent_id, envelope }`** for display fan-out
+  to connected tabs. Do not use the ordinary `envelope`: it has no pane and
+  the client would fan it out to `agent_id ∪ payload.to`, leaving a restored
+  row in panes that should not display it after reload (Fujino 30-10 must-fix
+  M2, 2026-08-08). `pane_agent_id` comes from the replaying wrapper's channel
+  assignment; wrapper payloads cannot choose a pane.
+  A single `replay_ia` push is split at a JSON byte length of **1,000,000
+  bytes** on the wrapper side. With an 8MB socket `max_frame_size`, 200
+  64KiB envelopes would be about 12MB and each frame would be rejected before
+  `complete`, leaving the pane permanently unhydrated. Send all pushes for one
+  `replay_id` before `history_replay_complete`. A row that cannot fit even a
+  single split is **dropped rather than sent**; sending it would repeat the
+  frame-reject / missing-complete / rejoin loop, the same fail-closed decision
+  as a corrupt sidecar row (Fujino 30-10 round-2 should, 2026-08-08). See the
+  `replay_ia` row in [protocol](protocol.md) for details.
+- **Relation to resume reconstruction**: do **not** reproject IA injection
+  framing text from the SDK transcript into the `kind=user` log. Structured
+  display is provided by sidecar-derived `replay_ia`, preventing duplicates.
 
-### Channels イベント増分
+### Channel event additions
 
-inter_agent_message 本体は既存 `envelope` イベント上で運ばれるが、
-コンパニオン機能のため **`directory_request`** を追補する。
+The `inter_agent_message` body continues to use the existing `envelope` event;
+the companion feature adds **`directory_request`**.
 
-#### peer directory の情報境界 (#99 / #150)
+#### Peer-directory information boundary (#99 / #150)
 
-phase-8 では宛先名の解決だけを目的に directory entry を
-`agent_id / persona / state` へ絞っていた。phase-15 で engine 間の state
-envelope schema が確定したため、#99 ではこの最小性判断を
-「**名前解決に加え、peer の実行特性を見て委譲先を選べる read-only
-directory**」へ引き直し、`engine / model / effort` を公開した。
+Phase 8 limited directory entries to `agent_id / persona / state` for name
+resolution. Once the cross-engine state-envelope schema was fixed in phase 15,
+#99 expanded that minimal read-only directory so agents could choose a
+delegate by peer execution characteristics, exposing `engine / model / effort`.
 
-issue #150 (phase-27) はこれをさらに **「peer の稼働状況を見て委譲の
-可否まで判断できる directory」** へ広げる。エージェントが operator の介在なしに
-「context が逼迫した peer に重い委任をしない」「利用上限に張り付いた peer
-を避ける」「対話中の peer に割り込まない」「長時間無活動の peer を報告
-する」を判断できることが要件。
+Issue #150 (phase 27) expands it again into a directory that can judge whether
+delegation is appropriate from peer liveness. Without operator involvement an
+agent must be able to avoid heavy work for a peer near its context limit, avoid
+peers at their usage limit, avoid interrupting a peer in conversation, and
+report peers that have been inactive for a long time.
 
-##### 開示 field 一覧
+##### Exposed fields
 
-| field | 型 | 意味 | 省略される条件 |
+| field | type | meaning | omitted when |
 |---|---|---|---|
-| `agent_id` | string | 宛先識別子 | MUST(常に存在) |
-| `persona` | `{id, name, sprite_set}` | pack 由来の canonical identity。`name` は session 中不変(issue #209 D19) | MUST |
-| `display_name` | string | 稼働中に変わり得る通称。表示に使うのはこちら(issue #209 D19/D26、ADR-0021 F6-3) | envelope が旧 wrapper build で `display_name` を未報告のとき |
-| `state` | string | 現在状態 | MUST |
-| `engine` / `model` / `effort` | string | 実行特性(#99) | non-empty string でないとき |
-| `context` | `{used_tokens, max_tokens, used_percentage}` | context 使用量 | 下記 capability gate 不成立、未報告、shape 不正、切断済み |
-| `session_started_at` | ISO8601 (UTC) | **server が観測した**現セッション開始時刻 | server が開始を観測しておらず `SessionStarts` からも復元できないとき。**相関できない join を受けた connection では、`SessionStarts` から復元できる場合でも省略する**(下記) |
-| `turns` | 非負整数 | 現セッションの応答往復数 | server が当該セッションの開始を観測していないとき(fallback で開始時刻だけ復元した場合も省略)。上と同じく、相関できない join を受けた connection でも省略 |
-| `last_activity_at` | ISO8601 (UTC) | server が envelope を最後に受理した時刻 | まだ 1 通も受理していないとき |
-| `conversation` | `{active, peers[]}` | active な IA 会話の有無と相手 | **省略しない**(下記) |
-| `rate_limits` | `{<window>: {status?, utilization?, resets_at?}}` | 最終 turn 時点の利用上限 snapshot | 未報告、全 window が projection で drop、切断済み |
-| `directory_only` | boolean(`true` 固定、issue #259) | この entry が `AgentStates` に live envelope を持たず、`AgentDirectory`(永続 ledger、[ADR-0030](../adr/0030-agent-directory-and-explicit-restore.md))のみに由来することを示す | live entry(AgentStates 側)では省略。**この field は他と absent の意味が違う** — absent は unknown ではなく「live directory 由来」(下記) |
-| `last_seen` | ISO8601 (UTC)、issue #259 | `AgentDirectory` が最後に envelope を受理した時刻の memory-only hint | server 再起動後 / 未 touch のとき、または live entry(live entry は `last_activity_at` を持つ) |
+| `agent_id` | string | destination identifier | MUST (always present) |
+| `persona` | `{id, name, sprite_set}` | canonical identity from the pack; `name` is stable within a session (issue #209 D19) | MUST |
+| `display_name` | string | mutable runtime name used for display (issue #209 D19/D26, ADR-0021 F6-3) | old wrapper did not report it |
+| `state` | string | current state | MUST |
+| `engine` / `model` / `effort` | string | execution characteristics (#99) | not a non-empty string |
+| `context` | `{used_tokens, max_tokens, used_percentage}` | context usage | capability gate fails, unreported, malformed, or disconnected |
+| `session_started_at` | ISO8601 (UTC) | **server-observed** current-session start | server did not observe or recover the start; also omitted for uncorrelated joins even when `SessionStarts` has a value |
+| `turns` | non-negative integer | response round trips in the current session | server did not observe that session start, or the join is uncorrelated |
+| `last_activity_at` | ISO8601 (UTC) | time the server last accepted an envelope | no envelope accepted yet |
+| `conversation` | `{active, peers[]}` | whether an IA conversation is active and its peers | **never omitted** (below) |
+| `rate_limits` | `{<window>: {status?, utilization?, resets_at?}}` | usage-limit snapshot at the last turn | unreported, all windows dropped in projection, or disconnected |
+| `directory_only` | boolean (`true` fixed, issue #259) | entry comes only from persistent `AgentDirectory`, with no live envelope in `AgentStates` ([ADR-0030](../adr/0030-agent-directory-and-explicit-restore.md)) | omitted for live entries; unlike other fields, absent means live-directory origin rather than unknown |
+| `last_seen` | ISO8601 (UTC), issue #259 | memory-only hint of the last envelope accepted by `AgentDirectory` | after server restart / never touched, or for live entries (which have `last_activity_at`) |
 
-`session_started_at` / `last_activity_at` は **server 側の時刻** である。
-wrapper が実測した値ではなく、envelope の `ts`(wrapper ホストの時計)
-とも別軸。ホスト跨ぎの時計ズレを判断材料に混ぜないための規約。
+`session_started_at` and `last_activity_at` are **server timestamps**. They
+are not wrapper measurements and are independent of envelope `ts` (the
+wrapper host clock), avoiding cross-host clock skew in decisions.
 
-##### directory-only entry (issue #259)
+##### Directory-only entry (issue #259)
 
-`directory_request` の応答 `agents` 配列は、`AgentStates`(in-memory
-live snapshot)から作る live entry に加え、`AgentStates` に envelope を
-持たない `AgentDirectory` エントリを **同じ配列に合流** する。別配列に
-しないのは、persona 名解決 → `send_to_agent` の既存フローを live/
-directory-only の両方で一貫させるため。合流の規則:
+The `agents` array in a `directory_request` response merges live entries built
+from the in-memory `AgentStates` snapshot with `AgentDirectory` entries that
+have no envelope in `AgentStates`. A single array keeps persona-name
+resolution and the existing `send_to_agent` flow identical for live and
+directory-only entries. Merge rules:
 
-- **重複排除**: 同一 `agent_id` が両方に存在する場合は `AgentStates`
-  (live)側を優先し、`directory_only` エントリは作らない
-- **合流後の entry**: `agent_id`、`state: "disconnected"` 固定、
-  `directory_only: true`、`persona`(typed unresolved を含め常に
-  present。下記)、解決できれば `display_name`、`conversation`
-  (`{active, peers[]}`。live entry と同じく常時付与)、取得できれば
-  `last_seen`
-- **省略する field**: `engine` / `model` / `effort` / `context` /
-  `rate_limits` / `session_started_at` / `turns` / `last_activity_at` は
-  `AgentDirectory` に情報が無いため常に省略(absent = unknown の通常
-  規約どおり)
-- **persona の typed unresolved**([#209](https://github.com/sakuraiyuta/kaoiro/issues/209)
-  D21 と同じ規則): `persona_id` が `PersonaAssets` に解決すれば
-  canonical `{id, name, sprite_set}`、解決しなければ `{id: persona_id}`
-  のみを返す。**`persona` キー自体は必ず present** — 省略すると
-  wrapper 側の narrow(`persona` を必須 field として扱う)が entry を
-  丸ごと drop してしまう
-- **件数上限**: `AgentDirectory` は operator が明示 delete するまで
-  消えず無制限に増えるため、directory-only 分は `last_seen` 降順
-  (unknown は最後尾、同着は `agent_id` 昇順)で **N=32** に切る。切った
-  件数は agent/request 単位で 1 行 warn する(rate_limits の window
-  drop ログと同じ集約方針)
-- **charset / display_name 検証**: `AgentId.valid?/1` に落ちる
-  `agent_id` は entry ごと drop(この経路が `AgentDirectory` の
-  DETS ロード由来 id を agent へ出す最初の関門になるため)。
-  `display_name` の検証落ちは field のみ省略し、entry は残す(live
-  entry と同じ discipline)
-- **requester 自身の除外**: live/directory-only を合流した後、1 箇所で
-  requester 自身を除外する
+- **Deduplication**: when an `agent_id` exists in both, prefer the live
+  `AgentStates` entry and do not create a `directory_only` entry.
+- **Merged entry**: `agent_id`, fixed `state: "disconnected"`,
+  `directory_only: true`, always-present `persona` (including typed unresolved,
+  below), resolved `display_name` when available, always-present
+  `conversation` (`{active, peers[]}` like live entries), and `last_seen` when
+  available.
+- **Omitted fields**: `engine`, `model`, `effort`, `context`, `rate_limits`,
+  `session_started_at`, `turns`, and `last_activity_at` are always omitted
+  because `AgentDirectory` has no values for them (the normal absent = unknown
+  rule).
+- **Typed-unresolved persona** (same rule as [#209](https://github.com/sakuraiyuta/kaoiro/issues/209)
+  D21): when `persona_id` resolves in `PersonaAssets`, return canonical
+  `{id, name, sprite_set}`; otherwise return only `{id: persona_id}`.
+  **The `persona` key itself is always present**; omitting it would make the
+  wrapper's narrow (which requires `persona`) drop the whole entry.
+- **Count cap**: `AgentDirectory` grows until an operator explicitly deletes
+  entries, so keep at most **N=32** directory-only entries ordered by descending
+  `last_seen` (unknown last, ties by ascending `agent_id`). Warn once per
+  agent/request about truncation, following the same aggregation as rate-limit
+  window-drop logs.
+- **Charset / display_name validation**: drop an entry whose `agent_id` fails
+  `AgentId.valid?/1` (the first gate before DETS-loaded IDs reach an agent).
+  If `display_name` validation fails, omit only that field and keep the entry,
+  as for live entries.
+- **Exclude the requester** once live and directory-only entries have been
+  merged.
 
-##### `context` の capability gate
+##### `context` capability gate
 
-`ext.context` の存在では判定しない。
-`ext.session_capabilities.supports_context_usage == true` かつ
-`used_tokens` / `max_tokens` / `used_percentage` がすべて数値のときだけ
-投影する。capability が absent(旧 wrapper)や explicit `false`(Codex)
-では **field ごと省略** し、`null` も推定値も出さない
-([ADR-0040](../adr/0040-context-usage-capability.md) D1 の 3-state 判定を
-dashboard と揃える)。capability field 自体は peer に開示しない。
+Do not decide from the presence of `ext.context`. Project it only when
+`ext.session_capabilities.supports_context_usage == true` and
+`used_tokens`, `max_tokens`, and `used_percentage` are all numeric. If the
+capability is absent (old wrapper) or explicitly `false` (Codex), **omit the
+field** and emit neither `null` nor an inferred value
+([ADR-0040](../adr/0040-context-usage-capability.md) D1's three-state decision,
+aligned with the dashboard). Do not disclose the
+capability field itself to peers.
 
-##### `ext` からの projection
+##### Projection from `ext`
 
-`ext` は wrapper が自由に拡張できる open schema なので、**raw を素通し
-しない**。canonical key だけを写した新しい map を組み立てる
-([ADR-0021](../adr/0021-role-information-disclosure-policy.md) F6-2 の
-allow-list を nested 階層まで適用)。
+`ext` is an open schema that wrappers may extend freely, so **never pass it
+through raw**. Build a new map containing only canonical keys, applying the
+allow-list recursively
+([ADR-0021](../adr/0021-role-information-disclosure-policy.md) F6-2).
 
-| 対象 | 許可 key | 検証 |
+| target | allowed keys | validation |
 |---|---|---|
-| `context` | `used_tokens` / `max_tokens` / `used_percentage` のみ | すべて **有限かつ `\|x\| <= 2^53-1`**。1 つでも欠ける・不正なら `context` ごと省略 |
-| `rate_limits` の window 値 | `status` / `utilization` / `resets_at` のみ(3 つとも optional) | `status` = string かつ UTF-8 64 bytes 以下、`utilization` = **有限かつ `\|x\| <= 2^53-1`**、`resets_at` = 非負の safe integer |
-| `rate_limits` の window key | open string | UTF-8 32 bytes 以下、charset `[A-Za-z0-9_-]` |
-| `rate_limits` の window 数 | — | 8 件以下 |
+| `context` | only `used_tokens` / `max_tokens` / `used_percentage` | all **finite with `\|x\| <= 2^53-1`**; omit `context` if any is missing or invalid |
+| `rate_limits` window value | only `status` / `utilization` / `resets_at` (all optional) | `status` is a string ≤64 UTF-8 bytes; `utilization` is **finite with `\|x\| <= 2^53-1`**; `resets_at` is a non-negative safe integer |
+| `rate_limits` window key | open string | ≤32 UTF-8 bytes, charset `[A-Za-z0-9_-]` |
+| `rate_limits` window count | — | at most 8 |
 
-- **key 自体が無い**ときだけ absent として許容する。key があって値が
-  invalid(`null` を含む)なら **当該 window ごと drop** する。値を 1 つ
-  だけ捨てて残りを返すと、不完全な窓が完全な窓と同じ形で読めてしまう。
-- projection 後に値が 1 つも残らない **empty window は drop**。
-- window 数が 8 を超えるときは、**validation と empty drop を通過した
-  valid window 集合** に対して canonical(`five_hour` → `seven_day`)を
-  無条件優先し、残り枠を lexical 昇順で埋める。canonical であっても
-  validation を通らない window は保持しない。
-- **malformed は top-level field 単位で drop** し、valid な sibling は
-  残す(`context` が壊れていても `rate_limits` は載る)。
-- 数値は換算しない。projection は「写す key を絞る」操作であって値の
-  加工ではない。`utilization` の 0..1 range 検査は入れない
-  ([#154](https://github.com/sakuraiyuta/kaoiro/issues/154) の
-  実データ確認後に判断)。
-- drop のログは window 単位で無制限に warn せず、agent / request 単位で
-  集約する(`list_agents` は auto-allow 経路であり、log amplification を
-  作らないため)。
-- **同じ規約・同じ上限値を wrapper 側の narrow にも適用する**。片側だけ
-  緩いと server が閉じた素通しを client が開け直すことになる。
+ - **Only a missing key is absent**: if a key exists but its value is invalid
+  (including `null`), drop that window. Dropping one value while returning the
+  rest would make an incomplete window look complete.
+- Drop an **empty window** when projection leaves no values.
+- When more than eight windows remain, consider only windows that passed
+  validation and empty-drop; always prefer canonical windows (`five_hour` then
+  `seven_day`) and fill the rest in lexical order. Canonical windows that fail
+  validation are not retained.
+- Drop malformed data at the top-level field and retain valid siblings (a bad
+  `context` does not remove `rate_limits`).
+- Do not convert numbers. Projection only narrows keys; it does not transform
+  values. Do not enforce a 0..1 range for `utilization` (defer until real data
+  is checked for [#154](https://github.com/sakuraiyuta/kaoiro/issues/154)).
+- Aggregate drop logs per agent/request rather than warning without bound per
+  window (`list_agents` is auto-allowed and must not amplify logs).
+- Apply the same rules and limits to wrapper-side narrowing; a looser side
+  would let the client reopen data the server closed.
 
-##### `conversation` は常に載せる
+##### Always include `conversation`
 
-他の field と違い engine 非依存で server が必ず判定できるため、会話が
-無くても `{"active": false, "peers": []}` を返す。旧 server では field
-ごと absent になるので、消費側は **absent(不明)と `active: false`
-(会話なし)を区別できる**。`conversation_id` は開示しない
-(ADR-0021 F6-5)。
+Unlike other fields, the server can determine this engine-independent value
+every time. Return `{"active": false, "peers": []}` even with no conversation.
+An old server may omit the field entirely, so consumers can distinguish
+**absent (unknown)** from `active: false` (no conversation). Never disclose
+`conversation_id` (ADR-0021 F6-5).
 
-##### 相関できない接続では session 系 field を省略する
+##### Omit session fields for uncorrelated connections
 
-server は spawn / restore / reset のたびに遷移の相関子を発行し、その遷移
-が生んだ wrapper 接続を join 時に照合する(実装詳細は
-[phase-27](../plans/phase-27-list-agents-metadata.md) D3)。照合できない
-接続 — 相関子を返さない旧 wrapper や、別の遷移に属する join — を受けた
-場合、その接続については `session_started_at` と `turns` を **省略する**。
+On every spawn, restore, or reset the server issues a transition correlator and
+matches the resulting wrapper connection at join (implementation details:
+[phase-27](../plans/phase-27-list-agents-metadata.md) D3). For an uncorrelated
+connection—an old wrapper that returns no correlator, or a join belonging to a
+different transition—**omit** `session_started_at` and `turns` for that
+connection.
 
-**`SessionStarts` からの復元より優先して省略する。** 後段に置くと、
-同一 session_id で復帰する legacy な restore のときに、restore 前の
-開始時刻と往復数が再公開されてしまう。「相関を確認できなかった」以上
-その値は現セッションのものと断定できないため、誤った値を見せるより
-省略する(本 spec 全体の「省略 = 不明」規約と同じ立場)。
+**This omission takes precedence over restoration from `SessionStarts`.** If
+it were applied later, a legacy restore that reuses a session_id could expose
+the pre-restore start time and turn count. Without correlation those values
+cannot be asserted to describe the current session, so omission follows the
+spec-wide “omitted = unknown” rule.
 
-`last_activity_at` と `conversation` は session に紐づかないので、この
-省略の対象外。
+`last_activity_at` and `conversation` are not session-bound and are not
+omitted here.
 
-##### 継続除外
+##### Persistent exclusions
 
-この変更は ext 全体の peer 公開ではない。`cwd`、permission / sandbox、
-`session_id`、model catalog、pending state、resume snapshot / drift、
-`model_source / effort_source`、`session_capabilities`、`cost` は引き続き
-directory から除外する。除外集合の正本は ADR-0021 F6-4。
+This change does not expose all of `ext` to peers. Continue excluding `cwd`,
+permission/sandbox, `session_id`, model catalog, pending state, resume
+snapshot/drift, `model_source / effort_source`, `session_capabilities`, and
+`cost` from the directory. ADR-0021 F6-4 is the canonical exclusion set.
 
-##### users 開示 field 一覧 (issue #187 段階2, ADR-0021 F6-8)
+##### Exposed user fields (issue #187 phase 2, ADR-0021 F6-8)
 
-`directory_request` の reply は `agents` と並列で **`users`** を必ず
-返す(空配列を含む)。中身は運用者設定 `KAOIRO_EXPOSE_USERS_TO_AGENTS`
-に従う — **config の既定は `true`**(未設定 = 開示。issue #187 制約節
-「原則見える」は config の既定値として実現する)、明示 `false` で
-opt-out。`config` key そのものが読めない異常系(config/runtime.exs が
-走っていない等)でのみ実装側 fallback が閉じる方向に倒れる。`agents`
-の allow-list (F6-2/F6-3) とは独立の allow 集合で、ADR-0021 F6-8 が
-正本。
+The `directory_request` reply always includes **`users`** alongside `agents`,
+including an empty array. Its contents follow the operator setting
+`KAOIRO_EXPOSE_USERS_TO_AGENTS`: **the config default is `true`** (unset means
+expose, implementing the issue #187 “visible by default” constraint), and an
+explicit `false` opts out. Only an abnormal case where the config key cannot
+be read (for example `config/runtime.exs` did not run) uses a closed fallback.
+This is a separate allow-list from the `agents` list (F6-2/F6-3); ADR-0021
+F6-8 is authoritative.
 
-| field | 型 | 意味 | 省略される条件 |
+| field | type | meaning | omitted when |
 |---|---|---|---|
-| `id` | string | user_id。agent_id と同一 charset (`[A-Za-z0-9._-]`、issue #61) — ADR-0050 D1 が id 空間を単一と定めるため | MUST(常に存在) |
-| `kind` | string | 常に literal `"user"` | MUST |
-| `display_name` | string | 表示名 (下記 contract 参照) | MUST |
+| `id` | string | user_id, using the same charset as agent_id (`[A-Za-z0-9._-]`, issue #61); ADR-0050 D1 defines one ID space | MUST (always present) |
+| `kind` | string | always the literal `"user"` | MUST |
+| `display_name` | string | display name (contract below) | MUST |
 | `role` | string | `"admin"` \| `"operator"` \| `"viewer"` | MUST |
 
-**role を解決できない (allow-list から revoke 済み、config 変更で未知に
-なった等) user は、field を省略するのではなく entry ごと省略する。**
-`role` は他 3 field と同じく wire 必須 field であり、per-field の
-「不明」を表現する余地が無いため — `agents` 側の「省略 = 不明」規約
-(このセクション冒頭) とは異なる扱いになる点に注意。
+**If a user's role cannot be resolved** (revoked from the allow-list or made
+unknown by a config change), omit the entire entry rather than only the field.
+`role` is a required wire field like the other three fields and has no
+per-field “unknown” representation; this differs from the agents' normal
+absent = unknown rule.
 
-**`display_name` の contract (issue #187 段階2、ふじ MF-1 レビュー
-指摘):** wire に乗る値は trim 後 non-empty、**grapheme cluster 単位で
-64 以下**、制御文字 (C0: `\x00`-`\x1f`、および DEL: `\x7f`) を
-含まないことを server (`WrapperChannel.valid_display_name/1`) が
-enforce する。「grapheme cluster 単位」は Elixir `String.length/1` が
-数える単位そのものを指す — UTF-16 code unit 数(JS の素の
-`.length`)や Unicode code point 数(`[...s].length`)は結合文字・ZWJ
-絵文字を過大カウントし、server が通した有効な値を誤って弾く(実測:
-`"👨‍👩‍👧‍👦é́"` は `String.length/1` = 2、`.length` = 13、
-`[...s].length` = 9 — grapheme cluster ベースの数え方だけが一致する)。
-wrapper 側の narrow (`userDirectoryEntryFrom`, `wrapper/core/src/
-transport.ts`) も同じ contract を検証し、違反する entry だけを drop
-する。二重 projection (D7) の双方が同じ境界を守ることで、rolling
-upgrade 中や不正 payload、将来の server 側 regression のいずれでも
-挙動が揃う。
+**`display_name` contract (issue #187 phase 2, Fujino MF-1 review):** after
+trimming, the wire value must be non-empty, at most **64 grapheme clusters**,
+and contain no control characters (C0 `\x00`–`\x1f` or DEL `\x7f`), enforced
+by the server (`WrapperChannel.valid_display_name/1`). “Grapheme cluster” is
+exactly the unit counted by Elixir `String.length/1`; JavaScript UTF-16
+`.length` or Unicode-code-point `[...s].length` overcounts combining marks and
+ZWJ emoji (measured example `"👨‍👩‍👧‍👦é́"`: `String.length/1` = 2,
+`.length` = 13, `[...s].length` = 9). Wrapper narrowing
+(`userDirectoryEntryFrom`, `wrapper/core/src/transport.ts`) enforces the same
+contract and drops only violating entries. Matching both sides of the double
+projection (D7) keeps rolling upgrades, malformed payloads, and future server
+regressions consistent.
 
-##### role のライブ join の意味
+##### Meaning of a live role join
 
-`role` は user の source (`{:oauth, provider, uid}` または
-`{:token, token_hash}`、server 内部限定) を、応答のたびに認可 SoT
-(`OAuthAllowlist` の allow-list テキスト、または `client_tokens` 設定)
-へ都度問い合わせて解決する。
+For every response, resolve the user's source (`{:oauth, provider, uid}` or
+`{:token, token_hash}`, server-internal only) against the authorization source
+of truth (`OAuthAllowlist` allow-list text or the `client_tokens` setting).
 
-「ライブ」が保証する範囲は **同一 wrapper socket のまま
-`directory_request` を再度呼んだとき、その時点の role が見えること**
-に限る。過去に返した応答を取り消す仕組みでも、role 変更を検知した
-push invalidate でもない — `directory_request` は pull API であり、
-server から wrapper へ変更を能動的に通知する経路は存在しない。次に
-呼ぶまで、古い role を見せ続けることも新しい entry の欠落も起こり得る。
+“Live” guarantees only that a repeated `directory_request` on the same wrapper
+socket sees the role at that moment. It is neither revocation of a previous
+response nor push invalidation: `directory_request` is a pull API and the
+server has no proactive change notification to wrappers. Until the next call,
+an old role may remain visible or a new entry may be absent.
 
-1 回の応答内では、認可 SoT の種別ごと(`OAuthAllowlist.snapshot/1` /
-`client_tokens` の token_hash→role map)に **1 回だけ読み**、同じ
-種別の user 間で新旧 role が混在することはない。ただし 2 つの SoT は
-逐次 read であり、**source 種別をまたいだ atomicity は保証しない**
-(ふじ M4 レビュー指摘)— OAuth 由来の user を解決した直後に
-`client_tokens` が書き換わり、token 由来の user だけ新しい値を
-拾う、というケースはあり得る。
+Within one response, read each authorization source once
+(`OAuthAllowlist.snapshot/1` or the `client_tokens` token_hash→role map), so
+users from one source type cannot mix old and new roles. The two sources are
+read sequentially, however, so **cross-source atomicity is not guaranteed**:
+`client_tokens` may change after OAuth users are resolved and before token users
+are read.
 
-##### users の後方互換 (issue #187 段階2)
+##### User backward compatibility (issue #187 phase 2)
 
-`users` キーは **段階2以降の server なら常に返る**(opt-out 時は空
-配列 `[]`)。キーが reply に **無い** のは issue #187 段階2 より前の
-server だけ — `KAOIRO_EXPOSE_USERS_TO_AGENTS` を無効化した server でも
-キー自体は返り、中身が空になるだけ(ふじ M4 レビュー指摘: 「未設定
-server」と「opt-out server」を同一視していた誤りを訂正)。wrapper 側の
-narrow はどちらも区別せず `users: []` に正規化する — 消費側
-(`list_agents` ツール) の挙動はどちらのケースでも変わらないため、
-区別する実利が無い。
+From phase 2 onward the server always returns `users` (an empty `[]` when
+opted out). A missing key indicates only a pre-phase-2 server. A server with
+`KAOIRO_EXPOSE_USERS_TO_AGENTS` disabled still returns the key with an empty
+array; the wrapper narrows both cases to `users: []` because consumers
+(`list_agents`) have no useful distinction.
 
-| event (方向) | 形 | server の振る舞い |
+| event (direction) | shape | server behavior |
 |---|---|---|
-| `envelope` (W→S, type=inter_agent_message) | 上記 Inner envelope | 因果順を固定([ADR-0051](../adr/0051-history-restart-resilience.md) D3-1): (1) **validate / preflight** — participant / ハード制限、planned intent (`peer_reconnecting` / `peer_reconnecting_capacity`)、および conversation quota の検査。quota は `ConversationStates.record_message/5` が検査と turn/token/wallclock 更新を単一呼び出しで atomic に行うため、**counter 更新もこの段で走る**(分割すると検査と更新の間に TOCTOU が開く。実装時確定、2026-08-08)。**reject が確定し得る検査はすべてここまでで終える**。planned reject は ConversationStates / pane / delivery ledger の全てより前に返す、(2) **ingress stamp 採番**(ingress-order domain、globally unique。wire 形は整数 2 要素配列 `[us, seq]`)、(3) per-pane projection へ sender pane + receiver pane を同一 stamp で upsert(identity = `ingress_stamp\|pane_agent_id`)、(4) `payload.to` の `wrapper:<to>` channel に **stamp を載せた envelope** を push + `agents:lobby` broadcast(operator 限定)、(5) push の **acceptance ack reply として `{ingress_stamp}`** を送信元 wrapper に返す(送信側 sidecar 記録のトリガ)。upsert 後に行う routing は peer push のみで、reject 済み IA が pane に残らないこと |
-| `envelope` 合成 (S→W) | ハード制限超過時 | 両 wrapper の `wrapper:<id>` + `agents:lobby` へ push |
-| `envelope` 合成 (S→W) | wrapper 切断 / matching 復帰時 | 当該 wrapper が参加中の各 conversation の他参加者へ、planned 切断なら `kind=inform` + `error.code=reconnecting`、予告なし切断なら `error.code=disconnected`、exact-token 復帰なら error なしの `kind=inform` (`reconnected`) を push(「応答不能エラーの通知」節) |
-| `directory_request` (W→S) | `{}`(空 payload) | wrapper-A は **自分以外** の peer entry リストを `{:ok, %{agents: [...], users: [...]}}` 返却で受け取る。`agents` の field と省略規則は上記「peer directory の情報境界」、`users` は「users 開示 field 一覧」(issue #187 段階2)。list_agents 用 (後述) |
+| `envelope` (W→S, type=inter_agent_message) | Inner envelope above | Preserve causal order ([ADR-0051](../adr/0051-history-restart-resilience.md) D3-1): (1) **validate / preflight** participants, hard limits, planned intents (`peer_reconnecting` / `peer_reconnecting_capacity`), an unexpectedly disconnected target (`disconnected`, issue #257), and conversation quota. `ConversationStates.record_message/5` checks and atomically updates turn/token/wallclock counters in one call, so **counter updates happen here** (splitting them opens a TOCTOU gap; fixed at implementation, 2026-08-08). Complete every check that could determine rejection before proceeding; return a planned reject before ConversationStates, pane, or delivery ledger. (2) **Allocate ingress stamp** (globally unique ingress-order domain, wire form `[us, seq]`). (3) Upsert sender and receiver panes with the same stamp (`identity = ingress_stamp\|pane_agent_id`). (4) Push the stamped envelope to `wrapper:<to>` and broadcast to `agents:lobby` (operator-only). (5) Return `{ingress_stamp}` to the sender wrapper as the **acceptance ack**, which triggers sender-side sidecar recording. Routing after upsert is only the peer push; rejected IA must not remain in a pane. |
+| synthesized `envelope` (S→W) | hard-limit exceeded | Push to both `wrapper:<id>` and `agents:lobby`. |
+| synthesized `envelope` (S→W) | wrapper disconnect / matching recovery | For each other participant in conversations of the wrapper, push `kind=inform` with `error.code=reconnecting` for planned disconnect, `error.code=disconnected` for unplanned disconnect, or error-free `kind=inform` (`reconnected`) after exact-token recovery (see “Unresponsive notices”). |
+| `directory_request` (W→S) | `{}` (empty payload) | wrapper-A receives all peer entries **except itself** in `{:ok, %{agents: [...], users: [...]}}`. Agent fields and omission rules follow “Peer-directory information boundary”; users follow “Exposed user fields” (issue #187 phase 2). Used by `list_agents` (below). |
 
-未知 `to` / 自己 routing / participants 不一致 / turn_number 不正 /
-stale turn / closed な conversation / 明示指定の未知 conversation_id
-への送信時のエラー(`unknown_agent` / `self_routing` /
-`participants_mismatch` / `invalid value: payload.turn_number` /
-`stale_turn` / `conversation_closed`(後 3 者は issue #167)/
-`unknown_conversation_id`(issue #252) / `peer_reconnecting` /
-`peer_reconnecting_capacity`(issue #256))は `envelope` の reply で返す。
-`peer_reconnecting` だけは wrapper が
-structured `peer_error.code=reconnecting` へ正規化し、一般の tool error と
-機械的に区別する。`peer_reconnecting_capacity` は message が未受理で close
-notice も予約されていない terminal tool error とし、同じ conversation_id で
-時間を置いて再送するよう固定文で案内する。
+Errors for unknown `to`, self-routing, participant mismatch, invalid
+`turn_number`, stale turns, closed conversations, or explicitly unknown
+conversation IDs (`unknown_agent`, `self_routing`, `participants_mismatch`,
+`invalid value: payload.turn_number`, `stale_turn`, `conversation_closed`
+ (the latter three from issue #167), `unknown_conversation_id` (issue #252),
+`peer_reconnecting`, `peer_reconnecting_capacity` (issue #256), and
+`disconnected` (issue #257, when `to` is known but not currently connected
+and no planned intent covers it)) are returned in the `envelope` reply.
+`peer_reconnecting` and `disconnected` are normalized by the wrapper to a
+structured `peer_error` (`code=reconnecting` / `code=disconnected`
+respectively), distinct from a generic tool error; either reject happens
+before `ConversationStates.record_message`, so it never mutates the delivery
+ledger or either pane. `peer_reconnecting_capacity` is a terminal tool error:
+the message was not accepted and no close notice was scheduled; fixed
+wording asks the sender to retry later with the same conversation_id.
 
-### 承認フロー(permission_broker 統合)
+### Approval flow (permission_broker integration)
 
-wrapper-A が `send_to_agent` ツールを呼ぶ際、wrapper は既存の
-`canUseTool` 経路で operator に承認を求める([ADR-0022](../adr/0022-pending-permission-authoritative-source.md))。
+When wrapper-A invokes `send_to_agent`, it asks the operator for approval
+through the existing `canUseTool` path ([ADR-0022](../adr/0022-pending-permission-authoritative-source.md)).
 
-- ツール名: `send_to_agent`
-- `input` には宛先 `to` / kind / body 抜粋 / `conversation_id` を
-  含める(operator が判断するための材料)
-- dialog UX は Phase 1 では既存 permission dialog を流用、Phase 2 で
-  専用 UI に磨く
-- deny した場合、tool 呼び出しは失敗。wrapper-A は SDK に「送信
-  拒否」のエラーを返し、エージェントは別の応答を試みる
+- Tool name: `send_to_agent`.
+- `input` contains destination `to`, kind, a body excerpt, and
+  `conversation_id` so the operator can decide.
+- Phase 1 reuses the existing permission dialog; Phase 2 may provide a
+  dedicated UI.
+- On denial the tool call fails; wrapper-A returns a send-rejected error to the
+  SDK and the agent can try another response.
 
-#### 自動承認 (conversation 単位 whitelist、ADR-0044 F2 追補・案 B)
+#### Automatic approval (conversation-scoped whitelist, ADR-0044 F2 addendum, option B)
 
-同一 `(conversation_id, to)` への 2 回目以降の `send_to_agent` は、
-**この wrapper プロセスが直前にその `(conversation_id, to)` への
-`send_to_agent` を server に受理 (accepted ack) させていれば**
-canUseTool を経由せず自動許可する(operator ダイアログは出ない)。
+Subsequent `send_to_agent` calls for the same `(conversation_id, to)` are
+automatically allowed without `canUseTool` (no operator dialog) **only when
+this wrapper process just received an accepted ack from the server for that
+pair**.
 
-- whitelist は **wrapper プロセスのメモリ内のみ**(conversation の
-  lifecycle track に載る field(`autoAllowedPeer`)、issue #167 の
-  `ConversationTrack` 拡張)。`conversation_id` と、承認時点の `to` の
-  **両方**に束縛される
-  (issue #165 review round 3、ふじ M2 — `conversation_id` 単独では、
-  `unknown_agent` reject 後に同一 `conversation_id` のまま別 `to` へ
-  差し替える送信も自動許可してしまう)。server 側の永続化はしない。
-  **wrapper プロセスの再起動 (再 launch を含む)**、または track 自体の
-  TTL/cap eviction で失われ、その conversation は再度初回承認からに
-  なる。transport の reconnect (WS 切断→再接続) はこれに含まれない
-  — 同一プロセス内の `InterAgentTool` インスタンスはそのまま生き続け、
-  reconnect は operator が既に承認した会話の信頼を失効させる理由には
-  ならない。
-- whitelist は **wrapper インスタンスごとに独立**する。A が開始した
-  conversation を B が初めて返信する際、B 側 wrapper にとってはその
-  conversation_id が未知のため、B の初回送信は通常どおり canUseTool
-  で承認を要する。
-- 新規 conversation(`conversation_id` 省略、送信後に wrapper が
-  新規採番して返す)の**最初の送信は必ず** canUseTool を経由する
-  (この時点では `conversation_id` が確定していないため whitelist に
-  何も無い)。
-- **whitelist を確立するのは「最初に operator-approved かつ
-  server-accepted な送信」のみ**(issue #165 review round 4、ふじ
-  design-review approve、条件 A — gitea issue #201
-  [comment 5384486838](https://github.com/sakuraiyuta/kaoiro/issues/201#issuecomment-5384486838))。
-  canUseTool の承認(operator dialog、または既存の auto-allow)は
-  「送信を試みてよいか」を決めるだけで、それ自体は whitelist を
-  書き込まない。実装は `#dispatch()` が server から
-  `{kind: "accepted"}` を返した時点で `(conversation_id, to)` を
-  whitelist へ登録する — **reject された送信、および ack が届かない
-  `unknown`(配送不明)は whitelist に一切触れない**。`unknown` を
-  昇格させない判断の根拠は、不明な状態は承認要求を維持する安全側へ
-  倒すという本リポジトリの一貫した設計方針
-  ([ADR-0051](../adr/0051-history-restart-resilience.md) D3-2 等)との
-  整合、および代償の非対称性(`accepted` のみに限定した場合の代償は
-  `unknown` が続く限り dialog が出続ける UX 上の不便に留まるのに対し、
-  `unknown` を whitelist 化した場合の代償は「配送されたか分からない
-  peer への送信が以後無承認で行われる」という permission bypass 方向の
-  リスクである)。
-  旧実装(issue #165 review round 1-3)は「canUseTool 通過時点で
-  楽観的に登録し、reject 時にケースごとに保護/巻き戻す」設計を採って
-  おり、3 巡の内部レビューで新規欠陥を出し続けた末に破棄した — 失敗
-  履歴は
-  [#201 comment 5384486746](https://github.com/sakuraiyuta/kaoiro/issues/201#issuecomment-5384486746)、
-  設計判定は
-  [#201 comment 5384486838](https://github.com/sakuraiyuta/kaoiro/issues/201#issuecomment-5384486838)
-  を参照。
-- **非 `done` 送信の dispatch 待機中に届いた inbound とのレース
-  (issue #165 review round 3、ふじ M3、gitea issue #201)**:
-  `#dispatch()` の応答を待っている間に、同じ `conversation_id` へ
-  正当な inbound (server 合成の hard-limit 強制終了通知を含む) が
-  届くケースでは、whitelist 登録が上記のとおり accepted 時のみに
-  限定されたため、reject された送信がこの race を通じて whitelist を
-  不正に確立することは構造的にない。track の `closed` / `turnNumber`
-  状態については、reject 時のクリーンアップが inbound の書き込み
-  (`closed=true` 等) を上書きしないよう `mutationGen`(実際に値が
-  変化した時のみ加算するカウンタ、issue #165 review round 4、ふじ
-  条件 C)で保護している — 詳細は
-  `wrapper/agent-common/src/inter_agent.ts` の `invoke()` /
-  `receiveInbound()` のコードコメントを正とする。
-- 本節は **Claude の canUseTool 経路にのみ適用される**。Codex は
-  approval が `never` 固定で canUseTool 相当の経路自体が無い
-  ([ADR-0033](../adr/0033-permission-model-dual-axis.md) F3) ため、
-  `send_to_agent` はもとから無条件で自動許可されており、本節の
-  whitelist を追加で適用する対象がない。
-- kind による区別はしない(query/response も request/propose も同じ
-  whitelist を共有する)。責務範囲(ADR-0044 F2)を auto-allow の判定
-  軸には使わない — 責務内外に関わらず、conversation 単位の初回承認
-  だけがゲートになる。
+- The whitelist exists **only in wrapper-process memory** as
+  `autoAllowedPeer` on the conversation lifecycle track (issue #167
+  `ConversationTrack` extension). It is bound to both `conversation_id` and
+  the approved `to` (issue #165 round-3 review, Fujino M2); binding only the
+  conversation would allow an `unknown_agent` rejection to be replaced by a
+  different recipient without approval. It is not persisted by the server.
+  A wrapper restart (including relaunch), or track TTL/cap eviction, clears it
+  and requires first-send approval again. A transport reconnect does not clear
+  it: the same-process `InterAgentTool` survives, and reconnect does not revoke
+  an operator-approved conversation.
+- Each wrapper instance has an independent whitelist. When B first replies to
+  a conversation started by A, B has no local entry and needs normal
+  `canUseTool` approval.
+- The first send of a new conversation (caller omitted `conversation_id`, and
+  the wrapper allocates one after sending) always goes through `canUseTool`;
+  no ID exists yet to match a whitelist entry.
+- **Establish a whitelist entry only for the first send that is both operator-
+  approved and server-accepted** (issue #165 round-4 review, Fujino design
+  approval, condition A — [issue #201 comment 5384486838](https://github.com/sakuraiyuta/kaoiro/issues/201#issuecomment-5384486838)).
+  `canUseTool` approval (dialog or an existing auto-allow) merely permits the
+  attempt and does not write the whitelist. Register `(conversation_id, to)`
+  when `#dispatch()` returns `{kind: "accepted"}`. **Rejected sends and
+  `unknown` (delivery unknown because no ack arrived) never touch the
+  whitelist**. Keeping unknown state gated is consistent with the repository's
+  safe default of retaining approval requirements ([ADR-0051](../adr/0051-history-restart-resilience.md)
+  D3-2): the cost is repeated dialogs, whereas promoting unknown delivery
+  would create a permission-bypass risk. The former optimistic registration at
+  the canUseTool boundary was discarded after three review rounds; see
+  [#201 comment 5384486746](https://github.com/sakuraiyuta/kaoiro/issues/201#issuecomment-5384486746)
+  and the design decision in [#201 comment 5384486838](https://github.com/sakuraiyuta/kaoiro/issues/201#issuecomment-5384486838).
+- **Race with inbound during a non-`done` dispatch** (issue #165 round-3
+  review, Fujino M3, gitea issue #201): if a valid inbound (including a
+  server-synthesized hard-limit stop) arrives for the same conversation while
+  `#dispatch()` is pending, the accepted-only rule prevents a rejected send
+  from establishing a whitelist through the race. `mutationGen` protects
+  `closed` / `turnNumber` state so reject cleanup cannot overwrite inbound
+  writes such as `closed=true` (a counter increments only on actual value
+  changes; issue #165 round-4 review, Fujino condition C). The comments in
+  `wrapper/agent-common/src/inter_agent.ts` `invoke()` and `receiveInbound()`
+  are authoritative.
+- This section applies **only to Claude's canUseTool path**. Codex fixes
+  approval to `never` and has no canUseTool-equivalent route ([ADR-0033](../adr/0033-permission-model-dual-axis.md)
+  F3), so `send_to_agent` is already unconditionally allowed and this
+  whitelist has no additional role.
+- Kind does not affect the decision (query/response and request/propose share
+  the whitelist). Responsibility scope from ADR-0044 F2 is not an auto-allow
+  axis; only first approval per conversation is the gate.
 
-### 受信側(wrapper-B)の挙動
+### Receiver-side behavior (wrapper-B)
 
-wrapper-B は `wrapper:<id>` channel で `envelope`(type=inter_agent_message、
-agent_id ≠ self)を受信したら、当該 envelope を SDK 次ターンの入力
-として注入する。注入形は:
+When wrapper-B receives an `envelope` (type `inter_agent_message`,
+`agent_id` not self) on `wrapper:<id>`, it injects it as input to the next SDK
+turn in this form:
 
 ```text
 [from <agent_id>] <kind>: <body>
@@ -1003,91 +931,81 @@ agent_id ≠ self)を受信したら、当該 envelope を SDK 次ターンの�
 (meta: done=<done>, propose_next=<propose_next>, conversation_id=<conversation_id>, turn_number=<turn_number>)
 ```
 
-エージェントが返信する場合は `send_to_agent` ツールで応答する。
-返信しない場合は通常の応答(`result` envelope)を返せばよく、
-`done` を送る義務はない — conversation はその後も open のまま
-残り続け、双方の `done=true` が揃う、hard limit 超過、または
-`open_conversation_ttl_ms` 経過(既定 24 時間、issue #211)の
-いずれかで初めて閉じる。旧 `max_wallclock` ハード制限は server が
-タイムアウトで自動的に `done` を付与する仕組みだったが、issue #211
-で撤廃した — `open_conversation_ttl_ms` はメモリ回収専用であり
-conversation を `done` 扱いにはしない(上記「conversation の
-ライフサイクル」参照)。
+An agent replies with `send_to_agent` when it chooses to respond. Otherwise a
+normal `result` envelope is sufficient; it need not send `done`. The
+conversation remains open until both sides send `done=true`, a hard limit is
+exceeded, or `open_conversation_ttl_ms` elapses (default 24 hours, issue
+#211). The former server `max_wallclock` hard limit automatically attached
+`done` on timeout; issue #211 removed it. `open_conversation_ttl_ms` is now
+memory reclamation only and never marks a conversation done (see “Conversation
+lifecycle” above).
 
-#### 保留メッセージの合流(issue #211 段階3)
+#### Coalescing pending messages (issue #211 phase 3)
 
-wrapper が busy な間(SDK への注入が既に1件以上溜まっている間)に、
-**同一 peer** から複数の inbound message が到着した場合、wrapper は
-それらを個別の SDK turn に分けず、**1 回の turn へ合流させて注入する**
-(合流単位は同一 peer — 複数 conversation_id をまたいでよいが、peer
-をまたぐ合流はしない。2026-08-11 クロエ裁定)。合流の目的は turn 数
-(= モデル呼び出し回数、xhigh effort では特にコストが大きい)を削減
-することにある。
+When a wrapper is busy (at least one SDK injection is queued) and multiple
+inbound messages arrive from the **same peer**, coalesce them into **one SDK
+turn** instead of separate turns. Coalescing may span conversation IDs but
+never spans peers (Chloe ruling, 2026-08-11). The goal is to reduce model-call
+count and the high cost of xhigh effort.
 
-- **トリガーは busy-trigger であり、時間デバウンスではない。** wrapper
-  が idle であれば単独メッセージでもそのまま即座に注入する(遅延を
-  追加しない)。既に注入待ちの turn がある間に到着した同一 peer からの
-  メッセージだけが、次の flush まで同じ batch へ追記される。
-- **順序は受信順を保つ。** batch 内の各メッセージは、それぞれ単独の
-  ときと同じ `[from <agent_id>] <kind>: <body>` ブロック(自分自身の
-  `conversation_id` を含む)を保ったまま、受信順に並べて 1 つの turn
-  テキストへ連結される — モデルはどの返信をどの `conversation_id`
-  へ送ればよいか、blockごとの記載から判断する。
-- **合流件数・合計サイズに上限がある。** 1 batch あたり最大 **10 件**
-  (wrapper の `MAX_ATTACHMENTS_PER_INSTRUCTION` と同じ桁)、かつ
-  各メッセージの整形済みテキストの合計が **16,384 バイト**(wrapper の
-  `MAX_INPUT_BYTES` / `MAX_TASKLIST_ITEMS_JSON_BYTES` / `MAX_LOG_BYTES`
-  と同じ値)を超えない。超過分は**捨てず**、次の batch(= 次の turn)
-  へ回す。単独で上限を超える巨大な1件は、それだけでも従来どおり
-  配送する(batchの先頭1件は上限に関わらず必ず入る)。
+- **The trigger is busy state, not a time debounce.** An idle wrapper injects a
+  lone message immediately with no added delay. Only messages from the same
+  peer that arrive while an injection is pending join the next flush batch.
+- **Preserve receive order.** Each message keeps its own
+  `[from <agent_id>] <kind>: <body>` block (including its conversation_id) and
+  blocks are concatenated in arrival order. The model can select the matching
+  conversation from each block.
+- **Cap count and total size.** A batch has at most **10 messages** (the same
+  order as `MAX_ATTACHMENTS_PER_INSTRUCTION`) and formatted text totals at most
+  **16,384 bytes** (the wrapper's `MAX_INPUT_BYTES`,
+  `MAX_TASKLIST_ITEMS_JSON_BYTES`, and `MAX_LOG_BYTES`). Overflow is **not
+  dropped**; defer it to the next batch/turn. A single oversized message still
+  delivers by itself; the first item is always included regardless of the cap.
 
-**トレードオフ: 1 turn の失敗が batch 内の全 conversation へ波及する。**
-wrapper は turn を SDK へ送った後、どのメッセージが失敗の原因だったか
-を知る手段を持たない。そのため合流された turn が
-`context_overflow` / `api_error` 等で失敗した場合、`payload.error` の
-notice(下記「応答不能エラーの通知」参照)は**batch に含まれていた
-全ての conversation_id へ個別に**送られる — 実際に失敗を引き起こした
-のが1件であっても、無関係な残りの peer 全員が同じ peer_error を
-受け取る。これは turn 数を減らす代償として意図的に許容している
-挙動であり、隠さず明記する(2026-08-11 クロエ裁定)。合流の合計サイズ
-上限(上記)は、この波及の起きやすさ(= batch が大きいほど
-`context_overflow` を誘発しやすい)を抑える目的も兼ねている。
+**Trade-off: one turn failure affects every conversation in the batch.**
+After sending a turn to the SDK the wrapper cannot identify which message
+caused a failure. If a coalesced turn fails with `context_overflow`,
+`api_error`, or similar, send a `payload.error` notice (see “Unresponsive
+notices”) **separately to every conversation_id in the batch**. Unrelated peers
+therefore receive the same peer_error. This is an intentional cost of reducing
+turn count (Chloe ruling, 2026-08-11); the total-size cap also limits how often
+large batches trigger context overflow.
 
-`send_to_agent.wait_for_response` で待機中の waiter が受け取る返信は
-合流の対象にならない — waiter は inbound envelope 到着時点で即座に
-消費され、SDK turn への注入自体が発生しない(下記参照)。
+Replies consumed by a `send_to_agent.wait_for_response` waiter are not
+coalesced: the waiter consumes the inbound envelope immediately, so no SDK
+turn injection occurs (below).
 
-#### 同期 reply 待ち (`send_to_agent.wait_for_response`)
+#### Synchronous reply wait (`send_to_agent.wait_for_response`)
 
-通常の受信は上記どおり次 SDK turn への注入である。現在の SDK turn
-の中で peer の応答を必要とする場合だけ、送信側は
-`wait_for_response: true` を指定できる。wrapper は送信後、同じ
-`conversation_id` の次 inbound envelope を待ち、受信 envelope 全文
-（`body` / `meta` を含む）をその **同じ tool result** で返す。
+Normal reception injects the next SDK turn as above. When the current SDK turn
+needs the peer's answer, the sender may set `wait_for_response: true`. After
+sending, the wrapper waits for the next inbound envelope for the same
+`conversation_id` and returns the complete envelope (including `body` and
+`meta`) in the **same tool result**.
 
-- 既定は `false` であり、既存の fire-and-forget / 次turn注入の挙動は不変。
-- `timeout_ms` は省略時 300,000ms、正の整数、最大 300,000ms。timeout時は
-  送信済み ack と `reply_pending=true` を返し、送信を取り消さない。
-- waiter が受け取った envelope は次 SDK turn へ重複注入しない。timeout後に
-  遅れて到着した envelope は通常どおり次turn注入する。
-- 同一 `conversation_id` では waiter を1件だけ許可する。重複した同期waitは
-  送信前に tool error とする。
-- server が送信そのものを reject した場合(`unknown_agent` 等)、および
-  acceptance ack が来なかった場合は、**waiter を即座に解除**して reject /
-  配送不明の tool result を返す(ふじ 30-10 must-fix M5、2026-08-08)。
-  誰も応答しない会話を `timeout_ms` いっぱい待たない。
+- Default is `false`; existing fire-and-forget and next-turn injection are
+  unchanged.
+- `timeout_ms` defaults to 300,000 ms, must be a positive integer, and is
+  capped at 300,000 ms. On timeout return the send ack and `reply_pending=true`;
+  do not cancel the send.
+- Do not inject an envelope consumed by the waiter into the next SDK turn.
+  An envelope arriving after timeout is injected normally.
+- Allow one waiter per `conversation_id`; reject duplicate synchronous waits
+  before sending.
+- If the server rejects the send (`unknown_agent`, etc.) or no acceptance ack
+  arrives, **release the waiter immediately** and return a reject or delivery-
+  unknown result (Fujino 30-10 M5, 2026-08-08). Do not wait the full timeout for
+  a peer that cannot answer.
 
-### 応答不能エラーの通知 (`payload.error`)
+### Unresponsive notices (`payload.error`)
 
-相手エージェントが利用制限・コンテキスト超過・接続断などで応答不能に
-なったとき、その事実を **送信元エージェント自身** に返す
-([issue #127](https://github.com/sakuraiyuta/kaoiro/issues/127))。
-送信元が「再送しても無駄か / 時間を置くべきか / operator に
-エスカレートすべきか」を自ら判断できることが要件であり、単なる無応答
-タイムアウト (`reply_pending`) と区別できなければならない。
-
-新 envelope type も kind enum 拡張も行わない。判別は `payload.error` の
-有無のみで行う。
+When a peer cannot answer because of a usage limit, context overflow, or lost
+connection, return that fact to the **originating agent itself**
+([issue #127](https://github.com/sakuraiyuta/kaoiro/issues/127)). The origin
+must be able to decide whether retrying is futile, whether to wait, or whether
+to escalate to an operator, and must distinguish this from a silent timeout
+(`reply_pending`). No new envelope type or kind enum member is added; presence
+of `payload.error` is the discriminator.
 
 ```json
 {
@@ -1105,517 +1023,505 @@ notice(下記「応答不能エラーの通知」参照)は**batch に含まれ�
 }
 ```
 
-- `kind` は `"inform"` を流用する(9 種 enum 不変)。`error` を知らない
-  旧受信側は通常の inform として劣化表示する
-- `body` にも同じ人間可読理由を重複記載する(旧クライアント表示互換)
-- `meta.done` は false 固定(Phase 1。会話を打ち切るかの判断は送信元
-  エージェントに委ねる)
-- `error.message` に秘匿情報(トークン等)を載せない。マスクと切り詰めは
-  発火元 wrapper の責務
+ - `kind` reuses `"inform"` (the nine-member enum is unchanged). Older
+  receivers that do not know `error` display it as a normal inform.
+- Repeat the same human-readable reason in `body` for old-client display
+  compatibility.
+- `meta.done` is always false in Phase 1; the originating agent decides whether
+  to end the conversation.
+- Never put secrets such as tokens in `error.message`; the emitting wrapper
+  masks and truncates it.
 
-#### エラー種別コード(初期セット)
+#### Error codes (initial set)
 
-`code` は open string。将来の engine 固有コード追加を阻害しないため
-enum にはしない。未知の `code` を受けた側は `api_error` と同等に扱う。
+`code` is an open string rather than an enum so engine-specific values can be
+added later. Treat an unknown code as `api_error`.
 
-| code | 意味 | 送信元エージェントの推奨行動 |
+| code | meaning | recommended action for origin |
 |---|---|---|
-| `rate_limit` | 利用制限・クォータ超過 | 即時再送は無駄。時間を置くか operator にエスカレート |
-| `context_overflow` | コンテキスト長超過 | 同内容の再送は無駄。要約・分割するか operator にエスカレート |
-| `api_error` | engine / API 側エラー。分類不能時の縮退先 | 一度の再送は可。続くならエスカレート |
-| `timeout` | peer 側処理のタイムアウト | 時間を置いて再送 |
-| `interrupted` | peer の turn が中断された | operator 都合の可能性。再送前に状況確認 |
-| `reconnecting` | server が予告済みの wrapper 再起動中 | エスカレートしない。`reconnected` notice を待ち、同じ `conversation_id` で再送 |
-| `disconnected` | peer wrapper の接続断 | 復帰まで再送は無駄。エスカレート |
-| `stale_turn` | 受信側 wrapper が turn_number を既知の最大値以下(AC9)と判定し、メッセージを破棄した | 新しい conversation_id で送り直す |
+| `rate_limit` | usage or quota exceeded | Immediate retry is futile; wait or escalate. |
+| `context_overflow` | context length exceeded | Retry with the same content is futile; summarize/split or escalate. |
+| `api_error` | engine/API error or classification fallback | One retry is allowed; escalate if it repeats. |
+| `timeout` | peer processing timed out | Wait, then retry. |
+| `interrupted` | peer turn was interrupted | It may be operator-driven; check state before retrying. |
+| `reconnecting` | server announced a wrapper restart | Do not escalate; wait for `reconnected`, then retry the same `conversation_id`. |
+| `disconnected` | peer wrapper disconnected | Retry is futile until it returns; escalate. |
+| `stale_turn` | receiver discarded a message whose turn_number was at or below its known maximum (AC9) | Send using a new conversation_id. |
 
-#### 発火元(3 系統)
+#### Sources (four paths)
 
-| 発火元 | 契機 | 経路 |
+| source | trigger | path |
 |---|---|---|
-| peer 側 wrapper | SDK turn が is_error 終了し、その turn に未返信の inter-agent 注入があった | 当該 conversation の送信元へ ServerLink 直送(モデル経由でないため broker 承認なし)。通常の `inter_agent_message` として既存ルーティングに乗る |
-| server | wrapper channel の切断 (terminate) | 予告済みの planned cycle は `code=reconnecting`、それ以外は `code=disconnected` を合成し、当該 wrapper が参加中の各 conversation の他参加者へ push |
-| 受信側 wrapper | AC9(stale/duplicate turn_number)判定でメッセージを破棄した(issue #212 欠陥3) | 破棄した envelope の送信元へ ServerLink 直送。ただし対象がそれ自体エラー通知の場合、または対象 conversation が既に closed の場合は送信しない — 詳細は次項 |
+| peer wrapper | SDK turn ended with `is_error` while an inter-agent injection in that turn remained unanswered | Send directly through ServerLink to the conversation origin (no broker approval because it bypasses the model); route as a normal `inter_agent_message`. |
+| server | wrapper channel terminated | Synthesize `code=reconnecting` for a planned cycle or `code=disconnected` otherwise, then push to every other participant in each conversation of that wrapper. |
+| server (preflight) | `envelope` send addressed to a `to` that is known but unexpectedly disconnected, with no active planned intent | Reject the `envelope` push itself with `disconnected` before `ConversationStates.record_message` (issue #257) — without this, the disconnect that would ever trigger the notice above already fired (or never will while `to` stays down), so no notice follows and the send would silently drop. The sending wrapper maps the synchronous reject to the same structured `peer_error.code=disconnected` as the async notice. |
+| receiver wrapper | AC9 discarded a stale/duplicate turn (issue #212 defect 3) | Send directly through ServerLink to the discarded envelope's sender, except when that envelope is itself an error notice or the conversation is already closed (next section). |
 
-#### stale_turn 通知の構造(issue #212 欠陥3)
+#### `stale_turn` notice structure (issue #212 defect 3)
 
-`stale_turn` は他の code と異なり、**通知であると同時に受信側の
-turn_number を送信側へ再同期させる副次効果を持つ**。通知の
-`turn_number` は受信側 wrapper 自身の `track.turnNumber` を新規採番
-した値であり、これを受け取った送信側の `receiveInbound()` はこの
-envelope を(stale ではない)通常の inbound として処理し、自分の
-track をその値まで前進させる。結果として送信側の次の送信は、たとえ
-同じ `conversation_id` を使っても、ずれを解消した番号で行われる —
-「通知」だけでなく「再同期」の役割を持つことは、将来この機構の
-要否を再検討する際にも踏まえること。
+Unlike other codes, `stale_turn` is both a **notice and a side effect that
+resynchronizes the receiver's turn number to the sender**. Its
+`turn_number` is freshly allocated from the receiving wrapper's
+`track.turnNumber`. The sender's `receiveInbound()` treats the envelope as a
+normal (non-stale) inbound and advances its own track to that value. Its next
+send can therefore use the same `conversation_id` with the skew removed. Keep
+this resynchronization role in mind if the mechanism is reconsidered.
 
-受信側で AC9 の stale 判定が発火したときに通知を送るが、無条件では
-ない。2 つのケースでは意図的に通知を生成しない:
+Send the notice when AC9 rejects a stale turn, but not unconditionally:
 
-- **対象 envelope 自体が `payload.error` を持つ場合**(= それ自体が
-  notice)。notice への返信として更に notice を返すと、turn_number が
-  ずれた 2 者間で無限に往復しうる。turn_number の前進だけではこれを
-  防げない — stale 判定は受信側自身の track との比較であり、送信側が
-  どれだけ番号を進めても受信側の判定には無関係だからである。notice を
-  notice の対象から除外することで、往復は構造的に 1 回に収まる。
-- **対象 conversation が既に `closed` の場合**。閉じた会話への遅延到着
-  は、ずれてはいるがまだ生きている会話への stale とは性質が異なる —
-  送信側は既に(または次の送信で)`conversation_closed` reject と
-  AC10 のローカル拒否を経験しているはずで、そこへ通知を重ねても
-  意味がない。再送も起きないので再同期する対象も無い。この場合も
-  破棄自体はログへ残す(無言の破棄経路を潰す issue で新しい無言
-  経路を作らないため)。
+- **If the target envelope already has `payload.error`** (it is itself a
+  notice), replying with another notice could bounce forever between two
+  skewed counters. Advancing the number cannot prevent this because stale
+  comparison uses the receiver's own track. Excluding notices bounds the
+  exchange to one message.
+- **If the target conversation is already `closed`**. A late message for a
+  closed conversation differs from a stale turn in a live conversation; the
+  sender has already (or will on its next send) receive `conversation_closed`
+  and the AC10 local rejection. Retrying adds no value and there is no target to
+  resynchronize. Still log the discard so this exception does not create a new
+  silent path.
 
-engine 差は共通 classifier の中で吸収する(engine-agnostic、
-[ADR-0032](../adr/0032-codex-adapter.md) F5)。分類不能な事象は
-`api_error` に縮退する。engine 由来の reason / detail 文字列は
-**分類のキーワード検査にのみ内部利用**し、`error.message` / `body`
-には常に code ごとの固定テンプレート文言を用いる(生の例外文字列を
-peer の LLM コンテキストへ露出させない。秘匿情報マスクの MUST は
-この固定テンプレート化で担保する)。
+Engine differences are absorbed in the shared classifier (engine-agnostic,
+[ADR-0032](../adr/0032-codex-adapter.md) F5); unclassifiable events fall back
+to `api_error`. Engine reason/detail strings are used **only for internal
+keyword classification**. Always use a fixed code-specific template for
+`error.message` and `body`, never exposing raw exception text to a peer LLM;
+the template also guarantees the required secret masking.
 
-#### server 合成 (`reconnecting` / `reconnected` / `disconnected`) の規則
+#### Server-synthesized (`reconnecting` / `reconnected` / `disconnected`) rules
 
-- 合成 envelope の `agent_id` は `"server"`、`turn_number` は 0、`owner`
-  は `{kind: "user", id: "system"}`。ハード制限超過時の合成 envelope と
-  同形(recipient ごとに `payload.to` をその受信者にする)
-- 候補宛先は当該 wrapper が参加中の各 conversation の **他参加者全員**。
-  planned cycle では後述の target-pair cap までを採用する
-  (Phase 1 は `max_concurrent_agents` = 2 なので 1 conversation あたり実質は
-  送信元 1 件)
-- `wrapper:<recipient>` と `agents:lobby` の双方へ push する(合成
-  escalate と同じ観測経路)
-- 合成 notice は turn / token カウントに **加算しない**。server 由来の
-  メタ通知であって対話ターンではないため(合成 escalate と同じ扱い)
-- conversation entry は削除しない。wrapper が復帰すれば同じ
-  `conversation_id` で継続でき、放置分は既存の wallclock GC が回収する
-- planned cycle は `session_reset` (operator / agent-self)、live agent の
-  `resume_session` (`switch_session`)、operator `restart` に限る。server が
-  runner へ送る前に agent ごとの intent を 1 件だけ確保し、
-  server-issued `request_id` を runner → wrapper の `transition_id` まで運ぶ。
-  direct kill、SIGKILL、runner / service の自律再起動、operator `stop`
-  は planned cycle を開始しない。stop が active intent と競合した場合は
-  `agent_busy` にせず intent を cancel し、既通知 target を terminal
-  `disconnected` で閉じる
-- planned disconnect 時は、その時点の open conversation peer を
-  read-only snapshot して `reconnecting` を配る。intent はこの snapshot と、
-  planned window 中に `peer_reconnecting` で bounce した
-  `{conversation_id, sender}` の deduplicated union を通知先 SoT として持つ。
-  cap の単位は実際の synth envelope 1 件に対応する `{conversation_id, peer}`
-  pair で、union 全体を 50 件に制限する。tracked bounce を優先し、snapshot は
-  残り slot だけを埋める。採用しなかった snapshot pair は件数と対象を warning
-  log に残す。
-  通常の unreachable
-  通知済み mark は参照も消費もしない(過去に terminal 通知済みの
-  peer も、後続の `reconnected` を受ける必要があるため)。これにより、
-  復帰後に一度も IA
-  を交わさず再度異常切断した場合も `disconnected` を通知できる
-- phase が `announced` / `disconnected` のどちらでも、後続 join が同じ
-  non-empty `transition_id` を提示したときだけ
-  intent を閉じ、target union 全体へ通常の
-  `kind=inform` (`payload.error` なし、protocol outcome は `reconnected`)を
-  配る。固定本文は物理的な再接続を断定せず「peer は到達可能、必要なら
-  同じ conversation_id で再送可」とする。不一致・空・欠落 token は intent
-  を閉じない
-- planned intent の timeout / terminal failure 時は、`AgentStates` の
-  authoritative state がまだ `disconnected` なら、ordinary の
-  `notified_unreachable` mark に関係なく target union 全体へ terminal
-  `disconnected` を配る。旧 wrapper または rollback wrapper が live なら、
-  既に bounce された sender を無言で待たせず同じ union へ `reconnected`
-  outcome を配って window を閉じる。reset の
-  `spawn_failed` は rollback 起動成功を意味するため例外的に
-  matching join または timeout まで intent を保持し、
-  `rollback_failed` は terminal failure として閉じる(issue #248)
-- 再接続後に遅れて走った stale な terminate では合成しない(server が
-  `disconnected` 状態を実際に採用した場合のみ発火する)
-- unexpected disconnect の ordinary `disconnected` は、同一 conversation へ
-  1 回きり。当該 agent がその conversation で再び発言するまで再通知しない。
-  planned cycle の target union を閉じる terminal `disconnected` はこの mark を
-  bypass する。entry は切断で消えず turn/token にも加算しないため、ordinary
-  path にこの抑止がないと crash loop / フラッピングする wrapper が peer の
-  ターンを消費し続ける
-- ordinary disconnect は 1 回に通知する conversation 数、planned cycle は
-  target pair 数に上限を設ける(どちらも実装既定 50)。
-  通知 1 件につき `wrapper:<peer>` と `agents:lobby` の 2 broadcast が
-  走るため、多数の conversation を抱えた wrapper の切断が fan-out を
-  増幅させないようにする。打ち切った分は warning ログに残す(黙って
-  落とさない)。この値は `PlannedDisconnects.max_unreachable_notices/0` が
-  単一ソースで、ordinary claim と planned snapshot が共有する。すでに
-  `peer_reconnecting` を返した bounce target は close notice を保証するため、
-  snapshot cap で後から捨てない。planned terminal はこの bounded union だけを
-  mark / deliver し、追加の ordinary target を claim しない
+- A synthesized envelope uses `agent_id: "server"`, `turn_number: 0`, and
+  `owner: {kind: "user", id: "system"}`, matching hard-limit envelopes; set
+  `payload.to` per recipient.
+- Candidate destinations are **all other participants** in every conversation
+  of the wrapper. Planned cycles apply the target-pair cap below (Phase 1 has
+  `max_concurrent_agents = 2`, so this is effectively one recipient per
+  conversation).
+- Push to both `wrapper:<recipient>` and `agents:lobby`, the same observation
+  path as synthesized escalation.
+- Do **not** add synthesized notices to turn or token counters: they are
+  server metadata, not dialogue turns.
+- Keep the conversation entry. A returning wrapper can continue with the same
+  `conversation_id`; existing wall-clock GC reclaims abandoned entries.
+- Planned cycles are limited to `session_reset` (operator or agent-self), a
+  live agent `resume_session` (`switch_session`), and operator `restart`.
+  Before sending to the runner, reserve one intent per agent and carry the
+  server-issued `request_id` through runner to wrapper `transition_id`.
+  Direct kills, SIGKILL, autonomous runner/service restarts, and operator
+  `stop` do not start a planned cycle. If `stop` races an active intent,
+  cancel the intent instead of returning `agent_busy`, and close already-notified
+  targets with terminal `disconnected`.
+- On a planned disconnect, take a read-only snapshot of peers in open
+  conversations and send `reconnecting`. The notification source of truth is
+  the deduplicated union of that snapshot and `{conversation_id, sender}` pairs
+  bounced with `peer_reconnecting` during the planned window. Cap the union at
+  50 `{conversation_id, peer}` pairs, preferring tracked bounces and filling
+  remaining slots from the snapshot; warn with count and targets for omitted
+  pairs. Do not consume the ordinary-unreachable mark: a peer that already got a
+  terminal notice may still need `reconnected`, and can receive `disconnected`
+  again after recovery without exchanging IA.
+- In either `announced` or `disconnected` phase, close the intent and send a
+  normal `kind=inform` with no `payload.error` (protocol outcome `reconnected`)
+  only when a later join presents the same non-empty `transition_id`. Fixed
+  wording says the peer is reachable and may be retried with the same
+  conversation_id without asserting physical reconnection. Mismatched, empty,
+  or missing tokens do not close the intent.
+- On planned-intent timeout or terminal failure, if authoritative `AgentStates`
+  is still `disconnected`, send terminal `disconnected` to the target union
+  regardless of ordinary `notified_unreachable` marks. If an old or rollback
+  wrapper is live, send `reconnected` to the same union rather than leaving
+  bounced senders waiting, then close the window. For reset,
+  `spawn_failed` means rollback startup succeeded, so retain the intent until a
+  matching join or timeout; `rollback_failed` closes it as terminal failure
+  (issue #248).
+- Do not synthesize for a stale terminate after reconnection; emit only when the
+  server actually adopts `disconnected` state.
+- An ordinary unexpected `disconnected` is sent once per conversation and is
+  suppressed until that agent speaks again. A terminal planned-cycle
+  `disconnected` that closes the target union bypasses this mark. Entries remain
+  and counters do not change on disconnect; without suppression a crash-looping
+  wrapper would consume peer turns repeatedly.
+- Cap ordinary notifications by conversation count and planned cycles by target
+  pairs (both default to 50). Each notice produces two broadcasts
+  (`wrapper:<peer>` and `agents:lobby`), so the cap prevents fan-out
+  amplification. Log overflow rather than silently dropping it.
+  `PlannedDisconnects.max_unreachable_notices/0` is the shared source for
+  ordinary claims and planned snapshots. Retain a bounced target that already
+  received `peer_reconnecting` so its close notice is guaranteed. Planned
+  terminal handling marks and delivers only this bounded union and claims no
+  additional ordinary target.
 
-planned intent が active な宛先への新規 IA は、server の
-preflight で `peer_reconnecting` として reject する。この reject は
-`ConversationStates`、送受信 pane、recipient delivery ledger を一切更新しない。
-active 判定と target union への追加は同じ `PlannedDisconnects.track_bounce`
-call で atomic に行う。close が先に勝って `:noop` なら通常 preflight を続け、
-target を記録できなかった message に `peer_reconnecting` を返さない。
-50 slot を使い切った後の未登録 pair は `peer_reconnecting_capacity` で reject
-し、state へ追加しない。この sender は `reconnecting` を受けず、後続 close
-notice を待つ契約も結ばない。未知 reason として受ける旧 wrapper も既存の
-generic `isError=true` reject へ縮退するため、誤って wait 契約を結ぶことは
-ない(新 wrapper の固定 retry guidance だけが欠ける)。
-wrapper は tool result を `{peer_error: {code: "reconnecting", message, from}}`
-に正規化し、送信先の `reconnected` notice まで再送も operator
-への escalate も行わない。planned window 外の瞬間的な delivery gap は
-issue #257 の範囲である。
+New IA to a destination with an active planned intent is rejected during server
+preflight as `peer_reconnecting`. The reject updates no `ConversationStates`,
+pane, or recipient delivery ledger. The active check and union insertion are
+atomic in one `PlannedDisconnects.track_bounce` call. If closure wins first and
+returns `:noop`, continue normal preflight and do not return
+`peer_reconnecting` for a message that was not recorded. After 50 slots, an
+unregistered pair is rejected as `peer_reconnecting_capacity` and is not added
+to state. Its sender receives no `reconnecting` and has no contract to wait for
+a later close notice; old wrappers treat the unknown reason as their generic
+`isError=true` reject (only the new wrapper's fixed retry guidance is missing).
+The wrapper normalizes the tool result to
+`{peer_error: {code: "reconnecting", message, from}}` and neither retries nor
+escalates until `reconnected`. Momentary delivery gaps outside the planned
+window are issue #257.
 
-state-machine の消費経路(matching join / fail / timeout / operator stop /
-disconnected agent purge / runner relay 前の setup failure)は、いずれも同じ
-target union を `reconnected` または terminal `disconnected` のどちらかへ
-必ず渡す。unexpected disconnect の ordinary claim と「再発話まで同一
-conversation を再通知しない」規則は従来どおりであり、planned-window 外の
-delivery gap は扱わない。
+Every state-machine exit (matching join, failure, timeout, operator stop,
+disconnected-agent purge, or setup failure before runner relay) passes the same
+target union to either `reconnected` or terminal `disconnected`. The existing
+ordinary-claim rule—do not notify the same conversation again until it speaks—
+remains; delivery gaps outside the planned window are out of scope.
 
-#### 受信側の扱い
+#### Receiver handling
 
-- `wait_for_response: true` の待受中に `error` 付き envelope を受けた
-  場合、wrapper はそれを reply として同じ tool result で返す。送信元は
-  `error.code` の有無で `reply_pending` と区別する
-- 非同期(次 turn 注入)の場合、注入テキストに `error.code` を含める
-  (SHOULD)。既存の注入形の meta 行へ `error=<code>` を併記する形を
-  推奨する。送信元エージェントが code から行動を選べることが要件
+- When a `wait_for_response: true` waiter receives an envelope with `error`,
+  return it as the reply in the same tool result. The sender distinguishes it
+  from `reply_pending` by the presence of `error.code`.
+- For asynchronous next-turn injection, include `error.code` in the injected
+  text (SHOULD), preferably as `error=<code>` on the existing metadata line.
+  The originating agent must be able to choose an action from the code.
 
-### コンパニオンツール (wrapper の SDK MCP)
+### Companion tools (wrapper SDK MCP)
 
-wrapper は `send_to_agent` (broker 経由) のほか、以下を **既定 allowedTools
-に含めて auto-allow** で提供する。 read-only / 副作用なしで、 model が宛先
-解決や自己同定に使うため都度承認の対象外:
+In addition to broker-mediated `send_to_agent`, the wrapper provides the
+following tools in the **default allowedTools with auto-allow**. They are
+read-only and side-effect free, so models use them for destination resolution
+and self-identification without per-call approval.
 
-| Tool (full name) | 用途 | 経路 |
+| Tool (full name) | purpose | path |
 |---|---|---|
-| `mcp__kaoiro__list_agents` | 同接続中の他 agent の一覧を取得。宛先解決 (id / persona name / state) に加え、委譲先選定のための実行特性 (engine / model / effort) と稼働状況 (context / session_started_at / turns / last_activity_at / conversation / rate_limits) を返す | wrapper → server の `directory_request` を呼び、reply の `agents` を narrow して返す |
-| `mcp__kaoiro__whoami` | 「server から見た自分」 = agent_id / persona / 現 state / engine / 実効 model・effort と source / permission / network_access / legacy permission_mode・fast_mode / session_id / cwd / `context` / `rate_limits` と、利用可能な場合は `inter_agent_delivery` を返す | identity / 実効設定 / `context` / `rate_limits` は wrapper のローカル `EffectiveStatusSnapshot` と host cache から読む。配送 status 照会が配線された `whoami` は wrapper → server の `delivery_status_request` で recipient ledger を読むため server round-trip を行い、応答が得られた場合だけ `inter_agent_delivery` を載せる |
+| `mcp__kaoiro__list_agents` | Lists other agents on the connection, returning destination identifiers (id/persona name/state), execution characteristics (engine/model/effort), and liveness (context/session_started_at/turns/last_activity_at/conversation/rate_limits). | Calls server `directory_request`, then narrows the reply's `agents`. |
+| `mcp__kaoiro__whoami` | Returns the server's view of this agent: agent_id/persona/state/engine, effective model/effort and sources, permission/network_access, legacy permission_mode/fast_mode, session_id/cwd, `context`, `rate_limits`, and `inter_agent_delivery` when available. | Reads identity/effective settings/context/rate_limits from local `EffectiveStatusSnapshot` and host cache. If delivery status is wired, performs a server `delivery_status_request` round trip and includes `inter_agent_delivery` only on success. |
 
-`whoami` の local field は state envelope と別に組み立てず、各 host が持つ共通
-`EffectiveStatusSnapshot` と host cache から投影する。`model` / `effort` /
-source と `network_access` は既知の場合だけ返す。`permission` は engine-neutral
-な `{sandbox, approval}`、`permission_mode` / `fast_mode` は Claude 互換 field
-として取得済みの場合だけ併記する。SDK / rollout がまだ値を報告していない field
-は stale 値や推測値で埋めず、key 自体を省略する。これら local field と異なり、
-`inter_agent_delivery` は下記の server ledger 観測であり、同じ `whoami` の呼び出し
-でも常に返ることを約束しない。
+Build `whoami` local fields from the shared host `EffectiveStatusSnapshot` and
+cache rather than a separate state envelope. Return model/effort/source and
+network_access only when known; permission is engine-neutral `{sandbox,
+approval}`, while permission_mode/fast_mode are included only when available as
+Claude-compatible fields. Omit fields the SDK or rollout has not reported
+instead of filling stale or inferred values. Unlike these local fields,
+`inter_agent_delivery` observes a server ledger and is not guaranteed on every
+call.
 
-`context` は phase-28 A2 ([#158](https://github.com/sakuraiyuta/kaoiro/issues/158))
-の追補で、自分の context window 使用量 `{used_tokens, max_tokens,
-used_percentage}` を返す。peer が `list_agents` で読む `context` と
-**shape も semantics も同一** (`DirectoryContext`) なので、自己認識と
-他者認識をそのまま比較できる。ただし同時点の値とは限らない — peer 側の
-コピーは server の directory projection を経由するため、配送差で一時的に
-値がずれうる。
+`context` (phase-28 A2, [#158](https://github.com/sakuraiyuta/kaoiro/issues/158))
+returns `{used_tokens, max_tokens, used_percentage}`. Its `DirectoryContext`
+shape and semantics are **identical** to what peers read through
+`list_agents`, so self and peer views are comparable, though transport delay
+can make their timestamps differ.
 
-- **cached last successful measurement**: whoami 自身は refresh を起こさない。
-  host が最後に成功した計測値をそのまま返すため、現ターンの実値から遅れうる。
-  on-demand refresh は提供しない(呼ぶだけで control request が走る tool は
-  常時参照を誘発する)
-- `supports_context_usage: false` の engine (codex) は key ごと省略する。
-  **absent = unknown** であり 0 でも「余裕あり」でもない
-- context 圧縮 / 会話リセットの境界で epoch が切れ、次の計測が成功する
-  までは key ごと省略される (圧縮前の値を残さない)。取得済みだった値は
-  その時点で撤回されるので、absent は「一度も測っていない」だけでなく
-  「直前の値がもう有効でない」も意味する
-- tool 説明では「必要なときに見る」に留め、常時参照を促さない
-  (context anxiety 回避。#158 comment-5384365227 の決定 P3)
+- **Cached last successful measurement**: `whoami` never refreshes. It returns
+  the host's latest successful measurement, which may lag the current turn;
+  no on-demand refresh is provided because a control request on every call
+  would encourage constant polling.
+- Engines with `supports_context_usage: false` (Codex) omit each key.
+  **Absent = unknown**, not zero or “plenty of room”.
+- Context compaction and conversation reset start a new epoch; omit each key
+  until a measurement succeeds in that epoch and withdraw the old value.
+  Absent therefore means either never measured or no longer valid.
+- Tool descriptions say to inspect values when needed and do not encourage
+  constant viewing (avoid context anxiety; #158 comment-5384365227, P3).
 
-`inter_agent_delivery` は issue #237 の追補で、server が持つ recipient-local な
-配送確認 ledger `{issued_seq, acked_seq, pending_since?}` を返す。これは local
-snapshot ではない。wrapper は `delivery_status_request` を server へ送り、その
-応答が得られた場合だけ field を載せる。旧 server / capability 未対応、切断、または
-照会失敗では key ごと省略し、**absent = unknown** とする。これは「SDK turn 開始
-まで未確認の配送」を観測する ledger であって、配送保証・再送 queue・失敗の推測では
-ない。
+`inter_agent_delivery` (issue #237 addendum) exposes the server's
+recipient-local delivery ledger `{issued_seq, acked_seq, pending_since?}`. It
+is not a local snapshot. The wrapper sends `delivery_status_request` and adds
+the field only when a reply arrives. Omit each key—and treat **absent as
+unknown**—for an old or incapable server, a disconnect, or a failed query.
+This ledger observes delivery unconfirmed before SDK turn start; it is not a
+delivery guarantee, resend queue, or failure inference.
 
-`rate_limits` は [#244](https://github.com/sakuraiyuta/kaoiro/issues/244)
-の追補で、自分の rate limit window を `{<window>: {status?, utilization?,
-resets_at?}}` で返す。peer が `list_agents` で読む `rate_limits` と
-**shape も semantics も同一** (`DirectoryRateLimitWindow`)。
+`rate_limits` (addendum [#244](https://github.com/sakuraiyuta/kaoiro/issues/244))
+returns this agent's windows as `{<window>: {status?, utilization?, resets_at?}}`.
+Its `DirectoryRateLimitWindow` shape and semantics are **identical** to the
+value peers read through `list_agents`.
 
-- **これは表示の穴ではなく自己監視の穴だった**。`list_agents` は呼び出し元を
-  除外するため、「7-day 使用率 N% で新規作業を止めよ」と指示された agent が
-  その数値を観測する手段が無かった。2026-08-16 の運用で 3 名が当たり、いずれも
-  director の `list_agents` 転記で代替している。`whoami` はこの唯一の
-  自己観測点になる
-- 値は **host 自身の最新スナップショット**から読む。server のコピーではない —
-  これらの値を生産しているのは wrapper 側なので、host の map は directory が
-  返しうる何よりも新しいか同じである。したがって peer が見る値と食い違うのは
-  配送差の一時的なずれだけで、実装として二経路にはしない
-  (テストで **同値**を固定している。同形では検出できない)
-- **`rate_limits` の取得自体は server round-trip を起こさない**。`whoami` が
-  `rate_limits` を返すだけなら host cache を読むだけである。ただし同じ tool call が
-  `inter_agent_delivery` も観測するときは、前節どおり独立した
-  `delivery_status_request` が server へ送られる。「whoami は常に round-trip なし」
-  という契約ではない
-- **snapshot は最終 turn 時点**で、idle 中は更新されない。`resets_at`
-  (Unix 秒) を現在時刻と突き合わせ、通過後は `utilization` / `status` を
-  信用しない。読み方の正本は `list_agents` の tool description と揃える
-- engine が一度も報告していない間は key ごと省略する。**absent = unknown**
-  であり「無制限」ではない (claude: 初回 usage refresh 前、codex: rollout
-  tail が存在しない spawn 直後)
+- **This addressed a self-observation gap, not a display gap.** Because
+  `list_agents` excludes its caller, an agent told to stop work at a 7-day
+  utilization threshold had no way to read its own number. `whoami` is now the
+  single self-observation point.
+- Read values from the **host's latest snapshot**, not a server copy. The
+  wrapper produces them, so the host map is at least as fresh as the directory;
+  any mismatch with a peer is temporary transport delay. Keep one implementation
+  path and pin **equal values** in tests (matching shape alone cannot detect a
+  split).
+- Reading `rate_limits` itself does **not** cause a server round trip; `whoami`
+  uses host cache. A call that also requests `inter_agent_delivery` sends the
+  independent `delivery_status_request` described above, so there is no
+  “whoami never round-trips” guarantee.
+- The snapshot is from the **last turn** and is not updated while idle. Compare
+  `resets_at` (Unix seconds) with current time and stop trusting
+  `utilization`/`status` after expiry, as specified by the `list_agents` tool
+  description.
+- Omit each key until the engine has reported it once. **Absent = unknown**, not
+  unlimited (Claude before the first usage refresh; Codex immediately after a
+  spawn with no rollout tail).
 
-#### セッション操作ツール — `request_compact` (phase-28 B2)
+#### Session operation tool — `request_compact` (phase-28 B2)
 
-`mcp__kaoiro__request_compact` は上の 2 つと違い **auto-allow しない**。
-`send_to_agent` と同じく既定 allowedTools に含めないことで canUseTool が
-発火し、`permission_broker` が operator に都度承認を求める
-([#158](https://github.com/sakuraiyuta/kaoiro/issues/158)
-決定 P2、[ADR-0028](../adr/0028-external-human-messaging.md) D4 と同じ形)。
+Unlike the two tools above, `mcp__kaoiro__request_compact` is **not auto-allowed**.
+Leaving it out of default allowedTools triggers canUseTool and asks the operator
+through `permission_broker` each time ([#158](https://github.com/sakuraiyuta/kaoiro/issues/158)
+P2, same shape as [ADR-0028](../adr/0028-external-human-messaging.md) D4).
 
-**承認の実効性は agent の permission mode に従属する**
-([ADR-0043](../adr/0043-agent-initiated-session-reset.md) D4 追補、
-2026-07-28 実機確定)。canUseTool → `permission_broker` のダイアログが
-出るのは SDK が canUseTool を照会する mode (`default` 系) に限られ、
-`auto` / `dontAsk` / `bypassPermissions` では SDK が mode の意味論として
-自動承認するためダイアログは出ない。これは `send_to_agent` /
-`request_session_reset` を含む canUseTool 経由の全 tool に共通する。
-厳格な都度承認が必要な agent は operator が mode を `default` 系へ
-設定する。
+**Approval effectiveness depends on the agent's permission mode**
+([ADR-0043](../adr/0043-agent-initiated-session-reset.md) D4 addendum, verified
+on hardware 2026-07-28). The canUseTool → `permission_broker` dialog appears
+only in SDK modes that consult canUseTool (`default` family). In `auto`,
+`dontAsk`, or `bypassPermissions`, the SDK auto-approves by mode semantics, so
+no dialog appears. This applies to every canUseTool tool, including
+`send_to_agent` and `request_session_reset`. Operators requiring strict
+per-call approval must set a `default`-family mode.
 
-| 項目 | 内容 |
+| item | content |
 |---|---|
-| 入力 | `{ reason?: string }`。任意。承認ダイアログに表示され、tool result にも echo される |
-| 承認時 | wrapper が instruction queue へ **固定文字列 `/compact`** を投入し、「予約受理」を返す。圧縮完了は待たない |
-| 拒否時 | SDK が deny message を tool result として model に返す。handler は走らない |
-| timeout | `permission_broker` の既存規約 (`permission_timeout_ms` 未設定なら無期限待機、[ADR-0022](../adr/0022-pending-permission-authoritative-source.md) F6) |
-| engine | **Claude のみ**。codex には出さない (`/compact` 経路が無く、engine 側 auto-compaction 前提) |
+| input | `{ reason?: string, resume_prompt?: string }`, both optional. `reason` appears in the approval dialog and is echoed in the tool result. `resume_prompt` is an automatic post-compaction instruction ([ADR-0055](../adr/0055-compaction-resume-and-lifecycle-log.md), phase-33 Stage A); the agent writes it while full context is available. Omitting it preserves the legacy opt-in behavior. |
+| approval | Queue the **fixed string `/compact`** and return “reservation accepted”; do not wait for compaction. Keep `resume_prompt` in wrapper memory when supplied. |
+| denial | SDK returns a deny message as the tool result; the handler does not run. |
+| timeout | Existing `permission_broker` rule (`permission_timeout_ms` unset means wait indefinitely, [ADR-0022](../adr/0022-pending-permission-authoritative-source.md) F6). |
+| engine | **Claude only**; Codex has no `/compact` path and relies on engine auto-compaction. |
 
-規約:
+Rules:
 
-- **MUST**: 投入テキストは固定リテラル `/compact`。`reason` を連結しない。
-  model が入力ストリームへ任意テキストを流し込む経路にしない
-- **MUST**: 投入は queue 経由。turn 境界で自然に発火するため、実行中の
-  turn を interrupt しない ([ADR-0036](../adr/0036-session-lifecycle-commands.md) F6 と非衝突)
-- 完了は Phase A の `compact_boundary` log (`kind:"system"`) で観測する。
-  tool は完了を待たない。所要は圧縮対象の文脈量に依存し (実測 13.7 秒
-  @ ~22k tokens / 168.8 秒 @ ~293k tokens)、数分に達し得る。tool
-  description も tool result も所要秒数を約束しない
-- 85% 等での**自動発動は実装しない**。SDK native の autoCompact を最終
-  防衛線とし、kaoiro 側の発動は必ず operator 承認を通す (P2)
+- **MUST**: Input is the fixed literal `/compact`; never concatenate `reason`
+  or let the model inject arbitrary text into the input stream.
+- **MUST**: Queue the input. It fires at a turn boundary and never interrupts
+  a running turn ([ADR-0036](../adr/0036-session-lifecycle-commands.md) F6).
+- Observe completion through the Phase-A `compact_boundary` log (`kind:"system"`).
+  The tool does not wait. Duration depends on context size (measured 13.7 s at
+  ~22k tokens and 168.8 s at ~293k tokens) and can reach minutes; neither the
+  tool description nor result promises a duration.
+- Do **not** auto-trigger at 85% or similar. SDK-native autoCompact is the last
+  line of defense; kaoiro triggers always require operator approval (P2).
 
-#### 閾値通知 (phase-28 B1)
+**`resume_prompt` firing rule** ([ADR-0055](../adr/0055-compaction-resume-and-lifecycle-log.md), phase-33 Stage A):
 
-wrapper は `context` の計測が更新されるたびに `used_percentage` を機械判定し、
-既定 70% 以上で **その context epoch につき 1 回だけ** agent へ通知を注入する
-(通常の instruction queue 経由の user turn)。dedup は epoch 単位で、
-compact 境界 / 会話リセットで解除される。
+- The wrapper fires on `compact_boundary` and injects a **fixed prefix template**
+  followed verbatim by the `resume_prompt` body as a user turn through the same
+  serialized instruction queue as threshold notices. The fixed prefix states
+  provenance and keeps arbitrary model text out of the injection path; only the
+  agent-authored body is verbatim.
+- Reservations live only in wrapper memory. If the wrapper dies during
+  compaction, the reservation may disappear (timeline remains distinguishable
+  as Stage-B `resume_reserved` without `resume_fired`).
+- **MUST**: `resume_prompt` is checked against two independent limits before
+  `/compact` is queued, and exceeding either fails the whole `request_compact`
+  call rather than truncating, which would break the verbatim guarantee above:
+  its own raw length, capped at 8,192 UTF-8 bytes; and the full serialized
+  `request_compact` input (`reason` + `resume_prompt` + JSON overhead), which
+  must fit PermissionBroker's approval-payload ceiling (16,384 bytes) once
+  serialized — JSON escaping can inflate a raw value well past the first cap
+  alone, so a value under it is not sufficient on its own.
+- Engine is **Claude only**, as for `request_compact`
+  ([codex-lifecycle-observability](../open-questions/codex-lifecycle-observability.md)).
 
-- **MUST**: epoch 境界直後の未確定 reading では通知しない。境界直後の
-  `getContextUsage()` は圧縮前の値を返し得る (Track S 実測) ため、
-  compact 直後に 2 通目を出してしまう。確定条件は次のいずれか:
-  boundary metadata (`post_tokens`、無ければ `pre_tokens`) を基準に
-  reading が新 epoch を反映していると言えること、または境界後の reading
-  が既定回数に達したこと
-- **MUST**: 確定条件を**大小比較だけにしない**。観測は離散なので、境界後の
-  reading が一度も基準を下回らない列は成立し得る。回数などの bounded な
-  逃げ道が無いと、その epoch の正当な通知が永久に出なくなる
-- **MUST**: 注入は operator instruction / inter-agent / `request_compact` と
-  同じ直列化経路に乗せる。queue 待ちの間に epoch が変わった通知は破棄し、
-  旧 epoch の通知を新 epoch へ持ち越さない
+#### Threshold notice (phase-28 B1)
 
-常時表示や毎 turn の再注入はしない (#158 決定 P3: context anxiety の回避)。
-文言も「切迫」ではなく「回復手段があること」と「今すぐ動く必要はないこと」を
-述べるに留める。閾値は現状 wrapper 内の定数
-(`CONTEXT_NOTICE_THRESHOLD_PERCENT`)。config 配線は dogfood 後に判断する。
+Whenever a `context` measurement updates, the wrapper evaluates
+`used_percentage` and injects one notice **per context epoch** at the default
+70% threshold (a user turn through the normal instruction queue). Deduplication
+is per epoch and resets at compaction or conversation reset.
+
+- **MUST**: Do not notify on an unconfirmed reading immediately after an epoch
+  boundary. `getContextUsage()` may still report the pre-compaction value
+  (Track-S measurement), causing a duplicate immediately after compact.
+  Confirm when boundary metadata (`post_tokens`, or `pre_tokens` if absent)
+  indicates the new epoch, or after the bounded number of post-boundary
+  readings.
+- **MUST**: Confirmation cannot rely on a **greater-than comparison alone**.
+  Discrete observations can remain above the threshold forever; without a
+  bounded escape such as a reading count, a valid notice could be suppressed
+  permanently.
+- **MUST**: Use the same serialized route as operator instructions,
+  inter-agent messages, and `request_compact`. Drop a notice whose epoch changes
+  while queued; never carry an old-epoch notice into a new epoch.
+
+Do not show the notice continuously or reinject every turn (#158 P3, avoid
+context anxiety). Wording should state that recovery options exist and no
+immediate action is required, not imply imminent danger. The threshold remains
+the wrapper constant `CONTEXT_NOTICE_THRESHOLD_PERCENT`; config wiring is
+deferred until dogfooding.
 
 #### `request_session_reset` (phase-28 C2)
 
-agent が自分自身の session を作り直すよう operator に要求する tool
-([ADR-0043](../adr/0043-agent-initiated-session-reset.md))。`request_compact`
-と同じく Claude 限定・都度承認だが、**効果の発生時点が違う**。
+Tool for an agent to ask the operator to rebuild its own session
+([ADR-0043](../adr/0043-agent-initiated-session-reset.md)). Like
+`request_compact`, it is Claude-only and requires per-call approval, but its
+**effect occurs at a different point**.
 
-| 項目 | 内容 |
+| item | content |
 |---|---|
-| 入力 | `{ mode: "new" \| "clear", reason?: string }`。`mode` 必須 |
-| 承認時 | wrapper は**予約のみ**返す。実行は当該 turn の `result` 処理後 |
-| turn 境界 | wrapper が `session_reset_request {mode, reason?}` を server へ送る。server は operator 起点と同じ gate (capability / pending lock / state / cooldown) を通す |
-| 拒否時 | SDK が deny message を tool result として model に返す。予約は作られない |
-| engine | **Claude のみ**。codex には出さない |
+| input | `{ mode: "new" \| "clear", reason?: string }`; `mode` is required. |
+| approval | Wrapper returns a **reservation only**; execution follows that turn's `result` processing. |
+| turn boundary | Wrapper sends `session_reset_request {mode, reason?}` to the server, which applies the same capability/pending-lock/state/cooldown gates as operator requests. |
+| denial | SDK returns a deny message as the tool result; no reservation is created. |
+| engine | **Claude only**; not exposed to Codex. |
 
-規約:
+Rules:
 
-- **MUST**: 実行は turn 境界のみ。tool call 時点では reset しない
-  ([ADR-0043](../adr/0043-agent-initiated-session-reset.md) D3)。承認と実行の
-  時間差は仕様であり、その間に state が変われば server が拒否してよい
-- **MUST**: `reason` は `session_reset_request` payload にのみ載せる。
-  instruction や runner payload へ連結せず、tool result にも echo しない
-- **MUST**: server が拒否したら黙って諦めない。agent へ次 turn で通知し
-  operator にも log する。reset したつもりの agent が書き続けるのを防ぐ
-- **MUST**: 再送は**結果が確定した retryable な拒否** (`agent_busy`) に
-  限る。push timeout は不受理を意味せず、`session_reset_pending` は自分の
-  reset が進行中である可能性がある。これらを再送すると受理済みの reset を
-  二重要求しかねない
-- **MUST**: 結果が確定していない拒否 (timeout / `session_reset_pending` /
-  語彙外) を「実行されなかった」「context は変わっていない」と断定しない。
-  「結果を確認できていない・reset が進行中の可能性がある」と正直に伝える。
-  断定は agent がそれを前提に行動するぶんだけ害が大きい
-- **MUST**: 未確定を解消する**時限を切らない**。「次の turn までに何も
-  起きなければ実行されていない」といった期限は根拠が無い — server の
-  reset transaction は独自の timeout (60 秒) を持ち、wrapper の turn 境界
-  とは無関係で、短い turn の直後に受理済み reset が process を置換する列
-  は普通に成立する。確定は process 置換または operator 向け lifecycle
-  event のみが与える。通知は「再要求しない」「どちらの結果でも安全なよう
-  durable state を保つ」までに留める
-- **MUST**: server から返る reason は closed vocabulary の値のみ採用し、
-  語彙外・非 object・空文字は `unknown_error` に潰す。reason は operator
-  log と agent への注入 turn の両方に載るため、任意テキストの通り道に
-  しない
-- **MUST**: tool description に「呼ぶ前に引き継ぎを外部へ書き出す」ことを
-  明記する (D5)。compact と違い要約は作られず、何も引き継がれない
-- 所要秒数や結果 metadata を約束しない (B2 の MF3 と同じ理由)
+- **MUST**: Execute only at a turn boundary; a tool call never resets
+  immediately ([ADR-0043](../adr/0043-agent-initiated-session-reset.md) D3).
+  The approval-to-execution delay is specified, and the server may reject if
+  state changed meanwhile.
+- **MUST**: Put `reason` only in the `session_reset_request` payload. Never
+  concatenate it into instructions or runner payloads, and do not echo it in
+  the tool result.
+- **MUST**: Surface a server rejection to the agent on the next turn and log
+  it for the operator; never silently abandon it.
+- **MUST**: Retry only a confirmed retryable rejection (`agent_busy`). A push
+  timeout does not prove non-acceptance, and `session_reset_pending` may mean
+  the reset is already running; retrying could request it twice.
+- **MUST**: Do not claim that an unconfirmed result (timeout,
+  `session_reset_pending`, or unknown reason) means “not executed” or “context
+  unchanged.” Say that the result is unknown and a reset may be in progress.
+- **MUST**: Put no deadline on resolving an unconfirmed result. The server reset
+  transaction has its own 60-second timeout independent of wrapper turn
+  boundaries, and an accepted reset may replace the process just after a short
+  turn. Only process replacement or an operator lifecycle event confirms the
+  outcome. Until then say not to retry and keep durable state safe for either
+  result.
+- **MUST**: Accept only closed-vocabulary server reasons; collapse unknown,
+  non-object, or empty values to `unknown_error`. Reasons appear in operator
+  logs and injected turns, so they must not be an arbitrary text channel.
+- **MUST**: The tool description must tell the agent to write handoff context
+  externally before calling (D5); unlike compact, no summary or handoff is
+  created.
+- Do not promise duration or result metadata (same reason as B2 MF3).
 
-#### 宛先解決の指針
+#### Destination-resolution guidance
 
-`send_to_agent.to` は **agent_id を必須** とする (charset `[A-Za-z0-9._-]`)。
-operator が `@あお` のような名前で指示しても、 model は send_to_agent に
-直接渡さず先に `list_agents` で resolve すること:
+`send_to_agent.to` requires an **agent_id** (charset `[A-Za-z0-9._-]`). If an
+operator names a persona such as `@あお`, the model must resolve it with
+`list_agents` before calling `send_to_agent`:
 
-1. `list_agents` で persona.name == "あお" の entry を集める
-2. 1 件 → その agent_id を `send_to_agent.to` に
-3. 複数 → operator に 「どちらの『あお』に送りますか? (候補: …)」と質問し、 候補から指示を得てから送信
-4. 0 件 → 「該当ペルソナが見当たりません」と operator に伝える
+1. Collect entries with `persona.name == "あお"` from `list_agents`.
+2. One entry → use its agent_id as `send_to_agent.to`.
+3. Multiple → ask the operator which matching persona should receive this
+   (include the candidate IDs) and wait for a choice before sending.
+4. None → tell the operator “No matching persona was found.”
 
-固有名で共同作業を指示された相手は既存 kaoiro peer である。上の解決を
-省いて内部サブエージェント(engine 固有の spawn 機構)を同名で代替
-生成してはならない([ADR-0038](../adr/0038-codex-internal-subagents-toggle.md))。
-内部サブエージェントは明示指示時に限り **役割名**(persona 名ではない)で
-作る。また `send_to_agent` で実際に送信し応答を受けるまで、共同作業・
-共同調査が済んだかのように報告しない。
+An agent named by the operator is an existing kaoiro peer. Do not skip the
+resolution above and create a same-named internal subagent as a substitute
+([ADR-0038](../adr/0038-codex-internal-subagents-toggle.md)). Create internal
+subagents only when explicitly requested and by **role name**, not persona
+name. Do not report collaboration or investigation as complete until an actual
+`send_to_agent` is sent and answered.
 
-候補対応 (3) は inject text / TOOL_DESCRIPTION で明示する。
+Spell out candidate handling (3) in injected text and TOOL_DESCRIPTION.
 
-### envelope.type の予約と version
+### Reserved `envelope.type` and version
 
-[protocol.md](protocol.md) の type 一覧に `inter_agent_message` を
-**確定追補**として追加する(`version` 据え置き、
-[ADR-0010](../adr/0010-protocol-precisification.md) /
-[ADR-0015](../adr/0015-protocol-version-stamping.md))。
+Add `inter_agent_message` to the type list in [protocol.md](protocol.md) as a
+**settled addendum** (keep `version` unchanged;
+[ADR-0010](../adr/0010-protocol-precisification.md) and
+[ADR-0015](../adr/0015-protocol-version-stamping.md)).
 
-| type | 状態 | payload |
+| type | status | payload |
 |---|---|---|
-| `inter_agent_message` | **確定**(本 spec) | 上記 "Inner envelope" 参照 |
+| `inter_agent_message` | **settled** (this spec) | see “Inner envelope” above |
 
 ## Constraints
 
-- MUST: server は payload の意味論(kind / body / meta)を解釈しない。
-  `to` フィールドのみをルーティング目的で参照する
-  - carve-out (issue #127): `payload.error` については **構造のみ**
-    検証する(`code` は非空 string、`message` は string)。code の値や
-    message の内容は解釈しない。加えて wrapper 切断時に server が
-    `code=reconnecting` または `code=disconnected` の envelope を合成し、
-    planned cycle の exact-token 復帰時に error なしの `reconnected`
-    inform を合成する。いずれも意味論の解釈ではなく、
-    可観測性のための最小限の構造的関与に留める
-- MUST: `payload.error` を持つ envelope の `kind` も 9 種 enum の
-  いずれか。応答不能エラーの通知は `inform` を使う
-- MUST: server 合成の error notice は turn / token カウントに加算しない
-- MUST: `inter_agent_message` envelope は **operator 限定配信**
-  ([ADR-0021](../adr/0021-role-information-disclosure-policy.md))。
-  viewer には完全除去する
-- MUST: `send_to_agent` ツール呼び出しは Phase 1 では permission_broker
-  の都度承認を経由する (実効性は permission mode に従属 — 「セッション
-  操作ツール」節の注記と ADR-0043 D4 追補を参照。auto 系 mode では mode
-  が承認を包含する)。kaoiro 側の autonomous な承認スキップ機構は
-  Phase 3 まで導入しない
-- MUST: server は config のハード制限(`max_turns` / `max_tokens` /
-  `max_concurrent_agents`)を機械的に強制する(issue #211: 旧
-  `max_wallclock` はハード制限から撤廃済み)
-- MUST: `meta.done` は両 owner-side エージェントから true で
-  conversation が完了。片側だけでは done としない
-- MUST(issue #167): 完了(両 owner-side done)、hard limit 超過、または
-  `open_conversation_ttl_ms` 経過(issue #211、GC 専用)で closed に
-  なった `conversation_id` は tombstone として保持し、
-  `tombstone_ttl_ms` 経過まで削除しない。closed 中の同一
-  `conversation_id` への送信は relay・store・通常 broadcast せず
-  `{:error, :conversation_closed}` で拒否する。counters
-  (turns / tokens / started_at / done_by)は closed 遷移時に破棄し、
-  再送によるリセットを許さない
-- MUST(issue #167): closed な conversation は `peer_index` /
-  disconnect 時の unreachable 通知("応答不能エラーの通知"節)で
-  active 扱いしない
-- MUST: `payload.to == agent_id` の自己ルーティングは server が拒否
-- MUST: `kind: "reject"` の envelope は `meta.reject_reason` を空でない
-  string で持つ
-- MUST: `send_to_agent.to` は agent_id のみ受理 (charset 制約あり)。
-  persona 名による解決は wrapper の `list_agents` ツールが担い、
-  ambiguous 時は operator 確認を経由する
-- MUST: peer directory は **allow-list**。`directory_entry` が明示列挙
-  した field だけを agent 間に出し、`ext` を丸ごと流し込まない。
-  allow-list は nested 階層まで適用し、canonical key だけを写した新しい
-  map を組み立てる([ADR-0021](../adr/0021-role-information-disclosure-policy.md)
-  F6-2、上記「`ext` からの projection」)
-- MUST(issue #187 段階2): `users` も同じ allow-list 規律に従う
-  ([ADR-0021](../adr/0021-role-information-disclosure-policy.md) F6-8)。
-  server 側の組み立ては literal map + 値ごとの再検証とし、キーだけを
-  絞る `Map.take/2` 相当は使わない — 値の shape を検証しないまま wire
-  へ通す経路になるため。role を解決できない user は field 省略ではなく
-  **entry ごと省略**する(上記「users 開示 field 一覧」)
-- MUST(issue #187 段階2): `users` 開示は **config の既定値**として
-  open にする — `KAOIRO_EXPOSE_USERS_TO_AGENTS` 未設定は開示、明示
-  `false` で opt-out(issue #187 制約節「原則見える」は config の
-  デフォルト値として実現する、ADR-0021 F6-8)。実装側の read-site
-  fallback (closed) は config key そのものが欠落する異常系専用であり、
-  通常運用のデフォルトにしてはならない(ふじ M1 レビュー指摘: config
-  default と実装 fallback を混同すると、通常 boot で意図せず閉じる)
-- MUST: `context` は
-  `ext.session_capabilities.supports_context_usage == true` のときだけ
-  投影する。capability が absent / explicit false では field ごと省略し、
-  `null` も推定値も出さない([ADR-0040](../adr/0040-context-usage-capability.md))
-- MUST: `rate_limits` の window は、key が無いときだけ absent として
-  許容し、key があって値が invalid(`null` 含む)なら **当該 window ごと
-  drop** する。値が 1 つも残らない window も drop する
-- MUST: server と wrapper は **同一の projection 規約・同一の上限値** を
-  適用する。片側だけ緩いと server が閉じた素通しを client が開け直す
-- MUST: `conversation` は会話が無くても
-  `{"active": false, "peers": []}` を返す(省略しない)。
-  `conversation_id` は開示しない
-- MUST: `session_started_at` / `last_activity_at` は **server が観測した
-  時刻** であり、wrapper の実測値でも envelope の `ts` でもない
-- MUST: `list_agents` の消費側(呼び出した agent)は、`rate_limits` の
-  `resets_at`(Unix 秒)を現在時刻と比較し、**過去であればその window は
-  窓が明けたものとみなして `utilization` / `status` を信用しない**。
-  snapshot は peer の最終 turn 時点の値であり idle 中は更新されないため。
-  ただしこれは **deterministic に強制される仕組みではない** — server も
-  wrapper も判定を代行せず、model の解釈に委ねる best-effort な規約で
-  ある。dashboard 側の同等対応は
-  [#154](https://github.com/sakuraiyuta/kaoiro/issues/154) の
-  scope
-- MUST: 省略された field は **「不明」であって 0 でも「問題なし」でも
-  ない**。`turns` の省略は 0 往復ではなく、`context` の省略は余裕が
-  あることでも、`rate_limits` の省略は無制限でもない
-- SHOULD: `conversation_id` は UUIDv4 ベースで採番、衝突回避と
-  グルーピング容易性を両立する
-- SHOULD: `body` は protocol 全体の他フィールド同様 wrapper 側で
-  16 KB を超える場合切り詰める(`truncated: true` を `meta` に付与)
+- MUST: The server must not interpret payload semantics (`kind` / `body` /
+  `meta`); it may read only `to` for routing. Carve-out (issue #127): validate
+  `payload.error` structurally (`code` non-empty string, `message` string) but
+  do not interpret values. The server may synthesize `reconnecting` or
+  `disconnected` envelopes on wrapper disconnect and an error-free `reconnected`
+  inform after exact-token planned recovery; these are minimal structural hooks
+  for observability, not semantic interpretation.
+- MUST: An envelope with `payload.error` still uses one of the nine kinds;
+  unresponsive notices use `inform`.
+- MUST: Do not count server-synthesized error notices in turns or tokens.
+- MUST: Deliver `inter_agent_message` envelopes **to operators only**
+  ([ADR-0021](../adr/0021-role-information-disclosure-policy.md)); remove them
+  entirely for viewers.
+- MUST: In Phase 1 every `send_to_agent` call goes through per-call
+  `permission_broker` approval (effect depends on permission mode; auto modes
+  include approval). Do not add kaoiro autonomous approval skipping before
+  Phase 3.
+- MUST: Enforce config hard limits (`max_turns`, `max_tokens`,
+  `max_concurrent_agents`) mechanically. Issue #211 removed old
+  `max_wallclock` as a hard limit.
+- MUST: A conversation completes only when both owner-side agents send
+  `meta.done=true`; one side alone is not done.
+- MUST (issue #167): Retain a conversation closed by both done flags, a hard
+  limit, or `open_conversation_ttl_ms` (issue #211, GC only) as a tombstone
+  until `tombstone_ttl_ms` expires. While closed, do not relay, store, or
+  broadcast sends for that conversation; reject them with
+  `{:error, :conversation_closed}`. Discard counters (turns/tokens/started_at/
+  done_by) at closure and never reset them on retry.
+- MUST (issue #167): Closed conversations are inactive in `peer_index` and in
+  disconnect unresponsive notices.
+- MUST: Reject self-routing where `payload.to == agent_id`.
+- MUST: A `kind: "reject"` envelope carries a non-empty string
+  `meta.reject_reason`.
+- MUST: Accept only agent IDs in `send_to_agent.to` (charset constrained).
+  Resolve persona names through the wrapper `list_agents` tool and ask the
+  operator when ambiguous.
+- MUST: The peer directory is an **allow-list**. Expose only fields explicitly
+  listed by `directory_entry`; never pass `ext` through. Apply the allow-list at
+  nested levels and construct a new map of canonical keys
+  ([ADR-0021](../adr/0021-role-information-disclosure-policy.md) F6-2 and
+  “Projection from `ext`” above).
+- MUST (issue #187 phase 2): Apply the same allow-list discipline to `users`
+  ([ADR-0021](../adr/0021-role-information-disclosure-policy.md) F6-8). Build literal maps with per-value validation; do not use a
+  `Map.take/2`-style key-only filter that bypasses shape checks. Omit an entire
+  user entry when its role cannot be resolved.
+- MUST (issue #187 phase 2): Expose users by default—unset
+  `KAOIRO_EXPOSE_USERS_TO_AGENTS` means open, explicit `false` opts out. A
+  closed read-site fallback is only for the abnormal case where the config key
+  itself is missing, not normal boot.
+- MUST: Project `context` only when
+  `ext.session_capabilities.supports_context_usage == true`; with absent or
+  explicit false capability omit each field and emit neither `null` nor an
+  inferred value ([ADR-0040](../adr/0040-context-usage-capability.md)).
+- MUST: For `rate_limits` windows, accept absence only when the key is missing;
+  if present with an invalid value (including `null`), drop that window. Drop
+  windows left empty after projection.
+- MUST: Server and wrapper apply **identical projection rules and limits**; a
+  looser side must not reopen data closed by the other.
+- MUST: Return `{"active": false, "peers": []}` even without a conversation;
+  never disclose `conversation_id`.
+- MUST: `session_started_at` and `last_activity_at` are **server-observed
+  timestamps**, not wrapper measurements or envelope `ts`.
+- MUST: A `list_agents` consumer compares `rate_limits.resets_at` (Unix seconds)
+  with current time and, after expiry, does not trust that window's
+  `utilization` or `status`. Snapshots come from the peer's last turn and do
+  not update while idle. This is a best-effort model convention, not a
+  deterministic server/wrapper enforcement; dashboard parity is tracked in
+  [#154](https://github.com/sakuraiyuta/kaoiro/issues/154).
+- MUST: An omitted field means **unknown**, never zero, healthy, or unlimited.
+- SHOULD: Allocate `conversation_id` values from UUIDv4 for collision
+  resistance and easy grouping.
+- SHOULD: Truncate `body` at 16 KB on the wrapper like other protocol fields and
+  set `meta.truncated=true`.
 
 ## Open Questions
 
-- conversation の永続化方針(server 再起動越えで conversation_id を
-  保持するか、Phase 4 / ADR-0014 範疇との接続)— Phase 2 で確定
-- メッセージフィルタ(kaoiro issue #18)の挿入位置 — Phase 2 で
-  検討開始
-- `owner.kind: "agent"` 起動時の自動エスカレーション規則 —
-  Phase 3 / kaoiro issue #87 待ち
+- Conversation persistence (whether conversation_id survives a server restart
+  and how it connects to Phase 4 / ADR-0014) — settle in Phase 2.
+- Insertion point for the message filter (kaoiro issue #18) — begin review in
+  Phase 2.
+- Automatic escalation when starting an `owner.kind: "agent"` conversation —
+  pending Phase 3 / kaoiro issue #87.
 
 ## See Also
 
-- 関連 specs: [protocol](protocol.md)(envelope 共通基盤)、
-  [subagent-tasks](subagent-tasks.md)(類似の予約 type パターン)、
-  [plugin-model](plugin-model.md)(将来のフィルタ挿入位置)、
-  [threat-model](threat-model.md)(operator 限定配信の根拠)
-- 関連 plans: [phase-8-inter-agent-messaging](../plans/phase-8-inter-agent-messaging.md)、
-  [phase-27-list-agents-metadata](../plans/phase-27-list-agents-metadata.md)
-  (peer directory の稼働状況 6 field)
+- Related specs: [protocol](protocol.md) (common envelope foundation),
+  [subagent-tasks](subagent-tasks.md) (similar reserved-type patterns),
+  [plugin-model](plugin-model.md) (future filter insertion point), and
+  [threat-model](threat-model.md) (basis for operator-only delivery).
+- Related plans: [phase-8-inter-agent-messaging](../plans/phase-8-inter-agent-messaging.md)
+  and [phase-27-list-agents-metadata](../plans/phase-27-list-agents-metadata.md)
+  (six peer-directory liveness fields).
 - ADRs: [0010 protocol-precisification](../adr/0010-protocol-precisification.md),
   [0015 protocol-version-stamping](../adr/0015-protocol-version-stamping.md),
   [0021 role-information-disclosure-policy](../adr/0021-role-information-disclosure-policy.md)
-  (F6 = agent 間開示の allow-list、F6-8 = users 開示の allow 集合),
+  (F6 = allow-list for agent disclosure, F6-8 = user disclosure allow-set),
   [0022 pending-permission-authoritative-source](../adr/0022-pending-permission-authoritative-source.md),
   [0040 context-usage-capability](../adr/0040-context-usage-capability.md)
-  (`context` の capability gate),
+  (the `context` capability gate),
   [0050 principal-model-and-graded-access-control](../adr/0050-principal-model-and-graded-access-control.md)
-  (D5 = identity 原則開示の方針)
-- kaoiro issue #17(本実装の起点)、#18(メッセージフィルタ)、
-  #87(調査の傘 issue)、#127(応答不能エラーの通知)、
-  #150(peer directory の稼働状況)、#154(rate_limits 表示不具合)、
-  #167(conversation lifecycle・tombstone・stale turn 拒否)、
-  #187(users 開示、段階2)
+  (D5 = identity disclosure policy)
+- kaoiro issues #17 (implementation origin), #18 (message filter), #87
+  (umbrella investigation), #127 (unresponsive notices), #150
+  (peer-directory liveness), #154 (rate-limit display defect), #167
+  (conversation lifecycle, tombstone, stale-turn rejection), and #187 (user
+  disclosure, phase 2).

@@ -1,99 +1,107 @@
 ---
-title: Codex model カタログの現状と変更経路
-description: OpenAI Codex エコシステム側のプラン × 利用可能 model 表、認証 2 モード (ChatGPT-account / API-key) の非対称、model 変更の 3 経路 (Web UI / CLI / config.toml)、および `codex doctor` の情報粒度。ADR-0032 F4bc「空カタログ + アカウント既定委任」判断の根拠情報。
+title: Codex model catalog status and change paths
+description: Plan × available-model table in the OpenAI Codex ecosystem; asymmetry between the two authentication modes (ChatGPT account / API key); three model-change paths (Web UI / CLI / config.toml); and the information granularity of `codex doctor`. Background for ADR-0032 F4bc's “empty catalog + delegate to account default” decision.
 status: accepted
 related: [codex-sdk-events, protocol, plugin-model]
 ---
 <!-- markdownlint-disable MD033 -->
 
-# Codex model カタログの現状と変更経路
+# Codex model catalog status and change paths
 
 ## Purpose
 
-[ADR-0032](../adr/0032-codex-adapter.md) F4bc は Codex adapter の
-`supportedModels()` を空カタログとし model 選択をアカウント既定に委任する
-判断を採ったが、その **根拠となる Codex エコシステム側の現状** (プラン別
-model 可用性 / 認証モードの非対称 / 変更経路 / SDK からの列挙可否) は ADR
-本体には収まらないため本 spec に外出しする。
+[ADR-0032](../adr/0032-codex-adapter.md) F4bc chose an empty catalog for the
+Codex adapter's `supportedModels()` and delegated model selection to the
+account default. The **current Codex-ecosystem information supporting that
+decision** (model availability by plan / authentication-mode asymmetry / change
+paths / whether SDK enumeration is possible) does not fit in the ADR itself, so
+it is separated into this specification.
 
-**phase-16 update (2026-07-13)**: [ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) の判断で catalog は復活
-した。ChatGPT-account 認証下でも **operator が `runner.config.json` に
-`codex.chatgpt_plan` を申告する**ことで entitled model 集合を静的に解決
-できるようになり、Plus 以上では Sol / Terra / Luna の catalog を LaunchDialog
-に出し、session 途中の switch も受け付ける (詳細は
-[ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) と
-[phase-16](../plans/phase-16-codex-model-switch.md))。本 spec は現時点でも
-「なぜ列挙 API を待たず operator 申告に依存するか」の 1 次情報として
-参照される。
+**phase-16 update (2026-07-13)**: The decision in
+[ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) restored
+the catalog. Even under ChatGPT-account authentication, the **operator declares
+`codex.chatgpt_plan` in `runner.config.json`** to statically resolve the
+entitled-model set. It presents the Sol / Terra / Luna catalog in LaunchDialog
+for Plus and above, and accepts mid-session switching (details:
+[ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) and
+[phase-16](../plans/phase-16-codex-model-switch.md)). This specification
+remains a primary-information reference for why it depends on an operator
+declaration rather than wait for an enumeration API.
 
-**Status: accepted** — 一次情報 (OpenAI 公式ドキュメント / help center /
-`codex doctor` 実行) の verbatim 引用ベース。ただし OpenAI 側運用で
-entitled model 集合が動く実績あり (2026-07 時点で過去 `gpt-5.5` が
-一時 404 → 復帰の例、[openai/codex#26892](https://github.com/openai/codex/issues/26892))
-のため、本 spec の表は「2026-07-11 時点」のスナップショット。
+**Status: accepted** — based on verbatim quotations from primary information
+(official OpenAI documentation / Help Center / running `codex doctor`). However,
+the entitled-model set has changed in OpenAI operations (for example,
+`gpt-5.5` temporarily returned 404 then recovered as of 2026-07;
+[openai/codex#26892](https://github.com/openai/codex/issues/26892)), so this
+specification's table is a snapshot as of 2026-07-11.
 
-## プラン × 利用可能 model (2026-07-11)
+## Plan × available model (2026-07-11)
 
-| プラン | 月額 | Codex 利用可能 model | Codex 側の既定 | 備考 |
+| Plan | Monthly price | Codex-available models | Codex default | Notes |
 |---|---|---|---|---|
-| Free | $0 | `gpt-5.6-terra` のみ | Terra | Sol / Luna 選択不可 |
-| Go | $8 | `gpt-5.6-terra` のみ | Terra | 2026-04 新設ティア |
-| Plus | $20 | Sol / Terra / Luna (effort 選択可) | **Sol + medium** | CLI/Desktop で切替可 |
-| Pro | $100 or $200 | Sol / Terra / Luna + `gpt-5.3-codex-spark` | **Sol + medium** | 200 版は 5h 窓 20 倍 |
-| Business | $25/user | Sol / Terra / Luna | **Sol + medium** | 旧 Team ($30) を 2026-04 に置換 |
-| Enterprise | custom | Sol / Terra / Luna (+ 個別交渉) | **Sol + medium** | admin 側 default 変更可 |
-| API-key | 従量 | Sol / Terra / Luna / 5.5 / 5.4 / 5.4-mini + deprecated 一部 | **明示指定必須** | 400/404 制約なし |
+| Free | $0 | `gpt-5.6-terra` only | Terra | Sol / Luna cannot be selected |
+| Go | $8 | `gpt-5.6-terra` only | Terra | Tier introduced in 2026-04 |
+| Plus | $20 | Sol / Terra / Luna (effort selectable) | **Sol + medium** | Switchable in CLI/Desktop |
+| Pro | $100 or $200 | Sol / Terra / Luna + `gpt-5.3-codex-spark` | **Sol + medium** | The $200 version has a 20× five-hour window |
+| Business | $25/user | Sol / Terra / Luna | **Sol + medium** | Replaced former Team ($30) in 2026-04 |
+| Enterprise | custom | Sol / Terra / Luna (+ individual negotiation) | **Sol + medium** | Admin can change the default |
+| API-key | Usage based | Sol / Terra / Luna / 5.5 / 5.4 / 5.4-mini + some deprecated models | **Explicit selection required** | No 400/404 restriction |
 
-**モデル slug** (`--model` / `~/.codex/config.toml` / `-c model=` で使う識別子):
+**Model slugs** (identifiers used by `--model` / `~/.codex/config.toml` /
+`-c model=`):
 `gpt-5.6-sol` / `gpt-5.6-terra` / `gpt-5.6-luna` / `gpt-5.5` / `gpt-5.4` /
-`gpt-5.4-mini` / `gpt-5.3-codex-spark`。
+`gpt-5.4-mini` / `gpt-5.3-codex-spark`.
 
-**API 参考料金** (1M token あたり): Sol $5 入力 / $30 出力、
-Terra $2.50 / $15、Luna $1 / $6。
+**Reference API pricing** (per 1M tokens): Sol $5 input / $30 output,
+Terra $2.50 / $15, Luna $1 / $6.
 
-## 認証 2 モードの非対称 (F4bc 根拠)
+## Asymmetry between the two authentication modes (F4bc background)
 
-### ChatGPT-account 認証
+### ChatGPT-account authentication
 
-プランに entitled されていないモデル slug を `--model` で明示指定すると:
+When a model slug not entitled by the plan is explicitly specified with
+`--model`:
 
 - **HTTP 400** `{"detail":"The 'gpt-X.Y' model is not supported when using
   Codex with a ChatGPT account."}`
-- または **HTTP 404** `Model not found gpt-X.Y`
+- Or **HTTP 404** `Model not found gpt-X.Y`
 
-観測された拒否 slug 例 (2026 時点、GitHub issue 実観測):
+Examples of rejected slugs observed in GitHub issues (as of 2026):
 `gpt-5-codex` / `gpt-5.1-codex` / `gpt-5.2-codex` / `*-codex-mini` /
-`codex-mini-latest`。過去には `gpt-5` / `gpt-5.5` も一時期拒否。
+`codex-mini-latest`. `gpt-5` / `gpt-5.5` were also rejected temporarily in the
+past.
 
-**列挙 API が存在しない**: このアカウントで通る slug 集合を SDK/CLI から
-プログラム的に取得する経路は現時点で無い。`~/.codex/auth.json` は token を
-保持するだけで entitlement を返さない。`codex doctor` (下記) も plan tier /
-entitled models は返さない。この非対称と列挙不能が **ADR-0032 F4bc が
-curated 静的リストを諦め空カタログに転じた直接の根拠**。
+**No enumeration API exists**: There is currently no SDK/CLI path to
+programmatically obtain the set of slugs accepted by this account.
+`~/.codex/auth.json` only retains tokens and returns no entitlement.
+`codex doctor` (below) also returns neither the plan tier nor entitled models.
+This asymmetry and inability to enumerate are **the direct basis for
+ADR-0032 F4bc abandoning a curated static list for an empty catalog**.
 
-### API-key 認証
+### API-key authentication
 
-entitle 判定なし。上記拒否 slug も多くが通る。deprecated 版も一部残る。
-curated 静的リストを持たせても 400/404 リスクは限定的。
+There is no entitlement check. Many of the rejected slugs above also work.
+Some deprecated versions remain. The 400/404 risk is limited even with a
+curated static list.
 
-## Model 変更の 3 経路
+## Three paths for changing models
 
 ### (A) Web UI (Codex Settings)
 
-2026-07-09 に Codex が macOS/Windows 版 ChatGPT Desktop App に統合された。
+On 2026-07-09, Codex was integrated into the macOS/Windows ChatGPT Desktop App.
 
-- **Codex サイドバー右上の歯車アイコン → 「Codex Settings」→ model
-  プルダウンで切替**。同じパネルに「Open config.toml」ボタンあり
-  (config.toml を直接編集する経路への導線)。
-- Desktop / CLI / IDE 拡張は同一の `~/.codex/config.toml` を共有するので、
-  どこで変えても全経路に効く。
+- **Gear icon at top-right of the Codex sidebar → “Codex Settings” → model
+  pull-down to switch**. The same panel has an “Open config.toml” button (an
+  entry point to editing config.toml directly).
+- Desktop / CLI / IDE extensions share the same `~/.codex/config.toml`, so a
+  change anywhere affects all paths.
 
-ChatGPT web の設定画面ではなく **Codex 側でのみ** 変える点に注意 (ChatGPT
-会話用と Codex コーディング用は別扱い)。
+Note that this changes it **only on the Codex side**, not on the ChatGPT web
+settings page (ChatGPT conversation and Codex coding are handled separately).
 
-### (B) CLI option (一時上書き)
+### (B) CLI option (temporary override)
 
-Codex CLI のヘルプ:
+Codex CLI help:
 
 ```text
 -m, --model <MODEL>
@@ -103,99 +111,106 @@ Codex CLI のヘルプ:
     `~/.codex/config.toml`. Examples: `-c model="o3"`
 ```
 
-- 単発上書き: `codex -m gpt-5.6-terra "..."`
-- ドット記法: `codex -c model="gpt-5.6-luna" "..."`
+- One-off override: `codex -m gpt-5.6-terra "..."`
+- Dot notation: `codex -c model="gpt-5.6-luna" "..."`
 
-`codex exec` / `codex mcp-server` などのサブコマンドでも同じフラグが渡る
-(`@openai/codex-sdk` 経由の kaoiro も同じ)。ただし ChatGPT-auth 下では
-プラン外 slug 指定で 400/404 に落ちる。
+The same flags pass to subcommands such as `codex exec` / `codex mcp-server`
+(and to kaoiro through `@openai/codex-sdk`). Under ChatGPT auth, however,
+specifying a slug outside the plan results in 400/404.
 
-### (C) 永続設定 (`~/.codex/config.toml`)
+### (C) Persistent setting (`~/.codex/config.toml`)
 
 ```toml
 # ~/.codex/config.toml
 model = "gpt-5.6-sol"
 ```
 
-**解決優先度** (高 → 低):
+**Resolution priority** (high → low):
 
-1. CLI フラグ (`--model` / `-c model=`)
-2. profile (`[profiles.xxx]` セクション、`--profile` で有効化)
-3. プロジェクト config `.codex/config.toml` (trusted project のみ)
-4. ユーザ config `~/.codex/config.toml`
-5. アカウント / プラン既定 (暗黙)
+1. CLI flags (`--model` / `-c model=`)
+2. Profile (`[profiles.xxx]` section, enabled by `--profile`)
+3. Project config `.codex/config.toml` (trusted projects only)
+4. User config `~/.codex/config.toml`
+5. Account / plan default (implicit)
 
-`CODEX_HOME` env で `~/.codex` の場所自体を移すことも可能。
+The `CODEX_HOME` environment variable can also relocate `~/.codex` itself.
 
-## `codex doctor` の情報粒度
+## Information granularity of `codex doctor`
 
-`codex doctor --json` (0.144.1) が返す 18 チェックのうち auth / config
-関連が以下を報告する:
+Of the 18 checks returned by `codex doctor --json` (0.144.1), the auth /
+config-related checks report the following:
 
-| フィールド | 経路 | 用途 |
+| Field | Path | Purpose |
 |---|---|---|
-| `auth.credentials.details["stored auth mode"]` | `~/.codex/auth.json` | `chatgpt` / `apikey` の判別 (kaoiro 側から取得可) |
-| `auth.credentials.details["stored API key"]` | 同上 | API-key 併用の有無 |
-| `auth.credentials.details["stored ChatGPT tokens"]` | 同上 | ChatGPT token 保存状態 |
-| `config.load.details["model"]` | `~/.codex/config.toml` | 明示指定値 or `<default>` |
-| `config.load.details["model provider"]` | 同上 | 通常 `openai` |
-| `config.load.details["enabled feature flags"]` | 同上 | 有効な feature flag 一覧 |
+| `auth.credentials.details["stored auth mode"]` | `~/.codex/auth.json` | Identifies `chatgpt` / `apikey` (available to kaoiro) |
+| `auth.credentials.details["stored API key"]` | Same as above | Whether an API key is also used |
+| `auth.credentials.details["stored ChatGPT tokens"]` | Same as above | ChatGPT token storage status |
+| `config.load.details["model"]` | `~/.codex/config.toml` | Explicitly selected value or `<default>` |
+| `config.load.details["model provider"]` | Same as above | Usually `openai` |
+| `config.load.details["enabled feature flags"]` | Same as above | List of enabled feature flags |
 
-**JSON 実形状の注意** (phase-16 の A-2 blocker で判明): 0.144.1 の doctor
-`--json` は `checks` を「フラットな要素キー辞書」として返し、要素キー自体が
-`"auth.credentials"` のようなリテラルなドット付き文字列になっている。
-つまり `report.checks["auth.credentials"].details["stored auth mode"]` で
-アクセスするのが正しく、`report.checks.auth.credentials.details[...]` の
-ネスト path として辿ると常に undefined になる。テスト fixture もこの実
-shape に合わせる必要がある (Potemkin fixture では実データ breakage を
-検出できない、[runner/src/codex-auth.ts](../../runner/src/codex-auth.ts) 実装参照)。
+**Caution about the actual JSON shape** (found by phase-16's A-2 blocker):
+0.144.1 doctor `--json` returns `checks` as a “flat element-key dictionary,”
+whose element keys are literal dotted strings such as `"auth.credentials"`.
+Thus access through
+`report.checks["auth.credentials"].details["stored auth mode"]` is correct;
+traversing it as the nested path `report.checks.auth.credentials.details[...]`
+always produces undefined. Test fixtures must also match this actual shape
+(a Potemkin fixture cannot detect real-data breakage; see the implementation in
+[runner/src/codex-auth.ts](../../runner/src/codex-auth.ts)).
 
-**返さないもの** (F4bc の判断が変わらない主要因):
+**Information not returned** (the main reason F4bc's decision remains):
 
-- Master (このアカウント) の **プラン tier** (Plus / Pro / Business / etc.)
-- **アカウント既定モデル名** (Sol / Terra / Luna のいずれか)
-- **entitled models 集合** (このアカウントで 400/404 にならない slug 列)
+- The **plan tier** of Master (this account) (Plus / Pro / Business / etc.)
+- The **account-default model name** (one of Sol / Terra / Luna)
+- The **entitled-model set** (the slugs that do not return 400/404 for this account)
 
-kaoiro 側は `codex doctor --json` を parse すれば auth mode 判別まで到達
-できるが、そこから先は operator 手入力 or 上流 SDK の情報公開待ちになる。
+kaoiro can parse `codex doctor --json` through to authentication-mode
+identification, but beyond that relies on operator input or waiting for the
+upstream SDK to expose the information.
 
-## kaoiro 側への含意
+## Implications for kaoiro
 
-- **旧実装 (ADR-0032 F4bc、2026-07-11 e89fa98 (private Gitea history)、phase-16 で ADR-0035 に上書き)**:
-  LaunchDialog に model select を出さず、wrapper は `model` を送らず、
-  `codex exec` は `~/.codex/config.toml` → プラン既定の順で解決していた。
-  AgentDetail は「アカウント既定 (選択不可)」を表示。
-- **現行 (ADR-0035、phase-16、2026-07-13 host verify 済)**: operator が
-  `runner.config.json` の `codex.chatgpt_plan` を申告することで catalog
-  resolver (`@kaoiro/codex/catalog.ts`) が auth mode + plan から
-  `EngineModelInfo[]` を返し、runner→wrapper→server→dashboard を経由して
-  `ext.models[]` を advertise する。LaunchDialog に model / effort select
-  が復活し、AgentDetail からの mid-session switch も
-  `set_model` / `set_effort` で受け付ける。詳細は
-  [ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) と
-  [phase-16](../plans/phase-16-codex-model-switch.md)。
-- **entitle 判定の非対称性は解消していない**: catalog は operator 申告に
-  依拠しており、SDK からの列挙 API 出現時は再検討する余地あり。
-- **auth mode も明示宣言できる (phase-24)**: `runner.config.json` の
-  `codex.auth_mode`(`"chatgpt"` / `"apikey"`)を書くと、優先順位
-  **明示宣言 > `codex doctor` 検出 > `"unknown"`** で解決され、doctor 検出
-  自体をスキップする。runner の PATH に codex binary が無い環境で catalog が
-  空になる回帰への対処。宣言はあくまで catalog 選択用の metadata で、runner は
-  credential を付与も変更もしない。誤宣言は catalog と実 entitlement のズレを
-  生み、未対応 model / effort の明示要求が 400/404 で loud fail して既存の
-  `switch_error` rollback に落ちる。`chatgpt_plan` からの暗黙推定はしない。
-- **切替の実行モデル**: switch は現 turn を保持したまま次 turn から適用する
-  ([ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) F1)。不正 slug は turn 開始時に 400/404 で loud fail し、
-  silent fallback せず旧 pinned model へ rollback する
-  ([ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) F3、adapter 実装は [wrapper/codex/src/host.ts](../../wrapper/codex/src/host.ts))。
-- **`~/.codex/config.toml` 直書きの位置付け**: kaoiro を介さない CLI/Desktop
-  経由の運用や、kaoiro 未対応 slug (`gpt-5.3-codex-spark` 等 Pro 限定
-  model) を使う場合の運用手段として引き続き有効。CLI 優先度 4 のため
-  kaoiro 経由 spawn より低く、operator 明示指定と競合しない。
+- **Former implementation (ADR-0032 F4bc, 2026-07-11 e89fa98 in private
+  Gitea history, superseded by ADR-0035 in phase-16)**: LaunchDialog had no
+  model select, the wrapper sent no `model`, and `codex exec` resolved through
+  `~/.codex/config.toml` then the plan default. AgentDetail displayed
+  “account default (not selectable).”
+- **Current implementation (ADR-0035, phase-16, host verified 2026-07-13)**:
+  When the operator declares `codex.chatgpt_plan` in `runner.config.json`, the
+  catalog resolver (`@kaoiro/codex/catalog.ts`) returns `EngineModelInfo[]`
+  from auth mode + plan and advertises `ext.models[]` through
+  runner→wrapper→server→dashboard. Model / effort selects return to
+  LaunchDialog, and mid-session switches from AgentDetail are accepted through
+  `set_model` / `set_effort`. Details: [ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md)
+  and [phase-16](../plans/phase-16-codex-model-switch.md).
+- **The entitlement-determination asymmetry remains**: The catalog relies on
+  the operator declaration; it can be reconsidered when the SDK gains an
+  enumeration API.
+- **The authentication mode can also be declared explicitly (phase-24)**:
+  Write `codex.auth_mode` (`"chatgpt"` / `"apikey"`) in `runner.config.json`
+  to resolve it with priority **explicit declaration > `codex doctor` detection
+  > `"unknown"`**, skipping doctor detection itself. This addresses a regression
+  where the catalog became empty when the runner PATH lacked a codex binary.
+  The declaration is metadata only for catalog selection; the runner neither
+  supplies nor changes credentials. A mistaken declaration misaligns catalog
+  and actual entitlement, so an explicit request for an unsupported model /
+  effort fails loudly with 400/404 and falls into existing `switch_error`
+  rollback. There is no implicit inference from `chatgpt_plan`.
+- **Switch execution model**: A switch preserves the current turn and applies
+  from the next turn ([ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md)
+  F1). An invalid slug fails loudly with 400/404 at turn start and rolls back
+  to the previous pinned model without a silent fallback ([ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md)
+  F3; adapter implementation: [wrapper/codex/src/host.ts](../../wrapper/codex/src/host.ts)).
+- **Role of directly editing `~/.codex/config.toml`**: It remains useful for
+  CLI/Desktop operation outside kaoiro and for kaoiro-unsupported slugs (such
+  as the Pro-only `gpt-5.3-codex-spark`). At CLI priority 4, it is lower than a
+  spawn through kaoiro and does not conflict with an operator's explicit
+  selection.
 
-## 一次情報の参照先
+## Primary-information references
 
-- OpenAI 公式:
+- Official OpenAI:
   [Codex Pricing](https://chatgpt.com/codex/pricing/) /
   [ChatGPT Learn — Models](https://learn.chatgpt.com/docs/models) /
   [Config basics](https://learn.chatgpt.com/docs/config-file/config-basic) /
@@ -204,9 +219,9 @@ kaoiro 側は `codex doctor --json` を parse すれば auth mode 判別まで�
 - OpenAI Help Center:
   [Using Codex with your ChatGPT plan (article 11369540)](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan) /
   [GPT-5.6 in ChatGPT (article 20001325)](https://help.openai.com/en/articles/20001325-a-preview-of-gpt-56-sol-terra-and-luna)
-- 実観測 (400/404 挙動):
-  [openai/codex#14266 (gpt-5.4 拒否期)](https://github.com/openai/codex/issues/14266) /
+- Live observations (400/404 behavior):
+  [openai/codex#14266 (gpt-5.4 rejection period)](https://github.com/openai/codex/issues/14266) /
   [#19654 (gpt-5.5 unsupported)](https://github.com/openai/codex/issues/19654) /
   [#26892 (gpt-5.5 404 while gpt-5.4 works)](https://github.com/openai/codex/issues/26892)
-- ローカル検証: `codex doctor --json --no-color` (Codex CLI 0.144.1、
-  2026-07-11 実行)
+- Local verification: `codex doctor --json --no-color` (Codex CLI 0.144.1,
+  run 2026-07-11)

@@ -56,6 +56,8 @@ const buildInfo = {
   revision: identity.revision,
   dirty: identity.dirty,
   built_at: new Date().toISOString(),
+  version: identity.version,
+  channel: identity.channel,
 };
 
 const distDir = join(runnerDir, "dist");

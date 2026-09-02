@@ -1,99 +1,101 @@
 ---
-title: Phase 26 — dashboard OAuth ログイン + 許可リスト (issue #65)
-description: Google/GitHub/Nextcloud の OAuth 個人認証を dashboard に導入し、テキスト許可リスト (provider:identifier[:role]) で認可する。KAOIRO_CLIENT_TOKENS 未設定時は token 認証無効 (OAuth のみ)。設計は ADR-0042。
+title: Phase 26 — Dashboard OAuth login + allowlist (issue #65)
+description: Introduce Google/GitHub/Nextcloud OAuth personal authentication to the dashboard and authorize with a text allowlist (provider:identifier[:role]). When KAOIRO_CLIENT_TOKENS is unset, token authentication is disabled (OAuth only). Design: ADR-0042.
 status: in_progress
 phase: 26
 depends_on: []
 last_updated: 2026-07-26
 ---
 
-# Phase 26 — dashboard OAuth ログイン + 許可リスト
+# Phase 26 — Dashboard OAuth login + allowlist
 
 ## Goal
 
-dashboard に個人を識別するログイン (OAuth: Google / GitHub /
-Nextcloud + 許可リスト認可) を導入する。共有トークン認証は
-`KAOIRO_CLIENT_TOKENS` 設定時のみ併存し、未設定時は OAuth のみ。
-設計決定は [ADR-0042](../adr/0042-oauth-allowlist-login.md)、
-issue は [#65](https://github.com/sakuraiyuta/kaoiro/issues/65)。
+Introduce personal-identity login to the dashboard (OAuth: Google / GitHub /
+Nextcloud + allowlist authorization). Shared-token authentication coexists only
+when `KAOIRO_CLIENT_TOKENS` is configured; when unset, OAuth is the only option.
+The design decision is [ADR-0042](../adr/0042-oauth-allowlist-login.md), and the
+issue is [#65](https://github.com/sakuraiyuta/kaoiro/issues/65).
 
-## 担当
+## Ownership
 
-- server (Elixir): **あお**
-- dashboard (Svelte/TS): **もも**
-- 計画・監督・本 doc の進捗更新: クロエ (担当者は本 doc を直接編集
-  しない — 進捗はクロエへ報告)
+- Server (Elixir): **Ao**
+- Dashboard (Svelte/TS): **Momo**
+- Planning, supervision, and progress updates in this doc: **Kuroe** (assignees
+  must not edit this doc directly—report progress to Kuroe)
 
-## API contract (両者の並行作業境界)
+## API contract (boundary for parallel work)
 
 - `GET /session/auth-methods` → 200
   `{"token": true|false, "oauth": ["google","github","nextcloud"]}`
-  (oauth は有効 provider のみ。認証不要で参照可)
-- `GET /auth/:provider` → 302 (provider の authorize URL へ)。
-  無効 provider は 404
-- `GET /auth/:provider/callback` → 成功: session cookie を積んで
-  302 `/index.html` / 失敗: 302
+  (oauth includes only enabled providers; readable without authentication)
+- `GET /auth/:provider` → 302 (to the provider's authorize URL). An invalid
+  provider returns 404.
+- `GET /auth/:provider/callback` → success: set a session cookie and 302
+  `/index.html` / failure: 302
   `/index.html?auth_error={provider_error|not_allowed|invalid_state}`
-- 以降の WS 接続・refresh・logout は既存経路のまま
-  (`/session/ticket` → `?ticket=`、`GET /session/refresh`、
-  `DELETE /session`)
-- 追補 (2026-07-26 あお、login CSRF 対策): `POST /session/new` は
-  JSON content-type 必須 (それ以外は 415)。dashboard は元から JSON
-  送信のため影響なし
+- Subsequent WS connection, refresh, and logout retain the existing paths
+  (`/session/ticket` → `?ticket=`, `GET /session/refresh`, `DELETE /session`).
+- Addendum (2026-07-26, Ao, login CSRF defense): `POST /session/new` requires
+  JSON content type (otherwise 415). The dashboard already sends JSON, so it is
+  unaffected.
 
-## Scope / タスク
+## Scope / Tasks
 
-| # | task | file | owner | status |
-|---|------|------|-------|--------|
-| 26-1 | deps: assent + HTTP client (Req 想定) 追加。adapter 構成は assent 公式推奨に従う | `server/mix.exs` | あお | done |
-| 26-2 | 許可リスト module: path 読み込み、`provider:identifier[:role]` parse (role 省略= viewer、malformed 行 warn+skip)、`role_for(provider, identifier)`。毎回 parse (キャッシュなし) | `server/lib/kaoiro_server/oauth_allowlist.ex` (新規) | あお | done |
-| 26-3 | runtime.exs: `KAOIRO_OAUTH_*` provider 設定 + `KAOIRO_OAUTH_ALLOWLIST_PATH` 読み込み。`Auth.warn_token_config/0` に OAuth 構成状態の起動時 WARN を追従 | `server/config/runtime.exs`, `auth.ex` | あお | done |
-| 26-4 | AuthController: `GET /auth/:provider` (session_params を session 保存) / callback (state 検証 → identity 正規化 → 許可リスト照合 → put_session → 302)。provider access token は破棄 | `server/lib/kaoiro_server_web/controllers/auth_controller.ex` (新規), `router.ex` | あお | done |
-| 26-5 | session/WS 統合: session の identity 格納、ticket の identity 暗号化、`ClientSocket.connect/3` の identity 解決 (毎回 allowlist 再照合)、`Auth.socket_id` の oauth variant、refresh/delete の identity 対応 | `client_socket.ex`, `session_controller.ex`, `auth.ex` | あお | done |
-| 26-6 | `GET /session/auth-methods` 実装 | `session_controller.ex`, `router.ex` | あお | done |
-| 26-7 | server tests: allowlist parse/fail-closed、callback 認可/拒否、oauth ticket 接続、refresh 401 + 強制切断、auth-methods。既存 suite (auth_test 等) の形式に倣う | `server/test/**` | あお | done |
-| 26-8 | docs/env: `.env.example` + `docs/specs/auth-and-authz.md` (socket 認証表・cookie/ticket 節・Known gaps) 更新 | `server/.env.example`, `docs/specs/auth-and-authz.md` | あお | done |
-| 26-9 | dashboard: 起動時 `GET /session/auth-methods` 取得、token フォームの条件表示 (token 無効時は非表示)、両方無効時の案内文言 | `dashboard/src/App.svelte` | もも | done |
-| 26-10 | dashboard: OAuth ログインボタン (トークン入力の下、`/auth/:provider` へのリンク)、`?auth_error=` の文言表示 + `history.replaceState` で URL 掃除 | `dashboard/src/App.svelte` | もも | done |
-| 26-11 | Vite dev proxy に `/auth` を追加 | `dashboard/vite.config.ts` | もも | done |
-| 26-12 | dashboard 検証: `pnpm typecheck` / `pnpm build` green。ログイン画面の状態分岐 (token のみ / oauth のみ / 併存 / 両方なし) を確認 | `dashboard/` | もも | done |
+| # | Task | File | Owner | Status |
+|---|---|---|---|---|
+| 26-1 | deps: add assent + HTTP client (Req assumed). Follow assent's official adapter recommendation | `server/mix.exs` | Ao | done |
+| 26-2 | Allowlist module: read path, parse `provider:identifier[:role]` (omitted role = viewer, warn+skip malformed lines), `role_for(provider, identifier)`. Parse every time (no cache) | `server/lib/kaoiro_server/oauth_allowlist.ex` (new) | Ao | done |
+| 26-3 | runtime.exs: load `KAOIRO_OAUTH_*` provider settings + `KAOIRO_OAUTH_ALLOWLIST_PATH`. Extend startup WARN from `Auth.warn_token_config/0` with OAuth configuration state | `server/config/runtime.exs`, `auth.ex` | Ao | done |
+| 26-4 | AuthController: `GET /auth/:provider` (save session_params to session) / callback (state validation → identity normalization → allowlist match → put_session → 302). Discard provider access tokens | `server/lib/kaoiro_server_web/controllers/auth_controller.ex` (new), `router.ex` | Ao | done |
+| 26-5 | Session/WS integration: store identity in session, encrypt identity in ticket, resolve identity in `ClientSocket.connect/3` (recheck allowlist every time), OAuth variant of `Auth.socket_id`, identity-aware refresh/delete | `client_socket.ex`, `session_controller.ex`, `auth.ex` | Ao | done |
+| 26-6 | Implement `GET /session/auth-methods` | `session_controller.ex`, `router.ex` | Ao | done |
+| 26-7 | Server tests: allowlist parse/fail-closed, callback authorization/rejection, OAuth ticket connection, refresh 401 + forced disconnect, auth-methods. Follow existing suites (auth_test etc.) | `server/test/**` | Ao | done |
+| 26-8 | Docs/env: update `.env.example` + `docs/specs/auth-and-authz.md` (socket auth table, cookie/ticket section, Known gaps) | `server/.env.example`, `docs/specs/auth-and-authz.md` | Ao | done |
+| 26-9 | Dashboard: fetch `GET /session/auth-methods` at startup, conditional token-form display (hide when token is disabled), guidance when both are disabled | `dashboard/src/App.svelte` | Momo | done |
+| 26-10 | Dashboard: OAuth login buttons (links to `/auth/:provider` below token input), display `?auth_error=` messages + clean the URL with `history.replaceState` | `dashboard/src/App.svelte` | Momo | done |
+| 26-11 | Add `/auth` to the Vite dev proxy | `dashboard/vite.config.ts` | Momo | done |
+| 26-12 | Dashboard verification: `pnpm typecheck` / `pnpm build` green. Check login-screen state branches (token only / OAuth only / both / neither) | `dashboard/` | Momo | done |
 
-## 受け入れ基準
+## Acceptance Criteria
 
 - `cd server && mix test` / `mix format --check-formatted` green
 - `cd dashboard && pnpm typecheck && pnpm build` green
-- 許可リスト外の identity は callback で `not_allowed` 拒否
-  (fail-closed)。許可リスト行削除後、refresh (401) で稼働中 socket が
-  切断される
-- `KAOIRO_CLIENT_TOKENS` 未設定 + OAuth 有効の構成で、token フォームが
-  出ず OAuth ボタンのみ表示される
-- provider access token がログ・session・DETS のどこにも残らない
+- An identity outside the allowlist is rejected with `not_allowed` at callback
+  (fail-closed). After removing an allowlist row, refresh (401) disconnects the
+  live socket.
+- With `KAOIRO_CLIENT_TOKENS` unset + OAuth enabled, show no token form and only
+  OAuth buttons.
+- Provider access tokens remain nowhere in logs, session, or DETS.
 
 ## Out of scope
 
-- role 細分化 (approver 等)、監査ログ、マルチテナント隔離
-- 案A (token ログインフォーム) の廃止 — 併存のまま
-- kaoiro.env ウィザード (#139) への OAuth 質問追加 (followup 候補)
+- Finer role distinctions (approver etc.), audit logs, and multi-tenant
+  isolation
+- Removal of option A (token login form)—keep both coexisting
+- Adding an OAuth question to the kaoiro.env wizard (#139 follow-up candidate)
 
-## 進捗ログ
+## Progress log
 
-- 2026-07-26: 計画作成 (クロエ)。あお/もも へ委任開始
-- 2026-07-26: 26-9〜26-12 完了 (もも、commit 5887df0)。auth-methods
-  取得失敗時は token フォームへ graceful degradation、fetchAuthMethods
-  は形状検証つき。svelte-check 0 errors / build / test 338 green、
-  レビュー must-fix 0
-- 2026-07-26: 26-1〜26-8 完了 (あお、未コミット)。mix test 611 green
-  (クロエ再実行で確認)。must-fix 1 件修正済 (OAuth 有効時に
-  warn_config が Endpoint.url() を boot 前評価して起動不能 →
-  enabled?/1 を env 参照のみに分離 + 別 BEAM 回帰テスト)。追加判明:
-  Nextcloud は PKCE 未対応 (state のみ)、assent 0.3.1 Req adapter の
-  ヘッダ混入バグ回避 (例外は型名のみログ)。followup: 許可リスト role
-  降格が稼働中 socket に効かない件は issue 化 (共有トークン経路にも
-  同穴、AgentsChannel 側の修正が本筋) → #148
-- 引き継ぎメモ: AuthController.log_failure/3 が例外の型名しか出さない
-  制約は assent 0.3.1 Req adapter のヘッダ混入バグ (upstream 修正済・
-  未リリース) が根拠。assent 更新時に緩和可否を再判断。Nextcloud が
-  PKCE 対応したら strategy に code_verifier: true を追加可
-- 2026-07-26: 全コミット完了・push 済 (5887df0 dashboard / 8f75e92
-  docs / 7f57a4c server)。残: マスターによる provider 登録 + 実機 E2E
-  (手順はクロエがチャットで提示済)、role 降格は #148
+- 2026-07-26: Plan created (Kuroe). Delegation to Ao/Momo started.
+- 2026-07-26: 26-9–26-12 complete (Momo, commit 5887df0). On auth-methods
+  fetch failure, gracefully degrade to the token form; fetchAuthMethods has
+  shape validation. svelte-check 0 errors / build / 338 tests green; 0 review
+  must-fixes.
+- 2026-07-26: 26-1–26-8 complete (Ao, uncommitted). mix test 611 green
+  (confirmed by Kuroe rerun). One must-fix corrected (when OAuth is enabled,
+  evaluating Endpoint.url() before boot in warn_config prevented startup →
+  split enabled?/1 to read only env + added a separate BEAM regression test).
+  Additional findings: Nextcloud does not support PKCE (state only); avoid an
+  assent 0.3.1 Req adapter header-injection bug (log only the exception type;
+  fixed upstream but unreleased). Follow-up: allowlist role demotion does not
+  affect live sockets; file an issue (#148—the same hole exists on the shared
+  token path, and the AgentsChannel-side fix is the real solution).
+- Handoff note: The constraint that AuthController.log_failure/3 logs only
+  exception type is based on an assent 0.3.1 Req adapter header-injection bug
+  (fixed upstream, unreleased). Reconsider whether to relax it when updating
+  assent. If Nextcloud adds PKCE support, code_verifier: true can be added to
+  the strategy.
+- 2026-07-26: All commits complete and pushed (5887df0 dashboard / 8f75e92
+  docs / 7f57a4c server). Remaining: master provider registration + real-device
+  E2E (Kuroe has supplied the procedure in chat); role demotion is #148.

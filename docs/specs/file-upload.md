@@ -1,205 +1,219 @@
 ---
-title: ファイルアップロード(添付の取り込み)
-description: ダッシュボードからの添付(画像/テキスト/PDF/Office)を wrapper で SDK 用 content blocks へレンダリングして operator が agent に渡す共通仕様。
+title: File uploads (attachment intake)
+description: Common specification by which the operator passes dashboard attachments (images/text/PDF/Office) to an agent after a wrapper renders them into SDK content blocks.
 status: provisional
 related: [protocol, architecture, non-goals, threat-model]
 ---
 
-# ファイルアップロード(添付の取り込み)
+# File uploads (attachment intake)
 
 ## Purpose
 
-operator がダッシュボードから添付ファイルを agent(初期は Claude Code /
-Claude Agent SDK)に渡せる機構を定義する。 wire の細部は
-[protocol](protocol.md)、 決定の根拠は
-[ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md)。
+Defines how an operator can pass attachments from the dashboard to an agent
+(initially Claude Code / Claude Agent SDK). Wire details are in
+[protocol](protocol.md); the decision rationale is
+[ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md).
 
 ## Definition
 
-### 用語
+### Terminology
 
-| 用語 | 意味 |
+| Term | Meaning |
 |--|--|
-| upload | 1 ファイルの転送単位。 `upload_id`(client 採番、 セッション内一意)で識別 |
-| chunk | 1 binary frame で運ぶ upload の部分。 サイズ・並列度は client 任意 |
-| pending_uploads | wrapper 内のメモリバッファ。 chunk を組み立てた bytes を保持 |
-| attachment | instruction が `attachment_ids` で参照する組み立て済 upload |
-| fit-to-SDK | wrapper が SDK の硬い上限に合わせて downsize / page-extract / truncate / 変換する best-effort 処理 |
+| upload | Transfer unit for one file, identified by `upload_id` (allocated by client; unique within a session). |
+| chunk | Portion of an upload carried in one binary frame. Size and parallelism are client-defined. |
+| pending_uploads | In-memory wrapper buffer retaining bytes assembled from chunks. |
+| attachment | Assembled upload referenced by an instruction through `attachment_ids`. |
+| fit-to-SDK | Best-effort wrapper work to downsize / extract pages / truncate / convert to meet an SDK's hard limits. |
 
-### 責務分担
+### Responsibilities
 
-| 層 | 責任 |
+| Layer | Responsibility |
 |--|--|
-| client(ダッシュボード) | file picker + chunker + ArrayBuffer push。 規範を持たない(UX hint は任意) |
-| server(Phoenix) | 透過 relay + transport DoS 防衛(frame 上限・ in-flight cap)+ operator 認可。 envelope と attach_* を解釈しない(agent 非依存) |
-| wrapper(per-engine) | pending_uploads 管理 / 規範最終判定 / fit-to-SDK / SDK content blocks への変換 / reject 通知。 rendering は wrapper-internal |
+| Client (dashboard) | File picker + chunker + ArrayBuffer push. Holds no normative policy (UX hints are optional). |
+| Server (Phoenix) | Transparent relay + transport DoS defenses (frame limit and in-flight cap) + operator authorization. Does not interpret envelopes or attach_* (agent-independent). |
+| Wrapper (per engine) | pending_uploads management / final normative decisions / fit-to-SDK / conversion to SDK content blocks / reject notification. Rendering is wrapper-internal. |
 
-### 対応ファイル種別 / MIME
+### Supported file types / MIME
 
-| 系統 | 許可 |
+| Category | Permitted |
 |--|--|
-| 画像 | `image/png`, `image/jpeg`, `image/webp`, `image/gif` |
-| テキスト | `text/plain`, `text/markdown`, `text/*`(UTF-8 限定)、 `application/json`, `application/xml`, 主要なソースコード MIME |
+| Images | `image/png`, `image/jpeg`, `image/webp`, `image/gif` |
+| Text | `text/plain`, `text/markdown`, `text/*` (UTF-8 only), `application/json`, `application/xml`, and major source-code MIME types |
 | PDF | `application/pdf` |
-| Office | OOXML のみ: docx(`application/vnd.openxmlformats-officedocument.wordprocessingml.document`)/ xlsx(`…spreadsheetml.sheet`)/ pptx(`…presentationml.presentation`) |
-| 拒否 | 圧縮(zip/tar)、 旧 Office(.doc/.xls/.ppt)、 動画/音声、 実行ファイル系 |
+| Office | OOXML only: docx (`application/vnd.openxmlformats-officedocument.wordprocessingml.document`) / xlsx (`…spreadsheetml.sheet`) / pptx (`…presentationml.presentation`) |
+| Rejected | Archives (zip/tar), legacy Office (.doc/.xls/.ppt), video/audio, and executable types |
 
-非対応 MIME を受信した wrapper は `attach_rejected{reason="mime_denied"}` を返す。
+A wrapper that receives an unsupported MIME returns
+`attach_rejected{reason="mime_denied"}`.
 
-### サイズ・点数・in-flight 上限
+### Size, count, and in-flight limits
 
-| 項目 | 値 | 担当 |
+| Item | Value | Owner |
 |--|--|--|
-| 個別ファイル上限 | **一律 128 MB** | wrapper |
-| 1 instruction 合計サイズ | **撤廃**(wrapper の fit-to-SDK と RSS が事実上の上限) | — |
-| 1 instruction 点数 | 10 | wrapper |
-| in-flight upload | 20 / wrapper | wrapper |
-| transport frame 上限 | 8 MB | server |
-| TTL(未参照 upload / chunk 不完全) | 5 分 | wrapper |
+| Per-file limit | **Uniform 128 MB** | wrapper |
+| Total size per instruction | **Removed** (wrapper fit-to-SDK and RSS are practical limits) | — |
+| Count per instruction | 10 | wrapper |
+| In-flight uploads | 20 / wrapper | wrapper |
+| Transport frame limit | 8 MB | server |
+| TTL (unreferenced upload / incomplete chunks) | Five minutes | wrapper |
 
-### 転送 wire
+### Transfer wire
 
-wire 詳細は [protocol](protocol.md) の「方向別メッセージ種別」と
-「ファイルアップロード wire」セクションを参照。 概要:
+For wire details, see the "Direction-specific message types" and "File-upload
+wire" sections of [protocol](protocol.md). Overview:
 
-- `attach_open`(text/JSON、 client → server → wrapper)で upload を予告。
-- `attach_chunk`(binary frame、 同方向)で bytes を chunked 転送。 並列可。
-- `attach_close`(text/JSON、 同方向)で 1 upload の完了通知。
-- `instruction` を拡張 `{ agent_id, text, attachment_ids? }` で id 参照。
+- `attach_open` (text/JSON, client → server → wrapper) announces an upload.
+- `attach_chunk` (binary frame, same direction) transfers bytes in chunks. It
+  may run in parallel.
+- `attach_close` (text/JSON, same direction) signals completion of one upload.
+- `instruction` is extended with `{ agent_id, text, attachment_ids? }` to
+  reference IDs.
 
-server はバイト列を解釈・永続せず agent channel に透過 relay する
-(ディスク不到達、 [ADR-0020](../adr/0020-dashboard-battery-included-client.md) F3)。
+The server relays bytes transparently to the agent channel without interpreting
+or persisting them (they never reach disk; [ADR-0020](../adr/0020-dashboard-battery-included-client.md)
+F3).
 
-### wrapper-internal rendering
+### Wrapper-internal rendering
 
-wrapper は active SDK と active model を知っているので、 各 attachment を
-最適な SDK content block に変換する。 protocol / client / server には
-Anthropic API 用語(image_block / document_block / text_block 等)は
-出さない。
+The wrapper knows the active SDK and active model, so it converts each
+attachment to the most suitable SDK content block. Anthropic API terminology
+(such as image_block / document_block / text_block) does not appear in the
+protocol, client, or server.
 
-Claude Agent SDK の場合:
+For the Claude Agent SDK:
 
-| 種別 | render 先 |
+| Type | Render target |
 |--|--|
-| 画像 | `image` content block |
-| text / code | `text` content block(本文インライン) |
+| Image | `image` content block |
+| Text / code | `text` content block (inline body) |
 | PDF | `document` content block |
-| Office | wrapper 内 officeparser(pure JS、docx/xlsx/pptx)でテキスト化 → `text` block |
+| Office | Convert to text with wrapper-internal officeparser (pure JS; docx/xlsx/pptx) → `text` block |
 
-上表は Claude Code アダプタ(`wrapper/claude-code/src/upload.ts`)の
-ポリシー。engine ごとに wrapper が独自ポリシーを持つ設計で、**Codex
-アダプタ(`wrapper/codex/src/upload.ts`)は画像のみ受け付ける** —
-`ext.session_capabilities` に `attachment_types: ["image"]` を advertise し、
-UI 側の picker / paste / drop もそれに合わせて画像へ絞る
-([plugin-model](plugin-model.md))。protocol 上限(128 MB / in-flight 20 /
-TTL 5 分)は両 engine で共通。
+The table above is the policy of the Claude Code adapter
+(`wrapper/claude-code/src/upload.ts`). Each engine's wrapper has its own
+policy; the **Codex adapter (`wrapper/codex/src/upload.ts`) accepts images
+only**. It advertises `attachment_types: ["image"]` in
+`ext.session_capabilities`, and restricts the UI picker / paste / drop to
+images accordingly ([plugin-model](plugin-model.md)). Protocol limits (128 MB /
+20 in flight / five-minute TTL) are common to both engines.
 
-### fit-to-SDK
+### Fit-to-SDK
 
-128 MB の protocol 上限(client → server → wrapper)と Claude API の SDK
-実効上限のギャップは wrapper が吸収する。 Phase 7 Stage A の spike(IN2)で
-判明した SDK 上限:
+The wrapper absorbs the gap between the 128 MB protocol limit (client → server
+→ wrapper) and the effective SDK limits of the Claude API. SDK limits
+identified by the Phase 7 Stage A spike (IN2):
 
-- 画像 content block: **10 MB(base64 後、 生 ~7.5 MB)** / モデル別
-  visual token 上限(8000 px 長辺 / 1568-2576 px の長辺で自動 downscale)
-- document content block(PDF): **32 MB / 600 ページ**(200K context モデルは
-  100 ページ)
-- text content block: byte 上限なし(モデルの context window 依存)
-- **リクエスト合計: 32 MB がハード上限**(全 attachment の base64 後合計)
-- 現行 active Claude モデル(Fable 5 / Mythos 5 / Opus 4.x / Sonnet 4.6 /
-  Haiku 4.5)はすべて image / document 対応
+- Image content block: **10 MB (after base64, raw ~7.5 MB)** / model-specific
+  visual-token limit (8,000 px longest side / automatic downscaling at a
+  1,568–2,576 px longest side)
+- Document content block (PDF): **32 MB / 600 pages** (100 pages for 200K
+  context models)
+- Text content block: no byte limit (depends on the model's context window)
+- **Request total: 32 MB hard limit** (total of all attachments after base64)
+- All currently active Claude models (Fable 5 / Mythos 5 / Opus 4.x / Sonnet
+  4.6 / Haiku 4.5) support images and documents
 
-| 種別 | fit | 失敗時 reject reason | 採用ライブラリ |
+| Type | Fit | Reject reason on failure | Library |
 |--|--|--|--|
-| 画像 | 解像度 / 品質 downsize → 10 MB / モデル別 px 上限 以内 | `unfittable_image` | sharp(`ImageDownsizer` 抽象経由、 ADR-0018 対応時に sharp-wasm32 / jimp へ差替え可能) |
-| PDF | 先頭 N ページ抽出 → 32 MB / モデル別ページ上限 以内 | `unfittable_pdf` | pdf-lib(pure JS) |
-| text / code | 先頭 N MB 切り詰め(`truncated` 印付き)+ Anthropic SDK の `countTokens` で context window 検証 | `text_too_large` | 自前 + `@anthropic-ai/sdk` `countTokens` |
-| Office (docx/xlsx/pptx) | text に変換 → text 同様 | 同上 | officeparser(pure JS、 markitdown は OQ で fallback 余地) |
+| Image | Downsize resolution / quality → within 10 MB / model-specific px limit | `unfittable_image` | sharp (through the `ImageDownsizer` abstraction; replaceable with sharp-wasm32 / jimp when supporting ADR-0018) |
+| PDF | Extract first N pages → within 32 MB / model-specific page limit | `unfittable_pdf` | pdf-lib (pure JS) |
+| Text / code | Truncate to first N MB (marked `truncated`) + validate context window with Anthropic SDK's `countTokens` | `text_too_large` | In-house + `@anthropic-ai/sdk` `countTokens` |
+| Office (docx/xlsx/pptx) | Convert to text → same as text | Same as above | officeparser (pure JS; markitdown has room as an OQ fallback) |
 
-**zip bomb ガード**: OOXML は zip コンテナなので、圧縮サイズが 128 MB 制限を
-通っても展開後に爆発しうる。wrapper は entry の**展開後合計**が
-`OFFICE_MAX_UNCOMPRESSED_BYTES`(64 MB)を超えた時点で変換を打ち切り、
-呼出元へ bomb として報告する(`wrapper/claude-code/src/upload.ts`)。
+**Zip-bomb guard**: OOXML is a ZIP container, so its compressed size can pass
+the 128 MB limit yet expand explosively. The wrapper stops conversion when the
+**total uncompressed size** of entries exceeds
+`OFFICE_MAX_UNCOMPRESSED_BYTES` (64 MB), and reports it to the caller as a bomb
+(`wrapper/claude-code/src/upload.ts`).
 
-wrapper は instruction 着信時に **全 attachment の base64 後合計サイズを
-事前検証**し、 32 MB を超える場合は
-`instruction_rejected{reason="total_request_over"}` で拒否する。
-個別 fit 後でも合計が超える場合に発火。 32 MB 超を扱う運用要求が出たら
-Files API 経路(`file_id` 参照)を OQ で起票する。
+When an instruction arrives, the wrapper **pre-validates the total size of all
+attachments after base64** and rejects it with
+`instruction_rejected{reason="total_request_over"}` if it exceeds 32 MB. It
+also fires when the total exceeds the limit after individual fitting. If an
+operational need arises to handle over 32 MB, create an OQ for the Files API
+route (referencing `file_id`).
 
-### reject 経路
+### Reject path
 
-wrapper の判定で受理不能な場合、 専用 envelope type で通知する:
+When wrapper decisions make an upload unacceptable, the wrapper notifies using
+a dedicated envelope type:
 
-| envelope `type` | payload | 用途 |
+| Envelope `type` | Payload | Purpose |
 |--|--|--|
-| `attach_rejected` | `{ upload_id, reason, detail? }` | 個別 upload 拒否(attach_close 時の検査) |
-| `instruction_rejected` | `{ attachment_ids?, reason, detail? }` | instruction 全体拒否(SDK エラー等) |
+| `attach_rejected` | `{ upload_id, reason, detail? }` | Rejection of one upload (validation at attach_close) |
+| `instruction_rejected` | `{ attachment_ids?, reason, detail? }` | Rejection of the entire instruction (SDK errors, etc.) |
 
-reason enum: `size_over` / `mime_denied` / `count_over` / `timeout` /
+Reason enum: `size_over` / `mime_denied` / `count_over` / `timeout` /
 `interrupted` / `unfittable_image` / `unfittable_pdf` / `text_too_large` /
-`total_request_over` / `sdk_error`。
+`total_request_over` / `sdk_error`.
 
-既存 `result.is_error` は「ターン完了時のエラー」の意味論を保つため
-流用しない。 両 envelope は operator 限定配信
-([ADR-0021](../adr/0021-role-information-disclosure-policy.md))。
+Existing `result.is_error` is not reused so that it retains its meaning of an
+"error at turn completion." Both envelopes are delivered to operators only
+([ADR-0021](../adr/0021-role-information-disclosure-policy.md)).
 
-### `interrupt` の意味拡張
+### Extended meaning of `interrupt`
 
-既存 `interrupt` op が次も担う:
+The existing `interrupt` operation also does the following:
 
-- 当該 agent の **pending_uploads を全 drop**(中継中 chunk 含む)
-- 直前 instruction が SDK 内処理中なら **staged attachment bytes を drop**
-- drop した upload_id ごとに `attach_rejected{reason="interrupted"}` を発火
-- turn 進行中でなくとも uploads があれば作動(従来の no-op 条件が緩む)
-- uploads / staged が無ければ従来通り(前方互換維持)
+- **Drops all pending_uploads** for that agent (including chunks in transit)
+- **Drops staged attachment bytes** if the previous instruction is processing
+  within the SDK
+- Fires `attach_rejected{reason="interrupted"}` for every dropped upload_id
+- Operates whenever uploads exist even if no turn is in progress (the previous
+  no-op condition is relaxed)
+- Behaves as before when no uploads / staged bytes exist (preserving forward
+  compatibility)
 
-### UI モデル(遅延 upload)
+### UI model (deferred upload)
 
-protocol 不変の client 規範:
+Client rules that do not alter the protocol:
 
-1. **添付ボタン または D&D drop zone** → file picker / ドロップで取得した
-   ファイルは client local の "to-send tray" に **参照だけ**保持
-   (bytes 転送なし)。 drop zone は agent 単位(例: AgentDetail の
-   チャットボックス領域)に限定し、 複数 agent 間で曖昧にならないようにする。
-2. tray から ✕ で除去可(client local の話、 protocol 関与なし)。
-3. 送信ボタン押下 → `attach_open` × N → `attach_chunk*` → `attach_close`
-   × N → `instruction(attachment_ids=[...])` の順で転送。
+1. **Attachment button or D&D drop zone** → retain files selected by the file
+   picker / drop in the client-local "to-send tray" **by reference only** (no
+   byte transfer). Limit a drop zone to one agent (for example, the chat-box
+   area in AgentDetail) to avoid ambiguity among multiple agents.
+2. Remove an item from the tray with ✕ (this is client-local; the protocol is
+   uninvolved).
+3. Press the send button → transfer in this order: `attach_open` × N →
+   `attach_chunk*` → `attach_close` × N →
+   `instruction(attachment_ids=[...])`.
 
-picker / D&D 取得時の即時 upload は非採用(送信前取り消しでの帯域浪費・
-TTL 依存を回避)。
+Immediate upload when a picker / D&D obtains a file is not adopted (avoids
+wasting bandwidth and relying on TTL when cancelling before sending).
 
-### TTL と fail-safe
+### TTL and fail-safe
 
-wrapper の `pending_uploads` は **5 分**で未参照のものを破棄する。
-explicit cancel は `interrupt`(上記)で出る。 TTL は client 障害 /
-instruction 不発時の fail-safe。
+The wrapper discards unreferenced `pending_uploads` after **five minutes**.
+Explicit cancellation is issued by `interrupt` (above). TTL is a fail-safe for
+client failures / instructions that never arrive.
 
 ## Constraints
 
-- MUST: rendering(image_block / document_block / text_block 選択・
-  Office 変換)は **wrapper-internal**。 protocol / client / server は
-  Anthropic API 用語を持たない。
-- MUST: server はバイト列を解釈・永続しない(agent 非依存・
-  [ADR-0020](../adr/0020-dashboard-battery-included-client.md) F3)。
+- MUST: Rendering (selecting image_block / document_block / text_block and
+  converting Office files) is **wrapper-internal**. The protocol, client, and
+  server contain no Anthropic API terminology.
+- MUST: The server does not interpret or persist bytes (agent-independent;
+  [ADR-0020](../adr/0020-dashboard-battery-included-client.md) F3).
 - MUST: `attach_open` / `attach_chunk` / `attach_close` / `attach_rejected`
-  / `instruction_rejected` は **operator 限定配信**
-  ([ADR-0021](../adr/0021-role-information-disclosure-policy.md))。
-- MUST: transport は [Phoenix Channels 一本化](../adr/0009-client-transport.md)
-  維持(別 socket / HTTP POST upload を立てない)。
-- MUST: protocol `version` 据え置きで追補
-  ([ADR-0015](../adr/0015-protocol-version-stamping.md))、 受信側は未知
-  キーを無視する。
-- MUST: `interrupt` 拡張は前方互換(uploads / staged 不在時は従来挙動)。
-- SHOULD: client は規範を持たず、 reject はすべて wrapper の判定に従う
-  (UX hint は任意)。
+  / `instruction_rejected` are delivered **to operators only**
+  ([ADR-0021](../adr/0021-role-information-disclosure-policy.md)).
+- MUST: Transport retains [the single Phoenix Channels route](../adr/0009-client-transport.md)
+  (do not add a separate socket / HTTP POST upload).
+- MUST: Add extensions without changing the protocol `version`
+  ([ADR-0015](../adr/0015-protocol-version-stamping.md)); receivers ignore
+  unknown keys.
+- MUST: The `interrupt` extension is forward compatible (previous behavior
+  applies when uploads / staged bytes are absent).
+- SHOULD: The client has no normative policy; all rejections follow wrapper
+  decisions (UX hints are optional).
 
 ## Open Questions
 
-| ID | スラグ | urgency |
+| ID | Slug | Urgency |
 |--|--|--|
 | Q1 | [file-upload-fs-read-fallback](../open-questions/file-upload-fs-read-fallback.md) | low |
-| Q2 | 解決済 — [ADR-0034](../adr/0034-session-capabilities-advertisement.md) F7 へ畳んだ(受理可種別は `ext.session_capabilities` で publish する) | — |
+| Q2 | Settled — folded into [ADR-0034](../adr/0034-session-capabilities-advertisement.md) F7 (publish accepted file types through `ext.session_capabilities`) | — |
 | Q3 | [file-upload-json-fallback](../open-questions/file-upload-json-fallback.md) | low |
 | Q5 | [file-upload-spill-storage](../open-questions/file-upload-spill-storage.md) | low |
 | Q6 | [file-upload-exif-stripping](../open-questions/file-upload-exif-stripping.md) | low |
@@ -209,12 +223,13 @@ instruction 不発時の fail-safe。
 
 ## See Also
 
-- 関連 specs: [protocol](protocol.md),
+- Related specs: [protocol](protocol.md),
   [architecture](architecture.md), [non-goals](non-goals.md),
   [threat-model](threat-model.md)
 - ADRs:
-  [0009](../adr/0009-client-transport.md)(Channels 一本化),
-  [0015](../adr/0015-protocol-version-stamping.md)(version 規約),
+  [0009](../adr/0009-client-transport.md) (single Channels route),
+  [0015](../adr/0015-protocol-version-stamping.md) (version convention),
   [0020](../adr/0020-dashboard-battery-included-client.md)(battery-included),
-  [0021](../adr/0021-role-information-disclosure-policy.md)(配信ポリシ),
-  [0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md)(本仕様の決定根拠)
+  [0021](../adr/0021-role-information-disclosure-policy.md) (delivery policy),
+  [0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md) (decision
+  rationale for this specification)

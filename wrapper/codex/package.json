@@ -8,11 +8,12 @@
   "types": "./dist/index.d.ts",
   "kaoiro": {
     "runtimeAssets": [
-      "dist/bridge.js"
+      "dist/bridge.js",
+      "dist/build-info.json"
     ]
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && node ../../scripts/generate-wrapper-build-info.mjs dist",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

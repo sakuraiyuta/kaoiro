@@ -1,117 +1,124 @@
 ---
-title: Phase 20 — LaunchDialog engine catalog live probe (Option E)
-description: LaunchDialog の Claude モデル catalog を短命 SDK probe + runner memory cache で live 化。probe CLI を wrapper/claude-code に切り出し、runner が cache/dedup/TTL/orchestration を担う。server は薄い relay のみ。
+title: Phase 20 — LaunchDialog Engine Catalog Live Probe (Option E)
+description: Make the LaunchDialog Claude model catalog live through a short-lived SDK probe and runner memory cache. Split the probe CLI into wrapper/claude-code, while runner handles cache/dedup/TTL/orchestration and server remains a thin relay.
 status: done
 phase: 20
 depends_on: [18]
 last_updated: 2026-07-15
 ---
 
-# Phase 20 — LaunchDialog engine catalog live probe (Option E)
+# Phase 20 — LaunchDialog Engine Catalog Live Probe (Option E)
 
 ## Goal
 
-[ADR-0039](../adr/0039-engine-catalog-live-probe.md) を実装する。LaunchDialog
-の Claude モデル catalog を `default` 1 エントリ固定から live 実測ベースへ切り
-替え、Anthropic の新モデル (Sonnet 5 等) を手動更新なしで表示できるようにする。
+Implement [ADR-0039](../adr/0039-engine-catalog-live-probe.md). Change
+LaunchDialog's Claude model catalog from a fixed one-entry `default` floor to a
+live, empirically verified source so that new Anthropic models (such as Sonnet
+5) can be displayed without manual updates.
 
-短命 SDK probe を wrapper/claude-code の専用 CLI (`kaoiro-claude-probe`) と
-して切り出し、runner が child process として起動する。runner は memory-only
-の last-known-good cache と dedup mutex を持ち、既存 `RunnerLink.updateRegister()`
-経由で refresh を hosts broadcast に流す。server side は薄い relay のみ
-(新規 GenServer なし)。
+Split out a short-lived SDK probe as a dedicated CLI
+(`kaoiro-claude-probe`) in wrapper/claude-code and launch it as a child process
+from runner. Runner owns a memory-only last-known-good cache and dedup mutex,
+and sends refreshes to the hosts broadcast through the existing
+`RunnerLink.updateRegister()`. The server side is only a thin relay (no new
+GenServer).
 
-責務分離: runner が catalog SoT、server は engine-agnostic relay、wrapper は
-SDK 直依存を閉じた probe CLI 提供、client は自動/手動 refresh と default
-fallback 描画。
+Responsibility split: runner is the catalog SoT, server is the engine-agnostic
+relay, wrapper provides a probe CLI with the SDK dependency contained there,
+and the client handles automatic/manual refresh and default fallback display.
 
 ## Acceptance Criteria
 
-- [x] Empirical spike で prompt 未送信の init→supportedModels→close 成立 +
-      副作用ゼロ (session file 差分 0 / tmpdir 汚染 0 / child process 残留 0)
-      を実測 (phase-20-1、SDK 0.3.208)。
-- [x] `protocol/src/index.ts` に `RefreshEngineCatalog` /
-      `EngineCatalogResult` / `EngineCatalogFailReason` 追加。
-- [x] `wrapper/claude-code/src/probe.ts` を新設し `bin: kaoiro-claude-probe`
-      として公開 (package.json exports + bin)。probe は init.models を第一
-      取得源、undefined/空時のみ `supportedModels()` fallback。副作用最小
-      Options (cwd 隔離 / mcpServers/tools/hooks/agents/additionalDirectories
-      を空)、OAuth/keychain は保持 (`--bare` は禁止)。
-- [x] `runner/src/claude_probe.ts` が child process 経由で probe CLI を実行
-      (SDK 直依存を runner に持ち込まない)。timeout / abort / stdout parse /
-      classifyError を実装。
-- [x] `runner/src/claude_catalog_cache.ts` が memory-only cache + TTL (1h)
-      + last-known-good + dedup mutex を持つ。probe 失敗時は cache を保持。
-- [x] `runner/src/engine_catalog_refresh.ts` が payload validation +
-      unsupported_engine gating + probe orchestration + updateRegister +
-      catalog_result 送信を担う。engine=codex は unsupported_engine で即
-      失敗を返す (probe 呼ばず)。
-- [x] `runner/src/transport.ts` に `onRefreshEngineCatalog` callback と
-      `sendCatalogResult` method を追加。
-- [x] `runner/src/cli.ts` で cache instance + handler を wire、config
-      hot-reload 時に cache の last-known-good を updateRegister に反映。
-- [x] `runner/src/config.ts` の `buildRegister` に第 3 引数
-      `claudeCatalogOverride?` を追加 (後方互換維持、指定時 claude-code
-      entry の models を override)。
-- [x] `server/lib/kaoiro_server_web/channels/agents_channel.ex` に
-      `handle_in("refresh_engine_catalog", ...)` を追加 (operator-only、
-      `relay_to_runner_guarded` パターン)。`intercept` と `handle_out` に
-      `catalog_result` を追加し operator-only 配信を保証。
-- [x] `server/lib/kaoiro_server_web/channels/runner_channel.ex` に
-      `handle_in("catalog_result", ...)` を追加 (`forward_to_operators`
-      パターン、host_id stamp)。
-- [x] `dashboard/src/lib/protocol.ts` に `refreshEngineCatalog` /
-      `onCatalogResult` / `EngineCatalogResult` を追加。`parseCatalogResult`
-      で defensive parse。
-- [x] `dashboard/src/lib/LaunchDialog.svelte` に engine=claude-code
-      選択時の auto refresh (force=false)、Claude 限定の手動 refresh button
-      (force=true)、error 表示、default fallback 維持。
+- [x] Measure an empirical spike establishing init→supportedModels→close with no
+      prompt sent and zero side effects (session file diff 0 / tmpdir pollution 0 /
+      no child process left behind) (phase-20-1, SDK 0.3.208).
+- [x] Add `RefreshEngineCatalog` / `EngineCatalogResult` /
+      `EngineCatalogFailReason` to `protocol/src/index.ts`.
+- [x] Create `wrapper/claude-code/src/probe.ts` and publish it as
+      `bin: kaoiro-claude-probe` through package.json exports + bin. The probe uses
+      init.models as its primary source and falls back to `supportedModels()` only
+      when undefined/empty. Use minimal-side-effect Options (isolated cwd /
+      empty mcpServers/tools/hooks/agents/additionalDirectories); retain
+      OAuth/keychain (`--bare` is forbidden).
+- [x] Execute the probe CLI through a child process in
+      `runner/src/claude_probe.ts` (do not bring a direct SDK dependency into
+      runner). Implement timeout / abort / stdout parse / classifyError.
+- [x] Give `runner/src/claude_catalog_cache.ts` a memory-only cache + TTL (1h) +
+      last-known-good + dedup mutex. Preserve the cache when the probe fails.
+- [x] Make `runner/src/engine_catalog_refresh.ts` handle payload validation,
+      unsupported-engine gating, probe orchestration, updateRegister, and
+      sending catalog_result. engine=codex immediately returns
+      unsupported_engine without invoking the probe.
+- [x] Add an `onRefreshEngineCatalog` callback and `sendCatalogResult` method to
+      `runner/src/transport.ts`.
+- [x] Wire the cache instance + handler in `runner/src/cli.ts`; apply the cache's
+      last-known-good to updateRegister on config hot-reload.
+- [x] Add an optional third argument `claudeCatalogOverride?` to
+      `runner/src/config.ts` `buildRegister` (preserve backward compatibility;
+      when specified, override the models of the claude-code entry).
+- [x] Add `handle_in("refresh_engine_catalog", ...)` to
+      `server/lib/kaoiro_server_web/channels/agents_channel.ex`
+      (operator-only, `relay_to_runner_guarded` pattern). Add `catalog_result`
+      to `intercept` and `handle_out` to guarantee operator-only delivery.
+- [x] Add `handle_in("catalog_result", ...)` to
+      `server/lib/kaoiro_server_web/channels/runner_channel.ex`
+      (`forward_to_operators` pattern, host_id stamp).
+- [x] Add `refreshEngineCatalog` / `onCatalogResult` /
+      `EngineCatalogResult` to `dashboard/src/lib/protocol.ts` and defensive
+      parsing in `parseCatalogResult`.
+- [x] Add automatic refresh (force=false) when engine=claude-code is selected,
+      a Claude-only manual refresh button (force=true), error display, and
+      default fallback preservation to `dashboard/src/lib/LaunchDialog.svelte`.
 - [x] Unit tests: `runner/test/claude_catalog_cache.test.ts` (TTL / force /
-      dedup / failure preserves)、`runner/test/engine_catalog_refresh.test.ts`
+      dedup / failure preserves), `runner/test/engine_catalog_refresh.test.ts`
       (success / failure / unsupported_engine / malformed drop / cache-fresh
-      skip)、`runner/test/config.test.ts` に buildRegister override 追加。
-- [x] Integration tests: `server/test/kaoiro_server_web/channels/agents_channel_test.exs`
-      に refresh_engine_catalog relay + operator-only intercept、
-      `runner_channel_test.exs` に catalog_result forward。
-- [x] `ADR-0037` の Context / Alternatives を「原理的に不可能」→「register-only
-      前提での不可能。ADR-0039 の短命 probe (query 生成) で緩和」に訂正。
-- [x] 変更関連の typecheck / test / format pass (commit は藤レビュー後)。
+      skip), and a buildRegister override in `runner/test/config.test.ts`.
+- [x] Integration tests: refresh_engine_catalog relay + operator-only intercept
+      in `server/test/kaoiro_server_web/channels/agents_channel_test.exs`, and
+      catalog_result forwarding in `runner_channel_test.exs`.
+- [x] Correct the Context / Alternatives of `ADR-0037` from “impossible in
+      principle” to “impossible under the register-only premise; mitigated by
+      ADR-0039's short-lived probe (query generation).”
+- [x] Related typecheck / test / format pass (commit after Fuji review).
 
 ## Tasks
 
-| # | 対象 | 状態 |
+| # | Target | Status |
 |---|------|------|
-| 20-1 | Empirical spike (SDK 0.3.208 で probe 副作用検証) | ✅ |
-| 20-2 | protocol event 定義 (RefreshEngineCatalog / EngineCatalogResult) | ✅ |
-| 20-3 | wrapper/claude-code probe CLI 切り出し + bin エントリ | ✅ |
+| 20-1 | Empirical spike (probe side-effect verification with SDK 0.3.208) | ✅ |
+| 20-2 | protocol event definitions (RefreshEngineCatalog / EngineCatalogResult) | ✅ |
+| 20-3 | Split out the wrapper/claude-code probe CLI + bin entry | ✅ |
 | 20-4 | runner probe client + cache + orchestrator + transport | ✅ |
 | 20-5 | server relay (agents_channel + runner_channel + intercept/handle_out) | ✅ |
-| 20-6 | client (protocol.ts + LaunchDialog auto/manual refresh) | ✅ |
+| 20-6 | client (protocol.ts + LaunchDialog automatic/manual refresh) | ✅ |
 | 20-7 | unit + integration tests | ✅ |
-| 20-8 | docs (ADR-0039 / phase-20 plan / ADR-0037 訂正) | ✅ |
-| 20-9 | 両 repo verify + 藤レビュー | ✅ |
-| 20-10 | ADR-0039 F9 v1: WrapperConfig 経由 initial catalog 輸送 (A のみ) | ✅ |
-| 20-11 | ADR-0039 F9 v2: B 相当の wrapper 内短命 probe + refresh_models_result 相関 + probe launcher 集約 + row shape defensive (藤 review turn-5→7) | ✅ |
+| 20-8 | docs (ADR-0039 / phase-20 plan / ADR-0037 correction) | ✅ |
+| 20-9 | verify both repos + Fuji review | ✅ |
+| 20-10 | ADR-0039 F9 v1: initial catalog transport through WrapperConfig (A only) | ✅ |
+| 20-11 | ADR-0039 F9 v2: B-equivalent short-lived probe inside wrapper + refresh_models_result correlation + probe launcher consolidation + defensive row shape (Fuji review turns 5→7) | ✅ |
 
 ## Notes
 
-- 実装は kaoiro peer delegation で kuroe が実施、fuji がレビュー・commit/push
-  を担う (2026-07-15)。commit / push / branch / installer 実行はレビュー後。
-- 個人情報 (account.email 等) は docs/test fixture/log/commit artifact に残さ
-  ない (fuji turn-5 指示、redact 徹底)。spike 記録は「OAuth 認証成功」までに
-  留める。
-- SDK 0.3.208 の `Options` に `settingsSources` は見つからず、user settings
-  は probe subprocess でも常にロードされる (ADR-0039 F4 注記)。副作用最小化
-  は cwd 隔離 + `mcpServers: {}` / `tools: []` 等で対応。
-- Multi-account host での probe/wrapper account mismatch リスクは ADR-0039
-  Consequences に明記 (単一 account 前提)。
-- Codex 側 catalog は据え置き (ADR-0035 F1 保持)。live probe は Claude のみ。
-- 検証記録 (最終): runner 171 pass (probe test +2 = 空/全 row 不正)、wrapper
-  build ok (probe.js 生成)、client 176 pass (integration test 15: LaunchDialog
-  7 + pending store 6 + unmount async no-crash 1 + in-place hosts refresh
-  no-refire 1)、client svelte-check 337 files/0 errors、server mix test 409/410
-  (唯一 fail は既知 #111 DETS 非分離、本変更と非回帰)。
-- 藤 (kaoiro peer) の独立 real probe 実行 (redact 済み記録): PASS / exit 0 /
-  elapsed ~1.59s / 6 models / `~/.claude/projects` ファイル数差分 0 / 個人情報
-  出力なし / probe 残留プロセスなし。ADR-0039 F4 の副作用最小 Options 構成が
-  operator の実環境でも実測どおりに機能することを追認。
+- Implementation was performed by Kuroe through kaoiro peer delegation; Fuji
+  handled review and commit/push (2026-07-15). Commit / push / branch /
+  installer execution followed review.
+- Do not leave personal information (account.email etc.) in docs/test
+  fixtures/logs/commit artifacts (Fuji's turn-5 instruction; redact
+  thoroughly). Keep the spike record only at “OAuth authentication succeeded.”
+- `settingsSources` was not found in SDK 0.3.208 `Options`, and user settings
+  are therefore always loaded even in the probe subprocess (ADR-0039 F4 note).
+  Minimize side effects with isolated cwd + `mcpServers: {}` / `tools: []`, etc.
+- State the probe/wrapper account mismatch risk on multi-account hosts in the
+  Consequences of ADR-0039 (single-account premise).
+- Keep the Codex catalog unchanged (ADR-0035 F1). The live probe is Claude-only.
+- Verification record (final): runner 171 pass (probe tests +2 = empty/all-row
+  invalid), wrapper build ok (probe.js generated), client 176 pass (integration
+  test 15: LaunchDialog 7 + pending store 6 + unmount async no-crash 1 +
+  in-place hosts refresh no-refire 1), client svelte-check 337 files/0 errors,
+  server mix test 409/410 (the sole failure is known #111 DETS non-isolation,
+  non-regressive for this change).
+- Fuji (kaoiro peer)'s independent real-probe execution (redacted record):
+  PASS / exit 0 / elapsed ~1.59s / 6 models / `~/.claude/projects` file count
+  diff 0 / no personal information in output / no probe process left behind.
+  This reconfirmed that ADR-0039 F4's minimal-side-effect Options configuration
+  works as empirically observed in the operator's environment.

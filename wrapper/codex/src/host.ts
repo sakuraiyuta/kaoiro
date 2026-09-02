@@ -71,11 +71,13 @@ import {
   codexRateLimitsFromRolloutIn,
   codexRolloutsRoot,
   isRolloutCorruptionDetail,
+  repairRolloutCorruption,
   resolveCodexModel,
   verifyRolloutCorruption,
   type CodexRateLimitSnapshot,
   type CodexRateLimitWindow,
   type RolloutCorruptionVerdict,
+  type RolloutRepairResult,
 } from "./rollout.js";
 import {
   CodexTurnDiagnostics,
@@ -115,6 +117,66 @@ export interface CodexClientLike {
 }
 
 type CodexCatalog = ReturnType<typeof resolveCodexCatalog>;
+
+const DEFAULT_CODEX_TERMINAL_DRAIN_GRACE_MS = 5_000;
+
+export type CodexLifecycleEvent =
+  | { kind: "turn_start"; turnToken: string }
+  | { kind: "sdk_event"; turnToken: string; type: string }
+  | {
+      kind: "terminal";
+      turnToken: string;
+      type: "turn.completed" | "turn.failed";
+      authoritative: boolean;
+    }
+  | { kind: "stream_eof"; turnToken: string; terminalSeen: boolean };
+
+type NextEventOutcome<T> =
+  | { kind: "result"; result: IteratorResult<T> }
+  | { kind: "error"; error: unknown }
+  | { kind: "timeout"; pending: Promise<IteratorResult<T>> };
+
+/** Wait for one post-terminal item without allowing a perpetually open SDK
+ * iterator to hold the host's single-turn queue forever. The pending next()
+ * is retained so the caller can abort and await the SDK's cleanup path before
+ * admitting another process. */
+function nextEventBeforeDeadline<T>(
+  iterator: AsyncIterator<T>,
+  deadlineMs: number,
+): Promise<NextEventOutcome<T>> {
+  let pending: Promise<IteratorResult<T>>;
+  try {
+    pending = Promise.resolve(iterator.next());
+  } catch (error) {
+    return Promise.resolve({ kind: "error", error });
+  }
+  const remainingMs = deadlineMs - Date.now();
+  if (remainingMs <= 0) {
+    return Promise.resolve({ kind: "timeout", pending });
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve({ kind: "timeout", pending });
+    }, remainingMs);
+    pending.then(
+      (result) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve({ kind: "result", result });
+      },
+      (error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve({ kind: "error", error });
+      },
+    );
+  });
+}
 
 function initialStatusExtFromCatalog(
   catalog: CodexCatalog,
@@ -195,10 +257,30 @@ export interface CodexHostOptions {
     turnToken: string;
     conversationIds: readonly string[];
     error?: { reason?: string; detail?: string };
+    cancellation?: { kind: "watchdog_fail_stop"; started: false };
   }) => void;
   /** The exact boundary at which an already-queued input begins an SDK turn.
    * Queue insertion intentionally does not count as dispatch (#247). */
   onTurnStart?: (info: { turnToken: string; conversationIds: readonly string[] }) => void;
+  /** Wrapper-local lifecycle evidence for the Codex stream. This is kept out
+   * of transcript envelopes because it exists to diagnose SDK wedges. */
+  onLifecycle?: (event: CodexLifecycleEvent) => void;
+  /** Exact SDK boundary, before lifecycle telemetry or failure persistence.
+   * This is intentionally separate from the fail-soft observation sink. */
+  onTurnBoundary?: (info: { turnToken: string }) => void;
+  /** Invoked after this host turn has fully left or been dropped from the
+   * stream path. Unlike stream_eof, this also covers timeout cleanup, stream
+   * rejection, and queued fail-stop cancellation. */
+  onTurnFinalized?: (info: { turnToken: string }) => void;
+  /** Invoked for every SDK frame while the exact turn is active. */
+  onTurnProgress?: (info: { turnToken: string }) => void;
+  /** Called when watchdog grace expires. The active token is deliberately not
+   * settled: its outcome remains owned by supervisor recovery. */
+  onWatchdogFailStop?: (info: {
+    turnToken?: string;
+    conversationIds: readonly string[];
+    attribution: "exact" | "unattributed";
+  }) => void;
   /** Server-composed personality + common footer (ADR-0029 F5), injected as
    *  a developer-role message via config.developer_instructions (ADR-0032
    *  F3, verified 2026-07-10). */
@@ -246,10 +328,16 @@ export interface CodexHostOptions {
    *  so an injected variant only changes WHERE it reads, not what
    *  "corrupted" means. */
   rolloutCorruptionVerifier?: (sessionId: string) => RolloutCorruptionVerdict;
+  /** Repairs a confirmed corrupt rollout. Injectable so tests can direct the
+   * real repairer at a fixture root; a failed repair remains on #253's
+   * permanent error/manual-fallback path. */
+  rolloutCorruptionRepairer?: (sessionId: string) => RolloutRepairResult;
   /** ISO timestamp source; injectable for tests. */
   now?: () => string;
   /** Epoch clock for deterministic upload TTL tests. */
   nowMs?: () => number;
+  /** Maximum time to drain SDK output after a terminal event. */
+  terminalDrainGraceMs?: number;
   /** Test seam for deterministic materialization lifecycle races. */
   materializeImages?: (
     agentId: string,
@@ -444,12 +532,18 @@ export class CodexHost implements EngineAdapter {
    * materialization observe cancellation before it can enqueue a turn. */
   #lifecycleGeneration = 0;
   readonly #nowMs: () => number;
+  readonly #terminalDrainGraceMs: number;
   #gcTimer: ReturnType<typeof setInterval> | null = null;
   #wake: (() => void) | null = null;
   #abort: AbortController | null = null;
   /** Present only while the SDK is executing one host turn. */
   #activeTurnToken: string | null = null;
+  #activeTurnConversationIds: readonly string[] = [];
   #closed = false;
+  #watchdogFailStopped = false;
+  /** Fail-stop cleanup is started synchronously with queue removal, then
+   * awaited by recovery/tests without ever including the active turn. */
+  #watchdogQueuedCleanup: Promise<void> = Promise.resolve();
   /** Invalidates an older turn's asynchronous account-default refresh. */
   #modelResolutionGeneration = 0;
   /** tool_use_id -> tool_name for tool_result backfill (protocol.md #40). */
@@ -489,6 +583,10 @@ export class CodexHost implements EngineAdapter {
     );
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#nowMs = options.nowMs ?? Date.now;
+    this.#terminalDrainGraceMs = Math.max(
+      0,
+      options.terminalDrainGraceMs ?? DEFAULT_CODEX_TERMINAL_DRAIN_GRACE_MS,
+    );
     this.#model = config.model ?? null;
     this.#modelSource = options.modelSource ?? null;
     this.#effort = config.effort ?? null;
@@ -716,6 +814,95 @@ export class CodexHost implements EngineAdapter {
     this.#abort?.abort();
   }
 
+  /** Requests an interrupt only while this exact token owns the SDK turn.
+   * The abort is a control signal, not a terminal acknowledgement. */
+  requestInterruptForTurn(turnToken: string): boolean {
+    if (
+      this.#activeTurnToken !== turnToken ||
+      this.#watchdogFailStopped ||
+      this.#closed
+    ) {
+      return false;
+    }
+    this.#abort?.abort();
+    return true;
+  }
+
+  /** Closes admission after an exact active token survives the watchdog
+   * interrupt grace. The active token is retained without a result or ack;
+   * supervisor recovery owns that uncertain outcome. */
+  failStopTurnForWatchdog(turnToken: string): boolean {
+    if (
+      this.#activeTurnToken !== turnToken ||
+      this.#watchdogFailStopped ||
+      this.#closed
+    ) {
+      return false;
+    }
+    return this.#failStopForWatchdog("exact");
+  }
+
+  /** Fail closed when the watchdog can no longer prove which token is active. */
+  failStopForWatchdogAttributionUnknown(): boolean {
+    if (this.#watchdogFailStopped) return false;
+    return this.#failStopForWatchdog("unattributed");
+  }
+
+  #failStopForWatchdog(
+    attribution: "exact" | "unattributed",
+  ): boolean {
+    this.#watchdogFailStopped = true;
+    this.#closed = true;
+    if (this.#gcTimer !== null) clearInterval(this.#gcTimer);
+    this.#gcTimer = null;
+    this.#machine = initialMachineState("error");
+    this.#emitState("error");
+
+    // These entries have not reached #runTurn. They are safe to discard and,
+    // when they belong to inter-agent batches, must settle as cancellations so
+    // the caller can report the drop without touching the active token.
+    const queuedTurns = this.#queue.splice(0);
+    this.#watchdogQueuedCleanup = this.#cleanupWatchdogQueuedTurns(
+      queuedTurns,
+    ).then(() => {
+      for (const turn of queuedTurns) {
+        if (turn.turnToken !== undefined) {
+          this.#options.onTurnFinalized?.({ turnToken: turn.turnToken });
+        }
+      }
+    });
+    const error = {
+      detail:
+        attribution === "exact"
+          ? "turn watchdog interrupt grace expired; host admission stopped pending operator recovery"
+          : "turn watchdog token attribution unavailable; host admission stopped pending operator recovery",
+    };
+    for (const turn of queuedTurns) {
+      if (turn.turnToken === undefined) continue;
+      this.#options.onTurnEnd?.({
+        turnToken: turn.turnToken,
+        conversationIds: turn.conversationIds ?? [],
+        error,
+        cancellation: { kind: "watchdog_fail_stop", started: false },
+      });
+    }
+    this.#options.onWatchdogFailStop?.({
+      ...(this.#activeTurnToken === null
+        ? {}
+        : { turnToken: this.#activeTurnToken }),
+      conversationIds: this.#activeTurnConversationIds,
+      attribution,
+    });
+    this.#wake?.();
+    return true;
+  }
+
+  /** Waits for local-image directories belonging to fail-stopped queued
+   * turns. The active turn's directory is intentionally outside this set. */
+  async waitForWatchdogCleanup(): Promise<void> {
+    await this.#watchdogQueuedCleanup;
+  }
+
   close(): void {
     this.#closed = true;
     this.#lifecycleGeneration += 1;
@@ -934,6 +1121,7 @@ export class CodexHost implements EngineAdapter {
       this.#gcTimer = null;
       this.#dropPendingUploads("interrupted");
       await this.#dropQueuedTempTurns();
+      await this.#watchdogQueuedCleanup;
       toolHost?.close();
     }
   }
@@ -986,8 +1174,11 @@ export class CodexHost implements EngineAdapter {
     tempDir?: string,
     conversationIds: readonly string[] = [],
     turnToken: string = randomUUID(),
+    retryAfterRepair = false,
+    settled: { value: boolean } = { value: false },
   ): Promise<void> {
     this.#activeTurnToken = turnToken;
+    this.#activeTurnConversationIds = conversationIds;
     const diagnostics = new CodexTurnDiagnostics(this.#turnTraceCaptureDir);
     const persistFailure = async (
       input: Parameters<CodexTurnDiagnostics["writeFailure"]>[0],
@@ -1064,7 +1255,10 @@ export class CodexHost implements EngineAdapter {
     // Creating/resuming the SDK thread is the last synchronous boundary
     // before `runStreamed()` hands the input to Codex. Confirm #247 delivery
     // here, never when its coordinator merely accepted the queue item.
-    this.#options.onTurnStart?.({ turnToken, conversationIds });
+    if (!retryAfterRepair) {
+      this.#options.onLifecycle?.({ kind: "turn_start", turnToken });
+      this.#options.onTurnStart?.({ turnToken, conversationIds });
+    }
     this.#abort = new AbortController();
     let finalText: string | null = null;
     // A stream-level `error` is evidence, not a terminal boundary. Some SDK
@@ -1072,13 +1266,91 @@ export class CodexHost implements EngineAdapter {
     // later terminal-less EOF has the best available local classification.
     let recordedThreadError: string | null = null;
     let sawResult = false;
+    let sdkBoundaryEnded = false;
+    const endSdkBoundary = (): void => {
+      if (sdkBoundaryEnded) return;
+      sdkBoundaryEnded = true;
+      this.#options.onTurnBoundary?.({ turnToken });
+    };
     try {
       const { events } = await thread.runStreamed(input, {
         signal: this.#abort.signal,
       });
-      for await (const event of events) {
+      const iterator = events[Symbol.asyncIterator]();
+      let terminalDrainDeadlineMs: number | null = null;
+      let terminalEventSeen = false;
+      while (true) {
+        let next: IteratorResult<ThreadEvent>;
+        if (terminalDrainDeadlineMs === null) {
+          next = await iterator.next();
+        } else {
+          const outcome = await nextEventBeforeDeadline(
+            iterator,
+            terminalDrainDeadlineMs,
+          );
+          if (outcome.kind === "error") throw outcome.error;
+          if (outcome.kind === "timeout") {
+            // The SDK's iterator finally kills the child but does not await
+            // its exit. Abort the pending read, then await that read and the
+            // iterator close before the host admits the next process.
+            this.#abort?.abort();
+            await outcome.pending.catch(() => undefined);
+            try {
+              await iterator.return?.();
+            } catch {
+              // The terminal result is already settled; cleanup failure is
+              // not allowed to produce a duplicate turn result.
+            }
+            break;
+          }
+          next = outcome.result;
+        }
+        if (next.done) {
+          if (!terminalEventSeen && !this.#watchdogFailStopped) {
+            endSdkBoundary();
+          }
+          this.#options.onLifecycle?.({
+            kind: "stream_eof",
+            turnToken,
+            terminalSeen: terminalEventSeen,
+          });
+          break;
+        }
+        const event = next.value;
+        const isUsable = isUsableThreadEvent(event);
+        const isTerminalEvent =
+          isUsable &&
+          (event.type === "turn.completed" || event.type === "turn.failed");
+        const firstTerminalEvent = isTerminalEvent && !terminalEventSeen;
+        if (firstTerminalEvent) {
+          terminalEventSeen = true;
+          if (!this.#watchdogFailStopped) endSdkBoundary();
+        }
         diagnostics.recordEvent(event);
-        if (!isUsableThreadEvent(event)) continue;
+        this.#options.onLifecycle?.({
+          kind: "sdk_event",
+          turnToken,
+          type: isRecord(event) && typeof event.type === "string"
+            ? event.type
+            : "unknown",
+        });
+        this.#options.onTurnProgress?.({ turnToken });
+        if (!isUsable || (terminalEventSeen && !firstTerminalEvent)) continue;
+        if (firstTerminalEvent) {
+          this.#options.onLifecycle?.({
+            kind: "terminal",
+            turnToken,
+            type: event.type,
+            authoritative: !this.#watchdogFailStopped,
+          });
+        }
+        // A watchdog fail-stop makes the active outcome unknown. Continue to
+        // consume the SDK stream for cleanup, but never re-enter the normal
+        // result/state/ack path from a late frame.
+        if (this.#watchdogFailStopped) {
+          if (isTerminalEvent) sawResult = true;
+          continue;
+        }
         if (event.type === "error") recordedThreadError = event.message;
         const sessionId = threadEventToSessionId(event);
         if (sessionId !== null && sessionId !== this.#sessionId) {
@@ -1099,6 +1371,7 @@ export class CodexHost implements EngineAdapter {
         if (last !== null) finalText = last;
         if (event.type === "turn.completed") {
           sawResult = true;
+          settled.value = true;
           this.#finishTurn(true, attempted);
           this.#emitResult({
             ...(finalText !== null ? { text: finalText } : {}),
@@ -1117,6 +1390,7 @@ export class CodexHost implements EngineAdapter {
           void this.#refreshRateLimits();
         } else if (event.type === "turn.failed") {
           sawResult = true;
+          settled.value = true;
           this.#finishTurn(false, attempted);
           this.#emitResult({ is_error: true });
           const detail = threadEventToErrorDetail(event);
@@ -1139,11 +1413,19 @@ export class CodexHost implements EngineAdapter {
         for (const adapterEvent of threadEventToEvents(event)) {
           this.#apply(adapterEvent);
         }
+        if (isTerminalEvent && terminalDrainDeadlineMs === null) {
+          // The terminal event is the SDK turn boundary, but upstream still
+          // flushes the rollout after publishing it. Drain normal EOF first;
+          // only a stuck tail may be aborted after this bounded grace.
+          terminalDrainDeadlineMs =
+            Date.now() + this.#terminalDrainGraceMs;
+        }
       }
-      if (!sawResult) {
+      if (!sawResult && !this.#watchdogFailStopped) {
         // Stream ended without a terminal turn event (abort, stream error
         // event, or process death): fold into the error path so the agent
         // never wedges in thinking/tool_running.
+        settled.value = true;
         this.#finishTurn(false, attempted);
         this.#emitResult({ is_error: true });
         this.#apply({ kind: "result", subtype: "error_during_execution" });
@@ -1165,8 +1447,14 @@ export class CodexHost implements EngineAdapter {
       }
     } catch (err) {
       // runStreamed rejection or mid-stream throw (exec exited non-zero).
+      if (this.#watchdogFailStopped) return;
+      if (!sawResult) endSdkBoundary();
+      let terminalError: unknown = err;
       if (!sawResult) {
-        this.#finishTurn(false, attempted);
+        // A repair retry shares this marker with its original turn. Once the
+        // retry began terminal delivery, its callback failure must not make
+        // the original turn send a second result or peer-error notice.
+        if (settled.value) return;
         const alreadyConfirmedCorrupted =
           resumeSessionId !== null &&
           resumeSessionId === this.#corruptedRolloutSessionId;
@@ -1176,7 +1464,7 @@ export class CodexHost implements EngineAdapter {
         // Re-stringifying it here would double-wrap that Error's own
         // "Error: " toString prefix onto an already-stringified detail —
         // use the remembered root-cause text verbatim instead.
-        const detail = alreadyConfirmedCorrupted
+        let detail = alreadyConfirmedCorrupted
           ? (this.#corruptedRolloutDetail ?? String(err))
           : String(err);
         // issue #263 (ふじ MF-1 / 必須pin): a stderr keyword match alone
@@ -1203,9 +1491,64 @@ export class CodexHost implements EngineAdapter {
           const verify =
             this.#options.rolloutCorruptionVerifier ??
             ((id: string) => verifyRolloutCorruption(id));
-          const verdict: RolloutCorruptionVerdict = verify(resumeSessionId);
-          rolloutCorrupted = verdict === "corrupted";
+          let verdict: RolloutCorruptionVerdict;
+          try {
+            verdict = verify(resumeSessionId);
+          } catch {
+            verdict = "unknown";
+          }
+          if (verdict === "corrupted") {
+            let repaired = false;
+            let repairedBackupPath: string | null = null;
+            if (!retryAfterRepair) {
+              try {
+                const repair =
+                  this.#options.rolloutCorruptionRepairer ??
+                  ((id: string) => repairRolloutCorruption(id));
+                const repairResult = repair(resumeSessionId);
+                repaired = repairResult.repaired;
+                if (repairResult.repaired) {
+                  repairedBackupPath = repairResult.backupPath;
+                }
+              } catch {
+                repaired = false;
+              }
+            }
+            if (repaired && repairedBackupPath !== null) {
+              try {
+                process.stderr.write(
+                  `codex rollout repaired for session ${resumeSessionId}; backup: ${repairedBackupPath}\n`,
+                );
+              } catch {
+                // Diagnostics must not downgrade an already atomic repair.
+              }
+            }
+            if (repaired) {
+              try {
+                await this.#runTurn(
+                  codex,
+                  input,
+                  undefined,
+                  conversationIds,
+                  turnToken,
+                  true,
+                  settled,
+                );
+                return;
+              } catch (retryError) {
+                if (settled.value) return;
+                // The retry has not reached a terminal event, so settle the
+                // original turn once through the ordinary failure path.
+                detail = String(retryError);
+                terminalError = retryError;
+              }
+            } else {
+              rolloutCorrupted = true;
+            }
+          }
         }
+        settled.value = true;
+        this.#finishTurn(false, attempted);
         if (rolloutCorrupted && resumeSessionId !== null) {
           // Remember both the session id AND this confirming turn's own
           // detail (ふじ should-fix 1) — #runTurn's guard at the top skips
@@ -1260,14 +1603,18 @@ export class CodexHost implements EngineAdapter {
               // on a later turn `err` is this file's own synthetic
               // "resume skipped" Error, so use the remembered root cause
               // verbatim rather than re-stringifying it.
-              `codex turn failed: rollout permanently corrupted for session ${resumeSessionId} (issue #263): ${this.#corruptedRolloutDetail ?? String(err)}\n`
-            : `codex turn failed: ${String(err)}\n`,
+              `codex turn failed: rollout permanently corrupted for session ${resumeSessionId} (issue #263): ${this.#corruptedRolloutDetail ?? String(terminalError)}\n`
+            : `codex turn failed: ${String(terminalError)}\n`,
         );
       }
     } finally {
       this.#abort = null;
       this.#activeTurnToken = null;
+      this.#activeTurnConversationIds = [];
       if (tempDir !== undefined) await this.#cleanupTempDir(tempDir);
+      if (!retryAfterRepair) {
+        this.#options.onTurnFinalized?.({ turnToken });
+      }
     }
   }
 
@@ -1314,6 +1661,14 @@ export class CodexHost implements EngineAdapter {
     }
     this.#queue.length = 0;
     this.#queue.push(...retained);
+  }
+
+  async #cleanupWatchdogQueuedTurns(
+    turns: ReadonlyArray<{ tempDir?: string }>,
+  ): Promise<void> {
+    for (const turn of turns) {
+      if (turn.tempDir !== undefined) await this.#cleanupTempDir(turn.tempDir);
+    }
   }
 
   async #cleanupTempDir(dir: string): Promise<void> {

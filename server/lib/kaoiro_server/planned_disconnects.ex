@@ -30,6 +30,33 @@ defmodule KaoiroServer.PlannedDisconnects do
   @max_unreachable_notices 50
   @kinds [:reset, :switch_session, :restart]
 
+  defmodule Intent do
+    @moduledoc false
+
+    @enforce_keys [
+      :agent_id,
+      :transition_id,
+      :kind,
+      :phase,
+      :targets,
+      :notice_targets,
+      :dropped_targets,
+      :unclaimed,
+      :timer_ref
+    ]
+    defstruct [
+      :agent_id,
+      :transition_id,
+      :kind,
+      :phase,
+      :targets,
+      :notice_targets,
+      :dropped_targets,
+      :unclaimed,
+      :timer_ref
+    ]
+  end
+
   @doc "Shared cap for ordinary conversations and planned synth target pairs."
   def max_unreachable_notices, do: @max_unreachable_notices
 
@@ -150,12 +177,13 @@ defmodule KaoiroServer.PlannedDisconnects do
       timer_ref =
         Process.send_after(self(), {:timeout, agent_id, transition_id}, state.timeout_ms)
 
-      intent = %{
+      intent = %Intent{
         agent_id: agent_id,
         transition_id: transition_id,
         kind: kind,
         phase: :announced,
         targets: MapSet.new(),
+        notice_targets: nil,
         dropped_targets: MapSet.new(),
         unclaimed: 0,
         timer_ref: timer_ref
@@ -167,7 +195,7 @@ defmodule KaoiroServer.PlannedDisconnects do
 
   def handle_call({:disconnect, agent_id}, _from, state) do
     case Map.get(state.pending, agent_id) do
-      %{phase: :announced} = intent ->
+      %Intent{phase: :announced} = intent ->
         {snapshot_targets, unclaimed} =
           safe_targets(state.target_provider, agent_id, state.max_targets)
 
@@ -176,20 +204,17 @@ defmodule KaoiroServer.PlannedDisconnects do
 
         notice_targets = MapSet.difference(targets, intent.targets)
 
-        disconnected = %{
+        disconnected = %Intent{
           intent
           | phase: :disconnected,
             targets: targets,
+            notice_targets: notice_targets,
             dropped_targets: dropped_targets,
             unclaimed: unclaimed
         }
 
-        public =
-          disconnected
-          |> public_intent()
-          |> Map.put(:notice_targets, targets_list(notice_targets))
-
-        {:reply, {:planned, public}, put_intent(state, agent_id, disconnected)}
+        {:reply, {:planned, public_intent(disconnected)},
+         put_intent(state, agent_id, disconnected)}
 
       _ ->
         {:reply, :noop, state}
@@ -201,7 +226,7 @@ defmodule KaoiroServer.PlannedDisconnects do
       nil ->
         {:reply, :noop, state}
 
-      intent ->
+      %Intent{} = intent ->
         target = {conversation_id, peer_id}
 
         cond do
@@ -220,7 +245,7 @@ defmodule KaoiroServer.PlannedDisconnects do
 
   def handle_call({:confirm_connection, agent_id, transition_id}, _from, state) do
     case Map.get(state.pending, agent_id) do
-      %{phase: phase, transition_id: ^transition_id} = intent
+      %Intent{phase: phase, transition_id: ^transition_id} = intent
       when phase in [:announced, :disconnected] and
              is_binary(transition_id) and transition_id != "" ->
         {:reply, {:reconnected, public_intent(intent)}, discard_intent(state, agent_id)}
@@ -235,10 +260,11 @@ defmodule KaoiroServer.PlannedDisconnects do
 
   def handle_call({:fail, agent_id, transition_id, reason}, _from, state) do
     case Map.get(state.pending, agent_id) do
-      %{transition_id: ^transition_id, kind: :reset} = intent when reason == :spawn_failed ->
+      %Intent{transition_id: ^transition_id, kind: :reset} = intent
+      when reason == :spawn_failed ->
         {:reply, {:deferred, public_intent(intent)}, state}
 
-      %{transition_id: ^transition_id} = intent ->
+      %Intent{transition_id: ^transition_id} = intent ->
         {:reply, {:failed, public_intent(intent)}, discard_intent(state, agent_id)}
 
       _ ->
@@ -260,14 +286,14 @@ defmodule KaoiroServer.PlannedDisconnects do
       nil ->
         {:reply, :noop, state}
 
-      intent ->
+      %Intent{} = intent ->
         {:reply, {:cancelled, public_intent(intent)}, discard_intent(state, agent_id)}
     end
   end
 
   def handle_call({:cancel_transition, agent_id, transition_id}, _from, state) do
     case Map.get(state.pending, agent_id) do
-      %{transition_id: ^transition_id} = intent ->
+      %Intent{transition_id: ^transition_id} = intent ->
         {:reply, {:cancelled, public_intent(intent)}, discard_intent(state, agent_id)}
 
       _ ->
@@ -278,7 +304,7 @@ defmodule KaoiroServer.PlannedDisconnects do
   @impl true
   def handle_info({:timeout, agent_id, transition_id}, state) do
     case Map.get(state.pending, agent_id) do
-      %{transition_id: ^transition_id} = intent ->
+      %Intent{transition_id: ^transition_id} = intent ->
         # Run the terminal callback while this GenServer still serializes the
         # transition: a same-token join is either processed before this
         # timeout and cancels it, or after it and is stale. There is no window
@@ -344,7 +370,7 @@ defmodule KaoiroServer.PlannedDisconnects do
       {nil, _pending} ->
         state
 
-      {%{timer_ref: timer_ref}, pending} ->
+      {%Intent{timer_ref: timer_ref}, pending} ->
         _ = Process.cancel_timer(timer_ref)
         %{state | pending: pending}
     end
@@ -353,11 +379,17 @@ defmodule KaoiroServer.PlannedDisconnects do
   defp maybe_public_intent(nil), do: nil
   defp maybe_public_intent(intent), do: public_intent(intent)
 
-  defp public_intent(intent) do
-    intent
-    |> Map.delete(:timer_ref)
-    |> Map.update!(:targets, &targets_list/1)
-    |> Map.update!(:dropped_targets, &targets_list/1)
+  defp public_intent(%Intent{} = intent) do
+    %{
+      agent_id: intent.agent_id,
+      transition_id: intent.transition_id,
+      kind: intent.kind,
+      phase: intent.phase,
+      targets: targets_list(intent.targets),
+      notice_targets: targets_list(intent.notice_targets),
+      dropped_targets: targets_list(intent.dropped_targets),
+      unclaimed: intent.unclaimed
+    }
   end
 
   defp target_pairs(targets) do
@@ -375,6 +407,8 @@ defmodule KaoiroServer.PlannedDisconnects do
       end
     end)
   end
+
+  defp targets_list(nil), do: nil
 
   defp targets_list(targets) do
     targets

@@ -1,6 +1,6 @@
 ---
-title: init 前後の Claude `effort_levels` UX ズレの影響評価
-description: BOOTSTRAP default エントリに FULL_EFFORT を仮出しする現行踏襲判断が、init 後の実測 default モデルの effort_levels との不一致 (init 前 5 段階 → init 後は減る可能性) として UX 影響を出すかを実装後に観察する。
+title: Impact assessment of the Claude `effort_levels` UX mismatch before and after init
+description: Observe after implementation whether the current decision to provisionally expose FULL_EFFORT in the BOOTSTRAP default entry causes UX impact through a mismatch with the measured default model's post-init effort_levels (5 levels before init → possibly fewer after init).
 status: open
 urgency: medium
 blocks: []
@@ -10,54 +10,60 @@ decided: null
 
 ## 背景
 
-[ADR-0037](../adr/0037-claude-model-catalog-live-refresh.md) F5 は、縮小後の
-`default` エントリの `effort_levels` に FULL_EFFORT
-(`["low", "medium", "high", "xhigh", "max"]`) を仮出しする現行踏襲を採用した。
-現行 fresh idle agent の effort switcher 供給源
-(`AgentDetail.svelte:369` コメント) を壊さないための踏襲であり、init 後の
-`ext.models` で正しい effort_levels に置換される契約と併存する。
+[ADR-0037](../adr/0037-claude-model-catalog-live-refresh.md) F5 adopts the
+current behavior of provisionally exposing FULL_EFFORT in the reduced `default`
+entry's `effort_levels`
+(`["low", "medium", "high", "xhigh", "max"]`).
+This preserves the current source for the fresh idle agent's effort switcher
+(`AgentDetail.svelte:369` comment) while coexisting with the contract that
+`ext.models` is replaced by the correct effort_levels after init.
 
-この判断の副作用として、init 前に effort を xhigh に選択したユーザが init
-完了後に「選んだはずの xhigh が switcher 候補から消える」ケースが発生しうる
-(実測 default が Sonnet 系列で SONNET_EFFORT
-`["low", "medium", "high", "max"]` を返す場合、xhigh は除外される)。
+One side effect of this decision is a possible case where a user selects xhigh
+before init, then sees “the xhigh they selected disappear from the switcher
+choices” after init completes (when the measured default is in the Sonnet family
+and returns SONNET_EFFORT
+`["low", "medium", "high", "max"]`, xhigh is excluded).
 
-この UX ズレが実装後にどの程度 user friction を生むかは事前に判断できない
-ため、実装後の観察対象として open-question 化する。
+It is not possible to predict in advance how much UX friction this mismatch will
+cause after implementation, so track it as an open question for observation.
 
 ## 選択肢
 
-| 案 | 内容 | メリット | デメリット |
+| Option | Content | Advantages | Disadvantages |
 |----|------|----------|-----------|
-| A | 受容可能なズレとして継続 (現行踏襲) | 実装最小、既存 switcher 供給経路を壊さない | init 前後の選択肢差が friction を生む可能性 (実装後観察) |
-| B | 実装後の UX 観察で問題大なら D1 を再判断 (effort_levels 空 or 3 段階固定へ) | 問題顕在化後に対処、実データに基づく判断 | 判断のタイミングが遅れる、user feedback 収集の仕組みが要 |
+| A | Continue with the mismatch as acceptable (retain current behavior) | Minimal implementation; does not break the existing switcher source | The difference in choices before and after init may cause friction (observe after implementation) |
+| B | If UX observation after implementation shows a serious problem, revisit D1 (empty effort_levels or fixed 3 levels) | Respond after the problem appears and base the decision on real data | Decision is delayed; requires a way to collect user feedback |
 
 ## 影響
 
-- **blocks**: なし (blocking しない、実装後の観察タスク)
-- init 前 launch dialog の effort 選択と init 後 AgentDetail の effort switcher で
-  選択肢集合が一致しない可能性がある。ズレの発生頻度は SDK が返す実測 default
-  モデルの `effort_levels` に依存
+- **blocks**: none (non-blocking; an observation task after implementation)
+- The choice sets in the effort selector of the pre-init launch dialog and the
+  post-init AgentDetail effort switcher may differ. Frequency depends on the
+  measured default model's `effort_levels` returned by the SDK
 
 ## 判断材料
 
-- Phase 18 実装後、init 前 xhigh / max を選択したユーザが init 後に "選択肢
-  から消えた" を経験する頻度 (issue / user feedback / dashboard log)
-- Phase 18-2 (Q1 実測) の結果、SDK 実測 default モデルが実際どの
-  `effort_levels` を返すか (現時点では Opus 系列で FULL_EFFORT が返る前提だが
-  未確定)
-- 案 B に移行する場合の代替値: effort_levels 空 (init 前 switcher 無効化)
-  または low/medium/high 3 段階固定
+- After Phase 18 implementation, frequency with which users who selected xhigh /
+  max before init experience “it disappeared from the choices” (issue / user
+  feedback / dashboard log)
+- The result of Phase 18-2 (Q1 measurement): which `effort_levels` the SDK's
+  measured default model actually returns (currently it is assumed that the Opus
+  family returns FULL_EFFORT, but this is unconfirmed)
+- Alternative value if moving to option B: empty effort_levels (disable the
+  pre-init switcher) or fixed low/medium/high 3-level set
 
 ## 暫定方針
 
-案 A (受容) で ADR-0037 F5 を進める。Phase 18 実装後、issue や user feedback
-から友情 friction が問題視されたら案 B へ移行を検討する。
+Proceed with ADR-0037 F5 under option A (accept). After Phase 18 implementation,
+consider moving to option B if issue reports or user feedback identify the
+friction as a problem.
 
-## 解決時のアクション
+## Actions upon resolution
 
-- [ ] Phase 18 実装後、UX 観察期間 (2〜4 週間を目安) を設ける
-- [ ] friction が観測された場合: [ADR-0037](../adr/0037-claude-model-catalog-live-refresh.md)
-      F5 を revise、`effort_levels` 空化 or 3 段階固定への切替を新規 ADR または
-      追補で判断
-- [ ] friction が観測されなかった場合: 本 open-question を close (削除)
+- [ ] After Phase 18 implementation, establish a UX observation period (roughly
+      2–4 weeks)
+- [ ] If friction is observed: revise F5 of
+      [ADR-0037](../adr/0037-claude-model-catalog-live-refresh.md), and decide in
+      a new or supplementary ADR whether to empty `effort_levels` or switch to a
+      fixed 3-level set
+- [ ] If friction is not observed: close (delete) this open question

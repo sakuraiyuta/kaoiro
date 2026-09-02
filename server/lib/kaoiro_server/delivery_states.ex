@@ -14,6 +14,15 @@ defmodule KaoiroServer.DeliveryStates do
   """
   use GenServer
 
+  alias KaoiroServer.AgentStates
+  alias KaoiroServer.TransportLimits
+
+  @wire_projection_bytes TransportLimits.snapshot_payload_budget(
+                           "delivery_snapshot",
+                           "deliveries",
+                           %{"snapshot_incomplete" => true}
+                         )
+
   @type status :: %{
           issued_seq: non_neg_integer(),
           acked_seq: non_neg_integer(),
@@ -54,15 +63,70 @@ defmodule KaoiroServer.DeliveryStates do
 
   def all(server \\ __MODULE__), do: GenServer.call(server, :all)
 
+  @doc "A bounded join-time projection; the DETS-backed observation store is unchanged."
+  def wire_projection, do: wire_projection(__MODULE__)
+
+  def wire_projection(server) when not is_map(server) do
+    wire_projection(all(server), AgentStates.connected_ids())
+  end
+
+  def wire_projection(deliveries) when is_map(deliveries) do
+    wire_projection(deliveries, AgentStates.connected_ids())
+  end
+
+  @doc false
+  def wire_projection(deliveries, connected_agent_ids)
+      when is_map(deliveries) and is_struct(connected_agent_ids, MapSet) do
+    {projected, incomplete?, _bytes} =
+      deliveries
+      |> Enum.sort_by(fn {agent_id, status} ->
+        {if(priority_delivery?(agent_id, status, connected_agent_ids), do: 0, else: 1), agent_id}
+      end)
+      |> Enum.reduce({%{}, false, 0}, fn {agent_id, status}, {projected, incomplete?, bytes} ->
+        entry_bytes = wire_entry_bytes(agent_id, status)
+
+        cond do
+          map_size(projected) >= TransportLimits.wire_projection_agents() ->
+            {projected, true, bytes}
+
+          bytes + entry_bytes + 1 <= @wire_projection_bytes ->
+            {Map.put(projected, agent_id, status), incomplete?, bytes + entry_bytes}
+
+          true ->
+            {projected, true, bytes}
+        end
+      end)
+
+    payload =
+      if incomplete?,
+        do: %{"deliveries" => projected, "snapshot_incomplete" => true},
+        else: %{"deliveries" => projected}
+
+    if TransportLimits.snapshot_frame_fits?("delivery_snapshot", payload) do
+      {projected, incomplete?}
+    else
+      {%{}, true}
+    end
+  end
+
   def delete(agent_id, server \\ __MODULE__) when is_binary(agent_id),
     do: GenServer.call(server, {:delete, agent_id})
 
   @impl true
   def init({name, path}) do
-    path |> Path.dirname() |> File.mkdir_p!()
+    KaoiroServer.DetsStorePath.prepare_parent!(path)
     table = open_table(name, path)
     _ = File.chmod(path, 0o600)
     {:ok, %{table: table, entries: load_entries(table)}}
+  end
+
+  defp priority_delivery?(agent_id, status, connected_agent_ids) do
+    MapSet.member?(connected_agent_ids, agent_id) or
+      Map.get(status, :issued_seq, 0) > Map.get(status, :acked_seq, 0)
+  end
+
+  defp wire_entry_bytes(agent_id, status) do
+    byte_size(Jason.encode!(agent_id)) + 1 + byte_size(Jason.encode!(status)) + 1
   end
 
   @impl true
@@ -198,6 +262,6 @@ defmodule KaoiroServer.DeliveryStates do
 
   defp default_path do
     Application.get_env(:kaoiro_server, :delivery_states_path) ||
-      Path.join(System.tmp_dir!(), "kaoiro_delivery_states.dets")
+      KaoiroServer.DetsStorePath.default_path("delivery_states.dets")
   end
 end

@@ -1,0 +1,204 @@
+name: CI
+
+on:
+  push:
+    branches: [develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  wrapper:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: wrapper
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.20.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+
+  # No `working-directory` default here: the install has to happen at the
+  # workspace root, and runner's typecheck needs the wrapper packages' emitted
+  # .d.ts files (they are workspace deps, so an unbuilt wrapper fails with
+  # TS2307).
+  runner:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.20.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -C wrapper build
+      - run: pnpm -C runner typecheck
+      - run: pnpm -C runner test
+
+  # Checks out on the host, then runs mix inside a pinned Elixir image.
+  #
+  # Three findings from measuring this on the actual runner:
+  #   - erlef/setup-beam: its prebuilt OTP cannot load :crypto on the Gitea
+  #     runner image (no matching libssl), so mix dies fetching rebar.
+  #   - `container:` with a hexpm image: it ships no node, so every JS action
+  #     (actions/checkout) fails with exit 127. Hence the explicit
+  #     `docker run`, which the server-image job proves works here.
+  #   - `docker run -v "$PWD:/src"`: the step itself already runs inside a
+  #     container, so the daemon resolves the bind mount against ITS OWN
+  #     filesystem and mounts an empty dir ("Could not find a Mix.Project").
+  #     The source therefore has to reach the container as a stream, the same
+  #     way `docker build` sends its context — hence the tar pipe below.
+  #
+  # The image matches what server/Dockerfile builds the release with — issue
+  # #150 aligned the two. Keep them in step when bumping either: the previous
+  # release pin (OTP 26) could not compile this suite's Japanese test names at
+  # all ("argument 1: not an iolist term"), which is what surfaced the drift.
+  server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: mix checks
+        shell: bash
+        run: |
+          # --no-xattrs drops attributes the build has no use for. Reproducing
+          # this on macOS additionally needs COPYFILE_DISABLE=1: bsdtar's
+          # copyfile metadata is separate from xattrs and unpacks as
+          # AppleDouble files, which `mix format` then parses as Elixir.
+          #
+          # mix runs as a non-root `ci` user (issue #192): the container
+          # otherwise runs as root, under which the phase-29 permission-denial
+          # tests (chmod-based simulations) are no-ops, since root ignores
+          # permission bits — the suite passed 781/784 with the 3 permission
+          # tests silently not exercising their raise/error path.
+          #
+          # set -o pipefail (issue #192, ふじ M1): without it, this pipe's
+          # exit status is the RIGHT side's (docker run) only, so a `tar`
+          # failure that still hands docker a consumable stream would go
+          # unnoticed.
+          set -euo pipefail
+          # RuntimeConfigTest also reads the repository's scripts/dev.sh.
+          #
+          # `-e CI` (issue #282 案a): `docker run` does not inherit the
+          # runner's environment automatically -- Actions sets `CI=true`
+          # on the JOB, not inside this container, so `mix test`
+          # (test_helper.exs) would never see it without this explicit
+          # pass-through. Value omitted so a local manual run of this same
+          # command (no CI var set) leaves it unset inside the container
+          # too, matching the local default.
+          tar --no-xattrs -cf - server scripts | docker run --rm -i -w /w \
+            -e CI \
+            docker.io/hexpm/elixir:1.20.1-erlang-29.0.2-debian-trixie-20260610-slim \
+            sh -euc '
+              tar -xf - -C /w
+              # inotify-tools backs :file_system, which PersonaWatcher,
+              # FooterWatcher, and OAuthAllowlistWatcher (issue #170)
+              # all use. Without it, PersonaWatcher/FooterWatcher fall
+              # back to :ignore (no fast path) and OAuthAllowlistWatcher
+              # degrades to poll-only. server/Dockerfile already
+              # installs this for the same reason (issue #148) -- this
+              # pin was missing only from the CI container, which does
+              # not go through that Dockerfile. Installed as root,
+              # before the su below (the ci user has no apt privileges).
+              apt-get update
+              apt-get install -y --no-install-recommends inotify-tools
+              rm -rf /var/lib/apt/lists/*
+              useradd -m -d /home/ci ci
+              chown -R ci:ci /w
+              su ci -c "
+                set -e
+                export HOME=/home/ci
+                cd /w/server
+                mix local.hex --force
+                mix local.rebar --force
+                mix deps.get
+                mix format --check-formatted
+                mix compile --warnings-as-errors
+
+                # issue #282: permanent lightweight runner-stall probe.
+                # Samples the monotonic clock every 10ms around mix test;
+                # a gap over 100ms between consecutive samples means THIS
+                # PROCESS went unscheduled longer than ExUnit default
+                # assert_receive_timeout, regardless of cause (CPU steal,
+                # cgroup throttle, hypervisor pause, ...) -- a net that
+                # catches the effect without needing to know the cause.
+                # Fail-soft throughout: probe start/stop never gates the
+                # real test result, only mix test own exit code does.
+                (
+                  prev=\$(date +%s%N)
+                  while true; do
+                    sleep 0.01
+                    now=\$(date +%s%N)
+                    diff_ms=\$(( (now - prev) / 1000000 ))
+                    if [ \"\$diff_ms\" -gt 100 ]; then
+                      echo \"GAP \$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ) diff_ms=\$diff_ms\" >> /tmp/gap.log
+                    fi
+                    prev=\$now
+                  done
+                ) >/dev/null 2>&1 &
+                GAP_PID=\$!
+
+                # set -e stays OFF until exit below: every line from here
+                # on is diagnostic (probe teardown + log printing), and
+                # my-review flagged that restoring set -e too early let a
+                # transient failure in the log-printing block itself abort
+                # this step with the WRONG exit code even when mix test
+                # passed. Only TEST_EXIT (captured before this point) may
+                # decide this step outcome.
+                set +e
+                mix test
+                TEST_EXIT=\$?
+
+                kill \$GAP_PID >/dev/null 2>&1 || true
+
+                echo \"=== runner stall probe (issue #282): monotonic clock gaps over 100ms ===\"
+                if [ -s /tmp/gap.log ]; then
+                  cat /tmp/gap.log
+                else
+                  echo \"no gaps over 100ms detected\"
+                fi
+
+                exit \$TEST_EXIT
+              "
+            '
+
+  dashboard:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.20.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: dashboard/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - run: pnpm test
+      - run: pnpm build
+
+  # Build context is the repository root (issue #70): the Dockerfile's node
+  # stage bundles the dashboard from /dashboard. Publishing waits on the
+  # registry decision (issue #145), so this only proves the image still
+  # builds.
+  server-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f server/Dockerfile -t kaoiro-server:ci .

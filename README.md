@@ -17,6 +17,69 @@ they can be difficult to relate to. kaoiro represents each agent as a character
 with changing expressions so that people can see what is happening and grow
 attached to them while running several agents at once.
 
+![kaoiro dashboard: four agents rendered as character cards next to a
+conversation timeline, one card badged as waiting for
+permission](docs/images/agent-grid.png)
+
+Every running agent becomes a card with its own character and a state label
+(`thinking`, `idle`, `permission?` …), and the badge marks the one waiting on
+an answer — a glance is enough to see who needs you. The timeline beside the
+grid merges what every agent said with the messages they send each other, so a
+hand-off ("あお → ふじ: review this diff") is visible without opening anyone.
+Agents are launched and tuned from the same screen:
+
+<p>
+  <img src="docs/images/launch-dialog.png" height="360"
+       alt="Launch dialog: host, persona, working directory, permission mode
+            and an optional initial prompt">
+  <img src="docs/images/settings-drawer.png" height="360"
+       alt="Settings drawer: notification sound, volume and card display
+            options">
+</p>
+
+The dashboard interface is currently Japanese-only.
+
+## Features
+
+- **State as a face** — each agent's state (`thinking`, `waiting_permission`,
+  `error`, …) is derived from engine SDK events and drawn as a character
+  expression, not inferred from the text it writes
+  ([protocol.md](docs/specs/protocol.md)).
+- **Launch and supervise from the browser** — choose host, persona, engine,
+  working directory and permission mode, then stop, restart, restore or resume
+  an earlier session without touching a terminal.
+- **Permission approval in the UI** — a tool call waiting for approval is
+  routed to the client and answered there, so an agent never blocks on an
+  unattended terminal ([threat-model.md](docs/specs/threat-model.md)).
+- **Questions become dialogs** — when an agent asks a multiple-choice question,
+  it arrives as a dialog on the same routing path as permissions.
+- **Agents message each other** — a delegation, a review request or an approval
+  between agents is a first-class message, grouped into conversations the
+  operator can list and close
+  ([protocol-inter-agent.md](docs/specs/protocol-inter-agent.md)).
+- **One merged timeline** — every agent's replies and their messages to each
+  other in a single time-ordered pane, with unread marks and click-through to
+  the full transcript.
+- **Tuning mid-session** — model, reasoning effort and permission mode are
+  changeable while an agent runs; prompts, interrupts and file attachments
+  travel the same channel.
+- **Multi-host** — one runner per machine registers that host, declares which
+  engines it can spawn, and supervises the wrapper processes living there
+  ([deployment.md](docs/specs/deployment.md)).
+- **Two engines, one protocol** — Claude Code and Codex sit behind the same
+  adapter boundary, and the UI branches on declared capabilities rather than on
+  engine names ([plugin-model.md](docs/specs/plugin-model.md)).
+- **Personas as zip packs** — characters are versioned, hash-checked packs read
+  from an ingest directory, with a bundled set as the default
+  ([persona-pack-schema.md](docs/specs/persona-pack-schema.md)).
+- **Operator and viewer roles** — sign in with a token or through OAuth; reply
+  logs, controls and persona internals are operator-only and fail closed
+  ([auth-and-authz.md](docs/specs/auth-and-authz.md)).
+- **Notifications, and a layout that folds** — a desktop notification and a
+  per-state sound when an agent hands control back, and a dashboard that
+  collapses down to a phone
+  ([responsive-layout.md](docs/specs/responsive-layout.md)).
+
 ## Install & Quick start
 
 Requirements: Node.js 22 or later, [pnpm](https://pnpm.io/) (`10.20.0` is

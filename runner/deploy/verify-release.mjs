@@ -51,6 +51,7 @@ const SENTINELS = [
 ];
 
 const REVISION_RE = /^[0-9a-f]{40}$/;
+const VERSION_RE = /^\d{4}\.(?:[1-9]|1[0-2])\.\d+$/;
 
 class VerifyError extends Error {}
 
@@ -109,14 +110,38 @@ function isValidBuiltAt(value) {
   return Number.isFinite(parsed.getTime()) && parsed.toISOString() === value;
 }
 
+function isValidBuildVersion(value) {
+  return value === "unknown" || (typeof value === "string" && VERSION_RE.test(value));
+}
+
+function isValidBuildChannel(value) {
+  return value === "dev" || value === "release";
+}
+
+function isBuildIdentityConsistent(value) {
+  return (
+    value.channel !== "release" ||
+    (value.dirty === false &&
+      value.revision !== "unknown" &&
+      value.version !== "unknown")
+  );
+}
+
 function isBuildInfoShape(value) {
   if (typeof value !== "object" || value === null) return false;
+  const hasVersion = Object.hasOwn(value, "version");
+  const hasChannel = Object.hasOwn(value, "channel");
   return (
     typeof value.revision === "string" &&
     (value.revision === "unknown" || REVISION_RE.test(value.revision)) &&
     typeof value.dirty === "boolean" &&
     typeof value.built_at === "string" &&
-    isValidBuiltAt(value.built_at)
+    isValidBuiltAt(value.built_at) &&
+    hasVersion === hasChannel &&
+    (!hasVersion ||
+      (isValidBuildVersion(value.version) &&
+        isValidBuildChannel(value.channel) &&
+        isBuildIdentityConsistent(value)))
   );
 }
 

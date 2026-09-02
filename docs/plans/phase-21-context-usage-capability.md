@@ -1,103 +1,109 @@
 ---
-title: Phase 21 — context 使用量表示の capability 化と Codex 側 estimated 撤回
-description: ext.session_capabilities.supports_context_usage を導入し UI を capability-only gating に切替。Claude 側は init/model-switch trigger + guards を追加、Codex 側は capability=false stamp と dead helper 撤去。
+title: Phase 21 — Capability-izing Context Usage Display and Retracting Codex Estimated Usage
+description: Introduce ext.session_capabilities.supports_context_usage and switch the UI to capability-only gating. Add init/model-switch triggers and guards on Claude; stamp capability=false and remove the dead helper on Codex.
 status: done
 phase: 21
 depends_on: [20]
 last_updated: 2026-07-16
 ---
 
-# Phase 21 — context 使用量表示の capability 化と Codex 側 estimated 撤回
+# Phase 21 — Capability-izing Context Usage Display and Retracting Codex Estimated Usage
 
 ## Goal
 
-[ADR-0040](../adr/0040-context-usage-capability.md) を実装する。既存の
-`ext.context` inline shape は据え置きつつ、`ext.session_capabilities.supports_context_usage`
-で 3-state (absent / false / true) の UI gating を確立する。Claude は
-capability=true + init/model-switch trigger 追加、Codex は capability=false
-stamp + dead code 撤去。旧固定文言「初回応答後に取得」を撤回する。
+Implement [ADR-0040](../adr/0040-context-usage-capability.md). Keep the existing
+`ext.context` inline shape unchanged while establishing UI gating on the
+three-state (absent / false / true) capability
+`ext.session_capabilities.supports_context_usage`. Claude adds capability=true
+and init/model-switch triggers; Codex stamps capability=false and removes dead
+code. Retract the old fixed wording, “retrieved after the first response.”
 
 ## Acceptance Criteria
 
-- [x] `protocol/src/index.ts` の `SessionCapabilitiesExt` に
-      `supports_context_usage?: boolean` を optional 追加。既存 5 field
-      と同じ open schema 拡張。tri-state 契約 (absent / false / true) を
-      JSDoc に明記。
-- [x] `docs/specs/protocol.md` L134-145 session_capabilities section に
-      `supports_context_usage` の 3-state 契約 (rolling upgrade 期の
-      absent と explicit false の区別、Claude=true / Codex=false の理由) を追記。
+- [x] Add optional `supports_context_usage?: boolean` to
+      `SessionCapabilitiesExt` in `protocol/src/index.ts`. Extend the open
+      schema like the existing 5 fields, and document the tri-state contract
+      (absent / false / true) in JSDoc.
+- [x] Add the three-state contract for `supports_context_usage` to the
+      session_capabilities section of `docs/specs/protocol.md` L134-145
+      (distinguish absent during rolling upgrade from explicit false, and explain
+      why Claude=true / Codex=false).
 - [x] `wrapper/claude-code/src/host.ts`:
-  - `initialStatusExt()` に `supports_context_usage: true` を追加。
-  - `#contextInflight` / `#contextRefreshPending` / `#contextGeneration`
-      フィールド追加。
-  - `#refreshContextUsage()` を rewrite: inflight guard + generation
-      guard + dedup + close guard + finally re-kick。
-  - `#refreshContextUsageForInit()` 追加: init + 100ms backoff で 1 回
-      retry、close/generation を跨がない bounded retry。
-  - `#applyInitMeta` 直後で `#refreshContextUsageForInit()` を fire。
-  - `setModel` 成功後で `#contextGeneration++` + `#context=null` +
-      `#emitState` + async re-fetch。
-- [x] `wrapper/claude-code/test/host.test.ts` 更新:
-  - 既存 `initialStatusExt` / capabilities matcher に
-      `supports_context_usage: true` を追加。
-  - 新規: init 直後 refresh、init bounded retry、dedup、setModel 世代管理
-      の 4 テスト追加 (計 197 test 全 pass)。
-- [x] `wrapper/codex/src/host.ts` の `initialStatusExtFromCatalog` に
-      `supports_context_usage: false` を追加。
-- [x] `wrapper/codex/src/adapter.ts` の dead `threadEventToUsage` を削除。
-      `wrapper/codex/src/index.ts` の export と
-      `wrapper/codex/test/adapter.test.ts` の該当テストも削除。
-- [x] `wrapper/codex/test/host.test.ts` 更新: capability matcher に
-      `supports_context_usage: false` 追加 + 「Codex は `ext.context` を
-      絶対 stamp しない」の全 envelope 検査を追加 (計 80 test 全 pass)。
-- [x] `docs/specs/codex-sdk-events.md` L48 (`usage` 説明) と L84
-      (`turn.completed` 状態導出) から「usage (tokens) を ext に反映」を
-      撤回、`ext.session_capabilities.supports_context_usage=false` を
-      advertise する旨に切替。
-- [x] `docs/specs/plugin-model.md` L32-37 に `ext.context` の Codex 扱い
-      (adapter 直接付与、ADR-0040 参照) を追記。
+  - Add `supports_context_usage: true` to `initialStatusExt()`.
+  - Add `#contextInflight` / `#contextRefreshPending` /
+      `#contextGeneration` fields.
+  - Rewrite `#refreshContextUsage()`: inflight guard + generation guard + dedup
+      + close guard + finally re-kick.
+  - Add `#refreshContextUsageForInit()`: one retry with init + 100ms backoff,
+      bounded so it does not cross close/generation.
+  - Fire `#refreshContextUsageForInit()` immediately after `#applyInitMeta`.
+  - After successful `setModel`, do `#contextGeneration++` + `#context=null` +
+      `#emitState` + async re-fetch.
+- [x] Update `wrapper/claude-code/test/host.test.ts`:
+  - Add `supports_context_usage: true` to the existing `initialStatusExt` /
+      capabilities matcher.
+  - Add 4 tests: refresh immediately after init, bounded init retry, dedup, and
+      setModel generation management (197 tests pass in total).
+- [x] Add `supports_context_usage: false` to
+      `initialStatusExtFromCatalog` in `wrapper/codex/src/host.ts`.
+- [x] Remove the dead `threadEventToUsage` from `wrapper/codex/src/adapter.ts`.
+      Also remove its export from `wrapper/codex/src/index.ts` and the related
+      test from `wrapper/codex/test/adapter.test.ts`.
+- [x] Update `wrapper/codex/test/host.test.ts`: add
+      `supports_context_usage: false` to the capability matcher and add an
+      all-envelope check that “Codex never stamps `ext.context`” (80 tests pass
+      in total).
+- [x] Retract “reflect usage (tokens) into ext” from the `usage` description at
+      L48 and `turn.completed` state derivation at L84 of
+      `docs/specs/codex-sdk-events.md`; instead advertise
+      `ext.session_capabilities.supports_context_usage=false`.
+- [x] Add Codex handling of `ext.context` (directly attached by the adapter,
+      see ADR-0040) to `docs/specs/plugin-model.md` L32-37.
 - [x] `dashboard/src/lib/protocol.ts`:
-  - `SessionCapabilities` に `supports_context_usage?: boolean` 追加、
-      JSDoc に 3-state UI 契約を明記。
-  - `sessionCapabilitiesFrom` parser で boolean のみ保存、malformed は
-      drop (fail-closed absent 相当)。
+  - Add `supports_context_usage?: boolean` to `SessionCapabilities`, with a
+      JSDoc note for the three-state UI contract.
+  - In the `sessionCapabilitiesFrom` parser, retain booleans only and drop
+      malformed values (equivalent to fail-closed absent).
 - [x] `dashboard/src/lib/AgentDetail.svelte`:
-  - ctx 行を capability-driven 3-state 分岐に書き換え
-      (true+value/true+null/false)。
-  - `undefined` は行そのものを非表示 (rolling upgrade 対応)。
-  - 旧固定文言「初回応答後に取得」を撤回、`true+null` は「取得中」に。
-- [x] `dashboard/test/protocol.test.ts` に tri-state 保存 + malformed
-      drop の parser test を追加。
-- [x] `dashboard/test/contextUsageDisplay.integration.test.ts` を新設
-      (5 test): AgentDetail mount で 4 状態 (true+null / true+value /
-      false / absent) を検査、engine 名分岐禁止の consistency も検証。
-- [x] `dashboard/test/modelSwitch.integration.test.ts` の fresh-idle
-      テスト fixture を `supports_context_usage: true` に更新、旧固定文言
-      「初回応答後に取得」除去を assert (計 191 test 全 pass)。
-- [x] Elixir 側の `wrapper_channel.ex` / `agents_channel.ex` は変更なし
-      (ext は opaque; 既存 viewer 秘匿 test は shape 変更不感で non-regression)。
+  - Rewrite the context row as a capability-driven three-state branch
+      (true+value / `true+null` / false).
+  - Hide the row itself for `undefined` (rolling-upgrade support).
+  - Retract the old fixed wording “retrieved after the first response”; use
+      “retrieving” for true+null.
+- [x] Add parser tests for tri-state retention + malformed drop to
+      `dashboard/test/protocol.test.ts`.
+- [x] Add `dashboard/test/contextUsageDisplay.integration.test.ts` (5 tests):
+      inspect the 4 states (true+null / true+value / false / absent) by mounting
+      AgentDetail, and test consistency without branching on engine name.
+- [x] Update the fresh-idle test fixture in
+      `dashboard/test/modelSwitch.integration.test.ts` to
+      `supports_context_usage: true`, and assert removal of the old fixed
+      wording “retrieved after the first response” (191 tests pass in total).
+- [x] Leave the Elixir-side `wrapper_channel.ex` / `agents_channel.ex` unchanged
+      (ext is opaque; existing viewer-confidentiality tests are shape-insensitive
+      and therefore non-regression).
 
 ## Progress
 
-| Task | 状態 | 内容 |
+| Task | Status | Details |
 |---|---|---|
-| 21-1 | ✅ | protocol.ts に capability field 追加 + docs/specs/protocol.md 同期 (commit e2f63a7) |
-| 21-2 | ✅ | Claude wrapper: capability stamp + 3 trigger (init [initial+retry] / result / model-switch) + 5 guards (inflight / pending re-run / generation / dedup / close) + 4 test (commit 9bf4581) |
-| 21-3 | ✅ | Codex wrapper: capability=false stamp + dead helper 撤去 + spec docs 同期 (commit 2e66794) |
-| 21-4 | ✅ | UI: engine-neutral 3-state gating + 6 test (commit 0604ff5) |
+| 21-1 | ✅ | Add capability field to protocol.ts + synchronize docs/specs/protocol.md (commit e2f63a7) |
+| 21-2 | ✅ | Claude wrapper: capability stamp + 3 triggers (init [initial+retry] / result / model-switch) + 5 guards (inflight / pending re-run / generation / dedup / close) + 4 tests (commit 9bf4581) |
+| 21-3 | ✅ | Codex wrapper: capability=false stamp + dead helper removal + spec docs synchronization (commit 2e66794) |
+| 21-4 | ✅ | UI: engine-neutral three-state gating + 6 tests (commit 0604ff5) |
 | 21-5 | ✅ | ADR-0040 + phase-21 plan (commit fd6dd60) |
-| 21-6 | ✅ | 藤 turn-5 review 反映: R1 (partial model switch failure 時の stale context 除去) + R2 (dedup 厳密化 test) + R3 (init retry throw ベース test) + plan doc 表現修正 |
+| 21-6 | ✅ | Fuji turn-5 review follow-up: R1 (remove stale context on partial model-switch failure) + R2 (tighten dedup test) + R3 (throw-based init retry test) + wording correction in the plan |
 
 ## Post-implementation
 
-Claude 側 init 直後の `getContextUsage()` 挙動は d.ts 実測ベースの合理的
-推定であり、期待される `totalTokens > 0` の返り値は実機 dogfood で
-別途検証する余地がある (ADR-0040 D6)。Codex 側 upstream の
-`token_count` / compaction telemetry が確定した場合は本 phase の設計を
-ベースに ADR-0040 を supersede する余地を残す。
+The behavior of Claude's `getContextUsage()` immediately after init is a
+reasonable estimate based on d.ts measurement, and the expected return value
+with `totalTokens > 0` remains a candidate for separate real-device dogfood
+verification (ADR-0040 D6). If Codex upstream finalizes `token_count` /
+compaction telemetry, ADR-0040 may be superseded based on this phase's design.
 
 ## References
 
-- [ADR-0040](../adr/0040-context-usage-capability.md) — 本 phase の設計判断
-- [ADR-0034](../adr/0034-session-capabilities-advertisement.md) F3 — capability-only 判定原則
-- 元 conversation: `fb40967b` (実装 orchestration)、`f4834340` (kickoff review)
+- [ADR-0040](../adr/0040-context-usage-capability.md) — design decision for this phase
+- [ADR-0034](../adr/0034-session-capabilities-advertisement.md) F3 — capability-only decision principle
+- Original conversations: `fb40967b` (implementation orchestration), `f4834340` (kickoff review)

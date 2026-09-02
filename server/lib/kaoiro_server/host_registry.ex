@@ -120,13 +120,12 @@ defmodule KaoiroServer.HostRegistry do
         # Launch catalog per engine (ADR-0032 F4bc), flows to the operator
         # `hosts` push as-is (public_entry keeps it).
         engines: Map.get(attrs, :engines, []),
-        # Build identity (issue #228) — both optional, nil for a pre-#228
-        # runner build. Flows to the `hosts` push as-is (public_entry's
-        # Map.drop only strips runner_pid/policy, everything else passes
-        # through); the dashboard compares build_revision against the
-        # server's own (GET /api/health) to warn on mismatch.
+        # Build identity (issues #228/#288) — optional, nil for a legacy
+        # runner build. Flows to the operator `hosts` push as-is.
         build_revision: Map.get(attrs, :build_revision),
         build_dirty: Map.get(attrs, :build_dirty),
+        build_version: Map.get(attrs, :build_version),
+        build_channel: Map.get(attrs, :build_channel),
         runner_pid: runner_pid,
         registered_at: now,
         last_heartbeat: now

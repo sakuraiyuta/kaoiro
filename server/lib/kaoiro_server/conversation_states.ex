@@ -9,7 +9,10 @@ defmodule KaoiroServer.ConversationStates do
   wrapper-supplied sequence distinct from `turns`, which merely counts
   accepted messages), the running token approximation (`byte_size(body)
   ÷ 3` per message — protocol-inter-agent spec, intentionally coarse),
-  the wallclock start time, the participating agent_id set, the set of
+  the monotonic start time (`started_at`, the TTL clock GC reads) and
+  its wallclock counterpart for display (`started_at_wall`, ISO8601,
+  issue #276 — monotonic time has no fixed epoch, so it cannot be shown
+  to an operator), the participating agent_id set, the set of
   agent_ids that have signalled `meta.done=true` so far, and the set
   already reported unreachable to their peers
   (`claim_unreachable_targets/3`, issue #131). `record_message/6`
@@ -56,8 +59,13 @@ defmodule KaoiroServer.ConversationStates do
 
   A CLOSED tombstone (`status: :closed`) replaces the open entry in place
   under the same key: `reason` (why it closed), `closed_at` (monotonic ms,
-  the TTL clock), `agents` (the former participant set) and `last_turn`
-  (the turn count reached at closing) are kept for observability and for
+  the TTL clock), `agents` (the former participant set), `last_turn`
+  (the turn count reached at closing), and `started_at_wall` (issue #276
+  director decision: an operator viewing a closed conversation's row
+  still needs to see when it started — kept alongside the other
+  observability fields; GC lifetime is keyed off `closed_at`/
+  `tombstone_ttl_ms`, never `started_at_wall`, so retaining it does not
+  extend a tombstone's lifetime) are kept for observability and for
   rejecting further sends; `tokens` / `started_at` / `done_by` /
   `max_turn_number` / `notified_unreachable` are dropped — a closed
   conversation never accepts another message, so nothing needs them again
@@ -217,6 +225,56 @@ defmodule KaoiroServer.ConversationStates do
   end
 
   @doc """
+  Returns a read-only operator-facing projection of EVERY conversation —
+  open and closed tombstones alike (issue #276: admin sees the whole
+  set, no per-pair filtering yet). String-keyed (wire shape, matches
+  `launch_defaults`'s convention) — each entry:
+  `%{"conversation_id", "participants" (sorted agent_id list), "turns",
+  "tokens", "status" ("open" | "closed"), "started_at" (ISO8601
+  wallclock)}`.
+
+  A closed tombstone drops `tokens` at close time (see the moduledoc), so
+  it comes back `nil` rather than the last live value — the projection
+  must not imply a closed conversation is still accruing. `started_at`
+  (director decision A, issue #276) survives the close transition, so a
+  closed entry's row can still show when it started. `turns` for a
+  closed entry is `last_turn`, the count frozen at close.
+
+  No filtering by role/permission here — the caller (channel handler)
+  owns the admin-only gate (issue #276 decision: keep the check at one
+  seam so #189's future per-pair model replaces it in one place).
+  """
+  def list_for_operator(server \\ __MODULE__) do
+    GenServer.call(server, :list_for_operator)
+  end
+
+  @doc """
+  Manually closes an OPEN conversation on operator request (issue #276
+  decision: reuse the existing tombstone mechanism, no new termination
+  machinery). Reuses the SAME `close_entry/3` transition every hard-limit
+  / GC closure already goes through — `reason: :operator_closed` is
+  simply a new value in that existing vocabulary.
+
+  Returns `{:ok, participant_agent_ids}` on success so the caller (channel
+  handler) can deliver the SAME `conversation_closed` notice
+  `SynthEnvelope.deliver_conversation_closed/3` already sends for a GC
+  auto-close — this function itself sends no notification, keeping the
+  existing split where this module owns state and the caller owns
+  delivery (mirrors `record_message/6`, whose hard-limit callers notify
+  from the return value rather than from inside this GenServer).
+
+  `{:error, :conversation_closed}` for an already-closed cid — idempotent,
+  a second close request is a no-op from the state's perspective, not an
+  error condition that should crash anything — and
+  `{:error, :unknown_conversation_id}` for a cid with no entry at all
+  (open or tombstoned), mirroring `record_message/6`'s existing
+  vocabulary for both cases.
+  """
+  def close_by_operator(conversation_id, server \\ __MODULE__) do
+    GenServer.call(server, {:close_by_operator, conversation_id})
+  end
+
+  @doc """
   Claims at most `limit` still-open conversations in which `agent_id` takes
   part and whose peers have not been told yet that this agent is
   unreachable, marks them as notified, and returns
@@ -245,9 +303,8 @@ defmodule KaoiroServer.ConversationStates do
   ordinary disconnect already set their `notified_unreachable` mark, or when
   a preflight bounce happened before the conversation entry existed. This
   call only owns ConversationStates' mark update; it deliberately neither
-  claims nor returns additional targets, so the planned intent remains the
-  sole bounded delivery set and `claim_unreachable_targets/3` stays unchanged
-  for unexpected disconnects.
+  claims nor returns additional targets. A caller that fills a planned
+  terminal notice's remaining cap does so with a subsequent claim.
   """
   def mark_terminal_targets(agent_id, required_targets, server \\ __MODULE__)
       when is_list(required_targets) do
@@ -361,6 +418,9 @@ defmodule KaoiroServer.ConversationStates do
               max_turn_number: 0,
               tokens: 0,
               started_at: now,
+              # Wallclock counterpart of `started_at` for operator display
+              # (issue #276) — `now` is monotonic ms with no fixed epoch.
+              started_at_wall: DateTime.utc_now() |> DateTime.to_iso8601(),
               agents: MapSet.new(),
               done_by: MapSet.new(),
               notified_unreachable: MapSet.new()
@@ -403,6 +463,41 @@ defmodule KaoiroServer.ConversationStates do
       |> Map.new(fn {agent_id, peers} -> {agent_id, peers |> MapSet.to_list() |> Enum.sort()} end)
 
     {:reply, index, state}
+  end
+
+  def handle_call(:list_for_operator, _from, state) do
+    projection =
+      for {cid, entry} <- state.conversations do
+        %{
+          "conversation_id" => cid,
+          "participants" => entry.agents |> MapSet.to_list() |> Enum.sort(),
+          "turns" => operator_turns(entry),
+          "tokens" => Map.get(entry, :tokens),
+          "status" => Atom.to_string(entry.status),
+          "started_at" => Map.get(entry, :started_at_wall)
+        }
+      end
+
+    {:reply, projection, state}
+  end
+
+  def handle_call({:close_by_operator, cid}, _from, state) do
+    case Map.get(state.conversations, cid) do
+      nil ->
+        {:reply, {:error, :unknown_conversation_id}, state}
+
+      %{status: :closed} ->
+        {:reply, {:error, :conversation_closed}, state}
+
+      %{status: :open} = entry ->
+        now = state.clock.()
+        agent_ids = MapSet.to_list(entry.agents)
+
+        conversations =
+          Map.put(state.conversations, cid, close_entry(entry, :operator_closed, now))
+
+        {:reply, {:ok, agent_ids}, %{state | conversations: conversations}}
+    end
   end
 
   def handle_call({:claim_unreachable, agent_id, limit}, _from, state) do
@@ -583,8 +678,42 @@ defmodule KaoiroServer.ConversationStates do
       reason: reason,
       closed_at: now,
       agents: entry.agents,
-      last_turn: entry.turns
+      last_turn: entry.turns,
+      # issue #276 director decision (A): keep the wallclock start time on
+      # the tombstone so an operator can still see when a closed
+      # conversation started. Every caller passes an OPEN entry here (see
+      # this function's call sites), which always carries this key — the
+      # Map.get default only guards a hypothetical future caller.
+      started_at_wall: Map.get(entry, :started_at_wall)
     }
+  end
+
+  # issue #276: an OPEN entry's live turn count keeps counting; a CLOSED
+  # tombstone has none (`turns` is dropped at close, see the moduledoc) —
+  # `last_turn` is the count frozen at that transition.
+  defp operator_turns(%{status: :closed, last_turn: last_turn}), do: last_turn
+  defp operator_turns(%{status: :open, turns: turns}), do: turns
+
+  # Defensive catch-all (issue #276 review follow-up, non-blocking).
+  # Today this module only ever produces :open / :closed (see
+  # close_entry/3 and the entry-creation literal in
+  # handle_call({:record, ...})), so this clause is currently
+  # unreachable. Kept anyway because list_for_operator/1 folds this
+  # function over EVERY tracked conversation in one pass — a future
+  # status value reaching here without this function being updated
+  # would otherwise raise FunctionClauseError mid-fold, crashing this
+  # singleton GenServer and, being in-memory only (moduledoc), losing
+  # every OTHER agent's still-tracked conversation for the sake of one
+  # unrecognised entry. `0` is a display-only placeholder for "turn
+  # count unknown", not a claim about the real count; the warning
+  # surfaces the gap so it gets fixed rather than silently masked.
+  defp operator_turns(entry) do
+    Logger.warning(
+      "conversation_states: operator_turns saw unrecognised status " <>
+        inspect(Map.get(entry, :status))
+    )
+
+    0
   end
 
   defp schedule_gc do

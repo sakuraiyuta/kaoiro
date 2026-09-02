@@ -1,6 +1,6 @@
 ---
-title: セリフ吹き出し UI 導入時の人格プロンプト再検討
-description: 将来 seri-fu(吹き出し / セリフ表示)UI を導入する際、人格プロンプトの持ち方をどう再設計するか。
+title: Reconsidering the Personality Prompt When Introducing a Dialogue-Bubble UI
+description: How to redesign the personality prompt when introducing a seri-fu (dialogue-bubble / dialogue display) UI in the future.
 status: open
 urgency: low
 blocks: []
@@ -10,46 +10,49 @@ decided: null
 
 ## 背景
 
-[personas](../specs/personas.md) は 15 行目で「口調・一人称などの会話設定
-は…将来セリフ表示等を導入する際に別途決定する」と記載している。今回の
+[personas](../specs/personas.md) states on line 15 that "conversation settings
+such as speech style and first person ... will be decided separately when
+dialogue display or similar is introduced in the future." The current
 [persona-personality-injection](../specs/persona-personality-injection.md)
-は口調系をカバーしたが、対象は Claude Agent SDK への注入までであり、
-セリフ吹き出し / 発話 UI が持つ「短さ・言い切り・一度に読める分量」等の
-制約は考慮していない。
+covers speech style, but only up to injection into the Claude Agent SDK; it
+does not consider constraints of a dialogue bubble / speech UI such as
+"brevity, sentence-finality, and the amount readable at once."
 
-将来 kaoiro dashboard に吹き出し UI を導入する段階で、既存の
-`personality_prompt_file` をどう扱うかを予約する。
+Reserve how to handle the existing `personality_prompt_file` when a dialogue
+bubble UI is introduced in the kaoiro dashboard in the future.
 
 ## 選択肢
 
-| 案 | 内容 | メリット | デメリット |
+| Option | Description | Advantages | Disadvantages |
 |----|------|----------|-----------|
-| A | 既存 `personality_prompt_file` のスタイル指示に「吹き出しに収まる短さ」等を後付け | フィールド追加不要 | 通常出力と吹き出し出力を同じプロンプトで両立させる制約 |
-| B | 吹き出し用の専用フィールド(`dialogue_style_prompt?` 等)を追加 | 通常出力と吹き出し出力を分けて設計できる | データモデル拡張。同期させないと二重管理になる |
-| C | 吹き出し UI 自体を spec 化する時にセットで再検討 | 現時点で決めない = 情報不足時に判断しない | 決定タイミングが遠くなる |
+| A | Add "brevity that fits in a dialogue bubble" and similar instructions to the style instructions of the existing `personality_prompt_file` | No field addition needed | Constraint of supporting normal and dialogue-bubble output in the same prompt |
+| B | Add a dedicated field for dialogue bubbles (such as `dialogue_style_prompt?`) | Normal and dialogue-bubble output can be designed separately | Data-model expansion; becomes duplicated management unless synchronized |
+| C | Reconsider it together when specifying the dialogue-bubble UI itself | Do not decide now = do not decide with insufficient information | The decision timing moves further away |
 
 ## 影響
 
-- 現在のスコープでは対象外なので、実装への影響なし。
-- 吹き出し UI 導入 spec が起こされた時に、必ず本 open-question を trigger
-  として参照する。
+- It is outside the current scope, so there is no implementation impact.
+- When a dialogue-bubble UI introduction spec is created, always refer to this
+  open question as a trigger.
 
 ## 判断材料
 
-- 吹き出し UI の具体的な仕様(何を、どのくらいの分量で、どのタイミングで
-  出すか)。
-- 「地の応答テキスト」と「吹き出しセリフ」を両方持たせるか、片方だけか。
-- personas.md 15 行目の「将来セリフ表示等」がどう具体化するか。
+- The concrete specification of the dialogue-bubble UI (what to show, how much,
+  and when to show it).
+- Whether to have both "main response text" and "dialogue-bubble dialogue," or
+  only one of them.
+- How personas.md's line 15, "dialogue display or similar in the future," will
+  be made concrete.
 
 ## 暫定方針
 
-**C**(吹き出し UI spec 起こし時に併せて decide する)。現時点では何も
-実装しない。
+**C** (decide together when creating the dialogue-bubble UI spec). Implement
+nothing at this time.
 
-## 解決時のアクション
+## Actions upon resolution
 
 - [ ] Decision recorded in `adr/NNNN-persona-personality-vs-dialogue.md`
-      or 吹き出し UI spec に統合
-- [ ] Spec `../specs/persona-personality-injection.md` の「スコープ」節に
-      吹き出し UI との連携方針を追記
+      or integrated into the dialogue-bubble UI spec
+- [ ] Add the integration policy with the dialogue-bubble UI to the "Scope"
+      section of Spec `../specs/persona-personality-injection.md`
 - [ ] This file moved to ADR or deleted

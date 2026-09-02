@@ -1,5 +1,5 @@
 ---
-title: 協調指針の共通フッター自動注入と都度指名 director 下の責務内自律
+title: Automatic injection of a common coordination-guideline footer and autonomy within assigned responsibilities under an ad hoc director
 status: accepted
 date: 2026-07-29
 opened: 2026-07-28
@@ -9,156 +9,163 @@ related_specs: [protocol-inter-agent, persona-personality-injection, threat-mode
 related_adrs: [21, 22, 29, 43, 45]
 ---
 
-# ADR-0044 — 協調指針の共通フッター自動注入と都度指名 director 下の責務内自律
+# ADR-0044 — Automatic injection of a common coordination-guideline footer and autonomy within assigned responsibilities under an ad hoc director
 
 ## Status
 
-Accepted (2026-07-28 起草、2026-07-29 マスター再決裁で F2 を改訂)。
-実装は kaoiro issue #87 (調査の傘) からの派生 issue で扱う。実装 phase
-は着手時に採番する。
+Accepted (drafted 2026-07-28; F2 revised by マスター's reapproval on 2026-07-29).
+Implementation will be handled as a derivative issue from kaoiro issue #87 (the
+umbrella for the investigation). A phase will be numbered when implementation
+begins.
 
-起草時の F2 は**永続的な** director 役を前提としており、その約 2 時間後
-に下された
-[#158 comment-5384365227](https://github.com/sakuraiyuta/kaoiro/issues/158#issuecomment-5384365227)
-の P5「永続 director 役は定義しない。都度 operator 指示 +
-permission_broker 都度承認」と矛盾していた。2026-07-29 のマスター再決裁
-により F2 を「operator が都度指名する director のもとで各エージェントに
-責務が割り当てられ、その責務の範囲内で自律する」形へ改訂し、永続役を
-定義しない点で P5 および
-[ADR-0043](0043-agent-initiated-session-reset.md) D2 と整合させた。
-F1 (フッター注入) / F3 (受動発動) は起草時から変更しない。
+The F2 in the draft assumed a **permanent** director role and conflicted with P5
+of [#158 comment-5384365227](https://github.com/sakuraiyuta/kaoiro/issues/158#issuecomment-5384365227),
+decided about two hours later: “Do not define a permanent director role; operator
+instruction each time + per-operation permission_broker approval.” Through
+マスター's reapproval on 2026-07-29, F2 was revised so that the operator assigns a
+director each time, responsibilities are assigned to each agent under that
+director, and each agent acts autonomously within those responsibilities. This
+aligns with P5 and [ADR-0043](0043-agent-initiated-session-reset.md) D2 in not
+defining a permanent role. F1 (footer injection) / F3 (passive activation) are
+unchanged from the draft.
 
 ## Context
 
-kaoiro 上で複数エージェントを並行運用する際、operator が毎回協調の
-やり方を指示しなくても、エージェント群が互いの状況を見て自律的に
-作業分担・共同作業できるようにしたい (kaoiro issue #87)。
+When multiple agents are operated in parallel on kaoiro, we want the agents to
+observe one another's situation and autonomously divide work and collaborate,
+without requiring the operator to specify the coordination method every time
+(kaoiro issue #87).
 
-観察基盤は phase-27 で整備済み: `list_agents` は peer の実行特性
-(engine / model / effort) と稼働状況 (context / session_started_at /
-turns / last_activity_at / conversation / rate_limits) を返す。
-一方で行動指針の注入機構はなく、`send_to_agent` は
-[ADR-0022](0022-pending-permission-authoritative-source.md) の
-`canUseTool` 経路で毎回 operator 承認を要する
-([protocol-inter-agent](../specs/protocol-inter-agent.md) は
-auto-allow を「Phase 2 以降」と保留)。運用ルール上も「作業配分の
-約束は escalate 対象」(2026-07-21 決裁) であり、自律的な作業分担は
-成立しない。
+The observation foundation was completed in phase-27: `list_agents` returns peer
+execution characteristics (engine / model / effort) and operating status
+(context / session_started_at / turns / last_activity_at / conversation /
+rate_limits). There is no mechanism for injecting behavioral guidance, however,
+and `send_to_agent` requires operator approval every time through the
+`canUseTool` path of [ADR-0022](0022-pending-permission-authoritative-source.md)
+([protocol-inter-agent](../specs/protocol-inter-agent.md) defers auto-allow to
+“Phase 2 and later”). Operational rules also treat “agreements on work
+allocation” as an escalation target (2026-07-21 decision), so autonomous work
+allocation cannot currently be established.
 
 ## Decision
 
-### F1 — 注入経路は server SoT 共通フッターの拡張
+### F1 — Extend the server-SoT common footer as the injection path
 
-「他エージェントの状況を `list_agents` で観察し、自分で判断し、
-必要なら `send_to_agent` で協調して作業分担・共同作業する」行動
-指針を、[ADR-0029](0029-persona-server-sot-and-pack-distribution.md)
-の server 集約 SoT 共通フッターに追記し、kaoiro 上で起動した**全
-エージェント**へ system prompt append で自動注入する。engine 非依存
-の既存機構の延長であり、Claude Code skill (SKILL.md) 形式の配布は
-採らない。指針の文面と長さは案 A (短い行動原則のみ) で確定した
-(2026-08-08 マスター決裁、詳細は下記追補)。
+Append the behavioral guidance “observe other agents' status with `list_agents`,
+make your own decision, and coordinate with `send_to_agent` as needed for work
+division and collaboration” to the server-centralized SoT common footer of
+[ADR-0029](0029-persona-server-sot-and-pack-distribution.md), and automatically
+inject it by system-prompt append into **all agents** started on kaoiro. This is
+an extension of the existing engine-independent mechanism; distribution in the
+form of a Claude Code skill (SKILL.md) is not used. The wording and length of the
+guidance are fixed as Option A (short behavioral principles only) (マスター decision
+on 2026-08-08; details in the addendum below).
 
-### F2 — HITL 境界は「都度指名 director のもとでの責務内自律」
+### F2 — The HITL boundary is “autonomy within responsibilities under an ad hoc director”
 
-**永続的な director 役は定義しない。** operator が作業単位ごとに
-director を都度指名する
-([ADR-0043](0043-agent-initiated-session-reset.md) D2 および #158 P5 と
-同じ形)。指名された director は配下エージェントへ役割 (責務範囲) を
-割り当て、各エージェントはその責務の範囲内では operator 承認なしに
-`send_to_agent` で協調 (作業分担の合意・調整・事後報告) してよい。
-責務の外へ出る判断は director への確認、または operator への escalate
-とする。
+**Do not define a permanent director role.** The operator appoints a director for
+each unit of work
+([ADR-0043](0043-agent-initiated-session-reset.md) D2 and #158 P5 use the same
+form). The appointed director assigns roles (responsibility boundaries) to
+subordinate agents, and each agent may coordinate through `send_to_agent` without
+operator approval within those responsibilities (agreeing on, adjusting, and
+reporting work division after the fact). For a decision outside the
+responsibility, confirm with the director or escalate to the operator.
 
-HITL の起点は **director の指名と責務範囲の設定** であり、責務内の
-個々の `send_to_agent` ではない。これに伴い現行運用「作業配分の約束は
-escalate 対象」(2026-07-21 決裁) を、責務範囲内に限って改訂する。
-前提となる `send_to_agent` の auto-allow は、protocol-inter-agent の
-「Phase 2 以降」から前倒しし、案 B (conversation 単位 whitelist) で
-確定した (2026-08-08 マスター決裁、詳細は下記追補)。
+The HITL starting point is **the director appointment and setting of the
+responsibility boundaries**, not each individual `send_to_agent` within those
+responsibilities. Accordingly, revise the current operating rule that “agreements
+on work allocation are an escalation target” (2026-07-21 decision) only within the
+responsibility boundaries. The `send_to_agent` auto-allow on which this depends is
+brought forward from “Phase 2 and later” in protocol-inter-agent and fixed as
+Option B (conversation-level whitelist) (マスター decision on 2026-08-08; details
+in the addendum below).
 
-**破壊的操作は責務内自律の対象外。** session reset (`/new`・`/clear`)
-は ADR-0043 D2/D4 のとおり、対象エージェント自身の tool 呼び出し +
-permission broker 都度承認を維持する。director が配下の reset を直接
-起動する経路は作らない。
+**Destructive operations are outside autonomy within responsibilities.** For
+session reset (`/new` / `/clear`), retain the target agent's own tool call plus
+per-operation permission-broker approval as in ADR-0043 D2/D4. Do not create a
+path for a director to directly start a reset for a subordinate.
 
-### F3 — 発動は受動 (作業契機)
+### F3 — Activation is passive (work-triggered)
 
-協調判断の発動は、自分がタスクを受けた時・行き詰まった時に peer
-状況を確認して行う**受動型**とする。idle エージェントが定期的に
-peer を監視して支援を申し出る能動監視 (polling 常駐) はスコープ外。
+Activate coordination judgment **passively** by checking peer status when one
+receives a task or becomes stuck. Continuous active monitoring in which an idle
+agent regularly watches peers and offers help (resident polling) is out of scope.
 
-### 追補 (2026-08-09、issue #165 — 残 open-question の決着)
+### Addendum (2026-08-09, issue #165 — resolving the remaining open questions)
 
-2026-08-08 マスター決裁により、F1/F2 が前提としていた残り 2 件の
-open-question を決着した。
+The two remaining open questions assumed by F1/F2 were decided by マスター on
+2026-08-08.
 
-- **send-to-agent-auto-allow**: 案 B (conversation 単位 whitelist) を
-  採用。最初に operator 承認 (`canUseTool`) を経て server に accepted
-  された送信のみがその `(conversation_id, to)` の組合せを確立し、
-  以降の `send_to_agent` を自動許可する — canUseTool の承認を経ただけ
-  (server がまだ受理していない、または reject/unknown) では組合せは
-  成立しない (`to` も束縛するのは外部レビューでの指摘、
-  [#201](https://github.com/sakuraiyuta/kaoiro/issues/201)
-  参照 — conversation_id 単独では reject 後の宛先差し替えが dialog を
-  飛ばしてしまう)。暴走ガード (#167 で一部対応) がまだ弱い現状では、
-  狭い範囲の自動許可が安全という判断。詳細な実装挙動 (dispatch 待機中
-  の受信レースへの耐性を含む) は
-  [protocol-inter-agent](../specs/protocol-inter-agent.md) 「自動承認」
-  節を正とする。
-- **coordination-footer-scope**: 案 A (短い行動原則のみ) を採用。
-  kind の使い分けや報告形式といった手順の詳細はフッターに含めない。
-  不足が判明すれば運用計測後に拡張する。長さ担保の機構は
-  [ADR-0045](0045-footer-file-externalization.md) F5 で別途決着済み。
+- **send-to-agent-auto-allow**: Adopt Option B (conversation-level whitelist).
+  Only a send that first passes operator approval (`canUseTool`) and is accepted
+  by the server establishes the `(conversation_id, to)` combination; subsequent
+  `send_to_agent` calls are auto-allowed. Merely passing canUseTool approval does
+  not establish the combination while the server has not yet accepted it, or has
+  rejected it / returned unknown (`to` is also bound because of an external
+  review finding; see [#201](https://github.com/sakuraiyuta/kaoiro/issues/201) —
+  binding only conversation_id would let a changed destination bypass the dialog
+  after rejection). With the runaway guard still weak in part (#167 has partial
+  coverage), the judgment is that narrowly scoped auto-allow is safer. Treat
+  [protocol-inter-agent](../specs/protocol-inter-agent.md)'s “auto-approval”
+  section as authoritative for detailed implementation behavior, including
+  resistance to receive races while dispatch is waiting.
+- **coordination-footer-scope**: Adopt Option A (short behavioral principles
+  only). Do not include procedural details such as kind selection or reporting
+  format in the footer. Expand after operational measurement if deficiencies are
+  found. The mechanism for guaranteeing length was decided separately in
+  [ADR-0045](0045-footer-file-externalization.md) F5.
 
-両 open-question は decided 反映のうえ close (削除) した。実装は本
-issue ([#165](https://github.com/sakuraiyuta/kaoiro/issues/165))
-で行う ([protocol-inter-agent](../specs/protocol-inter-agent.md)
-「承認フロー」節、server 側 `priv/footers/system-footer.md`)。
+Both open questions were closed (deleted) after reflecting the decisions. The
+implementation is handled in this issue ([#165](https://github.com/sakuraiyuta/kaoiro/issues/165))
+([protocol-inter-agent](../specs/protocol-inter-agent.md)'s “approval flow”
+section and the server-side `priv/footers/system-footer.md`).
 
 ## Consequences
 
 ### Positive
 
-- operator の指示なしにエージェント群の作業分担が成立し、並行運用
-  のスループットが上がる。
-- 注入は ADR-0029 の既存 SoT 機構の延長で、server 側の一元管理を
-  保てる。受動型のため常駐機構の token コストが発生しない。
+- Work division among agents can occur without operator instruction, increasing
+  throughput in parallel operation.
+- Injection extends ADR-0029's existing SoT mechanism and retains centralized
+  management on the server. Because activation is passive, there is no token cost
+  for a resident mechanism.
 
 ### Negative
 
-- `send_to_agent` の operator 承認が縮小し、エージェント間の暴走
-  対話・重複作業のリスクが増す (#87 の「終わり方設計」「観測可能性」
-  論点、および
-  [work-division-conflict-guard](../open-questions/work-division-conflict-guard.md)
-  で追う)。**追補 (2026-08-09、issue #167)**: 「終わり方」の一部 —
-  完了済み conversation が再開して done / escalate の ping-pong が
-  止まらなくなる不具合 — は #167 が server 側 tombstone
-  (`conversation_closed` での再開拒否) と wrapper 側 lifecycle
-  (`localDone` / `remoteDone` / `closed`、stale/duplicate turn の
-  拒否) で機械的に閉じた
-  ([protocol-inter-agent](../specs/protocol-inter-agent.md)
-  「conversation のライフサイクルと終了後の扱い」節)。残る論点
-  (意味的に同一の提案が形を変えて繰り返されるループの検知等) は
-  #87 のまま継続する。
-- 共通フッターが肥大すると全エージェントの context を常時消費する
-  (ADR-0029 の文字数 SHOULD 目安との折り合いが必要)。
+- Reducing operator approval for `send_to_agent` increases the risk of runaway
+  inter-agent conversations and duplicate work (tracked under #87's “designing
+  how to end” and “observability” concerns, and
+  [work-division-conflict-guard](../open-questions/work-division-conflict-guard.md)).
+  **Addendum (2026-08-09, issue #167)**: One part of “how to end” — a bug where a
+  completed conversation was reopened and its done / escalate ping-pong failed to
+  stop — was mechanically closed by #167 using a server-side tombstone (rejecting
+  reopening with `conversation_closed`) and wrapper-side lifecycle
+  (`localDone` / `remoteDone` / `closed`, rejecting stale/duplicate turns)
+  ([protocol-inter-agent](../specs/protocol-inter-agent.md)'s section on the
+  conversation lifecycle and handling after termination). Remaining issues, such
+  as detecting loops where semantically identical proposals are repeated in
+  changed forms, remain under #87.
+- If the common footer grows, it continuously consumes context for every agent;
+  this must be balanced against ADR-0029's SHOULD guideline for character count.
 
 ### Neutral
 
-- dashboard の観測経路 (inter-agent message の operator 限定配信、
-  [ADR-0021](0021-role-information-disclosure-policy.md)) は不変。
-  自律化するのは送信の承認であって開示範囲ではない。
-- director が指名されていない作業では従来どおり `send_to_agent` に
-  operator 承認を要する。自律が働くのは指名と責務割り当てを経た範囲に
-  限られ、既定状態は現行のままである。
+- The dashboard observation path (operator-only delivery of inter-agent messages,
+  [ADR-0021](0021-role-information-disclosure-policy.md)) is unchanged. What is
+  autonomous is approval of sending, not the disclosure scope.
+- Work without a director appointment still requires operator approval for
+  `send_to_agent` as before. Autonomy applies only to the scope that has gone
+  through appointment and responsibility assignment; the default state remains
+  current behavior.
 
 ## Alternatives Considered
 
 | Option | Why rejected |
 |--------|--------------|
-| Claude Code skill (SKILL.md) 配布 | engine 依存の仕組みになる |
-| フッター + skill の併用 | SoT 管理の複雑化 |
-| 完全自律 + 事後報告 (director なし) | 暴走・重複作業のリスク |
-| 永続 director 役を定義し指名を持続させる | 役割が固定され operator の統制点が失われる。#158 P5 / ADR-0043 D2 で不採用 |
-| 分担確定は operator 承認 (現状維持) | 自律性の向上が限定的 |
-| 能動監視 (polling 常駐) | token コストと雑音 |
+| Distribute a Claude Code skill (SKILL.md) | It would be an engine-dependent mechanism |
+| Combine footer + skill | Complicates SoT management |
+| Full autonomy + after-the-fact reporting (without a director) | Risk of runaway behavior and duplicate work |
+| Define a permanent director role and retain the appointment | The role would become fixed and the operator's control point would be lost. Rejected by #158 P5 / ADR-0043 D2 |
+| Keep operator approval for finalizing work division (current behavior) | Limits the improvement in autonomy |
+| Active monitoring (resident polling) | Token cost and noise |

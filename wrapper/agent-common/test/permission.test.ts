@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PermissionBroker } from "../src/permission.js";
+import {
+  fitsApprovalPayload,
+  MAX_INPUT_BYTES,
+  PermissionBroker,
+} from "../src/permission.js";
 import type {
   Envelope,
   PendingPermissionExt,
@@ -160,6 +164,27 @@ describe("PermissionBroker", () => {
       truncated: true,
     });
     expect(sent[0]?.payload).not.toHaveProperty("input");
+  });
+
+  // fitsApprovalPayload is exported so callers outside this class can fail
+  // closed before an oversized input ever reaches decide(). Pin it against
+  // decide()'s own truncated/not-truncated split, not a re-derived
+  // expectation — two independently computed byte counts could agree by
+  // coincidence and still drift later.
+  it("fitsApprovalPayload は decide() の truncated 判定と一致する", () => {
+    const { broker: brokerA, sent: sentA } = makeBroker();
+    const underCap = { content: "x".repeat(100) };
+    void brokerA.decide("Write", underCap);
+    expect(fitsApprovalPayload(underCap)).toBe(true);
+    expect(sentA[0]?.payload).not.toHaveProperty("truncated");
+
+    const { broker: brokerB, sent: sentB } = makeBroker();
+    const overCap = { content: "x".repeat(20_000) };
+    void brokerB.decide("Write", overCap);
+    expect(fitsApprovalPayload(overCap)).toBe(false);
+    expect(sentB[0]?.payload).toMatchObject({ truncated: true });
+
+    expect(MAX_INPUT_BYTES).toBe(16_384);
   });
 
   it("close は保留中の要求を全て deny で解決する", async () => {

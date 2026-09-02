@@ -55,14 +55,43 @@ export class CodexInterAgentTurnCoordinator {
   readonly #activeTokenByPeer = new Map<string, string>();
   readonly #onDispatch: (batch: DispatchedCodexInterAgentBatch) => void;
   readonly #createTurnToken: () => string;
+  #closed = false;
 
   constructor(options: CodexInterAgentTurnCoordinatorOptions) {
     this.#onDispatch = options.onDispatch;
     this.#createTurnToken = options.createTurnToken ?? randomUUID;
   }
 
+  /** Stops future dispatch after a watchdog fail-stop while retaining the
+   * exact SDK-active generation. Unstarted generations are deliberately
+   * discarded; the active generation remains unresolved for supervisor
+   * recovery and must not be acknowledged by a late callback. */
+  freezeForWatchdogFailStop(activeTurnToken?: string): {
+    droppedDispatched: number;
+    droppedPending: number;
+  } {
+    if (this.#closed) return { droppedDispatched: 0, droppedPending: 0 };
+    this.#closed = true;
+    let droppedDispatched = 0;
+    let droppedPending = 0;
+    for (const [turnToken, batch] of this.#batchByTurnToken) {
+      if (activeTurnToken !== undefined && turnToken === activeTurnToken) continue;
+      this.#batchByTurnToken.delete(turnToken);
+      if (this.#activeTokenByPeer.get(batch.peer) === turnToken) {
+        this.#activeTokenByPeer.delete(batch.peer);
+      }
+      droppedDispatched += 1;
+    }
+    for (const batches of this.#pendingBatches.values()) {
+      droppedPending += batches.length;
+    }
+    this.#pendingBatches.clear();
+    return { droppedDispatched, droppedPending };
+  }
+
   /** Queue an accepted inbound and dispatch immediately if its peer is free. */
   receive(envelope: Envelope, mode: InboundReplyMode): void {
+    if (this.#closed) return;
     const peer = envelope.agent_id;
     const item: CodexInterAgentBatchItem = { envelope, mode };
     const itemBytes = Buffer.byteLength(
@@ -117,12 +146,41 @@ export class CodexInterAgentTurnCoordinator {
       );
   }
 
+  /** Returns the min/max delivery sequence represented by one active batch. */
+  deliverySequenceRangeForTurn(
+    turnToken: string,
+  ): { first: number; last: number } | undefined {
+    const sequences = this.deliverySequencesForTurn(turnToken);
+    if (sequences.length === 0) return undefined;
+    return {
+      first: Math.min(...sequences),
+      last: Math.max(...sequences),
+    };
+  }
+
+  /** Finds the active turn which owns an inbound delivery sequence. */
+  turnTokenForDeliverySequence(deliverySeq: number): string | undefined {
+    for (const [turnToken, batch] of this.#batchByTurnToken) {
+      if (
+        batch.items.some(
+          (item) =>
+            (item.envelope as { delivery_seq?: unknown }).delivery_seq ===
+            deliverySeq,
+        )
+      ) {
+        return turnToken;
+      }
+    }
+    return undefined;
+  }
+
   /** Dispatch the oldest batch that was waiting behind a settled peer turn. */
   dispatchNextForPeer(peer: string): void {
     this.#dispatchNext(peer);
   }
 
   #dispatchNext(peer: string): void {
+    if (this.#closed) return;
     if (this.#activeTokenByPeer.has(peer)) return;
     const queue = this.#pendingBatches.get(peer);
     const pending = queue?.shift();

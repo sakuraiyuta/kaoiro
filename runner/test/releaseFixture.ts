@@ -41,7 +41,7 @@ const DEPLOY_SCRIPTS = [
 ];
 
 /** Mimics ONLY the `--version` contract cli.ts implements (read the sibling
- *  build-info.json, print the canonical `<rev>[-dirty]` form, exit 0). The
+ *  build-info.json, print the canonical project identity, exit 0). The
  *  real cli.ts behaviour is pinned separately by args.test.ts /
  *  build_info.test.ts.
  *
@@ -70,8 +70,12 @@ if (process.argv.includes("--version")) {
   const info = JSON.parse(
     readFileSync(join(import.meta.dirname, "build-info.json"), "utf8"),
   );
+  const revision = typeof info.revision === "string" ? info.revision : "unknown";
+  const version = typeof info.version === "string" ? info.version : "unknown";
+  const channel = info.channel === "release" ? "release" : "dev";
+  const shortHash = revision === "unknown" ? "unknown" : revision.slice(0, 7);
   process.stdout.write(
-    (override || (info.dirty ? \`\${info.revision}-dirty\` : info.revision)) +
+    (override || \`kaoiro \${channel} runner v\${version} / \${shortHash}\`) +
       "\\n",
   );
   process.exit(0);
@@ -122,7 +126,9 @@ export interface ReleaseTreeOptions {
   /** Overrides the VERSION file's content — used for the id value-domain
    *  cases, where VERSION must NOT match the revision. */
   version?: string;
+  buildVersion?: string;
   dirty?: boolean;
+  channel?: "dev" | "release";
   /** Makes the stub cli's `--version` report this instead of the tree's own
    *  identity — the only way left to stage a running artifact that disagrees
    *  with its release directory. */
@@ -195,6 +201,8 @@ export function writeReleaseTree(
       revision,
       dirty,
       built_at: "2026-08-16T00:00:00.000Z",
+      version: options.buildVersion ?? "2026.9.0",
+      channel: options.channel ?? "dev",
     }),
   );
   // The wrappers are real PACKAGES here, not two lone files, and a shared

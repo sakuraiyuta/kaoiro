@@ -1,6 +1,6 @@
 ---
-title: persona.language の消費ロジック
-description: Persona の language フィールドを実行時にどう消費するか(personality 選択、フッター切替、SDK 側の言語指示)。
+title: Consumption Logic for persona.language
+description: How to consume the Persona language field at runtime (personality selection, footer switching, and language instructions on the SDK side).
 status: open
 urgency: low
 blocks: [persona-personality-injection]
@@ -11,50 +11,51 @@ decided: null
 ## 背景
 
 [persona-personality-injection](../specs/persona-personality-injection.md)
-は `Persona` に `language?: string` フィールドを追加した(未指定は `"ja"`
-既定)。future-proof 目的で下地だけ敷いたため、phase-0 では読み込みのみで
-dispatch ロジックは持たない。
+added the `language?: string` field to `Persona` (default `"ja"` when omitted).
+Because only the foundation was laid for future-proofing, phase-0 only loads it
+and has no dispatch logic.
 
-多言語対応を実装する phase-1 段階で、`language` を何にどう消費するかを
-decide する必要がある([ADR-0026](../adr/0026-persona-personality-injection.md)
-の D4 決定に紐付く後続議論)。ドキュメント言語方針は
-[ADR-0006](../adr/0006-doc-language-i18n.md) が担っている。
+During phase-1, when multilingual support is implemented, decide what consumes
+`language` and how ([ADR-0026](../adr/0026-persona-personality-injection.md)'s
+follow-up discussion linked to the D4 decision). The document-language policy
+is covered by [ADR-0006](../adr/0006-doc-language-i18n.md).
 
 ## 選択肢
 
-| 案 | 内容 | メリット | デメリット |
+| Option | Description | Advantages | Disadvantages |
 |----|------|----------|-----------|
-| A | `personality_prompt_file` を `<id>.<lang>.md` 命名で切り替え | 人格記述そのものが言語ごと。翻訳ではなくロケール別の書き分けが可能 | ペルソナ数 × 言語数のファイル管理。language が違うと立ち絵の一貫性を保つ工夫が要る |
-| B | 共通フッターだけを language で切り替え、personality は 1 ファイル | 実装コスト最小。personality は英日どちらでも通用する書き方を心がける | エージェント応答言語は個人記述の言語に引きずられる可能性 |
-| C | language に応じて SDK 側の言語指示(「always respond in Japanese」等)を追加 append | 応答言語を強制できる | personality の口調と応答言語が別軸で管理される複雑さ |
+| A | Switch `personality_prompt_file` using the `<id>.<lang>.md` naming scheme | The personality description itself is language-specific; allows locale-specific writing rather than translation | File management grows as number of personas × number of languages; when language differs, care is needed to maintain consistency of the standing illustration |
+| B | Switch only the common footer by language and keep one personality file | Minimal implementation cost; write personality so it works in both English and Japanese | The agent's response language may be pulled toward the language of the individual description |
+| C | Append language instructions on the SDK side according to language (such as "always respond in Japanese") | Can enforce the response language | Complexity from managing personality speech style and response language as separate axes |
 
-上記は相互排他ではなく、A+C や B+C の組み合わせも成立する。decide 時に
-組み合わせて選ぶ余地を残す。
+The above are not mutually exclusive; combinations such as A+C and B+C are
+also possible. Leave room to choose a combination when deciding.
 
 ## 影響
 
-- phase-1 の実装内容がここで決まる。phase-0 は「language 読み込みのみ、
-  dispatch なし」で回るため、本 open-question の未決は phase-0 は
-  ブロックしない。
-- 多言語対応するペルソナが将来何体になるかで採択が変わる可能性がある。
+- The phase-1 implementation is decided here. Because phase-0 runs with "only
+  language loading, no dispatch," this open question's undecided status does
+  not block phase-0.
+- Adoption may change depending on how many personas will support multiple
+  languages in the future.
 
 ## 判断材料
 
-- 実際にペルソナを多言語化する需要が出るか(外部公開段階で発生見込み)。
-- ペルソナごとに別言語で書くケースがあるか、それとも全体を英訳するか。
-- [ADR-0006](../adr/0006-doc-language-i18n.md) の「ベータ前に全英訳」
-  マイルストーンでどこまで人格側を含めるか。
+- Whether actual demand emerges to make personas multilingual (expected to arise
+  at the external-release stage).
+- Whether there are cases for writing each persona in a different language, or
+  whether everything will be translated into English.
+- How much of the personality side to include in [ADR-0006](../adr/0006-doc-language-i18n.md)'s
+  "translate everything before beta" milestone.
 
 ## 暫定方針
 
-未定。phase-1 に入るタイミングで再議論する。それまでは phase-0 で
-language フィールド読み込みのみを実装しておく。
+Undecided. Revisit the discussion when entering phase-1. Until then, implement
+only loading the language field in phase-0.
 
-## 解決時のアクション
+## Actions upon resolution
 
 - [ ] Decision recorded in `adr/NNNN-persona-language-dispatch.md`
-- [ ] Spec `../specs/persona-personality-injection.md` の
-      「データモデル」節と「Constraints」節を更新
-- [ ] `../plans/persona-personality-injection.md` の phase-1 タスクを
-      具体化
+- [ ] Update the "Data model" and "Constraints" sections of Spec `../specs/persona-personality-injection.md`
+- [ ] Detail the phase-1 tasks in `../plans/persona-personality-injection.md`
 - [ ] This file moved to ADR or deleted

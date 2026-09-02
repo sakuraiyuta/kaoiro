@@ -1,6 +1,6 @@
 ---
-title: ファイルアップロード — (2) FS + Read 方式への再実装トリガと境界
-description: content-block 直送(1)でメモリ/速度に問題が出た時に wrapper-local FS + Read 誘導(2)へ切り替える判断境界の未決論点。
+title: File upload — trigger and boundary for reimplementing the (2) FS + Read path
+description: Open question on the decision boundary for switching to wrapper-local FS + Read guidance (2) when direct content-block delivery (1) causes memory / speed problems.
 status: open
 urgency: low
 blocks: []
@@ -10,43 +10,44 @@ decided: null
 
 ## 背景
 
-[#52 issue 本文](https://github.com/sakuraiyuta/kaoiro/issues/52)
-は 「まず (1) 内容をプロンプト展開して SDK メッセージに添付。 問題が出たら
-(2) wrapper ホスト FS にファイルを置き Read させる方式へ再実装を検討」と
-規定している。 [ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md)
-F1 / F3 で (1) 方式(wrapper-internal レンダリング + 純メモリ完結)を MVP
-として確定したが、 (2) への切替判断境界は未確定。
+The [#52 issue body](https://github.com/sakuraiyuta/kaoiro/issues/52) specifies:
+“First (1), expand the content into the prompt and attach it to the SDK message.
+If problems arise, consider reimplementing it as (2), placing the file on the
+wrapper host FS and having Read load it.” [ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md)
+F1 / F3 finalized (1) (wrapper-internal rendering + all in memory) as the MVP,
+but the decision boundary for switching to (2) is undecided.
 
 ## 選択肢
 
-| 案 | 内容 | メリット | デメリット |
+| Option | Content | Advantages | Disadvantages |
 |--|--|--|--|
-| A | メモリ/速度に問題が出たら (2) へ wrapper 内部実装を切替(protocol 不変) | issue 本文の既定、 切替コストを wrapper 内に閉じ込められる | 「問題が出た」の閾値が曖昧 |
-| B | 当面 (1) を据え置き、 切替判断は別 issue で起票時に再評価 | 現状維持、 判断を先送り | 問題顕在化時に意思決定の場がない |
+| A | Switch the wrapper's internal implementation to (2) when memory / speed becomes a problem (protocol unchanged) | Default in the issue body; switching cost stays inside the wrapper | Threshold for “a problem has appeared” is ambiguous |
+| B | Keep (1) for now and reassess the switch in a separate issue when it is filed | Preserve the current state; defer the decision | No decision venue when the problem becomes visible |
 
 ## 影響
 
-(1) で運用が成立する限り波及なし。 (2) へ切替時は wrapper の内部実装
-(SDK 呼び出し時の prompt 注入と Read 誘導の有無)に閉じる。 protocol /
-client / server は不変
-([ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md) F1 の
-wrapper-internal 原則)。
+No impact while operation succeeds with (1). Switching to (2) remains inside the
+wrapper implementation (whether prompt injection and Read guidance occur at SDK
+call time). Protocol / client / server remain unchanged
+([ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md) F1's
+wrapper-internal principle).
 
 ## 判断材料
 
-- (1) 運用での実測メモリピーク・ SDK 呼び出しレイテンシ(Stage C 完了後の
-  実機運用で観測)
-- Claude API の content block 限界に近づいた時の挙動安定性
-- Read 誘導が SDK / モデルでどれだけ確実に発火するか(誘導不安定なら (2) は
-  unreliable)
+- Measured memory peak / SDK-call latency in operation with (1) (observe in live
+  operation after Stage C completes)
+- Stability of behavior as the Claude API content-block limit is approached
+- How reliably Read guidance fires in the SDK / model (if guidance is unstable,
+  (2) is unreliable)
 
 ## 暫定方針
 
-A — issue 本文の既定。 切替閾値は phase-1 (Stage C) 完了後の運用観測で
-決める。
+A — This is the default in the issue body. Set the switching threshold through
+operational observation after phase-1 (Stage C) completes.
 
-## 解決時のアクション
+## Actions upon resolution
 
-- [ ] 観測メトリクス(メモリ・ レイテンシ)を plan に追記
-- [ ] (2) 採用なら ADR で記録、 wrapper の内部実装変更
-- [ ] 本ファイルを ADR 昇格 → 削除
+- [ ] Add observation metrics (memory / latency) to the plan
+- [ ] If adopting (2), record it in an ADR and change the wrapper internal
+      implementation
+- [ ] Promote this file to an ADR, then delete it

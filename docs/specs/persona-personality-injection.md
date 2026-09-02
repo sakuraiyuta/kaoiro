@@ -1,212 +1,219 @@
 ---
-title: 人格プロンプト注入
-description: ペルソナごとの口調・一人称・語尾・返答スタイルを engine SDK(Claude は systemPrompt.append、Codex は developer_instructions)へ注入する仕組み。プロンプト本文の SoT は server 側 persona pack、配送は WS ハンドシェイクで push。
+title: Personality-prompt injection
+description: A mechanism for injecting each persona's manner of speech, first-person pronoun, sentence endings, and response style into the engine SDK (Claude uses systemPrompt.append; Codex uses developer_instructions). The prompt body SoT is a server-side persona pack and is delivered by the WS handshake.
 status: provisional
 related: [personas, persona-pack-schema, protocol, threat-model]
 ---
 
-# 人格プロンプト注入
+# Personality-prompt injection
 
 ## Purpose
 
-[personas](personas.md) はペルソナ立ち絵の性格付け (ao / momo / kuroe /
-fuji) を、当初「立ち絵生成用の設計資料としてのみ」保持していたが、
-kaoiro が dogfooding 可能な段階に入り、実行時の会話にも一貫した
-キャラクター性を持たせる価値が出た。
+[personas](personas.md) initially retained the personality design (ao / momo /
+kuroe / fuji) for persona standing illustrations “only as design material for
+generating illustrations.” Once kaoiro reached a stage where it could dogfood
+itself, it became valuable to give runtime conversations a consistent persona.
 
-本 spec は、ペルソナごとの人格記述 (口調・一人称・語尾・返答スタイル)
-を engine SDK へ注入する仕組みを定める (Claude は `systemPrompt.append`、
-Codex は `developer_instructions`。下記「SDK への注入」)。既存の
-[ADR-0003](../adr/0003-persona-identity-persistence.md)(ペルソナ同一性
-の永続化)を延長し、「同じ persona は再起動をまたいで同じ**口調**でも
-喋る」を実現するのがゴール。
+This specification defines a mechanism to inject each persona's personality
+description (manner of speech, first-person pronoun, sentence endings, and
+response style) into the engine SDK (Claude uses `systemPrompt.append`; Codex
+uses `developer_instructions`; see “Injection into the SDK” below). It extends
+[ADR-0003](../adr/0003-persona-identity-persistence.md) (persistence of persona
+identity) to ensure “the same persona speaks in the same **manner** across
+restarts.”
 
-**適用モデル**: [ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
-に基づき、人格プロンプトの一次ソースは server 集約 SoT(persona pack
-zip の `personality.md`)。wrapper は WS ハンドシェイクで server から
-受信して SDK に注入する。旧モデル(wrapper 同梱 md ロード)は
-[ADR-0026](../adr/0026-persona-personality-injection.md) にて確立
-されたが、ADR-0029 で supersede された。
+**Application model**: Under [ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md),
+the primary source for personality prompts is the server-centralized SoT
+(`personality.md` in the persona-pack ZIP). The wrapper receives it from the
+server in the WS handshake and injects it into the SDK. The former model
+(loading an md bundled with the wrapper) was established by
+[ADR-0026](../adr/0026-persona-personality-injection.md), then superseded by
+ADR-0029.
 
 ## Definition
 
-### スコープ
+### Scope
 
-対象は**会話出力の見た目**(口調・一人称・語尾・返答スタイル)のみ。
-以下は本 spec の対象外:
+The subject is only the **appearance of conversational output** (manner of
+speech, first-person pronoun, sentence endings, and response style). The
+following are outside this specification:
 
-- タスク姿勢(慎重度・進捗報告頻度・ツール使用の癖) — 将来課題
+- Task posture (degree of caution, progress-report frequency, and tool-use habits) — future work
   ([persona-behavioral-prompt](../open-questions/persona-behavioral-prompt.md))
-- 感情フィルタとの連携([plans/phase-6-emotion-filter](../plans/phase-6-emotion-filter.md))
-- セリフ吹き出し / 発話 UI([persona-personality-vs-dialogue](../open-questions/persona-personality-vs-dialogue.md))
-- dashboard 側からの人格編集 UI
+- Integration with the emotion filter ([plans/phase-6-emotion-filter](../plans/phase-6-emotion-filter.md))
+- Speech balloons / utterance UI ([persona-personality-vs-dialogue](../open-questions/persona-personality-vs-dialogue.md))
+- A dashboard UI for editing personality
 
-### データモデル
+### Data model
 
-wrapper 側の設定に人格関連フィールドは持たない。`persona.id` /
-`persona.name` / `persona.sprite_set`(pack 由来の canonical、session 中
-不変)のみが wrapper 起動時 config に残る([setup-wizards](setup-wizards.md))。
-これとは別に、**稼働中に変わり得る表示名**を独立 top-level `display_name`
-field が担う(issue #209 D19/D20 — `Principal.display_name`,
-[ADR-0050](../adr/0050-principal-model-and-graded-access-control.md) D1)。
-spawn 時は operator 指定の custom name か、無指定なら `persona.name` の
-コピーを初期値として server が積む。
+Wrapper configuration has no personality-related field. Only `persona.id` /
+`persona.name` / `persona.sprite_set` (canonical values from the pack,
+unchangeable during a session) remain in startup configuration
+([setup-wizards](setup-wizards.md)). Separately, the independent top-level
+`display_name` field holds a **display name that may change during operation**
+(issue #209 D19/D20 — `Principal.display_name`,
+[ADR-0050](../adr/0050-principal-model-and-graded-access-control.md) D1). On
+spawn, the server initializes it with an operator-specified custom name or, if
+unspecified, a copy of `persona.name`.
 
-人格プロンプト本文は server 側 persona pack の `personality.md`
-([persona-pack-schema](persona-pack-schema.md))に置く。作成者は
-persona pack zip 内で編集する。
+The personality-prompt body resides in `personality.md` in the server-side
+persona pack ([persona-pack-schema](persona-pack-schema.md)). Authors edit it
+inside the persona-pack ZIP.
 
-### プロンプトの配送(WS ハンドシェイク)
+### Prompt delivery (WS handshake)
 
-wrapper が server に接続した直後の**ハンドシェイクメッセージ**で、
-server から wrapper に「人格記述 + 共通フッター」を結合済みの
-プロンプト文字列を push する。詳細メッセージ形式は
-[protocol](protocol.md) 参照。
+In the **handshake message** immediately after the wrapper connects to the
+server, the server pushes to the wrapper a prompt string combining “personality
+description + common footer.” See [protocol](protocol.md) for the detailed
+message format.
 
-- 未知の `persona.id` を名乗る wrapper 接続は server が reject する
-  (「野良 persona 禁止」の enforce、
-  [ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md))。
-- server 到達不能時は wrapper spawn 自体が失敗する(fail-closed)。
-  ローカルフォールバックは持たない。
+- The server rejects a wrapper connection claiming an unknown `persona.id`
+  (enforcement of “no unregistered personas,”
+  [ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)).
+- If the server is unreachable, the wrapper spawn itself fails (fail closed).
+  There is no local fallback.
 
-### SDK への注入
+### Injection into the SDK
 
-engine ごとに注入口は違うが、**wrapper は受信文字列をそのまま渡すだけ**で
-結合ロジックを持たない点は共通。
+Injection points differ by engine, but both share that **the wrapper only passes
+the received string through** and has no composition logic.
 
-**Claude Code**: Claude Agent SDK の `systemPrompt` は `{ type: 'preset',
-preset: 'claude_code', append?: string }` を受ける。ハンドシェイクで受信した
-プロンプト文字列をそのまま `append` に入れる。
+**Claude Code**: The Claude Agent SDK's `systemPrompt` accepts
+`{ type: 'preset', preset: 'claude_code', append?: string }`. Put the prompt
+string received in the handshake directly into `append`.
 
 ```typescript
 systemPrompt: {
   type: 'preset',
   preset: 'claude_code',
-  append: promptFromHandshake,   // server 側で personality + footer 結合済み
+  append: promptFromHandshake,   // personality + footer already combined server-side
 }
 ```
 
-`preset: 'claude_code'` によって Claude Code 相当の tool 使用マナー・
-安全指示は保持される。人格記述はその末尾に足される追記であり、preset
-を置換しない。
+`preset: 'claude_code'` preserves the tool-use practices and safety
+instructions equivalent to Claude Code. The personality description is an
+appendage at its end and does not replace the preset.
 
-**Codex**: 同じ文字列を per-run config の `developer_instructions` として
-developer ロールのメッセージに載せる([ADR-0032](../adr/0032-codex-adapter.md)
-F3、2026-07-10 に実測で確認)。Codex 側に preset 相当の概念は無い。
+**Codex**: Put the same string into a developer-role message as
+`developer_instructions` in per-run configuration
+([ADR-0032](../adr/0032-codex-adapter.md) F3, confirmed by live observation on
+2026-07-10). Codex has no concept equivalent to a preset.
 
-### 共通フッター
+### Common footer
 
-全ペルソナ (`default` 含む) に対して、共通のフッターを append 末尾に
-足す。**結合は server 側で行う**
-([ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md) F5)。
+Append a common footer at the end for every persona (including `default`).
+**Composition is performed server-side**
+([ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md) F5).
 
-[ADR-0045](../adr/0045-footer-file-externalization.md) の実装により、
-footer 設置ディレクトリ(`KAOIRO_FOOTER_DIR`。persona 取り込み
-ディレクトリとは分離)の md 2 枚を使う。未設定時は内蔵既定のみとなる。
-pack が無い予約 persona `default` でも、以下の footer 合成結果が prompt
-になる。
+The implementation of [ADR-0045](../adr/0045-footer-file-externalization.md)
+uses two md files in the footer directory (`KAOIRO_FOOTER_DIR`, separate from
+the persona-import directory). When it is unset, only the built-in default is
+used. Even for the reserved persona `default`, which has no pack, the following
+footer composition becomes the prompt.
 
-| ファイル | 位置付け | 欠落時 |
+| File | Role | When missing |
 |---|---|---|
-| `system-footer.md` | kaoiro 既定 (環境認識 + peer-routing 規約 + 協調行動指針)。置けば内蔵デフォルトを完全に置き換える | server バイナリ内蔵の既定文面を使う |
-| `user-footer.md` | 運用者が自由記述する上乗せ。env 相当の環境固有ファイル | 何も足さない |
+| `system-footer.md` | kaoiro default (environment awareness + peer-routing rules + collaborative-behavior guidance). When present, replaces the built-in default completely | Use the default text built into the server binary |
+| `user-footer.md` | Free-form operator overlay; an environment-specific file analogous to env | Add nothing |
 
-- 合成順: `preset(claude_code) + personality + system-footer +
-  user-footer`(区切りは `\n\n`)。
-- どちらも**全ペルソナ共通 1 枚のみ**。persona 別ファイル
-  (`user-footer.<persona_id>.md`) は持たない。persona 固有の指示は
-  pack の `personality.md` 側で表現する。
-- 運用者による上書きは実装変更を伴わず、ファイル編集だけで完結する。
-- 内蔵デフォルトの実体は `server/priv/footers/system-footer.md`
-  (build source。`@external_resource` で再コンパイル追跡 +
-  コンパイル時 `File.read!` で取り込み)。運用者はリポジトリまたは
-  release 同梱の `priv/` でこのファイルを閲覧して既定文面を確認
-  できる (ADR-0045 F1)。
-- 反映は専用 watcher 経由(`KAOIRO_FOOTER_DIR` 設定時のみ、2 ファイル
-  名の完全一致を監視)。編集で再構築が走り、次に接続する wrapper の
-  スナップショットから効く(接続中セッションは F9 どおり据え置き)。
-  rebuild ごとに各層の由来・文字数・短縮 hash を info ログへ出す
-  (ADR-0045 F5)。読み取りの意味論(UTF-8 / regular file 限定 /
-  一時 read_error の last-known-good)は ADR-0045 F6。
-- 協調行動指針 (`list_agents` で peer 状況を観察し判断し
-  `send_to_agent` で分担する原則) は `system-footer.md` 内蔵デフォルト
-  の一部として全ペルソナへ載る。文面は案 A (短い原則のみ、手順詳細は
-  含めない) で確定した ([ADR-0044](../adr/0044-coordination-injection-hitl.md)
-  F1 追補、issue #165)。運用者が `KAOIRO_FOOTER_DIR` の
-  `system-footer.md` で内蔵デフォルトを置き換えた場合、この指針も
-  含めて置き換わる (persona 固有ではなく全ペルソナ共通の指針である
-  ため)。
+- Composition order: `preset(claude_code) + personality + system-footer +
+  user-footer` (separated by `\n\n`).
+- There is **only one of each shared by all personas**. There is no
+  persona-specific file (`user-footer.<persona_id>.md`). Express persona-specific
+  instructions in the pack's `personality.md`.
+- An operator override needs no implementation change; editing the file alone
+  is sufficient.
+- The built-in default is `server/priv/footers/system-footer.md` (build source;
+  tracked for recompilation with `@external_resource` and included with
+  compile-time `File.read!`). Operators can inspect this file in the repository
+  or the `priv/` bundled with a release to check the default text (ADR-0045 F1).
+- A dedicated watcher applies changes (only when `KAOIRO_FOOTER_DIR` is set,
+  watching exact matches for the two filenames). Editing triggers a rebuild,
+  effective from the snapshot of the next connecting wrapper (live sessions
+  remain unchanged per F9). Every rebuild logs each layer's origin, character
+  count, and short hash at info level (ADR-0045 F5). Reading semantics (UTF-8 /
+  regular files only / last known good during a temporary read_error) are in
+  ADR-0045 F6.
+- Collaborative-behavior guidance (the principle of observing peer status with
+  `list_agents`, deciding, and delegating with `send_to_agent`) appears for all
+  personas as part of the `system-footer.md` built-in default. Its text was
+  settled as option A (short principles only, without detailed procedure;
+  [ADR-0044](../adr/0044-coordination-injection-hitl.md) F1 addendum,
+  issue #165). When an operator replaces the built-in default with
+  `system-footer.md` in `KAOIRO_FOOTER_DIR`, it also replaces this guidance
+  because it is guidance shared by all personas, not persona-specific.
 
-### 変更可能範囲
+### Changeable scope
 
-- 人格記述は **wrapper 起動時(ハンドシェイク時)にスナップショット
-  で確定** する。mid-session での差し替えは行わない
-  ([ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
-  F9)。SDK の `systemPrompt` が query 開始時のみ有効なことに加え、
-  「会話中に persona が変わる」不確実性を持ち込まない。
-- 取り込みディレクトリ内の zip が更新された場合、接続中 wrapper には
-  反映されない。次回接続時のスナップショットに反映される。
-- server 側 / dashboard から人格記述を上書き / 拡張する経路は用意しない
-  ([threat-model](threat-model.md) の allowed_tools と同じ扱い)。
-- Envelope (state_change / log / result) に人格文字列は載せない。
-  dashboard に流れるのは従来通り `persona.id` / `persona.name` のみ
-  (canonical、session 中不変)。表示名は別の top-level `display_name`
-  field(issue #209 D19)— rename は `persona.name` ではなくこちらを
-  書き換える。
+- The personality description is **settled as a snapshot when the wrapper
+  starts (at handshake)**. It is not replaced mid-session
+  ([ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md) F9).
+  In addition to the SDK's `systemPrompt` only being effective at query start,
+  this avoids introducing uncertainty that a persona changes during a
+  conversation.
+- Updating a ZIP in the import directory does not affect connected wrappers. It
+  takes effect in the snapshot of their next connection.
+- There is no path to override / extend personality description from the server
+  or dashboard (the same treatment as allowed_tools in
+  [threat-model](threat-model.md)).
+- No Envelope (state_change / log / result) carries a personality string. As
+  before, only `persona.id` / `persona.name` (canonical and immutable in the
+  session) flow to the dashboard. The display name is the separate top-level
+  `display_name` field (issue #209 D19); rename changes it, not `persona.name`.
 
 ## Constraints
 
-- MUST: Claude への注入は `systemPrompt: { type: 'preset', preset:
-  'claude_code', append: ... }` の `append` を使う。`preset` を捨てて
-  自作 string に置換しない。Codex は `developer_instructions` を使う。
-- MUST: 人格文字列を wrapper→server の Envelope に載せない
-  ([threat-model](threat-model.md))。
-- MUST: server 側で `personality + 共通フッター` を結合して配送する。
-  wrapper 側では結合ロジックを持たない
-  ([ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md) F5)。
-- MUST: フッターファイルの欠落は fail-closed にしない。
-  `system-footer.md` が無ければ内蔵デフォルト、`user-footer.md` が
-  無ければ何も足さない。
-- MUST NOT: persona 別のフッターファイルを設けない
-  (`user-footer.<persona_id>.md` は読まない)。
-- MUST NOT: 運用者が置いた `system-footer.md` / `user-footer.md` を
-  リポジトリに置かない(env と同じ環境固有ファイル。ADR-0045 F3)。
-- MUST: 未知の `persona.id` を名乗る wrapper 接続は server が reject
-  する。
-- MUST: server 到達不能時は wrapper spawn が失敗する(fail-closed)。
-- MUST NOT: wrapper 側にローカル md をロードするフォールバックを
-  実装しない。
-- MUST NOT: wrapper 側で prompt をキャッシュしない(SoT 侵害防止)。
-- SHOULD: 人格記述 md は 200〜1000 字を目安とする。hard 上限は設けない。
-- SHOULD: ペルソナ間の判別可能性(口調から persona を識別できること)
-  は努力目標。厳密化は問題化した時点で
+- MUST: Injection into Claude uses `append` in
+  `systemPrompt: { type: 'preset', preset: 'claude_code', append: ... }`. Do
+  not discard `preset` and replace it with a hand-built string. Codex uses
+  `developer_instructions`.
+- MUST: Do not put a personality string in wrapper→server Envelopes
+  ([threat-model](threat-model.md)).
+- MUST: Compose and deliver `personality + common footer` server-side. The
+  wrapper has no composition logic
+  ([ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md) F5).
+- MUST: Missing footer files do not fail closed. If `system-footer.md` is
+  absent, use the built-in default; if `user-footer.md` is absent, add nothing.
+- MUST NOT: Provide footer files per persona (do not read
+  `user-footer.<persona_id>.md`).
+- MUST NOT: Place operator-supplied `system-footer.md` / `user-footer.md` in
+  the repository (environment-specific files like env; ADR-0045 F3).
+- MUST: The server rejects a wrapper connection claiming an unknown `persona.id`.
+- MUST: Wrapper spawn fails when the server is unreachable (fail closed).
+- MUST NOT: Implement a fallback that loads local md on the wrapper side.
+- MUST NOT: Cache a prompt on the wrapper side (prevents SoT violation).
+- SHOULD: Aim for 200–1000 characters for personality-description md. There is
+  no hard limit.
+- SHOULD: Distinguishability among personas (being able to identify a persona
+  from its manner of speech) is an effort goal. When rigor is needed, create a
+  separate issue through
   [persona-voice-distinctiveness](../open-questions/persona-voice-distinctiveness.md)
-  経由で別課題化する。
+  when it becomes a problem.
 
 ## Open Questions
 
 - [persona-behavioral-prompt](../open-questions/persona-behavioral-prompt.md) —
-  タスク姿勢の注入(将来課題)
+  injection of task posture (future work)
 - [persona-voice-distinctiveness](../open-questions/persona-voice-distinctiveness.md)
-  — 判別可能性の厳密化トリガ
+  — trigger for rigorous distinguishability
 - [persona-language-dispatch](../open-questions/persona-language-dispatch.md) —
-  多言語 dispatch。旧モデルの `persona.language` フィールドは撤去された
-  ため、pack の manifest.json に `language` 相当を追加するかを含めて
-  再検討要
+  multilingual dispatch. Since the former model's `persona.language` field was
+  removed, reconsider including whether to add a `language` equivalent to the
+  pack's manifest.json
 - [persona-personality-vs-dialogue](../open-questions/persona-personality-vs-dialogue.md)
-  — セリフ吹き出し UI 導入時の再検討
+  — reconsideration when speech-balloon UI is introduced
 
 ## See Also
 
 - Related specs: [personas](personas.md),
   [persona-pack-schema](persona-pack-schema.md),
   [protocol](protocol.md), [threat-model](threat-model.md)
-- ADRs: [ADR-0003](../adr/0003-persona-identity-persistence.md)(ペルソナ
-  同一性)、[ADR-0006](../adr/0006-doc-language-i18n.md)(言語方針)、
+- ADRs: [ADR-0003](../adr/0003-persona-identity-persistence.md) (persona
+  identity), [ADR-0006](../adr/0006-doc-language-i18n.md) (language policy),
   [ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
-  (本 spec の適用モデル、旧 ADR-0026 を supersede)、
-  [ADR-0045](../adr/0045-footer-file-externalization.md)(共通フッターの
-  外部ファイル化。実装済み。ADR-0029 F5/D5 を部分改訂)、
-  [ADR-0044](../adr/0044-coordination-injection-hitl.md)(協調行動指針の
-  フッター追記、F1)
+  (application model for this specification; supersedes former ADR-0026),
+  [ADR-0045](../adr/0045-footer-file-externalization.md) (common-footer
+  externalization; implemented; partially revises ADR-0029 F5/D5),
+  [ADR-0044](../adr/0044-coordination-injection-hitl.md) (adding
+  collaborative-behavior guidance to footer, F1)
 - Plan: [phase-10-persona-server-sot](../plans/phase-10-persona-server-sot.md)

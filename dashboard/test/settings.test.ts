@@ -22,11 +22,13 @@ describe("loadSettings", () => {
       notificationSoundEnabled: false,
       notificationSoundVolume: 0.3,
       agentCardStatsEnabled: false,
+      hideNonMessageLogEntries: true,
     });
     expect(loadSettings()).toEqual({
       notificationSoundEnabled: false,
       notificationSoundVolume: 0.3,
       agentCardStatsEnabled: false,
+      hideNonMessageLogEntries: true,
     });
   });
 
@@ -81,6 +83,24 @@ describe("loadSettings", () => {
       DEFAULT_SETTINGS.agentCardStatsEnabled,
     );
   });
+
+  it("hideNonMessageLogEntries の保存値を復元する (issue #228)", () => {
+    localStorage.setItem(
+      SETTINGS_STORAGE_KEY,
+      JSON.stringify({ hideNonMessageLogEntries: true }),
+    );
+    expect(loadSettings().hideNonMessageLogEntries).toBe(true);
+  });
+
+  it("hideNonMessageLogEntries が boolean でなければ default に戻す (issue #228)", () => {
+    localStorage.setItem(
+      SETTINGS_STORAGE_KEY,
+      JSON.stringify({ hideNonMessageLogEntries: "yes" }),
+    );
+    expect(loadSettings().hideNonMessageLogEntries).toBe(
+      DEFAULT_SETTINGS.hideNonMessageLogEntries,
+    );
+  });
 });
 
 describe("updateSettings", () => {
@@ -96,6 +116,7 @@ describe("updateSettings", () => {
       notificationSoundEnabled: false,
       notificationSoundVolume: 0.2,
       agentCardStatsEnabled: true,
+      hideNonMessageLogEntries: false,
     });
   });
 
@@ -123,5 +144,19 @@ describe("updateSettings", () => {
     expect(settings.notificationSoundEnabled).toBe(false);
     expect(settings.notificationSoundVolume).toBe(0.5);
     expect(settings.agentCardStatsEnabled).toBe(false);
+  });
+
+  it("hideNonMessageLogEntries を更新して永続化する (issue #228)", () => {
+    updateSettings({ hideNonMessageLogEntries: true });
+    expect(settings.hideNonMessageLogEntries).toBe(true);
+    expect(loadSettings().hideNonMessageLogEntries).toBe(true);
+  });
+
+  it("hideNonMessageLogEntries のみの更新は他の設定を保持する (issue #228)", () => {
+    updateSettings({ notificationSoundEnabled: false, notificationSoundVolume: 0.5 });
+    updateSettings({ hideNonMessageLogEntries: true });
+    expect(settings.notificationSoundEnabled).toBe(false);
+    expect(settings.notificationSoundVolume).toBe(0.5);
+    expect(settings.hideNonMessageLogEntries).toBe(true);
   });
 });

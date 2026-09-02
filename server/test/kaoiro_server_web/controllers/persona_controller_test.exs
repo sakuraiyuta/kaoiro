@@ -33,6 +33,141 @@ defmodule KaoiroServerWeb.PersonaControllerTest do
     end
   end
 
+  # issue #232 MF-1: personality.md is a system prompt that may carry
+  # proprietary operating instructions for a custom pack (director
+  # decision) — operator/admin only, viewer disclosure deferred to a
+  # separate future decision (ADR-0021 fail-closed default). The 4 auth
+  # paths below (anonymous / viewer / operator+admin / revoked) pin that
+  # boundary directly; ふじ's round-1 negative probe demonstrated the
+  # pre-fix endpoint returning 200 to an anonymous request.
+  describe "GET /api/personas/:id (issue #232, operator/admin 限定)" do
+    setup do
+      original = Application.get_env(:kaoiro_server, :client_tokens)
+
+      on_exit(fn ->
+        if original do
+          Application.put_env(:kaoiro_server, :client_tokens, original)
+        else
+          Application.delete_env(:kaoiro_server, :client_tokens)
+        end
+      end)
+
+      :ok
+    end
+
+    test "operator は pack の全メタデータと personality.md 全文を得る", %{conn: conn} do
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-op:operator")
+
+      conn =
+        conn
+        |> init_test_session(%{"client_token" => "tok-op"})
+        |> get("/api/personas/fuji")
+
+      assert %{
+               "id" => "fuji",
+               "name" => "ふじ",
+               "sprite_set" => "fuji",
+               "version" => "1.0.2",
+               "license" => "CC0-1.0",
+               "min_kaoiro_version" => "0.1.0",
+               "states" => states,
+               "description" => _,
+               "author" => _,
+               "personality" => personality
+             } = json_response(conn, 200)
+
+      assert is_list(states)
+      assert is_binary(personality) and personality != ""
+    end
+
+    test "admin は 200 を得る", %{conn: conn} do
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-admin:admin")
+
+      conn =
+        conn
+        |> init_test_session(%{"client_token" => "tok-admin"})
+        |> get("/api/personas/fuji")
+
+      assert conn.status == 200
+    end
+
+    test "viewer は 403", %{conn: conn} do
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-view:viewer")
+
+      conn =
+        conn
+        |> init_test_session(%{"client_token" => "tok-view"})
+        |> get("/api/personas/fuji")
+
+      assert json_response(conn, 403) == %{"error" => "forbidden"}
+    end
+
+    test "匿名 (session に credential 無し) は 401", %{conn: conn} do
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-op:operator")
+
+      conn = conn |> init_test_session(%{}) |> get("/api/personas/fuji")
+
+      assert json_response(conn, 401) == %{"error" => "unauthorized"}
+    end
+
+    test "失効した (client_tokens から外れた) token は 401", %{conn: conn} do
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-op:operator")
+
+      conn =
+        conn
+        |> init_test_session(%{"client_token" => "revoked-token"})
+        |> get("/api/personas/fuji")
+
+      assert json_response(conn, 401) == %{"error" => "unauthorized"}
+    end
+
+    # issue #232 MF-1 round-2 must-fix (MF-R2-3, ふじ指摘): the previous
+    # "失効した token" test above only proved a token NEVER in
+    # `:client_tokens` gets 401 — that is the same shape as the
+    # "匿名" test just above it (an unknown credential), not a proof
+    # that `RequireOperatorPlug` re-validates on every request. This
+    # reuses the SAME session (the SAME `conn`, carrying the SAME
+    # cookie-derived credential) across two requests: 200 while the
+    # token is still configured, then 401 after it is removed from
+    # `:client_tokens` — without a new session, a new token, or any
+    # other change than the config revoke itself.
+    test "同じ session credential でも config から revoke されれば次 request で 401 (live revalidate)",
+         %{conn: conn} do
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-op:operator")
+      session_conn = init_test_session(conn, %{"client_token" => "tok-op"})
+
+      first = get(session_conn, "/api/personas/fuji")
+      assert first.status == 200
+
+      Application.put_env(:kaoiro_server, :client_tokens, "")
+
+      second = get(session_conn, "/api/personas/fuji")
+      assert json_response(second, 401) == %{"error" => "unauthorized"}
+    end
+
+    test "未知の id は operator でも 404", %{conn: conn} do
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-op:operator")
+
+      conn =
+        conn
+        |> init_test_session(%{"client_token" => "tok-op"})
+        |> get("/api/personas/nope")
+
+      assert json_response(conn, 404) == %{"error" => "not_found"}
+    end
+
+    test "予約済み default は pack を持たないため operator でも 404", %{conn: conn} do
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-op:operator")
+
+      conn =
+        conn
+        |> init_test_session(%{"client_token" => "tok-op"})
+        |> get("/api/personas/default")
+
+      assert json_response(conn, 404) == %{"error" => "not_found"}
+    end
+  end
+
   describe "GET /personas/:sprite_set/:file" do
     test "マニフェスト掲載のスプライトを PNG で返す", %{conn: conn} do
       conn = get(conn, "/personas/ao/idle.png")

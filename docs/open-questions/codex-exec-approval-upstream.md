@@ -1,6 +1,6 @@
 ---
-title: Codex exec の承認フロー upstream 対応の追跡
-description: codex exec は approval_policy を never に強制し caller へ承認要求を返せない。upstream feature flag exec_permission_approvals (開発中) の stable 化を追跡し、対応時に kaoiro の Codex 承認 UX を再設計する。
+title: Tracking upstream support for the Codex exec approval flow
+description: codex exec forces approval_policy to never and cannot return approval requests to the caller. Track stabilization of the upstream feature flag exec_permission_approvals (under development) and redesign kaoiro's Codex approval UX when it becomes available.
 status: open
 urgency: low
 blocks: []
@@ -10,35 +10,51 @@ decided: null
 
 ## 背景
 
-[ADR-0033](../adr/0033-permission-model-dual-axis.md) の実 SDK 検証 (2026-07-10) で、`codex exec` (= `@openai/codex-sdk` の実行路) は harness override で `approval_policy=never` を強制し、JSON event stream にも承認要求 event が無いことが確定した。このため Codex agent の権限は spawn 時固定二軸とし、`waiting_permission` は Codex では発生しない設計を採った。
+Live SDK verification for [ADR-0033](../adr/0033-permission-model-dual-axis.md)
+(2026-07-10) confirmed that `codex exec`
+(the execution path of `@openai/codex-sdk`) forces `approval_policy=never` through
+a harness override and has no approval-request event in the JSON event stream.
+Therefore Codex-agent permissions use a fixed two-axis choice at spawn, and the
+design does not produce `waiting_permission` for Codex.
 
-upstream には feature flag `exec_permission_approvals` (0.144.1 時点で under development) が存在し、将来 exec モードでも承認フローが提供される可能性がある。また experimental の `codex app-server` (JSON-RPC over stdio) には既に承認要求プロトコルが存在する。
+The upstream has a feature flag `exec_permission_approvals` (under development
+as of 0.144.1), so an approval flow may eventually be provided even in exec mode.
+The experimental `codex app-server` (JSON-RPC over stdio) already has an
+approval-request protocol.
 
 ## 選択肢
 
-| 案 | 内容 | メリット | デメリット |
+| Option | Content | Advantages | Disadvantages |
 |----|------|----------|-----------|
-| A | `exec_permission_approvals` が stable 化した時点で SDK/exec 経由の承認を配線し、Codex でも `waiting_permission` を成立させる | published な経路のまま Claude と対等の承認 UX | 時期不明 |
-| B | `codex app-server` へ乗り換えて先行対応 | 今すぐ可能 | experimental protocol 依存、実装コスト大 (ADR-0033 で rejected) |
-| C | 恒久的に起動時固定二軸のまま | 実装ゼロ | 承認 UX の engine 非対称が恒久化 |
+| A | When `exec_permission_approvals` stabilizes, wire approval through SDK/exec and make `waiting_permission` work in Codex too | A published path and approval UX equal to Claude | Timing unknown |
+| B | Switch to `codex app-server` and support it early | Possible immediately | Depends on an experimental protocol; high implementation cost (rejected in ADR-0033) |
+| C | Permanently retain the fixed two-axis choice at startup | Zero implementation | Engine asymmetry in approval UX becomes permanent |
 
 ## 影響
 
-なし (現行設計は固定二軸で完結)。upstream 対応時に Codex の権限 UX が改善できる、という機会の追跡。
+None (the current design is complete with fixed two-axis permissions). Track the
+opportunity to improve Codex permission UX when upstream support arrives.
 
 ## 判断材料
 
-- upstream `openai/codex` の `exec_permission_approvals` feature flag の状態 (`codex features list` で確認可)
-- `@openai/codex-sdk` への承認 callback API の追加有無 (release notes)
-- `codex app-server` の安定化状況
+- State of the upstream `openai/codex` `exec_permission_approvals` feature flag
+  (check with `codex features list`)
+- Whether an approval callback API has been added to `@openai/codex-sdk` (release
+  notes)
+- Stabilization status of `codex app-server`
 
 ## 暫定方針
 
-案 A を待つ。Codex SDK のバージョン更新時に `codex features list` と SDK changelog を確認し、承認経路が公開されたら本 open-question を ADR に昇格して再設計する。
+Wait for option A. On each Codex SDK version update, check `codex features list`
+and the SDK changelog; when an approval path is published, promote this open
+question to an ADR and redesign.
 
-## 解決時のアクション
+## Actions upon resolution
 
-- [ ] [ADR-0033](../adr/0033-permission-model-dual-axis.md) F3 (approval never 固定) を改訂する ADR を起こす
-- [ ] wrapper/codex に承認 callback を配線し、`waiting_permission` / `pending_permission` を Codex でも成立させる
-- [ ] dashboard の Codex 権限 UI (sandbox のみ) に approval セレクトを追加
-- [ ] 本 open-question を close (削除)
+- [ ] Create an ADR revising [ADR-0033](../adr/0033-permission-model-dual-axis.md)
+      F3 (approval fixed to never)
+- [ ] Wire an approval callback in wrapper/codex and make
+      `waiting_permission` / `pending_permission` work in Codex too
+- [ ] Add an approval selector to the dashboard's Codex permission UI (sandbox
+      only)
+- [ ] Close (delete) this open question

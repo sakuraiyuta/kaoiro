@@ -112,6 +112,7 @@ describe("ServerLink — initial envelope sequence (#107)", () => {
     mock.handlers.clear();
     mock.lastPush = null;
     mock.pushes = [];
+    mock.joinReceivers.clear();
   });
 
   it("first send は seq=1 を付与し ext を透過する", () => {
@@ -1236,6 +1237,7 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
     mock.handlers.clear();
     mock.lastPush = null;
     mock.pushes = [];
+    mock.joinReceivers.clear();
   });
 
   const versioned = () =>
@@ -1271,22 +1273,65 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
     history_replay_complete: (link) => link.sendHistoryReplayComplete("r"),
     directory_request: (link) => void link.requestDirectory(),
     session_reset_request: (link) => void link.requestSessionReset("new").catch(() => {}),
+    session_lifecycle: (link) =>
+      link.reportSessionLifecycle(
+        "threshold_notice",
+        undefined,
+        "2026-08-31T00:00:00Z",
+      ),
+    wrapper_build_info: () => mock.joinReceivers.get("ok")?.({}),
   };
 
   it("T1-1: fire 表は production policy の versioned 集合と完全一致する", () => {
     expect(Object.keys(fire).sort()).toEqual(versioned());
   });
 
-  it("T1-2: 7種すべてを実際に送る", () => {
-    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+  it("T1-2: 9種すべてを実際に送る", () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      buildInfo: {
+        revision: "0123456789012345678901234567890123456789",
+        dirty: false,
+        version: "2026.9.0",
+        channel: "dev",
+      },
+    });
     for (const trigger of Object.values(fire)) trigger(link);
     expect(mock.pushes.map((push) => push.event).sort()).toEqual(versioned());
   });
 
-  it("T1-3: 7種すべての payload に flat version を stamp する", () => {
-    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+  it("T1-3: 9種すべての payload に flat version を stamp する", () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      buildInfo: {
+        revision: "0123456789012345678901234567890123456789",
+        dirty: false,
+        version: "2026.9.0",
+        channel: "dev",
+      },
+    });
     for (const trigger of Object.values(fire)) trigger(link);
     for (const push of mock.pushes) expect(push.payload).toMatchObject({ version: "0" });
+  });
+
+  it("矛盾した release buildInfo は wrapper_build_info で unknown/dev に落とす", () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      buildInfo: {
+        revision: "unknown",
+        dirty: true,
+        version: "2026.9.0",
+        channel: "release",
+      },
+    });
+    mock.joinReceivers.get("ok")!({});
+    const push = mock.pushes.find((entry) => entry.event === "wrapper_build_info");
+    expect(push?.payload).toMatchObject({
+      build_revision: "unknown",
+      build_dirty: false,
+      build_version: "unknown",
+      build_channel: "dev",
+    });
   });
 
   it("T1-4: control call site は funnel を迂回しない", async () => {

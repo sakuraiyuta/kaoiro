@@ -1,0 +1,16 @@
+{
+  "mode": "txt2img",
+  "prompt": "score_9, score_8_up, safe, 1girl, solo, upper body, young woman, wisteria purple hair, long hair, drill hair, ringlet curls, purple eyes, white blouse, purple ribbon tie, lavender purple tailored jacket, looking at viewer, one hand raised gently, raised eyebrow, closed mouth, simple background, white background, clean lineart, flat colors, an elegant intellectual young lady in her early twenties with soft wisteria-purple modest drill curls falling below her shoulders, a crisp white blouse with a violet ribbon tie under a fitted lavender-purple tailored jacket, composed and refined, raising one hand as if presenting a proposal, brow arched in polite inquiry",
+  "negative": "worst quality, low quality, score_1, score_2, score_3, artist name, realistic, multiple views, logo, glowing, text, chibi, glasses",
+  "model": "animality_ap3.safetensors",
+  "architecture": "anima",
+  "seed": 218473265094718,
+  "steps": 30,
+  "width": 1024,
+  "height": 1024,
+  "cfg": 4.0,
+  "denoise": null,
+  "generated_at": "2026-07-05T13:54:36.020348+09:00",
+  "job_id": "10a677fa72464c96878da91e99b582a2",
+  "source_job_id": null
+}

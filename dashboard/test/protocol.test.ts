@@ -7,6 +7,7 @@ import {
   errorSubtypeLabel,
   fetchAuthMethods,
   fetchPersonaManifest,
+  fetchPersonaPackDetail,
   fetchServerHealth,
   fanOutInterAgentHistory,
   findPrecedingUserPrompt,
@@ -23,6 +24,8 @@ import {
   parseDeliverySnapshot,
   parseDeliveryStatus,
   parseHosts,
+  parseWrapperBuildInfo,
+  parseWrapperBuildInfoSnapshot,
   parseSessions,
   parseTasks,
   pendingPermissionFrom,
@@ -141,6 +144,55 @@ describe("fetchPersonaManifest", () => {
   });
 });
 
+describe("fetchPersonaPackDetail (issue #232)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("pack detail JSON を id で GET して返す", async () => {
+    const detail = {
+      id: "fuji",
+      name: "ふじ",
+      sprite_set: "fuji",
+      version: "1.0.2",
+      license: "CC0-1.0",
+      min_kaoiro_version: "0.1.0",
+      states: ["idle"],
+      personality: "body",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, json: async () => detail })),
+    );
+
+    expect(await fetchPersonaPackDetail("fuji")).toEqual(detail);
+    expect(fetch).toHaveBeenCalledWith("/api/personas/fuji");
+  });
+
+  it("id を URL エンコードする", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, json: async () => ({}) })),
+    );
+
+    await fetchPersonaPackDetail("a/b");
+    expect(fetch).toHaveBeenCalledWith("/api/personas/a%2Fb");
+  });
+
+  it("404 は null(未知 id へのフォールバック用)", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 404 })));
+    expect(await fetchPersonaPackDetail("nope")).toBeNull();
+  });
+
+  it("ネットワークエラーは null", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("offline");
+      }),
+    );
+    expect(await fetchPersonaPackDetail("fuji")).toBeNull();
+  });
+});
+
 describe("fetchAuthMethods (issue #65 / ADR-0042)", () => {
   afterEach(() => vi.unstubAllGlobals());
 
@@ -185,6 +237,8 @@ describe("fetchServerHealth (issue #228)", () => {
   it("health JSON を返す (no-store でフェッチする)", async () => {
     const health = {
       status: "ok",
+      build_version: "2026.9.0",
+      build_channel: "release",
       build_revision: "0123456789abcdef0123456789abcdef01234567",
       build_dirty: false,
       protocol_version: "0",
@@ -224,6 +278,8 @@ describe("fetchServerHealth (issue #228)", () => {
         ok: true,
         json: async () => ({
           status: "ok",
+          build_version: "2026.9.0",
+          build_channel: "release",
           build_revision: "0123456789abcdef0123456789abcdef01234567",
           protocol_version: "0",
         }),
@@ -243,6 +299,42 @@ describe("fetchServerHealth (issue #228)", () => {
           status: "ok",
           build_revision: "not-a-real-sha",
           build_dirty: false,
+          protocol_version: "0",
+        }),
+      })),
+    );
+    expect(await fetchServerHealth()).toBeNull();
+  });
+
+  it("build_channel が値域外なら null", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          status: "ok",
+          build_version: "2026.9.0",
+          build_channel: "main",
+          build_revision: "0123456789abcdef0123456789abcdef01234567",
+          build_dirty: false,
+          protocol_version: "0",
+        }),
+      })),
+    );
+    expect(await fetchServerHealth()).toBeNull();
+  });
+
+  it("release の矛盾した provenance は null", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          status: "ok",
+          build_version: "2026.9.0",
+          build_channel: "release",
+          build_revision: "unknown",
+          build_dirty: true,
           protocol_version: "0",
         }),
       })),
@@ -1677,6 +1769,111 @@ describe("parseHosts (#22)", () => {
     expect(host).toBeDefined();
     expect(host!.build_revision).toBe("0123456789abcdef0123456789abcdef01234567");
     expect(host!.build_dirty).toBe(true);
+  });
+
+  it("build_version/build_channel も valid な pair なら保持する", () => {
+    const [host] = parseHosts({
+      "lab-pc-1": {
+        personas: [mio],
+        cwd_allowlist: ["/p"],
+        build_revision: "0123456789abcdef0123456789abcdef01234567",
+        build_dirty: false,
+        build_version: "2026.9.0",
+        build_channel: "release",
+      },
+    });
+    expect(host?.build_version).toBe("2026.9.0");
+    expect(host?.build_channel).toBe("release");
+  });
+
+  it("build_version/build_channel の pair が不完全または不正なら両方落とす", () => {
+    const [partial] = parseHosts({
+      "partial-host": {
+        personas: [mio],
+        cwd_allowlist: ["/p"],
+        build_version: "2026.9.0",
+      },
+    });
+    expect("build_version" in partial!).toBe(false);
+    expect("build_channel" in partial!).toBe(false);
+
+    const [invalid] = parseHosts({
+      "invalid-host": {
+        personas: [mio],
+        cwd_allowlist: ["/p"],
+        build_version: "not-calver",
+        build_channel: "release",
+      },
+    });
+    expect("build_version" in invalid!).toBe(false);
+    expect("build_channel" in invalid!).toBe(false);
+  });
+
+  it("release pair は完全な provenance が無ければ落とす", () => {
+    const [withoutProvenance] = parseHosts({
+      "release-without-provenance": {
+        personas: [mio],
+        cwd_allowlist: ["/p"],
+        build_version: "2026.9.0",
+        build_channel: "release",
+      },
+    });
+    expect("build_version" in withoutProvenance!).toBe(false);
+    expect("build_channel" in withoutProvenance!).toBe(false);
+
+    const [contradictory] = parseHosts({
+      "contradictory-release": {
+        personas: [mio],
+        cwd_allowlist: ["/p"],
+        build_revision: "unknown",
+        build_dirty: true,
+        build_version: "2026.9.0",
+        build_channel: "release",
+      },
+    });
+    expect("build_revision" in contradictory!).toBe(false);
+    expect("build_dirty" in contradictory!).toBe(false);
+    expect("build_version" in contradictory!).toBe(false);
+    expect("build_channel" in contradictory!).toBe(false);
+  });
+});
+
+describe("parseWrapperBuildInfo (#288)", () => {
+  const info = {
+    build_revision: "0123456789abcdef0123456789abcdef01234567",
+    build_dirty: false,
+    build_version: "2026.9.0",
+    build_channel: "dev" as const,
+  };
+
+  it("accepts a complete identity", () => {
+    expect(parseWrapperBuildInfo(info)).toEqual(info);
+  });
+
+  it("drops a release identity with contradictory provenance", () => {
+    expect(
+      parseWrapperBuildInfo({
+        ...info,
+        build_revision: "unknown",
+        build_dirty: true,
+        build_channel: "release",
+      }),
+    ).toBeNull();
+  });
+
+  it("drops malformed identities and keeps valid snapshot siblings", () => {
+    expect(parseWrapperBuildInfo({ ...info, build_channel: "preview" })).toBeNull();
+    expect(
+      parseWrapperBuildInfoSnapshot({
+        good: info,
+        bad: { ...info, build_revision: "spoofed" },
+      }),
+    ).toEqual({ good: info });
+  });
+
+  it("treats non-map snapshots as empty", () => {
+    expect(parseWrapperBuildInfoSnapshot(null)).toEqual({});
+    expect(parseWrapperBuildInfoSnapshot([])).toEqual({});
   });
 });
 

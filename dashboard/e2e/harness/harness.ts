@@ -2,10 +2,10 @@
 // scenario from query params and mounts PRODUCTION components with fixture
 // data — no Phoenix server, no WebSocket round-trips.
 //
-//   ?view=lobby&role=operator|viewer[&taskRing=1]
+//   ?view=lobby&role=operator|viewer[&taskRing=N][&sprites=1][&demo=1]
 //   ?view=detail[&pending=permission|question][&attention=1]
-//     [&mountDelay=ms][&expandOrigin=1]
-//   ?view=overlay&overlay=dialog|drawer
+//     [&mountDelay=ms][&expandOrigin=1][&taskRing=N]
+//   ?view=overlay&overlay=dialog|drawer|persona|dialog-triggered|drawer-triggered
 //   ?view=app        — real App.svelte behind fetch mocks (header chrome)
 import { mount } from "svelte";
 import "../../src/app.css";
@@ -14,6 +14,7 @@ import DetailHarness from "./DetailHarness.svelte";
 import LobbyHarness from "./LobbyHarness.svelte";
 import OverlayHarness from "./OverlayHarness.svelte";
 import type { DetailScenario } from "./fixtures";
+import { personaSpriteManifest } from "./fixtures";
 
 const params = new URLSearchParams(location.search);
 const view = params.get("view") ?? "lobby";
@@ -38,6 +39,16 @@ function mockAppFetch(): void {
           ? input.toString()
           : input.url;
     if (url.includes("/session/ticket")) return json({ ticket: "e2e" });
+    if (url.includes("/api/health")) {
+      return json({
+        status: "ok",
+        build_version: "2026.9.0",
+        build_channel: "release",
+        build_revision: "0123456789abcdef0123456789abcdef01234567",
+        build_dirty: false,
+        protocol_version: "0",
+      });
+    }
     if (url.includes("/session/auth-methods")) {
       return json({ token: true, oauth: [] });
     }
@@ -56,7 +67,8 @@ if (view === "app") {
     scenario.pending = pending;
   }
   if (params.get("attention") === "1") scenario.attention = true;
-  if (params.get("taskRing") === "1") scenario.taskRing = true;
+  const taskRing = params.get("taskRing");
+  if (taskRing !== null) scenario.taskRing = Number(taskRing);
   if (params.get("sprite") === "1") scenario.sprite = true;
   const scrollTarget = params.get("scrollTarget");
   if (scrollTarget !== null) scenario.scrollTargetIndex = Number(scrollTarget);
@@ -71,9 +83,52 @@ if (view === "app") {
   }
   const logCount = params.get("logCount");
   if (logCount !== null) scenario.logCount = Number(logCount);
+  if (params.get("wrapperBuild") === "1") scenario.wrapperBuildInfo = true;
   mount(DetailHarness, { target, props: { scenario } });
 } else if (view === "overlay") {
-  const overlay = params.get("overlay") === "drawer" ? "drawer" : "dialog";
+  const overlayParam = params.get("overlay");
+  const overlay =
+    overlayParam === "drawer"
+      ? "drawer"
+      : overlayParam === "persona"
+        ? "persona"
+        : overlayParam === "modal-empty"
+          ? "modal-empty"
+          : overlayParam === "dialog-triggered"
+            ? "dialog-triggered"
+            : overlayParam === "drawer-triggered"
+              ? "drawer-triggered"
+              : "dialog";
+  if (overlay === "persona") {
+    // issue #232 MF-3 a11y spec: PersonaDetailDialog fetches its detail
+    // over GET /api/personas/:id — stub it so the modal actually renders
+    // content (an initial-focus/Tab-trap spec needs SOME focusable
+    // elements inside besides the close button).
+    window.fetch = async (input: RequestInfo | URL): Promise<Response> => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url;
+      if (url.includes("/api/personas/")) {
+        return json({
+          id: "fuji",
+          name: "ふじ",
+          sprite_set: "fuji",
+          version: "1.0.0",
+          license: "CC0-1.0",
+          min_kaoiro_version: "0.1.0",
+          states: ["idle"],
+          description: "e2e fixture persona",
+          author: "e2e",
+          homepage: "https://example.test/fuji",
+          personality: "e2e fixture personality body",
+        });
+      }
+      return new Response("", { status: 404 });
+    };
+  }
   mount(OverlayHarness, { target, props: { overlay } });
 } else {
   mount(LobbyHarness, {
@@ -81,7 +136,10 @@ if (view === "app") {
     props: {
       operator: params.get("role") !== "viewer",
       pending: params.get("pending") === "1",
-      taskRing: params.get("taskRing") === "1",
+      taskRing: Number(params.get("taskRing") ?? 0),
+      manifest:
+        params.get("sprites") === "1" ? personaSpriteManifest() : null,
+      demo: params.get("demo") === "1",
     },
   });
 }

@@ -5,6 +5,12 @@
 export { parseCliArgs } from "./args.js";
 export { ConfigError, PERMISSION_MODES, loadConfig, parseConfig } from "./persona.js";
 export {
+  isWrapperBuildInfoConsistent,
+  loadWrapperBuildInfo,
+  normalizeWrapperBuildInfo,
+} from "./build_info.js";
+export type { WrapperBuildInfo } from "./build_info.js";
+export {
   MAX_REPLAY_IA_PUSH_BYTES,
   ServerLink,
   chunkReplayIaItems,
@@ -12,16 +18,22 @@ export {
 } from "./transport.js";
 export type {
   AttachOpenMessage,
-  DirectoryContext,
-  DirectoryEntry,
-  DirectoryRateLimitWindow,
-  DirectoryResult,
   HydrationVerdictMessage,
-  InterAgentDeliveryStatus,
   InterAgentAcceptance,
   PermissionDecisionMessage,
   QuestionResponseMessage,
   ReplayIaItem,
   ServerLinkOptions,
-  UserDirectoryEntry,
 } from "./transport.js";
+/** Backward-compatible type exports. New consumers should import these
+ * directory wire shapes from `@kaoiro/protocol`. */
+export type {
+  DirectoryContext,
+  DirectoryConversation,
+  DirectoryEntry,
+  DirectoryRateLimitWindow,
+  DirectoryResult,
+  InterAgentDeliveryStatus,
+  UserDirectoryEntry,
+  UserRole,
+} from "@kaoiro/protocol";

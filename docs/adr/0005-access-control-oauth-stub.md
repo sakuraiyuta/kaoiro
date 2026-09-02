@@ -1,5 +1,5 @@
 ---
-title: アクセス制御は OAuth + RBAC、プロトタイプは stub
+title: Access control is OAuth + RBAC; the prototype is a stub
 status: accepted
 date: 2026-06-04
 opened: 2026-06-04
@@ -9,7 +9,7 @@ related_specs: [architecture]
 related_adrs: [7, 8, 11, 13, 42]
 ---
 
-# ADR-0005 — アクセス制御は OAuth + RBAC、プロトタイプは stub
+# ADR-0005 — Access Control Is OAuth + RBAC; the Prototype Is a Stub
 
 ## Status
 
@@ -17,36 +17,40 @@ Accepted
 
 ## Context
 
-クライアント ↔ サーバのユーザアクセスをどう制御するかが問題だった。将来は
-多人数アクセスと権限付与が要るが、プロトタイプ段階でフルの認証・認可を組むのは
-重い。ラッパー認証([ADR-0002](0002-local-wrapper-websocket-topology.md))とは
-別レイヤである。
+How to control client ↔ server user access was a problem. Multi-user access and
+permission assignment will be needed in the future, but implementing full
+authentication and authorization at the prototype stage is burdensome. This is
+a separate layer from wrapper authentication
+([ADR-0002](0002-local-wrapper-websocket-topology.md)).
 
 ## Decision
 
-- **OAuth 認証**で多人数アクセスを可能とし、**RBAC**(閲覧のみ/指示可能 等)を
-  行う。
-- **プロトタイプは stub** とし、許可メールアカウントを**テキストまたは SQLite の
-  ホワイトリスト**で管理する。
+- **OAuth authentication** enables multi-user access, with **RBAC** (view-only /
+  instruction-capable, etc.).
+- **The prototype is a stub**, managing allowed email accounts with a **text or
+  SQLite whitelist**.
 
 ## Consequences
 
 ### Positive
 
-- 早期に多人数の素地を持ちつつ、本実装は後段に回せる。
+- A basis for multi-user access is established early, while the full
+  implementation can be deferred.
 
 ### Negative
 
-- stub → 本実装への移行コスト。
-- OAuth プロバイダ・権限粒度は未確定(将来詰める)。
+- The migration cost from the stub to the full implementation.
+- The OAuth provider and permission granularity remain undecided (to be worked
+  out later).
 
 ### Neutral
 
-- 権限モデル(閲覧のみ/指示可能/承認可能 など)の粒度は実装時に確定。
+- The granularity of the permission model (view-only / instruction-capable /
+  approval-capable, etc.) will be settled at implementation time.
 
 ## Alternatives Considered
 
 | Option | Why rejected |
 |--------|--------------|
-| 認証なし | 公開運用ができない |
-| 最初からフル OAuth + RBAC | プロトタイプには過剰、開発が遅れる |
+| No authentication | Public operation is not possible |
+| Full OAuth + RBAC from the start | Overkill for the prototype and slows development |

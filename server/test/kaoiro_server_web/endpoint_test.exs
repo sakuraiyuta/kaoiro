@@ -1,8 +1,10 @@
 defmodule KaoiroServerWeb.EndpointTest do
   use ExUnit.Case, async: true
 
+  alias KaoiroServer.TransportLimits
+
   describe "socket max_frame_size (#154 M2)" do
-    test "3 ソケットすべてに 8MB の上限が付いている" do
+    test "3 ソケットすべてが TransportLimits の実 frame 上限を使う" do
       # A socket without an explicit cap falls back to Phoenix's
       # :infinity default, letting an unauthenticated peer park an
       # arbitrarily large frame in the receive buffer. /runner is the
@@ -14,7 +16,7 @@ defmodule KaoiroServerWeb.EndpointTest do
             p == path
           end)
 
-        assert get_in(opts, [:websocket, :max_frame_size]) == 8_000_000,
+        assert get_in(opts, [:websocket, :max_frame_size]) == TransportLimits.max_frame_bytes(),
                "#{path} は max_frame_size 未設定 (Phoenix 既定の :infinity)"
       end
     end

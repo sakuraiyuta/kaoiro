@@ -89,10 +89,12 @@ defmodule KaoiroServerWeb.AgentsChannel do
   alias KaoiroServer.AgentStates
   alias KaoiroServer.Auth
   alias KaoiroServer.ClearWatermarks
+  alias KaoiroServer.ConversationStates
   alias KaoiroServer.DeliveryStates
   alias KaoiroServer.HostRegistry
   alias KaoiroServer.PersonaAssets
   alias KaoiroServer.PlannedDisconnects
+  alias KaoiroServer.SessionLifecycleEvents
   alias KaoiroServer.SessionPointers
   alias KaoiroServer.SessionResets
   alias KaoiroServer.TaskStates
@@ -101,6 +103,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   alias KaoiroServerWeb.AgentId
   alias KaoiroServerWeb.ClientSocket
   alias KaoiroServerWeb.PeerConnectivity
+  alias KaoiroServerWeb.SynthEnvelope
 
   # Resource bound for an operator instruction; generous for prose,
   # far below the wrapper-side envelope cap.
@@ -149,6 +152,9 @@ defmodule KaoiroServerWeb.AgentsChannel do
     # Recipient dispatch watermarks are an operator diagnostic (issue #247).
     # Keep live updates behind the same role gate as their join-time snapshot.
     "delivery_status",
+    # Connected wrapper artifact identity is operator-only, like host build
+    # identity; viewers do not receive package provenance.
+    "wrapper_build_info",
     # Live directory refresh after a rename (issue #197 段階3, D16). The
     # join-time push (`handle_info(:after_join, ...)` above) was the only
     # producer of this event before rename existed, so it was never
@@ -163,14 +169,36 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # Internal PubSub broadcasts deliberately do not carry a wire version:
   # that keeps the stamp's source of truth at the client boundary.
   @client_event_policy MapSet.new(~w(
-    snapshot history hosts directory
+    snapshot task_snapshot delivery_snapshot history hosts directory
     history_cleared history_reset history_replay_complete
     history_replay_envelope agent_deleted delivery_status
     session_reset_started session_reset_completed session_reset_failed
-    envelope spawn_result runner_sessions catalog_result
+    envelope spawn_result runner_sessions catalog_result wrapper_build_info
   ))
 
+  @join_snapshot_events [
+    {"snapshot", "agents"},
+    {"task_snapshot", "tasks"},
+    {"delivery_snapshot", "deliveries"}
+  ]
+
   def client_event_policy, do: @client_event_policy
+
+  def join_snapshot_events, do: Map.new(@join_snapshot_events)
+
+  def validate_join_snapshot_frames(frames) when is_map(frames) do
+    expected_events = MapSet.new(Enum.map(@join_snapshot_events, &elem(&1, 0)))
+    actual_events = MapSet.new(Map.keys(frames))
+
+    if MapSet.equal?(expected_events, actual_events) and
+         Enum.all?(@join_snapshot_events, fn {event, key} ->
+           is_map(frames[event]) and Map.has_key?(frames[event], key)
+         end) do
+      :ok
+    else
+      {:error, :snapshot_frame_key_mismatch}
+    end
+  end
 
   # Error reasons cleared for verbatim return to the client (issue #62).
   # Anything outside this set is a bug or a future internal value (a
@@ -186,7 +214,9 @@ defmodule KaoiroServerWeb.AgentsChannel do
                    agent_busy agent_not_owned unsupported_session_reset
                    session_reset_pending reserved_session_command
                    invalid_mode missing_user_id invalid_user_id
-                   unknown_user revision_exhausted)a
+                   unknown_user revision_exhausted
+                   missing_conversation_id conversation_closed
+                   unknown_conversation_id)a
 
   # session_id charset — mirrors runner/src/sessions.ts SESSION_ID_PATTERN
   # (Claude Code's UUID-shaped JSONL filenames). Validated at this boundary so
@@ -259,9 +289,10 @@ defmodule KaoiroServerWeb.AgentsChannel do
       end)
       |> Map.new()
 
-    # issue #180 (ADR-0048 F3): the active task set rides the SAME
-    # join-time snapshot push, not a dedicated envelope — additive key,
-    # no protocol version bump. Operator-only (こはく決定 2026-08-09):
+    {agents, snapshot_incomplete?} = AgentStates.wire_projection(agents)
+
+    # issue #180 (ADR-0048 F3): the active task set rides the dedicated
+    # join-time task_snapshot frame. Operator-only (こはく決定 2026-08-09):
     # F5's progress meta (summary/last_tool_name) is content-bearing, the
     # issue's own goal is operator-facing, and ADR-0021 F2's fail-closed
     # default is "narrow unless asked" — an empty map for viewer, exactly
@@ -273,13 +304,36 @@ defmodule KaoiroServerWeb.AgentsChannel do
     # policy for the snapshot path specifically).
     tasks = if role in @operator_capable_roles, do: TaskStates.snapshot(), else: %{}
 
-    deliveries = if role in @operator_capable_roles, do: DeliveryStates.all(), else: %{}
+    {deliveries, delivery_snapshot_incomplete?} =
+      if role in @operator_capable_roles,
+        do: DeliveryStates.wire_projection(),
+        else: {%{}, false}
 
-    push_versioned(socket, "snapshot", %{
-      "agents" => agents,
-      "tasks" => tasks,
-      "deliveries" => deliveries
-    })
+    agent_snapshot = %{"agents" => agents}
+
+    agent_snapshot =
+      if snapshot_incomplete?,
+        do: Map.put(agent_snapshot, "snapshot_incomplete", true),
+        else: agent_snapshot
+
+    delivery_snapshot = %{"deliveries" => deliveries}
+
+    delivery_snapshot =
+      if delivery_snapshot_incomplete?,
+        do: Map.put(delivery_snapshot, "snapshot_incomplete", true),
+        else: delivery_snapshot
+
+    snapshot_frames = %{
+      "snapshot" => agent_snapshot,
+      "task_snapshot" => %{"tasks" => tasks},
+      "delivery_snapshot" => delivery_snapshot
+    }
+
+    :ok = validate_join_snapshot_frames(snapshot_frames)
+
+    Enum.each(@join_snapshot_events, fn {event, _key} ->
+      push_versioned(socket, event, Map.fetch!(snapshot_frames, event))
+    end)
 
     # Reply-log history, host set, and the identity ledger are operator-only;
     # viewers stay at the grid and never see host info (cwd allow-lists are
@@ -323,6 +377,10 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
       push_versioned(socket, "directory", %{
         "entries" => join_directory_entries(AgentDirectory.all())
+      })
+
+      push_versioned(socket, "wrapper_build_info", %{
+        "builds" => KaoiroServer.WrapperBuildInfos.snapshot()
       })
     end
 
@@ -443,7 +501,8 @@ defmodule KaoiroServerWeb.AgentsChannel do
              "session_reset_started",
              "session_reset_completed",
              "session_reset_failed",
-             "delivery_status"
+             "delivery_status",
+             "wrapper_build_info"
            ] do
     if socket.assigns[:role] in @operator_capable_roles do
       push_versioned(socket, event, payload)
@@ -644,6 +703,14 @@ defmodule KaoiroServerWeb.AgentsChannel do
         "agents:lobby",
         "session_reset_started",
         started_payload(agent_id, mode, request_id, prev_sid, "operator")
+      )
+
+      # ADR-0055 phase-33 Stage B.
+      SessionLifecycleEvents.append(
+        agent_id,
+        "session_reset_started",
+        nil,
+        DateTime.utc_now() |> DateTime.to_iso8601()
       )
 
       KaoiroServerWeb.Endpoint.broadcast(
@@ -856,6 +923,70 @@ defmodule KaoiroServerWeb.AgentsChannel do
   def handle_in("launch_defaults", payload, socket) do
     with :ok <- require_operator(socket, payload, "launch_defaults") do
       {:reply, {:ok, %{"defaults" => launch_defaults()}}, socket}
+    else
+      {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
+  end
+
+  # Operator-facing conversation list (issue #276, decided 2026-08-29).
+  # Pure read-time query, like launch_defaults just above: no wrapper
+  # relay, no new store, no live push — ConversationStates already holds
+  # everything needed. `require_operator` (operator-capable roles: admin
+  # > operator, ADR-0050 D2) is the ONE seam this decision asks to keep
+  # isolated so #189's future per-pair permission model can replace it
+  # here without touching the view.
+  def handle_in("list_conversations", payload, socket) do
+    with :ok <- require_operator(socket, payload, "list_conversations") do
+      {:reply, {:ok, %{"conversations" => ConversationStates.list_for_operator()}}, socket}
+    else
+      {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
+  end
+
+  # Operator-facing session_lifecycle timeline pull query (ADR-0055).
+  # `fetch_lifecycle_query_agent_id/1` validates FORMAT ONLY (no existence
+  # check), deliberately looser than `fetch_agent_id/1` /
+  # `fetch_restorable_agent_id/1` elsewhere in this file: neither helper's
+  # "known" definition survives `delete_agent` (its
+  # `purge_agent_records/1` does not touch `SessionLifecycleEvents`), so
+  # gating on either would make a deleted agent's still-persisted history
+  # permanently unqueryable — defeating the audit/debugging purpose this
+  # query exists for. An unknown/never-existed agent_id returns
+  # `events: []`, matching `list_for_agent/2`'s own graceful semantics.
+  def handle_in("list_session_events", payload, socket) do
+    with :ok <- require_operator(socket, payload, "list_session_events"),
+         {:ok, agent_id} <- fetch_lifecycle_query_agent_id(payload) do
+      events =
+        for event <- SessionLifecycleEvents.list_for_agent(agent_id) do
+          %{"kind" => event.kind, "trigger" => event.trigger, "at" => event.at}
+        end
+
+      {:reply, {:ok, %{"events" => events}}, socket}
+    else
+      {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
+  end
+
+  # Operator manual close (issue #276 decision): rides the SAME tombstone +
+  # conversation_closed notification every hard-limit/GC closure already
+  # uses — ConversationStates.close_by_operator/1 performs only the state
+  # transition and returns the participant set; delivering the notice is
+  # this handler's job, exactly mirroring how a hard-limit closure notifies
+  # from record_message/6's return value rather than from inside the
+  # GenServer. Same admin gate seam as list_conversations. Idempotent: a
+  # second close on an already-closed cid returns conversation_closed
+  # rather than sending a duplicate notice or crashing.
+  def handle_in("close_conversation", payload, socket) do
+    with :ok <- require_operator(socket, payload, "close_conversation"),
+         {:ok, cid} <- fetch_conversation_id(payload) do
+      case ConversationStates.close_by_operator(cid) do
+        {:ok, agent_ids} ->
+          SynthEnvelope.deliver_conversation_closed(cid, agent_ids, :operator_closed)
+          {:reply, :ok, socket}
+
+        {:error, reason} ->
+          {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+      end
     else
       {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
     end
@@ -1165,13 +1296,47 @@ defmodule KaoiroServerWeb.AgentsChannel do
     end
   end
 
+  # Operator-facing user list (issue #207). Pull-only, same shape as
+  # `list_conversations` (issue #276) just above — a management view the
+  # dashboard fetches on demand (opening SettingsDrawer), not something
+  # every join needs, so no `:after_join` snapshot push and no new store.
+  #
+  # `Users.all_with_role/1`'s shape (id/kind/display_name/role) already
+  # matches the allow-list issue #207 independently settled on for THIS
+  # operator-facing disclosure, so this handler reuses that
+  # IMPLEMENTATION (director-approved: "既存 public_entry_with_role/3 の
+  # 形と一致したため実装を再利用する") — but reusing the implementation
+  # is not the same guarantee as reusing the DECISION. That decision (4
+  # fields cross this boundary) was still made independently of
+  # ADR-0021 F6-8's separate, agent-facing allow-list (F6-1), and
+  # `public_entry_with_role/3` is `Users`' own internal helper — it
+  # could grow a field for a DIFFERENT consumer (e.g. F6-8's
+  # `directory_request` path) without this handler's own channel test
+  # noticing, because Elixir's map pattern match only asserts the named
+  # keys are present and does not reject extras (measured: adding a
+  # `source` key to `public_entry_with_role/3`'s return left the full
+  # channel test suite green). So this handler re-projects into its OWN
+  # literal 4-field map (`project_user_entry/1` below) rather than
+  # forwarding `Users.all_with_role/1`'s result verbatim, closing this
+  # boundary by STRUCTURE rather than by convention alone.
+  def handle_in("list_users", payload, socket) do
+    with :ok <- require_operator(socket, payload, "list_users") do
+      users = Enum.map(Users.all_with_role(), &project_user_entry/1)
+      {:reply, {:ok, %{"users" => users}}, socket}
+    else
+      {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
+  end
+
   # Operator-only live rename of a user's display name (issue #197 段階3,
   # D13 — operator-only, any existing user, no self-service distinction
   # per director's Q1 判定). No wrapper relay and no live broadcast: the
-  # `directory_request` `users` projection reads `Users` fresh on every
-  # call (issue #197 段階2's `all_with_role/1`), and no dashboard
-  # consumer of a user list exists yet (D13 — UI is out of scope for
-  # this unit), so there is nothing today that a live push would reach.
+  # dashboard re-fetches via `list_users` (issue #207) after a rename
+  # completes, the same refresh-on-mutation contract `close_conversation`
+  # (issue #276) uses for `list_conversations` — and the agent-facing
+  # `directory_request` `users` projection (`WrapperChannel`) reads
+  # `Users` fresh on every call too, so there is nothing today that a
+  # live push would reach beyond what those two pulls already cover.
   def handle_in("rename_user", payload, socket) do
     with :ok <- require_operator(socket, payload, "rename_user"),
          {:ok, user_id} <- fetch_user_id(payload),
@@ -2291,6 +2456,24 @@ defmodule KaoiroServerWeb.AgentsChannel do
   defp sanitize_envelope_for(:viewer, _envelope), do: :drop
 
   @doc """
+  `list_users`' projection, pulled out to a pure function (public, same
+  testability precedent as `safe_reason/1` just below) so its "strips
+  anything beyond these 4 keys" property is provable independently of
+  whatever shape `Users.all_with_role/1` CURRENTLY happens to return.
+  When this projection lived inline in the `list_users` handler, a
+  channel-test mutation that fed `public_entry_with_role/3` an extra
+  `source` key DID catch the leak — but only because feeding `Users` was
+  the only way to exercise the handler at all; removing the projection
+  itself while `Users` still returned exactly 4 keys left every test
+  green, since there was nothing FOR the projection to strip. Testing
+  this function directly, with a hand-built 5-key input, makes "the
+  projection strips extras" hold regardless of `Users`' current shape.
+  """
+  def project_user_entry(%{id: id, kind: kind, display_name: name, role: role}) do
+    %{id: id, kind: kind, display_name: name, role: role}
+  end
+
+  @doc """
   Allow-lists the client-facing reason (issue #62). Known atoms round-trip
   as their string and the channel-built key-validation tuples format to
   their stable text; anything else (a future AgentStates tuple, internal
@@ -2380,6 +2563,19 @@ defmodule KaoiroServerWeb.AgentsChannel do
     end
   end
 
+  # `list_session_events` (ADR-0055): format-only, no existence check —
+  # see that handler's comment for why `fetch_agent_id/1` /
+  # `fetch_restorable_agent_id/1` are the wrong fit here. A separate small
+  # helper rather than reusing `fetch_lifecycle_agent_id/1` above
+  # (planned-lifecycle intent, an unrelated feature with its own reason to
+  # stay format-only): coupling two features to one private helper risks
+  # a future change to one silently changing the other's contract.
+  defp fetch_lifecycle_query_agent_id(%{"agent_id" => agent_id}) when is_binary(agent_id) do
+    if AgentId.valid?(agent_id), do: {:ok, agent_id}, else: {:error, :invalid_agent_id}
+  end
+
+  defp fetch_lifecycle_query_agent_id(_payload), do: {:error, :missing_agent_id}
+
   defp fetch_agent_id(%{"agent_id" => agent_id} = _payload)
        when is_binary(agent_id) do
     # Enforce the protocol.md charset (issue #61) before the known? check;
@@ -2393,6 +2589,19 @@ defmodule KaoiroServerWeb.AgentsChannel do
   end
 
   defp fetch_agent_id(_payload), do: {:error, :missing_agent_id}
+
+  # issue #276: no charset/existence check like fetch_agent_id above —
+  # conversation_id is a wrapper-allocated UUID with no server-side format
+  # contract (ConversationStates itself treats it as an opaque key), and
+  # ConversationStates.close_by_operator/1 already answers "unknown" via
+  # its own :unknown_conversation_id, so duplicating that lookup here
+  # would just be a second source of truth for the same answer.
+  defp fetch_conversation_id(%{"conversation_id" => cid})
+       when is_binary(cid) and cid != "" do
+    {:ok, cid}
+  end
+
+  defp fetch_conversation_id(_payload), do: {:error, :missing_conversation_id}
 
   # Same shape as fetch_agent_id/1 but also accepts agents present in the
   # restart-surviving AgentDirectory (ADR-0030) — restore / resume_session

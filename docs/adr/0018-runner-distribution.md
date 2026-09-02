@@ -1,5 +1,5 @@
 ---
-title: wrapper/runner の配布(OS 別単一バイナリ・CLI のみ・Gitea release)
+title: Distribution of wrapper/runner (OS-specific single binary, CLI only, Gitea release)
 status: accepted
 date: 2026-06-16
 opened: 2026-06-16
@@ -9,103 +9,59 @@ related_specs: [setup-wizards]
 related_adrs: [17, 23, 24]
 ---
 
-# ADR-0018 — wrapper/runner の配布
+# ADR-0018 — Distribution of wrapper/runner
 
 ## Status
 
-Accepted(着手は主要機能が出揃ってから — 延期)
+Accepted (start deferred until the main functions are in place)
 
 ## Context
 
-wrapper/runner を各ホスト(Linux/macOS/Windows、ヘッドレス含む)へ配布・
-インストールする方式が未定。設定生成は [setup-wizards](../specs/setup-wizards.md)
-(provisional)に既にあるが、配布(パッケージング)は未仕様。最終目標の
-「リソース管理トータルソリューション」では CUI のみのホストでも動かす必要がある。
+The method for distributing and installing wrapper/runner on each host (including Linux/macOS/Windows and headless hosts) is undecided. Configuration generation already exists in [setup-wizards](../specs/setup-wizards.md) (provisional), but distribution (packaging) has not been specified. The ultimate goal, a “total resource-management solution,” requires it to run even on hosts with only a command-line interface.
 
 ## Decision
 
-- 配布形態は **OS 別の単一実行バイナリ**(ランタイム同梱でコンパイル、Node 前提を
-  排除)。
-- **CLI のみ(GUI 不採用)**。CUI のみ・ヘッドレスなホストでも動かせること。
-- 設定生成は setup-wizards の拡張: (i) 設定が無ければ**初回起動でウィザードを
-  自動起動**、(ii) 設定を **OS 別ユーザ設定ディレクトリ**(Linux `~/.config`、
-  macOS `~/Library/Application Support`、Windows `%APPDATA%`)に置く。
-  **(i) は撤回済み** — [setup-wizards](../specs/setup-wizards.md)(2026-07-25
-  accepted、issue #139)で「自動起動はせず、起動シムは exit 78 で止まって
-  ウィザードのコマンドを案内する」に上書きした。systemd / launchd から起動
-  された非対話セッションで対話プロンプトが立ち上がると、TTY が無いまま無応答
-  で止まるため。(ii) はそのまま有効。
-- 配布チャネルは **当面 Gitea の release(バイナリ資産)**、将来 GitHub 公開時に
-  GitHub releases。
+- The distribution form is a **single executable binary for each OS** (compiled with the runtime bundled, eliminating the Node prerequisite).
+- **CLI only (no GUI)**. It must run on hosts with only a command-line interface and on headless hosts.
+- Configuration generation is an extension of setup-wizards: (i) if no configuration exists, **automatically start the wizard on first launch**, and (ii) place the configuration in an **OS-specific user configuration directory** (Linux `~/.config`, macOS `~/Library/Application Support`, Windows `%APPDATA%`). **(i) has been withdrawn**—[setup-wizards](../specs/setup-wizards.md) (accepted 2026-07-25, issue #139) superseded it with “do not start automatically; the launch shim exits 78 and points to the wizard command.” An interactive prompt launched from a non-interactive session started by systemd / launchd would otherwise block indefinitely without a TTY. (ii) remains in effect.
+- The distribution channel is **a Gitea release (binary assets) for the time being**, and GitHub Releases once the project is made public on GitHub.
 
-**着手タイミングは主要機能が出揃ってから**(低優先・延期)。
+**The start timing is after the main functions are in place** (low priority; deferred).
 
-### 改訂(2026-07-25)— 単一バイナリを延期し Node 前提 tarball を先行
+### Revision (2026-07-25)—Defer the single binary and ship a Node-dependent tarball first
 
-マスター判断により **単一バイナリ化(bun compile)は撤回・延期**し、当面は
-**Node ランタイムのみを前提とする自己完結 tarball** で配布する(issue #70)。
+By the maintainer’s decision, **single-binary compilation (bun compile) is withdrawn and deferred**; for now, distribute a **self-contained tarball that assumes only the Node runtime** (issue #70).
 
-撤回の根拠:
+Reasons for the withdrawal:
 
-- bun が Zig → Rust の全面書き換え直後(2026-05 マージ / 07 公表)で不安定期
-- `sharp` のネイティブ `.node` が `bun build --compile` に埋め込めない既知の
-  未解決問題(sharp#4283 / bun#15374)
-- wrapper は Agent SDK 経由でエンジン CLI を子プロセス起動するため、単一
-  バイナリでも配布先のランタイム前提は消えない — **ただし下記の実測で訂正**
+- bun is in an unstable period immediately after a full rewrite from Zig to Rust (merged in 2026-05 / announced in 07)
+- The known unresolved issue that native `.node` files from `sharp` cannot be embedded in `bun build --compile` (sharp#4283 / bun#15374)
+- Because the wrapper starts the engine CLI as a child process through the Agent SDK, even a single binary would not remove the runtime prerequisite on the distribution host — **corrected by the measurement below**
 
-**実測による訂正**: エンジン CLI の実体は SDK が platform 別 npm パッケージと
-して同梱している(`@anthropic-ai/claude-agent-sdk-<os>-<arch>` 245 MB /
-`@openai/codex-<os>-<arch>` 297 MB)。そのため tarball 配布では **配布先ホスト
-に Claude Code / codex CLI を別途用意する必要がない**。裏返しとして sharp・
-canvas・両 CLI がすべて platform 別 optional dependency であるため、**OS/arch
-別アーカイブが必須**になる。
+**Correction based on measurement**: The engine CLI binaries are bundled by the SDK as platform-specific npm packages (`@anthropic-ai/claude-agent-sdk-<os>-<arch>` 245 MB / `@openai/codex-<os>-<arch>` 297 MB). Therefore, tarball distribution **does not require Claude Code / the codex CLI to be prepared separately on the destination host**. Conversely, because sharp, canvas, and both CLIs are all platform-specific optional dependencies, **an OS/arch-specific archive is mandatory**.
 
-改訂後の決定:
+Revised decision:
 
-- 生成は [`scripts/build-runner-tarball.sh`](../../scripts/build-runner-tarball.sh)
-  (`pnpm deploy --legacy` の成果物をそのまま tar.gz 化)
-- 生成対象は実需要の **2 arch(`darwin-arm64` / `linux-x64`)**。4 arch を
-  一律には作らない
-- クロスビルドは pnpm の `supportedArchitectures` をビルド中だけ注入して行う
-  (darwin ホスト 1 台から両方生成できることを実測で確認)
-- 設置は「解凍 → 設定ファイル編集 → ワンコマンド実行」以内。配布先で
-  `pnpm install` / build / workspace 解決を要求しない
-- 常駐化(#136)の起動シム・unit・plist は **無改造で配布物に載る**(シムは
-  自分の位置から `../dist/cli.js` を解決し、`deploy/` と `dist/` が成果物直下で
-  兄弟になる)
-- Gitea release への資産アップロード自動化は範囲外(#140)
-- **`bun compile` は Rust 版の安定後(目安 2027-01)に再評価**する。SDK 側に
-  Bun single-file executable 向けの `extractFromBunfs` ヘルパが用意されている
-  ため、sharp 側の解決が前提条件
+- Build with [`scripts/build-runner-tarball.sh`](../../scripts/build-runner-tarball.sh) (package the output of `pnpm deploy --legacy` directly as tar.gz)
+- Build for the **two architectures actually needed (`darwin-arm64` / `linux-x64`)**; do not build four architectures uniformly
+- Cross-build by injecting pnpm’s `supportedArchitectures` only during the build (measured and confirmed that both can be generated from one darwin host)
+- Installation must be no more than “extract → edit the configuration file → run one command.” Do not require `pnpm install` / build / workspace resolution on the destination host
+- The launch shim, unit, and plist for daemonisation (#136) are **included in the distribution unchanged** (the shim resolves `../dist/cli.js` from its own location, with `deploy/` and `dist/` as siblings directly under the distribution)
+- Automating asset uploads to a Gitea release is out of scope (#140)
+- **Re-evaluate `bun compile` after the Rust version stabilises (target: 2027-01)**. The SDK provides an `extractFromBunfs` helper for Bun single-file executables, so resolving the sharp issue is a prerequisite
 
-アーカイブサイズ(実測、tar.gz): **darwin-arm64 256 MB / linux-x64 368 MB**。
-linux 版は musl 変種も同梱されるため大きい代わりに glibc / musl 両対応になる
-(`supportedArchitectures.libc` では musl 変種を除外できなかった)。
+Archive sizes (measured, tar.gz): **256 MB for darwin-arm64 / 368 MB for linux-x64**. The Linux version is larger because it also includes the musl variant, but supports both glibc / musl (it was not possible to exclude the musl variant with `supportedArchitectures.libc`).
 
-### 改訂(2026-08-16)— 設置形態を immutable release + atomic switch に統一する
+### Revision (2026-08-16)—Unify installation as immutable release + atomic switch
 
-[issue #219](https://github.com/sakuraiyuta/kaoiro/issues/219)。
-本 ADR はここまで tarball の**生成**だけを決めており、**設置後の形**を
-決めていなかった。その空白に、文書上どこにも書かれていない運用形態が
-入り込んでいた — **リポジトリの checkout を live path にしたまま常駐させ、
-更新のたびに稼働中の `dist` を上書きする**形態である(本番ホストが実際に
-この形で動いていた)。
+[issue #219](https://github.com/sakuraiyuta/kaoiro/issues/219).
+Until this point, this ADR decided only how to **build** tarballs and did not decide their **post-installation form**. In that gap, an operational form that was documented nowhere had entered practice: **keeping a repository checkout as the live path and overwriting its running `dist` on every update** (the production host was actually running this way).
 
-これが危険なのは、**runner が wrapper を spawn するたびに on-disk の
-artifact を解決する**ため。`runner/src/spawn.ts` の
-`resolveWrapperLaunch()` は `require.resolve()` でパスを引き、しかも
-engine ごとに lazy である(codex は初回 codex spawn まで解決しない)。
-稼働中の checkout を build し直すと、旧 runner が新 wrapper を掴む、
-あるいはパッケージ間で新旧の混ざった module graph を掴む。
-[issue #209](https://github.com/sakuraiyuta/kaoiro/issues/209)
-で観測された `ConfigError` はその一例にすぎず、**version check を足しても
-partial module graph は救えない**。「停止 → build → 起動」の順序を人間が
-守ることで回避していたが、順序を一度誤れば再発する。
+This is dangerous because **the runner resolves the on-disk artifact every time it spawns a wrapper**. `runner/src/spawn.ts`’s `resolveWrapperLaunch()` obtains the path with `require.resolve()`, and does so lazily per engine (codex is not resolved until the first codex spawn). Rebuilding a live checkout can make the old runner pick up the new wrapper, or make it pick up a module graph mixed between old and new versions. The `ConfigError` observed in [issue #209](https://github.com/sakuraiyuta/kaoiro/issues/209) is only one example; **a version check cannot save a partial module graph**. This had been avoided by relying on a person to follow the order “stop → build → start,” but one mistake in that order would reproduce it.
 
-#### 決定
+#### Decision
 
-**設置先は immutable な release ディレクトリとし、live path は symlink
-1 本(`current`)だけにする。**
+**The installation target is an immutable release directory, and the live path is only one symlink (`current`).**
 
 ```text
 <install-root>/
@@ -114,275 +70,153 @@ partial module graph は救えない**。「停止 → build → 起動」の順
   previous -> releases/<revision>
 ```
 
-`<install-root>` は Linux `${XDG_DATA_HOME:-~/.local/share}/kaoiro`、
-macOS `~/Library/Application Support/kaoiro`(`KAOIRO_RUNNER_INSTALL_DIR`
-で上書き可)。macOS では config dir と同一ディレクトリになる — Apple は
-data / config を分けないため。entry 名は衝突しない。
+`<install-root>` is Linux `${XDG_DATA_HOME:-~/.local/share}/kaoiro`, and macOS `~/Library/Application Support/kaoiro` (overridable with `KAOIRO_RUNNER_INSTALL_DIR`). On macOS it is the same directory as the config directory—Apple does not separate data / config. Entry names do not collide.
 
-**source origin と activation layout は別軸である**。混同すると
-「repo で動かす形態」という、もう存在しない選択肢を文書が生かし続けることに
-なる。
+**Source origin and activation layout are separate axes**. Confusing them would keep the “run from the repo” form—an option that no longer exists—alive in the documentation.
 
-| 軸 | 取りうる値 |
+| Axis | Possible values |
 |---|---|
-| **source origin** | Gitea release の tarball / ローカル repo の build |
-| **activation layout** | **どちらも** `releases/<id>/` + `current` の 1 通りのみ |
+| **source origin** | Gitea release tarball / local repo build |
+| **activation layout** | **the same for both**: `releases/<id>/` + `current` |
 
-- したがって従来「repo-direct」と呼んでいた形態は
-  **local-build release profile** と呼ぶ。repo は **build 元**であって
-  live path ではない。tarball 配布ホストと**同一の設置形態・同一の
-  スクリプト**に収束するため、実行経路は 1 本しかない
-- **repo checkout を `ExecStart` に直接指す形態は、profile として認めない**
-  (開発時に手で起動する分には従来どおり使える)
-- **切替は停止後に、一時 symlink + `rename(2)` で atomic に行う**。`mv` は
-  使えない — 宛先が directory への symlink のとき `mv` はそれを**追従して
-  中へ**移動する(GNU coreutils 9.4 で実測: `current` は旧 release を指した
-  まま、旧 release の中に一時 symlink が残った)。GNU の `mv -T` は正しいが
-  BSD / macOS に無いため、`rename(2)` を node 経由で呼ぶ
-- **直前の release を `previous` として保持する**。保持世代数の既定は 3
-  (`--keep`)。ただし `current` / `previous` が指す release は世代数に
-  関わらず削除しない — 上記の lazy な wrapper 解決のため、稼働中 release は
-  起動後ずっと読まれ続ける
-- **起動シムは build せず verify のみ行う**。検査対象は builder が生成する
-  `MANIFEST.json` — runner 自身の `dist/` と、wrapper 2 種から依存宣言を
-  たどって到達する `@kaoiro/*` パッケージ全部の `dist/` — の存在検査。
-  `VERSION` を持たない repo-direct な checkout でのみ、sentinel
-  4 本(`dist/cli.js` / `dist/build-info.json` / wrapper 2 種の
-  `dist/cli.js`)へ縮退する。判別子は `VERSION` の有無であり、manifest の
-  可読性ではない
-- **install / switch は module graph を独立に再導出し、manifest の取りこぼしを
-  拒否する**(issue #219 もも レビュー)。manifest は自分自身の証人になれない
-  ため。**再導出の入力は同一 tree 内の `package.json` なので、これは改ざん
-  耐性ではない** — 閉じるのは builder のバグと配布後の部分的な破損で、tree
-  全体を書き換えられる主体への防御ではない。署名 / tree 外 digest は別途
-- **更新は `systemd-run --user --no-block` の transient *service* unit で
-  実行する**。runner 配下のエージェントが更新スクリプトを直接叩くと、runner
-  を停止した瞬間に自分が消えて後続が走らない
+- Therefore, the form formerly called “repo-direct” is called the **local-build release profile**. The repo is the **build source**, not the live path. Because it converges on the **same installation form and same scripts** as a host receiving a tarball, there is only one execution path
+- **Pointing `ExecStart` directly at a repo checkout is not recognised as a profile** (it can still be started manually as before during development)
+- **Switch after stopping, using a temporary symlink + `rename(2)` atomically**. `mv` cannot be used—when the destination is a symlink to a directory, `mv` **follows it into the directory** (measured with GNU coreutils 9.4: `current` continued to point to the old release and a temporary symlink was left inside the old release). GNU `mv -T` is correct, but it is not available on BSD / macOS, so call `rename(2)` through node
+- **Keep the immediately previous release as `previous`**. The default number of generations to retain is 3 (`--keep`). However, do not delete the releases pointed to by `current` / `previous` regardless of the generation count—for the lazy wrapper resolution described above, the active release continues to be read after startup
+- **The launch shim only verifies; it does not build**. It checks the `MANIFEST.json` generated by the builder—the presence of `dist/` for the runner itself and the `dist/` of every `@kaoiro/*` package reached by following dependency declarations from the two wrappers. Only a repo-direct checkout without `VERSION` falls back to four sentinels (`dist/cli.js` / `dist/build-info.json` / `dist/cli.js` for the two wrappers). The discriminator is whether `VERSION` exists, not whether the manifest is readable
+- **Install / switch independently re-derive the module graph and reject omissions from the manifest** (issue #219 もも review). The manifest cannot be its own witness. **The input to re-derivation is `package.json` in the same tree, so this is not tamper resistance**—it closes builder bugs and partial post-distribution damage, not an actor that rewrites the entire tree. Signatures / digests outside the tree are separate
+- **Run updates in a transient *service* unit with `systemd-run --user --no-block`**. If an agent under the runner directly invokes the update script, it disappears when it stops the runner and the rest of the update does not run
 
-#### 効いているのは cgroup であって process group ではない
+#### What matters is the cgroup, not the process group
 
-`systemd.kill(5)` の既定は `KillMode=control-group` — 「all remaining
-processes in the control group of this unit will be killed on unit stop」。
-**呼び出し元の process group から抜けても、runner service の cgroup に残って
-いれば道連れで死ぬ**。逃れられるのは transient *service* unit になることで、
-`systemd-run(1)` は「will run in a clean and detached execution environment,
-with the service manager as its parent process」と述べている。
+The default of `KillMode=control-group` in `systemd.kill(5)` is “all remaining processes in the control group of this unit will be killed on unit stop.” **Even if the caller leaves the process group, it is killed along with the runner if it remains in the runner service’s cgroup**. Becoming a transient *service* unit is what escapes this, and `systemd-run(1)` says it “will run in a clean and detached execution environment, with the service manager as its parent process.”
 
-したがって起動引数には次の 3 つが必須で、いずれも欠落は致命的:
+Therefore, the following three launch arguments are mandatory, and omitting any one is fatal:
 
-- **`--scope` を使わない。** transient scope は systemd-run 自身が実行し
-  「will thus inherit the execution environment of the caller」、しかも
-  同期実行になる。停止対象の unit の中へ更新を戻すことになり、`--no-block`
-  とも併用できない
-- **`PartOf` / `BindsTo` を付けない。** runner の停止が別経路で伝播する
-- **`--no-block` を付ける。** 最初の仕事が呼び出し元の停止である unit の
-  起動完了を待たせない
+- **Do not use `--scope`.** A transient scope is executed by systemd-run itself and “will thus inherit the execution environment of the caller”; it is also synchronous. That would return the update to the unit being stopped, and it cannot be combined with `--no-block`
+- **Do not set `PartOf` / `BindsTo`.** They would propagate the runner’s stop through another path
+- **Set `--no-block`.** Do not make startup wait for a unit whose first job is stopping the caller
 
-排他 lock を併用する。
+Use an exclusive lock as well.
 
-#### `--detach` は成功を報告しない
+#### `--detach` does not report success
 
-`--no-block` は start request が「only verified and enqueued」された時点で
-返る (`systemd-run(1)`)。**更新は開始すらしていない**ので、`--detach` の
-終了ステータスは結果について何も語らない。出力は「enqueue した」ことと
-unit 名、および journal / status の確認コマンドに限る。最終確認はオペレータ
-が行う。
+`--no-block` returns when the start request is “only verified and enqueued” (`systemd-run(1)`). **The update has not even started**, so the exit status of `--detach` says nothing about the result. Output is limited to the fact that it was enqueued, the unit name, and commands for checking the journal / status. The operator performs the final confirmation.
 
-#### 中断した staging の GC
+#### GC of interrupted staging
 
-install / build の staging ディレクトリは 1 本あたり 1 GB を超える。EXIT
-trap に到達せず死んだ run (SIGKILL、電源断) の残骸は、死んだ pid を名前に
-持つだけで誰も再訪しない。**排他 lock を取得した直後、自分の staging を作る
-前に GC する** — lock が「まだ在るものは放棄されたもの」を真にする。lock
-ディレクトリ (`.lock.*`) と staging (`.staging.*`) は接頭辞を分け、GC の
-glob が自分の lock を巻き込まないようにする
+An install / build staging directory exceeds 1 GB per copy. Remnants of a run that died without reaching its EXIT trap (SIGKILL, power loss) contain only the dead pid in their name and will never be revisited. **Immediately after acquiring the exclusive lock and before creating its own staging directory, perform GC**—the lock makes “anything still present was abandoned” true. Use different prefixes for the lock directory (`.lock.*`) and staging (`.staging.*`) so that the GC glob does not include its own lock
 
-**`ExecStartPre=pnpm build` は採用しない。** crash restart や OS 起動を
-コンパイラ / node_modules / pnpm の成否に結びつけ、build 中ずっと停止し、
-失敗時に中途半端な `dist` を残しうる。「`dist` が HEAD より古い」判定も
-lockfile / tsconfig / dependency / 削除済みファイル / dirty tree を
-表現できない。
+**Do not adopt `ExecStartPre=pnpm build`.** It ties crash restarts and OS startup to the success of the compiler / node_modules / pnpm, keeps the service stopped throughout the build, and can leave a half-written `dist` on failure. A check that “`dist` is older than HEAD” also cannot represent the lockfile / tsconfig / dependencies / deleted files / dirty tree.
 
-#### release identity の契約
+#### Release identity contract
 
-[ADR-0053](0053-build-identity.md) の identity は `revision` + `dirty` で
-あり、**`dirty` は「この SHA では中身が決まらない」と言っている**。つまり
-同一 commit の別 dirty build は **id が衝突しながら内容が異なる**。
-`current` はホストが何を動かしているかを決める名前なので、これを許すと
-「実際は何が動いているのか」という問いが一段上に戻ってくるだけである。
+The identity in [ADR-0053](0053-build-identity.md) is `revision` + `dirty`, and **`dirty` says that the contents are not determined by this SHA**. In other words, separate dirty builds of the same commit **have different contents while colliding on the same id**. Since `current` determines what the host is running, allowing this merely moves the question “what is actually running?” up one level.
 
-| 対象 | 契約 |
+| Target | Contract |
 |---|---|
-| **activation** (`current` になれる id) | **clean な 40 桁 hex のみ**。`-dirty` / `unknown` は `--allow-dirty` を明示した dev ホストに限る |
-| **clean release の再 install** | **置き換え不可**。content-addressed なので再 install は no-op。置き換えるフラグは用意しない |
-| **dirty / unknown release の再 install** | 既定で拒否。`--allow-dirty` で置換可。ただし `current` / `previous` が指す間は不可 |
-| **rollback** | gate をかけない。`previous` は一度 activate 済みであり、拒否は壊れた release にホストを縛りつけるだけ |
+| **activation** (id that can become `current`) | **Only a clean 40-digit hex value**. `-dirty` / `unknown` are limited to a dev host that explicitly uses `--allow-dirty` |
+| **reinstall of a clean release** | **Not replaceable**. Reinstall is a no-op because it is content-addressed. Provide no replacement flag |
+| **reinstall of a dirty / unknown release** | Rejected by default. Replacement is allowed with `--allow-dirty`, but not while `current` / `previous` points to it |
+| **rollback** | No gate. `previous` has already been activated once; rejecting it would only trap the host on a broken release |
 
-clean release を置き換える手段を用意しないことが、`releases/<clean-id>/` を
-「慣習として不変」でなく**実際に不変**にしている。破損を疑うなら手で消す —
-痕跡が残る。黙って上書きする経路は残さない。
+Not providing a way to replace a clean release makes `releases/<clean-id>/` **actually immutable**, rather than immutable merely by convention. If corruption is suspected, delete it by hand—leaving a trace. Do not leave a path that silently overwrites it.
 
-**id は path component になるため、値域検証は security boundary である。**
-`grep -q '^…$'` は行単位に錨を打ち、どれか 1 行が一致すれば成功するため、
-**複数行の値を検証できない**。実測 (2026-08-16): VERSION が
-`../../pwned-marker\n<40 hex>` の tarball は検証を通り、install root の
-2 階層上に release tree を書いて exit 0 で終わった。`$(cat FILE)` は末尾の
-改行しか落とさず、改行は path separator でもないため traversal を妨げない。
-検証は shell の `case` glob で id の文字集合外 (改行・`/`・`.` を含む) を
-落としてから行う。
+**Because the id becomes a path component, validating its value range is a security boundary.** `grep -q '^…$'` anchors by line and succeeds if any one line matches, so it **cannot validate a multi-line value**. Measurement (2026-08-16): a tarball whose VERSION was `../../pwned-marker\n<40 hex>` passed verification, wrote a release tree two levels above the install root, and exited 0. `$(cat FILE)` removes only the trailing newline, and because a newline is not a path separator, this does not prevent traversal. Validate by using the shell’s `case` glob to reject characters outside the id’s character set (including newline, `/`, and `.`).
 
-#### 前提の実測(2026-08-16)
+#### Measurement of the premise (2026-08-16)
 
-この設計は「稼働中 runner は `current` の切替に影響されない」ことに依存する。
-Node は既定で module path を realpath 化するため成立するが、断定せず実測した:
-`current/deploy/` 経由で起動したプロセスの `import.meta.url` は
-`releases/<id>/dist/cli.js` に解決され、**`current` を別 release へ切り替えた
-後の lazy な `require.resolve` も元の release の中を指した**。
+This design depends on “a running runner is unaffected by switching `current`.” Node realpaths module paths by default, so it should hold, but this was measured rather than asserted: a process launched through `current/deploy/` resolved its `import.meta.url` to `releases/<id>/dist/cli.js`, and **lazy `require.resolve` after switching `current` to another release still pointed inside the original release**.
 
-裏返しが上記の保持ルールである — **稼働中 release を prune すると、まだ
-起こっていない codex spawn の解決が壊れる**。
+The converse is the retention rule above—**pruning a running release breaks resolution for a codex spawn that has not happened yet**.
 
-#### 適用範囲(2026-08-16 時点)
+#### Scope of application (as of 2026-08-16)
 
-**「atomic switch は Linux 限定」は誤り**なので、層で切り分ける。
+**“Atomic switch is Linux-only” is incorrect**, so separate it by layer.
 
-| 層 | 適用範囲 |
+| Layer | Scope |
 |---|---|
-| release layout (`releases/<id>/` + `current` / `previous`) | **OS 共通** |
-| install / switch スクリプトと、symlink + `rename(2)` の atomicity | **OS 共通の契約**。Linux で実測。**macOS は未実測** |
-| service-manager orchestration (stop → pointer swap → start、self-stop-safe updater) | **Linux / systemd のみ** |
+| release layout (`releases/<id>/` + `current` / `previous`) | **OS-common** |
+| install / switch scripts and the atomicity of symlink + `rename(2)` | **OS-common contract**. Measured on Linux. **Not measured on macOS** |
+| service-manager orchestration (stop → pointer swap → start, self-stop-safe updater) | **Linux / systemd only** |
 
-`rename(2)` の atomicity は POSIX の要求であって Linux 固有ではない。
-`mv` を避けたのも移植性のため — GNU の `mv -T` は BSD / macOS に無い。
-したがって switch script は移植可能な設計だが、**macOS 上では
-operationally unverified** である。launchd には `systemd-run` 相当が無く
-(`launchctl submit` / 別 LaunchAgent + `kickstart` で代替する必要がある)、
-実機がないため acceptance を満たせない。macOS 版の orchestration は後続
-issue に切り出す。
+The atomicity of `rename(2)` is a POSIX requirement, not Linux-specific. Avoiding `mv` was also for portability—GNU `mv -T` is unavailable on BSD / macOS. Therefore, the switch script is portable by design, but **operationally unverified on macOS**. launchd has no equivalent to `systemd-run` (it requires a substitute using `launchctl submit` / another LaunchAgent + `kickstart`), and there is no real machine available, so it cannot meet acceptance. macOS orchestration is split into a follow-up issue.
 
-#### release verifier が持ち込む Node 依存(2026-08-16)
+#### Node dependency introduced by the release verifier (2026-08-16)
 
-strict 検証(install / switch)の closure 再導出は、V8 のパーサを
-`vm.SourceTextModule` 経由で使う。手書きの字句解析が同型の欠陥を 4 回
-出したため、パーサを持たずに JS を読むこと自体をやめた判断による
-(issue #219)。配布先ホストの Node に結合が 2 つ増える。
+Strict verification (install / switch) re-derives the closure through V8’s parser via `vm.SourceTextModule`. This follows the decision to stop reading JS without a parser, after hand-written lexical analysis produced the same class of defect four times (issue #219). This adds two bindings to Node on the distribution host.
 
-| 結合 | 内容 |
+| Binding | Details |
 |---|---|
-| experimental API | `vm.SourceTextModule` は `--experimental-vm-modules` を要する。フラグ無しでは `undefined`(node v24.3.0 で実測)。Node 側で予告なく変わりうる |
-| 版数 | 併用する `--disable-warning` は Node >= 20.11 / 21.3 で追加。`engines.node >= 22` の範囲では常に成立するが、それより古い node ではフラグ解釈の時点で落ちる |
+| experimental API | `vm.SourceTextModule` requires `--experimental-vm-modules`. Without the flag it is `undefined` (measured on node v24.3.0). This can change without notice on the Node side |
+| version | The accompanying `--disable-warning` was added in Node >= 20.11 / 21.3. It always exists within `engines.node >= 22`, but older node versions fail while parsing the flags |
 
-フラグを渡すのは `kaoiro-runner-common.sh` の
-`kaoiro_verify_release_tree` 1 箇所だけである。起動シムは素の `node` の
-ままで、存在確認のみ(`--require-manifest` 無し)なのでこのコードに到達
-しない。フラグが無いまま strict 経路に入った場合、verifier は再導出を
-飛ばさず exit 70 で落ちる — 縮退させれば「過小な MANIFEST.json を
-exit 0 で通す」既知の fail-open に戻るため。
+The flag is passed in exactly one place, `kaoiro_verify_release_tree` in `kaoiro-runner-common.sh`. The launch shim remains plain `node` and only checks for existence (`--require-manifest` is absent), so it does not reach this code. If the strict path is entered without the flag, the verifier exits 70 without skipping re-derivation—degrading it would restore the known fail-open behaviour of accepting an underspecified MANIFEST.json with exit 0.
 
-`vm.SourceTextModule` が stable 化 / 変更されたときの追随先は、この 1
-箇所と `runner/deploy/verify-release.mjs` の `expectedClosure` である。
+The follow-up locations when `vm.SourceTextModule` becomes stable / changes are this one and `expectedClosure` in `runner/deploy/verify-release.mjs`.
 
-#### 実行時参照は宣言する — 検出しない(2026-08-16)
+#### Declare runtime references—do not detect them (2026-08-16)
 
-closure が拾う edge は 2 系統だけで、どちらも推測を含まない。
+The closure picks up only two kinds of edges, neither involving inference.
 
-| 系統 | 出どころ |
+| Kind | Source |
 |---|---|
-| 静的 import グラフ | V8 の `dependencySpecifiers` |
-| 実行時に組み立てられるパス | 各パッケージの `package.json` の `kaoiro.runtimeAssets` |
+| static import graph | V8’s `dependencySpecifiers` |
+| paths assembled at runtime | Each package’s `kaoiro.runtimeAssets` in `package.json` |
 
-後者を call の文字列形から検出する実装は一度書かれ、撤回された。正規表現は
-binding を解決できないため、`foo.require("./x.js")`(無関係なメソッド呼び出し)
-と、モジュール内に自前の `class URL` を定義して呼ぶコードを、いずれも本物の
-edge と読んで健全な release を exit 70 で拒否した。同一クラスの誤検出 3 例目
-で機構ごと撤去している。V8 は scope 情報を公開せず、それが分かる parser を
-入れるには依存が要るため、推測を精密化するのではなく推測をやめた。
+An implementation that detected the latter from call-string forms was once written and withdrawn. Because a regular expression cannot resolve bindings, it read both `foo.require("./x.js")` (an unrelated method call) and code that defines and calls its own `class URL` inside a module as genuine edges, rejecting healthy releases with exit 70. After the third false positive of the same class, the mechanism was removed entirely. V8 does not expose scope information, and adding a parser that could provide it would add a dependency; therefore, stop guessing instead of making the guess more precise.
 
-宣言の例(`wrapper/codex/package.json`):
+Example declaration (`wrapper/codex/package.json`):
 
 ```json
 "kaoiro": { "runtimeAssets": ["dist/bridge.js"] }
 ```
 
-実在する実行時参照は 2 件(2026-08-16 時点)。
+There are two actual runtime references (as of 2026-08-16).
 
-| パッケージ | 参照の書かれ方 | 宣言 |
+| Package | How the reference is written | Declaration |
 |---|---|---|
 | `@kaoiro/codex` | `new URL("../dist/bridge.js", import.meta.url)` | `dist/bridge.js` |
 | `@kaoiro/claude-code` | `createRequire(import.meta.url).resolve("./probe.js")` | `dist/probe.js` |
 
-**境界**: 宣言の無い実行時参照は verifier から見えない。実行時参照を足す
-変更は、宣言を足すところまでが 1 つの変更である。リテラル引数の動的
-`import()` / `require()` も同じ扱い。
+**Boundary**: Runtime references without declarations are invisible to the verifier. A change that adds a runtime reference is one change through the point where the declaration is added. Literal-argument dynamic `import()` / `require()` are handled the same way.
 
-置き忘れは `runner/test/runtimeAssetDeclarations.test.ts` が CI で落とす。
-このテストは verifier が捨てたのと同じ textual heuristic を使う — 意図的で
-ある。誤検出のコストが、テスト側では赤 1 本と人間の判断で済むのに対し、
-verifier 側では健全な release の deploy 全停止になるからだ。
+Omissions are caught in CI by `runner/test/runtimeAssetDeclarations.test.ts`. This test uses the same textual heuristic that the verifier discarded—intentionally. The cost of a false positive is one red test and human judgement on the test side, whereas on the verifier side it would stop deployment of a healthy release altogether.
 
-**この heuristic 自身が一度取りこぼしている**。当初は `new URL(` /
-`import(` / `require(` の 3 形しか見ておらず、`createRequire(...).resolve(...)`
-は呼び出しの文字列に `require(` を含まないため素通しした。その結果
-「実行時参照は 1 件のみ」という実測が出て、そのまま信じられた。実際には
-`dist/probe.js` が未宣言で、実 release で `probe.js` と manifest entry を
-同時に削除すると strict 検証が exit 0 で通った(レビュー round 2 で検出)。
-現在は `createRequire` の束縛名をファイルから読み取って `.resolve(` を
-走査し、`${...}` を含むテンプレート引数は「自動判定できない」として根拠つき
-例外に列挙する(例外は件数込みで固定してあるので、同じファイルに 1 件増えれば
-テストが落ちる)。教訓は 1 行で言える — **自分の走査パターンで数えた件数は、
-そのパターンの外側については何も言っていない**。
+**This heuristic itself once missed a reference**. It initially looked for only the three forms `new URL(` / `import(` / `require(`; `createRequire(...).resolve(...)` passed through because the call string does not contain `require(`. As a result, the measured statement “there is only one runtime reference” was trusted as-is. In reality, `dist/probe.js` was undeclared, and strict verification passed with exit 0 when `probe.js` and its manifest entry were deleted together from a real release (found in review round 2). It now reads the binding name of `createRequire` from the file and scans for `.resolve(`; template arguments containing `${...}` are listed as “cannot be automatically determined” with supporting reasons (the number of exceptions is fixed, so adding one more in the same file makes the test fail). The lesson fits in one line—**the number counted by your scan pattern says nothing about what lies outside that pattern**.
 
-信頼境界は `dependencies` map と同じで、それ以上ではない。MANIFEST.json を
-書き換えられる者はこのフィールドも書き換えられる。閉じるのは builder のバグ
-と部分的な破損であって、改ざんではない。
+The trust boundary is the same as the `dependencies` map and no more. Anyone who can rewrite MANIFEST.json can also rewrite this field. It closes builder bugs and partial damage, not tampering.
 
 ## Consequences
 
 ### Positive
 
-- クロス OS 導入が滑らか。ヘッドレス運用に適合。
-  **「Node 無しで」は 2026-07-25 改訂で失効している** — 単一バイナリ化を延期し
-  Node 前提 tarball を先行させた時点で、配布先に Node (>= 22) が必要になった
-  (下記 Negative の 3 点目が正本)。2026-08-16 改訂の release verifier
-  (`verify-release.mjs`) も node で動く。単一バイナリ化が再開されるまで、
-  この前提は残る
-- 自己ホスト(Gitea)で配布が完結する。
+- Smooth cross-OS installation. Suitable for headless operation. **“Without Node” expired in the 2026-07-25 revision**—once single-binary compilation was deferred and the Node-dependent tarball was prioritised, Node (>= 22) became required on the distribution host (the third point under Negative is authoritative). The release verifier (`verify-release.mjs`) from the 2026-08-16 revision also runs on node. This prerequisite remains until single-binary compilation resumes
+- Distribution is complete on the self-hosted Gitea.
 
 ### Negative
 
-- OS 別クロスビルドの CI と単一バイナリ化ツールの選定が要る。
-- tarball(2026-07-25 改訂)はエンジン CLI 実体を含むため 1 arch あたり
-  256〜368 MB(tar.gz)。自己ホスト Gitea の release 資産としては許容と判断。
-- 配布先に Node(>= 22)が必要。単一バイナリ化までこの前提は残る。
-- install / switch の strict 検証が experimental API
-  (`vm.SourceTextModule` + `--experimental-vm-modules`)に依存する。
-  詳細と追随先は上記「release verifier が持ち込む Node 依存」。
+- Requires selecting CI for OS-specific cross-builds and a single-binary compilation tool.
+- The tarball (2026-07-25 revision) includes the engine binaries, making it 256–368 MB per architecture (tar.gz). Judged acceptable as self-hosted Gitea release assets.
+- Node (>= 22) is required on the distribution host. This prerequisite remains until single-binary compilation.
+- Strict install / switch verification depends on the experimental API (`vm.SourceTextModule` + `--experimental-vm-modules`). See “Node dependency introduced by the release verifier” above for details and follow-up locations.
 
 ### Neutral
 
-- 配布単位は [ADR-0017](0017-wrapper-multientity-packages.md) のパッケージ分割に
-  依存。runner の常駐デーモン仕様は
-  [ADR-0023](0023-host-runner-architecture.md)(supervisor 専任・TS/Node・
-  `kaoiro-runner`)で確定し、[ADR-0014](0014-session-resume-and-restore.md) の
-  resume と直結。
+- The distribution unit depends on the package split in [ADR-0017](0017-wrapper-multientity-packages.md). The runner daemon specification is established in [ADR-0023](0023-host-runner-architecture.md) (supervisor-only / TS/Node / `kaoiro-runner`) and is directly connected to resume in [ADR-0014](0014-session-resume-and-restore.md).
 
 ## Alternatives Considered
 
 | Option | Why rejected |
 |--------|--------------|
-| npm/pnpm パッケージ(`npm i -g`) | 各ホストに Node 前提。ヘッドレス最小構成に不利 |
-| コンテナ配布 | runner はホストの `~/.claude`・ローカルプロセス・cwd へアクセスするため不向き |
-| GUI インストーラ / GUI 設定 | CUI のみホストで動かせない |
-| 公開 npm へ publish | GitHub 公開までは Gitea release で足りる |
+| npm/pnpm package (`npm i -g`) | Requires Node on each host. Disadvantageous for a minimal headless configuration |
+| Container distribution | The runner needs access to the host’s `~/.claude`, local processes, and cwd, so this is unsuitable |
+| GUI installer / GUI configuration | Cannot run on hosts with only a command-line interface |
+| Publish to public npm | A Gitea release is sufficient until the project is public on GitHub |
 
 ## Related
 
-- spec: [setup-wizards](../specs/setup-wizards.md)。
-- 関連 ADR: [0017](0017-wrapper-multientity-packages.md)、
-  [0014](0014-session-resume-and-restore.md)。
-- 未解決(2026-07-25 時点): 単一バイナリ化ツールの選定は `bun compile` の再評価
-  待ち(Rust 版安定後、目安 2027-01)。runner/wrapper を 1 バイナリにするかは
-  単一バイナリ前提の論点なので同じく保留 — tarball では 1 アーカイブに両方が
-  入るため実務上は解決している。クロスビルドは pnpm の `supportedArchitectures`
-  で解決済み(darwin ホストから linux-x64 を生成できることを実測)。
-- 由来: my-idea-brief(走り書き「wrapper/runner の配布」)。
+- spec: [setup-wizards](../specs/setup-wizards.md).
+- Related ADRs: [0017](0017-wrapper-multientity-packages.md), [0014](0014-session-resume-and-restore.md).
+- Unresolved (as of 2026-07-25): selection of a single-binary compilation tool awaits re-evaluation of `bun compile` (after the Rust version stabilises, target 2027-01). Whether runner/wrapper should be one binary is likewise on hold because it is a single-binary premise; with a tarball, both are in one archive and the practical issue is resolved. Cross-building is resolved with pnpm’s `supportedArchitectures` (measured that linux-x64 can be generated from a darwin host).
+- Origin: my-idea-brief (scratch note “distribution of wrapper/runner”).

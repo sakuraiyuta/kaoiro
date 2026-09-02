@@ -29,11 +29,13 @@ defmodule KaoiroServerWeb.WrapperChannel do
   alias KaoiroServer.IngressOrder
   alias KaoiroServer.PersonaAssets
   alias KaoiroServer.PlannedDisconnects
+  alias KaoiroServer.SessionLifecycleEvents
   alias KaoiroServer.SessionPointers
   alias KaoiroServer.SessionResets
   alias KaoiroServer.SessionStarts
   alias KaoiroServer.TaskStates
   alias KaoiroServer.TokenDenylist
+  alias KaoiroServer.WrapperBuildInfos
   alias KaoiroServerWeb.AgentId
   alias KaoiroServerWeb.PeerConnectivity
   alias KaoiroServerWeb.SynthEnvelope
@@ -90,6 +92,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # before its individual handler runs. A new handler cannot opt out of the
   # receiver rule by simply omitting a local warning call.
   @wrapper_event_policy %{
+    "wrapper_build_info" => :versioned,
     "delivery_ack" => :versioned,
     "delivery_status_request" => :versioned,
     "directory_request" => :versioned,
@@ -97,6 +100,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
     "history_replay_complete" => :versioned,
     "replay_ia" => :versioned,
     "session_reset_request" => :versioned,
+    "session_lifecycle" => :versioned,
     "envelope" => :envelope_frame
   }
 
@@ -251,7 +255,35 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
       push_persona_sync(socket, agent_id)
       broadcast_delivery_status(agent_id)
-      _ = PeerConnectivity.confirm_connection(agent_id, transition_id)
+
+      # ADR-0055 phase-33 Stage B (director裁定 2026-08-31): a reset-driven
+      # rejoin (reset_result matched/legacy_absent) is recorded ONLY as
+      # session_reset_completed, never also as reconnected — the same
+      # `PeerConnectivity.confirm_connection` call underneath both would
+      # otherwise double-count one physical rejoin as two timeline entries.
+      if reset_result in [:matched, :legacy_absent] do
+        _ = PeerConnectivity.confirm_connection(agent_id, transition_id)
+
+        SessionLifecycleEvents.append(
+          agent_id,
+          "session_reset_completed",
+          nil,
+          DateTime.utc_now() |> DateTime.to_iso8601()
+        )
+      else
+        case PeerConnectivity.confirm_connection(agent_id, transition_id) do
+          :reconnected ->
+            SessionLifecycleEvents.append(
+              agent_id,
+              "reconnected",
+              nil,
+              DateTime.utc_now() |> DateTime.to_iso8601()
+            )
+
+          _ ->
+            :ok
+        end
+      end
 
       :ok
     end
@@ -457,7 +489,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
     self_id = socket.assigns.agent_id
     activities = AgentActivity.snapshot()
     peer_index = ConversationStates.peer_index()
-    deliveries = DeliveryStates.all()
+    {deliveries, _incomplete?} = DeliveryStates.wire_projection()
     states = AgentStates.snapshot()
 
     live =
@@ -513,6 +545,56 @@ defmodule KaoiroServerWeb.WrapperChannel do
   end
 
   defp handle_wrapper_in("delivery_ack", _payload, socket) do
+    {:reply, :ok, socket}
+  end
+
+  defp handle_wrapper_in("wrapper_build_info", payload, socket) do
+    case WrapperBuildInfos.canonical_info(payload) do
+      {:ok, info} ->
+        case WrapperBuildInfos.put(socket.assigns.agent_id, info, self()) do
+          :ok ->
+            KaoiroServerWeb.Endpoint.broadcast(
+              "agents:lobby",
+              "wrapper_build_info",
+              Map.put(info, "agent_id", socket.assigns.agent_id)
+            )
+
+          {:error, _reason} ->
+            :ok
+        end
+
+      {:error, _reason} ->
+        :ok
+    end
+
+    {:reply, :ok, socket}
+  end
+
+  # ADR-0055 phase-33 Stage B: recording only, no reply payload and no
+  # peer notification (matching delivery_ack's fire-and-forget shape —
+  # the wrapper never attaches a receiver). A malformed/missing `kind` or
+  # `at` falls through to the no-op clause below rather than crashing the
+  # channel. This clause only checks the wire SHAPE (both fields present
+  # and binary) — the protocol.md value vocabulary (closed kind/trigger
+  # sets, ISO-8601 `at`) is enforced once, centrally, by
+  # `SessionLifecycleEvents.append/5` (ふじ Stage B round 1 must-fix B3).
+  #
+  # `trigger` is passed through RAW, not sanitized here (ふじ Stage B
+  # round 2 must-fix B3-残り, 2026-08-31): `Map.get/2` already collapses
+  # both "key absent" and an explicit JSON `null` to `nil`, which
+  # `append/5` already treats as valid (no trigger). A wire value of the
+  # WRONG type (e.g. a JSON number) must reach `append/5` unchanged and be
+  # rejected as a whole event there — sanitizing it to `nil` here first
+  # would store it as a legitimate-looking "no trigger" event instead of
+  # dropping it.
+  defp handle_wrapper_in("session_lifecycle", %{"kind" => kind, "at" => at} = payload, socket)
+       when is_binary(kind) and is_binary(at) do
+    trigger = Map.get(payload, "trigger")
+    SessionLifecycleEvents.append(socket.assigns.agent_id, kind, trigger, at)
+    {:reply, :ok, socket}
+  end
+
+  defp handle_wrapper_in("session_lifecycle", _payload, socket) do
     {:reply, :ok, socket}
   end
 
@@ -653,6 +735,14 @@ defmodule KaoiroServerWeb.WrapperChannel do
         "agents:lobby",
         "session_reset_started",
         started_reset_payload(agent_id, mode, request_id, prev_sid, reason)
+      )
+
+      # ADR-0055 phase-33 Stage B.
+      SessionLifecycleEvents.append(
+        agent_id,
+        "session_reset_started",
+        nil,
+        DateTime.utc_now() |> DateTime.to_iso8601()
       )
 
       KaoiroServerWeb.Endpoint.broadcast(
@@ -1412,6 +1502,14 @@ defmodule KaoiroServerWeb.WrapperChannel do
     # applies it while this channel still owns the entry, so a stale
     # terminate after a reconnect cannot clobber the new state.
     ts = DateTime.utc_now() |> DateTime.to_iso8601()
+    build_info_clear = WrapperBuildInfos.delete(agent_id, self())
+
+    if match?({:ok, _}, build_info_clear) do
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "wrapper_build_info", %{
+        "agent_id" => agent_id,
+        "cleared" => true
+      })
+    end
 
     # ADR-0051 D2: a replay abandoned mid-way (the wrapper dropped between
     # `history_reset` and the completion boundary) rolls back to
@@ -1446,10 +1544,18 @@ defmodule KaoiroServerWeb.WrapperChannel do
         # got stale tasks it would never be told to drop, having already
         # missed the one broadcast for this disconnect.
         TaskStates.discard_for_agent(agent_id)
+
         KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
         # Only on an adopted disconnect: a stale terminate that lost the
         # entry to a reconnect must not tell peers the agent is gone.
-        _ = PeerConnectivity.disconnect(agent_id, ts)
+        # ADR-0055 phase-33 Stage B: merge server-known disconnect into the
+        # same timeline as wrapper-observed compact/resume events. `:planned`
+        # means `reconnecting` was the peer-facing notice (a reconnect is
+        # expected); `:unexpected` means the terminal `disconnected` was.
+        case PeerConnectivity.disconnect(agent_id, ts) do
+          :planned -> SessionLifecycleEvents.append(agent_id, "reconnecting", nil, ts)
+          :unexpected -> SessionLifecycleEvents.append(agent_id, "disconnected", nil, ts)
+        end
 
       :noop ->
         :ok
@@ -1844,33 +1950,52 @@ defmodule KaoiroServerWeb.WrapperChannel do
             # Keep this distinct from peer_reconnecting so the sender gets a
             # terminal tool rejection rather than waiting for a notice that
             # will deliberately never be emitted for this attempt.
+            Logger.warning(
+              "planned reconnecting target cap hit for #{to}: " <>
+                "rejecting preflight bounce; " <>
+                "max_targets=#{PlannedDisconnects.max_unreachable_notices()}"
+            )
+
             {:error, :peer_reconnecting_capacity}
 
           :noop ->
-            case ConversationStates.record_message(
-                   cid,
-                   from,
-                   to,
-                   body,
-                   turn_number,
-                   done?,
-                   new_conversation?
-                 ) do
-              # Within limits. `:both_done` means every participating agent
-              # has now signalled done; the tracker has already closed the
-              # entry into a tombstone atomically (issue #177; spec MUST: 両
-              # owner-side done で対話完了). No extra close needed.
-              ok when ok in [:ok, :both_done] ->
-                {:ok, {:accept, to, nil}}
+            # issue #257: `known?` alone does not mean reachable -- an
+            # unexpectedly disconnected target (no active planned intent,
+            # so track_bounce above returned :noop) would otherwise reach
+            # record_message and get accepted, but the disconnect event
+            # that could ever trigger claim_unreachable_targets already
+            # fired (or never will while it stays down), so no notice
+            # follows and the send silently drops. Reject here, before the
+            # message touches ConversationStates/DeliveryStates, so the
+            # sender's tool result is the only signal it needs.
+            if not AgentStates.connected?(to) do
+              {:error, :disconnected}
+            else
+              case ConversationStates.record_message(
+                     cid,
+                     from,
+                     to,
+                     body,
+                     turn_number,
+                     done?,
+                     new_conversation?
+                   ) do
+                # Within limits. `:both_done` means every participating agent
+                # has now signalled done; the tracker has already closed the
+                # entry into a tombstone atomically (issue #177; spec MUST: 両
+                # owner-side done で対話完了). No extra close needed.
+                ok when ok in [:ok, :both_done] ->
+                  {:ok, {:accept, to, nil}}
 
-              {:exceeded, reason} ->
-                {:ok, {:accept, to, {cid, from, to, reason}}}
+                {:exceeded, reason} ->
+                  {:ok, {:accept, to, {cid, from, to, reason}}}
 
-              # Cross-conversation pollution attempt, global cap reached,
-              # or an explicitly-named conversation_id with no entry at all
-              # (issue #262): reject at the routing boundary.
-              {:error, reason} ->
-                {:error, reason}
+                # Cross-conversation pollution attempt, global cap reached,
+                # or an explicitly-named conversation_id with no entry at all
+                # (issue #262): reject at the routing boundary.
+                {:error, reason} ->
+                  {:error, reason}
+              end
             end
         end
     end

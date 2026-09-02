@@ -34,7 +34,22 @@ FROM docker.io/node:22-slim AS dashboard
 
 WORKDIR /app/dashboard
 
+# The same build identity args are used by the dashboard's Vite build and by
+# the server release below. Keeping the values at the image boundary prevents
+# the client from silently displaying a different artifact identity.
+ARG KAOIRO_BUILD_REVISION=unknown
+ARG KAOIRO_BUILD_DIRTY=false
+ARG KAOIRO_BUILD_VERSION=unknown
+ARG KAOIRO_BUILD_CHANNEL=dev
+ENV KAOIRO_BUILD_REVISION=${KAOIRO_BUILD_REVISION}
+ENV KAOIRO_BUILD_DIRTY=${KAOIRO_BUILD_DIRTY}
+ENV KAOIRO_BUILD_VERSION=${KAOIRO_BUILD_VERSION}
+ENV KAOIRO_BUILD_CHANNEL=${KAOIRO_BUILD_CHANNEL}
+
 RUN corepack enable
+
+COPY VERSION /app/VERSION
+COPY scripts/build-identity.mjs /app/scripts/build-identity.mjs
 
 # pnpm-workspace.yaml carries the build-script approval (esbuild), so it
 # has to be in the deps layer alongside the manifest and lockfile.
@@ -122,8 +137,9 @@ RUN chown nobody /app
 # Build identity (issue #228, round 2 MF-1/MF-2 — ふじ 差し戻し), distinct
 # from ADR-0015's wire protocol version (message-shape compatibility,
 # stamped "0" per-message): the full 40-char git SHA the image was built
-# from ("unknown" when the build ran outside a git checkout) and whether
-# that checkout was dirty. The compose/CI caller is responsible for
+# from ("unknown" when the build ran outside a git checkout), whether that
+# checkout was dirty, the project CalVer, and its release/dev channel. The
+# compose/CI caller is responsible for
 # actually exporting both before `docker compose build`, see
 # docs/specs/deployment.md 4.3 (uses scripts/build-identity.mjs, the SAME
 # computation runner/scripts/generate-build-info.mjs uses, so the two
@@ -146,7 +162,10 @@ RUN chown nobody /app
 # reads this file, never System.get_env — see its own moduledoc.
 ARG KAOIRO_BUILD_REVISION=unknown
 ARG KAOIRO_BUILD_DIRTY=false
-RUN printf '{"revision":"%s","dirty":%s}\n' \
+ARG KAOIRO_BUILD_VERSION=unknown
+ARG KAOIRO_BUILD_CHANNEL=dev
+RUN printf '{"version":"%s","channel":"%s","revision":"%s","dirty":%s}\n' \
+      "$KAOIRO_BUILD_VERSION" "$KAOIRO_BUILD_CHANNEL" \
       "$KAOIRO_BUILD_REVISION" "$KAOIRO_BUILD_DIRTY" \
       > /app/build-info.json \
     && chown nobody:root /app/build-info.json
@@ -165,7 +184,7 @@ LABEL com.kaoiro.build-dirty=${KAOIRO_BUILD_DIRTY}
 # without it the volume would land as root:root and the runtime user
 # would fail to open the DETS file. See server/docker-compose.yaml
 # `volumes:` and KAOIRO_*_PATH in config/runtime.exs.
-RUN mkdir /var/lib/kaoiro && chown nobody /var/lib/kaoiro
+RUN mkdir /var/lib/kaoiro && chown nobody /var/lib/kaoiro && chmod 700 /var/lib/kaoiro
 
 # set runner ENV
 ENV MIX_ENV="prod"

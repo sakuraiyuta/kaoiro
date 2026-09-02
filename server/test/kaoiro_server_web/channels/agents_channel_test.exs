@@ -7,12 +7,17 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
   alias KaoiroServer.AgentDirectory
   alias KaoiroServer.AgentStates
   alias KaoiroServer.ClearWatermarks
+  alias KaoiroServer.ConversationStates
+  alias KaoiroServer.DeliveryStates
   alias KaoiroServer.HostRegistry
   alias KaoiroServer.PlannedDisconnects
+  alias KaoiroServer.SessionLifecycleEvents
   alias KaoiroServer.SessionPointers
   alias KaoiroServer.TaskStates
   alias KaoiroServer.TokenDenylist
+  alias KaoiroServer.TransportLimits
   alias KaoiroServerWeb.AgentsChannel
+  alias KaoiroServerWeb.PeerConnectivity
 
   defp put_agent(agent_id) do
     :ok =
@@ -30,6 +35,24 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
   # server/priv/persona-packs/ (ADR-0029). Custom-name test overrides
   # this via `apply_custom_name` on the spawn path.
   @ao %{"id" => "ao", "name" => "あお", "sprite_set" => "ao"}
+
+  # issue #266: `assert_reply` for a SUCCESSFUL `delete_agent` (not an
+  # early-rejected one — `not_disconnected`/`forbidden`/`unknown_agent`
+  # return before any of this) waits on a reply that only follows FOUR
+  # independent, directly-executed fsync-gated DETS writes (TokenDenylist
+  # + ClearWatermarks + SessionStarts + DeliveryStates, each `GenServer.call`
+  # + `:dets.sync/1` before its own reply -- see `purge_agent_records` in
+  # agents_channel.ex). Measured directly (instrumented timing, reverted
+  # before commit): under a 2-core CPU restriction (approximating a shared
+  # CI runner) this chain alone took 30-40ms, no other single test failure
+  # observed in 17 repeated runs at the exact CI-captured seed/max_cases.
+  # ExUnit's default `assert_receive_timeout` (100ms, unconfigured in this
+  # project) leaves little headroom against that baseline once a shared
+  # runner's real disk I/O degrades further -- this is the OSS-release-wave
+  # flaky capture from issue #266 (GitHub Actions run 33306440623, seed
+  # 225358). Not a race to fix -- delete_agent's real, measured cost against
+  # a timeout that assumed it would be fast.
+  @purge_reply_timeout 500
 
   defp register_host(host_id, opts \\ []) do
     :ok =
@@ -65,6 +88,11 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       |> subscribe_and_join(KaoiroServerWeb.AgentsChannel, "agents:lobby")
 
     socket
+  end
+
+  defp encoded_frame_bytes(message) do
+    {:socket_push, :text, encoded} = Phoenix.Socket.V2.JSONSerializer.encode!(message)
+    IO.iodata_length(encoded)
   end
 
   defp client_assigns(role) do
@@ -104,6 +132,141 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
     assert_push "snapshot", %{"agents" => agents}
     assert agents[agent_id] == envelope
+  end
+
+  test "wire projection の省略は join snapshot で snapshot_incomplete として観測できる" do
+    owner = self()
+
+    agent_ids =
+      for n <- 1..201 do
+        "test.snapshot-incomplete-#{String.pad_leading(Integer.to_string(n), 3, "0")}"
+      end
+
+    on_exit(fn ->
+      Enum.each(agent_ids, fn agent_id ->
+        case AgentStates.disconnect(agent_id, owner, "2026-08-28T00:00:00Z") do
+          {:ok, _} -> AgentStates.delete(agent_id)
+          :noop -> :ok
+        end
+      end)
+    end)
+
+    for agent_id <- agent_ids do
+      :ok =
+        AgentStates.put(
+          %{
+            "version" => "0",
+            "agent_id" => agent_id,
+            "ts" => "2026-08-28T00:00:00Z",
+            "type" => "state_change",
+            "state" => "waiting_input"
+          },
+          owner: owner
+        )
+    end
+
+    _socket = join_as(:operator)
+
+    assert_push "snapshot", %{"agents" => agents, "snapshot_incomplete" => true}
+    assert map_size(agents) == 200
+  end
+
+  test "join の3 snapshot frame は各 store を上限まで満たしても production serializer の bound 内に収まる" do
+    owner = self()
+
+    agent_ids =
+      for n <- 1..TransportLimits.wire_projection_agents() do
+        "test.snapshot-frame-#{String.pad_leading(Integer.to_string(n), 3, "0")}"
+      end
+
+    task_agent_id = hd(agent_ids)
+
+    on_exit(fn ->
+      Enum.each(agent_ids, fn agent_id ->
+        TaskStates.discard_for_agent(agent_id)
+        DeliveryStates.delete(agent_id)
+
+        case AgentStates.disconnect(agent_id, owner, "2026-08-28T00:00:00Z") do
+          {:ok, _} -> AgentStates.delete(agent_id)
+          :noop -> :ok
+        end
+      end)
+    end)
+
+    for agent_id <- agent_ids do
+      assert :ok =
+               AgentStates.put(
+                 %{
+                   "version" => "0",
+                   "agent_id" => agent_id,
+                   "ts" => "2026-08-28T00:00:00Z",
+                   "type" => "state_change",
+                   "state" => "waiting_input",
+                   "payload" => %{"text" => String.duplicate("a", 4_000)}
+                 },
+                 owner: owner
+               )
+
+      assert %{issued_seq: 0} =
+               DeliveryStates.bind(agent_id, "snapshot-bound-generation-#{agent_id}")
+    end
+
+    task_base = %{
+      "version" => "0",
+      "agent_id" => task_agent_id,
+      "ts" => "2026-08-28T00:00:00Z",
+      "type" => "task",
+      "state" => "idle",
+      "payload" => %{
+        "kind" => "started",
+        "agent_id" => task_agent_id,
+        "task_id" => "near-frame-bound",
+        "task_type" => "local_agent",
+        "status" => "running",
+        "summary" => ""
+      }
+    }
+
+    task_target_bytes = TaskStates.snapshot_byte_budget() - 4_096
+
+    task =
+      put_in(
+        task_base,
+        ["payload", "summary"],
+        String.duplicate("t", task_target_bytes - byte_size(Jason.encode!(task_base)))
+      )
+
+    assert :ok = TaskStates.put(task)
+
+    _socket = join_as(:operator)
+
+    for event <- ~w(snapshot task_snapshot delivery_snapshot) do
+      assert_receive %Phoenix.Socket.Message{event: ^event} = message
+      assert encoded_frame_bytes(message) <= TransportLimits.max_frame_bytes()
+    end
+  end
+
+  test "delivery snapshot の省略は incomplete marker で観測できる" do
+    agent_ids =
+      for n <- 1..(TransportLimits.wire_projection_agents() + 1) do
+        "test.delivery-snapshot-incomplete-#{String.pad_leading(Integer.to_string(n), 3, "0")}"
+      end
+
+    on_exit(fn -> Enum.each(agent_ids, &DeliveryStates.delete/1) end)
+
+    for agent_id <- agent_ids do
+      assert %{issued_seq: 0} =
+               DeliveryStates.bind(agent_id, "delivery-snapshot-generation-#{agent_id}")
+    end
+
+    _socket = join_as(:operator)
+
+    assert_push "delivery_snapshot", %{
+      "deliveries" => deliveries,
+      "snapshot_incomplete" => true
+    }
+
+    assert map_size(deliveries) == TransportLimits.wire_projection_agents()
   end
 
   test "delivery_status の live 診断は operator にだけ届く" do
@@ -819,7 +982,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "delete_agent", %{"agent_id" => agent_id})
 
-      assert_reply ref, :ok
+      assert_reply ref, :ok, %{}, @purge_reply_timeout
       assert_broadcast "agent_deleted", %{"agent_id" => ^agent_id}
       refute AgentStates.known?(agent_id)
       assert AgentDirectory.get(agent_id) == nil
@@ -855,7 +1018,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "delete_agent", %{"agent_id" => agent_id})
 
-      assert_reply ref, :ok
+      assert_reply ref, :ok, %{}, @purge_reply_timeout
       assert_broadcast "agent_deleted", %{"agent_id" => ^agent_id}
       assert AgentDirectory.get(agent_id) == nil
       assert SessionPointers.get(agent_id) == nil
@@ -873,7 +1036,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       socket = join_as(:operator)
 
       ref = push(socket, "delete_agent", %{"agent_id" => agent_id})
-      assert_reply ref, :ok
+      assert_reply ref, :ok, %{}, @purge_reply_timeout
 
       assert_received %Phoenix.Socket.Broadcast{
         topic: "wrapper:" <> ^peer_id,
@@ -887,6 +1050,197 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       assert_broadcast "agent_deleted", %{"agent_id" => ^agent_id}
       refute PlannedDisconnects.active?(agent_id)
+    end
+
+    test "delete_agent は planned bounce と ordinary conversation を各一度 terminal 通知する" do
+      agent_id = "test.del-planned-union"
+      bounce_peer_id = "test.del-planned-union-bounce"
+      ordinary_peer_id = "test.del-planned-union-ordinary"
+      bounce_cid = "cnv-del-planned-union-bounce"
+      ordinary_cid = "cnv-del-planned-union-ordinary"
+
+      assert :ok =
+               ConversationStates.record_message(
+                 bounce_cid,
+                 agent_id,
+                 bounce_peer_id,
+                 "bounce",
+                 1,
+                 false,
+                 true
+               )
+
+      assert :ok =
+               ConversationStates.record_message(
+                 ordinary_cid,
+                 agent_id,
+                 ordinary_peer_id,
+                 "ordinary",
+                 1,
+                 false,
+                 true
+               )
+
+      assert :ok = PlannedDisconnects.begin(agent_id, "transition-delete-union", :restart)
+
+      assert {:tracked, _} =
+               PlannedDisconnects.track_bounce(agent_id, bounce_cid, bounce_peer_id)
+
+      @endpoint.subscribe("wrapper:" <> bounce_peer_id)
+      @endpoint.subscribe("wrapper:" <> ordinary_peer_id)
+      assert :disconnected = PeerConnectivity.delete(agent_id)
+
+      for {peer_id, cid} <-
+            [{bounce_peer_id, bounce_cid}, {ordinary_peer_id, ordinary_cid}] do
+        assert_received %Phoenix.Socket.Broadcast{
+          topic: "wrapper:" <> ^peer_id,
+          payload: %{
+            "payload" => %{
+              "conversation_id" => ^cid,
+              "error" => %{"code" => "disconnected"}
+            }
+          }
+        }
+
+        refute_received %Phoenix.Socket.Broadcast{
+          topic: "wrapper:" <> ^peer_id,
+          payload: %{"payload" => %{"conversation_id" => ^cid}}
+        }
+      end
+
+      assert {[], 0} = ConversationStates.claim_unreachable_targets(agent_id, 50)
+    end
+
+    test "delete_agent の tracked 50 件は ordinary terminal claim の枠を残さない" do
+      agent_id = "test.del-planned-cap-full"
+      ordinary_peer_id = "test.del-planned-cap-full-ordinary"
+      ordinary_cid = "cnv-del-planned-cap-full-ordinary"
+
+      assert :ok =
+               ConversationStates.record_message(
+                 ordinary_cid,
+                 agent_id,
+                 ordinary_peer_id,
+                 "ordinary",
+                 1,
+                 false,
+                 true
+               )
+
+      assert :ok = PlannedDisconnects.begin(agent_id, "transition-delete-cap-full", :restart)
+
+      for n <- 1..50 do
+        assert {:tracked, _} =
+                 PlannedDisconnects.track_bounce(
+                   agent_id,
+                   "cnv-del-planned-cap-full-bounce-#{n}",
+                   "test.del-planned-cap-full-bounce-#{n}"
+                 )
+      end
+
+      @endpoint.subscribe("wrapper:" <> ordinary_peer_id)
+      assert :disconnected = PeerConnectivity.delete(agent_id)
+
+      refute_received %Phoenix.Socket.Broadcast{
+        topic: "wrapper:" <> ^ordinary_peer_id,
+        payload: %{"payload" => %{"conversation_id" => ^ordinary_cid}}
+      }
+
+      assert {[{^ordinary_cid, [^ordinary_peer_id]}], 0} =
+               ConversationStates.claim_unreachable_targets(agent_id, 50)
+    end
+
+    test "delete_agent の tracked n 件は ordinary 50-n 件だけ claim する" do
+      agent_id = "test.del-planned-cap-remainder"
+
+      assert :ok = PlannedDisconnects.begin(agent_id, "transition-delete-cap-remainder", :restart)
+
+      for n <- 1..2 do
+        assert {:tracked, _} =
+                 PlannedDisconnects.track_bounce(
+                   agent_id,
+                   "cnv-del-planned-cap-remainder-bounce-#{n}",
+                   "test.del-planned-cap-remainder-bounce-#{n}"
+                 )
+      end
+
+      for n <- 1..50 do
+        assert :ok =
+                 ConversationStates.record_message(
+                   "cnv-del-planned-cap-remainder-ordinary-#{n}",
+                   agent_id,
+                   "test.del-planned-cap-remainder-ordinary-#{n}",
+                   "ordinary",
+                   1,
+                   false,
+                   true
+                 )
+      end
+
+      assert :disconnected = PeerConnectivity.delete(agent_id)
+
+      assert {remaining, 0} = ConversationStates.claim_unreachable_targets(agent_id, 50)
+      assert length(remaining) == 2
+    end
+
+    test "delete_agent の残 cap は peer 数でなく tracked conversation 数から引く" do
+      agent_id = "test.del-planned-cap-three-party"
+      first_peer_id = "test.del-planned-cap-three-party-first"
+      second_peer_id = "test.del-planned-cap-three-party-second"
+      tracked_cid = "cnv-del-planned-cap-three-party-tracked"
+
+      assert :ok =
+               PlannedDisconnects.begin(agent_id, "transition-delete-cap-three-party", :restart)
+
+      for peer_id <- [first_peer_id, second_peer_id] do
+        assert {:tracked, _} = PlannedDisconnects.track_bounce(agent_id, tracked_cid, peer_id)
+      end
+
+      for n <- 1..50 do
+        assert :ok =
+                 ConversationStates.record_message(
+                   "cnv-del-planned-cap-three-party-ordinary-#{n}",
+                   agent_id,
+                   "test.del-planned-cap-three-party-ordinary-#{n}",
+                   "ordinary",
+                   1,
+                   false,
+                   true
+                 )
+      end
+
+      assert :disconnected = PeerConnectivity.delete(agent_id)
+
+      assert {remaining, 0} = ConversationStates.claim_unreachable_targets(agent_id, 50)
+      assert length(remaining) == 1
+    end
+
+    test "delete_agent は intent 無しなら terminal notice を出さない" do
+      agent_id = "test.del-without-intent"
+      peer_id = "test.del-without-intent-peer"
+      cid = "cnv-del-without-intent"
+
+      assert :ok =
+               ConversationStates.record_message(
+                 cid,
+                 agent_id,
+                 peer_id,
+                 "ordinary",
+                 1,
+                 false,
+                 true
+               )
+
+      @endpoint.subscribe("wrapper:" <> peer_id)
+      assert :noop = PeerConnectivity.delete(agent_id)
+
+      refute_received %Phoenix.Socket.Broadcast{
+        topic: "wrapper:" <> ^peer_id,
+        payload: %{"payload" => %{"conversation_id" => ^cid}}
+      }
+
+      assert {[{^cid, [^peer_id]}], 0} =
+               ConversationStates.claim_unreachable_targets(agent_id, 50)
     end
 
     test "稼働中 agent の削除は not_disconnected で拒否" do
@@ -966,7 +1320,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_push "snapshot", %{"agents" => _}
 
       ref = push(socket, "delete_agent", %{"agent_id" => agent_id})
-      assert_reply ref, :ok
+      assert_reply ref, :ok, %{}, @purge_reply_timeout
 
       # order pin: revoke が store purge より先に走っているので、
       # broadcast + revoked? が :ok reply の時点で確定している。
@@ -997,7 +1351,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_push "snapshot", %{"agents" => _}
 
       ref = push(socket, "delete_agent", %{"agent_id" => agent_id})
-      assert_reply ref, :ok
+      assert_reply ref, :ok, %{}, @purge_reply_timeout
 
       # 削除直後、pre-revoke に mint された token を用いて再 join を試行
       # → denylist gate で unauthorized。
@@ -1329,6 +1683,23 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
                kind: "user",
                display_name: "あお(user)"
              }
+    end
+
+    # Every other test in this describe block sends the legacy `"name"`
+    # key (issue #209 D23 compatibility window) — the dashboard's own
+    # `renameUser()` (issue #207) sends the canonical `"display_name"`
+    # key instead, and nothing here previously exercised that leg of
+    # extract_name_field/1.
+    test "canonical display_name key でも rename できる (issue #207 のdashboard producer が送るキー)" do
+      user = KaoiroServer.Users.get_or_create({:oauth, "github", "rename-canonical"}, "user", "R")
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      ref =
+        push(socket, "rename_user", %{"user_id" => user.id, "display_name" => "あお(canonical)"})
+
+      assert_reply ref, :ok, %{id: id, kind: "user", display_name: "あお(canonical)"}
+      assert id == user.id
     end
 
     test "viewer の rename_user は forbidden" do
@@ -1762,7 +2133,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_push "envelope", %{"type" => "inter_agent_message"}
     end
 
-    test "join 時の snapshot に admin でも tasks キーが入る" do
+    test "join 時の task_snapshot に admin でも tasks キーが入る" do
       # snapshot の tasks は handle_out ではなく join 経路の別ゲート
       # (ふじ should 1)。集約したうちの 1 箇所だけ直接比較へ戻る回帰は
       # 上の 3 本では拾えない。
@@ -1771,7 +2142,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       _socket = join_as(:admin)
 
-      assert_push "snapshot", %{"tasks" => tasks}
+      assert_push "task_snapshot", %{"tasks" => tasks}
       assert %{"test.task-snap-admin" => %{"t1" => stored}} = tasks
       assert stored["payload"]["task_id"] == "t1"
     end
@@ -2221,27 +2592,38 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert pushed["payload"]["summary"] == "content-bearing progress text"
     end
 
-    test "snapshot: operator には tasks キーが入る (ADR-0048 F3)" do
+    test "task_snapshot: operator には tasks キーが入る (ADR-0048 F3)" do
       on_exit(fn -> TaskStates.discard_for_agent("test.task-snap-op") end)
       TaskStates.put(task_envelope("test.task-snap-op", "t1"))
 
       _socket = join_as(:operator)
 
-      assert_push "snapshot", %{"tasks" => tasks}
+      assert_push "task_snapshot", %{"tasks" => tasks}
       # M1 fix-round: TaskStates is now keyed agent_id => %{task_id =>
       # envelope}.
       assert %{"test.task-snap-op" => %{"t1" => stored}} = tasks
       assert stored["payload"]["task_id"] == "t1"
     end
 
-    test "snapshot: viewer には tasks キーが空で届く (operator 限定、こはく決定 2026-08-09)" do
+    test "task_snapshot: viewer には tasks キーが空で届く (operator 限定、こはく決定 2026-08-09)" do
       on_exit(fn -> TaskStates.discard_for_agent("test.task-snap-viewer") end)
       TaskStates.put(task_envelope("test.task-snap-viewer", "t1"))
 
       _socket = join_as(:viewer)
 
-      assert_push "snapshot", %{"tasks" => tasks}
+      assert_push "task_snapshot", %{"tasks" => tasks}
       assert tasks == %{}
+    end
+
+    test "delivery_snapshot: viewer には deliveries キーが空で届く" do
+      agent_id = "test.delivery-snap-viewer"
+      on_exit(fn -> DeliveryStates.delete(agent_id) end)
+      assert %{issued_seq: 0} = DeliveryStates.bind(agent_id, "delivery-snap-viewer-generation")
+
+      _socket = join_as(:viewer)
+
+      assert_push "delivery_snapshot", %{"deliveries" => deliveries}
+      assert deliveries == %{}
     end
 
     # M3 round2 must-fix (2026-08-09, ふじ round 2): AgentStates と
@@ -2297,7 +2679,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       socket = join_as(:operator)
 
-      assert_push "snapshot", %{"agents" => agents, "tasks" => tasks}
+      assert_push "snapshot", %{"agents" => agents}
+      assert_push "task_snapshot", %{"tasks" => tasks}
       assert agents[agent_id]["state"] == "disconnected"
       # 交差の実物: disconnected な agent の task がまだ snapshot に
       # 残っている — これが収束を broadcast 側に依存させている理由。
@@ -4407,6 +4790,25 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
              }
     end
 
+    test "join 時 operator は接続中 wrapper の build identity snapshot を受ける" do
+      agent_id = "lab-pc-wrapper-build"
+
+      info = %{
+        "build_revision" => "0123456789012345678901234567890123456789",
+        "build_dirty" => false,
+        "build_version" => "2026.9.0",
+        "build_channel" => "dev"
+      }
+
+      assert :ok = KaoiroServer.WrapperBuildInfos.put(agent_id, info, self())
+      on_exit(fn -> KaoiroServer.WrapperBuildInfos.delete(agent_id, self()) end)
+
+      _operator = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+      assert_push "wrapper_build_info", %{"builds" => builds}
+      assert builds[agent_id] == info
+    end
+
     # issue #219 D21/D27 acceptance pin: pack が消えた (persona_id が
     # PersonaAssets で解決不能な) entry は canonical を非開示 ("typed
     # unresolved" — `persona` は `{"id" => ...}` のみ、`name`/`sprite_set`
@@ -4434,21 +4836,33 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       refute_push "directory", %{}
     end
 
-    test "runner_sessions / spawn_result / hosts の live broadcast は operator に届く" do
+    test "runner_sessions / spawn_result / hosts / wrapper_build_info の live broadcast は operator に届く" do
       _operator = join_as(:operator)
       assert_push "snapshot", %{"agents" => _}
 
-      for event <- ["runner_sessions", "spawn_result", "hosts", "catalog_result"] do
+      for event <- [
+            "runner_sessions",
+            "spawn_result",
+            "hosts",
+            "catalog_result",
+            "wrapper_build_info"
+          ] do
         KaoiroServerWeb.Endpoint.broadcast("agents:lobby", event, %{"host_id" => "h"})
         assert_push ^event, %{"host_id" => "h"}
       end
     end
 
-    test "runner_sessions / spawn_result / hosts は viewer には届かない (fail-closed)" do
+    test "runner_sessions / spawn_result / hosts / wrapper_build_info は viewer には届かない (fail-closed)" do
       _viewer = join_as(:viewer)
       assert_push "snapshot", %{"agents" => _}
 
-      for event <- ["runner_sessions", "spawn_result", "hosts", "catalog_result"] do
+      for event <- [
+            "runner_sessions",
+            "spawn_result",
+            "hosts",
+            "catalog_result",
+            "wrapper_build_info"
+          ] do
         KaoiroServerWeb.Endpoint.broadcast("agents:lobby", event, %{"host_id" => "h"})
         refute_push ^event, %{}
       end
@@ -4737,6 +5151,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       assert %{transition_id: ^request_id, kind: :reset, phase: :announced} =
                PlannedDisconnects.get(agent_id)
+
+      # ADR-0055 phase-33 Stage B.
+      assert [%{kind: "session_reset_started", trigger: nil}] =
+               KaoiroServer.SessionLifecycleEvents.list_for_agent(agent_id)
     end
 
     test "envelope に session_id が無ければ reset_session payload に previous_session_id を載せない" do
@@ -5423,6 +5841,293 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
   end
 
+  describe "list_conversations 経路 (issue #276, require_operator ゲート)" do
+    test "viewer は forbidden" do
+      socket = join_as(:viewer)
+
+      ref = push(socket, "list_conversations", %{})
+
+      assert_reply ref, :error, %{reason: "forbidden"}
+    end
+
+    test "operator は ConversationStates の内容を受け取る" do
+      cid = "gp.list-conv-#{System.unique_integer([:positive])}"
+
+      assert :ok =
+               ConversationStates.record_message(cid, "gp.lc-a", "gp.lc-b", "hi", 1, false, true)
+
+      socket = join_as(:operator)
+      ref = push(socket, "list_conversations", %{})
+
+      assert_reply ref, :ok, %{"conversations" => conversations}
+
+      assert %{
+               "conversation_id" => ^cid,
+               "participants" => ["gp.lc-a", "gp.lc-b"],
+               "status" => "open"
+             } = Enum.find(conversations, &(&1["conversation_id"] == cid))
+    end
+
+    test "admin も通る (require_operator は operator/admin いずれも許可)" do
+      socket = join_as(:admin)
+
+      ref = push(socket, "list_conversations", %{})
+
+      assert_reply ref, :ok, %{"conversations" => conversations}
+      assert is_list(conversations)
+    end
+  end
+
+  describe "list_users 経路 (issue #207)" do
+    test "viewer は forbidden" do
+      socket = join_as(:viewer)
+
+      ref = push(socket, "list_users", %{})
+
+      assert_reply ref, :error, %{reason: "forbidden"}
+    end
+
+    test "operator は Users.all_with_role/1 の内容を受け取る (id/kind/display_name/role)" do
+      on_exit(fn -> Application.delete_env(:kaoiro_server, :oauth_allowlist_path) end)
+
+      KaoiroServer.OAuthAllowlistFixture.put_allowlist("github:list-users-1:viewer\n")
+
+      user =
+        KaoiroServer.Users.get_or_create({:oauth, "github", "list-users-1"}, "user", "R")
+
+      socket = join_as(:operator)
+      ref = push(socket, "list_users", %{})
+
+      assert_reply ref, :ok, %{"users" => users}
+
+      entry = Enum.find(users, &(&1.id == user.id))
+      assert %{id: id, kind: "user", display_name: "R", role: :viewer} = entry
+      assert id == user.id
+
+      # code-review-assessment (issue #207): a plain map pattern match
+      # (the assertion just above) only asserts these 4 keys are
+      # PRESENT — Elixir map patterns do not reject extras, so it would
+      # still pass if the handler leaked an extra field (e.g. `source`)
+      # onto the wire. This closed-key-set check is what actually pins
+      # the boundary the handler's own comment claims to hold.
+      assert Map.keys(entry) |> Enum.sort() == [:display_name, :id, :kind, :role]
+    end
+
+    test "admin も通る (require_operator は operator/admin いずれも許可)" do
+      socket = join_as(:admin)
+
+      ref = push(socket, "list_users", %{})
+
+      assert_reply ref, :ok, %{"users" => users}
+      assert is_list(users)
+    end
+  end
+
+  describe "list_session_events 経路 (issue #200, ADR-0055, require_operator ゲート)" do
+    # `SessionLifecycleEvents.append/4` casts, so it returns before the
+    # store necessarily processed it. `:sys.get_state/1` forces a
+    # synchronous round trip through the SAME mailbox, so any append
+    # issued before it is guaranteed processed by the time this returns —
+    # a deterministic barrier instead of relying on the channel
+    # round-trip's own latency to win the race.
+    defp sync_lifecycle_store do
+      _ = :sys.get_state(KaoiroServer.SessionLifecycleEvents)
+    end
+
+    test "viewer は forbidden" do
+      socket = join_as(:viewer)
+
+      ref = push(socket, "list_session_events", %{"agent_id" => "test.lse-viewer"})
+
+      assert_reply ref, :error, %{reason: "forbidden"}
+    end
+
+    test "operator は agent の session_lifecycle timeline を newest-first で受け取る" do
+      agent_id = "test.lse-happy-#{System.unique_integer([:positive])}"
+
+      SessionLifecycleEvents.append(agent_id, "compacting", nil, "2026-08-31T00:00:01Z")
+
+      SessionLifecycleEvents.append(
+        agent_id,
+        "compact_boundary",
+        "request_compact",
+        "2026-08-31T00:00:02Z"
+      )
+
+      sync_lifecycle_store()
+
+      socket = join_as(:operator)
+      ref = push(socket, "list_session_events", %{"agent_id" => agent_id})
+
+      assert_reply ref, :ok, %{"events" => events}
+
+      assert events == [
+               %{
+                 "kind" => "compact_boundary",
+                 "trigger" => "request_compact",
+                 "at" => "2026-08-31T00:00:02Z"
+               },
+               %{"kind" => "compacting", "trigger" => nil, "at" => "2026-08-31T00:00:01Z"}
+             ]
+    end
+
+    test "admin も通る (require_operator は operator/admin いずれも許可)" do
+      socket = join_as(:admin)
+
+      ref = push(socket, "list_session_events", %{"agent_id" => "test.lse-admin"})
+
+      assert_reply ref, :ok, %{"events" => []}
+    end
+
+    test "agent_id 欠落は missing_agent_id" do
+      socket = join_as(:operator)
+
+      ref = push(socket, "list_session_events", %{})
+
+      assert_reply ref, :error, %{reason: "missing_agent_id"}
+    end
+
+    test "agent_id の charset 違反は invalid_agent_id" do
+      socket = join_as(:operator)
+
+      ref = push(socket, "list_session_events", %{"agent_id" => "bad id!"})
+
+      assert_reply ref, :error, %{reason: "invalid_agent_id"}
+    end
+
+    test "未知の agent_id は error ではなく空配列を返す (existence check 無し)" do
+      socket = join_as(:operator)
+
+      ref = push(socket, "list_session_events", %{"agent_id" => "test.lse-never-existed"})
+
+      assert_reply ref, :ok, %{"events" => []}
+    end
+
+    # delete_agent の purge_agent_records/1 は SessionLifecycleEvents を
+    # purge 対象に含まないため履歴は残り、fetch_agent_id/
+    # fetch_restorable_agent_id と違い existence check を課さないこの
+    # クエリなら削除後も問い合わせを継続できる — 事後デバッグ・監査と
+    # いう機能の狙いに直結する挙動。
+    test "削除済み agent の履歴も問い合わせ可能 (delete_agent は SessionLifecycleEvents を purge しない)" do
+      agent_id = "test.lse-deleted-#{System.unique_integer([:positive])}"
+      put_disconnected(agent_id)
+      SessionLifecycleEvents.append(agent_id, "conversation_reset", nil, "2026-08-31T00:00:01Z")
+      sync_lifecycle_store()
+
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      ref = push(socket, "delete_agent", %{"agent_id" => agent_id})
+      assert_reply ref, :ok, %{}, @purge_reply_timeout
+      assert_broadcast "agent_deleted", %{"agent_id" => ^agent_id}
+      refute AgentStates.known?(agent_id)
+      assert AgentDirectory.get(agent_id) == nil
+
+      ref2 = push(socket, "list_session_events", %{"agent_id" => agent_id})
+
+      assert_reply ref2, :ok, %{
+        "events" => [%{"kind" => "conversation_reset", "trigger" => nil, "at" => _}]
+      }
+    end
+  end
+
+  # ふじ独立レビュー round 2: 上の exact-key-set test は
+  # `Users.all_with_role/1` を経由するため、`Users`(現状ちょうど 4 key
+  # しか返さない)の CURRENT な形に依存している — `project_user_entry/1`
+  # の projection コードそのものを取り除いても、`Users` が 4 key しか
+  # 返さない限り exact-key-set assertion は依然 green のままで、
+  # projection の存在を独立に検証できていなかった。この describe は
+  # `project_user_entry/1` を `Users` を経由せず直接呼び、5 key 目
+  # (`source`)を手で与えた入力に対して projection 単独が正しく
+  # ストリップすることを、`Users` の CURRENT な形とは無関係に pin する。
+  describe "project_user_entry/1 (issue #207 のprojectionを単独で検証する)" do
+    test "id/kind/display_name/role の 4 key だけを返し、それ以外の key (例: source) は落とす" do
+      entry = %{
+        id: "u1",
+        kind: "user",
+        display_name: "R",
+        role: :viewer,
+        source: {:oauth, "github", "leaked"}
+      }
+
+      assert KaoiroServerWeb.AgentsChannel.project_user_entry(entry) == %{
+               id: "u1",
+               kind: "user",
+               display_name: "R",
+               role: :viewer
+             }
+    end
+  end
+
+  describe "close_conversation 経路 (issue #276, manual close)" do
+    test "viewer は forbidden" do
+      socket = join_as(:viewer)
+
+      ref = push(socket, "close_conversation", %{"conversation_id" => "c"})
+
+      assert_reply ref, :error, %{reason: "forbidden"}
+    end
+
+    test "operator の close は :ok を返し、両 participants へ conversation_closed 通知を broadcast する" do
+      cid = "gp.close-conv-#{System.unique_integer([:positive])}"
+      a = "gp.cc-a-#{System.unique_integer([:positive])}"
+      b = "gp.cc-b-#{System.unique_integer([:positive])}"
+      assert :ok = ConversationStates.record_message(cid, a, b, "hi", 1, false, true)
+
+      @endpoint.subscribe("wrapper:" <> a)
+      @endpoint.subscribe("wrapper:" <> b)
+
+      socket = join_as(:operator)
+      ref = push(socket, "close_conversation", %{"conversation_id" => cid})
+
+      assert_reply ref, :ok, %{}
+
+      # deliver_conversation_closed (issue #221 の GC 経路と同じ関数) が
+      # 各 participant の wrapper トピックへ synth envelope を broadcast
+      # する — kind=done / meta.done=true が wrapper 側の "server 発
+      # closed" 判定 (agent-common receiveInbound) の契約 (SynthEnvelope
+      # のモジュール doc)。
+      assert_broadcast "envelope", %{
+        "agent_id" => "server",
+        "payload" => %{"to" => ^a, "conversation_id" => ^cid, "kind" => "done"}
+      }
+
+      assert_broadcast "envelope", %{
+        "agent_id" => "server",
+        "payload" => %{"to" => ^b, "conversation_id" => ^cid, "kind" => "done"}
+      }
+
+      assert %{status: :closed, reason: :operator_closed} = ConversationStates.get(cid)
+    end
+
+    test "既に closed な会話への close は conversation_closed エラー (冪等)" do
+      cid = "gp.close-conv-twice-#{System.unique_integer([:positive])}"
+      assert :ok = ConversationStates.record_message(cid, "gp.a", "gp.b", "x", 1, true, true)
+
+      assert :both_done =
+               ConversationStates.record_message(cid, "gp.b", "gp.a", "y", 2, true, true)
+
+      socket = join_as(:operator)
+      ref = push(socket, "close_conversation", %{"conversation_id" => cid})
+
+      assert_reply ref, :error, %{reason: "conversation_closed"}
+    end
+
+    test "存在しない conversation_id への close は unknown_conversation_id" do
+      socket = join_as(:operator)
+      ref = push(socket, "close_conversation", %{"conversation_id" => "no-such-cid"})
+
+      assert_reply ref, :error, %{reason: "unknown_conversation_id"}
+    end
+
+    test "conversation_id 欠落は missing_conversation_id" do
+      socket = join_as(:operator)
+      ref = push(socket, "close_conversation", %{})
+
+      assert_reply ref, :error, %{reason: "missing_conversation_id"}
+    end
+  end
+
   # ふじ review 2026-08-05, should-fix 1: the pure-selection test above and
   # SessionPointers' own legacy-loader unit test cover the pieces
   # separately; this connects them — a REAL isolated SessionPointers
@@ -5433,7 +6138,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
   describe "migration 統合: legacy 5-tuple -> compute_launch_defaults (issue #88, should-fix 1)" do
     test "異 effort の legacy 2 agent は no preference、片方が正常 commit すると revisioned candidate が勝つ" do
       name = :"sp_migration_#{System.unique_integer([:positive])}"
-      path = Path.join(System.tmp_dir!(), "#{name}.dets")
+      path = Path.join([System.tmp_dir!(), "kaoiro_test_dets", "#{name}.dets"])
       File.rm(path)
       {:ok, _pid} = SessionPointers.start_link(name: name, path: path)
 
@@ -5799,10 +6504,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
   end
 
   describe "ADR-0015 stage 2 server -> client egress funnel (issue #270)" do
-    test "T4-1: join-time の4種は version を stamp する" do
+    test "T4-1: join-time の6種は version を stamp する" do
       _socket = join_as(:operator)
 
-      for event <- ~w(snapshot history hosts directory) do
+      for event <- ~w(snapshot task_snapshot delivery_snapshot history hosts directory) do
         assert_push ^event, %{"version" => "0"}
       end
     end
@@ -5821,12 +6526,13 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       end
     end
 
-    test "T4-3: catch-all 8種は version を stamp する" do
+    test "T4-3: catch-all 9種は version を stamp する" do
       _socket = join_as(:operator)
 
       for event <- ~w(
             runner_sessions spawn_result hosts catalog_result
             session_reset_started session_reset_completed session_reset_failed delivery_status
+            wrapper_build_info
           ) do
         KaoiroServerWeb.Endpoint.broadcast("agents:lobby", event, %{"request_id" => "t4"})
         assert_push ^event, %{"version" => "0"}
@@ -5869,14 +6575,35 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_push "envelope", %{"version" => "0", "agent_id" => "t4.envelope"}
     end
 
-    test "T4-7: policy は17種のみを許可し、未宣言 event は funnel で拒否する" do
+    test "T4-7: policy は20種のみを許可し、未宣言 event は funnel で拒否する" do
       policy = AgentsChannel.client_event_policy()
 
-      assert MapSet.size(policy) == 17
+      assert MapSet.size(policy) == 20
       refute MapSet.member?(policy, "not_declared")
 
       source = File.read!("lib/kaoiro_server_web/channels/agents_channel.ex")
       assert source =~ "is not declared in @client_event_policy"
+    end
+
+    test "join snapshot frame の event/key 対応は不足も取り違えも拒否する" do
+      frames = %{
+        "snapshot" => %{"agents" => %{}},
+        "task_snapshot" => %{"tasks" => %{}},
+        "delivery_snapshot" => %{"deliveries" => %{}}
+      }
+
+      assert :ok = AgentsChannel.validate_join_snapshot_frames(frames)
+
+      assert {:error, :snapshot_frame_key_mismatch} =
+               AgentsChannel.validate_join_snapshot_frames(
+                 Map.delete(frames, "delivery_snapshot")
+               )
+
+      assert {:error, :snapshot_frame_key_mismatch} =
+               AgentsChannel.validate_join_snapshot_frames(%{
+                 frames
+                 | "task_snapshot" => %{"deliveries" => %{}}
+               })
     end
 
     test "T4-8: raw push は push_versioned の本体の1箇所だけ" do

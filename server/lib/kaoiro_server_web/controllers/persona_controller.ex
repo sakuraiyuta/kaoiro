@@ -13,6 +13,21 @@ defmodule KaoiroServerWeb.PersonaController do
     json(conn, PersonaAssets.manifest())
   end
 
+  # Full persona pack detail (issue #232): manifest.json metadata +
+  # personality.md body, fetched on demand when the operator opens the
+  # detail modal — unlike `manifest/2` above, not polled/broadcast.
+  def detail(conn, %{"id" => id}) do
+    case PersonaAssets.get_pack_detail(id) do
+      nil ->
+        conn
+        |> put_status(:not_found)
+        |> json(%{"error" => "not_found"})
+
+      detail ->
+        json(conn, detail)
+    end
+  end
+
   # Only manifest-known files are served, so the request params never
   # touch the filesystem (no traversal surface). Only the manifest-issued
   # ?v= (current content hash) earns immutable caching — the manifest

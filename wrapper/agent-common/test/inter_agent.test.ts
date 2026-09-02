@@ -14,10 +14,13 @@ import {
   type WhoamiSnapshot,
 } from "../src/inter_agent.js";
 import type {
-  DirectoryEntry,
+  DirectoryEntry as LegacyDirectoryEntry,
   InterAgentAcceptance,
-  UserDirectoryEntry,
 } from "@kaoiro/wrapper-core";
+import type {
+  DirectoryEntry,
+  UserDirectoryEntry,
+} from "@kaoiro/protocol";
 import type {
   Envelope,
   InterAgentErrorPayload,
@@ -1213,6 +1216,25 @@ describe("classifyInterAgentError (issue #131)", () => {
     );
   });
 
+  it.each([
+    "stop_hook_prevented",
+    "hook_stopped",
+    "max_turns",
+    "budget_exhausted",
+  ])("再試行を案内できない terminal_reason %s は interrupted へ写像する", (reason) => {
+    expect(classifyInterAgentError({ reason })).toEqual({
+      code: "interrupted",
+      message: "the peer's turn was interrupted",
+    });
+  });
+
+  it("API 障害は api_error のままにする", () => {
+    expect(classifyInterAgentError({ reason: "api_error" })).toEqual({
+      code: "api_error",
+      message: "the peer reported an unspecified error",
+    });
+  });
+
   it("未知の reason は detail のキーワードで rate_limit/context_overflow を推定する", () => {
     expect(
       classifyInterAgentError({
@@ -1416,11 +1438,14 @@ describe("list_agents / whoami companion tools", () => {
         state: "thinking",
       },
     ];
+    // The former wrapper-core import remains source-compatible while the
+    // canonical directory wire type now lives in @kaoiro/protocol.
+    const legacyDirectory: LegacyDirectoryEntry[] = directory;
     const tool = new InterAgentTool({
       config: configFor("self.agent"),
       getState: () => "tool_running",
       send: () => {},
-      requestDirectory: async () => ({ agents: directory, users: [] }),
+      requestDirectory: async () => ({ agents: legacyDirectory, users: [] }),
     });
 
     const result = await tool.listAgents();
@@ -1813,6 +1838,58 @@ describe("send_to_agent の acceptance ack 連動 (ADR-0051 D3-2)", () => {
       to: "peer.agent",
       conversation_id: "cnv-planned",
       body: "retry after reconnected",
+      kind: "inform",
+    });
+
+    expect(second.isError).toBeUndefined();
+    expect((sent[0]!.payload as unknown as InterAgentMessagePayload).turn_number).toBe(1);
+    expect((sent[1]!.payload as unknown as InterAgentMessagePayload).turn_number).toBe(1);
+  });
+
+  it("disconnected (issue #257 preflight reject) は structured peer_error にし turn を rollback する", async () => {
+    const sent: Envelope[] = [];
+    let attempt = 0;
+    const tool = new InterAgentTool({
+      config: configFor("self.agent"),
+      getState: () => "tool_running",
+      send: () => {
+        throw new Error("acceptance-aware sink must be used");
+      },
+      sendInterAgent: (envelope) => {
+        sent.push(envelope);
+        attempt += 1;
+        return Promise.resolve(
+          attempt === 1
+            ? { kind: "rejected", reason: "disconnected" }
+            : { kind: "accepted", stamp: [1, 0] },
+        );
+      },
+      now: () => "2026-08-18T00:00:00Z",
+      newId: () => "cnv-unused",
+    });
+
+    const first = await tool.invoke({
+      to: "peer.agent",
+      conversation_id: "cnv-predisc",
+      body: "hi",
+      kind: "inform",
+    });
+
+    expect(first.isError).toBeUndefined();
+    expect(JSON.parse(first.content[0]!.text)).toEqual({
+      peer_error: {
+        code: "disconnected",
+        message: "the peer disconnected",
+        from: "peer.agent",
+      },
+    });
+
+    // A rejected send never advanced the turn — the retry reuses the same
+    // turn_number, same as the peer_reconnecting rollback above.
+    const second = await tool.invoke({
+      to: "peer.agent",
+      conversation_id: "cnv-predisc",
+      body: "retry after reconnect",
       kind: "inform",
     });
 

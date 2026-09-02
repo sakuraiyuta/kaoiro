@@ -91,6 +91,102 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
       assert entry.build_dirty == true
     end
 
+    test "release は provenance pair 無しでは受理しない" do
+      host_id = "lab-pc-build-version"
+      socket = join_runner(host_id)
+
+      ref =
+        push(
+          socket,
+          "register",
+          register_payload(%{
+            "build_version" => "2026.9.0",
+            "build_channel" => "release"
+          })
+        )
+
+      assert_reply ref, :error, %{reason: "invalid_build_info"}
+    end
+
+    test "release の矛盾した provenance は invalid_build_info" do
+      host_id = "lab-pc-contradictory-build"
+      socket = join_runner(host_id)
+
+      ref =
+        push(
+          socket,
+          "register",
+          register_payload(%{
+            "build_revision" => "unknown",
+            "build_dirty" => true,
+            "build_version" => "2026.9.0",
+            "build_channel" => "release"
+          })
+        )
+
+      assert_reply ref, :error, %{reason: "invalid_build_info"}
+    end
+
+    test "build_version/build_channel は revision pair と同時に hosts push へ含まれる" do
+      host_id = "lab-pc-build-identity-push"
+      @endpoint.subscribe("agents:lobby")
+      socket = join_runner(host_id)
+
+      ref =
+        push(
+          socket,
+          "register",
+          register_payload(%{
+            "build_revision" => "0123456789abcdef0123456789abcdef01234567",
+            "build_dirty" => false,
+            "build_version" => "2026.9.0",
+            "build_channel" => "dev"
+          })
+        )
+
+      assert_reply ref, :ok
+      assert_broadcast "hosts", %{"hosts" => hosts}
+      assert hosts[host_id][:build_version] == "2026.9.0"
+      assert hosts[host_id][:build_channel] == "dev"
+    end
+
+    test "build_version の型崩れは invalid_build_version" do
+      host_id = "lab-pc-bad-build-version"
+      socket = join_runner(host_id)
+
+      ref =
+        push(
+          socket,
+          "register",
+          register_payload(%{"build_version" => "2026.99.0", "build_channel" => "dev"})
+        )
+
+      assert_reply ref, :error, %{reason: "invalid_build_version"}
+    end
+
+    test "build_channel の型崩れは invalid_build_channel" do
+      host_id = "lab-pc-bad-build-channel"
+      socket = join_runner(host_id)
+
+      ref =
+        push(
+          socket,
+          "register",
+          register_payload(%{"build_version" => "2026.9.0", "build_channel" => "main"})
+        )
+
+      assert_reply ref, :error, %{reason: "invalid_build_channel"}
+    end
+
+    test "build_version のみ提示は incomplete_build_info" do
+      host_id = "lab-pc-partial-build-version"
+      socket = join_runner(host_id)
+
+      ref = push(socket, "register", register_payload(%{"build_version" => "2026.9.0"}))
+
+      assert_reply ref, :error, %{reason: "incomplete_build_info"}
+    end
+
     test "build_revision/build_dirty 未指定なら nil のまま (pre-#228 runner との互換)" do
       host_id = "lab-pc-no-build-info"
       socket = join_runner(host_id)

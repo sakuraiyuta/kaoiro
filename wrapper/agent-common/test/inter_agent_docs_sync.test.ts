@@ -1,8 +1,8 @@
 // Regression test for issue #134: inter_agent.ts's error-code tables
 // (ERROR_CODE_GUIDANCE / ERROR_CODE_MESSAGE) and
-// docs/specs/protocol-inter-agent.md's 「エラー種別コード」table are both
-// hand-written (the code side is an English wire-notice template, the docs
-// side is Japanese spec prose for readers — translating one into the other
+// docs/specs/protocol-inter-agent.md's "Error codes (initial set)" table
+// are both hand-written (the code side is a wire-notice template, the docs
+// side is spec prose for readers — translating one into the other
 // mechanically would not read naturally on either end, so nothing
 // generates one from the other). What DOES need to stay in sync is the SET
 // OF CODES: a code added to only one side is exactly the drift #131's
@@ -31,12 +31,13 @@ const SPEC_PATH = path.resolve(
   "../../../docs/specs/protocol-inter-agent.md",
 );
 
-const SECTION_HEADING = "#### エラー種別コード";
+const SECTION_HEADING = "#### Error codes (initial set)";
 
-/** Extracts the `code` column of the 「エラー種別コード」markdown table.
- *  Matches only rows whose first cell is backtick-quoted (`` `rate_limit` ``
- *  etc.) — this naturally skips the header row (`| code | 意味 | ... |`)
- *  and the `|---|---|---|` separator, neither of which has backticks. */
+/** Extracts the `code` column of the "Error codes (initial set)" markdown
+ *  table. Matches only rows whose first cell is backtick-quoted
+ *  (`` `rate_limit` `` etc.) — this naturally skips the header row
+ *  (`| code | meaning | recommended action for origin |`) and the
+ *  `|---|---|---|` separator, neither of which has backticks. */
 function extractDocsErrorCodes(markdown: string): string[] {
   const startIdx = markdown.indexOf(SECTION_HEADING);
   if (startIdx === -1) {
@@ -73,7 +74,7 @@ function extractDocsErrorCodes(markdown: string): string[] {
 const MIN_EXPECTED_DOCS_CODES = 6;
 
 describe("inter-agent error-code table sync (issue #134)", () => {
-  it("docs の「エラー種別コード」表から抽出ロジックが想定件数以上のコードを拾える(抽出経路そのものの健全性)", () => {
+  it("docs の \"Error codes (initial set)\" 表から抽出ロジックが想定件数以上のコードを拾える(抽出経路そのものの健全性)", () => {
     const markdown = readFileSync(SPEC_PATH, "utf-8");
     const docsCodes = extractDocsErrorCodes(markdown);
     expect(
@@ -99,7 +100,7 @@ describe("inter-agent error-code table sync (issue #134)", () => {
         ? undefined
         : "wrapper/agent-common/src/inter_agent.ts の ERROR_CODE_GUIDANCE/" +
           "ERROR_CODE_MESSAGE にあるが docs/specs/protocol-inter-agent.md の" +
-          `「エラー種別コード」表に無いコード: ${missingFromDocs.join(", ")}。` +
+          `"Error codes (initial set)" 表に無いコード: ${missingFromDocs.join(", ")}。` +
           "両テーブルは手書きの別文言(コード側は wire 通知文言、docs 側は" +
           "スペック説明)だが、コードの集合は同期している必要がある。" +
           "docs の表に行を追加すること。",
@@ -109,7 +110,7 @@ describe("inter-agent error-code table sync (issue #134)", () => {
       missingFromCode,
       missingFromCode.length === 0
         ? undefined
-        : "docs/specs/protocol-inter-agent.md の「エラー種別コード」表に" +
+        : "docs/specs/protocol-inter-agent.md の \"Error codes (initial set)\" 表に" +
           "あるが wrapper/agent-common/src/inter_agent.ts の " +
           "ERROR_CODE_GUIDANCE/ERROR_CODE_MESSAGE に無いコード: " +
           `${missingFromCode.join(", ")}。ERROR_CODE_GUIDANCE と ` +

@@ -28,11 +28,12 @@
   },
   "kaoiro": {
     "runtimeAssets": [
-      "dist/probe.js"
+      "dist/probe.js",
+      "dist/build-info.json"
     ]
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && node ../../scripts/generate-wrapper-build-info.mjs dist",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

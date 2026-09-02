@@ -91,6 +91,10 @@ import type {
 import { PERMISSION_MODE_AXES } from "./permission_axes.js";
 import { claudeBootstrapCatalog, type SupportedModel } from "./catalog.js";
 import { runClaudeProbe, type ProbeOutcome } from "./probe-client.js";
+import {
+  REQUEST_COMPACT_TOOL_FQN,
+  validateRequestCompactInput,
+} from "./request_compact.js";
 import type { ContentBlock, PendingUpload, UploadMeta } from "./upload.js";
 import {
   MAX_ATTACHMENTS_PER_INSTRUCTION,
@@ -253,6 +257,52 @@ function contextNoticeText(
   );
 }
 
+/** The turn injected once a `request_compact` `resume_prompt` reservation
+ *  fires on `compact_boundary` (ADR-0055, phase-33 Stage A). The prefix is a
+ *  FIXED literal — matching the `/compact` MUST just above it in the spec —
+ *  so the only agent-authored text in the injected turn is `resumePrompt`
+ *  itself, appended verbatim and unparsed. Two things the prefix has to
+ *  state (protocol-inter-agent.md "resume_prompt の発火規約"): where the
+ *  note came from (this agent's own past self, not the operator or another
+ *  agent), and that resuming is not urgent (P3 register, same as
+ *  `contextNoticeText` above) — a demand to "resume immediately at full
+ *  speed" would be exactly the kind of pressure #158 P3 already rejected for
+ *  the threshold notice, and there is no reason resume_prompt should differ. */
+export function resumeInjectionText(resumePrompt: string): string {
+  return (
+    "[kaoiro] Compaction has finished. Before requesting it, you left " +
+    "yourself the resume note below (via request_compact's resume_prompt) " +
+    "to pick up where you left off. There is no need to resume at full " +
+    "speed right away — get your bearings first, then continue at " +
+    "whatever pace the current state actually calls for.\n\n" +
+    resumePrompt
+  );
+}
+
+/** `session_lifecycle` event kinds this host can produce (ADR-0055,
+ *  phase-33 Stage B; protocol.md "session_lifecycle"). Server-produced
+ *  kinds (disconnected / reconnecting / reconnected / session_reset_*)
+ *  are merged into the same timeline server-side and never appear here. */
+export type SessionLifecycleKind =
+  | "compacting"
+  | "compact_boundary"
+  | "compact_failed"
+  | "resume_reserved"
+  | "resume_fired"
+  | "threshold_notice"
+  | "conversation_reset";
+
+/** `session_lifecycle`'s `trigger` field, present only for
+ *  `compact_boundary` (ADR-0055 phase-33 Stage B, director裁定 2026-08-31):
+ *  `"request_compact"` when the host's own FIFO reservation queue had an
+ *  entry for this boundary (Stage A's delivery semantics ARE the ground
+ *  truth for this label — see `#resolveCompactTrigger`); otherwise the
+ *  SDK's own `compact_metadata.trigger` verbatim (`"sdk_auto"` for
+ *  `"auto"`, `"manual"` for an operator-typed `/compact` or any other
+ *  non-request_compact manual trigger the SDK cannot further
+ *  distinguish); omitted when neither is determinable. */
+export type SessionLifecycleTrigger = "request_compact" | "sdk_auto" | "manual";
+
 // PermissionDecision / QuestionDecision moved to @kaoiro/agent-common with
 // the brokers (phase-13); re-exported here so the host's public surface is
 // unchanged.
@@ -277,6 +327,17 @@ export interface AgentHostOptions {
    *  existing channel. Omitted = task envelopes are not emitted (unit
    *  tests only; production always wires it). */
   onTask?: (envelope: Envelope) => void;
+  /** Invoked for each `session_lifecycle` event this host produces (ADR-0055,
+   *  phase-33 Stage B — compaction start/complete/failed, resume
+   *  reserved/fired, threshold-notice firing, conversation_reset). `at` is
+   *  this host's own observation timestamp, not a server receipt time.
+   *  Fire-and-forget by design (no reply, no peer notification) — omitted =
+   *  events are not reported (unit tests only; production always wires it). */
+  onSessionLifecycle?: (
+    kind: SessionLifecycleKind,
+    trigger: SessionLifecycleTrigger | undefined,
+    at: string,
+  ) => void;
   /** Invoked immediately before #input() yields an accepted wrapper turn to
    * the SDK. This is the actual SDK-turn start: a turn waiting in #queue has
    * not started and must not consume watchdog budget (issue #248). */
@@ -669,6 +730,20 @@ export class AgentHost implements EngineAdapter {
    *    this cap such an epoch would be muted for its whole life. */
   #contextEpochGate: { atOrBelow: number | null; readings: number } | null =
     null;
+  /** FIFO queue of `request_compact` reservations, one entry per
+   *  SUCCESSFUL `/compact` it actually queued (ADR-0055, phase-33 Stage A
+   *  — a singleton here would drop the 1:1 correspondence between a
+   *  reservation and the specific compaction it was made for). `null`
+   *  means that `/compact` carried no `resume_prompt`. Consumption:
+   *  `compact_boundary` shifts the head and fires it if non-null;
+   *  `compact_result:"failed"` shifts the head with no fire — the
+   *  compaction never happened, but the slot must still be retired or it
+   *  would fire on some LATER, unrelated boundary; `conversation_reset`
+   *  discards the whole queue — every entry was written for a
+   *  conversation that no longer exists. Wrapper-local memory only, per
+   *  spec — a wrapper crash mid-compaction loses it, and nothing
+   *  re-derives it from anywhere else. */
+  readonly #resumeReservations: (string | null)[] = [];
   readonly #rateLimits = new Map<
     string,
     { status?: string; utilization?: number; resets_at?: number }
@@ -1748,8 +1823,44 @@ export class AgentHost implements EngineAdapter {
               // ResultMessage or stream EOF opens the input barrier. This avoids
               // letting a buffered A result settle a newly-yielded B (#246).
               await this.#reconcilePendingTasklistRefreshes("conversation_reset");
+              // ADR-0055 Stage A (code-review-assessment round 1): every
+              // reservation still queued was written for a conversation
+              // that no longer exists. Left uncleared, the head would sit
+              // and fire on some LATER, unrelated compact_boundary —
+              // injecting a note claiming "you left yourself this" into a
+              // context that never wrote it. The WHOLE queue is discarded,
+              // not just the head: a reset ends every outstanding
+              // reservation's conversation alike. Symmetric with
+              // #invalidateContextEpoch just below, which already treats
+              // compact_boundary and conversation_reset alike.
+              this.#resumeReservations.length = 0;
+              this.#emitSessionLifecycle("conversation_reset");
             }
             this.#invalidateContextEpoch(compact.tokens);
+            // ADR-0055 Stage A: fires ONLY on an actual compaction boundary,
+            // never on conversation_reset (see #maybeFireResumeReservation's
+            // own doc for why).
+            if (compact.kind === "compact_boundary") {
+              // Trigger is resolved BEFORE the FIFO shift below: the queue's
+              // current (pre-shift) state is what tells us whether THIS
+              // boundary's own /compact was queued by request_compact.
+              this.#emitSessionLifecycle(
+                "compact_boundary",
+                this.#resolveCompactTrigger(compact.sdkTrigger),
+              );
+              this.#maybeFireResumeReservation();
+            }
+          } else if (compact.kind === "compact_result") {
+            // ADR-0055 Stage A: a failed compaction never reaches
+            // compact_boundary, so its FIFO slot has to be retired
+            // here instead — otherwise it would fire on some later,
+            // unrelated SUCCESSFUL boundary. Does not touch the context
+            // epoch: nothing was discarded (藤 review MF1, same reasoning
+            // as `compacting` just above).
+            this.#consumeFailedResumeReservation();
+            this.#emitSessionLifecycle("compact_failed");
+          } else if (compact.kind === "compacting") {
+            this.#emitSessionLifecycle("compacting");
           }
         }
         const result = sdkMessageToResult(message);
@@ -1811,6 +1922,18 @@ export class AgentHost implements EngineAdapter {
         autoAllow(conversationId, to)
       ) {
         return { behavior: "allow", updatedInput: input };
+      }
+    }
+    // ADR-0055 phase-33 Stage A: an oversized request_compact input would
+    // otherwise reach the broker's approval dialog, which silently drops
+    // the payload past its own serialized ceiling — the operator would be
+    // approving a call whose body they cannot actually read. Denying here,
+    // before decide() runs, means that dialog never appears at all rather
+    // than appearing truncated.
+    if (toolName === REQUEST_COMPACT_TOOL_FQN) {
+      const validation = validateRequestCompactInput(input);
+      if (!validation.ok) {
+        return { behavior: "deny", message: validation.message };
       }
     }
     const decide = this.#options.decidePermission;
@@ -2518,6 +2641,99 @@ export class AgentHost implements EngineAdapter {
     void this.#refreshContextUsage();
   }
 
+  /** Reports one `session_lifecycle` event to `onSessionLifecycle`, stamped
+   *  with this host's own observation timestamp (ADR-0055, phase-33 Stage
+   *  B). A thin wrapper so every call site supplies `kind` (and `trigger`
+   *  where it applies) without repeating the timestamp/callback plumbing. */
+  #emitSessionLifecycle(
+    kind: SessionLifecycleKind,
+    trigger?: SessionLifecycleTrigger,
+  ): void {
+    this.#options.onSessionLifecycle?.(kind, trigger, this.#now());
+  }
+
+  /** Resolves the `trigger` recorded for a `compact_boundary` lifecycle
+   *  event (ADR-0055 phase-33 Stage B, director裁定 2026-08-31). MUST be
+   *  called with the FIFO queue in its PRE-shift state — the caller's own
+   *  presence in the queue is the primary signal, more precise than the
+   *  SDK's `sdkTrigger` because it specifically distinguishes
+   *  request_compact from any other manual `/compact` (which the SDK
+   *  cannot). Falls back to the SDK's own account only when this host's
+   *  queue has nothing to say about this boundary. */
+  #resolveCompactTrigger(
+    sdkTrigger: "auto" | "manual" | undefined,
+  ): SessionLifecycleTrigger | undefined {
+    if (this.#resumeReservations.length > 0) return "request_compact";
+    if (sdkTrigger === "auto") return "sdk_auto";
+    if (sdkTrigger === "manual") return "manual";
+    return undefined;
+  }
+
+  /** Records one `request_compact` reservation as the new FIFO tail
+   *  (ADR-0055, phase-33 Stage A). Public: wired from cli.ts's
+   *  `requestCompactDescriptor` option, called exactly once
+   *  per `/compact` the tool actually queued via its own
+   *  `send(COMPACT_COMMAND)` — never for a compaction that was never
+   *  queued, which would let this entry fire on some LATER, unrelated
+   *  boundary instead. `null` records "this /compact carried no
+   *  resume_prompt" so the queue stays 1:1 with real compactions even when
+   *  most of them are silent. */
+  reserveResume(prompt: string | null): void {
+    this.#resumeReservations.push(prompt);
+    // ADR-0055 phase-33 Stage B: a null entry recorded "this /compact
+    // carried no resume_prompt" for the FIFO's own bookkeeping, but there
+    // is nothing to call a RESERVATION in the lifecycle-timeline sense —
+    // that /compact's occurrence is already recorded by its own
+    // compact_boundary (trigger="request_compact", resolved from this same
+    // queue).
+    if (prompt !== null) this.#emitSessionLifecycle("resume_reserved");
+  }
+
+  /** Fires the head `resume_prompt` reservation, if any and if non-null, on
+   *  THIS `compact_boundary` observation (ADR-0055, phase-33 Stage A — the
+   *  original problem this closes: an agent does not return to work on its
+   *  own after compaction). The head is shifted off unconditionally so a
+   *  later boundary with an empty queue, or a null head, stays silent —
+   *  matching the B1 notice's one-shot budget just below. Deliberately NOT
+   *  called for `conversation_reset`: that is a full session wipe, not a
+   *  compaction, and a resume note written for "after compacting" would
+   *  misdescribe what just happened (its reservations are discarded
+   *  wholesale where `conversation_reset` is handled instead). */
+  #maybeFireResumeReservation(): void {
+    if (this.#resumeReservations.length === 0) return;
+    const prompt = this.#resumeReservations.shift() ?? null;
+    if (prompt === null) return;
+    const text = resumeInjectionText(prompt);
+    void this.#enqueueInjection(async () => {
+      // ふじ Stage B round 1 must-fix B4 (2026-08-31): emit AFTER the
+      // closed guard and the actual `send()`, not before queueing — a
+      // queue reject, or the closed guard tripping once the queued task
+      // finally runs, previously left a `resume_fired` record with no
+      // injection ever delivered.
+      if (this.#closed) return;
+      await this.send(text);
+      this.#emitSessionLifecycle("resume_fired");
+    }).catch((err: unknown) => {
+      // Closed or full queue. The reservation is already consumed above —
+      // unlike the B1 notice, there is no budget to re-arm: a fired-but-
+      // undelivered resume note re-injected later would land detached from
+      // the boundary it was meant to follow.
+      process.stderr.write(`resume_prompt injection not queued: ${String(err)}\n`);
+    });
+  }
+
+  /** Retires the head FIFO reservation with no fire, on a `compact_result`
+   *  `"failed"` observation (ADR-0055, phase-33 Stage A). The `/compact`
+   *  that made this reservation WAS queued 1:1 by `reserveResume`, but a
+   *  failure never reaches `compact_boundary` — leaving the slot in place
+   *  would let it fire on some later, unrelated SUCCESSFUL boundary
+   *  instead, misattributing that note to a compaction it was never
+   *  written for. No-op when the queue is empty (a failure observed with
+   *  no outstanding reservation, e.g. an operator-typed `/compact`). */
+  #consumeFailedResumeReservation(): void {
+    this.#resumeReservations.shift();
+  }
+
   /** Queues the one threshold notice this context epoch is allowed
    *  (phase-28 B1, #168 P3). Called from `#refreshContextUsage` on every
    *  reading that actually changed, so the notice lands the first time usage
@@ -2564,6 +2780,11 @@ export class AgentHost implements EngineAdapter {
       // the new one, which is exactly what the operator just fixed.
       if (this.#closed || generation !== this.#contextGeneration) return;
       await this.send(text);
+      // ふじ Stage B round 1 must-fix B4 (2026-08-31): emit AFTER the
+      // guards and the actual `send()`, not before queueing — see
+      // #maybeFireResumeReservation's identical fix for the false-
+      // positive this closes (a record with no injection delivered).
+      this.#emitSessionLifecycle("threshold_notice");
     }).catch((err: unknown) => {
       // Closed or full queue. Re-arm rather than burning the epoch's one
       // notice on a send that never reached the model — but only while the

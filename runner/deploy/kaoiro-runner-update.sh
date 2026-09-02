@@ -322,7 +322,11 @@ start_failed=no
 # exited 0" into "the host is serving the release we meant".
 running=$("$root/current/deploy/kaoiro-runner-launch.sh" --version 2>/dev/null || true)
 
-if [ "$start_failed" = yes ] || [ "$running" != "$id" ]; then
+# `$id` is the release-directory identity (`<revision>[-dirty]`); what the
+# artifact reports is its own wording of the same revision, so the check is
+# attestation, not string equality — see kaoiro_identity_attests_revision.
+if [ "$start_failed" = yes ] ||
+  ! kaoiro_identity_attests_revision "$running" "${id%-dirty}"; then
   printf '%s: update did NOT reach a good state\n' "$prog" >&2
   printf '%s:   requested release: %s\n' "$prog" "$id" >&2
   printf '%s:   current reports:   %s\n' "$prog" "${running:-<unreadable>}" >&2

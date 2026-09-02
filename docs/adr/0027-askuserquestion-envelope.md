@@ -1,5 +1,5 @@
 ---
-title: AskUserQuestion 用に専用 envelope(question_request / question_response)と状態 waiting_question を新設
+title: Add dedicated envelopes (question_request / question_response) and waiting_question state for AskUserQuestion
 status: accepted
 date: 2026-07-03
 opened: 2026-07-03
@@ -9,7 +9,7 @@ related_specs: [protocol, protocol-inter-agent, agent-sdk-events, threat-model]
 related_adrs: [10, 11, 12, 21, 22]
 ---
 
-# ADR-0027 — AskUserQuestion 用の専用 envelope と状態 `waiting_question`
+# ADR-0027 — Dedicated Envelope and `waiting_question` State for AskUserQuestion
 
 ## Status
 
@@ -17,49 +17,33 @@ Accepted
 
 ## Context
 
-Claude Agent SDK(v0.3.187)の `AskUserQuestion` ツールは、tool permission と
-同じ **`canUseTool` 経路**で wrapper に届く(公式 docs `agent-sdk/user-input`、
-`node_modules/@anthropic-ai/claude-agent-sdk/sdk-tools.d.ts:724` の
-`AskUserQuestionInput`)。しかし現状 wrapper は `host.ts:731 #canUseTool` で
-すべてを allow/deny に潰しているため、構造化情報(question / options / header /
-multiSelect)が dashboard に届かず、選択回答も返せない(issue #78)。
+The `AskUserQuestion` tool in Claude Agent SDK (v0.3.187) reaches the wrapper through the same **`canUseTool` path** as tool permission (official docs `agent-sdk/user-input`, `node_modules/@anthropic-ai/claude-agent-sdk/sdk-tools.d.ts:724`’s `AskUserQuestionInput`). However, the current wrapper reduces everything to allow/deny in `host.ts:731 #canUseTool`, so structured information (question / options / header / multiSelect) does not reach the dashboard and selected answers cannot be returned (issue #78).
 
-技術調査で回答返却経路は確定した:
+Technical investigation fixed the answer-return path:
 
-- 入力 `AskUserQuestionInput`: `questions[1-4]` 各
-  `{ question, header, options[2-4]{ label, description, preview? }, multiSelect }`。
-- 回答は `canUseTool` から
-  `{ behavior: "allow", updatedInput: { ...questions, answers: { [質問文]: 選択 label }, annotations? } }`
-  を返す(`AskUserQuestionOutput` `sdk-tools.d.ts:2991`)。
-  却下/キャンセルは `{ behavior: "deny", message }`。
+- Input `AskUserQuestionInput`: each of `questions[1-4]` is `{ question, header, options[2-4]{ label, description, preview? }, multiSelect }`.
+- Return from `canUseTool`: `{ behavior: "allow", updatedInput: { ...questions, answers: { [質問文]: 選択 label }, annotations? } }` (`AskUserQuestionOutput` `sdk-tools.d.ts:2991`).
+  Rejection/cancellation is `{ behavior: "deny", message }`.
 
-wire プロトコル(wrapper ↔ server ↔ dashboard)をどう設計するかで 3 案を検討した
-(下記 Context の 3 案・Alternatives Considered)。
+Three options were considered for the wire protocol (wrapper ↔ server ↔ dashboard) (the three options in the Context below and in Alternatives Considered).
 
-| 案 | 概要 | 採否 |
+| Option | Summary | Decision |
 |---|---|---|
-| A | 既存 `permission_request` / `permission_decision` を拡張し質問・回答を相乗り | 却下: allow/deny と構造化回答は意味論的に別物。1 種別に相乗りさせると dashboard が描画をフィールド sniff で分岐し、permission の意味が濁って drift 温床になる |
-| B | 専用 envelope `question_request` / `question_response` と専用状態 `waiting_question` を新設 | **採用**: 既存 protocol が `waiting_permission`(許可待ち)と `waiting_input`(指示待ち)を*待ちの種類*で別状態にしている設計思想と一貫する。kaoiro の「状態=キャラクター」の核とも噛み合い、inter-agent の escalate-to-user でも再利用できる |
-| C | wire は専用種別だが state は `waiting_permission` 流用 | 部分採用: state 流用は既存の状態分離(permission/input を別建て)と不整合。ただし「broker の配管を流用する」部分(下記 F5)は本 ADR に取り込む |
+| A | Extend the existing `permission_request` / `permission_decision` and piggyback questions/answers | Rejected: allow/deny and structured answers are semantically different. Piggybacking them in one type would make the dashboard branch by sniffing fields, muddying the meaning of permission and creating a drift nursery |
+| B | Add dedicated envelopes `question_request` / `question_response` and a dedicated `waiting_question` state | **Adopted**: consistent with the existing protocol design, which separates `waiting_permission` (waiting for permission) and `waiting_input` (waiting for instructions) by *kind of wait*. It also fits kaoiro’s core “state = character” idea and can be reused for inter-agent escalate-to-user |
+| C | Use a dedicated wire type but reuse `waiting_permission` for state | Partially adopted: reusing the state conflicts with the existing separation of permission/input. However, reuse the broker plumbing (the part described in F5) in this ADR |
 
 ## Decision
 
-設計は [ADR-0022](0022-pending-permission-authoritative-source.md)(pending の
-真実を `state_change.ext` に置くパターン)を **question 側にも同型適用**する。
+Apply the pattern in [ADR-0022](0022-pending-permission-authoritative-source.md) (put the source of truth for pending state in `state_change.ext`) **to the question side in the same way**.
 
-### F1: 新状態 `waiting_question`
+### F1: New state `waiting_question`
 
-`canUseTool` が `toolName === "AskUserQuestion"` で発火し Promise 保留中の状態。
-導出元・遷移とも `waiting_permission` と対等(`canUseTool` は tool_use の後に
-呼ばれるため `tool_running → waiting_question → tool_running`)。protocol の
-状態表・mermaid、`wrapper/src/state.ts` に追加する。表情の方向性は
-「選択を差し出して待つ」(permission の『こちらを見て待つ』とは別表現の余地)。
+The state while `canUseTool` fires with `toolName === "AskUserQuestion"` and the Promise is pending. Both its derivation and transitions are equal to `waiting_permission` (`canUseTool` is called after tool_use, so `tool_running → waiting_question → tool_running`). Add it to the protocol state table and mermaid, and to `wrapper/src/state.ts`. The direction of the expression is “wait while offering a choice” (room for an expression distinct from permission’s “look this way and wait”).
 
-### F2: `ext.pending_question` を authoritative source とする
+### F2: Make `ext.pending_question` the authoritative source
 
-pending 中の質問の真実は `state_change.ext.pending_question` に乗る。
-`null` / 未設定なら pending 無し。形状は
-`{ request_id, questions, ts }`(`question_request` envelope の payload と同等)。
+The source of truth for a pending question is `state_change.ext.pending_question`. `null` / unset means nothing is pending. Its shape is `{ request_id, questions, ts }` (equivalent to the payload of the `question_request` envelope).
 
 ```json
 {
@@ -86,100 +70,64 @@ pending 中の質問の真実は `state_change.ext.pending_question` に乗る�
 }
 ```
 
-### F3: `question_request` envelope は初出通知
+### F3: `question_request` envelope is an initial notification
 
-protocol 互換の一貫性(permission_request と同型)と「新規 pending あり」
-イベント通知の目的で `question_request`(envelope `type`)を送る。状態の真実は
-`ext.pending_question` 側。両者は wrapper で同期保証する(同一の
-`request_id` / `questions` / `ts`)。dashboard は ext を読むのが正解。
+For protocol compatibility and consistency (the same form as permission_request), and to notify that new pending state exists, send `question_request` (envelope `type`). The source of truth is `ext.pending_question`. The wrapper guarantees synchronisation between the two (the same `request_id` / `questions` / `ts`). The dashboard should read ext.
 
-### F4: 回答は `question_response` チャネルイベント
+### F4: Answers are a `question_response` channel event
 
-client → server → wrapper のチャネルイベント(envelope `type` ではなく、
-`permission_decision` と同じ方向別メッセージ)。形状:
+This is a client → server → wrapper channel event (not an envelope `type`; a direction-specific message like `permission_decision`). Shape:
 
-- client → server: `{ agent_id, request_id, answers, cancelled? }`(operator のみ)
-- server → wrapper: `{ request_id, answers, cancelled? }`(relay)
+- client → server: `{ agent_id, request_id, answers, cancelled? }` (operator only)
+- server → wrapper: `{ request_id, answers, cancelled? }` (relay)
 
-`answers` は `{ [質問文]: string }`。**質問文をキー**にし、値は選択 option の
-`label`。multiSelect は client が `", "` で join した 1 文字列。"Other"(自由記述)は
-その文字列がそのまま値。`cancelled: true` は却下(deny 相当)。
+`answers` is `{ [質問文]: string }`. **Use the question text as the key** and the selected option’s `label` as the value. The client joins multiSelect into one string with `", "`. “Other” (free text) is used as-is as the value. `cancelled: true` means rejection (equivalent to deny).
 
-### F5: wrapper は `#canUseTool` を分岐、broker 配管を流用
+### F5: Branch `#canUseTool` in the wrapper and reuse broker plumbing
 
-- `host.ts #canUseTool` で `toolName === "AskUserQuestion"` を分岐し、question
-  フローへ落とす。`AskUserQuestionInput` から `questions` を取り出し
-  `QuestionBroker` に渡す。
-- `QuestionBroker` は `PermissionBroker` と **pending-map / timeout / close-deny の
-  機構を共有**する(共通コアを抽出、または sibling 実装で流用)。これらの要件は
-  permission と同一で、protocol/UX から不可視なため配管は再利用する(C の利点)。
-- 回答受信で `{ behavior: "allow", updatedInput: { ...input, answers } }` を返す。
-  `cancelled` / timeout / close 時は `{ behavior: "deny", message }`。
-- host は `#pendingQuestion` を持ち、`waiting_question` 中の `state_change.ext` に
-  `pending_question` を持続付与する(ADR-0022 F3 と同型)。
+- Branch `toolName === "AskUserQuestion"` in `host.ts #canUseTool` and enter the question flow. Extract `questions` from `AskUserQuestionInput` and pass them to `QuestionBroker`.
+- `QuestionBroker` **shares the pending-map / timeout / close-deny mechanisms** with `PermissionBroker` (extract a common core or reuse it through a sibling implementation). These requirements are identical to permission and invisible from the protocol/UX, so reuse the plumbing (the benefit of C).
+- On answer receipt, return `{ behavior: "allow", updatedInput: { ...input, answers } }`. On `cancelled` / timeout / close, return `{ behavior: "deny", message }`.
+- The host holds `#pendingQuestion` and persistently attaches `pending_question` to `state_change.ext` during `waiting_question` (same pattern as ADR-0022 F3).
 
-### F6: viewer 配信は ADR-0021 の allow-list に追従
+### F6: Viewer delivery follows ADR-0021’s allow-list
 
-`question_request` は operator 限定配信とし、viewer へは完全除去して grid 整合の
-ため合成 `state_change(waiting_question)`(`payload={}` / `ext` なし)へ置換する
-(`permission_request` と同じ扱い)。`ext.pending_question` は ext に乗るため
-「viewer は全 type で ext 除去」で自動的に守られる(追加ガード不要)。
-server の operator-only allow-list に `question_request` / `question_response` を
-追加する。
+Deliver `question_request` only to operators; completely remove it from viewers and replace it with a synthetic `state_change(waiting_question)` (`payload={}` / no `ext`) for grid consistency (same treatment as `permission_request`). Because `ext.pending_question` is in ext, it is automatically protected by “viewers have ext removed for every type” (no additional guard). Add `question_request` / `question_response` to the server’s operator-only allow-list.
 
-### F7: snapshot 復元
+### F7: Restore from a snapshot
 
-`question_request` は state_change に相乗りしないが、真実の
-`ext.pending_question` が最新 state_change envelope に乗るため、新規 join
-クライアントの snapshot でそのまま復元される(ADR-0022 F5 と同型)。DETS 永続化は
-不要。
+`question_request` does not piggyback on state_change, but because the source of truth `ext.pending_question` is on the latest state_change envelope, it is restored as-is in a snapshot for a newly joined client (same pattern as ADR-0022 F5). DETS persistence is unnecessary.
 
 ## Consequences
 
 ### Positive
 
-- dashboard が構造化選択肢(label / description / preview / multiSelect / Other)を
-  専用ダイアログで描画でき、回答を SDK へ正しく返せる(#78 根治)。
-- permission の意味に相乗りせず、protocol の状態分離思想と一貫する。
-- リロード・再接続時に `ext.pending_question` の snapshot で pending が復元される。
-- viewer 漏洩は ADR-0021 の allow-list / ext 除去で自動的に守られる。
-- inter-agent の `escalate-to-user`([protocol-inter-agent](../specs/protocol-inter-agent.md))が
-  同じ構造化ダイアログを再利用できる(当該 spec の「既存 AskUserQuestion 系 UI 流用」の
-  実体になる)。
+- The dashboard can render structured choices (label / description / preview / multiSelect / Other) in a dedicated dialog and correctly return the answer to the SDK (root fix for #78).
+- It does not piggyback on permission’s meaning and is consistent with the protocol’s state-separation idea.
+- Pending state is restored from an `ext.pending_question` snapshot after reload / reconnection.
+- Viewer leakage is automatically protected by ADR-0021’s allow-list / ext removal.
+- Inter-agent `escalate-to-user` ([protocol-inter-agent](../specs/protocol-inter-agent.md)) can reuse the same structured dialog (the concrete implementation of that spec’s “reuse the existing AskUserQuestion UI”).
 
 ### Negative
 
-- 状態 `waiting_question` の新設が protocol 状態表 / mermaid・`state.ts`・
-  client の状態→表現マッピングへ波及する。「選択待ち」のキャラ表現素材は
-  当面既存流用で成立させ、専用素材は後追いとする。
-- broker timeout 無制限(ADR-0022 F6)を question にも適用するため、operator が
-  無応答だと当該ターンが進まない(permission と同じ挙動、close() で強制 deny)。
+- The new `waiting_question` state affects the protocol state table / mermaid, `state.ts`, and the client’s state-to-expression mapping. Make the “waiting for a choice” character representation work with existing assets for now; add dedicated assets later.
+- Apply the unlimited broker timeout (ADR-0022 F6) to questions as well, so an operator who does not respond leaves the turn unadvanced (same behaviour as permission; forcibly deny on close()).
 
 ### Neutral
 
-- `answers` は multiSelect を client が join した 1 文字列に正規化する(SDK の
-  `answers: Record<string,string>` に 1:1 対応)。structured 保持が必要になれば
-  後方互換な追補(`version` 据え置き)で拡張可能。
-- `annotations`(per-question notes/preview)は当面 passthrough せず、必要時に追補。
+- Normalise `answers` into one string joined by the client for multiSelect (1:1 with the SDK’s `answers: Record<string,string>`). If structured retention becomes necessary, extend it in a backward-compatible addendum (leave `version` unchanged).
+- Do not pass through `annotations` (per-question notes/preview) for now; add it later if needed.
 
 ## Alternatives Considered
 
 | Option | Why rejected |
-|--------|--------------|
-| A: permission_request/decision を拡張 | allow/deny と構造化回答の意味相乗り。dashboard の描画分岐がフィールド sniff になり、permission 意味が濁って drift 温床 |
-| C: wire は専用種別だが state は waiting_permission 流用 | 既存の状態分離(permission/input を別建て)と不整合。ただし broker 配管流用は本 ADR F5 に取り込み済 |
-| onUserDialog 経路で受ける | 誤り。`onUserDialog` は refusal_fallback_prompt / side_question 等の別 dialog_kind 用で、AskUserQuestion は canUseTool 経路(公式 docs で確認) |
+|---|---|
+| A: Extend permission_request/decision | Piggybacks the meanings of allow/deny and structured answers. The dashboard’s rendering branch becomes field sniffing, muddying permission’s meaning and creating a drift nursery |
+| C: Dedicated wire type but reuse waiting_permission for state | Inconsistent with the existing separation of permission/input. Broker-plumbing reuse is already incorporated in F5 of this ADR |
+| Receive through the onUserDialog path | Incorrect. `onUserDialog` is for other dialog_kind values such as refusal_fallback_prompt / side_question; AskUserQuestion uses the canUseTool path (confirmed in the official docs) |
 
 ## Related
 
-- specs: [protocol](../specs/protocol.md)(`question_request` type・
-  `ext.pending_question`・`question_response` 方向別メッセージ・状態
-  `waiting_question` を追補)、[protocol-inter-agent](../specs/protocol-inter-agent.md)
-  (escalate-to-user の「既存 AskUserQuestion 系 UI 流用」が本 ADR の実体を指す)、
-  [agent-sdk-events](../specs/agent-sdk-events.md)(canUseTool 経路の
-  AskUserQuestion 分岐と回答返却)、[threat-model](../specs/threat-model.md)
-  (viewer 漏洩は ADR-0021 経由で自動カバー)。
-- ADR: [0021](0021-role-information-disclosure-policy.md)(operator 限定配信の
-  allow-list 基盤)、[0022](0022-pending-permission-authoritative-source.md)
-  (ext = pending の真実、という同型パターンの原型)。
-- 由来: [issue #78](https://github.com/sakuraiyuta/kaoiro/issues/78)。
+- specs: [protocol](../specs/protocol.md) (add `question_request` type, `ext.pending_question`, direction-specific `question_response`, and `waiting_question` state), [protocol-inter-agent](../specs/protocol-inter-agent.md) (the “reuse the existing AskUserQuestion UI” for escalate-to-user points to this ADR’s implementation), [agent-sdk-events](../specs/agent-sdk-events.md) (the AskUserQuestion branch and answer return in the canUseTool path), and [threat-model](../specs/threat-model.md) (viewer leakage automatically covered through ADR-0021).
+- ADRs: [0021](0021-role-information-disclosure-policy.md) (allow-list foundation for operator-only delivery), [0022](0022-pending-permission-authoritative-source.md) (prototype of the same pattern: ext = truth for pending state).
+- Origin: [issue #78](https://github.com/sakuraiyuta/kaoiro/issues/78).

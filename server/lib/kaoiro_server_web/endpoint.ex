@@ -1,6 +1,8 @@
 defmodule KaoiroServerWeb.Endpoint do
   use Phoenix.Endpoint, otp_app: :kaoiro_server
 
+  alias KaoiroServer.TransportLimits
+
   # The session cookie carries the dashboard's user token (ADR-0013).
   # encryption_salt (not just signing) keeps that token confidential even
   # to whoever can read the cookie jar; max_age is the sliding-window
@@ -27,7 +29,7 @@ defmodule KaoiroServerWeb.Endpoint do
   # transport safety valve so a misbehaving relay/operator cannot wedge a
   # wrapper/runner receive process with one oversize binary frame.
   socket "/wrapper", KaoiroServerWeb.WrapperSocket,
-    websocket: [max_frame_size: 8_000_000],
+    websocket: [max_frame_size: TransportLimits.max_frame_bytes()],
     longpoll: false
 
   # Resident-runner control channel (ADR-0023): separate system from the
@@ -37,13 +39,13 @@ defmodule KaoiroServerWeb.Endpoint do
   # an unauthenticated peer could park a multi-GB frame in the receive
   # buffer and OOM the node.
   socket "/runner", KaoiroServerWeb.RunnerSocket,
-    websocket: [max_frame_size: 8_000_000],
+    websocket: [max_frame_size: TransportLimits.max_frame_bytes()],
     longpoll: false
 
   socket "/client", KaoiroServerWeb.ClientSocket,
     websocket: [
       connect_info: [session: @session_options],
-      max_frame_size: 8_000_000
+      max_frame_size: TransportLimits.max_frame_bytes()
     ],
     longpoll: false
 
