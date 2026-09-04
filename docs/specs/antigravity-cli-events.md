@@ -210,8 +210,8 @@ hook command receives the tool call on stdin and answers on stdout:
   | read (local, side-effect free) | `view_file`, `list_dir`, `grep_search`, `find_by_name`, `command_status`, `list_permissions`, `manage_task`, `wait`, `wait_5_seconds`, `finish` |
   | write (local files) | `write_to_file`, `replace_file_content`, `multi_replace_file_content`, `sed_file`, `notebook_edit` |
   | shell | `run_command`, `send_command_input`, `notebook_execution` |
-  | network | `read_url_content`, `search_web`, `open_browser_url`, `generate_image`, `read_browser_page`, `list_browser_pages`, `browser_*` (19 names), `capture_browser_console_logs`, `capture_browser_screenshot`, `click_browser_pixel`, `execute_browser_javascript`, `browser_subagent` |
-  | subagent | `define_subagent`, `invoke_subagent`, `manage_subagents` |
+  | network | `read_url_content`, `search_web`, `open_browser_url`, `generate_image`, `read_browser_page`, `list_browser_pages`, `browser_*` (15 names), `capture_browser_console_logs`, `capture_browser_screenshot`, `click_browser_pixel`, `execute_browser_javascript`, `browser_subagent` |
+  | subagent | `define_subagent`, `invoke_subagent`, `manage_subagents` (`browser_subagent` is in network so the `network_access` toggle can switch it off) |
   | agent-internal (deny in headless) | `ask_question`, `ask_permission`, `ask_custom_permission`, `schedule`, `send_message`, `manage_inbox`, `delete_knowledge`, `call_mcp_tool`, `list_resources`, `read_resource` |
 
 - Hooks are also the only PostToolUse / Stop observation channel; not used
@@ -288,18 +288,23 @@ node <pkg>/dist/bridge.js list                              # prints the tool li
 
 - The model learns the bridge from the always-on rules file (tool names,
   one-line contracts, the exact invocation form) and a skill with fuller
-  examples. The socket path travels in the environment of the `agy` child
-  (`KAOIRO_BRIDGE_SOCKET`), which `run_command` inherits *(inheritance is
-  unverified — Stage A measures it; fallback is an absolute path baked into
-  the rules text)*.
-- The hook gate auto-allows a `run_command` whose `CommandLine` starts with
-  the bridge invocation (exact prefix match on the absolute script path), so
-  inter-agent calls never wait for the operator.
+  examples. The socket path and per-spawn nonce travel in the environment
+  of the `agy` child, which `run_command` inherits *(measured)*.
+- The gate auto-allows a `run_command` only when its `CommandLine`
+  full-matches the bridge grammar of ADR-0057 F5 (absolute paths, tool
+  name, base64url payload; no shell metacharacters possible). `run_command`
+  runs through `bash` *(measured: `$0` = bash, `/proc/$$/exe` = bash)*, so
+  `;`, `&&`, `$(…)` in a command line are interpreted *(measured)*.
 - `ask_user_question` goes through the same bridge; the bridge blocks until
   the operator answers, which holds the `run_command` step and therefore the
-  turn — the same mechanism that makes `waiting_question` hold on Codex
-  (ADR-0032 F6). `--print-timeout` and the hook timeout must both exceed
-  the question wait.
+  turn *(a 70 s tool call held the turn, measured)* — the same mechanism
+  that makes `waiting_question` hold on Codex (ADR-0032 F6).
+  `--print-timeout` and the hook timeout must both exceed the question wait.
+- PreToolUse fired for every tool step observed so far: `write_to_file`,
+  `view_file`, `list_dir`, `manage_task`, `run_command`, `define_subagent`,
+  `search_web` *(measured; `stepIdx` matched `step_index` in all 9 cases)*.
+  `wait_5_seconds` and `finish`, when asked for, produced no `tool` step
+  in the stream.
 
 ### System-prompt equivalent (persona personality injection)
 

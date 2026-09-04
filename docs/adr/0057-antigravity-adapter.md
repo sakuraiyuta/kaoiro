@@ -88,7 +88,7 @@ with stdin closed. Both `--add-dir` values are mandatory: in print mode
 the cwd is not a workspace root on its own (measured), and with only the
 customization dir added the model operates inside it.
 `--disable-slash-commands` keeps operator text out of the CLI control plane
-([ADR-0036](0036-session-reset-and-reserved-commands.md) only filters
+([ADR-0036](0036-session-lifecycle-commands.md) only filters
 literal `/new` / `/clear`). `interrupt()` terminates the child; pending gate
 requests for that turn are resolved as `deny` and `waiting_permission` /
 `waiting_input` are cleared; the next turn resumes by id. The resident
@@ -123,7 +123,11 @@ loudly (vendor drift detector) and treated as *unclassified*:
 (they need the TUI or MCP). `command_status` is read-class.
 
 **Axes** (ADR-0033 vocabulary, `sandbox` × `approval`, plus
-`network_access` per [ADR-0014](0014-permission-model-and-network-access.md)
+`network_access` with the effective-value normalisation of ADR-0033 F3
+addendum — `danger-full-access` → always true, `read-only` → always false,
+`workspace-write` → the toggle — shared with Codex through the same helper
+so `ext.effective.network_access` means one thing across engines; resume
+re-applies all three per [ADR-0014](0014-session-resume-and-restore.md)
 F1 addendum). The sandbox axis is **advisory** on this engine: it is
 enforced by argument inspection (`AbsolutePath` / `DirectoryPath` /
 `TargetFile` / `Cwd` resolved and compared with the agent cwd), never by the
@@ -139,40 +143,63 @@ Rows are ordered strict → permissive, columns likewise:
 | `workspace-write` | read allowed; write in-cwd, shell, subagent ask; write out-of-cwd denied | read and in-cwd write allowed; shell and subagent ask; out-of-cwd write denied | read, in-cwd write, shell, subagent allowed (shell is not sandboxed — badge) |
 | `danger-full-access` | read allowed; every other class asks | read and write allowed; shell and subagent ask | everything allowed |
 
-`network` class: denied when `network_access = false`; when `true` it
-follows the shell column of the row. `on-failure` is rejected at spawn for
+`network` class: denied when the *effective* `network_access` is false;
+when true it follows the shell column of the row (`browser_subagent` sits
+in the network class rather than subagent because it exists to reach the
+network, so the toggle must be able to switch it off). `on-failure` is rejected at spawn for
 this engine (LaunchDialog offers three values). The gate also denies,
-regardless of cell: any write or shell whose arguments reference the
-customization dir (canonical path, after symlink resolution), and any
-`run_command` whose `Cwd` is outside the agent cwd. Operator decisions reuse
+regardless of cell, any write or shell whose arguments reference the
+customization dir (canonical path, after symlink resolution). A
+`run_command` whose `Cwd` is outside the agent cwd is escalated to ask
+regardless of cell (not denied — if the rules text fails to steer the model
+the fallback is one approval, not a dead engine; the write-target check
+still applies). Operator decisions reuse
 `PermissionBroker` (`waiting_permission`, `ext.pending_permission`).
 
-Default launch axes: `workspace-write` × `on-request`, `network_access =
-false` (Codex defaults).
+Default launch axes: `workspace-write` (the Codex sandbox default) ×
+`on-request` (approval is selectable for the first time on this engine) ×
+`network_access = false`.
 
 ### F4b — Gate self-verification on the production path
 
 Because the hook is the only enforcement point and a hook that silently
 does not fire means unlimited execution, the wrapper verifies the gate
-before and during every session:
+before and during every session. F4b is a **detector of vendor-mechanism
+failure**, not a defence against an adversarial model (the nonce and the
+correlation map are readable by any shell the agent runs); it detects, it
+does not prevent — a tool that ran without a gate request has already run.
 
-1. Before the first turn (and after every `agy` version change or
-   customization-dir regeneration): `agy -p /hooks --add-dir <dir>
-   --output-format json` (quota-free, measured) must list exactly the
-   kaoiro gate with the expected `source` path; otherwise the spawn fails
-   with `error` (`antigravity_gate_not_registered`).
-2. During every turn, the **correlation invariant**: each `step_update`
-   with `step_type = "tool"` and `state = "ACTIVE"` must have been preceded
-   by a gate request for the same `stepIdx` / tool name. A tool step
-   observed without a gate request means the hook did not fire; the wrapper
-   terminates the child, marks the session `error`
-   (`antigravity_gate_bypassed`), and refuses further turns until the
-   registration check passes again. The invariant is a negative control
-   that runs on every real tool call, so no synthetic probe turn (and no
-   quota) is needed.
-3. `hook.js` and `bridge.js` identity: the hook sends the wrapper a
-   per-spawn nonce read from its environment; a request without the nonce
-   is answered `deny`.
+1. Smoke test (not an execution gate): before the first turn, and after
+   every `agy` version change or customization-dir regeneration,
+   `agy -p /hooks --add-dir <cwd> --add-dir <dir> --output-format json`
+   (quota-free, measured) must list exactly the kaoiro gate with the
+   expected `source`; otherwise the spawn fails with `error`
+   (`antigravity_gate_not_registered`). It runs on a different invocation
+   path from `--print`, so passing it never excuses item 2.
+2. Correlation invariant (the gate): a `step_update` with `step_type =
+   "tool"` reaching `DONE` or `ERROR` must have a gate request observed
+   for the same `stepIdx` (measured equal to `step_index`, 9 of 9 tool
+   calls across 4 conversations). `ACTIVE` arrives before the hook
+   decision returns (a 100 s hook showed `ACTIVE` first and `DONE` 110 s
+   later), so the check is order-independent and keyed on completion. A
+   completed tool step without a gate request terminates the child and
+   marks the session `error` with `antigravity_gate_unobserved_tool`
+   carrying the tool name; the session refuses further turns until item 1
+   passes again. Scope: tool names in classes where hook firing is
+   measured (write, read, shell, subagent, network — `write_to_file`,
+   `view_file`, `list_dir`, `run_command`, `define_subagent`,
+   `manage_task`, `search_web` fired; `wait_5_seconds` and `finish` did
+   not appear as tool steps at all); an unmeasured name only logs loudly.
+   Optional tightening (Stage B, needs a measured Δ): `ACTIVE` without a
+   gate request after Δ → kill before completion.
+3. Per-spawn nonce in the hook's environment; a request without it is
+   answered `deny`. This only rejects unrelated same-uid processes that
+   guessed the socket path.
+4. Gate socket lifecycle: if the hook connection closes before the wrapper
+   answers (the CLI killed the hook on `timeout`, measured; interrupt;
+   crash), the pending `PermissionBroker` entry is resolved as deny and
+   `waiting_permission` is cleared — the Codex `ToolHost` habit of
+   ignoring socket errors is not inherited on the gate path.
 
 ### F4c — Stage A fixes both axes at spawn; mid-session change is Stage B
 
@@ -193,19 +220,28 @@ a CLI (`list` / `call <tool> <json>`). `inter_agent` descriptors and
 blocks the bridge process, which holds the turn (measured: long tool calls
 hold). The rules file and a skill teach the invocation form.
 
-The gate's automatic allow for bridge calls is **not a prefix match**. The
-`CommandLine` is tokenised with a POSIX-shell-aware splitter and accepted
-only if: it contains no unquoted shell metacharacter, newline, or
-substitution; `argv[0]` is the absolute `node` path the wrapper launched
-with; `argv[1]` is the absolute bridge path; `argv[2]` ∈ {`list`, `call`};
-for `call`, `argv[3]` is a tool name the `ToolHost` serves and `argv[4]` is
-one JSON literal ≤ 64 KiB; `argc` matches exactly; `Cwd` equals the agent
-cwd. Anything else falls through to the normal cell decision (cost of a
-false negative = one operator approval). The `ToolHost` socket carries no
-authentication beyond the per-spawn nonce in the bridge's environment; a
-shell the agent runs can reach it directly, which is inside the agent's own
-privilege — the bridge rule is a convenience, not a security boundary, and
-the gate's argv validation is what protects the *auto-allow*.
+The gate's automatic allow for bridge calls is a **whole-string match on
+a metacharacter-free alphabet**, not a parse. `run_command` executes
+through `bash` (measured: `$0` = bash), so any tokenizer of our own would
+be betting on parity with bash's grammar. Instead the bridge accepts only
+`node <abs> <bridge abs> list` or `node <abs> <bridge abs> call <tool>
+<base64url payload>` and the gate auto-allows a `CommandLine` only when
+it full-matches
+
+```text
+^<node abs path> <bridge abs path> (list|call [a-z_]{1,64} [A-Za-z0-9_-]{1,N})$
+```
+
+with N = 87 KiB (64 KiB of JSON, base64url-encoded), the tool name known
+to the `ToolHost`, `Cwd` equal to the agent cwd, `WaitMsBeforeAsync` at
+or above the wrapper's floor, and no unknown keys in `toolCall.args`.
+Anything else falls through to the normal cell decision (cost of a false
+negative = one operator approval). The bridge decodes and validates the
+payload itself. The `ToolHost` socket carries no authentication beyond
+the per-spawn nonce; a shell the agent runs can reach it directly, which is
+inside the agent's own privilege — the bridge rule is a convenience, not a
+security boundary, and the whole-string match is what protects the
+*auto-allow*.
 
 ### F6 — Catalog: `agy models` at runner register, static snapshot fallback, account default entry
 
