@@ -332,6 +332,42 @@ describe("接続世代つき live buffer (ADR-0051 D4 / ふじ 30-10 M1)", () =>
   });
 });
 
+describe("join snapshot connecting state (issue #279)", () => {
+  it("shows Connecting until the agents snapshot arrives, regardless of task and delivery frames", async () => {
+    const h = await mountApp();
+
+    h.onJoined?.();
+    h.onTaskSnapshot?.({});
+    h.onDeliverySnapshot?.({});
+
+    const text = await timelineText();
+    expect(text).toContain("Connecting…");
+    expect(text).not.toContain("no agents yet");
+  });
+
+  it("leaves Connecting when a nonempty agents snapshot arrives", async () => {
+    const h = await mountApp();
+
+    h.onJoined?.();
+    h.onSnapshot({ "agent-a": stateEnvelope("agent-a") });
+
+    const text = await timelineText();
+    expect(text).not.toContain("Connecting…");
+    expect(text).toContain("agent-a");
+  });
+
+  it("shows the empty state after an empty agents snapshot arrives", async () => {
+    const h = await mountApp();
+
+    h.onJoined?.();
+    h.onSnapshot({});
+
+    const text = await timelineText();
+    expect(text).not.toContain("Connecting…");
+    expect(text).toContain("no agents yet");
+  });
+});
+
 // ADR-0051 D3-3 追補 / ふじ 30-10 must-fix M2: a restored IA row is addressed
 // to ONE pane. The discriminator used here is `agent_deleted`: deleting the
 // named pane must take the row with it. Under the old `envelope` fan-out the

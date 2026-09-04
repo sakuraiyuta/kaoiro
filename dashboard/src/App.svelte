@@ -144,6 +144,7 @@
   // and `awaitingHistory` is the open/closed flag for the window.
   let connectionGeneration = 0;
   let awaitingHistory = false;
+  let awaitingSnapshot = $state(false);
   let liveSinceJoin: Record<string, Envelope[]> = {};
   // Ticking clock owned by App for the response-timeline pane (#25).
   // Passed to ResponseTimeline so its "N 分前" labels refresh live
@@ -591,6 +592,7 @@
           wrapperBuildInfos = {};
           snapshotIncomplete = false;
           deliverySnapshotIncomplete = false;
+          awaitingSnapshot = true;
           awaitingHistory = true;
           liveSinceJoin = {};
           activeTimelineReplays = retainTimelineReplaysOfGeneration(
@@ -618,7 +620,10 @@
           // be stale by the time this fires.
           refreshServerHealth();
         },
-        onSnapshot: (next) => (agents = next),
+        onSnapshot: (next) => {
+          agents = next;
+          awaitingSnapshot = false;
+        },
         onSnapshotIncomplete: (incomplete) => (snapshotIncomplete = incomplete),
         onTaskSnapshot: (next) => (tasks = next),
         onDeliverySnapshot: (next) => (deliveries = next),
@@ -1289,6 +1294,7 @@
     logs = {};
     wrapperBuildInfos = {};
     liveSinceJoin = {};
+    awaitingSnapshot = false;
     awaitingHistory = false;
     projectionEpoch = null;
     clearTimelineState();
@@ -1652,9 +1658,13 @@
       {/if}
     </div>
   {:else if sorted.length === 0 && offlineEntries.length === 0}
-    <p class="empty">
-      no agents yet — start a wrapper with <code>server_url</code> set.
-    </p>
+    {#if awaitingSnapshot}
+      <p class="empty">Connecting…</p>
+    {:else}
+      <p class="empty">
+        no agents yet — start a wrapper with <code>server_url</code> set.
+      </p>
+    {/if}
   {:else}
     <!-- When offline entries exist, this vertical shell assigns all remaining
          viewport height to the live grid/timeline. This keeps the offline
