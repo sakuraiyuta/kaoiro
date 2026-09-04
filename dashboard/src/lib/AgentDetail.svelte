@@ -29,7 +29,6 @@
     resultOf,
     resumeDriftFrom,
     RUNNING_STATES,
-    SANDBOX_AXIS_ENGINES,
     sessionCapabilitiesFrom,
     shouldInterceptAsSessionReset,
     STOP_SAFE_STATES,
@@ -463,26 +462,28 @@
   const agentEngine = $derived(engineFrom(envelope));
   const permAxes = $derived(permissionFrom(envelope));
   const isCodexAgent = $derived(agentEngine === "codex");
-  // Engines whose sandbox axis is an independently reported network_access
-  // toggle (ADR-0033 F3, ADR-0057 F4c), as opposed to Claude's
-  // permission_mode display projection. SANDBOX_AXIS_ENGINES lives in
-  // protocol.ts (shared with LaunchDialog.svelte, review round 1 phase-34
-  // A12) so a future sandbox-axis engine extends one set instead of two
-  // duplicated literals.
-  const hasSandboxAxis = $derived(
-    agentEngine !== null && SANDBOX_AXIS_ENGINES.has(agentEngine),
+  // Whether the wrapper reports a runtime-switchable Claude-style
+  // permission_mode axis (enforcement stamped "mode", ADR-0033 F4 追補)
+  // rather than a launch-fixed sandbox×approval combo (enforcement "os" /
+  // "advisory", ADR-0033 F3, ADR-0057 F4c). Value-driven off
+  // permAxes.enforcement itself, NOT an engine-name allowlist (round 2
+  // MF-R2-6: ext.engine is declared display-only, ADR-0034 F3 — the prior
+  // SANDBOX_AXIS_ENGINES lookup replaced one name check with another and
+  // still showed the 作業意図 picker for any future launch-fixed engine
+  // the set had not been taught about). Absent permission data defaults
+  // to true, matching the legacy behaviour when nothing else is known.
+  const permissionModeSwitchable = $derived(
+    permAxes === null || permAxes.enforcement === "mode",
   );
   // Codex / Antigravity sandbox の network 軸 (ADR-0033 F3, ADR-0057 F4c,
   // issue #118)。protocol の ResolvedSnapshotExt に沿って
-  // ext.effective.network_access を defensive に読む。engine gate を derive
-  // に埋め込む (藤 R1): 他 wrapper が誤って boolean を stamp しても template
-  // gate だけでは hasCcStatus 経路で panel 開扉に効いてしまうため、対象外
-  // engine は最初から null に fail-closed。typeof boolean gate で false は
-  // 落とさない。snapshot.ts effectiveStatusEnvelopeFields は network_access
-  // を top-level には展開せず effective 配下にのみ入れるため、effective
-  // 経路のみを読む。
+  // ext.effective.network_access を defensive に読む。engine gate は
+  // permissionModeSwitchable (permAxes.enforcement 由来) に置き換えた —
+  // 旧 hasSandboxAxis は engine 名 allowlist で、Claude が誤って
+  // network_access を stamp した場合の防御を engine 名で行っていたが
+  // (round 1 pin)、round 2 MF-R2-6 で同じ判定を値駆動にする。
   const effectiveNetworkAccess = $derived.by(() => {
-    if (!hasSandboxAxis) return null;
+    if (permissionModeSwitchable) return null;
     const raw = envelope.ext?.effective;
     if (typeof raw !== "object" || raw === null) return null;
     const value = (raw as Record<string, unknown>).network_access;
@@ -2796,14 +2797,15 @@
               </dd>
             </div>
           {/if}
-          {#if !hasSandboxAxis && (ccPermissionMode || connection)}
+          {#if permissionModeSwitchable && (ccPermissionMode || connection)}
             <!-- 作業意図 (mode, ADR-0033 F4 追補): the operator's intent
                  expressed as the Claude permission_mode enum. Codex /
                  Antigravity are launch-fixed (ADR-0033 F3, ADR-0057 F4c) so
-                 no picker here — was `!isCodexAgent` before phase-34 A12,
-                 which showed a meaningless "作業意図: default" switcher on
-                 any non-Claude, non-Codex engine (ADR-0034 F3: do not infer
-                 feature availability from the engine name). -->
+                 no picker here; permissionModeSwitchable is value-driven off
+                 permAxes.enforcement (ADR-0034 F3: never infer feature
+                 availability from the engine name), so an engine the
+                 dashboard has not been taught about still hides correctly
+                 when it is launch-fixed. -->
             <div class="cc-row">
               <dt>作業意図</dt>
               <dd>
@@ -2885,13 +2887,13 @@
               </dd>
             </div>
           {/if}
-          {#if hasSandboxAxis && effectiveNetworkAccess !== null}
+          {#if effectiveNetworkAccess !== null}
             <!-- Codex / Antigravity sandbox の network 軸 (ADR-0033 F3,
                  ADR-0057 F4c, issue #118): workspace-write sandbox 内での
                  network 許可 toggle。protocol の ResolvedSnapshotExt /
                  ext.effective.network_access と直結で raw boolean を表示。
-                 対象外 engine は stamp しない (typeof gate と
-                 hasSandboxAxis の二重防御)。 -->
+                 engine gate は effectiveNetworkAccess 自身に埋め込み済み
+                 (permissionModeSwitchable 由来、ADR-0034 F3)。 -->
             <div class="cc-row">
               <dt>network_access</dt>
               <dd>{effectiveNetworkAccess}</dd>

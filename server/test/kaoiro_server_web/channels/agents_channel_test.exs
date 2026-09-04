@@ -3692,7 +3692,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert payload["approval"] == "never"
     end
 
-    test "operator の spawn: on-failure を含む未知 approval は payload から drop する" do
+    test "operator の spawn: antigravity で on-failure など未知 approval は agent_id 割当前に error reply する (round 2 MF-R2-4)" do
       host_id = "lab-pc-1e-approval-bad"
       register_host(host_id, cwd_allowlist: ["/home/user/proj"])
       @endpoint.subscribe("runner:" <> host_id)
@@ -3707,9 +3707,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "approval" => "on-failure"
         })
 
-      assert_reply ref, :ok, %{}
-      assert_broadcast "spawn", payload
-      refute Map.has_key?(payload, "approval")
+      assert_reply ref, :error, %{reason: "invalid_approval"}
+      refute_broadcast "spawn", _payload
     end
 
     test "operator の spawn: permission_mode を relay + PermissionModes に永続 (phase-15 15-12)" do

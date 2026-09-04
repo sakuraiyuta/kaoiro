@@ -9,7 +9,7 @@ import { execFile } from "node:child_process";
 import type { EngineModelInfo } from "@kaoiro/protocol";
 import {
   antigravityCatalogSnapshot,
-  catalogFromAgyModels,
+  parseAgyModelsOutput,
 } from "@kaoiro/antigravity";
 
 interface AgyModelsResult {
@@ -39,22 +39,13 @@ function runAgyModels(): Promise<AgyModelsResult> {
   });
 }
 
-/** Parses `agy models` stdout into a slug list (one slug per line, measured
- *  1.1.26 — the subcommand rejects `--output-format`). Blank lines are
- *  dropped; no other structure is assumed. */
-export function parseAgyModelsOutput(stdout: string): string[] {
-  return stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line !== "");
-}
-
 /** Register-time probe (ADR-0057 F6). Runs `agy models` and resolves the
- *  launch catalog via `catalogFromAgyModels` (which itself prepends the
- *  `{ value: "", display_name: "account default" }` entry — the measured
- *  account default slug is not part of the printed list). Falls back to
- *  the pinned 1.1.26 snapshot with a stderr warn on any failure: binary
- *  absent, non-zero exit, timeout, or empty output. */
+ *  launch catalog via `parseAgyModelsOutput` (shared with the wrapper —
+ *  it prepends the `{ value: "", display_name: "account default" }` entry
+ *  itself). Falls back to the pinned 1.1.26 snapshot with a stderr warn on
+ *  any failure: binary absent, non-zero exit, timeout, or output the parser
+ *  cannot make sense of (docs/specs/antigravity-cli-events.md — the format
+ *  drifts with the vendor). */
 export async function resolveAntigravityCatalog(
   runModels: RunAgyModels = runAgyModels,
 ): Promise<EngineModelInfo[]> {
@@ -68,13 +59,13 @@ export async function resolveAntigravityCatalog(
     );
     return antigravityCatalogSnapshot();
   }
-  const slugs = parseAgyModelsOutput(stdout);
-  if (slugs.length === 0) {
+  const models = parseAgyModelsOutput(stdout);
+  if (models === null) {
     process.stderr.write(
-      "runner: warn — antigravity `agy models` returned no slugs; " +
-        "publishing the pinned 1.1.26 snapshot\n",
+      "runner: warn — antigravity `agy models` output had no parseable " +
+        "models; publishing the pinned 1.1.26 snapshot\n",
     );
     return antigravityCatalogSnapshot();
   }
-  return catalogFromAgyModels(slugs);
+  return models;
 }

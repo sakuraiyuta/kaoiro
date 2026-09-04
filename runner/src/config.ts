@@ -367,6 +367,10 @@ export function buildRegister(
         codexAuthMode,
         config.codex?.chatgpt_plan,
       ),
+      // ADR-0033 F3: Codex exposes a launch-fixed sandbox axis (+ its
+      // network_access toggle) but not approval (upstream-fixed to
+      // "never", round 2 SF-R2-4).
+      launch_permission_axes: { sandbox: true, approval: false },
     });
   }
   if (capabilities.includes("antigravity")) {
@@ -378,6 +382,9 @@ export function buildRegister(
     // catalog.
     engines.push({
       id: "antigravity",
+      // ADR-0057 F4c: Antigravity exposes both the sandbox axis and the
+      // approval axis (round 2 SF-R2-4).
+      launch_permission_axes: { sandbox: true, approval: true },
       models: antigravityCatalogOverride ?? antigravityCatalogSnapshot(),
     });
   }

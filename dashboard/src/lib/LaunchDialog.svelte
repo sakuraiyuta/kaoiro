@@ -257,15 +257,26 @@
     effort = (event.currentTarget as HTMLSelectElement).value;
     manualEffortPick = true;
   }
-  // Engines whose launch permission exposes a selectable sandbox axis
-  // (ADR-0033 F3, ADR-0057 F4c) rather than Claude's single permission_mode
-  // knob. SANDBOX_AXIS_ENGINES lives in protocol.ts (shared with
-  // AgentDetail.svelte, review round 1 phase-34 A12) so a future
-  // sandbox-axis engine extends one set instead of two duplicated literals.
-  const hasSandboxAxis = $derived(SANDBOX_AXIS_ENGINES.has(engine));
-  // Only Antigravity exposes a selectable approval axis (ADR-0057 F4c);
-  // Codex's approval is upstream-fixed to "never" and not offered here.
-  const isAntigravity = $derived(engine === "antigravity");
+  // The runner declares each engine's launch-time permission axes in its
+  // register payload (EngineCatalogEntry.launch_permission_axes, ADR-0033
+  // F3, ADR-0057 F4c, round 2 SF-R2-4) — read that VALUE instead of
+  // inferring capability from the engine name (ADR-0034 F3). Falls back to
+  // the SANDBOX_AXIS_ENGINES / literal "antigravity" allowlists only for a
+  // pre-metadata runner (the field, or the whole entry, absent).
+  const engineCatalogEntry = $derived(
+    host?.engines?.find((e) => e.id === engine) ?? null,
+  );
+  const hasSandboxAxis = $derived(
+    engineCatalogEntry?.launch_permission_axes?.sandbox ??
+      SANDBOX_AXIS_ENGINES.has(engine),
+  );
+  // Approval is selectable only where the declared axis says so (currently
+  // Antigravity; Codex's approval is upstream-fixed to "never" and not
+  // offered here).
+  const hasApprovalAxis = $derived(
+    engineCatalogEntry?.launch_permission_axes?.approval ??
+      engine === "antigravity",
+  );
   // Claude-only: the permission_mode picker only makes sense for engine=
   // claude-code (Codex ignores the field). Kept as a derived so the select
   // vanishes automatically when the operator swaps engines mid-dialog.
@@ -479,8 +490,9 @@
         ...(hasSandboxAxis && sandbox === "workspace-write"
           ? { network_access: networkAccess }
           : {}),
-        // Antigravity-only launch approval (ADR-0057 F4c).
-        ...(isAntigravity ? { approval } : {}),
+        // Launch approval, only for engines whose declared axis offers it
+        // (ADR-0057 F4c).
+        ...(hasApprovalAxis ? { approval } : {}),
         // Claude-only launch permission mode (phase-15 15-12). Empty ""
         // means "no explicit pick" — fall through to the server's stored
         // value (natural continuation).
@@ -691,7 +703,7 @@
             sandbox 内のネットワークアクセスを許可
           </label>
         {/if}
-        {#if isAntigravity}
+        {#if hasApprovalAxis}
           <label>
             承認 (approval)
             <select bind:value={approval}>

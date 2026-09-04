@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 // phase-34 A12 (ADR-0057 F4/F4c): AgentDetail の permission panel を
-// antigravity にも適用する。(1) network_access 行の engine gate を
-// SANDBOX_AXIS_ENGINES (codex/antigravity) に拡張、(2)
+// antigravity にも適用する。(1) network_access 行は
+// ext.effective.network_access の値の有無だけで出し分ける、(2)
 // ext.permission.enforcement === "advisory" のとき実効書込範囲バッジに
 // 恒久表示、(3) 作業意図 (Claude permission_mode) スイッチャーは
-// hasSandboxAxis で非表示にする — A12 実装前は `!isCodexAgent` だったため
-// antigravity で意味のない「作業意図: default」が出ていた回帰の pin。
+// permAxes.enforcement === "mode" のときだけ表示する (round 2 MF-R2-6:
+// ext.engine は display-only, ADR-0034 F3 — SANDBOX_AXIS_ENGINES という
+// engine 名 allowlist も同じ違反だったため値駆動の判定に置き換えた)。
 import { mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AgentDetail from "../src/lib/AgentDetail.svelte";
@@ -130,5 +131,21 @@ describe("AgentDetail permission panel — antigravity (phase-34 A12, ADR-0057 F
   it("claude-code → 作業意図スイッチャーは引き続き表示される (既存挙動の非退行)", async () => {
     const target = await render({ engine: "claude-code" });
     expect(rowByLabel(target, "作業意図")).not.toBeNull();
+  });
+
+  it("未知 engine + enforcement='os' (launch-fixed) → 作業意図スイッチャーを表示しない (round 2 MF-R2-6 回帰 pin)", async () => {
+    // engine 名の allowlist (SANDBOX_AXIS_ENGINES) には無い架空の engine。
+    // permAxes.enforcement が "mode" 以外である以上、名前を知らなくても
+    // launch-fixed と判定できることを確認する — 旧実装 (engine 名 allowlist)
+    // ではここで意味のない「作業意図: default」が出ていた。
+    const target = await render({
+      engine: "future-engine",
+      permission: {
+        sandbox: "workspace-write",
+        approval: "never",
+        enforcement: "os",
+      },
+    });
+    expect(rowByLabel(target, "作業意図")).toBeNull();
   });
 });

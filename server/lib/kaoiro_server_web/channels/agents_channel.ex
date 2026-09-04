@@ -216,7 +216,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
                    invalid_mode missing_user_id invalid_user_id
                    unknown_user revision_exhausted
                    missing_conversation_id conversation_closed
-                   unknown_conversation_id)a
+                   unknown_conversation_id invalid_approval)a
 
   # session_id charset — mirrors runner/src/sessions.ts SESSION_ID_PATTERN
   # (Claude Code's UUID-shaped JSONL filenames). Validated at this boundary so
@@ -846,6 +846,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
          {:ok, display_name} <- resolve_spawn_display_name(persona, payload),
          {:ok, cwd} <- fetch_allowed_cwd(host, payload),
          {:ok, engine} <- fetch_allowed_engine(host, payload),
+         :ok <- validate_antigravity_approval(engine, payload),
          {:ok, agent_id} <- allocate_agent_id(host_id),
          request_id <- generate_transition_id(),
          {:ok, spawn_payload} <-
@@ -2015,6 +2016,23 @@ defmodule KaoiroServerWeb.AgentsChannel do
     do: Map.put(map, "approval", value)
 
   defp maybe_put_approval(map, _value), do: map
+
+  # Rejects a present-but-invalid approval for antigravity BEFORE agent_id
+  # allocation / broadcast (ふじ round 2 MF-R2-4): silently dropping it (the
+  # old `maybe_put_approval` behaviour, still applied here as a defensive
+  # gate) let a malformed spawn request launch anyway with the runner's
+  # `on-request` default, which is not what the operator asked for. Absent
+  # is fine (the runner default applies); any other engine's approval is
+  # untouched — this axis is antigravity-only.
+  defp validate_antigravity_approval("antigravity", payload) do
+    case payload["approval"] do
+      nil -> :ok
+      value when value in @approval_values -> :ok
+      _invalid -> {:error, :invalid_approval}
+    end
+  end
+
+  defp validate_antigravity_approval(_engine, _payload), do: :ok
 
   # ADR-0033 F4 追補 (phase-15 D2 / task 15-12). Same closed-enum gate as
   # @permission_modes above so a malformed spawn payload never reaches the

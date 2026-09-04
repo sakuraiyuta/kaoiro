@@ -156,10 +156,12 @@ export function permissionFrom(envelope: Envelope): PermissionAxes | null {
 
 /** Engines whose launch permission exposes a selectable sandbox axis
  *  (ADR-0033 F3, ADR-0057 F4c) rather than Claude's single permission_mode
- *  knob. Single source of truth for LaunchDialog.svelte and
- *  AgentDetail.svelte — a future sandbox-axis engine extends this one set
- *  instead of adding a matching branch in each component (review round 1,
- *  phase-34 A12: the two components had duplicated this set verbatim). */
+ *  knob. Used by LaunchDialog.svelte, which has no live session_capabilities
+ *  / permission data to read from before spawn (SF-R2-4 tracks moving this
+ *  to a per-engine capability declaration). AgentDetail.svelte judges the
+ *  same distinction from the live envelope's permission.enforcement instead
+ *  (round 2 MF-R2-6) — ext.engine is declared display-only (ADR-0034 F3),
+ *  so an active-session component must not gate on it. */
 export const SANDBOX_AXIS_ENGINES: ReadonlySet<string> = new Set([
   "codex",
   "antigravity",
@@ -1518,6 +1520,15 @@ export async function fetchServerHealth(base = ""): Promise<ServerHealth | null>
 export interface EngineCatalog {
   id: string;
   models: ModelOption[];
+  /** Launch-time permission axes this engine offers as operator-selectable
+   *  LaunchDialog controls (ADR-0033 F3, ADR-0057 F4c, round 2 SF-R2-4) —
+   *  mirrors protocol/src/index.ts EngineCatalogEntry.launch_permission_axes.
+   *  Absent = a pre-metadata runner; LaunchDialog falls back to its own
+   *  engine-name allowlist (SANDBOX_AXIS_ENGINES). */
+  launch_permission_axes?: {
+    sandbox: boolean;
+    approval: boolean;
+  };
 }
 
 /** A live host the operator can launch agents on (ADR-0023 / #22). Derived

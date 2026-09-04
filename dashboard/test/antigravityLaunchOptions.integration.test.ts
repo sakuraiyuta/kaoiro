@@ -180,4 +180,54 @@ describe("LaunchDialog antigravity sandbox/approval/network_access (phase-34 A12
       }),
     );
   });
+
+  it("未知 engine + launch_permission_axes 宣言あり → 値駆動で sandbox/承認 select を出す (round 2 SF-R2-4)", async () => {
+    // SANDBOX_AXIS_ENGINES には無い engine 名でも、register の
+    // launch_permission_axes 宣言があれば表示できることを確認する —
+    // 逆に言えば engine 名 (antigravity/codex) 固定のロジックではない。
+    const host: HostInfo = {
+      host_id: "host-a",
+      personas: [{ id: "ao", name: "あお", sprite_set: "ao" }],
+      cwd_allowlist: ["/workspace"],
+      capabilities: ["claude-code", "future-engine"],
+      engines: [
+        { id: "claude-code", models: [] },
+        {
+          id: "future-engine",
+          models: [],
+          launch_permission_axes: { sandbox: true, approval: true },
+        },
+      ],
+    };
+    const { target } = await render([host]);
+    await selectValue(labelledSelect(target, "エンジン"), "future-engine");
+
+    expect(findLabel(target, "sandbox")).toBeDefined();
+    expect(findLabel(target, "承認")).toBeDefined();
+  });
+
+  it("宣言された engine で approval=false → 承認 select を出さない (値が false を上書きする)", async () => {
+    // engine 名だけを見れば "antigravity" は SANDBOX_AXIS_ENGINES に入って
+    // approval も選べてしまうところ、宣言が approval:false ならそちらが勝つ
+    // ことを確認する。
+    const host: HostInfo = {
+      host_id: "host-a",
+      personas: [{ id: "ao", name: "あお", sprite_set: "ao" }],
+      cwd_allowlist: ["/workspace"],
+      capabilities: ["claude-code", "antigravity"],
+      engines: [
+        { id: "claude-code", models: [] },
+        {
+          id: "antigravity",
+          models: [],
+          launch_permission_axes: { sandbox: true, approval: false },
+        },
+      ],
+    };
+    const { target } = await render([host]);
+    await selectValue(labelledSelect(target, "エンジン"), "antigravity");
+
+    expect(findLabel(target, "sandbox")).toBeDefined();
+    expect(findLabel(target, "承認")).toBeUndefined();
+  });
 });

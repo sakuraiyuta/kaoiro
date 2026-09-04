@@ -328,6 +328,19 @@ describe("buildRegister", () => {
       value: "",
       display_name: "account default",
     });
+    // round 2 SF-R2-4: LaunchDialog reads this instead of an engine-name
+    // allowlist (ADR-0034 F3). Claude has no launch-fixed axis at all;
+    // Codex offers sandbox but not approval (upstream-fixed to "never");
+    // Antigravity offers both (ADR-0057 F4c).
+    expect(register.engines?.[0]?.launch_permission_axes).toBeUndefined();
+    expect(register.engines?.[1]?.launch_permission_axes).toEqual({
+      sandbox: true,
+      approval: false,
+    });
+    expect(register.engines?.[2]?.launch_permission_axes).toEqual({
+      sandbox: true,
+      approval: true,
+    });
   });
 
   it("allowed_personas を register に含める", () => {

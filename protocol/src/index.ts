@@ -332,6 +332,18 @@ export interface EngineModelInfo {
 export interface EngineCatalogEntry {
   id: EngineKind;
   models: EngineModelInfo[];
+  /** Launch-time permission axes this engine offers as operator-selectable
+   *  LaunchDialog controls, pre-spawn (ADR-0033 F3, ADR-0057 F4c) — declared
+   *  here so the dashboard reads a value instead of inferring capability
+   *  from `id` (ADR-0034 F3, round 2 SF-R2-4). Absent = a pre-metadata
+   *  runner; callers fall back to their own engine-name allowlist. */
+  launch_permission_axes?: {
+    /** sandbox (read-only/workspace-write/danger-full-access) picker, plus
+     *  the workspace-write network_access toggle. */
+    sandbox: boolean;
+    /** approval (untrusted/on-request/never) picker. */
+    approval: boolean;
+  };
 }
 
 /** state_change.ext.pending_permission shape (ADR-0022, #59). The
