@@ -85,6 +85,8 @@ through the CLI bridge. Measured substrate:
 | B3 | session enumeration metadata from `conversation_summaries.db` |
 | B4 | setup wizard: `agy` presence check; runner reports `agy --version` and re-runs the gate registration check on a version change |
 | B5 | context usage (per-model window table) — only if a source of truth exists |
+| B6 | `antigravity.extra_models` (issue #292 part A for this engine, reusing the codex helpers) |
+| B7 | server test for an antigravity spawn with the `approval` key entirely absent (review advisory) |
 
 ## Open Questions Blocking This Phase
 
