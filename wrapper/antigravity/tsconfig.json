@@ -1,5 +1,15 @@
 {
   "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "paths": {
+      "@kaoiro/wrapper-core": [
+        "../core/src/index.ts"
+      ],
+      "@kaoiro/agent-common": [
+        "../agent-common/src/index.ts"
+      ]
+    }
+  },
   "include": [
     "src",
     "test"
