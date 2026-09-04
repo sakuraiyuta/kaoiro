@@ -2,7 +2,8 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { PermissionBroker, type Envelope, type WrapperConfig } from "@kaoiro/agent-common";
-import { AntigravityHost, isGateRegistered, type SpawnedAgy } from "../src/host.js";
+import { AntigravityHost, initialStatusExt, isGateRegistered, type SpawnedAgy } from "../src/host.js";
+import type { AntigravityLaunchConfig } from "../src/gate.js";
 
 class FakeAgy extends EventEmitter {
   readonly stdout = new PassThrough();
@@ -66,6 +67,21 @@ function hostHarness(options: { resumeSessionId?: string; dangerouslySkipPermiss
 }
 
 describe("AntigravityHost", () => {
+  it("on-failure approvalはspawn前に拒否する", () => {
+    const cfg: AntigravityLaunchConfig = { ...config(), approval: "on-failure" };
+    const broker = new PermissionBroker({ config: cfg, send: () => {} });
+    expect(() => new AntigravityHost(cfg, {
+      cwd: process.cwd(), appendSystemPrompt: "persona", permissionBroker: broker,
+      onState: () => {}, runtimeAssetsAvailable: () => true,
+    })).toThrow("antigravity approval=on-failure is unsupported");
+  });
+
+  it("permission enforcementをadvisoryとしてstatus extにstampする", () => {
+    expect(initialStatusExt(config() as AntigravityLaunchConfig)).toMatchObject({
+      permission: { enforcement: "advisory" },
+    });
+  });
+
   it("F4b smoke probeはexpected sourceのgateをちょうど一つ要求する", () => {
     expect(isGateRegistered({ hooks: [{ source: "/pkg/dist/hook.js" }] }, "/pkg/dist/hook.js")).toBe(true);
     expect(isGateRegistered({ hooks: [] }, "/pkg/dist/hook.js")).toBe(false);

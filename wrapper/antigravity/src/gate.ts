@@ -7,7 +7,7 @@ import { PermissionBroker, type PermissionDecision, type WrapperConfig } from "@
 import { effectiveNetworkAccess } from "./network_access.js";
 
 export type AntigravityLaunchConfig = WrapperConfig & {
-  approval?: "untrusted" | "on-request" | "never";
+  approval?: "untrusted" | "on-request" | "on-failure" | "never";
 };
 
 export type AntigravityToolClass =

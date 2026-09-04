@@ -148,6 +148,9 @@ export class AntigravityHost implements EngineAdapter {
 
   constructor(config: WrapperConfig, options: AntigravityHostOptions) {
     this.#config = config as AntigravityLaunchConfig;
+    if (this.#config.approval === "on-failure") {
+      throw new Error("antigravity approval=on-failure is unsupported");
+    }
     this.#options = options;
     this.#sessionId = options.resumeSessionId ?? null;
     this.#now = () => new Date().toISOString();
