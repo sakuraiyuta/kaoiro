@@ -1,7 +1,17 @@
-// @kaoiro/antigravity — Antigravity (agy CLI) engine adapter skeleton
-// (ADR-0057, phase-34 Stage A A2). The adapter body (host.ts / adapter.ts /
-// catalog.ts / toolhost.ts / bridge.ts / history.ts) lands in a later task;
-// this package currently exports only the engine identity constant so the
-// wiring across protocol / runner / server can reference it.
-
-export const ANTIGRAVITY_ENGINE = { id: "antigravity" as const };
+export { ANTIGRAVITY_ENGINE, antigravityCatalogSnapshot, catalogFromAgyModels } from "./catalog.js";
+export { AntigravityHost, initialStatusExt, isGateRegistered } from "./host.js";
+export { AntigravityGate, GateServer, TOOL_CLASS_BY_NAME } from "./gate.js";
+export { CustomizationDir, sweepStaleCustomizationDirs } from "./customization.js";
+export { ToolHost } from "./toolhost.js";
+export { effectiveNetworkAccess } from "./network_access.js";
+export { applyAntigravityEnvDefaultModel, resolveAntigravitySources } from "./source_resolution.js";
+export { runAntigravityCli } from "./cli.js";
+export {
+  agyEventToErrorDetail,
+  agyEventToEvents,
+  agyEventToLogs,
+  agyEventToResult,
+  agyEventToSessionId,
+  parseAgyStreamLine,
+} from "./adapter.js";
+export type { AgyStreamEvent } from "./adapter.js";

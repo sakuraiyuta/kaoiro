@@ -1,0 +1,3 @@
+{"event":"init","conversation_id":"87046bdb-e540-41e3-a201-965427dd25d6","init":{"cwd":"/tmp/kohaku181-agyprobe","tools":["run_command"],"permission_mode":"request-review"}}
+{"event":"step_update","step_update":{"conversation_id":"87046bdb-e540-41e3-a201-965427dd25d6","step_index":0,"state":"DONE","step_type":"user_input"}}
+{"event":"result","result":{"conversation_id":"87046bdb-e540-41e3-a201-965427dd25d6","status":"ERROR","response":"","error":"timeout waiting for response"}}

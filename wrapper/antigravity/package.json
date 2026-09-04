@@ -7,12 +7,19 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "kaoiro": {
-    "runtimeAssets": []
+    "runtimeAssets": [
+      "dist/bridge.js",
+      "dist/hook.js"
+    ]
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node ../../scripts/generate-wrapper-build-info.mjs dist",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
+  },
+  "dependencies": {
+    "@kaoiro/agent-common": "workspace:*",
+    "@kaoiro/wrapper-core": "workspace:*"
   },
   "devDependencies": {
     "@kaoiro/protocol": "workspace:*",

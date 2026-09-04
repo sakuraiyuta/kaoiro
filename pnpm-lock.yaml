@@ -71,6 +71,13 @@ importers:
         version: 2.1.9(@types/node@22.20.0)
 
   wrapper/antigravity:
+    dependencies:
+      '@kaoiro/agent-common':
+        specifier: workspace:*
+        version: link:../agent-common
+      '@kaoiro/wrapper-core':
+        specifier: workspace:*
+        version: link:../core
     devDependencies:
       '@kaoiro/protocol':
         specifier: workspace:*

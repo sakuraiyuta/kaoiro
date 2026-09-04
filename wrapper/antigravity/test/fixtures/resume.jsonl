@@ -1,0 +1,6 @@
+{"event":"init","conversation_id":"8bb5af2f-a5ad-432b-9484-57de753b0824","init":{"cwd":"/tmp/kohaku181-agyprobe","tools":["run_command"],"permission_mode":"request-review"}}
+{"event":"step_update","step_update":{"conversation_id":"8bb5af2f-a5ad-432b-9484-57de753b0824","step_index":2,"state":"DONE","step_type":"user_input"}}
+{"event":"step_update","step_update":{"conversation_id":"8bb5af2f-a5ad-432b-9484-57de753b0824","step_index":3,"state":"DONE","step_type":"system_message"}}
+{"event":"step_update","step_update":{"conversation_id":"8bb5af2f-a5ad-432b-9484-57de753b0824","step_index":4,"state":"ACTIVE","step_type":"agent_response","text_delta":"PONG"}}
+{"event":"step_update","step_update":{"conversation_id":"8bb5af2f-a5ad-432b-9484-57de753b0824","step_index":4,"state":"DONE","step_type":"agent_response","text_delta":"\n"}}
+{"event":"result","result":{"conversation_id":"8bb5af2f-a5ad-432b-9484-57de753b0824","status":"SUCCESS","response":"PONG\n"}}
