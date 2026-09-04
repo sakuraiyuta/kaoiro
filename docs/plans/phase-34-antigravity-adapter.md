@@ -1,6 +1,6 @@
 ---
 title: Phase 34 — Antigravity adapter (third engine, agy CLI headless)
-description: Implement ADR-0057 — wrapper/antigravity package driving the agy CLI per turn, hook-based permission gate with mid-session two-axis policy, CLI bridge for kaoiro tools, rules-file persona injection, catalog from `agy models`, and the protocol / runner / server / dashboard wiring for engine id `antigravity`.
+description: Implement ADR-0057 — wrapper/antigravity package driving the agy CLI per turn, hook-based permission gate with a wrapper-side two-axis policy (axes fixed at spawn in Stage A), CLI bridge for kaoiro tools, rules-file persona injection, catalog from `agy models`, and the protocol / runner / server / dashboard wiring for engine id `antigravity`.
 status: planned
 phase: 34
 depends_on: [phase-14-codex-adapter, phase-33-compaction-resume-lifecycle]
@@ -67,7 +67,7 @@ through the CLI bridge. Measured substrate:
 | A6b | gate self-verification (F4b): `-p /hooks` registration check before first turn; per-turn tool-step ↔ gate-request correlation invariant with kill + `error` on violation; tests inject a missing hook and a missing nonce as negative controls | |
 | A7 | `gate.ts`: tool-class table (spec SoT) + `init.tools` diff, F4 cell table incl. `network_access`, customization-dir and `Cwd` denies, bridge argv validation (F5) with injection tests (`;`, `&&`, `|`, `$(…)`, newline, extra argv); `PermissionBroker` wiring; `setPermissionMode` rejects (F4c) | |
 | A8 | `bridge.ts` CLI (`list` / `call`) over `ToolHost`; `ask_user_question` blocking semantics; `inter_agent` descriptors | |
-| A9 | `catalog.ts` static 1.1.8 snapshot + runner `agy models` probe; `KAOIRO_ANTIGRAVITY_DEFAULT_MODEL`; source resolution | |
+| A9 | `catalog.ts` static 1.1.26 snapshot + account-default entry (F6) + runner `agy models` probe; `KAOIRO_ANTIGRAVITY_DEFAULT_MODEL`; source resolution | |
 | A10 | runner: `ENGINE_PACKAGES`, `BUNDLED_ENGINES`, `buildRegister` branch, `supervisor` validation + `approval` relay, `P0_FIELDS_BY_ENGINE` (`sandbox`, `approval`, `networkAccess`), `sessions.ts` enumeration, `setup.ts` choices | |
 | A11 | server: `@engine_values`, `wrapper_channel` engine guard, tests | |
 | A12 | dashboard: sandbox × approval × network knobs for `antigravity` (approval selectable at spawn); AgentDetail permission panel with the advisory-sandbox badge; account-default catalog entry | |

@@ -82,11 +82,12 @@ agy --print "<turn text>" \
 - **`--print-timeout`** is a Go duration; `24h` is accepted *(measured)*.
   Set it long because a turn can legitimately block on an operator decision
   (permission gate, ask_user_question) — see below.
-- `--mode accept-edits|plan` and `--sandbox` are accepted but do not change
-  `init.permission_mode` *(measured)*; their runtime effect is *(unverified)*
-  and not used by the adapter.
+- `--mode accept-edits|plan` is accepted but does not change
+  `init.permission_mode` *(measured)*; its runtime effect is *(unverified)*
+  and not used by the adapter. `--sandbox` is likewise accepted and had no
+  observable effect (see Permission).
 
-### stream-json events (actual 1.1.8 shapes)
+### stream-json events (actual 1.1.26 shapes)
 
 Three top-level `event` kinds, one JSON object per line *(measured)*:
 
@@ -123,7 +124,7 @@ Observed details:
 - `permission_mode` values seen: `request-review` (default) and
   `always-proceed` (when `settings.json` `toolPermission` is
   `always-proceed`). `init.tools` is the full tool inventory (57 names in
-  1.1.8); it is not filtered by permission.
+  1.1.26); it is not filtered by permission.
 - `agent_response` steps stream `text_delta` fragments while `ACTIVE` and
   close with `DONE` + `usage`. A thinking-only step emits `DONE` with
   `thinking_tokens > 0` and no `text_delta`.
