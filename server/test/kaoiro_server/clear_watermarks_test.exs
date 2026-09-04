@@ -246,8 +246,14 @@ defmodule KaoiroServer.ClearWatermarksTest do
     inject = :"cw_non_binary_agent_inject_#{System.unique_integer([:positive])}"
     {:ok, ^inject} = :dets.open_file(inject, file: String.to_charlist(path))
 
-    :ok =
-      :dets.insert(inject, {1, {8_000_000, 5}, "2026-07-20T12:00:00Z", nil, nil})
+    for record <- [
+          {1, {8_000_000, 5}, "2026-07-20T12:00:00Z", nil, nil},
+          {2, {8_000_001, 5}, "2026-07-20T12:01:00Z", nil},
+          {3, {8_000_002, 5}, "2026-07-20T12:02:00Z"},
+          {4, "2026-07-20T12:03:00Z"}
+        ] do
+      :ok = :dets.insert(inject, record)
+    end
 
     :ok = :dets.close(inject)
 
