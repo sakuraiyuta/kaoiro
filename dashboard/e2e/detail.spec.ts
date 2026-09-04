@@ -266,3 +266,49 @@ test("T8: handle attention badge returns to the grid while the sheet is open", a
   // onClose fired — same operation as button.blindspot (ADR-0052 F3).
   await expect(page.getByTestId("closed-marker")).toBeVisible();
 });
+
+test.describe("detail portrait sizing (PersonaFace `detail` preset)", () => {
+  /** `.face` / `.portrait-sprite` at size="detail" are sized in percent, so
+   *  they only render at all when `.portrait-open` gives them a containing
+   *  block with a definite width. Measured in a real browser because the
+   *  failure is a layout collapse, invisible to jsdom. */
+  async function portraitBoxes(page: Page) {
+    return page.evaluate(() => {
+      const portrait = document.querySelector(".portrait") as HTMLElement;
+      const face = document.querySelector(
+        '.face[data-size="detail"]',
+      ) as HTMLElement;
+      const style = getComputedStyle(portrait);
+      const portraitRect = portrait.getBoundingClientRect();
+      const faceRect = face.getBoundingClientRect();
+      return {
+        contentWidth:
+          portraitRect.width -
+          parseFloat(style.paddingLeft) -
+          parseFloat(style.paddingRight),
+        portraitCentre: portraitRect.x + portraitRect.width / 2,
+        faceCentre: faceRect.x + faceRect.width / 2,
+        faceWidth: faceRect.width,
+        faceHeight: faceRect.height,
+      };
+    });
+  }
+
+  for (const width of [1920, 844]) {
+    test(`${width}px: the fallback face fills 70% of the portrait`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(DETAIL);
+      if (width < 1200) await page.locator(".sheet .handle .toggle").click();
+      await page.locator('.face[data-size="detail"]').waitFor();
+      const box = await portraitBoxes(page);
+      // 70% is `.face[data-size="detail"]`'s own width in PersonaFace.
+      expect(box.faceWidth).toBeCloseTo(box.contentWidth * 0.7, 0);
+      // aspect-ratio: 1 / 1 — a collapsed face is square at 4px too, so the
+      // width assertion above is what pins the regression.
+      expect(box.faceHeight).toBeCloseTo(box.faceWidth, 0);
+      expect(box.faceCentre).toBeCloseTo(box.portraitCentre, 0);
+    });
+  }
+});

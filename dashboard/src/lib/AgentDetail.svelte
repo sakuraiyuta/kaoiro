@@ -4006,10 +4006,22 @@
 
   /* issue #232: plain reset so the click target for the persona detail
      modal does not visibly alter `.portrait`'s existing layout — the
-     button is a block wrapper around the image only, sized by its
-     PersonaFace child exactly as the unwrapped image was. */
+     button wraps the image only.
+
+     It carries `.portrait`'s flex centering and full width instead of
+     shrinking to fit, because PersonaFace's `detail` preset sizes itself
+     in PERCENT (`.face` 70%, `.portrait-sprite` 100%) and so needs a
+     containing block with a definite width. A shrink-to-fit button has
+     none: the percentage resolves against zero during intrinsic sizing,
+     and the fallback face — no sprite, therefore nothing with an
+     intrinsic size underneath — collapses to its 2px borders. These two
+     declarations reproduce the containing block PersonaFace had when it
+     was a flex item of `.portrait` directly. The `card` preset is
+     unaffected because it sizes in rem. */
   .portrait-open {
-    display: block;
+    display: flex;
+    justify-content: center;
+    width: 100%;
     margin: 0;
     padding: 0;
     border: none;
