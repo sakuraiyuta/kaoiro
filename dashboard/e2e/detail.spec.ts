@@ -184,8 +184,30 @@ test.describe("T11: 頭上リング (AgentDetail, issue #180 follow-up)", () => 
     test(`1600px 幅広デスクトップ (${label}): 最遠点でも .bar(戻るボタン)に重ならない`, async ({
       page,
     }) => {
+      if (label === "sprite") {
+        // issue #295 M1 (ふじ2 round1 must-fix): pin the broken-<img>
+        // premise explicitly rather than relying on Vite's incidental dev
+        // response. Real probe (2026-09-05): the unresolved
+        // /sprites/ao/idle.png returns 200/text/html (SPA fallback), NOT
+        // a 404 -- so without an explicit route here, a future change
+        // (a real file under dashboard/public/sprites, or a fallback
+        // config change) could silently start resolving the image and
+        // this test would stay green while losing its broken-<img>
+        // coverage.
+        await page.route("**/sprites/ao/idle.png", (route) =>
+          route.fulfill({ status: 404, body: "" }),
+        );
+      }
       await page.setViewportSize({ width: 1600, height: 900 });
       await page.goto(`${DETAIL}&taskRing=1${query}`);
+      if (label === "sprite") {
+        const img = page.locator('.portrait-sprite[data-size="detail"]');
+        await expect
+          .poll(() =>
+            img.evaluate((el) => (el as HTMLImageElement).naturalWidth),
+          )
+          .toBe(0);
+      }
       const ring = page.locator("aside.status .portrait .task-ring");
       await expect(ring).toBeVisible();
       await expect(ring).toHaveClass(
@@ -267,12 +289,15 @@ test("T8: handle attention badge returns to the grid while the sheet is open", a
   await expect(page.getByTestId("closed-marker")).toBeVisible();
 });
 
-// issue #295: a tiny real PNG (8x4, deliberately non-square so a passing
-// naturalWidth/Height check can't be a coincidence of a 1x1 stub) served via
-// page.route for `/sprites/ao/idle.png` -- the URL detailManifest({sprite:
-// true}) hands out, which Vite's dev server otherwise 404s (nothing serves
-// dashboard/public/sprites). Encoded inline rather than committed as a
-// binary fixture file. Generated with:
+// issue #295: a tiny real PNG (8x4, deliberately non-square so pinning its
+// exact naturalWidth/naturalHeight below can't be a coincidence of a 1x1
+// stub) served via page.route for `/sprites/ao/idle.png` -- the URL
+// detailManifest({sprite: true}) hands out. Vite's dev server has no static
+// file there (nothing serves dashboard/public/sprites), so the unresolved
+// request falls through to its SPA fallback -- 200/text/html, NOT a 404
+// (real probe, 2026-09-05) -- which the <img> cannot decode as an image.
+// Encoded inline rather than committed as a binary fixture file. Generated
+// with:
 //   convert -size 8x4 xc:'#3a7bd5' fixture.png
 const SPRITE_FIXTURE_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAEAQMAAACJA+yzAAAAIGNIUk0AAHomAACAhAAA+" +
@@ -280,11 +305,11 @@ const SPRITE_FIXTURE_PNG_BASE64 =
   "RAH/Ai3eAAAAB3RJTUUH6gkEFTovbezl2QAAAAtJREFUCNdjYIAAAAAIAAEvIN0xAAAA" +
   "AElFTkSuQmCC";
 
-/** Point the sprite manifest's URL at the fixture above instead of the 404
- *  Vite otherwise serves, so `<img>` actually decodes (issue #295). Every
- *  other `&sprite=1` spec (T11/T12 above) deliberately leaves this
- *  unstubbed, keeping the 404-fallback path covered per the issue's
- *  acceptance criteria. */
+/** Point the sprite manifest's URL at the fixture above instead of Vite's
+ *  SPA-fallback HTML, so `<img>` actually decodes (issue #295). Every other
+ *  `&sprite=1` spec (T11/T12 above) deliberately leaves this unstubbed,
+ *  keeping the broken-<img> path covered per the issue's acceptance
+ *  criteria. */
 async function stubSpriteFixture(page: Page): Promise<void> {
   await page.route("**/sprites/ao/idle.png", (route) =>
     route.fulfill({
@@ -337,12 +362,10 @@ test.describe("detail portrait sizing (PersonaFace `detail` preset)", () => {
     });
   }
 
-  // issue #295: the sibling of the loop above, but for a RESOLVED sprite
-  // instead of the CSS fallback face. Without stubSpriteFixture(), every
-  // sprite=1 scenario in this file only ever exercised `<img>`'s error
-  // state (Vite 404s /sprites/ao/idle.png) -- a regression in the loaded-
-  // sprite geometry (intrinsic size, object-fit, this box's own sizing)
-  // would pass the suite undetected.
+  // issue #295: the sibling of the loop above, for a RESOLVED sprite
+  // instead of the CSS fallback face -- requires stubSpriteFixture() since
+  // Vite serves no static file for /sprites/ao/idle.png (see that
+  // function's doc comment above).
   for (const width of [1920, 844]) {
     test(`${width}px: a resolved sprite fills 100% of the portrait (issue #295)`, async ({
       page,
@@ -353,14 +376,20 @@ test.describe("detail portrait sizing (PersonaFace `detail` preset)", () => {
       if (width < 1200) await page.locator(".sheet .handle .toggle").click();
       const img = page.locator('.portrait-sprite[data-size="detail"]');
       await img.waitFor();
-      // Prove the <img> actually decoded the stubbed fixture -- waitFor()
-      // above only proves the element exists, which a broken src also
-      // satisfies (naturalWidth stays 0 in that case).
+      // Prove the <img> actually decoded THIS fixture specifically (not
+      // just some image) -- pin the exact 8x4 intrinsic size, not merely
+      // naturalWidth > 0. poll() because naturalWidth only settles once
+      // the browser's own image decode completes, which can trail the
+      // element's attachment to the DOM (waitFor() above only proves the
+      // element exists, which a broken src also satisfies).
       await expect
         .poll(() =>
           img.evaluate((el) => (el as HTMLImageElement).naturalWidth),
         )
-        .toBeGreaterThan(0);
+        .toBe(8);
+      expect(
+        await img.evaluate((el) => (el as HTMLImageElement).naturalHeight),
+      ).toBe(4);
       const box = await portraitBoxes(
         page,
         '.portrait-sprite[data-size="detail"]',
