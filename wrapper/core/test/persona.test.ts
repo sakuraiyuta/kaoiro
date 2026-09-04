@@ -41,6 +41,9 @@ const ROUND_TRIP_CASES: {
   effort_source: { value: "env" },
   codex_auth_mode: { value: "chatgpt" },
   codex_chatgpt_plan: { value: "plus" },
+  codex_extra_models: {
+    value: [{ value: "gpt-6-astra", display_name: "GPT-6-Astra" }],
+  },
   codex_internal_subagents: { value: true },
   claude_engine_catalog: {
     value: [{ value: "sonnet", display_name: "Sonnet", description: "" }],
@@ -286,6 +289,77 @@ describe("parseConfig", () => {
     ];
     const parsed = parseConfig({ ...valid, claude_engine_catalog: catalog });
     expect(parsed.claude_engine_catalog).toEqual(catalog);
+  });
+
+  // issue #292: this object rides every state_change broadcast verbatim
+  // (host.ts stamps it into ext.models), so it gets the same
+  // nonEmptyString/MAX_FIELD_LENGTH + count-cap treatment as every other
+  // identity-string / list field in this file (round-1 review finding).
+  it("codex_extra_models: rejects an empty value / display_name", () => {
+    expect(() =>
+      parseConfig({
+        ...valid,
+        codex_extra_models: [{ value: "", display_name: "GPT-6-Astra" }],
+      }),
+    ).toThrow(/codex_extra_models\[0\]\.value must be a non-empty string/);
+    expect(() =>
+      parseConfig({
+        ...valid,
+        codex_extra_models: [{ value: "gpt-6-astra", display_name: "" }],
+      }),
+    ).toThrow(
+      /codex_extra_models\[0\]\.display_name must be a non-empty string/,
+    );
+  });
+
+  it("codex_extra_models: rejects a value exceeding MAX_FIELD_LENGTH", () => {
+    expect(() =>
+      parseConfig({
+        ...valid,
+        codex_extra_models: [
+          { value: "x".repeat(257), display_name: "GPT-6-Astra" },
+        ],
+      }),
+    ).toThrow(/codex_extra_models\[0\]\.value must be at most 256 characters/);
+  });
+
+  it("codex_extra_models: rejects 33+ declarations (MAX_EXTRA_MODELS=32)", () => {
+    const rows = Array.from({ length: 33 }, (_, i) => ({
+      value: `model-${i}`,
+      display_name: `Model ${i}`,
+    }));
+    expect(() =>
+      parseConfig({ ...valid, codex_extra_models: rows }),
+    ).toThrow(/codex_extra_models must have at most 32 entries/);
+  });
+
+  it("codex_extra_models: rejects 17+ effort_levels (MAX_EFFORT_LEVELS=16)", () => {
+    const effort_levels = Array.from({ length: 17 }, (_, i) => `level-${i}`);
+    expect(() =>
+      parseConfig({
+        ...valid,
+        codex_extra_models: [
+          { value: "gpt-6-astra", display_name: "GPT-6-Astra", effort_levels },
+        ],
+      }),
+    ).toThrow(
+      /codex_extra_models\[0\]\.effort_levels must have at most 16 entries/,
+    );
+  });
+
+  it("codex_extra_models: accepts a valid effort_levels + default_effort as-is", () => {
+    const models = [
+      {
+        value: "gpt-6-astra",
+        display_name: "GPT-6-Astra",
+        effort_levels: ["low", "medium", "high"],
+        default_effort: "low",
+      },
+    ];
+    expect(
+      parseConfig({ ...valid, codex_extra_models: models })
+        .codex_extra_models,
+    ).toEqual(models);
   });
 
   it("permission_timeout_ms は正の整数のみ受け入れる", () => {

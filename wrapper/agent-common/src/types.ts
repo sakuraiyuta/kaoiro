@@ -26,6 +26,7 @@ export type {
   InterAgentMessageKind,
   InterAgentMessagePayload,
   EngineKind,
+  EngineModelInfo,
   ModelSource,
   PermissionAxesExt,
   SessionCapabilitiesExt,

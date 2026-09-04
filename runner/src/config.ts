@@ -13,6 +13,7 @@ import { isBuildInfoConsistent, type BuildInfo } from "./build_info.js";
 import type {
   EngineCatalogEntry,
   EngineKind,
+  EngineModelInfo,
   Persona,
   RunnerHeartbeat,
   RunnerRegister,
@@ -26,6 +27,10 @@ const MAX_FIELD_LENGTH = 256;
 const MAX_PERSONAS = 64;
 const MAX_CWDS = 64;
 const MAX_CAPABILITIES = 16;
+/** Operator-declared extra models per engine (issue #292) — far above any
+ *  real declaration, same rationale as MAX_PERSONAS/MAX_CWDS above. */
+const MAX_EXTRA_MODELS = 32;
+const MAX_EFFORT_LEVELS = 16;
 
 /** host_id rides the channel topic `runner:<host_id>`, so its charset is
  *  restricted exactly like agent_id (the server enforces the same guard). */
@@ -87,6 +92,15 @@ export interface CodexConfig {
    *  effective value, so this runner option outranks any user-global Codex
    *  config. true force-enables, false disables, absent = default true. */
   internal_subagents?: boolean;
+  /** Operator-declared models to add to the resolved catalog, on top of
+   *  whatever `resolveCodexCatalog` already returns for the auth mode / plan
+   *  (issue #292) — lets an operator use a brand-new upstream model the day
+   *  it ships, without waiting for a kaoiro release to update the curated
+   *  snapshot in wrapper/codex/src/catalog.ts. Merged in `buildRegister`
+   *  (declared entries win on a `value` collision) and relayed to the
+   *  wrapper as `WrapperConfig.codex_extra_models` for the same merge on
+   *  the host side (ext.models / effort-switch / setModel validation). */
+  extra_models?: EngineModelInfo[];
 }
 
 const CHATGPT_PLANS = new Set<ChatGptPlan>([
@@ -137,6 +151,109 @@ function parseStringList(
     throw new ConfigError(`${field} must have at most ${max} entries`);
   }
   return value.map((entry, index) => nonEmptyString(entry, `${field}[${index}]`));
+}
+
+/** Parses one `EngineModelInfo` from an operator's `extra_models` entry
+ *  (issue #292). Engine-agnostic — the caller supplies the field path for
+ *  error messages, so this is shared verbatim by any engine's config block
+ *  (`codex.extra_models` today; `antigravity.extra_models` once that
+ *  wrapper package lands, ADR-0057). Only `value` is required; `display_name`
+ *  defaults to `value`, and `effort_levels` / `default_effort` are left
+ *  absent when not declared — no inferred effort UI (ADR-0035 "never guess
+ *  effort levels"). `resolved_model` is upstream-derived metadata, not an
+ *  operator input, and is never read from config. */
+function parseEngineModelInfo(
+  value: unknown,
+  field: string,
+): EngineModelInfo {
+  if (!isObject(value)) {
+    throw new ConfigError(`${field} must be an object`);
+  }
+  const modelValue = nonEmptyString(value.value, `${field}.value`);
+  const model: EngineModelInfo = {
+    value: modelValue,
+    display_name:
+      value.display_name === undefined
+        ? modelValue
+        : nonEmptyString(value.display_name, `${field}.display_name`),
+  };
+  if (value.description !== undefined) {
+    model.description = nonEmptyString(value.description, `${field}.description`);
+  }
+  if (value.effort_levels !== undefined) {
+    model.effort_levels = parseStringList(
+      value.effort_levels,
+      `${field}.effort_levels`,
+      MAX_EFFORT_LEVELS,
+    );
+  }
+  if (value.default_effort !== undefined) {
+    const defaultEffort = nonEmptyString(
+      value.default_effort,
+      `${field}.default_effort`,
+    );
+    if (model.effort_levels === undefined) {
+      throw new ConfigError(
+        `${field}.default_effort requires ${field}.effort_levels`,
+      );
+    }
+    if (!model.effort_levels.includes(defaultEffort)) {
+      throw new ConfigError(
+        `${field}.default_effort must be one of ${field}.effort_levels`,
+      );
+    }
+    model.default_effort = defaultEffort;
+  }
+  return model;
+}
+
+/** Parses an `extra_models` declaration array (issue #292). Rejects a
+ *  duplicate `value` within the SAME declaration fail-fast (ADR-0035's
+ *  "never silently pick one" spirit) rather than silently keeping the last
+ *  one — a collision here is virtually always an operator copy-paste
+ *  mistake, not an intentional override (override semantics apply only
+ *  between this list and the resolved base catalog, in `mergeExtraModels`). */
+function parseExtraModels(value: unknown, field: string): EngineModelInfo[] {
+  if (!Array.isArray(value)) {
+    throw new ConfigError(`${field} must be an array`);
+  }
+  if (value.length > MAX_EXTRA_MODELS) {
+    throw new ConfigError(`${field} must have at most ${MAX_EXTRA_MODELS} entries`);
+  }
+  const models = value.map((entry, index) =>
+    parseEngineModelInfo(entry, `${field}[${index}]`),
+  );
+  const seen = new Set<string>();
+  for (const model of models) {
+    if (seen.has(model.value)) {
+      throw new ConfigError(`${field} has a duplicate value: ${model.value}`);
+    }
+    seen.add(model.value);
+  }
+  return models;
+}
+
+/** Merges operator-declared extra models on top of a resolved base catalog
+ *  (issue #292). Declared entries win on a `value` collision (operator
+ *  override of a curated entry's display_name/effort/etc.) while keeping
+ *  the base catalog's ordering; new values are appended in declaration
+ *  order. Engine-agnostic and reused by both the runner's own
+ *  `buildRegister` (below) and the wrapper hosts' catalog resolution
+ *  (wrapper/codex/src/host.ts) — those two copies are NOT the same function
+ *  (runner and the wrapper packages do not share a dependency edge for a
+ *  cross-cutting util this small), but must stay behaviourally identical. */
+export function mergeExtraModels(
+  base: readonly EngineModelInfo[],
+  extra: readonly EngineModelInfo[] | undefined,
+): EngineModelInfo[] {
+  if (extra === undefined || extra.length === 0) return [...base];
+  const extraByValue = new Map(extra.map((model) => [model.value, model]));
+  const merged = base.map((model) => extraByValue.get(model.value) ?? model);
+  const baseValues = new Set(base.map((model) => model.value));
+  for (const model of extra) {
+    if (!baseValues.has(model.value)) merged.push(model);
+  }
+  return merged;
 }
 
 /**
@@ -267,6 +384,12 @@ export function parseRunnerConfig(raw: unknown): RunnerConfig {
       }
       codex.internal_subagents = raw.codex.internal_subagents;
     }
+    if (raw.codex.extra_models !== undefined) {
+      codex.extra_models = parseExtraModels(
+        raw.codex.extra_models,
+        "codex.extra_models",
+      );
+    }
     config.codex = codex;
   }
 
@@ -363,9 +486,13 @@ export function buildRegister(
   if (capabilities.includes("codex")) {
     engines.push({
       id: "codex",
-      models: resolveCodexCatalog(
-        codexAuthMode,
-        config.codex?.chatgpt_plan,
+      // issue #292: operator-declared codex.extra_models layer on top of
+      // the curated resolver's output (mergeExtraModels — declared entries
+      // win on a `value` collision, new ones append) so LaunchDialog sees a
+      // brand-new upstream model the day it ships, without a kaoiro release.
+      models: mergeExtraModels(
+        resolveCodexCatalog(codexAuthMode, config.codex?.chatgpt_plan),
+        config.codex?.extra_models,
       ),
       // ADR-0033 F3: Codex exposes a launch-fixed sandbox axis (+ its
       // network_access toggle) but not approval (upstream-fixed to

@@ -56,6 +56,7 @@ import {
   effectiveStatusEnvelopeFields,
   effectiveStatusWhoamiFields,
   logEntryToPayload,
+  mergeExtraModels,
 } from "@kaoiro/agent-common";
 import {
   threadEventToErrorDetail,
@@ -216,9 +217,15 @@ function initialStatusExtFromCatalog(
 export function initialStatusExt(
   config: WrapperConfig,
 ): Record<string, unknown> {
-  const catalog = resolveCodexCatalog(
-    config.codex_auth_mode ?? "unknown",
-    config.codex_chatgpt_plan,
+  // issue #292: operator-declared codex.extra_models, relayed by the
+  // runner as codex_extra_models, layer on top of the resolved catalog —
+  // same merge the runner already applied to the register's launch list.
+  const catalog = mergeExtraModels(
+    resolveCodexCatalog(
+      config.codex_auth_mode ?? "unknown",
+      config.codex_chatgpt_plan,
+    ),
+    config.codex_extra_models,
   );
   return initialStatusExtFromCatalog(catalog, config.model ?? null);
 }
@@ -622,9 +629,14 @@ export class CodexHost implements EngineAdapter {
     }
     this.#sandbox = config.sandbox ?? "workspace-write";
     this.#networkAccess = config.network_access ?? false;
-    this.#catalog = resolveCodexCatalog(
-      config.codex_auth_mode ?? "unknown",
-      config.codex_chatgpt_plan,
+    // issue #292: same merge as initialStatusExt above, applied to the
+    // constructor's own catalog (ext.models / effort-switch / setModel).
+    this.#catalog = mergeExtraModels(
+      resolveCodexCatalog(
+        config.codex_auth_mode ?? "unknown",
+        config.codex_chatgpt_plan,
+      ),
+      config.codex_extra_models,
     );
     this.#sessionId = options.resumeSessionId ?? null;
     // Phase-23 (ADR-0014 F1 追補 P1): a resume snapshot can restore both

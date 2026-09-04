@@ -83,6 +83,47 @@ describe("initialStatusExt", () => {
       },
     });
   });
+
+  // issue #292: codex_extra_models (relayed from runner.config.json's
+  // codex.extra_models) merges into the resolved catalog before ext.models
+  // is stamped.
+  it("appends a new codex_extra_models model to ext.models (issue #292)", () => {
+    const config: WrapperConfig = {
+      ...CONFIG,
+      codex_extra_models: [
+        {
+          value: "gpt-9-nova",
+          display_name: "GPT-9 Nova",
+          effort_levels: ["low", "high"],
+          default_effort: "low",
+        },
+      ],
+    };
+    const initial = initialStatusExt(config);
+    expect(
+      (initial.models as { value: string }[]).map((m) => m.value),
+    ).toEqual([
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+      "gpt-6-astra",
+      "gpt-9-nova",
+    ]);
+  });
+
+  it("codex_extra_models overrides an existing value (issue #292)", () => {
+    const config: WrapperConfig = {
+      ...CONFIG,
+      codex_extra_models: [
+        { value: "gpt-5.6-luna", display_name: "overridden" },
+      ],
+    };
+    const initial = initialStatusExt(config);
+    const luna = (
+      initial.models as { value: string; display_name: string }[]
+    ).find((m) => m.value === "gpt-5.6-luna");
+    expect(luna?.display_name).toBe("overridden");
+  });
 });
 
 describe("CodexHost — display_name rename (issue #197 段階3, revised issue #219 D19/D23)", () => {
@@ -782,6 +823,56 @@ describe("CodexHost", () => {
     expect(calls.options[1]).not.toHaveProperty("modelReasoningEffort");
     expect(states.at(-1)?.ext.effort_reset).toBeUndefined();
     expect(states.at(-1)?.ext.effective).toMatchObject({ effort: "medium" });
+  });
+
+  // issue #292: codex_extra_models must reach the LIVE catalog the
+  // constructor builds (this.#catalog), not just initialStatusExt's
+  // static snapshot -- setModel's effort-compatibility check is the only
+  // observable signal that a declared extra model's own effort_levels
+  // are actually consulted (the model value itself is never rejected at
+  // the wrapper layer; only the SDK can reject a switch, via the
+  // existing 400/404 switch_error path tested above).
+  it("switching to a codex_extra_models model resets an effort incompatible with its own effort_levels (issue #292)", async () => {
+    const states: Envelope[] = [];
+    const { client, calls } = makeClient([
+      [{ type: "thread.started", thread_id: "extra-model-reset" }, usageEvent()],
+      [usageEvent()],
+    ]);
+    const host = new CodexHost(
+      {
+        ...CONFIG,
+        model: "gpt-5.6-sol",
+        effort: "ultra",
+        codex_extra_models: [
+          {
+            value: "gpt-9-nova",
+            display_name: "GPT-9 Nova",
+            effort_levels: ["low"],
+            default_effort: "low",
+          },
+        ],
+      },
+      {
+        onState: (event) => states.push(event),
+        appendSystemPrompt: "p",
+        modelSource: "config",
+        effortSource: "config",
+        codexFactory: () => client,
+        now: () => "T",
+      },
+    );
+    const done = host.run("first");
+    await client.waitForTurn(0);
+    await host.setModel("gpt-9-nova");
+    expect(states.at(-1)?.ext.effort_reset).toBe(true);
+    expect(states.at(-1)?.ext.pending_effort).toBeUndefined();
+    await host.send("second");
+    await client.waitForTurn(1);
+    host.close();
+    await done;
+    expect(calls.options[1]).not.toHaveProperty("modelReasoningEffort");
+    expect(states.at(-1)?.ext.effort_reset).toBeUndefined();
+    expect(states.at(-1)?.ext.effective).toMatchObject({ effort: "low" });
   });
 
   it("account default の実効 model を rollout から解決して ext に載せる", async () => {

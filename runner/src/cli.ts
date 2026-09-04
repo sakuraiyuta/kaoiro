@@ -117,6 +117,9 @@ async function main(): Promise<void> {
     ...(config.codex?.internal_subagents === undefined
       ? {}
       : { codexInternalSubagents: config.codex.internal_subagents }),
+    ...(config.codex?.extra_models === undefined
+      ? {}
+      : { codexExtraModels: config.codex.extra_models }),
     ...(config.context_work_budget_percent === undefined
       ? {}
       : { contextWorkBudgetPercent: config.context_work_budget_percent }),
@@ -212,6 +215,7 @@ async function main(): Promise<void> {
       codexAuthMode,
       codexChatgptPlan: next.codex?.chatgpt_plan,
       codexInternalSubagents: next.codex?.internal_subagents,
+      codexExtraModels: next.codex?.extra_models,
       contextWorkBudgetPercent: next.context_work_budget_percent,
       // Preserve the live probe getter across reloads (ADR-0039 F9 追補).
       getClaudeEngineCatalog: () => claudeCatalog.getStale(),

@@ -80,7 +80,8 @@ node dist/setup-cli.js            # 直接叩く場合 (runner/ から)
 
 聞かれるのは host_id / server URL / 起動許可 cwd / engine(capabilities)/
 Codex を選んだ場合はその auth mode / トークン / node の絶対パス。
-`codex.chatgpt_plan` / `codex.internal_subagents` / `context_work_budget_percent` は
+`codex.chatgpt_plan` / `codex.extra_models` / `codex.internal_subagents` /
+`context_work_budget_percent` は
 ウィザードでは聞かず、必要なら生成後の `runner.config.json` に手で足す。出力先は OS 別ユーザ設定ディレクトリ(Linux
 `${XDG_CONFIG_HOME:-~/.config}/kaoiro`、macOS
 `~/Library/Application Support/kaoiro`。`KAOIRO_RUNNER_DIR` で上書き可)で、
@@ -401,6 +402,26 @@ Gitea release への資産アップロードは
   `switch_error` rollback に落ちる。
 - `chatgpt_plan` — operator 申告の ChatGPT plan(catalog 解決に使用、
   API-key auth では無視)。
+- `extra_models`(`EngineModelInfo[]`、issue #292)— lets the operator
+  declare a model kaoiro's curated catalog
+  (`wrapper/codex/src/catalog.ts`, ADR-0035 H3) has not caught up with yet,
+  without waiting for a kaoiro release. Only `value` is required;
+  `display_name` defaults to `value`; omitting `effort_levels` means no
+  effort UI is offered (ADR-0035's "never infer an effort level" rule). A
+  matching `value` overrides the curated catalog's entry; a new `value` is
+  appended (`mergeExtraModels`). The same merge applies both to the
+  runner's register (LaunchDialog) and to the wrapper's own catalog
+  resolution (`ext.models` / effort-switch / `setModel`). This does not
+  bypass entitlement — declaring a model the account cannot actually use
+  still hits the SDK's usual 400/404, surfaced as the existing
+  `switch_error` rollback (or a launch failure for a fresh spawn).
+  ```json
+  "extra_models": [
+    { "value": "gpt-6-astra", "display_name": "GPT-6-Astra",
+      "effort_levels": ["low", "medium", "high", "xhigh", "max", "ultra"],
+      "default_effort": "low" }
+  ]
+  ```
 - `internal_subagents`(boolean、既定 `true`)— Codex の内部サブエージェント
   spawn の可否。正の boolean で、`true` は force-enable、`false` は無効化、
   省略は effective default の `true`。wrapper が per-run config に effective 値を

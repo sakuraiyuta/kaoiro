@@ -245,6 +245,65 @@ describe("parseSpawn / resolveWrapperConfig", () => {
       codex_chatgpt_plan: "plus",
     });
   });
+  // issue #292: codex.extra_models relayed to the wrapper as
+  // codex_extra_models (last positional arg -- appended, not grouped with
+  // the other codex-only params above, so this function's many existing
+  // positional call sites do not shift).
+  it("relays codex.extra_models to the wrapper config as codex_extra_models (issue #292)", () => {
+    const parsed = parseSpawn({ ...spawnMsg, engine: "codex" })!;
+    const config = resolveWrapperConfig(
+      "lab-pc-1.codex-a",
+      parsed,
+      "ws://localhost:4000/wrapper",
+      "chatgpt",
+      "plus",
+      undefined,
+      null,
+      undefined,
+      [{ value: "gpt-6-astra", display_name: "GPT-6-Astra" }],
+    );
+    expect(config.codex_extra_models).toEqual([
+      { value: "gpt-6-astra", display_name: "GPT-6-Astra" },
+    ]);
+  });
+  it("omits codex_extra_models when codex.extra_models is absent / empty", () => {
+    const parsed = parseSpawn({ ...spawnMsg, engine: "codex" })!;
+    expect(
+      resolveWrapperConfig(
+        "lab-pc-1.codex-a",
+        parsed,
+        "ws://localhost:4000/wrapper",
+      ).codex_extra_models,
+    ).toBeUndefined();
+    expect(
+      resolveWrapperConfig(
+        "lab-pc-1.codex-a",
+        parsed,
+        "ws://localhost:4000/wrapper",
+        undefined,
+        undefined,
+        undefined,
+        null,
+        undefined,
+        [],
+      ).codex_extra_models,
+    ).toBeUndefined();
+  });
+  it("does not set codex_extra_models for a non-codex engine", () => {
+    const parsed = parseSpawn({ ...spawnMsg, engine: "claude-code" })!;
+    const config = resolveWrapperConfig(
+      "lab-pc-1.claude-a",
+      parsed,
+      "ws://localhost:4000/wrapper",
+      undefined,
+      undefined,
+      undefined,
+      null,
+      undefined,
+      [{ value: "gpt-6-astra", display_name: "GPT-6-Astra" }],
+    );
+    expect(config.codex_extra_models).toBeUndefined();
+  });
   it("server_url 省略を許す(案A: runner が補完)", () => {
     const { server_url: _omit, ...rest } = spawnMsg;
     void _omit;
@@ -1742,6 +1801,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       codexAuthMode: undefined,
       codexChatgptPlan: undefined,
       codexInternalSubagents: undefined,
+      codexExtraModels: undefined,
       contextWorkBudgetPercent: undefined,
       getClaudeEngineCatalog: undefined,
     });
@@ -1772,6 +1832,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       codexAuthMode: undefined,
       codexChatgptPlan: undefined,
       codexInternalSubagents: undefined,
+      codexExtraModels: undefined,
       contextWorkBudgetPercent: undefined,
       getClaudeEngineCatalog: undefined,
     });
@@ -1790,6 +1851,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       codexAuthMode: undefined,
       codexChatgptPlan: undefined,
       codexInternalSubagents: undefined,
+      codexExtraModels: undefined,
       contextWorkBudgetPercent: 75,
       getClaudeEngineCatalog: undefined,
     });
@@ -1805,12 +1867,57 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       codexAuthMode: "chatgpt",
       codexChatgptPlan: "pro",
       codexInternalSubagents: undefined,
+      codexExtraModels: undefined,
       contextWorkBudgetPercent: undefined,
       getClaudeEngineCatalog: undefined,
     });
     h.sup.handleSpawn({ ...spawnMsg, cwd: "/cwd", engine: "codex" });
     expect(h.configs.at(-1)?.codex_chatgpt_plan).toBe("pro");
     expect(h.configs.at(-1)?.codex_auth_mode).toBe("chatgpt");
+  });
+
+  it("swapping codexExtraModels reaches subsequent codex spawns' WrapperConfig (issue #292)", () => {
+    const h = harness({ cwdAllowlist: ["/cwd"] });
+    h.sup.updateRuntimeConfig({
+      cwdAllowlist: ["/cwd"],
+      wrapperServerUrl: "ws://localhost:4000/wrapper",
+      codexAuthMode: "chatgpt",
+      codexChatgptPlan: "pro",
+      codexInternalSubagents: undefined,
+      codexExtraModels: [{ value: "gpt-6-astra", display_name: "GPT-6-Astra" }],
+      contextWorkBudgetPercent: undefined,
+      getClaudeEngineCatalog: undefined,
+    });
+    h.sup.handleSpawn({ ...spawnMsg, cwd: "/cwd", engine: "codex" });
+    expect(h.configs.at(-1)?.codex_extra_models).toEqual([
+      { value: "gpt-6-astra", display_name: "GPT-6-Astra" },
+    ]);
+  });
+
+  it("resetting codexExtraModels to undefined clears it from subsequent codex spawns too", () => {
+    const h = harness({ cwdAllowlist: ["/cwd"] });
+    h.sup.updateRuntimeConfig({
+      cwdAllowlist: ["/cwd"],
+      wrapperServerUrl: "ws://localhost:4000/wrapper",
+      codexAuthMode: "chatgpt",
+      codexChatgptPlan: "pro",
+      codexInternalSubagents: undefined,
+      codexExtraModels: [{ value: "gpt-6-astra", display_name: "GPT-6-Astra" }],
+      contextWorkBudgetPercent: undefined,
+      getClaudeEngineCatalog: undefined,
+    });
+    h.sup.updateRuntimeConfig({
+      cwdAllowlist: ["/cwd"],
+      wrapperServerUrl: "ws://localhost:4000/wrapper",
+      codexAuthMode: "chatgpt",
+      codexChatgptPlan: "pro",
+      codexInternalSubagents: undefined,
+      codexExtraModels: undefined,
+      contextWorkBudgetPercent: undefined,
+      getClaudeEngineCatalog: undefined,
+    });
+    h.sup.handleSpawn({ ...spawnMsg, cwd: "/cwd", engine: "codex" });
+    expect(h.configs.at(-1)?.codex_extra_models).toBeUndefined();
   });
 
   it("codexChatgptPlan を undefined に戻すと以降の codex spawn からも消える", () => {
@@ -1821,6 +1928,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       codexAuthMode: "chatgpt",
       codexChatgptPlan: "pro",
       codexInternalSubagents: undefined,
+      codexExtraModels: undefined,
       contextWorkBudgetPercent: undefined,
       getClaudeEngineCatalog: undefined,
     });
@@ -1830,6 +1938,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       codexAuthMode: "chatgpt",
       codexChatgptPlan: undefined,
       codexInternalSubagents: undefined,
+      codexExtraModels: undefined,
       contextWorkBudgetPercent: undefined,
       getClaudeEngineCatalog: undefined,
     });
@@ -1847,6 +1956,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       codexAuthMode: undefined,
       codexChatgptPlan: undefined,
       codexInternalSubagents: undefined,
+      codexExtraModels: undefined,
       contextWorkBudgetPercent: undefined,
       getClaudeEngineCatalog: undefined,
     });
@@ -1867,6 +1977,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       codexAuthMode: "chatgpt",
       codexChatgptPlan: undefined,
       codexInternalSubagents: false,
+      codexExtraModels: undefined,
       contextWorkBudgetPercent: undefined,
       getClaudeEngineCatalog: undefined,
     });
@@ -1882,6 +1993,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       codexAuthMode: "chatgpt",
       codexChatgptPlan: undefined,
       codexInternalSubagents: true,
+      codexExtraModels: undefined,
       contextWorkBudgetPercent: undefined,
       getClaudeEngineCatalog: undefined,
     });

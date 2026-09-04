@@ -4,6 +4,7 @@
 // brokers, and the common tool description layer.
 
 export { askUserQuestionDescriptor } from "./ask_user_question.js";
+export { mergeExtraModels } from "./catalog.js";
 export type { EngineAdapter } from "./engine.js";
 export { mergePendingDisplayNameSync } from "./engine.js";
 export { HistoryReplayer } from "./history_replay.js";

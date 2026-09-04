@@ -227,6 +227,15 @@ export interface WrapperConfig {
    *  value, so the runner option outranks any user-global Codex config: true
    *  force-enables, false disables (ADR-0038 F2). */
   codex_internal_subagents?: boolean;
+  /** Operator-declared extra models from `runner.config.json`'s
+   *  `codex.extra_models` (issue #292), already merged by the runner's
+   *  `buildRegister` into the launch catalog it advertises. Relayed here so
+   *  the wrapper applies the SAME merge to its own catalog resolution
+   *  (`resolveCodexCatalog`) — ext.models, effort-switch availability, and
+   *  `setModel` validation must all recognise a declared model too, not
+   *  only the register's launch-time list. Absent / empty = no declarations
+   *  (a pre-#292 runner, or an operator who set none). */
+  codex_extra_models?: EngineModelInfo[];
   /** Claude-only: live-probed engine catalog snapshot from the runner's
    *  memory cache (ADR-0039 F9 追補). When set, the Claude adapter seeds
    *  its #models with this rich list instead of the ADR-0037 F1 single

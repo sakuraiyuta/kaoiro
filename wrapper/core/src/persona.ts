@@ -52,6 +52,13 @@ const MAX_FIELD_LENGTH = 256;
  *  without limit; far above any real tool count. */
 const MAX_ALLOWED_TOOLS = 64;
 
+/** Bounds for codex_extra_models (issue #292) -- same rationale and same
+ *  values as runner/src/config.ts's MAX_EXTRA_MODELS / MAX_EFFORT_LEVELS
+ *  (independent copies, no shared dependency edge between the runner and
+ *  wrapper packages for constants this small; keep the two in sync). */
+const MAX_EXTRA_MODELS = 32;
+const MAX_EFFORT_LEVELS = 16;
+
 class ConfigError extends Error {
   override name = "ConfigError";
 }
@@ -268,6 +275,73 @@ export function parseConfig(raw: unknown): WrapperConfig {
       throw new ConfigError("codex_internal_subagents must be a boolean");
     }
     config.codex_internal_subagents = raw.codex_internal_subagents;
+  }
+  if (raw.codex_extra_models !== undefined) {
+    // issue #292: same defensive shape + per-row validation as
+    // claude_engine_catalog below (the runner already validated/defaulted
+    // this at parse time, but the wrapper does not blindly trust it either).
+    // Unlike claude_engine_catalog, display_name is required here rather
+    // than re-defaulted: by the time it reaches the wrapper it should
+    // already carry the runner's default substitution, so a missing one
+    // signals a malformed upstream rather than a legitimately-omitted field.
+    // Routed through nonEmptyString (MAX_FIELD_LENGTH) and MAX_EXTRA_MODELS
+    // like every other identity-string / list field in this file: this
+    // object rides every state_change broadcast verbatim (host.ts stamps
+    // it into ext.models), so it gets the same wire-payload bound as
+    // allowed_tools / persona fields, not a looser one.
+    if (!Array.isArray(raw.codex_extra_models)) {
+      throw new ConfigError("codex_extra_models must be an array");
+    }
+    if (raw.codex_extra_models.length > MAX_EXTRA_MODELS) {
+      throw new ConfigError(
+        `codex_extra_models must have at most ${MAX_EXTRA_MODELS} entries`,
+      );
+    }
+    const rows: NonNullable<WrapperConfig["codex_extra_models"]> = [];
+    for (let i = 0; i < raw.codex_extra_models.length; i++) {
+      const r = raw.codex_extra_models[i];
+      if (typeof r !== "object" || r === null) {
+        throw new ConfigError(`codex_extra_models[${i}] must be an object`);
+      }
+      const row = r as Record<string, unknown>;
+      const copy: NonNullable<WrapperConfig["codex_extra_models"]>[number] = {
+        value: nonEmptyString(row.value, `codex_extra_models[${i}].value`),
+        display_name: nonEmptyString(
+          row.display_name,
+          `codex_extra_models[${i}].display_name`,
+        ),
+      };
+      if (row.description !== undefined) {
+        copy.description = nonEmptyString(
+          row.description,
+          `codex_extra_models[${i}].description`,
+        );
+      }
+      if (row.effort_levels !== undefined) {
+        if (!Array.isArray(row.effort_levels)) {
+          throw new ConfigError(
+            `codex_extra_models[${i}].effort_levels must be an array`,
+          );
+        }
+        if (row.effort_levels.length > MAX_EFFORT_LEVELS) {
+          throw new ConfigError(
+            `codex_extra_models[${i}].effort_levels must have at most ` +
+              `${MAX_EFFORT_LEVELS} entries`,
+          );
+        }
+        copy.effort_levels = row.effort_levels.map((l, j) =>
+          nonEmptyString(l, `codex_extra_models[${i}].effort_levels[${j}]`),
+        );
+      }
+      if (row.default_effort !== undefined) {
+        copy.default_effort = nonEmptyString(
+          row.default_effort,
+          `codex_extra_models[${i}].default_effort`,
+        );
+      }
+      rows.push(copy);
+    }
+    config.codex_extra_models = rows;
   }
   if (raw.claude_engine_catalog !== undefined) {
     // Defensive shape + per-row validation (ADR-0039 F9 v2 = 藤 review

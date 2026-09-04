@@ -7,6 +7,7 @@ import {
   buildHeartbeat,
   buildRegister,
   isPhoenixHeartbeatLoggingEnabled,
+  mergeExtraModels,
   parseRunnerConfig,
   wrapperUrlFrom,
 } from "../src/config.js";
@@ -139,6 +140,143 @@ describe("parseRunnerConfig", () => {
         codex: { internal_subagents: "yes" },
       }),
     ).toThrowError("codex.internal_subagents must be a boolean");
+  });
+
+  // issue #292: operator-declared extra_models. Only value is required;
+  // display_name defaults to value, effort_levels defaults to absent
+  // (ADR-0035's "never infer an effort domain" rule).
+  describe("codex.extra_models (issue #292)", () => {
+    it("accepts a value-only declaration, defaulting display_name to value", () => {
+      const config = parseRunnerConfig({
+        ...valid,
+        codex: { extra_models: [{ value: "gpt-6-astra" }] },
+      });
+      expect(config.codex?.extra_models).toEqual([
+        { value: "gpt-6-astra", display_name: "gpt-6-astra" },
+      ]);
+    });
+
+    it("accepts display_name / description / effort_levels / default_effort", () => {
+      const config = parseRunnerConfig({
+        ...valid,
+        codex: {
+          extra_models: [
+            {
+              value: "gpt-6-astra",
+              display_name: "GPT-6-Astra",
+              description: "test model",
+              effort_levels: ["low", "high"],
+              default_effort: "low",
+            },
+          ],
+        },
+      });
+      expect(config.codex?.extra_models).toEqual([
+        {
+          value: "gpt-6-astra",
+          display_name: "GPT-6-Astra",
+          description: "test model",
+          effort_levels: ["low", "high"],
+          default_effort: "low",
+        },
+      ]);
+    });
+
+    it("absent means undefined", () => {
+      expect(
+        parseRunnerConfig({ ...valid, codex: {} }).codex?.extra_models,
+      ).toBeUndefined();
+    });
+
+    it("rejects a non-array as a loud config error", () => {
+      expect(() =>
+        parseRunnerConfig({
+          ...valid,
+          codex: { extra_models: { value: "gpt-6-astra" } },
+        }),
+      ).toThrowError("codex.extra_models must be an array");
+    });
+
+    it("rejects a missing value as a loud config error", () => {
+      expect(() =>
+        parseRunnerConfig({
+          ...valid,
+          codex: { extra_models: [{ display_name: "no value" }] },
+        }),
+      ).toThrowError("codex.extra_models[0].value must be a non-empty string");
+    });
+
+    it("rejects effort_levels that is not a string array as a loud config error", () => {
+      expect(() =>
+        parseRunnerConfig({
+          ...valid,
+          codex: {
+            extra_models: [
+              { value: "gpt-6-astra", effort_levels: "low" },
+            ],
+          },
+        }),
+      ).toThrowError("codex.extra_models[0].effort_levels must be an array");
+    });
+
+    it("rejects default_effort declared without effort_levels as a loud config error", () => {
+      expect(() =>
+        parseRunnerConfig({
+          ...valid,
+          codex: {
+            extra_models: [
+              { value: "gpt-6-astra", default_effort: "low" },
+            ],
+          },
+        }),
+      ).toThrowError(
+        "codex.extra_models[0].default_effort requires " +
+          "codex.extra_models[0].effort_levels",
+      );
+    });
+
+    it("rejects default_effort absent from effort_levels as a loud config error", () => {
+      expect(() =>
+        parseRunnerConfig({
+          ...valid,
+          codex: {
+            extra_models: [
+              {
+                value: "gpt-6-astra",
+                effort_levels: ["low", "high"],
+                default_effort: "medium",
+              },
+            ],
+          },
+        }),
+      ).toThrowError(
+        "codex.extra_models[0].default_effort must be one of " +
+          "codex.extra_models[0].effort_levels",
+      );
+    });
+
+    it("rejects a duplicate value within one declaration as a loud config error", () => {
+      expect(() =>
+        parseRunnerConfig({
+          ...valid,
+          codex: {
+            extra_models: [
+              { value: "gpt-6-astra" },
+              { value: "gpt-6-astra", display_name: "duplicate" },
+            ],
+          },
+        }),
+      ).toThrowError("codex.extra_models has a duplicate value: gpt-6-astra");
+    });
+
+    it("rejects a declaration exceeding MAX_EXTRA_MODELS as a loud config error", () => {
+      const extra_models = Array.from({ length: 33 }, (_, i) => ({
+        value: `model-${i}`,
+      }));
+      expect(() =>
+        parseRunnerConfig({ ...valid, codex: { extra_models } }),
+      ).toThrowError("codex.extra_models must have at most 32 entries");
+    });
   });
 
   // Phase-24: explicit `codex.auth_mode` closed enum for the dogfood
@@ -367,6 +505,35 @@ describe("buildRegister", () => {
     ]);
   });
 
+  it("layers codex.extra_models onto the resolved catalog (issue #292)", () => {
+    const config = parseRunnerConfig({
+      ...valid,
+      codex: {
+        chatgpt_plan: "plus",
+        extra_models: [
+          // Overrides gpt-5.6-luna (same value).
+          { value: "gpt-5.6-luna", display_name: "overridden" },
+          // A new model is appended at the end.
+          { value: "gpt-9-nova", display_name: "GPT-9 Nova" },
+        ],
+      },
+    });
+    const codex = buildRegister(config, "chatgpt").engines?.find(
+      (engine) => engine.id === "codex",
+    );
+    expect(codex?.models.map((model) => model.value)).toEqual([
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+      "gpt-6-astra",
+      "gpt-9-nova",
+    ]);
+    expect(
+      codex?.models.find((model) => model.value === "gpt-5.6-luna")
+        ?.display_name,
+    ).toBe("overridden");
+  });
+
   it("blocked_personas を register に含める", () => {
     const config = parseRunnerConfig({
       ...valid,
@@ -517,5 +684,47 @@ describe("isPhoenixHeartbeatLoggingEnabled", () => {
     expect(isPhoenixHeartbeatLoggingEnabled()).toBe(true);
     vi.stubEnv(PHOENIX_HEARTBEAT_LOGS_ENV, "true");
     expect(isPhoenixHeartbeatLoggingEnabled()).toBe(false);
+  });
+});
+
+// issue #292: engine-agnostic merge helper shared by buildRegister (above)
+// and reused by every engine's config block (codex today, antigravity once
+// that wrapper package exists).
+describe("mergeExtraModels", () => {
+  const base = [
+    { value: "a", display_name: "A" },
+    { value: "b", display_name: "B" },
+  ];
+
+  it("returns a copy of base when extra is undefined / empty", () => {
+    expect(mergeExtraModels(base, undefined)).toEqual(base);
+    expect(mergeExtraModels(base, [])).toEqual(base);
+    expect(mergeExtraModels(base, undefined)).not.toBe(base);
+  });
+
+  it("a matching value overrides in place, keeping base's position", () => {
+    const merged = mergeExtraModels(base, [
+      { value: "a", display_name: "overridden" },
+    ]);
+    expect(merged.map((m) => m.value)).toEqual(["a", "b"]);
+    expect(merged[0]?.display_name).toBe("overridden");
+    expect(merged[1]).toEqual(base[1]);
+  });
+
+  it("a new value is appended in declaration order", () => {
+    const merged = mergeExtraModels(base, [
+      { value: "c", display_name: "C" },
+      { value: "d", display_name: "D" },
+    ]);
+    expect(merged.map((m) => m.value)).toEqual(["a", "b", "c", "d"]);
+  });
+
+  it("override and append both apply when mixed in one declaration", () => {
+    const merged = mergeExtraModels(base, [
+      { value: "c", display_name: "C" },
+      { value: "a", display_name: "overridden" },
+    ]);
+    expect(merged.map((m) => m.value)).toEqual(["a", "b", "c"]);
+    expect(merged[0]?.display_name).toBe("overridden");
   });
 });

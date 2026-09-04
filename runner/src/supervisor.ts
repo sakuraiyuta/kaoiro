@@ -7,6 +7,7 @@
 
 import type {
   EngineKind,
+  EngineModelInfo,
   ModelSource,
   PermissionAxesExt,
   PermissionMode,
@@ -150,6 +151,12 @@ export interface SupervisorOptions {
   codexAuthMode?: CodexAuthMode;
   codexChatgptPlan?: ChatGptPlan;
   codexInternalSubagents?: boolean;
+  /** Operator-declared extra models from runner.config.json's
+   *  `codex.extra_models` (issue #292), relayed verbatim to the wrapper as
+   *  `WrapperConfig.codex_extra_models` for the same value-collision merge
+   *  the runner's own `buildRegister` already applied to the register's
+   *  launch catalog. */
+  codexExtraModels?: EngineModelInfo[];
   /** Global soft context-work budget from runner.config.json. The wrapper
    * derives a per-model token denominator at measurement time (issue #264). */
   contextWorkBudgetPercent?: number;
@@ -387,6 +394,10 @@ export function resolveWrapperConfig(
   codexInternalSubagents?: boolean,
   claudeEngineCatalog?: WrapperConfig["claude_engine_catalog"] | null,
   contextWorkBudgetPercent?: number,
+  // issue #292, appended last (not grouped with the other codex-only params
+  // above) so this positional-argument function's many EXISTING call sites
+  // -- production and test alike -- do not silently shift by one slot.
+  codexExtraModels?: EngineModelInfo[],
 ): WrapperConfig {
   const config: WrapperConfig = {
     agent_id: agentId,
@@ -431,6 +442,12 @@ export function resolveWrapperConfig(
     // authoritative over user-global Codex config, so relay a concrete
     // boolean for every codex spawn (default true when unset).
     config.codex_internal_subagents = codexInternalSubagents ?? true;
+    // issue #292: relay codex.extra_models verbatim (empty/absent both fall
+    // through) so the wrapper applies the same merge to its own catalog
+    // resolution the runner already applied to the register's.
+    if (codexExtraModels !== undefined && codexExtraModels.length > 0) {
+      config.codex_extra_models = codexExtraModels;
+    }
   }
   if (
     parsed.engine === "claude-code" &&
@@ -529,6 +546,7 @@ export interface SupervisorRuntimeUpdate {
   codexAuthMode: CodexAuthMode | undefined;
   codexChatgptPlan: ChatGptPlan | undefined;
   codexInternalSubagents: boolean | undefined;
+  codexExtraModels: EngineModelInfo[] | undefined;
   contextWorkBudgetPercent: number | undefined;
   /** Live getter for the runner's Claude engine-catalog cache (ADR-0039
    *  F9 追補). Preserved on hot-reload so a config file change does not
@@ -560,6 +578,7 @@ export class Supervisor {
   #codexAuthMode: CodexAuthMode | undefined;
   #codexChatgptPlan: ChatGptPlan | undefined;
   #codexInternalSubagents: boolean | undefined;
+  #codexExtraModels: EngineModelInfo[] | undefined;
   #contextWorkBudgetPercent: number | undefined;
   #getClaudeEngineCatalog:
     | (() => WrapperConfig["claude_engine_catalog"] | null | undefined)
@@ -596,6 +615,7 @@ export class Supervisor {
     this.#codexAuthMode = options.codexAuthMode;
     this.#codexChatgptPlan = options.codexChatgptPlan;
     this.#codexInternalSubagents = options.codexInternalSubagents;
+    this.#codexExtraModels = options.codexExtraModels;
     this.#contextWorkBudgetPercent = options.contextWorkBudgetPercent;
     this.#getClaudeEngineCatalog = options.getClaudeEngineCatalog;
   }
@@ -613,6 +633,7 @@ export class Supervisor {
     this.#codexAuthMode = update.codexAuthMode;
     this.#codexChatgptPlan = update.codexChatgptPlan;
     this.#codexInternalSubagents = update.codexInternalSubagents;
+    this.#codexExtraModels = update.codexExtraModels;
     this.#contextWorkBudgetPercent = update.contextWorkBudgetPercent;
     this.#getClaudeEngineCatalog = update.getClaudeEngineCatalog;
   }
@@ -1176,6 +1197,7 @@ export class Supervisor {
         this.#codexInternalSubagents,
         this.#getClaudeEngineCatalog?.() ?? null,
         this.#contextWorkBudgetPercent,
+        this.#codexExtraModels,
       ),
       parsed.cwd,
       parsed.resumeSessionId,
@@ -1346,6 +1368,7 @@ export class Supervisor {
           this.#codexInternalSubagents,
           this.#getClaudeEngineCatalog?.() ?? null,
           this.#contextWorkBudgetPercent,
+          this.#codexExtraModels,
         ),
         entry.parsed.cwd,
         entry.parsed.resumeSessionId,
@@ -1393,6 +1416,7 @@ export class Supervisor {
           this.#codexInternalSubagents,
           this.#getClaudeEngineCatalog?.() ?? null,
           this.#contextWorkBudgetPercent,
+          this.#codexExtraModels,
         ),
         entry.parsed.cwd,
         undefined, // fresh: no --resume
@@ -1490,6 +1514,7 @@ export class Supervisor {
           this.#codexInternalSubagents,
           this.#getClaudeEngineCatalog?.() ?? null,
           this.#contextWorkBudgetPercent,
+          this.#codexExtraModels,
         ),
         entry.parsed.cwd,
         rollbackSid,

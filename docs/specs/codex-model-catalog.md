@@ -1,6 +1,6 @@
 ---
 title: Codex model catalog status and change paths
-description: Plan × available-model table in the OpenAI Codex ecosystem; asymmetry between the two authentication modes (ChatGPT account / API key); three model-change paths (Web UI / CLI / config.toml); and the information granularity of `codex doctor`. Background for ADR-0032 F4bc's “empty catalog + delegate to account default” decision.
+description: Plan × available-model table in the OpenAI Codex ecosystem; asymmetry between the two authentication modes (ChatGPT account / API key); four model-change paths (Web UI / CLI / config.toml / kaoiro's own extra_models declaration); and the information granularity of `codex doctor`. Background for ADR-0032 F4bc's “empty catalog + delegate to account default” decision.
 status: accepted
 related: [codex-sdk-events, protocol, plugin-model]
 ---
@@ -94,7 +94,11 @@ There is no entitlement check. Many of the rejected slugs above also work.
 Some deprecated versions remain. The 400/404 risk is limited even with a
 curated static list.
 
-## Three paths for changing models
+## Four paths for changing models
+
+(A)-(C) below select AMONG the models Codex (or kaoiro's own curated
+snapshot) already knows about. (D) is a different axis: it is how an
+operator makes kaoiro aware of a model neither has advertised yet.
 
 ### (A) Web UI (Codex Settings)
 
@@ -144,6 +148,43 @@ model = "gpt-5.6-sol"
 5. Account / plan default (implicit)
 
 The `CODEX_HOME` environment variable can also relocate `~/.codex` itself.
+
+### (D) kaoiro's own `extra_models` declaration (issue #292)
+
+kaoiro advertises a CURATED static snapshot of the entitled-model set
+(`wrapper/codex/src/catalog.ts`, ADR-0035 H3) rather than probing Codex at
+runtime, so a brand-new upstream model (like `gpt-6-astra`) is invisible to
+LaunchDialog / AgentDetail until a kaoiro release updates that snapshot.
+`runner.config.json`'s `codex.extra_models` lets an operator declare one
+themselves in the meantime:
+
+```json
+"codex": {
+  "extra_models": [
+    { "value": "gpt-6-astra", "display_name": "GPT-6-Astra",
+      "effort_levels": ["low", "medium", "high", "xhigh", "max", "ultra"],
+      "default_effort": "low" }
+  ]
+}
+```
+
+- Only `value` is required (`EngineModelInfo`); `display_name` defaults to
+  `value`; `effort_levels` / `default_effort` absent means no effort
+  switching is offered for that model (ADR-0035's "never infer an effort
+  domain" rule — kaoiro does not guess one).
+- Declared entries are merged onto the resolved base catalog by
+  `mergeExtraModels` (runner/src/config.ts, and the identical wrapper-side
+  copy in `@kaoiro/agent-common`'s `catalog.ts`): a `value` matching an
+  existing entry overrides it in place, a new `value` is appended. The
+  runner applies this to the register payload it advertises (so
+  LaunchDialog offers it before any wrapper exists); the wrapper applies
+  the same merge to its own catalog resolution (`ext.models`, effort-switch
+  availability, `setModel`).
+- The declaration is host-wide (every agent on that runner), takes effect
+  on the next spawn after a runner restart or config hot-reload, and does
+  not bypass entitlement — a model the account is not actually entitled to
+  still fails with the SDK's usual 400/404, surfaced as the existing
+  `switch_error` rollback (or a launch failure for a fresh spawn).
 
 ## Information granularity of `codex doctor`
 
