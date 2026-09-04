@@ -6,9 +6,9 @@
 // logic is testable without real processes (default launcher: spawn.ts).
 
 import type {
-  AntigravityApproval,
   EngineKind,
   ModelSource,
+  PermissionAxesExt,
   PermissionMode,
   ResolvedSnapshotExt,
   RunnerSessions,
@@ -112,8 +112,10 @@ export interface ParsedSpawn {
   networkAccess?: boolean;
   /** Antigravity-only launch approval axis (ADR-0057 F4c). Claude / Codex
    *  ignore it. Closed-enum validation runs at parseSpawn's whitelist and
-   *  at `applyResumeSnapshot` / the resume-snapshot sanitizer. */
-  approval?: AntigravityApproval;
+   *  at `applyResumeSnapshot` / the resume-snapshot sanitizer — both
+   *  reject "on-failure" even though the shared
+   *  `PermissionAxesExt["approval"]` type admits it. */
+  approval?: PermissionAxesExt["approval"];
   /** Resume snapshot: relayed by the server on a resume spawn only
    *  (ADR-0014 F1 追補, phase-15 D8). Passed through to the wrapper via
    *  config.resume_snapshot so the wrapper can stamp ext.resume_snapshot

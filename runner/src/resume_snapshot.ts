@@ -22,9 +22,9 @@
 //   documented in `computePair`.
 
 import type {
-  AntigravityApproval,
   EngineKind,
   ModelSource,
+  PermissionAxesExt,
   PermissionMode,
   ResolvedSnapshotExt,
 } from "@kaoiro/protocol";
@@ -55,9 +55,10 @@ const MODEL_SOURCE_VALUES: readonly string[] = [
   "default",
 ];
 
-/** Antigravity-only approval axis (ADR-0057 F4c), mirrors
- *  `AntigravityApproval`. `on-failure` is deliberately excluded: this
- *  engine rejects it at spawn (Stage A offers only these three values). */
+/** Antigravity-only approval axis (ADR-0057 F4c). A subset of
+ *  `PermissionAxesExt["approval"]` — `on-failure` is deliberately
+ *  excluded: this engine rejects it at spawn (Stage A offers only these
+ *  three values). */
 const APPROVAL_VALUES: readonly string[] = [
   "untrusted",
   "on-request",
@@ -254,7 +255,7 @@ export function applyResumeSnapshot(
       }
       case "approval": {
         next.approval = isValidFieldValue("approval", snapshot.approval)
-          ? (snapshot.approval as AntigravityApproval)
+          ? (snapshot.approval as PermissionAxesExt["approval"])
           : "on-request";
         break;
       }

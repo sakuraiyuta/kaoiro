@@ -244,8 +244,11 @@ export interface WrapperConfig {
   network_access?: boolean;
   /** Antigravity-only launch approval axis (ADR-0057 F4c); Codex and
    *  Claude ignore it (Codex's approval is launch-fixed to "never" via
-   *  `sandbox` alone, ADR-0033 F3). Omitted = "on-request". */
-  approval?: AntigravityApproval;
+   *  `sandbox` alone, ADR-0033 F3). "on-failure" is rejected by the server
+   *  / runner at spawn even though the type admits it (wire compatibility
+   *  with the shared `PermissionAxesExt["approval"]` enum). Omitted =
+   *  "on-request". */
+  approval?: PermissionAxesExt["approval"];
   /** Resume snapshot relayed by the runner on a resume launch only
    *  (ADR-0014 F1 追補, phase-15 D8). Absent on fresh spawn. When present,
    *  the wrapper stamps it as ext.resume_snapshot and computes ext.resume_drift
@@ -305,12 +308,6 @@ export interface PermissionAxesExt {
    *  host-fixed approval. */
   enforcement?: "os" | "mode" | "advisory";
 }
-
-/** Antigravity-only 3-value approval subset (ADR-0057 F4c). Distinct from
- *  {@link PermissionAxesExt.approval} (which keeps `"on-failure"` for
- *  Codex SDK wire compatibility): this engine's LaunchDialog offers only
- *  these three values and the server rejects `"on-failure"` at spawn. */
-export type AntigravityApproval = "untrusted" | "on-request" | "never";
 
 /** One launch-selectable model of an engine (ADR-0032 F4bc). Same shape as
  *  the `ext.models[]` entries the Claude adapter already publishes (#54),
@@ -522,8 +519,9 @@ export interface ResolvedSnapshotExt {
   /** Antigravity-only approval axis (ADR-0057 F4c). Stage A fixes both
    *  sandbox and approval at spawn (mid-session change is Stage B0), so
    *  the resume snapshot must carry approval too, not sandbox alone.
-   *  Claude / Codex ignore this field. */
-  approval?: AntigravityApproval;
+   *  Claude / Codex ignore this field. "on-failure" is a stale/invalid
+   *  value the runner falls back from (see resume_snapshot.ts). */
+  approval?: PermissionAxesExt["approval"];
 }
 
 /** One drifted field in a resume, comparing prev (resume_snapshot value)
@@ -1001,11 +999,11 @@ export interface SpawnMessage {
   network_access?: boolean;
   /** Antigravity-only launch approval axis (ADR-0057 F4c). Stage A fixes
    *  both sandbox and approval at spawn; mid-session change is Stage B0.
-   *  Codex and Claude ignore this field. "on-failure" is deliberately
-   *  excluded from the type: LaunchDialog offers three values for this
-   *  engine and the server rejects anything else. Omitted =
-   *  "on-request". */
-  approval?: AntigravityApproval;
+   *  Codex and Claude ignore this field. LaunchDialog offers three values
+   *  for this engine; the server rejects "on-failure" even though the
+   *  type admits it (wire compatibility with the shared
+   *  `PermissionAxesExt["approval"]` enum). Omitted = "on-request". */
+  approval?: PermissionAxesExt["approval"];
   /** Resume snapshot: the "last effective" resolved settings the server
    *  had cached for this agent (ADR-0014 F1 追補, phase-15 D8). Present
    *  either alongside `resume_session_id` (restore an existing SDK session
