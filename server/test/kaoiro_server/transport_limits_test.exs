@@ -58,8 +58,8 @@ defmodule KaoiroServer.TransportLimitsTest do
     }
 
     watermarks = %{
-      "display-a" => %{"cleared_at" => "2026-08-28T00:00:00Z"},
-      "display-b" => %{"cleared_at" => "2026-08-28T00:00:01Z"}
+      "display-a" => "2026-08-28T00:00:00Z",
+      "display-b" => "2026-08-28T00:00:01Z"
     }
 
     base_frame_bytes = production_push_frame_bytes("agents:lobby", "history", static)
@@ -80,6 +80,81 @@ defmodule KaoiroServer.TransportLimitsTest do
 
     assert frame_bytes == base_frame_bytes + history_bytes + watermark_bytes
     assert frame_bytes <= TransportLimits.max_frame_bytes() - 1_024
+  end
+
+  test "watermark ledger measures production object keys under a tight budget" do
+    static = %{"clear_watermarks" => %{}}
+
+    watermarks = %{
+      1 => "2026-08-28T00:00:00Z",
+      true => "2026-08-28T00:00:01Z",
+      nil => "2026-08-28T00:00:02Z",
+      "quote\"" => "2026-08-28T00:00:03Z",
+      "slash\\" => "2026-08-28T00:00:04Z",
+      "control\n\t" => "2026-08-28T00:00:05Z",
+      "あお" => "2026-08-28T00:00:06Z"
+    }
+
+    base_frame_bytes = production_push_frame_bytes("agents:lobby", "history", static)
+
+    full_frame_bytes =
+      production_push_frame_bytes("agents:lobby", "history", %{
+        "clear_watermarks" => watermarks
+      })
+
+    budget = full_frame_bytes - base_frame_bytes
+
+    {projected, false, used} = TransportLimits.bounded_map_with_ledger(watermarks, budget)
+
+    frame_bytes =
+      production_push_frame_bytes("agents:lobby", "history", %{
+        "clear_watermarks" => projected
+      })
+
+    assert projected == watermarks
+    assert frame_bytes == base_frame_bytes + used
+    assert frame_bytes == full_frame_bytes
+    assert frame_bytes <= TransportLimits.max_frame_bytes() - 1_024
+
+    {truncated, true, _used} = TransportLimits.bounded_map_with_ledger(watermarks, budget - 1)
+
+    refute truncated == watermarks
+
+    assert production_push_frame_bytes("agents:lobby", "history", %{
+             "clear_watermarks" => truncated
+           }) <= base_frame_bytes + budget
+  end
+
+  test "numeric watermark keys stay within the production history frame bound" do
+    static = %{
+      "agents" => %{},
+      "clear_watermarks" => %{},
+      "history_projection" => "per-pane-v1",
+      "projection_epoch" => "epoch-1",
+      "history_incomplete" => true
+    }
+
+    watermark = String.duplicate("x", 7_991)
+
+    watermarks =
+      1..1_000
+      |> Map.new(fn key -> {key, watermark} end)
+      |> Map.merge(%{true => watermark, nil => watermark})
+
+    base_frame_bytes = production_push_frame_bytes("agents:lobby", "history", static)
+    budget = TransportLimits.push_payload_budget("agents:lobby", "history", static)
+
+    {projected, true, used} = TransportLimits.bounded_map_with_ledger(watermarks, budget)
+
+    frame_bytes =
+      production_push_frame_bytes("agents:lobby", "history", %{
+        static
+        | "clear_watermarks" => projected
+      })
+
+    assert frame_bytes == base_frame_bytes + used
+    assert frame_bytes <= TransportLimits.max_frame_bytes() - 1_024
+    assert map_size(projected) < map_size(watermarks)
   end
 
   test "newest suffix ledger keeps later small panes after an oversized pane" do

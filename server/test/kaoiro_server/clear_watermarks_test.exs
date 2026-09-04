@@ -42,6 +42,12 @@ defmodule KaoiroServer.ClearWatermarksTest do
     assert ClearWatermarks.get_display("a.none", server) == nil
   end
 
+  test "record rejects a non-binary agent id", %{server: server} do
+    assert_raise FunctionClauseError, fn ->
+      apply(ClearWatermarks, :record, [1, order(1_000_000, 1), "2026-07-23T15:00:00Z", server])
+    end
+  end
+
   test "新しい order への更新は上書き、古い order への更新は無視 (単調前進)",
        %{server: server} do
     :ok =
@@ -230,6 +236,25 @@ defmodule KaoiroServer.ClearWatermarksTest do
 
     assert ClearWatermarks.get("a.legacy3", boot) ==
              {{8_000_002, 5}, "2026-07-20T12:02:00Z", nil}
+
+    GenServer.stop(boot)
+  end
+
+  test "DETS loader ignores non-binary agent ids", %{server: server, path: path} do
+    :ok = GenServer.stop(server)
+
+    inject = :"cw_non_binary_agent_inject_#{System.unique_integer([:positive])}"
+    {:ok, ^inject} = :dets.open_file(inject, file: String.to_charlist(path))
+
+    :ok =
+      :dets.insert(inject, {1, {8_000_000, 5}, "2026-07-20T12:00:00Z", nil, nil})
+
+    :ok = :dets.close(inject)
+
+    boot = :"cw_non_binary_agent_boot_#{System.unique_integer([:positive])}"
+    {:ok, _pid} = ClearWatermarks.start_link(name: boot, path: path)
+
+    assert ClearWatermarks.all_displays(boot) == %{}
 
     GenServer.stop(boot)
   end

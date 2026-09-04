@@ -119,15 +119,15 @@ defmodule KaoiroServer.TransportLimits do
 
         _ ->
           separator_bytes = if map_size(projected) == 0, do: 0, else: 1
-          entry_prefix_bytes = json_bytes(key) + 1 + separator_bytes
+          empty_entry_bytes = json_object_entry_bytes(key, []) + separator_bytes
 
           {suffix, item_bytes} =
-            bounded_newest_suffix(items, budget - used - entry_prefix_bytes - 2)
+            bounded_newest_suffix(items, budget - used - empty_entry_bytes)
 
           if suffix == [] do
             {projected, true, used}
           else
-            entry_bytes = entry_prefix_bytes + 2 + item_bytes
+            entry_bytes = empty_entry_bytes + item_bytes
 
             {
               Map.put(projected, key, suffix),
@@ -151,7 +151,7 @@ defmodule KaoiroServer.TransportLimits do
     |> Enum.sort_by(fn {key, _value} -> key end)
     |> Enum.reduce({%{}, false, 0}, fn {key, value}, {projected, incomplete?, used} ->
       entry_bytes =
-        json_bytes(key) + 1 + json_bytes(value) + if map_size(projected) == 0, do: 0, else: 1
+        json_object_entry_bytes(key, value) + if map_size(projected) == 0, do: 0, else: 1
 
       if used + entry_bytes <= budget do
         {Map.put(projected, key, value), incomplete?, used + entry_bytes}
@@ -207,6 +207,13 @@ defmodule KaoiroServer.TransportLimits do
         {:halt, {suffix, used}}
       end
     end)
+  end
+
+  defp json_object_entry_bytes(key, value) do
+    %{key => value}
+    |> Jason.encode!()
+    |> byte_size()
+    |> Kernel.-(2)
   end
 
   defp json_bytes(value), do: value |> Jason.encode!() |> byte_size()

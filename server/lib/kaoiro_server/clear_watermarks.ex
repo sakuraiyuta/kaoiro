@@ -95,7 +95,7 @@ defmodule KaoiroServer.ClearWatermarks do
   a call with an `order` at or below the current entry is a no-op.
   """
   def record(agent_id, {us, seq} = order, display_ts, server \\ __MODULE__)
-      when is_integer(us) and is_integer(seq) and is_binary(display_ts) do
+      when is_binary(agent_id) and is_integer(us) and is_integer(seq) and is_binary(display_ts) do
     GenServer.call(server, {:record, agent_id, order, display_ts, nil})
   end
 
@@ -254,7 +254,8 @@ defmodule KaoiroServer.ClearWatermarks do
              # Codex lazy Trigger 1 boundary and is never inferred for old
              # records (otherwise an old nil sid would mask a real switch).
              {agent_id, {us, seq}, display, sid, pending_from_sid}, acc
-             when is_integer(us) and is_integer(seq) and is_binary(display) and
+             when is_binary(agent_id) and is_integer(us) and is_integer(seq) and
+                    is_binary(display) and
                     (is_nil(sid) or is_binary(sid)) and
                     (is_nil(pending_from_sid) or is_binary(pending_from_sid)) ->
                Map.put(acc, agent_id, {{us, seq}, display, sid, pending_from_sid})
@@ -263,14 +264,16 @@ defmodule KaoiroServer.ClearWatermarks do
              # 2026-07-23): agent_id, order tuple, display ISO,
              # transition sid (nil until adopted for Codex lazy).
              {agent_id, {us, seq}, display, sid}, acc
-             when is_integer(us) and is_integer(seq) and is_binary(display) and
+             when is_binary(agent_id) and is_integer(us) and is_integer(seq) and
+                    is_binary(display) and
                     (is_nil(sid) or is_binary(sid)) ->
                Map.put(acc, agent_id, {{us, seq}, display, sid, nil})
 
              # Pre-M3 3-tuple record (post-M6, before SessionStarts was
              # split out): preserve its visibility tuple and retain a nil sid.
              {agent_id, {us, seq}, display}, acc
-             when is_integer(us) and is_integer(seq) and is_binary(display) ->
+             when is_binary(agent_id) and is_integer(us) and is_integer(seq) and
+                    is_binary(display) ->
                Map.put(acc, agent_id, {{us, seq}, display, nil, nil})
 
              # Legacy 2-tuple record (pre-M6, ISO-only): keep it in
@@ -284,7 +287,7 @@ defmodule KaoiroServer.ClearWatermarks do
              # `record/4` call for this agent promotes the entry to the
              # new tuple domain via the wildcard `current` branch of
              # `handle_call({:record, …})`.
-             {agent_id, display}, acc when is_binary(display) ->
+             {agent_id, display}, acc when is_binary(agent_id) and is_binary(display) ->
                Map.put(acc, agent_id, {:iso_only, display})
 
              _malformed, acc ->
