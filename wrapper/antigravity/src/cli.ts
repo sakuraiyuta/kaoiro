@@ -15,7 +15,7 @@ import {
   ServerLink,
 } from "@kaoiro/wrapper-core";
 import { AntigravityHost } from "./host.js";
-import { applyAntigravityEnvDefaultModel, resolveAntigravitySources } from "./source_resolution.js";
+import { applyAntigravityEnvDefaultModel, applyAntigravitySources, resolveAntigravitySources } from "./source_resolution.js";
 
 const PERSONA_PROMPT_TIMEOUT_MS = 10_000;
 
@@ -27,6 +27,7 @@ export async function runAntigravityCli(): Promise<void> {
     process.env.KAOIRO_ANTIGRAVITY_DEFAULT_MODEL,
   );
   applyAntigravityEnvDefaultModel(config, process.env.KAOIRO_ANTIGRAVITY_DEFAULT_MODEL);
+  applyAntigravitySources(config, { modelSource, effortSource });
 
   let host: AntigravityHost | undefined;
   let link: ServerLink | undefined;
@@ -88,6 +89,7 @@ export async function runAntigravityCli(): Promise<void> {
     cwd: process.cwd(),
     appendSystemPrompt,
     permissionBroker,
+    questionBroker,
     onState: send,
     onLog: send,
     onSessionId: (sessionId) => link?.setSessionId(sessionId),
@@ -95,8 +97,6 @@ export async function runAntigravityCli(): Promise<void> {
       ...interAgent.descriptors(),
       askUserQuestionDescriptor((questions) => questionBroker.decide(questions)),
     ],
-    ...(modelSource === undefined ? {} : { modelSource }),
-    ...(effortSource === undefined ? {} : { effortSource }),
     ...(resumeSessionId === undefined ? {} : { resumeSessionId }),
   });
   process.on("SIGINT", () => {

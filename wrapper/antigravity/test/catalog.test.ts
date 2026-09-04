@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { WrapperConfig } from "@kaoiro/agent-common";
 import { antigravityCatalogSnapshot, catalogFromAgyModels } from "../src/catalog.js";
-import { applyAntigravityEnvDefaultModel, resolveAntigravitySources } from "../src/source_resolution.js";
+import { applyAntigravityEnvDefaultModel, applyAntigravitySources, resolveAntigravitySources } from "../src/source_resolution.js";
 
 const config = (): WrapperConfig => ({
   agent_id: "a1",
@@ -33,6 +33,10 @@ describe("Antigravity catalog and source resolution", () => {
     expect(resolveAntigravitySources(env, "gemini-3.1-pro-high").modelSource).toBe("env");
     applyAntigravityEnvDefaultModel(env, "gemini-3.1-pro-high");
     expect(env.model).toBe("gemini-3.1-pro-high");
+    expect(env.model_source).toBe("env");
+    const configured = { ...config(), model: "gemini-3.6-flash-low", effort: "high" };
+    applyAntigravitySources(configured, resolveAntigravitySources(configured, undefined));
+    expect(configured).toMatchObject({ model_source: "config", effort_source: "config" });
     expect(resolveAntigravitySources(config(), undefined).modelSource).toBeUndefined();
   });
 });

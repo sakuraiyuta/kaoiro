@@ -29,6 +29,16 @@ class ToolHostClient {
     });
   }
 
+  close(): void {
+    this.#fail(new Error("bridge client closed"));
+    const socket = this.#socket;
+    this.#socket = null;
+    if (socket !== null && !socket.destroyed) {
+      socket.end();
+      socket.destroy();
+    }
+  }
+
   async #connect(): Promise<Socket> {
     if (this.#socket !== null && !this.#socket.destroyed) return this.#socket;
     return new Promise<Socket>((resolve, reject) => {
@@ -81,27 +91,31 @@ async function main(): Promise<void> {
   const nonce = process.env.KAOIRO_BRIDGE_NONCE;
   if (socketPath === undefined || nonce === undefined) fail("KAOIRO bridge environment is not set");
   const client = new ToolHostClient(socketPath, nonce);
-  if (command === "list" && toolName === undefined) {
-    const reply = await client.call("list_tools");
-    if (reply.error !== undefined) fail(reply.error);
-    process.stdout.write(`${JSON.stringify(reply.tools)}\n`);
-    return;
-  }
-  if (command !== "call" || toolName === undefined || encoded === undefined || process.argv.length !== 5 || !/^[a-z_]{1,64}$/.test(toolName) || !/^[A-Za-z0-9_-]+$/.test(encoded)) {
-    fail("usage: bridge.js list | bridge.js call <tool> <base64url-json>");
-  }
-  let input: unknown;
   try {
-    const bytes = Buffer.from(encoded, "base64url");
-    if (bytes.byteLength > 64 * 1024) fail("bridge input exceeds 64 KiB");
-    input = JSON.parse(bytes.toString("utf8"));
-  } catch {
-    fail("bridge input is not base64url JSON");
+    if (command === "list" && toolName === undefined) {
+      const reply = await client.call("list_tools");
+      if (reply.error !== undefined) fail(reply.error);
+      process.stdout.write(`${JSON.stringify(reply.tools)}\n`);
+      return;
+    }
+    if (command !== "call" || toolName === undefined || encoded === undefined || process.argv.length !== 5 || !/^[a-z_]{1,64}$/.test(toolName) || !/^[A-Za-z0-9_-]+$/.test(encoded)) {
+      fail("usage: bridge.js list | bridge.js call <tool> <base64url-json>");
+    }
+    let input: unknown;
+    try {
+      const bytes = Buffer.from(encoded, "base64url");
+      if (bytes.byteLength > 64 * 1024) fail("bridge input exceeds 64 KiB");
+      input = JSON.parse(bytes.toString("utf8"));
+    } catch {
+      fail("bridge input is not base64url JSON");
+    }
+    if (typeof input !== "object" || input === null || Array.isArray(input)) fail("bridge input must be an object");
+    const reply = await client.call("call_tool", { name: toolName, input });
+    if (reply.error !== undefined) fail(reply.error);
+    process.stdout.write(`${JSON.stringify(reply.result)}\n`);
+  } finally {
+    client.close();
   }
-  if (typeof input !== "object" || input === null || Array.isArray(input)) fail("bridge input must be an object");
-  const reply = await client.call("call_tool", { name: toolName, input });
-  if (reply.error !== undefined) fail(reply.error);
-  process.stdout.write(`${JSON.stringify(reply.result)}\n`);
 }
 
 void main().catch((error: unknown) => {

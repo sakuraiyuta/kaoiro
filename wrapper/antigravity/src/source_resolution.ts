@@ -27,5 +27,14 @@ export function applyAntigravityEnvDefaultModel(
 ): void {
   if (config.model === undefined && envDefaultModel !== undefined) {
     config.model = envDefaultModel;
+    config.model_source = "env";
   }
+}
+
+export function applyAntigravitySources(
+  config: WrapperConfig,
+  sources: AntigravitySourceResolution,
+): void {
+  if (sources.modelSource !== undefined) config.model_source = sources.modelSource;
+  if (sources.effortSource !== undefined) config.effort_source = sources.effortSource;
 }

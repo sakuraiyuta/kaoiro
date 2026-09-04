@@ -1,9 +1,6 @@
-import { createConnection } from "node:net";
+import { askGate } from "./hook_client.js";
 
-interface HookDecision {
-  decision: "allow" | "deny";
-  reason?: string;
-}
+export { askGate } from "./hook_client.js";
 
 function deny(reason: string): void {
   process.stdout.write(`${JSON.stringify({ decision: "deny", reason })}\n`);
@@ -13,45 +10,6 @@ async function readStdin(): Promise<string> {
   let body = "";
   for await (const chunk of process.stdin) body += String(chunk);
   return body;
-}
-
-async function askGate(socketPath: string, nonce: string, body: unknown, deadlineMs: number): Promise<HookDecision> {
-  return new Promise<HookDecision>((resolve, reject) => {
-    const socket = createConnection(socketPath);
-    let buffer = "";
-    const timer = setTimeout(() => {
-      socket.destroy();
-      reject(new Error("gate deadline exceeded"));
-    }, deadlineMs);
-    const finish = (result: HookDecision): void => {
-      clearTimeout(timer);
-      socket.destroy();
-      resolve(result);
-    };
-    socket.once("error", reject);
-    socket.once("connect", () => socket.write(`${JSON.stringify({ ...(body as Record<string, unknown>), nonce })}\n`));
-    socket.setEncoding("utf8");
-    socket.on("data", (chunk: string) => {
-      buffer += chunk;
-      const newline = buffer.indexOf("\n");
-      if (newline === -1) return;
-      try {
-        const parsed = JSON.parse(buffer.slice(0, newline)) as unknown;
-        if (typeof parsed === "object" && parsed !== null && (parsed as { decision?: unknown }).decision === "allow") {
-          finish({ decision: "allow" });
-          return;
-        }
-        if (typeof parsed === "object" && parsed !== null && (parsed as { decision?: unknown }).decision === "deny") {
-          const reason = (parsed as { reason?: unknown }).reason;
-          finish({ decision: "deny", ...(typeof reason === "string" ? { reason } : {}) });
-          return;
-        }
-        reject(new Error("malformed gate response"));
-      } catch {
-        reject(new Error("malformed gate response"));
-      }
-    });
-  });
 }
 
 async function main(): Promise<void> {

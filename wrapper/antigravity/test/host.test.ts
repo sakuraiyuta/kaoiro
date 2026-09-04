@@ -1,7 +1,9 @@
 import { EventEmitter } from "node:events";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
-import { PermissionBroker, type Envelope, type WrapperConfig } from "@kaoiro/agent-common";
+import { PermissionBroker, QuestionBroker, type Envelope, type WrapperConfig } from "@kaoiro/agent-common";
 import { AntigravityHost, initialStatusExt, isGateRegistered, type SpawnedAgy } from "../src/host.js";
 import type { AntigravityLaunchConfig } from "../src/gate.js";
 
@@ -41,7 +43,11 @@ async function waitFor(predicate: () => boolean): Promise<void> {
   throw new Error("timed out waiting for host");
 }
 
-function hostHarness(options: { resumeSessionId?: string; dangerouslySkipPermissions?: boolean; verifyGate?: boolean } = {}) {
+function hostHarness(options: {
+  resumeSessionId?: string;
+  dangerouslySkipPermissions?: boolean;
+  verifyGate?: boolean | (() => Promise<boolean>);
+} = {}) {
   const states: Envelope[] = [];
   const logs: Envelope[] = [];
   const calls: { command: string; args: string[]; child: FakeAgy }[] = [];
@@ -53,8 +59,8 @@ function hostHarness(options: { resumeSessionId?: string; dangerouslySkipPermiss
     permissionBroker: broker,
     onState: (envelope) => states.push(envelope),
     onLog: (envelope) => logs.push(envelope),
-    verifyGate: async () => options.verifyGate ?? true,
     runtimeAssetsAvailable: () => true,
+    verifyGate: async () => typeof options.verifyGate === "function" ? options.verifyGate() : options.verifyGate ?? true,
     ...(options.resumeSessionId === undefined ? {} : { resumeSessionId: options.resumeSessionId }),
     ...(options.dangerouslySkipPermissions === undefined ? {} : { dangerouslySkipPermissions: options.dangerouslySkipPermissions }),
     spawn: (command, args) => {
@@ -77,15 +83,50 @@ describe("AntigravityHost", () => {
   });
 
   it("permission enforcementをadvisoryとしてstatus extにstampする", () => {
-    expect(initialStatusExt(config() as AntigravityLaunchConfig)).toMatchObject({
+    expect(initialStatusExt({
+      ...config(), model: "gemini-3.6-flash-low", model_source: "env", effort: "high", effort_source: "config",
+    } as AntigravityLaunchConfig)).toMatchObject({
+      model: "gemini-3.6-flash-low",
+      model_source: "env",
+      effort: "high",
+      effort_source: "config",
       permission: { enforcement: "advisory" },
     });
   });
 
-  it("F4b smoke probeはexpected sourceのgateをちょうど一つ要求する", () => {
-    expect(isGateRegistered({ hooks: [{ source: "/pkg/dist/hook.js" }] }, "/pkg/dist/hook.js")).toBe(true);
-    expect(isGateRegistered({ hooks: [] }, "/pkg/dist/hook.js")).toBe(false);
-    expect(isGateRegistered({ hooks: [{ source: "/pkg/dist/hook.js" }, { source: "/pkg/dist/hook.js" }] }, "/pkg/dist/hook.js")).toBe(false);
+  it("F4b smoke probeは実機形hooks.json内の期待action一件だけを受け入れる", () => {
+    const source = "/tmp/kaoiro-agy-x/.agents/hooks.json";
+    const command = "/usr/bin/node /pkg/dist/hook.js";
+    const fixture = JSON.parse(readFileSync(new URL("./fixtures/hooks.json", import.meta.url), "utf8")
+      .replace("__HOOKS_JSON__", source).replace("__HOOK_COMMAND__", command)) as unknown;
+    const expected = { source, command, timeoutSeconds: 3600 };
+    expect(isGateRegistered(fixture, expected)).toBe(true);
+    expect(isGateRegistered({ hooks: [] }, expected)).toBe(false);
+    expect(isGateRegistered({ hooks: [{ source, actions: [{ event: "PreToolUse", matcher: "*", command, timeout_seconds: 3600 }, { event: "PreToolUse", matcher: "*", command, timeout_seconds: 3600 }] }] }, expected)).toBe(false);
+  });
+
+  it("verifyGate未注入のproduction pathが実機形fixtureを通してspawnする", async () => {
+    const calls: { command: string; args: string[]; child: FakeAgy }[] = [];
+    const cfg = config();
+    const host = new AntigravityHost(cfg, {
+      cwd: process.cwd(), appendSystemPrompt: "persona", permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
+      onState: () => {}, runtimeAssetsAvailable: () => true,
+      probeSpawn: (_command, args) => {
+        const child = new FakeAgy();
+        const source = join(args[args.lastIndexOf("--add-dir") + 1]!, ".agents", "hooks.json");
+        const command = `${process.execPath} ${new URL("../dist/hook.js", import.meta.url).pathname}`;
+        queueMicrotask(() => {
+          child.stdout.end(JSON.stringify({ hooks: [{ source, actions: [{ event: "PreToolUse", matcher: "*", command, timeout_seconds: 3600 }] }] }));
+          child.emit("exit", 0, null);
+        });
+        return child as unknown as SpawnedAgy;
+      },
+      spawn: (command, args) => { const child = new FakeAgy(); calls.push({ command, args, child }); return child as unknown as SpawnedAgy; },
+    });
+    await host.send("hello");
+    await waitFor(() => calls.length === 1);
+    calls[0]!.child.finish();
+    host.close();
   });
 
   it("F2のspawn引数、closed stdin、init session idとresultを結ぶ", async () => {
@@ -101,7 +142,10 @@ describe("AntigravityHost", () => {
     await waitFor(() => calls.length === 1);
     const call = calls[0]!;
     expect(call.command).toBe("agy");
-    expect(call.args).toEqual(expect.arrayContaining(["--print", "hello", "--output-format", "stream-json", "--print-timeout", "24h", "--disable-slash-commands", "--dangerously-skip-permissions", "--add-dir", process.cwd()]));
+    expect(call.args).toEqual(expect.arrayContaining(["--print", "hello", "--output-format", "stream-json", "--print-timeout", "24h", "--disable-slash-commands", "--dangerously-skip-permissions"]));
+    const addDirIndexes = call.args.flatMap((arg, index) => arg === "--add-dir" ? [index] : []);
+    expect(addDirIndexes).toHaveLength(2);
+    expect(addDirIndexes.map((index) => call.args[index + 1])).toEqual([process.cwd(), expect.stringMatching(/kaoiro-agy-/)]);
     expect(call.child.stdin.writableEnded).toBe(true);
     call.child.stdout.write('{"event":"init","conversation_id":"cid-1","init":{"tools":[]}}\n');
     call.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
@@ -143,7 +187,59 @@ describe("AntigravityHost", () => {
     await waitFor(() => child.killed === "SIGTERM");
     child.finish();
     await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-    expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ error_detail: "antigravity_gate_unobserved_tool" });
+    expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ error_detail: "antigravity_gate_unobserved_tool:run_command" });
+    host.close();
+  });
+
+  it("turn後にcustomizationが改ざんされるとsessionをerrorにする", async () => {
+    const { host, logs, calls } = hostHarness();
+    await host.send("hello");
+    await waitFor(() => calls.length === 1);
+    const customizationDir = calls[0]!.args.at(-1)!;
+    writeFileSync(join(customizationDir, ".agents", "rules", "AGENTS.md"), "tampered");
+    calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
+    calls[0]!.child.finish();
+    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
+    expect([...logs].reverse().find((envelope) => envelope.type === "result")?.payload).toMatchObject({ error_detail: "antigravity_customization_tampered" });
+    host.close();
+  });
+
+  it("QuestionBrokerのpendingはwaiting_questionを駆動しinterruptでcancelする", async () => {
+    const states: Envelope[] = [];
+    const cfg = config();
+    let host: AntigravityHost | undefined;
+    const questionBroker = new QuestionBroker({ config: cfg, send: () => {}, onPendingChange: (pending) => host?.setPendingQuestion(pending) });
+    host = new AntigravityHost(cfg, {
+      cwd: process.cwd(), appendSystemPrompt: "persona", permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }), questionBroker,
+      onState: (envelope) => states.push(envelope), runtimeAssetsAvailable: () => true,
+    });
+    const answer = questionBroker.decide([{ question: "continue?", header: "continue", multiSelect: false, options: [{ label: "yes", description: "yes" }, { label: "no", description: "no" }] }]);
+    expect(states.at(-1)?.state).toBe("waiting_question");
+    await host.interrupt();
+    await expect(answer).resolves.toEqual({ cancelled: true });
+    expect(states.at(-1)?.state).toBe("tool_running");
+    host.close();
+  });
+
+  it("interrupt中にgate smokeが完了してもturn childをspawnしない", async () => {
+    let resolveProbe!: (value: boolean) => void;
+    const probe = new Promise<boolean>((resolve) => { resolveProbe = resolve; });
+    const { host, calls } = hostHarness({ verifyGate: () => probe });
+    await host.send("hello");
+    await host.interrupt();
+    resolveProbe(true);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(calls).toHaveLength(0);
+    host.close();
+  });
+
+  it("child errorを待ち続けずerror resultに収束させる", async () => {
+    const { host, logs, calls } = hostHarness();
+    await host.send("hello");
+    await waitFor(() => calls.length === 1);
+    calls[0]!.child.emit("error", new Error("ENOENT"));
+    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
+    expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ error_detail: "agy_child_error: ENOENT" });
     host.close();
   });
 });

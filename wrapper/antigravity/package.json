@@ -16,6 +16,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node ../../scripts/generate-wrapper-build-info.mjs dist",
     "typecheck": "tsc --noEmit",
+    "pretest": "pnpm build",
     "test": "vitest run"
   },
   "dependencies": {

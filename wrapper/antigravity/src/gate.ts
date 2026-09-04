@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { PermissionBroker, type PermissionDecision, type WrapperConfig } from "@kaoiro/agent-common";
 import { effectiveNetworkAccess } from "./network_access.js";
 
@@ -77,17 +77,35 @@ const BRIDGE_ARG_KEYS = new Set([
   "toolSummary",
 ]);
 const PATH_ARGUMENT_KEYS = new Set(["AbsolutePath", "DirectoryPath", "TargetFile", "Cwd"]);
+const WRITE_TARGET_KEYS: Readonly<Record<string, readonly string[]>> = {
+  write_to_file: ["TargetFile", "AbsolutePath"],
+  replace_file_content: ["TargetFile", "AbsolutePath"],
+  multi_replace_file_content: ["TargetFile", "AbsolutePath"],
+  sed_file: ["TargetFile", "AbsolutePath"],
+  notebook_edit: ["TargetFile", "AbsolutePath"],
+};
 const MAX_BRIDGE_PAYLOAD_BYTES = 87 * 1024;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function canonical(path: string): string {
-  const absolute = resolve(path);
-  if (existsSync(absolute)) return realpathSync.native(absolute);
-  const parent = dirname(absolute);
-  return existsSync(parent) ? join(realpathSync.native(parent), relative(parent, absolute)) : absolute;
+function canonical(path: string): string | null {
+  try {
+    if (path.includes("\0")) return null;
+    const absolute = resolve(path);
+    const tail: string[] = [];
+    let ancestor = absolute;
+    while (!existsSync(ancestor)) {
+      const parent = dirname(ancestor);
+      if (parent === ancestor) return absolute;
+      tail.unshift(basename(ancestor));
+      ancestor = parent;
+    }
+    return join(realpathSync.native(ancestor), ...tail);
+  } catch {
+    return null;
+  }
 }
 
 function isInside(path: string, root: string): boolean {
@@ -97,12 +115,39 @@ function isInside(path: string, root: string): boolean {
 
 function referencesDirectory(args: Record<string, unknown>, directory: string): boolean {
   const root = canonical(directory);
+  if (root === null) return true;
   for (const [key, value] of Object.entries(args)) {
-    if (typeof value !== "string") continue;
-    if (PATH_ARGUMENT_KEYS.has(key) && isInside(canonical(value), root)) return true;
-    if (key === "CommandLine" && value.includes(root)) return true;
+    if (!PATH_ARGUMENT_KEYS.has(key)) continue;
+    if (typeof value !== "string") return true;
+    const path = canonical(value);
+    if (path === null || isInside(path, root)) return true;
   }
   return false;
+}
+
+function commandReferencesDirectory(args: Record<string, unknown>, directory: string): boolean {
+  const root = canonical(directory);
+  return root !== null && typeof args.CommandLine === "string" && args.CommandLine.includes(root);
+}
+
+interface PathArguments {
+  all: string[];
+  targets: string[];
+  valid: boolean;
+}
+
+function pathArguments(toolName: string, args: Record<string, unknown>): PathArguments {
+  const all: string[] = [];
+  const targets: string[] = [];
+  for (const [key, value] of Object.entries(args)) {
+    if (!PATH_ARGUMENT_KEYS.has(key)) continue;
+    if (typeof value !== "string" || value.length === 0) return { all, targets, valid: false };
+    const path = canonical(value);
+    if (path === null) return { all, targets, valid: false };
+    all.push(path);
+    if (WRITE_TARGET_KEYS[toolName]?.includes(key) === true) targets.push(path);
+  }
+  return { all, targets, valid: true };
 }
 
 function knownBridgePayload(encoded: string): boolean {
@@ -146,10 +191,10 @@ export class AntigravityGate {
   readonly #observedSteps = new Set<number>();
 
   constructor(options: GatePolicyOptions) {
-    this.#cwd = canonical(options.cwd);
-    this.#customizationDir = canonical(options.customizationDir);
-    this.#nodePath = canonical(options.nodePath);
-    this.#bridgePath = canonical(options.bridgePath);
+    this.#cwd = canonical(options.cwd) ?? resolve(options.cwd);
+    this.#customizationDir = canonical(options.customizationDir) ?? resolve(options.customizationDir);
+    this.#nodePath = canonical(options.nodePath) ?? resolve(options.nodePath);
+    this.#bridgePath = canonical(options.bridgePath) ?? resolve(options.bridgePath);
     this.#toolNames = options.toolNames;
     this.#broker = options.broker;
     this.#sandbox = options.config.sandbox ?? "workspace-write";
@@ -194,25 +239,29 @@ export class AntigravityGate {
     if (toolClass === "network" && !this.#networkAccess) {
       return { decision: "deny", reason: "kaoiro: network access is disabled" };
     }
-    if ((toolClass === "write" || toolClass === "shell") && referencesDirectory(toolCall.args, this.#customizationDir)) {
+    if ((toolClass === "read" || toolClass === "write") && referencesDirectory(toolCall.args, this.#customizationDir)) {
+      return { decision: "deny", reason: "kaoiro: customization directory is protected" };
+    }
+    if (toolClass === "shell" && commandReferencesDirectory(toolCall.args, this.#customizationDir)) {
       return { decision: "deny", reason: "kaoiro: customization directory is protected" };
     }
     if (toolCall.name === "run_command" && this.#isBridgeCall(toolCall.args)) {
       return { decision: "allow" };
     }
-    if (toolCall.name === "run_command" && typeof toolCall.args.Cwd === "string" && canonical(toolCall.args.Cwd) !== this.#cwd) {
+    if (toolCall.name === "run_command" && (typeof toolCall.args.Cwd !== "string" || canonical(toolCall.args.Cwd) !== this.#cwd)) {
       return { decision: "ask" };
     }
     const policyClass = toolClass === "network" ? "shell" : toolClass;
     if (policyClass === "read") return { decision: "allow" };
     if (policyClass === "write") {
-      const target = this.#pathTarget(toolCall.args);
-      if (this.#sandbox === "read-only" || (target !== null && !isInside(target, this.#cwd))) {
+      const paths = pathArguments(toolCall.name, toolCall.args);
+      if (!paths.valid || paths.targets.length === 0) {
+        return { decision: "deny", reason: "kaoiro: write target is missing or malformed" };
+      }
+      if (this.#sandbox === "read-only" || (this.#sandbox === "workspace-write" && paths.all.some((path) => !isInside(path, this.#cwd)))) {
         return { decision: "deny", reason: "kaoiro: write is outside the permitted workspace" };
       }
-      return this.#sandbox === "workspace-write" && this.#approval !== "untrusted"
-        ? { decision: "allow" }
-        : { decision: "ask" };
+      return this.#approval === "untrusted" ? { decision: "ask" } : { decision: "allow" };
     }
     if (this.#sandbox === "read-only") {
       return { decision: "deny", reason: "kaoiro: read-only sandbox" };
@@ -234,17 +283,9 @@ export class AntigravityGate {
     }
   }
 
-  #pathTarget(args: Record<string, unknown>): string | null {
-    for (const key of ["AbsolutePath", "DirectoryPath", "TargetFile"]) {
-      const value = args[key];
-      if (typeof value === "string") return canonical(value);
-    }
-    return null;
-  }
-
   #isBridgeCall(args: Record<string, unknown>): boolean {
     if (Object.keys(args).some((key) => !BRIDGE_ARG_KEYS.has(key))) return false;
-    if (canonical(String(args.Cwd ?? "")) !== this.#cwd) return false;
+    if (typeof args.Cwd !== "string" || canonical(args.Cwd) !== this.#cwd) return false;
     if (typeof args.WaitMsBeforeAsync !== "number" || args.WaitMsBeforeAsync < this.#waitMsBeforeAsyncFloor) return false;
     if (typeof args.CommandLine !== "string") return false;
     const escapedNode = this.#nodePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -269,6 +310,8 @@ export class GateServer {
   readonly socketPath: string;
   readonly #gate: AntigravityGate;
   readonly #onSocketClose: (() => void) | undefined;
+  readonly #sockets = new Set<Socket>();
+  #closed = false;
 
   private constructor(server: Server, dir: string, nonce: string, gate: AntigravityGate, onSocketClose?: () => void) {
     this.#server = server;
@@ -295,6 +338,10 @@ export class GateServer {
   }
 
   close(): void {
+    if (this.#closed) return;
+    this.#closed = true;
+    for (const socket of this.#sockets) socket.destroy();
+    this.#sockets.clear();
     this.#server.close();
     rmSync(this.#dir, { recursive: true, force: true });
   }
@@ -302,8 +349,10 @@ export class GateServer {
   #serve(socket: Socket): void {
     let buffer = "";
     let replied = false;
+    this.#sockets.add(socket);
     socket.setEncoding("utf8");
     socket.on("close", () => {
+      this.#sockets.delete(socket);
       if (!replied) this.#onSocketClose?.();
     });
     socket.on("data", (chunk: string) => {

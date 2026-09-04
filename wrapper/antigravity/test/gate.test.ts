@@ -1,9 +1,10 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createConnection } from "node:net";
 import { describe, expect, it } from "vitest";
 import { PermissionBroker } from "@kaoiro/agent-common";
-import { AntigravityGate, type AntigravityLaunchConfig } from "../src/gate.js";
+import { AntigravityGate, GateServer, type AntigravityLaunchConfig } from "../src/gate.js";
 
 function config(overrides: Partial<AntigravityLaunchConfig> = {}): AntigravityLaunchConfig {
   return {
@@ -58,6 +59,7 @@ describe("AntigravityGate", () => {
       expect(gate.evaluate({ name: "write_to_file", args: { TargetFile: join(customizationDir, "x") } })).toMatchObject({ decision: "deny" });
       expect(gate.evaluate({ name: "run_command", args: { CommandLine: "pwd", Cwd: root } })).toEqual({ decision: "ask" });
       expect(gate.evaluate({ name: "ask_question", args: {} })).toMatchObject({ decision: "deny" });
+      expect(gate.evaluate({ name: "run_command", args: { CommandLine: "pwd" } })).toEqual({ decision: "ask" });
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
@@ -74,6 +76,38 @@ describe("AntigravityGate", () => {
       expect(gate.evaluate({ name: "run_command", args: { ...args, CommandLine: `${process.execPath} ${bridgePath} call whoami !!!` } })).toEqual({ decision: "ask" });
       expect(gate.evaluate({ name: "run_command", args: { ...args, Extra: true } })).toEqual({ decision: "ask" });
       expect(gate.evaluate({ name: "run_command", args: { ...args, WaitMsBeforeAsync: 4999 } })).toEqual({ decision: "ask" });
+      expect(gate.evaluate({ name: "run_command", args: { CommandLine: command, WaitMsBeforeAsync: 5000 } })).toEqual({ decision: "ask" });
+      expect(gate.evaluate({ name: "run_command", args: { ...args, CommandLine: `${process.execPath} ${bridgePath} call unknown_tool ${payload}` } })).toEqual({ decision: "ask" });
+      const nonJson = Buffer.from("not-json", "utf8").toString("base64url");
+      expect(gate.evaluate({ name: "run_command", args: { ...args, CommandLine: `${process.execPath} ${bridgePath} call whoami ${nonJson}` } })).toEqual({ decision: "ask" });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("writeはtarget schema、全path、symlink祖先をfail-closedにする", () => {
+    const { gate, root, cwd, customizationDir } = makeGate();
+    try {
+      expect(gate.evaluate({ name: "write_to_file", args: {} })).toMatchObject({ decision: "deny" });
+      expect(gate.evaluate({ name: "write_to_file", args: { TargetFile: "\0bad" } })).toMatchObject({ decision: "deny" });
+      expect(gate.evaluate({ name: "write_to_file", args: {
+        AbsolutePath: join(cwd, "inside.txt"), TargetFile: join(root, "outside.txt"),
+      } })).toMatchObject({ decision: "deny" });
+      expect(gate.evaluate({ name: "write_to_file", args: {
+        TargetFile: join(root, "workspace", "..", "custom", "nested", "x.txt"),
+      } })).toMatchObject({ decision: "deny" });
+      const outside = join(root, "outside");
+      mkdirSync(outside);
+      symlinkSync(outside, join(cwd, "linked"));
+      expect(gate.evaluate({ name: "write_to_file", args: {
+        TargetFile: join(cwd, "linked", "not-yet-created", "x.txt"),
+      } })).toMatchObject({ decision: "deny" });
+      expect(gate.evaluate({ name: "view_file", args: { AbsolutePath: join(customizationDir, "secret") } })).toMatchObject({ decision: "deny" });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("danger-full-access/on-requestのcwd外writeはF4表どおりallowする", () => {
+    const { gate, root } = makeGate({ sandbox: "danger-full-access", approval: "on-request" });
+    try {
+      expect(gate.evaluate({ name: "write_to_file", args: { TargetFile: join(root, "outside.txt") } })).toEqual({ decision: "allow" });
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
@@ -86,5 +120,41 @@ describe("AntigravityGate", () => {
       expect(gate.observeCompletedTool(3, "future_vendor_tool")).toBe(true);
       expect(warnings).toContain("antigravity: unclassified completed tool: future_vendor_tool");
     } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("nonce欠落はdenyし、gate socket closeはpending brokerをdeny解決する", async () => {
+    const root = mkdtempSync(join(tmpdir(), "agy-gate-server-test-"));
+    const cwd = join(root, "workspace");
+    const customizationDir = join(root, "custom");
+    mkdirSync(cwd);
+    mkdirSync(customizationDir);
+    let pending = false;
+    const broker = new PermissionBroker({ config: config(), send: () => {}, onPendingChange: (value) => { pending = value !== null; } });
+    const gate = new AntigravityGate({
+      config: config(), cwd, customizationDir, nodePath: process.execPath, bridgePath: join(root, "bridge.js"), toolNames: () => new Set(), broker,
+    });
+    const server = await GateServer.listen({ gate, nonce: "nonce", onSocketClose: () => broker.close() });
+    try {
+      const missingNonce = createConnection(server.socketPath);
+      const denied = new Promise<string>((resolve) => {
+        missingNonce.setEncoding("utf8");
+        missingNonce.once("data", (line: string) => resolve(line));
+      });
+      await new Promise<void>((resolve) => missingNonce.once("connect", () => resolve()));
+      missingNonce.end(`${JSON.stringify({ stepIdx: 1, toolCall: { name: "run_command", args: { CommandLine: "pwd", Cwd: cwd } } })}\n`);
+      await expect(denied).resolves.toContain('"decision":"deny"');
+
+      const pendingSocket = createConnection(server.socketPath);
+      await new Promise<void>((resolve) => pendingSocket.once("connect", () => resolve()));
+      pendingSocket.write(`${JSON.stringify({ nonce: "nonce", stepIdx: 2, toolCall: { name: "run_command", args: { CommandLine: "pwd", Cwd: cwd } } })}\n`);
+      for (let index = 0; index < 50 && !pending; index += 1) await new Promise((resolve) => setTimeout(resolve, 1));
+      expect(pending).toBe(true);
+      pendingSocket.destroy();
+      for (let index = 0; index < 50 && pending; index += 1) await new Promise((resolve) => setTimeout(resolve, 1));
+      expect(pending).toBe(false);
+    } finally {
+      server.close();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

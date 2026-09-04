@@ -17,6 +17,8 @@ export class ToolHost {
   readonly #dir: string;
   readonly socketPath: string;
   readonly nonce: string;
+  readonly #sockets = new Set<Socket>();
+  #closed = false;
 
   private constructor(descriptors: ToolDescriptor[], server: Server, dir: string, nonce: string) {
     this.#descriptors = new Map(descriptors.map((descriptor) => [descriptor.name, descriptor]));
@@ -46,11 +48,17 @@ export class ToolHost {
   }
 
   close(): void {
+    if (this.#closed) return;
+    this.#closed = true;
+    for (const socket of this.#sockets) socket.destroy();
+    this.#sockets.clear();
     this.#server.close();
     rmSync(this.#dir, { recursive: true, force: true });
   }
 
   #serve(socket: Socket): void {
+    this.#sockets.add(socket);
+    socket.once("close", () => this.#sockets.delete(socket));
     let buffer = "";
     socket.setEncoding("utf8");
     socket.on("data", (chunk: string) => {
