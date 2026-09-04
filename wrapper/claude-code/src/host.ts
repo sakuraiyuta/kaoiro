@@ -114,6 +114,25 @@ import {
 /** Cap on queued user turns; send() throws beyond this (fail fast). */
 const MAX_QUEUED_TURNS = 1000;
 
+/** Settles a canUseTool wait whose own turn was torn down before the
+ *  operator answered. A symbol, not a decision shape, so racing it against
+ *  the decider can never be mistaken for a real deny (issue #285). */
+const ABANDONED_WAIT = Symbol("kaoiro:abandoned-wait");
+
+/** Reason handed back to the SDK for a wait its turn outlived. Usually
+ *  unread — the CLI has already dropped the control request by then. */
+const ABANDONED_WAIT_MESSAGE =
+  "kaoiro: the turn ended before this permission was answered";
+
+/** One open canUseTool wait, bound to the turn that triggered it. `owner` is
+ *  the SDK-active turn token when the wait opened, or null when no
+ *  wrapper-fed turn was active (fake-SDK drivers in tests). */
+interface TurnBoundWait {
+  owner: string | null;
+  kind: "permission" | "question";
+  abandon: () => void;
+}
+
 /** Total supportedModels() attempts before the host stays silent per session
  *  (ADR-0037 F6). Counts the init-time fetch as trial 1 and each subsequent
  *  end-of-turn retry as one further trial, so the semantics are "trial cap =
@@ -765,6 +784,11 @@ export class AgentHost implements EngineAdapter {
    *  so every state_change emitted while waiting_question carries it in ext.
    *  null when no question is in flight. */
   #pendingQuestion: PendingQuestionExt | null = null;
+  /** Open canUseTool waits (issue #285). The SDK holds a tool call until its
+   *  callback returns, so a wait must never outlive the turn that opened it:
+   *  an answer arriving afterwards would re-enter a busy state that no SDK
+   *  frame will ever leave. */
+  readonly #turnBoundWaits = new Set<TurnBoundWait>();
   /** Latest SDK conversation session id (ADR-0014 phase-0). Mirrored locally
    *  so the whoami snapshot can include it without coupling to ServerLink. */
   #sessionId: string | null = null;
@@ -1313,6 +1337,9 @@ export class AgentHost implements EngineAdapter {
       clearInterval(this.#gcTimer);
       this.#gcTimer = null;
     }
+    // Withdraw before the error envelope so it carries a cleared ext rather
+    // than advertising a dialog this host will never act on again (#285).
+    this.#abandonTurnBoundWaits(activeTurn?.turnToken);
     this.#machine = initialMachineState("error");
     this.#emitState("error");
 
@@ -1896,6 +1923,47 @@ export class AgentHost implements EngineAdapter {
     }
   }
 
+  /** Opens a canUseTool wait owned by the currently SDK-active turn. The
+   *  returned `abandoned` promise settles only if that turn is torn down
+   *  first, so the caller races it against the operator's decision. */
+  #beginTurnBoundWait(kind: "permission" | "question"): {
+    abandoned: Promise<typeof ABANDONED_WAIT>;
+    ownsActiveTurn: () => boolean;
+    release: () => void;
+  } {
+    const owner = this.#activeTurn?.turnToken ?? null;
+    let abandon!: () => void;
+    const abandoned = new Promise<typeof ABANDONED_WAIT>((resolve) => {
+      abandon = () => resolve(ABANDONED_WAIT);
+    });
+    const wait: TurnBoundWait = { owner, kind, abandon };
+    this.#turnBoundWaits.add(wait);
+    return {
+      abandoned,
+      ownsActiveTurn: () => (this.#activeTurn?.turnToken ?? null) === owner,
+      release: () => {
+        this.#turnBoundWaits.delete(wait);
+      },
+    };
+  }
+
+  /** Settles every wait the given turn owns and withdraws its operator
+   *  dialog record. Returns whether anything was withdrawn, so the caller
+   *  can decide whether a state_change is owed to drop the dialog. */
+  #abandonTurnBoundWaits(turnToken: string | undefined): boolean {
+    if (turnToken === undefined) return false;
+    let withdrew = false;
+    for (const wait of [...this.#turnBoundWaits]) {
+      if (wait.owner !== turnToken) continue;
+      this.#turnBoundWaits.delete(wait);
+      if (wait.kind === "permission") this.#pendingPermission = null;
+      else this.#pendingQuestion = null;
+      wait.abandon();
+      withdrew = true;
+    }
+    return withdrew;
+  }
+
   async #canUseTool(
     toolName: string,
     input: Record<string, unknown>,
@@ -1951,9 +2019,16 @@ export class AgentHost implements EngineAdapter {
     const decisionPromise: Promise<PermissionDecision> = decide
       ? Promise.resolve(decide(toolName, input))
       : Promise.resolve({ allow: false });
+    // A decider that rejects after the wait was abandoned has no awaiter
+    // left below; keep the rejection handled either way.
+    void decisionPromise.catch(() => {});
+    const wait = this.#beginTurnBoundWait("permission");
     this.#apply({ kind: "permission_request" });
     try {
-      const decision = await decisionPromise;
+      const decision = await Promise.race([decisionPromise, wait.abandoned]);
+      if (decision === ABANDONED_WAIT) {
+        return { behavior: "deny", message: ABANDONED_WAIT_MESSAGE };
+      }
       return decision.allow
         ? { behavior: "allow", updatedInput: input }
         : { behavior: "deny", message: decision.message ?? "denied" };
@@ -1961,12 +2036,17 @@ export class AgentHost implements EngineAdapter {
       // A throwing decider denies safely rather than crashing the session.
       return { behavior: "deny", message: "permission decision failed" };
     } finally {
+      wait.release();
       // Broker has already cleared pending in its settle path; the
       // permission_resolved state_change just needs to emit. A decider
       // that did NOT touch pending leaves the prior value untouched, so
       // belt-and-braces null it here too in case of a custom decider.
       this.#pendingPermission = null;
-      this.#apply({ kind: "permission_resolved" });
+      // issue #285: only the turn that asked may resume. permission_resolved
+      // re-enters tool_running unconditionally, so letting a wait whose turn
+      // already ended emit it strands the agent in a busy state that no SDK
+      // frame will ever leave.
+      if (wait.ownsActiveTurn()) this.#apply({ kind: "permission_resolved" });
     }
   }
 
@@ -1985,9 +2065,14 @@ export class AgentHost implements EngineAdapter {
       ? (input.questions as Question[])
       : [];
     const decisionPromise = Promise.resolve(decide(questions));
+    void decisionPromise.catch(() => {});
+    const wait = this.#beginTurnBoundWait("question");
     this.#apply({ kind: "question_request" });
     try {
-      const decision = await decisionPromise;
+      const decision = await Promise.race([decisionPromise, wait.abandoned]);
+      if (decision === ABANDONED_WAIT) {
+        return { behavior: "deny", message: ABANDONED_WAIT_MESSAGE };
+      }
       if (decision.cancelled) {
         return { behavior: "deny", message: "kaoiro: question cancelled" };
       }
@@ -1998,8 +2083,10 @@ export class AgentHost implements EngineAdapter {
     } catch {
       return { behavior: "deny", message: "question decision failed" };
     } finally {
+      wait.release();
       this.#pendingQuestion = null;
-      this.#apply({ kind: "question_resolved" });
+      // Same ownership rule as the permission path (issue #285).
+      if (wait.ownsActiveTurn()) this.#apply({ kind: "question_resolved" });
     }
   }
 
@@ -3240,6 +3327,12 @@ export class AgentHost implements EngineAdapter {
   ): void {
     const turn = this.#activeTurn;
     this.#activeTurn = null;
+    // The SDK has stopped waiting on this turn's tool calls, so its open
+    // permission/question waits are dead too. Withdraw them here rather than
+    // leaving an operator dialog whose answer can no longer be used (#285).
+    if (this.#abandonTurnBoundWaits(turn?.turnToken) && !this.#watchdogFailStopped) {
+      this.#emitState(this.#machine.state);
+    }
     if (turn !== null) {
       this.#options.onTurnEnd?.({
         turnToken: turn.turnToken,
