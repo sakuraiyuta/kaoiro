@@ -60,11 +60,21 @@ issue #213 で導入。エージェントの permission gate が `main` 宛の g
 2026-09-01)。clone に `gitea` remote が残っていても削除・push しない。
 旧系譜の branch は現履歴と互換がないため、fetch 先を混在させないこと。
 
+## Language
+
+このリポジトリに残る成果物は原則 **英語** で書く (OSS として英語で読まれる
+ため): コミットメッセージ (件名は `type(scope): summary`、本文も英語)、
+issue / PR の題名・本文・コメント、`docs/` 配下の仕様・計画・ADR、コード
+コメント、テスト名、ログ文言。既存の日本語文書を触るときは、変更した節から
+英語に置き換えてよい (全文の書き直しは求めない)。例外は本ファイルと
+AGENTS.md (エージェント向けの指示書として日本語のまま) と、
+`docs/specs/personas.md` 等の日本語そのものが仕様である箇所。オペレータとの
+会話・エージェント間メッセージはセッションの言語設定に従う (英語にしない)。
+
 ## Workflow rules
 
-- コミットメッセージは英語 (OSS 公開後は英語で読まれるため。件名は
-  `type(scope): summary` の形、本文も英語)。git 操作はユーザ承認のもとで
-  行う (`develop` 以下は上記 Branch strategy の範囲で自動可)。
+- git 操作はユーザ承認のもとで行う (`develop` 以下は上記 Branch strategy
+  の範囲で自動可)。
 - docs/plans/ のタスク表・進捗を更新するときは、frontmatter の
   `status` / `last_updated` も同時に更新する(status drift の予防。
   2026-07-03 に不整合 3 例を検出した再発防止)。
