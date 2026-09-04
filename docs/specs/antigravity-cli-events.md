@@ -164,7 +164,7 @@ Headless `agy` cannot prompt. Measured behaviour by configuration:
 | `settings.json` `permissions.allow: ["command(ls -1)"]` | exact command allowed and executed; other commands still auto-denied |
 | PreToolUse hook returning `{"decision":"allow"}` or `permissionOverrides` under `request-review` | **still auto-denied** — hooks cannot lift the headless denial |
 | `settings.json` `toolPermission: "always-proceed"` + PreToolUse hook | hook decides: `allow` → executed (`output` present); `deny` → `TOOL_ERROR: tool call denied by pre-tool hook: <reason>`; the model sees the reason and continues |
-| `--dangerously-skip-permissions` + PreToolUse hook | *(unverified — HITL; expected to equal the row above per process instead of host-wide)* |
+| `--dangerously-skip-permissions` + PreToolUse hook | `init.permission_mode = "always-proceed"` for that process only; the hook fired for both `run_command` steps (stepIdx 2, 4) and the commands ran *(measured by the operator, 2026-09-04; host `settings.json` untouched)* |
 | `--sandbox` (always-proceed, hook allow) | **no effect observed**: `touch` outside cwd and `curl https://example.com` both succeeded *(measured on WSL2; the terminal sandbox is advisory for this adapter)* |
 
 Therefore the adapter's approval channel is a **PreToolUse hook** shipped in
@@ -363,10 +363,9 @@ per-turn spawn. Persona packs stay engine-independent (ADR-0032 F3).
 - Every approval decision has to be made by the wrapper's hook gate — the
   CLI itself is run with prompts disabled. The gate must fail closed on
   socket failure, timeout, or malformed payload.
-- The permission substrate (`--dangerously-skip-permissions` per process vs
-  `toolPermission: "always-proceed"` in the host-wide `settings.json`) is
-  decided by the HITL measurement recorded in ADR-0057 Q1. The host-wide
-  setting would also affect the operator's own interactive `agy` sessions.
+- The permission substrate is the per-process flag
+  `--dangerously-skip-permissions` (ADR-0057 Q1, measured); the host-wide
+  `toolPermission` setting is not used.
 - No attachments in Stage A (`--print` takes text only).
 - No context-usage capability until a per-model window table exists.
 - The sandbox axis is advisory for this engine (`--sandbox` measured

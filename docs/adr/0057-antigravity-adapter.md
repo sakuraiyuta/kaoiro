@@ -18,7 +18,7 @@ Proposed (issue #181). Implementation is
 Revised 2026-09-04 after design review (kuroe): version pin corrected to
 1.1.26, gate self-verification (F4b), bridge argv validation (F5), advisory
 sandbox and `network_access` (F4), tool-class source of truth (F4), and
-axes fixed at spawn in Stage A (F4c). Q1 is a HITL measurement.
+axes fixed at spawn in Stage A (F4c). Q1–Q3 are closed by measurement.
 
 ## Context
 
@@ -37,8 +37,7 @@ established:
   deny any tool call.
 - Headless `agy` auto-denies every tool that would need a prompt; hooks
   cannot lift that denial, but with prompts disabled
-  (`toolPermission: always-proceed` measured; `--dangerously-skip-permissions`
-  expected) the hook becomes the sole gate — which gives kaoiro a **real
+  (`--dangerously-skip-permissions`, measured per process) the hook becomes the sole gate — which gives kaoiro a **real
   approval round trip**, something the Codex adapter never had
   ([ADR-0033](0033-permission-model-dual-axis.md) Context). A hook that
   blocked 100 s was honoured, and a 70 s tool call held the turn.
@@ -286,15 +285,11 @@ fallback if taken. These are acceptance items of phase-34, not follow-ups.
 
 ## Open questions
 
-- **Q1 (HITL, blocks Stage A merge)** — Confirm on the host that
-  `agy --print … --dangerously-skip-permissions --add-dir <dir with the gate
-  hook>` reports `init.permission_mode = "always-proceed"` and that the hook
-  `deny` still blocks. If yes: per-process, no host setting. If no: first
-  look for a process-scoped settings path (`agy install` "Configure
-  environment paths", env, HOME override); only if none exists does the
-  setup wizard write `toolPermission: "always-proceed"` host-wide — which
-  removes prompts from the operator's own interactive `agy` sessions and is
-  therefore a threat-model change, not a deployment note.
+- **Q1 — closed 2026-09-04 (operator measurement)**:
+  `--dangerously-skip-permissions` yields `init.permission_mode =
+  "always-proceed"` for that process only, and the PreToolUse gate still
+  fires for every tool step. F4 uses the flag; no host-wide setting is
+  written and the setup wizard fallback is dropped.
 - **Q2 — closed 2026-09-04**: the cwd is not a workspace root in print
   mode; passing `--add-dir <cwd>` as well restores it as the model's `Cwd`
   (F2). The gate's `Cwd` pin and the customization-dir deny stay as

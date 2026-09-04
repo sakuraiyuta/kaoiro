@@ -49,7 +49,7 @@ through the CLI bridge. Measured substrate:
 
 | # | Task | Outcome that closes it |
 |---|---|---|
-| 0.1 | ADR-0057 Q1: run the `--dangerously-skip-permissions` + gate hook probe on the host (operator; the agent harness blocks the flag) | `init.permission_mode` and the hook deny result recorded in the spec; substrate chosen |
+| 0.1 | ADR-0057 Q1 — done 2026-09-04 by the operator | per-process flag confirmed (`always-proceed`, hook fires); recorded in the spec |
 | 0.2 | Q2: `--add-dir` workspace-root semantics — done 2026-09-04 | both `--add-dir <cwd>` and `<agent dir>` are passed (ADR-0057 F2) |
 | 0.3 | Q3: env inheritance and hook-timeout behaviour — done 2026-09-04 | recorded in the spec; deadline ordering fixed in `host.ts` constants |
 | 0.4 | Design review (kuroe) round 1 — done 2026-09-04 | every must-fix resolved or dispositioned in ADR-0057 |
@@ -83,12 +83,12 @@ through the CLI bridge. Measured substrate:
 | B1 | `-p /usage` rate-limit probe per turn boundary → `rate_limits` |
 | B2 | history replay from `transcript_full.jsonl` (format measurement first) |
 | B3 | session enumeration metadata from `conversation_summaries.db` |
-| B4 | setup wizard: `agy` presence / version check; Q1 fallback writes `toolPermission` when chosen |
+| B4 | setup wizard: `agy` presence / version check |
 | B5 | context usage (per-model window table) — only if a source of truth exists |
 
 ## Open Questions Blocking This Phase
 
-- Stage 0.1 (Q1) blocks merging Stage A.
+- None — Stage 0 is closed.
 
 ## See Also
 
