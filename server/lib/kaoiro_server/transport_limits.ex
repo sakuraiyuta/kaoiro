@@ -101,6 +101,66 @@ defmodule KaoiroServer.TransportLimits do
     |> elem(0)
   end
 
+  @doc """
+  Projects each ordered pane as its newest list suffix within one shared JSON ledger.
+
+  The returned byte count is the exact increase from replacing an empty JSON
+  object with the projected map entries. Oversized panes are skipped so a
+  later, smaller pane can still fit.
+  """
+  def bounded_map_of_newest_suffixes(entries, budget)
+      when is_map(entries) and is_integer(budget) do
+    entries
+    |> Enum.sort_by(fn {key, _items} -> key end)
+    |> Enum.reduce({%{}, false, 0}, fn {key, items}, {projected, incomplete?, used} ->
+      case items do
+        [] ->
+          {projected, incomplete?, used}
+
+        _ ->
+          separator_bytes = if map_size(projected) == 0, do: 0, else: 1
+          entry_prefix_bytes = json_bytes(key) + 1 + separator_bytes
+
+          {suffix, item_bytes} =
+            bounded_newest_suffix(items, budget - used - entry_prefix_bytes - 2)
+
+          if suffix == [] do
+            {projected, true, used}
+          else
+            entry_bytes = entry_prefix_bytes + 2 + item_bytes
+
+            {
+              Map.put(projected, key, suffix),
+              incomplete? or length(suffix) < length(items),
+              used + entry_bytes
+            }
+          end
+      end
+    end)
+  end
+
+  @doc """
+  Projects map entries with a shared JSON ledger without reserializing the map.
+
+  The returned byte count is the exact increase from replacing an empty JSON
+  object with the projected map entries. Entries that do not fit do not stop
+  later smaller entries from being considered.
+  """
+  def bounded_map_with_ledger(entries, budget) when is_map(entries) and is_integer(budget) do
+    entries
+    |> Enum.sort_by(fn {key, _value} -> key end)
+    |> Enum.reduce({%{}, false, 0}, fn {key, value}, {projected, incomplete?, used} ->
+      entry_bytes =
+        json_bytes(key) + 1 + json_bytes(value) + if map_size(projected) == 0, do: 0, else: 1
+
+      if used + entry_bytes <= budget do
+        {Map.put(projected, key, value), incomplete?, used + entry_bytes}
+      else
+        {projected, true, used}
+      end
+    end)
+  end
+
   @doc "Measures the exact production text frame shape used by Phoenix Channels."
   def frame_bytes(event, payload) when is_binary(event) and is_map(payload) do
     push_frame_bytes("agents:lobby", event, payload)
@@ -133,6 +193,20 @@ defmodule KaoiroServer.TransportLimits do
 
     {:socket_push, :text, encoded} = JSONSerializer.encode!(reply)
     IO.iodata_length(encoded)
+  end
+
+  defp bounded_newest_suffix(items, budget) do
+    items
+    |> Enum.reverse()
+    |> Enum.reduce_while({[], 0}, fn item, {suffix, used} ->
+      item_bytes = json_bytes(item) + if suffix == [], do: 0, else: 1
+
+      if used + item_bytes <= budget do
+        {:cont, {[item | suffix], used + item_bytes}}
+      else
+        {:halt, {suffix, used}}
+      end
+    end)
   end
 
   defp json_bytes(value), do: value |> Jason.encode!() |> byte_size()
