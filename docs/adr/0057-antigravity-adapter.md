@@ -286,11 +286,12 @@ replay is Stage B2. Stage A ships with enumeration returning an empty list.
 
 ### F8 — Documents that change with the trust story
 
-threat-model.md gains a section for this engine (engine prompts disabled,
-wrapper as sole enforcement point, advisory sandbox, bridge auto-allow
-rule, possible host-wide setting under Q1); auth-and-authz.md gets the new
-boundary (hook → unix socket with nonce); deployment.md documents the Q1
-fallback if taken. These are acceptance items of phase-34, not follow-ups.
+threat-model.md gains a section for this engine (engine prompts disabled
+per process, wrapper as sole enforcement point, tamper detection rather
+than prevention for the customization dir, advisory sandbox, bridge
+auto-allow rule); auth-and-authz.md gets the new boundary (hook → unix
+socket with nonce). No host-wide setting is written (Q1), so deployment.md
+is unchanged. These are acceptance items of phase-34, not follow-ups.
 
 ## Open questions
 

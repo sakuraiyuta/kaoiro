@@ -248,11 +248,6 @@ costs. Design decisions live in ADR-0057; boundary mechanics live in
 
 ## Open Questions
 
-- Antigravity Q1 ([ADR-0057](../adr/0057-antigravity-adapter.md)) — whether
-  the CLI's approval-prompt disable can be scoped to the wrapper's own child
-  process. A host-wide fallback changes the operator's personal `agy`
-  sessions on that host, so it is a change to this document rather than a
-  deployment note.
 - Audit logging and tool-input masking remain future items as shown in the
   table above.
 
