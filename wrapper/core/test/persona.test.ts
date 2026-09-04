@@ -44,6 +44,9 @@ const ROUND_TRIP_CASES: {
   codex_extra_models: {
     value: [{ value: "gpt-6-astra", display_name: "GPT-6-Astra" }],
   },
+  antigravity_extra_models: {
+    value: [{ value: "gemini-3.7-flash", display_name: "Gemini 3.7 Flash" }],
+  },
   codex_internal_subagents: { value: true },
   claude_engine_catalog: {
     value: [{ value: "sonnet", display_name: "Sonnet", description: "" }],
@@ -359,6 +362,83 @@ describe("parseConfig", () => {
     expect(
       parseConfig({ ...valid, codex_extra_models: models })
         .codex_extra_models,
+    ).toEqual(models);
+  });
+
+  // issue #292 round 2 must-fix MF-1: parseConfig's extra_models validation
+  // was looser than runner/src/config.ts's parseEngineModelInfo, which
+  // enforces these same three invariants. Pinned here through the shared
+  // parseExtraModelsField helper so codex_extra_models and
+  // antigravity_extra_models cannot silently regress independently.
+  it("codex_extra_models: rejects default_effort declared without effort_levels", () => {
+    expect(() =>
+      parseConfig({
+        ...valid,
+        codex_extra_models: [
+          { value: "gpt-6-astra", display_name: "GPT-6-Astra", default_effort: "low" },
+        ],
+      }),
+    ).toThrow(
+      /codex_extra_models\[0\]\.default_effort requires codex_extra_models\[0\]\.effort_levels/,
+    );
+  });
+
+  it("codex_extra_models: rejects default_effort absent from effort_levels", () => {
+    expect(() =>
+      parseConfig({
+        ...valid,
+        codex_extra_models: [
+          {
+            value: "gpt-6-astra",
+            display_name: "GPT-6-Astra",
+            effort_levels: ["low", "high"],
+            default_effort: "medium",
+          },
+        ],
+      }),
+    ).toThrow(
+      /codex_extra_models\[0\]\.default_effort must be one of codex_extra_models\[0\]\.effort_levels/,
+    );
+  });
+
+  it("codex_extra_models: rejects a duplicate value within one declaration", () => {
+    expect(() =>
+      parseConfig({
+        ...valid,
+        codex_extra_models: [
+          { value: "gpt-6-astra", display_name: "GPT-6-Astra" },
+          { value: "gpt-6-astra", display_name: "duplicate" },
+        ],
+      }),
+    ).toThrow(/codex_extra_models has a duplicate value: gpt-6-astra/);
+  });
+
+  // antigravity_extra_models (issue #292 MF-2, phase-34 Stage B6) routes
+  // through the same parseExtraModelsField helper as codex_extra_models
+  // above, so this pins only that the wiring reaches the field -- the
+  // shared invariants are covered exhaustively by the codex_extra_models
+  // tests above and are not re-duplicated per engine.
+  it("antigravity_extra_models: rejects an empty value / display_name", () => {
+    expect(() =>
+      parseConfig({
+        ...valid,
+        antigravity_extra_models: [{ value: "", display_name: "Gemini 3.7 Flash" }],
+      }),
+    ).toThrow(/antigravity_extra_models\[0\]\.value must be a non-empty string/);
+  });
+
+  it("antigravity_extra_models: accepts a valid effort_levels + default_effort as-is", () => {
+    const models = [
+      {
+        value: "gemini-3.7-flash",
+        display_name: "Gemini 3.7 Flash",
+        effort_levels: ["low", "high"],
+        default_effort: "low",
+      },
+    ];
+    expect(
+      parseConfig({ ...valid, antigravity_extra_models: models })
+        .antigravity_extra_models,
     ).toEqual(models);
   });
 

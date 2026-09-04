@@ -304,6 +304,67 @@ describe("parseSpawn / resolveWrapperConfig", () => {
     );
     expect(config.codex_extra_models).toBeUndefined();
   });
+  // issue #292 (phase-34 Stage B6): antigravity.extra_models relayed to
+  // the wrapper as antigravity_extra_models (same appended-last positional
+  // arg rationale as codexExtraModels above).
+  it("relays antigravity.extra_models to the wrapper config as antigravity_extra_models (issue #292)", () => {
+    const parsed = parseSpawn({ ...spawnMsg, engine: "antigravity" })!;
+    const config = resolveWrapperConfig(
+      "lab-pc-1.antigravity-a",
+      parsed,
+      "ws://localhost:4000/wrapper",
+      undefined,
+      undefined,
+      undefined,
+      null,
+      undefined,
+      undefined,
+      [{ value: "gemini-4-nova", display_name: "Gemini 4 Nova" }],
+    );
+    expect(config.antigravity_extra_models).toEqual([
+      { value: "gemini-4-nova", display_name: "Gemini 4 Nova" },
+    ]);
+  });
+  it("omits antigravity_extra_models when antigravity.extra_models is absent / empty", () => {
+    const parsed = parseSpawn({ ...spawnMsg, engine: "antigravity" })!;
+    expect(
+      resolveWrapperConfig(
+        "lab-pc-1.antigravity-a",
+        parsed,
+        "ws://localhost:4000/wrapper",
+      ).antigravity_extra_models,
+    ).toBeUndefined();
+    expect(
+      resolveWrapperConfig(
+        "lab-pc-1.antigravity-a",
+        parsed,
+        "ws://localhost:4000/wrapper",
+        undefined,
+        undefined,
+        undefined,
+        null,
+        undefined,
+        undefined,
+        [],
+      ).antigravity_extra_models,
+    ).toBeUndefined();
+  });
+  it("does not set antigravity_extra_models for a non-antigravity engine", () => {
+    const parsed = parseSpawn({ ...spawnMsg, engine: "claude-code" })!;
+    const config = resolveWrapperConfig(
+      "lab-pc-1.claude-a",
+      parsed,
+      "ws://localhost:4000/wrapper",
+      undefined,
+      undefined,
+      undefined,
+      null,
+      undefined,
+      undefined,
+      [{ value: "gemini-4-nova", display_name: "Gemini 4 Nova" }],
+    );
+    expect(config.antigravity_extra_models).toBeUndefined();
+  });
   it("server_url 省略を許す(案A: runner が補完)", () => {
     const { server_url: _omit, ...rest } = spawnMsg;
     void _omit;
@@ -1802,6 +1863,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       codexChatgptPlan: undefined,
       codexInternalSubagents: undefined,
       codexExtraModels: undefined,
+      antigravityExtraModels: undefined,
       contextWorkBudgetPercent: undefined,
       getClaudeEngineCatalog: undefined,
     });
@@ -1833,6 +1895,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       codexChatgptPlan: undefined,
       codexInternalSubagents: undefined,
       codexExtraModels: undefined,
+      antigravityExtraModels: undefined,
       contextWorkBudgetPercent: undefined,
       getClaudeEngineCatalog: undefined,
     });
@@ -1852,6 +1915,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       codexChatgptPlan: undefined,
       codexInternalSubagents: undefined,
       codexExtraModels: undefined,
+      antigravityExtraModels: undefined,
       contextWorkBudgetPercent: 75,
       getClaudeEngineCatalog: undefined,
     });
@@ -1868,6 +1932,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       codexChatgptPlan: "pro",
       codexInternalSubagents: undefined,
       codexExtraModels: undefined,
+      antigravityExtraModels: undefined,
       contextWorkBudgetPercent: undefined,
       getClaudeEngineCatalog: undefined,
     });
@@ -1885,6 +1950,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       codexChatgptPlan: "pro",
       codexInternalSubagents: undefined,
       codexExtraModels: [{ value: "gpt-6-astra", display_name: "GPT-6-Astra" }],
+      antigravityExtraModels: undefined,
       contextWorkBudgetPercent: undefined,
       getClaudeEngineCatalog: undefined,
     });
@@ -1903,6 +1969,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       codexChatgptPlan: "pro",
       codexInternalSubagents: undefined,
       codexExtraModels: [{ value: "gpt-6-astra", display_name: "GPT-6-Astra" }],
+      antigravityExtraModels: undefined,
       contextWorkBudgetPercent: undefined,
       getClaudeEngineCatalog: undefined,
     });
@@ -1913,11 +1980,63 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       codexChatgptPlan: "pro",
       codexInternalSubagents: undefined,
       codexExtraModels: undefined,
+      antigravityExtraModels: undefined,
       contextWorkBudgetPercent: undefined,
       getClaudeEngineCatalog: undefined,
     });
     h.sup.handleSpawn({ ...spawnMsg, cwd: "/cwd", engine: "codex" });
     expect(h.configs.at(-1)?.codex_extra_models).toBeUndefined();
+  });
+
+  it("swapping antigravityExtraModels reaches subsequent antigravity spawns' WrapperConfig (issue #292)", () => {
+    const h = harness({ cwdAllowlist: ["/cwd"] });
+    h.sup.updateRuntimeConfig({
+      cwdAllowlist: ["/cwd"],
+      wrapperServerUrl: "ws://localhost:4000/wrapper",
+      codexAuthMode: undefined,
+      codexChatgptPlan: undefined,
+      codexInternalSubagents: undefined,
+      codexExtraModels: undefined,
+      antigravityExtraModels: [
+        { value: "gemini-4-nova", display_name: "Gemini 4 Nova" },
+      ],
+      contextWorkBudgetPercent: undefined,
+      getClaudeEngineCatalog: undefined,
+    });
+    h.sup.handleSpawn({ ...spawnMsg, cwd: "/cwd", engine: "antigravity" });
+    expect(h.configs.at(-1)?.antigravity_extra_models).toEqual([
+      { value: "gemini-4-nova", display_name: "Gemini 4 Nova" },
+    ]);
+  });
+
+  it("resetting antigravityExtraModels to undefined clears it from subsequent antigravity spawns too", () => {
+    const h = harness({ cwdAllowlist: ["/cwd"] });
+    h.sup.updateRuntimeConfig({
+      cwdAllowlist: ["/cwd"],
+      wrapperServerUrl: "ws://localhost:4000/wrapper",
+      codexAuthMode: undefined,
+      codexChatgptPlan: undefined,
+      codexInternalSubagents: undefined,
+      codexExtraModels: undefined,
+      antigravityExtraModels: [
+        { value: "gemini-4-nova", display_name: "Gemini 4 Nova" },
+      ],
+      contextWorkBudgetPercent: undefined,
+      getClaudeEngineCatalog: undefined,
+    });
+    h.sup.updateRuntimeConfig({
+      cwdAllowlist: ["/cwd"],
+      wrapperServerUrl: "ws://localhost:4000/wrapper",
+      codexAuthMode: undefined,
+      codexChatgptPlan: undefined,
+      codexInternalSubagents: undefined,
+      codexExtraModels: undefined,
+      antigravityExtraModels: undefined,
+      contextWorkBudgetPercent: undefined,
+      getClaudeEngineCatalog: undefined,
+    });
+    h.sup.handleSpawn({ ...spawnMsg, cwd: "/cwd", engine: "antigravity" });
+    expect(h.configs.at(-1)?.antigravity_extra_models).toBeUndefined();
   });
 
   it("codexChatgptPlan を undefined に戻すと以降の codex spawn からも消える", () => {
@@ -1929,6 +2048,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       codexChatgptPlan: "pro",
       codexInternalSubagents: undefined,
       codexExtraModels: undefined,
+      antigravityExtraModels: undefined,
       contextWorkBudgetPercent: undefined,
       getClaudeEngineCatalog: undefined,
     });
@@ -1939,6 +2059,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       codexChatgptPlan: undefined,
       codexInternalSubagents: undefined,
       codexExtraModels: undefined,
+      antigravityExtraModels: undefined,
       contextWorkBudgetPercent: undefined,
       getClaudeEngineCatalog: undefined,
     });
@@ -1957,6 +2078,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       codexChatgptPlan: undefined,
       codexInternalSubagents: undefined,
       codexExtraModels: undefined,
+      antigravityExtraModels: undefined,
       contextWorkBudgetPercent: undefined,
       getClaudeEngineCatalog: undefined,
     });
@@ -1978,6 +2100,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       codexChatgptPlan: undefined,
       codexInternalSubagents: false,
       codexExtraModels: undefined,
+      antigravityExtraModels: undefined,
       contextWorkBudgetPercent: undefined,
       getClaudeEngineCatalog: undefined,
     });
@@ -1994,6 +2117,7 @@ describe("Supervisor.updateRuntimeConfig (config hot-reload)", () => {
       codexChatgptPlan: undefined,
       codexInternalSubagents: true,
       codexExtraModels: undefined,
+      antigravityExtraModels: undefined,
       contextWorkBudgetPercent: undefined,
       getClaudeEngineCatalog: undefined,
     });

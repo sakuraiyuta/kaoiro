@@ -110,6 +110,55 @@ describe("AntigravityHost", () => {
     });
   });
 
+  // issue #292 (phase-34 Stage B6): antigravity_extra_models (relayed from
+  // runner.config.json's antigravity.extra_models) merges into the pinned
+  // snapshot before ext.models is stamped, mirroring the codex adapter's
+  // codex_extra_models (wrapper/codex/src/host.ts).
+  it("appends a new antigravity_extra_models model to ext.models (issue #292)", () => {
+    const cfg = {
+      ...config(),
+      antigravity_extra_models: [
+        { value: "gemini-4-nova", display_name: "Gemini 4 Nova" },
+      ],
+    } as AntigravityLaunchConfig;
+    const initial = initialStatusExt(cfg);
+    expect(
+      (initial.models as { value: string }[]).map((m) => m.value),
+    ).toContain("gemini-4-nova");
+  });
+
+  it("antigravity_extra_models overrides an existing snapshot value (issue #292)", () => {
+    const cfg = {
+      ...config(),
+      antigravity_extra_models: [
+        { value: "gemini-3.6-flash-high", display_name: "overridden" },
+      ],
+    } as AntigravityLaunchConfig;
+    const initial = initialStatusExt(cfg);
+    const flash = (
+      initial.models as { value: string; display_name: string }[]
+    ).find((m) => m.value === "gemini-3.6-flash-high");
+    expect(flash?.display_name).toBe("overridden");
+  });
+
+  it("the constructor's own catalog reflects antigravity_extra_models before any live probe resolves (issue #292)", () => {
+    const cfg = {
+      ...config(),
+      antigravity_extra_models: [
+        { value: "gemini-4-nova", display_name: "Gemini 4 Nova" },
+      ],
+    };
+    const { host } = hostHarness({ config: cfg });
+    // Synchronous, before any await: #refreshCatalog's probe cannot have
+    // resolved yet, so this observes the constructor's OWN merge line
+    // (this.#catalog = mergeExtraModels(...)), not a live-probed catalog.
+    const snapshot = host.statusExtSnapshot();
+    expect(
+      (snapshot.models as { value: string }[]).map((m) => m.value),
+    ).toContain("gemini-4-nova");
+    host.close();
+  });
+
   it("F4b smoke probeは実機形hooks.json内の期待action一件だけを受け入れる", () => {
     const source = "/tmp/kaoiro-agy-x/.agents/hooks.json";
     const command = "/usr/bin/node /pkg/dist/hook.js";
@@ -407,6 +456,36 @@ describe("AntigravityHost", () => {
     });
     await waitFor(() => states.some((envelope) => (envelope.ext?.models as { value: string }[] | undefined)?.some((model) => model.value === "gemini-3.6-flash-high") === true));
     expect(calls).toEqual([["models"]]);
+    host.close();
+  });
+
+  it("a live models probe re-applies antigravity_extra_models, not only the pinned snapshot (issue #292)", async () => {
+    const states: Envelope[] = [];
+    const cfg = {
+      ...config(),
+      antigravity_extra_models: [
+        // Overrides a value the live probe itself returns.
+        { value: "claude-sonnet-4-6", display_name: "overridden" },
+        // A value absent from both the snapshot and the live probe result.
+        { value: "gemini-4-nova", display_name: "Gemini 4 Nova" },
+      ],
+    };
+    const host = new AntigravityHost(cfg, {
+      cwd: process.cwd(), appendSystemPrompt: "persona", permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
+      onState: (envelope) => states.push(envelope), runtimeAssetsAvailable: () => true,
+      modelsProbeSpawn: () => {
+        const child = new FakeAgy();
+        queueMicrotask(() => {
+          child.stdout.end(readFileSync(new URL("./fixtures/agy-models.stdout", import.meta.url), "utf8"));
+          child.emit("exit", 0, null);
+        });
+        return child;
+      },
+    });
+    await waitFor(() => states.some((envelope) => (envelope.ext?.models as { value: string }[] | undefined)?.some((model) => model.value === "gemini-4-nova") === true));
+    const models = states.at(-1)!.ext!.models as { value: string; display_name: string }[];
+    expect(models.map((m) => m.value)).toContain("gemini-4-nova");
+    expect(models.find((m) => m.value === "claude-sonnet-4-6")?.display_name).toBe("overridden");
     host.close();
   });
 

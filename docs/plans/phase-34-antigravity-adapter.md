@@ -4,7 +4,7 @@ description: Implement ADR-0057 — wrapper/antigravity package driving the agy 
 status: planned
 phase: 34
 depends_on: [phase-14-codex-adapter, phase-33-compaction-resume-lifecycle]
-last_updated: 2026-09-04
+last_updated: 2026-09-05
 ---
 
 # Phase 34 — Antigravity adapter (third engine, agy CLI headless)
@@ -85,7 +85,7 @@ through the CLI bridge. Measured substrate:
 | B3 | session enumeration metadata from `conversation_summaries.db` |
 | B4 | setup wizard: `agy` presence check; runner reports `agy --version` and re-runs the gate registration check on a version change |
 | B5 | context usage (per-model window table) — only if a source of truth exists |
-| B6 | `antigravity.extra_models` (issue #292 part A for this engine, reusing the codex helpers) |
+| B6 | `antigravity.extra_models` (issue #292 part A for this engine, reusing the codex helpers) — **done in #292** |
 | B7 | server test for an antigravity spawn with the `approval` key entirely absent (review advisory) |
 
 ## Open Questions Blocking This Phase

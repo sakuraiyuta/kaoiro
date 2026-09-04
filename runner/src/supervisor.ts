@@ -157,6 +157,12 @@ export interface SupervisorOptions {
    *  the runner's own `buildRegister` already applied to the register's
    *  launch catalog. */
   codexExtraModels?: EngineModelInfo[];
+  /** Operator-declared extra models from runner.config.json's
+   *  `antigravity.extra_models` (issue #292, phase-34 Stage B6), relayed
+   *  verbatim to the wrapper as `WrapperConfig.antigravity_extra_models`
+   *  for the same value-collision merge the runner's own `buildRegister`
+   *  already applied to the register's launch catalog. */
+  antigravityExtraModels?: EngineModelInfo[];
   /** Global soft context-work budget from runner.config.json. The wrapper
    * derives a per-model token denominator at measurement time (issue #264). */
   contextWorkBudgetPercent?: number;
@@ -398,6 +404,9 @@ export function resolveWrapperConfig(
   // above) so this positional-argument function's many EXISTING call sites
   // -- production and test alike -- do not silently shift by one slot.
   codexExtraModels?: EngineModelInfo[],
+  // Same appended-last rationale as codexExtraModels immediately above
+  // (phase-34 Stage B6).
+  antigravityExtraModels?: EngineModelInfo[],
 ): WrapperConfig {
   const config: WrapperConfig = {
     agent_id: agentId,
@@ -447,6 +456,12 @@ export function resolveWrapperConfig(
     // resolution the runner already applied to the register's.
     if (codexExtraModels !== undefined && codexExtraModels.length > 0) {
       config.codex_extra_models = codexExtraModels;
+    }
+  }
+  if (parsed.engine === "antigravity") {
+    // Same relay rationale as codex_extra_models above (phase-34 Stage B6).
+    if (antigravityExtraModels !== undefined && antigravityExtraModels.length > 0) {
+      config.antigravity_extra_models = antigravityExtraModels;
     }
   }
   if (
@@ -547,6 +562,7 @@ export interface SupervisorRuntimeUpdate {
   codexChatgptPlan: ChatGptPlan | undefined;
   codexInternalSubagents: boolean | undefined;
   codexExtraModels: EngineModelInfo[] | undefined;
+  antigravityExtraModels: EngineModelInfo[] | undefined;
   contextWorkBudgetPercent: number | undefined;
   /** Live getter for the runner's Claude engine-catalog cache (ADR-0039
    *  F9 追補). Preserved on hot-reload so a config file change does not
@@ -579,6 +595,7 @@ export class Supervisor {
   #codexChatgptPlan: ChatGptPlan | undefined;
   #codexInternalSubagents: boolean | undefined;
   #codexExtraModels: EngineModelInfo[] | undefined;
+  #antigravityExtraModels: EngineModelInfo[] | undefined;
   #contextWorkBudgetPercent: number | undefined;
   #getClaudeEngineCatalog:
     | (() => WrapperConfig["claude_engine_catalog"] | null | undefined)
@@ -616,6 +633,7 @@ export class Supervisor {
     this.#codexChatgptPlan = options.codexChatgptPlan;
     this.#codexInternalSubagents = options.codexInternalSubagents;
     this.#codexExtraModels = options.codexExtraModels;
+    this.#antigravityExtraModels = options.antigravityExtraModels;
     this.#contextWorkBudgetPercent = options.contextWorkBudgetPercent;
     this.#getClaudeEngineCatalog = options.getClaudeEngineCatalog;
   }
@@ -634,6 +652,7 @@ export class Supervisor {
     this.#codexChatgptPlan = update.codexChatgptPlan;
     this.#codexInternalSubagents = update.codexInternalSubagents;
     this.#codexExtraModels = update.codexExtraModels;
+    this.#antigravityExtraModels = update.antigravityExtraModels;
     this.#contextWorkBudgetPercent = update.contextWorkBudgetPercent;
     this.#getClaudeEngineCatalog = update.getClaudeEngineCatalog;
   }
@@ -1198,6 +1217,7 @@ export class Supervisor {
         this.#getClaudeEngineCatalog?.() ?? null,
         this.#contextWorkBudgetPercent,
         this.#codexExtraModels,
+        this.#antigravityExtraModels,
       ),
       parsed.cwd,
       parsed.resumeSessionId,
@@ -1369,6 +1389,7 @@ export class Supervisor {
           this.#getClaudeEngineCatalog?.() ?? null,
           this.#contextWorkBudgetPercent,
           this.#codexExtraModels,
+          this.#antigravityExtraModels,
         ),
         entry.parsed.cwd,
         entry.parsed.resumeSessionId,
@@ -1417,6 +1438,7 @@ export class Supervisor {
           this.#getClaudeEngineCatalog?.() ?? null,
           this.#contextWorkBudgetPercent,
           this.#codexExtraModels,
+          this.#antigravityExtraModels,
         ),
         entry.parsed.cwd,
         undefined, // fresh: no --resume
@@ -1515,6 +1537,7 @@ export class Supervisor {
           this.#getClaudeEngineCatalog?.() ?? null,
           this.#contextWorkBudgetPercent,
           this.#codexExtraModels,
+          this.#antigravityExtraModels,
         ),
         entry.parsed.cwd,
         rollbackSid,

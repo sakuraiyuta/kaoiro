@@ -236,6 +236,15 @@ export interface WrapperConfig {
    *  only the register's launch-time list. Absent / empty = no declarations
    *  (a pre-#292 runner, or an operator who set none). */
   codex_extra_models?: EngineModelInfo[];
+  /** Operator-declared extra models from `runner.config.json`'s
+   *  `antigravity.extra_models` (issue #292), already merged by the
+   *  runner's `buildRegister` into the launch catalog it advertises.
+   *  Relayed here so the wrapper applies the SAME merge to its own catalog
+   *  (`antigravityCatalogSnapshot()` / the live `agy models` probe result)
+   *  — ext.models and `setModel` validation must both recognise a declared
+   *  model too, not only the register's launch-time list. Absent / empty
+   *  = no declarations (a pre-#292 runner, or an operator who set none). */
+  antigravity_extra_models?: EngineModelInfo[];
   /** Claude-only: live-probed engine catalog snapshot from the runner's
    *  memory cache (ADR-0039 F9 追補). When set, the Claude adapter seeds
    *  its #models with this rich list instead of the ADR-0037 F1 single

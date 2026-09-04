@@ -8,6 +8,7 @@ import {
   makeLog,
   makeResult,
   makeStateChange,
+  mergeExtraModels,
   stepState,
   type EngineAdapter,
   type Envelope,
@@ -127,7 +128,15 @@ export function isGateRegistered(value: unknown, expected: ExpectedGateRegistrat
     && (action as Record<string, unknown>).timeout_seconds === expected.timeoutSeconds;
 }
 
-export function initialStatusExt(config: AntigravityLaunchConfig, models = antigravityCatalogSnapshot()): Record<string, unknown> {
+export function initialStatusExt(
+  config: AntigravityLaunchConfig,
+  // issue #292 (phase-34 Stage B6): same merge as the constructor's own
+  // #catalog assignment below, applied as the default so a caller that
+  // omits `models` (the two direct unit tests below) still sees a
+  // declared model, not only the production call site which always
+  // passes the current #catalog explicitly.
+  models = mergeExtraModels(antigravityCatalogSnapshot(), config.antigravity_extra_models),
+): Record<string, unknown> {
   const sandbox = config.sandbox ?? "workspace-write";
   const approval = config.approval ?? "on-request";
   return {
@@ -187,6 +196,15 @@ export class AntigravityHost implements EngineAdapter {
     if (this.#config.approval === "on-failure") {
       throw new Error("antigravity approval=on-failure is unsupported");
     }
+    // issue #292 (phase-34 Stage B6): layer antigravity_extra_models on top
+    // of the pinned snapshot before the live probe below (#refreshCatalog)
+    // has a chance to run, so a declared model is visible even if the
+    // probe never completes (agy binary absent, timeout, unparsable
+    // output).
+    this.#catalog = mergeExtraModels(
+      antigravityCatalogSnapshot(),
+      this.#config.antigravity_extra_models,
+    );
     this.#options = options;
     this.#sessionId = options.resumeSessionId ?? null;
     this.#now = () => new Date().toISOString();
@@ -576,7 +594,11 @@ export class AntigravityHost implements EngineAdapter {
       return;
     }
     if (catalog === null || this.#closed) return;
-    this.#catalog = catalog;
+    // issue #292 (phase-34 Stage B6): re-apply the merge on top of the
+    // freshly probed catalog so a live refresh does not drop an
+    // operator-declared extra model that the pinned snapshot merge above
+    // already exposed.
+    this.#catalog = mergeExtraModels(catalog, this.#config.antigravity_extra_models);
     this.#emitState(this.#machine.state);
   }
 

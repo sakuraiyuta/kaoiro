@@ -81,7 +81,7 @@ node dist/setup-cli.js            # 直接叩く場合 (runner/ から)
 聞かれるのは host_id / server URL / 起動許可 cwd / engine(capabilities)/
 Codex を選んだ場合はその auth mode / トークン / node の絶対パス。
 `codex.chatgpt_plan` / `codex.extra_models` / `codex.internal_subagents` /
-`context_work_budget_percent` は
+`antigravity.extra_models` / `context_work_budget_percent` は
 ウィザードでは聞かず、必要なら生成後の `runner.config.json` に手で足す。出力先は OS 別ユーザ設定ディレクトリ(Linux
 `${XDG_CONFIG_HOME:-~/.config}/kaoiro`、macOS
 `~/Library/Application Support/kaoiro`。`KAOIRO_RUNNER_DIR` で上書き可)で、
@@ -405,7 +405,9 @@ Gitea release への資産アップロードは
 - `extra_models`(`EngineModelInfo[]`、issue #292)— lets the operator
   declare a model kaoiro's curated catalog
   (`wrapper/codex/src/catalog.ts`, ADR-0035 H3) has not caught up with yet,
-  without waiting for a kaoiro release. Only `value` is required;
+  without waiting for a kaoiro release. Only `value` is required; every
+  field accepts only `EngineModelInfo`'s INPUT subset — `resolved_model`
+  is upstream-derived metadata and is never read from config.
   `display_name` defaults to `value`; omitting `effort_levels` means no
   effort UI is offered (ADR-0035's "never infer an effort level" rule). A
   matching `value` overrides the curated catalog's entry; a new `value` is
@@ -435,6 +437,38 @@ Gitea release への資産アップロードは
 
 **live reload**: config を書き換えると次回以降の spawn にのみ反映される。稼働中の
 wrapper プロセスは launch 時の値を保持し、即時には変わらない。
+
+## Antigravity configuration
+
+`runner.config.json`'s `antigravity` block passes Antigravity-engine-specific
+settings (phase-34 Stage B6, issue #292).
+
+- `extra_models` (`EngineModelInfo[]`) — the same operator-declaration
+  mechanism as Codex's `extra_models` above, reusing the identical
+  `parseExtraModels` / `mergeExtraModels` helpers: lets the operator
+  declare a model that the register-time `agy models` probe (or the pinned
+  1.1.26 snapshot fallback) does not yet return, without waiting for a
+  kaoiro release. Only `value` is required; every field accepts only
+  `EngineModelInfo`'s INPUT subset — `resolved_model` is upstream-derived
+  metadata and is never read from config. `display_name`
+  defaults to `value`; omitting `effort_levels` means no effort UI is
+  offered (ADR-0035's "never infer an effort level" rule, which this
+  engine follows too even though Antigravity itself has no effort switch
+  today). A matching `value` overrides the resolved base catalog's entry;
+  a new `value` is appended. The same merge applies both to the runner's
+  register (LaunchDialog) and to the wrapper's own catalog (`ext.models`,
+  `setModel`), and is re-applied on every live probe refresh so a
+  refreshed catalog does not silently drop a declared model.
+  ```json
+  "antigravity": {
+    "extra_models": [
+      { "value": "gemini-4-nova", "display_name": "Gemini 4 Nova" }
+    ]
+  }
+  ```
+
+**live reload**: same semantics as the Codex block above — a config change
+reaches only spawns after the reload.
 
 ## 開発
 

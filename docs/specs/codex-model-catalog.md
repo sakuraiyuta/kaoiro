@@ -62,8 +62,9 @@ existing tiering (issue #292).
 `gpt-5.4` / `gpt-5.4-mini` / `gpt-5.3-codex-spark`.
 
 **Reference API pricing** (per 1M tokens): Sol $5 input / $30 output,
-Terra $2.50 / $15, Luna $1 / $6. Astra pricing was not published as of
-2026-09-05.
+Terra $2.50 / $15, Luna $1 / $6, Astra $10 / $50
+([official pricing page](https://developers.openai.com/api/docs/models/gpt-6-astra),
+2026-09-05).
 
 ## Asymmetry between the two authentication modes (F4bc background)
 
@@ -168,10 +169,16 @@ themselves in the meantime:
 }
 ```
 
-- Only `value` is required (`EngineModelInfo`); `display_name` defaults to
-  `value`; `effort_levels` / `default_effort` absent means no effort
-  switching is offered for that model (ADR-0035's "never infer an effort
-  domain" rule — kaoiro does not guess one).
+- Only `value` is required; every field accepts only `EngineModelInfo`'s
+  INPUT subset — `resolved_model` is upstream-derived metadata and is
+  never read from config. `display_name` defaults to `value`;
+  `effort_levels` / `default_effort` absent means no effort switching is
+  offered for that model (ADR-0035's "never infer an effort domain" rule
+  — kaoiro does not guess one).
+- The same mechanism (identical `parseExtraModels` / `mergeExtraModels`
+  helpers) is available for the Antigravity engine as
+  `antigravity.extra_models` (phase-34 Stage B6, issue #292) — see
+  runner/README.md's "Antigravity configuration" section.
 - Declared entries are merged onto the resolved base catalog by
   `mergeExtraModels` (runner/src/config.ts, and the identical wrapper-side
   copy in `@kaoiro/agent-common`'s `catalog.ts`): a `value` matching an

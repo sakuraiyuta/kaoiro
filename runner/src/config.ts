@@ -58,6 +58,7 @@ export interface RunnerConfig {
   context_work_budget_percent?: number;
   capabilities?: string[];
   codex?: CodexConfig;
+  antigravity?: AntigravityConfig;
 }
 
 export type ChatGptPlan =
@@ -100,6 +101,18 @@ export interface CodexConfig {
    *  (declared entries win on a `value` collision) and relayed to the
    *  wrapper as `WrapperConfig.codex_extra_models` for the same merge on
    *  the host side (ext.models / effort-switch / setModel validation). */
+  extra_models?: EngineModelInfo[];
+}
+
+export interface AntigravityConfig {
+  /** Operator-declared models to add to the resolved catalog, on top of
+   *  whatever the register-time `agy models` probe already returns (issue
+   *  #292 part A for this engine, phase-34 Stage B6) — the same mechanism
+   *  as `CodexConfig.extra_models`, reusing the engine-agnostic
+   *  `parseExtraModels` / `mergeExtraModels` helpers below. Merged in
+   *  `buildRegister` (declared entries win on a `value` collision) and
+   *  relayed to the wrapper as `WrapperConfig.antigravity_extra_models` for
+   *  the same merge on the host side (ext.models / setModel validation). */
   extra_models?: EngineModelInfo[];
 }
 
@@ -156,12 +169,12 @@ function parseStringList(
 /** Parses one `EngineModelInfo` from an operator's `extra_models` entry
  *  (issue #292). Engine-agnostic — the caller supplies the field path for
  *  error messages, so this is shared verbatim by any engine's config block
- *  (`codex.extra_models` today; `antigravity.extra_models` once that
- *  wrapper package lands, ADR-0057). Only `value` is required; `display_name`
- *  defaults to `value`, and `effort_levels` / `default_effort` are left
- *  absent when not declared — no inferred effort UI (ADR-0035 "never guess
- *  effort levels"). `resolved_model` is upstream-derived metadata, not an
- *  operator input, and is never read from config. */
+ *  (`codex.extra_models`, `antigravity.extra_models`). Only `value` is
+ *  required; `display_name` defaults to `value`, and `effort_levels` /
+ *  `default_effort` are left absent when not declared — no inferred effort
+ *  UI (ADR-0035 "never guess effort levels"). `resolved_model` is
+ *  upstream-derived metadata, not an operator input, and is never read
+ *  from config. */
 function parseEngineModelInfo(
   value: unknown,
   field: string,
@@ -393,6 +406,20 @@ export function parseRunnerConfig(raw: unknown): RunnerConfig {
     config.codex = codex;
   }
 
+  if (raw.antigravity !== undefined) {
+    if (!isObject(raw.antigravity)) {
+      throw new ConfigError("antigravity must be an object");
+    }
+    const antigravity: AntigravityConfig = {};
+    if (raw.antigravity.extra_models !== undefined) {
+      antigravity.extra_models = parseExtraModels(
+        raw.antigravity.extra_models,
+        "antigravity.extra_models",
+      );
+    }
+    config.antigravity = antigravity;
+  }
+
   return config;
 }
 
@@ -512,7 +539,12 @@ export function buildRegister(
       // ADR-0057 F4c: Antigravity exposes both the sandbox axis and the
       // approval axis (round 2 SF-R2-4).
       launch_permission_axes: { sandbox: true, approval: true },
-      models: antigravityCatalogOverride ?? antigravityCatalogSnapshot(),
+      // Same mergeExtraModels semantics as the Codex branch above
+      // (antigravity.extra_models, phase-34 Stage B6).
+      models: mergeExtraModels(
+        antigravityCatalogOverride ?? antigravityCatalogSnapshot(),
+        config.antigravity?.extra_models,
+      ),
     });
   }
   const safeBuildInfo =

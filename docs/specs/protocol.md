@@ -641,6 +641,28 @@ rejects a spawn race with `spawn_result.reason = already_running`. A wrapper joi
 `agent_id` that already has a live owner is also explicitly rejected, making accidental
 double starts visible instead of silently applying last-write-wins ([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) D5).
 
+### WrapperConfig fields relayed by the runner (issue #292)
+
+`WrapperConfig` (protocol/src/index.ts) is the runner's per-spawn config
+handoff to the wrapper process it launches — a process-boundary data
+structure, not a `runner:<host_id>` channel message like the table above.
+Most of its ~20 fields mirror the `spawn` payload verbatim
+(`resolveWrapperConfig`, runner/src/supervisor.ts); this section documents
+only the two fields that instead come from `runner.config.json`'s
+per-engine blocks, since nothing else in this spec names `WrapperConfig`.
+
+- `codex_extra_models` / `antigravity_extra_models` (`EngineModelInfo[]`)
+  — the operator's `codex.extra_models` / `antigravity.extra_models`
+  declaration (runner.config.json), already merged by the runner's
+  `buildRegister` into the launch catalog it advertises. Relayed so the
+  wrapper applies the SAME merge to its own catalog resolution — `ext.models`,
+  effort-switch availability (Codex only), and `setModel` validation must
+  all recognise a declared model too, not only the register's launch-time
+  list. Absent / empty on either field means no declarations for that
+  engine. See [codex-model-catalog](codex-model-catalog.md) (D) and
+  runner/README.md's "Codex 設定" / "Antigravity configuration" sections
+  for the declaration syntax and merge semantics.
+
 ### Client → server launch control (#22, [ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md))
 
 Launch-UI requests from the dashboard operator are relayed by the server to

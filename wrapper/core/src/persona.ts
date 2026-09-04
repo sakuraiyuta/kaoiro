@@ -5,7 +5,12 @@
 // (persona-personality-injection spec, protocol.md「人格プロンプト配送」).
 
 import { readFileSync } from "node:fs";
-import type { ModelSource, PermissionMode, WrapperConfig } from "@kaoiro/protocol";
+import type {
+  EngineModelInfo,
+  ModelSource,
+  PermissionMode,
+  WrapperConfig,
+} from "@kaoiro/protocol";
 
 // The protocol package is types-only (no runtime exports), so the closed
 // enum's value list is duplicated here. Keep in sync with the PermissionMode
@@ -77,6 +82,99 @@ function nonEmptyString(value: unknown, field: string): string {
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+/** Parses one `EngineModelInfo` row from an operator's `*_extra_models`
+ *  declaration (issue #292). Mirrors runner/src/config.ts's
+ *  `parseEngineModelInfo` invariant-for-invariant (independent copy, no
+ *  dependency edge between the runner and wrapper packages) since the
+ *  wrapper does not blindly trust what the runner already validated.
+ *  display_name is required here rather than re-defaulted from value: by
+ *  the time a row reaches the wrapper it should already carry the
+ *  runner's default substitution, so a missing one signals a malformed
+ *  upstream rather than a legitimately-omitted field. */
+function parseExtraModelRow(
+  row: Record<string, unknown>,
+  field: string,
+): EngineModelInfo {
+  const model: EngineModelInfo = {
+    value: nonEmptyString(row.value, `${field}.value`),
+    display_name: nonEmptyString(row.display_name, `${field}.display_name`),
+  };
+  if (row.description !== undefined) {
+    model.description = nonEmptyString(row.description, `${field}.description`);
+  }
+  if (row.effort_levels !== undefined) {
+    if (!Array.isArray(row.effort_levels)) {
+      throw new ConfigError(`${field}.effort_levels must be an array`);
+    }
+    if (row.effort_levels.length > MAX_EFFORT_LEVELS) {
+      throw new ConfigError(
+        `${field}.effort_levels must have at most ` +
+          `${MAX_EFFORT_LEVELS} entries`,
+      );
+    }
+    model.effort_levels = row.effort_levels.map((l, j) =>
+      nonEmptyString(l, `${field}.effort_levels[${j}]`),
+    );
+  }
+  if (row.default_effort !== undefined) {
+    const defaultEffort = nonEmptyString(
+      row.default_effort,
+      `${field}.default_effort`,
+    );
+    if (model.effort_levels === undefined) {
+      throw new ConfigError(
+        `${field}.default_effort requires ${field}.effort_levels`,
+      );
+    }
+    if (!model.effort_levels.includes(defaultEffort)) {
+      throw new ConfigError(
+        `${field}.default_effort must be one of ${field}.effort_levels`,
+      );
+    }
+    model.default_effort = defaultEffort;
+  }
+  return model;
+}
+
+/** Parses an `*_extra_models` declaration array under `raw[key]` (issue
+ *  #292). Shared by both `codex_extra_models` and `antigravity_extra_models`
+ *  so the two engines' declarations carry identical invariants rather than
+ *  each hand-rolling its own copy (a second copy would be the second
+ *  sighting of the same shape). Routed through `nonEmptyString`
+ *  (MAX_FIELD_LENGTH) and `MAX_EXTRA_MODELS` like every other
+ *  identity-string / list field in this file: this object rides every
+ *  `state_change` broadcast verbatim (host.ts stamps it into `ext.models`),
+ *  so it gets the same wire-payload bound as `allowed_tools` / persona
+ *  fields, not a looser one. Rejects a duplicate `value` within the SAME
+ *  declaration fail-fast, mirroring the runner's `parseExtraModels`. */
+function parseExtraModelsField(
+  raw: Record<string, unknown>,
+  key: string,
+): EngineModelInfo[] {
+  const value = raw[key];
+  if (!Array.isArray(value)) {
+    throw new ConfigError(`${key} must be an array`);
+  }
+  if (value.length > MAX_EXTRA_MODELS) {
+    throw new ConfigError(`${key} must have at most ${MAX_EXTRA_MODELS} entries`);
+  }
+  const rows: EngineModelInfo[] = [];
+  const seen = new Set<string>();
+  for (let i = 0; i < value.length; i++) {
+    const r = value[i];
+    if (typeof r !== "object" || r === null) {
+      throw new ConfigError(`${key}[${i}] must be an object`);
+    }
+    const model = parseExtraModelRow(r as Record<string, unknown>, `${key}[${i}]`);
+    if (seen.has(model.value)) {
+      throw new ConfigError(`${key} has a duplicate value: ${model.value}`);
+    }
+    seen.add(model.value);
+    rows.push(model);
+  }
+  return rows;
 }
 
 /** Charset is restricted so agent_id stays safe in channel topics and URLs
@@ -277,71 +375,13 @@ export function parseConfig(raw: unknown): WrapperConfig {
     config.codex_internal_subagents = raw.codex_internal_subagents;
   }
   if (raw.codex_extra_models !== undefined) {
-    // issue #292: same defensive shape + per-row validation as
-    // claude_engine_catalog below (the runner already validated/defaulted
-    // this at parse time, but the wrapper does not blindly trust it either).
-    // Unlike claude_engine_catalog, display_name is required here rather
-    // than re-defaulted: by the time it reaches the wrapper it should
-    // already carry the runner's default substitution, so a missing one
-    // signals a malformed upstream rather than a legitimately-omitted field.
-    // Routed through nonEmptyString (MAX_FIELD_LENGTH) and MAX_EXTRA_MODELS
-    // like every other identity-string / list field in this file: this
-    // object rides every state_change broadcast verbatim (host.ts stamps
-    // it into ext.models), so it gets the same wire-payload bound as
-    // allowed_tools / persona fields, not a looser one.
-    if (!Array.isArray(raw.codex_extra_models)) {
-      throw new ConfigError("codex_extra_models must be an array");
-    }
-    if (raw.codex_extra_models.length > MAX_EXTRA_MODELS) {
-      throw new ConfigError(
-        `codex_extra_models must have at most ${MAX_EXTRA_MODELS} entries`,
-      );
-    }
-    const rows: NonNullable<WrapperConfig["codex_extra_models"]> = [];
-    for (let i = 0; i < raw.codex_extra_models.length; i++) {
-      const r = raw.codex_extra_models[i];
-      if (typeof r !== "object" || r === null) {
-        throw new ConfigError(`codex_extra_models[${i}] must be an object`);
-      }
-      const row = r as Record<string, unknown>;
-      const copy: NonNullable<WrapperConfig["codex_extra_models"]>[number] = {
-        value: nonEmptyString(row.value, `codex_extra_models[${i}].value`),
-        display_name: nonEmptyString(
-          row.display_name,
-          `codex_extra_models[${i}].display_name`,
-        ),
-      };
-      if (row.description !== undefined) {
-        copy.description = nonEmptyString(
-          row.description,
-          `codex_extra_models[${i}].description`,
-        );
-      }
-      if (row.effort_levels !== undefined) {
-        if (!Array.isArray(row.effort_levels)) {
-          throw new ConfigError(
-            `codex_extra_models[${i}].effort_levels must be an array`,
-          );
-        }
-        if (row.effort_levels.length > MAX_EFFORT_LEVELS) {
-          throw new ConfigError(
-            `codex_extra_models[${i}].effort_levels must have at most ` +
-              `${MAX_EFFORT_LEVELS} entries`,
-          );
-        }
-        copy.effort_levels = row.effort_levels.map((l, j) =>
-          nonEmptyString(l, `codex_extra_models[${i}].effort_levels[${j}]`),
-        );
-      }
-      if (row.default_effort !== undefined) {
-        copy.default_effort = nonEmptyString(
-          row.default_effort,
-          `codex_extra_models[${i}].default_effort`,
-        );
-      }
-      rows.push(copy);
-    }
-    config.codex_extra_models = rows;
+    config.codex_extra_models = parseExtraModelsField(raw, "codex_extra_models");
+  }
+  if (raw.antigravity_extra_models !== undefined) {
+    config.antigravity_extra_models = parseExtraModelsField(
+      raw,
+      "antigravity_extra_models",
+    );
   }
   if (raw.claude_engine_catalog !== undefined) {
     // Defensive shape + per-row validation (ADR-0039 F9 v2 = 藤 review

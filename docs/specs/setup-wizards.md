@@ -133,6 +133,11 @@ startup**.
 | Runner token | `KAOIRO_RUNNER_TOKEN` in `runner.env` | Required when exposed | Manual entry / automatic generation. **Never write it to config JSON.** |
 | Node path | Same, `KAOIRO_NODE` | Optional | systemd user units / launchd start with a minimal PATH, so fix it to an absolute path when using a version manager. |
 
+- Fields the wizard does not ask (`codex.chatgpt_plan` / `codex.extra_models`
+  / `codex.internal_subagents` / `antigravity.extra_models` /
+  `context_work_budget_percent`) are manual-edit only, added to the
+  generated `runner.config.json` by hand — see runner/README.md's
+  "設定ウィザード" / "Codex 設定" / "Antigravity configuration" sections.
 - **Use OS-specific user configuration directories** (Linux
   `${XDG_CONFIG_HOME:-~/.config}/kaoiro`; macOS
   `~/Library/Application Support/kaoiro`). `KAOIRO_RUNNER_DIR` can override it.

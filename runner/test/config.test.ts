@@ -279,6 +279,73 @@ describe("parseRunnerConfig", () => {
     });
   });
 
+  // antigravity.extra_models (issue #292 MF-2, phase-34 Stage B6) routes
+  // through the SAME parseExtraModels / parseEngineModelInfo functions as
+  // codex.extra_models above (engine-agnostic by design), so this pins
+  // only that the new field reaches that shared parser -- the invariants
+  // themselves are covered exhaustively by the codex.extra_models suite
+  // above and are not re-duplicated per engine.
+  describe("antigravity.extra_models (issue #292)", () => {
+    it("accepts a value-only declaration, defaulting display_name to value", () => {
+      const config = parseRunnerConfig({
+        ...valid,
+        antigravity: { extra_models: [{ value: "gemini-3.7-flash" }] },
+      });
+      expect(config.antigravity?.extra_models).toEqual([
+        { value: "gemini-3.7-flash", display_name: "gemini-3.7-flash" },
+      ]);
+    });
+
+    it("absent means undefined", () => {
+      expect(
+        parseRunnerConfig({ ...valid, antigravity: {} }).antigravity
+          ?.extra_models,
+      ).toBeUndefined();
+    });
+
+    it("rejects a non-array as a loud config error", () => {
+      expect(() =>
+        parseRunnerConfig({
+          ...valid,
+          antigravity: { extra_models: { value: "gemini-3.7-flash" } },
+        }),
+      ).toThrowError("antigravity.extra_models must be an array");
+    });
+
+    it("rejects a missing value as a loud config error", () => {
+      expect(() =>
+        parseRunnerConfig({
+          ...valid,
+          antigravity: { extra_models: [{ display_name: "no value" }] },
+        }),
+      ).toThrowError(
+        "antigravity.extra_models[0].value must be a non-empty string",
+      );
+    });
+
+    it("rejects a duplicate value within one declaration as a loud config error", () => {
+      expect(() =>
+        parseRunnerConfig({
+          ...valid,
+          antigravity: {
+            extra_models: [
+              { value: "gemini-3.7-flash" },
+              { value: "gemini-3.7-flash", display_name: "duplicate" },
+            ],
+          },
+        }),
+      ).toThrowError(
+        "antigravity.extra_models has a duplicate value: gemini-3.7-flash",
+      );
+    });
+
+    it("rejects a non-object antigravity block as a loud config error", () => {
+      expect(() =>
+        parseRunnerConfig({ ...valid, antigravity: "not-an-object" }),
+      ).toThrowError("antigravity must be an object");
+    });
+  });
+
   // Phase-24: explicit `codex.auth_mode` closed enum for the dogfood
   // 環境依存回帰対策。旧 config 互換 (auth_mode 省略 = doctor fallback)
   // も同時に pin する。
@@ -534,6 +601,59 @@ describe("buildRegister", () => {
     ).toBe("overridden");
   });
 
+  it("layers antigravity.extra_models onto the resolved catalog (issue #292)", () => {
+    const config = parseRunnerConfig({
+      ...valid,
+      antigravity: {
+        extra_models: [
+          // Overrides gemini-3.6-flash-high (same value).
+          { value: "gemini-3.6-flash-high", display_name: "overridden" },
+          // A new model is appended at the end.
+          { value: "gemini-4-nova", display_name: "Gemini 4 Nova" },
+        ],
+      },
+    });
+    const antigravity = buildRegister(config).engines?.find(
+      (engine) => engine.id === "antigravity",
+    );
+    expect(antigravity?.models.map((model) => model.value)).toEqual([
+      "",
+      "gemini-3.6-flash-high",
+      "gemini-3.6-flash-medium",
+      "gemini-3.6-flash-low",
+      "gemini-3.1-pro-high",
+      "gemini-3.1-pro-low",
+      "claude-sonnet-4-6",
+      "claude-opus-4-6-thinking",
+      "gpt-oss-120b-medium",
+      "gemini-4-nova",
+    ]);
+    expect(
+      antigravity?.models.find((model) => model.value === "gemini-3.6-flash-high")
+        ?.display_name,
+    ).toBe("overridden");
+  });
+
+  it("layers antigravity.extra_models onto an explicit catalog override (issue #292)", () => {
+    const config = parseRunnerConfig({
+      ...valid,
+      antigravity: {
+        extra_models: [{ value: "gemini-4-nova", display_name: "Gemini 4 Nova" }],
+      },
+    });
+    const antigravity = buildRegister(
+      config,
+      "unknown",
+      undefined,
+      undefined,
+      [{ value: "probed-model", display_name: "Probed Model" }],
+    ).engines?.find((engine) => engine.id === "antigravity");
+    expect(antigravity?.models.map((model) => model.value)).toEqual([
+      "probed-model",
+      "gemini-4-nova",
+    ]);
+  });
+
   it("blocked_personas を register に含める", () => {
     const config = parseRunnerConfig({
       ...valid,
@@ -688,43 +808,82 @@ describe("isPhoenixHeartbeatLoggingEnabled", () => {
 });
 
 // issue #292: engine-agnostic merge helper shared by buildRegister (above)
-// and reused by every engine's config block (codex today, antigravity once
-// that wrapper package exists).
+// and reused by both codex's and antigravity's config blocks.
+// Contract table (issue #292 SF-1): kept byte-identical in this file and in
+// wrapper/agent-common/test/catalog.test.ts's copy of the same describe
+// block, so a behavioural drift between the runner's and the wrapper's
+// independent mergeExtraModels implementations fails in BOTH suites rather
+// than only the one a change happened to touch.
+const MERGE_EXTRA_MODELS_TABLE: {
+  name: string;
+  extra: { value: string; display_name: string }[] | undefined;
+  expectedValues: string[];
+  expectedDisplayNames: Record<string, string>;
+}[] = [
+  {
+    name: "undefined extra returns base's values unchanged",
+    extra: undefined,
+    expectedValues: ["a", "b"],
+    expectedDisplayNames: { a: "A", b: "B" },
+  },
+  {
+    name: "empty extra returns base's values unchanged",
+    extra: [],
+    expectedValues: ["a", "b"],
+    expectedDisplayNames: { a: "A", b: "B" },
+  },
+  {
+    name: "a matching value overrides in place, keeping base's position",
+    extra: [{ value: "a", display_name: "overridden" }],
+    expectedValues: ["a", "b"],
+    expectedDisplayNames: { a: "overridden", b: "B" },
+  },
+  {
+    name: "a new value is appended in declaration order",
+    extra: [
+      { value: "c", display_name: "C" },
+      { value: "d", display_name: "D" },
+    ],
+    expectedValues: ["a", "b", "c", "d"],
+    expectedDisplayNames: { a: "A", b: "B", c: "C", d: "D" },
+  },
+  {
+    name: "override and append both apply when mixed in one declaration",
+    extra: [
+      { value: "c", display_name: "C" },
+      { value: "a", display_name: "overridden" },
+    ],
+    expectedValues: ["a", "b", "c"],
+    expectedDisplayNames: { a: "overridden", b: "B", c: "C" },
+  },
+];
+
 describe("mergeExtraModels", () => {
   const base = [
     { value: "a", display_name: "A" },
     { value: "b", display_name: "B" },
   ];
 
-  it("returns a copy of base when extra is undefined / empty", () => {
-    expect(mergeExtraModels(base, undefined)).toEqual(base);
-    expect(mergeExtraModels(base, [])).toEqual(base);
+  it.each(MERGE_EXTRA_MODELS_TABLE)(
+    "$name",
+    ({ extra, expectedValues, expectedDisplayNames }) => {
+      const merged = mergeExtraModels(base, extra);
+      expect(merged.map((m) => m.value)).toEqual(expectedValues);
+      for (const [value, displayName] of Object.entries(expectedDisplayNames)) {
+        expect(merged.find((m) => m.value === value)?.display_name).toBe(
+          displayName,
+        );
+      }
+    },
+  );
+
+  it("returns a copy, not the same array reference", () => {
     expect(mergeExtraModels(base, undefined)).not.toBe(base);
   });
 
-  it("a matching value overrides in place, keeping base's position", () => {
-    const merged = mergeExtraModels(base, [
-      { value: "a", display_name: "overridden" },
-    ]);
-    expect(merged.map((m) => m.value)).toEqual(["a", "b"]);
-    expect(merged[0]?.display_name).toBe("overridden");
-    expect(merged[1]).toEqual(base[1]);
-  });
-
-  it("a new value is appended in declaration order", () => {
-    const merged = mergeExtraModels(base, [
-      { value: "c", display_name: "C" },
-      { value: "d", display_name: "D" },
-    ]);
-    expect(merged.map((m) => m.value)).toEqual(["a", "b", "c", "d"]);
-  });
-
-  it("override and append both apply when mixed in one declaration", () => {
-    const merged = mergeExtraModels(base, [
-      { value: "c", display_name: "C" },
-      { value: "a", display_name: "overridden" },
-    ]);
-    expect(merged.map((m) => m.value)).toEqual(["a", "b", "c"]);
-    expect(merged[0]?.display_name).toBe("overridden");
+  it("does not mutate base (non-destructive)", () => {
+    const snapshot = base.map((m) => ({ ...m }));
+    mergeExtraModels(base, [{ value: "a", display_name: "overridden" }]);
+    expect(base).toEqual(snapshot);
   });
 });

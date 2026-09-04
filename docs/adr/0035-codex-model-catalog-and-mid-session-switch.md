@@ -224,3 +224,27 @@ phase-16. Limit the phase-16 UI scope to:
 ## Implementation
 
 Implement this in [phase-16-codex-model-switch](../plans/phase-16-codex-model-switch.md).
+
+## Addendum (2026-09-05): `gpt-6-astra` and operator-declared `extra_models`
+
+**Decision.** Add `gpt-6-astra` to the Plus-and-above catalog
+(`wrapper/codex/src/catalog.ts`), extending F1's curated trio
+(Sol/Terra/Luna) to a quartet. Introduce operator-declared `extra_models`
+(`runner.config.json`'s `codex.extra_models`) as a fourth model-change
+path alongside the three in
+[codex-model-catalog](../specs/codex-model-catalog.md): it lets an
+operator advertise a brand-new upstream model the day it ships, without
+waiting for a kaoiro release to update the curated snapshot. Declared
+entries merge onto the resolved base catalog (a matching `value`
+overrides in place, a new `value` is appended) at both the runner's
+register and the wrapper's own catalog resolution, and carry the same
+"never infer an effort domain" constraint as F1's curated entries
+(`effort_levels` / `default_effort` absent means no effort UI, not a
+guessed one). This ADR's status remains Accepted.
+
+**Origin.** This is issue #292. Astra's addition follows F1's existing
+per-plan curation precedent (see the plan × model table in
+[codex-model-catalog](../specs/codex-model-catalog.md)); `extra_models`
+generalises that same precedent into an operator-facing declaration so
+the curated snapshot's inherent lag behind upstream releases has a
+stopgap that does not require a kaoiro release.
