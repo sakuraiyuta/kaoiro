@@ -46,13 +46,70 @@ defmodule KaoiroServer.TransportLimits do
 
   @doc "Whether the production JSON serializer keeps this snapshot frame in budget."
   def snapshot_frame_fits?(event, payload) when is_binary(event) and is_map(payload) do
-    frame_bytes(event, payload) <= @max_frame_bytes - @frame_safety_margin_bytes
+    push_frame_fits?("agents:lobby", event, payload)
+  end
+
+  @doc "Whether a channel push fits the production JSON frame budget."
+  def push_frame_fits?(topic, event, payload)
+      when is_binary(topic) and is_binary(event) and is_map(payload) do
+    push_frame_bytes(topic, event, payload) <= @max_frame_bytes - @frame_safety_margin_bytes
+  end
+
+  @doc "Whether a successful channel reply fits the production JSON frame budget."
+  def reply_frame_fits?(topic, response) when is_binary(topic) and is_map(response) do
+    reply_frame_bytes(topic, response) <= @max_frame_bytes - @frame_safety_margin_bytes
+  end
+
+  @doc "Bytes still available after an already-shaped push payload."
+  def push_payload_budget(topic, event, payload)
+      when is_binary(topic) and is_binary(event) and is_map(payload) do
+    @max_frame_bytes - @frame_safety_margin_bytes - push_frame_bytes(topic, event, payload)
+  end
+
+  @doc "Bytes still available after an already-shaped successful reply."
+  def reply_payload_budget(topic, response) when is_binary(topic) and is_map(response) do
+    @max_frame_bytes - @frame_safety_margin_bytes - reply_frame_bytes(topic, response)
+  end
+
+  @doc "Takes an ordered list prefix whose JSON fragments fit `budget` bytes."
+  def bounded_list(items, budget) when is_list(items) and is_integer(budget) do
+    Enum.reduce_while(items, {[], 0}, fn item, {kept, used} ->
+      item_bytes = json_bytes(item) + if kept == [], do: 0, else: 1
+
+      if used + item_bytes <= budget do
+        {:cont, {[item | kept], used + item_bytes}}
+      else
+        {:halt, {kept, used}}
+      end
+    end)
+    |> then(fn {kept, _used} -> Enum.reverse(kept) end)
+  end
+
+  @doc "Takes an ordered map-entry prefix whose JSON fragments fit `budget` bytes."
+  def bounded_map(entries, budget) when is_list(entries) and is_integer(budget) do
+    Enum.reduce_while(entries, {%{}, 0}, fn {key, value}, {kept, used} ->
+      entry_bytes =
+        json_bytes(key) + 1 + json_bytes(value) + if map_size(kept) == 0, do: 0, else: 1
+
+      if used + entry_bytes <= budget do
+        {:cont, {Map.put(kept, key, value), used + entry_bytes}}
+      else
+        {:halt, {kept, used}}
+      end
+    end)
+    |> elem(0)
   end
 
   @doc "Measures the exact production text frame shape used by Phoenix Channels."
   def frame_bytes(event, payload) when is_binary(event) and is_map(payload) do
+    push_frame_bytes("agents:lobby", event, payload)
+  end
+
+  @doc "Measures the exact production text frame shape of a channel push."
+  def push_frame_bytes(topic, event, payload)
+      when is_binary(topic) and is_binary(event) and is_map(payload) do
     message = %Message{
-      topic: "agents:lobby",
+      topic: topic,
       event: event,
       payload: Map.put_new(payload, "version", "0"),
       join_ref: nil,
@@ -62,4 +119,20 @@ defmodule KaoiroServer.TransportLimits do
     {:socket_push, :text, encoded} = JSONSerializer.encode!(message)
     IO.iodata_length(encoded)
   end
+
+  @doc "Measures the exact production text frame shape of a successful channel reply."
+  def reply_frame_bytes(topic, response) when is_binary(topic) and is_map(response) do
+    message = %Message{
+      topic: topic,
+      event: "phx_reply",
+      payload: %{"status" => "ok", "response" => response},
+      join_ref: nil,
+      ref: nil
+    }
+
+    {:socket_push, :text, encoded} = JSONSerializer.encode!(message)
+    IO.iodata_length(encoded)
+  end
+
+  defp json_bytes(value), do: value |> Jason.encode!() |> byte_size()
 end
