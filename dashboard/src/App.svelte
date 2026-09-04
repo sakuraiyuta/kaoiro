@@ -636,9 +636,10 @@
             deliveries = { ...deliveries, [agentId]: delivery };
           }
         },
-        onWrapperBuildInfoSnapshot: (next) => {
+        onWrapperBuildInfoSnapshot: (next, incomplete) => {
           wrapperBuildInfos = next;
           isOperator = true;
+          if (incomplete) showNotice("ビルド情報の一部を表示できません");
         },
         onWrapperBuildInfo: (agentId, info) => {
           if (info === null) {
@@ -789,7 +790,7 @@
             }
           }
         },
-        onHistory: (histories, watermarks, projection, epoch) => {
+        onHistory: (histories, watermarks, projection, epoch, incomplete) => {
           // issue #109 M6/M7 (2026-07-23): server pre-fans-out and
           // pre-filters IA per pane using its ingress ordering domain,
           // so `histories` already reflects the authoritative view for
@@ -836,6 +837,7 @@
           // `logs` directly.
           awaitingHistory = false;
           liveSinceJoin = {};
+          if (incomplete) showNotice("履歴の一部を表示できません");
         },
         onHistoryCleared: (agentId, sessionId, watermark) => {
           // An operator purged past-session lines (#48); keep only the
@@ -968,13 +970,17 @@
             spawnErrors = rest;
           }
         },
-        onHosts: (next) => {
+        onHosts: (next, incomplete) => {
           // Operators alone receive `hosts`, so this is also the operator
           // signal that reveals the launch UI (#22).
           hosts = next;
           isOperator = true;
+          if (incomplete) showNotice("ホスト一覧の一部を表示できません");
         },
-        onDirectory: (next) => (directory = next),
+        onDirectory: (next, incomplete) => {
+          directory = next;
+          if (incomplete) showNotice("エージェント一覧の一部を表示できません");
+        },
         onSpawnResult: (result) => {
           notifySpawn(result);
           // Track failed restore/spawn per agent so the tile can show a

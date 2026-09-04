@@ -33,6 +33,7 @@
   // getLaunchDefaults' pure read-time query shape).
   let conversations = $state<ConversationSummary[] | null>(null);
   let conversationsError = $state<string | null>(null);
+  let conversationsIncomplete = $state(false);
 
   // issue #207: same pure read-time query shape as conversations, just
   // above.
@@ -62,6 +63,7 @@
         if (seq === refreshSeq) {
           conversations = list;
           conversationsError = null;
+          conversationsIncomplete = list.incomplete;
         }
       })
       .catch((err: unknown) => {
@@ -142,6 +144,7 @@
       // visible while refreshing" behaviour.
       conversations = null;
       conversationsError = null;
+      conversationsIncomplete = false;
       // issue #207 round 4 (こはく判定, ふじ round3 計測を受けて撤回):
       // unlike conversations above, this reset does NOT pair with a
       // cleanup-side usersRefreshSeq bump — that line was removed as
@@ -412,11 +415,16 @@
       </div>
       {#if conversationsError}
         <p class="conv-status">取得に失敗しました({conversationsError})</p>
-      {:else if conversations === null}
-        <p class="conv-status">読み込み中…</p>
-      {:else if conversations.length === 0}
-        <p class="conv-status">開いている会話はありません</p>
       {:else}
+        {#if conversationsIncomplete}
+          <p class="conv-status">一部の会話を表示できません</p>
+        {/if}
+      {/if}
+      {#if !conversationsError && conversations === null}
+        <p class="conv-status">読み込み中…</p>
+      {:else if !conversationsError && conversations?.length === 0}
+        <p class="conv-status">開いている会話はありません</p>
+      {:else if !conversationsError && conversations}
         <ul class="conv-list">
           {#each conversations as conv (conv.conversationId)}
             <li>

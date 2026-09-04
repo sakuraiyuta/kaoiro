@@ -142,6 +142,31 @@ describe("listConversations の wire round trip (issue #276 review follow-up)", 
         startedAt: "2026-08-20T00:00:00Z",
       },
     ]);
+    expect(conversations.incomplete).toBe(false);
+  });
+
+  it("conversations_incomplete を receiver-observable marker として渡す", async () => {
+    RespondingWebSocket.nextResponse = {
+      conversations: [],
+      conversations_incomplete: true,
+    };
+
+    const conn = connectKaoiro(
+      "ws://test/client",
+      {
+        onStatus: vi.fn(),
+        onSnapshot: vi.fn(),
+        onEnvelope: vi.fn(),
+        onHosts: vi.fn(),
+      },
+      { transport: RespondingWebSocket, heartbeatIntervalMs: 1000 },
+    );
+    await settleSocket();
+
+    const pending = conn.listConversations();
+    await settleSocket();
+
+    expect((await pending).incomplete).toBe(true);
   });
 
   // started_at: null は「closed だから」ではなく、サーバが値を欠く

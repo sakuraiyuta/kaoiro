@@ -1335,10 +1335,12 @@ describe("inter-agent history replay (#105)", () => {
         agents: { "agent-a": [message] },
         clear_watermarks: { "agent-a": "2026-07-23T15:00:00Z" },
         history_projection: "per-pane-v1",
+        history_incomplete: true,
       });
       expect(parsed.projection).toBe("per-pane-v1");
       expect(parsed.histories["agent-a"]).toEqual([message]);
       expect(parsed.clearWatermarks["agent-a"]).toBe("2026-07-23T15:00:00Z");
+      expect(parsed.incomplete).toBe(true);
     });
 
     it("old server: history_projection 未同梱なら projection=undefined (legacy 分岐)", () => {

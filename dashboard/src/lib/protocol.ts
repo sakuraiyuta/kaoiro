@@ -1624,6 +1624,8 @@ export interface ConversationSummary {
   startedAt: string | null;
 }
 
+export type ConversationList = ConversationSummary[] & { incomplete: boolean };
+
 /** Operator-facing user-list entry (issue #207). Wire shape from
  *  `Users.all_with_role/1` (id/kind/display_name/role) — the server
  *  handler REUSES that shape's IMPLEMENTATION (it matches exactly), but
@@ -1729,7 +1731,10 @@ export interface KaoiroHandlers {
   onDeliverySnapshotIncomplete?: (incomplete: boolean) => void;
   onDeliveryStatus?: (agentId: string, status: InterAgentDeliveryStatus | null) => void;
   /** Current wrapper artifact identities, sent only to operators/admins. */
-  onWrapperBuildInfoSnapshot?: (infos: Record<string, WrapperBuildInfo>) => void;
+  onWrapperBuildInfoSnapshot?: (
+    infos: Record<string, WrapperBuildInfo>,
+    incomplete?: boolean,
+  ) => void;
   /** Live wrapper identity update; null means that wrapper disconnected. */
   onWrapperBuildInfo?: (agentId: string, info: WrapperBuildInfo | null) => void;
   /** Single-agent update (any envelope type; caller routes by type). */
@@ -1751,6 +1756,7 @@ export interface KaoiroHandlers {
     clearWatermarks: Record<string, string>,
     projection?: string,
     projectionEpoch?: string,
+    incomplete?: boolean,
   ) => void;
   /** A past-session log purge (issue #48): the named agent's transcript
    *  should drop every line outside `sessionId`. `clearWatermark`
@@ -1785,12 +1791,12 @@ export interface KaoiroHandlers {
   /** Live launchable hosts (#22); pushed on join and on every host
    *  register/drop. Operator-only — its arrival also marks this client an
    *  operator (viewers never receive it). */
-  onHosts?: (hosts: HostInfo[]) => void;
+  onHosts?: (hosts: HostInfo[], incomplete?: boolean) => void;
   /** Restart-surviving identity ledger (ADR-0030); pushed once on
    *  operator join. Every known agent_id maps to its persona and a
    *  last_seen hint. Merged with the AgentStates snapshot on the client
    *  to surface offline agents for the restore UI. Operator-only. */
-  onDirectory?: (entries: Record<string, DirectoryEntry>) => void;
+  onDirectory?: (entries: Record<string, DirectoryEntry>, incomplete?: boolean) => void;
   /** A spawn outcome forwarded from the runner (#22). Operator-only. */
   onSpawnResult?: (result: SpawnResult) => void;
   /** Resume candidates for a (host, cwd), in reply to enumerateSessions
@@ -2030,7 +2036,7 @@ export interface KaoiroConnection {
    *  event, the caller re-fetches on demand. Entries are defensively
    *  parsed (a malformed entry is dropped, not the whole list). Rejects
    *  on forbidden / transport disconnect / timeout. */
-  listConversations: () => Promise<ConversationSummary[]>;
+  listConversations: () => Promise<ConversationList>;
   /** Manual conversation close (issue #276): rides the same tombstone +
    *  conversation_closed notification every hard-limit/GC closure
    *  already uses — no new termination path. Resolves on server accept.
@@ -2662,6 +2668,7 @@ export interface ParsedHistoryPayload {
   clearWatermarks: Record<string, string>;
   projection?: string;
   projectionEpoch?: string;
+  incomplete?: boolean;
 }
 
 /** Extracts the fields the `history` push carries from an operator-role
@@ -2684,6 +2691,7 @@ export function parseHistoryPayload(value: unknown): ParsedHistoryPayload {
     clear_watermarks?: unknown;
     history_projection?: unknown;
     projection_epoch?: unknown;
+    history_incomplete?: unknown;
   };
   const histories: Record<string, Envelope[]> = {};
   if (payload.agents !== null && typeof payload.agents === "object") {
@@ -2715,11 +2723,13 @@ export function parseHistoryPayload(value: unknown): ParsedHistoryPayload {
     payload.projection_epoch !== ""
       ? payload.projection_epoch
       : undefined;
+  const incomplete = payload.history_incomplete === true;
   return {
     histories,
     clearWatermarks,
     ...(projection === undefined ? {} : { projection }),
     ...(projectionEpoch === undefined ? {} : { projectionEpoch }),
+    ...(incomplete ? { incomplete: true } : {}),
   };
 }
 
@@ -3464,6 +3474,7 @@ export function connectKaoiro(
       if (Object.prototype.hasOwnProperty.call(raw, "builds")) {
         handlers.onWrapperBuildInfoSnapshot?.(
           parseWrapperBuildInfoSnapshot(raw.builds),
+          raw.build_info_incomplete === true,
         );
         return;
       }
@@ -3542,6 +3553,7 @@ export function connectKaoiro(
       parsed.clearWatermarks,
       parsed.projection,
       parsed.projectionEpoch,
+      parsed.incomplete,
     );
   });
   bindServerEvent(
@@ -3602,11 +3614,11 @@ export function connectKaoiro(
       handlers.onAgentDeleted?.(payload.agent_id);
     }
   });
-  bindServerEvent(c, "hosts", (payload: { hosts?: unknown }) => {
-    handlers.onHosts?.(parseHosts(payload.hosts));
+  bindServerEvent(c, "hosts", (payload: { hosts?: unknown; hosts_incomplete?: unknown }) => {
+    handlers.onHosts?.(parseHosts(payload.hosts), payload.hosts_incomplete === true);
   });
-  bindServerEvent(c, "directory", (payload: { entries?: unknown }) => {
-    handlers.onDirectory?.(parseDirectory(payload.entries));
+  bindServerEvent(c, "directory", (payload: { entries?: unknown; directory_incomplete?: unknown }) => {
+    handlers.onDirectory?.(parseDirectory(payload.entries), payload.directory_incomplete === true);
   });
   bindServerEvent(c, "spawn_result", (payload: unknown) => {
     const p = payload as Partial<SpawnResult>;
@@ -4157,9 +4169,14 @@ export function connectKaoiro(
     listConversations: () =>
       new Promise((resolve, reject) => {
         pushVersioned(channel, "list_conversations", {})
-          .receive("ok", (resp: { conversations?: unknown }) =>
-            resolve(parseConversationList(resp?.conversations)),
-          )
+          .receive("ok", (resp: { conversations?: unknown; conversations_incomplete?: unknown }) => {
+            const conversations = parseConversationList(resp?.conversations) as ConversationList;
+            Object.defineProperty(conversations, "incomplete", {
+              value: resp?.conversations_incomplete === true,
+              enumerable: false,
+            });
+            resolve(conversations);
+          })
           .receive("error", (reason: { reason?: string } | undefined) =>
             reject(new Error(reason?.reason ?? "error")),
           )
