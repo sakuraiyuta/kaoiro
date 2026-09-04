@@ -99,6 +99,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   alias KaoiroServer.SessionResets
   alias KaoiroServer.TaskStates
   alias KaoiroServer.TokenDenylist
+  alias KaoiroServer.TransportLimits
   alias KaoiroServer.Users
   alias KaoiroServerWeb.AgentId
   alias KaoiroServerWeb.ClientSocket
@@ -364,24 +365,21 @@ defmodule KaoiroServerWeb.AgentsChannel do
       # different value and discards the baseline it would otherwise
       # merge into — the ghost-log fix. Absent on a legacy server, where
       # the client keeps its old merge behaviour.
-      push_versioned(socket, "history", %{
-        "agents" => merged_histories(),
-        "clear_watermarks" => ClearWatermarks.all_displays(),
-        "history_projection" => "per-pane-v1",
-        "projection_epoch" => AgentStates.projection_epoch()
-      })
+      push_versioned(socket, "history", history_payload())
 
-      push_versioned(socket, "hosts", %{
-        "hosts" => HostRegistry.snapshot(PersonaAssets.all_personas())
-      })
+      push_versioned(
+        socket,
+        "hosts",
+        hosts_payload(HostRegistry.snapshot(PersonaAssets.all_personas()))
+      )
 
-      push_versioned(socket, "directory", %{
-        "entries" => join_directory_entries(AgentDirectory.all())
-      })
+      push_versioned(socket, "directory", directory_payload(AgentDirectory.all()))
 
-      push_versioned(socket, "wrapper_build_info", %{
-        "builds" => KaoiroServer.WrapperBuildInfos.snapshot()
-      })
+      push_versioned(
+        socket,
+        "wrapper_build_info",
+        wrapper_build_info_payload(KaoiroServer.WrapperBuildInfos.snapshot())
+      )
     end
 
     {:noreply, socket}
@@ -427,9 +425,16 @@ defmodule KaoiroServerWeb.AgentsChannel do
   @impl true
   def handle_out("directory", %{"entries" => raw_entries}, socket) do
     if socket.assigns[:role] in @operator_capable_roles do
-      push_versioned(socket, "directory", %{
-        "entries" => join_directory_entries(raw_entries)
-      })
+      push_versioned(socket, "directory", directory_payload(raw_entries))
+    end
+
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_out("hosts", %{"hosts" => hosts}, socket) when is_map(hosts) do
+    if socket.assigns[:role] in @operator_capable_roles do
+      push_versioned(socket, "hosts", hosts_payload(hosts))
     end
 
     {:noreply, socket}
@@ -938,7 +943,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # here without touching the view.
   def handle_in("list_conversations", payload, socket) do
     with :ok <- require_operator(socket, payload, "list_conversations") do
-      {:reply, {:ok, %{"conversations" => ConversationStates.list_for_operator()}}, socket}
+      {:reply, {:ok, conversations_payload()}, socket}
     else
       {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
     end
@@ -962,7 +967,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
           %{"kind" => event.kind, "trigger" => event.trigger, "at" => event.at}
         end
 
-      {:reply, {:ok, %{"events" => events}}, socket}
+      {:reply, {:ok, session_events_payload(events)}, socket}
     else
       {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
     end
@@ -1504,6 +1509,99 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
   defp cap_newest(entries, max) when length(entries) <= max, do: entries
   defp cap_newest(entries, max), do: Enum.slice(entries, -max..-1//1)
+
+  defp history_payload do
+    static = %{
+      "agents" => %{},
+      "clear_watermarks" => %{},
+      "history_projection" => "per-pane-v1",
+      "projection_epoch" => AgentStates.projection_epoch(),
+      "history_incomplete" => true
+    }
+
+    histories = merged_histories()
+
+    projected_histories =
+      bounded_push_map("history", histories, static)
+
+    with_histories = Map.put(static, "agents", projected_histories)
+    watermarks = ClearWatermarks.all_displays()
+
+    projected_watermarks =
+      bounded_push_map("history", watermarks, with_histories)
+
+    incomplete? =
+      map_size(projected_histories) < map_size(histories) or
+        map_size(projected_watermarks) < map_size(watermarks)
+
+    with_histories
+    |> Map.put("clear_watermarks", projected_watermarks)
+    |> maybe_drop_incomplete("history_incomplete", incomplete?)
+  end
+
+  defp hosts_payload(hosts) when is_map(hosts) do
+    bounded_push_map_payload("hosts", "hosts", hosts, "hosts_incomplete")
+  end
+
+  defp directory_payload(entries) do
+    entries = join_directory_entries(entries)
+    bounded_push_map_payload("directory", "entries", entries, "directory_incomplete")
+  end
+
+  defp wrapper_build_info_payload(builds) when is_map(builds) do
+    bounded_push_map_payload("wrapper_build_info", "builds", builds, "build_info_incomplete")
+  end
+
+  defp conversations_payload do
+    conversations =
+      ConversationStates.list_for_operator()
+      |> Enum.sort_by(
+        fn conversation ->
+          {Map.get(conversation, "started_at", ""), Map.get(conversation, "conversation_id", "")}
+        end,
+        :desc
+      )
+
+    bounded_reply_list_payload(
+      "conversations",
+      conversations,
+      "conversations_incomplete"
+    )
+  end
+
+  defp session_events_payload(events) do
+    bounded_reply_list_payload("events", events, "events_incomplete")
+  end
+
+  defp bounded_push_map_payload(event, key, entries, marker) do
+    static = %{key => %{}, marker => true}
+    projected = bounded_push_map(event, entries, static)
+
+    static
+    |> Map.put(key, projected)
+    |> maybe_drop_incomplete(marker, map_size(projected) < map_size(entries))
+  end
+
+  defp bounded_push_map(event, entries, static) do
+    budget = TransportLimits.push_payload_budget("agents:lobby", event, static)
+
+    entries
+    |> Enum.sort_by(fn {entry_key, _value} -> entry_key end)
+    |> TransportLimits.bounded_map(budget)
+  end
+
+  defp bounded_reply_list_payload(key, entries, marker) do
+    static = %{key => [], marker => true}
+    budget = TransportLimits.reply_payload_budget("agents:lobby", static)
+    projected = TransportLimits.bounded_list(entries, budget)
+
+    static
+    |> Map.put(key, projected)
+    |> maybe_drop_incomplete(marker, length(projected) < length(entries))
+  end
+
+  defp maybe_drop_incomplete(payload, marker, false), do: Map.delete(payload, marker)
+  defp maybe_drop_incomplete(payload, _marker, true), do: payload
 
   defp delete_live_if_present(agent_id) do
     if AgentStates.known?(agent_id) do

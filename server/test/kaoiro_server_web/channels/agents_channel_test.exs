@@ -2770,6 +2770,25 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert [%{"payload" => %{"text" => "やります"}}] = agents[agent_id]
     end
 
+    test "default history projection truncates an oversized production frame" do
+      agent_id = "test.hist-frame-bound"
+      put_agent(agent_id)
+
+      for _n <- 1..200 do
+        assert :ok = AgentStates.append_log(log_envelope(agent_id, String.duplicate("x", 65_000)))
+      end
+
+      assert length(AgentStates.histories()[agent_id]) == 200
+
+      _socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+      assert_push "history", payload
+
+      assert payload["history_incomplete"] == true
+      assert payload["agents"] == %{}
+      assert TransportLimits.push_frame_fits?("agents:lobby", "history", payload)
+    end
+
     # ふじ R3 must-fix (2026-07-23): history push は projection marker を
     # 同梱する。 marker があるので new client は自前 fanOut をスキップし
     # server pre-fan-out 結果をそのまま使い、marker が無い old server と
@@ -4870,6 +4889,37 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert builds[agent_id] == info
     end
 
+    test "oversized wrapper build snapshot is truncated within the production frame budget" do
+      info = %{
+        "build_revision" => String.duplicate("a", 40),
+        "build_dirty" => false,
+        "build_version" => "2026.1." <> String.duplicate("9", 65_400),
+        "build_channel" => "dev"
+      }
+
+      assert KaoiroServer.WrapperBuildInfos.valid_info?(info)
+
+      agent_ids = for n <- 1..130, do: "test.build-frame-#{n}"
+
+      for agent_id <- agent_ids do
+        assert :ok = KaoiroServer.WrapperBuildInfos.put(agent_id, info, self())
+      end
+
+      on_exit(fn ->
+        for agent_id <- agent_ids do
+          KaoiroServer.WrapperBuildInfos.delete(agent_id, self())
+        end
+      end)
+
+      _operator = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+      assert_push "wrapper_build_info", payload
+
+      assert payload["build_info_incomplete"] == true
+      assert map_size(payload["builds"]) < length(agent_ids)
+      assert TransportLimits.push_frame_fits?("agents:lobby", "wrapper_build_info", payload)
+    end
+
     # issue #219 D21/D27 acceptance pin: pack が消えた (persona_id が
     # PersonaAssets で解決不能な) entry は canonical を非開示 ("typed
     # unresolved" — `persona` は `{"id" => ...}` のみ、`name`/`sprite_set`
@@ -4889,6 +4939,30 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
                "display_name" => "消えたパックの通称",
                "last_seen" => nil
              }
+    end
+
+    test "oversized directory push is truncated within the production frame budget" do
+      _operator = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+      assert_push "directory", %{"entries" => _}
+
+      entries =
+        Map.new(1..130, fn n ->
+          {"test.directory-frame-#{n}",
+           %{
+             persona_id: "nonexistent-pack-#{n}",
+             display_name: String.duplicate("d", 65_536),
+             last_seen: nil,
+             revision: 1
+           }}
+        end)
+
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "directory", %{"entries" => entries})
+
+      assert_push "directory", payload
+      assert payload["directory_incomplete"] == true
+      assert map_size(payload["entries"]) < map_size(entries)
+      assert TransportLimits.push_frame_fits?("agents:lobby", "directory", payload)
     end
 
     test "viewer は join 時に directory push を受けない (operator 限定、ADR-0030 D10)" do
@@ -4911,6 +4985,24 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         KaoiroServerWeb.Endpoint.broadcast("agents:lobby", event, %{"host_id" => "h"})
         assert_push ^event, %{"host_id" => "h"}
       end
+    end
+
+    test "oversized hosts push is truncated within the production frame budget" do
+      _operator = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+      assert_push "hosts", %{"hosts" => _}
+
+      hosts =
+        Map.new(1..130, fn n ->
+          {"test.host-frame-#{n}", %{"cwd_allowlist" => [String.duplicate("h", 65_536)]}}
+        end)
+
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "hosts", %{"hosts" => hosts})
+
+      assert_push "hosts", payload
+      assert payload["hosts_incomplete"] == true
+      assert map_size(payload["hosts"]) < map_size(hosts)
+      assert TransportLimits.push_frame_fits?("agents:lobby", "hosts", payload)
     end
 
     test "runner_sessions / spawn_result / hosts / wrapper_build_info は viewer には届かない (fail-closed)" do
@@ -5927,6 +6019,48 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
                "participants" => ["gp.lc-a", "gp.lc-b"],
                "status" => "open"
              } = Enum.find(conversations, &(&1["conversation_id"] == cid))
+
+      assert TransportLimits.reply_frame_fits?("agents:lobby", %{"conversations" => conversations})
+    end
+
+    test "oversized conversation reply is newest-first and marked incomplete" do
+      previous_state = :sys.get_state(ConversationStates)
+      on_exit(fn -> :sys.replace_state(ConversationStates, fn _state -> previous_state end) end)
+
+      conversations =
+        Map.new(1..130, fn n ->
+          started_at = String.duplicate(Integer.to_string(n), 65_000)
+
+          {"test.conversation-frame-#{n}",
+           %{
+             status: :open,
+             agents: MapSet.new(["test.conversation-a", "test.conversation-b"]),
+             turns: 1,
+             tokens: 1,
+             started_at_wall: started_at,
+             notified_unreachable: MapSet.new()
+           }}
+        end)
+
+      :sys.replace_state(ConversationStates, fn state ->
+        %{state | conversations: conversations}
+      end)
+
+      socket = join_as(:operator)
+      ref = push(socket, "list_conversations", %{})
+
+      assert_reply ref, :ok, %{
+        "conversations" => projected,
+        "conversations_incomplete" => true
+      }
+
+      assert projected == Enum.sort_by(projected, & &1["started_at"], :desc)
+      assert length(projected) < map_size(conversations)
+
+      assert TransportLimits.reply_frame_fits?("agents:lobby", %{
+               "conversations" => projected,
+               "conversations_incomplete" => true
+             })
     end
 
     test "admin も通る (require_operator は operator/admin いずれも許可)" do
@@ -6030,6 +6164,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
                },
                %{"kind" => "compacting", "trigger" => nil, "at" => "2026-08-31T00:00:01Z"}
              ]
+
+      assert TransportLimits.reply_frame_fits?("agents:lobby", %{"events" => events})
     end
 
     test "admin も通る (require_operator は operator/admin いずれも許可)" do
