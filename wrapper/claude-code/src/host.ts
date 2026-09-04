@@ -124,6 +124,16 @@ const ABANDONED_WAIT = Symbol("kaoiro:abandoned-wait");
 const ABANDONED_WAIT_MESSAGE =
   "kaoiro: the turn ended before this permission was answered";
 
+/** States asserting the SDK is working inside a turn. `sending` is
+ *  deliberately absent: it is raised when an instruction is accepted, which
+ *  is before the input barrier yields that turn to the SDK. */
+const TURN_BACKED_STATES: ReadonlySet<KaoiroState> = new Set<KaoiroState>([
+  "thinking",
+  "tool_running",
+  "waiting_permission",
+  "waiting_question",
+]);
+
 /** One open canUseTool wait, bound to the turn that triggered it. `owner` is
  *  the SDK-active turn token when the wait opened, or null when no
  *  wrapper-fed turn was active (fake-SDK drivers in tests). */
@@ -789,6 +799,10 @@ export class AgentHost implements EngineAdapter {
    *  an answer arriving afterwards would re-enter a busy state that no SDK
    *  frame will ever leave. */
   readonly #turnBoundWaits = new Set<TurnBoundWait>();
+  /** Whether the input barrier has ever yielded a turn to the SDK. Gates the
+   *  turn-backed-state invariant so it only judges hosts that actually route
+   *  their turns through #input(). */
+  #everStartedTurn = false;
   /** Latest SDK conversation session id (ADR-0014 phase-0). Mirrored locally
    *  so the whoami snapshot can include it without coupling to ServerLink. */
   #sessionId: string | null = null;
@@ -2103,7 +2117,24 @@ export class AgentHost implements EngineAdapter {
     }
   }
 
+  /** issue #285: a busy state with no SDK-active turn is unreachable by
+   *  design — no SDK frame is coming, so nothing will ever leave it and the
+   *  agent reads as working forever. Warn rather than throw: the operator
+   *  still needs whatever output remains, and killing the wrapper would not
+   *  recover the turn either. Gated on a turn having ever started, because a
+   *  host driven without the input barrier (fake-SDK tests) legitimately has
+   *  no owner for any state it emits. */
+  #assertTurnBackedState(state: KaoiroState): void {
+    if (this.#activeTurn !== null || !this.#everStartedTurn) return;
+    if (!TURN_BACKED_STATES.has(state)) return;
+    this.#warn(
+      `[kaoiro] invariant: ${state} emitted with no active turn; ` +
+        "no SDK frame can leave this state",
+    );
+  }
+
   #emitState(state: KaoiroState): void {
+    this.#assertTurnBackedState(state);
     this.#options.onState(
       makeStateChange(
         this.#config,
@@ -3256,6 +3287,7 @@ export class AgentHost implements EngineAdapter {
       while (this.#queue.length > 0) {
         const turn = this.#queue.shift() as QueuedTurn;
         this.#activeTurn = turn;
+        this.#everStartedTurn = true;
         // This is the watchdog's only start point. In particular, dispatch
         // and queue insertion are not starts: an earlier SDK turn can keep a
         // later input waiting here indefinitely without consuming its budget.
