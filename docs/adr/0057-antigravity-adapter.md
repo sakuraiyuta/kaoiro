@@ -280,8 +280,9 @@ precedence with env `KAOIRO_ANTIGRAVITY_DEFAULT_MODEL`. No entry in
 "Claude and GPT models" when the active slug starts with `claude-` or
 `gpt-`, otherwise "Gemini Models" (unknown slugs and the account default
 fall into the Gemini group, which is where the account default lives).
-Session enumeration reads `~/.gemini/antigravity-cli/conversations/*.db`;
-history replay is Stage B.
+Session enumeration
+(Stage B3) reads `~/.gemini/antigravity-cli/conversations/*.db`; history
+replay is Stage B2. Stage A ships with enumeration returning an empty list.
 
 ### F8 — Documents that change with the trust story
 
