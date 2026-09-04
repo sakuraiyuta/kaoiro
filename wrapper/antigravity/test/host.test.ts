@@ -173,6 +173,25 @@ describe("AntigravityHost", () => {
     host.close();
   });
 
+  it("coalesces three assistant text deltas into one log entry on DONE", async () => {
+    const { host, logs, calls } = hostHarness();
+    await host.send("hello");
+    await waitFor(() => calls.length === 1);
+    const child = calls[0]!.child;
+    child.stdout.write('{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"one "}}\n');
+    child.stdout.write('{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"two "}}\n');
+    child.stdout.write('{"event":"step_update","step_update":{"step_index":1,"state":"DONE","step_type":"agent_response","text_delta":"three"}}\n');
+    expect(logs.filter((envelope) => envelope.type === "log" && envelope.payload.kind === "assistant")).toEqual([
+      expect.objectContaining({ payload: { kind: "assistant", text: "one two three" } }),
+    ]);
+    child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"one two three"}}\n');
+    child.finish();
+    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
+    expect(logs.filter((envelope) => envelope.type === "log" && envelope.payload.kind === "assistant")).toHaveLength(1);
+    expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ text: "one two three" });
+    host.close();
+  });
+
   it("resumeではconversationを渡し、flagを設定で止められる", async () => {
     const { host, calls } = hostHarness({ resumeSessionId: "resume-1", dangerouslySkipPermissions: false });
     await host.send("next");

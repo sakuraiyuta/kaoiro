@@ -3,10 +3,13 @@ import { fileURLToPath } from "node:url";
 import {
   askUserQuestionDescriptor,
   InterAgentTool,
+  makeLog,
+  makeStateChange,
   PermissionBroker,
   QuestionBroker,
   type Envelope,
   type WhoamiSnapshot,
+  type WrapperConfig,
 } from "@kaoiro/agent-common";
 import {
   loadConfig,
@@ -19,9 +22,45 @@ import { applyAntigravityEnvDefaultModel, applyAntigravitySources, resolveAntigr
 
 const PERSONA_PROMPT_TIMEOUT_MS = 10_000;
 
-export async function runAntigravityCli(): Promise<void> {
-  const { configPath, prompt, resume: resumeSessionId } = parseCliArgs(process.argv.slice(2));
-  const config = loadConfig(configPath);
+type CreateServerLink = (
+  ...args: ConstructorParameters<typeof ServerLink>
+) => ServerLink;
+type CreateAntigravityHost = (
+  ...args: ConstructorParameters<typeof AntigravityHost>
+) => AntigravityHost;
+
+export interface AntigravityCliDependencies {
+  parseCliArgs?: typeof parseCliArgs;
+  loadConfig?: typeof loadConfig;
+  loadWrapperBuildInfo?: typeof loadWrapperBuildInfo;
+  createServerLink?: CreateServerLink;
+  createHost?: CreateAntigravityHost;
+}
+
+export function relayAntigravityInstruction(
+  config: WrapperConfig,
+  state: AntigravityHost["state"],
+  send: (envelope: Envelope) => void,
+  sendInstruction: (text: string) => Promise<void>,
+  text: string,
+  now: () => string = () => new Date().toISOString(),
+): void {
+  send(makeLog(config, state, now(), { kind: "user", text }));
+  void sendInstruction(text);
+}
+
+export async function runAntigravityCli(
+  dependencies: AntigravityCliDependencies = {},
+): Promise<void> {
+  const parseArgs = dependencies.parseCliArgs ?? parseCliArgs;
+  const loadCliConfig = dependencies.loadConfig ?? loadConfig;
+  const loadBuildInfo = dependencies.loadWrapperBuildInfo ?? loadWrapperBuildInfo;
+  const createServerLink =
+    dependencies.createServerLink ?? ((...args) => new ServerLink(...args));
+  const createHost =
+    dependencies.createHost ?? ((...args) => new AntigravityHost(...args));
+  const { configPath, prompt, resume: resumeSessionId } = parseArgs(process.argv.slice(2));
+  const config = loadCliConfig(configPath);
   const { modelSource, effortSource } = resolveAntigravitySources(
     config,
     process.env.KAOIRO_ANTIGRAVITY_DEFAULT_MODEL,
@@ -62,14 +101,17 @@ export async function runAntigravityCli(): Promise<void> {
       ...(host?.statusSnapshot() ?? { engine: "antigravity" }),
     }) as WhoamiSnapshot,
   });
-  const buildInfo = loadWrapperBuildInfo(fileURLToPath(new URL("../dist/build-info.json", import.meta.url)));
-  link = new ServerLink(config.server_url, config.agent_id, {
+  const buildInfo = loadBuildInfo(fileURLToPath(new URL("../dist/build-info.json", import.meta.url)));
+  link = createServerLink(config.server_url, config.agent_id, {
     personaId: config.persona.id,
     ...(config.server_token === undefined ? {} : { token: config.server_token }),
     ...(config.transition_id === undefined ? {} : { transitionId: config.transition_id }),
     buildInfo,
     onPersonaPrompt: resolvePersona,
-    onInstruction: (text) => { void host?.send(text); },
+    onInstruction: (text) => {
+      if (host === undefined) return;
+      relayAntigravityInstruction(config, host.state, send, (instruction) => host!.send(instruction), text);
+    },
     onPermissionDecision: (decision) => permissionBroker.resolve(decision),
     onQuestionResponse: (response) => questionBroker.resolve(response),
     onInterrupt: () => { void host?.interrupt(); },
@@ -85,7 +127,7 @@ export async function runAntigravityCli(): Promise<void> {
   } finally {
     clearTimeout(timer);
   }
-  host = new AntigravityHost(config, {
+  host = createHost(config, {
     cwd: process.cwd(),
     appendSystemPrompt,
     permissionBroker,
@@ -99,6 +141,15 @@ export async function runAntigravityCli(): Promise<void> {
     ],
     ...(resumeSessionId === undefined ? {} : { resumeSessionId }),
   });
+  send(
+    makeStateChange(
+      config,
+      host.state,
+      new Date().toISOString(),
+      {},
+      host.statusExtSnapshot(),
+    ),
+  );
   process.on("SIGINT", () => {
     void host?.interrupt().finally(() => host?.close());
   });

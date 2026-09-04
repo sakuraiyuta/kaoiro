@@ -282,6 +282,10 @@ export class AntigravityHost implements EngineAdapter {
   }
 
   statusSnapshot(): Record<string, unknown> {
+    return this.statusExtSnapshot();
+  }
+
+  statusExtSnapshot(): Record<string, unknown> {
     return this.#statusExt();
   }
 
@@ -364,6 +368,7 @@ export class AntigravityHost implements EngineAdapter {
       child.stderr.on("data", () => {});
       let terminalResult: AgyStreamEvent | null = null;
       let correlationFailure: string | null = null;
+      const assistantText = new Map<number, string>();
       readableLines(child.stdout, (line) => {
         const event = parseAgyStreamLine(line);
         if (event === null) {
@@ -374,7 +379,7 @@ export class AntigravityHost implements EngineAdapter {
           terminalResult ??= event;
           return;
         }
-        this.#handleEvent(event, gate);
+        this.#handleEvent(event, gate, assistantText);
         if (event.event === "step_update" && event.step_update.step_type === "tool" && (event.step_update.state === "DONE" || event.step_update.state === "ERROR")) {
           const stepIndex = event.step_update.step_index;
           const topLevelName = event.step_update.tool_name;
@@ -472,7 +477,7 @@ export class AntigravityHost implements EngineAdapter {
     });
   }
 
-  #handleEvent(event: AgyStreamEvent, gate: AntigravityGate): void {
+  #handleEvent(event: AgyStreamEvent, gate: AntigravityGate, assistantText: Map<number, string>): void {
     if (event.event === "init") {
       gate.inspectToolInventory(Array.isArray(event.init.tools) ? event.init.tools : []);
       const sessionId = agyEventToSessionId(event);
@@ -481,7 +486,21 @@ export class AntigravityHost implements EngineAdapter {
         this.#options.onSessionId?.(sessionId);
       }
     }
-    for (const log of agyEventToLogs(event)) this.#emitLog(log);
+    const step = event.event === "step_update" ? event.step_update : null;
+    if (step?.step_type === "agent_response" && typeof step.step_index === "number" && Number.isSafeInteger(step.step_index)) {
+      const stepIndex = step.step_index;
+      if (typeof step.text_delta === "string") {
+        assistantText.set(stepIndex, `${assistantText.get(stepIndex) ?? ""}${step.text_delta}`);
+      }
+      if (step.state === "DONE") {
+        const text = assistantText.get(stepIndex);
+        assistantText.delete(stepIndex);
+        if (text !== undefined && text !== "") this.#emitLog({ kind: "assistant", text });
+      }
+    }
+    for (const log of agyEventToLogs(event)) {
+      if (log.kind !== "assistant") this.#emitLog(log);
+    }
     for (const adapterEvent of agyEventToEvents(event)) this.#apply(adapterEvent);
   }
 
