@@ -272,6 +272,30 @@ describe("AntigravityHost", () => {
     host.close();
   });
 
+  it("child error後の未観測tool完了はclose時にgate errorを優先してfreezeする", async () => {
+    const { host, logs, calls } = hostHarness();
+    await host.send("hello");
+    await waitFor(() => calls.length === 1);
+    const child = calls[0]!.child;
+    child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"must not publish"}}\n');
+    child.stdout.write('{"event":"step_update","step_update":{"step_index":2,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
+    await waitFor(() => child.killed === "SIGTERM");
+    child.emit("error", new Error("kill failed"));
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    expect(logs).not.toContainEqual(expect.objectContaining({ type: "result" }));
+    const stdoutEnded = new Promise<void>((resolve) => child.stdout.once("end", () => resolve()));
+    child.stdout.end();
+    await stdoutEnded;
+    expect(logs).not.toContainEqual(expect.objectContaining({ type: "result" }));
+    child.emit("close", 0, null);
+    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
+    expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ error_detail: "antigravity_gate_unobserved_tool:run_command" });
+    await host.send("must not spawn");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(calls).toHaveLength(1);
+    host.close();
+  });
+
   it("turn後にcustomizationが改ざんされるとsessionをerrorにする", async () => {
     const { host, logs, calls } = hostHarness();
     await host.send("hello");
@@ -413,11 +437,19 @@ describe("AntigravityHost", () => {
     host.close();
   });
 
-  it("child errorを待ち続けずerror resultに収束させる", async () => {
+  it("pure spawn errorはerror、stdout end、close後にagy_child_errorへ収束する", async () => {
     const { host, logs, calls } = hostHarness();
     await host.send("hello");
     await waitFor(() => calls.length === 1);
-    calls[0]!.child.emit("error", new Error("ENOENT"));
+    const child = calls[0]!.child;
+    child.emit("error", new Error("ENOENT"));
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    expect(logs).not.toContainEqual(expect.objectContaining({ type: "result" }));
+    const stdoutEnded = new Promise<void>((resolve) => child.stdout.once("end", () => resolve()));
+    child.stdout.end();
+    await stdoutEnded;
+    expect(logs).not.toContainEqual(expect.objectContaining({ type: "result" }));
+    child.emit("close", 0, null);
     await waitFor(() => logs.some((envelope) => envelope.type === "result"));
     expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ error_detail: "agy_child_error: ENOENT" });
     host.close();

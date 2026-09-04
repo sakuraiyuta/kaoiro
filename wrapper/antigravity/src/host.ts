@@ -405,11 +405,11 @@ export class AntigravityHost implements EngineAdapter {
         this.#terminalError("antigravity_customization_tampered", attemptedModel);
       } else if (!this.#isCurrent(generation)) {
         return;
-      } else if (childError !== null) {
-        this.#terminalError(`agy_child_error: ${childError.message}`, attemptedModel);
       } else if (correlationFailure !== null) {
         this.#gateBroken = true;
         this.#terminalError(`antigravity_gate_unobserved_tool:${correlationFailure}`, attemptedModel);
+      } else if (childError !== null) {
+        this.#terminalError(`agy_child_error: ${childError.message}`, attemptedModel);
       } else if (terminalResult === null) {
         this.#terminalError("agy_exit_without_result", attemptedModel);
       } else {
@@ -448,13 +448,14 @@ export class AntigravityHost implements EngineAdapter {
       let settled = false;
       let closed = false;
       let stdoutEnded = false;
+      let childError: Error | null = null;
       const settle = (error: Error | null): void => {
         if (settled) return;
         settled = true;
         resolve(error);
       };
       const settleAfterTerminalIo = (): void => {
-        if (closed && stdoutEnded) settle(null);
+        if (closed && stdoutEnded) settle(childError);
       };
       child.stdout.once("end", () => {
         stdoutEnded = true;
@@ -464,7 +465,10 @@ export class AntigravityHost implements EngineAdapter {
         closed = true;
         settleAfterTerminalIo();
       });
-      child.once("error", (error) => settle(error));
+      child.once("error", (error) => {
+        childError ??= error;
+        settleAfterTerminalIo();
+      });
     });
   }
 
