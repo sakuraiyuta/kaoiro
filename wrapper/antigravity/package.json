@@ -9,7 +9,8 @@
   "kaoiro": {
     "runtimeAssets": [
       "dist/bridge.js",
-      "dist/hook.js"
+      "dist/hook.js",
+      "dist/build-info.json"
     ]
   },
   "scripts": {
