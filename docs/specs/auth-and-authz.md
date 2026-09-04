@@ -183,12 +183,12 @@ child and the wrapper ([ADR-0057](../adr/0057-antigravity-adapter.md) F4).
 | Boundary | Mechanism | Implementation | On failure |
 |---|---|---|---|
 | `agy` child → hook process | Hook registration in the wrapper-owned `.agents/hooks.json`, discovered through `--add-dir` | `wrapper/antigravity` customization-dir writer | Not registered → spawn fails with `antigravity_gate_not_registered`; hook exceeding the CLI `timeout` is killed and the tool call fails without running (measured) |
-| hook process → wrapper | Per-agent unix socket inside a 0700 `mkdtemp` dir; per-spawn nonce carried in the hook's environment | `hook.ts` → `gate.ts` | Socket error / wrapper deadline / malformed payload / missing nonce → `deny`; connection closed before an answer → the pending broker entry resolves as deny and `waiting_permission` is cleared |
+| hook process → wrapper | Per-agent unix socket inside a 0700 `mkdtemp` dir; per-spawn nonce carried in the hook's environment. Distinct from the `ToolHost` socket below — two sockets, two nonces, two protocols, so a shell that reaches the tool socket cannot answer gate questions | `hook.ts` → `gate.ts` | Socket error / wrapper deadline / malformed payload / missing nonce → `deny`; connection closed before an answer → the pending broker entry resolves as deny and `waiting_permission` is cleared |
 | wrapper → operator | `PermissionBroker` → `permission_request` (operator-only) → `permission_decision` (operator-only relay) | shared with the Claude path above | unchanged |
 
-- The nonce rejects an unrelated same-uid process that guessed the socket
-  path. It is **not** a defence against the agent itself, whose shell
-  inherits the socket path and can read the nonce — which is why
+- Each nonce rejects an unrelated same-uid process that guessed its socket
+  path. Neither is a defence against the agent itself, whose shell
+  inherits both socket paths and can read both nonces — which is why
   [threat-model](threat-model.md) records the gate self-verification as
   detection rather than authorization.
 - The **execution-capability ceiling** for this engine is the wrapper's
@@ -198,8 +198,9 @@ child and the wrapper ([ADR-0057](../adr/0057-antigravity-adapter.md) F4).
   is denied unconditionally, and a tool name absent from the table is
   unclassified: denied under `approval: never`, escalated to the operator
   otherwise.
-- kaoiro's own tool surface rides the same `ToolHost` unix socket as Codex,
-  invoked as a CLI through `run_command`. Its auto-allow is a whole-string
+- kaoiro's own tool surface rides the `ToolHost` unix socket shared with the
+  Codex adapter — a second socket, separate from the gate — invoked as a CLI
+  through `run_command`. Its auto-allow is a whole-string
   match on a metacharacter-free alphabet (ADR-0057 F5). The socket is
   reachable from the agent's own shell and exposes only tools that agent
   already holds, so it is not a privilege boundary.
