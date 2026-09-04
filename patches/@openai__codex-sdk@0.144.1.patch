@@ -1,0 +1,46 @@
+diff --git a/dist/index.js b/dist/index.js
+index f7122ee3659d7e850f272e94210bac7a96c00d0e..96fd98046a72f288cab4ff7f339358cbaa1f42be 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -137,7 +137,6 @@ function normalizeInput(input) {
+ import { spawn } from "child_process";
+ import { statSync } from "fs";
+ import path2 from "path";
+-import readline from "readline";
+ import { createRequire } from "module";
+ var INTERNAL_ORIGINATOR_ENV = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
+ var TYPESCRIPT_SDK_ORIGINATOR = "codex_sdk_ts";
+@@ -276,14 +275,19 @@ var CodexExec = class {
+         });
+       }
+     );
+-    const rl = readline.createInterface({
+-      input: child.stdout,
+-      crlfDelay: Infinity
+-    });
++    child.stdout.setEncoding("utf8");
++    let pending = "";
+     try {
+-      for await (const line of rl) {
+-        yield line;
++      for await (const chunk of child.stdout) {
++        pending += chunk;
++        let newline = pending.indexOf("\n");
++        while (newline !== -1) {
++          yield pending.slice(0, newline);
++          pending = pending.slice(newline + 1);
++          newline = pending.indexOf("\n");
++        }
+       }
++      if (pending !== "") yield pending;
+       if (spawnError) throw spawnError;
+       const { code, signal } = await exitPromise;
+       if (code !== 0 || signal) {
+@@ -292,7 +296,6 @@ var CodexExec = class {
+         throw new Error(`Codex Exec exited with ${detail}: ${stderrBuffer.toString("utf8")}`);
+       }
+     } finally {
+-      rl.close();
+       child.removeAllListeners();
+       try {
+         if (!child.killed) child.kill();

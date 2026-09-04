@@ -12,3 +12,6 @@ packages:
 # pnpm 10 build-script approval。vitest/tsx が引く esbuild の postinstall を許可。
 onlyBuiltDependencies:
   - esbuild
+
+patchedDependencies:
+  '@openai/codex-sdk@0.144.1': patches/@openai__codex-sdk@0.144.1.patch

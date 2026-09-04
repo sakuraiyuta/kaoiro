@@ -1,4 +1,5 @@
 import {
+  chmod,
   mkdir,
   mkdtemp,
   readdir,
@@ -11,10 +12,11 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type {
-  CodexOptions,
-  ThreadEvent,
-  ThreadOptions,
+import {
+  Codex,
+  type CodexOptions,
+  type ThreadEvent,
+  type ThreadOptions,
 } from "@openai/codex-sdk";
 import type {
   Envelope,
@@ -336,6 +338,61 @@ async function runOneTurn(
 }
 
 describe("CodexHost", () => {
+  it("finishes a real SDK stream when command output contains U+2028", async () => {
+    const root = await mkdtemp(join(tmpdir(), "kaoiro-codex-sdk-line-split-"));
+    const executable = join(root, "fake-codex");
+    const script = [
+      "#!/usr/bin/env node",
+      "const separator = String.fromCodePoint(0x2028);",
+      "const write = (item) => process.stdout.write(`${JSON.stringify(item)}\\n`);",
+      "write({ type: 'thread.started', thread_id: 'sdk-line-split' });",
+      "write({ type: 'turn.started' });",
+      "const item = {",
+      "  id: 'command',",
+      "  type: 'command_execution',",
+      "  command: 'echo fixture',",
+      "  aggregated_output: `before${separator}after`,",
+      "  status: 'completed',",
+      "  exit_code: 0,",
+      "};",
+      "write({ type: 'item.completed', item });",
+      "write({",
+      "  type: 'turn.completed',",
+      "  usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 },",
+      "});",
+    ].join("\n");
+    await writeFile(executable, script, "utf8");
+    await chmod(executable, 0o700);
+
+    const logs: Envelope[] = [];
+    const ended = deferred<void>();
+    const host = new CodexHost(CONFIG, {
+      onState: () => {},
+      onLog: (envelope) => logs.push(envelope),
+      onTurnEnd: () => ended.resolve(),
+      appendSystemPrompt: "p",
+      codexFactory: () =>
+        new Codex({ codexPathOverride: executable }) as CodexClientLike,
+      now: () => "T",
+    });
+    const running = host.run("exercise patched reader");
+
+    try {
+      await ended.promise;
+      expect(logs).toContainEqual(
+        expect.objectContaining({
+          type: "result",
+          state: "done",
+          payload: expect.not.objectContaining({ is_error: true }),
+        }),
+      );
+    } finally {
+      host.close();
+      await running;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("whoami は effective snapshot の model/effort/source/permission を返す", () => {
     const { client } = makeClient([]);
     const host = new CodexHost(
