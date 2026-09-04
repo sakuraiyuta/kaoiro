@@ -22,8 +22,8 @@ import {
   type ToolDescriptor,
   type WrapperConfig,
 } from "@kaoiro/agent-common";
+import type { EngineModelInfo } from "@kaoiro/protocol";
 import {
-  agyEventToErrorDetail,
   agyEventToEvents,
   agyEventToLogs,
   agyEventToResult,
@@ -31,7 +31,7 @@ import {
   parseAgyStreamLine,
   type AgyStreamEvent,
 } from "./adapter.js";
-import { antigravityCatalogSnapshot } from "./catalog.js";
+import { antigravityCatalogSnapshot, parseAgyModelsOutput } from "./catalog.js";
 import { CustomizationDir, GATE_DEADLINE_MS, HOOK_TIMEOUT_SECONDS, sweepStaleCustomizationDirs } from "./customization.js";
 import { AntigravityGate, GateServer, type AntigravityLaunchConfig } from "./gate.js";
 import { effectiveNetworkAccess } from "./network_access.js";
@@ -51,8 +51,10 @@ export interface SpawnedAgy {
 
 export interface GateProbe {
   stdout: NodeJS.ReadableStream;
+  stderr?: NodeJS.ReadableStream | null;
   once(event: "exit", listener: (code: number | null, signal: NodeJS.Signals | null) => void): this;
   once(event: "error", listener: (error: Error) => void): this;
+  kill?(signal?: NodeJS.Signals): boolean;
 }
 
 export interface AntigravityHostOptions {
@@ -70,7 +72,10 @@ export interface AntigravityHostOptions {
   agyPath?: string;
   spawn?: (command: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv }) => SpawnedAgy;
   probeSpawn?: (command: string, args: string[], options: { cwd: string }) => GateProbe;
+  modelsProbeSpawn?: (command: string, args: string[], options: { cwd: string }) => GateProbe;
   verifyGate?: (args: string[]) => Promise<boolean>;
+  gateProbeTimeoutMs?: number;
+  probeModels?: () => Promise<EngineModelInfo[] | null>;
   runtimeAssetsAvailable?: () => boolean;
   warn?: (message: string) => void;
 }
@@ -122,7 +127,7 @@ export function isGateRegistered(value: unknown, expected: ExpectedGateRegistrat
     && (action as Record<string, unknown>).timeout_seconds === expected.timeoutSeconds;
 }
 
-export function initialStatusExt(config: AntigravityLaunchConfig): Record<string, unknown> {
+export function initialStatusExt(config: AntigravityLaunchConfig, models = antigravityCatalogSnapshot()): Record<string, unknown> {
   const sandbox = config.sandbox ?? "workspace-write";
   const approval = config.approval ?? "on-request";
   return {
@@ -136,14 +141,11 @@ export function initialStatusExt(config: AntigravityLaunchConfig): Record<string
         ...(config.effort_source === undefined ? {} : { effort_source: config.effort_source }),
         sandbox,
         network_access: effectiveNetworkAccess(sandbox, config.network_access ?? false),
-        // ADR-0057 F4c: approval also rides `resolved` (not just
-        // `permission` above) so computeResumeDrift — which compares
-        // ResolvedSnapshotExt/`effective`, not `permission` — can detect a
-        // drifted approval on resume (ふじ MF-6(c)).
+        // ADR-0057 F4c requires resume drift detection to compare approval too.
         approval,
       },
     }),
-    models: antigravityCatalogSnapshot(),
+    models,
     permission: { sandbox, approval, enforcement: "advisory" },
     session_capabilities: {
       supports_attachments: false,
@@ -173,6 +175,11 @@ export class AntigravityHost implements EngineAdapter {
   #lifecycleGeneration = 0;
   #toolHost: ToolHost | null = null;
   #gateServer: GateServer | null = null;
+  #gateProbe: GateProbe | null = null;
+  #cancelGateProbe: (() => void) | null = null;
+  #catalog: EngineModelInfo[] = antigravityCatalogSnapshot();
+  #pendingModel: string | null = null;
+  #switchError: Record<string, unknown> | null = null;
   readonly #toolNames = new Map<string, string>();
 
   constructor(config: WrapperConfig, options: AntigravityHostOptions) {
@@ -184,6 +191,7 @@ export class AntigravityHost implements EngineAdapter {
     this.#sessionId = options.resumeSessionId ?? null;
     this.#now = () => new Date().toISOString();
     sweepStaleCustomizationDirs();
+    void this.#refreshCatalog();
   }
 
   get state(): KaoiroState {
@@ -221,6 +229,8 @@ export class AntigravityHost implements EngineAdapter {
     this.#clearPendingAfterInterrupt();
     this.#gateServer?.close();
     this.#toolHost?.close();
+    this.#cancelGateProbe?.();
+    this.#gateProbe?.kill?.("SIGTERM");
     this.#running?.kill("SIGTERM");
   }
 
@@ -233,17 +243,16 @@ export class AntigravityHost implements EngineAdapter {
     this.#clearPendingAfterInterrupt();
     this.#gateServer?.close();
     this.#toolHost?.close();
+    this.#cancelGateProbe?.();
+    this.#gateProbe?.kill?.("SIGTERM");
     this.#running?.kill("SIGTERM");
     this.#customization?.close();
     this.#customization = null;
   }
 
   async setModel(value: string): Promise<void> {
-    if (value === "") {
-      delete this.#config.model;
-    } else {
-      this.#config.model = value;
-    }
+    this.#pendingModel = value;
+    this.#switchError = null;
     this.#emitState(this.#machine.state);
   }
 
@@ -301,47 +310,44 @@ export class AntigravityHost implements EngineAdapter {
       hookPath: HOOK_SCRIPT,
       bridgePath: BRIDGE_SCRIPT,
     });
-    this.#customization.rewrite();
+    const customization = this.#customization;
+    customization.rewrite();
     if (!(this.#options.runtimeAssetsAvailable?.() ?? (existsSync(HOOK_SCRIPT) && existsSync(BRIDGE_SCRIPT)))) {
       throw new Error("antigravity runtime assets are not built");
     }
-    const toolHost = await ToolHost.listen(this.#options.toolDescriptors ?? []);
-    if (!this.#isCurrent(generation)) {
-      toolHost.close();
-      return;
-    }
-    const gate = new AntigravityGate({
-      config: this.#config,
-      cwd: this.#options.cwd,
-      customizationDir: this.#customization.path,
-      nodePath: this.#options.nodePath ?? process.execPath,
-      bridgePath: BRIDGE_SCRIPT,
-      toolNames: () => toolHost.toolNames(),
-      broker: this.#options.permissionBroker,
-      onPermissionRequest: () => this.#apply({ kind: "permission_request" }),
-      onPermissionResolved: () => this.#apply({ kind: "permission_resolved" }),
-      ...(this.#options.warn === undefined ? {} : { warn: this.#options.warn }),
-    });
-    const gateServer = await GateServer.listen({
-      gate,
-      onSocketClose: () => {
-        this.#options.permissionBroker.close();
-        this.#clearPendingPermission();
-      },
-    });
-    if (!this.#isCurrent(generation)) {
-      gateServer.close();
-      toolHost.close();
-      return;
-    }
-    this.#toolHost = toolHost;
-    this.#gateServer = gateServer;
+    let toolHost: ToolHost | null = null;
+    let gateServer: GateServer | null = null;
     try {
-      if (!(await this.#verifyGateRegistration())) {
+      toolHost = await ToolHost.listen(this.#options.toolDescriptors ?? []);
+      if (!this.#isCurrent(generation)) return;
+      const gate = new AntigravityGate({
+        config: this.#config,
+        cwd: this.#options.cwd,
+        customizationDir: customization.path,
+        nodePath: this.#options.nodePath ?? process.execPath,
+        bridgePath: BRIDGE_SCRIPT,
+        toolNames: () => toolHost!.toolNames(),
+        broker: this.#options.permissionBroker,
+        onPermissionRequest: () => this.#apply({ kind: "permission_request" }),
+        onPermissionResolved: () => this.#apply({ kind: "permission_resolved" }),
+        ...(this.#options.warn === undefined ? {} : { warn: this.#options.warn }),
+      });
+      gateServer = await GateServer.listen({
+        gate,
+        onSocketClose: () => {
+          this.#options.permissionBroker.close();
+          this.#clearPendingPermission();
+        },
+      });
+      if (!this.#isCurrent(generation)) return;
+      this.#toolHost = toolHost;
+      this.#gateServer = gateServer;
+      if (!(await this.#verifyGateRegistration(generation))) {
         throw new Error("antigravity_gate_not_registered");
       }
       if (!this.#isCurrent(generation)) return;
-      const args = this.#turnArguments(text, this.#customization.path);
+      const attemptedModel = this.#pendingModel;
+      const args = this.#turnArguments(text, customization.path, attemptedModel ?? this.#config.model);
       const child = (this.#options.spawn ?? this.#defaultSpawn)(this.#options.agyPath ?? "agy", args, {
         cwd: this.#options.cwd,
         env: {
@@ -356,7 +362,7 @@ export class AntigravityHost implements EngineAdapter {
       this.#running = child;
       child.stdin.end();
       child.stderr.on("data", () => {});
-      let resultSeen = false;
+      let terminalResult: AgyStreamEvent | null = null;
       let correlationFailure: string | null = null;
       readableLines(child.stdout, (line) => {
         const event = parseAgyStreamLine(line);
@@ -364,33 +370,47 @@ export class AntigravityHost implements EngineAdapter {
           this.#warn(`antigravity: ignored malformed stream line from ${basename(this.#options.agyPath ?? "agy")}`);
           return;
         }
+        if (event.event === "result") {
+          terminalResult ??= event;
+          return;
+        }
         this.#handleEvent(event, gate);
-        if (event.event === "result") resultSeen = true;
         if (event.event === "step_update" && event.step_update.step_type === "tool" && (event.step_update.state === "DONE" || event.step_update.state === "ERROR")) {
-          if (typeof event.step_update.step_index !== "number" || typeof event.step_update.tool_name !== "string") {
-            this.#warn("antigravity: completed tool step is missing step_index or tool_name");
-          } else if (!gate.observeCompletedTool(event.step_update.step_index, event.step_update.tool_name)) {
-            correlationFailure = event.step_update.tool_name;
+          const stepIndex = event.step_update.step_index;
+          const toolName = event.step_update.tool_name ?? event.step_update.tool_info?.name;
+          if (!Number.isSafeInteger(stepIndex) || typeof toolName !== "string" || toolName === "") {
+            correlationFailure = typeof toolName === "string" && toolName !== "" ? toolName : "unknown";
+            this.#warn(`antigravity: completed tool correlation is unprovable: ${correlationFailure}`);
+            child.kill("SIGTERM");
+          } else if (!gate.observeCompletedTool(stepIndex!, toolName)) {
+            correlationFailure = toolName;
             child.kill("SIGTERM");
           }
         }
       });
       const childError = await this.#waitForChild(child);
-      if (!this.#isCurrent(generation)) return;
-      if (this.#customization?.verify() !== true) {
+      if (this.#closed) return;
+      if (customization.verify() !== true) {
         this.#gateBroken = true;
-        this.#terminalError("antigravity_customization_tampered");
+        this.#terminalError("antigravity_customization_tampered", attemptedModel);
+      } else if (!this.#isCurrent(generation)) {
+        return;
       } else if (childError !== null) {
-        this.#terminalError(`agy_child_error: ${childError.message}`);
+        this.#terminalError(`agy_child_error: ${childError.message}`, attemptedModel);
       } else if (correlationFailure !== null) {
         this.#gateBroken = true;
-        this.#terminalError(`antigravity_gate_unobserved_tool:${correlationFailure}`);
-      } else if (!resultSeen) {
-        this.#terminalError("agy_exit_without_result");
+        this.#terminalError(`antigravity_gate_unobserved_tool:${correlationFailure}`, attemptedModel);
+      } else if (terminalResult === null) {
+        this.#terminalError("agy_exit_without_result", attemptedModel);
+      } else {
+        const result = agyEventToResult(terminalResult);
+        if (result?.is_error === true) this.#rollbackPendingModel(attemptedModel);
+        else this.#promotePendingModel(attemptedModel);
+        this.#publishTerminalResult(terminalResult);
       }
     } finally {
-      gateServer.close();
-      toolHost.close();
+      gateServer?.close();
+      toolHost?.close();
       if (this.#gateServer === gateServer) this.#gateServer = null;
       if (this.#toolHost === toolHost) this.#toolHost = null;
     }
@@ -437,39 +457,103 @@ export class AntigravityHost implements EngineAdapter {
     }
     for (const log of agyEventToLogs(event)) this.#emitLog(log);
     for (const adapterEvent of agyEventToEvents(event)) this.#apply(adapterEvent);
+  }
+
+  #publishTerminalResult(event: AgyStreamEvent): void {
+    for (const adapterEvent of agyEventToEvents(event)) this.#apply(adapterEvent);
     const result = agyEventToResult(event);
     if (result !== null) this.#options.onLog?.(makeResult(this.#config, this.#now(), result));
   }
 
-  #turnArguments(text: string, customizationDir: string): string[] {
+  #turnArguments(text: string, customizationDir: string, model: string | undefined): string[] {
     const args = ["--print", text, "--output-format", "stream-json", "--print-timeout", "24h", "--disable-slash-commands"];
     if (this.#options.dangerouslySkipPermissions ?? true) args.push("--dangerously-skip-permissions");
     if (this.#sessionId !== null) args.push("--conversation", this.#sessionId);
-    if (this.#config.model !== undefined && this.#config.model !== "") args.push("--model", this.#config.model);
+    if (model !== undefined && model !== "") args.push("--model", model);
     if (this.#config.effort !== undefined) args.push("--effort", this.#config.effort);
     args.push("--add-dir", this.#options.cwd, "--add-dir", customizationDir);
     return args;
   }
 
-  async #verifyGateRegistration(): Promise<boolean> {
+  async #verifyGateRegistration(generation: number): Promise<boolean> {
     const args = ["-p", "/hooks", "--add-dir", this.#options.cwd, "--add-dir", this.#customization!.path, "--output-format", "json"];
-    if (this.#options.verifyGate !== undefined) return this.#options.verifyGate(args);
     return new Promise<boolean>((resolveProbe) => {
-      const child = this.#options.probeSpawn?.(this.#options.agyPath ?? "agy", args, { cwd: this.#options.cwd })
+      let settled = false;
+      let child: GateProbe | null = null;
+      let timeout: ReturnType<typeof setTimeout> | null = null;
+      const settle = (value: boolean): void => {
+        if (settled) return;
+        settled = true;
+        if (timeout !== null) clearTimeout(timeout);
+        if (this.#cancelGateProbe === cancel) this.#cancelGateProbe = null;
+        if (this.#gateProbe === child) this.#gateProbe = null;
+        resolveProbe(value);
+      };
+      const cancel = (): void => {
+        child?.kill?.("SIGTERM");
+        settle(false);
+      };
+      timeout = setTimeout(cancel, this.#options.gateProbeTimeoutMs ?? 10_000);
+      this.#cancelGateProbe = cancel;
+      if (this.#options.verifyGate !== undefined) {
+        void this.#options.verifyGate(args).then(
+          (registered) => settle(registered && this.#isCurrent(generation)),
+          () => settle(false),
+        );
+        return;
+      }
+      const probeChild = this.#options.probeSpawn?.(this.#options.agyPath ?? "agy", args, { cwd: this.#options.cwd })
         ?? spawn(this.#options.agyPath ?? "agy", args, { cwd: this.#options.cwd, stdio: ["ignore", "pipe", "ignore"] });
+      child = probeChild;
+      this.#gateProbe = probeChild;
       let output = "";
-      child.stdout.setEncoding("utf8");
-      child.stdout.on("data", (chunk: string) => { output += chunk; });
-      child.once("error", () => resolveProbe(false));
-      child.once("exit", (code) => {
-        if (code !== 0) { resolveProbe(false); return; }
+      probeChild.stdout.setEncoding("utf8");
+      probeChild.stdout.on("data", (chunk: string) => { output += chunk; });
+      probeChild.once("error", () => settle(false));
+      probeChild.once("exit", (code) => {
+        if (code !== 0) { settle(false); return; }
         try {
-          resolveProbe(isGateRegistered(JSON.parse(output) as unknown, {
+          settle(isGateRegistered(JSON.parse(output) as unknown, {
             source: join(this.#customization!.path, ".agents", "hooks.json"),
             command: `${this.#options.nodePath ?? process.execPath} ${HOOK_SCRIPT}`,
             timeoutSeconds: HOOK_TIMEOUT_SECONDS,
           }));
-        } catch { resolveProbe(false); }
+        } catch { settle(false); }
+      });
+    });
+  }
+
+  async #refreshCatalog(): Promise<void> {
+    let catalog: EngineModelInfo[] | null;
+    try {
+      catalog = await (this.#options.probeModels?.() ?? this.#defaultProbeModels());
+    } catch {
+      return;
+    }
+    if (catalog === null || this.#closed) return;
+    this.#catalog = catalog;
+    this.#emitState(this.#machine.state);
+  }
+
+  #defaultProbeModels(): Promise<EngineModelInfo[] | null> {
+    return new Promise((resolveProbe) => {
+      let output = "";
+      const child = this.#options.modelsProbeSpawn?.(this.#options.agyPath ?? "agy", ["models"], { cwd: this.#options.cwd })
+        ?? spawn(this.#options.agyPath ?? "agy", ["models"], {
+          cwd: this.#options.cwd,
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+      const timeout = setTimeout(() => {
+        child.kill?.("SIGTERM");
+        resolveProbe(null);
+      }, 10_000);
+      child.stdout.setEncoding("utf8");
+      child.stdout.on("data", (chunk: string) => { output += chunk; });
+      child.stderr?.on("data", () => {});
+      child.once("error", () => { clearTimeout(timeout); resolveProbe(null); });
+      child.once("exit", (code) => {
+        clearTimeout(timeout);
+        resolveProbe(code === 0 ? parseAgyModelsOutput(output) : null);
       });
     });
   }
@@ -481,7 +565,7 @@ export class AntigravityHost implements EngineAdapter {
   }
 
   #emitState(state: KaoiroState): void {
-    this.#options.onState(makeStateChange(this.#config, state, this.#now(), {}, this.#statusExt()));
+    this.#options.onState(makeStateChange(this.#config, state, this.#now(), {}, this.#statusExt(true)));
   }
 
   #emitLog(entry: LogEntry): void {
@@ -498,13 +582,40 @@ export class AntigravityHost implements EngineAdapter {
     );
   }
 
-  #terminalError(error: string): void {
+  #terminalError(error: string, attemptedModel?: string | null): void {
+    this.#rollbackPendingModel(attemptedModel);
     this.#apply({ kind: "result", subtype: "error_during_execution" });
     this.#options.onLog?.(makeResult(this.#config, this.#now(), { is_error: true, error_subtype: "error_during_execution", error_detail: error }));
   }
 
-  #statusExt(): Record<string, unknown> {
-    const ext = initialStatusExt(this.#config);
+  #promotePendingModel(attemptedModel: string | null): void {
+    if (attemptedModel === null || this.#pendingModel !== attemptedModel) return;
+    this.#config.model = attemptedModel;
+    this.#config.model_source = "config";
+    this.#pendingModel = null;
+    this.#switchError = null;
+  }
+
+  #rollbackPendingModel(attemptedModel?: string | null): void {
+    if (this.#pendingModel === null) return;
+    if (attemptedModel !== undefined && this.#pendingModel !== attemptedModel) return;
+    const requested = this.#pendingModel;
+    this.#pendingModel = null;
+    this.#switchError = {
+      kind: "model",
+      requested,
+      reason: "turn_failed",
+      ...(this.#config.model === undefined ? {} : { rolled_back_to: this.#config.model }),
+    };
+  }
+
+  #statusExt(consumeOneShot = false): Record<string, unknown> {
+    const ext = initialStatusExt(this.#config, this.#catalog);
+    if (this.#pendingModel !== null) ext.pending_model = this.#pendingModel;
+    if (this.#switchError !== null) {
+      ext.switch_error = this.#switchError;
+      if (consumeOneShot) this.#switchError = null;
+    }
     if (this.#pendingPermission !== null) ext.pending_permission = this.#pendingPermission;
     if (this.#pendingQuestion !== null) ext.pending_question = this.#pendingQuestion;
     ext.cwd = this.#options.cwd;

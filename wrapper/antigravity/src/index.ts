@@ -1,4 +1,4 @@
-export { ANTIGRAVITY_ENGINE, antigravityCatalogSnapshot, catalogFromAgyModels } from "./catalog.js";
+export { ANTIGRAVITY_ENGINE, antigravityCatalogSnapshot, catalogFromAgyModels, parseAgyModelsOutput } from "./catalog.js";
 export { AntigravityHost, initialStatusExt, isGateRegistered } from "./host.js";
 export { AntigravityGate, GateServer, TOOL_CLASS_BY_NAME } from "./gate.js";
 export { CustomizationDir, sweepStaleCustomizationDirs } from "./customization.js";

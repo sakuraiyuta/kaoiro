@@ -28,6 +28,28 @@ export function catalogFromAgyModels(slugs: readonly string[]): EngineModelInfo[
   ];
 }
 
+const AGY_MODEL_SLUG = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+/** Parses `agy models` stdout. Progress belongs to stderr and is deliberately absent here. */
+export function parseAgyModelsOutput(output: string): EngineModelInfo[] | null {
+  const models = new Map<string, string>();
+  const lines = output.split(/\r?\n/);
+  if (lines.at(-1) === "") lines.pop();
+  for (const rawLine of lines) {
+    if (rawLine === "") return null;
+    const fields = rawLine.split("\t");
+    if (fields.length > 2) return null;
+    const slug = fields[0]!;
+    if (!AGY_MODEL_SLUG.test(slug)) return null;
+    const displayName = fields.length === 2 ? fields[1]! : slug;
+    if (displayName === "") return null;
+    if (!models.has(slug)) models.set(slug, displayName);
+  }
+  return models.size === 0
+    ? null
+    : [{ value: "", display_name: "account default" }, ...[...models].map(([value, display_name]) => ({ value, display_name }))];
+}
+
 export const ANTIGRAVITY_ENGINE = {
   id: "antigravity" as const,
   supportedModels: antigravityCatalogSnapshot,

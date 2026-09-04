@@ -53,6 +53,45 @@ describe("AntigravityGate", () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
+  it("F4の9セルをread/write/shell/subagentとnetworkでtable-drivenにpinする", () => {
+    const expected: Record<string, Record<"read" | "write" | "shell" | "subagent", "allow" | "ask" | "deny">> = {
+      "read-only/untrusted": { read: "allow", write: "deny", shell: "deny", subagent: "deny" },
+      "read-only/on-request": { read: "allow", write: "deny", shell: "deny", subagent: "deny" },
+      "read-only/never": { read: "allow", write: "deny", shell: "deny", subagent: "deny" },
+      "workspace-write/untrusted": { read: "allow", write: "ask", shell: "ask", subagent: "ask" },
+      "workspace-write/on-request": { read: "allow", write: "allow", shell: "ask", subagent: "ask" },
+      "workspace-write/never": { read: "allow", write: "allow", shell: "allow", subagent: "allow" },
+      "danger-full-access/untrusted": { read: "allow", write: "ask", shell: "ask", subagent: "ask" },
+      "danger-full-access/on-request": { read: "allow", write: "allow", shell: "ask", subagent: "ask" },
+      "danger-full-access/never": { read: "allow", write: "allow", shell: "allow", subagent: "allow" },
+    };
+    for (const [cell, decisions] of Object.entries(expected)) {
+      const [sandbox, approval] = cell.split("/") as [NonNullable<AntigravityLaunchConfig["sandbox"]>, NonNullable<AntigravityLaunchConfig["approval"]>];
+      const { gate, root, cwd } = makeGate({ sandbox, approval, network_access: true });
+      try {
+        expect(gate.evaluate({ name: "view_file", args: {} }).decision, `${cell}:read`).toBe(decisions.read);
+        expect(gate.evaluate({ name: "write_to_file", args: { TargetFile: join(cwd, "a.txt") } }).decision, `${cell}:write`).toBe(decisions.write);
+        expect(gate.evaluate({ name: "run_command", args: { CommandLine: "pwd", Cwd: cwd } }).decision, `${cell}:shell`).toBe(decisions.shell);
+        expect(gate.evaluate({ name: "invoke_subagent", args: {} }).decision, `${cell}:subagent`).toBe(decisions.subagent);
+      } finally { rmSync(root, { recursive: true, force: true }); }
+    }
+
+    for (const networkAccess of [false, true]) {
+      const { gate, root } = makeGate({ sandbox: "workspace-write", approval: "on-request", network_access: networkAccess });
+      try {
+        expect(gate.evaluate({ name: "search_web", args: { query: "kaoiro" } }).decision, `network=${networkAccess}`).toBe(networkAccess ? "ask" : "deny");
+      } finally { rmSync(root, { recursive: true, force: true }); }
+    }
+
+    for (const approval of ["untrusted", "on-request", "never"] as const) {
+      const { gate, root } = makeGate({ approval, network_access: true });
+      try {
+        expect(gate.evaluate({ name: "ask_question", args: {} }).decision, `${approval}:internal`).toBe("deny");
+        expect(gate.evaluate({ name: "future_vendor_tool", args: {} }).decision, `${approval}:unknown`).toBe(approval === "never" ? "deny" : "ask");
+      } finally { rmSync(root, { recursive: true, force: true }); }
+    }
+  });
+
   it("customization参照は常にdeny、Cwd外shellはaskにする", () => {
     const { gate, root, customizationDir } = makeGate({ approval: "never", network_access: true });
     try {
@@ -70,6 +109,7 @@ describe("AntigravityGate", () => {
       const command = `${process.execPath} ${bridgePath} call whoami ${payload}`;
       const args = { CommandLine: command, Cwd: cwd, WaitMsBeforeAsync: 5000 };
       expect(gate.evaluate({ name: "run_command", args })).toEqual({ decision: "allow" });
+      expect(gate.evaluate({ name: "run_command", args: { CommandLine: `${process.execPath} ${bridgePath} list`, Cwd: cwd, WaitMsBeforeAsync: 5000 } })).toEqual({ decision: "allow" });
       for (const injection of ["; id", " && id", " | id", " $(id)", "\necho injected", " extra", ` ${Buffer.from("not-json").toString("base64url")}`]) {
         expect(gate.evaluate({ name: "run_command", args: { ...args, CommandLine: command + injection } })).toEqual({ decision: "ask" });
       }

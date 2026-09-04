@@ -1,6 +1,7 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { WrapperConfig } from "@kaoiro/agent-common";
-import { antigravityCatalogSnapshot, catalogFromAgyModels } from "../src/catalog.js";
+import { antigravityCatalogSnapshot, catalogFromAgyModels, parseAgyModelsOutput } from "../src/catalog.js";
 import { applyAntigravityEnvDefaultModel, applyAntigravitySources, resolveAntigravitySources } from "../src/source_resolution.js";
 
 const config = (): WrapperConfig => ({
@@ -24,6 +25,18 @@ describe("Antigravity catalog and source resolution", () => {
       "gpt-oss-120b-medium",
     ]);
     expect(catalogFromAgyModels(["gemini-3.6-flash-low", "gemini-3.6-flash-low", "gpt-oss-120b-medium"]).map((model) => model.value)).toEqual(["", "gemini-3.6-flash-low", "gpt-oss-120b-medium"]);
+  });
+
+  it("agy modelsのTAB区切り実出力をdisplay name付きで読む", () => {
+    const output = readFileSync(new URL("./fixtures/agy-models.stdout", import.meta.url), "utf8");
+    expect(parseAgyModelsOutput(output)).toEqual([
+      { value: "", display_name: "account default" },
+      { value: "gemini-3.6-flash-high", display_name: "Gemini 3.6 Flash High" },
+      { value: "claude-sonnet-4-6", display_name: "Claude Sonnet 4.6" },
+      { value: "gpt-oss-120b-medium", display_name: "gpt-oss-120b-medium" },
+    ]);
+    expect(parseAgyModelsOutput("bad slug\tDisplay")).toBeNull();
+    expect(parseAgyModelsOutput("gemini\tDisplay\textra")).toBeNull();
   });
 
   it("launch > env > account default のsourceを保持する", () => {

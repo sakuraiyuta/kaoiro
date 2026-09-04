@@ -24,7 +24,7 @@ class FakeAgy extends EventEmitter {
   }
 }
 
-function config(): WrapperConfig {
+function config(overrides: Partial<WrapperConfig> = {}): WrapperConfig {
   return {
     agent_id: "a1",
     persona: { id: "momo", name: "もも", sprite_set: "momo" },
@@ -32,6 +32,7 @@ function config(): WrapperConfig {
     server_url: "ws://localhost:4000",
     sandbox: "workspace-write",
     network_access: false,
+    ...overrides,
   };
 }
 
@@ -47,11 +48,12 @@ function hostHarness(options: {
   resumeSessionId?: string;
   dangerouslySkipPermissions?: boolean;
   verifyGate?: boolean | (() => Promise<boolean>);
+  config?: WrapperConfig;
 } = {}) {
   const states: Envelope[] = [];
   const logs: Envelope[] = [];
   const calls: { command: string; args: string[]; child: FakeAgy }[] = [];
-  const cfg = config();
+  const cfg = options.config ?? config();
   const broker = new PermissionBroker({ config: cfg, send: () => {} });
   const host = new AntigravityHost(cfg, {
     cwd: process.cwd(),
@@ -118,7 +120,7 @@ describe("AntigravityHost", () => {
     expect(isGateRegistered({ hooks: [{ source, actions: [{ event: "PreToolUse", matcher: "*", command, timeout_seconds: 3600 }, { event: "PreToolUse", matcher: "*", command, timeout_seconds: 3600 }] }] }, expected)).toBe(false);
   });
 
-  it("verifyGate未注入のproduction pathが実機形fixtureを通してspawnする", async () => {
+  it("default verifier control-flowが実機形fixtureを通してspawnする", async () => {
     const calls: { command: string; args: string[]; child: FakeAgy }[] = [];
     const cfg = config();
     const host = new AntigravityHost(cfg, {
@@ -204,6 +206,33 @@ describe("AntigravityHost", () => {
     host.close();
   });
 
+  it("F4bはtool_info.nameをidentityに使い、未観測DONEをfail-closedにする", async () => {
+    const { host, logs, calls } = hostHarness();
+    await host.send("hello");
+    await waitFor(() => calls.length === 1);
+    const child = calls[0]!.child;
+    child.stdout.write('{"event":"init","conversation_id":"cid","init":{"tools":["run_command"]}}\n');
+    child.stdout.write('{"event":"step_update","step_update":{"step_index":2,"state":"DONE","step_type":"tool","tool_info":{"name":"run_command","output":"done"}}}\n');
+    await waitFor(() => child.killed === "SIGTERM");
+    child.finish();
+    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
+    expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ error_detail: "antigravity_gate_unobserved_tool:run_command" });
+    host.close();
+  });
+
+  it("F4bはunsafe step_indexを相関不能としてkillする", async () => {
+    const { host, logs, calls } = hostHarness();
+    await host.send("hello");
+    await waitFor(() => calls.length === 1);
+    const child = calls[0]!.child;
+    child.stdout.write('{"event":"step_update","step_update":{"step_index":1.5,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
+    await waitFor(() => child.killed === "SIGTERM");
+    child.finish();
+    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
+    expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ error_detail: "antigravity_gate_unobserved_tool:run_command" });
+    host.close();
+  });
+
   it("turn後にcustomizationが改ざんされるとsessionをerrorにする", async () => {
     const { host, logs, calls } = hostHarness();
     await host.send("hello");
@@ -214,6 +243,88 @@ describe("AntigravityHost", () => {
     calls[0]!.child.finish();
     await waitFor(() => logs.some((envelope) => envelope.type === "result"));
     expect([...logs].reverse().find((envelope) => envelope.type === "result")?.payload).toMatchObject({ error_detail: "antigravity_customization_tampered" });
+    host.close();
+  });
+
+  it("interrupt後でもturn後customization改ざんをfail-stopにする", async () => {
+    const { host, logs, calls } = hostHarness();
+    await host.send("hello");
+    await waitFor(() => calls.length === 1);
+    const customizationDir = calls[0]!.args.at(-1)!;
+    writeFileSync(join(customizationDir, ".agents", "rules", "AGENTS.md"), "tampered");
+    await host.interrupt();
+    calls[0]!.child.finish();
+    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
+    expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ error_detail: "antigravity_customization_tampered" });
+    await host.send("must not spawn");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(calls).toHaveLength(1);
+    host.close();
+  });
+
+  it("vendor resultはturn integrityが通るまでrelayしない", async () => {
+    const { host, logs, calls } = hostHarness();
+    await host.send("hello");
+    await waitFor(() => calls.length === 1);
+    calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    expect(logs).not.toContainEqual(expect.objectContaining({ type: "result" }));
+    calls[0]!.child.finish();
+    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
+    host.close();
+  });
+
+  it("setModelは次turn成功までeffective pairを変えず、account defaultをpromoteする", async () => {
+    const cfg: AntigravityLaunchConfig = { ...config({ model: "gemini-3.6-flash-low", model_source: "config" }), approval: "on-request" };
+    const { host, states, calls } = hostHarness({ config: cfg });
+    await host.setModel("");
+    expect(host.statusSnapshot()).toMatchObject({ effective: { model: "gemini-3.6-flash-low", model_source: "config" }, pending_model: "" });
+    await host.send("switch");
+    await waitFor(() => calls.length === 1);
+    expect(calls[0]!.args).not.toContain("--model");
+    calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
+    calls[0]!.child.finish();
+    await waitFor(() => states.some((envelope) => envelope.state === "done"));
+    expect(states.at(-1)).toMatchObject({ ext: { effective: { model: "", model_source: "config" } } });
+    host.close();
+  });
+
+  it("setModelの失敗はlast-known-goodへrollbackしswitch_errorを一度stampする", async () => {
+    const cfg: AntigravityLaunchConfig = { ...config({ model: "gemini-3.6-flash-low", model_source: "config" }), approval: "on-request" };
+    const { host, states, calls } = hostHarness({ config: cfg });
+    await host.setModel("missing-model");
+    await host.send("switch");
+    await waitFor(() => calls.length === 1);
+    expect(calls[0]!.args).toEqual(expect.arrayContaining(["--model", "missing-model"]));
+    calls[0]!.child.stdout.write('{"event":"result","result":{"status":"ERROR","error":"unknown model"}}\n');
+    calls[0]!.child.finish();
+    await waitFor(() => states.some((envelope) => envelope.state === "error"));
+    expect(states.find((envelope) => (envelope.ext?.switch_error as { requested?: string } | undefined)?.requested === "missing-model")).toMatchObject({ ext: {
+      effective: { model: "gemini-3.6-flash-low", model_source: "config" },
+      switch_error: { kind: "model", requested: "missing-model", reason: "turn_failed", rolled_back_to: "gemini-3.6-flash-low" },
+    } });
+    host.close();
+  });
+
+  it("default models probe control-flowの成功時はsnapshotではなく実測catalogをstampする", async () => {
+    const states: Envelope[] = [];
+    const cfg = config();
+    const calls: string[][] = [];
+    const host = new AntigravityHost(cfg, {
+      cwd: process.cwd(), appendSystemPrompt: "persona", permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
+      onState: (envelope) => states.push(envelope), runtimeAssetsAvailable: () => true,
+      modelsProbeSpawn: (_command, args) => {
+        calls.push(args);
+        const child = new FakeAgy();
+        queueMicrotask(() => {
+          child.stdout.end(readFileSync(new URL("./fixtures/agy-models.stdout", import.meta.url), "utf8"));
+          child.emit("exit", 0, null);
+        });
+        return child;
+      },
+    });
+    await waitFor(() => states.some((envelope) => (envelope.ext?.models as { value: string }[] | undefined)?.some((model) => model.value === "gemini-3.6-flash-high") === true));
+    expect(calls).toEqual([["models"]]);
     host.close();
   });
 
@@ -242,6 +353,23 @@ describe("AntigravityHost", () => {
     await host.interrupt();
     resolveProbe(true);
     await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(calls).toHaveLength(0);
+    host.close();
+  });
+
+  it("gate smokeは期限切れでfail-closedになりturn childをspawnしない", async () => {
+    const logs: Envelope[] = [];
+    const calls: FakeAgy[] = [];
+    const cfg = config();
+    const host = new AntigravityHost(cfg, {
+      cwd: process.cwd(), appendSystemPrompt: "persona", permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
+      onState: () => {}, onLog: (envelope) => logs.push(envelope), runtimeAssetsAvailable: () => true,
+      verifyGate: async () => new Promise<boolean>(() => {}), gateProbeTimeoutMs: 5,
+      spawn: () => { const child = new FakeAgy(); calls.push(child); return child as unknown as SpawnedAgy; },
+    });
+    await host.send("hello");
+    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
+    expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ error_detail: "antigravity_gate_not_registered" });
     expect(calls).toHaveLength(0);
     host.close();
   });
