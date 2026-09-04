@@ -267,17 +267,42 @@ test("T8: handle attention badge returns to the grid while the sheet is open", a
   await expect(page.getByTestId("closed-marker")).toBeVisible();
 });
 
+// issue #295: a tiny real PNG (8x4, deliberately non-square so a passing
+// naturalWidth/Height check can't be a coincidence of a 1x1 stub) served via
+// page.route for `/sprites/ao/idle.png` -- the URL detailManifest({sprite:
+// true}) hands out, which Vite's dev server otherwise 404s (nothing serves
+// dashboard/public/sprites). Encoded inline rather than committed as a
+// binary fixture file. Generated with:
+//   convert -size 8x4 xc:'#3a7bd5' fixture.png
+const SPRITE_FIXTURE_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAEAQMAAACJA+yzAAAAIGNIUk0AAHomAACAhAAA+" +
+  "gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAAGUExURTp71f///5+wI2MAAAABYktH" +
+  "RAH/Ai3eAAAAB3RJTUUH6gkEFTovbezl2QAAAAtJREFUCNdjYIAAAAAIAAEvIN0xAAAA" +
+  "AElFTkSuQmCC";
+
+/** Point the sprite manifest's URL at the fixture above instead of the 404
+ *  Vite otherwise serves, so `<img>` actually decodes (issue #295). Every
+ *  other `&sprite=1` spec (T11/T12 above) deliberately leaves this
+ *  unstubbed, keeping the 404-fallback path covered per the issue's
+ *  acceptance criteria. */
+async function stubSpriteFixture(page: Page): Promise<void> {
+  await page.route("**/sprites/ao/idle.png", (route) =>
+    route.fulfill({
+      contentType: "image/png",
+      body: Buffer.from(SPRITE_FIXTURE_PNG_BASE64, "base64"),
+    }),
+  );
+}
+
 test.describe("detail portrait sizing (PersonaFace `detail` preset)", () => {
   /** `.face` / `.portrait-sprite` at size="detail" are sized in percent, so
    *  they only render at all when `.portrait-open` gives them a containing
    *  block with a definite width. Measured in a real browser because the
    *  failure is a layout collapse, invisible to jsdom. */
-  async function portraitBoxes(page: Page) {
-    return page.evaluate(() => {
+  async function portraitBoxes(page: Page, faceSelector: string) {
+    return page.evaluate((selector) => {
       const portrait = document.querySelector(".portrait") as HTMLElement;
-      const face = document.querySelector(
-        '.face[data-size="detail"]',
-      ) as HTMLElement;
+      const face = document.querySelector(selector) as HTMLElement;
       const style = getComputedStyle(portrait);
       const portraitRect = portrait.getBoundingClientRect();
       const faceRect = face.getBoundingClientRect();
@@ -291,7 +316,7 @@ test.describe("detail portrait sizing (PersonaFace `detail` preset)", () => {
         faceWidth: faceRect.width,
         faceHeight: faceRect.height,
       };
-    });
+    }, faceSelector);
   }
 
   for (const width of [1920, 844]) {
@@ -302,11 +327,50 @@ test.describe("detail portrait sizing (PersonaFace `detail` preset)", () => {
       await page.goto(DETAIL);
       if (width < 1200) await page.locator(".sheet .handle .toggle").click();
       await page.locator('.face[data-size="detail"]').waitFor();
-      const box = await portraitBoxes(page);
+      const box = await portraitBoxes(page, '.face[data-size="detail"]');
       // 70% is `.face[data-size="detail"]`'s own width in PersonaFace.
       expect(box.faceWidth).toBeCloseTo(box.contentWidth * 0.7, 0);
       // aspect-ratio: 1 / 1 — a collapsed face is square at 4px too, so the
       // width assertion above is what pins the regression.
+      expect(box.faceHeight).toBeCloseTo(box.faceWidth, 0);
+      expect(box.faceCentre).toBeCloseTo(box.portraitCentre, 0);
+    });
+  }
+
+  // issue #295: the sibling of the loop above, but for a RESOLVED sprite
+  // instead of the CSS fallback face. Without stubSpriteFixture(), every
+  // sprite=1 scenario in this file only ever exercised `<img>`'s error
+  // state (Vite 404s /sprites/ao/idle.png) -- a regression in the loaded-
+  // sprite geometry (intrinsic size, object-fit, this box's own sizing)
+  // would pass the suite undetected.
+  for (const width of [1920, 844]) {
+    test(`${width}px: a resolved sprite fills 100% of the portrait (issue #295)`, async ({
+      page,
+    }) => {
+      await stubSpriteFixture(page);
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(`${DETAIL}&sprite=1`);
+      if (width < 1200) await page.locator(".sheet .handle .toggle").click();
+      const img = page.locator('.portrait-sprite[data-size="detail"]');
+      await img.waitFor();
+      // Prove the <img> actually decoded the stubbed fixture -- waitFor()
+      // above only proves the element exists, which a broken src also
+      // satisfies (naturalWidth stays 0 in that case).
+      await expect
+        .poll(() =>
+          img.evaluate((el) => (el as HTMLImageElement).naturalWidth),
+        )
+        .toBeGreaterThan(0);
+      const box = await portraitBoxes(
+        page,
+        '.portrait-sprite[data-size="detail"]',
+      );
+      // width: 100% — `.portrait-sprite[data-size="detail"]`'s own width in
+      // PersonaFace, unlike the 70%-wide fallback face above.
+      expect(box.faceWidth).toBeCloseTo(box.contentWidth, 0);
+      // aspect-ratio: 1 / 1 on the box itself — independent of the 8x4
+      // fixture's own aspect ratio, which object-fit: contain letterboxes
+      // into the square box.
       expect(box.faceHeight).toBeCloseTo(box.faceWidth, 0);
       expect(box.faceCentre).toBeCloseTo(box.portraitCentre, 0);
     });
