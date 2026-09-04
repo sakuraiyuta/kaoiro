@@ -131,8 +131,11 @@ re-applies all three per [ADR-0014](0014-session-resume-and-restore.md)
 F1 addendum). The sandbox axis is **advisory** on this engine: it is
 enforced by argument inspection (`AbsolutePath` / `DirectoryPath` /
 `TargetFile` / `Cwd` resolved and compared with the agent cwd), never by the
-OS. The envelope stamps `ext.permission.enforcement = "advisory"` and the
-dashboard shows a permanent badge next to the sandbox value, the same
+OS. The envelope stamps `ext.permission.enforcement`, a field every engine
+fills so the dashboard never branches on its absence: `"os"` for Codex
+(OS sandbox), `"mode"` for Claude (the sandbox value is a projection of
+`permissionMode`, ADR-0033 F2), `"advisory"` for this engine. Only
+`"advisory"` renders a permanent badge next to the sandbox value, the same
 device ADR-0033 F4 addendum uses for Codex's host-fixed approval.
 
 Rows are ordered strict → permissive, columns likewise:
@@ -192,9 +195,12 @@ does not prevent — a tool that ran without a gate request has already run.
    not appear as tool steps at all); an unmeasured name only logs loudly.
    Optional tightening (Stage B, needs a measured Δ): `ACTIVE` without a
    gate request after Δ → kill before completion.
-3. Per-spawn nonce in the hook's environment; a request without it is
-   answered `deny`. This only rejects unrelated same-uid processes that
-   guessed the socket path.
+3. The gate socket is **separate** from the `ToolHost` socket of F5 (two
+   unix sockets, two nonces, two protocols): a gate decision and a tool
+   execution must never share a trust role, and a shell reaching the
+   `ToolHost` socket must not thereby be able to answer gate questions.
+   A gate request without its nonce is answered `deny`. The nonce only
+   rejects unrelated same-uid processes that guessed the socket path.
 4. Gate socket lifecycle: if the hook connection closes before the wrapper
    answers (the CLI killed the hook on `timeout`, measured; interrupt;
    crash), the pending `PermissionBroker` entry is resolved as deny and
@@ -205,12 +211,17 @@ does not prevent — a tool that ran without a gate request has already run.
 
 `approval` is added next to `sandbox` in `SpawnRequest` / `SpawnMessage`,
 `ResolvedSnapshotExt`, and `P0_FIELDS_BY_ENGINE["antigravity"] =
-["sandbox", "approval", "networkAccess"]` (resume re-applies them; the
+["sandbox", "approval", "networkAccess"]`; `ext.permission.enforcement`
+(F4) is added to `PermissionAxesExt` (resume re-applies them; the
 phase-15 D8 rule of dropping a stale `danger-full-access` to the safe
 default applies to `approval = never` as well). `setPermissionMode` rejects
 in Stage A exactly as on Codex. Mid-session mutation needs a new two-axis
-control message plus dashboard controls and is scheduled as Stage B (the
-wrapper policy already supports it; only the wire is missing).
+control message plus dashboard controls and is scheduled as Stage B0.
+Precondition for B0: the threat-model MUST that the server cannot widen a
+wrapper's execution ceiling still holds — on this engine the cell matrix
+*is* the ceiling — so B0 adds wrapper-config clamps (`max_sandbox`,
+`max_approval`, `max_network_access`) and server-originated changes apply
+only in the narrowing direction beyond the launch values.
 
 ### F5 — kaoiro tools through a CLI bridge, not MCP
 
