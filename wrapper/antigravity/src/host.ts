@@ -44,7 +44,7 @@ export interface SpawnedAgy {
   stdout: NodeJS.ReadableStream;
   stderr: NodeJS.ReadableStream;
   stdin: NodeJS.WritableStream;
-  once(event: "exit", listener: (code: number | null, signal: NodeJS.Signals | null) => void): this;
+  once(event: "close", listener: (code: number | null, signal: NodeJS.Signals | null) => void): this;
   once(event: "error", listener: (error: Error) => void): this;
   kill(signal?: NodeJS.Signals): boolean;
 }
@@ -377,9 +377,19 @@ export class AntigravityHost implements EngineAdapter {
         this.#handleEvent(event, gate);
         if (event.event === "step_update" && event.step_update.step_type === "tool" && (event.step_update.state === "DONE" || event.step_update.state === "ERROR")) {
           const stepIndex = event.step_update.step_index;
-          const toolName = event.step_update.tool_name ?? event.step_update.tool_info?.name;
-          if (!Number.isSafeInteger(stepIndex) || typeof toolName !== "string" || toolName === "") {
-            correlationFailure = typeof toolName === "string" && toolName !== "" ? toolName : "unknown";
+          const topLevelName = event.step_update.tool_name;
+          const nestedName = event.step_update.tool_info?.name;
+          const validName = (value: unknown): value is string => typeof value === "string" && value !== "";
+          const toolName =
+            topLevelName === undefined
+              ? nestedName
+              : nestedName === undefined
+                ? topLevelName
+                : validName(topLevelName) && validName(nestedName) && topLevelName === nestedName
+                  ? topLevelName
+                  : null;
+          if (!Number.isSafeInteger(stepIndex) || !validName(toolName)) {
+            correlationFailure = validName(topLevelName) ? topLevelName : validName(nestedName) ? nestedName : "unknown";
             this.#warn(`antigravity: completed tool correlation is unprovable: ${correlationFailure}`);
             child.kill("SIGTERM");
           } else if (!gate.observeCompletedTool(stepIndex!, toolName)) {
@@ -436,12 +446,24 @@ export class AntigravityHost implements EngineAdapter {
   #waitForChild(child: SpawnedAgy): Promise<Error | null> {
     return new Promise((resolve) => {
       let settled = false;
+      let closed = false;
+      let stdoutEnded = false;
       const settle = (error: Error | null): void => {
         if (settled) return;
         settled = true;
         resolve(error);
       };
-      child.once("exit", () => settle(null));
+      const settleAfterTerminalIo = (): void => {
+        if (closed && stdoutEnded) settle(null);
+      };
+      child.stdout.once("end", () => {
+        stdoutEnded = true;
+        settleAfterTerminalIo();
+      });
+      child.once("close", () => {
+        closed = true;
+        settleAfterTerminalIo();
+      });
       child.once("error", (error) => settle(error));
     });
   }

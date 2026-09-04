@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { PermissionBroker, QuestionBroker, type Envelope, type WrapperConfig } from "@kaoiro/agent-common";
-import { AntigravityHost, initialStatusExt, isGateRegistered, type SpawnedAgy } from "../src/host.js";
+import { AntigravityHost, initialStatusExt, isGateRegistered, type GateProbe, type SpawnedAgy } from "../src/host.js";
 import type { AntigravityLaunchConfig } from "../src/gate.js";
 
 class FakeAgy extends EventEmitter {
@@ -21,6 +21,7 @@ class FakeAgy extends EventEmitter {
   finish(): void {
     this.stdout.end();
     this.emit("exit", 0, null);
+    this.emit("close", 0, null);
   }
 }
 
@@ -134,7 +135,7 @@ describe("AntigravityHost", () => {
           child.stdout.end(JSON.stringify({ hooks: [{ source, actions: [{ event: "PreToolUse", matcher: "*", command, timeout_seconds: 3600 }] }] }));
           child.emit("exit", 0, null);
         });
-        return child as unknown as SpawnedAgy;
+        return child as unknown as GateProbe;
       },
       spawn: (command, args) => { const child = new FakeAgy(); calls.push({ command, args, child }); return child as unknown as SpawnedAgy; },
     });
@@ -230,6 +231,44 @@ describe("AntigravityHost", () => {
     child.finish();
     await waitFor(() => logs.some((envelope) => envelope.type === "result"));
     expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ error_detail: "antigravity_gate_unobserved_tool:run_command" });
+    host.close();
+  });
+
+  it("F4bはtop-levelとtool_infoのname矛盾を相関不能としてkillする", async () => {
+    const { host, logs, calls } = hostHarness();
+    await host.send("hello");
+    await waitFor(() => calls.length === 1);
+    const child = calls[0]!.child;
+    child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"must not publish"}}\n');
+    child.stdout.write('{"event":"step_update","step_update":{"step_index":2,"state":"DONE","step_type":"tool","tool_name":"future_vendor_tool","tool_info":{"name":"run_command","output":"done"}}}\n');
+    await waitFor(() => child.killed === "SIGTERM");
+    child.finish();
+    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
+    expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ error_detail: "antigravity_gate_unobserved_tool:future_vendor_tool" });
+    host.close();
+  });
+
+  it("child exit後のlate tool completionをstdout EOFまで待ってfail-stopにする", async () => {
+    const { host, logs, calls } = hostHarness();
+    await host.send("hello");
+    await waitFor(() => calls.length === 1);
+    const child = calls[0]!.child;
+    child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"must not publish"}}\n');
+    child.emit("exit", 0, null);
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    expect(logs).not.toContainEqual(expect.objectContaining({ type: "result" }));
+    child.stdout.write('{"event":"step_update","step_update":{"step_index":2,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
+    await waitFor(() => child.killed === "SIGTERM");
+    const stdoutEnded = new Promise<void>((resolve) => child.stdout.once("end", () => resolve()));
+    child.stdout.end();
+    await stdoutEnded;
+    expect(logs).not.toContainEqual(expect.objectContaining({ type: "result" }));
+    child.emit("close", 0, null);
+    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
+    expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ error_detail: "antigravity_gate_unobserved_tool:run_command" });
+    await host.send("must not spawn");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(calls).toHaveLength(1);
     host.close();
   });
 
