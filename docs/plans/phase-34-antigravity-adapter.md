@@ -30,48 +30,56 @@ through the CLI bridge. Measured substrate:
    two personas (same check as ADR-0032 F3, 2026-07-11).
 4. Permission: with default axes a `run_command` produces a
    `waiting_permission` round trip; deny is visible to the model as the hook
-   reason; `setPermissionMode` changes take effect on the next tool call.
-   Gate fails closed on socket loss (test) and on wrapper deadline (test).
+   reason. Gate fails closed on socket loss, wrapper deadline, and missing
+   nonce (tests); a tool step without a preceding gate request kills the
+   child and errors the session (test with the hook removed); the bridge
+   auto-allow rejects every shell-injection fixture (tests).
 5. Tools: `list_agents` / `send_to_agent` / `whoami` / `ask_user_question`
    work through the bridge; a pending question holds the turn.
 6. Rate limits from `-p /usage` appear in `list_agents` / whoami.
 7. Release: tarball carries `@kaoiro/antigravity` with `runtimeAssets`
    (`dist/bridge.js`, `dist/hook.js`); `verify-release` sentinels updated.
 8. Docs: spec promoted to `accepted` with Stage A live-verification notes;
-   protocol.md / plugin-model.md engine tables updated.
+   protocol.md / plugin-model.md engine tables updated; threat-model.md and
+   auth-and-authz.md carry the new boundary (ADR-0057 F8).
 
 ## Tasks
 
-### Stage 0 — decisions (HITL)
+### Stage 0 — go / no-go measurements and decisions
 
-| # | Task | Owner |
+| # | Task | Outcome that closes it |
 |---|---|---|
-| 0.1 | ADR-0057 Q1: run the `--dangerously-skip-permissions` + gate hook probe on the host; record `init.permission_mode` and the hook deny result in the spec | operator |
-| 0.2 | Design review of ADR-0057 / spec (kuroe) | kuroe |
+| 0.1 | ADR-0057 Q1: run the `--dangerously-skip-permissions` + gate hook probe on the host (operator; the agent harness blocks the flag) | `init.permission_mode` and the hook deny result recorded in the spec; substrate chosen |
+| 0.2 | Q2: `--add-dir` workspace-root semantics with a trusted git repo as cwd | rules text and gate `Cwd` pin settled in the spec |
+| 0.3 | Q3: env inheritance into `run_command`; CLI behaviour on hook timeout | measured values in the spec; deadline ordering fixed in `host.ts` constants |
+| 0.4 | Design review (kuroe) round 1 — done 2026-09-04 | every must-fix resolved or dispositioned in ADR-0057 |
 
 ### Stage A — adapter core
 
 | # | Task | Notes |
 |---|---|---|
-| A1 | `protocol` `EngineKind` + `antigravity`; `pnpm-workspace.yaml`; `wrapper/package.json` fan-out; `runner/package.json` dep | wiring map in ADR-0057 F1 |
+| A1 | `protocol` `EngineKind` + `antigravity`; `approval` added beside `sandbox` on `SpawnRequest` / `SpawnMessage` / `ResolvedSnapshotExt`; `ext.permission.enforcement`; `pnpm-workspace.yaml`; `wrapper/package.json` fan-out; `runner/package.json` dep | ADR-0057 F1 + F4c |
 | A2 | `wrapper/antigravity` skeleton copied from `wrapper/codex` (package.json with `kaoiro.runtimeAssets`, tsconfigs, vitest config, `src/index.ts`) | |
 | A3 | `adapter.ts`: stream-json line → `AdapterEvent` (pure, table-driven) + tests from recorded fixtures | fixtures: the 2026-09-04 probe outputs |
 | A4 | `host.ts`: per-turn spawn, closed stdin, `--conversation`, interrupt (SIGTERM), exit-without-result → error, session_capabilities stamp | reuse Codex `TurnWatchdog` |
 | A5 | customization dir writer: `.agents/rules/AGENTS.md`, `.agents/hooks.json`, `.agents/skills/kaoiro/SKILL.md`; regenerate on persona/display-name sync; cleanup on close | |
-| A6 | `hook.ts` (→ `dist/hook.js`): stdin → wrapper socket `permission` request → stdout decision; fail-closed; Q3 measurements (timeout bound, env inheritance) recorded in the spec | |
-| A7 | permission policy in the wrapper: ADR-0057 F4 table; `PermissionBroker` wiring; `setPermissionMode` mutable; unit tests per cell of the table | |
+| A6 | `hook.ts` (→ `dist/hook.js`): stdin → wrapper socket `permission` request (with per-spawn nonce) → stdout decision; fail-closed with client deadline | |
+| A6b | gate self-verification (F4b): `-p /hooks` registration check before first turn; per-turn tool-step ↔ gate-request correlation invariant with kill + `error` on violation; tests inject a missing hook and a missing nonce as negative controls | |
+| A7 | `gate.ts`: tool-class table (spec SoT) + `init.tools` diff, F4 cell table incl. `network_access`, customization-dir and `Cwd` denies, bridge argv validation (F5) with injection tests (`;`, `&&`, `|`, `$(…)`, newline, extra argv); `PermissionBroker` wiring; `setPermissionMode` rejects (F4c) | |
 | A8 | `bridge.ts` CLI (`list` / `call`) over `ToolHost`; `ask_user_question` blocking semantics; `inter_agent` descriptors | |
 | A9 | `catalog.ts` static 1.1.8 snapshot + runner `agy models` probe; `KAOIRO_ANTIGRAVITY_DEFAULT_MODEL`; source resolution | |
-| A10 | runner: `ENGINE_PACKAGES`, `BUNDLED_ENGINES`, `buildRegister` branch, `supervisor` validation, `P0_FIELDS_BY_ENGINE` (`sandbox`, `approval`), `sessions.ts` enumeration, `setup.ts` choices | |
+| A10 | runner: `ENGINE_PACKAGES`, `BUNDLED_ENGINES`, `buildRegister` branch, `supervisor` validation + `approval` relay, `P0_FIELDS_BY_ENGINE` (`sandbox`, `approval`, `networkAccess`), `sessions.ts` enumeration, `setup.ts` choices | |
 | A11 | server: `@engine_values`, `wrapper_channel` engine guard, tests | |
-| A12 | dashboard: sandbox × approval knobs shown for `antigravity` (approval selectable, unlike Codex); AgentDetail permission panel | |
+| A12 | dashboard: sandbox × approval × network knobs for `antigravity` (approval selectable at spawn); AgentDetail permission panel with the advisory-sandbox badge; account-default catalog entry | |
 | A13 | scripts / release: `dev.sh`, `dogfood.sh`, `build-release-manifest.mjs`, `verify-release.mjs`, `runtimeAssetDeclarations` / `releaseFixture` tests | |
-| A14 | dogfood on the dev host with two personas; promote spec to accepted; ADR-0057 status → accepted | |
+| A14 | threat-model.md / auth-and-authz.md (and deployment.md if Q1 falls back) per ADR-0057 F8 | |
+| A15 | dogfood on the dev host with two personas; promote spec to accepted; ADR-0057 status → accepted | |
 
 ### Stage B — parity extras
 
 | # | Task |
 |---|---|
+| B0 | two-axis mid-session control message + dashboard controls (ADR-0057 F4c) |
 | B1 | `-p /usage` rate-limit probe per turn boundary → `rate_limits` |
 | B2 | history replay from `transcript_full.jsonl` (format measurement first) |
 | B3 | session enumeration metadata from `conversation_summaries.db` |
@@ -80,9 +88,7 @@ through the CLI bridge. Measured substrate:
 
 ## Open Questions Blocking This Phase
 
-- ADR-0057 Q1 (Stage 0.1) blocks merging Stage A.
-- ADR-0057 Q2 / Q3 are measured inside Stage A (A5 / A6) and may change the
-  rules text or the gate.
+- Stage 0.1 (Q1) blocks merging Stage A; 0.2 / 0.3 block starting A5 / A6.
 
 ## See Also
 

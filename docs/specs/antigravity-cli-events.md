@@ -1,6 +1,6 @@
 ---
 title: Antigravity adapter — Antigravity CLI (agy) headless event specification
-description: Measured behaviour of the Antigravity CLI (`agy` 1.1.8) in headless print mode — stream-json events, resume, customization discovery, hooks-as-permission-gate, and their derivation to kaoiro state. Third engine counterpart to agent-sdk-events / codex-sdk-events.
+description: Measured behaviour of the Antigravity CLI (`agy` 1.1.26) in headless print mode — stream-json events, resume, customization discovery, hooks-as-permission-gate, and their derivation to kaoiro state. Third engine counterpart to agent-sdk-events / codex-sdk-events.
 status: provisional
 related: [protocol, plugin-model, architecture, agent-sdk-events, codex-sdk-events]
 ---
@@ -18,8 +18,10 @@ to kaoiro state ([protocol](protocol.md)). Paired with
 [codex-sdk-events](codex-sdk-events.md) (Codex).
 
 **Status: provisional** — every claim below marked *(measured)* was observed
-on 2026-09-04 with `agy` 1.1.8 (x86-64 Linux, OAuth personal login) on the
-development host, using `--print` / `--output-format stream-json` runs in a
+on 2026-09-04 with `agy` 1.1.26 (x86-64 Linux, OAuth personal login) on the
+development host (the binary self-updated from 1.1.8 to 1.1.26 at the start
+of the session, so vendor drift is a live risk and the adapter records the
+version it measured against), using `--print` / `--output-format stream-json` runs in a
 scratch directory. Claims marked *(unverified)* come from the vendor
 changelog or docs and must be re-measured before relying on them. Promote
 to `accepted` after the phase-34 Stage A dogfood.
@@ -29,7 +31,7 @@ to `accepted` after the phase-34 Stage A dogfood.
 The issue #181 premise was the Antigravity **SDK**. It is Python-only
 (`google-antigravity` 0.1.16, no Node/TS SDK exists), which conflicts with
 the TS in-process hosting premise of [ADR-0023](../adr/0023-host-runner-architecture.md)
-D3. The CLI `agy` (Go binary, already installed on hosts that use
+D3. The CLI `agy` (Go binary, self-updating, already installed on hosts that use
 Antigravity) exposes a single NDJSON event stream in headless mode that maps
 onto kaoiro's state machine at least as well as `codex exec` does, so the
 adapter drives the CLI as a child process and no Python bridge is needed.
@@ -48,7 +50,7 @@ agy --print "<turn text>" \
     [--conversation <conversation_id>] \
     [--model <slug>] [--effort low|medium|high] \
     [--add-dir <per-agent customization dir>] \
-    [--dangerously-skip-permissions] \
+    [--dangerously-skip-permissions] --disable-slash-commands \
     </dev/null
 ```
 
@@ -68,6 +70,11 @@ agy --print "<turn text>" \
   (`warning: ignoring unsupported stream input message event "…"`), so there
   is no in-band interrupt, permission, or model-switch channel. Each turn
   emits its own `result`.
+- **`--disable-slash-commands`** *(flag present in 1.1.26)*: print mode
+  otherwise expands slash commands and skills found in the prompt text, so an
+  operator instruction starting with `/` would enter the CLI control plane.
+  Every instruction turn passes the flag; the wrapper's own quota-free
+  probes (`-p /usage`, `-p /hooks`) run without it.
 - **Interrupt** = terminate the child (SIGTERM). The conversation remains
   resumable by id afterwards *(measured after ERROR-terminated turns)*. What
   the child prints on receiving a signal mid-stream is *(unverified)*; the
@@ -157,6 +164,7 @@ Headless `agy` cannot prompt. Measured behaviour by configuration:
 | PreToolUse hook returning `{"decision":"allow"}` or `permissionOverrides` under `request-review` | **still auto-denied** — hooks cannot lift the headless denial |
 | `settings.json` `toolPermission: "always-proceed"` + PreToolUse hook | hook decides: `allow` → executed (`output` present); `deny` → `TOOL_ERROR: tool call denied by pre-tool hook: <reason>`; the model sees the reason and continues |
 | `--dangerously-skip-permissions` + PreToolUse hook | *(unverified — HITL; expected to equal the row above per process instead of host-wide)* |
+| `--sandbox` (always-proceed, hook allow) | **no effect observed**: `touch` outside cwd and `curl https://example.com` both succeeded *(measured on WSL2; the terminal sandbox is advisory for this adapter)* |
 
 Therefore the adapter's approval channel is a **PreToolUse hook** shipped in
 the per-agent customization dir (`.agents/hooks.json`, matcher `*`). The
@@ -175,22 +183,33 @@ hook command receives the tool call on stdin and answers on stdout:
 {"decision":"deny","reason":"kaoiro: operator rejected"}
 ```
 
-- Hook `timeout` is per handler in seconds (default 30). The gate hook must
-  wait for the operator, so the adapter sets a long timeout; whether very
-  long values (hours) are honoured is *(unverified — measure in Stage A)*.
-  On hook timeout the CLI behaviour is *(unverified)*; the wrapper must
-  fail closed (answer `deny`) before its own deadline.
-- `PreToolUse` fires for every tool including reads, so the wrapper's policy
-  (ADR-0033 two axes) auto-allows read-class tools without an operator round
-  trip. Tool classes observed in `init.tools`: reads (`view_file`,
-  `list_dir`, `grep_search`, `find_by_name`, `read_url_content`), writes
-  (`write_to_file`, `replace_file_content`, `multi_replace_file_content`,
-  `sed_file`, `notebook_edit`), shell (`run_command`, `send_command_input`,
-  `command_status`), web/browser (`search_web`, `browser_*`,
-  `open_browser_url`), subagents (`define_subagent`, `invoke_subagent`,
-  `manage_subagents`, `browser_subagent`), misc (`ask_question`,
-  `ask_permission`, `ask_custom_permission`, `generate_image`, `schedule`,
-  `send_message`, `manage_task`, `wait`, `finish`).
+- Hook `timeout` is per handler in seconds (default 30). `timeout: 3600`
+  with a handler that blocked for 100 s was honoured: the `run_command` step
+  stayed `ACTIVE` for 110 s and then ran *(measured)*. CLI behaviour on hook
+  timeout is *(unverified)*; the wrapper fails closed (answers `deny`) before
+  its own deadline, and the ordering **gate deadline < hook timeout <
+  `--print-timeout`** is a hard constraint.
+- A long `run_command` holds the turn: `sleep 70; echo …` stayed `ACTIVE`
+  for 77 s, then `DONE` with output, and the model waited for it
+  *(measured; `WaitMsBeforeAsync: 5000` in the args did not detach it)*. A
+  bridge call that blocks on an operator answer therefore holds the turn.
+- `agy -p /hooks --add-dir <dir> --output-format json` lists the gate
+  (`name`, `source` path, `matcher`, `timeout_seconds`) without a model turn
+  *(measured)*; without `--add-dir` the list is empty. This is the quota-free
+  registration check the wrapper runs before the first turn.
+- `PreToolUse` fires for every tool including reads. The 57 names in
+  `init.tools` (1.1.26), classified for ADR-0057 F4 — the table is the
+  source of truth and any name outside it is *unclassified*:
+
+  | class | tools |
+  |---|---|
+  | read (local, side-effect free) | `view_file`, `list_dir`, `grep_search`, `find_by_name`, `command_status`, `list_permissions`, `manage_task`, `wait`, `wait_5_seconds`, `finish` |
+  | write (local files) | `write_to_file`, `replace_file_content`, `multi_replace_file_content`, `sed_file`, `notebook_edit` |
+  | shell | `run_command`, `send_command_input`, `notebook_execution` |
+  | network | `read_url_content`, `search_web`, `open_browser_url`, `generate_image`, `read_browser_page`, `list_browser_pages`, `browser_*` (19 names), `capture_browser_console_logs`, `capture_browser_screenshot`, `click_browser_pixel`, `execute_browser_javascript`, `browser_subagent` |
+  | subagent | `define_subagent`, `invoke_subagent`, `manage_subagents` |
+  | agent-internal (deny in headless) | `ask_question`, `ask_permission`, `ask_custom_permission`, `schedule`, `send_message`, `manage_inbox`, `delete_knowledge`, `call_mcp_tool`, `list_resources`, `read_resource` |
+
 - Hooks are also the only PostToolUse / Stop observation channel; not used
   by the adapter in Stage A.
 
@@ -287,7 +306,7 @@ per-turn spawn. Persona packs stay engine-independent (ADR-0032 F3).
 ### Models, effort, usage, rate limits
 
 - `agy models` prints the slugs available to the account, one per line
-  *(measured, 1.1.8 has no `--output-format` on this subcommand)*:
+  *(measured; 1.1.26 rejects `--output-format` on this subcommand)*:
   `gemini-3.6-flash-high|medium|low`, `gemini-3.1-pro-high|low`,
   `claude-sonnet-4-6`, `claude-opus-4-6-thinking`, `gpt-oss-120b-medium`.
   The account default (`-p /model`) was `gemini-3.8-flash-high`, which is
@@ -310,8 +329,10 @@ per-turn spawn. Persona packs stay engine-independent (ADR-0032 F3).
   "oauth-personal"`); the child inherits the wrapper's environment and HOME,
   so no credential handling in kaoiro (ADR-0032 F7 convention).
   `GEMINI_API_KEY` is the API-key alternative *(docs, unverified)*.
-- Requires `agy` ≥ 1.1.8 on `PATH`. The runner probes `agy --version` and
-  `agy models` at register time; both are quota-free.
+- Requires `agy` on `PATH`. The runner probes `agy --version` and `agy models`
+  at register time (both quota-free) and reports the version; this spec was
+  measured against 1.1.26, and a version change is the trigger to re-run the
+  measurements marked *(measured)* here, because the binary self-updates.
 
 ## Constraints
 
@@ -324,6 +345,9 @@ per-turn spawn. Persona packs stay engine-independent (ADR-0032 F3).
   setting would also affect the operator's own interactive `agy` sessions.
 - No attachments in Stage A (`--print` takes text only).
 - No context-usage capability until a per-model window table exists.
+- The sandbox axis is advisory for this engine (`--sandbox` measured
+  ineffective; enforcement is the wrapper's argument inspection only).
+  The envelope must say so (ADR-0057 F4).
 
 ## See Also
 

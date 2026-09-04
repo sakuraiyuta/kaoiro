@@ -67,7 +67,8 @@ and settled in [ADR-0032](../adr/0032-codex-adapter.md) F1): entity-independent
 core (`wrapper/core`) / AI-agent common layer `wrapper/agent-common` (state
 machine, permission, instruction, `EngineAdapter` interface, common Tool
 description layer) / concrete adapters (`wrapper/claude-code`,
-`wrapper/codex`, and future databases, host monitors, etc.). State machine,
+`wrapper/codex`, `wrapper/antigravity` ([ADR-0057](../adr/0057-antigravity-adapter.md) F1),
+and future databases, host monitors, etc.). State machine,
 permission, and instruction are AI-specific and do not go in core. The eventual
 aim is to visualize the state of diverse entities as characters, not just AI
 (the broader aim is covered separately in vision).
