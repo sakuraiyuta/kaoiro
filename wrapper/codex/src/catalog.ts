@@ -10,8 +10,9 @@ export type ChatGptPlan =
   | "business"
   | "enterprise";
 
-// Snapshot from openai/codex main (2026-07-13). openai_models.rs defines
-// the ReasoningEffort wire vocabulary and ModelInfo fields; per-model values
+// Snapshot from openai/codex main (2026-07-13, gpt-6-astra added from a
+// 2026-09-05 re-fetch — issue #292). openai_models.rs defines the
+// ReasoningEffort wire vocabulary and ModelInfo fields; per-model values
 // live in codex-rs/models-manager/models.json and are copied here so catalog
 // advertisement never depends on a runtime model/list probe (ADR-0035 H3).
 const SOL: EngineModelInfo = {
@@ -38,11 +39,23 @@ const LUNA: EngineModelInfo = {
   default_effort: "medium",
 };
 
-const CHATGPT_TRIO = [SOL, TERRA, LUNA];
+// models.json marks this `visibility: hide` and lists free/go among its
+// plans, but that combination is unverified against the live free/go
+// experience (issue #292) -- deferred, so ASTRA joins the plus+ / API-key
+// tiers only, same as the other three curated models.
+const ASTRA: EngineModelInfo = {
+  value: "gpt-6-astra",
+  display_name: "GPT-6-Astra",
+  description: "Our most capable model for complex, demanding work.",
+  effort_levels: ["low", "medium", "high", "xhigh", "max", "ultra"],
+  default_effort: "low",
+};
+
+const CHATGPT_PLUS_MODELS = [SOL, TERRA, LUNA, ASTRA];
 const CHATGPT_TERRA = [TERRA];
 
 const APIKEY_MODELS: EngineModelInfo[] = [
-  ...CHATGPT_TRIO,
+  ...CHATGPT_PLUS_MODELS,
   {
     value: "gpt-5.5",
     display_name: "GPT-5.5",
@@ -96,7 +109,7 @@ export function resolveCodexCatalog(
   if (plan === "free" || plan === "go") {
     return copyCatalog(CHATGPT_TERRA);
   }
-  return copyCatalog(CHATGPT_TRIO);
+  return copyCatalog(CHATGPT_PLUS_MODELS);
 }
 
 export const CODEX_ENGINE = {

@@ -21,8 +21,8 @@ it is separated into this specification.
 [ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) restored
 the catalog. Even under ChatGPT-account authentication, the **operator declares
 `codex.chatgpt_plan` in `runner.config.json`** to statically resolve the
-entitled-model set. It presents the Sol / Terra / Luna catalog in LaunchDialog
-for Plus and above, and accepts mid-session switching (details:
+entitled-model set. It presents the Sol / Terra / Luna / Astra catalog in
+LaunchDialog for Plus and above, and accepts mid-session switching (details:
 [ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) and
 [phase-16](../plans/phase-16-codex-model-switch.md)). This specification
 remains a primary-information reference for why it depends on an operator
@@ -32,28 +32,38 @@ declaration rather than wait for an enumeration API.
 (official OpenAI documentation / Help Center / running `codex doctor`). However,
 the entitled-model set has changed in OpenAI operations (for example,
 `gpt-5.5` temporarily returned 404 then recovered as of 2026-07;
-[openai/codex#26892](https://github.com/openai/codex/issues/26892)), so this
-specification's table is a snapshot as of 2026-07-11.
+[openai/codex#26892](https://github.com/openai/codex/issues/26892), and
+`gpt-6-astra` was added 2026-09 per a re-fetch of
+`codex-rs/models-manager/models.json`; issue #292), so this specification's
+table is a snapshot as of 2026-09-05 for the Astra row/slug and 2026-07-11 for
+everything else.
 
-## Plan × available model (2026-07-11)
+## Plan × available model (2026-07-11, Astra column added 2026-09-05)
 
 | Plan | Monthly price | Codex-available models | Codex default | Notes |
 |---|---|---|---|---|
-| Free | $0 | `gpt-5.6-terra` only | Terra | Sol / Luna cannot be selected |
+| Free | $0 | `gpt-5.6-terra` only | Terra | Sol / Luna / Astra cannot be selected |
 | Go | $8 | `gpt-5.6-terra` only | Terra | Tier introduced in 2026-04 |
-| Plus | $20 | Sol / Terra / Luna (effort selectable) | **Sol + medium** | Switchable in CLI/Desktop |
-| Pro | $100 or $200 | Sol / Terra / Luna + `gpt-5.3-codex-spark` | **Sol + medium** | The $200 version has a 20× five-hour window |
-| Business | $25/user | Sol / Terra / Luna | **Sol + medium** | Replaced former Team ($30) in 2026-04 |
-| Enterprise | custom | Sol / Terra / Luna (+ individual negotiation) | **Sol + medium** | Admin can change the default |
-| API-key | Usage based | Sol / Terra / Luna / 5.5 / 5.4 / 5.4-mini + some deprecated models | **Explicit selection required** | No 400/404 restriction |
+| Plus | $20 | Sol / Terra / Luna / Astra (effort selectable) | **Sol + medium** | Switchable in CLI/Desktop |
+| Pro | $100 or $200 | Sol / Terra / Luna / Astra + `gpt-5.3-codex-spark` | **Sol + medium** | The $200 version has a 20× five-hour window |
+| Business | $25/user | Sol / Terra / Luna / Astra | **Sol + medium** | Replaced former Team ($30) in 2026-04 |
+| Enterprise | custom | Sol / Terra / Luna / Astra (+ individual negotiation) | **Sol + medium** | Admin can change the default |
+| API-key | Usage based | Sol / Terra / Luna / Astra / 5.5 / 5.4 / 5.4-mini + some deprecated models | **Explicit selection required** | No 400/404 restriction |
+
+`gpt-6-astra` is marked `visibility: hide` upstream and its `models.json`
+plan list also names Free/Go, but that combination is unverified against the
+live Free/Go experience — kaoiro's own catalog (`wrapper/codex/src/catalog.ts`)
+therefore only advertises it for Plus and above, matching Sol/Terra/Luna's
+existing tiering (issue #292).
 
 **Model slugs** (identifiers used by `--model` / `~/.codex/config.toml` /
 `-c model=`):
-`gpt-5.6-sol` / `gpt-5.6-terra` / `gpt-5.6-luna` / `gpt-5.5` / `gpt-5.4` /
-`gpt-5.4-mini` / `gpt-5.3-codex-spark`.
+`gpt-5.6-sol` / `gpt-5.6-terra` / `gpt-5.6-luna` / `gpt-6-astra` / `gpt-5.5` /
+`gpt-5.4` / `gpt-5.4-mini` / `gpt-5.3-codex-spark`.
 
 **Reference API pricing** (per 1M tokens): Sol $5 input / $30 output,
-Terra $2.50 / $15, Luna $1 / $6.
+Terra $2.50 / $15, Luna $1 / $6. Astra pricing was not published as of
+2026-09-05.
 
 ## Asymmetry between the two authentication modes (F4bc background)
 
@@ -162,7 +172,7 @@ always produces undefined. Test fixtures must also match this actual shape
 **Information not returned** (the main reason F4bc's decision remains):
 
 - The **plan tier** of Master (this account) (Plus / Pro / Business / etc.)
-- The **account-default model name** (one of Sol / Terra / Luna)
+- The **account-default model name** (one of Sol / Terra / Luna / Astra)
 - The **entitled-model set** (the slugs that do not return 400/404 for this account)
 
 kaoiro can parse `codex doctor --json` through to authentication-mode

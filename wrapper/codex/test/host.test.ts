@@ -70,7 +70,7 @@ describe("initialStatusExt", () => {
     });
     expect(
       (initial.ext.models as { value: string }[]).map((m) => m.value),
-    ).toEqual(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
+    ).toEqual(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra"]);
   });
 
   it("未申告 catalog は switch capability を fail-closed にする (#107)", () => {
@@ -383,10 +383,26 @@ describe("CodexHost", () => {
   it.each([
     ["chatgpt", "free", ["gpt-5.6-terra"]],
     ["chatgpt", "go", ["gpt-5.6-terra"]],
-    ["chatgpt", "plus", ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]],
-    ["chatgpt", "pro", ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]],
-    ["chatgpt", "business", ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]],
-    ["chatgpt", "enterprise", ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]],
+    [
+      "chatgpt",
+      "plus",
+      ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra"],
+    ],
+    [
+      "chatgpt",
+      "pro",
+      ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra"],
+    ],
+    [
+      "chatgpt",
+      "business",
+      ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra"],
+    ],
+    [
+      "chatgpt",
+      "enterprise",
+      ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra"],
+    ],
     [
       "apikey",
       undefined,
@@ -394,6 +410,7 @@ describe("CodexHost", () => {
         "gpt-5.6-sol",
         "gpt-5.6-terra",
         "gpt-5.6-luna",
+        "gpt-6-astra",
         "gpt-5.5",
         "gpt-5.4-mini",
       ],
@@ -502,7 +519,7 @@ describe("CodexHost", () => {
       (states.at(-1)?.ext.models as { value: string }[]).map(
         (model) => model.value,
       ),
-    ).toEqual(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
+    ).toEqual(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra"]);
     // result envelope: 最後の agent_message が最終応答
     const result = logs.find((e) => e.type === "result");
     expect(result?.payload).toMatchObject({ text: "了解しました" });

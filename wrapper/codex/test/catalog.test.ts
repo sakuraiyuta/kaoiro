@@ -31,6 +31,11 @@ describe("resolveCodexCatalog", () => {
       ["low", "medium", "high", "xhigh", "max"],
       "medium",
     ],
+    [
+      "gpt-6-astra",
+      ["low", "medium", "high", "xhigh", "max", "ultra"],
+      "low",
+    ],
   ] as const)(
     "%s の curated effort metadata が一次情報と一致する",
     (value, effortLevels, defaultEffort) => {
@@ -47,12 +52,13 @@ describe("resolveCodexCatalog", () => {
   });
 
   it.each(["plus", "pro", "business", "enterprise"] as const)(
-    "ChatGPT %s は Sol / Terra / Luna",
+    "ChatGPT %s は Sol / Terra / Luna / Astra (issue #292)",
     (plan) => {
       expect(values("chatgpt", plan)).toEqual([
         "gpt-5.6-sol",
         "gpt-5.6-terra",
         "gpt-5.6-luna",
+        "gpt-6-astra",
       ]);
     },
   );
@@ -62,6 +68,7 @@ describe("resolveCodexCatalog", () => {
       "gpt-5.6-sol",
       "gpt-5.6-terra",
       "gpt-5.6-luna",
+      "gpt-6-astra",
       "gpt-5.5",
       "gpt-5.4-mini",
     ]);
@@ -143,7 +150,7 @@ describe("effortLevelsForModel (intersection fail-closed helper)", () => {
     ]);
   });
 
-  it("chatgpt plus (SOL+TERRA+LUNA) intersection = low..max (ultra は LUNA に無い)", () => {
+  it("chatgpt plus (SOL+TERRA+LUNA+ASTRA) intersection = low..max (ultra は LUNA に無い)", () => {
     const catalog = resolveCodexCatalog("chatgpt", "plus");
     expect(effortLevelsForModel(catalog, null)).toEqual([
       "low",
@@ -154,7 +161,7 @@ describe("effortLevelsForModel (intersection fail-closed helper)", () => {
     ]);
   });
 
-  it("apikey (+gpt-5.5, +gpt-5.4-mini) intersection = low..xhigh (max/ultra 除外)", () => {
+  it("apikey (+gpt-6-astra, +gpt-5.5, +gpt-5.4-mini) intersection = low..xhigh (max/ultra 除外)", () => {
     const catalog = resolveCodexCatalog("apikey");
     expect(effortLevelsForModel(catalog, null)).toEqual([
       "low",
