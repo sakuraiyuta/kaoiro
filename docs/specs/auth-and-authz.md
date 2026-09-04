@@ -153,6 +153,12 @@ or revoked credentials return 401; viewers return 403.
 - Broker timeout is `permission_timeout_ms` in wrapper config; when unset it waits
   indefinitely (SDK default), avoiding accidental denial when no operator is
   present ([ADR-0022](../adr/0022-pending-permission-authoritative-source.md)).
+- The ceiling takes a different form per engine: Claude = `allowedTools` +
+  `canUseTool`; Codex = two axes fixed at spawn with no approval channel
+  ([ADR-0033](../adr/0033-permission-model-dual-axis.md) F3); antigravity =
+  the wrapper's tool-class table and cell matrix behind the hook gate
+  (below). The rule that server and client cannot widen it holds for all
+  three.
 
 ### MCP (`mcp__kaoiro__send_to_agent`)
 
@@ -163,6 +169,45 @@ or revoked credentials return 401; viewers return 403.
   auto-allowed (the `READ_ONLY_TOOLS` set above).
 - Routing uses the server's `route_inter_agent`; quotas use `ConversationStates`.
 - Details: [protocol-inter-agent](protocol-inter-agent.md)
+
+### Antigravity gate socket and customization dir (phase-34)
+
+**Status: designed, implemented in phase-34 Stage A** — recorded here ahead
+of the code so the boundary map is complete when it lands.
+
+For the `antigravity` engine the approval decision does not come from an SDK
+callback. `agy` runs with its own prompts disabled and invokes a PreToolUse
+hook per tool call, which adds an intra-host boundary between the engine
+child and the wrapper ([ADR-0057](../adr/0057-antigravity-adapter.md) F4).
+
+| Boundary | Mechanism | Implementation | On failure |
+|---|---|---|---|
+| `agy` child → hook process | Hook registration in the wrapper-owned `.agents/hooks.json`, discovered through `--add-dir` | `wrapper/antigravity` customization-dir writer | Not registered → spawn fails with `antigravity_gate_not_registered`; hook exceeding the CLI `timeout` is killed and the tool call fails without running (measured) |
+| hook process → wrapper | Per-agent unix socket inside a 0700 `mkdtemp` dir; per-spawn nonce carried in the hook's environment | `hook.ts` → `gate.ts` | Socket error / wrapper deadline / malformed payload / missing nonce → `deny`; connection closed before an answer → the pending broker entry resolves as deny and `waiting_permission` is cleared |
+| wrapper → operator | `PermissionBroker` → `permission_request` (operator-only) → `permission_decision` (operator-only relay) | shared with the Claude path above | unchanged |
+
+- The nonce rejects an unrelated same-uid process that guessed the socket
+  path. It is **not** a defence against the agent itself, whose shell
+  inherits the socket path and can read the nonce — which is why
+  [threat-model](threat-model.md) records the gate self-verification as
+  detection rather than authorization.
+- The **execution-capability ceiling** for this engine is the wrapper's
+  tool-class table plus the sandbox × approval × network cell matrix, not an
+  SDK `allowedTools` list. It is local configuration and the server cannot
+  widen it, exactly as the MUST below requires. The agent-internal tool class
+  is denied unconditionally, and a tool name absent from the table is
+  unclassified: denied under `approval: never`, escalated to the operator
+  otherwise.
+- kaoiro's own tool surface rides the same `ToolHost` unix socket as Codex,
+  invoked as a CLI through `run_command`. Its auto-allow is a whole-string
+  match on a metacharacter-free alphabet (ADR-0057 F5). The socket is
+  reachable from the agent's own shell and exposes only tools that agent
+  already holds, so it is not a privilege boundary.
+- The customization dir (persona rules + gate config) is wrapper-owned:
+  0700 `mkdtemp`, rewritten from memory and hash-verified before every
+  per-turn spawn, referencing writes and shell denied in every permission
+  cell, deleted on close, with stale `kaoiro-agy-*` directories swept at
+  startup after a SIGKILL.
 
 ### Cookie / ticket sessions ([ADR-0013](../adr/0013-user-token-cookie-persistence.md))
 
@@ -263,6 +308,8 @@ or revoked credentials return 401; viewers return 403.
 | **Operator role granularity** | Issue #188 introduced admin / operator / viewer, but operators still have full power (spawn / interrupt / approve / clear, etc.). Per-pair permission demotion is not implemented | None — single-tenant assumption | [issue #189](https://github.com/sakuraiyuta/kaoiro/issues/189) (per-pair permissions, [ADR-0050](../adr/0050-principal-model-and-graded-access-control.md) D3) |
 | **Immediate token revocation** | **Forced disconnect of active WS is implemented ([#47](https://github.com/sakuraiyuta/kaoiro/issues/47))**: logout (`DELETE /session`) and refresh 401 for a revoked credential call `disconnect_sockets/1`, broadcasting disconnect on the socket-id topic and dropping all connections. Delivery occurs when a detection trigger arrives rather than as an immediate push | Triggers are the next operator action (gate re-resolution in [#148](https://github.com/sakuraiyuta/kaoiro/issues/148)) / change-driven OAuth allowlist disconnect ([#160](https://github.com/sakuraiyuta/kaoiro/issues/160), including passive sockets) / 12-hour refresh / reconnect / explicit logout. Changing a shared `KAOIRO_CLIENT_TOKENS` value still requires restart because env is not reloaded (out of #160 scope) | Implemented |
 | **Signed-token revoke** | **Per-agent ID denylist implemented (2026-07-23, [#72](https://github.com/sakuraiyuta/kaoiro/issues/72))**: TokenDenylist DETS + `Auth.authorize_wrapper` check + `delete_agent` auto-revoke + explicit operator revoke handler + live disconnect via revoked broadcast | Key rotation remains the heavy option that revokes the whole fleet | Implemented |
+| **Sandbox enforcement (antigravity)** | The sandbox axis is advisory: `--sandbox` was measured ineffective, so `read-only` / `workspace-write` are enforced by wrapper argument inspection, never by the OS | `ext.permission.enforcement = "advisory"` plus a permanent dashboard badge; shell needs approval outside `danger-full-access` | [ADR-0057](../adr/0057-antigravity-adapter.md) F4 |
+| **Gate spoofing by the agent itself (antigravity)** | The gate nonce and the correlation state are readable by any shell the agent runs, so a compromised agent can satisfy the self-verification | None — F4b detects a vendor mechanism that stops firing; it is not an authorization boundary | [ADR-0057](../adr/0057-antigravity-adapter.md) F4b |
 | **Multi-tenant isolation** | Every operator can control every agent (OAuth identifies people but has no agent-owner boundary) | None — single-tenant assumption | [ADR-0042](../adr/0042-oauth-allowlist-login.md), out of scope |
 | **Dev fallback leakage risk** | **Resolved (2026-07-25, [#133](https://github.com/sakuraiyuta/kaoiro/issues/133))**: `:dev`/`:test` still allow all when unset; `:prod` fails closed when unset (2026-08-02 revision: wrapper accepts only server-minted signed tokens, whose signature derives from `secret_key_base`) | Startup WARN log (environment-specific wording) | Implemented |
 | **Audit logging** | No durable record of who sent what to which agent and when | None | Future (when SQLite is introduced) |
@@ -283,6 +330,10 @@ or revoked credentials return 401; viewers return 403.
 - MUST: When injecting a new in-process MCP tool into the SDK, explicitly decide
   whether it belongs in default allowedTools (omitted = per-use approval;
   included = unsupervised).
+- MUST: State the execution-capability ceiling form for every engine recorded
+  here (SDK allowlist / axes fixed at spawn / wrapper policy table). An engine
+  whose gate is enforced only by the wrapper must fail closed on a verification
+  failure — there is no engine-side backstop to fall back on.
 
 ## Release-time audit checklist
 
@@ -310,6 +361,9 @@ document and keep it synchronized with the issue checklist.
 - [ ] Inter-agent body prompt-injection risk is documented in README / threat model.
 - [ ] Server / client have no path to override the wrapper `allowedTools` ceiling
   (tests).
+- [ ] Antigravity: with the hook removed, the registration check and the
+  completed-tool correlation invariant both fail closed, and the bridge
+  auto-allow rejects every shell-injection fixture (phase-34).
 - [ ] `scripts/dev.sh` logs contain no secrets (grep `tmp/dev-logs/*.log`).
 - [ ] Scan `git log --all -p` for token / .env / cookie / signed-token strings;
   none may enter commits intended for publication.
@@ -325,7 +379,8 @@ document and keep it synchronized with the issue checklist.
   [0022](../adr/0022-pending-permission-authoritative-source.md) (pending permission),
   [0023](../adr/0023-host-runner-architecture.md) (runner),
   [0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) (spawn auth),
-  [0042](../adr/0042-oauth-allowlist-login.md) (OAuth + allowlist)
+  [0042](../adr/0042-oauth-allowlist-login.md) (OAuth + allowlist),
+  [0057](../adr/0057-antigravity-adapter.md) (antigravity gate socket)
 - Related issues: [#17](https://github.com/sakuraiyuta/kaoiro/issues/17) (inter-agent),
   [#28](https://github.com/sakuraiyuta/kaoiro/issues/28) (client fail-closed),
   [#46](https://github.com/sakuraiyuta/kaoiro/issues/46) (cwd exposure),
