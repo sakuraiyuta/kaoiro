@@ -101,8 +101,13 @@ The wrapper owns a per-agent directory (`mkdtemp`, 0700) passed with
 (working directory pinned to the agent cwd, bridge contract, "never touch
 this directory") + server-pushed personality + footer. Persona packs stay
 engine-independent (ADR-0032 F3). The wrapper rewrites the files before
-**every** spawn from in-memory content and verifies their SHA-256 after
-writing; it deletes the directory on close and on startup sweeps stale
+**every** spawn from in-memory content, verifies their SHA-256 after
+writing, and verifies them again after every turn: a mismatch marks the
+session `error` (`antigravity_customization_tampered`) and refuses further
+turns. This is **tamper detection, not prevention** — the agent runs as the
+same uid and a shell can rewrite the directory; the per-spawn regeneration
+bounds the damage to the remainder of one turn. It deletes the directory
+on close and on startup sweeps stale
 `kaoiro-agy-*` directories left by a SIGKILL (content is persona text and
 the gate config, low sensitivity, but the sweep keeps `/tmp` bounded).
 
@@ -150,8 +155,11 @@ when true it follows the shell column of the row (`browser_subagent` sits
 in the network class rather than subagent because it exists to reach the
 network, so the toggle must be able to switch it off). `on-failure` is rejected at spawn for
 this engine (LaunchDialog offers three values). The gate also denies,
-regardless of cell, any write or shell whose arguments reference the
-customization dir (canonical path, after symlink resolution). A
+regardless of cell, any file-tool call whose resolved path (every
+path-bearing key, realpath of the longest existing ancestor) lies inside
+the customization dir; for `run_command` the string check is best-effort
+only (a bash command line cannot be canonicalised), and the real protection
+is the post-turn SHA verification of F3. A
 `run_command` whose `Cwd` is outside the agent cwd is escalated to ask
 regardless of cell (not denied — if the rules text fails to steer the model
 the fallback is one approval, not a dead engine; the write-target check
@@ -267,7 +275,7 @@ precedence with env `KAOIRO_ANTIGRAVITY_DEFAULT_MODEL`. No entry in
 ### F7 — Session capabilities in Stage A
 
 `supports_attachments: false`, `supports_model_switch: true`,
-`supports_context_usage: false`, `rate_limits` via `-p /usage` mapped to the
+`supports_context_usage: false`; `rate_limits` (Stage B1) via `-p /usage` mapped to the
 `seven_day` window (`utilization = 1 - remaining_fraction`); the group is
 "Claude and GPT models" when the active slug starts with `claude-` or
 `gpt-`, otherwise "Gemini Models" (unknown slugs and the account default

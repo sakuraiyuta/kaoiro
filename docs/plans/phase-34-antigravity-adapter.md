@@ -36,7 +36,7 @@ through the CLI bridge. Measured substrate:
    auto-allow rejects every shell-injection fixture (tests).
 5. Tools: `list_agents` / `send_to_agent` / `whoami` / `ask_user_question`
    work through the bridge; a pending question holds the turn.
-6. Rate limits from `-p /usage` appear in `list_agents` / whoami.
+6. (Stage B1) Rate limits from `-p /usage` appear in `list_agents` / whoami.
 7. Release: tarball carries `@kaoiro/antigravity` with `runtimeAssets`
    (`dist/bridge.js`, `dist/hook.js`); `verify-release` sentinels updated.
 8. Docs: spec promoted to `accepted` with Stage A live-verification notes;
@@ -62,7 +62,7 @@ through the CLI bridge. Measured substrate:
 | A2 | `wrapper/antigravity` skeleton copied from `wrapper/codex` (package.json with `kaoiro.runtimeAssets`, tsconfigs, vitest config, `src/index.ts`) | |
 | A3 | `adapter.ts`: stream-json line → `AdapterEvent` (pure, table-driven) + tests from recorded fixtures | fixtures: the 2026-09-04 probe outputs |
 | A4 | `host.ts`: per-turn spawn, closed stdin, `--conversation`, interrupt (SIGTERM), exit-without-result → error, session_capabilities stamp | reuse Codex `TurnWatchdog` |
-| A5 | customization dir writer: `.agents/rules/AGENTS.md`, `.agents/hooks.json`, `.agents/skills/kaoiro/SKILL.md`; regenerate on persona/display-name sync; cleanup on close | |
+| A5 | customization dir writer: `.agents/rules/AGENTS.md`, `.agents/hooks.json`, `.agents/skills/kaoiro/SKILL.md`; regenerate before every spawn, SHA verify after every turn (tamper → error); stale sweep deletes only dirs carrying a valid owner marker; cleanup on close | |
 | A6 | `hook.ts` (→ `dist/hook.js`): stdin → wrapper socket `permission` request (with per-spawn nonce) → stdout decision; fail-closed with client deadline | |
 | A6b | gate self-verification (F4b): `-p /hooks` registration check before first turn; completion-keyed tool-step ↔ gate-request correlation invariant (measured classes only) with kill + `antigravity_gate_unobserved_tool` on violation; gate-socket close resolves the broker entry; tests inject a missing hook and a missing nonce as negative controls | |
 | A7 | `gate.ts`: tool-class table (spec SoT) + `init.tools` diff, F4 cell table incl. `network_access`, customization-dir and `Cwd` denies, bridge whole-string match (F5) with injection tests (`;`, `&&`, `|`, `$(…)`, newline, extra argv, non-base64 payload); `PermissionBroker` wiring; `setPermissionMode` rejects (F4c) | |
