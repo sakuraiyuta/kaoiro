@@ -140,6 +140,9 @@ const TURN_BACKED_STATES: ReadonlySet<KaoiroState> = new Set<KaoiroState>([
 interface TurnBoundWait {
   owner: string | null;
   kind: "permission" | "question";
+  /** Decider-side id of this request, so abandoning it can invalidate the
+   *  broker entry too. null when no decider stamped a pending record. */
+  requestId: string | null;
   abandon: () => void;
 }
 
@@ -475,6 +478,14 @@ export interface AgentHostOptions {
   decideQuestion?: (
     questions: Question[],
   ) => Promise<QuestionDecision> | QuestionDecision;
+  /**
+   * Invalidates a decider-side request whose wait the host has abandoned
+   * (issue #285). Settling the wait locally is not enough: the broker keeps
+   * its registry entry until someone answers, and ADR-0022 F6 makes waiting
+   * forever the default, so a late answer would clear the authoritative
+   * pending record of whatever request is in flight by then.
+   */
+  cancelDecision?: (kind: "permission" | "question", requestId: string) => void;
   /**
    * Conversation-unit auto-allow for `send_to_agent` (issue #175, ADR-0044
    * F2 追補 — 案 B). When it returns true for the call's
@@ -1954,7 +1965,14 @@ export class AgentHost implements EngineAdapter {
     const abandoned = new Promise<typeof ABANDONED_WAIT>((resolve) => {
       abandon = () => resolve(ABANDONED_WAIT);
     });
-    const wait: TurnBoundWait = { owner, kind, abandon };
+    const pending =
+      kind === "permission" ? this.#pendingPermission : this.#pendingQuestion;
+    const wait: TurnBoundWait = {
+      owner,
+      kind,
+      requestId: pending?.request_id ?? null,
+      abandon,
+    };
     this.#turnBoundWaits.add(wait);
     // The CLI cancels an outstanding can_use_tool control request and the SDK
     // aborts this signal (measured 2026-09-05: 2ms after Query.interrupt()).
@@ -1964,7 +1982,17 @@ export class AgentHost implements EngineAdapter {
     else signal?.addEventListener("abort", abandon, { once: true });
     return {
       abandoned,
-      ownsActiveTurn: () => (this.#activeTurn?.turnToken ?? null) === owner,
+      // A wait with no owner cannot legitimately resume anything once this
+      // host has started routing turns through #input(): there is no turn to
+      // return to. Hosts driven without the input barrier keep the plain
+      // comparison so their unowned waits behave as before. Residual: such a
+      // wait still opens waiting_permission and stays there once answered.
+      // #assertTurnBackedState makes that visible; it is not settled harder
+      // because no measurement has yet shown the SDK can ask outside a turn.
+      ownsActiveTurn: () =>
+        owner === null && this.#everStartedTurn
+          ? false
+          : (this.#activeTurn?.turnToken ?? null) === owner,
       release: () => {
         signal?.removeEventListener("abort", abandon);
         this.#turnBoundWaits.delete(wait);
@@ -1981,6 +2009,9 @@ export class AgentHost implements EngineAdapter {
     for (const wait of [...this.#turnBoundWaits]) {
       if (wait.owner !== turnToken) continue;
       this.#turnBoundWaits.delete(wait);
+      if (wait.requestId !== null) {
+        this.#options.cancelDecision?.(wait.kind, wait.requestId);
+      }
       if (wait.kind === "permission") this.#pendingPermission = null;
       else this.#pendingQuestion = null;
       wait.abandon();
@@ -2048,8 +2079,8 @@ export class AgentHost implements EngineAdapter {
     // A decider that rejects after the wait was abandoned has no awaiter
     // left below; keep the rejection handled either way.
     void decisionPromise.catch(() => {});
-    const wait = this.#beginTurnBoundWait("permission", signal);
     this.#apply({ kind: "permission_request" });
+    const wait = this.#beginTurnBoundWait("permission", signal);
     try {
       const decision = await Promise.race([decisionPromise, wait.abandoned]);
       if (decision === ABANDONED_WAIT) {
@@ -2093,8 +2124,8 @@ export class AgentHost implements EngineAdapter {
       : [];
     const decisionPromise = Promise.resolve(decide(questions));
     void decisionPromise.catch(() => {});
-    const wait = this.#beginTurnBoundWait("question", signal);
     this.#apply({ kind: "question_request" });
+    const wait = this.#beginTurnBoundWait("question", signal);
     try {
       const decision = await Promise.race([decisionPromise, wait.abandoned]);
       if (decision === ABANDONED_WAIT) {

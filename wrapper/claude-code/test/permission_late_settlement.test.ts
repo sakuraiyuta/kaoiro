@@ -16,6 +16,7 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import { AgentHost } from "../src/host.js";
 import type { AgentHostOptions } from "../src/host.js";
+import { PermissionBroker } from "@kaoiro/agent-common";
 import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
 
 const config: WrapperConfig = {
@@ -271,6 +272,142 @@ describe("issue #285 — permission decision after its turn ended", () => {
     const resumed = states.lastIndexOf("tool_running");
     expect(resumed).toBeGreaterThan(states.indexOf("waiting_permission"));
     expect(envelopes[resumed]?.ext?.pending_permission).toBeUndefined();
+  });
+
+  it("invalidates the broker request so a late answer cannot clear a newer one", async () => {
+    // Uses the real PermissionBroker: the hazard lives in its registry, which
+    // a decider stub would not have.
+    const states: Envelope[] = [];
+    const requests: string[] = [];
+    const asked = [deferred(), deferred()];
+    const streamOpen = deferred();
+    let round = 0;
+
+    const queryFn = ((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        const input = args.prompt[Symbol.asyncIterator]();
+        await input.next();
+        yield assistant([toolUse("tu_1")]);
+        void args.options.canUseTool!("Bash", { id: "tu_1" }, {
+          signal: new AbortController().signal,
+        } as never);
+        await asked[0]!.promise;
+        yield result("error");
+        await input.next();
+        yield assistant([toolUse("tu_2")]);
+        void args.options.canUseTool!("Bash", { id: "tu_2" }, {
+          signal: new AbortController().signal,
+        } as never);
+        await asked[1]!.promise;
+        await streamOpen.promise;
+      }
+      return Object.assign(gen(), {
+        interrupt: async () => {},
+      }) as unknown as Query;
+    }) as unknown as QueryFn;
+
+    let host!: AgentHost;
+    const broker = new PermissionBroker({
+      config,
+      send: (envelope) => {
+        const id = envelope.payload?.request_id;
+        if (typeof id !== "string") return;
+        requests.push(id);
+        asked[round]?.resolve();
+        round += 1;
+      },
+      onPendingChange: (pending) => host.setPendingPermission(pending),
+      now: () => "T",
+    });
+    host = new AgentHost(config, {
+      onState: (envelope) => states.push(envelope),
+      decidePermission: (toolName, input) => broker.decide(toolName, input),
+      cancelDecision: (kind, requestId) => {
+        if (kind !== "permission") return;
+        broker.resolve({ request_id: requestId, allow: false });
+      },
+      queryFn,
+      now: () => "T",
+    });
+    const running = host.run();
+    await host.send("one");
+    await asked[0]!.promise;
+    await host.send("two");
+    while (requests.length < 2) await flush();
+    await flush();
+
+    expect(requests).toHaveLength(2);
+    expect(host.statusExtSnapshot().pending_permission).toMatchObject({
+      request_id: requests[1],
+    });
+
+    // The operator answers the dialog abandoned two turns ago.
+    broker.resolve({ request_id: requests[0]!, allow: true });
+    await flush();
+
+    expect(host.statusExtSnapshot().pending_permission).toMatchObject({
+      request_id: requests[1],
+    });
+    expect(states[states.length - 1]?.state).toBe("waiting_permission");
+
+    streamOpen.resolve();
+    host.close();
+    await running;
+  });
+
+  it("does not resume a wait that opened with no turn to return to", async () => {
+    const states: string[] = [];
+    const warnings: string[] = [];
+    const decision = deferred<{ allow: boolean }>();
+    const asked = deferred();
+    const streamOpen = deferred();
+
+    const queryFn = ((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        const input = args.prompt[Symbol.asyncIterator]();
+        await input.next();
+        yield assistant([{ type: "text", text: "hi" }]);
+        yield result("success");
+        // A straggler permission request: the turn that could have owned it
+        // has already been settled by its result.
+        void args.options.canUseTool!("Bash", { id: "tu_late" }, {
+          signal: new AbortController().signal,
+        } as never);
+        await asked.promise;
+        await streamOpen.promise;
+      }
+      return Object.assign(gen(), {
+        interrupt: async () => {},
+      }) as unknown as Query;
+    }) as unknown as QueryFn;
+
+    const host = new AgentHost(config, {
+      onState: (envelope) => states.push(envelope.state),
+      warn: (message) => warnings.push(message),
+      decidePermission: () => {
+        asked.resolve();
+        return decision.promise;
+      },
+      queryFn,
+      now: () => "T",
+    });
+    const running = host.run();
+    await host.send("go");
+    await asked.promise;
+    await flush();
+
+    decision.resolve({ allow: true });
+    await flush();
+    await flush();
+
+    expect(states).not.toContain("tool_running");
+    expect(states[states.length - 1]).toBe("waiting_permission");
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("waiting_permission emitted with no active turn");
+
+    streamOpen.resolve();
+    host.close();
+    await running;
   });
 
   it("still resumes tool_running for concurrent answers inside a live turn", async () => {

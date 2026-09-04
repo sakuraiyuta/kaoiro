@@ -903,6 +903,25 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     // AskUserQuestion path (ADR-0027): server-connected wrappers always
     // have a question broker, so route through it directly.
     decideQuestion: (questions) => questionBroker!.decide(questions),
+    // issue #285: the host abandoned this wait, so consume the broker's
+    // registry entry with the same deny it handed the SDK. Leaving the id
+    // answerable would let a late decision clear a LATER request's
+    // authoritative pending record (ADR-0022) — and leak the entry.
+    cancelDecision: (kind, requestId) => {
+      if (kind === "permission") {
+        broker?.resolve({
+          request_id: requestId,
+          allow: false,
+          message: "kaoiro: this request was cancelled before it was answered",
+        });
+      } else {
+        questionBroker?.resolve({
+          request_id: requestId,
+          answers: {},
+          cancelled: true,
+        });
+      }
+    },
     // issue #175 (ADR-0044 F2 追補): conversation-unit send_to_agent
     // auto-allow — InterAgentTool owns the per-(conversation_id, to)
     // flag (issue #175 review, ふじ M2).
