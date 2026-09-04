@@ -1958,6 +1958,8 @@ export class AgentHost implements EngineAdapter {
   ): {
     abandoned: Promise<typeof ABANDONED_WAIT>;
     ownsActiveTurn: () => boolean;
+    /** Drops the authoritative pending record if it is still this wait's. */
+    clearPending: () => void;
     release: () => void;
   } {
     const owner = this.#activeTurn?.turnToken ?? null;
@@ -1977,9 +1979,15 @@ export class AgentHost implements EngineAdapter {
     // The CLI cancels an outstanding can_use_tool control request and the SDK
     // aborts this signal (measured 2026-09-05: 2ms after Query.interrupt()).
     // That also covers a request cancelled while its turn keeps running,
-    // which no turn boundary would ever settle.
-    if (signal?.aborted === true) abandon();
-    else signal?.addEventListener("abort", abandon, { once: true });
+    // which no turn boundary would ever settle. It routes through the SAME
+    // primitive as the boundary: abandoning without invalidating the decider
+    // request leaves an answerable id whose late answer clears a LATER
+    // request's slot (issue #285 review round 1, M1).
+    const onAbort = (): void => {
+      this.#abandonWait(wait);
+    };
+    if (signal?.aborted === true) onAbort();
+    else signal?.addEventListener("abort", onAbort, { once: true });
     return {
       abandoned,
       // A wait with no owner cannot legitimately resume anything once this
@@ -1993,29 +2001,65 @@ export class AgentHost implements EngineAdapter {
         owner === null && this.#everStartedTurn
           ? false
           : (this.#activeTurn?.turnToken ?? null) === owner,
+      clearPending: () => {
+        this.#clearPendingFor(wait);
+      },
       release: () => {
-        signal?.removeEventListener("abort", abandon);
+        signal?.removeEventListener("abort", onAbort);
+        // Removal only: a wait that reached its own settlement legitimately
+        // must NOT invalidate the decider request it just answered.
         this.#turnBoundWaits.delete(wait);
       },
     };
   }
 
-  /** Settles every wait the given turn owns and withdraws its operator
-   *  dialog record. Returns whether anything was withdrawn, so the caller
+  /** The one way a wait is abandoned, whichever side noticed first: the SDK
+   *  cancelling its control request, or the turn ending under it. Idempotent
+   *  through Set membership, so the decider request is invalidated exactly
+   *  once even when both fire. Returns whether this call was the one that
+   *  abandoned it. */
+  #abandonWait(wait: TurnBoundWait): boolean {
+    if (!this.#turnBoundWaits.delete(wait)) return false;
+    if (wait.requestId !== null) {
+      this.#options.cancelDecision?.(wait.kind, wait.requestId);
+    }
+    this.#clearPendingFor(wait);
+    wait.abandon();
+    return true;
+  }
+
+  /** Drops the authoritative pending record ONLY when it is still this
+   *  wait's own. The slot is single (ADR-0022 / ADR-0027) and a concurrent
+   *  call may already hold it; clearing then hides a dialog that is still
+   *  live and answerable. A wait with no request id predates any decider
+   *  that stamps one, so it keeps the original unconditional clear. */
+  #clearPendingFor(wait: TurnBoundWait): void {
+    if (wait.kind === "permission") {
+      if (
+        wait.requestId === null ||
+        this.#pendingPermission?.request_id === wait.requestId
+      ) {
+        this.#pendingPermission = null;
+      }
+      return;
+    }
+    if (
+      wait.requestId === null ||
+      this.#pendingQuestion?.request_id === wait.requestId
+    ) {
+      this.#pendingQuestion = null;
+    }
+  }
+
+  /** Abandons every wait the given turn owns and withdraws their operator
+   *  dialog records. Returns whether anything was withdrawn, so the caller
    *  can decide whether a state_change is owed to drop the dialog. */
   #abandonTurnBoundWaits(turnToken: string | undefined): boolean {
     if (turnToken === undefined) return false;
     let withdrew = false;
     for (const wait of [...this.#turnBoundWaits]) {
       if (wait.owner !== turnToken) continue;
-      this.#turnBoundWaits.delete(wait);
-      if (wait.requestId !== null) {
-        this.#options.cancelDecision?.(wait.kind, wait.requestId);
-      }
-      if (wait.kind === "permission") this.#pendingPermission = null;
-      else this.#pendingQuestion = null;
-      wait.abandon();
-      withdrew = true;
+      if (this.#abandonWait(wait)) withdrew = true;
     }
     return withdrew;
   }
@@ -2094,11 +2138,12 @@ export class AgentHost implements EngineAdapter {
       return { behavior: "deny", message: "permission decision failed" };
     } finally {
       wait.release();
-      // Broker has already cleared pending in its settle path; the
+      // Broker has already moved the slot on in its settle path; the
       // permission_resolved state_change just needs to emit. A decider
       // that did NOT touch pending leaves the prior value untouched, so
-      // belt-and-braces null it here too in case of a custom decider.
-      this.#pendingPermission = null;
+      // belt-and-braces clear it here too — but only when the slot is still
+      // this wait's own (issue #285 review round 1, M2).
+      wait.clearPending();
       // issue #285: only the turn that asked may resume. permission_resolved
       // re-enters tool_running unconditionally, so letting a wait whose turn
       // already ended emit it strands the agent in a busy state that no SDK
@@ -2142,7 +2187,7 @@ export class AgentHost implements EngineAdapter {
       return { behavior: "deny", message: "question decision failed" };
     } finally {
       wait.release();
-      this.#pendingQuestion = null;
+      wait.clearPending();
       // Same ownership rule as the permission path (issue #285).
       if (wait.ownsActiveTurn()) this.#apply({ kind: "question_resolved" });
     }
@@ -3402,13 +3447,17 @@ export class AgentHost implements EngineAdapter {
     },
   ): void {
     const turn = this.#activeTurn;
-    this.#activeTurn = null;
     // The SDK has stopped waiting on this turn's tool calls, so its open
     // permission/question waits are dead too. Withdraw them here rather than
     // leaving an operator dialog whose answer can no longer be used (#285).
+    // Runs BEFORE #activeTurn is cleared: the withdrawal re-emits the current
+    // state, and at stream EOF that state is still waiting_permission — after
+    // the clear it would read as a busy state with no turn behind it and trip
+    // the invariant on an ordinary teardown (review round 1, S1).
     if (this.#abandonTurnBoundWaits(turn?.turnToken) && !this.#watchdogFailStopped) {
       this.#emitState(this.#machine.state);
     }
+    this.#activeTurn = null;
     if (turn !== null) {
       this.#options.onTurnEnd?.({
         turnToken: turn.turnToken,

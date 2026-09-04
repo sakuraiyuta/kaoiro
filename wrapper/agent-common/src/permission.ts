@@ -67,6 +67,13 @@ export class PermissionBroker {
   readonly #now: () => string;
   readonly #newId: () => string;
   readonly #registry: PendingRegistry<PermissionDecision>;
+  /** Live pending records in arrival order (issue #285 review round 1, M2).
+   *  ADR-0022 gives the wrapper ONE authoritative pending slot, so concurrent
+   *  tool calls compete for it: the newest request takes the slot, and when
+   *  one settles the slot falls back to whatever is still live instead of
+   *  going empty. Left empty, a request nobody answered stays hidden from the
+   *  operator with no way back — the dialog is its only settle path. */
+  readonly #live = new Map<string, PendingPermissionExt>();
 
   constructor(options: PermissionBrokerOptions) {
     this.#options = options;
@@ -107,7 +114,8 @@ export class PermissionBroker {
     // Notify host SYNCHRONOUSLY so the next state_change emit carries
     // ext.pending_permission (ADR-0022 F3). Must precede the legacy
     // envelope so a subscriber draining its inbox sees them in order.
-    this.#options.onPendingChange?.(pending);
+    this.#live.set(requestId, pending);
+    this.#options.onPendingChange?.(this.#slot());
 
     this.#options.send(
       makePermissionRequest(this.#options.config, ts, payload),
@@ -117,7 +125,8 @@ export class PermissionBroker {
       // settle clears the ext pending-record before resolving; the registry
       // owns the pending map, timeout, and shutdown drain (ADR-0027 F5).
       const settle = (decision: PermissionDecision): void => {
-        this.#options.onPendingChange?.(null);
+        this.#live.delete(requestId);
+        this.#options.onPendingChange?.(this.#slot());
         resolve(decision);
       };
       this.#registry.add(requestId, settle, () => ({
@@ -125,6 +134,14 @@ export class PermissionBroker {
         message: "kaoiro: permission request timed out",
       }));
     });
+  }
+
+  /** The record the single authoritative slot should currently show: the
+   *  newest live request, or null when none is left. */
+  #slot(): PendingPermissionExt | null {
+    let newest: PendingPermissionExt | null = null;
+    for (const pending of this.#live.values()) newest = pending;
+    return newest;
   }
 
   /** Resolves a pending request; late/unknown request_ids are ignored

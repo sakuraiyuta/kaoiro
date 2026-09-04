@@ -50,6 +50,9 @@ export class QuestionBroker {
   readonly #now: () => string;
   readonly #newId: () => string;
   readonly #registry: PendingRegistry<QuestionDecision>;
+  /** Live pending records in arrival order — permission twin, same single
+   *  authoritative slot (ADR-0027 F3, issue #285 review round 1 M2). */
+  readonly #live = new Map<string, PendingQuestionExt>();
 
   constructor(options: QuestionBrokerOptions) {
     this.#options = options;
@@ -88,16 +91,27 @@ export class QuestionBroker {
     this.#options.send(
       makeQuestionRequest(this.#options.config, ts, payload),
     );
-    this.#options.onPendingChange?.(pending);
+    this.#live.set(requestId, pending);
+    this.#options.onPendingChange?.(this.#slot());
 
     return new Promise((resolve) => {
       const settle = (decision: QuestionDecision): void => {
-        this.#options.onPendingChange?.(null);
+        this.#live.delete(requestId);
+        this.#options.onPendingChange?.(this.#slot());
         resolve(decision);
       };
       // Timeout / close deny by cancellation, matching the permission path.
       this.#registry.add(requestId, settle, () => ({ cancelled: true }));
     });
+  }
+
+  /** Permission twin (issue #285 review round 1, M2): the newest live
+   *  question holds the single authoritative slot, and settling one falls
+   *  back to whatever is still live rather than hiding it. */
+  #slot(): PendingQuestionExt | null {
+    let newest: PendingQuestionExt | null = null;
+    for (const pending of this.#live.values()) newest = pending;
+    return newest;
   }
 
   /** Resolves a pending question; late/unknown request_ids are ignored. */

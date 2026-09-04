@@ -121,6 +121,27 @@ describe("QuestionBroker", () => {
     await expect(pending).resolves.toStrictEqual({ cancelled: true });
   });
 
+  it("falls the single slot back to a still-live question (issue #285 M2)", async () => {
+    // ADR-0027 gives the wrapper ONE authoritative pending slot. With two
+    // questions live, settling the newest must hand the slot back to the
+    // older one rather than empty it: the dialog is its only settle path,
+    // so an emptied slot hides a question nobody can answer.
+    const events: (PendingQuestionExt | null)[] = [];
+    const { broker } = makeBroker({ onPendingChange: (p) => events.push(p) });
+
+    const first = broker.decide(questions);
+    const second = broker.decide(questions);
+    expect(events.map((p) => p?.request_id ?? null)).toEqual(["q-1", "q-2"]);
+
+    broker.resolve({ request_id: "q-2", answers: {}, cancelled: true });
+    await second;
+    expect(events[events.length - 1]).toMatchObject({ request_id: "q-1" });
+
+    broker.resolve({ request_id: "q-1", answers: {}, cancelled: true });
+    await first;
+    expect(events[events.length - 1]).toBeNull();
+  });
+
   it("onPendingChange は decide で pending、resolve で null を順に呼ぶ", async () => {
     const events: (PendingQuestionExt | null)[] = [];
     const { broker } = makeBroker({ onPendingChange: (p) => events.push(p) });

@@ -135,6 +135,27 @@ describe("PermissionBroker", () => {
     expect(events[1]).toBeNull();
   });
 
+  it("falls the single slot back to a still-live request (issue #285 M2)", async () => {
+    // ADR-0022 gives the wrapper ONE authoritative pending slot; concurrent
+    // tool calls compete for it. Settling the newest must hand the slot back
+    // to the older one rather than empty it, or that request stays hidden
+    // from the operator with no way to answer it.
+    const events: (PendingPermissionExt | null)[] = [];
+    const { broker } = makeBroker({ onPendingChange: (p) => events.push(p) });
+
+    const first = broker.decide("Bash", { command: "one" });
+    const second = broker.decide("Bash", { command: "two" });
+    expect(events.map((p) => p?.request_id ?? null)).toEqual(["req-1", "req-2"]);
+
+    broker.resolve({ request_id: "req-2", allow: true });
+    await second;
+    expect(events[events.length - 1]).toMatchObject({ request_id: "req-1" });
+
+    broker.resolve({ request_id: "req-1", allow: true });
+    await first;
+    expect(events[events.length - 1]).toBeNull();
+  });
+
   it("onPendingChange は close でも null を呼ぶ", async () => {
     const events: (PendingPermissionExt | null)[] = [];
     const { broker } = makeBroker({
