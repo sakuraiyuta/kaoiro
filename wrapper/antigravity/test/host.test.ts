@@ -94,6 +94,19 @@ describe("AntigravityHost", () => {
     });
   });
 
+  it("effective snapshotにapprovalを含める (ADR-0057 F4c, resume drift検出に必要)", () => {
+    const cfg: AntigravityLaunchConfig = { ...config(), approval: "never" };
+    expect(initialStatusExt(cfg)).toMatchObject({
+      effective: { approval: "never" },
+    });
+  });
+
+  it("approval省略時はeffective snapshotでon-requestにfallbackする", () => {
+    expect(initialStatusExt(config() as AntigravityLaunchConfig)).toMatchObject({
+      effective: { approval: "on-request" },
+    });
+  });
+
   it("F4b smoke probeは実機形hooks.json内の期待action一件だけを受け入れる", () => {
     const source = "/tmp/kaoiro-agy-x/.agents/hooks.json";
     const command = "/usr/bin/node /pkg/dist/hook.js";

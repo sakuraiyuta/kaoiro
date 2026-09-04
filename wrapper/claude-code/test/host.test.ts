@@ -3210,10 +3210,18 @@ describe("AgentHost — query injection", () => {
     const thinkings = envs.filter((e) => e.state === "thinking");
     expect(thinkings[0]?.ext).toMatchObject({
       engine: "claude-code",
-      permission: { sandbox: "workspace-write", approval: "untrusted" },
+      permission: {
+        sandbox: "workspace-write",
+        approval: "untrusted",
+        enforcement: "mode",
+      },
     });
     expect(thinkings.at(-1)?.ext).toMatchObject({
-      permission: { sandbox: "read-only", approval: "on-request" },
+      permission: {
+        sandbox: "read-only",
+        approval: "on-request",
+        enforcement: "mode",
+      },
     });
   });
 

@@ -136,6 +136,11 @@ export function initialStatusExt(config: AntigravityLaunchConfig): Record<string
         ...(config.effort_source === undefined ? {} : { effort_source: config.effort_source }),
         sandbox,
         network_access: effectiveNetworkAccess(sandbox, config.network_access ?? false),
+        // ADR-0057 F4c: approval also rides `resolved` (not just
+        // `permission` above) so computeResumeDrift — which compares
+        // ResolvedSnapshotExt/`effective`, not `permission` — can detect a
+        // drifted approval on resume (ふじ MF-6(c)).
+        approval,
       },
     }),
     models: antigravityCatalogSnapshot(),

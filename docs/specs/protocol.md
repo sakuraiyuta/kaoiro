@@ -96,14 +96,22 @@ With the Codex adapter ([ADR-0032](../adr/0032-codex-adapter.md)), represent the
 common permission abstraction at agent level as two-axis `ext.permission` (do
 not duplicate axes inside `pending_permission`; ADR-0033 F1):
 
-- `ext.permission`: `{ sandbox, approval }`, attached to `state_change`
+- `ext.permission`: `{ sandbox, approval, enforcement? }`, attached to `state_change`
   - `sandbox`: `"read-only" | "workspace-write" | "danger-full-access"`
   - `approval`: `"untrusted" | "on-request" | "on-failure" | "never"`
     (`on-failure` is an upstream deprecated alias and kaoiro wrappers do not emit it)
+  - `enforcement` (ADR-0057 F4/F4c): `"os" | "mode" | "advisory"` — how the
+    sandbox axis is actually enforced, so the dashboard never branches on
+    engine name; only `"advisory"` (Antigravity) renders a permanent badge
 
 The Claude adapter has a six-mode → two-axis mapping table (ADR-0033 F2,
-display approximation). The Codex adapter projects its spawn sandbox_mode and
-fixed `approval: "never"` because exec has no approval flow (ADR-0033 F3).
+display approximation) and stamps `enforcement: "mode"`. The Codex adapter
+projects its spawn sandbox_mode and fixed `approval: "never"` because exec
+has no approval flow (ADR-0033 F3), stamping `enforcement: "os"` (its
+sandbox is the real OS sandbox). The Antigravity adapter stamps
+`enforcement: "advisory"` because its `--sandbox` flag was measured to have
+no effect; the wrapper enforces the cell by inspecting tool arguments,
+never by the OS (ADR-0057 F4).
 
 **Deprecation of `ext.permission_mode`**: `ext.permission` is the successor.
 Emit both fields for one release window, then remove `permission_mode` in the

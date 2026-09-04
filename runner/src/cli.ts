@@ -12,7 +12,7 @@
 //   fail-closed and rejects every runner, since runners have no
 //   server-minted signed-token path (issue #138).
 
-import type { EngineCatalogResult } from "@kaoiro/protocol";
+import type { EngineCatalogResult, EngineModelInfo } from "@kaoiro/protocol";
 import { parseRunnerArgs } from "./args.js";
 import {
   formatBuildIdentity,
@@ -22,6 +22,7 @@ import {
 import { ClaudeCatalogCache } from "./claude_catalog_cache.js";
 import { makeRefreshEngineCatalogHandler } from "./engine_catalog_refresh.js";
 import { type CodexAuthMode, resolveCodexAuthMode } from "./codex-auth.js";
+import { resolveAntigravityCatalog } from "./antigravity-catalog.js";
 import {
   applyServerUrlOverride,
   buildRegister,
@@ -61,6 +62,12 @@ function isCodexEnabled(config: RunnerConfig): boolean {
   return config.capabilities?.includes("codex") ?? true;
 }
 
+function isAntigravityEnabled(config: RunnerConfig): boolean {
+  // Absent = bundled default (config.ts BUNDLED_ENGINES includes
+  // antigravity), so antigravity ON.
+  return config.capabilities?.includes("antigravity") ?? true;
+}
+
 async function main(): Promise<void> {
   const { configPath, version } = parseRunnerArgs(process.argv.slice(2));
   // issue #228: checked BEFORE loadRunnerConfig — a first-run host with no
@@ -87,6 +94,13 @@ async function main(): Promise<void> {
     nextCodex: config.codex,
     nextEnabled: isCodexEnabled(config),
   });
+
+  // ADR-0057 F6: register-time `agy models` probe. Quota-free, so a fresh
+  // probe on every startup/reload is the whole refresh story — this engine
+  // carries no TTL cache and is absent from LIVE_PROBE_ENGINES (no manual
+  // refresh_engine_catalog support, engine_catalog_refresh.ts).
+  let antigravityCatalog: EngineModelInfo[] | undefined =
+    isAntigravityEnabled(config) ? await resolveAntigravityCatalog() : undefined;
 
   // link is assigned just below; the supervisor only calls sendResult after a
   // spawn arrives, long after assignment (mirrors the wrapper's host/link wiring).
@@ -135,7 +149,13 @@ async function main(): Promise<void> {
 
   link = new RunnerLink(config.server_url, config.host_id, {
     ...(token === undefined || token === "" ? {} : { token }),
-    register: buildRegister(config, codexAuthMode, undefined, buildInfo),
+    register: buildRegister(
+      config,
+      codexAuthMode,
+      undefined,
+      buildInfo,
+      antigravityCatalog,
+    ),
     heartbeatMs: HEARTBEAT_MS,
     onSpawn: (payload) => supervisor.handleSpawn(payload),
     onStop: (payload) => supervisor.handleStop(payload),
@@ -180,6 +200,12 @@ async function main(): Promise<void> {
       prevEnabled: prevCodexEnabled,
       prevMode: codexAuthMode,
     });
+    // ADR-0057 F6: re-probe on every reload while enabled (quota-free, no
+    // TTL cache to preserve); clear the catalog when the operator disables
+    // the capability so a stale probe result cannot outlive it.
+    antigravityCatalog = isAntigravityEnabled(next)
+      ? await resolveAntigravityCatalog()
+      : undefined;
     supervisor.updateRuntimeConfig({
       cwdAllowlist: next.cwd_allowlist,
       wrapperServerUrl: wrapperUrlFrom(next.server_url),
@@ -198,6 +224,7 @@ async function main(): Promise<void> {
       codexAuthMode,
       claudeOverride,
       buildInfo,
+      antigravityCatalog,
     );
     if (
       next.host_id !== config.host_id ||

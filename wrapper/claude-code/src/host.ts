@@ -917,7 +917,12 @@ export class AgentHost implements EngineAdapter {
           : {}),
         ...(axes === undefined ? {} : { sandbox: axes.sandbox }),
       },
-      ...(axes === undefined ? {} : { permission: axes }),
+      // enforcement: "mode" (ADR-0057 F4/F4c addendum) — the sandbox value
+      // here is a permissionMode display projection (ADR-0033 F2), not an
+      // independently enforced axis.
+      ...(axes === undefined
+        ? {}
+        : { permission: { ...axes, enforcement: "mode" as const } }),
       ...(this.#fastMode === null ? {} : { fast_mode: this.#fastMode }),
     };
   }

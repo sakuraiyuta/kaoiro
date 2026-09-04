@@ -7,6 +7,7 @@
 import { readFileSync } from "node:fs";
 import { resolveCodexCatalog } from "@kaoiro/codex";
 import { claudeBootstrapCatalog } from "@kaoiro/claude-code/catalog";
+import { antigravityCatalogSnapshot } from "@kaoiro/antigravity";
 import type { CodexAuthMode } from "./codex-auth.js";
 import { isBuildInfoConsistent, type BuildInfo } from "./build_info.js";
 import type {
@@ -337,13 +338,16 @@ export function effectiveCapabilities(config: RunnerConfig): string[] {
  *  versioned optimistic bootstrap snapshot which the SDK's account-aware
  *  ext.models replaces after init (#110); Codex resolves its curated list
  *  from the detected auth mode and operator-declared ChatGPT plan
- *  (ADR-0035); Antigravity publishes an empty catalog until the `agy
- *  models` probe lands (ADR-0057 F6, phase-34 A9). */
+ *  (ADR-0035); Antigravity's `antigravityCatalogOverride` is the caller's
+ *  `resolveAntigravityCatalog()` result (ADR-0057 F6) — absent falls back
+ *  to the pinned 1.1.26 snapshot, matching how a probe failure inside that
+ *  resolver already degrades. */
 export function buildRegister(
   config: RunnerConfig,
   codexAuthMode: CodexAuthMode = "unknown",
   claudeCatalogOverride?: EngineCatalogEntry["models"],
   buildInfo?: BuildInfo,
+  antigravityCatalogOverride?: EngineCatalogEntry["models"],
 ): RunnerRegister {
   const capabilities = effectiveCapabilities(config);
   const engines: EngineCatalogEntry[] = [];
@@ -366,15 +370,16 @@ export function buildRegister(
     });
   }
   if (capabilities.includes("antigravity")) {
-    // ADR-0057 F6: the `agy models` register-time probe is a separate task
-    // (phase-34 A9); until then publish an empty catalog and warn, matching
-    // the fail-loud-unsupported posture LaunchDialog already has for an
-    // engine with no models.
-    process.stderr.write(
-      "runner: antigravity model catalog probe not yet implemented " +
-        "(phase-34 A9); publishing an empty catalog\n",
-    );
-    engines.push({ id: "antigravity", models: [] });
+    // ADR-0057 F6: the caller runs `agy models` (resolveAntigravityCatalog,
+    // antigravity-catalog.ts) before calling buildRegister and passes the
+    // result here — this function stays synchronous like the Codex branch
+    // above. Absent override (caller never probed, e.g. a config predating
+    // this field) falls back to the static snapshot rather than an empty
+    // catalog.
+    engines.push({
+      id: "antigravity",
+      models: antigravityCatalogOverride ?? antigravityCatalogSnapshot(),
+    });
   }
   const safeBuildInfo =
     buildInfo !== undefined && !isBuildInfoConsistent(buildInfo)

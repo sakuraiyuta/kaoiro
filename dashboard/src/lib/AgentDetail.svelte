@@ -29,6 +29,7 @@
     resultOf,
     resumeDriftFrom,
     RUNNING_STATES,
+    SANDBOX_AXIS_ENGINES,
     sessionCapabilitiesFrom,
     shouldInterceptAsSessionReset,
     STOP_SAFE_STATES,
@@ -457,20 +458,31 @@
   );
   // Engine + two-axis permission posture (ADR-0032 F4a / ADR-0033 F1). The
   // badge renders engine-neutrally from ext.permission; the mode SWITCHER
-  // stays Claude-only — codex permission is launch-fixed (ADR-0033 F3).
+  // stays Claude-only — codex/antigravity permission is launch-fixed
+  // (ADR-0033 F3, ADR-0057 F4c).
   const agentEngine = $derived(engineFrom(envelope));
   const permAxes = $derived(permissionFrom(envelope));
   const isCodexAgent = $derived(agentEngine === "codex");
-  // Codex OS sandbox の network 軸 (ADR-0033 F3, issue #118)。protocol の
-  // ResolvedSnapshotExt に沿って ext.effective.network_access を defensive に
-  // 読む。engine gate を derive に埋め込む (藤 R1): 他 wrapper が誤って
-  // boolean を stamp しても template gate だけでは hasCcStatus 経路で panel
-  // 開扉に効いてしまうため、非 Codex は最初から null に fail-closed。
-  // typeof boolean gate で false は落とさない。snapshot.ts
-  // effectiveStatusEnvelopeFields は network_access を top-level には展開せず
-  // effective 配下にのみ入れるため、effective 経路のみを読む。
+  // Engines whose sandbox axis is an independently reported network_access
+  // toggle (ADR-0033 F3, ADR-0057 F4c), as opposed to Claude's
+  // permission_mode display projection. SANDBOX_AXIS_ENGINES lives in
+  // protocol.ts (shared with LaunchDialog.svelte, review round 1 phase-34
+  // A12) so a future sandbox-axis engine extends one set instead of two
+  // duplicated literals.
+  const hasSandboxAxis = $derived(
+    agentEngine !== null && SANDBOX_AXIS_ENGINES.has(agentEngine),
+  );
+  // Codex / Antigravity sandbox の network 軸 (ADR-0033 F3, ADR-0057 F4c,
+  // issue #118)。protocol の ResolvedSnapshotExt に沿って
+  // ext.effective.network_access を defensive に読む。engine gate を derive
+  // に埋め込む (藤 R1): 他 wrapper が誤って boolean を stamp しても template
+  // gate だけでは hasCcStatus 経路で panel 開扉に効いてしまうため、対象外
+  // engine は最初から null に fail-closed。typeof boolean gate で false は
+  // 落とさない。snapshot.ts effectiveStatusEnvelopeFields は network_access
+  // を top-level には展開せず effective 配下にのみ入れるため、effective
+  // 経路のみを読む。
   const effectiveNetworkAccess = $derived.by(() => {
-    if (!isCodexAgent) return null;
+    if (!hasSandboxAxis) return null;
     const raw = envelope.ext?.effective;
     if (typeof raw !== "object" || raw === null) return null;
     const value = (raw as Record<string, unknown>).network_access;
@@ -2784,10 +2796,14 @@
               </dd>
             </div>
           {/if}
-          {#if !isCodexAgent && (ccPermissionMode || connection)}
+          {#if !hasSandboxAxis && (ccPermissionMode || connection)}
             <!-- 作業意図 (mode, ADR-0033 F4 追補): the operator's intent
-                 expressed as the Claude permission_mode enum. Codex is
-                 launch-fixed (ADR-0033 F3) so no picker here. -->
+                 expressed as the Claude permission_mode enum. Codex /
+                 Antigravity are launch-fixed (ADR-0033 F3, ADR-0057 F4c) so
+                 no picker here — was `!isCodexAgent` before phase-34 A12,
+                 which showed a meaningless "作業意図: default" switcher on
+                 any non-Claude, non-Codex engine (ADR-0034 F3: do not infer
+                 feature availability from the engine name). -->
             <div class="cc-row">
               <dt>作業意図</dt>
               <dd>
@@ -2845,15 +2861,22 @@
             </div>
           {/if}
           {#if permAxes}
-            <!-- 実効書込範囲 (sandbox × approval, ADR-0033 F1/F4): engine-
-                 neutral two-axis posture. Codex approval is host-fixed to
-                 "never" (ADR-0033 F3, tracked in codex-exec-approval-upstream)
-                 so we badge it as such for phase-15 D2 / task 15-11. -->
+            <!-- 実効書込範囲 (sandbox × approval, ADR-0033 F1/F4, ADR-0057
+                 F4): engine-neutral two-axis posture. Codex approval is
+                 host-fixed to "never" (ADR-0033 F3, tracked in
+                 codex-exec-approval-upstream) so we badge it as such for
+                 phase-15 D2 / task 15-11. Antigravity's sandbox axis is
+                 advisory — wrapper argument inspection, not the OS — so a
+                 permanent badge sits next to sandbox instead (ADR-0057 F4,
+                 phase-34 A12). -->
             <div class="cc-row">
               <dt>実効書込範囲</dt>
               <dd>
                 <span class="axes-badge">
-                  書込: {permAxes.sandbox} /
+                  書込: {permAxes.sandbox}{#if permAxes.enforcement === "advisory"}<span
+                    class="axes-hostfixed"
+                    title="wrapper が tool 引数を検査するのみで OS 強制ではありません (ADR-0057 F4)"
+                  > (advisory, wrapper enforced)</span>{/if} /
                   承認: {permAxes.approval}{#if isCodexAgent}<span
                     class="axes-hostfixed"
                     title="upstream 制約 (codex-exec-approval-upstream)"
@@ -2862,12 +2885,13 @@
               </dd>
             </div>
           {/if}
-          {#if isCodexAgent && effectiveNetworkAccess !== null}
-            <!-- Codex OS sandbox の network 軸 (ADR-0033 F3, issue #118):
-                 workspace-write sandbox 内での network 許可 toggle。protocol の
-                 ResolvedSnapshotExt / ext.effective.network_access と直結で
-                 raw boolean を表示。他 engine は stamp しない (typeof gate と
-                 isCodexAgent の二重防御)。 -->
+          {#if hasSandboxAxis && effectiveNetworkAccess !== null}
+            <!-- Codex / Antigravity sandbox の network 軸 (ADR-0033 F3,
+                 ADR-0057 F4c, issue #118): workspace-write sandbox 内での
+                 network 許可 toggle。protocol の ResolvedSnapshotExt /
+                 ext.effective.network_access と直結で raw boolean を表示。
+                 対象外 engine は stamp しない (typeof gate と
+                 hasSandboxAxis の二重防御)。 -->
             <div class="cc-row">
               <dt>network_access</dt>
               <dd>{effectiveNetworkAccess}</dd>

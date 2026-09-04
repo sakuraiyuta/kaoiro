@@ -311,8 +311,9 @@ describe("buildRegister", () => {
     expect(register.blocked_personas).toBeUndefined();
     // Claude exposes a default-floor bootstrap so LaunchDialog always has a
     // safe choice before SDK init resolves the account catalog (ADR-0037 F1);
-    // Codex remains empty without auth/plan; Antigravity is empty until the
-    // `agy models` probe lands (ADR-0057 F6, phase-34 A9).
+    // Codex remains empty without auth/plan; Antigravity falls back to the
+    // pinned 1.1.26 snapshot when the caller passes no override (ADR-0057
+    // F6 — a bare buildRegister() call never ran the `agy models` probe).
     expect(register.engines?.map((e) => e.id)).toEqual([
       "claude-code",
       "codex",
@@ -322,7 +323,11 @@ describe("buildRegister", () => {
       "default",
     ]);
     expect(register.engines?.[1]?.models).toEqual([]);
-    expect(register.engines?.[2]?.models).toEqual([]);
+    expect(register.engines?.[2]?.models.length).toBeGreaterThan(0);
+    expect(register.engines?.[2]?.models[0]).toEqual({
+      value: "",
+      display_name: "account default",
+    });
   });
 
   it("allowed_personas を register に含める", () => {

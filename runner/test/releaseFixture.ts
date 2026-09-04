@@ -220,21 +220,23 @@ export function writeReleaseTree(
     // Reading it out of the call's TEXT was tried and withdrawn (a regex
     // cannot tell the global `URL` from a module-local one), so the package
     // DECLARES it and the verifier enforces the declaration.
-    // claude-code and codex each carry one, because the real ones do: codex
-    // composes ../dist/bridge.js with `new URL`, claude-code resolves
-    // ./probe.js through createRequire. A fixture that modelled only the
-    // first let a real undeclared asset (probe.js) survive review (review
-    // round 2). antigravity has none yet — its adapter body (and the
-    // runtime-asset-bearing bridge/hook it will need, ADR-0057 F5/A6/A8) is
-    // a later task (phase-34); this fixture models today's skeleton, a
-    // plain wrapper-core consumer with no declared runtime asset.
-    const asset =
+    // claude-code and codex each carry one asset this way, because the real
+    // ones do: codex composes ../dist/bridge.js with `new URL`, claude-code
+    // resolves ./probe.js through createRequire. antigravity's adapter body
+    // (ADR-0057 F5/A6/A8) carries TWO the same way — host.ts resolves both
+    // ../dist/bridge.js (the CLI tool bridge) and ../dist/hook.js (the
+    // PreToolUse gate) via `new URL`, plus dist/build-info.json (declared,
+    // not `new URL`-resolved, like codex/claude-code's own build-info.json
+    // — ADR-0053). A fixture that modelled only one of the two `new URL`
+    // sites would let the other's deletion survive review, the same class
+    // of gap that missed probe.js in round 2.
+    const asset: string[] =
       wrapper === "codex"
-        ? "dist/bridge.js"
+        ? ["dist/bridge.js"]
         : wrapper === "claude-code"
-          ? "dist/probe.js"
-          : null;
-    const runtime = asset === null ? {} : { kaoiro: { runtimeAssets: [asset] } };
+          ? ["dist/probe.js"]
+          : ["dist/bridge.js", "dist/hook.js", "dist/build-info.json"];
+    const runtime = { kaoiro: { runtimeAssets: asset } };
     put(
       `node_modules/@kaoiro/${wrapper}/package.json`,
       JSON.stringify({
@@ -249,12 +251,16 @@ export function writeReleaseTree(
     // expected closure by following the specifiers written inside each
     // module, so a wrapper stub that imported nothing would leave that walk
     // with nothing to walk (issue #229, もも review must-fix 2).
-    // The `new URL` line below stays because the REAL wrapper has it: it is
-    // what proves the verifier no longer reads edges out of call text.
+    // The `new URL` lines below stay because the REAL wrappers have them:
+    // they are what proves the verifier no longer reads edges out of call
+    // text.
     const bridgeEdge =
       wrapper === "codex"
         ? 'const b = new URL("../dist/bridge.js", import.meta.url);\n'
-        : "";
+        : wrapper === "antigravity"
+          ? 'const b = new URL("../dist/bridge.js", import.meta.url);\n' +
+            'const h = new URL("../dist/hook.js", import.meta.url);\n'
+          : "";
     put(
       `node_modules/@kaoiro/${wrapper}/dist/cli.js`,
       `import "@kaoiro/wrapper-core";\n${bridgeEdge}`,
@@ -262,6 +268,18 @@ export function writeReleaseTree(
   }
   put("node_modules/@kaoiro/codex/dist/bridge.js", "// stub bridge\n");
   put("node_modules/@kaoiro/claude-code/dist/probe.js", "// stub probe\n");
+  put("node_modules/@kaoiro/antigravity/dist/bridge.js", "// stub bridge\n");
+  put("node_modules/@kaoiro/antigravity/dist/hook.js", "// stub hook\n");
+  put(
+    "node_modules/@kaoiro/antigravity/dist/build-info.json",
+    JSON.stringify({
+      revision,
+      dirty,
+      built_at: "2026-08-16T00:00:00.000Z",
+      version: options.buildVersion ?? "2026.9.0",
+      channel: options.channel ?? "dev",
+    }),
+  );
   put(
     "node_modules/@kaoiro/wrapper-core/package.json",
     JSON.stringify({
@@ -313,7 +331,13 @@ export function writeReleaseTree(
     writeFileSync(path, `${JSON.stringify(parsed, null, 2)}\n`);
   }
 
-  for (const rel of omit) rmSync(join(tree, rel), { force: true });
+  // recursive: true lets `omit` name a whole package directory (SF-2
+  // negative control: a package ENTRY_PACKAGES/the manifest expects, wholly
+  // missing from the tarball) as well as a single file — a plain file omit
+  // is unaffected by the flag.
+  for (const rel of omit) {
+    rmSync(join(tree, rel), { force: true, recursive: true });
+  }
   return tree;
 }
 

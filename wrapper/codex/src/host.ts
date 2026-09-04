@@ -711,7 +711,14 @@ export class CodexHost implements EngineAdapter {
 
   /** Single engine-neutral SoT for both state_change.ext and whoami (#113). */
   #effectiveStatusSnapshot(): EffectiveStatusSnapshot {
-    const permission = { sandbox: this.#sandbox, approval: "never" } as const;
+    // enforcement: "os" (ADR-0057 F4/F4c addendum) — Codex enforces sandbox
+    // through the SDK's own OS sandbox, unlike Antigravity's advisory
+    // (argument-inspection-only) enforcement.
+    const permission = {
+      sandbox: this.#sandbox,
+      approval: "never",
+      enforcement: "os",
+    } as const;
     return {
       engine: "codex",
       resolved: {

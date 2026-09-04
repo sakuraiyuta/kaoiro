@@ -39,6 +39,14 @@ describe("computeResumeDrift", () => {
     ]);
   });
 
+  it("approval が変わっていれば drift として prev/now を並記する (ADR-0057 F4c, antigravity)", () => {
+    const prev: ResolvedSnapshotExt = { approval: "on-request" };
+    const now: ResolvedSnapshotExt = { approval: "never" };
+    expect(computeResumeDrift(prev, now)).toEqual([
+      { field: "approval", prev: "on-request", now: "never" },
+    ]);
+  });
+
   it("両側 undefined は drift ではない", () => {
     const prev: ResolvedSnapshotExt = { model: "x" };
     const now: ResolvedSnapshotExt = { model: "x" };
@@ -60,7 +68,8 @@ describe("computeResumeDrift", () => {
       sandbox: "read-only",
     };
     // 順序: model, model_source (両 undefined = skip), effort (skip),
-    // effort_source (skip), permission_mode, sandbox, network_access (skip)
+    // effort_source (skip), permission_mode, sandbox, network_access (skip),
+    // approval (skip)
     expect(computeResumeDrift(prev, now)).toEqual([
       { field: "model", prev: "a", now: "b" },
       { field: "permission_mode", prev: "default", now: "plan" },

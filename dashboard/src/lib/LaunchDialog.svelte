@@ -8,7 +8,11 @@
     KaoiroConnection,
     RunnerSessions,
   } from "./protocol";
-  import { PERMISSION_MODE_AXES, resolveLaunchDefaultEffort } from "./protocol";
+  import {
+    PERMISSION_MODE_AXES,
+    SANDBOX_AXIS_ENGINES,
+    resolveLaunchDefaultEffort,
+  } from "./protocol";
   import { formatRunnerHostLabel } from "./buildIdentity";
   import Modal from "./Modal.svelte";
 
@@ -94,6 +98,9 @@
     "workspace-write",
   );
   let networkAccess = $state(false);
+  // Antigravity-only launch approval axis (ADR-0057 F4c). Codex has no
+  // selectable approval (upstream-fixed to "never"); Claude ignores it.
+  let approval = $state<"untrusted" | "on-request" | "never">("on-request");
   // Claude-only launch permission mode (phase-15 15-12, ADR-0033 F4 追補).
   // Priority "explicit spawn > persisted store" is enforced server-side:
   // when the operator picks something other than "" the server relays it
@@ -250,9 +257,15 @@
     effort = (event.currentTarget as HTMLSelectElement).value;
     manualEffortPick = true;
   }
-  // Codex permission is launch-fixed (ADR-0033 F3): the sandbox axis is the
-  // only selectable knob; approval is pinned to "never" upstream.
-  const isCodex = $derived(engine === "codex");
+  // Engines whose launch permission exposes a selectable sandbox axis
+  // (ADR-0033 F3, ADR-0057 F4c) rather than Claude's single permission_mode
+  // knob. SANDBOX_AXIS_ENGINES lives in protocol.ts (shared with
+  // AgentDetail.svelte, review round 1 phase-34 A12) so a future
+  // sandbox-axis engine extends one set instead of two duplicated literals.
+  const hasSandboxAxis = $derived(SANDBOX_AXIS_ENGINES.has(engine));
+  // Only Antigravity exposes a selectable approval axis (ADR-0057 F4c);
+  // Codex's approval is upstream-fixed to "never" and not offered here.
+  const isAntigravity = $derived(engine === "antigravity");
   // Claude-only: the permission_mode picker only makes sense for engine=
   // claude-code (Codex ignores the field). Kept as a derived so the select
   // vanishes automatically when the operator swaps engines mid-dialog.
@@ -461,11 +474,13 @@
         engine,
         ...(model === "" ? {} : { model }),
         ...(effort === "" ? {} : { effort }),
-        // Codex-only launch permission (ADR-0033 F3).
-        ...(isCodex ? { sandbox } : {}),
-        ...(isCodex && sandbox === "workspace-write"
+        // Codex / Antigravity launch permission (ADR-0033 F3, ADR-0057 F4c).
+        ...(hasSandboxAxis ? { sandbox } : {}),
+        ...(hasSandboxAxis && sandbox === "workspace-write"
           ? { network_access: networkAccess }
           : {}),
+        // Antigravity-only launch approval (ADR-0057 F4c).
+        ...(isAntigravity ? { approval } : {}),
         // Claude-only launch permission mode (phase-15 15-12). Empty ""
         // means "no explicit pick" — fall through to the server's stored
         // value (natural continuation).
@@ -654,9 +669,10 @@
         </label>
       {/if}
 
-      {#if isCodex}
-        <!-- Codex の権限は起動時固定 (ADR-0033 F3): sandbox 軸のみ選択、
-             承認 (approval) は upstream 制約で never 固定。 -->
+      {#if hasSandboxAxis}
+        <!-- Codex / Antigravity の権限は起動時固定 (ADR-0033 F3, ADR-0057
+             F4c): sandbox 軸を選択。承認 (approval) は Codex では upstream
+             制約で never 固定、Antigravity では選択可能 (Stage A, F4c)。 -->
         <label>
           sandbox(書き込み範囲)
           <select bind:value={sandbox}>
@@ -675,9 +691,24 @@
             sandbox 内のネットワークアクセスを許可
           </label>
         {/if}
-        <p class="note">
-          承認 (approval) は never 固定 — Codex は実行中の承認要求に対応しません。
-        </p>
+        {#if isAntigravity}
+          <label>
+            承認 (approval)
+            <select bind:value={approval}>
+              <option value="untrusted">untrusted — 常に確認</option>
+              <option value="on-request">on-request — 必要な時だけ確認</option>
+              <option value="never">never — 確認しない</option>
+            </select>
+          </label>
+          <p class="note">
+            sandbox 軸はこのエンジンでは advisory (wrapper が引数を検査する
+            だけで OS 強制ではありません)。
+          </p>
+        {:else}
+          <p class="note">
+            承認 (approval) は never 固定 — Codex は実行中の承認要求に対応しません。
+          </p>
+        {/if}
       {/if}
 
       <label>

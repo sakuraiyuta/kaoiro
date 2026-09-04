@@ -108,6 +108,7 @@ const SNAPSHOT_FIELDS: (keyof ResolvedSnapshotExt)[] = [
   "permission_mode",
   "sandbox",
   "network_access",
+  "approval",
 ];
 
 /** Field-wise comparison of a resume snapshot and this run's effective

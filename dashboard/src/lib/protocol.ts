@@ -126,10 +126,13 @@ export function pendingQuestionFrom(
 }
 
 /** The engine-neutral two-axis permission posture (ADR-0033 F1), from
- *  agent-level ext.permission. Successor of ext.permission_mode. */
+ *  agent-level ext.permission. Successor of ext.permission_mode.
+ *  `enforcement` (ADR-0057 F4/F4c) is optional — a wrapper predating it
+ *  omits the field. */
 export interface PermissionAxes {
   sandbox: string;
   approval: string;
+  enforcement?: "os" | "mode" | "advisory";
 }
 
 /** Reads ext.permission off an envelope, or null when absent/malformed. */
@@ -137,10 +140,30 @@ export function permissionFrom(envelope: Envelope): PermissionAxes | null {
   const raw = envelope.ext?.permission;
   if (typeof raw !== "object" || raw === null) return null;
   const p = raw as PermissionAxes;
-  return typeof p.sandbox === "string" && typeof p.approval === "string"
-    ? { sandbox: p.sandbox, approval: p.approval }
-    : null;
+  if (typeof p.sandbox !== "string" || typeof p.approval !== "string") {
+    return null;
+  }
+  return {
+    sandbox: p.sandbox,
+    approval: p.approval,
+    ...(p.enforcement === "os" ||
+    p.enforcement === "mode" ||
+    p.enforcement === "advisory"
+      ? { enforcement: p.enforcement }
+      : {}),
+  };
 }
+
+/** Engines whose launch permission exposes a selectable sandbox axis
+ *  (ADR-0033 F3, ADR-0057 F4c) rather than Claude's single permission_mode
+ *  knob. Single source of truth for LaunchDialog.svelte and
+ *  AgentDetail.svelte — a future sandbox-axis engine extends this one set
+ *  instead of adding a matching branch in each component (review round 1,
+ *  phase-34 A12: the two components had duplicated this set verbatim). */
+export const SANDBOX_AXIS_ENGINES: ReadonlySet<string> = new Set([
+  "codex",
+  "antigravity",
+]);
 
 /** Reads ext.engine (ADR-0032 F4a), or null when absent. */
 export function engineFrom(envelope: Envelope): string | null {
@@ -1554,10 +1577,15 @@ export interface SpawnRequest {
     | "bypassPermissions"
     | "dontAsk"
     | "auto";
-  /** Codex-only launch permission (ADR-0033 F3): the OS sandbox axis and
-   *  its network toggle; approval is pinned to "never" and not sent. */
+  /** Codex / Antigravity launch permission (ADR-0033 F3, ADR-0057 F4c):
+   *  the sandbox axis and its network toggle. Codex pins approval to
+   *  "never" and never sends it; Antigravity sends `approval` below. */
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
   network_access?: boolean;
+  /** Antigravity-only launch approval axis (ADR-0057 F4c). "on-failure" is
+   *  deliberately excluded: this engine rejects it at spawn. Omitted =
+   *  "on-request". */
+  approval?: "untrusted" | "on-request" | "never";
 }
 
 /** Outcome of a spawn, forwarded from the runner (operator-only). */

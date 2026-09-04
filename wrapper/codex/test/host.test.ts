@@ -320,7 +320,11 @@ describe("CodexHost", () => {
       model_source: "config",
       effort: "xhigh",
       effort_source: "config",
-      permission: { sandbox: "workspace-write", approval: "never" },
+      permission: {
+        sandbox: "workspace-write",
+        approval: "never",
+        enforcement: "os",
+      },
       network_access: true,
     });
   });
