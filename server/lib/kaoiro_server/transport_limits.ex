@@ -4,6 +4,7 @@ defmodule KaoiroServer.TransportLimits do
   """
 
   alias Phoenix.Socket.Message
+  alias Phoenix.Socket.Reply
   alias Phoenix.Socket.V2.JSONSerializer
 
   @max_frame_bytes 8_000_000
@@ -122,15 +123,15 @@ defmodule KaoiroServer.TransportLimits do
 
   @doc "Measures the exact production text frame shape of a successful channel reply."
   def reply_frame_bytes(topic, response) when is_binary(topic) and is_map(response) do
-    message = %Message{
+    reply = %Reply{
       topic: topic,
-      event: "phx_reply",
-      payload: %{"status" => "ok", "response" => response},
+      status: :ok,
+      payload: response,
       join_ref: nil,
       ref: nil
     }
 
-    {:socket_push, :text, encoded} = JSONSerializer.encode!(message)
+    {:socket_push, :text, encoded} = JSONSerializer.encode!(reply)
     IO.iodata_length(encoded)
   end
 

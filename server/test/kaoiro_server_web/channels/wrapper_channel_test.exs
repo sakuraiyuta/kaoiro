@@ -44,6 +44,19 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     }
   end
 
+  defp production_reply_frame_bytes(topic, payload) do
+    reply = %Phoenix.Socket.Reply{
+      topic: topic,
+      status: :ok,
+      payload: payload,
+      join_ref: nil,
+      ref: nil
+    }
+
+    {:socket_push, :text, encoded} = Phoenix.Socket.V2.JSONSerializer.encode!(reply)
+    IO.iodata_length(encoded)
+  end
+
   # 50 text fields of exactly 256 raw bytes stay below the JSON ceiling.
   # Replacing an `a` with `"` adds exactly one escaped JSON byte, so this
   # builds an exact boundary (or its limit+1 sibling) without relaxing the
@@ -3061,16 +3074,18 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     test "wire reply が production frame budget を超える directory は拒否する" do
       self_id = "test.directory-too-large-self"
       socket = join_wrapper(self_id)
-      model = String.duplicate("m", 65_536)
+      model = String.duplicate("m", 65_200)
 
       for n <- 1..130 do
         agent_id = "test.directory-too-large-#{n}"
 
-        assert :ok =
-                 AgentStates.put(
-                   envelope(agent_id, "idle")
-                   |> Map.put("ext", %{"model" => model})
-                 )
+        oversized_directory_entry =
+          envelope(agent_id, "idle")
+          |> Map.put("ext", %{"model" => model})
+
+        assert :erlang.external_size(oversized_directory_entry) <= 65_536
+
+        assert :ok = AgentStates.put(oversized_directory_entry)
       end
 
       expected_agents =
@@ -3084,10 +3099,10 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
           }
         end
 
-      refute TransportLimits.reply_frame_fits?(
-               "wrapper:#{self_id}",
-               %{"agents" => expected_agents, "users" => %{}}
-             )
+      assert production_reply_frame_bytes("wrapper:#{self_id}", %{
+               "agents" => expected_agents,
+               "users" => %{}
+             }) > TransportLimits.max_frame_bytes() - 1_024
 
       ref = push(socket, "directory_request", %{})
 

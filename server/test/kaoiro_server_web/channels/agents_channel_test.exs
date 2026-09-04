@@ -95,6 +95,37 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     IO.iodata_length(encoded)
   end
 
+  defp production_push_frame_bytes(event, payload) do
+    %Phoenix.Socket.Message{
+      topic: "agents:lobby",
+      event: event,
+      payload: Map.put_new(payload, "version", "0"),
+      join_ref: nil,
+      ref: nil
+    }
+    |> encoded_frame_bytes()
+  end
+
+  defp assert_production_push_frame_fits(event, payload) do
+    assert production_push_frame_bytes(event, payload) <=
+             TransportLimits.max_frame_bytes() - 1_024
+  end
+
+  defp production_reply_frame_bytes(response) do
+    %Phoenix.Socket.Reply{
+      topic: "agents:lobby",
+      status: :ok,
+      payload: response,
+      join_ref: nil,
+      ref: nil
+    }
+    |> encoded_frame_bytes()
+  end
+
+  defp assert_production_reply_frame_fits(response) do
+    assert production_reply_frame_bytes(response) <= TransportLimits.max_frame_bytes() - 1_024
+  end
+
   defp client_assigns(role) do
     token = "tok-#{role}"
     fingerprint = KaoiroServer.Auth.socket_id(token)
@@ -2770,23 +2801,51 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert [%{"payload" => %{"text" => "やります"}}] = agents[agent_id]
     end
 
-    test "default history projection truncates an oversized production frame" do
+    test "default history projection keeps each pane's newest suffix and final watermarks within the production frame" do
       agent_id = "test.hist-frame-bound"
       put_agent(agent_id)
 
-      for _n <- 1..200 do
-        assert :ok = AgentStates.append_log(log_envelope(agent_id, String.duplicate("x", 65_000)))
+      for n <- 1..200 do
+        assert :ok =
+                 AgentStates.append_log(
+                   log_envelope(agent_id, String.duplicate("x", 65_000))
+                   |> Map.put("seq", n)
+                 )
       end
 
       assert length(AgentStates.histories()[agent_id]) == 200
+
+      watermark_ids =
+        for n <- 1..300 do
+          "test.hist-frame-watermark-#{String.pad_leading(Integer.to_string(n), 3, "0")}-" <>
+            String.duplicate("w", 200)
+        end
+
+      for {watermark_id, n} <- Enum.with_index(watermark_ids, 1) do
+        assert :ok =
+                 ClearWatermarks.record(
+                   watermark_id,
+                   {System.system_time(:microsecond), n},
+                   "2026-08-28T00:00:00Z"
+                 )
+      end
+
+      on_exit(fn -> Enum.each(watermark_ids, &ClearWatermarks.delete/1) end)
 
       _socket = join_as(:operator)
       assert_push "snapshot", %{"agents" => _}
       assert_push "history", payload
 
       assert payload["history_incomplete"] == true
-      assert payload["agents"] == %{}
-      assert TransportLimits.push_frame_fits?("agents:lobby", "history", payload)
+      assert retained = payload["agents"][agent_id]
+      assert length(retained) < 200
+      assert List.first(retained)["seq"] > 1
+      assert List.last(retained)["seq"] == 200
+
+      retained_watermark_ids = Map.keys(payload["clear_watermarks"])
+      assert Enum.any?(retained_watermark_ids, &(&1 in watermark_ids))
+      assert length(retained_watermark_ids) < length(watermark_ids)
+      assert_production_push_frame_fits("history", payload)
     end
 
     # ふじ R3 must-fix (2026-07-23): history push は projection marker を
@@ -4917,7 +4976,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       assert payload["build_info_incomplete"] == true
       assert map_size(payload["builds"]) < length(agent_ids)
-      assert TransportLimits.push_frame_fits?("agents:lobby", "wrapper_build_info", payload)
+      assert_production_push_frame_fits("wrapper_build_info", payload)
     end
 
     # issue #219 D21/D27 acceptance pin: pack が消えた (persona_id が
@@ -4962,7 +5021,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_push "directory", payload
       assert payload["directory_incomplete"] == true
       assert map_size(payload["entries"]) < map_size(entries)
-      assert TransportLimits.push_frame_fits?("agents:lobby", "directory", payload)
+      assert_production_push_frame_fits("directory", payload)
     end
 
     test "viewer は join 時に directory push を受けない (operator 限定、ADR-0030 D10)" do
@@ -5002,7 +5061,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_push "hosts", payload
       assert payload["hosts_incomplete"] == true
       assert map_size(payload["hosts"]) < map_size(hosts)
-      assert TransportLimits.push_frame_fits?("agents:lobby", "hosts", payload)
+      assert_production_push_frame_fits("hosts", payload)
     end
 
     test "runner_sessions / spawn_result / hosts / wrapper_build_info は viewer には届かない (fail-closed)" do
@@ -6020,7 +6079,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
                "status" => "open"
              } = Enum.find(conversations, &(&1["conversation_id"] == cid))
 
-      assert TransportLimits.reply_frame_fits?("agents:lobby", %{"conversations" => conversations})
+      assert_production_reply_frame_fits(%{"conversations" => conversations})
     end
 
     test "oversized conversation reply is newest-first and marked incomplete" do
@@ -6057,10 +6116,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert projected == Enum.sort_by(projected, & &1["started_at"], :desc)
       assert length(projected) < map_size(conversations)
 
-      assert TransportLimits.reply_frame_fits?("agents:lobby", %{
-               "conversations" => projected,
-               "conversations_incomplete" => true
-             })
+      assert_production_reply_frame_fits(%{
+        "conversations" => projected,
+        "conversations_incomplete" => true
+      })
     end
 
     test "admin も通る (require_operator は operator/admin いずれも許可)" do
@@ -6165,7 +6224,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
                %{"kind" => "compacting", "trigger" => nil, "at" => "2026-08-31T00:00:01Z"}
              ]
 
-      assert TransportLimits.reply_frame_fits?("agents:lobby", %{"events" => events})
+      assert_production_reply_frame_fits(%{"events" => events})
     end
 
     test "admin も通る (require_operator は operator/admin いずれも許可)" do

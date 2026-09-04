@@ -78,6 +78,10 @@
   let agents = $state<Record<string, Envelope>>({});
   let snapshotIncomplete = $state(false);
   let deliverySnapshotIncomplete = $state(false);
+  let buildInfoIncomplete = $state(false);
+  let historyIncomplete = $state(false);
+  let hostsIncomplete = $state(false);
+  let directoryIncomplete = $state(false);
   // Active subagent/workflow tasks (ADR-0019/0047/0048, issue #180),
   // nested agent_id -> task_id -> latest task envelope (M1 fix-round
   // composite key, 2026-08-09). Operator-only, twin of `directory`'s
@@ -593,6 +597,10 @@
           snapshotIncomplete = false;
           deliverySnapshotIncomplete = false;
           awaitingSnapshot = true;
+          buildInfoIncomplete = false;
+          historyIncomplete = false;
+          hostsIncomplete = false;
+          directoryIncomplete = false;
           awaitingHistory = true;
           liveSinceJoin = {};
           activeTimelineReplays = retainTimelineReplaysOfGeneration(
@@ -639,7 +647,8 @@
         onWrapperBuildInfoSnapshot: (next, incomplete) => {
           wrapperBuildInfos = next;
           isOperator = true;
-          if (incomplete) showNotice("ビルド情報の一部を表示できません");
+          if (incomplete) buildInfoIncomplete = true;
+          else buildInfoIncomplete = false;
         },
         onWrapperBuildInfo: (agentId, info) => {
           if (info === null) {
@@ -837,7 +846,8 @@
           // `logs` directly.
           awaitingHistory = false;
           liveSinceJoin = {};
-          if (incomplete) showNotice("履歴の一部を表示できません");
+          if (incomplete) historyIncomplete = true;
+          else historyIncomplete = false;
         },
         onHistoryCleared: (agentId, sessionId, watermark) => {
           // An operator purged past-session lines (#48); keep only the
@@ -975,11 +985,13 @@
           // signal that reveals the launch UI (#22).
           hosts = next;
           isOperator = true;
-          if (incomplete) showNotice("ホスト一覧の一部を表示できません");
+          if (incomplete) hostsIncomplete = true;
+          else hostsIncomplete = false;
         },
         onDirectory: (next, incomplete) => {
           directory = next;
-          if (incomplete) showNotice("エージェント一覧の一部を表示できません");
+          if (incomplete) directoryIncomplete = true;
+          else directoryIncomplete = false;
         },
         onSpawnResult: (result) => {
           notifySpawn(result);
@@ -1564,13 +1576,32 @@
   <p class="spawn-notice" role="status">{spawnNoticeText}</p>
 {/if}
 
-{#if snapshotIncomplete || deliverySnapshotIncomplete}
+{#if
+  snapshotIncomplete ||
+    deliverySnapshotIncomplete ||
+    buildInfoIncomplete ||
+    historyIncomplete ||
+    hostsIncomplete ||
+    directoryIncomplete
+}
   <p class="snapshot-notice" role="status">
     {#if snapshotIncomplete}
       一部のエージェントは snapshot の上限により表示されていません。
     {/if}
     {#if deliverySnapshotIncomplete}
       一部の inter-agent 配送確認は snapshot の上限により表示されていません。
+    {/if}
+    {#if buildInfoIncomplete}
+      ビルド情報の一部を表示できません。
+    {/if}
+    {#if historyIncomplete}
+      履歴の一部を表示できません。
+    {/if}
+    {#if hostsIncomplete}
+      ホスト一覧の一部を表示できません。
+    {/if}
+    {#if directoryIncomplete}
+      エージェント一覧の一部を表示できません。
     {/if}
   </p>
 {/if}

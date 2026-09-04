@@ -1521,8 +1521,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
     histories = merged_histories()
 
-    projected_histories =
-      bounded_push_map("history", histories, static)
+    {projected_histories, histories_incomplete?} = bounded_history_map(histories, static)
 
     with_histories = Map.put(static, "agents", projected_histories)
     watermarks = ClearWatermarks.all_displays()
@@ -1531,7 +1530,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
       bounded_push_map("history", watermarks, with_histories)
 
     incomplete? =
-      map_size(projected_histories) < map_size(histories) or
+      histories_incomplete? or
         map_size(projected_watermarks) < map_size(watermarks)
 
     with_histories
@@ -1580,6 +1579,35 @@ defmodule KaoiroServerWeb.AgentsChannel do
     static
     |> Map.put(key, projected)
     |> maybe_drop_incomplete(marker, map_size(projected) < map_size(entries))
+  end
+
+  defp bounded_history_map(histories, static) do
+    histories
+    |> Enum.sort_by(fn {agent_id, _entries} -> agent_id end)
+    |> Enum.reduce({%{}, false}, fn {agent_id, entries}, {projected, incomplete?} ->
+      suffix = bounded_history_suffix(agent_id, entries, projected, static)
+
+      cond do
+        entries == [] ->
+          {projected, incomplete?}
+
+        suffix == [] ->
+          {projected, true}
+
+        true ->
+          {Map.put(projected, agent_id, suffix), incomplete? or length(suffix) < length(entries)}
+      end
+    end)
+  end
+
+  defp bounded_history_suffix(agent_id, entries, projected, static) do
+    payload = Map.put(static, "agents", Map.put(projected, agent_id, []))
+    budget = TransportLimits.push_payload_budget("agents:lobby", "history", payload)
+
+    entries
+    |> Enum.reverse()
+    |> TransportLimits.bounded_list(budget)
+    |> Enum.reverse()
   end
 
   defp bounded_push_map(event, entries, static) do

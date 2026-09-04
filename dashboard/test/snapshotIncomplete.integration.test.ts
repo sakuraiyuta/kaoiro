@@ -128,6 +128,37 @@ describe("snapshot_incomplete の可観測性 (issue #203 V-4)", () => {
     );
   });
 
+  it("egress projection markers persist until their complete frame or the next join", async () => {
+    const handlers = await mountApp();
+
+    handlers.onWrapperBuildInfoSnapshot?.({}, true);
+    handlers.onHistory?.({}, {}, "per-pane-v1", "epoch-1", true);
+    handlers.onHosts?.([], true);
+    handlers.onDirectory?.({}, true);
+    await tick();
+
+    const notice = document.querySelector(".snapshot-notice")?.textContent;
+    expect(notice).toContain("ビルド情報の一部を表示できません");
+    expect(notice).toContain("履歴の一部を表示できません");
+    expect(notice).toContain("ホスト一覧の一部を表示できません");
+    expect(notice).toContain("エージェント一覧の一部を表示できません");
+
+    handlers.onWrapperBuildInfoSnapshot?.({}, false);
+    handlers.onHistory?.({}, {}, "per-pane-v1", "epoch-1", false);
+    handlers.onHosts?.([], false);
+    handlers.onDirectory?.({}, false);
+    await tick();
+    expect(document.querySelector(".snapshot-notice")).toBeNull();
+
+    handlers.onHistory?.({}, {}, "per-pane-v1", "epoch-1", true);
+    await tick();
+    expect(document.querySelector(".snapshot-notice")).not.toBeNull();
+
+    handlers.onJoined?.();
+    await tick();
+    expect(document.querySelector(".snapshot-notice")).toBeNull();
+  });
+
   it("rejoin の 0/1/2 frame prefix では前世代の 3 projection を残さない", async () => {
     const handlers = await mountApp();
     const agent = stateEnvelope("agent-a");

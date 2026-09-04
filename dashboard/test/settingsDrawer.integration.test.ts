@@ -237,6 +237,29 @@ describe("SettingsDrawer", () => {
     );
   });
 
+  it("incomplete conversation list marker persists until a complete refresh", async () => {
+    let incomplete = true;
+
+    const conn = makeConnection(async () =>
+      Object.assign([] as ConversationSummary[], { incomplete }),
+    );
+
+    const { target } = await renderDrawer(vi.fn(), conn);
+    await Promise.resolve();
+    await tick();
+
+    expect(target.textContent).toContain("一部の会話を表示できません");
+
+    incomplete = false;
+    target
+      .querySelector<HTMLButtonElement>('button[aria-label="会話一覧を更新"]')!
+      .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await Promise.resolve();
+    await tick();
+
+    expect(target.textContent).not.toContain("一部の会話を表示できません");
+  });
+
   it("取得失敗時はエラー文言を表示する", async () => {
     const conn = makeConnection(() => Promise.reject(new Error("forbidden")));
     const { target } = await renderDrawer(vi.fn(), conn);
