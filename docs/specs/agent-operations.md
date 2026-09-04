@@ -103,3 +103,9 @@ limits, and the turn-number contract).
   require the recipient to measure and decide, and to report its decision and
   evidence. Giving only a declarative premise risks implementing it unchanged
   even when it is wrong.
+- The round budget is a process rule, and this document is where it lives. The
+  server also detects a long rally structurally and shows the operator a
+  notice — counted per agent PAIR across conversations, because opening a
+  fresh `conversation_id` does not reset a review loop. That notice is
+  advisory: it never closes a conversation and never messages an agent. See
+  [protocol-inter-agent](protocol-inter-agent.md) "Review-quagmire detection".
