@@ -224,26 +224,27 @@ costs. Design decisions live in ADR-0057; boundary mechanics live in
   exposes only tools that agent already holds, so it grants no new
   capability, and the match protects the *auto-allow* from being widened
   by shell chaining, nothing more.
-- **The customization dir is part of the trusted computing base.** It
-  holds the gate configuration and the persona rules, is re-read on every
-  per-turn spawn, and was measured to become a workspace root the model
-  operates in. One write there would rewrite the gate for every later
-  turn, so writes and shell referencing it are denied in every permission
-  cell, and the wrapper rewrites the files from memory and verifies their
-  hashes before each spawn (ADR-0057 F3 / F4).
+- **The customization dir is part of the trusted computing base, and its
+  protection is detection, not prevention.** It holds the gate
+  configuration and the persona rules and is re-read on every per-turn
+  spawn. The agent runs as the same uid, and a bash command line cannot be
+  canonicalised, so a shell string check can only be best-effort; file
+  tools are denied by resolved path. The real control is that the wrapper
+  rewrites the files from memory before every spawn and verifies their
+  hashes after every turn (success, error, and interrupt alike); a
+  mismatch fails the session closed. Damage from a tamper is therefore
+  bounded to the remainder of one turn, not eliminated (ADR-0057 F3 / F4).
 - **Tool-input disclosure has a wider surface.** Threat 3 applies as
   before, with `toolCall.args` carrying the command line, absolute paths,
   `Cwd`, and the transcript path into the operator dialog unmasked
   (tool-input masking remains a future item in the table above).
-- **The Q1 fallback is a host-wide downgrade, not a deployment note.** If
-  the prompt disable cannot be scoped to the wrapper's own child process
-  and no process-scoped settings path exists, the remaining route writes
-  `toolPermission: "always-proceed"` into the host's own
-  `~/.gemini/antigravity-cli/settings.json`. That removes approval prompts
-  from the operator's personal interactive `agy` sessions as well, outside
-  kaoiro's control and beyond its process lifetime. It needs an explicit
-  operator decision recorded in [deployment](deployment.md); it is not a
-  default and not a silent setup-wizard step.
+- **Prompt disabling is scoped to the wrapper's own child process.** The
+  `--dangerously-skip-permissions` flag was measured to affect only that
+  process (ADR-0057 Q1); kaoiro never writes `toolPermission` into the
+  host's `~/.gemini/antigravity-cli/settings.json`, so the operator's own
+  interactive `agy` sessions keep their prompts. Any future change that
+  needs a host-wide setting is a threat-model change, not a deployment
+  note.
 
 ## Open Questions
 

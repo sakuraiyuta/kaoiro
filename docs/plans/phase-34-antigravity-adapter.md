@@ -83,7 +83,7 @@ through the CLI bridge. Measured substrate:
 | B1 | `-p /usage` rate-limit probe per turn boundary → `rate_limits` |
 | B2 | history replay from `transcript_full.jsonl` (format measurement first) |
 | B3 | session enumeration metadata from `conversation_summaries.db` |
-| B4 | setup wizard: `agy` presence / version check |
+| B4 | setup wizard: `agy` presence check; runner reports `agy --version` and re-runs the gate registration check on a version change |
 | B5 | context usage (per-model window table) — only if a source of truth exists |
 
 ## Open Questions Blocking This Phase

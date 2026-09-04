@@ -316,8 +316,8 @@ fallback if taken. These are acceptance items of phase-34, not follow-ups.
 - The wrapper is the only enforcement point; F4b makes its absence
   detectable on every tool call instead of trusting the vendor mechanism.
 - Vendor drift is expected (the binary self-updated mid-measurement); the
-  runner reports the version, and a change re-triggers the registration
-  check and the `init.tools` diff.
+  `init.tools` diff runs on every spawn, and version reporting with
+  re-triggered checks is Stage B4.
 - Tool calls cost one extra `node` process each (hook) plus one per bridge
   call; acceptable at kaoiro's turn rate.
 

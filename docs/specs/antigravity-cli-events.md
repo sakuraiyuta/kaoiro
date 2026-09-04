@@ -329,12 +329,16 @@ per-turn spawn. Persona packs stay engine-independent (ADR-0032 F3).
 
 ### Models, effort, usage, rate limits
 
-- `agy models` prints the slugs available to the account, one per line
-  *(measured; 1.1.26 rejects `--output-format` on this subcommand)*:
-  `gemini-3.6-flash-high|medium|low`, `gemini-3.1-pro-high|low`,
-  `claude-sonnet-4-6`, `claude-opus-4-6-thinking`, `gpt-oss-120b-medium`.
-  The account default (`-p /model`) was `gemini-3.8-flash-high`, which is
-  **not** in the list — the list is not exhaustive.
+- `agy models` prints one model per line as `<slug><TAB><display name>`
+  on stdout (progress goes to stderr) *(measured 2026-09-04 evening via a
+  pipe and via `execFile`: 14 lines, e.g. `gemini-3.8-flash-high\tGemini
+  3.8 Flash (High)`; 1.1.26 rejects `--output-format` on this subcommand)*.
+  An earlier run the same day printed bare slugs without the 3.8 family, so
+  the format and the list both drift with the vendor; the parser takes the
+  first tab-separated column as the slug, the second as display name,
+  accepts a bare-slug line, and falls back to the static snapshot on
+  anything else. `--model` must receive the slug only (a value containing
+  the display name fails with exit 1, measured by the reviewer).
 - `--model <slug>` echoes into `init.model` *(measured)*; `--effort
   low|medium|high` is accepted *(measured; effect not separately
   observable — gemini slugs already encode the tier)*.
@@ -353,10 +357,11 @@ per-turn spawn. Persona packs stay engine-independent (ADR-0032 F3).
   "oauth-personal"`); the child inherits the wrapper's environment and HOME,
   so no credential handling in kaoiro (ADR-0032 F7 convention).
   `GEMINI_API_KEY` is the API-key alternative *(docs, unverified)*.
-- Requires `agy` on `PATH`. The runner probes `agy --version` and `agy models`
-  at register time (both quota-free) and reports the version; this spec was
-  measured against 1.1.26, and a version change is the trigger to re-run the
-  measurements marked *(measured)* here, because the binary self-updates.
+- Requires `agy` on `PATH`. The runner probes `agy models` at register
+  time (quota-free); reporting `agy --version` and re-triggering checks on
+  a version change is Stage B4. This spec was measured against 1.1.26, and
+  a version change is the trigger to re-run the measurements marked
+  *(measured)* here, because the binary self-updates.
 
 ## Constraints
 
