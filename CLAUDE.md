@@ -62,8 +62,9 @@ issue #213 で導入。エージェントの permission gate が `main` 宛の g
 
 ## Workflow rules
 
-- コミットメッセージは日本語。git 操作はユーザ承認のもとで行う
-  (`develop` 以下は上記 Branch strategy の範囲で自動可)。
+- コミットメッセージは英語 (OSS 公開後は英語で読まれるため。件名は
+  `type(scope): summary` の形、本文も英語)。git 操作はユーザ承認のもとで
+  行う (`develop` 以下は上記 Branch strategy の範囲で自動可)。
 - docs/plans/ のタスク表・進捗を更新するときは、frontmatter の
   `status` / `last_updated` も同時に更新する(status drift の予防。
   2026-07-03 に不整合 3 例を検出した再発防止)。
