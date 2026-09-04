@@ -24,6 +24,10 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
+      # antigravity's pretest builds its own dist (hook.js / bridge.js are
+      # spawned as real processes), and that build needs the sibling
+      # workspace packages' dist, so build the whole wrapper first.
+      - run: pnpm build
       - run: pnpm test
 
   # No `working-directory` default here: the install has to happen at the
