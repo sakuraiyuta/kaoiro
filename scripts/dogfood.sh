@@ -110,19 +110,20 @@ cleanup() {
 trap cleanup INT TERM EXIT
 
 # 1) Workspace install + wrapper dist build. Runner spawns wrappers from
-# ./dist/*, so these four packages must be compiled before the runner
-# starts (same rationale as scripts/dev.sh; ADR-0017 / ADR-0032 F1 —
-# package `main` points at `./dist/index.js`). `pnpm install` runs FIRST
-# because each package's build is `tsc -p tsconfig.build.json` — on a
-# fresh clone the filtered build would otherwise fail with `tsc: not
-# found` before node_modules is ever populated. `wrapper/` 直下は非メンバ
-# の meta shim なので root から `-r --filter` で 4 パッケージだけ topo
+# ./dist/*, so these five packages must be compiled before the runner
+# starts (same rationale as scripts/dev.sh; ADR-0017 / ADR-0032 F1 /
+# ADR-0057 F1 — package `main` points at `./dist/index.js`). `pnpm install`
+# runs FIRST because each package's build is `tsc -p tsconfig.build.json`
+# — on a fresh clone the filtered build would otherwise fail with `tsc:
+# not found` before node_modules is ever populated. `wrapper/` 直下は非メ
+# ンバの meta shim なので root から `-r --filter` で 5 パッケージだけ topo
 # build させる。
 echo "dogfood: installing workspace deps + building wrapper packages..."
 ( cd "$root" && pnpm install </dev/null &&
   pnpm -r --filter '@kaoiro/wrapper-core' \
     --filter '@kaoiro/agent-common' --filter '@kaoiro/claude-code' \
-    --filter '@kaoiro/codex' run build ) 2>&1 | tee -a "$logdir/stack.log"
+    --filter '@kaoiro/codex' --filter '@kaoiro/antigravity' run build ) \
+    2>&1 | tee -a "$logdir/stack.log"
 
 # 2) Build runner dist. The workspace install in step 1 covered runner
 # devDeps too. Unlike dev.sh (tsx watch on src), dogfood runs the
@@ -151,7 +152,7 @@ if [[ ! -f "$runner_config" ]]; then
   "server_url": "ws://localhost:4000/runner",
   "blocked_personas": [],
   "cwd_allowlist": ["$root"],
-  "capabilities": ["claude-code", "codex"]
+  "capabilities": ["claude-code", "codex", "antigravity"]
 }
 JSON
 fi

@@ -7,6 +7,10 @@
 //   `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl`, with the cwd
 //   recorded in the first line's session_meta (verified 2026-07-10; the
 //   internal state_5.sqlite index is deliberately not relied on)
+// - antigravity enumeration is a stub (phase-34 B3): ADR-0057 F7 names
+//   `~/.gemini/antigravity-cli/conversations/*.db` as the metadata source,
+//   but reading it is deferred to Stage B, so both functions below report
+//   "no sessions" for this engine rather than guessing the schema.
 //
 // The runner lists these to offer resume candidates and verifies a resume
 // target actually exists under the bound cwd (threat-model T3).
@@ -336,23 +340,30 @@ export async function codexSessionExistsIn(
 
 // ---- engine dispatch ----
 
-/** Lists the resume candidates under cwd (ADR-0014 F2), per engine. */
+/** Lists the resume candidates under cwd (ADR-0014 F2), per engine.
+ *  antigravity is a stub returning no candidates (phase-34 B3 TODO: read
+ *  `~/.gemini/antigravity-cli/conversations/*.db`, ADR-0057 F7). */
 export function listSessions(
   cwd: string,
   engine: EngineKind = "claude-code",
 ): SessionMeta[] | Promise<SessionMeta[]> {
+  if (engine === "antigravity") return [];
   return engine === "codex"
     ? listCodexSessionsIn(codexSessionsRoot(), cwd)
     : listSessionsIn(projectsDir(cwd));
 }
 
 /** The T3 existence check: session_id is valid AND exists in the engine's
- *  session store under the bound cwd, gating a resume to that cwd. */
+ *  session store under the bound cwd, gating a resume to that cwd.
+ *  antigravity is a stub always reporting no match (phase-34 B3 TODO, see
+ *  `listSessions`) — a resume request against this engine fails T3 rather
+ *  than resuming an unverified session_id. */
 export function sessionExists(
   cwd: string,
   sessionId: string,
   engine: EngineKind = "claude-code",
 ): boolean | Promise<boolean> {
+  if (engine === "antigravity") return false;
   return engine === "codex"
     ? codexSessionExistsIn(codexSessionsRoot(), cwd, sessionId)
     : sessionExistsIn(projectsDir(cwd), sessionId);

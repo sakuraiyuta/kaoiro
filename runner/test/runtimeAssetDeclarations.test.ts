@@ -25,6 +25,7 @@ const PACKAGES = [
   "runner",
   "protocol",
   "wrapper/agent-common",
+  "wrapper/antigravity",
   "wrapper/claude-code",
   "wrapper/codex",
   "wrapper/core",

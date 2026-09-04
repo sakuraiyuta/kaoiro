@@ -133,7 +133,7 @@ if [[ ! -f "$runner_config" ]]; then
   "server_url": "ws://localhost:4000/runner",
   "blocked_personas": [],
   "cwd_allowlist": ["$root"],
-  "capabilities": ["claude-code", "codex"]
+  "capabilities": ["claude-code", "codex", "antigravity"]
 }
 JSON
 fi
@@ -162,18 +162,18 @@ fi
 # editing Claude wrapper), export KAOIRO_WRAPPER_DEV=1 before invoking
 # scripts/dev.sh.
 #
-# Prebuild the 4 wrapper packages before tsx starts: their package.json all
+# Prebuild the 5 wrapper packages before tsx starts: their package.json all
 # point `main` at `./dist/index.js` (phase-13 "typecheck/test は src、runtime
-# は dist" 分離; ADR-0017/0032 F1). Under the default (dist) launch the
-# runner needs those dist files to exist; under KAOIRO_WRAPPER_DEV=1 the tsx
-# entry still resolves `@kaoiro/codex` etc. at top-level (runner/src/config.ts)
-# so a missing dist ENOENTs before the watch loop even starts. `wrapper/` 直下
-# は非メンバの meta shim なので root から `-r --filter` で 4 パッケージだけ topo
-# build させる。
+# は dist" 分離; ADR-0017/0032 F1/0057 F1). Under the default (dist) launch
+# the runner needs those dist files to exist; under KAOIRO_WRAPPER_DEV=1 the
+# tsx entry still resolves `@kaoiro/codex` etc. at top-level
+# (runner/src/config.ts) so a missing dist ENOENTs before the watch loop
+# even starts. `wrapper/` 直下は非メンバの meta shim なので root から
+# `-r --filter` で 5 パッケージだけ topo build させる。
 ( cd "$root/runner" && pnpm install </dev/null &&
   cd "$root" && pnpm -r --filter '@kaoiro/wrapper-core' \
     --filter '@kaoiro/agent-common' --filter '@kaoiro/claude-code' \
-    --filter '@kaoiro/codex' run build &&
+    --filter '@kaoiro/codex' --filter '@kaoiro/antigravity' run build &&
   cd "$root/runner" &&
   exec pnpm exec tsx watch src/cli.ts runner.config.json
 ) </dev/null 2>&1 | tee -a "$logdir/runner.log" &

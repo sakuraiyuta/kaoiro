@@ -180,6 +180,7 @@ describe("runSetup", () => {
       "", // cwd #2 -> end
       "y", // claude-code
       "n", // codex
+      "n", // antigravity
       "y", // set a token?
       "n", // generate?
       "manual-token", // token
@@ -219,6 +220,7 @@ describe("runSetup", () => {
       "", // end list
       "y", // claude-code
       "n", // codex
+      "n", // antigravity
       "n", // no token
       "", // node path
     ]);
@@ -240,6 +242,7 @@ describe("runSetup", () => {
       "",
       "n", // claude-code off
       "y", // codex on
+      "n", // antigravity
       "y", // codex uses a ChatGPT plan
       "y", // set a token
       "y", // generate
@@ -265,6 +268,7 @@ describe("runSetup", () => {
       "",
       "y", // claude-code
       "n", // codex
+      "n", // antigravity
       "n", // no token
       "", // node path
       "n", // overwrite runner.config.json? -> no
@@ -290,6 +294,7 @@ describe("runSetup", () => {
       "",
       "n", // claude-code off
       "y", // codex on
+      "n", // antigravity
       "n", // ChatGPT plan? -> no, so API key
       "n", // no token
       "", // node path
@@ -316,6 +321,7 @@ describe("runSetup", () => {
       "",
       "y", // claude-code
       "n", // codex
+      "n", // antigravity
       "y", // set a token
       "n", // generate?
       "tok", // token
@@ -339,6 +345,7 @@ describe("runSetup", () => {
       "",
       "n", // claude-code off
       "n", // codex off
+      "n", // antigravity off
       "n", // no token
       "", // node path
     ]);

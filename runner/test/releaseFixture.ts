@@ -212,7 +212,7 @@ export function writeReleaseTree(
   // used to miss entirely: removing a file from it verified clean and then
   // failed at import, on a real tarball (issue #229, 2026-08-16). A fixture
   // with no dependency edges could not measure the difference.
-  for (const wrapper of ["claude-code", "codex"]) {
+  for (const wrapper of ["claude-code", "codex", "antigravity"]) {
     // The codex wrapper locates its bridge through `new URL(...,
     // import.meta.url)` — a real runtime module edge no import statement
     // expresses. The closure walk missed it entirely until もも removed
@@ -220,12 +220,21 @@ export function writeReleaseTree(
     // Reading it out of the call's TEXT was tried and withdrawn (a regex
     // cannot tell the global `URL` from a module-local one), so the package
     // DECLARES it and the verifier enforces the declaration.
-    // BOTH wrappers carry one, because the real ones do: codex composes
-    // ../dist/bridge.js with `new URL`, claude-code resolves ./probe.js
-    // through createRequire. A fixture that modelled only the first let a
-    // real undeclared asset (probe.js) survive review (review round 2).
-    const asset = wrapper === "codex" ? "dist/bridge.js" : "dist/probe.js";
-    const runtime = { kaoiro: { runtimeAssets: [asset] } };
+    // claude-code and codex each carry one, because the real ones do: codex
+    // composes ../dist/bridge.js with `new URL`, claude-code resolves
+    // ./probe.js through createRequire. A fixture that modelled only the
+    // first let a real undeclared asset (probe.js) survive review (review
+    // round 2). antigravity has none yet — its adapter body (and the
+    // runtime-asset-bearing bridge/hook it will need, ADR-0057 F5/A6/A8) is
+    // a later task (phase-34); this fixture models today's skeleton, a
+    // plain wrapper-core consumer with no declared runtime asset.
+    const asset =
+      wrapper === "codex"
+        ? "dist/bridge.js"
+        : wrapper === "claude-code"
+          ? "dist/probe.js"
+          : null;
+    const runtime = asset === null ? {} : { kaoiro: { runtimeAssets: [asset] } };
     put(
       `node_modules/@kaoiro/${wrapper}/package.json`,
       JSON.stringify({
@@ -340,9 +349,10 @@ export function writeWorkspaceCheckout(
   });
   writeFileSync(
     join(ws, "pnpm-workspace.yaml"),
-    "packages:\n  - runner\n  - wrapper/claude-code\n  - wrapper/codex\n",
+    "packages:\n  - runner\n  - wrapper/claude-code\n  - wrapper/codex\n" +
+      "  - wrapper/antigravity\n",
   );
-  for (const wrapper of ["claude-code", "codex"]) {
+  for (const wrapper of ["claude-code", "codex", "antigravity"]) {
     const link = join(runner, "node_modules", "@kaoiro", wrapper);
     const member = join(ws, "wrapper", wrapper);
     mkdirSync(dirname(member), { recursive: true });

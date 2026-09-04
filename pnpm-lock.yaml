@@ -16,6 +16,9 @@ importers:
 
   runner:
     dependencies:
+      '@kaoiro/antigravity':
+        specifier: workspace:*
+        version: link:../wrapper/antigravity
       '@kaoiro/claude-code':
         specifier: workspace:*
         version: link:../wrapper/claude-code
@@ -53,6 +56,21 @@ importers:
       zod:
         specifier: ^4.4.3
         version: 4.4.3
+    devDependencies:
+      '@kaoiro/protocol':
+        specifier: workspace:*
+        version: link:../../protocol
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.0
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.20.0)
+
+  wrapper/antigravity:
     devDependencies:
       '@kaoiro/protocol':
         specifier: workspace:*

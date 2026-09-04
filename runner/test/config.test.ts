@@ -304,22 +304,25 @@ describe("buildRegister", () => {
       version: "0",
       host_id: "lab-pc-1",
       cwd_allowlist: valid.cwd_allowlist,
-      capabilities: ["claude-code", "codex"],
+      capabilities: ["claude-code", "codex", "antigravity"],
     });
     expect(register.personas).toBeUndefined();
     expect(register.allowed_personas).toBeUndefined();
     expect(register.blocked_personas).toBeUndefined();
     // Claude exposes a default-floor bootstrap so LaunchDialog always has a
     // safe choice before SDK init resolves the account catalog (ADR-0037 F1);
-    // Codex remains empty without auth/plan.
+    // Codex remains empty without auth/plan; Antigravity is empty until the
+    // `agy models` probe lands (ADR-0057 F6, phase-34 A9).
     expect(register.engines?.map((e) => e.id)).toEqual([
       "claude-code",
       "codex",
+      "antigravity",
     ]);
     expect(register.engines?.[0]?.models.map((m) => m.value)).toEqual([
       "default",
     ]);
     expect(register.engines?.[1]?.models).toEqual([]);
+    expect(register.engines?.[2]?.models).toEqual([]);
   });
 
   it("allowed_personas を register に含める", () => {

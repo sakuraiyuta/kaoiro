@@ -38,7 +38,11 @@ import { dirname, join, relative, sep } from "node:path";
  *  sentinel list before it (measured on a real tarball, 2026-08-16). The
  *  defect this manifest exists to close IS enumeration; a shorter enumeration
  *  is not a fix for it. */
-const ENTRY_PACKAGES = ["@kaoiro/claude-code", "@kaoiro/codex"];
+const ENTRY_PACKAGES = [
+  "@kaoiro/claude-code",
+  "@kaoiro/codex",
+  "@kaoiro/antigravity",
+];
 
 const CODE_FILE_RE = /\.(js|mjs|cjs|json)$/;
 

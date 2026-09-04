@@ -309,9 +309,9 @@ export function loadRunnerConfig(path: string): RunnerConfig {
   return parseRunnerConfig(raw);
 }
 
-/** Engines this runner build bundles (ADR-0032 F4a); the default
- *  capabilities when the config file does not restrict them. */
-const BUNDLED_ENGINES: EngineKind[] = ["claude-code", "codex"];
+/** Engines this runner build bundles (ADR-0032 F4a, ADR-0057 F1); the
+ *  default capabilities when the config file does not restrict them. */
+const BUNDLED_ENGINES: EngineKind[] = ["claude-code", "codex", "antigravity"];
 
 /** Effective capabilities: the configured list (legacy "claude" normalized
  *  to "claude-code" with a warning — the server keeps the same one-release
@@ -336,7 +336,9 @@ export function effectiveCapabilities(config: RunnerConfig): string[] {
  *  launch catalog per capability (ADR-0032 F4bc). Claude advertises a
  *  versioned optimistic bootstrap snapshot which the SDK's account-aware
  *  ext.models replaces after init (#110); Codex resolves its curated list
- *  from the detected auth mode and operator-declared ChatGPT plan (ADR-0035). */
+ *  from the detected auth mode and operator-declared ChatGPT plan
+ *  (ADR-0035); Antigravity publishes an empty catalog until the `agy
+ *  models` probe lands (ADR-0057 F6, phase-34 A9). */
 export function buildRegister(
   config: RunnerConfig,
   codexAuthMode: CodexAuthMode = "unknown",
@@ -362,6 +364,17 @@ export function buildRegister(
         config.codex?.chatgpt_plan,
       ),
     });
+  }
+  if (capabilities.includes("antigravity")) {
+    // ADR-0057 F6: the `agy models` register-time probe is a separate task
+    // (phase-34 A9); until then publish an empty catalog and warn, matching
+    // the fail-loud-unsupported posture LaunchDialog already has for an
+    // engine with no models.
+    process.stderr.write(
+      "runner: antigravity model catalog probe not yet implemented " +
+        "(phase-34 A9); publishing an empty catalog\n",
+    );
+    engines.push({ id: "antigravity", models: [] });
   }
   const safeBuildInfo =
     buildInfo !== undefined && !isBuildInfoConsistent(buildInfo)

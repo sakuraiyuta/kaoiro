@@ -124,7 +124,7 @@ export interface SetupResult {
   token: string;
 }
 
-const CAPABILITY_CHOICES = ["claude-code", "codex"] as const;
+const CAPABILITY_CHOICES = ["claude-code", "codex", "antigravity"] as const;
 
 async function askHostId(prompt: Prompt, fallback: string): Promise<string> {
   for (;;) {

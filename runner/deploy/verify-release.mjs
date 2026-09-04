@@ -48,6 +48,7 @@ const SENTINELS = [
   "dist/build-info.json",
   "node_modules/@kaoiro/claude-code/dist/cli.js",
   "node_modules/@kaoiro/codex/dist/cli.js",
+  "node_modules/@kaoiro/antigravity/dist/cli.js",
 ];
 
 const REVISION_RE = /^[0-9a-f]{40}$/;
@@ -671,7 +672,11 @@ function parseManifest(raw) {
  *  pinned equal by a test that feeds the real builder's own output through
  *  this verifier, rather than by a shared import (which would defeat the
  *  point of deriving the set twice). */
-const ENTRY_PACKAGES = ["@kaoiro/claude-code", "@kaoiro/codex"];
+const ENTRY_PACKAGES = [
+  "@kaoiro/claude-code",
+  "@kaoiro/codex",
+  "@kaoiro/antigravity",
+];
 
 /** Specifiers this verifier follows at all. `node:` builtins and third-party
  *  packages are outside the manifest's own documented scope. */

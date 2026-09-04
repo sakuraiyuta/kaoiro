@@ -61,7 +61,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         %{
           policy: Keyword.get(opts, :policy, :accept_all),
           cwd_allowlist: Keyword.get(opts, :cwd_allowlist, ["/home/user/proj"]),
-          capabilities: Keyword.get(opts, :capabilities, ["claude-code", "codex"])
+          capabilities: Keyword.get(opts, :capabilities, ["claude-code", "codex", "antigravity"])
         },
         self()
       )

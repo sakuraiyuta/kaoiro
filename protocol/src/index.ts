@@ -271,9 +271,10 @@ export type PermissionMode =
   | "dontAsk"
   | "auto";
 
-/** Engine kinds a host can run (ADR-0032 F4a). The value set of the runner
- *  register `capabilities`, `SpawnMessage.engine`, and `ext.engine`. */
-export type EngineKind = "claude-code" | "codex";
+/** Engine kinds a host can run (ADR-0032 F4a, ADR-0057 F1). The value set of
+ *  the runner register `capabilities`, `SpawnMessage.engine`, and
+ *  `ext.engine`. */
+export type EngineKind = "claude-code" | "codex" | "antigravity";
 
 /** ext.permission — the agent's current permission posture as the
  *  engine-neutral two-axis form (ADR-0033 F1). Claude adapters derive it
@@ -496,6 +497,11 @@ export interface ResolvedSnapshotExt {
    *  always `false` for `read-only`, regardless of the toggle (ADR-0033
    *  F3 追補, phase-22 dogfood 藤 audit). Claude ignores this field. */
   network_access?: boolean;
+  /** Antigravity-only approval axis (ADR-0057 F4). Unlike Codex, both
+   *  sandbox and approval are mid-session mutable for this engine, so the
+   *  resume snapshot must carry approval too, not sandbox alone. Claude /
+   *  Codex ignore this field. */
+  approval?: PermissionAxesExt["approval"];
 }
 
 /** One drifted field in a resume, comparing prev (resume_snapshot value)
@@ -880,10 +886,10 @@ export interface RunnerRegister {
   allowed_personas?: string[];
   blocked_personas?: string[];
   cwd_allowlist: string[];
-  /** Engine kinds this host can run (ADR-0032 F4a): "claude-code" /
-   *  "codex". The legacy value "claude" is normalized to "claude-code"
-   *  by the server for one release window (deprecation warn), then
-   *  rejected. */
+  /** Engine kinds this host can run (ADR-0032 F4a, ADR-0057 F1):
+   *  "claude-code" / "codex" / "antigravity". The legacy value "claude"
+   *  is normalized to "claude-code" by the server for one release window
+   *  (deprecation warn), then rejected. */
   capabilities?: string[];
   /** Launch catalog per engine (ADR-0032 F4bc): the models (and their
    *  effort levels) the dashboard offers in the engine -> model -> effort
@@ -941,8 +947,8 @@ export interface SpawnMessage {
   token?: string;
   initial_prompt?: string;
   resume_session_id?: string;
-  /** Engine to launch (ADR-0032 F4a). Omitted = "claude-code" (the
-   *  pre-engine-select default), so old servers keep working. */
+  /** Engine to launch (ADR-0032 F4a, ADR-0057 F1). Omitted = "claude-code"
+   *  (the pre-engine-select default), so old servers keep working. */
   engine?: EngineKind;
   /** Launch-time model pick from the LaunchDialog cascade (ADR-0032
    *  F4bc), an EngineModelInfo.value. Omitted = engine default. */
@@ -1158,7 +1164,7 @@ export interface EngineCatalogResult {
 
 /** server -> runner, operator-only: list the resume candidates under cwd
  *  (ADR-0014 F2). `engine` scopes the listing to one engine's session store
- *  (ADR-0032 F8); omitted = "claude-code".
+ *  (ADR-0032 F8, ADR-0057 F1); omitted = "claude-code".
  *
  *  This models what the RUNNER receives, which is not what the client sent:
  *  the server strips `host_id` and, when `cwd` was omitted, resolves it from

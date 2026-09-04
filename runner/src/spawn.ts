@@ -42,10 +42,11 @@ export function toManagedChild(child: ExitErrorChild): ManagedChild {
   };
 }
 
-/** Engine kind -> wrapper package (ADR-0032 F4a). */
+/** Engine kind -> wrapper package (ADR-0032 F4a, ADR-0057 F1). */
 const ENGINE_PACKAGES: Record<EngineKind, string> = {
   "claude-code": "@kaoiro/claude-code",
   codex: "@kaoiro/codex",
+  antigravity: "@kaoiro/antigravity",
 };
 
 // Leading argv for `process.execPath` (node) that runs the wrapper of the

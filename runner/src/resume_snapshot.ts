@@ -24,6 +24,7 @@
 import type {
   EngineKind,
   ModelSource,
+  PermissionAxesExt,
   PermissionMode,
   ResolvedSnapshotExt,
 } from "@kaoiro/protocol";
@@ -54,6 +55,15 @@ const MODEL_SOURCE_VALUES: readonly string[] = [
   "default",
 ];
 
+/** Antigravity-only approval axis (ADR-0057 F4), mirrors
+ *  `PermissionAxesExt["approval"]`. */
+const APPROVAL_VALUES: readonly string[] = [
+  "untrusted",
+  "on-request",
+  "on-failure",
+  "never",
+];
+
 const KNOWN_FIELDS: readonly (keyof ResolvedSnapshotExt)[] = [
   "model",
   "model_source",
@@ -62,6 +72,7 @@ const KNOWN_FIELDS: readonly (keyof ResolvedSnapshotExt)[] = [
   "permission_mode",
   "sandbox",
   "network_access",
+  "approval",
 ];
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -88,6 +99,8 @@ function isValidFieldValue(
       return typeof value === "string" && MODEL_SOURCE_VALUES.includes(value);
     case "network_access":
       return typeof value === "boolean";
+    case "approval":
+      return typeof value === "string" && APPROVAL_VALUES.includes(value);
     case "model":
     case "effort":
       return typeof value === "string" && value !== "";
@@ -136,11 +149,15 @@ export function validateResolvedSnapshot(
  *  not an independent wire input for the wrapper. */
 type ClaudeApplyField = "permissionMode";
 type CodexApplyField = "sandbox" | "networkAccess";
-type P0ApplyField = ClaudeApplyField | CodexApplyField;
+/** Antigravity uses the same OS sandbox axis as Codex plus its own
+ *  mid-session-mutable approval axis (ADR-0057 F4). */
+type AntigravityApplyField = "sandbox" | "approval";
+type P0ApplyField = ClaudeApplyField | CodexApplyField | AntigravityApplyField;
 
 const P0_FIELDS_BY_ENGINE: Record<EngineKind, readonly P0ApplyField[]> = {
   "claude-code": ["permissionMode"],
   codex: ["sandbox", "networkAccess"],
+  antigravity: ["sandbox", "approval"],
 };
 
 /** P1 (phase-23): 5-case source-aware pair rule for `model` / `effort`.
@@ -232,6 +249,12 @@ export function applyResumeSnapshot(
         )
           ? (snapshot.permission_mode as PermissionMode)
           : "default";
+        break;
+      }
+      case "approval": {
+        next.approval = isValidFieldValue("approval", snapshot.approval)
+          ? (snapshot.approval as PermissionAxesExt["approval"])
+          : "on-request";
         break;
       }
     }

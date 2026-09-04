@@ -8,6 +8,7 @@
 import type {
   EngineKind,
   ModelSource,
+  PermissionAxesExt,
   PermissionMode,
   ResolvedSnapshotExt,
   RunnerSessions,
@@ -109,6 +110,10 @@ export interface ParsedSpawn {
   permissionMode?: PermissionMode;
   sandbox?: WrapperConfig["sandbox"];
   networkAccess?: boolean;
+  /** Antigravity-only mid-session-mutable approval axis (ADR-0057 F4).
+   *  Claude / Codex ignore it. Closed-enum validation runs at
+   *  `applyResumeSnapshot` / the resume-snapshot sanitizer. */
+  approval?: PermissionAxesExt["approval"];
   /** Resume snapshot: relayed by the server on a resume spawn only
    *  (ADR-0014 F1 追補, phase-15 D8). Passed through to the wrapper via
    *  config.resume_snapshot so the wrapper can stamp ext.resume_snapshot
@@ -252,11 +257,15 @@ export function parseSpawn(payload: unknown): ParsedSpawn | null {
   ) {
     return null;
   }
-  // engine (ADR-0032 F4a): absent = claude-code; an unknown value is a
-  // fail-loud reject, not a silent fallback to the wrong engine.
+  // engine (ADR-0032 F4a, ADR-0057 F1): absent = claude-code; an unknown
+  // value is a fail-loud reject, not a silent fallback to the wrong engine.
   let engine: EngineKind = "claude-code";
   if (payload.engine !== undefined) {
-    if (payload.engine !== "claude-code" && payload.engine !== "codex") {
+    if (
+      payload.engine !== "claude-code" &&
+      payload.engine !== "codex" &&
+      payload.engine !== "antigravity"
+    ) {
       return null;
     }
     engine = payload.engine;
@@ -997,11 +1006,16 @@ export class Supervisor {
     const cwd = payload.cwd;
     if (typeof cwd !== "string") return;
     const generation = ++this.#enumerationGeneration;
-    // engine scopes the listing to one session store (ADR-0032 F8);
-    // absent = claude-code, unknown values fall back to an empty list.
+    // engine scopes the listing to one session store (ADR-0032 F8,
+    // ADR-0057 F1); absent = claude-code, unknown values fall back to an
+    // empty list.
     let engine: EngineKind = "claude-code";
     if (payload.engine !== undefined) {
-      if (payload.engine !== "claude-code" && payload.engine !== "codex") {
+      if (
+        payload.engine !== "claude-code" &&
+        payload.engine !== "codex" &&
+        payload.engine !== "antigravity"
+      ) {
         this.#sendSessions({
           version: "0",
           host_id: this.#hostId,

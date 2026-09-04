@@ -1379,8 +1379,12 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
     engine =
       case envelope do
-        %{"ext" => %{"engine" => e}} when e in ["claude-code", "codex"] -> e
-        _ -> nil
+        %{"ext" => %{"engine" => e}}
+        when e in ["claude-code", "codex", "antigravity"] ->
+          e
+
+        _ ->
+          nil
       end
 
     SessionPointers.record(agent_id, sid, cwd, engine)

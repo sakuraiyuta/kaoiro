@@ -29,6 +29,7 @@
   "dependencies": {
     "@kaoiro/claude-code": "workspace:*",
     "phoenix": "^1.8.7",
-    "@kaoiro/codex": "workspace:*"
+    "@kaoiro/codex": "workspace:*",
+    "@kaoiro/antigravity": "workspace:*"
   }
 }
