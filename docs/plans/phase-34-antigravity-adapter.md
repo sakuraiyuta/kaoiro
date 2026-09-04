@@ -50,8 +50,8 @@ through the CLI bridge. Measured substrate:
 | # | Task | Outcome that closes it |
 |---|---|---|
 | 0.1 | ADR-0057 Q1: run the `--dangerously-skip-permissions` + gate hook probe on the host (operator; the agent harness blocks the flag) | `init.permission_mode` and the hook deny result recorded in the spec; substrate chosen |
-| 0.2 | Q2: `--add-dir` workspace-root semantics with a trusted git repo as cwd | rules text and gate `Cwd` pin settled in the spec |
-| 0.3 | Q3: env inheritance into `run_command`; CLI behaviour on hook timeout | measured values in the spec; deadline ordering fixed in `host.ts` constants |
+| 0.2 | Q2: `--add-dir` workspace-root semantics — done 2026-09-04 | both `--add-dir <cwd>` and `<agent dir>` are passed (ADR-0057 F2) |
+| 0.3 | Q3: env inheritance and hook-timeout behaviour — done 2026-09-04 | recorded in the spec; deadline ordering fixed in `host.ts` constants |
 | 0.4 | Design review (kuroe) round 1 — done 2026-09-04 | every must-fix resolved or dispositioned in ADR-0057 |
 
 ### Stage A — adapter core
@@ -88,7 +88,7 @@ through the CLI bridge. Measured substrate:
 
 ## Open Questions Blocking This Phase
 
-- Stage 0.1 (Q1) blocks merging Stage A; 0.2 / 0.3 block starting A5 / A6.
+- Stage 0.1 (Q1) blocks merging Stage A.
 
 ## See Also
 

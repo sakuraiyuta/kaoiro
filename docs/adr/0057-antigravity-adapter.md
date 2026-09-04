@@ -83,7 +83,10 @@ additions of F4c (`approval` on spawn / snapshot / P0).
 
 Each instruction turn spawns `agy --print <text> --output-format
 stream-json --print-timeout 24h --disable-slash-commands [--conversation
-<id>] [--model] [--effort] --add-dir <agent dir>` with stdin closed.
+<id>] [--model] [--effort] --add-dir <agent cwd> --add-dir <agent dir>`
+with stdin closed. Both `--add-dir` values are mandatory: in print mode
+the cwd is not a workspace root on its own (measured), and with only the
+customization dir added the model operates inside it.
 `--disable-slash-commands` keeps operator text out of the CLI control plane
 ([ADR-0036](0036-session-reset-and-reserved-commands.md) only filters
 literal `/new` / `/clear`). `interrupt()` terminates the child; pending gate
@@ -245,14 +248,13 @@ fallback if taken. These are acceptance items of phase-34, not follow-ups.
   setup wizard write `toolPermission: "always-proceed"` host-wide — which
   removes prompts from the operator's own interactive `agy` sessions and is
   therefore a threat-model change, not a deployment note.
-- **Q2 (Stage 0 measurement)** — `--add-dir` workspace-root semantics
-  (the model chose the added dir as `Cwd` in one probe). The gate's `Cwd`
-  pin and the customization-dir deny (F4) close the safety side; Stage 0
-  measures whether a trusted git repository as cwd changes the default so
-  the rules text can be tuned.
-- **Q3 (Stage 0 measurement)** — env inheritance from the `agy` process
-  into `run_command` (bridge socket path and nonce); CLI behaviour when a
-  hook exceeds its `timeout`.
+- **Q2 — closed 2026-09-04**: the cwd is not a workspace root in print
+  mode; passing `--add-dir <cwd>` as well restores it as the model's `Cwd`
+  (F2). The gate's `Cwd` pin and the customization-dir deny stay as
+  defence in depth.
+- **Q3 — closed 2026-09-04**: environment variables reach both the hook
+  and `run_command`; a hook exceeding its `timeout` is killed and the tool
+  step fails without running (fail-closed on the CLI side too).
 - **Q4 (Stage B)** — transcript format for history replay; conversation db
   schema; per-model context window table.
 

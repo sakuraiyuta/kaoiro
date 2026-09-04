@@ -49,7 +49,7 @@ agy --print "<turn text>" \
     --print-timeout <duration> \
     [--conversation <conversation_id>] \
     [--model <slug>] [--effort low|medium|high] \
-    [--add-dir <per-agent customization dir>] \
+    --add-dir <agent cwd> --add-dir <per-agent customization dir> \
     [--dangerously-skip-permissions] --disable-slash-commands \
     </dev/null
 ```
@@ -235,11 +235,26 @@ customization root **without** being listed in
   custom agent with YAML frontmatter and an H1 system prompt; measured to
   take effect (`init.agent = "kaoiro"`, prompt obeyed). Not used: whether it
   replaces the default scaffolding is unknown.
-- **Caveat (measured)**: with `--add-dir`, the model's `run_command` picked
-  `Cwd = <dir>` and `hook.workspacePaths` listed only `<dir>`, i.e. the
-  added directory became a workspace root the agent may operate in. Stage A
-  must verify the behaviour when the real cwd is a trusted git repository,
-  and the rules text must state the working directory explicitly.
+- **Workspace roots (measured, Stage 0.2)**: in print mode the process cwd
+  is **not** a workspace root by itself — with no `--add-dir` the model ran
+  `pwd` in `~/.gemini/antigravity-cli/scratch`, and a `.agents/hooks.json`
+  under the cwd never fired (this is the root cause of the earlier
+  "cwd hooks did not fire" observation; trusting the cwd in
+  `settings.json` did not change it). With `--add-dir <customization dir>`
+  alone, that dir became the only root and the model's `Cwd`. With
+  **both** `--add-dir <cwd> --add-dir <customization dir>` (either order),
+  `hook.workspacePaths` lists both and `run_command` ran in the real cwd.
+  The adapter therefore always passes both, the rules text names the
+  working directory, and the gate rejects a `Cwd` outside the agent cwd.
+- **Environment inheritance (measured, Stage 0.3)**: a variable set on the
+  `agy` process reached both the hook command and the `run_command` shell,
+  so the bridge socket path and per-spawn nonce can travel in the
+  environment.
+- **Hook timeout exceeded (measured, Stage 0.3)**: a handler that outlived
+  its `timeout` was killed and the tool step ended in `ERROR`
+  (`JSON hook "jsonhook__kaoiro-gate_PreToolUse_0_0" failed: command
+  failed: signal: killed`) — the tool did **not** run. Timeout is
+  fail-closed on the CLI side as well.
 - `.agents/mcp_config.json`, `.agents/plugins/<p>/mcp_config.json`,
   `.agents/permissions.json`, `.agents/settings.json` — **not loaded** in
   headless mode *(measured)*.
