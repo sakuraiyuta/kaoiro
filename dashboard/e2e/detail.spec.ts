@@ -185,15 +185,10 @@ test.describe("T11: 頭上リング (AgentDetail, issue #180 follow-up)", () => 
       page,
     }) => {
       if (label === "sprite") {
-        // issue #295 M1 (ふじ2 round1 must-fix): pin the broken-<img>
-        // premise explicitly rather than relying on Vite's incidental dev
-        // response. Real probe (2026-09-05): the unresolved
-        // /sprites/ao/idle.png returns 200/text/html (SPA fallback), NOT
-        // a 404 -- so without an explicit route here, a future change
-        // (a real file under dashboard/public/sprites, or a fallback
-        // config change) could silently start resolving the image and
-        // this test would stay green while losing its broken-<img>
-        // coverage.
+        // Pin the broken-<img> branch explicitly: Vite's missing-file SPA
+        // fallback is 200/text/html, so the unstubbed response is not a
+        // stable HTTP-error fixture and a real file appearing under
+        // dashboard/public/sprites would silently turn this green.
         await page.route("**/sprites/ao/idle.png", (route) =>
           route.fulfill({ status: 404, body: "" }),
         );
@@ -289,15 +284,13 @@ test("T8: handle attention badge returns to the grid while the sheet is open", a
   await expect(page.getByTestId("closed-marker")).toBeVisible();
 });
 
-// issue #295: a tiny real PNG (8x4, deliberately non-square so pinning its
-// exact naturalWidth/naturalHeight below can't be a coincidence of a 1x1
-// stub) served via page.route for `/sprites/ao/idle.png` -- the URL
-// detailManifest({sprite: true}) hands out. Vite's dev server has no static
-// file there (nothing serves dashboard/public/sprites), so the unresolved
-// request falls through to its SPA fallback -- 200/text/html, NOT a 404
-// (real probe, 2026-09-05) -- which the <img> cannot decode as an image.
-// Encoded inline rather than committed as a binary fixture file. Generated
-// with:
+// A tiny real PNG (8x4, deliberately non-square so pinning its exact
+// naturalWidth/naturalHeight below can't be a coincidence of a 1x1 stub)
+// served via page.route for `/sprites/ao/idle.png` -- the URL
+// detailManifest({sprite: true}) hands out. Nothing serves
+// dashboard/public/sprites, so the unstubbed request falls through to Vite's
+// SPA fallback (200/text/html), which the <img> cannot decode. Encoded inline
+// rather than committed as a binary fixture file. Generated with:
 //   convert -size 8x4 xc:'#3a7bd5' fixture.png
 const SPRITE_FIXTURE_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAEAQMAAACJA+yzAAAAIGNIUk0AAHomAACAhAAA+" +
@@ -306,10 +299,9 @@ const SPRITE_FIXTURE_PNG_BASE64 =
   "AElFTkSuQmCC";
 
 /** Point the sprite manifest's URL at the fixture above instead of Vite's
- *  SPA-fallback HTML, so `<img>` actually decodes (issue #295). Every other
- *  `&sprite=1` spec (T11/T12 above) deliberately leaves this unstubbed,
- *  keeping the broken-<img> path covered per the issue's acceptance
- *  criteria. */
+ *  SPA-fallback HTML, so `<img>` actually decodes. Every other `&sprite=1`
+ *  spec (T11/T12 above) deliberately leaves this unstubbed, keeping the
+ *  broken-<img> path covered. */
 async function stubSpriteFixture(page: Page): Promise<void> {
   await page.route("**/sprites/ao/idle.png", (route) =>
     route.fulfill({
@@ -362,7 +354,7 @@ test.describe("detail portrait sizing (PersonaFace `detail` preset)", () => {
     });
   }
 
-  // issue #295: the sibling of the loop above, for a RESOLVED sprite
+  // The sibling of the loop above, for a RESOLVED sprite
   // instead of the CSS fallback face -- requires stubSpriteFixture() since
   // Vite serves no static file for /sprites/ao/idle.png (see that
   // function's doc comment above).
