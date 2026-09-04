@@ -194,6 +194,9 @@ hook command receives the tool call on stdin and answers on stdout:
   for 77 s, then `DONE` with output, and the model waited for it
   *(measured; `WaitMsBeforeAsync: 5000` in the args did not detach it)*. A
   bridge call that blocks on an operator answer therefore holds the turn.
+- The hook payload's `stepIdx` equals the stream's `step_index` of the
+  matching `tool` step (4 of 4 tool calls across 3 conversations,
+  *measured*), which is what the ADR-0057 F4b correlation invariant keys on.
 - `agy -p /hooks --add-dir <dir> --output-format json` lists the gate
   (`name`, `source` path, `matcher`, `timeout_seconds`) without a model turn
   *(measured)*; without `--add-dir` the list is empty. This is the quota-free
