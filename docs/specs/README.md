@@ -16,6 +16,7 @@ Feature specifications, organized by topic. Each file has `status` and
 | [agent-sdk-events](agent-sdk-events.md) | accepted | Settled Agent SDK event specification and state derivation (Claude edition) |
 | [codex-sdk-events](codex-sdk-events.md) | accepted | Settled Codex SDK (@openai/codex-sdk) event specification and state derivation (counterpart to agent-sdk-events) |
 | [codex-model-catalog](codex-model-catalog.md) | accepted | Codex model table by plan; three change paths (Web UI / CLI / config.toml); asymmetry between two authentication modes. Evidence for ADR-0032 F4bc |
+| [antigravity-cli-events](antigravity-cli-events.md) | provisional | Measured Antigravity CLI (agy) headless event specification, hooks-as-permission-gate, and state derivation (third engine, ADR-0057) |
 | [subagent-tasks](subagent-tasks.md) | provisional | Detection of subagent/workflow tasks and dedicated envelope notifications |
 | [file-upload](file-upload.md) | provisional | Render dashboard attachments (images/text/PDF/Office) to the SDK in the wrapper |
 | [design](design.md) | accepted | Visual design specification for the dashboard/UI. Uses the DESIGN.md format (YAML tokens + prose) and recognizes `dashboard/src/` as the canonical source |

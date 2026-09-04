@@ -45,6 +45,7 @@ when follow-ups have been spun out into issues.
 | 32 | [phase-32-subagent-workflow-visibility](phase-32-subagent-workflow-visibility.md) | 🟡 | Visualize internal sub-agent/workflow activity — wrapper detection, server aggregation (operator-only), dashboard ring above the agent, [ADR-0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md) / [ADR-0047](../adr/0047-task-envelope-schema.md) / [ADR-0048](../adr/0048-task-aggregation-delivery.md) |
 | | | | Implementation complete, under internal review (awaiting こはく confirmation, external review, and commit/push) |
 | 33 | [phase-33-compaction-resume-lifecycle](phase-33-compaction-resume-lifecycle.md) | 🟡 | Automatic resume after compaction (wrapper-local `resume_prompt`) and a server-retained `session_lifecycle` timeline with an operator pull query, [ADR-0055](../adr/0055-compaction-resume-and-lifecycle-log.md). Live verification of automatic resume on an actual `compact_boundary` awaits the master's confirmation |
+| 34 | [phase-34-antigravity-adapter](phase-34-antigravity-adapter.md) | ⏳ | Third engine `antigravity` driving the `agy` CLI headless per turn — hook-based permission gate with mid-session two-axis policy, CLI bridge for kaoiro tools, rules-file persona injection, [ADR-0057](../adr/0057-antigravity-adapter.md). Stage 0 HITL (Q1 permission substrate) pending |
 
 ## Feature-local plans
 
