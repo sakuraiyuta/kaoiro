@@ -4,7 +4,7 @@
 //
 // Contract (藤 D1/D2 + phase-23 P1 拡張):
 // - `validateResolvedSnapshot(raw)` sanitizes an inbound `resume_snapshot`
-//   object to the known 7 ResolvedSnapshotExt fields whose values pass a
+//   object to the known 8 ResolvedSnapshotExt fields whose values pass a
 //   closed-enum / boolean / non-empty-string guard. Unknown or malformed
 //   entries are dropped with a stderr warn (write-side defense already
 //   fires in `SessionPointers.record_snapshot`; this is read-side
@@ -22,9 +22,9 @@
 //   documented in `computePair`.
 
 import type {
+  AntigravityApproval,
   EngineKind,
   ModelSource,
-  PermissionAxesExt,
   PermissionMode,
   ResolvedSnapshotExt,
 } from "@kaoiro/protocol";
@@ -55,12 +55,12 @@ const MODEL_SOURCE_VALUES: readonly string[] = [
   "default",
 ];
 
-/** Antigravity-only approval axis (ADR-0057 F4), mirrors
- *  `PermissionAxesExt["approval"]`. */
+/** Antigravity-only approval axis (ADR-0057 F4c), mirrors
+ *  `AntigravityApproval`. `on-failure` is deliberately excluded: this
+ *  engine rejects it at spawn (Stage A offers only these three values). */
 const APPROVAL_VALUES: readonly string[] = [
   "untrusted",
   "on-request",
-  "on-failure",
   "never",
 ];
 
@@ -142,22 +142,23 @@ export function validateResolvedSnapshot(
   return out;
 }
 
-/** Engine-relevant P0 privilege axes (phase-22). Codex uses the OS sandbox
- *  pair; Claude uses the permission mode. Kept in one place so any P0
- *  scope change has a single edit site. Claude sandbox is intentionally
- *  NOT included: it is a permission_mode display mapping (ADR-0033 F2),
- *  not an independent wire input for the wrapper. */
+/** Engine-relevant P0 privilege axes (phase-22, ADR-0057 F4c). Codex uses
+ *  the sandbox+networkAccess pair; Antigravity uses the same pair plus its
+ *  own approval axis; Claude uses the permission mode. Kept in one place
+ *  so any P0 scope change has a single edit site. Claude sandbox is
+ *  intentionally NOT included: it is a permission_mode display mapping
+ *  (ADR-0033 F2), not an independent wire input for the wrapper. */
 type ClaudeApplyField = "permissionMode";
 type CodexApplyField = "sandbox" | "networkAccess";
-/** Antigravity uses the same OS sandbox axis as Codex plus its own
- *  mid-session-mutable approval axis (ADR-0057 F4). */
-type AntigravityApplyField = "sandbox" | "approval";
+/** Antigravity additionally carries its own approval axis (ADR-0057 F4c);
+ *  sandbox and networkAccess are the same fields Codex already applies. */
+type AntigravityApplyField = "approval";
 type P0ApplyField = ClaudeApplyField | CodexApplyField | AntigravityApplyField;
 
 const P0_FIELDS_BY_ENGINE: Record<EngineKind, readonly P0ApplyField[]> = {
   "claude-code": ["permissionMode"],
   codex: ["sandbox", "networkAccess"],
-  antigravity: ["sandbox", "approval"],
+  antigravity: ["sandbox", "approval", "networkAccess"],
 };
 
 /** P1 (phase-23): 5-case source-aware pair rule for `model` / `effort`.
@@ -253,7 +254,7 @@ export function applyResumeSnapshot(
       }
       case "approval": {
         next.approval = isValidFieldValue("approval", snapshot.approval)
-          ? (snapshot.approval as PermissionAxesExt["approval"])
+          ? (snapshot.approval as AntigravityApproval)
           : "on-request";
         break;
       }

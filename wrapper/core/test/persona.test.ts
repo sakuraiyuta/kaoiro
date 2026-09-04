@@ -47,6 +47,7 @@ const ROUND_TRIP_CASES: {
   },
   sandbox: { value: "workspace-write" },
   network_access: { value: true },
+  approval: { value: "never" },
   resume_snapshot: { value: { model: "sonnet" } },
   transition_id: { value: "tr-99" },
 };

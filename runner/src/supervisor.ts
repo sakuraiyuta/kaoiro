@@ -6,9 +6,9 @@
 // logic is testable without real processes (default launcher: spawn.ts).
 
 import type {
+  AntigravityApproval,
   EngineKind,
   ModelSource,
-  PermissionAxesExt,
   PermissionMode,
   ResolvedSnapshotExt,
   RunnerSessions,
@@ -110,10 +110,10 @@ export interface ParsedSpawn {
   permissionMode?: PermissionMode;
   sandbox?: WrapperConfig["sandbox"];
   networkAccess?: boolean;
-  /** Antigravity-only mid-session-mutable approval axis (ADR-0057 F4).
-   *  Claude / Codex ignore it. Closed-enum validation runs at
-   *  `applyResumeSnapshot` / the resume-snapshot sanitizer. */
-  approval?: PermissionAxesExt["approval"];
+  /** Antigravity-only launch approval axis (ADR-0057 F4c). Claude / Codex
+   *  ignore it. Closed-enum validation runs at parseSpawn's whitelist and
+   *  at `applyResumeSnapshot` / the resume-snapshot sanitizer. */
+  approval?: AntigravityApproval;
   /** Resume snapshot: relayed by the server on a resume spawn only
    *  (ADR-0014 F1 追補, phase-15 D8). Passed through to the wrapper via
    *  config.resume_snapshot so the wrapper can stamp ext.resume_snapshot
@@ -313,9 +313,22 @@ export function parseSpawn(payload: unknown): ParsedSpawn | null {
     if (typeof payload.network_access !== "boolean") return null;
     parsed.networkAccess = payload.network_access;
   }
+  // Antigravity-only launch approval axis (ADR-0057 F4c). "on-failure" is
+  // deliberately excluded from the whitelist — this engine rejects it at
+  // spawn (Stage A offers only these three values in LaunchDialog).
+  if (payload.approval !== undefined) {
+    if (
+      payload.approval !== "untrusted" &&
+      payload.approval !== "on-request" &&
+      payload.approval !== "never"
+    ) {
+      return null;
+    }
+    parsed.approval = payload.approval;
+  }
   // Resume snapshot (ADR-0014 F1 追補, resume-privilege-restoration 藤 D2):
   // read-side sanitize — closed-enum / boolean / non-empty-string guards
-  // on each of the known 7 fields, unknown / malformed dropped with a
+  // on each of the known 8 fields, unknown / malformed dropped with a
   // stderr warn. A present-but-non-object shape is fail-loud (parseSpawn
   // returns null) so a compromised sender cannot slip a garbage payload
   // that later apply-time code would have to guard against.
@@ -436,6 +449,7 @@ export function resolveWrapperConfig(
   if (parsed.networkAccess !== undefined) {
     config.network_access = parsed.networkAccess;
   }
+  if (parsed.approval !== undefined) config.approval = parsed.approval;
   if (parsed.resumeSnapshot !== undefined) {
     // Invariant: `parsed.resumeSnapshot` is already sanitized by the caller
     // (parseSpawn / handleSwitchSession / handleResetSession all run

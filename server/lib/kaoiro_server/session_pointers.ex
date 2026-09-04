@@ -51,7 +51,7 @@ defmodule KaoiroServer.SessionPointers do
   envelope carrying the initial pointer must arrive first).
 
   The snapshot is sanitized before persistence (write-side validation,
-  藤 D2, resume-privilege-restoration): only the known 7 `ResolvedSnapshotExt`
+  藤 D2, resume-privilege-restoration): only the known 8 `ResolvedSnapshotExt`
   fields survive, with closed-enum guards on `sandbox` / `permission_mode` /
   `*_source` and a boolean guard on `network_access`. Unknown or
   malformed fields are dropped with a `Logger.warning` — a compromised
@@ -385,7 +385,7 @@ defmodule KaoiroServer.SessionPointers do
   end
 
   # Snapshot sanitizer (ADR-0014 F1 追補, resume-privilege-restoration 藤 D2).
-  # Keeps only the known 7 ResolvedSnapshotExt fields whose values pass their
+  # Keeps only the known 8 ResolvedSnapshotExt fields whose values pass their
   # closed-enum / boolean / non-empty-string guard. Unknown or malformed
   # entries are dropped with a warn so `record_snapshot`'s downstream
   # relay (`build_restore_payload` / `switch_payload` / reset broadcast)
@@ -404,11 +404,14 @@ defmodule KaoiroServer.SessionPointers do
   # value drops the field even when an atom-keyed value would have passed
   # — test-pinned to keep behavior deterministic.)
   @snapshot_known_fields ~w(model model_source effort effort_source
-                            permission_mode sandbox network_access)a
+                            permission_mode sandbox network_access approval)a
   @snapshot_sandbox_values ~w(read-only workspace-write danger-full-access)
   @snapshot_permission_mode_values ~w(default acceptEdits bypassPermissions
                                        plan dontAsk auto)
   @snapshot_model_source_values ~w(launch env config default)
+  # Antigravity-only approval axis (ADR-0057 F4c). "on-failure" is
+  # deliberately excluded: this engine rejects it at spawn.
+  @snapshot_approval_values ~w(untrusted on-request never)
 
   defp sanitize_snapshot(snapshot) when is_map(snapshot) do
     {out, seen_keys} =
@@ -494,6 +497,9 @@ defmodule KaoiroServer.SessionPointers do
     do: is_binary(value) and value in @snapshot_model_source_values
 
   defp snapshot_field_valid?(:network_access, value), do: is_boolean(value)
+
+  defp snapshot_field_valid?(:approval, value),
+    do: is_binary(value) and value in @snapshot_approval_values
 
   defp snapshot_field_valid?(:model, value),
     do: is_binary(value) and value != ""

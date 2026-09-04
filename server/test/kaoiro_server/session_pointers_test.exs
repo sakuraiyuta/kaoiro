@@ -341,7 +341,7 @@ defmodule KaoiroServer.SessionPointersTest do
   # unknown / malformed fields with a warn and keep the rest, so a
   # compromised wrapper cannot land invalid enum values via record_snapshot.
   describe "record_snapshot: field-level sanitize (藤 D2)" do
-    test "全 7 known field が enum / boolean guard を通過して保持される", %{server: server} do
+    test "全 8 known field が enum / boolean guard を通過して保持される", %{server: server} do
       SessionPointers.record("a.sanitize.full", "s", "/w", nil, server)
 
       SessionPointers.record_snapshot(
@@ -353,7 +353,8 @@ defmodule KaoiroServer.SessionPointersTest do
           "effort_source" => "launch",
           "permission_mode" => "bypassPermissions",
           "sandbox" => "danger-full-access",
-          "network_access" => true
+          "network_access" => true,
+          "approval" => "never"
         },
         server
       )
@@ -366,7 +367,8 @@ defmodule KaoiroServer.SessionPointersTest do
                  "effort_source" => "launch",
                  "permission_mode" => "bypassPermissions",
                  "sandbox" => "danger-full-access",
-                 "network_access" => true
+                 "network_access" => true,
+                 "approval" => "never"
                }
              } = SessionPointers.get("a.sanitize.full", server)
     end
@@ -385,6 +387,23 @@ defmodule KaoiroServer.SessionPointersTest do
 
       refute Map.has_key?(snap, "sandbox")
       assert snap["permission_mode"] == "plan"
+    end
+
+    test "on-failure を含む malformed approval enum は drop、他 field は保持 (ADR-0057 F4c)",
+         %{server: server} do
+      SessionPointers.record("a.sanitize.bad_approval", "s", "/w", nil, server)
+
+      SessionPointers.record_snapshot(
+        "a.sanitize.bad_approval",
+        %{"approval" => "on-failure", "sandbox" => "workspace-write"},
+        server
+      )
+
+      assert %{snapshot: snap} =
+               SessionPointers.get("a.sanitize.bad_approval", server)
+
+      refute Map.has_key?(snap, "approval")
+      assert snap["sandbox"] == "workspace-write"
     end
 
     test "malformed permission_mode enum は drop", %{server: server} do

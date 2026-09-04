@@ -1947,13 +1947,16 @@ defmodule KaoiroServerWeb.AgentsChannel do
       |> maybe_put_string("resume_session_id", payload["resume_session_id"])
       |> maybe_put_string("request_id", payload["request_id"])
       |> maybe_put_engine(engine)
-      # Launch-time picks (ADR-0032 F4bc / ADR-0033 F3): free-form model /
-      # effort strings (value sets belong to the engine catalog) plus the
-      # codex sandbox axis and its network toggle; the runner re-validates.
+      # Launch-time picks (ADR-0032 F4bc / ADR-0033 F3, ADR-0057 F4c):
+      # free-form model / effort strings (value sets belong to the engine
+      # catalog) plus the codex/antigravity sandbox axis, its network
+      # toggle, and the antigravity-only approval axis; the runner
+      # re-validates all of them.
       |> maybe_put_string("model", payload["model"])
       |> maybe_put_string("effort", payload["effort"])
       |> maybe_put_sandbox(payload["sandbox"])
       |> maybe_put_boolean("network_access", payload["network_access"])
+      |> maybe_put_approval(payload["approval"])
       # Claude-only launch permission mode (ADR-0033 F4 追補, phase-15 D2 /
       # task 15-12). Priority "explicit spawn wins over the persisted
       # store": when present we ALSO record it into PermissionModes here so
@@ -2002,6 +2005,16 @@ defmodule KaoiroServerWeb.AgentsChannel do
     do: Map.put(map, "sandbox", value)
 
   defp maybe_put_sandbox(map, _value), do: map
+
+  # Antigravity-only launch approval axis (ADR-0057 F4c). Same closed-enum
+  # gate shape as maybe_put_sandbox; deliberately excludes "on-failure" —
+  # this engine rejects it at spawn (Stage A offers only these three
+  # values in LaunchDialog).
+  @approval_values ["untrusted", "on-request", "never"]
+  defp maybe_put_approval(map, value) when value in @approval_values,
+    do: Map.put(map, "approval", value)
+
+  defp maybe_put_approval(map, _value), do: map
 
   # ADR-0033 F4 追補 (phase-15 D2 / task 15-12). Same closed-enum gate as
   # @permission_modes above so a malformed spawn payload never reaches the

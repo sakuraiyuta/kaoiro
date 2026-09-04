@@ -237,11 +237,15 @@ export interface WrapperConfig {
    *  back to `claudeBootstrapCatalog()`; the SDK's own catalog still
    *  overrides both once `#refreshSupportedModels()` succeeds. */
   claude_engine_catalog?: EngineModelInfo[];
-  /** Codex-only OS sandbox axis (ADR-0033 F3); Claude ignores it.
-   *  Omitted = "workspace-write". */
+  /** Codex / Antigravity sandbox axis (ADR-0033 F3, ADR-0057 F4c); Claude
+   *  ignores it. Omitted = "workspace-write". */
   sandbox?: PermissionAxesExt["sandbox"];
-  /** Codex-only network toggle for workspace-write sandboxes. */
+  /** Codex / Antigravity network toggle for workspace-write sandboxes. */
   network_access?: boolean;
+  /** Antigravity-only launch approval axis (ADR-0057 F4c); Codex and
+   *  Claude ignore it (Codex's approval is launch-fixed to "never" via
+   *  `sandbox` alone, ADR-0033 F3). Omitted = "on-request". */
+  approval?: AntigravityApproval;
   /** Resume snapshot relayed by the runner on a resume launch only
    *  (ADR-0014 F1 追補, phase-15 D8). Absent on fresh spawn. When present,
    *  the wrapper stamps it as ext.resume_snapshot and computes ext.resume_drift
@@ -280,15 +284,33 @@ export type EngineKind = "claude-code" | "codex" | "antigravity";
  *  engine-neutral two-axis form (ADR-0033 F1). Claude adapters derive it
  *  from permissionMode via a display-approximation table (ADR-0033 F2);
  *  the codex adapter projects its launch-fixed sandbox with approval
- *  pinned to "never" (ADR-0033 F3). Successor of `ext.permission_mode`
- *  (kept in parallel for one release window, then removed). */
+ *  pinned to "never" (ADR-0033 F3); the antigravity adapter reports both
+ *  axes as operator-selected at spawn (ADR-0057 F4c). Successor of
+ *  `ext.permission_mode` (kept in parallel for one release window, then
+ *  removed). */
 export interface PermissionAxesExt {
   sandbox: "read-only" | "workspace-write" | "danger-full-access";
   /** `on-failure` is a deprecated upstream alias of `on-request`; kaoiro
    *  wrappers never emit it but the enum keeps wire compatibility with
    *  the Codex SDK vocabulary. */
   approval: "untrusted" | "on-request" | "on-failure" | "never";
+  /** How the sandbox axis is actually enforced (ADR-0057 F4/F4c). Every
+   *  engine fills this so the dashboard never branches on its absence:
+   *  `"os"` for Codex (OS sandbox), `"mode"` for Claude (the sandbox value
+   *  is a projection of permissionMode, ADR-0033 F2), `"advisory"` for
+   *  Antigravity — its `--sandbox` flag was measured to have no effect, so
+   *  the wrapper enforces the cell by inspecting tool arguments, never by
+   *  the OS. Only `"advisory"` renders a permanent badge next to the
+   *  sandbox value, reusing ADR-0033 F4 addendum's device for Codex's
+   *  host-fixed approval. */
+  enforcement?: "os" | "mode" | "advisory";
 }
+
+/** Antigravity-only 3-value approval subset (ADR-0057 F4c). Distinct from
+ *  {@link PermissionAxesExt.approval} (which keeps `"on-failure"` for
+ *  Codex SDK wire compatibility): this engine's LaunchDialog offers only
+ *  these three values and the server rejects `"on-failure"` at spawn. */
+export type AntigravityApproval = "untrusted" | "on-request" | "never";
 
 /** One launch-selectable model of an engine (ADR-0032 F4bc). Same shape as
  *  the `ext.models[]` entries the Claude adapter already publishes (#54),
@@ -497,11 +519,11 @@ export interface ResolvedSnapshotExt {
    *  always `false` for `read-only`, regardless of the toggle (ADR-0033
    *  F3 追補, phase-22 dogfood 藤 audit). Claude ignores this field. */
   network_access?: boolean;
-  /** Antigravity-only approval axis (ADR-0057 F4). Unlike Codex, both
-   *  sandbox and approval are mid-session mutable for this engine, so the
-   *  resume snapshot must carry approval too, not sandbox alone. Claude /
-   *  Codex ignore this field. */
-  approval?: PermissionAxesExt["approval"];
+  /** Antigravity-only approval axis (ADR-0057 F4c). Stage A fixes both
+   *  sandbox and approval at spawn (mid-session change is Stage B0), so
+   *  the resume snapshot must carry approval too, not sandbox alone.
+   *  Claude / Codex ignore this field. */
+  approval?: AntigravityApproval;
 }
 
 /** One drifted field in a resume, comparing prev (resume_snapshot value)
@@ -967,14 +989,23 @@ export interface SpawnMessage {
    *  the persisted store value naturally. The Codex engine ignores it
    *  (its permission posture is launch-fixed via sandbox, ADR-0033 F3). */
   permission_mode?: PermissionMode;
-  /** Codex-only launch permission: the OS sandbox axis (ADR-0033 F3;
-   *  the approval axis is pinned to "never" and not selectable). The
-   *  Claude engine ignores it (its permission posture is the mode,
-   *  pushed after join per #58). Omitted = "workspace-write". */
+  /** Codex / Antigravity launch permission: the sandbox axis (ADR-0033 F3,
+   *  ADR-0057 F4c). On Codex the approval axis is pinned to "never" and
+   *  not selectable; on Antigravity `approval` below is a separate,
+   *  operator-selectable field. The Claude engine ignores this (its
+   *  permission posture is the mode, pushed after join per #58). Omitted
+   *  = "workspace-write". */
   sandbox?: PermissionAxesExt["sandbox"];
-  /** Codex-only: allow network inside a workspace-write sandbox.
-   *  Omitted = false (Codex CLI default). */
+  /** Codex / Antigravity: allow network inside a workspace-write sandbox.
+   *  Omitted = false. */
   network_access?: boolean;
+  /** Antigravity-only launch approval axis (ADR-0057 F4c). Stage A fixes
+   *  both sandbox and approval at spawn; mid-session change is Stage B0.
+   *  Codex and Claude ignore this field. "on-failure" is deliberately
+   *  excluded from the type: LaunchDialog offers three values for this
+   *  engine and the server rejects anything else. Omitted =
+   *  "on-request". */
+  approval?: AntigravityApproval;
   /** Resume snapshot: the "last effective" resolved settings the server
    *  had cached for this agent (ADR-0014 F1 追補, phase-15 D8). Present
    *  either alongside `resume_session_id` (restore an existing SDK session

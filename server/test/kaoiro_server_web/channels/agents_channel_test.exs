@@ -3669,6 +3669,49 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert SessionPointers.get(agent_id).engine == "codex"
     end
 
+    test "operator の spawn: antigravity の approval を検証して payload に中継する (ADR-0057 F4c)" do
+      host_id = "lab-pc-1e-approval"
+      register_host(host_id, cwd_allowlist: ["/home/user/proj"])
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "spawn", %{
+          "host_id" => host_id,
+          "persona" => "ao",
+          "cwd" => "/home/user/proj",
+          "engine" => "antigravity",
+          "sandbox" => "workspace-write",
+          "approval" => "never"
+        })
+
+      assert_reply ref, :ok, %{}
+      assert_broadcast "spawn", payload
+      assert payload["engine"] == "antigravity"
+      assert payload["sandbox"] == "workspace-write"
+      assert payload["approval"] == "never"
+    end
+
+    test "operator の spawn: on-failure を含む未知 approval は payload から drop する" do
+      host_id = "lab-pc-1e-approval-bad"
+      register_host(host_id, cwd_allowlist: ["/home/user/proj"])
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "spawn", %{
+          "host_id" => host_id,
+          "persona" => "ao",
+          "cwd" => "/home/user/proj",
+          "engine" => "antigravity",
+          "approval" => "on-failure"
+        })
+
+      assert_reply ref, :ok, %{}
+      assert_broadcast "spawn", payload
+      refute Map.has_key?(payload, "approval")
+    end
+
     test "operator の spawn: permission_mode を relay + PermissionModes に永続 (phase-15 15-12)" do
       host_id = "lab-pc-1e-pm"
       register_host(host_id, cwd_allowlist: ["/home/user/proj"])

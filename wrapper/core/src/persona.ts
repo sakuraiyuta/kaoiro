@@ -334,8 +334,9 @@ export function parseConfig(raw: unknown): WrapperConfig {
     config.claude_engine_catalog = rows;
   }
 
-  // Codex-only launch permission (ADR-0033 F3); the Claude engine ignores
-  // both. The sandbox axis is a closed enum.
+  // Codex / Antigravity launch permission (ADR-0033 F3, ADR-0057 F4c); the
+  // Claude engine ignores all three. The sandbox and approval axes are
+  // closed enums.
   if (raw.sandbox !== undefined) {
     if (
       raw.sandbox !== "read-only" &&
@@ -353,6 +354,20 @@ export function parseConfig(raw: unknown): WrapperConfig {
       throw new ConfigError("network_access must be a boolean");
     }
     config.network_access = raw.network_access;
+  }
+  // Antigravity-only launch approval axis (ADR-0057 F4c). "on-failure" is
+  // deliberately excluded: this engine rejects it at spawn.
+  if (raw.approval !== undefined) {
+    if (
+      raw.approval !== "untrusted" &&
+      raw.approval !== "on-request" &&
+      raw.approval !== "never"
+    ) {
+      throw new ConfigError(
+        "approval must be one of: untrusted, on-request, never",
+      );
+    }
+    config.approval = raw.approval;
   }
 
   // Resume snapshot (ADR-0014 F1 追補, phase-15 D8): passed through by the

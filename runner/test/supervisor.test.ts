@@ -291,6 +291,32 @@ describe("parseSpawn / resolveWrapperConfig", () => {
     );
     expect(config.permission_mode).toBe("acceptEdits");
   });
+  it("approval の有効値は ParsedSpawn に載せる (ADR-0057 F4c)", () => {
+    const parsed = parseSpawn({ ...spawnMsg, approval: "never" })!;
+    expect(parsed.approval).toBe("never");
+  });
+  it("on-failure を含む未知 approval は parseSpawn が null (fail-loud)", () => {
+    expect(parseSpawn({ ...spawnMsg, approval: "on-failure" })).toBeNull();
+    expect(parseSpawn({ ...spawnMsg, approval: "hacked" })).toBeNull();
+  });
+  it("approval は wrapper config へ passthrough (ADR-0057 F4c)", () => {
+    const parsed = parseSpawn({ ...spawnMsg, approval: "untrusted" })!;
+    const config = resolveWrapperConfig(
+      "lab-pc-1.claude-a",
+      parsed,
+      "ws://localhost:4000/wrapper",
+    );
+    expect(config.approval).toBe("untrusted");
+  });
+  it("approval 未指定なら wrapper config に field なし", () => {
+    const parsed = parseSpawn(spawnMsg)!;
+    const config = resolveWrapperConfig(
+      "lab-pc-1.claude-a",
+      parsed,
+      "ws://localhost:4000/wrapper",
+    );
+    expect("approval" in config).toBe(false);
+  });
   it("permission_mode 未指定なら wrapper config に field なし", () => {
     const parsed = parseSpawn(spawnMsg)!;
     const config = resolveWrapperConfig(

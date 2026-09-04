@@ -16,7 +16,7 @@ function makeParsed(engine: EngineKind = "codex"): ParsedSpawn {
 }
 
 describe("validateResolvedSnapshot (藤 D2 read-side sanitize)", () => {
-  test("完全に有効な 7 field は全て保持される", () => {
+  test("完全に有効な 8 field は全て保持される", () => {
     const result = validateResolvedSnapshot({
       model: "gpt-5",
       model_source: "config",
@@ -25,6 +25,7 @@ describe("validateResolvedSnapshot (藤 D2 read-side sanitize)", () => {
       permission_mode: "bypassPermissions",
       sandbox: "danger-full-access",
       network_access: true,
+      approval: "never",
     });
     expect(result).toEqual({
       model: "gpt-5",
@@ -34,7 +35,15 @@ describe("validateResolvedSnapshot (藤 D2 read-side sanitize)", () => {
       permission_mode: "bypassPermissions",
       sandbox: "danger-full-access",
       network_access: true,
+      approval: "never",
     });
+  });
+
+  test("malformed approval (on-failure 含む) は drop", () => {
+    const warn = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    expect(validateResolvedSnapshot({ approval: "on-failure" })).toEqual({});
+    expect(validateResolvedSnapshot({ approval: "hacked" })).toEqual({});
+    warn.mockRestore();
   });
 
   test("非 object は null (defensive drop)", () => {
@@ -232,6 +241,74 @@ describe("applyResumeSnapshot (藤 D1/D2 engine-aware apply)", () => {
         "claude-code",
       );
       expect(next.permissionMode).toBe("default");
+    });
+  });
+
+  describe("engine=antigravity (ADR-0057 F4c)", () => {
+    test("snapshot.sandbox / network_access / approval を parsed に上書き", () => {
+      const parsed: ParsedSpawn = {
+        ...makeParsed("antigravity"),
+        sandbox: "read-only",
+        networkAccess: false,
+        approval: "untrusted",
+      };
+      const next = applyResumeSnapshot(
+        parsed,
+        {
+          sandbox: "danger-full-access",
+          network_access: true,
+          approval: "never",
+        },
+        "antigravity",
+      );
+      expect(next.sandbox).toBe("danger-full-access");
+      expect(next.networkAccess).toBe(true);
+      expect(next.approval).toBe("never");
+    });
+
+    test("snapshot.approval absent → safe default on-request に降格", () => {
+      const parsed: ParsedSpawn = {
+        ...makeParsed("antigravity"),
+        approval: "never",
+      };
+      const next = applyResumeSnapshot(
+        parsed,
+        { sandbox: "workspace-write", network_access: false },
+        "antigravity",
+      );
+      expect(next.approval).toBe("on-request");
+    });
+
+    test("snapshot.approval='on-failure' (stale/不正値) → safe default on-request に降格", () => {
+      // ADR-0057 F4c: この engine は on-failure を spawn 時に reject する。
+      // resume 再適用でも "danger 値を保持しない" (D2) と同じ扱いにする。
+      const parsed: ParsedSpawn = {
+        ...makeParsed("antigravity"),
+        approval: "on-request",
+      };
+      const next = applyResumeSnapshot(
+        parsed,
+        {
+          sandbox: "workspace-write",
+          network_access: false,
+          approval: "on-failure" as never,
+        },
+        "antigravity",
+      );
+      expect(next.approval).toBe("on-request");
+    });
+
+    test("空 snapshot {} → sandbox/networkAccess/approval とも safe default に降格", () => {
+      const parsed: ParsedSpawn = {
+        ...makeParsed("antigravity"),
+        sandbox: "danger-full-access",
+        networkAccess: true,
+        approval: "never",
+      };
+      const next = applyResumeSnapshot(parsed, {}, "antigravity");
+      expect(next.sandbox).toBe("workspace-write");
+      expect(next.networkAccess).toBe(false);
+      expect(next.approval).toBe("on-request");
     });
   });
 
