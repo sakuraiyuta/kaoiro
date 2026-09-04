@@ -14,6 +14,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
   alias KaoiroServer.SessionPointers
   alias KaoiroServer.TaskStates
   alias KaoiroServer.TokenDenylist
+  alias KaoiroServer.TransportLimits
   alias KaoiroServer.WrapperBuildInfos
   alias KaoiroServerWeb.WrapperChannel
 
@@ -3057,6 +3058,42 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
   end
 
   describe "directory_request (protocol-inter-agent コンパニオンツール)" do
+    test "wire reply が production frame budget を超える directory は拒否する" do
+      self_id = "test.directory-too-large-self"
+      socket = join_wrapper(self_id)
+      model = String.duplicate("m", 65_536)
+
+      for n <- 1..130 do
+        agent_id = "test.directory-too-large-#{n}"
+
+        assert :ok =
+                 AgentStates.put(
+                   envelope(agent_id, "idle")
+                   |> Map.put("ext", %{"model" => model})
+                 )
+      end
+
+      expected_agents =
+        for n <- 1..130 do
+          %{
+            "agent_id" => "test.directory-too-large-#{n}",
+            "persona" => %{"id" => "mio", "name" => "澪", "sprite_set" => "mio"},
+            "state" => "idle",
+            "model" => model,
+            "conversation" => %{"active" => false, "peers" => []}
+          }
+        end
+
+      refute TransportLimits.reply_frame_fits?(
+               "wrapper:#{self_id}",
+               %{"agents" => expected_agents, "users" => %{}}
+             )
+
+      ref = push(socket, "directory_request", %{})
+
+      assert_reply ref, :error, %{reason: "directory_too_large"}
+    end
+
     test "自分以外の agent を返し未stamp optional fieldは省略する" do
       self_id = "test.dir-self"
       peer_id = "test.dir-peer"

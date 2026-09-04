@@ -35,6 +35,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   alias KaoiroServer.SessionStarts
   alias KaoiroServer.TaskStates
   alias KaoiroServer.TokenDenylist
+  alias KaoiroServer.TransportLimits
   alias KaoiroServer.WrapperBuildInfos
   alias KaoiroServerWeb.AgentId
   alias KaoiroServerWeb.PeerConnectivity
@@ -526,7 +527,14 @@ defmodule KaoiroServerWeb.WrapperChannel do
     {directory_only_kept, live_kept} = Enum.split_with(merged, &(&1["directory_only"] == true))
     agents = live_kept ++ bound_directory_only(directory_only_kept, self_id)
 
-    {:reply, {:ok, %{"agents" => agents, "users" => users_projection()}}, socket}
+    reply = %{"agents" => agents, "users" => users_projection()}
+
+    if TransportLimits.reply_frame_fits?("wrapper:#{self_id}", reply) do
+      {:reply, {:ok, reply}, socket}
+    else
+      Logger.warning("directory_request reply exceeded the transport frame budget")
+      {:reply, {:error, %{reason: "directory_too_large"}}, socket}
+    end
   end
 
   defp handle_wrapper_in("delivery_status_request", _payload, socket) do
