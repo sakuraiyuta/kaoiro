@@ -239,6 +239,93 @@ describe("issue #285 M2 — concurrent tool calls share one authoritative slot",
   }
 });
 
+describe("issue #285 M2 — the question arm of the same slot rule", () => {
+  it("hands the slot back to the still-live question through the real host", async () => {
+    // The permission case above cannot cover this: #clearPendingFor branches
+    // on kind, and the question arm is its own comparison. Two AskUserQuestion
+    // calls in one turn, opened through the real host and a real
+    // QuestionBroker, are what make that branch run.
+    const bothOpened = deferred();
+    const decided: string[] = [];
+    const envelopes: Envelope[] = [];
+
+    const queryFn = ((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        const input = args.prompt[Symbol.asyncIterator]();
+        await input.next();
+        yield assistant([
+          { type: "tool_use", id: "q_1", name: "AskUserQuestion", input: {} },
+          { type: "tool_use", id: "q_2", name: "AskUserQuestion", input: {} },
+        ]);
+        const calls = ["q_1", "q_2"].map((id) =>
+          args.options
+            .canUseTool!(
+              "AskUserQuestion",
+              {
+                questions: [
+                  { question: `${id}?`, header: "h", multiSelect: false, options: [] },
+                ],
+              },
+              { signal: new AbortController().signal } as never,
+            )
+            .then((decision) => decided.push(`${id}:${decision?.behavior}`)),
+        );
+        await bothOpened.promise;
+        await Promise.all(calls);
+        yield result("success");
+      }
+      return Object.assign(gen(), {
+        interrupt: async () => {},
+      }) as unknown as Query;
+    }) as unknown as QueryFn;
+
+    const { host, questionBroker, requests } = withRealBrokers({
+      queryFn,
+      onState: (envelope) => envelopes.push(envelope),
+    });
+    const running = host.run();
+    await host.send("go");
+
+    await vi.waitFor(() => expect(requests).toHaveLength(2));
+    const [first, second] = requestIdsFrom(requests);
+    bothOpened.resolve();
+
+    expect(host.statusExtSnapshot().pending_question).toMatchObject({
+      request_id: second,
+    });
+
+    questionBroker.resolve({
+      request_id: second!,
+      answers: { "q_2?": "a" },
+      cancelled: false,
+    });
+    await flush();
+
+    // Settling one must not blank the slot: the other question is still live
+    // and its dialog is the only way to answer it.
+    expect(host.statusExtSnapshot().pending_question).toMatchObject({
+      request_id: first,
+    });
+    // The operator sees it on the wire too, not merely in the snapshot.
+    expect(envelopes[envelopes.length - 1]?.ext?.pending_question).toMatchObject(
+      { request_id: first },
+    );
+
+    questionBroker.resolve({
+      request_id: first!,
+      answers: { "q_1?": "a" },
+      cancelled: false,
+    });
+    await flush();
+
+    expect(host.statusExtSnapshot().pending_question).toBeUndefined();
+    expect(decided.sort()).toEqual(["q_1:allow", "q_2:allow"]);
+
+    host.close();
+    await running;
+  });
+});
+
 describe("issue #285 M3 — question twin and stream EOF", () => {
   it("invalidates an abandoned QuestionBroker request the same way", async () => {
     const opened = deferred();
