@@ -324,6 +324,79 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     refute_push "delivery_status", %{}
   end
 
+  test "quagmire_notice reaches the operator only (issue #273)" do
+    _operator_socket = join_as(:operator)
+    assert_push "snapshot", %{"agents" => _}
+
+    _viewer_socket = join_as(:viewer)
+    assert_push "snapshot", %{"agents" => _}
+
+    KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "quagmire_notice", %{
+      "kind" => "rally",
+      "participants" => ["test.a", "test.b"],
+      "turns" => 18,
+      "conversations" => 2,
+      "threshold" => 16,
+      "window_ms" => 86_400_000
+    })
+
+    assert_push "quagmire_notice", %{
+      "kind" => "rally",
+      "participants" => ["test.a", "test.b"],
+      "turns" => 18
+    }
+
+    refute_push "quagmire_notice", %{}
+  end
+
+  test "list_conversations carries the cross-conversation rally and verdict (issue #273)" do
+    socket = join_as(:operator)
+    assert_push "snapshot", %{"agents" => _}
+
+    ConversationStates.record_message("qc1", "test.a", "test.b", "x", 1, false, true)
+    ConversationStates.record_message("qc2", "test.a", "test.b", "x", 1, false, true)
+
+    ref = push(socket, "list_conversations", %{})
+
+    assert_reply ref, :ok, %{"conversations" => conversations}
+
+    rows = Enum.filter(conversations, &(Map.fetch!(&1, "conversation_id") in ["qc1", "qc2"]))
+    assert length(rows) == 2
+
+    # Both rows report the PAIR's total, not their own single turn — the
+    # distinction the detector rests on.
+    assert Enum.all?(rows, &(Map.fetch!(&1, "rally_turns") == 2))
+    assert Enum.all?(rows, &(Map.fetch!(&1, "rally_conversations") == 2))
+    assert Enum.all?(rows, &(Map.fetch!(&1, "turns") == 1))
+    # Below the configured threshold, so the server's own verdict is false.
+    assert Enum.all?(rows, &(Map.fetch!(&1, "quagmire") == false))
+  end
+
+  test "list_conversations marks a pair whose rally crosses the threshold (issue #273)" do
+    # The verdict is computed server-side precisely so one place owns the
+    # threshold; asserting only the false branch leaves that comparison
+    # unpinned in the direction an operator actually acts on.
+    Application.put_env(:kaoiro_server, :quagmire, rally_turns: 2)
+    on_exit(fn -> Application.delete_env(:kaoiro_server, :quagmire) end)
+
+    socket = join_as(:operator)
+    assert_push "snapshot", %{"agents" => _}
+
+    ConversationStates.record_message("qt1", "test.a", "test.b", "x", 1, false, true)
+    ConversationStates.record_message("qt2", "test.a", "test.b", "x", 1, false, true)
+    ConversationStates.record_message("qt3", "test.a", "test.c", "x", 1, false, true)
+
+    ref = push(socket, "list_conversations", %{})
+    assert_reply ref, :ok, %{"conversations" => conversations}
+
+    verdicts =
+      conversations
+      |> Enum.filter(&(Map.fetch!(&1, "conversation_id") in ["qt1", "qt2", "qt3"]))
+      |> Map.new(&{Map.fetch!(&1, "conversation_id"), Map.fetch!(&1, "quagmire")})
+
+    assert %{"qt1" => true, "qt2" => true, "qt3" => false} = verdicts
+  end
+
   # connect 時の role は snapshot にすぎない (#158)。許可リスト/トークン
   # 側の降格が、接続しっぱなしの socket に効くことを pin する。
   describe "operator gate の role 再解決 (#158)" do
@@ -6831,10 +6904,12 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_push "envelope", %{"version" => "0", "agent_id" => "t4.envelope"}
     end
 
-    test "T4-7: policy は20種のみを許可し、未宣言 event は funnel で拒否する" do
+    test "T4-7: policy は21種のみを許可し、未宣言 event は funnel で拒否する" do
       policy = AgentsChannel.client_event_policy()
 
-      assert MapSet.size(policy) == 20
+      # 21 since issue #273 added quagmire_notice.
+      assert MapSet.size(policy) == 21
+      assert MapSet.member?(policy, "quagmire_notice")
       refute MapSet.member?(policy, "not_declared")
 
       source = File.read!("lib/kaoiro_server_web/channels/agents_channel.ex")

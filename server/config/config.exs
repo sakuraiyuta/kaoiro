@@ -41,6 +41,30 @@ config :kaoiro_server,
     tombstone_ttl_ms: 86_400_000
   ]
 
+# Review-quagmire detection (issue #273). Advisory only: nothing here
+# rejects a message, closes a conversation, or messages an agent — a false
+# positive that stops a working loop costs more than a missed notice. Kept
+# out of :inter_agent deliberately, whose entries are all hard limits.
+#
+# The defaults are provisional. rally_turns comes from a thin sample (a
+# healthy delegation runs well under 10 turns; the incident that motivated
+# the issue reached round 18), so revisit it against the rally_turns the
+# list_conversations projection reports after a month of real traffic.
+# stall_ms sits ABOVE the wrapper's 30-minute turn-watchdog inactivity
+# default: an unacknowledged delivery also happens while the recipient is
+# simply mid-turn, and a long tool run or review workflow passes 30 minutes
+# routinely. Firing under the watchdog would double-announce what the
+# watchdog's own interrupt already handles.
+config :kaoiro_server,
+  quagmire: [
+    rally_turns: 16,
+    # Must not exceed :inter_agent tombstone_ttl_ms above — QuagmireWatch
+    # refuses to boot otherwise, since closed conversations are the data.
+    rally_window_ms: 86_400_000,
+    stall_ms: 3_600_000,
+    sweep_interval_ms: 60_000
+  ]
+
 # Configure the endpoint
 config :kaoiro_server, KaoiroServerWeb.Endpoint,
   url: [host: "localhost"],

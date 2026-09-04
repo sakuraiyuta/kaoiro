@@ -249,6 +249,34 @@ defmodule KaoiroServer.ConversationStates do
   end
 
   @doc """
+  Returns `%{sorted_participant_ids => %{turns: n, conversations: k}}`, the
+  rally length of each agent group across conversations (issue #273).
+
+  A rally is not bounded by one `conversation_id`. `max_turns` closes a
+  conversation at 20 and the protocol then forces the peers onto a fresh id,
+  so a review loop that recurses far enough necessarily spans several
+  entries; counting within one of them measures the wrong unit. Every OPEN
+  entry contributes its live `turns` (it IS the rally in progress) and every
+  tombstone closed within `window_ms` contributes its frozen `last_turn`.
+
+  `window_ms` must not exceed `configured_tombstone_ttl_ms/0`: tombstones are
+  the only record of a closed conversation, so a longer window silently
+  under-reports rather than reaching further back. The caller validates that
+  — this function has no way to reject a value it is merely given.
+  """
+  def pair_rally(window_ms, server \\ __MODULE__)
+      when is_integer(window_ms) and window_ms >= 0 do
+    GenServer.call(server, {:pair_rally, window_ms})
+  end
+
+  @doc """
+  The configured tombstone retention, exposed so a caller reading tombstones
+  through `pair_rally/2` validates its window against this module's own
+  source rather than a second copy of the default.
+  """
+  def configured_tombstone_ttl_ms, do: load_limits().tombstone_ttl_ms
+
+  @doc """
   Manually closes an OPEN conversation on operator request (issue #276
   decision: reuse the existing tombstone mechanism, no new termination
   machinery). Reuses the SAME `close_entry/3` transition every hard-limit
@@ -481,6 +509,27 @@ defmodule KaoiroServer.ConversationStates do
     {:reply, projection, state}
   end
 
+  def handle_call({:pair_rally, window_ms}, _from, state) do
+    cutoff = state.clock.() - window_ms
+
+    index =
+      Enum.reduce(state.conversations, %{}, fn {_cid, entry}, acc ->
+        case rally_turns(entry, cutoff) do
+          nil ->
+            acc
+
+          turns ->
+            key = entry.agents |> MapSet.to_list() |> Enum.sort()
+
+            Map.update(acc, key, %{turns: turns, conversations: 1}, fn tally ->
+              %{turns: tally.turns + turns, conversations: tally.conversations + 1}
+            end)
+        end
+      end)
+
+    {:reply, index, state}
+  end
+
   def handle_call({:close_by_operator, cid}, _from, state) do
     case Map.get(state.conversations, cid) do
       nil ->
@@ -687,6 +736,19 @@ defmodule KaoiroServer.ConversationStates do
       started_at_wall: Map.get(entry, :started_at_wall)
     }
   end
+
+  # An OPEN entry always counts: it is the rally in progress, and
+  # open_conversation_ttl_ms already bounds how long it can stay open. A
+  # tombstone counts only while it is inside the window. nil = does not
+  # contribute (too old, or an unrecognized status — same defensive posture
+  # as operator_turns/1 below).
+  defp rally_turns(%{status: :open, turns: turns}, _cutoff), do: turns
+
+  defp rally_turns(%{status: :closed, closed_at: closed_at, last_turn: last_turn}, cutoff)
+       when closed_at >= cutoff,
+       do: last_turn
+
+  defp rally_turns(_entry, _cutoff), do: nil
 
   # issue #276: an OPEN entry's live turn count keeps counting; a CLOSED
   # tombstone has none (`turns` is dropped at close, see the moduledoc) —

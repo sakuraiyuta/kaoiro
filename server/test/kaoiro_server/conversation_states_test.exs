@@ -699,6 +699,68 @@ defmodule KaoiroServer.ConversationStatesTest do
              ConversationStates.record_message("c", "a", "b", "y", 2, false, true, name)
   end
 
+  describe "pair_rally/2 (issue #273)" do
+    test "sums a pair's turns across several conversations inside the window" do
+      # The A1 discriminator. max_turns closes a conversation at 20 and the
+      # protocol then forces a fresh id, so a long rally necessarily spans
+      # entries; a per-conversation count reports 2 here instead of 5.
+      {name, clock} = start_tracker_with_clock(:cs_rally_multi, tombstone_ttl_ms: 100_000)
+
+      assert :ok = ConversationStates.record_message("c1", "a", "b", "x", 1, true, true, name)
+
+      # Both sides done closes c1 into a tombstone holding last_turn: 2.
+      assert :both_done =
+               ConversationStates.record_message("c1", "b", "a", "x", 2, true, false, name)
+
+      advance_clock(clock, 10)
+      assert :ok = ConversationStates.record_message("c2", "a", "b", "x", 1, false, true, name)
+      assert :ok = ConversationStates.record_message("c2", "b", "a", "x", 2, false, false, name)
+      assert :ok = ConversationStates.record_message("c2", "a", "b", "x", 3, false, false, name)
+
+      assert %{["a", "b"] => %{turns: 5, conversations: 2}} =
+               ConversationStates.pair_rally(100_000, name)
+    end
+
+    test "excludes a tombstone that closed before the window" do
+      {name, clock} = start_tracker_with_clock(:cs_rally_window, tombstone_ttl_ms: 100_000)
+
+      assert :ok = ConversationStates.record_message("c1", "a", "b", "x", 1, true, true, name)
+
+      assert :both_done =
+               ConversationStates.record_message("c1", "b", "a", "x", 2, true, false, name)
+
+      advance_clock(clock, 5_000)
+      assert :ok = ConversationStates.record_message("c2", "a", "b", "x", 1, false, true, name)
+
+      # Window reaches back 1_000ms; c1 closed 5_000ms ago.
+      assert %{["a", "b"] => %{turns: 1, conversations: 1}} =
+               ConversationStates.pair_rally(1_000, name)
+    end
+
+    test "keys each pair separately and omits pairs with no contribution" do
+      name = start_tracker(:cs_rally_pairs)
+
+      assert :ok = ConversationStates.record_message("c1", "a", "b", "x", 1, false, true, name)
+      assert :ok = ConversationStates.record_message("c2", "a", "c", "x", 1, false, true, name)
+
+      rally = ConversationStates.pair_rally(100_000, name)
+
+      assert %{["a", "b"] => %{turns: 1}, ["a", "c"] => %{turns: 1}} = rally
+      assert map_size(rally) == 2
+    end
+
+    test "counts an open conversation regardless of how long it has been open" do
+      # An open entry IS the rally in progress; open_conversation_ttl_ms
+      # already bounds how long it can sit there.
+      {name, clock} = start_tracker_with_clock(:cs_rally_open_age, [])
+
+      assert :ok = ConversationStates.record_message("c1", "a", "b", "x", 1, false, true, name)
+      advance_clock(clock, 10_000)
+
+      assert %{["a", "b"] => %{turns: 1}} = ConversationStates.pair_rally(1_000, name)
+    end
+  end
+
   describe "list_for_operator/1 (issue #276)" do
     test "open conversation を participants/turns/tokens/status/started_at 付きで返す" do
       name = start_tracker(:cs_list_open)

@@ -150,6 +150,35 @@ if path = System.get_env("KAOIRO_SESSION_POINTERS_PATH") do
   config :kaoiro_server, :session_pointers_path, path
 end
 
+# Review-quagmire thresholds (issue #273). The defaults in config.exs are
+# provisional and meant to be retuned against real traffic, so expose the two
+# an operator would actually turn without a rebuild. An invalid value raises
+# at boot rather than silently reverting to the default: a detector running
+# on a threshold nobody chose is worse than one that refuses to start.
+quagmire_int = fn name ->
+  case Integer.parse(System.get_env(name) || "") do
+    {value, ""} when value > 0 ->
+      value
+
+    _ ->
+      raise "#{name} must be a positive integer, got #{inspect(System.get_env(name))}"
+  end
+end
+
+# Only the overridden key is written: Config deep-merges keyword values, so
+# the remaining config.exs entries survive. Reading the current value first
+# would look load-bearing while doing nothing under a release, where the
+# Config.Provider runs before applications are loaded.
+if System.get_env("KAOIRO_QUAGMIRE_RALLY_TURNS") do
+  config :kaoiro_server,
+    quagmire: [rally_turns: quagmire_int.("KAOIRO_QUAGMIRE_RALLY_TURNS")]
+end
+
+if System.get_env("KAOIRO_QUAGMIRE_STALL_MS") do
+  config :kaoiro_server,
+    quagmire: [stall_ms: quagmire_int.("KAOIRO_QUAGMIRE_STALL_MS")]
+end
+
 # DETS file for the restart-surviving agent identity ledger (ADR-0030).
 # Point this at a persistent volume in production; the unset default
 # (a tmp path, resolved in KaoiroServer.AgentDirectory) survives a

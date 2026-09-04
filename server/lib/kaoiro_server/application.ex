@@ -94,6 +94,14 @@ defmodule KaoiroServer.Application do
       # timeout returns through the web boundary so authoritative reachability
       # selects terminal disconnected or neutral reconnected for its targets.
       {KaoiroServer.PlannedDisconnects, on_timeout: &KaoiroServerWeb.PeerConnectivity.timeout/3},
+      # Review-quagmire detection (issue #273). Reads ConversationStates and
+      # DeliveryStates, so it starts after both. `:on_notice` is the one
+      # place its data crosses into KaoiroServerWeb, same boundary reason as
+      # ConversationStates' `:on_auto_closed` above.
+      {KaoiroServer.QuagmireWatch,
+       on_notice: fn payload ->
+         KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "quagmire_notice", payload)
+       end},
       # Single owner of the common-footer snapshot + last-known-good
       # (ADR-0045). Must precede FooterWatcher, which rebuilds through it,
       # and the Endpoint, whose WrapperChannel reads the snapshot.

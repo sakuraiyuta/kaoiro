@@ -94,6 +94,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   alias KaoiroServer.HostRegistry
   alias KaoiroServer.PersonaAssets
   alias KaoiroServer.PlannedDisconnects
+  alias KaoiroServer.QuagmireWatch
   alias KaoiroServer.SessionLifecycleEvents
   alias KaoiroServer.SessionPointers
   alias KaoiroServer.SessionResets
@@ -153,6 +154,12 @@ defmodule KaoiroServerWeb.AgentsChannel do
     # Recipient dispatch watermarks are an operator diagnostic (issue #247).
     # Keep live updates behind the same role gate as their join-time snapshot.
     "delivery_status",
+    # Review-quagmire notice (issue #273). Names agent pairs and their
+    # traffic volume, so it is operator-only like the diagnostics above.
+    # Deliberately NOT a join snapshot frame: a joining operator reads the
+    # current picture from list_conversations / delivery_snapshot, and this
+    # event is edge-triggered rather than a state projection.
+    "quagmire_notice",
     # Connected wrapper artifact identity is operator-only, like host build
     # identity; viewers do not receive package provenance.
     "wrapper_build_info",
@@ -172,7 +179,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   @client_event_policy MapSet.new(~w(
     snapshot task_snapshot delivery_snapshot history hosts directory
     history_cleared history_reset history_replay_complete
-    history_replay_envelope agent_deleted delivery_status
+    history_replay_envelope agent_deleted delivery_status quagmire_notice
     session_reset_started session_reset_completed session_reset_failed
     envelope spawn_result runner_sessions catalog_result wrapper_build_info
   ))
@@ -507,6 +514,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
              "session_reset_completed",
              "session_reset_failed",
              "delivery_status",
+             "quagmire_notice",
              "wrapper_build_info"
            ] do
     if socket.assigns[:role] in @operator_capable_roles do
@@ -1556,7 +1564,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
   defp conversations_payload do
     conversations =
-      ConversationStates.list_for_operator()
+      annotate_rally(ConversationStates.list_for_operator())
       |> Enum.sort_by(
         fn conversation ->
           {Map.get(conversation, "started_at", ""), Map.get(conversation, "conversation_id", "")}
@@ -2243,6 +2251,28 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # (LaunchDialog falls back to the model's own default_effort for those).
   defp launch_defaults do
     compute_launch_defaults(AgentDirectory.all(), SessionPointers.all())
+  end
+
+  # issue #273: each row also carries the rally its participants have run up
+  # ACROSS conversations, and whether that crosses the threshold. The verdict
+  # is computed here rather than shipping the threshold for the client to
+  # compare, so one place owns what "quagmire" means. Purely additive keys on
+  # an unchanged reply shape — an older client ignores them. Thresholds are
+  # read from config directly rather than through the detector process: they
+  # are fixed for the life of a boot, so calling into an advisory GenServer
+  # would buy nothing dynamic while letting its liveness take down this RPC.
+  defp annotate_rally(rows) do
+    settings = QuagmireWatch.configured_settings()
+    rally = ConversationStates.pair_rally(settings.rally_window_ms)
+
+    Enum.map(rows, fn row ->
+      tally = Map.get(rally, Map.fetch!(row, "participants"), %{turns: 0, conversations: 0})
+
+      row
+      |> Map.put("rally_turns", tally.turns)
+      |> Map.put("rally_conversations", tally.conversations)
+      |> Map.put("quagmire", tally.turns >= settings.rally_turns)
+    end)
   end
 
   @doc """
