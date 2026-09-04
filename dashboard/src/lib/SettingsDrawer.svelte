@@ -440,6 +440,13 @@
                   / {formatStartedAt(conv.startedAt)}
                 {/if}
               </span>
+              {#if conv.quagmire}
+                <span
+                  class="conv-rally"
+                  title="{conv.rallyTurns} messages across {conv.rallyConversations} conversations between these participants (issue #273)"
+                  >rally {conv.rallyTurns}</span
+                >
+              {/if}
               {#if conv.status === "open"}
                 <button
                   type="button"
@@ -840,6 +847,14 @@
   .conv-meta,
   .user-meta {
     color: var(--fg-dim);
+  }
+
+  .conv-rally {
+    padding: 0 0.35em;
+    border-radius: 0.25em;
+    background: var(--warn-bg, #7a3d0a);
+    color: var(--warn-fg, #ffd9a0);
+    white-space: nowrap;
   }
 
   .conv-close,

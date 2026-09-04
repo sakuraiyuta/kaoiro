@@ -1622,9 +1622,38 @@ export interface ConversationSummary {
   tokens: number | null;
   status: "open" | "closed";
   startedAt: string | null;
+  /** Messages these participants have exchanged ACROSS conversations inside
+   *  the server's rally window (issue #273), not this row's own `turns`.
+   *  Absent when the server predates the field. */
+  rallyTurns?: number;
+  /** How many conversations that total came from. */
+  rallyConversations?: number;
+  /** The server's own verdict on `rallyTurns` against its configured
+   *  threshold. The comparison is not repeated here: one place owns what
+   *  "quagmire" means, and it is the side that holds the threshold. */
+  quagmire?: boolean;
 }
 
 export type ConversationList = ConversationSummary[] & { incomplete: boolean };
+
+/** Edge-triggered review-quagmire notice (issue #273). `rally` names the
+ *  participants of a long cross-conversation exchange; `stall` names one
+ *  recipient whose deliveries have gone unacknowledged. Operator-only. */
+export type QuagmireNotice =
+  | {
+      kind: "rally";
+      participants: string[];
+      turns: number;
+      conversations: number;
+      threshold: number;
+    }
+  | {
+      kind: "stall";
+      agentId: string;
+      undelivered: number;
+      pendingSince: string | null;
+      thresholdMs: number;
+    };
 
 /** Operator-facing user-list entry (issue #207). Wire shape from
  *  `Users.all_with_role/1` (id/kind/display_name/role) — the server
@@ -1730,6 +1759,9 @@ export interface KaoiroHandlers {
   /** Whether the bounded delivery projection omitted watermarks on this join. */
   onDeliverySnapshotIncomplete?: (incomplete: boolean) => void;
   onDeliveryStatus?: (agentId: string, status: InterAgentDeliveryStatus | null) => void;
+  /** Review-quagmire notice (issue #273). Operator-only on the server side,
+   *  so a viewer session never sees this fire. */
+  onQuagmireNotice?: (notice: QuagmireNotice) => void;
   /** Current wrapper artifact identities, sent only to operators/admins. */
   onWrapperBuildInfoSnapshot?: (
     infos: Record<string, WrapperBuildInfo>,
@@ -2994,9 +3026,56 @@ function parseConversationList(raw: unknown): ConversationSummary[] {
       tokens: typeof p.tokens === "number" ? p.tokens : null,
       status: p.status,
       startedAt: typeof p.started_at === "string" ? p.started_at : null,
+      ...(typeof p.rally_turns === "number" ? { rallyTurns: p.rally_turns } : {}),
+      ...(typeof p.rally_conversations === "number"
+        ? { rallyConversations: p.rally_conversations }
+        : {}),
+      ...(typeof p.quagmire === "boolean" ? { quagmire: p.quagmire } : {}),
     });
   }
   return out;
+}
+
+/** Rejects a malformed notice entirely rather than rendering a half-filled
+ *  banner: an operator acting on a quagmire needs the numbers to be real. */
+export function parseQuagmireNotice(raw: unknown): QuagmireNotice | null {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+  const p = raw as Record<string, unknown>;
+  if (p.kind === "rally") {
+    if (
+      !Array.isArray(p.participants) ||
+      !p.participants.every((v) => typeof v === "string") ||
+      typeof p.turns !== "number" ||
+      typeof p.conversations !== "number" ||
+      typeof p.threshold !== "number"
+    ) {
+      return null;
+    }
+    return {
+      kind: "rally",
+      participants: p.participants as string[],
+      turns: p.turns,
+      conversations: p.conversations,
+      threshold: p.threshold,
+    };
+  }
+  if (p.kind === "stall") {
+    if (
+      typeof p.agent_id !== "string" ||
+      typeof p.undelivered !== "number" ||
+      typeof p.threshold_ms !== "number"
+    ) {
+      return null;
+    }
+    return {
+      kind: "stall",
+      agentId: p.agent_id,
+      undelivered: p.undelivered,
+      pendingSince: typeof p.pending_since === "string" ? p.pending_since : null,
+      thresholdMs: p.threshold_ms,
+    };
+  }
+  return null;
 }
 
 // Same charset `AgentId.valid?/1` enforces server-side (`agent_id.ex`,
@@ -3119,6 +3198,7 @@ export const CLIENT_EVENT_VERSION_POLICY = {
   history_replay_envelope: "checked",
   agent_deleted: "checked",
   delivery_status: "checked",
+  quagmire_notice: "checked",
   session_reset_started: "checked",
   session_reset_completed: "checked",
   session_reset_failed: "checked",
@@ -3465,6 +3545,10 @@ export function connectKaoiro(
       const raw = payload as Record<string, unknown>;
       if (typeof raw.agent_id !== "string") return;
       handlers.onDeliveryStatus?.(raw.agent_id, parseDeliveryStatus(raw.delivery));
+    });
+    bindServerEvent(c, "quagmire_notice", (payload: unknown) => {
+      const notice = parseQuagmireNotice(payload);
+      if (notice !== null) handlers.onQuagmireNotice?.(notice);
     });
     bindServerEvent(c, "wrapper_build_info", (payload: unknown) => {
       if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {

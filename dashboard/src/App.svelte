@@ -37,6 +37,7 @@
     KaoiroConnection,
     PersonaManifest,
     RunnerSessions,
+    QuagmireNotice,
     ServerHealth,
     SpawnResult,
     TaskTable,
@@ -217,6 +218,40 @@
   // click affordance; viewer disclosure is a separate future decision
   // (ADR-0021 F7).
   let personaDetailId = $state<string | null>(null);
+  // issue #273: review-quagmire notices. Deliberately NOT the 6-second
+  // spawn-notice toast — the whole point is that nobody was watching, so a
+  // notice that expires on its own reproduces the problem it reports. One
+  // banner per subject, dismissed by the operator. The server only sends
+  // these to operators; the render gates on isOperator too, so a role
+  // downgrade mid-session stops showing them without waiting for a rejoin.
+  let quagmireNotices = $state<QuagmireNotice[]>([]);
+
+  function quagmireKey(notice: QuagmireNotice): string {
+    return notice.kind === "rally"
+      ? `rally:${notice.participants.join("|")}`
+      : `stall:${notice.agentId}`;
+  }
+
+  function recordQuagmire(notice: QuagmireNotice): void {
+    const key = quagmireKey(notice);
+    quagmireNotices = [
+      ...quagmireNotices.filter((n) => quagmireKey(n) !== key),
+      notice,
+    ];
+  }
+
+  function quagmireText(notice: QuagmireNotice): string {
+    if (notice.kind === "rally") {
+      const names = notice.participants
+        .map((id) => formatAgentLabel(agents, id))
+        .join(" ⇔ ");
+      return `${names} のやり取りが ${notice.turns} 通 (${notice.conversations} 会話、閾値 ${notice.threshold}) に達しました。進捗を確認してください。`;
+    }
+    // Not asserted: an unacknowledged delivery also looks like this while the
+    // recipient is simply mid-turn (director addendum).
+    const label = formatAgentLabel(agents, notice.agentId);
+    return `${label} 宛のメッセージ ${notice.undelivered} 件が未着です (${notice.pendingSince ?? "時刻不明"} から)。停滞の疑いがあります。`;
+  }
   let spawnNotice = $state<string | null>(null);
   let spawnNoticeTimer: ReturnType<typeof setTimeout> | undefined;
   // spawn の immediate reply は新 agent が state_change を出す前に届くため、
@@ -634,6 +669,7 @@
         },
         onSnapshotIncomplete: (incomplete) => (snapshotIncomplete = incomplete),
         onTaskSnapshot: (next) => (tasks = next),
+        onQuagmireNotice: recordQuagmire,
         onDeliverySnapshot: (next) => (deliveries = next),
         onDeliverySnapshotIncomplete: (incomplete) => (deliverySnapshotIncomplete = incomplete),
         onDeliveryStatus: (agentId, delivery) => {
@@ -1572,6 +1608,24 @@
   </div>
 </header>
 
+{#if isOperator}
+  {#each quagmireNotices as notice (quagmireKey(notice))}
+    <p class="quagmire-notice" role="status">
+      <span>{quagmireText(notice)}</span>
+      <button
+        type="button"
+        class="quagmire-dismiss"
+        onclick={() =>
+          (quagmireNotices = quagmireNotices.filter(
+            (n) => quagmireKey(n) !== quagmireKey(notice),
+          ))}
+      >
+        閉じる
+      </button>
+    </p>
+  {/each}
+{/if}
+
 {#if spawnNoticeText}
   <p class="spawn-notice" role="status">{spawnNoticeText}</p>
 {/if}
@@ -2354,6 +2408,30 @@
   .settings-toggle:hover {
     color: var(--fg);
     border-color: var(--fg-dim);
+  }
+
+  .quagmire-notice {
+    display: flex;
+    flex: 0 0 auto;
+    gap: 0.75rem;
+    align-items: center;
+    justify-content: space-between;
+    margin: 0;
+    padding: 0.4rem max(2rem, env(safe-area-inset-right)) 0.4rem
+      max(2rem, env(safe-area-inset-left));
+    font-size: var(--fs-body-sm);
+    color: var(--warn-fg, #ffd9a0);
+    background: var(--warn-bg, #7a3d0a);
+    border-bottom: 1px solid var(--line);
+  }
+
+  .quagmire-dismiss {
+    flex: 0 0 auto;
+    color: inherit;
+    background: transparent;
+    border: 1px solid currentcolor;
+    border-radius: 0.25em;
+    cursor: pointer;
   }
 
   .spawn-notice {

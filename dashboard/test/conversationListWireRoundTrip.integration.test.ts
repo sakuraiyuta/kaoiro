@@ -295,6 +295,95 @@ describe("listConversations の wire round trip (issue #276 review follow-up)", 
     expect(conversations.map((c) => c.conversationId)).toEqual(["ok"]);
   });
 
+  it("carries the server's cross-conversation rally and its verdict (issue #273)", async () => {
+    RespondingWebSocket.nextResponse = {
+      conversations: [
+        {
+          conversation_id: "loop",
+          participants: ["a", "b"],
+          turns: 3,
+          tokens: 10,
+          status: "open",
+          started_at: "2026-09-05T00:00:00Z",
+          rally_turns: 18,
+          rally_conversations: 2,
+          quagmire: true,
+        },
+        {
+          conversation_id: "quiet",
+          participants: ["a", "c"],
+          turns: 1,
+          tokens: 4,
+          status: "open",
+          started_at: "2026-09-05T00:00:00Z",
+          rally_turns: 1,
+          rally_conversations: 1,
+          quagmire: false,
+        },
+      ],
+    };
+
+    const conn = connectKaoiro(
+      "ws://test/client",
+      {
+        onStatus: vi.fn(),
+        onSnapshot: vi.fn(),
+        onEnvelope: vi.fn(),
+        onHosts: vi.fn(),
+      },
+      { transport: RespondingWebSocket, heartbeatIntervalMs: 1000 },
+    );
+    await settleSocket();
+
+    const pending = conn.listConversations();
+    await settleSocket();
+    const conversations = await pending;
+
+    // The rally is the PAIR's total across conversations, not this row's
+    // own turns — the distinction the whole detector rests on.
+    expect(conversations[0]).toMatchObject({
+      turns: 3,
+      rallyTurns: 18,
+      rallyConversations: 2,
+      quagmire: true,
+    });
+    expect(conversations[1]).toMatchObject({ rallyTurns: 1, quagmire: false });
+  });
+
+  it("leaves the rally fields absent when an older server omits them", async () => {
+    RespondingWebSocket.nextResponse = {
+      conversations: [
+        {
+          conversation_id: "legacy",
+          participants: ["a", "b"],
+          turns: 2,
+          tokens: 8,
+          status: "open",
+          started_at: "2026-09-05T00:00:00Z",
+        },
+      ],
+    };
+
+    const conn = connectKaoiro(
+      "ws://test/client",
+      {
+        onStatus: vi.fn(),
+        onSnapshot: vi.fn(),
+        onEnvelope: vi.fn(),
+        onHosts: vi.fn(),
+      },
+      { transport: RespondingWebSocket, heartbeatIntervalMs: 1000 },
+    );
+    await settleSocket();
+
+    const pending = conn.listConversations();
+    await settleSocket();
+    const conversations = await pending;
+
+    expect(conversations[0]?.rallyTurns).toBeUndefined();
+    expect(conversations[0]?.quagmire).toBeUndefined();
+  });
+
   it("conversations が配列でない reply は空配列を返す(fail-closed)", async () => {
     RespondingWebSocket.nextResponse = { conversations: "not-an-array" };
 

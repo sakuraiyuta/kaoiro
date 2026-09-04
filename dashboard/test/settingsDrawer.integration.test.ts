@@ -618,6 +618,45 @@ describe("SettingsDrawer", () => {
       expect(items[1]!.querySelector(".conv-close")).toBeNull();
     });
 
+    it("marks only the rows the server called a quagmire (issue #273)", async () => {
+      // The badge follows the SERVER's verdict, not a threshold this
+      // component keeps its own copy of.
+      const conn = makeConnection(async () => [
+        {
+          conversationId: "loop",
+          participants: ["a", "b"],
+          turns: 3,
+          tokens: 10,
+          status: "open",
+          startedAt: null,
+          rallyTurns: 18,
+          rallyConversations: 2,
+          quagmire: true,
+        },
+        {
+          conversationId: "quiet",
+          participants: ["a", "c"],
+          turns: 3,
+          tokens: 10,
+          status: "open",
+          startedAt: null,
+          rallyTurns: 3,
+          rallyConversations: 1,
+          quagmire: false,
+        },
+      ]);
+      const { target } = await renderDrawer(vi.fn(), conn);
+      await Promise.resolve();
+      await tick();
+
+      const items = target.querySelectorAll(".conv-list li");
+      const badge = items[0]!.querySelector(".conv-rally");
+      expect(badge).not.toBeNull();
+      // The pair total, not the row's own 3 turns.
+      expect(badge!.textContent).toContain("18");
+      expect(items[1]!.querySelector(".conv-rally")).toBeNull();
+    });
+
     it("閉じるボタン → 確認ダイアログ表示、キャンセルでは closeConversation を呼ばない", async () => {
       const conn = makeConnection(async () => [
         {
