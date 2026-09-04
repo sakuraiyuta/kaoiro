@@ -2024,11 +2024,19 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # `on-request` default, which is not what the operator asked for. Absent
   # is fine (the runner default applies); any other engine's approval is
   # untouched — this axis is antigravity-only.
+  #
+  # `Map.fetch/2`, not `payload["approval"]` (ふじ round 3 MF-R3-3): a plain
+  # map access returns nil for BOTH an absent key and an explicit
+  # `"approval" => nil` (JSON `null`), so the key-absent branch used to also
+  # swallow an explicit null — it then fell through `maybe_put_approval`'s
+  # drop clause and launched with the runner's on-request default instead of
+  # being rejected. `Map.fetch/2` distinguishes the two: only a genuinely
+  # absent key is :ok; a present nil is now an invalid value like any other.
   defp validate_antigravity_approval("antigravity", payload) do
-    case payload["approval"] do
-      nil -> :ok
-      value when value in @approval_values -> :ok
-      _invalid -> {:error, :invalid_approval}
+    case Map.fetch(payload, "approval") do
+      :error -> :ok
+      {:ok, value} when value in @approval_values -> :ok
+      {:ok, _invalid} -> {:error, :invalid_approval}
     end
   end
 

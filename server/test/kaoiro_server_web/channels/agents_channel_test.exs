@@ -3711,6 +3711,25 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       refute_broadcast "spawn", _payload
     end
 
+    test "operator の spawn: antigravity で明示 approval=null は key absent と区別して error reply する (round 3 MF-R3-3)" do
+      host_id = "lab-pc-1e-approval-null"
+      register_host(host_id, cwd_allowlist: ["/home/user/proj"])
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "spawn", %{
+          "host_id" => host_id,
+          "persona" => "ao",
+          "cwd" => "/home/user/proj",
+          "engine" => "antigravity",
+          "approval" => nil
+        })
+
+      assert_reply ref, :error, %{reason: "invalid_approval"}
+      refute_broadcast "spawn", _payload
+    end
+
     test "operator の spawn: permission_mode を relay + PermissionModes に永続 (phase-15 15-12)" do
       host_id = "lab-pc-1e-pm"
       register_host(host_id, cwd_allowlist: ["/home/user/proj"])
