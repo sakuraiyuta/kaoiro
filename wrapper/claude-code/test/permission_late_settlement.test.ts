@@ -218,6 +218,61 @@ describe("issue #285 — permission decision after its turn ended", () => {
     await running;
   });
 
+  it("settles a request the SDK cancels while its turn keeps running", async () => {
+    // Measured 2026-09-05 against @anthropic-ai/claude-agent-sdk 0.3.258: the
+    // CLI cancels an outstanding can_use_tool and the SDK aborts this signal
+    // 2ms after Query.interrupt(). No turn boundary settles this case.
+    const envelopes: Envelope[] = [];
+    const requested = deferred();
+    const controller = new AbortController();
+    const decided: Array<{ behavior: string; message?: string }> = [];
+
+    const queryFn = ((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        const input = args.prompt[Symbol.asyncIterator]();
+        await input.next();
+        yield assistant([toolUse("tu_1")]);
+        const pending = args.options.canUseTool!("Bash", { id: "tu_1" }, {
+          signal: controller.signal,
+        } as never);
+        await requested.promise;
+        controller.abort();
+        decided.push((await pending) as { behavior: string; message?: string });
+        yield result("success");
+      }
+      return Object.assign(gen(), {
+        interrupt: async () => {},
+      }) as unknown as Query;
+    }) as unknown as QueryFn;
+
+    let host!: AgentHost;
+    host = new AgentHost(config, {
+      onState: (envelope) => envelopes.push(envelope),
+      decidePermission: () => {
+        host.setPendingPermission({
+          request_id: "req_1",
+          tool_name: "Bash",
+          ts: "T",
+        });
+        requested.resolve();
+        return new Promise(() => {});
+      },
+      queryFn,
+      now: () => "T",
+    });
+    const running = host.run();
+    await host.send("go");
+    host.close();
+    await running;
+
+    expect(decided[0]).toMatchObject({ behavior: "deny" });
+    expect(decided[0]?.message).toContain("cancelled before it was answered");
+    const states = envelopes.map((envelope) => envelope.state);
+    const resumed = states.lastIndexOf("tool_running");
+    expect(resumed).toBeGreaterThan(states.indexOf("waiting_permission"));
+    expect(envelopes[resumed]?.ext?.pending_permission).toBeUndefined();
+  });
+
   it("still resumes tool_running for concurrent answers inside a live turn", async () => {
     const envelopes: Envelope[] = [];
     const warnings: string[] = [];

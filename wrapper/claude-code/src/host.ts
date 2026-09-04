@@ -122,7 +122,7 @@ const ABANDONED_WAIT = Symbol("kaoiro:abandoned-wait");
 /** Reason handed back to the SDK for a wait its turn outlived. Usually
  *  unread — the CLI has already dropped the control request by then. */
 const ABANDONED_WAIT_MESSAGE =
-  "kaoiro: the turn ended before this permission was answered";
+  "kaoiro: this request was cancelled before it was answered";
 
 /** States asserting the SDK is working inside a turn. `sending` is
  *  deliberately absent: it is raised when an instruction is accepted, which
@@ -1737,7 +1737,8 @@ export class AgentHost implements EngineAdapter {
       },
       // Set last so queryOptions can never override the hook that drives
       // waiting_permission.
-      canUseTool: (toolName, input) => this.#canUseTool(toolName, input),
+      canUseTool: (toolName, input, options) =>
+        this.#canUseTool(toolName, input, options.signal),
     };
     try {
       const session = this.#queryFn({ prompt: this.#input(), options });
@@ -1940,7 +1941,10 @@ export class AgentHost implements EngineAdapter {
   /** Opens a canUseTool wait owned by the currently SDK-active turn. The
    *  returned `abandoned` promise settles only if that turn is torn down
    *  first, so the caller races it against the operator's decision. */
-  #beginTurnBoundWait(kind: "permission" | "question"): {
+  #beginTurnBoundWait(
+    kind: "permission" | "question",
+    signal?: AbortSignal,
+  ): {
     abandoned: Promise<typeof ABANDONED_WAIT>;
     ownsActiveTurn: () => boolean;
     release: () => void;
@@ -1952,10 +1956,17 @@ export class AgentHost implements EngineAdapter {
     });
     const wait: TurnBoundWait = { owner, kind, abandon };
     this.#turnBoundWaits.add(wait);
+    // The CLI cancels an outstanding can_use_tool control request and the SDK
+    // aborts this signal (measured 2026-09-05: 2ms after Query.interrupt()).
+    // That also covers a request cancelled while its turn keeps running,
+    // which no turn boundary would ever settle.
+    if (signal?.aborted === true) abandon();
+    else signal?.addEventListener("abort", abandon, { once: true });
     return {
       abandoned,
       ownsActiveTurn: () => (this.#activeTurn?.turnToken ?? null) === owner,
       release: () => {
+        signal?.removeEventListener("abort", abandon);
         this.#turnBoundWaits.delete(wait);
       },
     };
@@ -1981,13 +1992,14 @@ export class AgentHost implements EngineAdapter {
   async #canUseTool(
     toolName: string,
     input: Record<string, unknown>,
+    signal?: AbortSignal,
   ): Promise<PermissionResult> {
     // AskUserQuestion arrives via canUseTool too, but needs a structured
     // dialog and a structured answer, not allow/deny (ADR-0027). Branch to the
     // question path when a decider is wired; else fall through to allow/deny.
     const decideQuestion = this.#options.decideQuestion;
     if (toolName === "AskUserQuestion" && decideQuestion) {
-      return this.#askUserQuestion(decideQuestion, input);
+      return this.#askUserQuestion(decideQuestion, input, signal);
     }
     // issue #175 (ADR-0044 F2 追補, 案 B): a conversation-unit whitelist
     // for send_to_agent. When this wrapper already had an approved send on
@@ -2036,7 +2048,7 @@ export class AgentHost implements EngineAdapter {
     // A decider that rejects after the wait was abandoned has no awaiter
     // left below; keep the rejection handled either way.
     void decisionPromise.catch(() => {});
-    const wait = this.#beginTurnBoundWait("permission");
+    const wait = this.#beginTurnBoundWait("permission", signal);
     this.#apply({ kind: "permission_request" });
     try {
       const decision = await Promise.race([decisionPromise, wait.abandoned]);
@@ -2074,13 +2086,14 @@ export class AgentHost implements EngineAdapter {
       questions: Question[],
     ) => Promise<QuestionDecision> | QuestionDecision,
     input: Record<string, unknown>,
+    signal?: AbortSignal,
   ): Promise<PermissionResult> {
     const questions = Array.isArray(input.questions)
       ? (input.questions as Question[])
       : [];
     const decisionPromise = Promise.resolve(decide(questions));
     void decisionPromise.catch(() => {});
-    const wait = this.#beginTurnBoundWait("question");
+    const wait = this.#beginTurnBoundWait("question", signal);
     this.#apply({ kind: "question_request" });
     try {
       const decision = await Promise.race([decisionPromise, wait.abandoned]);
