@@ -93,14 +93,17 @@ const ASSISTANT_ERROR_SUMMARIES: Readonly<Record<string, {
 };
 
 /** Bounded summary/hint for an assistant-level SDK error code. Falls back to
- *  a generic summary (embedding the raw code, not raw SDK text) for a value
- *  this table does not yet recognize, so a future SDK error class degrades
- *  gracefully instead of vanishing (こはく裁定: "unknown" に丸めず、コードを
- *  保持した上で summary は汎用文にする"). */
+ *  a fixed generic summary for a value this table does not yet recognize,
+ *  so a future SDK error class degrades gracefully instead of vanishing
+ *  (こはく裁定: "unknown" に丸めず、コードを保持した上で summary は汎用文に
+ *  する"). The generic summary is a FIXED string, never interpolated with
+ *  `code` -- `code` is an unvalidated SDK-supplied value, so splicing it
+ *  into error_summary would let an upstream SDK release put arbitrary text
+ *  into the primary UI line, defeating the closed-table contract
+ *  (protocol.md, ResultPayload.error_summary in @kaoiro/protocol). The
+ *  caller keeps `code` itself verbatim in error_code (ふじ2 round1 M2). */
 function assistantErrorSummary(code: string): { summary: string; hint?: string } {
-  return (
-    ASSISTANT_ERROR_SUMMARIES[code] ?? { summary: `APIエラーが発生しました (${code})` }
-  );
+  return ASSISTANT_ERROR_SUMMARIES[code] ?? { summary: "APIエラーが発生しました。" };
 }
 
 /** Extract the state-relevant block kinds and tool_use ids from an assistant

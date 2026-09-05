@@ -140,4 +140,39 @@ describe("AgentDetail error surfacing (issue #287)", () => {
       "最大ターン数到達",
     );
   });
+
+  // ふじ2 round1 M2: pin the DOM side of the closed-table contract -- a
+  // code this wrapper has never seen still renders the FIXED generic
+  // summary, never the code itself. Splicing the code back into the
+  // summary (adapter.ts's old bug) would turn this red.
+  it("未知の error_code でも error_summary は固定汎用文のまま (code 自体は DOM に出ない)", async () => {
+    const target = await render([
+      resultLog({
+        is_error: true,
+        error_code: "some_future_code",
+        error_summary: "APIエラーが発生しました。",
+      }),
+    ]);
+    const turnEnd = target.querySelector(".turn-end");
+    expect(turnEnd?.textContent).toContain("APIエラーが発生しました。");
+    expect(turnEnd?.textContent).not.toContain("some_future_code");
+  });
+
+  // negative control (issue #287, wire/console 側は host.test.ts が担当):
+  // is_error 時は res.text を一切見ない実装であることを rendered DOM で確認。
+  // token 風文字列がたとえ payload.text に漏れていても、この分岐が読まない
+  // 限り画面には出ない。
+  it("is_error=true のとき payload.text は DOM のどこにも描画されない (negative control)", async () => {
+    const TOKEN_LIKE =
+      "sk-ant-api03-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
+    const target = await render([
+      resultLog({
+        is_error: true,
+        error_code: "authentication_failed",
+        error_summary: "認証の有効期限が切れました。",
+        text: `Failed to authenticate: ${TOKEN_LIKE}`,
+      }),
+    ]);
+    expect(target.innerHTML).not.toContain(TOKEN_LIKE);
+  });
 });

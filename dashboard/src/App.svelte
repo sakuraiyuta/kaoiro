@@ -106,18 +106,51 @@
   // when the agent next reports a live envelope or a subsequent
   // spawn_result for the same agent_id succeeds.
   let spawnErrors = $state<Record<string, string>>({});
-  // Latest unacknowledged error-result entry key per agent (issue #287).
+  // Sticky error badge (issue #287, ふじ2 round1 M1): the transcript
+  // (`logs`) is the source of truth, NOT the live envelope stream alone.
   // AgentCard's needs-attention badge otherwise tracks only the LIVE state
   // (waiting_permission/waiting_question/error), which an error result
   // clears within the same second when the state machine moves on to
-  // waiting_input (protocol.md: error/done are momentary, followed
-  // immediately by waiting_input) — the operator never sees it. Kept in
-  // memory only (こはく裁定 2026-09-05: reload re-arming the badge is the
-  // safe-side default over a per-browser localStorage ack that would not
-  // reach a second operator/tab). Set below when a `result` envelope with
-  // is_error arrives; cleared by the `selected` effect when the operator
-  // opens that agent's detail (ack).
-  let unackedErrorKey = $state<Record<string, string>>({});
+  // waiting_input (protocol.md: error/done are momentary) — the operator
+  // never sees it, AND a dashboard that was disconnected when the error
+  // happened would never see it either (the error only ever arrives via
+  // `onHistory`/replay for that connection, never as a live `onEnvelope`).
+  //
+  // `ackedErrorKeys` is the only piece of state (agent_id -> the entry key
+  // that was acked); `unackedErrorKey` below is DERIVED from it plus
+  // `logs`, so every path that populates `logs` (live onEnvelope, onHistory,
+  // replay) is covered uniformly with no separate wiring per path.
+  // In-memory only (こはく裁定 2026-09-05: reload re-arming the badge is
+  // the safe-side default over a per-browser localStorage ack that would
+  // not reach a second operator/tab) — cleared wholesale on logout()
+  // alongside `logs` itself, so a later login's re-derived unackedErrorKey
+  // does not carry a stale operator's ack forward onto a fresh session.
+  let ackedErrorKeys = $state<Record<string, string>>({});
+  /** Newest is_error result entry key per agent, scanned from `logs`
+   *  newest-first per agent so a later error always wins over an earlier
+   *  still-unacked one. */
+  const latestErrorKeyByAgent = $derived.by<Record<string, string>>(() => {
+    const result: Record<string, string> = {};
+    for (const [agentId, transcript] of Object.entries(logs)) {
+      for (let i = transcript.length - 1; i >= 0; i--) {
+        const envelope = transcript[i];
+        if (envelope.type === "result" && resultOf(envelope)?.is_error) {
+          result[agentId] = conversationEntryKey(envelope);
+          break;
+        }
+      }
+    }
+    return result;
+  });
+  /** agent_id -> entry key, present only when that agent's newest is_error
+   *  result has not yet been acked (opening its detail). */
+  const unackedErrorKey = $derived.by<Record<string, string>>(() => {
+    const result: Record<string, string> = {};
+    for (const [agentId, key] of Object.entries(latestErrorKeyByAgent)) {
+      if (ackedErrorKeys[agentId] !== key) result[agentId] = key;
+    }
+    return result;
+  });
   // Per-agent session-reset progress (ADR-0036 F7, phase-17 17-9). The
   // value is the mode being reset ("new" | "clear"); presence in the
   // map means the reset is between started and completed/failed, which
@@ -176,12 +209,16 @@
   // issue #287: opening an agent's detail is the ack for its sticky error
   // badge (unackedErrorKey above) — every `selected` write path (there are
   // several; see the assignments below) funnels through this one effect
-  // instead of each call site remembering to ack.
+  // instead of each call site remembering to ack. Acking records the
+  // CURRENT key into ackedErrorKeys (not a delete) so a later reconnect
+  // that re-delivers the same newest error via onHistory does not
+  // re-arm the badge — only a genuinely NEWER error (a different key)
+  // does.
   $effect(() => {
     const id = selected;
-    if (id !== null && unackedErrorKey[id] !== undefined) {
-      const { [id]: _drop, ...rest } = unackedErrorKey;
-      unackedErrorKey = rest;
+    const key = id === null ? undefined : unackedErrorKey[id];
+    if (key !== undefined) {
+      ackedErrorKeys = { ...ackedErrorKeys, [id as string]: key };
     }
   });
   // Timeline click の発話位置。AgentDetail は stable entry identity を DOM
@@ -781,17 +818,11 @@
               }
             }
             logs = next;
-            // issue #287: an error result stays the sticky attention badge
-            // even after the state machine moves on to waiting_input —
-            // opening the detail (the `selected` effect below) acks it.
-            // Keyed to THIS envelope specifically so a later error
-            // overwrites an earlier still-unacked one (latest wins).
-            if (envelope.type === "result" && resultOf(envelope)?.is_error) {
-              unackedErrorKey = {
-                ...unackedErrorKey,
-                [envelope.agent_id]: conversationEntryKey(envelope),
-              };
-            }
+            // issue #287: unackedErrorKey (above) is derived from `logs`
+            // directly, so no separate bookkeeping is needed here — this
+            // assignment already covers the sticky-badge case (ふじ2 M1:
+            // history-sourced errors, e.g. from onHistory below, are
+            // covered the same way, not just this live path).
             // JSONL resume replay deliberately reuses ordinary `envelope`
             // events. Its explicit reset/complete boundary, rather than an
             // arrival-count heuristic, is what distinguishes it from a live
@@ -1385,6 +1416,12 @@
     // Don't keep the previous session's data behind the login form.
     agents = {};
     logs = {};
+    // issue #287 (ふじ2 round1 M1): unackedErrorKey derives from `logs` +
+    // ackedErrorKeys, so clearing `logs` alone already zeroes it for the
+    // NEXT session's re-derivation -- but ackedErrorKeys itself must be
+    // cleared too, or a stale ack (same agent_id reused by a later login)
+    // would silently suppress that fresh session's first real error.
+    ackedErrorKeys = {};
     wrapperBuildInfos = {};
     liveSinceJoin = {};
     awaitingSnapshot = false;

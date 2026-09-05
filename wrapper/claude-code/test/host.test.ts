@@ -1927,6 +1927,37 @@ describe("AgentHost — query injection", () => {
     expect(JSON.stringify(res?.payload)).not.toContain("OAuth session expired");
   });
 
+  // ふじ2 round1 M2: the fixed phrase above is not a stand-in for a real
+  // secret shape -- pin a token-LIKE string explicitly across wire, console,
+  // and (agentDetailErrorSurfacing.integration.test.ts) rendered DOM.
+  it("token 風の raw SDK text は wire payload にも console 出力にも一切現れない (issue #287 negative control)", async () => {
+    const TOKEN_LIKE =
+      "sk-ant-api03-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logs: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onLog: (e) => logs.push(e),
+      queryFn: scriptedQuery([
+        assistant([{ type: "text" }], "authentication_failed"),
+        result("success", {
+          is_error: true,
+          result: `Failed to authenticate: ${TOKEN_LIKE}`,
+        }),
+      ]),
+      now: () => "T",
+    });
+    await host.run();
+    const res = logs.find((l) => l.type === "result");
+    expect(JSON.stringify(res?.payload)).not.toContain(TOKEN_LIKE);
+    for (const call of [...warnSpy.mock.calls, ...errorSpy.mock.calls]) {
+      expect(call.map(String).join(" ")).not.toContain(TOKEN_LIKE);
+    }
+    warnSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+
   it("success + is_error=true が続いた後の success はコードを持ち越さない (issue #287)", async () => {
     const logs: Envelope[] = [];
     const host = new AgentHost(config, {

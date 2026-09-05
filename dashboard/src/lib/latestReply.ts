@@ -36,7 +36,19 @@ function toSummary(text: string): string {
 
 function replyText(envelope: Envelope): string | null {
   if (envelope.type === "result") {
-    const text = (envelope.payload as { text?: unknown } | undefined)?.text;
+    const payload = envelope.payload as
+      | { text?: unknown; is_error?: unknown; error_summary?: unknown }
+      | undefined;
+    // issue #287 (ふじ2 round1 S1): a success-subtype API error (e.g. auth
+    // failure) never carries payload.text (adapter.ts drops it on
+    // is_error, so the raw SDK text cannot reach the wire) -- reading
+    // .text alone left the timeline row blank instead of showing the
+    // wrapper's own bounded summary that AgentDetail already prefers.
+    if (payload?.is_error === true) {
+      const summary = payload.error_summary;
+      return typeof summary === "string" ? summary : "";
+    }
+    const text = payload?.text;
     return typeof text === "string" ? text : "";
   }
   if (envelope.type === "log") {

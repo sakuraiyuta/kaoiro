@@ -3385,9 +3385,12 @@ export class AgentHost implements EngineAdapter {
     if (typeof payload.error_detail === "string") {
       out.error_detail = clipText(payload.error_detail).text;
     }
-    // issue #287: error_code/error_summary/recovery_hint are bounded,
-    // wrapper-generated text (assistantErrorSummary's closed table) — never
-    // raw SDK output — so no clipText here, unlike error_detail above.
+    // issue #287: error_code is the SDK's OWN error-class string, forwarded
+    // verbatim (NOT wrapper-generated — see assistantErrorSummary's own doc
+    // for why it must never be spliced into error_summary/recovery_hint).
+    // error_summary/recovery_hint themselves ARE bounded, wrapper-generated
+    // text from a closed table — never raw SDK output — so no clipText on
+    // any of the three here, unlike error_detail above.
     if (typeof payload.error_code === "string") {
       out.error_code = payload.error_code;
     }

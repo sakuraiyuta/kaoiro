@@ -485,13 +485,18 @@ describe("sdkMessageToResult", () => {
     });
   });
 
-  it("未知の assistantErrorCode はコードを保持しつつ汎用 summary に丸める (issue #287)", () => {
+  it("未知の assistantErrorCode はコードを保持しつつ summary は固定汎用文に丸める (issue #287, ふじ2 round1 M2)", () => {
     const payload = sdkMessageToResult(
       msg({ type: "result", subtype: "success", is_error: true, result: "x" }),
       "some_future_code",
     );
     expect(payload?.error_code).toBe("some_future_code");
-    expect(payload?.error_summary).toBe("APIエラーが発生しました (some_future_code)");
+    // Fixed string, NOT interpolated with the code -- error_summary must
+    // stay a closed-table value even for a code this table has never seen,
+    // or an upstream SDK release could put arbitrary text into the primary
+    // UI line via error_summary. code に補間を戻すと red になる.
+    expect(payload?.error_summary).toBe("APIエラーが発生しました。");
+    expect(payload?.error_summary).not.toContain("some_future_code");
     expect(payload).not.toHaveProperty("recovery_hint");
   });
 

@@ -143,4 +143,37 @@ describe("latestReplies (#25)", () => {
     const [entry] = latestReplies({ "agent-a": [noText] });
     expect(entry?.summary).toBe("");
   });
+
+  // issue #287 (ふじ2 round1 S1): a success+is_error result never carries
+  // payload.text (adapter.ts drops it), so the pre-#287 behavior left this
+  // row blank even though the wrapper's own error_summary was available.
+  it("is_error の result は error_summary を summary に使う (issue #287)", () => {
+    const authFailure: Envelope = {
+      version: "0",
+      agent_id: "agent-a",
+      ts: "2026-07-23T15:00:00Z",
+      type: "result",
+      state: "error",
+      payload: {
+        is_error: true,
+        error_code: "authentication_failed",
+        error_summary: "認証の有効期限が切れました。",
+      },
+    };
+    const [entry] = latestReplies({ "agent-a": [authFailure] });
+    expect(entry?.summary).toBe("認証の有効期限が切れました。");
+  });
+
+  it("is_error かつ error_summary も無いエントリは空 summary のまま (回帰防止)", () => {
+    const bare: Envelope = {
+      version: "0",
+      agent_id: "agent-a",
+      ts: "2026-07-23T15:00:00Z",
+      type: "result",
+      state: "error",
+      payload: { is_error: true, error_subtype: "error_max_turns" },
+    };
+    const [entry] = latestReplies({ "agent-a": [bare] });
+    expect(entry?.summary).toBe("");
+  });
 });

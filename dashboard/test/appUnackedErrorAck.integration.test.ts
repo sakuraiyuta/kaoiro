@@ -152,4 +152,115 @@ describe("App.svelte unacked error badge wiring (issue #287)", () => {
 
     expect(document.querySelector(".badge")).toBeNull();
   });
+
+  // ふじ2 round1 M1: logs (transcript/history) is the source of truth for
+  // the sticky badge, not just the live onEnvelope path -- a dashboard that
+  // was disconnected when the error happened must still see it via
+  // onHistory alone.
+  it("history のみに含まれる is_error result でもバッジが立つ (history-only, live envelope 無し)", async () => {
+    const h = await mountApp();
+    h.onHosts?.([]);
+    h.onSnapshot({ "host-a.p": onlineEnvelope("host-a.p", "あお") });
+    h.onHistory?.({ "host-a.p": [errorResultEnvelope("host-a.p")] }, {});
+    await tick();
+
+    expect(document.querySelector(".badge")).not.toBeNull();
+  });
+
+  it("ack 後、同じ history で reconnect してもバッジは再点灯しない", async () => {
+    const h = await mountApp();
+    h.onHosts?.([]);
+    h.onSnapshot({ "host-a.p": onlineEnvelope("host-a.p", "あお") });
+    h.onHistory?.({ "host-a.p": [errorResultEnvelope("host-a.p")] }, {});
+    await tick();
+    await openDetailFromGrid();
+    document
+      .querySelector<HTMLButtonElement>("button.blindspot")
+      ?.click();
+    await tick();
+    expect(document.querySelector(".badge")).toBeNull();
+
+    // Reconnect: the server re-sends the SAME history (same envelope, same
+    // entry key) -- e.g. a socket blip that re-triggers the join push.
+    h.onHistory?.({ "host-a.p": [errorResultEnvelope("host-a.p")] }, {});
+    await tick();
+
+    expect(document.querySelector(".badge")).toBeNull();
+  });
+
+  it("fresh mount (reload 相当) では ack が引き継がれず再点灯する", async () => {
+    const h1 = await mountApp();
+    h1.onHosts?.([]);
+    h1.onSnapshot({ "host-a.p": onlineEnvelope("host-a.p", "あお") });
+    h1.onHistory?.({ "host-a.p": [errorResultEnvelope("host-a.p")] }, {});
+    await tick();
+    await openDetailFromGrid();
+    document
+      .querySelector<HTMLButtonElement>("button.blindspot")
+      ?.click();
+    await tick();
+    expect(document.querySelector(".badge")).toBeNull();
+
+    // Reload: a brand-new App instance -- ackedErrorKeys is in-memory only
+    // (こはく裁定), so it must NOT survive this.
+    await unmount(component!);
+    component = null;
+    captured.handlers = null;
+    document.body.innerHTML = "";
+
+    const h2 = await mountApp();
+    h2.onHosts?.([]);
+    h2.onSnapshot({ "host-a.p": onlineEnvelope("host-a.p", "あお") });
+    h2.onHistory?.({ "host-a.p": [errorResultEnvelope("host-a.p")] }, {});
+    await tick();
+
+    expect(document.querySelector(".badge")).not.toBeNull();
+  });
+
+  it("logout 後の再ログインでは stale ack が持ち越されない (同じ agent_id でもバッジが立つ)", async () => {
+    vi.stubGlobal("confirm", () => true);
+    const h = await mountApp();
+    h.onHosts?.([]);
+    h.onSnapshot({ "host-a.p": onlineEnvelope("host-a.p", "あお") });
+    h.onHistory?.({ "host-a.p": [errorResultEnvelope("host-a.p")] }, {});
+    await tick();
+    await openDetailFromGrid();
+    document
+      .querySelector<HTMLButtonElement>("button.blindspot")
+      ?.click();
+    await tick();
+    expect(document.querySelector(".badge")).toBeNull();
+
+    // Logout via the UI (confirm() stubbed true above). logout() itself is
+    // async (awaits the DELETE fetch before flipping needLogin), so the
+    // login form needs an extra microtask turn to actually mount.
+    document.querySelector<HTMLButtonElement>("button.logout")?.click();
+    await tick();
+    await tick();
+
+    // Re-login through the actual form -- exercises logout()'s own clear,
+    // not a re-mount (which would trivially clear everything).
+    captured.handlers = null;
+    const tokenInput = document.querySelector<HTMLInputElement>(
+      'input[aria-label="アクセストークン"]',
+    );
+    const form = document.querySelector<HTMLFormElement>("form.login-card");
+    expect(tokenInput).not.toBeNull();
+    expect(form).not.toBeNull();
+    tokenInput!.value = "dummy-token";
+    tokenInput!.dispatchEvent(new Event("input", { bubbles: true }));
+    form!.dispatchEvent(
+      new Event("submit", { bubbles: true, cancelable: true }),
+    );
+    await vi.waitFor(() => {
+      if (captured.handlers === null) throw new Error("not reconnected yet");
+    });
+    const h2 = captured.handlers!;
+    h2.onHosts?.([]);
+    h2.onSnapshot({ "host-a.p": onlineEnvelope("host-a.p", "あお") });
+    h2.onHistory?.({ "host-a.p": [errorResultEnvelope("host-a.p")] }, {});
+    await tick();
+
+    expect(document.querySelector(".badge")).not.toBeNull();
+  });
 });
