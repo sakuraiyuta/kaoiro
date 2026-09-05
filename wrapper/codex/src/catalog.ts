@@ -54,6 +54,8 @@ const ASTRA: EngineModelInfo = {
 };
 
 const CHATGPT_PLUS_MODELS = [SOL, TERRA, LUNA, ASTRA];
+// Free/Go exclusions follow the Plan × available-model table in
+// docs/specs/codex-model-catalog.md.
 const CHATGPT_TERRA = [TERRA];
 
 const APIKEY_MODELS: EngineModelInfo[] = [
@@ -75,6 +77,8 @@ const APIKEY_MODELS: EngineModelInfo[] = [
     minimal_client_version: "0.98.0",
   },
 ];
+
+const CURATED_MODELS = APIKEY_MODELS;
 
 function copyCatalog(models: EngineModelInfo[]): EngineModelInfo[] {
   return models.map((model) => ({
@@ -98,6 +102,8 @@ function parseCoreVersion(value: string, source: string): CoreVersion {
   if (parts.some((part) => !Number.isSafeInteger(part))) {
     throw new Error(`${source} has an unsafe version component`);
   }
+  // The catalog's minima are stable release thresholds, so prerelease/build
+  // metadata does not participate in compatibility decisions.
   return [parts[0]!, parts[1]!, parts[2]!];
 }
 
@@ -125,6 +131,59 @@ function bundledCodexVersion(): string {
 
 export const BUNDLED_CODEX_VERSION = bundledCodexVersion();
 
+const warnedUndeclaredOperatorModels = new Set<string>();
+
+function restoreCuratedMinimums(
+  base: readonly EngineModelInfo[],
+  merged: readonly EngineModelInfo[],
+  operatorExtraModels: readonly EngineModelInfo[] | undefined,
+): EngineModelInfo[] {
+  if (operatorExtraModels === undefined) return [...merged];
+  const curatedMinimums = new Map(
+    base.flatMap((model) =>
+      model.minimal_client_version === undefined
+        ? []
+        : [[model.value, model.minimal_client_version] as const],
+    ),
+  );
+  const operatorValuesWithoutMinimum = new Set(
+    operatorExtraModels
+      .filter((model) => model.minimal_client_version === undefined)
+      .map((model) => model.value),
+  );
+  return merged.map((model) => {
+    const minimum = curatedMinimums.get(model.value);
+    if (
+      minimum === undefined ||
+      !operatorValuesWithoutMinimum.has(model.value)
+    ) {
+      return model;
+    }
+    return { ...model, minimal_client_version: minimum };
+  });
+}
+
+/** Rejects a static model pin that the bundled CLI cannot execute. An
+ * operator may explicitly provide a minimum for an override, making its
+ * compatibility declaration authoritative instead of the curated one. */
+export function assertCuratedModelCompatible(
+  value: string | null,
+  operatorExtraModels: readonly EngineModelInfo[] | undefined,
+  clientVersion = BUNDLED_CODEX_VERSION,
+): void {
+  if (value === null) return;
+  const operatorOverride = operatorExtraModels?.find(
+    (model) => model.value === value,
+  );
+  if (operatorOverride?.minimal_client_version !== undefined) return;
+  const curated = CURATED_MODELS.find((model) => model.value === value);
+  const minimum = curated?.minimal_client_version;
+  if (minimum === undefined || isAtLeast(clientVersion, minimum)) return;
+  throw new Error(
+    `codex: model ${value} requires Codex >= ${minimum}, bundled version is ${clientVersion}`,
+  );
+}
+
 function filterCatalogByClientVersion(
   catalog: readonly EngineModelInfo[],
   operatorExtraModels: readonly EngineModelInfo[] | undefined,
@@ -135,7 +194,11 @@ function filterCatalogByClientVersion(
   );
   return catalog.filter((model) => {
     if (model.minimal_client_version === undefined) {
-      if (operatorValues.has(model.value)) {
+      if (
+        operatorValues.has(model.value) &&
+        !warnedUndeclaredOperatorModels.has(model.value)
+      ) {
+        warnedUndeclaredOperatorModels.add(model.value);
         process.stderr.write(
           `codex: warn — minimal_client_version is not declared for operator model ${model.value}; CLI compatibility is the operator's responsibility\n`,
         );
@@ -180,8 +243,13 @@ export function resolveCodexCatalog(
   } else {
     catalog = copyCatalog(CHATGPT_PLUS_MODELS);
   }
-  return filterCatalogByClientVersion(
+  const merged = restoreCuratedMinimums(
+    catalog,
     mergeExtraModels(catalog, extraModels),
+    extraModels,
+  );
+  return filterCatalogByClientVersion(
+    merged,
     extraModels,
     clientVersion,
   );

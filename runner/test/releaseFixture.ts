@@ -243,7 +243,14 @@ export function writeReleaseTree(
         name: `@kaoiro/${wrapper}`,
         version: "0.0.0",
         type: "module",
-        dependencies: { "@kaoiro/wrapper-core": "workspace:*" },
+        dependencies:
+          wrapper === "codex"
+            ? {
+                "@kaoiro/wrapper-core": "workspace:*",
+                "@openai/codex": "0.153.4",
+                "@openai/codex-sdk": "^0.153.4",
+              }
+            : { "@kaoiro/wrapper-core": "workspace:*" },
         ...runtime,
       }),
     );
@@ -293,6 +300,19 @@ export function writeReleaseTree(
     "node_modules/@kaoiro/wrapper-core/dist/index.js",
     "// stub shared wrapper package\n",
   );
+  put(
+    "node_modules/@openai/codex/package.json",
+    JSON.stringify({ name: "@openai/codex", version: "0.153.4" }),
+  );
+  put(
+    "node_modules/@openai/codex-sdk/package.json",
+    JSON.stringify({
+      name: "@openai/codex-sdk",
+      version: "0.153.4",
+      exports: { ".": { import: "./dist/index.js" } },
+    }),
+  );
+  put("node_modules/@openai/codex-sdk/dist/index.js", "// stub SDK\n");
 
   // LAST, so a test can override a standard-tree file and not merely add one.
   for (const [rel, content] of Object.entries(options.extraFiles ?? {})) {
@@ -382,6 +402,25 @@ export function writeWorkspaceCheckout(
     mkdirSync(dirname(member), { recursive: true });
     renameSync(link, member);
     symlinkSync(`../../../wrapper/${wrapper}`, link);
+  }
+  const runtimePackages = join(runner, "node_modules", "@openai");
+  const workspacePackages = join(
+    ws,
+    "node_modules",
+    ".pnpm",
+    "runtime-deps",
+    "node_modules",
+    "@openai",
+  );
+  mkdirSync(dirname(workspacePackages), { recursive: true });
+  renameSync(runtimePackages, workspacePackages);
+  const codexPackages = join(ws, "wrapper", "codex", "node_modules", "@openai");
+  mkdirSync(codexPackages, { recursive: true });
+  for (const name of ["codex", "codex-sdk"]) {
+    symlinkSync(
+      `../../../../node_modules/.pnpm/runtime-deps/node_modules/@openai/${name}`,
+      join(codexPackages, name),
+    );
   }
   return runner;
 }

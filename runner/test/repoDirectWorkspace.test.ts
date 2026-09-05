@@ -93,6 +93,16 @@ describe("repo-direct な workspace checkout の起動検証", () => {
     expect(result.stdout).toContain("stub cli.js started");
   });
 
+  it("rejects a repo-direct checkout whose Codex runtime link is missing", () => {
+    unlinkSync(join(ws, "wrapper", "codex", "node_modules", "@openai", "codex"));
+
+    const result = launch();
+
+    expect(result.status).toBe(78);
+    expect(result.stderr).toContain("@openai/codex");
+    expect(result.stdout).not.toContain("stub cli.js started");
+  });
+
   it("workspace の外を指すリンクは exit 78 で起動しない", () => {
     // The negative control the release root used to provide for free. Widening
     // the boundary to the workspace must not widen it to the filesystem: a

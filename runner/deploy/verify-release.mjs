@@ -37,12 +37,12 @@
 // import.
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import vm from "node:vm";
 
-/** Artifacts a release must carry even when it has no MANIFEST.json — a
- *  repo-direct dev checkout, which the builder never touched. In a real
- *  release the manifest supersedes this list. */
+/** Artifacts a repo-direct checkout must carry even when it has no
+ * MANIFEST.json. A real release's manifest covers these first-party files. */
 const SENTINELS = [
   "dist/cli.js",
   "dist/build-info.json",
@@ -53,6 +53,7 @@ const SENTINELS = [
 
 const REVISION_RE = /^[0-9a-f]{40}$/;
 const VERSION_RE = /^\d{4}\.(?:[1-9]|1[0-2])\.\d+$/;
+const EXACT_SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 
 class VerifyError extends Error {}
 
@@ -578,6 +579,105 @@ function containedRealPath(root, realRoot, rel) {
   return checkBuildOutputLeaf(root, realRoot, rel, rel);
 }
 
+function containedRuntimePath(realRoot, path, label) {
+  let real;
+  try {
+    real = realpathSync(path);
+  } catch (err) {
+    fail(`${label} is not resolvable: ${err.message}`);
+  }
+  const within = relative(realRoot, real);
+  if (within === "" || within.startsWith("..") || isAbsolute(within)) {
+    fail(`${label} resolves outside the release: ${real}`);
+  }
+  let stats;
+  try {
+    stats = statSync(real);
+  } catch (err) {
+    fail(`${label} is unreadable: ${err.message}`);
+  }
+  if (!stats.isFile()) fail(`${label} is not an ordinary file: ${real}`);
+  return real;
+}
+
+function packageManifestFromRuntime(runtimeRequire, name) {
+  const paths = runtimeRequire.resolve.paths(name) ?? [];
+  for (const dir of paths) {
+    const candidate = join(dir, name, "package.json");
+    try {
+      if (statSync(candidate).isFile()) return candidate;
+      fail(`${name}'s package.json is not an ordinary file: ${candidate}`);
+    } catch (err) {
+      if (err.code === "ENOENT") continue;
+      fail(`${name}'s package.json is unreadable: ${err.message}`);
+    }
+  }
+  fail(`${name} is not resolvable from @kaoiro/codex`);
+}
+
+function esmImportEntry(manifestPath, name) {
+  let pkg;
+  try {
+    pkg = JSON.parse(readFileSync(manifestPath, "utf8"));
+  } catch (err) {
+    fail(`${name}'s package.json is unreadable or malformed: ${err.message}`);
+  }
+  const entry = pkg.exports?.["."]?.import;
+  if (typeof entry !== "string" || !entry.startsWith("./")) {
+    fail(`${name} has no relative ESM import entry`);
+  }
+  return join(dirname(manifestPath), entry);
+}
+
+function codexRuntimeFiles(root, realRoot) {
+  const wrapperCli = containedRealPath(
+    root,
+    realRoot,
+    "node_modules/@kaoiro/codex/dist/cli.js",
+  );
+  const runtimeRequire = createRequire(wrapperCli);
+  const wrapperPackagePath = join(dirname(dirname(wrapperCli)), "package.json");
+  let wrapperPackage;
+  try {
+    wrapperPackage = JSON.parse(readFileSync(wrapperPackagePath, "utf8"));
+  } catch (err) {
+    fail(`@kaoiro/codex package.json is unreadable or malformed: ${err.message}`);
+  }
+  const expectedVersion = wrapperPackage.dependencies?.["@openai/codex"];
+  if (typeof expectedVersion !== "string" || !EXACT_SEMVER_RE.test(expectedVersion)) {
+    fail("@kaoiro/codex must declare an exact @openai/codex version");
+  }
+  let codexPackagePath;
+  try {
+    codexPackagePath = runtimeRequire.resolve("@openai/codex/package.json");
+  } catch (err) {
+    fail(`@openai/codex is not resolvable from @kaoiro/codex: ${err.message}`);
+  }
+  const codexPackage = containedRuntimePath(
+    realRoot,
+    codexPackagePath,
+    "@openai/codex/package.json",
+  );
+  let installedCodex;
+  try {
+    installedCodex = JSON.parse(readFileSync(codexPackage, "utf8"));
+  } catch (err) {
+    fail(`@openai/codex package.json is unreadable or malformed: ${err.message}`);
+  }
+  if (installedCodex.version !== expectedVersion) {
+    fail(
+      `@openai/codex version ${String(installedCodex.version)} does not match @kaoiro/codex exact dependency ${expectedVersion}`,
+    );
+  }
+  const sdkPackage = packageManifestFromRuntime(runtimeRequire, "@openai/codex-sdk");
+  const sdkEntry = containedRuntimePath(
+    realRoot,
+    esmImportEntry(sdkPackage, "@openai/codex-sdk"),
+    "@openai/codex-sdk import entry",
+  );
+  return [codexPackage, sdkEntry];
+}
+
 /** The pnpm workspace root at or above `dir`, or null when there is none.
  *
  *  A REPO-DIRECT CHECKOUT'S BOUNDARY IS THE WORKSPACE, NOT runner/. pnpm links
@@ -1085,7 +1185,12 @@ export function verifyRelease(root, opts = {}) {
     // The wider boundary is what the workspace marker BUYS, and only there.
     const boundary = workspaceRootOf(realRoot) ?? realRoot;
     for (const rel of SENTINELS) containedRealPath(root, boundary, rel);
-    return { identity, checked: SENTINELS.length, manifest: false };
+    const runtimeFiles = codexRuntimeFiles(root, boundary);
+    return {
+      identity,
+      checked: SENTINELS.length + runtimeFiles.length,
+      manifest: false,
+    };
   }
 
   const manifest = parseManifest(manifestRaw);
@@ -1095,6 +1200,14 @@ export function verifyRelease(root, opts = {}) {
     listed.add(real);
     if (opts.hash === true && sha256(real) !== digest) {
       fail(`${rel} does not match its MANIFEST.json sha256`);
+    }
+  }
+
+  for (const runtimeFile of codexRuntimeFiles(root, realRoot)) {
+    if (!listed.has(runtimeFile)) {
+      fail(
+        `MANIFEST.json omits ${relative(realRoot, runtimeFile)}, which @kaoiro/codex resolves at runtime`,
+      );
     }
   }
 

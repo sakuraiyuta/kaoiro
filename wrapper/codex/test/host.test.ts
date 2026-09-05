@@ -355,6 +355,66 @@ async function runOneTurn(
 }
 
 describe("CodexHost", () => {
+  it("fails startup for a curated model newer than the bundled Codex CLI", () => {
+    expect(
+      () =>
+        new CodexHost(
+          { ...CONFIG, model: "gpt-6-astra" },
+          {
+            onState: () => {},
+            appendSystemPrompt: "p",
+            codexClientVersion: "0.144.1",
+          },
+        ),
+    ).toThrow(
+      "codex: model gpt-6-astra requires Codex >= 0.153.0, bundled version is 0.144.1",
+    );
+  });
+
+  it("rejects a switch to a curated model newer than the bundled Codex CLI", async () => {
+    const states: Envelope[] = [];
+    const { client } = makeClient([]);
+    const host = new CodexHost(
+      { ...CONFIG, model: "gpt-5.6-terra" },
+      {
+        onState: (state) => states.push(state),
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        codexClientVersion: "0.144.1",
+      },
+    );
+
+    await expect(host.setModel("gpt-6-astra")).rejects.toThrow(
+      "codex: model gpt-6-astra requires Codex >= 0.153.0, bundled version is 0.144.1",
+    );
+    expect(states).toEqual([]);
+    host.close();
+  });
+
+  it("leaves an explicitly declared operator model outside the curated startup gate", () => {
+    expect(
+      () =>
+        new CodexHost(
+          {
+            ...CONFIG,
+            model: "operator-model",
+            codex_extra_models: [
+              {
+                value: "operator-model",
+                display_name: "Operator model",
+                minimal_client_version: "0.153.0",
+              },
+            ],
+          },
+          {
+            onState: () => {},
+            appendSystemPrompt: "p",
+            codexClientVersion: "0.144.1",
+          },
+        ),
+    ).not.toThrow();
+  });
+
   it("finishes a real SDK stream when command output contains U+2028", async () => {
     const root = await mkdtemp(join(tmpdir(), "kaoiro-codex-sdk-line-split-"));
     const executable = join(root, "fake-codex");

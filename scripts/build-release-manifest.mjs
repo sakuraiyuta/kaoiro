@@ -12,12 +12,13 @@
 // a fault no restart can fix (reproduced 2026-08-16).
 //
 // SCOPE IS THE FIRST-PARTY JS: the runner's own dist/, plus the dist/ of
-// every @kaoiro package reachable from the two wrappers it spawns.
-// Deliberately NOT the engine CLI payloads, which are ~920 MB of the archive
-// — they are not resolved through the module graph the launch shim protects,
-// and hashing them would make install-time verification cost minutes for no
-// added coverage. That residual is stated in runner/deploy/verify-release.mjs
-// too, where the checking happens.
+// every @kaoiro package reachable from the two wrappers it spawns. It also
+// records the Codex package metadata and SDK import entry resolved from the
+// wrapper's actual runtime location. Deliberately NOT the engine CLI payloads,
+// which are ~920 MB of the archive — they are not resolved through the module
+// graph the launch shim protects, and hashing them would make install-time
+// verification cost minutes for no added coverage. That residual is stated in
+// runner/deploy/verify-release.mjs too, where the checking happens.
 import { createHash } from "node:crypto";
 import {
   readdirSync,
@@ -27,7 +28,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join, relative, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 
 /** The wrapper packages the runner resolves from disk at spawn time. Their
  *  first-party dependencies are FOLLOWED from here, never listed: the
@@ -45,6 +46,85 @@ const ENTRY_PACKAGES = [
 ];
 
 const CODE_FILE_RE = /\.(js|mjs|cjs|json)$/;
+
+function runtimeFailure(message) {
+  process.stderr.write(`build-release-manifest: ${message}\n`);
+  process.exit(70); // EX_SOFTWARE
+}
+
+function containedRuntimeFile(root, path, label) {
+  let real;
+  try {
+    real = realpathSync(path);
+  } catch (err) {
+    runtimeFailure(`${label} is not resolvable: ${err.message}`);
+  }
+  const rel = relative(root, real);
+  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
+    runtimeFailure(`${label} resolves outside the release: ${real}`);
+  }
+  try {
+    if (!statSync(real).isFile()) {
+      runtimeFailure(`${label} is not an ordinary file: ${real}`);
+    }
+  } catch (err) {
+    runtimeFailure(`${label} is unreadable: ${err.message}`);
+  }
+  return { real, rel: rel.split(sep).join("/") };
+}
+
+function packageManifestFromRuntime(runtimeRequire, name) {
+  const paths = runtimeRequire.resolve.paths(name) ?? [];
+  for (const dir of paths) {
+    const candidate = join(dir, name, "package.json");
+    try {
+      if (statSync(candidate).isFile()) return candidate;
+      runtimeFailure(`${name}'s package.json is not an ordinary file: ${candidate}`);
+    } catch (err) {
+      if (err.code === "ENOENT") continue;
+      runtimeFailure(`${name}'s package.json is unreadable: ${err.message}`);
+    }
+  }
+  runtimeFailure(`${name} is not resolvable from @kaoiro/codex`);
+}
+
+function esmImportEntry(manifestPath, name) {
+  let pkg;
+  try {
+    pkg = JSON.parse(readFileSync(manifestPath, "utf8"));
+  } catch (err) {
+    runtimeFailure(`${name}'s package.json is unreadable or malformed: ${err.message}`);
+  }
+  const entry = pkg.exports?.["."]?.import;
+  if (typeof entry !== "string" || !entry.startsWith("./")) {
+    runtimeFailure(`${name} has no relative ESM import entry`);
+  }
+  return join(dirname(manifestPath), entry);
+}
+
+function codexRuntimeFiles(root) {
+  const wrapperCli = containedRuntimeFile(
+    root,
+    join(root, "node_modules/@kaoiro/codex/dist/cli.js"),
+    "@kaoiro/codex CLI",
+  );
+  const runtimeRequire = createRequire(wrapperCli.real);
+  let codexPackage;
+  try {
+    codexPackage = runtimeRequire.resolve("@openai/codex/package.json");
+  } catch (err) {
+    runtimeFailure(`@openai/codex is not resolvable from @kaoiro/codex: ${err.message}`);
+  }
+  const sdkPackage = packageManifestFromRuntime(runtimeRequire, "@openai/codex-sdk");
+  return [
+    containedRuntimeFile(root, codexPackage, "@openai/codex/package.json"),
+    containedRuntimeFile(
+      root,
+      esmImportEntry(sdkPackage, "@openai/codex-sdk"),
+      "@openai/codex-sdk import entry",
+    ),
+  ];
+}
 
 function collect(root, dir, files) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -128,6 +208,9 @@ function main(argv) {
       process.exit(70); // EX_SOFTWARE
     }
     collect(root, dir, files);
+  }
+  for (const file of codexRuntimeFiles(root)) {
+    files[file.rel] = createHash("sha256").update(readFileSync(file.real)).digest("hex");
   }
   const count = Object.keys(files).length;
   if (count === 0) {

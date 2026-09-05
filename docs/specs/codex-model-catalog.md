@@ -56,6 +56,9 @@ Free/Go experience — kaoiro's own catalog (`wrapper/codex/src/catalog.ts`)
 therefore only advertises it for Plus and above, matching Sol/Terra/Luna's
 existing tiering (issue #292).
 
+The advertised set is then filtered by the bundled Codex CLI version: an
+entry whose `minimal_client_version` is newer is not offered.
+
 **Model slugs** (identifiers used by `--model` / `~/.codex/config.toml` /
 `-c model=`):
 `gpt-5.6-sol` / `gpt-5.6-terra` / `gpt-5.6-luna` / `gpt-6-astra` / `gpt-5.5` /
@@ -182,6 +185,8 @@ themselves in the meantime:
   `mergeExtraModels` (runner/src/config.ts, and the identical wrapper-side
   copy in `@kaoiro/agent-common`'s `catalog.ts`): a `value` matching an
   existing entry overrides it in place, a new `value` is appended. The
+  matching Codex entry retains its curated `minimal_client_version` unless
+  the declaration explicitly supplies a replacement.
   runner applies this to the register payload it advertises (so
   LaunchDialog offers it before any wrapper exists); the wrapper applies
   the same merge to its own catalog resolution (`ext.models`, effort-switch
@@ -194,8 +199,9 @@ themselves in the meantime:
 - A Codex declaration may include `minimal_client_version` as a
   `major.minor.patch` string. When present, the runner and wrapper exclude
   the entry if the SDK-bundled Codex CLI is older. When absent, the entry
-  remains advertised and the runner writes one warning: CLI compatibility is
-  the operator's responsibility for that escape-hatch declaration.
+  remains advertised and the runner and wrapper write one warning per model:
+  CLI compatibility is the operator's responsibility for that escape-hatch
+  declaration.
 
 ## Information granularity of `codex doctor`
 

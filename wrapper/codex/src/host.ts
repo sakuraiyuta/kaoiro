@@ -65,7 +65,11 @@ import {
   threadEventToSessionId,
   threadEventToTasklist,
 } from "./adapter.js";
-import { effortLevelsForModel, resolveCodexCatalog } from "./catalog.js";
+import {
+  assertCuratedModelCompatible,
+  effortLevelsForModel,
+  resolveCodexCatalog,
+} from "./catalog.js";
 import { effectiveNetworkAccess } from "./network_access.js";
 import {
   codexRateLimitsFromRolloutIn,
@@ -342,6 +346,8 @@ export interface CodexHostOptions {
   nowMs?: () => number;
   /** Maximum time to drain SDK output after a terminal event. */
   terminalDrainGraceMs?: number;
+  /** Overrides the bundled CLI version for deterministic compatibility tests. */
+  codexClientVersion?: string;
   /** Test seam for deterministic materialization lifecycle races. */
   materializeImages?: (
     agentId: string,
@@ -632,6 +638,12 @@ export class CodexHost implements EngineAdapter {
       config.codex_auth_mode ?? "unknown",
       config.codex_chatgpt_plan,
       config.codex_extra_models,
+      options.codexClientVersion,
+    );
+    assertCuratedModelCompatible(
+      this.#model,
+      config.codex_extra_models,
+      options.codexClientVersion,
     );
     this.#sessionId = options.resumeSessionId ?? null;
     // Phase-23 (ADR-0014 F1 追補 P1): a resume snapshot can restore both
@@ -981,6 +993,11 @@ export class CodexHost implements EngineAdapter {
   async setModel(value: string): Promise<void> {
     // Applies from the next turn: each turn resumes the thread with fresh
     // ThreadOptions, so no live session state needs touching.
+    assertCuratedModelCompatible(
+      value,
+      this.#config.codex_extra_models,
+      this.#options.codexClientVersion,
+    );
     this.#modelPending = value;
     this.#effortResetPending = false;
     const model = this.#catalog.find((entry) => entry.value === value);

@@ -401,6 +401,36 @@ describe("kaoiro-runner-install.sh (issue #229)", () => {
     expect(result.stderr).toContain("package.json");
   });
 
+  it("rejects a built release whose runtime-resolved Codex package is missing", () => {
+    const revision = revisionOf("codex-runtime-package-gone");
+    const asset = "node_modules/@openai/codex/package.json";
+    const archive = makeReleaseTarball(work, revision, {
+      omit: [asset],
+      dropManifestEntries: [asset],
+    });
+
+    const result = install(archive);
+
+    expect(result.status).toBe(70);
+    expect(result.stderr).toContain("@openai/codex");
+    expect(existsSync(join(root, "releases", revision))).toBe(false);
+  });
+
+  it("rejects a manifest that omits the runtime-resolved Codex package", () => {
+    const revision = revisionOf("codex-runtime-package-unlisted");
+    const asset = "node_modules/@openai/codex/package.json";
+    const archive = makeReleaseTarball(work, revision, {
+      dropManifestEntries: [asset],
+    });
+
+    const result = install(archive);
+
+    expect(result.status).toBe(70);
+    expect(result.stderr).toContain("MANIFEST.json omits");
+    expect(result.stderr).toContain("@openai/codex/package.json");
+    expect(existsSync(join(root, "releases", revision))).toBe(false);
+  });
+
   it.each([
     // Enough `..` to reach the filesystem root from anywhere the staging dir
     // sits, so the target really EXISTS and the containment check is what
@@ -421,7 +451,10 @@ describe("kaoiro-runner-install.sh (issue #229)", () => {
           name: "@kaoiro/codex",
           version: "0.0.0",
           type: "module",
-          dependencies: { "@kaoiro/wrapper-core": "workspace:*" },
+          dependencies: {
+            "@kaoiro/wrapper-core": "workspace:*",
+            "@openai/codex": "0.153.4",
+          },
           kaoiro: { runtimeAssets: [declared] },
         }),
       },

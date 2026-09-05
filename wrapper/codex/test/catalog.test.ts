@@ -232,6 +232,35 @@ describe("resolveCodexCatalog", () => {
       stderr.mockRestore();
     }
   });
+
+  it("warns once per undeclared operator model in this process", () => {
+    const stderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+    try {
+      const extra = [{ value: "warn-once-model", display_name: "Warn once" }];
+      resolveCodexCatalog("unknown", undefined, extra);
+      resolveCodexCatalog("unknown", undefined, extra);
+      expect(
+        stderr.mock.calls.filter(([line]) =>
+          String(line).includes("warn-once-model"),
+        ),
+      ).toHaveLength(1);
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  it("keeps a curated minimum when an operator only overrides its label", () => {
+    const luna = resolveCodexCatalog("chatgpt", "plus", [
+      { value: "gpt-5.6-luna", display_name: "Operator Luna" },
+    ]).find((model) => model.value === "gpt-5.6-luna");
+
+    expect(luna).toMatchObject({
+      display_name: "Operator Luna",
+      minimal_client_version: "0.144.0",
+    });
+  });
 });
 
 // Phase-23 dogfood 再回帰対策 (藤 修正版方針 3): exact→miss で intersection
