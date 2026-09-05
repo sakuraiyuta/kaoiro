@@ -87,6 +87,37 @@ export function redactCredentials(text: string): string {
   // the safe failure mode"): a real scheme keyword (Bearer included) is no
   // longer readable in the output, and up to one adjacent prose word can
   // be swept in too.
+  //
+  // Residual, deliberately left unfixed: a comma-parameterised scheme
+  // (Digest's `username="u", response="..."`; AWS SigV4's
+  // `Credential=..., Signature=...`) is not parsed at all -- VALUE_CLASS
+  // stops at the first quote or comma it meets, so only the leading
+  // `key=` fragment is captured and any later parameter (including the
+  // one actually carrying the credential) rides through unmasked.
+  //
+  // Second residual (round 5 review, finding S-B): this "up to 2 tokens"
+  // capture is not idempotent when the credential is followed by trailing
+  // prose, or when a second, unrelated credential sits on the same line
+  // (`api_key=...` right after an Authorization/Bearer match) -- each
+  // additional pass over the SAME text can sweep in up to one more
+  // adjacent whitespace-delimited TOKEN into the masked run. This is
+  // over-masking, not a leak: masking is a same-length substitution, and
+  // once a position becomes `*` it never reverts on a later pass, so
+  // repeated application only ever widens an already-masked span and
+  // always reaches a fixed point (never grows without limit) -- it just
+  // does not do so in exactly one pass for every shape. A guard
+  // recognizing "this token is already masked" by its shape was tried
+  // twice and rejected twice, both times live-measured by an automated
+  // review: shape alone cannot distinguish a genuinely re-masked run from
+  // a RAW, never-masked value that merely happens to start with the same
+  // star-run shape (e.g. `api_key=**realsecret`), so any such guard lets
+  // that raw value ride through completely unmasked instead. No guard
+  // exists here for that reason. In practice this applies to at most 2
+  // total applications of `redactCredentials` on the same text (codex's
+  // `codexExecFailureRelay`, adapter.ts, masks upstream; `makeResult`,
+  // state.ts, applies the unconditional backstop downstream -- see the
+  // comment at that call site), so the degradation from the first pass's
+  // own result is at most one more token.
   const authSep = separator(false);
   masked = masked.replace(
     new RegExp(

@@ -199,12 +199,13 @@ describe("redactCredentials — round 4 finding M-C: non-Bearer Authorization sc
   // one word further along, completely untouched.
   //
   // A first fix tried to CLASSIFY the word after "Authorization" as
-  // either a scheme or the credential (a length cap: short words are a
-  // scheme, long ones are the value). Live mutation testing (クロエ)
-  // showed that is not decidable from shape alone and just moves the
-  // failure: `Authorization: <token> failed` regressed to treating the
-  // real (short) token as a "scheme" and masking "failed" instead. This
-  // version does not classify at all -- it masks up to TWO consecutive
+  // either a scheme or the credential, via a plain character class
+  // (`[A-Za-z][A-Za-z0-9._-]*`, no length limit). Live mutation testing
+  // (クロエ) showed that is not decidable from shape alone and just moves
+  // the failure: even a 29-character token matched the class regardless
+  // of its length, so `Authorization: <token> failed` regressed to
+  // treating the real token as a "scheme" and masking "failed" instead.
+  // This version does not classify at all -- it masks up to TWO consecutive
   // whitespace-joined words as one combined value, so whichever one is
   // the real credential ends up inside the masked run either way. Cost,
   // accepted (see redact.ts's own "over-masking is the safe failure
@@ -255,6 +256,80 @@ describe("redactCredentials — round 4 finding M-C: non-Bearer Authorization sc
     const out = redactCredentials(input);
     expect(out).toBe(expected);
     expect(out).not.toContain(TOKEN);
+  });
+
+  // Round 5 review, finding S-B (accepted as a residual, see redact.ts's
+  // own comment above the Authorization/Bearer regex): the "up to 2
+  // tokens" capture is NOT fully idempotent when the credential is
+  // followed by trailing prose, or a second credential shares the line.
+  // Two shape-based guards were tried and both introduced a NEW leak
+  // (each let a raw value that merely LOOKED already-masked ride through
+  // untouched), so no guard exists. How many passes it takes to settle
+  // varies BY SHAPE (a single trailing word settles in one pass, three
+  // trailing words take three) -- asserting a fixed pass count would pin
+  // the test's own fixtures rather than the actual guarantee. These
+  // cases instead assert the three form-independent contracts that
+  // together describe what "safe, if imperfectly idempotent" means here:
+  it.each([
+    [
+      "scheme-less, two trailing words",
+      `Authorization: ${TOKEN} failed to renew`,
+    ],
+    ["Bearer, trailing prose", `Authorization: Bearer ${TOKEN} failed to renew`],
+    [
+      "JSON-compact, growth inside the quoted string",
+      `{"Authorization":"Bearer ${TOKEN} extra"}`,
+    ],
+    [
+      "two credentials on one line",
+      `Authorization: Bearer ${TOKEN} api_key=${TOKEN}`,
+    ],
+  ])(
+    "masks the credential on pass 1, only ever widens further, and reaches a fixed point (%s)",
+    (_label, input) => {
+      const MAX_ITERATIONS = 12;
+      const history: string[] = [input];
+      let converged = false;
+      for (let i = 0; i < MAX_ITERATIONS; i++) {
+        const next = redactCredentials(history[history.length - 1]!);
+        history.push(next);
+        if (next === history[history.length - 2]) {
+          converged = true;
+          break;
+        }
+      }
+      // Contract 1: the credential is gone after the very first pass.
+      expect(history[1]).not.toContain(TOKEN);
+      // Contract 2: masking only ever widens. Masking is a same-length
+      // substitution, so positions line up across passes; once a
+      // position is `*`, it must stay `*` on every later pass -- a
+      // regression here would mean a prior mask got REVERTED, not just
+      // grown around.
+      for (let i = 1; i < history.length; i++) {
+        const before = history[i - 1]!;
+        const after = history[i]!;
+        expect(after.length).toBe(before.length);
+        for (let pos = 0; pos < before.length; pos++) {
+          if (before[pos] === "*") expect(after[pos]).toBe("*");
+        }
+      }
+      // Contract 3: repeated application reaches a fixed point within a
+      // bounded number of iterations -- growth does not continue forever.
+      expect(converged).toBe(true);
+    },
+  );
+
+  // Negative control for the guards REJECTED above: with no shape-based
+  // "already masked" guard in maskValue, a raw value that happens to
+  // start with "**" is not specially skipped -- it goes through the same
+  // masking as any other value and comes out fully redacted.
+  it.each([
+    ["api_key", `api_key=**${TOKEN}`],
+    ["Authorization", `Authorization: **${TOKEN}`],
+  ])("masks a raw %s value that happens to start with \"**\" (no guard to bypass)", (_keyword, input) => {
+    const out = redactCredentials(input);
+    expect(out).not.toContain(TOKEN);
+    expect(out.endsWith(TOKEN.slice(-4))).toBe(true);
   });
 });
 

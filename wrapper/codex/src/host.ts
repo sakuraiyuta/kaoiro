@@ -2109,6 +2109,22 @@ export class CodexHost implements EngineAdapter {
     // backstop for producers that bypass the relay (e.g. the
     // rollout-corrupted branch), not a replacement for the relay's own
     // pre-clip masking.
+    //
+    // This means the relay's own path DOES run redactCredentials twice on
+    // the same text. That double application is safe NOT because it is
+    // idempotent -- it is not, for every shape (issue #300 round 5,
+    // finding S-B: a credential followed by trailing prose, or a second
+    // credential on the same line, can sweep in up to one more adjacent
+    // TOKEN on a second pass) -- but because masking there only ever
+    // WIDENS an already-masked span, never narrows or reveals one: a
+    // second pass cannot un-mask anything the first pass already
+    // redacted. Production applies this at most twice on any given text
+    // (codexExecFailureRelay, adapter.ts:479, then makeResult,
+    // state.ts:275 -- other engines only ever go through makeResult), so
+    // the degradation from the relay's own first-pass result is at most
+    // one more token. See redact.ts's own comment above the
+    // Authorization/Bearer regex for why no shape-based guard closes this
+    // instead.
     this.#options.onLog?.(
       makeResult(this.#config, this.#now(), clipped, this.#statusExt()),
     );
