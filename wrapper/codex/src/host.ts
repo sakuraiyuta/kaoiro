@@ -1002,14 +1002,16 @@ export class CodexHost implements EngineAdapter {
       );
     } catch (error) {
       if (error instanceof CodexClientVersionTooOldError) {
-        const rolledBackTo = this.#model ?? this.#modelLastGood;
         this.#switchErrorOnce = {
           kind: "model",
           requested: value,
           reason: "client_version_too_old",
-          ...(rolledBackTo === null ? {} : { rolled_back_to: rolledBackTo }),
+          ...(this.#modelLastGood === null
+            ? {}
+            : { rolled_back_to: this.#modelLastGood }),
         };
         this.#emitState(this.#machine.state);
+        return;
       }
       throw error;
     }

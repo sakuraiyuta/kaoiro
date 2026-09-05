@@ -371,9 +371,11 @@ describe("CodexHost", () => {
     );
   });
 
-  it("rejects a switch to a curated model newer than the bundled Codex CLI", async () => {
+  it("surfaces a switch error for a curated model newer than the bundled Codex CLI", async () => {
     const states: Envelope[] = [];
-    const { client } = makeClient([]);
+    const { client } = makeClient([
+      [{ type: "thread.started", thread_id: "last-good" }, usageEvent()],
+    ]);
     const host = new CodexHost(
       { ...CONFIG, model: "gpt-5.6-terra" },
       {
@@ -383,18 +385,23 @@ describe("CodexHost", () => {
         codexClientVersion: "0.144.1",
       },
     );
+    const running = host.run("establish last good");
+    await client.waitForTurn(0);
+    await vi.waitFor(() => {
+      expect(states.some((state) => state.state === "done")).toBe(true);
+    });
+    const statesBeforeSwitch = states.length;
 
-    await expect(host.setModel("gpt-6-astra")).rejects.toThrow(
-      "codex: model gpt-6-astra requires Codex >= 0.153.0, bundled version is 0.144.1",
-    );
-    expect(states).toHaveLength(1);
-    expect(states[0]?.ext.switch_error).toEqual({
+    await expect(host.setModel("gpt-6-astra")).resolves.toBeUndefined();
+    expect(states).toHaveLength(statesBeforeSwitch + 1);
+    expect(states.at(-1)?.ext.switch_error).toEqual({
       kind: "model",
       requested: "gpt-6-astra",
       reason: "client_version_too_old",
       rolled_back_to: "gpt-5.6-terra",
     });
     host.close();
+    await running;
   });
 
   it("leaves an explicitly declared operator model outside the curated startup gate", () => {
