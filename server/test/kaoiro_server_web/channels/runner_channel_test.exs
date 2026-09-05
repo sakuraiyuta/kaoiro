@@ -57,6 +57,85 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
       assert entry.engines == engines
     end
 
+    test "register bounds catalog string fields without rejecting shipped values" do
+      host_id = "lab-pc-catalog-byte-caps"
+      socket = join_runner(host_id)
+
+      shipped =
+        register_payload(%{
+          "capabilities" => ["claude-code"],
+          "engines" => [
+            %{
+              "id" => "claude-code",
+              "models" => [
+                %{
+                  "value" => "claude-opus-4-6-thinking",
+                  "display_name" => "Claude Opus 4.6 Thinking"
+                }
+              ]
+            }
+          ]
+        })
+
+      assert_reply push(socket, "register", shipped), :ok
+
+      at_limit =
+        register_payload(%{
+          "capabilities" => [String.duplicate("c", 64)],
+          "engines" => [
+            %{
+              "id" => String.duplicate("e", 64),
+              "models" => [
+                %{
+                  "value" => String.duplicate("v", 256),
+                  "display_name" => String.duplicate("d", 256)
+                }
+              ]
+            }
+          ]
+        })
+
+      assert_reply push(socket, "register", at_limit), :ok
+      accepted_entry = HostRegistry.get(host_id)
+      @endpoint.subscribe("agents:lobby")
+
+      for {reason, oversized} <- [
+            {:invalid_capabilities,
+             register_payload(%{"capabilities" => [String.duplicate("c", 65)]})},
+            {:invalid_engines,
+             register_payload(%{
+               "engines" => [%{"id" => String.duplicate("e", 65), "models" => []}]
+             })},
+            {:invalid_engines,
+             register_payload(%{
+               "engines" => [
+                 %{
+                   "id" => "codex",
+                   "models" => [
+                     %{"value" => String.duplicate("v", 257), "display_name" => "Codex"}
+                   ]
+                 }
+               ]
+             })},
+            {:invalid_engines,
+             register_payload(%{
+               "engines" => [
+                 %{
+                   "id" => "codex",
+                   "models" => [
+                     %{"value" => "gpt-5.6-sol", "display_name" => String.duplicate("d", 257)}
+                   ]
+                 }
+               ]
+             })}
+          ] do
+        assert_reply push(socket, "register", oversized), :error, %{reason: actual_reason}
+        assert actual_reason == Atom.to_string(reason)
+        assert HostRegistry.get(host_id) == accepted_entry
+        refute_broadcast "hosts", _
+      end
+    end
+
     test "engines の型崩れは invalid_register" do
       host_id = "lab-pc-bad-engines"
       socket = join_runner(host_id)

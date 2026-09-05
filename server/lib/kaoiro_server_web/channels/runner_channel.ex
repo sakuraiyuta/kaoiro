@@ -36,6 +36,10 @@ defmodule KaoiroServerWeb.RunnerChannel do
   # persona/cwd lists, far below an envelope. Bounds the whole map so an
   # oversized opaque extra key cannot reach the server process either.
   @max_payload_bytes 65_536
+  @max_capability_bytes 64
+  @max_engine_id_bytes 64
+  @max_engine_model_value_bytes 256
+  @max_engine_model_display_name_bytes 256
 
   @impl true
   def join("runner:" <> host_id, _params, socket) do
@@ -290,29 +294,35 @@ defmodule KaoiroServerWeb.RunnerChannel do
         {:ok, %{}}
 
       caps when is_list(caps) ->
-        normalized =
-          Enum.map(caps, fn
-            "claude" ->
-              Logger.warning(
-                "RunnerRegister capability \"claude\" is deprecated " <>
-                  "(ADR-0032 F4a); use \"claude-code\". The alias will be " <>
-                  "rejected in the next release."
-              )
+        caps
+        |> Enum.reduce_while([], fn
+          "claude", normalized ->
+            Logger.warning(
+              "RunnerRegister capability \"claude\" is deprecated " <>
+                "(ADR-0032 F4a); use \"claude-code\". The alias will be " <>
+                "rejected in the next release."
+            )
 
-              "claude-code"
+            {:cont, ["claude-code" | normalized]}
 
-            other ->
-              other
-          end)
+          capability, normalized
+          when is_binary(capability) and byte_size(capability) <= @max_capability_bytes ->
+            {:cont, [capability | normalized]}
 
-        {:ok, %{capabilities: normalized}}
+          _capability, _normalized ->
+            {:halt, :invalid}
+        end)
+        |> case do
+          :invalid -> {:error, :invalid_capabilities}
+          normalized -> {:ok, %{capabilities: Enum.reverse(normalized)}}
+        end
 
       _ ->
         {:error, :invalid_capabilities}
     end
   end
 
-  # Launch catalog per engine (ADR-0032 F4bc): loosely shape-checked and
+  # Launch catalog per engine (ADR-0032 F4bc): shape-checked and
   # stored as-is for the operator `hosts` push; the dashboard renders each
   # engine's model list in the LaunchDialog cascade.
   defp parse_engines(payload) do
@@ -321,11 +331,7 @@ defmodule KaoiroServerWeb.RunnerChannel do
         {:ok, %{}}
 
       engines when is_list(engines) ->
-        valid? =
-          Enum.all?(engines, fn
-            %{"id" => id, "models" => models} when is_binary(id) and is_list(models) -> true
-            _ -> false
-          end)
+        valid? = Enum.all?(engines, &valid_engine_catalog?/1)
 
         if valid? do
           {:ok, %{engines: engines}}
@@ -337,6 +343,21 @@ defmodule KaoiroServerWeb.RunnerChannel do
         {:error, :invalid_engines}
     end
   end
+
+  defp valid_engine_catalog?(%{"id" => id, "models" => models})
+       when is_binary(id) and byte_size(id) <= @max_engine_id_bytes and is_list(models) do
+    Enum.all?(models, &valid_engine_model?/1)
+  end
+
+  defp valid_engine_catalog?(_engine), do: false
+
+  defp valid_engine_model?(%{"value" => value, "display_name" => display_name})
+       when is_binary(value) and byte_size(value) <= @max_engine_model_value_bytes and
+              is_binary(display_name) and
+              byte_size(display_name) <= @max_engine_model_display_name_bytes,
+       do: true
+
+  defp valid_engine_model?(_model), do: false
 
   # Build identity (issues #228/#288), distinct from ADR-0015's protocol
   # version. Each pair is optional so old runners remain compatible, but a
