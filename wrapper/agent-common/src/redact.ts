@@ -70,19 +70,27 @@ export function redactCredentials(text: string): string {
     new RegExp(`${LEFT_BOUNDARY}(sk-)([A-Za-z0-9_-]{16,})\\b`, "g"),
     (_match, prefix: string, value: string) => `${prefix}${maskValue(value)}`,
   );
-  // The compound alternative ("Authorization: Bearer <token>") must be
-  // tried before the two bare keywords, or a plain "Authorization|Bearer"
-  // alternation matches "Authorization" first and treats the word "Bearer"
-  // itself as the value to mask, leaving the actual token right after it
-  // untouched. Its OWN internal separator (between "Authorization" and
-  // "Bearer") needs the same quote-tolerant form as the outer one, or a
-  // JSON-compact `"Authorization":"Bearer ..."` never bridges the `":"`
-  // between the two keywords at all and falls through to the bare
-  // "Authorization" alternative instead (finding M-A).
+  // A first attempt at finding M-C (a non-Bearer Authorization scheme --
+  // Basic, Digest, Token, an unregistered vendor scheme -- riding through
+  // unmasked) tried to CLASSIFY the word after "Authorization" as either a
+  // scheme or the credential itself. That is not decidable from shape
+  // alone: a scheme name and a short credential are both plain
+  // alphanumeric words, so any classifier -- a length cap included --
+  // just moves the boundary where a real, scheme-less credential gets
+  // misread as a "scheme" and only the unrelated word after IT gets
+  // masked (round 4 review, live-measured: `Authorization: <token> failed`
+  // regressed to leaking `<token>` and masking "failed" instead). Rather
+  // than classify, this captures up to TWO consecutive whitespace-joined
+  // tokens as one combined value and masks them together -- whichever one
+  // is the real credential, it ends up inside the masked run either way.
+  // Cost, accepted per this file's own header comment ("over-masking is
+  // the safe failure mode"): a real scheme keyword (Bearer included) is no
+  // longer readable in the output, and up to one adjacent prose word can
+  // be swept in too.
   const authSep = separator(false);
   masked = masked.replace(
     new RegExp(
-      `${LEFT_BOUNDARY}(Authorization${authSep}Bearer|Authorization|Bearer)(${authSep})(${VALUE_CLASS})`,
+      `${LEFT_BOUNDARY}(Authorization|Bearer)(${authSep})((?:${VALUE_CLASS}\\s+)?${VALUE_CLASS})`,
       "gi",
     ),
     (_match, keyword: string, sep: string, value: string) =>

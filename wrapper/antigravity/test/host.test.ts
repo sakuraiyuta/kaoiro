@@ -588,7 +588,7 @@ describe("AntigravityHost", () => {
     child.emit("close", 0, null);
     await waitFor(() => logs.some((envelope) => envelope.type === "result"));
     expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({
-      error_detail: "agy_child_error: Authorization: Bearer ********3456",
+      error_detail: "agy_child_error: Authorization: ***************3456",
     });
     host.close();
   });

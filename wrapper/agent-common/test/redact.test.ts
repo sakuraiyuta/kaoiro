@@ -12,9 +12,13 @@ describe("redactCredentials (issue #300 round 2)", () => {
     );
   });
 
-  it("masks an Authorization/Bearer header value, keeping the keyword", () => {
+  it("masks an Authorization/Bearer header value, including the scheme word (issue #300 round 4, finding M-C)", () => {
+    // The scheme word ("Bearer" here) is swept into the same masked run as
+    // the credential -- see the round-4 comment above the Authorization/
+    // Bearer regex in redact.ts for why this file no longer tries to keep
+    // it readable.
     expect(redactCredentials("Authorization: Bearer abcdef123456")).toBe(
-      "Authorization: Bearer ********3456",
+      "Authorization: ***************3456",
     );
   });
 
@@ -137,20 +141,19 @@ describe("redactCredentials (issue #300 round 2)", () => {
 
 describe("redactCredentials — round 3 finding M-A: compact-JSON value leak (issue #300)", () => {
   it("masks the exact reported fixture: compact-JSON Authorization/Bearer with no whitespace", () => {
-    // Root cause (クロエ's live measurement): with no whitespace, the
-    // compound "Authorization...Bearer" alternative cannot bridge the
-    // `":"` between the two keywords and never fires; the bare
-    // "Authorization" alternative then matches alone, and the OLD `\S+`
-    // value class swallowed `":"Bearer` whole (a closing quote, colon,
-    // opening quote, and the literal word "Bearer") as if it were the
-    // secret -- leaving the REAL token, after the next space, completely
-    // untouched. This is the third sighting of "value class crosses a
-    // delimiter it shouldn't" (after api_key's own JSON-quoted form and
-    // the underscore left-boundary bug), so the fix is a shared
-    // VALUE_CLASS/separator, not a one-off patch.
+    // Root cause (クロエ's live measurement): with no whitespace, the OLD
+    // `\S+` value class swallowed `":"Bearer` whole (a closing quote,
+    // colon, opening quote, and the literal word "Bearer") as if it were
+    // the secret -- leaving the REAL token, after the next space,
+    // completely untouched. This is the third sighting of "value class
+    // crosses a delimiter it shouldn't" (after api_key's own JSON-quoted
+    // form and the underscore left-boundary bug), so the fix is a shared
+    // VALUE_CLASS/separator, not a one-off patch. (The scheme word
+    // "Bearer" itself is masked along with the token as of round 4,
+    // finding M-C -- see the redact.ts comment above the regex.)
     expect(
       redactCredentials('{"Authorization":"Bearer abc123456789"}'),
-    ).toBe('{"Authorization":"Bearer ********6789"}');
+    ).toBe('{"Authorization":"***************6789"}');
   });
 
   // 3 keywords x 4 separator/quoting forms -- the grid this class of
@@ -183,6 +186,75 @@ describe("redactCredentials — round 3 finding M-A: compact-JSON value leak (is
     const once = redactCredentials(input);
     expect(once).toBe(expected);
     expect(redactCredentials(once)).toBe(once);
+  });
+});
+
+describe("redactCredentials — round 4 finding M-C: non-Bearer Authorization schemes (issue #300)", () => {
+  // Root cause (クロエ's live measurement, 8/25 LEAK on the acceptance
+  // probe): the compound alternative hardcoded the literal keyword
+  // "Bearer", so any OTHER scheme -- Basic, Digest, Token, ApiKey, or an
+  // unregistered vendor scheme -- fell through to the bare "Authorization"
+  // alternative instead, which then masked the SCHEME WORD ITSELF (the
+  // first thing after "Authorization: ") and left the real credential,
+  // one word further along, completely untouched.
+  //
+  // A first fix tried to CLASSIFY the word after "Authorization" as
+  // either a scheme or the credential (a length cap: short words are a
+  // scheme, long ones are the value). Live mutation testing (クロエ)
+  // showed that is not decidable from shape alone and just moves the
+  // failure: `Authorization: <token> failed` regressed to treating the
+  // real (short) token as a "scheme" and masking "failed" instead. This
+  // version does not classify at all -- it masks up to TWO consecutive
+  // whitespace-joined words as one combined value, so whichever one is
+  // the real credential ends up inside the masked run either way. Cost,
+  // accepted (see redact.ts's own "over-masking is the safe failure
+  // mode" header comment): the scheme keyword itself is no longer
+  // readable in the output.
+  it.each([
+    ["Basic", `Authorization: Basic ${TOKEN}`, "Authorization: ******************7890"],
+    ["Token", `Authorization: Token ${TOKEN}`, "Authorization: ******************7890"],
+    [
+      "unregistered vendor scheme",
+      `Authorization: Vendor-Xyz ${TOKEN}`,
+      "Authorization: ***********************7890",
+    ],
+    [
+      "Basic, JSON-compact",
+      `{"Authorization":"Basic ${TOKEN}"}`,
+      '{"Authorization":"******************7890"}',
+    ],
+  ])("masks the scheme word and the credential after a %s scheme together", (_scheme, input, expected) => {
+    expect(redactCredentials(input)).toBe(expected);
+  });
+
+  // The actual regression this redesign exists to close (review-cycle
+  // finding: the prior grid above only varied the SCHEME WORD, never the
+  // TRAILING PROSE that broke the rejected SCHEME_CLASS classifier
+  // attempt). A scheme-less or short credential immediately followed by
+  // an ordinary word must still end up fully inside the masked run,
+  // whichever of the two adjacent words the "up to 2 tokens" capture
+  // treats as the credential.
+  it.each([
+    ["scheme-less, trailing prose", `Authorization: ${TOKEN} failed`, "Authorization: *******************iled"],
+    [
+      "Bearer, trailing prose",
+      `Authorization: Bearer ${TOKEN} failed to renew`,
+      "Authorization: *******************7890 failed to renew",
+    ],
+    [
+      "assign form, trailing prose",
+      `Authorization=${TOKEN} rejected`,
+      "Authorization=*********************cted",
+    ],
+    [
+      "JSON form, trailing prose outside the string",
+      `{"Authorization":"${TOKEN}"} rejected`,
+      '{"Authorization":"************7890"} rejected',
+    ],
+  ])("never leaves the real credential unmasked (%s)", (_label, input, expected) => {
+    const out = redactCredentials(input);
+    expect(out).toBe(expected);
+    expect(out).not.toContain(TOKEN);
   });
 });
 
