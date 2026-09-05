@@ -163,10 +163,15 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     agent_id = "test.directory-model-byte-cap"
     @endpoint.subscribe("agents:lobby")
     socket = join_wrapper(agent_id)
+    at_limit = String.duplicate("😀", 64)
+    oversized = String.duplicate("😀", 63) <> "á̂"
+
+    assert byte_size(at_limit) == 256
+    assert byte_size(oversized) == 257
 
     accepted =
       envelope(agent_id, "tool_running")
-      |> Map.put("ext", %{"model" => String.duplicate("m", 256), "engine" => "codex"})
+      |> Map.put("ext", %{"model" => at_limit, "engine" => "codex"})
 
     assert_reply push(socket, "envelope", accepted), :ok
     assert_broadcast "envelope", ^accepted
@@ -178,7 +183,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     assert_broadcast "envelope", ^current_model
     assert AgentStates.snapshot()[agent_id] == current_model
 
-    rejected = put_in(accepted, ["ext", "model"], String.duplicate("m", 257))
+    rejected = put_in(accepted, ["ext", "model"], oversized)
 
     log =
       capture_log(fn ->

@@ -147,7 +147,7 @@ defmodule KaoiroServer.AgentDirectoryTest do
     GenServer.stop(name2)
   end
 
-  test "loader skips oversized display_names while preserving maximum-sized current and legacy records" do
+  test "loader bounds current and legacy display_names by UTF-8 bytes" do
     table_name = :"ad_display_name_bound_#{System.unique_integer([:positive])}"
     path = Path.join([System.tmp_dir!(), "kaoiro_test_dets", "#{table_name}.dets"])
     File.rm(path)
@@ -155,12 +155,16 @@ defmodule KaoiroServer.AgentDirectoryTest do
     on_exit(fn -> File.rm(path) end)
 
     {:ok, ^table_name} = :dets.open_file(table_name, file: String.to_charlist(path))
-    at_limit = String.duplicate("a", 256)
+    at_limit = String.duplicate("😀", 64)
+    oversized = String.duplicate("😀", 63) <> "á̂"
+
+    assert byte_size(at_limit) == 256
+    assert byte_size(oversized) == 257
 
     :ok = :dets.insert(table_name, {"a.display-name-max", "ao", 1, at_limit})
 
     :ok =
-      :dets.insert(table_name, {"a.display-name-oversized", "ao", 1, String.duplicate("a", 257)})
+      :dets.insert(table_name, {"a.display-name-oversized", "ao", 1, oversized})
 
     :ok =
       :dets.insert(
@@ -171,8 +175,19 @@ defmodule KaoiroServer.AgentDirectoryTest do
     :ok =
       :dets.insert(
         table_name,
-        {"a.display-name-legacy-oversized",
-         %{"id" => "fuji", "name" => String.duplicate("a", 257)}, 2}
+        {"a.display-name-legacy-oversized", %{"id" => "fuji", "name" => oversized}, 2}
+      )
+
+    :ok =
+      :dets.insert(
+        table_name,
+        {"a.display-name-legacy-two-max", %{"id" => "momo", "name" => at_limit}}
+      )
+
+    :ok =
+      :dets.insert(
+        table_name,
+        {"a.display-name-legacy-two-oversized", %{"id" => "momo", "name" => oversized}}
       )
 
     :ok = :dets.close(table_name)
@@ -192,6 +207,11 @@ defmodule KaoiroServer.AgentDirectoryTest do
                  AgentDirectory.get("a.display-name-legacy-max", name)
 
         assert AgentDirectory.get("a.display-name-legacy-oversized", name) == nil
+
+        assert %{display_name: ^at_limit, revision: @initial_revision} =
+                 AgentDirectory.get("a.display-name-legacy-two-max", name)
+
+        assert AgentDirectory.get("a.display-name-legacy-two-oversized", name) == nil
         GenServer.stop(pid)
       end)
 

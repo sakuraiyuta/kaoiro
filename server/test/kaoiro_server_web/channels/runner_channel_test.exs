@@ -57,7 +57,7 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
       assert entry.engines == engines
     end
 
-    test "register bounds catalog string fields without rejecting shipped values" do
+    test "register bounds catalog string fields" do
       host_id = "lab-pc-catalog-byte-caps"
       socket = join_runner(host_id)
 
@@ -81,14 +81,14 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
 
       at_limit =
         register_payload(%{
-          "capabilities" => [String.duplicate("c", 64)],
+          "capabilities" => [String.duplicate("😀", 16)],
           "engines" => [
             %{
-              "id" => String.duplicate("e", 64),
+              "id" => String.duplicate("😀", 16),
               "models" => [
                 %{
-                  "value" => String.duplicate("v", 256),
-                  "display_name" => String.duplicate("d", 256)
+                  "value" => String.duplicate("😀", 64),
+                  "display_name" => String.duplicate("😀", 64)
                 }
               ]
             }
@@ -98,13 +98,26 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
       assert_reply push(socket, "register", at_limit), :ok
       accepted_entry = HostRegistry.get(host_id)
       @endpoint.subscribe("agents:lobby")
+      at_capability_limit = String.duplicate("😀", 16)
+      oversized_capability = String.duplicate("😀", 15) <> "á̂"
+      at_engine_id_limit = String.duplicate("😀", 16)
+      oversized_engine_id = String.duplicate("😀", 15) <> "á̂"
+      at_model_limit = String.duplicate("😀", 64)
+      oversized_model = String.duplicate("😀", 63) <> "á̂"
+
+      assert byte_size(at_capability_limit) == 64
+      assert byte_size(oversized_capability) == 65
+      assert byte_size(at_engine_id_limit) == 64
+      assert byte_size(oversized_engine_id) == 65
+      assert byte_size(at_model_limit) == 256
+      assert byte_size(oversized_model) == 257
 
       for {reason, oversized} <- [
             {:invalid_capabilities,
-             register_payload(%{"capabilities" => [String.duplicate("c", 65)]})},
+             register_payload(%{"capabilities" => [oversized_capability]})},
             {:invalid_engines,
              register_payload(%{
-               "engines" => [%{"id" => String.duplicate("e", 65), "models" => []}]
+               "engines" => [%{"id" => oversized_engine_id, "models" => []}]
              })},
             {:invalid_engines,
              register_payload(%{
@@ -112,7 +125,7 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
                  %{
                    "id" => "codex",
                    "models" => [
-                     %{"value" => String.duplicate("v", 257), "display_name" => "Codex"}
+                     %{"value" => oversized_model, "display_name" => "Codex"}
                    ]
                  }
                ]
@@ -123,7 +136,7 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
                  %{
                    "id" => "codex",
                    "models" => [
-                     %{"value" => "gpt-5.6-sol", "display_name" => String.duplicate("d", 257)}
+                     %{"value" => "gpt-5.6-sol", "display_name" => oversized_model}
                    ]
                  }
                ]
