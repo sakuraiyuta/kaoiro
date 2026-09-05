@@ -567,9 +567,14 @@ defmodule KaoiroServerWeb.WrapperChannel do
               Map.put(info, "agent_id", socket.assigns.agent_id)
             )
 
-          {:error, _reason} ->
-            :ok
+          {:error, reason} ->
+            Logger.warning(
+              "wrapper_build_info rejected for #{socket.assigns.agent_id}: #{reason}"
+            )
         end
+
+      {:error, reason} when is_map(payload) and is_map_key(payload, "build_version") ->
+        Logger.warning("wrapper_build_info rejected for #{socket.assigns.agent_id}: #{reason}")
 
       {:error, _reason} ->
         :ok

@@ -164,6 +164,29 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
       assert_reply ref, :error, %{reason: "invalid_build_version"}
     end
 
+    test "register keeps the six-digit build patch bound" do
+      host_id = "lab-pc-build-version-patch-bound"
+      socket = join_runner(host_id)
+
+      accepted =
+        register_payload(%{
+          "build_version" => "2026.9.123456",
+          "build_channel" => "dev"
+        })
+
+      assert_reply push(socket, "register", accepted), :ok
+      assert HostRegistry.get(host_id).build_version == "2026.9.123456"
+
+      rejected =
+        register_payload(%{
+          "build_version" => "2026.9.1234567",
+          "build_channel" => "dev"
+        })
+
+      assert_reply push(socket, "register", rejected), :error, %{reason: "invalid_build_version"}
+      assert HostRegistry.get(host_id).build_version == "2026.9.123456"
+    end
+
     test "build_channel の型崩れは invalid_build_channel" do
       host_id = "lab-pc-bad-build-channel"
       socket = join_runner(host_id)

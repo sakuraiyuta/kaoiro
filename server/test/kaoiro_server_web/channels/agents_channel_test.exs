@@ -5043,25 +5043,26 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert builds[agent_id] == info
     end
 
-    test "oversized wrapper build snapshot is truncated within the production frame budget" do
+    test "maximum valid wrapper build snapshot fits within the production frame budget" do
       info = %{
         "build_revision" => String.duplicate("a", 40),
         "build_dirty" => false,
-        "build_version" => "2026.1." <> String.duplicate("9", 65_400),
+        "build_version" => "2026.1.123456",
         "build_channel" => "dev"
       }
 
       assert KaoiroServer.WrapperBuildInfos.valid_info?(info)
 
-      agent_ids = for n <- 1..130, do: "test.build-frame-#{n}"
+      agent_ids = for n <- 1..1000, do: "test.build-frame-#{n}"
+      owner = self()
 
       for agent_id <- agent_ids do
-        assert :ok = KaoiroServer.WrapperBuildInfos.put(agent_id, info, self())
+        assert :ok = KaoiroServer.WrapperBuildInfos.put(agent_id, info, owner)
       end
 
       on_exit(fn ->
         for agent_id <- agent_ids do
-          KaoiroServer.WrapperBuildInfos.delete(agent_id, self())
+          KaoiroServer.WrapperBuildInfos.delete(agent_id, owner)
         end
       end)
 
@@ -5069,8 +5070,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_push "snapshot", %{"agents" => _}
       assert_push "wrapper_build_info", payload
 
-      assert payload["build_info_incomplete"] == true
-      assert map_size(payload["builds"]) < length(agent_ids)
+      refute payload["build_info_incomplete"]
+      assert map_size(payload["builds"]) == length(agent_ids)
       assert_production_push_frame_fits("wrapper_build_info", payload)
     end
 

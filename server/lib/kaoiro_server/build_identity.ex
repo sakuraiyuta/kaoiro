@@ -18,7 +18,7 @@ defmodule KaoiroServer.BuildIdentity do
   """
 
   @revision_re ~r/\A[0-9a-f]{40}\z/
-  @version_re ~r/\A\d{4}\.(?:[1-9]|1[0-2])\.\d+\z/
+  @version_re ~r/\A\d{4}\.(?:[1-9]|1[0-2])\.\d{1,6}\z/
 
   @doc "True for the literal \"unknown\" or a lowercase 40-hex-digit SHA."
   @spec valid_revision?(term()) :: boolean()

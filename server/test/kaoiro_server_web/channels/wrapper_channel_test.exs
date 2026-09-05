@@ -188,6 +188,33 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     on_exit(fn -> WrapperBuildInfos.delete(agent_id, socket.channel_pid) end)
   end
 
+  test "wrapper_build_info keeps the six-digit patch bound and warns on rejection" do
+    agent_id = "test.wrapper-build-info-patch-bound"
+    socket = join_wrapper(agent_id)
+
+    accepted = %{
+      "version" => "0",
+      "build_revision" => "0123456789012345678901234567890123456789",
+      "build_dirty" => false,
+      "build_version" => "2026.9.123456",
+      "build_channel" => "dev"
+    }
+
+    assert_reply push(socket, "wrapper_build_info", accepted), :ok
+    assert WrapperBuildInfos.snapshot()[agent_id]["build_version"] == "2026.9.123456"
+
+    rejected = Map.put(accepted, "build_version", "2026.9.1234567")
+
+    log =
+      capture_log(fn ->
+        assert_reply push(socket, "wrapper_build_info", rejected), :ok
+      end)
+
+    assert log =~ "wrapper_build_info rejected for #{agent_id}: invalid_build_info"
+    assert WrapperBuildInfos.snapshot()[agent_id]["build_version"] == "2026.9.123456"
+    on_exit(fn -> WrapperBuildInfos.delete(agent_id, socket.channel_pid) end)
+  end
+
   describe "ADR-0015 stage 2 wrapper inbound funnel (issue #270)" do
     # T2-3 は「version 一致なら警告ゼロ」を log == "" で検証するが、7 種の
     # push には directory_request が含まれ、その directory-only 射影は

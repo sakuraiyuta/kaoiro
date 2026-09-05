@@ -203,6 +203,25 @@ defmodule KaoiroServerWeb.HealthControllerTest do
                json_response(conn, 200)
     end
 
+    test "persisted build-info with a seven-digit patch fails soft", %{conn: conn} do
+      dir = tmp_release_root!()
+
+      write_build_info!(
+        dir,
+        ~s({"version":"2026.9.1234567","channel":"dev","revision":"0123456789abcdef0123456789abcdef01234567","dirty":false})
+      )
+
+      System.put_env("RELEASE_ROOT", dir)
+      conn = get(conn, "/api/health")
+
+      assert %{
+               "build_version" => "unknown",
+               "build_channel" => "dev",
+               "build_revision" => "unknown",
+               "build_dirty" => false
+             } = json_response(conn, 200)
+    end
+
     test "channel が値域外なら unknown/dev へ fail-soft する", %{conn: conn} do
       dir = tmp_release_root!()
 
