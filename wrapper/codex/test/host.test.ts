@@ -373,6 +373,9 @@ describe("CodexHost", () => {
 
   it("surfaces a switch error for a curated model newer than the bundled Codex CLI", async () => {
     const states: Envelope[] = [];
+    const stderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
     const { client } = makeClient([
       [{ type: "thread.started", thread_id: "last-good" }, usageEvent()],
     ]);
@@ -400,8 +403,12 @@ describe("CodexHost", () => {
       reason: "client_version_too_old",
       rolled_back_to: "gpt-5.6-terra",
     });
+    expect(stderr).toHaveBeenCalledWith(
+      "codex: codex: model gpt-6-astra requires Codex >= 0.153.0, bundled version is 0.144.1\n",
+    );
     host.close();
     await running;
+    stderr.mockRestore();
   });
 
   it("leaves an explicitly declared operator model outside the curated startup gate", () => {

@@ -602,6 +602,8 @@ export interface SwitchErrorExt {
    *  adapter-specific loud-failure categories. Currently used:
    *  - `"turn_failed"` — mid-session model/effort switch rejected by SDK
    *    (ADR-0035 F3, phase-16).
+   *  - `"client_version_too_old"` — requested model requires a newer bundled
+   *    Codex CLI.
    *  - `"persist_alias_unknown"` — persisted model alias (from spawn config,
    *    env, or resume snapshot) not present in the SDK's measured catalog at
    *    startup; the wrapper falls back to `default` (ADR-0037 F8, phase-18-7).

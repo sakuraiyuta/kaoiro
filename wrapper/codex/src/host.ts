@@ -1002,6 +1002,7 @@ export class CodexHost implements EngineAdapter {
       );
     } catch (error) {
       if (error instanceof CodexClientVersionTooOldError) {
+        process.stderr.write(`codex: ${error.message}\n`);
         this.#switchErrorOnce = {
           kind: "model",
           requested: value,
