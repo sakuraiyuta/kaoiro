@@ -37,6 +37,72 @@ const ERROR_SUBTYPES: ReadonlySet<string> = new Set([
   "error_max_structured_output_retries",
 ]);
 
+/** issue #287: closed code -> {summary, hint} table for the SDK's assistant-
+ *  level error classes (SDKAssistantMessageError). Bounded, wrapper-owned
+ *  text only — never the SDK's raw result/error text — so the client can
+ *  render `error_summary`/`recovery_hint` directly with no further masking
+ *  (protocol.md). Kept in ONE place (こはく裁定 2026-09-05) rather than in
+ *  the dashboard, so a future SDK error class needs one wrapper-side edit.
+ *  Deliberately keyed by string, not the SDK's own union, so a value the
+ *  SDK adds later still falls through to the generic summary below instead
+ *  of failing to compile. */
+const ASSISTANT_ERROR_SUMMARIES: Readonly<Record<string, {
+  summary: string;
+  hint?: string;
+}>> = {
+  authentication_failed: {
+    summary: "認証の有効期限が切れました。",
+    hint: "ホストで claude を対話起動し /login で再認証、その後このセッションを再起動してください。",
+  },
+  oauth_org_not_allowed: {
+    summary: "この組織アカウントでの認証が許可されていません。",
+    hint: "ホストで claude を対話起動し、許可されたアカウントで /login し直してください。",
+  },
+  account_on_hold: {
+    summary: "アカウントが保留状態です。",
+    hint: "Anthropic アカウントの状態を確認してください。",
+  },
+  billing_error: {
+    summary: "課金に関するエラーが発生しました。",
+    hint: "Anthropic アカウントの請求設定を確認してください。",
+  },
+  rate_limit: {
+    summary: "レート制限に達しました。",
+    hint: "しばらく待ってから再送してください。",
+  },
+  overloaded: {
+    summary: "API が混雑しています。",
+    hint: "しばらく待ってから再送してください。",
+  },
+  invalid_request: {
+    summary: "リクエストが不正と判定されました。",
+  },
+  model_not_found: {
+    summary: "指定されたモデルが見つかりません。",
+  },
+  server_error: {
+    summary: "API サーバでエラーが発生しました。",
+    hint: "しばらく待ってから再送してください。",
+  },
+  max_output_tokens: {
+    summary: "出力トークンの上限に達しました。",
+  },
+  unknown: {
+    summary: "APIエラーが発生しました。",
+  },
+};
+
+/** Bounded summary/hint for an assistant-level SDK error code. Falls back to
+ *  a generic summary (embedding the raw code, not raw SDK text) for a value
+ *  this table does not yet recognize, so a future SDK error class degrades
+ *  gracefully instead of vanishing (こはく裁定: "unknown" に丸めず、コードを
+ *  保持した上で summary は汎用文にする"). */
+function assistantErrorSummary(code: string): { summary: string; hint?: string } {
+  return (
+    ASSISTANT_ERROR_SUMMARIES[code] ?? { summary: `APIエラーが発生しました (${code})` }
+  );
+}
+
 /** Extract the state-relevant block kinds and tool_use ids from an assistant
  *  message's content. Blocks without a string id are counted but not tracked. */
 function scanAssistantContent(content: unknown): {
@@ -85,8 +151,20 @@ function toolResultIds(content: unknown): {
   return { hasToolResult, toolUseIds };
 }
 
+/** issue #287: a `success`-subtype result can still carry `is_error: true`
+ *  (an SDK-classified API error — e.g. auth failure — surfacing as
+ *  `result.result` text rather than an `errors[]` array). Treating that
+ *  case as `success` here is what made a real authentication failure show
+ *  up as `done` in both the state machine and the result payload's
+ *  `error_subtype`; rounding it to `error_during_execution` keeps it out of
+ *  the closed subtype vocabulary while still routing it onto the error
+ *  path. The API-error class itself (authentication_failed etc.) travels
+ *  separately as `error_code` (sdkMessageToResult), not through this
+ *  subtype. */
 function resultSubtype(message: SDKResultMessage): ResultSubtype {
-  if (message.subtype === "success") return "success";
+  if (message.subtype === "success") {
+    return message.is_error === true ? "error_during_execution" : "success";
+  }
   return ERROR_SUBTYPES.has(message.subtype)
     ? (message.subtype as ResultSubtype)
     : "error_during_execution";
@@ -102,7 +180,12 @@ export function sdkMessageToEvents(message: SDKMessage): AdapterEvent[] {
       // SDKSystemMessage(init) only; other system subtypes carry no state.
       return message.subtype === "init" ? [{ kind: "session_init" }] : [];
     case "assistant": {
-      if (message.error) return [{ kind: "assistant", blocks: [], error: true }];
+      // issue #287: keep the SDK's own error-class string (e.g.
+      // "authentication_failed") instead of coercing to a boolean, so the
+      // host can carry it into the turn's result as error_code.
+      if (message.error) {
+        return [{ kind: "assistant", blocks: [], error: message.error }];
+      }
       const { blocks, toolUseIds } = scanAssistantContent(
         message.message.content,
       );
@@ -214,18 +297,36 @@ export function sdkMessageToLogs(message: SDKMessage): LogEntry[] {
 }
 
 /** Final-reply payload of a result message, or null for other messages.
- *  Only the success subtype carries reply text; failures surface as
+ *  Only a non-error success subtype carries reply text; failures surface as
  *  is_error, plus (issue #127) an error_subtype for UI branching and,
  *  when present, an error_detail string joined from SDKResultError.errors
  *  (falling back to stop_reason) — otherwise the AgentDetail turn-end
- *  line shows a bare "エラーで終了" without cause. */
-export function sdkMessageToResult(message: SDKMessage): ResultPayload | null {
+ *  line shows a bare "エラーで終了" without cause.
+ *
+ *  `assistantErrorCode` (issue #287) is the SDK's own error-class string
+ *  from the assistant message that preceded this result (e.g.
+ *  "authentication_failed") — the host tracks it across messages
+ *  (sdkMessageToEvents' "assistant" event carries it) and passes it here
+ *  because a `success`-subtype error result names no error class of its
+ *  own. When present on an error result, it becomes `error_code` plus a
+ *  bounded `error_summary`/`recovery_hint` from the wrapper's own closed
+ *  table (assistantErrorSummary) — never a copy of SDK text. */
+export function sdkMessageToResult(
+  message: SDKMessage,
+  assistantErrorCode?: string,
+): ResultPayload | null {
   if (message.type !== "result") return null;
   const payload: ResultPayload = {};
-  if (message.subtype === "success" && typeof message.result === "string") {
+  const isError = message.subtype !== "success" || message.is_error === true;
+  // issue #287: a success-subtype API error carries its "reply" text in
+  // `result`, which is really the error text (SDK doc: "with is_error true,
+  // the error text when the turn ended on an API error"). Do not surface it
+  // as a normal reply — error_summary/recovery_hint below are what the UI
+  // shows instead.
+  if (!isError && message.subtype === "success" && typeof message.result === "string") {
     payload.text = message.result;
   }
-  if (message.subtype !== "success" || message.is_error === true) {
+  if (isError) {
     payload.is_error = true;
     payload.error_subtype = resultSubtype(message);
     // TypeScript narrows to SDKResultError here; that shape carries no
@@ -243,6 +344,12 @@ export function sdkMessageToResult(message: SDKMessage): ResultPayload | null {
       ) {
         payload.error_detail = message.stop_reason;
       }
+    }
+    if (assistantErrorCode !== undefined) {
+      payload.error_code = assistantErrorCode;
+      const { summary, hint } = assistantErrorSummary(assistantErrorCode);
+      payload.error_summary = summary;
+      if (hint !== undefined) payload.recovery_hint = hint;
     }
   }
   return payload;

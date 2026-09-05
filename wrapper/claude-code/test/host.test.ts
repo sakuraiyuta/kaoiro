@@ -175,8 +175,8 @@ describe("AgentHost whoami effective projection (#113)", () => {
 // The host reads only a few SDK fields; build minimal shapes and cast.
 const msg = (shape: unknown): SDKMessage => shape as SDKMessage;
 const system = (): SDKMessage => msg({ type: "system", subtype: "init" });
-const assistant = (content: unknown): SDKMessage =>
-  msg({ type: "assistant", message: { content } });
+const assistant = (content: unknown, error?: string): SDKMessage =>
+  msg({ type: "assistant", message: { content }, error });
 const user = (content: unknown): SDKMessage =>
   msg({ type: "user", message: { content } });
 const taskToolResult = (toolUseId: string): SDKMessage =>
@@ -1889,6 +1889,62 @@ describe("AgentHost — query injection", () => {
       error_subtype: "error_during_execution",
       error_detail: "tool crashed: EACCES",
     });
+  });
+
+  // issue #287: real SDK shape ふじ2's investigation measured against HEAD —
+  // assistant.error="authentication_failed" followed by a success-subtype
+  // result with is_error=true and the auth text in `result`. Before the
+  // fix this surfaced as a bare "done" with error_subtype="success" and no
+  // error_code at all.
+  it("success + is_error=true な auth failure は done を出さず error_code/summary/hint を relay (issue #287)", async () => {
+    const logs: Envelope[] = [];
+    const states: string[] = [];
+    const host = new AgentHost(config, {
+      onState: (e) => states.push(e.state),
+      onLog: (e) => logs.push(e),
+      queryFn: scriptedQuery([
+        assistant([{ type: "text" }], "authentication_failed"),
+        result("success", {
+          is_error: true,
+          result: "Failed to authenticate: OAuth session expired and could not be refreshed",
+        }),
+      ]),
+      now: () => "T",
+    });
+    await host.run();
+    expect(states).not.toContain("done");
+    const res = logs.find((l) => l.type === "result");
+    expect(res?.payload).toEqual({
+      is_error: true,
+      error_subtype: "error_during_execution",
+      error_code: "authentication_failed",
+      error_summary: "認証の有効期限が切れました。",
+      recovery_hint:
+        "ホストで claude を対話起動し /login で再認証、その後このセッションを再起動してください。",
+    });
+    // The raw SDK text must not leak onto the wire anywhere in this payload
+    // (こはく裁定: error_summary/recovery_hint are wrapper-owned text only).
+    expect(JSON.stringify(res?.payload)).not.toContain("OAuth session expired");
+  });
+
+  it("success + is_error=true が続いた後の success はコードを持ち越さない (issue #287)", async () => {
+    const logs: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onLog: (e) => logs.push(e),
+      queryFn: scriptedQuery([
+        assistant([{ type: "text" }], "authentication_failed"),
+        result("success", { is_error: true, result: "auth failed" }),
+        assistant([{ type: "text" }]),
+        result("success", { result: "recovered" }),
+      ]),
+      now: () => "T",
+    });
+    await host.run();
+    const results = logs.filter((l) => l.type === "result");
+    expect(results).toHaveLength(2);
+    expect(results[1]?.payload).toEqual({ text: "recovered" });
+    expect(results[1]?.payload).not.toHaveProperty("error_code");
   });
 
   it("error result は onTurnEnd に conversationIds=[](未タグ) + terminal_reason/error_detail を渡す (issue #131)", async () => {

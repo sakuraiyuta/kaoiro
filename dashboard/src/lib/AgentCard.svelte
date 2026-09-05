@@ -20,6 +20,7 @@
     directoryOnly = false,
     activeTaskCount = 0,
     spawnError = null,
+    hasUnackedError = false,
     onSelect,
     onInterrupt,
     onStop,
@@ -47,6 +48,14 @@
      *  the tile corner until the agent comes online again or is restored
      *  successfully (ADR-0030 D8). Null clears it. */
     spawnError?: string | null;
+    /** True when the transcript holds an error result the operator has not
+     *  yet acknowledged by opening this agent's detail (issue #287). Keeps
+     *  the needs-attention badge lit after the live state moves past the
+     *  momentary `error` into `waiting_input` — without this the badge
+     *  clears within the same second and the operator never sees it.
+     *  Always false for a viewer session (App.svelte's transcript is
+     *  operator-only, ADR-0012), same scoping as activeTaskCount. */
+    hasUnackedError?: boolean;
     // exactOptionalPropertyTypes: undefined must be in the type since
     // App.svelte conditionally passes undefined when there is no connection
     // (or when a directory-only tile has no detail view to open).
@@ -141,11 +150,15 @@
     ),
   );
   // Needs-attention badge (ADR-0012 F6): approval/error draw the eye on the
-  // grid; the actual allow/deny happens in the detail view.
+  // grid; the actual allow/deny happens in the detail view. issue #287:
+  // `error` alone only covers the momentary live state — hasUnackedError
+  // keeps the badge lit across the error -> waiting_input transition until
+  // the operator opens the detail (App.svelte owns the ack).
   const attention = $derived(
     envelope.state === "waiting_permission" ||
       envelope.state === "waiting_question" ||
-      envelope.state === "error",
+      envelope.state === "error" ||
+      hasUnackedError,
   );
 
   // --- engine·model·effort / ctx·5h·7day stats (issue #193) ---

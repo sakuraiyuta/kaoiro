@@ -64,6 +64,7 @@
     computeActiveTaskCountByAgent,
     activeTaskCountForDetail,
     tasklistForDetail,
+    resultOf,
   } from "./lib/protocol";
   import {
     isWaitTransition,
@@ -105,6 +106,18 @@
   // when the agent next reports a live envelope or a subsequent
   // spawn_result for the same agent_id succeeds.
   let spawnErrors = $state<Record<string, string>>({});
+  // Latest unacknowledged error-result entry key per agent (issue #287).
+  // AgentCard's needs-attention badge otherwise tracks only the LIVE state
+  // (waiting_permission/waiting_question/error), which an error result
+  // clears within the same second when the state machine moves on to
+  // waiting_input (protocol.md: error/done are momentary, followed
+  // immediately by waiting_input) — the operator never sees it. Kept in
+  // memory only (こはく裁定 2026-09-05: reload re-arming the badge is the
+  // safe-side default over a per-browser localStorage ack that would not
+  // reach a second operator/tab). Set below when a `result` envelope with
+  // is_error arrives; cleared by the `selected` effect when the operator
+  // opens that agent's detail (ack).
+  let unackedErrorKey = $state<Record<string, string>>({});
   // Per-agent session-reset progress (ADR-0036 F7, phase-17 17-9). The
   // value is the mode being reset ("new" | "clear"); presence in the
   // map means the reset is between started and completed/failed, which
@@ -160,6 +173,17 @@
   let nowTimer: ReturnType<typeof setInterval> | undefined;
   // agent_id of the agent shown full-screen, or null for the grid.
   let selected = $state<string | null>(null);
+  // issue #287: opening an agent's detail is the ack for its sticky error
+  // badge (unackedErrorKey above) — every `selected` write path (there are
+  // several; see the assignments below) funnels through this one effect
+  // instead of each call site remembering to ack.
+  $effect(() => {
+    const id = selected;
+    if (id !== null && unackedErrorKey[id] !== undefined) {
+      const { [id]: _drop, ...rest } = unackedErrorKey;
+      unackedErrorKey = rest;
+    }
+  });
   // Timeline click の発話位置。AgentDetail は stable entry identity を DOM
   // anchor に照合して、該当箇所まで smooth scroll する (#122)。primitive の
   // entryKey しか渡さないため、同じ行の再クリックでは reactive 変化として
@@ -757,6 +781,17 @@
               }
             }
             logs = next;
+            // issue #287: an error result stays the sticky attention badge
+            // even after the state machine moves on to waiting_input —
+            // opening the detail (the `selected` effect below) acks it.
+            // Keyed to THIS envelope specifically so a later error
+            // overwrites an earlier still-unacked one (latest wins).
+            if (envelope.type === "result" && resultOf(envelope)?.is_error) {
+              unackedErrorKey = {
+                ...unackedErrorKey,
+                [envelope.agent_id]: conversationEntryKey(envelope),
+              };
+            }
             // JSONL resume replay deliberately reuses ordinary `envelope`
             // events. Its explicit reset/complete boundary, rather than an
             // arrival-count heuristic, is what distinguishes it from a live
@@ -1814,6 +1849,7 @@
                 {manifest}
                 activeTaskCount={activeTaskCountByAgent[envelope.agent_id] ?? 0}
                 spawnError={spawnErrors[envelope.agent_id] ?? null}
+                hasUnackedError={unackedErrorKey[envelope.agent_id] !== undefined}
                 onSelect={(o) => {
                   origin = o ?? null;
                   timelineScrollTarget = null;

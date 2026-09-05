@@ -643,8 +643,25 @@ export interface ResultPayload {
   /** SDK error termination detail text (issue #127) — the wrapper forwards
    *  what the SDK returned alongside is_error (e.g. tool error message).
    *  Absent on success; may be omitted on error when the SDK provided no
-   *  text. */
+   *  text. NOT masked or summarized (clipped only, protocol.md) — prefer
+   *  `error_summary` for the primary display line and treat this as the
+   *  detail-expansion (issue #287). */
   error_detail?: string;
+  /** Machine-readable API-level error class (issue #287), e.g. the SDK's
+   *  own `authentication_failed` / `rate_limit` / ... enum. Set only when
+   *  the wrapper's underlying SDK classified the failure at that level
+   *  (distinct from `error_subtype`, the turn-termination subtype); absent
+   *  otherwise, including on success. */
+  error_code?: string;
+  /** Bounded, human-readable summary of `error_code` (issue #287), built by
+   *  the wrapper from a closed code -> text table — never a copy of raw SDK
+   *  output. Safe to render directly. Present only alongside `error_code`. */
+  error_summary?: string;
+  /** Suggested recovery action for `error_code` (issue #287), e.g. for
+   *  authentication failure: re-authenticate on the host and restart the
+   *  session. Same closed-table provenance as `error_summary`. Present only
+   *  when the wrapper has a hint for the code. */
+  recovery_hint?: string;
 }
 
 /** Human-readable Japanese label for a wrapper's error_subtype (issue #127).

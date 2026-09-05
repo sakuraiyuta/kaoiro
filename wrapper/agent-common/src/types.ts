@@ -80,12 +80,16 @@ export type LogEntry =
 export type AdapterEvent =
   /** SDKSystemMessage (init) */
   | { kind: "session_init" }
-  /** SDKAssistantMessage. content kinds map to blocks, message.error to error.
-   *  toolUseIds lists the ids of tool_use blocks (omitted when none). */
+  /** SDKAssistantMessage. content kinds map to blocks, message.error to
+   *  error (issue #287: the SDK's own error-class string, e.g.
+   *  "authentication_failed" — kept as-is rather than coerced to a
+   *  boolean, so the wrapper host can carry it into the following result's
+   *  error_code). toolUseIds lists the ids of tool_use blocks (omitted when
+   *  none). */
   | {
       kind: "assistant";
       blocks: AssistantBlockKind[];
-      error?: boolean;
+      error?: string;
       toolUseIds?: string[];
     }
   /** tool_result block(s) of an SDKUserMessage. toolUseIds lists the answered

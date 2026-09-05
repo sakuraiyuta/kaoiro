@@ -687,6 +687,12 @@ export class AgentHost implements EngineAdapter {
    *  every result message (cooldown only ever surfaces via result). Stamped
    *  into ext.fast_mode. */
   #fastMode: string | null = null;
+  /** SDK error-class string from the most recent assistant.error (issue
+   *  #287), pending until the turn's result message consumes it as
+   *  error_code. Set when an "assistant" event carries `error`; cleared
+   *  unconditionally on the next result message (success or error) so a
+   *  stale code can never leak onto an unrelated later turn. */
+  #pendingAssistantErrorCode: string | undefined = undefined;
   /** Snapshot of the persisted model alias supplied at construction (spawn
    *  config / env / resume snapshot). #model tracks the *effective* value
    *  which init overwrites with what the SDK is actually running (host.ts:
@@ -1831,6 +1837,13 @@ export class AgentHost implements EngineAdapter {
           void this.#refreshSupportedModels();
         }
 
+        // issue #287: stash the assistant-level SDK error class so the
+        // following result message can surface it as error_code. Read
+        // directly off `message` (not the adapter event) since this is a
+        // host-local carry, not state-machine input.
+        if (message.type === "assistant" && message.error) {
+          this.#pendingAssistantErrorCode = message.error;
+        }
         // State first, so a log envelope carries the state this message
         // settled into; then relay the message's reply lines.
         for (const event of sdkMessageToEvents(message)) this.#apply(event);
@@ -1921,8 +1934,13 @@ export class AgentHost implements EngineAdapter {
             this.#emitSessionLifecycle("compacting");
           }
         }
-        const result = sdkMessageToResult(message);
+        const result = sdkMessageToResult(message, this.#pendingAssistantErrorCode);
         if (result) {
+          // issue #287: every result message closes the turn, so the
+          // pending code must not survive to a later, unrelated turn —
+          // clear it whether or not this result actually consumed it
+          // (e.g. a plain success has no error_code to carry).
+          this.#pendingAssistantErrorCode = undefined;
           this.#emitResult(result, sdkMessageToCost(message));
           if (result.is_error) {
             const terminalReason = sdkMessageToTerminalReason(message);
@@ -3358,7 +3376,7 @@ export class AgentHost implements EngineAdapter {
     if (typeof payload.text === "string")
       out.text = clipText(payload.text).text;
     if (payload.is_error) out.is_error = true;
-    // issue #127: only forward error metadata on error results. The
+    // issue #127/#287: only forward error metadata on error results. The
     // adapter never sets these on success, but the guard keeps the wire
     // payload minimal even if a future caller reuses this shape.
     if (typeof payload.error_subtype === "string") {
@@ -3366,6 +3384,18 @@ export class AgentHost implements EngineAdapter {
     }
     if (typeof payload.error_detail === "string") {
       out.error_detail = clipText(payload.error_detail).text;
+    }
+    // issue #287: error_code/error_summary/recovery_hint are bounded,
+    // wrapper-generated text (assistantErrorSummary's closed table) — never
+    // raw SDK output — so no clipText here, unlike error_detail above.
+    if (typeof payload.error_code === "string") {
+      out.error_code = payload.error_code;
+    }
+    if (typeof payload.error_summary === "string") {
+      out.error_summary = payload.error_summary;
+    }
+    if (typeof payload.recovery_hint === "string") {
+      out.recovery_hint = payload.recovery_hint;
     }
     const ext = cost !== null ? { cost } : {};
     onLog(makeResult(this.#config, this.#now(), out, ext));

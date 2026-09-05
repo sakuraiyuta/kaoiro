@@ -79,9 +79,9 @@ describe("sdkMessageToEvents", () => {
     ]);
   });
 
-  it("assistant error -> error event", () => {
+  it("assistant error -> error event carrying the SDK error code (issue #287)", () => {
     expect(sdkMessageToEvents(assistant([{ type: "text" }], "rate_limit"))).toEqual(
-      [{ kind: "assistant", blocks: [], error: true }],
+      [{ kind: "assistant", blocks: [], error: "rate_limit" }],
     );
   });
 
@@ -112,6 +112,24 @@ describe("sdkMessageToEvents", () => {
     ).toEqual([{ kind: "result", subtype: "error_max_turns" }]);
     expect(
       sdkMessageToEvents(msg({ type: "result", subtype: "error_weird" })),
+    ).toEqual([{ kind: "result", subtype: "error_during_execution" }]);
+  });
+
+  // issue #287: real SDK shape for an API error surfaced through a
+  // success-subtype result (SDKResultSuccess.is_error=true) — the premise
+  // ふじ2's investigation measured against HEAD. Before the fix this
+  // returned {kind:"result", subtype:"success"}, which is the direct cause
+  // of the reported error -> done -> waiting_input sequence.
+  it("success subtype + is_error=true is NOT treated as success (issue #287)", () => {
+    expect(
+      sdkMessageToEvents(
+        msg({
+          type: "result",
+          subtype: "success",
+          is_error: true,
+          result: "Failed to authenticate: OAuth session expired and could not be refreshed",
+        }),
+      ),
     ).toEqual([{ kind: "result", subtype: "error_during_execution" }]);
   });
 
@@ -428,6 +446,63 @@ describe("sdkMessageToResult", () => {
   it("result 以外は null", () => {
     expect(sdkMessageToResult(assistant([{ type: "text", text: "x" }]))).toBeNull();
   });
+
+  // issue #287: fixtures below use the real SDK shape ふじ2 measured against
+  // HEAD (SDKResultSuccess with is_error=true, the auth text in `result`),
+  // not a hand-guessed shape — a wrong premise here fails the test instead
+  // of passing vacuously.
+  it("success + is_error=true は text を落とし is_error/error_subtype を立てる (issue #287)", () => {
+    expect(
+      sdkMessageToResult(
+        msg({
+          type: "result",
+          subtype: "success",
+          is_error: true,
+          result: "Failed to authenticate: OAuth session expired and could not be refreshed",
+        }),
+      ),
+    ).toEqual({ is_error: true, error_subtype: "error_during_execution" });
+  });
+
+  it("assistantErrorCode 付きなら error_code/error_summary/recovery_hint を載せる (issue #287)", () => {
+    expect(
+      sdkMessageToResult(
+        msg({
+          type: "result",
+          subtype: "success",
+          is_error: true,
+          result: "Failed to authenticate: OAuth session expired and could not be refreshed",
+        }),
+        "authentication_failed",
+      ),
+    ).toEqual({
+      is_error: true,
+      error_subtype: "error_during_execution",
+      error_code: "authentication_failed",
+      error_summary: "認証の有効期限が切れました。",
+      recovery_hint:
+        "ホストで claude を対話起動し /login で再認証、その後このセッションを再起動してください。",
+    });
+  });
+
+  it("未知の assistantErrorCode はコードを保持しつつ汎用 summary に丸める (issue #287)", () => {
+    const payload = sdkMessageToResult(
+      msg({ type: "result", subtype: "success", is_error: true, result: "x" }),
+      "some_future_code",
+    );
+    expect(payload?.error_code).toBe("some_future_code");
+    expect(payload?.error_summary).toBe("APIエラーが発生しました (some_future_code)");
+    expect(payload).not.toHaveProperty("recovery_hint");
+  });
+
+  it("success + is_error=false は assistantErrorCode を渡しても text のみ (issue #287)", () => {
+    expect(
+      sdkMessageToResult(
+        msg({ type: "result", subtype: "success", result: "完了" }),
+        "rate_limit",
+      ),
+    ).toEqual({ text: "完了" });
+  });
 });
 
 describe("sdkMessageToTerminalReason (issue #131)", () => {
@@ -538,6 +613,40 @@ describe("adapter + state machine", () => {
       "done",
       "waiting_input",
     ]);
+  });
+
+  // issue #287 negative controls (real SDK shape, per the issue's fixture
+  // requirement): a plain success still reaches "done" exactly once; an
+  // auth failure surfacing through a success-subtype is_error=true result
+  // must never emit "done" at all, only "error" -> "waiting_input".
+  it("success + is_error=false は done を経る (issue #287 negative control)", () => {
+    const stream: SDKMessage[] = [
+      msg({ type: "system", subtype: "init" }),
+      assistant([{ type: "text" }]),
+      msg({ type: "result", subtype: "success", is_error: false, result: "ok" }),
+    ];
+    expect(reduceStates(stream.flatMap(sdkMessageToEvents))).toEqual([
+      "idle",
+      "thinking",
+      "done",
+      "waiting_input",
+    ]);
+  });
+
+  it("success + is_error=true (auth failure) は done を一度も出さない (issue #287)", () => {
+    const stream: SDKMessage[] = [
+      msg({ type: "system", subtype: "init" }),
+      assistant([{ type: "text" }], "authentication_failed"),
+      msg({
+        type: "result",
+        subtype: "success",
+        is_error: true,
+        result: "Failed to authenticate: OAuth session expired and could not be refreshed",
+      }),
+    ];
+    const trace = reduceStates(stream.flatMap(sdkMessageToEvents));
+    expect(trace).not.toContain("done");
+    expect(trace).toEqual(["idle", "error", "error", "waiting_input"]);
   });
 });
 

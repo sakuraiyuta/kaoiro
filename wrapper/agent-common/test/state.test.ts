@@ -58,12 +58,12 @@ describe("stepState", () => {
     ).toEqual(["thinking"]);
   });
 
-  it("assistant.error を error に導出する", () => {
+  it("assistant.error を error に導出する (issue #287: error はコード文字列)", () => {
     expect(
       stepState(initialMachineState("thinking"), {
         kind: "assistant",
         blocks: ["text"],
-        error: true,
+        error: "authentication_failed",
       }).emitted,
     ).toEqual(["error"]);
   });

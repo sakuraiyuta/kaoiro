@@ -3277,13 +3277,17 @@
                  result only marks the turn boundary, not a duplicate (#29).
                  On error, issue #127: subtype label (max_turns 等) と SDK 由来
                  detail (errors[] / stop_reason) を併記して原因特定を可能に。
+                 issue #287: error_summary (wrapper 定型文、認証切れ等) が
+                 あれば errLabel より優先して表示 — こはく裁定。
                  issue #128: 直前の user プロンプトを findPrecedingUserPrompt で
                  拾って再送ボタンを表示 (slash command と null は button 非表示)。 -->
             <p class="turn-end" class:error={res.is_error}>
               {res.is_error
-                ? errLabel
-                  ? `エラーで終了 (${errLabel})`
-                  : "エラーで終了"
+                ? res.error_summary
+                  ? `エラーで終了 (${res.error_summary})`
+                  : errLabel
+                    ? `エラーで終了 (${errLabel})`
+                    : "エラーで終了"
                 : "応答完了"}
               {#if cost !== null}
                 <span
@@ -3305,8 +3309,20 @@
               {/if}
               <time class="ts" datetime={env.ts}>{time}</time>
             </p>
+            {#if res.is_error && res.recovery_hint}
+              <!-- issue #287: recovery action for error_code (closed
+                   wrapper-owned text, e.g. "re-authenticate on the host"). -->
+              <p class="turn-end-hint">{res.recovery_hint}</p>
+            {/if}
             {#if res.is_error && res.error_detail}
-              <p class="turn-end-detail">{res.error_detail}</p>
+              <!-- issue #287: raw SDK detail is now the expandable
+                   secondary view — error_summary above (when present) is
+                   the primary line, per protocol.md's display-priority
+                   note. -->
+              <details class="turn-end-detail">
+                <summary>詳細</summary>
+                <p>{res.error_detail}</p>
+              </details>
             {/if}
             {/if}
           </div>
@@ -4635,14 +4651,36 @@
     color: var(--c-error);
   }
 
-  /* Error detail line (issue #127): shows SDK errors[] / stop_reason under
-     the turn-end when an error terminated the turn. Same tone as turn-end
-     but wraps normally instead of being centred. */
+  /* Error detail (issue #127): SDK errors[] / stop_reason under the
+     turn-end when an error terminated the turn. Same tone as turn-end but
+     wraps normally instead of being centred. issue #287: promoted to
+     <details> so the raw SDK text is an opt-in expansion, not always-on —
+     error_summary above (when present) is the primary line now. */
   .turn-end-detail {
     margin: 0 1rem 0.4rem;
     text-align: center;
     font-size: var(--fs-metadata);
     color: var(--c-error);
+    opacity: 0.85;
+  }
+
+  .turn-end-detail summary {
+    cursor: pointer;
+  }
+
+  .turn-end-detail p {
+    margin: 0.2rem 0 0;
+    word-break: break-word;
+  }
+
+  /* Recovery hint (issue #287): the wrapper's fixed-table recovery action
+     for error_code, e.g. "re-authenticate on the host". Same placement as
+     turn-end-detail but not error-toned — it is guidance, not the failure
+     itself. */
+  .turn-end-hint {
+    margin: 0 1rem 0.4rem;
+    text-align: center;
+    font-size: var(--fs-metadata);
     opacity: 0.85;
     word-break: break-word;
   }

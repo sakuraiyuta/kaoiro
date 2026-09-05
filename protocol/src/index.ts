@@ -62,8 +62,29 @@ export interface ResultPayload {
   error_subtype?: string;
   /** SDK error termination detail (issue #127): the free-form message the
    *  SDK returned alongside is_error (e.g. tool error text). Absent on
-   *  success; may be omitted on error if the SDK provided no text. */
+   *  success; may be omitted on error if the SDK provided no text. NOT
+   *  masked or summarized (clipped only, protocol.md); the client should
+   *  prefer `error_summary` for the primary display line and treat this as
+   *  the optional detail-expansion (issue #287). */
   error_detail?: string;
+  /** Machine-readable API-level error class (issue #287), e.g. the SDK's
+   *  own `authentication_failed` / `rate_limit` / ... enum. Set only when
+   *  the wrapper's underlying SDK classified the failure at that level
+   *  (distinct from `error_subtype`, which is the turn-termination
+   *  subtype); absent otherwise, including on success. Wire-typed as a
+   *  plain string so an SDK enum value the wrapper does not yet recognize
+   *  still round-trips instead of being dropped. */
+  error_code?: string;
+  /** Bounded, human-readable summary of `error_code` (issue #287). Built by
+   *  the wrapper from a closed, wrapper-owned code -> text table; NEVER a
+   *  copy of raw SDK output, so the client may render it directly with no
+   *  further masking/clipping. Present only alongside `error_code`. */
+  error_summary?: string;
+  /** Suggested recovery action for `error_code` (issue #287), e.g. for
+   *  authentication failure: re-authenticate on the host and restart the
+   *  session. Same closed-table provenance as `error_summary` — no raw SDK
+   *  text. Present only when the wrapper has a hint for the code. */
+  recovery_hint?: string;
 }
 
 /** Coarse subagent/workflow lifecycle status (ADR-0019 F3). Distinct from
