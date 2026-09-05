@@ -50,9 +50,9 @@ everything else.
 | Enterprise | custom | Sol / Terra / Luna / Astra (+ individual negotiation) | **Sol + medium** | Admin can change the default |
 | API-key | Usage based | Sol / Terra / Luna / Astra / 5.5 / 5.4 / 5.4-mini + some deprecated models | **Explicit selection required** | No 400/404 restriction |
 
-`gpt-6-astra` is marked `visibility: hide` upstream and its `models.json`
-plan list also names Free/Go, but that combination is unverified against the
-live Free/Go experience — kaoiro's own catalog (`wrapper/codex/src/catalog.ts`)
+`gpt-6-astra` is marked `visibility: list` upstream. Its `models.json` plan
+list also names Free/Go, but that combination is unverified against the live
+Free/Go experience — kaoiro's own catalog (`wrapper/codex/src/catalog.ts`)
 therefore only advertises it for Plus and above, matching Sol/Terra/Luna's
 existing tiering (issue #292).
 
@@ -169,9 +169,8 @@ themselves in the meantime:
 }
 ```
 
-- Only `value` is required; every field accepts only `EngineModelInfo`'s
-  INPUT subset — `resolved_model` is upstream-derived metadata and is
-  never read from config. `display_name` defaults to `value`;
+- Only `value` is required; `resolved_model` is upstream-derived metadata and
+  is never read from config. `display_name` defaults to `value`;
   `effort_levels` / `default_effort` absent means no effort switching is
   offered for that model (ADR-0035's "never infer an effort domain" rule
   — kaoiro does not guess one).
@@ -192,6 +191,11 @@ themselves in the meantime:
   not bypass entitlement — a model the account is not actually entitled to
   still fails with the SDK's usual 400/404, surfaced as the existing
   `switch_error` rollback (or a launch failure for a fresh spawn).
+- A Codex declaration may include `minimal_client_version` as a
+  `major.minor.patch` string. When present, the runner and wrapper exclude
+  the entry if the SDK-bundled Codex CLI is older. When absent, the entry
+  remains advertised and the runner writes one warning: CLI compatibility is
+  the operator's responsibility for that escape-hatch declaration.
 
 ## Information granularity of `codex doctor`
 

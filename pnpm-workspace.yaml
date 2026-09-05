@@ -14,4 +14,4 @@ onlyBuiltDependencies:
   - esbuild
 
 patchedDependencies:
-  '@openai/codex-sdk@0.144.1': patches/@openai__codex-sdk@0.144.1.patch
+  '@openai/codex-sdk@0.153.4': patches/@openai__codex-sdk@0.153.4.patch

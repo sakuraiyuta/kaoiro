@@ -126,6 +126,22 @@ describe("initialStatusExt", () => {
     ).find((m) => m.value === "gpt-5.6-luna");
     expect(luna?.display_name).toBe("overridden");
   });
+
+  it("does not stamp an extra model above the bundled Codex version", () => {
+    const initial = initialStatusExt({
+      ...CONFIG,
+      codex_extra_models: [
+        {
+          value: "requires-newer-codex",
+          display_name: "Requires newer Codex",
+          minimal_client_version: "999.0.0",
+        },
+      ],
+    });
+    expect((initial.models as { value: string }[]).map((model) => model.value)).not.toContain(
+      "requires-newer-codex",
+    );
+  });
 });
 
 describe("CodexHost — display_name rename (issue #197 段階3, revised issue #219 D19/D23)", () => {
@@ -232,6 +248,7 @@ function usageEvent(): ThreadEvent {
       cached_input_tokens: 0,
       output_tokens: 1,
       reasoning_output_tokens: 0,
+      cache_write_input_tokens: 0,
     },
   };
 }
@@ -358,7 +375,7 @@ describe("CodexHost", () => {
       "write({ type: 'item.completed', item });",
       "write({",
       "  type: 'turn.completed',",
-      "  usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 },",
+      "  usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0, cache_write_input_tokens: 0 },",
       "});",
     ].join("\n");
     await writeFile(executable, script, "utf8");

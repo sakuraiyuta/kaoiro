@@ -1,8 +1,8 @@
 diff --git a/dist/index.js b/dist/index.js
-index f7122ee3659d7e850f272e94210bac7a96c00d0e..96fd98046a72f288cab4ff7f339358cbaa1f42be 100644
+index 062039c2610107095bd7a254bdebd6fcf7e15fc6..343ddb329cfa631e4697d4d1a3effd09e3f105c7 100644
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -137,7 +137,6 @@ function normalizeInput(input) {
+@@ -140,7 +140,6 @@ function normalizeInput(input) {
  import { spawn } from "child_process";
  import { statSync } from "fs";
  import path2 from "path";
@@ -10,7 +10,7 @@ index f7122ee3659d7e850f272e94210bac7a96c00d0e..96fd98046a72f288cab4ff7f339358cb
  import { createRequire } from "module";
  var INTERNAL_ORIGINATOR_ENV = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
  var TYPESCRIPT_SDK_ORIGINATOR = "codex_sdk_ts";
-@@ -276,14 +275,19 @@ var CodexExec = class {
+@@ -289,14 +288,19 @@ var CodexExec = class {
          });
        }
      );
@@ -36,7 +36,7 @@ index f7122ee3659d7e850f272e94210bac7a96c00d0e..96fd98046a72f288cab4ff7f339358cb
        if (spawnError) throw spawnError;
        const { code, signal } = await exitPromise;
        if (code !== 0 || signal) {
-@@ -292,7 +296,6 @@ var CodexExec = class {
+@@ -305,7 +309,6 @@ var CodexExec = class {
          throw new Error(`Codex Exec exited with ${detail}: ${stderrBuffer.toString("utf8")}`);
        }
      } finally {

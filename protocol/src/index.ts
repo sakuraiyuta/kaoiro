@@ -363,6 +363,9 @@ export interface EngineModelInfo {
    *  upstream ModelInfo.resolvedModel (e.g. the concrete id an alias like
    *  `default` maps to). Read-only metadata; absent = unknown. */
   resolved_model?: string;
+  /** Lowest Codex CLI version that can execute this model. Omitted for
+   *  operator-declared models whose compatibility is not known to kaoiro. */
+  minimal_client_version?: string;
 }
 
 /** Launch catalog for one engine, sent by the runner in its register

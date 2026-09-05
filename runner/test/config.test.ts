@@ -235,6 +235,35 @@ describe("parseRunnerConfig", () => {
       ]);
     });
 
+    it("preserves a declared minimal_client_version", () => {
+      const config = parseRunnerConfig({
+        ...valid,
+        codex: {
+          extra_models: [
+            { value: "gpt-6-astra", minimal_client_version: "0.153.0" },
+          ],
+        },
+      });
+      expect(config.codex?.extra_models?.[0]?.minimal_client_version).toBe(
+        "0.153.0",
+      );
+    });
+
+    it("rejects a malformed minimal_client_version", () => {
+      expect(() =>
+        parseRunnerConfig({
+          ...valid,
+          codex: {
+            extra_models: [
+              { value: "gpt-6-astra", minimal_client_version: "0.153" },
+            ],
+          },
+        }),
+      ).toThrowError(
+        "codex.extra_models[0].minimal_client_version must be a major.minor.patch version",
+      );
+    });
+
     it("absent means undefined", () => {
       expect(
         parseRunnerConfig({ ...valid, codex: {} }).codex?.extra_models,
@@ -330,6 +359,61 @@ describe("parseRunnerConfig", () => {
         parseRunnerConfig({ ...valid, codex: { extra_models } }),
       ).toThrowError("codex.extra_models must have at most 32 entries");
     });
+  });
+
+  it("buildRegister excludes an operator model above the bundled Codex version", () => {
+    const stderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+    try {
+      const config = parseRunnerConfig({
+        ...valid,
+        codex: {
+          auth_mode: "apikey",
+          extra_models: [
+            {
+              value: "requires-newer-codex",
+              minimal_client_version: "999.0.0",
+            },
+          ],
+        },
+      });
+      const register = buildRegister(config, "apikey");
+      const codex = register.engines?.find((engine) => engine.id === "codex");
+      expect(codex?.models.map((model) => model.value)).not.toContain(
+        "requires-newer-codex",
+      );
+      expect(stderr).toHaveBeenCalledWith(
+        expect.stringContaining("excluding requires-newer-codex"),
+      );
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  it("buildRegister keeps an operator model without a minimum version and warns", () => {
+    const stderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+    try {
+      const config = parseRunnerConfig({
+        ...valid,
+        codex: {
+          auth_mode: "apikey",
+          extra_models: [{ value: "operator-responsibility-model" }],
+        },
+      });
+      const register = buildRegister(config, "apikey");
+      const codex = register.engines?.find((engine) => engine.id === "codex");
+      expect(codex?.models.map((model) => model.value)).toContain(
+        "operator-responsibility-model",
+      );
+      expect(stderr).toHaveBeenCalledWith(
+        expect.stringContaining("operator's responsibility"),
+      );
+    } finally {
+      stderr.mockRestore();
+    }
   });
 
   // antigravity.extra_models (issue #292 MF-2, phase-34 Stage B6) routes

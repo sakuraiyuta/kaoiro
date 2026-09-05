@@ -63,6 +63,7 @@ const MAX_ALLOWED_TOOLS = 64;
  *  wrapper packages for constants this small; keep the two in sync). */
 const MAX_EXTRA_MODELS = 32;
 const MAX_EFFORT_LEVELS = 16;
+const CORE_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:[-+].*)?$/;
 
 class ConfigError extends Error {
   override name = "ConfigError";
@@ -82,6 +83,14 @@ function nonEmptyString(value: unknown, field: string): string {
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function parseMinimalClientVersion(value: unknown, field: string): string {
+  const version = nonEmptyString(value, field);
+  if (!CORE_VERSION.test(version)) {
+    throw new ConfigError(`${field} must be a major.minor.patch version`);
+  }
+  return version;
 }
 
 /** Parses one `EngineModelInfo` row from an operator's `*_extra_models`
@@ -134,6 +143,12 @@ function parseExtraModelRow(
       );
     }
     model.default_effort = defaultEffort;
+  }
+  if (row.minimal_client_version !== undefined) {
+    model.minimal_client_version = parseMinimalClientVersion(
+      row.minimal_client_version,
+      `${field}.minimal_client_version`,
+    );
   }
   return model;
 }

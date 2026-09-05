@@ -31,6 +31,7 @@ const MAX_CAPABILITIES = 16;
  *  real declaration, same rationale as MAX_PERSONAS/MAX_CWDS above. */
 const MAX_EXTRA_MODELS = 32;
 const MAX_EFFORT_LEVELS = 16;
+const CORE_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:[-+].*)?$/;
 
 /** host_id rides the channel topic `runner:<host_id>`, so its charset is
  *  restricted exactly like agent_id (the server enforces the same guard). */
@@ -166,6 +167,14 @@ function parseStringList(
   return value.map((entry, index) => nonEmptyString(entry, `${field}[${index}]`));
 }
 
+function parseMinimalClientVersion(value: unknown, field: string): string {
+  const version = nonEmptyString(value, field);
+  if (!CORE_VERSION.test(version)) {
+    throw new ConfigError(`${field} must be a major.minor.patch version`);
+  }
+  return version;
+}
+
 /** Parses one `EngineModelInfo` from an operator's `extra_models` entry
  *  (issue #292). Engine-agnostic — the caller supplies the field path for
  *  error messages, so this is shared verbatim by any engine's config block
@@ -216,6 +225,12 @@ function parseEngineModelInfo(
       );
     }
     model.default_effort = defaultEffort;
+  }
+  if (value.minimal_client_version !== undefined) {
+    model.minimal_client_version = parseMinimalClientVersion(
+      value.minimal_client_version,
+      `${field}.minimal_client_version`,
+    );
   }
   return model;
 }
@@ -513,12 +528,9 @@ export function buildRegister(
   if (capabilities.includes("codex")) {
     engines.push({
       id: "codex",
-      // issue #292: operator-declared codex.extra_models layer on top of
-      // the curated resolver's output (mergeExtraModels — declared entries
-      // win on a `value` collision, new ones append) so LaunchDialog sees a
-      // brand-new upstream model the day it ships, without a kaoiro release.
-      models: mergeExtraModels(
-        resolveCodexCatalog(codexAuthMode, config.codex?.chatgpt_plan),
+      models: resolveCodexCatalog(
+        codexAuthMode,
+        config.codex?.chatgpt_plan,
         config.codex?.extra_models,
       ),
       // ADR-0033 F3: Codex exposes a launch-fixed sandbox axis (+ its

@@ -1,6 +1,9 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import type { EngineModelInfo } from "@kaoiro/protocol";
 import {
+  BUNDLED_CODEX_VERSION,
   effortLevelsForModel,
   resolveCodexCatalog,
 } from "../src/catalog.js";
@@ -123,6 +126,111 @@ describe("resolveCodexCatalog", () => {
     expect(resolveCodexCatalog("chatgpt", "plus")[0]?.display_name).toBe(
       "GPT-5.6-Sol",
     );
+  });
+
+  it("loads the bundled Codex CLI version through the SDK dependency", () => {
+    expect(BUNDLED_CODEX_VERSION).toBe("0.153.4");
+  });
+
+  it("matches the SDK's exact Codex CLI dependency", () => {
+    const sdkPackage = JSON.parse(
+      readFileSync(
+        fileURLToPath(
+          new URL(
+            "../node_modules/@openai/codex-sdk/package.json",
+            import.meta.url,
+          ),
+        ),
+        "utf8",
+      ),
+    ) as { dependencies?: Record<string, unknown> };
+    expect(sdkPackage.dependencies?.["@openai/codex"]).toBe(
+      BUNDLED_CODEX_VERSION,
+    );
+  });
+
+  it.each([
+    ["gpt-5.6-sol", "0.144.0"],
+    ["gpt-5.6-terra", "0.144.0"],
+    ["gpt-5.6-luna", "0.144.0"],
+    ["gpt-6-astra", "0.153.0"],
+    ["gpt-5.5", "0.124.0"],
+    ["gpt-5.4-mini", "0.98.0"],
+  ])("pins curated %s minimal_client_version", (value, minimum) => {
+    const model = resolveCodexCatalog("apikey").find(
+      (entry) => entry.value === value,
+    );
+    expect(model?.minimal_client_version).toBe(minimum);
+  });
+
+  it("excludes curated models newer than the bundled Codex CLI", () => {
+    const stderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+    try {
+      const catalog = resolveCodexCatalog(
+        "chatgpt",
+        "plus",
+        undefined,
+        "0.144.1",
+      );
+      expect(catalog.map((model) => model.value)).toEqual([
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+      ]);
+      expect(stderr).toHaveBeenCalledWith(
+        expect.stringContaining("requires Codex >= 0.153.0"),
+      );
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  it("filters operator models that declare an unsupported minimum version", () => {
+    const stderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+    try {
+      const catalog = resolveCodexCatalog(
+        "unknown",
+        undefined,
+        [
+          {
+            value: "operator-model",
+            display_name: "Operator model",
+            minimal_client_version: "0.153.0",
+          },
+        ],
+        "0.144.1",
+      );
+      expect(catalog).toEqual([]);
+      expect(stderr).toHaveBeenCalledWith(
+        expect.stringContaining("excluding operator-model"),
+      );
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  it("keeps an operator model without a minimum version and warns", () => {
+    const stderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+    try {
+      const catalog = resolveCodexCatalog(
+        "unknown",
+        undefined,
+        [{ value: "operator-model", display_name: "Operator model" }],
+        "0.144.1",
+      );
+      expect(catalog.map((model) => model.value)).toEqual(["operator-model"]);
+      expect(stderr).toHaveBeenCalledWith(
+        expect.stringContaining("operator's responsibility"),
+      );
+    } finally {
+      stderr.mockRestore();
+    }
   });
 });
 

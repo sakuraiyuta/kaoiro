@@ -1,3 +1,5 @@
+import { createRequire } from "node:module";
+import { mergeExtraModels } from "@kaoiro/agent-common";
 import type { EngineModelInfo } from "@kaoiro/protocol";
 
 export type CodexAuthMode = "chatgpt" | "apikey" | "unknown";
@@ -21,6 +23,7 @@ const SOL: EngineModelInfo = {
   description: "Latest frontier agentic coding model.",
   effort_levels: ["low", "medium", "high", "xhigh", "max", "ultra"],
   default_effort: "low",
+  minimal_client_version: "0.144.0",
 };
 
 const TERRA: EngineModelInfo = {
@@ -29,6 +32,7 @@ const TERRA: EngineModelInfo = {
   description: "Balanced agentic coding model for everyday work.",
   effort_levels: ["low", "medium", "high", "xhigh", "max", "ultra"],
   default_effort: "medium",
+  minimal_client_version: "0.144.0",
 };
 
 const LUNA: EngineModelInfo = {
@@ -37,18 +41,16 @@ const LUNA: EngineModelInfo = {
   description: "Fast and affordable agentic coding model.",
   effort_levels: ["low", "medium", "high", "xhigh", "max"],
   default_effort: "medium",
+  minimal_client_version: "0.144.0",
 };
 
-// models.json marks this `visibility: hide` and lists free/go among its
-// plans, but that combination is unverified against the live free/go
-// experience (issue #292) -- deferred, so ASTRA joins the plus+ / API-key
-// tiers only, same as the other three curated models.
 const ASTRA: EngineModelInfo = {
   value: "gpt-6-astra",
   display_name: "GPT-6-Astra",
   description: "Our most capable model for complex, demanding work.",
   effort_levels: ["low", "medium", "high", "xhigh", "max", "ultra"],
   default_effort: "low",
+  minimal_client_version: "0.153.0",
 };
 
 const CHATGPT_PLUS_MODELS = [SOL, TERRA, LUNA, ASTRA];
@@ -62,6 +64,7 @@ const APIKEY_MODELS: EngineModelInfo[] = [
     description: "Frontier model for complex coding and research.",
     effort_levels: ["low", "medium", "high", "xhigh"],
     default_effort: "medium",
+    minimal_client_version: "0.124.0",
   },
   {
     value: "gpt-5.4-mini",
@@ -69,6 +72,7 @@ const APIKEY_MODELS: EngineModelInfo[] = [
     description: "Small, fast, and cost-efficient coding model.",
     effort_levels: ["low", "medium", "high", "xhigh"],
     default_effort: "medium",
+    minimal_client_version: "0.98.0",
   },
 ];
 
@@ -81,35 +85,106 @@ function copyCatalog(models: EngineModelInfo[]): EngineModelInfo[] {
   }));
 }
 
+type CoreVersion = readonly [number, number, number];
+
+const CORE_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:[-+].*)?$/;
+
+function parseCoreVersion(value: string, source: string): CoreVersion {
+  const match = CORE_VERSION.exec(value);
+  if (match === null) {
+    throw new Error(`${source} must be a major.minor.patch version`);
+  }
+  const parts = match.slice(1, 4).map(Number);
+  if (parts.some((part) => !Number.isSafeInteger(part))) {
+    throw new Error(`${source} has an unsafe version component`);
+  }
+  return [parts[0]!, parts[1]!, parts[2]!];
+}
+
+function isAtLeast(version: string, minimum: string): boolean {
+  const actual = parseCoreVersion(version, "bundled Codex version");
+  const required = parseCoreVersion(minimum, "minimal_client_version");
+  for (let index = 0; index < actual.length; index += 1) {
+    if (actual[index]! !== required[index]!) {
+      return actual[index]! > required[index]!;
+    }
+  }
+  return true;
+}
+
+function bundledCodexVersion(): string {
+  const codexPackage = createRequire(import.meta.url)(
+    "@openai/codex/package.json",
+  ) as { version?: unknown };
+  if (typeof codexPackage.version !== "string") {
+    throw new Error("bundled @openai/codex package.json has no version");
+  }
+  parseCoreVersion(codexPackage.version, "bundled Codex version");
+  return codexPackage.version;
+}
+
+export const BUNDLED_CODEX_VERSION = bundledCodexVersion();
+
+function filterCatalogByClientVersion(
+  catalog: readonly EngineModelInfo[],
+  operatorExtraModels: readonly EngineModelInfo[] | undefined,
+  clientVersion: string,
+): EngineModelInfo[] {
+  const operatorValues = new Set(
+    operatorExtraModels?.map((model) => model.value),
+  );
+  return catalog.filter((model) => {
+    if (model.minimal_client_version === undefined) {
+      if (operatorValues.has(model.value)) {
+        process.stderr.write(
+          `codex: warn — minimal_client_version is not declared for operator model ${model.value}; CLI compatibility is the operator's responsibility\n`,
+        );
+      }
+      return true;
+    }
+    if (isAtLeast(clientVersion, model.minimal_client_version)) return true;
+    process.stderr.write(
+      `codex: warn — excluding ${model.value}: requires Codex >= ${model.minimal_client_version}, bundled version is ${clientVersion}\n`,
+    );
+    return false;
+  });
+}
+
 export function resolveCodexCatalog(
   authMode: CodexAuthMode,
   plan?: ChatGptPlan,
+  extraModels?: readonly EngineModelInfo[],
+  clientVersion = BUNDLED_CODEX_VERSION,
 ): EngineModelInfo[] {
+  let catalog: EngineModelInfo[];
   if (authMode === "unknown") {
     process.stderr.write(
       "codex: warn — auth mode is unknown; model catalog is empty\n",
     );
-    return [];
-  }
-  if (authMode === "apikey") {
+    catalog = [];
+  } else if (authMode === "apikey") {
     if (plan !== undefined) {
       process.stderr.write(
         "codex: warn — chatgpt_plan is ignored for API-key auth\n",
       );
     }
-    return copyCatalog(APIKEY_MODELS);
-  }
-  if (plan === undefined) {
+    catalog = copyCatalog(APIKEY_MODELS);
+  } else if (plan === undefined) {
     process.stderr.write(
       "codex: warn — chatgpt_plan is not configured; " +
         "model catalog is empty\n",
     );
-    return [];
+    catalog = [];
+  } else if (plan === "free" || plan === "go") {
+    catalog = copyCatalog(CHATGPT_TERRA);
+  } else {
+    catalog = copyCatalog(CHATGPT_PLUS_MODELS);
   }
-  if (plan === "free" || plan === "go") {
-    return copyCatalog(CHATGPT_TERRA);
-  }
-  return copyCatalog(CHATGPT_PLUS_MODELS);
+  return filterCatalogByClientVersion(
+    mergeExtraModels(catalog, extraModels),
+    extraModels,
+    clientVersion,
+  );
 }
 
 export const CODEX_ENGINE = {

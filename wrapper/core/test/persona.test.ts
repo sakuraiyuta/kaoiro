@@ -365,6 +365,37 @@ describe("parseConfig", () => {
     ).toEqual(models);
   });
 
+  it("codex_extra_models: preserves minimal_client_version", () => {
+    const models = [
+      {
+        value: "gpt-6-astra",
+        display_name: "GPT-6-Astra",
+        minimal_client_version: "0.153.0",
+      },
+    ];
+    expect(
+      parseConfig({ ...valid, codex_extra_models: models })
+        .codex_extra_models,
+    ).toEqual(models);
+  });
+
+  it("codex_extra_models: rejects malformed minimal_client_version", () => {
+    expect(() =>
+      parseConfig({
+        ...valid,
+        codex_extra_models: [
+          {
+            value: "gpt-6-astra",
+            display_name: "GPT-6-Astra",
+            minimal_client_version: "0.153",
+          },
+        ],
+      }),
+    ).toThrow(
+      /codex_extra_models\[0\]\.minimal_client_version must be a major\.minor\.patch version/,
+    );
+  });
+
   // issue #292 round 2 must-fix MF-1: parseConfig's extra_models validation
   // was looser than runner/src/config.ts's parseEngineModelInfo, which
   // enforces these same three invariants. Pinned here through the shared
