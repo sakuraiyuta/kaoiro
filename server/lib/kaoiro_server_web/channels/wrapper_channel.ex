@@ -55,6 +55,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # Resource bound only; content/type refinement is Phase 1.5-4. Clients
   # must still treat all envelope strings as untrusted when rendering.
   @max_envelope_bytes 65_536
+  @max_directory_model_bytes 256
   @session_reset_modes ["new", "clear"]
 
   # M1 round-3 fix (2026-08-09, ふじ round 3, issue #180): `task_id` on a
@@ -433,6 +434,11 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   defp handle_wrapper_in("envelope", envelope, socket) do
     agent_id = socket.assigns.agent_id
+    {envelope, dropped_model?} = drop_oversized_directory_model(envelope)
+
+    if dropped_model? do
+      Logger.warning("directory model dropped for #{agent_id}: exceeds 256 bytes")
+    end
 
     with :ok <- validate(envelope, agent_id),
          {:ok, inter_agent} <- preflight_inter_agent(envelope, agent_id) do
@@ -1580,6 +1586,13 @@ defmodule KaoiroServerWeb.WrapperChannel do
   end
 
   def terminate(_reason, %Phoenix.Socket{}), do: :ok
+
+  defp drop_oversized_directory_model(%{"ext" => %{"model" => model} = ext} = envelope)
+       when is_binary(model) and byte_size(model) > @max_directory_model_bytes do
+    {Map.put(envelope, "ext", Map.delete(ext, "model")), true}
+  end
+
+  defp drop_oversized_directory_model(envelope), do: {envelope, false}
 
   defp validate(envelope, agent_id) when is_map(envelope) do
     cond do

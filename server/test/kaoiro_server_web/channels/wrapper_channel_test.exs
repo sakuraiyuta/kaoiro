@@ -159,6 +159,39 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     assert AgentStates.snapshot()[agent_id] == envelope
   end
 
+  test "oversized directory model is dropped while the remaining envelope is retained" do
+    agent_id = "test.directory-model-byte-cap"
+    @endpoint.subscribe("agents:lobby")
+    socket = join_wrapper(agent_id)
+
+    accepted =
+      envelope(agent_id, "tool_running")
+      |> Map.put("ext", %{"model" => String.duplicate("m", 256), "engine" => "codex"})
+
+    assert_reply push(socket, "envelope", accepted), :ok
+    assert_broadcast "envelope", ^accepted
+    assert AgentStates.snapshot()[agent_id] == accepted
+
+    current_model = put_in(accepted, ["ext", "model"], "claude-opus-4-6-thinking")
+
+    assert_reply push(socket, "envelope", current_model), :ok
+    assert_broadcast "envelope", ^current_model
+    assert AgentStates.snapshot()[agent_id] == current_model
+
+    rejected = put_in(accepted, ["ext", "model"], String.duplicate("m", 257))
+
+    log =
+      capture_log(fn ->
+        assert_reply push(socket, "envelope", rejected), :ok
+      end)
+
+    expected = put_in(accepted, ["ext"], %{"engine" => "codex"})
+
+    assert log =~ "directory model dropped for #{agent_id}: exceeds 256 bytes"
+    assert_broadcast "envelope", ^expected
+    assert AgentStates.snapshot()[agent_id] == expected
+  end
+
   test "wrapper_build_info を接続中マップへ保存し operator へ通知する" do
     agent_id = "test.wrapper-build-info"
     @endpoint.subscribe("agents:lobby")
