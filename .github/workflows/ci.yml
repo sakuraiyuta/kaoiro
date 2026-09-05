@@ -101,7 +101,7 @@ jobs:
           # pass-through. Value omitted so a local manual run of this same
           # command (no CI var set) leaves it unset inside the container
           # too, matching the local default.
-          tar --no-xattrs -cf - server scripts | docker run --rm -i -w /w \
+          tar --no-xattrs -cf - server scripts VERSION | docker run --rm -i -w /w \
             -e CI \
             docker.io/hexpm/elixir:1.20.1-erlang-29.0.2-debian-trixie-20260610-slim \
             sh -euc '
