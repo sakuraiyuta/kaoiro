@@ -1854,6 +1854,26 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert id == user.id
     end
 
+    test "user renames keep their grapheme-only length contract" do
+      user =
+        KaoiroServer.Users.get_or_create(
+          {:oauth, "github", "rename-user-byte-scope"},
+          "user",
+          "R"
+        )
+
+      display_name = String.duplicate("á̂", 64)
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      assert String.length(display_name) == 64
+      assert byte_size(display_name) == 320
+
+      assert_reply push(socket, "rename_user", %{"user_id" => user.id, "name" => display_name}),
+                   :ok,
+                   %{display_name: ^display_name}
+    end
+
     test "viewer の rename_user は forbidden" do
       user = KaoiroServer.Users.get_or_create({:oauth, "github", "rename-viewer"}, "user", "R")
       socket = join_as(:viewer)

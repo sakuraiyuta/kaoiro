@@ -67,12 +67,10 @@ defmodule KaoiroServer.PersonaAssets do
   # time (issue #219 D20/D24 — the initial value must already satisfy the
   # SAME domain `Principal.display_name` is validated against everywhere
   # else, or a valid pack could mint an invalid Principal). Matches
-  # `AgentsChannel`'s `@display_name_max_graphemes` /
-  # `@display_name_control_char_pattern` exactly — same 1-64 code-point
-  # bound (persona-pack-schema.md, tightened from 256 by this issue) and
-  # C0 controls + DEL rejection `WrapperChannel.valid_display_name/1`
-  # already enforces elsewhere on this repo's display-name fields.
+  # `AgentsChannel`'s display-name bounds exactly, so a canonical fallback
+  # can always be persisted as an agent display name.
   @persona_name_max_graphemes 64
+  @persona_name_max_bytes 256
   @persona_name_control_char_pattern ~r/[\x00-\x1f\x7f]/
 
   # The reserved persona (personas.md「デフォルトペルソナ」, #35). Always
@@ -2128,7 +2126,7 @@ defmodule KaoiroServer.PersonaAssets do
 
       not valid_persona_name?(manifest["name"]) ->
         {:error,
-         "manifest.name must be 1-#{@persona_name_max_graphemes} characters with no control characters"}
+         "manifest.name must be 1-#{@persona_name_max_graphemes} characters, at most #{@persona_name_max_bytes} UTF-8 bytes, with no control characters"}
 
       not string?(manifest["version"]) ->
         {:error, "manifest.version must be a string"}
@@ -2187,6 +2185,7 @@ defmodule KaoiroServer.PersonaAssets do
     string?(value) and
       String.trim(value) == value and
       String.length(value) <= @persona_name_max_graphemes and
+      byte_size(value) <= @persona_name_max_bytes and
       not String.match?(value, @persona_name_control_char_pattern)
   end
 

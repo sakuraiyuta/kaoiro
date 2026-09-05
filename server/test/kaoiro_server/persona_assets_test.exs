@@ -498,6 +498,38 @@ defmodule KaoiroServer.PersonaAssetsTest do
     assert Map.keys(personas) == ["ok2"]
   end
 
+  test "canonical persona names enforce the display-name byte cap", %{tmp_dir: tmp} do
+    at_limit = String.duplicate("😀", 64)
+    oversized = String.duplicate("😀", 63) <> "á̂"
+
+    assert String.length(at_limit) == 64
+    assert byte_size(at_limit) == 256
+    assert String.length(oversized) == 64
+    assert byte_size(oversized) == 257
+
+    :ok =
+      write_pack(
+        tmp,
+        "canonical-name-max-1.0.0",
+        base_manifest("canonical-name-max", %{"name" => at_limit}),
+        "body"
+      )
+
+    :ok =
+      write_pack(
+        tmp,
+        "canonical-name-oversized-1.0.0",
+        base_manifest("canonical-name-oversized", %{"name" => oversized}),
+        "body"
+      )
+
+    use_ingest(tmp)
+
+    %{"personas" => personas} = PersonaAssets.manifest()
+    assert personas["canonical-name-max"]["name"] == at_limit
+    refute Map.has_key?(personas, "canonical-name-oversized")
+  end
+
   test "sprites/ の PNG が 1 枚欠けても pack ごと skip", %{tmp_dir: tmp} do
     # Build a valid pack directory, then delete one PNG before zipping to
     # exercise the sprite check (the write_pack helper is complete by

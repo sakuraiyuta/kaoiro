@@ -1245,7 +1245,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   def handle_in("rename_agent", payload, socket) do
     with :ok <- require_operator(socket, payload, "rename_agent"),
          {:ok, agent_id} <- fetch_restorable_agent_id(payload),
-         {:ok, display_name} <- validate_rename_name(payload) do
+         {:ok, display_name} <- validate_agent_rename_name(payload) do
       case AgentDirectory.rename(agent_id, display_name) do
         {:ok, %{display_name: display_name, revision: revision}} ->
           # issue #219 D22: DUAL-EMIT, both at the SAME revision. Old
@@ -1355,7 +1355,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   def handle_in("rename_user", payload, socket) do
     with :ok <- require_operator(socket, payload, "rename_user"),
          {:ok, user_id} <- fetch_user_id(payload),
-         {:ok, display_name} <- validate_rename_name(payload) do
+         {:ok, display_name} <- validate_user_rename_name(payload) do
       case Users.rename(user_id, display_name) do
         {:ok, entry} ->
           {:reply, {:ok, entry}, socket}
@@ -1978,12 +1978,20 @@ defmodule KaoiroServerWeb.AgentsChannel do
   end
 
   # Live-rename name validation (issue #197 段階3, D12/D13, revised issue
-  # #219 D23; shared by `rename_agent` and `rename_user`). Unlike
+  # #219 D23). Unlike
   # `resolve_spawn_display_name/2` above, a blank/absent name has no
   # sensible "keep the existing name" default here — a rename request IS
   # the operator's request to CHANGE the name, so blank is rejected
   # rather than silently ignored.
-  defp validate_rename_name(payload) do
+  defp validate_agent_rename_name(payload) do
+    validate_rename_name(payload, &valid_display_name_value?/1)
+  end
+
+  defp validate_user_rename_name(payload) do
+    validate_rename_name(payload, &valid_user_display_name_value?/1)
+  end
+
+  defp validate_rename_name(payload, valid_name?) do
     case extract_name_field(payload) do
       {:ok, nil} ->
         {:error, :invalid_name}
@@ -1993,13 +2001,18 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
         cond do
           trimmed == "" -> {:error, :invalid_name}
-          not valid_display_name_value?(trimmed) -> {:error, :invalid_name}
+          not valid_name?.(trimmed) -> {:error, :invalid_name}
           true -> {:ok, trimmed}
         end
 
       {:error, :invalid_name} = error ->
         error
     end
+  end
+
+  defp valid_user_display_name_value?(trimmed) do
+    String.length(trimmed) <= @display_name_max_graphemes and
+      not String.match?(trimmed, @display_name_control_char_pattern)
   end
 
   # cwd must be one the host declared spawnable (T1, threat-model). The runner

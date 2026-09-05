@@ -45,7 +45,7 @@ is the source of truth.
 | Field | Type | Required | Meaning |
 |---|---|---|---|
 | `id` | string | Required | Unique persona identifier. `^[A-Za-z0-9._-]+$` / 1–256 characters. [ADR-0003](../adr/0003-persona-identity-persistence.md). Also becomes the filesystem directory name. |
-| `name` | string | Required | Proper name of the persona defined by the pack (Japanese permitted; canonical—issue #209 D19). 1–64 characters; control characters prohibited (same domain as `Principal.display_name`, D24). |
+| `name` | string | Required | Proper name of the persona defined by the pack (Japanese permitted; canonical—issue #209 D19). 1–64 grapheme clusters and at most 256 UTF-8 bytes; control characters prohibited (same domain as agent `display_name`, D24). |
 | `sprite_set` | string | Required | Sprite-set identifier. Usually identical to `id`. 1–256 characters. |
 | `version` | string | Required | Semver (for example, `1.0.0`). The author bumps it each time they update the pack. |
 | `license` | string | Required | License identifier (SPDX-compliant recommended; for example, `CC0-1.0`, `CC-BY-4.0`, `MIT`, `proprietary`). AI-generated works may not have copyright, so confirm that the license label matches reality. Separately confirm how far the model's terms extend to Outputs. |
