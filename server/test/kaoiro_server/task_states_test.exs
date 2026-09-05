@@ -381,8 +381,17 @@ defmodule KaoiroServer.TaskStatesTest do
       refute log =~ long_task_id
       # A bounded preview, not merely "missing the raw string" — the log
       # line itself must stay short (well under the pre-fix 62KB ふじ
-      # measured for an unbounded interpolation).
-      assert byte_size(log) < 1000
+      # measured for an unbounded interpolation). Measure only the reject
+      # line: capture_log is process-global, so concurrently running async
+      # tests can interleave their own warnings into the capture (CI 2026-09-05
+      # measured 1186 bytes with a foreign line included).
+      reject_lines =
+        log
+        |> String.split("\n")
+        |> Enum.filter(&String.contains?(&1, "snapshot byte budget"))
+
+      assert reject_lines != []
+      assert Enum.all?(reject_lines, &(byte_size(&1) < 1000))
     end
 
     test "completed で bytes が減れば、その分の budget は次の新規に開放される", %{store: store} do
