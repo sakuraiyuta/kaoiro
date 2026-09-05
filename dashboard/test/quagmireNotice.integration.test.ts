@@ -143,6 +143,42 @@ describe("quagmire notice (issue #273)", () => {
     await tick();
     expect(banners()).toHaveLength(1);
   });
+
+  it("drops the banners when the session ends", async () => {
+    // They survive a reconnect on purpose -- the condition is still standing
+    // -- but a logout hands the tab to whoever logs in next, who has not seen
+    // them and cannot tell them from a live notice.
+    const h = await mountApp();
+    h.onHosts?.([]);
+    h.onQuagmireNotice?.(rally);
+    await tick();
+    expect(banners()).toHaveLength(1);
+
+    vi.stubGlobal("confirm", vi.fn(() => true));
+    captured.handlers = null;
+    document.querySelector<HTMLButtonElement>(".logout")?.click();
+    await vi.waitFor(() => {
+      if (!document.querySelector(".login-card")) throw new Error("still in");
+    });
+
+    const token = document.querySelector<HTMLInputElement>(".login-card input");
+    if (!token) throw new Error("no token field");
+    token.value = "t-1";
+    token.dispatchEvent(new Event("input", { bubbles: true }));
+    await tick();
+    document
+      .querySelector<HTMLButtonElement>('.login-card button[type="submit"]')
+      ?.click();
+
+    const next = await vi.waitFor(() => {
+      if (captured.handlers === null) throw new Error("not reconnected yet");
+      return captured.handlers;
+    });
+    next.onHosts?.([]);
+    await tick();
+
+    expect(banners()).toHaveLength(0);
+  });
 });
 
 describe("parseQuagmireNotice", () => {

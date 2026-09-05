@@ -1217,6 +1217,10 @@
     // onTaskSnapshot repopulates for operators, and a viewer never had
     // any entries to begin with (ADR-0021).
     tasks = {};
+    // Advisory banners deliberately survive a reconnect (the condition is
+    // still standing), but not the end of a session: whoever logs in next on
+    // this tab has not seen them, and the detector re-announces on its own.
+    quagmireNotices = [];
   }
 
   // Bulk restore of every offline entry (ADR-0030 D5). Confirms once, then
