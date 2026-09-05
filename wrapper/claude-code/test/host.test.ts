@@ -1927,14 +1927,21 @@ describe("AgentHost — query injection", () => {
     expect(JSON.stringify(res?.payload)).not.toContain("OAuth session expired");
   });
 
-  // ふじ2 round1 M2: the fixed phrase above is not a stand-in for a real
-  // secret shape -- pin a token-LIKE string explicitly across wire, console,
-  // and (agentDetailErrorSurfacing.integration.test.ts) rendered DOM.
-  it("token 風の raw SDK text は wire payload にも console 出力にも一切現れない (issue #287 negative control)", async () => {
+  // ふじ2 round1 M2 / round2 M3: the fixed phrase above is not a stand-in
+  // for a real secret shape -- pin a token-LIKE string. round1 spied
+  // console.warn/console.error here, but AgentHost's actual production
+  // sinks are process.stdout.write (printLog, cli.ts) and
+  // process.stderr.write (#warn, host.ts) -- neither goes through
+  // console.*, and this fixture replaces onLog with a plain array push, so
+  // printLog is never even reached. Removed the vacuous console spy; the
+  // wire-payload assertion below still holds (AgentHost's own boundary),
+  // and the actual production-sink coverage (real cli.ts, real
+  // process.stdout/stderr) now lives in
+  // cli_error_surfacing_composition.test.ts, which drives the real
+  // runClaudeCli() entrypoint end to end.
+  it("token 風の raw SDK text は wire payload に一切現れない (issue #287 negative control)", async () => {
     const TOKEN_LIKE =
       "sk-ant-api03-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const logs: Envelope[] = [];
     const host = new AgentHost(config, {
       onState: () => {},
@@ -1951,11 +1958,6 @@ describe("AgentHost — query injection", () => {
     await host.run();
     const res = logs.find((l) => l.type === "result");
     expect(JSON.stringify(res?.payload)).not.toContain(TOKEN_LIKE);
-    for (const call of [...warnSpy.mock.calls, ...errorSpy.mock.calls]) {
-      expect(call.map(String).join(" ")).not.toContain(TOKEN_LIKE);
-    }
-    warnSpy.mockRestore();
-    errorSpy.mockRestore();
   });
 
   it("success + is_error=true が続いた後の success はコードを持ち越さない (issue #287)", async () => {

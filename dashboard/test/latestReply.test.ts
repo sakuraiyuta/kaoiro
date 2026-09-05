@@ -164,6 +164,33 @@ describe("latestReplies (#25)", () => {
     expect(entry?.summary).toBe("認証の有効期限が切れました。");
   });
 
+  // ふじ2 round2 M3: round1's S1 test never actually poisoned payload.text,
+  // so it could not tell "replyText ignores text on is_error" apart from
+  // "text just happened to be absent". A real wrapper bug (or a future
+  // adapter.ts regression) could still leak the raw SDK text into
+  // payload.text alongside a valid error_summary -- pin that error_summary
+  // wins even when text carries a token-shaped poison.
+  it("is_error のとき payload.text に token 風の毒が入っていても error_summary を優先する (negative control)", () => {
+    const TOKEN_LIKE =
+      "sk-ant-api03-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
+    const poisoned: Envelope = {
+      version: "0",
+      agent_id: "agent-a",
+      ts: "2026-07-23T15:00:00Z",
+      type: "result",
+      state: "error",
+      payload: {
+        is_error: true,
+        error_code: "authentication_failed",
+        error_summary: "認証の有効期限が切れました。",
+        text: `Failed to authenticate: ${TOKEN_LIKE}`,
+      },
+    };
+    const [entry] = latestReplies({ "agent-a": [poisoned] });
+    expect(entry?.summary).toBe("認証の有効期限が切れました。");
+    expect(entry?.summary).not.toContain(TOKEN_LIKE);
+  });
+
   it("is_error かつ error_summary も無いエントリは空 summary のまま (回帰防止)", () => {
     const bare: Envelope = {
       version: "0",
