@@ -73,8 +73,9 @@
      *  button (e.g. no connection / viewer). */
     onDelete?: (() => Promise<void>) | undefined;
     /** Opens the persona pack detail modal (issue #232) for this agent's
-     *  persona; pass undefined to disable the image's click affordance
-     *  (e.g. no resolved persona id). */
+     *  persona when supplied and a persona id resolved; otherwise the
+     *  image's click falls back to onSelect (handlePersonaOpenClick below),
+     *  same as clicking the rest of the card. */
     onOpenPersonaDetail?: ((personaId: string) => void) | undefined;
   } = $props();
 
@@ -519,9 +520,10 @@
     <div class="sprite-slot">
       <!-- issue #232 MF-2: own <button>, sibling to `.open` below — a
            keyboard user can now Tab to this action directly instead of
-           it being unreachable except by mouse. disabled when there is
-           nothing to open (directoryOnly / no resolved persona id / no
-           handler), mirroring AgentDetail's `.portrait-open`. -->
+           it being unreachable except by mouse. disabled only when there
+           is no detail view to open at all (directoryOnly); no persona id
+           or no handler falls back to selectFrom (handlePersonaOpenClick
+           above) rather than disabling the click. -->
       <button
         type="button"
         class="persona-open"

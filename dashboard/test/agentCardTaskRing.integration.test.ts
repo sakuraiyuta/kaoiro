@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 // AgentCard の 頭上リング (issue #180, ADR-0019/0047/0048): activeTaskCount
-// > 0 のときだけ .task-ring を描画する。数値そのものは表示しない
-// (こはく scoping: 数値表示は対象外) — レンダリングされるのは on/off の
-// 装飾要素のみであることを固定する。
+// > 0 のときだけ .task-ring を描画する。数値そのものはテキストとして表示
+// しない (こはく scoping: 数値表示は対象外) — activeTaskCount の値に応じた
+// dot 数の生成自体は issue #233、TaskRing.svelte 自身のテストが担当する。
 import { mount, tick, unmount } from "svelte";
 import { afterEach, describe, expect, it } from "vitest";
 import AgentCard from "../src/lib/AgentCard.svelte";

@@ -989,8 +989,9 @@ export function purgeTasksForAgent(tasks: TaskTable, agentId: string): TaskTable
 }
 
 /** Per-agent active-task tally (ADR-0019 F4 concurrency), driving
- *  AgentCard's 頭上リング on/off only — no numeric display (issue #180,
- *  こはく scoping). Extracted from App.svelte's `activeTaskCountByAgent`
+ *  AgentCard's 頭上リング (issue #180; issue #233: the active dot COUNT,
+ *  not an on/off flag — no separate numeric text display, こはく scoping).
+ *  Extracted from App.svelte's `activeTaskCountByAgent`
  *  derived state (M2 fix-round, 2026-08-09, ふじ round 2) so it is
  *  directly unit-testable rather than only reachable by mounting the
  *  component. Named distinctly from that `$derived` binding to avoid a

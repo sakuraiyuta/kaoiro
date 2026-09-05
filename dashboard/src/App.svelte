@@ -373,8 +373,8 @@
   // is already the authoritative "currently active" set: kind=completed
   // removes the entry in the onEnvelope handler below, so every
   // remaining entry IS an active task). Drives AgentCard's 頭上リング
-  // on/off only — no numeric display (issue #180, こはく scoping: 数値
-  // 表示は対象外).
+  // (issue #180; issue #233: the active dot COUNT, one per task, not an
+  // on/off flag — no separate numeric text display though, こはく scoping).
   // M2 fix-round (2026-08-09, ふじ round 2): the computation itself moved
   // to protocol.ts's `activeTaskCountByAgent` so it is unit-testable
   // (including the Object.create(null) fix for agent_id="__proto__") —

@@ -121,8 +121,9 @@
 {/each}
 
 <style>
-  /* 頭上リング(issue #180, ADR-0019/0047/0048): a single achromatic light
-     point orbiting an ellipse above the sprite/face while a
+  /* 頭上リング(issue #180, ADR-0019/0047/0048): one achromatic light point
+     per active task (issue #233 — count, not an on/off flag), each
+     orbiting the same ellipse above the sprite/face while at least one
      subagent/workflow task is active under this agent. CSS-only (no
      image assets, per issue scoping). The caller must give this element
      a `position: relative` containing block (AgentCard's `.sprite-slot`,

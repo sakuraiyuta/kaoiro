@@ -85,13 +85,14 @@
      * target the recipient pane even though its producer is `server`. */
     scrollToEntryKey?: string | null;
     /** Count of subagent/workflow tasks currently active under this agent
-     *  (ADR-0019/0047/0048, issue #180 follow-up 2026-08-10). Drives the
-     *  頭上リング (overhead ring) the same way AgentCard's does — on/off
-     *  only, no numeric display. The caller (App.svelte) is responsible
-     *  for zeroing this for a disconnected/directory-only envelope (a
-     *  disconnected agent cannot have an active subagent, and a stale
-     *  `tasks` entry must not leak through — クロエ 2026-08-10); this
-     *  component does not re-derive that guard itself. */
+     *  (ADR-0019/0047/0048, issue #180 follow-up 2026-08-10; issue #233:
+     *  the active dot COUNT, not an on/off flag). Drives the 頭上リング
+     *  (overhead ring) the same way AgentCard's does. The caller
+     *  (App.svelte) is responsible for zeroing this for a
+     *  disconnected/directory-only envelope (a disconnected agent cannot
+     *  have an active subagent, and a stale `tasks` entry must not leak
+     *  through — クロエ 2026-08-10); this component does not re-derive
+     *  that guard itself. */
     activeTaskCount?: number;
     /** Latest parent-owned todo snapshot (issue #188). This is intentionally
      * separate from activeTaskCount: a tasklist is current state for the
