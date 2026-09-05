@@ -74,6 +74,7 @@ defmodule KaoiroServer.AgentDirectory do
   # greater than its own baseline. `revision` is a monotonic order token,
   # not a rename count, so shifting the floor changes no other semantics.
   @initial_revision 1
+  @max_display_name_bytes 256
 
   @doc """
   Starts the ledger. `:path` overrides the DETS file and `:name` the
@@ -247,12 +248,7 @@ defmodule KaoiroServer.AgentDirectory do
   # instead of being caught here.
   defp load_fold({agent_id, persona_id, revision, display_name}, acc)
        when is_binary(agent_id) and is_binary(persona_id) and is_binary(display_name) do
-    Map.put(acc, agent_id, %{
-      persona_id: persona_id,
-      display_name: display_name,
-      last_seen: nil,
-      revision: clamp_revision(revision)
-    })
+    load_entry(acc, agent_id, persona_id, revision, display_name)
   end
 
   # Legacy shape (issue #197 段階3): a persona MAP was baked into the
@@ -303,17 +299,7 @@ defmodule KaoiroServer.AgentDirectory do
   #   all, so it never had this failure mode).
   defp load_fold({agent_id, %{"id" => persona_id, "name" => display_name}, revision}, acc)
        when is_binary(agent_id) and is_binary(persona_id) and is_binary(display_name) do
-    Logger.warning(
-      "agent directory migration (issue #219): #{agent_id} legacy persona map " <>
-        "migrated to persona_id=#{inspect(persona_id)} display_name=#{inspect(display_name)}"
-    )
-
-    Map.put(acc, agent_id, %{
-      persona_id: persona_id,
-      display_name: display_name,
-      last_seen: nil,
-      revision: clamp_revision(revision)
-    })
+    load_legacy_entry(acc, agent_id, persona_id, revision, display_name)
   end
 
   # Even older shape (pre issue #197 段階3, no revision at all) — same
@@ -326,17 +312,7 @@ defmodule KaoiroServer.AgentDirectory do
   # `agent_id` too.
   defp load_fold({agent_id, %{"id" => persona_id, "name" => display_name}}, acc)
        when is_binary(agent_id) and is_binary(persona_id) and is_binary(display_name) do
-    Logger.warning(
-      "agent directory migration (issue #219): #{agent_id} legacy persona map " <>
-        "migrated to persona_id=#{inspect(persona_id)} display_name=#{inspect(display_name)}"
-    )
-
-    Map.put(acc, agent_id, %{
-      persona_id: persona_id,
-      display_name: display_name,
-      last_seen: nil,
-      revision: @initial_revision
-    })
+    load_legacy_entry(acc, agent_id, persona_id, @initial_revision, display_name)
   end
 
   # Catch-all (issue #219 must-fix, クロエ実測検証 2026-08-11): none of the
@@ -353,6 +329,41 @@ defmodule KaoiroServer.AgentDirectory do
   # alone, just extended to a corrupted/unrecognised record shape.
   defp load_fold(other, acc) do
     Logger.warning("agent directory: skipping unrecognised DETS record #{inspect(other)}")
+    acc
+  end
+
+  defp load_entry(acc, agent_id, persona_id, revision, display_name)
+       when byte_size(display_name) <= @max_display_name_bytes do
+    Map.put(acc, agent_id, %{
+      persona_id: persona_id,
+      display_name: display_name,
+      last_seen: nil,
+      revision: clamp_revision(revision)
+    })
+  end
+
+  defp load_entry(acc, _agent_id, _persona_id, _revision, _display_name) do
+    Logger.warning("agent directory: skipping DETS record with oversized display_name")
+    acc
+  end
+
+  defp load_legacy_entry(acc, agent_id, persona_id, revision, display_name)
+       when byte_size(display_name) <= @max_display_name_bytes do
+    Logger.warning(
+      "agent directory migration (issue #219): #{agent_id} legacy persona map " <>
+        "migrated to persona_id=#{inspect(persona_id)} display_name=#{inspect(display_name)}"
+    )
+
+    Map.put(acc, agent_id, %{
+      persona_id: persona_id,
+      display_name: display_name,
+      last_seen: nil,
+      revision: clamp_revision(revision)
+    })
+  end
+
+  defp load_legacy_entry(acc, _agent_id, _persona_id, _revision, _display_name) do
+    Logger.warning("agent directory: skipping DETS record with oversized display_name")
     acc
   end
 

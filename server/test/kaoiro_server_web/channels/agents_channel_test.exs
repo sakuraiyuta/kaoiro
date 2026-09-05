@@ -1589,6 +1589,32 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
                AgentDirectory.get(agent_id)
     end
 
+    test "rename enforces the display_name byte cap without changing the grapheme rule" do
+      agent_id = "test.rename-display-name-byte-cap"
+      at_limit = String.duplicate("😀", 64)
+      oversized = String.duplicate("😀", 63) <> "a" <> String.duplicate("́", 2)
+
+      assert String.length(at_limit) == 64
+      assert byte_size(at_limit) == 256
+      assert String.length(oversized) == 64
+      assert byte_size(oversized) == 257
+
+      put_agent(agent_id)
+      AgentDirectory.record(agent_id, @ao["id"], @ao["name"])
+      socket = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      assert_reply push(socket, "rename_agent", %{"agent_id" => agent_id, "name" => at_limit}),
+                   :ok,
+                   %{"display_name" => ^at_limit}
+
+      assert_reply push(socket, "rename_agent", %{"agent_id" => agent_id, "name" => oversized}),
+                   :error,
+                   %{reason: "invalid_name"}
+
+      assert %{display_name: ^at_limit, revision: 2} = AgentDirectory.get(agent_id)
+    end
+
     test "disconnected agent も rename できる (wrapper 不在でも relay broadcast 自体は行う)" do
       agent_id = "test.rename-dc"
       put_disconnected(agent_id)
@@ -4058,6 +4084,42 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
         assert_reply ref, :error, %{reason: "invalid_name"}
       end
+
+      refute_broadcast "spawn", %{}
+    end
+
+    test "spawn enforces the display_name byte cap without changing the grapheme rule" do
+      host_id = "lab-pc-display-name-byte-cap"
+      at_limit = String.duplicate("😀", 64)
+      oversized = String.duplicate("😀", 63) <> "a" <> String.duplicate("́", 2)
+
+      assert String.length(at_limit) == 64
+      assert byte_size(at_limit) == 256
+      assert String.length(oversized) == 64
+      assert byte_size(oversized) == 257
+
+      register_host(host_id)
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      assert_reply push(socket, "spawn", %{
+                     "host_id" => host_id,
+                     "persona" => "ao",
+                     "cwd" => "/home/user/proj",
+                     "name" => at_limit
+                   }),
+                   :ok
+
+      assert_broadcast "spawn", %{"display_name" => ^at_limit}
+
+      assert_reply push(socket, "spawn", %{
+                     "host_id" => host_id,
+                     "persona" => "ao",
+                     "cwd" => "/home/user/proj",
+                     "name" => oversized
+                   }),
+                   :error,
+                   %{reason: "invalid_name"}
 
       refute_broadcast "spawn", %{}
     end

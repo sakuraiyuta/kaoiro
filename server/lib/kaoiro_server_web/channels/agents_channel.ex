@@ -253,6 +253,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # display_name validators use, e.g. `WrapperChannel.valid_display_name/1`,
   # issue #197 段階2 MF-1).
   @display_name_max_graphemes 64
+  @display_name_max_bytes 256
   @display_name_control_char_pattern ~r/[\x00-\x1f\x7f]/
 
   @impl true
@@ -1945,6 +1946,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # and `PersonaAssets`' pack `name` field (issue #219 D24) enforce.
   defp valid_display_name_value?(trimmed) do
     String.length(trimmed) <= @display_name_max_graphemes and
+      byte_size(trimmed) <= @display_name_max_bytes and
       not String.match?(trimmed, @display_name_control_char_pattern)
   end
 

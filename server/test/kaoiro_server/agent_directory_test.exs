@@ -147,6 +147,57 @@ defmodule KaoiroServer.AgentDirectoryTest do
     GenServer.stop(name2)
   end
 
+  test "loader skips oversized display_names while preserving maximum-sized current and legacy records" do
+    table_name = :"ad_display_name_bound_#{System.unique_integer([:positive])}"
+    path = Path.join([System.tmp_dir!(), "kaoiro_test_dets", "#{table_name}.dets"])
+    File.rm(path)
+
+    on_exit(fn -> File.rm(path) end)
+
+    {:ok, ^table_name} = :dets.open_file(table_name, file: String.to_charlist(path))
+    at_limit = String.duplicate("a", 256)
+
+    :ok = :dets.insert(table_name, {"a.display-name-max", "ao", 1, at_limit})
+
+    :ok =
+      :dets.insert(table_name, {"a.display-name-oversized", "ao", 1, String.duplicate("a", 257)})
+
+    :ok =
+      :dets.insert(
+        table_name,
+        {"a.display-name-legacy-max", %{"id" => "fuji", "name" => at_limit}, 2}
+      )
+
+    :ok =
+      :dets.insert(
+        table_name,
+        {"a.display-name-legacy-oversized",
+         %{"id" => "fuji", "name" => String.duplicate("a", 257)}, 2}
+      )
+
+    :ok = :dets.close(table_name)
+
+    name = :"ad_display_name_bound_load_#{System.unique_integer([:positive])}"
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        {:ok, pid} = AgentDirectory.start_link(name: name, path: path)
+
+        assert %{display_name: ^at_limit, revision: @initial_revision} =
+                 AgentDirectory.get("a.display-name-max", name)
+
+        assert AgentDirectory.get("a.display-name-oversized", name) == nil
+
+        assert %{display_name: ^at_limit, revision: 2} =
+                 AgentDirectory.get("a.display-name-legacy-max", name)
+
+        assert AgentDirectory.get("a.display-name-legacy-oversized", name) == nil
+        GenServer.stop(pid)
+      end)
+
+    assert log =~ "agent directory: skipping DETS record with oversized display_name"
+  end
+
   test "all は全 entry を返す", %{server: server} do
     AgentDirectory.record("a.5", "ao", "ao", server)
     AgentDirectory.record("a.6", "momo", "momo", server)
