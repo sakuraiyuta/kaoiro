@@ -10,6 +10,7 @@ import type {
   LogEntry,
   TasklistSourceItem,
 } from "@kaoiro/agent-common";
+import { redactCredentials } from "@kaoiro/agent-common";
 import { clipTail } from "./turn_diagnostics.js";
 
 /** Tool-ish items: they occupy the tool_running state between item.started
@@ -332,59 +333,6 @@ export function extractJsonErrorFromStderr(
   return null;
 }
 
-/** Masks a matched secret-shaped value to security.md's convention (at
- *  most the last 4 characters visible). A value of 4 or fewer characters
- *  is masked in full -- revealing all of it is not masking. */
-function maskValue(value: string): string {
-  if (value.length <= 4) return "*".repeat(value.length);
-  return `${"*".repeat(value.length - 4)}${value.slice(-4)}`;
-}
-
-/** Redacts credential-shaped substrings from Codex CLI stderr before it
- *  rides the wire as error_detail. No existing masking function covers
- *  this: `clipText` (@kaoiro/agent-common's logpayload.ts) only
- *  size-clips, it never redacts content. This is new, narrowly-scoped
- *  coverage for the three patterns kaoiro's stderr relay can plausibly
- *  carry (an OpenAI-style API key, an Authorization/Bearer header value,
- *  a bare api_key=/: assignment) -- a pattern match, not a full secret
- *  scanner, so it may occasionally mask non-secret text following these
- *  keywords; over-masking is the safe failure mode for a redaction pass,
- *  under-masking is not. Deliberately does NOT touch filesystem paths
- *  (including home directories) -- those are not credentials. */
-export function maskCodexStderr(text: string): string {
-  let masked = text.replace(
-    /\b(sk-)([A-Za-z0-9_-]{16,})\b/g,
-    (_match, prefix: string, value: string) => `${prefix}${maskValue(value)}`,
-  );
-  // The compound alternative ("Authorization: Bearer <token>") must be
-  // tried before the two bare keywords, or a plain "Authorization|Bearer"
-  // alternation matches "Authorization" first and treats the word "Bearer"
-  // itself as the value to mask, leaving the actual token right after it
-  // untouched.
-  masked = masked.replace(
-    /\b(Authorization\s*[:=]?\s*Bearer|Authorization|Bearer)(\s*[:=]?\s*)(\S+)/gi,
-    (_match, keyword: string, sep: string, value: string) =>
-      `${keyword}${sep}${maskValue(value)}`,
-  );
-  // Matches both a bare assignment (`api_key=value`) and a JSON-quoted
-  // field (`"api_key": "value"` -- exactly the shape
-  // extractJsonErrorFromStderr's own target, a Codex stderr JSON error
-  // body, is most likely to carry). The quote closing the keyword and the
-  // quote opening the value are each optional and folded into `sep` so the
-  // reconstruction restores them untouched; the value itself stops before
-  // a closing quote/comma/brace so masking a JSON string cannot swallow
-  // surrounding syntax (review finding, issue #300: the previous pattern
-  // required the separator to follow the bare keyword directly, so a
-  // JSON-quoted key's closing quote broke the match and left the value
-  // fully unmasked).
-  masked = masked.replace(
-    /\b(api[_-]?key)(\s*["']?\s*[:=]\s*["']?)([^"',\s}]+)/gi,
-    (_match, keyword: string, sep: string, value: string) =>
-      `${keyword}${sep}${maskValue(value)}`,
-  );
-  return masked;
-}
-
 interface CodexErrorCodeInfo {
   summary: string;
   hint?: string;
@@ -502,18 +450,20 @@ export function codexErrorClassification(jsonError: {
  *  `rawMessage` should be the thrown Error's own `.message` (see
  *  parseCodexExecErrorMessage's doc for why). JSON extraction reads the
  *  ORIGINAL, unmasked stderr tail (masking a still-JSON-structured line
- *  risks corrupting adjacent syntax, since the masking patterns' `\S+`
- *  value capture does not stop at a JSON delimiter) -- safe because the
- *  extracted `message` is only ever used to keyword-match
- *  CODEX_ERROR_MESSAGE_HINTS above, never copied into what gets relayed.
- *  Masking is applied only to the separate copy that becomes
- *  error_detail, and BEFORE tail-clipping (not after), so a byte-cut
- *  cannot land mid-secret and leave an unmasked fragment exposed. Falls
- *  back to relaying `rawMessage` itself (masked and tail-clipped, no
- *  code/summary/hint) when it does not match the SDK's known
- *  exec-failure shape at all, so an unrecognized future SDK wording still
- *  relays SOMETHING rather than silently reverting to the pre-#300 bare
- *  `is_error: true`. */
+ *  risks corrupting adjacent syntax, since the masking patterns' value
+ *  capture does not stop at every JSON delimiter) -- safe because the
+ *  extracted `message` field specifically is only ever used to
+ *  keyword-match CODEX_ERROR_MESSAGE_HINTS above, never copied into what
+ *  gets relayed (`code`/`type`, by contrast, ARE forwarded as-is via
+ *  codexErrorClassification's error_code -- see decision (b) -- so only
+ *  `message` gets this "extracted but not relayed" treatment). Masking
+ *  is applied only to the separate copy that becomes error_detail, and
+ *  BEFORE tail-clipping (not after), so a byte-cut cannot land mid-secret
+ *  and leave an unmasked fragment exposed. Falls back to relaying
+ *  `rawMessage` itself (masked and tail-clipped, no code/summary/hint)
+ *  when it does not match the SDK's known exec-failure shape at all, so
+ *  an unrecognized future SDK wording still relays SOMETHING rather than
+ *  silently reverting to the pre-#300 bare `is_error: true`. */
 export function codexExecFailureRelay(rawMessage: string): {
   error_detail: string;
   error_code?: string;
@@ -526,7 +476,7 @@ export function codexExecFailureRelay(rawMessage: string): {
   const classification =
     jsonError !== null ? codexErrorClassification(jsonError) : null;
   const boundedTail = clipTail(
-    maskCodexStderr(stderrTail),
+    redactCredentials(stderrTail),
     MAX_RELAYED_STDERR_TAIL_BYTES,
   );
   return {

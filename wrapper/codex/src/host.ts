@@ -56,6 +56,7 @@ import {
   effectiveStatusEnvelopeFields,
   effectiveStatusWhoamiFields,
   logEntryToPayload,
+  redactCredentials,
 } from "@kaoiro/agent-common";
 import {
   codexExecFailureRelay,
@@ -1635,6 +1636,12 @@ export class CodexHost implements EngineAdapter {
           this.#corruptedRolloutSessionId = resumeSessionId;
         }
         if (rolloutCorrupted) {
+          // issue #300 review S1 (superseded by M2's choke-point fix,
+          // review round 2): this branch used to need its own
+          // redactCredentials() call here, since it bypasses
+          // codexExecFailureRelay entirely -- but #emitResult now masks
+          // every error_detail at the choke point, so this branch is
+          // covered structurally with no producer-level call needed.
           this.#emitResult({
             is_error: true,
             error_subtype: "error_rollout_corrupted",
@@ -2084,10 +2091,37 @@ export class CodexHost implements EngineAdapter {
       }
     }
     if (clipped.error_detail !== undefined) {
-      // Same envelope-size discipline claude-code's #emitResult applies to
-      // this field (host.ts:2870 there) — untrusted, unbounded subprocess
-      // text must not ride the wire raw.
-      clipped.error_detail = clipText(clipped.error_detail).text;
+      // issue #300 round 2 (M2, クロエ review): masking belongs at the
+      // CHOKE POINT (every producer's error_detail passes through here),
+      // not enumerated per producer -- the same "enumeration never
+      // closes the class" defect M1's own fix exists to avoid. This
+      // covers every current and future #emitResult({error_detail})
+      // caller in this file, including the rollout-corrupted branch,
+      // with no per-branch call needed.
+      //
+      // codexExecFailureRelay (adapter.ts) ALSO masks, upstream of here,
+      // and that call is NOT redundant: it runs BEFORE its own
+      // clipTail(4096) bounds the stderr tail, and mask-before-clip is
+      // load-bearing there (a clip-then-mask order can cut a secret's
+      // "sk-"/"api_key=" anchor away, leaving the surviving fragment
+      // unmasked forever). Masking here, AFTER that clip already ran,
+      // cannot recover an anchor already lost -- so this call is a
+      // BACKSTOP for producers that bypass the relay entirely (e.g. the
+      // rollout-corrupted branch), not a replacement for the relay's own
+      // masking.
+      //
+      // Applying both is safe: redactCredentials is idempotent on its
+      // own output (see redact.test.ts's "idempotent on already-masked
+      // input" case) — a masked "api_key=********1234"/"Authorization:
+      // Bearer ********1234" re-matches and re-masks to the SAME string
+      // (maskValue always reveals only its own input's last 4
+      // characters, which do not change between passes), and a masked
+      // "sk-****...wxyz" does not re-match at all (the `*` characters
+      // fall outside the sk- pattern's value character class), so
+      // running this a second time changes nothing either way.
+      clipped.error_detail = clipText(
+        redactCredentials(clipped.error_detail),
+      ).text;
     }
     this.#options.onLog?.(
       makeResult(this.#config, this.#now(), clipped, this.#statusExt()),

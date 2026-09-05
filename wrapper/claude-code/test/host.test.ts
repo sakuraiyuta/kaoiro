@@ -1891,6 +1891,32 @@ describe("AgentHost — query injection", () => {
     });
   });
 
+  it("error_detail の credential 様文字列は clip 前に masking される (issue #300 round 2 M2)", async () => {
+    // Regression: protocol.md previously documented error_detail as
+    // unmasked for every engine; the contract was widened to require
+    // masking here too (a tool-crash message can echo a secret same as a
+    // Codex stderr tail can). Shares @kaoiro/agent-common's
+    // redactCredentials with the Codex adapter.
+    const logs: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: () => {},
+      onLog: (e) => logs.push(e),
+      queryFn: scriptedQuery([
+        result("error_during_execution", {
+          errors: ["tool crashed: api_key=abcdef123456"],
+        }),
+      ]),
+      now: () => "T",
+    });
+    await host.run();
+    const res = logs.find((l) => l.type === "result");
+    expect(res?.payload).toEqual({
+      is_error: true,
+      error_subtype: "error_during_execution",
+      error_detail: "tool crashed: api_key=********3456",
+    });
+  });
+
   // issue #287: real SDK shape ふじ2's investigation measured against HEAD —
   // assistant.error="authentication_failed" followed by a success-subtype
   // result with is_error=true and the auth text in `result`. Before the

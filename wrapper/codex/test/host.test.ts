@@ -3528,6 +3528,59 @@ describe("issue #262: rollout 破損の安全な自動修復", () => {
     await rm(root, { recursive: true, force: true });
   });
 
+  // issue #300 review S1 (superseded by M2's choke-point fix, review
+  // round 2): this branch used to need its own explicit masking call,
+  // since it bypasses codexExecFailureRelay entirely. #emitResult now
+  // masks every error_detail at the choke point, so this pins that the
+  // rollout-corrupted producer is covered WITHOUT a per-branch call.
+  it("error_rollout_corrupted も choke point (#emitResult) で masking される (issue #300 review finding S1)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "kaoiro-codex-corrupt-mask-e2e-"));
+    const sessionId = "corrupt-mask-session-e2e";
+    const original = Buffer.from(" \n\t\n", "utf8");
+    await writeFixtureRollout(root, sessionId, original);
+
+    const logs: Envelope[] = [];
+    const turnEnds: unknown[] = [];
+    const turnSettled = [deferred<void>(), deferred<void>()];
+    const { client } = makeClient([
+      [{ type: "thread.started", thread_id: sessionId }, usageEvent()],
+      new Error(
+        "stream did not contain valid UTF-8 (code -32603) api_key=abcdef123456",
+      ),
+    ]);
+    const host = new CodexHost(CONFIG, {
+      onState: () => {},
+      onLog: (e) => logs.push(e),
+      appendSystemPrompt: "p",
+      codexFactory: () => client,
+      rolloutCorruptionVerifier: (id) => verifyRolloutCorruption(id, root),
+      rolloutCorruptionRepairer: (id) => repairRolloutCorruption(id, root),
+      onTurnEnd: (info) => {
+        turnEnds.push(info);
+        turnSettled[turnEnds.length - 1]?.resolve();
+      },
+      now: () => "T",
+    });
+
+    const done = host.run("hi");
+    await turnSettled[0]!.promise;
+    await host.send("continue 1");
+    await turnSettled[1]!.promise;
+    host.close();
+    await done;
+
+    const results = logs.filter((e) => e.type === "result");
+    expect(results[1]?.payload).toMatchObject({
+      is_error: true,
+      error_subtype: "error_rollout_corrupted",
+    });
+    const detail = results[1]?.payload.error_detail as string;
+    expect(detail).toContain("api_key=********3456");
+    expect(detail).not.toContain("abcdef123456");
+
+    await rm(root, { recursive: true, force: true });
+  });
+
   it("修復後 retry の同期 throw でも onTurnEnd を一度だけ発火し、backup を stderr に出す", async () => {
     const sessionId = "repair-retry-throws";
     const turnEnds: {

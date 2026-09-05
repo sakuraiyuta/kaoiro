@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { ThreadEvent } from "@openai/codex-sdk";
 import { reduceStates } from "@kaoiro/agent-common";
@@ -7,7 +9,6 @@ import {
   extractJsonErrorFromStderr,
   MAX_ERROR_CODE_BYTES,
   MAX_RELAYED_STDERR_TAIL_BYTES,
-  maskCodexStderr,
   parseCodexExecErrorMessage,
   threadEventToErrorDetail,
   threadEventToEvents,
@@ -296,6 +297,58 @@ describe("helpers", () => {
     };
     expect(threadEventToErrorDetail(event)).toBe(cliJson);
   });
+
+  // issue #300 review S2: the test above only pins the WRAPPER's own
+  // handling of a hand-built ThreadEvent, which stays green even if the
+  // installed SDK's actual source has moved -- it cannot detect the SDK
+  // silently reshaping event.error before this wrapper ever sees it. Read
+  // the installed @openai/codex-sdk source directly (not asserted from
+  // memory/comment) so a future SDK upgrade that changes either behavior
+  // fails HERE, not silently.
+  it("pins: the installed @openai/codex-sdk source has no turn.failed reshaping and the exec-exit message format is unchanged", () => {
+    const distPath = fileURLToPath(
+      new URL("../node_modules/@openai/codex-sdk/dist/index.js", import.meta.url),
+    );
+    const dist = readFileSync(distPath, "utf8");
+
+    // CodexExec.run()'s exit handler builds the "Codex Exec exited with
+    // X: Y" message parseCodexExecErrorMessage's regex depends on.
+    expect(dist).toContain(
+      'throw new Error(`Codex Exec exited with ${detail}: ${stderrBuffer.toString("utf8")}`)',
+    );
+
+    // Isolate runStreamedInternal's body (the generator thread.runStreamed
+    // actually wraps -- confirmed by `runStreamed` calling it directly a
+    // few lines above in the same file) between its own signature and the
+    // next method's doc comment, so the assertions below are scoped to
+    // the function host.ts's #runTurn stream loop actually consumes, not
+    // to the whole file.
+    const bodyStart = dist.indexOf(
+      "async *runStreamedInternal(input, turnOptions = {}) {",
+    );
+    const bodyEnd = dist.indexOf(
+      "/** Provides the input to the agent and returns the completed turn. */",
+    );
+    expect(bodyStart).toBeGreaterThan(-1);
+    expect(bodyEnd).toBeGreaterThan(bodyStart);
+    const streamedBody = dist.slice(bodyStart, bodyEnd);
+
+    // Every parsed JSONL line is yielded as-is; no case exists for
+    // "turn.failed" inside this function, so its event (including
+    // event.error.message) reaches host.ts completely unreshaped.
+    expect(streamedBody).toContain("yield parsed;");
+    expect(streamedBody).not.toContain('"turn.failed"');
+    // The only two special-cased types, confirming the premise's "NONE
+    // for turn.failed" claim isn't just an absence of matches elsewhere.
+    expect(streamedBody).toContain('"thread.started"');
+    expect(streamedBody).toContain('"turn.completed"');
+
+    // Second, independent confirmation via Thread.run() (a convenience
+    // wrapper over the same generator, not what host.ts calls, but built
+    // from the identical stream): it assigns event.error to turnFailure
+    // with no transformation at all before throwing turnFailure.message.
+    expect(dist).toContain("turnFailure = event.error;");
+  });
 });
 
 // issue #300: exec-failure stderr relay. codexExecFailureRelay's own doc
@@ -398,49 +451,12 @@ describe("extractJsonErrorFromStderr (issue #300)", () => {
   });
 });
 
-describe("maskCodexStderr (issue #300)", () => {
-  it("masks an sk-style API key to its last 4 characters", () => {
-    expect(maskCodexStderr("key=sk-abcdefghijklmnopqrstuvwxyz")).toBe(
-      "key=sk-**********************wxyz",
-    );
-  });
-
-  it("masks an Authorization/Bearer header value, keeping the keyword", () => {
-    expect(maskCodexStderr("Authorization: Bearer abcdef123456")).toBe(
-      "Authorization: Bearer ********3456",
-    );
-  });
-
-  it("masks a bare api_key assignment", () => {
-    expect(maskCodexStderr("api_key=abcdef123456")).toBe(
-      "api_key=********3456",
-    );
-  });
-
-  it("masks a 4-or-fewer character value in full", () => {
-    expect(maskCodexStderr("api_key=ab12")).toBe("api_key=****");
-  });
-
-  it("masks a JSON-quoted api_key field, preserving the quotes (issue #300 review finding)", () => {
-    // Regression: the earlier pattern required the separator to follow the
-    // bare keyword directly, so a JSON key's closing quote (as in the
-    // Codex CLI's own stderr JSON error bodies) broke the match and left
-    // the value fully unmasked.
-    expect(
-      maskCodexStderr('{"api_key": "abcdef1234567890"}'),
-    ).toBe('{"api_key": "************7890"}');
-  });
-
-  it("leaves ordinary text untouched (negative control)", () => {
-    const text = "Reading prompt from stdin...\nthread failed to start";
-    expect(maskCodexStderr(text)).toBe(text);
-  });
-
-  it("leaves filesystem paths untouched", () => {
-    const text = "config not found at /home/operator/.codex/config.toml";
-    expect(maskCodexStderr(text)).toBe(text);
-  });
-});
+// maskCodexStderr's unit tests moved to
+// wrapper/agent-common/test/redact.test.ts (issue #300 round 2, M2): the
+// masking function itself moved to @kaoiro/agent-common so codex and
+// claude-code share one implementation and one contract. codexExecFailureRelay
+// below still exercises it end-to-end (e.g. the mask-before-clip ordering
+// test), so masking behavior stays covered from this package too.
 
 describe("codexErrorClassification (issue #300)", () => {
   it("uses error.code when present, from the closed table", () => {

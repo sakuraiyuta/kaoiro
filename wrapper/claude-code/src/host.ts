@@ -83,6 +83,7 @@ import {
   clipText,
   computeResumeDrift,
   logEntryToPayload,
+  redactCredentials,
 } from "@kaoiro/agent-common";
 import type {
   ContextBudgetExt,
@@ -3383,7 +3384,15 @@ export class AgentHost implements EngineAdapter {
       out.error_subtype = payload.error_subtype;
     }
     if (typeof payload.error_detail === "string") {
-      out.error_detail = clipText(payload.error_detail).text;
+      // issue #300 round 2 (M2, クロエ review): masking belongs at the
+      // CHOKE POINT (every producer's error_detail passes through this
+      // one #emitResult), not enumerated per producer -- protocol.md
+      // previously documented this field as unmasked, which was true
+      // here but never should have been (an SDK exception/tool-crash
+      // message can echo a secret just as a Codex stderr tail can).
+      // Same shared function Codex's #emitResult applies at its own
+      // choke point (wrapper/codex/src/host.ts).
+      out.error_detail = clipText(redactCredentials(payload.error_detail)).text;
     }
     // issue #287: error_code is the SDK's OWN error-class string, forwarded
     // verbatim (NOT wrapper-generated — see assistantErrorSummary's own doc

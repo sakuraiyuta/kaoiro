@@ -643,9 +643,10 @@ export interface ResultPayload {
   /** SDK error termination detail text (issue #127) — the wrapper forwards
    *  what the SDK returned alongside is_error (e.g. tool error message).
    *  Absent on success; may be omitted on error when the SDK provided no
-   *  text. NOT masked or summarized (clipped only, protocol.md) — prefer
-   *  `error_summary` for the primary display line and treat this as the
-   *  detail-expansion (issue #287). */
+   *  text. Credential-shaped substrings are redacted before clipping
+   *  (protocol.md); NOT summarized — prefer `error_summary` for the
+   *  primary display line and treat this as the detail-expansion
+   *  (issue #287). */
   error_detail?: string;
   /** Machine-readable API-level error class (issue #287), e.g. the SDK's
    *  own `authentication_failed` / `rate_limit` / ... enum. Set only when
