@@ -20,6 +20,15 @@ const valid = {
   cwd_allowlist: ["/home/user/git/kaoiro"],
 };
 
+// Keep this production-composition contract aligned with protocol.md's
+// runner `register` field caps.
+const REGISTER_FIELD_CAPS = {
+  capability: 64,
+  engineId: 64,
+  modelValue: 256,
+  modelDisplayName: 256,
+} as const;
+
 describe("parseRunnerConfig", () => {
   it("persona 関連を書かない設定は accept-all として通す", () => {
     expect(parseRunnerConfig(valid)).toEqual(valid);
@@ -76,6 +85,31 @@ describe("parseRunnerConfig", () => {
     const claude = reg.engines?.find((e) => e.id === "claude-code");
     // ADR-0037 F1 で BOOTSTRAP は default 1 エントリのみ
     expect(claude?.models.map((m) => m.value)).toEqual(["default"]);
+  });
+
+  it("buildRegister default composition stays within register field caps", () => {
+    const register = buildRegister(parseRunnerConfig(valid));
+
+    for (const capability of register.capabilities ?? []) {
+      expect(Buffer.byteLength(capability, "utf8")).toBeLessThanOrEqual(
+        REGISTER_FIELD_CAPS.capability,
+      );
+    }
+
+    for (const engine of register.engines ?? []) {
+      expect(Buffer.byteLength(engine.id, "utf8")).toBeLessThanOrEqual(
+        REGISTER_FIELD_CAPS.engineId,
+      );
+
+      for (const model of engine.models) {
+        expect(Buffer.byteLength(model.value, "utf8")).toBeLessThanOrEqual(
+          REGISTER_FIELD_CAPS.modelValue,
+        );
+        expect(
+          Buffer.byteLength(model.display_name, "utf8"),
+        ).toBeLessThanOrEqual(REGISTER_FIELD_CAPS.modelDisplayName);
+      }
+    }
   });
 
   it.each([
