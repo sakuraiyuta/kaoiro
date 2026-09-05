@@ -204,6 +204,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     assert WrapperBuildInfos.snapshot()[agent_id]["build_version"] == "2026.9.123456"
 
     rejected = Map.put(accepted, "build_version", "2026.9.1234567")
+    @endpoint.subscribe("agents:lobby")
 
     log =
       capture_log(fn ->
@@ -212,6 +213,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
     assert log =~ "wrapper_build_info rejected for #{agent_id}: invalid_build_info"
     assert WrapperBuildInfos.snapshot()[agent_id]["build_version"] == "2026.9.123456"
+    refute_broadcast "wrapper_build_info", _
     on_exit(fn -> WrapperBuildInfos.delete(agent_id, socket.channel_pid) end)
   end
 

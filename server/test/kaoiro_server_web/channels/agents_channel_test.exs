@@ -5034,8 +5034,9 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         "build_channel" => "dev"
       }
 
-      assert :ok = KaoiroServer.WrapperBuildInfos.put(agent_id, info, self())
-      on_exit(fn -> KaoiroServer.WrapperBuildInfos.delete(agent_id, self()) end)
+      owner = self()
+      assert :ok = KaoiroServer.WrapperBuildInfos.put(agent_id, info, owner)
+      on_exit(fn -> KaoiroServer.WrapperBuildInfos.delete(agent_id, owner) end)
 
       _operator = join_as(:operator)
       assert_push "snapshot", %{"agents" => _}
@@ -5047,18 +5048,21 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       info = %{
         "build_revision" => String.duplicate("a", 40),
         "build_dirty" => false,
-        "build_version" => "2026.1.123456",
-        "build_channel" => "dev"
+        "build_version" => "9999.12.999999",
+        "build_channel" => "release"
       }
 
       assert KaoiroServer.WrapperBuildInfos.valid_info?(info)
 
-      agent_ids = for n <- 1..1000, do: "test.build-frame-#{n}"
-      owner = self()
+      agent_ids =
+        for n <- 1..1000 do
+          suffix = Integer.to_string(n)
+          "h." <> suffix <> String.duplicate("a", 256 - 2 - byte_size(suffix))
+        end
 
-      for agent_id <- agent_ids do
-        assert :ok = KaoiroServer.WrapperBuildInfos.put(agent_id, info, owner)
-      end
+      assert Enum.all?(agent_ids, &KaoiroServerWeb.AgentId.valid?/1)
+
+      owner = self()
 
       on_exit(fn ->
         for agent_id <- agent_ids do
@@ -5066,12 +5070,17 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         end
       end)
 
+      for agent_id <- agent_ids do
+        assert :ok = KaoiroServer.WrapperBuildInfos.put(agent_id, info, owner)
+      end
+
       _operator = join_as(:operator)
       assert_push "snapshot", %{"agents" => _}
       assert_push "wrapper_build_info", payload
 
       refute payload["build_info_incomplete"]
       assert map_size(payload["builds"]) == length(agent_ids)
+      assert production_push_frame_bytes("wrapper_build_info", payload) == 400_074
       assert_production_push_frame_fits("wrapper_build_info", payload)
     end
 
