@@ -102,7 +102,10 @@ signal above would be muted with it.
   per condition per subject when it first crosses, and again only after the
   subject has fallen back below. It is deliberately not a join snapshot
   frame — a joining operator reads the current picture from
-  `list_conversations` and `delivery_snapshot`.
+  `list_conversations` and `delivery_snapshot`. A sweep whose store is
+  unavailable skips that detector alone and keeps what the other already
+  announced, so one outage does not re-announce an unrelated condition on
+  every tick.
   - rally: `{kind: "rally", participants, turns, conversations, threshold, window_ms}`
   - stall: `{kind: "stall", agent_id, undelivered, pending_since, threshold_ms}`
 - `list_conversations` rows additionally carry `rally_turns`,

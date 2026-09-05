@@ -25,6 +25,8 @@ defmodule KaoiroServer.QuagmireWatchTest do
     path = Path.join([System.tmp_dir!(), "kaoiro_test_dets", "#{deliveries}.dets"])
     File.rm(path)
 
+    original_inter_agent = Application.get_env(:kaoiro_server, :inter_agent)
+    original_quagmire = Application.get_env(:kaoiro_server, :quagmire)
     Application.put_env(:kaoiro_server, :inter_agent, tombstone_ttl_ms: 100_000)
     {:ok, clock} = Agent.start_link(fn -> 0 end)
 
@@ -35,7 +37,8 @@ defmodule KaoiroServer.QuagmireWatchTest do
     {:ok, notices} = Agent.start_link(fn -> [] end)
 
     on_exit(fn ->
-      Application.delete_env(:kaoiro_server, :inter_agent)
+      restore_env(:inter_agent, original_inter_agent)
+      restore_env(:quagmire, original_quagmire)
       stop_quietly(conversations)
       stop_quietly(deliveries)
       File.rm(path)
@@ -47,9 +50,16 @@ defmodule KaoiroServer.QuagmireWatchTest do
       watch: watch,
       notices: notices,
       clock: clock,
-      path: path
+      path: path,
+      original_inter_agent: original_inter_agent
     }
   end
+
+  # Restores the value the key HAD, rather than deleting it: config.exs ships
+  # both keys, so a delete would leave every later test in the run reading the
+  # module fallbacks instead of the shipped configuration.
+  defp restore_env(key, nil), do: Application.delete_env(:kaoiro_server, key)
+  defp restore_env(key, value), do: Application.put_env(:kaoiro_server, key, value)
 
   defp start_watch(ctx, opts \\ []) do
     {:ok, _} =
@@ -92,6 +102,12 @@ defmodule KaoiroServer.QuagmireWatchTest do
     %{pending_since: pending} = DeliveryStates.get(agent_id, ctx.deliveries)
     {:ok, since, _offset} = DateTime.from_iso8601(pending)
     fn -> DateTime.add(since, offset_ms, :millisecond) end
+  end
+
+  # Same derivation, for a test that has to move the clock more than once:
+  # each generation opens a pending_since of its own.
+  defp set_wall_after(ctx, wall, agent_id, offset_ms) do
+    Agent.update(wall, fn _ -> now_wall_after(ctx, agent_id, offset_ms).() end)
   end
 
   defp exchange_and_close(ctx, cid, turns) do
@@ -164,7 +180,7 @@ defmodule KaoiroServer.QuagmireWatchTest do
     test "notifies on an unacknowledged gap older than the threshold", ctx do
       DeliveryStates.bind("momo", "gen-a", ctx.deliveries)
       DeliveryStates.issue("momo", ctx.deliveries)
-      watch = start_watch(ctx, now_wall: now_wall_after(ctx, "momo", 30_000))
+      watch = start_watch(ctx, now_wall: now_wall_after(ctx, "momo", 30_001))
 
       assert :ok = QuagmireWatch.sweep(watch)
 
@@ -182,6 +198,18 @@ defmodule KaoiroServer.QuagmireWatchTest do
       DeliveryStates.bind("momo", "gen-a", ctx.deliveries)
       DeliveryStates.issue("momo", ctx.deliveries)
       watch = start_watch(ctx, now_wall: now_wall_after(ctx, "momo", 29_999))
+
+      assert :ok = QuagmireWatch.sweep(watch)
+      assert notices(ctx) == []
+    end
+
+    test "stays silent at exactly the threshold", ctx do
+      # "older than stall_ms" (spec, Stall): equality is not older. Pinned
+      # alongside the two neighbours so the comparison cannot drift by one
+      # millisecond in either direction unnoticed.
+      DeliveryStates.bind("momo", "gen-a", ctx.deliveries)
+      DeliveryStates.issue("momo", ctx.deliveries)
+      watch = start_watch(ctx, now_wall: now_wall_after(ctx, "momo", 30_000))
 
       assert :ok = QuagmireWatch.sweep(watch)
       assert notices(ctx) == []
@@ -210,6 +238,31 @@ defmodule KaoiroServer.QuagmireWatchTest do
 
       assert :ok = QuagmireWatch.sweep(watch)
       assert notices(ctx) == []
+    end
+
+    test "reports the next generation's stall after the first was abandoned", ctx do
+      # The edge-trigger set is REBUILT from the current over-threshold set
+      # each sweep. Accumulating it instead would silence the agent for good
+      # after its first stall, which no operator action could undo.
+      DeliveryStates.bind("momo", "gen-a", ctx.deliveries)
+      DeliveryStates.issue("momo", ctx.deliveries)
+      {:ok, wall} = Agent.start_link(fn -> ~U[2026-09-05 12:00:00Z] end)
+      watch = start_watch(ctx, now_wall: fn -> Agent.get(wall, & &1) end)
+
+      set_wall_after(ctx, wall, "momo", 30_001)
+      assert :ok = QuagmireWatch.sweep(watch)
+      assert [%{"kind" => "stall", "agent_id" => "momo"}] = notices(ctx)
+
+      # A replacement wrapper moves acked to issued, so the condition falls
+      # back below and the memory has to clear with it.
+      DeliveryStates.bind("momo", "gen-b", ctx.deliveries)
+      assert :ok = QuagmireWatch.sweep(watch)
+      assert length(notices(ctx)) == 1
+
+      DeliveryStates.issue("momo", ctx.deliveries)
+      set_wall_after(ctx, wall, "momo", 30_001)
+      assert :ok = QuagmireWatch.sweep(watch)
+      assert length(notices(ctx)) == 2
     end
   end
 
@@ -262,6 +315,23 @@ defmodule KaoiroServer.QuagmireWatchTest do
       assert length(notices(ctx)) == 1
     end
 
+    test "a later store's failure does not re-announce the earlier detector", ctx do
+      # The rally notice is emitted BEFORE DeliveryStates is read. Rolling the
+      # whole sweep back on that read's exit throws away the edge-trigger
+      # memory the emit just earned, so every tick re-announces the same
+      # rally -- a condition the failing store has nothing to do with.
+      watch = start_watch(ctx)
+      exchange(ctx, "c1", 4)
+      stop_quietly(ctx.deliveries)
+
+      send(watch, :sweep)
+      assert %{} = :sys.get_state(watch)
+      send(watch, :sweep)
+      assert %{} = :sys.get_state(watch)
+
+      assert length(notices(ctx)) == 1
+    end
+
     test "exposes the running thresholds so the channel cannot disagree", ctx do
       watch = start_watch(ctx)
 
@@ -277,13 +347,35 @@ defmodule KaoiroServer.QuagmireWatchTest do
         rally_window_ms: 100_000
       )
 
-      on_exit(fn -> Application.delete_env(:kaoiro_server, :quagmire) end)
-
       watch = start_watch(ctx)
       stop_quietly(ctx.watch)
       refute Process.whereis(watch)
 
       assert %{rally_turns: 7} = QuagmireWatch.configured_settings()
+    end
+
+    test "the shipped configuration and the module fallbacks agree", ctx do
+      # Nothing injected: this is what a deployment runs. stall_ms must clear
+      # the wrapper's 30-minute turn watchdog on BOTH paths -- a recipient
+      # that is merely mid-turn cannot acknowledge, and reporting that as a
+      # stall is the false positive the threshold was raised to avoid.
+      restore_env(:inter_agent, ctx.original_inter_agent)
+
+      assert %{
+               rally_turns: 16,
+               rally_window_ms: 86_400_000,
+               stall_ms: 3_600_000,
+               sweep_interval_ms: 60_000
+             } = QuagmireWatch.configured_settings()
+
+      Application.delete_env(:kaoiro_server, :quagmire)
+
+      assert %{
+               rally_turns: 16,
+               rally_window_ms: 86_400_000,
+               stall_ms: 3_600_000,
+               sweep_interval_ms: 60_000
+             } = QuagmireWatch.configured_settings()
     end
   end
 end

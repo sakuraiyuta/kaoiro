@@ -90,6 +90,13 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     socket
   end
 
+  # Three participant ids no other test in the run shares, for the rally
+  # aggregate (issue #273).
+  defp rally_pair do
+    n = System.unique_integer([:positive])
+    {"test.rally#{n}a", "test.rally#{n}b", "test.rally#{n}c"}
+  end
+
   defp encoded_frame_bytes(message) do
     {:socket_push, :text, encoded} = Phoenix.Socket.V2.JSONSerializer.encode!(message)
     IO.iodata_length(encoded)
@@ -350,11 +357,15 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
   end
 
   test "list_conversations carries the cross-conversation rally and verdict (issue #273)" do
+    # ConversationStates is shared by the whole case and the rally is a PAIR
+    # aggregate, so a participant name reused by another test adds to this
+    # one's count. Every rally test therefore owns its own pair.
+    {a, b, _c} = rally_pair()
     socket = join_as(:operator)
     assert_push "snapshot", %{"agents" => _}
 
-    ConversationStates.record_message("qc1", "test.a", "test.b", "x", 1, false, true)
-    ConversationStates.record_message("qc2", "test.a", "test.b", "x", 1, false, true)
+    ConversationStates.record_message("qc1", a, b, "x", 1, false, true)
+    ConversationStates.record_message("qc2", a, b, "x", 1, false, true)
 
     ref = push(socket, "list_conversations", %{})
 
@@ -376,15 +387,26 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     # The verdict is computed server-side precisely so one place owns the
     # threshold; asserting only the false branch leaves that comparison
     # unpinned in the direction an operator actually acts on.
+    {a, b, c} = rally_pair()
+    original_quagmire = Application.get_env(:kaoiro_server, :quagmire)
     Application.put_env(:kaoiro_server, :quagmire, rally_turns: 2)
-    on_exit(fn -> Application.delete_env(:kaoiro_server, :quagmire) end)
+
+    # Restore rather than delete: config.exs ships :quagmire, so a delete
+    # leaves every later test reading the module fallbacks instead.
+    on_exit(fn ->
+      if original_quagmire do
+        Application.put_env(:kaoiro_server, :quagmire, original_quagmire)
+      else
+        Application.delete_env(:kaoiro_server, :quagmire)
+      end
+    end)
 
     socket = join_as(:operator)
     assert_push "snapshot", %{"agents" => _}
 
-    ConversationStates.record_message("qt1", "test.a", "test.b", "x", 1, false, true)
-    ConversationStates.record_message("qt2", "test.a", "test.b", "x", 1, false, true)
-    ConversationStates.record_message("qt3", "test.a", "test.c", "x", 1, false, true)
+    ConversationStates.record_message("qt1", a, b, "x", 1, false, true)
+    ConversationStates.record_message("qt2", a, b, "x", 1, false, true)
+    ConversationStates.record_message("qt3", a, c, "x", 1, false, true)
 
     ref = push(socket, "list_conversations", %{})
     assert_reply ref, :ok, %{"conversations" => conversations}

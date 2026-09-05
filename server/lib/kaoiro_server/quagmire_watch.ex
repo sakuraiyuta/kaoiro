@@ -46,9 +46,13 @@ defmodule KaoiroServer.QuagmireWatch do
   alias KaoiroServer.ConversationStates
   alias KaoiroServer.DeliveryStates
 
+  # Fallbacks for a deployment that configures nothing. They must match
+  # config.exs: a value that only lives here is one nobody reviews when the
+  # shipped default is retuned, and stall_ms below 60 minutes fires under the
+  # wrapper's own turn watchdog.
   @default_rally_turns 16
   @default_rally_window_ms 86_400_000
-  @default_stall_ms 1_800_000
+  @default_stall_ms 3_600_000
   @default_sweep_interval_ms 60_000
 
   def start_link(opts \\ []) do
@@ -102,18 +106,7 @@ defmodule KaoiroServer.QuagmireWatch do
 
   @impl true
   def handle_info(:sweep, state) do
-    next =
-      try do
-        detect(state)
-      catch
-        :exit, reason ->
-          # ConversationStates or DeliveryStates was slow or absent. Crashing
-          # here would empty the edge-trigger memory, so the next sweep would
-          # re-announce every condition the operator has already seen.
-          Logger.warning("quagmire sweep skipped: #{inspect(reason)}")
-          state
-      end
-
+    next = detect(state)
     schedule_sweep(state.settings.sweep_interval_ms)
     {:noreply, next}
   end
@@ -122,8 +115,21 @@ defmodule KaoiroServer.QuagmireWatch do
 
   defp detect(state) do
     state
-    |> detect_rally()
-    |> detect_stall()
+    |> guarded(:rally, &detect_rally/1)
+    |> guarded(:stall, &detect_stall/1)
+  end
+
+  # Each detector is fail-soft on its own store AND commits its own edge
+  # memory. ConversationStates or DeliveryStates being slow or absent must not
+  # empty that memory: crashing, or rolling the whole sweep back, re-announces
+  # on the next tick every condition the operator has already seen -- including
+  # the ones the unavailable store had nothing to do with.
+  defp guarded(state, kind, detector) do
+    detector.(state)
+  catch
+    :exit, reason ->
+      Logger.warning("quagmire #{kind} sweep skipped: #{inspect(reason)}")
+      state
   end
 
   defp detect_rally(state) do
@@ -186,7 +192,7 @@ defmodule KaoiroServer.QuagmireWatch do
        )
        when is_binary(pending) and acked < issued do
     case DateTime.from_iso8601(pending) do
-      {:ok, since, _offset} -> DateTime.diff(now, since, :millisecond) >= threshold_ms
+      {:ok, since, _offset} -> DateTime.diff(now, since, :millisecond) > threshold_ms
       _ -> false
     end
   end
