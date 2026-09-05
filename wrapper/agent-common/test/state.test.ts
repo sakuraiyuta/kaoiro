@@ -413,4 +413,53 @@ describe("makeResult", () => {
       payload: { is_error: true },
     });
   });
+
+  // issue #300 round 3, finding M-B: masking+clipping moved from each
+  // engine's own emit path INTO makeResult itself, since this is the ONE
+  // function every EngineAdapter's result envelope funnels through --
+  // antigravity had no equivalent choke point of its own at all, so a
+  // per-engine fix kept missing one engine. Testing it here, once,
+  // covers every current and future caller unconditionally.
+  describe("error_detail masking+clipping (issue #300 round 3, finding M-B)", () => {
+    it("masks a credential-shaped error_detail", () => {
+      const envelope = makeResult(CONFIG, "2026-06-04T11:55:00Z", {
+        is_error: true,
+        error_detail: "api_key=abcdef123456",
+      });
+      expect(envelope.payload).toMatchObject({
+        error_detail: "api_key=********3456",
+      });
+    });
+
+    it("clips an oversized error_detail to 16,384 UTF-8 bytes", () => {
+      const oversized = "x".repeat(16_384 + 100);
+      const envelope = makeResult(CONFIG, "2026-06-04T11:55:00Z", {
+        is_error: true,
+        error_detail: oversized,
+      });
+      const detail = (envelope.payload as { error_detail: string }).error_detail;
+      expect(Buffer.byteLength(detail, "utf8")).toBe(16_384);
+    });
+
+    it("leaves a payload with no error_detail untouched (no field is invented)", () => {
+      const envelope = makeResult(CONFIG, "2026-06-04T11:55:00Z", {
+        is_error: true,
+        error_subtype: "error_during_execution",
+      });
+      expect(envelope.payload).not.toHaveProperty("error_detail");
+    });
+
+    it("is idempotent: masking an already-masked error_detail again changes nothing", () => {
+      const once = makeResult(CONFIG, "2026-06-04T11:55:00Z", {
+        is_error: true,
+        error_detail: "api_key=abcdef123456",
+      });
+      const detailOnce = (once.payload as { error_detail: string }).error_detail;
+      const twice = makeResult(CONFIG, "2026-06-04T11:55:00Z", {
+        is_error: true,
+        error_detail: detailOnce,
+      });
+      expect(twice.payload).toMatchObject({ error_detail: detailOnce });
+    });
+  });
 });

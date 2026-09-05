@@ -552,4 +552,57 @@ describe("AntigravityHost", () => {
     expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ error_detail: "agy_child_error: ENOENT" });
     host.close();
   });
+
+  // issue #300 round 3, finding M-B: this host had no per-engine choke
+  // point at all -- both error_detail producers (#terminalError below,
+  // and the ERROR-status stream result routed through
+  // #publishTerminalResult) called makeResult directly with no masking
+  // or clipping. The fix moved into makeResult itself
+  // (@kaoiro/agent-common's state.ts, unit-tested there directly) since
+  // that is the one function every engine's result envelope funnels
+  // through unconditionally; these tests confirm antigravity's own two
+  // real call sites actually reach it with the right text, end to end.
+  it("#publishTerminalResult経由のerror_detailはmaskingされる (issue #300 round 3, finding M-B)", async () => {
+    const { host, logs, calls } = hostHarness();
+    await host.send("hello");
+    await waitFor(() => calls.length === 1);
+    calls[0]!.child.stdout.write('{"event":"result","result":{"status":"ERROR","error":"api_key=abcdef123456"}}\n');
+    calls[0]!.child.finish();
+    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
+    expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({
+      is_error: true,
+      error_detail: "api_key=********3456",
+    });
+    host.close();
+  });
+
+  it("#terminalError経由のerror_detailはmaskingされる (issue #300 round 3, finding M-B)", async () => {
+    const { host, logs, calls } = hostHarness();
+    await host.send("hello");
+    await waitFor(() => calls.length === 1);
+    const child = calls[0]!.child;
+    child.emit("error", new Error("Authorization: Bearer abcdef123456"));
+    const stdoutEnded = new Promise<void>((resolve) => child.stdout.once("end", () => resolve()));
+    child.stdout.end();
+    await stdoutEnded;
+    child.emit("close", 0, null);
+    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
+    expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({
+      error_detail: "agy_child_error: Authorization: Bearer ********3456",
+    });
+    host.close();
+  });
+
+  it("#publishTerminalResult経由のerror_detailは16KiBにclipされる (issue #300 round 3, finding M-B)", async () => {
+    const { host, logs, calls } = hostHarness();
+    await host.send("hello");
+    await waitFor(() => calls.length === 1);
+    const oversized = "x".repeat(16_384 + 100);
+    calls[0]!.child.stdout.write(`${JSON.stringify({ event: "result", result: { status: "ERROR", error: oversized } })}\n`);
+    calls[0]!.child.finish();
+    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
+    const detail = logs.find((envelope) => envelope.type === "result")?.payload.error_detail as string;
+    expect(Buffer.byteLength(detail, "utf8")).toBe(16_384);
+    host.close();
+  });
 });

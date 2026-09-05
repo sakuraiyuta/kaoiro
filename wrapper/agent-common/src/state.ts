@@ -19,6 +19,7 @@ import type {
   TaskPayload,
   WrapperConfig,
 } from "./types.js";
+import { boundErrorDetail } from "./redact.js";
 
 const EMPTY_IDS: ReadonlySet<string> = new Set();
 
@@ -252,13 +253,27 @@ export function makeLog(
 
 /** Wraps a turn's final reply into the common envelope v0 (protocol.md
  *  type="result"). state mirrors the terminal done/error. `ext` carries
- *  filter-added fields such as `cost` (#8). */
+ *  filter-added fields such as `cost` (#8).
+ *
+ *  issue #300 round 3 (finding M-B): `error_detail`, when present, is
+ *  passed through `boundErrorDetail` (mask, then clip) HERE rather than
+ *  at each engine's own emit path. Every `EngineAdapter` funnels its
+ *  result envelope through this one function -- unlike a per-engine
+ *  choke point (`#emitResult` or equivalent), which a new engine, or one
+ *  that never grew such a method (antigravity, until this fix), can
+ *  still bypass. Bounding the wire-facing envelope this way is treated
+ *  as part of envelope construction's own responsibility, not a layering
+ *  violation, precisely because no caller can opt out of it. */
 export function makeResult(
   config: WrapperConfig,
   ts: string,
   payload: ResultPayload,
   ext: Record<string, unknown> = {},
 ): Envelope {
+  const boundPayload: ResultPayload =
+    typeof payload.error_detail === "string"
+      ? { ...payload, error_detail: boundErrorDetail(payload.error_detail) }
+      : payload;
   return {
     version: "0",
     agent_id: config.agent_id,
@@ -267,7 +282,7 @@ export function makeResult(
     ts,
     type: "result",
     state: payload.is_error ? "error" : "done",
-    payload: payload as unknown as Record<string, unknown>,
+    payload: boundPayload as unknown as Record<string, unknown>,
     ext,
   };
 }

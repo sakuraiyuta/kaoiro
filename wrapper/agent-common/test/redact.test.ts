@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { redactCredentials } from "../src/redact.js";
+import { MAX_LOG_BYTES } from "../src/logpayload.js";
+import { boundErrorDetail, redactCredentials } from "../src/redact.js";
+
+const TOKEN = "abcdef1234567890";
+const MASKED_TOKEN = "************7890";
 
 describe("redactCredentials (issue #300 round 2)", () => {
   it("masks an sk-style API key to its last 4 characters", () => {
@@ -81,10 +85,11 @@ describe("redactCredentials (issue #300 round 2)", () => {
   });
 
   it("is idempotent on its own output (issue #300 round 2: two call sites can both mask the same text)", () => {
-    // codex's #emitResult masks at the choke point AFTER
-    // codexExecFailureRelay already masked upstream (mask-before-clip
-    // ordering requires the upstream call; the choke point is a backstop
-    // for producers that bypass it) -- so the same text can pass through
+    // makeResult (the actual choke point, called by every engine's own
+    // result path) masks AFTER codex's codexExecFailureRelay already
+    // masked upstream (mask-before-clip ordering requires the upstream
+    // call; makeResult's own masking is a backstop for producers that
+    // bypass the relay) -- so the same text can pass through
     // redactCredentials twice. Two DIFFERENT reasons make each pattern a
     // fixed point, and both must be pinned: a naive "one case is enough"
     // check would miss a future maskValue change (e.g. to a fixed
@@ -114,5 +119,104 @@ describe("redactCredentials (issue #300 round 2)", () => {
     // right-boundary behavior the left-boundary fix above must not break.
     const text = "apikeyword is a word";
     expect(redactCredentials(text)).toBe(text);
+  });
+
+  it("does not match a keyword glued onto a preceding letter (negative control)", () => {
+    const text = "xBearer token";
+    expect(redactCredentials(text)).toBe(text);
+  });
+
+  it("does not match api_key glued onto a preceding letter (negative control)", () => {
+    // Left-boundary sibling of the "xBearer token" case above -- pins
+    // that LEFT_BOUNDARY's rejection applies to api_key too, not only
+    // the Authorization/Bearer pattern (issue #300 round 3 review).
+    const text = "myapi_key=x";
+    expect(redactCredentials(text)).toBe(text);
+  });
+});
+
+describe("redactCredentials — round 3 finding M-A: compact-JSON value leak (issue #300)", () => {
+  it("masks the exact reported fixture: compact-JSON Authorization/Bearer with no whitespace", () => {
+    // Root cause (クロエ's live measurement): with no whitespace, the
+    // compound "Authorization...Bearer" alternative cannot bridge the
+    // `":"` between the two keywords and never fires; the bare
+    // "Authorization" alternative then matches alone, and the OLD `\S+`
+    // value class swallowed `":"Bearer` whole (a closing quote, colon,
+    // opening quote, and the literal word "Bearer") as if it were the
+    // secret -- leaving the REAL token, after the next space, completely
+    // untouched. This is the third sighting of "value class crosses a
+    // delimiter it shouldn't" (after api_key's own JSON-quoted form and
+    // the underscore left-boundary bug), so the fix is a shared
+    // VALUE_CLASS/separator, not a one-off patch.
+    expect(
+      redactCredentials('{"Authorization":"Bearer abc123456789"}'),
+    ).toBe('{"Authorization":"Bearer ********6789"}');
+  });
+
+  // 3 keywords x 4 separator/quoting forms -- the grid this class of
+  // defect keeps surfacing in one cell at a time. Each cell name doubles
+  // as the failure-mode label a future regression would fall under.
+  it.each([
+    ["Authorization", "plain", `Authorization: ${TOKEN}`, `Authorization: ${MASKED_TOKEN}`],
+    ["Authorization", "assign", `Authorization=${TOKEN}`, `Authorization=${MASKED_TOKEN}`],
+    [
+      "Authorization",
+      "json_spaced",
+      `"Authorization": "${TOKEN}"`,
+      `"Authorization": "${MASKED_TOKEN}"`,
+    ],
+    [
+      "Authorization",
+      "json_compact",
+      `"Authorization":"${TOKEN}"`,
+      `"Authorization":"${MASKED_TOKEN}"`,
+    ],
+    ["Bearer", "plain", `Bearer: ${TOKEN}`, `Bearer: ${MASKED_TOKEN}`],
+    ["Bearer", "assign", `Bearer=${TOKEN}`, `Bearer=${MASKED_TOKEN}`],
+    ["Bearer", "json_spaced", `"Bearer": "${TOKEN}"`, `"Bearer": "${MASKED_TOKEN}"`],
+    ["Bearer", "json_compact", `"Bearer":"${TOKEN}"`, `"Bearer":"${MASKED_TOKEN}"`],
+    ["api_key", "plain", `api_key: ${TOKEN}`, `api_key: ${MASKED_TOKEN}`],
+    ["api_key", "assign", `api_key=${TOKEN}`, `api_key=${MASKED_TOKEN}`],
+    ["api_key", "json_spaced", `"api_key": "${TOKEN}"`, `"api_key": "${MASKED_TOKEN}"`],
+    ["api_key", "json_compact", `"api_key":"${TOKEN}"`, `"api_key":"${MASKED_TOKEN}"`],
+  ])("%s / %s masks and is idempotent", (_keyword, _form, input, expected) => {
+    const once = redactCredentials(input);
+    expect(once).toBe(expected);
+    expect(redactCredentials(once)).toBe(once);
+  });
+});
+
+describe("boundErrorDetail (issue #300 round 3, finding M-B: the mask-then-clip transform makeResult applies)", () => {
+  it("masks a credential and stays under the byte bound for ordinary text", () => {
+    expect(boundErrorDetail("api_key=abcdef123456")).toBe(
+      "api_key=********3456",
+    );
+  });
+
+  it("clips oversized text to MAX_LOG_BYTES", () => {
+    const oversized = "x".repeat(MAX_LOG_BYTES + 100);
+    const detail = boundErrorDetail(oversized);
+    expect(Buffer.byteLength(detail, "utf8")).toBe(MAX_LOG_BYTES);
+  });
+
+  it("masks a credential near the start of oversized text (both transforms apply in one call)", () => {
+    // `clipText` is a HEAD clip (keeps the first MAX_LOG_BYTES bytes), so
+    // a keyword+value pair near the start keeps its own anchor within the
+    // kept region regardless of transform order here -- unlike
+    // codexExecFailureRelay's TAIL clip, this does not by itself prove an
+    // ordering requirement (see boundErrorDetail's doc comment), but it
+    // does pin that masking still fires when the input is oversized. The
+    // filler starts with a newline so the api_key value class (which
+    // stops at whitespace) does not greedily swallow it too.
+    const secret = "api_key=abcdef123456";
+    const after = `\n${"y".repeat(MAX_LOG_BYTES)}`;
+    const detail = boundErrorDetail(`${secret}${after}`);
+    expect(Buffer.byteLength(detail, "utf8")).toBe(MAX_LOG_BYTES);
+    expect(detail.startsWith("api_key=********3456\n")).toBe(true);
+  });
+
+  it("leaves short, non-secret text unchanged", () => {
+    const text = "tool crashed: EACCES";
+    expect(boundErrorDetail(text)).toBe(text);
   });
 });

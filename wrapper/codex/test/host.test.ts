@@ -3528,12 +3528,13 @@ describe("issue #262: rollout 破損の安全な自動修復", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  // issue #300 review S1 (superseded by M2's choke-point fix, review
-  // round 2): this branch used to need its own explicit masking call,
-  // since it bypasses codexExecFailureRelay entirely. #emitResult now
-  // masks every error_detail at the choke point, so this pins that the
+  // issue #300 review S1 (superseded by round 3's fix, finding M-B):
+  // this branch used to need its own explicit masking call, since it
+  // bypasses codexExecFailureRelay entirely. makeResult (the actual
+  // choke point every engine's result path funnels through) now masks
+  // every error_detail unconditionally, so this pins that the
   // rollout-corrupted producer is covered WITHOUT a per-branch call.
-  it("error_rollout_corrupted も choke point (#emitResult) で masking される (issue #300 review finding S1)", async () => {
+  it("error_rollout_corrupted も makeResult で masking される (issue #300 review finding S1)", async () => {
     const root = await mkdtemp(join(tmpdir(), "kaoiro-codex-corrupt-mask-e2e-"));
     const sessionId = "corrupt-mask-session-e2e";
     const original = Buffer.from(" \n\t\n", "utf8");

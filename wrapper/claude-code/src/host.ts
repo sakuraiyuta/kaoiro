@@ -83,7 +83,6 @@ import {
   clipText,
   computeResumeDrift,
   logEntryToPayload,
-  redactCredentials,
 } from "@kaoiro/agent-common";
 import type {
   ContextBudgetExt,
@@ -3383,16 +3382,16 @@ export class AgentHost implements EngineAdapter {
     if (typeof payload.error_subtype === "string") {
       out.error_subtype = payload.error_subtype;
     }
+    // issue #300 round 3 (M-B, クロエ review): masking+clipping moved
+    // INTO makeResult (@kaoiro/agent-common's state.ts) itself, since
+    // that is the one function EVERY engine's result path funnels
+    // through unconditionally -- antigravity had no #emitResult-shaped
+    // choke point at all, so per-engine enumeration (this file's own
+    // #emitResult, codex's own, antigravity's own) kept missing one.
+    // `boundErrorDetail` no longer needs calling here; `out.error_detail`
+    // is passed through raw and makeResult applies it.
     if (typeof payload.error_detail === "string") {
-      // issue #300 round 2 (M2, クロエ review): masking belongs at the
-      // CHOKE POINT (every producer's error_detail passes through this
-      // one #emitResult), not enumerated per producer -- protocol.md
-      // previously documented this field as unmasked, which was true
-      // here but never should have been (an SDK exception/tool-crash
-      // message can echo a secret just as a Codex stderr tail can).
-      // Same shared function Codex's #emitResult applies at its own
-      // choke point (wrapper/codex/src/host.ts).
-      out.error_detail = clipText(redactCredentials(payload.error_detail)).text;
+      out.error_detail = payload.error_detail;
     }
     // issue #287: error_code is the SDK's OWN error-class string, forwarded
     // verbatim (NOT wrapper-generated — see assistantErrorSummary's own doc

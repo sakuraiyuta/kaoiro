@@ -55,7 +55,7 @@ export type {
   WhoamiSnapshot,
 } from "./inter_agent.js";
 export { MAX_LOG_BYTES, clipText, logEntryToPayload } from "./logpayload.js";
-export { redactCredentials } from "./redact.js";
+export { boundErrorDetail, redactCredentials } from "./redact.js";
 export {
   MAX_TASKLIST_ITEMS,
   MAX_TASKLIST_ITEMS_JSON_BYTES,

@@ -1,14 +1,17 @@
 // Credential-shaped substring redaction for operator-facing error text
 // (protocol.md `result.error_detail`: "credential-shaped substrings are
-// redacted ... before clipping"). Every engine adapter's error_detail
-// generation point applies this same pass before its own clipText, so the
-// same wire field carries the same guarantee regardless of which SDK
-// produced the text (issue #300 round 2: the guarantee previously existed
-// only for Codex, and only incompletely). A pattern match, not a full
-// secret scanner: it may occasionally mask non-secret text following these
+// redacted ... before clipping"). `makeResult` (state.ts) applies
+// `boundErrorDetail` to every result envelope's error_detail
+// unconditionally (issue #300 round 3, finding M-B), so the same wire
+// field carries the same guarantee regardless of which engine adapter
+// produced the text (round 2: the guarantee previously existed only for
+// Codex, and only incompletely). A pattern match, not a full secret
+// scanner: it may occasionally mask non-secret text following these
 // keywords -- over-masking is the safe failure mode for a redaction pass,
 // under-masking is not. Deliberately does NOT touch filesystem paths
 // (including home directories) -- those are not credentials.
+
+import { clipText } from "./logpayload.js";
 
 /** Masks a matched secret-shaped value to security.md's convention (at
  *  most the last 4 characters visible). A value of 4 or fewer characters
@@ -31,10 +34,37 @@ function maskValue(value: string): string {
 // `xBearer`).
 const LEFT_BOUNDARY = "(?<![A-Za-z0-9])";
 
+// Shared value class for the two keyword=value patterns (Authorization/
+// Bearer and api_key -- sk- is a different grammar, a bare prefix with no
+// separator, and keeps its own strict shape check below). `\S+` (the
+// original value class) has no JSON-delimiter awareness, so a JSON-shaped
+// body like `"Authorization":"Bearer abc123"` let its value capture eat
+// straight through the closing quote into `"Bearer` (issue #300 review
+// round 3, finding M-A -- the third sighting of this "value class crosses
+// a delimiter it shouldn't" defect class, after api_key's own JSON-quoted
+// form and the underscore left-boundary bug). Stopping at a quote, comma,
+// whitespace, or closing brace keeps the match inside one JSON string/
+// bare token, whichever this text turns out to contain.
+const VALUE_CLASS = '[^"\',\\s}]+';
+
+/** Builds the separator between a keyword and its value, tolerating an
+ *  optional quote on either side of the `:`/`=` operator (JSON's own
+ *  quoting around a key or value) so the same separator bridges both a
+ *  bare `keyword=value` assignment and a JSON `"keyword":"value"` field,
+ *  compact or spaced. `requireOperator` is false only for the
+ *  Authorization/Bearer keywords, matching their original (pre-#300)
+ *  design of tolerating a bare space with no `:`/`=` at all -- api_key's
+ *  operator stays mandatory, since that requirement is what rejects a
+ *  false match like "apikeyword" (no colon/equals following it). */
+function separator(requireOperator: boolean): string {
+  const operator = requireOperator ? "[:=]" : "[:=]?";
+  return `\\s*["']?\\s*${operator}\\s*["']?`;
+}
+
 /** Redacts the three credential shapes this text can plausibly carry: an
  *  OpenAI-style API key, an Authorization/Bearer header value, and an
- *  api_key assignment (bare `api_key=value` or JSON-quoted
- *  `"api_key": "value"`). */
+ *  api_key assignment -- each in bare (`key=value`), JSON-spaced
+ *  (`"key": "value"`), or JSON-compact (`"key":"value"`) form. */
 export function redactCredentials(text: string): string {
   let masked = text.replace(
     new RegExp(`${LEFT_BOUNDARY}(sk-)([A-Za-z0-9_-]{16,})\\b`, "g"),
@@ -44,29 +74,43 @@ export function redactCredentials(text: string): string {
   // tried before the two bare keywords, or a plain "Authorization|Bearer"
   // alternation matches "Authorization" first and treats the word "Bearer"
   // itself as the value to mask, leaving the actual token right after it
-  // untouched.
+  // untouched. Its OWN internal separator (between "Authorization" and
+  // "Bearer") needs the same quote-tolerant form as the outer one, or a
+  // JSON-compact `"Authorization":"Bearer ..."` never bridges the `":"`
+  // between the two keywords at all and falls through to the bare
+  // "Authorization" alternative instead (finding M-A).
+  const authSep = separator(false);
   masked = masked.replace(
     new RegExp(
-      `${LEFT_BOUNDARY}(Authorization\\s*[:=]?\\s*Bearer|Authorization|Bearer)(\\s*[:=]?\\s*)(\\S+)`,
+      `${LEFT_BOUNDARY}(Authorization${authSep}Bearer|Authorization|Bearer)(${authSep})(${VALUE_CLASS})`,
       "gi",
     ),
     (_match, keyword: string, sep: string, value: string) =>
       `${keyword}${sep}${maskValue(value)}`,
   );
-  // The RIGHT boundary needs no separate guard here: the required `[:=]`
-  // immediately after the keyword already rejects a false match like
-  // "apikeyword" (no colon/equals follows), and the quotes around the
-  // keyword/value are folded into the separator capture so reconstruction
-  // restores them untouched; the value itself stops before a closing
-  // quote/comma/brace so masking a JSON string cannot swallow surrounding
-  // syntax.
   masked = masked.replace(
     new RegExp(
-      `${LEFT_BOUNDARY}(api[_-]?key)(\\s*["']?\\s*[:=]\\s*["']?)([^"',\\s}]+)`,
+      `${LEFT_BOUNDARY}(api[_-]?key)(${separator(true)})(${VALUE_CLASS})`,
       "gi",
     ),
     (_match, keyword: string, sep: string, value: string) =>
       `${keyword}${sep}${maskValue(value)}`,
   );
   return masked;
+}
+
+/** The `result.error_detail` mask-then-clip transform (issue #300 round 3,
+ *  finding M-B). `clipText` keeps the FIRST MAX_LOG_BYTES bytes (a head
+ *  clip), so a keyword+value pair near the start of the text -- the
+ *  common case here -- keeps its own anchor in either order; masking
+ *  first is still the chosen order for defensive consistency with
+ *  `codexExecFailureRelay`'s own clip (a TAIL clip, where the ordering IS
+ *  load-bearing: clipping first there can discard a secret's keyword
+ *  anchor while keeping the value's tail, masking nothing). Called from
+ *  exactly one place, `makeResult` (state.ts) -- the actual choke point,
+ *  since every `EngineAdapter`'s result envelope funnels through it
+ *  unconditionally, unlike a per-engine `#emitResult` an engine could
+ *  omit or bypass. */
+export function boundErrorDetail(text: string): string {
+  return clipText(redactCredentials(text)).text;
 }
