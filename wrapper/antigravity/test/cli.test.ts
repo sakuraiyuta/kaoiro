@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
 import { relayAntigravityInstruction, runAntigravityCli } from "../src/cli.js";
 
@@ -78,5 +78,50 @@ describe("Antigravity CLI", () => {
         ext: { engine: "antigravity", permission: { enforcement: "advisory" } },
       }),
     ]);
+  });
+
+  it("absorbs an unavailable effort switch delivered through the server link", async () => {
+    const stderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+    let onSetEffort: ((effort: string) => void) | undefined;
+    const link = {
+      close: () => {},
+      send: () => {},
+    };
+    const host = {
+      state: "idle" as const,
+      statusExtSnapshot: () => ({ engine: "antigravity" }),
+      setEffort: async () => {
+        throw new Error("antigravity effort switching is unavailable in Stage A");
+      },
+      run: async () => {
+        onSetEffort?.("high");
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      },
+    };
+
+    try {
+      await runAntigravityCli({
+        parseCliArgs: () => ({
+          configPath: "test",
+          prompt: undefined,
+          resume: undefined,
+        }),
+        loadConfig: () => config(),
+        createServerLink: (_url, _agentId, options) => {
+          onSetEffort = options.onSetEffort;
+          queueMicrotask(() => options.onPersonaPrompt?.("system prompt"));
+          return link as never;
+        },
+        createHost: () => host as never,
+      });
+
+      expect(stderr).toHaveBeenCalledWith(
+        "antigravity: Error: antigravity effort switching is unavailable in Stage A\n",
+      );
+    } finally {
+      stderr.mockRestore();
+    }
   });
 });

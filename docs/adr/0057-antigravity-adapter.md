@@ -270,7 +270,9 @@ capabilities and publishes the slugs plus one explicit entry
 absent from the list). On failure it publishes the 1.1.26 snapshot and
 warns. Effort is hidden in Stage A; `ext.model_source` follows the phase-15
 precedence with env `KAOIRO_ANTIGRAVITY_DEFAULT_MODEL`. No entry in
-`LIVE_PROBE_ENGINES`.
+`LIVE_PROBE_ENGINES`. Stage A advertises `supports_effort_switch: false`; a
+generic `set_effort` relay is logged and absorbed so unsupported control
+traffic cannot terminate the wrapper.
 
 ### F7 — Session capabilities in Stage A
 
