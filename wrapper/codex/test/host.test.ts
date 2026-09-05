@@ -387,7 +387,13 @@ describe("CodexHost", () => {
     await expect(host.setModel("gpt-6-astra")).rejects.toThrow(
       "codex: model gpt-6-astra requires Codex >= 0.153.0, bundled version is 0.144.1",
     );
-    expect(states).toEqual([]);
+    expect(states).toHaveLength(1);
+    expect(states[0]?.ext.switch_error).toEqual({
+      kind: "model",
+      requested: "gpt-6-astra",
+      reason: "client_version_too_old",
+      rolled_back_to: "gpt-5.6-terra",
+    });
     host.close();
   });
 

@@ -120,6 +120,17 @@ describe("resolveCodexCatalog", () => {
     }
   });
 
+  it("retains a curated minimum for an operator override outside the active plan", () => {
+    expect(
+      resolveCodexCatalog(
+        "chatgpt",
+        "plus",
+        [{ value: "gpt-5.5", display_name: "x" }],
+        "0.100.0",
+      ).map((model) => model.value),
+    ).not.toContain("gpt-5.5");
+  });
+
   it("呼び出し間でmodel entryを共有しない", () => {
     const first = resolveCodexCatalog("chatgpt", "plus");
     first[0]!.display_name = "mutated";

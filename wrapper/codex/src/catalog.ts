@@ -131,6 +131,8 @@ function bundledCodexVersion(): string {
 
 export const BUNDLED_CODEX_VERSION = bundledCodexVersion();
 
+export class CodexClientVersionTooOldError extends Error {}
+
 const warnedUndeclaredOperatorModels = new Set<string>();
 
 function restoreCuratedMinimums(
@@ -179,7 +181,7 @@ export function assertCuratedModelCompatible(
   const curated = CURATED_MODELS.find((model) => model.value === value);
   const minimum = curated?.minimal_client_version;
   if (minimum === undefined || isAtLeast(clientVersion, minimum)) return;
-  throw new Error(
+  throw new CodexClientVersionTooOldError(
     `codex: model ${value} requires Codex >= ${minimum}, bundled version is ${clientVersion}`,
   );
 }
@@ -244,7 +246,7 @@ export function resolveCodexCatalog(
     catalog = copyCatalog(CHATGPT_PLUS_MODELS);
   }
   const merged = restoreCuratedMinimums(
-    catalog,
+    CURATED_MODELS,
     mergeExtraModels(catalog, extraModels),
     extraModels,
   );

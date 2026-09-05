@@ -67,6 +67,7 @@ import {
 } from "./adapter.js";
 import {
   assertCuratedModelCompatible,
+  CodexClientVersionTooOldError,
   effortLevelsForModel,
   resolveCodexCatalog,
 } from "./catalog.js";
@@ -993,11 +994,25 @@ export class CodexHost implements EngineAdapter {
   async setModel(value: string): Promise<void> {
     // Applies from the next turn: each turn resumes the thread with fresh
     // ThreadOptions, so no live session state needs touching.
-    assertCuratedModelCompatible(
-      value,
-      this.#config.codex_extra_models,
-      this.#options.codexClientVersion,
-    );
+    try {
+      assertCuratedModelCompatible(
+        value,
+        this.#config.codex_extra_models,
+        this.#options.codexClientVersion,
+      );
+    } catch (error) {
+      if (error instanceof CodexClientVersionTooOldError) {
+        const rolledBackTo = this.#model ?? this.#modelLastGood;
+        this.#switchErrorOnce = {
+          kind: "model",
+          requested: value,
+          reason: "client_version_too_old",
+          ...(rolledBackTo === null ? {} : { rolled_back_to: rolledBackTo }),
+        };
+        this.#emitState(this.#machine.state);
+      }
+      throw error;
+    }
     this.#modelPending = value;
     this.#effortResetPending = false;
     const model = this.#catalog.find((entry) => entry.value === value);

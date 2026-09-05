@@ -184,13 +184,13 @@ themselves in the meantime:
 - Declared entries are merged onto the resolved base catalog by
   `mergeExtraModels` (runner/src/config.ts, and the identical wrapper-side
   copy in `@kaoiro/agent-common`'s `catalog.ts`): a `value` matching an
-  existing entry overrides it in place, a new `value` is appended. The
-  matching Codex entry retains its curated `minimal_client_version` unless
-  the declaration explicitly supplies a replacement.
-  runner applies this to the register payload it advertises (so
+  existing entry overrides it in place, a new `value` is appended. The runner
+  applies this to the register payload it advertises (so
   LaunchDialog offers it before any wrapper exists); the wrapper applies
   the same merge to its own catalog resolution (`ext.models`, effort-switch
   availability, `setModel`).
+  A matching Codex entry retains its curated `minimal_client_version` unless
+  the declaration explicitly supplies a replacement.
 - The declaration is host-wide (every agent on that runner), takes effect
   on the next spawn after a runner restart or config hot-reload, and does
   not bypass entitlement — a model the account is not actually entitled to

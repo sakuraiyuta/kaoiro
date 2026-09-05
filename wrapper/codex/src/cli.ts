@@ -525,7 +525,9 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     },
     onSetModel: (value) => {
       process.stdout.write(`  set_model: ${value}\n`);
-      void host.setModel(value).catch(() => {});
+      void host.setModel(value).catch((err: unknown) => {
+        process.stderr.write(`set_model failed: ${String(err)}\n`);
+      });
     },
     onSetEffort: (level) => {
       process.stdout.write(`  set_effort: ${level}\n`);
