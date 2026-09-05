@@ -58,6 +58,7 @@ import {
   logEntryToPayload,
 } from "@kaoiro/agent-common";
 import {
+  codexExecFailureRelay,
   threadEventToErrorDetail,
   threadEventToEvents,
   threadEventToFinalText,
@@ -1441,8 +1442,23 @@ export class CodexHost implements EngineAdapter {
           sawResult = true;
           settled.value = true;
           this.#finishTurn(false, attempted);
-          this.#emitResult({ is_error: true });
           const detail = threadEventToErrorDetail(event);
+          // issue #300: this is the branch that actually fires for a
+          // model/request rejection surfaced as a structured SDK event
+          // (verified against a live `codex exec` 400 — the JSON error
+          // rides event.error.message here, and the LATER exec-exit
+          // rejection this same turn also triggers (see #runTurn's
+          // catch(err) below) has already lost it to a boilerplate
+          // "Reading prompt from stdin..." stderr tail by then).
+          // codexExecFailureRelay's parseCodexExecErrorMessage returns
+          // null for a bare (non-"Codex Exec exited with..."-prefixed)
+          // message like this one, so it falls through to treating the
+          // whole message as the stderr tail to run JSON extraction on —
+          // the same function works for both call sites unmodified.
+          this.#emitResult({
+            is_error: true,
+            ...(detail === null ? {} : codexExecFailureRelay(detail)),
+          });
           await persistFailure({
             sessionId: this.#sessionId,
             turnToken,
@@ -1476,7 +1492,16 @@ export class CodexHost implements EngineAdapter {
         // never wedges in thinking/tool_running.
         settled.value = true;
         this.#finishTurn(false, attempted);
-        this.#emitResult({ is_error: true });
+        // issue #300: recordedThreadError comes from a stream-level
+        // `error` event (distinct from turn.failed, see the branch
+        // above) and can carry the same JSON-shaped body -- same relay,
+        // same fallback-to-raw-message behaviour when it does not.
+        this.#emitResult({
+          is_error: true,
+          ...(recordedThreadError === null
+            ? {}
+            : codexExecFailureRelay(recordedThreadError)),
+        });
         this.#apply({ kind: "result", subtype: "error_during_execution" });
         await persistFailure({
           sessionId: this.#sessionId,
@@ -1609,15 +1634,23 @@ export class CodexHost implements EngineAdapter {
           }
           this.#corruptedRolloutSessionId = resumeSessionId;
         }
-        this.#emitResult(
-          rolloutCorrupted
-            ? {
-                is_error: true,
-                error_subtype: "error_rollout_corrupted",
-                error_detail: detail,
-              }
-            : { is_error: true },
-        );
+        if (rolloutCorrupted) {
+          this.#emitResult({
+            is_error: true,
+            error_subtype: "error_rollout_corrupted",
+            error_detail: detail,
+          });
+        } else {
+          // issue #300: relay a bounded, masked stderr tail (plus a
+          // wrapper-classified error_code/summary/hint when the tail's
+          // last line is a recognizable JSON error) instead of the bare
+          // is_error: true this branch used to emit — detail was already
+          // computed above but never reached the operator.
+          const relay = codexExecFailureRelay(
+            terminalError instanceof Error ? terminalError.message : detail,
+          );
+          this.#emitResult({ is_error: true, ...relay });
+        }
         this.#apply({ kind: "result", subtype: "error_during_execution" });
         await persistFailure({
           sessionId: this.#sessionId,
@@ -2023,12 +2056,24 @@ export class CodexHost implements EngineAdapter {
     // its own rollout-corruption classification (see #runTurn's catch(err)).
     error_subtype?: string;
     error_detail?: string;
+    // issue #300: error_code is the codex-sdk exec-failure JSON's own
+    // `error.code ?? error.type`, forwarded as-is (never wrapper-invented);
+    // error_summary/recovery_hint are bounded, wrapper-generated text from
+    // a closed table (adapter.ts's CODEX_ERROR_CODES) — never raw SDK
+    // output — so, like claude-code's #emitResult, no clipText on any of
+    // these three, unlike error_detail above.
+    error_code?: string;
+    error_summary?: string;
+    recovery_hint?: string;
   }): void {
     const clipped: {
       text?: string;
       is_error?: boolean;
       error_subtype?: string;
       error_detail?: string;
+      error_code?: string;
+      error_summary?: string;
+      recovery_hint?: string;
     } = { ...payload };
     if (clipped.text !== undefined) {
       const { text, truncated } = clipText(clipped.text);

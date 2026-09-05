@@ -88,7 +88,13 @@ export async function ensureCodexTurnTraceDir(directory: string): Promise<void> 
   await chmod(directory, 0o700);
 }
 
-function clipTail(value: string, maxBytes: number): string {
+/** Keeps the LAST `maxBytes` UTF-8 bytes of `value` (a cut may land
+ *  mid-codepoint; toString renders the partial byte as U+FFFD). Exported
+ *  for reuse by adapter.ts's operator-facing stderr-tail extraction
+ *  (issue #300) -- same byte-safe tail-take, different consumer; this
+ *  file's own trace output stays host-private regardless of who else
+ *  calls this helper. */
+export function clipTail(value: string, maxBytes: number): string {
   const bytes = Buffer.from(value, "utf8");
   return bytes.length <= maxBytes
     ? value

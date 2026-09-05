@@ -3009,6 +3009,165 @@ describe("CodexHost", () => {
       });
     });
 
+    // issue #300: before this, the result envelope's payload was bare
+    // `{is_error: true}` for an exec-exit-nonzero failure -- `detail` was
+    // already computed (see the onTurnEnd test just above) but never
+    // reached #emitResult, so the operator saw no detail at all.
+    it("exec-exit-nonzero relays a masked, classified stderr tail into the result payload (issue #300)", async () => {
+      const logs: Envelope[] = [];
+      const json =
+        '{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The \'gpt-6-astra\' model requires a newer version of Codex. Please upgrade to the latest app or CLI and try again."}}';
+      const { client } = makeClient([
+        new Error(`Codex Exec exited with code 1: ${json}`),
+      ]);
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        onLog: (e) => logs.push(e),
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        now: () => "T",
+      });
+
+      await runOneTurn(host, "inbound", client);
+
+      const results = logs.filter((e) => e.type === "result");
+      expect(results).toHaveLength(1);
+      expect(results[0]?.payload).toMatchObject({
+        is_error: true,
+        error_detail: json,
+        error_code: "invalid_request_error",
+        error_summary: "リクエストが不正と判定されました。",
+        recovery_hint:
+          "kaoiro が同梱する Codex CLI の更新が必要です。operator に連絡してください。",
+      });
+    });
+
+    it("negative control: exec-exit-nonzero with empty stderr keeps the current message shape", async () => {
+      const logs: Envelope[] = [];
+      const { client } = makeClient([
+        new Error("Codex Exec exited with code 1: "),
+      ]);
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        onLog: (e) => logs.push(e),
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        now: () => "T",
+      });
+
+      await runOneTurn(host, "inbound", client);
+
+      const results = logs.filter((e) => e.type === "result");
+      expect(results).toHaveLength(1);
+      expect(results[0]?.payload).toMatchObject({
+        is_error: true,
+        error_detail: "",
+      });
+      expect(results[0]?.payload).not.toHaveProperty("error_code");
+      expect(results[0]?.payload).not.toHaveProperty("error_summary");
+      expect(results[0]?.payload).not.toHaveProperty("recovery_hint");
+    });
+
+    // issue #300 (extended scope, discovered via the real-Codex
+    // reproduction step): a model/request rejection surfaces as a
+    // STRUCTURED turn.failed SDK event, not (only) an exec-exit-nonzero
+    // exception -- verified live against `codex exec` with an invalid
+    // model name (2026-09, ChatGPT-authenticated codex CLI v0.153.0):
+    // the JSON error rides `event.error.message` here, while the exec
+    // process's LATER non-zero exit (also caught by #runTurn) has by then
+    // lost the JSON to a "Reading prompt from stdin..." boilerplate
+    // stderr tail -- which is the EXACT text the original issue quoted.
+    // Fixing only the exec-exit-nonzero branch would therefore have
+    // missed the scenario issue #300 itself describes.
+    it("turn.failed relays a masked, classified stderr tail too (issue #300 extended scope)", async () => {
+      const logs: Envelope[] = [];
+      // Captured verbatim from turn.failed's event.error.message in the
+      // live `runStreamed` reproduction above.
+      const json =
+        '{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The \'this-model-does-not-exist-xyz\' model is not supported when using Codex with a ChatGPT account."}}';
+      const { client } = makeClient([
+        [
+          { type: "thread.started", thread_id: "turn-failed-relay" },
+          { type: "turn.failed", error: { message: json } },
+        ],
+      ]);
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        onLog: (e) => logs.push(e),
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        now: () => "T",
+      });
+
+      await runOneTurn(host, "inbound", client);
+
+      const results = logs.filter((e) => e.type === "result");
+      expect(results).toHaveLength(1);
+      expect(results[0]?.payload).toMatchObject({
+        is_error: true,
+        error_detail: json,
+        error_code: "invalid_request_error",
+        error_summary: "リクエストが不正と判定されました。",
+      });
+    });
+
+    it("negative control: turn.failed with a plain (non-JSON) message keeps the current shape", async () => {
+      const logs: Envelope[] = [];
+      const { client } = makeClient([
+        [
+          { type: "thread.started", thread_id: "turn-failed-plain" },
+          { type: "turn.failed", error: { message: "rate limited" } },
+        ],
+      ]);
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        onLog: (e) => logs.push(e),
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        now: () => "T",
+      });
+
+      await runOneTurn(host, "inbound", client);
+
+      const results = logs.filter((e) => e.type === "result");
+      expect(results).toHaveLength(1);
+      expect(results[0]?.payload).toMatchObject({
+        is_error: true,
+        error_detail: "rate limited",
+      });
+      expect(results[0]?.payload).not.toHaveProperty("error_code");
+    });
+
+    it("stream_ended_without_terminal relays the same masked, classified stderr tail (issue #300 extended scope)", async () => {
+      const logs: Envelope[] = [];
+      const json =
+        '{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The \'this-model-does-not-exist-xyz\' model is not supported when using Codex with a ChatGPT account."}}';
+      const { client } = makeClient([
+        [
+          { type: "thread.started", thread_id: "stream-ended-relay" },
+          { type: "error", message: json },
+        ],
+      ]);
+      const host = new CodexHost(CONFIG, {
+        onState: () => {},
+        onLog: (e) => logs.push(e),
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        now: () => "T",
+      });
+
+      await runOneTurn(host, "inbound", client);
+
+      const results = logs.filter((e) => e.type === "result");
+      expect(results).toHaveLength(1);
+      expect(results[0]?.payload).toMatchObject({
+        is_error: true,
+        error_detail: json,
+        error_code: "invalid_request_error",
+        error_summary: "リクエストが不正と判定されました。",
+      });
+    });
+
     it("host 起動時に agent の古い trace capture dir を20件までへ GC する", async () => {
       const traceDir = await mkdtemp(join(tmpdir(), "kaoiro-trace-gc-test-"));
       const captures = await Promise.all(

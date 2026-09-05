@@ -10,6 +10,7 @@ import type {
   LogEntry,
   TasklistSourceItem,
 } from "@kaoiro/agent-common";
+import { clipTail } from "./turn_diagnostics.js";
 
 /** Tool-ish items: they occupy the tool_running state between item.started
  *  and item.completed. agent_message / reasoning / todo_list are not tools. */
@@ -242,4 +243,294 @@ export function threadEventToSessionId(event: ThreadEvent): string | null {
  *  (@kaoiro/agent-common) keyword-sniffs it. */
 export function threadEventToErrorDetail(event: ThreadEvent): string | null {
   return event.type === "turn.failed" ? event.error.message : null;
+}
+
+// --- Exec-failure stderr relay (issue #300) -------------------------------
+//
+// When codex-sdk's CodexExec.run() child process exits non-zero, the SDK
+// throws `Error("Codex Exec exited with ${detail}: ${stderr}")` -- stderr is
+// already captured by the SDK, just embedded in the thrown message rather
+// than exposed as a separate field. Before this, the host computed `detail`
+// but never passed it to #emitResult in the ordinary (non-rollout-corrupted)
+// failure branch, so the operator saw a bare `is_error: true` with no detail
+// at all. This section extracts a bounded, masked stderr tail for
+// error_detail, and -- when the tail's last line is a single-line JSON
+// error object -- error_code/error_summary/recovery_hint (issue #287
+// fields) from a closed, wrapper-owned table.
+
+/** Bounded stderr tail relayed to the operator on an exec-exit-nonzero
+ *  failure. Independent of turn_diagnostics.ts's MAX_STDERR_BYTES=8192
+ *  (that one bounds a host-private trace file); this one rides the wire
+ *  inside error_detail, which itself gets clipText's 16384-byte clip
+ *  downstream, so a smaller bound here leaves headroom for the exit-detail
+ *  prefix kaoiro adds. */
+export const MAX_RELAYED_STDERR_TAIL_BYTES = 4096;
+
+/** Splits codex-sdk's own exec-failure Error message into the exit detail
+ *  and the raw stderr it captured. Anchored to the EXACT format
+ *  codex-sdk's CodexExec.run() throws -- verified directly against
+ *  @openai/codex-sdk 0.153.4's dist/index.js (`throw new Error(
+ *  \`Codex Exec exited with ${detail}: ${stderrBuffer.toString("utf8")}\`)`,
+ *  where `detail` is `code ${code}` or `signal ${signal}`) -- rather than
+ *  a generic non-greedy split, so JSON stderr content (which may itself
+ *  contain ": ") cannot be mis-split. `message` should be the thrown
+ *  Error's OWN `.message`, not `String(err)` (which prepends "Error: ").
+ *  A future SDK release that changes this wording degrades to null here,
+ *  not a crash -- the caller falls back to relaying the raw message
+ *  as-is (masked and tail-clipped), losing only the JSON/code extraction. */
+export function parseCodexExecErrorMessage(
+  message: string,
+): { exitDetail: string; stderrTail: string } | null {
+  const match = /^Codex Exec exited with (code \d+|signal \S+): ([\s\S]*)$/.exec(
+    message,
+  );
+  if (match === null) return null;
+  return { exitDetail: match[1]!, stderrTail: match[2]! };
+}
+
+/** Extracts a single-line JSON error object from a stderr tail. Scans
+ *  from the LAST line backwards (the real terminal error is more likely
+ *  to be the last thing printed than the first) and returns the first
+ *  line that parses as JSON with a `.error.message` string; `code`/`type`
+ *  are included only when present and string-typed. Deliberately does
+ *  not attempt multi-line/pretty-printed JSON -- when none is found, the
+ *  caller still has the raw stderrTail for error_detail, so degrading to
+ *  null loses only the structured error_code/error_summary/recovery_hint,
+ *  not the underlying text. */
+export function extractJsonErrorFromStderr(
+  stderrTail: string,
+): { message: string; code?: string; type?: string } | null {
+  const lines = stderrTail.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]!.trim();
+    if (line === "") continue;
+    // codex CLI prints its own JSON error lines with a log-level prefix
+    // (`ERROR: {...}`, confirmed 2026-09 against a live `codex exec` 400
+    // response) rather than as bare JSON, so parse from the line's first
+    // `{` onward instead of the whole trimmed line.
+    const jsonStart = line.indexOf("{");
+    if (jsonStart === -1) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line.slice(jsonStart));
+    } catch {
+      continue;
+    }
+    if (typeof parsed !== "object" || parsed === null) continue;
+    const error = (parsed as Record<string, unknown>).error;
+    if (typeof error !== "object" || error === null) continue;
+    const message = (error as Record<string, unknown>).message;
+    if (typeof message !== "string") continue;
+    const code = (error as Record<string, unknown>).code;
+    const type = (error as Record<string, unknown>).type;
+    return {
+      message,
+      ...(typeof code === "string" ? { code } : {}),
+      ...(typeof type === "string" ? { type } : {}),
+    };
+  }
+  return null;
+}
+
+/** Masks a matched secret-shaped value to security.md's convention (at
+ *  most the last 4 characters visible). A value of 4 or fewer characters
+ *  is masked in full -- revealing all of it is not masking. */
+function maskValue(value: string): string {
+  if (value.length <= 4) return "*".repeat(value.length);
+  return `${"*".repeat(value.length - 4)}${value.slice(-4)}`;
+}
+
+/** Redacts credential-shaped substrings from Codex CLI stderr before it
+ *  rides the wire as error_detail. No existing masking function covers
+ *  this: `clipText` (@kaoiro/agent-common's logpayload.ts) only
+ *  size-clips, it never redacts content. This is new, narrowly-scoped
+ *  coverage for the three patterns kaoiro's stderr relay can plausibly
+ *  carry (an OpenAI-style API key, an Authorization/Bearer header value,
+ *  a bare api_key=/: assignment) -- a pattern match, not a full secret
+ *  scanner, so it may occasionally mask non-secret text following these
+ *  keywords; over-masking is the safe failure mode for a redaction pass,
+ *  under-masking is not. Deliberately does NOT touch filesystem paths
+ *  (including home directories) -- those are not credentials. */
+export function maskCodexStderr(text: string): string {
+  let masked = text.replace(
+    /\b(sk-)([A-Za-z0-9_-]{16,})\b/g,
+    (_match, prefix: string, value: string) => `${prefix}${maskValue(value)}`,
+  );
+  // The compound alternative ("Authorization: Bearer <token>") must be
+  // tried before the two bare keywords, or a plain "Authorization|Bearer"
+  // alternation matches "Authorization" first and treats the word "Bearer"
+  // itself as the value to mask, leaving the actual token right after it
+  // untouched.
+  masked = masked.replace(
+    /\b(Authorization\s*[:=]?\s*Bearer|Authorization|Bearer)(\s*[:=]?\s*)(\S+)/gi,
+    (_match, keyword: string, sep: string, value: string) =>
+      `${keyword}${sep}${maskValue(value)}`,
+  );
+  // Matches both a bare assignment (`api_key=value`) and a JSON-quoted
+  // field (`"api_key": "value"` -- exactly the shape
+  // extractJsonErrorFromStderr's own target, a Codex stderr JSON error
+  // body, is most likely to carry). The quote closing the keyword and the
+  // quote opening the value are each optional and folded into `sep` so the
+  // reconstruction restores them untouched; the value itself stops before
+  // a closing quote/comma/brace so masking a JSON string cannot swallow
+  // surrounding syntax (review finding, issue #300: the previous pattern
+  // required the separator to follow the bare keyword directly, so a
+  // JSON-quoted key's closing quote broke the match and left the value
+  // fully unmasked).
+  masked = masked.replace(
+    /\b(api[_-]?key)(\s*["']?\s*[:=]\s*["']?)([^"',\s}]+)/gi,
+    (_match, keyword: string, sep: string, value: string) =>
+      `${keyword}${sep}${maskValue(value)}`,
+  );
+  return masked;
+}
+
+interface CodexErrorCodeInfo {
+  summary: string;
+  hint?: string;
+}
+
+/** error_code mirrors an upstream enum only by convention: unlike
+ *  claude-code's error_code (a closed TypeScript string-literal union at
+ *  the SDK's own type level), Codex's `error.code`/`error.type` are plain
+ *  fields inside unstructured, externally-controlled JSON text with no
+ *  schema bounding their length (review finding, issue #300). Head-clip
+ *  defensively so a malformed or reflected oversized value cannot ride
+ *  the envelope unbounded -- every known real code (see CODEX_ERROR_CODES
+ *  below) is a short snake_case word, well under this bound, so clipping
+ *  before the table lookup never changes behavior for a legitimate code. */
+export const MAX_ERROR_CODE_BYTES = 256;
+
+/** A straight byte cut (as clipTail uses for the tail-clip case) can land
+ *  mid-codepoint; toString("utf8") then substitutes a 3-byte U+FFFD for
+ *  the dangling partial sequence, which can push the decoded string's own
+ *  byte length back OVER MAX_ERROR_CODE_BYTES -- defeating the very bound
+ *  this function exists to enforce (review finding, issue #300 round 2).
+ *  Back off byte-by-byte from the cut point with a fatal decoder until the
+ *  prefix is valid UTF-8 on its own, so the result never gains a
+ *  cut-induced character and its byte length never exceeds the bound. */
+function clipErrorCode(value: string): string {
+  const bytes = Buffer.from(value, "utf8");
+  if (bytes.length <= MAX_ERROR_CODE_BYTES) return value;
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  for (let end = MAX_ERROR_CODE_BYTES; end > 0; end--) {
+    try {
+      return decoder.decode(bytes.subarray(0, end));
+    } catch {
+      continue;
+    }
+  }
+  return "";
+}
+
+/** Closed, wrapper-owned code -> {summary, hint} table for Codex's own
+ *  API/CLI JSON error envelope. Mirrors claude-code's
+ *  ASSISTANT_ERROR_SUMMARIES (wrapper/claude-code/src/adapter.ts) in
+ *  shape and in its degrade-gracefully contract: an unrecognized code
+ *  still gets error_code set (forwarded as-is from `error.code ??
+ *  error.type`, never fabricated) plus a fixed generic summary, so a
+ *  future upstream error class does not vanish silently. Japanese text,
+ *  matching the sibling table's precedent -- this is operator-facing UI
+ *  copy shown on the dashboard, not repository documentation. */
+const CODEX_ERROR_CODES: Readonly<Record<string, CodexErrorCodeInfo>> = {
+  invalid_request_error: {
+    summary: "リクエストが不正と判定されました。",
+  },
+  authentication_error: {
+    summary: "認証エラーが発生しました。",
+    hint: "Codex の認証情報を確認してください。",
+  },
+  rate_limit_error: {
+    summary: "レート制限に達しました。",
+    hint: "しばらく待ってから再送してください。",
+  },
+  server_error: {
+    summary: "API サーバでエラーが発生しました。",
+    hint: "しばらく待ってから再送してください。",
+  },
+};
+
+const GENERIC_CODEX_ERROR_SUMMARY = "Codex でエラーが発生しました。";
+
+/** Message-keyword sub-classification for a broad code: the code itself
+ *  never changes on a match -- only recovery_hint is narrowed when the
+ *  message identifies a specific, actionable cause the code alone does
+ *  not distinguish. Kept deliberately small; add an entry only once a
+ *  real failure has been observed carrying it (issue #300 決定 (b), the
+ *  gpt-6-astra/invalid_request_error case below is the one currently
+ *  on record). */
+const CODEX_ERROR_MESSAGE_HINTS: ReadonlyArray<{
+  pattern: RegExp;
+  hint: string;
+}> = [
+  {
+    pattern: /requires a newer version of codex/i,
+    hint:
+      "kaoiro が同梱する Codex CLI の更新が必要です。operator に連絡してください。",
+  },
+];
+
+/** Builds error_code/error_summary/recovery_hint from a JSON error
+ *  extracted from stderr: error_code is `error.code ?? error.type`,
+ *  forwarded as-is (never fabricated -- null when the JSON has neither),
+ *  head-clipped to MAX_ERROR_CODE_BYTES so it stays bounded like every
+ *  sibling field; error_summary/recovery_hint come from the closed table
+ *  above, falling back to a generic summary for a code the table does not
+ *  yet recognize (same degrade-gracefully contract as claude-code's
+ *  assistantErrorSummary). */
+export function codexErrorClassification(jsonError: {
+  message: string;
+  code?: string;
+  type?: string;
+}): { error_code: string; error_summary: string; recovery_hint?: string } | null {
+  const rawCode = jsonError.code ?? jsonError.type;
+  if (rawCode === undefined) return null;
+  const code = clipErrorCode(rawCode);
+  const info = CODEX_ERROR_CODES[code];
+  const keywordHint = CODEX_ERROR_MESSAGE_HINTS.find((entry) =>
+    entry.pattern.test(jsonError.message),
+  )?.hint;
+  const hint = keywordHint ?? info?.hint;
+  return {
+    error_code: code,
+    error_summary: info?.summary ?? GENERIC_CODEX_ERROR_SUMMARY,
+    ...(hint !== undefined ? { recovery_hint: hint } : {}),
+  };
+}
+
+/** Full relay payload for an exec-exit-nonzero failure (issue #300).
+ *  `rawMessage` should be the thrown Error's own `.message` (see
+ *  parseCodexExecErrorMessage's doc for why). JSON extraction reads the
+ *  ORIGINAL, unmasked stderr tail (masking a still-JSON-structured line
+ *  risks corrupting adjacent syntax, since the masking patterns' `\S+`
+ *  value capture does not stop at a JSON delimiter) -- safe because the
+ *  extracted `message` is only ever used to keyword-match
+ *  CODEX_ERROR_MESSAGE_HINTS above, never copied into what gets relayed.
+ *  Masking is applied only to the separate copy that becomes
+ *  error_detail, and BEFORE tail-clipping (not after), so a byte-cut
+ *  cannot land mid-secret and leave an unmasked fragment exposed. Falls
+ *  back to relaying `rawMessage` itself (masked and tail-clipped, no
+ *  code/summary/hint) when it does not match the SDK's known
+ *  exec-failure shape at all, so an unrecognized future SDK wording still
+ *  relays SOMETHING rather than silently reverting to the pre-#300 bare
+ *  `is_error: true`. */
+export function codexExecFailureRelay(rawMessage: string): {
+  error_detail: string;
+  error_code?: string;
+  error_summary?: string;
+  recovery_hint?: string;
+} {
+  const parsed = parseCodexExecErrorMessage(rawMessage);
+  const stderrTail = parsed?.stderrTail ?? rawMessage;
+  const jsonError = extractJsonErrorFromStderr(stderrTail);
+  const classification =
+    jsonError !== null ? codexErrorClassification(jsonError) : null;
+  const boundedTail = clipTail(
+    maskCodexStderr(stderrTail),
+    MAX_RELAYED_STDERR_TAIL_BYTES,
+  );
+  return {
+    error_detail: boundedTail,
+    ...(classification ?? {}),
+  };
 }
