@@ -29,6 +29,31 @@ const REGISTER_FIELD_CAPS = {
   modelDisplayName: 256,
 } as const;
 
+function expectRegisterFieldsWithinProtocolCaps(
+  register: ReturnType<typeof buildRegister>,
+): void {
+  for (const capability of register.capabilities ?? []) {
+    expect(Buffer.byteLength(capability, "utf8")).toBeLessThanOrEqual(
+      REGISTER_FIELD_CAPS.capability,
+    );
+  }
+
+  for (const engine of register.engines ?? []) {
+    expect(Buffer.byteLength(engine.id, "utf8")).toBeLessThanOrEqual(
+      REGISTER_FIELD_CAPS.engineId,
+    );
+
+    for (const model of engine.models) {
+      expect(Buffer.byteLength(model.value, "utf8")).toBeLessThanOrEqual(
+        REGISTER_FIELD_CAPS.modelValue,
+      );
+      expect(
+        Buffer.byteLength(model.display_name, "utf8"),
+      ).toBeLessThanOrEqual(REGISTER_FIELD_CAPS.modelDisplayName);
+    }
+  }
+}
+
 describe("parseRunnerConfig", () => {
   it("persona 関連を書かない設定は accept-all として通す", () => {
     expect(parseRunnerConfig(valid)).toEqual(valid);
@@ -90,26 +115,20 @@ describe("parseRunnerConfig", () => {
   it("buildRegister default composition stays within register field caps", () => {
     const register = buildRegister(parseRunnerConfig(valid));
 
-    for (const capability of register.capabilities ?? []) {
-      expect(Buffer.byteLength(capability, "utf8")).toBeLessThanOrEqual(
-        REGISTER_FIELD_CAPS.capability,
-      );
-    }
+    expectRegisterFieldsWithinProtocolCaps(register);
+  });
 
-    for (const engine of register.engines ?? []) {
-      expect(Buffer.byteLength(engine.id, "utf8")).toBeLessThanOrEqual(
-        REGISTER_FIELD_CAPS.engineId,
-      );
+  it("buildRegister API-key composition bounds the non-empty Codex catalog", () => {
+    const config = parseRunnerConfig({
+      ...valid,
+      codex: { auth_mode: "apikey" },
+    });
+    const register = buildRegister(config, "apikey");
+    const codex = register.engines?.find((engine) => engine.id === "codex");
 
-      for (const model of engine.models) {
-        expect(Buffer.byteLength(model.value, "utf8")).toBeLessThanOrEqual(
-          REGISTER_FIELD_CAPS.modelValue,
-        );
-        expect(
-          Buffer.byteLength(model.display_name, "utf8"),
-        ).toBeLessThanOrEqual(REGISTER_FIELD_CAPS.modelDisplayName);
-      }
-    }
+    expect(codex).toBeDefined();
+    expect(codex?.models).not.toHaveLength(0);
+    expectRegisterFieldsWithinProtocolCaps(register);
   });
 
   it.each([
