@@ -253,9 +253,12 @@ boolean, including `false`. Reject `null`, empty patches, and unknown fields
 remains `never` on Codex and is not an operation parameter.
 
 Server validation order is live operator/admin authorization, payload/size,
-agent identity/current connection, reset exclusion, capability, and raw baseline
-availability. Busy states are accepted. No new request is accepted against an
-offline or unsupported wrapper. Existing accepted requests survive reconnect.
+agent identity/current connection, reset exclusion, current metadata readiness,
+capability, and raw baseline availability. Before the current connection has
+reported its first capability metadata, return `permission_not_ready`. Once that
+metadata is present, a missing/false supports_permission_switch means
+`unsupported_permission_switch`, not a transient wait. Busy states are accepted.
+No new request is accepted against an offline or unsupported wrapper. Existing accepted requests survive reconnect.
 The error body is `{reason}` with `SetPermissionErrorReason`: `forbidden`,
 `invalid_payload`, `unknown_agent`, `agent_unavailable`,
 `unsupported_permission_switch`, `permission_not_ready`,
@@ -297,6 +300,7 @@ model/effort `ext.switch_error`:
 {
   revision: number,
   requested: PermissionConfiguration,
+  constraints: PermissionConstraints,
   status: "pending" | "applying" | "applied" | "failed" | "unknown",
   submitted?: PermissionSubmission,
   effective?: PermissionObservation,
@@ -309,6 +313,9 @@ model/effort `ext.switch_error`:
 `PermissionSubmission` is `{revision, requested, execution_id}`.
 `PermissionObservation` extends it with `{session_id, turn_id, permission,
 network_access}`; `permission` is the existing `PermissionAxesExt`.
+An applied state requires both submitted and effective, with matching revision,
+requested pair, and execution_id. The observation adds the engine identities;
+it does not replace the immutable submission.
 `execution_id` is a wrapper-generated correlation ID for one exec; `session_id`
 and `turn_id` are engine-observed identities. Requested/submitted values retain
 raw network configuration. Expected network access is normalized: full access
@@ -319,7 +326,10 @@ Never copy an observed full-access true into the raw toggle for a later
 workspace-write selection.
 
 Revision zero is reserved for the wrapper's initial raw launch baseline; it is
-not an operator command. Before the first execution, publish that baseline with
+not an operator command. Before accepting the first operator patch, the server
+must persist that baseline in PermissionSettings, bound to the agent and engine.
+It is a real prior next-execution selection even if no exec has run, but is not
+an effective observation. Before the first execution, publish that baseline with
 `status=pending`, no submitted/effective observation, and no permission audit
 transition. A supporting wrapper sends the control state on every state change.
 For engines without this capability, the legacy startup display is unchanged.
@@ -370,6 +380,26 @@ latest request to operator snapshots/live state so reloads and other clients
 see pending requests even before a wrapper report arrives. Viewers receive no
 permission control details under the existing ext removal rule.
 
+Fixed adapter constraints are required in every control state, including the
+initial revision-zero baseline: Codex sends `constraints:{approval:"never",
+enforcement:"os"}`. These fields survive omission of `ext.permission`; they
+state the configured contract, not an observation of an unstarted exec. Render
+the permanent approval host-fixed label from constraints and render sandbox and
+network as unknown until observed. If an observation contradicts a constraint,
+show the observed value and a contract-violation error rather than concealing it
+behind the fixed label.
+
+The dashboard must not infer Claude mode switching from absent permission data.
+Show the six-mode picker only with affirmative mode metadata (observed
+`enforcement:"mode"` or a valid legacy `permission_mode`), and never when the
+control constraints declare a different enforcement mechanism. The independent
+sandbox/network picker requires supports_permission_switch. Keep its network
+row with an unknown label while observation is unavailable; do not gate the row
+through Claude mode-switch availability. Updating these consumers is required
+before the supporting capability is enabled end to end. Older dashboard clients
+with the absence-as-mode fallback must be refreshed for this rollout; disabling
+their new picker alone does not correct their legacy fallback.
+
 #### Persistence, join synchronization, and resume
 
 `PermissionSettings` is separate from `SessionPointers.snapshot`. It retains raw
@@ -396,8 +426,13 @@ After **every** negotiated wrapper join, the server sends `permission_sync`:
 launch baseline, not from normalized `ext.effective`. Otherwise `next` is the
 saved next-execution selection. The retained `control` may describe a failed
 latest request, but `next` never replays that rejected pair; retain the prior
-selection only when rejection was definitively before application. Unknown
-requests remain next, and applied selections are reasserted on process restart.
+selection only when rejection was definitively before application. If the first
+operator request is rejected before application, `next` is the persisted
+`{revision:0, requested:<launch baseline>}`; non-null failed control therefore
+still has a non-null next. Do not allocate a new revision or publish the launch
+baseline as observed merely to restore it. Unknown requests remain next, and applied selections are reasserted on process restart.
+Reasserting a saved widening request is delayed execution of the authenticated
+operator selection, not permission to choose a wider policy autonomously.
 Both fields are null together or non-null together. For a mismatch after
 submission, retain the requested selection as next but stop dispatch until the
 operator reconciles it; do not substitute a previous policy automatically.
@@ -430,6 +465,26 @@ snapshots must not overwrite permission fields with pending, unknown, or stale
 values. Persisted snapshots remain last observed even while current permission
 is unknown. Intentional sandbox/network changes are excluded from resume drift;
 unintended host substitutions remain visible.
+
+**Drift comparison while observation is pending.** When permission_control is
+present but has no current effective observation, exclude only `sandbox` and
+`network_access` from resume_drift comparison. This is an observation-readiness
+filter, not an intentional-change filter: it also applies to a resumed agent
+that has never received set_permission and remains idle before its first turn.
+Do not insert these fields into the operator-switched set merely because they
+are unobserved. On a fresh current observation, compare both fields against the
+resume snapshot, then apply the ordinary intentional-change filter. Unexpected
+differences must produce drift. All other fields and engines without this
+control keep the existing rule that undefined versus a known value is drift.
+The same field-specific pause applies during each later unobserved exec; it must
+not suppress model/effort drift while waiting for permission observation.
+
+Implementation checks must cover resume without any operator request before
+its first exec (no permission drift), a first observation with an unexpected
+sandbox/network value (drift), and an unrelated model/effort difference during
+that wait (still drift). Dashboard checks must cover the initial unobserved
+Codex state: fixed approval/enforcement present, no Claude picker, and visible
+unknown sandbox/network values.
 
 #### Permission lifecycle audit
 

@@ -84,8 +84,11 @@ Separate the requirements into two layers.
 - Because resume_reserved / resume_fired remain in the
   timeline, it is possible to determine afterward when a reservation was lost
   because the wrapper disappeared.
-- For now, the codex engine contributes only disconnect-related events to the
-  timeline (pending in
-  [codex-lifecycle-observability](../open-questions/codex-lifecycle-observability.md)).
+- Codex contributes disconnect-related events and, when permission switching is
+  enabled, observed permission outcomes alongside server-recorded operator
+  requests. The [permission audit contract](../specs/protocol.md#permission-lifecycle-audit)
+  defines the typed details and preserves this timeline's best-effort durability.
+  Other engine lifecycle observations remain tracked in
+  [codex-lifecycle-observability](../open-questions/codex-lifecycle-observability.md).
 - This does not touch the mechanism that triggers automatic compaction
   (decision P2 for issue #158: operator approval required).

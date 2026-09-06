@@ -122,6 +122,11 @@ records threats and mitigations before full operation or external release
   server. Antigravity Stage A remains launch-fixed, and Stage B still requires
   the wrapper-config clamps in ADR-0057 F4c. Enforcement of a selected policy
   and an immutable ceiling are separate guarantees.
+  An accepted widening request survives a wrapper crash: the runner may restart
+  with a narrower launch configuration, then permission_sync supplies the saved
+  operator selection before the first exec. This is delayed application of an
+  authenticated operator request, not an autonomous choice to widen. The launch
+  configuration is not a rollback or revocation of that saved request.
 - MUST: Permission display and resume snapshots distinguish requested/submitted
   configuration from observed effective policy. Unknown execution outcomes do
   not establish rollback, even to a narrower value. A failure after policy

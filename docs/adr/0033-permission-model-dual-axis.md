@@ -154,7 +154,10 @@ are in [protocol](../specs/protocol.md#permission-changes-at-an-execution-bounda
 observed effective snapshot in `SessionPointers`. Resume uses the latter and
 synchronizes the former before the first execution. A failed or pending request
 must never masquerade as an effective resume snapshot. Intentional changes do
-not produce `resume_drift`; an unintended substitution still does.
+not produce `resume_drift`; an unintended substitution still does. Unobserved
+sandbox/network fields are temporarily excluded from drift comparison even
+without an operator request; compare them once current observation exists. This
+does not change undefined-versus-known drift for other fields or legacy engines.
 
 #### Network configuration and effective access
 
@@ -179,10 +182,28 @@ Snapshots do not recover a lost raw toggle. Without a `PermissionSettings`
 record, initialize the raw configuration from wrapper launch configuration and
 publish that baseline rather than reverse-mapping an effective value.
 
+The existing runner/server snapshot precedence remains: on a snapshot-applying
+resume, an explicit boolean in the snapshot, including `false`, takes priority
+over the engine default. A present snapshot with an absent/invalid privilege
+field falls back to the safe engine default. The runner's no-apply paths for
+fresh spawn without apply_resume_snapshot, crash restart, and rollback remain
+unchanged; permission_sync is a separate next-execution selection step, not an
+expansion of applyResumeSnapshot to those paths. See
+[ADR-0014's resume contract](0014-session-resume-and-restore.md).
+
+The normalization regression coverage is in
+[network_access.test.ts](../../wrapper/codex/test/network_access.test.ts)
+(the three-sandbox matrix) and
+[host.test.ts](../../wrapper/codex/test/host.test.ts)
+(normalization and legacy snapshot self-healing).
+
 ### F4 — Dashboard UI: engine-native operations + two-axis badge display
 
 - **Display** (AgentCard / AgentDetail): unify on two-axis badges sourced from
-  `ext.permission`, independent of engine.
+  `ext.permission`, independent of engine. During an unobserved execution,
+  `permission_control.constraints` retains fixed approval/enforcement metadata;
+  sandbox/network remain explicitly unknown. Permission absence never authorizes
+  the Claude mode picker; require affirmative mode metadata.
 - **Operations** (LaunchDialog / AgentDetail): show an engine-native selector.
   Claude = mode selector (six values); Codex = sandbox selector (three values) +
   network-access toggle when workspace-write. Mid-session sandbox/network controls
@@ -214,7 +235,8 @@ Implement it in [phase-15-wrapper-ux-parity](../plans/phase-15-wrapper-ux-parity
   mode label after selection, so the operator can understand current effective
   permissions without opening the candidate menu.
 - **Permanent “approval: never (host-fixed, upstream constraint)” badge on Codex**:
-  sandbox/network switching does not enable approval switching. Link the fixed
+  sandbox/network switching does not enable approval switching. Source the label
+  from control constraints while ext.permission is absent. Link the fixed
   approval label to [codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md).
 - **Add a Claude permission_mode selector to LaunchDialog**: currently only
   Codex shows a sandbox selector and Claude can select a mode only after launch in

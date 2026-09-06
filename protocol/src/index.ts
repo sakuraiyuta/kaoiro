@@ -336,8 +336,9 @@ export interface PermissionAxesExt {
    *  wrappers never emit it but the enum keeps wire compatibility with
    *  the Codex SDK vocabulary. */
   approval: "untrusted" | "on-request" | "on-failure" | "never";
-  /** How the sandbox axis is actually enforced (ADR-0057 F4/F4c). Every
-   *  engine fills this so the dashboard never branches on its absence:
+  /** Adapter enforcement mechanism (ADR-0057 F4/F4c). While the current
+   *  policy is unobserved, permission_control.constraints carries it without
+   *  inventing a sandbox observation. Absence does not authorize a selector:
    *  `"os"` for Codex (OS sandbox), `"mode"` for Claude (the sandbox value
    *  is a projection of permissionMode, ADR-0033 F2), `"advisory"` for
    *  Antigravity — its `--sandbox` flag was measured to have no effect, so
@@ -368,7 +369,15 @@ export interface PermissionObservation extends PermissionSubmission {
   session_id: string;
   turn_id: string;
   permission: PermissionAxesExt;
+  /** Normalized observation; requested.network_access remains the raw toggle. */
   network_access: boolean;
+}
+
+/** Fixed adapter constraints survive periods without an observed sandbox.
+ * These describe the configured contract, not a current execution observation. */
+export interface PermissionConstraints {
+  approval: PermissionAxesExt["approval"];
+  enforcement: NonNullable<PermissionAxesExt["enforcement"]>;
 }
 
 export type PermissionControlStatus =
@@ -381,6 +390,7 @@ export type PermissionControlStatus =
 /** The latest request may be newer than submitted/effective. Only effective
  * describes the current execution; last_effective is historical evidence. */
 export interface PermissionControlBase extends PermissionSelection {
+  constraints: PermissionConstraints;
   last_effective?: PermissionObservation;
 }
 
@@ -401,7 +411,7 @@ export type PermissionControlExt = PermissionControlBase & (
     }
   | {
       status: "applied";
-      submitted?: PermissionSubmission;
+      submitted: PermissionSubmission;
       effective: PermissionObservation;
       reason?: never;
       rolled_back_to?: never;

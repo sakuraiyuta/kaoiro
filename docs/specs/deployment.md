@@ -91,13 +91,15 @@ The **ten DETS paths** (locations of DETS files that retain state across
 restarts) are already configured by the bundled `docker-compose.yaml` through
 `environment:` and the named volume `kaoiro-state`; compose users need not put
 them in `.env`. When running a release directly on the host without compose,
-set all ten explicitly to writable persistent paths: `KAOIRO_SESSION_POINTERS_PATH` /
+set the following paths explicitly to writable persistent locations, including
+the conditional PermissionSettings entry when enabling set_permission: `KAOIRO_SESSION_POINTERS_PATH` /
 `KAOIRO_AGENT_DIRECTORY_PATH` / `KAOIRO_PERMISSION_MODES_PATH` /
 `KAOIRO_CLEAR_WATERMARKS_PATH` / `KAOIRO_SESSION_STARTS_PATH` /
 `KAOIRO_INGRESS_ORDER_PATH` / `KAOIRO_USERS_PATH` /
 `KAOIRO_TOKEN_DENYLIST_PATH` / `KAOIRO_DELIVERY_STATES_PATH` /
-`KAOIRO_SESSION_LIFECYCLE_EVENTS_PATH`. Unset paths fall
-under a container-equivalent of `/tmp` and disappear after `docker compose down`
+`KAOIRO_SESSION_LIFECYCLE_EVENTS_PATH` /
+`KAOIRO_PERMISSION_SETTINGS_PATH` (required when set_permission is enabled).
+Unset paths fall under a container-equivalent of `/tmp` and disappear after `docker compose down`
 (the offline-agent list is lost).
 
 For deployments enabling `set_permission`, the `PermissionSettings` store adds
