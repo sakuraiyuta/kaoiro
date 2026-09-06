@@ -654,6 +654,10 @@ export interface SessionCapabilitiesExt {
   /** Absent/false rejects set_permission. Independent of Claude's mode
    * selector; enabled only with the permission sync and observation contract. */
   supports_permission_switch?: boolean;
+  /** Command availability, not an observed mode. True from Claude's first
+   * state_change even without permission_mode; false overrides legacy metadata.
+   * See protocol.md for the absent-capability compatibility rule. */
+  supports_permission_mode_switch?: boolean;
   /** Whether the session accepts /new・/clear as first-class session-reset
    *  control (ADR-0036 F5, phase-17 17-2). Advertised true only when the
    *  wrapper/runner/server together provide the fresh-relaunch + completion

@@ -170,6 +170,7 @@ cannot represent.
 - `supports_model_switch: boolean` — whether mid-session `set_model` is accepted (phase 16, [ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) F4).
 - `supports_effort_switch: boolean` — whether mid-session `set_effort` is accepted. UI shows/hides model and effort selectors from each boolean, never from engine name (ADR-0034 F3).
 - `supports_permission_switch?: boolean` — accepts the engine-neutral `set_permission` control and implements its synchronization/observation contract below. Absent or false means unsupported. Codex advertises true only when the contract is implemented end to end; Claude and Antigravity Stage A do not. This is independent of Claude's six-mode selector.
+- `supports_permission_mode_switch?: boolean` — accepts the existing six-value `set_permission_mode` command. Claude advertises true from its first state_change, including an idle spawn/restore with no configured or observed permission_mode, and retains it after SDK metadata arrives. Codex and Antigravity Stage A do not advertise true. This describes command availability, not the effective mode or fixed permission constraints. The absent-capability compatibility rule below is the explicit exception to the general unstamped-capability rule.
 - `supports_session_reset: boolean` / `session_reset_modes?: ("new" | "clear")[]` — whether the operator can run `session_reset` and which modes are available. This is separate from exposing the agent's `request_session_reset` tool, currently Claude-only (ADR-0043).
 - `supports_context_usage: boolean` — whether this session provides an authoritative context-window snapshot in `ext.context` (phase 21, [ADR-0040](../adr/0040-context-usage-capability.md)). UI has three states:
   - **absent** — unstamped capability from an old wrapper during rolling upgrade; hide the context row rather than treating it as unsupported.
@@ -390,9 +391,21 @@ show the observed value and a contract-violation error rather than concealing it
 behind the fixed label.
 
 The dashboard must not infer Claude mode switching from absent permission data.
-Show the six-mode picker only with affirmative mode metadata (observed
-`enforcement:"mode"` or a valid legacy `permission_mode`), and never when the
-control constraints declare a different enforcement mechanism. The independent
+Show the six-mode picker when `supports_permission_mode_switch` is true, even
+before any mode metadata exists; show the current mode as unknown until reported.
+An explicit false hides the picker. Only when the capability is absent may a
+legacy wrapper qualify through affirmative mode metadata (`enforcement:"mode"`
+or a valid legacy `permission_mode`). In every case, contrary enforcement in
+either ext.permission or control constraints hides the picker. An absent
+capability and absent mode metadata never authorize it; do not substitute an
+engine-name allowlist or invent a default observed mode.
+
+The Claude adapter must publish the capability through initialStatusExt and
+retain it in subsequent status envelopes, independently of SDK initialization.
+This producer must ship with the dashboard gate, so launching or restoring
+without an explicit mode and without sending input still leaves a usable mode
+picker. The existing command's validation, authorization and SDK mode semantics
+remain unchanged. The independent
 sandbox/network picker requires supports_permission_switch. Keep its network
 row with an unknown label while observation is unavailable; do not gate the row
 through Claude mode-switch availability. Updating these consumers is required
@@ -471,10 +484,21 @@ present but has no current effective observation, exclude only `sandbox` and
 `network_access` from resume_drift comparison. This is an observation-readiness
 filter, not an intentional-change filter: it also applies to a resumed agent
 that has never received set_permission and remains idle before its first turn.
-Do not insert these fields into the operator-switched set merely because they
-are unobserved. On a fresh current observation, compare both fields against the
-resume snapshot, then apply the ordinary intentional-change filter. Unexpected
-differences must produce drift. All other fields and engines without this
+On a fresh current observation, compare both fields against the resume snapshot.
+For each field, exclude an intentional difference only when that observation is
+bound to this exec's submitted selection, the selection has a positive revision
+allocated for an accepted operator request, and the observed field matches the
+selection's sandbox-aware normalized value. Use the submitted selection for
+this execution, not a newer pending `next` selection. Revision zero is only a
+launch baseline and cannot establish operator intent. A mismatch remains
+eligible for drift and must also report a policy violation even if it happens
+to equal the resume snapshot.
+
+Recover this attribution from the authoritative selection delivered by
+permission_sync after relaunch; it must not depend on a process-local
+operator-switched set. Do not permanently exempt either permission field after
+a request: validate the execution binding and value match for each observation.
+All other fields and engines without this
 control keep the existing rule that undefined versus a known value is drift.
 The same field-specific pause applies during each later unobserved exec; it must
 not suppress model/effort drift while waiting for permission observation.
@@ -482,9 +506,19 @@ not suppress model/effort drift while waiting for permission observation.
 Implementation checks must cover resume without any operator request before
 its first exec (no permission drift), a first observation with an unexpected
 sandbox/network value (drift), and an unrelated model/effort difference during
-that wait (still drift). Dashboard checks must cover the initial unobserved
+that wait (still drift). Also cover an accepted pending selection followed by
+snapshot-applying relaunch and sync: its matching first observation produces no
+intentional permission drift, while an unexpected value still does. Include
+revision-zero observations and overlapping submitted A / pending B to ensure
+neither the launch baseline nor another execution's request masks drift.
+Dashboard checks must cover the initial unobserved
 Codex state: fixed approval/enforcement present, no Claude picker, and visible
 unknown sandbox/network values.
+Also cover Claude spawn and restore without an explicit/stored mode and without
+running a turn: the first status advertises mode switching, the picker is usable,
+and the current mode remains unknown. Verify the capability survives SDK metadata
+arrival, explicit false overrides legacy mode metadata, and capability absence
+alone exposes neither picker.
 
 #### Permission lifecycle audit
 

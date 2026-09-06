@@ -156,8 +156,14 @@ synchronizes the former before the first execution. A failed or pending request
 must never masquerade as an effective resume snapshot. Intentional changes do
 not produce `resume_drift`; an unintended substitution still does. Unobserved
 sandbox/network fields are temporarily excluded from drift comparison even
-without an operator request; compare them once current observation exists. This
-does not change undefined-versus-known drift for other fields or legacy engines.
+without an operator request; compare them once current observation exists.
+Exclude an intentional field difference only when the observation matches the
+normalized, positive-revision operator selection submitted for that execution.
+Recover the selection through permission_sync after relaunch; neither a
+process-local switched-field set, revision-zero baseline, nor a newer pending
+selection establishes that attribution. This does not change
+undefined-versus-known drift for other fields or legacy engines. The detailed
+comparison contract is in [protocol](../specs/protocol.md#persistence-join-synchronization-and-resume).
 
 #### Network configuration and effective access
 
@@ -203,7 +209,14 @@ The normalization regression coverage is in
   `ext.permission`, independent of engine. During an unobserved execution,
   `permission_control.constraints` retains fixed approval/enforcement metadata;
   sandbox/network remain explicitly unknown. Permission absence never authorizes
-  the Claude mode picker; require affirmative mode metadata.
+  the Claude mode picker. Use `supports_permission_mode_switch=true`, advertised
+  by Claude from the first state_change even without a configured/observed mode
+  and retained after SDK initialization. This capability declares command
+  availability; it does not manufacture an effective mode. Explicit false hides
+  the picker. For an absent capability only, affirmative legacy mode metadata
+  may qualify; contrary enforcement always hides it (see protocol's display
+  contract). Ship the Claude capability producer with the dashboard gate so
+  idle spawn/restore without a mode retains its setting control.
 - **Operations** (LaunchDialog / AgentDetail): show an engine-native selector.
   Claude = mode selector (six values); Codex = sandbox selector (three values) +
   network-access toggle when workspace-write. Mid-session sandbox/network controls

@@ -87,8 +87,8 @@ The bundled compose sets `KAOIRO_PERSONA_CACHE_DIR=/var/lib/kaoiro/persona-cache
 Keep the cache on writable persistent storage, separate from the persona-pack
 mount.
 
-The **ten DETS paths** (locations of DETS files that retain state across
-restarts) are already configured by the bundled `docker-compose.yaml` through
+The existing DETS paths (locations of files that retain state across
+restarts) are configured by the bundled `docker-compose.yaml` through
 `environment:` and the named volume `kaoiro-state`; compose users need not put
 them in `.env`. When running a release directly on the host without compose,
 set the following paths explicitly to writable persistent locations, including
@@ -114,7 +114,7 @@ this file; `session_pointers.dets` continues to hold observed effective snapshot
 Stage B) caps the per-agent event count the `session_lifecycle` DETS
 retains, oldest discarded first. Unset defaults to 10000.
 
-**These paths, plus the PermissionSettings path when enabled, are the canonical
+**These paths, including PermissionSettings when enabled, are the canonical
 persistence set.** The preflight in section 4
 checks that every path resolves under the named volume using this list. A DETS
 file not listed can **silently escape backup**—`KAOIRO_USERS_PATH` did exactly
