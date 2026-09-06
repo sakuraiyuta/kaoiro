@@ -97,7 +97,7 @@ the conditional PermissionSettings entry when enabling set_permission: `KAOIRO_S
 `KAOIRO_CLEAR_WATERMARKS_PATH` / `KAOIRO_SESSION_STARTS_PATH` /
 `KAOIRO_INGRESS_ORDER_PATH` / `KAOIRO_USERS_PATH` /
 `KAOIRO_TOKEN_DENYLIST_PATH` / `KAOIRO_DELIVERY_STATES_PATH` /
-`KAOIRO_SESSION_LIFECYCLE_EVENTS_PATH` /
+`KAOIRO_SESSION_LIFECYCLE_EVENTS_PATH` / `KAOIRO_QUAGMIRE_SETTINGS_PATH` /
 `KAOIRO_PERMISSION_SETTINGS_PATH` (required when set_permission is enabled).
 Unset paths fall under a container-equivalent of `/tmp` and disappear after `docker compose down`
 (the offline-agent list is lost).

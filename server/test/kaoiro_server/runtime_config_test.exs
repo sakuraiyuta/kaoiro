@@ -7,8 +7,9 @@ defmodule KaoiroServer.RuntimeConfigTest do
   # 上書き」に統一した session_pointers / agent_directory / permission_modes、
   # must-fix 1 (ふじ 2026-07-25) で横断対象に追加した token_denylist、
   # issue #247 の delivery_states、issue #197 の users、ADR-0055 phase-33
-  # Stage B の session_lifecycle_events を含む、deployment.md 1.2 の
-  # canonical 10 DETS store 全てを確認する (inter_agent_history は
+  # Stage B の session_lifecycle_events、issue #307 の quagmire_settings を
+  # 含む、deployment.md 1.2 の canonical 11 DETS store 全てを確認する
+  # (inter_agent_history は
   # ADR-0051 で撤廃)。ふじ Stage B round 2 non-blocking (2026-08-31):
   # users_path はこの横断対象から漏れていた — 「全」を名乗る comment と
   # 実体が長らくずれていたので、canonical 側 (10) に合わせて追加した。
@@ -22,6 +23,7 @@ defmodule KaoiroServer.RuntimeConfigTest do
     permission_modes_path: "kaoiro_test_permission_modes_",
     token_denylist_path: "kaoiro_test_token_denylist_",
     session_lifecycle_events_path: "kaoiro_test_session_lifecycle_events_",
+    quagmire_settings_path: "kaoiro_test_quagmire_settings_",
     users_path: "kaoiro_test_users_"
   ]
 
@@ -35,7 +37,7 @@ defmodule KaoiroServer.RuntimeConfigTest do
     end
   end
 
-  # ふじ #120 must-fix 1 追加検証 (2026-07-25): 全 10 path が互いに衝突しない
+  # ふじ #120 must-fix 1 追加検証 (2026-07-25): 全 path が互いに衝突しない
   # ことの smoke test。真の nonce 共有 (unique_integer への per-store 退行
   # 検出) は捕まえられない — 各 basename の prefix (kaoiro_test_<store>_) が
   # store ごとに一意なのでこの assert は退行しても pass する。suffix を
@@ -74,5 +76,23 @@ defmodule KaoiroServer.RuntimeConfigTest do
 
     assert dev_launcher =~
              "KAOIRO_SESSION_LIFECYCLE_EVENTS_PATH=\"${KAOIRO_SESSION_LIFECYCLE_EVENTS_PATH:-$data_dir/session_lifecycle_events.dets}\""
+  end
+
+  # issue #307: same B1 failure mode. runtime.exs reading the env var proves
+  # nothing about a deploy — an unlisted path falls through to the
+  # container's /tmp default and loses the operator's threshold on every
+  # recreation, and the backup set is built from this same list.
+  test "compose, dev launcher and the runbook wire the quagmire threshold path" do
+    repo_root = Path.expand("../../..", __DIR__)
+    compose = File.read!(Path.join(repo_root, "server/docker-compose.yaml"))
+    dev_launcher = File.read!(Path.join(repo_root, "scripts/dev.sh"))
+    deployment = File.read!(Path.join(repo_root, "docs/specs/deployment.md"))
+
+    assert compose =~ "KAOIRO_QUAGMIRE_SETTINGS_PATH: /var/lib/kaoiro/quagmire_settings.dets"
+
+    assert dev_launcher =~
+             "KAOIRO_QUAGMIRE_SETTINGS_PATH=\"${KAOIRO_QUAGMIRE_SETTINGS_PATH:-$data_dir/quagmire_settings.dets}\""
+
+    assert deployment =~ "`KAOIRO_QUAGMIRE_SETTINGS_PATH`"
   end
 end

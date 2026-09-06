@@ -216,6 +216,15 @@ if path = System.get_env("KAOIRO_SESSION_STARTS_PATH") do
   config :kaoiro_server, :session_starts_path, path
 end
 
+# DETS file for the operator-picked rally threshold (issue #307). Same
+# rationale as the paths above: unset falls back to a tmp path, and the
+# threshold an operator tuned mid-session would not survive a container
+# recreation. KAOIRO_QUAGMIRE_RALLY_TURNS remains the boot default for a
+# deployment that has never stored a pick.
+if path = System.get_env("KAOIRO_QUAGMIRE_SETTINGS_PATH") do
+  config :kaoiro_server, :quagmire_settings_path, path
+end
+
 if path = System.get_env("KAOIRO_SESSION_LIFECYCLE_EVENTS_PATH") do
   config :kaoiro_server, :session_lifecycle_events_path, path
 end

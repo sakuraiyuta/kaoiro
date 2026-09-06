@@ -125,7 +125,8 @@ defmodule Mix.Tasks.Kaoiro.Env do
       "#KAOIRO_DELIVERY_STATES_PATH=/var/lib/kaoiro/delivery_states.dets",
       "#KAOIRO_TOKEN_DENYLIST_PATH=/var/lib/kaoiro/token_denylist.dets",
       "#KAOIRO_USERS_PATH=/var/lib/kaoiro/users.dets",
-      "#KAOIRO_SESSION_LIFECYCLE_EVENTS_PATH=/var/lib/kaoiro/session_lifecycle_events.dets"
+      "#KAOIRO_SESSION_LIFECYCLE_EVENTS_PATH=/var/lib/kaoiro/session_lifecycle_events.dets",
+      "#KAOIRO_QUAGMIRE_SETTINGS_PATH=/var/lib/kaoiro/quagmire_settings.dets"
     ]
     |> List.flatten()
     |> Enum.join("\n")

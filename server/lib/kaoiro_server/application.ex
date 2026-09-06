@@ -106,6 +106,9 @@ defmodule KaoiroServer.Application do
       # timeout returns through the web boundary so authoritative reachability
       # selects terminal disconnected or neutral reconnected for its targets.
       {KaoiroServer.PlannedDisconnects, on_timeout: &KaoiroServerWeb.PeerConnectivity.timeout/3},
+      # Operator-picked rally threshold (issue #307). Starts before the
+      # detector and before the Endpoint, both of which read it.
+      KaoiroServer.QuagmireSettings,
       # Review-quagmire detection (issue #273). Reads ConversationStates and
       # DeliveryStates, so it starts after both. `:on_notice` is the one
       # place its data crosses into KaoiroServerWeb, same boundary reason as

@@ -100,6 +100,18 @@ config :kaoiro_server,
          "kaoiro_test_session_lifecycle_events_#{run_nonce}.dets"
        )
 
+# Per-run throwaway DETS file for the operator-picked rally threshold
+# (issue #307). Same isolation reason as the stores above: without it the
+# app-started singleton shares the default
+# $TMPDIR/kaoiro-dets/quagmire_settings.dets, so a threshold one test
+# stored would be the starting state of the next `mix test` invocation.
+config :kaoiro_server,
+       :quagmire_settings_path,
+       Path.join(
+         test_dets_dir,
+         "kaoiro_test_quagmire_settings_#{run_nonce}.dets"
+       )
+
 # Per-run throwaway DETS file for the IngressOrder allocator (ふじ
 # R5 must-fix, 2026-07-23) and its A4 advisory (2026-07-23, 3rd
 # review): without this, the app-started singleton wrote the shared
