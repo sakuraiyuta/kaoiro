@@ -560,9 +560,9 @@ compose build` used to hit when the auto-export was missing). The old
 container keeps running with its old image ID; failure here has zero impact
 on the live system.
 
-**Issue #220 absorption — persistence-path / env consistency.** Once the
-target image exposes `KaoiroServer.PersistencePaths.manifest/0` (issue #310,
-not yet landed), `update` queries it by image ID:
+**Issue #220 absorption — persistence-path / env consistency.** The target
+image exposes `KaoiroServer.PersistencePaths.manifest/0` (issue #310), and
+`update` queries it by image ID:
 
 ```sh
 docker run --rm --entrypoint /app/bin/kaoiro_server <image_id> eval \
@@ -582,6 +582,16 @@ missing one of the four keys, an empty `env`/`default_path`) is treated as
 actively wrong, not absent — `update` throws `DeployError` rather than
 skipping, the same way `docker compose config` returning garbage does
 elsewhere in this section.
+
+Two image-side conditions make that probe work at all, and the `server-image`
+CI job runs this exact command against the image it just built to keep both
+pinned. `config/runtime.exs` skips its required-variable raises when
+`RELEASE_COMMAND == "eval"` — the probe deliberately passes no env, so the
+production guard would otherwise abort it and every image would read as
+pre-#310, permanently. And the runtime image installs `libsctp1`: without it
+the VM prints an esock warning to STDOUT ahead of the JSON, which this
+section treats as actively wrong rather than absent, so every update would
+fail. Both apply to any custom image built from this Dockerfile.
 
 `update` then, for every reported persistence-path env var, compares
 **compose's resolved

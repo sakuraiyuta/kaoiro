@@ -227,3 +227,40 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build -f server/Dockerfile -t kaoiro-server:ci .
+      # The deploy CLI reads the persistence-path manifest out of the image
+      # with exactly this command, addressed by image id and passed NO env
+      # (docs/specs/deployment.md 4.3). Two accidents are pinned here, both
+      # measured 2026-09-07 and both invisible to `mix test`: runtime.exs
+      # raising under an env-less Config.Provider (the CLI then records every
+      # image as "issue #310 has not landed"), and anything the VM prints to
+      # stdout ahead of the JSON (a missing libsctp1 did) — which the CLI
+      # treats as actively wrong and fails the update on.
+      - name: deploy CLI persistence-path probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint /app/bin/kaoiro_server kaoiro-server:ci \
+            eval 'IO.puts(Jason.encode!(KaoiroServer.PersistencePaths.manifest()))' \
+            > manifest.json
+          node -e '
+            const entries = JSON.parse(require("fs").readFileSync("manifest.json", "utf8"));
+            if (!Array.isArray(entries) || entries.length === 0) {
+              throw new Error("manifest is not a non-empty JSON array");
+            }
+            const keys = ["default_file", "default_path", "env", "store"];
+            for (const entry of entries) {
+              const own = Object.keys(entry).sort();
+              if (own.length !== keys.length || own.some((k, i) => k !== keys[i])) {
+                throw new Error("entry keys are not exactly " + keys + ": " + JSON.stringify(entry));
+              }
+              for (const key of keys) {
+                if (typeof entry[key] !== "string" || entry[key] === "") {
+                  throw new Error(key + " is not a non-empty string: " + JSON.stringify(entry));
+                }
+              }
+              if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(entry.env)) {
+                throw new Error("env is not a shell identifier: " + entry.env);
+              }
+            }
+            console.log("persistence-path manifest OK (" + entries.length + " stores)");
+          '

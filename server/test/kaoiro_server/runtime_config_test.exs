@@ -1,31 +1,15 @@
 defmodule KaoiroServer.RuntimeConfigTest do
   use ExUnit.Case, async: true
 
+  alias KaoiroServer.PersistencePaths
+
   # issue #120 横断: 全 DETS path 系 config が (a) test.exs で per-run 名で
-  # 設定され、(b) runtime.exs の env 上書きで nil に潰されないこと。
-  # 元々検証されていた visibility 3 key に加え、issue #120 で「env 存在時のみ
-  # 上書き」に統一した session_pointers / agent_directory / permission_modes、
-  # must-fix 1 (ふじ 2026-07-25) で横断対象に追加した token_denylist、
-  # issue #247 の delivery_states、issue #197 の users、ADR-0055 phase-33
-  # Stage B の session_lifecycle_events、issue #307 の quagmire_settings を
-  # 含む、deployment.md 1.2 の canonical 11 DETS store 全てを確認する
-  # (inter_agent_history は
-  # ADR-0051 で撤廃)。ふじ Stage B round 2 non-blocking (2026-08-31):
-  # users_path はこの横断対象から漏れていた — 「全」を名乗る comment と
-  # 実体が長らくずれていたので、canonical 側 (10) に合わせて追加した。
-  @paths [
-    clear_watermarks_path: "kaoiro_test_clear_watermarks_",
-    session_starts_path: "kaoiro_test_session_starts_",
-    ingress_order_path: "kaoiro_test_ingress_order_",
-    delivery_states_path: "kaoiro_test_delivery_states_",
-    session_pointers_path: "kaoiro_test_session_pointers_",
-    agent_directory_path: "kaoiro_test_agent_directory_",
-    permission_modes_path: "kaoiro_test_permission_modes_",
-    token_denylist_path: "kaoiro_test_token_denylist_",
-    session_lifecycle_events_path: "kaoiro_test_session_lifecycle_events_",
-    quagmire_settings_path: "kaoiro_test_quagmire_settings_",
-    users_path: "kaoiro_test_users_"
-  ]
+  # 設定され、(b) runtime.exs の env 上書きで nil に潰されないこと。対象は
+  # KaoiroServer.PersistencePaths から派生する (issue #310)。手書きの一覧は
+  # 「全」を名乗りながら permission_settings_path を落としていた —
+  # 派生にすればその乖離自体が起こらない。
+  @paths for store <- PersistencePaths.stores(),
+             do: {store.config_key, "kaoiro_test_#{store.store}_"}
 
   test "test用のDETS pathはruntime configでnil上書きされない" do
     for {key, prefix} <- @paths do
@@ -50,49 +34,35 @@ defmodule KaoiroServer.RuntimeConfigTest do
     assert Enum.uniq(paths) == paths, "DETS test path が衝突: #{inspect(paths)}"
   end
 
-  test "compose と dev launcher は delivery ledger を永続 / project-local path へ配線する" do
+  # issue #217 の class: runtime.exs が env を読むこと自体は deploy の証拠に
+  # ならない。どれか 1 面に載り損ねた store は container の /tmp default へ
+  # 落ち、再作成のたびに失われる (backup 集合も同じ一覧から作られる)。
+  # PersistencePaths から派生させ、新しい store が 1 面だけに載る状態を
+  # 起こせなくする (issue #310)。以前は delivery_states /
+  # session_lifecycle_events / quagmire_settings の 3 store だけを手書きで
+  # 見ていた。
+  test "全 canonical store が compose / dev launcher / .env.example / runbook に配線されている" do
     repo_root = Path.expand("../../..", __DIR__)
     compose = File.read!(Path.join(repo_root, "server/docker-compose.yaml"))
     dev_launcher = File.read!(Path.join(repo_root, "scripts/dev.sh"))
-
-    assert compose =~ "KAOIRO_DELIVERY_STATES_PATH: /var/lib/kaoiro/delivery_states.dets"
-    assert compose =~ "- kaoiro-state:/var/lib/kaoiro"
-
-    assert dev_launcher =~
-             "KAOIRO_DELIVERY_STATES_PATH=\"${KAOIRO_DELIVERY_STATES_PATH:-$data_dir/delivery_states.dets}\""
-  end
-
-  # ふじ Stage B round 1 must-fix B1 (2026-08-31): runtime.exs read the env
-  # var but no canonical persistence surface (compose / dev launcher) set
-  # it, so a production deploy silently fell through to the container's
-  # /tmp default and lost the timeline on every recreation.
-  test "compose と dev launcher は session_lifecycle timeline を永続 / project-local path へ配線する" do
-    repo_root = Path.expand("../../..", __DIR__)
-    compose = File.read!(Path.join(repo_root, "server/docker-compose.yaml"))
-    dev_launcher = File.read!(Path.join(repo_root, "scripts/dev.sh"))
-
-    assert compose =~
-             "KAOIRO_SESSION_LIFECYCLE_EVENTS_PATH: /var/lib/kaoiro/session_lifecycle_events.dets"
-
-    assert dev_launcher =~
-             "KAOIRO_SESSION_LIFECYCLE_EVENTS_PATH=\"${KAOIRO_SESSION_LIFECYCLE_EVENTS_PATH:-$data_dir/session_lifecycle_events.dets}\""
-  end
-
-  # issue #307: same B1 failure mode. runtime.exs reading the env var proves
-  # nothing about a deploy — an unlisted path falls through to the
-  # container's /tmp default and loses the operator's threshold on every
-  # recreation, and the backup set is built from this same list.
-  test "compose, dev launcher and the runbook wire the quagmire threshold path" do
-    repo_root = Path.expand("../../..", __DIR__)
-    compose = File.read!(Path.join(repo_root, "server/docker-compose.yaml"))
-    dev_launcher = File.read!(Path.join(repo_root, "scripts/dev.sh"))
+    env_example = File.read!(Path.join(repo_root, "server/.env.example"))
     deployment = File.read!(Path.join(repo_root, "docs/specs/deployment.md"))
 
-    assert compose =~ "KAOIRO_QUAGMIRE_SETTINGS_PATH: /var/lib/kaoiro/quagmire_settings.dets"
+    for store <- PersistencePaths.stores() do
+      volume_path = PersistencePaths.volume_path(store)
 
-    assert dev_launcher =~
-             "KAOIRO_QUAGMIRE_SETTINGS_PATH=\"${KAOIRO_QUAGMIRE_SETTINGS_PATH:-$data_dir/quagmire_settings.dets}\""
+      assert compose =~ "#{store.env}: #{volume_path}",
+             "docker-compose.yaml does not declare #{store.env}"
 
-    assert deployment =~ "`KAOIRO_QUAGMIRE_SETTINGS_PATH`"
+      assert dev_launcher =~
+               "#{store.env}=\"${#{store.env}:-$data_dir/#{store.default_file}}\"",
+             "scripts/dev.sh does not export #{store.env}"
+
+      assert env_example =~ "#{store.env}=#{volume_path}",
+             "server/.env.example does not document #{store.env}"
+
+      assert deployment =~ "`#{store.env}`",
+             "docs/specs/deployment.md does not list #{store.env}"
+    end
   end
 end

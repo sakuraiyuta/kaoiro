@@ -1,6 +1,7 @@
 defmodule Mix.Tasks.Kaoiro.EnvTest do
   use ExUnit.Case, async: false
 
+  alias KaoiroServer.PersistencePaths
   alias Mix.Tasks.Kaoiro.Env
 
   @answers %{
@@ -43,7 +44,9 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
   #
   # Reads the task's SOURCE, not `render/1`'s output, on purpose: the OAuth
   # branch emits KAOIRO_OAUTH_ALLOWLIST_PATH only for some answers, and a
-  # variable that a branch can emit still has to be documented.
+  # variable that a branch can emit still has to be documented. The DETS
+  # lines moved out of the source into KaoiroServer.PersistencePaths (issue
+  # #310), so they come from that list — the same one the task renders from.
   test "every path variable the wizard can emit is documented in .env.example" do
     repo_root = Path.expand("../../../..", __DIR__)
     task_source = File.read!(Path.join(repo_root, "server/lib/mix/tasks/kaoiro.env.ex"))
@@ -56,7 +59,11 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
       |> MapSet.new()
     end
 
-    emitted = path_vars.(task_source)
+    emitted =
+      task_source
+      |> path_vars.()
+      |> MapSet.union(MapSet.new(PersistencePaths.stores(), & &1.env))
+
     documented = path_vars.(example)
 
     # Guards the regex itself: an empty emitted set would make the subset
