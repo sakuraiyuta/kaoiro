@@ -17,6 +17,7 @@ import {
   pruneOldTransactions,
   resolveHealthUrl,
   runBuild,
+  runRollback,
   runStart,
   runStatus,
   runUpdate,
@@ -185,8 +186,15 @@ case "$1" in
         # path the -v ...:/backup mapping names, so the CLI's own
         # host-side \`tar tvzf\` verification has something real to
         # parse — a fake stdout string would not survive that.
+        #
+        # outfile is read from the actual \`/backup/<name>\` argument
+        # (issue #306 (d)-B: rollback's own forensic/restore-verify
+        # archives use different names than update's \`archive.tar.gz\`
+        # within the SAME transaction dir, so a hardcoded name here would
+        # make one call silently overwrite another's output).
         prev=""
         hostdir=""
+        outfile="archive.tar.gz"
         for arg in "$@"; do
           case "$prev" in
             -v)
@@ -195,18 +203,21 @@ case "$1" in
               esac
               ;;
           esac
+          case "$arg" in
+            /backup/*) outfile=\${arg#/backup/} ;;
+          esac
           prev=$arg
         done
         if [ -n "$hostdir" ]; then
           case "$FAKE_DOCKER_SCENARIO" in
-            running-broken-archive) printf 'not a real gzip stream' > "$hostdir/archive.tar.gz" ;;
+            running-broken-archive) printf 'not a real gzip stream' > "$hostdir/$outfile" ;;
             # SF-5's post-archive empty check pin: the PRE-archive guard
             # (below) reports non-empty, but the archive that actually
             # gets written is empty — the one disagreement a stale/wrong
             # pre-scan (not merely a hypothetical) would produce.
             running-archive-drifts-empty)
               mkdir -p "$hostdir/.fakesrc-empty"
-              tar --owner=0 --group=0 -czf "$hostdir/archive.tar.gz" -C "$hostdir/.fakesrc-empty" .
+              tar --owner=0 --group=0 -czf "$hostdir/$outfile" -C "$hostdir/.fakesrc-empty" .
               ;;
             # クロエ round 2 review SF-8 pin: a real archive containing a
             # symlink and a hardlink alongside a plain file, so
@@ -225,12 +236,12 @@ case "$1" in
               chmod 664 "$hostdir/.fakesrc-torture/real.txt"
               ln -s real.txt "$hostdir/.fakesrc-torture/sym.txt"
               ln "$hostdir/.fakesrc-torture/real.txt" "$hostdir/.fakesrc-torture/hard.txt"
-              tar --owner=1000 --group=1000 -czf "$hostdir/archive.tar.gz" -C "$hostdir/.fakesrc-torture" .
+              tar --owner=1000 --group=1000 -czf "$hostdir/$outfile" -C "$hostdir/.fakesrc-torture" .
               ;;
             *)
               mkdir -p "$hostdir/.fakesrc"
               printf 'x' > "$hostdir/.fakesrc/users.dets"
-              tar --owner=1000 --group=1000 --mode=600 -czf "$hostdir/archive.tar.gz" -C "$hostdir/.fakesrc" .
+              tar --owner=1000 --group=1000 --mode=600 -czf "$hostdir/$outfile" -C "$hostdir/.fakesrc" .
               ;;
           esac
         fi
@@ -1567,9 +1578,28 @@ test("runUpdate's unfinished-transaction guidance for a transaction parked at ST
 });
 
 test("UNRESUMABLE_PHASES is exactly every phase reachable from STOPPING", () => {
+  // Grew automatically to include rollback's own phases once B-4 added
+  // a ROLLED_BACK edge from STOPPING onward and a ROLLBACK_STOPPED edge
+  // from STARTING/UP/HEALTHY/DONE — a transaction parked mid-rollback is
+  // exactly as unresumable BY UPDATE as one parked at STOPPED always
+  // was, and the derivation (not a hand-written list) picked that up
+  // for free.
   assert.deepEqual(
     [...UNRESUMABLE_PHASES].sort(),
-    ["archived", "done", "healthy", "mount_resolved", "starting", "stopped", "stopping", "up"].sort(),
+    [
+      "archived",
+      "done",
+      "healthy",
+      "mount_resolved",
+      "rollback_forensic_archived",
+      "rollback_restored",
+      "rollback_stopped",
+      "rolled_back",
+      "starting",
+      "stopped",
+      "stopping",
+      "up",
+    ].sort(),
   );
 });
 
@@ -1732,4 +1762,263 @@ test("status's scopeNote names exactly the branches it can and cannot answer", (
   assert.ok(result.scopeNote.includes("(0)/(1)/(3)/(4)/(5)"));
   assert.ok(result.scopeNote.includes("not (2)"));
   assert.ok(result.scopeNote.includes("5-b"));
+});
+
+// --- rollback (director ruling 2026-09-06, B-1..B-5) ----------------------
+
+function journalEntry(phase, observation) {
+  return { phase, at: "2026-09-06T23:00:00.000Z", observation };
+}
+
+test("runRollback requires --transaction", () => {
+  assert.throws(() => runRollback({ repo: workDir }, configWithOverride()), DeployError);
+});
+
+test("runRollback refuses an unknown transaction id", () => {
+  assert.throws(
+    () => runRollback({ repo: workDir, transaction: "20200101T000000Z" }, configWithOverride()),
+    DeployError,
+  );
+});
+
+test("runRollback refuses when the directory's journal claims a different transaction_id", () => {
+  const backupRoot = join(root, "kaoiro-deploy");
+  const dirId = "20200101T000000Z";
+  writeSyntheticTransaction(backupRoot, dirId, { phase: "old_image_saved" });
+  // writeSyntheticTransaction's journal.transaction_id matches its own
+  // dir name; overwrite it to disagree.
+  const journalPath = join(backupRoot, dirId, "journal.json");
+  const journal = JSON.parse(readFileSync(journalPath, "utf8"));
+  journal.transaction_id = "20200102T000000Z";
+  writeFileSync(journalPath, JSON.stringify(journal));
+  assert.throws(
+    () => runRollback({ repo: workDir, transaction: dirId }, configWithOverride()),
+    DeployError,
+  );
+});
+
+test("runRollback refuses a transaction still at PREFLIGHT (not yet eligible)", () => {
+  const backupRoot = join(root, "kaoiro-deploy");
+  const id = "20200101T000000Z";
+  const dir = join(backupRoot, id);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "journal.json"),
+    JSON.stringify({
+      schema_version: 1,
+      transaction_id: id,
+      phase: "preflight",
+      history: [journalEntry("preflight", { container: "kaoiro-c1" })],
+    }),
+  );
+  // --confirm-restore: true — see the already-rolled-back test's own
+  // comment for why this matters for a clean pin.
+  let caught;
+  try {
+    runRollback({ repo: workDir, transaction: id, confirmRestore: true }, configWithOverride());
+  } catch (err) {
+    caught = err;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.ok(caught.message.includes("not eligible for rollback"));
+});
+
+test("runRollback refuses an already-rolled-back transaction", () => {
+  const backupRoot = join(root, "kaoiro-deploy");
+  const id = "20200101T000000Z";
+  const dir = join(backupRoot, id);
+  mkdirSync(dir, { recursive: true });
+  const oldSha = "c".repeat(40);
+  const history = [
+    journalEntry("preflight", { container: "kaoiro-c1" }),
+    journalEntry("old_image_saved", {
+      old_image_id: OLD_IMAGE_ID,
+      old_sha: oldSha,
+      compose_artifact: { path: "/x/docker-compose.yaml", sha256: "a".repeat(64) },
+      rollback_tag: `kaoiro-server:rollback-${oldSha}`,
+    }),
+    journalEntry("rolled_back", {}),
+  ];
+  writeFileSync(
+    join(dir, "journal.json"),
+    JSON.stringify({ schema_version: 1, transaction_id: id, phase: "rolled_back", history }),
+  );
+  // --confirm-restore: true so this actually exercises the eligibility
+  // check, not merely the (also-present, but different) confirm gate —
+  // without it, both a correct rejection AND a bypassed-eligibility bug
+  // that reaches the confirm gate first would equally satisfy a bare
+  // "throws DeployError" assertion.
+  let caught;
+  try {
+    runRollback({ repo: workDir, transaction: id, confirmRestore: true }, configWithOverride());
+  } catch (err) {
+    caught = err;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.ok(caught.message.includes("not eligible for rollback"));
+});
+
+test("runRollback --dry-run previews the non-destructive plan without mutating anything", () => {
+  let transactionId;
+  withScenario("running", () => {
+    try {
+      runUpdate({ repo: workDir, target: headSha }, configWithOverride());
+    } catch (err) {
+      assert.ok(err instanceof DeployError);
+    }
+  });
+  const backupRoot = join(root, "kaoiro-deploy");
+  [transactionId] = readdirSyncNonHidden(backupRoot);
+
+  const logPath = join(root, "docker-calls.log");
+  process.env.KAOIRO_TEST_CALL_LOG = logPath;
+  let result;
+  try {
+    result = withOverrideEnv(() =>
+      runRollback({ repo: workDir, transaction: transactionId, dryRun: true }, configWithOverride()),
+    );
+  } finally {
+    delete process.env.KAOIRO_TEST_CALL_LOG;
+  }
+  assert.equal(result.dryRun, true);
+  assert.equal(result.destructive, false);
+  assert.equal(result.phase, "env_consistency_checked");
+  assert.deepEqual(readCallLog(logPath), [], "dry-run must not call docker at all");
+  // Unchanged — dry-run never touches the journal.
+  const journal = readJournal(join(backupRoot, transactionId));
+  assert.equal(journal.phase, "env_consistency_checked");
+});
+
+test("runRollback refuses without --confirm-restore, naming the path it would take", () => {
+  let transactionId;
+  withScenario("running", () => {
+    try {
+      runUpdate({ repo: workDir, target: headSha }, configWithOverride());
+    } catch (err) {
+      assert.ok(err instanceof DeployError);
+    }
+  });
+  const backupRoot = join(root, "kaoiro-deploy");
+  [transactionId] = readdirSyncNonHidden(backupRoot);
+
+  let caught;
+  try {
+    withOverrideEnv(() => runRollback({ repo: workDir, transaction: transactionId }, configWithOverride()));
+  } catch (err) {
+    caught = err;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.ok(caught.message.includes("--confirm-restore"));
+  assert.ok(caught.message.includes("non-destructive"));
+});
+
+test("runRollback (non-destructive) retags latest and starts the old container, reaching rolled_back", () => {
+  let transactionId;
+  withScenario("running", () => {
+    try {
+      runUpdate({ repo: workDir, target: headSha }, configWithOverride());
+    } catch (err) {
+      assert.ok(err instanceof DeployError);
+    }
+  });
+  const backupRoot = join(root, "kaoiro-deploy");
+  [transactionId] = readdirSyncNonHidden(backupRoot);
+
+  const logPath = join(root, "docker-calls.log");
+  process.env.KAOIRO_TEST_CALL_LOG = logPath;
+  let result;
+  try {
+    result = withOverrideEnv(() =>
+      runRollback({ repo: workDir, transaction: transactionId, confirmRestore: true }, configWithOverride()),
+    );
+  } finally {
+    delete process.env.KAOIRO_TEST_CALL_LOG;
+  }
+  assert.equal(result.destructive, false);
+  assert.equal(result.phase, "rolled_back");
+  assert.equal(result.restoredImageId, OLD_IMAGE_ID);
+  const log = readCallLog(logPath);
+  assert.ok(log.includes(`tag ${OLD_IMAGE_ID} kaoiro-server:latest`));
+  assert.ok(log.includes(`start ${result.container}`));
+  assert.ok(!log.some((l) => l.startsWith("compose up")), "non-destructive rollback must never call compose up");
+  const journal = readJournal(join(backupRoot, transactionId));
+  assert.equal(journal.phase, "rolled_back");
+});
+
+test("runRollback (destructive) runs the full stop/forensic/restore/retag/up/health chain, reaching rolled_back", () => {
+  let transactionId;
+  const backupRoot = join(root, "kaoiro-deploy");
+  withScenario("running-clean-stop", () => {
+    const update = runUpdate(
+      { repo: workDir, target: headSha, maintenanceApproved: true },
+      configWithCleanStopMeasured(),
+    );
+    assert.equal(update.phase, "done");
+    transactionId = update.transactionId;
+  });
+
+  const logPath = join(root, "docker-calls.log");
+  process.env.KAOIRO_TEST_CALL_LOG = logPath;
+  let result;
+  try {
+    result = withScenario("running-clean-stop", () =>
+      runRollback(
+        { repo: workDir, transaction: transactionId, confirmRestore: true },
+        configWithCleanStopMeasured(),
+      ),
+    );
+  } finally {
+    delete process.env.KAOIRO_TEST_CALL_LOG;
+  }
+  assert.equal(result.destructive, true);
+  assert.equal(result.phase, "rolled_back");
+  assert.equal(result.restoredImageId, OLD_IMAGE_ID);
+  assert.ok(result.health, "expected a health poll result for the destructive path");
+
+  const log = readCallLog(logPath);
+  assert.ok(log.some((l) => l.startsWith("compose stop")));
+  assert.ok(log.includes(`tag ${OLD_IMAGE_ID} kaoiro-server:latest`));
+  assert.ok(log.some((l) => l.startsWith("compose up") && l.includes("--force-recreate")));
+
+  const journal = readJournal(join(backupRoot, transactionId));
+  assert.equal(journal.phase, "rolled_back");
+  for (const phase of ["rollback_stopped", "rollback_forensic_archived", "rollback_restored", "rolled_back"]) {
+    assert.ok(journal.history.some((e) => e.phase === phase), `expected a ${phase} checkpoint`);
+  }
+  assert.ok(existsSync(join(backupRoot, transactionId, "rollback-forensic.tar.gz")));
+});
+
+test("runRollback (destructive) refuses when the pre-deploy archive no longer matches its recorded sha256", () => {
+  let transactionId;
+  const backupRoot = join(root, "kaoiro-deploy");
+  withScenario("running-clean-stop", () => {
+    const update = runUpdate(
+      { repo: workDir, target: headSha, maintenanceApproved: true },
+      configWithCleanStopMeasured(),
+    );
+    transactionId = update.transactionId;
+  });
+
+  const dir = join(backupRoot, transactionId);
+  // Tamper with the pre-deploy archive AFTER it was recorded — the exact
+  // "changed archive" scenario the mutation pin below exists to catch.
+  writeFileSync(join(dir, "archive.tar.gz"), Buffer.concat([readFileSync(join(dir, "archive.tar.gz")), Buffer.from("tampered")]));
+
+  let caught;
+  try {
+    withScenario("running-clean-stop", () =>
+      runRollback(
+        { repo: workDir, transaction: transactionId, confirmRestore: true },
+        configWithCleanStopMeasured(),
+      ),
+    );
+  } catch (err) {
+    caught = err;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.ok(caught.message.includes("does not match its recorded sha256"));
+  // Refused BEFORE the destructive wipe — journal must not have advanced
+  // past the forensic checkpoint.
+  const journal = readJournal(dir);
+  assert.equal(journal.phase, "rollback_forensic_archived");
 });

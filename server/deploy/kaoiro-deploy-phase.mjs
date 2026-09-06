@@ -46,6 +46,20 @@ export const PHASE = Object.freeze({
   // its own comment) checks for this exact value to let a completed
   // transaction stop blocking a new `update`.
   DONE: "done",
+  // `rollback`'s own destructive-path checkpoints (director ruling
+  // 2026-09-06, B-5) — only reachable from STARTING/UP/HEALTHY/DONE
+  // (TRANSITIONS below), where the volume may already hold data written
+  // by the NEW code and a restore is destructive. The non-destructive
+  // path (OLD_IMAGE_SAVED..ARCHIVED, where the old container was never
+  // recreated) jumps straight to ROLLED_BACK — retag + `docker start`
+  // are each already a single atomic-ish call, with nothing between them
+  // worth a separate checkpoint.
+  ROLLBACK_STOPPED: "rollback_stopped",
+  ROLLBACK_FORENSIC_ARCHIVED: "rollback_forensic_archived",
+  ROLLBACK_RESTORED: "rollback_restored",
+  // Literally "rolled_back" — kaoiro-deploy-transaction.mjs's
+  // TERMINAL_PHASES already anticipated this exact value.
+  ROLLED_BACK: "rolled_back",
 });
 
 /** Each key's value is the set of phases that may follow it directly.
@@ -58,18 +72,36 @@ export const PHASE = Object.freeze({
 // forgotten from.
 export const TRANSITIONS = {
   [PHASE.PREFLIGHT]: [PHASE.OLD_IMAGE_SAVED],
-  [PHASE.OLD_IMAGE_SAVED]: [PHASE.BUILD_PREPARED],
-  [PHASE.BUILD_PREPARED]: [PHASE.ENV_CONSISTENCY_CHECKED],
-  [PHASE.ENV_CONSISTENCY_CHECKED]: [PHASE.MAINTENANCE_GATE_PASSED],
-  [PHASE.MAINTENANCE_GATE_PASSED]: [PHASE.STOPPING],
-  [PHASE.STOPPING]: [PHASE.STOPPED],
-  [PHASE.STOPPED]: [PHASE.MOUNT_RESOLVED],
-  [PHASE.MOUNT_RESOLVED]: [PHASE.ARCHIVED],
-  [PHASE.ARCHIVED]: [PHASE.STARTING],
-  [PHASE.STARTING]: [PHASE.UP],
-  [PHASE.UP]: [PHASE.HEALTHY],
-  [PHASE.HEALTHY]: [PHASE.DONE],
-  [PHASE.DONE]: [],
+  // director ruling 2026-09-06, B-4: rollback accepts any transaction at
+  // OLD_IMAGE_SAVED or later (B-1) — every phase from here through
+  // ARCHIVED can ALSO go straight to ROLLED_BACK (the non-destructive
+  // path: the old container was never recreated, so there is nothing to
+  // restore, only latest to retag back and the old container to
+  // (re)start).
+  [PHASE.OLD_IMAGE_SAVED]: [PHASE.BUILD_PREPARED, PHASE.ROLLED_BACK],
+  [PHASE.BUILD_PREPARED]: [PHASE.ENV_CONSISTENCY_CHECKED, PHASE.ROLLED_BACK],
+  [PHASE.ENV_CONSISTENCY_CHECKED]: [PHASE.MAINTENANCE_GATE_PASSED, PHASE.ROLLED_BACK],
+  [PHASE.MAINTENANCE_GATE_PASSED]: [PHASE.STOPPING, PHASE.ROLLED_BACK],
+  [PHASE.STOPPING]: [PHASE.STOPPED, PHASE.ROLLED_BACK],
+  [PHASE.STOPPED]: [PHASE.MOUNT_RESOLVED, PHASE.ROLLED_BACK],
+  [PHASE.MOUNT_RESOLVED]: [PHASE.ARCHIVED, PHASE.ROLLED_BACK],
+  [PHASE.ARCHIVED]: [PHASE.STARTING, PHASE.ROLLED_BACK],
+  // STARTING onward: the new image may already have been started (or
+  // that is unknown — the same "provably never started" vs. "assume
+  // opened" ambiguity STARTING's own comment below describes), so
+  // rollback here is the DESTRUCTIVE path — ROLLBACK_STOPPED begins its
+  // own linear chain rather than jumping straight to ROLLED_BACK.
+  [PHASE.STARTING]: [PHASE.UP, PHASE.ROLLBACK_STOPPED],
+  [PHASE.UP]: [PHASE.HEALTHY, PHASE.ROLLBACK_STOPPED],
+  [PHASE.HEALTHY]: [PHASE.DONE, PHASE.ROLLBACK_STOPPED],
+  // A fully DONE transaction can still be rolled back later (an operator
+  // decision made after the fact, not a failure of this transaction
+  // itself) — director ruling 2026-09-06, B-4.
+  [PHASE.DONE]: [PHASE.ROLLBACK_STOPPED],
+  [PHASE.ROLLBACK_STOPPED]: [PHASE.ROLLBACK_FORENSIC_ARCHIVED],
+  [PHASE.ROLLBACK_FORENSIC_ARCHIVED]: [PHASE.ROLLBACK_RESTORED],
+  [PHASE.ROLLBACK_RESTORED]: [PHASE.ROLLED_BACK],
+  [PHASE.ROLLED_BACK]: [],
 };
 
 /** Per-phase observation shape (S1 item i) — what advancePhase() must
@@ -151,6 +183,20 @@ const OBSERVATION_SCHEMAS = {
     SHA_RE.test(obs.health_revision) &&
     typeof obs.health_dirty === "boolean",
   [PHASE.DONE]: () => true,
+  // director ruling 2026-09-06, B-5: the destructive rollback path's own
+  // checkpoints, mirroring the granularity `update` already applies to
+  // its own risky steps.
+  //
+  // `stopped_container` is nullable: a transaction parked at STARTING
+  // may never have actually started a container at all (the same
+  // ambiguity STARTING's own schema comment above describes) — finding
+  // nothing to stop is a legitimate, recorded outcome, not a failure.
+  [PHASE.ROLLBACK_STOPPED]: (obs) =>
+    obs.stopped_container === null ||
+    (typeof obs.stopped_container === "string" && obs.stopped_container !== ""),
+  [PHASE.ROLLBACK_FORENSIC_ARCHIVED]: (obs) => isPathSha(obs.archive),
+  [PHASE.ROLLBACK_RESTORED]: (obs) => isValidRequiredEntries(obs.required_entries),
+  [PHASE.ROLLED_BACK]: () => true,
 };
 
 export function isKnownPhase(phase) {

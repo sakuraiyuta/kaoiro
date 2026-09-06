@@ -362,3 +362,82 @@ test("validateJournalAgainstStateMachine rejects a transition out of DONE (termi
   journal.phase = PHASE.UP;
   assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
 });
+
+// director ruling 2026-09-06, B-4/B-5: rollback's own phases.
+const ROLLBACK_FORENSIC_OBS = { archive: { path: "/backup/forensic.tar.gz", sha256: "9".repeat(64) } };
+const ROLLBACK_RESTORED_OBS = {
+  required_entries: [{ path: "users.dets", owner: "1000:1000", mode: "0600" }],
+};
+
+test("validateJournalAgainstStateMachine accepts the non-destructive path: OLD_IMAGE_SAVED straight to ROLLED_BACK", () => {
+  const journal = fullJournal(PHASE.OLD_IMAGE_SAVED);
+  journal.history = journal.history.slice(0, indexOf(journal, PHASE.OLD_IMAGE_SAVED) + 1);
+  journal.history.push(entry(PHASE.ROLLED_BACK, {}));
+  journal.phase = PHASE.ROLLED_BACK;
+  assert.doesNotThrow(() => validateJournalAgainstStateMachine(journal));
+});
+
+test("validateJournalAgainstStateMachine accepts the non-destructive path from every pre-STARTING phase, ARCHIVED included", () => {
+  const journal = fullJournalThroughArchived(PHASE.ARCHIVED);
+  journal.history.push(entry(PHASE.ROLLED_BACK, {}));
+  journal.phase = PHASE.ROLLED_BACK;
+  assert.doesNotThrow(() => validateJournalAgainstStateMachine(journal));
+});
+
+test("validateJournalAgainstStateMachine accepts the destructive path: DONE through ROLLBACK_STOPPED/FORENSIC/RESTORED to ROLLED_BACK", () => {
+  const journal = fullJournalThroughDone(PHASE.DONE);
+  journal.history.push(
+    entry(PHASE.ROLLBACK_STOPPED, { stopped_container: "kaoiro-c2" }),
+    entry(PHASE.ROLLBACK_FORENSIC_ARCHIVED, ROLLBACK_FORENSIC_OBS),
+    entry(PHASE.ROLLBACK_RESTORED, ROLLBACK_RESTORED_OBS),
+    entry(PHASE.ROLLED_BACK, {}),
+  );
+  journal.phase = PHASE.ROLLED_BACK;
+  assert.doesNotThrow(() => validateJournalAgainstStateMachine(journal));
+});
+
+test("validateJournalAgainstStateMachine accepts a ROLLBACK_STOPPED observation with stopped_container: null", () => {
+  const journal = fullJournalThroughDone(PHASE.DONE);
+  journal.history.push(entry(PHASE.ROLLBACK_STOPPED, { stopped_container: null }));
+  journal.phase = PHASE.ROLLBACK_STOPPED;
+  assert.doesNotThrow(() => validateJournalAgainstStateMachine(journal));
+});
+
+test("validateJournalAgainstStateMachine rejects skipping ROLLBACK_FORENSIC_ARCHIVED straight to ROLLBACK_RESTORED", () => {
+  const journal = fullJournalThroughDone(PHASE.DONE);
+  journal.history.push(
+    entry(PHASE.ROLLBACK_STOPPED, { stopped_container: "kaoiro-c2" }),
+    entry(PHASE.ROLLBACK_RESTORED, ROLLBACK_RESTORED_OBS),
+  );
+  journal.phase = PHASE.ROLLBACK_RESTORED;
+  assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
+});
+
+test("validateJournalAgainstStateMachine rejects a ROLLBACK_FORENSIC_ARCHIVED observation with a malformed archive sha256", () => {
+  const journal = fullJournalThroughDone(PHASE.DONE);
+  journal.history.push(
+    entry(PHASE.ROLLBACK_STOPPED, { stopped_container: "kaoiro-c2" }),
+    entry(PHASE.ROLLBACK_FORENSIC_ARCHIVED, { archive: { path: "/x", sha256: "not-a-sha" } }),
+  );
+  journal.phase = PHASE.ROLLBACK_FORENSIC_ARCHIVED;
+  assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
+});
+
+test("validateJournalAgainstStateMachine rejects a ROLLBACK_RESTORED observation with malformed required_entries", () => {
+  const journal = fullJournalThroughDone(PHASE.DONE);
+  journal.history.push(
+    entry(PHASE.ROLLBACK_STOPPED, { stopped_container: "kaoiro-c2" }),
+    entry(PHASE.ROLLBACK_FORENSIC_ARCHIVED, ROLLBACK_FORENSIC_OBS),
+    entry(PHASE.ROLLBACK_RESTORED, { required_entries: [{ path: "x", owner: "bad", mode: "0600" }] }),
+  );
+  journal.phase = PHASE.ROLLBACK_RESTORED;
+  assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
+});
+
+test("validateJournalAgainstStateMachine rejects a transition out of ROLLED_BACK (terminal)", () => {
+  const journal = fullJournal(PHASE.OLD_IMAGE_SAVED);
+  journal.history = journal.history.slice(0, indexOf(journal, PHASE.OLD_IMAGE_SAVED) + 1);
+  journal.history.push(entry(PHASE.ROLLED_BACK, {}), entry(PHASE.DONE, {}));
+  journal.phase = PHASE.DONE;
+  assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
+});
