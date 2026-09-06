@@ -207,6 +207,9 @@ sudo systemctl show docker -p After -p Wants -p NeedDaemonReload
 
 Do not restart Docker as part of this procedure: it affects every container
 under the same daemon. The ordering applies on the next Docker start or boot.
+`Wants=` and `After=` order the startup attempt; they do not guarantee that the
+VPN unit succeeds or that its address is ready. If the VPN unit fails, Docker
+may still start and the bind may still fail.
 
 As a host-wide alternative, an operator may opt into IPv4
 `net.ipv4.ip_nonlocal_bind=1`. It permits binding an address before the
