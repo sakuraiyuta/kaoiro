@@ -249,6 +249,17 @@ function restartCount(bin, container) {
  *  this string. */
 const PERSISTENCE_PATHS_EVAL_EXPR = "IO.puts(Jason.encode!(KaoiroServer.PersistencePaths.manifest()))";
 
+// クロエ round 4 review A-SF-1: `entry.env` is about to be embedded into
+// a RegExp (readEnvFileValue) to search `.env`'s own text — an
+// unconstrained string lets a malformed (or malicious) eval response
+// turn that into an arbitrary pattern (`.*` would match ANY line,
+// leaking an unrelated secret line from `.env` into the recorded
+// entry; `(` alone is an invalid RegExp and throws SyntaxError). Real
+// env var names are POSIX-shell identifiers; restricting to that shape
+// closes the class rather than escaping the string and hoping every
+// future caller remembers to.
+const ENV_VAR_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
 function isValidPersistencePathEntry(entry) {
   return (
     typeof entry === "object" &&
@@ -256,7 +267,7 @@ function isValidPersistencePathEntry(entry) {
     typeof entry.store === "string" &&
     entry.store !== "" &&
     typeof entry.env === "string" &&
-    entry.env !== "" &&
+    ENV_VAR_NAME_RE.test(entry.env) &&
     typeof entry.default_file === "string" &&
     entry.default_file !== ""
   );
@@ -315,7 +326,11 @@ function queryPersistencePaths(bin, imageId) {
  *  of the file, which may hold secrets (SECRET_KEY_BASE,
  *  KAOIRO_CLIENT_TOKENS, ...) this check has no business reading or
  *  recording (director ruling 2026-09-06, A-2). `null` when the key is
- *  absent — a legitimate "not set" observation, not a read failure. */
+ *  absent — a legitimate "not set" observation, not a read failure.
+ *  Safe to embed `envName` in a RegExp unescaped: every caller filters
+ *  through `isValidPersistencePathEntry`'s ENV_VAR_NAME_RE first (クロエ
+ *  round 4 review A-SF-1) — this function does not re-validate, so it
+ *  must never be called on an unvalidated name. */
 function readEnvFileValue(envPath, envName) {
   let raw;
   try {
@@ -371,28 +386,33 @@ function containerEffectiveEnv(bin, container) {
   return env;
 }
 
-/** Three-way consistency for exactly the env var names `paths` names
- *  (director ruling 2026-09-06, A-2): `.env`'s own line / compose's
- *  resolved declaration / the CURRENTLY RUNNING (old) container's actual
- *  effective env. `match` is plain three-way equality, including all
- *  three agreeing on `null` (unset everywhere) — a genuine "nothing to
- *  flag between these three sources" outcome, distinct from the separate
- *  question of whether the var should be set at all (compose already
- *  declares the full canonical set unconditionally in production; a var
- *  eval reports but compose does not declare shows up as a real
- *  disagreement, not an all-null pass-through). */
+/** TWO-way consistency for exactly the env var names `paths` names
+ *  (director ruling 2026-09-06, A-MF-1, correcting the original 3-way
+ *  design): compose's resolved declaration vs. the CURRENTLY RUNNING
+ *  (old) container's actual effective env. `match` is `compose ===
+ *  container`, including both agreeing on `null` (unset in both) — a
+ *  genuine "nothing to flag" outcome, distinct from whether the var
+ *  should be set at all.
+ *
+ *  `.env`'s own line is recorded as `declared` but NEVER folded into
+ *  `match`: the bundled docker-compose.yaml sets every canonical
+ *  persistence-path var as a LITERAL `environment:` entry (not `${VAR}`
+ *  interpolation), while `.env.example`/`mix kaoiro.env` emit the same
+ *  vars as commented-out hints. A three-way check comparing this
+ *  legitimately-absent `.env` line against compose's real value would
+ *  read as a permanent mismatch on a correctly-configured production
+ *  host, fail-closed EVERY update from the moment #310 lands. `declared`
+ *  stays in the record purely for an operator's own reference (e.g. the
+ *  4.3 (5-b) first-application migration, which DOES set
+ *  KAOIRO_USERS_PATH in `.env` deliberately) — a value never compared,
+ *  never gates the outcome. */
 function checkEnvConsistency(paths, envPath, composeEnv, containerEnv) {
   const entries = {};
   for (const { env: envName } of paths) {
-    const envFile = readEnvFileValue(envPath, envName);
+    const declared = readEnvFileValue(envPath, envName);
     const compose = Object.hasOwn(composeEnv, envName) ? composeEnv[envName] : null;
     const container = Object.hasOwn(containerEnv, envName) ? containerEnv[envName] : null;
-    entries[envName] = {
-      env_file: envFile,
-      compose,
-      container,
-      match: envFile === compose && compose === container,
-    };
+    entries[envName] = { declared, compose, container, match: compose === container };
   }
   return entries;
 }
@@ -1450,18 +1470,25 @@ export function runUpdate(flags, config) {
   }
 }
 
-// Every phase `rollback` may act on (director ruling 2026-09-06, B-1):
-// reachable forward from OLD_IMAGE_SAVED — everything but PREFLIGHT
-// (nothing was even recorded yet) — MINUS the rollback chain's own
-// phases and the terminal ROLLED_BACK. A transaction already mid-
+// Every phase `rollback` may act on (director ruling 2026-09-06, B-1;
+// fully derived per round 4 review B-2, closing the SAME class MF-2 did
+// — the original version derived the base set but then DELETED the
+// rollback chain's own phases by a hand-written 4-element literal,
+// which a phase inserted into that chain later could silently miss).
+// Reachable forward from OLD_IMAGE_SAVED (everything but PREFLIGHT,
+// where nothing was even recorded yet) MINUS everything reachable
+// forward from ROLLBACK_STOPPED (the rollback chain's own phases,
+// including the terminal ROLLED_BACK — a transaction already mid-
 // rollback or fully rolled back needs manual investigation, not a
-// second `rollback` invocation (no resume support for rollback itself
-// yet, the same limit `update`'s own UNRESUMABLE_PHASES documents for
-// its half).
-const ROLLBACK_ELIGIBLE_PHASES = reachablePhases(PHASE.OLD_IMAGE_SAVED, TRANSITIONS);
-for (const phase of [PHASE.ROLLBACK_STOPPED, PHASE.ROLLBACK_FORENSIC_ARCHIVED, PHASE.ROLLBACK_RESTORED, PHASE.ROLLED_BACK]) {
-  ROLLBACK_ELIGIBLE_PHASES.delete(phase);
-}
+// second `rollback` invocation, the same limit `update`'s own
+// UNRESUMABLE_PHASES documents for its half). Inserting a new phase
+// anywhere in the rollback chain is excluded automatically, by
+// construction, not by remembering to add it to a list here too.
+export const ROLLBACK_ELIGIBLE_PHASES = new Set(
+  [...reachablePhases(PHASE.OLD_IMAGE_SAVED, TRANSITIONS)].filter(
+    (phase) => !reachablePhases(PHASE.ROLLBACK_STOPPED, TRANSITIONS).has(phase),
+  ),
+);
 
 /** `rollback`: restores the OLD image + its corresponding pre-deploy
  *  DETS pair for `--transaction <id>` (director ruling 2026-09-06,

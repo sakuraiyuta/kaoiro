@@ -19,7 +19,7 @@ function validManifest() {
     env_consistency: {
       skipped: false,
       entries: {
-        KAOIRO_CLIENT_TOKENS: { env_file: "set", compose: "set", container: "set", match: true },
+        KAOIRO_CLIENT_TOKENS: { declared: "set", compose: "set", container: "set", match: true },
       },
     },
     image_id: "sha256:" + "b".repeat(64),
@@ -102,7 +102,7 @@ test("isValidManifestShape rejects an env_consistency entry with a non-boolean m
   bad.env_consistency = {
     skipped: false,
     entries: {
-      KAOIRO_CLIENT_TOKENS: { env_file: "set", compose: "set", container: "set", match: "yes" },
+      KAOIRO_CLIENT_TOKENS: { declared: "set", compose: "set", container: "set", match: "yes" },
     },
   };
   assert.equal(isValidManifestShape(bad), false);
@@ -130,7 +130,7 @@ test("isValidManifestShape rejects env_consistency skipped:false with no entries
 test("isValidManifestShape rejects a bare per-key map with no skipped discriminator (the pre-#220 shape)", () => {
   const bad = validManifest();
   bad.env_consistency = {
-    KAOIRO_CLIENT_TOKENS: { env_file: "set", compose: "set", container: "set", match: true },
+    KAOIRO_CLIENT_TOKENS: { declared: "set", compose: "set", container: "set", match: true },
   };
   assert.equal(isValidManifestShape(bad), false);
 });
