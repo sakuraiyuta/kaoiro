@@ -660,6 +660,39 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # rejected as a whole event there — sanitizing it to `nil` here first
   # would store it as a legitimate-looking "no trigger" event instead of
   # dropping it.
+  # `permission_requested` (issue #305) is server-only audit — the server
+  # "never trusts a wrapper-produced permission_requested" (protocol.md,
+  # "Permission lifecycle audit"). `SessionLifecycleEvents.valid_kind?/1`
+  # alone cannot reject it (it is a legitimate stored kind when
+  # `agents_channel.ex`'s `set_permission` handler appends it directly),
+  # so the wire-ingress boundary rejects it explicitly instead. Logged and
+  # dropped, not an error reply — a compromised/buggy wrapper gets no
+  # signal about which detail rejected it.
+  defp handle_wrapper_in("session_lifecycle", %{"kind" => "permission_requested"}, socket) do
+    Logger.warning(
+      "session_lifecycle: wrapper-produced permission_requested rejected " <>
+        "(server-only audit kind), agent_id=#{socket.assigns.agent_id}"
+    )
+
+    {:reply, :ok, socket}
+  end
+
+  defp handle_wrapper_in(
+         "session_lifecycle",
+         %{"kind" => kind, "at" => at} = payload,
+         socket
+       )
+       when kind in ["permission_applied", "permission_failed"] and is_binary(at) do
+    SessionLifecycleEvents.record_permission_event(
+      socket.assigns.agent_id,
+      kind,
+      at,
+      Map.get(payload, "details")
+    )
+
+    {:reply, :ok, socket}
+  end
+
   defp handle_wrapper_in("session_lifecycle", %{"kind" => kind, "at" => at} = payload, socket)
        when is_binary(kind) and is_binary(at) do
     trigger = Map.get(payload, "trigger")

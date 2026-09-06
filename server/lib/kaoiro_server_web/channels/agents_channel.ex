@@ -715,6 +715,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
          {:ok, engine} <- fetch_agent_engine(envelope),
          actor = permission_actor(socket),
          at = DateTime.utc_now() |> DateTime.to_iso8601(),
+         previous = permission_previous_observation(agent_id),
          {:ok, revision, requested} <-
            PermissionSettings.submit_request(agent_id, engine, patch, actor, at) do
       KaoiroServerWeb.Endpoint.broadcast("wrapper:#{agent_id}", "set_permission", %{
@@ -723,6 +724,13 @@ defmodule KaoiroServerWeb.AgentsChannel do
         "sandbox" => requested.sandbox,
         "network_access" => requested.network_access
       })
+
+      SessionLifecycleEvents.record_permission_event(
+        agent_id,
+        "permission_requested",
+        at,
+        permission_requested_details(revision, requested, actor, previous)
+      )
 
       {:reply,
        {:ok,
@@ -1028,7 +1036,12 @@ defmodule KaoiroServerWeb.AgentsChannel do
          {:ok, agent_id} <- fetch_lifecycle_query_agent_id(payload) do
       events =
         for event <- SessionLifecycleEvents.list_for_agent(agent_id) do
-          %{"kind" => event.kind, "trigger" => event.trigger, "at" => event.at}
+          %{
+            "kind" => event.kind,
+            "trigger" => event.trigger,
+            "at" => event.at,
+            "details" => Map.get(event, :details)
+          }
         end
 
       {:reply, {:ok, session_events_payload(events)}, socket}
@@ -3161,6 +3174,38 @@ defmodule KaoiroServerWeb.AgentsChannel do
     do: :invalid_payload
 
   defp permission_error_reason(reason), do: reason
+
+  # `permission_requested`'s optional `previous` (protocol.md "Permission
+  # lifecycle audit"): the most recent CONFIRMED observation before this
+  # new request, resolved from the server's own accepted observations
+  # (never a wrapper-supplied audit claim). Read BEFORE
+  # `PermissionSettings.submit_request/6` mutates the entry — that call
+  # advances `control` to the new pending revision, so `effective` /
+  # `last_effective` must be captured from the entry as it stood before.
+  defp permission_previous_observation(agent_id) do
+    case PermissionSettings.get(agent_id) do
+      %{control: %{effective: effective}} when is_map(effective) -> effective
+      %{control: %{last_effective: last_effective}} when is_map(last_effective) -> last_effective
+      _ -> nil
+    end
+  end
+
+  defp permission_requested_details(revision, requested, actor, previous) do
+    %{
+      "revision" => revision,
+      "requested" => %{
+        "sandbox" => requested.sandbox,
+        "network_access" => requested.network_access
+      },
+      "actor" => %{"kind" => actor.kind, "id" => actor.id}
+    }
+    |> maybe_put_permission_previous(previous)
+  end
+
+  defp maybe_put_permission_previous(details, nil), do: details
+
+  defp maybe_put_permission_previous(details, previous),
+    do: Map.put(details, "previous", previous)
 
   # phase-17 17-5 (must-1): the runner's rollback branch needs the
   # session_id that was current AT LOCK ACQUIRE TIME, not the one baked

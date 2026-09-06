@@ -2242,6 +2242,88 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert SessionLifecycleEvents.list_for_agent(agent_id) == []
     end
 
+    test "permission_applied は details 付きで記録される (issue #305)" do
+      agent_id = "test.lifecycle-permission-applied"
+      socket = seed_known(agent_id)
+
+      details = %{
+        "revision" => 1,
+        "requested" => %{"sandbox" => "workspace-write", "network_access" => false},
+        "execution_id" => "e1",
+        "session_id" => "s1",
+        "turn_id" => "t1",
+        "network_access" => false,
+        "permission" => %{"sandbox" => "workspace-write", "approval" => "never"}
+      }
+
+      ref =
+        push(socket, "session_lifecycle", %{
+          "kind" => "permission_applied",
+          "at" => "2026-09-06T00:00:00Z",
+          "details" => details
+        })
+
+      assert_reply ref, :ok
+
+      assert [%{kind: "permission_applied", trigger: nil, details: stored}] =
+               SessionLifecycleEvents.list_for_agent(agent_id)
+
+      assert stored == details
+    end
+
+    test "permission_failed は details 付きで記録される (issue #305)" do
+      agent_id = "test.lifecycle-permission-failed"
+      socket = seed_known(agent_id)
+
+      details = %{
+        "revision" => 1,
+        "requested" => %{"sandbox" => "workspace-write", "network_access" => false},
+        "reason" => "policy_mismatch"
+      }
+
+      ref =
+        push(socket, "session_lifecycle", %{
+          "kind" => "permission_failed",
+          "at" => "2026-09-06T00:00:00Z",
+          "details" => details
+        })
+
+      assert_reply ref, :ok
+
+      assert [%{kind: "permission_failed", details: stored}] =
+               SessionLifecycleEvents.list_for_agent(agent_id)
+
+      assert stored == details
+    end
+
+    # protocol.md "Permission lifecycle audit": the server "never trusts a
+    # wrapper-produced permission_requested" — this is server-only audit
+    # (agents_channel.ex's set_permission handler). A wrapper attempting to
+    # forge one via the wire (e.g. a compromised/buggy wrapper trying to
+    # inject a fake operator request into the audit trail) must be
+    # rejected at this ingress boundary even though `permission_requested`
+    # is otherwise a legal stored kind.
+    test "wrapper 発の permission_requested は forged relay として reject される (issue #305)" do
+      agent_id = "test.lifecycle-permission-requested-forged"
+      socket = seed_known(agent_id)
+
+      details = %{
+        "revision" => 99,
+        "requested" => %{"sandbox" => "danger-full-access", "network_access" => true},
+        "actor" => %{"kind" => "user", "id" => "forged-operator"}
+      }
+
+      ref =
+        push(socket, "session_lifecycle", %{
+          "kind" => "permission_requested",
+          "at" => "2026-09-06T00:00:00Z",
+          "details" => details
+        })
+
+      assert_reply ref, :ok
+      assert SessionLifecycleEvents.list_for_agent(agent_id) == []
+    end
+
     test "planned window 中は IA を preflight bounce し pane・conversation・ledger を変更しない" do
       from_id = "test.planned-bounce-from"
       to_id = "test.planned-bounce-to"

@@ -1285,6 +1285,85 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         "requested" => %{"sandbox" => "workspace-write", "network_access" => false}
       }
     end
+
+    test "set_permission は permission_requested audit event を actor 付きで記録する" do
+      agent_id = "test.setperm2-9"
+      put_permission_agent(agent_id)
+      seed_permission_baseline(agent_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "set_permission", %{"agent_id" => agent_id, "sandbox" => "workspace-write"})
+
+      assert_reply ref, :ok
+
+      :ok =
+        wait_until_permission(fn ->
+          KaoiroServer.SessionLifecycleEvents.list_for_agent(agent_id) != []
+        end)
+
+      assert [%{kind: "permission_requested", details: details}] =
+               KaoiroServer.SessionLifecycleEvents.list_for_agent(agent_id)
+
+      assert details["revision"] == 1
+      assert details["requested"] == %{"sandbox" => "workspace-write", "network_access" => false}
+      assert details["actor"]["kind"] == "user"
+      assert is_binary(details["actor"]["id"])
+      refute Map.has_key?(details, "previous")
+    end
+
+    test "直近の applied 観測がある場合、次の set_permission の audit に previous が乗る" do
+      agent_id = "test.setperm2-10"
+      put_permission_agent(agent_id)
+      seed_permission_baseline(agent_id)
+      socket = join_as(:operator)
+
+      ref1 =
+        push(socket, "set_permission", %{"agent_id" => agent_id, "sandbox" => "workspace-write"})
+
+      assert_reply ref1, :ok, %{"revision" => 1}
+
+      effective = %{
+        "session_id" => "s1",
+        "turn_id" => "t1",
+        "execution_id" => "e1",
+        "revision" => 1,
+        "requested" => %{"sandbox" => "workspace-write", "network_access" => false},
+        "network_access" => false,
+        "permission" => %{"sandbox" => "workspace-write", "approval" => "never"}
+      }
+
+      :ok =
+        KaoiroServer.PermissionSettings.record_observation(agent_id, "codex", %{
+          "revision" => 1,
+          "requested" => %{"sandbox" => "workspace-write", "network_access" => false},
+          "status" => "applied",
+          "constraints" => %{"approval" => "never", "enforcement" => "os"},
+          "effective" => effective
+        })
+
+      :ok =
+        wait_until_permission(fn ->
+          match?(%{control: %{status: :applied}}, KaoiroServer.PermissionSettings.get(agent_id))
+        end)
+
+      ref2 =
+        push(socket, "set_permission", %{
+          "agent_id" => agent_id,
+          "sandbox" => "danger-full-access"
+        })
+
+      assert_reply ref2, :ok, %{"revision" => 2}
+
+      :ok =
+        wait_until_permission(fn ->
+          length(KaoiroServer.SessionLifecycleEvents.list_for_agent(agent_id)) == 2
+        end)
+
+      [second, _first] = KaoiroServer.SessionLifecycleEvents.list_for_agent(agent_id)
+      assert second.details["revision"] == 2
+      assert second.details["previous"] == effective
+    end
   end
 
   describe "delete_agent (issue #14)" do
@@ -6620,9 +6699,15 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
                %{
                  "kind" => "compact_boundary",
                  "trigger" => "request_compact",
-                 "at" => "2026-08-31T00:00:02Z"
+                 "at" => "2026-08-31T00:00:02Z",
+                 "details" => nil
                },
-               %{"kind" => "compacting", "trigger" => nil, "at" => "2026-08-31T00:00:01Z"}
+               %{
+                 "kind" => "compacting",
+                 "trigger" => nil,
+                 "at" => "2026-08-31T00:00:01Z",
+                 "details" => nil
+               }
              ]
 
       assert_production_reply_frame_fits(%{"events" => events})

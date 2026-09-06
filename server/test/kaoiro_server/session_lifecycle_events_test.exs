@@ -42,9 +42,10 @@ defmodule KaoiroServer.SessionLifecycleEventsTest do
              %{
                kind: "compact_boundary",
                trigger: "request_compact",
-               at: "2026-08-31T00:00:02Z"
+               at: "2026-08-31T00:00:02Z",
+               details: nil
              },
-             %{kind: "compacting", trigger: nil, at: "2026-08-31T00:00:01Z"}
+             %{kind: "compacting", trigger: nil, at: "2026-08-31T00:00:01Z", details: nil}
            ]
   end
 
@@ -98,8 +99,13 @@ defmodule KaoiroServer.SessionLifecycleEventsTest do
     {:ok, _pid} = SessionLifecycleEvents.start_link(name: name, path: path, cap: 3)
 
     assert SessionLifecycleEvents.list_for_agent("a.restart", name) == [
-             %{kind: "compact_boundary", trigger: "sdk_auto", at: "2026-08-31T00:00:02Z"},
-             %{kind: "compacting", trigger: nil, at: "2026-08-31T00:00:01Z"}
+             %{
+               kind: "compact_boundary",
+               trigger: "sdk_auto",
+               at: "2026-08-31T00:00:02Z",
+               details: nil
+             },
+             %{kind: "compacting", trigger: nil, at: "2026-08-31T00:00:01Z", details: nil}
            ]
   end
 
@@ -110,6 +116,270 @@ defmodule KaoiroServer.SessionLifecycleEventsTest do
     assert {:ok, pid} = SessionLifecycleEvents.start_link(name: name, path: path, cap: 3)
     assert Process.alive?(pid)
     assert SessionLifecycleEvents.list_for_agent("a.any", name) == []
+  end
+
+  describe "record_permission_event/5 (issue #305, typed permission audit)" do
+    defp valid_observation do
+      %{
+        "revision" => 1,
+        "requested" => %{"sandbox" => "workspace-write", "network_access" => false},
+        "execution_id" => "e1",
+        "session_id" => "s1",
+        "turn_id" => "t1",
+        "network_access" => false,
+        "permission" => %{"sandbox" => "workspace-write", "approval" => "never"}
+      }
+    end
+
+    test "permission_requested の必須 field だけを保存する", %{name: name} do
+      details = %{
+        "revision" => 1,
+        "requested" => %{"sandbox" => "workspace-write", "network_access" => false},
+        "actor" => %{"kind" => "user", "id" => "u1"}
+      }
+
+      :ok =
+        SessionLifecycleEvents.record_permission_event(
+          "a.pr1",
+          "permission_requested",
+          "2026-09-06T00:00:00Z",
+          details,
+          name
+        )
+
+      assert [%{kind: "permission_requested", trigger: nil, details: stored}] =
+               SessionLifecycleEvents.list_for_agent("a.pr1", name)
+
+      assert stored == details
+    end
+
+    test "permission_requested の previous も保存される", %{name: name} do
+      details = %{
+        "revision" => 2,
+        "requested" => %{"sandbox" => "danger-full-access", "network_access" => true},
+        "actor" => %{"kind" => "user", "id" => "u1"},
+        "previous" => valid_observation()
+      }
+
+      :ok =
+        SessionLifecycleEvents.record_permission_event(
+          "a.pr2",
+          "permission_requested",
+          "2026-09-06T00:00:00Z",
+          details,
+          name
+        )
+
+      assert [%{details: stored}] = SessionLifecycleEvents.list_for_agent("a.pr2", name)
+      assert stored["previous"] == valid_observation()
+    end
+
+    test "permission_requested に未知 field が混ざると event ごと drop される", %{name: name} do
+      details = %{
+        "revision" => 1,
+        "requested" => %{"sandbox" => "workspace-write", "network_access" => false},
+        "actor" => %{"kind" => "user", "id" => "u1"},
+        "raw_sdk_error" => "leaked internal detail"
+      }
+
+      capture_log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          :ok =
+            SessionLifecycleEvents.record_permission_event(
+              "a.pr3",
+              "permission_requested",
+              "2026-09-06T00:00:00Z",
+              details,
+              name
+            )
+        end)
+
+      assert capture_log =~ "rejected"
+      assert SessionLifecycleEvents.list_for_agent("a.pr3", name) == []
+    end
+
+    test "actor.id が 256 byte を超えると drop される", %{name: name} do
+      details = %{
+        "revision" => 1,
+        "requested" => %{"sandbox" => "workspace-write", "network_access" => false},
+        "actor" => %{"kind" => "user", "id" => String.duplicate("a", 257)}
+      }
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        :ok =
+          SessionLifecycleEvents.record_permission_event(
+            "a.pr4",
+            "permission_requested",
+            "2026-09-06T00:00:00Z",
+            details,
+            name
+          )
+      end)
+
+      assert SessionLifecycleEvents.list_for_agent("a.pr4", name) == []
+    end
+
+    test "permission_applied は PermissionObservation を丸ごと保存する", %{name: name} do
+      :ok =
+        SessionLifecycleEvents.record_permission_event(
+          "a.pa1",
+          "permission_applied",
+          "2026-09-06T00:00:00Z",
+          valid_observation(),
+          name
+        )
+
+      assert [%{kind: "permission_applied", details: stored}] =
+               SessionLifecycleEvents.list_for_agent("a.pa1", name)
+
+      assert stored == valid_observation()
+    end
+
+    test "permission_applied の enforcement は closed enum で検証される", %{name: name} do
+      bad = put_in(valid_observation(), ["permission", "enforcement"], "yolo")
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        :ok =
+          SessionLifecycleEvents.record_permission_event(
+            "a.pa2",
+            "permission_applied",
+            "2026-09-06T00:00:00Z",
+            bad,
+            name
+          )
+      end)
+
+      assert SessionLifecycleEvents.list_for_agent("a.pa2", name) == []
+    end
+
+    test "permission_applied の permission に未知 field が混ざると drop される (enforcement 省略との組合せ)",
+         %{name: name} do
+      bad =
+        valid_observation()
+        |> Map.update!("permission", &Map.delete(&1, "enforcement"))
+        |> put_in(["permission", "raw_sdk_error"], "leaked")
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        :ok =
+          SessionLifecycleEvents.record_permission_event(
+            "a.pa3",
+            "permission_applied",
+            "2026-09-06T00:00:00Z",
+            bad,
+            name
+          )
+      end)
+
+      assert SessionLifecycleEvents.list_for_agent("a.pa3", name) == []
+    end
+
+    test "permission_failed は reason/execution_id/rolled_back_to を保存する", %{name: name} do
+      details = %{
+        "revision" => 3,
+        "requested" => %{"sandbox" => "workspace-write", "network_access" => false},
+        "reason" => "policy_mismatch",
+        "execution_id" => "e9",
+        "rolled_back_to" => %{"sandbox" => "read-only", "network_access" => false}
+      }
+
+      :ok =
+        SessionLifecycleEvents.record_permission_event(
+          "a.pf1",
+          "permission_failed",
+          "2026-09-06T00:00:00Z",
+          details,
+          name
+        )
+
+      assert [%{kind: "permission_failed", details: stored}] =
+               SessionLifecycleEvents.list_for_agent("a.pf1", name)
+
+      assert stored == details
+    end
+
+    test "permission_failed の reason が256 byteを超えると drop される", %{name: name} do
+      details = %{
+        "revision" => 1,
+        "requested" => %{"sandbox" => "workspace-write", "network_access" => false},
+        "reason" => String.duplicate("x", 257)
+      }
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        :ok =
+          SessionLifecycleEvents.record_permission_event(
+            "a.pf2",
+            "permission_failed",
+            "2026-09-06T00:00:00Z",
+            details,
+            name
+          )
+      end)
+
+      assert SessionLifecycleEvents.list_for_agent("a.pf2", name) == []
+    end
+
+    test "revision が負の場合は drop される", %{name: name} do
+      details = %{
+        "revision" => -1,
+        "requested" => %{"sandbox" => "workspace-write", "network_access" => false},
+        "reason" => "x"
+      }
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        :ok =
+          SessionLifecycleEvents.record_permission_event(
+            "a.pf3",
+            "permission_failed",
+            "2026-09-06T00:00:00Z",
+            details,
+            name
+          )
+      end)
+
+      assert SessionLifecycleEvents.list_for_agent("a.pf3", name) == []
+    end
+
+    test "壊れた permission_applied row は再起動後に resurrect しない (must-fix B3 同様の保証)",
+         %{name: name, path: path} do
+      :ok =
+        SessionLifecycleEvents.record_permission_event(
+          "a.pa-legacy",
+          "permission_applied",
+          "2026-09-06T00:00:00Z",
+          valid_observation(),
+          name
+        )
+
+      GenServer.stop(Process.whereis(name))
+
+      {:ok, table} = :dets.open_file(name, file: String.to_charlist(path))
+
+      :dets.insert(table, {
+        "a.pa-legacy",
+        [
+          %{
+            kind: "permission_applied",
+            trigger: nil,
+            at: "2026-09-06T00:00:01Z",
+            details: %{"revision" => 1, "requested" => %{}}
+          },
+          %{
+            kind: "permission_applied",
+            trigger: nil,
+            at: "2026-09-06T00:00:00Z",
+            details: valid_observation()
+          }
+        ]
+      })
+
+      :dets.sync(table)
+      :dets.close(table)
+
+      {:ok, _pid} = SessionLifecycleEvents.start_link(name: name, path: path, cap: 3)
+
+      assert [%{at: "2026-09-06T00:00:00Z"}] =
+               SessionLifecycleEvents.list_for_agent("a.pa-legacy", name)
+    end
   end
 
   # ふじ Stage B round 1 must-fix B3 (2026-08-31): kind/trigger/at outside
