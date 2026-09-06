@@ -50,7 +50,7 @@ case "$1" in
     case "$2" in
       ps)
         case "$FAKE_DOCKER_SCENARIO" in
-          stopped|running|retag-drift|running-clean-stop|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty|compose-config-renamed-service|compose-config-missing-environment-key|mount-vanishes-after-stop)
+          stopped|running|retag-drift|running-clean-stop|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty|compose-config-renamed-service|compose-config-missing-environment-key|mount-vanishes-after-stop|system-df-fails|system-df-invalid-json|system-df-not-array)
             printf 'kaoiro-c1\\n' ;;
           # round 4 review B-1 (expanded): rollback's own "2+ containers,
           # refuse" guard, distinct from requireRunningContainer's own
@@ -188,7 +188,7 @@ case "$1" in
           '{{.State.Status}}')
             case "$FAKE_DOCKER_SCENARIO" in
               stopped) printf 'exited\\n' ;;
-              running|retag-drift|running-clean-stop|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty|compose-config-renamed-service|compose-config-missing-environment-key|mount-vanishes-after-stop)
+              running|retag-drift|running-clean-stop|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty|compose-config-renamed-service|compose-config-missing-environment-key|mount-vanishes-after-stop|system-df-fails|system-df-invalid-json|system-df-not-array)
                 printf 'running\\n' ;;
             esac
             ;;
@@ -382,14 +382,6 @@ case "$1" in
           printf '[]\\n'
         fi
         ;;
-      # #303 capacity preflight: KiB used under the resolved volume, the
-      # same du -sk /data an alpine container run read-only against a
-      # real volume prints. KAOIRO_TEST_VOLUME_KB lets a specific test
-      # control this precisely; every other test gets a small, harmless
-      # default that any real host's free space trivially clears.
-      *"du -sk"*)
-        printf '%s\\t/data\\n' "\${KAOIRO_TEST_VOLUME_KB:-2}"
-        ;;
       *)
         # Pre-archive empty-volume guard (find -mindepth 1 -maxdepth 1
         # -exec stat -c '%n %u:%g %04a' {} \\;) — only whether anything is
@@ -403,6 +395,30 @@ case "$1" in
     esac
     ;;
   start) exit 0 ;;
+  # #303 capacity preflight (director ruling 2026-09-07): \`docker system
+  # df -v\`'s own per-volume accounting, SI-formatted the way real docker
+  # does (measured live, 29.6.1, 2026-09-07: "213.6kB", "1.302MB", "0B").
+  # KAOIRO_TEST_VOLUME_SIZE lets a specific test control the exact Size
+  # string; every other test gets a small, harmless default well under
+  # any real host's free space even at the default capacity_multiplier.
+  # KAOIRO_TEST_VOLUME_NAME lets a test make the entry name disagree with
+  # whatever resolveKaoiroLibMount resolved, simulating "absent from its
+  # own listing".
+  system)
+    case "$2" in
+      df)
+        case "$FAKE_DOCKER_SCENARIO" in
+          system-df-fails) exit 1 ;;
+          system-df-invalid-json) printf 'not json\\n' ;;
+          system-df-not-array) printf '{"oops":"an object, not an array"}\\n' ;;
+          *)
+            printf '[{"Name":"%s","Size":"%s"}]\\n' \\
+              "\${KAOIRO_TEST_VOLUME_NAME:-kaoiro_kaoiro-state}" "\${KAOIRO_TEST_VOLUME_SIZE:-2kB}"
+            ;;
+        esac
+        ;;
+    esac
+    ;;
 esac
 `;
 
@@ -1892,11 +1908,12 @@ test("runUpdate refuses when the archive fails full-traversal verification", () 
 });
 
 // #303 capacity preflight: this scenario's container never carries the
-// mount at all, so checkCapacity's OWN mount-resolution guard now catches
-// it BEFORE the transaction directory is even created — earlier than the
-// post-stop MOUNT_RESOLVED re-check this test used to reach (that guard's
-// own dedicated pin, now that this scenario no longer reaches it, is the
-// "mount-vanishes-after-stop" test right below).
+// mount at all, so resolveKaoiroLibMount returns "" here, and volumeUsedBytes
+// finds no matching entry (an empty name never matches a real volume's) in
+// 'docker system df -v' — caught BEFORE the transaction directory is even
+// created, earlier than the post-stop MOUNT_RESOLVED re-check this test
+// used to reach (that guard's own dedicated pin, now that this scenario no
+// longer reaches it, is the "mount-vanishes-after-stop" test right below).
 test("runUpdate refuses at the capacity preflight when the /var/lib/kaoiro mount cannot be resolved", () => {
   let caught;
   try {
@@ -1907,6 +1924,7 @@ test("runUpdate refuses at the capacity preflight when the /var/lib/kaoiro mount
     caught = err;
   }
   assert.ok(caught instanceof DeployError);
+  assert.ok(caught.message.includes("has no entry for volume"));
   // backup_root itself already exists (acquireLock creates it), but no
   // PER-TRANSACTION directory does — checkCapacity fails before
   // newTransactionId()/mkdirSync(dir), so there is nothing left behind.
@@ -1965,7 +1983,7 @@ test("runUpdate's capacity preflight passes and records free/volume/threshold wh
   const planned = withScenario("running", () =>
     runUpdate({ repo: workDir, target: headSha, dryRun: true }, configWithOverride()),
   );
-  assert.equal(planned.capacity.volume_bytes, 2 * 1024); // FAKE_DOCKER's default KAOIRO_TEST_VOLUME_KB
+  assert.equal(planned.capacity.volume_bytes, 2000); // FAKE_DOCKER's default "2kB" (SI: 2 x 1000)
   assert.equal(
     planned.capacity.threshold_bytes,
     DEFAULT_CONFIG.capacity_multiplier * planned.capacity.volume_bytes,
@@ -1986,56 +2004,74 @@ test("runUpdate's capacity preflight passes and records free/volume/threshold wh
   const [transactionDir] = readdirSyncNonHidden(backupRoot);
   const journal = readJournal(join(backupRoot, transactionDir));
   const preflight = journal.history.find((e) => e.phase === "preflight").observation;
-  assert.equal(preflight.volume_bytes, 2 * 1024);
+  assert.equal(preflight.volume_bytes, 2000);
   assert.equal(preflight.threshold_bytes, DEFAULT_CONFIG.capacity_multiplier * preflight.volume_bytes);
   assert.ok(preflight.free_bytes >= preflight.threshold_bytes);
 });
 
-test("runUpdate's capacity preflight refuses when free space cannot be measured (df fails)", () => {
-  const dfBin = join(root, "fake-df-fails.sh");
-  writeFileSync(dfBin, "#!/bin/sh\nexit 1\n");
-  chmodSync(dfBin, 0o700);
-  process.env.KAOIRO_DEPLOY_DF_BIN = dfBin;
+// director ruling 2026-09-07 (turn 7), クロエ-sub live measurement (this
+// host's 21 volumes): 'kB' (lowercase k) is SI base-1000, not 1024 — base
+// 1024 here would UNDERESTIMATE the real size, the dangerous direction (a
+// genuine shortage would then read as "enough room").
+test("runUpdate's capacity preflight scales a 'kB' volume size by 1000, not 1024", () => {
+  process.env.KAOIRO_TEST_VOLUME_SIZE = "213.6kB";
+  let planned;
+  try {
+    planned = withScenario("running", () =>
+      runUpdate({ repo: workDir, target: headSha, dryRun: true }, configWithOverride()),
+    );
+  } finally {
+    delete process.env.KAOIRO_TEST_VOLUME_SIZE;
+  }
+  assert.equal(planned.capacity.volume_bytes, 213600);
+});
+
+test("runUpdate's capacity preflight refuses when volume usage cannot be measured ('docker system df -v' fails)", () => {
   let caught;
   try {
-    withScenario("running", () =>
+    withScenario("system-df-fails", () =>
       runUpdate({ repo: workDir, target: headSha, dryRun: true }, configWithOverride()),
     );
   } catch (err) {
     caught = err;
-  } finally {
-    delete process.env.KAOIRO_DEPLOY_DF_BIN;
   }
   assert.ok(caught instanceof DeployError);
-  assert.ok(caught.message.includes("could not measure free space"));
+  assert.ok(caught.message.includes("could not measure volume usage"));
 });
 
 // The "0 exit but garbage shape" class this file already treats as a hard
-// failure elsewhere (queryPersistencePaths, composeDeclaredEnv) — a `df`
-// that RUNS but whose output this parser cannot read is a different,
-// equally fail-closed outcome from `df` failing to run at all (pinned
-// above).
-test("runUpdate's capacity preflight refuses when df succeeds but prints an unparseable line", () => {
-  const dfBin = join(root, "fake-df-garbage.sh");
-  writeFileSync(dfBin, "#!/bin/sh\nprintf 'not a df line\\n'\n");
-  chmodSync(dfBin, 0o700);
-  process.env.KAOIRO_DEPLOY_DF_BIN = dfBin;
+// failure elsewhere (queryPersistencePaths, composeDeclaredEnv) — a
+// command that RUNS but whose output this parser cannot read is a
+// different, equally fail-closed outcome from the command failing to run
+// at all (pinned above).
+test("runUpdate's capacity preflight refuses when 'docker system df -v' prints invalid JSON", () => {
   let caught;
   try {
-    withScenario("running", () =>
+    withScenario("system-df-invalid-json", () =>
       runUpdate({ repo: workDir, target: headSha, dryRun: true }, configWithOverride()),
     );
   } catch (err) {
     caught = err;
-  } finally {
-    delete process.env.KAOIRO_DEPLOY_DF_BIN;
   }
   assert.ok(caught instanceof DeployError);
-  assert.ok(caught.message.includes("could not parse"));
+  assert.ok(caught.message.includes("did not return valid JSON"));
 });
 
-test("runUpdate's capacity preflight refuses when du -sk prints an unparseable line", () => {
-  process.env.KAOIRO_TEST_VOLUME_KB = "not-a-number";
+test("runUpdate's capacity preflight refuses when 'docker system df -v' prints a non-array shape", () => {
+  let caught;
+  try {
+    withScenario("system-df-not-array", () =>
+      runUpdate({ repo: workDir, target: headSha, dryRun: true }, configWithOverride()),
+    );
+  } catch (err) {
+    caught = err;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.ok(caught.message.includes("unexpected shape"));
+});
+
+test("runUpdate's capacity preflight refuses when the resolved volume is absent from 'docker system df -v'", () => {
+  process.env.KAOIRO_TEST_VOLUME_NAME = "some-other-volume";
   let caught;
   try {
     withScenario("running", () =>
@@ -2044,10 +2080,29 @@ test("runUpdate's capacity preflight refuses when du -sk prints an unparseable l
   } catch (err) {
     caught = err;
   } finally {
-    delete process.env.KAOIRO_TEST_VOLUME_KB;
+    delete process.env.KAOIRO_TEST_VOLUME_NAME;
   }
   assert.ok(caught instanceof DeployError);
-  assert.ok(caught.message.includes("could not parse 'du -sk /data'"));
+  assert.ok(caught.message.includes("has no entry for volume"));
+});
+
+// director ruling 2026-09-07 (turn 7): any unit spelling other than the
+// five docker's own formatter emits (a different docker version, a
+// binary-prefix unit like KiB/MiB) is unmeasurable, never guessed at.
+test("runUpdate's capacity preflight refuses an unknown volume-size unit ('MiB')", () => {
+  process.env.KAOIRO_TEST_VOLUME_SIZE = "1MiB";
+  let caught;
+  try {
+    withScenario("running", () =>
+      runUpdate({ repo: workDir, target: headSha, dryRun: true }, configWithOverride()),
+    );
+  } catch (err) {
+    caught = err;
+  } finally {
+    delete process.env.KAOIRO_TEST_VOLUME_SIZE;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.ok(caught.message.includes("could not parse volume"));
 });
 
 test("runUpdate refuses to proceed past a stop with no measured clean-stop expectation", () => {
