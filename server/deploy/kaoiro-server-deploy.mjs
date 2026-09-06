@@ -17,7 +17,7 @@ import { BRANCH, classify, requireRunningContainer } from "./kaoiro-deploy-branc
 import { loadConfig } from "./kaoiro-deploy-config.mjs";
 import { dockerInspect, resolveDockerBin, runDocker } from "./kaoiro-deploy-docker.mjs";
 import { advancePhase, readJournal, writeJournal } from "./kaoiro-deploy-journal.mjs";
-import { writeManifest } from "./kaoiro-deploy-manifest.mjs";
+import { readManifest, writeManifest } from "./kaoiro-deploy-manifest.mjs";
 import { PHASE, validateJournalAgainstStateMachine } from "./kaoiro-deploy-phase.mjs";
 import { acquireLock, releaseLock } from "./kaoiro-deploy-lock.mjs";
 import { findUnfinishedTransaction, newTransactionId } from "./kaoiro-deploy-transaction.mjs";
@@ -228,8 +228,15 @@ function transactionIdToDate(transactionId) {
  *  otherwise prune it (keep_generations already enforces a minimum of 1
  *  via the config validator, which structurally protects the newest by
  *  count alone — this is the explicit, count-independent guarantee on
- *  top of that coincidence). Returns the names actually removed. */
-export function pruneOldTransactions(backupRoot, config, protectedTransactionId) {
+ *  top of that coincidence).
+ *
+ *  Each actually-pruned transaction's own `docker tag` (read from its
+ *  manifest, never rediscovered by globbing docker's image list — a glob
+ *  risks matching an unrelated same-named image) is removed via `bin`
+ *  before its directory goes, best-effort: an already-gone or
+ *  still-referenced tag must not block reclaiming the directory itself.
+ *  Returns the names actually removed. */
+export function pruneOldTransactions(backupRoot, config, protectedTransactionId, bin) {
   let names;
   try {
     names = readdirSync(backupRoot).filter((name) => !name.startsWith("."));
@@ -262,7 +269,21 @@ export function pruneOldTransactions(backupRoot, config, protectedTransactionId)
     if (name === protectedTransactionId) continue;
     const age = now - transactionIdToDate(name).getTime();
     if (age < retentionMs) continue;
-    rmSync(join(backupRoot, name), { recursive: true, force: true });
+    const dir = join(backupRoot, name);
+    // director ruling 2026-09-06: the tag to remove is READ from this
+    // transaction's own manifest, never derived by globbing docker's
+    // image list — a glob risks matching (and deleting) an unrelated
+    // image an operator happens to have named similarly. Best-effort:
+    // an already-removed tag, or one still referenced by something else,
+    // must not block reclaiming the DIRECTORY (the actual disk-space win
+    // this function exists for).
+    try {
+      const rollbackTag = readManifest(dir).rollback_tag;
+      runDocker(bin, ["rmi", rollbackTag]);
+    } catch {
+      // Intentionally ignored — see comment above.
+    }
+    rmSync(dir, { recursive: true, force: true });
     removed.push(name);
   }
   return removed;
@@ -876,6 +897,11 @@ export function runUpdate(flags, config) {
       volume_id: volumeId,
       archive,
       required_entries: requiredEntries,
+      // director ruling 2026-09-06: recorded on the manifest (not just
+      // the journal) so retention's docker-tag cleanup reads it from
+      // the one durable "facts about this transaction" record instead
+      // of rediscovering it by globbing docker's own image list.
+      rollback_tag: rollbackTag,
     });
 
     // (c3): bring the prepared image up, verify it is actually the target
@@ -947,7 +973,7 @@ export function runUpdate(flags, config) {
     let prunedTransactions = [];
     let pruneError = null;
     try {
-      prunedTransactions = pruneOldTransactions(backupRoot, config, transactionId);
+      prunedTransactions = pruneOldTransactions(backupRoot, config, transactionId, bin);
     } catch (err) {
       pruneError = err.message;
     }

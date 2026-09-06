@@ -12,15 +12,15 @@
 // smell; what this file exists to prevent is an UNLISTED phase or an
 // UNLISTED transition passing silently, not the list staying short
 // until the work that defines the rest lands.
-import { IMAGE_ID_RE, isPathSha, isValidRequiredEntries, SHA_RE } from "./kaoiro-deploy-manifest.mjs";
+import {
+  IMAGE_ID_RE,
+  isPathSha,
+  isValidRequiredEntries,
+  ROLLBACK_TAG_RE,
+  SHA_RE,
+} from "./kaoiro-deploy-manifest.mjs";
 
 export class PhaseError extends Error {}
-
-// クロエ round 1 review MF-2: the rollback tag must name the OLD sha it
-// was cut from, not just look like a tag — a value that merely looks
-// like a docker tag string but drifted from old_sha would be a silent
-// footgun the whole point of recording it is meant to prevent.
-const ROLLBACK_TAG_RE = /^kaoiro-server:rollback-[0-9a-f]{40}$/;
 
 export const PHASE = Object.freeze({
   PREFLIGHT: "preflight",
@@ -74,6 +74,10 @@ const TRANSITIONS = {
  *  whether to advance past STOPPED at all. */
 const OBSERVATION_SCHEMAS = {
   [PHASE.PREFLIGHT]: (obs) => typeof obs.container === "string" && obs.container !== "",
+  // クロエ round 1 review MF-2: the rollback tag must name the OLD sha it
+  // was cut from, not just look like a tag — a value that merely looks
+  // like a docker tag string but drifted from old_sha would be a silent
+  // footgun the whole point of recording it is meant to prevent.
   [PHASE.OLD_IMAGE_SAVED]: (obs) =>
     typeof obs.old_image_id === "string" &&
     IMAGE_ID_RE.test(obs.old_image_id) &&
