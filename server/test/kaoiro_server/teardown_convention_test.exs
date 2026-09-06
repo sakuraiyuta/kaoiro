@@ -31,58 +31,116 @@ defmodule KaoiroServer.TeardownConventionTest do
   # so never matches.
   @raw_stop_names [:stop, :terminate]
 
-  test "every on_exit teardown stops its process through TestTeardown" do
-    blocks =
-      for file <- test_sources(),
-          {line, ast} <- on_exit_calls(file),
-          do: {Path.relative_to(file, @test_root), line, ast}
+  describe "the scan" do
+    # Pinned on INLINE sources, never by planting a violating file under
+    # test/: a real violation would leave the suite permanently red, and
+    # excluding it again would rebuild the very blind spot this checker is
+    # for. Nothing here is evaluated — the sources are only parsed — so
+    # undefined names in them are deliberate.
+    test "reports a raw stop in a bare on_exit" do
+      assert [:stop] = raw_stops_in(~S|on_exit(fn -> GenServer.stop(pid) end)|)
+    end
 
-    raw =
-      for {file, line, ast} <- blocks, name <- raw_stop_calls(ast), uniq: true do
-        "#{file}:#{line} (#{name})"
-      end
+    # test/support modules do not `use ExUnit.Case`, so a teardown written
+    # in one can only be the qualified spelling. Matching the bare atom
+    # alone made every such file a blind spot (クロエ #318 round 1 must).
+    test "reports a raw stop in a QUALIFIED on_exit" do
+      assert [:stop] = raw_stops_in(~S|ExUnit.Callbacks.on_exit(fn -> GenServer.stop(pid) end)|)
+    end
 
-    adopters = for {_f, _l, ast} <- blocks, calls?(ast, :stop_quietly), do: ast
+    test "an aliased qualifier does not walk past it" do
+      assert [:stop] = raw_stops_in(~S|on_exit(fn -> GS.stop(pid) end)|)
 
-    # Two liveness guards, because they fail for different reasons and one
-    # threshold covering both can be lowered by an honest change (クロエ
-    # #318 round 1 nit-2). The scan is alive: the suite's `on_exit` count is
-    # in the hundreds (179 measured 2026-09-07) and no routine change moves
-    # it by an order of magnitude, so a scan that stopped parsing shows up
-    # here rather than passing with an empty `raw`.
-    assert length(blocks) >= 100,
-           "the on_exit scan found #{length(blocks)} callbacks; it is not reading the suite"
+      assert [:terminate] =
+               raw_stops_in(~S|ExUnit.Callbacks.on_exit(fn -> :sys.terminate(pid, :normal) end)|)
+    end
 
-    # The `stop_quietly` matcher is alive. Separate from the count above so
-    # that folding store tests together cannot quietly lower the scan's own
-    # liveness bar along with it.
-    assert length(adopters) >= 1,
-           "no teardown goes through stop_quietly; the matcher is not matching"
+    # A balanced-paren slicer ended the body at the `)` inside the string
+    # and never saw the stop after it. Elixir's own parser decides where the
+    # call ends, so that cannot happen.
+    test "a `)` inside a string literal does not end the body early" do
+      source = ~S|on_exit(fn -> _label = "closing) paren"; GenServer.stop(pid) end)|
 
-    assert raw == [],
-           "teardown must stop its process through " <>
-             "KaoiroServer.TestTeardown.stop_quietly/1 (issue #318): " <>
-             Enum.join(raw, ", ")
+      assert [:stop] = raw_stops_in(source)
+    end
+
+    test "reports a stop passed as a capture" do
+      assert [:stop] = raw_stops_in(~S|on_exit(fn -> Enum.each(pids, &GenServer.stop/1) end)|)
+    end
+
+    test "does not report what it must not" do
+      # The helper this checker exists to enforce.
+      assert [] == raw_stops_in(~S|on_exit(fn -> stop_quietly(pid) end)|)
+      # A stop in a test body: deliberate, and not this race.
+      assert [] == raw_stops_in(~S|test "reopen" do GenServer.stop(pid) end|)
+      # Comments are absent from the AST.
+      assert [] ==
+               raw_stops_in(~S"""
+               on_exit(fn ->
+                 # GenServer.stop(pid)
+                 :ok
+               end)
+               """)
+
+      # Out of scope by design: nothing waits on it.
+      assert [] == raw_stops_in(~S|on_exit(fn -> Process.exit(pid, :kill) end)|)
+    end
   end
 
-  defp test_sources do
-    @test_root |> Path.join("**/*.{ex,exs}") |> Path.wildcard()
+  describe "the suite" do
+    # Two liveness guards in two tests, because they fail for different
+    # reasons and one threshold covering both can be lowered by an honest
+    # change (クロエ #318 round 1 nit-2).
+    test "the scan reads the whole suite" do
+      # 179 callbacks measured 2026-09-07 (177 bare, 2 qualified). No routine
+      # change moves that by an order of magnitude, so a scan that stopped
+      # parsing shows up here rather than passing with an empty result.
+      count = length(on_exit_callbacks_in_suite())
+
+      assert count >= 100,
+             "the on_exit scan found #{count} callbacks; it is not reading the suite"
+    end
+
+    test "the stop_quietly matcher still matches" do
+      # 22 adopting sites measured 2026-09-07. Deliberately a low bar:
+      # folding store tests together honestly reduces this, and it must not
+      # drag the scan's own liveness bar down with it.
+      adopters =
+        Enum.count(on_exit_callbacks_in_suite(), fn {_file, _line, ast} ->
+          calls?(ast, :stop_quietly)
+        end)
+
+      assert adopters >= 1, "no teardown goes through stop_quietly; the matcher is not matching"
+    end
+
+    test "every on_exit teardown stops its process through TestTeardown" do
+      raw =
+        for {file, line, ast} <- on_exit_callbacks_in_suite(),
+            name <- raw_stop_calls(ast),
+            uniq: true do
+          "#{file}:#{line} (#{name})"
+        end
+
+      assert raw == [],
+             "teardown must stop its process through " <>
+               "KaoiroServer.TestTeardown.stop_quietly/1 (issue #318): " <>
+               Enum.join(raw, ", ")
+    end
   end
 
-  # Parsed, not sliced: Elixir's own parser decides where an `on_exit(...)`
-  # call ends, so a `)` inside a string literal or a comment cannot end the
-  # body early and hide a stop after it (the fail-open a balanced-paren
-  # slicer had). Comments are absent from the AST, so a commented-out stop
-  # is correctly ignored too.
-  # Both spellings, symmetrically with raw_stop_calls/1. `test/support`
-  # modules do not `use ExUnit.Case`, so `on_exit/1` is not imported there
-  # and a teardown written in one is ALWAYS the qualified
-  # `ExUnit.Callbacks.on_exit(...)` — matching only the bare atom made every
-  # such file a blind spot (クロエ #318 round 1 must; two qualified sites
-  # exist today).
-  defp on_exit_calls(file) do
-    file
-    |> File.read!()
+  defp on_exit_callbacks_in_suite do
+    for file <- Path.wildcard(Path.join(@test_root, "**/*.{ex,exs}")),
+        {line, ast} <- file |> File.read!() |> on_exit_callbacks(),
+        do: {Path.relative_to(file, @test_root), line, ast}
+  end
+
+  defp raw_stops_in(source),
+    do: for({_line, ast} <- on_exit_callbacks(source), do: raw_stop_calls(ast)) |> List.flatten()
+
+  # Parsed, not sliced, and both spellings — symmetrically with
+  # raw_stop_calls/1, whose qualified clause this one was missing.
+  defp on_exit_callbacks(source) do
+    source
     |> Code.string_to_quoted!()
     |> collect(fn
       {:on_exit, meta, args} when is_list(args) -> {meta[:line], args}
