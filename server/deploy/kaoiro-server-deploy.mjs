@@ -17,6 +17,7 @@ import { BRANCH, classify, requireRunningContainer } from "./kaoiro-deploy-branc
 import { loadConfig } from "./kaoiro-deploy-config.mjs";
 import { dockerInspect, resolveDockerBin, runDocker } from "./kaoiro-deploy-docker.mjs";
 import { advancePhase, writeJournal } from "./kaoiro-deploy-journal.mjs";
+import { writeManifest } from "./kaoiro-deploy-manifest.mjs";
 import { PHASE, validateJournalAgainstStateMachine } from "./kaoiro-deploy-phase.mjs";
 import { acquireLock, releaseLock } from "./kaoiro-deploy-lock.mjs";
 import { findUnfinishedTransaction, newTransactionId } from "./kaoiro-deploy-transaction.mjs";
@@ -329,6 +330,7 @@ export function runUpdate(flags, config) {
     let oldSha;
     let buildResult;
     let container;
+    let composeArtifact;
 
     if (flags.transaction !== undefined) {
       if (unfinished === null || unfinished.id !== flags.transaction) {
@@ -351,6 +353,7 @@ export function runUpdate(flags, config) {
       }
       oldImageId = oldEntry.observation.old_image_id;
       oldSha = oldEntry.observation.old_sha;
+      composeArtifact = oldEntry.observation.compose_artifact;
       buildResult = {
         imageId: buildEntry.observation.image_id,
         imageTag: buildEntry.observation.image_tag,
@@ -383,15 +386,12 @@ export function runUpdate(flags, config) {
       oldImageId = dockerInspect(bin, container, "{{.Image}}");
       oldSha = gitOutput(["rev-parse", "HEAD"], repo);
       const composeArtifactPath = join(serverDir, "docker-compose.yaml");
+      composeArtifact = { path: composeArtifactPath, sha256: sha256File(composeArtifactPath) };
       journal = advancePhase(
         dir,
         journal,
         PHASE.OLD_IMAGE_SAVED,
-        {
-          old_image_id: oldImageId,
-          old_sha: oldSha,
-          compose_artifact: { path: composeArtifactPath, sha256: sha256File(composeArtifactPath) },
-        },
+        { old_image_id: oldImageId, old_sha: oldSha, compose_artifact: composeArtifact },
         validateJournalAgainstStateMachine,
       );
 
@@ -476,9 +476,72 @@ export function runUpdate(flags, config) {
       validateJournalAgainstStateMachine,
     );
 
+    // --- archive: full traversal + checksum + required entries +
+    // ownership, all from the SAME resolved volume, before this
+    // transaction may call itself rollback-capable.
+    const requiredEntries = listVolumeEntries(bin, volumeId);
+    if (requiredEntries.length === 0) {
+      fail(
+        `resolved volume ${volumeId} contains no files — archiving an empty volume would not be a usable backup`,
+      );
+    }
+
+    const archivePath = join(dir, "archive.tar.gz");
+    runDocker(bin, [
+      "run",
+      "--rm",
+      "-v",
+      `${volumeId}:/data:ro`,
+      "-v",
+      `${dir}:/backup`,
+      "alpine",
+      "tar",
+      "czf",
+      "/backup/archive.tar.gz",
+      "-C",
+      "/data",
+      ".",
+    ]);
+    // Full traversal, not `| head`: a truncated pipeline's exit status
+    // comes from the tail command, masking a corrupt archive (same
+    // reasoning as deployment.md 4.3 step 5-c's own warning).
+    try {
+      execFileSync("tar", ["tzf", archivePath], { stdio: "ignore" });
+    } catch (err) {
+      fail(`archive verification failed (tar tzf ${archivePath}): ${err.message}`);
+    }
+    const archive = { path: archivePath, sha256: sha256File(archivePath) };
+
+    journal = advancePhase(
+      dir,
+      journal,
+      PHASE.ARCHIVED,
+      { archive, required_entries: requiredEntries },
+      validateJournalAgainstStateMachine,
+    );
+
+    // Written exactly once, here — the first point every fact it needs
+    // (S1's contract) is fully determined. Earlier phases hold the same
+    // facts in the journal's history in the meantime (S1 item i).
+    writeManifest(dir, {
+      schema_version: 1,
+      transaction_id: transactionId,
+      compose_artifact: composeArtifact,
+      // Key set + values are #220 absorption's job (a later commit) —
+      // see the #306 check-in on why no runtime-queryable source exists
+      // yet for the comparison this is meant to record.
+      env_consistency: {},
+      image_id: buildResult.imageId,
+      source_sha: oldSha,
+      target_sha: target,
+      volume_id: volumeId,
+      archive,
+      required_entries: requiredEntries,
+    });
+
     return {
       command: "update",
-      phase: "mount_resolved",
+      phase: "archived",
       transactionId,
       docker: overridden ? "fake" : "docker",
       oldImageId,
@@ -488,10 +551,46 @@ export function runUpdate(flags, config) {
       stopExitCode,
       stopOomKilled,
       volumeId,
+      archive,
+      requiredEntries,
     };
   } finally {
     releaseLock(lockPath);
   }
+}
+
+/** Lists a volume's top-level entries as manifest-shaped required-entry
+ *  records (`{ path, owner, mode }`) via a throwaway alpine container.
+ *  This is the (a) scope from the #306 archive design check-in: it
+ *  records what IS in the volume, not what SHOULD be — comparing
+ *  against the runtime-defined persistent-path set is #220 absorption's
+ *  job (a later commit; no runtime-queryable source exists on the
+ *  server side today).
+ *
+ *  Top-level only (`/data/*`), so a dotfile at the volume root is not
+ *  recorded here even though the archive step still includes it
+ *  (`tar -C /data .` covers everything) — a real gap in what this
+ *  function reports, scoped out rather than silently pretended away.
+ *  `[ -e "$f" ]` guards the empty-volume case: with no match, an
+ *  unquoted glob in `sh` is passed through literally as the string
+ *  `/data/*`, and `stat` on that would fail instead of yielding zero
+ *  entries. */
+function listVolumeEntries(bin, volumeId) {
+  const output = runDocker(bin, [
+    "run",
+    "--rm",
+    "-v",
+    `${volumeId}:/data:ro`,
+    "alpine",
+    "sh",
+    "-c",
+    'for f in /data/*; do [ -e "$f" ] && stat -c \'%n %u:%g %a\' "$f"; done',
+  ]);
+  if (output === "") return [];
+  return output.split("\n").map((line) => {
+    const [rawPath, owner, mode] = line.split(" ");
+    return { path: rawPath.replace(/^\/data\//, ""), owner, mode: `0${mode}` };
+  });
 }
 
 async function main(argv) {
