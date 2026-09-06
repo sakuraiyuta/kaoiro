@@ -14,12 +14,29 @@
 // read. Without that flag the env var is silently ignored, not rejected
 // loudly — a production host legitimately never sets it, and a loud
 // rejection there would fire on every ordinary run.
+//
+// SCOPE OF THE GUARANTEE (ふじ design review S2). This gate stops the
+// ONE mistake it names: KAOIRO_DEPLOY_DOCKER_BIN being set (by accident
+// or by a stray test export) in a shell that later runs a real deploy.
+// It does NOT, and cannot, prove that the literal string "docker" this
+// module hands to execFileSync resolves to the real Docker CLI —
+// resolution is PATH lookup, and anything earlier on PATH than the real
+// binary is invoked instead, `overridden: false` or not.
+// `overridden: false` therefore means "the dedicated override was not
+// used", never "the real docker binary ran". Closing that gap would mean
+// resolving an absolute path from a trusted, non-PATH-dependent
+// location, which this commit does not do. A party who can already
+// write ahead of docker on the deploying user's PATH has the same
+// privilege level needed to edit --config itself, so no combination of
+// flags in this file defends against a same-privilege PATH/config
+// attacker — only against the env-var accident this gate was built for.
 import { execFileSync } from "node:child_process";
 
 /** Resolves which docker binary this run uses, and whether that is an
  *  override. Callers surface `overridden` in --dry-run / status output
  *  (as `docker=fake`) so an operator reading a plan can never mistake a
- *  gated test run for a production one. */
+ *  gated test run for a production one. See the module comment above
+ *  for what `overridden: false` does NOT prove. */
 export function resolveDockerBin(config, env = process.env) {
   const override = env.KAOIRO_DEPLOY_DOCKER_BIN;
   if (!override || config?.allow_docker_override !== true) {

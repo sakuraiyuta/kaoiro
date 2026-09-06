@@ -12,7 +12,7 @@ function journal(phase) {
     schema_version: 1,
     transaction_id: "t",
     phase,
-    history: [{ phase, at: "2026-09-06T10:15:00.000Z" }],
+    history: [{ phase, at: "2026-09-06T10:15:00.000Z", observation: {} }],
   };
 }
 

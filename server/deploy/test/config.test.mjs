@@ -58,3 +58,20 @@ test("loadConfig rejects malformed JSON", () => {
   chmodSync(path, 0o600);
   assert.throws(() => loadConfig(path), ConfigError);
 });
+
+test("loadConfig rejects a file not owned by the current user", () => {
+  const path = join(dir, "config.json");
+  writeFileSync(path, "{}");
+  chmodSync(path, 0o600);
+  // process.getuid() is temporarily made to disagree with the file's
+  // real owner (this process itself), reaching the ownership guard
+  // without needing root to actually create a file owned by someone
+  // else.
+  const original = process.getuid;
+  process.getuid = () => original() + 1;
+  try {
+    assert.throws(() => loadConfig(path), ConfigError);
+  } finally {
+    process.getuid = original;
+  }
+});

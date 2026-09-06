@@ -11,11 +11,16 @@
 // journal records WHERE the transaction currently is. Splitting them
 // means a phase transition never has to rewrite (and re-validate) the
 // artifact facts that did not change.
-import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
+
+import { writeFileDurably } from "./kaoiro-deploy-atomic-write.mjs";
 
 const SHA256_RE = /^[0-9a-f]{64}$/;
 const SHA_RE = /^[0-9a-f]{40}$/;
+const IMAGE_ID_RE = /^sha256:[0-9a-f]{64}$/;
+const OWNER_RE = /^[0-9]+:[0-9]+$/;
+const MODE_RE = /^0[0-7]{3}$/;
 
 export class ManifestError extends Error {}
 
@@ -34,6 +39,34 @@ function isPathSha(value) {
   );
 }
 
+/** One env-var's three-way comparison (ふじ design review M1): the
+ *  actual KEY SET being compared (`.env` explicit values vs. compose vs.
+ *  container effective env, #220 absorption) is not decided yet — that
+ *  is a later commit's preflight work. What this fixes NOW is the
+ *  per-key VALUE SHAPE, so a manifest can no longer claim
+ *  `env_consistency: []` or `{checked: true}` and pass: each recorded
+ *  key must actually carry the three observed values and the computed
+ *  match result. `null` means "not present in that source", which is a
+ *  legitimate observation, not a missing measurement. */
+function isEnvConsistencyEntry(value) {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    (value.env_file === null || typeof value.env_file === "string") &&
+    (value.compose === null || typeof value.compose === "string") &&
+    (value.container === null || typeof value.container === "string") &&
+    typeof value.match === "boolean"
+  );
+}
+
+function isValidEnvConsistency(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  return Object.values(value).every(isEnvConsistencyEntry);
+}
+
 /** Validates the shape the operator decisions on #303 fixed. STRICT, like
  *  verify-release.mjs's isBuildInfoShape: a manifest with any invalid
  *  field is not trustworthy over the whole, so this returns false rather
@@ -45,10 +78,10 @@ export function isValidManifestShape(value) {
     return false;
   }
   if (!isPathSha(value.compose_artifact)) return false;
-  if (typeof value.env_consistency !== "object" || value.env_consistency === null) {
+  if (!isValidEnvConsistency(value.env_consistency)) return false;
+  if (typeof value.image_id !== "string" || !IMAGE_ID_RE.test(value.image_id)) {
     return false;
   }
-  if (typeof value.image_id !== "string" || value.image_id === "") return false;
   if (typeof value.source_sha !== "string" || !SHA_RE.test(value.source_sha)) {
     return false;
   }
@@ -58,37 +91,42 @@ export function isValidManifestShape(value) {
   if (typeof value.volume_id !== "string" || value.volume_id === "") return false;
   if (!isPathSha(value.archive)) return false;
   if (!Array.isArray(value.required_entries)) return false;
+  // Path uniqueness (ふじ design review M1) — a duplicate path is not a
+  // malformed entry on its own, but two entries claiming the same
+  // persistent-path record two different owner/mode expectations for
+  // one file, which cannot both hold.
+  const seenPaths = new Set();
   for (const entry of value.required_entries) {
     if (
       typeof entry !== "object" ||
       entry === null ||
       typeof entry.path !== "string" ||
       entry.path === "" ||
+      seenPaths.has(entry.path) ||
       typeof entry.owner !== "string" ||
-      entry.owner === "" ||
+      !OWNER_RE.test(entry.owner) ||
       typeof entry.mode !== "string" ||
-      entry.mode === ""
+      !MODE_RE.test(entry.mode)
     ) {
       return false;
     }
+    seenPaths.add(entry.path);
   }
   return true;
 }
 
-/** Writes manifest.json atomically: write a temp file in the SAME
- *  directory, then rename — a reader (including a concurrent `status`)
- *  never observes a partial write. Same rationale as
- *  kaoiro-runner-common.sh's kaoiro_symlink_swap. Refuses to write a
- *  manifest that fails its own shape check: a manifest this file cannot
- *  read back is worse than none. */
+/** Writes manifest.json durably via writeFileDurably() (ふじ design
+ *  review M3: fsync the file before rename, fsync the directory after —
+ *  a reader never observes a partial write, and the write survives a
+ *  crash, not just a normal read). Refuses to write a manifest that
+ *  fails its own shape check: a manifest this file cannot read back is
+ *  worse than none. */
 export function writeManifest(dir, manifest) {
   if (!isValidManifestShape(manifest)) {
     fail("refusing to write a manifest that does not match the expected shape");
   }
   const target = join(dir, "manifest.json");
-  const tmp = `${target}.tmp.${process.pid}`;
-  writeFileSync(tmp, `${JSON.stringify(manifest, null, 2)}\n`);
-  renameSync(tmp, target);
+  writeFileDurably(target, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
 /** Reads and STRICTLY validates manifest.json. Never degrades a missing

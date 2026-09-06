@@ -306,14 +306,18 @@ export function runUpdate(flags, config) {
           `transaction ${transactionId} has not completed prepare (phase: ${journal.phase}); rerun update with --transaction ${transactionId} and no --maintenance-approved to retry prepare`,
         );
       }
-      if (buildEntry.target_sha !== target) {
+      if (buildEntry.observation.target_sha !== target) {
         fail(
-          `--target ${target} does not match transaction ${transactionId}'s prepared target ${buildEntry.target_sha}`,
+          `--target ${target} does not match transaction ${transactionId}'s prepared target ${buildEntry.observation.target_sha}`,
         );
       }
-      oldImageId = oldEntry.old_image_id;
-      oldSha = oldEntry.old_sha;
-      buildResult = { imageId: buildEntry.image_id, imageTag: buildEntry.image_tag, target };
+      oldImageId = oldEntry.observation.old_image_id;
+      oldSha = oldEntry.observation.old_sha;
+      buildResult = {
+        imageId: buildEntry.observation.image_id,
+        imageTag: buildEntry.observation.image_tag,
+        target,
+      };
       // Re-verify: prepare ran against a running container, and resume
       // may happen an arbitrary time later — nothing here should trust
       // that it still is.
@@ -334,7 +338,7 @@ export function runUpdate(flags, config) {
         schema_version: 1,
         transaction_id: transactionId,
         phase: "preflight",
-        history: [{ phase: "preflight", at: new Date().toISOString(), container }],
+        history: [{ phase: "preflight", at: new Date().toISOString(), observation: { container } }],
       };
       writeJournal(dir, journal);
 
