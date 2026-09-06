@@ -142,11 +142,35 @@ defmodule KaoiroServer.AgentAcceptance do
   """
   def delete(agent_id) when is_binary(agent_id) do
     case Registry.lookup(@registry, agent_id) do
-      [{pid, _value}] -> DynamicSupervisor.terminate_child(@supervisor, pid)
-      [] -> :ok
+      [{pid, _value}] ->
+        ref = Process.monitor(pid)
+        _ = DynamicSupervisor.terminate_child(@supervisor, pid)
+        await_worker_removal(agent_id, pid, ref)
+
+      [] ->
+        :ok
     end
 
     :ok
+  end
+
+  defp await_worker_removal(agent_id, pid, ref) do
+    receive do
+      {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+    end
+
+    await_registry_removal(agent_id)
+  end
+
+  defp await_registry_removal(agent_id) do
+    case Registry.lookup(@registry, agent_id) do
+      [] ->
+        :ok
+
+      _still_registered ->
+        Process.sleep(1)
+        await_registry_removal(agent_id)
+    end
   end
 
   @impl true

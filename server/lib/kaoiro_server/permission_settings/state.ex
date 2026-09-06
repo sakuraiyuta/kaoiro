@@ -38,8 +38,11 @@ defmodule KaoiroServer.PermissionSettings.State do
   revision (`counter + 1`), and returns the fully-updated entry — no
   persistence, no side effects. Returns `{:ok, new_revision, new_entry}`
   or `{:error, :revision_exhausted}` when `counter` is already at the
-  safe-integer ceiling.
+  safe-integer ceiling, or `{:error, :permission_not_ready}` when no
+  launch baseline exists yet.
   """
+  def submit(nil, _counter, _engine, _patch, _actor, _at), do: {:error, :permission_not_ready}
+
   def submit(entry, counter, engine, patch, actor, at) do
     if counter >= @max_safe_integer do
       {:error, :revision_exhausted}
@@ -178,6 +181,7 @@ defmodule KaoiroServer.PermissionSettings.State do
   end
 
   defp merge_current_revision(entry, sanitized) do
+    sanitized = discard_unknown_effective(sanitized)
     ledger = update_ledger_entry(entry.ledger, entry.control.revision, sanitized)
 
     {control, next} =
@@ -189,6 +193,11 @@ defmodule KaoiroServer.PermissionSettings.State do
 
     prune_entry(%{entry | control: control, next: next, ledger: ledger})
   end
+
+  defp discard_unknown_effective(%{status: :unknown} = sanitized),
+    do: %{sanitized | effective: nil}
+
+  defp discard_unknown_effective(sanitized), do: sanitized
 
   # issue #305 M3(b), director round-2 correction 2026-09-06 (withdraws
   # the original ruling): a same-revision observation reporting a
@@ -435,30 +444,39 @@ defmodule KaoiroServer.PermissionSettings.State do
   server actually restart" — that distinction is not reliably observable
   from a loaded entry, and the same caution applies to a same-process
   rejoin, protocol.md: "A same-process rejoin must not turn a cached
-  observation into a fresh application"). `applying` / `applied` /
-  `unknown` all round to `pending`: a join is a readiness barrier, not a
-  fresh reconfirmation of a previous connection's observation. Presenting
-  a stale `applied` as still current would also make a wrapper's own
+  observation into a fresh application"). `applying` and `applied` round
+  to `pending`: a join is a readiness barrier, not a fresh reconfirmation
+  of a previous connection's observation. Presenting a stale `applied` as
+  still current would also make a wrapper's own
   audit dedupe (keyed off a fresh `applied` transition) re-fire for a
-  status it never freshly re-observed on THIS connection. `submitted`/`effective`
-  are dropped on rounding — presenting them next to a rounded-down
-  `pending` status would contradict it — but `last_effective` always
-  survives the rounding (seeded from `effective` when the stored status
-  was `applied`) so historical evidence is never lost. `failed` is
-  never rounded: its `reason`/`rolled_back_to` are exactly what the
+  status it never freshly re-observed on THIS connection. `submitted`/
+  `effective` are dropped on rounding — presenting them next to a
+  rounded-down `pending` status would contradict it — but `last_effective`
+  always survives the rounding (seeded from `effective` when the stored
+  status was `applied`) so historical evidence is never lost. `unknown`
+  remains blocked across a join; it retains its `submitted` and `reason`,
+  while current `effective` and `rolled_back_to` remain absent. `failed`
+  is never rounded: its `reason`/`rolled_back_to` are exactly what the
   operator needs to see, unchanged, on every rejoin.
   """
   def sync_view(nil), do: {nil, nil}
 
   def sync_view(%{control: control, next: next}) do
     rounded =
-      if control.status in [:applying, :applied, :unknown] do
+      if control.status in [:applying, :applied] do
         %{control | status: :pending, submitted: nil, effective: nil}
       else
         control
       end
 
-    {control_wire(rounded), next}
+    projected =
+      if rounded.status == :unknown do
+        %{rounded | effective: nil, rolled_back_to: nil}
+      else
+        rounded
+      end
+
+    {control_wire(projected), next}
   end
 
   @doc """

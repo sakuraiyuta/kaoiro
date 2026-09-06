@@ -4,6 +4,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
   import KaoiroServer.TestTeardown
 
   alias KaoiroServer.PermissionSettings
+  alias KaoiroServer.PermissionSettings.State
 
   # Mirrors SessionPointers' isolation setup: a cross-BEAM-unique path so
   # concurrent `mix test` invocations never race the same DETS file
@@ -62,6 +63,15 @@ defmodule KaoiroServer.PermissionSettingsTest do
 
   describe "submit_request/6" do
     test "no baseline yet returns permission_not_ready", %{server: server} do
+      assert State.submit(
+               nil,
+               0,
+               "codex",
+               %{sandbox: "workspace-write"},
+               %{kind: "user", id: "u1"},
+               "2026-09-06T00:00:00Z"
+             ) == {:error, :permission_not_ready}
+
       assert PermissionSettings.submit_request(
                "a.none",
                "codex",
@@ -1130,6 +1140,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
             "status" => "unknown",
             "requested" => %{"sandbox" => "workspace-write", "network_access" => false},
             "submitted" => submitted,
+            "effective" => %{"execution_id" => "e1", "sandbox" => "workspace-write"},
             "reason" => "observation_unavailable"
           }),
           server
@@ -1149,6 +1160,28 @@ defmodule KaoiroServer.PermissionSettingsTest do
       assert entry.control.status == :unknown
       assert entry.control.submitted == submitted
       assert entry.control.reason == "observation_unavailable"
+      assert entry.control.effective == nil
+
+      {control, next} = PermissionSettings.sync_view(entry)
+      assert control["status"] == "unknown"
+      assert control["submitted"] == submitted
+      assert control["reason"] == "observation_unavailable"
+      refute Map.has_key?(control, "effective")
+      refute Map.has_key?(control, "rolled_back_to")
+      assert next == entry.next
+
+      persisted_unknown = %{
+        entry
+        | control: %{
+            entry.control
+            | effective: %{"execution_id" => "legacy-e1"},
+              rolled_back_to: %{sandbox: "read-only", network_access: false}
+          }
+      }
+
+      {control, _next} = PermissionSettings.sync_view(persisted_unknown)
+      refute Map.has_key?(control, "effective")
+      refute Map.has_key?(control, "rolled_back_to")
 
       GenServer.stop(pid2)
     end
@@ -1303,7 +1336,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
       assert next == entry.next
     end
 
-    test "unknown rounds to pending, no explicit null for submitted/effective (issue #305 M1)",
+    test "unknown remains blocked with the C parser's wire shape (issue #305 M1)",
          %{server: server} do
       seed_baseline(server, "c.6")
 
@@ -1325,6 +1358,12 @@ defmodule KaoiroServer.PermissionSettingsTest do
             "revision" => 1,
             "status" => "unknown",
             "requested" => %{"sandbox" => "workspace-write", "network_access" => false},
+            "submitted" => %{"execution_id" => "e1", "revision" => 1},
+            "effective" => %{
+              "sandbox" => "workspace-write",
+              "network_access" => false,
+              "execution_id" => "e1"
+            },
             "reason" => "observation_unavailable"
           }),
           server
@@ -1336,14 +1375,11 @@ defmodule KaoiroServer.PermissionSettingsTest do
       entry = PermissionSettings.get("c.6", server)
       {control, next} = PermissionSettings.sync_view(entry)
 
-      assert control["status"] == "pending"
-      refute Map.has_key?(control, "submitted")
+      assert control["status"] == "unknown"
+      assert control["submitted"] == %{"execution_id" => "e1", "revision" => 1}
       refute Map.has_key?(control, "effective")
-      # reason is not part of the rounding contract (sync_view only
-      # touches status/submitted/effective) — still present here since
-      # this stored control legitimately has one, but not asserted as
-      # cleared, since that is not what this fix changes. The M1
-      # contract this test exists to pin is the null-vs-omitted shape.
+      refute Map.has_key?(control, "rolled_back_to")
+      assert control["reason"] == "observation_unavailable"
       assert next == entry.next
     end
 

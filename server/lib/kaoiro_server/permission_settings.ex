@@ -190,20 +190,18 @@ defmodule KaoiroServer.PermissionSettings do
 
   @impl true
   def handle_call({:submit_request, agent_id, engine, patch, actor, at}, _from, state) do
-    case Map.get(state.settings, agent_id) do
-      nil ->
+    entry = Map.get(state.settings, agent_id)
+    counter = Map.get(state.counters, agent_id, 0)
+
+    case State.submit(entry, counter, engine, patch, actor, at) do
+      {:ok, new_revision, new_entry} ->
+        persist_submit(agent_id, new_revision, new_entry, state)
+
+      {:error, :permission_not_ready} ->
         {:reply, {:error, :permission_not_ready}, state}
 
-      entry ->
-        counter = Map.get(state.counters, agent_id, 0)
-
-        case State.submit(entry, counter, engine, patch, actor, at) do
-          {:ok, new_revision, new_entry} ->
-            persist_submit(agent_id, new_revision, new_entry, state)
-
-          {:error, :revision_exhausted} ->
-            {:reply, {:error, :revision_exhausted}, state}
-        end
+      {:error, :revision_exhausted} ->
+        {:reply, {:error, :revision_exhausted}, state}
     end
   end
 

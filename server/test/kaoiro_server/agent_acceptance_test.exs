@@ -106,14 +106,9 @@ defmodule KaoiroServer.AgentAcceptanceTest do
 
     assert AgentAcceptance.delete(agent_id) == :ok
     refute Process.alive?(pid)
+    assert Registry.lookup(KaoiroServer.AgentAcceptance.Registry, agent_id) == []
 
-    # A respawn under the same agent_id gets a fresh worker transparently
-    # (also proves this is not still talking to the terminated pid —
-    # Registry's own cleanup of the OLD entry races this call slightly,
-    # since it is driven by an async monitor `:DOWN`, not
-    # `terminate_child/2`'s synchronous return, so ensure_worker/1's
-    # very next lookup is what is actually being proven here, not the
-    # Registry's internal timing).
+    # A respawn under the same agent_id gets a fresh worker transparently.
     assert AgentAcceptance.run(agent_id, fn -> :ok end) == :ok
     assert [{new_pid, _}] = Registry.lookup(KaoiroServer.AgentAcceptance.Registry, agent_id)
     assert new_pid != pid
