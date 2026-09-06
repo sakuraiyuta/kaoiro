@@ -48,11 +48,15 @@ defmodule KaoiroServer.TeardownConventionTest do
       assert [:stop] = raw_stops_in(~S|ExUnit.Callbacks.on_exit(fn -> GenServer.stop(pid) end)|)
     end
 
+    # One dimension per pin, so a broken clause reddens one test and names
+    # itself. The qualified SPELLING is pinned just above; this one varies
+    # the qualifier of the STOP and nothing else.
     test "an aliased qualifier does not walk past it" do
       assert [:stop] = raw_stops_in(~S|on_exit(fn -> GS.stop(pid) end)|)
+    end
 
-      assert [:terminate] =
-               raw_stops_in(~S|ExUnit.Callbacks.on_exit(fn -> :sys.terminate(pid, :normal) end)|)
+    test "reports :sys.terminate as well as stop" do
+      assert [:terminate] = raw_stops_in(~S|on_exit(fn -> :sys.terminate(pid, :normal) end)|)
     end
 
     # A balanced-paren slicer ended the body at the `)` inside the string
@@ -88,9 +92,14 @@ defmodule KaoiroServer.TeardownConventionTest do
   end
 
   describe "the suite" do
-    # Two liveness guards in two tests, because they fail for different
-    # reasons and one threshold covering both can be lowered by an honest
-    # change (クロエ #318 round 1 nit-2).
+    # What the scan DETECTS is pinned above, on inline sources. These two
+    # answer the one remaining question — whether the scan is still reading
+    # the real suite at all — and nothing else. Two tests, not one, because
+    # they fail for different reasons and a single threshold covering both
+    # can be lowered by an honest change (クロエ #318 round 1 nit-2). The
+    # two qualified callbacks under `test/support` hold `File.rm` and
+    # `Application.put_env`, no stop, so picking them up leaves the
+    # suite-wide check green — as it should.
     test "the scan reads the whole suite" do
       # 179 callbacks measured 2026-09-07 (177 bare, 2 qualified). No routine
       # change moves that by an order of magnitude, so a scan that stopped
