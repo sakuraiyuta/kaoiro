@@ -228,6 +228,16 @@ while [ $# -gt 0 ]; do
     --install-dir)
       [ $# -ge 2 ] || kaoiro_die "--install-dir needs a value" 64
       kaoiro_reject_option_like --install-dir "$2"
+      # Round-2 review N-3: rejecting this HERE, not only inside
+      # render_systemd_unit/render_launchd_plist, is what makes --dry-run
+      # catch it too. plan_systemd/plan_launchd only call render_* to
+      # DIFF against an existing unit/plist file (`[ -e "$_unit_path" ] &&
+      # render_... | cmp`); on a fresh host that file does not exist yet,
+      # so the `&&` short-circuits and render_* — and its own reject_newline
+      # — is never reached. Without this, --dry-run printed a clean plan
+      # and exited 0 for a root a real run would later reject at exit 70,
+      # well after the wizard/install/switch had already run.
+      reject_newline "install root" "$2" || exit 64
       root=$2
       shift 2
       ;;
@@ -270,6 +280,18 @@ case "$os" in
     kaoiro_die "unsupported OS: $os (this script supports Linux/systemd and macOS/launchd only)" 78
     ;;
 esac
+
+# Round-2 review N-3, same reasoning as the --install-dir check above: this
+# runs ONCE here, for both --dry-run and a real run alike, rather than only
+# inside render_launchd_plist — which --dry-run can also short-circuit past
+# on a fresh host, and which the systemd branch never reaches at all (only
+# render_launchd_plist substitutes $HOME). `${HOME:-}` (not `$HOME`): HOME
+# being genuinely UNSET is a different condition, left to whichever function
+# actually needs it (kaoiro_install_root / kaoiro_config_dir already die on
+# that with their own clear message) — an empty string here has no newline
+# to reject, so this check passes it through rather than raising `set -u`'s
+# unbound-variable error.
+reject_newline HOME "${HOME:-}" || exit 64
 
 config_dir=$(kaoiro_config_dir)
 config_json="$config_dir/runner.config.json"

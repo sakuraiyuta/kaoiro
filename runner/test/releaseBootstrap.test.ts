@@ -21,7 +21,6 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readdirSync,
   readFileSync,
   readlinkSync,
   rmSync,
@@ -263,6 +262,24 @@ describe("kaoiro-runner-bootstrap.sh (issue #314)", () => {
       expect(existsSync(root)).toBe(false);
       expect(readCalls()).toEqual([]);
     });
+
+    it("install root に改行を含む場合は render まで進まず exit 64 で拒否する(issue #314 round2 N-3)", () => {
+      // Before N-3, this passed with exit 0 and a clean-looking plan: on a
+      // fresh host (no unit/plist file yet) plan_systemd/plan_launchd's own
+      // `[ -e "$_unit_path" ] && render_... | cmp` short-circuits past
+      // render_systemd_unit's reject_newline, so --dry-run never reached the
+      // check that a REAL run hits later, deep inside apply_systemd (exit
+      // 70) — after the wizard, install and switch had already run. No
+      // tarball needs to exist: --install-dir is rejected before the
+      // tarball argument is ever inspected.
+      const weirdRoot = join(dir, "install-root-with\nnewline");
+
+      const result = bootstrap(["/nonexistent.tar.gz", "--dry-run"], {}, weirdRoot);
+
+      expect(result.status).toBe(64);
+      expect(result.stderr).toContain("must not contain a newline");
+      expect(result.stderr).not.toContain("would write");
+    });
   });
 
   describe("OS 分岐", () => {
@@ -436,7 +453,14 @@ describe("kaoiro-runner-bootstrap.sh (issue #314)", () => {
       expect(content).not.toContain("@@HOME@@");
     });
 
-    it("install root に改行を含む場合は描画前に拒否し、一時ファイルを残さない", () => {
+    it("install root に改行を含む場合は拒否し、何も配置しない", () => {
+      // Exit 64, not 70: round-2 N-3 moved this rejection to arg parsing
+      // (see the "--dry-run" describe block), so a REAL run now hits it
+      // there too — before the wizard, install or switch ever run, not
+      // deep inside apply_systemd after all of them already have. The
+      // render-level reject_newline this test used to reach directly is
+      // kept as defense in depth (round-2 review: harmless), but is no
+      // longer this script's own path to a newline-containing root.
       writeConfig();
       const weirdRoot = join(dir, "install-root-with\nnewline");
       const revision = revisionOf("bootstrap-newline-reject");
@@ -444,12 +468,10 @@ describe("kaoiro-runner-bootstrap.sh (issue #314)", () => {
 
       const result = bootstrap([archive], {}, weirdRoot);
 
-      expect(result.status).toBe(70);
+      expect(result.status).toBe(64);
       expect(result.stderr).toContain("must not contain a newline");
-      const unitDir = join(home, ".config", "systemd", "user");
-      if (existsSync(unitDir)) {
-        expect(readdirSync(unitDir).some((f) => f.includes(".new."))).toBe(false);
-      }
+      expect(existsSync(join(home, ".config", "systemd", "user"))).toBe(false);
+      expect(readCalls()).toEqual([]);
     });
   });
 
