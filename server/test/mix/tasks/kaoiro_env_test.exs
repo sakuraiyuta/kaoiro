@@ -34,6 +34,46 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
     end
   end
 
+  # issue #307 review (director こはく): KAOIRO_QUAGMIRE_SETTINGS_PATH reached
+  # runtime.exs, compose, the dev launcher and this task, but NOT
+  # server/.env.example — the file an operator reads first when running
+  # outside compose. The wizard and the example file are separate surfaces
+  # and drifted apart silently, so pin the relation rather than the list:
+  # every path variable this task can emit must also appear in .env.example.
+  #
+  # Reads the task's SOURCE, not `render/1`'s output, on purpose: the OAuth
+  # branch emits KAOIRO_OAUTH_ALLOWLIST_PATH only for some answers, and a
+  # variable that a branch can emit still has to be documented.
+  #
+  # NOTE for issue #305: that branch adds KAOIRO_PERMISSION_SETTINGS_PATH to
+  # this task, which will fail this test until .env.example carries it too.
+  # Fixing that belongs to #305 when it lands, not here.
+  test "every path variable the wizard can emit is documented in .env.example" do
+    repo_root = Path.expand("../../../..", __DIR__)
+    task_source = File.read!(Path.join(repo_root, "server/lib/mix/tasks/kaoiro.env.ex"))
+    example = File.read!(Path.join(repo_root, "server/.env.example"))
+
+    path_vars = fn text ->
+      ~r/KAOIRO_[A-Z0-9_]*_PATH/
+      |> Regex.scan(text)
+      |> List.flatten()
+      |> MapSet.new()
+    end
+
+    emitted = path_vars.(task_source)
+    documented = path_vars.(example)
+
+    # Guards the regex itself: an empty emitted set would make the subset
+    # assertion below pass while measuring nothing.
+    assert MapSet.size(emitted) >= 10
+
+    missing = MapSet.difference(emitted, documented)
+
+    assert MapSet.equal?(missing, MapSet.new()),
+           "path variables emitted by mix kaoiro.env but absent from " <>
+             "server/.env.example: #{inspect(MapSet.to_list(missing))}"
+  end
+
   describe "render/1" do
     test "必須項目は素の代入として出る" do
       body = Env.render(@answers)
