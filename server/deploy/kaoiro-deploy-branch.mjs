@@ -13,6 +13,8 @@
 // rather than re-deriving their own branch logic.
 import { dockerComposeContainerNames, dockerInspect } from "./kaoiro-deploy-docker.mjs";
 
+export class BranchError extends Error {}
+
 export const BRANCH = Object.freeze({
   STOPPED_CONTAINER: "A",
   STATE_WITHOUT_CONTAINER: "B",
@@ -50,4 +52,26 @@ export function classify(bin, cwd, service, hasState) {
     reason: `container status is "${status}", expected "exited"`,
     container,
   };
+}
+
+/** Requires exactly one container for `service`, in status "running" —
+ *  the precondition `update` needs before it may touch anything. Unlike
+ *  classify(), this is not a branch table: `update`'s only acceptable
+ *  starting point is "already running normally", and anything else
+ *  (stopped, multiple, unknown status) is refused here rather than
+ *  auto-classified — running `status`/`start` first is what tells the
+ *  operator which of A-D they are actually looking at. */
+export function requireRunningContainer(bin, cwd, service) {
+  const names = dockerComposeContainerNames(bin, cwd, service);
+  if (names.length !== 1) {
+    throw new BranchError(
+      `expected exactly one container for service ${service}, found ${names.length}; run 'status' first`,
+    );
+  }
+  const [container] = names;
+  const status = dockerInspect(bin, container, "{{.State.Status}}");
+  if (status !== "running") {
+    throw new BranchError(`container ${container} is "${status}", not "running"; run 'status' first`);
+  }
+  return container;
 }
