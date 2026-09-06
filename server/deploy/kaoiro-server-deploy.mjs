@@ -10,12 +10,12 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 
 import { computeBuildIdentity } from "../../scripts/build-identity.mjs";
 import { BRANCH, classify, requireRunningContainer } from "./kaoiro-deploy-branch.mjs";
 import { loadConfig } from "./kaoiro-deploy-config.mjs";
-import { dockerInspect, resolveDockerBin, runDocker } from "./kaoiro-deploy-docker.mjs";
+import { dockerComposeContainerNames, dockerInspect, resolveDockerBin, runDocker } from "./kaoiro-deploy-docker.mjs";
 import { advancePhase, readJournal, writeJournal } from "./kaoiro-deploy-journal.mjs";
 import { readManifest, writeManifest } from "./kaoiro-deploy-manifest.mjs";
 import { PHASE, TRANSITIONS, validateJournalAgainstStateMachine } from "./kaoiro-deploy-phase.mjs";
@@ -1369,6 +1369,306 @@ export function runUpdate(flags, config) {
   }
 }
 
+// Every phase `rollback` may act on (director ruling 2026-09-06, B-1):
+// reachable forward from OLD_IMAGE_SAVED — everything but PREFLIGHT
+// (nothing was even recorded yet) — MINUS the rollback chain's own
+// phases and the terminal ROLLED_BACK. A transaction already mid-
+// rollback or fully rolled back needs manual investigation, not a
+// second `rollback` invocation (no resume support for rollback itself
+// yet, the same limit `update`'s own UNRESUMABLE_PHASES documents for
+// its half).
+const ROLLBACK_ELIGIBLE_PHASES = reachablePhases(PHASE.OLD_IMAGE_SAVED, TRANSITIONS);
+for (const phase of [PHASE.ROLLBACK_STOPPED, PHASE.ROLLBACK_FORENSIC_ARCHIVED, PHASE.ROLLBACK_RESTORED, PHASE.ROLLED_BACK]) {
+  ROLLBACK_ELIGIBLE_PHASES.delete(phase);
+}
+
+/** `rollback`: restores the OLD image + its corresponding pre-deploy
+ *  DETS pair for `--transaction <id>` (director ruling 2026-09-06,
+ *  B-1..B-5). Never mutates without `--confirm-restore` (or previews
+ *  with `--dry-run`, which never touches anything either).
+ *
+ *  The destructive/non-destructive split is derived from the SAME
+ *  TRANSITIONS graph `update` and its own UNRESUMABLE_PHASES read
+ *  (`TRANSITIONS[phase]` includes ROLLBACK_STOPPED exactly for
+ *  STARTING/UP/HEALTHY/DONE) rather than a second hand-written list —
+ *  the same "derive it, do not re-enumerate it" fix as MF-2.
+ *
+ *  Non-destructive (OLD_IMAGE_SAVED..ARCHIVED): the old container was
+ *  never recreated — nothing on the volume has changed since PREFLIGHT.
+ *  Retag `latest` back to the old image (undoing `compose build`'s side
+ *  effect, verified by read-back) and `docker start` the PREFLIGHT-
+ *  recorded container (a harmless no-op if it was never actually
+ *  stopped — measured live: `docker start` on an already-running
+ *  container exits 0). No manifest needed (B-1) since ARCHIVED and
+ *  earlier phases may not have one yet, and even ARCHIVED's own archive
+ *  is untouched, so there is nothing to restore FROM.
+ *
+ *  Destructive (STARTING/UP/HEALTHY/DONE): the new image may already
+ *  have opened (STARTING's own ambiguity), so old code is not assumed
+ *  able to read whatever it wrote. Requires a manifest (only reachable
+ *  transactions have one, since it is written at ARCHIVED): stop
+ *  whatever is currently running for the service, forensically archive
+ *  the CURRENT volume state (before touching it), re-verify the
+ *  pre-deploy archive's sha256 right before the destructive wipe
+ *  (mutation-pinned — a changed archive refuses to restore), wipe and
+ *  restore, re-tar the restored volume and confirm it matches the
+ *  manifest's own required_entries exactly, retag `latest` back
+ *  (verified), `compose up -d --no-build --force-recreate`, and poll
+ *  health for the OLD sha. */
+export function runRollback(flags, config) {
+  const repo = flags.repo ?? process.cwd();
+  const serverDir = join(repo, "server");
+  const { bin, overridden } = resolveDockerBin(config);
+  const backupRoot = resolveBackupRoot(config);
+
+  if (!flags.transaction) {
+    fail("rollback requires --transaction <id>", 64);
+  }
+  const dir = join(backupRoot, flags.transaction);
+  let journal;
+  try {
+    journal = readJournal(dir);
+  } catch (err) {
+    fail(`--transaction ${flags.transaction} has no readable journal at ${dir}: ${err.message}`);
+  }
+  if (journal.transaction_id !== flags.transaction) {
+    fail(
+      `transaction directory ${dir} contains a journal claiming transaction_id ${journal.transaction_id} — refusing to guess which is authoritative`,
+    );
+  }
+  try {
+    validateJournalAgainstStateMachine(journal);
+  } catch (err) {
+    fail(`transaction ${flags.transaction}'s journal is internally inconsistent: ${err.message}`);
+  }
+  if (!ROLLBACK_ELIGIBLE_PHASES.has(journal.phase)) {
+    fail(
+      `transaction ${flags.transaction} is at phase ${journal.phase}, not eligible for rollback (must have reached at least old_image_saved, and must not already be rolled back or mid-rollback) — investigate ${dir} manually`,
+    );
+  }
+
+  const oldEntry = journal.history.find((e) => e.phase === PHASE.OLD_IMAGE_SAVED);
+  const { old_image_id: oldImageId, old_sha: oldSha } = oldEntry.observation;
+  const preflightContainer = journal.history.find((e) => e.phase === PHASE.PREFLIGHT).observation.container;
+  const destructive = TRANSITIONS[journal.phase]?.includes(PHASE.ROLLBACK_STOPPED) ?? false;
+
+  if (flags.dryRun === true) {
+    return {
+      command: "rollback",
+      dryRun: true,
+      docker: overridden ? "fake" : "docker",
+      transactionId: flags.transaction,
+      phase: journal.phase,
+      destructive,
+      oldImageId,
+      oldSha,
+      wouldRun: destructive
+        ? [
+            "stop whatever is currently running for the service (if anything)",
+            "forensic-archive the current volume state",
+            "re-verify the pre-deploy archive's sha256",
+            "wipe the volume and restore from the pre-deploy archive",
+            "verify the restored volume against the recorded required_entries",
+            `docker tag ${oldImageId} kaoiro-server:latest`,
+            "docker compose up -d --no-build --force-recreate",
+            `poll health for build_revision=${oldSha}`,
+          ]
+        : [`docker tag ${oldImageId} kaoiro-server:latest`, `docker start ${preflightContainer}`],
+    };
+  }
+  if (flags.confirmRestore !== true) {
+    fail(
+      `rollback requires --confirm-restore to actually restore transaction ${flags.transaction} (phase: ${journal.phase}, ${destructive ? "destructive" : "non-destructive"} path); rerun with --dry-run to preview without confirming`,
+      64,
+    );
+  }
+
+  const lockPath = acquireLock(backupRoot);
+  try {
+    if (!destructive) {
+      runDocker(bin, ["tag", oldImageId, "kaoiro-server:latest"]);
+      const revertedId = dockerInspect(bin, "kaoiro-server:latest", "{{.Id}}");
+      if (revertedId !== oldImageId) {
+        fail(
+          `rollback could not restore kaoiro-server:latest to the old image ${oldImageId} (now ${revertedId}) — investigate before retrying`,
+        );
+      }
+      // Harmless no-op if this container was never actually stopped
+      // (measured live: `docker start` on an already-running container
+      // exits 0 and changes nothing) — the non-destructive phases span
+      // both "never stopped" (OLD_IMAGE_SAVED..MAINTENANCE_GATE_PASSED)
+      // and "genuinely stopped" (STOPPING..ARCHIVED), and this call is
+      // correct either way without needing to distinguish them.
+      runDocker(bin, ["start", preflightContainer]);
+      journal = advancePhase(dir, journal, PHASE.ROLLED_BACK, {}, validateJournalAgainstStateMachine);
+      return {
+        command: "rollback",
+        phase: "rolled_back",
+        transactionId: flags.transaction,
+        destructive: false,
+        restoredImageId: oldImageId,
+        container: preflightContainer,
+      };
+    }
+
+    // --- destructive path ---
+    const manifest = readManifest(dir);
+    const volumeId = manifest.volume_id;
+
+    let stoppedContainer = null;
+    const currentNames = dockerComposeContainerNames(bin, serverDir, SERVICE);
+    if (currentNames.length > 1) {
+      fail(
+        `${currentNames.length} containers match service ${SERVICE}; expected 0 or 1 — investigate before rollback can proceed`,
+      );
+    }
+    if (currentNames.length === 1) {
+      [stoppedContainer] = currentNames;
+      runDocker(bin, ["compose", "stop", "-t", "30"], { cwd: serverDir, stdio: "inherit" });
+    }
+    journal = advancePhase(
+      dir,
+      journal,
+      PHASE.ROLLBACK_STOPPED,
+      { stopped_container: stoppedContainer },
+      validateJournalAgainstStateMachine,
+    );
+
+    const forensicPath = join(dir, "rollback-forensic.tar.gz");
+    runDocker(bin, [
+      "run",
+      "--rm",
+      "-v",
+      `${volumeId}:/data:ro`,
+      "-v",
+      `${dir}:/backup`,
+      ALPINE_IMAGE,
+      "tar",
+      "czf",
+      "/backup/rollback-forensic.tar.gz",
+      "-C",
+      "/data",
+      ".",
+    ]);
+    try {
+      execFileSync("tar", ["tzf", forensicPath]);
+    } catch (err) {
+      fail(`forensic archive of the current (pre-restore) volume state failed verification: ${err.message}`);
+    }
+    journal = advancePhase(
+      dir,
+      journal,
+      PHASE.ROLLBACK_FORENSIC_ARCHIVED,
+      { archive: { path: forensicPath, sha256: sha256File(forensicPath) } },
+      validateJournalAgainstStateMachine,
+    );
+
+    // Re-verify the PRE-DEPLOY archive right before the destructive
+    // wipe — a changed or corrupted archive must refuse to restore
+    // rather than wipe the volume onto nothing recoverable.
+    const preDeployArchiveSha = sha256File(manifest.archive.path);
+    if (preDeployArchiveSha !== manifest.archive.sha256) {
+      fail(
+        `pre-deploy archive at ${manifest.archive.path} does not match its recorded sha256 (expected ${manifest.archive.sha256}, got ${preDeployArchiveSha}) — refusing to restore from a changed archive`,
+      );
+    }
+    try {
+      execFileSync("tar", ["tzf", manifest.archive.path]);
+    } catch (err) {
+      fail(`pre-deploy archive at ${manifest.archive.path} failed full-traversal verification: ${err.message}`);
+    }
+
+    runDocker(bin, [
+      "run",
+      "--rm",
+      "-v",
+      `${volumeId}:/data`,
+      "-v",
+      `${dirname(manifest.archive.path)}:/backup:ro`,
+      ALPINE_IMAGE,
+      "sh",
+      "-c",
+      `find /data -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + && tar xzf /backup/${basename(manifest.archive.path)} -C /data`,
+    ]);
+
+    // Re-tar the JUST-RESTORED volume and confirm it matches the
+    // manifest's own required_entries EXACTLY — proves the restore did
+    // not silently drop or alter anything, not merely that `tar xzf`
+    // exited 0.
+    const restoreVerifyPath = join(dir, "rollback-restore-verify.tar.gz");
+    runDocker(bin, [
+      "run",
+      "--rm",
+      "-v",
+      `${volumeId}:/data:ro`,
+      "-v",
+      `${dir}:/backup`,
+      ALPINE_IMAGE,
+      "tar",
+      "czf",
+      "/backup/rollback-restore-verify.tar.gz",
+      "-C",
+      "/data",
+      ".",
+    ]);
+    let restoreVerifyOutput;
+    try {
+      restoreVerifyOutput = execFileSync("tar", ["tvzf", restoreVerifyPath, "--numeric-owner"], { encoding: "utf8" });
+    } catch (err) {
+      fail(`could not verify the restored volume's contents: ${err.message}`);
+    }
+    const restoredEntries = parseTarEntries(restoreVerifyOutput);
+    const byPath = (a, b) => a.path.localeCompare(b.path);
+    const expectedJson = JSON.stringify([...manifest.required_entries].sort(byPath));
+    const restoredJson = JSON.stringify([...restoredEntries].sort(byPath));
+    if (restoredJson !== expectedJson) {
+      fail(
+        `restored volume's contents do not match the recorded required_entries — investigate before starting the old image (expected ${expectedJson}, got ${restoredJson})`,
+      );
+    }
+    journal = advancePhase(
+      dir,
+      journal,
+      PHASE.ROLLBACK_RESTORED,
+      { required_entries: restoredEntries },
+      validateJournalAgainstStateMachine,
+    );
+
+    runDocker(bin, ["tag", oldImageId, "kaoiro-server:latest"]);
+    const revertedId = dockerInspect(bin, "kaoiro-server:latest", "{{.Id}}");
+    if (revertedId !== oldImageId) {
+      fail(
+        `rollback could not restore kaoiro-server:latest to the old image ${oldImageId} (now ${revertedId}) — investigate before retrying`,
+      );
+    }
+    runDocker(bin, ["compose", "up", "-d", "--no-build", "--force-recreate"], { cwd: serverDir, stdio: "inherit" });
+
+    const curlBin = resolveCurlBin();
+    const healthUrl = resolveHealthUrl(bin, serverDir, config);
+    const health = pollHealth(
+      curlBin,
+      healthUrl,
+      oldSha,
+      config.health_poll_interval_ms,
+      config.health_poll_timeout_ms,
+    );
+
+    journal = advancePhase(dir, journal, PHASE.ROLLED_BACK, {}, validateJournalAgainstStateMachine);
+
+    return {
+      command: "rollback",
+      phase: "rolled_back",
+      transactionId: flags.transaction,
+      destructive: true,
+      restoredImageId: oldImageId,
+      stoppedContainer,
+      health,
+    };
+  } finally {
+    releaseLock(lockPath);
+  }
+}
+
 /** Manifest + journal facts for one DONE transaction, for `status`'s own
  *  listing — a rollback target picker needs source/target SHA and
  *  completion time, none of which pruneOldTransactions' own id-only list
@@ -1623,8 +1923,10 @@ async function main(argv) {
       return runUpdate(flags, config);
     case "status":
       return runStatus(flags, config);
+    case "rollback":
+      return runRollback(flags, config);
     default:
-      fail(`unknown command: ${command} (build/start/update/status implemented so far; rollback lands in a later commit)`, 64);
+      fail(`unknown command: ${command} (build/start/update/status/rollback implemented)`, 64);
   }
 }
 
