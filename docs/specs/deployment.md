@@ -102,13 +102,12 @@ the conditional PermissionSettings entry when enabling set_permission: `KAOIRO_S
 Unset paths fall under a container-equivalent of `/tmp` and disappear after `docker compose down`
 (the offline-agent list is lost).
 
-For deployments enabling `set_permission`, the `PermissionSettings` store adds
-`KAOIRO_PERMISSION_SETTINGS_PATH=/var/lib/kaoiro/permission_settings.dets` to
-this required persistence set. Its runtime env mapping, compose `environment:`
-entry, and backup/restore required-entry checks must ship together with the
-server implementation before that capability is advertised. The contract alone
-does not add a store to older server releases. Keep raw requested settings in
-this file; `session_pointers.dets` continues to hold observed effective snapshots.
+For deployments enabling `set_permission` (issue #305), the `PermissionSettings`
+store adds `KAOIRO_PERMISSION_SETTINGS_PATH=/var/lib/kaoiro/permission_settings.dets`
+to this required persistence set: the bundled `docker-compose.yaml` sets it, and
+`mix kaoiro.env`'s sample `.env` documents it alongside the other restart-surviving
+paths. Keep raw requested settings in this file; `session_pointers.dets` continues
+to hold observed effective snapshots.
 
 `SESSION_LIFECYCLE_MAX_EVENTS_PER_AGENT` (unprefixed, ADR-0055 phase-33
 Stage B) caps the per-agent event count the `session_lifecycle` DETS
