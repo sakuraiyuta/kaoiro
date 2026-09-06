@@ -700,8 +700,8 @@ defmodule KaoiroServer.PermissionSettingsTest do
              ) == {:error, :permission_not_ready}
     end
 
-    test "a same-revision report with a different requested pair is a policy mismatch (M3-b)",
-         %{server: server} do
+    test "a same-revision report with a different requested pair is a failed policy mismatch (M-2)",
+         %{server: server, path: path} do
       seed_baseline(server, "c.mismatch")
 
       {:ok, 1, %{sandbox: "workspace-write"}} =
@@ -726,6 +726,12 @@ defmodule KaoiroServer.PermissionSettingsTest do
         "network_access" => true
       }
 
+      submitted = %{
+        "revision" => 1,
+        "requested" => forged,
+        "execution_id" => "exec-1"
+      }
+
       :ok =
         PermissionSettings.record_observation(
           "c.mismatch",
@@ -734,6 +740,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
             "revision" => 1,
             "status" => "applied",
             "requested" => forged,
+            "submitted" => submitted,
             "effective" => forged_effective
           }),
           server
@@ -741,22 +748,15 @@ defmodule KaoiroServer.PermissionSettingsTest do
 
       :ok =
         wait_until(fn ->
-          PermissionSettings.get("c.mismatch", server).control.status == :unknown
+          PermissionSettings.get("c.mismatch", server).control.status == :failed
         end)
 
       entry = PermissionSettings.get("c.mismatch", server)
-      # The server's own requested pair survives, unreplaced by the
-      # wrapper's forged value; a mismatched observation is never
-      # trustworthy historical evidence either. Surfaced as :unknown
-      # ("blocked"), never :failed (director round-2 correction): :failed
-      # would trigger the pre-application-rollback path and move `next`
-      # backward, but a mismatch must leave `next` exactly as it was —
-      # "retain the requested selection as next... do not substitute a
-      # previous policy automatically" (protocol.md).
       assert entry.control.requested == %{sandbox: "workspace-write", network_access: false}
-      assert entry.control.status == :unknown
+      assert entry.control.status == :failed
+      assert entry.control.submitted == submitted
       assert entry.control.reason == "policy_mismatch"
-      assert entry.control.effective == nil
+      assert entry.control.effective == forged_effective
       assert entry.control.last_effective == nil
       assert entry.control.rolled_back_to == nil
 
@@ -764,6 +764,72 @@ defmodule KaoiroServer.PermissionSettingsTest do
                revision: 1,
                requested: %{sandbox: "workspace-write", network_access: false}
              }
+
+      {control, next} = PermissionSettings.sync_view(entry)
+      assert control["status"] == "failed"
+      assert control["requested"] == %{"sandbox" => "workspace-write", "network_access" => false}
+      assert control["submitted"] == submitted
+      assert control["effective"] == forged_effective
+      assert control["reason"] == "policy_mismatch"
+      refute Map.has_key?(control, "rolled_back_to")
+      assert next == entry.next
+
+      probe_name = :"ps_mismatch_probe_#{System.unique_integer([:positive])}"
+      {:ok, ^probe_name} = :dets.open_file(probe_name, file: String.to_charlist(path))
+
+      assert [{{:settings, "c.mismatch"}, persisted}] =
+               :dets.lookup(probe_name, {:settings, "c.mismatch"})
+
+      assert persisted.control.status == :failed
+      assert persisted.next == entry.next
+      :dets.close(probe_name)
+
+      :ok = GenServer.stop(server)
+      name2 = :"ps_mismatch_restart_#{System.unique_integer([:positive])}"
+      {:ok, pid2} = PermissionSettings.start_link(name: name2, path: path)
+
+      reopened = PermissionSettings.get("c.mismatch", name2)
+      {reopened_control, reopened_next} = PermissionSettings.sync_view(reopened)
+      assert reopened_control == control
+      assert reopened_next == next
+
+      GenServer.stop(pid2)
+    end
+
+    test "a submitted-less mismatch retains the server-selected next pair", %{server: server} do
+      seed_baseline(server, "c.mismatch-no-submitted")
+
+      {:ok, 1, requested} =
+        PermissionSettings.submit_request(
+          "c.mismatch-no-submitted",
+          "codex",
+          %{sandbox: "workspace-write"},
+          %{kind: "user", id: "u1"},
+          "t",
+          server
+        )
+
+      :ok =
+        PermissionSettings.record_observation(
+          "c.mismatch-no-submitted",
+          "codex",
+          baseline_control(%{
+            "revision" => 1,
+            "status" => "applied",
+            "requested" => %{"sandbox" => "danger-full-access", "network_access" => true}
+          }),
+          server
+        )
+
+      :ok =
+        wait_until(fn ->
+          PermissionSettings.get("c.mismatch-no-submitted", server).control.status == :failed
+        end)
+
+      entry = PermissionSettings.get("c.mismatch-no-submitted", server)
+      assert entry.control.submitted == nil
+      assert entry.control.rolled_back_to == nil
+      assert entry.next == %{revision: 1, requested: requested}
     end
 
     test "a mismatch never adopts a WIDER pair via a forged requested (M3-b negative control)",
@@ -805,7 +871,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
 
       :ok =
         wait_until(fn ->
-          PermissionSettings.get("c.mismatch-wide", server).control.status == :unknown
+          PermissionSettings.get("c.mismatch-wide", server).control.status == :failed
         end)
 
       entry = PermissionSettings.get("c.mismatch-wide", server)

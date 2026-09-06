@@ -184,10 +184,18 @@ defmodule KaoiroServer.PermissionSettings.State do
 
   defp merge_current_revision(entry, sanitized) do
     sanitized = discard_unknown_effective(sanitized)
-    ledger = update_ledger_entry(entry.ledger, entry.control.revision, sanitized)
+    mismatch? = sanitized.requested != entry.control.requested
+
+    ledger =
+      update_ledger_entry(
+        entry.ledger,
+        entry.control.revision,
+        sanitized,
+        if(mismatch?, do: entry.control.requested, else: sanitized.requested)
+      )
 
     {control, next} =
-      if sanitized.requested != entry.control.requested do
+      if mismatch? do
         mismatch_transition(entry, sanitized)
       else
         settled_transition(entry, sanitized, ledger)
@@ -201,26 +209,15 @@ defmodule KaoiroServer.PermissionSettings.State do
 
   defp discard_unknown_effective(sanitized), do: sanitized
 
-  # issue #305 M3(b), director round-2 correction 2026-09-06 (withdraws
-  # the original ruling): a same-revision observation reporting a
-  # DIFFERENT requested pair than the server's own record is surfaced as
-  # `:unknown` ("blocked"), NEVER `:failed` — `:failed` would enter
-  # `settled_transition/3`'s pre-application-rollback path below and move
-  # `next` backward, but protocol.md ("retain the requested selection as
-  # next ... do not substitute a previous policy automatically") requires
-  # the CURRENT requested pair to stay in `next` while dispatch simply
-  # stops. `effective` is omitted per protocol.md's `unknown` row ("Omit
-  # current effective permissions. Historical evidence stays in
-  # last_effective") — the wrapper's mismatched observation is not
-  # trustworthy enough to publish OR to promote into `last_effective`.
-  # `rolled_back_to` is never set here: a mismatch is not an established
-  # pre-application rejection, just an unexplained disagreement.
+  # A mismatch is failed rather than unknown because an unknown wire record
+  # requires its submission pair to match the server request. It remains
+  # blocked, but retains the server-selected next pair without rollback.
   defp mismatch_transition(entry, sanitized) do
     control = %{
       entry.control
-      | status: :unknown,
-        submitted: sanitized.submitted || entry.control.submitted,
-        effective: nil,
+      | status: :failed,
+        submitted: sanitized.submitted,
+        effective: sanitized.effective,
         reason: "policy_mismatch",
         rolled_back_to: nil
     }
@@ -305,11 +302,15 @@ defmodule KaoiroServer.PermissionSettings.State do
   end
 
   defp update_ledger_entry(ledger, revision, sanitized) do
+    update_ledger_entry(ledger, revision, sanitized, sanitized.requested)
+  end
+
+  defp update_ledger_entry(ledger, revision, sanitized, requested) do
     Map.update(
       ledger,
       revision,
       %{
-        requested: sanitized.requested,
+        requested: requested,
         submitted: sanitized.submitted,
         effective: sanitized.effective,
         prior_next: nil
@@ -317,7 +318,8 @@ defmodule KaoiroServer.PermissionSettings.State do
       fn stored ->
         %{
           stored
-          | submitted: sanitized.submitted || stored.submitted,
+          | requested: requested,
+            submitted: sanitized.submitted || stored.submitted,
             effective: sanitized.effective || stored.effective
         }
       end

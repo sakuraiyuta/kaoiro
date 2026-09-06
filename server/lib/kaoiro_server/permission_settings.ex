@@ -320,6 +320,7 @@ defmodule KaoiroServer.PermissionSettings do
 
   defp write_settings(agent_id, entry, state) do
     :ok = :dets.insert(state.table, {{:settings, agent_id}, entry})
+    :ok = :dets.sync(state.table)
     %{state | settings: Map.put(state.settings, agent_id, entry)}
   end
 
