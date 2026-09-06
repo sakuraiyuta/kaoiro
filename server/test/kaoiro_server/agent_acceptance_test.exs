@@ -116,4 +116,30 @@ defmodule KaoiroServer.AgentAcceptanceTest do
     # Idempotent: deleting an agent_id with no worker at all is a no-op.
     assert AgentAcceptance.delete(unique_agent_id("aa.never-existed")) == :ok
   end
+
+  # クロエ round 3 should-fix (N-1P): @registry_removal_attempts's 100-try
+  # bound was unpinned — removing it left every existing test in this file
+  # green. Suspending the Registry's own PID partition process makes
+  # `Registry.lookup/2` inside `await_registry_removal/2` itself never
+  # return, so the bounded retry (not the DOWN wait before it) is what
+  # this measures: without the bound, `delete/1` would hang forever here
+  # instead of logging and returning `:ok`.
+  test "delete/1 stops waiting when the Registry entry never clears" do
+    agent_id = unique_agent_id("aa.registry-stuck")
+    assert AgentAcceptance.run(agent_id, fn -> :ok end) == :ok
+    partition = Process.whereis(KaoiroServer.AgentAcceptance.Registry.PIDPartition0)
+    :ok = :sys.suspend(partition)
+
+    try do
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          task = Task.async(fn -> AgentAcceptance.delete(agent_id) end)
+          assert Task.yield(task, 2_000) == {:ok, :ok}
+        end)
+
+      assert log =~ "Registry entry did not clear"
+    after
+      :sys.resume(partition)
+    end
+  end
 end

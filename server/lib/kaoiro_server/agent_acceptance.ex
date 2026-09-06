@@ -1,10 +1,12 @@
 defmodule KaoiroServer.AgentAcceptance do
   @moduledoc """
-  Per-agent_id serialization point for the two operator-driven
-  "acceptance" commits that must never both succeed for the same agent
-  at once (issue #305 M7, ふじ round 1 / director ruling 2026-09-06): a
-  `session_reset` acquiring `SessionResets`'s lock, and a
-  `set_permission` persisting through `PermissionSettings.submit_request/6`.
+  Per-agent_id serialization point for the "acceptance" commits that must
+  never both succeed for the same agent at once, regardless of origin
+  (issue #305 M7, ふじ round 1 / director ruling 2026-09-06; M7-S,
+  2026-09-06, extends the same closure to the agent-self origin): an
+  operator `session_reset` or an agent-self `session_reset_request`
+  acquiring `SessionResets`'s lock, and an operator `set_permission`
+  persisting through `PermissionSettings.submit_request/6`.
 
   `agents_channel.ex`'s existing early guards (`guard_against_reset_pending/2`
   before `set_permission`, `SessionResets.check_and_acquire/4`'s own

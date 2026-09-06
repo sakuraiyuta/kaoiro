@@ -19,6 +19,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   require Logger
 
+  alias KaoiroServer.AgentAcceptance
   alias KaoiroServer.AgentDirectory
   alias KaoiroServer.AgentActivity
   alias KaoiroServer.AgentStates
@@ -860,6 +861,21 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # after its MCP tool has been broker-approved and after the wrapper has
   # reached its turn boundary. The request does not re-parse model text and
   # joins the exact SessionResets gate used by operator `session_reset`.
+  #
+  # issue #305 M7-S: `check_and_acquire/6`'s lock acquisition is the same
+  # commit `AgentsChannel`'s operator `session_reset` and `set_permission`
+  # already serialize through `AgentAcceptance.run/2` (see that module's
+  # moduledoc) — this agent-self path reaches the identical `SessionResets`
+  # lock but had been calling it directly, outside the choke point. That
+  # reopened the exact race M7 closed: a `set_permission` past its own
+  # early `guard_against_reset_pending/2` check and this handler's
+  # `check_and_acquire` on a different process could both commit before
+  # either saw the other (reproduced: suspend `PermissionSettings`, push
+  # `set_permission`, then complete a `session_reset_request` on this
+  # channel within the suspend window — both succeeded). Wrapping the lock
+  # acquisition in the same `AgentAcceptance.run/2` closure makes this
+  # origin mutually exclusive with the other two at the actual commit
+  # point too, not just at each handler's own early check.
   defp handle_wrapper_in("session_reset_request", payload, socket) do
     agent_id = socket.assigns.agent_id
 
@@ -869,14 +885,16 @@ defmodule KaoiroServerWeb.WrapperChannel do
          :ok <- require_reset_capability(envelope, mode),
          {:ok, state} <- fetch_kaoiro_state(envelope),
          {:ok, request_id, prev_sid} <-
-           SessionResets.check_and_acquire(
-             agent_id,
-             mode,
-             state,
-             Map.get(envelope, "session_id"),
-             :agent_self,
-             SessionResets
-           ),
+           AgentAcceptance.run(agent_id, fn ->
+             SessionResets.check_and_acquire(
+               agent_id,
+               mode,
+               state,
+               Map.get(envelope, "session_id"),
+               :agent_self,
+               SessionResets
+             )
+           end),
          :ok <- begin_planned_reset(agent_id, request_id) do
       KaoiroServerWeb.Endpoint.broadcast(
         "agents:lobby",

@@ -402,13 +402,12 @@ defmodule KaoiroServer.PermissionSettings.State do
   # ---- read-time defense (M-A) -------------------------------------------
 
   @doc """
-  Sanitizes an entry loaded from DETS: defaults a missing `:ledger` key
-  and rejects a legacy `client_socket:`
-  fingerprint-prefixed `control.actor.id` back to `nil` (issue #305 M-A,
-  クロエ round 2 / director round-2 correction 2026-09-06 — the same
-  read-path rejection `session_lifecycle_events.ex` applies to
-  `actor.id`; `control.actor` is not itself wire-exposed today, but
-  nothing structurally prevents a future reader from doing so).
+  Sanitizes an entry loaded from DETS: defaults a missing `:ledger` key and
+  rejects a legacy `client_socket:` fingerprint-prefixed `control.actor.id`
+  back to `nil` (issue #305 M-A, クロエ round 2 / director round-2 correction
+  2026-09-06 — the same read-path rejection `session_lifecycle_events.ex`
+  applies to `actor.id`; `control.actor` is not itself wire-exposed today,
+  but nothing structurally prevents a future reader from doing so).
   """
   def sanitize_loaded_entry(entry) do
     entry

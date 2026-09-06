@@ -7972,6 +7972,79 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
   end
 
+  # issue #305 M7-S (director ruling 2026-09-06): the agent-self reset
+  # path (`WrapperChannel`'s `session_reset_request`, ADR-0043 D1/D3)
+  # reaches the identical `SessionResets` lock as the two M7 paths above
+  # but was calling `check_and_acquire/6` directly, outside
+  # `AgentAcceptance`'s choke point — reopening the M7 race for this
+  # third origin (reproduced: suspend `PermissionSettings`, push
+  # `set_permission`, then complete a `session_reset_request` on the
+  # wrapper channel within the suspend window — both succeeded). Mirrors
+  # "fuji first queued permission acceptance serializes a later reset"
+  # (operator/operator) with the reset leg replaced by an agent-self
+  # request pushed on the wrapper's own channel.
+  test "M7-S: an agent-self session_reset_request cannot straddle a queued set_permission" do
+    id = "test.m7-self-reset-race"
+
+    {:ok, _reply, wrapper_socket} =
+      KaoiroServerWeb.WrapperSocket
+      |> socket(nil, %{})
+      |> subscribe_and_join(KaoiroServerWeb.WrapperChannel, "wrapper:" <> id, %{
+        "persona_id" => "default"
+      })
+
+    env_ref =
+      push(wrapper_socket, "envelope", %{
+        "version" => "0",
+        "agent_id" => id,
+        "persona" => %{"id" => "mio", "name" => "澪", "sprite_set" => "mio"},
+        "ts" => "2026-09-06T00:00:00Z",
+        "type" => "state_change",
+        "state" => "idle",
+        "payload" => %{},
+        "session_id" => "sess-prev",
+        "ext" => %{
+          "engine" => "codex",
+          "session_capabilities" => %{
+            "supports_permission_switch" => true,
+            "supports_session_reset" => true,
+            "session_reset_modes" => ["new", "clear"]
+          }
+        }
+      })
+
+    assert_reply env_ref, :ok
+
+    seed_permission_baseline(id)
+    perm_socket = join_as(:operator)
+    ps = KaoiroServer.PermissionSettings
+    :sys.suspend(ps)
+
+    try do
+      perm_ref =
+        push(perm_socket, "set_permission", %{"agent_id" => id, "sandbox" => "workspace-write"})
+
+      assert :ok ==
+               wait_until_permission(fn ->
+                 {:messages, messages} = Process.info(Process.whereis(ps), :messages)
+
+                 Enum.any?(messages, fn message ->
+                   match?({:"$gen_call", _, _}, message)
+                 end)
+               end)
+
+      Process.sleep(2_100)
+      reset_ref = push(wrapper_socket, "session_reset_request", %{"mode" => "new"})
+      refute_receive %Phoenix.Socket.Reply{ref: ^reset_ref}, 500
+      :sys.resume(ps)
+      assert_reply perm_ref, :ok, %{"revision" => 1}
+      assert_reply reset_ref, :ok, %{request_id: _}
+    after
+      :sys.resume(ps)
+      KaoiroServer.SessionResets.delete(id)
+    end
+  end
+
   test "M7 reverse: a session_reset queued behind an in-flight set_permission sees its dispatch stamp" do
     id = "test.m7-reverse"
     put_permission_agent(id)
