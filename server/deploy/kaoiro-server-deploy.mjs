@@ -476,12 +476,12 @@ const UNRESUMABLE_PHASES = new Set([
 ]);
 
 /** `update`: lock, preflight, save the old image, build the versioned
- *  target, the human maintenance gate, then the stop/archive commit
- *  itself. Everything up to the gate touches nothing but the checkout
- *  and a versioned image tag — the running container is never stopped —
- *  matching deployment.md 4.3's "separate prepare (no downtime) from
- *  commit (the stop window)". `up --no-build`/health-poll/retention are
- *  a later commit; this function currently ends at ARCHIVED.
+ *  target, the human maintenance gate, then the stop/archive/up/
+ *  health-poll/retention commit itself, ending at DONE. Everything up
+ *  to the gate touches nothing but the checkout and a versioned image
+ *  tag — the running container is never stopped — matching
+ *  deployment.md 4.3's "separate prepare (no downtime) from commit (the
+ *  stop window)". `rollback`/`status` are a later commit.
  *
  *  `--dry-run` (クロエ round 1 review MF-1) performs only reads — the
  *  same `compose ps`/`inspect` requireRunningContainer already needs,
@@ -539,6 +539,10 @@ export function runUpdate(flags, config) {
               "wait for --maintenance-approved",
               "docker compose stop -t 30",
               "archive /var/lib/kaoiro",
+              "docker compose up -d --no-build",
+              `poll ${config.health_url} for build_revision=${target}`,
+              `wait ${config.stability_window_ms}ms for a stable container`,
+              "prune old backups (keep_generations/retention_days)",
             ],
     };
   }
@@ -783,12 +787,22 @@ export function runUpdate(flags, config) {
     // the required_entries this transaction records, so the recorded set
     // is provably what the archive contains, not a separately-scanned
     // guess that could disagree with it.
-    let requiredEntries;
+    //
+    // クロエ round 2 review N-7: running tar and parsing its output are
+    // kept as two separate steps so their failures stay distinguishable
+    // — a non-zero tar exit here means the ARCHIVE itself is suspect
+    // (corrupt/truncated), while a parseTarEntries failure below means
+    // the archive is fine but its listing had a shape this CLI does not
+    // understand; conflating both into one "archive verification
+    // failed" message would send an operator investigating the wrong
+    // thing.
+    let tarOutput;
     try {
-      requiredEntries = parseTarTvzfEntries(archivePath);
+      tarOutput = execFileSync("tar", ["tvzf", archivePath, "--numeric-owner"], { encoding: "utf8" });
     } catch (err) {
       fail(`archive verification failed (tar tvzf ${archivePath}): ${err.message}`);
     }
+    const requiredEntries = parseTarEntries(tarOutput);
     if (requiredEntries.length === 0) {
       fail(
         `archive at ${archivePath} contains no entries — archiving an empty volume would not be a usable backup`,
@@ -902,7 +916,7 @@ export function runUpdate(flags, config) {
 
 /** PRE-archive guard only (see the call site's comment): whether a
  *  volume has anything in it at all, via a throwaway alpine container.
- *  What gets RECORDED as required_entries comes from parseTarTvzfEntries
+ *  What gets RECORDED as required_entries comes from parseTarEntries
  *  instead (SF-5) — this function only answers "would archiving this be
  *  pointless".
  *
@@ -913,9 +927,13 @@ export function runUpdate(flags, config) {
  *  script's own exit status is 1, not 0: `execFileSync` throws before
  *  `.length === 0` is ever reached, making the empty-volume guard
  *  unreachable in production regardless of what it checks. Measured live
- *  (`sh -c` against a real empty dir: exit 1) and against the real
- *  `alpine` image (`find`/`stat -c %04a` both present via busybox,
- *  exit 0 empty output on an empty dir). */
+ *  (`sh -c` against a real empty dir: exit 1, automated as
+ *  VOLUME_LISTING_SCRIPT's own test) and, separately (a manual
+ *  one-time check against a real `docker run alpine`, not an automated
+ *  test — busybox's `find`/`stat` are not guaranteed identical to GNU
+ *  coreutils' and this is the one place that distinction matters): `find`
+ *  and `stat -c %04a` both present via alpine's busybox, exit 0 empty
+ *  output on an empty dir. */
 // Exported so the mutation-check test can run the EXACT same script text
 // through a real `sh -c` against a real directory (MF-4 pin (a)) instead
 // of a hand-copied duplicate that could silently drift from what
@@ -971,26 +989,63 @@ function modeFromTarPermString(perm) {
 // real archive containing a space-bearing filename).
 const TAR_TVZF_LINE_RE = /^(\S+)\s+(\d+)\/(\d+)\s+\d+\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s(.*)$/;
 
-/** Derives required_entries from the archive's OWN verification listing
- *  (クロエ round 1 review SF-5) rather than a separately-scanned volume
- *  listing that could disagree with what actually got archived. Recurses
+/** クロエ round 2 review SF-8: a symlink or hardlink line's NAME field
+ *  carries a target suffix (` -> target` for a symlink, ` link to
+ *  target` for a hardlink — measured against a real archive containing
+ *  both) that TAR_TVZF_LINE_RE's own generic "rest of the line" capture
+ *  cannot distinguish from a space-bearing plain name — the same class
+ *  of problem as that regex's own space handling, a second instance of
+ *  it. Branches on the entry-type character (the permission string's
+ *  own first column) to strip exactly that suffix for the two types that
+ *  carry one; any other type this archive is not expected to ever
+ *  contain (block/char device, fifo, socket) fails loudly rather than
+ *  silently keeping a suffix that does not belong in a path. */
+function splitTarEntryName(typeChar, rawName) {
+  if (typeChar === "l") {
+    const idx = rawName.indexOf(" -> ");
+    if (idx === -1) {
+      fail(`symlink entry is missing its own " -> " target marker: ${rawName}`);
+    }
+    return rawName.slice(0, idx);
+  }
+  if (typeChar === "h") {
+    const idx = rawName.indexOf(" link to ");
+    if (idx === -1) {
+      fail(`hardlink entry is missing its own " link to " target marker: ${rawName}`);
+    }
+    return rawName.slice(0, idx);
+  }
+  if (typeChar === "d" || typeChar === "-") {
+    return rawName;
+  }
+  fail(
+    `archive contains an unsupported entry type '${typeChar}' for ${rawName} — only regular files, directories, symlinks, and hardlinks are expected in this volume`,
+  );
+}
+
+/** Parses `tar tv*f --numeric-owner`'s own output text into
+ *  manifest-shaped required-entry records (クロエ round 1 review SF-5) —
+ *  a pure function over already-captured text, kept separate from
+ *  actually RUNNING tar (see the call site) so a parse failure and an
+ *  archive-integrity failure surface as two distinguishable errors
+ *  (クロエ round 2 review N-7), not one message conflating both. Recurses
  *  into the whole archive (unlike the old top-level-only volume scan),
  *  which also closes that scan's dotfile gap for free — `tar -C /data .`
  *  always included them; the pre-archive scan just never reported them.
  *  The archive root entry itself (`./`) is not a required entry. */
-function parseTarTvzfEntries(archivePath) {
-  const output = execFileSync("tar", ["tvzf", archivePath, "--numeric-owner"], {
-    encoding: "utf8",
-  }).trim();
-  if (output === "") return [];
+export function parseTarEntries(output) {
+  const trimmed = output.trim();
+  if (trimmed === "") return [];
   const entries = [];
-  for (const line of output.split("\n")) {
+  for (const line of trimmed.split("\n")) {
     const match = TAR_TVZF_LINE_RE.exec(line);
     if (match === null) {
       fail(`could not parse tar tvzf output line: ${line}`);
     }
     const [, perm, uid, gid, rawName] = match;
-    const name = rawName.replace(/^\.\//, "").replace(/\/$/, "");
+    const name = splitTarEntryName(perm.charAt(0), rawName)
+      .replace(/^\.\//, "")
+      .replace(/\/$/, "");
     if (name === "") continue;
     entries.push({ path: name, owner: `${uid}:${gid}`, mode: modeFromTarPermString(perm) });
   }
