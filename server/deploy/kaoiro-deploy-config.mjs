@@ -25,6 +25,16 @@ export const DEFAULT_CONFIG = Object.freeze({
   health_poll_interval_ms: 2000,
   health_poll_timeout_ms: 60000,
   stability_window_ms: 30000,
+  // Clean-stop expectation (S1 / yuta ruling 2026-09-06): "measured on a
+  // dev host, not assumed" (deployment.md 4.3 step 5). `null` here is
+  // deliberate — until commit (e)'s dev-host self-test fixes a real
+  // value, EVERY stop is treated as abnormal (see
+  // kaoiro-server-deploy.mjs's clean-stop check), which is the safe
+  // direction to fail in. An operator config sets both together once
+  // the measurement exists; there is no default non-null value to fall
+  // back to.
+  expected_clean_stop_exit_code: null,
+  expected_clean_stop_oom_killed: null,
 });
 
 const VALIDATORS = {
@@ -36,6 +46,8 @@ const VALIDATORS = {
   health_poll_interval_ms: (v) => Number.isInteger(v) && v >= 1,
   health_poll_timeout_ms: (v) => Number.isInteger(v) && v >= 1,
   stability_window_ms: (v) => Number.isInteger(v) && v >= 0,
+  expected_clean_stop_exit_code: (v) => v === null || Number.isInteger(v),
+  expected_clean_stop_oom_killed: (v) => v === null || typeof v === "boolean",
 };
 
 /** Merges a config file over DEFAULT_CONFIG. Rejects an unknown key

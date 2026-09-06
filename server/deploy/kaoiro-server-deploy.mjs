@@ -50,6 +50,24 @@ function sha256File(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
+/** Parses a docker inspect `{{.State.ExitCode}}`-shaped field. Returns
+ *  `null` on anything that is not a plain integer string — "取得不能"
+ *  (unreadable) is a real outcome (a crashed/unsupported docker, a
+ *  fake binary in a test), and must stay indistinguishable from "not
+ *  measured yet" rather than silently becoming 0. */
+function parseDockerIntField(raw) {
+  return /^-?\d+$/.test(raw) ? Number(raw) : null;
+}
+
+/** Parses a docker inspect boolean-shaped field (`{{.State.OOMKilled}}`
+ *  prints the literal strings "true"/"false"). Anything else is `null`,
+ *  same reasoning as parseDockerIntField. */
+function parseDockerBoolField(raw) {
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  return null;
+}
+
 const VALUE_FLAGS = new Set(["--config", "--repo", "--target", "--transaction"]);
 const BOOL_FLAGS = new Map([
   ["--dry-run", "dryRun"],
@@ -310,6 +328,7 @@ export function runUpdate(flags, config) {
     let oldImageId;
     let oldSha;
     let buildResult;
+    let container;
 
     if (flags.transaction !== undefined) {
       if (unfinished === null || unfinished.id !== flags.transaction) {
@@ -340,7 +359,7 @@ export function runUpdate(flags, config) {
       // Re-verify: prepare ran against a running container, and resume
       // may happen an arbitrary time later — nothing here should trust
       // that it still is.
-      requireRunningContainer(bin, serverDir, SERVICE);
+      container = requireRunningContainer(bin, serverDir, SERVICE);
     } else {
       if (unfinished !== null) {
         fail(
@@ -348,7 +367,7 @@ export function runUpdate(flags, config) {
         );
       }
 
-      const container = requireRunningContainer(bin, serverDir, SERVICE);
+      container = requireRunningContainer(bin, serverDir, SERVICE);
 
       transactionId = newTransactionId();
       dir = join(backupRoot, transactionId);
@@ -386,14 +405,62 @@ export function runUpdate(flags, config) {
     }
     journal = advancePhase(dir, journal, PHASE.MAINTENANCE_GATE_PASSED);
 
+    // --- commit: from here on the service is stopped. Everything above
+    // this line is documented as no-downtime in runUpdate's own doc
+    // comment; nothing below it may run before the checkpoint above it
+    // completed (S1 item ii).
+    runDocker(bin, ["compose", "stop", "-t", "30"], { cwd: serverDir, stdio: "inherit" });
+
+    const stopExitCode = parseDockerIntField(dockerInspect(bin, container, "{{.State.ExitCode}}"));
+    const stopOomKilled = parseDockerBoolField(dockerInspect(bin, container, "{{.State.OOMKilled}}"));
+    journal = advancePhase(dir, journal, PHASE.STOPPED, {
+      stop_exit_code: stopExitCode,
+      stop_oom_killed: stopOomKilled,
+    });
+
+    // "measured, not assumed" (deployment.md 4.3 step 5) — an unset
+    // expectation, a mismatch, or an unparsed docker field are ALL
+    // abnormal. `null` from either side never matches `null` on the
+    // other by design: an unmeasured expectation must never coincide
+    // with an unreadable observation and be treated as agreement.
+    const cleanStop =
+      config.expected_clean_stop_exit_code !== null &&
+      config.expected_clean_stop_oom_killed !== null &&
+      stopExitCode === config.expected_clean_stop_exit_code &&
+      stopOomKilled === config.expected_clean_stop_oom_killed;
+    if (!cleanStop) {
+      fail(
+        `stop was not clean (exit=${stopExitCode}, oom=${stopOomKilled}; expected exit=${config.expected_clean_stop_exit_code}, expected oom=${config.expected_clean_stop_oom_killed}) — the server is stopped but archiving/restarting requires manual recovery; investigate before retrying`,
+      );
+    }
+
+    // Re-resolve the mount from the NOW-STOPPED container — the same
+    // container prepare already verified was running, not a fresh
+    // lookup that could pick up a different one.
+    const volumeId = dockerInspect(
+      bin,
+      container,
+      '{{range .Mounts}}{{if eq .Destination "/var/lib/kaoiro"}}{{.Name}}{{end}}{{end}}',
+    );
+    if (volumeId === "") {
+      fail(
+        `could not resolve the /var/lib/kaoiro mount for container ${container} — empty output means the mount layout changed; archiving the wrong (or no) volume would be worse than stopping here`,
+      );
+    }
+    journal = advancePhase(dir, journal, PHASE.MOUNT_RESOLVED, { volume_id: volumeId });
+
     return {
       command: "update",
-      phase: "prepare_complete",
+      phase: "mount_resolved",
       transactionId,
       docker: overridden ? "fake" : "docker",
       oldImageId,
       oldSha,
       build: buildResult,
+      container,
+      stopExitCode,
+      stopOomKilled,
+      volumeId,
     };
   } finally {
     releaseLock(lockPath);
