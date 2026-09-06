@@ -17,6 +17,7 @@ import { BRANCH, classify, requireRunningContainer } from "./kaoiro-deploy-branc
 import { loadConfig } from "./kaoiro-deploy-config.mjs";
 import { dockerInspect, resolveDockerBin, runDocker } from "./kaoiro-deploy-docker.mjs";
 import { advancePhase, writeJournal } from "./kaoiro-deploy-journal.mjs";
+import { PHASE } from "./kaoiro-deploy-phase.mjs";
 import { acquireLock, releaseLock } from "./kaoiro-deploy-lock.mjs";
 import { findUnfinishedTransaction, newTransactionId } from "./kaoiro-deploy-transaction.mjs";
 
@@ -317,8 +318,8 @@ export function runUpdate(flags, config) {
         );
       }
       ({ id: transactionId, dir, journal } = unfinished);
-      const oldEntry = journal.history.find((e) => e.phase === "old_image_saved");
-      const buildEntry = journal.history.find((e) => e.phase === "build_prepared");
+      const oldEntry = journal.history.find((e) => e.phase === PHASE.OLD_IMAGE_SAVED);
+      const buildEntry = journal.history.find((e) => e.phase === PHASE.BUILD_PREPARED);
       if (oldEntry === undefined || buildEntry === undefined) {
         fail(
           `transaction ${transactionId} has not completed prepare (phase: ${journal.phase}); rerun update with --transaction ${transactionId} and no --maintenance-approved to retry prepare`,
@@ -355,22 +356,22 @@ export function runUpdate(flags, config) {
       journal = {
         schema_version: 1,
         transaction_id: transactionId,
-        phase: "preflight",
-        history: [{ phase: "preflight", at: new Date().toISOString(), observation: { container } }],
+        phase: PHASE.PREFLIGHT,
+        history: [{ phase: PHASE.PREFLIGHT, at: new Date().toISOString(), observation: { container } }],
       };
       writeJournal(dir, journal);
 
       oldImageId = dockerInspect(bin, container, "{{.Image}}");
       oldSha = gitOutput(["rev-parse", "HEAD"], repo);
       const composeArtifactPath = join(serverDir, "docker-compose.yaml");
-      journal = advancePhase(dir, journal, "old_image_saved", {
+      journal = advancePhase(dir, journal, PHASE.OLD_IMAGE_SAVED, {
         old_image_id: oldImageId,
         old_sha: oldSha,
         compose_artifact: { path: composeArtifactPath, sha256: sha256File(composeArtifactPath) },
       });
 
       buildResult = runBuild({ repo, target }, config);
-      journal = advancePhase(dir, journal, "build_prepared", {
+      journal = advancePhase(dir, journal, PHASE.BUILD_PREPARED, {
         image_id: buildResult.imageId,
         image_tag: buildResult.imageTag,
         target_sha: target,
@@ -383,7 +384,7 @@ export function runUpdate(flags, config) {
         64,
       );
     }
-    journal = advancePhase(dir, journal, "maintenance_gate_passed");
+    journal = advancePhase(dir, journal, PHASE.MAINTENANCE_GATE_PASSED);
 
     return {
       command: "update",
