@@ -241,13 +241,22 @@ test("validateJournalAgainstStateMachine rejects an OLD_IMAGE_SAVED observation 
 
 // issue #306 (c3): up / health / done.
 const HEALTHY_OBS = { health_revision: "d".repeat(40), health_dirty: false };
+const UP_OBS = { container_id: "sha256:up-container-id", started_at: "2026-09-06T10:20:00.000Z" };
 
+// history indices in fullJournalThroughDone(): 0-7 = fullJournalThroughArchived
+// (see its own comment), 8 = STARTING, 9 = UP, 10 = HEALTHY, 11 = DONE.
 function fullJournalThroughDone(phase = PHASE.DONE) {
   const base = fullJournalThroughArchived(PHASE.ARCHIVED);
   return {
     ...base,
     phase,
-    history: [...base.history, entry(PHASE.UP, {}), entry(PHASE.HEALTHY, HEALTHY_OBS), entry(PHASE.DONE, {})],
+    history: [
+      ...base.history,
+      entry(PHASE.STARTING, {}),
+      entry(PHASE.UP, UP_OBS),
+      entry(PHASE.HEALTHY, HEALTHY_OBS),
+      entry(PHASE.DONE, {}),
+    ],
   };
 }
 
@@ -257,19 +266,35 @@ test("validateJournalAgainstStateMachine accepts a full journal through DONE", (
 
 test("validateJournalAgainstStateMachine rejects a HEALTHY observation whose health_revision does not match SHA_RE", () => {
   const journal = fullJournalThroughDone();
-  journal.history[9] = entry(PHASE.HEALTHY, { ...HEALTHY_OBS, health_revision: "not-a-sha" });
+  journal.history[10] = entry(PHASE.HEALTHY, { ...HEALTHY_OBS, health_revision: "not-a-sha" });
+  assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
+});
+
+test("validateJournalAgainstStateMachine rejects skipping STARTING straight to UP", () => {
+  const journal = fullJournalThroughDone();
+  journal.history.splice(8, 1); // drop the STARTING entry
   assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
 });
 
 test("validateJournalAgainstStateMachine rejects skipping UP straight to HEALTHY", () => {
   const journal = fullJournalThroughDone();
-  journal.history.splice(8, 1); // drop the UP entry
+  journal.history.splice(9, 1); // drop the UP entry
+  assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
+});
+
+// クロエ design review F2: the new container's own identity is required,
+// not merely present — an empty UP observation would silently lose the
+// one fact runbook 4.4 (3)'s recovery needs to find that container.
+test("validateJournalAgainstStateMachine rejects a UP observation missing container_id", () => {
+  const journal = fullJournalThroughDone();
+  const { container_id: _drop, ...rest } = UP_OBS;
+  journal.history[9] = entry(PHASE.UP, rest);
   assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
 });
 
 test("validateJournalAgainstStateMachine rejects a transition out of DONE (terminal)", () => {
   const journal = fullJournalThroughDone();
-  journal.history.push(entry(PHASE.UP, {}));
+  journal.history.push(entry(PHASE.UP, UP_OBS));
   journal.phase = PHASE.UP;
   assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
 });

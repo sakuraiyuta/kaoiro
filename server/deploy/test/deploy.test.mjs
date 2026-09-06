@@ -667,10 +667,6 @@ test("runUpdate's required_entries strip a symlink's and a hardlink's target suf
 });
 
 test("parseTarEntries refuses a listing line with an unsupported entry type", () => {
-  // A device/fifo/socket entry cannot be created inside this fake
-  // without root, so this pins splitTarEntryName's fail-closed branch
-  // directly — the symlink/hardlink branches above are the ones
-  // exercised end to end through a real archive.
   let caught;
   try {
     parseTarEntries("p--------- 0/0               0 2026-09-06 00:00 ./fifo");
@@ -683,6 +679,33 @@ test("parseTarEntries refuses a listing line with an unsupported entry type", ()
   // test above) — runUpdate's own call site no longer wraps this one in
   // "archive verification failed".
   assert.ok(!caught.message.includes("archive verification failed"));
+});
+
+// クロエ round 2 review SF-8 supplement: a FIFO needs no root (`mkfifo`
+// — measured; the earlier assumption that device/fifo/socket entries
+// need it was wrong), so this feeds parseTarEntries a REAL archive
+// containing a symlink, a hardlink, a space-bearing name, AND a FIFO all
+// together — the exact combination the round asked for as a round-3
+// acceptance check — rather than the hand-typed single-line fixture
+// above.
+test("parseTarEntries rejects a real archive containing a FIFO, even alongside otherwise-valid entries", () => {
+  const src = mkdtempSync(join(tmpdir(), "kaoiro-306-tar-torture-"));
+  const archiveDir = mkdtempSync(join(tmpdir(), "kaoiro-306-tar-torture-out-"));
+  try {
+    writeFileSync(join(src, "real.txt"), "x");
+    writeFileSync(join(src, "name with space.txt"), "x");
+    execFileSync("ln", ["-s", "real.txt", join(src, "sym.txt")]);
+    execFileSync("ln", [join(src, "real.txt"), join(src, "hard.txt")]);
+    execFileSync("mkfifo", [join(src, "a.fifo")]);
+    const archivePath = join(archiveDir, "archive.tar.gz");
+    execFileSync("tar", ["--owner=1000", "--group=1000", "-czf", archivePath, "-C", src, "."]);
+    const listing = execFileSync("tar", ["tvzf", archivePath, "--numeric-owner"], { encoding: "utf8" });
+    assert.ok(listing.includes("a.fifo"), "sanity: the fixture actually contains the FIFO entry");
+    assert.throws(() => parseTarEntries(listing), DeployError);
+  } finally {
+    rmSync(src, { recursive: true, force: true });
+    rmSync(archiveDir, { recursive: true, force: true });
+  }
 });
 
 // クロエ round 1 review S1/(c3): a delayed health response for a
@@ -865,6 +888,33 @@ test("pruneOldTransactions never removes a transaction that has not reached DONE
   const removed = pruneOldTransactions(backupRoot, { keep_generations: 0, retention_days: 1 });
   assert.deepEqual(removed, []);
   assert.equal(existsSync(stuckDir), true);
+});
+
+// director ruling 2026-09-06 (#306 (c3) review): the current rollback
+// pair is protected by IDENTITY, not merely by the keep_generations
+// count coincidentally always including the newest — keep_generations:0
+// here (bypassing the config validator's own >= 1 floor, exactly as a
+// directly-constructed config in production code could) would otherwise
+// prune EVERY done transaction, including the protected one.
+test("pruneOldTransactions never removes the protected transaction, even with keep_generations:0", () => {
+  const backupRoot = join(root, "kaoiro-deploy");
+  mkdirSync(backupRoot, { recursive: true });
+
+  const protectedId = "20200101T000000Z";
+  const protectedDir = join(backupRoot, protectedId);
+  mkdirSync(protectedDir, { recursive: true });
+  writeFileSync(
+    join(protectedDir, "journal.json"),
+    JSON.stringify({ schema_version: 1, transaction_id: protectedId, phase: "done", history: [] }),
+  );
+
+  const removed = pruneOldTransactions(
+    backupRoot,
+    { keep_generations: 0, retention_days: 1 },
+    protectedId,
+  );
+  assert.deepEqual(removed, []);
+  assert.equal(existsSync(protectedDir), true);
 });
 
 test("runUpdate refuses to proceed past a dirty stop even with a measured expectation", () => {

@@ -217,8 +217,19 @@ function transactionIdToDate(transactionId) {
  *  auto-deleted), and never touches a directory whose name does not match
  *  its own journal.transaction_id (the same distrust
  *  findUnfinishedTransaction already applies) or whose id does not parse
- *  as a timestamp. Returns the names actually removed. */
-export function pruneOldTransactions(backupRoot, config) {
+ *  as a timestamp.
+ *
+ *  `protectedTransactionId` (director ruling 2026-09-06, #306 (c3)
+ *  review) is excluded from deletion by IDENTITY, never by the
+ *  keep_generations/retention_days arithmetic alone — the CURRENT
+ *  rollback pair (this run's own rollback_tag + archive, the ONE a
+ *  rollback right after this update would actually use) must survive
+ *  even a keep_generations/retention_days combination that would
+ *  otherwise prune it (keep_generations already enforces a minimum of 1
+ *  via the config validator, which structurally protects the newest by
+ *  count alone — this is the explicit, count-independent guarantee on
+ *  top of that coincidence). Returns the names actually removed. */
+export function pruneOldTransactions(backupRoot, config, protectedTransactionId) {
   let names;
   try {
     names = readdirSync(backupRoot).filter((name) => !name.startsWith("."));
@@ -248,6 +259,7 @@ export function pruneOldTransactions(backupRoot, config) {
   const now = Date.now();
   const removed = [];
   for (const name of doneIds.slice(config.keep_generations)) {
+    if (name === protectedTransactionId) continue;
     const age = now - transactionIdToDate(name).getTime();
     if (age < retentionMs) continue;
     rmSync(join(backupRoot, name), { recursive: true, force: true });
@@ -870,8 +882,28 @@ export function runUpdate(flags, config) {
     // (not merely "a container exists"), and confirm it survives long
     // enough to call this update done — deployment.md 4.3 step 6 / 4.5's
     // own "operational success" + "provenance" checks.
+    //
+    // クロエ design review F1: STARTING is checkpointed BEFORE `compose
+    // up` runs (mirrors STOPPING) — a crash between this line and UP
+    // would otherwise leave the journal at ARCHIVED, indistinguishable
+    // from "up was never attempted" even though runbook 4.4 (3)'s
+    // recovery branches on exactly that distinction.
+    journal = advancePhase(dir, journal, PHASE.STARTING, {}, validateJournalAgainstStateMachine);
     runDocker(bin, ["compose", "up", "-d", "--no-build"], { cwd: serverDir, stdio: "inherit" });
-    journal = advancePhase(dir, journal, PHASE.UP, {}, validateJournalAgainstStateMachine);
+    // クロエ design review F2: `compose up -d` on a changed image
+    // recreates the container (not the same one `container` above named
+    // — a new id), and runbook 4.4 (3)'s recovery starts by stopping
+    // THAT container, which is otherwise nowhere in the journal.
+    const newContainer = requireRunningContainer(bin, serverDir, SERVICE);
+    const newContainerId = dockerInspect(bin, newContainer, "{{.Id}}");
+    const startedAt = dockerInspect(bin, newContainer, "{{.State.StartedAt}}");
+    journal = advancePhase(
+      dir,
+      journal,
+      PHASE.UP,
+      { container_id: newContainerId, started_at: startedAt },
+      validateJournalAgainstStateMachine,
+    );
 
     const curlBin = resolveCurlBin();
     const healthUrl = resolveHealthUrl(bin, serverDir, config);
@@ -915,7 +947,7 @@ export function runUpdate(flags, config) {
     let prunedTransactions = [];
     let pruneError = null;
     try {
-      prunedTransactions = pruneOldTransactions(backupRoot, config);
+      prunedTransactions = pruneOldTransactions(backupRoot, config, transactionId);
     } catch (err) {
       pruneError = err.message;
     }
