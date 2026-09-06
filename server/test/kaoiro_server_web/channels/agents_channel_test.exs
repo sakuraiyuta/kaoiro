@@ -8045,6 +8045,65 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
   end
 
+  # issue #305 M7-S (クロエ round 3 S-3): mirrors "AgentAcceptance の内部失敗は
+  # session_reset では timeout に写す" above, but through WrapperChannel's
+  # agent-self path (ADR-0043) — a transient AgentAcceptance failure must
+  # not read back as the PERMANENT "unsupported_session_reset" capability
+  # signal on this origin either.
+  test "AgentAcceptance の内部失敗は agent-self session_reset_request では timeout に写す" do
+    id = "test.m7-self-acceptance-unavailable"
+
+    {:ok, _reply, wrapper_socket} =
+      KaoiroServerWeb.WrapperSocket
+      |> socket(nil, %{})
+      |> subscribe_and_join(KaoiroServerWeb.WrapperChannel, "wrapper:" <> id, %{
+        "persona_id" => "default"
+      })
+
+    env_ref =
+      push(wrapper_socket, "envelope", %{
+        "version" => "0",
+        "agent_id" => id,
+        "persona" => %{"id" => "mio", "name" => "澪", "sprite_set" => "mio"},
+        "ts" => "2026-09-06T00:00:00Z",
+        "type" => "state_change",
+        "state" => "idle",
+        "payload" => %{},
+        "session_id" => "sess-prev",
+        "ext" => %{
+          "session_capabilities" => %{
+            "supports_session_reset" => true,
+            "session_reset_modes" => ["new", "clear"]
+          }
+        }
+      })
+
+    assert_reply env_ref, :ok
+
+    accept_pid = agent_acceptance_worker(id)
+    :sys.suspend(accept_pid)
+
+    try do
+      reset_ref = push(wrapper_socket, "session_reset_request", %{"mode" => "new"})
+
+      assert :ok ==
+               wait_until_permission(fn ->
+                 {:messages, messages} = Process.info(accept_pid, :messages)
+                 Enum.any?(messages, &match?({:"$gen_call", _, {:run, _}}, &1))
+               end)
+
+      capture_log(fn ->
+        with_session_resets_unavailable(fn ->
+          :ok = :sys.resume(accept_pid)
+          assert_reply reset_ref, :error, %{reason: "timeout"}
+        end)
+      end)
+    after
+      :sys.resume(accept_pid)
+      KaoiroServer.SessionResets.delete(id)
+    end
+  end
+
   test "M7 reverse: a session_reset queued behind an in-flight set_permission sees its dispatch stamp" do
     id = "test.m7-reverse"
     put_permission_agent(id)

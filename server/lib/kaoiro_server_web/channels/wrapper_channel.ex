@@ -2105,6 +2105,18 @@ defmodule KaoiroServerWeb.WrapperChannel do
             ],
        do: Atom.to_string(reason)
 
+  # issue #305 M7-S (クロエ round 3 S-3): `AgentAcceptance.run/2` degrading
+  # to `:acceptance_unavailable` (its own worker timed out or crashed) is a
+  # TRANSIENT failure, not a fixed capability fact — the catch-all below
+  # would otherwise fold it into "unsupported_session_reset", which
+  # `session_reset_started`/`session_reset_failed` readers (and this
+  # command's OWN client) treat as permanent. Mirrors
+  # `agents_channel.ex`'s `session_reset_error_reason/1` mapping for the
+  # operator path, and reuses "timeout" from ADR-0036's own closed
+  # vocabulary (already used for `session_reset_failed`) rather than
+  # adding a new wire word.
+  defp reset_request_reason(:acceptance_unavailable), do: "timeout"
+
   defp reset_request_reason(_reason), do: "unsupported_session_reset"
 
   defp begin_planned_reset(agent_id, request_id) do
