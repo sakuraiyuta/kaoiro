@@ -5635,4 +5635,88 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       refute Map.has_key?(AgentStates.ia_projection(), "server")
     end
   end
+  defp fuji_control do
+    %{"revision" => 0, "requested" => %{"sandbox" => "read-only", "network_access" => false},
+      "status" => "pending", "constraints" => %{"approval" => "never", "enforcement" => "os"}}
+  end
+  defp fuji_observation(revision, requested) do
+    %{"revision" => revision, "requested" => requested, "execution_id" => "exec-1",
+      "session_id" => "seed-session", "turn_id" => "turn-1", "network_access" => requested["network_access"],
+      "permission" => %{"sandbox" => requested["sandbox"], "approval" => "never", "enforcement" => "os"}}
+  end
+  defp fuji_accepted(agent_id) do
+    ps = KaoiroServer.PermissionSettings
+    ps.record_observation(agent_id, "codex", fuji_control())
+    ps.get(agent_id)
+    {:ok, rev, pair} = ps.submit_request(agent_id, "codex", %{sandbox: "workspace-write", network_access: true}, %{kind: "user", id: "u1"}, "2026-09-06T00:00:00Z")
+    {rev, %{"sandbox" => pair.sandbox, "network_access" => pair.network_access}}
+  end
+  @tag :fuji
+  test "fuji observed permission survives pending model in SessionPointers" do
+    id = "test.fuji-snapshot-pending"
+    socket = seed_known(id)
+    seed_snapshot(id, "old-model")
+    SessionPointers.record_snapshot(id, %{"model" => "old-model", "sandbox" => "read-only", "network_access" => false})
+    {rev, pair} = fuji_accepted(id)
+    obs = fuji_observation(rev, pair)
+    control = Map.merge(fuji_control(), %{"revision" => rev, "requested" => pair, "status" => "applied", "submitted" => Map.take(obs, ["revision", "requested", "execution_id"]), "effective" => obs})
+    ext = %{"engine" => "codex", "pending_model" => "new-model", "permission_control" => control,
+      "effective" => %{"model" => "old-model", "sandbox" => "workspace-write", "network_access" => true}}
+    ref = push(socket, "envelope", Map.put(envelope(id, "idle"), "ext", ext))
+    assert_reply ref, :ok
+    assert KaoiroServer.PermissionSettings.get(id).control.status == :applied
+    assert SessionPointers.get(id).snapshot == %{"model" => "old-model", "sandbox" => "workspace-write", "network_access" => true}
+  end
+  @tag :fuji
+  test "fuji unknown generic snapshot preserves observed permission fields" do
+    id = "test.fuji-snapshot-unknown"
+    socket = seed_known(id)
+    seed_snapshot(id, "old-model")
+    SessionPointers.record_snapshot(id, %{"model" => "old-model", "sandbox" => "read-only", "network_access" => false})
+    ext = %{"engine" => "codex", "permission_control" => fuji_control(), "effective" => %{"model" => "new-model"}}
+    ref = push(socket, "envelope", Map.put(envelope(id, "idle"), "ext", ext))
+    assert_reply ref, :ok
+    assert SessionPointers.get(id).snapshot == %{"model" => "new-model", "sandbox" => "read-only", "network_access" => false}
+  end
+  @tag :fuji
+  test "fuji unallocated permission audit is rejected" do
+    id = "test.fuji-audit-unallocated"
+    socket = seed_known(id)
+    ref = push(socket, "session_lifecycle", %{"kind" => "permission_applied", "at" => "2026-09-06T00:00:00Z", "details" => fuji_observation(42, %{"sandbox" => "workspace-write", "network_access" => true})})
+    assert_reply ref, :ok
+    assert SessionLifecycleEvents.list_for_agent(id) == []
+  end
+  @tag :fuji
+  test "fuji accepted audit deduplicates the same execution outcome" do
+    id = "test.fuji-audit-duplicate"
+    socket = seed_known(id)
+    {rev, pair} = fuji_accepted(id)
+    payload = %{"kind" => "permission_applied", "at" => "2026-09-06T00:00:00Z", "details" => fuji_observation(rev, pair)}
+    for _ <- 1..2 do
+      ref = push(socket, "session_lifecycle", payload)
+      assert_reply ref, :ok
+    end
+    assert length(SessionLifecycleEvents.list_for_agent(id)) == 1
+  end
+  @tag :fuji
+  test "fuji permission audit rejects non-null trigger" do
+    id = "test.fuji-audit-trigger"
+    socket = seed_known(id)
+    {rev, pair} = fuji_accepted(id)
+    ref = push(socket, "session_lifecycle", %{"kind" => "permission_applied", "trigger" => 42, "at" => "2026-09-06T00:00:00Z", "details" => fuji_observation(rev, pair)})
+    assert_reply ref, :ok
+    assert SessionLifecycleEvents.list_for_agent(id) == []
+  end
+  @tag :fuji
+  test "fuji permission audit does not trust wrapper previous" do
+    id = "test.fuji-audit-previous"
+    socket = seed_known(id)
+    {rev, pair} = fuji_accepted(id)
+    details = Map.put(fuji_observation(rev, pair), "previous", fuji_observation(99, pair))
+    ref = push(socket, "session_lifecycle", %{"kind" => "permission_applied", "at" => "2026-09-06T00:00:00Z", "details" => details})
+    assert_reply ref, :ok
+    events = SessionLifecycleEvents.list_for_agent(id)
+    assert Enum.all?(events, fn event -> not Map.has_key?(event.details, "previous") end)
+  end
+
 end

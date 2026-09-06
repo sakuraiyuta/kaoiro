@@ -7619,4 +7619,65 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert length(raw_pushes) == 1
     end
   end
+  @tag :fuji
+  test "fuji accepted request is projected without wrapper echo" do
+    id = "test.fuji-request-projection"
+    put_permission_agent(id)
+    seed_permission_baseline(id)
+    socket = join_as(:operator)
+    ref = push(socket, "set_permission", %{"agent_id" => id, "sandbox" => "workspace-write"})
+    assert_reply ref, :ok, %{"revision" => 1}
+    env = AgentStates.snapshot() |> Map.fetch!(id)
+    assert get_in(env, ["ext", "permission_control", "revision"]) == 1
+  end
+
+  @tag :fuji
+  test "fuji DETS failure does not relay or acknowledge acceptance" do
+    id = "test.fuji-persistence-failure"
+    put_permission_agent(id)
+    seed_permission_baseline(id)
+    @endpoint.subscribe("wrapper:" <> id)
+    socket = join_as(:operator)
+    ps = KaoiroServer.PermissionSettings
+    original = :sys.get_state(ps).table
+    :sys.replace_state(ps, fn state -> %{state | table: :fuji_unopened_dets} end)
+    try do
+      ref = push(socket, "set_permission", %{"agent_id" => id, "sandbox" => "workspace-write"})
+      assert_reply ref, :error, %{reason: "persistence_failed"}
+      refute_broadcast "set_permission", _
+      assert ps.get(id).control.revision == 0
+    after
+      :sys.replace_state(ps, fn state -> %{state | table: original} end)
+    end
+  end
+  @tag :fuji
+  test "fuji permission acceptance cannot cross a reset lock" do
+    id = "test.fuji-reset-race"
+    put_permission_agent(id)
+    env = AgentStates.snapshot() |> Map.fetch!(id)
+    caps = Map.merge(env["ext"]["session_capabilities"], %{"supports_session_reset" => true, "session_reset_modes" => ["new", "clear"]})
+    :ok = AgentStates.put(env |> put_in(["ext", "session_capabilities"], caps) |> Map.put("session_id", "sess-prev"))
+    seed_permission_baseline(id)
+    reset_socket = join_as(:operator)
+    socket = join_as(:operator)
+    ps = KaoiroServer.PermissionSettings
+    :sys.suspend(ps)
+    try do
+      ref = push(socket, "set_permission", %{"agent_id" => id, "sandbox" => "workspace-write"})
+      assert :ok == wait_until_permission(fn ->
+        {:messages, messages} = Process.info(Process.whereis(ps), :messages)
+        Enum.any?(messages, fn message -> match?({:"$gen_call", _, {:get, ^id}}, message) end)
+      end)
+      Process.sleep(2_100)
+      reset_ref = push(reset_socket, "session_reset", %{"agent_id" => id, "mode" => "new"})
+      assert_reply reset_ref, :ok
+      :sys.resume(ps)
+      assert_receive %Phoenix.Socket.Reply{ref: ^ref, status: status, payload: payload}, 1_000
+      assert {status, payload} == {:error, %{reason: "session_reset_pending"}}
+    after
+      :sys.resume(ps)
+      KaoiroServer.SessionResets.delete(id)
+    end
+  end
+
 end
