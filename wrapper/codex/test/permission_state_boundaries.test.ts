@@ -341,3 +341,24 @@ it("keeps unknown permission drift suppressed after capability downgrade", async
   h.host.setPermissionSyncSupported(false);
   expect(h.ext().resume_drift).toEqual([]);
 });
+
+it.each([false, true])("keeps a blocked selection blocked when a newer request is rejected (rejected=%s)", async (isRejected) => {
+  const h = await createHarness({ writeContext: false });
+  const a = selection(1);
+  const b = selection(2, "read-only", false);
+  await h.host.setPermission(a);
+  void h.run();
+  await expectStatus(h, "unknown");
+  await h.host.send("second");
+  h.host.applyPermissionSync({
+    version: "0",
+    control: isRejected ? rejected(b, a) : pending(b),
+    next: isRejected ? a : b,
+  });
+  if (isRejected) {
+    await new Promise(resolve => setTimeout(resolve, 80));
+    expect(h.sdkCalls).toBe(1);
+  } else {
+    await vi.waitFor(() => expect(h.sdkCalls).toBe(2));
+  }
+});
