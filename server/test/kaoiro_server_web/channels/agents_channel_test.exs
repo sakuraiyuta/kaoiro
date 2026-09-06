@@ -493,6 +493,29 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       }
     end
 
+    # クロエ review M-1: the store is a separate process, and this RPC is
+    # not advisory. Asserting the WARNING as well as the reply is what
+    # distinguishes "fell back" from "the store happened to answer".
+    test "list_conversations survives a stopped settings store" do
+      operator = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      :ok = Supervisor.terminate_child(KaoiroServer.Supervisor, QuagmireSettings)
+
+      on_exit(fn ->
+        {:ok, _} = Supervisor.restart_child(KaoiroServer.Supervisor, QuagmireSettings)
+      end)
+
+      log =
+        capture_log(fn ->
+          ref = push(operator, "list_conversations", %{})
+          assert_reply ref, :ok, %{"conversations" => _}
+        end)
+
+      assert log =~ "quagmire settings unavailable"
+      assert Process.alive?(operator.channel_pid)
+    end
+
     test "a joining operator is told the threshold in force" do
       :ok = QuagmireSettings.put_rally_turns(33)
 

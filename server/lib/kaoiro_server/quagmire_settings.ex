@@ -167,13 +167,20 @@ defmodule KaoiroServer.QuagmireSettings do
     {:reply, effective_of(state), state}
   end
 
+  # `:dets.sync/1` before replying, not just `:dets.insert/2`: DETS buffers,
+  # so without it the reply promises durability the file does not yet have —
+  # a kill between the two loses a pick the operator was told was stored.
+  # Closing the table on a clean shutdown flushes too, which is why a
+  # restart test alone cannot see this.
   def handle_call({:put_rally_turns, value}, _from, state) do
     :ok = :dets.insert(state.table, {@key, value})
+    :ok = :dets.sync(state.table)
     {:reply, :ok, %{state | stored: value}}
   end
 
   def handle_call(:clear, _from, state) do
     :ok = :dets.delete(state.table, @key)
+    :ok = :dets.sync(state.table)
     {:reply, :ok, %{state | stored: nil}}
   end
 

@@ -65,6 +65,33 @@ defmodule KaoiroServer.QuagmireSettingsTest do
     assert QuagmireSettings.rally_turns(server) == 24
   end
 
+  # A restart test cannot see this: closing the table on a clean shutdown
+  # flushes, so a missing `:dets.sync/1` still reads back correctly there.
+  # A second handle opened while the store is STILL RUNNING sees only what
+  # is on disk at that instant.
+  test "the pick is on disk before put_rally_turns replies", %{server: server, path: path} do
+    assert :ok = QuagmireSettings.put_rally_turns(37, server)
+
+    probe = :"qs_durable_probe_#{System.unique_integer([:positive])}"
+    {:ok, ^probe} = :dets.open_file(probe, file: String.to_charlist(path))
+    persisted = :dets.lookup(probe, :rally_turns)
+    :dets.close(probe)
+
+    assert persisted == [{:rally_turns, 37}]
+  end
+
+  test "clear removes the pick from disk before it replies", %{server: server, path: path} do
+    assert :ok = QuagmireSettings.put_rally_turns(37, server)
+    assert :ok = QuagmireSettings.clear(server)
+
+    probe = :"qs_clear_probe_#{System.unique_integer([:positive])}"
+    {:ok, ^probe} = :dets.open_file(probe, file: String.to_charlist(path))
+    persisted = :dets.lookup(probe, :rally_turns)
+    :dets.close(probe)
+
+    assert persisted == []
+  end
+
   test "clear drops the pick and restores the boot value", %{server: server} do
     assert :ok = QuagmireSettings.put_rally_turns(40, server)
     assert :ok = QuagmireSettings.clear(server)

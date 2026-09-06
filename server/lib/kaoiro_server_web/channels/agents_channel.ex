@@ -2484,12 +2484,10 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # `rally_window_ms` still comes from config, which is fixed for the life of
   # a boot. `rally_turns` does not (issue #307): reading it from config here
   # would leave this verdict on the old threshold after an operator changed
-  # it, while the banner used the new one. QuagmireSettings is a plain store
-  # like the others this RPC already calls, not the advisory detector whose
-  # liveness must stay off this path.
+  # it, while the banner used the new one.
   defp annotate_rally(rows) do
     settings = QuagmireWatch.configured_settings()
-    threshold = QuagmireSettings.rally_turns()
+    threshold = live_rally_turns(settings)
     rally = ConversationStates.pair_rally(settings.rally_window_ms)
 
     Enum.map(rows, fn row ->
@@ -2500,6 +2498,20 @@ defmodule KaoiroServerWeb.AgentsChannel do
       |> Map.put("rally_conversations", tally.conversations)
       |> Map.put("quagmire", quagmire?(tally.turns, threshold))
     end)
+  end
+
+  # A store restarting or wedged must not take this RPC down with it: the
+  # threshold is advisory, the conversation list is not. Falling back to the
+  # boot value leaves the verdict one setting stale for that call, which is
+  # what the detector already does on the same failure (QuagmireWatch's
+  # `live_rally_turns/1`).
+  defp live_rally_turns(settings) do
+    QuagmireSettings.rally_turns()
+  catch
+    :exit, reason ->
+      Logger.warning("quagmire settings unavailable (#{inspect(reason)}); using boot rally_turns")
+
+      settings.rally_turns
   end
 
   defp quagmire?(_turns, :off), do: false
