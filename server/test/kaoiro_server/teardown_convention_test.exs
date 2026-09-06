@@ -59,6 +59,15 @@ defmodule KaoiroServer.TeardownConventionTest do
       assert [:terminate] = raw_stops_in(~S|on_exit(fn -> :sys.terminate(pid, :normal) end)|)
     end
 
+    # A bare call, with no module in front: an imported one, or a `stop/1`
+    # the test module defines itself. Worth keeping distinct from the
+    # qualified clause because it also catches part of the residual, where
+    # the teardown hands the stop to a local function (クロエ #318 round 2
+    # nit-1 — the clause was there but nothing pinned it).
+    test "reports an unqualified stop call" do
+      assert [:stop] = raw_stops_in(~S|on_exit(fn -> stop(pid) end)|)
+    end
+
     # A balanced-paren slicer ended the body at the `)` inside the string
     # and never saw the stop after it. Elixir's own parser decides where the
     # call ends, so that cannot happen.
