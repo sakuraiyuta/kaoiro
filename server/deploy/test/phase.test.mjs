@@ -365,6 +365,12 @@ test("validateJournalAgainstStateMachine rejects a transition out of DONE (termi
 
 // director ruling 2026-09-06, B-4/B-5: rollback's own phases.
 const ROLLBACK_FORENSIC_OBS = { archive: { path: "/backup/forensic.tar.gz", sha256: "9".repeat(64) } };
+// クロエ round 5 review SF-9: the checkpoint immediately before the
+// destructive wipe.
+const ROLLBACK_RESTORING_OBS = {
+  forensic_archive: { path: "/backup/forensic.tar.gz", sha256: "9".repeat(64) },
+  restore_from: { path: "/backup/archive.tar.gz", sha256: "8".repeat(64) },
+};
 const ROLLBACK_RESTORED_OBS = {
   required_entries: [{ path: "users.dets", owner: "1000:1000", mode: "0600" }],
 };
@@ -384,11 +390,12 @@ test("validateJournalAgainstStateMachine accepts the non-destructive path from e
   assert.doesNotThrow(() => validateJournalAgainstStateMachine(journal));
 });
 
-test("validateJournalAgainstStateMachine accepts the destructive path: DONE through ROLLBACK_STOPPED/FORENSIC/RESTORED to ROLLED_BACK", () => {
+test("validateJournalAgainstStateMachine accepts the destructive path: DONE through ROLLBACK_STOPPED/FORENSIC/RESTORING/RESTORED to ROLLED_BACK", () => {
   const journal = fullJournalThroughDone(PHASE.DONE);
   journal.history.push(
     entry(PHASE.ROLLBACK_STOPPED, { stopped_container: "kaoiro-c2" }),
     entry(PHASE.ROLLBACK_FORENSIC_ARCHIVED, ROLLBACK_FORENSIC_OBS),
+    entry(PHASE.ROLLBACK_RESTORING, ROLLBACK_RESTORING_OBS),
     entry(PHASE.ROLLBACK_RESTORED, ROLLBACK_RESTORED_OBS),
     entry(PHASE.ROLLED_BACK, {}),
   );
@@ -413,6 +420,20 @@ test("validateJournalAgainstStateMachine rejects skipping ROLLBACK_FORENSIC_ARCH
   assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
 });
 
+// クロエ round 5 review SF-9: the new checkpoint must be a required stop
+// on the way to RESTORED, not merely accepted when present — skipping
+// straight from FORENSIC_ARCHIVED to RESTORED must still be rejected.
+test("validateJournalAgainstStateMachine rejects skipping ROLLBACK_RESTORING straight from FORENSIC_ARCHIVED to RESTORED", () => {
+  const journal = fullJournalThroughDone(PHASE.DONE);
+  journal.history.push(
+    entry(PHASE.ROLLBACK_STOPPED, { stopped_container: "kaoiro-c2" }),
+    entry(PHASE.ROLLBACK_FORENSIC_ARCHIVED, ROLLBACK_FORENSIC_OBS),
+    entry(PHASE.ROLLBACK_RESTORED, ROLLBACK_RESTORED_OBS),
+  );
+  journal.phase = PHASE.ROLLBACK_RESTORED;
+  assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
+});
+
 test("validateJournalAgainstStateMachine rejects a ROLLBACK_FORENSIC_ARCHIVED observation with a malformed archive sha256", () => {
   const journal = fullJournalThroughDone(PHASE.DONE);
   journal.history.push(
@@ -423,11 +444,37 @@ test("validateJournalAgainstStateMachine rejects a ROLLBACK_FORENSIC_ARCHIVED ob
   assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
 });
 
+test("validateJournalAgainstStateMachine rejects a ROLLBACK_RESTORING observation missing restore_from", () => {
+  const journal = fullJournalThroughDone(PHASE.DONE);
+  journal.history.push(
+    entry(PHASE.ROLLBACK_STOPPED, { stopped_container: "kaoiro-c2" }),
+    entry(PHASE.ROLLBACK_FORENSIC_ARCHIVED, ROLLBACK_FORENSIC_OBS),
+    entry(PHASE.ROLLBACK_RESTORING, { forensic_archive: ROLLBACK_RESTORING_OBS.forensic_archive }),
+  );
+  journal.phase = PHASE.ROLLBACK_RESTORING;
+  assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
+});
+
+test("validateJournalAgainstStateMachine rejects a ROLLBACK_RESTORING observation with a malformed restore_from sha256", () => {
+  const journal = fullJournalThroughDone(PHASE.DONE);
+  journal.history.push(
+    entry(PHASE.ROLLBACK_STOPPED, { stopped_container: "kaoiro-c2" }),
+    entry(PHASE.ROLLBACK_FORENSIC_ARCHIVED, ROLLBACK_FORENSIC_OBS),
+    entry(PHASE.ROLLBACK_RESTORING, {
+      forensic_archive: ROLLBACK_RESTORING_OBS.forensic_archive,
+      restore_from: { path: "/backup/archive.tar.gz", sha256: "not-a-sha" },
+    }),
+  );
+  journal.phase = PHASE.ROLLBACK_RESTORING;
+  assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
+});
+
 test("validateJournalAgainstStateMachine rejects a ROLLBACK_RESTORED observation with malformed required_entries", () => {
   const journal = fullJournalThroughDone(PHASE.DONE);
   journal.history.push(
     entry(PHASE.ROLLBACK_STOPPED, { stopped_container: "kaoiro-c2" }),
     entry(PHASE.ROLLBACK_FORENSIC_ARCHIVED, ROLLBACK_FORENSIC_OBS),
+    entry(PHASE.ROLLBACK_RESTORING, ROLLBACK_RESTORING_OBS),
     entry(PHASE.ROLLBACK_RESTORED, { required_entries: [{ path: "x", owner: "bad", mode: "0600" }] }),
   );
   journal.phase = PHASE.ROLLBACK_RESTORED;
