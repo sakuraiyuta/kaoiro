@@ -669,6 +669,60 @@ defmodule KaoiroServer.PermissionSettingsTest do
       Process.sleep(20)
       assert PermissionSettings.get("b.8", server) == entry
     end
+
+    # issue #305 (クロエ round 3 N-4): a stale/delayed observation's own
+    # self-reported `requested` must never overwrite the ledger's already-
+    # recorded historical pair for that revision — that pair is
+    # server-authoritative from the moment it is first recorded, exactly
+    # like control.requested itself for the CURRENT revision.
+    test "a delayed applied observation for a superseded revision does not overwrite the ledger's historical requested pair",
+         %{server: server} do
+      seed_baseline(server, "b.9")
+
+      {:ok, 1, _} =
+        PermissionSettings.submit_request(
+          "b.9",
+          "codex",
+          %{sandbox: "workspace-write"},
+          %{kind: "user", id: "u1"},
+          "t1",
+          server
+        )
+
+      {:ok, 2, _} =
+        PermissionSettings.submit_request(
+          "b.9",
+          "codex",
+          %{sandbox: "danger-full-access"},
+          %{kind: "user", id: "u1"},
+          "t2",
+          server
+        )
+
+      effective = %{"session_id" => "s1", "turn_id" => "t1", "execution_id" => "e1"}
+      forged = %{"sandbox" => "danger-full-access", "network_access" => true}
+
+      :ok =
+        PermissionSettings.record_observation(
+          "b.9",
+          "codex",
+          baseline_control(%{
+            "revision" => 1,
+            "status" => "applied",
+            "requested" => forged,
+            "effective" => effective
+          }),
+          server
+        )
+
+      :ok =
+        wait_until(fn ->
+          PermissionSettings.get("b.9", server).control.last_effective == effective
+        end)
+
+      entry = PermissionSettings.get("b.9", server)
+      assert entry.ledger[1].requested == %{sandbox: "workspace-write", network_access: false}
+    end
   end
 
   # ---- M3 ledger (issue #305, ふじ round 1 store-probe findings) -----------
@@ -1645,5 +1699,68 @@ defmodule KaoiroServer.PermissionSettingsTest do
     assert control["rolled_back_to"] == a_wire
 
     GenServer.stop(pid)
+  end
+
+  # issue #305 M-2 (クロエ round 3 S-2): a mismatched report legitimately
+  # omits `submitted` when an earlier report already established it for
+  # this same revision, so the merged value is what "never submitted"
+  # must be read from — the same rule `settled_transition/3` states for
+  # its own classification. Without the retention, a wrapper erases its
+  # own submission evidence simply by omitting the field.
+  test "a submitted-less mismatch keeps the submission an earlier report established",
+       %{server: server} do
+    id = "c.mismatch-retains-submitted"
+    seed_baseline(server, id)
+
+    {:ok, 1, requested} =
+      PermissionSettings.submit_request(
+        id,
+        "codex",
+        %{sandbox: "workspace-write"},
+        %{kind: "user", id: "u1"},
+        "t",
+        server
+      )
+
+    submitted = %{
+      "revision" => 1,
+      "requested" => %{"sandbox" => "workspace-write", "network_access" => false},
+      "execution_id" => "exec-1"
+    }
+
+    :ok =
+      PermissionSettings.record_observation(
+        id,
+        "codex",
+        baseline_control(%{
+          "revision" => 1,
+          "status" => "applying",
+          "requested" => %{"sandbox" => "workspace-write", "network_access" => false},
+          "submitted" => submitted
+        }),
+        server
+      )
+
+    :ok = wait_until(fn -> PermissionSettings.get(id, server).control.submitted == submitted end)
+
+    :ok =
+      PermissionSettings.record_observation(
+        id,
+        "codex",
+        baseline_control(%{
+          "revision" => 1,
+          "status" => "applied",
+          "requested" => %{"sandbox" => "danger-full-access", "network_access" => true}
+        }),
+        server
+      )
+
+    :ok = wait_until(fn -> PermissionSettings.get(id, server).control.status == :failed end)
+
+    entry = PermissionSettings.get(id, server)
+    assert entry.control.submitted == submitted
+    assert entry.control.reason == "policy_mismatch"
+    assert entry.control.rolled_back_to == nil
+    assert entry.next == %{revision: 1, requested: requested}
   end
 end

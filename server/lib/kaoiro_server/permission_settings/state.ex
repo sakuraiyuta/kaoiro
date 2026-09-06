@@ -212,11 +212,18 @@ defmodule KaoiroServer.PermissionSettings.State do
   # A mismatch is failed rather than unknown because an unknown wire record
   # requires its submission pair to match the server request. It remains
   # blocked, but retains the server-selected next pair without rollback.
+  #
+  # issue #305 M-2 (クロエ round 3 S-2): "never submitted" must read the
+  # MERGED value here too, mirroring settled_transition/3's own rule below
+  # — a mismatched report legitimately omits `submitted` when an earlier
+  # report already established it for this same revision. Using only
+  # `sanitized.submitted` let a wrapper erase its own already-recorded
+  # submission evidence simply by omitting the field on a later report.
   defp mismatch_transition(entry, sanitized) do
     control = %{
       entry.control
       | status: :failed,
-        submitted: sanitized.submitted,
+        submitted: sanitized.submitted || entry.control.submitted,
         effective: sanitized.effective,
         reason: "policy_mismatch",
         rolled_back_to: nil
@@ -305,6 +312,17 @@ defmodule KaoiroServer.PermissionSettings.State do
     update_ledger_entry(ledger, revision, sanitized, sanitized.requested)
   end
 
+  # issue #305 (クロエ round 3 N-4): a ledger row's `requested` is fixed at
+  # the revision it was created for — `merge_current_revision`'s own call
+  # always passes back the value already stored (a genuine mismatch passes
+  # `entry.control.requested`, a match passes `sanitized.requested`, which
+  # by `mismatch?`'s own definition equals it), so overwriting it there was
+  # already a no-op. `merge_stale_revision`'s call was NOT a no-op: it
+  # passed the wrapper's freshly self-reported `requested` for a revision
+  # that may be well in the past, letting a delayed/self-reported observation
+  # overwrite the server-authoritative historical pair. `requested` is
+  # still used to seed a genuinely NEW row (a revision the ledger has never
+  # seen), just never used to overwrite one that already exists.
   defp update_ledger_entry(ledger, revision, sanitized, requested) do
     Map.update(
       ledger,
@@ -318,8 +336,7 @@ defmodule KaoiroServer.PermissionSettings.State do
       fn stored ->
         %{
           stored
-          | requested: requested,
-            submitted: sanitized.submitted || stored.submitted,
+          | submitted: sanitized.submitted || stored.submitted,
             effective: sanitized.effective || stored.effective
         }
       end
