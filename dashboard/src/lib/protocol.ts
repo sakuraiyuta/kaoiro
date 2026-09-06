@@ -1257,8 +1257,9 @@ export function mergeTranscriptEntries(
  *  `latestErrorKeyByAgent` $derived.by, which rescanned EVERY agent's
  *  WHOLE transcript backwards on every single `logs` replacement --
  *  catastrophic at scale (5 agents x 5000-entry history x 100ms receive
- *  tick: up to 290s of accumulated long-task time per ~3s window,
- *  candidate A). `envelopeByAgent` is the newest is_error RESULT envelope
+ *  tick: only 9 of 30 composer keystrokes completed before a 120s action
+ *  timeout, vs. 30/30 on the pre-regression baseline; candidate A).
+ *  `envelopeByAgent` is the newest is_error RESULT envelope
  *  seen per agent (not just its key), kept so noteIfNewestError below can
  *  compare a new candidate against it in O(1) without rescanning anything.
  *  `keyByAgent` is the public projection App.svelte's `unackedErrorKey`

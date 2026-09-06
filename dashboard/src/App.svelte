@@ -132,16 +132,18 @@
   // issue #304 (candidate A): this used to be a `$derived.by` that
   // rescanned EVERY agent's WHOLE transcript on every single `logs`
   // replacement -- catastrophic at scale (5 agents x 5000-entry history x
-  // 100ms receive tick: up to 290s of accumulated long-task time per ~3s
-  // window). Replaced with an incrementally-maintained index
+  // 100ms receive tick: only 9 of 30 composer keystrokes completed before
+  // a 120s action timeout, vs. 30/30 on the pre-regression baseline).
+  // Replaced with an incrementally-maintained index
   // (noteIfNewestError/recomputeLatestError/dropLatestError, protocol.ts)
   // that every `logs`-mutating path below updates explicitly -- unlike the
   // old derived, this is NOT automatic, so each call site owns keeping it
   // in sync (live onEnvelope / onHistory / onHistoryCleared / onHistoryReset
-  // / onHistoryReplayEnvelope / onAgentDeleted / onSessionResetCompleted
-  // "clear" / logout). Funneled through those 3 shared helpers only, so the
-  // "newest is_error entry per agent" invariant has one place it can go
-  // wrong, not eight.
+  // / onAgentDeleted / onSessionResetCompleted "clear" / logout --
+  // onHistoryReplayEnvelope updates `logs` too but deliberately not this
+  // index, see its own call site comment for why). Funneled through those
+  // 3 shared helpers only, so the "newest is_error entry per agent"
+  // invariant has one place it can go wrong, not seven.
   let errorIndex = $state<ErrorIndexState>(EMPTY_ERROR_INDEX);
   /** agent_id -> entry key, present only when that agent's newest is_error
    *  result has not yet been acked (opening its detail). */
@@ -1037,21 +1039,14 @@
           // restored row into an offline peer's pane (ふじ 30-10 M2). No
           // arrival marker either: this is a replay, not a live reply.
           const previous = logs[paneAgentId] ?? [];
-          const merged = mergeTranscriptEntries(previous, [envelope]);
-          logs = { ...logs, [paneAgentId]: merged };
-          // issue #304: a single replayed envelope only ever APPENDS
-          // (never removes) an entry, so the O(1) incremental path
-          // applies here exactly as it does for live onEnvelope arrivals
-          // -- gated on `accepted` for the same reason (see onEnvelope's
-          // own comment and noteIfNewestError's doc comment). In practice
-          // `envelope` here is always `inter_agent_message`
-          // (parseHistoryReplayEnvelope rejects anything else), so this
-          // call is currently a no-op every time -- kept for the same
-          // uniform per-site update this file follows everywhere else,
-          // not because it does anything reachable today.
-          if (merged.length > previous.length) {
-            errorIndex = noteIfNewestError(errorIndex, paneAgentId, [envelope]);
-          }
+          logs = {
+            ...logs,
+            [paneAgentId]: mergeTranscriptEntries(previous, [envelope]),
+          };
+          // issue #304: no errorIndex update here -- `envelope` is always
+          // `inter_agent_message` (parseHistoryReplayEnvelope rejects
+          // anything else), which can never be an is_error result, so
+          // there is nothing for the index to record on this path.
           if (awaitingHistory) {
             liveSinceJoin[paneAgentId] = mergeTranscriptEntries(
               liveSinceJoin[paneAgentId] ?? [],

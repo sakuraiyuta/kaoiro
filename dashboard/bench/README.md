@@ -88,9 +88,14 @@ landed ("before"), materialised the same generate-then-delete way as
 
 ```bash
 PATH="$HOME/.asdf/shims:$PATH" node bench/runBenchApp.mjs \
-  <agentCount> <historyCount> <keystrokes> <tickMs> <errorAgents>
+  <agentCount> <historyCount> <keystrokes> <tickMs> <errorAgents> [runLabel]
 # e.g. the catastrophic case (candidate A's own reproduction recipe)
 PATH="$HOME/.asdf/shims:$PATH" node bench/runBenchApp.mjs 5 5000 30 100 none
+# repeated runs of the SAME scenario for a median: give each an explicit
+# label, or the same filename gets silently overwritten each time
+PATH="$HOME/.asdf/shims:$PATH" node bench/runBenchApp.mjs 5 5000 30 100 none run1
+PATH="$HOME/.asdf/shims:$PATH" node bench/runBenchApp.mjs 5 5000 30 100 none run2
+PATH="$HOME/.asdf/shims:$PATH" node bench/runBenchApp.mjs 5 5000 30 100 none run3
 ```
 
 - `agentCount`: total agents seeded (1 viewed + `agentCount-1` background).
@@ -100,21 +105,71 @@ PATH="$HOME/.asdf/shims:$PATH" node bench/runBenchApp.mjs 5 5000 30 100 none
   agent and one background agent at this same frequency each tick.
 - `errorAgents`: `"all"` or `"none"` — whether every seeded agent's history
   ends with an `is_error` result.
+- `runLabel` (optional): appended to the result JSON and trace filenames
+  (e.g. `-run1`) so repeated runs of the same scenario land in separate
+  files instead of overwriting each other. Omit for a single run.
 
 Each run also types `/` into the composer and confirms `.slash-menu`
 actually appears before measuring (the seeded `ext.slash_commands` alone
 only wires the data the menu needs; this is the observation that it
 renders).
 
-Results are written to `bench/results/candidateA/candidateA-agents<N>-hist<N>-tick<N>-err<mode>.json`,
+Results are written to `bench/results/candidateA/candidateA-agents<N>-hist<N>-tick<N>-err<mode>[-<runLabel>].json`,
 plus one Playwright trace per variant. **The invocation exits non-zero**
 (not just an `error` field in the printed JSON) when either variant:
-fails to mount/measure at all, the slash menu never appears, the typing
-loop does not finish all requested keystrokes, or a required
-measurement (DOM node count) comes back missing. To confirm this
-yourself: temporarily make `window.__bench.waitReady()` reject inside
-`harnessApp.ts`, run the command above, and check `echo $?` is non-zero
-— catching the resulting rejection into the saved JSON is not enough on
-its own, the exit code is what actually gates. Performance itself (long
-task counts/durations) has no automatic pass/fail threshold yet — read
-the printed numbers.
+
+- fails to mount/measure at all (harness error),
+- the slash menu never appears,
+- the typing loop does not finish all requested keystrokes,
+- a required measurement (DOM node count) comes back missing,
+- reading back the rAF latencies / Event Timing / Long Tasks arrays from
+  the page itself failed (`page.evaluate()` rejected -- distinct from
+  those arrays legitimately being empty; the harness tracks this
+  separately so a read failure can't be mistaken for "0 samples"), or
+- at least one keystroke completed but the rAF latency probe recorded
+  ZERO samples -- this is the wiring-failure case specifically (the
+  probe's `input` listener never fired), not a legitimate empty result.
+
+Event Timing / Long Tasks are NOT held to that last rule: a fast run can
+legitimately produce zero events over the 16ms threshold or zero long
+tasks, so an empty array there is not itself a failure. Performance
+itself (long task counts/durations) has no automatic pass/fail
+threshold — read the printed numbers.
+
+To confirm the exit-code behavior yourself (catching a rejection into
+the saved JSON is not enough on its own, the exit code is what actually
+gates):
+
+- **Harness error**: temporarily make `window.__bench.waitReady()`
+  reject inside `harnessApp.ts`, run the command above, and check
+  `echo $?` is non-zero.
+- **Measurement read failure**: temporarily insert `await page.close()`
+  in `runBenchApp.mjs`'s `measure()` right after `domCountAfter` is read
+  (before the `latencies`/`eventTimings`/`longTasks` reads), run the
+  command above, and check `echo $?` is non-zero.
+- **rAF probe wiring failure**: temporarily change the event name
+  `armLatencyProbe` listens for (e.g. `"input"` -> `"nope"`) so it never
+  fires, run the command above (with a non-zero `<keystrokes>` so at
+  least one keystroke completes), and check `echo $?` is non-zero.
+
+When testing exit codes, check `$?` from a plain `cmd; echo $?` (or
+`cmd > log 2>&1; echo $?`) -- piping the command's output through
+another one (e.g. `cmd | tail`) makes `$?` report THAT command's exit
+code instead, not the bench's.
+
+### Reading `domNodeCount`
+
+`harnessApp.ts` imports the real `src/app.css` (mirroring `src/main.ts`,
+so the harness page's layout matches production instead of browser
+defaults). Loading it made the `.log` transcript container an
+actual scrollable region for the first time in this harness, so the
+rendered row count is no longer fixed the way it was before: it settled
+around 200 rows without the real CSS (matching #174's render-window
+design exactly) but around 232/231 with it, because a real scroll
+position now exists for that window logic to anchor against. This is a
+CSS-driven rendering difference, not a product regression -- don't read
+`domNodeCount` across runs as "the same fixed DOM"; the actual row count
+also depends on receive-tick volume and how much has scrolled by the
+time it's measured. What stays meaningful is the before/after DELTA
+within a single run (candidate A's own before/after comparison), not the
+absolute count.

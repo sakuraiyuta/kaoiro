@@ -7,55 +7,55 @@
   "before": {
     "rafLatencyMs": {
       "n": 30,
-      "avg": 4.16,
-      "median": 0.8,
-      "p95": 12.2,
-      "max": 12.5
+      "avg": 4.25,
+      "median": 1.5,
+      "p95": 14.4,
+      "max": 15.6
     },
     "eventTiming": {
       "inputDelayMs": {
-        "n": 29,
-        "avg": 0.3,
+        "n": 47,
+        "avg": 0.22,
         "median": 0.2,
-        "p95": 1,
+        "p95": 0.7,
         "max": 1
       },
       "processingTimeMs": {
-        "n": 29,
-        "avg": 0.36,
+        "n": 47,
+        "avg": 0.41,
         "median": 0.1,
         "p95": 1.5,
-        "max": 1.6
+        "max": 4.6
       },
       "presentationDelayMs": {
-        "n": 29,
-        "avg": 15.34,
-        "median": 15.6,
-        "p95": 16,
-        "max": 16
+        "n": 47,
+        "avg": 16.56,
+        "median": 15.7,
+        "p95": 23.8,
+        "max": 24
       },
       "durationMs": {
-        "n": 29,
-        "avg": 16,
+        "n": 47,
+        "avg": 17.19,
         "median": 16,
-        "p95": 16,
-        "max": 16
+        "p95": 24,
+        "max": 24
       }
     },
     "longTasks": {
       "count": 2,
-      "totalDurationMs": 190,
+      "totalDurationMs": 178,
       "durationMs": {
         "n": 2,
-        "avg": 95,
-        "median": 112,
-        "p95": 112,
-        "max": 112
+        "avg": 89,
+        "median": 105,
+        "p95": 105,
+        "max": 105
       }
     },
     "mountLongTasks": {
       "count": 2,
-      "totalDurationMs": 266
+      "totalDurationMs": 258
     },
     "domNodeCount": {
       "before": 1135,
@@ -63,6 +63,7 @@
     },
     "tracePath": "/home/yuta/git/kaoiro/worktrees/ao-304/dashboard/bench/results/candidateA/trace-agents5-hist5000-tick500-errall-before.zip",
     "typingError": null,
+    "readFailed": false,
     "keystrokes": {
       "completed": 30,
       "requested": 30
@@ -71,55 +72,55 @@
   "after": {
     "rafLatencyMs": {
       "n": 30,
-      "avg": 3.76,
-      "median": 0.8,
-      "p95": 10.4,
-      "max": 12.1
+      "avg": 5.17,
+      "median": 2.4,
+      "p95": 14.1,
+      "max": 15.4
     },
     "eventTiming": {
       "inputDelayMs": {
-        "n": 35,
-        "avg": 0.23,
+        "n": 56,
+        "avg": 0.22,
         "median": 0.2,
-        "p95": 0.8,
-        "max": 0.8
+        "p95": 0.7,
+        "max": 0.7
       },
       "processingTimeMs": {
-        "n": 35,
-        "avg": 0.41,
+        "n": 56,
+        "avg": 0.36,
         "median": 0.1,
-        "p95": 1.7,
+        "p95": 1.6,
         "max": 1.8
       },
       "presentationDelayMs": {
-        "n": 35,
-        "avg": 17.42,
-        "median": 15.8,
-        "p95": 24,
-        "max": 24
+        "n": 56,
+        "avg": 17.13,
+        "median": 15.7,
+        "p95": 30.3,
+        "max": 32
       },
       "durationMs": {
-        "n": 35,
-        "avg": 18.06,
+        "n": 56,
+        "avg": 17.71,
         "median": 16,
-        "p95": 24,
-        "max": 24
+        "p95": 32,
+        "max": 32
       }
     },
     "longTasks": {
       "count": 2,
-      "totalDurationMs": 179,
+      "totalDurationMs": 180,
       "durationMs": {
         "n": 2,
-        "avg": 89.5,
-        "median": 105,
-        "p95": 105,
-        "max": 105
+        "avg": 90,
+        "median": 101,
+        "p95": 101,
+        "max": 101
       }
     },
     "mountLongTasks": {
       "count": 2,
-      "totalDurationMs": 252
+      "totalDurationMs": 249
     },
     "domNodeCount": {
       "before": 1135,
@@ -127,6 +128,7 @@
     },
     "tracePath": "/home/yuta/git/kaoiro/worktrees/ao-304/dashboard/bench/results/candidateA/trace-agents5-hist5000-tick500-errall-after.zip",
     "typingError": null,
+    "readFailed": false,
     "keystrokes": {
       "completed": 30,
       "requested": 30

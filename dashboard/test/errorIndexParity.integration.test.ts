@@ -10,13 +10,15 @@
 //
 // This mounts the REAL App.svelte (same captured-handlers mock as
 // appUnackedErrorAck.integration.test.ts) and drives its actual production
-// wiring through a randomized operation sequence mixing all 8
-// logs-mutating paths (live append / history join / resume replay / reset
-// / clear x2 / agent delete / logout), so a wiring omission at any ONE
-// site -- not just a logic bug inside the pure functions themselves -- is
-// what a red run here is pinning against. The sequence is seeded
-// (mulberry32) and the seed/step/op are embedded in the assertion message,
-// so a failure is reproducible without rerunning with instrumentation.
+// wiring through a randomized operation sequence mixing 6 logs-mutating
+// paths (live append / history join / reset / clear x2 / agent delete),
+// comparing the incrementally-maintained index against the reference after
+// every operation. The sequence is seeded (mulberry32) and the
+// seed/step/op are embedded in the assertion message, so a failure is
+// reproducible without rerunning with instrumentation. (`onHistoryReplayEnvelope`
+// is NOT exercised here: its only reachable input, `inter_agent_message`,
+// can never be an is_error result, so it cannot affect the index -- see
+// its call site comment in App.svelte.)
 //
 // `randomEnvelope` deliberately reuses the previous (ts, seq) pair for a
 // given agent some of the time, so the sequence exercises BOTH cases
@@ -25,7 +27,12 @@
 // stable-sorted), and two entries with the FULL identity match
 // (mergeTranscriptEntries dedupes, keeping only the first). Without this,
 // every candidate has a unique (ts, seq) and neither case is ever
-// reached.
+// reached. Confirmed detection rate (mutation-tested against
+// noteIfNewestError, 8 seeded runs): reverting its `< 0` comparison back
+// to the pre-fix `<= 0` goes red on 3/8; removing App.svelte onEnvelope's
+// `accepted` (merge-acceptance) guard goes red on 2/8 -- neither is 8/8,
+// since the random sequence only sometimes produces the (ts, seq) tie
+// each regression needs to manifest.
 import { mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -170,39 +177,6 @@ function randomEnvelope(
       } as unknown as Envelope);
 }
 
-/** onHistoryReplayEnvelope's real caller (parseHistoryReplayEnvelope,
- *  protocol.ts) rejects anything but `type: "inter_agent_message"` --
- *  a `result`/is_error envelope can never reach this path in production.
- *  This building block exists so the "replay" operation below exercises
- *  the actual reachable shape instead of an impossible one. */
-function randomInterAgentMessageEnvelope(
-  rand: () => number,
-  agentId: string,
-  to: string,
-): Envelope {
-  const ts = new Date(
-    Date.parse("2026-09-01T00:00:00Z") + Math.floor(rand() * 1_000_000),
-  ).toISOString();
-  const seq = seqCounter++;
-  return {
-    version: "0",
-    agent_id: agentId,
-    ts,
-    seq,
-    type: "inter_agent_message",
-    state: "thinking",
-    payload: {
-      to,
-      conversation_id: `conv-${seq}`,
-      turn_number: 1,
-      kind: "inform",
-      body: "x",
-      meta: { done: false, propose_next: "" },
-      owner: { kind: "agent", id: agentId },
-    },
-  } as unknown as Envelope;
-}
-
 async function mountApp(): Promise<KaoiroHandlers> {
   component = mount(App, { target: document.body });
   await vi.waitFor(() => {
@@ -251,7 +225,6 @@ const OP_COUNT = 300;
 const OP_KINDS = [
   "append",
   "historyJoin",
-  "replay",
   "reset",
   "clear48",
   "clearCmd",
@@ -313,25 +286,6 @@ describe("App.svelte error index parity (issue #304)", () => {
             };
             h.onHistory?.(histories, {}, "per-pane-v1");
             testLogs = mergeHistories(histories, testLogs);
-            break;
-          }
-          case "replay": {
-            // Real transport shape: onHistoryReplayEnvelope only ever
-            // receives an inter_agent_message (parseHistoryReplayEnvelope
-            // rejects anything else), so it can never carry an is_error
-            // result -- this operation exercises "logs gains a row via
-            // this path" without ever touching the error index.
-            const other = AGENT_IDS.find((id) => id !== agentId) ?? agentId;
-            const envelope = randomInterAgentMessageEnvelope(
-              rand,
-              agentId,
-              other,
-            );
-            h.onHistoryReplayEnvelope?.(agentId, envelope);
-            testLogs[agentId] = mergeTranscriptEntries(
-              testLogs[agentId] ?? [],
-              [envelope],
-            );
             break;
           }
           case "reset": {

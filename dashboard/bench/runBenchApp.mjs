@@ -8,7 +8,7 @@
 // of the #174-era rAF-only metric (kept for comparability).
 //
 //   PATH="$HOME/.asdf/shims:$PATH" node bench/runBenchApp.mjs \
-//     [agentCount] [historyCount] [keystrokes] [tickMs] [errorAgents]
+//     [agentCount] [historyCount] [keystrokes] [tickMs] [errorAgents] [runLabel]
 //
 // agentCount:   total agents seeded (1 viewed + agentCount-1 background)
 // historyCount: synthetic transcript length per agent
@@ -18,6 +18,9 @@
 //               frequency each tick (candidate A's own reproduction recipe)
 // errorAgents:  "all" | "none" -- whether every seeded agent's history ends
 //               with an is_error result (candidate A: "error あり/なし")
+// runLabel:     optional (e.g. "run1") -- appended to the output JSON/trace
+//               filenames so repeated runs of the SAME scenario land in
+//               separate files instead of silently overwriting each other.
 import { chromium } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -163,7 +166,15 @@ async function verifySlashMenu(page) {
 }
 
 async function measure(page, baseUrl, variant, opts) {
-  const { agentCount, historyCount, keystrokes, tickMs, errorAgents, traceDir } = opts;
+  const {
+    agentCount,
+    historyCount,
+    keystrokes,
+    tickMs,
+    errorAgents,
+    traceDir,
+    runLabel,
+  } = opts;
   await page.goto(
     `${baseUrl}/bench/harnessApp.html?variant=${variant}&token=bench-${variant}`,
     { waitUntil: "load" },
@@ -266,23 +277,38 @@ async function measure(page, baseUrl, variant, opts) {
 
   const tracePath = path.join(
     traceDir,
-    `trace-agents${agentCount}-hist${historyCount}-tick${tickMs}-err${errorAgents}-${variant}.zip`,
+    `trace-agents${agentCount}-hist${historyCount}-tick${tickMs}-err${errorAgents}${runLabel ? `-${runLabel}` : ""}-${variant}.zip`,
   );
   await page.context().tracing.stop({ path: tracePath }).catch(() => {});
 
   const domCountAfter = await page
     .evaluate(() => document.querySelectorAll("*").length)
     .catch(() => null);
-  const latencies = await page.evaluate(() => window.__latencies).catch(() => []);
+  // A read failure here (page died, evaluate() rejected) and a
+  // legitimately empty result look IDENTICAL once caught into `[]` --
+  // `readFailed` keeps them apart so scenarioFailed can gate on the
+  // former without ever mistaking a genuinely empty Event Timing/Long
+  // Task array (both can legitimately be empty) for a failure.
+  let readFailed = false;
+  const onReadFailure = () => {
+    readFailed = true;
+    return [];
+  };
+  const latencies = await page
+    .evaluate(() => window.__latencies)
+    .catch(onReadFailure);
   const eventTimings = await page
     .evaluate(() => window.__eventTimings)
-    .catch(() => []);
-  const longTasks = await page.evaluate(() => window.__longTasks).catch(() => []);
+    .catch(onReadFailure);
+  const longTasks = await page
+    .evaluate(() => window.__longTasks)
+    .catch(onReadFailure);
 
   return {
     latencies,
     eventTimings,
     longTasks,
+    readFailed,
     mountLongTasks: mountCost.longTasks,
     domCountBefore,
     domCountAfter,
@@ -333,6 +359,7 @@ function summarize(raw) {
     domNodeCount: { before: raw.domCountBefore, after: raw.domCountAfter },
     tracePath: raw.tracePath,
     typingError: raw.typingError,
+    readFailed: raw.readFailed,
     keystrokes: { completed: raw.keystrokesCompleted, requested: raw.keystrokesRequested },
   };
 }
@@ -353,6 +380,28 @@ function scenarioFailed(result) {
   if (result.typingError) return true;
   if (result.keystrokes.completed < result.keystrokes.requested) return true;
   if (result.domNodeCount.after === null) return true;
+  // A read (page.evaluate) failure for latencies/eventTimings/longTasks
+  // is caught into `[]` so the rest of summarize() still has arrays to
+  // work with, but that also makes it indistinguishable from a
+  // legitimately empty result -- `readFailed` is set by that SAME catch
+  // path specifically to keep the two apart, and is a failure on its own
+  // regardless of what keystrokes/rAF report.
+  if (result.readFailed) return true;
+  // A completed keystroke run with ZERO rAF latency samples means either
+  // the probe's own wiring failed (armLatencyProbe's `input` listener
+  // never fired) or its read-back failed (page died before
+  // page.evaluate() could read window.__latencies) -- reject.catch(() =>
+  // []) makes both of those indistinguishable from a legitimately empty
+  // array, so a completed-but-zero-sample run is treated as a
+  // measurement failure here rather than a valid "0 samples" result.
+  // Event Timing / Long Tasks are NOT held to this: a fast run
+  // genuinely can have zero events >16ms or zero long tasks, and there
+  // is no analogous "this MUST have produced at least one sample"
+  // guarantee for them the way there is for rAF once >=1 keystroke has
+  // landed.
+  if (result.keystrokes.completed > 0 && result.rafLatencyMs.n === 0) {
+    return true;
+  }
   return false;
 }
 
@@ -361,6 +410,21 @@ const HISTORY_COUNT = Number(process.argv[3] ?? "1000");
 const KEYSTROKES = Number(process.argv[4] ?? "30");
 const TICK_MS = Number(process.argv[5] ?? "200");
 const ERROR_AGENTS = process.argv[6] ?? "none"; // "all" | "none"
+// Optional 7th arg (e.g. "run1"): repeated runs of the SAME scenario would
+// otherwise silently overwrite the same JSON/trace filename, leaving only
+// the LAST run's evidence on disk even after multiple invocations -- an
+// earlier round of this same bench made exactly that mistake. Empty by
+// default so single-run usage (the common case) is unaffected.
+const RUN_LABEL = process.argv[7] ?? "";
+// Unlike the other args (numeric, or "all"/"none"), this one flows straight
+// into path.join() for the output filenames with no other validation --
+// a value containing "/" or ".." would write outside results/candidateA.
+if (RUN_LABEL !== "" && !/^[A-Za-z0-9_-]+$/.test(RUN_LABEL)) {
+  console.error(
+    `runLabel must match /^[A-Za-z0-9_-]+$/, got: ${JSON.stringify(RUN_LABEL)}`,
+  );
+  process.exit(1);
+}
 
 const outDir = path.join(__dirname, "results", "candidateA");
 fs.mkdirSync(outDir, { recursive: true });
@@ -384,6 +448,7 @@ try {
           tickMs: TICK_MS,
           errorAgents: ERROR_AGENTS,
           traceDir: outDir,
+          runLabel: RUN_LABEL,
         });
         results[variant] = summarize(raw);
         console.log(variant, JSON.stringify(results[variant], null, 2));
@@ -397,7 +462,7 @@ try {
 
     const outFile = path.join(
       outDir,
-      `candidateA-agents${AGENT_COUNT}-hist${HISTORY_COUNT}-tick${TICK_MS}-err${ERROR_AGENTS}.json`,
+      `candidateA-agents${AGENT_COUNT}-hist${HISTORY_COUNT}-tick${TICK_MS}-err${ERROR_AGENTS}${RUN_LABEL ? `-${RUN_LABEL}` : ""}.json`,
     );
     fs.writeFileSync(
       outFile,
@@ -408,6 +473,7 @@ try {
           keystrokes: KEYSTROKES,
           tickMs: TICK_MS,
           errorAgents: ERROR_AGENTS,
+          runLabel: RUN_LABEL || undefined,
           ...results,
         },
         null,

@@ -1,0 +1,138 @@
+{
+  "agentCount": 5,
+  "historyCount": 5000,
+  "keystrokes": 30,
+  "tickMs": 100,
+  "errorAgents": "none",
+  "runLabel": "run1",
+  "before": {
+    "rafLatencyMs": {
+      "n": 30,
+      "avg": 9.44,
+      "median": 0.7,
+      "p95": 65.9,
+      "max": 66.4
+    },
+    "eventTiming": {
+      "inputDelayMs": {
+        "n": 49,
+        "avg": 13.9,
+        "median": 0.3,
+        "p95": 64.7,
+        "max": 66.8
+      },
+      "processingTimeMs": {
+        "n": 49,
+        "avg": 0.4,
+        "median": 0.1,
+        "p95": 1.4,
+        "max": 1.4
+      },
+      "presentationDelayMs": {
+        "n": 49,
+        "avg": 28.15,
+        "median": 15.7,
+        "p95": 72,
+        "max": 72
+      },
+      "durationMs": {
+        "n": 49,
+        "avg": 42.45,
+        "median": 64,
+        "p95": 72,
+        "max": 72
+      }
+    },
+    "longTasks": {
+      "count": 25,
+      "totalDurationMs": 1464,
+      "durationMs": {
+        "n": 25,
+        "avg": 58.56,
+        "median": 56,
+        "p95": 65,
+        "max": 89
+      }
+    },
+    "mountLongTasks": {
+      "count": 2,
+      "totalDurationMs": 233
+    },
+    "domNodeCount": {
+      "before": 1134,
+      "after": 1254
+    },
+    "tracePath": "/home/yuta/git/kaoiro/worktrees/ao-304/dashboard/bench/results/candidateA/trace-agents5-hist5000-tick100-errnone-run1-before.zip",
+    "typingError": null,
+    "readFailed": false,
+    "keystrokes": {
+      "completed": 30,
+      "requested": 30
+    }
+  },
+  "after": {
+    "rafLatencyMs": {
+      "n": 30,
+      "avg": 17.48,
+      "median": 8.2,
+      "p95": 63.2,
+      "max": 68.5
+    },
+    "eventTiming": {
+      "inputDelayMs": {
+        "n": 71,
+        "avg": 8.82,
+        "median": 0.2,
+        "p95": 62.1,
+        "max": 67.3
+      },
+      "processingTimeMs": {
+        "n": 71,
+        "avg": 0.39,
+        "median": 0.1,
+        "p95": 1.6,
+        "max": 1.7
+      },
+      "presentationDelayMs": {
+        "n": 71,
+        "avg": 32.81,
+        "median": 15.9,
+        "p95": 70.3,
+        "max": 72
+      },
+      "durationMs": {
+        "n": 71,
+        "avg": 42.03,
+        "median": 56,
+        "p95": 72,
+        "max": 72
+      }
+    },
+    "longTasks": {
+      "count": 26,
+      "totalDurationMs": 1523,
+      "durationMs": {
+        "n": 26,
+        "avg": 58.58,
+        "median": 58,
+        "p95": 66,
+        "max": 89
+      }
+    },
+    "mountLongTasks": {
+      "count": 2,
+      "totalDurationMs": 229
+    },
+    "domNodeCount": {
+      "before": 1134,
+      "after": 1259
+    },
+    "tracePath": "/home/yuta/git/kaoiro/worktrees/ao-304/dashboard/bench/results/candidateA/trace-agents5-hist5000-tick100-errnone-run1-after.zip",
+    "typingError": null,
+    "readFailed": false,
+    "keystrokes": {
+      "completed": 30,
+      "requested": 30
+    }
+  }
+}
