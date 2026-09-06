@@ -1431,6 +1431,38 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert second.details["revision"] == 2
       assert second.details["previous"] == effective
     end
+
+    # director裁定 2026-09-06: "agent token" means a wrapper-scoped
+    # credential (`:wrapper_tokens`, `KAOIRO_WRAPPER_TOKENS`) presented on
+    # the CLIENT socket to reach `set_permission`. Unlike every other case
+    # in this describe block, `join_as/1`'s harness shortcut (it builds
+    # `role`/`credential`/`socket_id` assigns directly, bypassing
+    # `ClientSocket.connect/3` entirely) cannot exercise this — there is
+    # no credential resolution to bypass around. This test goes through
+    # the REAL `connect/3` callback instead (same idiom as
+    # `client_socket_test.exs`), so the auth decision comes from the
+    # actual `role_for/1` resolution, not an injected role.
+    test "wrapper 用 token を client 資格情報として使っても set_permission に届かない (agent token)" do
+      agent_id = "test.setperm2-wrappertoken"
+      put_permission_agent(agent_id)
+      seed_permission_baseline(agent_id)
+
+      wrapper_token = "wtok-#{System.unique_integer([:positive])}"
+
+      Application.put_env(
+        :kaoiro_server,
+        :wrapper_tokens,
+        "#{agent_id}:#{wrapper_token}"
+      )
+
+      on_exit(fn -> Application.delete_env(:kaoiro_server, :wrapper_tokens) end)
+
+      # The wrapper token is valid for `Auth.authorize_wrapper/2` but was
+      # never added to `:client_tokens` (this describe block's `setup`
+      # only configures "tok-operator"/"tok-viewer"/"tok-admin") — so
+      # `Auth.client_role/1` must not resolve any role for it.
+      assert :error = connect(KaoiroServerWeb.ClientSocket, %{"token" => wrapper_token})
+    end
   end
 
   describe "delete_agent (issue #14)" do
