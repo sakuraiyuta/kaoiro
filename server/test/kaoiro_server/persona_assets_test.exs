@@ -872,6 +872,8 @@ defmodule KaoiroServer.PersonaAssetsTest do
       long_name = Path.join(tmp, "long.zip")
       {:ok, _} = :zip.create(cl.(long_name), [{cl.(String.duplicate("n", 300)), "x"}])
 
+      # ここのランダム列は issue #320 の class に当たらない。下の assert は
+      # {:error, _} という分類だけを見ており、失敗の理由文字列に依存しない。
       garbage = Path.join(tmp, "garbage.zip")
       File.write!(garbage, :crypto.strong_rand_bytes(512))
 
@@ -2135,10 +2137,16 @@ defmodule KaoiroServer.PersonaAssetsTest do
     File.mkdir_p!(ingest)
     :ok = write_pack(ingest, "good-1.0.0", base_manifest("good"), "body-good")
 
-    # method=8 と宣言しつつ中身は deflate ですらないバイト列。
+    # method=8 と宣言しつつ中身は deflate ですらないバイト列。先頭 byte の
+    # BTYPE に raw deflate の予約値 11 を置くので zlib は必ず :data_error を
+    # 返す。以前はここが :crypto.strong_rand_bytes(300) で、**0.53% の確率で
+    # そのランダム列が inflate を通り** (issue #320、20,000 試行で実測)、
+    # pack は skip されるものの理由が :bad_crc になって下の assert が落ちた。
+    # 決定的な列にしても「preflight が :data_error を捕まえる」という主張は
+    # そのままなので、assert は緩めていない。
     File.write!(
       Path.join(ingest, "rot-1.0.0.zip"),
-      custom_zip(name: "rot.bin", body: :crypto.strong_rand_bytes(300), method: 8)
+      custom_zip(name: "rot.bin", body: <<7>> <> :binary.copy(<<0>>, 299), method: 8)
     )
 
     Application.put_env(:kaoiro_server, :persona_cache_dir, Path.join(tmp, "cache"))
