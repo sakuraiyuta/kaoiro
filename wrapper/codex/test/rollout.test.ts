@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   mkdtempSync,
   mkdirSync,
   writeFileSync,
@@ -93,6 +94,28 @@ describe("Codex permission rollout cursor", () => {
 
     expect(codexPermissionContextAfter(cursor, id)).toBeNull();
     rmSync(root, { recursive: true, force: true });
+  });
+
+  it("does not trust a resumed boundary when known-turn reading was unavailable", () => {
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-codex-permission-"));
+    const id = "permission-unreadable-resume-baseline";
+    const path = join(root, `rollout-${id}.jsonl`);
+    writeFileSync(path, `${permissionTurnContext("old-turn", "read-only")}\n`);
+    try {
+      chmodSync(path, 0o000);
+      const cursor = captureCodexPermissionRolloutCursor(root, id);
+      expect(cursor.resumeBaselineUnavailable).toBe(true);
+      chmodSync(path, 0o600);
+      writeFileSync(
+        path,
+        `${permissionTurnContext("old-turn", "read-only")}\n`,
+        { flag: "a" },
+      );
+      expect(codexPermissionContextAfter(cursor, id)).toBeNull();
+    } finally {
+      chmodSync(path, 0o600);
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

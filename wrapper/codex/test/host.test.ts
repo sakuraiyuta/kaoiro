@@ -4753,6 +4753,65 @@ describe("issue #262: rollout 破損の安全な自動修復", () => {
     expect(spawns).toBe(0);
   });
 
+  it("close cancels a rejoined sync wait reached from a blocked dispatch", async () => {
+    let rejoining = false;
+    let waits = 0;
+    const rejoin = deferred<void>();
+    let spawns = 0;
+    const unknown: PermissionControlExt = {
+      revision: 0,
+      requested: { sandbox: "read-only", network_access: false },
+      constraints: { approval: "never", enforcement: "os" },
+      status: "unknown",
+      submitted: {
+        revision: 0,
+        requested: { sandbox: "read-only", network_access: false },
+        execution_id: "blocked",
+      },
+      reason: "observation_unavailable",
+    };
+    const sync: PermissionSyncMessage = {
+      version: "0",
+      control: unknown,
+      next: { revision: 0, requested: { sandbox: "read-only", network_access: false } },
+    };
+    const thread: CodexThreadLike = {
+      async runStreamed() {
+        spawns += 1;
+        async function* events(): AsyncGenerator<ThreadEvent> {
+          yield { type: "thread.started", thread_id: "unexpected-spawn" };
+          yield usageEvent();
+        }
+        return { events: events() };
+      },
+    };
+    const host = new CodexHost(CONFIG, {
+      onState: () => {},
+      appendSystemPrompt: "p",
+      codexFactory: () => ({ startThread: () => thread, resumeThread: () => thread }),
+      permissionSyncSupported: true,
+      waitForPermissionSync: () => {
+        waits += 1;
+        return rejoining ? rejoin.promise : Promise.resolve();
+      },
+    });
+    host.applyPermissionSync(sync);
+    const running = host.run("blocked");
+    await vi.waitFor(() => expect(waits).toBe(1));
+    rejoining = true;
+    host.applyPermissionSync(sync);
+    await vi.waitFor(() => expect(waits).toBe(2));
+
+    host.close();
+    await Promise.race([
+      running,
+      new Promise<void>((_resolve, reject) => {
+        setTimeout(() => reject(new Error("blocked dispatch did not close")), 500);
+      }),
+    ]);
+    expect(spawns).toBe(0);
+  });
+
   it("未知の resume 失敗は従来どおり分類せず、次のターンでも resumeThread を再試行する (fall back、rollout 検査自体が走らない)", async () => {
     const logs: Envelope[] = [];
     const turnEnds: unknown[] = [];

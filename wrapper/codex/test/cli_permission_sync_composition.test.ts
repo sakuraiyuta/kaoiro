@@ -11,6 +11,17 @@ import { runCodexCli } from "../src/cli.js";
 
 type Receiver = (payload: unknown) => void;
 
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 const transport = {
   handlers: new Map<string, Receiver[]>(),
   joinReceivers: new Map<string, Receiver>(),
@@ -270,6 +281,65 @@ describe("Codex CLI permission-sync composition", () => {
 
       emit("permission_sync", { version: "0", control: null, next: null });
       await vi.waitFor(() => expect(spawns).toBe(2));
+    } finally {
+      closeCli(host, running);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rechecks the current join after diagnostics preparation before opening an SDK exec", async () => {
+    const root = await mkdtemp(join(tmpdir(), "kaoiro-codex-cli-permission-"));
+    const diagnosticsStarted = deferred<void>();
+    const releaseDiagnostics = deferred<void>();
+    let host: CodexHost | undefined;
+    let spawns = 0;
+    const thread: CodexThreadLike = {
+      async runStreamed() {
+        spawns += 1;
+        async function* events(): AsyncGenerator<ThreadEvent> {
+          yield { type: "thread.started", thread_id: "cli-diagnostics-rejoin" };
+          yield completed();
+        }
+        return { events: events() };
+      },
+    };
+    const client: CodexClientLike = {
+      startThread: () => thread,
+      resumeThread: () => thread,
+    };
+    const running = runCodexCli({
+      parseCliArgs: () => ({ configPath: "test", prompt: "first", resume: undefined }),
+      loadConfig: () => ({ ...config }),
+      createServerLink,
+      createHost: (hostConfig, options) => {
+        host = new CodexHost(hostConfig, {
+          ...options,
+          codexFactory: () => client,
+          permissionRolloutRoot: root,
+          turnTraceDir: root,
+          afterDiagnosticsBegin: async () => {
+            diagnosticsStarted.resolve();
+            await releaseDiagnostics.promise;
+          },
+        });
+        return host;
+      },
+    });
+    try {
+      await vi.waitFor(() => expect(transport.joinReceivers.get("ok")).toBeTypeOf("function"));
+      transport.joinReceivers.get("ok")?.({ permission_sync: true });
+      emit("persona_prompt", { prompt: "system prompt" });
+      emit("permission_sync", { version: "0", control: null, next: null });
+      await diagnosticsStarted.promise;
+
+      transport.onOpen?.();
+      transport.joinReceivers.get("ok")?.({ permission_sync: true });
+      releaseDiagnostics.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(spawns).toBe(0);
+
+      emit("permission_sync", { version: "0", control: null, next: null });
+      await vi.waitFor(() => expect(spawns).toBe(1));
     } finally {
       closeCli(host, running);
       await rm(root, { recursive: true, force: true });

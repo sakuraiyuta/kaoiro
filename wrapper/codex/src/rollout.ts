@@ -323,13 +323,13 @@ function turnContextFrom(value: unknown, sessionId: string): CodexPermissionTurn
   }
 }
 
-function knownTurnIdsIn(path: string, sessionId: string): Set<string> {
+function knownTurnIdsIn(path: string, sessionId: string): Set<string> | null {
   const known = new Set<string>();
   let text: string;
   try {
     text = readFileSync(path, "utf8");
   } catch {
-    return known;
+    return null;
   }
   for (const line of text.split("\n")) {
     try {
@@ -360,12 +360,14 @@ export function captureCodexPermissionRolloutCursor(
     };
   }
   try {
+    const knownTurnIds = knownTurnIdsIn(path, sessionId);
+    if (knownTurnIds === null) throw new Error("rollout baseline is unreadable");
     return {
       root,
       sessionId,
       path,
       offset: statSync(path).size,
-      knownTurnIds: knownTurnIdsIn(path, sessionId),
+      knownTurnIds,
       resumeBaselineUnavailable: false,
     };
   } catch {
