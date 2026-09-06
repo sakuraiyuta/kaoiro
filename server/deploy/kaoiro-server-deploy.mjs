@@ -1,17 +1,23 @@
 #!/usr/bin/env node
 // Server deploy CLI (issue #306, design per #303 comments 2026-09-06):
 // one entry point for build / start / update / rollback / status, backed
-// by the manifest+journal from commit (a). This commit implements
-// `build` and `start` only; `update` / `rollback` / `status` land in
-// later commits (commit split agreed with yuta 2026-09-06).
+// by the manifest+journal from commit (a). This commit adds the PREPARE
+// half of `update` (lock, preflight, old-image save, build, maintenance
+// gate) — the no-downtime steps, ending right before the stop window.
+// The COMMIT half (stop/archive/up/health-poll/retention) and
+// `rollback`/`status` land in later commits (commit split agreed with
+// yuta 2026-09-06).
 import { execFileSync } from "node:child_process";
-import { readdirSync } from "node:fs";
+import { mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { computeBuildIdentity } from "../../scripts/build-identity.mjs";
-import { BRANCH, classify } from "./kaoiro-deploy-branch.mjs";
+import { BRANCH, classify, requireRunningContainer } from "./kaoiro-deploy-branch.mjs";
 import { loadConfig } from "./kaoiro-deploy-config.mjs";
 import { dockerInspect, resolveDockerBin, runDocker } from "./kaoiro-deploy-docker.mjs";
+import { advancePhase, writeJournal } from "./kaoiro-deploy-journal.mjs";
+import { acquireLock, releaseLock } from "./kaoiro-deploy-lock.mjs";
+import { findUnfinishedTransaction, newTransactionId } from "./kaoiro-deploy-transaction.mjs";
 
 // The compose service name in server/docker-compose.yaml. Resolved through
 // `docker compose ps`, never guessed as `<dir>-<service>-1`, so this is the
@@ -251,6 +257,121 @@ export function runStart(flags, config) {
   return { command: "start", dryRun: false, docker: overridden ? "fake" : "docker", ...result, identity };
 }
 
+/** `update` — PREPARE half only (this commit): lock, preflight, save the
+ *  old image, build the versioned target, and the human maintenance
+ *  gate. Every step up to the gate touches nothing but the checkout and
+ *  a versioned image tag — the running container is never stopped —
+ *  matching deployment.md 4.3's "separate prepare (no downtime) from
+ *  commit (the stop window)". The COMMIT half (graceful stop, archive,
+ *  `up --no-build`, health poll, retention) is a later commit; this
+ *  function's return value is the interface boundary between the two.
+ *
+ *  `--transaction <id>` resumes a transaction that reached the
+ *  maintenance gate but has not been approved yet: it re-verifies the
+ *  container is still running, refuses if `--target` no longer matches
+ *  what was already built, and re-checks the gate — it does NOT redo
+ *  the old-image-save or build steps, both of which already happened
+ *  and are read back from the journal's history instead. */
+export function runUpdate(flags, config) {
+  const repo = flags.repo ?? process.cwd();
+  if (!flags.target || !SHA_RE.test(flags.target)) {
+    fail("--target <full 40-hex SHA> is required for update", 64);
+  }
+  const target = flags.target;
+  const serverDir = join(repo, "server");
+  const { bin, overridden } = resolveDockerBin(config);
+  const backupRoot = resolveBackupRoot(config);
+
+  const lockPath = acquireLock(backupRoot);
+  try {
+    const unfinished = findUnfinishedTransaction(backupRoot);
+    let transactionId;
+    let dir;
+    let journal;
+    let oldImageId;
+    let oldSha;
+    let buildResult;
+
+    if (flags.transaction !== undefined) {
+      if (unfinished === null || unfinished.id !== flags.transaction) {
+        fail(
+          `--transaction ${flags.transaction} is not an in-progress transaction; run 'status' to see what exists`,
+        );
+      }
+      ({ id: transactionId, dir, journal } = unfinished);
+      const oldEntry = journal.history.find((e) => e.phase === "old_image_saved");
+      const buildEntry = journal.history.find((e) => e.phase === "build_prepared");
+      if (oldEntry === undefined || buildEntry === undefined) {
+        fail(
+          `transaction ${transactionId} has not completed prepare (phase: ${journal.phase}); rerun update with --transaction ${transactionId} and no --maintenance-approved to retry prepare`,
+        );
+      }
+      if (buildEntry.target_sha !== target) {
+        fail(
+          `--target ${target} does not match transaction ${transactionId}'s prepared target ${buildEntry.target_sha}`,
+        );
+      }
+      oldImageId = oldEntry.old_image_id;
+      oldSha = oldEntry.old_sha;
+      buildResult = { imageId: buildEntry.image_id, imageTag: buildEntry.image_tag, target };
+      // Re-verify: prepare ran against a running container, and resume
+      // may happen an arbitrary time later — nothing here should trust
+      // that it still is.
+      requireRunningContainer(bin, serverDir, SERVICE);
+    } else {
+      if (unfinished !== null) {
+        fail(
+          `transaction ${unfinished.id} is unfinished (phase: ${unfinished.journal.phase}); resume it with --transaction ${unfinished.id}, or investigate ${unfinished.dir} before starting a new one`,
+        );
+      }
+
+      const container = requireRunningContainer(bin, serverDir, SERVICE);
+
+      transactionId = newTransactionId();
+      dir = join(backupRoot, transactionId);
+      mkdirSync(dir, { recursive: true });
+      journal = {
+        schema_version: 1,
+        transaction_id: transactionId,
+        phase: "preflight",
+        history: [{ phase: "preflight", at: new Date().toISOString(), container }],
+      };
+      writeJournal(dir, journal);
+
+      oldImageId = dockerInspect(bin, container, "{{.Image}}");
+      oldSha = gitOutput(["rev-parse", "HEAD"], repo);
+      journal = advancePhase(dir, journal, "old_image_saved", { old_image_id: oldImageId, old_sha: oldSha });
+
+      buildResult = runBuild({ repo, target }, config);
+      journal = advancePhase(dir, journal, "build_prepared", {
+        image_id: buildResult.imageId,
+        image_tag: buildResult.imageTag,
+        target_sha: target,
+      });
+    }
+
+    if (flags.maintenanceApproved !== true) {
+      fail(
+        `update requires --maintenance-approved before the stop window opens (no-downtime steps are complete); resume with --transaction ${transactionId} --target ${target} --maintenance-approved once the operator has approved the maintenance window`,
+        64,
+      );
+    }
+    journal = advancePhase(dir, journal, "maintenance_gate_passed");
+
+    return {
+      command: "update",
+      phase: "prepare_complete",
+      transactionId,
+      docker: overridden ? "fake" : "docker",
+      oldImageId,
+      oldSha,
+      build: buildResult,
+    };
+  } finally {
+    releaseLock(lockPath);
+  }
+}
+
 async function main(argv) {
   const { command, flags } = parseArgs(argv);
   const config = loadConfig(flags.config);
@@ -259,8 +380,10 @@ async function main(argv) {
       return runBuild(flags, config);
     case "start":
       return runStart(flags, config);
+    case "update":
+      return runUpdate(flags, config);
     default:
-      fail(`unknown command: ${command} (build/start implemented so far; update/rollback/status land in later commits)`, 64);
+      fail(`unknown command: ${command} (build/start/update implemented so far; rollback/status land in later commits)`, 64);
   }
 }
 

@@ -1,25 +1,34 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
 
 import { DEFAULT_CONFIG } from "../kaoiro-deploy-config.mjs";
-import { DeployError, hasPriorTransactions, parseArgs, runBuild, runStart } from "../kaoiro-server-deploy.mjs";
+import { readJournal } from "../kaoiro-deploy-journal.mjs";
+import {
+  DeployError,
+  hasPriorTransactions,
+  parseArgs,
+  runBuild,
+  runStart,
+  runUpdate,
+} from "../kaoiro-server-deploy.mjs";
 
-// A single fake docker covering every branch runBuild/runStart exercise:
-// `compose build` / `tag` / `compose up -d --build` all succeed silently;
-// `inspect ... --format {{.Id}}` returns a fixed fake image id;
-// `compose ps -a` / `inspect ... --format {{.State.Status}}` are driven
-// by FAKE_DOCKER_SCENARIO the same way test/branch.test.mjs's fake does.
+// A single fake docker covering every branch runBuild/runStart/runUpdate
+// exercise: `compose build` / `tag` / `compose up -d --build` / `start`
+// all succeed silently; `inspect ... --format {{.Id}}` and `{{.Image}}`
+// return fixed fake ids; `compose ps -a` / `inspect ...
+// --format {{.State.Status}}` are driven by FAKE_DOCKER_SCENARIO the
+// same way test/branch.test.mjs's fake does.
 const FAKE_DOCKER = `#!/bin/sh
 case "$1" in
   compose)
     case "$2" in
       ps)
         case "$FAKE_DOCKER_SCENARIO" in
-          stopped) printf 'kaoiro-c1\\n' ;;
+          stopped|running) printf 'kaoiro-c1\\n' ;;
         esac
         ;;
       build|up) exit 0 ;;
@@ -27,8 +36,14 @@ case "$1" in
     ;;
   tag) exit 0 ;;
   inspect)
-    case "$FAKE_DOCKER_SCENARIO" in
-      stopped) printf 'exited\\n' ;;
+    case "$4" in
+      '{{.State.Status}}')
+        case "$FAKE_DOCKER_SCENARIO" in
+          stopped) printf 'exited\\n' ;;
+          running) printf 'running\\n' ;;
+        esac
+        ;;
+      '{{.Image}}') printf 'sha256:oldimageid\\n' ;;
       *) printf 'sha256:fakeimageid\\n' ;;
     esac
     ;;
@@ -88,6 +103,17 @@ function withOverrideEnv(fn) {
   } finally {
     if (prior === undefined) delete process.env.KAOIRO_DEPLOY_DOCKER_BIN;
     else process.env.KAOIRO_DEPLOY_DOCKER_BIN = prior;
+  }
+}
+
+function withScenario(scenario, fn) {
+  const prior = process.env.FAKE_DOCKER_SCENARIO;
+  process.env.FAKE_DOCKER_SCENARIO = scenario;
+  try {
+    return withOverrideEnv(fn);
+  } finally {
+    if (prior === undefined) delete process.env.FAKE_DOCKER_SCENARIO;
+    else process.env.FAKE_DOCKER_SCENARIO = prior;
   }
 }
 
@@ -207,3 +233,112 @@ test("runStart on branch C with --initialize and --dry-run reports the plan", ()
   assert.equal(result.dryRun, true);
   assert.ok(result.wouldRun.some((line) => line.includes("compose up")));
 });
+
+test("runUpdate requires --target", () => {
+  assert.throws(
+    () => withScenario("running", () => runUpdate({ repo: workDir }, configWithOverride())),
+    DeployError,
+  );
+});
+
+test("runUpdate refuses when the container is not running", () => {
+  assert.throws(
+    () => withScenario("stopped", () => runUpdate({ repo: workDir, target: headSha }, configWithOverride())),
+    Error,
+  );
+});
+
+test("runUpdate stops at the maintenance gate without --maintenance-approved, but records prepare progress", () => {
+  let caught;
+  try {
+    withScenario("running", () => runUpdate({ repo: workDir, target: headSha }, configWithOverride()));
+  } catch (err) {
+    caught = err;
+  }
+  assert.ok(caught instanceof DeployError);
+  const backupRoot = join(root, "kaoiro-deploy");
+  const [transactionDir] = readdirSyncNonHidden(backupRoot);
+  const journal = readJournal(join(backupRoot, transactionDir));
+  assert.equal(journal.phase, "build_prepared");
+});
+
+test("runUpdate completes prepare with --maintenance-approved", () => {
+  const result = withScenario("running", () =>
+    runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithOverride()),
+  );
+  assert.equal(result.phase, "prepare_complete");
+  assert.equal(result.oldImageId, "sha256:oldimageid");
+  assert.equal(result.build.imageTag, `kaoiro-server:${headSha}`);
+  const backupRoot = join(root, "kaoiro-deploy");
+  const journal = readJournal(join(backupRoot, result.transactionId));
+  assert.equal(journal.phase, "maintenance_gate_passed");
+});
+
+test("runUpdate resumes a gated transaction via --transaction without rebuilding", () => {
+  let transactionId;
+  try {
+    withScenario("running", () => runUpdate({ repo: workDir, target: headSha }, configWithOverride()));
+  } catch (err) {
+    assert.ok(err instanceof DeployError);
+  }
+  const backupRoot = join(root, "kaoiro-deploy");
+  [transactionId] = readdirSyncNonHidden(backupRoot);
+
+  const result = withScenario("running", () =>
+    runUpdate(
+      { repo: workDir, target: headSha, transaction: transactionId, maintenanceApproved: true },
+      configWithOverride(),
+    ),
+  );
+  assert.equal(result.phase, "prepare_complete");
+  assert.equal(result.transactionId, transactionId);
+});
+
+test("runUpdate refuses to resume when --target no longer matches the prepared transaction", () => {
+  try {
+    withScenario("running", () => runUpdate({ repo: workDir, target: headSha }, configWithOverride()));
+  } catch (err) {
+    assert.ok(err instanceof DeployError);
+  }
+  const backupRoot = join(root, "kaoiro-deploy");
+  const [transactionId] = readdirSyncNonHidden(backupRoot);
+  const otherTarget = "f".repeat(40);
+  assert.throws(
+    () =>
+      withScenario("running", () =>
+        runUpdate(
+          { repo: workDir, target: otherTarget, transaction: transactionId, maintenanceApproved: true },
+          configWithOverride(),
+        ),
+      ),
+    DeployError,
+  );
+});
+
+test("runUpdate refuses a second transaction while one is unfinished, and creates no new transaction dir", () => {
+  // maintenanceApproved:true still leaves the transaction non-terminal
+  // (phase "maintenance_gate_passed" is not in TERMINAL_PHASES) — the
+  // commit half that would reach "done" does not exist yet.
+  withScenario("running", () =>
+    runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithOverride()),
+  );
+  const backupRoot = join(root, "kaoiro-deploy");
+  const before = readdirSyncNonHidden(backupRoot).length;
+  assert.throws(
+    () => withScenario("running", () => runUpdate({ repo: workDir, target: headSha }, configWithOverride())),
+    DeployError,
+  );
+  // The count check is what actually pins the guard: without it, a
+  // mutated guard that lets a second run through still ends up throwing
+  // DeployError at its OWN maintenance gate, so `assert.throws` alone
+  // would pass even with the duplicate-transaction check removed.
+  assert.equal(
+    readdirSyncNonHidden(backupRoot).length,
+    before,
+    "a second transaction must not be created while one is unfinished",
+  );
+});
+
+function readdirSyncNonHidden(dir) {
+  return readdirSync(dir).filter((name) => !name.startsWith("."));
+}
