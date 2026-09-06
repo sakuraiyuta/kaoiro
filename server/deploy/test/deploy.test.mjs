@@ -15,6 +15,7 @@ import {
   parseArgs,
   parseTarEntries,
   pruneOldTransactions,
+  resolveHealthUrl,
   runBuild,
   runStart,
   runUpdate,
@@ -47,6 +48,17 @@ case "$1" in
         esac
         ;;
       build|up|stop) exit 0 ;;
+      # director ruling 2026-09-06 (#306 (c3) review): resolveHealthUrl's
+      # own source of truth when config.health_url is not overridden.
+      # Unhandled scenarios fall through with empty output (no explicit
+      # case, sh's own default) — that IS the "no output" failure case
+      # resolveHealthUrl's own test relies on, not a gap to fill in.
+      port)
+        case "$FAKE_DOCKER_SCENARIO" in
+          health-url-derivable) printf '127.0.0.1:9999\\n' ;;
+          health-url-port-fails) exit 1 ;;
+        esac
+        ;;
     esac
     ;;
   tag) exit 0 ;;
@@ -215,14 +227,17 @@ let workDir;
 let headSha;
 let bin;
 
-// Simulates `curl -sS --max-time N <url>` for pollHealth: ignores its
-// own args entirely and replies with the env-var-controlled
-// build_revision, so each test decides what "the running server"
-// reports without a real HTTP server. KAOIRO_TEST_HEALTH_REVISION unset
-// (the "no server up yet" case) reports a value that can never match a
-// real 40-hex target.
+// Simulates `curl -sS --fail --max-time N <url>` for pollHealth: ignores
+// its own args entirely and replies with the env-var-controlled
+// build_revision/build_dirty, so each test decides what "the running
+// server" reports without a real HTTP server. KAOIRO_TEST_HEALTH_REVISION
+// unset (the "no server up yet" case) reports a value that can never
+// match a real 40-hex target. KAOIRO_TEST_HEALTH_DIRTY defaults to
+// "false" (director ruling 2026-09-06: healthy requires build_dirty ===
+// false too, not just a matching revision).
 const FAKE_CURL = `#!/bin/sh
-printf '{"build_revision":"%s","build_dirty":false}' "\${KAOIRO_TEST_HEALTH_REVISION:-no-server-yet}"
+printf '{"build_revision":"%s","build_dirty":%s}' \\
+  "\${KAOIRO_TEST_HEALTH_REVISION:-no-server-yet}" "\${KAOIRO_TEST_HEALTH_DIRTY:-false}"
 `;
 
 let curlBin;
@@ -601,6 +616,40 @@ test("runUpdate completes through DONE with --maintenance-approved and a clean s
   assert.deepEqual(manifest.required_entries, result.requiredEntries);
 });
 
+// director ruling 2026-09-06 (#306 (c3) review): a hardcoded health_url
+// default would miss in production (KAOIRO_PUBLISH_IP publishes on a
+// different host than the dev-default loopback) — resolveHealthUrl
+// derives it from `docker compose port` instead, tested here directly
+// rather than by threading 3 more scenarios through the whole runUpdate
+// flow.
+test("resolveHealthUrl returns config.health_url unchanged without calling docker", () => {
+  const url = withOverrideEnv(() =>
+    resolveHealthUrl(bin, join(workDir, "server"), { health_url: "http://explicit/api/health" }),
+  );
+  assert.equal(url, "http://explicit/api/health");
+});
+
+test("resolveHealthUrl derives the URL from `docker compose port` when health_url is null", () => {
+  const url = withScenario("health-url-derivable", () =>
+    resolveHealthUrl(bin, join(workDir, "server"), { health_url: null }),
+  );
+  assert.equal(url, "http://127.0.0.1:9999/api/health");
+});
+
+test("resolveHealthUrl fails when `docker compose port` itself fails", () => {
+  assert.throws(
+    () => withScenario("health-url-port-fails", () => resolveHealthUrl(bin, join(workDir, "server"), { health_url: null })),
+    DeployError,
+  );
+});
+
+test("resolveHealthUrl fails when `docker compose port` returns no output", () => {
+  assert.throws(
+    () => withScenario("health-url-port-empty", () => resolveHealthUrl(bin, join(workDir, "server"), { health_url: null })),
+    DeployError,
+  );
+});
+
 // クロエ round 2 review SF-8: a symlink's `-> target` and a hardlink's
 // `link to target` suffix must not leak into the recorded path — both
 // exercised against a REAL archive (FAKE_DOCKER's running-clean-stop-torture
@@ -657,6 +706,25 @@ test("runUpdate's health poll times out when the server never reports the target
   const [transactionDir] = readdirSyncNonHidden(backupRoot);
   const journal = readJournal(join(backupRoot, transactionDir));
   assert.equal(journal.phase, "up");
+});
+
+// director ruling 2026-09-06 (#306 (c3) review): a dirty build at the
+// right SHA is not a successful deploy — deployment.md 4.5's own
+// provenance table treats build_dirty as a SEPARATE success criterion
+// from build_revision, not a detail folded into it.
+test("runUpdate's health poll times out when the server reports the target revision but a dirty build", () => {
+  process.env.KAOIRO_TEST_HEALTH_DIRTY = "true";
+  try {
+    assert.throws(
+      () =>
+        withScenario("running-clean-stop", () =>
+          runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+        ),
+      DeployError,
+    );
+  } finally {
+    delete process.env.KAOIRO_TEST_HEALTH_DIRTY;
+  }
 });
 
 test("runUpdate refuses to call an update done when the container restarts during the stability window", () => {
