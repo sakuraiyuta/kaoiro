@@ -342,7 +342,7 @@ only points specific to multi-host deployment.
 # 各エージェントホストへ転送し、release として install する
 # (展開先は <install-root>/releases/<rev>/、ADR-0018 2026-08-16 改訂)
 ./kaoiro-runner-install.sh kaoiro-runner-<rev>-linux-x64.tar.gz
-./kaoiro-runner-switch.sh <rev>
+./kaoiro-runner-switch.sh <release-id>
 ```
 
 The install / switch scripts are in the package's `deploy/`. For the first
@@ -1096,7 +1096,7 @@ git status --porcelain   # 空であること (dirty だと id に -dirty が付
   dist-tarball/kaoiro-runner-<rev>-linux-x64.tar.gz
 
 # 4. current を作る。unit はまだ旧 path を指しているので無影響
-./runner/deploy/kaoiro-runner-switch.sh <rev>
+./runner/deploy/kaoiro-runner-switch.sh <release-id>
 
 # 5. unit の ExecStart を current 経由へ張り替える
 install_root="${XDG_DATA_HOME:-$HOME/.local/share}/kaoiro"

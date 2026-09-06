@@ -26,6 +26,9 @@ Confirm all of these before starting.
   **GNU tar** on the server host (the deploy CLI's own archive-listing parser
   assumes GNU `tar tv*` output — bsdtar/busybox hosts fail loudly, but only
   after an archive has already been written).
+- **Elixir `~> 1.15` with Phoenix** on the server host, with dependencies
+  fetched once (`cd server && mix deps.get`) before running the `.env`
+  wizard in step 1.
 - **Node.js ≥ 22** on the server host (`server/deploy/kaoiro-server-deploy.mjs`
   requires it) and on every runner host (the tarball is self-contained — a
   runner host needs nothing but a Node runtime). Whichever host BUILDS the
@@ -38,9 +41,12 @@ Confirm all of these before starting.
 
 **The deploy CLI's own config file** (optional, but required for anything
 other than its built-in defaults): a `0600` JSON file, owned by the user that
-runs the CLI, passed as `--config <path>` to every subcommand. Every key
-defaults to the operator-decided value below, so a config file only needs to
-state what it overrides:
+runs the CLI, passed as `--config <path>` to every subcommand. The table
+below is the operator-facing subset — every key in it defaults to the value
+shown, so a config file only needs to state what it overrides. (One more
+key, `allow_docker_override`, exists only so the test suite can fake the
+docker binary; it has no legitimate production use and is deliberately
+omitted here.)
 
 | Key | Default |
 |---|---|
@@ -132,7 +138,7 @@ service:
 
 ```sh
 ./deploy/kaoiro-runner-install.sh ../kaoiro-runner-<rev>-<os>-<arch>.tar.gz
-./deploy/kaoiro-runner-switch.sh <rev>
+./deploy/kaoiro-runner-switch.sh <release-id>
 ```
 
 Then enable the service — Linux (systemd user unit):
@@ -173,12 +179,13 @@ this — deployment.md 4.5):
 
 ## 4. Update
 
-**This is two commands, not one** — `update` deliberately splits into a
-no-downtime *prepare* and an explicitly-approved *commit*, because
-human-judgment points in this deploy (an abnormal stop, a lost ledger, an
-ambiguous recovery) get no `--skip`/`--force` flag by design; requiring an
-explicit second invocation is that same policy applied to the routine case,
-not an oversight.
+**Server-side, this is a `--dry-run` preview plus two real invocations —
+prepare, then commit — not one call.** `update` deliberately splits the real
+work into a no-downtime *prepare* and an explicitly-approved *commit*,
+because human-judgment points in this deploy (an abnormal stop, a lost
+ledger, an ambiguous recovery) get no `--skip`/`--force` flag by design;
+requiring an explicit second invocation is that same policy applied to the
+routine case, not an oversight.
 
 **Run `--dry-run` first, every time** (not only the first time this CLI ever
 touches this host) — it performs only reads and prints the plan:
@@ -252,10 +259,15 @@ Confirm it reads that way before trusting the CLI with a real update:
 node server/deploy/kaoiro-server-deploy.mjs status
 ```
 
-Expect `container.running: true` and `doneTransactions: []`. Then preview an
-update as in step 4 (`--dry-run`) before running one for real. There is
-nothing else to migrate — the CLI works from whatever is currently running,
-the same way a first-ever `update` on a brand-new host would.
+Expect `container.running: true` and `doneTransactions: []`. Also confirm
+`health.build_revision` matches `git rev-parse HEAD` in this checkout — the
+CLI derives `old_sha` from the repo HEAD, not from what the running
+container was actually built from, so a checkout that has since moved would
+silently record the wrong `old_sha`. If they disagree, `git checkout` the
+commit `health.build_revision` names before running anything else. Then
+preview an update as in step 4 (`--dry-run`) before running one for real.
+There is nothing else to migrate — the CLI works from whatever is currently
+running, the same way a first-ever `update` on a brand-new host would.
 
 ## 6. Troubleshooting
 
