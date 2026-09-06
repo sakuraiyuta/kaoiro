@@ -1717,6 +1717,27 @@ test("status surfaces an unfinished transaction's id and phase", () => {
   const [transactionId] = readdirSyncNonHidden(backupRoot);
   assert.equal(result.unfinishedTransaction.id, transactionId);
   assert.equal(result.unfinishedTransaction.phase, "mount_resolved");
+  // issue #220 absorption (turn 8 follow-up): MOUNT_RESOLVED is reached
+  // only after ENV_CONSISTENCY_CHECKED, so its recorded observation is
+  // already available here.
+  assert.deepEqual(result.unfinishedTransaction.envConsistency, { skipped: false, entries: {} });
+});
+
+// issue #220 absorption (turn 8 follow-up): a transaction that has NOT
+// yet reached ENV_CONSISTENCY_CHECKED reports null there — an absence,
+// not a false "skipped".
+test("status reports envConsistency: null for an unfinished transaction that has not reached that phase yet", () => {
+  let result;
+  withScenario("running-tag-drift", () => {
+    try {
+      runUpdate({ repo: workDir, target: headSha }, configWithOverride());
+    } catch (err) {
+      assert.ok(err instanceof DeployError);
+    }
+    result = runStatus({ repo: workDir }, configWithOverride());
+  });
+  assert.equal(result.unfinishedTransaction.phase, "preflight");
+  assert.equal(result.unfinishedTransaction.envConsistency, null);
 });
 
 test("status lists a completed transaction with its source/target SHA and completion time", () => {
@@ -1734,6 +1755,7 @@ test("status lists a completed transaction with its source/target SHA and comple
   const [entry] = result.doneTransactions;
   assert.equal(entry.sourceSha, headSha);
   assert.equal(entry.targetSha, headSha);
+  assert.deepEqual(entry.envConsistency, { skipped: false, entries: {} });
   assert.ok(typeof entry.doneAt === "string" && entry.doneAt !== "");
 });
 

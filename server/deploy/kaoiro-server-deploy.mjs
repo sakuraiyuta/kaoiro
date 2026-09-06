@@ -1682,10 +1682,16 @@ function listDoneTransactionSummaries(backupRoot) {
     const dir = join(backupRoot, id);
     let sourceSha = null;
     let targetSha = null;
+    let envConsistency = null;
     try {
       const manifest = readManifest(dir);
       sourceSha = manifest.source_sha;
       targetSha = manifest.target_sha;
+      // issue #220 absorption (turn 8 follow-up): surfaces the recorded
+      // {skipped:true, reason} or {skipped:false, entries} directly —
+      // an operator picking a rollback target needs to know whether
+      // env_consistency was ever actually checked for it.
+      envConsistency = manifest.env_consistency;
     } catch {
       // manifest.json is written exactly once, right after ARCHIVED
       // (runUpdate's own writeManifest call) — unreadable here means the
@@ -1699,7 +1705,7 @@ function listDoneTransactionSummaries(backupRoot) {
       // Same reasoning as above, independently — a damaged journal.json
       // must not also blank the manifest facts read above.
     }
-    return { id, sourceSha, targetSha, doneAt };
+    return { id, sourceSha, targetSha, envConsistency, doneAt };
   });
 }
 
@@ -1757,6 +1763,14 @@ export function runStatus(flags, config) {
   }
 
   const unfinished = findUnfinishedTransaction(backupRoot);
+  // issue #220 absorption (turn 8 follow-up): surfaced only once the
+  // transaction has actually reached that phase — earlier phases have
+  // no ENV_CONSISTENCY_CHECKED entry yet, and that absence (not a false
+  // "skipped") is itself the correct fact to report.
+  const unfinishedEnvConsistency =
+    unfinished === null
+      ? null
+      : (unfinished.journal.history.find((e) => e.phase === PHASE.ENV_CONSISTENCY_CHECKED)?.observation ?? null);
 
   return {
     command: "status",
@@ -1764,7 +1778,9 @@ export function runStatus(flags, config) {
     container: containerState,
     health,
     unfinishedTransaction:
-      unfinished === null ? null : { id: unfinished.id, phase: unfinished.journal.phase },
+      unfinished === null
+        ? null
+        : { id: unfinished.id, phase: unfinished.journal.phase, envConsistency: unfinishedEnvConsistency },
     doneTransactions: listDoneTransactionSummaries(backupRoot),
     scopeNote:
       "status answers deployment.md 4.4's server-side recovery branches (0)/(1)/(3)/(4)/(5) only " +
