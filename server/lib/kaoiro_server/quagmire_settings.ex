@@ -83,6 +83,11 @@ defmodule KaoiroServer.QuagmireSettings do
 
   @doc """
   Drops the stored pick so the boot value applies again. Idempotent.
+
+  No client path reaches this: the dashboard offers a threshold or ∞, never
+  "revert to the boot value". It exists so a test that changes the shared
+  singleton can put it back, and adding a UI for it is a scope decision, not
+  a matter of wiring this up.
   """
   @spec clear(GenServer.server()) :: :ok
   def clear(server \\ __MODULE__), do: GenServer.call(server, :clear)
