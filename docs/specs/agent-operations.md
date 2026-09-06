@@ -82,6 +82,24 @@ limits, and the turn-number contract).
   the same file pulled another person's hunks into commits twice (2026-08-28,
   issue #232 / #203 `App.svelte`).
 
+## Shared-host process discipline
+
+- Send signals (`kill`, `docker stop`, `systemctl stop`, ...) only to processes
+  you spawned yourself and whose PID you kept from the spawn. Never select a
+  target by pattern (`pgrep -f`, `pkill -f`, `killall`, `docker ps | grep`):
+  on a shared host the first match is as likely to be another agent's test
+  run, a peer's verification BEAM, or the runner supervising every session.
+- When a probe needs to kill a process (crash / SIGKILL durability tests),
+  start that process from the test itself and hold its PID or port; assert
+  the identity before signalling.
+- Cleanup follows the same rule: remove only scratch directories, worktrees
+  and containers you created, named so that ownership is visible.
+- Why: a `pgrep -f beam.smp | head -1` followed by `kill -9` during a review
+  probe could not be confirmed to have hit the reviewer's own child
+  (2026-09-06, issue #305 B round 2). Nothing in production was affected,
+  but on this host the same pattern can match a peer's `mix test` or the
+  kaoiro runner.
+
 ## Dispatch side (director)
 
 - Do not impose a mechanism unavailable to a peer's engine as a completion
