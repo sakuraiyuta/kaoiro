@@ -27,12 +27,12 @@
 // stable-sorted), and two entries with the FULL identity match
 // (mergeTranscriptEntries dedupes, keeping only the first). Without this,
 // every candidate has a unique (ts, seq) and neither case is ever
-// reached. Confirmed detection rate (mutation-tested against
-// noteIfNewestError, 8 seeded runs): reverting its `< 0` comparison back
-// to the pre-fix `<= 0` goes red on 3/8; removing App.svelte onEnvelope's
-// `accepted` (merge-acceptance) guard goes red on 2/8 -- neither is 8/8,
-// since the random sequence only sometimes produces the (ts, seq) tie
-// each regression needs to manifest.
+// reached. Mutation-testing noteIfNewestError confirms this catches
+// real regressions: reverting its `< 0` comparison back to the pre-fix
+// `<= 0`, or removing App.svelte onEnvelope's `accepted`
+// (merge-acceptance) guard, each makes SOME seeds go red -- not
+// necessarily every seed, since the random sequence only sometimes
+// produces the (ts, seq) tie each regression needs to manifest.
 import { mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
