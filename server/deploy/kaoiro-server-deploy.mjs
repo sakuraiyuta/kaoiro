@@ -17,7 +17,7 @@ import { BRANCH, classify, requireRunningContainer } from "./kaoiro-deploy-branc
 import { loadConfig } from "./kaoiro-deploy-config.mjs";
 import { dockerInspect, resolveDockerBin, runDocker } from "./kaoiro-deploy-docker.mjs";
 import { advancePhase, writeJournal } from "./kaoiro-deploy-journal.mjs";
-import { PHASE } from "./kaoiro-deploy-phase.mjs";
+import { PHASE, validateJournalAgainstStateMachine } from "./kaoiro-deploy-phase.mjs";
 import { acquireLock, releaseLock } from "./kaoiro-deploy-lock.mjs";
 import { findUnfinishedTransaction, newTransactionId } from "./kaoiro-deploy-transaction.mjs";
 
@@ -378,23 +378,35 @@ export function runUpdate(flags, config) {
         phase: PHASE.PREFLIGHT,
         history: [{ phase: PHASE.PREFLIGHT, at: new Date().toISOString(), observation: { container } }],
       };
-      writeJournal(dir, journal);
+      writeJournal(dir, journal, validateJournalAgainstStateMachine);
 
       oldImageId = dockerInspect(bin, container, "{{.Image}}");
       oldSha = gitOutput(["rev-parse", "HEAD"], repo);
       const composeArtifactPath = join(serverDir, "docker-compose.yaml");
-      journal = advancePhase(dir, journal, PHASE.OLD_IMAGE_SAVED, {
-        old_image_id: oldImageId,
-        old_sha: oldSha,
-        compose_artifact: { path: composeArtifactPath, sha256: sha256File(composeArtifactPath) },
-      });
+      journal = advancePhase(
+        dir,
+        journal,
+        PHASE.OLD_IMAGE_SAVED,
+        {
+          old_image_id: oldImageId,
+          old_sha: oldSha,
+          compose_artifact: { path: composeArtifactPath, sha256: sha256File(composeArtifactPath) },
+        },
+        validateJournalAgainstStateMachine,
+      );
 
       buildResult = runBuild({ repo, target }, config);
-      journal = advancePhase(dir, journal, PHASE.BUILD_PREPARED, {
-        image_id: buildResult.imageId,
-        image_tag: buildResult.imageTag,
-        target_sha: target,
-      });
+      journal = advancePhase(
+        dir,
+        journal,
+        PHASE.BUILD_PREPARED,
+        {
+          image_id: buildResult.imageId,
+          image_tag: buildResult.imageTag,
+          target_sha: target,
+        },
+        validateJournalAgainstStateMachine,
+      );
     }
 
     if (flags.maintenanceApproved !== true) {
@@ -403,7 +415,7 @@ export function runUpdate(flags, config) {
         64,
       );
     }
-    journal = advancePhase(dir, journal, PHASE.MAINTENANCE_GATE_PASSED);
+    journal = advancePhase(dir, journal, PHASE.MAINTENANCE_GATE_PASSED, {}, validateJournalAgainstStateMachine);
 
     // --- commit: from here on the service is stopped. Everything above
     // this line is documented as no-downtime in runUpdate's own doc
@@ -413,10 +425,13 @@ export function runUpdate(flags, config) {
 
     const stopExitCode = parseDockerIntField(dockerInspect(bin, container, "{{.State.ExitCode}}"));
     const stopOomKilled = parseDockerBoolField(dockerInspect(bin, container, "{{.State.OOMKilled}}"));
-    journal = advancePhase(dir, journal, PHASE.STOPPED, {
-      stop_exit_code: stopExitCode,
-      stop_oom_killed: stopOomKilled,
-    });
+    journal = advancePhase(
+      dir,
+      journal,
+      PHASE.STOPPED,
+      { stop_exit_code: stopExitCode, stop_oom_killed: stopOomKilled },
+      validateJournalAgainstStateMachine,
+    );
 
     // "measured, not assumed" (deployment.md 4.3 step 5) — an unset
     // expectation, a mismatch, or an unparsed docker field are ALL
@@ -442,12 +457,24 @@ export function runUpdate(flags, config) {
       container,
       '{{range .Mounts}}{{if eq .Destination "/var/lib/kaoiro"}}{{.Name}}{{end}}{{end}}',
     );
+    // Measured redundant with the MOUNT_RESOLVED observation schema
+    // below (advancePhase() now runs validateJournalAgainstStateMachine
+    // too) — removing this check still stops the run, via a PhaseError
+    // instead of this DeployError. Kept anyway for the diagnostic: "the
+    // mount layout changed" names the actual docker-side cause, where
+    // the schema error only says an observation looked wrong.
     if (volumeId === "") {
       fail(
         `could not resolve the /var/lib/kaoiro mount for container ${container} — empty output means the mount layout changed; archiving the wrong (or no) volume would be worse than stopping here`,
       );
     }
-    journal = advancePhase(dir, journal, PHASE.MOUNT_RESOLVED, { volume_id: volumeId });
+    journal = advancePhase(
+      dir,
+      journal,
+      PHASE.MOUNT_RESOLVED,
+      { volume_id: volumeId },
+      validateJournalAgainstStateMachine,
+    );
 
     return {
       command: "update",

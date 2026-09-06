@@ -88,3 +88,25 @@ test("advancePhase appends to history and moves the current phase", () => {
   assert.equal(journal.phase, "prepare");
   assert.equal(journal.history.length, 1);
 });
+
+test("writeJournal runs the validate callback and refuses to write when it throws", () => {
+  const journal = validJournal();
+  const boom = () => {
+    throw new Error("boom");
+  };
+  assert.throws(() => writeJournal(dir, journal, boom), /boom/);
+  assert.throws(() => readJournal(dir), JournalError);
+});
+
+test("advancePhase runs the validate callback and refuses to write the new phase when it throws", () => {
+  const journal = validJournal();
+  writeJournal(dir, journal);
+  const boom = () => {
+    throw new Error("boom");
+  };
+  assert.throws(() => advancePhase(dir, journal, "stopping", {}, boom), /boom/);
+  // The file on disk must still reflect the last successful write, not
+  // the rejected transition — a validate() failure must not leave a
+  // half-applied phase change checkpointed.
+  assert.deepEqual(readJournal(dir), journal);
+});
