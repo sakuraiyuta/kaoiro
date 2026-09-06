@@ -312,10 +312,17 @@ describe("kaoiro-runner-bootstrap.sh (issue #314)", () => {
     it("--install-dir 省略時、既定 root の由来(XDG_DATA_HOME)の改行も拒否する(issue #314 round3 must)", () => {
       const weirdXdgData = join(dir, "xdg-data-with\nnewline");
 
+      // KAOIRO_RUNNER_INSTALL_DIR: undefined — explicit, not just "not
+      // mentioned": runScript merges onto process.env, so an ambient value
+      // on the host/CI running this suite would win kaoiro_install_root's
+      // FIRST branch and silently divert this test off the XDG_DATA_HOME
+      // branch it exists to exercise. Same discipline as
+      // configDirViaShell's env object above.
       const result = runScript(bootstrapScript, ["/nonexistent.tar.gz", "--dry-run"], {
         HOME: home,
         KAOIRO_RUNNER_DIR: configDir,
         KAOIRO_UNAME: "Linux",
+        KAOIRO_RUNNER_INSTALL_DIR: undefined,
         XDG_DATA_HOME: weirdXdgData,
       });
 
@@ -327,11 +334,16 @@ describe("kaoiro-runner-bootstrap.sh (issue #314)", () => {
     it("--install-dir 省略時、既定 root の由来(KAOIRO_RUNNER_INSTALL_DIR)の \\ も拒否する(issue #314 round3 must)", () => {
       const weirdInstallDir = join(dir, "install-dir-a\\1b");
 
+      // XDG_DATA_HOME: undefined for the same reason as the sibling test
+      // above — KAOIRO_RUNNER_INSTALL_DIR already wins regardless (it is
+      // checked first), but nulling every override key this function reads
+      // keeps the env fully self-documenting rather than relying on that.
       const result = runScript(bootstrapScript, ["/nonexistent.tar.gz", "--dry-run"], {
         HOME: home,
         KAOIRO_RUNNER_DIR: configDir,
         KAOIRO_UNAME: "Linux",
         KAOIRO_RUNNER_INSTALL_DIR: weirdInstallDir,
+        XDG_DATA_HOME: undefined,
       });
 
       expect(result.status).toBe(64);
@@ -423,10 +435,15 @@ describe("kaoiro-runner-bootstrap.sh (issue #314)", () => {
       const revision = revisionOf("bootstrap-darwin-install-root-parity");
       const archive = makeReleaseTarball(work, revision);
 
+      // KAOIRO_RUNNER_INSTALL_DIR: undefined — same reason as the
+      // --install-dir-omitted tests above: an ambient value on the host/CI
+      // would win kaoiro_install_root's first branch and silently divert
+      // this test off the Darwin `uname` branch it exists to exercise.
       const result = runScript(bootstrapScript, [archive, "--dry-run"], {
         HOME: home,
         KAOIRO_RUNNER_DIR: configDir,
         KAOIRO_UNAME: "Darwin",
+        KAOIRO_RUNNER_INSTALL_DIR: undefined,
         KAOIRO_LAUNCHCTL: launchctlStub({ loaded: false }),
       });
 
