@@ -13,6 +13,7 @@ import {
   DeployError,
   hasPriorTransactions,
   parseArgs,
+  parseTarEntries,
   pruneOldTransactions,
   runBuild,
   runStart,
@@ -41,7 +42,7 @@ case "$1" in
     case "$2" in
       ps)
         case "$FAKE_DOCKER_SCENARIO" in
-          stopped|running|running-clean-stop|running-clean-stop-restarts|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty)
+          stopped|running|running-clean-stop|running-clean-stop-restarts|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty)
             printf 'kaoiro-c1\\n' ;;
         esac
         ;;
@@ -78,27 +79,27 @@ case "$1" in
           '{{.State.Status}}')
             case "$FAKE_DOCKER_SCENARIO" in
               stopped) printf 'exited\\n' ;;
-              running|running-clean-stop|running-clean-stop-restarts|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty)
+              running|running-clean-stop|running-clean-stop-restarts|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty)
                 printf 'running\\n' ;;
             esac
             ;;
           '{{.State.ExitCode}}')
             case "$FAKE_DOCKER_SCENARIO" in
-              running-clean-stop|running-clean-stop-restarts|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-archive-drifts-empty) printf '0\\n' ;;
+              running-clean-stop|running-clean-stop-restarts|running-clean-stop-torture|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-archive-drifts-empty) printf '0\\n' ;;
               running-dirty-stop) printf '137\\n' ;;
               *) printf 'unknown\\n' ;;
             esac
             ;;
           '{{.State.OOMKilled}}')
             case "$FAKE_DOCKER_SCENARIO" in
-              running-clean-stop|running-clean-stop-restarts|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-archive-drifts-empty) printf 'false\\n' ;;
+              running-clean-stop|running-clean-stop-restarts|running-clean-stop-torture|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-archive-drifts-empty) printf 'false\\n' ;;
               running-dirty-stop) printf 'true\\n' ;;
               *) printf 'unknown\\n' ;;
             esac
             ;;
           '{{range .Mounts}}{{if eq .Destination "/var/lib/kaoiro"}}{{.Name}}{{end}}{{end}}')
             case "$FAKE_DOCKER_SCENARIO" in
-              running-clean-stop|running-clean-stop-restarts|running-dirty-stop|running-empty-vol|running-broken-archive|alpine-missing|running-archive-drifts-empty) printf 'kaoiro_kaoiro-state\\n' ;;
+              running-clean-stop|running-clean-stop-restarts|running-clean-stop-torture|running-dirty-stop|running-empty-vol|running-broken-archive|alpine-missing|running-archive-drifts-empty) printf 'kaoiro_kaoiro-state\\n' ;;
               running-no-mount) ;;
             esac
             ;;
@@ -154,6 +155,18 @@ case "$1" in
               mkdir -p "$hostdir/.fakesrc-empty"
               tar --owner=0 --group=0 -czf "$hostdir/archive.tar.gz" -C "$hostdir/.fakesrc-empty" .
               ;;
+            # クロエ round 2 review SF-8 pin: a real archive containing a
+            # symlink and a hardlink alongside a plain file, so
+            # parseTarEntries sees actual "-> target" / "link to target"
+            # suffixed lines, not a hand-written fixture standing in for
+            # tar's own output shape.
+            running-clean-stop-torture)
+              mkdir -p "$hostdir/.fakesrc-torture"
+              printf x > "$hostdir/.fakesrc-torture/real.txt"
+              ln -s real.txt "$hostdir/.fakesrc-torture/sym.txt"
+              ln "$hostdir/.fakesrc-torture/real.txt" "$hostdir/.fakesrc-torture/hard.txt"
+              tar --owner=1000 --group=1000 -czf "$hostdir/archive.tar.gz" -C "$hostdir/.fakesrc-torture" .
+              ;;
             *)
               mkdir -p "$hostdir/.fakesrc"
               printf 'x' > "$hostdir/.fakesrc/users.dets"
@@ -168,7 +181,7 @@ case "$1" in
         # -exec stat -c '%n %u:%g %04a' {} \\;) — only whether anything is
         # there, not what gets recorded (that comes from tar tvzf now).
         case "$FAKE_DOCKER_SCENARIO" in
-          running-clean-stop|running-clean-stop-restarts|running-dirty-stop|running-broken-archive|alpine-missing|running-archive-drifts-empty) printf '/data/users.dets 1000:1000 0600\\n' ;;
+          running-clean-stop|running-clean-stop-restarts|running-clean-stop-torture|running-dirty-stop|running-broken-archive|alpine-missing|running-archive-drifts-empty) printf '/data/users.dets 1000:1000 0600\\n' ;;
           running-empty-vol) ;;
         esac
         exit 0
@@ -586,6 +599,41 @@ test("runUpdate completes through DONE with --maintenance-approved and a clean s
   assert.equal(manifest.image_id, result.build.imageId);
   assert.equal(manifest.source_sha, headSha);
   assert.deepEqual(manifest.required_entries, result.requiredEntries);
+});
+
+// クロエ round 2 review SF-8: a symlink's `-> target` and a hardlink's
+// `link to target` suffix must not leak into the recorded path — both
+// exercised against a REAL archive (FAKE_DOCKER's running-clean-stop-torture
+// branch), not a hand-written tar-tvzf-shaped string.
+test("runUpdate's required_entries strip a symlink's and a hardlink's target suffix from the name", () => {
+  const result = withScenario("running-clean-stop-torture", () =>
+    runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+  );
+  assert.equal(result.phase, "done");
+  const byPath = Object.fromEntries(result.requiredEntries.map((e) => [e.path, e]));
+  assert.deepEqual(Object.keys(byPath).sort(), ["hard.txt", "real.txt", "sym.txt"]);
+  assert.deepEqual(byPath["sym.txt"], { path: "sym.txt", owner: "1000:1000", mode: "0777" });
+  assert.deepEqual(byPath["hard.txt"], { path: "hard.txt", owner: "1000:1000", mode: "0664" });
+  assert.deepEqual(byPath["real.txt"], { path: "real.txt", owner: "1000:1000", mode: "0664" });
+});
+
+test("parseTarEntries refuses a listing line with an unsupported entry type", () => {
+  // A device/fifo/socket entry cannot be created inside this fake
+  // without root, so this pins splitTarEntryName's fail-closed branch
+  // directly — the symlink/hardlink branches above are the ones
+  // exercised end to end through a real archive.
+  let caught;
+  try {
+    parseTarEntries("p--------- 0/0               0 2026-09-06 00:00 ./fifo");
+  } catch (err) {
+    caught = err;
+  }
+  assert.ok(caught instanceof DeployError);
+  // クロエ round 2 review N-7: a PARSE failure (this) must read
+  // distinctly from an ARCHIVE-integrity failure (the broken-archive
+  // test above) — runUpdate's own call site no longer wraps this one in
+  // "archive verification failed".
+  assert.ok(!caught.message.includes("archive verification failed"));
 });
 
 // クロエ round 1 review S1/(c3): a delayed health response for a
