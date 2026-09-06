@@ -1783,10 +1783,13 @@
     }
   });
   // Rendered request line: the best LIVE source that has not fallen
-  // behind the mark. A stale source renders nothing rather than the
-  // retained value — "clients render unknown as unknown, not as the
-  // previous observed badge". Ties go to the control, which is the only
-  // side carrying reason / rolled_back_to.
+  // behind the mark. When neither source qualifies the line is empty —
+  // not because showing an earlier request would be forbidden, but
+  // because this frame carries nothing eligible to build one from. The
+  // observed sandbox / network badge is a separate surface and keeps its
+  // own unknown handling; the mark never revives a past observation as
+  // the current one. Ties go to the control: the mark exists to stop the
+  // display moving backwards, not to move push authority to the ack.
   const permRequestView = $derived.by(() => {
     let best: PermRequestView | null = null;
     let bestRank = -1;

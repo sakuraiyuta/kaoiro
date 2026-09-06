@@ -864,6 +864,51 @@ describe("permissionControlFrom per-status field table (ふじ round 1 M2)", () 
     expect(parsed?.rolled_back_to?.sandbox).toBe("read-only");
   });
 
+  it("accepts the wrapper's revision-zero launch baseline", () => {
+    // Zero is a legitimate control revision — the raw launch baseline the
+    // wrapper publishes before any operator request. Only the ack domain
+    // excludes it, so a shared lower bound of >0 would erase this.
+    const parsed = permissionControlFrom(
+      envelope(ext(control({ revision: 0 }))),
+    );
+    expect(parsed?.revision).toBe(0);
+    expect(parsed?.status).toBe("pending");
+  });
+
+  it("accepts failed carrying the predecessor's rollback and observation", () => {
+    // failed B may legitimately report the rollback to A together with
+    // A's still-current observation; the applied binding must not be
+    // generalised into rejecting that pair.
+    const observation = {
+      ...olderEvidence,
+      session_id: "session-a",
+      turn_id: "turn-4",
+      permission: {
+        sandbox: "read-only",
+        approval: "never",
+        enforcement: "os",
+      },
+      network_access: false,
+    };
+    const parsed = permissionControlFrom(
+      envelope(
+        ext(
+          control({
+            revision: 9,
+            status: "failed",
+            reason: "policy_mismatch",
+            submitted: olderEvidence,
+            effective: observation,
+            rolled_back_to: { sandbox: "read-only", network_access: false },
+          }),
+        ),
+      ),
+    );
+    expect(parsed?.revision).toBe(9);
+    expect(parsed?.status).toBe("failed");
+    expect(parsed?.rolled_back_to?.sandbox).toBe("read-only");
+  });
+
   it("rejects applying without the submission that defines it", () => {
     expect(
       permissionControlFrom(envelope(ext(control({ status: "applying" })))),
@@ -900,5 +945,40 @@ describe("permissionControlFrom per-status field table (ふじ round 1 M2)", () 
     // must not fail the forbidden-field check on a pending record.
     const pc = control({ reason: null, rolled_back_to: null });
     expect(permissionControlFrom(envelope(ext(pc)))?.status).toBe("pending");
+  });
+});
+
+describe("ack / control precedence at one revision (issue #305 D)", () => {
+  it("keeps the control authoritative when both sit at the same revision", async () => {
+    // The mark stops the display moving backwards; it does not move push
+    // authority to the ack. At an equal revision AND an equal progress
+    // rank neither outranks the other, so the tie has to be decided, and
+    // the server's control is what decides it. The two carry different
+    // requested pairs here purely so the winner is observable.
+    const { target, props } = await render(reviewExt(), {
+      onSetPermission: vi.fn(async () => ({
+        revision: 5,
+        status: "pending" as const,
+        requested: { sandbox: "read-only", network_access: false },
+      })),
+    });
+    await reviewPick(target);
+    await tick();
+    expect(rowByLabel(target, "権限要求")?.textContent).toContain("read-only");
+
+    props.envelope = envelope(
+      reviewExt(
+        control({
+          revision: 5,
+          status: "pending",
+          requested: { sandbox: "workspace-write", network_access: true },
+        }),
+      ),
+    );
+    await tick();
+
+    const dd = rowByLabel(target, "権限要求");
+    expect(dd?.textContent).toContain("workspace-write");
+    expect(dd?.textContent).not.toContain("read-only");
   });
 });
