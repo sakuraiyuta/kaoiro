@@ -804,12 +804,20 @@
             for (const id of targets) {
               const previous = next[id] ?? [];
               const merged = mergeTranscriptEntries(previous, [envelope]);
-              if (merged.length > previous.length) addedToTranscript = true;
+              const accepted = merged.length > previous.length;
+              if (accepted) addedToTranscript = true;
               next[id] = merged;
               // issue #304: O(1) incremental update, not a rescan -- see
-              // the errorIndex declaration comment above for why this is
-              // no longer automatic.
-              errorIndex = noteIfNewestError(errorIndex, id, [envelope]);
+              // the errorIndex declaration comment above. Gated on
+              // `accepted`: mergeTranscriptEntries dedupes by full
+              // identity (agent_id/session_id/ts/seq/type/...), so a
+              // candidate it drops as a duplicate must never reach
+              // noteIfNewestError (its own contract, see its doc comment)
+              // -- passing it anyway would record an is_error result that
+              // isn't actually in the transcript.
+              if (accepted) {
+                errorIndex = noteIfNewestError(errorIndex, id, [envelope]);
+              }
               // ADR-0051 D4 step 1: remember it separately, so a history
               // push that invalidates the baseline can still keep it — but
               // ONLY inside this connection's join→history window. Outside
@@ -1029,14 +1037,21 @@
           // restored row into an offline peer's pane (ふじ 30-10 M2). No
           // arrival marker either: this is a replay, not a live reply.
           const previous = logs[paneAgentId] ?? [];
-          logs = {
-            ...logs,
-            [paneAgentId]: mergeTranscriptEntries(previous, [envelope]),
-          };
-          // issue #304: a single replayed envelope only ever APPENDS (never
-          // removes) an entry, so the O(1) incremental path applies here
-          // exactly as it does for live onEnvelope arrivals.
-          errorIndex = noteIfNewestError(errorIndex, paneAgentId, [envelope]);
+          const merged = mergeTranscriptEntries(previous, [envelope]);
+          logs = { ...logs, [paneAgentId]: merged };
+          // issue #304: a single replayed envelope only ever APPENDS
+          // (never removes) an entry, so the O(1) incremental path
+          // applies here exactly as it does for live onEnvelope arrivals
+          // -- gated on `accepted` for the same reason (see onEnvelope's
+          // own comment and noteIfNewestError's doc comment). In practice
+          // `envelope` here is always `inter_agent_message`
+          // (parseHistoryReplayEnvelope rejects anything else), so this
+          // call is currently a no-op every time -- kept for the same
+          // uniform per-site update this file follows everywhere else,
+          // not because it does anything reachable today.
+          if (merged.length > previous.length) {
+            errorIndex = noteIfNewestError(errorIndex, paneAgentId, [envelope]);
+          }
           if (awaitingHistory) {
             liveSinceJoin[paneAgentId] = mergeTranscriptEntries(
               liveSinceJoin[paneAgentId] ?? [],

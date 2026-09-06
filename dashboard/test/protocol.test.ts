@@ -3344,15 +3344,39 @@ describe("parseHistoryPayload — projection_epoch (ADR-0051 D4)", () => {
 });
 
 describe("error index (noteIfNewestError / recomputeLatestError / dropLatestError, issue #304)", () => {
-  function errorEnvelope(agentId: string, ts: string, seq: number): Envelope {
+  function errorEnvelope(
+    agentId: string,
+    ts: string,
+    seq: number,
+    sessionId?: string,
+  ): Envelope {
     return {
       version: "0",
       agent_id: agentId,
+      session_id: sessionId,
       ts,
       seq,
       type: "result",
       state: "error",
       payload: { is_error: true },
+    } as unknown as Envelope;
+  }
+
+  function nonErrorResultEnvelope(
+    agentId: string,
+    ts: string,
+    seq: number,
+    sessionId?: string,
+  ): Envelope {
+    return {
+      version: "0",
+      agent_id: agentId,
+      session_id: sessionId,
+      ts,
+      seq,
+      type: "result",
+      state: "done",
+      payload: { is_error: false },
     } as unknown as Envelope;
   }
 
@@ -3389,6 +3413,93 @@ describe("error index (noteIfNewestError / recomputeLatestError / dropLatestErro
     expect(index.keyByAgent.a).toBe(transcriptEntryKey(newer));
   });
 
+  // noteIfNewestError's contract (see its doc comment) requires callers to
+  // pass only candidates mergeTranscriptEntries actually accepted,
+  // detected via `merged.length > previous.length` (App.svelte's
+  // onEnvelope/onHistoryReplayEnvelope both do this). This pins the two
+  // premises that detection relies on, so a future change to
+  // mergeTranscriptEntries's semantics breaks THIS test loudly instead of
+  // silently breaking the detection everywhere it's used.
+  it("mergeTranscriptEntries: 受理時は length が+1、history 側の要素は同一参照のまま", () => {
+    const previous = [
+      logEnvelope("a", "2026-09-01T00:00:00Z", 0),
+      logEnvelope("a", "2026-09-01T00:00:01Z", 1),
+    ];
+    const candidate = logEnvelope("a", "2026-09-01T00:00:02Z", 2);
+    const merged = mergeTranscriptEntries(previous, [candidate]);
+    expect(merged.length).toBe(previous.length + 1);
+    for (const entry of previous) {
+      expect(merged).toContain(entry);
+    }
+  });
+
+  it("mergeTranscriptEntries: 同一identityの重複は length が変わらず先着が残る", () => {
+    const previous = [errorEnvelope("a", "2026-09-01T00:00:01Z", 1)];
+    // 別オブジェクトだが identity (agent_id/session_id/ts/seq/type) は同一。
+    const duplicate = errorEnvelope("a", "2026-09-01T00:00:01Z", 1);
+    expect(duplicate).not.toBe(previous[0]);
+    const merged = mergeTranscriptEntries(previous, [duplicate]);
+    expect(merged.length).toBe(previous.length);
+    expect(merged[0]).toBe(previous[0]);
+  });
+
+  // 増分 index が merge の実際の受理/棄却と一致しない回帰の再発防止
+  // (noteIfNewestError の CONTRACT: merge が棄却した候補を渡さないこと)。
+  it("(a) 同ts/seq/type だが session_id 違いの error A→B は両方 merge に残り、後着 B が index を勝ち取る", () => {
+    const a = errorEnvelope("a", "2026-09-01T00:00:01Z", 1, "s1");
+    const b = errorEnvelope("a", "2026-09-01T00:00:01Z", 1, "s2");
+
+    let logs: Envelope[] = [];
+    let index = EMPTY_ERROR_INDEX;
+    for (const candidate of [a, b]) {
+      const merged = mergeTranscriptEntries(logs, [candidate]);
+      if (merged.length > logs.length) {
+        index = noteIfNewestError(index, "a", [candidate]);
+      }
+      logs = merged;
+    }
+
+    expect(logs.length).toBe(2);
+    expect(index.keyByAgent.a).toBe(transcriptEntryKey(b));
+    expect(index.keyByAgent).toEqual(referenceLatestErrorKeyByAgent({ a: logs }));
+  });
+
+  it("(b) 同一identityの non-error A → is_error B は B が merge に棄却され、index にも記録されない (phantom badge 無し)", () => {
+    const a = nonErrorResultEnvelope("a", "2026-09-01T00:00:01Z", 1);
+    const b = errorEnvelope("a", "2026-09-01T00:00:01Z", 1); // A と同一 identity
+
+    let logs: Envelope[] = [];
+    let index = EMPTY_ERROR_INDEX;
+    for (const candidate of [a, b]) {
+      const merged = mergeTranscriptEntries(logs, [candidate]);
+      if (merged.length > logs.length) {
+        index = noteIfNewestError(index, "a", [candidate]);
+      }
+      logs = merged;
+    }
+
+    expect(logs.length).toBe(1);
+    expect(logs[0]).toBe(a);
+    expect(index.keyByAgent.a).toBeUndefined();
+    expect(index.keyByAgent).toEqual(referenceLatestErrorKeyByAgent({ a: logs }));
+  });
+
+  it("同一エラーの重複再送は merge に棄却され index が no-op (同一参照を返す)", () => {
+    const e1 = errorEnvelope("a", "2026-09-01T00:00:01Z", 1);
+    let logs: Envelope[] = [];
+    let index = EMPTY_ERROR_INDEX;
+
+    let merged = mergeTranscriptEntries(logs, [e1]);
+    if (merged.length > logs.length) index = noteIfNewestError(index, "a", [e1]);
+    logs = merged;
+    const indexAfterFirst = index;
+
+    merged = mergeTranscriptEntries(logs, [e1]);
+    expect(merged.length).toBe(logs.length);
+    if (merged.length > logs.length) index = noteIfNewestError(index, "a", [e1]);
+    expect(index).toBe(indexAfterFirst);
+  });
+
   it("recomputeLatestError / dropLatestError は referenceLatestErrorKeyByAgent と一致する", () => {
     const transcript = [
       logEnvelope("a", "2026-09-01T00:00:00Z", 0),
@@ -3405,12 +3516,11 @@ describe("error index (noteIfNewestError / recomputeLatestError / dropLatestErro
     expect(dropped.envelopeByAgent).toEqual({});
   });
 
-  // Security review round 1 (issue #304, 2026-09-06): agent_id の wire
-  // charset は "__proto__" などの Object.prototype メンバ名を禁止していない
-  // (TaskTable 側の既存ハードニング, issue #180 と同じ前提)。素の {} への
-  // bracket 読み取り/`in` は prototype chain を辿るため、これらの関数が
+  // agent_id の wire charset は "__proto__" などの Object.prototype
+  // メンバ名を禁止していない(TaskTable 側の既存ハードニングと同じ前提)。
+  // 素の {} への bracket 読み取り/`in` は prototype chain を辿るため、
   // hasOwnProperty ガード無しだと agentId="__proto__" の is_error を
-  // 静かに無視してしまう(検出済みの回帰)。
+  // 静かに無視してしまう。
   it("agentId が \"__proto__\" でも is_error を正しく記録・削除できる (prototype 読み取り穴の回帰防止)", () => {
     const e1 = errorEnvelope("__proto__", "2026-09-01T00:00:01Z", 1);
     let index: ErrorIndexState = noteIfNewestError(
@@ -3430,10 +3540,10 @@ describe("error index (noteIfNewestError / recomputeLatestError / dropLatestErro
     expect(index.keyByAgent).toEqual({});
   });
 
-  // Round-2 review follow-up: referenceLatestErrorKeyByAgent (the
-  // differential test's oracle) had the SAME class via a bare bracket
-  // ASSIGNMENT (`result[agentId] = ...`, distinct write form from the
-  // functions above -- see the function's own comment).
+  // referenceLatestErrorKeyByAgent (the differential test's oracle) has
+  // the SAME class via a bare bracket ASSIGNMENT (`result[agentId] = ...`,
+  // a distinct write form from the functions above -- see its own
+  // comment).
   it("referenceLatestErrorKeyByAgent も agentId=\"__proto__\" を own property として記録する", () => {
     const e1 = errorEnvelope("__proto__", "2026-09-01T00:00:01Z", 1);
     // An OBJECT-LITERAL key `__proto__` gets Annex B special-casing (sets

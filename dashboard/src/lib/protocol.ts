@@ -1288,25 +1288,38 @@ function findLatestErrorEnvelope(
 /** O(candidates.length), never rescans the rest of the agent's transcript.
  *  Use on every LIVE single-envelope arrival for one agent (onEnvelope,
  *  onHistoryReplayEnvelope) -- this is what makes the receive-tick path
- *  O(1) per envelope instead of O(total history length). A later
- *  non-error candidate never clears an earlier cached error: this
+ *  O(1) per envelope instead of O(total history length).
+ *
+ *  Compares by (ts, seq) only, via compareTranscriptEnvelopes -- the same
+ *  key mergeTranscriptEntries sorts by, NOT the full transcriptEntryKey
+ *  identity (which also carries agent_id/session_id/type/...). Two
+ *  distinct entries can tie on (ts, seq) while differing elsewhere; when
+ *  they do, mergeTranscriptEntries's STABLE sort keeps both and orders
+ *  the later-arriving one last, so a tie here must favor the candidate
+ *  (>= wins, not >) to agree with that ordering.
+ *
+ *  CONTRACT: callers must pass only candidates that mergeTranscriptEntries
+ *  actually accepted into the transcript (e.g. `merged.length >
+ *  previous.length` for a single-candidate call) -- a candidate the merge
+ *  dropped as a duplicate must never reach here, or an is_error result
+ *  that isn't really in the transcript gets recorded anyway (a phantom
+ *  badge). This function only decides WHICH accepted candidate is
+ *  newest; it does not itself know what merging accepted.
+ *
+ *  A later non-error candidate never clears an earlier cached error: this
  *  preserves the pre-#304-fix semantics exactly ("the newest IS_ERROR
- *  entry", not "is the newest entry an error") -- ties/older candidates
- *  are dropped via compareTranscriptEnvelopes so an out-of-order replay
- *  delivery can never regress an already-newer cached error. */
+ *  entry", not "is the newest entry an error"). */
 export function noteIfNewestError(
   index: ErrorIndexState,
   agentId: string,
   candidates: Envelope[],
 ): ErrorIndexState {
-  // Security review round 1 (issue #304, 2026-09-06): a bare bracket read
-  // walks the prototype chain -- an agent_id equal to an Object.prototype
-  // member name ("__proto__", "toString", "constructor", ...; the wire
-  // agent_id charset does not exclude these, see parseTasks's own
-  // Object.create(null) fix below) would silently seed `envelope` with an
-  // inherited non-Envelope value instead of undefined, corrupting the
-  // compare below. Same guard already established for TaskTable in
-  // applyTaskEnvelope/purgeTasksForAgent (issue #180, 2026-08-09).
+  // A bare bracket read walks the prototype chain -- an agent_id equal to
+  // an Object.prototype member name ("__proto__", "toString",
+  // "constructor", ...; the wire agent_id charset does not exclude these,
+  // see parseTasks's Object.create(null) fix below) would silently seed
+  // `envelope` with an inherited non-Envelope value instead of undefined,
+  // corrupting the compare below.
   let envelope = Object.prototype.hasOwnProperty.call(
     index.envelopeByAgent,
     agentId,
@@ -1318,7 +1331,7 @@ export function noteIfNewestError(
     if (candidate.type !== "result" || !resultOf(candidate)?.is_error) {
       continue;
     }
-    if (envelope && compareTranscriptEnvelopes(candidate, envelope) <= 0) {
+    if (envelope && compareTranscriptEnvelopes(candidate, envelope) < 0) {
       continue;
     }
     envelope = candidate;
@@ -1386,14 +1399,14 @@ export function referenceLatestErrorKeyByAgent(
   let result: Record<string, string> = {};
   for (const [agentId, transcript] of Object.entries(logs)) {
     const found = findLatestErrorEnvelope(transcript);
-    // Round-2 review (issue #304): a bare bracket ASSIGNMENT here
-    // (`result[agentId] = ...`) would hit the inherited `__proto__`
-    // accessor SETTER for that one magic agentId instead of creating an
-    // own property (silently dropping it, since the setter no-ops for a
-    // non-object/non-null value) -- same class as noteIfNewestError /
-    // dropLatestError above, different write form. The object-literal
-    // computed-key spread used everywhere else in this file is the safe
-    // form (`[[DefineOwnProperty]]`, never triggers the setter).
+    // A bare bracket ASSIGNMENT here (`result[agentId] = ...`) would hit
+    // the inherited `__proto__` accessor SETTER for that one magic
+    // agentId instead of creating an own property (the setter no-ops for
+    // a non-object/non-null value, silently dropping it) -- same class as
+    // noteIfNewestError/dropLatestError above, different write form. The
+    // object-literal computed-key spread used everywhere else in this
+    // file is the safe form (`[[DefineOwnProperty]]`, never triggers the
+    // setter).
     if (found) result = { ...result, [agentId]: transcriptEntryKey(found) };
   }
   return result;

@@ -74,3 +74,47 @@ history grows past the issue's stated floor (5000: before nearly 10ms avg,
 after under half that). Sample size is modest (30-60 samples per cell,
 single machine, single run) — treat these as directional, not
 statistically rigorous.
+
+## App-level bench (candidate A, error-index scan)
+
+`runBenchApp.mjs` mounts the real `src/App.svelte` (via `harnessApp.ts`
+and a fake `phoenix` transport, `fakePhoenix.ts` aliased in only by
+`vite.harness.config.ts`) instead of `AgentDetail.svelte` alone, so it can
+drive multi-agent state, live receive ticks, and the error-index scan
+(App.svelte's `errorIndex`). Compares the current worktree ("after")
+against a pinned baseline immediately before the error-index feature
+landed ("before"), materialised the same generate-then-delete way as
+`runBench.mjs` above (`src/.App.before.bench.svelte`).
+
+```bash
+PATH="$HOME/.asdf/shims:$PATH" node bench/runBenchApp.mjs \
+  <agentCount> <historyCount> <keystrokes> <tickMs> <errorAgents>
+# e.g. the catastrophic case (candidate A's own reproduction recipe)
+PATH="$HOME/.asdf/shims:$PATH" node bench/runBenchApp.mjs 5 5000 30 100 none
+```
+
+- `agentCount`: total agents seeded (1 viewed + `agentCount-1` background).
+- `historyCount`: synthetic transcript length per agent.
+- `keystrokes`: composer keystrokes typed.
+- `tickMs`: interval between live-log receive ticks, sent to the viewed
+  agent and one background agent at this same frequency each tick.
+- `errorAgents`: `"all"` or `"none"` — whether every seeded agent's history
+  ends with an `is_error` result.
+
+Each run also types `/` into the composer and confirms `.slash-menu`
+actually appears before measuring (the seeded `ext.slash_commands` alone
+only wires the data the menu needs; this is the observation that it
+renders).
+
+Results are written to `bench/results/candidateA/candidateA-agents<N>-hist<N>-tick<N>-err<mode>.json`,
+plus one Playwright trace per variant. **The invocation exits non-zero**
+(not just an `error` field in the printed JSON) when either variant:
+fails to mount/measure at all, the slash menu never appears, the typing
+loop does not finish all requested keystrokes, or a required
+measurement (DOM node count) comes back missing. To confirm this
+yourself: temporarily make `window.__bench.waitReady()` reject inside
+`harnessApp.ts`, run the command above, and check `echo $?` is non-zero
+— catching the resulting rejection into the saved JSON is not enough on
+its own, the exit code is what actually gates. Performance itself (long
+task counts/durations) has no automatic pass/fail threshold yet — read
+the printed numbers.

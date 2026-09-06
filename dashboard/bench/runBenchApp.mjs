@@ -146,6 +146,22 @@ function mountCostSoFar(page) {
   });
 }
 
+/** Types "/" into the composer and confirms `.slash-menu` (AgentDetail.
+ *  svelte, #34) actually appears -- the seeded `ext.slash_commands`
+ *  (measure()'s agents array) only wires the DATA the menu needs; this is
+ *  the observation that it renders. Clears the composer afterward so the
+ *  candidate-A keystroke loop below starts from an empty textarea, not
+ *  "/" left behind. Throws (via waitForSelector) on failure -- see
+ *  measure()'s call site comment for why a throw here still needs
+ *  checkForFailures below to become a non-zero process exit. */
+async function verifySlashMenu(page) {
+  const textarea = page.locator("textarea").first();
+  await textarea.click();
+  await textarea.fill("/");
+  await page.waitForSelector(".slash-menu", { timeout: 5000 });
+  await textarea.fill("");
+}
+
 async function measure(page, baseUrl, variant, opts) {
   const { agentCount, historyCount, keystrokes, tickMs, errorAgents, traceDir } = opts;
   await page.goto(
@@ -177,6 +193,18 @@ async function measure(page, baseUrl, variant, opts) {
   await page.waitForTimeout(500);
 
   const mountCost = await mountCostSoFar(page);
+  // This harness supplies `ext.slash_commands` so AgentDetail's slash menu
+  // has the data it needs, but that alone never confirmed the menu
+  // actually renders -- the exact "fixed a wiring gap but never observed
+  // it working" mistake #174's own bench made once already. Placed AFTER
+  // mountCostSoFar (its own long tasks must not inflate reported mount
+  // cost) and BEFORE armProbes (which arms a non-buffered observer, so
+  // this activity must not leak into the during-typing window either) --
+  // this gap is invisible to both metric buckets. Throws (via
+  // waitForSelector's timeout) on failure, which propagates out of
+  // measure() to the caller's try/catch -- see scenarioFailed below for
+  // why that alone is not yet a non-zero exit.
+  await verifySlashMenu(page);
   await armProbes(page);
 
   const domCountBefore = await page.evaluate(
@@ -309,6 +337,25 @@ function summarize(raw) {
   };
 }
 
+/** The main loop's own try/catch (below) records a
+ *  failed variant into `results[variant].error` so ONE variant's failure
+ *  does not lose the other's data -- but that alone leaves the PROCESS
+ *  exiting 0 even when a variant never produced a valid measurement
+ *  (harness error, slash-menu did not appear, typing never finished, or a
+ *  required field came back null because the page died mid-read). This
+ *  scans the finished `results` for exactly those cases; the caller sets
+ *  `process.exitCode` from it, which is what actually makes the
+ *  invocation non-zero (see README's own negative control: reject
+ *  __bench.waitReady and confirm the exit code, not just the printed
+ *  JSON -- catching a rejection is not the same as failing the process). */
+function scenarioFailed(result) {
+  if (!result || result.error) return true;
+  if (result.typingError) return true;
+  if (result.keystrokes.completed < result.keystrokes.requested) return true;
+  if (result.domNodeCount.after === null) return true;
+  return false;
+}
+
 const AGENT_COUNT = Number(process.argv[2] ?? "3");
 const HISTORY_COUNT = Number(process.argv[3] ?? "1000");
 const KEYSTROKES = Number(process.argv[4] ?? "30");
@@ -368,6 +415,16 @@ try {
       ),
     );
     console.log("written", outFile);
+
+    if (Object.values(results).some(scenarioFailed)) {
+      console.error(
+        "FAIL: at least one variant did not produce a valid measurement " +
+          "(harness error / slash-menu did not appear / typing did not " +
+          "finish / a required field is missing) -- see the JSON above " +
+          "for which one and why.",
+      );
+      process.exitCode = 1;
+    }
   });
 } finally {
   removeBeforeSnapshot();

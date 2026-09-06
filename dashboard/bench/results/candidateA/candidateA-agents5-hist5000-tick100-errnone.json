@@ -7,59 +7,59 @@
   "before": {
     "rafLatencyMs": {
       "n": 30,
-      "avg": 6.42,
-      "median": 2.3,
-      "p95": 15.6,
-      "max": 64.3
+      "avg": 7.91,
+      "median": 0.8,
+      "p95": 71.6,
+      "max": 111
     },
     "eventTiming": {
       "inputDelayMs": {
-        "n": 46,
-        "avg": 3.08,
+        "n": 21,
+        "avg": 0.3,
         "median": 0.2,
-        "p95": 1.2,
-        "max": 65.2
+        "p95": 0.6,
+        "max": 1.1
       },
       "processingTimeMs": {
-        "n": 46,
-        "avg": 0.2,
-        "median": 0,
-        "p95": 1.2,
-        "max": 1.4
+        "n": 21,
+        "avg": 0.51,
+        "median": 0.1,
+        "p95": 1.8,
+        "max": 4.5
       },
       "presentationDelayMs": {
-        "n": 46,
-        "avg": 21.06,
-        "median": 15.8,
-        "p95": 71.7,
-        "max": 72
+        "n": 21,
+        "avg": 52.14,
+        "median": 16,
+        "p95": 118.2,
+        "max": 119.8
       },
       "durationMs": {
-        "n": 46,
-        "avg": 24.35,
+        "n": 21,
+        "avg": 52.95,
         "median": 16,
-        "p95": 72,
-        "max": 72
+        "p95": 120,
+        "max": 120
       }
     },
     "longTasks": {
-      "count": 28,
-      "totalDurationMs": 1673,
+      "count": 30,
+      "totalDurationMs": 1931,
       "durationMs": {
-        "n": 28,
-        "avg": 59.75,
-        "median": 57,
-        "p95": 76,
-        "max": 88
+        "n": 30,
+        "avg": 64.37,
+        "median": 62,
+        "p95": 81,
+        "max": 101
       }
     },
     "mountLongTasks": {
       "count": 2,
-      "totalDurationMs": 222
+      "totalDurationMs": 250
     },
     "domNodeCount": {
-      "before": 1133,
-      "after": 1133
+      "before": 1134,
+      "after": 1279
     },
     "tracePath": "/home/yuta/git/kaoiro/worktrees/ao-304/dashboard/bench/results/candidateA/trace-agents5-hist5000-tick100-errnone-before.zip",
     "typingError": null,
@@ -71,59 +71,59 @@
   "after": {
     "rafLatencyMs": {
       "n": 30,
-      "avg": 10.66,
-      "median": 7.7,
-      "p95": 55.6,
-      "max": 63.2
+      "avg": 5.67,
+      "median": 0.6,
+      "p95": 11,
+      "max": 108.7
     },
     "eventTiming": {
       "inputDelayMs": {
-        "n": 80,
-        "avg": 1.69,
-        "median": 0.2,
-        "p95": 1.3,
-        "max": 61.6
+        "n": 24,
+        "avg": 0.3,
+        "median": 0.3,
+        "p95": 0.7,
+        "max": 1
       },
       "processingTimeMs": {
-        "n": 80,
-        "avg": 0.27,
-        "median": 0,
-        "p95": 1.4,
-        "max": 1.4
+        "n": 24,
+        "avg": 0.54,
+        "median": 0.1,
+        "p95": 1.6,
+        "max": 4.9
       },
       "presentationDelayMs": {
-        "n": 80,
-        "avg": 20.14,
+        "n": 24,
+        "avg": 35.16,
         "median": 15.7,
-        "p95": 64,
-        "max": 72
+        "p95": 111.9,
+        "max": 112
       },
       "durationMs": {
-        "n": 80,
-        "avg": 22.1,
+        "n": 24,
+        "avg": 36,
         "median": 16,
-        "p95": 64,
-        "max": 72
+        "p95": 112,
+        "max": 112
       }
     },
     "longTasks": {
-      "count": 28,
-      "totalDurationMs": 1646,
+      "count": 30,
+      "totalDurationMs": 1917,
       "durationMs": {
-        "n": 28,
-        "avg": 58.79,
-        "median": 57,
-        "p95": 69,
-        "max": 89
+        "n": 30,
+        "avg": 63.9,
+        "median": 63,
+        "p95": 74,
+        "max": 95
       }
     },
     "mountLongTasks": {
       "count": 2,
-      "totalDurationMs": 226
+      "totalDurationMs": 247
     },
     "domNodeCount": {
-      "before": 1133,
-      "after": 1133
+      "before": 1134,
+      "after": 1279
     },
     "tracePath": "/home/yuta/git/kaoiro/worktrees/ao-304/dashboard/bench/results/candidateA/trace-agents5-hist5000-tick100-errnone-after.zip",
     "typingError": null,
