@@ -2,6 +2,7 @@ defmodule KaoiroServer.DetsStorePathTest do
   use ExUnit.Case, async: false
 
   import Bitwise
+  import KaoiroServer.TestTeardown
 
   alias KaoiroServer.AgentDirectory
   alias KaoiroServer.ClearWatermarks
@@ -39,7 +40,7 @@ defmodule KaoiroServer.DetsStorePathTest do
       File.chmod!(parent, 0o755)
 
       {:ok, pid} = store.start_link(name: name, path: path)
-      on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+      on_exit(fn -> stop_quietly(pid) end)
 
       assert %{mode: mode} = File.stat!(parent)
       assert band(mode, 0o777) == 0o700
