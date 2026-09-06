@@ -241,12 +241,15 @@ function restartCount(bin, container) {
 
 /** #310 (a separate issue, not yet landed as of this commit) is expected
  *  to expose exactly this: `KaoiroServer.PersistencePaths.manifest/0`
- *  returning a list of maps with keys `:store`/`:env`/`:default_file`.
- *  Named here as the single fixed expression this file's own eval call
- *  uses (director ruling 2026-09-06, A-1) — an image built before #310
- *  lands (or an old image a rollback targets) simply lacks this module;
- *  that is queryPersistencePaths' own "skipped" outcome, not a defect in
- *  this string. */
+ *  returning a list of maps with keys `:store`/`:env`/`:default_file`/
+ *  `:default_path` (クロエ round 5 review A-MF-2 extends the contract with
+ *  the last one — the ABSOLUTE path `runtime.exs`'s own fallback resolves
+ *  to when `:env` is unset, as opposed to `:default_file`'s bare
+ *  filename). Named here as the single fixed expression this file's own
+ *  eval call uses (director ruling 2026-09-06, A-1) — an image built
+ *  before #310 lands (or an old image a rollback targets) simply lacks
+ *  this module; that is queryPersistencePaths' own "skipped" outcome, not
+ *  a defect in this string. */
 const PERSISTENCE_PATHS_EVAL_EXPR = "IO.puts(Jason.encode!(KaoiroServer.PersistencePaths.manifest()))";
 
 // クロエ round 4 review A-SF-1: `entry.env` is about to be embedded into
@@ -269,7 +272,14 @@ function isValidPersistencePathEntry(entry) {
     typeof entry.env === "string" &&
     ENV_VAR_NAME_RE.test(entry.env) &&
     typeof entry.default_file === "string" &&
-    entry.default_file !== ""
+    entry.default_file !== "" &&
+    // A-MF-2: the running container's own fallback when `entry.env` is
+    // unset — required so checkEnvConsistency can tell "the container
+    // never had this env set, but is still reading the same place
+    // compose now declares" (no migration needed) apart from "compose
+    // just moved this store to a genuinely different place" (5-b).
+    typeof entry.default_path === "string" &&
+    entry.default_path !== ""
   );
 }
 
@@ -422,33 +432,60 @@ function containerEffectiveEnv(bin, container) {
   return env;
 }
 
-/** TWO-way consistency for exactly the env var names `paths` names
- *  (director ruling 2026-09-06, A-MF-1, correcting the original 3-way
- *  design): compose's resolved declaration vs. the CURRENTLY RUNNING
- *  (old) container's actual effective env. `match` is `compose ===
- *  container`, including both agreeing on `null` (unset in both) — a
- *  genuine "nothing to flag" outcome, distinct from whether the var
- *  should be set at all.
+/** Consistency for exactly the env var names `paths` names (director
+ *  ruling 2026-09-06, A-MF-1, correcting the original 3-way design;
+ *  クロエ round 5 review A-MF-2, correcting A-MF-1 in turn): compose's
+ *  resolved declaration vs. the CURRENTLY RUNNING (old) container's
+ *  EFFECTIVE path for that store — the container's own env value if set,
+ *  else the image's `default_path` for it (what the app itself falls
+ *  back to). `match` is `compose === container_effective`.
+ *
+ *  WHY EFFECTIVE, NOT THE RAW ENV (A-MF-1's own bug): on the first
+ *  application that adds a NEW persistence-path var to compose, the OLD
+ *  container was never recreated with it, so its raw env can NEVER equal
+ *  compose's new value — comparing raw env would fail-close EVERY
+ *  legitimate first application, forever, since the raw env cannot change
+ *  before the container the check reads FROM is itself recreated by the
+ *  very deploy the check is gating. Comparing against the image's OWN
+ *  documented fallback instead asks the right question: "is the store
+ *  already effectively where compose is about to declare it" — true when
+ *  compose merely started EXPLICITLY declaring what was already the
+ *  default (no migration needed), false when compose names a genuinely
+ *  DIFFERENT location (a real 5-b migration is needed, and the failure
+ *  message below says so).
+ *
+ *  `compose === null` (compose does not declare this var AT ALL, for a
+ *  store the image DOES require) is its own failure mode — the exact
+ *  #217 class (a required persistence var silently missing from compose
+ *  escapes backup). No separate `compose !== null` guard is needed to
+ *  fail it: `container_effective` is never null (`default_path` is a
+ *  required, non-empty field — isValidPersistencePathEntry), so `null`
+ *  can never equal it and `match` already reads false on its own
+ *  (measured: adding the guard back and then removing it again left
+ *  every test in this file's own suite green either way).
  *
  *  `.env`'s own line is recorded as `declared` but NEVER folded into
  *  `match`: the bundled docker-compose.yaml sets every canonical
  *  persistence-path var as a LITERAL `environment:` entry (not `${VAR}`
  *  interpolation), while `.env.example`/`mix kaoiro.env` emit the same
- *  vars as commented-out hints. A three-way check comparing this
- *  legitimately-absent `.env` line against compose's real value would
- *  read as a permanent mismatch on a correctly-configured production
- *  host, fail-closed EVERY update from the moment #310 lands. `declared`
- *  stays in the record purely for an operator's own reference (e.g. the
- *  4.3 (5-b) first-application migration, which DOES set
- *  KAOIRO_USERS_PATH in `.env` deliberately) — a value never compared,
- *  never gates the outcome. */
+ *  vars as commented-out hints. `declared` stays in the record purely
+ *  for an operator's own reference — a value never compared, never gates
+ *  the outcome. */
 function checkEnvConsistency(paths, envPath, composeEnv, containerEnv) {
   const entries = {};
-  for (const { env: envName } of paths) {
+  for (const { env: envName, default_path: defaultPath } of paths) {
     const declared = readEnvFileValue(envPath, envName);
     const compose = Object.hasOwn(composeEnv, envName) ? composeEnv[envName] : null;
-    const container = Object.hasOwn(containerEnv, envName) ? containerEnv[envName] : null;
-    entries[envName] = { declared, compose, container, match: compose === container };
+    const containerRaw = Object.hasOwn(containerEnv, envName) ? containerEnv[envName] : null;
+    const containerEffective = containerRaw !== null ? containerRaw : defaultPath;
+    const containerSource = containerRaw !== null ? "env" : "default";
+    entries[envName] = {
+      declared,
+      compose,
+      container_effective: containerEffective,
+      container_source: containerSource,
+      match: compose === containerEffective,
+    };
   }
   return entries;
 }
@@ -1197,8 +1234,19 @@ export function runUpdate(flags, config) {
               `env_consistency check failed AND could not restore kaoiro-server:latest to the old image ${oldImageId} (now ${revertedId}) — investigate before retrying`,
             );
           }
+          // クロエ round 5 review A-MF-2: distinguishes the two DIFFERENT
+          // remediations a mismatching entry can need — an operator
+          // reading either sentence knows what to actually go do,
+          // instead of a single generic "mismatch" naming three fields.
+          const problems = Object.entries(entries)
+            .filter(([, e]) => !e.match)
+            .map(([envName, e]) =>
+              e.compose === null
+                ? `${envName}: compose does not declare this persistence-path var at all (the #217 class — a required var missing from compose can silently escape backup)`
+                : `${envName}: compose declares "${e.compose}" but the running container's effective path is "${e.container_effective}" (${e.container_source}) — this looks like a first-application migration; follow docs/specs/deployment.md 4.3 (5-b) before retrying`,
+            );
           fail(
-            `env_consistency check found a mismatch between compose's declared env and the running container's effective env for one or more persistence-path env vars (.env's own line is recorded above as "declared" for reference only — it is never compared; restored kaoiro-server:latest to the old image): ${JSON.stringify(entries)}`,
+            `env_consistency check found a problem for one or more persistence-path env vars (.env's own line is recorded as "declared" for reference only — it is never compared; restored kaoiro-server:latest to the old image): ${problems.join("; ")} — full detail: ${JSON.stringify(entries)}`,
           );
         }
       }

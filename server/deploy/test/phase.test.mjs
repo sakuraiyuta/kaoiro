@@ -197,7 +197,8 @@ test("validateJournalAgainstStateMachine accepts an ENV_CONSISTENCY_CHECKED obse
       KAOIRO_USERS_PATH: {
         declared: null,
         compose: "/var/lib/kaoiro/users.dets",
-        container: "/var/lib/kaoiro/users.dets",
+        container_effective: "/var/lib/kaoiro/users.dets",
+        container_source: "env",
         match: true,
       },
     },
