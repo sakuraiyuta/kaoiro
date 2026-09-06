@@ -105,15 +105,45 @@ function armProbes(page) {
   });
 }
 
-/** Same instruments as armProbes, but buffered from navigation -- used
- *  once right after mount to report one-time mount cost SEPARATELY from
- *  the during-typing/during-receive-tick window (not mixed into it). */
+/** Registers a buffered 'longtask' observer as early as possible after
+ *  navigation, to report one-time mount cost SEPARATELY from the
+ *  during-typing/during-receive-tick window (not mixed into it).
+ *  `buffered: true` retroactively replays the browser's own long-task
+ *  entry buffer back to navigation start (confirmed against web.dev's
+ *  Long Tasks API guidance), so arming this right after page.goto still
+ *  sees mount-time tasks even though page.evaluate() only runs after the
+ *  page's own scripts have already started. Kept as a separate
+ *  observer/array from armProbes()'s during-typing one (window.__longTasks),
+ *  so disconnecting it in mountCostSoFar() below can never affect that
+ *  window's data. */
+function armMountCostProbe(page) {
+  return page.evaluate(() => {
+    window.__mountLongTasks = [];
+    window.__mountLongTaskObserver = new PerformanceObserver((list) => {
+      for (const e of list.getEntries()) {
+        window.__mountLongTasks.push({
+          name: e.name,
+          startTime: e.startTime,
+          duration: e.duration,
+        });
+      }
+    });
+    window.__mountLongTaskObserver.observe({ type: "longtask", buffered: true });
+  });
+}
+
+/** Reads + disconnects the probe armed by armMountCostProbe. Cannot use
+ *  `performance.getEntriesByType("longtask")` here: per the Performance
+ *  Timeline spec (confirmed against MDN's Performance.getEntriesByType()
+ *  docs), "longtask" -- along with "event", "element",
+ *  "largest-contentful-paint", "layout-shift" -- is observer-only and is
+ *  never returned by getEntriesByType()/getEntries(), buffered or not;
+ *  that call always returns []. */
 function mountCostSoFar(page) {
-  return page.evaluate(() => ({
-    longTasks: performance
-      .getEntriesByType("longtask")
-      .map((e) => ({ name: e.name, startTime: e.startTime, duration: e.duration })),
-  }));
+  return page.evaluate(() => {
+    window.__mountLongTaskObserver?.disconnect();
+    return { longTasks: window.__mountLongTasks ?? [] };
+  });
 }
 
 async function measure(page, baseUrl, variant, opts) {
@@ -122,6 +152,7 @@ async function measure(page, baseUrl, variant, opts) {
     `${baseUrl}/bench/harnessApp.html?variant=${variant}&token=bench-${variant}`,
     { waitUntil: "load" },
   );
+  await armMountCostProbe(page);
   await page.evaluate(() => window.__bench.waitReady());
 
   const agents = Array.from({ length: agentCount }, (_, i) => ({
