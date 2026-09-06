@@ -67,8 +67,17 @@ export function isPathSha(value) {
  *  out, so a three-way check including `declared` (`.env`'s own line)
  *  would read as a permanent mismatch on every correctly-configured
  *  production host. `declared` is kept as a reference-only observation
- *  (never gates `match`). `null` on any field means "not present in
- *  that source", a legitimate observation, not a missing measurement. */
+ *  (never gates `match`). `compose` is `null` when compose does not
+ *  declare this var at all (its own failure mode — the #217 class,
+ *  never comparable to any container value). `container_effective`
+ *  (クロエ round 5 review A-MF-2, replacing the original 2-way `container`
+ *  raw-env field) is never `null` — the running container's own env
+ *  value if set, else the image's own documented default path for that
+ *  store (`container_source` names which of the two it is), so a first
+ *  application (the old container never had the var set at all) is
+ *  compared against what it was ALREADY effectively reading, not
+ *  against an env value that structurally cannot exist before the very
+ *  deploy this check is gating recreates the container. */
 function isEnvConsistencyEntry(value) {
   return (
     typeof value === "object" &&
@@ -76,7 +85,9 @@ function isEnvConsistencyEntry(value) {
     !Array.isArray(value) &&
     (value.declared === null || typeof value.declared === "string") &&
     (value.compose === null || typeof value.compose === "string") &&
-    (value.container === null || typeof value.container === "string") &&
+    typeof value.container_effective === "string" &&
+    value.container_effective !== "" &&
+    (value.container_source === "env" || value.container_source === "default") &&
     typeof value.match === "boolean"
   );
 }

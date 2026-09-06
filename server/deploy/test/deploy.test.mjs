@@ -893,13 +893,41 @@ test("runUpdate throws when the target image's eval prints valid JSON that is no
   );
 });
 
+// クロエ round 5 review A-MF-2: the eval contract's own extension —
+// an entry missing default_path is as much a shape violation as one
+// missing store/env/default_file, since checkEnvConsistency cannot
+// compute an effective path without it. compose and container are
+// DELIBERATELY made to agree here — if the shape guard were absent,
+// this would otherwise reach checkEnvConsistency and match cleanly
+// (compose === containerRaw, default_path never even consulted),
+// throwing for the WRONG reason and masking whether this guard fired.
+test("runUpdate throws when the target image's eval reports an entry with no default_path", () => {
+  const evalOutput = JSON.stringify([{ store: "Users", env: "KAOIRO_USERS_PATH", default_file: "users.dets" }]);
+  assert.throws(
+    () =>
+      withScenario("running-clean-stop", () =>
+        withEnvConsistencyFixture(
+          {
+            evalOutput,
+            composeEnvJson: '{"KAOIRO_USERS_PATH":"/var/lib/kaoiro/users.dets"}',
+            containerEnvJson: '["KAOIRO_USERS_PATH=/var/lib/kaoiro/users.dets"]',
+          },
+          () => runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+        ),
+      ),
+    DeployError,
+  );
+});
+
 // クロエ round 4 review A-SF-1: `entry.env` is embedded into a RegExp
 // (readEnvFileValue) unescaped — a malformed eval response must be
 // treated as a shape violation (DeployError, not skipped), not run
 // through to the RegExp construction at all.
 test("runUpdate throws (not skipped) when eval reports an env name that is not a valid identifier", () => {
   writeFileSync(join(workDir, "server", ".env"), "SECRET_KEY_BASE=super-secret-value-must-never-leak\n");
-  const evalOutput = JSON.stringify([{ store: "Users", env: ".*", default_file: "users.dets" }]);
+  const evalOutput = JSON.stringify([
+    { store: "Users", env: ".*", default_file: "users.dets", default_path: "/tmp/kaoiro_users.dets" },
+  ]);
   let caught;
   try {
     withScenario("running-clean-stop", () =>
@@ -920,7 +948,9 @@ test("runUpdate throws (not a SyntaxError) when eval reports an env name that is
   // RegExp(...)`, masking whether the guard (not that short-circuit) is
   // what actually prevents the SyntaxError.
   writeFileSync(join(workDir, "server", ".env"), "KAOIRO_USERS_PATH=/var/lib/kaoiro/users.dets\n");
-  const evalOutput = JSON.stringify([{ store: "Users", env: "(", default_file: "users.dets" }]);
+  const evalOutput = JSON.stringify([
+    { store: "Users", env: "(", default_file: "users.dets", default_path: "/tmp/kaoiro_users.dets" },
+  ]);
   assert.throws(
     () =>
       withScenario("running-clean-stop", () =>
@@ -934,7 +964,9 @@ test("runUpdate throws (not a SyntaxError) when eval reports an env name that is
 
 test("runUpdate fails closed and restores kaoiro-server:latest to the old image when env_consistency finds a mismatch", () => {
   writeFileSync(join(workDir, "server", ".env"), "KAOIRO_USERS_PATH=/var/lib/kaoiro/users.dets\n");
-  const evalOutput = JSON.stringify([{ store: "Users", env: "KAOIRO_USERS_PATH", default_file: "users.dets" }]);
+  const evalOutput = JSON.stringify([
+    { store: "Users", env: "KAOIRO_USERS_PATH", default_file: "users.dets", default_path: "/tmp/kaoiro_users.dets" },
+  ]);
   const logPath = join(root, "docker-calls.log");
   process.env.KAOIRO_TEST_CALL_LOG = logPath;
   let caught;
@@ -957,12 +989,18 @@ test("runUpdate fails closed and restores kaoiro-server:latest to the old image 
     delete process.env.KAOIRO_TEST_CALL_LOG;
   }
   assert.ok(caught instanceof DeployError);
-  assert.ok(caught.message.includes("env_consistency check found a mismatch"));
+  assert.ok(caught.message.includes("env_consistency check found a problem"));
   // クロエ round 5 review SF-8: the message must name the two parties the
-  // check actually compares (compose vs. the container) and must not send
-  // an operator to edit .env, which A-MF-1 never reads for `match`.
-  assert.ok(caught.message.includes("compose's declared env and the running container's effective env"));
-  assert.ok(caught.message.includes(".env's own line is recorded above as \"declared\" for reference only"));
+  // check actually compares (compose vs. the container's effective path)
+  // and must not send an operator to edit .env, which A-MF-1 never reads
+  // for `match`. A-MF-2: a genuine value mismatch (compose is not null)
+  // reads as a first-application migration, naming both paths and 5-b.
+  assert.ok(caught.message.includes(".env's own line is recorded as \"declared\" for reference only"));
+  assert.ok(
+    caught.message.includes(
+      'KAOIRO_USERS_PATH: compose declares "/var/lib/kaoiro/users.dets" but the running container\'s effective path is "/tmp/kaoiro-dets/users.dets" (env) — this looks like a first-application migration; follow docs/specs/deployment.md 4.3 (5-b) before retrying',
+    ),
+  );
   const log = existsSync(logPath) ? readFileSync(logPath, "utf8") : "";
   assert.ok(
     log.trim().split("\n").includes(`tag ${OLD_IMAGE_ID} kaoiro-server:latest`),
@@ -978,7 +1016,9 @@ test("runUpdate fails closed and restores kaoiro-server:latest to the old image 
 // lists alongside "running") since the mismatch is reached well before
 // the stop window — no clean-stop scenario is needed here at all.
 test("runUpdate reports both failures when env_consistency mismatches AND the abort-cleanup retag read-back also disagrees", () => {
-  const evalOutput = JSON.stringify([{ store: "Users", env: "KAOIRO_USERS_PATH", default_file: "users.dets" }]);
+  const evalOutput = JSON.stringify([
+    { store: "Users", env: "KAOIRO_USERS_PATH", default_file: "users.dets", default_path: "/tmp/kaoiro_users.dets" },
+  ]);
   let caught;
   try {
     withScenario("retag-drift", () =>
@@ -1000,7 +1040,9 @@ test("runUpdate reports both failures when env_consistency mismatches AND the ab
 
 test("runUpdate proceeds through DONE when compose and container agree", () => {
   writeFileSync(join(workDir, "server", ".env"), "KAOIRO_USERS_PATH=/var/lib/kaoiro/users.dets\n");
-  const evalOutput = JSON.stringify([{ store: "Users", env: "KAOIRO_USERS_PATH", default_file: "users.dets" }]);
+  const evalOutput = JSON.stringify([
+    { store: "Users", env: "KAOIRO_USERS_PATH", default_file: "users.dets", default_path: "/tmp/kaoiro_users.dets" },
+  ]);
   const result = withScenario("running-clean-stop", () =>
     withEnvConsistencyFixture(
       {
@@ -1029,7 +1071,9 @@ test("runUpdate proceeds through DONE when compose and container agree", () => {
 // container only) must pass here regardless.
 test("runUpdate proceeds through DONE when compose and container agree, even with no .env line at all", () => {
   // No .env file written at all — readEnvFileValue's own ENOENT path.
-  const evalOutput = JSON.stringify([{ store: "Users", env: "KAOIRO_USERS_PATH", default_file: "users.dets" }]);
+  const evalOutput = JSON.stringify([
+    { store: "Users", env: "KAOIRO_USERS_PATH", default_file: "users.dets", default_path: "/tmp/kaoiro_users.dets" },
+  ]);
   const result = withScenario("running-clean-stop", () =>
     withEnvConsistencyFixture(
       {
@@ -1048,6 +1092,91 @@ test("runUpdate proceeds through DONE when compose and container agree, even wit
   assert.equal(entry.declared, null);
 });
 
+// クロエ round 5 review A-MF-2 ("ao's own finding while writing (e)"): the
+// original A-MF-1 design compared compose against the container's RAW env
+// only — on the first application of a NEW persistence-path var, the old
+// container was never recreated with it, so the raw env can NEVER equal
+// compose's new value, fail-closing every legitimate first application
+// forever. Comparing against the container's EFFECTIVE path (its own env
+// value if set, else the image's default_path) fixes this: a first
+// application where the store was already effectively where compose now
+// declares it (default_path happens to equal compose's value) needs no
+// migration, but a first application moving the store somewhere genuinely
+// different still correctly reads as "5-b migration needed".
+test("runUpdate matches when the container's raw env is unset but its default_path already equals compose's value", () => {
+  const evalOutput = JSON.stringify([
+    {
+      store: "Users",
+      env: "KAOIRO_USERS_PATH",
+      default_file: "users.dets",
+      default_path: "/var/lib/kaoiro/users.dets",
+    },
+  ]);
+  const result = withScenario("running-clean-stop", () =>
+    withEnvConsistencyFixture(
+      {
+        evalOutput,
+        composeEnvJson: '{"KAOIRO_USERS_PATH":"/var/lib/kaoiro/users.dets"}',
+        containerEnvJson: "[]",
+      },
+      () => runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+    ),
+  );
+  assert.equal(result.phase, "done");
+  const backupRoot = join(root, "kaoiro-deploy");
+  const manifest = readManifest(join(backupRoot, result.transactionId));
+  const entry = manifest.env_consistency.entries.KAOIRO_USERS_PATH;
+  assert.equal(entry.match, true);
+  assert.equal(entry.container_effective, "/var/lib/kaoiro/users.dets");
+  assert.equal(entry.container_source, "default");
+});
+
+test("runUpdate refuses with the 5-b message when the container's raw env is unset and its default_path genuinely differs from compose", () => {
+  const evalOutput = JSON.stringify([
+    { store: "Users", env: "KAOIRO_USERS_PATH", default_file: "users.dets", default_path: "/tmp/kaoiro_users.dets" },
+  ]);
+  let caught;
+  try {
+    withScenario("running", () =>
+      withEnvConsistencyFixture(
+        { evalOutput, composeEnvJson: '{"KAOIRO_USERS_PATH":"/var/lib/kaoiro/users.dets"}', containerEnvJson: "[]" },
+        () => runUpdate({ repo: workDir, target: headSha }, configWithOverride()),
+      ),
+    );
+  } catch (err) {
+    caught = err;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.ok(
+    caught.message.includes(
+      'KAOIRO_USERS_PATH: compose declares "/var/lib/kaoiro/users.dets" but the running container\'s effective path is "/tmp/kaoiro_users.dets" (default) — this looks like a first-application migration; follow docs/specs/deployment.md 4.3 (5-b) before retrying',
+    ),
+  );
+});
+
+test("runUpdate refuses when compose does not declare a persistence-path var the image requires at all", () => {
+  const evalOutput = JSON.stringify([
+    { store: "Users", env: "KAOIRO_USERS_PATH", default_file: "users.dets", default_path: "/tmp/kaoiro_users.dets" },
+  ]);
+  let caught;
+  try {
+    withScenario("running", () =>
+      withEnvConsistencyFixture(
+        { evalOutput, composeEnvJson: "{}", containerEnvJson: '["KAOIRO_USERS_PATH=/tmp/kaoiro_users.dets"]' },
+        () => runUpdate({ repo: workDir, target: headSha }, configWithOverride()),
+      ),
+    );
+  } catch (err) {
+    caught = err;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.ok(
+    caught.message.includes(
+      "KAOIRO_USERS_PATH: compose does not declare this persistence-path var at all (the #217 class",
+    ),
+  );
+});
+
 // クロエ round 5 review SF-7: composeDeclaredEnv's own shape guard — the
 // original silently collapsed every unexpected shape to `{}`, which with
 // A-MF-1's two-way comparison either fails closed on every entry (compose:
@@ -1055,7 +1184,9 @@ test("runUpdate proceeds through DONE when compose and container agree, even wit
 // anything at all (both sides null). Same "0 exit but garbage shape is a
 // hard failure, not a skip" treatment queryPersistencePaths already gets.
 test("runUpdate parses compose's environment when it is the array (\"KEY=VALUE\") shape", () => {
-  const evalOutput = JSON.stringify([{ store: "Users", env: "KAOIRO_USERS_PATH", default_file: "users.dets" }]);
+  const evalOutput = JSON.stringify([
+    { store: "Users", env: "KAOIRO_USERS_PATH", default_file: "users.dets", default_path: "/tmp/kaoiro_users.dets" },
+  ]);
   const result = withScenario("running-clean-stop", () =>
     withEnvConsistencyFixture(
       {
@@ -1073,7 +1204,9 @@ test("runUpdate parses compose's environment when it is the array (\"KEY=VALUE\"
 });
 
 test("runUpdate throws (not a silent {}) when compose config has no service by the expected name", () => {
-  const evalOutput = JSON.stringify([{ store: "Users", env: "KAOIRO_USERS_PATH", default_file: "users.dets" }]);
+  const evalOutput = JSON.stringify([
+    { store: "Users", env: "KAOIRO_USERS_PATH", default_file: "users.dets", default_path: "/tmp/kaoiro_users.dets" },
+  ]);
   let caught;
   try {
     withScenario("compose-config-renamed-service", () =>
@@ -1090,7 +1223,9 @@ test("runUpdate throws (not a silent {}) when compose config has no service by t
 });
 
 test("runUpdate throws (not a silent {}) when compose config's service has no environment key at all", () => {
-  const evalOutput = JSON.stringify([{ store: "Users", env: "KAOIRO_USERS_PATH", default_file: "users.dets" }]);
+  const evalOutput = JSON.stringify([
+    { store: "Users", env: "KAOIRO_USERS_PATH", default_file: "users.dets", default_path: "/tmp/kaoiro_users.dets" },
+  ]);
   let caught;
   try {
     withScenario("compose-config-missing-environment-key", () =>

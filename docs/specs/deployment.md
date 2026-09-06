@@ -451,6 +451,10 @@ Satisfy all of the following before starting.
 - **Confirm there is no active work** (human judgment). Stopping a runner stops all
   wrappers beneath it (section 2, “Run as a service”); conversation state is not
   persisted, so in-progress exchanges are lost.
+- **The deploy host's `tar` must be GNU tar.** The CLI's own archive-listing
+  parser assumes GNU `tar tv*`'s output format; a bsdtar or busybox host fails
+  loudly (a parse error, not a silent misread) once the archive has already
+  been written.
 
 ### 4.3 Update procedure
 
@@ -559,19 +563,36 @@ on the live system.
 
 **Issue #220 absorption — persistence-path / env consistency.** Once the
 target image exposes `KaoiroServer.PersistencePaths.manifest/0` (issue #310,
-not yet landed), `update` queries it by image ID and, for every reported
-persistence-path env var, compares **compose's resolved declaration** against
-**the currently-running (old) container's actual effective environment** —
-not the literal `.env` file, recorded separately as `declared` for reference
-only (the bundled `docker-compose.yaml` sets every canonical persistence-path
-var as a literal `environment:` entry, so `.env`'s own line legitimately
-differs on every correctly-configured host; folding it into the comparison
-would fail-close every update). A mismatch aborts here, before the stop
-window: `latest` is retagged back to the old image and the retag verified by
-read-back automatically — nothing to do manually for this specific case.
-**Until #310 lands, the target image lacks this module and the check reports
-`{skipped: true, reason: ...}`**; it neither blocks nor verifies anything
-today.
+not yet landed, contract below), `update` queries it by image ID and, for
+every reported persistence-path env var, compares **compose's resolved
+declaration** against **the currently-running (old) container's EFFECTIVE
+path for that store** — the container's own env value if it is set, else the
+image's own documented `default_path` for it (what the app itself falls back
+to) — not the literal `.env` file, recorded separately as `declared` for
+reference only (the bundled `docker-compose.yaml` sets every canonical
+persistence-path var as a literal `environment:` entry, so `.env`'s own line
+legitimately differs on every correctly-configured host; folding it into the
+comparison would fail-close every update).
+
+**Effective, not raw env, on purpose.** On the first application that adds a
+NEW persistence-path var to compose, the old container was never recreated
+with it, so its raw env can never equal compose's new value — comparing raw
+env would fail-close every legitimate first application forever, since the
+raw env cannot change before the very deploy the check is gating recreates
+the container. Comparing against the effective path instead asks the right
+question: compose merely starting to declare EXPLICITLY what was already the
+default needs no migration (match); compose naming a genuinely different
+location means a real first-application migration is needed (5-b, below) —
+`update` aborts with a message naming the store and both paths. Compose not
+declaring a required store AT ALL is its own, always-failing case (the #217
+class: a required persistence var missing from compose can silently escape
+backup).
+
+Either failure aborts before the stop window: `latest` is retagged back to
+the old image and the retag verified by read-back automatically — nothing to
+do manually for this specific case. **Until #310 lands, the target image
+lacks this module and the check reports `{skipped: true, reason: ...}`**; it
+neither blocks nor verifies anything today.
 
 `update` then exits non-zero, naming the transaction and requiring
 `--maintenance-approved`:
@@ -689,13 +710,16 @@ Always compare SHA-256. **If the source file is absent, the ledger is already
 lost.** Record this and let the operator decide; **do not silently create an
 empty ledger**—distinguish “lost” from “never existed.”
 
-**Set `KAOIRO_USERS_PATH` in the operator's `.env` too**, even though the
-target compose already sets it under `environment:` and that is what actually
-gates the container — `.env`'s own line is recorded as `declared` (reference
-only, never compared) by the #220 check above, and it is what an operator
-reads by hand when investigating later. This step's DETS placement is
-included in the pre-deploy archive step (5) takes right after; later
-deployments never need this step again.
+**Setting `KAOIRO_USERS_PATH` in the operator's `.env` is optional and
+reference-only** — the target compose's own `environment:` entry is what
+actually gates the container, and `.env`'s own line (recorded as `declared`
+by the #220 check above) is never compared. Do not treat it as a step to keep
+in sync by hand: `.env.example` and `mix kaoiro.env` both emit this line
+commented out by design, so a later wizard re-run silently drops a
+manually-uncommented one — an operator relying on `.env` to remember this
+setting would find it quietly gone. This step's DETS placement is included
+in the pre-deploy archive step (5) takes right after; later deployments never
+need this step again.
 
 **(5-c) Archive and verify DETS (automatic)**
 
