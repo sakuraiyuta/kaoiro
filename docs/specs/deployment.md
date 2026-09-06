@@ -182,6 +182,38 @@ Add these two variables to `.env` (all other steps are the same as 1.1–1.3):
 | `KAOIRO_PLAIN_HTTP` | `true` | Build time: disable `force_ssl` and Secure cookies (compile-time). Runtime: switch URL generation and `check_origin` to `http://PHX_HOST:PORT`. Compose wires the same value to both build arg and runtime env; mismatch raises at server startup |
 | `KAOIRO_PUBLISH_IP` | Host's VPN-side interface IP | Compose bind address (default `127.0.0.1`); restrict to the VPN interface rather than publishing on all interfaces |
 
+#### Boot order for a VPN publish address
+
+If `KAOIRO_PUBLISH_IP` is an address that appears late during boot, such as a
+VPN address, `docker.service` **MUST** start after the unit that creates that
+address. This is unnecessary for the default `127.0.0.1` publish address behind
+nginx. The only shipped asset for this ordering is the
+[`docker-vpn-order.conf.example`](../../server/deploy/systemd/docker-vpn-order.conf.example)
+template; replace `@@VPN_UNIT@@` with the actual VPN systemd unit, rather than
+assuming a WireGuard interface name.
+
+From the checkout root, expand the template, reload systemd, and verify the
+result. This example uses `wg-quick@wg0.service`; substitute the unit that owns
+the configured publish address.
+
+```sh
+VPN_UNIT=wg-quick@wg0.service
+sudo install -d -m 0755 /etc/systemd/system/docker.service.d
+sed "s|@@VPN_UNIT@@|${VPN_UNIT}|g" server/deploy/systemd/docker-vpn-order.conf.example \
+  | sudo tee /etc/systemd/system/docker.service.d/kaoiro-vpn.conf >/dev/null
+sudo systemctl daemon-reload
+sudo systemctl show docker -p After -p Wants -p NeedDaemonReload
+```
+
+Do not restart Docker as part of this procedure: it affects every container
+under the same daemon. The ordering applies on the next Docker start or boot.
+
+As a host-wide alternative, an operator may opt into IPv4
+`net.ipv4.ip_nonlocal_bind=1`. It permits binding an address before the
+interface owns it, but also lets an incorrect publish address bind successfully
+and therefore makes configuration errors harder to notice. It is an explicit
+operator choice, not a shipped sysctl asset or default.
+
 `check_origin` allows only `http://PHX_HOST:PORT` and loopback (private Gitea
 issue 154 M1: comparing only the default host would let another port on the same
 host steal an operator socket). **Opening the dashboard with another name or a
@@ -1180,6 +1212,28 @@ After `systemctl --user stop` stopped the caller, the worker wrote its sentinel 
 exited `Result=success`; the active `kaoiro-runner` remained unaffected. **Repeat
 the measurement when the host changes**—this is observed on one host, not a
 guarantee for every systemd configuration.
+
+## 5. Troubleshooting
+
+### Container does not start after a reboot
+
+**Symptom.** The server container is not running after a host reboot.
+
+**Diagnosis.** Inspect the existing container's recorded error:
+
+```sh
+docker inspect --format '{{.State.Error}}' <container>
+```
+
+If it reports `cannot assign requested address`, check whether
+`KAOIRO_PUBLISH_IP` is present on a host interface. A VPN address that is absent
+while Docker starts causes the published port bind to fail.
+
+**Remedy.** Install and verify the VPN ordering drop-in from [1.5](#15-direct-vpn-deployment-no-nginx-plain-http-2026-07-26), then start the existing
+container with `docker start <container>` once the publish address is present.
+Do not treat `docker compose up --no-build` as the general recovery command: a
+prepared `latest` tag can point to a newer image, while the existing container
+identifies the known deployment state.
 
 ## See Also
 

@@ -1,0 +1,3 @@
+[Unit]
+Wants=@@VPN_UNIT@@
+After=@@VPN_UNIT@@
