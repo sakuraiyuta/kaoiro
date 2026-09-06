@@ -17,21 +17,25 @@ import {
 } from "../kaoiro-server-deploy.mjs";
 
 // A single fake docker covering every branch runBuild/runStart/runUpdate
-// exercise: `compose build` / `tag` / `compose up -d --build` / `start`
-// all succeed silently; `inspect ... --format {{.Id}}` and `{{.Image}}`
-// return fixed fake ids; `compose ps -a` / `inspect ...
-// --format {{.State.Status}}` are driven by FAKE_DOCKER_SCENARIO the
-// same way test/branch.test.mjs's fake does.
+// exercise: `compose build` / `compose stop` / `compose up -d --build` /
+// `tag` / `start` all succeed silently; `inspect ... --format {{.Id}}`
+// and `{{.Image}}` return fixed fake ids; `compose ps -a` / `inspect ...
+// --format {{.State.Status}}` / clean-stop fields / the mount lookup are
+// driven by FAKE_DOCKER_SCENARIO the same way test/branch.test.mjs's
+// fake does. FAKE_DOCKER_SCENARIO "running-clean-stop" additionally
+// reports a clean stop (exit 0, not OOM-killed) and a resolvable mount,
+// for the tests that exercise runUpdate all the way through
+// MOUNT_RESOLVED.
 const FAKE_DOCKER = `#!/bin/sh
 case "$1" in
   compose)
     case "$2" in
       ps)
         case "$FAKE_DOCKER_SCENARIO" in
-          stopped|running) printf 'kaoiro-c1\\n' ;;
+          stopped|running|running-clean-stop|running-no-mount) printf 'kaoiro-c1\\n' ;;
         esac
         ;;
-      build|up) exit 0 ;;
+      build|up|stop) exit 0 ;;
     esac
     ;;
   tag) exit 0 ;;
@@ -40,7 +44,25 @@ case "$1" in
       '{{.State.Status}}')
         case "$FAKE_DOCKER_SCENARIO" in
           stopped) printf 'exited\\n' ;;
-          running) printf 'running\\n' ;;
+          running|running-clean-stop|running-no-mount) printf 'running\\n' ;;
+        esac
+        ;;
+      '{{.State.ExitCode}}')
+        case "$FAKE_DOCKER_SCENARIO" in
+          running-clean-stop|running-no-mount) printf '0\\n' ;;
+          *) printf 'unknown\\n' ;;
+        esac
+        ;;
+      '{{.State.OOMKilled}}')
+        case "$FAKE_DOCKER_SCENARIO" in
+          running-clean-stop|running-no-mount) printf 'false\\n' ;;
+          *) printf 'unknown\\n' ;;
+        esac
+        ;;
+      '{{range .Mounts}}{{if eq .Destination "/var/lib/kaoiro"}}{{.Name}}{{end}}{{end}}')
+        case "$FAKE_DOCKER_SCENARIO" in
+          running-clean-stop) printf 'kaoiro_kaoiro-state\\n' ;;
+          running-no-mount) ;;
         esac
         ;;
       '{{.Image}}') printf 'sha256:oldimageid\\n' ;;
@@ -93,6 +115,18 @@ afterEach(() => {
 // this test's outcome to whatever happens to exist there.
 function configWithOverride() {
   return { ...DEFAULT_CONFIG, allow_docker_override: true, backup_root: join(root, "kaoiro-deploy") };
+}
+
+// A separate helper, not a default on configWithOverride(): most tests
+// deliberately want the default null/null expectation (everything is
+// abnormal), and only the tests exercising the STOPPED/MOUNT_RESOLVED
+// path need a config claiming a measurement exists.
+function configWithCleanStopMeasured() {
+  return {
+    ...configWithOverride(),
+    expected_clean_stop_exit_code: 0,
+    expected_clean_stop_oom_killed: false,
+  };
 }
 
 function withOverrideEnv(fn) {
@@ -262,16 +296,39 @@ test("runUpdate stops at the maintenance gate without --maintenance-approved, bu
   assert.equal(journal.phase, "build_prepared");
 });
 
-test("runUpdate completes prepare with --maintenance-approved", () => {
-  const result = withScenario("running", () =>
-    runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithOverride()),
+test("runUpdate completes through MOUNT_RESOLVED with --maintenance-approved and a clean stop", () => {
+  const result = withScenario("running-clean-stop", () =>
+    runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
   );
-  assert.equal(result.phase, "prepare_complete");
+  assert.equal(result.phase, "mount_resolved");
   assert.equal(result.oldImageId, "sha256:oldimageid");
   assert.equal(result.build.imageTag, `kaoiro-server:${headSha}`);
+  assert.equal(result.stopExitCode, 0);
+  assert.equal(result.stopOomKilled, false);
+  assert.equal(result.volumeId, "kaoiro_kaoiro-state");
   const backupRoot = join(root, "kaoiro-deploy");
   const journal = readJournal(join(backupRoot, result.transactionId));
-  assert.equal(journal.phase, "maintenance_gate_passed");
+  assert.equal(journal.phase, "mount_resolved");
+});
+
+test("runUpdate refuses to proceed when the mount cannot be resolved after stopping", () => {
+  assert.throws(
+    () =>
+      withScenario("running-no-mount", () =>
+        runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+      ),
+    DeployError,
+  );
+});
+
+test("runUpdate refuses to proceed past a stop with no measured clean-stop expectation", () => {
+  assert.throws(
+    () =>
+      withScenario("running-clean-stop", () =>
+        runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithOverride()),
+      ),
+    DeployError,
+  );
 });
 
 test("runUpdate resumes a gated transaction via --transaction without rebuilding", () => {
@@ -284,13 +341,13 @@ test("runUpdate resumes a gated transaction via --transaction without rebuilding
   const backupRoot = join(root, "kaoiro-deploy");
   [transactionId] = readdirSyncNonHidden(backupRoot);
 
-  const result = withScenario("running", () =>
+  const result = withScenario("running-clean-stop", () =>
     runUpdate(
       { repo: workDir, target: headSha, transaction: transactionId, maintenanceApproved: true },
-      configWithOverride(),
+      configWithCleanStopMeasured(),
     ),
   );
-  assert.equal(result.phase, "prepare_complete");
+  assert.equal(result.phase, "mount_resolved");
   assert.equal(result.transactionId, transactionId);
 });
 
@@ -317,10 +374,10 @@ test("runUpdate refuses to resume when --target no longer matches the prepared t
 
 test("runUpdate refuses a second transaction while one is unfinished, and creates no new transaction dir", () => {
   // maintenanceApproved:true still leaves the transaction non-terminal
-  // (phase "maintenance_gate_passed" is not in TERMINAL_PHASES) — the
-  // commit half that would reach "done" does not exist yet.
-  withScenario("running", () =>
-    runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithOverride()),
+  // (phase "mount_resolved" is not in TERMINAL_PHASES) — the commit
+  // half that would reach "done" does not exist yet.
+  withScenario("running-clean-stop", () =>
+    runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
   );
   const backupRoot = join(root, "kaoiro-deploy");
   const before = readdirSyncNonHidden(backupRoot).length;

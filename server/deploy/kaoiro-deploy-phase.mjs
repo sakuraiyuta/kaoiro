@@ -12,7 +12,7 @@
 // a design smell; what this file exists to prevent is an UNLISTED phase
 // or an UNLISTED transition passing silently, not the list staying
 // short until the work that defines the rest lands.
-import { IMAGE_ID_RE, isPathSha, SHA_RE } from "./kaoiro-deploy-manifest.mjs";
+import { IMAGE_ID_RE, isPathSha, isValidRequiredEntries, SHA_RE } from "./kaoiro-deploy-manifest.mjs";
 
 export class PhaseError extends Error {}
 
@@ -21,6 +21,9 @@ export const PHASE = Object.freeze({
   OLD_IMAGE_SAVED: "old_image_saved",
   BUILD_PREPARED: "build_prepared",
   MAINTENANCE_GATE_PASSED: "maintenance_gate_passed",
+  STOPPED: "stopped",
+  MOUNT_RESOLVED: "mount_resolved",
+  ARCHIVED: "archived",
 });
 
 /** Each key's value is the set of phases that may follow it directly.
@@ -30,7 +33,10 @@ const TRANSITIONS = {
   [PHASE.PREFLIGHT]: [PHASE.OLD_IMAGE_SAVED],
   [PHASE.OLD_IMAGE_SAVED]: [PHASE.BUILD_PREPARED],
   [PHASE.BUILD_PREPARED]: [PHASE.MAINTENANCE_GATE_PASSED],
-  [PHASE.MAINTENANCE_GATE_PASSED]: [],
+  [PHASE.MAINTENANCE_GATE_PASSED]: [PHASE.STOPPED],
+  [PHASE.STOPPED]: [PHASE.MOUNT_RESOLVED],
+  [PHASE.MOUNT_RESOLVED]: [PHASE.ARCHIVED],
+  [PHASE.ARCHIVED]: [],
 };
 
 /** Per-phase observation shape (S1 item i) — what advancePhase() must
@@ -38,7 +44,14 @@ const TRANSITIONS = {
  *  `compose_artifact` at OLD_IMAGE_SAVED is what lets rollback name the
  *  compose file the OLD image was started with, not just the image id;
  *  BUILD_PREPARED's `target_sha` is the value resume's target-mismatch
- *  guard already compares `--target` against (kaoiro-server-deploy.mjs). */
+ *  guard already compares `--target` against (kaoiro-server-deploy.mjs).
+ *  STOPPED's exit-code fields are `null` until the dev-host measurement
+ *  (commit e) fixes an expected value — see kaoiro-server-deploy.mjs's
+ *  own EXPECTED_CLEAN_STOP_EXIT_CODE comment for why `null` there means
+ *  "treat every stop as abnormal", not "anything goes" here: this schema
+ *  only checks the RECORDED shape (number-or-null, boolean-or-null), the
+ *  abnormal/normal judgment itself lives in the caller that decides
+ *  whether to advance past STOPPED at all. */
 const OBSERVATION_SCHEMAS = {
   [PHASE.PREFLIGHT]: (obs) => typeof obs.container === "string" && obs.container !== "",
   [PHASE.OLD_IMAGE_SAVED]: (obs) =>
@@ -55,6 +68,11 @@ const OBSERVATION_SCHEMAS = {
     typeof obs.target_sha === "string" &&
     SHA_RE.test(obs.target_sha),
   [PHASE.MAINTENANCE_GATE_PASSED]: () => true,
+  [PHASE.STOPPED]: (obs) =>
+    (obs.stop_exit_code === null || Number.isInteger(obs.stop_exit_code)) &&
+    (obs.stop_oom_killed === null || typeof obs.stop_oom_killed === "boolean"),
+  [PHASE.MOUNT_RESOLVED]: (obs) => typeof obs.volume_id === "string" && obs.volume_id !== "",
+  [PHASE.ARCHIVED]: (obs) => isPathSha(obs.archive) && isValidRequiredEntries(obs.required_entries),
 };
 
 export function isKnownPhase(phase) {

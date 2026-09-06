@@ -96,13 +96,22 @@ export function isValidManifestShape(value) {
   }
   if (typeof value.volume_id !== "string" || value.volume_id === "") return false;
   if (!isPathSha(value.archive)) return false;
-  if (!Array.isArray(value.required_entries)) return false;
+  if (!isValidRequiredEntries(value.required_entries)) return false;
+  return true;
+}
+
+/** Exported separately from isValidManifestShape (used directly by
+ *  kaoiro-deploy-phase.mjs's ARCHIVED observation schema) so the archive
+ *  phase's own required-entries check and the manifest's stay the SAME
+ *  domain rather than two independently drifting ones. */
+export function isValidRequiredEntries(value) {
+  if (!Array.isArray(value)) return false;
   // Path uniqueness (ふじ design review M1) — a duplicate path is not a
   // malformed entry on its own, but two entries claiming the same
   // persistent-path record two different owner/mode expectations for
   // one file, which cannot both hold.
   const seenPaths = new Set();
-  for (const entry of value.required_entries) {
+  for (const entry of value) {
     if (
       typeof entry !== "object" ||
       entry === null ||

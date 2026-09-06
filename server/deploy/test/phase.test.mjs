@@ -24,6 +24,13 @@ const BUILD_OBS = {
   target_sha: "d".repeat(40),
 };
 
+const STOPPED_OBS = { stop_exit_code: 0, stop_oom_killed: false };
+const MOUNT_RESOLVED_OBS = { volume_id: "kaoiro_kaoiro-state" };
+const ARCHIVED_OBS = {
+  archive: { path: "/backup/archive.tar.gz", sha256: "f".repeat(64) },
+  required_entries: [{ path: "users.dets", owner: "1000:1000", mode: "0600" }],
+};
+
 function fullJournal(phase = PHASE.MAINTENANCE_GATE_PASSED) {
   return {
     schema_version: 1,
@@ -34,6 +41,20 @@ function fullJournal(phase = PHASE.MAINTENANCE_GATE_PASSED) {
       entry(PHASE.OLD_IMAGE_SAVED, OLD_IMAGE_OBS),
       entry(PHASE.BUILD_PREPARED, BUILD_OBS),
       entry(PHASE.MAINTENANCE_GATE_PASSED, {}),
+    ],
+  };
+}
+
+function fullJournalThroughArchived(phase = PHASE.ARCHIVED) {
+  const base = fullJournal(PHASE.MAINTENANCE_GATE_PASSED);
+  return {
+    ...base,
+    phase,
+    history: [
+      ...base.history,
+      entry(PHASE.STOPPED, STOPPED_OBS),
+      entry(PHASE.MOUNT_RESOLVED, MOUNT_RESOLVED_OBS),
+      entry(PHASE.ARCHIVED, ARCHIVED_OBS),
     ],
   };
 }
@@ -133,5 +154,48 @@ test("validateJournalAgainstStateMachine rejects an OLD_IMAGE_SAVED observation 
 test("validateJournalAgainstStateMachine rejects a BUILD_PREPARED observation with a malformed image_id", () => {
   const journal = fullJournal();
   journal.history[2] = entry(PHASE.BUILD_PREPARED, { ...BUILD_OBS, image_id: "not-an-image" });
+  assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
+});
+
+test("validateJournalAgainstStateMachine accepts a full journal through ARCHIVED", () => {
+  assert.doesNotThrow(() => validateJournalAgainstStateMachine(fullJournalThroughArchived()));
+});
+
+test("validateJournalAgainstStateMachine rejects a STOPPED observation with a non-integer exit code", () => {
+  const journal = fullJournalThroughArchived();
+  journal.history[4] = entry(PHASE.STOPPED, { ...STOPPED_OBS, stop_exit_code: "0" });
+  assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
+});
+
+test("validateJournalAgainstStateMachine accepts a STOPPED observation with null exit code/oom (unmeasured)", () => {
+  const journal = fullJournalThroughArchived();
+  journal.history[4] = entry(PHASE.STOPPED, { stop_exit_code: null, stop_oom_killed: null });
+  assert.doesNotThrow(() => validateJournalAgainstStateMachine(journal));
+});
+
+test("validateJournalAgainstStateMachine rejects a MOUNT_RESOLVED observation with an empty volume_id", () => {
+  const journal = fullJournalThroughArchived();
+  journal.history[5] = entry(PHASE.MOUNT_RESOLVED, { volume_id: "" });
+  assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
+});
+
+test("validateJournalAgainstStateMachine rejects an ARCHIVED observation with a malformed archive sha256", () => {
+  const journal = fullJournalThroughArchived();
+  journal.history[6] = entry(PHASE.ARCHIVED, { ...ARCHIVED_OBS, archive: { path: "/x", sha256: "not-a-sha" } });
+  assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
+});
+
+test("validateJournalAgainstStateMachine rejects an ARCHIVED observation with malformed required_entries", () => {
+  const journal = fullJournalThroughArchived();
+  journal.history[6] = entry(PHASE.ARCHIVED, {
+    ...ARCHIVED_OBS,
+    required_entries: [{ path: "users.dets", owner: "banana", mode: "0600" }],
+  });
+  assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
+});
+
+test("validateJournalAgainstStateMachine rejects skipping STOPPED straight to ARCHIVED", () => {
+  const journal = fullJournalThroughArchived();
+  journal.history.splice(4, 1); // drop the STOPPED entry
   assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
 });
