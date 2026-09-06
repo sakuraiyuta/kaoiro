@@ -563,8 +563,29 @@ on the live system.
 
 **Issue #220 absorption — persistence-path / env consistency.** Once the
 target image exposes `KaoiroServer.PersistencePaths.manifest/0` (issue #310,
-not yet landed, contract below), `update` queries it by image ID and, for
-every reported persistence-path env var, compares **compose's resolved
+not yet landed), `update` queries it by image ID:
+
+```sh
+docker run --rm --entrypoint /app/bin/kaoiro_server <image_id> eval \
+  'IO.puts(Jason.encode!(KaoiroServer.PersistencePaths.manifest()))'
+```
+
+**The contract #310 must satisfy**: stdout is a JSON array; each element has
+exactly the keys `store` (string), `env` (the persistence-path env var name),
+`default_file` (the bare filename under the fallback dir), and `default_path`
+(the ABSOLUTE path `runtime.exs`'s own fallback resolves to when `env` is
+unset — A-MF-2 below). Two DIFFERENT failure modes, handled differently: the
+eval **process** exiting non-zero means this module has not landed on this
+image (a pre-#310 image, or an old image a rollback targets) — recorded as
+`env_consistency: {skipped: true, reason}`, never a failure. The eval process
+exiting **0 but printing anything else** (not a JSON array, an element
+missing one of the four keys, an empty `env`/`default_path`) is treated as
+actively wrong, not absent — `update` throws `DeployError` rather than
+skipping, the same way `docker compose config` returning garbage does
+elsewhere in this section.
+
+`update` then, for every reported persistence-path env var, compares
+**compose's resolved
 declaration** against **the currently-running (old) container's EFFECTIVE
 path for that store** — the container's own env value if it is set, else the
 image's own documented `default_path` for it (what the app itself falls back
@@ -762,6 +783,8 @@ object:
 
 | Field | Meaning |
 |---|---|
+| `command` | Always `"status"` |
+| `docker` | `"docker"` or `"fake"` — the same override-visibility field every subcommand returns, so a gated test run (`KAOIRO_DEPLOY_DOCKER_BIN` + `--config allow_docker_override: true`) can never be mistaken for a production one when reading output back |
 | `container` | `{running: true, container}`, or `{running: false, branch, reason, container}` (the A/B/D branch table below), or `{running: false, error}` when docker itself is unreachable |
 | `health` | The target's own `GET /api/health` body when a container is running, `null` otherwise, or `{error}` if the request itself failed |
 | `unfinishedTransaction` | `null`, `{id, phase, envConsistency}` for an in-progress transaction, or `{error, directory}` if its journal itself is unreadable/inconsistent |
