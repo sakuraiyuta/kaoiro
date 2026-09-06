@@ -402,6 +402,10 @@ engine-name allowlist or invent a default observed mode.
 
 The Claude adapter must publish the capability through initialStatusExt and
 retain it in subsequent status envelopes, independently of SDK initialization.
+This requirement starts with the constructed host's first status: a pre-host
+state_change with empty ext legitimately hides the picker. An older Claude
+wrapper without the new capability also hides it until affirmative mode metadata
+arrives; upgrade that wrapper to make the picker available before its first turn.
 This producer must ship with the dashboard gate, so launching or restoring
 without an explicit mode and without sending input still leaves a usable mode
 picker. The existing command's validation, authorization and SDK mode semantics
@@ -493,6 +497,15 @@ this execution, not a newer pending `next` selection. Revision zero is only a
 launch baseline and cannot establish operator intent. A mismatch remains
 eligible for drift and must also report a policy violation even if it happens
 to equal the resume snapshot.
+
+For the selection's expected network value, use
+`effectiveNetworkAccess(submitted.requested.sandbox, submitted.requested.network_access)`
+from [network_access.ts](../../wrapper/codex/src/network_access.ts), the
+normalization source of truth in
+[ADR-0033](../adr/0033-permission-model-dual-axis.md#network-configuration-and-effective-access).
+Compare this expectation with the observed effective value. Do not renormalize
+stored snapshot values or contradictory observations during comparison: doing
+so would hide legacy snapshot drift or an observation mismatch.
 
 Recover this attribution from the authoritative selection delivered by
 permission_sync after relaunch; it must not depend on a process-local
