@@ -18,6 +18,7 @@ import {
   resolveHealthUrl,
   runBuild,
   runStart,
+  runStatus,
   runUpdate,
   VOLUME_LISTING_SCRIPT,
 } from "../kaoiro-server-deploy.mjs";
@@ -1169,3 +1170,149 @@ test("runUpdate's unfinished-transaction guidance still offers --transaction bef
 function readdirSyncNonHidden(dir) {
   return readdirSync(dir).filter((name) => !name.startsWith("."));
 }
+
+// --- status --------------------------------------------------------------
+// `status` never mutates: no lock, no transaction directory, no docker
+// mutation. Every test below only reads.
+
+test("status reports a running container without falling back to classify()'s branch table", () => {
+  const result = withScenario("running", () => runStatus({ repo: workDir }, configWithOverride()));
+  assert.equal(result.container.running, true);
+  assert.equal(result.container.container, "kaoiro-c1");
+  assert.equal(result.unfinishedTransaction, null);
+  assert.deepEqual(result.doneTransactions, []);
+});
+
+test("status reports branch A when the container is stopped", () => {
+  const result = withScenario("stopped", () => runStatus({ repo: workDir }, configWithOverride()));
+  assert.equal(result.container.running, false);
+  assert.equal(result.container.branch, "A");
+  assert.equal(result.container.container, "kaoiro-c1");
+});
+
+test("status reports branch C when there is no container and no prior state", () => {
+  const result = withOverrideEnv(() => runStatus({ repo: workDir }, configWithOverride()));
+  assert.equal(result.container.running, false);
+  assert.equal(result.container.branch, "C");
+});
+
+test("status reports branch B when prior transaction state exists but no container is found", () => {
+  const backupRoot = join(root, "kaoiro-deploy");
+  mkdirSync(join(backupRoot, "20260906T000000Z"), { recursive: true });
+  const result = withOverrideEnv(() =>
+    runStatus({ repo: workDir }, { ...configWithOverride(), backup_root: backupRoot }),
+  );
+  assert.equal(result.container.running, false);
+  assert.equal(result.container.branch, "B");
+});
+
+test("status's health field carries the health body when the container answers", () => {
+  const result = withScenario("running", () =>
+    runStatus({ repo: workDir }, { ...configWithOverride(), health_url: "http://fake-server.invalid/api/health" }),
+  );
+  assert.equal(result.health.url, "http://fake-server.invalid/api/health");
+  // withOverrideEnv's own default sets KAOIRO_TEST_HEALTH_REVISION to
+  // headSha unless a caller already set it — status only surfaces what
+  // curl returned, it does not judge whether it matches any target.
+  assert.equal(result.health.build_revision, headSha);
+});
+
+test("status's health field reports an error (not a crash) when curl itself fails to resolve the URL", () => {
+  // "running" is not a case `docker compose port` recognizes in this
+  // fixture (only the health-url-* scenarios are), so it falls through
+  // to empty output — the same "no output" failure resolveHealthUrl's
+  // own direct unit test exercises via "health-url-port-empty". Reusing
+  // it here (rather than "health-url-port-fails", which is ALSO absent
+  // from the fixture's `compose ps` case list and would report no
+  // container at all) keeps container.running true while still failing
+  // health_url resolution.
+  const result = withScenario("running", () =>
+    runStatus({ repo: workDir }, { ...configWithOverride(), health_url: null }),
+  );
+  assert.equal(result.container.running, true);
+  assert.ok(result.health.error, "expected a health.error, not a thrown exception");
+});
+
+test("status's health field reports an error (not a crash) when curl itself is unavailable", () => {
+  withScenario("running", () => {
+    const priorCurl = process.env.KAOIRO_DEPLOY_CURL_BIN;
+    process.env.KAOIRO_DEPLOY_CURL_BIN = join(root, "does-not-exist-curl");
+    try {
+      const result = runStatus(
+        { repo: workDir },
+        { ...configWithOverride(), health_url: "http://fake-server.invalid/api/health" },
+      );
+      assert.equal(result.container.running, true);
+      assert.ok(result.health.error, "expected a health.error, not a thrown exception");
+    } finally {
+      if (priorCurl === undefined) delete process.env.KAOIRO_DEPLOY_CURL_BIN;
+      else process.env.KAOIRO_DEPLOY_CURL_BIN = priorCurl;
+    }
+  });
+});
+
+test("status does not attempt a health check when no container is running", () => {
+  const result = withScenario("stopped", () => runStatus({ repo: workDir }, configWithOverride()));
+  assert.equal(result.health, null);
+});
+
+test("status surfaces an unfinished transaction's id and phase", () => {
+  let result;
+  withScenario("running-broken-archive", () => {
+    try {
+      runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured());
+    } catch (err) {
+      assert.ok(err instanceof DeployError);
+    }
+    result = runStatus({ repo: workDir }, configWithCleanStopMeasured());
+  });
+  const backupRoot = configWithCleanStopMeasured().backup_root;
+  const [transactionId] = readdirSyncNonHidden(backupRoot);
+  assert.equal(result.unfinishedTransaction.id, transactionId);
+  assert.equal(result.unfinishedTransaction.phase, "mount_resolved");
+});
+
+test("status lists a completed transaction with its source/target SHA and completion time", () => {
+  let result;
+  withScenario("running-clean-stop", () => {
+    const update = runUpdate(
+      { repo: workDir, target: headSha, maintenanceApproved: true },
+      configWithCleanStopMeasured(),
+    );
+    assert.equal(update.phase, "done");
+    result = runStatus({ repo: workDir }, configWithCleanStopMeasured());
+  });
+  assert.equal(result.unfinishedTransaction, null);
+  assert.equal(result.doneTransactions.length, 1);
+  const [entry] = result.doneTransactions;
+  assert.equal(entry.sourceSha, headSha);
+  assert.equal(entry.targetSha, headSha);
+  assert.ok(typeof entry.doneAt === "string" && entry.doneAt !== "");
+});
+
+test("status still lists a DONE transaction (with null facts) when its manifest.json is missing", () => {
+  let result;
+  const backupRoot = configWithCleanStopMeasured().backup_root;
+  withScenario("running-clean-stop", () => {
+    const update = runUpdate(
+      { repo: workDir, target: headSha, maintenanceApproved: true },
+      configWithCleanStopMeasured(),
+    );
+    rmSync(join(backupRoot, update.transactionId, "manifest.json"));
+    result = runStatus({ repo: workDir }, configWithCleanStopMeasured());
+  });
+  assert.equal(result.doneTransactions.length, 1);
+  const [entry] = result.doneTransactions;
+  assert.equal(entry.sourceSha, null);
+  assert.equal(entry.targetSha, null);
+  // journal.json is untouched, so completion time is still readable
+  // independently of the missing manifest.
+  assert.ok(typeof entry.doneAt === "string" && entry.doneAt !== "");
+});
+
+test("status's scopeNote names exactly the branches it can and cannot answer", () => {
+  const result = withScenario("running", () => runStatus({ repo: workDir }, configWithOverride()));
+  assert.ok(result.scopeNote.includes("(0)/(1)/(3)/(4)/(5)"));
+  assert.ok(result.scopeNote.includes("not (2)"));
+  assert.ok(result.scopeNote.includes("5-b"));
+});
