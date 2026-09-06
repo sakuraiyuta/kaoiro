@@ -110,14 +110,40 @@ function resolveCurlBin(env = process.env) {
   return env.KAOIRO_DEPLOY_CURL_BIN || "curl";
 }
 
+/** director ruling 2026-09-06, #306 (c3) review: config.health_url has
+ *  no default (a hardcoded 127.0.0.1:4000 MISSES in production, where
+ *  KAOIRO_PUBLISH_IP publishes on a different host) — derived instead
+ *  from `docker compose port <service> 4000`, the exact fact the
+ *  compose project itself holds about where it actually published the
+ *  port, measured live (`docker compose port web 8080` against a real
+ *  published container: prints `host:port`, e.g. `127.0.0.1:18080`).
+ *  An explicit config override always wins and skips this call. */
+export function resolveHealthUrl(bin, serverDir, config) {
+  if (config.health_url !== null) return config.health_url;
+  let hostPort;
+  try {
+    hostPort = runDocker(bin, ["compose", "port", SERVICE, "4000"], { cwd: serverDir });
+  } catch (err) {
+    fail(
+      `could not resolve the published host:port for ${SERVICE} port 4000 via 'docker compose port' (set health_url explicitly via --config to skip this): ${err.message}`,
+    );
+  }
+  if (hostPort === "") {
+    fail(`'docker compose port ${SERVICE} 4000' returned no output — is the service published on that port?`);
+  }
+  return `http://${hostPort}/api/health`;
+}
+
 /** `GET url`, parsed as JSON. Never throws: a curl failure (connection
- *  refused, timeout, non-2xx) or a non-JSON body are both just "this
+ *  refused, timeout, non-2xx — `--fail` turns the latter into a non-zero
+ *  exit instead of printing an error-page body that might otherwise
+ *  parse as unrelated JSON) or a non-JSON body are both just "this
  *  attempt did not succeed" for pollHealth's retry loop, not a reason to
  *  abort the whole poll on the first flaky response. */
 function fetchHealth(curlBin, url) {
   let raw;
   try {
-    raw = execFileSync(curlBin, ["-sS", "--max-time", "5", url], { encoding: "utf8" });
+    raw = execFileSync(curlBin, ["-sS", "--fail", "--max-time", "5", url], { encoding: "utf8" });
   } catch (err) {
     return { ok: false, error: err.message };
   }
@@ -128,19 +154,22 @@ function fetchHealth(curlBin, url) {
   }
 }
 
-/** Polls `url` every `intervalMs` until its `build_revision` equals
- *  `targetSha` or `timeoutMs` elapses — deployment.md 4.5's provenance
- *  check ("the running JS/image derives from the target commit") via
- *  `GET /api/health` (server/lib/kaoiro_server_web/controllers/
- *  health_controller.ex). Returns the matching health body; throws
- *  DeployError naming the LAST observed attempt otherwise, so a
- *  diagnosis does not have to re-run curl by hand first. */
+/** Polls `url` every `intervalMs` until it reports the target build
+ *  cleanly — `build_revision === targetSha` AND `build_dirty === false`
+ *  — or `timeoutMs` elapses. deployment.md 4.5's own provenance table
+ *  lists BOTH as success criteria ("build_dirty is intentional ...
+ *  false for a clean build at target SHA"); checking revision alone
+ *  would call a dirty build at the right SHA healthy. `GET /api/health`
+ *  is server/lib/kaoiro_server_web/controllers/health_controller.ex's
+ *  own endpoint. Returns the matching health body; throws DeployError
+ *  naming the LAST observed attempt otherwise, so a diagnosis does not
+ *  have to re-run curl by hand first. */
 function pollHealth(curlBin, url, targetSha, intervalMs, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let last = null;
   while (Date.now() < deadline) {
     const result = fetchHealth(curlBin, url);
-    if (result.ok && result.body.build_revision === targetSha) {
+    if (result.ok && result.body.build_revision === targetSha && result.body.build_dirty === false) {
       return result.body;
     }
     last = result;
@@ -540,7 +569,7 @@ export function runUpdate(flags, config) {
               "docker compose stop -t 30",
               "archive /var/lib/kaoiro",
               "docker compose up -d --no-build",
-              `poll ${config.health_url} for build_revision=${target}`,
+              `poll ${config.health_url ?? "<published host:port>/api/health"} for build_revision=${target}, build_dirty=false`,
               `wait ${config.stability_window_ms}ms for a stable container`,
               "prune old backups (keep_generations/retention_days)",
             ],
@@ -845,9 +874,10 @@ export function runUpdate(flags, config) {
     journal = advancePhase(dir, journal, PHASE.UP, {}, validateJournalAgainstStateMachine);
 
     const curlBin = resolveCurlBin();
+    const healthUrl = resolveHealthUrl(bin, serverDir, config);
     const health = pollHealth(
       curlBin,
-      config.health_url,
+      healthUrl,
       target,
       config.health_poll_interval_ms,
       config.health_poll_timeout_ms,
