@@ -50,9 +50,9 @@ omitted here.)
 
 | Key | Default |
 |---|---|
-| `backup_root` | `~/kaoiro-deploy` (absolute path required if overridden) |
+| `backup_root` | `~/kaoiro-deploy` (absolute path required if overridden); also selects the filesystem the capacity preflight measures |
 | `keep_generations` / `retention_days` | `5` / `30` |
-| `capacity_multiplier` | `10` (refuse an update when free space < 10× the volume size) |
+| `capacity_multiplier` | `10` (refuse an update when free space on `backup_root`'s filesystem < 10× the volume size) |
 | `health_poll_interval_ms` / `health_poll_timeout_ms` | `2000` / `60000` |
 | `stability_window_ms` | `30000` |
 | `health_url` | `null` (derived from `docker compose port`; override only if wrong for this host) |
