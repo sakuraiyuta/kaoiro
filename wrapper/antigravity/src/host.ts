@@ -19,6 +19,7 @@ import {
   type PendingQuestionExt,
   type PermissionBroker,
   type PermissionMode,
+  type PermissionSelection,
   type QuestionBroker,
   type ToolDescriptor,
   type WrapperConfig,
@@ -276,6 +277,10 @@ export class AntigravityHost implements EngineAdapter {
 
   async setEffort(_level: string): Promise<void> {
     throw new Error("antigravity effort switching is unavailable in Stage A");
+  }
+
+  async setPermission(_selection: PermissionSelection): Promise<void> {
+    throw new Error("antigravity permission switching is unavailable in Stage A");
   }
 
   async setPermissionMode(_mode: PermissionMode): Promise<void> {

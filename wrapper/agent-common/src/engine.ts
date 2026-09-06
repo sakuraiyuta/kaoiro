@@ -9,6 +9,7 @@ import type {
   KaoiroState,
   PendingPermissionExt,
   PendingQuestionExt,
+  PermissionSelection,
   PermissionMode,
 } from "./types.js";
 
@@ -30,6 +31,9 @@ export interface EngineAdapter {
   setModel(value: string): Promise<void>;
   /** Applies an operator effort switch for subsequent turns (#54). */
   setEffort(level: string): Promise<void>;
+  /** Accepts the server-issued raw permission pair for a later execution.
+   *  Engines without the selector reject explicitly. */
+  setPermission(selection: PermissionSelection): Promise<void>;
   /** Applies an operator permission change (#58). Engines with launch-fixed
    *  permissions (codex, ADR-0033 F3) may reject mid-session changes. */
   setPermissionMode(mode: PermissionMode): Promise<void>;

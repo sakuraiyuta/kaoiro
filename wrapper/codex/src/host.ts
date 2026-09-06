@@ -16,6 +16,15 @@ import type {
   ThreadEvent,
   ThreadOptions,
 } from "@openai/codex-sdk";
+import type {
+  PermissionConfiguration,
+  PermissionControlExt,
+  PermissionObservation,
+  PermissionSelection,
+  PermissionSubmission,
+  PermissionSyncMessage,
+  WrapperPermissionLifecycleMessage,
+} from "@kaoiro/protocol";
 import {
   initialMachineState,
   makeAttachRejected,
@@ -76,6 +85,8 @@ import { effectiveNetworkAccess } from "./network_access.js";
 import {
   codexRateLimitsFromRolloutIn,
   codexRolloutsRoot,
+  captureCodexPermissionRolloutCursor,
+  codexPermissionContextAfter,
   isRolloutCorruptionDetail,
   repairRolloutCorruption,
   resolveCodexModel,
@@ -84,6 +95,7 @@ import {
   type CodexRateLimitWindow,
   type RolloutCorruptionVerdict,
   type RolloutRepairResult,
+  type CodexPermissionRolloutCursor,
 } from "./rollout.js";
 import {
   CodexTurnDiagnostics,
@@ -125,6 +137,7 @@ export interface CodexClientLike {
 type CodexCatalog = ReturnType<typeof resolveCodexCatalog>;
 
 const DEFAULT_CODEX_TERMINAL_DRAIN_GRACE_MS = 5_000;
+const DEFAULT_PERMISSION_SYNC_WARNING_MS = 10_000;
 
 export type CodexLifecycleEvent =
   | { kind: "turn_start"; turnToken: string }
@@ -141,6 +154,18 @@ type NextEventOutcome<T> =
   | { kind: "result"; result: IteratorResult<T> }
   | { kind: "error"; error: unknown }
   | { kind: "timeout"; pending: Promise<IteratorResult<T>> };
+
+type AttemptedTurnSettings = {
+  model: string | null;
+  effort: string | null;
+  effortReset: boolean;
+  accountDefault: boolean;
+  resolutionGeneration: number;
+  permission: {
+    submission: PermissionSubmission;
+    cursor: CodexPermissionRolloutCursor;
+  } | null;
+};
 
 /** Wait for one post-terminal item without allowing a perpetually open SDK
  * iterator to hold the host's single-turn queue forever. The pending next()
@@ -187,6 +212,7 @@ function nextEventBeforeDeadline<T>(
 function initialStatusExtFromCatalog(
   catalog: CodexCatalog,
   model: string | null,
+  permissionSyncSupported = false,
 ): Record<string, unknown> {
   return {
     engine: "codex",
@@ -212,6 +238,7 @@ function initialStatusExtFromCatalog(
       // なし)。UI は「未対応」表示。upstream で compaction telemetry が
       // 確定するまで estimated 投影も行わない (docs/specs/codex-sdk-events.md)。
       supports_context_usage: false,
+      supports_permission_switch: permissionSyncSupported,
     },
     ...(catalog.length > 0 ? { models: catalog } : {}),
   };
@@ -350,6 +377,16 @@ export interface CodexHostOptions {
   terminalDrainGraceMs?: number;
   /** Overrides the bundled CLI version for deterministic compatibility tests. */
   codexClientVersion?: string;
+  /** Whether the current server join negotiated the permission selector. */
+  permissionSyncSupported?: boolean;
+  /** Gates each successor exec while a negotiated join awaits its sync. */
+  waitForPermissionSync?: () => Promise<void>;
+  /** Warns after this wait without releasing the barrier. */
+  permissionSyncWarningMs?: number;
+  /** Rollout root used for per-exec permission confirmation. */
+  permissionRolloutRoot?: string;
+  /** Persists a wrapper-observed permission lifecycle event. */
+  onPermissionLifecycle?: (event: WrapperPermissionLifecycleMessage) => void;
   /** Test seam for deterministic materialization lifecycle races. */
   materializeImages?: (
     agentId: string,
@@ -382,6 +419,15 @@ function rateLimitsDiffer(
     }
   }
   return false;
+}
+
+function samePermissionSelection(
+  left: PermissionSelection,
+  right: PermissionSelection,
+): boolean {
+  return left.revision === right.revision &&
+    left.requested.sandbox === right.requested.sandbox &&
+    left.requested.network_access === right.requested.network_access;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -519,6 +565,14 @@ export class CodexHost implements EngineAdapter {
   readonly #resumeSnapshot: ResolvedSnapshotExt | null;
   readonly #sandbox: NonNullable<WrapperConfig["sandbox"]>;
   readonly #networkAccess: boolean;
+  #permissionSyncSupported: boolean;
+  #permissionSelection: PermissionSelection;
+  #permissionControl: PermissionControlExt | null = null;
+  #permissionCurrentEffective: PermissionObservation | null = null;
+  #permissionLastEffective: PermissionObservation | null = null;
+  #permissionDispatchBlocked = false;
+  #permissionDispatchWake: (() => void) | null = null;
+  readonly #permissionSyncWarningMs: number;
   readonly #cwd: string = process.cwd();
   readonly #catalog: CodexCatalog;
   #pendingPermission: PendingPermissionExt | null = null;
@@ -634,6 +688,23 @@ export class CodexHost implements EngineAdapter {
     }
     this.#sandbox = config.sandbox ?? "workspace-write";
     this.#networkAccess = config.network_access ?? false;
+    this.#permissionSyncSupported = options.permissionSyncSupported ?? false;
+    this.#permissionSelection = {
+      revision: 0,
+      requested: {
+        sandbox: this.#sandbox,
+        network_access: this.#networkAccess,
+      },
+    };
+    this.#permissionSyncWarningMs = Math.max(
+      0,
+      options.permissionSyncWarningMs ?? DEFAULT_PERMISSION_SYNC_WARNING_MS,
+    );
+    if (this.#permissionSyncSupported) {
+      this.#permissionControl = this.#pendingPermissionControl(
+        this.#permissionSelection,
+      );
+    }
     // issue #292: same merge as initialStatusExt above, applied to the
     // constructor's own catalog (ext.models / effort-switch / setModel).
     this.#catalog = resolveCodexCatalog(
@@ -732,14 +803,19 @@ export class CodexHost implements EngineAdapter {
 
   /** Single engine-neutral SoT for both state_change.ext and whoami (#113). */
   #effectiveStatusSnapshot(): EffectiveStatusSnapshot {
-    // enforcement: "os" (ADR-0057 F4/F4c addendum) — Codex enforces sandbox
-    // through the SDK's own OS sandbox, unlike Antigravity's advisory
-    // (argument-inspection-only) enforcement.
-    const permission = {
-      sandbox: this.#sandbox,
-      approval: "never",
-      enforcement: "os",
-    } as const;
+    const observed = this.#permissionSyncSupported
+      ? this.#permissionCurrentEffective
+      : {
+          permission: {
+            sandbox: this.#sandbox,
+            approval: "never" as const,
+            enforcement: "os" as const,
+          },
+          network_access: effectiveNetworkAccess(
+            this.#sandbox,
+            this.#networkAccess,
+          ),
+        };
     return {
       engine: "codex",
       resolved: {
@@ -751,13 +827,14 @@ export class CodexHost implements EngineAdapter {
         ...(this.#effortSource !== null
           ? { effort_source: this.#effortSource }
           : {}),
-        sandbox: this.#sandbox,
-        network_access: effectiveNetworkAccess(
-          this.#sandbox,
-          this.#networkAccess,
-        ),
+        ...(observed === null
+          ? {}
+          : {
+              sandbox: observed.permission.sandbox,
+              network_access: observed.network_access,
+            }),
       },
-      permission,
+      ...(observed === null ? {} : { permission: observed.permission }),
     };
   }
 
@@ -939,6 +1016,7 @@ export class CodexHost implements EngineAdapter {
     this.#gcTimer = null;
     void this.#dropQueuedTempTurns();
     this.#abort?.abort();
+    this.#permissionDispatchWake?.();
     this.#wake?.();
   }
 
@@ -1037,6 +1115,58 @@ export class CodexHost implements EngineAdapter {
     this.#effortPending = level;
     this.#effortResetPending = false;
     this.#emitState(this.#machine.state);
+  }
+
+  async setPermission(selection: PermissionSelection): Promise<void> {
+    if (!this.#permissionSyncSupported) {
+      throw new Error("codex: permission switching is unavailable on this server");
+    }
+    if (selection.revision <= this.#permissionSelection.revision) return;
+    this.#permissionSelection = selection;
+    this.#permissionDispatchBlocked = false;
+    this.#permissionControl = this.#pendingPermissionControl(selection);
+    this.#emitState(this.#machine.state);
+    this.#permissionDispatchWake?.();
+    this.#wake?.();
+  }
+
+  /** Called by the CLI after each join reply. A legacy server cannot leave a
+   * selector advertised from an earlier negotiated connection. */
+  setPermissionSyncSupported(supported: boolean): void {
+    if (this.#permissionSyncSupported === supported) return;
+    this.#permissionSyncSupported = supported;
+    if (!supported) {
+      this.#permissionControl = null;
+      this.#permissionCurrentEffective = null;
+    } else {
+      this.#permissionControl = this.#pendingPermissionControl(
+        this.#permissionSelection,
+      );
+    }
+    this.#emitState(this.#machine.state);
+  }
+
+  /** Applies the server's current-join snapshot before a later exec crosses
+   * the readiness barrier. A stale snapshot cannot replace a newer relay. */
+  applyPermissionSync(message: PermissionSyncMessage): void {
+    if (!this.#permissionSyncSupported) return;
+    const next = message.next ?? this.#permissionSelection;
+    if (next.revision < this.#permissionSelection.revision) return;
+    const historical = message.control === null
+      ? null
+      : message.control.status === "applied"
+        ? message.control.effective
+        : message.control.last_effective;
+    this.#permissionSelection = next;
+    this.#permissionCurrentEffective = null;
+    if (historical !== null && historical !== undefined) {
+      this.#permissionLastEffective = historical;
+    }
+    this.#permissionControl = this.#pendingPermissionControl(next);
+    this.#permissionDispatchBlocked = false;
+    this.#emitState(this.#machine.state);
+    this.#permissionDispatchWake?.();
+    this.#wake?.();
   }
 
   async setPermissionMode(_mode: PermissionMode): Promise<void> {
@@ -1176,13 +1306,13 @@ export class CodexHost implements EngineAdapter {
     }
   }
 
-  #threadOptions(
-    modelPending: string | null,
-    effortPending: string | null,
-    effortReset: boolean,
-  ): ThreadOptions {
+  #threadOptions(attempted: AttemptedTurnSettings): ThreadOptions {
+    const { model: modelPending, effort: effortPending, effortReset } = attempted;
+    const requestedPermission = attempted.permission?.submission.requested;
+    const sandbox = requestedPermission?.sandbox ?? this.#sandbox;
+    const networkAccess = requestedPermission?.network_access ?? this.#networkAccess;
     const options: ThreadOptions = {
-      sandboxMode: this.#sandbox,
+      sandboxMode: sandbox,
       workingDirectory: this.#cwd,
       skipGitRepoCheck: true,
     };
@@ -1212,8 +1342,8 @@ export class CodexHost implements EngineAdapter {
         ThreadOptions["modelReasoningEffort"]
       >;
     }
-    if (this.#sandbox === "workspace-write") {
-      options.networkAccessEnabled = this.#networkAccess;
+    if (sandbox === "workspace-write") {
+      options.networkAccessEnabled = networkAccess;
     }
     return options;
   }
@@ -1227,6 +1357,8 @@ export class CodexHost implements EngineAdapter {
     retryAfterRepair = false,
     settled: { value: boolean } = { value: false },
   ): Promise<void> {
+    await this.#awaitPermissionDispatch();
+    if (this.#closed) return;
     this.#activeTurnToken = turnToken;
     this.#activeTurnConversationIds = conversationIds;
     const diagnostics = new CodexTurnDiagnostics(this.#turnTraceCaptureDir);
@@ -1256,7 +1388,22 @@ export class CodexHost implements EngineAdapter {
         this.#modelPending === null &&
         (this.#model === null || this.#modelSource === "default"),
       resolutionGeneration,
+      permission: this.#permissionSyncSupported
+        ? {
+            submission: {
+              ...this.#permissionSelection,
+              execution_id: randomUUID(),
+            },
+            cursor: captureCodexPermissionRolloutCursor(
+              this.#options.permissionRolloutRoot ?? codexRolloutsRoot(),
+              this.#sessionId,
+            ),
+          }
+        : null,
     };
+    if (attempted.permission !== null) {
+      this.#beginPermissionExecution(attempted.permission.submission);
+    }
     // issue #263 (ふじ 必須pin): capture whether THIS turn is a resume
     // attempt, and which session id it targets, BEFORE anything in the
     // stream below can move `#sessionId`. Only a resume has a pre-existing
@@ -1289,18 +1436,10 @@ export class CodexHost implements EngineAdapter {
         : isResumeAttempt
           ? codex.resumeThread(
               resumeSessionId,
-              this.#threadOptions(
-                attempted.model,
-                attempted.effort,
-                attempted.effortReset,
-              ),
+              this.#threadOptions(attempted),
             )
           : codex.startThread(
-              this.#threadOptions(
-                attempted.model,
-                attempted.effort,
-                attempted.effortReset,
-              ),
+              this.#threadOptions(attempted),
             );
     // Creating/resuming the SDK thread is the last synchronous boundary
     // before `runStreamed()` hands the input to Codex. Confirm #247 delivery
@@ -1422,6 +1561,7 @@ export class CodexHost implements EngineAdapter {
         if (event.type === "turn.completed") {
           sawResult = true;
           settled.value = true;
+          await this.#observePermission(attempted);
           this.#finishTurn(true, attempted);
           this.#emitResult({
             ...(finalText !== null ? { text: finalText } : {}),
@@ -1441,6 +1581,7 @@ export class CodexHost implements EngineAdapter {
         } else if (event.type === "turn.failed") {
           sawResult = true;
           settled.value = true;
+          await this.#observePermission(attempted);
           this.#finishTurn(false, attempted);
           const detail = threadEventToErrorDetail(event);
           // issue #300: this is the branch that actually fires for a
@@ -1491,6 +1632,7 @@ export class CodexHost implements EngineAdapter {
         // event, or process death): fold into the error path so the agent
         // never wedges in thinking/tool_running.
         settled.value = true;
+        await this.#observePermission(attempted);
         this.#finishTurn(false, attempted);
         // issue #300: recordedThreadError comes from a stream-level
         // `error` event (distinct from turn.failed, see the branch
@@ -1622,6 +1764,7 @@ export class CodexHost implements EngineAdapter {
           }
         }
         settled.value = true;
+        await this.#observePermission(attempted);
         this.#finishTurn(false, attempted);
         if (rolloutCorrupted && resumeSessionId !== null) {
           // Remember both the session id AND this confirming turn's own
@@ -1769,6 +1912,211 @@ export class CodexHost implements EngineAdapter {
     process.stderr.write(`${message}\n`);
   };
 
+  #pendingPermissionControl(
+    selection: PermissionSelection,
+    submitted?: PermissionSubmission,
+    effective?: PermissionObservation,
+  ): PermissionControlExt {
+    return {
+      ...selection,
+      constraints: { approval: "never", enforcement: "os" },
+      status: "pending",
+      ...(submitted === undefined ? {} : { submitted }),
+      ...(effective === undefined ? {} : { effective }),
+      ...(this.#permissionLastEffective === null
+        ? {}
+        : { last_effective: this.#permissionLastEffective }),
+    };
+  }
+
+  #beginPermissionExecution(submission: PermissionSubmission): void {
+    if (this.#permissionCurrentEffective !== null) {
+      this.#permissionLastEffective = this.#permissionCurrentEffective;
+    }
+    this.#permissionCurrentEffective = null;
+    if (samePermissionSelection(this.#permissionSelection, submission)) {
+      this.#permissionControl = {
+        ...this.#permissionSelection,
+        constraints: { approval: "never", enforcement: "os" },
+        status: "applying",
+        submitted: submission,
+        ...(this.#permissionLastEffective === null
+          ? {}
+          : { last_effective: this.#permissionLastEffective }),
+      };
+    } else {
+      this.#permissionControl = this.#pendingPermissionControl(
+        this.#permissionSelection,
+        submission,
+      );
+    }
+    this.#emitState(this.#machine.state);
+  }
+
+  async #awaitPermissionDispatch(): Promise<void> {
+    const waitForSync = this.#options.waitForPermissionSync;
+    if (waitForSync !== undefined) {
+      const warning = setTimeout(() => {
+        process.stderr.write(
+          "codex: waiting for permission_sync; next exec remains gated\n",
+        );
+      }, this.#permissionSyncWarningMs);
+      try {
+        await waitForSync();
+      } finally {
+        clearTimeout(warning);
+      }
+    }
+    while (this.#permissionDispatchBlocked && !this.#closed) {
+      await new Promise<void>((resolve) => {
+        this.#permissionDispatchWake = resolve;
+      });
+      this.#permissionDispatchWake = null;
+      if (waitForSync !== undefined) await waitForSync();
+    }
+  }
+
+  async #observePermission(
+    attempted: AttemptedTurnSettings,
+  ): Promise<void> {
+    const permission = attempted.permission;
+    if (permission === null) return;
+    const sessionId = this.#sessionId;
+    let context = sessionId === null
+      ? null
+      : codexPermissionContextAfter(permission.cursor, sessionId);
+    for (let attempt = 0; context === null && attempt < 4; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      context = sessionId === null
+        ? null
+        : codexPermissionContextAfter(permission.cursor, sessionId);
+    }
+    if (context === null) {
+      this.#permissionObservationFailed(
+        permission.submission,
+        "observation_unavailable",
+      );
+      return;
+    }
+    const expected = permission.submission.requested;
+    if (context.approvalPolicy !== "never") {
+      process.stderr.write(
+        `codex: permission policy mismatch: expected approval=never; observed approval=${context.approvalPolicy}\n`,
+      );
+      this.#permissionObservationFailed(
+        permission.submission,
+        "approval_policy_mismatch",
+      );
+      return;
+    }
+    const expectedNetwork = effectiveNetworkAccess(
+      expected.sandbox,
+      expected.network_access,
+    );
+    if (context.sandbox !== expected.sandbox || context.networkAccess !== expectedNetwork) {
+      process.stderr.write(
+        "codex: permission policy mismatch: " +
+          `expected sandbox=${expected.sandbox} network_access=${expectedNetwork}; ` +
+          `observed sandbox=${context.sandbox} network_access=${context.networkAccess}\n`,
+      );
+      this.#permissionObservationFailed(
+        permission.submission,
+        "policy_mismatch",
+      );
+      return;
+    }
+    const observation: PermissionObservation = {
+      ...permission.submission,
+      session_id: context.sessionId,
+      turn_id: context.turnId,
+      permission: {
+        sandbox: context.sandbox,
+        approval: "never",
+        enforcement: "os",
+      },
+      network_access: context.networkAccess,
+    };
+    this.#permissionCurrentEffective = observation;
+    if (samePermissionSelection(this.#permissionSelection, permission.submission)) {
+      this.#permissionControl = {
+        ...this.#permissionSelection,
+        constraints: { approval: "never", enforcement: "os" },
+        status: "applied",
+        submitted: permission.submission,
+        effective: observation,
+        ...(this.#permissionLastEffective === null
+          ? {}
+          : { last_effective: this.#permissionLastEffective }),
+      };
+    } else {
+      this.#permissionControl = this.#pendingPermissionControl(
+        this.#permissionSelection,
+        permission.submission,
+        observation,
+      );
+    }
+    if (permission.submission.revision > 0) {
+      this.#options.onPermissionLifecycle?.({
+        version: "0",
+        kind: "permission_applied",
+        at: this.#now(),
+        details: observation,
+      });
+    }
+    this.#emitState(this.#machine.state);
+  }
+
+  #permissionObservationFailed(
+    submission: PermissionSubmission,
+    reason: string,
+  ): void {
+    this.#permissionCurrentEffective = null;
+    const submissionIsCurrent = samePermissionSelection(this.#permissionSelection, submission);
+    this.#permissionDispatchBlocked = submissionIsCurrent;
+    if (submissionIsCurrent) {
+      this.#permissionControl = reason === "policy_mismatch" ||
+          reason === "approval_policy_mismatch"
+        ? {
+            ...this.#permissionSelection,
+            constraints: { approval: "never", enforcement: "os" },
+            status: "failed",
+            submitted: submission,
+            reason,
+            ...(this.#permissionLastEffective === null
+              ? {}
+              : { last_effective: this.#permissionLastEffective }),
+          }
+        : {
+            ...this.#permissionSelection,
+            constraints: { approval: "never", enforcement: "os" },
+            status: "unknown",
+            submitted: submission,
+            reason,
+            ...(this.#permissionLastEffective === null
+              ? {}
+              : { last_effective: this.#permissionLastEffective }),
+          };
+    } else {
+      this.#permissionControl = this.#pendingPermissionControl(
+        this.#permissionSelection,
+      );
+    }
+    if (submission.revision > 0) {
+      this.#options.onPermissionLifecycle?.({
+        version: "0",
+        kind: "permission_failed",
+        at: this.#now(),
+        details: {
+          revision: submission.revision,
+          requested: submission.requested,
+          reason,
+          execution_id: submission.execution_id,
+        },
+      });
+    }
+    this.#emitState(this.#machine.state);
+  }
+
   #emitAttachRejected(payload: AttachRejectedPayload): void {
     this.#options.onAttachRejected?.(
       makeAttachRejected(this.#config, this.#machine.state, this.#now(), payload),
@@ -1783,13 +2131,7 @@ export class CodexHost implements EngineAdapter {
 
   #finishTurn(
     success: boolean,
-    attempted: {
-      model: string | null;
-      effort: string | null;
-      effortReset: boolean;
-      accountDefault: boolean;
-      resolutionGeneration: number;
-    },
+    attempted: AttemptedTurnSettings,
   ): void {
     if (success) {
       if (attempted.model !== null) {
@@ -1956,10 +2298,35 @@ export class CodexHost implements EngineAdapter {
     return this.#statusExt(false);
   }
 
+  #resumeDrift(resolved: ResolvedSnapshotExt) {
+    const observed = this.#permissionCurrentEffective;
+    const submitted = this.#permissionControl?.submitted;
+    const intentionalPermission = observed !== null && submitted !== undefined &&
+      submitted.revision > 0 &&
+      samePermissionSelection(observed, submitted) &&
+      observed.permission.sandbox === submitted.requested.sandbox &&
+      observed.network_access === effectiveNetworkAccess(
+        submitted.requested.sandbox,
+        submitted.requested.network_access,
+      );
+    return computeResumeDrift(this.#resumeSnapshot!, resolved).filter((entry) => {
+      if (entry.field !== "sandbox" && entry.field !== "network_access") {
+        return !this.#operatorSwitchedFields.has(entry.field);
+      }
+      if (!this.#permissionSyncSupported) return true;
+      if (observed === null) return false;
+      return !intentionalPermission;
+    });
+  }
+
   #statusExt(consumeOneShot = false): Record<string, unknown> {
     const effectiveStatus = this.#effectiveStatusSnapshot();
     const ext: Record<string, unknown> = {
-      ...initialStatusExtFromCatalog(this.#catalog, this.#model),
+      ...initialStatusExtFromCatalog(
+        this.#catalog,
+        this.#model,
+        this.#permissionSyncSupported,
+      ),
       ...effectiveStatusEnvelopeFields(effectiveStatus),
     };
     // Effective resolved settings this run (ADR-0014 F1 追補, phase-15 D8).
@@ -1968,10 +2335,7 @@ export class CodexHost implements EngineAdapter {
     // resume_drift only appear when a resume relayed a snapshot.
     if (this.#resumeSnapshot !== null) {
       ext.resume_snapshot = this.#resumeSnapshot;
-      ext.resume_drift = computeResumeDrift(
-        this.#resumeSnapshot,
-        effectiveStatus.resolved,
-      ).filter((entry) => !this.#operatorSwitchedFields.has(entry.field));
+      ext.resume_drift = this.#resumeDrift(effectiveStatus.resolved);
     }
     // Session capabilities (ADR-0034 F1/F4, #112): advertised
     // from the first state_change onward (adapter-static values, no
@@ -2018,6 +2382,9 @@ export class CodexHost implements EngineAdapter {
     }
     if (this.#pendingQuestion !== null) {
       ext.pending_question = this.#pendingQuestion;
+    }
+    if (this.#permissionControl !== null) {
+      ext.permission_control = this.#permissionControl;
     }
     return ext;
   }

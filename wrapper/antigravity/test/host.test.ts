@@ -76,6 +76,15 @@ function hostHarness(options: {
 }
 
 describe("AntigravityHost", () => {
+  it("set_permission は Stage A では明示的に拒否する", async () => {
+    const { host } = hostHarness();
+    await expect(host.setPermission({
+      revision: 1,
+      requested: { sandbox: "workspace-write", network_access: true },
+    })).rejects.toThrow("antigravity permission switching is unavailable in Stage A");
+    host.close();
+  });
+
   it("on-failure approvalはspawn前に拒否する", () => {
     const cfg: AntigravityLaunchConfig = { ...config(), approval: "on-failure" };
     const broker = new PermissionBroker({ config: cfg, send: () => {} });

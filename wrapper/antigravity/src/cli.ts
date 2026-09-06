@@ -121,6 +121,11 @@ export async function runAntigravityCli(
         process.stderr.write(`antigravity: ${String(error)}\n`);
       });
     },
+    onSetPermission: (selection) => {
+      void host?.setPermission(selection).catch((error: unknown) => {
+        process.stderr.write(`antigravity: ${String(error)}\n`);
+      });
+    },
     onSetPermissionMode: () => process.stderr.write("antigravity: permission axes are fixed at spawn in Stage A\n"),
     onRenameDisplayName: (displayName, revision) => host?.renameDisplayName(displayName, revision),
   });

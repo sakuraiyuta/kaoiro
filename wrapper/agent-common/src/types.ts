@@ -29,6 +29,7 @@ export type {
   EngineModelInfo,
   ModelSource,
   PermissionAxesExt,
+  PermissionSelection,
   SessionCapabilitiesExt,
   ResolvedSnapshotExt,
   ResumeDriftEntry,

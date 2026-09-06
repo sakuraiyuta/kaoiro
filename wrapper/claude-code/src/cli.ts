@@ -652,6 +652,11 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       process.stdout.write(`  set_effort: ${level}\n`);
       void host.setEffort(level).catch(() => {});
     },
+    onSetPermission: (selection) => {
+      void host.setPermission(selection).catch((error: unknown) => {
+        process.stderr.write(`set_permission failed: ${String(error)}\n`);
+      });
+    },
     onRefreshModels: (payload) => {
       // protocol.md (ADR-0037 F6, phase-18-5) + ADR-0039 F9 v2 = 藤 review
       // D2a: manual refresh. When the server relays `request_id` we run

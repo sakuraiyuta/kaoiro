@@ -124,4 +124,47 @@ describe("Antigravity CLI", () => {
       stderr.mockRestore();
     }
   });
+
+  it("rejects set_permission delivered through the server link in Stage A", async () => {
+    const stderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+    let onSetPermission:
+      | ((selection: { revision: number; requested: { sandbox: string; network_access: boolean } }) => void)
+      | undefined;
+    const link = { close: () => {}, send: () => {} };
+    const host = {
+      state: "idle" as const,
+      statusExtSnapshot: () => ({ engine: "antigravity" }),
+      setPermission: async () => {
+        throw new Error("antigravity permission switching is unavailable in Stage A");
+      },
+      run: async () => {
+        onSetPermission?.({
+          revision: 1,
+          requested: { sandbox: "workspace-write", network_access: true },
+        });
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      },
+    };
+
+    try {
+      await runAntigravityCli({
+        parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+        loadConfig: () => config(),
+        createServerLink: (_url, _agentId, options) => {
+          onSetPermission = options.onSetPermission as typeof onSetPermission;
+          queueMicrotask(() => options.onPersonaPrompt?.("system prompt"));
+          return link as never;
+        },
+        createHost: () => host as never,
+      });
+
+      expect(stderr).toHaveBeenCalledWith(
+        "antigravity: Error: antigravity permission switching is unavailable in Stage A\n",
+      );
+    } finally {
+      stderr.mockRestore();
+    }
+  });
 });

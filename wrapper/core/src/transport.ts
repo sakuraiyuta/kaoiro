@@ -18,8 +18,15 @@ import type {
   DirectoryEntry,
   DirectoryRateLimitWindow,
   DirectoryResult,
+  EngineKind,
   Envelope,
   InterAgentDeliveryStatus,
+  PermissionAxesExt,
+  PermissionConfiguration,
+  PermissionControlExt,
+  PermissionSelection,
+  PermissionSyncMessage,
+  WrapperPermissionLifecycleMessage,
   UserDirectoryEntry,
   UserRole,
 } from "@kaoiro/protocol";
@@ -184,6 +191,8 @@ export const SERVER_EVENT_VERSION_POLICY = {
   interrupt: "checked",
   set_model: "checked",
   set_effort: "checked",
+  set_permission: "checked",
+  permission_sync: "checked",
   refresh_models: "checked",
   set_permission_mode: "checked",
   persona_sync: "checked",
@@ -297,6 +306,14 @@ export interface ServerLinkOptions {
   /** An operator's effort switch relayed by the server (protocol.md, #54).
    *  Payload is `{ effort: string }` — a level from a model's effort_levels. */
   onSetEffort?: (level: string) => void;
+  /** A complete, server-issued raw permission pair for a later execution. */
+  onSetPermission?: (selection: PermissionSelection) => void;
+  /** Opts this wrapper into the permission-sync join contract. */
+  permissionSync?: {
+    engine: EngineKind;
+    onNegotiated?: (supported: boolean) => void;
+    onSync?: (message: PermissionSyncMessage, generation: number) => void;
+  };
   /** An operator's manual retry of supportedModels() relayed by the server
    *  (protocol.md, ADR-0037 F6, phase-18-5). Payload is `{}` — the topic
    *  addresses the agent. The wrapper resets its retry counter + succeeded
@@ -495,6 +512,221 @@ function nonNegativeInteger(value: unknown): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
     ? value
     : undefined;
+}
+
+const PERMISSION_SANDBOXES = new Set<PermissionConfiguration["sandbox"]>([
+  "read-only",
+  "workspace-write",
+  "danger-full-access",
+]);
+const PERMISSION_APPROVALS = new Set<PermissionAxesExt["approval"]>([
+  "untrusted",
+  "on-request",
+  "on-failure",
+  "never",
+]);
+const PERMISSION_ENFORCEMENTS = new Set<NonNullable<PermissionAxesExt["enforcement"]>>([
+  "os",
+  "mode",
+  "advisory",
+]);
+const PERMISSION_CONTROL_STATUSES = new Set<PermissionControlExt["status"]>([
+  "pending",
+  "applying",
+  "applied",
+  "failed",
+  "unknown",
+]);
+
+function permissionConfigurationFrom(
+  value: unknown,
+): PermissionConfiguration | null {
+  if (!isPlainObject(value)) return null;
+  if (
+    !PERMISSION_SANDBOXES.has(value.sandbox as PermissionConfiguration["sandbox"]) ||
+    typeof value.network_access !== "boolean"
+  ) {
+    return null;
+  }
+  return {
+    sandbox: value.sandbox as PermissionConfiguration["sandbox"],
+    network_access: value.network_access,
+  };
+}
+
+function permissionSelectionFrom(
+  value: unknown,
+  minimumRevision: number,
+): PermissionSelection | null {
+  if (!isPlainObject(value)) return null;
+  const revision = nonNegativeInteger(value.revision);
+  const requested = permissionConfigurationFrom(value.requested);
+  if (revision === undefined || revision < minimumRevision || requested === null) {
+    return null;
+  }
+  return { revision, requested };
+}
+
+function permissionObservationFrom(value: unknown): PermissionControlExt["last_effective"] | null {
+  if (!isPlainObject(value)) return null;
+  const selection = permissionSelectionFrom(value, 0);
+  if (
+    selection === null ||
+    typeof value.execution_id !== "string" ||
+    value.execution_id === "" ||
+    typeof value.session_id !== "string" ||
+    value.session_id === "" ||
+    typeof value.turn_id !== "string" ||
+    value.turn_id === "" ||
+    !isPlainObject(value.permission) ||
+    !PERMISSION_SANDBOXES.has(value.permission.sandbox as PermissionConfiguration["sandbox"]) ||
+    !PERMISSION_APPROVALS.has(value.permission.approval as PermissionAxesExt["approval"]) ||
+    !PERMISSION_ENFORCEMENTS.has(value.permission.enforcement as NonNullable<PermissionAxesExt["enforcement"]>) ||
+    typeof value.network_access !== "boolean"
+  ) {
+    return null;
+  }
+  return {
+    ...selection,
+    execution_id: value.execution_id,
+    session_id: value.session_id,
+    turn_id: value.turn_id,
+    permission: {
+      sandbox: value.permission.sandbox as PermissionConfiguration["sandbox"],
+      approval: value.permission.approval as PermissionAxesExt["approval"],
+      enforcement: value.permission.enforcement as NonNullable<PermissionAxesExt["enforcement"]>,
+    },
+    network_access: value.network_access,
+  };
+}
+
+function permissionSubmissionFrom(value: unknown): PermissionControlExt["submitted"] | null {
+  if (!isPlainObject(value)) return null;
+  const selection = permissionSelectionFrom(value, 0);
+  if (
+    selection === null ||
+    typeof value.execution_id !== "string" ||
+    value.execution_id === ""
+  ) {
+    return null;
+  }
+  return { ...selection, execution_id: value.execution_id };
+}
+
+function samePermissionSelection(
+  left: PermissionSelection,
+  right: PermissionSelection,
+): boolean {
+  return left.revision === right.revision &&
+    left.requested.sandbox === right.requested.sandbox &&
+    left.requested.network_access === right.requested.network_access;
+}
+
+function permissionControlFrom(value: unknown): PermissionControlExt | null {
+  if (!isPlainObject(value)) return null;
+  const selection = permissionSelectionFrom(value, 0);
+  if (
+    selection === null ||
+    !isPlainObject(value.constraints) ||
+    !PERMISSION_APPROVALS.has(value.constraints.approval as PermissionAxesExt["approval"]) ||
+    !PERMISSION_ENFORCEMENTS.has(
+      value.constraints.enforcement as NonNullable<PermissionAxesExt["enforcement"]>,
+    ) ||
+    !PERMISSION_CONTROL_STATUSES.has(value.status as PermissionControlExt["status"])
+  ) {
+    return null;
+  }
+  const lastEffective = value.last_effective === undefined
+    ? undefined
+    : permissionObservationFrom(value.last_effective);
+  if (lastEffective === null) return null;
+  const submitted = value.submitted === undefined
+    ? undefined
+    : permissionSubmissionFrom(value.submitted);
+  if (submitted === null) return null;
+  const effective = value.effective === undefined
+    ? undefined
+    : permissionObservationFrom(value.effective);
+  if (effective === null) return null;
+  const base = {
+    ...selection,
+    constraints: {
+      approval: value.constraints.approval as PermissionAxesExt["approval"],
+      enforcement: value.constraints.enforcement as NonNullable<PermissionAxesExt["enforcement"]>,
+    },
+    ...(lastEffective === undefined ? {} : { last_effective: lastEffective }),
+  };
+  switch (value.status) {
+    case "pending":
+      return {
+        ...base,
+        status: "pending",
+        ...(submitted === undefined ? {} : { submitted }),
+        ...(effective === undefined ? {} : { effective }),
+      };
+    case "applying":
+      return submitted === undefined || effective !== undefined
+        ? null
+        : { ...base, status: "applying", submitted };
+    case "applied":
+      return submitted === undefined || effective === undefined ||
+          !samePermissionSelection(submitted, effective) ||
+          submitted.execution_id !== effective.execution_id
+        ? null
+        : { ...base, status: "applied", submitted, effective };
+    case "failed": {
+      if (typeof value.reason !== "string" || value.reason === "") return null;
+      const rolledBackTo = value.rolled_back_to === undefined
+        ? undefined
+        : permissionConfigurationFrom(value.rolled_back_to);
+      if (rolledBackTo === null) return null;
+      return {
+        ...base,
+        status: "failed",
+        ...(submitted === undefined ? {} : { submitted }),
+        ...(effective === undefined ? {} : { effective }),
+        reason: value.reason,
+        ...(rolledBackTo === undefined ? {} : { rolled_back_to: rolledBackTo }),
+      };
+    }
+    case "unknown":
+      return submitted === undefined || effective !== undefined ||
+          typeof value.reason !== "string" || value.reason === ""
+        ? null
+        : { ...base, status: "unknown", submitted, reason: value.reason };
+    default:
+      return null;
+  }
+}
+
+function permissionSyncFrom(value: unknown): PermissionSyncMessage | null {
+  if (!isPlainObject(value) || typeof value.version !== "string") {
+    return null;
+  }
+  if (value.control === null && value.next === null) {
+    return { version: WRAPPER_PROTOCOL_VERSION, control: null, next: null };
+  }
+  const control = permissionControlFrom(value.control);
+  const next = permissionSelectionFrom(value.next, 0);
+  return control === null || next === null
+    ? null
+    : { version: WRAPPER_PROTOCOL_VERSION, control, next };
+}
+
+function setPermissionSelectionFrom(value: unknown): PermissionSelection | null {
+  if (!isPlainObject(value) || typeof value.version !== "string") {
+    return null;
+  }
+  return permissionSelectionFrom(
+    {
+      revision: value.revision,
+      requested: {
+        sandbox: value.sandbox,
+        network_access: value.network_access,
+      },
+    },
+    1,
+  );
 }
 
 function deliveryStatusFrom(value: unknown): InterAgentDeliveryStatus | undefined {
@@ -840,6 +1072,17 @@ export class ServerLink {
   /** Kept because `send/1` needs it per push, unlike the inbound handlers
    *  which are bound once in the constructor. */
   readonly #onInterAgentAck: ServerLinkOptions["onInterAgentAck"];
+  readonly #permissionSync: ServerLinkOptions["permissionSync"];
+  #permissionSyncSupported = false;
+  #permissionSyncGeneration = 0;
+  #permissionSyncAccepting = false;
+  #permissionSyncReady = true;
+  #permissionSyncRequiresSynchronization = false;
+  #permissionSyncBarrier: Promise<void> = Promise.resolve();
+  #releasePermissionSyncBarrier: (() => void) | null = null;
+  #permissionSyncNegotiated: Promise<boolean>;
+  #resolvePermissionSyncNegotiated!: (supported: boolean) => void;
+  #permissionSyncNegotiationSettled = false;
 
   /**
    * @param serverUrl Socket endpoint, e.g. "ws://localhost:4000/wrapper"
@@ -852,6 +1095,10 @@ export class ServerLink {
     options: ServerLinkOptions,
   ) {
     this.#onInterAgentAck = options.onInterAgentAck;
+    this.#permissionSync = options.permissionSync;
+    this.#permissionSyncNegotiated = new Promise<boolean>((resolve) => {
+      this.#resolvePermissionSyncNegotiated = resolve;
+    });
     this.#socket = new Socket(serverUrl, {
       transport: WebSocket,
       params: options.token === undefined ? {} : { token: options.token },
@@ -868,6 +1115,9 @@ export class ServerLink {
       persona_id: options.personaId,
       inter_agent_delivery_ack: "dispatch-v1",
       delivery_generation: randomUUID(),
+      ...(this.#permissionSync === undefined
+        ? {}
+        : { permission_sync: { engine: this.#permissionSync.engine } }),
       ...(options.transitionId !== undefined && options.transitionId !== ""
         ? { transition_id: options.transitionId }
         : {}),
@@ -947,6 +1197,25 @@ export class ServerLink {
       if (isObject(payload) && typeof payload.effort === "string") {
         options.onSetEffort?.(payload.effort);
       }
+    });
+    this.#bindServerEvent("set_permission", (payload: unknown) => {
+      const selection = setPermissionSelectionFrom(payload);
+      if (selection !== null) {
+        this.#permissionSyncRequiresSynchronization = true;
+        options.onSetPermission?.(selection);
+      }
+    });
+    this.#bindServerEvent("permission_sync", (payload: unknown) => {
+      if (!this.#permissionSyncAccepting) return;
+      const message = permissionSyncFrom(payload);
+      if (message === null) return;
+      this.#permissionSyncAccepting = false;
+      if (message.next !== null && message.next.revision > 0) {
+        this.#permissionSyncRequiresSynchronization = true;
+      }
+      this.#permissionSync?.onSync?.(message, this.#permissionSyncGeneration);
+      this.#releasePermissionSyncBarrier?.();
+      this.#releasePermissionSyncBarrier = null;
     });
     // protocol.md (ADR-0037 F6, phase-18-5): server -> wrapper `refresh_models`
     // has no payload fields; the topic already addresses the agent. Fire the
@@ -1105,6 +1374,7 @@ export class ServerLink {
     // both caches are empty (no-op); on reconnects pushes are buffered by the
     // client until the channel rejoins. send() stamps a fresh seq.
     this.#socket.onOpen(() => {
+      this.#beginPermissionSyncBarrier();
       if (this.#lastEnvelope) this.send(this.#lastEnvelope);
       for (const task of [...this.#activeTasks.values()]) this.send(task.envelope);
     });
@@ -1118,6 +1388,7 @@ export class ServerLink {
     this.#channel
       .join()
       .receive("ok", (reply: unknown) => {
+        this.#acceptPermissionSyncJoin(reply);
         if (options.buildInfo !== undefined) {
           const buildInfo = normalizeWrapperBuildInfo(options.buildInfo);
           this.#pushVersioned("wrapper_build_info", {
@@ -1140,6 +1411,55 @@ export class ServerLink {
       .receive("timeout", () => {
         process.stderr.write("ServerLink join timeout\n");
       });
+  }
+
+  #beginPermissionSyncBarrier(): void {
+    if (this.#permissionSync === undefined) return;
+    this.#permissionSyncAccepting = false;
+    if (!this.#permissionSyncReady) return;
+    this.#permissionSyncReady = false;
+    this.#permissionSyncGeneration += 1;
+    this.#permissionSyncBarrier = new Promise<void>((resolve) => {
+      this.#releasePermissionSyncBarrier = () => {
+        if (this.#permissionSyncReady) return;
+        this.#permissionSyncReady = true;
+        resolve();
+      };
+    });
+  }
+
+  #acceptPermissionSyncJoin(reply: unknown): void {
+    if (this.#permissionSync === undefined) return;
+    const supported = isObject(reply) && reply.permission_sync === true;
+    this.#permissionSyncSupported = supported;
+    if (!this.#permissionSyncNegotiationSettled) {
+      this.#permissionSyncNegotiationSettled = true;
+      this.#resolvePermissionSyncNegotiated(supported);
+    }
+    this.#permissionSync.onNegotiated?.(supported);
+    if (!supported) {
+      if (!this.#permissionSyncRequiresSynchronization) {
+        this.#releasePermissionSyncBarrier?.();
+        this.#releasePermissionSyncBarrier = null;
+      }
+      return;
+    }
+    this.#beginPermissionSyncBarrier();
+    this.#permissionSyncAccepting = true;
+  }
+
+  /** Resolves after the initial join reply says whether this server speaks
+   *  permission synchronization. It does not wait for the sync payload. */
+  waitForPermissionSyncNegotiation(): Promise<boolean> {
+    return this.#permissionSync === undefined
+      ? Promise.resolve(false)
+      : this.#permissionSyncNegotiated;
+  }
+
+  /** Waits for the current negotiated join's authoritative sync. A legacy
+   *  server without a saved operator selection leaves the resolved barrier. */
+  waitForPermissionSync(): Promise<void> {
+    return this.#permissionSyncBarrier;
   }
 
   /** Binds one server -> wrapper event with ADR-0015's receiver check in
@@ -1207,6 +1527,16 @@ export class ServerLink {
       kind,
       ...(trigger !== undefined ? { trigger } : {}),
       at,
+    });
+  }
+
+  /** Records a permission application outcome with the protocol's typed
+   * details rather than overloading the compact/reset lifecycle surface. */
+  reportPermissionLifecycle(event: WrapperPermissionLifecycleMessage): void {
+    this.#pushVersioned("session_lifecycle", {
+      kind: event.kind,
+      at: event.at,
+      details: event.details,
     });
   }
 

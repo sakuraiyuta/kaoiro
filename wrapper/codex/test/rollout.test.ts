@@ -10,6 +10,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  captureCodexPermissionRolloutCursor,
+  codexPermissionContextAfter,
   codexModelFromRolloutIn,
   codexRateLimitsFromRolloutIn,
   resolveCodexModel,
@@ -18,6 +20,65 @@ import {
   repairRolloutCorruption,
   verifyRolloutCorruption,
 } from "../src/rollout.js";
+
+function permissionTurnContext(
+  turnId: string,
+  sandbox: "read-only" | "workspace-write" | "danger-full-access",
+  networkAccess = false,
+): string {
+  const sandbox_policy = sandbox === "workspace-write"
+    ? { type: sandbox, network_access: networkAccess }
+    : { type: sandbox };
+  return JSON.stringify({
+    type: "turn_context",
+    payload: {
+      turn_id: turnId,
+      approval_policy: "never",
+      sandbox_policy,
+    },
+  });
+}
+
+describe("Codex permission rollout cursor", () => {
+  it("reads exactly one complete turn_context appended after the execution boundary", () => {
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-codex-permission-"));
+    const id = "permission-boundary";
+    const path = join(root, `rollout-${id}.jsonl`);
+    writeFileSync(path, `${permissionTurnContext("old-turn", "read-only")}\n`);
+    const captured = captureCodexPermissionRolloutCursor(root, id);
+    const cursor = { ...captured, knownTurnIds: new Set<string>() };
+
+    writeFileSync(
+      path,
+      `${permissionTurnContext("old-turn", "read-only")}\n${permissionTurnContext("new-turn", "workspace-write", true)}\n`,
+    );
+
+    expect(codexPermissionContextAfter(cursor, id)).toEqual({
+      sessionId: id,
+      turnId: "new-turn",
+      sandbox: "workspace-write",
+      networkAccess: true,
+      approvalPolicy: "never",
+    });
+  });
+
+  it("does not promote a pre-bound record, a partial write, or another session", () => {
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-codex-permission-"));
+    const id = "permission-unconfirmed";
+    const path = join(root, `rollout-${id}.jsonl`);
+    writeFileSync(path, `${permissionTurnContext("old-turn", "read-only")}\n`);
+    const cursor = captureCodexPermissionRolloutCursor(root, id);
+
+    expect(codexPermissionContextAfter(cursor, id)).toBeNull();
+    expect(codexPermissionContextAfter(cursor, "other-session")).toBeNull();
+
+    writeFileSync(
+      path,
+      `${permissionTurnContext("old-turn", "read-only")}\n${permissionTurnContext("new-turn", "workspace-write", true)}`,
+    );
+    expect(codexPermissionContextAfter(cursor, id)).toBeNull();
+  });
+});
 
 describe("codexModelFromRolloutIn", () => {
   it("turn_context の最新 model を返す", () => {

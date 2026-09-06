@@ -129,6 +129,7 @@ export type {
   PendingPermissionExt,
   PendingQuestionExt,
   PermissionAxesExt,
+  PermissionSelection,
   PermissionMode,
   Persona,
   Question,

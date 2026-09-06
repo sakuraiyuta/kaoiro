@@ -14,10 +14,27 @@ import {
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import type { PermissionConfiguration } from "@kaoiro/protocol";
 
 const SESSION_ID_PATTERN = /^[A-Za-z0-9-]{1,128}$/;
 const TAIL_BYTES = 512 * 1024;
 const rolloutPathCache = new Map<string, string>();
+
+export interface CodexPermissionRolloutCursor {
+  root: string;
+  sessionId: string | null;
+  path: string | null;
+  offset: number;
+  knownTurnIds: ReadonlySet<string>;
+}
+
+export interface CodexPermissionTurnContext {
+  sessionId: string;
+  turnId: string;
+  sandbox: PermissionConfiguration["sandbox"];
+  networkAccess: boolean;
+  approvalPolicy: string;
+}
 
 export function codexRolloutsRoot(): string {
   return join(homedir(), ".codex", "sessions");
@@ -246,6 +263,151 @@ export function rolloutPathIn(root: string, sessionId: string): string | null {
   const suffix = `-${sessionId}.jsonl`;
   const rel = names.find((name) => basename(name).endsWith(suffix));
   return rel === undefined ? null : join(root, rel);
+}
+
+function turnContextFrom(value: unknown, sessionId: string): CodexPermissionTurnContext | null {
+  if (value === null || typeof value !== "object") return null;
+  const entry = value as { type?: unknown; payload?: unknown };
+  if (entry.type !== "turn_context" || entry.payload === null || typeof entry.payload !== "object") {
+    return null;
+  }
+  const payload = entry.payload as {
+    turn_id?: unknown;
+    sandbox_policy?: unknown;
+    approval_policy?: unknown;
+  };
+  if (
+    typeof payload.turn_id !== "string" || payload.turn_id === "" ||
+    typeof payload.approval_policy !== "string" ||
+    payload.approval_policy === "" ||
+    payload.sandbox_policy === null || typeof payload.sandbox_policy !== "object"
+  ) {
+    return null;
+  }
+  const sandboxPolicy = payload.sandbox_policy as {
+    type?: unknown;
+    network_access?: unknown;
+  };
+  switch (sandboxPolicy.type) {
+    case "read-only":
+      return {
+        sessionId,
+        turnId: payload.turn_id,
+        sandbox: "read-only",
+        networkAccess: false,
+        approvalPolicy: payload.approval_policy,
+      };
+    case "danger-full-access":
+      return {
+        sessionId,
+        turnId: payload.turn_id,
+        sandbox: "danger-full-access",
+        networkAccess: true,
+        approvalPolicy: payload.approval_policy,
+      };
+    case "workspace-write":
+      return typeof sandboxPolicy.network_access !== "boolean"
+        ? null
+        : {
+            sessionId,
+            turnId: payload.turn_id,
+            sandbox: "workspace-write",
+            networkAccess: sandboxPolicy.network_access,
+            approvalPolicy: payload.approval_policy,
+          };
+    default:
+      return null;
+  }
+}
+
+function knownTurnIdsIn(path: string, sessionId: string): Set<string> {
+  const known = new Set<string>();
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    return known;
+  }
+  for (const line of text.split("\n")) {
+    try {
+      const context = turnContextFrom(JSON.parse(line), sessionId);
+      if (context !== null) known.add(context.turnId);
+    } catch {
+      // A partial final line is not a completed prior turn context.
+    }
+  }
+  return known;
+}
+
+/** Captures the append boundary before an exec. Resumed sessions have a
+ * stable path at this point; a fresh session is bound after thread.started. */
+export function captureCodexPermissionRolloutCursor(
+  root: string,
+  sessionId: string | null,
+): CodexPermissionRolloutCursor {
+  const path = sessionId === null ? null : rolloutPathIn(root, sessionId);
+  if (path === null || sessionId === null) {
+    return { root, sessionId, path: null, offset: 0, knownTurnIds: new Set() };
+  }
+  try {
+    return {
+      root,
+      sessionId,
+      path,
+      offset: statSync(path).size,
+      knownTurnIds: knownTurnIdsIn(path, sessionId),
+    };
+  } catch {
+    return { root, sessionId, path: null, offset: 0, knownTurnIds: new Set() };
+  }
+}
+
+/** Reads exactly one newly appended policy context. A changed session/path,
+ * an incomplete line, or multiple candidates is deliberately unconfirmed. */
+export function codexPermissionContextAfter(
+  cursor: CodexPermissionRolloutCursor,
+  sessionId: string,
+): CodexPermissionTurnContext | null {
+  if (cursor.sessionId !== null && cursor.sessionId !== sessionId) return null;
+  const path = cursor.path ?? rolloutPathIn(cursor.root, sessionId);
+  if (path === null || (cursor.path !== null && path !== cursor.path)) return null;
+  let size: number;
+  try {
+    size = statSync(path).size;
+  } catch {
+    return null;
+  }
+  if (size < cursor.offset) return null;
+  let fd: number;
+  try {
+    fd = openSync(path, "r");
+  } catch {
+    return null;
+  }
+  try {
+    const bytes = Buffer.alloc(size - cursor.offset);
+    const read = readSync(fd, bytes, 0, bytes.length, cursor.offset);
+    const complete = bytes.subarray(0, read).toString("utf8");
+    const finalNewline = complete.lastIndexOf("\n");
+    if (finalNewline < 0) return null;
+    const candidates: CodexPermissionTurnContext[] = [];
+    for (const line of complete.slice(0, finalNewline).split("\n")) {
+      try {
+        const context = turnContextFrom(JSON.parse(line), sessionId);
+        if (context !== null && !cursor.knownTurnIds.has(context.turnId)) {
+          candidates.push(context);
+        }
+      } catch {
+        // Ignore malformed non-terminal records; a candidate must be a
+        // complete, independently parseable turn_context line.
+      }
+    }
+    return candidates.length === 1 ? candidates[0]! : null;
+  } catch {
+    return null;
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /** Absolute path to a session's IA sidecar — beside its rollout file, per

@@ -519,6 +519,128 @@ describe("ServerLink — set_model / set_effort 制御 (#54)", () => {
   });
 });
 
+describe("ServerLink — permission synchronization", () => {
+  beforeEach(() => {
+    mock.handlers.clear();
+    mock.joinReceivers.clear();
+    mock.lastChannelParams = null;
+    mock.onOpen = null;
+  });
+
+  it("negotiated join は authoritative permission_sync まで次の exec barrier を閉じる", async () => {
+    const negotiated: boolean[] = [];
+    const received: unknown[] = [];
+    const link = new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      permissionSync: {
+        engine: "codex",
+        onNegotiated: (supported) => negotiated.push(supported),
+        onSync: (message, generation) => received.push({ message, generation }),
+      },
+    });
+    expect(mock.lastChannelParams).toEqual(expect.objectContaining({
+      permission_sync: { engine: "codex" },
+    }));
+
+    mock.joinReceivers.get("ok")?.({ permission_sync: true });
+    await expect(link.waitForPermissionSyncNegotiation()).resolves.toBe(true);
+    let released = false;
+    void link.waitForPermissionSync().then(() => {
+      released = true;
+    });
+    await Promise.resolve();
+    expect(released).toBe(false);
+
+    emit("permission_sync", { version: "0", control: null, next: null });
+    await vi.waitFor(() => expect(released).toBe(true));
+    expect(negotiated).toEqual([true]);
+    expect(received).toEqual([
+      {
+        message: { version: "0", control: null, next: null },
+        generation: 1,
+      },
+    ]);
+  });
+
+  it("legacy join は capability false で既存 dispatch を止めない", async () => {
+    const negotiated: boolean[] = [];
+    const link = new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      permissionSync: {
+        engine: "codex",
+        onNegotiated: (supported) => negotiated.push(supported),
+      },
+    });
+    mock.joinReceivers.get("ok")?.({});
+
+    await expect(link.waitForPermissionSyncNegotiation()).resolves.toBe(false);
+    await expect(link.waitForPermissionSync()).resolves.toBeUndefined();
+    expect(negotiated).toEqual([false]);
+  });
+
+  it("complete positive revision の set_permission だけを host へ relay する", () => {
+    const selections: unknown[] = [];
+    new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      onSetPermission: (selection) => selections.push(selection),
+    });
+
+    emit("set_permission", {
+      version: "future-version",
+      revision: 1,
+      sandbox: "workspace-write",
+      network_access: true,
+    });
+    emit("set_permission", {
+      version: "0",
+      revision: 2,
+      sandbox: "workspace-write",
+    });
+    emit("set_permission", {
+      version: "0",
+      revision: 0,
+      sandbox: "read-only",
+      network_access: false,
+    });
+    expect(selections).toEqual([
+      {
+        revision: 1,
+        requested: { sandbox: "workspace-write", network_access: true },
+      },
+    ]);
+  });
+
+  it("permission outcome を versioned session_lifecycle audit として送る", () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+    link.reportPermissionLifecycle({
+      version: "0",
+      kind: "permission_failed",
+      at: "2026-09-06T00:00:00Z",
+      details: {
+        revision: 1,
+        requested: { sandbox: "workspace-write", network_access: true },
+        reason: "policy_mismatch",
+        execution_id: "exec-1",
+      },
+    });
+
+    expect(mock.lastPush).toEqual(expect.objectContaining({
+      event: "session_lifecycle",
+      payload: {
+        version: "0",
+        kind: "permission_failed",
+        at: "2026-09-06T00:00:00Z",
+        details: {
+          revision: 1,
+          requested: { sandbox: "workspace-write", network_access: true },
+          reason: "policy_mismatch",
+          execution_id: "exec-1",
+        },
+      },
+    }));
+  });
+});
+
 describe("ServerLink — persona_sync (issue #197 段階3, legacy key, revised issue #219 D22)", () => {
   beforeEach(() => mock.handlers.clear());
 

@@ -10,6 +10,11 @@
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import type {
+  PermissionSelection,
+  PermissionSyncMessage,
+  WrapperPermissionLifecycleMessage,
+} from "@kaoiro/protocol";
 import {
   HistoryReplayer,
   createDeliveryAcknowledgementRuntime,
@@ -237,6 +242,17 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   // and apply once `host` exists, rather than risk touching an
   // undefined `host` from the handler.
   let pendingDisplayNameSync: { displayName: string; revision: number } | undefined;
+  let pendingPermissionSelection: PermissionSelection | undefined;
+  let pendingPermissionSync: PermissionSyncMessage | undefined;
+  let permissionSyncSupported = false;
+
+  const retainNewerPermissionSelection = (
+    current: PermissionSelection | undefined,
+    incoming: PermissionSelection,
+  ): PermissionSelection =>
+    current === undefined || incoming.revision > current.revision
+      ? incoming
+      : current;
 
   /** Production owner of Codex same-peer batching. Tests instantiate this
    * exact class instead of copying queue state into their harness. */
@@ -497,6 +513,20 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     ...(config.server_token === undefined
       ? {}
       : { token: config.server_token }),
+    permissionSync: {
+      engine: "codex",
+      onNegotiated: (supported) => {
+        permissionSyncSupported = supported;
+        if (host !== undefined) host.setPermissionSyncSupported(supported);
+      },
+      onSync: (message) => {
+        if (host === undefined) {
+          pendingPermissionSync = message;
+          return;
+        }
+        host.applyPermissionSync(message);
+      },
+    },
     onPersonaPrompt: (received) => resolvePersonaPrompt(received),
     onHydration: (verdict) => replayer.onVerdict(verdict),
     onInterAgentAck: (envelope, stamp) =>
@@ -532,6 +562,18 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     onSetEffort: (level) => {
       process.stdout.write(`  set_effort: ${level}\n`);
       void host.setEffort(level).catch(() => {});
+    },
+    onSetPermission: (selection) => {
+      if (host === undefined) {
+        pendingPermissionSelection = retainNewerPermissionSelection(
+          pendingPermissionSelection,
+          selection,
+        );
+        return;
+      }
+      void host.setPermission(selection).catch((error: unknown) => {
+        process.stderr.write(`set_permission failed: ${String(error)}\n`);
+      });
     },
     onSetPermissionMode: (mode) => {
       // Claude-mode pushes (server after_join restores a persisted pick)
@@ -600,6 +642,14 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     throw err;
   } finally {
     clearTimeout(timeoutHandle);
+  }
+
+  if (
+    link !== null &&
+    "waitForPermissionSyncNegotiation" in link &&
+    typeof link.waitForPermissionSyncNegotiation === "function"
+  ) {
+    permissionSyncSupported = await link.waitForPermissionSyncNegotiation();
   }
 
   const hostOptions = deliveryAcknowledgementRuntime.withHostOptions<
@@ -681,6 +731,20 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       );
     },
     appendSystemPrompt,
+    permissionSyncSupported,
+    waitForPermissionSync: () => {
+      if (
+        link !== null &&
+        "waitForPermissionSync" in link &&
+        typeof link.waitForPermissionSync === "function"
+      ) {
+        return link.waitForPermissionSync();
+      }
+      return Promise.resolve();
+    },
+    onPermissionLifecycle: (event: WrapperPermissionLifecycleMessage) => {
+      link?.reportPermissionLifecycle(event);
+    },
     onInstructionRejected: (envelope) => link?.send(envelope),
     onAttachRejected: (envelope) => link?.send(envelope),
     onSessionId: (id) => {
@@ -707,6 +771,15 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     turnWatchdog.start(turnToken);
   });
   host = createHost(config, hostOptions);
+
+  if (pendingPermissionSync !== undefined) {
+    host.applyPermissionSync(pendingPermissionSync);
+  }
+  if (pendingPermissionSelection !== undefined) {
+    void host.setPermission(pendingPermissionSelection).catch((error: unknown) => {
+      process.stderr.write(`set_permission failed: ${String(error)}\n`);
+    });
+  }
 
   // Apply the after_join display_name sync that arrived before host was
   // constructed (issue #197 段階3, renamed issue #219 D19/D23), same

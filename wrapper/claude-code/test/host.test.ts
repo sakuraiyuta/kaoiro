@@ -61,6 +61,7 @@ describe("initialStatusExt", () => {
         supports_session_reset: true,
         session_reset_modes: ["new", "clear"],
         supports_context_usage: true,
+        supports_permission_mode_switch: true,
       },
     });
     expect(
@@ -2832,6 +2833,10 @@ describe("AgentHost — query injection", () => {
       supports_session_reset: true,
       session_reset_modes: ["new", "clear"],
       supports_context_usage: true,
+      supports_permission_mode_switch: true,
+    });
+    expect(envs.at(-1)?.ext.session_capabilities).toMatchObject({
+      supports_permission_mode_switch: true,
     });
   });
 

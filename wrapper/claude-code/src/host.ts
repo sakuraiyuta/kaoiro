@@ -31,6 +31,7 @@ import type {
   PendingPermissionExt,
   PendingQuestionExt,
   PermissionMode,
+  PermissionSelection,
   Question,
   ResolvedSnapshotExt,
   ResultPayload,
@@ -193,6 +194,7 @@ export function initialStatusExt(): Record<string, unknown> {
       supports_session_reset: true,
       session_reset_modes: ["new", "clear"],
       supports_context_usage: true,
+      supports_permission_mode_switch: true,
     },
     models: claudeBootstrapCatalog(),
   };
@@ -1577,6 +1579,10 @@ export class AgentHost implements EngineAdapter {
       this.#emitState(this.#machine.state);
       throw error;
     }
+  }
+
+  async setPermission(_selection: PermissionSelection): Promise<void> {
+    throw new Error("claude-code: sandbox/network switching is unsupported");
   }
 
   /** Switch the permission mode for subsequent turns (#58). Two paths:
