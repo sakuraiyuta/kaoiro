@@ -265,10 +265,25 @@ const PERSISTENCE_PATHS_EVAL_EXPR = "IO.puts(Jason.encode!(KaoiroServer.Persiste
 // future caller remembers to.
 const ENV_VAR_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
+// クロエ #310 round 1 S-1: the contract says EXACTLY these keys
+// (docs/specs/deployment.md), and only this list enforced it. Sorted, and
+// compared as a whole set below: a fifth key means the image's own idea of
+// the contract has drifted from this file's, which is a shape violation
+// like any other, not something to read past.
+const PERSISTENCE_PATH_ENTRY_KEYS = ["default_file", "default_path", "env", "store"];
+
 function isValidPersistencePathEntry(entry) {
+  if (typeof entry !== "object" || entry === null) {
+    return false;
+  }
+  const keys = Object.keys(entry).sort();
+  if (keys.length !== PERSISTENCE_PATH_ENTRY_KEYS.length) {
+    return false;
+  }
+  if (keys.some((key, i) => key !== PERSISTENCE_PATH_ENTRY_KEYS[i])) {
+    return false;
+  }
   return (
-    typeof entry === "object" &&
-    entry !== null &&
     typeof entry.store === "string" &&
     entry.store !== "" &&
     typeof entry.env === "string" &&
@@ -329,6 +344,17 @@ function queryPersistencePaths(bin, imageId) {
   if (!Array.isArray(parsed) || !parsed.every(isValidPersistencePathEntry)) {
     fail(
       `persistence-path eval for image ${imageId} exited 0 but printed an unexpected shape: ${JSON.stringify(parsed)}`,
+    );
+  }
+  // クロエ #310 round 1 S-1: an empty array is not "nothing to check". The
+  // module always declares at least one store, so an empty one means the
+  // list is broken -- and it would sail through: Array.isArray holds and
+  // .every() is vacuously true, so checkEnvConsistency (this list's only
+  // consumer) compares nothing and the update proceeds as if every store
+  // agreed.
+  if (parsed.length === 0) {
+    fail(
+      `persistence-path eval for image ${imageId} reported an empty manifest — the image declares no persistence paths at all`,
     );
   }
   return { skipped: false, paths: parsed };

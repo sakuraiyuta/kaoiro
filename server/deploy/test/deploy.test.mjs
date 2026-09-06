@@ -76,10 +76,10 @@ case "$1" in
       # issue #220 absorption: compose's own RESOLVED declaration for the
       # service, keyed by env var name — measured live to be a plain
       # object map under \`--format json\` (Compose v5.3.1). Overridable
-      # per-test via KAOIRO_TEST_COMPOSE_ENV_JSON; an empty environment
-      # map by default so scenarios that do not care about env
-      # consistency see zero disagreement (no canonical keys to compare
-      # either, since the default eval output below is also \`[]\`).
+      # per-test via KAOIRO_TEST_COMPOSE_ENV_JSON; by default it declares
+      # the one store the default eval output below reports, at the same
+      # path the container default carries, so scenarios that do not care
+      # about env consistency see zero disagreement.
       #
       # The volumes shape (round 4 review N-3) is also measured live
       # (Compose v5.3.1): services.<name>.volumes[] names the mount
@@ -103,7 +103,7 @@ case "$1" in
             if [ -n "$KAOIRO_TEST_COMPOSE_ENV_JSON" ]; then
               env_json="$KAOIRO_TEST_COMPOSE_ENV_JSON"
             else
-              env_json='{}'
+              env_json='{"KAOIRO_USERS_PATH":"/var/lib/kaoiro/users.dets"}'
             fi
             printf '{"services":{"kaoiro":{"environment":%s,"volumes":[{"type":"volume","source":"kaoiro-state","target":"/var/lib/kaoiro","volume":{}}]}},"volumes":{"kaoiro-state":{"name":"kaoiro_kaoiro-state"}}}\\n' "$env_json"
             ;;
@@ -248,13 +248,14 @@ case "$1" in
           '{{.Image}}') printf '${OLD_IMAGE_ID}\\n' ;;
           # issue #220 absorption: the OLD (currently running) container's
           # actual effective env, Docker's own \`"KEY=VALUE"\` array shape.
-          # Overridable via KAOIRO_TEST_CONTAINER_ENV_JSON; empty by
-          # default (see the \`compose config\` fake's own comment).
+          # Overridable via KAOIRO_TEST_CONTAINER_ENV_JSON; by default it
+          # agrees with compose's own default (see the \`compose config\`
+          # fake's own comment).
           '{{json .Config.Env}}')
             if [ -n "$KAOIRO_TEST_CONTAINER_ENV_JSON" ]; then
               printf '%s\\n' "$KAOIRO_TEST_CONTAINER_ENV_JSON"
             else
-              printf '[]\\n'
+              printf '["KAOIRO_USERS_PATH=/var/lib/kaoiro/users.dets"]\\n'
             fi
             ;;
           *) printf 'sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\\n' ;;
@@ -370,8 +371,12 @@ case "$1" in
       # image, or an old image rollback targets) — the fake's own
       # "eval process itself failed" outcome, distinct from a malformed
       # 0-exit output (KAOIRO_TEST_EVAL_OUTPUT set to something that is
-      # not a valid JSON array). Defaults to \`[]\` (nothing to check),
-      # so scenarios that do not care about env consistency never trip it.
+      # not a valid JSON array). Defaults to ONE agreeing store, matching
+      # the compose/container defaults above and below, so scenarios that
+      # do not care about env consistency see zero disagreement. It used
+      # to default to \`[]\`, which encoded the very premise クロエ #310
+      # round 1 S-1 rejected — an empty manifest sailing through as a
+      # clean result.
       *"/app/bin/kaoiro_server"*)
         if [ "$KAOIRO_TEST_EVAL_EXIT" = "1" ]; then
           exit 1
@@ -379,7 +384,7 @@ case "$1" in
         if [ -n "$KAOIRO_TEST_EVAL_OUTPUT" ]; then
           printf '%s\\n' "$KAOIRO_TEST_EVAL_OUTPUT"
         else
-          printf '[]\\n'
+          printf '[{"store":"users","env":"KAOIRO_USERS_PATH","default_file":"users.dets","default_path":"/tmp/kaoiro-dets/users.dets"}]\\n'
         fi
         ;;
       *)
@@ -579,7 +584,7 @@ function withCallLog(scenario, fn) {
 // control the target image's canonical set, compose's declaration, and
 // the running container's effective env independently. Undefined values
 // are deleted rather than set, so a test only overriding one of the four
-// leaves the others at FAKE_DOCKER's own defaults (empty/`[]`).
+// leaves the others at FAKE_DOCKER's own defaults (one agreeing store).
 function withEnvConsistencyFixture({ evalExit, evalOutput, composeEnvJson, containerEnvJson } = {}, fn) {
   const vars = {
     KAOIRO_TEST_EVAL_EXIT: evalExit,
@@ -970,6 +975,52 @@ test("runUpdate throws when the target image's eval reports an entry with no def
             containerEnvJson: '["KAOIRO_USERS_PATH=/var/lib/kaoiro/users.dets"]',
           },
           () => runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+        ),
+      ),
+    DeployError,
+  );
+});
+
+// クロエ #310 round 1 S-1: the contract is "exactly the four keys", so a
+// FIFTH key is a shape violation too — the image's contract has drifted
+// from this file's. compose and container are DELIBERATELY made to agree,
+// so without the key-set guard this reaches checkEnvConsistency and matches
+// cleanly; the throw can only come from the guard under test.
+test("runUpdate throws when the target image's eval reports an entry with an extra key", () => {
+  const evalOutput = JSON.stringify([
+    {
+      store: "Users",
+      env: "KAOIRO_USERS_PATH",
+      default_file: "users.dets",
+      default_path: "/tmp/kaoiro-dets/users.dets",
+      config_key: "users_path",
+    },
+  ]);
+  assert.throws(
+    () =>
+      withScenario("running-clean-stop", () =>
+        withEnvConsistencyFixture(
+          {
+            evalOutput,
+            composeEnvJson: '{"KAOIRO_USERS_PATH":"/var/lib/kaoiro/users.dets"}',
+            containerEnvJson: '["KAOIRO_USERS_PATH=/var/lib/kaoiro/users.dets"]',
+          },
+          () => runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+        ),
+      ),
+    DeployError,
+  );
+});
+
+// クロエ #310 round 1 S-1: an empty manifest passed every other guard —
+// Array.isArray holds, .every() is vacuously true — and produced a CLEAN
+// result in which checkEnvConsistency compared nothing at all.
+test("runUpdate throws when the target image's eval reports an empty manifest", () => {
+  assert.throws(
+    () =>
+      withScenario("running-clean-stop", () =>
+        withEnvConsistencyFixture({ evalOutput: "[]" }, () =>
+          runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
         ),
       ),
     DeployError,
@@ -2626,7 +2677,18 @@ test("status surfaces an unfinished transaction's id and phase", () => {
   // issue #220 absorption (turn 8 follow-up): MOUNT_RESOLVED is reached
   // only after ENV_CONSISTENCY_CHECKED, so its recorded observation is
   // already available here.
-  assert.deepEqual(result.unfinishedTransaction.envConsistency, { skipped: false, entries: {} });
+  assert.deepEqual(result.unfinishedTransaction.envConsistency, {
+    skipped: false,
+    entries: {
+      KAOIRO_USERS_PATH: {
+        compose: "/var/lib/kaoiro/users.dets",
+        container_effective: "/var/lib/kaoiro/users.dets",
+        container_source: "env",
+        declared: null,
+        match: true,
+      },
+    },
+  });
 });
 
 // issue #220 absorption (turn 8 follow-up): a transaction that has NOT
@@ -2661,7 +2723,18 @@ test("status lists a completed transaction with its source/target SHA and comple
   const [entry] = result.doneTransactions;
   assert.equal(entry.sourceSha, headSha);
   assert.equal(entry.targetSha, headSha);
-  assert.deepEqual(entry.envConsistency, { skipped: false, entries: {} });
+  assert.deepEqual(entry.envConsistency, {
+    skipped: false,
+    entries: {
+      KAOIRO_USERS_PATH: {
+        compose: "/var/lib/kaoiro/users.dets",
+        container_effective: "/var/lib/kaoiro/users.dets",
+        container_source: "env",
+        declared: null,
+        match: true,
+      },
+    },
+  });
   assert.ok(typeof entry.doneAt === "string" && entry.doneAt !== "");
 });
 
