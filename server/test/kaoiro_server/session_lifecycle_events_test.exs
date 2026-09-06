@@ -219,6 +219,67 @@ defmodule KaoiroServer.SessionLifecycleEventsTest do
       assert SessionLifecycleEvents.list_for_agent("a.pr4", name) == []
     end
 
+    # issue #305 M1 round 2 (クロエ must-fix): the WRITE side no longer
+    # produces a "client_socket:"-prefixed actor.id (agents_channel.ex
+    # now resolves a Users principal instead), but the READ side must
+    # independently refuse to resurface one too — otherwise a
+    # `permission_requested` record written by the PRE-fix code keeps
+    # surfacing the digest to operators via list_session_events forever,
+    # since nothing ever re-writes an already-stored record.
+    test "actor.id が client_socket: prefix だと drop される (M1 round 2, write path)",
+         %{name: name} do
+      details = %{
+        "revision" => 1,
+        "requested" => %{"sandbox" => "workspace-write", "network_access" => false},
+        "actor" => %{"kind" => "user", "id" => "client_socket:abc123"}
+      }
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        :ok =
+          SessionLifecycleEvents.record_permission_event(
+            "a.pr5",
+            "permission_requested",
+            "2026-09-06T00:00:00Z",
+            details,
+            name
+          )
+      end)
+
+      assert SessionLifecycleEvents.list_for_agent("a.pr5", name) == []
+    end
+
+    test "client_socket: prefix の actor.id を持つ既存 DETS row は再起動後も resurrect しない (M1 round 2, read path)",
+         %{name: name, path: path} do
+      legacy_details = %{
+        "revision" => 1,
+        "requested" => %{"sandbox" => "workspace-write", "network_access" => false},
+        "actor" => %{"kind" => "user", "id" => "client_socket:abc123"}
+      }
+
+      GenServer.stop(Process.whereis(name))
+
+      {:ok, table} = :dets.open_file(name, file: String.to_charlist(path))
+
+      :dets.insert(table, {
+        "a.pr-legacy",
+        [
+          %{
+            kind: "permission_requested",
+            trigger: nil,
+            at: "2026-09-06T00:00:00Z",
+            details: legacy_details
+          }
+        ]
+      })
+
+      :dets.sync(table)
+      :dets.close(table)
+
+      {:ok, _pid} = SessionLifecycleEvents.start_link(name: name, path: path, cap: 3)
+
+      assert SessionLifecycleEvents.list_for_agent("a.pr-legacy", name) == []
+    end
+
     test "permission_applied は PermissionObservation を丸ごと保存する", %{name: name} do
       :ok =
         SessionLifecycleEvents.record_permission_event(

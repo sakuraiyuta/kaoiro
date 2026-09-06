@@ -1616,6 +1616,44 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       assert_reply ref, :error, %{reason: "forbidden"}
     end
+
+    # issue #305 M1 round 2 (クロエ should-fix): `Users.get_or_create/4` is
+    # a bare `GenServer.call` with no bounded-call wrapper of its own — a
+    # stopped/wedged Users store must not crash THIS channel process (the
+    # operator's whole socket dropping), only fail this one command.
+    #
+    # Stops the REAL global `KaoiroServer.Users` singleton (one_for_one
+    # supervisor, application.ex) rather than an isolated instance: unlike
+    # PermissionSettings/SessionLifecycleEvents, agents_channel.ex calls
+    # `Users` with no server-override seam (by design — production code
+    # has no reason to parameterize its normal dependency), so there is
+    # no way to exercise `resolve_permission_actor/1`'s real call site
+    # without touching the shared process. `Supervisor.terminate_child/2`
+    # (not `GenServer.stop/2`) is what keeps it down for the assertion —
+    # a plain stop/crash is a `:one_for_one` restart the supervisor
+    # performs near-instantly, and a first attempt measured that race
+    # losing (the store was back up before `push` reached it, so the
+    # request quietly succeeded instead of failing). `terminate_child/2`
+    # leaves the child terminated until explicitly restarted, closing
+    # that race; `restart_child/2` in `on_exit` brings it back so no
+    # later test observes a missing store.
+    test "Users store が落ちていれば set_permission は channel を落とさず persistence_failed になる" do
+      agent_id = "test.setperm2-m1-users-down"
+      put_permission_agent(agent_id)
+      seed_permission_baseline(agent_id)
+      socket = join_as(:operator)
+
+      :ok = Supervisor.terminate_child(KaoiroServer.Supervisor, KaoiroServer.Users)
+
+      on_exit(fn ->
+        _ = Supervisor.restart_child(KaoiroServer.Supervisor, KaoiroServer.Users)
+      end)
+
+      ref =
+        push(socket, "set_permission", %{"agent_id" => agent_id, "sandbox" => "workspace-write"})
+
+      assert_reply ref, :error, %{reason: "persistence_failed"}
+    end
   end
 
   describe "delete_agent (issue #14)" do
@@ -7619,6 +7657,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert length(raw_pushes) == 1
     end
   end
+
   @tag :fuji
   test "fuji accepted request is projected without wrapper echo" do
     id = "test.fuji-request-projection"
@@ -7641,6 +7680,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     ps = KaoiroServer.PermissionSettings
     original = :sys.get_state(ps).table
     :sys.replace_state(ps, fn state -> %{state | table: :fuji_unopened_dets} end)
+
     try do
       ref = push(socket, "set_permission", %{"agent_id" => id, "sandbox" => "workspace-write"})
       assert_reply ref, :error, %{reason: "persistence_failed"}
@@ -7650,24 +7690,44 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       :sys.replace_state(ps, fn state -> %{state | table: original} end)
     end
   end
+
   @tag :fuji
   test "fuji permission acceptance cannot cross a reset lock" do
     id = "test.fuji-reset-race"
     put_permission_agent(id)
     env = AgentStates.snapshot() |> Map.fetch!(id)
-    caps = Map.merge(env["ext"]["session_capabilities"], %{"supports_session_reset" => true, "session_reset_modes" => ["new", "clear"]})
-    :ok = AgentStates.put(env |> put_in(["ext", "session_capabilities"], caps) |> Map.put("session_id", "sess-prev"))
+
+    caps =
+      Map.merge(env["ext"]["session_capabilities"], %{
+        "supports_session_reset" => true,
+        "session_reset_modes" => ["new", "clear"]
+      })
+
+    :ok =
+      AgentStates.put(
+        env
+        |> put_in(["ext", "session_capabilities"], caps)
+        |> Map.put("session_id", "sess-prev")
+      )
+
     seed_permission_baseline(id)
     reset_socket = join_as(:operator)
     socket = join_as(:operator)
     ps = KaoiroServer.PermissionSettings
     :sys.suspend(ps)
+
     try do
       ref = push(socket, "set_permission", %{"agent_id" => id, "sandbox" => "workspace-write"})
-      assert :ok == wait_until_permission(fn ->
-        {:messages, messages} = Process.info(Process.whereis(ps), :messages)
-        Enum.any?(messages, fn message -> match?({:"$gen_call", _, {:get, ^id}}, message) end)
-      end)
+
+      assert :ok ==
+               wait_until_permission(fn ->
+                 {:messages, messages} = Process.info(Process.whereis(ps), :messages)
+
+                 Enum.any?(messages, fn message ->
+                   match?({:"$gen_call", _, {:get, ^id}}, message)
+                 end)
+               end)
+
       Process.sleep(2_100)
       reset_ref = push(reset_socket, "session_reset", %{"agent_id" => id, "mode" => "new"})
       assert_reply reset_ref, :ok
@@ -7679,5 +7739,4 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       KaoiroServer.SessionResets.delete(id)
     end
   end
-
 end

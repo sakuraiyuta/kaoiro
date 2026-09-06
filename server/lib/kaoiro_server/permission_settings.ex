@@ -196,7 +196,13 @@ defmodule KaoiroServer.PermissionSettings do
   # same recovery as PermissionModes/SessionPointers: drop and recreate
   # empty. Losing settings here costs at most one re-selection; losing
   # the counter risks a revision reuse, but a corrupt file has no
-  # trustworthy counter to preserve anyway.
+  # trustworthy counter to preserve anyway. One further cost specific to
+  # this store (クロエ round 2): resetting the counter to 0 also makes
+  # `known_revision?/3` reject wrapper-reported audit events for every
+  # revision this agent legitimately held before the corruption, until a
+  # fresh `submit_request/6` re-advances the counter past them — a
+  # fail-closed audit gap, not a fail-open one, and the intended
+  # trade-off given the counter cannot be trusted to be correct either.
   defp open_table(name, path) do
     case :dets.open_file(name, file: String.to_charlist(path)) do
       {:ok, ^name} ->

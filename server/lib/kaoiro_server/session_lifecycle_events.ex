@@ -375,8 +375,20 @@ defmodule KaoiroServer.SessionLifecycleEvents do
   defp valid_revision?(revision),
     do: is_integer(revision) and revision >= 0 and revision <= @max_safe_revision
 
+  # `"client_socket:"` is `Auth.socket_id/1`/`oauth_socket_id/2`'s fixed
+  # prefix (a credential fingerprint, issue #47) — rejecting it here closes
+  # the READ side of issue #305 M1 (クロエ round 2): a `permission_requested`
+  # record written by the pre-M1 code (actor.id = socket_id) would
+  # otherwise still validate on boot-load / list_session_events and keep
+  # surfacing the digest to operators after the WRITE side was fixed.
+  # Applied to every audit id (execution_id/session_id/turn_id too, not
+  # only actor.id) — none of those are ever wrapper/engine-supplied in
+  # this shape, so the restriction only ever fires on the class this
+  # closes.
   defp valid_audit_id?(value),
-    do: is_binary(value) and value != "" and byte_size(value) <= @max_audit_id_bytes
+    do:
+      is_binary(value) and value != "" and byte_size(value) <= @max_audit_id_bytes and
+        not String.starts_with?(value, "client_socket:")
 
   defp valid_audit_reason?(value),
     do: is_binary(value) and value != "" and byte_size(value) <= @max_audit_reason_bytes

@@ -3157,12 +3157,18 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
   # Server-derived, never a client claim (`PermissionAuditActor`,
   # protocol.md; issue #305 M1, director/クロエ ruling 2026-09-06).
-  # Deliberately NOT `socket.assigns[:socket_id]` — that fingerprint
-  # identifies a CREDENTIAL for issue #47's force-disconnect targeting,
-  # not a PRINCIPAL; auth-and-authz.md and protocol.ts both require a
-  # principal id here, and a shared operator token would otherwise
-  # collapse every holder into one indistinguishable actor. Resolved
-  # lazily HERE (not at `ClientSocket.connect/3`) so the `Users`
+  # Deliberately NOT `socket.assigns[:socket_id]` — this field's contract
+  # is to carry the `Users` ledger's PRINCIPAL id, and `socket_id` is a
+  # credential FINGERPRINT instead (issue #47's force-disconnect
+  # target): a secret-derived correlation handle that auth-and-authz.md
+  # and protocol.ts both require never reach a log line or wire payload.
+  # Note this does NOT make holders of one SHARED token individually
+  # distinguishable — `client_token_hash/1` is a pure function of the
+  # token, so every holder of the same token still converges on the same
+  # user_id under M1 too, exactly as it did before. What changes is only
+  # that the value carried is a durable principal id, not a digest.
+  #
+  # Resolved lazily HERE (not at `ClientSocket.connect/3`) so the `Users`
   # `GenServer.call` — and, for a token, the fingerprint reverse-scan —
   # rides only an actual `set_permission` request, never every dashboard
   # connection including viewers who never need an actor at all.
@@ -3174,31 +3180,73 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # through the SAME `Users.get_or_create/4` source-key shape
   # `session_controller.ex`/`auth_controller.ex` use at HTTP login, so a
   # socket authenticated with the same credential converges on the same
-  # user_id regardless of which path created it first. `{:error,
-  # :forbidden}` on an unresolvable fingerprint (token rotated out of
-  # `:client_tokens` after this socket connected) mirrors the outcome
-  # `current_role/1`'s own live re-resolution already produces for that
-  # same event — this function fails closed on its own rather than
-  # assuming that upstream check ran first.
+  # user_id regardless of which path created it first. The OAuth branch's
+  # `uid` fallback for `initial_display_name` only ever matters on a
+  # first-ever sight of that source: `socket.assigns[:credential]` can
+  # only ever BE `{:oauth, ...}` after `ClientSocket.connect/3`'s
+  # `session_credential/1`/ticket path, both of which require having
+  # already passed through `auth_controller.ex`'s own
+  # `Users.get_or_create/4` call at login — so in practice this call
+  # always finds the existing entry `get_or_create/4` returns unchanged.
+  #
+  # `{:error, :forbidden}` on an unresolvable fingerprint (token rotated
+  # out of `:client_tokens` after this socket connected) mirrors the
+  # outcome `current_role/1`'s own live re-resolution already produces
+  # for that same event — this function fails closed on its own rather
+  # than assuming that upstream check ran first.
   defp resolve_permission_actor(socket) do
     case socket.assigns[:credential] do
       {:token_fingerprint, fingerprint} ->
         case Auth.client_token_identity_by_fingerprint(fingerprint) do
           {:ok, hash, display_name} ->
-            user = Users.get_or_create({:token, hash}, "user", display_name)
-            {:ok, %{"kind" => "user", "id" => user.id}}
+            case safe_get_or_create({:token, hash}, "user", display_name) do
+              {:ok, user} -> {:ok, %{"kind" => "user", "id" => user.id}}
+              :error -> {:error, :persistence_failed}
+            end
 
           {:error, _reason} ->
             {:error, :forbidden}
         end
 
       {:oauth, %{provider: provider, uid: uid}} ->
-        user = Users.get_or_create({:oauth, provider, uid}, "user", uid)
-        {:ok, %{"kind" => "user", "id" => user.id}}
+        case safe_get_or_create({:oauth, provider, uid}, "user", uid) do
+          {:ok, user} -> {:ok, %{"kind" => "user", "id" => user.id}}
+          :error -> {:error, :persistence_failed}
+        end
 
       _other ->
         {:error, :forbidden}
     end
+  end
+
+  # `Users.get_or_create/4` is a bare `GenServer.call` (no bounded-call
+  # wrapper of its own, unlike e.g. `SessionLifecycleEvents.list_for_agent/2`)
+  # — a stopped or wedged `Users` store makes it `exit` after the default
+  # 5s timeout, which would otherwise crash THIS channel process (issue
+  # #305, クロエ round 2 should-fix): the operator's whole socket drops,
+  # not just this one command. Catching it and mapping to
+  # `persistence_failed` matches how a DETS write failure elsewhere in
+  # this flow already degrades gracefully rather than taking the channel
+  # down with it.
+  defp safe_get_or_create(source, kind, display_name) do
+    {:ok, Users.get_or_create(source, kind, display_name)}
+  catch
+    # `reason` is NOT safe to log here: GenServer.call embeds the full
+    # call request (including `source`, e.g. `{:token, hash}`) into the
+    # exit reason on both :noproc and :timeout, so `inspect(reason)`
+    # would print the very client_token_hash digest issue #197/#305 M1
+    # forbids from ever reaching a log line (code-review-assessment
+    # finding, issue #305 round 2). Log a fixed, source-free message.
+    # `reason` is NOT safe to log here: GenServer.call embeds the full
+    # call request (including `source`, e.g. `{:token, hash}`) into the
+    # exit reason on both :noproc and :timeout, so `inspect(reason)`
+    # would print the very client_token_hash digest issue #197/#305 M1
+    # forbids from ever reaching a log line (code-review-assessment
+    # finding, issue #305 round 2). Log a fixed, source-free message.
+    :exit, _reason ->
+      Logger.warning("resolve_permission_actor: Users store unavailable")
+
+      :error
   end
 
   # `SetPermissionErrorReason` (protocol.md) is closed and does not
