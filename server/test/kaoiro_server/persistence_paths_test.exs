@@ -110,6 +110,9 @@ defmodule KaoiroServer.PersistencePathsTest do
   end
 
   defp fallbacks_in(module) do
+    # `:code.which/1` answers `:cover_compiled` under `mix test --cover`, so
+    # every module falls to the else branch and the caller's own "matched
+    # nothing" assertion fails rather than reporting a clean scan.
     with beam when is_list(beam) <- :code.which(module),
          {:ok, {_module, [debug_info: {:debug_info_v1, :elixir_erl, {:elixir_v1, info, _}}]}} <-
            :beam_lib.chunks(beam, [:debug_info]) do
