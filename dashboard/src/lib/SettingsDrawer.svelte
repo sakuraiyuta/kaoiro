@@ -3,9 +3,11 @@
   // Slides in from the right; every change writes straight to localStorage
   // via updateSettings() (no separate save step, the value set is small).
   import { settings, updateSettings } from "./settings.svelte";
+  import { MAX_RALLY_TURNS } from "./protocol";
   import type {
     ConversationSummary,
     KaoiroConnection,
+    QuagmireSettings,
     UserSummary,
   } from "./protocol";
   import Modal from "./Modal.svelte";
@@ -14,6 +16,7 @@
     onClose,
     onLogout = undefined,
     connection = undefined,
+    quagmireSettings = null,
   }: {
     onClose: () => void;
     /** Logout relay (phase-31 31-7): on smartphone the header hides its
@@ -27,7 +30,50 @@
      *  through here for `isOperator` sessions) — every other row
      *  (local-only settings) works without it. */
     connection?: KaoiroConnection | undefined;
+    /** Rally threshold in force (issue #307), or null before the first
+     *  push. Owned by App.svelte so a change made elsewhere is reflected
+     *  here without the drawer holding its own copy. */
+    quagmireSettings?: QuagmireSettings | null;
   } = $props();
+
+  let quagmireError = $state<string | null>(null);
+
+  // Seed for the undo path only — what an unchecked "∞" sends when no
+  // numeric threshold has been seen this session. The value IN FORCE is
+  // always the one the server reports, never this.
+  let lastNumericRallyTurns = $state(16);
+
+  $effect(() => {
+    const turns = quagmireSettings?.rallyTurns;
+    if (typeof turns === "number") lastNumericRallyTurns = turns;
+  });
+
+  const rallyOff = $derived(quagmireSettings?.rallyTurns === null);
+
+  const rallySourceLabel = $derived(
+    quagmireSettings === null
+      ? "取得中"
+      : { stored: "設定済み", env: "環境変数", default: "既定値" }[
+          quagmireSettings.source
+        ],
+  );
+
+  function commitRallyTurns(value: number | null): void {
+    if (!connection) return;
+    quagmireError = null;
+    connection.setQuagmireSettings(value).catch((err: unknown) => {
+      quagmireError = err instanceof Error ? err.message : "error";
+    });
+  }
+
+  // The number input accepts anything the browser lets through, so clamp
+  // before sending: the server rejects out-of-range rather than clamping,
+  // and a rejection here would only tell the operator they guessed wrong.
+  function commitTypedRallyTurns(raw: string): void {
+    const parsed = Number(raw);
+    if (!Number.isInteger(parsed)) return;
+    commitRallyTurns(Math.min(Math.max(parsed, 1), MAX_RALLY_TURNS));
+  }
 
   // issue #276: fetched once per drawer open (no live push — mirrors
   // getLaunchDefaults' pure read-time query shape).
@@ -401,6 +447,60 @@
   </label>
 
   {#if connection}
+    <section class="quagmire">
+      <h3>停滞検知のしきい値</h3>
+      <p class="hint">
+        エージェント間のやり取りがこの通数に達すると警告バナーを出します
+        (現在の設定元: {rallySourceLabel})。
+      </p>
+
+      <label class="row">
+        <input
+          type="checkbox"
+          checked={rallyOff}
+          onchange={(e) =>
+            commitRallyTurns(
+              e.currentTarget.checked ? null : lastNumericRallyTurns,
+            )}
+        />
+        検知しない (∞)
+      </label>
+
+      <label>
+        しきい値
+        <input
+          type="range"
+          min="4"
+          max="64"
+          step="1"
+          value={quagmireSettings?.rallyTurns ?? lastNumericRallyTurns}
+          disabled={rallyOff}
+          onchange={(e) => commitRallyTurns(Number(e.currentTarget.value))}
+        />
+        <span class="value"
+          >{rallyOff
+            ? "∞"
+            : `${quagmireSettings?.rallyTurns ?? lastNumericRallyTurns} 通`}</span
+        >
+      </label>
+
+      <label>
+        直接入力 (1〜{MAX_RALLY_TURNS})
+        <input
+          type="number"
+          min="1"
+          max={MAX_RALLY_TURNS}
+          value={quagmireSettings?.rallyTurns ?? lastNumericRallyTurns}
+          disabled={rallyOff}
+          onchange={(e) => commitTypedRallyTurns(e.currentTarget.value)}
+        />
+      </label>
+
+      {#if quagmireError}
+        <p class="error">しきい値を変更できません: {quagmireError}</p>
+      {/if}
+    </section>
+
     <section class="conversations">
       <div class="conversations-header">
         <h3>会話一覧</h3>
@@ -803,10 +903,21 @@
      disambiguate which section a match came from, but no duplicated
      CSS. */
   .conv-status,
-  .user-status {
+  .user-status,
+  .quagmire .hint {
     margin: 0;
     font-size: var(--fs-body-sm);
     color: var(--fg-dim);
+  }
+
+  .quagmire .error {
+    margin: 0;
+    font-size: var(--fs-body-sm);
+    color: var(--danger, #c62828);
+  }
+
+  .quagmire input[type="number"] {
+    width: 6rem;
   }
 
   .conv-list,

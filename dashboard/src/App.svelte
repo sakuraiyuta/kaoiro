@@ -39,6 +39,7 @@
     PersonaManifest,
     RunnerSessions,
     QuagmireNotice,
+    QuagmireSettings,
     ServerHealth,
     SpawnResult,
     TaskTable,
@@ -302,6 +303,23 @@
       ...quagmireNotices.filter((n) => quagmireKey(n) !== key),
       notice,
     ];
+  }
+
+  // issue #307: the threshold in force. Held here rather than in the drawer
+  // so a change from another dashboard also clears banners the operator is
+  // looking at right now, whether or not the drawer is open.
+  let quagmireSettings = $state<QuagmireSettings | null>(null);
+
+  // A raised threshold has to take the banners with it. The server only
+  // announces edges, so it cannot retract a notice it already sent, and the
+  // notice carries the `turns` that were counted — enough to decide here.
+  function applyQuagmireSettings(next: QuagmireSettings): void {
+    quagmireSettings = next;
+    quagmireNotices = quagmireNotices.filter(
+      (n) =>
+        n.kind !== "rally" ||
+        (next.rallyTurns !== null && n.turns >= next.rallyTurns),
+    );
   }
 
   function quagmireText(notice: QuagmireNotice): string {
@@ -734,6 +752,7 @@
         onSnapshotIncomplete: (incomplete) => (snapshotIncomplete = incomplete),
         onTaskSnapshot: (next) => (tasks = next),
         onQuagmireNotice: recordQuagmire,
+        onQuagmireSettings: applyQuagmireSettings,
         onDeliverySnapshot: (next) => (deliveries = next),
         onDeliverySnapshotIncomplete: (incomplete) => (deliverySnapshotIncomplete = incomplete),
         onDeliveryStatus: (agentId, delivery) => {
@@ -1324,6 +1343,7 @@
     // still standing), but not the end of a session: whoever logs in next on
     // this tab has not seen them, and the detector re-announces on its own.
     quagmireNotices = [];
+    quagmireSettings = null;
   }
 
   // Bulk restore of every offline entry (ADR-0030 D5). Confirms once, then
@@ -1793,6 +1813,7 @@
     onClose={() => (showSettings = false)}
     onLogout={logout}
     connection={isOperator ? (connection ?? undefined) : undefined}
+    {quagmireSettings}
   />
 {/if}
 

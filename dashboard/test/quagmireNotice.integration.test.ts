@@ -8,7 +8,7 @@
 import { mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { KaoiroHandlers, QuagmireNotice } from "../src/lib/protocol";
-import { parseQuagmireNotice } from "../src/lib/protocol";
+import { parseQuagmireNotice, parseQuagmireSettings } from "../src/lib/protocol";
 
 const captured = vi.hoisted(() => ({
   handlers: null as KaoiroHandlers | null,
@@ -178,6 +178,81 @@ describe("quagmire notice (issue #273)", () => {
     await tick();
 
     expect(banners()).toHaveLength(0);
+  });
+});
+
+// issue #307: the server announces edges and cannot retract a notice, so a
+// raised threshold has to take the banner with it on this side.
+describe("quagmire banners follow the threshold (issue #307)", () => {
+  const stall: QuagmireNotice = {
+    kind: "stall",
+    agentId: "host.c",
+    undelivered: 2,
+    pendingSince: "2026-09-05T00:00:00Z",
+    thresholdMs: 1_800_000,
+  };
+
+  it("drops a rally banner once the threshold passes its turn count", async () => {
+    const h = await mountApp();
+    h.onHosts?.([]);
+    h.onQuagmireNotice?.(rally);
+    await tick();
+    expect(banners()).toHaveLength(1);
+
+    h.onQuagmireSettings?.({ rallyTurns: 20, source: "stored" });
+    await tick();
+    expect(banners()).toHaveLength(0);
+  });
+
+  it("keeps a rally banner the new threshold still covers", async () => {
+    const h = await mountApp();
+    h.onHosts?.([]);
+    h.onQuagmireNotice?.(rally);
+    await tick();
+
+    h.onQuagmireSettings?.({ rallyTurns: 18, source: "stored" });
+    await tick();
+    expect(banners()).toHaveLength(1);
+  });
+
+  it("clears rally banners on ∞ and leaves stall alone", async () => {
+    const h = await mountApp();
+    h.onHosts?.([]);
+    h.onQuagmireNotice?.(rally);
+    h.onQuagmireNotice?.(stall);
+    await tick();
+    expect(banners()).toHaveLength(2);
+
+    h.onQuagmireSettings?.({ rallyTurns: null, source: "stored" });
+    await tick();
+
+    expect(banners()).toHaveLength(1);
+    expect(banners()[0]?.textContent).toContain("疑い");
+  });
+});
+
+describe("parseQuagmireSettings", () => {
+  it("accepts a threshold and the ∞ form", () => {
+    expect(parseQuagmireSettings({ rally_turns: 24, source: "stored" })).toEqual({
+      rallyTurns: 24,
+      source: "stored",
+    });
+    expect(parseQuagmireSettings({ rally_turns: null, source: "default" })).toEqual({
+      rallyTurns: null,
+      source: "default",
+    });
+  });
+
+  // Anything unparseable must not render as "off": that reads as a
+  // deliberate ∞ when the real threshold is still in force.
+  it("rejects a malformed payload rather than reading it as off", () => {
+    expect(parseQuagmireSettings(null)).toBeNull();
+    expect(parseQuagmireSettings({ source: "stored" })).toBeNull();
+    expect(parseQuagmireSettings({ rally_turns: 24 })).toBeNull();
+    expect(parseQuagmireSettings({ rally_turns: 24, source: "elsewhere" })).toBeNull();
+    expect(parseQuagmireSettings({ rally_turns: "24", source: "stored" })).toBeNull();
+    expect(parseQuagmireSettings({ rally_turns: 24.5, source: "stored" })).toBeNull();
+    expect(parseQuagmireSettings({ rally_turns: 0, source: "stored" })).toBeNull();
   });
 });
 

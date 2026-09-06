@@ -2206,6 +2206,18 @@ export type ConversationList = ConversationSummary[] & { incomplete: boolean };
 /** Edge-triggered review-quagmire notice (issue #273). `rally` names the
  *  participants of a long cross-conversation exchange; `stall` names one
  *  recipient whose deliveries have gone unacknowledged. Operator-only. */
+/** Largest rally threshold the server accepts (issue #307,
+ *  `QuagmireSettings.max_rally_turns/0`). Past it an operator wants ∞, not
+ *  a number, so the control clamps here and offers the off switch instead. */
+export const MAX_RALLY_TURNS = 999;
+
+/** Rally threshold in force, and which layer supplied it (issue #307).
+ *  `rallyTurns: null` is ∞ — rally detection off. Operator-only. */
+export type QuagmireSettings = {
+  rallyTurns: number | null;
+  source: "stored" | "env" | "default";
+};
+
 export type QuagmireNotice =
   | {
       kind: "rally";
@@ -2329,6 +2341,9 @@ export interface KaoiroHandlers {
   /** Review-quagmire notice (issue #273). Operator-only on the server side,
    *  so a viewer session never sees this fire. */
   onQuagmireNotice?: (notice: QuagmireNotice) => void;
+  /** Rally threshold in force (issue #307). Pushed on join and again on
+   *  every operator change, so several dashboards agree. Operator-only. */
+  onQuagmireSettings?: (settings: QuagmireSettings) => void;
   /** Current wrapper artifact identities, sent only to operators/admins. */
   onWrapperBuildInfoSnapshot?: (
     infos: Record<string, WrapperBuildInfo>,
@@ -2566,6 +2581,12 @@ export interface KaoiroConnection {
    * (#58); the server also persists the pick so the wrapper restores it
    * on next start. `mode` must be a closed-enum PermissionMode value. */
   setPermissionMode: (agentId: string, mode: string) => Promise<void>;
+  /** Sets the rally threshold the whole deployment detects against
+   *  (issue #307). `null` is ∞. Operator-only; rejects with
+   *  `invalid_rally_turns` outside 1..MAX_RALLY_TURNS. The effective value
+   *  comes back as a `quagmire_settings` push rather than in the ack, so
+   *  every open dashboard agrees rather than only the one that asked. */
+  setQuagmireSettings: (rallyTurns: number | null) => Promise<void>;
   /** Requests a sandbox / network_access change for the agent's NEXT
    *  execution (issue #305); the running turn keeps its own configuration.
    *  Rejects with a `SetPermissionErrorReason` message on server refusal.
@@ -3656,6 +3677,27 @@ export function parseQuagmireNotice(raw: unknown): QuagmireNotice | null {
   return null;
 }
 
+/** Rejects a malformed payload rather than guessing: an absent or
+ *  unparseable `rally_turns` is indistinguishable on the wire from the
+ *  deliberate `null` that means ∞, and showing "off" for a threshold that
+ *  is actually in force would mislead exactly when it matters. */
+export function parseQuagmireSettings(raw: unknown): QuagmireSettings | null {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+  const p = raw as Record<string, unknown>;
+  if (p.source !== "stored" && p.source !== "env" && p.source !== "default") {
+    return null;
+  }
+  if (p.rally_turns === null) return { rallyTurns: null, source: p.source };
+  if (
+    typeof p.rally_turns !== "number" ||
+    !Number.isInteger(p.rally_turns) ||
+    p.rally_turns <= 0
+  ) {
+    return null;
+  }
+  return { rallyTurns: p.rally_turns, source: p.source };
+}
+
 // Same charset `AgentId.valid?/1` enforces server-side (`agent_id.ex`,
 // `^[A-Za-z0-9._-]{1,256}$`) -- user_id shares the SAME id space as
 // agent_id (ADR-0050 D1), and the server's `fetch_user_id/1` reuses
@@ -3777,6 +3819,7 @@ export const CLIENT_EVENT_VERSION_POLICY = {
   agent_deleted: "checked",
   delivery_status: "checked",
   quagmire_notice: "checked",
+  quagmire_settings: "checked",
   session_reset_started: "checked",
   session_reset_completed: "checked",
   session_reset_failed: "checked",
@@ -4147,6 +4190,10 @@ export function connectKaoiro(
     bindServerEvent(c, "quagmire_notice", (payload: unknown) => {
       const notice = parseQuagmireNotice(payload);
       if (notice !== null) handlers.onQuagmireNotice?.(notice);
+    });
+    bindServerEvent(c, "quagmire_settings", (payload: unknown) => {
+      const settings = parseQuagmireSettings(payload);
+      if (settings !== null) handlers.onQuagmireSettings?.(settings);
     });
     bindServerEvent(c, "wrapper_build_info", (payload: unknown) => {
       if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
@@ -4794,6 +4841,8 @@ export function connectKaoiro(
     },
     setPermissionMode: (agentId, mode) =>
       pushAsync(channel, "set_permission_mode", { agent_id: agentId, mode }),
+    setQuagmireSettings: (rallyTurns) =>
+      pushAsync(channel, "set_quagmire_settings", { rally_turns: rallyTurns }),
     setPermission: async (agentId, patch) =>
       setPermissionAckOf(
         await pushAsyncReply(channel, "set_permission", {
