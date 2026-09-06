@@ -221,9 +221,10 @@ does not prevent — a tool that ran without a gate request has already run.
 ["sandbox", "approval", "networkAccess"]`; `ext.permission.enforcement`
 (F4) is added to `PermissionAxesExt` (resume re-applies them; the
 phase-15 D8 rule of dropping a stale `danger-full-access` to the safe
-default applies to `approval = never` as well). `setPermissionMode` rejects
-in Stage A exactly as on Codex. Mid-session mutation needs a new two-axis
-control message plus dashboard controls and is scheduled as Stage B0.
+default applies to `approval = never` as well). `setPermissionMode` and
+`set_permission` reject in Stage A. Unlike Codex, this engine does not advertise
+`supports_permission_switch`. Enabling the shared control message and dashboard
+controls is scheduled as Stage B0.
 Precondition for B0: the threat-model MUST that the server cannot widen a
 wrapper's execution ceiling still holds — on this engine the cell matrix
 *is* the ceiling — so B0 adds wrapper-config clamps (`max_sandbox`,

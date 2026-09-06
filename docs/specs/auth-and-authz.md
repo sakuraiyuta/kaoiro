@@ -111,7 +111,7 @@ Call `require_operator(socket)` first, both directly and inside
 `relay_to_wrapper_guarded/3` / `relay_to_runner_guarded/3`:
 
 - `instruction` / `permission_decision` / `question_response` / `interrupt`
-- `set_model` / `set_effort` / `set_permission_mode` / `refresh_models`
+- `set_model` / `set_effort` / `set_permission_mode` / `set_permission` / `refresh_models`
 - `refresh_engine_catalog`
 - `spawn` / `stop` / `restart` / `enumerate_sessions` / `restore` /
   `resume_session`
@@ -153,12 +153,29 @@ or revoked credentials return 401; viewers return 403.
 - Broker timeout is `permission_timeout_ms` in wrapper config; when unset it waits
   indefinitely (SDK default), avoiding accidental denial when no operator is
   present ([ADR-0022](../adr/0022-pending-permission-authoritative-source.md)).
-- The ceiling takes a different form per engine: Claude = `allowedTools` +
-  `canUseTool`; Codex = two axes fixed at spawn with no approval channel
-  ([ADR-0033](../adr/0033-permission-model-dual-axis.md) F3); antigravity =
-  the wrapper's tool-class table and cell matrix behind the hook gate
-  (below). The rule that server and client cannot widen it holds for all
-  three.
+- Claude's tool ceiling remains `allowedTools` / `canUseTool`. Codex's selected
+  sandbox/network policy may change through the operator-only `set_permission`
+  control; approval stays `never`. Selection is not an immutable launch-time
+  ceiling ([ADR-0033](../adr/0033-permission-model-dual-axis.md) F3).
+  Antigravity's tool-class table and hook-gate cell matrix remain launch-fixed in
+  Stage A; Stage B still requires the local clamps in ADR-0057 F4c.
+
+### Permission configuration control
+
+`set_permission` requires a currently authorized operator/admin client socket.
+Wrapper and runner credentials do not grant this operation. Resolve the actor
+from the authenticated socket's user principal; never accept an actor, role, or
+revision supplied in the command body. Audit records contain the principal ID,
+not a token, cookie, or OAuth credential.
+
+Server validation requires a connected current wrapper, advertised
+`supports_permission_switch`, a known raw configuration baseline, valid fields,
+and no pending session reset. Busy execution is allowed. The wrapper validates
+the relayed pair independently. Unsupported engines, including Antigravity Stage
+A, reject without changing their configuration. Confirmation UI is not required
+for widening. Audit acceptance and observation in the operator-only lifecycle
+timeline; recording remains best-effort. See the complete
+[permission contract](protocol.md#permission-changes-at-an-execution-boundary).
 
 ### MCP (`mcp__kaoiro__send_to_agent`)
 
@@ -332,7 +349,8 @@ child and the wrapper ([ADR-0057](../adr/0057-antigravity-adapter.md) F4).
   whether it belongs in default allowedTools (omitted = per-use approval;
   included = unsupervised).
 - MUST: State the execution-capability ceiling form for every engine recorded
-  here (SDK allowlist / axes fixed at spawn / wrapper policy table). An engine
+  here (SDK allowlist / operator-selected OS policy / wrapper policy table).
+  Distinguish a mutable selected policy from an immutable ceiling. An engine
   whose gate is enforced only by the wrapper must fail closed on a verification
   failure — there is no engine-side backstop to fall back on.
 

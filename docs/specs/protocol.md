@@ -169,6 +169,7 @@ cannot represent.
 - Unstamped means conservatively “feature unavailable” (fail-closed); UI decisions use only this field.
 - `supports_model_switch: boolean` — whether mid-session `set_model` is accepted (phase 16, [ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) F4).
 - `supports_effort_switch: boolean` — whether mid-session `set_effort` is accepted. UI shows/hides model and effort selectors from each boolean, never from engine name (ADR-0034 F3).
+- `supports_permission_switch?: boolean` — accepts the engine-neutral `set_permission` control and implements its synchronization/observation contract below. Absent or false means unsupported. Codex advertises true only when the contract is implemented end to end; Claude and Antigravity Stage A do not. This is independent of Claude's six-mode selector.
 - `supports_session_reset: boolean` / `session_reset_modes?: ("new" | "clear")[]` — whether the operator can run `session_reset` and which modes are available. This is separate from exposing the agent's `request_session_reset` tool, currently Claude-only (ADR-0043).
 - `supports_context_usage: boolean` — whether this session provides an authoritative context-window snapshot in `ext.context` (phase 21, [ADR-0040](../adr/0040-context-usage-capability.md)). UI has three states:
   - **absent** — unstamped capability from an old wrapper during rolling upgrade; hide the context row rather than treating it as unsupported.
@@ -187,9 +188,11 @@ or permission substitutions on the resume path.
   launch-fixed approval axis, [ADR-0057](../adr/0057-antigravity-adapter.md)
   F4c; unset means absent).
   **Important**: use the last effective values, not spawn values. If an operator
-  changed model, effort, or permission mode mid-session, snapshot the latest
-  values so an intentional change does not trigger a resume drift.
-- `ext.effective` (`ResolvedSnapshotExt`): values forced by this host, same shape.
+  changed model, effort, permission mode, or sandbox/network mid-session, snapshot
+  the latest confirmed values so an intentional change does not trigger a resume drift.
+- `ext.effective` (`ResolvedSnapshotExt`): effective values, same shape. For
+  switchable permissions, sandbox/network fields require a current observation;
+  omit them while the current execution's policy is unknown.
 - `ext.resume_drift` (`ResumeDriftExt`): per-field differences between the two
   snapshots as `Array<{field, prev, now}>`; an empty array means no difference,
   absent means a fresh spawn rather than a resume.
@@ -224,6 +227,247 @@ model/effort changes intentionally made by an operator mid-session (intentional
 change is not drift). Consult the adapter's `modelRollbackPinned` flag and
 switch history; emit drift only for an unintended substitution immediately
 after resume.
+
+### Permission changes at an execution boundary
+
+**Contract: accepted; capability-gated rollout.** `set_permission` changes an
+engine's sandbox/network configuration. Codex implements it using fresh options
+for each `codex exec` while retaining its session ID. Antigravity Stage A rejects
+it; Stage B requires ADR-0057 F4c's local clamps. The operation is not Claude's
+`set_permission_mode`: its six values encode intent/classifier/approval semantics,
+map only approximately to sandbox, and cannot express network access. No reverse
+mapping from a sandbox pair to a Claude mode is defined.
+
+#### Request, relay, and acknowledgement
+
+Client to server:
+
+```json
+{"version":"0","agent_id":"host.agent","sandbox":"workspace-write","network_access":false}
+```
+
+Either axis may be omitted, but at least one is required. Sandbox accepts only
+`read-only`, `workspace-write`, or `danger-full-access`; network access is a strict
+boolean, including `false`. Reject `null`, empty patches, and unknown fields
+(including `approval`, `actor`, and `revision`) as `invalid_payload`. Approval
+remains `never` on Codex and is not an operation parameter.
+
+Server validation order is live operator/admin authorization, payload/size,
+agent identity/current connection, reset exclusion, capability, and raw baseline
+availability. Busy states are accepted. No new request is accepted against an
+offline or unsupported wrapper. Existing accepted requests survive reconnect.
+The error body is `{reason}` with `SetPermissionErrorReason`: `forbidden`,
+`invalid_payload`, `unknown_agent`, `agent_unavailable`,
+`unsupported_permission_switch`, `permission_not_ready`,
+`session_reset_pending`, `revision_exhausted`, or `persistence_failed`.
+
+The server merges the patch into the latest next-execution **raw** configuration
+in one serialized store operation, assigns a positive safe-integer revision,
+and persists it before relay and acknowledgement. Revision allocation survives
+restart and never reuses a number, including after deletion of one agent's
+settings; exhaust the safe-integer domain by rejecting, not wrapping. A revision
+binds one immutable requested pair. Send the complete pair to `wrapper:<id>`:
+
+```json
+{"version":"0","revision":17,"sandbox":"workspace-write","network_access":false}
+```
+
+`agent_id` is removed; `version` and `revision` come from the server. The wrapper
+validates the complete message independently. Duplicate revisions are no-op;
+older revisions cannot replace newer requests. A repeated value under a new
+revision is still a distinct request. Server acceptance replies:
+
+```json
+{"revision":17,"status":"pending","requested":{"sandbox":"workspace-write","network_access":false}}
+```
+
+This acknowledges the saved request, not delivery, SDK application, or an audit
+fsync. Relay is retried by authoritative synchronization after a reconnect, not
+by assuming that the initial broadcast reached the wrapper. A persistence failure
+must not relay or acknowledge acceptance. Permission and reset acceptance must
+serialize their exclusion: neither can pass a check and commit across the other.
+
+#### Requested, submitted, and effective state
+
+`ext.permission_control` (`PermissionControlExt`) is the latest request and its
+progress. It is independent of approval-broker `ext.pending_permission` and
+model/effort `ext.switch_error`:
+
+```ts
+{
+  revision: number,
+  requested: PermissionConfiguration,
+  status: "pending" | "applying" | "applied" | "failed" | "unknown",
+  submitted?: PermissionSubmission,
+  effective?: PermissionObservation,
+  last_effective?: PermissionObservation,
+  reason?: string,
+  rolled_back_to?: PermissionConfiguration
+}
+```
+
+`PermissionSubmission` is `{revision, requested, execution_id}`.
+`PermissionObservation` extends it with `{session_id, turn_id, permission,
+network_access}`; `permission` is the existing `PermissionAxesExt`.
+`execution_id` is a wrapper-generated correlation ID for one exec; `session_id`
+and `turn_id` are engine-observed identities. Requested/submitted values retain
+raw network configuration. Expected network access is normalized: full access
+is true, read-only is false, and workspace-write uses the configured toggle.
+Confirm this against the new policy record, including its workspace-write
+network field; if it differs, report the observed value and the mismatch.
+Never copy an observed full-access true into the raw toggle for a later
+workspace-write selection.
+
+Revision zero is reserved for the wrapper's initial raw launch baseline; it is
+not an operator command. Before the first execution, publish that baseline with
+`status=pending`, no submitted/effective observation, and no permission audit
+transition. A supporting wrapper sends the control state on every state change.
+For engines without this capability, the legacy startup display is unchanged.
+
+| Event | State of latest request | Effective publication |
+|---|---|---|
+| Request accepted before the next exec | `pending` | Keep a known current observation, if any; no optimistic promotion. |
+| Exec captures this revision | `applying` | Move prior observation to `last_effective`; current permission is unknown. |
+| This exec's policy is confirmed | `applied` | Publish this observation to `effective`, `ext.permission`, and the sandbox/network fields in `ext.effective`. |
+| Definitive rejection before application or observed policy mismatch | `failed`, with `reason` | A `rolled_back_to` pair is allowed only when pre-application rejection is established; do not invent an observation. |
+| Exec outcome or policy cannot be established | `unknown`, with `reason` | Omit current effective permissions. Historical evidence stays in `last_effective`. |
+| General `turn.failed` after policy confirmation | Remain `applied` | Retain the observation. Permission is not a model-selection rollback. |
+
+The table describes a request with no newer successor. If revision B arrives
+while A runs, the top-level request is B/pending while `submitted` and a known
+`effective` may describe A. A's eventual result cannot settle or erase B. Retain
+A's submission and request binding until its outcome is handled; comparing pair
+values alone does not distinguish A from B. A delayed observation for a finished
+execution may update historical evidence, never the current execution's badge.
+An idle session retains its last confirmed policy until the next exec starts.
+
+For Codex, confirmation must read `sandbox_policy` and `approval_policy` from
+**this execution's** rollout `turn_context`. Capture a pre-execution file boundary
+and existing turn identity, then accept only a new correlated record. Neither
+`turn.started` (which carries no turn ID or permission fields in SDK 0.153.4)
+nor a prior tail record is confirmation. Handle delayed/partial writes and
+session changes without promoting stale evidence. A policy mismatch is a loud
+failure with the actually observed policy, not a silent substitution. An
+approval value other than the fixed `never` is a contract violation; do not
+continue dispatch until reconciled. The effective claim is an observation of
+the engine's policy, not a proof that every OS isolation primitive succeeded.
+
+Once policy is confirmed, subsequent API failure does not roll it back. Only a
+definitive rejection before application can set `rolled_back_to`; missing
+observation never does. No automatic transition may widen permissions. Even
+when the previous policy is narrower, it is not effective without observation
+or proof of rejection before application. An unknown result preserves the
+requested next configuration; it does not authorize resending user input or
+creating a new turn automatically. A new operator selection may supersede it.
+
+Clients render unknown as unknown, not as the previous observed badge. They may
+show `last_effective` with an explicit historical label. `whoami` uses the same
+observation/status distinction. Busy execution does not disable the picker;
+network editing is offered for workspace-write and approval remains host-fixed.
+Client ack/state updates cannot reduce the latest known revision or restore
+pending after that revision settled. The server projects its authoritative
+latest request to operator snapshots/live state so reloads and other clients
+see pending requests even before a wrapper report arrives. Viewers receive no
+permission control details under the existing ext removal rule.
+
+#### Persistence, join synchronization, and resume
+
+`PermissionSettings` is separate from `SessionPointers.snapshot`. It retains raw
+next-execution selection, latest request/progress, in-flight revision bindings,
+and the authenticated user ID/time for operator requests. The server owns
+revision allocation and request records; wrapper reports can update observations
+only for matching accepted/submitted revisions on the current connection. A
+retired wrapper cannot commit a stale observation.
+
+The wrapper requests `permission_sync:{engine}` in its channel join payload
+(`PermissionSyncJoinRequest`); the server replies `permission_sync:true` when
+this contract is supported (`PermissionSyncJoinReply`). The engine value uses
+the existing EngineKind enum and prevents cross-engine settings replay; it does
+not replace capability checks. This negotiation precedes host construction and
+does not depend on a state_change capability advertisement.
+After **every** negotiated wrapper join, the server sends `permission_sync`:
+
+```ts
+{version: "0", control: PermissionControlExt | null,
+ next: {revision: number, requested: {sandbox, network_access}} | null}
+```
+
+`null/null` explicitly means no saved settings. Seed from the wrapper's raw
+launch baseline, not from normalized `ext.effective`. Otherwise `next` is the
+saved next-execution selection. The retained `control` may describe a failed
+latest request, but `next` never replays that rejected pair; retain the prior
+selection only when rejection was definitively before application. Unknown
+requests remain next, and applied selections are reasserted on process restart.
+Both fields are null together or non-null together. For a mismatch after
+submission, retain the requested selection as next but stop dispatch until the
+operator reconciles it; do not substitute a previous policy automatically.
+
+Synchronization is a readiness barrier, including the explicit empty response.
+Buffer messages received before host construction. Process the authoritative
+sync before any initial/replayed/queued input can create an exec. On rejoin,
+keep an already running exec unchanged and gate its successor until sync.
+A same-process rejoin must not turn a cached observation into a fresh application;
+a fresh process starts with historical evidence only and must observe its exec.
+An old server that does not support this handshake cannot enable the capability;
+a wrapper that has already accepted permission changes must not resume dispatch
+without synchronization merely because the new connection is silent. Scope sync
+to the current channel join, and do not let a delayed sync overwrite a newer live
+revision already accepted on that join.
+
+Resume/restore/switch/reset initially use only last-observed effective fields in
+`SessionPointers`; sync then supplies the raw requested selection before exec.
+Crash restart also needs sync: it may reuse the runner's older launch config.
+A legacy snapshot without raw settings cannot recover a latent network toggle.
+The live wrapper's launch configuration is the explicit baseline in that case.
+Delete removes per-agent PermissionSettings (not the revision allocator or audit
+history); an engine change must not replay another engine's settings.
+
+A current confirmed permission observation updates only the relevant snapshot
+fields and preserves unrelated model/effort fields. It must still be recorded
+when model/effort is pending or failed; the model switch's whole-snapshot skip
+must not discard independently observed permissions. Conversely, generic state
+snapshots must not overwrite permission fields with pending, unknown, or stale
+values. Persisted snapshots remain last observed even while current permission
+is unknown. Intentional sandbox/network changes are excluded from resume drift;
+unintended host substitutions remain visible.
+
+#### Permission lifecycle audit
+
+Extend ADR-0055's `SessionLifecycleEvents` timeline, not a separate stderr-only
+log. `session_lifecycle` remains a versioned control event; it is not an envelope
+`type`. The permission events carry closed, typed `details`:
+
+| Kind | Producer | Details |
+|---|---|---|
+| `permission_requested` | Server after accepting an operator request | `{revision, requested, actor:{kind:"user",id}, previous?}` |
+| `permission_applied` | Wrapper after a new selection's policy is observed | The `PermissionObservation` fields, plus optional `previous` observation. |
+| `permission_failed` | Wrapper for a definitive rejection or an unconfirmed/mismatched application | `{revision, requested, reason, execution_id?, rolled_back_to?}` |
+
+`previous` is a historical `PermissionObservation`, absent when unknown. Do not
+emit applied solely for replaying an already applied revision; fresh observation
+still updates current state. Deduplicate matching revision/kind outcomes across
+reconnect; a transition from unknown to subsequently observed may add applied.
+The server joins observations to its stored request, resolves previous from
+its own accepted observations, and authenticates their agent/current connection.
+It never trusts a wrapper-supplied audit actor or a wrapper-produced
+permission_requested. Keep in-flight request bindings long
+enough for A's result when B is already pending. Rejected client payloads do not
+create a permission_requested record.
+
+Validate kind-specific details at ingress, store append, and boot load, and
+preserve them in `list_session_events`. `trigger` remains exclusive to
+`compact_boundary` (absent/null for permission events). Require finite safe
+revisions and bounded identifiers/reasons: IDs at most 256 UTF-8 bytes, reason
+at most 256 UTF-8 bytes, with no prompt, tool input, credentials, or raw SDK error.
+The existing ISO timestamp and transport frame limits still apply. Unknown
+execution outcomes use a reason such as `observation_unavailable` without
+`rolled_back_to`; the event name alone does not establish rejection/rollback.
+
+Record narrowing and widening without confirmation UI or peer notification.
+The existing retention, operator-only pull access, and best-effort asynchronous
+write policy remain. An audit write failure does not reverse or block an
+accepted command, and its ack is not an audit-fsync receipt. This timeline is
+not a guaranteed durable security journal.
 
 ### Types and payload (v0 settled)
 
@@ -332,6 +576,7 @@ The complete coverage and the permanent `attach_chunk` exception are normative i
 | client → server | `set_effort` | `{ agent_id, effort }` selects one of the model's `effort_levels` and is relayed fire-and-forget; unknown agents are rejected (#54, [ADR-0020](../adr/0020-dashboard-battery-included-client.md), [ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md)). |
 | client → server | `refresh_models` | `{ agent_id }` asks the wrapper to retry its supported-model catalog fetch ([ADR-0037](../adr/0037-claude-model-catalog-live-refresh.md) F6). It is a no-op for an absent session and rejects while `session_reset` is pending. |
 | client → server | `set_permission_mode` | `{ agent_id, mode }` relays a six-value SDK mode and persists it per agent for the next wrapper join. Unknown mode/agent returns `invalid value: mode` / `unknown_agent` (#58). |
+| client → server | `set_permission` | `{ version, agent_id, sandbox?, network_access? }`; operator-only non-empty patch. Persists requested raw configuration and returns `{revision, status:"pending", requested}`; see [permission changes](#permission-changes-at-an-execution-boundary). |
 | client → server | `clear_history` | `{ agent_id }` purges prior-session display logs from the server ring buffer and broadcasts `history_cleared`; it never touches wrapper JSONL. Unknown agent/current session returns `unknown_agent` / `no_current_session` (#48). |
 | client → server | `delete_agent` | `{ agent_id }` is accepted only for disconnected agents. Requiring the disconnected pre-check, revoking and fsyncing the token, broadcasting `revoked`, closing planned targets, purging all server stores, then broadcasting `agent_deleted` preserves fail-closed ordering ([ADR-0051](../adr/0051-history-restart-resilience.md), [#14](https://github.com/sakuraiyuta/kaoiro/issues/14), [#72](https://github.com/sakuraiyuta/kaoiro/issues/72)). |
 | client → server | `revoke_wrapper_token` | `{ agent_id }` immediately places the per-agent signed token on the denylist, fsyncs, and force-disconnects the wrapper. It is accepted for live or disconnected agents and survives restart ([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md), [#72](https://github.com/sakuraiyuta/kaoiro/issues/72)). |
@@ -349,13 +594,15 @@ The complete coverage and the permanent `attach_chunk` exception are normative i
 | server → wrapper | `set_effort` | `{ effort }` calls `Query.applyFlagSettings({ effortLevel })` for subsequent turns; absent sessions are a no-op (#54). |
 | server → wrapper | `refresh_models` | `{}` resets retry state and kicks `#refreshSupportedModels()`; it remains usable after a silent cap and is a no-op without a session ([ADR-0037](../adr/0037-claude-model-catalog-live-refresh.md) F6). |
 | server → wrapper | `set_permission_mode` | `{ mode }` relays or pushes after join. Before a session it updates internal state for the next query; `bypassPermissions` is accepted only when startup enabled `allowDangerouslySkipPermissions` (#58). |
+| server → wrapper | `set_permission` | `{ version, revision, sandbox, network_access }`; complete raw pair for the next execution, never the current exec. Unsupported adapters reject. |
+| server → wrapper | `permission_sync` | `{ version, control, next }`; authoritative permission settings after every join, including explicit nulls when empty. Gates the first/successor exec; see [permission synchronization](#persistence-join-synchronization-and-resume). |
 | server → wrapper | `persona_sync` | `{ version, name, revision }` is the legacy half of the dual emit with `display_name_sync`; both update only display_name and guard monotonic safe revisions (issue #209). |
 | server → wrapper | `display_name_sync` | `{ version, display_name, revision }` is the new dual-emitted form with the same contract and revision guard; wrappers route both forms through `renameDisplayName`. |
 | client → server | `session_reset` | `{ agent_id, mode: "new" \| "clear" }` is operator-only. Validate role, agent, mode, capability, idle state, and pending lock atomically, then broadcast `session_reset_started` and push runner `reset_session`; reserved literal commands are rejected ([ADR-0036](../adr/0036-session-lifecycle-commands.md)). |
 | wrapper → server | `session_reset_request` | `{ mode: "new" \| "clear", reason?: string }` is the agent-self deferred reset request. Bind agent_id to the connection, reuse SessionResets checks, and return `{ request_id }` as lock confirmation only; use existing lifecycle rejection vocabulary ([ADR-0043](../adr/0043-agent-initiated-session-reset.md)). |
-| wrapper → server | `session_lifecycle` | `{ kind, trigger?, at }` records one session-lifecycle transition (phase-33, [ADR-0055](../adr/0055-compaction-resume-and-lifecycle-log.md)). `kind` — wrapper-produced: `compacting` \| `compact_boundary` \| `compact_failed` \| `resume_reserved` \| `resume_fired` \| `threshold_notice` \| `conversation_reset`; server-merged into the same per-agent timeline: `disconnected` \| `reconnecting` \| `reconnected` \| `session_reset_started` \| `session_reset_completed` (a reset-driven rejoin records only `session_reset_completed`, never also `reconnected`). `trigger` applies only to `compact_boundary`: `request_compact` when the wrapper's own FIFO reservation queue attributes this boundary to a `request_compact` call; otherwise the SDK's own account (`sdk_auto` for its `"auto"`, `manual` for its `"manual"` — which also covers an operator-typed `/compact` directly, indistinguishable from the SDK's side); omitted when neither is determinable. `at` is the wrapper's own observation timestamp, not server receipt time. Server retains up to `SESSION_LIFECYCLE_MAX_EVENTS_PER_AGENT` events per agent (default 10,000, oldest discarded first) and does not notify peers. |
+| wrapper → server | `session_lifecycle` | `{ kind, trigger?, at, details? }` records one session-lifecycle transition (phase-33, [ADR-0055](../adr/0055-compaction-resume-and-lifecycle-log.md)). `kind` — wrapper-produced: `compacting` \| `compact_boundary` \| `compact_failed` \| `resume_reserved` \| `resume_fired` \| `threshold_notice` \| `conversation_reset` plus `permission_applied` / `permission_failed` with typed [permission details](#permission-lifecycle-audit); server-only `permission_requested` uses the same timeline. Server-merged into the same per-agent timeline: `disconnected` \| `reconnecting` \| `reconnected` \| `session_reset_started` \| `session_reset_completed` (a reset-driven rejoin records only `session_reset_completed`, never also `reconnected`). `trigger` applies only to `compact_boundary`: `request_compact` when the wrapper's own FIFO reservation queue attributes this boundary to a `request_compact` call; otherwise the SDK's own account (`sdk_auto` for its `"auto"`, `manual` for its `"manual"` — which also covers an operator-typed `/compact` directly, indistinguishable from the SDK's side); omitted when neither is determinable. `at` is the wrapper's own observation timestamp, not server receipt time. Server retains up to `SESSION_LIFECYCLE_MAX_EVENTS_PER_AGENT` events per agent (default 10,000, oldest discarded first) and does not notify peers. |
 | client → server | `list_conversations` | `{ version }` is an operator-only pull query. It replies `{ conversations: [{ conversation_id, agents, status, started_at, turns, tokens }, ...], conversations_incomplete?: true }`, newest first. `conversations_incomplete: true` means a newest-first prefix was returned because further complete entries would exceed the transport frame budget. |
-| client → server | `list_session_events` | `{ version, agent_id }` is an operator-only pull query for one agent's `session_lifecycle` timeline, with the same `require_operator` gate as `list_conversations` / `list_users` (phase-33, [ADR-0055](../adr/0055-compaction-resume-and-lifecycle-log.md)). `agent_id` is format-validated only (no existence check): `delete_agent` does not purge the `session_lifecycle` store, so a deleted agent's history stays queryable for post-hoc debugging — that retention is a deliberate decision, not an oversight, made together with this query (issue #200 closing note); an unknown/never-existed `agent_id` returns `{ "events": [] }`. Replies `{ events: [{ kind, trigger, at }, …], events_incomplete?: true }`, newest first. `events_incomplete: true` means a newest-first prefix was returned because further complete entries would exceed the transport frame budget. |
+| client → server | `list_session_events` | `{ version, agent_id }` is an operator-only pull query for one agent's `session_lifecycle` timeline, with the same `require_operator` gate as `list_conversations` / `list_users` (phase-33, [ADR-0055](../adr/0055-compaction-resume-and-lifecycle-log.md)). `agent_id` is format-validated only (no existence check): `delete_agent` does not purge the `session_lifecycle` store, so a deleted agent's history stays queryable for post-hoc debugging — that retention is a deliberate decision, not an oversight, made together with this query (issue #200 closing note); an unknown/never-existed `agent_id` returns `{ "events": [] }`. Replies `{ events: [{ kind, trigger, at, details? }, …], events_incomplete?: true }`; permission events retain their typed details, newest first. `events_incomplete: true` means a newest-first prefix was returned because further complete entries would exceed the transport frame budget. |
 | server → client | `session_reset_started` | `{ request_id, agent_id, mode, origin: "operator" \| "agent_self", previous_session_id?, reason? }` is operator-only; dashboard shows progress and disables Composer.  ([../adr/0021-role-information-disclosure-policy.md](../adr/0021-role-information-disclosure-policy.md)) |
 | server → client | `session_reset_completed` | `{ request_id, agent_id, mode, previous_session_id?, to_session_id: string \| null, clear_watermark?: string }` is emitted after fresh wrapper join confirms completion. `/clear` includes a SessionStarts-derived watermark used to filter panes. |
 | server → client | `session_reset_failed` | `{ request_id, agent_id, mode, reason }` is operator-only with closed lifecycle vocabulary; dashboard displays a loud reason notice. |
@@ -732,7 +979,7 @@ original claim is warned before normalization.
 
 | Status | Message |
 |---|---|
-| Stamped | `instruction` / `permission_decision` / `question_response` / `interrupt` / `set_model` / `set_effort` / `refresh_models` / `refresh_engine_catalog` / `set_permission_mode` / `rename_agent` / `clear_history` / `delete_agent` / `stop` / `restore` / `resume_session` / `session_reset` / `spawn` / `launch_defaults` / `enumerate_sessions` / `attach_open` / `attach_close` |
+| Stamped | `instruction` / `permission_decision` / `question_response` / `interrupt` / `set_model` / `set_effort` / `refresh_models` / `refresh_engine_catalog` / `set_permission_mode` / `set_permission` / `rename_agent` / `clear_history` / `delete_agent` / `stop` / `restore` / `resume_session` / `session_reset` / `spawn` / `launch_defaults` / `enumerate_sessions` / `attach_open` / `attach_close` |
 | Permanent carve-out | `attach_chunk` (below) |
 | Producer not implemented | `restart` (no dashboard push call; implementation will use `pushVersioned` and stamp automatically) |
 
@@ -746,7 +993,7 @@ same funnel. The unimplemented `revoke_wrapper_token` has only server-side recei
 | Status | Message |
 |---|---|
 | Server normalizes (`relay/5`) | `instruction` / `permission_decision` / `question_response` / `interrupt` / `set_model` / `set_effort` / `refresh_models` / `set_permission_mode` |
-| Stamped during assembly | `attach_open` / `attach_close` / `revoked` / `session_reset_failed` / `delivery_status` / `persona_prompt` / join `set_permission_mode` / `persona_sync` / `display_name_sync` |
+| Stamped during assembly | `attach_open` / `attach_close` / `revoked` / `session_reset_failed` / `delivery_status` / `persona_prompt` / join `set_permission_mode` / `set_permission` / `permission_sync` / `persona_sync` / `display_name_sync` |
 | From envelope | `envelope` (IA relay; frame key carries `version`, including synthesized `SynthEnvelope`) |
 | Permanent carve-out | `attach_chunk` (below) |
 
@@ -765,7 +1012,7 @@ same funnel. The unimplemented `revoke_wrapper_token` has only server-side recei
 
 `envelope` is stamped by its frame key. `delivery_ack` / `delivery_status_request` /
 `history_reset` / `replay_ia` / `history_replay_complete` / `directory_request` /
-`session_reset_request` / `wrapper_build_info` are declared in `WRAPPER_CONTROL_EVENT_POLICY`;
+`session_reset_request` / `wrapper_build_info` / `session_lifecycle` are declared in `WRAPPER_CONTROL_EVENT_POLICY`;
 the wrapper's sole send point `#pushVersioned` adds flat `version`. The server's
 `@wrapper_event_policy` and single `handle_in/3` funnel warn on omission/mismatch and accept
 best-effort. `wrapper_build_info` is sent after every join/rejoin from the wrapper's own

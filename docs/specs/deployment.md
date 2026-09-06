@@ -100,11 +100,20 @@ set all ten explicitly to writable persistent paths: `KAOIRO_SESSION_POINTERS_PA
 under a container-equivalent of `/tmp` and disappear after `docker compose down`
 (the offline-agent list is lost).
 
+For deployments enabling `set_permission`, the `PermissionSettings` store adds
+`KAOIRO_PERMISSION_SETTINGS_PATH=/var/lib/kaoiro/permission_settings.dets` to
+this required persistence set. Its runtime env mapping, compose `environment:`
+entry, and backup/restore required-entry checks must ship together with the
+server implementation before that capability is advertised. The contract alone
+does not add a store to older server releases. Keep raw requested settings in
+this file; `session_pointers.dets` continues to hold observed effective snapshots.
+
 `SESSION_LIFECYCLE_MAX_EVENTS_PER_AGENT` (unprefixed, ADR-0055 phase-33
 Stage B) caps the per-agent event count the `session_lifecycle` DETS
 retains, oldest discarded first. Unset defaults to 10000.
 
-**These ten are the canonical persistence set.** The preflight in section 4
+**These paths, plus the PermissionSettings path when enabled, are the canonical
+persistence set.** The preflight in section 4
 checks that every path resolves under the named volume using this list. A DETS
 file not listed can **silently escape backup**—`KAOIRO_USERS_PATH` did exactly
 that, and the user ledger was lost when the container was recreated without it
@@ -425,7 +434,7 @@ Satisfy all of the following before starting.
 - **Ensure the server host's SSH host key is in `known_hosts`.** Do not bypass with
   `StrictHostKeyChecking=no`.
 - **Ensure every persistence path resolves under the named volume.** The source of
-  truth is the ten paths in 1.2. An unlisted DETS can **silently escape backup**
+  truth is the persistence set in 1.2. An unlisted DETS can **silently escape backup**
   (`KAOIRO_USERS_PATH` did so, losing the user ledger on container recreation;
   issue #217).
 - **Confirm there is no active work** (human judgment). Stopping a runner stops all
@@ -747,7 +756,7 @@ Inspect contents with a **separate command** from verification.
 ssh <server-host> 'tar tzf <backup-dir>/kaoiro-dets-<timestamp>.tar.gz | head -20'
 ```
 
-**Confirm that all ten paths in 1.2 are included.** Any missing DETS is outside
+**Confirm that every required path in 1.2 is included.** Any missing DETS is outside
 the volume and cannot be restored from this backup.
 
 **(6) Start the server with the prepared image**
@@ -892,7 +901,7 @@ ssh <server-host> 'docker run --rm -v <volume>:/data -v <backup-dir>:/backup \
   alpine sh -c "find /data -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + \
     && tar xzf /backup/kaoiro-dets-<timestamp>.tar.gz -C /data"'
 
-# 6. restore 結果を確認する (1.2 節の 9 種の存在、owner / mode)
+# 6. Verify all required entries from 1.2, including owner and mode
 ssh <server-host> 'docker run --rm -v <volume>:/data:ro alpine ls -la /data/'
 ```
 

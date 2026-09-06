@@ -109,6 +109,23 @@ records threats and mitigations before full operation or external release
 - MUST: A wrapper does not change its `allowedTools` / `canUseTool` settings in
   response to a server instruction (the execution-capability ceiling is local
   configuration).
+- MUST: Mid-session `set_permission` is an explicit operator-only control
+  (operator decision, 2026-09-06), including widening sandbox/network access.
+  Derive its audit actor from the authenticated client socket and record both
+  requested and observed changes in the ADR-0055 best-effort lifecycle timeline.
+  No confirmation UI or audit-fsync acknowledgement is implied.
+  Codex enforces the selected policy through its OS sandbox where enabled;
+  changing that policy is explicitly authorized operator control, not
+  preservation of the launch-time ceiling. In particular, selecting
+  `danger-full-access` does not retain the preceding sandbox restriction.
+  This does not authorize changing `allowedTools` / `canUseTool` through the
+  server. Antigravity Stage A remains launch-fixed, and Stage B still requires
+  the wrapper-config clamps in ADR-0057 F4c. Enforcement of a selected policy
+  and an immutable ceiling are separate guarantees.
+- MUST: Permission display and resume snapshots distinguish requested/submitted
+  configuration from observed effective policy. Unknown execution outcomes do
+  not establish rollback, even to a narrower value. A failure after policy
+  confirmation must not undo it; no automatic transition may widen permissions.
 - MUST: Limit resume target session_id to one that exists beneath the cwd bound
   to that agent (reject resume to another cwd/arbitrary path,
   [ADR-0014](../adr/0014-session-resume-and-restore.md)).
@@ -178,7 +195,7 @@ need a prompt and a PreToolUse hook cannot lift that denial
 ([ADR-0057](../adr/0057-antigravity-adapter.md) F4). Threat 1 (instruction
 = remote tool execution) keeps its blast radius, but the mechanism that
 bounds it moves entirely into the wrapper: unlike Claude (SDK `canUseTool`)
-and Codex (an OS sandbox fixed at spawn,
+and Codex (OS enforcement when the selected sandbox policy enables it,
 [ADR-0033](../adr/0033-permission-model-dual-axis.md) F3), nothing behind
 the wrapper will refuse a tool call. The layers below record what that
 costs. Design decisions live in ADR-0057; boundary mechanics live in

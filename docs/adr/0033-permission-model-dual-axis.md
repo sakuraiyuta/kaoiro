@@ -47,9 +47,10 @@ abstraction itself to two axes.
 `codex exec` process for every turn and closes stdin immediately after writing the
 prompt, so **there is no path to return an operator approval to the SDK while it is
 running** (feature flag `exec_permission_approvals` is under development = not
-released; the default approval_policy for exec is `never`). Therefore, the Codex
-agent’s two axes are fixed at spawn, and `waiting_permission` never occurs for
-Codex. Track upstream approval support in [open-questions/codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md).
+released; the default approval_policy for exec is `never`). This fixes approval
+to `never`; it does not prevent changing sandbox or network configuration between
+executions. `waiting_permission` never occurs for Codex. Track upstream approval
+support in [open-questions/codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md).
 
 ## Decision
 
@@ -110,74 +111,73 @@ handle only the two axes without knowing engine vocabulary. The mapping is an
 
 ### F3 — Codex uses the two axes directly (approval fixed to `never`)
 
-The `wrapper/codex` adapter projects the `sandbox_mode` selected at spawn directly
-to `ext.permission.sandbox`. `approval` is **fixed to `never`** — `codex exec`
-forces approval_policy to `never` through a harness override (even
-`-c approval_policy=...` is ineffective), and no path exists to return approval
-through the SDK, so report the fact as-is in the envelope. Mid-session permission
-changes (the equivalent of `set_permission_mode`) are also unsupported in Codex.
+Codex accepts operator-requested changes to `sandbox` and `network_access`
+through `set_permission`. A running `codex exec` retains its captured
+configuration. Requests received while busy are accepted; the next execution
+captures the latest requested configuration, regardless of whether its input
+came from the operator, an inter-agent message, or the instruction queue. The
+session ID and history are retained. The wrapper does not interrupt a turn to
+apply a permission change.
 
-The resume path for restoring `sandbox` / `network_access` is consolidated in
-[ADR-0014 F1 addendum “reapply three privilege axes on resume”](0014-session-resume-and-restore.md).
-The F3 principle of “fixed at spawn” remains: values decided at fresh spawn only
-propagate through the snapshot to restore / switch / reset resume operations; they
-do not switch mid-session (the Codex adapter throws from `setPermissionMode`).
+Keep three distinct values:
 
-#### F3 Addendum: normalise effective `network_access` (phase-22 dogfood 藤 audit)
+- **Requested**: the latest operator selection, persisted with a server-issued
+  revision. A command acknowledgement confirms acceptance, not application.
+- **Submitted**: the immutable configuration and revision captured for one exec.
+  A newer request does not mutate it.
+- **Effective**: the policy observed in that execution's `turn_context`, including
+  `sandbox_policy` and `approval_policy`. Neither constructing argv nor receiving
+  `turn.started` establishes effective permissions. A prior turn's record is not
+  evidence for the current execution; absent or uncorrelated evidence is unknown.
 
-During phase-22 dogfood verification, a dashboard incident showed
-`network_access` as `false` for a Codex agent (`sandbox=danger-full-access`) after
-restart / resume, triggering an audit (藤 audit). The old `runner.log` showed that
-`false` had already continued from before that restart, and **there is no direct
-evidence that the current restore relay dropped `true`**. The root cause was a
-**semantic mismatch** in which the raw toggle was propagated as effective:
-`WrapperConfig.network_access` was copied without a sandbox branch into
-`ext.effective.network_access` / whoami / the server DETS snapshot. The Codex SDK
-passes `networkAccessEnabled` to enforcement only for `sandbox="workspace-write"`;
-with `danger-full-access`, network is included in the sandbox (effectively enabled),
-and with `read-only` it is always disallowed. Reporting the raw toggle in both
-modes produced display and persistence that contradicted the effective state.
+`approval` remains **fixed to `never`**. The exec harness overrides the approval
+policy, and the SDK cannot deliver an operator approval while the process runs.
+It is not an input to `set_permission`. See
+[codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md).
 
-As an addendum, separate `network_access` into two concepts:
+Reuse ADR-0035's `requested`, `effective`, and `rolled_back_to` vocabulary, but
+not its model-failure rollback rule. Once the current `turn_context` confirms a
+policy, a later `turn.failed` does not roll it back. Only a definitive rejection
+before application may report `rolled_back_to`. Observation failure remains
+`unknown`, not evidence that the previous policy resumed. No automatic transition
+may widen permissions. Even a narrower previous value must not be displayed as
+effective without observation or proof that rejection preceded application.
+There is no confirmation UI for widening; both widening and narrowing are
+operator-only and recorded in the
+[ADR-0055 lifecycle timeline](0055-compaction-resume-and-lifecycle-log.md).
+Its existing best-effort durability is unchanged; the command ack does not
+promise an audit fsync.
 
-- **Spawn-config raw toggle** (`WrapperConfig.network_access`) — the value desired
-  by the operator; meaningful only for the `workspace-write` sandbox
-- **Effective value** (`ResolvedSnapshotExt.network_access`,
-  `ext.effective.network_access`, whoami, and the server DETS snapshot) — the
-  sandbox-aware normalised network state that is actually enforced
+The normative command, synchronization, persistence, and observation contracts
+are in [protocol](../specs/protocol.md#permission-changes-at-an-execution-boundary).
+`PermissionSettings` retains requested configuration separately from the last
+observed effective snapshot in `SessionPointers`. Resume uses the latter and
+synchronizes the former before the first execution. A failed or pending request
+must never masquerade as an effective resume snapshot. Intentional changes do
+not produce `resume_drift`; an unintended substitution still does.
 
-Implement the normalisation rule as one pure helper
-`effectiveNetworkAccess(sandbox, toggle)` in `wrapper/codex/src/network_access.ts`,
-and route both Host effective-status snapshots and the CLI startup resolved log
-through the same helper (SSoT):
+#### Network configuration and effective access
+
+The raw `network_access` toggle is meaningful to the SDK for `workspace-write`.
+Preserve it independently of the sandbox-aware effective value:
 
 | sandbox | effective network_access |
 |---|---|
-| `danger-full-access` | `true` (network is included in full access) |
-| `read-only` | `false` (network unavailable) |
-| `workspace-write` | `configured` (reflect the raw toggle, default `false`) |
+| `danger-full-access` | `true` |
+| `read-only` | `false` |
+| `workspace-write` | raw configured toggle, default `false` |
 
-Host `#threadOptions()` (the SDK enforcement path) already correctly passes
-`networkAccessEnabled` to the SDK only for workspace-write, so leave it unchanged.
-This addendum corrects only the display / persistence layer; runtime behavior (the
-actual set of permitted network calls) does not change.
+`effectiveNetworkAccess` in `wrapper/codex/src/network_access.ts` is the shared
+normalization rule for display and snapshots. The SDK enforcement path passes
+`networkAccessEnabled` only for `workspace-write`. A full-access observation of
+`true` must not overwrite the raw toggle and silently enable networking on a
+later switch to `workspace-write`.
 
-**Legacy self-healing contract**: A persisted incorrect snapshot from before the
-addendum (`{sandbox:danger-full-access, network_access:false}`) is normalised to
-`effective=true` by the wrapper on the next resume, and `ext.resume_drift` emits
-`{field:network_access, prev:false, now:true}` **once**. The next
-`record_snapshot` updates the server DETS to `true`, resolving the drift thereafter.
-Do not change runner / server Phase22 precedence (an explicit boolean in the
-snapshot takes priority over the engine default) or the no-apply contracts for
-fresh spawn / crash restart / rollback (the correction stays in the wrapper layer).
-
-**Related implementation**: `wrapper/codex/src/network_access.ts` (helper, SSoT),
-`wrapper/codex/src/host.ts` `#effectiveStatusSnapshot()` (replacement),
-`wrapper/codex/src/cli.ts` startup resolved log (replacement), and
-`protocol/src/index.ts` `ResolvedSnapshotExt` (doc-comment addendum). Tests are
-`wrapper/codex/test/network_access.test.ts` (three-sandbox matrix) and
-`wrapper/codex/test/host.test.ts` (one danger-full normalisation case / one legacy
-self-heal drift case).
+Legacy snapshots with inconsistent effective values normalize on resume and
+report `resume_drift` once; the next confirmed snapshot repairs persistence.
+Snapshots do not recover a lost raw toggle. Without a `PermissionSettings`
+record, initialize the raw configuration from wrapper launch configuration and
+publish that baseline rather than reverse-mapping an effective value.
 
 ### F4 — Dashboard UI: engine-native operations + two-axis badge display
 
@@ -185,7 +185,11 @@ self-heal drift case).
   `ext.permission`, independent of engine.
 - **Operations** (LaunchDialog / AgentDetail): show an engine-native selector.
   Claude = mode selector (six values); Codex = sandbox selector (three values) +
-  network-access toggle when workspace-write. Include the two-axis conversion in
+  network-access toggle when workspace-write. Mid-session sandbox/network controls
+  require `supports_permission_switch=true`; absence or false hides them. Accept
+  selections while busy and show pending/submitted/unknown separately from
+  observed permissions. Do not optimistically update effective badges. Include
+  the two-axis conversion in
   each option label (for example, “acceptEdits — write: workspace / approval:
   on-request equivalent”).
 - Do **not** adopt the initially considered cross-engine preset shortcuts
@@ -210,10 +214,8 @@ Implement it in [phase-15-wrapper-ux-parity](../plans/phase-15-wrapper-ux-parity
   mode label after selection, so the operator can understand current effective
   permissions without opening the candidate menu.
 - **Permanent “approval: never (host-fixed, upstream constraint)” badge on Codex**:
-  AgentDetail currently only omits the mode switcher for Codex (ADR-0033 F3,
-  set_permission_mode rejected), leaving the operator unable to tell whether this
-  is unchangeable or an implementation omission. Add the explicit permanent label
-  to Codex permission display. Link it to [codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md).
+  sandbox/network switching does not enable approval switching. Link the fixed
+  approval label to [codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md).
 - **Add a Claude permission_mode selector to LaunchDialog**: currently only
   Codex shows a sandbox selector and Claude can select a mode only after launch in
   AgentDetail. Add a mode selector (default / plan / acceptEdits / dontAsk / auto /
@@ -286,7 +288,7 @@ supersede ADR-0022.
 | Flatten Codex to one axis and keep the existing `permissionMode` schema | Loses Codex’s two-axis expressiveness and hides its OS sandbox safety model from the envelope. |
 | Put `sandbox` / `approval` inside pending_permission (the initial ADR draft) | Codex emits no pending_permission (the approval flow cannot be provided through exec), leaving nowhere to put Codex’s permission state. Unify it at agent-level `ext.permission`. |
 | Cross-engine preset shortcut layer (old Q3 temporary policy) | Only 3–6 combinations are selectable per engine, so it adds mapping maintenance; most presets collapse to the same setting in Codex. |
-| Wire approvals by calling `codex app-server` (JSON-RPC) directly | Abandons the published SDK for an experimental protocol. High implementation cost and fragile against upstream changes; startup-fixed two axes are sufficient for the MVP. |
+| Wire approvals by calling `codex app-server` (JSON-RPC) directly | Abandons the published SDK for an experimental protocol. High implementation cost and fragile against upstream changes; an approval transport is outside this decision. |
 
 ## Related
 

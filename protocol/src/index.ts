@@ -325,7 +325,7 @@ export type EngineKind = "claude-code" | "codex" | "antigravity";
 /** ext.permission — the agent's current permission posture as the
  *  engine-neutral two-axis form (ADR-0033 F1). Claude adapters derive it
  *  from permissionMode via a display-approximation table (ADR-0033 F2);
- *  the codex adapter projects its launch-fixed sandbox with approval
+ *  the codex adapter projects its observed sandbox with approval
  *  pinned to "never" (ADR-0033 F3); the antigravity adapter reports both
  *  axes as operator-selected at spawn (ADR-0057 F4c). Successor of
  *  `ext.permission_mode` (kept in parallel for one release window, then
@@ -347,6 +347,182 @@ export interface PermissionAxesExt {
    *  host-fixed approval. */
   enforcement?: "os" | "mode" | "advisory";
 }
+
+/** Raw operator configuration; network_access is not the normalized effective
+ * value. See protocol.md, "Permission changes at an execution boundary". */
+export interface PermissionConfiguration {
+  sandbox: PermissionAxesExt["sandbox"];
+  network_access: boolean;
+}
+
+export interface PermissionSelection {
+  revision: number;
+  requested: PermissionConfiguration;
+}
+
+export interface PermissionSubmission extends PermissionSelection {
+  execution_id: string;
+}
+
+export interface PermissionObservation extends PermissionSubmission {
+  session_id: string;
+  turn_id: string;
+  permission: PermissionAxesExt;
+  network_access: boolean;
+}
+
+export type PermissionControlStatus =
+  | "pending"
+  | "applying"
+  | "applied"
+  | "failed"
+  | "unknown";
+
+/** The latest request may be newer than submitted/effective. Only effective
+ * describes the current execution; last_effective is historical evidence. */
+export interface PermissionControlBase extends PermissionSelection {
+  last_effective?: PermissionObservation;
+}
+
+export type PermissionControlExt = PermissionControlBase & (
+  | {
+      status: "pending";
+      submitted?: PermissionSubmission;
+      effective?: PermissionObservation;
+      reason?: never;
+      rolled_back_to?: never;
+    }
+  | {
+      status: "applying";
+      submitted: PermissionSubmission;
+      effective?: never;
+      reason?: never;
+      rolled_back_to?: never;
+    }
+  | {
+      status: "applied";
+      submitted?: PermissionSubmission;
+      effective: PermissionObservation;
+      reason?: never;
+      rolled_back_to?: never;
+    }
+  | {
+      status: "failed";
+      submitted?: PermissionSubmission;
+      effective?: PermissionObservation;
+      reason: string;
+      rolled_back_to?: PermissionConfiguration;
+    }
+  | {
+      status: "unknown";
+      submitted: PermissionSubmission;
+      effective?: never;
+      reason: string;
+      rolled_back_to?: never;
+    }
+);
+
+export type SetPermissionRequest = {
+  version: "0";
+  agent_id: string;
+} & (
+  | { sandbox: PermissionConfiguration["sandbox"]; network_access?: boolean }
+  | { sandbox?: PermissionConfiguration["sandbox"]; network_access: boolean }
+);
+
+export interface SetPermissionMessage extends PermissionConfiguration {
+  version: "0";
+  revision: number;
+}
+
+export interface SetPermissionAck extends PermissionSelection {
+  status: "pending";
+}
+
+export type SetPermissionErrorReason =
+  | "forbidden"
+  | "invalid_payload"
+  | "unknown_agent"
+  | "agent_unavailable"
+  | "unsupported_permission_switch"
+  | "permission_not_ready"
+  | "session_reset_pending"
+  | "revision_exhausted"
+  | "persistence_failed";
+
+/** An after-join barrier, including when no settings have been saved. A
+ * settled failed request is retained in control but never replayed as next. */
+export type PermissionSyncMessage = {
+  version: "0";
+} & (
+  | { control: null; next: null }
+  | { control: PermissionControlExt; next: PermissionSelection }
+);
+
+export interface PermissionSyncJoinRequest {
+  permission_sync?: { engine: EngineKind };
+}
+
+export interface PermissionSyncJoinReply {
+  permission_sync?: true;
+}
+
+/** Server-derived principal reference, never a credential or a client claim. */
+export interface PermissionAuditActor {
+  kind: "user";
+  id: string;
+}
+
+export interface PermissionRequestedDetails extends PermissionSelection {
+  actor: PermissionAuditActor;
+  previous?: PermissionObservation;
+}
+
+export interface PermissionAppliedDetails extends PermissionObservation {
+  previous?: PermissionObservation;
+}
+
+export interface PermissionFailedDetails extends PermissionSelection {
+  reason: string;
+  execution_id?: string;
+  rolled_back_to?: PermissionConfiguration;
+}
+
+export type PermissionLifecycleEvent =
+  | { kind: "permission_requested"; at: string; details: PermissionRequestedDetails }
+  | { kind: "permission_applied"; at: string; details: PermissionAppliedDetails }
+  | { kind: "permission_failed"; at: string; details: PermissionFailedDetails };
+
+export type WrapperPermissionLifecycleMessage = { version: "0" } & Exclude<
+  PermissionLifecycleEvent,
+  { kind: "permission_requested" }
+>;
+
+export type SessionLifecycleEvent =
+  | {
+      kind: "compact_boundary";
+      at: string;
+      trigger?: "request_compact" | "sdk_auto" | "manual" | null;
+    }
+  | {
+      kind:
+        | "compacting"
+        | "compact_failed"
+        | "resume_reserved"
+        | "resume_fired"
+        | "threshold_notice"
+        | "conversation_reset"
+        | "disconnected"
+        | "reconnecting"
+        | "reconnected"
+        | "session_reset_started"
+        | "session_reset_completed";
+      at: string;
+      trigger?: null;
+    }
+  | (PermissionLifecycleEvent & { trigger?: null });
+
+export type SessionLifecycleEventKind = SessionLifecycleEvent["kind"];
 
 /** One launch-selectable model of an engine (ADR-0032 F4bc). Same shape as
  *  the `ext.models[]` entries the Claude adapter already publishes (#54),
@@ -465,6 +641,9 @@ export interface SessionCapabilitiesExt {
   /** Whether the active model supports changing reasoning effort at a turn
    *  boundary. Absent / false = fail-closed unsupported. */
   supports_effort_switch?: boolean;
+  /** Absent/false rejects set_permission. Independent of Claude's mode
+   * selector; enabled only with the permission sync and observation contract. */
+  supports_permission_switch?: boolean;
   /** Whether the session accepts /new・/clear as first-class session-reset
    *  control (ADR-0036 F5, phase-17 17-2). Advertised true only when the
    *  wrapper/runner/server together provide the fresh-relaunch + completion
@@ -553,7 +732,7 @@ export type SessionResetErrorReason =
  *  (ADR-0032 F4bc + ADR-0033 F4 addenda, phase-15). Same shape for both
  *  ext.resume_snapshot (the "last effective values" of the prior session,
  *  NOT the spawn-time values — mid-session operator switches via
- *  set_model / set_effort / set_permission_mode land here so an intended
+ *  set_model / set_effort / set_permission_mode / set_permission land here so an intended
  *  change is not warned as drift) and ext.effective (the values the host
  *  is enforcing this run). Any field may be absent when it was never set. */
 export interface ResolvedSnapshotExt {
@@ -628,6 +807,7 @@ export interface ContextBudgetExt {
  *  forward-compatible extension space while making established wire fields
  *  first-class to producers and consumers. */
 export interface EnvelopeExt extends Record<string, unknown> {
+  permission_control?: PermissionControlExt;
   context_budget?: ContextBudgetExt;
   pending_model?: string;
   pending_effort?: string;
@@ -1041,7 +1221,7 @@ export interface SpawnMessage {
    *  matches the operator's latest intent. Restore paths (which do not
    *  pass through the LaunchDialog) omit this field and fall through to
    *  the persisted store value naturally. The Codex engine ignores it
-   *  (its permission posture is launch-fixed via sandbox, ADR-0033 F3). */
+   *  (sandbox/network changes use set_permission, ADR-0033 F3). */
   permission_mode?: PermissionMode;
   /** Codex / Antigravity launch permission: the sandbox axis (ADR-0033 F3,
    *  ADR-0057 F4c). On Codex the approval axis is pinned to "never" and
