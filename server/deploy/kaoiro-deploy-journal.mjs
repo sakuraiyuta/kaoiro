@@ -56,9 +56,22 @@ export function isValidJournalShape(value) {
   return true;
 }
 
-export function writeJournal(dir, journal) {
+/** `validate`, when given, is called with `journal` AFTER the generic
+ *  shape check but BEFORE anything is written — a state-machine check
+ *  (kaoiro-deploy-phase.mjs's validateJournalAgainstStateMachine) is
+ *  deliberately NOT wired in here directly: this module stays free-form
+ *  about `phase` (build/start's own future journal use should not have
+ *  to satisfy update's state machine), and the caller that KNOWS which
+ *  state machine applies decides whether to pass one. Throwing here
+ *  means the write never happens — the checkpoint-before-mutation
+ *  contract (S1 item ii) only holds if an invalid journal is refused,
+ *  not merely reported after the fact. */
+export function writeJournal(dir, journal, validate = null) {
   if (!isValidJournalShape(journal)) {
     fail("refusing to write a journal that does not match the expected shape");
+  }
+  if (validate !== null) {
+    validate(journal);
   }
   const target = join(dir, "journal.json");
   writeFileDurably(target, `${JSON.stringify(journal, null, 2)}\n`);
@@ -92,13 +105,13 @@ export function readJournal(dir) {
  *  its own key — never spread onto the entry — so nothing an observation
  *  happens to name can collide with `phase` or `at` (see the shape
  *  check's own comment for the reproduced bug this replaced). */
-export function advancePhase(dir, journal, phase, observation = {}) {
+export function advancePhase(dir, journal, phase, observation = {}, validate = null) {
   const entry = { phase, at: new Date().toISOString(), observation };
   const next = {
     ...journal,
     phase,
     history: [...journal.history, entry],
   };
-  writeJournal(dir, next);
+  writeJournal(dir, next, validate);
   return next;
 }
