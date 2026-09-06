@@ -1,0 +1,13 @@
+{
+  "name": "kaoiro-server-deploy",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Server deploy CLI (issue #306): build/start/update/rollback/status with a deploy manifest and journal.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}
