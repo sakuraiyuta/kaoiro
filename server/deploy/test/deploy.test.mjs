@@ -18,6 +18,7 @@ import {
   resolveHealthUrl,
   runBuild,
   requiredEntriesMatch,
+  ROLLBACK_ELIGIBLE_PHASES,
   runRollback,
   runStart,
   runStatus,
@@ -49,6 +50,10 @@ case "$1" in
         case "$FAKE_DOCKER_SCENARIO" in
           stopped|running|running-clean-stop|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty)
             printf 'kaoiro-c1\\n' ;;
+          # round 4 review B-1 (expanded): rollback's own "2+ containers,
+          # refuse" guard, distinct from requireRunningContainer's own
+          # (unrelated) "!= 1" check.
+          multiple-containers) printf 'kaoiro-c1\\nkaoiro-c2\\n' ;;
         esac
         ;;
       build|up|stop) exit 0 ;;
@@ -149,8 +154,18 @@ case "$1" in
       # issue #220 absorption: the abort-cleanup retag-back read-back
       # (env_consistency mismatch) — echoes OLD_IMAGE_ID, matching the
       # \`tag\` command's own always-succeeds fake so the read-back check
-      # passes.
-      kaoiro-server:latest) printf '${OLD_IMAGE_ID}\\n' ;;
+      # passes. round 4 review B-1 (expanded): rollback's OWN retag
+      # read-back needs the SAME pin on a genuine drift (\`docker tag\`
+      # having silently pointed \`latest\` somewhere other than what was
+      # asked, or \`latest\` moving under it between the tag and the
+      # verify) — the same class MF-2/rollback-tag-drift already covers
+      # for update's own rollback tag.
+      kaoiro-server:latest)
+        case "$FAKE_DOCKER_SCENARIO" in
+          retag-drift) printf 'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\\n' ;;
+          *) printf '${OLD_IMAGE_ID}\\n' ;;
+        esac
+        ;;
       *)
         case "$4" in
           '{{.State.Status}}')
@@ -250,6 +265,36 @@ case "$1" in
         if [ -n "$hostdir" ]; then
           case "$FAKE_DOCKER_SCENARIO" in
             running-broken-archive) printf 'not a real gzip stream' > "$hostdir/$outfile" ;;
+            # round 4 review B-1 (expanded): rollback's OWN forensic-
+            # archive verification guard, pinned by making JUST that
+            # archive corrupt — the pre-deploy archive.tar.gz created
+            # during an EARLIER runUpdate call (a different scenario,
+            # a different outfile name) is unaffected.
+            rollback-forensic-corrupt)
+              if [ "$outfile" = "rollback-forensic.tar.gz" ]; then
+                printf 'not a real gzip stream' > "$hostdir/$outfile"
+              else
+                mkdir -p "$hostdir/.fakesrc"
+                printf 'x' > "$hostdir/.fakesrc/users.dets"
+                tar --owner=1000 --group=1000 --mode=600 -czf "$hostdir/$outfile" -C "$hostdir/.fakesrc" .
+              fi
+              ;;
+            # round 4 review B-1 (expanded): rollback's OWN restored-
+            # volume-vs-required_entries guard, exercised end to end (not
+            # just requiredEntriesMatch's own unit tests) by making the
+            # restore-verify re-tar contain a DIFFERENT file than the
+            # pre-deploy archive's own (unaffected) content.
+            rollback-restore-drifts)
+              if [ "$outfile" = "rollback-restore-verify.tar.gz" ]; then
+                mkdir -p "$hostdir/.fakesrc-drift"
+                printf 'x' > "$hostdir/.fakesrc-drift/unexpected.dets"
+                tar --owner=1000 --group=1000 --mode=600 -czf "$hostdir/$outfile" -C "$hostdir/.fakesrc-drift" .
+              else
+                mkdir -p "$hostdir/.fakesrc"
+                printf 'x' > "$hostdir/.fakesrc/users.dets"
+                tar --owner=1000 --group=1000 --mode=600 -czf "$hostdir/$outfile" -C "$hostdir/.fakesrc" .
+              fi
+              ;;
             # SF-5's post-archive empty check pin: the PRE-archive guard
             # (below) reports non-empty, but the archive that actually
             # gets written is empty — the one disagreement a stale/wrong
@@ -831,6 +876,45 @@ test("runUpdate throws when the target image's eval prints valid JSON that is no
   );
 });
 
+// クロエ round 4 review A-SF-1: `entry.env` is embedded into a RegExp
+// (readEnvFileValue) unescaped — a malformed eval response must be
+// treated as a shape violation (DeployError, not skipped), not run
+// through to the RegExp construction at all.
+test("runUpdate throws (not skipped) when eval reports an env name that is not a valid identifier", () => {
+  writeFileSync(join(workDir, "server", ".env"), "SECRET_KEY_BASE=super-secret-value-must-never-leak\n");
+  const evalOutput = JSON.stringify([{ store: "Users", env: ".*", default_file: "users.dets" }]);
+  let caught;
+  try {
+    withScenario("running-clean-stop", () =>
+      withEnvConsistencyFixture({ evalOutput }, () =>
+        runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+      ),
+    );
+  } catch (err) {
+    caught = err;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.ok(!caught.message.includes("super-secret-value-must-never-leak"));
+});
+
+test("runUpdate throws (not a SyntaxError) when eval reports an env name that is not a valid RegExp fragment", () => {
+  // A real .env file must exist — otherwise readEnvFileValue's own
+  // ENOENT short-circuit returns null before ever reaching `new
+  // RegExp(...)`, masking whether the guard (not that short-circuit) is
+  // what actually prevents the SyntaxError.
+  writeFileSync(join(workDir, "server", ".env"), "KAOIRO_USERS_PATH=/var/lib/kaoiro/users.dets\n");
+  const evalOutput = JSON.stringify([{ store: "Users", env: "(", default_file: "users.dets" }]);
+  assert.throws(
+    () =>
+      withScenario("running-clean-stop", () =>
+        withEnvConsistencyFixture({ evalOutput }, () =>
+          runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+        ),
+      ),
+    DeployError,
+  );
+});
+
 test("runUpdate fails closed and restores kaoiro-server:latest to the old image when env_consistency finds a mismatch", () => {
   writeFileSync(join(workDir, "server", ".env"), "KAOIRO_USERS_PATH=/var/lib/kaoiro/users.dets\n");
   const evalOutput = JSON.stringify([{ store: "Users", env: "KAOIRO_USERS_PATH", default_file: "users.dets" }]);
@@ -864,7 +948,7 @@ test("runUpdate fails closed and restores kaoiro-server:latest to the old image 
   );
 });
 
-test("runUpdate proceeds through DONE when env_consistency's three sources all agree", () => {
+test("runUpdate proceeds through DONE when compose and container agree", () => {
   writeFileSync(join(workDir, "server", ".env"), "KAOIRO_USERS_PATH=/var/lib/kaoiro/users.dets\n");
   const evalOutput = JSON.stringify([{ store: "Users", env: "KAOIRO_USERS_PATH", default_file: "users.dets" }]);
   const result = withScenario("running-clean-stop", () =>
@@ -881,7 +965,37 @@ test("runUpdate proceeds through DONE when env_consistency's three sources all a
   const backupRoot = join(root, "kaoiro-deploy");
   const manifest = readManifest(join(backupRoot, result.transactionId));
   assert.equal(manifest.env_consistency.skipped, false);
-  assert.equal(manifest.env_consistency.entries.KAOIRO_USERS_PATH.match, true);
+  const entry = manifest.env_consistency.entries.KAOIRO_USERS_PATH;
+  assert.equal(entry.match, true);
+  assert.equal(entry.declared, "/var/lib/kaoiro/users.dets");
+});
+
+// director ruling 2026-09-06, A-MF-1: the exact bug the 3-way design had
+// — the bundled docker-compose.yaml sets every canonical persistence-
+// path var as a LITERAL `environment:` entry (never `.env` interpolation),
+// so `.env` legitimately has NO line for it on every correctly-configured
+// production host. A 3-way check would have read this as a permanent
+// mismatch from the moment #310 lands; the 2-way check (compose vs.
+// container only) must pass here regardless.
+test("runUpdate proceeds through DONE when compose and container agree, even with no .env line at all", () => {
+  // No .env file written at all — readEnvFileValue's own ENOENT path.
+  const evalOutput = JSON.stringify([{ store: "Users", env: "KAOIRO_USERS_PATH", default_file: "users.dets" }]);
+  const result = withScenario("running-clean-stop", () =>
+    withEnvConsistencyFixture(
+      {
+        evalOutput,
+        composeEnvJson: '{"KAOIRO_USERS_PATH":"/var/lib/kaoiro/users.dets"}',
+        containerEnvJson: '["KAOIRO_USERS_PATH=/var/lib/kaoiro/users.dets"]',
+      },
+      () => runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+    ),
+  );
+  assert.equal(result.phase, "done");
+  const backupRoot = join(root, "kaoiro-deploy");
+  const manifest = readManifest(join(backupRoot, result.transactionId));
+  const entry = manifest.env_consistency.entries.KAOIRO_USERS_PATH;
+  assert.equal(entry.match, true);
+  assert.equal(entry.declared, null);
 });
 
 test("runUpdate completes through DONE with --maintenance-approved and a clean stop", () => {
@@ -1721,6 +1835,39 @@ test("UNRESUMABLE_PHASES is exactly every phase reachable from STOPPING", () => 
   );
 });
 
+// クロエ round 4 review B-2: ROLLBACK_ELIGIBLE_PHASES is now the set
+// difference reachable(OLD_IMAGE_SAVED) \ reachable(ROLLBACK_STOPPED),
+// not a hand-written 4-element delete list — pinned two ways: the exact
+// current membership, and (more directly protecting the actual property
+// B-2 cares about) that EVERY phase reachable from ROLLBACK_STOPPED is
+// excluded, which stays true automatically if a phase is ever inserted
+// into that chain.
+test("ROLLBACK_ELIGIBLE_PHASES is exactly OLD_IMAGE_SAVED-reachable minus ROLLBACK_STOPPED-reachable", () => {
+  assert.deepEqual(
+    [...ROLLBACK_ELIGIBLE_PHASES].sort(),
+    [
+      "archived",
+      "build_prepared",
+      "done",
+      "env_consistency_checked",
+      "healthy",
+      "maintenance_gate_passed",
+      "mount_resolved",
+      "old_image_saved",
+      "starting",
+      "stopped",
+      "stopping",
+      "up",
+    ].sort(),
+  );
+});
+
+test("ROLLBACK_ELIGIBLE_PHASES never includes a phase reachable from ROLLBACK_STOPPED", () => {
+  for (const phase of ["rollback_stopped", "rollback_forensic_archived", "rollback_restored", "rolled_back"]) {
+    assert.equal(ROLLBACK_ELIGIBLE_PHASES.has(phase), false, `${phase} must be excluded`);
+  }
+});
+
 // クロエ round 3 review MF-3 pin.
 test("runUpdate fails the stability gate when RestartCount reads as unreadable on both sides", () => {
   assert.throws(
@@ -2244,4 +2391,195 @@ test("runRollback (destructive) refuses when the pre-deploy archive no longer ma
   // past the forensic checkpoint.
   const journal = readJournal(dir);
   assert.equal(journal.phase, "rollback_forensic_archived");
+});
+
+// クロエ round 4 review B-1 (expanded, e3785ba3 measurement): only the
+// sha256 comparison had a dedicated pin — the pre-deploy archive's own
+// full-traversal check, the forensic archive's own verification, the
+// restored-volume comparison's END-TO-END wiring, the 2+-container
+// refusal, and BOTH paths' retag read-back were all silently unpinned
+// (mutation showed 191/191 unchanged). Each gets its own test below.
+
+test("runRollback (destructive) refuses when the pre-deploy archive fails full-traversal verification, even with a matching sha256", () => {
+  let transactionId;
+  const backupRoot = join(root, "kaoiro-deploy");
+  withScenario("running-clean-stop", () => {
+    const update = runUpdate(
+      { repo: workDir, target: headSha, maintenanceApproved: true },
+      configWithCleanStopMeasured(),
+    );
+    transactionId = update.transactionId;
+  });
+
+  const dir = join(backupRoot, transactionId);
+  const archivePath = join(dir, "archive.tar.gz");
+  // Corrupt the archive AND fix up the recorded sha256 to match the
+  // corrupt bytes — the sha256 check must PASS (same as production data
+  // silently corrupted after being archived), isolating this guard from
+  // the sha256-mismatch guard already pinned above.
+  const corrupt = Buffer.from("not a real gzip stream");
+  writeFileSync(archivePath, corrupt);
+  const manifestPath = join(dir, "manifest.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  manifest.archive.sha256 = createHash("sha256").update(corrupt).digest("hex");
+  writeFileSync(manifestPath, JSON.stringify(manifest));
+
+  let caught;
+  try {
+    withScenario("running-clean-stop", () =>
+      runRollback(
+        { repo: workDir, transaction: transactionId, confirmRestore: true },
+        configWithCleanStopMeasured(),
+      ),
+    );
+  } catch (err) {
+    caught = err;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.ok(caught.message.includes("failed full-traversal verification"));
+  const journal = readJournal(dir);
+  assert.equal(journal.phase, "rollback_forensic_archived");
+});
+
+test("runRollback (destructive) refuses when the forensic archive of the current volume state fails verification", () => {
+  let transactionId;
+  const backupRoot = join(root, "kaoiro-deploy");
+  withScenario("running-clean-stop", () => {
+    const update = runUpdate(
+      { repo: workDir, target: headSha, maintenanceApproved: true },
+      configWithCleanStopMeasured(),
+    );
+    transactionId = update.transactionId;
+  });
+
+  let caught;
+  try {
+    withScenario("rollback-forensic-corrupt", () =>
+      runRollback(
+        { repo: workDir, transaction: transactionId, confirmRestore: true },
+        configWithCleanStopMeasured(),
+      ),
+    );
+  } catch (err) {
+    caught = err;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.ok(caught.message.includes("forensic archive"));
+  // Refused before even the FORENSIC checkpoint — the archive it just
+  // wrote failed its own verification before advancing past it.
+  const journal = readJournal(join(backupRoot, transactionId));
+  assert.equal(journal.phase, "rollback_stopped");
+});
+
+test("runRollback (destructive) refuses end to end when the restored volume drifts from the recorded required_entries", () => {
+  let transactionId;
+  const backupRoot = join(root, "kaoiro-deploy");
+  withScenario("running-clean-stop", () => {
+    const update = runUpdate(
+      { repo: workDir, target: headSha, maintenanceApproved: true },
+      configWithCleanStopMeasured(),
+    );
+    transactionId = update.transactionId;
+  });
+
+  let caught;
+  try {
+    withScenario("rollback-restore-drifts", () =>
+      runRollback(
+        { repo: workDir, transaction: transactionId, confirmRestore: true },
+        configWithCleanStopMeasured(),
+      ),
+    );
+  } catch (err) {
+    caught = err;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.ok(caught.message.includes("do not match the recorded required_entries"));
+  const journal = readJournal(join(backupRoot, transactionId));
+  assert.equal(journal.phase, "rollback_forensic_archived");
+});
+
+test("runRollback (destructive) refuses when 2 or more containers currently match the service", () => {
+  let transactionId;
+  const backupRoot = join(root, "kaoiro-deploy");
+  withScenario("running-clean-stop", () => {
+    const update = runUpdate(
+      { repo: workDir, target: headSha, maintenanceApproved: true },
+      configWithCleanStopMeasured(),
+    );
+    transactionId = update.transactionId;
+  });
+
+  let caught;
+  try {
+    withScenario("multiple-containers", () =>
+      runRollback(
+        { repo: workDir, transaction: transactionId, confirmRestore: true },
+        configWithCleanStopMeasured(),
+      ),
+    );
+  } catch (err) {
+    caught = err;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.ok(caught.message.includes("expected 0 or 1"));
+  // Refused before the FIRST rollback checkpoint — still "done".
+  const journal = readJournal(join(backupRoot, transactionId));
+  assert.equal(journal.phase, "done");
+});
+
+test("runRollback (destructive) refuses when the retag read-back disagrees with the old image id", () => {
+  let transactionId;
+  const backupRoot = join(root, "kaoiro-deploy");
+  withScenario("running-clean-stop", () => {
+    const update = runUpdate(
+      { repo: workDir, target: headSha, maintenanceApproved: true },
+      configWithCleanStopMeasured(),
+    );
+    transactionId = update.transactionId;
+  });
+
+  let caught;
+  try {
+    withScenario("retag-drift", () =>
+      runRollback(
+        { repo: workDir, transaction: transactionId, confirmRestore: true },
+        configWithCleanStopMeasured(),
+      ),
+    );
+  } catch (err) {
+    caught = err;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.ok(caught.message.includes("could not restore kaoiro-server:latest"));
+  // Reached ROLLBACK_RESTORED (the restore itself succeeded) but never
+  // advanced to ROLLED_BACK — the retag is the LAST gate.
+  const journal = readJournal(join(backupRoot, transactionId));
+  assert.equal(journal.phase, "rollback_restored");
+});
+
+test("runRollback (non-destructive) refuses when the retag read-back disagrees with the old image id", () => {
+  withScenario("running", () => {
+    try {
+      runUpdate({ repo: workDir, target: headSha }, configWithOverride());
+    } catch (err) {
+      assert.ok(err instanceof DeployError);
+    }
+  });
+  const backupRoot = join(root, "kaoiro-deploy");
+  const [transactionId] = readdirSyncNonHidden(backupRoot);
+
+  let caught;
+  try {
+    withScenario("retag-drift", () =>
+      runRollback({ repo: workDir, transaction: transactionId, confirmRestore: true }, configWithOverride()),
+    );
+  } catch (err) {
+    caught = err;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.ok(caught.message.includes("could not restore kaoiro-server:latest"));
+  // Never advanced to ROLLED_BACK — still wherever it was before rollback.
+  const journal = readJournal(join(backupRoot, transactionId));
+  assert.equal(journal.phase, "env_consistency_checked");
 });

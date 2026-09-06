@@ -58,21 +58,23 @@ export function isPathSha(value) {
   );
 }
 
-/** One env-var's three-way comparison (ふじ design review M1): the
- *  actual KEY SET being compared (`.env` explicit values vs. compose vs.
- *  container effective env, #220 absorption) is not decided yet — that
- *  is a later commit's preflight work. What this fixes NOW is the
- *  per-key VALUE SHAPE, so a manifest can no longer claim
- *  `env_consistency: []` or `{checked: true}` and pass: each recorded
- *  key must actually carry the three observed values and the computed
- *  match result. `null` means "not present in that source", which is a
- *  legitimate observation, not a missing measurement. */
+/** One env-var's comparison record (ふじ design review M1 fixed the
+ *  per-key VALUE SHAPE; director ruling 2026-09-06, A-MF-1 fixed which
+ *  fields the computed `match` actually covers). `match` is `compose ===
+ *  container` ONLY — the bundled docker-compose.yaml sets every
+ *  canonical persistence-path var as a literal `environment:` entry
+ *  while `.env.example`/`mix kaoiro.env` emit the same vars commented
+ *  out, so a three-way check including `declared` (`.env`'s own line)
+ *  would read as a permanent mismatch on every correctly-configured
+ *  production host. `declared` is kept as a reference-only observation
+ *  (never gates `match`). `null` on any field means "not present in
+ *  that source", a legitimate observation, not a missing measurement. */
 function isEnvConsistencyEntry(value) {
   return (
     typeof value === "object" &&
     value !== null &&
     !Array.isArray(value) &&
-    (value.env_file === null || typeof value.env_file === "string") &&
+    (value.declared === null || typeof value.declared === "string") &&
     (value.compose === null || typeof value.compose === "string") &&
     (value.container === null || typeof value.container === "string") &&
     typeof value.match === "boolean"
