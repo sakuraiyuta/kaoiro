@@ -47,13 +47,16 @@ function observation(
   };
 }
 
-function rejected(control: PermissionSelection): PermissionControlExt {
+function rejected(
+  control: PermissionSelection,
+  rolledBackTo = baseline.requested,
+): Extract<PermissionControlExt, { status: "failed" }> {
   return {
     ...control,
     constraints: { approval: "never", enforcement: "os" },
     status: "failed",
     reason: "rejected_before_application",
-    rolled_back_to: baseline.requested,
+    rolled_back_to: rolledBackTo,
   };
 }
 
@@ -197,10 +200,7 @@ describe("Codex permission-state projector", () => {
     );
     state = applyPermissionSyncState(state, {
       version: "0",
-      control: {
-        ...rejected(rejectedSuccessor),
-        rolled_back_to: blockedSelection.requested,
-      },
+      control: rejected(rejectedSuccessor, blockedSelection.requested),
       next: blockedSelection,
     });
 
