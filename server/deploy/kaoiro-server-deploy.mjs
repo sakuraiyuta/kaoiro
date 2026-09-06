@@ -236,7 +236,15 @@ function transactionIdToDate(transactionId) {
  *  before its directory goes, best-effort: an already-gone or
  *  still-referenced tag must not block reclaiming the directory itself.
  *  Returns the names actually removed. */
-export function pruneOldTransactions(backupRoot, config, protectedTransactionId, bin) {
+/** Transaction ids under `backupRoot` whose OWN journal is readable,
+ *  self-consistent (directory name === journal.transaction_id), phase
+ *  DONE, and whose id parses as a timestamp — the same distrust
+ *  findUnfinishedTransaction applies, shared by pruneOldTransactions and
+ *  `status`'s own listing so "what counts as a real, finished
+ *  transaction" is answered in exactly one place. Sorted newest-first:
+ *  transaction_id is a sortable UTC timestamp string (newTransactionId's
+ *  own format), so lexicographic order IS chronological order. */
+function listDoneTransactionIds(backupRoot) {
   let names;
   try {
     names = readdirSync(backupRoot).filter((name) => !name.startsWith("."));
@@ -257,11 +265,13 @@ export function pruneOldTransactions(backupRoot, config, protectedTransactionId,
     if (transactionIdToDate(name) === null) continue;
     doneIds.push(name);
   }
-  // transaction_id is a sortable UTC timestamp string (newTransactionId's
-  // own format), so lexicographic order IS chronological order.
   doneIds.sort();
   doneIds.reverse();
+  return doneIds;
+}
 
+export function pruneOldTransactions(backupRoot, config, protectedTransactionId, bin) {
+  const doneIds = listDoneTransactionIds(backupRoot);
   const retentionMs = config.retention_days * 24 * 60 * 60 * 1000;
   const now = Date.now();
   const removed = [];
@@ -1002,6 +1012,110 @@ export function runUpdate(flags, config) {
   }
 }
 
+/** Manifest + journal facts for one DONE transaction, for `status`'s own
+ *  listing — a rollback target picker needs source/target SHA and
+ *  completion time, none of which pruneOldTransactions' own id-only list
+ *  carries. manifest.json and journal.json are read INDEPENDENTLY (not
+ *  one gating the other): status is a diagnostic read, and a damaged
+ *  file on one side must not blank the facts still readable from the
+ *  other — each missing fact reports as `null`, never a thrown
+ *  exception that would blank the whole list over one bad transaction. */
+function listDoneTransactionSummaries(backupRoot) {
+  return listDoneTransactionIds(backupRoot).map((id) => {
+    const dir = join(backupRoot, id);
+    let sourceSha = null;
+    let targetSha = null;
+    try {
+      const manifest = readManifest(dir);
+      sourceSha = manifest.source_sha;
+      targetSha = manifest.target_sha;
+    } catch {
+      // manifest.json is written exactly once, right after ARCHIVED
+      // (runUpdate's own writeManifest call) — unreadable here means the
+      // directory was damaged AFTER the fact, not that this transaction
+      // never finished (listDoneTransactionIds already required DONE).
+    }
+    let doneAt = null;
+    try {
+      doneAt = readJournal(dir).history.find((e) => e.phase === PHASE.DONE)?.at ?? null;
+    } catch {
+      // Same reasoning as above, independently — a damaged journal.json
+      // must not also blank the manifest facts read above.
+    }
+    return { id, sourceSha, targetSha, doneAt };
+  });
+}
+
+/** `status`: read-only diagnostic over the current container state, any
+ *  in-progress transaction, and past DONE transactions — never mutates
+ *  anything, never acquires the deploy lock.
+ *
+ *  Container state is checked via `requireRunningContainer` FIRST (the
+ *  "everything is fine" case) and only falls back to `classify()` on
+ *  failure — `classify()` is documented as answering the "no running
+ *  container" branch table (A/B/C/D) alone, so calling it first would
+ *  misreport a normally-running container as branch D ("status is
+ *  running, expected exited"), the one status this command must not get
+ *  wrong.
+ *
+ *  `scopeNote` (director ruling 2026-09-06, point (f)): this command can
+ *  only answer deployment.md 4.4's SERVER-side recovery branches —
+ *  (0)/(1)/(3)/(4)/(5), all backed by journal/manifest/docker facts this
+ *  process can read. (2) ("build failed") is the RUNNER side's own
+ *  concern, with no server-side signal to read here, and 5-b's
+ *  first-application ledger migration is a one-time human judgment this
+ *  command was never asked to automate. Stating the boundary in the
+ *  output itself (not only in docs) is what keeps an operator from
+ *  reading a clean `status` as clearing either. */
+export function runStatus(flags, config) {
+  const repo = flags.repo ?? process.cwd();
+  const serverDir = join(repo, "server");
+  const { bin, overridden } = resolveDockerBin(config);
+  const backupRoot = resolveBackupRoot(config);
+  const hasState = hasPriorTransactions(backupRoot);
+
+  let containerState;
+  try {
+    const container = requireRunningContainer(bin, serverDir, SERVICE);
+    containerState = { running: true, container };
+  } catch {
+    const result = classify(bin, serverDir, SERVICE, hasState);
+    containerState = {
+      running: false,
+      branch: result.branch,
+      reason: result.reason,
+      container: result.container ?? null,
+    };
+  }
+
+  let health = null;
+  if (containerState.running) {
+    try {
+      const url = resolveHealthUrl(bin, serverDir, config);
+      const result = fetchHealth(resolveCurlBin(), url);
+      health = result.ok ? { url, ...result.body } : { url, error: result.error };
+    } catch (err) {
+      health = { error: err.message };
+    }
+  }
+
+  const unfinished = findUnfinishedTransaction(backupRoot);
+
+  return {
+    command: "status",
+    docker: overridden ? "fake" : "docker",
+    container: containerState,
+    health,
+    unfinishedTransaction:
+      unfinished === null ? null : { id: unfinished.id, phase: unfinished.journal.phase },
+    doneTransactions: listDoneTransactionSummaries(backupRoot),
+    scopeNote:
+      "status answers deployment.md 4.4's server-side recovery branches (0)/(1)/(3)/(4)/(5) only " +
+      "— not (2) (runner/build failure, no server-side signal to read) or the first-application " +
+      "user-ledger migration in 5-b; both remain the operator's own judgment.",
+  };
+}
+
 /** PRE-archive guard only (see the call site's comment): whether a
  *  volume has anything in it at all, via a throwaway alpine container.
  *  What gets RECORDED as required_entries comes from parseTarEntries
@@ -1150,8 +1264,10 @@ async function main(argv) {
       return runStart(flags, config);
     case "update":
       return runUpdate(flags, config);
+    case "status":
+      return runStatus(flags, config);
     default:
-      fail(`unknown command: ${command} (build/start/update implemented so far; rollback/status land in later commits)`, 64);
+      fail(`unknown command: ${command} (build/start/update/status implemented so far; rollback lands in a later commit)`, 64);
   }
 }
 
