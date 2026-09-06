@@ -5,22 +5,29 @@
 // string — the phase LIST is a state-machine concern, not a storage-
 // format one, and belongs here instead.
 //
-// PHASES ARE ADDED HERE AS COMMITS LAND, NOT ALL AT ONCE. This commit's
-// `update` only reaches MAINTENANCE_GATE_PASSED — stop/archive/up/
-// health/stable/done/rolled-back/failed arrive with later commits.
-// Extending PHASE/TRANSITIONS/OBSERVATION_SCHEMAS then is expected, not
-// a design smell; what this file exists to prevent is an UNLISTED phase
-// or an UNLISTED transition passing silently, not the list staying
-// short until the work that defines the rest lands.
+// PHASES ARE ADDED HERE AS COMMITS LAND, NOT ALL AT ONCE. `update`
+// currently reaches ARCHIVED — up/health/stable/done/rolled-back/failed
+// arrive with later commits. Extending PHASE/TRANSITIONS/
+// OBSERVATION_SCHEMAS then is expected, not a design smell; what this
+// file exists to prevent is an UNLISTED phase or an UNLISTED transition
+// passing silently, not the list staying short until the work that
+// defines the rest lands.
 import { IMAGE_ID_RE, isPathSha, isValidRequiredEntries, SHA_RE } from "./kaoiro-deploy-manifest.mjs";
 
 export class PhaseError extends Error {}
+
+// クロエ round 1 review MF-2: the rollback tag must name the OLD sha it
+// was cut from, not just look like a tag — a value that merely looks
+// like a docker tag string but drifted from old_sha would be a silent
+// footgun the whole point of recording it is meant to prevent.
+const ROLLBACK_TAG_RE = /^kaoiro-server:rollback-[0-9a-f]{40}$/;
 
 export const PHASE = Object.freeze({
   PREFLIGHT: "preflight",
   OLD_IMAGE_SAVED: "old_image_saved",
   BUILD_PREPARED: "build_prepared",
   MAINTENANCE_GATE_PASSED: "maintenance_gate_passed",
+  STOPPING: "stopping",
   STOPPED: "stopped",
   MOUNT_RESOLVED: "mount_resolved",
   ARCHIVED: "archived",
@@ -33,7 +40,8 @@ const TRANSITIONS = {
   [PHASE.PREFLIGHT]: [PHASE.OLD_IMAGE_SAVED],
   [PHASE.OLD_IMAGE_SAVED]: [PHASE.BUILD_PREPARED],
   [PHASE.BUILD_PREPARED]: [PHASE.MAINTENANCE_GATE_PASSED],
-  [PHASE.MAINTENANCE_GATE_PASSED]: [PHASE.STOPPED],
+  [PHASE.MAINTENANCE_GATE_PASSED]: [PHASE.STOPPING],
+  [PHASE.STOPPING]: [PHASE.STOPPED],
   [PHASE.STOPPED]: [PHASE.MOUNT_RESOLVED],
   [PHASE.MOUNT_RESOLVED]: [PHASE.ARCHIVED],
   [PHASE.ARCHIVED]: [],
@@ -56,10 +64,13 @@ const OBSERVATION_SCHEMAS = {
   [PHASE.PREFLIGHT]: (obs) => typeof obs.container === "string" && obs.container !== "",
   [PHASE.OLD_IMAGE_SAVED]: (obs) =>
     typeof obs.old_image_id === "string" &&
-    obs.old_image_id !== "" &&
+    IMAGE_ID_RE.test(obs.old_image_id) &&
     typeof obs.old_sha === "string" &&
     SHA_RE.test(obs.old_sha) &&
-    isPathSha(obs.compose_artifact),
+    isPathSha(obs.compose_artifact) &&
+    typeof obs.rollback_tag === "string" &&
+    ROLLBACK_TAG_RE.test(obs.rollback_tag) &&
+    obs.rollback_tag === `kaoiro-server:rollback-${obs.old_sha}`,
   [PHASE.BUILD_PREPARED]: (obs) =>
     typeof obs.image_id === "string" &&
     IMAGE_ID_RE.test(obs.image_id) &&
@@ -68,6 +79,12 @@ const OBSERVATION_SCHEMAS = {
     typeof obs.target_sha === "string" &&
     SHA_RE.test(obs.target_sha),
   [PHASE.MAINTENANCE_GATE_PASSED]: () => true,
+  // クロエ round 1 review SF-2: a checkpoint written immediately before
+  // `compose stop` runs, so a crash between the stop command and the
+  // STOPPED checkpoint leaves the journal AT this phase — distinguishable
+  // from "the gate passed but stop was never attempted" (a crash before
+  // this checkpoint would still show MAINTENANCE_GATE_PASSED).
+  [PHASE.STOPPING]: () => true,
   [PHASE.STOPPED]: (obs) =>
     (obs.stop_exit_code === null || Number.isInteger(obs.stop_exit_code)) &&
     (obs.stop_oom_killed === null || typeof obs.stop_oom_killed === "boolean"),

@@ -13,10 +13,12 @@ function entry(phase, observation) {
 }
 
 const PREFLIGHT_OBS = { container: "kaoiro-c1" };
+const OLD_SHA = "c".repeat(40);
 const OLD_IMAGE_OBS = {
-  old_image_id: "sha256:oldimageid",
-  old_sha: "c".repeat(40),
+  old_image_id: `sha256:${"0".repeat(64)}`,
+  old_sha: OLD_SHA,
   compose_artifact: { path: "/server/docker-compose.yaml", sha256: "a".repeat(64) },
+  rollback_tag: `kaoiro-server:rollback-${OLD_SHA}`,
 };
 const BUILD_OBS = {
   image_id: `sha256:${"b".repeat(64)}`,
@@ -52,6 +54,7 @@ function fullJournalThroughArchived(phase = PHASE.ARCHIVED) {
     phase,
     history: [
       ...base.history,
+      entry(PHASE.STOPPING, {}),
       entry(PHASE.STOPPED, STOPPED_OBS),
       entry(PHASE.MOUNT_RESOLVED, MOUNT_RESOLVED_OBS),
       entry(PHASE.ARCHIVED, ARCHIVED_OBS),
@@ -163,39 +166,75 @@ test("validateJournalAgainstStateMachine accepts a full journal through ARCHIVED
 
 test("validateJournalAgainstStateMachine rejects a STOPPED observation with a non-integer exit code", () => {
   const journal = fullJournalThroughArchived();
-  journal.history[4] = entry(PHASE.STOPPED, { ...STOPPED_OBS, stop_exit_code: "0" });
+  journal.history[5] = entry(PHASE.STOPPED, { ...STOPPED_OBS, stop_exit_code: "0" });
   assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
 });
 
 test("validateJournalAgainstStateMachine accepts a STOPPED observation with null exit code/oom (unmeasured)", () => {
   const journal = fullJournalThroughArchived();
-  journal.history[4] = entry(PHASE.STOPPED, { stop_exit_code: null, stop_oom_killed: null });
+  journal.history[5] = entry(PHASE.STOPPED, { stop_exit_code: null, stop_oom_killed: null });
   assert.doesNotThrow(() => validateJournalAgainstStateMachine(journal));
 });
 
 test("validateJournalAgainstStateMachine rejects a MOUNT_RESOLVED observation with an empty volume_id", () => {
   const journal = fullJournalThroughArchived();
-  journal.history[5] = entry(PHASE.MOUNT_RESOLVED, { volume_id: "" });
+  journal.history[6] = entry(PHASE.MOUNT_RESOLVED, { volume_id: "" });
   assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
 });
 
 test("validateJournalAgainstStateMachine rejects an ARCHIVED observation with a malformed archive sha256", () => {
   const journal = fullJournalThroughArchived();
-  journal.history[6] = entry(PHASE.ARCHIVED, { ...ARCHIVED_OBS, archive: { path: "/x", sha256: "not-a-sha" } });
+  journal.history[7] = entry(PHASE.ARCHIVED, { ...ARCHIVED_OBS, archive: { path: "/x", sha256: "not-a-sha" } });
   assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
 });
 
 test("validateJournalAgainstStateMachine rejects an ARCHIVED observation with malformed required_entries", () => {
   const journal = fullJournalThroughArchived();
-  journal.history[6] = entry(PHASE.ARCHIVED, {
+  journal.history[7] = entry(PHASE.ARCHIVED, {
     ...ARCHIVED_OBS,
     required_entries: [{ path: "users.dets", owner: "banana", mode: "0600" }],
   });
   assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
 });
 
+// クロエ round 1 review SF-7: a 4-digit mode with a nonzero leading
+// (special-bit) digit, like a setgid directory's "2755", must not be
+// rejected by the schema that also gates ARCHIVED.
+test("validateJournalAgainstStateMachine accepts an ARCHIVED observation with a setgid (4-digit) mode", () => {
+  const journal = fullJournalThroughArchived();
+  journal.history[7] = entry(PHASE.ARCHIVED, {
+    ...ARCHIVED_OBS,
+    required_entries: [{ path: "some-dir", owner: "1000:1000", mode: "2755" }],
+  });
+  assert.doesNotThrow(() => validateJournalAgainstStateMachine(journal));
+});
+
+test("validateJournalAgainstStateMachine rejects skipping STOPPING straight to STOPPED", () => {
+  const journal = fullJournalThroughArchived();
+  journal.history.splice(4, 1); // drop the STOPPING entry
+  assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
+});
+
 test("validateJournalAgainstStateMachine rejects skipping STOPPED straight to ARCHIVED", () => {
   const journal = fullJournalThroughArchived();
-  journal.history.splice(4, 1); // drop the STOPPED entry
+  journal.history.splice(5, 1); // drop the STOPPED entry
+  assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
+});
+
+// クロエ round 1 review SF-1/MF-2: OLD_IMAGE_SAVED now enforces the same
+// IMAGE_ID_RE shape BUILD_PREPARED already did, plus a rollback_tag that
+// actually names old_sha.
+test("validateJournalAgainstStateMachine rejects an OLD_IMAGE_SAVED observation with a malformed old_image_id", () => {
+  const journal = fullJournal();
+  journal.history[1] = entry(PHASE.OLD_IMAGE_SAVED, { ...OLD_IMAGE_OBS, old_image_id: "sha256:oldimageid" });
+  assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
+});
+
+test("validateJournalAgainstStateMachine rejects an OLD_IMAGE_SAVED observation whose rollback_tag names a different sha", () => {
+  const journal = fullJournal();
+  journal.history[1] = entry(PHASE.OLD_IMAGE_SAVED, {
+    ...OLD_IMAGE_OBS,
+    rollback_tag: `kaoiro-server:rollback-${"9".repeat(40)}`,
+  });
   assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
 });

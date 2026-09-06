@@ -10,7 +10,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 
 import { computeBuildIdentity } from "../../scripts/build-identity.mjs";
 import { BRANCH, classify, requireRunningContainer } from "./kaoiro-deploy-branch.mjs";
@@ -27,6 +27,12 @@ import { findUnfinishedTransaction, newTransactionId } from "./kaoiro-deploy-tra
 // only place the service name itself needs to be named.
 const SERVICE = "kaoiro";
 const SHA_RE = /^[0-9a-f]{40}$/;
+
+// クロエ round 1 review N-5: pinned (not bare `alpine`, which floats) and
+// pulled once, up front, during preflight — before the stop window opens,
+// not implicitly by the first `docker run alpine ...` the archive step
+// happens to make after the server is already down.
+const ALPINE_IMAGE = "alpine:3";
 
 export class DeployError extends Error {
   constructor(message, exitCode = 1) {
@@ -67,6 +73,22 @@ function parseDockerBoolField(raw) {
   if (raw === "true") return true;
   if (raw === "false") return false;
   return null;
+}
+
+/** Ensures ALPINE_IMAGE is present locally, pulling it if not — BEFORE
+ *  the stop window opens (クロエ round 1 review N-5). `dockerInspect`
+ *  throws on a missing image; that failure IS the signal to pull, not an
+ *  error to propagate. A pull failure here fails the whole update before
+ *  anything is stopped, rather than surfacing mid-archive with the
+ *  server already down for no useful reason. */
+function ensureAlpineImage(bin) {
+  try {
+    dockerInspect(bin, ALPINE_IMAGE, "{{.Id}}");
+    return;
+  } catch {
+    // Falls through to the pull below.
+  }
+  runDocker(bin, ["pull", ALPINE_IMAGE], { stdio: "inherit" });
 }
 
 const VALUE_FLAGS = new Set(["--config", "--repo", "--target", "--transaction"]);
@@ -124,7 +146,17 @@ export function hasPriorTransactions(backupRoot) {
 }
 
 function resolveBackupRoot(config) {
-  if (config.backup_root !== null) return config.backup_root;
+  if (config.backup_root !== null) {
+    // Defense in depth alongside kaoiro-deploy-config.mjs's own VALIDATORS
+    // check (クロエ round 1 review SF-6): a config object built
+    // programmatically (not through loadConfig) never passes through that
+    // validator at all, so this must not be the only place that rejects a
+    // relative path before anything mutates.
+    if (!isAbsolute(config.backup_root)) {
+      fail(`backup_root must be an absolute path, got: ${config.backup_root}`);
+    }
+    return config.backup_root;
+  }
   if (!process.env.HOME) fail("HOME is unset; pass backup_root explicitly via --config");
   return join(process.env.HOME, "kaoiro-deploy");
 }
@@ -282,14 +314,31 @@ export function runStart(flags, config) {
   return { command: "start", dryRun: false, docker: overridden ? "fake" : "docker", ...result, identity };
 }
 
-/** `update` — PREPARE half only (this commit): lock, preflight, save the
- *  old image, build the versioned target, and the human maintenance
- *  gate. Every step up to the gate touches nothing but the checkout and
- *  a versioned image tag — the running container is never stopped —
+// クロエ round 1 review MF-3: `--transaction` resume re-verifies the
+// container is RUNNING (requireRunningContainer) before doing anything
+// else — a transaction that reached STOPPING or later can never satisfy
+// that check again, since the whole point of those phases is that the
+// container is no longer running. The commit half has no resume support
+// yet ((c3), a later commit); telling the operator to "resume it with
+// --transaction" for one of these phases sends them into a guaranteed
+// second failure instead of the manual runbook that actually recovers.
+const UNRESUMABLE_PHASES = new Set([PHASE.STOPPING, PHASE.STOPPED, PHASE.MOUNT_RESOLVED, PHASE.ARCHIVED]);
+
+/** `update`: lock, preflight, save the old image, build the versioned
+ *  target, the human maintenance gate, then the stop/archive commit
+ *  itself. Everything up to the gate touches nothing but the checkout
+ *  and a versioned image tag — the running container is never stopped —
  *  matching deployment.md 4.3's "separate prepare (no downtime) from
- *  commit (the stop window)". The COMMIT half (graceful stop, archive,
- *  `up --no-build`, health poll, retention) is a later commit; this
- *  function's return value is the interface boundary between the two.
+ *  commit (the stop window)". `up --no-build`/health-poll/retention are
+ *  a later commit; this function currently ends at ARCHIVED.
+ *
+ *  `--dry-run` (クロエ round 1 review MF-1) performs only reads — the
+ *  same `compose ps`/`inspect` requireRunningContainer already needs,
+ *  plus `git fetch origin` to report whether the target is even
+ *  reachable — and returns a plan. It never acquires the deploy lock,
+ *  creates a transaction directory, or resumes one via `--transaction`
+ *  (an unrelated feature this commit does not attempt to give a
+ *  meaningful non-mutating definition to).
  *
  *  `--transaction <id>` resumes a transaction that reached the
  *  maintenance gate but has not been approved yet: it re-verifies the
@@ -299,17 +348,11 @@ export function runStart(flags, config) {
  *  and are read back from the journal's history instead.
  *
  *  CHECKPOINT-BEFORE-MUTATION (S1 item ii, yuta ruling 2026-09-06):
- *  every fact this function learns (old image id, old sha,
- *  compose_artifact, new image id/tag) is written durably via
- *  advancePhase() — which itself calls writeJournal()'s
- *  writeFileDurably() (M3) — BEFORE the next step runs. This commit's
- *  own steps only read docker state or build a new (not-yet-live) image
- *  tag, so none of them mutate the running deployment; the ordering
- *  still matters because the COMMIT half (a later commit: stop,
- *  archive, `up --no-build`) is exactly where a real Docker mutation
- *  happens, and it must find every fact it needs already checkpointed —
- *  never derive a fact from an in-memory variable that skipped the
- *  journal. */
+ *  every fact this function learns is written durably via advancePhase()
+ *  — which itself calls writeJournal()'s writeFileDurably() (M3) —
+ *  BEFORE the next step runs, so the COMMIT half's real Docker mutations
+ *  always find every fact they need already checkpointed, never an
+ *  in-memory variable that skipped the journal. */
 export function runUpdate(flags, config) {
   const repo = flags.repo ?? process.cwd();
   if (!flags.target || !SHA_RE.test(flags.target)) {
@@ -319,6 +362,35 @@ export function runUpdate(flags, config) {
   const serverDir = join(repo, "server");
   const { bin, overridden } = resolveDockerBin(config);
   const backupRoot = resolveBackupRoot(config);
+  const dryRun = flags.dryRun === true;
+
+  if (dryRun) {
+    if (flags.transaction !== undefined) {
+      fail("--dry-run does not support --transaction", 64);
+    }
+    const container = requireRunningContainer(bin, serverDir, SERVICE);
+    const unfinished = findUnfinishedTransaction(backupRoot);
+    gitOutput(["fetch", "origin"], repo);
+    return {
+      command: "update",
+      dryRun: true,
+      docker: overridden ? "fake" : "docker",
+      container,
+      target,
+      unfinishedTransactionId: unfinished === null ? null : unfinished.id,
+      wouldRun:
+        unfinished !== null
+          ? [`resume transaction ${unfinished.id} (phase: ${unfinished.journal.phase})`]
+          : [
+              `git merge --ff-only ${target}`,
+              "docker compose build",
+              "docker tag <old_image_id> kaoiro-server:rollback-<old-sha>",
+              "wait for --maintenance-approved",
+              "docker compose stop -t 30",
+              "archive /var/lib/kaoiro",
+            ],
+    };
+  }
 
   const lockPath = acquireLock(backupRoot);
   try {
@@ -328,6 +400,7 @@ export function runUpdate(flags, config) {
     let journal;
     let oldImageId;
     let oldSha;
+    let rollbackTag;
     let buildResult;
     let container;
     let composeArtifact;
@@ -353,6 +426,7 @@ export function runUpdate(flags, config) {
       }
       oldImageId = oldEntry.observation.old_image_id;
       oldSha = oldEntry.observation.old_sha;
+      rollbackTag = oldEntry.observation.rollback_tag;
       composeArtifact = oldEntry.observation.compose_artifact;
       buildResult = {
         imageId: buildEntry.observation.image_id,
@@ -366,7 +440,9 @@ export function runUpdate(flags, config) {
     } else {
       if (unfinished !== null) {
         fail(
-          `transaction ${unfinished.id} is unfinished (phase: ${unfinished.journal.phase}); resume it with --transaction ${unfinished.id}, or investigate ${unfinished.dir} before starting a new one`,
+          UNRESUMABLE_PHASES.has(unfinished.journal.phase)
+            ? `transaction ${unfinished.id} is unfinished (phase: ${unfinished.journal.phase}); the commit half has no resume support yet ((c3)) — follow docs/specs/deployment.md 4.4 to recover manually, or investigate ${unfinished.dir}`
+            : `transaction ${unfinished.id} is unfinished (phase: ${unfinished.journal.phase}); resume it with --transaction ${unfinished.id}, or investigate ${unfinished.dir} before starting a new one`,
         );
       }
 
@@ -374,7 +450,13 @@ export function runUpdate(flags, config) {
 
       transactionId = newTransactionId();
       dir = join(backupRoot, transactionId);
-      mkdirSync(dir, { recursive: true });
+      // クロエ round 1 review N-2: backupRoot itself may not exist yet on
+      // a first-ever transaction (recursive create is fine — there is
+      // nothing under it to collide with), but the transaction's OWN
+      // leaf directory must fail loudly on a same-second collision
+      // rather than silently reusing whatever is already there.
+      mkdirSync(backupRoot, { recursive: true });
+      mkdirSync(dir, { recursive: false });
       journal = {
         schema_version: 1,
         transaction_id: transactionId,
@@ -387,11 +469,28 @@ export function runUpdate(flags, config) {
       oldSha = gitOutput(["rev-parse", "HEAD"], repo);
       const composeArtifactPath = join(serverDir, "docker-compose.yaml");
       composeArtifact = { path: composeArtifactPath, sha256: sha256File(composeArtifactPath) };
+
+      // クロエ round 1 review MF-2: retagged from the RUNNING container's
+      // own image id, never from `latest` — `compose build` below is
+      // about to repoint `latest` at the new image, so retagging from
+      // `latest` after that point would make the rollback tag point at
+      // the very image it is supposed to be an escape hatch FROM
+      // (deployment.md 4.3 (1)). Verified via a real `docker inspect`
+      // read-back, not merely assumed from the `docker tag` exit code.
+      rollbackTag = `kaoiro-server:rollback-${oldSha}`;
+      runDocker(bin, ["tag", oldImageId, rollbackTag]);
+      const rollbackTagId = dockerInspect(bin, rollbackTag, "{{.Id}}");
+      if (rollbackTagId !== oldImageId) {
+        fail(
+          `rollback tag ${rollbackTag} points at ${rollbackTagId}, not the old image ${oldImageId} — refusing to proceed with an unverifiable rollback target`,
+        );
+      }
+
       journal = advancePhase(
         dir,
         journal,
         PHASE.OLD_IMAGE_SAVED,
-        { old_image_id: oldImageId, old_sha: oldSha, compose_artifact: composeArtifact },
+        { old_image_id: oldImageId, old_sha: oldSha, compose_artifact: composeArtifact, rollback_tag: rollbackTag },
         validateJournalAgainstStateMachine,
       );
 
@@ -416,6 +515,22 @@ export function runUpdate(flags, config) {
       );
     }
     journal = advancePhase(dir, journal, PHASE.MAINTENANCE_GATE_PASSED, {}, validateJournalAgainstStateMachine);
+
+    // クロエ round 1 review N-5: pulled here, before the stop window
+    // opens — not implicitly by the first `docker run alpine ...` the
+    // archive step happens to make after the server is already down,
+    // which would both extend the outage by however long the pull takes
+    // and risk a SECOND pull mid-archive if the first `docker run`
+    // somehow did not warm the local cache.
+    ensureAlpineImage(bin);
+
+    // クロエ round 1 review SF-2: a checkpoint written immediately
+    // before `compose stop` runs, so a crash between this line and the
+    // STOPPED checkpoint below leaves the journal AT this phase —
+    // distinguishable from "the gate passed but stop was never
+    // attempted" (a crash before this line would still show
+    // MAINTENANCE_GATE_PASSED).
+    journal = advancePhase(dir, journal, PHASE.STOPPING, {}, validateJournalAgainstStateMachine);
 
     // --- commit: from here on the service is stopped. Everything above
     // this line is documented as no-downtime in runUpdate's own doc
@@ -444,8 +559,13 @@ export function runUpdate(flags, config) {
       stopExitCode === config.expected_clean_stop_exit_code &&
       stopOomKilled === config.expected_clean_stop_oom_killed;
     if (!cleanStop) {
+      // クロエ round 1 review N-1: names the exact runbook essentials
+      // (deployment.md 4.3 step 5) an operator investigating an abnormal
+      // stop needs immediately — recover the container with `docker
+      // start`, never `docker compose up`, while `latest` still points
+      // at the new (not-yet-live) image built earlier in this run.
       fail(
-        `stop was not clean (exit=${stopExitCode}, oom=${stopOomKilled}; expected exit=${config.expected_clean_stop_exit_code}, expected oom=${config.expected_clean_stop_oom_killed}) — the server is stopped but archiving/restarting requires manual recovery; investigate before retrying`,
+        `stop was not clean (exit=${stopExitCode}, oom=${stopOomKilled}; expected exit=${config.expected_clean_stop_exit_code}, expected oom=${config.expected_clean_stop_oom_killed}) — the server is stopped but archiving/restarting requires manual recovery (deployment.md 4.3 step 5): use 'docker start ${container}' to recover the OLD container, never 'docker compose up' while latest points at the new image; investigate before retrying`,
       );
     }
 
@@ -478,9 +598,12 @@ export function runUpdate(flags, config) {
 
     // --- archive: full traversal + checksum + required entries +
     // ownership, all from the SAME resolved volume, before this
-    // transaction may call itself rollback-capable.
-    const requiredEntries = listVolumeEntries(bin, volumeId);
-    if (requiredEntries.length === 0) {
+    // transaction may call itself rollback-capable. listVolumeEntries is
+    // a PRE-archive guard only (fail before spending time archiving
+    // nothing) — the required_entries actually RECORDED come from the
+    // archive's own verification listing below (SF-5), so nothing can
+    // claim a required entry the archive does not actually contain.
+    if (listVolumeEntries(bin, volumeId).length === 0) {
       fail(
         `resolved volume ${volumeId} contains no files — archiving an empty volume would not be a usable backup`,
       );
@@ -494,7 +617,7 @@ export function runUpdate(flags, config) {
       `${volumeId}:/data:ro`,
       "-v",
       `${dir}:/backup`,
-      "alpine",
+      ALPINE_IMAGE,
       "tar",
       "czf",
       "/backup/archive.tar.gz",
@@ -502,13 +625,23 @@ export function runUpdate(flags, config) {
       "/data",
       ".",
     ]);
-    // Full traversal, not `| head`: a truncated pipeline's exit status
-    // comes from the tail command, masking a corrupt archive (same
-    // reasoning as deployment.md 4.3 step 5-c's own warning).
+    // クロエ round 1 review SF-5: `tar tvzf` (verbose), not `tar tzf`
+    // (names only) — the full traversal this already needed (not `| head`,
+    // whose exit status would come from the tail command and mask a
+    // corrupt archive — deployment.md 4.3 step 5-c) now ALSO produces
+    // the required_entries this transaction records, so the recorded set
+    // is provably what the archive contains, not a separately-scanned
+    // guess that could disagree with it.
+    let requiredEntries;
     try {
-      execFileSync("tar", ["tzf", archivePath], { stdio: "ignore" });
+      requiredEntries = parseTarTvzfEntries(archivePath);
     } catch (err) {
-      fail(`archive verification failed (tar tzf ${archivePath}): ${err.message}`);
+      fail(`archive verification failed (tar tvzf ${archivePath}): ${err.message}`);
+    }
+    if (requiredEntries.length === 0) {
+      fail(
+        `archive at ${archivePath} contains no entries — archiving an empty volume would not be a usable backup`,
+      );
     }
     const archive = { path: archivePath, sha256: sha256File(archivePath) };
 
@@ -546,6 +679,7 @@ export function runUpdate(flags, config) {
       docker: overridden ? "fake" : "docker",
       oldImageId,
       oldSha,
+      rollbackTag,
       build: buildResult,
       container,
       stopExitCode,
@@ -559,38 +693,101 @@ export function runUpdate(flags, config) {
   }
 }
 
-/** Lists a volume's top-level entries as manifest-shaped required-entry
- *  records (`{ path, owner, mode }`) via a throwaway alpine container.
- *  This is the (a) scope from the #306 archive design check-in: it
- *  records what IS in the volume, not what SHOULD be — comparing
- *  against the runtime-defined persistent-path set is #220 absorption's
- *  job (a later commit; no runtime-queryable source exists on the
- *  server side today).
+/** PRE-archive guard only (see the call site's comment): whether a
+ *  volume has anything in it at all, via a throwaway alpine container.
+ *  What gets RECORDED as required_entries comes from parseTarTvzfEntries
+ *  instead (SF-5) — this function only answers "would archiving this be
+ *  pointless".
  *
- *  Top-level only (`/data/*`), so a dotfile at the volume root is not
- *  recorded here even though the archive step still includes it
- *  (`tar -C /data .` covers everything) — a real gap in what this
- *  function reports, scoped out rather than silently pretended away.
- *  `[ -e "$f" ]` guards the empty-volume case: with no match, an
- *  unquoted glob in `sh` is passed through literally as the string
- *  `/data/*`, and `stat` on that would fail instead of yielding zero
- *  entries. */
+ *  クロエ round 1 review MF-4: `find -mindepth 1 -maxdepth 1`, not a bare
+ *  `/data/*` glob. An empty directory leaves an unquoted glob unexpanded
+ *  (`sh` passes the literal string `/data/*` through), so `[ -e "$f" ]`
+ *  is false and — being the LAST command the loop ever runs — the whole
+ *  script's own exit status is 1, not 0: `execFileSync` throws before
+ *  `.length === 0` is ever reached, making the empty-volume guard
+ *  unreachable in production regardless of what it checks. Measured live
+ *  (`sh -c` against a real empty dir: exit 1) and against the real
+ *  `alpine` image (`find`/`stat -c %04a` both present via busybox,
+ *  exit 0 empty output on an empty dir). */
+// Exported so the mutation-check test can run the EXACT same script text
+// through a real `sh -c` against a real directory (MF-4 pin (a)) instead
+// of a hand-copied duplicate that could silently drift from what
+// production actually runs.
+export const VOLUME_LISTING_SCRIPT =
+  "find /data -mindepth 1 -maxdepth 1 -exec stat -c '%n %u:%g %04a' {} \\;";
+
 function listVolumeEntries(bin, volumeId) {
   const output = runDocker(bin, [
     "run",
     "--rm",
     "-v",
     `${volumeId}:/data:ro`,
-    "alpine",
+    ALPINE_IMAGE,
     "sh",
     "-c",
-    'for f in /data/*; do [ -e "$f" ] && stat -c \'%n %u:%g %a\' "$f"; done',
+    VOLUME_LISTING_SCRIPT,
   ]);
   if (output === "") return [];
   return output.split("\n").map((line) => {
     const [rawPath, owner, mode] = line.split(" ");
-    return { path: rawPath.replace(/^\/data\//, ""), owner, mode: `0${mode}` };
+    return { path: rawPath.replace(/^\/data\//, ""), owner, mode };
   });
+}
+
+/** Converts a `tar tv*` permission string (`drwxr-sr-x`, `-rw-------`,
+ *  `-rwSr--r--`, …) to the 4-digit octal mode manifest entries use.
+ *  Special bits overlay the execute position (lower-case with execute
+ *  ALSO set, upper-case without) — measured against real GNU tar output
+ *  for setuid/setgid/sticky combined with and without execute, not
+ *  assumed from the format's name alone. */
+function modeFromTarPermString(perm) {
+  const bits = perm.slice(1);
+  const [ur, uw, ux] = bits.slice(0, 3);
+  const [gr, gw, gx] = bits.slice(3, 6);
+  const [pr, pw, px] = bits.slice(6, 9);
+  const owner = (ur === "r" ? 4 : 0) + (uw === "w" ? 2 : 0) + (ux === "x" || ux === "s" ? 1 : 0);
+  const group = (gr === "r" ? 4 : 0) + (gw === "w" ? 2 : 0) + (gx === "x" || gx === "s" ? 1 : 0);
+  const other = (pr === "r" ? 4 : 0) + (pw === "w" ? 2 : 0) + (px === "x" || px === "t" ? 1 : 0);
+  const special =
+    (ux === "s" || ux === "S" ? 4 : 0) +
+    (gx === "s" || gx === "S" ? 2 : 0) +
+    (px === "t" || px === "T" ? 1 : 0);
+  return `${special}${owner}${group}${other}`;
+}
+
+// One line of `tar tv*f ... --numeric-owner`: permission string, then
+// numeric uid/gid (guaranteed numeric only by --numeric-owner — without
+// it, a uid tar's own metadata happens to recognise, uid 0 above all,
+// prints as a name like "root" instead), size, date, time, and the rest
+// of the line verbatim as the entry name (names may contain spaces —
+// only ONE separating space is consumed before it, measured against a
+// real archive containing a space-bearing filename).
+const TAR_TVZF_LINE_RE = /^(\S+)\s+(\d+)\/(\d+)\s+\d+\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s(.*)$/;
+
+/** Derives required_entries from the archive's OWN verification listing
+ *  (クロエ round 1 review SF-5) rather than a separately-scanned volume
+ *  listing that could disagree with what actually got archived. Recurses
+ *  into the whole archive (unlike the old top-level-only volume scan),
+ *  which also closes that scan's dotfile gap for free — `tar -C /data .`
+ *  always included them; the pre-archive scan just never reported them.
+ *  The archive root entry itself (`./`) is not a required entry. */
+function parseTarTvzfEntries(archivePath) {
+  const output = execFileSync("tar", ["tvzf", archivePath, "--numeric-owner"], {
+    encoding: "utf8",
+  }).trim();
+  if (output === "") return [];
+  const entries = [];
+  for (const line of output.split("\n")) {
+    const match = TAR_TVZF_LINE_RE.exec(line);
+    if (match === null) {
+      fail(`could not parse tar tvzf output line: ${line}`);
+    }
+    const [, perm, uid, gid, rawName] = match;
+    const name = rawName.replace(/^\.\//, "").replace(/\/$/, "");
+    if (name === "") continue;
+    entries.push({ path: name, owner: `${uid}:${gid}`, mode: modeFromTarPermString(perm) });
+  }
+  return entries;
 }
 
 async function main(argv) {
