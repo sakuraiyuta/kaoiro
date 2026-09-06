@@ -279,7 +279,6 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --install-dir)
       [ $# -ge 2 ] || kaoiro_die "--install-dir needs a value" 64
-      kaoiro_reject_option_like --install-dir "$2"
       root=$2
       shift 2
       ;;
@@ -324,6 +323,16 @@ done
 # existing unit/plist file (`[ -e "$_unit_path" ] && render_... | cmp`), and
 # on a fresh host that file does not exist yet, so the `&&` short-circuits
 # and render_* is never reached.
+#
+# Round-3 review S-2: kaoiro_reject_option_like moved here too, for the
+# exact same reason — it used to sit in the --install-dir case arm, so a
+# root from KAOIRO_RUNNER_INSTALL_DIR (e.g. `-p/foo`) never went through
+# it (measured: --dry-run printed "would install ... into -p/foo/releases/"
+# and exited 0; the real run is not corrupted by this — mkdir -p on that
+# root fails before the lock or wizard ever run — but a leading `-` is
+# still not this script's own value domain for a root, regardless of
+# where it came from).
+kaoiro_reject_option_like "install root" "$root"
 reject_tar_unsafe_root "install root" "$root" || exit 64
 
 # --------------------------------------------------------------- OS branch --

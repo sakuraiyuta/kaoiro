@@ -351,6 +351,26 @@ describe("kaoiro-runner-bootstrap.sh (issue #314)", () => {
       expect(result.stderr).not.toContain("would write");
     });
 
+    it("--install-dir 省略時、KAOIRO_RUNNER_INSTALL_DIR が '-' で始まっても拒否する(issue #314 round3 S-2)", () => {
+      // Round-3 S-2: the same origin-asymmetry class the round-3 "must"
+      // fix closed for reject_tar_unsafe_root, a second time —
+      // kaoiro_reject_option_like also used to sit in the --install-dir
+      // case arm, so a root from KAOIRO_RUNNER_INSTALL_DIR never went
+      // through it (measured by クロエ: --dry-run printed "would install
+      // ... into -p/foo/releases/" and exited 0).
+      const result = runScript(bootstrapScript, ["/nonexistent.tar.gz", "--dry-run"], {
+        HOME: home,
+        KAOIRO_RUNNER_DIR: configDir,
+        KAOIRO_UNAME: "Linux",
+        KAOIRO_RUNNER_INSTALL_DIR: "-p/foo",
+        XDG_DATA_HOME: undefined,
+      });
+
+      expect(result.status).toBe(64);
+      expect(result.stderr).toContain("must not begin with '-'");
+      expect(result.stderr).not.toContain("would install");
+    });
+
     it("$HOME に改行があっても --dry-run で exit 64 拒否する(issue #314 round2 N-3、自動テスト追加分)", () => {
       const weirdHome = join(dir, "home-with\nnewline");
       mkdirSync(weirdHome, { recursive: true });
