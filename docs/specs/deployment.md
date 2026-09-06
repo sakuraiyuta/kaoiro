@@ -395,26 +395,35 @@ disconnects every agent on that host.
    `unauthorized`).
 3. Confirm the host list in the dashboard contains the `host_id`.
 
-## 4. Update an existing deployment (interim procedure)
+## 4. Update an existing deployment
 
 Sections 1–2 cover **initial deployment**. This section is canonical for moving
 an already-running deployment to a new version.
 
-> **This section is an interim manual procedure.** It bridges the period before
-> automation and is not the final form. **A runbook does not make the operation
-> safe**—the limits in 4.1 remain even when followed. History and replacement
-> criteria are in issue #217.
+> **The server side is a CLI** (`server/deploy/kaoiro-server-deploy.mjs`,
+> issue #306), driven by a transaction manifest + journal — 4.3/4.4 below
+> document it. **The runner side remains a separate, still-manual (or
+> checkout-direct) procedure** interleaved with the CLI calls; 4.6 covers the
+> release-profile automation for it. Automation does not remove the 4.1
+> limits by itself — they remain until their own resolving condition is met.
 
 ### 4.1 Known limits
 
 | Limit | Details | Resolving issue |
 |---|---|---|
 | **In-place build** (checkout-direct hosts only) | Overwrites `dist` in the active checkout. Each wrapper spawn resolves on-disk `dist` (`resolveWrapperLaunch()` in `runner/src/spawn.ts`), so a spawn during build can capture a mixed old/new artifact. Even if the procedure says “build while stopped,” **one ordering mistake reproduces the failure** | #219 (implemented; **remains until the host moves to the release profile** — 4.6) |
-| **No automatic rollback** | All recovery after failure is manual (4.4) | #220 |
 
 **Missing artifact provenance (former #218) is resolved**: build identity
 ([ADR-0053](../adr/0053-build-identity.md)) exposes the full SHA through the
 health endpoint and runner registration data (4.5).
+
+**Manual-only rollback (former #220) is resolved**: `server/deploy/kaoiro-server-deploy.mjs
+rollback --transaction <id> --confirm-restore` (4.4) restores the old image and its
+corresponding pre-deploy archive as one unit, re-verifying the archive and the
+restored volume's contents before starting the old image. It is operator-invoked,
+not automatic — the CLI never rolls back on its own — but every mechanical step
+(stop, forensic-archive, verify, wipe, restore, retag, start, health poll) that used
+to be manual SSH commands is now one command.
 
 **In-place build is resolved in the release profile** ([ADR-0018](../adr/0018-runner-distribution.md),
 revised 2026-08-16). Releases expand to `releases/<revision>/` and the live path
@@ -445,12 +454,44 @@ Satisfy all of the following before starting.
 
 ### 4.3 Update procedure
 
-**Separate prepare (no downtime) from commit (the stop window).**
+The server side is `server/deploy/kaoiro-server-deploy.mjs` (issue #306): one
+command per step, backed by a transaction manifest + journal under
+`backup_root` (default `~/kaoiro-deploy/`). Run it as a normal user directly on
+the server host, inside its checked-out repo — it runs every `git`/`docker`
+call itself. Unlike the old manual runbook, **none of the commands below are
+wrapped in `ssh '...'`**: log into the server host once for the CLI calls and
+5-b's manual steps (all of them operate on the server's own containers/
+volumes), and separately into the relevant runner host for (3)/(4)/(7)
+(section 2 covers multi-host runner deployment; a single-host lab setup may
+have both be the same machine).
 
-**Do not count server-image build time as server downtime.** The old container can
-keep running with its old image ID.
+```sh
+node server/deploy/kaoiro-server-deploy.mjs <command> [flags...]
+```
 
-**Whether runner build time is downtime depends on the host installation shape.**
+Config keys (`--config <0600 JSON file>`; every key defaults to the value
+shown, so a file only needs to state what it overrides):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `backup_root` | `~/kaoiro-deploy` | Absolute path; transaction directories live under it |
+| `keep_generations` / `retention_days` | `5` / `30` | DONE transactions kept regardless of age / max age beyond that |
+| `health_poll_interval_ms` / `health_poll_timeout_ms` | `2000` / `60000` | `update`/`rollback`'s own health poll after `compose up` |
+| `stability_window_ms` | `30000` | How long the container must stay `running` with an unchanged restart count after health passes, before `update` calls itself done |
+| `health_url` | `null` (derived via `docker compose port <service> 4000`) | Override only if the derived URL is wrong for this host |
+| `expected_clean_stop_exit_code` / `expected_clean_stop_oom_killed` | `null` / `null` | **Must be set from a measurement on this host** (step 5) — until then every stop is treated as abnormal, the safe direction to fail in |
+
+**Separate prepare (no downtime) from commit (the stop window)** — steps
+(1)/(2) below now run automatically, inside one `update` invocation, ending
+right before the stop window; steps (5)/(6) run automatically inside a second
+`update` invocation once `--maintenance-approved` is given.
+
+**Do not count server-image build time as server downtime.** The old container
+keeps running with its old image ID throughout (1)/(2).
+
+**Whether runner build time is downtime depends on the host installation
+shape** (unchanged — the runner is a separate system, outside issue #306's
+scope).
 
 - **Release profile** (migrated in 4.6): build and expansion stay under
   `releases/<revision>/`, so **downtime is only switching `current` and restarting**.
@@ -466,105 +507,80 @@ the build fails.
 
 ```mermaid
 flowchart TD
-  A["Retag from running container image ID<br/>record old commit"] --> B["Prepare server image<br/>old container keeps running"]
-  B -->|failure| R0["Abort cleanup 4.4-0<br/>restore remote source to old"]
-  B -->|success| C["Stop runner"]
-  C --> D["Advance local to target<br/>frozen install + build"]
-  D -->|failure| R1["Abort cleanup 4.4-0<br/>restore local to old commit<br/>4.4-2"]
-  D -->|success| E["Gracefully stop server"]
-  E --> S{"Stopped cleanly?<br/>check exit and oom"}
-  S -->|abnormal or unknown| R5["Restart same container with docker start<br/>confirm clean open, retry stop<br/>abort if impossible"]
-  S -->|normal| V["Resolve volume and confirm non-empty<br/>4.3-5-a"]
-  V --> M["First time only<br/>migrate user ledger<br/>4.3-5-b"]
-  M --> F["DETS archive + full verification<br/>4.3-5-c"]
-  F -->|failure| R2["Abort cleanup 4.4-0<br/>restart with old image<br/>4.4-1"]
-  F -->|success| G["Start server with prepared image"]
-  G -->|failure| R3["Determine whether state was opened<br/>stop, restore, run 0<br/>4.4-3"]
-  G -->|success| H["Start runner"]
-  H -->|failure| R4["Repair and rerun 4.5<br/>or post-start rollback<br/>4.4-4"]
+  A["update --target sha<br/>(1)+(2): retag old, build, persistence-path check"] -->|env_consistency mismatch| R0["CLI retags latest back to the<br/>old image itself (verified) — nothing else to do"]
+  A -->|ok, exits asking for --maintenance-approved| C["(3) Stop runner"]
+  C --> D["(4) Advance local to target<br/>frozen install + build"]
+  D -->|failure| R1["Abort cleanup 4.4-0<br/>4.4-2"]
+  D -->|success| E["update --transaction id --maintenance-approved<br/>(5)+(5-c)+(6): stop, archive, up, poll"]
+  E -->|clean-stop check fails| R5["4.4-1: docker start the OLD container<br/>manually — not resumable"]
+  E -->|archive/up/health/stability fails| R3["4.4-1 or 4.4-3: manual recovery /<br/>rollback --transaction id"]
+  E -->|success, phase=done| H["(7) Start runner"]
+  H -->|failure| R4["Repair and rerun 4.5<br/>or rollback --transaction id<br/>4.4-4"]
   H -->|success| I{"Does 4.5 operational<br/>success hold?"}
-  I -->|no| R6["Repair and rerun 4.5<br/>or post-start rollback<br/>4.4-5"]
+  I -->|no| R6["Repair and rerun 4.5<br/>or rollback --transaction id<br/>4.4-5"]
   I -->|yes| Z["Complete"]
 ```
 
 **C / D in the diagram (stop runner → build) apply to checkout-direct hosts.**
-Release-profile hosts can build in parallel with B; they stop the runner only just
+Release-profile hosts can build in parallel with A; they stop the runner only just
 before switching `current` (4.6).
-
-**Take the backup after stopping the server.** Tarring a live named volume can mix
-state across DETS files (this mistake occurred in the 2026-08-12 rollout).
-The backup is the only rollback path, so this step is mandatory.
 
 Substitute each environment's values for the placeholders below.
 
-`<server-host>` / `<repo-path>` / `<backup-dir>` / `<container>` /
-`<volume>` / `<target-sha>` / `<old-sha>` / `<old-remote-sha>` /
-`<old-local-sha>` / `<running-image-id>` / `<timestamp>` / `<uid>` / `<gid>`
+`<container>` / `<volume>` / `<target-sha>` / `<transaction-id>` /
+`<backup-dir>` / `<timestamp>` / `<uid>` / `<gid>`
 
-**(1) Preserve and record the old configuration**
-
-`docker compose build` retags `kaoiro-server:latest` to the new image.
-**Tag the old image separately before building or rollback will have nowhere to
-point.**
-
-**Retag from the image ID actually used by the running container, not `latest`.**
-After prepare, failure, or retry, `latest` may already point to the new image—the
-runbook itself creates that state in (2). Retagging from `latest` can make even
-the rollback tag point to the new image, **destroying the rollback target**.
+**(1) Save the old image (automatic, inside `update`'s prepare)**
 
 ```sh
-# running container の image ID を正本として取得する
-ssh <server-host> 'docker inspect <container> --format "{{.Image}}"'
-
-# その ID に rollback tag を付ける (latest からではない)
-ssh <server-host> 'docker tag <running-image-id> kaoiro-server:rollback-<old-sha>'
-
-# tag が意図した ID を指しているか検証する
-ssh <server-host> 'docker image inspect kaoiro-server:rollback-<old-sha> --format "{{.Id}}"'
-# → <running-image-id> と一致すること
-
-ssh <server-host> 'cd <repo-path> && git rev-parse HEAD'   # 旧 remote commit
-git -C <repo-path> rev-parse HEAD                          # 旧 local commit
+node server/deploy/kaoiro-server-deploy.mjs update --target <target-sha>
 ```
 
-Record: **running image ID / rollback tag / old remote commit / old local commit /
-target SHA / backup destination / archive SHA-256**. Rollback uses the pair
-“**old image + its DETS**”; recovery is impossible without all of these.
+Retags the image ID **actually used by the running container** — never
+`latest`, which the build in (2) is about to move — as
+`kaoiro-server:rollback-<old-sha>`, and verifies the tag by read-back before
+continuing. Recorded in the transaction's `journal.json`
+(`<backup_root>/<transaction-id>/journal.json`, `old_image_saved` phase):
+old image ID, rollback tag, old SHA, compose artifact SHA. Nothing to run
+manually.
 
-**(2) Prepare the server image (no downtime)**
+**(2) Prepare the server image (automatic, no downtime)**
 
-The old container keeps running with its old image ID; failure here has **zero
-impact on the live system**.
+Still part of the same `update` call. `KAOIRO_BUILD_VERSION` /
+`KAOIRO_BUILD_CHANNEL` / `KAOIRO_BUILD_REVISION` / `KAOIRO_BUILD_DIRTY`
+(build identity, issues #218/#288, [ADR-0053](../adr/0053-build-identity.md),
+[ADR-0056](../adr/0056-project-calver-build-version.md)) are computed by
+`scripts/build-identity.mjs` and passed **directly into `docker compose
+build`'s child process environment** — no shell `eval`, so there is no
+`set -a` step to forget (the exact footgun a hand-run `eval "$(...)"; docker
+compose build` used to hit when the auto-export was missing). The old
+container keeps running with its old image ID; failure here has zero impact
+on the live system.
 
-**Pass `KAOIRO_BUILD_VERSION` / `KAOIRO_BUILD_CHANNEL` /
-`KAOIRO_BUILD_REVISION` / `KAOIRO_BUILD_DIRTY` explicitly** (build identity,
-issues #218/#288, [ADR-0053](../adr/0053-build-identity.md),
-[ADR-0056](../adr/0056-project-calver-build-version.md)). Because `.dockerignore`
-excludes `.git` from the build context, the Dockerfile cannot read git; forgetting
-these values makes `GET /api/health` return an unknown development identity (the
-build still succeeds, affecting observability only). Obtain all four from
-`scripts/build-identity.mjs` (the same calculation that generates runner
-`dist/build-info.json`; issue #218 round 2 avoids two dirty definitions). Do not
-write them to `.env`; pass them as one-shot build environment variables (ADR-0053
-Alternatives Considered).
+**Issue #220 absorption — persistence-path / env consistency.** Once the
+target image exposes `KaoiroServer.PersistencePaths.manifest/0` (issue #310,
+not yet landed), `update` queries it by image ID and, for every reported
+persistence-path env var, compares **compose's resolved declaration** against
+**the currently-running (old) container's actual effective environment** —
+not the literal `.env` file, recorded separately as `declared` for reference
+only (the bundled `docker-compose.yaml` sets every canonical persistence-path
+var as a literal `environment:` entry, so `.env`'s own line legitimately
+differs on every correctly-configured host; folding it into the comparison
+would fail-close every update). A mismatch aborts here, before the stop
+window: `latest` is retagged back to the old image and the retag verified by
+read-back automatically — nothing to do manually for this specific case.
+**Until #310 lands, the target image lacks this module and the check reports
+`{skipped: true, reason: ...}`**; it neither blocks nor verifies anything
+today.
 
-**Do not forget `set -a`.** `scripts/build-identity.mjs` prints four plain
-`KEY=VALUE` lines without `export`. `eval` alone creates non-exported variables
-in the caller shell, and `docker compose build` is a separate process that does
-not inherit them. Running `eval` under `set -a` auto-exports subsequent
-assignments (issue #218 round 2 observed this regression after a rollback:
-leaving `eval "$(...)"; docker compose build` fell back to `unknown` / `false`,
-defeating MF-2). The behavior was measured with
-`bash -c 'eval "$(printf "X=1\\n")"; bash -c "echo [\\$X]"'`, which returns `[]`.
+`update` then exits non-zero, naming the transaction and requiring
+`--maintenance-approved`:
 
-```sh
-ssh <server-host> 'cd <repo-path> && git fetch origin \
-  && git merge --ff-only <target-sha> \
-  && set -a && eval "$(node scripts/build-identity.mjs)" && set +a \
-  && cd server && docker compose build'
+```text
+update requires --maintenance-approved before the stop window opens ...
+resume with --transaction <transaction-id> --target <target-sha> --maintenance-approved
+once the operator has approved the maintenance window
 ```
-
-Do not run `up -d` yet.
 
 **(3) Stop the runner**
 
@@ -584,193 +600,128 @@ systemctl --user stop kaoiro-runner
 with stale `node_modules` fails at runtime.
 
 ```sh
-git -C <repo-path> fetch origin && git -C <repo-path> merge --ff-only <target-sha>
-pnpm -C <repo-path> install --frozen-lockfile
-pnpm -C <repo-path>/wrapper build && pnpm -C <repo-path>/runner build
+git fetch origin && git merge --ff-only <target-sha>
+pnpm install --frozen-lockfile
+pnpm -C wrapper build && pnpm -C runner build
 ```
 
-**On failure, go to 4.4 (2).** The server is still the old container, so restoring
-local to the old commit returns the original configuration.
+**On failure, go to 4.4 (2).** The server-side transaction from (1)/(2) is
+untouched — it is still sitting at `env_consistency_checked`, waiting for
+`--maintenance-approved`.
 
-**(5) Stop the server and determine whether it stopped cleanly**
-
-Gracefully stop and **verify a clean shutdown**.
+**(5) Stop the server and determine whether it stopped cleanly (automatic)**
 
 ```sh
-ssh <server-host> 'cd <repo-path>/server && docker compose stop -t 30'
-ssh <server-host> 'docker inspect <container> \
-  --format "running={{.State.Running}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}}"'
+node server/deploy/kaoiro-server-deploy.mjs update --target <target-sha> \
+  --transaction <transaction-id> --maintenance-approved
 ```
 
-**`running=false` alone does not prove a clean stop.** A timeout (`-t 30`) followed
-by SIGKILL also yields `running=false`. Inspect `exit` and `oom` together (normal
-exit codes are implementation-dependent; **record the normal value and treat any
-different value as abnormal**). When uncertain, inspect the end of `docker logs`
-to confirm shutdown completed.
+Re-verifies the container is still running and that `--target` still matches
+what was already built, then runs `docker compose stop -t 30` and checks
+`exit`/`oom` against `expected_clean_stop_exit_code` /
+`expected_clean_stop_oom_killed` from `--config`. **An unset expectation, a
+mismatch, or an unreadable docker field are all treated as abnormal** — never
+as agreement by default. On an abnormal stop, `update` aborts immediately;
+there is no automatic retry loop. Recovery is manual (4.4 (1)): `docker start
+<container>` to recover the OLD container — never `docker compose up`, since
+`latest` already points at the new image. **This transaction cannot resume
+past this point**; once the stop failure is understood, a fresh `update`
+starts a new transaction.
 
-**Do not promote this archive to the rollback backup when forced or abnormal
-termination is suspected.** This runbook defines the backup as the **only rollback
-path**; making a known-inconsistent snapshot canonical violates its invariant.
-Retry in this order.
+**Do this step's migration (5-b) BEFORE running the command above**, while the
+old container is still running — this call stops it and immediately archives,
+with no pause in between.
 
-1. You may take a forensic snapshot, but **do not promote it to the rollback backup**.
-2. **Restart the same stopped container.** Do not use `docker compose up`: remote
-   source is now target and `latest` points to the new image, so **compose would
-   start the new image**.
+**(5-a) Resolve the volume (automatic)**
 
-   ```sh
-   ssh <server-host> 'docker start <container>'
-   ssh <server-host> 'docker logs --tail 50 <container>'   # inspect DETS open / recovery
-   ```
+Re-resolved from the just-stopped container's own mount (never hard-coded),
+recorded in `journal.json`'s `mount_resolved` phase. An empty result aborts
+the run rather than archiving nothing.
 
-3. If it opens cleanly, gracefully stop it again.
+**(5-b) Migrate the user ledger (first application only, manual)**
 
-   ```sh
-   ssh <server-host> 'docker stop -t 30 <container>'
-   ssh <server-host> 'docker inspect <container> \
-     --format "running={{.State.Running}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}}"'
-   ```
-
-4. After confirming a clean stop, retake a consistent backup.
-5. If it cannot open or stop cleanly, **abort the deployment**.
-
-**There is another reason to restart the same container with `docker start`.** This
-branch precedes migration (5-b); recreating the container would **destroy the
-migration source itself (the ledger inside the old container)**.
-
-**Abort when you cannot determine the state.** Do not proceed on “probably fine.”
-
-**(5-a) Resolve the volume**
-
-Resolve the volume name **from the container mount** (do not hard-code it).
-**Resolve it first**; all later migration and archive steps use this value.
-
-```sh
-ssh <server-host> 'docker inspect <container> \
-  --format "{{range .Mounts}}{{if eq .Destination \"/var/lib/kaoiro\"}}{{.Name}}{{end}}{{end}}"'
-```
-
-**Confirm the output is non-empty.** Empty output means the mount layout changed;
-the archive could then succeed with nothing and migration could target the wrong
-volume.
-
-**(5-b) Migrate the user ledger (first application only)**
-
-On the **first application** that adds `KAOIRO_USERS_PATH` to compose, the
-**current ledger is not in the volume**. The old container started without this
-env and used the fallback under `System.tmp_dir!()` (`kaoiro_users.dets`) from
+Outside `update`'s own scope (its `status` output says so explicitly: "does
+not perform the first-application user-ledger migration judgment"). On the
+**first application** that adds `KAOIRO_USERS_PATH` to compose, the **current
+ledger is not in the volume** — the old container started without this env and
+used the fallback under `System.tmp_dir!()` (`kaoiro_users.dets`) from
 `KaoiroServer.Users.default_path/0`. **Recreating it as-is would make the
-deployment that fixes compose discard the current ledger.**
+deployment that fixes compose discard the current ledger.** Do this once,
+before step (5)'s commit call, while the old container is still running:
 
 ```sh
-# 1. running container の実効 path を確認する
-ssh <server-host> 'docker inspect <container> \
-  --format "{{range .Config.Env}}{{if eq (index (split . \"=\") 0) \"KAOIRO_USERS_PATH\"}}{{.}}{{end}}{{end}}"'
+# 1. running container の実効 path を確認する (空なら unset = fallback 使用中)
+docker inspect <container> \
+  --format '{{range .Config.Env}}{{if eq (index (split . "=") 0) "KAOIRO_USERS_PATH"}}{{.}}{{end}}{{end}}'
 ```
 
-Empty output means unset and that the fallback path is in use. **If configured,
-skip this step** (and all later deployments do the same).
+Empty output means unset and the fallback path is in use. **If already
+configured, skip this step** (and all later deployments do the same).
 
 ```sh
-# 2. 停止済みの旧 container から ledger を退避し、checksum と numeric owner を記録する
-ssh <server-host> 'docker cp <container>:/tmp/kaoiro_users.dets \
-  <backup-dir>/users-migrate-<timestamp>.dets'
-ssh <server-host> 'sha256sum <backup-dir>/users-migrate-<timestamp>.dets'
+# 2. running container から ledger を退避し、checksum と numeric owner を記録する
+#    (docker cp は running container に対しても動くので、停止前に実行できる)
+docker cp <container>:/tmp/kaoiro_users.dets <backup-dir>/users-migrate-<timestamp>.dets
+sha256sum <backup-dir>/users-migrate-<timestamp>.dets
 
 # 復元すべき numeric owner を、既知の既存 DETS から決定的に取得する
-ssh <server-host> 'docker run --rm -v <volume>:/data:ro \
-  alpine stat -c "%u:%g" /data/agent_directory.dets'
+docker run --rm -v <volume>:/data:ro alpine stat -c "%u:%g" /data/agent_directory.dets
 
 # 3. volume 側に users.dets が既に無いことを確認する
-ssh <server-host> 'docker run --rm -v <volume>:/data:ro alpine ls -la /data/users.dets 2>&1'
+docker run --rm -v <volume>:/data:ro alpine ls -la /data/users.dets 2>&1
 
 # 4. volume へ配置する。owner は必ず numeric で指定する
 #    alpine の `nogroup` は GID 65533 だが runtime の DETS は別 GID であり、
 #    名前指定 (nobody:nogroup) では group が食い違う
-ssh <server-host> 'docker run --rm -v <volume>:/data -v <backup-dir>:/backup \
+docker run --rm -v <volume>:/data -v <backup-dir>:/backup \
   alpine sh -c "cp /backup/users-migrate-<timestamp>.dets /data/users.dets \
-    && chown <uid>:<gid> /data/users.dets && chmod 600 /data/users.dets"'
+    && chown <uid>:<gid> /data/users.dets && chmod 600 /data/users.dets"
 
 # 5. 配置後、退避元と bit 同一であることを確認する
-ssh <server-host> 'docker run --rm -v <volume>:/data:ro alpine sha256sum /data/users.dets'
+docker run --rm -v <volume>:/data:ro alpine sha256sum /data/users.dets
 # → 2 で記録した SHA-256 と一致すること
-ssh <server-host> 'docker run --rm -v <volume>:/data:ro alpine ls -n /data/users.dets'
+docker run --rm -v <volume>:/data:ro alpine ls -n /data/users.dets
 # → owner / group / mode が既存 DETS と揃っていること
 ```
 
 **A successful copy alone does not guarantee bit identity with the authority.**
-Always compare SHA-256.
+Always compare SHA-256. **If the source file is absent, the ledger is already
+lost.** Record this and let the operator decide; **do not silently create an
+empty ledger**—distinguish “lost” from “never existed.”
 
-**If both exist, the path actually referenced by the running container is the
-authority.** Do not merge by guesswork.
+**Set `KAOIRO_USERS_PATH` in the operator's `.env` too**, even though the
+target compose already sets it under `environment:` and that is what actually
+gates the container — `.env`'s own line is recorded as `declared` (reference
+only, never compared) by the #220 check above, and it is what an operator
+reads by hand when investigating later. This step's DETS placement is
+included in the pre-deploy archive step (5) takes right after; later
+deployments never need this step again.
 
-**If the source file is absent, the ledger is already lost.** Record this and let
-the operator decide. **Do not silently create an empty ledger**—distinguish
-“lost” from “never existed.”
+**(5-c) Archive and verify DETS (automatic)**
 
-**Keep the same setting in the operator's `.env` so rollback also points to the
-volume.**
+Full-traversal `tar tvzf` verification (never `| head`, whose exit status
+would come from `head` and mask a corrupt archive); `required_entries`
+recorded from that same listing, so the recorded set is provably what the
+archive contains, never a separately-scanned guess that could disagree with
+it. Both the archive and its SHA-256 are written to `manifest.json`, alongside
+the env_consistency result, image ID, source/target SHA, volume ID, and
+rollback tag — the durable transaction record `rollback` later reads.
 
-The target compose contains this under `environment:`, but **the old rollback
-compose does not**. Starting from the old source would make the server ignore the
-restored `/var/lib/kaoiro/users.dets` and **recreate an empty ledger at the
-fallback path**. The “old image + corresponding DETS” pair would no longer hold
-for Users; rollback of the compose fix would discard the ledger it fixes.
+**(6) Start the server with the prepared image (automatic)**
 
-Both compose versions use `env_file: - .env`, and `.env` is outside git, so it
-survives restoring source to the old commit. Put the setting there to **point to
-the volume in both directions**.
-
-```sh
-ssh <server-host> 'grep -q "^KAOIRO_USERS_PATH=" <repo-path>/server/.env \
-  || printf "KAOIRO_USERS_PATH=/var/lib/kaoiro/users.dets\n" >> <repo-path>/server/.env'
-```
-
-The target duplicates the compose `environment:` entry, but **the identical value
-has no effect**. **Include this external setting in the change log and rollback
-pair**; otherwise the next operator cannot trace why restoring compose produced
-an empty ledger.
-
-This migration is **included in the pre-deploy archive taken in the next step**;
-later deployments use the normal path.
-
-**(5-c) Archive and verify DETS**
-
-```sh
-ssh <server-host> 'docker run --rm -v <volume>:/data:ro -v <backup-dir>:/backup \
-  alpine tar czf /backup/kaoiro-dets-<timestamp>.tar.gz -C /data .'
-```
-
-**Verify with a complete traversal.**
-
-```sh
-ssh <server-host> 'tar tzf <backup-dir>/kaoiro-dets-<timestamp>.tar.gz >/dev/null \
-  && sha256sum <backup-dir>/kaoiro-dets-<timestamp>.tar.gz'
-```
-
-Do not write `tar tzf ... | head -20`. **The pipeline status comes from `head`,
-masking a `tar` failure.** A corrupt archive still exists, so `sha256sum` succeeds
-and falsely appears to verify it.
-
-Inspect contents with a **separate command** from verification.
-
-```sh
-ssh <server-host> 'tar tzf <backup-dir>/kaoiro-dets-<timestamp>.tar.gz | head -20'
-```
-
-**Confirm that every required path in 1.2 is included.** Any missing DETS is outside
-the volume and cannot be restored from this backup.
-
-**(6) Start the server with the prepared image**
-
-```sh
-ssh <server-host> 'cd <repo-path>/server && docker compose up -d --no-build'
-```
-
-Use `--no-build`; rebuilding here could produce an image different from the one
-verified in (2).
+`docker compose up -d --no-build` (rebuilding here could produce an image
+different from the one verified in (2)); then polls `GET .../api/health` until
+`build_revision` equals the target SHA and `build_dirty` is `false`, waits
+`stability_window_ms` confirming the container is still `running` with an
+unchanged restart count, and only then advances to `done` and best-effort
+prunes old transactions (`keep_generations`/`retention_days`). Any failure
+from here on cannot resume via `--transaction` — see 4.4 (3) once a manifest
+exists (it does, written in (5-c) before this step runs).
 
 **(7) Start the runner**
+
+Skip for release-profile hosts — already started by `kaoiro-runner-update.sh`
+in (3)/(4).
 
 ```sh
 systemctl --user start kaoiro-runner
@@ -778,180 +729,151 @@ systemctl --user start kaoiro-runner
 
 ### 4.4 Failure handling
 
-**(0) Common abort cleanup**
+Most failure modes now stop `kaoiro-server-deploy.mjs` itself with a non-zero
+exit and a message naming the exact next command — read it first. The
+subsections below cover the cases a message says to investigate manually, and
+what `rollback` does once a transaction has reached a point it can act on.
 
-**When to run it depends on whether a new container was started.**
+**(0) A prepare-phase abort left `latest` pointing at the wrong image**
 
-- **Abort before starting a new container** ((1) / (2)): **run (0) first**.
-- **After starting a new container, or when start status is unknown** ((3) / (4) /
-  (5)): **run the restore procedure in (3) first, then (0)**. Step (0) restores
-  `latest` to the old image and **checks its image ID against the running
-  container**; running it first while the new container is active intentionally
-  fails that check.
+`update`'s own env_consistency-mismatch check retags `latest` back to the old
+image automatically, verified by read-back (4.3 (2)) — no action needed for
+that specific case. For any OTHER failure between "`docker compose build`
+succeeds" (which retags `latest` to the new image as its own side effect,
+inside 4.3 (2)) and the transaction reaching `maintenance_gate_passed`,
+confirm manually:
 
-Even if the old server process keeps running, **that alone does not restore the old
-configuration**. After a successful prepare, the state is:
+```sh
+docker image inspect kaoiro-server:latest --format '{{.Id}}'
+docker inspect <container> --format '{{.Image}}'
+```
 
-- remote checkout = **target**
-- `kaoiro-server:latest` = **new image**
-- only the running container has the old image ID
+If they differ, the old image ID is in the transaction's own `journal.json`
+(`<backup_root>/<transaction-id>/journal.json`, `old_image_saved` phase,
+`old_image_id`):
+
+```sh
+docker tag <old-image-id-from-journal> kaoiro-server:latest
+```
 
 **Leaving this state unattended lets the next `docker compose up` switch an
-incomplete deployment into production.**
+incomplete deployment into production.** The running container itself was
+never touched by prepare; only `latest` needs restoring. Unlike the pre-CLI
+runbook, `update` does not revert the local checkout on abort — `git merge
+--ff-only <target-sha>` already ran as part of (2), and a later `update
+--target <target-sha>` simply finds it already there (a no-op merge).
 
-Restore the following without touching the running container.
+**(1) The commit step failed before reaching `done`** (4.3 step 5 / step 5-c)
 
-```sh
-# 1. Restore remote source to the old commit
-ssh <server-host> 'cd <repo-path> && git checkout <old-remote-sha>'
+The commit half (`update --maintenance-approved`) has no resume support: any
+failure from `stopping` through `starting`/`up`/`healthy` leaves that
+transaction permanently unresumable. What to do next depends on how far it
+got — read the failing command's own error message, which names the phase.
 
-# 2. Restore latest to the old image (if prepare succeeded)
-ssh <server-host> 'docker tag <running-image-id> kaoiro-server:latest'
+- **Stop was not clean**, or **the archive failed or was refused** (empty
+  volume, `tar` verification failed): the container is stopped and nothing
+  past it has run. `docker start <container>` to recover the OLD container —
+  never `docker compose up`, since `latest` still points at the new image
+  (compose would start it). Inspect `docker logs --tail 50 <container>` for
+  the actual reason; once understood, a fresh `update` (a new transaction)
+  can retry. **Do not use `--force-recreate`** here — the original container
+  (and, for a first-application migration, the fallback-path ledger inside
+  it) still exists; recreating it would destroy the migration source.
+- **`compose up` / health / stability failed after the archive succeeded**: a
+  manifest now exists for this transaction (written in 4.3 (5-c), before
+  `starting`), so **(3)** below — `rollback --transaction <transaction-id>
+  --confirm-restore` — is the supported recovery once you decide not to keep
+  retrying forward.
 
-# 3. Confirm latest and the running container have the same image ID
-ssh <server-host> 'docker image inspect kaoiro-server:latest --format "{{.Id}}"'
-ssh <server-host> 'docker inspect <container> --format "{{.Image}}"'
-```
+**(2) Runner build failed** (4.3 step 4)
 
-It is fine to retain the prepared new image under another tag. **Restore only
-`latest` and the production checkout to the old configuration.**
-
-**`git checkout <sha>` leaves a detached HEAD.** It works for recovery but loses
-which branch the production checkout followed. **Treat rollback as detached and
-have the operator restore the branch pointer afterward.** This limit remains until
-the source checkout is separated as a release (#219).
-
-**(1) DETS archive or verification failed** (4.3 step 5)
-
-**Do not proceed to the new server.** Run **(0)**, then **restart the same
-container**.
-
-**Do not use `--force-recreate`.** For an initial deployment, the **original
-container containing the fallback-path ledger—the authority—still exists**;
-recreating it would **destroy the migration source**.
-
-```sh
-ssh <server-host> 'docker start <container>'
-```
-
-Restore local to the old commit, run frozen install + build, then start the runner
-(same procedure as (2)). An update without a backup is an **update without a
-rollback path**.
-
-**(2) Build failed** (4.3 step 4)
-
-The server has not switched, so the old container is still running. **Still run
-(0)**—if prepare succeeded, `latest` already points to the new image.
-
-Then restore local. **Restoring a saved `dist` is only a limited recovery**:
-if `pnpm install` changed `node_modules`, restoring only `dist` leaves runtime
-dependencies inconsistent. **A dist-only restore is valid only when lockfile and
-`node_modules` were unchanged.**
-
-The canonical recovery is to redo the build from the old commit and its lockfile.
+The server has not switched — the old container is still running. **Still
+check (0)**: if the server's own prepare (4.3 (1)/(2)) already succeeded,
+`latest` points at the new server image regardless of what the runner build
+did. The server-side transaction itself is untouched and still waiting at
+`env_consistency_checked`; fix the runner build and retry, or abandon this
+deploy (in which case also revert the runner build to the old commit/lockfile
+before restarting it — there is nothing server-side to undo).
 
 ```sh
-git -C <repo-path> checkout <old-local-sha>
-pnpm -C <repo-path> install --frozen-lockfile
-pnpm -C <repo-path>/wrapper build && pnpm -C <repo-path>/runner build
+git checkout <old-sha>
+pnpm install --frozen-lockfile
+pnpm -C wrapper build && pnpm -C runner build
 systemctl --user start kaoiro-runner
 ```
 
-If that is unavailable, leave the runner stopped. **Do not start it with a partial
-`dist`.**
+If that is unavailable, leave the runner stopped. **Do not start it with a
+partial `dist`.**
 
-**(3) New server does not start** (4.3 step 6)
-
-**Do not leave “did the new server open state?” to human judgment.** Use these
-observable boundaries.
-
-- **`docker compose up -d` has not run, or you can prove the container process
-  never started**: no DETS restore is needed; run **(0)** and start the old image.
-- **A new container was started even once, or start status is unknown**: **treat
-  state as opened**. There is no guarantee that old code can read DETS written by
-  new code (issue #209 previously changed a tuple from 3 to 4 elements).
-
-For the latter case, follow these steps. **Restore is destructive; preserve this
-order.**
+**(3) Roll back a committed transaction** (4.3 step 6)
 
 ```sh
-# 1. failed / new container を停止し、非 running を確認する
-#    restart: unless-stopped のため、crash-loop 中の process が同じ volume へ
-#    書いている可能性がある。止めずに tar / 削除 / 展開すると両方が壊れる
-ssh <server-host> 'cd <repo-path>/server && docker compose stop -t 30'
-ssh <server-host> 'docker inspect <container> --format "{{.State.Running}}"'   # false
-
-# 2. volume 名を再解決し、operator が目視で確認する
-ssh <server-host> 'docker inspect <container> \
-  --format "{{range .Mounts}}{{if eq .Destination \"/var/lib/kaoiro\"}}{{.Name}}{{end}}{{end}}"'
-
-# 3. 現在 (新) の state を forensic archive し、完全走査 + checksum を記録する
-ssh <server-host> 'docker run --rm -v <volume>:/data:ro -v <backup-dir>:/backup \
-  alpine tar czf /backup/kaoiro-dets-forensic-<timestamp>.tar.gz -C /data .'
-ssh <server-host> 'tar tzf <backup-dir>/kaoiro-dets-forensic-<timestamp>.tar.gz >/dev/null \
-  && sha256sum <backup-dir>/kaoiro-dets-forensic-<timestamp>.tar.gz'
-
-# 4. pre-deploy archive を destructive delete の前に再検証する
-#    記録済み SHA-256 との一致と、完全走査の両方
-ssh <server-host> 'sha256sum <backup-dir>/kaoiro-dets-<timestamp>.tar.gz'
-ssh <server-host> 'tar tzf <backup-dir>/kaoiro-dets-<timestamp>.tar.gz >/dev/null'
-
-# 5. volume を完全に空にして restore する
-#    rm -rf /data/* は dotfile を消さないため「完全に空」にならない。
-#    mount root 自体は残して全 entry を消す
-ssh <server-host> 'docker run --rm -v <volume>:/data -v <backup-dir>:/backup \
-  alpine sh -c "find /data -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + \
-    && tar xzf /backup/kaoiro-dets-<timestamp>.tar.gz -C /data"'
-
-# 6. Verify all required entries from 1.2, including owner and mode
-ssh <server-host> 'docker run --rm -v <volume>:/data:ro alpine ls -la /data/'
+node server/deploy/kaoiro-server-deploy.mjs rollback \
+  --transaction <transaction-id> --confirm-restore
 ```
 
-Then run **(0)** and start the old image. **Before starting, verify that old
-compose also puts `KAOIRO_USERS_PATH` in the container environment** (the setting
-written to `.env` in 5-b).
+(`--dry-run` first to preview without confirming.) `rollback` re-reads and
+re-validates the transaction's journal before trusting anything in it, and
+refuses a transaction that never reached `old_image_saved`, or one already
+mid-rollback or fully rolled back — **do not leave “did the new server open
+state?” to human judgment**; the eligible-phase check and the
+destructive/non-destructive split below are both derived from the same phase
+graph `update` itself advances through.
 
-```sh
-ssh <server-host> 'cd <repo-path>/server && docker compose config | grep KAOIRO_USERS_PATH'
-ssh <server-host> 'cd <repo-path>/server && docker compose up -d --no-build --force-recreate'
-```
+- **Non-destructive** (transaction reached anywhere from `old_image_saved`
+  through `archived` — `docker compose up -d` never ran, so no DETS restore is
+  needed): retags `latest` back to the old image (verified by read-back) and
+  `docker start`s the original container — a harmless no-op if it was never
+  actually stopped.
+- **Destructive** (transaction reached `starting`/`up`/`healthy`/`done` — a
+  new container was started at least once, so **treat state as opened**;
+  there is no guarantee old code can read DETS written by new code, issue
+  #209 previously changed a tuple from 3 to 4 elements): stops whatever is
+  currently running for the service (refuses on more than one match),
+  forensically archives the CURRENT volume state before touching it
+  (full-traversal verified), re-verifies the pre-deploy archive's checksum
+  AND a full traversal right before the destructive wipe, wipes the volume
+  (`find -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +` — a bare `rm -rf
+  /data/*` would leave dotfiles behind) and restores from it, re-archives the
+  JUST-restored volume and confirms it matches the manifest's own
+  `required_entries` **exactly** (owner and mode included), retags `latest`
+  back (verified), brings the old image up with `--force-recreate`, and polls
+  health for the old SHA.
 
-**Without this env the server creates an empty ledger at the fallback path instead
-of reading restored `users.dets`.** In post-start rollback the **original container
-has already been replaced**, so the `.env` setting from 5-b is the only path.
-
-**The backup you restore must correspond to that image.** “Old image only” or
-“backup only” cannot restore the deployment.
+Both paths advance the transaction to `rolled_back` on success — a rollback
+of an already-`rolled_back` transaction is refused; investigate manually if it
+needs to be redone. **The backup restored must correspond to the image
+started**: `rollback` always restores the pair together, from the same
+transaction's manifest, never “old image only” or “backup only”.
 
 **(4) Runner does not restart** (4.3 step 7)
 
 Check `systemctl --user status kaoiro-runner` and the journal. Exit code 78
 (`EX_CONFIG`) is a configuration error and restart will not fix it (section 2,
-“Restart policy and exit codes”). Missing `dist` also produces this code, so first
-check the recovery procedure in (2).
+“Restart policy and exit codes”). Missing `dist` also produces this code, so
+first check the recovery procedure in (2).
 
 **At this point the new server has already opened state.** Do not stop at
 investigation; choose one of the following.
 
 - **Repairable on target**: repair, start the runner, and **rerun 4.5**.
-- **Not repairable or rollback chosen**: stop the runner and run **post-start
-  rollback in (3)**. Restore local to the old commit, frozen install / build, and
-  start the old runner.
+- **Not repairable, or rollback chosen**: stop the runner and run **(3)**.
 
 **(5) Operational checks are incomplete**
 
 When any 4.5 operational-success check is missing, **do not consider the update
 successful.**
 
-**“Abort” does not mean leaving the new server running.** Keeping a configuration
-that fails success criteria in production is not an abort. Use the same two exits
-as (4).
+**“Abort” does not mean leaving the new server running.** Keeping a
+configuration that fails success criteria in production is not an abort. Use
+the same two exits as (4).
 
 - **Repairable**: repair and **rerun 4.5**.
-- **Not repairable or rollback chosen**: stop the runner and perform **post-start
-  rollback in (3)**.
+- **Not repairable, or rollback chosen**: stop the runner and run **(3)**.
 
-Even if the decision takes time, **retain the backup** and **record the state**.
+Even if the decision takes time, **retain the backup**: retention only prunes
+DONE transactions past `keep_generations`/`retention_days`, never the one
+`--transaction` currently points at.
 
 ### 4.5 Verification and its limits
 
@@ -962,9 +884,9 @@ check is present.**
 
 | Item | Verification |
 |---|---|
-| Server source is exact target | `ssh <server-host> 'cd <repo-path> && git rev-parse HEAD'` equals target SHA |
-| Local source is exact target | `git -C <repo-path> rev-parse HEAD` equals the same |
-| Build succeeded | Every command in 4.3 steps 2 / 4 exits 0 |
+| Server source is exact target | `git rev-parse HEAD`, run on the server host, equals target SHA |
+| Runner source is exact target | `git rev-parse HEAD`, run on the runner host, equals the same |
+| Build succeeded | Every command in 4.3 steps (2) / (4) exits 0 |
 | Container is stable | No restart after a reasonable interval (about 60 seconds); `docker ps` shows `Up` |
 | **Connectivity checks in section 3 pass** | **Rerun them mandatorily** — dashboard opens, runner journal shows a sustained connection, and the target `host_id` appears in the host list |
 
