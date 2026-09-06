@@ -239,17 +239,19 @@ function restartCount(bin, container) {
 // BUILD_PREPARED), not before — this is the earliest point its own
 // `eval` interface can be queried at all.
 
-/** #310 (a separate issue, not yet landed as of this commit) is expected
- *  to expose exactly this: `KaoiroServer.PersistencePaths.manifest/0`
- *  returning a list of maps with keys `:store`/`:env`/`:default_file`/
- *  `:default_path` (クロエ round 5 review A-MF-2 extends the contract with
- *  the last one — the ABSOLUTE path `runtime.exs`'s own fallback resolves
- *  to when `:env` is unset, as opposed to `:default_file`'s bare
- *  filename). Named here as the single fixed expression this file's own
- *  eval call uses (director ruling 2026-09-06, A-1) — an image built
- *  before #310 lands (or an old image a rollback targets) simply lacks
- *  this module; that is queryPersistencePaths' own "skipped" outcome, not
- *  a defect in this string. */
+/** The canonical list, landed by #310:
+ *  `KaoiroServer.PersistencePaths.manifest/0` returns one map per store
+ *  carrying exactly the keys `:store`/`:env`/`:default_file`/
+ *  `:default_path` (クロエ round 5 review A-MF-2 added the last one — the
+ *  ABSOLUTE path `runtime.exs`'s own fallback resolves to when `:env` is
+ *  unset, as opposed to `:default_file`'s bare filename). Named here as
+ *  the single fixed expression this file's own eval call uses (director
+ *  ruling 2026-09-06, A-1); CI's `server-image` job runs this same
+ *  expression against the image it just built, with no env, and rejects
+ *  anything that is not a JSON array of exactly those four keys. An image
+ *  built before #310 landed (or an old image a rollback targets) simply
+ *  lacks the module; that is queryPersistencePaths' own "skipped"
+ *  outcome, not a defect in this string. */
 const PERSISTENCE_PATHS_EVAL_EXPR = "IO.puts(Jason.encode!(KaoiroServer.PersistencePaths.manifest()))";
 
 // クロエ round 4 review A-SF-1: `entry.env` is about to be embedded into
