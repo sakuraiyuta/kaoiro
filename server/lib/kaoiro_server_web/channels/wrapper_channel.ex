@@ -677,18 +677,39 @@ defmodule KaoiroServerWeb.WrapperChannel do
     {:reply, :ok, socket}
   end
 
+  # issue #305 S1: cross-check a wrapper-reported permission_applied/
+  # failed's revision against PermissionSettings' own allocation ledger
+  # BEFORE it ever enters the audit trail — the SAME "a revision the
+  # server never allocated is not actionable" rule
+  # `PermissionSettings.merge_observation/4` already applies to live
+  # state (`KaoiroServer.PermissionSettings.known_revision?/3`). A
+  # malformed/missing revision is NOT pre-filtered here: it falls
+  # through to `record_permission_event/5`'s own shape validation, which
+  # rejects it with an accurate log message rather than this one's
+  # ledger-specific wording.
   defp handle_wrapper_in(
          "session_lifecycle",
          %{"kind" => kind, "at" => at} = payload,
          socket
        )
        when kind in ["permission_applied", "permission_failed"] and is_binary(at) do
-    SessionLifecycleEvents.record_permission_event(
-      socket.assigns.agent_id,
-      kind,
-      at,
-      Map.get(payload, "details")
-    )
+    agent_id = socket.assigns.agent_id
+    details = Map.get(payload, "details")
+
+    case details do
+      %{"revision" => revision} when is_integer(revision) and revision >= 0 ->
+        if KaoiroServer.PermissionSettings.known_revision?(agent_id, revision) do
+          SessionLifecycleEvents.record_permission_event(agent_id, kind, at, details)
+        else
+          Logger.warning(
+            "session_lifecycle: #{kind} revision #{revision} exceeds the known " <>
+              "allocation ledger, dropped (agent_id=#{agent_id})"
+          )
+        end
+
+      _malformed ->
+        SessionLifecycleEvents.record_permission_event(agent_id, kind, at, details)
+    end
 
     {:reply, :ok, socket}
   end

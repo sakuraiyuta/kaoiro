@@ -695,9 +695,11 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # submit_request/6` merges the patch into the agent's latest
   # next-execution pair, allocates the revision, and persists before
   # this handler relays to the wrapper and acks the client (protocol.md,
-  # "Permission changes at an execution boundary"). The `with` steps
-  # below follow that section's validation order exactly: operator role,
-  # payload/size, payload shape, agent identity, reset exclusion,
+  # "Permission changes at an execution boundary", whose checks this
+  # covers, though not in that section's exact prose order): operator
+  # role, payload/size, payload shape, agent identity, reset exclusion
+  # (BEFORE the connection/capability checks below it — a pending reset
+  # rejects even a disconnected or capability-less agent the same way),
   # current connection, capability metadata readiness + capability, then
   # the store's own raw-baseline check (`permission_not_ready` from
   # `submit_request/6` itself when no baseline has been recorded yet).
@@ -713,7 +715,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
          :ok <- require_agent_connected(envelope),
          :ok <- require_permission_switch_capability(envelope),
          {:ok, engine} <- fetch_agent_engine(envelope),
-         actor = permission_actor(socket),
+         {:ok, actor} <- resolve_permission_actor(socket),
          at = DateTime.utc_now() |> DateTime.to_iso8601(),
          previous = permission_previous_observation(agent_id),
          {:ok, revision, requested} <-
@@ -3154,15 +3156,50 @@ defmodule KaoiroServerWeb.AgentsChannel do
   end
 
   # Server-derived, never a client claim (`PermissionAuditActor`,
-  # protocol.md). Reuses the SAME credential fingerprint `ClientSocket`
-  # already computes for issue #47's force-disconnect targeting
-  # (`socket.assigns[:socket_id]`) rather than resolving a `Users` ledger
-  # id — that ledger exists for the display-name feature (issue #197),
-  # a different concern, and by the time an operator-gated handler runs,
-  # `role_for/1` having already accepted this credential guarantees
-  # `socket_id` is a real, non-nil fingerprint (`connect/3` refuses the
-  # socket outright for a credential shape that would produce nil).
-  defp permission_actor(socket), do: %{kind: "user", id: socket.assigns[:socket_id]}
+  # protocol.md; issue #305 M1, director/クロエ ruling 2026-09-06).
+  # Deliberately NOT `socket.assigns[:socket_id]` — that fingerprint
+  # identifies a CREDENTIAL for issue #47's force-disconnect targeting,
+  # not a PRINCIPAL; auth-and-authz.md and protocol.ts both require a
+  # principal id here, and a shared operator token would otherwise
+  # collapse every holder into one indistinguishable actor. Resolved
+  # lazily HERE (not at `ClientSocket.connect/3`) so the `Users`
+  # `GenServer.call` — and, for a token, the fingerprint reverse-scan —
+  # rides only an actual `set_permission` request, never every dashboard
+  # connection including viewers who never need an actor at all.
+  #
+  # `socket.assigns[:credential]` is `re_resolvable/1`'s post-connect
+  # form: `{:token_fingerprint, fp}` for a shared token (the raw token
+  # itself was never retained), or `{:oauth, %{provider, uid}}` for an
+  # OAuth identity (kept in full — not a secret). Both branches resolve
+  # through the SAME `Users.get_or_create/4` source-key shape
+  # `session_controller.ex`/`auth_controller.ex` use at HTTP login, so a
+  # socket authenticated with the same credential converges on the same
+  # user_id regardless of which path created it first. `{:error,
+  # :forbidden}` on an unresolvable fingerprint (token rotated out of
+  # `:client_tokens` after this socket connected) mirrors the outcome
+  # `current_role/1`'s own live re-resolution already produces for that
+  # same event — this function fails closed on its own rather than
+  # assuming that upstream check ran first.
+  defp resolve_permission_actor(socket) do
+    case socket.assigns[:credential] do
+      {:token_fingerprint, fingerprint} ->
+        case Auth.client_token_identity_by_fingerprint(fingerprint) do
+          {:ok, hash, display_name} ->
+            user = Users.get_or_create({:token, hash}, "user", display_name)
+            {:ok, %{"kind" => "user", "id" => user.id}}
+
+          {:error, _reason} ->
+            {:error, :forbidden}
+        end
+
+      {:oauth, %{provider: provider, uid: uid}} ->
+        user = Users.get_or_create({:oauth, provider, uid}, "user", uid)
+        {:ok, %{"kind" => "user", "id" => user.id}}
+
+      _other ->
+        {:error, :forbidden}
+    end
+  end
 
   # `SetPermissionErrorReason` (protocol.md) is closed and does not
   # include `invalid_agent_id` / `missing_agent_id` — both collapse to
@@ -3197,7 +3234,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
         "sandbox" => requested.sandbox,
         "network_access" => requested.network_access
       },
-      "actor" => %{"kind" => actor.kind, "id" => actor.id}
+      "actor" => actor
     }
     |> maybe_put_permission_previous(previous)
   end

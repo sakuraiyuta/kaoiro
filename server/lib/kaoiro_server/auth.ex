@@ -288,9 +288,51 @@ defmodule KaoiroServer.Auth do
 
   def client_role_by_fingerprint(_fingerprint), do: {:error, :unauthorized}
 
+  @doc """
+  Resolves a client token's `KaoiroServer.Users` lookup key + display
+  name (issue #197, ADR-0050 D1) from its `socket_id/1` fingerprint —
+  the SAME reverse-scan `client_role_by_fingerprint/1` uses (issue #305
+  M1, director/クロエ ruling 2026-09-06). The raw token is recovered only
+  from the CONFIGURED `:client_tokens` candidates, one at a time, by
+  re-hashing each and comparing — never from the fingerprint itself
+  (one-way) and never from socket/channel state, which holds only the
+  fingerprint. The raw token never leaves this function; only the
+  opaque hash `Users` already treats as its own secondary-index key
+  (`client_token_hash/1`) is returned, matching exactly what
+  `session_controller.ex`'s login flow passes to
+  `Users.get_or_create/4` for the same token — a socket authenticated
+  with token T and an HTTP login with the same T converge on the same
+  user_id.
+
+  `{:error, :unauthorized}` on no match: a token rotated out of
+  `:client_tokens` after this socket connected. In practice a caller
+  reaches this only after `current_role/1`'s own live re-resolution
+  (issue #158) already re-checked the SAME fingerprint moments earlier
+  in the SAME operator gate, so this failing here without `current_role/1`
+  already having rejected the request would mean the two disagree — not
+  expected, but this function still fails closed on its own rather than
+  trusting that upstream check to be perfectly synchronized.
+  """
+  def client_token_identity_by_fingerprint(fingerprint) when is_binary(fingerprint) do
+    tokens = parse_client_pairs(Application.get_env(:kaoiro_server, :client_tokens))
+
+    case token_by_fingerprint(tokens, fingerprint) do
+      nil -> {:error, :unauthorized}
+      token -> {:ok, client_token_hash(token), client_token_display_name(token)}
+    end
+  end
+
+  def client_token_identity_by_fingerprint(_fingerprint), do: {:error, :unauthorized}
+
   defp role_by_fingerprint(tokens, fingerprint) do
     Enum.reduce(tokens, nil, fn {token, %{role: role}}, acc ->
       if fingerprint_matches?(token, fingerprint), do: parse_role(role), else: acc
+    end)
+  end
+
+  defp token_by_fingerprint(tokens, fingerprint) do
+    Enum.reduce(tokens, nil, fn {token, _meta}, acc ->
+      if fingerprint_matches?(token, fingerprint), do: token, else: acc
     end)
   end
 

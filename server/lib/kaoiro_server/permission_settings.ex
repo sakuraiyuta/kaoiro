@@ -159,6 +159,30 @@ defmodule KaoiroServer.PermissionSettings do
     GenServer.call(server, {:delete, agent_id})
   end
 
+  @doc """
+  `true` when `revision` is within the agent's allocated range: 0 (the
+  launch baseline, always legitimate even before any operator request)
+  or at most the agent's current counter high-water mark. Mirrors
+  `merge_observation/4`'s own "a revision the server never allocated"
+  rejection (issue #305 S1) so a wrapper-reported
+  `permission_applied`/`permission_failed` AUDIT event is held to the
+  same provenance rule `record_observation/4` already applies to live
+  STATE — `wrapper_channel.ex` calls this before
+  `SessionLifecycleEvents.record_permission_event/5` so a forged
+  revision is rejected before it ever reaches the audit trail, not only
+  kept out of `control`/`next`.
+
+  Uses the COUNTER (survives `delete/2` and an engine-mismatch reset,
+  moduledoc), not the current `control.revision` — the latter can be
+  LOWER right after an engine change, and a residual report from the
+  previous engine context that the counter genuinely once allocated
+  should not be misclassified as forged.
+  """
+  def known_revision?(agent_id, revision, server \\ __MODULE__)
+      when is_binary(agent_id) and is_integer(revision) and revision >= 0 do
+    GenServer.call(server, {:known_revision?, agent_id, revision})
+  end
+
   @impl true
   def init({name, path}) do
     KaoiroServer.DetsStorePath.prepare_parent!(path)
@@ -222,6 +246,11 @@ defmodule KaoiroServer.PermissionSettings do
   def handle_call({:delete, agent_id}, _from, state) do
     :ok = :dets.delete(state.table, {:settings, agent_id})
     {:reply, :ok, %{state | settings: Map.delete(state.settings, agent_id)}}
+  end
+
+  def handle_call({:known_revision?, agent_id, revision}, _from, state) do
+    ceiling = Map.get(state.counters, agent_id, 0)
+    {:reply, revision <= ceiling, state}
   end
 
   @impl true

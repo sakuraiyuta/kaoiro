@@ -2247,7 +2247,12 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       socket = seed_known(agent_id)
 
       details = %{
-        "revision" => 1,
+        # Revision 0 (the launch baseline) is always within
+        # PermissionSettings.known_revision?/3's allowed range, even for
+        # an agent_id with no PermissionSettings entry at all (issue
+        # #305 S1) — this test's own concern is detail storage, not the
+        # ledger cross-check, which has its own dedicated tests below.
+        "revision" => 0,
         "requested" => %{"sandbox" => "workspace-write", "network_access" => false},
         "execution_id" => "e1",
         "session_id" => "s1",
@@ -2276,7 +2281,9 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       socket = seed_known(agent_id)
 
       details = %{
-        "revision" => 1,
+        # Revision 0 for the same reason as the permission_applied test
+        # above.
+        "revision" => 0,
         "requested" => %{"sandbox" => "workspace-write", "network_access" => false},
         "reason" => "policy_mismatch"
       }
@@ -2294,6 +2301,135 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
                SessionLifecycleEvents.list_for_agent(agent_id)
 
       assert stored == details
+    end
+
+    # issue #305 S1: `PermissionSettings.merge_observation/4` already
+    # drops a revision the server never allocated from LIVE state ("a
+    # revision the server never allocated is not actionable" — the
+    # unknown-revision branch has its own tests in
+    # permission_settings_test.exs). This mirrors the SAME rule for the
+    # AUDIT trail: a wrapper report exceeding the agent's own allocation
+    # ledger must not enter `SessionLifecycleEvents` either.
+    test "known_revision? を超える permission_applied は merge_observation と同じ規則で drop される (issue #305 S1)" do
+      agent_id = "test.lifecycle-permission-s1-exceeds"
+      socket = seed_known(agent_id)
+
+      seed_control = %{
+        "revision" => 0,
+        "requested" => %{"sandbox" => "read-only", "network_access" => false},
+        "status" => "pending",
+        "constraints" => %{"approval" => "never", "enforcement" => "os"}
+      }
+
+      :ok = KaoiroServer.PermissionSettings.record_observation(agent_id, "codex", seed_control)
+
+      :ok =
+        wait_until(fn -> KaoiroServer.PermissionSettings.get(agent_id) != nil end)
+
+      # The only revision this agent's ledger has ever allocated is 0
+      # (the seeded baseline) — nothing has gone through
+      # submit_request/6, so revision 1 exceeds the known ceiling.
+      details = %{
+        "revision" => 1,
+        "requested" => %{"sandbox" => "workspace-write", "network_access" => false},
+        "execution_id" => "e1",
+        "session_id" => "s1",
+        "turn_id" => "t1",
+        "network_access" => false,
+        "permission" => %{"sandbox" => "workspace-write", "approval" => "never"}
+      }
+
+      ref =
+        push(socket, "session_lifecycle", %{
+          "kind" => "permission_applied",
+          "at" => "2026-09-06T00:00:00Z",
+          "details" => details
+        })
+
+      assert_reply ref, :ok
+      assert SessionLifecycleEvents.list_for_agent(agent_id) == []
+    end
+
+    test "known_revision? の範囲内の permission_applied は記録される (issue #305 S1, positive control)" do
+      agent_id = "test.lifecycle-permission-s1-within"
+      socket = seed_known(agent_id)
+
+      seed_control = %{
+        "revision" => 0,
+        "requested" => %{"sandbox" => "read-only", "network_access" => false},
+        "status" => "pending",
+        "constraints" => %{"approval" => "never", "enforcement" => "os"}
+      }
+
+      :ok = KaoiroServer.PermissionSettings.record_observation(agent_id, "codex", seed_control)
+
+      {:ok, 1, _requested} =
+        KaoiroServer.PermissionSettings.submit_request(
+          agent_id,
+          "codex",
+          %{sandbox: "workspace-write"},
+          %{"kind" => "user", "id" => "u1"},
+          "2026-09-06T00:00:00Z"
+        )
+
+      details = %{
+        "revision" => 1,
+        "requested" => %{"sandbox" => "workspace-write", "network_access" => false},
+        "execution_id" => "e1",
+        "session_id" => "s1",
+        "turn_id" => "t1",
+        "network_access" => false,
+        "permission" => %{"sandbox" => "workspace-write", "approval" => "never"}
+      }
+
+      ref =
+        push(socket, "session_lifecycle", %{
+          "kind" => "permission_applied",
+          "at" => "2026-09-06T00:00:01Z",
+          "details" => details
+        })
+
+      assert_reply ref, :ok
+
+      assert [%{kind: "permission_applied", details: stored}] =
+               SessionLifecycleEvents.list_for_agent(agent_id)
+
+      assert stored == details
+    end
+
+    # code-review-assessment finding (2026-09-06): the S1 guard's own
+    # `is_integer(revision)` accepted a NEGATIVE revision and passed it
+    # straight to `known_revision?/3`, whose own guard requires
+    # `revision >= 0` and has no fallback clause -- a wrapper-reported
+    # negative revision raised FunctionClauseError inside
+    # `handle_wrapper_in/3`, crashing that wrapper's channel process
+    # (self-inflicted DoS reachable by any already-authenticated
+    # wrapper). Fixed by tightening the ingress guard to `revision >= 0`
+    # so a negative value falls through to `record_permission_event/5`'s
+    # own graceful shape validation instead.
+    test "負の revision は crash せず drop される (issue #305 S1, code-review finding)" do
+      agent_id = "test.lifecycle-permission-s1-negative"
+      socket = seed_known(agent_id)
+
+      details = %{
+        "revision" => -1,
+        "requested" => %{"sandbox" => "workspace-write", "network_access" => false},
+        "execution_id" => "e1",
+        "session_id" => "s1",
+        "turn_id" => "t1",
+        "network_access" => false,
+        "permission" => %{"sandbox" => "workspace-write", "approval" => "never"}
+      }
+
+      ref =
+        push(socket, "session_lifecycle", %{
+          "kind" => "permission_applied",
+          "at" => "2026-09-06T00:00:00Z",
+          "details" => details
+        })
+
+      assert_reply ref, :ok
+      assert SessionLifecycleEvents.list_for_agent(agent_id) == []
     end
 
     # protocol.md "Permission lifecycle audit": the server "never trusts a

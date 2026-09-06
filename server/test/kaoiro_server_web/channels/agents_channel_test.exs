@@ -2,6 +2,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
   use KaoiroServerWeb.ChannelCase, async: false
 
   import ExUnit.CaptureLog
+  import KaoiroServer.OAuthAllowlistFixture
   import KaoiroServer.TestTeardown
 
   alias KaoiroServer.AgentDirectory
@@ -1161,7 +1162,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       entry = KaoiroServer.PermissionSettings.get(agent_id)
       assert entry.control.revision == 1
-      assert entry.control.actor.kind == "user"
+      assert entry.control.actor["kind"] == "user"
+      assert is_binary(entry.control.actor["id"])
     end
 
     test "viewer の set_permission は forbidden" do
@@ -1462,6 +1464,157 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       # only configures "tok-operator"/"tok-viewer"/"tok-admin") — so
       # `Auth.client_role/1` must not resolve any role for it.
       assert :error = connect(KaoiroServerWeb.ClientSocket, %{"token" => wrapper_token})
+    end
+  end
+
+  # issue #305 M1 (director/クロエ ruling 2026-09-06): the audit actor
+  # must be a durable user PRINCIPAL, not a per-credential fingerprint.
+  describe "audit actor identity (M1)" do
+    test "HTTP login と WS 経路の同じ token は同じ user_id に収束する" do
+      # Simulates session_controller.ex's login-time resolution for the
+      # SAME token join_as(:operator) authenticates with ("tok-operator",
+      # client_assigns/1).
+      http_user =
+        KaoiroServer.Users.get_or_create(
+          {:token, KaoiroServer.Auth.client_token_hash("tok-operator")},
+          "user",
+          KaoiroServer.Auth.client_token_display_name("tok-operator")
+        )
+
+      agent_id = "test.setperm2-m1-convergence"
+      put_permission_agent(agent_id)
+      seed_permission_baseline(agent_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "set_permission", %{
+          "agent_id" => agent_id,
+          "sandbox" => "workspace-write"
+        })
+
+      assert_reply ref, :ok
+
+      entry = KaoiroServer.PermissionSettings.get(agent_id)
+      assert entry.control.actor["id"] == http_user.id
+    end
+
+    test "actor.id は list_users の id と一致する" do
+      agent_id = "test.setperm2-m1-listusers"
+      put_permission_agent(agent_id)
+      seed_permission_baseline(agent_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "set_permission", %{
+          "agent_id" => agent_id,
+          "sandbox" => "workspace-write"
+        })
+
+      assert_reply ref, :ok
+
+      actor_id = KaoiroServer.PermissionSettings.get(agent_id).control.actor["id"]
+
+      ref2 = push(socket, "list_users", %{})
+      assert_reply ref2, :ok, %{"users" => users}
+      assert Enum.any?(users, &(&1.id == actor_id))
+    end
+
+    test "actor.id は token digest ではない (socket_id/client_token_hash と不一致)" do
+      agent_id = "test.setperm2-m1-nodigest"
+      put_permission_agent(agent_id)
+      seed_permission_baseline(agent_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "set_permission", %{
+          "agent_id" => agent_id,
+          "sandbox" => "workspace-write"
+        })
+
+      assert_reply ref, :ok
+
+      actor_id = KaoiroServer.PermissionSettings.get(agent_id).control.actor["id"]
+
+      refute actor_id == KaoiroServer.Auth.socket_id("tok-operator")
+      refute actor_id == KaoiroServer.Auth.client_token_hash("tok-operator")
+      refute String.contains?(actor_id, "client_socket:")
+
+      # Also confirm the audit trail itself never carries the digest.
+      [%{details: details}] = KaoiroServer.SessionLifecycleEvents.list_for_agent(agent_id)
+      refute String.contains?(inspect(details), "client_socket:")
+    end
+
+    test "oauth 経路は既存の display_name を上書きしない" do
+      put_allowlist("github:305-oauth-uid:operator\n")
+      on_exit(fn -> Application.delete_env(:kaoiro_server, :oauth_allowlist_path) end)
+
+      http_user =
+        KaoiroServer.Users.get_or_create({:oauth, "github", "305-oauth-uid"}, "user", "Yuta")
+
+      agent_id = "test.setperm2-m1-oauth"
+      put_permission_agent(agent_id)
+      seed_permission_baseline(agent_id)
+
+      {:ok, _reply, socket} =
+        KaoiroServerWeb.ClientSocket
+        |> socket(nil, %{
+          role: :operator,
+          credential: {:oauth, %{provider: "github", uid: "305-oauth-uid"}},
+          socket_id: KaoiroServer.Auth.oauth_socket_id("github", "305-oauth-uid")
+        })
+        |> subscribe_and_join(KaoiroServerWeb.AgentsChannel, "agents:lobby")
+
+      ref =
+        push(socket, "set_permission", %{
+          "agent_id" => agent_id,
+          "sandbox" => "workspace-write"
+        })
+
+      assert_reply ref, :ok
+
+      entry = KaoiroServer.PermissionSettings.get(agent_id)
+      assert entry.control.actor["id"] == http_user.id
+      assert KaoiroServer.Users.get(http_user.id).display_name == "Yuta"
+    end
+
+    test "config から token が消えていれば connect 拒否 (rotate / denylist 後の live 再解決)" do
+      Application.put_env(:kaoiro_server, :client_tokens, "tok-rotating:operator")
+
+      on_exit(fn ->
+        Application.put_env(
+          :kaoiro_server,
+          :client_tokens,
+          "tok-operator:operator,tok-viewer:viewer,tok-admin:admin"
+        )
+      end)
+
+      {:ok, socket} = connect(KaoiroServerWeb.ClientSocket, %{"token" => "tok-rotating"})
+
+      # Join WHILE the token is still valid (join/3 also re-resolves the
+      # role live, issue #170 — rotating before join would be rejected
+      # there instead of exercising the LATER re-resolution this test
+      # targets).
+      {:ok, _reply, joined} =
+        subscribe_and_join(socket, KaoiroServerWeb.AgentsChannel, "agents:lobby")
+
+      # Rotate the token out from under the already-joined socket.
+      Application.put_env(
+        :kaoiro_server,
+        :client_tokens,
+        "tok-operator:operator,tok-viewer:viewer,tok-admin:admin"
+      )
+
+      agent_id = "test.setperm2-m1-rotated"
+      put_permission_agent(agent_id)
+      seed_permission_baseline(agent_id)
+
+      ref =
+        push(joined, "set_permission", %{
+          "agent_id" => agent_id,
+          "sandbox" => "workspace-write"
+        })
+
+      assert_reply ref, :error, %{reason: "forbidden"}
     end
   end
 
