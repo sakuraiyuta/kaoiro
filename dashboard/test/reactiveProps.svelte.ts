@@ -16,6 +16,8 @@ import type {
   HostInfo,
   KaoiroConnection,
   RunnerSessions,
+  SetPermissionAck,
+  SetPermissionPatch,
 } from "../src/lib/protocol";
 
 export interface ReactiveAgentDetailProps {
@@ -82,6 +84,31 @@ export interface ReactiveSettingsDrawerProps {
 export function makeReactiveSettingsDrawerProps(
   initial: ReactiveSettingsDrawerProps,
 ): ReactiveSettingsDrawerProps {
+  const state = $state(initial);
+  return state;
+}
+
+// issue #305 D: the set_permission ack lives in component state, so the
+// "which revision wins" precedence between an ack and a server-pushed
+// permission_control can only be exercised by replacing the envelope on a
+// MOUNTED instance — re-mounting would discard the ack being measured.
+export interface ReactivePermissionDetailProps {
+  envelope: Envelope;
+  connection: KaoiroConnection;
+  onClose: () => void;
+  // Explicit `| undefined` so a test can express the viewer case (prop
+  // withheld) under `exactOptionalPropertyTypes: true`.
+  onSetPermission:
+    | ((
+        agentId: string,
+        patch: SetPermissionPatch,
+      ) => Promise<SetPermissionAck | null>)
+    | undefined;
+}
+
+export function makeReactivePermissionDetailProps(
+  initial: ReactivePermissionDetailProps,
+): ReactivePermissionDetailProps {
   const state = $state(initial);
   return state;
 }

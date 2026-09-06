@@ -24,6 +24,7 @@
     modelSwitchStateFrom,
     pendingPermissionFrom,
     pendingQuestionFrom,
+    permissionControlFrom,
     permissionFrom,
     PERMISSION_MODE_AXES,
     resultOf,
@@ -38,8 +39,11 @@
     Envelope,
     KaoiroConnection,
     PersonaManifest,
+    PermissionControlStatus,
     RunnerSessions,
     SessionResetMode,
+    SetPermissionAck,
+    SetPermissionPatch,
     TasklistSnapshot,
     InterAgentDeliveryStatus,
     WrapperBuildInfo,
@@ -63,6 +67,7 @@
     onSelectAgent,
     onRename,
     onOpenPersonaDetail,
+    onSetPermission,
   }: {
     envelope: Envelope;
     logs?: Envelope[];
@@ -127,6 +132,20 @@
      *  persona; pass undefined to disable the portrait's click affordance
      *  (e.g. no resolved persona id). */
     onOpenPersonaDetail?: ((personaId: string) => void) | undefined;
+    /** Requests a sandbox / network_access change for this agent's next
+     *  execution (issue #305). Undefined hides the picker entirely — a
+     *  viewer session never gets this prop (App.svelte gates it on
+     *  `isOperator`, mirroring onRename). The switchers above ride the
+     *  implicit `connection` gate instead, which works only because their
+     *  ext.* inputs are stripped for viewers; this control is gated
+     *  explicitly so it does not depend on that stripping staying in
+     *  place. */
+    onSetPermission?:
+      | ((
+          agentId: string,
+          patch: SetPermissionPatch,
+        ) => Promise<SetPermissionAck | null>)
+      | undefined;
   } = $props();
 
   // Expand the detail from the tile that opened it (#36): scale up from the
@@ -463,33 +482,66 @@
   const agentEngine = $derived(engineFrom(envelope));
   const permAxes = $derived(permissionFrom(envelope));
   const isCodexAgent = $derived(agentEngine === "codex");
+  // ADR-0034 F1/F3: session-level capability advertise. Consumers here are
+  // fail-closed — a null / absent capability envelope disables the feature
+  // rather than defaulting to "permitted". Both adapters currently advertise
+  // unconditional true; the judge for user_input_dialog is future-proofing
+  // for D5 (Free plan / user_input_modes) without another UI rewrite.
+  const sessionCaps = $derived(sessionCapabilitiesFrom(envelope));
+  const permControl = $derived(permissionControlFrom(envelope));
+  const permissionSwitchSupported = $derived(
+    sessionCaps?.supports_permission_switch === true,
+  );
   // Whether the wrapper reports a runtime-switchable Claude-style
   // permission_mode axis (enforcement stamped "mode", ADR-0033 F4 追補)
-  // rather than a launch-fixed sandbox×approval combo (enforcement "os" /
-  // "advisory", ADR-0033 F3, ADR-0057 F4c). Value-driven off
-  // permAxes.enforcement itself, NOT an engine-name allowlist (round 2
-  // MF-R2-6: ext.engine is declared display-only, ADR-0034 F3 — the prior
-  // SANDBOX_AXIS_ENGINES lookup replaced one name check with another and
-  // still showed the 作業意図 picker for any future launch-fixed engine
-  // the set had not been taught about). Absent permission data defaults
-  // to true, matching the legacy behaviour when nothing else is known.
-  const permissionModeSwitchable = $derived(
-    permAxes === null || permAxes.enforcement === "mode",
+  // rather than a sandbox×approval combo (enforcement "os" / "advisory",
+  // ADR-0033 F3, ADR-0057 F4c). Value-driven, NOT an engine-name allowlist
+  // (round 2 MF-R2-6: ext.engine is declared display-only, ADR-0034 F3).
+  //
+  // issue #305: absent permission data no longer defaults to true. That
+  // fail-open default showed the six-mode picker on a Codex agent whose
+  // sandbox was not yet observed, where set_permission_mode is rejected —
+  // a control that cannot do anything. The capability decides instead;
+  // only an ABSENT capability (rolling upgrade) may fall back to
+  // affirmative legacy metadata, and a contrary enforcement mechanism
+  // hides the picker in every case, including the control constraints
+  // that outlive an unobserved sandbox.
+  const permissionModeSwitchable = $derived.by(() => {
+    if (permAxes?.enforcement !== undefined && permAxes.enforcement !== "mode")
+      return false;
+    if (permControl !== null && permControl.constraints.enforcement !== "mode")
+      return false;
+    const capability = sessionCaps?.supports_permission_mode_switch;
+    if (capability !== undefined) return capability;
+    return (
+      permAxes?.enforcement === "mode" ||
+      (ccPermissionMode !== null &&
+        PERMISSION_MODE_AXES[ccPermissionMode] !== undefined)
+    );
+  });
+  // The Codex / Antigravity sandbox's network axis (ADR-0033 F3, ADR-0057
+  // F4c, issue #118). This used to be written as the negation of
+  // permissionModeSwitchable; issue #305 made that one capability-driven,
+  // so the original "does this session have a sandbox axis" condition is
+  // spelled out here instead — an older wrapper that stamps no
+  // enforcement still counts as having the axis, as before.
+  const sandboxAxisPresent = $derived(
+    permAxes !== null && permAxes.enforcement !== "mode",
   );
-  // Codex / Antigravity sandbox の network 軸 (ADR-0033 F3, ADR-0057 F4c,
-  // issue #118)。protocol の ResolvedSnapshotExt に沿って
-  // ext.effective.network_access を defensive に読む。engine gate は
-  // permissionModeSwitchable (permAxes.enforcement 由来) に置き換えた —
-  // 旧 hasSandboxAxis は engine 名 allowlist で、Claude が誤って
-  // network_access を stamp した場合の防御を engine 名で行っていたが
-  // (round 1 pin)、round 2 MF-R2-6 で同じ判定を値駆動にする。
   const effectiveNetworkAccess = $derived.by(() => {
-    if (permissionModeSwitchable) return null;
+    if (!sandboxAxisPresent && !permissionSwitchSupported) return null;
     const raw = envelope.ext?.effective;
     if (typeof raw !== "object" || raw === null) return null;
     const value = (raw as Record<string, unknown>).network_access;
     return typeof value === "boolean" ? value : null;
   });
+  // A missing value is handled two ways. On a switch-capable session the
+  // contract keeps the row and marks the value unknown. On a launch-fixed
+  // session the older fail-closed behaviour stands: an absent or
+  // non-boolean value hides the row entirely (issue #118's pin).
+  const networkRowVisible = $derived(
+    effectiveNetworkAccess !== null || permissionSwitchSupported,
+  );
   // ADR-0014 F1 addendum (phase-15 D8): the resume-launch drift entries the
   // wrapper stamped when this launch's effective values differ from the
   // resumed session's snapshot. null on a fresh spawn (nothing to compare),
@@ -1257,12 +1309,14 @@
   // guard must key off the label that renders — not raw permLabel, which
   // would suppress the badge for that first-frame default case.
   const displayPermLabel = $derived(permLabel ?? "default");
-  // ADR-0034 F1/F3: session-level capability advertise. Consumers here are
-  // fail-closed — a null / absent capability envelope disables the feature
-  // rather than defaulting to "permitted". Both adapters currently advertise
-  // unconditional true; the judge for user_input_dialog is future-proofing
-  // for D5 (Free plan / user_input_modes) without another UI rewrite.
-  const sessionCaps = $derived(sessionCapabilitiesFrom(envelope));
+  // issue #305: the BUTTON must not read "default" before a mode has been
+  // reported — that is an invented observation, and the operator cannot
+  // tell it apart from a wrapper that really is in `default`. The
+  // "default" fallback survives only where it is a lookup key
+  // (userInputDialogAvailability), never as a rendered claim.
+  const permLabelAxes = $derived(
+    permLabel === null ? undefined : PERMISSION_MODE_AXES[permLabel],
+  );
   const switchState = $derived(modelSwitchStateFrom(envelope));
   const modelSwitchSupported = $derived(
     sessionCaps?.supports_model_switch === true,
@@ -1607,6 +1661,97 @@
     }
     pendingPerm = value;
     void run(() => connection.setPermissionMode(envelope.agent_id, value));
+  }
+
+  // issue #305: sandbox / network_access take effect from the NEXT
+  // execution, so a request while a turn runs is accepted rather than
+  // blocked, and nothing here promotes an effective badge — the observed
+  // values keep arriving through ext.permission / ext.effective.
+  const SANDBOX_VALUES = [
+    "read-only",
+    "workspace-write",
+    "danger-full-access",
+  ] as const;
+  const PERMISSION_STATUS_LABELS: Record<PermissionControlStatus, string> = {
+    pending: "要求済み (次の turn から適用)",
+    applying: "適用中 (次の実行が取得済み)",
+    applied: "適用済み",
+    failed: "失敗",
+    unknown: "未確認",
+  };
+  // The closed SetPermissionErrorReason vocabulary. A reason outside it is
+  // rendered raw rather than swallowed: an unmapped value means the server
+  // grew a rejection this client has not been taught, and hiding it would
+  // leave the operator with a control that silently does nothing.
+  const PERMISSION_ERROR_TEXTS: Record<string, string> = {
+    forbidden: "権限がありません (operator のみ実行できます)",
+    invalid_payload: "送信内容が不正です",
+    unknown_agent: "対象の agent が見つかりません",
+    agent_unavailable: "agent が接続していません",
+    unsupported_permission_switch: "この engine は権限切替に未対応です",
+    permission_not_ready: "権限情報の準備待ちです",
+    session_reset_pending: "session reset の完了待ちです",
+    revision_exhausted: "revision を使い切りました",
+    persistence_failed: "サーバ側の保存に失敗しました",
+  };
+  let sandboxMenuOpen = $state(false);
+  let permActionError = $state<string | null>(null);
+  // The server's ack, shown as a REQUESTED state until its own or a newer
+  // control state arrives. It never promotes an effective value: the ack
+  // confirms the saved request only.
+  let permAck = $state<SetPermissionAck | null>(null);
+  $effect(() => {
+    const control = permControl;
+    const ack = untrack(() => permAck);
+    if (control !== null && ack !== null && control.revision >= ack.revision) {
+      permAck = null;
+    }
+  });
+  // Rendered request line. The higher revision wins, with the server's
+  // control taking ties: an ack that arrives after a newer control is
+  // already stale, and a control replayed from an older revision (a slow
+  // reconnect frame) must not drag the display backwards either.
+  const permRequestView = $derived.by(() => {
+    const control =
+      permControl === null
+        ? null
+        : {
+            revision: permControl.revision,
+            requested: permControl.requested,
+            status: permControl.status,
+            reason: permControl.reason,
+            rolledBackTo: permControl.rolled_back_to,
+          };
+    const ack =
+      permAck === null
+        ? null
+        : {
+            revision: permAck.revision,
+            requested: permAck.requested,
+            status: "pending" as PermissionControlStatus,
+            reason: undefined,
+            rolledBackTo: undefined,
+          };
+    if (control === null) return ack;
+    if (ack === null) return control;
+    return control.revision >= ack.revision ? control : ack;
+  });
+  const permissionPickerVisible = $derived(
+    permissionSwitchSupported && onSetPermission !== undefined,
+  );
+
+  function sendPermission(patch: SetPermissionPatch): void {
+    sandboxMenuOpen = false;
+    if (onSetPermission === undefined) return;
+    permActionError = null;
+    void (async () => {
+      try {
+        permAck = await onSetPermission(envelope.agent_id, patch);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        permActionError = PERMISSION_ERROR_TEXTS[reason] ?? reason;
+      }
+    })();
   }
   // tool_use_id under the pointer, so its tool_use and tool_result both
   // highlight while hovered (#40).
@@ -2819,14 +2964,14 @@
                       aria-expanded={permMenuOpen}
                       onclick={togglePermMenu}
                     >
-                      {displayPermLabel}
-                      {#if PERMISSION_MODE_AXES[displayPermLabel]}
+                      {permLabel ?? "未確認"}
+                      {#if permLabelAxes}
                         <!-- Pin the two-axis reading on the selected label
                              too, not only on the dropdown candidates
                              (phase-15 D2 / task 15-10). -->
                         <span class="axes-hint">
-                          書込: {PERMISSION_MODE_AXES[displayPermLabel].sandbox} /
-                          承認: {PERMISSION_MODE_AXES[displayPermLabel].approval}
+                          書込: {permLabelAxes.sandbox} /
+                          承認: {permLabelAxes.approval}
                         </span>
                       {/if}
                     </button>
@@ -2887,18 +3032,135 @@
                 </span>
               </dd>
             </div>
+          {:else if permControl}
+            <!-- issue #305: ext.permission is absent while the sandbox is
+                 unobserved, so that no unobserved value is presented as a
+                 settled one. approval and enforcement are fixed contract
+                 values that need no observation, so they keep coming from
+                 the control constraints — an unknown sandbox is no reason
+                 to also drop the certain fact that approval is host-fixed
+                 to never (ADR-0033 F4). -->
+            <div class="cc-row">
+              <dt>実効書込範囲</dt>
+              <dd>
+                <span class="axes-badge">
+                  書込: 未確認 / 承認: {permControl.constraints.approval}<span
+                    class="axes-hostfixed"
+                    title="upstream 制約 (codex-exec-approval-upstream)"
+                  > (host-fixed)</span>
+                </span>
+              </dd>
+            </div>
           {/if}
-          {#if effectiveNetworkAccess !== null}
-            <!-- Codex / Antigravity sandbox の network 軸 (ADR-0033 F3,
-                 ADR-0057 F4c, issue #118): workspace-write sandbox 内での
-                 network 許可 toggle。protocol の ResolvedSnapshotExt /
-                 ext.effective.network_access と直結で raw boolean を表示。
-                 engine gate は effectiveNetworkAccess 自身に埋め込み済み
-                 (permissionModeSwitchable 由来、ADR-0034 F3)。 -->
+          {#if networkRowVisible}
+            <!-- The Codex / Antigravity network axis (ADR-0033 F3,
+                 ADR-0057 F4c, issue #118): network permission inside a
+                 workspace-write sandbox, rendered as the raw boolean of
+                 ext.effective.network_access. issue #305 keeps the row in
+                 place before any observation and marks the value unknown
+                 rather than dropping the row. -->
             <div class="cc-row">
               <dt>network_access</dt>
-              <dd>{effectiveNetworkAccess}</dd>
+              <dd>{effectiveNetworkAccess ?? "未確認"}</dd>
             </div>
+          {/if}
+          {#if permissionPickerVisible}
+            <!-- issue #305: the operator changes sandbox / network for the
+                 NEXT execution. A running turn keeps the configuration it
+                 captured, so the control stays usable while busy, and an
+                 ack means "request saved" only — the effective badge above
+                 is never moved from here. -->
+            <div class="cc-row">
+              <dt>sandbox 変更</dt>
+              <dd>
+                <div class="cc-switchbox cc-perm-switchbox">
+                  <button
+                    type="button"
+                    class="cc-switch cc-perm-switch"
+                    aria-haspopup="listbox"
+                    aria-expanded={sandboxMenuOpen}
+                    onclick={() => (sandboxMenuOpen = !sandboxMenuOpen)}
+                  >
+                    {permRequestView?.requested.sandbox ?? "未確認"}
+                    <span class="axes-hint">次の turn から適用</span>
+                  </button>
+                  {#if sandboxMenuOpen}
+                    <ul
+                      class="switch-menu"
+                      role="listbox"
+                      aria-label="sandbox 候補"
+                    >
+                      {#each SANDBOX_VALUES as value (value)}
+                        <li>
+                          <button
+                            type="button"
+                            role="option"
+                            aria-selected={permRequestView?.requested
+                              .sandbox === value}
+                            onclick={() => sendPermission({ sandbox: value })}
+                          >
+                            {value}
+                          </button>
+                        </li>
+                      {/each}
+                    </ul>
+                  {/if}
+                </div>
+              </dd>
+            </div>
+            {#if permRequestView?.requested.sandbox === "workspace-write"}
+              <!-- The raw network toggle only reaches the SDK for
+                   workspace-write (ADR-0033 F3 addendum), so no control is
+                   offered for the other sandboxes. -->
+              <div class="cc-row">
+                <dt>network 変更</dt>
+                <dd>
+                  <button
+                    type="button"
+                    class="cc-switch"
+                    onclick={() =>
+                      sendPermission({
+                        network_access:
+                          !permRequestView.requested.network_access,
+                      })}
+                  >
+                    {permRequestView.requested.network_access
+                      ? "無効にする"
+                      : "有効にする"}
+                  </button>
+                </dd>
+              </div>
+            {/if}
+            {#if permRequestView !== null}
+              <div class="cc-row">
+                <dt>権限要求</dt>
+                <dd>
+                  rev {permRequestView.revision} — {PERMISSION_STATUS_LABELS[
+                    permRequestView.status
+                  ]}
+                  <span class="axes-hint">
+                    要求: 書込 {permRequestView.requested.sandbox} / network
+                    {permRequestView.requested.network_access}
+                  </span>
+                  {#if permRequestView.reason}
+                    <span class="axes-hint">理由: {permRequestView.reason}</span>
+                  {/if}
+                  {#if permRequestView.rolledBackTo}
+                    <span class="axes-hint">
+                      適用前に戻した設定: 書込 {permRequestView.rolledBackTo
+                        .sandbox} / network {permRequestView.rolledBackTo
+                        .network_access}
+                    </span>
+                  {/if}
+                </dd>
+              </div>
+            {/if}
+            {#if permActionError !== null}
+              <div class="cc-row">
+                <dt>権限要求エラー</dt>
+                <dd>{permActionError}</dd>
+              </div>
+            {/if}
           {/if}
           {#if ccFastMode}
             <div class="cc-row">

@@ -1853,6 +1853,9 @@
           }}
           onRename={isOperator && connection ? connection.renameAgent : undefined}
           onOpenPersonaDetail={isOperator ? (id) => (personaDetailId = id) : undefined}
+          onSetPermission={isOperator && connection
+            ? connection.setPermission
+            : undefined}
         />
       </div>
       {#if nextAgentId}

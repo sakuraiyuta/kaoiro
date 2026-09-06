@@ -263,7 +263,21 @@ describe("phase-16 dashboard model switch integration", () => {
   });
 
   it("permission switch uses the shrink-safe specialized class (#110)", async () => {
-    const { target } = await renderDetail({ engine: "claude-code" });
+    // issue #305: the picker is capability-gated now, and the two-axis
+    // hint only renders for a mode that was actually reported — the
+    // fixture therefore stamps what the Claude adapter really sends
+    // (initialStatusExt's supports_permission_mode_switch, plus the
+    // permission_mode the SDK echoes) instead of relying on the old
+    // "absent data means switchable, label it default" fallback.
+    const { target } = await renderDetail({
+      engine: "claude-code",
+      permission_mode: "acceptEdits",
+      session_capabilities: {
+        supports_attachments: false,
+        supports_user_input_dialog: true,
+        supports_permission_mode_switch: true,
+      },
+    });
     const button = target.querySelector(".cc-perm-switch");
     expect(button).not.toBeNull();
     expect(button?.textContent).toContain("書込:");

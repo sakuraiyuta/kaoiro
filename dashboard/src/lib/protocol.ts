@@ -154,6 +154,129 @@ export function permissionFrom(envelope: Envelope): PermissionAxes | null {
   };
 }
 
+/** The raw operator selection for the next execution (issue #305).
+ *  `network_access` is the configured toggle, NOT the sandbox-aware
+ *  effective value — that one rides ext.effective.network_access. */
+export interface PermissionConfiguration {
+  sandbox: string;
+  network_access: boolean;
+}
+
+/** Adapter constraints that hold without a current observation (issue
+ *  #305). They carry the host-fixed approval label and the enforcement
+ *  mechanism while sandbox/network are still unobserved, so the badge does
+ *  not have to invent an observation to stay renderable. */
+export interface PermissionConstraints {
+  approval: string;
+  enforcement: "os" | "mode" | "advisory";
+}
+
+export type PermissionControlStatus =
+  | "pending"
+  | "applying"
+  | "applied"
+  | "failed"
+  | "unknown";
+
+/** ext.permission_control — the latest permission request and its progress
+ *  (issue #305). Only the fields this client renders are kept; observed
+ *  values are read from ext.permission / ext.effective as before, so a
+ *  second copy of them cannot drift from the badge. */
+export interface PermissionControl {
+  revision: number;
+  requested: PermissionConfiguration;
+  constraints: PermissionConstraints;
+  status: PermissionControlStatus;
+  reason?: string;
+  rolled_back_to?: PermissionConfiguration;
+}
+
+const PERMISSION_CONTROL_STATUSES: ReadonlySet<string> = new Set([
+  "pending",
+  "applying",
+  "applied",
+  "failed",
+  "unknown",
+]);
+
+function permissionConfigurationOf(
+  value: unknown,
+): PermissionConfiguration | null {
+  if (typeof value !== "object" || value === null) return null;
+  const r = value as Record<string, unknown>;
+  if (typeof r.sandbox !== "string" || r.sandbox === "") return null;
+  if (typeof r.network_access !== "boolean") return null;
+  return { sandbox: r.sandbox, network_access: r.network_access };
+}
+
+/** Reads ext.permission_control off an envelope, or null when absent or
+ *  malformed. Fail-closed like {@link sessionCapabilitiesFrom}: a partial
+ *  record is dropped whole rather than rendered with holes, since every
+ *  field here drives a permission badge. `constraints` is required by the
+ *  contract in every state, so its absence is malformed rather than
+ *  "constraints unknown". */
+export function permissionControlFrom(
+  envelope: Envelope,
+): PermissionControl | null {
+  const raw = envelope.ext?.permission_control;
+  if (typeof raw !== "object" || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  if (!Number.isSafeInteger(r.revision)) return null;
+  if (typeof r.status !== "string") return null;
+  if (!PERMISSION_CONTROL_STATUSES.has(r.status)) return null;
+  const requested = permissionConfigurationOf(r.requested);
+  if (requested === null) return null;
+  const constraints = r.constraints;
+  if (typeof constraints !== "object" || constraints === null) return null;
+  const c = constraints as Record<string, unknown>;
+  if (typeof c.approval !== "string" || c.approval === "") return null;
+  if (
+    c.enforcement !== "os" &&
+    c.enforcement !== "mode" &&
+    c.enforcement !== "advisory"
+  ) {
+    return null;
+  }
+  const rolledBackTo = permissionConfigurationOf(r.rolled_back_to);
+  return {
+    revision: r.revision as number,
+    requested,
+    constraints: { approval: c.approval, enforcement: c.enforcement },
+    status: r.status as PermissionControlStatus,
+    ...(typeof r.reason === "string" && r.reason !== ""
+      ? { reason: r.reason }
+      : {}),
+    ...(rolledBackTo === null ? {} : { rolled_back_to: rolledBackTo }),
+  };
+}
+
+/** A `set_permission` patch (issue #305). The union shape is the
+ *  non-empty-patch rule from the contract expressed in the type: an
+ *  object carrying neither axis matches no branch and fails to compile,
+ *  so the client cannot send a patch the server must reject. */
+export type SetPermissionPatch =
+  | { sandbox: string; network_access?: boolean }
+  | { sandbox?: string; network_access: boolean };
+
+/** The server's `set_permission` acknowledgement (issue #305). It confirms
+ *  the SAVED request only — not delivery, SDK application, or an audit
+ *  write — so it never promotes an effective badge. */
+export interface SetPermissionAck {
+  revision: number;
+  status: "pending";
+  requested: PermissionConfiguration;
+}
+
+function setPermissionAckOf(value: unknown): SetPermissionAck | null {
+  if (typeof value !== "object" || value === null) return null;
+  const r = value as Record<string, unknown>;
+  if (!Number.isSafeInteger(r.revision)) return null;
+  if (r.status !== "pending") return null;
+  const requested = permissionConfigurationOf(r.requested);
+  if (requested === null) return null;
+  return { revision: r.revision as number, status: "pending", requested };
+}
+
 /** Engines whose launch permission exposes a selectable sandbox axis
  *  (ADR-0033 F3, ADR-0057 F4c) rather than Claude's single permission_mode
  *  knob. Used by LaunchDialog.svelte, which has no live session_capabilities
@@ -267,6 +390,17 @@ export interface SessionCapabilities {
    *     available. UI shows the meter when `ext.context` lands, else a
    *     "取得中" placeholder. */
   supports_context_usage?: boolean;
+  /** Whether the session accepts the engine-neutral `set_permission`
+   *  control (issue #305). Absent or false = unsupported; it gates the
+   *  sandbox/network picker independently of Claude's six-mode selector. */
+  supports_permission_switch?: boolean;
+  /** Whether the session accepts the six-value `set_permission_mode`
+   *  command (issue #305). Claude stamps true from its first state_change
+   *  even before any mode is configured or observed, so the mode picker
+   *  no longer has to infer availability from absent permission data.
+   *  Absent = rolling upgrade; only then may affirmative legacy metadata
+   *  stand in for it. */
+  supports_permission_mode_switch?: boolean;
 }
 
 /** Reads ext.session_capabilities off an envelope (ADR-0034 F1). Returns
@@ -298,6 +432,12 @@ export function sessionCapabilitiesFrom(
   }
   if (typeof r.supports_context_usage === "boolean") {
     out.supports_context_usage = r.supports_context_usage;
+  }
+  if (typeof r.supports_permission_switch === "boolean") {
+    out.supports_permission_switch = r.supports_permission_switch;
+  }
+  if (typeof r.supports_permission_mode_switch === "boolean") {
+    out.supports_permission_mode_switch = r.supports_permission_mode_switch;
   }
   if (Array.isArray(r.attachment_types)) {
     const types: Array<"image"> = [];
@@ -2178,6 +2318,17 @@ export interface KaoiroConnection {
    * (#58); the server also persists the pick so the wrapper restores it
    * on next start. `mode` must be a closed-enum PermissionMode value. */
   setPermissionMode: (agentId: string, mode: string) => Promise<void>;
+  /** Requests a sandbox / network_access change for the agent's NEXT
+   *  execution (issue #305); the running turn keeps its own configuration.
+   *  Rejects with a `SetPermissionErrorReason` message on server refusal.
+   *  Resolves with the saved request's ack, or null when the server's
+   *  reply body is absent/malformed — the authoritative state still
+   *  arrives as ext.permission_control, so a missing ack only forfeits
+   *  the stale-render guard. */
+  setPermission: (
+    agentId: string,
+    patch: SetPermissionPatch,
+  ) => Promise<SetPermissionAck | null>;
   /** Renames the agent's `display_name` while it is running (issue #197
    *  段階3 unit B, wire vocabulary revised issue #219 D23 — `persona`
    *  canonical data is never touched by this call); rejects like
@@ -3440,6 +3591,26 @@ function pushAsync(
   });
 }
 
+/** Like {@link pushAsync}, but resolves with the server's ok payload
+ *  instead of discarding it. Only `set_permission` reads a reply body
+ *  (issue #305: the ack's revision keeps a slow render from overwriting a
+ *  newer control state), so the void-resolving helper every other caller
+ *  uses is left as it is rather than widened for one call site. */
+function pushAsyncReply(
+  channel: Channel,
+  event: string,
+  payload: Record<string, unknown>,
+): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    pushVersioned(channel, event, payload)
+      .receive("ok", (reply: unknown) => resolve(reply))
+      .receive("error", (reason: { reason?: string } | undefined) =>
+        reject(new Error(reason?.reason ?? "error")),
+      )
+      .receive("timeout", () => reject(new Error("timeout")));
+  });
+}
+
 /** Wake-guard threshold for the tab-visibility rebuild path (issue #123).
  *  On visible resume, if the tab was hidden longer than this, App.svelte
  *  calls connectKaoiro's reconnect() unconditionally to catch the
@@ -4375,6 +4546,14 @@ export function connectKaoiro(
     },
     setPermissionMode: (agentId, mode) =>
       pushAsync(channel, "set_permission_mode", { agent_id: agentId, mode }),
+    setPermission: async (agentId, patch) =>
+      setPermissionAckOf(
+        await pushAsyncReply(channel, "set_permission", {
+          version: "0",
+          agent_id: agentId,
+          ...patch,
+        }),
+      ),
     // `display_name` (issue #219 D23): the server's field-extraction
     // helper (`extract_name_field/1`) still accepts the legacy `name` key
     // during the compatibility window, but this client — built alongside

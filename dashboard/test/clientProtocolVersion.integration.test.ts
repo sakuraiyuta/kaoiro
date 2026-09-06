@@ -246,6 +246,11 @@ const PUSH_CASES: ReadonlyArray<{
     fire: (c) => c.setPermissionMode(AGENT_ID, "default"),
   },
   {
+    method: "setPermission",
+    event: "set_permission",
+    fire: (c) => c.setPermission(AGENT_ID, { sandbox: "read-only" }),
+  },
+  {
     method: "renameAgent",
     event: "rename_agent",
     fire: (c) => c.renameAgent(AGENT_ID, "あお"),

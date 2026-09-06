@@ -129,7 +129,19 @@ describe("AgentDetail permission panel — antigravity (phase-34 A12, ADR-0057 F
   });
 
   it("claude-code → 作業意図スイッチャーは引き続き表示される (既存挙動の非退行)", async () => {
-    const target = await render({ engine: "claude-code" });
+    // issue #305: availability comes from the capability the Claude
+    // adapter stamps from its first state_change, not from the absence of
+    // permission data. The fixture mirrors that producer so this
+    // non-regression pin keeps measuring Claude's picker rather than the
+    // removed fail-open default.
+    const target = await render({
+      engine: "claude-code",
+      session_capabilities: {
+        supports_attachments: false,
+        supports_user_input_dialog: true,
+        supports_permission_mode_switch: true,
+      },
+    });
     expect(rowByLabel(target, "作業意図")).not.toBeNull();
   });
 
