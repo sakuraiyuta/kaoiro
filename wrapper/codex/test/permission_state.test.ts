@@ -197,7 +197,10 @@ describe("Codex permission-state projector", () => {
     );
     state = applyPermissionSyncState(state, {
       version: "0",
-      control: rejected(rejectedSuccessor),
+      control: {
+        ...rejected(rejectedSuccessor),
+        rolled_back_to: blockedSelection.requested,
+      },
       next: blockedSelection,
     });
 
