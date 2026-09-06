@@ -44,7 +44,12 @@ export const PHASE = Object.freeze({
 /** Each key's value is the set of phases that may follow it directly.
  *  An entry reached by any other route is a history CONTRADICTION
  *  (S1 iv), not merely an unexpected phase. */
-const TRANSITIONS = {
+// Exported (クロエ round 3 review MF-2) so a caller that needs "every
+// phase reachable from X" (kaoiro-server-deploy.mjs's UNRESUMABLE_PHASES)
+// can derive it from the SAME graph this file's own validator walks,
+// rather than hand-enumerating a second copy that a new phase can be
+// forgotten from.
+export const TRANSITIONS = {
   [PHASE.PREFLIGHT]: [PHASE.OLD_IMAGE_SAVED],
   [PHASE.OLD_IMAGE_SAVED]: [PHASE.BUILD_PREPARED],
   [PHASE.BUILD_PREPARED]: [PHASE.MAINTENANCE_GATE_PASSED],

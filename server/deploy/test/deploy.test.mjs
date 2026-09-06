@@ -20,6 +20,7 @@ import {
   runStart,
   runStatus,
   runUpdate,
+  UNRESUMABLE_PHASES,
   VOLUME_LISTING_SCRIPT,
 } from "../kaoiro-server-deploy.mjs";
 
@@ -44,7 +45,7 @@ case "$1" in
     case "$2" in
       ps)
         case "$FAKE_DOCKER_SCENARIO" in
-          stopped|running|running-clean-stop|running-clean-stop-restarts|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty)
+          stopped|running|running-clean-stop|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty)
             printf 'kaoiro-c1\\n' ;;
         esac
         ;;
@@ -58,6 +59,9 @@ case "$1" in
         case "$FAKE_DOCKER_SCENARIO" in
           health-url-derivable) printf '127.0.0.1:9999\\n' ;;
           health-url-port-fails) exit 1 ;;
+          # クロエ round 3 review N-1: real \`docker compose port\` reports
+          # an IPv6 wildcard binding unbracketed.
+          health-url-ipv6) printf ':::4000\\n' ;;
         esac
         ;;
     esac
@@ -93,27 +97,27 @@ case "$1" in
           '{{.State.Status}}')
             case "$FAKE_DOCKER_SCENARIO" in
               stopped) printf 'exited\\n' ;;
-              running|running-clean-stop|running-clean-stop-restarts|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty)
+              running|running-clean-stop|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty)
                 printf 'running\\n' ;;
             esac
             ;;
           '{{.State.ExitCode}}')
             case "$FAKE_DOCKER_SCENARIO" in
-              running-clean-stop|running-clean-stop-restarts|running-clean-stop-torture|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-archive-drifts-empty) printf '0\\n' ;;
+              running-clean-stop|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-archive-drifts-empty) printf '0\\n' ;;
               running-dirty-stop) printf '137\\n' ;;
               *) printf 'unknown\\n' ;;
             esac
             ;;
           '{{.State.OOMKilled}}')
             case "$FAKE_DOCKER_SCENARIO" in
-              running-clean-stop|running-clean-stop-restarts|running-clean-stop-torture|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-archive-drifts-empty) printf 'false\\n' ;;
+              running-clean-stop|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-archive-drifts-empty) printf 'false\\n' ;;
               running-dirty-stop) printf 'true\\n' ;;
               *) printf 'unknown\\n' ;;
             esac
             ;;
           '{{range .Mounts}}{{if eq .Destination "/var/lib/kaoiro"}}{{.Name}}{{end}}{{end}}')
             case "$FAKE_DOCKER_SCENARIO" in
-              running-clean-stop|running-clean-stop-restarts|running-clean-stop-torture|running-dirty-stop|running-empty-vol|running-broken-archive|alpine-missing|running-archive-drifts-empty) printf 'kaoiro_kaoiro-state\\n' ;;
+              running-clean-stop|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-empty-vol|running-broken-archive|alpine-missing|running-archive-drifts-empty) printf 'kaoiro_kaoiro-state\\n' ;;
               running-no-mount) ;;
             esac
             ;;
@@ -128,6 +132,11 @@ case "$1" in
                 echo $((count + 1)) > "$KAOIRO_TEST_RESTART_COUNTER"
                 printf '%s\\n' "$count"
                 ;;
+              # クロエ round 3 review MF-3 pin: real \`docker inspect\`
+              # prints the literal string "<no value>" for a template
+              # field it cannot resolve — parseDockerIntField reads this
+              # as null (unreadable), never 0.
+              running-clean-stop-restartcount-unreadable) printf '<no value>\\n' ;;
               *) printf '0\\n' ;;
             esac
             ;;
@@ -202,7 +211,7 @@ case "$1" in
         # -exec stat -c '%n %u:%g %04a' {} \\;) — only whether anything is
         # there, not what gets recorded (that comes from tar tvzf now).
         case "$FAKE_DOCKER_SCENARIO" in
-          running-clean-stop|running-clean-stop-restarts|running-clean-stop-torture|running-dirty-stop|running-broken-archive|alpine-missing|running-archive-drifts-empty) printf '/data/users.dets 1000:1000 0600\\n' ;;
+          running-clean-stop|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-broken-archive|alpine-missing|running-archive-drifts-empty) printf '/data/users.dets 1000:1000 0600\\n' ;;
           running-empty-vol) ;;
         esac
         exit 0
@@ -656,6 +665,16 @@ test("resolveHealthUrl derives the URL from `docker compose port` when health_ur
   assert.equal(url, "http://127.0.0.1:9999/api/health");
 });
 
+// クロエ round 3 review N-1: `http://:::4000/...` is not a valid URL — an
+// IPv6 host must be bracketed once it contains a colon of its own.
+test("resolveHealthUrl brackets an IPv6 host reported unbracketed by `docker compose port`", () => {
+  const url = withScenario("health-url-ipv6", () =>
+    resolveHealthUrl(bin, join(workDir, "server"), { health_url: null }),
+  );
+  assert.equal(url, "http://[::]:4000/api/health");
+  assert.doesNotThrow(() => new URL(url));
+});
+
 test("resolveHealthUrl fails when `docker compose port` itself fails", () => {
   assert.throws(
     () => withScenario("health-url-port-fails", () => resolveHealthUrl(bin, join(workDir, "server"), { health_url: null })),
@@ -805,9 +824,10 @@ test("runUpdate prunes DONE transactions beyond keep_generations that are also o
       JSON.stringify({ schema_version: 1, transaction_id: id, phase: "done", history: [] }),
     );
   }
-  // director ruling 2026-09-06: only the FIRST one carries a manifest, so
-  // this also confirms a missing manifest degrades to "skip the tag
-  // cleanup, still remove the directory" rather than aborting the prune.
+  // クロエ round 3 review SF-2: only the FIRST one carries a manifest —
+  // the other two must be SKIPPED (left on disk), not have their
+  // directory deleted anyway with the tag cleanup merely skipped (the
+  // prior contract this test itself pinned before round 3).
   writeFileSync(
     join(backupRoot, oldIds[0], "manifest.json"),
     JSON.stringify({
@@ -851,10 +871,18 @@ test("runUpdate prunes DONE transactions beyond keep_generations that are also o
   );
   assert.equal(result.phase, "done");
   // The newest kept generation is THIS transaction; all 3 synthetic old
-  // ones are beyond keep_generations:1 and older than retention_days:1.
-  assert.deepEqual(result.prunedTransactions.sort(), oldIds);
-  for (const id of oldIds) {
-    assert.equal(existsSync(join(backupRoot, id)), false);
+  // ones are beyond keep_generations:1 and older than retention_days:1 —
+  // but only oldIds[0] carries a manifest, so it alone is actually
+  // removed (SF-2: an unreadable manifest skips deletion, not just the
+  // tag cleanup).
+  assert.deepEqual(result.prunedTransactions, [oldIds[0]]);
+  assert.equal(existsSync(join(backupRoot, oldIds[0])), false);
+  assert.deepEqual(
+    result.pruneSkipped.map((s) => s.id).sort(),
+    [oldIds[1], oldIds[2]],
+  );
+  for (const id of [oldIds[1], oldIds[2]]) {
+    assert.equal(existsSync(join(backupRoot, id)), true);
   }
 });
 
@@ -903,6 +931,27 @@ test("runUpdate keeps the newest keep_generations DONE transactions even when al
       JSON.stringify({ schema_version: 1, transaction_id: id, phase: "done", history: [] }),
     );
   }
+  // A manifest (SF-2: no manifest means "skip, do not delete" — this test
+  // is pinning the COUNT bound, so olderId must actually be eligible for
+  // deletion, not merely skipped for an unrelated reason). Its own
+  // rollback_tag is unique (not shared with newerId or this run's own
+  // transaction), so MF-1's tag-survival protection does not interfere.
+  writeFileSync(
+    join(backupRoot, olderId, "manifest.json"),
+    JSON.stringify({
+      schema_version: 1,
+      transaction_id: olderId,
+      compose_artifact: { path: "server/docker-compose.yaml", sha256: "a".repeat(64) },
+      env_consistency: {},
+      image_id: `sha256:${"b".repeat(64)}`,
+      source_sha: "9".repeat(40),
+      target_sha: "d".repeat(40),
+      volume_id: "kaoiro_kaoiro-state",
+      archive: { path: "/backup/archive.tar.gz", sha256: "e".repeat(64) },
+      required_entries: [{ path: "users.dets", owner: "1000:1000", mode: "0600" }],
+      rollback_tag: `kaoiro-server:rollback-${"9".repeat(40)}`,
+    }),
+  );
 
   const result = withScenario("running-clean-stop", () =>
     runUpdate(
@@ -942,7 +991,7 @@ test("pruneOldTransactions never removes a transaction that has not reached DONE
     }),
   );
 
-  const removed = pruneOldTransactions(backupRoot, { keep_generations: 0, retention_days: 1 });
+  const { removed } = pruneOldTransactions(backupRoot, { keep_generations: 0, retention_days: 1 });
   assert.deepEqual(removed, []);
   assert.equal(existsSync(stuckDir), true);
 });
@@ -965,13 +1014,119 @@ test("pruneOldTransactions never removes the protected transaction, even with ke
     JSON.stringify({ schema_version: 1, transaction_id: protectedId, phase: "done", history: [] }),
   );
 
-  const removed = pruneOldTransactions(
+  const { removed } = pruneOldTransactions(
     backupRoot,
     { keep_generations: 0, retention_days: 1 },
     protectedId,
   );
   assert.deepEqual(removed, []);
   assert.equal(existsSync(protectedDir), true);
+});
+
+// クロエ round 3 review MF-1: writes a synthetic transaction directory
+// directly (journal.json always, manifest.json only when `manifest` is
+// given) — rollback_tag is `kaoiro-server:rollback-<sourceSha>`
+// (schema-enforced), so two transactions built with the SAME sourceSha
+// end up with the SAME tag, exactly the collision MF-1 is about.
+function writeSyntheticTransaction(backupRoot, id, { phase, sourceSha }) {
+  const dir = join(backupRoot, id);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "journal.json"), JSON.stringify({ schema_version: 1, transaction_id: id, phase, history: [] }));
+  if (sourceSha === undefined) return;
+  writeFileSync(
+    join(dir, "manifest.json"),
+    JSON.stringify({
+      schema_version: 1,
+      transaction_id: id,
+      compose_artifact: { path: "server/docker-compose.yaml", sha256: "a".repeat(64) },
+      env_consistency: {},
+      image_id: `sha256:${"b".repeat(64)}`,
+      source_sha: sourceSha,
+      target_sha: "d".repeat(40),
+      volume_id: "kaoiro_kaoiro-state",
+      archive: { path: "/backup/archive.tar.gz", sha256: "e".repeat(64) },
+      required_entries: [{ path: "users.dets", owner: "1000:1000", mode: "0600" }],
+      rollback_tag: `kaoiro-server:rollback-${sourceSha}`,
+    }),
+  );
+}
+
+function readCallLog(logPath) {
+  return existsSync(logPath) ? readFileSync(logPath, "utf8").trim().split("\n").filter((l) => l !== "") : [];
+}
+
+test("pruneOldTransactions never rmi's a tag the protected transaction still shares with a pruned older DONE", () => {
+  const backupRoot = join(root, "kaoiro-deploy");
+  mkdirSync(backupRoot, { recursive: true });
+  const sha = "a".repeat(40);
+  const olderId = "20200101T000000Z";
+  const protectedId = "20200102T000000Z";
+  writeSyntheticTransaction(backupRoot, olderId, { phase: "done", sourceSha: sha });
+  writeSyntheticTransaction(backupRoot, protectedId, { phase: "done", sourceSha: sha });
+
+  const logPath = join(root, "docker-calls.log");
+  process.env.KAOIRO_TEST_CALL_LOG = logPath;
+  let removed;
+  try {
+    ({ removed } = pruneOldTransactions(backupRoot, { keep_generations: 0, retention_days: 1 }, protectedId, bin));
+  } finally {
+    delete process.env.KAOIRO_TEST_CALL_LOG;
+  }
+  // The older, same-sha transaction's DIRECTORY is still reclaimed —
+  // only its shared TAG must survive, since the protected transaction
+  // still names it.
+  assert.deepEqual(removed, [olderId]);
+  assert.equal(existsSync(join(backupRoot, protectedId)), true);
+  assert.deepEqual(readCallLog(logPath), [], "the shared tag must never be rmi'd while the protected transaction still needs it");
+});
+
+test("pruneOldTransactions rmi's a pruned transaction's tag when no surviving transaction shares it", () => {
+  const backupRoot = join(root, "kaoiro-deploy");
+  mkdirSync(backupRoot, { recursive: true });
+  const sharedSha = "a".repeat(40);
+  const uniqueSha = "b".repeat(40);
+  const olderId = "20200101T000000Z"; // shares sharedSha with protectedId
+  const protectedId = "20200102T000000Z";
+  const uniqueId = "20200103T000000Z"; // its own tag, shared with nobody
+  writeSyntheticTransaction(backupRoot, olderId, { phase: "done", sourceSha: sharedSha });
+  writeSyntheticTransaction(backupRoot, protectedId, { phase: "done", sourceSha: sharedSha });
+  writeSyntheticTransaction(backupRoot, uniqueId, { phase: "done", sourceSha: uniqueSha });
+
+  const logPath = join(root, "docker-calls.log");
+  process.env.KAOIRO_TEST_CALL_LOG = logPath;
+  let removed;
+  try {
+    ({ removed } = pruneOldTransactions(backupRoot, { keep_generations: 0, retention_days: 1 }, protectedId, bin));
+  } finally {
+    delete process.env.KAOIRO_TEST_CALL_LOG;
+  }
+  assert.deepEqual(removed.sort(), [olderId, uniqueId]);
+  assert.deepEqual(readCallLog(logPath), [`rmi kaoiro-server:rollback-${uniqueSha}`]);
+});
+
+test("pruneOldTransactions never rmi's a tag an unfinished transaction still shares with a pruned old DONE", () => {
+  const backupRoot = join(root, "kaoiro-deploy");
+  mkdirSync(backupRoot, { recursive: true });
+  const sha = "a".repeat(40);
+  const oldDoneId = "20200101T000000Z";
+  const unfinishedId = "20200102T000000Z";
+  writeSyntheticTransaction(backupRoot, oldDoneId, { phase: "done", sourceSha: sha });
+  // Parked at old_image_saved — non-DONE, so it never enters doneIds at
+  // all, yet it is exactly the transaction that most needs its own tag
+  // (it may still resume and roll back through it).
+  writeSyntheticTransaction(backupRoot, unfinishedId, { phase: "old_image_saved", sourceSha: sha });
+
+  const logPath = join(root, "docker-calls.log");
+  process.env.KAOIRO_TEST_CALL_LOG = logPath;
+  let removed;
+  try {
+    ({ removed } = pruneOldTransactions(backupRoot, { keep_generations: 0, retention_days: 1 }, undefined, bin));
+  } finally {
+    delete process.env.KAOIRO_TEST_CALL_LOG;
+  }
+  assert.deepEqual(removed, [oldDoneId]);
+  assert.equal(existsSync(join(backupRoot, unfinishedId)), true);
+  assert.deepEqual(readCallLog(logPath), [], "the unfinished transaction's own tag must never be rmi'd");
 });
 
 test("runUpdate refuses to proceed past a dirty stop even with a measured expectation", () => {
@@ -1165,6 +1320,84 @@ test("runUpdate's unfinished-transaction guidance still offers --transaction bef
   assert.ok(caught instanceof DeployError);
   assert.ok(caught.message.includes("resume it with --transaction"));
   assert.ok(!caught.message.includes("no resume support yet"));
+});
+
+// クロエ round 3 review MF-2: STARTING was missing from the old
+// hand-written UNRESUMABLE_PHASES set — a transaction parked there got
+// "resume with --transaction", and the resume path then appended
+// MAINTENANCE_GATE_PASSED, an illegal transition from STARTING, raising
+// a raw PhaseError instead of this diagnosable message. No existing
+// FAKE_DOCKER scenario stops a real runUpdate exactly between STARTING
+// and UP (every scenario's `compose ps`/`up` succeed together), so this
+// writes the parked journal directly — a full, schema-valid history
+// through STARTING, the same shape findUnfinishedTransaction's own
+// validateJournalAgainstStateMachine call requires before this guidance
+// is ever reached.
+test("runUpdate's unfinished-transaction guidance for a transaction parked at STARTING is the manual-recovery message", () => {
+  const backupRoot = join(root, "kaoiro-deploy");
+  const transactionId = "20260906T230000Z";
+  const dir = join(backupRoot, transactionId);
+  mkdirSync(dir, { recursive: true });
+  const oldSha = headSha;
+  const targetSha = "d".repeat(40);
+  const imageId = `sha256:${"b".repeat(64)}`;
+  const composeSha = "c".repeat(64);
+  const entry = (phase, observation) => ({ phase, at: "2026-09-06T23:00:00.000Z", observation });
+  const history = [
+    entry("preflight", { container: "kaoiro-c1" }),
+    entry("old_image_saved", {
+      old_image_id: imageId,
+      old_sha: oldSha,
+      compose_artifact: { path: "/x/docker-compose.yaml", sha256: composeSha },
+      rollback_tag: `kaoiro-server:rollback-${oldSha}`,
+    }),
+    entry("build_prepared", { image_id: imageId, image_tag: "kaoiro-server:latest", target_sha: targetSha }),
+    entry("maintenance_gate_passed", {}),
+    entry("stopping", {}),
+    entry("stopped", { stop_exit_code: 0, stop_oom_killed: false }),
+    entry("mount_resolved", { volume_id: "kaoiro_kaoiro-state" }),
+    entry("archived", {
+      archive: { path: "/b/a.tar.gz", sha256: composeSha },
+      required_entries: [{ path: "u.dets", owner: "1000:1000", mode: "0600" }],
+    }),
+    entry("starting", {}),
+  ];
+  writeFileSync(
+    join(dir, "journal.json"),
+    JSON.stringify({ schema_version: 1, transaction_id: transactionId, phase: "starting", history }),
+  );
+
+  let caught;
+  try {
+    withOverrideEnv(() => runUpdate({ repo: workDir, target: targetSha }, configWithOverride()));
+  } catch (err) {
+    caught = err;
+  }
+  // instanceof DeployError (not PhaseError) also confirms the fixture
+  // above is itself schema-valid — a malformed history would surface as
+  // a raw PhaseError from findUnfinishedTransaction's own validation
+  // instead of reaching this guidance message at all.
+  assert.ok(caught instanceof DeployError);
+  assert.ok(caught.message.includes("no resume support yet"));
+  assert.ok(!caught.message.includes("resume it with --transaction"));
+});
+
+test("UNRESUMABLE_PHASES is exactly every phase reachable from STOPPING", () => {
+  assert.deepEqual(
+    [...UNRESUMABLE_PHASES].sort(),
+    ["archived", "done", "healthy", "mount_resolved", "starting", "stopped", "stopping", "up"].sort(),
+  );
+});
+
+// クロエ round 3 review MF-3 pin.
+test("runUpdate fails the stability gate when RestartCount reads as unreadable on both sides", () => {
+  assert.throws(
+    () =>
+      withScenario("running-clean-stop-restartcount-unreadable", () =>
+        runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+      ),
+    DeployError,
+  );
 });
 
 function readdirSyncNonHidden(dir) {

@@ -18,7 +18,7 @@ import { loadConfig } from "./kaoiro-deploy-config.mjs";
 import { dockerInspect, resolveDockerBin, runDocker } from "./kaoiro-deploy-docker.mjs";
 import { advancePhase, readJournal, writeJournal } from "./kaoiro-deploy-journal.mjs";
 import { readManifest, writeManifest } from "./kaoiro-deploy-manifest.mjs";
-import { PHASE, validateJournalAgainstStateMachine } from "./kaoiro-deploy-phase.mjs";
+import { PHASE, TRANSITIONS, validateJournalAgainstStateMachine } from "./kaoiro-deploy-phase.mjs";
 import { acquireLock, releaseLock } from "./kaoiro-deploy-lock.mjs";
 import { findUnfinishedTransaction, newTransactionId } from "./kaoiro-deploy-transaction.mjs";
 
@@ -73,6 +73,22 @@ function parseDockerBoolField(raw) {
   if (raw === "true") return true;
   if (raw === "false") return false;
   return null;
+}
+
+/** True only when both `a` and `b` are non-null and equal — the one
+ *  place this CLI compares an EXPECTED value against an OBSERVED one
+ *  (clean-stop exit code/OOM flag, stability's RestartCount). Plain
+ *  `a === b` treats two unreadable values (both `null`, from
+ *  parseDockerIntField/parseDockerBoolField's own "could not parse"
+ *  outcome) as agreement, since `null === null` is true — exactly
+ *  backwards: an unmeasured expectation must never coincide with an
+ *  unreadable observation and read as "matches". クロエ round 3 review
+ *  MF-3: the clean-stop check already avoided this class by checking
+ *  each side for null explicitly; the stability check did not — one
+ *  helper for both closes the class instead of leaving a second,
+ *  independently-written version of the same guard to drift. */
+function agrees(a, b) {
+  return a !== null && b !== null && a === b;
 }
 
 /** Ensures ALPINE_IMAGE is present locally, pulling it if not — BEFORE
@@ -131,7 +147,25 @@ export function resolveHealthUrl(bin, serverDir, config) {
   if (hostPort === "") {
     fail(`'docker compose port ${SERVICE} 4000' returned no output — is the service published on that port?`);
   }
-  return `http://${hostPort}/api/health`;
+  return `http://${bracketIpv6HostPort(hostPort)}/api/health`;
+}
+
+/** クロエ round 3 review N-1: `docker compose port` reports an IPv6
+ *  binding unbracketed (e.g. `:::4000` for the IPv6 wildcard address) —
+ *  `http://:::4000/...` is not a valid URL (a bare host:port needs the
+ *  host bracketed once it itself contains a colon). Splits on the LAST
+ *  colon (an IPv6 host has more than one, so the first would cut the
+ *  host in half) and brackets it unless the host is already bracketed —
+ *  an IPv4 host or hostname has no colon and passes through unchanged. */
+function bracketIpv6HostPort(hostPort) {
+  const lastColon = hostPort.lastIndexOf(":");
+  if (lastColon === -1) {
+    fail(`'docker compose port' returned a value with no host:port separator: ${hostPort}`);
+  }
+  const host = hostPort.slice(0, lastColon);
+  const port = hostPort.slice(lastColon + 1);
+  const needsBrackets = host.includes(":") && !host.startsWith("[");
+  return needsBrackets ? `[${host}]:${port}` : hostPort;
 }
 
 /** `GET url`, parsed as JSON. Never throws: a curl failure (connection
@@ -173,7 +207,13 @@ function pollHealth(curlBin, url, targetSha, intervalMs, timeoutMs) {
       return result.body;
     }
     last = result;
-    sleepMs(intervalMs);
+    // クロエ round 3 review N-2: skip the sleep once the deadline has
+    // already passed — the `while` condition rechecks it immediately
+    // anyway, so sleeping here only delays reporting failure by another
+    // whole intervalMs for no observation gained.
+    if (Date.now() < deadline) {
+      sleepMs(intervalMs);
+    }
   }
   const detail =
     last === null
@@ -205,37 +245,6 @@ function transactionIdToDate(transactionId) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-/** Deletes DONE transaction directories beyond `config.keep_generations`
- *  most-recent ones, but ONLY those also older than `config.retention_days`
- *  — issue #306 (c3). Requiring BOTH bounds (not either alone) is a
- *  deliberate conservative choice for a directory whose only job is to
- *  make rollback possible: a count-based prune alone could discard a
- *  same-day backup during a burst of deploys, and a pure age-based prune
- *  alone could discard the only remaining backup during a long quiet
- *  spell. Never touches a transaction that is not phase DONE (unfinished
- *  or failed transactions are a manual-investigation matter, never
- *  auto-deleted), and never touches a directory whose name does not match
- *  its own journal.transaction_id (the same distrust
- *  findUnfinishedTransaction already applies) or whose id does not parse
- *  as a timestamp.
- *
- *  `protectedTransactionId` (director ruling 2026-09-06, #306 (c3)
- *  review) is excluded from deletion by IDENTITY, never by the
- *  keep_generations/retention_days arithmetic alone — the CURRENT
- *  rollback pair (this run's own rollback_tag + archive, the ONE a
- *  rollback right after this update would actually use) must survive
- *  even a keep_generations/retention_days combination that would
- *  otherwise prune it (keep_generations already enforces a minimum of 1
- *  via the config validator, which structurally protects the newest by
- *  count alone — this is the explicit, count-independent guarantee on
- *  top of that coincidence).
- *
- *  Each actually-pruned transaction's own `docker tag` (read from its
- *  manifest, never rediscovered by globbing docker's image list — a glob
- *  risks matching an unrelated same-named image) is removed via `bin`
- *  before its directory goes, best-effort: an already-gone or
- *  still-referenced tag must not block reclaiming the directory itself.
- *  Returns the names actually removed. */
 /** Transaction ids under `backupRoot` whose OWN journal is readable,
  *  self-consistent (directory name === journal.transaction_id), phase
  *  DONE, and whose id parses as a timestamp — the same distrust
@@ -270,33 +279,126 @@ function listDoneTransactionIds(backupRoot) {
   return doneIds;
 }
 
+/** Deletes DONE transaction directories beyond `config.keep_generations`
+ *  most-recent ones, but ONLY those also older than `config.retention_days`
+ *  — issue #306 (c3). Requiring BOTH bounds (not either alone) is a
+ *  deliberate conservative choice for a directory whose only job is to
+ *  make rollback possible: a count-based prune alone could discard a
+ *  same-day backup during a burst of deploys, and a pure age-based prune
+ *  alone could discard the only remaining backup during a long quiet
+ *  spell. Never touches a transaction that is not phase DONE (unfinished
+ *  or failed transactions are a manual-investigation matter, never
+ *  auto-deleted), and never touches a directory whose name does not match
+ *  its own journal.transaction_id (the same distrust
+ *  findUnfinishedTransaction already applies) or whose id does not parse
+ *  as a timestamp.
+ *
+ *  `protectedTransactionId` (director ruling 2026-09-06, #306 (c3)
+ *  review) is excluded from deletion by IDENTITY, never by the
+ *  keep_generations/retention_days arithmetic alone — the CURRENT
+ *  rollback pair (this run's own rollback_tag + archive, the ONE a
+ *  rollback right after this update would actually use) must survive
+ *  even a keep_generations/retention_days combination that would
+ *  otherwise prune it (keep_generations already enforces a minimum of 1
+ *  via the config validator, which structurally protects the newest by
+ *  count alone — this is the explicit, count-independent guarantee on
+ *  top of that coincidence).
+ *
+ *  クロエ round 3 review MF-1: a rollback_tag is
+ *  `kaoiro-server:rollback-<source_sha>` (schema-enforced), so TWO DONE
+ *  transactions recorded against the same source_sha (a re-deploy of the
+ *  same sha — `--target` has no `!== oldSha` guard, and `merge --ff-only`
+ *  onto an unchanged sha is a legal no-op) share ONE tag. Protecting only
+ *  `protectedTransactionId`'s own DIRECTORY was not enough — pruning an
+ *  OLDER same-sha transaction still `rmi`'d the tag the newer, retained
+ *  one needed. Tags are now protected by VALUE: before any `rmi`, this
+ *  scans EVERY directory under `backupRoot` (not just doneIds — an
+ *  unfinished or failed transaction, unreadable journal, mismatched
+ *  transaction_id, or unparsable name all still occupy a directory this
+ *  run will not touch, and an unfinished one may need its tag more than
+ *  any DONE one does) that is not itself about to be pruned this run, and
+ *  collects the rollback_tag from every manifest.json among them that can
+ *  be read. Only a tag NOT in that surviving set is ever `rmi`'d.
+ *
+ *  Each actually-pruned transaction's own `docker tag` (read from its
+ *  manifest, never rediscovered by globbing docker's image list — a glob
+ *  risks matching an unrelated same-named image) is removed via `bin`
+ *  before its directory goes, best-effort: an already-gone or
+ *  still-referenced tag must not block reclaiming the directory itself.
+ *
+ *  クロエ round 3 review SF-2: only the `rmi` itself is best-effort. A
+ *  transaction whose own manifest.json cannot be read is left ENTIRELY
+ *  alone (no rmi attempt — its tag is unknown — and no directory
+ *  deletion) rather than deleting an orphan; `status`'s own transaction
+ *  listing already surfaces an undeleted, manifest-less directory (null
+ *  facts) for investigation, so this returns it under `skipped` rather
+ *  than reporting nothing.
+ *
+ *  Returns `{ removed, skipped }`: `removed` is the transaction ids
+ *  whose directory was actually deleted; `skipped` is prune-eligible ids
+ *  left in place because their own manifest could not be read, each with
+ *  the read failure's message. */
 export function pruneOldTransactions(backupRoot, config, protectedTransactionId, bin) {
   const doneIds = listDoneTransactionIds(backupRoot);
   const retentionMs = config.retention_days * 24 * 60 * 60 * 1000;
   const now = Date.now();
-  const removed = [];
+
+  const pruneCandidates = [];
   for (const name of doneIds.slice(config.keep_generations)) {
     if (name === protectedTransactionId) continue;
     const age = now - transactionIdToDate(name).getTime();
     if (age < retentionMs) continue;
-    const dir = join(backupRoot, name);
-    // director ruling 2026-09-06: the tag to remove is READ from this
-    // transaction's own manifest, never derived by globbing docker's
-    // image list — a glob risks matching (and deleting) an unrelated
-    // image an operator happens to have named similarly. Best-effort:
-    // an already-removed tag, or one still referenced by something else,
-    // must not block reclaiming the DIRECTORY (the actual disk-space win
-    // this function exists for).
+    pruneCandidates.push(name);
+  }
+  const pruneSet = new Set(pruneCandidates);
+
+  let allNames;
+  try {
+    allNames = readdirSync(backupRoot).filter((name) => !name.startsWith("."));
+  } catch (err) {
+    if (err.code === "ENOENT") return { removed: [], skipped: [] };
+    throw err;
+  }
+  const remainingTags = new Set();
+  for (const name of allNames) {
+    if (pruneSet.has(name)) continue;
     try {
-      const rollbackTag = readManifest(dir).rollback_tag;
-      runDocker(bin, ["rmi", rollbackTag]);
+      remainingTags.add(readManifest(join(backupRoot, name)).rollback_tag);
     } catch {
-      // Intentionally ignored — see comment above.
+      // No manifest (or unreadable) means no tag claim from this
+      // directory — a bare directory identity is not a tag record.
+    }
+  }
+
+  const removed = [];
+  const skipped = [];
+  for (const name of pruneCandidates) {
+    const dir = join(backupRoot, name);
+    let rollbackTag;
+    try {
+      rollbackTag = readManifest(dir).rollback_tag;
+    } catch (err) {
+      skipped.push({ id: name, reason: err.message });
+      continue;
+    }
+    if (!remainingTags.has(rollbackTag)) {
+      // director ruling 2026-09-06: the tag to remove is READ from this
+      // transaction's own manifest, never derived by globbing docker's
+      // image list — a glob risks matching (and deleting) an unrelated
+      // image an operator happens to have named similarly. Best-effort:
+      // an already-removed tag, or one still referenced by something
+      // else, must not block reclaiming the DIRECTORY (the actual
+      // disk-space win this function exists for).
+      try {
+        runDocker(bin, ["rmi", rollbackTag]);
+      } catch {
+        // Intentionally ignored — see comment above.
+      }
     }
     rmSync(dir, { recursive: true, force: true });
     removed.push(name);
   }
-  return removed;
+  return { removed, skipped };
 }
 
 const VALUE_FLAGS = new Set(["--config", "--repo", "--target", "--transaction"]);
@@ -522,30 +624,48 @@ export function runStart(flags, config) {
   return { command: "start", dryRun: false, docker: overridden ? "fake" : "docker", ...result, identity };
 }
 
-// クロエ round 1 review MF-3: `--transaction` resume re-verifies the
-// container is RUNNING (requireRunningContainer) before doing anything
-// else, then unconditionally re-advances to MAINTENANCE_GATE_PASSED — a
-// transaction that reached STOPPING or later can never satisfy the
-// running-container check, and even UP/HEALTHY (where a container IS
-// running again) would hit that same re-advance, which is not a listed
-// transition from any of these phases and raises a raw PhaseError
-// instead of a diagnosable DeployError. None of the commit half has
-// resume support yet ((c3) does not add any); telling the operator to
-// "resume it with --transaction" for one of these phases sends them into
-// a guaranteed second failure instead of the manual runbook that
-// actually recovers. DONE is already filtered out by
+/** Every phase reachable from `from` (inclusive) by following
+ *  `transitions` forward — a plain graph walk over the SAME table
+ *  `validateJournalAgainstStateMachine` itself uses to check history. */
+function reachablePhases(from, transitions) {
+  const seen = new Set([from]);
+  const stack = [from];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    for (const next of transitions[current] ?? []) {
+      if (!seen.has(next)) {
+        seen.add(next);
+        stack.push(next);
+      }
+    }
+  }
+  return seen;
+}
+
+// クロエ round 1 review MF-3 / round 3 review MF-2: `--transaction`
+// resume re-verifies the container is RUNNING (requireRunningContainer)
+// before doing anything else, then unconditionally re-advances to
+// MAINTENANCE_GATE_PASSED — a transaction that reached STOPPING or later
+// can never satisfy the running-container check, and even UP/HEALTHY
+// (where a container IS running again) would hit that same re-advance,
+// which is not a listed transition from any of these phases and raises a
+// raw PhaseError instead of a diagnosable DeployError. None of the
+// commit half has resume support yet ((c3) does not add any); telling
+// the operator to "resume it with --transaction" for one of these phases
+// sends them into a guaranteed second failure instead of the manual
+// runbook that actually recovers.
+//
+// Round 3 review: hand-enumerating this set let STARTING go missing when
+// (c3) added it between ARCHIVED and UP — the exact "a new phase can be
+// forgotten" failure mode. Derived instead from TRANSITIONS' own graph
+// (every phase reachable from STOPPING, the first phase this file's own
+// docs mark as "the commit half begins here"): a future phase inserted
+// anywhere after STOPPING is unresumable by construction, not by
+// remembering to add it here too. DONE is reachable from STOPPING and so
+// included automatically — already filtered out by
 // findUnfinishedTransaction's own TERMINAL_PHASES check before this is
-// ever consulted — included anyway so this set stays complete on its own
-// if that ever changes.
-const UNRESUMABLE_PHASES = new Set([
-  PHASE.STOPPING,
-  PHASE.STOPPED,
-  PHASE.MOUNT_RESOLVED,
-  PHASE.ARCHIVED,
-  PHASE.UP,
-  PHASE.HEALTHY,
-  PHASE.DONE,
-]);
+// ever consulted, but correct on its own regardless.
+export const UNRESUMABLE_PHASES = reachablePhases(PHASE.STOPPING, TRANSITIONS);
 
 /** `update`: lock, preflight, save the old image, build the versioned
  *  target, the human maintenance gate, then the stop/archive/up/
@@ -779,12 +899,12 @@ export function runUpdate(flags, config) {
     // expectation, a mismatch, or an unparsed docker field are ALL
     // abnormal. `null` from either side never matches `null` on the
     // other by design: an unmeasured expectation must never coincide
-    // with an unreadable observation and be treated as agreement.
+    // with an unreadable observation and be treated as agreement (via
+    // agrees(), shared with the stability check below — クロエ round 3
+    // review MF-3).
     const cleanStop =
-      config.expected_clean_stop_exit_code !== null &&
-      config.expected_clean_stop_oom_killed !== null &&
-      stopExitCode === config.expected_clean_stop_exit_code &&
-      stopOomKilled === config.expected_clean_stop_oom_killed;
+      agrees(stopExitCode, config.expected_clean_stop_exit_code) &&
+      agrees(stopOomKilled, config.expected_clean_stop_oom_killed);
     if (!cleanStop) {
       // クロエ round 1 review N-1: names the exact runbook essentials
       // (deployment.md 4.3 step 5) an operator investigating an abnormal
@@ -965,13 +1085,26 @@ export function runUpdate(flags, config) {
     // crash-looping could transiently read "running" at the exact instant
     // checked, so the restart count (not just the final status) is what
     // actually rules that out.
-    const restartsAtHealthy = restartCount(bin, container);
+    //
+    // クロエ round 3 review SF-1: inspects `newContainerId` (UP's own
+    // recorded identity), not `container` (the PREFLIGHT-resolved
+    // service name from BEFORE `compose up` recreated it) — the same
+    // reasoning as F2's own comment above UP itself: a name can be
+    // reused by a DIFFERENT object, and inspecting by the exact id this
+    // update actually started fails loudly on a swap instead of quietly
+    // reading a fresh RestartCount of 0 for whatever now holds that name.
+    const restartsAtHealthy = restartCount(bin, newContainerId);
     sleepMs(config.stability_window_ms);
-    const statusAfterWindow = dockerInspect(bin, container, "{{.State.Status}}");
-    const restartsAfterWindow = restartCount(bin, container);
-    if (statusAfterWindow !== "running" || restartsAfterWindow !== restartsAtHealthy) {
+    const statusAfterWindow = dockerInspect(bin, newContainerId, "{{.State.Status}}");
+    const restartsAfterWindow = restartCount(bin, newContainerId);
+    // クロエ round 3 review MF-3: `agrees()` (not `!==`) — two unreadable
+    // RestartCounts must not read as "no restart happened" the way
+    // `null !== null` (false) would silently produce. The stop check
+    // three phases above already avoided this class explicitly; this is
+    // the second instance of it, closed with the same helper.
+    if (statusAfterWindow !== "running" || !agrees(restartsAfterWindow, restartsAtHealthy)) {
       fail(
-        `container ${container} was not stable for ${config.stability_window_ms}ms after becoming healthy (status=${statusAfterWindow}, restarts ${restartsAtHealthy} -> ${restartsAfterWindow}) — the update reached HEALTHY but did not survive to be called done; investigate before retrying`,
+        `container ${newContainerId} was not stable for ${config.stability_window_ms}ms after becoming healthy (status=${statusAfterWindow}, restarts ${restartsAtHealthy} -> ${restartsAfterWindow}) — the update reached HEALTHY but did not survive to be called done; investigate before retrying`,
       );
     }
     journal = advancePhase(dir, journal, PHASE.DONE, {}, validateJournalAgainstStateMachine);
@@ -981,9 +1114,15 @@ export function runUpdate(flags, config) {
     // backup nobody could delete is a cleanup problem to report, not a
     // reason to call a deploy that just reached DONE a failure.
     let prunedTransactions = [];
+    let pruneSkipped = [];
     let pruneError = null;
     try {
-      prunedTransactions = pruneOldTransactions(backupRoot, config, transactionId, bin);
+      ({ removed: prunedTransactions, skipped: pruneSkipped } = pruneOldTransactions(
+        backupRoot,
+        config,
+        transactionId,
+        bin,
+      ));
     } catch (err) {
       pruneError = err.message;
     }
@@ -1005,6 +1144,7 @@ export function runUpdate(flags, config) {
       requiredEntries,
       health,
       prunedTransactions,
+      pruneSkipped,
       pruneError,
     };
   } finally {
