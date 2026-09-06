@@ -25,6 +25,13 @@ import { writeFileDurably } from "./kaoiro-deploy-atomic-write.mjs";
 export const SHA256_RE = /^[0-9a-f]{64}$/;
 export const SHA_RE = /^[0-9a-f]{40}$/;
 export const IMAGE_ID_RE = /^sha256:[0-9a-f]{64}$/;
+// クロエ round 1 review MF-2 / director ruling 2026-09-06: shared with
+// kaoiro-deploy-phase.mjs's OLD_IMAGE_SAVED schema (imported back from
+// here, not redefined) — one definition of what a rollback tag looks
+// like. Recorded on the manifest too (director ruling: retention's
+// docker-tag cleanup must read the tag to remove from the manifest,
+// never rediscover it by globbing docker's own image list).
+export const ROLLBACK_TAG_RE = /^kaoiro-server:rollback-[0-9a-f]{40}$/;
 const OWNER_RE = /^[0-9]+:[0-9]+$/;
 // クロエ round 1 review SF-7: `stat -c %a` omits the special-bits digit
 // when it is zero (a plain 644 file prints "644", but a setgid dir
@@ -103,6 +110,10 @@ export function isValidManifestShape(value) {
   if (typeof value.volume_id !== "string" || value.volume_id === "") return false;
   if (!isPathSha(value.archive)) return false;
   if (!isValidRequiredEntries(value.required_entries)) return false;
+  if (typeof value.rollback_tag !== "string" || !ROLLBACK_TAG_RE.test(value.rollback_tag)) {
+    return false;
+  }
+  if (value.rollback_tag !== `kaoiro-server:rollback-${value.source_sha}`) return false;
   return true;
 }
 

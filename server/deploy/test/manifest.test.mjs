@@ -27,6 +27,7 @@ function validManifest() {
     required_entries: [
       { path: "users.dets", owner: "1000:1000", mode: "0600" },
     ],
+    rollback_tag: `kaoiro-server:rollback-${"c".repeat(40)}`,
   };
 }
 
@@ -96,6 +97,20 @@ test("isValidManifestShape rejects duplicate required_entries paths", () => {
 test("isValidManifestShape rejects an env_consistency entry with a non-boolean match", () => {
   const bad = validManifest();
   bad.env_consistency = { KAOIRO_CLIENT_TOKENS: { env_file: "set", compose: "set", container: "set", match: "yes" } };
+  assert.equal(isValidManifestShape(bad), false);
+});
+
+// director ruling 2026-09-06: recorded so retention's docker-tag cleanup
+// reads the tag from the manifest, never a docker-image-list glob.
+test("isValidManifestShape rejects a malformed rollback_tag", () => {
+  const bad = validManifest();
+  bad.rollback_tag = "kaoiro-server:rollback-not-a-sha";
+  assert.equal(isValidManifestShape(bad), false);
+});
+
+test("isValidManifestShape rejects a rollback_tag naming a different sha than source_sha", () => {
+  const bad = validManifest();
+  bad.rollback_tag = `kaoiro-server:rollback-${"9".repeat(40)}`;
   assert.equal(isValidManifestShape(bad), false);
 });
 

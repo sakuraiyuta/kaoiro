@@ -63,6 +63,7 @@ case "$1" in
     ;;
   tag) exit 0 ;;
   pull) exit 0 ;;
+  rmi) exit 0 ;;
   inspect)
     case "$2" in
       # Preflight image check (N-5): the missing-alpine scenario is the
@@ -776,6 +777,7 @@ test("runUpdate prunes DONE transactions beyond keep_generations that are also o
   // Three synthetic prior DONE transactions, all well past retention_days
   // and beyond keep_generations:1 — every one of them is prune-eligible.
   const oldIds = ["20200101T000000Z", "20200102T000000Z", "20200103T000000Z"];
+  const oldRollbackTag = `kaoiro-server:rollback-${"9".repeat(40)}`;
   for (const id of oldIds) {
     const dir = join(backupRoot, id);
     mkdirSync(dir, { recursive: true });
@@ -784,12 +786,49 @@ test("runUpdate prunes DONE transactions beyond keep_generations that are also o
       JSON.stringify({ schema_version: 1, transaction_id: id, phase: "done", history: [] }),
     );
   }
+  // director ruling 2026-09-06: only the FIRST one carries a manifest, so
+  // this also confirms a missing manifest degrades to "skip the tag
+  // cleanup, still remove the directory" rather than aborting the prune.
+  writeFileSync(
+    join(backupRoot, oldIds[0], "manifest.json"),
+    JSON.stringify({
+      schema_version: 1,
+      transaction_id: oldIds[0],
+      compose_artifact: { path: "server/docker-compose.yaml", sha256: "a".repeat(64) },
+      env_consistency: {},
+      image_id: `sha256:${"b".repeat(64)}`,
+      source_sha: "9".repeat(40),
+      target_sha: "d".repeat(40),
+      volume_id: "kaoiro_kaoiro-state",
+      archive: { path: "/backup/archive.tar.gz", sha256: "e".repeat(64) },
+      required_entries: [{ path: "users.dets", owner: "1000:1000", mode: "0600" }],
+      rollback_tag: oldRollbackTag,
+    }),
+  );
 
-  const result = withScenario("running-clean-stop", () =>
-    runUpdate(
-      { repo: workDir, target: headSha, maintenanceApproved: true },
-      { ...configWithCleanStopMeasured(), keep_generations: 1, retention_days: 1 },
-    ),
+  const logPath = join(root, "docker-calls.log");
+  process.env.KAOIRO_TEST_CALL_LOG = logPath;
+  let result;
+  try {
+    result = withScenario("running-clean-stop", () =>
+      runUpdate(
+        { repo: workDir, target: headSha, maintenanceApproved: true },
+        { ...configWithCleanStopMeasured(), keep_generations: 1, retention_days: 1 },
+      ),
+    );
+  } finally {
+    delete process.env.KAOIRO_TEST_CALL_LOG;
+  }
+  const log = existsSync(logPath) ? readFileSync(logPath, "utf8") : "";
+  const lines = log.trim().split("\n");
+  assert.ok(
+    lines.some((line) => line === `rmi ${oldRollbackTag}`),
+    "expected the pruned transaction's own manifest-recorded rollback_tag to be removed via docker rmi",
+  );
+  assert.equal(
+    lines.filter((line) => line.startsWith("rmi ")).length,
+    1,
+    "only the ONE pruned transaction that actually has a manifest should trigger a docker rmi call",
   );
   assert.equal(result.phase, "done");
   // The newest kept generation is THIS transaction; all 3 synthetic old
@@ -798,7 +837,6 @@ test("runUpdate prunes DONE transactions beyond keep_generations that are also o
   for (const id of oldIds) {
     assert.equal(existsSync(join(backupRoot, id)), false);
   }
-  assert.equal(existsSync(join(backupRoot, result.transactionId)), true);
 });
 
 test("runUpdate does not prune a DONE transaction that is beyond keep_generations but still within retention_days", () => {

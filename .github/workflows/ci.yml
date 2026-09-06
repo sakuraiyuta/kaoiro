@@ -51,6 +51,24 @@ jobs:
       - run: pnpm -C runner typecheck
       - run: pnpm -C runner test
 
+  # server/deploy (issue #306) has no dependencies of its own (plain
+  # node:test, no package-lock.json) and is NOT covered by the `server`
+  # job below — that job runs `mix test` only, inside an Elixir-only
+  # image with no node binary at all, so nothing here ever ran in CI
+  # until this job existed (クロエ-sub finding, #306 round 3: every prior
+  # green `node --test` count was a LOCAL claim only).
+  server-deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server/deploy
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --test
+
   # Checks out on the host, then runs mix inside a pinned Elixir image.
   #
   # Three findings from measuring this on the actual runner:
