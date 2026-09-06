@@ -176,6 +176,13 @@ case "$1" in
             running-clean-stop-torture)
               mkdir -p "$hostdir/.fakesrc-torture"
               printf x > "$hostdir/.fakesrc-torture/real.txt"
+              # Mode pinned explicitly (not left to the shell's umask):
+              # \`printf > file\` mode depends on the process umask, which
+              # differs between a dev host (often 0002 -> 0664) and CI's
+              # node:22 container (0022 -> 0644) — PR #312 round-3 run,
+              # 2026-09-06. The hardlink below shares this inode, so both
+              # real.txt and hard.txt land on the 0664 the test asserts.
+              chmod 664 "$hostdir/.fakesrc-torture/real.txt"
               ln -s real.txt "$hostdir/.fakesrc-torture/sym.txt"
               ln "$hostdir/.fakesrc-torture/real.txt" "$hostdir/.fakesrc-torture/hard.txt"
               tar --owner=1000 --group=1000 -czf "$hostdir/archive.tar.gz" -C "$hostdir/.fakesrc-torture" .
@@ -444,7 +451,18 @@ test("runBuild refuses when the post-merge revision does not match --target", ()
   // HEAD stays at the newer commit computeBuildIdentity() then reports.
   writeFileSync(join(workDir, "second.txt"), "second\n");
   execFileSync("git", ["-C", workDir, "add", "-A"]);
-  execFileSync("git", ["-C", workDir, "commit", "-q", "-m", "second"]);
+  // workDir is a `git clone` of bareDir — clone never copies the SOURCE
+  // repo's local user.email/user.name (identity is deliberately excluded
+  // from clone), so this commit has no identity to fall back to unless
+  // the host happens to have a global one set. CI's node:22 container has
+  // none (PR #312 round-3 run, 2026-09-06) — pin identity explicitly here
+  // instead of relying on global config.
+  execFileSync("git", [
+    "-C", workDir,
+    "-c", "user.email=test@example.com",
+    "-c", "user.name=Test",
+    "commit", "-q", "-m", "second",
+  ]);
   assert.throws(
     () => withOverrideEnv(() => runBuild({ repo: workDir, target: headSha }, configWithOverride())),
     DeployError,
