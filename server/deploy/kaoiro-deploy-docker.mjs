@@ -28,12 +28,16 @@ export function resolveDockerBin(config, env = process.env) {
   return { bin: override, overridden: true };
 }
 
-/** Runs `<bin> <args>`, returning trimmed stdout. Throws (with stderr
+/** Runs `<bin> <args>`, returning trimmed stdout — or `""` when the
+ *  caller passed `stdio: "inherit"` (a long-running build/up whose
+ *  output should stream to the terminal rather than being captured;
+ *  execFileSync then returns `null`, not a string). Throws (with stderr
  *  attached by execFileSync itself) on a non-zero exit — callers decide
  *  what a given failure means (branch classification, abort, ...); this
  *  only runs the process. */
 export function runDocker(bin, args, opts = {}) {
-  return execFileSync(bin, args, { encoding: "utf8", ...opts }).trim();
+  const output = execFileSync(bin, args, { encoding: "utf8", ...opts });
+  return output === null ? "" : output.trim();
 }
 
 /** `docker inspect <target> --format <format>` — one target, one format
@@ -43,4 +47,21 @@ export function runDocker(bin, args, opts = {}) {
  *  instead of settling it here once. */
 export function dockerInspect(bin, target, format) {
   return runDocker(bin, ["inspect", target, "--format", format]);
+}
+
+/** Container names docker compose reports for `service` in the compose
+ *  project rooted at `cwd`, including stopped ones (`-a`) — branch
+ *  classification (A-D) needs to see an exited container, not just a
+ *  running one. Resolving through `docker compose ps`, not a guessed
+ *  `<dir>-<service>-1` name or a bare `docker ps --filter name=`, is what
+ *  keeps this correct regardless of COMPOSE_PROJECT_NAME or a renamed
+ *  checkout directory. Empty output means zero containers, not one
+ *  empty-string name. */
+export function dockerComposeContainerNames(bin, cwd, service) {
+  const output = runDocker(
+    bin,
+    ["compose", "ps", "-a", "--format", "{{.Name}}", service],
+    { cwd },
+  );
+  return output === "" ? [] : output.split("\n");
 }
