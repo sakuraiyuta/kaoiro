@@ -135,11 +135,9 @@ export interface PermissionAxes {
   enforcement?: "os" | "mode" | "advisory";
 }
 
-/** Reads ext.permission off an envelope, or null when absent/malformed. */
-export function permissionFrom(envelope: Envelope): PermissionAxes | null {
-  const raw = envelope.ext?.permission;
-  if (typeof raw !== "object" || raw === null) return null;
-  const p = raw as PermissionAxes;
+function permissionAxesOf(value: unknown): PermissionAxes | null {
+  if (typeof value !== "object" || value === null) return null;
+  const p = value as PermissionAxes;
   if (typeof p.sandbox !== "string" || typeof p.approval !== "string") {
     return null;
   }
@@ -152,6 +150,11 @@ export function permissionFrom(envelope: Envelope): PermissionAxes | null {
       ? { enforcement: p.enforcement }
       : {}),
   };
+}
+
+/** Reads ext.permission off an envelope, or null when absent/malformed. */
+export function permissionFrom(envelope: Envelope): PermissionAxes | null {
+  return permissionAxesOf(envelope.ext?.permission);
 }
 
 /** The raw operator selection for the next execution (issue #305).
@@ -209,21 +212,92 @@ function permissionConfigurationOf(
   return { sandbox: r.sandbox, network_access: r.network_access };
 }
 
+function sameConfiguration(
+  a: PermissionConfiguration,
+  b: PermissionConfiguration,
+): boolean {
+  return a.sandbox === b.sandbox && a.network_access === b.network_access;
+}
+
+/** A control/ack revision. Revision zero is the wrapper's launch baseline,
+ *  so the domain is the NON-NEGATIVE safe integers — a negative value is
+ *  malformed, not an old request. */
+function revisionOf(value: unknown): number | null {
+  return Number.isSafeInteger(value) && (value as number) >= 0
+    ? (value as number)
+    : null;
+}
+
+/** `PermissionSubmission` = `{revision, requested, execution_id}`. Parsed
+ *  to CHECK the evidence behind a rendered status, never kept: observed
+ *  values are read from ext.permission / ext.effective so a second copy
+ *  cannot drift from the badge. */
+interface PermissionSubmission {
+  revision: number;
+  requested: PermissionConfiguration;
+  execution_id: string;
+}
+
+function permissionSubmissionOf(value: unknown): PermissionSubmission | null {
+  if (typeof value !== "object" || value === null) return null;
+  const r = value as Record<string, unknown>;
+  const revision = revisionOf(r.revision);
+  if (revision === null) return null;
+  const requested = permissionConfigurationOf(r.requested);
+  if (requested === null) return null;
+  if (typeof r.execution_id !== "string" || r.execution_id === "") return null;
+  return { revision, requested, execution_id: r.execution_id };
+}
+
+/** `PermissionObservation` extends a submission with the engine identities
+ *  `{session_id, turn_id, permission, network_access}`. Without them the
+ *  record is a second copy of the submission, so an "observed" claim built
+ *  on it would have no observation behind it. */
+function permissionObservationOf(value: unknown): PermissionSubmission | null {
+  const submission = permissionSubmissionOf(value);
+  if (submission === null) return null;
+  const r = value as Record<string, unknown>;
+  if (typeof r.session_id !== "string" || r.session_id === "") return null;
+  if (typeof r.turn_id !== "string" || r.turn_id === "") return null;
+  if (typeof r.network_access !== "boolean") return null;
+  if (permissionAxesOf(r.permission) === null) return null;
+  return submission;
+}
+
 /** Reads ext.permission_control off an envelope, or null when absent or
  *  malformed. Fail-closed like {@link sessionCapabilitiesFrom}: a partial
  *  record is dropped whole rather than rendered with holes, since every
  *  field here drives a permission badge. `constraints` is required by the
  *  contract in every state, so its absence is malformed rather than
- *  "constraints unknown". */
+ *  "constraints unknown".
+ *
+ *  The status is not free-standing: it is a CLAIM, and the contract names
+ *  the evidence each claim needs (protocol.md, "Requested, submitted, and
+ *  effective state"). Two clauses are enforced here because this client
+ *  renders exactly those claims:
+ *
+ *  - `applied` requires both `submitted` and `effective`, matching each
+ *    other and this record on revision, requested pair and execution_id.
+ *  - `rolled_back_to` is accepted only on `failed` — "only a definitive
+ *    rejection before application can set rolled_back_to; missing
+ *    observation never does".
+ *
+ *  Residual, deliberately not enforced: clauses whose subject this client
+ *  never renders (a `reason` missing from failed/unknown, a `submitted`
+ *  missing from applying, an `effective` the contract asks the producer to
+ *  omit). Rejecting the record there would hide a real state without
+ *  preventing a false claim. */
 export function permissionControlFrom(
   envelope: Envelope,
 ): PermissionControl | null {
   const raw = envelope.ext?.permission_control;
   if (typeof raw !== "object" || raw === null) return null;
   const r = raw as Record<string, unknown>;
-  if (!Number.isSafeInteger(r.revision)) return null;
+  const revision = revisionOf(r.revision);
+  if (revision === null) return null;
   if (typeof r.status !== "string") return null;
   if (!PERMISSION_CONTROL_STATUSES.has(r.status)) return null;
+  const status = r.status as PermissionControlStatus;
   const requested = permissionConfigurationOf(r.requested);
   if (requested === null) return null;
   const constraints = r.constraints;
@@ -237,12 +311,27 @@ export function permissionControlFrom(
   ) {
     return null;
   }
-  const rolledBackTo = permissionConfigurationOf(r.rolled_back_to);
+  if (status === "applied") {
+    const submitted = permissionSubmissionOf(r.submitted);
+    const effective = permissionObservationOf(r.effective);
+    if (submitted === null || effective === null) return null;
+    if (submitted.revision !== revision) return null;
+    if (effective.revision !== revision) return null;
+    if (submitted.execution_id !== effective.execution_id) return null;
+    if (!sameConfiguration(submitted.requested, requested)) return null;
+    if (!sameConfiguration(effective.requested, requested)) return null;
+  }
+  let rolledBackTo: PermissionConfiguration | null = null;
+  if (r.rolled_back_to !== undefined && r.rolled_back_to !== null) {
+    if (status !== "failed") return null;
+    rolledBackTo = permissionConfigurationOf(r.rolled_back_to);
+    if (rolledBackTo === null) return null;
+  }
   return {
-    revision: r.revision as number,
+    revision,
     requested,
     constraints: { approval: c.approval, enforcement: c.enforcement },
-    status: r.status as PermissionControlStatus,
+    status,
     ...(typeof r.reason === "string" && r.reason !== ""
       ? { reason: r.reason }
       : {}),
@@ -270,11 +359,12 @@ export interface SetPermissionAck {
 function setPermissionAckOf(value: unknown): SetPermissionAck | null {
   if (typeof value !== "object" || value === null) return null;
   const r = value as Record<string, unknown>;
-  if (!Number.isSafeInteger(r.revision)) return null;
+  const revision = revisionOf(r.revision);
+  if (revision === null) return null;
   if (r.status !== "pending") return null;
   const requested = permissionConfigurationOf(r.requested);
   if (requested === null) return null;
-  return { revision: r.revision as number, status: "pending", requested };
+  return { revision, status: "pending", requested };
 }
 
 /** Engines whose launch permission exposes a selectable sandbox axis
@@ -631,17 +721,26 @@ export function resumeDriftFrom(envelope: Envelope): ResumeDriftEntry[] | null {
   return out;
 }
 
+/** Builds a string-keyed lookup table with NO prototype, so a key taken
+ *  from an envelope or a server reply (`constructor`, `toString`,
+ *  `__proto__`) reads as absent instead of returning an inherited
+ *  Object.prototype member. Closing this at the table rather than at each
+ *  index site is what keeps a later `TABLE[untrusted]` from re-opening it. */
+export function lookupTable<T>(entries: Record<string, T>): Record<string, T> {
+  return Object.assign(Object.create(null) as Record<string, T>, entries);
+}
+
 /** Claude mode -> two-axis display annotation (ADR-0033 F2/F4: the picker
  *  stays engine-native, each option annotated with its two-axis reading).
  *  Mirrors the wrapper's PERMISSION_MODE_AXES table. */
-export const PERMISSION_MODE_AXES: Record<string, PermissionAxes> = {
+export const PERMISSION_MODE_AXES = lookupTable<PermissionAxes>({
   default: { sandbox: "workspace-write", approval: "untrusted" },
   acceptEdits: { sandbox: "workspace-write", approval: "on-request" },
   plan: { sandbox: "read-only", approval: "on-request" },
   bypassPermissions: { sandbox: "danger-full-access", approval: "never" },
   dontAsk: { sandbox: "workspace-write", approval: "never" },
   auto: { sandbox: "workspace-write", approval: "on-request" },
-};
+});
 
 /** A selectable model surfaced on state_change.ext.models (#54, ADR-0020):
  *  the choices and per-model effort levels behind the dashboard's model /

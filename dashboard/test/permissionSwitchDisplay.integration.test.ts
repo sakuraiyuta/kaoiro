@@ -82,6 +82,33 @@ function control(over: Record<string, unknown> = {}): Record<string, unknown> {
   };
 }
 
+/** A COMPLETE `applied` record. The contract requires both `submitted`
+ *  and `effective`, matching on revision, requested pair and execution_id
+ *  — an `applied` without them claims an observation nothing observed.
+ *  (Introduced by ふじ's round-1 boundary probes; hoisted here so the
+ *  status-line fixtures below stop encoding the unbacked shape.) */
+function observedControl(revision: number): Record<string, unknown> {
+  const requested = { sandbox: "workspace-write", network_access: false };
+  const submitted = { revision, requested, execution_id: `exec-${revision}` };
+  return control({
+    revision,
+    requested,
+    status: "applied",
+    submitted,
+    effective: {
+      ...submitted,
+      session_id: "session-a",
+      turn_id: `turn-${revision}`,
+      permission: {
+        sandbox: "workspace-write",
+        approval: "never",
+        enforcement: "os",
+      },
+      network_access: false,
+    },
+  });
+}
+
 function rowByLabel(target: HTMLElement, label: string): HTMLElement | null {
   for (const row of target.querySelectorAll(".cc-row")) {
     if (row.querySelector("dt")?.textContent?.trim() === label) {
@@ -205,7 +232,8 @@ describe("AgentDetail sandbox / network control (issue #305 D)", () => {
     const { target } = await render({
       engine: "codex",
       session_capabilities: SWITCH_CAPS,
-      permission_control: control({ status }),
+      permission_control:
+        status === "applied" ? observedControl(7) : control({ status }),
     });
     const dd = rowByLabel(target, "権限要求");
     expect(dd?.textContent).toContain("rev 7");
@@ -343,7 +371,7 @@ describe("AgentDetail sandbox / network control (issue #305 D)", () => {
     props.envelope = envelope({
       engine: "codex",
       session_capabilities: SWITCH_CAPS,
-      permission_control: control({ revision: 6, status: "applied" }),
+      permission_control: observedControl(6),
     });
     await tick();
     props.envelope = envelope({
@@ -622,5 +650,119 @@ describe("AgentDetail Claude mode picker gating (issue #305 D)", () => {
       permission: { sandbox: "read-only", approval: "never", enforcement: "os" },
     });
     expect(rowByLabel(target, "作業意図")).toBeNull();
+  });
+});
+
+// Independent review boundary probes; state inputs are valid wire controls unless named malformed.
+async function reviewPick(target: HTMLElement) {
+  const dd = rowByLabel(target, "sandbox 変更")!;
+  (dd.querySelector(".cc-perm-switch") as HTMLButtonElement).click();
+  await tick();
+  (dd.querySelector('[role="option"]') as HTMLButtonElement).click();
+  await tick();
+}
+const reviewExt = (pc?: Record<string, unknown>) => ({ engine: "codex",
+  session_capabilities: SWITCH_CAPS, ...(pc === undefined ? {} : { permission_control: pc }) });
+
+describe("Fuji independent permission boundaries", () => {
+  it("does not resurrect an ack delivered after its applied push disappeared", async () => {
+    let resolve!: (value: SetPermissionAck) => void;
+    const reply = new Promise<SetPermissionAck>(r => { resolve = r; });
+    const { target, props } = await render(reviewExt(), { onSetPermission: vi.fn(() => reply) });
+    await reviewPick(target);
+    props.envelope = envelope(reviewExt(observedControl(9)));
+    await tick();
+    resolve({ revision: 9, status: "pending", requested: { sandbox: "workspace-write", network_access: false } });
+    await tick(); await tick();
+    expect(rowByLabel(target, "権限要求")?.textContent).toContain("適用済み");
+    props.envelope = envelope(reviewExt());
+    await tick();
+    expect(rowByLabel(target, "権限要求")).toBeNull();
+  });
+  it("keeps the latest known revision after a settled ack is cleared", async () => {
+    const { target, props } = await render(reviewExt(), { onSetPermission: vi.fn(async () => ({
+      revision: 9, status: "pending", requested: { sandbox: "workspace-write", network_access: false }
+    })) });
+    await reviewPick(target); await tick();
+    props.envelope = envelope(reviewExt(observedControl(9)));
+    await tick();
+    expect(rowByLabel(target, "権限要求")?.textContent).toContain("適用済み");
+    props.envelope = envelope(reviewExt(control({ revision: 4 })));
+    await tick();
+    expect(rowByLabel(target, "権限要求")?.textContent ?? "").not.toContain("rev 4");
+  });
+  it("does not let push-only updates reduce the latest known revision", async () => {
+    const { target, props } = await render(reviewExt(observedControl(9)));
+    props.envelope = envelope(reviewExt(control({ revision: 4 })));
+    await tick();
+    expect(rowByLabel(target, "権限要求")?.textContent ?? "").not.toContain("rev 4");
+  });
+  it("accepts the complete applied observation as a positive parse control", () => {
+    expect(permissionControlFrom(envelope(reviewExt(observedControl(9))))?.status).toBe("applied");
+  });
+  it("rejects applied without submitted or observed evidence", () => {
+    expect(permissionControlFrom(envelope(reviewExt(control({ status: "applied" }))))).toBeNull();
+  });
+  it("rejects applied whose effective is only a copy of the submission", () => {
+    // The engine identities are what make `effective` an OBSERVATION.
+    // Without them the record repeats the submission, and "適用済み" would
+    // rest on the wrapper having asked rather than on anything observed.
+    const requested = { sandbox: "workspace-write", network_access: false };
+    const submitted = { revision: 9, requested, execution_id: "exec-9" };
+    const pc = control({
+      revision: 9,
+      requested,
+      status: "applied",
+      submitted,
+      effective: { ...submitted },
+    });
+    expect(permissionControlFrom(envelope(reviewExt(pc)))).toBeNull();
+  });
+
+  it("rejects applied whose evidence describes another execution", () => {
+    // "matching revision, requested pair, and execution_id" — a submission
+    // and an observation that disagree describe two different execs, and
+    // the contract warns that a predecessor's result cannot settle the
+    // current request.
+    const pc = observedControl(9) as Record<string, Record<string, unknown>>;
+    const mismatched = {
+      ...pc,
+      effective: { ...pc.effective, execution_id: "exec-8" },
+    };
+    expect(permissionControlFrom(envelope(reviewExt(mismatched)))).toBeNull();
+  });
+
+  it("rejects applied whose evidence carries a different requested pair", () => {
+    const pc = observedControl(9) as Record<string, Record<string, unknown>>;
+    const mismatched = {
+      ...pc,
+      submitted: {
+        ...pc.submitted,
+        requested: { sandbox: "read-only", network_access: false },
+      },
+    };
+    expect(permissionControlFrom(envelope(reviewExt(mismatched)))).toBeNull();
+  });
+
+  it("rejects a negative control revision", () => {
+    expect(permissionControlFrom(envelope(reviewExt(control({ revision: -1 }))))).toBeNull();
+  });
+  it("does not fabricate rollback for an unobserved result", () => {
+    const pc = control({ status: "unknown", reason: "observation_unavailable",
+      submitted: { revision: 7, requested: { sandbox: "workspace-write", network_access: false }, execution_id: "exec-7" },
+      rolled_back_to: { sandbox: "read-only", network_access: false } });
+    expect(permissionControlFrom(envelope(reviewExt(pc)))).toBeNull();
+  });
+  it.each(["__proto__", "constructor", "toString"])("does not authorize a legacy mode picker from invalid mode %s", async (permission_mode) => {
+    const { target } = await render({ engine: "claude-code", permission_mode });
+    expect(rowByLabel(target, "作業意図")).toBeNull();
+  });
+});
+
+describe("Fuji inherited error-map keys", () => {
+  it.each(["constructor", "toString"])("renders unknown rejection %s as its raw value", async reason => {
+    const { target } = await render(reviewExt(), {onSetPermission: vi.fn(async () => { throw new Error(reason); })});
+    await reviewPick(target); await tick();
+    expect(rowByLabel(target, "権限要求エラー")?.textContent?.trim()).toBe(reason);
   });
 });

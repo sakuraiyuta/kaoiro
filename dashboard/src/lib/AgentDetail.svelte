@@ -19,6 +19,7 @@
     hostIdFromAgentId,
     interAgentMessageOf,
     logOf,
+    lookupTable,
     modelsFrom,
     modelSourceFrom,
     modelSwitchStateFrom,
@@ -39,6 +40,7 @@
     Envelope,
     KaoiroConnection,
     PersonaManifest,
+    PermissionConfiguration,
     PermissionControlStatus,
     RunnerSessions,
     SessionResetMode,
@@ -1469,6 +1471,8 @@
       sandboxMenuOpen = false;
       permActionError = null;
       permAck = null;
+      permSeenRevision = -1;
+      permSeenRank = -1;
     }
   });
   // Close all popovers on a click outside any switch box.
@@ -1703,7 +1707,7 @@
   // rendered raw rather than swallowed: an unmapped value means the server
   // grew a rejection this client has not been taught, and hiding it would
   // leave the operator with a control that silently does nothing.
-  const PERMISSION_ERROR_TEXTS: Record<string, string> = {
+  const PERMISSION_ERROR_TEXTS: Record<string, string> = lookupTable<string>({
     forbidden: "権限がありません (operator のみ実行できます)",
     invalid_payload: "送信内容が不正です",
     unknown_agent: "対象の agent が見つかりません",
@@ -1713,42 +1717,98 @@
     session_reset_pending: "session reset の完了待ちです",
     revision_exhausted: "revision を使い切りました",
     persistence_failed: "サーバ側の保存に失敗しました",
+  });
+  // How far a revision has progressed. The contract lets a state update
+  // move a revision forward but never back: "Client ack/state updates
+  // cannot reduce the latest known revision or restore pending after that
+  // revision settled" (protocol.md, "Requested, submitted, and effective
+  // state").
+  const PERMISSION_STATUS_RANK: Record<PermissionControlStatus, number> = {
+    pending: 0,
+    applying: 1,
+    applied: 2,
+    failed: 2,
+    unknown: 2,
   };
+  type PermRequestView = {
+    revision: number;
+    requested: PermissionConfiguration;
+    status: PermissionControlStatus;
+    reason: string | undefined;
+    rolledBackTo: PermissionConfiguration | undefined;
+  };
+  const permControlView = $derived.by<PermRequestView | null>(() =>
+    permControl === null
+      ? null
+      : {
+          revision: permControl.revision,
+          requested: permControl.requested,
+          status: permControl.status,
+          reason: permControl.reason,
+          rolledBackTo: permControl.rolled_back_to,
+        },
+  );
+  const permAckView = $derived.by<PermRequestView | null>(() =>
+    permAck === null
+      ? null
+      : {
+          revision: permAck.revision,
+          requested: permAck.requested,
+          status: "pending" as PermissionControlStatus,
+          reason: undefined,
+          rolledBackTo: undefined,
+        },
+  );
+  // High-water mark over everything this component has been told about
+  // THIS agent, from either source. Neither source can hold the line
+  // alone — the ack lives in local state while the control rides every
+  // envelope — so a late ack, a replayed frame, and an ack overtaken by
+  // its own control each walked the display backwards in a different
+  // way. One monotonic mark covers all three. Reset on agent switch with
+  // the rest of the permission state: revisions are per-agent.
+  //
+  // -1 is below every real revision now that the parser rejects negative
+  // ones.
+  let permSeenRevision = $state(-1);
+  let permSeenRank = $state(-1);
   $effect(() => {
-    const control = permControl;
-    const ack = untrack(() => permAck);
-    if (control !== null && ack !== null && control.revision >= ack.revision) {
-      permAck = null;
+    for (const view of [permControlView, permAckView]) {
+      if (view === null) continue;
+      const rank = PERMISSION_STATUS_RANK[view.status];
+      const seenRevision = untrack(() => permSeenRevision);
+      const seenRank = untrack(() => permSeenRank);
+      if (
+        view.revision > seenRevision ||
+        (view.revision === seenRevision && rank > seenRank)
+      ) {
+        permSeenRevision = view.revision;
+        permSeenRank = rank;
+      }
     }
   });
-  // Rendered request line. The higher revision wins, with the server's
-  // control taking ties: an ack that arrives after a newer control is
-  // already stale, and a control replayed from an older revision (a slow
-  // reconnect frame) must not drag the display backwards either.
+  // Rendered request line: the best LIVE source that has not fallen
+  // behind the mark. A stale source renders nothing rather than the
+  // retained value — "clients render unknown as unknown, not as the
+  // previous observed badge". Ties go to the control, which is the only
+  // side carrying reason / rolled_back_to.
   const permRequestView = $derived.by(() => {
-    const control =
-      permControl === null
-        ? null
-        : {
-            revision: permControl.revision,
-            requested: permControl.requested,
-            status: permControl.status,
-            reason: permControl.reason,
-            rolledBackTo: permControl.rolled_back_to,
-          };
-    const ack =
-      permAck === null
-        ? null
-        : {
-            revision: permAck.revision,
-            requested: permAck.requested,
-            status: "pending" as PermissionControlStatus,
-            reason: undefined,
-            rolledBackTo: undefined,
-          };
-    if (control === null) return ack;
-    if (ack === null) return control;
-    return control.revision >= ack.revision ? control : ack;
+    let best: PermRequestView | null = null;
+    let bestRank = -1;
+    for (const view of [permControlView, permAckView]) {
+      if (view === null) continue;
+      const rank = PERMISSION_STATUS_RANK[view.status];
+      if (view.revision < permSeenRevision) continue;
+      if (view.revision === permSeenRevision && rank < permSeenRank) continue;
+      if (
+        best === null ||
+        view.revision > best.revision ||
+        (view.revision === best.revision && rank > bestRank)
+      ) {
+        best = view;
+        bestRank = rank;
+      }
+    }
+    return best;
   });
   const permissionPickerVisible = $derived(
     permissionSwitchSupported && onSetPermission !== undefined,
