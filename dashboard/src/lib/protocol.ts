@@ -202,7 +202,69 @@ const PERMISSION_CONTROL_STATUSES: ReadonlySet<string> = new Set([
   "unknown",
 ]);
 
+/** The closed value domains `PermissionAxesExt` declares (`@kaoiro/protocol`
+ *  index.ts). Every enum-typed field an evidence record carries is checked
+ *  against these — the class of defect here was a parser that validated
+ *  SHAPE everywhere and DOMAIN nowhere, so "not-a-policy" rode into a
+ *  rendered "applied". Kept separate from the display path on purpose: an
+ *  engine value the badge shows is not evidence, and tightening
+ *  {@link permissionFrom} would change what an existing session renders. */
+const PERMISSION_SANDBOX_VALUES: ReadonlySet<string> = new Set([
+  "read-only",
+  "workspace-write",
+  "danger-full-access",
+]);
+
+const PERMISSION_APPROVAL_VALUES: ReadonlySet<string> = new Set([
+  "untrusted",
+  "on-request",
+  "on-failure",
+  "never",
+]);
+
+const PERMISSION_ENFORCEMENT_VALUES: ReadonlySet<string> = new Set([
+  "os",
+  "mode",
+  "advisory",
+]);
+
+/** Strict counterpart of {@link permissionFrom} for the evidence boundary:
+ *  every axis must be in its declared domain, and an `enforcement` that is
+ *  present but unknown is a rejection rather than a silently dropped
+ *  field. */
+function permissionPolicyOf(value: unknown): PermissionAxes | null {
+  if (typeof value !== "object" || value === null) return null;
+  const p = value as Record<string, unknown>;
+  if (typeof p.sandbox !== "string") return null;
+  if (!PERMISSION_SANDBOX_VALUES.has(p.sandbox)) return null;
+  if (typeof p.approval !== "string") return null;
+  if (!PERMISSION_APPROVAL_VALUES.has(p.approval)) return null;
+  if (p.enforcement !== undefined) {
+    if (typeof p.enforcement !== "string") return null;
+    if (!PERMISSION_ENFORCEMENT_VALUES.has(p.enforcement)) return null;
+  }
+  return {
+    sandbox: p.sandbox,
+    approval: p.approval,
+    ...(p.enforcement === undefined
+      ? {}
+      : {
+          enforcement: p.enforcement as NonNullable<
+            PermissionAxes["enforcement"]
+          >,
+        }),
+  };
+}
+
 type FieldRule = "required" | "optional" | "forbidden";
+
+/** Whether the evidence a status carries describes THIS request. `bound`
+ *  states are the ones whose label is itself a claim about this revision's
+ *  execution ("適用中" / "適用済み" / "未確認"), so their submission and
+ *  observation must match the record's own selection. `free` states may
+ *  legitimately carry a predecessor's: a pending successor B while A still
+ *  runs, and a failed B reporting the rollback to A with A's observation. */
+type EvidenceBinding = "bound" | "free";
 
 /** Per-status field requirements, transcribed from the
  *  `PermissionControlExt` union in `@kaoiro/protocol` (index.ts). A `never`
@@ -210,44 +272,54 @@ type FieldRule = "required" | "optional" | "forbidden";
  *  receiving it means the record does not describe the state it claims. */
 const PERMISSION_CONTROL_FIELDS: Record<
   PermissionControlStatus,
-  Record<"submitted" | "effective" | "reason" | "rolled_back_to", FieldRule>
+  Record<"submitted" | "effective" | "reason" | "rolled_back_to", FieldRule> & {
+    evidence: EvidenceBinding;
+  }
 > = {
   pending: {
     submitted: "optional",
     effective: "optional",
     reason: "forbidden",
     rolled_back_to: "forbidden",
+    evidence: "free",
   },
   applying: {
     submitted: "required",
     effective: "forbidden",
     reason: "forbidden",
     rolled_back_to: "forbidden",
+    evidence: "bound",
   },
   applied: {
     submitted: "required",
     effective: "required",
     reason: "forbidden",
     rolled_back_to: "forbidden",
+    evidence: "bound",
   },
   failed: {
     submitted: "optional",
     effective: "optional",
     reason: "required",
     rolled_back_to: "optional",
+    evidence: "free",
   },
   unknown: {
     submitted: "required",
     effective: "forbidden",
     reason: "required",
     rolled_back_to: "forbidden",
+    evidence: "bound",
   },
 };
 
-/** JSON has no `undefined`, so an explicit null is the wire's way of
- *  spelling "absent" and is read as such rather than as a malformed value. */
+/** Only an OMITTED key is absent. An explicit null is a value of the wrong
+ *  type, not a spelling of "no value" — no clause in the contract equates
+ *  the two, and the producers do not need it: the wrapper builds every
+ *  optional field with a conditional spread and the server omits rather
+ *  than nulls. */
 function present(value: unknown): boolean {
-  return value !== undefined && value !== null;
+  return value !== undefined;
 }
 
 function presenceAllowed(rule: FieldRule, isPresent: boolean): boolean {
@@ -259,7 +331,8 @@ function permissionConfigurationOf(
 ): PermissionConfiguration | null {
   if (typeof value !== "object" || value === null) return null;
   const r = value as Record<string, unknown>;
-  if (typeof r.sandbox !== "string" || r.sandbox === "") return null;
+  if (typeof r.sandbox !== "string") return null;
+  if (!PERMISSION_SANDBOX_VALUES.has(r.sandbox)) return null;
   if (typeof r.network_access !== "boolean") return null;
   return { sandbox: r.sandbox, network_access: r.network_access };
 }
@@ -321,7 +394,7 @@ function permissionObservationOf(value: unknown): PermissionSubmission | null {
   if (typeof r.session_id !== "string" || r.session_id === "") return null;
   if (typeof r.turn_id !== "string" || r.turn_id === "") return null;
   if (typeof r.network_access !== "boolean") return null;
-  if (permissionAxesOf(r.permission) === null) return null;
+  if (permissionPolicyOf(r.permission) === null) return null;
   return submission;
 }
 
@@ -360,14 +433,10 @@ export function permissionControlFrom(
   const constraints = r.constraints;
   if (typeof constraints !== "object" || constraints === null) return null;
   const c = constraints as Record<string, unknown>;
-  if (typeof c.approval !== "string" || c.approval === "") return null;
-  if (
-    c.enforcement !== "os" &&
-    c.enforcement !== "mode" &&
-    c.enforcement !== "advisory"
-  ) {
-    return null;
-  }
+  if (typeof c.approval !== "string") return null;
+  if (!PERMISSION_APPROVAL_VALUES.has(c.approval)) return null;
+  if (typeof c.enforcement !== "string") return null;
+  if (!PERMISSION_ENFORCEMENT_VALUES.has(c.enforcement)) return null;
   const rules = PERMISSION_CONTROL_FIELDS[status];
   if (!presenceAllowed(rules.submitted, present(r.submitted))) return null;
   if (!presenceAllowed(rules.effective, present(r.effective))) return null;
@@ -390,19 +459,29 @@ export function permissionControlFrom(
     ? permissionConfigurationOf(r.rolled_back_to)
     : null;
   if (present(r.rolled_back_to) && rolledBackTo === null) return null;
-  if (status === "applied") {
-    // Non-null by the table above; re-stated for the type checker.
-    if (submitted === null || effective === null) return null;
-    if (submitted.revision !== revision) return null;
-    if (effective.revision !== revision) return null;
-    if (submitted.execution_id !== effective.execution_id) return null;
-    if (!sameConfiguration(submitted.requested, requested)) return null;
-    if (!sameConfiguration(effective.requested, requested)) return null;
+  if (rules.evidence === "bound") {
+    for (const record of [submitted, effective]) {
+      if (record === null) continue;
+      if (record.revision !== revision) return null;
+      if (!sameConfiguration(record.requested, requested)) return null;
+    }
+    // Submission and observation describe ONE execution, so a pair that
+    // disagrees on the correlation id is two records, not one state.
+    if (
+      submitted !== null &&
+      effective !== null &&
+      submitted.execution_id !== effective.execution_id
+    ) {
+      return null;
+    }
   }
   return {
     revision,
     requested,
-    constraints: { approval: c.approval, enforcement: c.enforcement },
+    constraints: {
+      approval: c.approval,
+      enforcement: c.enforcement as PermissionConstraints["enforcement"],
+    },
     status,
     ...(typeof r.reason === "string" ? { reason: r.reason } : {}),
     ...(rolledBackTo === null ? {} : { rolled_back_to: rolledBackTo }),

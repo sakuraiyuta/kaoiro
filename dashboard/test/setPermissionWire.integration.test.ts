@@ -168,6 +168,20 @@ describe("set_permission reply contract (issue #305 D, ふじ round 1 S2)", () =
     },
   );
 
+  it("resolves null for an ack whose sandbox is outside the declared domain", async () => {
+    const { conn, ws } = await connect();
+    const pending = conn.setPermission(AGENT_ID, { sandbox: "read-only" });
+    ws.replyToLatestSetPermission({
+      ok: true,
+      response: {
+        revision: 17,
+        status: "pending",
+        requested: { sandbox: "banana", network_access: false },
+      },
+    });
+    await expect(pending).resolves.toBeNull();
+  });
+
   it("rejects an error reply with the server's reason, the key the UI maps", async () => {
     const { conn, ws } = await connect();
     const pending = conn.setPermission(AGENT_ID, { sandbox: "read-only" });

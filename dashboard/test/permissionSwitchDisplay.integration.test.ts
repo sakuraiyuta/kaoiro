@@ -909,6 +909,47 @@ describe("permissionControlFrom per-status field table (ふじ round 1 M2)", () 
     expect(parsed?.rolled_back_to?.sandbox).toBe("read-only");
   });
 
+  it.each(["session_id", "turn_id", "permission", "network_access"])(
+    "rejects an observation missing the engine identity %s",
+    (key) => {
+      // Each identity is checked on its own. Dropping one at a time is
+      // what separates the guards — an observation stripped of all four
+      // is rejected by whichever check happens to run first, so it
+      // measures none of them.
+      const pc = structuredClone(observedControl(9)) as Record<
+        string,
+        Record<string, unknown>
+      >;
+      delete pc.effective[key];
+      expect(permissionControlFrom(envelope(ext(pc)))).toBeNull();
+    },
+  );
+
+  it.each([
+    ["requested", () => control({ requested: { sandbox: "banana", network_access: false } })],
+    ["submitted.requested", () => control({
+      status: "applying",
+      submitted: { revision: 7, requested: { sandbox: "banana", network_access: false }, execution_id: "exec-7" },
+    })],
+    ["rolled_back_to", () => control({
+      status: "failed",
+      reason: "policy_mismatch",
+      rolled_back_to: { sandbox: "banana", network_access: false },
+    })],
+    ["constraints.approval", () => control({
+      constraints: { approval: "banana", enforcement: "os" },
+    })],
+    ["constraints.enforcement", () => control({
+      constraints: { approval: "never", enforcement: "banana" },
+    })],
+  ])("rejects a value outside the declared domain in %s", (_label, build) => {
+    // Siblings of the observation axis the review reproduced: every
+    // enum-typed field on the record, not just the one that was measured.
+    // requested.sandbox in particular renders straight into the request
+    // line, so an unchecked one shows "書込 banana" to the operator.
+    expect(permissionControlFrom(envelope(ext(build())))).toBeNull();
+  });
+
   it("rejects applying without the submission that defines it", () => {
     expect(
       permissionControlFrom(envelope(ext(control({ status: "applying" })))),
@@ -940,45 +981,31 @@ describe("permissionControlFrom per-status field table (ふじ round 1 M2)", () 
     expect(permissionControlFrom(envelope(ext(pc)))).toBeNull();
   });
 
-  it("reads an explicit null as absent rather than as a malformed value", () => {
-    // JSON has no undefined, so a producer spelling "no rollback" as null
-    // must not fail the forbidden-field check on a pending record.
-    const pc = control({ reason: null, rolled_back_to: null });
-    expect(permissionControlFrom(envelope(ext(pc)))?.status).toBe("pending");
-  });
 });
 
-describe("ack / control precedence at one revision (issue #305 D)", () => {
-  it("keeps the control authoritative when both sit at the same revision", async () => {
-    // The mark stops the display moving backwards; it does not move push
-    // authority to the ack. At an equal revision AND an equal progress
-    // rank neither outranks the other, so the tie has to be decided, and
-    // the server's control is what decides it. The two carry different
-    // requested pairs here purely so the winner is observable.
-    const { target, props } = await render(reviewExt(), {
-      onSetPermission: vi.fn(async () => ({
-        revision: 5,
-        status: "pending" as const,
-        requested: { sandbox: "read-only", network_access: false },
-      })),
+describe("Fuji round 2 contract boundaries", () => {
+  it.each(["sandbox", "approval", "enforcement"])("rejects an unknown observation axis %s", async axis => {
+    const pc = structuredClone(observedControl(9)) as any;
+    pc.effective.permission[axis] = "not-a-policy";
+    const {target} = await render(reviewExt(pc));
+    expect(rowByLabel(target, "権限要求")?.textContent ?? "").not.toContain("適用済み");
+    expect(permissionControlFrom(envelope(reviewExt(pc)))).toBeNull();
+  });
+  it.each([["applying", "revision"], ["unknown", "revision"], ["applying", "requested"], ["unknown", "requested"]])("rejects %s bound to a different submitted %s", async (status, field) => {
+    const pc = conformingControl(status) as any;
+    pc.submitted = field === "revision" ? {...pc.submitted, revision: 6} : {...pc.submitted, requested: {sandbox: "read-only", network_access: true}};
+    const {target} = await render(reviewExt(pc));
+    expect(rowByLabel(target, "権限要求")).toBeNull();
+  });
+  it.each(["reason", "rolled_back_to", "submitted", "effective"])("does not treat null %s as an omitted pending field", key => {
+    const pc = control({[key]: null});
+    expect(permissionControlFrom(envelope(reviewExt(pc)))).toBeNull();
+  });
+  it("preserves control precedence at equal revision and rank", async () => {
+    const {target} = await render(reviewExt(control({revision: 9})), {
+      onSetPermission: vi.fn(async () => ({revision:9,status:"pending",requested:{sandbox:"read-only",network_access:false}}))
     });
-    await reviewPick(target);
-    await tick();
-    expect(rowByLabel(target, "権限要求")?.textContent).toContain("read-only");
-
-    props.envelope = envelope(
-      reviewExt(
-        control({
-          revision: 5,
-          status: "pending",
-          requested: { sandbox: "workspace-write", network_access: true },
-        }),
-      ),
-    );
-    await tick();
-
-    const dd = rowByLabel(target, "権限要求");
-    expect(dd?.textContent).toContain("workspace-write");
-    expect(dd?.textContent).not.toContain("read-only");
+    await reviewPick(target); await tick();
+    expect(rowByLabel(target, "権限要求")?.textContent).toContain("workspace-write");
   });
 });
