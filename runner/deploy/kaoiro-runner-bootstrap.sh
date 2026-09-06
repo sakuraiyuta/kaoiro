@@ -149,6 +149,13 @@ reject_tar_unsafe_root() {
 
 render_systemd_unit() {
   # $1 = install root
+  # DEFENSE IN DEPTH, not this script's own path to a newline-containing
+  # root: reject_tar_unsafe_root (called once, right after $root gets its
+  # final value, before either plan_* or apply_* ever run) already rejects
+  # that for every caller of this function. Kept in case a future caller
+  # reaches render_* directly and bypasses that check; NOT independently
+  # pinned by a test — the CLI's own call graph has no route to this
+  # returning 1 as of round-3 review.
   reject_newline "install root" "$1" || return 1
   sed "s|@@DEPLOY_DIR@@|$(sed_escape_replacement "$1/current/deploy")|" \
     "$deploy_dir/kaoiro-runner.service"
@@ -156,6 +163,11 @@ render_systemd_unit() {
 
 render_launchd_plist() {
   # $1 = install root
+  # Same defense-in-depth / unreachable-via-the-CLI status as
+  # render_systemd_unit's own reject_newline above: $root is validated by
+  # reject_tar_unsafe_root and $HOME by the post-OS-branch reject_newline
+  # call, both before plan_launchd/apply_launchd ever call this. Neither
+  # call below is independently pinned.
   reject_newline "install root" "$1" || return 1
   reject_newline HOME "$HOME" || return 1
   sed -e "s|@@DEPLOY_DIR@@|$(sed_escape_replacement "$1/current/deploy")|" \
@@ -197,6 +209,11 @@ apply_systemd() {
   _unit_path="$_unit_dir/kaoiro-runner.service"
   mkdir -p "$_unit_dir"
   _new="$_unit_dir/.kaoiro-runner.service.new.$$"
+  # The reject_newline-triggered branch of this failure is unreachable
+  # through the CLI as of round-3 review (see render_systemd_unit's own
+  # comment) and not independently pinned; a missing/unreadable
+  # $deploy_dir/kaoiro-runner.service (sed's OTHER failure mode) is a
+  # separate, still-live trigger for the same _new cleanup.
   render_systemd_unit "$_root" >"$_new" ||
     { rm -f "$_new"; kaoiro_die "failed to render $_unit_path" 70; }
   _changed=yes
@@ -225,6 +242,8 @@ apply_launchd() {
   mkdir -p "$_agents_dir"
   _plist_path="$_agents_dir/com.kaoiro.runner.plist"
   _new="$_agents_dir/.com.kaoiro.runner.plist.new.$$"
+  # Same unreachable-via-the-CLI / not-independently-pinned status as
+  # apply_systemd's own comment above.
   render_launchd_plist "$_root" >"$_new" ||
     { rm -f "$_new"; kaoiro_die "failed to render $_plist_path" 70; }
   _changed=yes
@@ -261,20 +280,6 @@ while [ $# -gt 0 ]; do
     --install-dir)
       [ $# -ge 2 ] || kaoiro_die "--install-dir needs a value" 64
       kaoiro_reject_option_like --install-dir "$2"
-      # Round-2 review N-3: rejecting this HERE, not only inside
-      # render_systemd_unit/render_launchd_plist, is what makes --dry-run
-      # catch it too. plan_systemd/plan_launchd only call render_* to
-      # DIFF against an existing unit/plist file (`[ -e "$_unit_path" ] &&
-      # render_... | cmp`); on a fresh host that file does not exist yet,
-      # so the `&&` short-circuits and render_* — and its own reject_newline
-      # — is never reached. Without this, --dry-run printed a clean plan
-      # and exited 0 for a root a real run would later reject at exit 70,
-      # well after the wizard/install/switch had already run. round-2's
-      # follow-up (N-3 addendum) widens this to reject_tar_unsafe_root: a
-      # backslash is also unsafe here, for a reason specific to the
-      # INSTALL side (tar's own -C argument handling), not the render side
-      # reject_newline alone was written for — see that function's comment.
-      reject_tar_unsafe_root "install root" "$2" || exit 64
       root=$2
       shift 2
       ;;
@@ -304,6 +309,22 @@ done
 [ -n "$tarball" ] ||
   kaoiro_die "usage: $prog <tarball> [--install-dir <dir>] [--reconfigure] [--dry-run]" 64
 [ -n "$root" ] || root=$(kaoiro_install_root)
+
+# Round-3 review must: this check used to sit INSIDE the --install-dir case
+# arm above, which only ever validated a root that arrived via an EXPLICIT
+# --install-dir. production.md's own instructions never pass --install-dir,
+# so the actual, documented default path — root computed by
+# kaoiro_install_root() from KAOIRO_RUNNER_INSTALL_DIR / $HOME / XDG_DATA_HOME
+# — went completely unchecked (measured: a newline in XDG_DATA_HOME produced
+# a clean --dry-run plan and exit 0). Checking HERE, once root has its final
+# value regardless of where it came from, is what makes both paths land on
+# the same rule — rejecting this HERE, not only inside
+# render_systemd_unit/render_launchd_plist, is also what makes --dry-run
+# catch it: plan_systemd/plan_launchd only call render_* to DIFF against an
+# existing unit/plist file (`[ -e "$_unit_path" ] && render_... | cmp`), and
+# on a fresh host that file does not exist yet, so the `&&` short-circuits
+# and render_* is never reached.
+reject_tar_unsafe_root "install root" "$root" || exit 64
 
 # --------------------------------------------------------------- OS branch --
 # Decided ONCE, up front: every later step (unit vs plist, systemctl vs

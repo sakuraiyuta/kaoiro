@@ -299,6 +299,60 @@ describe("kaoiro-runner-bootstrap.sh (issue #314)", () => {
       expect(result.stderr).toContain("must not contain a newline or backslash");
       expect(result.stderr).not.toContain("would write");
     });
+
+    // Round-3 review must: the checks above only ever exercised an
+    // EXPLICIT --install-dir. production.md's own instructions never pass
+    // it, so the actual default path — root computed by
+    // kaoiro_install_root() from KAOIRO_RUNNER_INSTALL_DIR / $HOME /
+    // XDG_DATA_HOME — went completely unchecked before this round: a
+    // newline in XDG_DATA_HOME produced a clean plan and exit 0 (measured
+    // by クロエ). These bypass the `bootstrap()` helper (which always
+    // passes --install-dir) and call runScript directly, so root is
+    // resolved the DEFAULT way.
+    it("--install-dir 省略時、既定 root の由来(XDG_DATA_HOME)の改行も拒否する(issue #314 round3 must)", () => {
+      const weirdXdgData = join(dir, "xdg-data-with\nnewline");
+
+      const result = runScript(bootstrapScript, ["/nonexistent.tar.gz", "--dry-run"], {
+        HOME: home,
+        KAOIRO_RUNNER_DIR: configDir,
+        KAOIRO_UNAME: "Linux",
+        XDG_DATA_HOME: weirdXdgData,
+      });
+
+      expect(result.status).toBe(64);
+      expect(result.stderr).toContain("must not contain a newline or backslash");
+      expect(result.stderr).not.toContain("would write");
+    });
+
+    it("--install-dir 省略時、既定 root の由来(KAOIRO_RUNNER_INSTALL_DIR)の \\ も拒否する(issue #314 round3 must)", () => {
+      const weirdInstallDir = join(dir, "install-dir-a\\1b");
+
+      const result = runScript(bootstrapScript, ["/nonexistent.tar.gz", "--dry-run"], {
+        HOME: home,
+        KAOIRO_RUNNER_DIR: configDir,
+        KAOIRO_UNAME: "Linux",
+        KAOIRO_RUNNER_INSTALL_DIR: weirdInstallDir,
+      });
+
+      expect(result.status).toBe(64);
+      expect(result.stderr).toContain("must not contain a newline or backslash");
+      expect(result.stderr).not.toContain("would write");
+    });
+
+    it("$HOME に改行があっても --dry-run で exit 64 拒否する(issue #314 round2 N-3、自動テスト追加分)", () => {
+      const weirdHome = join(dir, "home-with\nnewline");
+      mkdirSync(weirdHome, { recursive: true });
+
+      const result = runScript(
+        bootstrapScript,
+        ["--install-dir", root, "/nonexistent.tar.gz", "--dry-run"],
+        { HOME: weirdHome, KAOIRO_RUNNER_DIR: configDir, KAOIRO_UNAME: "Linux" },
+      );
+
+      expect(result.status).toBe(64);
+      expect(result.stderr).toContain("HOME must not contain a newline");
+      expect(result.stderr).not.toContain("would write");
+    });
   });
 
   describe("OS 分岐", () => {
@@ -357,6 +411,30 @@ describe("kaoiro-runner-bootstrap.sh (issue #314)", () => {
       const linuxConfigDir = join(home, ".config", "kaoiro");
       expect(result.stderr).toContain(darwinConfigDir);
       expect(result.stderr).not.toContain(linuxConfigDir);
+    });
+
+    it("kaoiro_install_root も KAOIRO_UNAME seam を使い、既定 root が os 判定と食い違わない(issue #314 round3 nit)", () => {
+      // Same class of regression this file already pins for
+      // kaoiro_config_dir (above), for kaoiro_install_root: before round-3
+      // it called bare `uname -s`, so on this (Linux) CI host, os (from
+      // KAOIRO_UNAME=Darwin) and the DEFAULT install root (from the real
+      // kernel) could disagree about which OS a run is for. --install-dir
+      // is omitted so kaoiro_install_root's own branch actually runs.
+      const revision = revisionOf("bootstrap-darwin-install-root-parity");
+      const archive = makeReleaseTarball(work, revision);
+
+      const result = runScript(bootstrapScript, [archive, "--dry-run"], {
+        HOME: home,
+        KAOIRO_RUNNER_DIR: configDir,
+        KAOIRO_UNAME: "Darwin",
+        KAOIRO_LAUNCHCTL: launchctlStub({ loaded: false }),
+      });
+
+      expect(result.status).toBe(0);
+      const darwinInstallRoot = join(home, "Library", "Application Support", "kaoiro");
+      const linuxInstallRoot = join(home, ".local", "share", "kaoiro");
+      expect(result.stderr).toContain(`install root: ${darwinInstallRoot}`);
+      expect(result.stderr).not.toContain(linuxInstallRoot);
     });
   });
 

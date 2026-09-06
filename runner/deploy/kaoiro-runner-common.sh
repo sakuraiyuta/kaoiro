@@ -26,6 +26,14 @@ kaoiro_die() {
 # platform's only per-user location for both, and Apple has no XDG-style data
 # / config split. The entry names do not collide (releases/, current,
 # previous vs runner.config.json, runner.env).
+#
+# `${KAOIRO_UNAME:-$(uname -s)}` (issue #314 round-3 nit) — the same seam
+# kaoiro_config_dir below already uses, and kaoiro-runner-bootstrap.sh uses
+# for its own `os` decision, so all three read one OS opinion. A bare
+# `uname -s` here would have let a test (or a host) force one OS via
+# KAOIRO_UNAME while this function still asked the real kernel, so
+# bootstrap.sh's `os`-driven branch (systemd vs launchd) and its DEFAULT
+# install root could disagree about which OS this run is for.
 kaoiro_install_root() {
   if [ -n "${KAOIRO_RUNNER_INSTALL_DIR:-}" ]; then
     printf '%s\n' "$KAOIRO_RUNNER_INSTALL_DIR"
@@ -33,7 +41,7 @@ kaoiro_install_root() {
   fi
   [ -n "${HOME:-}" ] ||
     kaoiro_die "HOME is unset; pass --install-dir or set KAOIRO_RUNNER_INSTALL_DIR"
-  if [ "$(uname -s)" = "Darwin" ]; then
+  if [ "${KAOIRO_UNAME:-$(uname -s)}" = "Darwin" ]; then
     printf '%s\n' "$HOME/Library/Application Support/kaoiro"
   else
     printf '%s\n' "${XDG_DATA_HOME:-$HOME/.local/share}/kaoiro"
