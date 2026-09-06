@@ -13,6 +13,13 @@ defmodule KaoiroServer.DetsStorePath do
   is also absent from the canonical list it escapes docker-compose, the
   sample `.env` and the backup set at the same time, silently. That is
   issue #217 (the user ledger), so it fails at the call instead.
+
+  Passing an explicit `:path` does not avoid this: every store resolves its
+  path as `Keyword.get(opts, :path, default_path())`, whose default is
+  evaluated eagerly, so an undeclared filename raises even when the caller
+  never uses the result. Declare the store in `PersistencePaths` — do not
+  route around the check with `Keyword.get_lazy/3`, which would reopen
+  exactly the silent escape above.
   """
   def default_path(filename) when is_binary(filename) do
     if not declared?(filename) do
@@ -20,7 +27,8 @@ defmodule KaoiroServer.DetsStorePath do
             "#{filename} is not declared in KaoiroServer.PersistencePaths. " <>
               "A DETS store missing from that list escapes docker-compose, " <>
               "server/.env.example and the backup set (issue #217). Add an " <>
-              "entry there, or open the store with an explicit path."
+              "entry there. An explicit :path does not help — the default " <>
+              "is evaluated eagerly at every store's start_link."
     end
 
     Path.join([System.tmp_dir!(), @default_dir, filename])
