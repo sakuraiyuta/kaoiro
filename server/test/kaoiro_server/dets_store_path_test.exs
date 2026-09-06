@@ -8,6 +8,7 @@ defmodule KaoiroServer.DetsStorePathTest do
   alias KaoiroServer.DeliveryStates
   alias KaoiroServer.IngressOrder
   alias KaoiroServer.PermissionModes
+  alias KaoiroServer.PersistencePaths
   alias KaoiroServer.SessionPointers
   alias KaoiroServer.SessionStarts
   alias KaoiroServer.TokenDenylist
@@ -50,6 +51,26 @@ defmodule KaoiroServer.DetsStorePathTest do
 
     assert_raise ArgumentError, ~r/dedicated directory/, fn ->
       KaoiroServer.DetsStorePath.prepare_parent!(path)
+    end
+  end
+
+  # issue #217 class, second layer (クロエ #310 round 1 M-1). The test-time
+  # scan of the compiled artifact catches an undeclared store before it
+  # ships; this catches one at the moment it would actually place its file
+  # in the container's temporary directory — the deployment that loses the
+  # data on the next recreation.
+  test "default_path refuses a filename PersistencePaths does not declare" do
+    assert_raise ArgumentError, ~r/not declared in KaoiroServer\.PersistencePaths/, fn ->
+      KaoiroServer.DetsStorePath.default_path("undeclared_store.dets")
+    end
+  end
+
+  test "default_path resolves every declared store" do
+    for store <- PersistencePaths.stores() do
+      path = KaoiroServer.DetsStorePath.default_path(store.default_file)
+
+      assert Path.basename(path) == store.default_file
+      assert Path.type(path) == :absolute
     end
   end
 end

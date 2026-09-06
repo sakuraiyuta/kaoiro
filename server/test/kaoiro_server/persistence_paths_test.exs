@@ -50,15 +50,15 @@ defmodule KaoiroServer.PersistencePathsTest do
   # copy. The set comparison is the issue #217 guard: a store that resolves
   # through DetsStorePath but is missing from the list escapes compose, the
   # sample `.env` and the backup set at once.
-  test "every DetsStorePath fallback in lib is declared with the same file" do
-    fallbacks = dets_fallbacks_in_lib()
+  test "every DetsStorePath fallback in the app is declared with the same file" do
+    fallbacks = dets_fallbacks_in_app()
 
     declared =
       PersistencePaths.stores()
       |> Enum.map(&{&1.config_key, &1.default_file})
       |> MapSet.new()
 
-    assert MapSet.size(fallbacks) >= 12, "the source scan matched nothing"
+    assert MapSet.size(fallbacks) >= 12, "the artifact scan matched nothing"
 
     manifest = Map.new(PersistencePaths.manifest(), &{&1.store, &1})
 
@@ -92,18 +92,61 @@ defmodule KaoiroServer.PersistencePathsTest do
     end
   end
 
-  defp dets_fallbacks_in_lib do
-    pattern =
-      ~r/Application\.get_env\(:kaoiro_server, :([a-z_]+)\)\s*\|\|\s*KaoiroServer\.DetsStorePath\.default_path\("([^"]+)"\)/
+  # Reads the COMPILED artifact, never the source. A source regex only ever
+  # matches the spellings it was written for: the alias form
+  # (`DetsStorePath.default_path/1` after `alias`), a filename held in a
+  # module attribute, and `Application.get_env/3` all slipped past the
+  # previous one (クロエ #310 round 1 M-1, measured 2026-09-07). By the time
+  # a module is compiled, aliases are resolved to full atoms and attributes
+  # and macros are expanded, so this sees one canonical form regardless of
+  # how the store spells it.
+  defp dets_fallbacks_in_app do
+    modules = Application.spec(:kaoiro_server, :modules) || []
 
-    Path.expand("../../lib/kaoiro_server", __DIR__)
-    |> Path.join("**/*.ex")
-    |> Path.wildcard()
-    |> Enum.flat_map(fn file ->
-      pattern
-      |> Regex.scan(File.read!(file))
-      |> Enum.map(fn [_, key, filename] -> {String.to_atom(key), filename} end)
-    end)
+    modules
+    |> Enum.reject(&(&1 == PersistencePaths))
+    |> Enum.flat_map(&fallbacks_in/1)
     |> MapSet.new()
+  end
+
+  defp fallbacks_in(module) do
+    with beam when is_list(beam) <- :code.which(module),
+         {:ok, {_module, [debug_info: {:debug_info_v1, :elixir_erl, {:elixir_v1, info, _}}]}} <-
+           :beam_lib.chunks(beam, [:debug_info]) do
+      Enum.flat_map(info.definitions, &fallbacks_in_definition/1)
+    else
+      _ -> []
+    end
+  end
+
+  # Paired within one definition: every store resolves its fallback in the
+  # same function that reads its config key. An unpaired key (nil) or a
+  # computed filename (:non_literal) matches no declared entry and is
+  # therefore reported rather than skipped.
+  defp fallbacks_in_definition({_signature, _kind, _meta, clauses}) do
+    ast = Enum.map(clauses, &Tuple.to_list/1)
+    key = List.first(collect(ast, :config_key))
+
+    for file <- collect(ast, :fallback_file), do: {key, file}
+  end
+
+  @env_readers [:get_env, :fetch_env, :fetch_env!, :compile_env, :compile_env!]
+
+  defp collect(ast, what) do
+    {_ast, found} =
+      Macro.prewalk(ast, [], fn
+        {{:., _, [KaoiroServer.DetsStorePath, :default_path]}, _, [arg]} = node, acc
+        when what == :fallback_file ->
+          {node, [if(is_binary(arg), do: arg, else: :non_literal) | acc]}
+
+        {{:., _, [Application, reader]}, _, [:kaoiro_server, key | _]} = node, acc
+        when what == :config_key and reader in @env_readers and is_atom(key) ->
+          {node, [key | acc]}
+
+        node, acc ->
+          {node, acc}
+      end)
+
+    Enum.reverse(found)
   end
 end
