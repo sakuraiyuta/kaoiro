@@ -5781,7 +5781,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     assert_reply ref, :ok
 
     entry = KaoiroServer.PermissionSettings.get(id)
-    assert entry.control.status == :unknown
+    assert entry.control.status == :failed
     assert entry.control.reason == "policy_mismatch"
 
     # The forged danger-full-access/true pair must never reach the resume
