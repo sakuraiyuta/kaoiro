@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
 
 import { DEFAULT_CONFIG } from "../kaoiro-deploy-config.mjs";
 import { readJournal } from "../kaoiro-deploy-journal.mjs";
+import { readManifest } from "../kaoiro-deploy-manifest.mjs";
 import {
   DeployError,
   hasPriorTransactions,
@@ -32,7 +34,8 @@ case "$1" in
     case "$2" in
       ps)
         case "$FAKE_DOCKER_SCENARIO" in
-          stopped|running|running-clean-stop|running-no-mount) printf 'kaoiro-c1\\n' ;;
+          stopped|running|running-clean-stop|running-no-mount|running-empty-vol|running-broken-archive)
+            printf 'kaoiro-c1\\n' ;;
         esac
         ;;
       build|up|stop) exit 0 ;;
@@ -44,24 +47,25 @@ case "$1" in
       '{{.State.Status}}')
         case "$FAKE_DOCKER_SCENARIO" in
           stopped) printf 'exited\\n' ;;
-          running|running-clean-stop|running-no-mount) printf 'running\\n' ;;
+          running|running-clean-stop|running-no-mount|running-empty-vol|running-broken-archive)
+            printf 'running\\n' ;;
         esac
         ;;
       '{{.State.ExitCode}}')
         case "$FAKE_DOCKER_SCENARIO" in
-          running-clean-stop|running-no-mount) printf '0\\n' ;;
+          running-clean-stop|running-no-mount|running-empty-vol|running-broken-archive) printf '0\\n' ;;
           *) printf 'unknown\\n' ;;
         esac
         ;;
       '{{.State.OOMKilled}}')
         case "$FAKE_DOCKER_SCENARIO" in
-          running-clean-stop|running-no-mount) printf 'false\\n' ;;
+          running-clean-stop|running-no-mount|running-empty-vol|running-broken-archive) printf 'false\\n' ;;
           *) printf 'unknown\\n' ;;
         esac
         ;;
       '{{range .Mounts}}{{if eq .Destination "/var/lib/kaoiro"}}{{.Name}}{{end}}{{end}}')
         case "$FAKE_DOCKER_SCENARIO" in
-          running-clean-stop) printf 'kaoiro_kaoiro-state\\n' ;;
+          running-clean-stop|running-empty-vol|running-broken-archive) printf 'kaoiro_kaoiro-state\\n' ;;
           running-no-mount) ;;
         esac
         ;;
@@ -69,9 +73,50 @@ case "$1" in
       *) printf 'sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\\n' ;;
     esac
     ;;
+  run)
+    case "$*" in
+      *"tar czf"*)
+        # Real archive step: write an actual (empty but valid) tar.gz at
+        # the host path the -v ...:/backup mapping names, so the CLI's
+        # own host-side \`tar tzf\` verification has something real to
+        # check — a fake stdout string would not survive that.
+        prev=""
+        hostdir=""
+        for arg in "$@"; do
+          case "$prev" in
+            -v)
+              case "$arg" in
+                *:/backup) hostdir=\${arg%:/backup} ;;
+              esac
+              ;;
+          esac
+          prev=$arg
+        done
+        if [ -n "$hostdir" ]; then
+          case "$FAKE_DOCKER_SCENARIO" in
+            running-broken-archive) printf 'not a real gzip stream' > "$hostdir/archive.tar.gz" ;;
+            *) tar czf "$hostdir/archive.tar.gz" -T /dev/null ;;
+          esac
+        fi
+        exit 0
+        ;;
+      *)
+        # Volume listing (stat -c '%n %u:%g %a' /data/*).
+        case "$FAKE_DOCKER_SCENARIO" in
+          running-clean-stop|running-broken-archive) printf '/data/users.dets 1000:1000 600\\n' ;;
+          running-empty-vol) ;;
+        esac
+        exit 0
+        ;;
+    esac
+    ;;
   start) exit 0 ;;
 esac
 `;
+
+function sha256File(path) {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
 
 function initRepo(dir) {
   mkdirSync(dir, { recursive: true });
@@ -296,19 +341,48 @@ test("runUpdate stops at the maintenance gate without --maintenance-approved, bu
   assert.equal(journal.phase, "build_prepared");
 });
 
-test("runUpdate completes through MOUNT_RESOLVED with --maintenance-approved and a clean stop", () => {
+test("runUpdate completes through ARCHIVED with --maintenance-approved and a clean stop", () => {
   const result = withScenario("running-clean-stop", () =>
     runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
   );
-  assert.equal(result.phase, "mount_resolved");
+  assert.equal(result.phase, "archived");
   assert.equal(result.oldImageId, "sha256:oldimageid");
   assert.equal(result.build.imageTag, `kaoiro-server:${headSha}`);
   assert.equal(result.stopExitCode, 0);
   assert.equal(result.stopOomKilled, false);
   assert.equal(result.volumeId, "kaoiro_kaoiro-state");
+  assert.equal(result.requiredEntries.length, 1);
+  assert.deepEqual(result.requiredEntries[0], { path: "users.dets", owner: "1000:1000", mode: "0600" });
+  assert.equal(existsSync(result.archive.path), true);
+  assert.equal(result.archive.sha256, sha256File(result.archive.path));
   const backupRoot = join(root, "kaoiro-deploy");
   const journal = readJournal(join(backupRoot, result.transactionId));
-  assert.equal(journal.phase, "mount_resolved");
+  assert.equal(journal.phase, "archived");
+  const manifest = readManifest(join(backupRoot, result.transactionId));
+  assert.equal(manifest.volume_id, "kaoiro_kaoiro-state");
+  assert.equal(manifest.image_id, result.build.imageId);
+  assert.equal(manifest.source_sha, headSha);
+  assert.deepEqual(manifest.required_entries, result.requiredEntries);
+});
+
+test("runUpdate refuses to archive an empty volume", () => {
+  assert.throws(
+    () =>
+      withScenario("running-empty-vol", () =>
+        runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+      ),
+    DeployError,
+  );
+});
+
+test("runUpdate refuses when the archive fails full-traversal verification", () => {
+  assert.throws(
+    () =>
+      withScenario("running-broken-archive", () =>
+        runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+      ),
+    DeployError,
+  );
 });
 
 test("runUpdate refuses to proceed when the mount cannot be resolved after stopping", () => {
@@ -347,7 +421,7 @@ test("runUpdate resumes a gated transaction via --transaction without rebuilding
       configWithCleanStopMeasured(),
     ),
   );
-  assert.equal(result.phase, "mount_resolved");
+  assert.equal(result.phase, "archived");
   assert.equal(result.transactionId, transactionId);
 });
 
