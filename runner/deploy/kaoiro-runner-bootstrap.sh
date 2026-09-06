@@ -114,6 +114,39 @@ reject_newline() {
   return 1
 }
 
+# The install root is not only substituted into sed (render_systemd_unit /
+# render_launchd_plist's own escape closes that) — it is ALSO passed
+# verbatim as `--install-dir` to kaoiro-runner-install.sh, which hands a
+# path under it to `tar xzf ... -C "$staging"`. GNU tar expands ITS OWN
+# table of backslash escapes in a `-C` argument before opening it (measured
+# live against GNU tar 1.35: `\1` -> the octal byte 0x01, `\n` -> a literal
+# newline, `\\` fails outright — a real, on-disk directory spelling one of
+# these becomes unopenable under its own name), while bsdtar (macOS) does
+# not, so the SAME install root would behave differently per OS depending
+# on what it happens to contain. Round-1's escaping closes the RENDER side
+# of `\`; this closes the INSTALL side by rejecting it outright rather than
+# trying to track tar's escape table.
+#
+# Rejecting EVERY backslash — not just the handful tar's table currently
+# recognises (a value like `a\zb` passes through tar untouched today) — is
+# deliberate over-approximation: the set that happens to survive is an
+# accident of tar's escape table, not a contract this script can rely on
+# staying stable across GNU tar versions or matching bsdtar's own behavior.
+reject_tar_unsafe_root() {
+  # $1 = label, $2 = value
+  _tar_unsafe=no
+  [ "$(printf '%s' "$2" | wc -l)" -eq 0 ] || _tar_unsafe=yes
+  case $2 in
+    *\\*) _tar_unsafe=yes ;;
+  esac
+  if [ "$_tar_unsafe" = no ]; then
+    return 0
+  fi
+  printf '%s: %s must not contain a newline or backslash: GNU tar expands backslash escapes in -C and bsdtar does not, so the same value would behave differently per OS: %s\n' \
+    "$prog" "$1" "$2" >&2
+  return 1
+}
+
 render_systemd_unit() {
   # $1 = install root
   reject_newline "install root" "$1" || return 1
@@ -236,8 +269,12 @@ while [ $# -gt 0 ]; do
       # so the `&&` short-circuits and render_* — and its own reject_newline
       # — is never reached. Without this, --dry-run printed a clean plan
       # and exited 0 for a root a real run would later reject at exit 70,
-      # well after the wizard/install/switch had already run.
-      reject_newline "install root" "$2" || exit 64
+      # well after the wizard/install/switch had already run. round-2's
+      # follow-up (N-3 addendum) widens this to reject_tar_unsafe_root: a
+      # backslash is also unsafe here, for a reason specific to the
+      # INSTALL side (tar's own -C argument handling), not the render side
+      # reject_newline alone was written for — see that function's comment.
+      reject_tar_unsafe_root "install root" "$2" || exit 64
       root=$2
       shift 2
       ;;

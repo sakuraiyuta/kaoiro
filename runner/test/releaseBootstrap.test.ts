@@ -280,6 +280,25 @@ describe("kaoiro-runner-bootstrap.sh (issue #314)", () => {
       expect(result.stderr).toContain("must not contain a newline");
       expect(result.stderr).not.toContain("would write");
     });
+
+    it("install root に \\ を含む場合も render まで進まず exit 64 で拒否する(issue #314 round2 N-3 追補)", () => {
+      // クロエ's live measurement against GNU tar 1.35: `-C`'s argument goes
+      // through tar's OWN backslash-escape table before
+      // kaoiro-runner-install.sh's `tar xzf ... -C "$staging"` ever runs
+      // (`\1` -> octal 0x01, `\n` -> a literal newline, `\\` fails
+      // outright), while bsdtar (macOS) does not — so the SAME install
+      // root would behave differently per OS. This rejects EVERY
+      // backslash outright (not just the ones tar's table currently
+      // recognises) rather than tracking that table; the $HOME-via-`\`
+      // escape test above stays as-is, since $HOME never reaches tar.
+      const weirdRoot = join(dir, "install-root-a\\1b");
+
+      const result = bootstrap(["/nonexistent.tar.gz", "--dry-run"], {}, weirdRoot);
+
+      expect(result.status).toBe(64);
+      expect(result.stderr).toContain("must not contain a newline or backslash");
+      expect(result.stderr).not.toContain("would write");
+    });
   });
 
   describe("OS 分岐", () => {
