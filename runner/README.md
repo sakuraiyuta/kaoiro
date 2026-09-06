@@ -103,6 +103,16 @@ Codex を選んだ場合はその auth mode / トークン / node の絶対パ�
 
 ホスト常駐用のサービス定義は [`deploy/`](deploy) にある(issue #136)。
 
+**初回設置は `kaoiro-runner-bootstrap.sh <tarball>` の1本で完結する**(issue
+#314): wizard(対話はここだけ) → install → switch → unit/plist 配置 →
+enable/start を順に行う。OS は `uname -s` で自動判定(Linux は systemd user
+unit、macOS は launchd LaunchAgent)。冪等 — 既に config があれば wizard を
+スキップし(`--reconfigure` で強制、既存 config は退避してから上書き)、
+unit/plist の内容が変わっていなければ何もしない。稼働中サービスを黙って
+再起動することはなく、変更があれば再起動コマンドを表示するだけに留める。
+`--dry-run` で計画のみ表示。以下は個別 script を手で叩く場合の参照(更新は
+対象外、`kaoiro-runner-bootstrap.sh` は初回専用)。
+
 > **既に稼働している配備を新しいバージョンへ更新する手順**は
 > [docs/specs/deployment.md](../docs/specs/deployment.md) の「既存配備の更新」が
 > 正本。本節は初回の設置手順のみを扱う。更新は停止順序・DETS バックアップ・
@@ -110,6 +120,7 @@ Codex を選んだ場合はその auth mode / トークン / node の絶対パ�
 
 | ファイル | 用途 |
 |---|---|
+| [`deploy/kaoiro-runner-bootstrap.sh`](deploy/kaoiro-runner-bootstrap.sh) | 初回設置の単一 entry point。wizard → install → switch → unit/plist → enable/start |
 | [`deploy/kaoiro-runner-launch.sh`](deploy/kaoiro-runner-launch.sh) | 起動シム。env ファイル読込・config 解決・`exec` を集約 |
 | [`deploy/kaoiro-runner.service`](deploy/kaoiro-runner.service) | systemd **user** unit(Linux) |
 | [`deploy/com.kaoiro.runner.plist`](deploy/com.kaoiro.runner.plist) | launchd **LaunchAgent**(macOS) |

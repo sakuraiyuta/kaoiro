@@ -40,6 +40,27 @@ kaoiro_install_root() {
   fi
 }
 
+# The CONFIG dir (runner.config.json, runner.env) — kaoiro-runner-bootstrap.sh
+# (issue #314) is the first shell script that needs to know whether a host
+# is already configured, so this mirrors runner/src/setup.ts's own
+# resolveConfigDir() rather than shelling out to node just to ask it. KEEP
+# THE TWO IN SYNC: resolveConfigDir is the actual authority the wizard
+# writes through; this is pinned against it directly in
+# releaseBootstrap.test.ts (same env/platform in, same path out), not
+# assumed to match by construction.
+kaoiro_config_dir() {
+  if [ -n "${KAOIRO_RUNNER_DIR:-}" ]; then
+    printf '%s\n' "$KAOIRO_RUNNER_DIR"
+    return 0
+  fi
+  [ -n "${HOME:-}" ] || kaoiro_die "HOME is unset; set KAOIRO_RUNNER_DIR"
+  if [ "$(uname -s)" = "Darwin" ]; then
+    printf '%s\n' "$HOME/Library/Application Support/kaoiro"
+  else
+    printf '%s\n' "${XDG_CONFIG_HOME:-$HOME/.config}/kaoiro"
+  fi
+}
+
 # mkdir is atomic, so it doubles as the lock — the same mechanism
 # scripts/build-runner-tarball.sh already uses. A SIGKILLed run leaves the
 # dir behind and the next run says so rather than silently proceeding.

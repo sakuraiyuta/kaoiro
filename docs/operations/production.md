@@ -114,51 +114,27 @@ token/`.env`/nginx/VPN/OAuth detail this manual skips.
 ```
 
 Transfer the resulting `dist-tarball/kaoiro-runner-<rev>-<os>-<arch>.tar.gz`
-to the runner host, then:
+to the runner host, then run the bootstrap script — it detects the OS
+(systemd on Linux, launchd on macOS), and stops only for the setup wizard's
+own prompts (`host_id`, `server_url` — pair `server_url` with the
+`<host_id>:<token>` the server wizard issued in step 1; `wss://...` through
+nginx, or `ws://<PHX_HOST>:<PORT>/runner` for the direct-VPN deployment,
+1.5):
 
 ```sh
 tar xzf kaoiro-runner-<rev>-<os>-<arch>.tar.gz
 cd kaoiro-runner-<rev>-<os>-<arch>
+./deploy/kaoiro-runner-bootstrap.sh ../kaoiro-runner-<rev>-<os>-<arch>.tar.gz
+sudo loginctl enable-linger "$USER"   # Linux only — required to start at boot
 ```
 
-**Edit**: `runner.config.json` (`host_id`, `server_url`, `cwd_allowlist`) and
-`runner.env` (`KAOIRO_RUNNER_TOKEN`, paired with the `<host_id>:<token>` the
-server wizard issued in step 1) — generate both interactively:
+Safe to re-run (skips the wizard if already configured; `--reconfigure`
+forces it; `--dry-run` previews). macOS orchestration is not yet verified in
+production (issue #242).
 
-```sh
-./deploy/kaoiro-runner-setup.sh
-```
-
-`server_url` must be `wss://...` through nginx (a bare `ws://` gets redirected
-and the handshake fails) — the direct-VPN deployment (1.5) is the one
-exception, using `ws://<PHX_HOST>:<PORT>/runner`.
-
-**Run**: install as a managed release, activate it, and enable it as a
-service:
-
-```sh
-./deploy/kaoiro-runner-install.sh ../kaoiro-runner-<rev>-<os>-<arch>.tar.gz
-./deploy/kaoiro-runner-switch.sh <release-id>
-```
-
-Then enable the service — Linux (systemd user unit):
-
-```sh
-install_root="${XDG_DATA_HOME:-$HOME/.local/share}/kaoiro"
-sed "s|@@DEPLOY_DIR@@|$install_root/current/deploy|" \
-  "$install_root/current/deploy/kaoiro-runner.service" \
-  > ~/.config/systemd/user/kaoiro-runner.service
-systemctl --user daemon-reload
-systemctl --user enable --now kaoiro-runner
-sudo loginctl enable-linger "$USER"
-```
-
-macOS (launchd) uses `com.kaoiro.runner.plist` the same way — see
-[runner/README.md](../../runner/README.md#macoslaunchd-launchagent) (macOS
-orchestration is not yet verified in production, issue #242).
-
-Stuck? → [runner/README.md](../../runner/README.md) "常駐化" for the full
-systemd/launchd reference, exit codes, and log locations; deployment.md
+Stuck? → the per-script manual path (install/switch + systemd/launchd by
+hand), exit codes, and log locations are in
+[runner/README.md](../../runner/README.md) "常駐化"; deployment.md
 [2](../specs/deployment.md#2-deploy-runners-multiple-hosts) for the
 multi-host specifics.
 
