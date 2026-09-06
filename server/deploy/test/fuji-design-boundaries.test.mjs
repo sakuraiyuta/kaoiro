@@ -10,9 +10,13 @@ test('environment consistency values cannot be an array',()=>{
 test('observations cannot replace the authoritative transition phase',()=>{
  const dir=mkdtempSync('/tmp/fuji306-phase.');
  try{
+  // クロエ round 1 review SF-4: a `catch{return;}` here let the test pass
+  // vacuously if advancePhase threw for ANY reason — since journal.mjs's
+  // M2 fix nests `observation` under its own key, advancePhase must not
+  // throw for this input at all, so the outcome is stated directly.
   const journal={schema_version:1,transaction_id:'tx',phase:'prepare',history:[]};
-  let next;
-  try{next=advancePhase(dir,journal,'stopping',{phase:'healthy'});}catch{return;}
+  const next=advancePhase(dir,journal,'stopping',{phase:'healthy'});
+  assert.equal(next.phase,'stopping');
   assert.equal(next.history.at(-1).phase,next.phase);
  }finally{rmSync(dir,{recursive:true,force:true});}
 });

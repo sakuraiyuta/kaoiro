@@ -4,6 +4,7 @@
 // has a default from that decision, so a config file only needs to state
 // what it overrides.
 import { closeSync, fstatSync, openSync, readFileSync } from "node:fs";
+import { isAbsolute } from "node:path";
 
 export class ConfigError extends Error {}
 
@@ -39,7 +40,13 @@ export const DEFAULT_CONFIG = Object.freeze({
 
 const VALIDATORS = {
   allow_docker_override: (v) => typeof v === "boolean",
-  backup_root: (v) => v === null || (typeof v === "string" && v !== ""),
+  // クロエ round 1 review SF-6: a relative backup_root is not caught
+  // until well after the stop window opens (docker rejects a relative
+  // bind-mount source with exit 125, but only once the archive step
+  // tries to use it), and journal.json/manifest.json would still have
+  // been written to a cwd-relative directory by then. Absolute-only,
+  // checked here at config load, fails BEFORE anything is touched.
+  backup_root: (v) => v === null || (typeof v === "string" && v !== "" && isAbsolute(v)),
   keep_generations: (v) => Number.isInteger(v) && v >= 1,
   retention_days: (v) => Number.isInteger(v) && v >= 1,
   capacity_multiplier: (v) => Number.isInteger(v) && v >= 1,

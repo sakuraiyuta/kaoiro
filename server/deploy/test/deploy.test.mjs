@@ -16,25 +16,31 @@ import {
   runBuild,
   runStart,
   runUpdate,
+  VOLUME_LISTING_SCRIPT,
 } from "../kaoiro-server-deploy.mjs";
 
 // A single fake docker covering every branch runBuild/runStart/runUpdate
 // exercise: `compose build` / `compose stop` / `compose up -d --build` /
-// `tag` / `start` all succeed silently; `inspect ... --format {{.Id}}`
-// and `{{.Image}}` return fixed fake ids; `compose ps -a` / `inspect ...
-// --format {{.State.Status}}` / clean-stop fields / the mount lookup are
-// driven by FAKE_DOCKER_SCENARIO the same way test/branch.test.mjs's
-// fake does. FAKE_DOCKER_SCENARIO "running-clean-stop" additionally
-// reports a clean stop (exit 0, not OOM-killed) and a resolvable mount,
-// for the tests that exercise runUpdate all the way through
-// MOUNT_RESOLVED.
+// `tag` / `pull` / `start` all succeed silently; `inspect ... --format
+// {{.Id}}` and `{{.Image}}` return fixed fake ids; `compose ps -a` /
+// `inspect ... --format {{.State.Status}}` / clean-stop fields / the
+// mount lookup are driven by FAKE_DOCKER_SCENARIO the same way
+// test/branch.test.mjs's fake does. FAKE_DOCKER_SCENARIO
+// "running-clean-stop" additionally reports a clean stop (exit 0, not
+// OOM-killed) and a resolvable mount, for the tests that exercise
+// runUpdate all the way through ARCHIVED.
+//
+// OLD_IMAGE_ID must be IMAGE_ID_RE-valid (クロエ round 1 review SF-1) —
+// all-hex, unlike the old "sha256:oldimageid" fixture.
+const OLD_IMAGE_ID = `sha256:${"0".repeat(64)}`;
 const FAKE_DOCKER = `#!/bin/sh
+if [ -n "$KAOIRO_TEST_CALL_LOG" ]; then printf '%s\\n' "$*" >> "$KAOIRO_TEST_CALL_LOG"; fi
 case "$1" in
   compose)
     case "$2" in
       ps)
         case "$FAKE_DOCKER_SCENARIO" in
-          stopped|running|running-clean-stop|running-no-mount|running-empty-vol|running-broken-archive)
+          stopped|running|running-clean-stop|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty)
             printf 'kaoiro-c1\\n' ;;
         esac
         ;;
@@ -42,44 +48,74 @@ case "$1" in
     esac
     ;;
   tag) exit 0 ;;
+  pull) exit 0 ;;
   inspect)
-    case "$4" in
-      '{{.State.Status}}')
+    case "$2" in
+      # Preflight image check (N-5): the missing-alpine scenario is the
+      # ONLY one where this fails, forcing ensureAlpineImage's pull.
+      alpine:3)
         case "$FAKE_DOCKER_SCENARIO" in
-          stopped) printf 'exited\\n' ;;
-          running|running-clean-stop|running-no-mount|running-empty-vol|running-broken-archive)
-            printf 'running\\n' ;;
+          alpine-missing) exit 1 ;;
+          *) printf 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\n' ;;
         esac
         ;;
-      '{{.State.ExitCode}}')
+      # Rollback-tag verify-by-inspect (MF-2): echoes back the SAME id
+      # \`{{.Image}}\` reports below, so every scenario that reaches the
+      # tag step passes its own read-back check — except
+      # running-tag-drift, which deliberately answers with a DIFFERENT
+      # id, simulating \`docker tag\` having silently pointed the tag
+      # somewhere other than what was asked (or \`latest\` having moved
+      # under it between the tag and the verify).
+      kaoiro-server:rollback-*)
         case "$FAKE_DOCKER_SCENARIO" in
-          running-clean-stop|running-no-mount|running-empty-vol|running-broken-archive) printf '0\\n' ;;
-          *) printf 'unknown\\n' ;;
+          running-tag-drift) printf 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\\n' ;;
+          *) printf '${OLD_IMAGE_ID}\\n' ;;
         esac
         ;;
-      '{{.State.OOMKilled}}')
-        case "$FAKE_DOCKER_SCENARIO" in
-          running-clean-stop|running-no-mount|running-empty-vol|running-broken-archive) printf 'false\\n' ;;
-          *) printf 'unknown\\n' ;;
+      *)
+        case "$4" in
+          '{{.State.Status}}')
+            case "$FAKE_DOCKER_SCENARIO" in
+              stopped) printf 'exited\\n' ;;
+              running|running-clean-stop|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty)
+                printf 'running\\n' ;;
+            esac
+            ;;
+          '{{.State.ExitCode}}')
+            case "$FAKE_DOCKER_SCENARIO" in
+              running-clean-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-archive-drifts-empty) printf '0\\n' ;;
+              running-dirty-stop) printf '137\\n' ;;
+              *) printf 'unknown\\n' ;;
+            esac
+            ;;
+          '{{.State.OOMKilled}}')
+            case "$FAKE_DOCKER_SCENARIO" in
+              running-clean-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-archive-drifts-empty) printf 'false\\n' ;;
+              running-dirty-stop) printf 'true\\n' ;;
+              *) printf 'unknown\\n' ;;
+            esac
+            ;;
+          '{{range .Mounts}}{{if eq .Destination "/var/lib/kaoiro"}}{{.Name}}{{end}}{{end}}')
+            case "$FAKE_DOCKER_SCENARIO" in
+              running-clean-stop|running-dirty-stop|running-empty-vol|running-broken-archive|alpine-missing|running-archive-drifts-empty) printf 'kaoiro_kaoiro-state\\n' ;;
+              running-no-mount) ;;
+            esac
+            ;;
+          '{{.Image}}') printf '${OLD_IMAGE_ID}\\n' ;;
+          *) printf 'sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\\n' ;;
         esac
         ;;
-      '{{range .Mounts}}{{if eq .Destination "/var/lib/kaoiro"}}{{.Name}}{{end}}{{end}}')
-        case "$FAKE_DOCKER_SCENARIO" in
-          running-clean-stop|running-empty-vol|running-broken-archive) printf 'kaoiro_kaoiro-state\\n' ;;
-          running-no-mount) ;;
-        esac
-        ;;
-      '{{.Image}}') printf 'sha256:oldimageid\\n' ;;
-      *) printf 'sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\\n' ;;
     esac
     ;;
   run)
     case "$*" in
       *"tar czf"*)
-        # Real archive step: write an actual (empty but valid) tar.gz at
-        # the host path the -v ...:/backup mapping names, so the CLI's
-        # own host-side \`tar tzf\` verification has something real to
-        # check — a fake stdout string would not survive that.
+        # Real archive step: write an actual tar.gz (with the same
+        # owner/mode metadata a real \`stat\` would report, via GNU tar's
+        # --owner/--group/--mode overrides — no root needed) at the host
+        # path the -v ...:/backup mapping names, so the CLI's own
+        # host-side \`tar tvzf\` verification has something real to
+        # parse — a fake stdout string would not survive that.
         prev=""
         hostdir=""
         for arg in "$@"; do
@@ -95,15 +131,29 @@ case "$1" in
         if [ -n "$hostdir" ]; then
           case "$FAKE_DOCKER_SCENARIO" in
             running-broken-archive) printf 'not a real gzip stream' > "$hostdir/archive.tar.gz" ;;
-            *) tar czf "$hostdir/archive.tar.gz" -T /dev/null ;;
+            # SF-5's post-archive empty check pin: the PRE-archive guard
+            # (below) reports non-empty, but the archive that actually
+            # gets written is empty — the one disagreement a stale/wrong
+            # pre-scan (not merely a hypothetical) would produce.
+            running-archive-drifts-empty)
+              mkdir -p "$hostdir/.fakesrc-empty"
+              tar --owner=0 --group=0 -czf "$hostdir/archive.tar.gz" -C "$hostdir/.fakesrc-empty" .
+              ;;
+            *)
+              mkdir -p "$hostdir/.fakesrc"
+              printf 'x' > "$hostdir/.fakesrc/users.dets"
+              tar --owner=1000 --group=1000 --mode=600 -czf "$hostdir/archive.tar.gz" -C "$hostdir/.fakesrc" .
+              ;;
           esac
         fi
         exit 0
         ;;
       *)
-        # Volume listing (stat -c '%n %u:%g %a' /data/*).
+        # Pre-archive empty-volume guard (find -mindepth 1 -maxdepth 1
+        # -exec stat -c '%n %u:%g %04a' {} \\;) — only whether anything is
+        # there, not what gets recorded (that comes from tar tvzf now).
         case "$FAKE_DOCKER_SCENARIO" in
-          running-clean-stop|running-broken-archive) printf '/data/users.dets 1000:1000 600\\n' ;;
+          running-clean-stop|running-dirty-stop|running-broken-archive|alpine-missing|running-archive-drifts-empty) printf '/data/users.dets 1000:1000 0600\\n' ;;
           running-empty-vol) ;;
         esac
         exit 0
@@ -195,6 +245,51 @@ function withScenario(scenario, fn) {
     else process.env.FAKE_DOCKER_SCENARIO = prior;
   }
 }
+
+// Captures every argv the fake docker was invoked with, one line each,
+// for tests that need to assert on WHICH calls did (or did not) happen —
+// MF-1's "records zero mutating calls" and N-5's "pulls alpine:3". `fn`
+// may throw (a caller inspecting only the call log, not the outcome,
+// e.g. N-5's pull check where runUpdate legitimately fails LATER for an
+// unrelated reason); the exception is swallowed here on purpose.
+function withCallLog(scenario, fn) {
+  const logPath = join(root, "docker-calls.log");
+  const prior = process.env.KAOIRO_TEST_CALL_LOG;
+  process.env.KAOIRO_TEST_CALL_LOG = logPath;
+  try {
+    withScenario(scenario, fn);
+  } catch {
+    // Intentionally ignored — see doc comment.
+  } finally {
+    if (prior === undefined) delete process.env.KAOIRO_TEST_CALL_LOG;
+    else process.env.KAOIRO_TEST_CALL_LOG = prior;
+  }
+  return existsSync(logPath) ? readFileSync(logPath, "utf8") : "";
+}
+
+// クロエ round 1 review MF-4 pin (a): runs the REAL script text (imported,
+// not hand-copied — see VOLUME_LISTING_SCRIPT's own doc comment) through
+// a real `sh -c`, no docker involved, against a real empty directory and
+// a real 1-file directory. `/data` is substituted for the test's own tmp
+// dir — the same "faithful against a real path" approach クロエ's own
+// repro-b.mjs used, since a bind mount to literally `/data` needs a
+// container this test does not have.
+test("the volume-listing script exits 0 with empty output on an empty dir, and one line on a populated one", () => {
+  const dir = mkdtempSync(join(tmpdir(), "kaoiro-306-volume-listing-"));
+  try {
+    const script = VOLUME_LISTING_SCRIPT.replace("/data", dir);
+    const empty = execFileSync("sh", ["-c", script], { encoding: "utf8" });
+    assert.equal(empty, "");
+
+    writeFileSync(join(dir, "users.dets"), "x");
+    const populated = execFileSync("sh", ["-c", script], { encoding: "utf8" });
+    const lines = populated.trim().split("\n");
+    assert.equal(lines.length, 1);
+    assert.ok(lines[0].startsWith(`${dir}/users.dets `));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test("parseArgs rejects a missing command", () => {
   assert.throws(() => parseArgs([]), DeployError);
@@ -297,6 +392,15 @@ test("runStart on branch B refuses to bootstrap over existing prior-transaction 
   );
 });
 
+// クロエ round 1 review SF-6: defense in depth alongside the config
+// VALIDATORS check — a config object built programmatically (as this
+// test does, and as any caller not going through loadConfig would) never
+// passes through that validator at all.
+test("runStart refuses a relative backup_root even when the config was not loaded from a file", () => {
+  const config = { ...configWithOverride(), backup_root: "relative/backup/dir" };
+  assert.throws(() => withOverrideEnv(() => runStart({ repo: workDir, initialize: true }, config)), DeployError);
+});
+
 test("runStart on branch C refuses without --initialize", () => {
   assert.throws(
     () => withOverrideEnv(() => runStart({ repo: workDir }, configWithOverride())),
@@ -327,6 +431,63 @@ test("runUpdate refuses when the container is not running", () => {
   );
 });
 
+// クロエ round 1 review MF-1: `update` silently ignored --dry-run and
+// performed the real stop/build/archive/transaction-dir-creation
+// sequence — reproduced live (repro.mjs) before this fix existed.
+test("runUpdate --dry-run performs no mutating docker call and creates no transaction dir", () => {
+  const backupRoot = join(root, "kaoiro-deploy");
+  const log = withCallLog("running", () =>
+    runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true, dryRun: true }, configWithOverride()),
+  );
+  const lines = log.trim().split("\n");
+  assert.ok(
+    lines.some((line) => line.startsWith("compose ps")),
+    "a read-only compose ps call should still happen",
+  );
+  for (const mutating of ["compose build", "compose stop", "compose up", "tag", "pull"]) {
+    assert.ok(
+      !lines.some((line) => line.startsWith(mutating)),
+      `dry-run must not call: ${mutating}`,
+    );
+  }
+  assert.ok(!log.includes("tar czf"), "dry-run must not archive");
+  assert.equal(existsSync(backupRoot), false, "dry-run must not create backup_root or any transaction dir");
+});
+
+test("runUpdate --dry-run reports the plan", () => {
+  const result = withScenario("running", () =>
+    runUpdate({ repo: workDir, target: headSha, dryRun: true }, configWithOverride()),
+  );
+  assert.equal(result.dryRun, true);
+  assert.equal(result.container, "kaoiro-c1");
+  assert.equal(result.unfinishedTransactionId, null);
+  assert.ok(result.wouldRun.some((line) => line.includes("compose stop")));
+});
+
+test("runUpdate --dry-run refuses --transaction", () => {
+  assert.throws(
+    () =>
+      withScenario("running", () =>
+        runUpdate({ repo: workDir, target: headSha, dryRun: true, transaction: "20260906T000000Z" }, configWithOverride()),
+      ),
+    DeployError,
+  );
+});
+
+// クロエ round 1 review N-5: alpine is pulled, pinned to alpine:3, during
+// preflight — before the stop window, not implicitly by the archive
+// step's first `docker run` after the server is already down.
+test("runUpdate pulls alpine:3 during preflight when it is not already present", () => {
+  const log = withCallLog("alpine-missing", () =>
+    runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithOverride()),
+  );
+  const stopIndex = log.indexOf("compose stop");
+  const pullIndex = log.indexOf("pull alpine:3");
+  assert.ok(pullIndex !== -1, "expected a pull of alpine:3");
+  assert.ok(stopIndex !== -1, "expected the run to reach compose stop");
+  assert.ok(pullIndex < stopIndex, "the pull must happen BEFORE compose stop, not after");
+});
+
 test("runUpdate stops at the maintenance gate without --maintenance-approved, but records prepare progress", () => {
   let caught;
   try {
@@ -346,7 +507,8 @@ test("runUpdate completes through ARCHIVED with --maintenance-approved and a cle
     runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
   );
   assert.equal(result.phase, "archived");
-  assert.equal(result.oldImageId, "sha256:oldimageid");
+  assert.equal(result.oldImageId, OLD_IMAGE_ID);
+  assert.equal(result.rollbackTag, `kaoiro-server:rollback-${result.oldSha}`);
   assert.equal(result.build.imageTag, `kaoiro-server:${headSha}`);
   assert.equal(result.stopExitCode, 0);
   assert.equal(result.stopOomKilled, false);
@@ -358,6 +520,8 @@ test("runUpdate completes through ARCHIVED with --maintenance-approved and a cle
   const backupRoot = join(root, "kaoiro-deploy");
   const journal = readJournal(join(backupRoot, result.transactionId));
   assert.equal(journal.phase, "archived");
+  const oldImageEntry = journal.history.find((e) => e.phase === "old_image_saved");
+  assert.equal(oldImageEntry.observation.rollback_tag, result.rollbackTag);
   const manifest = readManifest(join(backupRoot, result.transactionId));
   assert.equal(manifest.volume_id, "kaoiro_kaoiro-state");
   assert.equal(manifest.image_id, result.build.imageId);
@@ -365,10 +529,61 @@ test("runUpdate completes through ARCHIVED with --maintenance-approved and a cle
   assert.deepEqual(manifest.required_entries, result.requiredEntries);
 });
 
+test("runUpdate refuses to proceed past a dirty stop even with a measured expectation", () => {
+  // クロエ round 1 review SF-3: the clean-stop test above only ever
+  // exercises "expected present, observation absent (unknown)" via the
+  // OTHER unmeasured-expectation test below — this is the missing case,
+  // "expected present, observation present and DIFFERENT" (a real crash:
+  // exit 137, OOM-killed).
+  assert.throws(
+    () =>
+      withScenario("running-dirty-stop", () =>
+        runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+      ),
+    DeployError,
+  );
+});
+
+// クロエ round 1 review MF-2: the rollback tag is verified by reading it
+// BACK via `docker inspect`, not merely trusted because `docker tag`
+// exited 0 — a tag pointing somewhere other than the old image (a
+// `latest` race, an unexpected docker behavior) must stop the run before
+// `compose build` ever runs, not silently record an unusable rollback
+// target.
+test("runUpdate refuses when the rollback tag verification disagrees with the old image id", () => {
+  assert.throws(
+    () =>
+      withScenario("running-tag-drift", () => runUpdate({ repo: workDir, target: headSha }, configWithOverride())),
+    DeployError,
+  );
+  const backupRoot = join(root, "kaoiro-deploy");
+  const [transactionDir] = readdirSyncNonHidden(backupRoot);
+  const journal = readJournal(join(backupRoot, transactionDir));
+  // Stopped BEFORE the checkpoint that would have recorded the
+  // (unverifiable) rollback tag.
+  assert.equal(journal.phase, "preflight");
+});
+
 test("runUpdate refuses to archive an empty volume", () => {
   assert.throws(
     () =>
       withScenario("running-empty-vol", () =>
+        runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+      ),
+    DeployError,
+  );
+});
+
+// クロエ round 1 review SF-5's own note (MF-4): isValidRequiredEntries([])
+// is true, so a check that the ARCHIVE itself is non-empty is the only
+// thing that stops an empty archive being recorded as restorable — the
+// pre-archive volume-listing guard is a different scan and could
+// disagree (this scenario's archive ends up empty despite the pre-scan
+// reporting one file).
+test("runUpdate refuses when the archive itself ends up empty despite a non-empty pre-scan", () => {
+  assert.throws(
+    () =>
+      withScenario("running-archive-drifts-empty", () =>
         runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
       ),
     DeployError,
@@ -455,10 +670,20 @@ test("runUpdate refuses a second transaction while one is unfinished, and create
   );
   const backupRoot = join(root, "kaoiro-deploy");
   const before = readdirSyncNonHidden(backupRoot).length;
-  assert.throws(
-    () => withScenario("running", () => runUpdate({ repo: workDir, target: headSha }, configWithOverride())),
-    DeployError,
-  );
+  let caught;
+  try {
+    withScenario("running", () => runUpdate({ repo: workDir, target: headSha }, configWithOverride()));
+  } catch (err) {
+    caught = err;
+  }
+  assert.ok(caught instanceof DeployError);
+  // クロエ round 1 review MF-3: the reached phase is ARCHIVED — the
+  // commit half has already stopped the container, so `--transaction`'s
+  // own requireRunningContainer re-check could never succeed. The
+  // message must say so rather than send the operator into a guaranteed
+  // second failure.
+  assert.ok(!caught.message.includes("resume it with --transaction"));
+  assert.ok(caught.message.includes("no resume support yet"));
   // The count check is what actually pins the guard: without it, a
   // mutated guard that lets a second run through still ends up throwing
   // DeployError at its OWN maintenance gate, so `assert.throws` alone
@@ -468,6 +693,29 @@ test("runUpdate refuses a second transaction while one is unfinished, and create
     before,
     "a second transaction must not be created while one is unfinished",
   );
+});
+
+test("runUpdate's unfinished-transaction guidance still offers --transaction before the maintenance gate", () => {
+  // The COUNTERPART of the test above: a transaction that has NOT yet
+  // stopped the container is genuinely resumable, and must keep saying
+  // so — this is what MF-3's fix is phase-DEPENDENT, not a blanket
+  // rewording.
+  withScenario("running", () => {
+    try {
+      runUpdate({ repo: workDir, target: headSha }, configWithOverride());
+    } catch (err) {
+      assert.ok(err instanceof DeployError);
+    }
+  });
+  let caught;
+  try {
+    withScenario("running", () => runUpdate({ repo: workDir, target: headSha }, configWithOverride()));
+  } catch (err) {
+    caught = err;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.ok(caught.message.includes("resume it with --transaction"));
+  assert.ok(!caught.message.includes("no resume support yet"));
 });
 
 function readdirSyncNonHidden(dir) {

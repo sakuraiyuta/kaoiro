@@ -26,7 +26,13 @@ export const SHA256_RE = /^[0-9a-f]{64}$/;
 export const SHA_RE = /^[0-9a-f]{40}$/;
 export const IMAGE_ID_RE = /^sha256:[0-9a-f]{64}$/;
 const OWNER_RE = /^[0-9]+:[0-9]+$/;
-const MODE_RE = /^0[0-7]{3}$/;
+// クロエ round 1 review SF-7: `stat -c %a` omits the special-bits digit
+// when it is zero (a plain 644 file prints "644", but a setgid dir
+// prints "2755" — 4 digits, not 3) and prints a bare "0" for mode 000,
+// not "000". A fixed `0[0-7]{3}` shape can never represent either —
+// exactly 4 octal digits, no fixed leading zero, is what `%04a` (used at
+// the call site) actually produces.
+const MODE_RE = /^[0-7]{4}$/;
 
 export class ManifestError extends Error {}
 

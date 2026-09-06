@@ -52,6 +52,25 @@ test("loadConfig rejects an out-of-domain value", () => {
   assert.throws(() => loadConfig(path), ConfigError);
 });
 
+// クロエ round 1 review SF-6: a relative backup_root is not caught until
+// well after the stop window opens (docker rejects a relative bind-mount
+// source, but only once the archive step tries to use it) — reject it
+// here, at config load, instead.
+test("loadConfig rejects a relative backup_root", () => {
+  const path = join(dir, "config.json");
+  writeFileSync(path, JSON.stringify({ backup_root: "relative/path" }));
+  chmodSync(path, 0o600);
+  assert.throws(() => loadConfig(path), ConfigError);
+});
+
+test("loadConfig accepts an absolute backup_root", () => {
+  const path = join(dir, "config.json");
+  writeFileSync(path, JSON.stringify({ backup_root: "/var/lib/kaoiro-deploy" }));
+  chmodSync(path, 0o600);
+  const config = loadConfig(path);
+  assert.equal(config.backup_root, "/var/lib/kaoiro-deploy");
+});
+
 test("loadConfig rejects malformed JSON", () => {
   const path = join(dir, "config.json");
   writeFileSync(path, "not json");
