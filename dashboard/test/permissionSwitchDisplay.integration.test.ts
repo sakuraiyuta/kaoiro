@@ -50,10 +50,11 @@ function connection(): KaoiroConnection {
 function envelope(
   ext: Record<string, unknown>,
   state = "idle",
+  agentId = "host-a.p",
 ): Envelope {
   return {
     version: "0",
-    agent_id: "host-a.p",
+    agent_id: agentId,
     ts: "2026-09-06T00:00:00Z",
     type: "state_change",
     state,
@@ -351,6 +352,156 @@ describe("AgentDetail sandbox / network control (issue #305 D)", () => {
     });
     await tick();
     expect(rowByLabel(target, "権限要求")).toBeNull();
+  });
+
+  it("clears the request line and the error when the detail switches agent", async () => {
+    // AgentDetail is reused across agents rather than re-keyed, so local
+    // request state has to be dropped on the switch — otherwise one
+    // agent's pending revision and error text render under another's
+    // controls.
+    const ack: SetPermissionAck = {
+      revision: 5,
+      status: "pending",
+      requested: { sandbox: "read-only", network_access: false },
+    };
+    const { target, props } = await render(
+      { engine: "codex", session_capabilities: SWITCH_CAPS },
+      { onSetPermission: vi.fn(async () => ack) },
+    );
+    const dd = () => rowByLabel(target, "sandbox 変更");
+    (dd()?.querySelector(".cc-perm-switch") as HTMLButtonElement).click();
+    await tick();
+    const option = Array.from(
+      dd()?.querySelectorAll('[role="option"]') ?? [],
+    ).find((o) => o.textContent?.trim() === "read-only") as HTMLButtonElement;
+    option.click();
+    await tick();
+    await tick();
+    expect(rowByLabel(target, "権限要求")?.textContent).toContain("rev 5");
+
+    props.envelope = envelope(
+      { engine: "codex", session_capabilities: SWITCH_CAPS },
+      "idle",
+      "host-b.p",
+    );
+    await tick();
+    expect(rowByLabel(target, "権限要求")).toBeNull();
+  });
+
+  it("ignores a reply that lands after the detail switched agent", async () => {
+    // Clearing the state on switch is not enough while a reply is still in
+    // flight: the continuation resumes into a view showing another agent.
+    // Revisions are per-agent, so a leaked ack would also outrank the new
+    // agent's own control and suppress its real state.
+    let resolveAck: (value: SetPermissionAck | null) => void = () => {};
+    const pending = new Promise<SetPermissionAck | null>((resolve) => {
+      resolveAck = resolve;
+    });
+    const { target, props } = await render(
+      { engine: "codex", session_capabilities: SWITCH_CAPS },
+      { onSetPermission: vi.fn(() => pending) },
+    );
+    const dd = () => rowByLabel(target, "sandbox 変更");
+    (dd()?.querySelector(".cc-perm-switch") as HTMLButtonElement).click();
+    await tick();
+    const option = Array.from(
+      dd()?.querySelectorAll('[role="option"]') ?? [],
+    ).find((o) => o.textContent?.trim() === "read-only") as HTMLButtonElement;
+    option.click();
+    await tick();
+
+    props.envelope = envelope(
+      {
+        engine: "codex",
+        session_capabilities: SWITCH_CAPS,
+        permission_control: control({
+          revision: 2,
+          requested: { sandbox: "read-only", network_access: false },
+        }),
+      },
+      "idle",
+      "host-b.p",
+    );
+    await tick();
+    resolveAck({
+      revision: 42,
+      status: "pending",
+      requested: { sandbox: "danger-full-access", network_access: false },
+    });
+    await tick();
+    await tick();
+    const row = rowByLabel(target, "権限要求");
+    expect(row?.textContent).toContain("rev 2");
+    expect(row?.textContent).not.toContain("rev 42");
+    expect(row?.textContent).not.toContain("danger-full-access");
+  });
+
+  it("ignores a rejection that lands after the detail switched agent", async () => {
+    let rejectAck: (reason: unknown) => void = () => {};
+    const pending = new Promise<SetPermissionAck | null>((_resolve, reject) => {
+      rejectAck = reject;
+    });
+    const { target, props } = await render(
+      { engine: "codex", session_capabilities: SWITCH_CAPS },
+      { onSetPermission: vi.fn(() => pending) },
+    );
+    const dd = () => rowByLabel(target, "sandbox 変更");
+    (dd()?.querySelector(".cc-perm-switch") as HTMLButtonElement).click();
+    await tick();
+    const option = Array.from(
+      dd()?.querySelectorAll('[role="option"]') ?? [],
+    ).find((o) => o.textContent?.trim() === "read-only") as HTMLButtonElement;
+    option.click();
+    await tick();
+
+    props.envelope = envelope(
+      { engine: "codex", session_capabilities: SWITCH_CAPS },
+      "idle",
+      "host-b.p",
+    );
+    await tick();
+    rejectAck(new Error("forbidden"));
+    await tick();
+    await tick();
+    expect(rowByLabel(target, "権限要求エラー")).toBeNull();
+  });
+
+  it("does not let a slower ack overwrite a newer one", async () => {
+    // The control stays usable while a request is in flight, so two
+    // patches can be outstanding at once; the older reply must not roll
+    // the displayed revision back.
+    const acks: SetPermissionAck[] = [
+      {
+        revision: 9,
+        status: "pending",
+        requested: { sandbox: "read-only", network_access: false },
+      },
+      {
+        revision: 3,
+        status: "pending",
+        requested: { sandbox: "danger-full-access", network_access: false },
+      },
+    ];
+    let call = 0;
+    const { target } = await render(
+      { engine: "codex", session_capabilities: SWITCH_CAPS },
+      { onSetPermission: vi.fn(async () => acks[call++]!) },
+    );
+    const dd = () => rowByLabel(target, "sandbox 変更");
+    const pick = async (value: string) => {
+      (dd()?.querySelector(".cc-perm-switch") as HTMLButtonElement).click();
+      await tick();
+      const option = Array.from(
+        dd()?.querySelectorAll('[role="option"]') ?? [],
+      ).find((o) => o.textContent?.trim() === value) as HTMLButtonElement;
+      option.click();
+      await tick();
+      await tick();
+    };
+    await pick("read-only");
+    expect(rowByLabel(target, "権限要求")?.textContent).toContain("rev 9");
+    await pick("danger-full-access");
+    expect(rowByLabel(target, "権限要求")?.textContent).toContain("rev 9");
   });
 
   it("maps a rejection reason to UI text and shows an unmapped one raw", async () => {

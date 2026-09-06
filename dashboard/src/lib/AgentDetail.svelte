@@ -1271,6 +1271,15 @@
   let modelMenuOpen = $state(false);
   let effortMenuOpen = $state(false);
   let permMenuOpen = $state(false);
+  // issue #305: sibling popover / request state for the sandbox-network
+  // control. Declared here so the agent-switch reset effect below can clear
+  // it — the component is reused across agents, not re-keyed.
+  let sandboxMenuOpen = $state(false);
+  let permActionError = $state<string | null>(null);
+  // The server's ack, shown as a REQUESTED state until its own or a newer
+  // control state arrives. It never promotes an effective value: the ack
+  // confirms the saved request only.
+  let permAck = $state<SetPermissionAck | null>(null);
   let selectedEffort = $state<string | null>(null);
   // --- rename (issue #197 段階3 unit B) --------------------------------
   // Same popover shape as the model/effort/permission switchers above
@@ -1457,11 +1466,21 @@
       effortMenuOpen = false;
       permMenuOpen = false;
       renameMenuOpen = false;
+      sandboxMenuOpen = false;
+      permActionError = null;
+      permAck = null;
     }
   });
   // Close all popovers on a click outside any switch box.
   $effect(() => {
-    if (!modelMenuOpen && !effortMenuOpen && !permMenuOpen && !renameMenuOpen) return;
+    if (
+      !modelMenuOpen &&
+      !effortMenuOpen &&
+      !permMenuOpen &&
+      !renameMenuOpen &&
+      !sandboxMenuOpen
+    )
+      return;
     function onDocClick(event: MouseEvent): void {
       const target = event.target as HTMLElement | null;
       if (!target?.closest(".cc-switchbox")) {
@@ -1469,6 +1488,7 @@
         effortMenuOpen = false;
         permMenuOpen = false;
         renameMenuOpen = false;
+        sandboxMenuOpen = false;
       }
     }
     document.addEventListener("click", onDocClick);
@@ -1694,12 +1714,6 @@
     revision_exhausted: "revision を使い切りました",
     persistence_failed: "サーバ側の保存に失敗しました",
   };
-  let sandboxMenuOpen = $state(false);
-  let permActionError = $state<string | null>(null);
-  // The server's ack, shown as a REQUESTED state until its own or a newer
-  // control state arrives. It never promotes an effective value: the ack
-  // confirms the saved request only.
-  let permAck = $state<SetPermissionAck | null>(null);
   $effect(() => {
     const control = permControl;
     const ack = untrack(() => permAck);
@@ -1744,10 +1758,27 @@
     sandboxMenuOpen = false;
     if (onSetPermission === undefined) return;
     permActionError = null;
+    // The detail view is reused across agents rather than re-keyed, so
+    // this continuation owns nothing after its await: clearing the state
+    // on switch is not enough when a reply is still in flight. Both
+    // resumption points therefore re-check the displayed agent. A leaked
+    // ack would not merely mislabel a request — revisions are per-agent,
+    // so a foreign one also outranks the new agent's own ack and control
+    // and would suppress its real state.
+    const forAgent = envelope.agent_id;
     void (async () => {
       try {
-        permAck = await onSetPermission(envelope.agent_id, patch);
+        const ack = await onSetPermission(forAgent, patch);
+        if (envelope.agent_id !== forAgent) return;
+        // Two clicks can be in flight at once (the control stays usable
+        // while busy), so a slower reply must not overwrite a newer one.
+        // A null reply — an absent or malformed ack body — leaves the
+        // previous request line alone rather than blanking it.
+        if (ack !== null && (permAck === null || ack.revision >= permAck.revision)) {
+          permAck = ack;
+        }
       } catch (error) {
+        if (envelope.agent_id !== forAgent) return;
         const reason = error instanceof Error ? error.message : String(error);
         permActionError = PERMISSION_ERROR_TEXTS[reason] ?? reason;
       }

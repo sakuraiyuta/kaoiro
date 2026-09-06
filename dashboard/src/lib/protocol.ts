@@ -4549,7 +4549,6 @@ export function connectKaoiro(
     setPermission: async (agentId, patch) =>
       setPermissionAckOf(
         await pushAsyncReply(channel, "set_permission", {
-          version: "0",
           agent_id: agentId,
           ...patch,
         }),
