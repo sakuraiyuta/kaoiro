@@ -118,6 +118,7 @@ defmodule Mix.Tasks.Kaoiro.Env do
       "#KAOIRO_SESSION_POINTERS_PATH=/var/lib/kaoiro/session_pointers.dets",
       "#KAOIRO_AGENT_DIRECTORY_PATH=/var/lib/kaoiro/agent_directory.dets",
       "#KAOIRO_PERMISSION_MODES_PATH=/var/lib/kaoiro/permission_modes.dets",
+      "#KAOIRO_PERMISSION_SETTINGS_PATH=/var/lib/kaoiro/permission_settings.dets",
       "#KAOIRO_CLEAR_WATERMARKS_PATH=/var/lib/kaoiro/clear_watermarks.dets",
       "#KAOIRO_SESSION_STARTS_PATH=/var/lib/kaoiro/session_starts.dets",
       "#KAOIRO_INGRESS_ORDER_PATH=/var/lib/kaoiro/ingress_order.dets",

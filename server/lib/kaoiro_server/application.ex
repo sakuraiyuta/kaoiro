@@ -38,6 +38,9 @@ defmodule KaoiroServer.Application do
       KaoiroServer.SessionPointers,
       # Restart-surviving per-agent permission_mode picks (#58).
       KaoiroServer.PermissionModes,
+      # Restart-surviving per-agent Codex sandbox/network_access request
+      # state (issue #305, ADR-0033 F3/F4).
+      KaoiroServer.PermissionSettings,
       # Per-agent clear watermarks so operator `clear_history` hides past
       # inter-agent messages from the cleared agent's transcript on
       # subsequent reloads (issue #109). Peer panes are unaffected.

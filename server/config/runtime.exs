@@ -198,6 +198,13 @@ if path = System.get_env("KAOIRO_PERMISSION_MODES_PATH") do
   config :kaoiro_server, :permission_modes_path, path
 end
 
+# DETS file for the Codex sandbox/network_access request store (issue
+# #305). Same rationale as PermissionModes above: unset falls back to a
+# tmp path destroyed with the container.
+if path = System.get_env("KAOIRO_PERMISSION_SETTINGS_PATH") do
+  config :kaoiro_server, :permission_settings_path, path
+end
+
 # #109 visibility data must survive a full container recreation: the
 # cutoff it records is compared against ingress stamps the wrapper hosts
 # replay back after a restart (ADR-0051 D3-4). fsync-gated before clear ack.

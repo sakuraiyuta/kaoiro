@@ -37,6 +37,15 @@ config :kaoiro_server,
          "kaoiro_test_permission_modes_#{run_nonce}.dets"
        )
 
+# Per-run throwaway DETS file for the Codex sandbox/network_access
+# request store (issue #305).
+config :kaoiro_server,
+       :permission_settings_path,
+       Path.join(
+         test_dets_dir,
+         "kaoiro_test_permission_settings_#{run_nonce}.dets"
+       )
+
 # Per-run throwaway DETS file for the agent identity ledger (ADR-0030).
 config :kaoiro_server,
        :agent_directory_path,
