@@ -214,6 +214,10 @@ export function applyPermissionSyncState(
   const failedCurrent = acceptsIncoming &&
     (incoming.status === "failed" || incoming.status === "unknown") &&
     samePermissionSelection(incoming, next);
+  const clearsBlocked = acceptsIncoming &&
+    state.blocked !== null &&
+    incoming.revision > state.blocked.revision;
+  const blocked = clearsBlocked ? null : state.blocked;
 
   return {
     ...state,
@@ -221,10 +225,9 @@ export function applyPermissionSyncState(
     latest,
     next,
     ...history,
-    // Synchronization reconciles history; it cannot clear a current-process
-    // fail-closed block. A freshly restored failed/unknown current request
-    // establishes one only when it remains the next selection.
-    blocked: state.blocked ?? (failedCurrent
+    // A server-accepted later revision supersedes an earlier fail-closed
+    // block even when the operator's relay arrived through a reconnect sync.
+    blocked: blocked ?? (failedCurrent
       ? { revision: incoming.revision, reason: incoming.reason }
       : null),
   };

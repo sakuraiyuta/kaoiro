@@ -302,3 +302,26 @@ describe("permission state boundaries", () => {
     expect(h.audits.filter(e => e.kind === "permission_applied")).toHaveLength(0);
   });
 });
+
+it.each(["live", "sync"] as const)("reconciles a blocked request through a newer operator selection delivered by %s", async (delivery) => {
+  const h = await createHarness({ writeContext: false });
+  await h.host.setPermission(selection(1));
+  void h.run();
+  await expectStatus(h, "unknown");
+  await h.host.send("second");
+  const newer = selection(2);
+  if (delivery === "live") await h.host.setPermission(newer);
+  else h.host.applyPermissionSync({ version: "0", control: pending(newer), next: newer });
+  await vi.waitFor(() => expect(h.sdkCalls).toBe(2), { timeout: 300 });
+});
+
+it("keeps unknown permission drift suppressed after capability downgrade", async () => {
+  const h = await createHarness({ writeContext: false, host: {
+    resumeSnapshot: { sandbox: "read-only", network_access: false },
+  } });
+  await h.host.setPermission(selection(1));
+  void h.run();
+  await expectStatus(h, "unknown");
+  h.host.setPermissionSyncSupported(false);
+  expect(h.ext().resume_drift).toEqual([]);
+});

@@ -2242,7 +2242,10 @@ export class CodexHost implements EngineAdapter {
       if (entry.field !== "sandbox" && entry.field !== "network_access") {
         return !this.#operatorSwitchedFields.has(entry.field);
       }
-      if (!this.#permissionState.syncSupported) return true;
+      if (
+        !this.#permissionState.syncSupported &&
+        !this.#permissionState.hasControl
+      ) return true;
       if (permission.observation === null) return false;
       return entry.field === "sandbox"
         ? !permission.intentional.sandbox
