@@ -3,6 +3,11 @@
 # done; never a checked-in file.
 src/lib/.AgentDetail.before.bench.svelte
 
+# issue #304 bench: runBenchApp.mjs's equivalent for the App-level harness
+# (git show <SHA>:dashboard/src/App.svelte); same generate-then-delete
+# lifecycle, never a checked-in file.
+src/.App.before.bench.svelte
+
 # Playwright (31-10 viewport regression): runner output, never checked in
 test-results/
 playwright-report/

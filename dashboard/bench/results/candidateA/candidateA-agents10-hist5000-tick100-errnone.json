@@ -1,0 +1,135 @@
+{
+  "agentCount": 10,
+  "historyCount": 5000,
+  "keystrokes": 30,
+  "tickMs": 100,
+  "errorAgents": "none",
+  "before": {
+    "rafLatencyMs": {
+      "n": 30,
+      "avg": 3.04,
+      "median": 0.9,
+      "p95": 11.3,
+      "max": 11.9
+    },
+    "eventTiming": {
+      "inputDelayMs": {
+        "n": 37,
+        "avg": 0.51,
+        "median": 0.3,
+        "p95": 2.3,
+        "max": 2.3
+      },
+      "processingTimeMs": {
+        "n": 37,
+        "avg": 0.41,
+        "median": 0,
+        "p95": 1.6,
+        "max": 5.7
+      },
+      "presentationDelayMs": {
+        "n": 37,
+        "avg": 19.19,
+        "median": 16.8,
+        "p95": 23.7,
+        "max": 23.7
+      },
+      "durationMs": {
+        "n": 37,
+        "avg": 20.11,
+        "median": 24,
+        "p95": 24,
+        "max": 24
+      }
+    },
+    "longTasks": {
+      "count": 29,
+      "totalDurationMs": 1842,
+      "durationMs": {
+        "n": 29,
+        "avg": 63.52,
+        "median": 61,
+        "p95": 72,
+        "max": 81
+      }
+    },
+    "mountLongTasks": {
+      "count": 0,
+      "totalDurationMs": 0
+    },
+    "domNodeCount": {
+      "before": 1163,
+      "after": 1163
+    },
+    "tracePath": "/home/yuta/git/kaoiro/worktrees/ao-304/dashboard/bench/results/candidateA/trace-before.zip",
+    "typingError": null,
+    "keystrokes": {
+      "completed": 30,
+      "requested": 30
+    }
+  },
+  "after": {
+    "rafLatencyMs": {
+      "n": 4,
+      "avg": 3.13,
+      "median": 1.5,
+      "p95": 8.1,
+      "max": 8.1
+    },
+    "eventTiming": {
+      "inputDelayMs": {
+        "n": 24,
+        "avg": 29,
+        "median": 0.3,
+        "p95": 172.9,
+        "max": 173
+      },
+      "processingTimeMs": {
+        "n": 24,
+        "avg": 0.19,
+        "median": 0,
+        "p95": 1.2,
+        "max": 1.5
+      },
+      "presentationDelayMs": {
+        "n": 24,
+        "avg": 13.47,
+        "median": 15.7,
+        "p95": 15.8,
+        "max": 16
+      },
+      "durationMs": {
+        "n": 24,
+        "avg": 42.67,
+        "median": 16,
+        "p95": 176,
+        "max": 176
+      }
+    },
+    "longTasks": {
+      "count": 1390,
+      "totalDurationMs": 269017,
+      "durationMs": {
+        "n": 1390,
+        "avg": 193.54,
+        "median": 192,
+        "p95": 226,
+        "max": 437
+      }
+    },
+    "mountLongTasks": {
+      "count": 0,
+      "totalDurationMs": 0
+    },
+    "domNodeCount": {
+      "before": 1163,
+      "after": 1163
+    },
+    "tracePath": "/home/yuta/git/kaoiro/worktrees/ao-304/dashboard/bench/results/candidateA/trace-after.zip",
+    "typingError": "locator.type: Timeout 120000ms exceeded.\nCall log:\n  - waiting for locator('textarea').first()\n    - locator resolved to <textarea rows=\"2\" class=\"svelte-1scy0gf\" aria-label=\"instruction for agent-viewed\" placeholder=\"指示を送る…(Ctrl+Enter で送信、/ でコマンド候補、ドラッグドロップ・ペーストで画像等ファイル送信)\"></textarea>\n  - elementHandle.type(\"a\")\n",
+    "keystrokes": {
+      "completed": 4,
+      "requested": 30
+    }
+  }
+}

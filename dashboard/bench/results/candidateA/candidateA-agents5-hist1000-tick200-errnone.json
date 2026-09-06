@@ -1,0 +1,127 @@
+{
+  "agentCount": 5,
+  "historyCount": 1000,
+  "keystrokes": 30,
+  "tickMs": 200,
+  "errorAgents": "none",
+  "before": {
+    "rafLatencyMs": {
+      "n": 30,
+      "avg": 6.79,
+      "median": 1.6,
+      "p95": 32.3,
+      "max": 39.1
+    },
+    "eventTiming": {
+      "inputDelayMs": {
+        "n": 67,
+        "avg": 1.34,
+        "median": 0.3,
+        "p95": 1.5,
+        "max": 34.5
+      },
+      "processingTimeMs": {
+        "n": 67,
+        "avg": 0.25,
+        "median": 0,
+        "p95": 1.4,
+        "max": 1.5
+      },
+      "presentationDelayMs": {
+        "n": 67,
+        "avg": 21.57,
+        "median": 16,
+        "p95": 40,
+        "max": 48
+      },
+      "durationMs": {
+        "n": 67,
+        "avg": 23.16,
+        "median": 16,
+        "p95": 40,
+        "max": 48
+      }
+    },
+    "longTasks": {
+      "count": 0,
+      "totalDurationMs": 0,
+      "durationMs": {
+        "n": 0
+      }
+    },
+    "mountLongTasks": {
+      "count": 0,
+      "totalDurationMs": 0
+    },
+    "domNodeCount": {
+      "before": 1133,
+      "after": 1133
+    },
+    "tracePath": "/home/yuta/git/kaoiro/worktrees/ao-304/dashboard/bench/results/candidateA/trace-before.zip",
+    "typingError": null,
+    "keystrokes": {
+      "completed": 30,
+      "requested": 30
+    }
+  },
+  "after": {
+    "rafLatencyMs": {
+      "n": 30,
+      "avg": 6.55,
+      "median": 3.6,
+      "p95": 15.1,
+      "max": 45.6
+    },
+    "eventTiming": {
+      "inputDelayMs": {
+        "n": 68,
+        "avg": 0.96,
+        "median": 0.3,
+        "p95": 1.1,
+        "max": 43.1
+      },
+      "processingTimeMs": {
+        "n": 68,
+        "avg": 0.31,
+        "median": 0.1,
+        "p95": 1.6,
+        "max": 1.9
+      },
+      "presentationDelayMs": {
+        "n": 68,
+        "avg": 17.09,
+        "median": 15.7,
+        "p95": 46,
+        "max": 48
+      },
+      "durationMs": {
+        "n": 68,
+        "avg": 18.35,
+        "median": 16,
+        "p95": 48,
+        "max": 48
+      }
+    },
+    "longTasks": {
+      "count": 0,
+      "totalDurationMs": 0,
+      "durationMs": {
+        "n": 0
+      }
+    },
+    "mountLongTasks": {
+      "count": 0,
+      "totalDurationMs": 0
+    },
+    "domNodeCount": {
+      "before": 1133,
+      "after": 1133
+    },
+    "tracePath": "/home/yuta/git/kaoiro/worktrees/ao-304/dashboard/bench/results/candidateA/trace-after.zip",
+    "typingError": null,
+    "keystrokes": {
+      "completed": 30,
+      "requested": 30
+    }
+  }
+}
