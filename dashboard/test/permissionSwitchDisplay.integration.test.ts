@@ -109,6 +109,29 @@ function observedControl(revision: number): Record<string, unknown> {
   });
 }
 
+/** A record that satisfies the `PermissionControlExt` arm for `status`.
+ *  Each arm requires different fields, so `control({ status })` is a valid
+ *  positive fixture for `pending` alone — using it everywhere is what let
+ *  an unbacked `applied` and a reasonless `unknown` stand as normal
+ *  examples (ふじ round 1 M2). */
+function conformingControl(status: string): Record<string, unknown> {
+  const revision = 7;
+  const requested = { sandbox: "workspace-write", network_access: false };
+  const submitted = { revision, requested, execution_id: `exec-${revision}` };
+  switch (status) {
+    case "applying":
+      return control({ status, submitted });
+    case "applied":
+      return observedControl(revision);
+    case "failed":
+      return control({ status, reason: "observation_unavailable" });
+    case "unknown":
+      return control({ status, submitted, reason: "observation_unavailable" });
+    default:
+      return control({ status });
+  }
+}
+
 function rowByLabel(target: HTMLElement, label: string): HTMLElement | null {
   for (const row of target.querySelectorAll(".cc-row")) {
     if (row.querySelector("dt")?.textContent?.trim() === label) {
@@ -227,13 +250,13 @@ describe("AgentDetail sandbox / network control (issue #305 D)", () => {
     ["pending", "要求済み"],
     ["applying", "適用中"],
     ["applied", "適用済み"],
+    ["failed", "失敗"],
     ["unknown", "未確認"],
   ])("renders status=%s as its own distinct state line", async (status, label) => {
     const { target } = await render({
       engine: "codex",
       session_capabilities: SWITCH_CAPS,
-      permission_control:
-        status === "applied" ? observedControl(7) : control({ status }),
+      permission_control: conformingControl(status),
     });
     const dd = rowByLabel(target, "権限要求");
     expect(dd?.textContent).toContain("rev 7");
@@ -307,7 +330,15 @@ describe("AgentDetail sandbox / network control (issue #305 D)", () => {
     props.envelope = envelope({
       engine: "codex",
       session_capabilities: SWITCH_CAPS,
-      permission_control: control({ revision: 6, status: "applying" }),
+      permission_control: control({
+        revision: 6,
+        status: "applying",
+        submitted: {
+          revision: 6,
+          requested: { sandbox: "workspace-write", network_access: false },
+          execution_id: "exec-6",
+        },
+      }),
     });
     await tick();
     expect(rowByLabel(target, "権限要求")?.textContent).toContain("rev 6");
@@ -732,6 +763,14 @@ describe("Fuji independent permission boundaries", () => {
     expect(permissionControlFrom(envelope(reviewExt(mismatched)))).toBeNull();
   });
 
+  it("rejects applied whose evidence belongs to an earlier revision", () => {
+    // A predecessor's observation cannot settle the current request: "A's
+    // eventual result cannot settle or erase B." Without this the badge
+    // would read "rev 10 適用済み" on evidence for rev 9.
+    const pc = { ...observedControl(9), revision: 10 };
+    expect(permissionControlFrom(envelope(reviewExt(pc)))).toBeNull();
+  });
+
   it("rejects applied whose evidence carries a different requested pair", () => {
     const pc = observedControl(9) as Record<string, Record<string, unknown>>;
     const mismatched = {
@@ -764,5 +803,102 @@ describe("Fuji inherited error-map keys", () => {
     const { target } = await render(reviewExt(), {onSetPermission: vi.fn(async () => { throw new Error(reason); })});
     await reviewPick(target); await tick();
     expect(rowByLabel(target, "権限要求エラー")?.textContent?.trim()).toBe(reason);
+  });
+});
+
+describe("permissionControlFrom per-status field table (ふじ round 1 M2)", () => {
+  const ext = (pc: Record<string, unknown>) => ({
+    engine: "codex",
+    session_capabilities: SWITCH_CAPS,
+    permission_control: pc,
+  });
+  const olderEvidence = {
+    revision: 4,
+    requested: { sandbox: "read-only", network_access: false },
+    execution_id: "exec-4",
+  };
+
+  it("accepts a pending successor carrying its predecessor's evidence", () => {
+    // "If revision B arrives while A runs, the top-level request is
+    // B/pending while submitted and a known effective may describe A."
+    // The applied binding must not be generalised into rejecting this.
+    const parsed = permissionControlFrom(
+      envelope(
+        ext(
+          control({
+            revision: 9,
+            submitted: olderEvidence,
+            effective: {
+              ...olderEvidence,
+              session_id: "session-a",
+              turn_id: "turn-4",
+              permission: {
+                sandbox: "read-only",
+                approval: "never",
+                enforcement: "os",
+              },
+              network_access: false,
+            },
+          }),
+        ),
+      ),
+    );
+    expect(parsed?.revision).toBe(9);
+    expect(parsed?.status).toBe("pending");
+  });
+
+  it("accepts failed with its reason, evidence and rollback", () => {
+    const parsed = permissionControlFrom(
+      envelope(
+        ext(
+          control({
+            status: "failed",
+            reason: "policy_mismatch",
+            submitted: { ...olderEvidence, revision: 7 },
+            rolled_back_to: { sandbox: "read-only", network_access: false },
+          }),
+        ),
+      ),
+    );
+    expect(parsed?.status).toBe("failed");
+    expect(parsed?.rolled_back_to?.sandbox).toBe("read-only");
+  });
+
+  it("rejects applying without the submission that defines it", () => {
+    expect(
+      permissionControlFrom(envelope(ext(control({ status: "applying" })))),
+    ).toBeNull();
+  });
+
+  it("rejects applying that publishes a current observation", () => {
+    // The arm marks effective `never`: while an exec is capturing the
+    // revision the current permission is unknown, and a prior observation
+    // belongs in last_effective.
+    const pc = observedControl(9);
+    expect(
+      permissionControlFrom(
+        envelope(ext({ ...pc, status: "applying" })),
+      ),
+    ).toBeNull();
+  });
+
+  it("rejects unknown without a reason", () => {
+    const pc = control({
+      status: "unknown",
+      submitted: { ...olderEvidence, revision: 7 },
+    });
+    expect(permissionControlFrom(envelope(ext(pc)))).toBeNull();
+  });
+
+  it("rejects a settled state that carries a reason its arm forbids", () => {
+    const pc = { ...observedControl(9), reason: "policy_mismatch" };
+    expect(permissionControlFrom(envelope(ext(pc)))).toBeNull();
+  });
+
+  it("reads an explicit null as absent rather than as a malformed value", () => {
+    // JSON has no undefined, so a producer spelling "no rollback" as null
+    // must not fail the forbidden-field check on a pending record.
+    const pc = control({ reason: null, rolled_back_to: null });
+    expect(permissionControlFrom(envelope(ext(pc)))?.status).toBe("pending");
   });
 });

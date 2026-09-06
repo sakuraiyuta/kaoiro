@@ -202,6 +202,58 @@ const PERMISSION_CONTROL_STATUSES: ReadonlySet<string> = new Set([
   "unknown",
 ]);
 
+type FieldRule = "required" | "optional" | "forbidden";
+
+/** Per-status field requirements, transcribed from the
+ *  `PermissionControlExt` union in `@kaoiro/protocol` (index.ts). A `never`
+ *  in an arm is "forbidden" here: the producer must not send the field, so
+ *  receiving it means the record does not describe the state it claims. */
+const PERMISSION_CONTROL_FIELDS: Record<
+  PermissionControlStatus,
+  Record<"submitted" | "effective" | "reason" | "rolled_back_to", FieldRule>
+> = {
+  pending: {
+    submitted: "optional",
+    effective: "optional",
+    reason: "forbidden",
+    rolled_back_to: "forbidden",
+  },
+  applying: {
+    submitted: "required",
+    effective: "forbidden",
+    reason: "forbidden",
+    rolled_back_to: "forbidden",
+  },
+  applied: {
+    submitted: "required",
+    effective: "required",
+    reason: "forbidden",
+    rolled_back_to: "forbidden",
+  },
+  failed: {
+    submitted: "optional",
+    effective: "optional",
+    reason: "required",
+    rolled_back_to: "optional",
+  },
+  unknown: {
+    submitted: "required",
+    effective: "forbidden",
+    reason: "required",
+    rolled_back_to: "forbidden",
+  },
+};
+
+/** JSON has no `undefined`, so an explicit null is the wire's way of
+ *  spelling "absent" and is read as such rather than as a malformed value. */
+function present(value: unknown): boolean {
+  return value !== undefined && value !== null;
+}
+
+function presenceAllowed(rule: FieldRule, isPresent: boolean): boolean {
+  return rule === "optional" || (rule === "required") === isPresent;
+}
+
 function permissionConfigurationOf(
   value: unknown,
 ): PermissionConfiguration | null {
@@ -219,13 +271,22 @@ function sameConfiguration(
   return a.sandbox === b.sandbox && a.network_access === b.network_access;
 }
 
-/** A control/ack revision. Revision zero is the wrapper's launch baseline,
- *  so the domain is the NON-NEGATIVE safe integers — a negative value is
+/** A control revision. Revision zero is the wrapper's launch baseline, so
+ *  the domain is the NON-NEGATIVE safe integers — a negative value is
  *  malformed, not an old request. */
 function revisionOf(value: unknown): number | null {
   return Number.isSafeInteger(value) && (value as number) >= 0
     ? (value as number)
     : null;
+}
+
+/** An ack revision. Zero is excluded on top of {@link revisionOf}: it is
+ *  "reserved for the wrapper's initial raw launch baseline; it is not an
+ *  operator command" (protocol.md), and an ack answers exactly one — an
+ *  operator patch the server saved. */
+function ackRevisionOf(value: unknown): number | null {
+  const revision = revisionOf(value);
+  return revision === null || revision === 0 ? null : revision;
 }
 
 /** `PermissionSubmission` = `{revision, requested, execution_id}`. Parsed
@@ -271,22 +332,18 @@ function permissionObservationOf(value: unknown): PermissionSubmission | null {
  *  contract in every state, so its absence is malformed rather than
  *  "constraints unknown".
  *
- *  The status is not free-standing: it is a CLAIM, and the contract names
- *  the evidence each claim needs (protocol.md, "Requested, submitted, and
- *  effective state"). Two clauses are enforced here because this client
- *  renders exactly those claims:
+ *  The status is not free-standing: `PermissionControlExt` is a
+ *  discriminated union, and each arm names which of `submitted`,
+ *  `effective`, `reason` and `rolled_back_to` it requires and which it
+ *  forbids (`@kaoiro/protocol` index.ts). {@link PERMISSION_CONTROL_FIELDS}
+ *  is that table; a record that does not satisfy its own arm is malformed
+ *  whether the field is missing or is one the arm marks `never`.
  *
- *  - `applied` requires both `submitted` and `effective`, matching each
- *    other and this record on revision, requested pair and execution_id.
- *  - `rolled_back_to` is accepted only on `failed` — "only a definitive
- *    rejection before application can set rolled_back_to; missing
- *    observation never does".
- *
- *  Residual, deliberately not enforced: clauses whose subject this client
- *  never renders (a `reason` missing from failed/unknown, a `submitted`
- *  missing from applying, an `effective` the contract asks the producer to
- *  omit). Rejecting the record there would hide a real state without
- *  preventing a false claim. */
+ *  On top of the table, `applied` binds its evidence: submitted and
+ *  effective must agree with each other AND with this record on revision,
+ *  requested pair and execution_id. Other states do not, deliberately —
+ *  a pending B may legitimately carry the submission and observation of
+ *  its predecessor A. */
 export function permissionControlFrom(
   envelope: Envelope,
 ): PermissionControl | null {
@@ -311,9 +368,30 @@ export function permissionControlFrom(
   ) {
     return null;
   }
+  const rules = PERMISSION_CONTROL_FIELDS[status];
+  if (!presenceAllowed(rules.submitted, present(r.submitted))) return null;
+  if (!presenceAllowed(rules.effective, present(r.effective))) return null;
+  if (!presenceAllowed(rules.reason, present(r.reason))) return null;
+  if (!presenceAllowed(rules.rolled_back_to, present(r.rolled_back_to))) {
+    return null;
+  }
+  const submitted = present(r.submitted)
+    ? permissionSubmissionOf(r.submitted)
+    : null;
+  if (present(r.submitted) && submitted === null) return null;
+  const effective = present(r.effective)
+    ? permissionObservationOf(r.effective)
+    : null;
+  if (present(r.effective) && effective === null) return null;
+  if (present(r.reason) && (typeof r.reason !== "string" || r.reason === "")) {
+    return null;
+  }
+  const rolledBackTo = present(r.rolled_back_to)
+    ? permissionConfigurationOf(r.rolled_back_to)
+    : null;
+  if (present(r.rolled_back_to) && rolledBackTo === null) return null;
   if (status === "applied") {
-    const submitted = permissionSubmissionOf(r.submitted);
-    const effective = permissionObservationOf(r.effective);
+    // Non-null by the table above; re-stated for the type checker.
     if (submitted === null || effective === null) return null;
     if (submitted.revision !== revision) return null;
     if (effective.revision !== revision) return null;
@@ -321,20 +399,12 @@ export function permissionControlFrom(
     if (!sameConfiguration(submitted.requested, requested)) return null;
     if (!sameConfiguration(effective.requested, requested)) return null;
   }
-  let rolledBackTo: PermissionConfiguration | null = null;
-  if (r.rolled_back_to !== undefined && r.rolled_back_to !== null) {
-    if (status !== "failed") return null;
-    rolledBackTo = permissionConfigurationOf(r.rolled_back_to);
-    if (rolledBackTo === null) return null;
-  }
   return {
     revision,
     requested,
     constraints: { approval: c.approval, enforcement: c.enforcement },
     status,
-    ...(typeof r.reason === "string" && r.reason !== ""
-      ? { reason: r.reason }
-      : {}),
+    ...(typeof r.reason === "string" ? { reason: r.reason } : {}),
     ...(rolledBackTo === null ? {} : { rolled_back_to: rolledBackTo }),
   };
 }
@@ -359,7 +429,7 @@ export interface SetPermissionAck {
 function setPermissionAckOf(value: unknown): SetPermissionAck | null {
   if (typeof value !== "object" || value === null) return null;
   const r = value as Record<string, unknown>;
-  const revision = revisionOf(r.revision);
+  const revision = ackRevisionOf(r.revision);
   if (revision === null) return null;
   if (r.status !== "pending") return null;
   const requested = permissionConfigurationOf(r.requested);

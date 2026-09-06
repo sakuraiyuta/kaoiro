@@ -1314,17 +1314,13 @@
     }
   });
   const permLabel = $derived(pendingPerm ?? ccPermissionMode);
-  // The label the switcher button actually shows: "default" is the SDK's own
-  // fallback when no mode has been reported yet (ext.permission_mode absent).
-  // Task 15-10 pins the two-axis annotation onto the SELECTED label, so the
-  // guard must key off the label that renders — not raw permLabel, which
-  // would suppress the badge for that first-frame default case.
+  // A LOOKUP KEY only, never rendered: "default" is the SDK's own fallback
+  // when no mode has been reported yet (ext.permission_mode absent), and
+  // userInputDialogAvailability needs some key for that first frame.
+  // issue #305 took it off the button, which must not read "default"
+  // before a mode has been reported — that is an invented observation the
+  // operator cannot tell apart from a wrapper really in `default`.
   const displayPermLabel = $derived(permLabel ?? "default");
-  // issue #305: the BUTTON must not read "default" before a mode has been
-  // reported — that is an invented observation, and the operator cannot
-  // tell it apart from a wrapper that really is in `default`. The
-  // "default" fallback survives only where it is a lookup key
-  // (userInputDialogAvailability), never as a rendered claim.
   const permLabelAxes = $derived(
     permLabel === null ? undefined : PERMISSION_MODE_AXES[permLabel],
   );

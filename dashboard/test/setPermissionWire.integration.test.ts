@@ -148,6 +148,26 @@ describe("set_permission reply contract (issue #305 D, ふじ round 1 S2)", () =
     await expect(pending).resolves.toBeNull();
   });
 
+  it.each([0, -1, 1.5])(
+    "resolves null for an ack revision outside the operator domain (%s)",
+    async (revision) => {
+      // Revision zero is the wrapper's launch baseline and "is not an
+      // operator command" (protocol.md), so it cannot be the answer to
+      // one. A negative or fractional revision is malformed outright.
+      const { conn, ws } = await connect();
+      const pending = conn.setPermission(AGENT_ID, { sandbox: "read-only" });
+      ws.replyToLatestSetPermission({
+        ok: true,
+        response: {
+          revision,
+          status: "pending",
+          requested: { sandbox: "read-only", network_access: false },
+        },
+      });
+      await expect(pending).resolves.toBeNull();
+    },
+  );
+
   it("rejects an error reply with the server's reason, the key the UI maps", async () => {
     const { conn, ws } = await connect();
     const pending = conn.setPermission(AGENT_ID, { sandbox: "read-only" });
