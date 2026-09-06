@@ -1073,6 +1073,220 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
   end
 
+  describe "set_permission (issue #305, ADR-0033 F3/F4)" do
+    defp wait_until_permission(predicate, attempts \\ 50) do
+      cond do
+        predicate.() -> :ok
+        attempts <= 0 -> :timeout
+        true -> Process.sleep(5) && wait_until_permission(predicate, attempts - 1)
+      end
+    end
+
+    defp put_permission_agent(agent_id, opts \\ []) do
+      state = Keyword.get(opts, :state, "idle")
+      engine = Keyword.get(opts, :engine, "codex")
+      supports = Keyword.get(opts, :supports_permission_switch, true)
+      with_capabilities = Keyword.get(opts, :with_capabilities, true)
+
+      caps =
+        %{
+          "supports_attachments" => true,
+          "supports_user_input_dialog" => true
+        }
+        |> maybe_put_caps_field("supports_permission_switch", supports)
+
+      ext =
+        if with_capabilities do
+          %{"session_capabilities" => caps, "engine" => engine}
+        else
+          %{}
+        end
+
+      envelope = %{
+        "version" => "0",
+        "agent_id" => agent_id,
+        "ts" => "2026-09-06T00:00:00Z",
+        "type" => "state_change",
+        "state" => state,
+        "ext" => ext
+      }
+
+      :ok = AgentStates.put(envelope)
+    end
+
+    defp seed_permission_baseline(agent_id, opts \\ []) do
+      engine = Keyword.get(opts, :engine, "codex")
+      sandbox = Keyword.get(opts, :sandbox, "read-only")
+      network_access = Keyword.get(opts, :network_access, false)
+
+      control = %{
+        "revision" => 0,
+        "requested" => %{"sandbox" => sandbox, "network_access" => network_access},
+        "status" => "pending",
+        "constraints" => %{"approval" => "never", "enforcement" => "os"}
+      }
+
+      :ok = KaoiroServer.PermissionSettings.record_observation(agent_id, engine, control)
+
+      :ok =
+        wait_until_permission(fn ->
+          KaoiroServer.PermissionSettings.get(agent_id) != nil
+        end)
+    end
+
+    test "operator の set_permission を wrapper topic へ relay し PermissionSettings に永続化する" do
+      agent_id = "test.setperm2-1"
+      put_permission_agent(agent_id)
+      seed_permission_baseline(agent_id)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "set_permission", %{
+          "agent_id" => agent_id,
+          "sandbox" => "workspace-write"
+        })
+
+      assert_reply ref, :ok, %{"revision" => 1, "status" => "pending", "requested" => requested}
+      assert requested == %{"sandbox" => "workspace-write", "network_access" => false}
+
+      assert_broadcast "set_permission", payload
+
+      assert payload == %{
+               "version" => "0",
+               "revision" => 1,
+               "sandbox" => "workspace-write",
+               "network_access" => false
+             }
+
+      entry = KaoiroServer.PermissionSettings.get(agent_id)
+      assert entry.control.revision == 1
+      assert entry.control.actor.kind == "user"
+    end
+
+    test "viewer の set_permission は forbidden" do
+      agent_id = "test.setperm2-2"
+      put_permission_agent(agent_id)
+      seed_permission_baseline(agent_id)
+      socket = join_as(:viewer)
+
+      ref =
+        push(socket, "set_permission", %{"agent_id" => agent_id, "sandbox" => "workspace-write"})
+
+      assert_reply ref, :error, %{reason: "forbidden"}
+    end
+
+    test "capability metadata 未到着 (ext 空) は permission_not_ready" do
+      agent_id = "test.setperm2-3"
+      put_permission_agent(agent_id, with_capabilities: false)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "set_permission", %{"agent_id" => agent_id, "sandbox" => "workspace-write"})
+
+      assert_reply ref, :error, %{reason: "permission_not_ready"}
+    end
+
+    test "supports_permission_switch=false は unsupported_permission_switch" do
+      agent_id = "test.setperm2-4"
+      put_permission_agent(agent_id, supports_permission_switch: false)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "set_permission", %{"agent_id" => agent_id, "sandbox" => "workspace-write"})
+
+      assert_reply ref, :error, %{reason: "unsupported_permission_switch"}
+    end
+
+    test "disconnected agent は agent_unavailable" do
+      agent_id = "test.setperm2-5"
+      put_disconnected(agent_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "set_permission", %{"agent_id" => agent_id, "sandbox" => "workspace-write"})
+
+      assert_reply ref, :error, %{reason: "agent_unavailable"}
+    end
+
+    test "unknown agent は unknown_agent" do
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "set_permission", %{
+          "agent_id" => "test.setperm2-unknown",
+          "sandbox" => "workspace-write"
+        })
+
+      assert_reply ref, :error, %{reason: "unknown_agent"}
+    end
+
+    test "PermissionSettings に baseline が無いうちは permission_not_ready" do
+      agent_id = "test.setperm2-6"
+      put_permission_agent(agent_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "set_permission", %{"agent_id" => agent_id, "sandbox" => "workspace-write"})
+
+      assert_reply ref, :error, %{reason: "permission_not_ready"}
+    end
+
+    test "pending 中の reset は session_reset_pending で reject" do
+      # `acquire_reset_lock/1` (session_reset describe block below) replaces
+      # the agent's whole envelope with one that has no permission
+      # capabilities — that is fine here: `guard_against_reset_pending/2`
+      # runs BEFORE this handler's capability checks, so the pending-reset
+      # rejection fires regardless of what the envelope's ext carries.
+      agent_id = "test.setperm2-7"
+      acquire_reset_lock(agent_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "set_permission", %{"agent_id" => agent_id, "sandbox" => "workspace-write"})
+
+      assert_reply ref, :error, %{reason: "session_reset_pending"}
+
+      :ok = KaoiroServer.SessionResets.delete(agent_id)
+    end
+
+    for {label, payload_extra} <- [
+          {"null sandbox", %{"sandbox" => nil}},
+          {"unknown sandbox 値", %{"sandbox" => "yolo"}},
+          {"network_access が boolean でない", %{"network_access" => "true"}},
+          {"空の patch", %{}},
+          {"approval フィールド混入", %{"sandbox" => "workspace-write", "approval" => "never"}},
+          {"revision フィールド混入", %{"sandbox" => "workspace-write", "revision" => 5}},
+          {"actor フィールド混入", %{"sandbox" => "workspace-write", "actor" => %{"id" => "x"}}}
+        ] do
+      test "invalid_payload: #{label}" do
+        agent_id = "test.setperm2-invalid-#{System.unique_integer([:positive])}"
+        put_permission_agent(agent_id)
+        seed_permission_baseline(agent_id)
+        socket = join_as(:operator)
+
+        payload = Map.merge(%{"agent_id" => agent_id}, unquote(Macro.escape(payload_extra)))
+        ref = push(socket, "set_permission", payload)
+        assert_reply ref, :error, %{reason: "invalid_payload"}
+      end
+    end
+
+    test "false は network_access の正当な値として受理される" do
+      agent_id = "test.setperm2-8"
+      put_permission_agent(agent_id)
+      seed_permission_baseline(agent_id, sandbox: "workspace-write", network_access: true)
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "set_permission", %{"agent_id" => agent_id, "network_access" => false})
+
+      assert_reply ref, :ok, %{
+        "requested" => %{"sandbox" => "workspace-write", "network_access" => false}
+      }
+    end
+  end
+
   describe "delete_agent (issue #14)" do
     defp put_disconnected(agent_id) do
       :ok =

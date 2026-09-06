@@ -92,6 +92,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   alias KaoiroServer.ConversationStates
   alias KaoiroServer.DeliveryStates
   alias KaoiroServer.HostRegistry
+  alias KaoiroServer.PermissionSettings
   alias KaoiroServer.PersonaAssets
   alias KaoiroServer.PlannedDisconnects
   alias KaoiroServer.QuagmireWatch
@@ -224,7 +225,10 @@ defmodule KaoiroServerWeb.AgentsChannel do
                    invalid_mode missing_user_id invalid_user_id
                    unknown_user revision_exhausted
                    missing_conversation_id conversation_closed
-                   unknown_conversation_id invalid_approval)a
+                   unknown_conversation_id invalid_approval
+                   invalid_payload agent_unavailable
+                   unsupported_permission_switch permission_not_ready
+                   persistence_failed)a
 
   # session_id charset — mirrors runner/src/sessions.ts SESSION_ID_PATTERN
   # (Claude Code's UUID-shaped JSONL filenames). Validated at this boundary so
@@ -682,6 +686,57 @@ defmodule KaoiroServerWeb.AgentsChannel do
     else
       {:error, reason} ->
         {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
+  end
+
+  # Engine-neutral sandbox/network_access request (issue #305, ADR-0033
+  # F3/F4). NOT a relay/5 opaque pass-through like set_permission_mode
+  # above: the server computes state itself — `PermissionSettings.
+  # submit_request/6` merges the patch into the agent's latest
+  # next-execution pair, allocates the revision, and persists before
+  # this handler relays to the wrapper and acks the client (protocol.md,
+  # "Permission changes at an execution boundary"). The `with` steps
+  # below follow that section's validation order exactly: operator role,
+  # payload/size, payload shape, agent identity, reset exclusion,
+  # current connection, capability metadata readiness + capability, then
+  # the store's own raw-baseline check (`permission_not_ready` from
+  # `submit_request/6` itself when no baseline has been recorded yet).
+  def handle_in("set_permission", payload, socket) do
+    role = current_role(socket)
+
+    with :ok <- require_operator(role, payload, "set_permission"),
+         :ok <- check_relay_size(payload),
+         {:ok, patch} <- fetch_permission_patch(payload),
+         {:ok, agent_id} <- fetch_agent_id(payload),
+         :ok <- guard_against_reset_pending(role, payload),
+         {:ok, envelope} <- fetch_agent_envelope(agent_id),
+         :ok <- require_agent_connected(envelope),
+         :ok <- require_permission_switch_capability(envelope),
+         {:ok, engine} <- fetch_agent_engine(envelope),
+         actor = permission_actor(socket),
+         at = DateTime.utc_now() |> DateTime.to_iso8601(),
+         {:ok, revision, requested} <-
+           PermissionSettings.submit_request(agent_id, engine, patch, actor, at) do
+      KaoiroServerWeb.Endpoint.broadcast("wrapper:#{agent_id}", "set_permission", %{
+        "version" => "0",
+        "revision" => revision,
+        "sandbox" => requested.sandbox,
+        "network_access" => requested.network_access
+      })
+
+      {:reply,
+       {:ok,
+        %{
+          "revision" => revision,
+          "status" => "pending",
+          "requested" => %{
+            "sandbox" => requested.sandbox,
+            "network_access" => requested.network_access
+          }
+        }}, socket}
+    else
+      {:error, reason} ->
+        {:reply, {:error, %{reason: safe_reason(permission_error_reason(reason))}}, socket}
     end
   end
 
@@ -1434,6 +1489,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
       AgentDirectory.delete(agent_id)
       SessionPointers.delete(agent_id)
       KaoiroServer.PermissionModes.delete(agent_id)
+      PermissionSettings.delete(agent_id)
       # ADR-0051 D3-5: no IA ledger to purge any more. The deleted
       # agent's own pane goes with its AgentStates entry; a peer's pane
       # keeps its copies, which is that peer's display and its own
@@ -2129,6 +2185,53 @@ defmodule KaoiroServerWeb.AgentsChannel do
     do: Map.put(map, "sandbox", value)
 
   defp maybe_put_sandbox(map, _value), do: map
+
+  # `set_permission`'s payload shape (issue #305, ADR-0033 F3/F4;
+  # protocol.md "Request, relay, and acknowledgement"). Unlike
+  # `check_keys/2`'s allow-list-of-required-keys shape, this REJECTS any
+  # key beyond the closed set — the contract explicitly calls out
+  # `approval`/`actor`/`revision` as forbidden fields (a client cannot
+  # supply what only the server/wrapper may authoritatively set), and a
+  # permissive extra-key pass-through here would let a client smuggle
+  # them through unnoticed. `network_access: false` must be ACCEPTED (a
+  # strict boolean, not a truthiness check) — `Map.has_key?/2` is what
+  # distinguishes "the axis was not sent" from "the axis was sent as
+  # false", `payload[key] == nil` cannot.
+  @permission_patch_keys ~w(version agent_id sandbox network_access)
+  defp fetch_permission_patch(payload) do
+    unknown_keys = Map.keys(payload) -- @permission_patch_keys
+    has_sandbox? = Map.has_key?(payload, "sandbox")
+    has_network? = Map.has_key?(payload, "network_access")
+
+    cond do
+      unknown_keys != [] ->
+        {:error, :invalid_payload}
+
+      not has_sandbox? and not has_network? ->
+        {:error, :invalid_payload}
+
+      has_sandbox? and payload["sandbox"] not in @sandbox_values ->
+        {:error, :invalid_payload}
+
+      has_network? and not is_boolean(payload["network_access"]) ->
+        {:error, :invalid_payload}
+
+      true ->
+        patch =
+          %{}
+          |> maybe_put_permission_patch_field(:sandbox, has_sandbox?, payload["sandbox"])
+          |> maybe_put_permission_patch_field(
+            :network_access,
+            has_network?,
+            payload["network_access"]
+          )
+
+        {:ok, patch}
+    end
+  end
+
+  defp maybe_put_permission_patch_field(patch, key, true, value), do: Map.put(patch, key, value)
+  defp maybe_put_permission_patch_field(patch, _key, false, _value), do: patch
 
   # Antigravity-only launch approval axis (ADR-0057 F4c). Same closed-enum
   # gate shape as maybe_put_sandbox; deliberately excludes "on-failure" —
@@ -2990,6 +3093,74 @@ defmodule KaoiroServerWeb.AgentsChannel do
       _ -> {:error, :unsupported_session_reset}
     end
   end
+
+  # `set_permission`'s "agent identity/current connection" check
+  # (protocol.md). A `disconnected` snapshot means the wrapper that would
+  # receive the relay is gone — accepting and persisting a request nobody
+  # is listening for would silently strand it until the next join's sync.
+  # Busy states are explicitly ACCEPTED (protocol.md), so this checks only
+  # the one disqualifying value, not an allow-list of the rest.
+  defp require_agent_connected(%{"state" => "disconnected"}), do: {:error, :agent_unavailable}
+  defp require_agent_connected(_envelope), do: :ok
+
+  # `set_permission`'s "current metadata readiness" + "capability" checks,
+  # combined (protocol.md distinguishes them for validation ORDER, not
+  # for which function computes them): before session_capabilities has
+  # arrived at all on this connection, `permission_not_ready` — a
+  # transient wait, not a fixed rejection. Once present,
+  # `supports_permission_switch` absent/false is a fixed
+  # `unsupported_permission_switch`, mirroring `require_reset_capability/2`'s
+  # shape for the sibling session_reset capability.
+  defp require_permission_switch_capability(envelope) do
+    case envelope |> Map.get("ext", %{}) |> Map.get("session_capabilities") do
+      caps when is_map(caps) ->
+        if Map.get(caps, "supports_permission_switch") == true do
+          :ok
+        else
+          {:error, :unsupported_permission_switch}
+        end
+
+      _absent ->
+        {:error, :permission_not_ready}
+    end
+  end
+
+  # `ext.engine` is required to route the request through
+  # `PermissionSettings` (which resets control/next on an engine
+  # mismatch) and to build the wrapper-bound relay. Its absence would
+  # otherwise reach `PermissionSettings.submit_request/6`'s `is_binary`
+  # guard as a crash rather than a graceful reject; folding it into the
+  # same `permission_not_ready` bucket as the capability-metadata check
+  # above is correct because both mean the same thing to the caller: this
+  # connection has not yet reported enough about itself to accept a request.
+  defp fetch_agent_engine(envelope) do
+    case envelope |> Map.get("ext", %{}) |> Map.get("engine") do
+      engine when is_binary(engine) and engine != "" -> {:ok, engine}
+      _absent -> {:error, :permission_not_ready}
+    end
+  end
+
+  # Server-derived, never a client claim (`PermissionAuditActor`,
+  # protocol.md). Reuses the SAME credential fingerprint `ClientSocket`
+  # already computes for issue #47's force-disconnect targeting
+  # (`socket.assigns[:socket_id]`) rather than resolving a `Users` ledger
+  # id — that ledger exists for the display-name feature (issue #197),
+  # a different concern, and by the time an operator-gated handler runs,
+  # `role_for/1` having already accepted this credential guarantees
+  # `socket_id` is a real, non-nil fingerprint (`connect/3` refuses the
+  # socket outright for a credential shape that would produce nil).
+  defp permission_actor(socket), do: %{kind: "user", id: socket.assigns[:socket_id]}
+
+  # `SetPermissionErrorReason` (protocol.md) is closed and does not
+  # include `invalid_agent_id` / `missing_agent_id` — both collapse to
+  # `invalid_payload` for this command's client-facing reason, while
+  # every other reason (from `require_operator/4`, `guard_against_reset_pending/2`,
+  # `PermissionSettings.submit_request/6`, and this module's own new
+  # helpers above) already matches the closed set verbatim.
+  defp permission_error_reason(reason) when reason in [:invalid_agent_id, :missing_agent_id],
+    do: :invalid_payload
+
+  defp permission_error_reason(reason), do: reason
 
   # phase-17 17-5 (must-1): the runner's rollback branch needs the
   # session_id that was current AT LOCK ACQUIRE TIME, not the one baked

@@ -1728,6 +1728,189 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     end
   end
 
+  describe "permission_sync join negotiation and after_join push (issue #305)" do
+    defp permission_control(overrides \\ %{}) do
+      Map.merge(
+        %{
+          "revision" => 0,
+          "requested" => %{"sandbox" => "read-only", "network_access" => false},
+          "status" => "pending",
+          "constraints" => %{"approval" => "never", "enforcement" => "os"}
+        },
+        overrides
+      )
+    end
+
+    defp seed_permission_settings(agent_id, engine, overrides \\ %{}) do
+      :ok =
+        KaoiroServer.PermissionSettings.record_observation(
+          agent_id,
+          engine,
+          permission_control(overrides)
+        )
+
+      :ok =
+        wait_until(fn -> KaoiroServer.PermissionSettings.get(agent_id) != nil end)
+    end
+
+    test "engine を宣言した join には reply に permission_sync: true が付く" do
+      agent_id = "test.permsync-join-1"
+
+      {reply, _socket} =
+        join_wrapper_with_reply(agent_id, "default", %{
+          "permission_sync" => %{"engine" => "codex"}
+        })
+
+      assert reply["permission_sync"] == true
+    end
+
+    test "permission_sync を宣言しない join には reply にそのキーが無い" do
+      agent_id = "test.permsync-join-2"
+
+      {reply, _socket} = join_wrapper_with_reply(agent_id)
+
+      refute Map.has_key?(reply, "permission_sync")
+    end
+
+    test "設定が無い agent は permission_sync {control: nil, next: nil} を push する" do
+      agent_id = "test.permsync-push-1"
+      assert KaoiroServer.PermissionSettings.get(agent_id) == nil
+
+      _socket =
+        join_wrapper(agent_id, "default", %{"permission_sync" => %{"engine" => "codex"}})
+
+      assert_push "permission_sync", %{version: "0", control: nil, next: nil}
+    end
+
+    test "設定がある agent はその control/next を push する" do
+      agent_id = "test.permsync-push-2"
+      seed_permission_settings(agent_id, "codex")
+
+      _socket =
+        join_wrapper(agent_id, "default", %{"permission_sync" => %{"engine" => "codex"}})
+
+      assert_push "permission_sync", %{version: "0", control: control, next: next}
+      assert control.revision == 0
+      assert control.status == :pending
+      assert next == %{revision: 0, requested: %{sandbox: "read-only", network_access: false}}
+    end
+
+    test "join が permission_sync を要求しなければ push もされない" do
+      agent_id = "test.permsync-push-3"
+      seed_permission_settings(agent_id, "codex")
+
+      _socket = join_wrapper(agent_id)
+
+      refute_push "permission_sync", _
+    end
+
+    test "保存済み engine と join 宣言の engine が食い違えば {nil, nil} を push する" do
+      agent_id = "test.permsync-push-4"
+      seed_permission_settings(agent_id, "claude-code")
+
+      _socket =
+        join_wrapper(agent_id, "default", %{"permission_sync" => %{"engine" => "codex"}})
+
+      assert_push "permission_sync", %{version: "0", control: nil, next: nil}
+    end
+
+    test "applied は sync 時に pending へ丸められ、submitted/effective は落ちるが last_effective は残る" do
+      agent_id = "test.permsync-push-5"
+      seed_permission_settings(agent_id, "codex")
+
+      effective = %{"session_id" => "s1", "turn_id" => "t1", "execution_id" => "e1"}
+
+      :ok =
+        KaoiroServer.PermissionSettings.record_observation(
+          agent_id,
+          "codex",
+          permission_control(%{
+            "status" => "applied",
+            "submitted" => %{"execution_id" => "e1"},
+            "effective" => effective
+          })
+        )
+
+      :ok =
+        wait_until(fn ->
+          KaoiroServer.PermissionSettings.get(agent_id).control.status == :applied
+        end)
+
+      _socket =
+        join_wrapper(agent_id, "default", %{"permission_sync" => %{"engine" => "codex"}})
+
+      assert_push "permission_sync", %{version: "0", control: control}
+      assert control.status == :pending
+      assert control.submitted == nil
+      assert control.effective == nil
+      assert control.last_effective == effective
+    end
+
+    test "state_change の ext.permission_control が PermissionSettings へ記録される" do
+      agent_id = "test.permsync-record-1"
+      socket = join_wrapper(agent_id)
+
+      env =
+        envelope(agent_id, "idle")
+        |> Map.put("ext", %{
+          "engine" => "codex",
+          "permission_control" => permission_control()
+        })
+
+      ref = push(socket, "envelope", env)
+      assert_reply ref, :ok
+
+      :ok = wait_until(fn -> KaoiroServer.PermissionSettings.get(agent_id) != nil end)
+      entry = KaoiroServer.PermissionSettings.get(agent_id)
+      assert entry.engine == "codex"
+      assert entry.control.revision == 0
+    end
+
+    test "model switch pending 中でも ext.permission_control は独立して記録される" do
+      agent_id = "test.permsync-record-2"
+      socket = join_wrapper(agent_id)
+
+      baseline =
+        envelope(agent_id, "idle")
+        |> Map.put("session_id", "sess-perm")
+        |> Map.put("ext", %{"effective" => %{"model" => "m1"}})
+
+      ref = push(socket, "envelope", baseline)
+      assert_reply ref, :ok
+      :ok = wait_until(fn -> SessionPointers.get(agent_id) != nil end)
+      assert SessionPointers.get(agent_id).snapshot == %{"model" => "m1"}
+
+      # `switch_error` triggers `record_snapshot_from_ext/2`'s whole-snapshot
+      # skip (ADR-0035 F3) — SessionPointers must stay at the baseline above
+      # even though this SAME envelope also carries a fresh
+      # `permission_control`, which must still land independently.
+      env =
+        envelope(agent_id, "thinking")
+        |> Map.put("session_id", "sess-perm")
+        |> Map.put("ext", %{
+          "engine" => "codex",
+          "effective" => %{"model" => "m2"},
+          "switch_error" => %{"reason" => "unsupported_model", "requested" => "m2"},
+          "permission_control" => permission_control(%{"status" => "applying"})
+        })
+
+      ref = push(socket, "envelope", env)
+      assert_reply ref, :ok
+
+      :ok =
+        wait_until(fn ->
+          match?(%{control: %{status: :applying}}, KaoiroServer.PermissionSettings.get(agent_id))
+        end)
+
+      entry = KaoiroServer.PermissionSettings.get(agent_id)
+      assert entry.control.status == :applying
+
+      # The whole-snapshot skip is unaffected: SessionPointers is still the
+      # pre-switch-error baseline, not "m2".
+      assert SessionPointers.get(agent_id).snapshot == %{"model" => "m1"}
+    end
+  end
+
   describe "inter_agent_message ルーティング (protocol-inter-agent, phase-8)" do
     defp inter_envelope(agent_id, to, opts \\ []) do
       meta =

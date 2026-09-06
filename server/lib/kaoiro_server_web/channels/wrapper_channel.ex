@@ -131,15 +131,22 @@ defmodule KaoiroServerWeb.WrapperChannel do
       # (rather than in :after_join) keeps it inside the same message the
       # wrapper is already waiting on, so the wrapper never has to guess
       # whether a verdict is still coming.
+      permission_sync_engine = fetch_permission_sync_engine(params)
+
       reply =
         %{"hydration" => hydration_verdict(agent_id)}
         |> maybe_put_optional_field("delivery", delivery)
+        |> maybe_put_optional_field(
+          "permission_sync",
+          if(permission_sync_engine, do: true)
+        )
 
       {:ok, reply,
        socket
        |> assign(:agent_id, agent_id)
        |> assign(:persona_id, persona_id)
        |> assign(:transition_id, transition_id)
+       |> assign(:permission_sync_engine, permission_sync_engine)
        |> assign(:wrapper_token, nil)}
     else
       {:error, reason} -> {:error, %{reason: to_string(reason)}}
@@ -161,6 +168,20 @@ defmodule KaoiroServerWeb.WrapperChannel do
     :ok = DeliveryStates.disarm(agent_id)
     nil
   end
+
+  # `PermissionSyncJoinRequest` (issue #305, protocol.md "Persistence,
+  # join synchronization, and resume"): a wrapper that supports the
+  # permission_sync contract declares its engine here so the server can
+  # reply `permission_sync: true` and later push the readiness-barrier
+  # sync in `after_join_handshake/1`. An older wrapper that omits this
+  # key gets neither — the negotiation itself is the compatibility gate,
+  # not a capability the server assumes.
+  defp fetch_permission_sync_engine(%{"permission_sync" => %{"engine" => engine}})
+       when is_binary(engine) and engine != "" do
+    engine
+  end
+
+  defp fetch_permission_sync_engine(_params), do: nil
 
   # Push the initial handshake state once the join completes:
   # - `persona_prompt`: the ready-to-inject personality + common footer
@@ -255,6 +276,8 @@ defmodule KaoiroServerWeb.WrapperChannel do
           :ok
       end
 
+      push_permission_sync(socket, agent_id)
+
       push_persona_sync(socket, agent_id)
       broadcast_delivery_status(agent_id)
 
@@ -319,6 +342,37 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # never returns canonical persona data anymore (issue #219 D19) —
   # `display_name` is a pure instance-state field, no join against
   # `PersonaAssets` needed here.
+  # `PermissionSyncMessage` (issue #305, protocol.md "Persistence, join
+  # synchronization, and resume"). Sent ONLY when this join's `permission_sync`
+  # negotiation was accepted (`socket.assigns.permission_sync_engine` set in
+  # `join/3`) — an old wrapper that never asked must not receive an event it
+  # was never told to expect. Sent unconditionally otherwise, `{control: nil,
+  # next: nil}` included: the join reply already promised `permission_sync:
+  # true`, and a supporting wrapper gates its first exec on this arriving at
+  # all, not on its content (protocol.md: "Synchronization is a readiness
+  # barrier, including the explicit empty response").
+  #
+  # An engine mismatch against the stored entry (agent_id reused under a
+  # different engine) is treated the same as "no settings" — protocol.md:
+  # "an engine change must not replay another engine's settings".
+  defp push_permission_sync(socket, agent_id) do
+    case socket.assigns[:permission_sync_engine] do
+      engine when is_binary(engine) ->
+        {control, next} = permission_sync_view(agent_id, engine)
+        push(socket, "permission_sync", %{version: "0", control: control, next: next})
+
+      nil ->
+        :ok
+    end
+  end
+
+  defp permission_sync_view(agent_id, engine) do
+    case KaoiroServer.PermissionSettings.get(agent_id) do
+      %{engine: ^engine} = entry -> KaoiroServer.PermissionSettings.sync_view(entry)
+      _no_entry_or_engine_mismatch -> {nil, nil}
+    end
+  end
+
   defp push_persona_sync(socket, agent_id) do
     case AgentDirectory.get(agent_id) do
       %{display_name: display_name, revision: revision} ->
@@ -1408,6 +1462,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
     SessionPointers.record(agent_id, sid, cwd, engine)
     record_snapshot_from_ext(agent_id, envelope)
+    record_permission_observation(agent_id, envelope)
   end
 
   defp record_session_pointer(envelope) do
@@ -1418,6 +1473,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
     case envelope do
       %{"agent_id" => agent_id} when is_binary(agent_id) ->
         record_snapshot_from_ext(agent_id, envelope)
+        record_permission_observation(agent_id, envelope)
 
       _ ->
         :ok
@@ -1513,6 +1569,25 @@ defmodule KaoiroServerWeb.WrapperChannel do
   end
 
   defp record_snapshot_from_ext(_agent_id, _envelope), do: :ok
+
+  # Field-level, revision-checked ingestion of a wrapper-reported
+  # `ext.permission_control` (issue #305). Deliberately INDEPENDENT of
+  # `record_snapshot_from_ext/2`'s model/effort pending guard above:
+  # protocol.md requires permission progress to keep recording even
+  # while a model/effort switch is pending or failed — the whole-snapshot
+  # skip that guard exists for must not also discard an unrelated,
+  # independently observed permission update. Malformed/absent shapes
+  # and stale/unknown revisions are `PermissionSettings.record_observation/4`'s
+  # own concern; this clause only extracts the fields.
+  defp record_permission_observation(agent_id, %{
+         "ext" => %{"permission_control" => permission_control, "engine" => engine}
+       })
+       when is_map(permission_control) and
+              engine in ["claude-code", "codex", "antigravity"] do
+    KaoiroServer.PermissionSettings.record_observation(agent_id, engine, permission_control)
+  end
+
+  defp record_permission_observation(_agent_id, _envelope), do: :ok
 
   @impl true
   # Phoenix.Channel.Server invokes this callback even when `join/3` returned
