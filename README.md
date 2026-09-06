@@ -10,12 +10,14 @@
 > every machine where agents run. Treat it like an SSH key to those
 > hosts, and read [SECURITY.md](SECURITY.md) before deploying.
 
-A system that **monitors the state and progress of multiple CLI AI agents**
-(such as Claude Code and Codex) and visualizes them as characters. Text-based
-CLI agents make it hard to tell what they are doing and who is waiting, and
-they can be difficult to relate to. kaoiro represents each agent as a character
-with changing expressions so that people can see what is happening and grow
-attached to them while running several agents at once.
+A system for **running, watching and orchestrating several CLI AI agents at
+once** (such as Claude Code and Codex). kaoiro launches agents on any host it
+supervises, derives each agent's state from engine SDK events and draws it as
+a character with changing expressions, routes the permission requests and
+questions they raise to the browser, and carries the messages they send each
+other. With faces, names that persist across sessions and a shared place to
+talk, running several agents is closer to keeping a small virtual AI office
+than to cycling through terminals — and easier to grow attached to.
 
 ![kaoiro dashboard: four agents rendered as character cards next to a
 conversation timeline, one card badged as waiting for
