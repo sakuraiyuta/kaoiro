@@ -81,6 +81,7 @@ defmodule KaoiroServer.AgentAcceptance do
   # reply gracefully before this OUTER call's own timeout would otherwise
   # fire first and mask that graceful reply with a raw `exit`.
   @run_timeout_ms 15_000
+  @registry_removal_attempts 100
 
   @doc false
   def start_link(agent_id) when is_binary(agent_id) do
@@ -162,14 +163,25 @@ defmodule KaoiroServer.AgentAcceptance do
     await_registry_removal(agent_id)
   end
 
-  defp await_registry_removal(agent_id) do
+  defp await_registry_removal(agent_id, attempts \\ @registry_removal_attempts)
+
+  defp await_registry_removal(agent_id, 0) do
+    Logger.warning(
+      "AgentAcceptance: Registry entry did not clear after worker termination " <>
+        "for agent_id=#{agent_id}"
+    )
+
+    :ok
+  end
+
+  defp await_registry_removal(agent_id, attempts) do
     case Registry.lookup(@registry, agent_id) do
       [] ->
         :ok
 
       _still_registered ->
         Process.sleep(1)
-        await_registry_removal(agent_id)
+        await_registry_removal(agent_id, attempts - 1)
     end
   end
 

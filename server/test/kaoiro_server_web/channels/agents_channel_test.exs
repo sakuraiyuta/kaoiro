@@ -82,6 +82,35 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     on_exit(fn -> Application.delete_env(:kaoiro_server, :client_tokens) end)
   end
 
+  defp wait_for_session_resets_restart(previous_pid, attempts \\ 100)
+
+  defp wait_for_session_resets_restart(_previous_pid, 0), do: :timeout
+
+  defp wait_for_session_resets_restart(previous_pid, attempts) do
+    case Process.whereis(KaoiroServer.SessionResets) do
+      pid when is_pid(pid) and pid != previous_pid ->
+        :ok
+
+      _ ->
+        Process.sleep(5)
+        wait_for_session_resets_restart(previous_pid, attempts - 1)
+    end
+  end
+
+  defp with_session_resets_unavailable(fun) when is_function(fun, 0) do
+    supervisor = Process.whereis(KaoiroServer.Supervisor)
+    previous_pid = Process.whereis(KaoiroServer.SessionResets)
+    :ok = :sys.suspend(supervisor)
+    true = Process.exit(previous_pid, :kill)
+
+    try do
+      fun.()
+    after
+      :ok = :sys.resume(supervisor)
+      assert wait_for_session_resets_restart(previous_pid) == :ok
+    end
+  end
+
   defp join_as(role) do
     {:ok, _reply, socket} =
       KaoiroServerWeb.ClientSocket
@@ -1312,6 +1341,35 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_reply ref, :error, %{reason: "permission_not_ready"}
     end
 
+    test "AgentAcceptance の内部失敗は set_permission では persistence_failed に写す" do
+      agent_id = "test.setperm2-acceptance-unavailable"
+      put_permission_agent(agent_id)
+      seed_permission_baseline(agent_id)
+      socket = join_as(:operator)
+      accept_pid = agent_acceptance_worker(agent_id)
+      :sys.suspend(accept_pid)
+
+      try do
+        ref =
+          push(socket, "set_permission", %{"agent_id" => agent_id, "sandbox" => "workspace-write"})
+
+        assert :ok ==
+                 wait_until_permission(fn ->
+                   {:messages, messages} = Process.info(accept_pid, :messages)
+                   Enum.any?(messages, &match?({:"$gen_call", _, {:run, _}}, &1))
+                 end)
+
+        capture_log(fn ->
+          with_session_resets_unavailable(fn ->
+            :ok = :sys.resume(accept_pid)
+            assert_reply ref, :error, %{reason: "persistence_failed"}
+          end)
+        end)
+      after
+        :sys.resume(accept_pid)
+      end
+    end
+
     test "pending 中の reset は session_reset_pending で reject" do
       # `acquire_reset_lock/1` (session_reset describe block below) replaces
       # the agent's whole envelope with one that has no permission
@@ -1443,6 +1501,85 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       [second, _first] = KaoiroServer.SessionLifecycleEvents.list_for_agent(agent_id)
       assert second.details["revision"] == 2
       assert second.details["previous"] == effective
+    end
+
+    test "queued set_permission requests capture audit time and previous at commit" do
+      agent_id = "test.setperm2-queued-audit"
+      put_permission_agent(agent_id)
+      seed_permission_baseline(agent_id)
+      first_socket = join_as(:operator)
+      second_socket = join_as(:operator)
+      accept_pid = agent_acceptance_worker(agent_id)
+      :sys.suspend(accept_pid)
+
+      try do
+        first_ref =
+          push(first_socket, "set_permission", %{
+            "agent_id" => agent_id,
+            "sandbox" => "workspace-write"
+          })
+
+        second_ref =
+          push(second_socket, "set_permission", %{
+            "agent_id" => agent_id,
+            "sandbox" => "danger-full-access"
+          })
+
+        assert :ok ==
+                 wait_until_permission(fn ->
+                   {:messages, messages} = Process.info(accept_pid, :messages)
+                   Enum.count(messages, &match?({:"$gen_call", _, {:run, _}}, &1)) == 2
+                 end)
+
+        effective = %{
+          "session_id" => "queued-audit-session",
+          "turn_id" => "queued-audit-turn",
+          "execution_id" => "queued-audit-exec",
+          "revision" => 0,
+          "requested" => %{"sandbox" => "read-only", "network_access" => false},
+          "network_access" => false,
+          "permission" => %{"sandbox" => "read-only", "approval" => "never"}
+        }
+
+        :ok =
+          KaoiroServer.PermissionSettings.record_observation(agent_id, "codex", %{
+            "revision" => 0,
+            "requested" => %{"sandbox" => "read-only", "network_access" => false},
+            "status" => "applied",
+            "constraints" => %{"approval" => "never", "enforcement" => "os"},
+            "effective" => effective
+          })
+
+        assert :ok ==
+                 wait_until_permission(fn ->
+                   get_in(KaoiroServer.PermissionSettings.get(agent_id), [:control, :effective]) ==
+                     effective
+                 end)
+
+        not_before = DateTime.utc_now() |> DateTime.to_iso8601()
+        Process.sleep(2)
+        :ok = :sys.resume(accept_pid)
+
+        assert_reply first_ref, :ok, %{"revision" => first_revision}
+        assert_reply second_ref, :ok, %{"revision" => second_revision}
+        assert MapSet.new([first_revision, second_revision]) == MapSet.new([1, 2])
+
+        assert :ok ==
+                 wait_until_permission(fn ->
+                   length(KaoiroServer.SessionLifecycleEvents.list_for_agent(agent_id)) == 2
+                 end)
+
+        events =
+          KaoiroServer.SessionLifecycleEvents.list_for_agent(agent_id)
+          |> Map.new(fn event -> {event.details["revision"], event} end)
+
+        assert events[1].details["previous"] == effective
+        assert events[2].details["previous"] == effective
+        assert events[1].at >= not_before
+        assert events[2].at >= events[1].at
+      after
+        :sys.resume(accept_pid)
+      end
     end
 
     # director裁定 2026-09-06: "agent token" means a wrapper-scoped
@@ -6187,6 +6324,34 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
                KaoiroServer.SessionLifecycleEvents.list_for_agent(agent_id)
     end
 
+    test "AgentAcceptance の内部失敗は session_reset では timeout に写す" do
+      agent_id = "sess-reset.acceptance-unavailable"
+      put_agent_with_caps(agent_id)
+      socket = join_as(:operator)
+      accept_pid = agent_acceptance_worker(agent_id)
+      :sys.suspend(accept_pid)
+
+      try do
+        ref = push(socket, "session_reset", %{"agent_id" => agent_id, "mode" => "new"})
+
+        assert :ok ==
+                 wait_until_permission(fn ->
+                   {:messages, messages} = Process.info(accept_pid, :messages)
+                   Enum.any?(messages, &match?({:"$gen_call", _, {:run, _}}, &1))
+                 end)
+
+        capture_log(fn ->
+          with_session_resets_unavailable(fn ->
+            :ok = :sys.resume(accept_pid)
+            assert_reply ref, :error, %{reason: "timeout"}
+          end)
+        end)
+      after
+        :sys.resume(accept_pid)
+        KaoiroServer.SessionResets.delete(agent_id)
+      end
+    end
+
     test "envelope に session_id が無ければ reset_session payload に previous_session_id を載せない" do
       agent_id = "sess-reset.no-prev"
       put_agent_with_caps(agent_id, session_id: nil)
@@ -7759,7 +7924,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
   end
 
   @tag :fuji
-  test "fuji permission acceptance cannot cross a reset lock" do
+  test "fuji first queued permission acceptance serializes a later reset" do
     id = "test.fuji-reset-race"
     put_permission_agent(id)
     env = AgentStates.snapshot() |> Map.fetch!(id)
@@ -7791,16 +7956,16 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
                  {:messages, messages} = Process.info(Process.whereis(ps), :messages)
 
                  Enum.any?(messages, fn message ->
-                   match?({:"$gen_call", _, {:get, ^id}}, message)
+                   match?({:"$gen_call", _, _}, message)
                  end)
                end)
 
       Process.sleep(2_100)
       reset_ref = push(reset_socket, "session_reset", %{"agent_id" => id, "mode" => "new"})
-      assert_reply reset_ref, :ok
+      refute_receive %Phoenix.Socket.Reply{ref: ^reset_ref}, 200
       :sys.resume(ps)
-      assert_receive %Phoenix.Socket.Reply{ref: ^ref, status: status, payload: payload}, 1_000
-      assert {status, payload} == {:error, %{reason: "session_reset_pending"}}
+      assert_reply ref, :ok, %{"revision" => 1}
+      assert_reply reset_ref, :ok
     after
       :sys.resume(ps)
       KaoiroServer.SessionResets.delete(id)

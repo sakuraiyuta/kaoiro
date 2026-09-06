@@ -229,7 +229,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
                    unknown_conversation_id invalid_approval
                    invalid_payload agent_unavailable
                    unsupported_permission_switch permission_not_ready
-                   persistence_failed acceptance_unavailable)a
+                   persistence_failed timeout)a
 
   # session_id charset — mirrors runner/src/sessions.ts SESSION_ID_PATTERN
   # (Claude Code's UUID-shaped JSONL filenames). Validated at this boundary so
@@ -716,8 +716,6 @@ defmodule KaoiroServerWeb.AgentsChannel do
          :ok <- require_agent_connected(envelope),
          :ok <- require_permission_switch_capability(envelope),
          {:ok, engine} <- fetch_agent_engine(envelope),
-         at = DateTime.utc_now() |> DateTime.to_iso8601(),
-         previous = permission_previous_observation(agent_id),
          # issue #305 M7, ふじ round 1 / director ruling 2026-09-06 +
          # round-2 correction: the early `guard_against_reset_pending/2`
          # check above ran on THIS channel process before the actual
@@ -741,13 +739,15 @@ defmodule KaoiroServerWeb.AgentsChannel do
          # `AgentAcceptance`'s closure unresolved — the shared
          # serialization point is released either way, so a stuck Users
          # store cannot also block an unrelated `session_reset`.
-         {:ok, revision, requested, actor} <-
+         {:ok, revision, requested, actor, at, previous} <-
            AgentAcceptance.run(agent_id, fn ->
              with :ok <- SessionResets.guard_instruction(agent_id),
                   {:ok, actor} <- resolve_permission_actor(socket),
+                  at = DateTime.utc_now() |> DateTime.to_iso8601(),
+                  previous = permission_previous_observation(agent_id),
                   {:ok, revision, requested} <-
                     PermissionSettings.submit_request(agent_id, engine, patch, actor, at) do
-               {:ok, revision, requested, actor}
+               {:ok, revision, requested, actor, at, previous}
              end
            end) do
       # issue #305 M5, ふじ round 1: project the just-accepted request into
@@ -865,7 +865,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
       {:reply, :ok, socket}
     else
       {:error, reason} ->
-        {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+        {:reply, {:error, %{reason: safe_reason(session_reset_error_reason(reason))}}, socket}
     end
   end
 
@@ -3286,15 +3286,21 @@ defmodule KaoiroServerWeb.AgentsChannel do
   defp permission_error_reason(reason) when reason in [:invalid_agent_id, :missing_agent_id],
     do: :invalid_payload
 
+  defp permission_error_reason(:acceptance_unavailable), do: :persistence_failed
+
   defp permission_error_reason(reason), do: reason
+
+  defp session_reset_error_reason(:acceptance_unavailable), do: :timeout
+  defp session_reset_error_reason(reason), do: reason
 
   # `permission_requested`'s optional `previous` (protocol.md "Permission
   # lifecycle audit"): the most recent CONFIRMED observation before this
   # new request, resolved from the server's own accepted observations
-  # (never a wrapper-supplied audit claim). Read BEFORE
-  # `PermissionSettings.submit_request/6` mutates the entry — that call
-  # advances `control` to the new pending revision, so `effective` /
-  # `last_effective` must be captured from the entry as it stood before.
+  # (never a wrapper-supplied audit claim). Read immediately before
+  # `PermissionSettings.submit_request/6` inside AgentAcceptance's
+  # closure: that call advances `control` to the new pending revision,
+  # so `effective` / `last_effective` must be captured from the entry as
+  # it stood at the commit point.
   defp permission_previous_observation(agent_id) do
     case PermissionSettings.get(agent_id) do
       %{control: %{effective: effective}} when is_map(effective) -> effective

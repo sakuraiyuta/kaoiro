@@ -1079,7 +1079,68 @@ defmodule KaoiroServer.PermissionSettingsTest do
       refute Map.has_key?(entry.ledger, 1)
     end
 
-    test "a client_socket: actor id from a pre-M1 record does not resurrect on load (M-A)",
+    test "a rejected chain retains its eligible selection after pruning", %{server: server} do
+      id = "c.rejected-chain-prune"
+      actor = %{kind: "user", id: "u1"}
+      at = "2026-09-06T00:00:00Z"
+      seed_baseline(server, id)
+
+      {:ok, 1, a} =
+        PermissionSettings.submit_request(
+          id,
+          "codex",
+          %{sandbox: "workspace-write", network_access: true},
+          actor,
+          at,
+          server
+        )
+
+      for revision <- 2..35 do
+        sandbox = if rem(revision, 2) == 0, do: "danger-full-access", else: "read-only"
+
+        {:ok, ^revision, requested} =
+          PermissionSettings.submit_request(id, "codex", %{sandbox: sandbox}, actor, at, server)
+
+        :ok =
+          PermissionSettings.record_observation(
+            id,
+            "codex",
+            baseline_control(%{
+              "revision" => revision,
+              "requested" => %{
+                "sandbox" => requested.sandbox,
+                "network_access" => requested.network_access
+              },
+              "status" => "failed",
+              "reason" => "rejected_before_application",
+              "rolled_back_to" => %{
+                "sandbox" => requested.sandbox,
+                "network_access" => requested.network_access
+              }
+            }),
+            server
+          )
+
+        :ok =
+          wait_until(fn ->
+            case PermissionSettings.get(id, server) do
+              %{control: %{revision: ^revision, status: :failed}} -> true
+              _ -> false
+            end
+          end)
+
+        assert PermissionSettings.get(id, server).next == %{revision: 1, requested: a}
+      end
+
+      entry = PermissionSettings.get(id, server)
+      {_control, next} = PermissionSettings.sync_view(entry)
+
+      assert next == %{revision: 1, requested: a}
+      assert map_size(entry.ledger) <= 32
+      assert Map.has_key?(entry.ledger, 1)
+    end
+
+    test "a client_socket: actor id from a retained pre-M1 record does not resurrect on load (M-A)",
          %{server: server, path: path} do
       seed_baseline(server, "c.legacy-actor")
 
@@ -1100,8 +1161,21 @@ defmodule KaoiroServer.PermissionSettingsTest do
       [{{:settings, "c.legacy-actor"}, entry}] =
         :dets.lookup(table, {:settings, "c.legacy-actor"})
 
+      retained_ledger =
+        Map.new(2..33, fn revision ->
+          {revision,
+           %{
+             requested: entry.next.requested,
+             submitted: nil,
+             effective: nil,
+             prior_next: %{revision: 1, requested: entry.next.requested}
+           }}
+        end)
+
       legacy_entry =
-        put_in(entry, [:control, :actor], %{"kind" => "user", "id" => "client_socket:abc123"})
+        entry
+        |> Map.put(:ledger, Map.merge(entry.ledger, retained_ledger))
+        |> put_in([:control, :actor], %{"kind" => "user", "id" => "client_socket:abc123"})
 
       :dets.insert(table, {{:settings, "c.legacy-actor"}, legacy_entry})
       :dets.sync(table)
@@ -1427,5 +1501,83 @@ defmodule KaoiroServer.PermissionSettingsTest do
 
       :dets.close(probe_name)
     end
+  end
+
+  @tag :fuji_r2
+  test "consecutive rejected requests retain the last eligible next selection", %{
+    server: server,
+    path: path
+  } do
+    id = "fuji.consecutive-rejections"
+    seed_baseline(server, id)
+    actor = %{kind: "user", id: "u1"}
+    at = "2026-09-06T00:00:00Z"
+
+    request = fn patch ->
+      PermissionSettings.submit_request(id, "codex", patch, actor, at, server)
+    end
+
+    report = fn revision, requested, status, extras ->
+      control =
+        baseline_control(
+          Map.merge(
+            %{
+              "revision" => revision,
+              "requested" => %{
+                "sandbox" => requested.sandbox,
+                "network_access" => requested.network_access
+              },
+              "status" => status
+            },
+            extras
+          )
+        )
+
+      :ok = PermissionSettings.record_observation(id, "codex", control, server)
+      PermissionSettings.get(id, server)
+    end
+
+    assert {:ok, 1, a} = request.(%{sandbox: "workspace-write", network_access: true})
+    a_wire = %{"sandbox" => a.sandbox, "network_access" => a.network_access}
+    submitted = %{"revision" => 1, "requested" => a_wire, "execution_id" => "exec-a"}
+
+    observed =
+      Map.merge(submitted, %{
+        "session_id" => "session",
+        "turn_id" => "turn-a",
+        "permission" => %{
+          "sandbox" => "workspace-write",
+          "approval" => "never",
+          "enforcement" => "os"
+        },
+        "network_access" => true
+      })
+
+    report.(1, a, "applied", %{"submitted" => submitted, "effective" => observed})
+    assert {:ok, 2, b} = request.(%{sandbox: "danger-full-access"})
+
+    rejection = %{
+      "reason" => "rejected_before_application",
+      "rolled_back_to" => %{"sandbox" => b.sandbox, "network_access" => b.network_access}
+    }
+
+    first = report.(2, b, "failed", rejection)
+    assert first.next == %{revision: 1, requested: a}
+
+    assert {:ok, 3, c} = request.(%{sandbox: "read-only"})
+    second = report.(3, c, "failed", rejection)
+    {control, next} = PermissionSettings.sync_view(second)
+    assert next == %{revision: 1, requested: a}
+    assert control["rolled_back_to"] == a_wire
+
+    :ok = GenServer.stop(server)
+    name = :"ps_rejected_chain_#{System.unique_integer([:positive])}"
+    {:ok, pid} = PermissionSettings.start_link(name: name, path: path)
+
+    {control, next} = PermissionSettings.sync_view(PermissionSettings.get(id, name))
+    assert next == %{revision: 1, requested: a}
+    assert control["rolled_back_to"] == a_wire
+
+    GenServer.stop(pid)
   end
 end

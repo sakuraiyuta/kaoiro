@@ -19,10 +19,10 @@ defmodule KaoiroServer.PermissionSettings.State do
     `actor`/`at` for audit.
   - `next` — `%{revision, requested}`, what the wrapper should apply at
     its next execution.
-  - `ledger` — `%{revision => %{requested, submitted, effective}}` for
-    every revision this agent has ever been submitted or seeded at, an
-    append-mostly history bounded by `prune_ledger/2` (see `submit/6`
-    and `observe/4`'s docs for what it is used for).
+  - `ledger` — `%{revision => %{requested, submitted, effective,
+    prior_next}}` for every revision this agent has ever been submitted
+    or seeded at. `prior_next` binds a request to the server-owned
+    selection that was current when it was accepted.
   """
 
   @max_safe_integer 9_007_199_254_740_991
@@ -90,7 +90,8 @@ defmodule KaoiroServer.PermissionSettings.State do
             Map.put(entry.ledger, new_revision, %{
               requested: requested,
               submitted: nil,
-              effective: nil
+              effective: nil,
+              prior_next: entry.next
             })
       }
 
@@ -171,7 +172,8 @@ defmodule KaoiroServer.PermissionSettings.State do
           sanitized.revision => %{
             requested: sanitized.requested,
             submitted: sanitized.submitted,
-            effective: sanitized.effective
+            effective: sanitized.effective,
+            prior_next: nil
           }
         }
       }
@@ -257,7 +259,7 @@ defmodule KaoiroServer.PermissionSettings.State do
         (sanitized.rolled_back_to != nil or submitted == nil)
 
     if pre_application_rejection? do
-      fallback = fallback_to_predecessor(entry, ledger)
+      fallback = fallback_to_prior_next(entry, ledger)
 
       control = %{
         entry.control
@@ -309,7 +311,8 @@ defmodule KaoiroServer.PermissionSettings.State do
       %{
         requested: sanitized.requested,
         submitted: sanitized.submitted,
-        effective: sanitized.effective
+        effective: sanitized.effective,
+        prior_next: nil
       },
       fn stored ->
         %{
@@ -321,32 +324,16 @@ defmodule KaoiroServer.PermissionSettings.State do
     )
   end
 
-  # `submitted == nil` signals this revision was never itself submitted
-  # for execution — a still-in-flight PRIOR revision's submission can
-  # ride along in the SAME observation payload (protocol.md: "Retain A's
-  # submission and request binding until its outcome is handled"), so
-  # `submitted`'s ABSENCE, not its presence, is what a pre-application
-  # rejection of THIS revision actually looks like. The fallback target
-  # is always the ledger's numerically nearest LOWER revision (never a
-  # content search — see `settled_transition/3`'s moduledoc-adjacent
-  # comment on why the wrapper's `rolled_back_to` value is never
-  # trusted for this): revisions allocate sequentially with no gaps
-  # except from `prune_ledger/2`, so this is normally exactly
-  # "revision - 1", reaching further back only when pruning has already
-  # removed that immediate predecessor.
-  defp fallback_to_predecessor(entry, ledger) do
-    current_revision = entry.control.revision
+  # A rejection falls back to the selection that was current when this
+  # revision was accepted. A numerically older ledger row may itself have
+  # been rejected, so revision order is not a safe recovery rule.
+  defp fallback_to_prior_next(entry, ledger) do
+    case Map.get(ledger, entry.control.revision) do
+      %{prior_next: %{revision: revision, requested: requested}} ->
+        %{revision: revision, requested: requested}
 
-    ledger
-    |> Map.keys()
-    |> Enum.filter(&(&1 < current_revision))
-    |> case do
-      [] ->
+      _legacy_entry_without_prior_next ->
         entry.next
-
-      revisions ->
-        predecessor = Enum.max(revisions)
-        %{revision: predecessor, requested: ledger[predecessor].requested}
     end
   end
 
@@ -357,12 +344,10 @@ defmodule KaoiroServer.PermissionSettings.State do
   @doc """
   Bounds ledger growth (issue #305 M3, director ruling 2026-09-06).
   Retains only entries a live lookup can still need — the current
-  `control`/`next` revisions and `last_effective`'s own revision, if
-  present — plus a safety cap (`#{@ledger_safety_cap}`); older entries
-  beyond the cap are pruned OLDEST first. A revision still in flight is
-  always one of the protected ones (it is always either
-  `control.revision` or `next.revision`), so nothing pruned here is
-  ever actionable state. `resolve_permission_previous/2`'s own contract
+  `control`/`next` revisions, an unresolved control's `prior_next`, and
+  `last_effective`'s own revision, if present — plus a safety cap
+  (`#{@ledger_safety_cap}`); older entries beyond the cap are pruned
+  OLDEST first. `resolve_permission_previous/2`'s own contract
   (`wrapper_channel.ex`): `previous` resolves only within whatever the
   ledger still holds — a revision pruned away resolves to an earlier
   surviving one, or `nil`, never an error.
@@ -377,6 +362,16 @@ defmodule KaoiroServer.PermissionSettings.State do
 
   defp protected_revisions(entry) do
     base = MapSet.new([entry.control.revision, entry.next.revision])
+
+    base =
+      if entry.control.status in [:pending, :applying, :unknown] do
+        case Map.get(entry.ledger, entry.control.revision) do
+          %{prior_next: %{revision: revision}} -> MapSet.put(base, revision)
+          _ -> base
+        end
+      else
+        base
+      end
 
     case entry.control.last_effective do
       %{"revision" => revision} -> MapSet.put(base, revision)
@@ -406,10 +401,7 @@ defmodule KaoiroServer.PermissionSettings.State do
 
   @doc """
   Sanitizes an entry loaded from DETS: defaults a missing `:ledger` key
-  (a record stored before the M3 ledger redesign had `:prior_next`
-  instead, now unused — losing rollback history for a pre-upgrade entry
-  costs at most one M3(d) fallback to `entry.next`, matching the pre-M3
-  behavior for that one case) and rejects a legacy `client_socket:`
+  and rejects a legacy `client_socket:`
   fingerprint-prefixed `control.actor.id` back to `nil` (issue #305 M-A,
   クロエ round 2 / director round-2 correction 2026-09-06 — the same
   read-path rejection `session_lifecycle_events.ex` applies to
