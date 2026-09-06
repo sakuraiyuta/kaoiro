@@ -53,6 +53,11 @@ limits, and the turn-number contract).
 - Save flaky-test output before rerunning. The test name, stack trace, and seed
   are lost the moment a rerun is green (on failure, ExUnit prints a
   `mix test --seed <N>` reproduction command).
+- A completion report states, for every gate command, the exit code and
+  whether unhandled errors or warnings were emitted, not the pass count
+  alone. A suite can report every test green and still exit non-zero
+  (vitest unhandled errors, ExUnit `--warnings-as-errors`); a count-only
+  report hides exactly the failure CI will surface (2026-09-06, issue #307).
 - Confirm for each artifact where an agreed fix landed. When one agreement has
   multiple destinations (code / ADR / issue body / proposal text), do not check
   one and infer the rest.
@@ -93,7 +98,10 @@ limits, and the turn-number contract).
   start that process from the test itself and hold its PID or port; assert
   the identity before signalling.
 - Cleanup follows the same rule: remove only scratch directories, worktrees
-  and containers you created, named so that ownership is visible.
+  and containers you created, named so that ownership is visible. When two
+  sessions share a persona name, put the display name (`kuroe-sub`, not
+  `kuroe`) in the scratch name; a reviewer must be able to tell whose
+  28 MB repo copy under `/tmp` is still live without asking.
 - Why: a `pgrep -f beam.smp | head -1` followed by `kill -9` during a review
   probe could not be confirmed to have hit the reviewer's own child
   (2026-09-06, issue #305 B round 2). Nothing in production was affected,
