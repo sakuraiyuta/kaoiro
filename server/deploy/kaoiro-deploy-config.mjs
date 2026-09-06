@@ -3,7 +3,7 @@
 // holding the operating values decided on #303 (2026-09-06). Every value
 // has a default from that decision, so a config file only needs to state
 // what it overrides.
-import { readFileSync, statSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readFileSync } from "node:fs";
 
 export class ConfigError extends Error {}
 
@@ -46,28 +46,52 @@ const VALIDATORS = {
  *
  *  `path === undefined` (no --config given) returns the defaults as-is;
  *  every other failure mode (missing file, wrong mode, bad JSON, bad
- *  shape) throws ConfigError. */
+ *  shape) throws ConfigError.
+ *
+ *  AUTHORIZATION-VS-CONTENT IDENTITY (ふじ design review S2). Mode and
+ *  ownership are checked, and the file is read, through the SAME open
+ *  file descriptor — a stat-by-path followed by a separate
+ *  readFileSync-by-path would let the path be replaced between the two
+ *  calls (classic TOCTOU), so the mode this function approved would not
+ *  be the mode of the bytes it actually parses. Opening once and using
+ *  fstat + a read on that fd closes that specific window.
+ *
+ *  WHAT THIS DOES NOT CLOSE: everything before the open() itself. A
+ *  party with write access to this path (or to a directory in it) at any
+ *  point before this call — necessarily the same privilege level needed
+ *  to plant a malicious --config in the first place — is not defended
+ *  against by mode/owner checks done AFTER they already acted. This
+ *  function proves "the fd I opened, at open time, was 0600 and owned by
+ *  me", not "no same-privilege party has ever touched this file". */
 export function loadConfig(path) {
   if (path === undefined) return { ...DEFAULT_CONFIG };
 
-  let stat;
+  let fd;
   try {
-    stat = statSync(path);
+    fd = openSync(path, "r");
   } catch (err) {
     fail(`--config file is unreadable at ${path}: ${err.message}`);
   }
-  const mode = stat.mode & 0o777;
-  if (mode !== 0o600) {
-    fail(
-      `--config file must be mode 0600, found ${mode.toString(8)}: ${path} (chmod 600 ${path})`,
-    );
-  }
-
   let raw;
   try {
-    raw = readFileSync(path, "utf8");
+    const stat = fstatSync(fd);
+    const mode = stat.mode & 0o777;
+    if (mode !== 0o600) {
+      fail(
+        `--config file must be mode 0600, found ${mode.toString(8)}: ${path} (chmod 600 ${path})`,
+      );
+    }
+    if (typeof process.getuid === "function" && stat.uid !== process.getuid()) {
+      fail(
+        `--config file must be owned by the current user (uid ${process.getuid()}), found uid ${stat.uid}: ${path}`,
+      );
+    }
+    raw = readFileSync(fd, "utf8");
   } catch (err) {
+    if (err instanceof ConfigError) throw err;
     fail(`--config file is unreadable at ${path}: ${err.message}`);
+  } finally {
+    closeSync(fd);
   }
   let parsed;
   try {

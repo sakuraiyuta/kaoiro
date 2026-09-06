@@ -17,7 +17,7 @@ function validJournal() {
     schema_version: 1,
     transaction_id: "20260906T101500Z",
     phase: "prepare",
-    history: [{ phase: "prepare", at: "2026-09-06T10:15:00.000Z" }],
+    history: [{ phase: "prepare", at: "2026-09-06T10:15:00.000Z", observation: {} }],
   };
 }
 
@@ -80,7 +80,7 @@ test("advancePhase appends to history and moves the current phase", () => {
   assert.equal(next.phase, "stopping");
   assert.equal(next.history.length, 2);
   assert.equal(next.history[1].phase, "stopping");
-  assert.equal(next.history[1].stop_exit_code, null);
+  assert.equal(next.history[1].observation.stop_exit_code, null);
   assert.deepEqual(readJournal(dir), next);
   // The original object handed in must not be mutated in place — a
   // caller that still holds `journal` after calling advancePhase must

@@ -16,7 +16,9 @@ function validManifest() {
     schema_version: 1,
     transaction_id: "20260906T101500Z",
     compose_artifact: { path: "server/docker-compose.yaml", sha256: "a".repeat(64) },
-    env_consistency: { checked: true },
+    env_consistency: {
+      KAOIRO_CLIENT_TOKENS: { env_file: "set", compose: "set", container: "set", match: true },
+    },
     image_id: "sha256:" + "b".repeat(64),
     source_sha: "c".repeat(40),
     target_sha: "d".repeat(40),
@@ -61,6 +63,39 @@ test("isValidManifestShape rejects a required_entries item without owner", () =>
 test("isValidManifestShape rejects an unknown schema_version", () => {
   const bad = validManifest();
   bad.schema_version = 2;
+  assert.equal(isValidManifestShape(bad), false);
+});
+
+test("isValidManifestShape rejects an image_id that is not a sha256 digest", () => {
+  const bad = validManifest();
+  bad.image_id = "not-an-image";
+  assert.equal(isValidManifestShape(bad), false);
+});
+
+test("isValidManifestShape rejects a required_entries owner that is not numeric uid:gid", () => {
+  const bad = validManifest();
+  bad.required_entries = [{ path: "users.dets", owner: "banana", mode: "0600" }];
+  assert.equal(isValidManifestShape(bad), false);
+});
+
+test("isValidManifestShape rejects a required_entries mode that is not octal", () => {
+  const bad = validManifest();
+  bad.required_entries = [{ path: "users.dets", owner: "1000:1000", mode: "banana" }];
+  assert.equal(isValidManifestShape(bad), false);
+});
+
+test("isValidManifestShape rejects duplicate required_entries paths", () => {
+  const bad = validManifest();
+  bad.required_entries = [
+    { path: "users.dets", owner: "1000:1000", mode: "0600" },
+    { path: "users.dets", owner: "1000:1000", mode: "0644" },
+  ];
+  assert.equal(isValidManifestShape(bad), false);
+});
+
+test("isValidManifestShape rejects an env_consistency entry with a non-boolean match", () => {
+  const bad = validManifest();
+  bad.env_consistency = { KAOIRO_CLIENT_TOKENS: { env_file: "set", compose: "set", container: "set", match: "yes" } };
   assert.equal(isValidManifestShape(bad), false);
 });
 
