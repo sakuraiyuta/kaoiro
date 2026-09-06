@@ -40,21 +40,30 @@ kaoiro_install_root() {
   fi
 }
 
-# The CONFIG dir (runner.config.json, runner.env) — kaoiro-runner-bootstrap.sh
-# (issue #314) is the first shell script that needs to know whether a host
-# is already configured, so this mirrors runner/src/setup.ts's own
-# resolveConfigDir() rather than shelling out to node just to ask it. KEEP
-# THE TWO IN SYNC: resolveConfigDir is the actual authority the wizard
-# writes through; this is pinned against it directly in
-# releaseBootstrap.test.ts (same env/platform in, same path out), not
-# assumed to match by construction.
+# The CONFIG dir (runner.config.json, runner.env) — this mirrors the SAME
+# rule implemented THREE times over (issue #314 added this one; #144 and
+# #70 added the other two, listed so a future reader does not have to grep
+# for them): runner/src/setup.ts's resolveConfigDir() (the wizard, the
+# actual authority the config is written through) and
+# kaoiro-runner-launch.sh:29-33 (the service-start shim). KEEP ALL THREE IN
+# SYNC. This one is pinned against resolveConfigDir directly in
+# releaseBootstrap.test.ts (same env/platform in, same path out via a
+# `KAOIRO_UNAME`-forced Darwin/Linux/XDG matrix, not assumed to match by
+# construction).
+#
+# `${KAOIRO_UNAME:-$(uname -s)}` — the SAME seam kaoiro-runner-bootstrap.sh
+# uses for its own `os` decision, and for the same reason: the two must
+# read one OS opinion, not two, or a test (or a host) forcing one via
+# KAOIRO_UNAME while this function still asked the real kernel could pick
+# systemd's launchd counterpart's config path while running the OTHER
+# branch's service logic. Do not call bare `uname -s` here again.
 kaoiro_config_dir() {
   if [ -n "${KAOIRO_RUNNER_DIR:-}" ]; then
     printf '%s\n' "$KAOIRO_RUNNER_DIR"
     return 0
   fi
   [ -n "${HOME:-}" ] || kaoiro_die "HOME is unset; set KAOIRO_RUNNER_DIR"
-  if [ "$(uname -s)" = "Darwin" ]; then
+  if [ "${KAOIRO_UNAME:-$(uname -s)}" = "Darwin" ]; then
     printf '%s\n' "$HOME/Library/Application Support/kaoiro"
   else
     printf '%s\n' "${XDG_CONFIG_HOME:-$HOME/.config}/kaoiro"

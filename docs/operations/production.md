@@ -125,7 +125,13 @@ nginx, or `ws://<PHX_HOST>:<PORT>/runner` for the direct-VPN deployment,
 tar xzf kaoiro-runner-<rev>-<os>-<arch>.tar.gz
 cd kaoiro-runner-<rev>-<os>-<arch>
 ./deploy/kaoiro-runner-bootstrap.sh ../kaoiro-runner-<rev>-<os>-<arch>.tar.gz
-sudo loginctl enable-linger "$USER"   # Linux only — required to start at boot
+```
+
+**Linux only** — required so the user service starts at boot, before anyone
+logs in (macOS has no equivalent step; skip this on Darwin):
+
+```sh
+sudo loginctl enable-linger "$USER"
 ```
 
 Safe to re-run (skips the wizard if already configured; `--reconfigure`

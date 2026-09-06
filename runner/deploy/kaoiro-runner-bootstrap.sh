@@ -82,14 +82,51 @@ launchctl_bin="${KAOIRO_LAUNCHCTL:-launchctl}"
 # service-manager file, and both branches close over `deploy_dir` (this
 # script's own directory, where the templates live).
 
+# sed's REPLACEMENT text treats a literal `&` as "the whole match" and `\`
+# as an escape leader, so an install root or $HOME carrying either would
+# silently splice @@DEPLOY_DIR@@ itself back into the rendered unit/plist
+# instead of the intended path — the placeholder text survives into the
+# file, and the service reads it on every future start. `|` (this script's
+# own sed delimiter, chosen so a `/`-heavy path needs no escaping) fails
+# LOUDLY instead ("unterminated `s' command"), the safer of the two but
+# still worth closing with the same substitution.
+sed_escape_replacement() {
+  printf '%s' "$1" | sed -e 's/[\\&|]/\\&/g'
+}
+
+# A newline in the value cannot be escaped this way (sed's own replacement
+# text is line-based), so it is rejected before rendering rather than risking
+# a truncated or multi-line substitution. Prints its own diagnostic and
+# returns non-zero rather than calling kaoiro_die directly, so a caller
+# writing the render's stdout to a temp file can clean that file up before
+# exiting.
+reject_newline() {
+  # $1 = label (for the message), $2 = value
+  # `if` (not `[ ... ] && return 0`): under `set -e`, a bare AND-list whose
+  # left side fails would exit the whole script right there instead of
+  # falling through to the diagnostic below — `-e` is only suspended for a
+  # command tested as an `if` CONDITION, not for one that is merely the left
+  # side of `&&` in a standalone statement.
+  if [ "$(printf '%s' "$2" | wc -l)" -eq 0 ]; then
+    return 0
+  fi
+  printf '%s: %s must not contain a newline: %s\n' "$prog" "$1" "$2" >&2
+  return 1
+}
+
 render_systemd_unit() {
   # $1 = install root
-  sed "s|@@DEPLOY_DIR@@|$1/current/deploy|" "$deploy_dir/kaoiro-runner.service"
+  reject_newline "install root" "$1" || return 1
+  sed "s|@@DEPLOY_DIR@@|$(sed_escape_replacement "$1/current/deploy")|" \
+    "$deploy_dir/kaoiro-runner.service"
 }
 
 render_launchd_plist() {
   # $1 = install root
-  sed -e "s|@@DEPLOY_DIR@@|$1/current/deploy|" -e "s|@@HOME@@|$HOME|" \
+  reject_newline "install root" "$1" || return 1
+  reject_newline HOME "$HOME" || return 1
+  sed -e "s|@@DEPLOY_DIR@@|$(sed_escape_replacement "$1/current/deploy")|" \
+    -e "s|@@HOME@@|$(sed_escape_replacement "$HOME")|" \
     "$deploy_dir/com.kaoiro.runner.plist"
 }
 
@@ -127,7 +164,8 @@ apply_systemd() {
   _unit_path="$_unit_dir/kaoiro-runner.service"
   mkdir -p "$_unit_dir"
   _new="$_unit_dir/.kaoiro-runner.service.new.$$"
-  render_systemd_unit "$_root" >"$_new"
+  render_systemd_unit "$_root" >"$_new" ||
+    { rm -f "$_new"; kaoiro_die "failed to render $_unit_path" 70; }
   _changed=yes
   [ ! -e "$_unit_path" ] || ! cmp -s "$_new" "$_unit_path" || _changed=no
   _was_active=no
@@ -154,7 +192,8 @@ apply_launchd() {
   mkdir -p "$_agents_dir"
   _plist_path="$_agents_dir/com.kaoiro.runner.plist"
   _new="$_agents_dir/.com.kaoiro.runner.plist.new.$$"
-  render_launchd_plist "$_root" >"$_new"
+  render_launchd_plist "$_root" >"$_new" ||
+    { rm -f "$_new"; kaoiro_die "failed to render $_plist_path" 70; }
   _changed=yes
   [ ! -e "$_plist_path" ] || ! cmp -s "$_new" "$_plist_path" || _changed=no
   _uid=$(id -u)

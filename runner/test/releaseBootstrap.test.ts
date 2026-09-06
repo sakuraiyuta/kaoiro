@@ -21,6 +21,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   readlinkSync,
   rmSync,
@@ -30,13 +31,32 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { resolveConfigDir } from "../src/setup.js";
 import { makeReleaseTarball, revisionOf, runScript } from "./releaseFixture.js";
 
 const bootstrapScript = fileURLToPath(
   new URL("../deploy/kaoiro-runner-bootstrap.sh", import.meta.url),
 );
+const commonScript = fileURLToPath(
+  new URL("../deploy/kaoiro-runner-common.sh", import.meta.url),
+);
 
 const TOKEN = "kaoiro-secret-token-do-not-print-9f3a";
+
+/** Runs `kaoiro_config_dir` (kaoiro-runner-common.sh) in isolation, the same
+ *  way any deploy/*.sh sourcing the file would call it. Every override key
+ *  defaults to `undefined` (removed) so a case only reflects what it states,
+ *  never an ambient value the host or CI runner happens to carry. */
+const configDirViaShell = (
+  env: Record<string, string | undefined>,
+) =>
+  runScript("sh", ["-c", `. ${JSON.stringify(commonScript)}; kaoiro_config_dir`], {
+    HOME: undefined,
+    XDG_CONFIG_HOME: undefined,
+    KAOIRO_RUNNER_DIR: undefined,
+    KAOIRO_UNAME: undefined,
+    ...env,
+  });
 
 describe("kaoiro-runner-bootstrap.sh (issue #314)", () => {
   let dir: string;
@@ -277,6 +297,31 @@ describe("kaoiro-runner-bootstrap.sh (issue #314)", () => {
       expect(content).toContain(`${home}/Library/Logs/kaoiro/runner.log`);
       expect(readCalls().some((l) => l.startsWith("bootstrap gui/"))).toBe(true);
     });
+
+    it("KAOIRO_UNAME=Darwin では os も config dir も揃って launchd 側へ振れる(食い違わない)", () => {
+      // KAOIRO_RUNNER_DIR is explicitly left UNSET (unlike every other test
+      // in this file, which overrides it to a fixed temp dir) so
+      // kaoiro_config_dir genuinely runs its own uname branch here — round-1
+      // review M-1: before the fix, this function always called bare
+      // `uname -s`, so on a real-Linux CI host, os (from KAOIRO_UNAME) and
+      // config_dir (from the real kernel) could disagree about which OS this
+      // run is for. This test fails exactly that way if the fix regresses,
+      // since this suite always runs on Linux.
+      const revision = revisionOf("bootstrap-darwin-config-dir-parity");
+      const archive = makeReleaseTarball(work, revision);
+
+      const result = runScript(
+        bootstrapScript,
+        ["--install-dir", root, archive, "--dry-run"],
+        { HOME: home, KAOIRO_UNAME: "Darwin", KAOIRO_RUNNER_DIR: undefined },
+      );
+
+      expect(result.status).toBe(0);
+      const darwinConfigDir = join(home, "Library", "Application Support", "kaoiro");
+      const linuxConfigDir = join(home, ".config", "kaoiro");
+      expect(result.stderr).toContain(darwinConfigDir);
+      expect(result.stderr).not.toContain(linuxConfigDir);
+    });
   });
 
   describe("冪等な再実行", () => {
@@ -332,6 +377,82 @@ describe("kaoiro-runner-bootstrap.sh (issue #314)", () => {
     });
   });
 
+  describe("render の sed 置換値 escape (issue #314 round1 S-1)", () => {
+    it("install root に & / | を含んでも @@DEPLOY_DIR@@ を正しい literal path に解決する", () => {
+      writeConfig();
+      // sed's own RHS specials: `&` (whole match) and `|` (this script's own
+      // delimiter). Both are REAL, valid path-component bytes on Linux — an
+      // install root is not guaranteed to avoid them. (`\` is pinned
+      // separately below, via $HOME rather than the install root — see that
+      // test for why.)
+      for (const fragment of ["a&b", "a|b"]) {
+        const weirdRoot = join(dir, `install-root-${fragment}`);
+        const revision = revisionOf(`bootstrap-sed-escape-${fragment}`);
+        const archive = makeReleaseTarball(work, revision);
+
+        const result = bootstrap([archive], {}, weirdRoot);
+
+        expect(result.status).toBe(0);
+        const unitPath = join(home, ".config", "systemd", "user", "kaoiro-runner.service");
+        const content = readFileSync(unitPath, "utf8");
+        expect(content).toContain(`${weirdRoot}/current/deploy`);
+        expect(content).not.toContain("@@DEPLOY_DIR@@");
+      }
+    });
+
+    it("$HOME に \\ を含んでも launchd plist の @@HOME@@ を正しい literal path に解決する", () => {
+      // The install ROOT deliberately does NOT carry a backslash here: GNU
+      // tar's `-C` argument goes through tar's OWN backslash-unquoting
+      // before kaoiro-runner-install.sh ever runs (measured live —
+      // `tar xzf ... -C "a\1b/dir"` fails to open a directory that
+      // demonstrably exists, because tar reads `\1` as an octal escape and
+      // looks for a mangled name instead). That is a pre-existing tar
+      // behavior on a script this round's scope explicitly leaves untouched
+      // (install.sh), not a property of sed_escape_replacement, so this test
+      // exercises the same `\` character through $HOME / the launchd plist
+      // instead — a path render_launchd_plist substitutes directly and tar
+      // never sees.
+      writeConfig();
+      const weirdHome = join(dir, "home-a\\1b");
+      mkdirSync(weirdHome, { recursive: true });
+      const revision = revisionOf("bootstrap-sed-escape-home-backslash");
+      const archive = makeReleaseTarball(work, revision);
+
+      const result = runScript(
+        bootstrapScript,
+        ["--install-dir", root, archive],
+        {
+          HOME: weirdHome,
+          KAOIRO_RUNNER_DIR: configDir,
+          KAOIRO_UNAME: "Darwin",
+          KAOIRO_LAUNCHCTL: launchctlStub({ loaded: false }),
+        },
+      );
+
+      expect(result.status).toBe(0);
+      const plistPath = join(weirdHome, "Library", "LaunchAgents", "com.kaoiro.runner.plist");
+      const content = readFileSync(plistPath, "utf8");
+      expect(content).toContain(`${weirdHome}/Library/Logs/kaoiro/runner.log`);
+      expect(content).not.toContain("@@HOME@@");
+    });
+
+    it("install root に改行を含む場合は描画前に拒否し、一時ファイルを残さない", () => {
+      writeConfig();
+      const weirdRoot = join(dir, "install-root-with\nnewline");
+      const revision = revisionOf("bootstrap-newline-reject");
+      const archive = makeReleaseTarball(work, revision);
+
+      const result = bootstrap([archive], {}, weirdRoot);
+
+      expect(result.status).toBe(70);
+      expect(result.stderr).toContain("must not contain a newline");
+      const unitDir = join(home, ".config", "systemd", "user");
+      if (existsSync(unitDir)) {
+        expect(readdirSync(unitDir).some((f) => f.includes(".new."))).toBe(false);
+      }
+    });
+  });
+
   describe("token を一切表示しない", () => {
     it("runner.env の内容がどのモードの stdout/stderr にも現れない", () => {
       writeConfig();
@@ -349,5 +470,70 @@ describe("kaoiro-runner-bootstrap.sh (issue #314)", () => {
         expect(result.stderr).not.toContain(TOKEN);
       }
     });
+  });
+});
+
+// Separate top-level describe: unlike the suite above, these cases need no
+// release tarball, install root, or fake service manager — only
+// kaoiro-runner-common.sh's kaoiro_config_dir in isolation, compared against
+// the TS function it claims to mirror.
+describe("kaoiro_config_dir と resolveConfigDir の parity (issue #314 round1 M-1)", () => {
+  // Same 4 shapes setup.test.ts's own resolveConfigDir suite pins on the TS
+  // side (override / darwin / XDG set / XDG absent) — this proves the SHELL
+  // side agrees with it, not merely that each agrees with itself.
+  const cases: Array<{
+    name: string;
+    shellEnv: Record<string, string | undefined>;
+    tsEnv: Record<string, string | undefined>;
+    platform: string;
+    home: string;
+  }> = [
+    {
+      name: "KAOIRO_RUNNER_DIR が最優先",
+      shellEnv: {
+        HOME: "/Users/me",
+        KAOIRO_UNAME: "Darwin",
+        KAOIRO_RUNNER_DIR: "/custom",
+        XDG_CONFIG_HOME: "/xdg",
+      },
+      tsEnv: { KAOIRO_RUNNER_DIR: "/custom", XDG_CONFIG_HOME: "/xdg" },
+      platform: "darwin",
+      home: "/Users/me",
+    },
+    {
+      name: "Darwin は Application Support 配下",
+      shellEnv: { HOME: "/Users/me", KAOIRO_UNAME: "Darwin" },
+      tsEnv: {},
+      platform: "darwin",
+      home: "/Users/me",
+    },
+    {
+      name: "XDG_CONFIG_HOME を尊重する (Linux)",
+      shellEnv: { HOME: "/home/me", KAOIRO_UNAME: "Linux", XDG_CONFIG_HOME: "/xdg" },
+      tsEnv: { XDG_CONFIG_HOME: "/xdg" },
+      platform: "linux",
+      home: "/home/me",
+    },
+    {
+      name: "XDG_CONFIG_HOME 未設定なら ~/.config (Linux)",
+      shellEnv: { HOME: "/home/me", KAOIRO_UNAME: "Linux" },
+      tsEnv: {},
+      platform: "linux",
+      home: "/home/me",
+    },
+  ];
+
+  for (const c of cases) {
+    it(`${c.name}: shell (kaoiro_config_dir) と TS (resolveConfigDir) が同じ path を返す`, () => {
+      const result = configDirViaShell(c.shellEnv);
+      expect(result.status).toBe(0);
+      expect(result.stdout.trim()).toBe(resolveConfigDir(c.tsEnv, c.platform, c.home));
+    });
+  }
+
+  it("HOME が未設定なら KAOIRO_RUNNER_DIR を案内して exit 非 0", () => {
+    const result = configDirViaShell({});
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("KAOIRO_RUNNER_DIR");
   });
 });
