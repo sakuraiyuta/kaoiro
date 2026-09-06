@@ -33,12 +33,37 @@ vi.mock("../src/lib/protocol", async (importOriginal) => {
         renameAgent: async () => {},
         setPermission: async () => null,
         setQuagmireSettings: async () => ({ rallyTurns: 16, source: "default" }),
+        // SettingsDrawer fetches both lists as soon as it has a
+        // connection; `listConversations` also carries `.incomplete`.
+        listConversations: async () =>
+          Object.assign([], { incomplete: false }),
+        listUsers: async () => [],
+        closeConversation: async () => {},
+        renameUser: async () => {},
       };
     },
     fetchPersonaManifest: async () => null,
     fetchAuthMethods: async () => ({ token: true, oauth: [] }),
   };
 });
+
+// jsdom does not implement HTMLDialogElement.showModal/close (same
+// polyfill as modal.integration.test.ts / settingsDrawer.integration.test.ts).
+// SettingsDrawer opens a Modal.svelte instance, so mounting the real App and
+// opening the drawer reaches it — without this the run stays green but
+// vitest reports unhandled errors and exits non-zero.
+if (
+  typeof HTMLDialogElement !== "undefined" &&
+  typeof HTMLDialogElement.prototype.showModal !== "function"
+) {
+  HTMLDialogElement.prototype.showModal = function (this: HTMLDialogElement) {
+    this.setAttribute("open", "");
+  };
+  HTMLDialogElement.prototype.close = function (this: HTMLDialogElement) {
+    this.removeAttribute("open");
+    this.dispatchEvent(new Event("close"));
+  };
+}
 
 const App = (await import("../src/App.svelte")).default;
 let component: object | null = null;
