@@ -4,6 +4,7 @@ import {
   writeFileSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -77,6 +78,21 @@ describe("Codex permission rollout cursor", () => {
       `${permissionTurnContext("old-turn", "read-only")}\n${permissionTurnContext("new-turn", "workspace-write", true)}`,
     );
     expect(codexPermissionContextAfter(cursor, id)).toBeNull();
+  });
+
+  it("does not treat a later-visible resumed rollout as a fresh execution boundary", () => {
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-codex-permission-"));
+    const id = "permission-missing-resume-baseline";
+    const hidden = join(root, "hidden-rollout.jsonl");
+    const path = join(root, `rollout-${id}.jsonl`);
+    writeFileSync(hidden, `${permissionTurnContext("old-turn", "read-only")}\n`);
+
+    const cursor = captureCodexPermissionRolloutCursor(root, id);
+    expect(cursor.resumeBaselineUnavailable).toBe(true);
+    renameSync(hidden, path);
+
+    expect(codexPermissionContextAfter(cursor, id)).toBeNull();
+    rmSync(root, { recursive: true, force: true });
   });
 });
 

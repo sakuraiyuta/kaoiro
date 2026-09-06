@@ -24,6 +24,7 @@ import type {
   WrapperConfig,
 } from "@kaoiro/agent-common";
 import { makeStateChange } from "@kaoiro/agent-common";
+import type { PermissionControlExt, PermissionSyncMessage } from "@kaoiro/protocol";
 import { CodexHost, initialStatusExt } from "../src/host.js";
 import type { CodexClientLike, CodexThreadLike } from "../src/host.js";
 import {
@@ -1356,7 +1357,7 @@ describe("CodexHost", () => {
     expect(states.at(-1)?.ext.pending_question).toBeUndefined();
   });
 
-  it("setPermissionMode は launch-fixed として reject する", async () => {
+  it("setPermissionMode は six-value API unsupported として reject する", async () => {
     const { client } = makeClient([]);
     const host = new CodexHost(CONFIG, {
       onState: () => {},
@@ -1365,7 +1366,7 @@ describe("CodexHost", () => {
       now: () => "T",
     });
     await expect(host.setPermissionMode("default")).rejects.toThrow(
-      /launch-fixed/,
+      /permission-mode switching is unsupported/,
     );
   });
 
@@ -4292,6 +4293,7 @@ describe("issue #262: rollout 破損の安全な自動修復", () => {
         appendSystemPrompt: "p",
         codexFactory: () => client,
         resumeSessionId: sessionId,
+        resumeSnapshot: { sandbox: "read-only", network_access: false },
         permissionSyncSupported: true,
         permissionRolloutRoot: root,
         now: () => "T",
@@ -4305,8 +4307,25 @@ describe("issue #262: rollout 破損の安全な自動修復", () => {
         expect(states.at(-1)?.ext.permission_control).toMatchObject({
           status: "failed",
           reason: "policy_mismatch",
+          effective: {
+            turn_id: "mismatched-turn",
+            permission: { sandbox: "workspace-write", approval: "never" },
+            network_access: true,
+          },
         });
       });
+      expect(states.at(-1)?.ext.permission).toMatchObject({
+        sandbox: "workspace-write",
+        approval: "never",
+      });
+      expect(states.at(-1)?.ext.effective).toMatchObject({
+        sandbox: "workspace-write",
+        network_access: true,
+      });
+      expect(states.at(-1)?.ext.resume_drift).toEqual(expect.arrayContaining([
+        expect.objectContaining({ field: "sandbox" }),
+        expect.objectContaining({ field: "network_access" }),
+      ]));
       expect(stderr).toHaveBeenCalledWith(
         "codex: permission policy mismatch: expected sandbox=read-only network_access=false; observed sandbox=workspace-write network_access=true\n",
       );
@@ -4319,6 +4338,419 @@ describe("issue #262: rollout 破損の安全な自動修復", () => {
       stderr.mockRestore();
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("same failed permission_sync は mismatch の dispatch block を解除しない", async () => {
+    const root = await mkdtemp(join(tmpdir(), "kaoiro-codex-permission-host-"));
+    const sessionId = "permission-rejoin-failed-session";
+    const rollout = join(root, `rollout-${sessionId}.jsonl`);
+    const initial = `${permissionRolloutLine("historic-turn", "read-only")}\n`;
+    await writeFile(rollout, initial);
+    const states: Envelope[] = [];
+    let spawns = 0;
+    const thread: CodexThreadLike = {
+      async runStreamed() {
+        spawns += 1;
+        await writeFile(
+          rollout,
+          `${initial}${permissionRolloutLine("mismatch-turn", "workspace-write", true)}\n`,
+        );
+        async function* events(): AsyncGenerator<ThreadEvent> {
+          yield { type: "thread.started", thread_id: sessionId };
+          yield usageEvent();
+        }
+        return { events: events() };
+      },
+    };
+    const client: CodexClientLike = {
+      startThread: () => {
+        throw new Error("expected resumed session");
+      },
+      resumeThread: () => thread,
+    };
+    const host = new CodexHost(
+      { ...CONFIG, sandbox: "read-only", network_access: false },
+      {
+        onState: (state) => states.push(state),
+        appendSystemPrompt: "p",
+        codexFactory: () => client,
+        resumeSessionId: sessionId,
+        permissionSyncSupported: true,
+        permissionRolloutRoot: root,
+        now: () => "T",
+      },
+    );
+    host.applyPermissionSync({ version: "0", control: null, next: null });
+    await host.setPermission({
+      revision: 1,
+      requested: { sandbox: "read-only", network_access: false },
+    });
+
+    const running = host.run("first");
+    try {
+      await vi.waitFor(() => {
+        expect(states.at(-1)?.ext.permission_control).toMatchObject({
+          revision: 1,
+          status: "failed",
+          reason: "policy_mismatch",
+        });
+      });
+      const control = states.at(-1)?.ext.permission_control as PermissionControlExt;
+      host.applyPermissionSync({
+        version: "0",
+        control,
+        next: {
+          revision: 1,
+          requested: { sandbox: "read-only", network_access: false },
+        },
+      });
+      await host.send("must remain blocked");
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      expect(spawns).toBe(1);
+    } finally {
+      host.close();
+      await running;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("pre-application rejection retains its latest control while next restores baseline", async () => {
+    const states: Envelope[] = [];
+    const options: ThreadOptions[] = [];
+    const rejected: PermissionControlExt = {
+      revision: 2,
+      requested: { sandbox: "workspace-write", network_access: true },
+      constraints: { approval: "never", enforcement: "os" },
+      status: "failed",
+      reason: "rejected_before_application",
+      rolled_back_to: { sandbox: "read-only", network_access: false },
+    };
+    const sync: PermissionSyncMessage = {
+      version: "0",
+      control: rejected,
+      next: {
+        revision: 0,
+        requested: { sandbox: "read-only", network_access: false },
+      },
+    };
+    const thread: CodexThreadLike = {
+      async runStreamed() {
+        async function* events(): AsyncGenerator<ThreadEvent> {
+          yield { type: "thread.started", thread_id: "rejected-baseline" };
+          yield usageEvent();
+        }
+        return { events: events() };
+      },
+    };
+    const host = new CodexHost(
+      { ...CONFIG, sandbox: "read-only", network_access: false },
+      {
+        onState: (state) => states.push(state),
+        appendSystemPrompt: "p",
+        codexFactory: () => ({
+          startThread: (threadOptions) => {
+            if (threadOptions !== undefined) options.push(threadOptions);
+            return thread;
+          },
+          resumeThread: () => thread,
+        }),
+        permissionSyncSupported: true,
+        now: () => "T",
+      },
+    );
+    host.applyPermissionSync(sync);
+    expect(states.at(-1)?.ext.permission_control).toEqual(rejected);
+
+    const running = host.run("baseline");
+    await vi.waitFor(() => expect(options).toHaveLength(1));
+    expect(options[0]).toMatchObject({ sandboxMode: "read-only" });
+    expect(options[0]?.networkAccessEnabled).toBeUndefined();
+    host.close();
+    await running;
+  });
+
+  it("pending B keeps A's submitted observation bound for resume drift", async () => {
+    const root = await mkdtemp(join(tmpdir(), "kaoiro-codex-permission-host-"));
+    const sessionId = "permission-drift-binding-session";
+    const rollout = join(root, `rollout-${sessionId}.jsonl`);
+    const initial = `${permissionRolloutLine("historic-turn", "read-only")}\n`;
+    await writeFile(rollout, initial);
+    const states: Envelope[] = [];
+    const thread: CodexThreadLike = {
+      async runStreamed() {
+        await writeFile(
+          rollout,
+          `${initial}${permissionRolloutLine("selected-turn", "workspace-write", true)}\n`,
+        );
+        async function* events(): AsyncGenerator<ThreadEvent> {
+          yield { type: "thread.started", thread_id: sessionId };
+          yield usageEvent();
+        }
+        return { events: events() };
+      },
+    };
+    const host = new CodexHost(
+      { ...CONFIG, sandbox: "read-only", network_access: false },
+      {
+        onState: (state) => states.push(state),
+        appendSystemPrompt: "p",
+        codexFactory: () => ({
+          startThread: () => {
+            throw new Error("expected resumed session");
+          },
+          resumeThread: () => thread,
+        }),
+        resumeSessionId: sessionId,
+        resumeSnapshot: { sandbox: "read-only", network_access: false },
+        permissionSyncSupported: true,
+        permissionRolloutRoot: root,
+        now: () => "T",
+      },
+    );
+    host.applyPermissionSync({ version: "0", control: null, next: null });
+    await host.setPermission({
+      revision: 1,
+      requested: { sandbox: "workspace-write", network_access: true },
+    });
+
+    const running = host.run("first");
+    try {
+      await vi.waitFor(() => {
+        expect(states.at(-1)?.ext.permission_control).toMatchObject({
+          revision: 1,
+          status: "applied",
+        });
+      });
+      expect(states.at(-1)?.ext.resume_drift).toEqual([]);
+      await host.setPermission({
+        revision: 2,
+        requested: { sandbox: "read-only", network_access: false },
+      });
+      expect(states.at(-1)?.ext.resume_drift).toEqual([]);
+    } finally {
+      host.close();
+      await running;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("negotiation downgrade preserves the last observed effective policy", async () => {
+    const root = await mkdtemp(join(tmpdir(), "kaoiro-codex-permission-host-"));
+    const sessionId = "permission-capability-downgrade-session";
+    const rollout = join(root, `rollout-${sessionId}.jsonl`);
+    const initial = `${permissionRolloutLine("historic-turn", "read-only")}\n`;
+    await writeFile(rollout, initial);
+    const states: Envelope[] = [];
+    const thread: CodexThreadLike = {
+      async runStreamed() {
+        await writeFile(
+          rollout,
+          `${initial}${permissionRolloutLine("observed-turn", "workspace-write", true)}\n`,
+        );
+        async function* events(): AsyncGenerator<ThreadEvent> {
+          yield { type: "thread.started", thread_id: sessionId };
+          yield usageEvent();
+        }
+        return { events: events() };
+      },
+    };
+    const host = new CodexHost(
+      { ...CONFIG, sandbox: "read-only", network_access: false },
+      {
+        onState: (state) => states.push(state),
+        appendSystemPrompt: "p",
+        codexFactory: () => ({
+          startThread: () => {
+            throw new Error("expected resumed session");
+          },
+          resumeThread: () => thread,
+        }),
+        resumeSessionId: sessionId,
+        permissionSyncSupported: true,
+        permissionRolloutRoot: root,
+        now: () => "T",
+      },
+    );
+    host.applyPermissionSync({ version: "0", control: null, next: null });
+    await host.setPermission({
+      revision: 1,
+      requested: { sandbox: "workspace-write", network_access: true },
+    });
+
+    const running = host.run("first");
+    try {
+      await vi.waitFor(() => {
+        expect(states.at(-1)?.ext.effective).toMatchObject({
+          sandbox: "workspace-write",
+          network_access: true,
+        });
+      });
+      host.setPermissionSyncSupported(false);
+      expect(states.at(-1)?.ext.effective).toMatchObject({
+        sandbox: "workspace-write",
+        network_access: true,
+      });
+      expect(states.at(-1)?.ext.permission).toMatchObject({
+        sandbox: "workspace-write",
+        approval: "never",
+      });
+    } finally {
+      host.close();
+      await running;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("observed approval mismatch publishes the actual approval policy", async () => {
+    const root = await mkdtemp(join(tmpdir(), "kaoiro-codex-permission-host-"));
+    const sessionId = "permission-approval-mismatch-session";
+    const rollout = join(root, `rollout-${sessionId}.jsonl`);
+    const initial = `${permissionRolloutLine("historic-turn", "read-only")}\n`;
+    await writeFile(rollout, initial);
+    const states: Envelope[] = [];
+    const thread: CodexThreadLike = {
+      async runStreamed() {
+        await writeFile(
+          rollout,
+          `${initial}${permissionRolloutLine("approval-mismatch-turn", "read-only", false, "on-request")}\n`,
+        );
+        async function* events(): AsyncGenerator<ThreadEvent> {
+          yield { type: "thread.started", thread_id: sessionId };
+          yield usageEvent();
+        }
+        return { events: events() };
+      },
+    };
+    const host = new CodexHost(CONFIG, {
+      onState: (state) => states.push(state),
+      appendSystemPrompt: "p",
+      codexFactory: () => ({
+        startThread: () => {
+          throw new Error("expected resumed session");
+        },
+        resumeThread: () => thread,
+      }),
+      resumeSessionId: sessionId,
+      permissionSyncSupported: true,
+      permissionRolloutRoot: root,
+      now: () => "T",
+    });
+    host.applyPermissionSync({ version: "0", control: null, next: null });
+
+    const running = host.run("first");
+    try {
+      await vi.waitFor(() => {
+        expect(states.at(-1)?.ext.permission_control).toMatchObject({
+          status: "failed",
+          reason: "approval_policy_mismatch",
+          effective: {
+            turn_id: "approval-mismatch-turn",
+            permission: { approval: "on-request" },
+          },
+        });
+      });
+      expect(states.at(-1)?.ext.permission).toMatchObject({ approval: "on-request" });
+    } finally {
+      host.close();
+      await running;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not emit permission_applied twice for a replayed applied revision", async () => {
+    const root = await mkdtemp(join(tmpdir(), "kaoiro-codex-permission-host-"));
+    const sessionId = "permission-applied-dedupe-session";
+    const rollout = join(root, `rollout-${sessionId}.jsonl`);
+    const initial = `${permissionRolloutLine("historic-turn", "read-only")}\n`;
+    await writeFile(rollout, initial);
+    const states: Envelope[] = [];
+    const lifecycle: unknown[] = [];
+    let turn = 0;
+    const contexts: string[] = [];
+    const thread: CodexThreadLike = {
+      async runStreamed() {
+        turn += 1;
+        contexts.push(
+          permissionRolloutLine(`applied-turn-${turn}`, "workspace-write", true),
+        );
+        await writeFile(
+          rollout,
+          `${initial}${contexts.join("\n")}\n`,
+        );
+        async function* events(): AsyncGenerator<ThreadEvent> {
+          yield { type: "thread.started", thread_id: sessionId };
+          yield usageEvent();
+        }
+        return { events: events() };
+      },
+    };
+    const host = new CodexHost(CONFIG, {
+      onState: (state) => states.push(state),
+      appendSystemPrompt: "p",
+      codexFactory: () => ({
+        startThread: () => {
+          throw new Error("expected resumed session");
+        },
+        resumeThread: () => thread,
+      }),
+      resumeSessionId: sessionId,
+      permissionSyncSupported: true,
+      permissionRolloutRoot: root,
+      onPermissionLifecycle: (event) => lifecycle.push(event),
+      now: () => "T",
+    });
+    host.applyPermissionSync({ version: "0", control: null, next: null });
+    await host.setPermission({
+      revision: 1,
+      requested: { sandbox: "workspace-write", network_access: true },
+    });
+
+    const running = host.run("first");
+    try {
+      await vi.waitFor(() => expect(lifecycle).toHaveLength(1));
+      await host.send("second");
+      await vi.waitFor(() => expect(turn).toBe(2));
+      await vi.waitFor(() => {
+        expect(states.at(-1)?.ext.permission_control).toMatchObject({
+          status: "applied",
+          effective: { turn_id: "applied-turn-2" },
+        });
+      });
+      expect(lifecycle).toHaveLength(1);
+    } finally {
+      host.close();
+      await running;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("close cancels a permission-sync wait without admitting an exec", async () => {
+    const sync = deferred<void>();
+    let spawns = 0;
+    const thread: CodexThreadLike = {
+      async runStreamed() {
+        spawns += 1;
+        async function* events(): AsyncGenerator<ThreadEvent> {
+          yield { type: "thread.started", thread_id: "permission-close-session" };
+          yield usageEvent();
+        }
+        return { events: events() };
+      },
+    };
+    const host = new CodexHost(CONFIG, {
+      onState: () => {},
+      appendSystemPrompt: "p",
+      codexFactory: () => ({ startThread: () => thread, resumeThread: () => thread }),
+      permissionSyncSupported: true,
+      waitForPermissionSync: () => sync.promise,
+    });
+
+    const running = host.run("blocked");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(spawns).toBe(0);
+    host.close();
+    await running;
+    expect(spawns).toBe(0);
   });
 
   it("未知の resume 失敗は従来どおり分類せず、次のターンでも resumeThread を再試行する (fall back、rollout 検査自体が走らない)", async () => {

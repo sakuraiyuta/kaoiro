@@ -2,7 +2,7 @@
 // config, connects the ServerLink, waits fail-closed for the server-pushed
 // personality (ADR-0029 F3), then drives a CodexHost. Mirrors the Claude
 // composition (@kaoiro/claude-code/src/cli.ts) minus the Claude-only parts:
-// no permission broker wiring (approval is launch-fixed, ADR-0033 F3), no
+// no permission broker wiring (approval is fixed to never, ADR-0033 F3), no
 // image-only upload rendering, rollout history replay.
 //
 // Usage: node dist/cli.js [configPath] [prompt] [--resume <session_id>]
@@ -576,10 +576,10 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       });
     },
     onSetPermissionMode: (mode) => {
-      // Claude-mode pushes (server after_join restores a persisted pick)
-      // do not apply to codex: permission is launch-fixed (ADR-0033 F3).
+      // Codex accepts sandbox/network through set_permission, not this
+      // Claude-specific six-value mode API (ADR-0033 F3).
       process.stdout.write(
-        `  set_permission_mode: ignored (codex is launch-fixed): ${mode}\n`,
+        `  set_permission_mode: ignored (codex has no permission-mode API): ${mode}\n`,
       );
     },
     onRenameDisplayName: (displayName, revision) => {

@@ -34,8 +34,8 @@ export interface EngineAdapter {
   /** Accepts the server-issued raw permission pair for a later execution.
    *  Engines without the selector reject explicitly. */
   setPermission(selection: PermissionSelection): Promise<void>;
-  /** Applies an operator permission change (#58). Engines with launch-fixed
-   *  permissions (codex, ADR-0033 F3) may reject mid-session changes. */
+  /** Applies an engine-native permission mode. Engines that only expose the
+   *  two-axis selector (codex, ADR-0033 F3) reject this six-value API. */
   setPermissionMode(mode: PermissionMode): Promise<void>;
   /** Stamps the authoritative pending-permission record onto the next
    *  state_change's ext (ADR-0022); null clears it. */

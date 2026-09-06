@@ -26,6 +26,9 @@ export interface CodexPermissionRolloutCursor {
   path: string | null;
   offset: number;
   knownTurnIds: ReadonlySet<string>;
+  /** A resumed session must prove its pre-exec append boundary. Unlike a
+   * fresh session, a later-discovered file can contain old contexts. */
+  resumeBaselineUnavailable: boolean;
 }
 
 export interface CodexPermissionTurnContext {
@@ -347,7 +350,14 @@ export function captureCodexPermissionRolloutCursor(
 ): CodexPermissionRolloutCursor {
   const path = sessionId === null ? null : rolloutPathIn(root, sessionId);
   if (path === null || sessionId === null) {
-    return { root, sessionId, path: null, offset: 0, knownTurnIds: new Set() };
+    return {
+      root,
+      sessionId,
+      path: null,
+      offset: 0,
+      knownTurnIds: new Set(),
+      resumeBaselineUnavailable: sessionId !== null,
+    };
   }
   try {
     return {
@@ -356,9 +366,17 @@ export function captureCodexPermissionRolloutCursor(
       path,
       offset: statSync(path).size,
       knownTurnIds: knownTurnIdsIn(path, sessionId),
+      resumeBaselineUnavailable: false,
     };
   } catch {
-    return { root, sessionId, path: null, offset: 0, knownTurnIds: new Set() };
+    return {
+      root,
+      sessionId,
+      path: null,
+      offset: 0,
+      knownTurnIds: new Set(),
+      resumeBaselineUnavailable: true,
+    };
   }
 }
 
@@ -369,6 +387,7 @@ export function codexPermissionContextAfter(
   sessionId: string,
 ): CodexPermissionTurnContext | null {
   if (cursor.sessionId !== null && cursor.sessionId !== sessionId) return null;
+  if (cursor.resumeBaselineUnavailable) return null;
   const path = cursor.path ?? rolloutPathIn(cursor.root, sessionId);
   if (path === null || (cursor.path !== null && path !== cursor.path)) return null;
   let size: number;

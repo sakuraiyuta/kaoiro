@@ -35,6 +35,11 @@ import {
   type WrapperBuildInfo,
 } from "./build_info.js";
 
+type ServerSocketFactory = (
+  serverUrl: string,
+  options: ConstructorParameters<typeof Socket>[1],
+) => Socket;
+
 /** A client's permission decision relayed by the server (protocol.md).
  *  Defined here (the wire layer that parses it); the PermissionBroker in
  *  @kaoiro/agent-common consumes it. */
@@ -1093,13 +1098,15 @@ export class ServerLink {
     serverUrl: string,
     agentId: string,
     options: ServerLinkOptions,
+    socketFactory: ServerSocketFactory = (url, socketOptions) =>
+      new Socket(url, socketOptions),
   ) {
     this.#onInterAgentAck = options.onInterAgentAck;
     this.#permissionSync = options.permissionSync;
     this.#permissionSyncNegotiated = new Promise<boolean>((resolve) => {
       this.#resolvePermissionSyncNegotiated = resolve;
     });
-    this.#socket = new Socket(serverUrl, {
+    this.#socket = socketFactory(serverUrl, {
       transport: WebSocket,
       params: options.token === undefined ? {} : { token: options.token },
     });

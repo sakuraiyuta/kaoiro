@@ -430,6 +430,20 @@ function samePermissionSelection(
     left.requested.network_access === right.requested.network_access;
 }
 
+function permissionApprovalFromRollout(
+  approval: string,
+): PermissionObservation["permission"]["approval"] | null {
+  switch (approval) {
+    case "untrusted":
+    case "on-request":
+    case "on-failure":
+    case "never":
+      return approval;
+    default:
+      return null;
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -566,11 +580,23 @@ export class CodexHost implements EngineAdapter {
   readonly #sandbox: NonNullable<WrapperConfig["sandbox"]>;
   readonly #networkAccess: boolean;
   #permissionSyncSupported: boolean;
+  /** The raw pair selected for the next exec. It is deliberately separate
+   * from request progress and the last observed execution. */
   #permissionSelection: PermissionSelection;
+  /** The server's latest request/progress projection. */
   #permissionControl: PermissionControlExt | null = null;
+  /** The immutable selection captured for the active or most recently
+   * observed execution. A newer next selection must not replace it. */
+  #permissionCurrentSubmission: PermissionSubmission | null = null;
+  /** The actual policy read from the current or most recently completed
+   * execution. A mismatch is still an observation, not unknown. */
   #permissionCurrentEffective: PermissionObservation | null = null;
   #permissionLastEffective: PermissionObservation | null = null;
   #permissionDispatchBlocked = false;
+  #permissionBlockedRevision: number | null = null;
+  #permissionCloseWake: (() => void) | null = null;
+  /** Server lifecycle is transition evidence, not a per-exec heartbeat. */
+  readonly #permissionAppliedAuditRevisions = new Set<number>();
   #permissionDispatchWake: (() => void) | null = null;
   readonly #permissionSyncWarningMs: number;
   readonly #cwd: string = process.cwd();
@@ -803,9 +829,9 @@ export class CodexHost implements EngineAdapter {
 
   /** Single engine-neutral SoT for both state_change.ext and whoami (#113). */
   #effectiveStatusSnapshot(): EffectiveStatusSnapshot {
-    const observed = this.#permissionSyncSupported
-      ? this.#permissionCurrentEffective
-      : {
+    const observed = this.#permissionCurrentEffective ??
+      (!this.#permissionSyncSupported
+        ? {
           permission: {
             sandbox: this.#sandbox,
             approval: "never" as const,
@@ -815,7 +841,8 @@ export class CodexHost implements EngineAdapter {
             this.#sandbox,
             this.#networkAccess,
           ),
-        };
+        }
+        : null);
     return {
       engine: "codex",
       resolved: {
@@ -1016,6 +1043,7 @@ export class CodexHost implements EngineAdapter {
     this.#gcTimer = null;
     void this.#dropQueuedTempTurns();
     this.#abort?.abort();
+    this.#permissionCloseWake?.();
     this.#permissionDispatchWake?.();
     this.#wake?.();
   }
@@ -1123,8 +1151,18 @@ export class CodexHost implements EngineAdapter {
     }
     if (selection.revision <= this.#permissionSelection.revision) return;
     this.#permissionSelection = selection;
-    this.#permissionDispatchBlocked = false;
-    this.#permissionControl = this.#pendingPermissionControl(selection);
+    if (
+      this.#permissionBlockedRevision !== null &&
+      selection.revision > this.#permissionBlockedRevision
+    ) {
+      this.#permissionDispatchBlocked = false;
+      this.#permissionBlockedRevision = null;
+    }
+    this.#permissionControl = this.#pendingPermissionControl(
+      selection,
+      this.#permissionCurrentSubmission ?? undefined,
+      this.#permissionCurrentEffective ?? undefined,
+    );
     this.#emitState(this.#machine.state);
     this.#permissionDispatchWake?.();
     this.#wake?.();
@@ -1135,10 +1173,7 @@ export class CodexHost implements EngineAdapter {
   setPermissionSyncSupported(supported: boolean): void {
     if (this.#permissionSyncSupported === supported) return;
     this.#permissionSyncSupported = supported;
-    if (!supported) {
-      this.#permissionControl = null;
-      this.#permissionCurrentEffective = null;
-    } else {
+    if (supported && this.#permissionControl === null) {
       this.#permissionControl = this.#pendingPermissionControl(
         this.#permissionSelection,
       );
@@ -1151,19 +1186,58 @@ export class CodexHost implements EngineAdapter {
   applyPermissionSync(message: PermissionSyncMessage): void {
     if (!this.#permissionSyncSupported) return;
     const next = message.next ?? this.#permissionSelection;
-    if (next.revision < this.#permissionSelection.revision) return;
-    const historical = message.control === null
-      ? null
-      : message.control.status === "applied"
+    const currentControlRevision = this.#permissionControl?.revision ?? -1;
+    const acceptsNext = next.revision >= this.#permissionSelection.revision;
+    const acceptsControl = message.control !== null &&
+      message.control.revision >= currentControlRevision;
+
+    if (acceptsNext) this.#permissionSelection = next;
+
+    if (acceptsControl) {
+      this.#permissionControl = message.control;
+      if (message.control.status === "applied") {
+        this.#permissionAppliedAuditRevisions.add(message.control.revision);
+      }
+      const historical = message.control.status === "applied"
         ? message.control.effective
         : message.control.last_effective;
-    this.#permissionSelection = next;
-    this.#permissionCurrentEffective = null;
-    if (historical !== null && historical !== undefined) {
-      this.#permissionLastEffective = historical;
+      if (
+        this.#permissionCurrentEffective === null &&
+        historical !== undefined
+      ) {
+        this.#permissionLastEffective = historical;
+      }
+      if (
+        (message.control.status === "failed" ||
+          message.control.status === "unknown") &&
+        message.control.revision === next.revision
+      ) {
+        this.#permissionDispatchBlocked = true;
+        this.#permissionBlockedRevision = message.control.revision;
+      }
     }
-    this.#permissionControl = this.#pendingPermissionControl(next);
-    this.#permissionDispatchBlocked = false;
+
+    if (
+      message.control === null &&
+      acceptsNext &&
+      (this.#permissionControl === null || this.#permissionControl.revision === 0)
+    ) {
+      this.#permissionControl = this.#pendingPermissionControl(
+        next,
+        this.#permissionCurrentSubmission ?? undefined,
+        this.#permissionCurrentEffective ?? undefined,
+      );
+    }
+
+    // A synchronisation snapshot is historical reconciliation, never a new
+    // operator request. In particular it cannot clear a mismatch block.
+    if (
+      this.#permissionBlockedRevision !== null &&
+      this.#permissionSelection.revision > this.#permissionBlockedRevision
+    ) {
+      this.#permissionDispatchBlocked = false;
+      this.#permissionBlockedRevision = null;
+    }
     this.#emitState(this.#machine.state);
     this.#permissionDispatchWake?.();
     this.#wake?.();
@@ -1171,7 +1245,7 @@ export class CodexHost implements EngineAdapter {
 
   async setPermissionMode(_mode: PermissionMode): Promise<void> {
     throw new Error(
-      "codex: permission is launch-fixed; mid-session change unsupported (ADR-0033 F3)",
+      "codex: permission-mode switching is unsupported; use set_permission for sandbox and network access (ADR-0033 F3)",
     );
   }
 
@@ -1934,7 +2008,8 @@ export class CodexHost implements EngineAdapter {
       this.#permissionLastEffective = this.#permissionCurrentEffective;
     }
     this.#permissionCurrentEffective = null;
-    if (samePermissionSelection(this.#permissionSelection, submission)) {
+    this.#permissionCurrentSubmission = submission;
+    if (this.#submissionOwnsLatestPermissionControl(submission)) {
       this.#permissionControl = {
         ...this.#permissionSelection,
         constraints: { approval: "never", enforcement: "os" },
@@ -1944,7 +2019,7 @@ export class CodexHost implements EngineAdapter {
           ? {}
           : { last_effective: this.#permissionLastEffective }),
       };
-    } else {
+    } else if (this.#permissionControl?.status === "pending") {
       this.#permissionControl = this.#pendingPermissionControl(
         this.#permissionSelection,
         submission,
@@ -1962,8 +2037,14 @@ export class CodexHost implements EngineAdapter {
         );
       }, this.#permissionSyncWarningMs);
       try {
-        await waitForSync();
+        await Promise.race([
+          waitForSync(),
+          new Promise<void>((resolve) => {
+            this.#permissionCloseWake = resolve;
+          }),
+        ]);
       } finally {
+        this.#permissionCloseWake = null;
         clearTimeout(warning);
       }
     }
@@ -1998,14 +2079,29 @@ export class CodexHost implements EngineAdapter {
       );
       return;
     }
+    const approval = permissionApprovalFromRollout(context.approvalPolicy);
+    const observation = approval === null
+      ? null
+      : {
+          ...permission.submission,
+          session_id: context.sessionId,
+          turn_id: context.turnId,
+          permission: {
+            sandbox: context.sandbox,
+            approval,
+            enforcement: "os" as const,
+          },
+          network_access: context.networkAccess,
+        };
     const expected = permission.submission.requested;
-    if (context.approvalPolicy !== "never") {
+    if (context.approvalPolicy !== "never" || observation === null) {
       process.stderr.write(
         `codex: permission policy mismatch: expected approval=never; observed approval=${context.approvalPolicy}\n`,
       );
       this.#permissionObservationFailed(
         permission.submission,
         "approval_policy_mismatch",
+        observation,
       );
       return;
     }
@@ -2022,22 +2118,12 @@ export class CodexHost implements EngineAdapter {
       this.#permissionObservationFailed(
         permission.submission,
         "policy_mismatch",
+        observation,
       );
       return;
     }
-    const observation: PermissionObservation = {
-      ...permission.submission,
-      session_id: context.sessionId,
-      turn_id: context.turnId,
-      permission: {
-        sandbox: context.sandbox,
-        approval: "never",
-        enforcement: "os",
-      },
-      network_access: context.networkAccess,
-    };
     this.#permissionCurrentEffective = observation;
-    if (samePermissionSelection(this.#permissionSelection, permission.submission)) {
+    if (this.#submissionOwnsLatestPermissionControl(permission.submission)) {
       this.#permissionControl = {
         ...this.#permissionSelection,
         constraints: { approval: "never", enforcement: "os" },
@@ -2048,14 +2134,18 @@ export class CodexHost implements EngineAdapter {
           ? {}
           : { last_effective: this.#permissionLastEffective }),
       };
-    } else {
+    } else if (this.#permissionControl?.status === "pending") {
       this.#permissionControl = this.#pendingPermissionControl(
         this.#permissionSelection,
         permission.submission,
         observation,
       );
     }
-    if (permission.submission.revision > 0) {
+    if (
+      permission.submission.revision > 0 &&
+      !this.#permissionAppliedAuditRevisions.has(permission.submission.revision)
+    ) {
+      this.#permissionAppliedAuditRevisions.add(permission.submission.revision);
       this.#options.onPermissionLifecycle?.({
         version: "0",
         kind: "permission_applied",
@@ -2069,11 +2159,19 @@ export class CodexHost implements EngineAdapter {
   #permissionObservationFailed(
     submission: PermissionSubmission,
     reason: string,
+    observation?: PermissionObservation | null,
   ): void {
-    this.#permissionCurrentEffective = null;
-    const submissionIsCurrent = samePermissionSelection(this.#permissionSelection, submission);
-    this.#permissionDispatchBlocked = submissionIsCurrent;
-    if (submissionIsCurrent) {
+    this.#permissionCurrentEffective = observation ?? null;
+    this.#permissionCurrentSubmission = submission;
+    const submissionIsNext = samePermissionSelection(this.#permissionSelection, submission);
+    const submissionOwnsControl = this.#submissionOwnsLatestPermissionControl(
+      submission,
+    );
+    this.#permissionDispatchBlocked = submissionIsNext;
+    this.#permissionBlockedRevision = submissionIsNext
+      ? submission.revision
+      : null;
+    if (submissionOwnsControl) {
       this.#permissionControl = reason === "policy_mismatch" ||
           reason === "approval_policy_mismatch"
         ? {
@@ -2081,6 +2179,9 @@ export class CodexHost implements EngineAdapter {
             constraints: { approval: "never", enforcement: "os" },
             status: "failed",
             submitted: submission,
+            ...(observation === null || observation === undefined
+              ? {}
+              : { effective: observation }),
             reason,
             ...(this.#permissionLastEffective === null
               ? {}
@@ -2096,9 +2197,11 @@ export class CodexHost implements EngineAdapter {
               ? {}
               : { last_effective: this.#permissionLastEffective }),
           };
-    } else {
+    } else if (this.#permissionControl?.status === "pending") {
       this.#permissionControl = this.#pendingPermissionControl(
         this.#permissionSelection,
+        submission,
+        observation ?? undefined,
       );
     }
     if (submission.revision > 0) {
@@ -2115,6 +2218,13 @@ export class CodexHost implements EngineAdapter {
       });
     }
     this.#emitState(this.#machine.state);
+  }
+
+  #submissionOwnsLatestPermissionControl(
+    submission: PermissionSubmission,
+  ): boolean {
+    return this.#permissionControl === null ||
+      samePermissionSelection(this.#permissionControl, submission);
   }
 
   #emitAttachRejected(payload: AttachRejectedPayload): void {
@@ -2300,8 +2410,8 @@ export class CodexHost implements EngineAdapter {
 
   #resumeDrift(resolved: ResolvedSnapshotExt) {
     const observed = this.#permissionCurrentEffective;
-    const submitted = this.#permissionControl?.submitted;
-    const intentionalPermission = observed !== null && submitted !== undefined &&
+    const submitted = this.#permissionCurrentSubmission;
+    const intentionalPermission = observed !== null && submitted !== null &&
       submitted.revision > 0 &&
       samePermissionSelection(observed, submitted) &&
       observed.permission.sandbox === submitted.requested.sandbox &&
