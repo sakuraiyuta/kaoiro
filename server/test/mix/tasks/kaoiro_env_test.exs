@@ -44,10 +44,6 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
   # Reads the task's SOURCE, not `render/1`'s output, on purpose: the OAuth
   # branch emits KAOIRO_OAUTH_ALLOWLIST_PATH only for some answers, and a
   # variable that a branch can emit still has to be documented.
-  #
-  # NOTE for issue #305: that branch adds KAOIRO_PERMISSION_SETTINGS_PATH to
-  # this task, which will fail this test until .env.example carries it too.
-  # Fixing that belongs to #305 when it lands, not here.
   test "every path variable the wizard can emit is documented in .env.example" do
     repo_root = Path.expand("../../../..", __DIR__)
     task_source = File.read!(Path.join(repo_root, "server/lib/mix/tasks/kaoiro.env.ex"))
