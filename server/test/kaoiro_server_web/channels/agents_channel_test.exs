@@ -1198,6 +1198,73 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_reply ref, :error, %{reason: "unsupported_permission_switch"}
     end
 
+    # ADR-0057 F4c: Antigravity stays launch-fixed for Stage A — its
+    # adapter never advertises supports_permission_switch=true, so this
+    # is the SAME capability gate as the generic case above, exercised
+    # with the concrete engine the reject-matrix names explicitly rather
+    # than an engine-name allowlist (protocol.md forbids one; the gate
+    # reads only the advertised capability, not `ext.engine`).
+    test "Antigravity は launch-fixed のため set_permission は unsupported_permission_switch" do
+      agent_id = "test.setperm2-antigravity"
+
+      put_permission_agent(agent_id,
+        engine: "antigravity",
+        supports_permission_switch: false
+      )
+
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "set_permission", %{"agent_id" => agent_id, "sandbox" => "workspace-write"})
+
+      assert_reply ref, :error, %{reason: "unsupported_permission_switch"}
+    end
+
+    test "session_reset は PermissionSettings に触れない" do
+      agent_id = "test.setperm2-reset"
+
+      :ok =
+        AgentStates.put(%{
+          "version" => "0",
+          "agent_id" => agent_id,
+          "ts" => "2026-09-06T00:00:00Z",
+          "type" => "state_change",
+          "state" => "idle",
+          "session_id" => "sess-prev",
+          "ext" => %{
+            "engine" => "codex",
+            "session_capabilities" => %{
+              "supports_attachments" => true,
+              "supports_user_input_dialog" => true,
+              "supports_permission_switch" => true,
+              "supports_session_reset" => true,
+              "session_reset_modes" => ["new", "clear"]
+            }
+          }
+        })
+
+      seed_permission_baseline(agent_id)
+
+      {:ok, 1, _} =
+        KaoiroServer.PermissionSettings.submit_request(
+          agent_id,
+          "codex",
+          %{sandbox: "workspace-write"},
+          %{kind: "user", id: "u1"},
+          "t"
+        )
+
+      before = KaoiroServer.PermissionSettings.get(agent_id)
+
+      socket = join_as(:operator)
+      ref = push(socket, "session_reset", %{"agent_id" => agent_id, "mode" => "new"})
+      assert_reply ref, :ok
+
+      assert KaoiroServer.PermissionSettings.get(agent_id) == before
+
+      _ = KaoiroServer.SessionResets.delete(agent_id)
+    end
+
     test "disconnected agent は agent_unavailable" do
       agent_id = "test.setperm2-5"
       put_disconnected(agent_id)
