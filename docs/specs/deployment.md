@@ -751,6 +751,65 @@ in (3)/(4).
 systemctl --user start kaoiro-runner
 ```
 
+**Checking status and reading a transaction's records**
+
+```sh
+node server/deploy/kaoiro-server-deploy.mjs status
+```
+
+Read-only; never mutates, never acquires the deploy lock. Returns one JSON
+object:
+
+| Field | Meaning |
+|---|---|
+| `container` | `{running: true, container}`, or `{running: false, branch, reason, container}` (the A/B/D branch table below), or `{running: false, error}` when docker itself is unreachable |
+| `health` | The target's own `GET /api/health` body when a container is running, `null` otherwise, or `{error}` if the request itself failed |
+| `unfinishedTransaction` | `null`, `{id, phase, envConsistency}` for an in-progress transaction, or `{error, directory}` if its journal itself is unreadable/inconsistent |
+| `doneTransactions` | Every completed transaction: `{id, sourceSha, targetSha, envConsistency, doneAt}` |
+| `scopeNote` | States exactly what this command reads and does not (runner-side signals, the 5-b judgment, and a runner build failure's own cause are all out of scope) |
+
+`container.branch` (only present when no *running* container is found) is one
+of: `A` (one *exited* container — `start` would resume it directly with
+`docker start`), `B` (no container, but this CLI's own transaction state or
+the named volume still exists — recover with `update --transaction` or
+`rollback`, never `start --initialize`), `C` (nothing at all —
+`start --initialize` bootstraps), or `D` (anything else: 2+ containers, a
+container in some OTHER status than `exited` — paused, restarting, dead — or
+docker itself could not answer whether prior state exists — investigate
+manually).
+
+Every transaction's full record lives under `<backup_root>/<transaction-id>/`:
+`journal.json` (the phase reached so far plus one history entry per
+checkpoint — the authority for "how far did this get") and, from `archived`
+onward, `manifest.json` (the durable facts: compose artifact SHA, env
+consistency result, image ID, source/target SHA, volume ID, archive path+SHA,
+required entries, rollback tag). Every phase `update`/`rollback` can reach,
+in the order they occur:
+
+| Phase | Meaning |
+|---|---|
+| `preflight` | The container was confirmed running; nothing else touched yet |
+| `old_image_saved` | Old image retagged (`kaoiro-server:rollback-<sha>`) and verified by read-back |
+| `build_prepared` | Target image built (`kaoiro-server:<target-sha>`) |
+| `env_consistency_checked` | The #220 persistence-path check ran (or was recorded as skipped, pre-#310) |
+| `maintenance_gate_passed` | The operator approved the stop window (`--maintenance-approved`) |
+| `stopping` | About to run `docker compose stop` (checkpoint before the risky step) |
+| `stopped` | Stop completed; exit code and OOM-killed recorded |
+| `mount_resolved` | The volume name re-resolved from the now-stopped container |
+| `archived` | DETS archived and verified; `manifest.json` written |
+| `starting` | About to run `docker compose up` (checkpoint before the risky step) |
+| `up` | New container running, not yet confirmed healthy |
+| `healthy` | Health check confirmed the target `build_revision`, `build_dirty: false` |
+| `done` | Stable for `stability_window_ms`; **terminal** |
+| `rollback_stopped` | (`rollback` only) whatever was running has been stopped, or nothing was found to stop |
+| `rollback_forensic_archived` | (`rollback` only) the CURRENT (pre-restore) volume state archived, before touching it |
+| `rollback_restoring` | (`rollback` only) about to wipe and restore (checkpoint before the risky step) |
+| `rollback_restored` | (`rollback` only) the restore verified against the manifest's `required_entries` |
+| `rolled_back` | (`rollback` only) old image up, health confirmed for the old SHA; **terminal** |
+
+A transaction stuck at any phase from `stopping` onward (`update`'s commit
+half) cannot resume via `--transaction` — see 4.4.
+
 ### 4.4 Failure handling
 
 Most failure modes now stop `kaoiro-server-deploy.mjs` itself with a non-zero
