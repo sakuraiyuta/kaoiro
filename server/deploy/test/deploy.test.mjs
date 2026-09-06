@@ -44,7 +44,7 @@ case "$1" in
         esac
         ;;
       '{{.Image}}') printf 'sha256:oldimageid\\n' ;;
-      *) printf 'sha256:fakeimageid\\n' ;;
+      *) printf 'sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\\n' ;;
     esac
     ;;
   start) exit 0 ;;
@@ -177,7 +177,7 @@ test("runBuild builds, tags and reads back the image id through the gated fake d
   assert.equal(result.docker, "fake");
   assert.equal(result.identity.revision, headSha);
   assert.equal(result.identity.dirty, false);
-  assert.equal(result.imageId, "sha256:fakeimageid");
+  assert.equal(result.imageId, `sha256:${"f".repeat(64)}`);
   assert.equal(result.imageTag, `kaoiro-server:${headSha}`);
 });
 

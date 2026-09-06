@@ -7,6 +7,9 @@ import { readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { JournalError, readJournal } from "./kaoiro-deploy-journal.mjs";
+import { validateJournalAgainstStateMachine } from "./kaoiro-deploy-phase.mjs";
+
+export class TransactionError extends Error {}
 
 const TERMINAL_PHASES = new Set(["done", "rolled_back"]);
 
@@ -16,7 +19,16 @@ const TERMINAL_PHASES = new Set(["done", "rolled_back"]);
  *  rather than treated as a scan failure: it may be something this CLI
  *  does not own (a rollback backup, `.lock.update` itself), and this
  *  scan's only job is finding an in-progress transaction of THIS CLI's
- *  own making. */
+ *  own making.
+ *
+ *  TWO things stop the scan outright instead of being skipped (yuta
+ *  ruling 2026-09-06, S1 items iii/iv): a directory name disagreeing
+ *  with its own journal's `transaction_id`, and a journal that fails
+ *  the state-machine check (unknown phase, bad observation shape,
+ *  illegal transition). Both mean this CLI's OWN prior write is
+ *  internally inconsistent — silently skipping past it (as an unrelated
+ *  file is skipped) would let an operator resume the wrong transaction
+ *  or start a new one over corrupted state without ever being told. */
 export function findUnfinishedTransaction(backupRoot) {
   let entries;
   try {
@@ -35,9 +47,21 @@ export function findUnfinishedTransaction(backupRoot) {
       if (err instanceof JournalError) continue;
       throw err;
     }
-    if (!TERMINAL_PHASES.has(journal.phase)) {
-      return { id: entry.name, dir, journal };
+    if (journal.transaction_id !== entry.name) {
+      throw new TransactionError(
+        `transaction directory ${entry.name} contains a journal claiming transaction_id ${journal.transaction_id} — refusing to guess which is authoritative`,
+      );
     }
+    // TERMINAL_PHASES ("done"/"rolled_back") are checked BEFORE the
+    // state-machine validation, not after: PHASE (kaoiro-deploy-phase.mjs)
+    // only knows the phases THIS commit's prepare half reaches, so a
+    // terminal phase from a later commit's rollback/commit half would
+    // otherwise be misclassified as "unknown phase" and stop this scan
+    // outright. A finished transaction is not this scan's concern
+    // either way.
+    if (TERMINAL_PHASES.has(journal.phase)) continue;
+    validateJournalAgainstStateMachine(journal);
+    return { id: entry.name, dir, journal };
   }
   return null;
 }

@@ -8,7 +8,8 @@
 // `rollback`/`status` land in later commits (commit split agreed with
 // yuta 2026-09-06).
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readdirSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { computeBuildIdentity } from "../../scripts/build-identity.mjs";
@@ -42,6 +43,10 @@ function gitOutput(args, cwd) {
   } catch (err) {
     fail(`git ${args.join(" ")} failed in ${cwd}: ${err.message}`);
   }
+}
+
+function sha256File(path) {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
 const VALUE_FLAGS = new Set(["--config", "--repo", "--target", "--transaction"]);
@@ -271,7 +276,20 @@ export function runStart(flags, config) {
  *  container is still running, refuses if `--target` no longer matches
  *  what was already built, and re-checks the gate — it does NOT redo
  *  the old-image-save or build steps, both of which already happened
- *  and are read back from the journal's history instead. */
+ *  and are read back from the journal's history instead.
+ *
+ *  CHECKPOINT-BEFORE-MUTATION (S1 item ii, yuta ruling 2026-09-06):
+ *  every fact this function learns (old image id, old sha,
+ *  compose_artifact, new image id/tag) is written durably via
+ *  advancePhase() — which itself calls writeJournal()'s
+ *  writeFileDurably() (M3) — BEFORE the next step runs. This commit's
+ *  own steps only read docker state or build a new (not-yet-live) image
+ *  tag, so none of them mutate the running deployment; the ordering
+ *  still matters because the COMMIT half (a later commit: stop,
+ *  archive, `up --no-build`) is exactly where a real Docker mutation
+ *  happens, and it must find every fact it needs already checkpointed —
+ *  never derive a fact from an in-memory variable that skipped the
+ *  journal. */
 export function runUpdate(flags, config) {
   const repo = flags.repo ?? process.cwd();
   if (!flags.target || !SHA_RE.test(flags.target)) {
@@ -344,7 +362,12 @@ export function runUpdate(flags, config) {
 
       oldImageId = dockerInspect(bin, container, "{{.Image}}");
       oldSha = gitOutput(["rev-parse", "HEAD"], repo);
-      journal = advancePhase(dir, journal, "old_image_saved", { old_image_id: oldImageId, old_sha: oldSha });
+      const composeArtifactPath = join(serverDir, "docker-compose.yaml");
+      journal = advancePhase(dir, journal, "old_image_saved", {
+        old_image_id: oldImageId,
+        old_sha: oldSha,
+        compose_artifact: { path: composeArtifactPath, sha256: sha256File(composeArtifactPath) },
+      });
 
       buildResult = runBuild({ repo, target }, config);
       journal = advancePhase(dir, journal, "build_prepared", {

@@ -16,9 +16,15 @@ import { join } from "node:path";
 
 import { writeFileDurably } from "./kaoiro-deploy-atomic-write.mjs";
 
-const SHA256_RE = /^[0-9a-f]{64}$/;
-const SHA_RE = /^[0-9a-f]{40}$/;
-const IMAGE_ID_RE = /^sha256:[0-9a-f]{64}$/;
+// Exported (not just module-local) so kaoiro-deploy-phase.mjs's
+// per-phase observation schemas (S1 item i, yuta ruling 2026-09-06) can
+// validate a journal entry's `old_sha`/`target_sha`/`image_id`/
+// `compose_artifact` against the SAME domains this file enforces on the
+// manifest — one definition of "what a SHA/image id looks like", not
+// two independently drifting ones.
+export const SHA256_RE = /^[0-9a-f]{64}$/;
+export const SHA_RE = /^[0-9a-f]{40}$/;
+export const IMAGE_ID_RE = /^sha256:[0-9a-f]{64}$/;
 const OWNER_RE = /^[0-9]+:[0-9]+$/;
 const MODE_RE = /^0[0-7]{3}$/;
 
@@ -28,7 +34,7 @@ function fail(message) {
   throw new ManifestError(message);
 }
 
-function isPathSha(value) {
+export function isPathSha(value) {
   return (
     typeof value === "object" &&
     value !== null &&
