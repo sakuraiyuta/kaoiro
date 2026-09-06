@@ -17,6 +17,7 @@ import {
   pruneOldTransactions,
   resolveHealthUrl,
   runBuild,
+  requiredEntriesMatch,
   runRollback,
   runStart,
   runStatus,
@@ -72,12 +73,50 @@ case "$1" in
       # map by default so scenarios that do not care about env
       # consistency see zero disagreement (no canonical keys to compare
       # either, since the default eval output below is also \`[]\`).
+      #
+      # The volumes shape (round 4 review N-3) is also measured live
+      # (Compose v5.3.1): services.<name>.volumes[] names the mount
+      # (type/source/target), and the top-level volumes.<source>.name
+      # gives the FULLY-RESOLVED docker volume name — "kaoiro_kaoiro-state"
+      # here, matching this fixture's own service name.
       config)
         if [ -n "$KAOIRO_TEST_COMPOSE_ENV_JSON" ]; then
-          printf '%s\\n' "$KAOIRO_TEST_COMPOSE_ENV_JSON"
+          env_json="$KAOIRO_TEST_COMPOSE_ENV_JSON"
         else
-          printf '{"services":{"kaoiro":{"environment":{}}}}\\n'
+          env_json='{}'
         fi
+        printf '{"services":{"kaoiro":{"environment":%s,"volumes":[{"type":"volume","source":"kaoiro-state","target":"/var/lib/kaoiro","volume":{}}]}},"volumes":{"kaoiro-state":{"name":"kaoiro_kaoiro-state"}}}\\n' "$env_json"
+        ;;
+    esac
+    ;;
+  # クロエ round 4 review N-3: hasPriorTransactions' own docker-
+  # reachability probe (\`docker version --format {{.Server.Version}}\`,
+  # measured live to fail when the daemon is unreachable). Always
+  # succeeds except for the one scenario that specifically wants to
+  # exercise classify()'s own unknown-hasState branch END TO END (\`compose
+  # ps\` still answers normally — this simulates JUST the volume-existence
+  # check being unreachable, not total docker failure, which a SEPARATE
+  # dedicated broken-docker fixture already covers for requireRunningContainer
+  # itself).
+  version)
+    case "$FAKE_DOCKER_SCENARIO" in
+      docker-unreachable-for-state-check) exit 1 ;;
+      *) exit 0 ;;
+    esac
+    ;;
+  # クロエ round 4 review N-3: existence-only, matching \`docker volume
+  # inspect\` (measured live: exit 0 for an existing volume, 1 for a
+  # missing one). Defaults to "does not exist" — most branch-C/FRESH
+  # fixtures in this file assume a genuinely empty deployment; the one
+  # scenario that needs the OPPOSITE (a volume surviving after its
+  # container disappeared) opts in explicitly.
+  volume)
+    case "$2" in
+      inspect)
+        case "$FAKE_DOCKER_SCENARIO" in
+          volume-exists-no-container) exit 0 ;;
+          *) exit 1 ;;
+        esac
         ;;
     esac
     ;;
@@ -511,14 +550,54 @@ test("parseArgs rejects a value flag whose value looks like another flag", () =>
   assert.throws(() => parseArgs(["build", "--repo", "--target"]), DeployError);
 });
 
-test("hasPriorTransactions is false for a directory that does not exist", () => {
-  assert.equal(hasPriorTransactions(join(root, "does-not-exist")), false);
-});
-
-test("hasPriorTransactions is true once a transaction directory exists", () => {
+test("hasPriorTransactions is true once a transaction directory exists, without ever touching docker", () => {
+  // Short-circuits on the backup_root check alone — bin is never used,
+  // matching the doc comment's own ordering (prior transactions first).
   const backupRoot = join(root, "kaoiro-deploy");
   mkdirSync(join(backupRoot, "20260906T000000Z"), { recursive: true });
-  assert.equal(hasPriorTransactions(backupRoot), true);
+  assert.equal(hasPriorTransactions("/does-not-exist-bin", join(workDir, "server"), backupRoot), true);
+});
+
+test("hasPriorTransactions is false when the backup root is empty and the named volume does not exist", () => {
+  const backupRoot = join(root, "does-not-exist");
+  const result = withOverrideEnv(() => hasPriorTransactions(bin, join(workDir, "server"), backupRoot));
+  assert.equal(result, false);
+});
+
+// クロエ round 4 review N-3: the exact danger this ruling exists to
+// close — `start --initialize` once, no `update` since (empty
+// backup_root), and the container has since disappeared. The volume
+// itself still holds live state and must NOT read as "no prior state".
+test("hasPriorTransactions is true when the backup root is empty but the named volume still exists", () => {
+  const backupRoot = join(root, "does-not-exist");
+  const result = withScenario("volume-exists-no-container", () =>
+    hasPriorTransactions(bin, join(workDir, "server"), backupRoot),
+  );
+  assert.equal(result, true);
+});
+
+// クロエ round 4 review N-3: docker unreachable must resolve to `null`
+// (unknown), never `false` — a `false` here is exactly what would let
+// `start --initialize` re-run over state this function simply could not
+// check.
+test("hasPriorTransactions is null (unknown) when docker itself is unreachable, never false", () => {
+  const backupRoot = join(root, "does-not-exist");
+  const brokenBin = join(root, "broken-docker.sh");
+  writeFileSync(brokenBin, "#!/bin/sh\necho 'Cannot connect to the Docker daemon.' >&2\nexit 1\n");
+  chmodSync(brokenBin, 0o700);
+  const result = hasPriorTransactions(brokenBin, join(workDir, "server"), backupRoot);
+  assert.equal(result, null);
+});
+
+// クロエ round 4 review SF-5: hasPriorTransactions alone had not
+// excluded dotfiles the way every other reader of backup_root already
+// does — a leftover `.lock.update` from a crashed run must not read as
+// "prior transaction state exists".
+test("hasPriorTransactions ignores a leftover .lock.update, unlike a real transaction directory", () => {
+  const backupRoot = join(root, "kaoiro-deploy");
+  mkdirSync(join(backupRoot, ".lock.update"), { recursive: true });
+  const result = withOverrideEnv(() => hasPriorTransactions(bin, join(workDir, "server"), backupRoot));
+  assert.equal(result, false);
 });
 
 test("runBuild requires --target", () => {
@@ -763,8 +842,7 @@ test("runUpdate fails closed and restores kaoiro-server:latest to the old image 
       withEnvConsistencyFixture(
         {
           evalOutput,
-          composeEnvJson:
-            '{"services":{"kaoiro":{"environment":{"KAOIRO_USERS_PATH":"/var/lib/kaoiro/users.dets"}}}}',
+          composeEnvJson: '{"KAOIRO_USERS_PATH":"/var/lib/kaoiro/users.dets"}',
           // Deliberately DIFFERENT from .env/compose — the running
           // (old) container predates this compose value.
           containerEnvJson: '["KAOIRO_USERS_PATH=/tmp/kaoiro-dets/users.dets"]',
@@ -793,7 +871,7 @@ test("runUpdate proceeds through DONE when env_consistency's three sources all a
     withEnvConsistencyFixture(
       {
         evalOutput,
-        composeEnvJson: '{"services":{"kaoiro":{"environment":{"KAOIRO_USERS_PATH":"/var/lib/kaoiro/users.dets"}}}}',
+        composeEnvJson: '{"KAOIRO_USERS_PATH":"/var/lib/kaoiro/users.dets"}',
         containerEnvJson: '["KAOIRO_USERS_PATH=/var/lib/kaoiro/users.dets"]',
       },
       () => runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
@@ -939,6 +1017,46 @@ test("parseTarEntries rejects a real archive containing a FIFO, even alongside o
     rmSync(src, { recursive: true, force: true });
     rmSync(archiveDir, { recursive: true, force: true });
   }
+});
+
+// director ruling 2026-09-06 (round 5, closing the required_entries
+// mismatch pin gap left open in the rollback commit): the restored-
+// volume-vs-manifest comparison rollback's own destructive path relies
+// on, pinned directly as a pure function.
+test("requiredEntriesMatch is true for the same entries in a different order", () => {
+  const a = [
+    { path: "users.dets", owner: "1000:1000", mode: "0600" },
+    { path: "agent_directory.dets", owner: "1000:1000", mode: "0600" },
+  ];
+  const b = [...a].reverse();
+  assert.equal(requiredEntriesMatch(a, b), true);
+});
+
+test("requiredEntriesMatch is false when an entry is missing", () => {
+  const expected = [
+    { path: "users.dets", owner: "1000:1000", mode: "0600" },
+    { path: "agent_directory.dets", owner: "1000:1000", mode: "0600" },
+  ];
+  const actual = [expected[0]];
+  assert.equal(requiredEntriesMatch(actual, expected), false);
+});
+
+test("requiredEntriesMatch is false when an entry is extra", () => {
+  const expected = [{ path: "users.dets", owner: "1000:1000", mode: "0600" }];
+  const actual = [...expected, { path: "unexpected.dets", owner: "1000:1000", mode: "0600" }];
+  assert.equal(requiredEntriesMatch(actual, expected), false);
+});
+
+test("requiredEntriesMatch is false when an entry's owner disagrees", () => {
+  const expected = [{ path: "users.dets", owner: "1000:1000", mode: "0600" }];
+  const actual = [{ path: "users.dets", owner: "0:0", mode: "0600" }];
+  assert.equal(requiredEntriesMatch(actual, expected), false);
+});
+
+test("requiredEntriesMatch is false when an entry's mode disagrees", () => {
+  const expected = [{ path: "users.dets", owner: "1000:1000", mode: "0600" }];
+  const actual = [{ path: "users.dets", owner: "1000:1000", mode: "0644" }];
+  assert.equal(requiredEntriesMatch(actual, expected), false);
 });
 
 // クロエ round 1 review S1/(c3): a delayed health response for a
@@ -1643,6 +1761,20 @@ test("status reports branch C when there is no container and no prior state", ()
   assert.equal(result.container.branch, "C");
 });
 
+// クロエ round 4 review N-3, end to end through classify(): no container
+// (requireRunningContainer correctly throws BranchError, reaching
+// classify()) and no prior transactions, but hasPriorTransactions
+// itself could not determine the volume's existence (docker
+// unreachable) — must diagnose, never claim FRESH.
+test("status reports branch D (never C) when no container is found and hasPriorTransactions itself could not tell", () => {
+  const result = withScenario("docker-unreachable-for-state-check", () =>
+    runStatus({ repo: workDir }, configWithOverride()),
+  );
+  assert.equal(result.container.running, false);
+  assert.equal(result.container.branch, "D");
+  assert.ok(result.container.reason.includes("could not determine whether prior state exists"));
+});
+
 test("status reports branch B when prior transaction state exists but no container is found", () => {
   const backupRoot = join(root, "kaoiro-deploy");
   mkdirSync(join(backupRoot, "20260906T000000Z"), { recursive: true });
@@ -1700,6 +1832,69 @@ test("status's health field reports an error (not a crash) when curl itself is u
 
 test("status does not attempt a health check when no container is running", () => {
   const result = withScenario("stopped", () => runStatus({ repo: workDir }, configWithOverride()));
+  assert.equal(result.health, null);
+});
+
+// クロエ round 4 review MF-4: every leg of status is independent — a
+// transaction directory that fails findUnfinishedTransaction's own
+// state-machine trust checks must not blank the rest of the output.
+test("status still returns a full object when a transaction directory has a mismatched transaction_id", () => {
+  const backupRoot = join(root, "kaoiro-deploy");
+  const dirId = "20200101T000000Z";
+  mkdirSync(join(backupRoot, dirId), { recursive: true });
+  writeFileSync(
+    join(backupRoot, dirId, "journal.json"),
+    JSON.stringify({ schema_version: 1, transaction_id: "20200102T000000Z", phase: "preflight", history: [] }),
+  );
+  const result = withScenario("running", () =>
+    runStatus({ repo: workDir }, { ...configWithOverride(), backup_root: backupRoot }),
+  );
+  assert.equal(result.container.running, true);
+  assert.deepEqual(result.doneTransactions, []);
+  assert.ok(typeof result.scopeNote === "string" && result.scopeNote !== "");
+  assert.ok(result.unfinishedTransaction.error.includes("refusing to guess which is authoritative"));
+  assert.equal(result.unfinishedTransaction.directory, join(backupRoot, dirId));
+});
+
+test("status still returns a full object when a transaction directory fails the state-machine check", () => {
+  const backupRoot = join(root, "kaoiro-deploy");
+  const dirId = "20200101T000000Z";
+  mkdirSync(join(backupRoot, dirId), { recursive: true });
+  // Non-empty history is required for PREFLIGHT to be the only phase an
+  // empty history is legal at — "archived" with an empty history is a
+  // state-machine violation (validateJournalAgainstStateMachine's own
+  // "no evidence supports it" branch).
+  writeFileSync(
+    join(backupRoot, dirId, "journal.json"),
+    JSON.stringify({ schema_version: 1, transaction_id: dirId, phase: "archived", history: [] }),
+  );
+  const result = withScenario("running", () =>
+    runStatus({ repo: workDir }, { ...configWithOverride(), backup_root: backupRoot }),
+  );
+  assert.equal(result.container.running, true);
+  assert.ok(result.unfinishedTransaction.error.includes("no evidence supports it"));
+  assert.equal(result.unfinishedTransaction.directory, join(backupRoot, dirId));
+});
+
+// クロエ round 4 review SF-3: docker itself unreachable must not escape
+// as a raw, undiagnosed error — and classify() must not be called a
+// second time against the same unreachable daemon.
+test("status reports container.error (not a crash) when docker itself is unreachable", () => {
+  const brokenBin = join(root, "broken-docker.sh");
+  writeFileSync(brokenBin, "#!/bin/sh\necho 'Cannot connect to the Docker daemon.' >&2\nexit 1\n");
+  chmodSync(brokenBin, 0o700);
+  const priorDocker = process.env.KAOIRO_DEPLOY_DOCKER_BIN;
+  process.env.KAOIRO_DEPLOY_DOCKER_BIN = brokenBin;
+  let result;
+  try {
+    result = runStatus({ repo: workDir }, configWithOverride());
+  } finally {
+    if (priorDocker === undefined) delete process.env.KAOIRO_DEPLOY_DOCKER_BIN;
+    else process.env.KAOIRO_DEPLOY_DOCKER_BIN = priorDocker;
+  }
+  assert.equal(result.container.running, false);
+  assert.ok(typeof result.container.error === "string" && result.container.error !== "");
+  assert.equal(result.container.branch, undefined, "classify() must not have run a second docker call");
   assert.equal(result.health, null);
 });
 
@@ -1779,10 +1974,16 @@ test("status still lists a DONE transaction (with null facts) when its manifest.
   assert.ok(typeof entry.doneAt === "string" && entry.doneAt !== "");
 });
 
-test("status's scopeNote names exactly the branches it can and cannot answer", () => {
+// クロエ round 4 review SF-4: reworded to what status actually reads
+// (container state / health provenance / unfinished phase / DONE
+// history) and does not (runner signals, 5-b's ledger migration, the
+// REASON behind a runner-side build failure) — the original overclaimed
+// full coverage of deployment.md 4.4's branches (0)/(1)/(3)/(4)/(5).
+test("status's scopeNote states what it reads and does not, without overclaiming runbook branch coverage", () => {
   const result = withScenario("running", () => runStatus({ repo: workDir }, configWithOverride()));
-  assert.ok(result.scopeNote.includes("(0)/(1)/(3)/(4)/(5)"));
-  assert.ok(result.scopeNote.includes("not (2)"));
+  assert.ok(result.scopeNote.includes("container state"));
+  assert.ok(result.scopeNote.includes("health provenance"));
+  assert.ok(result.scopeNote.includes("does not read runner-side signals"));
   assert.ok(result.scopeNote.includes("5-b"));
 });
 
