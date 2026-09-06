@@ -9,7 +9,7 @@
 // yuta 2026-09-06).
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
 
 import { computeBuildIdentity } from "../../scripts/build-identity.mjs";
@@ -1010,6 +1010,120 @@ export function reachablePhases(from, transitions) {
 // ever consulted, but correct on its own regardless.
 export const UNRESUMABLE_PHASES = reachablePhases(PHASE.STOPPING, TRANSITIONS);
 
+// --- #303 capacity preflight ----------------------------------------------
+// クロエ manual round-1 review M1: `capacity_multiplier` has existed in the
+// operator config since #306 landed, with no consumer — the #303 operator
+// decision (5) ("refuse update when free space < capacity_multiplier x
+// volume size") was never actually implemented. Checked at PREFLIGHT,
+// before ANY mutation (even OLD_IMAGE_SAVED's own retag), and in
+// `--dry-run` too (both measurements below are pure reads).
+
+/** The docker volume name (if any) mounted at /var/lib/kaoiro for
+ *  `container` — the SAME go-template the post-stop MOUNT_RESOLVED phase
+ *  re-resolves with, factored out once two call sites need it (this
+ *  commit adds the first: the capacity preflight, run while `container`
+ *  is still the one live, pre-stop container). Empty string when no such
+ *  mount exists; callers decide what that means for their own phase. */
+function resolveKaoiroLibMount(bin, container) {
+  return dockerInspect(
+    bin,
+    container,
+    '{{range .Mounts}}{{if eq .Destination "/var/lib/kaoiro"}}{{.Name}}{{end}}{{end}}',
+  );
+}
+
+/** A SEPARATE override seam from KAOIRO_DEPLOY_DOCKER_BIN's gated one —
+ *  same reasoning as resolveCurlBin: `df` is read-only (no docker
+ *  mutation the gate's own threat model cares about), so this needs no
+ *  --config permission bit, just a way for a test to point it at a fake
+ *  without depending on the real host's actual free space. */
+function resolveDfBin(env = process.env) {
+  return env.KAOIRO_DEPLOY_DF_BIN || "df";
+}
+
+/** `df -Pk`'s Available column (KiB), for the nearest EXISTING ancestor of
+ *  `path` — `backup_root` itself may not exist yet on a brand-new host's
+ *  very first `update` (nothing has created it yet, and `df` on a missing
+ *  path fails outright even though the directory is about to be created
+ *  on the same filesystem an existing ancestor already sits on). `-P`
+ *  (POSIX format) keeps the output on exactly one line regardless of how
+ *  long the filesystem name is — plain `df` can wrap that onto a second
+ *  line, which would misalign a fixed-column parse. Throws DeployError on
+ *  any failure to run or parse `df` — an unmeasurable free-space figure
+ *  is UNKNOWN, never "assume there is room" (#303 capacity-preflight
+ *  ruling, 2026-09-06: "測定不能 → 拒否"). */
+function readAvailableBytes(path) {
+  let probe = path;
+  while (!existsSync(probe)) {
+    const parent = dirname(probe);
+    if (parent === probe) break; // reached the filesystem root
+    probe = parent;
+  }
+  const dfBin = resolveDfBin();
+  let raw;
+  try {
+    raw = execFileSync(dfBin, ["-Pk", probe], { encoding: "utf8" });
+  } catch (err) {
+    fail(`could not measure free space at ${probe} (${dfBin} -Pk failed): ${err.message}`);
+  }
+  const dataLine = raw.trim().split("\n").at(-1);
+  const availableKb = Number(dataLine.trim().split(/\s+/)[3]);
+  if (!Number.isInteger(availableKb)) {
+    fail(`could not parse '${dfBin} -Pk ${probe}' output: ${raw}`);
+  }
+  return availableKb * 1024;
+}
+
+/** KiB used under the docker volume named `volumeName`, via `du -sk`
+ *  inside a throwaway alpine container mounted read-only — the same
+ *  pattern the archive step already uses to read a volume's content.
+ *  Reading a volume that is ALSO mounted read-write into the still-
+ *  running container (the capacity preflight's own case, pre-stop) is
+ *  safe, the same way any `du` against a live filesystem is. Pulls
+ *  alpine first if missing: this preflight is now the FIRST thing in a
+ *  run that might need it, ahead of N-5's own pre-stop pull later on. */
+function volumeUsedBytes(bin, volumeName) {
+  ensureAlpineImage(bin);
+  let raw;
+  try {
+    raw = runDocker(bin, ["run", "--rm", "-v", `${volumeName}:/data:ro`, ALPINE_IMAGE, "du", "-sk", "/data"]);
+  } catch (err) {
+    fail(`could not measure volume usage for ${volumeName} (du -sk failed): ${err.message}`);
+  }
+  const usedKb = Number(raw.trim().split(/\s+/)[0]);
+  if (!Number.isInteger(usedKb)) {
+    fail(`could not parse 'du -sk /data' output for volume ${volumeName}: ${raw}`);
+  }
+  return usedKb * 1024;
+}
+
+/** Refuses to proceed when `backupRoot`'s filesystem does not have at
+ *  least `config.capacity_multiplier` times the /var/lib/kaoiro volume's
+ *  CURRENT size free — #303 operator decision (5), unimplemented until
+ *  this commit. Every failure mode here is fail-closed: an unresolvable
+ *  mount, a `df`/`du` that cannot be run or parsed, or an insufficient
+ *  result are all treated the same as a genuine shortage. Returns the
+ *  three measured/derived numbers so the caller can checkpoint them
+ *  durably (S1's own "checkpoint every fact" contract) instead of only
+ *  holding them in memory. */
+function checkCapacity(bin, container, backupRoot, config) {
+  const volumeName = resolveKaoiroLibMount(bin, container);
+  if (volumeName === "") {
+    fail(
+      `capacity preflight could not resolve the /var/lib/kaoiro mount for ${container} — cannot measure its size`,
+    );
+  }
+  const freeBytes = readAvailableBytes(backupRoot);
+  const volumeBytes = volumeUsedBytes(bin, volumeName);
+  const thresholdBytes = config.capacity_multiplier * volumeBytes;
+  if (freeBytes < thresholdBytes) {
+    fail(
+      `capacity preflight refused: ${backupRoot}'s filesystem has ${freeBytes} bytes free, below the required ${thresholdBytes} bytes (capacity_multiplier ${config.capacity_multiplier} x current volume size ${volumeBytes} bytes) — free up space, or lower capacity_multiplier via --config, before retrying`,
+    );
+  }
+  return { free_bytes: freeBytes, volume_bytes: volumeBytes, threshold_bytes: thresholdBytes };
+}
+
 /** `update`: lock, preflight, save the old image, build the versioned
  *  target, the human maintenance gate, then the stop/archive/up/
  *  health-poll/retention commit itself, ending at DONE. Everything up
@@ -1057,6 +1171,11 @@ export function runUpdate(flags, config) {
     const container = requireRunningContainer(bin, serverDir, SERVICE);
     const unfinished = findUnfinishedTransaction(backupRoot);
     gitOutput(["fetch", "origin"], repo);
+    // #303 operator decision (5): the capacity preflight is a pure read
+    // (df + du inside a throwaway container) and fail-closed, so a
+    // dry-run reports the SAME pass/fail answer a real run would give,
+    // not merely a plan that omits it.
+    const capacity = checkCapacity(bin, container, backupRoot, config);
     return {
       command: "update",
       dryRun: true,
@@ -1064,6 +1183,7 @@ export function runUpdate(flags, config) {
       container,
       target,
       unfinishedTransactionId: unfinished === null ? null : unfinished.id,
+      capacity,
       wouldRun:
         unfinished !== null
           ? [`resume transaction ${unfinished.id} (phase: ${unfinished.journal.phase})`]
@@ -1138,6 +1258,12 @@ export function runUpdate(flags, config) {
 
       container = requireRunningContainer(bin, serverDir, SERVICE);
 
+      // #303 operator decision (5), クロエ manual round-1 review M1:
+      // measured and gated BEFORE any mutation — even before this
+      // transaction's own directory exists — so an insufficient host
+      // leaves nothing behind to clean up.
+      const capacity = checkCapacity(bin, container, backupRoot, config);
+
       transactionId = newTransactionId();
       dir = join(backupRoot, transactionId);
       // クロエ round 1 review N-2: backupRoot itself may not exist yet on
@@ -1151,7 +1277,13 @@ export function runUpdate(flags, config) {
         schema_version: 1,
         transaction_id: transactionId,
         phase: PHASE.PREFLIGHT,
-        history: [{ phase: PHASE.PREFLIGHT, at: new Date().toISOString(), observation: { container } }],
+        history: [
+          {
+            phase: PHASE.PREFLIGHT,
+            at: new Date().toISOString(),
+            observation: { container, ...capacity },
+          },
+        ],
       };
       writeJournal(dir, journal, validateJournalAgainstStateMachine);
 
@@ -1323,11 +1455,7 @@ export function runUpdate(flags, config) {
     // Re-resolve the mount from the NOW-STOPPED container — the same
     // container prepare already verified was running, not a fresh
     // lookup that could pick up a different one.
-    const volumeId = dockerInspect(
-      bin,
-      container,
-      '{{range .Mounts}}{{if eq .Destination "/var/lib/kaoiro"}}{{.Name}}{{end}}{{end}}',
-    );
+    const volumeId = resolveKaoiroLibMount(bin, container);
     // Measured redundant with the MOUNT_RESOLVED observation schema
     // below (advancePhase() now runs validateJournalAgainstStateMachine
     // too) — removing this check still stops the run, via a PhaseError

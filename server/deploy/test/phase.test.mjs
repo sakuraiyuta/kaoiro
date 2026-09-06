@@ -22,7 +22,15 @@ function indexOf(journal, phase) {
   return idx;
 }
 
-const PREFLIGHT_OBS = { container: "kaoiro-c1" };
+// #303 capacity preflight (operator decision (5)): free_bytes/volume_bytes/
+// threshold_bytes are the three measured/derived facts the fail-closed
+// capacity check itself used to decide pass/fail.
+const PREFLIGHT_OBS = {
+  container: "kaoiro-c1",
+  free_bytes: 100000000,
+  volume_bytes: 1000000,
+  threshold_bytes: 10000000,
+};
 const OLD_SHA = "c".repeat(40);
 const OLD_IMAGE_OBS = {
   old_image_id: `sha256:${"0".repeat(64)}`,
@@ -160,6 +168,25 @@ test("validateJournalAgainstStateMachine rejects journal.phase disagreeing with 
 test("validateJournalAgainstStateMachine rejects a PREFLIGHT observation missing container", () => {
   const journal = fullJournal();
   journal.history[indexOf(journal, PHASE.PREFLIGHT)] = entry(PHASE.PREFLIGHT, {});
+  assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
+});
+
+// #303 capacity preflight: pinned SEPARATELY from the "missing container"
+// test above — container present and valid, only the three capacity
+// fields dropped, so a regression that stops requiring them (while still
+// requiring container) cannot hide behind that other test's coverage.
+test("validateJournalAgainstStateMachine rejects a PREFLIGHT observation missing the capacity fields", () => {
+  const journal = fullJournal();
+  journal.history[indexOf(journal, PHASE.PREFLIGHT)] = entry(PHASE.PREFLIGHT, { container: "kaoiro-c1" });
+  assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
+});
+
+test("validateJournalAgainstStateMachine rejects a PREFLIGHT observation with a non-integer threshold_bytes", () => {
+  const journal = fullJournal();
+  journal.history[indexOf(journal, PHASE.PREFLIGHT)] = entry(PHASE.PREFLIGHT, {
+    ...PREFLIGHT_OBS,
+    threshold_bytes: "10000000",
+  });
   assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
 });
 

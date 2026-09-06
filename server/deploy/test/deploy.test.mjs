@@ -50,7 +50,7 @@ case "$1" in
     case "$2" in
       ps)
         case "$FAKE_DOCKER_SCENARIO" in
-          stopped|running|retag-drift|running-clean-stop|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty|compose-config-renamed-service|compose-config-missing-environment-key)
+          stopped|running|retag-drift|running-clean-stop|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty|compose-config-renamed-service|compose-config-missing-environment-key|mount-vanishes-after-stop)
             printf 'kaoiro-c1\\n' ;;
           # round 4 review B-1 (expanded): rollback's own "2+ containers,
           # refuse" guard, distinct from requireRunningContainer's own
@@ -188,28 +188,42 @@ case "$1" in
           '{{.State.Status}}')
             case "$FAKE_DOCKER_SCENARIO" in
               stopped) printf 'exited\\n' ;;
-              running|retag-drift|running-clean-stop|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty|compose-config-renamed-service|compose-config-missing-environment-key)
+              running|retag-drift|running-clean-stop|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty|compose-config-renamed-service|compose-config-missing-environment-key|mount-vanishes-after-stop)
                 printf 'running\\n' ;;
             esac
             ;;
           '{{.State.ExitCode}}')
             case "$FAKE_DOCKER_SCENARIO" in
-              running-clean-stop|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-archive-drifts-empty) printf '0\\n' ;;
+              running-clean-stop|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-archive-drifts-empty|mount-vanishes-after-stop) printf '0\\n' ;;
               running-dirty-stop) printf '137\\n' ;;
               *) printf 'unknown\\n' ;;
             esac
             ;;
           '{{.State.OOMKilled}}')
             case "$FAKE_DOCKER_SCENARIO" in
-              running-clean-stop|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-archive-drifts-empty) printf 'false\\n' ;;
+              running-clean-stop|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-archive-drifts-empty|mount-vanishes-after-stop) printf 'false\\n' ;;
               running-dirty-stop) printf 'true\\n' ;;
               *) printf 'unknown\\n' ;;
             esac
             ;;
           '{{range .Mounts}}{{if eq .Destination "/var/lib/kaoiro"}}{{.Name}}{{end}}{{end}}')
+            # #303 capacity preflight: this SAME inspect now also runs
+            # PRE-stop (checkCapacity), so every scenario that reaches
+            # requireRunningContainer needs a real answer here, not just
+            # the scenarios that used to reach POST-stop MOUNT_RESOLVED.
+            # Defaulting to the standard mount keeps every scenario that
+            # does not care about mount resolution unaffected;
+            # running-no-mount is the one deliberate exception (a
+            # container genuinely never carrying this mount).
             case "$FAKE_DOCKER_SCENARIO" in
-              running-clean-stop|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-empty-vol|running-broken-archive|alpine-missing|running-archive-drifts-empty) printf 'kaoiro_kaoiro-state\\n' ;;
               running-no-mount) ;;
+              mount-vanishes-after-stop)
+                count=0
+                [ -f "$KAOIRO_TEST_MOUNT_CALL_COUNTER" ] && count=$(cat "$KAOIRO_TEST_MOUNT_CALL_COUNTER")
+                echo $((count + 1)) > "$KAOIRO_TEST_MOUNT_CALL_COUNTER"
+                if [ "$count" -eq 0 ]; then printf 'kaoiro_kaoiro-state\\n'; fi
+                ;;
+              *) printf 'kaoiro_kaoiro-state\\n' ;;
             esac
             ;;
           '{{.RestartCount}}')
@@ -367,6 +381,14 @@ case "$1" in
         else
           printf '[]\\n'
         fi
+        ;;
+      # #303 capacity preflight: KiB used under the resolved volume, the
+      # same du -sk /data an alpine container run read-only against a
+      # real volume prints. KAOIRO_TEST_VOLUME_KB lets a specific test
+      # control this precisely; every other test gets a small, harmless
+      # default that any real host's free space trivially clears.
+      *"du -sk"*)
+        printf '%s\\t/data\\n' "\${KAOIRO_TEST_VOLUME_KB:-2}"
         ;;
       *)
         # Pre-archive empty-volume guard (find -mindepth 1 -maxdepth 1
@@ -1869,14 +1891,163 @@ test("runUpdate refuses when the archive fails full-traversal verification", () 
   );
 });
 
-test("runUpdate refuses to proceed when the mount cannot be resolved after stopping", () => {
-  assert.throws(
-    () =>
-      withScenario("running-no-mount", () =>
-        runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+// #303 capacity preflight: this scenario's container never carries the
+// mount at all, so checkCapacity's OWN mount-resolution guard now catches
+// it BEFORE the transaction directory is even created — earlier than the
+// post-stop MOUNT_RESOLVED re-check this test used to reach (that guard's
+// own dedicated pin, now that this scenario no longer reaches it, is the
+// "mount-vanishes-after-stop" test right below).
+test("runUpdate refuses at the capacity preflight when the /var/lib/kaoiro mount cannot be resolved", () => {
+  let caught;
+  try {
+    withScenario("running-no-mount", () =>
+      runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+    );
+  } catch (err) {
+    caught = err;
+  }
+  assert.ok(caught instanceof DeployError);
+  // backup_root itself already exists (acquireLock creates it), but no
+  // PER-TRANSACTION directory does — checkCapacity fails before
+  // newTransactionId()/mkdirSync(dir), so there is nothing left behind.
+  const backupRoot = join(root, "kaoiro-deploy");
+  assert.deepEqual(readdirSyncNonHidden(backupRoot), []);
+});
+
+// MOUNT_RESOLVED's own comment: "not a fresh lookup that could pick up a
+// different one" — pinned in isolation now that running-no-mount (above)
+// no longer reaches it. The mount resolves fine during the PRE-stop
+// capacity check (1st inspect call) but has vanished by the time
+// MOUNT_RESOLVED re-resolves it POST-stop (2nd call).
+test("runUpdate refuses to proceed when the mount cannot be resolved after stopping (re-verification)", () => {
+  process.env.KAOIRO_TEST_MOUNT_CALL_COUNTER = join(root, "mount-call-counter");
+  try {
+    assert.throws(
+      () =>
+        withScenario("mount-vanishes-after-stop", () =>
+          runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+        ),
+      DeployError,
+    );
+  } finally {
+    delete process.env.KAOIRO_TEST_MOUNT_CALL_COUNTER;
+  }
+  const backupRoot = join(root, "kaoiro-deploy");
+  const [transactionDir] = readdirSyncNonHidden(backupRoot);
+  const journal = readJournal(join(backupRoot, transactionDir));
+  assert.equal(journal.phase, "stopped");
+});
+
+// #303 operator decision (5), クロエ manual round-1 review M1:
+// capacity_multiplier has existed in the operator config since #306
+// landed, with no consumer until this commit. Pinned via --dry-run (both
+// measurements are pure reads, so a dry-run gives the same fail-closed
+// answer a real run would) with an absurdly large capacity_multiplier so
+// the comparison fails deterministically regardless of the real test
+// host's actual free space.
+test("runUpdate's capacity preflight refuses when free space is below capacity_multiplier x volume size", () => {
+  let caught;
+  try {
+    withScenario("running", () =>
+      runUpdate(
+        { repo: workDir, target: headSha, dryRun: true },
+        { ...configWithOverride(), capacity_multiplier: 1000000000000 },
       ),
-    DeployError,
+    );
+  } catch (err) {
+    caught = err;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.ok(caught.message.includes("capacity preflight refused"));
+});
+
+test("runUpdate's capacity preflight passes and records free/volume/threshold when there is enough room", () => {
+  const planned = withScenario("running", () =>
+    runUpdate({ repo: workDir, target: headSha, dryRun: true }, configWithOverride()),
   );
+  assert.equal(planned.capacity.volume_bytes, 2 * 1024); // FAKE_DOCKER's default KAOIRO_TEST_VOLUME_KB
+  assert.equal(
+    planned.capacity.threshold_bytes,
+    DEFAULT_CONFIG.capacity_multiplier * planned.capacity.volume_bytes,
+  );
+  assert.ok(planned.capacity.free_bytes >= planned.capacity.threshold_bytes);
+
+  // A REAL (non-dry-run) run checkpoints the SAME shape durably in the
+  // PREFLIGHT observation, not merely in the dry-run's return value —
+  // this run legitimately stops at the maintenance gate right after.
+  let caught;
+  try {
+    withScenario("running", () => runUpdate({ repo: workDir, target: headSha }, configWithOverride()));
+  } catch (err) {
+    caught = err;
+  }
+  assert.ok(caught instanceof DeployError);
+  const backupRoot = join(root, "kaoiro-deploy");
+  const [transactionDir] = readdirSyncNonHidden(backupRoot);
+  const journal = readJournal(join(backupRoot, transactionDir));
+  const preflight = journal.history.find((e) => e.phase === "preflight").observation;
+  assert.equal(preflight.volume_bytes, 2 * 1024);
+  assert.equal(preflight.threshold_bytes, DEFAULT_CONFIG.capacity_multiplier * preflight.volume_bytes);
+  assert.ok(preflight.free_bytes >= preflight.threshold_bytes);
+});
+
+test("runUpdate's capacity preflight refuses when free space cannot be measured (df fails)", () => {
+  const dfBin = join(root, "fake-df-fails.sh");
+  writeFileSync(dfBin, "#!/bin/sh\nexit 1\n");
+  chmodSync(dfBin, 0o700);
+  process.env.KAOIRO_DEPLOY_DF_BIN = dfBin;
+  let caught;
+  try {
+    withScenario("running", () =>
+      runUpdate({ repo: workDir, target: headSha, dryRun: true }, configWithOverride()),
+    );
+  } catch (err) {
+    caught = err;
+  } finally {
+    delete process.env.KAOIRO_DEPLOY_DF_BIN;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.ok(caught.message.includes("could not measure free space"));
+});
+
+// The "0 exit but garbage shape" class this file already treats as a hard
+// failure elsewhere (queryPersistencePaths, composeDeclaredEnv) — a `df`
+// that RUNS but whose output this parser cannot read is a different,
+// equally fail-closed outcome from `df` failing to run at all (pinned
+// above).
+test("runUpdate's capacity preflight refuses when df succeeds but prints an unparseable line", () => {
+  const dfBin = join(root, "fake-df-garbage.sh");
+  writeFileSync(dfBin, "#!/bin/sh\nprintf 'not a df line\\n'\n");
+  chmodSync(dfBin, 0o700);
+  process.env.KAOIRO_DEPLOY_DF_BIN = dfBin;
+  let caught;
+  try {
+    withScenario("running", () =>
+      runUpdate({ repo: workDir, target: headSha, dryRun: true }, configWithOverride()),
+    );
+  } catch (err) {
+    caught = err;
+  } finally {
+    delete process.env.KAOIRO_DEPLOY_DF_BIN;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.ok(caught.message.includes("could not parse"));
+});
+
+test("runUpdate's capacity preflight refuses when du -sk prints an unparseable line", () => {
+  process.env.KAOIRO_TEST_VOLUME_KB = "not-a-number";
+  let caught;
+  try {
+    withScenario("running", () =>
+      runUpdate({ repo: workDir, target: headSha, dryRun: true }, configWithOverride()),
+    );
+  } catch (err) {
+    caught = err;
+  } finally {
+    delete process.env.KAOIRO_TEST_VOLUME_KB;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.ok(caught.message.includes("could not parse 'du -sk /data'"));
 });
 
 test("runUpdate refuses to proceed past a stop with no measured clean-stop expectation", () => {
@@ -2013,7 +2184,12 @@ test("runUpdate's unfinished-transaction guidance for a transaction parked at ST
   const composeSha = "c".repeat(64);
   const entry = (phase, observation) => ({ phase, at: "2026-09-06T23:00:00.000Z", observation });
   const history = [
-    entry("preflight", { container: "kaoiro-c1" }),
+    entry("preflight", {
+      container: "kaoiro-c1",
+      free_bytes: 100000000,
+      volume_bytes: 1000000,
+      threshold_bytes: 10000000,
+    }),
     entry("old_image_saved", {
       old_image_id: imageId,
       old_sha: oldSha,
@@ -2446,7 +2622,14 @@ test("runRollback refuses a transaction still at PREFLIGHT (not yet eligible)", 
       schema_version: 1,
       transaction_id: id,
       phase: "preflight",
-      history: [journalEntry("preflight", { container: "kaoiro-c1" })],
+      history: [
+        journalEntry("preflight", {
+          container: "kaoiro-c1",
+          free_bytes: 100000000,
+          volume_bytes: 1000000,
+          threshold_bytes: 10000000,
+        }),
+      ],
     }),
   );
   // --confirm-restore: true — see the already-rolled-back test's own
@@ -2468,7 +2651,12 @@ test("runRollback refuses an already-rolled-back transaction", () => {
   mkdirSync(dir, { recursive: true });
   const oldSha = "c".repeat(40);
   const history = [
-    journalEntry("preflight", { container: "kaoiro-c1" }),
+    journalEntry("preflight", {
+      container: "kaoiro-c1",
+      free_bytes: 100000000,
+      volume_bytes: 1000000,
+      threshold_bytes: 10000000,
+    }),
     journalEntry("old_image_saved", {
       old_image_id: OLD_IMAGE_ID,
       old_sha: oldSha,

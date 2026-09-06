@@ -127,7 +127,20 @@ export const TRANSITIONS = {
  *  abnormal/normal judgment itself lives in the caller that decides
  *  whether to advance past STOPPED at all. */
 const OBSERVATION_SCHEMAS = {
-  [PHASE.PREFLIGHT]: (obs) => typeof obs.container === "string" && obs.container !== "",
+  // #303 capacity preflight (operator decision (5), クロエ manual round-1
+  // review M1): the three measured/derived facts the fail-closed capacity
+  // check itself used to decide pass/fail, recorded so a resumed
+  // transaction (or an operator auditing later) can see exactly what was
+  // measured, not just that "PREFLIGHT passed".
+  [PHASE.PREFLIGHT]: (obs) =>
+    typeof obs.container === "string" &&
+    obs.container !== "" &&
+    Number.isInteger(obs.free_bytes) &&
+    obs.free_bytes >= 0 &&
+    Number.isInteger(obs.volume_bytes) &&
+    obs.volume_bytes >= 0 &&
+    Number.isInteger(obs.threshold_bytes) &&
+    obs.threshold_bytes >= 0,
   // クロエ round 1 review MF-2: the rollback tag must name the OLD sha it
   // was cut from, not just look like a tag — a value that merely looks
   // like a docker tag string but drifted from old_sha would be a silent
