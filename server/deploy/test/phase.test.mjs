@@ -238,3 +238,38 @@ test("validateJournalAgainstStateMachine rejects an OLD_IMAGE_SAVED observation 
   });
   assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
 });
+
+// issue #306 (c3): up / health / done.
+const HEALTHY_OBS = { health_revision: "d".repeat(40), health_dirty: false };
+
+function fullJournalThroughDone(phase = PHASE.DONE) {
+  const base = fullJournalThroughArchived(PHASE.ARCHIVED);
+  return {
+    ...base,
+    phase,
+    history: [...base.history, entry(PHASE.UP, {}), entry(PHASE.HEALTHY, HEALTHY_OBS), entry(PHASE.DONE, {})],
+  };
+}
+
+test("validateJournalAgainstStateMachine accepts a full journal through DONE", () => {
+  assert.doesNotThrow(() => validateJournalAgainstStateMachine(fullJournalThroughDone()));
+});
+
+test("validateJournalAgainstStateMachine rejects a HEALTHY observation whose health_revision does not match SHA_RE", () => {
+  const journal = fullJournalThroughDone();
+  journal.history[9] = entry(PHASE.HEALTHY, { ...HEALTHY_OBS, health_revision: "not-a-sha" });
+  assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
+});
+
+test("validateJournalAgainstStateMachine rejects skipping UP straight to HEALTHY", () => {
+  const journal = fullJournalThroughDone();
+  journal.history.splice(8, 1); // drop the UP entry
+  assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
+});
+
+test("validateJournalAgainstStateMachine rejects a transition out of DONE (terminal)", () => {
+  const journal = fullJournalThroughDone();
+  journal.history.push(entry(PHASE.UP, {}));
+  journal.phase = PHASE.UP;
+  assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
+});

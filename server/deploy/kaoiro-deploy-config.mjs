@@ -26,6 +26,11 @@ export const DEFAULT_CONFIG = Object.freeze({
   health_poll_interval_ms: 2000,
   health_poll_timeout_ms: 60000,
   stability_window_ms: 30000,
+  // deployment.md 4.5's own provenance-verification source
+  // (`curl <server-url>/api/health`). 127.0.0.1:4000 matches
+  // docker-compose.yaml's default port publish; an operator whose
+  // KAOIRO_PUBLISH_IP is not loopback overrides this.
+  health_url: "http://127.0.0.1:4000/api/health",
   // Clean-stop expectation (S1 / yuta ruling 2026-09-06): "measured on a
   // dev host, not assumed" (deployment.md 4.3 step 5). `null` here is
   // deliberate — until commit (e)'s dev-host self-test fixes a real
@@ -53,6 +58,15 @@ const VALIDATORS = {
   health_poll_interval_ms: (v) => Number.isInteger(v) && v >= 1,
   health_poll_timeout_ms: (v) => Number.isInteger(v) && v >= 1,
   stability_window_ms: (v) => Number.isInteger(v) && v >= 0,
+  health_url: (v) => {
+    if (typeof v !== "string" || v === "") return false;
+    try {
+      new URL(v);
+      return true;
+    } catch {
+      return false;
+    }
+  },
   expected_clean_stop_exit_code: (v) => v === null || Number.isInteger(v),
   expected_clean_stop_oom_killed: (v) => v === null || typeof v === "boolean",
 };

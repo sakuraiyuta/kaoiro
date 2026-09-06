@@ -13,6 +13,7 @@ import {
   DeployError,
   hasPriorTransactions,
   parseArgs,
+  pruneOldTransactions,
   runBuild,
   runStart,
   runUpdate,
@@ -40,7 +41,7 @@ case "$1" in
     case "$2" in
       ps)
         case "$FAKE_DOCKER_SCENARIO" in
-          stopped|running|running-clean-stop|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty)
+          stopped|running|running-clean-stop|running-clean-stop-restarts|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty)
             printf 'kaoiro-c1\\n' ;;
         esac
         ;;
@@ -77,28 +78,42 @@ case "$1" in
           '{{.State.Status}}')
             case "$FAKE_DOCKER_SCENARIO" in
               stopped) printf 'exited\\n' ;;
-              running|running-clean-stop|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty)
+              running|running-clean-stop|running-clean-stop-restarts|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty)
                 printf 'running\\n' ;;
             esac
             ;;
           '{{.State.ExitCode}}')
             case "$FAKE_DOCKER_SCENARIO" in
-              running-clean-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-archive-drifts-empty) printf '0\\n' ;;
+              running-clean-stop|running-clean-stop-restarts|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-archive-drifts-empty) printf '0\\n' ;;
               running-dirty-stop) printf '137\\n' ;;
               *) printf 'unknown\\n' ;;
             esac
             ;;
           '{{.State.OOMKilled}}')
             case "$FAKE_DOCKER_SCENARIO" in
-              running-clean-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-archive-drifts-empty) printf 'false\\n' ;;
+              running-clean-stop|running-clean-stop-restarts|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-archive-drifts-empty) printf 'false\\n' ;;
               running-dirty-stop) printf 'true\\n' ;;
               *) printf 'unknown\\n' ;;
             esac
             ;;
           '{{range .Mounts}}{{if eq .Destination "/var/lib/kaoiro"}}{{.Name}}{{end}}{{end}}')
             case "$FAKE_DOCKER_SCENARIO" in
-              running-clean-stop|running-dirty-stop|running-empty-vol|running-broken-archive|alpine-missing|running-archive-drifts-empty) printf 'kaoiro_kaoiro-state\\n' ;;
+              running-clean-stop|running-clean-stop-restarts|running-dirty-stop|running-empty-vol|running-broken-archive|alpine-missing|running-archive-drifts-empty) printf 'kaoiro_kaoiro-state\\n' ;;
               running-no-mount) ;;
+            esac
+            ;;
+          '{{.RestartCount}}')
+            case "$FAKE_DOCKER_SCENARIO" in
+              # Increments on every read: 0 the first time (right after
+              # HEALTHY), 1 the second (after the stability window) —
+              # pins the "restarted during the stability window" failure.
+              running-clean-stop-restarts)
+                count=0
+                [ -f "$KAOIRO_TEST_RESTART_COUNTER" ] && count=$(cat "$KAOIRO_TEST_RESTART_COUNTER")
+                echo $((count + 1)) > "$KAOIRO_TEST_RESTART_COUNTER"
+                printf '%s\\n' "$count"
+                ;;
+              *) printf '0\\n' ;;
             esac
             ;;
           '{{.Image}}') printf '${OLD_IMAGE_ID}\\n' ;;
@@ -153,7 +168,7 @@ case "$1" in
         # -exec stat -c '%n %u:%g %04a' {} \\;) — only whether anything is
         # there, not what gets recorded (that comes from tar tvzf now).
         case "$FAKE_DOCKER_SCENARIO" in
-          running-clean-stop|running-dirty-stop|running-broken-archive|alpine-missing|running-archive-drifts-empty) printf '/data/users.dets 1000:1000 0600\\n' ;;
+          running-clean-stop|running-clean-stop-restarts|running-dirty-stop|running-broken-archive|alpine-missing|running-archive-drifts-empty) printf '/data/users.dets 1000:1000 0600\\n' ;;
           running-empty-vol) ;;
         esac
         exit 0
@@ -187,6 +202,18 @@ let workDir;
 let headSha;
 let bin;
 
+// Simulates `curl -sS --max-time N <url>` for pollHealth: ignores its
+// own args entirely and replies with the env-var-controlled
+// build_revision, so each test decides what "the running server"
+// reports without a real HTTP server. KAOIRO_TEST_HEALTH_REVISION unset
+// (the "no server up yet" case) reports a value that can never match a
+// real 40-hex target.
+const FAKE_CURL = `#!/bin/sh
+printf '{"build_revision":"%s","build_dirty":false}' "\${KAOIRO_TEST_HEALTH_REVISION:-no-server-yet}"
+`;
+
+let curlBin;
+
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "kaoiro-deploy-cli-"));
   sourceDir = join(root, "source");
@@ -199,6 +226,10 @@ beforeEach(() => {
   bin = join(root, "fake-docker.sh");
   writeFileSync(bin, FAKE_DOCKER);
   chmodSync(bin, 0o700);
+
+  curlBin = join(root, "fake-curl.sh");
+  writeFileSync(curlBin, FAKE_CURL);
+  chmodSync(curlBin, 0o700);
 });
 
 afterEach(() => {
@@ -215,23 +246,45 @@ function configWithOverride() {
 // A separate helper, not a default on configWithOverride(): most tests
 // deliberately want the default null/null expectation (everything is
 // abnormal), and only the tests exercising the STOPPED/MOUNT_RESOLVED
-// path need a config claiming a measurement exists.
+// path need a config claiming a measurement exists. Also carries FAST
+// health-poll/stability settings (real defaults would make every test
+// that reaches UP take up to health_poll_timeout_ms + stability_window_ms
+// — up to 90 real seconds) and a health_url that is never actually
+// dialed (KAOIRO_DEPLOY_CURL_BIN redirects curl itself).
 function configWithCleanStopMeasured() {
   return {
     ...configWithOverride(),
     expected_clean_stop_exit_code: 0,
     expected_clean_stop_oom_killed: false,
+    health_url: "http://fake-server.invalid/api/health",
+    health_poll_interval_ms: 1,
+    health_poll_timeout_ms: 200,
+    stability_window_ms: 1,
   };
 }
 
 function withOverrideEnv(fn) {
-  const prior = process.env.KAOIRO_DEPLOY_DOCKER_BIN;
+  const priorDocker = process.env.KAOIRO_DEPLOY_DOCKER_BIN;
+  const priorCurl = process.env.KAOIRO_DEPLOY_CURL_BIN;
+  const priorHealthRevision = process.env.KAOIRO_TEST_HEALTH_REVISION;
   process.env.KAOIRO_DEPLOY_DOCKER_BIN = bin;
+  process.env.KAOIRO_DEPLOY_CURL_BIN = curlBin;
+  // Default: "the server is already running the target" — the common
+  // case every test not specifically exercising a health mismatch wants.
+  // Set before the call, never mutated by this helper afterward, so a
+  // caller can override it (e.g. to a value that never matches) beforehand.
+  if (process.env.KAOIRO_TEST_HEALTH_REVISION === undefined) {
+    process.env.KAOIRO_TEST_HEALTH_REVISION = headSha;
+  }
   try {
     return fn();
   } finally {
-    if (prior === undefined) delete process.env.KAOIRO_DEPLOY_DOCKER_BIN;
-    else process.env.KAOIRO_DEPLOY_DOCKER_BIN = prior;
+    if (priorDocker === undefined) delete process.env.KAOIRO_DEPLOY_DOCKER_BIN;
+    else process.env.KAOIRO_DEPLOY_DOCKER_BIN = priorDocker;
+    if (priorCurl === undefined) delete process.env.KAOIRO_DEPLOY_CURL_BIN;
+    else process.env.KAOIRO_DEPLOY_CURL_BIN = priorCurl;
+    if (priorHealthRevision === undefined) delete process.env.KAOIRO_TEST_HEALTH_REVISION;
+    else process.env.KAOIRO_TEST_HEALTH_REVISION = priorHealthRevision;
   }
 }
 
@@ -502,11 +555,11 @@ test("runUpdate stops at the maintenance gate without --maintenance-approved, bu
   assert.equal(journal.phase, "build_prepared");
 });
 
-test("runUpdate completes through ARCHIVED with --maintenance-approved and a clean stop", () => {
+test("runUpdate completes through DONE with --maintenance-approved and a clean stop", () => {
   const result = withScenario("running-clean-stop", () =>
     runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
   );
-  assert.equal(result.phase, "archived");
+  assert.equal(result.phase, "done");
   assert.equal(result.oldImageId, OLD_IMAGE_ID);
   assert.equal(result.rollbackTag, `kaoiro-server:rollback-${result.oldSha}`);
   assert.equal(result.build.imageTag, `kaoiro-server:${headSha}`);
@@ -517,16 +570,185 @@ test("runUpdate completes through ARCHIVED with --maintenance-approved and a cle
   assert.deepEqual(result.requiredEntries[0], { path: "users.dets", owner: "1000:1000", mode: "0600" });
   assert.equal(existsSync(result.archive.path), true);
   assert.equal(result.archive.sha256, sha256File(result.archive.path));
+  // (c3): health/stability.
+  assert.equal(result.health.build_revision, headSha);
+  assert.deepEqual(result.prunedTransactions, []);
+  assert.equal(result.pruneError, null);
   const backupRoot = join(root, "kaoiro-deploy");
   const journal = readJournal(join(backupRoot, result.transactionId));
-  assert.equal(journal.phase, "archived");
+  assert.equal(journal.phase, "done");
   const oldImageEntry = journal.history.find((e) => e.phase === "old_image_saved");
   assert.equal(oldImageEntry.observation.rollback_tag, result.rollbackTag);
+  const healthyEntry = journal.history.find((e) => e.phase === "healthy");
+  assert.equal(healthyEntry.observation.health_revision, headSha);
   const manifest = readManifest(join(backupRoot, result.transactionId));
   assert.equal(manifest.volume_id, "kaoiro_kaoiro-state");
   assert.equal(manifest.image_id, result.build.imageId);
   assert.equal(manifest.source_sha, headSha);
   assert.deepEqual(manifest.required_entries, result.requiredEntries);
+});
+
+// クロエ round 1 review S1/(c3): a delayed health response for a
+// PREVIOUS target must not let this transaction advance — the health
+// poll retries until it actually observes the CURRENT target_sha, not
+// merely "a response arrived".
+test("runUpdate's health poll times out when the server never reports the target revision", () => {
+  process.env.KAOIRO_TEST_HEALTH_REVISION = "f".repeat(40); // never equals headSha
+  try {
+    assert.throws(
+      () =>
+        withScenario("running-clean-stop", () =>
+          runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+        ),
+      DeployError,
+    );
+  } finally {
+    delete process.env.KAOIRO_TEST_HEALTH_REVISION;
+  }
+  const backupRoot = join(root, "kaoiro-deploy");
+  const [transactionDir] = readdirSyncNonHidden(backupRoot);
+  const journal = readJournal(join(backupRoot, transactionDir));
+  assert.equal(journal.phase, "up");
+});
+
+test("runUpdate refuses to call an update done when the container restarts during the stability window", () => {
+  process.env.KAOIRO_TEST_RESTART_COUNTER = join(root, "restart-counter");
+  try {
+    assert.throws(
+      () =>
+        withScenario("running-clean-stop-restarts", () =>
+          runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+        ),
+      DeployError,
+    );
+  } finally {
+    delete process.env.KAOIRO_TEST_RESTART_COUNTER;
+  }
+  const backupRoot = join(root, "kaoiro-deploy");
+  const [transactionDir] = readdirSyncNonHidden(backupRoot);
+  const journal = readJournal(join(backupRoot, transactionDir));
+  assert.equal(journal.phase, "healthy");
+});
+
+test("runUpdate prunes DONE transactions beyond keep_generations that are also older than retention_days", () => {
+  const backupRoot = join(root, "kaoiro-deploy");
+  mkdirSync(backupRoot, { recursive: true });
+
+  // Three synthetic prior DONE transactions, all well past retention_days
+  // and beyond keep_generations:1 — every one of them is prune-eligible.
+  const oldIds = ["20200101T000000Z", "20200102T000000Z", "20200103T000000Z"];
+  for (const id of oldIds) {
+    const dir = join(backupRoot, id);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "journal.json"),
+      JSON.stringify({ schema_version: 1, transaction_id: id, phase: "done", history: [] }),
+    );
+  }
+
+  const result = withScenario("running-clean-stop", () =>
+    runUpdate(
+      { repo: workDir, target: headSha, maintenanceApproved: true },
+      { ...configWithCleanStopMeasured(), keep_generations: 1, retention_days: 1 },
+    ),
+  );
+  assert.equal(result.phase, "done");
+  // The newest kept generation is THIS transaction; all 3 synthetic old
+  // ones are beyond keep_generations:1 and older than retention_days:1.
+  assert.deepEqual(result.prunedTransactions.sort(), oldIds);
+  for (const id of oldIds) {
+    assert.equal(existsSync(join(backupRoot, id)), false);
+  }
+  assert.equal(existsSync(join(backupRoot, result.transactionId)), true);
+});
+
+test("runUpdate does not prune a DONE transaction that is beyond keep_generations but still within retention_days", () => {
+  const backupRoot = join(root, "kaoiro-deploy");
+  mkdirSync(backupRoot, { recursive: true });
+
+  const recentId = new Date(Date.now() - 60 * 60 * 1000) // 1 hour ago
+    .toISOString()
+    .replace(/[-:]/g, "")
+    .replace(/\.\d\d\dZ$/, "Z");
+  const dir = join(backupRoot, recentId);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "journal.json"),
+    JSON.stringify({ schema_version: 1, transaction_id: recentId, phase: "done", history: [] }),
+  );
+
+  const result = withScenario("running-clean-stop", () =>
+    runUpdate(
+      { repo: workDir, target: headSha, maintenanceApproved: true },
+      { ...configWithCleanStopMeasured(), keep_generations: 1, retention_days: 30 },
+    ),
+  );
+  assert.equal(result.phase, "done");
+  assert.deepEqual(result.prunedTransactions, []);
+  assert.equal(existsSync(dir), true);
+});
+
+// Distinguishes the COUNT bound from the age bound: both synthetic
+// transactions here are old enough that retention_days:1 alone would
+// prune both. keep_generations:2 (which counts THIS run's own
+// transaction as the newest generation) must still protect the
+// second-newest of the three from being pruned this round.
+test("runUpdate keeps the newest keep_generations DONE transactions even when all are past retention_days", () => {
+  const backupRoot = join(root, "kaoiro-deploy");
+  mkdirSync(backupRoot, { recursive: true });
+
+  const olderId = "20200101T000000Z";
+  const newerId = "20200102T000000Z";
+  for (const id of [olderId, newerId]) {
+    const dir = join(backupRoot, id);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "journal.json"),
+      JSON.stringify({ schema_version: 1, transaction_id: id, phase: "done", history: [] }),
+    );
+  }
+
+  const result = withScenario("running-clean-stop", () =>
+    runUpdate(
+      { repo: workDir, target: headSha, maintenanceApproved: true },
+      { ...configWithCleanStopMeasured(), keep_generations: 2, retention_days: 1 },
+    ),
+  );
+  assert.equal(result.phase, "done");
+  assert.deepEqual(result.prunedTransactions, [olderId]);
+  assert.equal(existsSync(join(backupRoot, olderId)), false);
+  assert.equal(existsSync(join(backupRoot, newerId)), true);
+  assert.equal(existsSync(join(backupRoot, result.transactionId)), true);
+});
+
+// Retention must never touch a transaction that has not reached DONE —
+// an in-progress or manually-parked one is a human's investigation, not
+// automatic cleanup, no matter how old or how far beyond keep_generations.
+// A non-DONE transaction directory can never coexist with a successful
+// runUpdate call in practice (findUnfinishedTransaction refuses to start
+// a new transaction while ANY non-terminal one exists — this IS the
+// property being relied on), so this exercises pruneOldTransactions()
+// directly rather than manufacturing an unreachable end-to-end scenario.
+test("pruneOldTransactions never removes a transaction that has not reached DONE, however old", () => {
+  const backupRoot = join(root, "kaoiro-deploy");
+  mkdirSync(backupRoot, { recursive: true });
+
+  const stuckId = "20200101T000000Z";
+  const stuckDir = join(backupRoot, stuckId);
+  mkdirSync(stuckDir, { recursive: true });
+  writeFileSync(
+    join(stuckDir, "journal.json"),
+    JSON.stringify({
+      schema_version: 1,
+      transaction_id: stuckId,
+      phase: "preflight",
+      history: [{ phase: "preflight", at: "2020-01-01T00:00:00.000Z", observation: { container: "kaoiro-c1" } }],
+    }),
+  );
+
+  const removed = pruneOldTransactions(backupRoot, { keep_generations: 0, retention_days: 1 });
+  assert.deepEqual(removed, []);
+  assert.equal(existsSync(stuckDir), true);
 });
 
 test("runUpdate refuses to proceed past a dirty stop even with a measured expectation", () => {
@@ -636,7 +858,7 @@ test("runUpdate resumes a gated transaction via --transaction without rebuilding
       configWithCleanStopMeasured(),
     ),
   );
-  assert.equal(result.phase, "archived");
+  assert.equal(result.phase, "done");
   assert.equal(result.transactionId, transactionId);
 });
 
@@ -662,12 +884,16 @@ test("runUpdate refuses to resume when --target no longer matches the prepared t
 });
 
 test("runUpdate refuses a second transaction while one is unfinished, and creates no new transaction dir", () => {
-  // maintenanceApproved:true still leaves the transaction non-terminal
-  // (phase "mount_resolved" is not in TERMINAL_PHASES) — the commit
-  // half that would reach "done" does not exist yet.
-  withScenario("running-clean-stop", () =>
-    runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
-  );
+  // running-broken-archive stops at MOUNT_RESOLVED (archive verification
+  // fails before ARCHIVED is ever checkpointed) — non-terminal, and
+  // untouched by (c3)'s up/health/stability/retention plumbing.
+  try {
+    withScenario("running-broken-archive", () =>
+      runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+    );
+  } catch (err) {
+    assert.ok(err instanceof DeployError);
+  }
   const backupRoot = join(root, "kaoiro-deploy");
   const before = readdirSyncNonHidden(backupRoot).length;
   let caught;
@@ -677,7 +903,7 @@ test("runUpdate refuses a second transaction while one is unfinished, and create
     caught = err;
   }
   assert.ok(caught instanceof DeployError);
-  // クロエ round 1 review MF-3: the reached phase is ARCHIVED — the
+  // クロエ round 1 review MF-3: the reached phase is MOUNT_RESOLVED — the
   // commit half has already stopped the container, so `--transaction`'s
   // own requireRunningContainer re-check could never succeed. The
   // message must say so rather than send the operator into a guaranteed
