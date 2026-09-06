@@ -9,14 +9,14 @@
 // yuta 2026-09-06).
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 
 import { computeBuildIdentity } from "../../scripts/build-identity.mjs";
 import { BRANCH, classify, requireRunningContainer } from "./kaoiro-deploy-branch.mjs";
 import { loadConfig } from "./kaoiro-deploy-config.mjs";
 import { dockerInspect, resolveDockerBin, runDocker } from "./kaoiro-deploy-docker.mjs";
-import { advancePhase, writeJournal } from "./kaoiro-deploy-journal.mjs";
+import { advancePhase, readJournal, writeJournal } from "./kaoiro-deploy-journal.mjs";
 import { writeManifest } from "./kaoiro-deploy-manifest.mjs";
 import { PHASE, validateJournalAgainstStateMachine } from "./kaoiro-deploy-phase.mjs";
 import { acquireLock, releaseLock } from "./kaoiro-deploy-lock.mjs";
@@ -89,6 +89,142 @@ function ensureAlpineImage(bin) {
     // Falls through to the pull below.
   }
   runDocker(bin, ["pull", ALPINE_IMAGE], { stdio: "inherit" });
+}
+
+/** True blocking sleep in the main thread (no worker, no subprocess) —
+ *  Node has no synchronous timer, but `Atomics.wait` on a throwaway
+ *  SharedArrayBuffer blocks the calling thread for exactly `ms`, which is
+ *  what a synchronous CLI polling loop needs (this whole module is
+ *  execFileSync-based throughout; making runUpdate async to use a real
+ *  timer would ripple through every existing call site and test). */
+function sleepMs(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/** `curl` is a SEPARATE override seam from KAOIRO_DEPLOY_DOCKER_BIN's
+ *  gated one — a health GET is read-only (no docker mutation the gate's
+ *  own threat model cares about), so this needs no --config permission
+ *  bit, just a way for tests to point it at a fake without touching the
+ *  real network. */
+function resolveCurlBin(env = process.env) {
+  return env.KAOIRO_DEPLOY_CURL_BIN || "curl";
+}
+
+/** `GET url`, parsed as JSON. Never throws: a curl failure (connection
+ *  refused, timeout, non-2xx) or a non-JSON body are both just "this
+ *  attempt did not succeed" for pollHealth's retry loop, not a reason to
+ *  abort the whole poll on the first flaky response. */
+function fetchHealth(curlBin, url) {
+  let raw;
+  try {
+    raw = execFileSync(curlBin, ["-sS", "--max-time", "5", url], { encoding: "utf8" });
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+  try {
+    return { ok: true, body: JSON.parse(raw) };
+  } catch (err) {
+    return { ok: false, error: `GET ${url} did not return valid JSON: ${err.message}` };
+  }
+}
+
+/** Polls `url` every `intervalMs` until its `build_revision` equals
+ *  `targetSha` or `timeoutMs` elapses — deployment.md 4.5's provenance
+ *  check ("the running JS/image derives from the target commit") via
+ *  `GET /api/health` (server/lib/kaoiro_server_web/controllers/
+ *  health_controller.ex). Returns the matching health body; throws
+ *  DeployError naming the LAST observed attempt otherwise, so a
+ *  diagnosis does not have to re-run curl by hand first. */
+function pollHealth(curlBin, url, targetSha, intervalMs, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let last = null;
+  while (Date.now() < deadline) {
+    const result = fetchHealth(curlBin, url);
+    if (result.ok && result.body.build_revision === targetSha) {
+      return result.body;
+    }
+    last = result;
+    sleepMs(intervalMs);
+  }
+  const detail =
+    last === null
+      ? "no attempt completed"
+      : last.ok
+        ? `last observed build_revision=${JSON.stringify(last.body.build_revision)}`
+        : `last error: ${last.error}`;
+  fail(
+    `health check at ${url} did not report build_revision=${targetSha} within ${timeoutMs}ms (${detail})`,
+  );
+}
+
+/** `docker inspect --format {{.RestartCount}}`, parsed the same
+ *  never-silently-0 way as parseDockerIntField's other callers — an
+ *  unreadable count must not read as "definitely zero restarts". */
+function restartCount(bin, container) {
+  return parseDockerIntField(dockerInspect(bin, container, "{{.RestartCount}}"));
+}
+
+// newTransactionId()'s own format: YYYYMMDDTHHMMSSZ (its ISO timestamp
+// with `-`/`:` stripped and sub-second precision dropped).
+const TRANSACTION_ID_TIMESTAMP_RE = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/;
+
+function transactionIdToDate(transactionId) {
+  const m = TRANSACTION_ID_TIMESTAMP_RE.exec(transactionId);
+  if (m === null) return null;
+  const [, y, mo, d, h, mi, s] = m;
+  const date = new Date(`${y}-${mo}-${d}T${h}:${mi}:${s}Z`);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+/** Deletes DONE transaction directories beyond `config.keep_generations`
+ *  most-recent ones, but ONLY those also older than `config.retention_days`
+ *  — issue #306 (c3). Requiring BOTH bounds (not either alone) is a
+ *  deliberate conservative choice for a directory whose only job is to
+ *  make rollback possible: a count-based prune alone could discard a
+ *  same-day backup during a burst of deploys, and a pure age-based prune
+ *  alone could discard the only remaining backup during a long quiet
+ *  spell. Never touches a transaction that is not phase DONE (unfinished
+ *  or failed transactions are a manual-investigation matter, never
+ *  auto-deleted), and never touches a directory whose name does not match
+ *  its own journal.transaction_id (the same distrust
+ *  findUnfinishedTransaction already applies) or whose id does not parse
+ *  as a timestamp. Returns the names actually removed. */
+export function pruneOldTransactions(backupRoot, config) {
+  let names;
+  try {
+    names = readdirSync(backupRoot).filter((name) => !name.startsWith("."));
+  } catch (err) {
+    if (err.code === "ENOENT") return [];
+    throw err;
+  }
+
+  const doneIds = [];
+  for (const name of names) {
+    let journal;
+    try {
+      journal = readJournal(join(backupRoot, name));
+    } catch {
+      continue;
+    }
+    if (journal.transaction_id !== name || journal.phase !== PHASE.DONE) continue;
+    if (transactionIdToDate(name) === null) continue;
+    doneIds.push(name);
+  }
+  // transaction_id is a sortable UTC timestamp string (newTransactionId's
+  // own format), so lexicographic order IS chronological order.
+  doneIds.sort();
+  doneIds.reverse();
+
+  const retentionMs = config.retention_days * 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const removed = [];
+  for (const name of doneIds.slice(config.keep_generations)) {
+    const age = now - transactionIdToDate(name).getTime();
+    if (age < retentionMs) continue;
+    rmSync(join(backupRoot, name), { recursive: true, force: true });
+    removed.push(name);
+  }
+  return removed;
 }
 
 const VALUE_FLAGS = new Set(["--config", "--repo", "--target", "--transaction"]);
@@ -316,13 +452,28 @@ export function runStart(flags, config) {
 
 // クロエ round 1 review MF-3: `--transaction` resume re-verifies the
 // container is RUNNING (requireRunningContainer) before doing anything
-// else — a transaction that reached STOPPING or later can never satisfy
-// that check again, since the whole point of those phases is that the
-// container is no longer running. The commit half has no resume support
-// yet ((c3), a later commit); telling the operator to "resume it with
-// --transaction" for one of these phases sends them into a guaranteed
-// second failure instead of the manual runbook that actually recovers.
-const UNRESUMABLE_PHASES = new Set([PHASE.STOPPING, PHASE.STOPPED, PHASE.MOUNT_RESOLVED, PHASE.ARCHIVED]);
+// else, then unconditionally re-advances to MAINTENANCE_GATE_PASSED — a
+// transaction that reached STOPPING or later can never satisfy the
+// running-container check, and even UP/HEALTHY (where a container IS
+// running again) would hit that same re-advance, which is not a listed
+// transition from any of these phases and raises a raw PhaseError
+// instead of a diagnosable DeployError. None of the commit half has
+// resume support yet ((c3) does not add any); telling the operator to
+// "resume it with --transaction" for one of these phases sends them into
+// a guaranteed second failure instead of the manual runbook that
+// actually recovers. DONE is already filtered out by
+// findUnfinishedTransaction's own TERMINAL_PHASES check before this is
+// ever consulted — included anyway so this set stays complete on its own
+// if that ever changes.
+const UNRESUMABLE_PHASES = new Set([
+  PHASE.STOPPING,
+  PHASE.STOPPED,
+  PHASE.MOUNT_RESOLVED,
+  PHASE.ARCHIVED,
+  PHASE.UP,
+  PHASE.HEALTHY,
+  PHASE.DONE,
+]);
 
 /** `update`: lock, preflight, save the old image, build the versioned
  *  target, the human maintenance gate, then the stop/archive commit
@@ -672,9 +823,62 @@ export function runUpdate(flags, config) {
       required_entries: requiredEntries,
     });
 
+    // (c3): bring the prepared image up, verify it is actually the target
+    // (not merely "a container exists"), and confirm it survives long
+    // enough to call this update done — deployment.md 4.3 step 6 / 4.5's
+    // own "operational success" + "provenance" checks.
+    runDocker(bin, ["compose", "up", "-d", "--no-build"], { cwd: serverDir, stdio: "inherit" });
+    journal = advancePhase(dir, journal, PHASE.UP, {}, validateJournalAgainstStateMachine);
+
+    const curlBin = resolveCurlBin();
+    const health = pollHealth(
+      curlBin,
+      config.health_url,
+      target,
+      config.health_poll_interval_ms,
+      config.health_poll_timeout_ms,
+    );
+    journal = advancePhase(
+      dir,
+      journal,
+      PHASE.HEALTHY,
+      { health_revision: health.build_revision, health_dirty: health.build_dirty },
+      validateJournalAgainstStateMachine,
+    );
+
+    // "Container is stable" (deployment.md 4.5): no crash-restart over the
+    // stability window, still `running` at the end of it. RestartCount is
+    // docker's own counter for restart_policy-triggered restarts (server/
+    // docker-compose.yaml: `restart: unless-stopped`) — a container stuck
+    // crash-looping could transiently read "running" at the exact instant
+    // checked, so the restart count (not just the final status) is what
+    // actually rules that out.
+    const restartsAtHealthy = restartCount(bin, container);
+    sleepMs(config.stability_window_ms);
+    const statusAfterWindow = dockerInspect(bin, container, "{{.State.Status}}");
+    const restartsAfterWindow = restartCount(bin, container);
+    if (statusAfterWindow !== "running" || restartsAfterWindow !== restartsAtHealthy) {
+      fail(
+        `container ${container} was not stable for ${config.stability_window_ms}ms after becoming healthy (status=${statusAfterWindow}, restarts ${restartsAtHealthy} -> ${restartsAfterWindow}) — the update reached HEALTHY but did not survive to be called done; investigate before retrying`,
+      );
+    }
+    journal = advancePhase(dir, journal, PHASE.DONE, {}, validateJournalAgainstStateMachine);
+
+    // Retention (issue #306 (c3), config.keep_generations/retention_days):
+    // best-effort, never fails an otherwise-successful update — a stale
+    // backup nobody could delete is a cleanup problem to report, not a
+    // reason to call a deploy that just reached DONE a failure.
+    let prunedTransactions = [];
+    let pruneError = null;
+    try {
+      prunedTransactions = pruneOldTransactions(backupRoot, config);
+    } catch (err) {
+      pruneError = err.message;
+    }
+
     return {
       command: "update",
-      phase: "archived",
+      phase: "done",
       transactionId,
       docker: overridden ? "fake" : "docker",
       oldImageId,
@@ -687,6 +891,9 @@ export function runUpdate(flags, config) {
       volumeId,
       archive,
       requiredEntries,
+      health,
+      prunedTransactions,
+      pruneError,
     };
   } finally {
     releaseLock(lockPath);

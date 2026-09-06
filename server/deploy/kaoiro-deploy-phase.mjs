@@ -6,12 +6,12 @@
 // format one, and belongs here instead.
 //
 // PHASES ARE ADDED HERE AS COMMITS LAND, NOT ALL AT ONCE. `update`
-// currently reaches ARCHIVED — up/health/stable/done/rolled-back/failed
-// arrive with later commits. Extending PHASE/TRANSITIONS/
-// OBSERVATION_SCHEMAS then is expected, not a design smell; what this
-// file exists to prevent is an UNLISTED phase or an UNLISTED transition
-// passing silently, not the list staying short until the work that
-// defines the rest lands.
+// currently reaches DONE — rollback (a separate command, its own
+// rolled-back/failed phases) arrives with a later commit. Extending
+// PHASE/TRANSITIONS/OBSERVATION_SCHEMAS then is expected, not a design
+// smell; what this file exists to prevent is an UNLISTED phase or an
+// UNLISTED transition passing silently, not the list staying short
+// until the work that defines the rest lands.
 import { IMAGE_ID_RE, isPathSha, isValidRequiredEntries, SHA_RE } from "./kaoiro-deploy-manifest.mjs";
 
 export class PhaseError extends Error {}
@@ -31,6 +31,13 @@ export const PHASE = Object.freeze({
   STOPPED: "stopped",
   MOUNT_RESOLVED: "mount_resolved",
   ARCHIVED: "archived",
+  UP: "up",
+  HEALTHY: "healthy",
+  // Literally "done" — kaoiro-deploy-transaction.mjs's own TERMINAL_PHASES
+  // set (a plain string set, decoupled from this file on purpose — see
+  // its own comment) checks for this exact value to let a completed
+  // transaction stop blocking a new `update`.
+  DONE: "done",
 });
 
 /** Each key's value is the set of phases that may follow it directly.
@@ -44,7 +51,10 @@ const TRANSITIONS = {
   [PHASE.STOPPING]: [PHASE.STOPPED],
   [PHASE.STOPPED]: [PHASE.MOUNT_RESOLVED],
   [PHASE.MOUNT_RESOLVED]: [PHASE.ARCHIVED],
-  [PHASE.ARCHIVED]: [],
+  [PHASE.ARCHIVED]: [PHASE.UP],
+  [PHASE.UP]: [PHASE.HEALTHY],
+  [PHASE.HEALTHY]: [PHASE.DONE],
+  [PHASE.DONE]: [],
 };
 
 /** Per-phase observation shape (S1 item i) — what advancePhase() must
@@ -90,6 +100,17 @@ const OBSERVATION_SCHEMAS = {
     (obs.stop_oom_killed === null || typeof obs.stop_oom_killed === "boolean"),
   [PHASE.MOUNT_RESOLVED]: (obs) => typeof obs.volume_id === "string" && obs.volume_id !== "",
   [PHASE.ARCHIVED]: (obs) => isPathSha(obs.archive) && isValidRequiredEntries(obs.required_entries),
+  [PHASE.UP]: () => true,
+  // (c3) health poll: `HEALTHY` records what deployment.md 4.5's
+  // provenance check actually observed (GET /api/health's build_revision/
+  // build_dirty), not merely "it matched" — the value itself is worth
+  // keeping for a later audit even though the caller already enforced
+  // `health_revision === target_sha` before advancing here.
+  [PHASE.HEALTHY]: (obs) =>
+    typeof obs.health_revision === "string" &&
+    SHA_RE.test(obs.health_revision) &&
+    typeof obs.health_dirty === "boolean",
+  [PHASE.DONE]: () => true,
 };
 
 export function isKnownPhase(phase) {
