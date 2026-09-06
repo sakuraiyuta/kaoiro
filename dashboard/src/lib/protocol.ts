@@ -1253,6 +1253,152 @@ export function mergeTranscriptEntries(
   return merged.sort(compareTranscriptEnvelopes);
 }
 
+/** issue #304: incremental replacement for App.svelte's former
+ *  `latestErrorKeyByAgent` $derived.by, which rescanned EVERY agent's
+ *  WHOLE transcript backwards on every single `logs` replacement --
+ *  catastrophic at scale (5 agents x 5000-entry history x 100ms receive
+ *  tick: up to 290s of accumulated long-task time per ~3s window,
+ *  candidate A). `envelopeByAgent` is the newest is_error RESULT envelope
+ *  seen per agent (not just its key), kept so noteIfNewestError below can
+ *  compare a new candidate against it in O(1) without rescanning anything.
+ *  `keyByAgent` is the public projection App.svelte's `unackedErrorKey`
+ *  reads, unchanged in shape from the old derived's return value. */
+export interface ErrorIndexState {
+  readonly envelopeByAgent: Readonly<Record<string, Envelope>>;
+  readonly keyByAgent: Readonly<Record<string, string>>;
+}
+
+export const EMPTY_ERROR_INDEX: ErrorIndexState = {
+  envelopeByAgent: {},
+  keyByAgent: {},
+};
+
+function findLatestErrorEnvelope(
+  transcript: Envelope[],
+): Envelope | undefined {
+  for (let i = transcript.length - 1; i >= 0; i--) {
+    const envelope = transcript[i];
+    if (envelope.type === "result" && resultOf(envelope)?.is_error) {
+      return envelope;
+    }
+  }
+  return undefined;
+}
+
+/** O(candidates.length), never rescans the rest of the agent's transcript.
+ *  Use on every LIVE single-envelope arrival for one agent (onEnvelope,
+ *  onHistoryReplayEnvelope) -- this is what makes the receive-tick path
+ *  O(1) per envelope instead of O(total history length). A later
+ *  non-error candidate never clears an earlier cached error: this
+ *  preserves the pre-#304-fix semantics exactly ("the newest IS_ERROR
+ *  entry", not "is the newest entry an error") -- ties/older candidates
+ *  are dropped via compareTranscriptEnvelopes so an out-of-order replay
+ *  delivery can never regress an already-newer cached error. */
+export function noteIfNewestError(
+  index: ErrorIndexState,
+  agentId: string,
+  candidates: Envelope[],
+): ErrorIndexState {
+  // Security review round 1 (issue #304, 2026-09-06): a bare bracket read
+  // walks the prototype chain -- an agent_id equal to an Object.prototype
+  // member name ("__proto__", "toString", "constructor", ...; the wire
+  // agent_id charset does not exclude these, see parseTasks's own
+  // Object.create(null) fix below) would silently seed `envelope` with an
+  // inherited non-Envelope value instead of undefined, corrupting the
+  // compare below. Same guard already established for TaskTable in
+  // applyTaskEnvelope/purgeTasksForAgent (issue #180, 2026-08-09).
+  let envelope = Object.prototype.hasOwnProperty.call(
+    index.envelopeByAgent,
+    agentId,
+  )
+    ? index.envelopeByAgent[agentId]
+    : undefined;
+  let changed = false;
+  for (const candidate of candidates) {
+    if (candidate.type !== "result" || !resultOf(candidate)?.is_error) {
+      continue;
+    }
+    if (envelope && compareTranscriptEnvelopes(candidate, envelope) <= 0) {
+      continue;
+    }
+    envelope = candidate;
+    changed = true;
+  }
+  if (!changed) return index;
+  return {
+    envelopeByAgent: { ...index.envelopeByAgent, [agentId]: envelope! },
+    keyByAgent: {
+      ...index.keyByAgent,
+      [agentId]: transcriptEntryKey(envelope!),
+    },
+  };
+}
+
+/** O(transcript.length): full rescan for ONE agent. Use only at
+ *  bulk-replace/removal sites (history join, resume reset, operator
+ *  clear) where entries can be REMOVED or reordered, not appended --
+ *  noteIfNewestError's O(1) incremental compare cannot detect a removal
+ *  of the entry it is currently pointing at. Never call this on the live
+ *  per-envelope path; it defeats the whole point of the incremental
+ *  index. */
+export function recomputeLatestError(
+  index: ErrorIndexState,
+  agentId: string,
+  transcript: Envelope[],
+): ErrorIndexState {
+  const found = findLatestErrorEnvelope(transcript);
+  if (found === undefined) return dropLatestError(index, agentId);
+  return {
+    envelopeByAgent: { ...index.envelopeByAgent, [agentId]: found },
+    keyByAgent: { ...index.keyByAgent, [agentId]: transcriptEntryKey(found) },
+  };
+}
+
+/** Removes an agent's entry entirely (agent_deleted, logout-scale reset
+ *  handled by callers via EMPTY_ERROR_INDEX instead). No-op if absent. */
+export function dropLatestError(
+  index: ErrorIndexState,
+  agentId: string,
+): ErrorIndexState {
+  // Same hasOwnProperty guard as noteIfNewestError above -- `in` also
+  // walks the prototype chain, so this early-return would otherwise be
+  // skipped for a magic-name agentId even when never actually stored.
+  if (
+    !Object.prototype.hasOwnProperty.call(index.envelopeByAgent, agentId) &&
+    !Object.prototype.hasOwnProperty.call(index.keyByAgent, agentId)
+  ) {
+    return index;
+  }
+  const { [agentId]: _e, ...envelopeByAgent } = index.envelopeByAgent;
+  const { [agentId]: _k, ...keyByAgent } = index.keyByAgent;
+  return { envelopeByAgent, keyByAgent };
+}
+
+/** Reference implementation kept ONLY for the issue #304 differential
+ *  test (App.svelte no longer uses this shape directly) -- the original
+ *  full-rescan-of-everything algorithm that noteIfNewestError /
+ *  recomputeLatestError above replace. Exists to prove the incremental
+ *  index computes the exact same result across an arbitrary operation
+ *  sequence, not to be used in production. */
+export function referenceLatestErrorKeyByAgent(
+  logs: Record<string, Envelope[]>,
+): Record<string, string> {
+  let result: Record<string, string> = {};
+  for (const [agentId, transcript] of Object.entries(logs)) {
+    const found = findLatestErrorEnvelope(transcript);
+    // Round-2 review (issue #304): a bare bracket ASSIGNMENT here
+    // (`result[agentId] = ...`) would hit the inherited `__proto__`
+    // accessor SETTER for that one magic agentId instead of creating an
+    // own property (silently dropping it, since the setter no-ops for a
+    // non-object/non-null value) -- same class as noteIfNewestError /
+    // dropLatestError above, different write form. The object-literal
+    // computed-key spread used everywhere else in this file is the safe
+    // form (`[[DefineOwnProperty]]`, never triggers the setter).
+    if (found) result = { ...result, [agentId]: transcriptEntryKey(found) };
+  }
+  return result;
+}
+
 /** Legacy-server branch of `onHistory` (ふじ R3 must-fix, 2026-07-23):
  *  when the server omits `history_projection` (pre-M6/R3 build), the
  *  history payload is still keyed by sender only, so the client must

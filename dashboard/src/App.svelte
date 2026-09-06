@@ -32,6 +32,7 @@
     ConnectionStatus,
     DirectoryEntry,
     Envelope,
+    ErrorIndexState,
     InterAgentDeliveryStatus,
     HostInfo,
     KaoiroConnection,
@@ -49,6 +50,8 @@
     decideWakeAction,
     defaultSocketUrl,
     dispatchOnlineWake,
+    dropLatestError,
+    EMPTY_ERROR_INDEX,
     fetchAuthMethods,
     fetchPersonaManifest,
     fetchServerHealth,
@@ -57,14 +60,15 @@
     formatAgentLabel,
     isReplyEnvelope,
     mergeTranscriptEntries,
+    noteIfNewestError,
     applyProjectionEpoch,
+    recomputeLatestError,
     resetTranscriptHistory,
     applyTaskEnvelope,
     purgeTasksForAgent,
     computeActiveTaskCountByAgent,
     activeTaskCountForDetail,
     tasklistForDetail,
-    resultOf,
   } from "./lib/protocol";
   import {
     isWaitTransition,
@@ -117,36 +121,33 @@
   // `onHistory`/replay for that connection, never as a live `onEnvelope`).
   //
   // `ackedErrorKeys` is the only piece of state (agent_id -> the entry key
-  // that was acked); `unackedErrorKey` below is DERIVED from it plus
-  // `logs`, so every path that populates `logs` (live onEnvelope, onHistory,
-  // replay) is covered uniformly with no separate wiring per path.
+  // that was acked); `unackedErrorKey` below is derived from it plus
+  // `errorIndex.keyByAgent`.
   // In-memory only (こはく裁定 2026-09-05: reload re-arming the badge is
   // the safe-side default over a per-browser localStorage ack that would
   // not reach a second operator/tab) — cleared wholesale on logout()
   // alongside `logs` itself, so a later login's re-derived unackedErrorKey
   // does not carry a stale operator's ack forward onto a fresh session.
   let ackedErrorKeys = $state<Record<string, string>>({});
-  /** Newest is_error result entry key per agent, scanned from `logs`
-   *  newest-first per agent so a later error always wins over an earlier
-   *  still-unacked one. */
-  const latestErrorKeyByAgent = $derived.by<Record<string, string>>(() => {
-    const result: Record<string, string> = {};
-    for (const [agentId, transcript] of Object.entries(logs)) {
-      for (let i = transcript.length - 1; i >= 0; i--) {
-        const envelope = transcript[i];
-        if (envelope.type === "result" && resultOf(envelope)?.is_error) {
-          result[agentId] = conversationEntryKey(envelope);
-          break;
-        }
-      }
-    }
-    return result;
-  });
+  // issue #304 (candidate A): this used to be a `$derived.by` that
+  // rescanned EVERY agent's WHOLE transcript on every single `logs`
+  // replacement -- catastrophic at scale (5 agents x 5000-entry history x
+  // 100ms receive tick: up to 290s of accumulated long-task time per ~3s
+  // window). Replaced with an incrementally-maintained index
+  // (noteIfNewestError/recomputeLatestError/dropLatestError, protocol.ts)
+  // that every `logs`-mutating path below updates explicitly -- unlike the
+  // old derived, this is NOT automatic, so each call site owns keeping it
+  // in sync (live onEnvelope / onHistory / onHistoryCleared / onHistoryReset
+  // / onHistoryReplayEnvelope / onAgentDeleted / onSessionResetCompleted
+  // "clear" / logout). Funneled through those 3 shared helpers only, so the
+  // "newest is_error entry per agent" invariant has one place it can go
+  // wrong, not eight.
+  let errorIndex = $state<ErrorIndexState>(EMPTY_ERROR_INDEX);
   /** agent_id -> entry key, present only when that agent's newest is_error
    *  result has not yet been acked (opening its detail). */
   const unackedErrorKey = $derived.by<Record<string, string>>(() => {
     const result: Record<string, string> = {};
-    for (const [agentId, key] of Object.entries(latestErrorKeyByAgent)) {
+    for (const [agentId, key] of Object.entries(errorIndex.keyByAgent)) {
       if (ackedErrorKeys[agentId] !== key) result[agentId] = key;
     }
     return result;
@@ -805,6 +806,10 @@
               const merged = mergeTranscriptEntries(previous, [envelope]);
               if (merged.length > previous.length) addedToTranscript = true;
               next[id] = merged;
+              // issue #304: O(1) incremental update, not a rescan -- see
+              // the errorIndex declaration comment above for why this is
+              // no longer automatic.
+              errorIndex = noteIfNewestError(errorIndex, id, [envelope]);
               // ADR-0051 D4 step 1: remember it separately, so a history
               // push that invalidates the baseline can still keep it — but
               // ONLY inside this connection's join→history window. Outside
@@ -818,11 +823,6 @@
               }
             }
             logs = next;
-            // issue #287: unackedErrorKey (above) is derived from `logs`
-            // directly, so no separate bookkeeping is needed here — this
-            // assignment already covers the sticky-badge case (ふじ2 M1:
-            // history-sourced errors, e.g. from onHistory below, are
-            // covered the same way, not just this live path).
             // JSONL resume replay deliberately reuses ordinary `envelope`
             // events. Its explicit reset/complete boundary, rather than an
             // arrival-count heuristic, is what distinguishes it from a live
@@ -942,6 +942,17 @@
           }
           clearWatermarks = applied.clearWatermarks;
           logs = applied.logs;
+          // issue #304: a join/reconnect legitimately replaces every
+          // agent's transcript at once, so there is no cheaper option
+          // than a full per-agent rescan here -- but it runs once per
+          // connection, not once per envelope, unlike the old $derived.by.
+          {
+            let nextIndex = EMPTY_ERROR_INDEX;
+            for (const [id, transcript] of Object.entries(applied.logs)) {
+              nextIndex = recomputeLatestError(nextIndex, id, transcript);
+            }
+            errorIndex = nextIndex;
+          }
           projectionEpoch = applied.epoch;
           // The window this buffer covers — this connection's join until
           // its history push — has closed; live envelopes now land in
@@ -980,6 +991,10 @@
               computeStaleTimelineKeys(prev, next, conversationEntryKey),
             );
             logs = { ...logs, [agentId]: next };
+            // issue #304: a purge can REMOVE the entry the index currently
+            // points at, so this needs a full rescan of this one agent
+            // (recomputeLatestError), not the O(1) live-append path.
+            errorIndex = recomputeLatestError(errorIndex, agentId, next);
           }
           mirrorIntoLiveBuffer(agentId, (rows) =>
             filterAfterHistoryCleared(rows, sessionId, clearWatermarks[agentId]),
@@ -994,6 +1009,9 @@
             computeStaleTimelineKeys(prev, next, conversationEntryKey),
           );
           logs = { ...logs, [agentId]: next };
+          // issue #304: resetTranscriptHistory can drop the entry the
+          // index currently points at -- full per-agent rescan, as above.
+          errorIndex = recomputeLatestError(errorIndex, agentId, next);
           mirrorIntoLiveBuffer(agentId, (rows) =>
             resetTranscriptHistory(rows, preserveInterAgent),
           );
@@ -1015,6 +1033,10 @@
             ...logs,
             [paneAgentId]: mergeTranscriptEntries(previous, [envelope]),
           };
+          // issue #304: a single replayed envelope only ever APPENDS (never
+          // removes) an entry, so the O(1) incremental path applies here
+          // exactly as it does for live onEnvelope arrivals.
+          errorIndex = noteIfNewestError(errorIndex, paneAgentId, [envelope]);
           if (awaitingHistory) {
             liveSinceJoin[paneAgentId] = mergeTranscriptEntries(
               liveSinceJoin[paneAgentId] ?? [],
@@ -1073,6 +1095,9 @@
               Object.entries(logs).filter(([id]) => id !== agentId),
             );
           }
+          // issue #304: the deleted agent's cached error entry (if any)
+          // must go with its transcript.
+          errorIndex = dropLatestError(errorIndex, agentId);
           // The join-window buffer holds a second copy of the transcript and
           // becomes the baseline on an epoch mismatch, so a deleted agent
           // left in it would reappear with its whole history.
@@ -1159,13 +1184,15 @@
             }
             const prev = logs[payload.agent_id];
             if (prev) {
-              logs = {
-                ...logs,
-                [payload.agent_id]: retainClearMarkerOnly(
-                  prev,
-                  payload.request_id,
-                ),
-              };
+              const next = retainClearMarkerOnly(prev, payload.request_id);
+              logs = { ...logs, [payload.agent_id]: next };
+              // issue #304: /clear can remove the entry the index
+              // currently points at -- full per-agent rescan.
+              errorIndex = recomputeLatestError(
+                errorIndex,
+                payload.agent_id,
+                next,
+              );
             }
             // ふじ 30-10 R1: `/clear` は他の 3 経路と同じく buffer にも
             // 効かせる。epoch 不一致で buffer が baseline に昇格したとき、
@@ -1416,11 +1443,15 @@
     // Don't keep the previous session's data behind the login form.
     agents = {};
     logs = {};
-    // issue #287 (ふじ2 round1 M1): unackedErrorKey derives from `logs` +
-    // ackedErrorKeys, so clearing `logs` alone already zeroes it for the
-    // NEXT session's re-derivation -- but ackedErrorKeys itself must be
-    // cleared too, or a stale ack (same agent_id reused by a later login)
-    // would silently suppress that fresh session's first real error.
+    // issue #304: errorIndex is no longer auto-derived from `logs`, so
+    // clearing `logs` alone would leave a stale cached error behind --
+    // reset it explicitly, same as `logs` itself.
+    errorIndex = EMPTY_ERROR_INDEX;
+    // issue #287 (ふじ2 round1 M1): unackedErrorKey derives from
+    // errorIndex.keyByAgent + ackedErrorKeys -- ackedErrorKeys itself must
+    // be cleared too, or a stale ack (same agent_id reused by a later
+    // login) would silently suppress that fresh session's first real
+    // error.
     ackedErrorKeys = {};
     wrapperBuildInfos = {};
     liveSinceJoin = {};

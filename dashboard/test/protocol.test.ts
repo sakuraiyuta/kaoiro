@@ -4,6 +4,8 @@ import {
   applyProjectionEpoch,
   ATTACH_CHUNK_SIZE,
   buildChunkPayload,
+  dropLatestError,
+  EMPTY_ERROR_INDEX,
   errorSubtypeLabel,
   fetchAuthMethods,
   fetchPersonaManifest,
@@ -17,6 +19,9 @@ import {
   isReplyEnvelope,
   logOf,
   mergeTranscriptEntries,
+  noteIfNewestError,
+  recomputeLatestError,
+  referenceLatestErrorKeyByAgent,
   modelsFrom,
   modelSwitchStateFrom,
   switchErrorFrom,
@@ -58,7 +63,12 @@ import {
   userInputDialogAvailability,
   warnOnServerVersionMismatch,
 } from "../src/lib/protocol";
-import type { Envelope, SessionCapabilities, TaskTable } from "../src/lib/protocol";
+import type {
+  Envelope,
+  ErrorIndexState,
+  SessionCapabilities,
+  TaskTable,
+} from "../src/lib/protocol";
 
 describe("ADR-0015 stage 2 server -> client version check", () => {
   it("欠落・不一致は warn し、一致は無警告で後続処理を妨げない", () => {
@@ -3330,5 +3340,118 @@ describe("parseHistoryPayload — projection_epoch (ADR-0051 D4)", () => {
     expect(
       parseHistoryPayload({ agents: {}, projection_epoch: 7 }).projectionEpoch,
     ).toBeUndefined();
+  });
+});
+
+describe("error index (noteIfNewestError / recomputeLatestError / dropLatestError, issue #304)", () => {
+  function errorEnvelope(agentId: string, ts: string, seq: number): Envelope {
+    return {
+      version: "0",
+      agent_id: agentId,
+      ts,
+      seq,
+      type: "result",
+      state: "error",
+      payload: { is_error: true },
+    } as unknown as Envelope;
+  }
+
+  function logEnvelope(agentId: string, ts: string, seq: number): Envelope {
+    return {
+      version: "0",
+      agent_id: agentId,
+      ts,
+      seq,
+      type: "log",
+      state: "thinking",
+      payload: { kind: "assistant", text: "x" },
+    } as unknown as Envelope;
+  }
+
+  it("noteIfNewestError は O(1): 新しい is_error だけ採用し、古い/非errorは無視する", () => {
+    const e1 = errorEnvelope("a", "2026-09-01T00:00:01Z", 1);
+    let index = noteIfNewestError(EMPTY_ERROR_INDEX, "a", [e1]);
+    expect(index.keyByAgent.a).toBe(transcriptEntryKey(e1));
+
+    // 非error は badge を消さない (旧 $derived.by と同じ意味論)。
+    const log = logEnvelope("a", "2026-09-01T00:00:02Z", 2);
+    index = noteIfNewestError(index, "a", [log]);
+    expect(index.keyByAgent.a).toBe(transcriptEntryKey(e1));
+
+    // より古い(ts 順で前の) is_error は上書きしない -- 順序入れ替え耐性。
+    const older = errorEnvelope("a", "2026-08-01T00:00:00Z", 0);
+    index = noteIfNewestError(index, "a", [older]);
+    expect(index.keyByAgent.a).toBe(transcriptEntryKey(e1));
+
+    // より新しい is_error は上書きする。
+    const newer = errorEnvelope("a", "2026-09-02T00:00:00Z", 3);
+    index = noteIfNewestError(index, "a", [newer]);
+    expect(index.keyByAgent.a).toBe(transcriptEntryKey(newer));
+  });
+
+  it("recomputeLatestError / dropLatestError は referenceLatestErrorKeyByAgent と一致する", () => {
+    const transcript = [
+      logEnvelope("a", "2026-09-01T00:00:00Z", 0),
+      errorEnvelope("a", "2026-09-01T00:00:01Z", 1),
+      logEnvelope("a", "2026-09-01T00:00:02Z", 2),
+    ];
+    const index = recomputeLatestError(EMPTY_ERROR_INDEX, "a", transcript);
+    expect(index.keyByAgent).toEqual(
+      referenceLatestErrorKeyByAgent({ a: transcript }),
+    );
+
+    const dropped = dropLatestError(index, "a");
+    expect(dropped.keyByAgent).toEqual({});
+    expect(dropped.envelopeByAgent).toEqual({});
+  });
+
+  // Security review round 1 (issue #304, 2026-09-06): agent_id の wire
+  // charset は "__proto__" などの Object.prototype メンバ名を禁止していない
+  // (TaskTable 側の既存ハードニング, issue #180 と同じ前提)。素の {} への
+  // bracket 読み取り/`in` は prototype chain を辿るため、これらの関数が
+  // hasOwnProperty ガード無しだと agentId="__proto__" の is_error を
+  // 静かに無視してしまう(検出済みの回帰)。
+  it("agentId が \"__proto__\" でも is_error を正しく記録・削除できる (prototype 読み取り穴の回帰防止)", () => {
+    const e1 = errorEnvelope("__proto__", "2026-09-01T00:00:01Z", 1);
+    let index: ErrorIndexState = noteIfNewestError(
+      EMPTY_ERROR_INDEX,
+      "__proto__",
+      [e1],
+    );
+    expect(
+      Object.prototype.hasOwnProperty.call(index.keyByAgent, "__proto__"),
+    ).toBe(true);
+    expect(index.keyByAgent.__proto__).toBe(transcriptEntryKey(e1));
+
+    index = dropLatestError(index, "__proto__");
+    expect(
+      Object.prototype.hasOwnProperty.call(index.keyByAgent, "__proto__"),
+    ).toBe(false);
+    expect(index.keyByAgent).toEqual({});
+  });
+
+  // Round-2 review follow-up: referenceLatestErrorKeyByAgent (the
+  // differential test's oracle) had the SAME class via a bare bracket
+  // ASSIGNMENT (`result[agentId] = ...`, distinct write form from the
+  // functions above -- see the function's own comment).
+  it("referenceLatestErrorKeyByAgent も agentId=\"__proto__\" を own property として記録する", () => {
+    const e1 = errorEnvelope("__proto__", "2026-09-01T00:00:01Z", 1);
+    // An OBJECT-LITERAL key `__proto__` gets Annex B special-casing (sets
+    // [[Prototype]] instead of creating an own property) -- JSON.parse
+    // uses CreateDataProperty instead, matching the real wire path and
+    // the file's own established test technique (see the parseTasks
+    // "__proto__" test above).
+    const logs = JSON.parse(
+      `{"__proto__": ${JSON.stringify([e1])}}`,
+    ) as Record<string, Envelope[]>;
+    expect(Object.prototype.hasOwnProperty.call(logs, "__proto__")).toBe(
+      true,
+    );
+
+    const result = referenceLatestErrorKeyByAgent(logs);
+    expect(Object.prototype.hasOwnProperty.call(result, "__proto__")).toBe(
+      true,
+    );
+    expect(result.__proto__).toBe(transcriptEntryKey(e1));
   });
 });

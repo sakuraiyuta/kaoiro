@@ -7,55 +7,55 @@
   "before": {
     "rafLatencyMs": {
       "n": 30,
-      "avg": 3.01,
-      "median": 1.3,
-      "p95": 10.8,
-      "max": 13.1
+      "avg": 6.42,
+      "median": 2.3,
+      "p95": 15.6,
+      "max": 64.3
     },
     "eventTiming": {
       "inputDelayMs": {
-        "n": 36,
-        "avg": 3.86,
-        "median": 0.3,
-        "p95": 63.5,
-        "max": 63.5
+        "n": 46,
+        "avg": 3.08,
+        "median": 0.2,
+        "p95": 1.2,
+        "max": 65.2
       },
       "processingTimeMs": {
-        "n": 36,
-        "avg": 0.21,
+        "n": 46,
+        "avg": 0.2,
         "median": 0,
-        "p95": 1.5,
-        "max": 1.5
+        "p95": 1.2,
+        "max": 1.4
       },
       "presentationDelayMs": {
-        "n": 36,
-        "avg": 19.71,
-        "median": 23.3,
-        "p95": 23.7,
-        "max": 23.7
+        "n": 46,
+        "avg": 21.06,
+        "median": 15.8,
+        "p95": 71.7,
+        "max": 72
       },
       "durationMs": {
-        "n": 36,
-        "avg": 23.78,
-        "median": 24,
+        "n": 46,
+        "avg": 24.35,
+        "median": 16,
         "p95": 72,
         "max": 72
       }
     },
     "longTasks": {
-      "count": 29,
-      "totalDurationMs": 1783,
+      "count": 28,
+      "totalDurationMs": 1673,
       "durationMs": {
-        "n": 29,
-        "avg": 61.48,
-        "median": 60,
-        "p95": 78,
-        "max": 92
+        "n": 28,
+        "avg": 59.75,
+        "median": 57,
+        "p95": 76,
+        "max": 88
       }
     },
     "mountLongTasks": {
-      "count": 0,
-      "totalDurationMs": 0
+      "count": 2,
+      "totalDurationMs": 222
     },
     "domNodeCount": {
       "before": 1133,
@@ -70,65 +70,65 @@
   },
   "after": {
     "rafLatencyMs": {
-      "n": 11,
-      "avg": 2.03,
-      "median": 1.4,
-      "p95": 8.9,
-      "max": 8.9
+      "n": 30,
+      "avg": 10.66,
+      "median": 7.7,
+      "p95": 55.6,
+      "max": 63.2
     },
     "eventTiming": {
       "inputDelayMs": {
-        "n": 40,
-        "avg": 47.96,
-        "median": 0.5,
-        "p95": 140.7,
-        "max": 140.9
+        "n": 80,
+        "avg": 1.69,
+        "median": 0.2,
+        "p95": 1.3,
+        "max": 61.6
       },
       "processingTimeMs": {
-        "n": 40,
-        "avg": 0.34,
-        "median": 0.1,
-        "p95": 1.7,
-        "max": 1.8
+        "n": 80,
+        "avg": 0.27,
+        "median": 0,
+        "p95": 1.4,
+        "max": 1.4
       },
       "presentationDelayMs": {
-        "n": 40,
-        "avg": 11.7,
-        "median": 15.3,
-        "p95": 15.7,
-        "max": 16
+        "n": 80,
+        "avg": 20.14,
+        "median": 15.7,
+        "p95": 64,
+        "max": 72
       },
       "durationMs": {
-        "n": 40,
-        "avg": 60,
+        "n": 80,
+        "avg": 22.1,
         "median": 16,
-        "p95": 144,
-        "max": 144
+        "p95": 64,
+        "max": 72
       }
     },
     "longTasks": {
-      "count": 2151,
-      "totalDurationMs": 312015,
+      "count": 28,
+      "totalDurationMs": 1646,
       "durationMs": {
-        "n": 2151,
-        "avg": 145.06,
-        "median": 146,
-        "p95": 182,
-        "max": 264
+        "n": 28,
+        "avg": 58.79,
+        "median": 57,
+        "p95": 69,
+        "max": 89
       }
     },
     "mountLongTasks": {
-      "count": 0,
-      "totalDurationMs": 0
+      "count": 2,
+      "totalDurationMs": 226
     },
     "domNodeCount": {
       "before": 1133,
       "after": 1133
     },
     "tracePath": "/home/yuta/git/kaoiro/worktrees/ao-304/dashboard/bench/results/candidateA/trace-agents5-hist5000-tick100-errnone-after.zip",
-    "typingError": "locator.type: Timeout 120000ms exceeded.\nCall log:\n  - waiting for locator('textarea').first()\n    - locator resolved to <textarea rows=\"2\" class=\"svelte-1scy0gf\" aria-label=\"instruction for agent-viewed\" placeholder=\"指示を送る…(Ctrl+Enter で送信、/ でコマンド候補、ドラッグドロップ・ペーストで画像等ファイル送信)\"></textarea>\n",
+    "typingError": null,
     "keystrokes": {
-      "completed": 11,
+      "completed": 30,
       "requested": 30
     }
   }
