@@ -831,7 +831,12 @@ test("runUpdate --dry-run performs no mutating docker call and creates no transa
     lines.some((line) => line.startsWith("compose ps")),
     "a read-only compose ps call should still happen",
   );
-  for (const mutating of ["compose build", "compose stop", "compose up", "tag", "pull"]) {
+  // "run" (director ruling 2026-09-07, turn 9): the capacity preflight's
+  // OWN pre-#303-fix version started a throwaway alpine container even
+  // during --dry-run (`docker run ... du -sk`), breaking MF-1/N-5 — now
+  // that volume size comes from 'docker system df -v' (a pure query, no
+  // container), no scenario should ever log a `run` call during dry-run.
+  for (const mutating of ["compose build", "compose stop", "compose up", "tag", "pull", "run"]) {
     assert.ok(
       !lines.some((line) => line.startsWith(mutating)),
       `dry-run must not call: ${mutating}`,
