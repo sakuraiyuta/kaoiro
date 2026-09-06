@@ -56,6 +56,14 @@ export const PHASE = Object.freeze({
   // worth a separate checkpoint.
   ROLLBACK_STOPPED: "rollback_stopped",
   ROLLBACK_FORENSIC_ARCHIVED: "rollback_forensic_archived",
+  // クロエ round 5 review SF-9: a checkpoint immediately before the
+  // destructive wipe (`find ... -exec rm -rf` + `tar xzf`) runs — without
+  // it, a crash mid-wipe leaves the journal at ROLLBACK_FORENSIC_ARCHIVED,
+  // indistinguishable from "the wipe was never attempted", even though an
+  // operator investigating needs exactly that distinction (the volume may
+  // now be empty, half-restored, or still intact). Mirrors STOPPING/
+  // STARTING's own "checkpoint right before the risky step" pattern.
+  ROLLBACK_RESTORING: "rollback_restoring",
   ROLLBACK_RESTORED: "rollback_restored",
   // Literally "rolled_back" — kaoiro-deploy-transaction.mjs's
   // TERMINAL_PHASES already anticipated this exact value.
@@ -99,7 +107,8 @@ export const TRANSITIONS = {
   // itself) — director ruling 2026-09-06, B-4.
   [PHASE.DONE]: [PHASE.ROLLBACK_STOPPED],
   [PHASE.ROLLBACK_STOPPED]: [PHASE.ROLLBACK_FORENSIC_ARCHIVED],
-  [PHASE.ROLLBACK_FORENSIC_ARCHIVED]: [PHASE.ROLLBACK_RESTORED],
+  [PHASE.ROLLBACK_FORENSIC_ARCHIVED]: [PHASE.ROLLBACK_RESTORING],
+  [PHASE.ROLLBACK_RESTORING]: [PHASE.ROLLBACK_RESTORED],
   [PHASE.ROLLBACK_RESTORED]: [PHASE.ROLLED_BACK],
   [PHASE.ROLLED_BACK]: [],
 };
@@ -195,6 +204,12 @@ const OBSERVATION_SCHEMAS = {
     obs.stopped_container === null ||
     (typeof obs.stopped_container === "string" && obs.stopped_container !== ""),
   [PHASE.ROLLBACK_FORENSIC_ARCHIVED]: (obs) => isPathSha(obs.archive),
+  // SF-9: self-contained like every other phase's observation (not just
+  // "trust the prior entry") — the forensic archive already recorded at
+  // ROLLBACK_FORENSIC_ARCHIVED, plus the pre-deploy archive about to be
+  // extracted over the volume (re-verified against manifest.archive's own
+  // sha256 right before this checkpoint is written).
+  [PHASE.ROLLBACK_RESTORING]: (obs) => isPathSha(obs.forensic_archive) && isPathSha(obs.restore_from),
   [PHASE.ROLLBACK_RESTORED]: (obs) => isValidRequiredEntries(obs.required_entries),
   [PHASE.ROLLED_BACK]: () => true,
 };

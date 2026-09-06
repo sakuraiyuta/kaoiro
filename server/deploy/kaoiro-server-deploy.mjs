@@ -348,7 +348,21 @@ function readEnvFileValue(envPath, envName) {
  *  --format json` reports `services.<name>.environment` as a plain
  *  object map — measured live against the installed Docker Compose
  *  (v5.3.1, 2026-09-06), not assumed from the CLI's own docs (which do
- *  not commit to a shape, and the shape has differed across versions). */
+ *  not commit to a shape, and the shape has differed across versions).
+ *  Compose has also emitted the array `"KEY=VALUE"` shape across
+ *  versions (the same shape `containerEffectiveEnv` already parses from
+ *  `docker inspect`); both are accepted here.
+ *
+ *  クロエ round 5 review SF-7: the original version collapsed EVERY
+ *  unexpected shape (array, a renamed/missing service, a missing
+ *  `environment` key entirely) to `{}` silently. With `checkEnvConsistency`'s
+ *  two-way comparison (A-MF-1), a silent `{}` either fails every entry
+ *  closed (compose: null vs a real container value) or, worse, PASSES
+ *  without ever actually comparing anything (both sides null) — the same
+ *  "0 exit but garbage shape" class `queryPersistencePaths` already
+ *  treats as a hard failure, not a skip. Same treatment here: a shape
+ *  this function does not recognize is a `DeployError`, never a quiet
+ *  `{}`. */
 function composeDeclaredEnv(bin, serverDir) {
   let raw;
   try {
@@ -362,8 +376,30 @@ function composeDeclaredEnv(bin, serverDir) {
   } catch (err) {
     fail(`'docker compose config' did not return valid JSON: ${err.message}`);
   }
-  const env = parsed?.services?.[SERVICE]?.environment;
-  return env && typeof env === "object" && !Array.isArray(env) ? env : {};
+  const service = parsed?.services?.[SERVICE];
+  if (typeof service !== "object" || service === null) {
+    fail(`'docker compose config' has no service named ${SERVICE}`);
+  }
+  if (!Object.hasOwn(service, "environment")) {
+    fail(`'docker compose config' service ${SERVICE} has no environment key`);
+  }
+  const env = service.environment;
+  if (Array.isArray(env)) {
+    const result = {};
+    for (const entry of env) {
+      if (typeof entry !== "string") continue;
+      const idx = entry.indexOf("=");
+      if (idx === -1) continue;
+      result[entry.slice(0, idx)] = entry.slice(idx + 1);
+    }
+    return result;
+  }
+  if (env !== null && typeof env === "object") {
+    return env;
+  }
+  fail(
+    `'docker compose config' service ${SERVICE}'s environment is neither an object nor an array: ${JSON.stringify(env)}`,
+  );
 }
 
 /** The container's own actual effective env, keyed by name — parses
@@ -891,8 +927,13 @@ export function runStart(flags, config) {
 
 /** Every phase reachable from `from` (inclusive) by following
  *  `transitions` forward — a plain graph walk over the SAME table
- *  `validateJournalAgainstStateMachine` itself uses to check history. */
-function reachablePhases(from, transitions) {
+ *  `validateJournalAgainstStateMachine` itself uses to check history.
+ *  Exported (クロエ round 5 review SF-6) so a test can measure the
+ *  ROLLBACK_ELIGIBLE_PHASES/UNRESUMABLE_PHASES DERIVATION against the
+ *  real TRANSITIONS graph directly, rather than hand-listing the phases
+ *  it currently produces — a hand-list pins today's membership, not the
+ *  auto-exclusion property B-2/MF-2 actually care about. */
+export function reachablePhases(from, transitions) {
   const seen = new Set([from]);
   const stack = [from];
   while (stack.length > 0) {
@@ -1157,7 +1198,7 @@ export function runUpdate(flags, config) {
             );
           }
           fail(
-            `env_consistency check found a mismatch between .env / compose / the running container's effective env for one or more persistence-path env vars (restored kaoiro-server:latest to the old image): ${JSON.stringify(entries)}`,
+            `env_consistency check found a mismatch between compose's declared env and the running container's effective env for one or more persistence-path env vars (.env's own line is recorded above as "declared" for reference only — it is never compared; restored kaoiro-server:latest to the old image): ${JSON.stringify(entries)}`,
           );
         }
       }
@@ -1685,6 +1726,22 @@ export function runRollback(flags, config) {
     } catch (err) {
       fail(`pre-deploy archive at ${manifest.archive.path} failed full-traversal verification: ${err.message}`);
     }
+
+    // クロエ round 5 review SF-9: checkpointed immediately before the
+    // destructive wipe — a crash between this line and ROLLBACK_RESTORED
+    // otherwise leaves the journal at ROLLBACK_FORENSIC_ARCHIVED,
+    // indistinguishable from "the wipe was never attempted" even though
+    // the volume may now be anywhere from untouched to fully restored.
+    journal = advancePhase(
+      dir,
+      journal,
+      PHASE.ROLLBACK_RESTORING,
+      {
+        forensic_archive: { path: forensicPath, sha256: sha256File(forensicPath) },
+        restore_from: { path: manifest.archive.path, sha256: preDeployArchiveSha },
+      },
+      validateJournalAgainstStateMachine,
+    );
 
     runDocker(bin, [
       "run",

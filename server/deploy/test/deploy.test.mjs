@@ -9,12 +9,14 @@ import { afterEach, beforeEach, test } from "node:test";
 import { DEFAULT_CONFIG } from "../kaoiro-deploy-config.mjs";
 import { readJournal } from "../kaoiro-deploy-journal.mjs";
 import { readManifest } from "../kaoiro-deploy-manifest.mjs";
+import { PHASE, TRANSITIONS } from "../kaoiro-deploy-phase.mjs";
 import {
   DeployError,
   hasPriorTransactions,
   parseArgs,
   parseTarEntries,
   pruneOldTransactions,
+  reachablePhases,
   resolveHealthUrl,
   runBuild,
   requiredEntriesMatch,
@@ -48,7 +50,7 @@ case "$1" in
     case "$2" in
       ps)
         case "$FAKE_DOCKER_SCENARIO" in
-          stopped|running|retag-drift|running-clean-stop|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty)
+          stopped|running|retag-drift|running-clean-stop|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty|compose-config-renamed-service|compose-config-missing-environment-key)
             printf 'kaoiro-c1\\n' ;;
           # round 4 review B-1 (expanded): rollback's own "2+ containers,
           # refuse" guard, distinct from requireRunningContainer's own
@@ -85,12 +87,27 @@ case "$1" in
       # gives the FULLY-RESOLVED docker volume name — "kaoiro_kaoiro-state"
       # here, matching this fixture's own service name.
       config)
-        if [ -n "$KAOIRO_TEST_COMPOSE_ENV_JSON" ]; then
-          env_json="$KAOIRO_TEST_COMPOSE_ENV_JSON"
-        else
-          env_json='{}'
-        fi
-        printf '{"services":{"kaoiro":{"environment":%s,"volumes":[{"type":"volume","source":"kaoiro-state","target":"/var/lib/kaoiro","volume":{}}]}},"volumes":{"kaoiro-state":{"name":"kaoiro_kaoiro-state"}}}\\n' "$env_json"
+        case "$FAKE_DOCKER_SCENARIO" in
+          # クロエ round 5 review SF-7: composeDeclaredEnv's own shape
+          # guard, pinned via a compose config response naming a DIFFERENT
+          # service ("kaoiro" is not present at all) and one whose service
+          # exists but has no "environment" key at all (neither \`{}\` nor
+          # \`null\` — genuinely absent).
+          compose-config-renamed-service)
+            printf '{"services":{"other-service":{"environment":{},"volumes":[{"type":"volume","source":"kaoiro-state","target":"/var/lib/kaoiro","volume":{}}]}},"volumes":{"kaoiro-state":{"name":"kaoiro_kaoiro-state"}}}\\n'
+            ;;
+          compose-config-missing-environment-key)
+            printf '{"services":{"kaoiro":{"volumes":[{"type":"volume","source":"kaoiro-state","target":"/var/lib/kaoiro","volume":{}}]}},"volumes":{"kaoiro-state":{"name":"kaoiro_kaoiro-state"}}}\\n'
+            ;;
+          *)
+            if [ -n "$KAOIRO_TEST_COMPOSE_ENV_JSON" ]; then
+              env_json="$KAOIRO_TEST_COMPOSE_ENV_JSON"
+            else
+              env_json='{}'
+            fi
+            printf '{"services":{"kaoiro":{"environment":%s,"volumes":[{"type":"volume","source":"kaoiro-state","target":"/var/lib/kaoiro","volume":{}}]}},"volumes":{"kaoiro-state":{"name":"kaoiro_kaoiro-state"}}}\\n' "$env_json"
+            ;;
+        esac
         ;;
     esac
     ;;
@@ -171,7 +188,7 @@ case "$1" in
           '{{.State.Status}}')
             case "$FAKE_DOCKER_SCENARIO" in
               stopped) printf 'exited\\n' ;;
-              running|retag-drift|running-clean-stop|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty)
+              running|retag-drift|running-clean-stop|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty|compose-config-renamed-service|compose-config-missing-environment-key)
                 printf 'running\\n' ;;
             esac
             ;;
@@ -941,6 +958,11 @@ test("runUpdate fails closed and restores kaoiro-server:latest to the old image 
   }
   assert.ok(caught instanceof DeployError);
   assert.ok(caught.message.includes("env_consistency check found a mismatch"));
+  // クロエ round 5 review SF-8: the message must name the two parties the
+  // check actually compares (compose vs. the container) and must not send
+  // an operator to edit .env, which A-MF-1 never reads for `match`.
+  assert.ok(caught.message.includes("compose's declared env and the running container's effective env"));
+  assert.ok(caught.message.includes(".env's own line is recorded above as \"declared\" for reference only"));
   const log = existsSync(logPath) ? readFileSync(logPath, "utf8") : "";
   assert.ok(
     log.trim().split("\n").includes(`tag ${OLD_IMAGE_ID} kaoiro-server:latest`),
@@ -1024,6 +1046,64 @@ test("runUpdate proceeds through DONE when compose and container agree, even wit
   const entry = manifest.env_consistency.entries.KAOIRO_USERS_PATH;
   assert.equal(entry.match, true);
   assert.equal(entry.declared, null);
+});
+
+// クロエ round 5 review SF-7: composeDeclaredEnv's own shape guard — the
+// original silently collapsed every unexpected shape to `{}`, which with
+// A-MF-1's two-way comparison either fails closed on every entry (compose:
+// null vs. a real container value) or, worse, PASSES without comparing
+// anything at all (both sides null). Same "0 exit but garbage shape is a
+// hard failure, not a skip" treatment queryPersistencePaths already gets.
+test("runUpdate parses compose's environment when it is the array (\"KEY=VALUE\") shape", () => {
+  const evalOutput = JSON.stringify([{ store: "Users", env: "KAOIRO_USERS_PATH", default_file: "users.dets" }]);
+  const result = withScenario("running-clean-stop", () =>
+    withEnvConsistencyFixture(
+      {
+        evalOutput,
+        composeEnvJson: '["KAOIRO_USERS_PATH=/var/lib/kaoiro/users.dets"]',
+        containerEnvJson: '["KAOIRO_USERS_PATH=/var/lib/kaoiro/users.dets"]',
+      },
+      () => runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+    ),
+  );
+  assert.equal(result.phase, "done");
+  const backupRoot = join(root, "kaoiro-deploy");
+  const manifest = readManifest(join(backupRoot, result.transactionId));
+  assert.equal(manifest.env_consistency.entries.KAOIRO_USERS_PATH.match, true);
+});
+
+test("runUpdate throws (not a silent {}) when compose config has no service by the expected name", () => {
+  const evalOutput = JSON.stringify([{ store: "Users", env: "KAOIRO_USERS_PATH", default_file: "users.dets" }]);
+  let caught;
+  try {
+    withScenario("compose-config-renamed-service", () =>
+      withEnvConsistencyFixture(
+        { evalOutput, containerEnvJson: "[]" },
+        () => runUpdate({ repo: workDir, target: headSha }, configWithOverride()),
+      ),
+    );
+  } catch (err) {
+    caught = err;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.ok(caught.message.includes("has no service named"));
+});
+
+test("runUpdate throws (not a silent {}) when compose config's service has no environment key at all", () => {
+  const evalOutput = JSON.stringify([{ store: "Users", env: "KAOIRO_USERS_PATH", default_file: "users.dets" }]);
+  let caught;
+  try {
+    withScenario("compose-config-missing-environment-key", () =>
+      withEnvConsistencyFixture(
+        { evalOutput, containerEnvJson: "[]" },
+        () => runUpdate({ repo: workDir, target: headSha }, configWithOverride()),
+      ),
+    );
+  } catch (err) {
+    caught = err;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.ok(caught.message.includes("has no environment key"));
 });
 
 test("runUpdate completes through DONE with --maintenance-approved and a clean stop", () => {
@@ -1837,6 +1917,13 @@ test("runUpdate's unfinished-transaction guidance for a transaction parked at ST
   assert.ok(!caught.message.includes("resume it with --transaction"));
 });
 
+// クロエ round 5 review SF-6 applies to this test too (the same class,
+// a second sighting): a hand-listed expectation pins today's membership,
+// not the auto-growth property the comment below actually claims. Measured
+// instead against the SAME formula UNRESUMABLE_PHASES itself uses, so
+// inserting a new phase anywhere reachable from STOPPING (as B-4's own
+// ROLLED_BACK/ROLLBACK_STOPPED edges, and SF-9's ROLLBACK_RESTORING,
+// already did once each) can never leave this test stale.
 test("UNRESUMABLE_PHASES is exactly every phase reachable from STOPPING", () => {
   // Grew automatically to include rollback's own phases once B-4 added
   // a ROLLED_BACK edge from STOPPING onward and a ROLLBACK_STOPPED edge
@@ -1846,20 +1933,7 @@ test("UNRESUMABLE_PHASES is exactly every phase reachable from STOPPING", () => 
   // for free.
   assert.deepEqual(
     [...UNRESUMABLE_PHASES].sort(),
-    [
-      "archived",
-      "done",
-      "healthy",
-      "mount_resolved",
-      "rollback_forensic_archived",
-      "rollback_restored",
-      "rollback_stopped",
-      "rolled_back",
-      "starting",
-      "stopped",
-      "stopping",
-      "up",
-    ].sort(),
+    [...reachablePhases(PHASE.STOPPING, TRANSITIONS)].sort(),
   );
 });
 
@@ -1891,8 +1965,39 @@ test("ROLLBACK_ELIGIBLE_PHASES is exactly OLD_IMAGE_SAVED-reachable minus ROLLBA
 });
 
 test("ROLLBACK_ELIGIBLE_PHASES never includes a phase reachable from ROLLBACK_STOPPED", () => {
-  for (const phase of ["rollback_stopped", "rollback_forensic_archived", "rollback_restored", "rolled_back"]) {
+  for (const phase of reachablePhases(PHASE.ROLLBACK_STOPPED, TRANSITIONS)) {
     assert.equal(ROLLBACK_ELIGIBLE_PHASES.has(phase), false, `${phase} must be excluded`);
+  }
+});
+
+// クロエ round 5 review SF-6: the test above ORIGINALLY hand-listed
+// today's 4 rollback-chain phases — reverting the production derivation
+// back to the old hand-written delete list left it green (those same 4
+// literals happen to be excluded by that list too), so it measured
+// today's membership, not the auto-exclusion PROPERTY B-2/MF-2 actually
+// care about: a phase inserted into the rollback chain LATER must be
+// excluded without anyone remembering to update a list. Pinned by
+// running the exact formula ROLLBACK_ELIGIBLE_PHASES itself uses against
+// a test-local TRANSITIONS copy with a synthetic phase spliced into the
+// chain — the production constant can't be recomputed at test time (it
+// is frozen once at import), so this measures the FORMULA directly.
+test("the ROLLBACK_ELIGIBLE_PHASES formula auto-excludes a phase newly inserted into the rollback chain", () => {
+  const SYNTHETIC = "rollback_synthetic_inserted_phase";
+  const testTransitions = {
+    ...TRANSITIONS,
+    [PHASE.ROLLBACK_STOPPED]: [SYNTHETIC],
+    [SYNTHETIC]: [PHASE.ROLLBACK_FORENSIC_ARCHIVED],
+  };
+  const eligible = new Set(
+    [...reachablePhases(PHASE.OLD_IMAGE_SAVED, testTransitions)].filter(
+      (phase) => !reachablePhases(PHASE.ROLLBACK_STOPPED, testTransitions).has(phase),
+    ),
+  );
+  assert.equal(eligible.has(SYNTHETIC), false, "the newly-inserted phase must be excluded without an update");
+  // Splicing in the synthetic phase must not accidentally widen anything
+  // else the chain already excluded.
+  for (const phase of ["rollback_forensic_archived", "rollback_restored", "rolled_back"]) {
+    assert.equal(eligible.has(phase), false, `${phase} must remain excluded`);
   }
 });
 
@@ -2380,9 +2485,22 @@ test("runRollback (destructive) runs the full stop/forensic/restore/retag/up/hea
 
   const journal = readJournal(join(backupRoot, transactionId));
   assert.equal(journal.phase, "rolled_back");
-  for (const phase of ["rollback_stopped", "rollback_forensic_archived", "rollback_restored", "rolled_back"]) {
+  for (const phase of [
+    "rollback_stopped",
+    "rollback_forensic_archived",
+    "rollback_restoring",
+    "rollback_restored",
+    "rolled_back",
+  ]) {
     assert.ok(journal.history.some((e) => e.phase === phase), `expected a ${phase} checkpoint`);
   }
+  // SF-9: the checkpoint's own observation is self-contained (not "trust
+  // the prior entry") — both the forensic archive and the pre-deploy
+  // archive it is about to restore from are recorded with it.
+  const restoring = journal.history.find((e) => e.phase === "rollback_restoring").observation;
+  assert.ok(existsSync(restoring.forensic_archive.path));
+  assert.equal(restoring.restore_from.path, readManifest(join(backupRoot, transactionId)).archive.path);
+  assert.equal(restoring.restore_from.sha256, readManifest(join(backupRoot, transactionId)).archive.sha256);
   assert.ok(existsSync(join(backupRoot, transactionId, "rollback-forensic.tar.gz")));
 });
 
@@ -2523,8 +2641,11 @@ test("runRollback (destructive) refuses end to end when the restored volume drif
   }
   assert.ok(caught instanceof DeployError);
   assert.ok(caught.message.includes("do not match the recorded required_entries"));
+  // Advanced to ROLLBACK_RESTORING (SF-9's checkpoint right before the
+  // wipe) before the wipe+restore ran — the drift is only detectable
+  // AFTER that, so RESTORED itself is correctly never reached.
   const journal = readJournal(join(backupRoot, transactionId));
-  assert.equal(journal.phase, "rollback_forensic_archived");
+  assert.equal(journal.phase, "rollback_restoring");
 });
 
 test("runRollback (destructive) refuses when 2 or more containers currently match the service", () => {
