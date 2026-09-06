@@ -48,7 +48,7 @@ case "$1" in
     case "$2" in
       ps)
         case "$FAKE_DOCKER_SCENARIO" in
-          stopped|running|running-clean-stop|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty)
+          stopped|running|retag-drift|running-clean-stop|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty)
             printf 'kaoiro-c1\\n' ;;
           # round 4 review B-1 (expanded): rollback's own "2+ containers,
           # refuse" guard, distinct from requireRunningContainer's own
@@ -171,7 +171,7 @@ case "$1" in
           '{{.State.Status}}')
             case "$FAKE_DOCKER_SCENARIO" in
               stopped) printf 'exited\\n' ;;
-              running|running-clean-stop|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty)
+              running|retag-drift|running-clean-stop|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty)
                 printf 'running\\n' ;;
             esac
             ;;
@@ -946,6 +946,34 @@ test("runUpdate fails closed and restores kaoiro-server:latest to the old image 
     log.trim().split("\n").includes(`tag ${OLD_IMAGE_ID} kaoiro-server:latest`),
     "expected kaoiro-server:latest to be retagged back to the old image on failure",
   );
+});
+
+// クロエ round 4 review B-1 (expanded further, WORKLOG 2026-09-07 00:14:
+// B-1 spans 3 retag read-back call sites, not 2 — runUpdate's own
+// abort-cleanup retag (env_consistency mismatch), separate from
+// runRollback's destructive/non-destructive ones already pinned above).
+// Uses "retag-drift" as the WHOLE scenario (added to the ps/State.Status
+// lists alongside "running") since the mismatch is reached well before
+// the stop window — no clean-stop scenario is needed here at all.
+test("runUpdate reports both failures when env_consistency mismatches AND the abort-cleanup retag read-back also disagrees", () => {
+  const evalOutput = JSON.stringify([{ store: "Users", env: "KAOIRO_USERS_PATH", default_file: "users.dets" }]);
+  let caught;
+  try {
+    withScenario("retag-drift", () =>
+      withEnvConsistencyFixture(
+        {
+          evalOutput,
+          composeEnvJson: '{"KAOIRO_USERS_PATH":"/var/lib/kaoiro/users.dets"}',
+          containerEnvJson: '["KAOIRO_USERS_PATH=/tmp/kaoiro-dets/users.dets"]',
+        },
+        () => runUpdate({ repo: workDir, target: headSha }, configWithOverride()),
+      ),
+    );
+  } catch (err) {
+    caught = err;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.ok(caught.message.includes("env_consistency check failed AND could not restore kaoiro-server:latest"));
 });
 
 test("runUpdate proceeds through DONE when compose and container agree", () => {
