@@ -216,7 +216,7 @@ export function applyPermissionSyncState(
     samePermissionSelection(incoming, next);
   const clearsBlocked = acceptsIncoming &&
     state.blocked !== null &&
-    incoming.revision > state.blocked.revision;
+    next.revision > state.blocked.revision;
   const blocked = clearsBlocked ? null : state.blocked;
 
   return {

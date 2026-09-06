@@ -176,6 +176,38 @@ describe("Codex permission-state projector", () => {
     expect(projected.usesLegacyFallback).toBe(false);
   });
 
+  it("keeps a blocked selection when a rejected successor rolls back to it", () => {
+    const blockedSelection: PermissionSelection = {
+      revision: 1,
+      requested: { sandbox: "workspace-write", network_access: true },
+    };
+    const rejectedSuccessor: PermissionSelection = {
+      revision: 2,
+      requested: { sandbox: "read-only", network_access: false },
+    };
+    let state = requestPermission(
+      createPermissionState(baseline, true),
+      blockedSelection,
+    );
+    state = permissionObservationFailed(
+      beginPermissionExecution(state, submission(blockedSelection)),
+      submission(blockedSelection),
+      "observation_unavailable",
+      null,
+    );
+    state = applyPermissionSyncState(state, {
+      version: "0",
+      control: rejected(rejectedSuccessor),
+      next: blockedSelection,
+    });
+
+    expect(state.next).toEqual(blockedSelection);
+    expect(state.blocked).toEqual({
+      revision: 1,
+      reason: "observation_unavailable",
+    });
+  });
+
   it("restores audit dedupe from a failed successor's historical effective evidence", () => {
     const selected: PermissionSelection = {
       revision: 1,

@@ -315,6 +315,22 @@ it.each(["live", "sync"] as const)("reconciles a blocked request through a newer
   await vi.waitFor(() => expect(h.sdkCalls).toBe(2), { timeout: 300 });
 });
 
+it("keeps a blocked selection stopped when a successor is rejected before application", async () => {
+  const h = await createHarness({ writeContext: false });
+  const blocked = selection(1);
+  await h.host.setPermission(blocked);
+  void h.run();
+  await expectStatus(h, "unknown");
+  await h.host.send("second");
+  h.host.applyPermissionSync({
+    version: "0",
+    control: rejected(selection(2, "read-only", false), blocked),
+    next: blocked,
+  });
+  await new Promise(resolve => setTimeout(resolve, 30));
+  expect(h.sdkCalls).toBe(1);
+});
+
 it("keeps unknown permission drift suppressed after capability downgrade", async () => {
   const h = await createHarness({ writeContext: false, host: {
     resumeSnapshot: { sandbox: "read-only", network_access: false },
