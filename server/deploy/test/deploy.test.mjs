@@ -64,6 +64,20 @@ case "$1" in
           health-url-ipv6) printf ':::4000\\n' ;;
         esac
         ;;
+      # issue #220 absorption: compose's own RESOLVED declaration for the
+      # service, keyed by env var name — measured live to be a plain
+      # object map under \`--format json\` (Compose v5.3.1). Overridable
+      # per-test via KAOIRO_TEST_COMPOSE_ENV_JSON; an empty environment
+      # map by default so scenarios that do not care about env
+      # consistency see zero disagreement (no canonical keys to compare
+      # either, since the default eval output below is also \`[]\`).
+      config)
+        if [ -n "$KAOIRO_TEST_COMPOSE_ENV_JSON" ]; then
+          printf '%s\\n' "$KAOIRO_TEST_COMPOSE_ENV_JSON"
+        else
+          printf '{"services":{"kaoiro":{"environment":{}}}}\\n'
+        fi
+        ;;
     esac
     ;;
   tag) exit 0 ;;
@@ -92,6 +106,11 @@ case "$1" in
           *) printf '${OLD_IMAGE_ID}\\n' ;;
         esac
         ;;
+      # issue #220 absorption: the abort-cleanup retag-back read-back
+      # (env_consistency mismatch) — echoes OLD_IMAGE_ID, matching the
+      # \`tag\` command's own always-succeeds fake so the read-back check
+      # passes.
+      kaoiro-server:latest) printf '${OLD_IMAGE_ID}\\n' ;;
       *)
         case "$4" in
           '{{.State.Status}}')
@@ -141,6 +160,17 @@ case "$1" in
             esac
             ;;
           '{{.Image}}') printf '${OLD_IMAGE_ID}\\n' ;;
+          # issue #220 absorption: the OLD (currently running) container's
+          # actual effective env, Docker's own \`"KEY=VALUE"\` array shape.
+          # Overridable via KAOIRO_TEST_CONTAINER_ENV_JSON; empty by
+          # default (see the \`compose config\` fake's own comment).
+          '{{json .Config.Env}}')
+            if [ -n "$KAOIRO_TEST_CONTAINER_ENV_JSON" ]; then
+              printf '%s\\n' "$KAOIRO_TEST_CONTAINER_ENV_JSON"
+            else
+              printf '[]\\n'
+            fi
+            ;;
           *) printf 'sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\\n' ;;
         esac
         ;;
@@ -206,6 +236,26 @@ case "$1" in
         fi
         exit 0
         ;;
+      # issue #220 absorption: the target image's own persistence-path
+      # eval — matched on the entrypoint string alone (unique to this
+      # call in the whole fixture), regardless of image id or the exact
+      # eval expression content. KAOIRO_TEST_EVAL_EXIT=1 simulates the
+      # querying module not having landed on this image (a pre-#310
+      # image, or an old image rollback targets) — the fake's own
+      # "eval process itself failed" outcome, distinct from a malformed
+      # 0-exit output (KAOIRO_TEST_EVAL_OUTPUT set to something that is
+      # not a valid JSON array). Defaults to \`[]\` (nothing to check),
+      # so scenarios that do not care about env consistency never trip it.
+      *"/app/bin/kaoiro_server"*)
+        if [ "$KAOIRO_TEST_EVAL_EXIT" = "1" ]; then
+          exit 1
+        fi
+        if [ -n "$KAOIRO_TEST_EVAL_OUTPUT" ]; then
+          printf '%s\\n' "$KAOIRO_TEST_EVAL_OUTPUT"
+        else
+          printf '[]\\n'
+        fi
+        ;;
       *)
         # Pre-archive empty-volume guard (find -mindepth 1 -maxdepth 1
         # -exec stat -c '%n %u:%g %04a' {} \\;) — only whether anything is
@@ -233,6 +283,14 @@ function initRepo(dir) {
   execFileSync("git", ["-C", dir, "config", "user.name", "Test"]);
   mkdirSync(join(dir, "server"), { recursive: true });
   writeFileSync(join(dir, "server", "docker-compose.yaml"), "# fixture\n");
+  // Matches the real repo's own root .gitignore (`.env` is listed there).
+  // Without this, a test writing server/.env (issue #220 absorption)
+  // relies on the HOST's global git excludesFile to stay clean — true on
+  // a dev host that already has one, false on a bare CI container, where
+  // `git status --porcelain` then reports it and runBuild's dirty-tree
+  // guard fires for the wrong reason (measured: PR #312 round-3 style
+  // node:22 repro, 2026-09-06).
+  writeFileSync(join(dir, ".gitignore"), ".env\n");
   execFileSync("git", ["-C", dir, "add", "-A"]);
   execFileSync("git", ["-C", dir, "commit", "-q", "-m", "init"]);
   return execFileSync("git", ["-C", dir, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
@@ -364,6 +422,35 @@ function withCallLog(scenario, fn) {
     else process.env.KAOIRO_TEST_CALL_LOG = prior;
   }
   return existsSync(logPath) ? readFileSync(logPath, "utf8") : "";
+}
+
+// issue #220 absorption: sets/restores the four env vars FAKE_DOCKER's
+// own eval/compose-config/inspect-Config.Env cases read, so a test can
+// control the target image's canonical set, compose's declaration, and
+// the running container's effective env independently. Undefined values
+// are deleted rather than set, so a test only overriding one of the four
+// leaves the others at FAKE_DOCKER's own defaults (empty/`[]`).
+function withEnvConsistencyFixture({ evalExit, evalOutput, composeEnvJson, containerEnvJson } = {}, fn) {
+  const vars = {
+    KAOIRO_TEST_EVAL_EXIT: evalExit,
+    KAOIRO_TEST_EVAL_OUTPUT: evalOutput,
+    KAOIRO_TEST_COMPOSE_ENV_JSON: composeEnvJson,
+    KAOIRO_TEST_CONTAINER_ENV_JSON: containerEnvJson,
+  };
+  const prior = {};
+  for (const [key, value] of Object.entries(vars)) {
+    prior[key] = process.env[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  try {
+    return fn();
+  } finally {
+    for (const [key, value] of Object.entries(prior)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 }
 
 // クロエ round 1 review MF-4 pin (a): runs the REAL script text (imported,
@@ -609,7 +696,103 @@ test("runUpdate stops at the maintenance gate without --maintenance-approved, bu
   const backupRoot = join(root, "kaoiro-deploy");
   const [transactionDir] = readdirSyncNonHidden(backupRoot);
   const journal = readJournal(join(backupRoot, transactionDir));
-  assert.equal(journal.phase, "build_prepared");
+  // issue #220 absorption: env_consistency is now checked BEFORE the
+  // approval gate too (still no-downtime) — "prepare progress" now
+  // extends one phase further than build alone.
+  assert.equal(journal.phase, "env_consistency_checked");
+});
+
+// --- issue #220 absorption -----------------------------------------------
+
+test("runUpdate records env_consistency as skipped when the target image's own eval process fails", () => {
+  const result = withScenario("running-clean-stop", () =>
+    withEnvConsistencyFixture({ evalExit: "1" }, () =>
+      runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+    ),
+  );
+  assert.equal(result.phase, "done");
+  const backupRoot = join(root, "kaoiro-deploy");
+  const manifest = readManifest(join(backupRoot, result.transactionId));
+  assert.equal(manifest.env_consistency.skipped, true);
+  assert.ok(manifest.env_consistency.reason.includes("persistence-path eval failed"));
+});
+
+test("runUpdate throws when the target image's eval exits 0 but does not print valid JSON", () => {
+  assert.throws(
+    () =>
+      withScenario("running-clean-stop", () =>
+        withEnvConsistencyFixture({ evalOutput: "not json" }, () =>
+          runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+        ),
+      ),
+    DeployError,
+  );
+});
+
+test("runUpdate throws when the target image's eval prints valid JSON that is not the expected shape", () => {
+  assert.throws(
+    () =>
+      withScenario("running-clean-stop", () =>
+        withEnvConsistencyFixture({ evalOutput: '{"not":"an array"}' }, () =>
+          runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+        ),
+      ),
+    DeployError,
+  );
+});
+
+test("runUpdate fails closed and restores kaoiro-server:latest to the old image when env_consistency finds a mismatch", () => {
+  writeFileSync(join(workDir, "server", ".env"), "KAOIRO_USERS_PATH=/var/lib/kaoiro/users.dets\n");
+  const evalOutput = JSON.stringify([{ store: "Users", env: "KAOIRO_USERS_PATH", default_file: "users.dets" }]);
+  const logPath = join(root, "docker-calls.log");
+  process.env.KAOIRO_TEST_CALL_LOG = logPath;
+  let caught;
+  try {
+    withScenario("running-clean-stop", () =>
+      withEnvConsistencyFixture(
+        {
+          evalOutput,
+          composeEnvJson:
+            '{"services":{"kaoiro":{"environment":{"KAOIRO_USERS_PATH":"/var/lib/kaoiro/users.dets"}}}}',
+          // Deliberately DIFFERENT from .env/compose — the running
+          // (old) container predates this compose value.
+          containerEnvJson: '["KAOIRO_USERS_PATH=/tmp/kaoiro-dets/users.dets"]',
+        },
+        () => runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+      ),
+    );
+  } catch (err) {
+    caught = err;
+  } finally {
+    delete process.env.KAOIRO_TEST_CALL_LOG;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.ok(caught.message.includes("env_consistency check found a mismatch"));
+  const log = existsSync(logPath) ? readFileSync(logPath, "utf8") : "";
+  assert.ok(
+    log.trim().split("\n").includes(`tag ${OLD_IMAGE_ID} kaoiro-server:latest`),
+    "expected kaoiro-server:latest to be retagged back to the old image on failure",
+  );
+});
+
+test("runUpdate proceeds through DONE when env_consistency's three sources all agree", () => {
+  writeFileSync(join(workDir, "server", ".env"), "KAOIRO_USERS_PATH=/var/lib/kaoiro/users.dets\n");
+  const evalOutput = JSON.stringify([{ store: "Users", env: "KAOIRO_USERS_PATH", default_file: "users.dets" }]);
+  const result = withScenario("running-clean-stop", () =>
+    withEnvConsistencyFixture(
+      {
+        evalOutput,
+        composeEnvJson: '{"services":{"kaoiro":{"environment":{"KAOIRO_USERS_PATH":"/var/lib/kaoiro/users.dets"}}}}',
+        containerEnvJson: '["KAOIRO_USERS_PATH=/var/lib/kaoiro/users.dets"]',
+      },
+      () => runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+    ),
+  );
+  assert.equal(result.phase, "done");
+  const backupRoot = join(root, "kaoiro-deploy");
+  const manifest = readManifest(join(backupRoot, result.transactionId));
+  assert.equal(manifest.env_consistency.skipped, false);
+  assert.equal(manifest.env_consistency.entries.KAOIRO_USERS_PATH.match, true);
 });
 
 test("runUpdate completes through DONE with --maintenance-approved and a clean stop", () => {
@@ -834,7 +1017,7 @@ test("runUpdate prunes DONE transactions beyond keep_generations that are also o
       schema_version: 1,
       transaction_id: oldIds[0],
       compose_artifact: { path: "server/docker-compose.yaml", sha256: "a".repeat(64) },
-      env_consistency: {},
+      env_consistency: { skipped: false, entries: {} },
       image_id: `sha256:${"b".repeat(64)}`,
       source_sha: "9".repeat(40),
       target_sha: "d".repeat(40),
@@ -942,7 +1125,7 @@ test("runUpdate keeps the newest keep_generations DONE transactions even when al
       schema_version: 1,
       transaction_id: olderId,
       compose_artifact: { path: "server/docker-compose.yaml", sha256: "a".repeat(64) },
-      env_consistency: {},
+      env_consistency: { skipped: false, entries: {} },
       image_id: `sha256:${"b".repeat(64)}`,
       source_sha: "9".repeat(40),
       target_sha: "d".repeat(40),
@@ -1039,7 +1222,7 @@ function writeSyntheticTransaction(backupRoot, id, { phase, sourceSha }) {
       schema_version: 1,
       transaction_id: id,
       compose_artifact: { path: "server/docker-compose.yaml", sha256: "a".repeat(64) },
-      env_consistency: {},
+      env_consistency: { skipped: false, entries: {} },
       image_id: `sha256:${"b".repeat(64)}`,
       source_sha: sourceSha,
       target_sha: "d".repeat(40),
@@ -1352,6 +1535,7 @@ test("runUpdate's unfinished-transaction guidance for a transaction parked at ST
       rollback_tag: `kaoiro-server:rollback-${oldSha}`,
     }),
     entry("build_prepared", { image_id: imageId, image_tag: "kaoiro-server:latest", target_sha: targetSha }),
+    entry("env_consistency_checked", { skipped: false, entries: {} }),
     entry("maintenance_gate_passed", {}),
     entry("stopping", {}),
     entry("stopped", { stop_exit_code: 0, stop_oom_killed: false }),

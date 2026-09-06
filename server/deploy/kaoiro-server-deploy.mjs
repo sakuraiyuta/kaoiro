@@ -233,6 +233,170 @@ function restartCount(bin, container) {
   return parseDockerIntField(dockerInspect(bin, container, "{{.RestartCount}}"));
 }
 
+// --- #220 absorption: persistence-path env consistency ------------------
+// director ruling 2026-09-06 (turn 13, correcting the phase placement in
+// an earlier ruling): checked once the target image exists (right after
+// BUILD_PREPARED), not before — this is the earliest point its own
+// `eval` interface can be queried at all.
+
+/** #310 (a separate issue, not yet landed as of this commit) is expected
+ *  to expose exactly this: `KaoiroServer.PersistencePaths.manifest/0`
+ *  returning a list of maps with keys `:store`/`:env`/`:default_file`.
+ *  Named here as the single fixed expression this file's own eval call
+ *  uses (director ruling 2026-09-06, A-1) — an image built before #310
+ *  lands (or an old image a rollback targets) simply lacks this module;
+ *  that is queryPersistencePaths' own "skipped" outcome, not a defect in
+ *  this string. */
+const PERSISTENCE_PATHS_EVAL_EXPR = "IO.puts(Jason.encode!(KaoiroServer.PersistencePaths.manifest()))";
+
+function isValidPersistencePathEntry(entry) {
+  return (
+    typeof entry === "object" &&
+    entry !== null &&
+    typeof entry.store === "string" &&
+    entry.store !== "" &&
+    typeof entry.env === "string" &&
+    entry.env !== "" &&
+    typeof entry.default_file === "string" &&
+    entry.default_file !== ""
+  );
+}
+
+/** Queries `imageId`'s own canonical persistence-path list: `docker run
+ *  --rm --entrypoint /app/bin/kaoiro_server <imageId> eval
+ *  '<PERSISTENCE_PATHS_EVAL_EXPR>'`, addressed by Id (never a tag, which
+ *  can move — director ruling 2026-09-06, A-1) so this always queries
+ *  the EXACT image about to run. No env vars are passed; the list this
+ *  queries is static, not env-dependent.
+ *
+ *  Two failure modes, deliberately handled differently:
+ *  - the eval PROCESS itself exits non-zero: the querying module has not
+ *    landed on this image (#310 — a pre-#310 image, or an old image a
+ *    rollback targets). Returns `{skipped: true, reason}`, never
+ *    throws — the caller proceeds without this check rather than
+ *    blocking on a capability this image was never going to have.
+ *  - the eval process exits 0 but stdout is not the expected JSON
+ *    shape: something is actively wrong (a real bug in the module, or
+ *    this expression drifting from #310's contract) — a 0 exit means
+ *    the check RAN and produced garbage, materially different from "did
+ *    not run", so this throws DeployError instead of skipping. */
+function queryPersistencePaths(bin, imageId) {
+  let raw;
+  try {
+    raw = runDocker(bin, [
+      "run",
+      "--rm",
+      "--entrypoint",
+      "/app/bin/kaoiro_server",
+      imageId,
+      "eval",
+      PERSISTENCE_PATHS_EVAL_EXPR,
+    ]);
+  } catch (err) {
+    return { skipped: true, reason: `persistence-path eval failed for image ${imageId}: ${err.message}` };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    fail(
+      `persistence-path eval for image ${imageId} exited 0 but did not print a JSON array (${err.message}): ${raw}`,
+    );
+  }
+  if (!Array.isArray(parsed) || !parsed.every(isValidPersistencePathEntry)) {
+    fail(
+      `persistence-path eval for image ${imageId} exited 0 but printed an unexpected shape: ${JSON.stringify(parsed)}`,
+    );
+  }
+  return { skipped: false, paths: parsed };
+}
+
+/** Reads `.env`'s explicit value for exactly `envName` — never the rest
+ *  of the file, which may hold secrets (SECRET_KEY_BASE,
+ *  KAOIRO_CLIENT_TOKENS, ...) this check has no business reading or
+ *  recording (director ruling 2026-09-06, A-2). `null` when the key is
+ *  absent — a legitimate "not set" observation, not a read failure. */
+function readEnvFileValue(envPath, envName) {
+  let raw;
+  try {
+    raw = readFileSync(envPath, "utf8");
+  } catch {
+    return null;
+  }
+  const match = new RegExp(`^${envName}=(.*)$`, "m").exec(raw);
+  return match === null ? null : match[1];
+}
+
+/** The compose project's own RESOLVED declaration for `SERVICE` (`.env`
+ *  interpolation already applied — the same fact `docker compose up`
+ *  itself would use), keyed by env var name. `docker compose config
+ *  --format json` reports `services.<name>.environment` as a plain
+ *  object map — measured live against the installed Docker Compose
+ *  (v5.3.1, 2026-09-06), not assumed from the CLI's own docs (which do
+ *  not commit to a shape, and the shape has differed across versions). */
+function composeDeclaredEnv(bin, serverDir) {
+  let raw;
+  try {
+    raw = runDocker(bin, ["compose", "config", "--format", "json"], { cwd: serverDir });
+  } catch (err) {
+    fail(`'docker compose config' failed: ${err.message}`);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    fail(`'docker compose config' did not return valid JSON: ${err.message}`);
+  }
+  const env = parsed?.services?.[SERVICE]?.environment;
+  return env && typeof env === "object" && !Array.isArray(env) ? env : {};
+}
+
+/** The container's own actual effective env, keyed by name — parses
+ *  `docker inspect --format {{json .Config.Env}}`'s `"KEY=VALUE"` array
+ *  shape (Docker's own long-stable Config.Env format). */
+function containerEffectiveEnv(bin, container) {
+  const raw = dockerInspect(bin, container, "{{json .Config.Env}}");
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    fail(`could not parse '{{json .Config.Env}}' for ${container}: ${err.message}`);
+  }
+  const env = {};
+  for (const line of parsed) {
+    const idx = line.indexOf("=");
+    if (idx === -1) continue;
+    env[line.slice(0, idx)] = line.slice(idx + 1);
+  }
+  return env;
+}
+
+/** Three-way consistency for exactly the env var names `paths` names
+ *  (director ruling 2026-09-06, A-2): `.env`'s own line / compose's
+ *  resolved declaration / the CURRENTLY RUNNING (old) container's actual
+ *  effective env. `match` is plain three-way equality, including all
+ *  three agreeing on `null` (unset everywhere) — a genuine "nothing to
+ *  flag between these three sources" outcome, distinct from the separate
+ *  question of whether the var should be set at all (compose already
+ *  declares the full canonical set unconditionally in production; a var
+ *  eval reports but compose does not declare shows up as a real
+ *  disagreement, not an all-null pass-through). */
+function checkEnvConsistency(paths, envPath, composeEnv, containerEnv) {
+  const entries = {};
+  for (const { env: envName } of paths) {
+    const envFile = readEnvFileValue(envPath, envName);
+    const compose = Object.hasOwn(composeEnv, envName) ? composeEnv[envName] : null;
+    const container = Object.hasOwn(containerEnv, envName) ? containerEnv[envName] : null;
+    entries[envName] = {
+      env_file: envFile,
+      compose,
+      container,
+      match: envFile === compose && compose === container,
+    };
+  }
+  return entries;
+}
+
 // newTransactionId()'s own format: YYYYMMDDTHHMMSSZ (its ISO timestamp
 // with `-`/`:` stripped and sub-second precision dropped).
 const TRANSACTION_ID_TIMESTAMP_RE = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/;
@@ -855,6 +1019,56 @@ export function runUpdate(flags, config) {
       );
     }
 
+    // issue #220 absorption (director ruling 2026-09-06, turn 13): right
+    // after the target image exists (BUILD_PREPARED), before the
+    // maintenance gate — still no-downtime. Gated on journal.phase being
+    // EXACTLY BUILD_PREPARED (not merely "not yet past it") so a
+    // transaction resumed after already reaching ENV_CONSISTENCY_CHECKED
+    // does not re-run this and does not attempt an illegal
+    // BUILD_PREPARED -> ENV_CONSISTENCY_CHECKED jump from a journal
+    // already one phase further along.
+    if (journal.phase === PHASE.BUILD_PREPARED) {
+      const persistencePaths = queryPersistencePaths(bin, buildResult.imageId);
+      let envConsistency;
+      if (persistencePaths.skipped) {
+        envConsistency = { skipped: true, reason: persistencePaths.reason };
+      } else {
+        const entries = checkEnvConsistency(
+          persistencePaths.paths,
+          join(serverDir, ".env"),
+          composeDeclaredEnv(bin, serverDir),
+          containerEffectiveEnv(bin, container),
+        );
+        envConsistency = { skipped: false, entries };
+        if (!Object.values(entries).every((e) => e.match)) {
+          // director ruling 2026-09-06: abort cleanup before the stop
+          // window — `compose build` (inside runBuild, above) already
+          // repointed `latest` at the new image; leaving it there would
+          // let the next `compose up` (an operator retry, or another
+          // tool) switch an unreviewed deployment into production.
+          // Restored to the SAME image the already-verified rollback
+          // tag names, verified again here by read-back.
+          runDocker(bin, ["tag", oldImageId, "kaoiro-server:latest"]);
+          const revertedId = dockerInspect(bin, "kaoiro-server:latest", "{{.Id}}");
+          if (revertedId !== oldImageId) {
+            fail(
+              `env_consistency check failed AND could not restore kaoiro-server:latest to the old image ${oldImageId} (now ${revertedId}) — investigate before retrying`,
+            );
+          }
+          fail(
+            `env_consistency check found a mismatch between .env / compose / the running container's effective env for one or more persistence-path env vars (restored kaoiro-server:latest to the old image): ${JSON.stringify(entries)}`,
+          );
+        }
+      }
+      journal = advancePhase(
+        dir,
+        journal,
+        PHASE.ENV_CONSISTENCY_CHECKED,
+        envConsistency,
+        validateJournalAgainstStateMachine,
+      );
+    }
+
     if (flags.maintenanceApproved !== true) {
       fail(
         `update requires --maintenance-approved before the stop window opens (no-downtime steps are complete); resume with --transaction ${transactionId} --target ${target} --maintenance-approved once the operator has approved the maintenance window`,
@@ -1013,14 +1227,17 @@ export function runUpdate(flags, config) {
     // Written exactly once, here — the first point every fact it needs
     // (S1's contract) is fully determined. Earlier phases hold the same
     // facts in the journal's history in the meantime (S1 item i).
+    //
+    // env_consistency is read BACK from the journal's own
+    // ENV_CONSISTENCY_CHECKED entry, not a local variable — a resumed
+    // transaction that already passed that phase in an EARLIER process
+    // invocation never re-runs the check in this one, so the only
+    // durable record of what it found is the journal history itself.
     writeManifest(dir, {
       schema_version: 1,
       transaction_id: transactionId,
       compose_artifact: composeArtifact,
-      // Key set + values are #220 absorption's job (a later commit) —
-      // see the #306 check-in on why no runtime-queryable source exists
-      // yet for the comparison this is meant to record.
-      env_consistency: {},
+      env_consistency: journal.history.find((e) => e.phase === PHASE.ENV_CONSISTENCY_CHECKED).observation,
       image_id: buildResult.imageId,
       source_sha: oldSha,
       target_sha: target,

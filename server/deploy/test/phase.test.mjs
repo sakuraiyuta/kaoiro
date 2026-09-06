@@ -12,6 +12,16 @@ function entry(phase, observation) {
   return { phase, at: "2026-09-06T10:15:00.000Z", observation };
 }
 
+// Looks up a fixture's own entry by phase rather than a hardcoded array
+// index — a magic index silently drifts every time a phase is inserted
+// (exactly what happened to this file's own indices when STARTING landed
+// mid-session; ENV_CONSISTENCY_CHECKED below would have repeated it).
+function indexOf(journal, phase) {
+  const idx = journal.history.findIndex((e) => e.phase === phase);
+  if (idx === -1) throw new Error(`fixture has no ${phase} entry`);
+  return idx;
+}
+
 const PREFLIGHT_OBS = { container: "kaoiro-c1" };
 const OLD_SHA = "c".repeat(40);
 const OLD_IMAGE_OBS = {
@@ -32,6 +42,11 @@ const ARCHIVED_OBS = {
   archive: { path: "/backup/archive.tar.gz", sha256: "f".repeat(64) },
   required_entries: [{ path: "users.dets", owner: "1000:1000", mode: "0600" }],
 };
+// issue #220 absorption: a "checked, nothing to flag" observation — the
+// discriminated-union shape kaoiro-deploy-manifest.mjs's
+// isValidEnvConsistency defines, imported into this schema rather than
+// redefined.
+const ENV_CONSISTENCY_OBS = { skipped: false, entries: {} };
 
 function fullJournal(phase = PHASE.MAINTENANCE_GATE_PASSED) {
   return {
@@ -42,6 +57,7 @@ function fullJournal(phase = PHASE.MAINTENANCE_GATE_PASSED) {
       entry(PHASE.PREFLIGHT, PREFLIGHT_OBS),
       entry(PHASE.OLD_IMAGE_SAVED, OLD_IMAGE_OBS),
       entry(PHASE.BUILD_PREPARED, BUILD_OBS),
+      entry(PHASE.ENV_CONSISTENCY_CHECKED, ENV_CONSISTENCY_OBS),
       entry(PHASE.MAINTENANCE_GATE_PASSED, {}),
     ],
   };
@@ -143,20 +159,61 @@ test("validateJournalAgainstStateMachine rejects journal.phase disagreeing with 
 
 test("validateJournalAgainstStateMachine rejects a PREFLIGHT observation missing container", () => {
   const journal = fullJournal();
-  journal.history[0] = entry(PHASE.PREFLIGHT, {});
+  journal.history[indexOf(journal, PHASE.PREFLIGHT)] = entry(PHASE.PREFLIGHT, {});
   assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
 });
 
 test("validateJournalAgainstStateMachine rejects an OLD_IMAGE_SAVED observation missing compose_artifact", () => {
   const journal = fullJournal();
   const { compose_artifact: _drop, ...rest } = OLD_IMAGE_OBS;
-  journal.history[1] = entry(PHASE.OLD_IMAGE_SAVED, rest);
+  journal.history[indexOf(journal, PHASE.OLD_IMAGE_SAVED)] = entry(PHASE.OLD_IMAGE_SAVED, rest);
   assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
 });
 
 test("validateJournalAgainstStateMachine rejects a BUILD_PREPARED observation with a malformed image_id", () => {
   const journal = fullJournal();
-  journal.history[2] = entry(PHASE.BUILD_PREPARED, { ...BUILD_OBS, image_id: "not-an-image" });
+  journal.history[indexOf(journal, PHASE.BUILD_PREPARED)] = entry(PHASE.BUILD_PREPARED, {
+    ...BUILD_OBS,
+    image_id: "not-an-image",
+  });
+  assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
+});
+
+// issue #220 absorption.
+test("validateJournalAgainstStateMachine accepts an ENV_CONSISTENCY_CHECKED observation reporting skipped", () => {
+  const journal = fullJournal();
+  journal.history[indexOf(journal, PHASE.ENV_CONSISTENCY_CHECKED)] = entry(PHASE.ENV_CONSISTENCY_CHECKED, {
+    skipped: true,
+    reason: "eval exited 1: module not landed on this image",
+  });
+  assert.doesNotThrow(() => validateJournalAgainstStateMachine(journal));
+});
+
+test("validateJournalAgainstStateMachine accepts an ENV_CONSISTENCY_CHECKED observation with per-key entries", () => {
+  const journal = fullJournal();
+  journal.history[indexOf(journal, PHASE.ENV_CONSISTENCY_CHECKED)] = entry(PHASE.ENV_CONSISTENCY_CHECKED, {
+    skipped: false,
+    entries: {
+      KAOIRO_USERS_PATH: {
+        env_file: null,
+        compose: "/var/lib/kaoiro/users.dets",
+        container: "/var/lib/kaoiro/users.dets",
+        match: true,
+      },
+    },
+  });
+  assert.doesNotThrow(() => validateJournalAgainstStateMachine(journal));
+});
+
+test("validateJournalAgainstStateMachine rejects an ENV_CONSISTENCY_CHECKED observation that is neither skipped nor checked", () => {
+  const journal = fullJournal();
+  journal.history[indexOf(journal, PHASE.ENV_CONSISTENCY_CHECKED)] = entry(PHASE.ENV_CONSISTENCY_CHECKED, {});
+  assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
+});
+
+test("validateJournalAgainstStateMachine rejects skipping ENV_CONSISTENCY_CHECKED straight from BUILD_PREPARED to MAINTENANCE_GATE_PASSED", () => {
+  const journal = fullJournal();
+  journal.history.splice(indexOf(journal, PHASE.ENV_CONSISTENCY_CHECKED), 1);
   assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
 });
 
@@ -166,31 +223,37 @@ test("validateJournalAgainstStateMachine accepts a full journal through ARCHIVED
 
 test("validateJournalAgainstStateMachine rejects a STOPPED observation with a non-integer exit code", () => {
   const journal = fullJournalThroughArchived();
-  journal.history[5] = entry(PHASE.STOPPED, { ...STOPPED_OBS, stop_exit_code: "0" });
+  journal.history[indexOf(journal, PHASE.STOPPED)] = entry(PHASE.STOPPED, { ...STOPPED_OBS, stop_exit_code: "0" });
   assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
 });
 
 test("validateJournalAgainstStateMachine accepts a STOPPED observation with null exit code/oom (unmeasured)", () => {
   const journal = fullJournalThroughArchived();
-  journal.history[5] = entry(PHASE.STOPPED, { stop_exit_code: null, stop_oom_killed: null });
+  journal.history[indexOf(journal, PHASE.STOPPED)] = entry(PHASE.STOPPED, {
+    stop_exit_code: null,
+    stop_oom_killed: null,
+  });
   assert.doesNotThrow(() => validateJournalAgainstStateMachine(journal));
 });
 
 test("validateJournalAgainstStateMachine rejects a MOUNT_RESOLVED observation with an empty volume_id", () => {
   const journal = fullJournalThroughArchived();
-  journal.history[6] = entry(PHASE.MOUNT_RESOLVED, { volume_id: "" });
+  journal.history[indexOf(journal, PHASE.MOUNT_RESOLVED)] = entry(PHASE.MOUNT_RESOLVED, { volume_id: "" });
   assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
 });
 
 test("validateJournalAgainstStateMachine rejects an ARCHIVED observation with a malformed archive sha256", () => {
   const journal = fullJournalThroughArchived();
-  journal.history[7] = entry(PHASE.ARCHIVED, { ...ARCHIVED_OBS, archive: { path: "/x", sha256: "not-a-sha" } });
+  journal.history[indexOf(journal, PHASE.ARCHIVED)] = entry(PHASE.ARCHIVED, {
+    ...ARCHIVED_OBS,
+    archive: { path: "/x", sha256: "not-a-sha" },
+  });
   assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
 });
 
 test("validateJournalAgainstStateMachine rejects an ARCHIVED observation with malformed required_entries", () => {
   const journal = fullJournalThroughArchived();
-  journal.history[7] = entry(PHASE.ARCHIVED, {
+  journal.history[indexOf(journal, PHASE.ARCHIVED)] = entry(PHASE.ARCHIVED, {
     ...ARCHIVED_OBS,
     required_entries: [{ path: "users.dets", owner: "banana", mode: "0600" }],
   });
@@ -202,7 +265,7 @@ test("validateJournalAgainstStateMachine rejects an ARCHIVED observation with ma
 // rejected by the schema that also gates ARCHIVED.
 test("validateJournalAgainstStateMachine accepts an ARCHIVED observation with a setgid (4-digit) mode", () => {
   const journal = fullJournalThroughArchived();
-  journal.history[7] = entry(PHASE.ARCHIVED, {
+  journal.history[indexOf(journal, PHASE.ARCHIVED)] = entry(PHASE.ARCHIVED, {
     ...ARCHIVED_OBS,
     required_entries: [{ path: "some-dir", owner: "1000:1000", mode: "2755" }],
   });
@@ -211,13 +274,13 @@ test("validateJournalAgainstStateMachine accepts an ARCHIVED observation with a 
 
 test("validateJournalAgainstStateMachine rejects skipping STOPPING straight to STOPPED", () => {
   const journal = fullJournalThroughArchived();
-  journal.history.splice(4, 1); // drop the STOPPING entry
+  journal.history.splice(indexOf(journal, PHASE.STOPPING), 1);
   assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
 });
 
 test("validateJournalAgainstStateMachine rejects skipping STOPPED straight to ARCHIVED", () => {
   const journal = fullJournalThroughArchived();
-  journal.history.splice(5, 1); // drop the STOPPED entry
+  journal.history.splice(indexOf(journal, PHASE.STOPPED), 1);
   assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
 });
 
@@ -226,13 +289,13 @@ test("validateJournalAgainstStateMachine rejects skipping STOPPED straight to AR
 // actually names old_sha.
 test("validateJournalAgainstStateMachine rejects an OLD_IMAGE_SAVED observation with a malformed old_image_id", () => {
   const journal = fullJournal();
-  journal.history[1] = entry(PHASE.OLD_IMAGE_SAVED, { ...OLD_IMAGE_OBS, old_image_id: "sha256:oldimageid" });
+  journal.history[indexOf(journal, PHASE.OLD_IMAGE_SAVED)] = entry(PHASE.OLD_IMAGE_SAVED, { ...OLD_IMAGE_OBS, old_image_id: "sha256:oldimageid" });
   assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
 });
 
 test("validateJournalAgainstStateMachine rejects an OLD_IMAGE_SAVED observation whose rollback_tag names a different sha", () => {
   const journal = fullJournal();
-  journal.history[1] = entry(PHASE.OLD_IMAGE_SAVED, {
+  journal.history[indexOf(journal, PHASE.OLD_IMAGE_SAVED)] = entry(PHASE.OLD_IMAGE_SAVED, {
     ...OLD_IMAGE_OBS,
     rollback_tag: `kaoiro-server:rollback-${"9".repeat(40)}`,
   });
@@ -243,8 +306,6 @@ test("validateJournalAgainstStateMachine rejects an OLD_IMAGE_SAVED observation 
 const HEALTHY_OBS = { health_revision: "d".repeat(40), health_dirty: false };
 const UP_OBS = { container_id: "sha256:up-container-id", started_at: "2026-09-06T10:20:00.000Z" };
 
-// history indices in fullJournalThroughDone(): 0-7 = fullJournalThroughArchived
-// (see its own comment), 8 = STARTING, 9 = UP, 10 = HEALTHY, 11 = DONE.
 function fullJournalThroughDone(phase = PHASE.DONE) {
   const base = fullJournalThroughArchived(PHASE.ARCHIVED);
   return {
@@ -266,19 +327,22 @@ test("validateJournalAgainstStateMachine accepts a full journal through DONE", (
 
 test("validateJournalAgainstStateMachine rejects a HEALTHY observation whose health_revision does not match SHA_RE", () => {
   const journal = fullJournalThroughDone();
-  journal.history[10] = entry(PHASE.HEALTHY, { ...HEALTHY_OBS, health_revision: "not-a-sha" });
+  journal.history[indexOf(journal, PHASE.HEALTHY)] = entry(PHASE.HEALTHY, {
+    ...HEALTHY_OBS,
+    health_revision: "not-a-sha",
+  });
   assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
 });
 
 test("validateJournalAgainstStateMachine rejects skipping STARTING straight to UP", () => {
   const journal = fullJournalThroughDone();
-  journal.history.splice(8, 1); // drop the STARTING entry
+  journal.history.splice(indexOf(journal, PHASE.STARTING), 1);
   assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
 });
 
 test("validateJournalAgainstStateMachine rejects skipping UP straight to HEALTHY", () => {
   const journal = fullJournalThroughDone();
-  journal.history.splice(9, 1); // drop the UP entry
+  journal.history.splice(indexOf(journal, PHASE.UP), 1);
   assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
 });
 
@@ -288,7 +352,7 @@ test("validateJournalAgainstStateMachine rejects skipping UP straight to HEALTHY
 test("validateJournalAgainstStateMachine rejects a UP observation missing container_id", () => {
   const journal = fullJournalThroughDone();
   const { container_id: _drop, ...rest } = UP_OBS;
-  journal.history[9] = entry(PHASE.UP, rest);
+  journal.history[indexOf(journal, PHASE.UP)] = entry(PHASE.UP, rest);
   assert.throws(() => validateJournalAgainstStateMachine(journal), PhaseError);
 });
 

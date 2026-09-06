@@ -79,11 +79,41 @@ function isEnvConsistencyEntry(value) {
   );
 }
 
-function isValidEnvConsistency(value) {
+/** env_consistency is a discriminated union (issue #220 absorption,
+ *  director ruling 2026-09-06) — exported so
+ *  kaoiro-deploy-phase.mjs's ENV_CONSISTENCY_CHECKED observation schema
+ *  validates the SAME shape this file enforces on the manifest, one
+ *  definition rather than two independently drifting ones (the same
+ *  pattern as ROLLBACK_TAG_RE above).
+ *
+ *  `{skipped: true, reason}`: the target image's persistence-path `eval`
+ *  itself exited non-zero — the querying module has not landed on that
+ *  image (a pre-#310 image, or an old image a rollback targets). Recorded
+ *  rather than silently treated as "no keys to check", so an operator
+ *  reading the manifest later can tell "checked, found nothing to flag"
+ *  apart from "never actually checked".
+ *
+ *  `{skipped: false, entries: {<env var name>: {env_file, compose,
+ *  container, match}}}`: the eval succeeded — one three-way comparison
+ *  per canonical persistence-path key it reported. A bare per-key map
+ *  (the shape before this discriminator existed) is no longer valid on
+ *  its own; every writer already produces the new shape, and silently
+ *  accepting the old one would make a writer bug indistinguishable from
+ *  an intentional skip. */
+export function isValidEnvConsistency(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return false;
   }
-  return Object.values(value).every(isEnvConsistencyEntry);
+  if (value.skipped === true) {
+    return typeof value.reason === "string" && value.reason !== "";
+  }
+  if (value.skipped === false) {
+    if (typeof value.entries !== "object" || value.entries === null || Array.isArray(value.entries)) {
+      return false;
+    }
+    return Object.values(value.entries).every(isEnvConsistencyEntry);
+  }
+  return false;
 }
 
 /** Validates the shape the operator decisions on #303 fixed. STRICT, like
