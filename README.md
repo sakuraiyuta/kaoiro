@@ -112,6 +112,14 @@ settings or starting each component separately, see "Local development" in
 | dashboard (Svelte, not a pnpm workspace member) | `cd dashboard && pnpm install && pnpm test` / `pnpm check` / `pnpm build` |
 | server (Elixir/Phoenix) | `cd server && mix test` / `mix format` / `mix phx.server` |
 
+## Production deployment
+
+Start at [docs/operations/production.md](docs/operations/production.md) —
+a copy-paste manual (install, verify, update, rollback, troubleshooting)
+covering the server, one or more runner hosts, and the deploy CLI.
+[docs/specs/deployment.md](docs/specs/deployment.md) is the normative
+reference the manual is built against.
+
 ## Architecture
 
 Three layers plus a host-resident supervision layer (the runner):
@@ -168,6 +176,7 @@ See [docs/](docs/) for structured documentation.
 | [docs/specs/overview.md](docs/specs/overview.md) | What kaoiro is (purpose, two goals, and users) |
 | [docs/specs/architecture.md](docs/specs/architecture.md) | Three-layer structure and data flow |
 | [docs/specs/protocol.md](docs/specs/protocol.md) | Common events, envelopes, and state machine |
+| [docs/operations/production.md](docs/operations/production.md) | Production deployment manual (install / update / rollback / troubleshooting) |
 | [docs/plans/](docs/plans/) | Plans and status by phase |
 | [docs/open-questions/](docs/open-questions/) | Open questions |
 | [docs/adr/](docs/adr/) | Architecture Decision Records (ADRs) |
