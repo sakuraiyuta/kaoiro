@@ -31,6 +31,7 @@ export const PHASE = Object.freeze({
   STOPPED: "stopped",
   MOUNT_RESOLVED: "mount_resolved",
   ARCHIVED: "archived",
+  STARTING: "starting",
   UP: "up",
   HEALTHY: "healthy",
   // Literally "done" — kaoiro-deploy-transaction.mjs's own TERMINAL_PHASES
@@ -51,7 +52,8 @@ const TRANSITIONS = {
   [PHASE.STOPPING]: [PHASE.STOPPED],
   [PHASE.STOPPED]: [PHASE.MOUNT_RESOLVED],
   [PHASE.MOUNT_RESOLVED]: [PHASE.ARCHIVED],
-  [PHASE.ARCHIVED]: [PHASE.UP],
+  [PHASE.ARCHIVED]: [PHASE.STARTING],
+  [PHASE.STARTING]: [PHASE.UP],
   [PHASE.UP]: [PHASE.HEALTHY],
   [PHASE.HEALTHY]: [PHASE.DONE],
   [PHASE.DONE]: [],
@@ -100,7 +102,24 @@ const OBSERVATION_SCHEMAS = {
     (obs.stop_oom_killed === null || typeof obs.stop_oom_killed === "boolean"),
   [PHASE.MOUNT_RESOLVED]: (obs) => typeof obs.volume_id === "string" && obs.volume_id !== "",
   [PHASE.ARCHIVED]: (obs) => isPathSha(obs.archive) && isValidRequiredEntries(obs.required_entries),
-  [PHASE.UP]: () => true,
+  // クロエ design review F1 (state machine vs runbook 4.4): a checkpoint
+  // immediately before `compose up -d` runs, mirroring STOPPING's own
+  // reasoning — a crash between the up command and the UP checkpoint
+  // otherwise leaves the journal at ARCHIVED, indistinguishable from "up
+  // was never attempted" even though 4.4 (3)'s recovery branches
+  // ("provably never started" vs. "started or unknown, assume DETS was
+  // opened") need exactly that distinction.
+  [PHASE.STARTING]: () => true,
+  // クロエ design review F2: the new container's own identity, not the
+  // PREFLIGHT-recorded compose SERVICE name — 4.4 (3) recovery starts by
+  // stopping the new container, and after `compose up -d` recreates one
+  // (a new image means compose does not just restart the old object),
+  // its id is not otherwise anywhere in the journal.
+  [PHASE.UP]: (obs) =>
+    typeof obs.container_id === "string" &&
+    obs.container_id !== "" &&
+    typeof obs.started_at === "string" &&
+    obs.started_at !== "",
   // (c3) health poll: `HEALTHY` records what deployment.md 4.5's
   // provenance check actually observed (GET /api/health's build_revision/
   // build_dirty), not merely "it matched" — the value itself is worth
