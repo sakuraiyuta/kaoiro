@@ -1018,18 +1018,33 @@ export const UNRESUMABLE_PHASES = reachablePhases(PHASE.STOPPING, TRANSITIONS);
 // before ANY mutation (even OLD_IMAGE_SAVED's own retag), and in
 // `--dry-run` too (both measurements below are pure reads).
 
-/** The docker volume name (if any) mounted at /var/lib/kaoiro for
- *  `container` — the SAME go-template the post-stop MOUNT_RESOLVED phase
- *  re-resolves with, factored out once two call sites need it (this
- *  commit adds the first: the capacity preflight, run while `container`
- *  is still the one live, pre-stop container). Empty string when no such
- *  mount exists; callers decide what that means for their own phase. */
+/** The docker volume name mounted at /var/lib/kaoiro for `container` —
+ *  the SAME go-template the post-stop MOUNT_RESOLVED phase re-resolves
+ *  with, factored out once two call sites need it: the capacity
+ *  preflight (run while `container` is still the one live, pre-stop
+ *  container) and MOUNT_RESOLVED's own post-stop re-verification ("not a
+ *  fresh lookup that could pick up a different one" — its own call site
+ *  keeps re-calling this on purpose).
+ *
+ *  クロエ round-1 review S1 (#303 capacity preflight): empty output is
+ *  guarded HERE, not left for each caller to notice — before this fix,
+ *  the capacity preflight's own caller had no such guard and fell
+ *  through to volumeUsedBytes' generic "absent from its own listing"
+ *  message, which does not name the actual cause (a container with no
+ *  such mount at all) the way this one does. Both callers now get the
+ *  SAME diagnostic. */
 function resolveKaoiroLibMount(bin, container) {
-  return dockerInspect(
+  const volumeId = dockerInspect(
     bin,
     container,
     '{{range .Mounts}}{{if eq .Destination "/var/lib/kaoiro"}}{{.Name}}{{end}}{{end}}',
   );
+  if (volumeId === "") {
+    fail(
+      `could not resolve the /var/lib/kaoiro mount for container ${container} — empty output means the mount layout changed; archiving the wrong (or no) volume would be worse than stopping here`,
+    );
+  }
+  return volumeId;
 }
 
 /** Bytes available to a non-root user on the nearest EXISTING ancestor of
@@ -1126,17 +1141,13 @@ function volumeUsedBytes(bin, volumeName) {
  *  configurable) — this measures backupRoot's, since that is what the
  *  archive write actually depends on; rollback's own wipe/restore is a
  *  separate concern this does not gate. Every failure mode here is
- *  fail-closed: a measurement that cannot be taken or parsed, or an
- *  insufficient result, are all treated the same as a genuine shortage.
- *  An unresolvable mount (`resolveKaoiroLibMount` returning `""`) needs
- *  no dedicated guard here — an empty name never matches a real volume's
- *  in `docker system df -v`'s own listing, so volumeUsedBytes' own
- *  "absent from its own listing" failure already covers it (measured: a
- *  separate early check for `volumeName === ""` left every test in this
- *  file's own suite green either way, so it was never load-bearing).
- *  Returns the three measured/derived numbers so the caller can
- *  checkpoint them durably (S1's own "checkpoint every fact" contract)
- *  instead of only holding them in memory. */
+ *  fail-closed: an unresolvable mount (resolveKaoiroLibMount's own
+ *  guard — round-1 review S1, so this and the post-stop MOUNT_RESOLVED
+ *  re-check share one diagnostic), a measurement that cannot be taken or
+ *  parsed, or an insufficient result, are all treated the same as a
+ *  genuine shortage. Returns the three measured/derived numbers so the
+ *  caller can checkpoint them durably (S1's own "checkpoint every fact"
+ *  contract) instead of only holding them in memory. */
 function checkCapacity(bin, container, backupRoot, config) {
   const volumeName = resolveKaoiroLibMount(bin, container);
   const freeBytes = readAvailableBytes(backupRoot);
@@ -1480,19 +1491,11 @@ export function runUpdate(flags, config) {
 
     // Re-resolve the mount from the NOW-STOPPED container — the same
     // container prepare already verified was running, not a fresh
-    // lookup that could pick up a different one.
+    // lookup that could pick up a different one. The empty-output guard
+    // (and its "mount layout changed" diagnostic) now lives inside
+    // resolveKaoiroLibMount itself (クロエ round-1 review S1), shared
+    // with the capacity preflight's own call.
     const volumeId = resolveKaoiroLibMount(bin, container);
-    // Measured redundant with the MOUNT_RESOLVED observation schema
-    // below (advancePhase() now runs validateJournalAgainstStateMachine
-    // too) — removing this check still stops the run, via a PhaseError
-    // instead of this DeployError. Kept anyway for the diagnostic: "the
-    // mount layout changed" names the actual docker-side cause, where
-    // the schema error only says an observation looked wrong.
-    if (volumeId === "") {
-      fail(
-        `could not resolve the /var/lib/kaoiro mount for container ${container} — empty output means the mount layout changed; archiving the wrong (or no) volume would be worse than stopping here`,
-      );
-    }
     journal = advancePhase(
       dir,
       journal,

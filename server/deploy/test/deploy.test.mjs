@@ -821,6 +821,25 @@ test("runUpdate refuses when the container is not running", () => {
 // クロエ round 1 review MF-1: `update` silently ignored --dry-run and
 // performed the real stop/build/archive/transaction-dir-creation
 // sequence — reproduced live (repro.mjs) before this fix existed.
+// クロエ round-1 review S3: a DENYLIST of mutating verbs missed `start`
+// (runStart's branch A / rollback's own non-destructive path) and `rmi`
+// (retention) — neither happens to run during THIS test, but the list
+// itself does not structurally rule them out, the same enumeration trap
+// this file's own UNRESUMABLE_PHASES/ROLLBACK_ELIGIBLE_PHASES already
+// learned to avoid. Inverted to an ALLOW-list of the read-only verbs this
+// CLI actually calls anywhere (compose ps/config/port, inspect, system
+// df, version, volume inspect) — any OTHER verb appearing in the log,
+// today or after a future change, fails this test by construction.
+const READ_ONLY_DOCKER_VERBS = [
+  "compose ps",
+  "compose config",
+  "compose port",
+  "inspect",
+  "system df",
+  "version",
+  "volume inspect",
+];
+
 test("runUpdate --dry-run performs no mutating docker call and creates no transaction dir", () => {
   const backupRoot = join(root, "kaoiro-deploy");
   const log = withCallLog("running", () =>
@@ -831,15 +850,10 @@ test("runUpdate --dry-run performs no mutating docker call and creates no transa
     lines.some((line) => line.startsWith("compose ps")),
     "a read-only compose ps call should still happen",
   );
-  // "run" (director ruling 2026-09-07, turn 9): the capacity preflight's
-  // OWN pre-#303-fix version started a throwaway alpine container even
-  // during --dry-run (`docker run ... du -sk`), breaking MF-1/N-5 — now
-  // that volume size comes from 'docker system df -v' (a pure query, no
-  // container), no scenario should ever log a `run` call during dry-run.
-  for (const mutating of ["compose build", "compose stop", "compose up", "tag", "pull", "run"]) {
+  for (const line of lines) {
     assert.ok(
-      !lines.some((line) => line.startsWith(mutating)),
-      `dry-run must not call: ${mutating}`,
+      READ_ONLY_DOCKER_VERBS.some((verb) => line.startsWith(verb)),
+      `dry-run made a non-read-only (or unrecognized) docker call: ${line}`,
     );
   }
   assert.ok(!log.includes("tar czf"), "dry-run must not archive");
@@ -1913,12 +1927,12 @@ test("runUpdate refuses when the archive fails full-traversal verification", () 
 });
 
 // #303 capacity preflight: this scenario's container never carries the
-// mount at all, so resolveKaoiroLibMount returns "" here, and volumeUsedBytes
-// finds no matching entry (an empty name never matches a real volume's) in
-// 'docker system df -v' — caught BEFORE the transaction directory is even
+// mount at all, so resolveKaoiroLibMount's OWN guard (クロエ round-1
+// review S1) catches it BEFORE the transaction directory is even
 // created, earlier than the post-stop MOUNT_RESOLVED re-check this test
-// used to reach (that guard's own dedicated pin, now that this scenario no
-// longer reaches it, is the "mount-vanishes-after-stop" test right below).
+// used to reach (that guard's own dedicated pin, now that this scenario
+// no longer reaches it, is the "mount-vanishes-after-stop" test right
+// below). Both call sites now share the SAME diagnostic message.
 test("runUpdate refuses at the capacity preflight when the /var/lib/kaoiro mount cannot be resolved", () => {
   let caught;
   try {
@@ -1929,7 +1943,7 @@ test("runUpdate refuses at the capacity preflight when the /var/lib/kaoiro mount
     caught = err;
   }
   assert.ok(caught instanceof DeployError);
-  assert.ok(caught.message.includes("has no entry for volume"));
+  assert.ok(caught.message.includes("mount layout changed"));
   // backup_root itself already exists (acquireLock creates it), but no
   // PER-TRANSACTION directory does — checkCapacity fails before
   // newTransactionId()/mkdirSync(dir), so there is nothing left behind.
@@ -2029,6 +2043,52 @@ test("runUpdate's capacity preflight scales a 'kB' volume size by 1000, not 1024
     delete process.env.KAOIRO_TEST_VOLUME_SIZE;
   }
   assert.equal(planned.capacity.volume_bytes, 213600);
+});
+
+// クロエ round-1 review S2: kB/MB were pinned but GB/TB were not — each
+// multiplier is its OWN entry in SI_VOLUME_SIZE_MULTIPLIER, so a typo'd
+// exponent for the two largest units could survive undetected. A GB/TB
+// volume size at ANY realistic capacity_multiplier can legitimately
+// exceed a real test host's free disk space (unlike kB/MB above, which
+// safely clear it) — read the computed byte count back from a
+// DETERMINISTICALLY-refused run's own message instead of asserting on a
+// "passes" path that a host with less free disk would flake on.
+test("runUpdate's capacity preflight scales a 'GB' volume size by 1000 ** 3", () => {
+  process.env.KAOIRO_TEST_VOLUME_SIZE = "1.5GB";
+  let caught;
+  try {
+    withScenario("running", () =>
+      runUpdate(
+        { repo: workDir, target: headSha, dryRun: true },
+        { ...configWithOverride(), capacity_multiplier: 1000000000000 },
+      ),
+    );
+  } catch (err) {
+    caught = err;
+  } finally {
+    delete process.env.KAOIRO_TEST_VOLUME_SIZE;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.ok(caught.message.includes("current volume size 1500000000 bytes"));
+});
+
+test("runUpdate's capacity preflight scales a 'TB' volume size by 1000 ** 4", () => {
+  process.env.KAOIRO_TEST_VOLUME_SIZE = "2TB";
+  let caught;
+  try {
+    withScenario("running", () =>
+      runUpdate(
+        { repo: workDir, target: headSha, dryRun: true },
+        { ...configWithOverride(), capacity_multiplier: 1000000000000 },
+      ),
+    );
+  } catch (err) {
+    caught = err;
+  } finally {
+    delete process.env.KAOIRO_TEST_VOLUME_SIZE;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.ok(caught.message.includes("current volume size 2000000000000 bytes"));
 });
 
 test("runUpdate's capacity preflight refuses when volume usage cannot be measured ('docker system df -v' fails)", () => {
