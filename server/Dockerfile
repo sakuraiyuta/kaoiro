@@ -119,8 +119,15 @@ FROM ${RUNNER_IMAGE} AS final
 # live reloads. Without it the watcher fails to boot
 # (fs_inotify_bootstrap_error) and pack changes only apply on restart —
 # found on a real Linux host during issue #148's deployment check.
+#
+# libsctp1: OTP's esock NIF dlopen()s libsctp.so.1 during VM start and, when
+# it is missing, prints "[UNIX-ESSIO] Failed open sctp dynamic library" ON
+# STDOUT. That is not cosmetic here — the deploy CLI parses the whole stdout
+# of `bin/kaoiro_server eval` as JSON (docs/specs/deployment.md 4.3), and a
+# non-JSON prefix is treated as actively wrong, failing every update
+# (measured 2026-09-07, issue #310).
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends libstdc++6 openssl libncurses6 locales ca-certificates inotify-tools \
+  && apt-get install -y --no-install-recommends libstdc++6 openssl libncurses6 locales ca-certificates inotify-tools libsctp1 \
   && rm -rf /var/lib/apt/lists/*
 
 # Set the locale

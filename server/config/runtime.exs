@@ -139,15 +139,19 @@ if path = System.get_env("KAOIRO_OAUTH_ALLOWLIST_PATH") do
   config :kaoiro_server, :oauth_allowlist_path, path
 end
 
-# DETS file for the restart-surviving session_id pointers (ADR-0014 F1,
-# issue #49). Point this at a persistent volume in production; the unset
-# default (a tmp path, resolved in KaoiroServer.SessionPointers) survives
-# a process restart but not a fresh container. The file is created
-# owner-only (chmod 600) since records carry cwd (sensitive, #46). A lost
-# pointer only drops the default resume target — the runner re-enumerates
-# (ADR-0014 F2).
-if path = System.get_env("KAOIRO_SESSION_POINTERS_PATH") do
-  config :kaoiro_server, :session_pointers_path, path
+# Restart-surviving DETS stores (docs/specs/deployment.md 1.2). Walked from
+# KaoiroServer.PersistencePaths rather than written out one `if` per store:
+# the same list drives `mix kaoiro.env`, the cross-store tests and the deploy
+# CLI's manifest, so a store can no longer reach one surface and silently
+# miss another (issue #310). Each store's own rationale lives beside its
+# entry there.
+#
+# Only a SET env overwrites, so config/test.exs (loaded earlier) is not
+# silently clobbered with nil (issue #120).
+for store <- KaoiroServer.PersistencePaths.stores() do
+  if path = System.get_env(store.env) do
+    config :kaoiro_server, store.config_key, path
+  end
 end
 
 # Review-quagmire thresholds (issue #273). The defaults in config.exs are
@@ -179,56 +183,6 @@ if System.get_env("KAOIRO_QUAGMIRE_STALL_MS") do
     quagmire: [stall_ms: quagmire_int.("KAOIRO_QUAGMIRE_STALL_MS")]
 end
 
-# DETS file for the restart-surviving agent identity ledger (ADR-0030).
-# Point this at a persistent volume in production; the unset default
-# (a tmp path, resolved in KaoiroServer.AgentDirectory) survives a
-# process restart but not a fresh container. The file is created
-# owner-only (chmod 600); a lost entry only drops the ability to restore
-# that agent until it is spawned fresh.
-if path = System.get_env("KAOIRO_AGENT_DIRECTORY_PATH") do
-  config :kaoiro_server, :agent_directory_path, path
-end
-
-# DETS file for the per-agent permission-mode ledger. Same rationale as
-# the two paths above: unset falls back to a tmp path
-# (KaoiroServer.PermissionModes) which is destroyed together with the
-# container on `docker compose down`. Point at a persistent volume so the
-# per-agent mode survives a dogfood restart.
-if path = System.get_env("KAOIRO_PERMISSION_MODES_PATH") do
-  config :kaoiro_server, :permission_modes_path, path
-end
-
-# DETS file for the Codex sandbox/network_access request store (issue
-# #305). Same rationale as PermissionModes above: unset falls back to a
-# tmp path destroyed with the container.
-if path = System.get_env("KAOIRO_PERMISSION_SETTINGS_PATH") do
-  config :kaoiro_server, :permission_settings_path, path
-end
-
-# #109 visibility data must survive a full container recreation: the
-# cutoff it records is compared against ingress stamps the wrapper hosts
-# replay back after a restart (ADR-0051 D3-4). fsync-gated before clear ack.
-if path = System.get_env("KAOIRO_CLEAR_WATERMARKS_PATH") do
-  config :kaoiro_server, :clear_watermarks_path, path
-end
-
-if path = System.get_env("KAOIRO_SESSION_STARTS_PATH") do
-  config :kaoiro_server, :session_starts_path, path
-end
-
-# DETS file for the operator-picked rally threshold (issue #307). Same
-# rationale as the paths above: unset falls back to a tmp path, and the
-# threshold an operator tuned mid-session would not survive a container
-# recreation. KAOIRO_QUAGMIRE_RALLY_TURNS remains the boot default for a
-# deployment that has never stored a pick.
-if path = System.get_env("KAOIRO_QUAGMIRE_SETTINGS_PATH") do
-  config :kaoiro_server, :quagmire_settings_path, path
-end
-
-if path = System.get_env("KAOIRO_SESSION_LIFECYCLE_EVENTS_PATH") do
-  config :kaoiro_server, :session_lifecycle_events_path, path
-end
-
 # ADR-0055 phase-33 Stage B — per-agent event cap for the session_lifecycle
 # timeline. Same idiom as the PORT parse above: String.to_integer/1 raises
 # (boot fails) on a non-numeric value rather than silently falling back,
@@ -237,62 +191,56 @@ if cap = System.get_env("SESSION_LIFECYCLE_MAX_EVENTS_PER_AGENT") do
   config :kaoiro_server, :session_lifecycle_max_events_per_agent, String.to_integer(cap)
 end
 
-# #247's ledger contains only recipient-local dispatch watermarks (no
-# messages), but it must survive a server restart or a real pending gap would
-# be silently forgotten. Point production at the same persistent volume as
-# the other DETS ledgers; unset keeps the module's local-development default.
-if path = System.get_env("KAOIRO_DELIVERY_STATES_PATH") do
-  config :kaoiro_server, :delivery_states_path, path
-end
-
-# DETS file for the restart-surviving user identity ledger (issue #197,
-# ADR-0050 D1). Same rationale as the agent identity ledger above: unset
-# falls back to a tmp path (KaoiroServer.Users) that survives a process
-# restart but not a fresh container. A lost entry re-issues a new user_id
-# and resets display_name to its initial value on that source's next
-# login — the acceptance criterion "変更が再起動を跨いで保持される"
-# depends on this being pointed at a persistent volume in production.
-if path = System.get_env("KAOIRO_USERS_PATH") do
-  config :kaoiro_server, :users_path, path
-end
-
-if path = System.get_env("KAOIRO_INGRESS_ORDER_PATH") do
-  config :kaoiro_server, :ingress_order_path, path
-end
-
-# Token denylist DETS store (ふじ #120 must-fix 1, 2026-07-25). This is
-# the authoritative store of revoked agent_ids for fail-closed auth: a lost
-# entry silently re-grants a revoked identity. Point at a persistent volume
-# in production; unset falls back to KaoiroServer.TokenDenylist.default_path/0
-# (`$TMPDIR/kaoiro-dets/token_denylist.dets`) which does NOT survive a
-# container recreation.
-if path = System.get_env("KAOIRO_TOKEN_DENYLIST_PATH") do
-  config :kaoiro_server, :token_denylist_path, path
-end
-
 if config_env() == :prod do
+  # `bin/kaoiro_server eval` runs this file through Config.Provider before it
+  # evaluates the expression, so the deploy CLI's persistence-path probe
+  # (docs/specs/deployment.md 4.3) — run with NO env, against an image id —
+  # would abort on the two raises below and be recorded as "issue #310 has
+  # not landed on this image" forever. `eval` serves no traffic and signs
+  # nothing, so it takes obviously-invalid placeholders instead. The release
+  # launcher assigns RELEASE_COMMAND from its own argv (`RELEASE_COMMAND=$1`,
+  # unconditionally), so `start` cannot be given this relaxation through the
+  # environment.
+  release_eval? = System.get_env("RELEASE_COMMAND") == "eval"
+
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # A default value is used in config/dev.exs and config/test.exs but you
   # want to use a different value for prod and you most likely don't want
   # to check this value into version control, so we use an environment
   # variable instead.
   secret_key_base =
-    System.get_env("SECRET_KEY_BASE") ||
-      raise """
-      environment variable SECRET_KEY_BASE is missing.
-      You can generate one by calling: mix phx.gen.secret
-      """
+    case System.get_env("SECRET_KEY_BASE") do
+      nil when release_eval? ->
+        String.duplicate("0", 64)
+
+      nil ->
+        raise """
+        environment variable SECRET_KEY_BASE is missing.
+        You can generate one by calling: mix phx.gen.secret
+        """
+
+      value ->
+        value
+    end
 
   # A silently-wrong default here breaks URL generation and check_origin
   # without an obvious symptom (issue #139) — fail fast like
   # SECRET_KEY_BASE above instead of falling back to "example.com".
   host =
-    System.get_env("PHX_HOST") ||
-      raise """
-      environment variable PHX_HOST is missing.
-      Set it to the public hostname this server is reachable at (used for
-      URL generation and WebSocket check_origin).
-      """
+    case System.get_env("PHX_HOST") do
+      nil when release_eval? ->
+        "release-eval.invalid"
+
+      nil ->
+        raise """
+        environment variable PHX_HOST is missing.
+        Set it to the public hostname this server is reachable at (used for
+        URL generation and WebSocket check_origin).
+        """
+
+      value ->
+        value
+    end
 
   config :kaoiro_server, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 

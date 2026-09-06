@@ -23,6 +23,8 @@ defmodule Mix.Tasks.Kaoiro.Env do
 
   use Mix.Task
 
+  alias KaoiroServer.PersistencePaths
+
   @default_path ".env"
 
   @impl Mix.Task
@@ -115,18 +117,9 @@ defmodule Mix.Tasks.Kaoiro.Env do
       "# Restart-surviving state paths. docker-compose.yaml already sets",
       "# these; only needed when running outside compose. See the deployment",
       "# runbook (issue #142) for the full list and their meaning.",
-      "#KAOIRO_SESSION_POINTERS_PATH=/var/lib/kaoiro/session_pointers.dets",
-      "#KAOIRO_AGENT_DIRECTORY_PATH=/var/lib/kaoiro/agent_directory.dets",
-      "#KAOIRO_PERMISSION_MODES_PATH=/var/lib/kaoiro/permission_modes.dets",
-      "#KAOIRO_PERMISSION_SETTINGS_PATH=/var/lib/kaoiro/permission_settings.dets",
-      "#KAOIRO_CLEAR_WATERMARKS_PATH=/var/lib/kaoiro/clear_watermarks.dets",
-      "#KAOIRO_SESSION_STARTS_PATH=/var/lib/kaoiro/session_starts.dets",
-      "#KAOIRO_INGRESS_ORDER_PATH=/var/lib/kaoiro/ingress_order.dets",
-      "#KAOIRO_DELIVERY_STATES_PATH=/var/lib/kaoiro/delivery_states.dets",
-      "#KAOIRO_TOKEN_DENYLIST_PATH=/var/lib/kaoiro/token_denylist.dets",
-      "#KAOIRO_USERS_PATH=/var/lib/kaoiro/users.dets",
-      "#KAOIRO_SESSION_LIFECYCLE_EVENTS_PATH=/var/lib/kaoiro/session_lifecycle_events.dets",
-      "#KAOIRO_QUAGMIRE_SETTINGS_PATH=/var/lib/kaoiro/quagmire_settings.dets"
+      Enum.map(PersistencePaths.stores(), fn store ->
+        "##{store.env}=#{PersistencePaths.volume_path(store)}"
+      end)
     ]
     |> List.flatten()
     |> Enum.join("\n")
