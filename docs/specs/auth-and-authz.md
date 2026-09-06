@@ -118,6 +118,7 @@ Call `require_operator(socket)` first, both directly and inside
 - `session_reset`
 - `clear_history` / `delete_agent` / `revoke_wrapper_token`
 - `attach_open` / `attach_chunk` / `attach_close`
+- `set_quagmire_settings`
 
 The same events from a viewer are rejected with `{:error, :forbidden}`. Resolve
 the role with `ClientSocket.role_for/1` for every operation rather than using a

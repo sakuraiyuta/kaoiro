@@ -135,3 +135,10 @@ limits, and the turn-number contract).
   fresh `conversation_id` does not reset a review loop. That notice is
   advisory: it never closes a conversation and never messages an agent. See
   [protocol-inter-agent](protocol-inter-agent.md) "Review-quagmire detection".
+- The threshold that notice fires on is the operator's to set, from the
+  dashboard settings drawer, without a server restart. Director-style
+  operation holds several long review loops at once, so the shipped default
+  can put a permanent banner on every active pair. Raise it, or turn rally
+  detection off (∞), rather than reading past banners that never clear —
+  a notice nobody acts on is worth nothing. The threshold is
+  deployment-wide, not per director.

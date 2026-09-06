@@ -112,6 +112,17 @@ signal above would be muted with it.
   `rally_conversations`, and `quagmire`. The verdict is computed server-side
   rather than shipping the threshold for a client to compare, so one place
   owns what "quagmire" means.
+- `set_quagmire_settings {rally_turns}` (client → server, operator-only)
+  changes the rally threshold at runtime; `null` is ∞. Out of range
+  (1..999), non-integer, or an ABSENT key returns `invalid_rally_turns` —
+  JSON `null` and a missing field both arrive as nil, and only one of them
+  means off, so an absent key is refused rather than read as a request to
+  disable.
+- `quagmire_settings {rally_turns, source}` is the matching operator-only
+  push: on join, and again whenever the threshold changes, so several
+  dashboards agree on what is in force. `source` is `stored` / `env` /
+  `default`. Unlike `quagmire_notice` this IS a join frame — a threshold is
+  state rather than an edge.
 
 ### Configuration
 
@@ -121,6 +132,27 @@ signal above would be muted with it.
 `KAOIRO_QUAGMIRE_RALLY_TURNS` and `KAOIRO_QUAGMIRE_STALL_MS` override the two
 an operator would retune without a rebuild, and an invalid value raises at
 boot rather than reverting to a default nobody chose.
+
+**`rally_turns` is also runtime-mutable.** `QuagmireSettings` holds the
+operator's pick in its own DETS store
+(`KAOIRO_QUAGMIRE_SETTINGS_PATH`, part of the canonical persistence set in
+[deployment](deployment.md)), and precedence is stored > env > `config.exs`.
+The detector reads it on every sweep and both the notice and the
+`list_conversations` verdict follow it, so one threshold governs all three.
+An unreachable store falls back to the boot value for that sweep rather than
+disabling rally detection.
+
+Changing it does NOT reset the edge memory, and deliberately so:
+`notified_rally` is rebuilt from the current over-threshold set on every
+sweep, so raising the threshold drops the subjects that fell below it and
+lowering it announces the newly-crossed ones once. Clearing the memory
+instead would re-announce subjects the operator has already seen. The server
+cannot retract a notice it already sent, so the client drops banners whose
+turn count the new threshold no longer covers.
+
+The remaining three stay boot-time. `rally_window_ms` in particular is
+validated against `tombstone_ttl_ms` at boot, and none of the three is a
+per-session judgement.
 
 **The defaults are provisional.** `rally_turns: 16` rests on a thin sample: a
 healthy delegation runs well under 10 turns, and the incident that motivated
