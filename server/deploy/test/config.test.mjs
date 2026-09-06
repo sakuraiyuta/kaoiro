@@ -1,0 +1,60 @@
+import assert from "node:assert/strict";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, test } from "node:test";
+
+import { ConfigError, DEFAULT_CONFIG, loadConfig } from "../kaoiro-deploy-config.mjs";
+
+let dir;
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), "kaoiro-deploy-config-"));
+});
+afterEach(() => {
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("loadConfig with no path returns the defaults", () => {
+  assert.deepEqual(loadConfig(undefined), DEFAULT_CONFIG);
+});
+
+test("loadConfig throws when the file does not exist", () => {
+  assert.throws(() => loadConfig(join(dir, "missing.json")), ConfigError);
+});
+
+test("loadConfig throws when the file is not mode 0600", () => {
+  const path = join(dir, "config.json");
+  writeFileSync(path, "{}");
+  chmodSync(path, 0o644);
+  assert.throws(() => loadConfig(path), ConfigError);
+});
+
+test("loadConfig merges a valid override over the defaults", () => {
+  const path = join(dir, "config.json");
+  writeFileSync(path, JSON.stringify({ keep_generations: 7 }));
+  chmodSync(path, 0o600);
+  const config = loadConfig(path);
+  assert.equal(config.keep_generations, 7);
+  assert.equal(config.retention_days, DEFAULT_CONFIG.retention_days);
+});
+
+test("loadConfig rejects an unknown key", () => {
+  const path = join(dir, "config.json");
+  writeFileSync(path, JSON.stringify({ keep_generation: 7 }));
+  chmodSync(path, 0o600);
+  assert.throws(() => loadConfig(path), ConfigError);
+});
+
+test("loadConfig rejects an out-of-domain value", () => {
+  const path = join(dir, "config.json");
+  writeFileSync(path, JSON.stringify({ keep_generations: 0 }));
+  chmodSync(path, 0o600);
+  assert.throws(() => loadConfig(path), ConfigError);
+});
+
+test("loadConfig rejects malformed JSON", () => {
+  const path = join(dir, "config.json");
+  writeFileSync(path, "not json");
+  chmodSync(path, 0o600);
+  assert.throws(() => loadConfig(path), ConfigError);
+});
