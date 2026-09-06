@@ -81,6 +81,12 @@ defmodule KaoiroServer.QuagmireSettings do
     end
   end
 
+  @doc """
+  Drops the stored pick so the boot value applies again. Idempotent.
+  """
+  @spec clear(GenServer.server()) :: :ok
+  def clear(server \\ __MODULE__), do: GenServer.call(server, :clear)
+
   @impl true
   def init({name, path}) do
     KaoiroServer.DetsStorePath.prepare_parent!(path)
@@ -126,12 +132,20 @@ defmodule KaoiroServer.QuagmireSettings do
     end
   end
 
-  # `configured_settings/0` reads and validates the same config the detector
-  # boots on, so the fallback cannot drift from the value nothing overrode.
+  # Reads the detector's own key and its own fallback, so the two cannot
+  # drift. Deliberately NOT validated against `@max_rally_turns`: that bound
+  # is on what an operator may SET, and coercing a configured value here
+  # would leave the store reporting one threshold while the detector's own
+  # fallback used another.
   defp boot_fallback do
     source = if System.get_env("KAOIRO_QUAGMIRE_RALLY_TURNS"), do: :env, else: :default
 
-    %{rally_turns: QuagmireWatch.configured_settings().rally_turns, source: source}
+    rally_turns =
+      :kaoiro_server
+      |> Application.get_env(:quagmire, [])
+      |> Keyword.get(:rally_turns, QuagmireWatch.default_rally_turns())
+
+    %{rally_turns: rally_turns, source: source}
   end
 
   defp valid?(:off), do: true
@@ -151,6 +165,11 @@ defmodule KaoiroServer.QuagmireSettings do
   def handle_call({:put_rally_turns, value}, _from, state) do
     :ok = :dets.insert(state.table, {@key, value})
     {:reply, :ok, %{state | stored: value}}
+  end
+
+  def handle_call(:clear, _from, state) do
+    :ok = :dets.delete(state.table, @key)
+    {:reply, :ok, %{state | stored: nil}}
   end
 
   defp effective_of(%{stored: nil, fallback: fallback}), do: fallback

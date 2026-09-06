@@ -96,6 +96,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   alias KaoiroServer.PermissionSettings
   alias KaoiroServer.PersonaAssets
   alias KaoiroServer.PlannedDisconnects
+  alias KaoiroServer.QuagmireSettings
   alias KaoiroServer.QuagmireWatch
   alias KaoiroServer.SessionLifecycleEvents
   alias KaoiroServer.SessionPointers
@@ -162,6 +163,10 @@ defmodule KaoiroServerWeb.AgentsChannel do
     # current picture from list_conversations / delivery_snapshot, and this
     # event is edge-triggered rather than a state projection.
     "quagmire_notice",
+    # The rally threshold behind that notice (issue #307). Operator-only for
+    # the same reason, and changeable at runtime, so operators watching from
+    # different dashboards must not disagree about what is in force.
+    "quagmire_settings",
     # Connected wrapper artifact identity is operator-only, like host build
     # identity; viewers do not receive package provenance.
     "wrapper_build_info",
@@ -182,6 +187,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
     snapshot task_snapshot delivery_snapshot history hosts directory
     history_cleared history_reset history_replay_complete
     history_replay_envelope agent_deleted delivery_status quagmire_notice
+    quagmire_settings
     session_reset_started session_reset_completed session_reset_failed
     envelope spawn_result runner_sessions catalog_result wrapper_build_info
   ))
@@ -229,7 +235,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
                    unknown_conversation_id invalid_approval
                    invalid_payload agent_unavailable
                    unsupported_permission_switch permission_not_ready
-                   persistence_failed timeout)a
+                   persistence_failed timeout invalid_rally_turns)a
 
   # session_id charset — mirrors runner/src/sessions.ts SESSION_ID_PATTERN
   # (Claude Code's UUID-shaped JSONL filenames). Validated at this boundary so
@@ -393,6 +399,11 @@ defmodule KaoiroServerWeb.AgentsChannel do
         "wrapper_build_info",
         wrapper_build_info_payload(KaoiroServer.WrapperBuildInfos.snapshot())
       )
+
+      # issue #307: unlike `quagmire_notice`, the threshold IS state rather
+      # than an edge, so a joining operator needs it up front — the drawer
+      # control has nothing to show otherwise.
+      push_versioned(socket, "quagmire_settings", quagmire_settings_payload())
     end
 
     {:noreply, socket}
@@ -521,6 +532,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
              "session_reset_failed",
              "delivery_status",
              "quagmire_notice",
+             "quagmire_settings",
              "wrapper_build_info"
            ] do
     if socket.assigns[:role] in @operator_capable_roles do
@@ -1138,6 +1150,25 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # spawn → runner path, so the runner is unchanged (it does the T3 existence
   # check + F4 lock). Reviving the same agent_id keeps the face / mood / tile.
   #
+  # Runtime rally threshold (issue #307). Operator-only. `null` is ∞ (rally
+  # detection off); anything else that is not a threshold is REJECTED rather
+  # than clamped, so a client that sends one is told instead of silently
+  # corrected. Persist before replying, then sweep once: the detector rebuilds
+  # its edge memory from the over-threshold set, so one sweep is the whole of
+  # "apply live" — nothing resets `notified_rally`.
+  def handle_in("set_quagmire_settings", payload, socket) do
+    with :ok <- require_operator(socket, payload, "set_quagmire_settings"),
+         {:ok, requested} <- requested_rally_turns(payload),
+         :ok <- QuagmireSettings.put_rally_turns(requested) do
+      QuagmireWatch.sweep_async()
+      settings = quagmire_settings_payload()
+      KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "quagmire_settings", settings)
+      {:reply, {:ok, settings}, socket}
+    else
+      {:error, reason} -> {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
+    end
+  end
+
   # Two branches based on the SessionPointer's session_id (phase-25, ADR-0030
   # D8 追補 / ADR-0014 F1 追補 fresh-restore):
   # - **binary session_id (通常 resume)**: build_restore_payload stamps
@@ -2448,12 +2479,17 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # ACROSS conversations, and whether that crosses the threshold. The verdict
   # is computed here rather than shipping the threshold for the client to
   # compare, so one place owns what "quagmire" means. Purely additive keys on
-  # an unchanged reply shape — an older client ignores them. Thresholds are
-  # read from config directly rather than through the detector process: they
-  # are fixed for the life of a boot, so calling into an advisory GenServer
-  # would buy nothing dynamic while letting its liveness take down this RPC.
+  # an unchanged reply shape — an older client ignores them.
+  #
+  # `rally_window_ms` still comes from config, which is fixed for the life of
+  # a boot. `rally_turns` does not (issue #307): reading it from config here
+  # would leave this verdict on the old threshold after an operator changed
+  # it, while the banner used the new one. QuagmireSettings is a plain store
+  # like the others this RPC already calls, not the advisory detector whose
+  # liveness must stay off this path.
   defp annotate_rally(rows) do
     settings = QuagmireWatch.configured_settings()
+    threshold = QuagmireSettings.rally_turns()
     rally = ConversationStates.pair_rally(settings.rally_window_ms)
 
     Enum.map(rows, fn row ->
@@ -2462,8 +2498,30 @@ defmodule KaoiroServerWeb.AgentsChannel do
       row
       |> Map.put("rally_turns", tally.turns)
       |> Map.put("rally_conversations", tally.conversations)
-      |> Map.put("quagmire", tally.turns >= settings.rally_turns)
+      |> Map.put("quagmire", quagmire?(tally.turns, threshold))
     end)
+  end
+
+  defp quagmire?(_turns, :off), do: false
+  defp quagmire?(turns, threshold), do: turns >= threshold
+
+  # An absent key is not a request to disable: JSON `null` and a missing
+  # field both arrive as nil, and only one of them means ∞.
+  defp requested_rally_turns(payload) do
+    case Map.fetch(payload, "rally_turns") do
+      {:ok, nil} -> {:ok, :off}
+      {:ok, value} -> {:ok, value}
+      :error -> {:error, :invalid_rally_turns}
+    end
+  end
+
+  defp quagmire_settings_payload do
+    %{rally_turns: rally_turns, source: source} = QuagmireSettings.effective()
+
+    %{
+      "rally_turns" => if(rally_turns == :off, do: nil, else: rally_turns),
+      "source" => Atom.to_string(source)
+    }
   end
 
   @doc """

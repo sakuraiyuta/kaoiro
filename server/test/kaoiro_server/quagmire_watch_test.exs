@@ -8,6 +8,7 @@ defmodule KaoiroServer.QuagmireWatchTest do
 
   alias KaoiroServer.ConversationStates
   alias KaoiroServer.DeliveryStates
+  alias KaoiroServer.QuagmireSettings
   alias KaoiroServer.QuagmireWatch
 
   @settings %{
@@ -61,19 +62,48 @@ defmodule KaoiroServer.QuagmireWatchTest do
   defp restore_env(key, nil), do: Application.delete_env(:kaoiro_server, key)
   defp restore_env(key, value), do: Application.put_env(:kaoiro_server, key, value)
 
+  # issue #307: the threshold comes from QuagmireSettings, so the injected
+  # `settings.rally_turns` seeds an isolated store rather than being read
+  # straight out of the detector's state. `store: :absent` names a store that
+  # was never started, for the fail-soft path.
   defp start_watch(ctx, opts \\ []) do
+    settings = Keyword.get(opts, :settings, @settings)
+
+    settings_store =
+      case Keyword.get(opts, :store, :isolated) do
+        :isolated -> start_settings_store(Keyword.get(opts, :rally_turns, settings.rally_turns))
+        :absent -> :"qw_qs_absent_#{System.unique_integer([:positive])}"
+        started -> started
+      end
+
     {:ok, _} =
       QuagmireWatch.start_link(
         name: ctx.watch,
-        settings: Keyword.get(opts, :settings, @settings),
+        settings: settings,
         conversations: ctx.conversations,
         deliveries: ctx.deliveries,
+        settings_store: settings_store,
         now_wall: Keyword.get(opts, :now_wall, fn -> ~U[2026-09-05 12:00:00Z] end),
         on_notice: fn payload -> Agent.update(ctx.notices, &[payload | &1]) end
       )
 
     on_exit(fn -> stop_quietly(ctx.watch) end)
     ctx.watch
+  end
+
+  defp start_settings_store(rally_turns) do
+    name = :"qw_qs_#{System.unique_integer([:positive])}"
+    path = Path.join([System.tmp_dir!(), "kaoiro_test_dets", "#{name}.dets"])
+    File.rm(path)
+    {:ok, _} = QuagmireSettings.start_link(name: name, path: path)
+    :ok = QuagmireSettings.put_rally_turns(rally_turns, name)
+
+    on_exit(fn ->
+      stop_quietly(name)
+      File.rm(path)
+    end)
+
+    name
   end
 
   defp notices(ctx), do: ctx.notices |> Agent.get(& &1) |> Enum.reverse()
@@ -376,6 +406,78 @@ defmodule KaoiroServer.QuagmireWatchTest do
                stall_ms: 3_600_000,
                sweep_interval_ms: 60_000
              } = QuagmireWatch.configured_settings()
+    end
+  end
+
+  describe "runtime threshold (issue #307)" do
+    test "the stored pick, not the boot settings, decides the verdict", ctx do
+      # settings still says 4; the store says 9, and 5 turns is over one and
+      # under the other.
+      watch = start_watch(ctx, rally_turns: 9)
+      exchange(ctx, "c1", 5)
+
+      assert :ok = QuagmireWatch.sweep(watch)
+      assert notices(ctx) == []
+    end
+
+    test ":off silences rally without touching stall", ctx do
+      DeliveryStates.bind("momo", "gen-a", ctx.deliveries)
+      DeliveryStates.issue("momo", ctx.deliveries)
+
+      watch =
+        start_watch(ctx, rally_turns: :off, now_wall: now_wall_after(ctx, "momo", 30_001))
+
+      exchange(ctx, "c1", 12)
+
+      assert :ok = QuagmireWatch.sweep(watch)
+      assert [%{"kind" => "stall"}] = notices(ctx)
+    end
+
+    # This is why nothing resets `notified_rally` on a change: the rebuild
+    # already does the work, and a reset would re-announce a subject the
+    # operator has seen. Raising drops the subject, lowering re-announces it
+    # exactly once.
+    test "raising then lowering the threshold re-announces exactly once", ctx do
+      store = start_settings_store(4)
+      watch = start_watch(ctx, store: store)
+      exchange(ctx, "c1", 4)
+
+      assert :ok = QuagmireWatch.sweep(watch)
+      assert length(notices(ctx)) == 1
+
+      :ok = QuagmireSettings.put_rally_turns(50, store)
+      assert :ok = QuagmireWatch.sweep(watch)
+      assert length(notices(ctx)) == 1
+
+      :ok = QuagmireSettings.put_rally_turns(4, store)
+      assert :ok = QuagmireWatch.sweep(watch)
+      assert length(notices(ctx)) == 2
+
+      # Still edge-triggered afterwards: a further sweep adds nothing.
+      assert :ok = QuagmireWatch.sweep(watch)
+      assert length(notices(ctx)) == 2
+    end
+
+    test "falls back to the boot threshold when the store is unreachable", ctx do
+      watch = start_watch(ctx, store: :absent)
+      exchange(ctx, "c1", 4)
+
+      assert :ok = QuagmireWatch.sweep(watch)
+
+      assert [%{"kind" => "rally", "threshold" => 4}] = notices(ctx)
+    end
+
+    # The fallback must not swallow the stall detector with it: the settings
+    # store has nothing to do with that condition.
+    test "an unreachable store leaves stall detection alone", ctx do
+      DeliveryStates.bind("momo", "gen-a", ctx.deliveries)
+      DeliveryStates.issue("momo", ctx.deliveries)
+
+      watch =
+        start_watch(ctx, store: :absent, now_wall: now_wall_after(ctx, "momo", 30_001))
+
+      assert :ok = QuagmireWatch.sweep(watch)
+      assert [%{"kind" => "stall"}] = notices(ctx)
     end
   end
 end

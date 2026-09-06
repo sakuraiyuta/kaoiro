@@ -11,7 +11,9 @@ defmodule KaoiroServer.QuagmireWatch do
       `ConversationStates.pair_rally/2`. A per-conversation count cannot see
       this: `max_turns` closes a conversation at 20 and the protocol then
       forces the peers onto a fresh id, so a long review loop necessarily
-      spans several entries.
+      spans several entries. `rally_turns` is read from `QuagmireSettings`
+      on every sweep (issue #307), so an operator retunes it without a
+      restart; the remaining settings stay boot-time.
 
     * **stall** — a recipient has an unacknowledged delivery gap
       (`acked_seq < issued_seq`) older than `stall_ms`, read from
@@ -31,7 +33,11 @@ defmodule KaoiroServer.QuagmireWatch do
   crosses, and again only after it has fallen back below. `notified_*` is
   rebuilt from the current over-threshold set each tick, so a subject that
   disappears (a GC'd tombstone, a deleted agent) drops out rather than
-  accumulating.
+  accumulating. That rebuild is also why a changed threshold needs no
+  explicit reset of the edge memory: raising it drops the subjects that fell
+  below, lowering it lets the newly-crossed ones announce once. Clearing
+  `notified_rally` on a change would instead re-announce subjects the
+  operator has already seen.
 
   Detection only. The module never closes a conversation and never messages
   an agent: a false positive that stops a working loop costs far more than a
@@ -45,6 +51,7 @@ defmodule KaoiroServer.QuagmireWatch do
 
   alias KaoiroServer.ConversationStates
   alias KaoiroServer.DeliveryStates
+  alias KaoiroServer.QuagmireSettings
 
   # Fallbacks for a deployment that configures nothing. They must match
   # config.exs: a value that only lives here is one nobody reviews when the
@@ -75,8 +82,24 @@ defmodule KaoiroServer.QuagmireWatch do
   """
   def configured_settings, do: load_settings(nil)
 
+  @doc """
+  The shipped fallback for `rally_turns` alone. `configured_settings/0` also
+  validates `rally_window_ms` against `tombstone_ttl_ms` and raises on a
+  violation, which is right for the detector and wrong for a caller that
+  needs only this one number.
+  """
+  def default_rally_turns, do: @default_rally_turns
+
   @doc "Runs one detection pass synchronously. Tests use it instead of waiting."
   def sweep(server \\ __MODULE__), do: GenServer.call(server, :sweep)
+
+  @doc """
+  Asks for a sweep without waiting. Used after a settings change, so the new
+  threshold takes effect at once rather than at the next tick. A cast on
+  purpose: whether an operator's setting is accepted must not depend on an
+  advisory detector being alive, and a cast to a dead name is a no-op.
+  """
+  def sweep_async(server \\ __MODULE__), do: GenServer.cast(server, :sweep)
 
   @impl true
   def init(opts) do
@@ -86,6 +109,7 @@ defmodule KaoiroServer.QuagmireWatch do
       settings: settings,
       on_notice: Keyword.get(opts, :on_notice, fn _payload -> :ok end),
       conversations: Keyword.get(opts, :conversations, ConversationStates),
+      settings_store: Keyword.get(opts, :settings_store, QuagmireSettings),
       deliveries: Keyword.get(opts, :deliveries, DeliveryStates),
       now_wall: Keyword.get(opts, :now_wall, &DateTime.utc_now/0),
       notified_rally: MapSet.new(),
@@ -103,6 +127,9 @@ defmodule KaoiroServer.QuagmireWatch do
     next = detect(state)
     {:reply, :ok, next}
   end
+
+  @impl true
+  def handle_cast(:sweep, state), do: {:noreply, detect(state)}
 
   @impl true
   def handle_info(:sweep, state) do
@@ -133,8 +160,26 @@ defmodule KaoiroServer.QuagmireWatch do
   end
 
   defp detect_rally(state) do
-    threshold = state.settings.rally_turns
+    case live_rally_turns(state) do
+      :off -> %{state | notified_rally: MapSet.new()}
+      threshold -> detect_rally(state, threshold)
+    end
+  end
 
+  # The store is its own process, so it can be restarting while a sweep runs.
+  # `guarded/3` would skip rally detection entirely; falling back to the boot
+  # threshold keeps the detector working on the value it started with instead
+  # of going blind until the store returns.
+  defp live_rally_turns(state) do
+    QuagmireSettings.rally_turns(state.settings_store)
+  catch
+    :exit, reason ->
+      Logger.warning("quagmire settings unavailable (#{inspect(reason)}); using boot rally_turns")
+
+      state.settings.rally_turns
+  end
+
+  defp detect_rally(state, threshold) do
     over =
       state.settings.rally_window_ms
       |> then(&ConversationStates.pair_rally(&1, state.conversations))

@@ -65,6 +65,17 @@ defmodule KaoiroServer.QuagmireSettingsTest do
     assert QuagmireSettings.rally_turns(server) == 24
   end
 
+  test "clear drops the pick and restores the boot value", %{server: server} do
+    assert :ok = QuagmireSettings.put_rally_turns(40, server)
+    assert :ok = QuagmireSettings.clear(server)
+
+    assert QuagmireSettings.rally_turns(server) ==
+             QuagmireWatch.configured_settings().rally_turns
+
+    assert %{source: :default} = QuagmireSettings.effective(server)
+    assert :ok = QuagmireSettings.clear(server)
+  end
+
   test "the pick survives a restart of the store", %{server: server, path: path} do
     assert :ok = QuagmireSettings.put_rally_turns(48, server)
     stop_quietly(server)

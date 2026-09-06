@@ -12,6 +12,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
   alias KaoiroServer.DeliveryStates
   alias KaoiroServer.HostRegistry
   alias KaoiroServer.PlannedDisconnects
+  alias KaoiroServer.QuagmireSettings
   alias KaoiroServer.SessionLifecycleEvents
   alias KaoiroServer.SessionPointers
   alias KaoiroServer.TaskStates
@@ -386,6 +387,134 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     refute_push "quagmire_notice", %{}
   end
 
+  describe "set_quagmire_settings (issue #307)" do
+    setup do
+      on_exit(fn -> QuagmireSettings.clear() end)
+      :ok
+    end
+
+    test "an operator's pick is acknowledged and pushed to operators only" do
+      operator = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+      # Drain the operator's own join push; both sockets feed one mailbox, so
+      # leaving it there would satisfy the refute below on its own.
+      assert_push "quagmire_settings", %{"source" => "default"}
+
+      _viewer = join_as(:viewer)
+      assert_push "snapshot", %{"agents" => _}
+
+      ref = push(operator, "set_quagmire_settings", %{"rally_turns" => 40})
+
+      assert_reply ref, :ok, %{"rally_turns" => 40, "source" => "stored"}
+      assert_push "quagmire_settings", %{"rally_turns" => 40, "source" => "stored"}
+      refute_push "quagmire_settings", %{}
+    end
+
+    test "null is the off switch and survives the round trip" do
+      operator = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      ref = push(operator, "set_quagmire_settings", %{"rally_turns" => nil})
+
+      assert_reply ref, :ok, %{"rally_turns" => nil, "source" => "stored"}
+      assert QuagmireSettings.rally_turns() == :off
+    end
+
+    test "a viewer cannot change the threshold" do
+      viewer = join_as(:viewer)
+      assert_push "snapshot", %{"agents" => _}
+
+      ref = push(viewer, "set_quagmire_settings", %{"rally_turns" => 40})
+
+      assert_reply ref, :error, %{reason: "forbidden"}
+      assert %{source: :default} = QuagmireSettings.effective()
+    end
+
+    # A missing key reads as nil exactly like JSON null, and only one of the
+    # two means "turn rally detection off".
+    test "an absent, out-of-range or non-integer value is rejected" do
+      operator = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      for payload <- [
+            %{},
+            %{"rally_turns" => 0},
+            %{"rally_turns" => -1},
+            %{"rally_turns" => QuagmireSettings.max_rally_turns() + 1},
+            %{"rally_turns" => 16.0},
+            %{"rally_turns" => "16"}
+          ] do
+        ref = push(operator, "set_quagmire_settings", payload)
+        assert_reply ref, :error, %{reason: "invalid_rally_turns"}
+      end
+
+      assert %{source: :default} = QuagmireSettings.effective()
+    end
+
+    test "the list_conversations verdict follows the new threshold" do
+      {a, b, _c} = rally_pair()
+      operator = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      ConversationStates.record_message("qs1", a, b, "x", 1, false, true)
+      ConversationStates.record_message("qs2", a, b, "x", 1, false, true)
+
+      ref = push(operator, "set_quagmire_settings", %{"rally_turns" => 2})
+      assert_reply ref, :ok, %{"rally_turns" => 2}
+
+      assert verdicts(operator, ["qs1", "qs2"]) == %{"qs1" => true, "qs2" => true}
+
+      # ∞ is not "a very large threshold": the verdict must go false, not
+      # merely become harder to reach.
+      ref = push(operator, "set_quagmire_settings", %{"rally_turns" => nil})
+      assert_reply ref, :ok, %{"rally_turns" => nil}
+
+      assert verdicts(operator, ["qs1", "qs2"]) == %{"qs1" => false, "qs2" => false}
+    end
+
+    # Pins the resweep wiring: without the cast the detector would not notice
+    # the lowered threshold until its own 60-second tick.
+    test "lowering the threshold makes the detector announce without waiting for a tick" do
+      {a, b, _c} = rally_pair()
+      operator = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+
+      ConversationStates.record_message("qr1", a, b, "x", 1, false, true)
+      ConversationStates.record_message("qr2", a, b, "x", 1, false, true)
+
+      ref = push(operator, "set_quagmire_settings", %{"rally_turns" => 2})
+      assert_reply ref, :ok, %{"rally_turns" => 2}
+
+      assert_push "quagmire_notice", %{
+        "kind" => "rally",
+        "participants" => [^a, ^b],
+        "turns" => 2,
+        "threshold" => 2
+      }
+    end
+
+    test "a joining operator is told the threshold in force" do
+      :ok = QuagmireSettings.put_rally_turns(33)
+
+      _operator = join_as(:operator)
+      assert_push "snapshot", %{"agents" => _}
+      assert_push "quagmire_settings", %{"rally_turns" => 33, "source" => "stored"}
+
+      _viewer = join_as(:viewer)
+      assert_push "snapshot", %{"agents" => _}
+      refute_push "quagmire_settings", %{}
+    end
+  end
+
+  defp verdicts(socket, ids) do
+    ref = push(socket, "list_conversations", %{})
+    assert_reply ref, :ok, %{"conversations" => conversations}
+
+    conversations
+    |> Enum.filter(&(Map.fetch!(&1, "conversation_id") in ids))
+    |> Map.new(&{Map.fetch!(&1, "conversation_id"), Map.fetch!(&1, "quagmire")})
+  end
+
   test "list_conversations carries the cross-conversation rally and verdict (issue #273)" do
     # ConversationStates is shared by the whole case and the rally is a PAIR
     # aggregate, so a participant name reused by another test adds to this
@@ -418,18 +547,11 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     # threshold; asserting only the false branch leaves that comparison
     # unpinned in the direction an operator actually acts on.
     {a, b, c} = rally_pair()
-    original_quagmire = Application.get_env(:kaoiro_server, :quagmire)
-    Application.put_env(:kaoiro_server, :quagmire, rally_turns: 2)
-
-    # Restore rather than delete: config.exs ships :quagmire, so a delete
-    # leaves every later test reading the module fallbacks instead.
-    on_exit(fn ->
-      if original_quagmire do
-        Application.put_env(:kaoiro_server, :quagmire, original_quagmire)
-      else
-        Application.delete_env(:kaoiro_server, :quagmire)
-      end
-    end)
+    # issue #307: the threshold is the operator's stored pick now, so config
+    # is no longer what moves this verdict. Cleared afterwards so the rest of
+    # the run reads the boot value again.
+    :ok = QuagmireSettings.put_rally_turns(2)
+    on_exit(fn -> QuagmireSettings.clear() end)
 
     socket = join_as(:operator)
     assert_push "snapshot", %{"agents" => _}
@@ -7823,9 +7945,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     test "T4-7: policy は21種のみを許可し、未宣言 event は funnel で拒否する" do
       policy = AgentsChannel.client_event_policy()
 
-      # 21 since issue #273 added quagmire_notice.
-      assert MapSet.size(policy) == 21
+      # 22 since issue #307 added quagmire_settings beside quagmire_notice.
+      assert MapSet.size(policy) == 22
       assert MapSet.member?(policy, "quagmire_notice")
+      assert MapSet.member?(policy, "quagmire_settings")
       refute MapSet.member?(policy, "not_declared")
 
       source = File.read!("lib/kaoiro_server_web/channels/agents_channel.ex")
