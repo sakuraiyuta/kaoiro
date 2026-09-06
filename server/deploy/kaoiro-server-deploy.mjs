@@ -13,7 +13,7 @@ import { mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
 
 import { computeBuildIdentity } from "../../scripts/build-identity.mjs";
-import { BRANCH, classify, requireRunningContainer } from "./kaoiro-deploy-branch.mjs";
+import { BRANCH, BranchError, classify, requireRunningContainer } from "./kaoiro-deploy-branch.mjs";
 import { loadConfig } from "./kaoiro-deploy-config.mjs";
 import { dockerComposeContainerNames, dockerInspect, resolveDockerBin, runDocker } from "./kaoiro-deploy-docker.mjs";
 import { advancePhase, readJournal, writeJournal } from "./kaoiro-deploy-journal.mjs";
@@ -409,6 +409,24 @@ function transactionIdToDate(transactionId) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
+/** Directory entries directly under `backupRoot` that could be a
+ *  transaction directory — dotfiles (`.lock.update`) excluded, the same
+ *  distrust every other reader of this directory already applies.
+ *  Shared here so hasPriorTransactions/listDoneTransactionIds/
+ *  pruneOldTransactions's own directory scan cannot independently drift
+ *  on what counts (クロエ round 4 review SF-5: hasPriorTransactions
+ *  alone had NOT excluded dotfiles, so a leftover `.lock.update` from a
+ *  crashed run made a fresh host look like it already had transaction
+ *  state). Returns `[]` when `backupRoot` does not exist yet. */
+function listTransactionDirNames(backupRoot) {
+  try {
+    return readdirSync(backupRoot).filter((name) => !name.startsWith("."));
+  } catch (err) {
+    if (err.code === "ENOENT") return [];
+    throw err;
+  }
+}
+
 /** Transaction ids under `backupRoot` whose OWN journal is readable,
  *  self-consistent (directory name === journal.transaction_id), phase
  *  DONE, and whose id parses as a timestamp — the same distrust
@@ -418,14 +436,7 @@ function transactionIdToDate(transactionId) {
  *  transaction_id is a sortable UTC timestamp string (newTransactionId's
  *  own format), so lexicographic order IS chronological order. */
 function listDoneTransactionIds(backupRoot) {
-  let names;
-  try {
-    names = readdirSync(backupRoot).filter((name) => !name.startsWith("."));
-  } catch (err) {
-    if (err.code === "ENOENT") return [];
-    throw err;
-  }
-
+  const names = listTransactionDirNames(backupRoot);
   const doneIds = [];
   for (const name of names) {
     let journal;
@@ -515,14 +526,7 @@ export function pruneOldTransactions(backupRoot, config, protectedTransactionId,
     pruneCandidates.push(name);
   }
   const pruneSet = new Set(pruneCandidates);
-
-  let allNames;
-  try {
-    allNames = readdirSync(backupRoot).filter((name) => !name.startsWith("."));
-  } catch (err) {
-    if (err.code === "ENOENT") return { removed: [], skipped: [] };
-    throw err;
-  }
+  const allNames = listTransactionDirNames(backupRoot);
   const remainingTags = new Set();
   for (const name of allNames) {
     if (pruneSet.has(name)) continue;
@@ -600,23 +604,100 @@ export function parseArgs(argv) {
   return { command, flags };
 }
 
-/** Whether this repo's target/build has been through this CLI before —
- *  a coarse stand-in for "does prior deploy state exist", checked by
- *  listing prior transaction directories under `backupRoot`. This is
- *  deliberately NOT a volume inspection: resolving the compose project's
- *  actual volume name belongs with the archive/migration work in the
- *  update commit, which already has to resolve it from the container
- *  mount (deployment.md 4.3 step 5-a) — duplicating that resolution here
- *  ahead of time would just be a second, unsynchronised way to compute
- *  the same fact. This narrower question is enough to keep `start`
- *  from overwriting existing CLI-managed state. */
-export function hasPriorTransactions(backupRoot) {
+/** `docker version` needs the daemon; formatting `.Server.Version`
+ *  specifically fails (non-zero exit) when it cannot be reached —
+ *  measured live against a deliberately-broken DOCKER_HOST, 2026-09-06
+ *  — giving a clean, version-independent "is docker reachable at all"
+ *  probe distinct from "the specific thing I asked for does not exist"
+ *  (a missing volume/image both fail differently and depend on parsing
+ *  docker's own error text, which is not something to rely on here). */
+function isDockerReachable(bin) {
   try {
-    return readdirSync(backupRoot).length > 0;
-  } catch (err) {
-    if (err.code === "ENOENT") return false;
-    throw err;
+    runDocker(bin, ["version", "--format", "{{.Server.Version}}"]);
+    return true;
+  } catch {
+    return false;
   }
+}
+
+/** Resolves the ACTUAL docker volume name compose would attach `SERVICE`
+ *  to at `/var/lib/kaoiro` — never a guessed `<dir>-<service>-1`-style
+ *  name. `docker compose config --format json` already reports the
+ *  fully-resolved name directly at `volumes.<declared-name>.name`
+ *  (measured live, Docker Compose v5.3.1, 2026-09-06: a compose file
+ *  declaring `kaoiro-state` under a project named `ao306-compose-probe2`
+ *  reports `volumes: { "kaoiro-state": { "name":
+ *  "ao306-compose-probe2_kaoiro-state" } }`) — no need to hand-compute
+ *  `<project>_<volume>` and risk drifting from compose's own naming
+ *  rules. Matches on the service's OWN mount destination
+ *  (`/var/lib/kaoiro`), the same target this file's other mount
+ *  resolutions already key on. Returns `{ok: false, reason}` on
+ *  anything unexpected — a caller must never treat that as "no volume
+ *  configured". */
+function resolveNamedVolumeFromCompose(bin, serverDir) {
+  let raw;
+  try {
+    raw = runDocker(bin, ["compose", "config", "--format", "json"], { cwd: serverDir });
+  } catch (err) {
+    return { ok: false, reason: `'docker compose config' failed: ${err.message}` };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    return { ok: false, reason: `'docker compose config' did not return valid JSON: ${err.message}` };
+  }
+  const serviceVolumes = parsed?.services?.[SERVICE]?.volumes;
+  const mount = Array.isArray(serviceVolumes)
+    ? serviceVolumes.find((v) => v.target === "/var/lib/kaoiro")
+    : undefined;
+  if (mount === undefined || mount.type !== "volume") {
+    return { ok: false, reason: `compose config has no named-volume mount at /var/lib/kaoiro for service ${SERVICE}` };
+  }
+  const resolvedName = parsed?.volumes?.[mount.source]?.name;
+  if (typeof resolvedName !== "string" || resolvedName === "") {
+    return { ok: false, reason: `compose config's volumes entry for ${mount.source} has no resolved name` };
+  }
+  return { ok: true, name: resolvedName };
+}
+
+/** `docker volume inspect <name>` — existence only (measured live: exits
+ *  0 for an existing volume, 1 with "no such volume" for a missing one).
+ *  Never inspects CONTENTS, never pulls an image, never starts anything
+ *  — `status`, a read-only diagnostic, is one of this function's two
+ *  callers. */
+function namedVolumeExists(bin, volumeName) {
+  try {
+    runDocker(bin, ["volume", "inspect", volumeName]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Whether prior deployment state exists for this compose project —
+ *  CLI-managed transaction state under `backupRoot` (dotfiles excluded),
+ *  OR the named volume `SERVICE` mounts at `/var/lib/kaoiro` (existence
+ *  only). クロエ round 4 review N-3 (revised after a live measurement):
+ *  the ORIGINAL version of this function looked at `backupRoot` alone,
+ *  which classify()'s own contract ("manifest OR non-empty volume")
+ *  never actually satisfied — a host that ran `start --initialize`
+ *  once, never ran `update` since (so `backupRoot` stays empty), and
+ *  whose container later disappeared would misreport as BRANCH C FRESH,
+ *  and following FRESH's own guidance (`start --initialize` again) would
+ *  re-initialize over the live state still sitting in that volume — the
+ *  dangerous direction.
+ *
+ *  Returns `null` (never `false`) when docker is unreachable or
+ *  `docker compose config` itself fails — an unknown answer must never
+ *  resolve to FRESH, and `classify()`'s own tri-state contract already
+ *  expects exactly this. */
+export function hasPriorTransactions(bin, serverDir, backupRoot) {
+  if (listTransactionDirNames(backupRoot).length > 0) return true;
+  if (!isDockerReachable(bin)) return null;
+  const volume = resolveNamedVolumeFromCompose(bin, serverDir);
+  if (!volume.ok) return null;
+  return namedVolumeExists(bin, volume.name);
 }
 
 function resolveBackupRoot(config) {
@@ -735,7 +816,7 @@ export function runStart(flags, config) {
   const { bin, overridden } = resolveDockerBin(config);
   const dryRun = flags.dryRun === true;
   const backupRoot = resolveBackupRoot(config);
-  const hasState = hasPriorTransactions(backupRoot);
+  const hasState = hasPriorTransactions(bin, serverDir, backupRoot);
 
   const result = classify(bin, serverDir, SERVICE, hasState);
 
@@ -1618,12 +1699,9 @@ export function runRollback(flags, config) {
       fail(`could not verify the restored volume's contents: ${err.message}`);
     }
     const restoredEntries = parseTarEntries(restoreVerifyOutput);
-    const byPath = (a, b) => a.path.localeCompare(b.path);
-    const expectedJson = JSON.stringify([...manifest.required_entries].sort(byPath));
-    const restoredJson = JSON.stringify([...restoredEntries].sort(byPath));
-    if (restoredJson !== expectedJson) {
+    if (!requiredEntriesMatch(restoredEntries, manifest.required_entries)) {
       fail(
-        `restored volume's contents do not match the recorded required_entries — investigate before starting the old image (expected ${expectedJson}, got ${restoredJson})`,
+        `restored volume's contents do not match the recorded required_entries — investigate before starting the old image (expected ${JSON.stringify(manifest.required_entries)}, got ${JSON.stringify(restoredEntries)})`,
       );
     }
     journal = advancePhase(
@@ -1711,44 +1789,49 @@ function listDoneTransactionSummaries(backupRoot) {
 
 /** `status`: read-only diagnostic over the current container state, any
  *  in-progress transaction, and past DONE transactions — never mutates
- *  anything, never acquires the deploy lock.
+ *  anything, never acquires the deploy lock. Every leg below is
+ *  INDEPENDENT (クロエ round 4 review MF-4): a problem reading one part
+ *  of the on-disk state must still let every other, healthy leg report.
  *
  *  Container state is checked via `requireRunningContainer` FIRST (the
- *  "everything is fine" case) and only falls back to `classify()` on
- *  failure — `classify()` is documented as answering the "no running
- *  container" branch table (A/B/C/D) alone, so calling it first would
- *  misreport a normally-running container as branch D ("status is
- *  running, expected exited"), the one status this command must not get
- *  wrong.
+ *  "everything is fine" case) and only falls back to `classify()` on a
+ *  `BranchError` specifically (クロエ round 4 review SF-3) —
+ *  `classify()` is documented as answering the "no running container"
+ *  branch table (A/B/C/D) alone, so calling it unconditionally would
+ *  misreport a normally-running container as branch D, AND calling it
+ *  after some OTHER failure (docker itself unreachable) would just hit
+ *  docker a second time and let a raw, undiagnosed error escape instead
+ *  of a reported `container.error`.
  *
- *  `scopeNote` (director ruling 2026-09-06, point (f)): this command can
- *  only answer deployment.md 4.4's SERVER-side recovery branches —
- *  (0)/(1)/(3)/(4)/(5), all backed by journal/manifest/docker facts this
- *  process can read. (2) ("build failed") is the RUNNER side's own
- *  concern, with no server-side signal to read here, and 5-b's
- *  first-application ledger migration is a one-time human judgment this
- *  command was never asked to automate. Stating the boundary in the
- *  output itself (not only in docs) is what keeps an operator from
- *  reading a clean `status` as clearing either. */
+ *  `scopeNote` (director ruling 2026-09-06, point (f); reworded per
+ *  クロエ round 4 review SF-4, which found the original overclaimed):
+ *  states exactly what this command reads and does not. */
 export function runStatus(flags, config) {
   const repo = flags.repo ?? process.cwd();
   const serverDir = join(repo, "server");
   const { bin, overridden } = resolveDockerBin(config);
   const backupRoot = resolveBackupRoot(config);
-  const hasState = hasPriorTransactions(backupRoot);
+  const hasState = hasPriorTransactions(bin, serverDir, backupRoot);
 
   let containerState;
   try {
     const container = requireRunningContainer(bin, serverDir, SERVICE);
     containerState = { running: true, container };
-  } catch {
-    const result = classify(bin, serverDir, SERVICE, hasState);
-    containerState = {
-      running: false,
-      branch: result.branch,
-      reason: result.reason,
-      container: result.container ?? null,
-    };
+  } catch (err) {
+    if (err instanceof BranchError) {
+      const result = classify(bin, serverDir, SERVICE, hasState);
+      containerState = {
+        running: false,
+        branch: result.branch,
+        reason: result.reason,
+        container: result.container ?? null,
+      };
+    } else {
+      // docker itself is unreachable (or some other non-branch failure)
+      // — classify() would only hit docker again and fail the same way,
+      // so this is reported as-is rather than escaping as a raw error.
+      containerState = { running: false, error: err.message };
+    }
   }
 
   let health = null;
@@ -1762,7 +1845,18 @@ export function runStatus(flags, config) {
     }
   }
 
-  const unfinished = findUnfinishedTransaction(backupRoot);
+  // クロエ round 4 review MF-4: findUnfinishedTransaction throws BY
+  // DESIGN on internally-inconsistent state (right for `update`, which
+  // must not silently proceed past it) — but status is a diagnostic
+  // read, not a mutation, so the same finding must not blank every
+  // OTHER leg this function can still answer.
+  let unfinished = null;
+  let unfinishedError = null;
+  try {
+    unfinished = findUnfinishedTransaction(backupRoot);
+  } catch (err) {
+    unfinishedError = { error: err.message, directory: err.directory ?? null };
+  }
   // issue #220 absorption (turn 8 follow-up): surfaced only once the
   // transaction has actually reached that phase — earlier phases have
   // no ENV_CONSISTENCY_CHECKED entry yet, and that absence (not a false
@@ -1778,14 +1872,18 @@ export function runStatus(flags, config) {
     container: containerState,
     health,
     unfinishedTransaction:
-      unfinished === null
-        ? null
-        : { id: unfinished.id, phase: unfinished.journal.phase, envConsistency: unfinishedEnvConsistency },
+      unfinishedError !== null
+        ? unfinishedError
+        : unfinished === null
+          ? null
+          : { id: unfinished.id, phase: unfinished.journal.phase, envConsistency: unfinishedEnvConsistency },
     doneTransactions: listDoneTransactionSummaries(backupRoot),
     scopeNote:
-      "status answers deployment.md 4.4's server-side recovery branches (0)/(1)/(3)/(4)/(5) only " +
-      "— not (2) (runner/build failure, no server-side signal to read) or the first-application " +
-      "user-ledger migration in 5-b; both remain the operator's own judgment.",
+      "status returns: container state (running, or the diagnosed A/B/D branch), health provenance " +
+      "from the target's own endpoint, any unfinished transaction's phase, and the DONE transaction " +
+      "history. It does not read runner-side signals (systemctl status, EX_CONFIG, the runner's own " +
+      "journal), does not perform the first-application user-ledger migration judgment (5-b), and " +
+      "does not diagnose the reason behind a runner-side build failure.",
   };
 }
 
@@ -1925,6 +2023,22 @@ export function parseTarEntries(output) {
     entries.push({ path: name, owner: `${uid}:${gid}`, mode: modeFromTarPermString(perm) });
   }
   return entries;
+}
+
+/** Whether `actual` (a restored volume's own parsed tar listing) EXACTLY
+ *  matches `expected` (the manifest's recorded required_entries) —
+ *  order-independent (both sides sorted by path first), but otherwise
+ *  exact: an extra, a missing, or a differing owner/mode entry on either
+ *  side is a mismatch. Exported and unit-tested directly (director
+ *  ruling 2026-09-06: rollback's own destructive-path restore-
+ *  verification guard is the highest-risk point in this whole CLI to
+ *  leave unpinned — FAKE_DOCKER's shared `run` scenario handling has no
+ *  way to make a SECOND `tar czf` call inside one test differ from the
+ *  first, so this is pinned as a pure function instead of through a
+ *  fixture). */
+export function requiredEntriesMatch(actual, expected) {
+  const byPath = (a, b) => a.path.localeCompare(b.path);
+  return JSON.stringify([...actual].sort(byPath)) === JSON.stringify([...expected].sort(byPath));
 }
 
 async function main(argv) {

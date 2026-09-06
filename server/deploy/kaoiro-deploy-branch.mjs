@@ -25,7 +25,15 @@ export const BRANCH = Object.freeze({
 /** `hasState` is the caller's own answer to "does a manifest or a
  *  non-empty volume already exist" — this module only reads docker, it
  *  never inspects the filesystem or a manifest itself, so that question
- *  stays with whichever caller owns the transaction directory. */
+ *  stays with whichever caller owns the transaction directory.
+ *
+ *  Tri-state (クロエ round 4 review N-3): `true`/`false`/`null`, where
+ *  `null` means the caller could not determine an answer (docker
+ *  unreachable, `compose config` failed). `null` NEVER resolves to
+ *  FRESH — the one branch whose own guidance is to bootstrap fresh,
+ *  which on a host that merely could not be checked would risk
+ *  (re-)initializing over state that may well still be there. It
+ *  diagnoses instead, the same as an unrecognised container status. */
 export function classify(bin, cwd, service, hasState) {
   const names = dockerComposeContainerNames(bin, cwd, service);
   if (names.length > 1) {
@@ -35,6 +43,13 @@ export function classify(bin, cwd, service, hasState) {
     };
   }
   if (names.length === 0) {
+    if (hasState === null) {
+      return {
+        branch: BRANCH.DIAGNOSE,
+        reason:
+          "could not determine whether prior state exists (docker unreachable, or `docker compose config` failed) — investigate before proceeding",
+      };
+    }
     return hasState
       ? {
           branch: BRANCH.STATE_WITHOUT_CONTAINER,

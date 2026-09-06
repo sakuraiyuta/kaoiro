@@ -48,9 +48,15 @@ export function findUnfinishedTransaction(backupRoot) {
       throw err;
     }
     if (journal.transaction_id !== entry.name) {
-      throw new TransactionError(
+      const err = new TransactionError(
         `transaction directory ${entry.name} contains a journal claiming transaction_id ${journal.transaction_id} — refusing to guess which is authoritative`,
       );
+      // Attached (not just embedded in the message text) so a caller
+      // that wants to report WHICH directory failed structurally (クロエ
+      // round 4 review MF-4: `status`'s own per-leg error reporting) can
+      // read it directly, rather than parsing it back out of prose.
+      err.directory = dir;
+      throw err;
     }
     // TERMINAL_PHASES ("done"/"rolled_back") are checked BEFORE the
     // state-machine validation, not after: PHASE (kaoiro-deploy-phase.mjs)
@@ -60,7 +66,12 @@ export function findUnfinishedTransaction(backupRoot) {
     // outright. A finished transaction is not this scan's concern
     // either way.
     if (TERMINAL_PHASES.has(journal.phase)) continue;
-    validateJournalAgainstStateMachine(journal);
+    try {
+      validateJournalAgainstStateMachine(journal);
+    } catch (err) {
+      err.directory = dir;
+      throw err;
+    }
     return { id: entry.name, dir, journal };
   }
   return null;
