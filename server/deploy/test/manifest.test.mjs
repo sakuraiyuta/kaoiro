@@ -17,7 +17,10 @@ function validManifest() {
     transaction_id: "20260906T101500Z",
     compose_artifact: { path: "server/docker-compose.yaml", sha256: "a".repeat(64) },
     env_consistency: {
-      KAOIRO_CLIENT_TOKENS: { env_file: "set", compose: "set", container: "set", match: true },
+      skipped: false,
+      entries: {
+        KAOIRO_CLIENT_TOKENS: { env_file: "set", compose: "set", container: "set", match: true },
+      },
     },
     image_id: "sha256:" + "b".repeat(64),
     source_sha: "c".repeat(40),
@@ -96,7 +99,39 @@ test("isValidManifestShape rejects duplicate required_entries paths", () => {
 
 test("isValidManifestShape rejects an env_consistency entry with a non-boolean match", () => {
   const bad = validManifest();
-  bad.env_consistency = { KAOIRO_CLIENT_TOKENS: { env_file: "set", compose: "set", container: "set", match: "yes" } };
+  bad.env_consistency = {
+    skipped: false,
+    entries: {
+      KAOIRO_CLIENT_TOKENS: { env_file: "set", compose: "set", container: "set", match: "yes" },
+    },
+  };
+  assert.equal(isValidManifestShape(bad), false);
+});
+
+// issue #220 absorption: env_consistency's discriminated union.
+test("isValidManifestShape accepts env_consistency reporting skipped with a reason", () => {
+  const manifest = validManifest();
+  manifest.env_consistency = { skipped: true, reason: "eval exited 1: module not landed" };
+  assert.equal(isValidManifestShape(manifest), true);
+});
+
+test("isValidManifestShape rejects env_consistency skipped:true with no reason", () => {
+  const bad = validManifest();
+  bad.env_consistency = { skipped: true };
+  assert.equal(isValidManifestShape(bad), false);
+});
+
+test("isValidManifestShape rejects env_consistency skipped:false with no entries", () => {
+  const bad = validManifest();
+  bad.env_consistency = { skipped: false };
+  assert.equal(isValidManifestShape(bad), false);
+});
+
+test("isValidManifestShape rejects a bare per-key map with no skipped discriminator (the pre-#220 shape)", () => {
+  const bad = validManifest();
+  bad.env_consistency = {
+    KAOIRO_CLIENT_TOKENS: { env_file: "set", compose: "set", container: "set", match: true },
+  };
   assert.equal(isValidManifestShape(bad), false);
 });
 

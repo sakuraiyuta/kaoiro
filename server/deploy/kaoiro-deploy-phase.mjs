@@ -15,6 +15,7 @@
 import {
   IMAGE_ID_RE,
   isPathSha,
+  isValidEnvConsistency,
   isValidRequiredEntries,
   ROLLBACK_TAG_RE,
   SHA_RE,
@@ -26,6 +27,12 @@ export const PHASE = Object.freeze({
   PREFLIGHT: "preflight",
   OLD_IMAGE_SAVED: "old_image_saved",
   BUILD_PREPARED: "build_prepared",
+  // issue #220 absorption (director ruling 2026-09-06): checked right
+  // after the target image is built (so its own `eval` can be queried)
+  // and before the maintenance gate — still no-downtime, and a
+  // fail-closed refusal here has broken nothing but the `latest` retag
+  // `compose build` just did.
+  ENV_CONSISTENCY_CHECKED: "env_consistency_checked",
   MAINTENANCE_GATE_PASSED: "maintenance_gate_passed",
   STOPPING: "stopping",
   STOPPED: "stopped",
@@ -52,7 +59,8 @@ export const PHASE = Object.freeze({
 export const TRANSITIONS = {
   [PHASE.PREFLIGHT]: [PHASE.OLD_IMAGE_SAVED],
   [PHASE.OLD_IMAGE_SAVED]: [PHASE.BUILD_PREPARED],
-  [PHASE.BUILD_PREPARED]: [PHASE.MAINTENANCE_GATE_PASSED],
+  [PHASE.BUILD_PREPARED]: [PHASE.ENV_CONSISTENCY_CHECKED],
+  [PHASE.ENV_CONSISTENCY_CHECKED]: [PHASE.MAINTENANCE_GATE_PASSED],
   [PHASE.MAINTENANCE_GATE_PASSED]: [PHASE.STOPPING],
   [PHASE.STOPPING]: [PHASE.STOPPED],
   [PHASE.STOPPED]: [PHASE.MOUNT_RESOLVED],
@@ -99,6 +107,10 @@ const OBSERVATION_SCHEMAS = {
     obs.image_tag !== "" &&
     typeof obs.target_sha === "string" &&
     SHA_RE.test(obs.target_sha),
+  // issue #220 absorption: the observation IS the manifest's own
+  // env_consistency shape (isValidEnvConsistency, imported rather than
+  // redefined — see that function's own doc comment).
+  [PHASE.ENV_CONSISTENCY_CHECKED]: (obs) => isValidEnvConsistency(obs),
   [PHASE.MAINTENANCE_GATE_PASSED]: () => true,
   // クロエ round 1 review SF-2: a checkpoint written immediately before
   // `compose stop` runs, so a crash between the stop command and the
