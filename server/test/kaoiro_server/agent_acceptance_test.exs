@@ -1,0 +1,124 @@
+defmodule KaoiroServer.AgentAcceptanceTest do
+  use ExUnit.Case, async: true
+
+  alias KaoiroServer.AgentAcceptance
+
+  # These tests run against the REAL global Registry/DynamicSupervisor
+  # (application.ex) — there is no per-test isolation seam here, unlike
+  # PermissionSettings/SessionLifecycleEvents' own DETS-backed stores,
+  # because a worker is scoped by agent_id alone. A unique agent_id per
+  # test (matching the convention every OTHER channel test already uses
+  # for PermissionSettings/SessionResets/Users) is enough isolation: two
+  # tests never share a worker unless they share an agent_id.
+  defp unique_agent_id(prefix), do: "#{prefix}-#{System.unique_integer([:positive])}"
+
+  test "runs the closure and returns its result" do
+    agent_id = unique_agent_id("aa.basic")
+    assert AgentAcceptance.run(agent_id, fn -> {:ok, 42} end) == {:ok, 42}
+  end
+
+  test "two run/2 calls for the SAME agent_id still serialize" do
+    agent_id = unique_agent_id("aa.same")
+    order = :ets.new(:order, [:public])
+    parent = self()
+
+    task1 =
+      Task.async(fn ->
+        AgentAcceptance.run(agent_id, fn ->
+          :ets.insert(order, {1, :start})
+          Process.sleep(30)
+          :ets.insert(order, {1, :finish})
+          send(parent, :task1_done)
+          :ok
+        end)
+      end)
+
+    # Give task1 time to actually enter its closure before task2 queues.
+    Process.sleep(10)
+
+    task2 =
+      Task.async(fn ->
+        AgentAcceptance.run(agent_id, fn -> :ets.insert(order, {2, :start}) end)
+      end)
+
+    assert Task.await(task1) == :ok
+    assert Task.await(task2) == true
+    assert_received :task1_done
+    # task2's closure could only run after task1's finished (both entries
+    # for key 1 exist by the time task2 recorded anything at all).
+    assert :ets.lookup(order, 1) == [{1, :finish}]
+  end
+
+  # issue #305 M7, director round-2 correction: AgentAcceptance serializes
+  # PER agent_id, not globally — a blocked/slow closure for one agent
+  # must never delay an unrelated agent's commit. Proven directly (two
+  # genuinely concurrent processes), not via suspend/resume timing
+  # tricks: if serialization were still global, agent B's call would
+  # queue behind agent A's 1s sleep and this would take >= 1s too.
+  test "a blocked commit for one agent does not block a different agent's commit" do
+    agent_a = unique_agent_id("aa.blocked-a")
+    agent_b = unique_agent_id("aa.blocked-b")
+
+    task_a =
+      Task.async(fn ->
+        AgentAcceptance.run(agent_a, fn ->
+          Process.sleep(1_000)
+          :a_done
+        end)
+      end)
+
+    # Let agent A's closure actually start before racing agent B.
+    Process.sleep(100)
+
+    {microseconds, result_b} =
+      :timer.tc(fn -> AgentAcceptance.run(agent_b, fn -> :b_done end) end)
+
+    assert result_b == :b_done
+    # Comfortably under A's 1s sleep — B never queued behind it.
+    assert microseconds < 500_000
+
+    assert Task.await(task_a, 2_000) == :a_done
+  end
+
+  # code-review-assessment finding (issue #305 M7, round 1): an inner
+  # exit (e.g. a nested GenServer.call timing out under real contention)
+  # must degrade to an error reply for that ONE caller, not crash that
+  # agent's worker in a way that also breaks a LATER call for the same
+  # agent_id (a fresh worker must be started transparently).
+  test "a closure that exits does not crash the process or block later callers for the same agent" do
+    agent_id = unique_agent_id("aa.exits")
+
+    assert AgentAcceptance.run(agent_id, fn -> exit(:boom) end) ==
+             {:error, :acceptance_unavailable}
+
+    assert AgentAcceptance.run(agent_id, fn -> :still_working end) == :still_working
+  end
+
+  # code-review-assessment finding (issue #305 round 1): without a
+  # teardown hook, the worker/Registry-entry count grows without bound
+  # over a long-running server's lifetime under ordinary agent churn —
+  # `agents_channel.ex`'s `delete_agent` purge path must reclaim it.
+  test "delete/1 terminates the worker; delete of an unknown agent_id is a no-op" do
+    agent_id = unique_agent_id("aa.delete")
+    assert AgentAcceptance.run(agent_id, fn -> :ok end) == :ok
+    assert [{pid, _}] = Registry.lookup(KaoiroServer.AgentAcceptance.Registry, agent_id)
+    assert Process.alive?(pid)
+
+    assert AgentAcceptance.delete(agent_id) == :ok
+    refute Process.alive?(pid)
+
+    # A respawn under the same agent_id gets a fresh worker transparently
+    # (also proves this is not still talking to the terminated pid —
+    # Registry's own cleanup of the OLD entry races this call slightly,
+    # since it is driven by an async monitor `:DOWN`, not
+    # `terminate_child/2`'s synchronous return, so ensure_worker/1's
+    # very next lookup is what is actually being proven here, not the
+    # Registry's internal timing).
+    assert AgentAcceptance.run(agent_id, fn -> :ok end) == :ok
+    assert [{new_pid, _}] = Registry.lookup(KaoiroServer.AgentAcceptance.Registry, agent_id)
+    assert new_pid != pid
+
+    # Idempotent: deleting an agent_id with no worker at all is a no-op.
+    assert AgentAcceptance.delete(unique_agent_id("aa.never-existed")) == :ok
+  end
+end

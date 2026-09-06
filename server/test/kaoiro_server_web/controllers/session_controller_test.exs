@@ -2,6 +2,7 @@ defmodule KaoiroServerWeb.SessionControllerTest do
   # Mutates :client_tokens; init_test_session seeds the session (ADR-0013).
   use KaoiroServerWeb.ConnCase, async: false
 
+  import ExUnit.CaptureLog
   import KaoiroServer.OAuthAllowlistFixture
 
   alias KaoiroServer.Auth
@@ -75,13 +76,46 @@ defmodule KaoiroServerWeb.SessionControllerTest do
     # indirectly proves the controller already created it with the
     # configured name.
     source = {:token, Auth.client_token_hash(token)}
-    user = KaoiroServer.Users.get_or_create(source, "user", nil)
+    {:ok, user} = KaoiroServer.Users.get_or_create(source, "user", nil)
     assert user.display_name == "CI Runner"
 
     conn2 = build_conn() |> json_req() |> post("/session/new", %{token: token})
     assert conn2.status == 204
 
-    assert KaoiroServer.Users.get_or_create(source, "user", nil).id == user.id
+    {:ok, same_user} = KaoiroServer.Users.get_or_create(source, "user", nil)
+    assert same_user.id == user.id
+  end
+
+  # issue #305 M-B (director round-2 correction): authorization for a
+  # token login is already settled by `Auth.client_role/1` above —
+  # `Users.get_or_create/4` only supplies a display log line, so a Users
+  # outage must not turn a valid login into a failure.
+  test "create: Users store が落ちていても token login は成立し hash を残さない",
+       %{conn: conn} do
+    Application.put_env(:kaoiro_server, :client_tokens, "tok-users-down:operator")
+    :ok = Supervisor.terminate_child(KaoiroServer.Supervisor, KaoiroServer.Users)
+    on_exit(fn -> _ = Supervisor.restart_child(KaoiroServer.Supervisor, KaoiroServer.Users) end)
+
+    log =
+      capture_log(fn ->
+        conn = conn |> json_req() |> post("/session/new", %{token: "tok-users-down"})
+
+        assert conn.status == 204
+        assert get_session(conn, "client_token") == "tok-users-down"
+      end)
+
+    refute log =~ Auth.client_token_hash("tok-users-down")
+    refute log =~ "GenServer.call"
+
+    _ = Supervisor.restart_child(KaoiroServer.Supervisor, KaoiroServer.Users)
+
+    # (c) Once the store recovers, resolving the SAME source converges on
+    # one user_id — the ledger entry was simply never written during the
+    # outage, not diverged onto a different one.
+    source = {:token, Auth.client_token_hash("tok-users-down")}
+    {:ok, user} = KaoiroServer.Users.get_or_create(source, "user", nil)
+    {:ok, again} = KaoiroServer.Users.get_or_create(source, "user", nil)
+    assert again.id == user.id
   end
 
   test "ticket: 有効な session から検証可能な WS チケットを発行する", %{conn: conn} do

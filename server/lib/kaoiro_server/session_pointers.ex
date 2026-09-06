@@ -59,6 +59,22 @@ defmodule KaoiroServer.SessionPointers do
   still stamp valid `danger-full-access` on its own, the trust boundary
   documented in ADR-0014 F1 追補「resume 時の privilege 三軸再適用」).
 
+  7 of the 8 fields are merged FIELD-BY-FIELD into the existing stored
+  snapshot, never whole-replaced (issue #305 M4, ふじ round 1): a caller
+  reports only the axes it actually observed on this update (e.g.
+  `record_permission_observation/2` reports just `sandbox`/
+  `network_access` independently of `model`), so a key absent from
+  `snapshot` must retain its previously-stored value rather than
+  disappear. `effort`/`effort_source` are the one exception, kept as a
+  plain replace pair (absent clears both): they describe a property OF
+  the current `model`, so a fresh report that names a model without an
+  effort is "this model has none" — a real reset, not an unrelated axis
+  the caller simply didn't touch this time (protocol.md ADR-0035,
+  effort-less model switch). A key present but malformed is dropped by
+  the sanitizer above and therefore ALSO treated as absent, not `nil` —
+  sanitization cannot distinguish "omitted" from "rejected" once the
+  field never enters `sanitized`.
+
   Also advances the pointer's `effort_revision` (issue #88, ふじ 2026-08-05
   spec) — a monotonic counter, NOT a timestamp, tracking the last time the
   sanitized `{effort, effort_source}` pair actually changed to a new valid
@@ -273,12 +289,14 @@ defmodule KaoiroServer.SessionPointers do
             {:noreply, state}
 
           existing ->
+            merged = merge_snapshot(existing.snapshot || %{}, sanitized)
+
             {effort_revision, next_effort_revision} =
-              bump_effort_revision(existing, sanitized, state.next_effort_revision)
+              bump_effort_revision(existing, merged, state.next_effort_revision)
 
             new_pointer = %{
               existing
-              | snapshot: sanitized,
+              | snapshot: merged,
                 effort_revision: effort_revision
             }
 
@@ -288,7 +306,7 @@ defmodule KaoiroServer.SessionPointers do
               :ok =
                 :dets.insert(
                   state.table,
-                  {agent_id, existing.session_id, existing.cwd, existing.engine, sanitized,
+                  {agent_id, existing.session_id, existing.cwd, existing.engine, merged,
                    effort_revision}
                 )
 
@@ -351,7 +369,7 @@ defmodule KaoiroServer.SessionPointers do
 
   # effort_revision bump rule (issue #88, ふじ 2026-08-05 spec). Advances
   # ONLY when:
-  #   (a) the sanitized {effort, effort_source} pair actually changes AND
+  #   (a) the merged {effort, effort_source} pair actually changes AND
   #       the new effort is valid (non-empty), or
   #   (b) this pointer predates the feature (effort_revision nil) and the
   #       new commit carries a valid effort — lazy migration on the next
@@ -365,11 +383,11 @@ defmodule KaoiroServer.SessionPointers do
   # additionally re-validates effort at read time (defensive skip of
   # malformed/empty entries), so a revision left stale by such a transition
   # is simply not selected there rather than pointing at nothing.
-  defp bump_effort_revision(existing, sanitized, next_revision) do
+  defp bump_effort_revision(existing, merged, next_revision) do
     old_snapshot = existing.snapshot || %{}
     old_pair = {Map.get(old_snapshot, "effort"), Map.get(old_snapshot, "effort_source")}
-    new_effort = Map.get(sanitized, "effort")
-    new_pair = {new_effort, Map.get(sanitized, "effort_source")}
+    new_effort = Map.get(merged, "effort")
+    new_pair = {new_effort, Map.get(merged, "effort_source")}
     valid_new_effort? = is_binary(new_effort) and new_effort != ""
 
     cond do
@@ -405,6 +423,10 @@ defmodule KaoiroServer.SessionPointers do
   # — test-pinned to keep behavior deterministic.)
   @snapshot_known_fields ~w(model model_source effort effort_source
                             permission_mode sandbox network_access approval)a
+  # See `record_snapshot/3` moduledoc: every known field merges (preserves
+  # its previous value when a report omits it) except `effort`/
+  # `effort_source`, which replace as a pair (issue #305 M4).
+  @snapshot_replace_fields ~w(effort effort_source)
   @snapshot_sandbox_values ~w(read-only workspace-write danger-full-access)
   @snapshot_permission_mode_values ~w(default acceptEdits bypassPermissions
                                        plan dontAsk auto)
@@ -412,6 +434,17 @@ defmodule KaoiroServer.SessionPointers do
   # Antigravity-only approval axis (ADR-0057 F4c). "on-failure" is
   # deliberately excluded: this engine rejects it at spawn.
   @snapshot_approval_values ~w(untrusted on-request never)
+
+  # `record_snapshot/3` moduledoc: field-level merge with one replace-pair
+  # exception. Building the merge base from `existing` first and layering
+  # `sanitized` on top preserves every field `sanitized` omits EXCEPT
+  # `@snapshot_replace_fields`, which `sanitized` decides outright (absent
+  # there means absent in the result, i.e. cleared).
+  defp merge_snapshot(existing, sanitized) do
+    existing
+    |> Map.drop(@snapshot_replace_fields)
+    |> Map.merge(sanitized)
+  end
 
   defp sanitize_snapshot(snapshot) when is_map(snapshot) do
     {out, seen_keys} =

@@ -1083,6 +1083,17 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       end
     end
 
+    # AgentAcceptance serializes per agent_id (issue #305 M7, director
+    # round-2 correction) via an on-demand Registry-backed worker, not a
+    # single module-named process — a no-op `run/2` call guarantees the
+    # worker exists before the Registry lookup, so tests that need to
+    # `:sys.suspend/1` it directly can get its pid.
+    defp agent_acceptance_worker(agent_id) do
+      _ = KaoiroServer.AgentAcceptance.run(agent_id, fn -> :ok end)
+      [{pid, _value}] = Registry.lookup(KaoiroServer.AgentAcceptance.Registry, agent_id)
+      pid
+    end
+
     defp put_permission_agent(agent_id, opts \\ []) do
       state = Keyword.get(opts, :state, "idle")
       engine = Keyword.get(opts, :engine, "codex")
@@ -1474,7 +1485,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       # Simulates session_controller.ex's login-time resolution for the
       # SAME token join_as(:operator) authenticates with ("tok-operator",
       # client_assigns/1).
-      http_user =
+      {:ok, http_user} =
         KaoiroServer.Users.get_or_create(
           {:token, KaoiroServer.Auth.client_token_hash("tok-operator")},
           "user",
@@ -1548,7 +1559,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       put_allowlist("github:305-oauth-uid:operator\n")
       on_exit(fn -> Application.delete_env(:kaoiro_server, :oauth_allowlist_path) end)
 
-      http_user =
+      {:ok, http_user} =
         KaoiroServer.Users.get_or_create({:oauth, "github", "305-oauth-uid"}, "user", "Yuta")
 
       agent_id = "test.setperm2-m1-oauth"
@@ -1649,10 +1660,35 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         _ = Supervisor.restart_child(KaoiroServer.Supervisor, KaoiroServer.Users)
       end)
 
-      ref =
+      log =
+        capture_log(fn ->
+          ref =
+            push(socket, "set_permission", %{
+              "agent_id" => agent_id,
+              "sandbox" => "workspace-write"
+            })
+
+          assert_reply ref, :error, %{reason: "persistence_failed"}
+        end)
+
+      # S-B (director round-2, issue #305 M-B): the log line itself must
+      # never carry the token-hash source or the raw exit reason it is
+      # embedded in — pinned here so a later regression (reintroducing
+      # `inspect(reason)`) is caught even though it would not flip the
+      # reply's reason string.
+      refute log =~ KaoiroServer.Auth.client_token_hash("tok-operator")
+      refute log =~ ":token,"
+      refute log =~ "GenServer.call"
+
+      # The channel survives; a later request on the SAME socket still
+      # works once the store recovers (issue #305 M7 note: a Users
+      # outage must not also wedge the channel for unrelated commands).
+      _ = Supervisor.restart_child(KaoiroServer.Supervisor, KaoiroServer.Users)
+
+      ref2 =
         push(socket, "set_permission", %{"agent_id" => agent_id, "sandbox" => "workspace-write"})
 
-      assert_reply ref, :error, %{reason: "persistence_failed"}
+      assert_reply ref2, :ok, %{"revision" => 1}
     end
   end
 
@@ -2404,7 +2440,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
   describe "rename_user (issue #197 段階3, D13)" do
     test "operator は既存 user を rename でき、更新後の public entry を返す" do
-      user = KaoiroServer.Users.get_or_create({:oauth, "github", "rename-1"}, "user", "R")
+      {:ok, user} = KaoiroServer.Users.get_or_create({:oauth, "github", "rename-1"}, "user", "R")
       socket = join_as(:operator)
       assert_push "snapshot", %{"agents" => _}
 
@@ -2426,7 +2462,9 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     # key instead, and nothing here previously exercised that leg of
     # extract_name_field/1.
     test "canonical display_name key でも rename できる (issue #207 のdashboard producer が送るキー)" do
-      user = KaoiroServer.Users.get_or_create({:oauth, "github", "rename-canonical"}, "user", "R")
+      {:ok, user} =
+        KaoiroServer.Users.get_or_create({:oauth, "github", "rename-canonical"}, "user", "R")
+
       socket = join_as(:operator)
       assert_push "snapshot", %{"agents" => _}
 
@@ -2438,7 +2476,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
 
     test "user renames keep their grapheme-only length contract" do
-      user =
+      {:ok, user} =
         KaoiroServer.Users.get_or_create(
           {:oauth, "github", "rename-user-byte-scope"},
           "user",
@@ -2458,7 +2496,9 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
 
     test "viewer の rename_user は forbidden" do
-      user = KaoiroServer.Users.get_or_create({:oauth, "github", "rename-viewer"}, "user", "R")
+      {:ok, user} =
+        KaoiroServer.Users.get_or_create({:oauth, "github", "rename-viewer"}, "user", "R")
+
       socket = join_as(:viewer)
       assert_push "snapshot", %{"agents" => _}
 
@@ -2487,7 +2527,9 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     # ADR-0015 (issue #197 段階3, ふじ MF-1 レビュー指摘): rename_agent と
     # 同じ "accepting" action の version 検証。
     test "version 不一致は警告してから処理を継続する (ADR-0015)" do
-      user = KaoiroServer.Users.get_or_create({:oauth, "github", "rename-vmismatch"}, "user", "R")
+      {:ok, user} =
+        KaoiroServer.Users.get_or_create({:oauth, "github", "rename-vmismatch"}, "user", "R")
+
       socket = join_as(:operator)
       assert_push "snapshot", %{"agents" => _}
 
@@ -2508,7 +2550,9 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
 
     test "version 省略も警告した上で処理を継続する" do
-      user = KaoiroServer.Users.get_or_create({:oauth, "github", "rename-vabsent"}, "user", "R")
+      {:ok, user} =
+        KaoiroServer.Users.get_or_create({:oauth, "github", "rename-vabsent"}, "user", "R")
+
       socket = join_as(:operator)
       assert_push "snapshot", %{"agents" => _}
 
@@ -2522,7 +2566,9 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
 
     test "version が \"0\" なら警告しない" do
-      user = KaoiroServer.Users.get_or_create({:oauth, "github", "rename-vmatch"}, "user", "R")
+      {:ok, user} =
+        KaoiroServer.Users.get_or_create({:oauth, "github", "rename-vmatch"}, "user", "R")
+
       socket = join_as(:operator)
       assert_push "snapshot", %{"agents" => _}
 
@@ -2542,7 +2588,9 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
 
     test "空白 / 64 grapheme 超 / 制御文字混入の name は invalid_name" do
-      user = KaoiroServer.Users.get_or_create({:oauth, "github", "rename-invalid"}, "user", "R")
+      {:ok, user} =
+        KaoiroServer.Users.get_or_create({:oauth, "github", "rename-invalid"}, "user", "R")
+
       socket = join_as(:operator)
       assert_push "snapshot", %{"agents" => _}
 
@@ -6916,7 +6964,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       KaoiroServer.OAuthAllowlistFixture.put_allowlist("github:list-users-1:viewer\n")
 
-      user =
+      {:ok, user} =
         KaoiroServer.Users.get_or_create({:oauth, "github", "list-users-1"}, "user", "R")
 
       socket = join_as(:operator)
@@ -7670,6 +7718,25 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     assert get_in(env, ["ext", "permission_control", "revision"]) == 1
   end
 
+  test "a stale wrapper envelope does not erase the just-projected permission_control (round-1 review finding)" do
+    id = "test.m5-overlay-not-clobbered"
+    put_permission_agent(id)
+    seed_permission_baseline(id)
+    socket = join_as(:operator)
+    ref = push(socket, "set_permission", %{"agent_id" => id, "sandbox" => "workspace-write"})
+    assert_reply ref, :ok, %{"revision" => 1}
+
+    # An unrelated wrapper state_change (a heartbeat/tool-progress
+    # update) lands before the wrapper's own envelope ever catches up
+    # with the just-accepted revision — its `ext` carries no
+    # permission_control at all, matching a wrapper that has not yet
+    # processed the `set_permission` broadcast.
+    :ok = AgentStates.put(%{"agent_id" => id, "type" => "state_change", "state" => "thinking"})
+
+    env = AgentStates.snapshot() |> Map.fetch!(id)
+    assert get_in(env, ["ext", "permission_control", "revision"]) == 1
+  end
+
   @tag :fuji
   test "fuji DETS failure does not relay or acknowledge acceptance" do
     id = "test.fuji-persistence-failure"
@@ -7737,6 +7804,128 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     after
       :sys.resume(ps)
       KaoiroServer.SessionResets.delete(id)
+    end
+  end
+
+  test "M7 reverse: a session_reset queued behind an in-flight set_permission sees its dispatch stamp" do
+    id = "test.m7-reverse"
+    put_permission_agent(id)
+    env = AgentStates.snapshot() |> Map.fetch!(id)
+
+    caps =
+      Map.merge(env["ext"]["session_capabilities"], %{
+        "supports_session_reset" => true,
+        "session_reset_modes" => ["new", "clear"]
+      })
+
+    :ok =
+      AgentStates.put(
+        env
+        |> put_in(["ext", "session_capabilities"], caps)
+        |> Map.put("session_id", "sess-prev")
+      )
+
+    seed_permission_baseline(id)
+    perm_socket = join_as(:operator)
+    reset_socket = join_as(:operator)
+    # AgentAcceptance serializes PER agent_id (director round-2
+    # correction): both `set_permission` and `session_reset` for THIS
+    # SAME agent_id share one worker, so suspending that one worker
+    # (found via the module's Registry, not a module-named process)
+    # queues both without affecting any other agent's worker.
+    accept_pid = agent_acceptance_worker(id)
+    :sys.suspend(accept_pid)
+
+    try do
+      perm_ref =
+        push(perm_socket, "set_permission", %{"agent_id" => id, "sandbox" => "workspace-write"})
+
+      assert :ok ==
+               wait_until_permission(fn ->
+                 {:messages, messages} = Process.info(accept_pid, :messages)
+
+                 Enum.any?(messages, fn message ->
+                   match?({:"$gen_call", _, {:run, _}}, message)
+                 end)
+               end)
+
+      reset_ref = push(reset_socket, "session_reset", %{"agent_id" => id, "mode" => "new"})
+
+      # Both calls are now queued on the suspended worker's mailbox in
+      # this order; neither channel can have replied yet.
+      refute_receive %Phoenix.Socket.Reply{ref: ^perm_ref}, 200
+      refute_receive %Phoenix.Socket.Reply{ref: ^reset_ref}, 200
+
+      :sys.resume(accept_pid)
+
+      assert_reply perm_ref, :ok, %{"revision" => 1}
+
+      # The reset's `check_and_acquire/4` runs INSIDE the shared choke
+      # point strictly after the permission's own `guard_instruction/1`
+      # re-stamp (issue #305 M7): it correctly sees that fresh dispatch
+      # stamp and is refused by the pre-existing 2s dispatch cooldown
+      # (session_resets.ex `@dispatch_cooldown_ms`), not raced ahead of
+      # it. A stale/unordered read here would let the reset slip through
+      # as :ok instead — exactly the M7 hazard this closes.
+      assert_reply reset_ref, :error, %{reason: "agent_busy"}
+    after
+      :sys.resume(accept_pid)
+      KaoiroServer.SessionResets.delete(id)
+    end
+  end
+
+  test "actor resolution re-scans live tokens from inside the serialization closure, not before it (M7 correction negative control)" do
+    Application.put_env(:kaoiro_server, :client_tokens, "tok-m7-actor:operator")
+
+    on_exit(fn ->
+      Application.put_env(
+        :kaoiro_server,
+        :client_tokens,
+        "tok-operator:operator,tok-viewer:viewer,tok-admin:admin"
+      )
+    end)
+
+    {:ok, socket} = connect(KaoiroServerWeb.ClientSocket, %{"token" => "tok-m7-actor"})
+
+    {:ok, _reply, joined} =
+      subscribe_and_join(socket, KaoiroServerWeb.AgentsChannel, "agents:lobby")
+
+    id = "test.m7-actor-live-rescan"
+    put_permission_agent(id)
+    seed_permission_baseline(id)
+    accept_pid = agent_acceptance_worker(id)
+    :sys.suspend(accept_pid)
+
+    try do
+      ref = push(joined, "set_permission", %{"agent_id" => id, "sandbox" => "workspace-write"})
+
+      assert :ok ==
+               wait_until_permission(fn ->
+                 {:messages, messages} = Process.info(accept_pid, :messages)
+
+                 Enum.any?(messages, fn message ->
+                   match?({:"$gen_call", _, {:run, _}}, message)
+                 end)
+               end)
+
+      # Rotate the token OUT while the request sits queued behind the
+      # suspended worker — the channel's own early gate (join, role
+      # checks) already passed with the old token.
+      Application.put_env(
+        :kaoiro_server,
+        :client_tokens,
+        "tok-operator:operator,tok-viewer:viewer,tok-admin:admin"
+      )
+
+      :sys.resume(accept_pid)
+
+      # If actor resolution had happened BEFORE entering the closure
+      # (the withdrawn design), this would still succeed on the
+      # already-resolved actor. Resolving it live, immediately before
+      # persist, correctly refuses the now-rotated token instead.
+      assert_reply ref, :error, %{reason: "forbidden"}
+    after
+      :sys.resume(accept_pid)
     end
   end
 end

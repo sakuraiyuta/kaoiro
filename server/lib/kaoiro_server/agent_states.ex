@@ -147,6 +147,26 @@ defmodule KaoiroServer.AgentStates do
   end
 
   @doc """
+  Overlays `control_wire` (a wire-shaped `PermissionControlExt` map, string
+  keys) onto `agent_id`'s latest envelope's `ext.permission_control`, the
+  second server-derived exception alongside `disconnect/3` above (issue
+  #305 M5, ふじ round 1: "fuji accepted request is projected without
+  wrapper echo"). protocol.md: "The server projects its authoritative
+  latest request to operator snapshots/live state so reloads and other
+  clients see pending requests even before a wrapper report arrives" — an
+  accepted `set_permission` must be visible in `snapshot/1` immediately,
+  not only once the wrapper's own envelope echoes it back. Every other
+  `ext` field and the rest of the envelope (state/payload/history) is left
+  untouched. `:noop` when the agent is unknown (should not happen in
+  practice: `set_permission`'s own handler already required a known
+  connected agent before calling this).
+  """
+  def overlay_permission_control(agent_id, control_wire, opts \\ []) do
+    server = Keyword.get(opts, :server, __MODULE__)
+    GenServer.call(server, {:overlay_permission_control, agent_id, control_wire})
+  end
+
+  @doc """
   Drops the agent's history lines that do NOT belong to its current
   session — the `session_id` of its latest state envelope. Lines tagged
   with a different session_id (or with none) are removed; the current
@@ -428,6 +448,7 @@ defmodule KaoiroServer.AgentStates do
       {:reply, {:error, :too_many_agents}, state}
     else
       existing = Map.get(agents, agent_id)
+      envelope = preserve_newer_permission_control(existing, envelope)
 
       entry = %{
         envelope: envelope,
@@ -474,6 +495,18 @@ defmodule KaoiroServer.AgentStates do
       %{^agent_id => %{envelope: envelope, owner: ^owner} = entry} ->
         derived = disconnected_envelope(envelope, ts)
         {:reply, {:ok, derived}, put_agent(state, agent_id, %{entry | envelope: derived})}
+
+      _ ->
+        {:reply, :noop, state}
+    end
+  end
+
+  def handle_call({:overlay_permission_control, agent_id, control_wire}, _from, state) do
+    case state.agents do
+      %{^agent_id => %{envelope: envelope} = entry} ->
+        ext = Map.get(envelope, "ext", %{})
+        updated = Map.put(envelope, "ext", Map.put(ext, "permission_control", control_wire))
+        {:reply, :ok, put_agent(state, agent_id, %{entry | envelope: updated})}
 
       _ ->
         {:reply, :noop, state}
@@ -696,6 +729,39 @@ defmodule KaoiroServer.AgentStates do
   end
 
   defp incomplete_payload(agents), do: %{"agents" => agents, "snapshot_incomplete" => true}
+
+  # code-review-assessment finding (issue #305 M5, round 1): `put/2`
+  # replaces the whole envelope wholesale, so ANY wrapper envelope
+  # landing between `overlay_permission_control/3`'s projection and the
+  # wrapper's own eventual catch-up report would silently wipe the
+  # just-projected pending revision back down to the wrapper's still-
+  # stale view (protocol.md: "A supporting wrapper sends the control
+  # state on every state change" — every envelope carries ITS OWN
+  # cached copy, not just the one that actually echoes a change). Carry
+  # the higher-revision `permission_control` forward across a `put/2`
+  # instead of just accepting whatever the incoming envelope happens to
+  # report — mirrors `disconnect/3`'s "protect a server-derived overlay
+  # from a stale write" concern, generalized to any revision the
+  # incoming envelope has not yet caught up to.
+  defp preserve_newer_permission_control(nil, envelope), do: envelope
+
+  defp preserve_newer_permission_control(%{envelope: existing_envelope}, envelope) do
+    existing_revision = get_in(existing_envelope, ["ext", "permission_control", "revision"])
+    incoming_revision = get_in(envelope, ["ext", "permission_control", "revision"])
+
+    cond do
+      is_nil(existing_revision) ->
+        envelope
+
+      not is_nil(incoming_revision) and incoming_revision >= existing_revision ->
+        envelope
+
+      true ->
+        existing_control = get_in(existing_envelope, ["ext", "permission_control"])
+        ext = Map.get(envelope, "ext", %{})
+        Map.put(envelope, "ext", Map.put(ext, "permission_control", existing_control))
+    end
+  end
 
   # The comma is charged for every member, including the final one, so the
   # ledger never underestimates the JSON object that the final serializer sees.

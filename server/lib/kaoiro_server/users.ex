@@ -50,9 +50,26 @@ defmodule KaoiroServer.Users do
   token name) — the new user's id itself becomes its display_name, the
   same "fall back to the id" shape `AgentDetail.svelte` already uses for
   a persona-less agent (`envelope.persona?.name ?? envelope.agent_id`).
+
+  Returns `{:ok, user}` normally, or `{:error, :unavailable}` if this
+  store is down/wedged (issue #197/#305 M-B, director round-2 correction
+  2026-09-06). Bounded here, at the SUPPLY side, rather than trusting
+  every call site to wrap its own `try/catch` — 2 of the 3 real call
+  sites (`session_controller.ex`, `auth_controller.ex`) had none before
+  this fix, and a bare `GenServer.call` exit reason on `:noproc`/
+  `:timeout` embeds the full call request — including `source`, e.g.
+  `{:token, hash}` — so an uncaught exit anywhere risks the same
+  token-hash leak `client_token_hash/1`'s own docstring forbids
+  (director review, issue #197), regardless of whether the crashing
+  process happens to log it. Closing it once here covers every present
+  and future caller.
   """
   def get_or_create(source, kind, initial_display_name, server \\ __MODULE__) do
-    GenServer.call(server, {:get_or_create, source, kind, initial_display_name})
+    {:ok, GenServer.call(server, {:get_or_create, source, kind, initial_display_name})}
+  catch
+    :exit, _reason ->
+      Logger.warning("Users: store unavailable for get_or_create")
+      {:error, :unavailable}
   end
 
   @doc "Latest entry `%{id, kind, display_name}` for `user_id`, or nil."

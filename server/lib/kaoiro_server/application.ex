@@ -75,6 +75,15 @@ defmodule KaoiroServer.Application do
       # Session-reset pending lock (ADR-0036 F6/F7, phase-17 17-4).
       # In-memory only; a reset in flight when the server dies is a wash.
       {KaoiroServer.SessionResets, on_failure: &KaoiroServerWeb.PeerConnectivity.fail/3},
+      # Shared commit-serialization point between a session_reset
+      # acquisition and a set_permission submit for the same agent
+      # (issue #305 M7) — one ephemeral worker per agent_id, registered
+      # here and started on demand by `KaoiroServer.AgentAcceptance.run/2`
+      # (director round-2 correction: per-agent, not one global process).
+      # In-memory only, same lifetime as the two stores above it
+      # coordinates.
+      {Registry, keys: :unique, name: KaoiroServer.AgentAcceptance.Registry},
+      {DynamicSupervisor, name: KaoiroServer.AgentAcceptance.Supervisor, strategy: :one_for_one},
       # Restart-surviving identity ledger — agent_id → persona (ADR-0030).
       # Lets operator-driven restore work after a server restart when
       # AgentStates is empty.

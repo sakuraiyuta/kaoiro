@@ -687,6 +687,16 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # through to `record_permission_event/5`'s own shape validation, which
   # rejects it with an accurate log message rather than this one's
   # ledger-specific wording.
+  #
+  # issue #305 M6 (ふじ round 1): `trigger` never applies to a permission
+  # event (protocol.md: "trigger remains exclusive to compact_boundary —
+  # absent/null for permission events" — BOTH absent and explicit `null`
+  # are legitimate, so a plain `Map.get/2` treats them alike). A non-null
+  # value is rejected as a WHOLE event rather than silently repaired to
+  # nil, since a wrapper that stamps one is not producing the shape this
+  # audit trail expects and should get no signal it was accepted —
+  # matching how a wrapper-produced `permission_requested` is rejected
+  # outright rather than repaired.
   defp handle_wrapper_in(
          "session_lifecycle",
          %{"kind" => kind, "at" => at} = payload,
@@ -694,21 +704,31 @@ defmodule KaoiroServerWeb.WrapperChannel do
        )
        when kind in ["permission_applied", "permission_failed"] and is_binary(at) do
     agent_id = socket.assigns.agent_id
-    details = Map.get(payload, "details")
 
-    case details do
-      %{"revision" => revision} when is_integer(revision) and revision >= 0 ->
-        if KaoiroServer.PermissionSettings.known_revision?(agent_id, revision) do
-          SessionLifecycleEvents.record_permission_event(agent_id, kind, at, details)
-        else
-          Logger.warning(
-            "session_lifecycle: #{kind} revision #{revision} exceeds the known " <>
-              "allocation ledger, dropped (agent_id=#{agent_id})"
-          )
+    case Map.get(payload, "trigger") do
+      nil ->
+        details = resolve_permission_previous(agent_id, Map.get(payload, "details"))
+
+        case details do
+          %{"revision" => revision} when is_integer(revision) and revision >= 0 ->
+            if KaoiroServer.PermissionSettings.known_revision?(agent_id, revision) do
+              SessionLifecycleEvents.record_permission_event(agent_id, kind, at, details)
+            else
+              Logger.warning(
+                "session_lifecycle: #{kind} revision #{revision} exceeds the known " <>
+                  "allocation ledger, dropped (agent_id=#{agent_id})"
+              )
+            end
+
+          _malformed ->
+            SessionLifecycleEvents.record_permission_event(agent_id, kind, at, details)
         end
 
-      _malformed ->
-        SessionLifecycleEvents.record_permission_event(agent_id, kind, at, details)
+      trigger ->
+        Logger.warning(
+          "session_lifecycle: #{kind} carries a non-null trigger " <>
+            "(#{inspect(trigger)}); dropped (agent_id=#{agent_id})"
+        )
     end
 
     {:reply, :ok, socket}
@@ -894,6 +914,44 @@ defmodule KaoiroServerWeb.WrapperChannel do
         {:reply, {:error, %{reason: reset_request_reason(reason)}}, socket}
     end
   end
+
+  # issue #305 M6 (ふじ round 1), protocol.md "Permission lifecycle
+  # audit": "The server joins observations to its stored request,
+  # resolves previous from its own accepted observations" — a
+  # wrapper-supplied `previous` is exactly as untrustworthy as a
+  # wrapper-supplied audit actor and must never be relayed verbatim.
+  # Resolved from `PermissionSettings`'s own ledger (issue #305 M3):
+  # the latest revision strictly BELOW this report's own revision that
+  # actually has a recorded `effective` observation — order-independent
+  # of whether this same envelope's `record_observation/4` call has
+  # landed yet, since it only ever looks at STRICTLY earlier revisions.
+  # `nil` when none exists yet (a first-ever applied policy has no
+  # previous) — the key is omitted entirely, not stored as `null`.
+  #
+  # Contract: `previous` resolves only within whatever the ledger still
+  # holds (`PermissionSettings.State.prune_ledger/2`'s 32-entry cap) — a
+  # revision pruned away resolves to an earlier surviving one, or `nil`,
+  # never an error (issue #305, landing comment tracks the residual).
+  defp resolve_permission_previous(agent_id, %{"revision" => revision} = details)
+       when is_integer(revision) and revision >= 0 do
+    case KaoiroServer.PermissionSettings.get(agent_id) do
+      %{ledger: ledger} ->
+        previous =
+          ledger
+          |> Enum.filter(fn {rev, target} -> rev < revision and target.effective != nil end)
+          |> Enum.max_by(fn {rev, _target} -> rev end, fn -> nil end)
+
+        case previous do
+          nil -> Map.delete(details, "previous")
+          {_rev, target} -> Map.put(details, "previous", target.effective)
+        end
+
+      _other ->
+        Map.delete(details, "previous")
+    end
+  end
+
+  defp resolve_permission_previous(_agent_id, details), do: details
 
   # Non-IA envelopes: retain, then fan out. Unchanged from pre-ADR-0051
   # except that `inter_agent_message` no longer reaches it (see
@@ -1613,6 +1671,11 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # Pending and failed switches carry the prior effective value for display,
   # but are not a commit point. Skipping them keeps the persisted snapshot at
   # the last turn that completed without an outstanding switch (ADR-0035 F3).
+  # sandbox/network_access do NOT need a carve-out here despite also living
+  # in this same `effective` map: they confirm through their own independent
+  # machinery (`record_confirmed_permission_snapshot/2` below, sourced from
+  # `permission_control` rather than this `effective` map), so this guard
+  # skipping the whole map on THEIR account never actually withholds them.
   defp record_snapshot_from_ext(agent_id, %{
          "ext" => %{"effective" => effective} = ext
        })
@@ -1639,9 +1702,56 @@ defmodule KaoiroServerWeb.WrapperChannel do
        when is_map(permission_control) and
               engine in ["claude-code", "codex", "antigravity"] do
     KaoiroServer.PermissionSettings.record_observation(agent_id, engine, permission_control)
+    record_confirmed_permission_snapshot(agent_id)
   end
 
   defp record_permission_observation(_agent_id, _envelope), do: :ok
+
+  # Forwards the CONFIRMED sandbox/network_access pair into SessionPointers'
+  # resume snapshot, independent of `record_snapshot_from_ext/2`'s
+  # model/effort switch guard above (issue #305 M4, ふじ round 1): a
+  # permission observation confirms through its own machinery entirely
+  # unrelated to a model/effort switch, so a pending/failed model switch
+  # must not hide an already-applied sandbox/network_access change from the
+  # next resume. Only `status == :applied` is confirmed enough to publish
+  # here (protocol.md's state table: pending/applying/failed/unknown have
+  # no current effective permission to report). `SessionPointers.record_snapshot/3`'s
+  # field-level merge (M4) means this 2-key map only ever touches these two
+  # fields, leaving model/effort/etc. exactly as they were.
+  #
+  # Reads `PermissionSettings.get/1` — the server's OWN post-merge
+  # verdict — rather than the wrapper's raw wire status/effective
+  # (code-review-assessment finding, issue #305 round 1): `record_observation/4`
+  # just above is a `GenServer.cast`, but a `get/1` call sent right after
+  # from this same process is guaranteed to be processed after it (FIFO
+  # mailbox, same sender/target), so this always sees the JUST-merged
+  # state. This matters because `merge_current_revision/4`'s M3(b) fix
+  # can override a wrapper's self-reported "applied" to `:failed` /
+  # "policy_mismatch" when `requested` disagrees with what the server
+  # actually accepted — reading the raw wire status instead would forward
+  # a forged/buggy pair straight into the resume snapshot, which is later
+  # replayed as the agent's literal next-launch sandbox/network_access.
+  defp record_confirmed_permission_snapshot(agent_id) do
+    case KaoiroServer.PermissionSettings.get(agent_id) do
+      %{
+        control: %{
+          status: :applied,
+          effective: %{
+            "permission" => %{"sandbox" => sandbox},
+            "network_access" => network_access
+          }
+        }
+      }
+      when is_binary(sandbox) and is_boolean(network_access) ->
+        SessionPointers.record_snapshot(agent_id, %{
+          "sandbox" => sandbox,
+          "network_access" => network_access
+        })
+
+      _other ->
+        :ok
+    end
+  end
 
   @impl true
   # Phoenix.Channel.Server invokes this callback even when `join/3` returned

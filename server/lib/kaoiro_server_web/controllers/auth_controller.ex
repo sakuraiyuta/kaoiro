@@ -107,17 +107,31 @@ defmodule KaoiroServerWeb.AuthController do
         # Resolves (or, on a first login, creates) this identity's kaoiro
         # user_id (issue #197, ADR-0050 D1). display_name falls back to
         # uid when the provider gave none (マスター決裁 2026-08-09 #1).
-        user =
-          KaoiroServer.Users.get_or_create(
-            {:oauth, provider, uid},
-            "user",
-            display_name || uid
-          )
+        #
+        # Authorization is already settled above (`OAuthAllowlist.role_for/2`);
+        # `user` is used here only for the log line, never to gate this
+        # login. A `Users` outage (issue #305 M-B) must not block login —
+        # proceed either way, logging `user_id=unavailable` when the
+        # ledger can't be reached. The ledger entry itself gets created
+        # on the agent's first `set_permission` instead
+        # (`agents_channel.ex`'s `resolve_permission_actor/1`, same
+        # source key, so the eventual user_id does not diverge by path).
+        case KaoiroServer.Users.get_or_create(
+               {:oauth, provider, uid},
+               "user",
+               display_name || uid
+             ) do
+          {:ok, user} ->
+            Logger.info(
+              "OAuth login: user_id=#{user.id} name=#{inspect(user.display_name)} " <>
+                "provider=#{provider}"
+            )
 
-        Logger.info(
-          "OAuth login: user_id=#{user.id} name=#{inspect(user.display_name)} " <>
-            "provider=#{provider}"
-        )
+          {:error, :unavailable} ->
+            Logger.info(
+              "OAuth login: user_id=unavailable (Users store unreachable) provider=#{provider}"
+            )
+        end
 
         conn
         # One credential per session: an OAuth login supersedes any

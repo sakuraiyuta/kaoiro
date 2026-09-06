@@ -1790,8 +1790,8 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
         join_wrapper(agent_id, "default", %{"permission_sync" => %{"engine" => "codex"}})
 
       assert_push "permission_sync", %{version: "0", control: control, next: next}
-      assert control.revision == 0
-      assert control.status == :pending
+      assert control["revision"] == 0
+      assert control["status"] == "pending"
       assert next == %{revision: 0, requested: %{sandbox: "read-only", network_access: false}}
     end
 
@@ -1840,10 +1840,10 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
         join_wrapper(agent_id, "default", %{"permission_sync" => %{"engine" => "codex"}})
 
       assert_push "permission_sync", %{version: "0", control: control}
-      assert control.status == :pending
-      assert control.submitted == nil
-      assert control.effective == nil
-      assert control.last_effective == effective
+      assert control["status"] == "pending"
+      refute Map.has_key?(control, "submitted")
+      refute Map.has_key?(control, "effective")
+      assert control["last_effective"] == effective
     end
 
     test "state_change の ext.permission_control が PermissionSettings へ記録される" do
@@ -4522,7 +4522,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       Application.put_env(:kaoiro_server, :expose_users_to_agents, true)
       put_allowlist("github:dir-users-ao:operator\n")
 
-      user =
+      {:ok, user} =
         KaoiroServer.Users.get_or_create({:oauth, "github", "dir-users-ao"}, "user", "Ao")
 
       %{"users" => users} = request_directory("test.dir-users-config-true")
@@ -4546,7 +4546,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       Application.put_env(:kaoiro_server, :expose_users_to_agents, true)
       put_allowlist("github:dir-users-admin:admin\n")
 
-      user =
+      {:ok, user} =
         KaoiroServer.Users.get_or_create({:oauth, "github", "dir-users-admin"}, "user", "Admin")
 
       %{"users" => users} = request_directory("test.dir-users-admin")
@@ -4573,17 +4573,17 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       overlong = String.duplicate("a", 65)
       ctrl_name = "bad" <> <<0x01>> <> "name"
 
-      overlong_user =
+      {:ok, overlong_user} =
         KaoiroServer.Users.get_or_create(
           {:oauth, "github", "dir-users-overlong"},
           "user",
           overlong
         )
 
-      ctrl_user =
+      {:ok, ctrl_user} =
         KaoiroServer.Users.get_or_create({:oauth, "github", "dir-users-ctrl"}, "user", ctrl_name)
 
-      ok_user =
+      {:ok, ok_user} =
         KaoiroServer.Users.get_or_create({:oauth, "github", "dir-users-ok"}, "user", "Ok")
 
       %{"users" => users} = request_directory("test.dir-users-display-name-bound")
@@ -4600,7 +4600,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       Application.put_env(:kaoiro_server, :expose_users_to_agents, true)
       put_allowlist("github:dir-users-live-join:operator\n")
 
-      user =
+      {:ok, user} =
         KaoiroServer.Users.get_or_create({:oauth, "github", "dir-users-live-join"}, "user", "L")
 
       self_id = "test.dir-users-live-join-self"
@@ -4624,7 +4624,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       Application.put_env(:kaoiro_server, :client_tokens, "dir-users-live-tok:operator")
       hash = KaoiroServer.Auth.client_token_hash("dir-users-live-tok")
 
-      user = KaoiroServer.Users.get_or_create({:token, hash}, "user", "LT")
+      {:ok, user} = KaoiroServer.Users.get_or_create({:token, hash}, "user", "LT")
 
       self_id = "test.dir-users-live-tok-self"
       socket = join_wrapper(self_id)
@@ -4687,7 +4687,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       Application.put_env(:kaoiro_server, :client_tokens, "dir-users-tok:viewer")
       hash = KaoiroServer.Auth.client_token_hash("dir-users-tok")
 
-      user = KaoiroServer.Users.get_or_create({:token, hash}, "user", "Token User")
+      {:ok, user} = KaoiroServer.Users.get_or_create({:token, hash}, "user", "Token User")
 
       %{"users" => users} = request_directory("test.dir-users-config-token")
 
@@ -4705,7 +4705,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       Application.put_env(:kaoiro_server, :expose_users_to_agents, true)
       put_allowlist("github:dir-users-revoked:operator\n")
 
-      user =
+      {:ok, user} =
         KaoiroServer.Users.get_or_create({:oauth, "github", "dir-users-revoked"}, "user", "R")
 
       # 一旦は role 解決できることを確認してから revoke する。
@@ -4727,7 +4727,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       entry = "github:dir-users-e2e-recovery:operator\n"
       path = put_allowlist(entry)
 
-      user =
+      {:ok, user} =
         KaoiroServer.Users.get_or_create(
           {:oauth, "github", "dir-users-e2e-recovery"},
           "user",
@@ -5635,88 +5635,274 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       refute Map.has_key?(AgentStates.ia_projection(), "server")
     end
   end
+
   defp fuji_control do
-    %{"revision" => 0, "requested" => %{"sandbox" => "read-only", "network_access" => false},
-      "status" => "pending", "constraints" => %{"approval" => "never", "enforcement" => "os"}}
+    %{
+      "revision" => 0,
+      "requested" => %{"sandbox" => "read-only", "network_access" => false},
+      "status" => "pending",
+      "constraints" => %{"approval" => "never", "enforcement" => "os"}
+    }
   end
+
   defp fuji_observation(revision, requested) do
-    %{"revision" => revision, "requested" => requested, "execution_id" => "exec-1",
-      "session_id" => "seed-session", "turn_id" => "turn-1", "network_access" => requested["network_access"],
-      "permission" => %{"sandbox" => requested["sandbox"], "approval" => "never", "enforcement" => "os"}}
+    %{
+      "revision" => revision,
+      "requested" => requested,
+      "execution_id" => "exec-1",
+      "session_id" => "seed-session",
+      "turn_id" => "turn-1",
+      "network_access" => requested["network_access"],
+      "permission" => %{
+        "sandbox" => requested["sandbox"],
+        "approval" => "never",
+        "enforcement" => "os"
+      }
+    }
   end
+
   defp fuji_accepted(agent_id) do
     ps = KaoiroServer.PermissionSettings
     ps.record_observation(agent_id, "codex", fuji_control())
     ps.get(agent_id)
-    {:ok, rev, pair} = ps.submit_request(agent_id, "codex", %{sandbox: "workspace-write", network_access: true}, %{kind: "user", id: "u1"}, "2026-09-06T00:00:00Z")
+
+    {:ok, rev, pair} =
+      ps.submit_request(
+        agent_id,
+        "codex",
+        %{sandbox: "workspace-write", network_access: true},
+        %{kind: "user", id: "u1"},
+        "2026-09-06T00:00:00Z"
+      )
+
     {rev, %{"sandbox" => pair.sandbox, "network_access" => pair.network_access}}
   end
+
   @tag :fuji
   test "fuji observed permission survives pending model in SessionPointers" do
     id = "test.fuji-snapshot-pending"
     socket = seed_known(id)
     seed_snapshot(id, "old-model")
-    SessionPointers.record_snapshot(id, %{"model" => "old-model", "sandbox" => "read-only", "network_access" => false})
+
+    SessionPointers.record_snapshot(id, %{
+      "model" => "old-model",
+      "sandbox" => "read-only",
+      "network_access" => false
+    })
+
     {rev, pair} = fuji_accepted(id)
     obs = fuji_observation(rev, pair)
-    control = Map.merge(fuji_control(), %{"revision" => rev, "requested" => pair, "status" => "applied", "submitted" => Map.take(obs, ["revision", "requested", "execution_id"]), "effective" => obs})
-    ext = %{"engine" => "codex", "pending_model" => "new-model", "permission_control" => control,
-      "effective" => %{"model" => "old-model", "sandbox" => "workspace-write", "network_access" => true}}
+
+    control =
+      Map.merge(fuji_control(), %{
+        "revision" => rev,
+        "requested" => pair,
+        "status" => "applied",
+        "submitted" => Map.take(obs, ["revision", "requested", "execution_id"]),
+        "effective" => obs
+      })
+
+    ext = %{
+      "engine" => "codex",
+      "pending_model" => "new-model",
+      "permission_control" => control,
+      "effective" => %{
+        "model" => "old-model",
+        "sandbox" => "workspace-write",
+        "network_access" => true
+      }
+    }
+
     ref = push(socket, "envelope", Map.put(envelope(id, "idle"), "ext", ext))
     assert_reply ref, :ok
     assert KaoiroServer.PermissionSettings.get(id).control.status == :applied
-    assert SessionPointers.get(id).snapshot == %{"model" => "old-model", "sandbox" => "workspace-write", "network_access" => true}
+
+    assert SessionPointers.get(id).snapshot == %{
+             "model" => "old-model",
+             "sandbox" => "workspace-write",
+             "network_access" => true
+           }
   end
+
   @tag :fuji
   test "fuji unknown generic snapshot preserves observed permission fields" do
     id = "test.fuji-snapshot-unknown"
     socket = seed_known(id)
     seed_snapshot(id, "old-model")
-    SessionPointers.record_snapshot(id, %{"model" => "old-model", "sandbox" => "read-only", "network_access" => false})
-    ext = %{"engine" => "codex", "permission_control" => fuji_control(), "effective" => %{"model" => "new-model"}}
+
+    SessionPointers.record_snapshot(id, %{
+      "model" => "old-model",
+      "sandbox" => "read-only",
+      "network_access" => false
+    })
+
+    ext = %{
+      "engine" => "codex",
+      "permission_control" => fuji_control(),
+      "effective" => %{"model" => "new-model"}
+    }
+
     ref = push(socket, "envelope", Map.put(envelope(id, "idle"), "ext", ext))
     assert_reply ref, :ok
-    assert SessionPointers.get(id).snapshot == %{"model" => "new-model", "sandbox" => "read-only", "network_access" => false}
+
+    assert SessionPointers.get(id).snapshot == %{
+             "model" => "new-model",
+             "sandbox" => "read-only",
+             "network_access" => false
+           }
   end
+
+  test "a policy-mismatch applied report is not forwarded to SessionPointers (round-1 review finding)" do
+    id = "test.mismatch-snapshot-guard"
+    socket = seed_known(id)
+    seed_snapshot(id, "old-model")
+
+    SessionPointers.record_snapshot(id, %{
+      "model" => "old-model",
+      "sandbox" => "read-only",
+      "network_access" => false
+    })
+
+    {rev, _pair} = fuji_accepted(id)
+
+    forged = %{"sandbox" => "danger-full-access", "network_access" => true}
+    forged_obs = fuji_observation(rev, forged)
+
+    control =
+      Map.merge(fuji_control(), %{
+        "revision" => rev,
+        "requested" => forged,
+        "status" => "applied",
+        "effective" => forged_obs
+      })
+
+    ext = %{"engine" => "codex", "permission_control" => control}
+    ref = push(socket, "envelope", Map.put(envelope(id, "idle"), "ext", ext))
+    assert_reply ref, :ok
+
+    entry = KaoiroServer.PermissionSettings.get(id)
+    assert entry.control.status == :unknown
+    assert entry.control.reason == "policy_mismatch"
+
+    # The forged danger-full-access/true pair must never reach the resume
+    # snapshot, even though the wrapper's own report claimed "applied" —
+    # PermissionSettings' own post-merge verdict is what governs, not the
+    # wrapper's raw wire status.
+    assert SessionPointers.get(id).snapshot == %{
+             "model" => "old-model",
+             "sandbox" => "read-only",
+             "network_access" => false
+           }
+  end
+
   @tag :fuji
   test "fuji unallocated permission audit is rejected" do
     id = "test.fuji-audit-unallocated"
     socket = seed_known(id)
-    ref = push(socket, "session_lifecycle", %{"kind" => "permission_applied", "at" => "2026-09-06T00:00:00Z", "details" => fuji_observation(42, %{"sandbox" => "workspace-write", "network_access" => true})})
+
+    ref =
+      push(socket, "session_lifecycle", %{
+        "kind" => "permission_applied",
+        "at" => "2026-09-06T00:00:00Z",
+        "details" =>
+          fuji_observation(42, %{"sandbox" => "workspace-write", "network_access" => true})
+      })
+
     assert_reply ref, :ok
     assert SessionLifecycleEvents.list_for_agent(id) == []
   end
+
   @tag :fuji
   test "fuji accepted audit deduplicates the same execution outcome" do
     id = "test.fuji-audit-duplicate"
     socket = seed_known(id)
     {rev, pair} = fuji_accepted(id)
-    payload = %{"kind" => "permission_applied", "at" => "2026-09-06T00:00:00Z", "details" => fuji_observation(rev, pair)}
+
+    payload = %{
+      "kind" => "permission_applied",
+      "at" => "2026-09-06T00:00:00Z",
+      "details" => fuji_observation(rev, pair)
+    }
+
     for _ <- 1..2 do
       ref = push(socket, "session_lifecycle", payload)
       assert_reply ref, :ok
     end
+
     assert length(SessionLifecycleEvents.list_for_agent(id)) == 1
   end
+
+  test "a same-revision report with different content is recorded, not deduplicated (round-1 review finding)" do
+    id = "test.audit-dedup-content-guard"
+    socket = seed_known(id)
+    {rev, pair} = fuji_accepted(id)
+
+    honest_ref =
+      push(socket, "session_lifecycle", %{
+        "kind" => "permission_applied",
+        "at" => "2026-09-06T00:00:00Z",
+        "details" => fuji_observation(rev, pair)
+      })
+
+    assert_reply honest_ref, :ok
+
+    # A forged report for the SAME (kind, revision) but a DIFFERENT
+    # execution_id/effective must not be treated as a duplicate of the
+    # honest one above — dropping it here would just as easily drop the
+    # LEGITIMATE report if the forged one had arrived first.
+    forged =
+      fuji_observation(rev, pair)
+      |> Map.put("execution_id", "exec-forged")
+
+    forged_ref =
+      push(socket, "session_lifecycle", %{
+        "kind" => "permission_applied",
+        "at" => "2026-09-06T00:00:01Z",
+        "details" => forged
+      })
+
+    assert_reply forged_ref, :ok
+
+    events = SessionLifecycleEvents.list_for_agent(id)
+    assert length(events) == 2
+    execution_ids = Enum.map(events, &get_in(&1.details, ["execution_id"]))
+    assert Enum.sort(execution_ids) == ["exec-1", "exec-forged"]
+  end
+
   @tag :fuji
   test "fuji permission audit rejects non-null trigger" do
     id = "test.fuji-audit-trigger"
     socket = seed_known(id)
     {rev, pair} = fuji_accepted(id)
-    ref = push(socket, "session_lifecycle", %{"kind" => "permission_applied", "trigger" => 42, "at" => "2026-09-06T00:00:00Z", "details" => fuji_observation(rev, pair)})
+
+    ref =
+      push(socket, "session_lifecycle", %{
+        "kind" => "permission_applied",
+        "trigger" => 42,
+        "at" => "2026-09-06T00:00:00Z",
+        "details" => fuji_observation(rev, pair)
+      })
+
     assert_reply ref, :ok
     assert SessionLifecycleEvents.list_for_agent(id) == []
   end
+
   @tag :fuji
   test "fuji permission audit does not trust wrapper previous" do
     id = "test.fuji-audit-previous"
     socket = seed_known(id)
     {rev, pair} = fuji_accepted(id)
     details = Map.put(fuji_observation(rev, pair), "previous", fuji_observation(99, pair))
-    ref = push(socket, "session_lifecycle", %{"kind" => "permission_applied", "at" => "2026-09-06T00:00:00Z", "details" => details})
+
+    ref =
+      push(socket, "session_lifecycle", %{
+        "kind" => "permission_applied",
+        "at" => "2026-09-06T00:00:00Z",
+        "details" => details
+      })
+
     assert_reply ref, :ok
     events = SessionLifecycleEvents.list_for_agent(id)
     assert Enum.all?(events, fn event -> not Map.has_key?(event.details, "previous") end)
   end
-
 end

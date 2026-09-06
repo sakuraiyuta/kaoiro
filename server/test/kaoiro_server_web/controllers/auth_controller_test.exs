@@ -68,7 +68,7 @@ defmodule KaoiroServerWeb.AuthControllerTest do
 
       callback(conn)
 
-      user = KaoiroServer.Users.get_or_create({:oauth, "nextcloud", "ao"}, "user", nil)
+      {:ok, user} = KaoiroServer.Users.get_or_create({:oauth, "nextcloud", "ao"}, "user", nil)
       assert user.display_name == "ao"
     end
 
@@ -77,13 +77,46 @@ defmodule KaoiroServerWeb.AuthControllerTest do
       put_allowlist("nextcloud:ao:operator")
       stub_provider()
       callback(conn)
-      first = KaoiroServer.Users.get_or_create({:oauth, "nextcloud", "ao"}, "user", nil)
+      {:ok, first} = KaoiroServer.Users.get_or_create({:oauth, "nextcloud", "ao"}, "user", nil)
 
       stub_provider()
       callback(build_conn())
-      second = KaoiroServer.Users.get_or_create({:oauth, "nextcloud", "ao"}, "user", nil)
+      {:ok, second} = KaoiroServer.Users.get_or_create({:oauth, "nextcloud", "ao"}, "user", nil)
 
       assert first.id == second.id
+    end
+
+    # issue #305 M-B (director round-2 correction): authorization for an
+    # OAuth login is already settled by `OAuthAllowlist.role_for/2`
+    # above — `Users.get_or_create/4` only supplies a display log line,
+    # so a Users outage must not turn an allow-listed login into a
+    # failure.
+    test "Users store が落ちていても許可済み OAuth login は成立する", %{conn: conn} do
+      import ExUnit.CaptureLog
+
+      configure_nextcloud()
+      put_allowlist("nextcloud:ao:operator")
+      stub_provider()
+
+      :ok = Supervisor.terminate_child(KaoiroServer.Supervisor, KaoiroServer.Users)
+      on_exit(fn -> _ = Supervisor.restart_child(KaoiroServer.Supervisor, KaoiroServer.Users) end)
+
+      log =
+        capture_log(fn ->
+          conn = callback(conn)
+          assert redirected_to(conn) == "/index.html"
+          assert get_session(conn, "oauth_identity") == %{provider: "nextcloud", uid: "ao"}
+        end)
+
+      refute log =~ "GenServer.call"
+
+      # Convergence-after-recovery for THIS same {:oauth, "nextcloud",
+      # "ao"} source is already pinned by "同じ identity での再ログインは
+      # 同じ user_id になる" above — re-probing it here with a nil
+      # display_name would risk creating/renaming the shared identity
+      # out from under that sibling test depending on execution order,
+      # since `Users` has no per-test isolation (real global singleton).
+      _ = Supervisor.restart_child(KaoiroServer.Supervisor, KaoiroServer.Users)
     end
 
     test "provider の access token は session に残らない", %{conn: conn} do

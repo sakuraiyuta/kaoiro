@@ -403,21 +403,78 @@ defmodule KaoiroServer.SessionLifecycleEvents do
 
   @impl true
   def handle_cast({:append, agent_id, kind, trigger, at, details}, state) do
-    event = %{kind: kind, trigger: trigger, at: at, details: details}
     existing = Map.get(state.events, agent_id, [])
-    updated = Enum.take([event | existing], state.cap)
 
-    case write_record(state.table, agent_id, updated) do
-      :ok ->
-        {:noreply, %{state | events: Map.put(state.events, agent_id, updated)}}
+    if duplicate_permission_outcome?(existing, kind, details) do
+      {:noreply, state}
+    else
+      event = %{kind: kind, trigger: trigger, at: at, details: details}
+      updated = Enum.take([event | existing], state.cap)
 
-      {:error, reason} ->
-        Logger.warning(
-          "session_lifecycle event store write failed (#{inspect(reason)}); event dropped"
-        )
+      case write_record(state.table, agent_id, updated) do
+        :ok ->
+          {:noreply, %{state | events: Map.put(state.events, agent_id, updated)}}
 
-        {:noreply, state}
+        {:error, reason} ->
+          Logger.warning(
+            "session_lifecycle event store write failed (#{inspect(reason)}); event dropped"
+          )
+
+          {:noreply, state}
+      end
     end
+  end
+
+  # issue #305 M6 (ふじ round 1), protocol.md "Permission lifecycle
+  # audit": "Deduplicate matching revision/kind outcomes across
+  # reconnect." A reconnect (or a wrapper retry) can re-report the exact
+  # same execution outcome; storing it twice would misrepresent the
+  # audit trail as two distinct events. Keyed on (kind, revision), not
+  # execution_id: "a transition from unknown to subsequently observed
+  # may add applied" is a DIFFERENT kind (permission_failed vs
+  # permission_applied) for the same revision, so it is never deduped
+  # away by this check. `permission_requested` is server-authored once
+  # per accepted `submit_request/6` call and never re-delivered, so it
+  # is intentionally excluded.
+  #
+  # (kind, revision) ALONE is not enough (code-review-assessment
+  # finding, issue #305 round 1): `revision` is disclosed to the
+  # wrapper in the `set_permission` broadcast before anything actually
+  # executes, so a compromised/buggy wrapper could pre-emptively push a
+  # forged outcome for a known revision; without a content check, the
+  # LEGITIMATE report for that same (kind, revision) would then be
+  # silently dropped as "already seen" forever. `matching_permission_outcome?/2`
+  # additionally requires the security-relevant fields to agree before
+  # treating a new report as a duplicate — a mismatch means this is NOT
+  # a re-delivery and must be recorded, not discarded.
+  @permission_outcome_kinds ~w(permission_applied permission_failed)
+  defp duplicate_permission_outcome?(existing, kind, %{"revision" => revision} = details)
+       when kind in @permission_outcome_kinds do
+    Enum.any?(existing, fn event ->
+      event.kind == kind and is_map(event.details) and
+        Map.get(event.details, "revision") == revision and
+        matching_permission_outcome?(event.details, details)
+    end)
+  end
+
+  defp duplicate_permission_outcome?(_existing, _kind, _details), do: false
+
+  # Compares the security-relevant identity of two permission_applied/
+  # permission_failed reports for the same (kind, revision) — NOT full
+  # map equality: `previous` is resolved server-side independently on
+  # each delivery (`resolve_permission_previous/2`, M6) from whatever
+  # the ledger currently holds, so it can legitimately differ between
+  # two deliveries of the SAME real outcome without that outcome itself
+  # having changed. `permission_applied`'s shape has no `reason`/
+  # `rolled_back_to` and `permission_failed`'s has no `effective`;
+  # `Map.get/2` defaults the absent side to `nil` so comparing across
+  # either shape is still meaningful (both nil is a match).
+  defp matching_permission_outcome?(stored, incoming) do
+    Map.get(stored, "requested") == Map.get(incoming, "requested") and
+      Map.get(stored, "execution_id") == Map.get(incoming, "execution_id") and
+      Map.get(stored, "effective") == Map.get(incoming, "effective") and
+      Map.get(stored, "reason") == Map.get(incoming, "reason") and
+      Map.get(stored, "rolled_back_to") == Map.get(incoming, "rolled_back_to")
   end
 
   @impl true

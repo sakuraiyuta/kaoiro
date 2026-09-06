@@ -25,22 +25,22 @@ defmodule KaoiroServer.UsersTest do
   end
 
   test "get_or_create は新規 source に採番し id/kind/display_name を返す", %{server: server} do
-    user = Users.get_or_create({:oauth, "github", "ao"}, "user", "Ao", server)
+    {:ok, user} = Users.get_or_create({:oauth, "github", "ao"}, "user", "Ao", server)
 
     assert %{id: id, kind: "user", display_name: "Ao"} = user
     assert is_binary(id)
   end
 
   test "get_or_create は internal source を公開しない", %{server: server} do
-    user = Users.get_or_create({:oauth, "github", "ao"}, "user", "Ao", server)
+    {:ok, user} = Users.get_or_create({:oauth, "github", "ao"}, "user", "Ao", server)
 
     refute Map.has_key?(user, :source)
     assert Map.keys(user) |> Enum.sort() == [:display_name, :id, :kind]
   end
 
   test "同一 source を再度 get_or_create すると同じ user_id が返る", %{server: server} do
-    first = Users.get_or_create({:oauth, "github", "ao"}, "user", "Ao", server)
-    second = Users.get_or_create({:oauth, "github", "ao"}, "user", "Ao", server)
+    {:ok, first} = Users.get_or_create({:oauth, "github", "ao"}, "user", "Ao", server)
+    {:ok, second} = Users.get_or_create({:oauth, "github", "ao"}, "user", "Ao", server)
 
     assert first.id == second.id
   end
@@ -48,16 +48,18 @@ defmodule KaoiroServer.UsersTest do
   test "既存 user の display_name は再ログインで更新されない (マスター決裁2026-08-09#1)", %{
     server: server
   } do
-    first = Users.get_or_create({:oauth, "github", "ao"}, "user", "Ao", server)
-    second = Users.get_or_create({:oauth, "github", "ao"}, "user", "Ao Renamed Upstream", server)
+    {:ok, first} = Users.get_or_create({:oauth, "github", "ao"}, "user", "Ao", server)
+
+    {:ok, second} =
+      Users.get_or_create({:oauth, "github", "ao"}, "user", "Ao Renamed Upstream", server)
 
     assert first.id == second.id
     assert second.display_name == "Ao"
   end
 
   test "異なる source は別の user_id になる", %{server: server} do
-    a = Users.get_or_create({:oauth, "github", "ao"}, "user", "Ao", server)
-    b = Users.get_or_create({:oauth, "github", "kuroe"}, "user", "Kuroe", server)
+    {:ok, a} = Users.get_or_create({:oauth, "github", "ao"}, "user", "Ao", server)
+    {:ok, b} = Users.get_or_create({:oauth, "github", "kuroe"}, "user", "Kuroe", server)
 
     refute a.id == b.id
   end
@@ -65,8 +67,8 @@ defmodule KaoiroServer.UsersTest do
   test "oauth source と token source は別の user_id になる (同じ文字列由来でも衝突しない)", %{
     server: server
   } do
-    a = Users.get_or_create({:oauth, "token", "abc"}, "user", "A", server)
-    b = Users.get_or_create({:token, "abc"}, "user", "B", server)
+    {:ok, a} = Users.get_or_create({:oauth, "token", "abc"}, "user", "A", server)
+    {:ok, b} = Users.get_or_create({:token, "abc"}, "user", "B", server)
 
     refute a.id == b.id
   end
@@ -74,7 +76,7 @@ defmodule KaoiroServer.UsersTest do
   test "initial_display_name が nil なら採番した user_id 自体が display_name になる", %{
     server: server
   } do
-    user = Users.get_or_create({:token, "hash-x"}, "user", nil, server)
+    {:ok, user} = Users.get_or_create({:token, "hash-x"}, "user", nil, server)
 
     assert user.display_name == user.id
   end
@@ -84,14 +86,14 @@ defmodule KaoiroServer.UsersTest do
   end
 
   test "get で登録済み user を引ける", %{server: server} do
-    created = Users.get_or_create({:oauth, "github", "ao"}, "user", "Ao", server)
+    {:ok, created} = Users.get_or_create({:oauth, "github", "ao"}, "user", "Ao", server)
 
     assert Users.get(created.id, server) == created
   end
 
   test "all は全 user を返す", %{server: server} do
-    a = Users.get_or_create({:oauth, "github", "ao"}, "user", "Ao", server)
-    b = Users.get_or_create({:oauth, "github", "kuroe"}, "user", "Kuroe", server)
+    {:ok, a} = Users.get_or_create({:oauth, "github", "ao"}, "user", "Ao", server)
+    {:ok, b} = Users.get_or_create({:oauth, "github", "kuroe"}, "user", "Kuroe", server)
 
     all = Users.all(server)
     assert all[a.id] == a
@@ -102,7 +104,7 @@ defmodule KaoiroServer.UsersTest do
     server: server,
     path: path
   } do
-    a = Users.get_or_create({:oauth, "github", "ao"}, "user", "Ao", server)
+    {:ok, a} = Users.get_or_create({:oauth, "github", "ao"}, "user", "Ao", server)
     :ok = GenServer.stop(server)
 
     name2 = :"users_restart_#{System.unique_integer([:positive])}"
@@ -112,7 +114,7 @@ defmodule KaoiroServer.UsersTest do
     assert Users.get(a.id, name2) == a
 
     # 新規 source は復元済み id と衝突しない番号を採番する。
-    b = Users.get_or_create({:oauth, "github", "kuroe"}, "user", "Kuroe", name2)
+    {:ok, b} = Users.get_or_create({:oauth, "github", "kuroe"}, "user", "Kuroe", name2)
     refute b.id == a.id
 
     GenServer.stop(name2)
@@ -120,7 +122,7 @@ defmodule KaoiroServer.UsersTest do
 
   describe "rename/3 (issue #197 段階3)" do
     test "display_name を書き換え、更新後の public entry を返す", %{server: server} do
-      user = Users.get_or_create({:oauth, "github", "ao"}, "user", "Ao", server)
+      {:ok, user} = Users.get_or_create({:oauth, "github", "ao"}, "user", "Ao", server)
 
       assert {:ok, renamed} = Users.rename(user.id, "あお(改名)", server)
       assert renamed == %{id: user.id, kind: "user", display_name: "あお(改名)"}
@@ -128,7 +130,7 @@ defmodule KaoiroServer.UsersTest do
     end
 
     test "rename は internal source を公開しない", %{server: server} do
-      user = Users.get_or_create({:oauth, "github", "ao"}, "user", "Ao", server)
+      {:ok, user} = Users.get_or_create({:oauth, "github", "ao"}, "user", "Ao", server)
 
       assert {:ok, renamed} = Users.rename(user.id, "あお(改名)", server)
       refute Map.has_key?(renamed, :source)
@@ -139,7 +141,7 @@ defmodule KaoiroServer.UsersTest do
     end
 
     test "rename 後の再起動で新しい display_name が残る", %{server: server, path: path} do
-      user = Users.get_or_create({:oauth, "github", "kuroe"}, "user", "Kuroe", server)
+      {:ok, user} = Users.get_or_create({:oauth, "github", "kuroe"}, "user", "Kuroe", server)
       assert {:ok, _renamed} = Users.rename(user.id, "くろえ(改)", server)
       :ok = GenServer.stop(server)
 
@@ -157,7 +159,10 @@ defmodule KaoiroServer.UsersTest do
 
     test "rename 後も all_with_role の role join は継続する", %{server: server} do
       put_allowlist("github:dir-rename-role:operator\n")
-      user = Users.get_or_create({:oauth, "github", "dir-rename-role"}, "user", "R", server)
+
+      {:ok, user} =
+        Users.get_or_create({:oauth, "github", "dir-rename-role"}, "user", "R", server)
+
       assert {:ok, _renamed} = Users.rename(user.id, "R(改)", server)
 
       assert [%{id: id, display_name: "R(改)", role: :operator}] = Users.all_with_role(server)
@@ -173,7 +178,7 @@ defmodule KaoiroServer.UsersTest do
 
     test "OAuth source の role を allow-list からライブ join する", %{server: server} do
       put_allowlist("github:ao:operator\n")
-      user = Users.get_or_create({:oauth, "github", "ao"}, "user", "Ao", server)
+      {:ok, user} = Users.get_or_create({:oauth, "github", "ao"}, "user", "Ao", server)
 
       assert Users.all_with_role(server) == [
                %{id: user.id, kind: "user", display_name: "Ao", role: :operator}
@@ -183,7 +188,7 @@ defmodule KaoiroServer.UsersTest do
     test "token source の role を client_tokens からライブ join する", %{server: server} do
       Application.put_env(:kaoiro_server, :client_tokens, "tok-a:viewer")
       hash = KaoiroServer.Auth.client_token_hash("tok-a")
-      user = Users.get_or_create({:token, hash}, "user", "Token User", server)
+      {:ok, user} = Users.get_or_create({:token, hash}, "user", "Token User", server)
 
       assert Users.all_with_role(server) == [
                %{id: user.id, kind: "user", display_name: "Token User", role: :viewer}
@@ -192,7 +197,7 @@ defmodule KaoiroServer.UsersTest do
 
     test "role 変更は次の呼び出しに反映される (キャッシュしない)", %{server: server} do
       put_allowlist("github:ao:operator\n")
-      user = Users.get_or_create({:oauth, "github", "ao"}, "user", "Ao", server)
+      {:ok, user} = Users.get_or_create({:oauth, "github", "ao"}, "user", "Ao", server)
 
       assert [%{role: :operator}] = Users.all_with_role(server)
 
@@ -204,7 +209,7 @@ defmodule KaoiroServer.UsersTest do
 
     test "allow-list から消えた user は entry ごと省略され、復旧後は再出現する", %{server: server} do
       put_allowlist("github:ao:operator\n")
-      user = Users.get_or_create({:oauth, "github", "ao"}, "user", "Ao", server)
+      {:ok, user} = Users.get_or_create({:oauth, "github", "ao"}, "user", "Ao", server)
 
       assert [%{role: :operator}] = Users.all_with_role(server)
 
@@ -227,7 +232,7 @@ defmodule KaoiroServer.UsersTest do
       put_allowlist("github:ao:operator\n")
       Application.put_env(:kaoiro_server, :client_tokens, "")
 
-      resolvable = Users.get_or_create({:oauth, "github", "ao"}, "user", "Ao", server)
+      {:ok, resolvable} = Users.get_or_create({:oauth, "github", "ao"}, "user", "Ao", server)
       Users.get_or_create({:token, "unresolvable-hash"}, "user", "Ghost", server)
 
       assert [%{id: id}] = Users.all_with_role(server)

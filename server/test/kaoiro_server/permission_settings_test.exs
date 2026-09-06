@@ -661,6 +661,499 @@ defmodule KaoiroServer.PermissionSettingsTest do
     end
   end
 
+  # ---- M3 ledger (issue #305, ふじ round 1 store-probe findings) -----------
+
+  describe "M3 ledger" do
+    test "an unallocated non-zero revision cannot seed a first-ever baseline (M3-a)",
+         %{server: server} do
+      :ok =
+        PermissionSettings.record_observation(
+          "c.unallocated",
+          "codex",
+          baseline_control(%{"revision" => 42}),
+          server
+        )
+
+      # No entry ever lands — a bogus revision-42 "baseline" would
+      # otherwise let a later legitimate submit_request allocate
+      # revision 1, landing BELOW it and being misread as stale.
+      Process.sleep(20)
+      assert PermissionSettings.get("c.unallocated", server) == nil
+
+      assert PermissionSettings.submit_request(
+               "c.unallocated",
+               "codex",
+               %{sandbox: "workspace-write"},
+               %{kind: "user", id: "u1"},
+               "t",
+               server
+             ) == {:error, :permission_not_ready}
+    end
+
+    test "a same-revision report with a different requested pair is a policy mismatch (M3-b)",
+         %{server: server} do
+      seed_baseline(server, "c.mismatch")
+
+      {:ok, 1, %{sandbox: "workspace-write"}} =
+        PermissionSettings.submit_request(
+          "c.mismatch",
+          "codex",
+          %{sandbox: "workspace-write"},
+          %{kind: "user", id: "u1"},
+          "t",
+          server
+        )
+
+      forged = %{"sandbox" => "danger-full-access", "network_access" => true}
+
+      forged_effective = %{
+        "revision" => 1,
+        "requested" => forged,
+        "execution_id" => "exec-1",
+        "session_id" => "session",
+        "turn_id" => "turn-1",
+        "permission" => %{"sandbox" => "danger-full-access", "approval" => "never"},
+        "network_access" => true
+      }
+
+      :ok =
+        PermissionSettings.record_observation(
+          "c.mismatch",
+          "codex",
+          baseline_control(%{
+            "revision" => 1,
+            "status" => "applied",
+            "requested" => forged,
+            "effective" => forged_effective
+          }),
+          server
+        )
+
+      :ok =
+        wait_until(fn ->
+          PermissionSettings.get("c.mismatch", server).control.status == :unknown
+        end)
+
+      entry = PermissionSettings.get("c.mismatch", server)
+      # The server's own requested pair survives, unreplaced by the
+      # wrapper's forged value; a mismatched observation is never
+      # trustworthy historical evidence either. Surfaced as :unknown
+      # ("blocked"), never :failed (director round-2 correction): :failed
+      # would trigger the pre-application-rollback path and move `next`
+      # backward, but a mismatch must leave `next` exactly as it was —
+      # "retain the requested selection as next... do not substitute a
+      # previous policy automatically" (protocol.md).
+      assert entry.control.requested == %{sandbox: "workspace-write", network_access: false}
+      assert entry.control.status == :unknown
+      assert entry.control.reason == "policy_mismatch"
+      assert entry.control.effective == nil
+      assert entry.control.last_effective == nil
+      assert entry.control.rolled_back_to == nil
+
+      assert entry.next == %{
+               revision: 1,
+               requested: %{sandbox: "workspace-write", network_access: false}
+             }
+    end
+
+    test "a mismatch never adopts a WIDER pair via a forged requested (M3-b negative control)",
+         %{server: server} do
+      seed_baseline(server, "c.mismatch-wide")
+
+      {:ok, 1, %{sandbox: "read-only"}} =
+        PermissionSettings.submit_request(
+          "c.mismatch-wide",
+          "codex",
+          %{sandbox: "read-only"},
+          %{kind: "user", id: "u1"},
+          "t",
+          server
+        )
+
+      forged = %{"sandbox" => "danger-full-access", "network_access" => true}
+
+      :ok =
+        PermissionSettings.record_observation(
+          "c.mismatch-wide",
+          "codex",
+          baseline_control(%{
+            "revision" => 1,
+            "status" => "applied",
+            "requested" => forged,
+            "effective" => %{
+              "revision" => 1,
+              "requested" => forged,
+              "execution_id" => "exec-w",
+              "session_id" => "session",
+              "turn_id" => "turn-1",
+              "permission" => %{"sandbox" => "danger-full-access", "approval" => "never"},
+              "network_access" => true
+            }
+          }),
+          server
+        )
+
+      :ok =
+        wait_until(fn ->
+          PermissionSettings.get("c.mismatch-wide", server).control.status == :unknown
+        end)
+
+      entry = PermissionSettings.get("c.mismatch-wide", server)
+      # `next` must never be widened to the forged pair, regardless of
+      # how the mismatch is reported.
+      assert entry.next == %{
+               revision: 1,
+               requested: %{sandbox: "read-only", network_access: false}
+             }
+    end
+
+    test "a new request while the prior revision is still applying carries its submitted forward (M3-c)",
+         %{server: server} do
+      seed_baseline(server, "c.successor")
+
+      {:ok, 1, _} =
+        PermissionSettings.submit_request(
+          "c.successor",
+          "codex",
+          %{sandbox: "workspace-write", network_access: true},
+          %{kind: "user", id: "u1"},
+          "t",
+          server
+        )
+
+      submitted = %{"revision" => 1, "requested" => %{"sandbox" => "workspace-write"}}
+
+      :ok =
+        PermissionSettings.record_observation(
+          "c.successor",
+          "codex",
+          baseline_control(%{
+            "revision" => 1,
+            "status" => "applying",
+            "requested" => %{"sandbox" => "workspace-write", "network_access" => true},
+            "submitted" => submitted
+          }),
+          server
+        )
+
+      :ok =
+        wait_until(fn ->
+          PermissionSettings.get("c.successor", server).control.status == :applying
+        end)
+
+      {:ok, 2, _} =
+        PermissionSettings.submit_request(
+          "c.successor",
+          "codex",
+          %{sandbox: "read-only"},
+          %{kind: "user", id: "u1"},
+          "t",
+          server
+        )
+
+      entry = PermissionSettings.get("c.successor", server)
+      assert entry.control.revision == 2
+      # protocol.md: "the top-level request is B/pending while submitted
+      # ... may describe A" — B's own submit must not wipe A's still
+      # in-flight submission.
+      assert entry.control.submitted == submitted
+    end
+
+    test "a definitive rollback resolves next from the ledger's own prior selection (M3-d)",
+         %{server: server} do
+      seed_baseline(server, "c.rollback")
+
+      req_a = %{"sandbox" => "workspace-write", "network_access" => true}
+
+      {:ok, 1, _} =
+        PermissionSettings.submit_request(
+          "c.rollback",
+          "codex",
+          %{sandbox: "workspace-write", network_access: true},
+          %{kind: "user", id: "u1"},
+          "t",
+          server
+        )
+
+      obs_a = %{
+        "revision" => 1,
+        "requested" => req_a,
+        "execution_id" => "exec-1",
+        "session_id" => "session",
+        "turn_id" => "turn-1",
+        "permission" => %{"sandbox" => "workspace-write", "approval" => "never"},
+        "network_access" => true
+      }
+
+      sub_a = Map.take(obs_a, ["revision", "requested", "execution_id"])
+
+      :ok =
+        PermissionSettings.record_observation(
+          "c.rollback",
+          "codex",
+          baseline_control(%{
+            "revision" => 1,
+            "status" => "applied",
+            "requested" => req_a,
+            "submitted" => sub_a,
+            "effective" => obs_a
+          }),
+          server
+        )
+
+      :ok =
+        wait_until(fn ->
+          PermissionSettings.get("c.rollback", server).control.status == :applied
+        end)
+
+      {:ok, 2, _} =
+        PermissionSettings.submit_request(
+          "c.rollback",
+          "codex",
+          %{sandbox: "read-only"},
+          %{kind: "user", id: "u1"},
+          "t",
+          server
+        )
+
+      # Revision 2 is rejected before application; the observation still
+      # carries A's lingering `submitted` (protocol.md: "Retain A's
+      # submission and request binding"), so `submitted == nil` alone
+      # cannot signal the rollback — `rolled_back_to` does.
+      :ok =
+        PermissionSettings.record_observation(
+          "c.rollback",
+          "codex",
+          baseline_control(%{
+            "revision" => 2,
+            "status" => "failed",
+            "requested" => %{"sandbox" => "read-only", "network_access" => true},
+            "submitted" => sub_a,
+            "effective" => obs_a,
+            "reason" => "rejected_before_application",
+            "rolled_back_to" => req_a
+          }),
+          server
+        )
+
+      :ok =
+        wait_until(fn ->
+          PermissionSettings.get("c.rollback", server).control.status == :failed
+        end)
+
+      entry = PermissionSettings.get("c.rollback", server)
+
+      assert entry.next == %{
+               revision: 1,
+               requested: %{sandbox: "workspace-write", network_access: true}
+             }
+
+      # rolled_back_to published to clients/audit is SERVER-derived from
+      # the same fallback used for `next`, not the wrapper's raw claim
+      # (here they happen to agree; the negative-control test below
+      # covers the case where they do NOT).
+      assert entry.control.rolled_back_to == %{sandbox: "workspace-write", network_access: true}
+      assert entry.control.effective == nil
+    end
+
+    test "a rollback never adopts a forged rolled_back_to VALUE, even a wider one (M3-d negative control)",
+         %{server: server} do
+      seed_baseline(server, "c.rollback-forged")
+
+      req_a = %{"sandbox" => "workspace-write", "network_access" => false}
+
+      {:ok, 1, _} =
+        PermissionSettings.submit_request(
+          "c.rollback-forged",
+          "codex",
+          %{sandbox: "workspace-write"},
+          %{kind: "user", id: "u1"},
+          "t",
+          server
+        )
+
+      obs_a = %{
+        "revision" => 1,
+        "requested" => req_a,
+        "execution_id" => "exec-1",
+        "session_id" => "session",
+        "turn_id" => "turn-1",
+        "permission" => %{"sandbox" => "workspace-write", "approval" => "never"},
+        "network_access" => false
+      }
+
+      :ok =
+        PermissionSettings.record_observation(
+          "c.rollback-forged",
+          "codex",
+          baseline_control(%{
+            "revision" => 1,
+            "status" => "applied",
+            "requested" => req_a,
+            "submitted" => Map.take(obs_a, ["revision", "requested", "execution_id"]),
+            "effective" => obs_a
+          }),
+          server
+        )
+
+      :ok =
+        wait_until(fn ->
+          PermissionSettings.get("c.rollback-forged", server).control.status == :applied
+        end)
+
+      {:ok, 2, _} =
+        PermissionSettings.submit_request(
+          "c.rollback-forged",
+          "codex",
+          %{sandbox: "read-only"},
+          %{kind: "user", id: "u1"},
+          "t",
+          server
+        )
+
+      # The wrapper claims rolled_back_to = danger-full-access/true — a
+      # WIDER pair than A's actual workspace-write/false, and one that
+      # never appears anywhere in this agent's real ledger history.
+      forged_rollback = %{"sandbox" => "danger-full-access", "network_access" => true}
+
+      :ok =
+        PermissionSettings.record_observation(
+          "c.rollback-forged",
+          "codex",
+          baseline_control(%{
+            "revision" => 2,
+            "status" => "failed",
+            "requested" => %{"sandbox" => "read-only", "network_access" => false},
+            "reason" => "rejected_before_application",
+            "rolled_back_to" => forged_rollback
+          }),
+          server
+        )
+
+      :ok =
+        wait_until(fn ->
+          PermissionSettings.get("c.rollback-forged", server).control.status == :failed
+        end)
+
+      entry = PermissionSettings.get("c.rollback-forged", server)
+      # next/rolled_back_to fall back to the ledger's real prior
+      # selection (A), never the forged (and wider) claimed value.
+      real_req_a = %{sandbox: "workspace-write", network_access: false}
+      assert entry.next == %{revision: 1, requested: real_req_a}
+      assert entry.control.rolled_back_to == real_req_a
+    end
+
+    test "the ledger prunes oldest settled entries beyond the safety cap", %{server: server} do
+      seed_baseline(server, "c.prune")
+
+      for n <- 1..40 do
+        sandbox = if rem(n, 2) == 0, do: "workspace-write", else: "read-only"
+
+        {:ok, ^n, _} =
+          PermissionSettings.submit_request(
+            "c.prune",
+            "codex",
+            %{sandbox: sandbox},
+            %{kind: "user", id: "u1"},
+            "t",
+            server
+          )
+      end
+
+      entry = PermissionSettings.get("c.prune", server)
+      assert entry.control.revision == 40
+      assert map_size(entry.ledger) <= 32
+      # The current and next revisions are always protected.
+      assert Map.has_key?(entry.ledger, 40)
+      # Oldest entries were dropped first.
+      refute Map.has_key?(entry.ledger, 1)
+    end
+
+    test "a client_socket: actor id from a pre-M1 record does not resurrect on load (M-A)",
+         %{server: server, path: path} do
+      seed_baseline(server, "c.legacy-actor")
+
+      {:ok, 1, _} =
+        PermissionSettings.submit_request(
+          "c.legacy-actor",
+          "codex",
+          %{sandbox: "workspace-write"},
+          %{kind: "user", id: "u1"},
+          "t",
+          server
+        )
+
+      :ok = GenServer.stop(server)
+
+      {:ok, table} = :dets.open_file(server, file: String.to_charlist(path))
+
+      [{{:settings, "c.legacy-actor"}, entry}] =
+        :dets.lookup(table, {:settings, "c.legacy-actor"})
+
+      legacy_entry =
+        put_in(entry, [:control, :actor], %{"kind" => "user", "id" => "client_socket:abc123"})
+
+      :dets.insert(table, {{:settings, "c.legacy-actor"}, legacy_entry})
+      :dets.sync(table)
+      :dets.close(table)
+
+      name2 = :"ps_legacy_actor_#{System.unique_integer([:positive])}"
+      {:ok, pid2} = PermissionSettings.start_link(name: name2, path: path)
+
+      assert PermissionSettings.get("c.legacy-actor", name2).control.actor == nil
+
+      GenServer.stop(pid2)
+    end
+
+    test "an unknown status survives a restart unchanged, submitted and reason intact (M3-e)",
+         %{server: server, path: path} do
+      seed_baseline(server, "c.unknown-restart")
+
+      {:ok, 1, _} =
+        PermissionSettings.submit_request(
+          "c.unknown-restart",
+          "codex",
+          %{sandbox: "workspace-write"},
+          %{kind: "user", id: "u1"},
+          "t",
+          server
+        )
+
+      submitted = %{"execution_id" => "e1", "revision" => 1}
+
+      :ok =
+        PermissionSettings.record_observation(
+          "c.unknown-restart",
+          "codex",
+          baseline_control(%{
+            "revision" => 1,
+            "status" => "unknown",
+            "requested" => %{"sandbox" => "workspace-write", "network_access" => false},
+            "submitted" => submitted,
+            "reason" => "observation_unavailable"
+          }),
+          server
+        )
+
+      :ok =
+        wait_until(fn ->
+          PermissionSettings.get("c.unknown-restart", server).control.status == :unknown
+        end)
+
+      :ok = GenServer.stop(server)
+
+      name2 = :"ps_unknown_restart_#{System.unique_integer([:positive])}"
+      {:ok, pid2} = PermissionSettings.start_link(name: name2, path: path)
+
+      entry = PermissionSettings.get("c.unknown-restart", name2)
+      assert entry.control.status == :unknown
+      assert entry.control.submitted == submitted
+      assert entry.control.reason == "observation_unavailable"
+
+      GenServer.stop(pid2)
+    end
+  end
+
   # ---- sync_view -----------------------------------------------------------
 
   describe "sync_view/1" do
@@ -668,11 +1161,12 @@ defmodule KaoiroServer.PermissionSettingsTest do
       assert PermissionSettings.sync_view(nil) == {nil, nil}
     end
 
-    test "pending is passed through unchanged", %{server: server} do
+    test "pending is passed through unchanged (wire-shaped)", %{server: server} do
       seed_baseline(server, "c.1")
       entry = PermissionSettings.get("c.1", server)
 
-      assert PermissionSettings.sync_view(entry) == {entry.control, entry.next}
+      assert PermissionSettings.sync_view(entry) ==
+               {PermissionSettings.control_wire(entry.control), entry.next}
     end
 
     test "applied rounds to pending, drops submitted/effective, keeps last_effective", %{
@@ -711,10 +1205,10 @@ defmodule KaoiroServer.PermissionSettingsTest do
       entry = PermissionSettings.get("c.2", server)
       {control, next} = PermissionSettings.sync_view(entry)
 
-      assert control.status == :pending
-      assert control.submitted == nil
-      assert control.effective == nil
-      assert control.last_effective == effective
+      assert control["status"] == "pending"
+      refute Map.has_key?(control, "submitted")
+      refute Map.has_key?(control, "effective")
+      assert control["last_effective"] == effective
       assert next == entry.next
     end
 
@@ -750,9 +1244,152 @@ defmodule KaoiroServer.PermissionSettingsTest do
       entry = PermissionSettings.get("c.3", server)
       {control, _next} = PermissionSettings.sync_view(entry)
 
-      assert control.status == :failed
-      assert control.reason == "rejected_by_wrapper"
-      assert control.rolled_back_to == %{sandbox: "read-only", network_access: false}
+      assert control["status"] == "failed"
+      assert control["reason"] == "rejected_by_wrapper"
+      assert control["rolled_back_to"] == %{"sandbox" => "read-only", "network_access" => false}
+    end
+
+    test "optional fields are OMITTED, never emitted as explicit null (issue #305 M1)",
+         %{server: server} do
+      seed_baseline(server, "c.4")
+      entry = PermissionSettings.get("c.4", server)
+      {control, _next} = PermissionSettings.sync_view(entry)
+
+      refute Map.has_key?(control, "submitted")
+      refute Map.has_key?(control, "effective")
+      refute Map.has_key?(control, "last_effective")
+      refute Map.has_key?(control, "reason")
+      refute Map.has_key?(control, "rolled_back_to")
+    end
+
+    test "applying rounds to pending, no explicit null for submitted/effective (issue #305 M1)",
+         %{server: server} do
+      seed_baseline(server, "c.5")
+
+      {:ok, 1, _} =
+        PermissionSettings.submit_request(
+          "c.5",
+          "codex",
+          %{sandbox: "workspace-write"},
+          %{kind: "user", id: "u1"},
+          "t",
+          server
+        )
+
+      submitted = %{"execution_id" => "e1", "revision" => 1}
+
+      :ok =
+        PermissionSettings.record_observation(
+          "c.5",
+          "codex",
+          baseline_control(%{
+            "revision" => 1,
+            "status" => "applying",
+            "requested" => %{"sandbox" => "workspace-write", "network_access" => false},
+            "submitted" => submitted
+          }),
+          server
+        )
+
+      :ok =
+        wait_until(fn -> PermissionSettings.get("c.5", server).control.status == :applying end)
+
+      entry = PermissionSettings.get("c.5", server)
+      {control, next} = PermissionSettings.sync_view(entry)
+
+      assert control["status"] == "pending"
+      refute Map.has_key?(control, "submitted")
+      refute Map.has_key?(control, "effective")
+      assert next == entry.next
+    end
+
+    test "unknown rounds to pending, no explicit null for submitted/effective (issue #305 M1)",
+         %{server: server} do
+      seed_baseline(server, "c.6")
+
+      {:ok, 1, _} =
+        PermissionSettings.submit_request(
+          "c.6",
+          "codex",
+          %{sandbox: "workspace-write"},
+          %{kind: "user", id: "u1"},
+          "t",
+          server
+        )
+
+      :ok =
+        PermissionSettings.record_observation(
+          "c.6",
+          "codex",
+          baseline_control(%{
+            "revision" => 1,
+            "status" => "unknown",
+            "requested" => %{"sandbox" => "workspace-write", "network_access" => false},
+            "reason" => "observation_unavailable"
+          }),
+          server
+        )
+
+      :ok =
+        wait_until(fn -> PermissionSettings.get("c.6", server).control.status == :unknown end)
+
+      entry = PermissionSettings.get("c.6", server)
+      {control, next} = PermissionSettings.sync_view(entry)
+
+      assert control["status"] == "pending"
+      refute Map.has_key?(control, "submitted")
+      refute Map.has_key?(control, "effective")
+      # reason is not part of the rounding contract (sync_view only
+      # touches status/submitted/effective) — still present here since
+      # this stored control legitimately has one, but not asserted as
+      # cleared, since that is not what this fix changes. The M1
+      # contract this test exists to pin is the null-vs-omitted shape.
+      assert next == entry.next
+    end
+
+    # issue #305 M2 (durability): `submit_request/6` must not reply
+    # `:ok` until the DETS write is actually durable, so a crash right
+    # after a successful reply cannot lose the counter/settings it just
+    # promised. Pins the ORDER (counter sync, then settings sync, then
+    # reply) rather than reproducing ふじ's real SIGKILL probe
+    # (/tmp/fuji305b-r1-evidence/fuji305b-r1-durability.log) in-process —
+    # `:dets.sync/1` itself cannot be intercepted from Elixir without
+    # replacing the DETS module, so this test instead asserts the
+    # documented contract by reading the file position/state directly:
+    # after `submit_request/6` returns `:ok`, the counter and settings
+    # rows are already flushed to the underlying file, not merely
+    # buffered in the DETS server's own write-back cache.
+    test "submit_request/6 does not reply until the DETS write is durable (M2)", %{
+      server: server,
+      path: path
+    } do
+      seed_baseline(server, "c.durable")
+
+      {:ok, 1, _} =
+        PermissionSettings.submit_request(
+          "c.durable",
+          "codex",
+          %{sandbox: "workspace-write"},
+          %{kind: "user", id: "u1"},
+          "t",
+          server
+        )
+
+      # A fresh, independent DETS handle on the SAME file sees the
+      # just-committed counter/settings rows without going through this
+      # store's own in-memory state — proof the write reached disk, not
+      # just this GenServer's cache, before submit_request/6 returned.
+      probe_name = :"ps_durable_probe_#{System.unique_integer([:positive])}"
+      {:ok, ^probe_name} = :dets.open_file(probe_name, file: String.to_charlist(path))
+
+      assert :dets.lookup(probe_name, {:counter, "c.durable"}) == [{{:counter, "c.durable"}, 1}]
+
+      assert [{{:settings, "c.durable"}, settings}] =
+               :dets.lookup(probe_name, {:settings, "c.durable"})
+
+      assert settings.control.revision == 1
+
+      :dets.close(probe_name)
     end
   end
 end

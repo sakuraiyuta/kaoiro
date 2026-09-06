@@ -84,6 +84,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
   require Logger
 
+  alias KaoiroServer.AgentAcceptance
   alias KaoiroServer.AgentDirectory
   alias KaoiroServer.AgentActivity
   alias KaoiroServer.AgentStates
@@ -228,7 +229,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
                    unknown_conversation_id invalid_approval
                    invalid_payload agent_unavailable
                    unsupported_permission_switch permission_not_ready
-                   persistence_failed)a
+                   persistence_failed acceptance_unavailable)a
 
   # session_id charset — mirrors runner/src/sessions.ts SESSION_ID_PATTERN
   # (Claude Code's UUID-shaped JSONL filenames). Validated at this boundary so
@@ -715,11 +716,57 @@ defmodule KaoiroServerWeb.AgentsChannel do
          :ok <- require_agent_connected(envelope),
          :ok <- require_permission_switch_capability(envelope),
          {:ok, engine} <- fetch_agent_engine(envelope),
-         {:ok, actor} <- resolve_permission_actor(socket),
          at = DateTime.utc_now() |> DateTime.to_iso8601(),
          previous = permission_previous_observation(agent_id),
-         {:ok, revision, requested} <-
-           PermissionSettings.submit_request(agent_id, engine, patch, actor, at) do
+         # issue #305 M7, ふじ round 1 / director ruling 2026-09-06 +
+         # round-2 correction: the early `guard_against_reset_pending/2`
+         # check above ran on THIS channel process before the actual
+         # commit — a `session_reset` accepted on a DIFFERENT channel
+         # process in between could still slip through. Re-checking the
+         # guard AND persisting inside the same `AgentAcceptance.run/2`
+         # closure as `session_reset`'s own commit (below) makes the two
+         # mutually exclusive at the actual commit point, not just at
+         # each handler's own early check.
+         #
+         # `resolve_permission_actor/1` is ALSO resolved inside this
+         # closure, immediately before persist — not before entering it —
+         # per director's round-2 correction: resolving it earlier would
+         # let a token rotated/revoked DURING the time this request sat
+         # queued behind another agent's commit still be honored, since
+         # the live `:client_tokens` re-scan would have already happened
+         # before the rotation. `Users.get_or_create/4` itself now
+         # returns a plain `{:error, :unavailable}` rather than raising
+         # (issue #305 M-B, moved to the supply side), so a Users-store
+         # outage here degrades this ONE request without ever leaving
+         # `AgentAcceptance`'s closure unresolved — the shared
+         # serialization point is released either way, so a stuck Users
+         # store cannot also block an unrelated `session_reset`.
+         {:ok, revision, requested, actor} <-
+           AgentAcceptance.run(agent_id, fn ->
+             with :ok <- SessionResets.guard_instruction(agent_id),
+                  {:ok, actor} <- resolve_permission_actor(socket),
+                  {:ok, revision, requested} <-
+                    PermissionSettings.submit_request(agent_id, engine, patch, actor, at) do
+               {:ok, revision, requested, actor}
+             end
+           end) do
+      # issue #305 M5, ふじ round 1: project the just-accepted request into
+      # AgentStates immediately (protocol.md: "The server projects its
+      # authoritative latest request to operator snapshots/live state so
+      # reloads and other clients see pending requests even before a
+      # wrapper report arrives") — do not wait for the wrapper's own
+      # envelope to echo `ext.permission_control` back.
+      case PermissionSettings.get(agent_id) do
+        %{control: control} ->
+          AgentStates.overlay_permission_control(
+            agent_id,
+            PermissionSettings.control_wire(control)
+          )
+
+        nil ->
+          :noop
+      end
+
       KaoiroServerWeb.Endpoint.broadcast("wrapper:#{agent_id}", "set_permission", %{
         "version" => "0",
         "revision" => revision,
@@ -770,13 +817,19 @@ defmodule KaoiroServerWeb.AgentsChannel do
          {:ok, envelope} <- fetch_agent_envelope(agent_id),
          :ok <- require_reset_capability(envelope, mode),
          {:ok, state} <- fetch_kaoiro_state(envelope),
+         # issue #305 M7: the reverse direction of the same race
+         # `set_permission` closes above — acquiring the reset lock
+         # through the shared `AgentAcceptance` choke point so it cannot
+         # straddle a `set_permission` commit for the same agent either.
          {:ok, request_id, prev_sid} <-
-           SessionResets.check_and_acquire(
-             agent_id,
-             mode,
-             state,
-             Map.get(envelope, "session_id")
-           ),
+           AgentAcceptance.run(agent_id, fn ->
+             SessionResets.check_and_acquire(
+               agent_id,
+               mode,
+               state,
+               Map.get(envelope, "session_id")
+             )
+           end),
          :ok <- begin_planned_reset(agent_id, request_id) do
       KaoiroServerWeb.Endpoint.broadcast(
         "agents:lobby",
@@ -1516,6 +1569,11 @@ defmodule KaoiroServerWeb.AgentsChannel do
       SessionResets.delete(agent_id)
       _ = PeerConnectivity.delete(agent_id)
       AgentActivity.delete(agent_id)
+      # code-review-assessment finding (issue #305 round 1): without
+      # this, an AgentAcceptance worker (M7) started for this agent_id
+      # would never be reclaimed, growing without bound over the
+      # server's lifetime under ordinary agent churn.
+      AgentAcceptance.delete(agent_id)
       # issue #109: purge the clear watermark too, so an agent respawned
       # under the same agent_id starts fresh (no lingering hide-past
       # filter from a prior operator).
@@ -3199,9 +3257,9 @@ defmodule KaoiroServerWeb.AgentsChannel do
       {:token_fingerprint, fingerprint} ->
         case Auth.client_token_identity_by_fingerprint(fingerprint) do
           {:ok, hash, display_name} ->
-            case safe_get_or_create({:token, hash}, "user", display_name) do
+            case Users.get_or_create({:token, hash}, "user", display_name) do
               {:ok, user} -> {:ok, %{"kind" => "user", "id" => user.id}}
-              :error -> {:error, :persistence_failed}
+              {:error, :unavailable} -> {:error, :persistence_failed}
             end
 
           {:error, _reason} ->
@@ -3209,44 +3267,14 @@ defmodule KaoiroServerWeb.AgentsChannel do
         end
 
       {:oauth, %{provider: provider, uid: uid}} ->
-        case safe_get_or_create({:oauth, provider, uid}, "user", uid) do
+        case Users.get_or_create({:oauth, provider, uid}, "user", uid) do
           {:ok, user} -> {:ok, %{"kind" => "user", "id" => user.id}}
-          :error -> {:error, :persistence_failed}
+          {:error, :unavailable} -> {:error, :persistence_failed}
         end
 
       _other ->
         {:error, :forbidden}
     end
-  end
-
-  # `Users.get_or_create/4` is a bare `GenServer.call` (no bounded-call
-  # wrapper of its own, unlike e.g. `SessionLifecycleEvents.list_for_agent/2`)
-  # — a stopped or wedged `Users` store makes it `exit` after the default
-  # 5s timeout, which would otherwise crash THIS channel process (issue
-  # #305, クロエ round 2 should-fix): the operator's whole socket drops,
-  # not just this one command. Catching it and mapping to
-  # `persistence_failed` matches how a DETS write failure elsewhere in
-  # this flow already degrades gracefully rather than taking the channel
-  # down with it.
-  defp safe_get_or_create(source, kind, display_name) do
-    {:ok, Users.get_or_create(source, kind, display_name)}
-  catch
-    # `reason` is NOT safe to log here: GenServer.call embeds the full
-    # call request (including `source`, e.g. `{:token, hash}`) into the
-    # exit reason on both :noproc and :timeout, so `inspect(reason)`
-    # would print the very client_token_hash digest issue #197/#305 M1
-    # forbids from ever reaching a log line (code-review-assessment
-    # finding, issue #305 round 2). Log a fixed, source-free message.
-    # `reason` is NOT safe to log here: GenServer.call embeds the full
-    # call request (including `source`, e.g. `{:token, hash}`) into the
-    # exit reason on both :noproc and :timeout, so `inspect(reason)`
-    # would print the very client_token_hash digest issue #197/#305 M1
-    # forbids from ever reaching a log line (code-review-assessment
-    # finding, issue #305 round 2). Log a fixed, source-free message.
-    :exit, _reason ->
-      Logger.warning("resolve_permission_actor: Users store unavailable")
-
-      :error
   end
 
   # `SetPermissionErrorReason` (protocol.md) is closed and does not

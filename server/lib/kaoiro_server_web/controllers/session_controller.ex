@@ -89,14 +89,27 @@ defmodule KaoiroServerWeb.SessionController do
         # user_id (issue #197, ADR-0050 D1). The raw token never leaves
         # this function; only its opaque hash becomes the store's lookup
         # key, and it is never logged.
-        user =
-          KaoiroServer.Users.get_or_create(
-            {:token, Auth.client_token_hash(token)},
-            "user",
-            Auth.client_token_display_name(token)
-          )
+        #
+        # Authorization is already settled above (`Auth.client_role/1`);
+        # `user` is used here only for the log line, never to gate this
+        # login. So a `Users` outage (issue #305 M-B) must not block
+        # login — proceed either way, logging `user_id=unavailable`
+        # (never the hash) when the ledger can't be reached. The
+        # ledger entry itself gets created on the agent's first
+        # `set_permission` instead (`agents_channel.ex`'s
+        # `resolve_permission_actor/1`, same source key, so the
+        # eventual user_id does not diverge by path).
+        case KaoiroServer.Users.get_or_create(
+               {:token, Auth.client_token_hash(token)},
+               "user",
+               Auth.client_token_display_name(token)
+             ) do
+          {:ok, user} ->
+            Logger.info("token login: user_id=#{user.id} name=#{inspect(user.display_name)}")
 
-        Logger.info("token login: user_id=#{user.id} name=#{inspect(user.display_name)}")
+          {:error, :unavailable} ->
+            Logger.info("token login: user_id=unavailable (Users store unreachable)")
+        end
 
         conn
         # One credential per session, mirroring AuthController: a token
