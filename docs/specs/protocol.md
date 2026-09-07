@@ -713,6 +713,11 @@ The complete coverage and the permanent `attach_chunk` exception are normative i
 | server → runner | `reset_session` | `{ version, agent_id, mode, request_id, previous_session_id?, resume_snapshot? }` terminates the old child, then fresh-launches or rolls back. It never double-starts after timeout and uses SessionPointers to apply the resume snapshot ([ADR-0036](../adr/0036-session-lifecycle-commands.md), [ADR-0014](../adr/0014-session-resume-and-restore.md)). |
 | runner → server | `session_reset_result` | `{ version, host_id, agent_id, mode, request_id, ok, reason?, to_session_id?: string \| null }` reports fresh spawn/rollback after exact host binding. Success waits for wrapper join; failure broadcasts and releases the lock. |
 
+A `session_reset_request` error reply has exactly four `reason` values: `agent_busy`,
+`session_reset_pending`, `unsupported_session_reset`, and `runner_unavailable`.
+`timeout` never appears in this payload because the wrapper transport owns that result when a
+request receives no reply.
+
 ### Planned wrapper cycle (issue #256)
 
 The server reserves an in-memory `PlannedDisconnects` intent immediately before sending the

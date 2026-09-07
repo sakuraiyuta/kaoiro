@@ -8191,12 +8191,9 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
   end
 
-  # issue #305 M7-S (クロエ round 3 S-3): mirrors "AgentAcceptance の内部失敗は
-  # session_reset では timeout に写す" above, but through WrapperChannel's
-  # agent-self path (ADR-0043) — a transient AgentAcceptance failure must
-  # not read back as the PERMANENT "unsupported_session_reset" capability
-  # signal on this origin either.
-  test "AgentAcceptance の内部失敗は agent-self session_reset_request では timeout に写す" do
+  # The agent-self reply has a narrower closed vocabulary than the operator
+  # session_reset reply, so its availability degradation maps to agent_busy.
+  test "AgentAcceptance の内部失敗は agent-self session_reset_request では agent_busy に写す" do
     id = "test.m7-self-acceptance-unavailable"
 
     {:ok, _reply, wrapper_socket} =
@@ -8235,13 +8232,17 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert :ok ==
                wait_until_permission(fn ->
                  {:messages, messages} = Process.info(accept_pid, :messages)
-                 Enum.any?(messages, &match?({:"$gen_call", _, {:run, :session_reset, _}}, &1))
+
+                 Enum.any?(
+                   messages,
+                   &match?({:"$gen_call", _, {:run, :session_reset_request, _}}, &1)
+                 )
                end)
 
       capture_log(fn ->
         with_session_resets_unavailable(fn ->
           :ok = :sys.resume(accept_pid)
-          assert_reply reset_ref, :error, %{reason: "timeout"}
+          assert_reply reset_ref, :error, %{reason: "agent_busy"}
         end)
       end)
     after

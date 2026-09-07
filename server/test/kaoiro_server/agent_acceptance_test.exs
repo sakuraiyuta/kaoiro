@@ -94,6 +94,9 @@ defmodule KaoiroServer.AgentAcceptanceTest do
     assert AgentAcceptance.run(agent_id, :session_reset, fn -> exit(:boom) end) ==
              {:error, :timeout}
 
+    assert AgentAcceptance.run(agent_id, :session_reset_request, fn -> exit(:boom) end) ==
+             {:error, :agent_busy}
+
     assert AgentAcceptance.run(agent_id, :set_permission, fn -> :still_working end) ==
              :still_working
   end

@@ -885,7 +885,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
          :ok <- require_reset_capability(envelope, mode),
          {:ok, state} <- fetch_kaoiro_state(envelope),
          {:ok, request_id, prev_sid} <-
-           AgentAcceptance.run(agent_id, :session_reset, fn ->
+           AgentAcceptance.run(agent_id, :session_reset_request, fn ->
              SessionResets.check_and_acquire(
                agent_id,
                mode,
@@ -2092,21 +2092,22 @@ defmodule KaoiroServerWeb.WrapperChannel do
   defp fetch_reset_reason(%{"reason" => _}), do: {:error, {:invalid_value, "reason"}}
   defp fetch_reset_reason(payload) when is_map(payload), do: {:ok, nil}
 
-  # `unsupported_session_reset` tells a wrapper that the capability is absent,
-  # so only the explicit capability result may emit it. Unknown failures stay
-  # transient rather than disabling the tool.
-  defp reset_request_reason(:unsupported_session_reset), do: "unsupported_session_reset"
+  @doc false
+  # The reply is limited to wrapper/core's SESSION_RESET_ERROR_REASONS. In
+  # particular, timeout is transport-owned: it means no reply arrived.
+  def reset_request_reason(:invalid_mode), do: "unsupported_session_reset"
+  def reset_request_reason({:invalid_value, _field}), do: "unsupported_session_reset"
+  def reset_request_reason(:unsupported_session_reset), do: "unsupported_session_reset"
 
-  defp reset_request_reason(reason)
-       when reason in [
-              :agent_busy,
-              :session_reset_pending,
-              :runner_unavailable,
-              :timeout
-            ],
-       do: Atom.to_string(reason)
+  def reset_request_reason(reason)
+      when reason in [
+             :agent_busy,
+             :session_reset_pending,
+             :runner_unavailable
+           ],
+      do: Atom.to_string(reason)
 
-  defp reset_request_reason(_reason), do: "timeout"
+  def reset_request_reason(_reason), do: "agent_busy"
 
   defp begin_planned_reset(agent_id, request_id) do
     case PlannedDisconnects.begin(agent_id, request_id, :reset) do
