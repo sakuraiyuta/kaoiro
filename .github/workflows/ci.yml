@@ -114,7 +114,8 @@ jobs:
           # unnoticed.
           set -euo pipefail
           node --test scripts/test/extract-session-reset-request-reply-vocabulary.test.mjs
-          export KAOIRO_SESSION_RESET_REQUEST_REPLY_REASONS="$(node scripts/extract-session-reset-request-reply-vocabulary.mjs)"
+          KAOIRO_SESSION_RESET_REQUEST_REPLY_REASONS="$(node scripts/extract-session-reset-request-reply-vocabulary.mjs)"
+          export KAOIRO_SESSION_RESET_REQUEST_REPLY_REASONS
           # RuntimeConfigTest also reads the repository's scripts/dev.sh and
           # docs/specs/deployment.md (the canonical DETS store list, issue
           # #307); anything a server test reads from outside server/ has to
