@@ -1695,6 +1695,39 @@ export function runUpdate(flags, config) {
       rollback_tag: rollbackTag,
     });
 
+    // issue #322 M2 (must-fix): composeArtifact was recorded at THIS
+    // transaction's own prepare, but nothing re-verified it before
+    // `compose up` below drives whatever docker-compose.yaml currently
+    // says — an operator (or another tool) editing it between prepare and
+    // commit/resume took effect silently, unpinned to what this
+    // transaction actually approved. Checked (and the image explicitly
+    // re-pinned) BEFORE the STARTING checkpoint below, so a refusal here
+    // leaves the journal at ARCHIVED — "never attempted", the same clean
+    // shape a prepare-time abort already leaves — rather than STARTING
+    // with no `up` ever attempted, which runbook 4.4 (3) reads as a
+    // possible mid-start crash needing manual investigation.
+    const currentComposeSha = sha256File(join(serverDir, "docker-compose.yaml"));
+    if (currentComposeSha !== composeArtifact.sha256) {
+      fail(
+        `docker-compose.yaml at ${composeArtifact.path} has changed since this transaction's own prepare (recorded sha256 ${composeArtifact.sha256}, now ${currentComposeSha}) — refusing to commit against a compose file this transaction did not record; start a new transaction if the change is intentional`,
+      );
+    }
+    // compose.yaml pins `image: kaoiro-server:latest` (a fixed tag) —
+    // `compose up --no-build` resolves whatever THAT currently is, not
+    // necessarily what THIS transaction's own `runBuild` built (prepare
+    // and commit/resume can be arbitrarily far apart; an unrelated build
+    // in between would have repointed `latest`). Re-pin it to this
+    // transaction's own image right before `up`, verified by read-back —
+    // the exact idiom rollback already uses to restore `latest` to
+    // `oldImageId`, applied here to the forward direction.
+    runDocker(bin, ["tag", buildResult.imageId, "kaoiro-server:latest"]);
+    const latestId = dockerInspect(bin, "kaoiro-server:latest", "{{.Id}}");
+    if (latestId !== buildResult.imageId) {
+      fail(
+        `could not pin kaoiro-server:latest to this transaction's own built image ${buildResult.imageId} (now ${latestId}) — refusing to commit against an unverifiable image`,
+      );
+    }
+
     // (c3): bring the prepared image up, verify it is actually the target
     // (not merely "a container exists"), and confirm it survives long
     // enough to call this update done — deployment.md 4.3 step 6 / 4.5's
@@ -1997,6 +2030,20 @@ export function runRollback(flags, config) {
     // --- destructive path ---
     const manifest = readManifest(dir);
     const volumeId = manifest.volume_id;
+
+    // issue #322 M2 (must-fix): manifest.compose_artifact was recorded at
+    // the ORIGINAL update's prepare, but nothing re-verified it before
+    // `compose up` below — an operator (or another tool) editing
+    // docker-compose.yaml since then took effect unpinned. Checked before
+    // ANY destructive step (same reasoning as M3's own pre-wipe checks):
+    // an operator finding out AFTER the volume has already been wiped and
+    // restored is a strictly worse failure than finding out before.
+    const currentComposeSha = sha256File(join(serverDir, "docker-compose.yaml"));
+    if (currentComposeSha !== manifest.compose_artifact.sha256) {
+      fail(
+        `docker-compose.yaml at ${manifest.compose_artifact.path} has changed since this transaction's own update prepared (recorded sha256 ${manifest.compose_artifact.sha256}, now ${currentComposeSha}) — refusing to roll back against a compose file this transaction did not record`,
+      );
+    }
 
     let stoppedContainer = null;
     const currentNames = dockerComposeContainerNames(bin, serverDir, SERVICE);
