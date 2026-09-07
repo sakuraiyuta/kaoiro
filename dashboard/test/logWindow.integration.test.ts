@@ -227,8 +227,8 @@ async function renderReactive(props: Parameters<typeof makeReactiveTimelineDetai
 }
 
 describe("AgentDetail log render window (#184)", () => {
-  it(`既定では直近 ${LOG_WINDOW_SIZE} 件のみ描画する (1000+ 件相当)`, async () => {
-    const logs = buildLogs("agent-a", 1000);
+  it(`既定では直近 ${LOG_WINDOW_SIZE} 件のみ描画する (200+ 件相当)`, async () => {
+    const logs = buildLogs("agent-a", 250);
     const { target } = await renderReactive({
       envelope: state("agent-a"),
       logs,
@@ -237,11 +237,11 @@ describe("AgentDetail log render window (#184)", () => {
       onClose: vi.fn(),
     });
     expect(target.querySelectorAll(".transcript-entry").length).toBe(LOG_WINDOW_SIZE);
-    expect(target.querySelector(".load-earlier")?.textContent).toContain("800");
+    expect(target.querySelector(".load-earlier")?.textContent).toContain("50");
   });
 
   it("「以前のログを表示」で全件展開する", async () => {
-    const logs = buildLogs("agent-a", 1000);
+    const logs = buildLogs("agent-a", 250);
     const { target } = await renderReactive({
       envelope: state("agent-a"),
       logs,
@@ -253,12 +253,12 @@ describe("AgentDetail log render window (#184)", () => {
     await tick();
     await Promise.resolve();
     await tick();
-    expect(target.querySelectorAll(".transcript-entry").length).toBe(1000);
+    expect(target.querySelectorAll(".transcript-entry").length).toBe(250);
     expect(target.querySelector(".load-earlier")).toBeNull();
   });
 
   it("全件展開後、ログ追記があっても展開状態を維持する (explicit-expanded, M1)", async () => {
-    const logs = buildLogs("agent-a", 1000);
+    const logs = buildLogs("agent-a", 250);
     const { target, props } = await renderReactive({
       envelope: state("agent-a"),
       logs,
@@ -270,7 +270,7 @@ describe("AgentDetail log render window (#184)", () => {
     await tick();
     await Promise.resolve();
     await tick();
-    expect(target.querySelectorAll(".transcript-entry").length).toBe(1000);
+    expect(target.querySelectorAll(".transcript-entry").length).toBe(250);
 
     // A "keep last N" count would silently re-derive a non-zero start once
     // logs.length grows again — that regression is exactly what M1 fixed.
@@ -282,13 +282,13 @@ describe("AgentDetail log render window (#184)", () => {
       ts: tsFor(1000 + i),
     }))];
     await tick();
-    expect(target.querySelectorAll(".transcript-entry").length).toBe(1005);
+    expect(target.querySelectorAll(".transcript-entry").length).toBe(255);
     expect(target.querySelector(".load-earlier")).toBeNull();
   });
 
   it("reading-frozen は append 中でも既読行を保持し、bottom 復帰で tail(200) へ戻る (round-2 M1)", async () => {
     installScrollGeometry();
-    const logs = buildLogs("agent-a", 1000);
+    const logs = buildLogs("agent-a", 250);
     const { target, props } = await renderReactive({
       envelope: state("agent-a"),
       logs,
@@ -301,11 +301,11 @@ describe("AgentDetail log render window (#184)", () => {
 
     // Scroll away from the bottom (distance from bottom = scrollHeight(200*30)
     // - 0 - clientHeight(400) = 5600, well past the 8px threshold) to freeze
-    // the window at its current boundary (absolute index 800 of 1000).
+    // the window at its current boundary (absolute index 50 of 250).
     scrollLogTo(logEl, 0);
     await tick();
 
-    // Append 50 more entries while mid-read: the frozen start (800) must not
+    // Append 50 more entries while mid-read: the frozen start (50) must not
     // move, so the rows being read stay in the DOM (no silent eviction) and
     // the visible count simply grows by the appended entries (200 -> 250).
     props.logs = [...props.logs, ...buildLogs("agent-a", 50).map((e, i) => ({
@@ -501,7 +501,7 @@ describe("AgentDetail log render window (#184)", () => {
 
   it("履歴 clear/reset で logs が縮んでも残存ログが表示される (round-2 M2)", async () => {
     installScrollGeometry();
-    const logs = buildLogs("agent-a", 1000);
+    const logs = buildLogs("agent-a", 250);
     const { target, props } = await renderReactive({
       envelope: state("agent-a"),
       logs,
@@ -511,7 +511,7 @@ describe("AgentDetail log render window (#184)", () => {
     });
     const logEl = target.querySelector(".log") as HTMLElement;
 
-    // Freeze at absolute index 800 (same as the previous test).
+    // Freeze at absolute index 50 (same as the previous test).
     scrollLogTo(logEl, 0);
     await tick();
     expect(target.querySelectorAll(".transcript-entry").length).toBe(200);
@@ -533,7 +533,7 @@ describe("AgentDetail log render window (#184)", () => {
       callback(0);
       return 1;
     });
-    const logsA = buildLogs("agent-a", 1000);
+    const logsA = buildLogs("agent-a", 250);
     const { target, props } = await renderReactive({
       envelope: state("agent-a"),
       logs: logsA,
@@ -550,7 +550,7 @@ describe("AgentDetail log render window (#184)", () => {
 
     // Switch away, then back to A but with a drastically shrunk transcript
     // (history clear/reset while A was not the active view — the restored
-    // `mem` here is exactly the stale {stick:false, frozenWindow:{start:800,
+    // `mem` here is exactly the stale {stick:false, frozenWindow:{start:50,
     // ...}} entry from before the shrink).
     props.envelope = state("agent-b");
     props.logs = buildLogs("agent-b", 3);
@@ -600,7 +600,7 @@ describe("AgentDetail log render window (#184)", () => {
       callback(0);
       return 1;
     });
-    const logsA = buildLogs("agent-a", 1000);
+    const logsA = buildLogs("agent-a", 250);
     const { target, props } = await renderReactive({
       envelope: state("agent-a"),
       logs: logsA,
@@ -650,7 +650,7 @@ describe("AgentDetail log render window (#184)", () => {
 
   it("window 外の timeline target (#122) は window を拡張して描画し、mermaid を 1 回だけ実行する (round-4 S2)", async () => {
     stubScrollTo();
-    const logs = buildLogs("agent-a", 1000);
+    const logs = buildLogs("agent-a", 250);
     const targetKey = conversationEntryKey(logs[10]);
     const { target } = await renderReactive({
       envelope: state("agent-a"),
@@ -664,6 +664,12 @@ describe("AgentDetail log render window (#184)", () => {
     await tick();
     const found = target.querySelector(`[data-envelope-key="${targetKey}"]`);
     expect(found).not.toBeNull();
+    // issue #308: "found" alone does not distinguish a genuine
+    // window-expansion-to-the-target from some other coincidental render
+    // shape that happens to still contain it. The exact count (250-10) is
+    // what witnesses ensureIndexVisible actually moved the window start to
+    // the target's absolute index, and stays true at any fixture size.
+    expect(target.querySelectorAll(".transcript-entry").length).toBe(240);
     // ふじ round-4 should-fix S2: ensureIndexVisible used to read
     // effectiveWindowStart (-> frozenWindow) tracked from inside this same
     // $effect, so expanding the window for the target registered
@@ -677,13 +683,13 @@ describe("AgentDetail log render window (#184)", () => {
   it("window 外の tool_use/tool_result 相互 jump (#40) も window を拡張して描画する (round-2 S1)", async () => {
     stubScrollTo();
     stubScrollIntoView();
-    const logs = buildLogs("agent-a", 1000);
+    const logs = buildLogs("agent-a", 250);
     // tool_use hidden deep in history (index 5, well outside the default
-    // 800-999 window); its tool_result partner sits inside the default
-    // window (index 900) so the operator can click it without any prior
+    // 50-249 window); its tool_result partner sits inside the default
+    // window (index 220) so the operator can click it without any prior
     // expansion.
     logs[5] = toolUse("agent-a", 5, "tuid-1");
-    logs[900] = toolResult("agent-a", 900, "tuid-1");
+    logs[220] = toolResult("agent-a", 220, "tuid-1");
     const { target } = await renderReactive({
       envelope: state("agent-a"),
       logs,
@@ -709,7 +715,7 @@ describe("AgentDetail log render window (#184)", () => {
 
   it("agent 往復で window 展開状態と scrollTop を実クランプ込みで復元する (round-2 M2/S1)", async () => {
     installScrollGeometry();
-    const logsA = buildLogs("agent-a", 1000);
+    const logsA = buildLogs("agent-a", 250);
     const { target, props } = await renderReactive({
       envelope: state("agent-a"),
       logs: logsA,
@@ -722,13 +728,14 @@ describe("AgentDetail log render window (#184)", () => {
     await tick();
     await Promise.resolve();
     await tick();
-    expect(target.querySelectorAll(".transcript-entry").length).toBe(1000);
+    expect(target.querySelectorAll(".transcript-entry").length).toBe(250);
 
-    // Park mid-scroll (scrollHeight = 1000*30 = 30000, well within the
-    // [0, 29600] range) and let it persist to scrollMemory.
-    scrollLogTo(logEl, 15000);
+    // Park mid-scroll (scrollHeight = 250*30 = 7500, well within the
+    // [0, 7100] range, and — deliberately — ABOVE the pre-fix 200-row
+    // window's own max of 5600 below, so a wrong restore is observable).
+    scrollLogTo(logEl, 6800);
     await tick();
-    expect(logEl.scrollTop).toBe(15000);
+    expect(logEl.scrollTop).toBe(6800);
 
     // Switch away to a different agent, then back to A.
     props.envelope = state("agent-b");
@@ -744,14 +751,14 @@ describe("AgentDetail log render window (#184)", () => {
 
     // A "keep last N" reset on switch (the pre-#184-fix behaviour) would
     // show 200 rows here — scrollHeight 6000, max scrollTop 5600 — and
-    // clamp the restored 15000 down to 5600. Restoring the full 1000-row
+    // clamp the restored 6800 down to 5600. Restoring the full 250-row
     // window BEFORE scrollTop is applied is what keeps this exact.
-    expect(target.querySelectorAll(".transcript-entry").length).toBe(1000);
-    expect(logEl.scrollTop).toBe(15000);
+    expect(target.querySelectorAll(".transcript-entry").length).toBe(250);
+    expect(logEl.scrollTop).toBe(6800);
   });
 
   it("「以前のログを表示」は新たに見える範囲の mermaid を 1 回だけ再描画する (round-1 M3, round-3 M2)", async () => {
-    const logs = buildLogs("agent-a", 1000);
+    const logs = buildLogs("agent-a", 250);
     const { target } = await renderReactive({
       envelope: state("agent-a"),
       logs,
@@ -780,7 +787,7 @@ describe("AgentDetail log render window (#184)", () => {
       callback(0);
       return 1;
     });
-    const logsA = buildLogs("agent-a", 1000);
+    const logsA = buildLogs("agent-a", 250);
     const { target, props } = await renderReactive({
       envelope: state("agent-a"),
       logs: logsA,
@@ -869,9 +876,9 @@ describe("AgentDetail log render window (#184)", () => {
   it("window 先頭行は日付変化が無くても日付ラベルを表示する", async () => {
     // Every timestamp lands in the same UTC minute range (see assistantLog),
     // so there is no real day change anywhere — dayDividers only labels
-    // index 0. With the default window (start=800 of 1000), the head row
+    // index 0. With the default window (start=50 of 250), the head row
     // must still carry a label so date context is not lost.
-    const logs = buildLogs("agent-a", 1000);
+    const logs = buildLogs("agent-a", 250);
     const { target } = await renderReactive({
       envelope: state("agent-a"),
       logs,
