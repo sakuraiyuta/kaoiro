@@ -18,6 +18,21 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
   alias KaoiroServer.WrapperBuildInfos
   alias KaoiroServerWeb.WrapperChannel
 
+  # Source: wrapper/core/src/transport.ts SESSION_RESET_ERROR_REASONS. This
+  # is the complete reply vocabulary, not the broader lifecycle vocabulary.
+  @session_reset_request_reply_reasons MapSet.new([
+                                         "agent_busy",
+                                         "session_reset_pending",
+                                         "unsupported_session_reset",
+                                         "runner_unavailable"
+                                       ])
+
+  defp assert_session_reset_request_error(ref, expected) do
+    assert_reply ref, :error, %{reason: reason}
+    assert reason == expected
+    assert MapSet.member?(@session_reset_request_reply_reasons, reason)
+  end
+
   defp envelope(agent_id, state) do
     %{
       "version" => "0",
@@ -287,7 +302,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
           assert_reply ref, :error, %{reason: "invalid value: replay_ia"}
 
         "session_reset_request" ->
-          assert_reply ref, :error, %{reason: "timeout"}
+          assert_reply ref, :error, %{reason: "unsupported_session_reset"}
 
         _ ->
           assert_reply ref, :ok
@@ -4870,7 +4885,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       socket = seed_reset_agent("self-reset.busy", state: "thinking")
 
       ref = push(socket, "session_reset_request", %{"mode" => "clear"})
-      assert_reply ref, :error, %{reason: "agent_busy"}
+      assert_session_reset_request_error(ref, "agent_busy")
       refute_broadcast "session_reset_started", _
     end
 
@@ -4881,7 +4896,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
         )
 
       ref = push(socket, "session_reset_request", %{"mode" => "new"})
-      assert_reply ref, :error, %{reason: "unsupported_session_reset"}
+      assert_session_reset_request_error(ref, "unsupported_session_reset")
       refute_broadcast "session_reset_started", _
     end
 
@@ -4892,7 +4907,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert_reply first, :ok
 
       second = push(socket, "session_reset_request", %{"mode" => "clear"})
-      assert_reply second, :error, %{reason: "session_reset_pending"}
+      assert_session_reset_request_error(second, "session_reset_pending")
     end
 
     test "別 lifecycle の planned intent と競合した self reset は lock を残さない" do
@@ -4902,17 +4917,21 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       @endpoint.subscribe("runner:self-reset")
 
       ref = push(socket, "session_reset_request", %{"mode" => "new"})
-      assert_reply ref, :error, %{reason: "agent_busy"}
+      assert_session_reset_request_error(ref, "agent_busy")
       refute KaoiroServer.SessionResets.pending?(agent_id)
       refute_broadcast "reset_session", _
       assert %{transition_id: "switch-won"} = PlannedDisconnects.get(agent_id)
     end
 
-    test "unknown reset-request failure stays transient instead of claiming capability loss" do
+    # Corresponds to the `session_reset_request` with-chain: mode and reason
+    # validation, envelope/capability lookup, state/acquisition, and planned
+    # reset contention are covered by this test and the four rejection tests
+    # above. Each must stay in the transport's four-value reply vocabulary.
+    test "malformed reset requests normalize to the supported reply vocabulary" do
       socket = seed_reset_agent("self-reset.reason")
 
       invalid = push(socket, "session_reset_request", %{"mode" => "new", "reason" => 42})
-      assert_reply invalid, :error, %{reason: "timeout"}
+      assert_session_reset_request_error(invalid, "unsupported_session_reset")
 
       too_large =
         push(socket, "session_reset_request", %{
@@ -4920,11 +4939,34 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
           "reason" => String.duplicate("x", 65_537)
         })
 
-      assert_reply too_large, :error, %{reason: "timeout"}
+      assert_session_reset_request_error(too_large, "unsupported_session_reset")
 
       invalid_mode = push(socket, "session_reset_request", %{"mode" => "restart"})
-      assert_reply invalid_mode, :error, %{reason: "timeout"}
+      assert_session_reset_request_error(invalid_mode, "unsupported_session_reset")
+
       refute_broadcast "session_reset_started", _
+    end
+
+    test "all session_reset_request rejection reasons normalize into transport vocabulary" do
+      # `handle_wrapper_in/3`'s with-chain can return validation errors from
+      # fetch_reset_mode/fetch_reset_reason, capability errors from
+      # fetch_reset_envelope/require_reset_capability, and busy/pending errors
+      # from fetch_kaoiro_state, SessionResets, or begin_planned_reset.
+      source_errors = [
+        {:invalid_mode, "unsupported_session_reset"},
+        {{:invalid_value, "reason"}, "unsupported_session_reset"},
+        {:unsupported_session_reset, "unsupported_session_reset"},
+        {:agent_busy, "agent_busy"},
+        {:session_reset_pending, "session_reset_pending"},
+        {:runner_unavailable, "runner_unavailable"},
+        {:future_reset_backend_reason, "agent_busy"}
+      ]
+
+      for {source_error, expected} <- source_errors do
+        actual = WrapperChannel.reset_request_reason(source_error)
+        assert actual == expected
+        assert MapSet.member?(@session_reset_request_reply_reasons, actual)
+      end
     end
   end
 
