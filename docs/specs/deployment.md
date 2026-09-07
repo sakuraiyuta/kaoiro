@@ -970,17 +970,21 @@ graph `update` itself advances through.
 - **Destructive** (transaction reached `starting`/`up`/`healthy`/`done` — a
   new container was started at least once, so **treat state as opened**;
   there is no guarantee old code can read DETS written by new code, issue
-  #209 previously changed a tuple from 3 to 4 elements): stops whatever is
-  currently running for the service (refuses on more than one match),
-  forensically archives the CURRENT volume state before touching it
-  (full-traversal verified), re-verifies the pre-deploy archive's checksum
-  AND a full traversal right before the destructive wipe, wipes the volume
-  (`find -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +` — a bare `rm -rf
-  /data/*` would leave dotfiles behind) and restores from it, re-archives the
-  JUST-restored volume and confirms it matches the manifest's own
-  `required_entries` **exactly** (owner and mode included), retags `latest`
-  back (verified), brings the old image up with `--force-recreate`, and polls
-  health for the old SHA.
+  #209 previously changed a tuple from 3 to 4 elements): verifies the WHOLE
+  recovery pair — the old image still exists, the pre-deploy archive's
+  checksum and a full traversal, and `docker compose config` still
+  renders — **before touching anything** (no stop, no wipe, without all of
+  it present); only then stops whatever is currently running for the
+  service (refuses on more than one match), forensically archives the
+  CURRENT volume state before touching it (full-traversal verified),
+  re-verifies the pre-deploy archive's checksum AND a full traversal AGAIN
+  right before the destructive wipe (catches a change during the stop/
+  forensic window itself), wipes the volume (`find -mindepth 1 -maxdepth 1
+  -exec rm -rf -- {} +` — a bare `rm -rf /data/*` would leave dotfiles
+  behind) and restores from it, re-archives the JUST-restored volume and
+  confirms it matches the manifest's own `required_entries` **exactly**
+  (owner and mode included), retags `latest` back (verified), brings the
+  old image up with `--force-recreate`, and polls health for the old SHA.
 
 Both paths advance the transaction to `rolled_back` on success — a rollback
 of an already-`rolled_back` transaction is refused; investigate manually if it
