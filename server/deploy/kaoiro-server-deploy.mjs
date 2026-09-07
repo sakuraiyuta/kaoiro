@@ -21,7 +21,7 @@ import {
 import { basename, dirname, isAbsolute, join } from "node:path";
 
 import { computeBuildIdentity } from "../../scripts/build-identity.mjs";
-import { fsyncExistingPath } from "./kaoiro-deploy-atomic-write.mjs";
+import { fsyncExistingPath, writeFileDurably } from "./kaoiro-deploy-atomic-write.mjs";
 import { BRANCH, BranchError, classify, requireRunningContainer } from "./kaoiro-deploy-branch.mjs";
 import { loadConfig } from "./kaoiro-deploy-config.mjs";
 import { dockerComposeContainerNames, dockerInspect, resolveDockerBin, runDocker } from "./kaoiro-deploy-docker.mjs";
@@ -69,6 +69,14 @@ function fail(message, exitCode = 1, extra) {
 function gitOutput(args, cwd) {
   try {
     return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+  } catch (err) {
+    fail(`git ${args.join(" ")} failed in ${cwd}: ${err.message}`);
+  }
+}
+
+function gitFile(args, cwd) {
+  try {
+    return execFileSync("git", args, { cwd, encoding: "utf8" });
   } catch (err) {
     fail(`git ${args.join(" ")} failed in ${cwd}: ${err.message}`);
   }
@@ -122,6 +130,93 @@ function oldImageRevision(bin, oldImageId) {
 
 function sha256File(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+function sha256Bytes(bytes) {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+function normalizeJson(value) {
+  if (Array.isArray(value)) return value.map(normalizeJson);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((key) => [key, normalizeJson(value[key])]),
+    );
+  }
+  return value;
+}
+
+function composePlan(bin, serverDir, composeArgs = []) {
+  let rendered;
+  try {
+    rendered = runDocker(bin, ["compose", ...composeArgs, "config", "--format", "json"], { cwd: serverDir });
+  } catch (err) {
+    fail(`could not render the effective compose plan in ${serverDir}: ${err.message}`);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(rendered);
+  } catch (err) {
+    fail(`effective compose plan in ${serverDir} is not valid JSON: ${err.message}`);
+  }
+  const envPath = join(serverDir, ".env");
+  let envBytes = Buffer.alloc(0);
+  try {
+    envBytes = readFileSync(envPath);
+  } catch (err) {
+    if (err.code !== "ENOENT") fail(`could not read ${envPath}: ${err.message}`);
+  }
+  return {
+    compose_sha256: sha256Bytes(JSON.stringify(normalizeJson(parsed))),
+    env_sha256: sha256Bytes(envBytes),
+  };
+}
+
+function recoveryComposePath(dir) {
+  return join(dir, "recovery-compose.yaml");
+}
+
+function recoveryComposeArgs(path, serverDir) {
+  return ["-f", path, "--project-directory", serverDir];
+}
+
+function recoveryComposeSource(repo, oldSha) {
+  try {
+    gitOutput(["cat-file", "-e", `${oldSha}^{commit}`], repo);
+  } catch {
+    fail(
+      `old image revision ${oldSha} is not a commit in this checkout's history — fetch the matching source revision before updating so rollback can reproduce its compose plan`,
+    );
+  }
+  return gitFile(["show", `${oldSha}:server/docker-compose.yaml`], repo);
+}
+
+function recoveryPlanAt(bin, repo, serverDir, oldSha, path) {
+  const source = recoveryComposeSource(repo, oldSha);
+  let recordedSourceSha;
+  try {
+    recordedSourceSha = sha256File(path);
+  } catch (err) {
+    fail(`could not read recovery compose file ${path}: ${err.message} — refusing before Docker mutation`);
+  }
+  if (recordedSourceSha !== sha256Bytes(source)) {
+    fail(
+      `recovery compose file ${path} no longer matches old image revision ${oldSha} — refusing before Docker mutation`,
+    );
+  }
+  return composePlan(bin, serverDir, recoveryComposeArgs(path, serverDir));
+}
+
+function requirePlanMatch(recorded, current, label) {
+  for (const field of ["compose_sha256", "env_sha256"]) {
+    if (recorded?.[field] !== current[field]) {
+      fail(
+        `${label} effective compose plan ${field} has changed since it was recorded (recorded ${JSON.stringify(recorded?.[field])}, now ${current[field]}) — refusing before Docker mutation`,
+      );
+    }
+  }
 }
 
 /** Parses a docker inspect `{{.State.ExitCode}}`-shaped field. Returns
@@ -201,11 +296,11 @@ function resolveCurlBin(env = process.env) {
  *  port, measured live (`docker compose port web 8080` against a real
  *  published container: prints `host:port`, e.g. `127.0.0.1:18080`).
  *  An explicit config override always wins and skips this call. */
-export function resolveHealthUrl(bin, serverDir, config) {
+export function resolveHealthUrl(bin, serverDir, config, composeArgs = []) {
   if (config.health_url !== null) return config.health_url;
   let hostPort;
   try {
-    hostPort = runDocker(bin, ["compose", "port", SERVICE, "4000"], { cwd: serverDir });
+    hostPort = runDocker(bin, ["compose", ...composeArgs, "port", SERVICE, "4000"], { cwd: serverDir });
   } catch (err) {
     fail(
       `could not resolve the published host:port for ${SERVICE} port 4000 via 'docker compose port' (set health_url explicitly via --config to skip this): ${err.message}`,
@@ -1050,30 +1145,21 @@ export function deploymentLockKey(serverDir) {
  *  container or write any manifest — the transaction record is the
  *  update command's job (later commit), since `build` alone has no
  *  transaction to record one against. */
-export function runBuild(flags, config) {
+function normalizeBuildFlags(flags) {
   const repo = flags.repo ?? process.cwd();
   if (!flags.target || !SHA_RE.test(flags.target)) {
     fail("--target <full 40-hex SHA> is required for build", 64);
   }
-  const target = flags.target;
-  const dryRun = flags.dryRun === true;
+  return { repo, target: flags.target, dryRun: flags.dryRun === true };
+}
+
+function buildUnderLock({ repo, target }, config) {
   const { bin, overridden } = resolveDockerBin(config);
   const serverDir = join(repo, "server");
 
   const status = gitOutput(["status", "--porcelain"], repo);
   if (status !== "") {
     fail(`repo at ${repo} is dirty; refuse to build a moving target from a dirty tree`);
-  }
-
-  if (dryRun) {
-    return {
-      command: "build",
-      dryRun: true,
-      docker: overridden ? "fake" : "docker",
-      repo,
-      target,
-      wouldRun: [`git fetch origin`, `git merge --ff-only ${target}`, `docker compose build`],
-    };
   }
 
   gitOutput(["fetch", "origin"], repo);
@@ -1115,6 +1201,34 @@ export function runBuild(flags, config) {
     imageId,
     imageTag: versionedTag,
   };
+}
+
+export function runBuild(flags, config) {
+  const { repo, target, dryRun } = normalizeBuildFlags(flags);
+  const { overridden } = resolveDockerBin(config);
+  if (dryRun) {
+    const status = gitOutput(["status", "--porcelain"], repo);
+    if (status !== "") {
+      fail(`repo at ${repo} is dirty; refuse to build a moving target from a dirty tree`);
+    }
+    return {
+      command: "build",
+      dryRun: true,
+      docker: overridden ? "fake" : "docker",
+      repo,
+      target,
+      wouldRun: [`git fetch origin`, `git merge --ff-only ${target}`, `docker compose build`],
+    };
+  }
+
+  const serverDir = join(repo, "server");
+  const backupRoot = resolveBackupRoot(config);
+  const lockPath = acquireLock(backupRoot, deploymentLockKey(serverDir));
+  try {
+    return buildUnderLock({ repo, target }, config);
+  } finally {
+    releaseLock(lockPath);
+  }
 }
 
 /** `start`: the ONLY way to bring the compose service up when it is not
@@ -1524,6 +1638,9 @@ export function runUpdate(flags, config) {
     let buildResult;
     let container;
     let composeArtifact;
+    let recoveryComposeFile;
+    let recoveryPlan;
+    let targetPlan;
 
     if (flags.transaction !== undefined) {
       if (unfinished === null || unfinished.id !== flags.transaction) {
@@ -1548,6 +1665,14 @@ export function runUpdate(flags, config) {
       oldSha = oldEntry.observation.old_sha;
       rollbackTag = oldEntry.observation.rollback_tag;
       composeArtifact = oldEntry.observation.compose_artifact;
+      recoveryComposeFile = recoveryComposePath(dir);
+      recoveryPlan = oldEntry.observation.recovery_plan;
+      targetPlan = buildEntry.observation.target_plan;
+      if (recoveryPlan === undefined || targetPlan === undefined) {
+        fail(
+          `transaction ${transactionId} predates effective compose-plan recording; do not resume it automatically — recover it through the deployment runbook`,
+        );
+      }
       buildResult = {
         imageId: buildEntry.observation.image_id,
         imageTag: buildEntry.observation.image_tag,
@@ -1575,26 +1700,17 @@ export function runUpdate(flags, config) {
       const capacity = checkCapacity(bin, container, backupRoot, config);
       oldImageId = dockerInspect(bin, container, "{{.Image}}");
       oldSha = oldImageRevision(bin, oldImageId);
+      // The old image's revision names the recovery checkout. Confirm that
+      // source exists before creating a transaction which could later be
+      // impossible to roll back with its original Compose input.
+      const recoverySource = recoveryComposeSource(repo, oldSha);
       const composeArtifactPath = join(serverDir, "docker-compose.yaml");
       composeArtifact = { path: composeArtifactPath, sha256: sha256File(composeArtifactPath) };
 
       transactionId = newTransactionId();
       dir = join(backupRoot, transactionId);
-      // クロエ round 1 review N-2: backupRoot itself may not exist yet on
-      // a first-ever transaction (recursive create is fine — there is
-      // nothing under it to collide with), but the transaction's OWN
-      // leaf directory must fail loudly on a same-second collision
-      // rather than silently reusing whatever is already there.
-      const createdBackupRoot = mkdirSync(backupRoot, { recursive: true });
-      if (createdBackupRoot !== undefined) {
-        try {
-          fsyncExistingPath(dirname(createdBackupRoot));
-        } catch (err) {
-          fail(
-            `could not fsync ${dirname(createdBackupRoot)} after creating ${createdBackupRoot} — the backup root entry may not survive a crash: ${err.message}`,
-          );
-        }
-      }
+      // acquireLock owns backupRoot creation and makes its parent entry
+      // durable before this transaction reaches the directory below.
       mkdirSync(dir, { recursive: false });
       // issue #322 M4 (must-fix): fsync backupRoot itself — the new
       // directory ENTRY for `dir` — so it survives a crash the same way
@@ -1609,6 +1725,9 @@ export function runUpdate(flags, config) {
           `could not fsync ${backupRoot} after creating transaction directory ${dir} — the new directory entry may not survive a crash: ${err.message}`,
         );
       }
+      recoveryComposeFile = recoveryComposePath(dir);
+      writeFileDurably(recoveryComposeFile, recoverySource);
+      recoveryPlan = composePlan(bin, serverDir, recoveryComposeArgs(recoveryComposeFile, serverDir));
       journal = {
         schema_version: 1,
         transaction_id: transactionId,
@@ -1643,11 +1762,18 @@ export function runUpdate(flags, config) {
         dir,
         journal,
         PHASE.OLD_IMAGE_SAVED,
-        { old_image_id: oldImageId, old_sha: oldSha, compose_artifact: composeArtifact, rollback_tag: rollbackTag },
+        {
+          old_image_id: oldImageId,
+          old_sha: oldSha,
+          compose_artifact: composeArtifact,
+          recovery_plan: recoveryPlan,
+          rollback_tag: rollbackTag,
+        },
         validateJournalAgainstStateMachine,
       );
 
-      buildResult = runBuild({ repo, target }, config);
+      buildResult = buildUnderLock({ repo, target }, config);
+      targetPlan = composePlan(bin, serverDir);
       journal = advancePhase(
         dir,
         journal,
@@ -1656,6 +1782,7 @@ export function runUpdate(flags, config) {
           image_id: buildResult.imageId,
           image_tag: buildResult.imageTag,
           target_sha: target,
+          target_plan: targetPlan,
         },
         validateJournalAgainstStateMachine,
       );
@@ -1771,6 +1898,12 @@ export function runUpdate(flags, config) {
         64,
       );
     }
+    requirePlanMatch(targetPlan, composePlan(bin, serverDir), "target");
+    requirePlanMatch(
+      recoveryPlan,
+      recoveryPlanAt(bin, repo, serverDir, oldSha, recoveryComposeFile),
+      "recovery",
+    );
     journal = advancePhase(dir, journal, PHASE.MAINTENANCE_GATE_PASSED, {}, validateJournalAgainstStateMachine);
 
     // クロエ round 1 review N-5: pulled here, before the stop window
@@ -1931,6 +2064,8 @@ export function runUpdate(flags, config) {
       schema_version: 1,
       transaction_id: transactionId,
       compose_artifact: composeArtifact,
+      recovery_plan: recoveryPlan,
+      target_plan: targetPlan,
       env_consistency: journal.history.find((e) => e.phase === PHASE.ENV_CONSISTENCY_CHECKED).observation,
       image_id: buildResult.imageId,
       source_sha: oldSha,
@@ -1945,23 +2080,6 @@ export function runUpdate(flags, config) {
       rollback_tag: rollbackTag,
     });
 
-    // issue #322 M2 (must-fix): composeArtifact was recorded at THIS
-    // transaction's own prepare, but nothing re-verified it before
-    // `compose up` below drives whatever docker-compose.yaml currently
-    // says — an operator (or another tool) editing it between prepare and
-    // commit/resume took effect silently, unpinned to what this
-    // transaction actually approved. Checked (and the image explicitly
-    // re-pinned) BEFORE the STARTING checkpoint below, so a refusal here
-    // leaves the journal at ARCHIVED — "never attempted", the same clean
-    // shape a prepare-time abort already leaves — rather than STARTING
-    // with no `up` ever attempted, which runbook 4.4 (3) reads as a
-    // possible mid-start crash needing manual investigation.
-    const currentComposeSha = sha256File(join(serverDir, "docker-compose.yaml"));
-    if (currentComposeSha !== composeArtifact.sha256) {
-      fail(
-        `docker-compose.yaml at ${composeArtifact.path} has changed since this transaction's own prepare (recorded sha256 ${composeArtifact.sha256}, now ${currentComposeSha}) — refusing to commit against a compose file this transaction did not record; start a new transaction if the change is intentional`,
-      );
-    }
     // compose.yaml pins `image: kaoiro-server:latest` (a fixed tag) —
     // `compose up --no-build` resolves whatever THAT currently is, not
     // necessarily what THIS transaction's own `runBuild` built (prepare
@@ -2280,20 +2398,18 @@ export function runRollback(flags, config) {
     // --- destructive path ---
     const manifest = readManifest(dir);
     const volumeId = manifest.volume_id;
-
-    // issue #322 M2 (must-fix): manifest.compose_artifact was recorded at
-    // the ORIGINAL update's prepare, but nothing re-verified it before
-    // `compose up` below — an operator (or another tool) editing
-    // docker-compose.yaml since then took effect unpinned. Checked before
-    // ANY destructive step (same reasoning as M3's own pre-wipe checks):
-    // an operator finding out AFTER the volume has already been wiped and
-    // restored is a strictly worse failure than finding out before.
-    const currentComposeSha = sha256File(join(serverDir, "docker-compose.yaml"));
-    if (currentComposeSha !== manifest.compose_artifact.sha256) {
+    const recoveryComposeFile = recoveryComposePath(dir);
+    const recoveryArgs = recoveryComposeArgs(recoveryComposeFile, serverDir);
+    if (manifest.recovery_plan === undefined || manifest.target_plan === undefined) {
       fail(
-        `docker-compose.yaml at ${manifest.compose_artifact.path} has changed since this transaction's own update prepared (recorded sha256 ${manifest.compose_artifact.sha256}, now ${currentComposeSha}) — refusing to roll back against a compose file this transaction did not record`,
+        `transaction ${flags.transaction} predates effective compose-plan recording; do not roll it back automatically — recover it through the deployment runbook`,
       );
     }
+    requirePlanMatch(
+      manifest.recovery_plan,
+      recoveryPlanAt(bin, repo, serverDir, oldSha, recoveryComposeFile),
+      "recovery",
+    );
 
     // issue #322 M3 (must-fix): the recovery PAIR this rollback depends on
     // — the old image, the pre-deploy archive, and a compose file that
@@ -2324,14 +2440,8 @@ export function runRollback(flags, config) {
         `pre-deploy archive at ${manifest.archive.path} failed full-traversal verification: ${err.message} — refusing before stopping or touching anything`,
       );
     }
-    try {
-      runDocker(bin, ["compose", "config"], { cwd: serverDir });
-    } catch (err) {
-      fail(`docker-compose.yaml at ${serverDir} does not render: ${err.message}`);
-    }
-
     let stoppedContainer = null;
-    const currentNames = dockerComposeContainerNames(bin, serverDir, SERVICE);
+    const currentNames = dockerComposeContainerNames(bin, serverDir, SERVICE, recoveryArgs);
     if (currentNames.length > 1) {
       fail(
         `${currentNames.length} containers match service ${SERVICE}; expected 0 or 1 — investigate before rollback can proceed`,
@@ -2339,7 +2449,7 @@ export function runRollback(flags, config) {
     }
     if (currentNames.length === 1) {
       [stoppedContainer] = currentNames;
-      runDocker(bin, ["compose", "stop", "-t", "30"], { cwd: serverDir, stdio: "inherit" });
+      runDocker(bin, ["compose", ...recoveryArgs, "stop", "-t", "30"], { cwd: serverDir, stdio: "inherit" });
     }
     journal = advancePhase(
       dir,
@@ -2488,10 +2598,13 @@ export function runRollback(flags, config) {
         `rollback could not restore kaoiro-server:latest to the old image ${oldImageId} (now ${revertedId}) — investigate before retrying`,
       );
     }
-    runDocker(bin, ["compose", "up", "-d", "--no-build", "--force-recreate"], { cwd: serverDir, stdio: "inherit" });
+    runDocker(bin, ["compose", ...recoveryArgs, "up", "-d", "--no-build", "--force-recreate"], {
+      cwd: serverDir,
+      stdio: "inherit",
+    });
 
     const curlBin = resolveCurlBin();
-    const healthUrl = resolveHealthUrl(bin, serverDir, config);
+    const healthUrl = resolveHealthUrl(bin, serverDir, config, recoveryArgs);
     const health = pollHealth(
       curlBin,
       healthUrl,

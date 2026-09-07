@@ -60,7 +60,13 @@ const FAKE_DOCKER = `#!/bin/sh
 if [ -n "$KAOIRO_TEST_CALL_LOG" ]; then printf '%s\\n' "$*" >> "$KAOIRO_TEST_CALL_LOG"; fi
 case "$1" in
   compose)
-    case "$2" in
+    shift
+    compose_file=""
+    while [ "$1" = "-f" ] || [ "$1" = "--project-directory" ]; do
+      if [ "$1" = "-f" ]; then compose_file="$2"; fi
+      shift 2
+    done
+    case "$1" in
       ps)
         case "$FAKE_DOCKER_SCENARIO" in
           stopped|running|retag-drift|running-clean-stop|running-clean-stop-retag-drift|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty|compose-config-renamed-service|compose-config-missing-environment-key|mount-vanishes-after-stop|system-df-fails|system-df-invalid-json|system-df-not-array)
@@ -123,12 +129,19 @@ case "$1" in
             printf '{"services":{"kaoiro":{"volumes":[{"type":"volume","source":"kaoiro-state","target":"/var/lib/kaoiro","volume":{}}]}},"volumes":{"kaoiro-state":{"name":"kaoiro_kaoiro-state"}}}\\n'
             ;;
           *)
-            if [ -n "$KAOIRO_TEST_COMPOSE_ENV_JSON" ]; then
+            if [ -n "$compose_file" ] && [ -n "$KAOIRO_TEST_RECOVERY_COMPOSE_CONFIG_JSON" ]; then
+              printf '%s\\n' "$KAOIRO_TEST_RECOVERY_COMPOSE_CONFIG_JSON"
+            elif [ -z "$compose_file" ] && [ -n "$KAOIRO_TEST_COMPOSE_CONFIG_JSON" ]; then
+              printf '%s\\n' "$KAOIRO_TEST_COMPOSE_CONFIG_JSON"
+            elif [ -z "$compose_file" ] && grep -q 'legitimate target compose change' docker-compose.yaml; then
+              printf '{"services":{"kaoiro":{"image":"target-compose","environment":{"KAOIRO_USERS_PATH":"/var/lib/kaoiro/users.dets"},"volumes":[{"type":"volume","source":"kaoiro-state","target":"/var/lib/kaoiro","volume":{}}]}},"volumes":{"kaoiro-state":{"name":"kaoiro_kaoiro-state"}}}\\n'
+            elif [ -n "$KAOIRO_TEST_COMPOSE_ENV_JSON" ]; then
               env_json="$KAOIRO_TEST_COMPOSE_ENV_JSON"
+              printf '{"services":{"kaoiro":{"environment":%s,"volumes":[{"type":"volume","source":"kaoiro-state","target":"/var/lib/kaoiro","volume":{}}]}},"volumes":{"kaoiro-state":{"name":"kaoiro_kaoiro-state"}}}\\n' "$env_json"
             else
               env_json='{"KAOIRO_USERS_PATH":"/var/lib/kaoiro/users.dets"}'
+              printf '{"services":{"kaoiro":{"environment":%s,"volumes":[{"type":"volume","source":"kaoiro-state","target":"/var/lib/kaoiro","volume":{}}]}},"volumes":{"kaoiro-state":{"name":"kaoiro_kaoiro-state"}}}\\n' "$env_json"
             fi
-            printf '{"services":{"kaoiro":{"environment":%s,"volumes":[{"type":"volume","source":"kaoiro-state","target":"/var/lib/kaoiro","volume":{}}]}},"volumes":{"kaoiro-state":{"name":"kaoiro_kaoiro-state"}}}\\n' "$env_json"
             ;;
         esac
         ;;
@@ -684,6 +697,7 @@ function withOverrideEnv(fn) {
   const priorHealthRevision = process.env.KAOIRO_TEST_HEALTH_REVISION;
   const priorLatestTagFile = process.env.KAOIRO_TEST_LATEST_TAG_FILE;
   const priorOldImageRevision = process.env.KAOIRO_TEST_OLD_IMAGE_REVISION;
+  const priorRecoveryComposeConfigJson = process.env.KAOIRO_TEST_RECOVERY_COMPOSE_CONFIG_JSON;
   process.env.KAOIRO_DEPLOY_DOCKER_BIN = bin;
   process.env.KAOIRO_DEPLOY_CURL_BIN = curlBin;
   // issue #322 M2: always set (not conditional like HEALTH_REVISION below)
@@ -712,6 +726,8 @@ function withOverrideEnv(fn) {
     else process.env.KAOIRO_TEST_LATEST_TAG_FILE = priorLatestTagFile;
     if (priorOldImageRevision === undefined) delete process.env.KAOIRO_TEST_OLD_IMAGE_REVISION;
     else process.env.KAOIRO_TEST_OLD_IMAGE_REVISION = priorOldImageRevision;
+    if (priorRecoveryComposeConfigJson === undefined) delete process.env.KAOIRO_TEST_RECOVERY_COMPOSE_CONFIG_JSON;
+    else process.env.KAOIRO_TEST_RECOVERY_COMPOSE_CONFIG_JSON = priorRecoveryComposeConfigJson;
   }
 }
 
@@ -939,6 +955,40 @@ test("runBuild builds, tags and reads back the image id through the gated fake d
   assert.equal(result.identity.dirty, false);
   assert.equal(result.imageId, `sha256:${"f".repeat(64)}`);
   assert.equal(result.imageTag, `kaoiro-server:${headSha}`);
+});
+
+test("the public build command refuses a held deployment lock before compose build", () => {
+  const config = configWithOverride();
+  const backupRoot = config.backup_root;
+  mkdirSync(join(backupRoot, `.lock.${deploymentLockKey(join(workDir, "server"))}`), { recursive: true });
+  const configPath = join(root, "build-config.json");
+  writeFileSync(configPath, JSON.stringify(config), { mode: 0o600 });
+  const logPath = join(root, "docker-calls.log");
+  let failure;
+  try {
+    execFileSync(
+      process.execPath,
+      [
+        new URL("../kaoiro-server-deploy.mjs", import.meta.url).pathname,
+        "build",
+        "--repo",
+        workDir,
+        "--target",
+        headSha,
+        "--config",
+        configPath,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, KAOIRO_DEPLOY_DOCKER_BIN: bin, KAOIRO_TEST_CALL_LOG: logPath },
+      },
+    );
+  } catch (err) {
+    failure = err;
+  }
+  assert.notEqual(failure?.status, 0);
+  const calls = existsSync(logPath) ? readCallLog(logPath) : [];
+  assert.equal(calls.filter((line) => line.startsWith("compose build")).length, 0);
 });
 
 test("runBuild refuses when the post-merge revision does not match --target", () => {
@@ -1198,11 +1248,16 @@ test("runUpdate --dry-run refuses --transaction", () => {
 });
 
 test("runUpdate derives old_sha from the old image build info, not git rev-parse HEAD", () => {
-  const imageRevision = "b".repeat(40);
+  writeFileSync(join(sourceDir, "server", "docker-compose.yaml"), "# target fixture\n");
+  execFileSync("git", ["-C", sourceDir, "add", "server/docker-compose.yaml"]);
+  execFileSync("git", ["-C", sourceDir, "commit", "-q", "-m", "target"]);
+  const targetSha = execFileSync("git", ["-C", sourceDir, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  execFileSync("git", ["-C", sourceDir, "push", "-q", bareDir, "main"]);
+  const imageRevision = headSha;
   let caught;
   withOldBuildInfo(JSON.stringify({ revision: imageRevision }), () => {
     try {
-      withScenario("running", () => runUpdate({ repo: workDir, target: headSha }, configWithOverride()));
+      withScenario("running", () => runUpdate({ repo: workDir, target: targetSha }, configWithOverride()));
     } catch (err) {
       caught = err;
     }
@@ -1213,7 +1268,7 @@ test("runUpdate derives old_sha from the old image build info, not git rev-parse
   const journal = readJournal(join(backupRoot, transactionDir));
   const oldEntry = journal.history.find((e) => e.phase === "old_image_saved");
   assert.equal(oldEntry.observation.old_sha, imageRevision);
-  assert.notEqual(oldEntry.observation.old_sha, headSha, "must not have fallen back to git rev-parse HEAD");
+  assert.notEqual(oldEntry.observation.old_sha, targetSha, "must not have fallen back to the target revision");
   assert.equal(oldEntry.observation.rollback_tag, `kaoiro-server:rollback-${imageRevision}`);
 });
 
@@ -1235,6 +1290,18 @@ test("runUpdate refuses a pre-build-info old image before creating a transaction
         withScenario("running", () => runUpdate({ repo: workDir, target: headSha }, configWithOverride())),
       ),
     (err) => err instanceof DeployError && new RegExp(OLD_IMAGE_BUILD_INFO_PATH).test(err.message),
+  );
+  assert.deepEqual(readdirSyncNonHidden(join(root, "kaoiro-deploy")), []);
+});
+
+test("runUpdate refuses before creating a transaction when the old image revision is absent from source history", () => {
+  const unavailableRevision = "b".repeat(40);
+  assert.throws(
+    () =>
+      withOldBuildInfo(JSON.stringify({ revision: unavailableRevision }), () =>
+        withScenario("running", () => runUpdate({ repo: workDir, target: headSha }, configWithOverride())),
+      ),
+    (err) => err instanceof DeployError && /not a commit in this checkout's history/.test(err.message),
   );
   assert.deepEqual(readdirSyncNonHidden(join(root, "kaoiro-deploy")), []);
 });
@@ -1903,11 +1970,7 @@ test("runUpdate completes through DONE with --maintenance-approved and a clean s
   assert.deepEqual(manifest.required_entries, result.requiredEntries);
 });
 
-// issue #322 M2 (must-fix): compose_artifact was recorded at prepare but
-// nothing re-verified it before commit's own `compose up` — an operator
-// editing docker-compose.yaml between prepare and commit/resume took
-// effect silently, unpinned to what this transaction actually approved.
-test("runUpdate refuses to resume/commit when docker-compose.yaml changed since this transaction's own prepare", () => {
+test("runUpdate refuses before stopping when the target effective compose plan changes after prepare", () => {
   try {
     withScenario("running", () => runUpdate({ repo: workDir, target: headSha }, configWithOverride()));
   } catch (err) {
@@ -1918,6 +1981,46 @@ test("runUpdate refuses to resume/commit when docker-compose.yaml changed since 
 
   const composePath = join(workDir, "server", "docker-compose.yaml");
   writeFileSync(composePath, "# fixture\n# drifted after prepare\n");
+  const priorPlan = process.env.KAOIRO_TEST_COMPOSE_CONFIG_JSON;
+  process.env.KAOIRO_TEST_COMPOSE_CONFIG_JSON = JSON.stringify({ services: { kaoiro: { image: "unexpected" } } });
+
+  const logPath = join(root, "docker-calls.log");
+  process.env.KAOIRO_TEST_CALL_LOG = logPath;
+  let caught;
+  try {
+    withScenario("running-clean-stop", () =>
+      runUpdate(
+        { repo: workDir, target: headSha, transaction: transactionId, maintenanceApproved: true },
+        configWithCleanStopMeasured(),
+      ),
+    );
+  } catch (err) {
+    caught = err;
+  } finally {
+    delete process.env.KAOIRO_TEST_CALL_LOG;
+    if (priorPlan === undefined) delete process.env.KAOIRO_TEST_COMPOSE_CONFIG_JSON;
+    else process.env.KAOIRO_TEST_COMPOSE_CONFIG_JSON = priorPlan;
+  }
+  assert.ok(caught instanceof DeployError, `expected a DeployError, got: ${caught}`);
+  assert.match(caught.message, /target effective compose plan compose_sha256 has changed/);
+
+  const log = readCallLog(logPath);
+  assert.ok(!log.some((l) => l.startsWith("compose stop")), "must never stop for a drifted plan");
+  assert.ok(!log.some((l) => l.startsWith("compose up")), "must never call compose up against a drifted config");
+  const journal = readJournal(join(backupRoot, transactionId));
+  assert.equal(journal.phase, "env_consistency_checked");
+});
+
+test("runUpdate refuses before stopping when .env bytes drift after prepare", () => {
+  writeFileSync(join(workDir, "server", ".env"), "KAOIRO_UNUSED=before\n");
+  try {
+    withScenario("running", () => runUpdate({ repo: workDir, target: headSha }, configWithOverride()));
+  } catch (err) {
+    assert.ok(err instanceof DeployError);
+  }
+  const backupRoot = join(root, "kaoiro-deploy");
+  const [transactionId] = readdirSyncNonHidden(backupRoot);
+  writeFileSync(join(workDir, "server", ".env"), "KAOIRO_UNUSED=after\n");
 
   const logPath = join(root, "docker-calls.log");
   process.env.KAOIRO_TEST_CALL_LOG = logPath;
@@ -1934,22 +2037,58 @@ test("runUpdate refuses to resume/commit when docker-compose.yaml changed since 
   } finally {
     delete process.env.KAOIRO_TEST_CALL_LOG;
   }
-  assert.ok(caught instanceof DeployError, `expected a DeployError, got: ${caught}`);
-  assert.match(caught.message, /docker-compose\.yaml.*has changed/);
-
-  // The stop window itself already ran BEFORE this transaction reached
-  // ARCHIVED (in this same call, since it resumes straight through) —
-  // that is not what M2 is closing. What must never happen is starting
-  // the NEW (drifted) config: `compose up` is the actual mutation this
-  // check exists to prevent.
+  assert.ok(caught instanceof DeployError);
+  assert.match(caught.message, /target effective compose plan env_sha256 has changed/);
   const log = readCallLog(logPath);
-  assert.ok(!log.some((l) => l.startsWith("compose up")), "must never call compose up against a drifted config");
+  assert.ok(!log.some((line) => line.startsWith("compose stop")));
+  assert.ok(!log.some((line) => line.startsWith("compose up")));
+});
+
+test("runUpdate records the target effective compose plan after a legitimate target compose change", () => {
+  writeFileSync(join(sourceDir, "server", "docker-compose.yaml"), "# legitimate target compose change\n");
+  execFileSync("git", ["-C", sourceDir, "add", "server/docker-compose.yaml"]);
+  execFileSync("git", ["-C", sourceDir, "commit", "-q", "-m", "target compose change"]);
+  const target = execFileSync("git", ["-C", sourceDir, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  execFileSync("git", ["-C", sourceDir, "push", "-q", bareDir, "main"]);
+
+  try {
+    withScenario("running", () => runUpdate({ repo: workDir, target }, configWithOverride()));
+  } catch (err) {
+    assert.ok(err instanceof DeployError);
+  }
+  const backupRoot = join(root, "kaoiro-deploy");
+  const [transactionId] = readdirSyncNonHidden(backupRoot);
+  const priorHealth = process.env.KAOIRO_TEST_HEALTH_REVISION;
+  process.env.KAOIRO_TEST_HEALTH_REVISION = target;
+  try {
+    const result = withScenario("running-clean-stop", () =>
+      runUpdate(
+        { repo: workDir, target, transaction: transactionId, maintenanceApproved: true },
+        configWithCleanStopMeasured(),
+      ),
+    );
+    assert.equal(result.command, "update");
+    assert.equal(result.health.build_revision, target);
+  } finally {
+    if (priorHealth === undefined) delete process.env.KAOIRO_TEST_HEALTH_REVISION;
+    else process.env.KAOIRO_TEST_HEALTH_REVISION = priorHealth;
+  }
   const journal = readJournal(join(backupRoot, transactionId));
-  assert.equal(
-    journal.phase,
-    "archived",
-    "a refused compose-drift check must leave the journal at archived — 'never attempted starting', not starting with no up ever run",
+  const oldImage = journal.history.find((entry) => entry.phase === "old_image_saved");
+  const build = journal.history.find((entry) => entry.phase === "build_prepared");
+  assert.equal(typeof oldImage.observation.recovery_plan.compose_sha256, "string");
+  assert.equal(typeof build.observation.target_plan.compose_sha256, "string");
+  assert.notEqual(
+    build.observation.target_plan.compose_sha256,
+    oldImage.observation.recovery_plan.compose_sha256,
+    "target plan must be captured after the target checkout is built",
   );
+  const recoveryCompose = readFileSync(join(backupRoot, transactionId, "recovery-compose.yaml"), "utf8");
+  assert.equal(
+    recoveryCompose,
+    execFileSync("git", ["-C", workDir, "show", `${headSha}:server/docker-compose.yaml`], { encoding: "utf8" }),
+  );
+  assert.notEqual(recoveryCompose, readFileSync(join(workDir, "server", "docker-compose.yaml"), "utf8"));
 });
 
 // issue #322 M2 (must-fix): kaoiro-server:latest is a MUTABLE tag —
@@ -3654,9 +3793,14 @@ test("runRollback (destructive) runs the full stop/forensic/restore/retag/up/hea
   assert.ok(result.health, "expected a health poll result for the destructive path");
 
   const log = readCallLog(logPath);
-  assert.ok(log.some((l) => l.startsWith("compose stop")));
+  assert.ok(log.some((l) => l.includes(" stop")));
   assert.ok(log.includes(`tag ${OLD_IMAGE_ID} kaoiro-server:latest`));
-  assert.ok(log.some((l) => l.startsWith("compose up") && l.includes("--force-recreate")));
+  assert.ok(log.some((l) => l.includes(" up") && l.includes("--force-recreate")));
+  const recoveryComposeFile = join(backupRoot, transactionId, "recovery-compose.yaml");
+  const recoveryPrefix = `compose -f ${recoveryComposeFile} --project-directory ${join(workDir, "server")}`;
+  assert.ok(log.some((l) => l.startsWith(`${recoveryPrefix} config`)));
+  assert.ok(log.some((l) => l.startsWith(`${recoveryPrefix} stop`)));
+  assert.ok(log.some((l) => l.startsWith(`${recoveryPrefix} up`) && l.includes("--force-recreate")));
 
   const journal = readJournal(join(backupRoot, transactionId));
   assert.equal(journal.phase, "rolled_back");
@@ -3839,13 +3983,7 @@ test("runRollback (destructive) refuses end to end when the restored volume drif
   assert.equal(journal.phase, "rollback_restoring");
 });
 
-// issue #322 M2 (must-fix): manifest.compose_artifact was recorded at the
-// ORIGINAL update's own prepare, but nothing re-verified it before
-// rollback's own `compose up` — the same defect M2 closed for commit,
-// applied to rollback ("Rollback has the same defect (restores the
-// image, not the compose)" per the review's own text). Checked before
-// ANY destructive step, so the wipe count below stays 0.
-test("runRollback (destructive) refuses when docker-compose.yaml changed since the original update's own prepare", () => {
+test("runRollback (destructive) refuses when its durable recovery compose file no longer matches the old revision", () => {
   let transactionId;
   const backupRoot = join(root, "kaoiro-deploy");
   withScenario("running-clean-stop", () => {
@@ -3856,8 +3994,8 @@ test("runRollback (destructive) refuses when docker-compose.yaml changed since t
     transactionId = update.transactionId;
   });
 
-  const composePath = join(workDir, "server", "docker-compose.yaml");
-  writeFileSync(composePath, "# fixture\n# drifted after the update this rollback targets\n");
+  const recoveryPath = join(backupRoot, transactionId, "recovery-compose.yaml");
+  writeFileSync(recoveryPath, "# tampered after the update this rollback targets\n");
 
   const logPath = join(root, "docker-calls.log");
   process.env.KAOIRO_TEST_CALL_LOG = logPath;
@@ -3875,7 +4013,7 @@ test("runRollback (destructive) refuses when docker-compose.yaml changed since t
     delete process.env.KAOIRO_TEST_CALL_LOG;
   }
   assert.ok(caught instanceof DeployError, `expected a DeployError, got: ${caught}`);
-  assert.match(caught.message, /docker-compose\.yaml.*has changed/);
+  assert.match(caught.message, /recovery compose file .* no longer matches old image revision/);
 
   const log = readCallLog(logPath);
   assert.ok(!log.some((l) => l.startsWith("compose stop")), "must refuse before stopping the container");
@@ -3884,6 +4022,40 @@ test("runRollback (destructive) refuses when docker-compose.yaml changed since t
   // like the multiple-containers refusal right below.
   const journal = readJournal(join(backupRoot, transactionId));
   assert.equal(journal.phase, "done");
+});
+
+test("runRollback (destructive) refuses before stopping when the recovery .env bytes drift", () => {
+  const backupRoot = join(root, "kaoiro-deploy");
+  writeFileSync(join(workDir, "server", ".env"), "KAOIRO_UNUSED=before\n");
+  let transactionId;
+  withScenario("running-clean-stop", () => {
+    transactionId = runUpdate(
+      { repo: workDir, target: headSha, maintenanceApproved: true },
+      configWithCleanStopMeasured(),
+    ).transactionId;
+  });
+  writeFileSync(join(workDir, "server", ".env"), "KAOIRO_UNUSED=after\n");
+
+  const logPath = join(root, "docker-calls.log");
+  process.env.KAOIRO_TEST_CALL_LOG = logPath;
+  let caught;
+  try {
+    withScenario("running-clean-stop", () =>
+      runRollback(
+        { repo: workDir, transaction: transactionId, confirmRestore: true },
+        configWithCleanStopMeasured(),
+      ),
+    );
+  } catch (err) {
+    caught = err;
+  } finally {
+    delete process.env.KAOIRO_TEST_CALL_LOG;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.match(caught.message, /recovery effective compose plan env_sha256 has changed/);
+  const log = readCallLog(logPath);
+  assert.ok(!log.some((l) => l.includes(" stop")), "must refuse before stopping the container");
+  assert.equal(readJournal(join(backupRoot, transactionId)).phase, "done");
 });
 
 // issue #322 M3 (must-fix): before this fix, rollback's destructive path
@@ -3956,7 +4128,7 @@ test("runRollback (destructive) refuses when docker-compose.yaml does not render
     delete process.env.KAOIRO_TEST_CALL_LOG;
   }
   assert.ok(caught instanceof DeployError, `expected a DeployError, got: ${caught}`);
-  assert.match(caught.message, /does not render/);
+  assert.match(caught.message, /could not render the effective compose plan/);
 
   const log = readCallLog(logPath);
   assert.ok(!log.some((l) => l.startsWith("compose stop")), "must refuse before stopping the container");

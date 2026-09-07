@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, mkdirSync, mkdtempSync, openSync, rmSync, rmdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
@@ -38,4 +38,28 @@ test("releaseLock allows a subsequent acquireLock under the same key to succeed"
   const lockPath = acquireLock(backupRoot, "abc123");
   releaseLock(lockPath);
   assert.doesNotThrow(() => acquireLock(backupRoot, "abc123"));
+});
+
+test("acquireLock durably records a newly-created backup root in its parent", () => {
+  const backupRoot = join(dir, "nested", "kaoiro-deploy");
+  const synced = [];
+  const fsImpl = {
+    closeSync,
+    fsyncSync,
+    mkdirSync,
+    openSync(path, flags) {
+      synced.push(path);
+      return openSync(path, flags);
+    },
+    rmdirSync,
+  };
+
+  const lockPath = acquireLock(backupRoot, "abc123", fsImpl);
+  assert.equal(lockPath, join(backupRoot, ".lock.abc123"));
+  assert.deepEqual(synced, [dir, join(dir, "nested"), backupRoot]);
+
+  releaseLock(lockPath, fsImpl);
+  synced.length = 0;
+  acquireLock(backupRoot, "abc123", fsImpl);
+  assert.equal(synced.length, 0, "an existing backup root needs no creation-entry fsync");
 });
