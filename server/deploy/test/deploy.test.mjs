@@ -1,17 +1,29 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import fs, {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
 
 import { DEFAULT_CONFIG } from "../kaoiro-deploy-config.mjs";
 import { readJournal } from "../kaoiro-deploy-journal.mjs";
+import { LockError } from "../kaoiro-deploy-lock.mjs";
 import { readManifest } from "../kaoiro-deploy-manifest.mjs";
 import { PHASE, TRANSITIONS } from "../kaoiro-deploy-phase.mjs";
 import {
   DeployError,
+  deploymentLockKey,
   hasPriorTransactions,
   parseArgs,
   parseTarEntries,
@@ -807,6 +819,68 @@ test("runStart on branch C with --initialize and --dry-run reports the plan", ()
   assert.equal(result.branch, "C");
   assert.equal(result.dryRun, true);
   assert.ok(result.wouldRun.some((line) => line.includes("compose up")));
+});
+
+// issue #322 M1 (must-fix): before this fix, runStart took no lock at
+// all, so a prepared transaction (the lock update/rollback hold) did not
+// stop it from calling `docker start` underneath them. Pre-creating the
+// same lock a real run would compute (deploymentLockKey, exported
+// specifically so this test does not hand-derive a parallel formula that
+// could drift) reproduces "another mutator is mid-flight" without
+// needing a second real process.
+test("runStart refuses when the deployment lock is already held, and never calls docker start", () => {
+  const backupRoot = join(root, "kaoiro-deploy");
+  const config = configWithOverride();
+  const lockPath = join(backupRoot, `.lock.${deploymentLockKey(join(workDir, "server"))}`);
+  mkdirSync(lockPath, { recursive: true });
+
+  const logPath = join(root, "docker-calls.log");
+  process.env.KAOIRO_TEST_CALL_LOG = logPath;
+  try {
+    assert.throws(
+      () =>
+        withOverrideEnv(() => {
+          process.env.FAKE_DOCKER_SCENARIO = "stopped";
+          try {
+            return runStart({ repo: workDir }, config);
+          } finally {
+            delete process.env.FAKE_DOCKER_SCENARIO;
+          }
+        }),
+      LockError,
+    );
+  } finally {
+    delete process.env.KAOIRO_TEST_CALL_LOG;
+  }
+  const log = readCallLog(logPath);
+  assert.ok(
+    !log.some((l) => l.startsWith("start ")),
+    "start must not call docker start while another mutator holds the deployment lock",
+  );
+});
+
+// issue #322 M1 (should-hold, hygiene direction): the lock's key is
+// serverDir-derived specifically so a shared backup_root does not force
+// TWO UNRELATED checkouts to contend with each other's lock — the
+// opposite failure mode from the residual director ruling 2026-09-07
+// accepts (same checkout, different backup_root, still independent).
+test("runStart is not blocked by a lock held for a DIFFERENT serverDir under the same backup_root", () => {
+  const backupRoot = join(root, "kaoiro-deploy");
+  const config = configWithOverride();
+  const otherServerDir = join(root, "unrelated-checkout", "server");
+  mkdirSync(otherServerDir, { recursive: true });
+  const otherLockPath = join(backupRoot, `.lock.${deploymentLockKey(otherServerDir)}`);
+  mkdirSync(otherLockPath, { recursive: true });
+
+  const result = withOverrideEnv(() => {
+    process.env.FAKE_DOCKER_SCENARIO = "stopped";
+    try {
+      return runStart({ repo: workDir }, config);
+    } finally {
+      delete process.env.FAKE_DOCKER_SCENARIO;
+    }
+  });
+  assert.equal(result.branch, "A");
 });
 
 test("runUpdate requires --target", () => {
@@ -2962,6 +3036,72 @@ test("runRollback (non-destructive) retags latest and starts the old container, 
   assert.ok(!log.some((l) => l.startsWith("compose up")), "non-destructive rollback must never call compose up");
   const journal = readJournal(join(backupRoot, transactionId));
   assert.equal(journal.phase, "rolled_back");
+});
+
+// issue #322 M1 (must-fix): before this fix, the journal read +
+// eligibility + destructive-or-not decision all happened BEFORE
+// acquireLock. Two concurrent rollback calls for the SAME transaction
+// could both read the same still-eligible journal, both decide
+// "destructive", and both wipe the volume. Deterministic reproduction
+// (ふじ design review round 1, boundaries.patch, adapted here to this
+// file's own helpers rather than importing that scratch file directly):
+// intercept the EXACT mkdirSync call that creates the lock directory and,
+// the first time it fires, run a full SECOND runRollback call for the
+// same transaction before letting the real mkdirSync proceed — the
+// deterministic equivalent of a second process winning the race right
+// before this call's own lock exists.
+test("runRollback (destructive) revalidates the journal after acquiring its lock — a same-window concurrent rollback cannot also wipe", () => {
+  let transactionId;
+  const backupRoot = join(root, "kaoiro-deploy");
+  withScenario("running-clean-stop", () => {
+    const update = runUpdate(
+      { repo: workDir, target: headSha, maintenanceApproved: true },
+      configWithCleanStopMeasured(),
+    );
+    assert.equal(update.phase, "done");
+    transactionId = update.transactionId;
+  });
+
+  const flags = { repo: workDir, transaction: transactionId, confirmRestore: true };
+  const config = configWithCleanStopMeasured();
+  const lockPath = join(backupRoot, `.lock.${deploymentLockKey(join(workDir, "server"))}`);
+  const logPath = join(root, "docker-calls.log");
+  process.env.KAOIRO_TEST_CALL_LOG = logPath;
+
+  const realMkdirSync = fs.mkdirSync;
+  let intervened = false;
+  const outcomes = [];
+  try {
+    withScenario("running-clean-stop", () => {
+      fs.mkdirSync = (path, ...rest) => {
+        if (path === lockPath && !intervened) {
+          intervened = true;
+          try {
+            outcomes.push(runRollback(flags, config).phase);
+          } catch (err) {
+            outcomes.push(err.message);
+          }
+        }
+        return realMkdirSync(path, ...rest);
+      };
+      syncBuiltinESMExports();
+      try {
+        outcomes.push(runRollback(flags, config).phase);
+      } catch (err) {
+        outcomes.push(err.message);
+      }
+    });
+  } finally {
+    fs.mkdirSync = realMkdirSync;
+    syncBuiltinESMExports();
+    delete process.env.KAOIRO_TEST_CALL_LOG;
+  }
+
+  assert.equal(intervened, true, "the lock mkdirSync call was never intercepted — test setup is stale");
+  const log = readCallLog(logPath);
+  const wipes = log.filter((l) => l.includes("find /data -mindepth"));
+  assert.equal(wipes.length, 1, `expected exactly 1 wipe, outcomes=${JSON.stringify(outcomes)}`);
+  assert.equal(readJournal(join(backupRoot, transactionId)).phase, "rolled_back");
 });
 
 test("runRollback (destructive) runs the full stop/forensic/restore/retag/up/health chain, reaching rolled_back", () => {

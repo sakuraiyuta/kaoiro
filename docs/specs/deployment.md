@@ -454,6 +454,14 @@ Satisfy all of the following before starting.
   parser assumes GNU `tar tv*`'s output format; a bsdtar or busybox host fails
   loudly (a parse error, not a silent misread) once the archive has already
   been written.
+- **Use exactly one `backup_root` per deployment host.** The single-writer
+  lock every mutating command (`start`/`update`/`rollback`) takes lives under
+  `backup_root`, keyed by the checkout's own path — two DIFFERENT
+  `backup_root` values for the SAME checkout get two INDEPENDENT locks, so a
+  concurrent run against the same deployment would not be caught. Keep the
+  `--config` file's `backup_root` the same across every invocation on a host
+  (the default, `~/kaoiro-deploy`, already satisfies this without a config
+  file at all).
 
 ### 4.3 Update procedure
 
@@ -877,6 +885,16 @@ never touched by prepare; only `latest` needs restoring. Unlike the pre-CLI
 runbook, `update` does not revert the local checkout on abort — `git merge
 --ff-only <target-sha>` already ran as part of (2), and a later `update
 --target <target-sha>` simply finds it already there (a no-op merge).
+
+**(0a) `another run holds <lock-path>`**
+
+`start`, `update`, and `rollback` all take the same single-writer lock for
+one deployment (4.2's `backup_root` precondition) before reading any
+state, and hold it through their own mutation — this message means another
+one of the three is genuinely in flight against the same deployment right
+now. Wait for it to finish (check `status`), or — only after confirming no
+process actually holds it (a killed run leaves the lock directory behind) —
+remove the named directory manually.
 
 **(1) The commit step failed before reaching `done`** (4.3 step 5 / step 5-c)
 
