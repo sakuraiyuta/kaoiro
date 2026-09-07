@@ -15,19 +15,34 @@
 // the git checkout, which would break deployment.md 4.2's `git status
 // --porcelain` clean-tree precondition). This module stays a generic
 // mkdir-lock primitive; it does not know what a "deployment" is.
-import { mkdirSync, rmdirSync } from "node:fs";
-import { join } from "node:path";
+import { closeSync, fsyncSync, mkdirSync, openSync, rmdirSync } from "node:fs";
+import { dirname, join, relative, sep } from "node:path";
+
+import { fsyncExistingPath } from "./kaoiro-deploy-atomic-write.mjs";
 
 export class LockError extends Error {}
 
 /** Acquires `<backupRoot>/.lock.<lockKey>`, creating `backupRoot` itself
  *  (recursively) first if this is the very first transaction. Throws
  *  LockError, naming the lock path, when another run already holds it. */
-export function acquireLock(backupRoot, lockKey) {
-  mkdirSync(backupRoot, { recursive: true });
+export function acquireLock(
+  backupRoot,
+  lockKey,
+  fsImpl = { closeSync, fsyncSync, mkdirSync, openSync, rmdirSync },
+) {
+  const firstCreated = fsImpl.mkdirSync(backupRoot, { recursive: true });
+  if (firstCreated !== undefined) {
+    fsyncExistingPath(dirname(firstCreated), fsImpl);
+    let created = firstCreated;
+    for (const component of relative(firstCreated, backupRoot).split(sep).filter(Boolean)) {
+      fsyncExistingPath(created, fsImpl);
+      created = join(created, component);
+    }
+    fsyncExistingPath(backupRoot, fsImpl);
+  }
   const lockPath = join(backupRoot, `.lock.${lockKey}`);
   try {
-    mkdirSync(lockPath, { recursive: false });
+    fsImpl.mkdirSync(lockPath, { recursive: false });
   } catch (err) {
     if (err.code === "EEXIST") {
       throw new LockError(
@@ -39,9 +54,9 @@ export function acquireLock(backupRoot, lockKey) {
   return lockPath;
 }
 
-export function releaseLock(lockPath) {
+export function releaseLock(lockPath, fsImpl = { closeSync, fsyncSync, mkdirSync, openSync, rmdirSync }) {
   try {
-    rmdirSync(lockPath);
+    fsImpl.rmdirSync(lockPath);
   } catch {
     // Best-effort, matching kaoiro_lock_release: a lock dir that is
     // already gone or non-empty is not this call's problem to fix.

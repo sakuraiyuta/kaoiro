@@ -74,10 +74,10 @@ export function dockerInspect(bin, target, format) {
  *  keeps this correct regardless of COMPOSE_PROJECT_NAME or a renamed
  *  checkout directory. Empty output means zero containers, not one
  *  empty-string name. */
-export function dockerComposeContainerNames(bin, cwd, service) {
+export function dockerComposeContainerNames(bin, cwd, service, composeArgs = []) {
   const output = runDocker(
     bin,
-    ["compose", "ps", "-a", "--format", "{{.Name}}", service],
+    ["compose", ...composeArgs, "ps", "-a", "--format", "{{.Name}}", service],
     { cwd },
   );
   return output === "" ? [] : output.split("\n");
