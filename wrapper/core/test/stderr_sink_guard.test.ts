@@ -5,12 +5,13 @@ import * as ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 /*
- * This guard rejects unreviewed direct diagnostics: process.stderr,
- * console, stderr imports, any-receiver access, module loaders, and
- * constructor-member capability acquisition. It does not prove value
- * provenance. Reflection, casts, and binding patterns that intentionally
- * obtain Function capability for dynamic code are out of scope and remain
- * a code-review concern rather than a source-guard guarantee.
+ * This guard enforces a static convention for the listed diagnostic and
+ * capability-acquisition forms: process.stderr, console, stderr imports,
+ * any-receiver access, module loaders, and constructor-member access. It
+ * does not determine review status or intent, and it does not analyze
+ * value provenance. Reflection, casts, and binding patterns used to obtain
+ * Function capability for dynamic code are outside this convention and
+ * remain a code-review concern.
  */
 const REPOSITORY_ROOT = resolve(
   fileURLToPath(new URL("../../..", import.meta.url)),
