@@ -100,6 +100,12 @@ config :kaoiro_server,
          "kaoiro_test_session_lifecycle_events_#{run_nonce}.dets"
        )
 
+# issue #320: the detector's 60-second sweep crosses test boundaries. A test
+# that closes a conversation past the rally threshold leaves it readable, and
+# a sweep firing during a LATER test broadcasts it to `agents:lobby`, failing
+# that test's `refute_push`. Tests that need the detector start their own.
+config :kaoiro_server, start_quagmire_watch: false
+
 # Per-run throwaway DETS file for the operator-picked rally threshold
 # (issue #307). Same isolation reason as the stores above: without it the
 # app-started singleton shares the default

@@ -16,7 +16,20 @@ defmodule KaoiroServer.Application do
     # so the state is visible in logs (specs/threat-model.md, issue #28).
     :ok = KaoiroServer.Auth.warn_token_config()
 
-    children = [
+    # See https://hexdocs.pm/elixir/Supervisor.html
+    # for other strategies and supported options
+    opts = [strategy: :one_for_one, name: KaoiroServer.Supervisor]
+    Supervisor.start_link(children(), opts)
+  end
+
+  @doc """
+  The supervision tree, as a value.
+
+  Split out so the QuagmireWatch flag below can be checked without starting
+  the application a second time (issue #320).
+  """
+  def children(quagmire_watch? \\ quagmire_watch_enabled?()) do
+    [
       KaoiroServerWeb.Telemetry,
       {DNSCluster, query: Application.get_env(:kaoiro_server, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: KaoiroServer.PubSub},
@@ -112,11 +125,9 @@ defmodule KaoiroServer.Application do
       # Review-quagmire detection (issue #273). Reads ConversationStates and
       # DeliveryStates, so it starts after both. `:on_notice` is the one
       # place its data crosses into KaoiroServerWeb, same boundary reason as
-      # ConversationStates' `:on_auto_closed` above.
-      {KaoiroServer.QuagmireWatch,
-       on_notice: fn payload ->
-         KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "quagmire_notice", payload)
-       end},
+      # ConversationStates' `:on_auto_closed` above. Conditional since issue
+      # #320 — see quagmire_watch_children/1.
+      quagmire_watch_children(quagmire_watch?),
       # Single owner of the common-footer snapshot + last-known-good
       # (ADR-0045). Must precede FooterWatcher, which rebuilds through it,
       # and the Endpoint, whose WrapperChannel reads the snapshot.
@@ -155,11 +166,40 @@ defmodule KaoiroServer.Application do
       # Start to serve requests, typically the last entry
       KaoiroServerWeb.Endpoint
     ]
+    |> List.flatten()
+  end
 
-    # See https://hexdocs.pm/elixir/Supervisor.html
-    # for other strategies and supported options
-    opts = [strategy: :one_for_one, name: KaoiroServer.Supervisor]
-    Supervisor.start_link(children, opts)
+  @doc """
+  Whether this node runs the review-quagmire detector. Defaults to ON: only
+  `config/test.exs` turns it off, so a default of `false` here would take
+  the detector out of production silently.
+  """
+  def quagmire_watch_enabled?,
+    do: Application.get_env(:kaoiro_server, :start_quagmire_watch, true)
+
+  @doc """
+  The detector's child spec, or nothing.
+
+  It sweeps on a 60-second timer and broadcasts to `agents:lobby`, which is
+  the only path by which a `quagmire_notice` reaches that topic. Under
+  `mix test` that timer crosses test boundaries: one test closes a
+  conversation past the rally threshold, and a sweep firing during a LATER
+  test broadcasts it into whatever socket that test has joined — measured
+  as a `refute_push` failure in roughly 1 run in 30 (issue #320). Tests that
+  want the detector start their own with this same spec, so the production
+  `on_notice` wiring stays on the path they exercise.
+  """
+  def quagmire_watch_children(false), do: []
+
+  def quagmire_watch_children(true),
+    do: [{KaoiroServer.QuagmireWatch, on_notice: &__MODULE__.broadcast_quagmire_notice/1}]
+
+  @doc """
+  The detector's one crossing into KaoiroServerWeb. Named rather than
+  inline so a test can assert the tree carries THIS function.
+  """
+  def broadcast_quagmire_notice(payload) do
+    KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "quagmire_notice", payload)
   end
 
   # Tell Phoenix to update the endpoint configuration
