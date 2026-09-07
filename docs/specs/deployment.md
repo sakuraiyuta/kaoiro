@@ -502,6 +502,12 @@ explicit signal that this reflects refs as of the last real `git fetch`, not
 a live query. Run a real `git fetch origin` yourself first if the answer
 needs to be current.
 
+**A real (non-dry-run) `update` still fetches** — inside `runBuild`, before
+`git merge --ff-only <target-sha>` — so S1's read-only guarantee is specific
+to `--dry-run`; it does not remove the fetch from an actual prepare. The
+`--dry-run` plan's own `wouldRun` list now says so explicitly (issue #322
+S1 review, should-1), matching what a real run does.
+
 **Separate prepare (no downtime) from commit (the stop window)** — steps
 (1)/(2) below now run automatically, inside one `update` invocation, ending
 right before the stop window; steps (5)/(6) run automatically inside a second
@@ -574,14 +580,21 @@ continuing. Recorded in the transaction's `journal.json`
 old image ID, rollback tag, old SHA, compose artifact SHA. Nothing to run
 manually.
 
-**The old SHA comes from the running container's own `/api/health`
-(issue #322 S2), never `git rev-parse HEAD` in the local checkout.** Nothing
-keeps the checkout in lockstep with what the container was actually built
-from — an operator can `git checkout` between deploys without touching the
-running container, and a resumed transaction runs an arbitrary time after
-prepare. `update` refuses outright if that health check is unreachable or
-does not report a valid `build_revision`, rather than silently falling back
-to a possibly-wrong git guess.
+**The old SHA comes from the OLD image's own `/app/build-info.json`**
+(issue #322 S2; review should-2 moved it here from an earlier `/api/health`
+design) **, never `git rev-parse HEAD` in the local checkout.** Nothing keeps
+the checkout in lockstep with what the container was actually built from —
+an operator can `git checkout` between deploys without touching the running
+container, and a resumed transaction runs an arbitrary time after prepare.
+Reading the OLD image directly (`docker run --rm --entrypoint cat
+<old-image-id> /app/build-info.json`) needs no network and no dependency on
+the app actually answering health checks — the image itself is a valid
+rollback target even if the container it is currently running in is mid
+restart, or `health_url` has been overridden to point somewhere unrelated.
+`update` refuses outright if that file is missing or its `revision` is not a
+valid 40-hex SHA, rather than silently falling back to a possibly-wrong git
+guess — checked, along with the capacity preflight, BEFORE this transaction's
+own directory exists, so a refusal here leaves nothing behind to clean up.
 
 **(2) Prepare the server image (automatic, no downtime)**
 

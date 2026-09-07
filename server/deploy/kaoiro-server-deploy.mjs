@@ -21,6 +21,22 @@ import {
 import { basename, dirname, isAbsolute, join } from "node:path";
 
 import { computeBuildIdentity } from "../../scripts/build-identity.mjs";
+// issue #322 M4 review (should-1, disclosed residual): the 5
+// fsyncExistingPath call sites below (M4 nit-1 added the 5th — the
+// PARENT of backupRoot's own first-ever-created ancestor) are exercised
+// on their happy path by the integration suite (real files, real
+// successful fsync calls throughout) but their fail()-on-throw branches
+// are NOT independently mutation-pinnable there — the tar verification
+// each site already runs right before its own call
+// (archive.tar.gz/rollback-forensic.tar.gz/rollback-restore-verify.tar.gz),
+// and findUnfinishedTransaction's own readdirSync for the transaction-
+// dir case, both read the SAME path first, so no real fault reaches
+// fsync alone without first tripping an already-tested earlier guard
+// (measured directly: removing the M4 nit-1 call leaves the full suite
+// green too). Pinning it would need a test-only fs injection seam on
+// this file's own call sites — no precedent for that pattern here,
+// which otherwise only injects faults through real external state (the
+// fake docker binary, real corrupted archives).
 import { fsyncExistingPath } from "./kaoiro-deploy-atomic-write.mjs";
 import { BRANCH, BranchError, classify, requireRunningContainer } from "./kaoiro-deploy-branch.mjs";
 import { loadConfig } from "./kaoiro-deploy-config.mjs";
@@ -81,11 +97,63 @@ function gitOutput(args, cwd) {
  *  `--dry-run` reader assume a live check ran. */
 function targetKnownLocally(target, repo) {
   try {
-    execFileSync("git", ["cat-file", "-e", `${target}^{commit}`], { cwd: repo });
+    // issue #322 S1 review (should-2): `execFileSync` without an `stdio`
+    // override still lets the child's stderr reach THIS process's own
+    // stderr (measured live — git's "fatal: Not a valid object name ..."
+    // leaks on every ordinary "not found" answer, the COMMON case here).
+    // `cat-file -e` answers purely via exit status; nothing is lost by
+    // discarding all three streams.
+    execFileSync("git", ["cat-file", "-e", `${target}^{commit}`], { cwd: repo, stdio: "ignore" });
     return true;
   } catch {
     return false;
   }
+}
+
+// issue #322 S2 review (should-2, director design change): old_sha's own
+// source of truth. Path exported (must-1-style) so CI's own server-image
+// job can pin drift the same way it already does for
+// PERSISTENCE_PATHS_BEAM_GLOB.
+export const BUILD_INFO_PATH = "/app/build-info.json";
+
+/** old_sha's three consumers (the rollback tag name, manifest
+ *  source_sha, and rollback's own health-poll expectation) are all
+ *  really asking one question: "the identity of the image rollback
+ *  restores" — read directly from THAT image's own `${BUILD_INFO_PATH}`
+ *  (`docker run --rm --entrypoint cat <imageId> ${BUILD_INFO_PATH}`)
+ *  rather than the running CONTAINER's `/api/health`, which this
+ *  replaces. No network, no dependency on the app actually being up
+ *  (health could be mid-restart, or `health_url` overridden to
+ *  something unrelated, while the image itself is still a perfectly
+ *  good rollback target). Measured live against a real production
+ *  image (director, homeguard, 2026-09-07): `{"version":"2026.9.0",
+ *  "channel":"dev","revision":"caf8e38b74828036c7a5349094485bcd1d1aebb4",
+ *  "dirty":false}`. A CI-built image (no --build-arg) reports
+ *  `revision: "unknown"` — this function only validates that `revision`
+ *  IS a string, not that it is 40-hex; the CI probe checks the file
+ *  exists and parses, not a real identity (a separate concern from
+ *  pinning this path against drift). This `docker run` is a `run` verb,
+ *  not on --dry-run's read-only allow-list — callers must never call it
+ *  from a dry-run branch. */
+function oldImageBuildRevision(bin, imageId) {
+  let raw;
+  try {
+    raw = runDocker(bin, ["run", "--rm", "--entrypoint", "cat", imageId, BUILD_INFO_PATH]);
+  } catch (err) {
+    fail(
+      `could not read ${BUILD_INFO_PATH} from image ${imageId} (needed as old_sha before recording anything about it): ${err.message}`,
+    );
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    fail(`${BUILD_INFO_PATH} in image ${imageId} did not parse as JSON (${err.message}): ${raw}`);
+  }
+  if (typeof parsed.revision !== "string" || !SHA_RE.test(parsed.revision)) {
+    fail(`${BUILD_INFO_PATH} in image ${imageId} reported an unexpected revision: ${JSON.stringify(parsed.revision)}`);
+  }
+  return parsed.revision;
 }
 
 function sha256File(path) {
@@ -1465,6 +1533,11 @@ export function runUpdate(flags, config) {
         unfinished !== null
           ? [`resume transaction ${unfinished.id} (phase: ${unfinished.journal.phase})`]
           : [
+              // issue #322 S1 review (should-1): the REAL (non-dry-run)
+              // prepare fetches inside runBuild — this --dry-run plan
+              // must say so too, now that S1 itself no longer fetches
+              // as a SIDE EFFECT of merely previewing.
+              `git fetch origin`,
               `git merge --ff-only ${target}`,
               "docker compose build",
               "docker tag <old_image_id> kaoiro-server:rollback-<old-sha>",
@@ -1541,6 +1614,18 @@ export function runUpdate(flags, config) {
       // leaves nothing behind to clean up.
       const capacity = checkCapacity(bin, container, backupRoot, config);
 
+      // issue #322 S2 review (should-1): moved here from right after
+      // writeJournal below, to sit BEFORE any mutation — the same
+      // principle capacity above already follows. Recording it only
+      // after the transaction directory + PREFLIGHT journal already
+      // existed meant a failure here left an orphaned PREFLIGHT-only
+      // transaction with no CLI-side recovery path (this branch's own
+      // "unfinished... investigate ${unfinished.dir}" message and
+      // UNRESUMABLE_PHASES' message point at each other, not at a real
+      // resume command).
+      oldImageId = dockerInspect(bin, container, "{{.Image}}");
+      oldSha = oldImageBuildRevision(bin, oldImageId);
+
       transactionId = newTransactionId();
       dir = join(backupRoot, transactionId);
       // クロエ round 1 review N-2: backupRoot itself may not exist yet on
@@ -1548,7 +1633,15 @@ export function runUpdate(flags, config) {
       // nothing under it to collide with), but the transaction's OWN
       // leaf directory must fail loudly on a same-second collision
       // rather than silently reusing whatever is already there.
-      mkdirSync(backupRoot, { recursive: true });
+      //
+      // issue #322 M4 review (nit-1): `mkdirSync(path, {recursive:
+      // true})`'s own return value is the TOPMOST directory it actually
+      // created — `undefined` if backupRoot (and every ancestor) already
+      // existed (Node 24, measured by クロエ). On a first-ever run,
+      // backupRoot's own directory entry is new too, in ITS parent — the
+      // fsync below alone only covers `dir`'s entry inside backupRoot,
+      // leaving backupRoot's own creation asymmetrically unprotected.
+      const firstCreatedBackupRootAncestor = mkdirSync(backupRoot, { recursive: true });
       mkdirSync(dir, { recursive: false });
       // issue #322 M4 (must-fix): fsync backupRoot itself — the new
       // directory ENTRY for `dir` — so it survives a crash the same way
@@ -1558,6 +1651,9 @@ export function runUpdate(flags, config) {
       // logged and continued past.
       try {
         fsyncExistingPath(backupRoot);
+        if (firstCreatedBackupRootAncestor !== undefined) {
+          fsyncExistingPath(dirname(firstCreatedBackupRootAncestor));
+        }
       } catch (err) {
         fail(
           `could not fsync ${backupRoot} after creating transaction directory ${dir} — the new directory entry may not survive a crash: ${err.message}`,
@@ -1577,31 +1673,7 @@ export function runUpdate(flags, config) {
       };
       writeJournal(dir, journal, validateJournalAgainstStateMachine);
 
-      oldImageId = dockerInspect(bin, container, "{{.Image}}");
-      // issue #322 S2 (should-fix): was `gitOutput(["rev-parse", "HEAD"],
-      // repo)` — the LOCAL checkout's HEAD, which nothing keeps in
-      // lockstep with what `container` was actually built from (an
-      // operator can `git checkout` the repo between deploys without
-      // touching the running container; a resumed transaction runs an
-      // arbitrary time after prepare). A wrong old_sha here silently
-      // mislabels the rollback tag and archive provenance with a sha the
-      // running container never was. The running container's own
-      // `/api/health` (already this file's one source of truth for
-      // "what build is actually live", pollHealth's own contract) is
-      // asked instead; unreachable REFUSES rather than falling back to
-      // the possibly-wrong git guess — a silent wrong answer here is
-      // worse than an explicit stop before any mutation past PREFLIGHT.
-      const oldHealthUrl = resolveHealthUrl(bin, serverDir, config);
-      const oldHealth = fetchHealth(resolveCurlBin(), oldHealthUrl);
-      if (!oldHealth.ok) {
-        fail(
-          `could not reach ${oldHealthUrl} to determine the running container's own build_revision (needed as old_sha before recording anything about it): ${oldHealth.error}`,
-        );
-      }
-      if (typeof oldHealth.body.build_revision !== "string" || !SHA_RE.test(oldHealth.body.build_revision)) {
-        fail(`${oldHealthUrl} reported an unexpected build_revision: ${JSON.stringify(oldHealth.body.build_revision)}`);
-      }
-      oldSha = oldHealth.body.build_revision;
+      // oldImageId/oldSha already derived above, before mkdirSync.
       const composeArtifactPath = join(serverDir, "docker-compose.yaml");
       composeArtifact = { path: composeArtifactPath, sha256: sha256File(composeArtifactPath) };
 

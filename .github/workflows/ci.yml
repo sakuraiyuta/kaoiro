@@ -282,3 +282,26 @@ jobs:
             }
             console.log("persistence-path manifest OK (" + entries.length + " stores)");
           '
+      # issue #322 S2 review (should-2): old_sha's own source, pinned
+      # against path drift the same way must-1 pins the beam glob. This
+      # image is built with NO --build-arg, so its own revision reads
+      # "unknown" (server/Dockerfile: `ARG KAOIRO_BUILD_REVISION=unknown`)
+      # — this only checks the file exists, parses as JSON, and has a
+      # string revision key; it is not a check on THIS image's identity
+      # (a separate concern from pinning the path itself).
+      - name: deploy CLI old-image build-info probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUILD_INFO_PATH=$(node --input-type=module -e '
+            import { BUILD_INFO_PATH } from "./server/deploy/kaoiro-server-deploy.mjs";
+            console.log(BUILD_INFO_PATH);
+          ')
+          docker run --rm --entrypoint cat kaoiro-server:ci "$BUILD_INFO_PATH" > build-info.json
+          node -e '
+            const info = JSON.parse(require("fs").readFileSync("build-info.json", "utf8"));
+            if (typeof info.revision !== "string") {
+              throw new Error("revision is not a string: " + JSON.stringify(info));
+            }
+            console.log("build-info.json OK (revision: " + info.revision + ")");
+          '
