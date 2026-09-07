@@ -807,9 +807,21 @@ Full-traversal `tar tvzf` verification (never `| head`, whose exit status
 would come from `head` and mask a corrupt archive); `required_entries`
 recorded from that same listing, so the recorded set is provably what the
 archive contains, never a separately-scanned guess that could disagree with
-it. Both the archive and its SHA-256 are written to `manifest.json`, alongside
-the env_consistency result, image ID, source/target SHA, volume ID, and
-rollback tag — the durable transaction record `rollback` later reads.
+it. issue #322 M4 (must-fix): the archive is fsync'd right after
+verification, before its SHA-256 is recorded as a durable fact — `tar`
+inside the docker container that wrote it is a process this CLI never
+opened itself, so nothing guaranteed its bytes had actually reached disk
+until this explicit fsync. The same applies to the forensic and
+restore-verify archives `rollback` creates (4.4 (3)), and to a new
+transaction's own directory entry (fsync'd on its parent, `backup_root`,
+right after `mkdir` — same reasoning as `writeFileDurably`'s own
+fsync-the-directory step, applied to a directory this module did not
+create THROUGH that helper). A failed fsync anywhere in this chain aborts
+before the fact is recorded, the same as any other checkpoint failure in
+this section. Both the archive and its SHA-256 are written to
+`manifest.json`, alongside the env_consistency result, image ID,
+source/target SHA, volume ID, and rollback tag — the durable transaction
+record `rollback` later reads.
 
 **(6) Start the server with the prepared image (automatic)**
 
