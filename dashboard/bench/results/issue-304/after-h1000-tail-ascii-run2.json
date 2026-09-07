@@ -1,0 +1,516 @@
+{
+  "schema": 1,
+  "issue": 304,
+  "variant": "after",
+  "scenario": "h1000-tail",
+  "mode": "ascii",
+  "run": 2,
+  "source": {
+    "baselineRevision": "2ea8f80bcd18aaac2bb6f47b9a685dbcfe3ebb7e",
+    "currentRevision": "cd77d9f3868ff528f8a6b8791ba2cf371913366e",
+    "generatorSha256": "023fe41dedfe9380f72c1b9cacf90bb3a073e297200bd3367b726a606d05c119",
+    "current": {
+      "appSha256": "29e07d47eba426daf3b463422c8c156a0b56113e3407afcb474d2bebb106b7c7",
+      "detailSha256": "e399d54ecca9ea55ab2269235116039764cb04f1e2844e947078be550f0b6b14",
+      "protocolSha256": "8dbfdb58982ed425c27c67fc3911071bbb4f15699a015496293889639db686c8"
+    },
+    "baseline": {
+      "appSha256": "004054f083e2297a28518ec0e63a6e449520b6a9081d48cca7b11a5f516fad12",
+      "detailSha256": "14463f56eeadde7836b22d200369046f5b6656129ed46292987b80227458f39c",
+      "protocolSha256": "cd6a42daf72405136889797b69848cb9981e62fe65905866d0a2f429988a4ff8"
+    },
+    "buildSha256": "1a77504a170a218e2b629c00544c8af3fbca764e0d7773083b83cd8a4b1da87d"
+  },
+  "shape": {
+    "initialRows": 200,
+    "finalRows": 200,
+    "expectedRows": 200,
+    "expectedFinalRows": 200
+  },
+  "formatWork": {
+    "backgroundCalls": 0,
+    "viewedCalls": 10,
+    "typingOnlyCalls": 0
+  },
+  "primary": {
+    "dispatchToInput": {
+      "count": 60,
+      "median": 3.699951171875,
+      "p95": 7.900146484375,
+      "max": 10.699951171875
+    }
+  },
+  "secondary": {
+    "dispatchToRaf": {
+      "count": 60,
+      "median": 8.7001953125,
+      "p95": 19,
+      "max": 20.800048828125
+    },
+    "inputToRaf": {
+      "count": 60,
+      "median": 4.300048828125,
+      "p95": 15.5,
+      "max": 15.699951171875
+    },
+    "tickCost": {
+      "count": 23,
+      "median": 1.1000001430511475,
+      "p95": 1.2999999523162842,
+      "max": 1.2999999523162842
+    }
+  },
+  "longTasks": [],
+  "raw": {
+    "dispatches": [
+      1788809786931.4001,
+      1788809786972.7002,
+      1788809787011.1,
+      1788809787048.7002,
+      1788809787087.3,
+      1788809787126.1,
+      1788809787164.3,
+      1788809787203,
+      1788809787241.9001,
+      1788809787281,
+      1788809787319.7002,
+      1788809787358,
+      1788809787396.3,
+      1788809787437.9001,
+      1788809787477.1,
+      1788809787515.9001,
+      1788809787554.3,
+      1788809787593.3,
+      1788809787637.8,
+      1788809787675.5,
+      1788809787714.3,
+      1788809787753.5,
+      1788809787792,
+      1788809787830.3,
+      1788809787874,
+      1788809787912.4001,
+      1788809787951.3,
+      1788809787990.3,
+      1788809788029,
+      1788809788074.2002,
+      1788809788112.1,
+      1788809788151.2002,
+      1788809788188.9001,
+      1788809788227.9001,
+      1788809788271.1,
+      1788809788309,
+      1788809788346.7002,
+      1788809788385.5,
+      1788809788424.3,
+      1788809788463.1,
+      1788809788501.7002,
+      1788809788539.5,
+      1788809788578.4001,
+      1788809788616.6,
+      1788809788656.6,
+      1788809788702.9001,
+      1788809788742.7002,
+      1788809788780.7002,
+      1788809788819.1,
+      1788809788857.2002,
+      1788809788894.7002,
+      1788809788937.4001,
+      1788809788977.3,
+      1788809789016.9001,
+      1788809789054.9001,
+      1788809789093.3,
+      1788809789137.6,
+      1788809789175.6,
+      1788809789214.4001,
+      1788809789253.2002
+    ],
+    "inputs": [
+      {
+        "at": 1788809786936.3,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809786938
+      },
+      {
+        "at": 1788809786976.5,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809786983.3
+      },
+      {
+        "at": 1788809787014.3,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809787015
+      },
+      {
+        "at": 1788809787052.4001,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809787067.5
+      },
+      {
+        "at": 1788809787091,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809787091.7002
+      },
+      {
+        "at": 1788809787129.5,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809787133.3
+      },
+      {
+        "at": 1788809787168.2002,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809787183.9001
+      },
+      {
+        "at": 1788809787206.5,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809787207.2002
+      },
+      {
+        "at": 1788809787245.8,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809787250.5
+      },
+      {
+        "at": 1788809787284.2002,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809787285
+      },
+      {
+        "at": 1788809787323.5,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809787333.3
+      },
+      {
+        "at": 1788809787361.4001,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809787366.7002
+      },
+      {
+        "at": 1788809787399.7002,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809787400.3
+      },
+      {
+        "at": 1788809787442.1,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809787450.4001
+      },
+      {
+        "at": 1788809787480.5,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809787483.2002
+      },
+      {
+        "at": 1788809787519.5,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809787533.4001
+      },
+      {
+        "at": 1788809787558.1,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809787566.8
+      },
+      {
+        "at": 1788809787596.6,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809787599.9001
+      },
+      {
+        "at": 1788809787642,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809787650.3
+      },
+      {
+        "at": 1788809787679.1,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809787683.3
+      },
+      {
+        "at": 1788809787717.8,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809787733.3
+      },
+      {
+        "at": 1788809787757.2002,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809787766.8
+      },
+      {
+        "at": 1788809787795.8,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809787799.8
+      },
+      {
+        "at": 1788809787839,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809787851.1
+      },
+      {
+        "at": 1788809787877.9001,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809787883.6
+      },
+      {
+        "at": 1788809787915.9001,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809787916.6
+      },
+      {
+        "at": 1788809787955.9001,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809787967.1
+      },
+      {
+        "at": 1788809787993.8,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809787994.6
+      },
+      {
+        "at": 1788809788036.9001,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809788038.4001
+      },
+      {
+        "at": 1788809788077.8,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809788083.4001
+      },
+      {
+        "at": 1788809788115.5,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809788116.2002
+      },
+      {
+        "at": 1788809788155,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809788167.1
+      },
+      {
+        "at": 1788809788192.5,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809788193.2002
+      },
+      {
+        "at": 1788809788231.6,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809788233.1
+      },
+      {
+        "at": 1788809788274.3,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809788283.6
+      },
+      {
+        "at": 1788809788312.2002,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809788312.9001
+      },
+      {
+        "at": 1788809788350.4001,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809788351.5
+      },
+      {
+        "at": 1788809788389,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809788389.6
+      },
+      {
+        "at": 1788809788428.1,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809788433.2002
+      },
+      {
+        "at": 1788809788466.5,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809788467.2002
+      },
+      {
+        "at": 1788809788505.1,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809788505.8
+      },
+      {
+        "at": 1788809788543.6,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809788550.2002
+      },
+      {
+        "at": 1788809788582.1,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809788583.1
+      },
+      {
+        "at": 1788809788620,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809788633.3
+      },
+      {
+        "at": 1788809788667.3,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809788667.9001
+      },
+      {
+        "at": 1788809788706.7002,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809788707.5
+      },
+      {
+        "at": 1788809788746,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809788750.3
+      },
+      {
+        "at": 1788809788784,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809788784.7002
+      },
+      {
+        "at": 1788809788822.3,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809788833.2002
+      },
+      {
+        "at": 1788809788860.9001,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809788866.6
+      },
+      {
+        "at": 1788809788898,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809788899.8
+      },
+      {
+        "at": 1788809788941.7002,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809788950.4001
+      },
+      {
+        "at": 1788809788981.2002,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809788983.2002
+      },
+      {
+        "at": 1788809789020.4001,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809789033.3
+      },
+      {
+        "at": 1788809789058.8,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809789066.5
+      },
+      {
+        "at": 1788809789096.7002,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809789100.1
+      },
+      {
+        "at": 1788809789141.7002,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809789150.3
+      },
+      {
+        "at": 1788809789179.3,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809789183.1
+      },
+      {
+        "at": 1788809789217.8,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809789233.3
+      },
+      {
+        "at": 1788809789256.7002,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809789266.6
+      }
+    ],
+    "ticks": [
+      1.1000001430511475,
+      1,
+      1,
+      0.8999998569488525,
+      1,
+      1,
+      1,
+      1.0999999046325684,
+      1.2000000476837158,
+      1.2000000476837158,
+      1.2000000476837158,
+      1.2999999523162842,
+      1.1999998092651367,
+      1.2999999523162842,
+      1.2000000476837158,
+      1.1000001430511475,
+      1.2000000476837158,
+      1.1000001430511475,
+      1,
+      1.0999999046325684,
+      1.0999999046325684,
+      1,
+      1.1000001430511475
+    ]
+  },
+  "pageErrors": []
+}

@@ -1,0 +1,523 @@
+{
+  "schema": 1,
+  "issue": 304,
+  "variant": "baseline",
+  "scenario": "h5000-tail",
+  "mode": "ascii",
+  "run": 1,
+  "source": {
+    "baselineRevision": "2ea8f80bcd18aaac2bb6f47b9a685dbcfe3ebb7e",
+    "currentRevision": "cd77d9f3868ff528f8a6b8791ba2cf371913366e",
+    "generatorSha256": "023fe41dedfe9380f72c1b9cacf90bb3a073e297200bd3367b726a606d05c119",
+    "current": {
+      "appSha256": "29e07d47eba426daf3b463422c8c156a0b56113e3407afcb474d2bebb106b7c7",
+      "detailSha256": "e399d54ecca9ea55ab2269235116039764cb04f1e2844e947078be550f0b6b14",
+      "protocolSha256": "8dbfdb58982ed425c27c67fc3911071bbb4f15699a015496293889639db686c8"
+    },
+    "baseline": {
+      "appSha256": "004054f083e2297a28518ec0e63a6e449520b6a9081d48cca7b11a5f516fad12",
+      "detailSha256": "14463f56eeadde7836b22d200369046f5b6656129ed46292987b80227458f39c",
+      "protocolSha256": "cd6a42daf72405136889797b69848cb9981e62fe65905866d0a2f429988a4ff8"
+    },
+    "buildSha256": "e3982ab34bc15b6042de7eca19fe18b13cf467fa2f01f9c5905ce82c80ff79d4"
+  },
+  "shape": {
+    "initialRows": 200,
+    "finalRows": 200,
+    "expectedRows": 200,
+    "expectedFinalRows": 200
+  },
+  "formatWork": {
+    "backgroundCalls": 0,
+    "viewedCalls": 2000,
+    "typingOnlyCalls": 0
+  },
+  "primary": {
+    "dispatchToInput": {
+      "count": 60,
+      "median": 4.5,
+      "p95": 14.599853515625,
+      "max": 17.10009765625
+    }
+  },
+  "secondary": {
+    "dispatchToRaf": {
+      "count": 60,
+      "median": 10.599853515625,
+      "p95": 21,
+      "max": 26.5
+    },
+    "inputToRaf": {
+      "count": 60,
+      "median": 5,
+      "p95": 10.5,
+      "max": 12.5
+    },
+    "tickCost": {
+      "count": 30,
+      "median": 13.200000047683716,
+      "p95": 20.40000009536743,
+      "max": 21.200000047683716
+    }
+  },
+  "longTasks": [],
+  "raw": {
+    "dispatches": [
+      1788809481336.5,
+      1788809481378.8,
+      1788809481418.3,
+      1788809481480.5,
+      1788809481569.1,
+      1788809481612.8,
+      1788809481673.5,
+      1788809481713.4001,
+      1788809481792,
+      1788809481872.7,
+      1788809481919.7,
+      1788809481974.1,
+      1788809482016.1,
+      1788809482072.4001,
+      1788809482124.3,
+      1788809482166.2,
+      1788809482210.2,
+      1788809482267.6,
+      1788809482310.6,
+      1788809482370.5,
+      1788809482425.5,
+      1788809482465.4001,
+      1788809482507.8,
+      1788809482567.8,
+      1788809482610.8,
+      1788809482667.1,
+      1788809482720.2,
+      1788809482766.6,
+      1788809482810.9001,
+      1788809482867.7,
+      1788809482909.8,
+      1788809482968.4001,
+      1788809483022.9001,
+      1788809483065.7,
+      1788809483106.6,
+      1788809483167.2,
+      1788809483209.8,
+      1788809483267.6,
+      1788809483320.6,
+      1788809483365.3,
+      1788809483406.6,
+      1788809483467.8,
+      1788809483509.2,
+      1788809483567.6,
+      1788809483620.3,
+      1788809483665.2,
+      1788809483706.9001,
+      1788809483767.4001,
+      1788809483810,
+      1788809483867.7,
+      1788809483922.1,
+      1788809483964.8,
+      1788809484007.6,
+      1788809484067.6,
+      1788809484110.3,
+      1788809484168.2,
+      1788809484223.9001,
+      1788809484265.2,
+      1788809484307.1,
+      1788809484368
+    ],
+    "inputs": [
+      {
+        "at": 1788809481341.6,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809481351.2
+      },
+      {
+        "at": 1788809481382.4001,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809481383.2
+      },
+      {
+        "at": 1788809481421.9001,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809481434.4001
+      },
+      {
+        "at": 1788809481497.6,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809481501.7
+      },
+      {
+        "at": 1788809481577.3,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809481584.5
+      },
+      {
+        "at": 1788809481616.8,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809481617.6
+      },
+      {
+        "at": 1788809481678.7,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809481684.6
+      },
+      {
+        "at": 1788809481720.3,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809481721.5
+      },
+      {
+        "at": 1788809481808.7,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809481818.5
+      },
+      {
+        "at": 1788809481881.3,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809481884.6
+      },
+      {
+        "at": 1788809481924.2,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809481924.9001
+      },
+      {
+        "at": 1788809481978.7,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809481984.7
+      },
+      {
+        "at": 1788809482019.9001,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809482020.6
+      },
+      {
+        "at": 1788809482087,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809482087.8
+      },
+      {
+        "at": 1788809482128.7,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809482129.6
+      },
+      {
+        "at": 1788809482174.7,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809482184.6
+      },
+      {
+        "at": 1788809482214.6,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809482217.9001
+      },
+      {
+        "at": 1788809482274.6,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809482284.6
+      },
+      {
+        "at": 1788809482314.3,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809482317.9001
+      },
+      {
+        "at": 1788809482380.1,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809482390.7
+      },
+      {
+        "at": 1788809482429.2,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809482430.1
+      },
+      {
+        "at": 1788809482469.8,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809482472
+      },
+      {
+        "at": 1788809482511.7,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809482517.7
+      },
+      {
+        "at": 1788809482575.4001,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809482584.4001
+      },
+      {
+        "at": 1788809482614.7,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809482617.7
+      },
+      {
+        "at": 1788809482676.1,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809482686.6
+      },
+      {
+        "at": 1788809482724.3,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809482725
+      },
+      {
+        "at": 1788809482775.1,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809482784.6
+      },
+      {
+        "at": 1788809482815.1,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809482817.6
+      },
+      {
+        "at": 1788809482874.7,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809482884.4001
+      },
+      {
+        "at": 1788809482913.4001,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809482917.7
+      },
+      {
+        "at": 1788809482977.6,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809482987.8
+      },
+      {
+        "at": 1788809483026.3,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809483027
+      },
+      {
+        "at": 1788809483069.7,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809483071.4001
+      },
+      {
+        "at": 1788809483110.4001,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809483117.8
+      },
+      {
+        "at": 1788809483174.9001,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809483184.4001
+      },
+      {
+        "at": 1788809483213.5,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809483217.7
+      },
+      {
+        "at": 1788809483276.1,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809483286.3
+      },
+      {
+        "at": 1788809483324.6,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809483325.4001
+      },
+      {
+        "at": 1788809483369.7,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809483371.3
+      },
+      {
+        "at": 1788809483411,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809483417.7
+      },
+      {
+        "at": 1788809483474.8,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809483484.5
+      },
+      {
+        "at": 1788809483512.7,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809483517.7
+      },
+      {
+        "at": 1788809483577,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809483587.1
+      },
+      {
+        "at": 1788809483623.9001,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809483624.7
+      },
+      {
+        "at": 1788809483669.6,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809483671.3
+      },
+      {
+        "at": 1788809483710.4001,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809483717.9001
+      },
+      {
+        "at": 1788809483775,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809483784.5
+      },
+      {
+        "at": 1788809483814,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809483817.8
+      },
+      {
+        "at": 1788809483877.5,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809483887.7
+      },
+      {
+        "at": 1788809483925.5,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809483926.3
+      },
+      {
+        "at": 1788809483969.8,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809483971.6
+      },
+      {
+        "at": 1788809484011.2,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809484017.9001
+      },
+      {
+        "at": 1788809484075.4001,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809484084.5
+      },
+      {
+        "at": 1788809484114.9001,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809484117.8
+      },
+      {
+        "at": 1788809484179,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809484189.2
+      },
+      {
+        "at": 1788809484227.6,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809484228.4001
+      },
+      {
+        "at": 1788809484270,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809484272.1
+      },
+      {
+        "at": 1788809484310.7,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809484317.7
+      },
+      {
+        "at": 1788809484375.5,
+        "inputType": "insertText",
+        "composing": false,
+        "raf": 1788809484384.5
+      }
+    ],
+    "ticks": [
+      21.200000047683716,
+      13.300000190734863,
+      13.300000190734863,
+      20.40000009536743,
+      16.799999952316284,
+      14.100000143051147,
+      13.700000047683716,
+      13.399999856948853,
+      13.300000190734863,
+      13.700000047683716,
+      12.900000095367432,
+      13.700000047683716,
+      13.100000143051147,
+      13,
+      13.100000143051147,
+      13.900000095367432,
+      12.900000095367432,
+      12.800000190734863,
+      12.700000047683716,
+      12.400000095367432,
+      13.100000143051147,
+      13.100000143051147,
+      12.700000047683716,
+      13.200000047683716,
+      13,
+      12.5,
+      13.200000047683716,
+      13.200000047683716,
+      12.600000143051147,
+      13
+    ]
+  },
+  "pageErrors": []
+}

@@ -48,6 +48,8 @@ import {
   purgeTasksForAgent,
   computeActiveTaskCountByAgent,
   activeTaskCountForDetail,
+  createTranscriptIdentityIndex,
+  mergeLiveTranscriptEntry,
   tasklistForAgent,
   tasklistForDetail,
   resetTranscriptHistory,
@@ -3441,6 +3443,85 @@ describe("error index (noteIfNewestError / recomputeLatestError / dropLatestErro
     const merged = mergeTranscriptEntries(previous, [duplicate]);
     expect(merged.length).toBe(previous.length);
     expect(merged[0]).toBe(previous[0]);
+  });
+
+  it("live transcript index: warmed ordered append avoids a full merge", () => {
+    const previous = [
+      logEnvelope("a", "2026-09-01T00:00:00Z", 0),
+      logEnvelope("a", "2026-09-01T00:00:01Z", 1),
+    ];
+    const incoming = logEnvelope("a", "2026-09-01T00:00:02Z", 2);
+    const result = mergeLiveTranscriptEntry(
+      previous,
+      createTranscriptIdentityIndex(previous),
+      incoming,
+    );
+
+    expect(result.usedFullMerge).toBe(false);
+    expect(result.accepted).toBe(true);
+    expect(result.transcript).toEqual(
+      mergeTranscriptEntries(previous, [incoming]),
+    );
+    expect(result.index.source).toBe(result.transcript);
+  });
+
+  it("live transcript index: duplicate is an O(1) no-op and is not accepted", () => {
+    const previous = [logEnvelope("a", "2026-09-01T00:00:01Z", 1)];
+    const duplicate = logEnvelope("a", "2026-09-01T00:00:01Z", 1);
+    const index = createTranscriptIdentityIndex(previous);
+    const result = mergeLiveTranscriptEntry(previous, index, duplicate);
+
+    expect(result.usedFullMerge).toBe(false);
+    expect(result.accepted).toBe(false);
+    expect(result.transcript).toBe(previous);
+    expect(result.index).toBe(index);
+    expect(result.transcript).toEqual(
+      mergeTranscriptEntries(previous, [duplicate]),
+    );
+  });
+
+  it("live transcript index: out-of-order input uses stable upper-bound insertion", () => {
+    const first = logEnvelope("a", "2026-09-01T00:00:01Z", 1);
+    const sameOrderFirst = logEnvelope("a", "2026-09-01T00:00:02Z", 2);
+    const last = logEnvelope("a", "2026-09-01T00:00:03Z", 3);
+    const incoming = {
+      ...logEnvelope("a", "2026-09-01T00:00:02Z", 2),
+      session_id: "another-session",
+    };
+    const previous = [first, sameOrderFirst, last];
+    const result = mergeLiveTranscriptEntry(
+      previous,
+      createTranscriptIdentityIndex(previous),
+      incoming,
+    );
+
+    expect(result.usedFullMerge).toBe(false);
+    expect(result.transcript).toEqual(
+      mergeTranscriptEntries(previous, [incoming]),
+    );
+    expect(result.transcript.indexOf(sameOrderFirst)).toBeLessThan(
+      result.transcript.indexOf(incoming),
+    );
+  });
+
+  it("live transcript index: absent or stale sidecar falls back to full merge", () => {
+    const previous = [logEnvelope("a", "2026-09-01T00:00:01Z", 1)];
+    const incoming = logEnvelope("a", "2026-09-01T00:00:02Z", 2);
+    const absent = mergeLiveTranscriptEntry(previous, undefined, incoming);
+    const stale = mergeLiveTranscriptEntry(
+      [...previous],
+      createTranscriptIdentityIndex(previous),
+      incoming,
+    );
+
+    for (const result of [absent, stale]) {
+      expect(result.usedFullMerge).toBe(true);
+      expect(result.accepted).toBe(true);
+      expect(result.transcript).toEqual(
+        mergeTranscriptEntries(previous, [incoming]),
+      );
+      expect(result.index.source).toBe(result.transcript);
+    }
   });
 
   // 増分 index が merge の実際の受理/棄却と一致しない回帰の再発防止

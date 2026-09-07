@@ -45,6 +45,7 @@ import type {
 const captured = vi.hoisted(() => ({
   handlers: null as KaoiroHandlers | null,
   latestIndex: null as ErrorIndexState | null,
+  liveMerges: [] as Array<{ usedFullMerge: boolean; accepted: boolean }>,
 }));
 
 vi.mock("../src/lib/protocol", async (importOriginal) => {
@@ -83,6 +84,16 @@ vi.mock("../src/lib/protocol", async (importOriginal) => {
     ) => track(actual.recomputeLatestError(...args)),
     dropLatestError: (...args: Parameters<typeof actual.dropLatestError>) =>
       track(actual.dropLatestError(...args)),
+    mergeLiveTranscriptEntry: (
+      ...args: Parameters<typeof actual.mergeLiveTranscriptEntry>
+    ) => {
+      const result = actual.mergeLiveTranscriptEntry(...args);
+      captured.liveMerges.push({
+        usedFullMerge: result.usedFullMerge,
+        accepted: result.accepted,
+      });
+      return result;
+    },
   };
 });
 
@@ -188,6 +199,7 @@ async function mountApp(): Promise<KaoiroHandlers> {
 beforeEach(() => {
   captured.handlers = null;
   captured.latestIndex = null;
+  captured.liveMerges = [];
   seqCounter = 0;
   lastTsSeqByAgent = new Map();
   vi.stubGlobal(
@@ -232,6 +244,63 @@ const OP_KINDS = [
 ] as const;
 
 describe("App.svelte error index parity (issue #304)", () => {
+  it("warmed live transcript route avoids full merge for append, duplicate, and ordered insertion", async () => {
+    const h = await mountApp();
+    const initial = [
+      randomEnvelope(mulberry32(21), "a1", "s1", false),
+      randomEnvelope(mulberry32(22), "a1", "s1", false),
+    ].sort((a, b) => a.ts.localeCompare(b.ts));
+    h.onHistory?.({ a1: initial }, {}, "per-pane-v1");
+    await tick();
+    captured.liveMerges = [];
+
+    const appended = {
+      ...randomEnvelope(mulberry32(23), "a1", "s1", false),
+      ts: "2026-10-01T00:00:03Z",
+      seq: 3,
+    };
+    const duplicate = { ...appended };
+    const outOfOrder = {
+      ...randomEnvelope(mulberry32(24), "a1", "s2", false),
+      ts: "2026-10-01T00:00:02Z",
+      seq: 2,
+    };
+    h.onEnvelope(appended);
+    h.onEnvelope(duplicate);
+    h.onEnvelope(outOfOrder);
+    await tick();
+
+    expect(captured.liveMerges).toEqual([
+      { usedFullMerge: false, accepted: true },
+      { usedFullMerge: false, accepted: false },
+      { usedFullMerge: false, accepted: true },
+    ]);
+  });
+
+  it("replacement writers rebuild the sidecar before the next live append", async () => {
+    const h = await mountApp();
+    const first = {
+      ...randomEnvelope(mulberry32(25), "a1", "s1", false),
+      ts: "2026-10-01T00:00:01Z",
+      seq: 1,
+    };
+    h.onHistory?.({ a1: [first] }, {}, "per-pane-v1");
+    h.onHistoryReset?.("a1", false, "replay-1");
+    await tick();
+    captured.liveMerges = [];
+
+    h.onEnvelope({
+      ...randomEnvelope(mulberry32(26), "a1", "s1", false),
+      ts: "2026-10-01T00:00:02Z",
+      seq: 2,
+    });
+    await tick();
+
+    expect(captured.liveMerges).toEqual([
+      { usedFullMerge: false, accepted: true },
+    ]);
+  });
+
   for (const seed of [1, 2, 3, 4, 5]) {
     it(`incremental index matches full-rescan reference over a random operation sequence (seed=${seed})`, async () => {
       const rand = mulberry32(seed);

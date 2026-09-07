@@ -6,6 +6,14 @@ and write to `/tmp/fuji304-measure/`; create that directory first and do not run
 concurrently. The original raw evidence is retained there until review finishes.
 No raw profiles or generated bundles are committed.
 
+`bench/runIssue304.mjs` is the replacement gate. It builds the current tree and
+the `2ea8f80b` baseline as separate production bundles, instruments the actual
+`formatTime` function in those throwaway bundles, and writes one JSON record per
+run to `bench/results/issue-304/`. It measures dispatch-to-input as the primary
+metric; input-to-rAF remains secondary. Run it from `dashboard/` with
+`node bench/runIssue304.mjs`. Its temporary baseline source and bundles are
+removed when the invocation finishes; committed JSON is the evidence artifact.
+
 - `fujiMeasure.mjs`: ASCII/native Chromium composition/insertText, production or
   dev harness, raw dispatch/input/rAF timestamps and CPU profiles.
 - `fujiShape.mjs`: the same experiment with explicit history expansion and a

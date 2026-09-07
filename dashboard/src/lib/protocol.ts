@@ -1641,6 +1641,89 @@ export function mergeTranscriptEntries(
   return merged.sort(compareTranscriptEnvelopes);
 }
 
+/** Mutable sidecar for the live single-envelope path. `source` proves that
+ *  its key set describes the exact transcript currently being updated. */
+export interface TranscriptIdentityIndex {
+  source: Envelope[];
+  keys: Set<string>;
+}
+
+export interface LiveTranscriptMerge {
+  transcript: Envelope[];
+  index: TranscriptIdentityIndex;
+  accepted: boolean;
+  usedFullMerge: boolean;
+}
+
+export function createTranscriptIdentityIndex(
+  transcript: Envelope[],
+): TranscriptIdentityIndex {
+  return {
+    source: transcript,
+    keys: new Set(transcript.map(transcriptEntryKey)),
+  };
+}
+
+/** Inserts one live envelope without rebuilding transcript identity state.
+ *  A sidecar from another array is never trusted: full merge remains the
+ *  authority for history/replay and every replacement path. */
+export function mergeLiveTranscriptEntry(
+  transcript: Envelope[],
+  index: TranscriptIdentityIndex | undefined,
+  envelope: Envelope,
+): LiveTranscriptMerge {
+  if (index === undefined || index.source !== transcript) {
+    const merged = mergeTranscriptEntries(transcript, [envelope]);
+    return {
+      transcript: merged,
+      index: createTranscriptIdentityIndex(merged),
+      accepted: merged.length > transcript.length,
+      usedFullMerge: true,
+    };
+  }
+
+  const key = transcriptEntryKey(envelope);
+  if (index.keys.has(key)) {
+    return {
+      transcript,
+      index,
+      accepted: false,
+      usedFullMerge: false,
+    };
+  }
+
+  let insertAt = transcript.length;
+  if (
+    transcript.length > 0 &&
+    compareTranscriptEnvelopes(transcript[transcript.length - 1], envelope) > 0
+  ) {
+    let low = 0;
+    let high = transcript.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (compareTranscriptEnvelopes(transcript[middle], envelope) <= 0) {
+        low = middle + 1;
+      } else {
+        high = middle;
+      }
+    }
+    insertAt = low;
+  }
+
+  const next =
+    insertAt === transcript.length
+      ? [...transcript, envelope]
+      : [...transcript.slice(0, insertAt), envelope, ...transcript.slice(insertAt)];
+  index.keys.add(key);
+  index.source = next;
+  return {
+    transcript: next,
+    index,
+    accepted: true,
+    usedFullMerge: false,
+  };
+}
+
 /** issue #304: incremental replacement for App.svelte's former
  *  `latestErrorKeyByAgent` $derived.by, which rescanned EVERY agent's
  *  WHOLE transcript backwards on every single `logs` replacement --

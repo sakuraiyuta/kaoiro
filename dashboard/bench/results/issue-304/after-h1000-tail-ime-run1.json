@@ -1,0 +1,600 @@
+{
+  "schema": 1,
+  "issue": 304,
+  "variant": "after",
+  "scenario": "h1000-tail",
+  "mode": "ime",
+  "run": 1,
+  "source": {
+    "baselineRevision": "2ea8f80bcd18aaac2bb6f47b9a685dbcfe3ebb7e",
+    "currentRevision": "cd77d9f3868ff528f8a6b8791ba2cf371913366e",
+    "generatorSha256": "023fe41dedfe9380f72c1b9cacf90bb3a073e297200bd3367b726a606d05c119",
+    "current": {
+      "appSha256": "29e07d47eba426daf3b463422c8c156a0b56113e3407afcb474d2bebb106b7c7",
+      "detailSha256": "e399d54ecca9ea55ab2269235116039764cb04f1e2844e947078be550f0b6b14",
+      "protocolSha256": "8dbfdb58982ed425c27c67fc3911071bbb4f15699a015496293889639db686c8"
+    },
+    "baseline": {
+      "appSha256": "004054f083e2297a28518ec0e63a6e449520b6a9081d48cca7b11a5f516fad12",
+      "detailSha256": "14463f56eeadde7836b22d200369046f5b6656129ed46292987b80227458f39c",
+      "protocolSha256": "cd6a42daf72405136889797b69848cb9981e62fe65905866d0a2f429988a4ff8"
+    },
+    "buildSha256": "1a77504a170a218e2b629c00544c8af3fbca764e0d7773083b83cd8a4b1da87d"
+  },
+  "shape": {
+    "initialRows": 200,
+    "finalRows": 200,
+    "expectedRows": 200,
+    "expectedFinalRows": 200
+  },
+  "formatWork": {
+    "backgroundCalls": 0,
+    "viewedCalls": 10,
+    "typingOnlyCalls": 0
+  },
+  "primary": {
+    "dispatchToInput": {
+      "count": 72,
+      "median": 3.39990234375,
+      "p95": 7,
+      "max": 10.400146484375
+    }
+  },
+  "secondary": {
+    "dispatchToRaf": {
+      "count": 72,
+      "median": 7.39990234375,
+      "p95": 18,
+      "max": 20.300048828125
+    },
+    "inputToRaf": {
+      "count": 72,
+      "median": 3.89990234375,
+      "p95": 13.39990234375,
+      "max": 14.900146484375
+    },
+    "tickCost": {
+      "count": 23,
+      "median": 1.0999999046325684,
+      "p95": 1.2999999523162842,
+      "max": 1.4000000953674316
+    }
+  },
+  "longTasks": [],
+  "raw": {
+    "dispatches": [
+      1788809805349,
+      1788809805390.2,
+      1788809805427.6,
+      1788809805466.1,
+      1788809805504.7,
+      1788809805509.7,
+      1788809805545,
+      1788809805587.2,
+      1788809805625.5,
+      1788809805663.1,
+      1788809805700.8,
+      1788809805705.1,
+      1788809805742.6,
+      1788809805783,
+      1788809805820.2,
+      1788809805858.1,
+      1788809805896.4,
+      1788809805900.8,
+      1788809805936.5,
+      1788809805974.1,
+      1788809806012,
+      1788809806052.1,
+      1788809806092.7,
+      1788809806097.1,
+      1788809806132.5,
+      1788809806170.2,
+      1788809806207.9,
+      1788809806247.2,
+      1788809806290,
+      1788809806294.2,
+      1788809806329,
+      1788809806366.8,
+      1788809806406.1,
+      1788809806444.2,
+      1788809806485.4,
+      1788809806490.6,
+      1788809806526.8,
+      1788809806564.6,
+      1788809806602.5,
+      1788809806640.7,
+      1788809806677.8,
+      1788809806682.2,
+      1788809806717.6,
+      1788809806757.2,
+      1788809806795.2,
+      1788809806832,
+      1788809806869.7,
+      1788809806875.3,
+      1788809806911.4,
+      1788809806953.3,
+      1788809806993.7,
+      1788809807031.8,
+      1788809807071.2,
+      1788809807082.7,
+      1788809807118.3,
+      1788809807156.4,
+      1788809807194.5,
+      1788809807231.4,
+      1788809807267.8,
+      1788809807274,
+      1788809807310.4,
+      1788809807347.3,
+      1788809807390.1,
+      1788809807428,
+      1788809807465.8,
+      1788809807469.9,
+      1788809807506.6,
+      1788809807544.3,
+      1788809807585.4,
+      1788809807623.3,
+      1788809807661.6,
+      1788809807666.5
+    ],
+    "inputs": [
+      {
+        "at": 1788809805354.3,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809805356.2
+      },
+      {
+        "at": 1788809805393.8,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809805406.4
+      },
+      {
+        "at": 1788809805431.1,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809805432.1
+      },
+      {
+        "at": 1788809805469.9,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809805473.5
+      },
+      {
+        "at": 1788809805508.2,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809805509
+      },
+      {
+        "at": 1788809805511.9,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809805522.4
+      },
+      {
+        "at": 1788809805548.6,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809805549.3
+      },
+      {
+        "at": 1788809805591.4,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809805606.3
+      },
+      {
+        "at": 1788809805628.7,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809805629.5
+      },
+      {
+        "at": 1788809805666.5,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809805673.4
+      },
+      {
+        "at": 1788809805704.1,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809805706.2
+      },
+      {
+        "at": 1788809805708.2,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809805722.4
+      },
+      {
+        "at": 1788809805746.1,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809805746.9
+      },
+      {
+        "at": 1788809805786.5,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809805790.1
+      },
+      {
+        "at": 1788809805823.4,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809805824.3
+      },
+      {
+        "at": 1788809805861.9,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809805873.6
+      },
+      {
+        "at": 1788809805899.9,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809805906.2
+      },
+      {
+        "at": 1788809805902.7,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809805906.2
+      },
+      {
+        "at": 1788809805939.8,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809805940.5
+      },
+      {
+        "at": 1788809805977.9,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809805990.3
+      },
+      {
+        "at": 1788809806015.1,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809806015.8
+      },
+      {
+        "at": 1788809806056.8,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809806058.7
+      },
+      {
+        "at": 1788809806096.3,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809806106.4
+      },
+      {
+        "at": 1788809806099.1,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809806106.4
+      },
+      {
+        "at": 1788809806135.8,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809806136.5
+      },
+      {
+        "at": 1788809806173.6,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809806174.9
+      },
+      {
+        "at": 1788809806211,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809806211.8
+      },
+      {
+        "at": 1788809806255.4,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809806257.1
+      },
+      {
+        "at": 1788809806293.3,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809806306.4
+      },
+      {
+        "at": 1788809806295.9,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809806306.4
+      },
+      {
+        "at": 1788809806332.5,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809806333.4
+      },
+      {
+        "at": 1788809806370.2,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809806373.2
+      },
+      {
+        "at": 1788809806409.5,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809806410.3
+      },
+      {
+        "at": 1788809806447.7,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809806458.8
+      },
+      {
+        "at": 1788809806488.7,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809806489.9
+      },
+      {
+        "at": 1788809806492.6,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809806505.7
+      },
+      {
+        "at": 1788809806530.4,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809806531
+      },
+      {
+        "at": 1788809806568.1,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809806573.4
+      },
+      {
+        "at": 1788809806606,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809806606.9
+      },
+      {
+        "at": 1788809806643.9,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809806658.7
+      },
+      {
+        "at": 1788809806681.2,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809806689.9
+      },
+      {
+        "at": 1788809806684,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809806689.9
+      },
+      {
+        "at": 1788809806720.9,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809806721.7
+      },
+      {
+        "at": 1788809806761.3,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809806773.5
+      },
+      {
+        "at": 1788809806798.4,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809806806.4
+      },
+      {
+        "at": 1788809806835.3,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809806836.1
+      },
+      {
+        "at": 1788809806873.2,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809806874.5
+      },
+      {
+        "at": 1788809806877.6,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809806889
+      },
+      {
+        "at": 1788809806914.8,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809806923
+      },
+      {
+        "at": 1788809806960.8,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809806973.6
+      },
+      {
+        "at": 1788809806997.4,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809807006.4
+      },
+      {
+        "at": 1788809807035.2,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809807036.1
+      },
+      {
+        "at": 1788809807081.6,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809807089.5
+      },
+      {
+        "at": 1788809807084.4,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809807089.5
+      },
+      {
+        "at": 1788809807121.8,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809807122.5
+      },
+      {
+        "at": 1788809807160,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809807173.4
+      },
+      {
+        "at": 1788809807197.7,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809807206.1
+      },
+      {
+        "at": 1788809807234.7,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809807235.4
+      },
+      {
+        "at": 1788809807271.4,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809807273.3
+      },
+      {
+        "at": 1788809807276.6,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809807288.9
+      },
+      {
+        "at": 1788809807313.7,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809807323
+      },
+      {
+        "at": 1788809807354.3,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809807356
+      },
+      {
+        "at": 1788809807393.4,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809807394.4
+      },
+      {
+        "at": 1788809807431.4,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809807439.7
+      },
+      {
+        "at": 1788809807469,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809807472.9
+      },
+      {
+        "at": 1788809807471.6,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809807472.9
+      },
+      {
+        "at": 1788809807510,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809807510.8
+      },
+      {
+        "at": 1788809807547.4,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809807558.4
+      },
+      {
+        "at": 1788809807588.5,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809807589.7
+      },
+      {
+        "at": 1788809807627.5,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809807639.6
+      },
+      {
+        "at": 1788809807665.2,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809807673
+      },
+      {
+        "at": 1788809807668.2,
+        "inputType": "insertCompositionText",
+        "composing": true,
+        "raf": 1788809807673
+      }
+    ],
+    "ticks": [
+      1.0999999046325684,
+      0.9000000953674316,
+      1.0999999046325684,
+      0.9000000953674316,
+      1,
+      1.0999999046325684,
+      1,
+      1.0999999046325684,
+      1.2999999523162842,
+      1.2999999523162842,
+      1.1999998092651367,
+      1.2999999523162842,
+      1.1999998092651367,
+      1.4000000953674316,
+      1.2999999523162842,
+      1.2999999523162842,
+      1.2000000476837158,
+      1.1999998092651367,
+      1,
+      1,
+      0.9000000953674316,
+      1,
+      1.0999999046325684
+    ]
+  },
+  "pageErrors": []
+}

@@ -727,16 +727,18 @@
       connection !== null,
   );
 
+  const transcriptTimeFormatter = new Intl.DateTimeFormat([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+
   // Wall-clock time of a log line from its envelope ts (#38). Invalid or
   // missing timestamps render as empty rather than "Invalid Date".
   function formatTime(ts: string): string {
     const at = new Date(ts);
     if (Number.isNaN(at.getTime())) return "";
-    return at.toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    });
+    return transcriptTimeFormatter.format(at);
   }
 
   // Local-day key for grouping consecutive log lines under a date divider
@@ -772,6 +774,17 @@
     return kind === "tool_use" || kind === "tool_result";
   }
 
+  type DisplayableLog = { env: Envelope; absoluteIndex: number };
+  const displayableLogCache = new WeakMap<Envelope, DisplayableLog>();
+
+  function displayableLog(env: Envelope, absoluteIndex: number): DisplayableLog {
+    const cached = displayableLogCache.get(env);
+    if (cached?.absoluteIndex === absoluteIndex) return cached;
+    const row = { env, absoluteIndex };
+    displayableLogCache.set(env, row);
+    return row;
+  }
+
   // issue #228 round-1 must-fix (ふじ M1): hiding must happen BEFORE the
   // window slice below, not by leaving a hidden row's outer
   // `.transcript-entry` in the DOM and skipping only its inner content —
@@ -789,7 +802,7 @@
   // filtered view, so that index must survive filtering intact.
   const displayableLogs = $derived(
     logs
-      .map((env, absoluteIndex) => ({ env, absoluteIndex }))
+      .map((env, absoluteIndex) => displayableLog(env, absoluteIndex))
       .filter(
         ({ env }) => !shouldHideLogEntry(env, settings.hideNonMessageLogEntries),
       ),

@@ -44,6 +44,7 @@
     SpawnResult,
     TaskTable,
     TicketRefreshResult,
+    TranscriptIdentityIndex,
     WrapperBuildInfo,
   } from "./lib/protocol";
   import {
@@ -68,7 +69,9 @@
     applyTaskEnvelope,
     purgeTasksForAgent,
     computeActiveTaskCountByAgent,
+    createTranscriptIdentityIndex,
     activeTaskCountForDetail,
+    mergeLiveTranscriptEntry,
     tasklistForDetail,
   } from "./lib/protocol";
   import {
@@ -163,6 +166,28 @@
   // Per-agent reply transcript (operator-only, ADR-0012): log/result
   // envelopes accumulate here instead of overwriting the latest state.
   let logs = $state<Record<string, Envelope[]>>({});
+  let transcriptIdentityIndexes = new Map<string, TranscriptIdentityIndex>();
+
+  function rebuildTranscriptIdentityIndexes(
+    transcripts: Record<string, Envelope[]>,
+  ): void {
+    transcriptIdentityIndexes = new Map(
+      Object.entries(transcripts).map(([agentId, transcript]) => [
+        agentId,
+        createTranscriptIdentityIndex(transcript),
+      ]),
+    );
+  }
+
+  function replaceTranscriptIdentityIndex(
+    agentId: string,
+    transcript: Envelope[],
+  ): void {
+    transcriptIdentityIndexes.set(
+      agentId,
+      createTranscriptIdentityIndex(transcript),
+    );
+  }
   // #124: read marker belongs to this session owner, rather than the
   // response-timeline mount. Opening a detail unmounts the grid/timeline;
   // keeping it here prevents an already-read row from becoming unread again.
@@ -821,13 +846,20 @@
               );
             }
             const next = { ...logs };
+            const nextIndexes = new Map<string, TranscriptIdentityIndex>();
             let addedToTranscript = false;
             for (const id of targets) {
               const previous = next[id] ?? [];
-              const merged = mergeTranscriptEntries(previous, [envelope]);
+              const liveMerge = mergeLiveTranscriptEntry(
+                previous,
+                transcriptIdentityIndexes.get(id),
+                envelope,
+              );
+              const merged = liveMerge.transcript;
               const accepted = merged.length > previous.length;
               if (accepted) addedToTranscript = true;
               next[id] = merged;
+              nextIndexes.set(id, liveMerge.index);
               // issue #304: O(1) incremental update, not a rescan -- see
               // the errorIndex declaration comment above. Gated on
               // `accepted`: mergeTranscriptEntries dedupes by full
@@ -852,6 +884,12 @@
               }
             }
             logs = next;
+            for (const [id, index] of nextIndexes) {
+              // `$state` wraps assigned arrays. The sidecar must remember
+              // that reactive identity, not the pre-assignment raw array.
+              index.source = logs[id];
+              transcriptIdentityIndexes.set(id, index);
+            }
             // JSONL resume replay deliberately reuses ordinary `envelope`
             // events. Its explicit reset/complete boundary, rather than an
             // arrival-count heuristic, is what distinguishes it from a live
@@ -971,6 +1009,7 @@
           }
           clearWatermarks = applied.clearWatermarks;
           logs = applied.logs;
+          rebuildTranscriptIdentityIndexes(logs);
           // issue #304: a join/reconnect legitimately replaces every
           // agent's transcript at once, so there is no cheaper option
           // than a full per-agent rescan here -- but it runs once per
@@ -1020,6 +1059,7 @@
               computeStaleTimelineKeys(prev, next, conversationEntryKey),
             );
             logs = { ...logs, [agentId]: next };
+            replaceTranscriptIdentityIndex(agentId, logs[agentId]);
             // issue #304: a purge can REMOVE the entry the index currently
             // points at, so this needs a full rescan of this one agent
             // (recomputeLatestError), not the O(1) live-append path.
@@ -1038,6 +1078,7 @@
             computeStaleTimelineKeys(prev, next, conversationEntryKey),
           );
           logs = { ...logs, [agentId]: next };
+          replaceTranscriptIdentityIndex(agentId, logs[agentId]);
           // issue #304: resetTranscriptHistory can drop the entry the
           // index currently points at -- full per-agent rescan, as above.
           errorIndex = recomputeLatestError(errorIndex, agentId, next);
@@ -1058,10 +1099,12 @@
           // restored row into an offline peer's pane (ふじ 30-10 M2). No
           // arrival marker either: this is a replay, not a live reply.
           const previous = logs[paneAgentId] ?? [];
+          const next = mergeTranscriptEntries(previous, [envelope]);
           logs = {
             ...logs,
-            [paneAgentId]: mergeTranscriptEntries(previous, [envelope]),
+            [paneAgentId]: next,
           };
+          replaceTranscriptIdentityIndex(paneAgentId, logs[paneAgentId]);
           // issue #304: no errorIndex update here -- `envelope` is always
           // `inter_agent_message` (parseHistoryReplayEnvelope rejects
           // anything else), which can never be an is_error result, so
@@ -1124,6 +1167,7 @@
               Object.entries(logs).filter(([id]) => id !== agentId),
             );
           }
+          transcriptIdentityIndexes.delete(agentId);
           // issue #304: the deleted agent's cached error entry (if any)
           // must go with its transcript.
           errorIndex = dropLatestError(errorIndex, agentId);
@@ -1215,6 +1259,10 @@
             if (prev) {
               const next = retainClearMarkerOnly(prev, payload.request_id);
               logs = { ...logs, [payload.agent_id]: next };
+              replaceTranscriptIdentityIndex(
+                payload.agent_id,
+                logs[payload.agent_id],
+              );
               // issue #304: /clear can remove the entry the index
               // currently points at -- full per-agent rescan.
               errorIndex = recomputeLatestError(
@@ -1473,6 +1521,7 @@
     // Don't keep the previous session's data behind the login form.
     agents = {};
     logs = {};
+    transcriptIdentityIndexes = new Map();
     // issue #304: errorIndex is no longer auto-derived from `logs`, so
     // clearing `logs` alone would leave a stale cached error behind --
     // reset it explicitly, same as `logs` itself.

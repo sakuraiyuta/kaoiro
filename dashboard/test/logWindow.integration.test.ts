@@ -286,6 +286,63 @@ describe("AgentDetail log render window (#184)", () => {
     expect(target.querySelector(".load-earlier")).toBeNull();
   });
 
+  it("全件展開後の append は新しい行だけ formatTime する (issue #304)", async () => {
+    const formatDescriptor = Object.getOwnPropertyDescriptor(
+      Intl.DateTimeFormat.prototype,
+      "format",
+    );
+    if (formatDescriptor?.get === undefined) {
+      throw new Error("Intl.DateTimeFormat.prototype.format getter unavailable");
+    }
+    let formatCalls = 0;
+    Object.defineProperty(Intl.DateTimeFormat.prototype, "format", {
+      configurable: true,
+      get(this: Intl.DateTimeFormat) {
+        const format = formatDescriptor.get!.call(this) as (
+          date?: Date | number,
+        ) => string;
+        return (date?: Date | number) => {
+          formatCalls += 1;
+          return format(date);
+        };
+      },
+    });
+
+    try {
+      const logs = buildLogs("agent-a", 250);
+      const { target, props } = await renderReactive({
+        envelope: state("agent-a"),
+        logs,
+        agents: {},
+        scrollToEntryKey: null,
+        onClose: vi.fn(),
+      });
+      (target.querySelector(".load-earlier") as HTMLButtonElement).click();
+      await tick();
+      await Promise.resolve();
+      await tick();
+
+      formatCalls = 0;
+      props.logs = [
+        ...props.logs,
+        {
+          ...assistantLog("agent-a", 1_000),
+          ts: tsFor(1_000),
+        },
+      ];
+      await tick();
+
+      expect(formatCalls).toBe(1);
+      expect(target.querySelectorAll(".transcript-entry").length).toBe(251);
+    } finally {
+      Object.defineProperty(
+        Intl.DateTimeFormat.prototype,
+        "format",
+        formatDescriptor,
+      );
+    }
+  });
+
   it("reading-frozen は append 中でも既読行を保持し、bottom 復帰で tail(200) へ戻る (round-2 M1)", async () => {
     installScrollGeometry();
     const logs = buildLogs("agent-a", 250);
