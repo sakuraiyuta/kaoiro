@@ -525,6 +525,11 @@ not cleared merely because failed control advances to revision 4: clearing
 requires `next.revision > blocked.revision`, reflecting a newer server-accepted
 selection, whether delivered by live relay or sync.
 
+If an existing entry has no acceptance-time recovery binding, preserve its
+current `next` selection and derive any pre-application rejection's
+`rolled_back_to` from that same selection; do not infer a missing predecessor
+or claim a fresh effective observation.
+
 **Join projection.** Apply these rules after every negotiated join, including
 server restart, wrapper restart, and same-process rejoin:
 
