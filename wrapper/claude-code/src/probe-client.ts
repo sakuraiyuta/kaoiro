@@ -10,7 +10,7 @@
 // Query; this file only owns the launcher.
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import type { EngineCatalogFailReason, EngineModelInfo } from "@kaoiro/protocol";
 
 /** Wall-clock cap on the child process itself. Slightly above the probe's own
@@ -35,13 +35,11 @@ export interface ProbeOutcome {
   source?: "init" | "supported_models" | "cache";
 }
 
-const require_ = createRequire(import.meta.url);
-
 /** Resolve the probe entrypoint against this package's exports. Same
  *  package = the sibling `probe.js` inside `dist/`. */
 function resolveProbePath(): string {
   try {
-    return require_.resolve("./probe.js");
+    return fileURLToPath(new URL("./probe.js", import.meta.url));
   } catch (err) {
     throw new Error(
       `cannot resolve @kaoiro/claude-code/dist/probe.js (build the wrapper first?): ${String(err)}`,
