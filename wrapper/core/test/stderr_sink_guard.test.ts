@@ -4,6 +4,14 @@ import { fileURLToPath } from "node:url";
 import * as ts from "typescript";
 import { describe, expect, it } from "vitest";
 
+/*
+ * This guard rejects unreviewed direct diagnostics: process.stderr,
+ * console, stderr imports, any-receiver access, module loaders, and
+ * constructor-member capability acquisition. It does not prove value
+ * provenance. Reflection, casts, and binding patterns that intentionally
+ * obtain Function capability for dynamic code are out of scope and remain
+ * a code-review concern rather than a source-guard guarantee.
+ */
 const REPOSITORY_ROOT = resolve(
   fileURLToPath(new URL("../../..", import.meta.url)),
 );
@@ -566,5 +574,22 @@ describe("wrapper stderr sink guard", () => {
 
   it("accepts an ordinary function call without dynamic-code capability access", () => {
     expect(scanText('const make = () => "safe"; make();')).toMatchObject({ violations: [] });
+  });
+
+  it.each([
+    [
+      "reflection descriptor value",
+      'const make = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(() => {}), "constructor")!.value; make("return 1")();',
+    ],
+    [
+      "reflection value cast to a callable type",
+      'const make = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(() => {}), "constructor")!.value as (code: string) => () => void; make("return 1")();',
+    ],
+    [
+      "constructor binding cast to a callable type",
+      'const { constructor: original } = (() => {}); const make = original as (code: string) => () => void; make("return 1")();',
+    ],
+  ])("accepts an out-of-scope intentional dynamic-code pattern: %s", (_label, source) => {
+    expect(scanText(source).violations).toEqual([]);
   });
 });
