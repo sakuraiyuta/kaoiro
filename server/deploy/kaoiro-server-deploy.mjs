@@ -9,7 +9,15 @@
 // yuta 2026-09-06).
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statfsSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statfsSync,
+} from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
 
 import { computeBuildIdentity } from "../../scripts/build-identity.mjs";
@@ -837,6 +845,39 @@ function resolveBackupRoot(config) {
   return join(process.env.HOME, "kaoiro-deploy");
 }
 
+/** issue #322 M1: every mutator (start/update/rollback) must land on the
+ *  SAME lock for the SAME deployment — before this, the lock's name was
+ *  the fixed literal `.lock.update` under `backupRoot`, so two configs
+ *  naming DIFFERENT `backup_root` values for the SAME compose checkout
+ *  never contended with each other at all, and a concurrent run against
+ *  the same deployment could freely interleave.
+ *
+ *  Keyed by `serverDir`'s REALPATH (not the raw, possibly-relative or
+ *  symlinked argument) — two invocations that resolve to the same actual
+ *  directory must collide even if `--repo` was spelled differently. This
+ *  does not identify "the compose project" by name (docker compose's own
+ *  default project-name derivation, or a `.env`-declared
+ *  `COMPOSE_PROJECT_NAME`, are invisible to this CLI) — it identifies
+ *  "the same checkout this CLI was pointed at", which is the identity
+ *  this CLI itself can observe and enforce.
+ *
+ *  Kept UNDER `backup_root` rather than inside the git checkout (director
+ *  ruling 2026-09-07): a lock directory living inside `serverDir` would
+ *  make `git status --porcelain` non-empty there, breaking
+ *  deployment.md 4.2's clean-tree precondition. The residual this leaves
+ *  — a host running two DIFFERENT `backup_root` values for the SAME
+ *  checkout still gets two independent locks — is accepted per that same
+ *  ruling; deployment.md 4.2 states the one-`backup_root`-per-host rule
+ *  this residual relies on.
+ *
+ *  Exported so a test can compute the exact lock path a real run would,
+ *  rather than hand-deriving a parallel formula that could silently drift
+ *  from this one. */
+export function deploymentLockKey(serverDir) {
+  const real = realpathSync(serverDir);
+  return createHash("sha256").update(real).digest("hex").slice(0, 16);
+}
+
 /** `build`: prepares a versioned server image with no downtime — the
  *  no-downtime half of deployment.md 4.3 (1)/(2). Advances the repo
  *  checkout at `--repo` to `--target` (fast-forward only), computes
@@ -935,36 +976,28 @@ export function runStart(flags, config) {
   const repo = flags.repo ?? process.cwd();
   const serverDir = join(repo, "server");
   const { bin, overridden } = resolveDockerBin(config);
-  const dryRun = flags.dryRun === true;
   const backupRoot = resolveBackupRoot(config);
-  const hasState = hasPriorTransactions(bin, serverDir, backupRoot);
 
-  const result = classify(bin, serverDir, SERVICE, hasState);
+  if (flags.dryRun === true) {
+    // Snapshot preview, no lock — same convention as runUpdate/runRollback's
+    // own dry-run branches (a concurrent mutator can make this stale by the
+    // time an operator acts on it; that staleness is inherent to "preview").
+    const hasState = hasPriorTransactions(bin, serverDir, backupRoot);
+    const result = classify(bin, serverDir, SERVICE, hasState);
 
-  if (result.branch === BRANCH.STOPPED_CONTAINER) {
-    if (dryRun) {
+    if (result.branch === BRANCH.STOPPED_CONTAINER) {
       return { command: "start", dryRun: true, docker: overridden ? "fake" : "docker", ...result };
     }
-    runDocker(bin, ["start", result.container], { stdio: "inherit" });
-    return { command: "start", dryRun: false, docker: overridden ? "fake" : "docker", ...result };
-  }
-
-  if (result.branch === BRANCH.STATE_WITHOUT_CONTAINER) {
-    fail(
-      `${result.reason}; use update/rollback to recover from existing state, not start`,
-    );
-  }
-
-  if (result.branch === BRANCH.DIAGNOSE) {
-    fail(`start refuses: ${result.reason}`);
-  }
-
-  // BRANCH.FRESH from here on.
-  if (flags.initialize !== true) {
-    fail("start --initialize is required to bootstrap a fresh deployment (no prior state found)", 64);
-  }
-
-  if (dryRun) {
+    if (result.branch === BRANCH.STATE_WITHOUT_CONTAINER) {
+      fail(`${result.reason}; use update/rollback to recover from existing state, not start`);
+    }
+    if (result.branch === BRANCH.DIAGNOSE) {
+      fail(`start refuses: ${result.reason}`);
+    }
+    // BRANCH.FRESH from here on.
+    if (flags.initialize !== true) {
+      fail("start --initialize is required to bootstrap a fresh deployment (no prior state found)", 64);
+    }
     return {
       command: "start",
       dryRun: true,
@@ -974,20 +1007,56 @@ export function runStart(flags, config) {
     };
   }
 
-  const identity = computeBuildIdentity(repo);
-  runDocker(bin, ["compose", "up", "-d", "--build"], {
-    cwd: serverDir,
-    env: {
-      ...process.env,
-      KAOIRO_BUILD_REVISION: identity.revision,
-      KAOIRO_BUILD_DIRTY: String(identity.dirty),
-      KAOIRO_BUILD_VERSION: identity.version,
-      KAOIRO_BUILD_CHANNEL: identity.channel,
-    },
-    stdio: "inherit",
-  });
+  // issue #322 M1 (must-fix): acquired before classify() ever reads
+  // docker/transaction state, so a concurrent update/rollback against the
+  // SAME deployment is visible (and refuses this call) before start
+  // decides which branch to take, let alone mutates. Before this fix,
+  // start took NO lock at all: with a prepared transaction and the lock
+  // held by update, start still called `docker start` underneath it —
+  // reading OUTSIDE the lock, then mutating, would only move the race
+  // rather than close it (the same reasoning as runRollback's own fix).
+  const lockPath = acquireLock(backupRoot, deploymentLockKey(serverDir));
+  try {
+    const hasState = hasPriorTransactions(bin, serverDir, backupRoot);
+    const result = classify(bin, serverDir, SERVICE, hasState);
 
-  return { command: "start", dryRun: false, docker: overridden ? "fake" : "docker", ...result, identity };
+    if (result.branch === BRANCH.STOPPED_CONTAINER) {
+      runDocker(bin, ["start", result.container], { stdio: "inherit" });
+      return { command: "start", dryRun: false, docker: overridden ? "fake" : "docker", ...result };
+    }
+
+    if (result.branch === BRANCH.STATE_WITHOUT_CONTAINER) {
+      fail(
+        `${result.reason}; use update/rollback to recover from existing state, not start`,
+      );
+    }
+
+    if (result.branch === BRANCH.DIAGNOSE) {
+      fail(`start refuses: ${result.reason}`);
+    }
+
+    // BRANCH.FRESH from here on.
+    if (flags.initialize !== true) {
+      fail("start --initialize is required to bootstrap a fresh deployment (no prior state found)", 64);
+    }
+
+    const identity = computeBuildIdentity(repo);
+    runDocker(bin, ["compose", "up", "-d", "--build"], {
+      cwd: serverDir,
+      env: {
+        ...process.env,
+        KAOIRO_BUILD_REVISION: identity.revision,
+        KAOIRO_BUILD_DIRTY: String(identity.dirty),
+        KAOIRO_BUILD_VERSION: identity.version,
+        KAOIRO_BUILD_CHANNEL: identity.channel,
+      },
+      stdio: "inherit",
+    });
+
+    return { command: "start", dryRun: false, docker: overridden ? "fake" : "docker", ...result, identity };
+  } finally {
+    releaseLock(lockPath);
+  }
 }
 
 /** Every phase reachable from `from` (inclusive) by following
@@ -1267,7 +1336,7 @@ export function runUpdate(flags, config) {
     };
   }
 
-  const lockPath = acquireLock(backupRoot);
+  const lockPath = acquireLock(backupRoot, deploymentLockKey(serverDir));
   try {
     const unfinished = findUnfinishedTransaction(backupRoot);
     let transactionId;
@@ -1797,6 +1866,42 @@ export const ROLLBACK_ELIGIBLE_PHASES = new Set(
  *  manifest's own required_entries exactly, retag `latest` back
  *  (verified), `compose up -d --no-build --force-recreate`, and poll
  *  health for the OLD sha. */
+/** Reads the journal, validates it, checks rollback eligibility, and
+ *  derives the fixed decision facts (old image/sha, preflight container,
+ *  destructive-or-not) a rollback needs before it can act. Shared by
+ *  --dry-run (a snapshot preview, read with no lock — same convention as
+ *  runUpdate's own dry-run branch) and the real path (issue #322 M1:
+ *  read AFTER acquireLock, so the decision this returns cannot go stale
+ *  before the caller acts on it). */
+function readRollbackDecision(dir, transactionId) {
+  let journal;
+  try {
+    journal = readJournal(dir);
+  } catch (err) {
+    fail(`--transaction ${transactionId} has no readable journal at ${dir}: ${err.message}`);
+  }
+  if (journal.transaction_id !== transactionId) {
+    fail(
+      `transaction directory ${dir} contains a journal claiming transaction_id ${journal.transaction_id} — refusing to guess which is authoritative`,
+    );
+  }
+  try {
+    validateJournalAgainstStateMachine(journal);
+  } catch (err) {
+    fail(`transaction ${transactionId}'s journal is internally inconsistent: ${err.message}`);
+  }
+  if (!ROLLBACK_ELIGIBLE_PHASES.has(journal.phase)) {
+    fail(
+      `transaction ${transactionId} is at phase ${journal.phase}, not eligible for rollback (must have reached at least old_image_saved, and must not already be rolled back or mid-rollback) — investigate ${dir} manually`,
+    );
+  }
+  const oldEntry = journal.history.find((e) => e.phase === PHASE.OLD_IMAGE_SAVED);
+  const { old_image_id: oldImageId, old_sha: oldSha } = oldEntry.observation;
+  const preflightContainer = journal.history.find((e) => e.phase === PHASE.PREFLIGHT).observation.container;
+  const destructive = TRANSITIONS[journal.phase]?.includes(PHASE.ROLLBACK_STOPPED) ?? false;
+  return { journal, oldImageId, oldSha, preflightContainer, destructive };
+}
+
 export function runRollback(flags, config) {
   const repo = flags.repo ?? process.cwd();
   const serverDir = join(repo, "server");
@@ -1807,34 +1912,17 @@ export function runRollback(flags, config) {
     fail("rollback requires --transaction <id>", 64);
   }
   const dir = join(backupRoot, flags.transaction);
-  let journal;
-  try {
-    journal = readJournal(dir);
-  } catch (err) {
-    fail(`--transaction ${flags.transaction} has no readable journal at ${dir}: ${err.message}`);
-  }
-  if (journal.transaction_id !== flags.transaction) {
-    fail(
-      `transaction directory ${dir} contains a journal claiming transaction_id ${journal.transaction_id} — refusing to guess which is authoritative`,
-    );
-  }
-  try {
-    validateJournalAgainstStateMachine(journal);
-  } catch (err) {
-    fail(`transaction ${flags.transaction}'s journal is internally inconsistent: ${err.message}`);
-  }
-  if (!ROLLBACK_ELIGIBLE_PHASES.has(journal.phase)) {
-    fail(
-      `transaction ${flags.transaction} is at phase ${journal.phase}, not eligible for rollback (must have reached at least old_image_saved, and must not already be rolled back or mid-rollback) — investigate ${dir} manually`,
-    );
-  }
-
-  const oldEntry = journal.history.find((e) => e.phase === PHASE.OLD_IMAGE_SAVED);
-  const { old_image_id: oldImageId, old_sha: oldSha } = oldEntry.observation;
-  const preflightContainer = journal.history.find((e) => e.phase === PHASE.PREFLIGHT).observation.container;
-  const destructive = TRANSITIONS[journal.phase]?.includes(PHASE.ROLLBACK_STOPPED) ?? false;
 
   if (flags.dryRun === true) {
+    // Snapshot preview, not gated by the lock below — same convention as
+    // runUpdate's own dry-run branch (findUnfinishedTransaction, read with
+    // no lock). A concurrent real run can make this stale between the
+    // read and whenever an operator next acts on it; that staleness is
+    // inherent to "preview" and is not the race issue #322 M1 closes.
+    const { journal, oldImageId, oldSha, preflightContainer, destructive } = readRollbackDecision(
+      dir,
+      flags.transaction,
+    );
     return {
       command: "rollback",
       dryRun: true,
@@ -1858,15 +1946,28 @@ export function runRollback(flags, config) {
         : [`docker tag ${oldImageId} kaoiro-server:latest`, `docker start ${preflightContainer}`],
     };
   }
-  if (flags.confirmRestore !== true) {
-    fail(
-      `rollback requires --confirm-restore to actually restore transaction ${flags.transaction} (phase: ${journal.phase}, ${destructive ? "destructive" : "non-destructive"} path); rerun with --dry-run to preview without confirming`,
-      64,
-    );
-  }
 
-  const lockPath = acquireLock(backupRoot);
+  // issue #322 M1 (must-fix): acquired BEFORE the journal is ever read for
+  // the real path, and held through the eligibility decision and every
+  // mutation below. Before this fix, the journal read + eligibility +
+  // destructive-or-not decision all happened BEFORE this lock — a
+  // concurrent rollback against the SAME transaction could read the SAME
+  // still-eligible journal, both decide "proceed", and both wipe the
+  // volume (measured: a deterministic injection at the mkdir call this
+  // acquireLock makes reproduced exactly that — 2 wipes for 1 transaction).
+  const lockPath = acquireLock(backupRoot, deploymentLockKey(serverDir));
   try {
+    const decision = readRollbackDecision(dir, flags.transaction);
+    let journal = decision.journal;
+    const { oldImageId, oldSha, preflightContainer, destructive } = decision;
+
+    if (flags.confirmRestore !== true) {
+      fail(
+        `rollback requires --confirm-restore to actually restore transaction ${flags.transaction} (phase: ${journal.phase}, ${destructive ? "destructive" : "non-destructive"} path); rerun with --dry-run to preview without confirming`,
+        64,
+      );
+    }
+
     if (!destructive) {
       runDocker(bin, ["tag", oldImageId, "kaoiro-server:latest"]);
       const revertedId = dockerInspect(bin, "kaoiro-server:latest", "{{.Id}}");
