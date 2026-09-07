@@ -7,6 +7,7 @@ defmodule KaoiroServer.OAuthAllowlistWatcherTest do
 
   alias KaoiroServer.Auth
   alias KaoiroServer.OAuthAllowlistWatcher
+  alias KaoiroServer.TestTimeouts
 
   @checkpoint_key {OAuthAllowlistWatcher, :checkpoint}
 
@@ -227,7 +228,8 @@ defmodule KaoiroServer.OAuthAllowlistWatcherTest do
 
       File.write!(path, "github:ao:viewer\n")
 
-      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect", topic: ^socket_id}, 500
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect", topic: ^socket_id},
+                     TestTimeouts.out_of_band()
     end
 
     test "許可リストの親 dir が起動時に無くても :ignore にならず poll-only で生存する" do
@@ -258,7 +260,8 @@ defmodule KaoiroServer.OAuthAllowlistWatcherTest do
       Process.sleep(80)
       File.write!(path, "github:ao:viewer\n")
 
-      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect", topic: ^socket_id}, 500
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect", topic: ^socket_id},
+                     TestTimeouts.out_of_band()
     end
   end
 

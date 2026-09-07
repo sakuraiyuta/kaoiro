@@ -161,7 +161,7 @@ defmodule KaoiroServer.SessionResetsTest do
       assert {:ok, timeout_id, _} =
                SessionResets.check_and_acquire("a.timeout", "new", "idle", nil, name)
 
-      assert_receive {:reset_failure, "a.timeout", ^timeout_id, "timeout"}, 100
+      assert_receive {:reset_failure, "a.timeout", ^timeout_id, "timeout"}
     end
 
     test "join transition_id は matched / mismatch / legacy_absent / noop を区別する", %{resets: sr} do

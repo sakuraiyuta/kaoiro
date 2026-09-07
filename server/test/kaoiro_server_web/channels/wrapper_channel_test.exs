@@ -14,6 +14,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
   alias KaoiroServer.SessionPointers
   alias KaoiroServer.SessionResetRequestReplyReasons
   alias KaoiroServer.TaskStates
+  alias KaoiroServer.TestTimeouts
   alias KaoiroServer.TokenDenylist
   alias KaoiroServer.TransportLimits
   alias KaoiroServer.WrapperBuildInfos
@@ -457,7 +458,9 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     )
 
     # handle_out で {:stop, :shutdown, socket} を返すので channel 終了。
-    assert_receive {:DOWN, ^monitor_ref, :process, ^channel_pid, :shutdown}, 500
+    assert_receive {:DOWN, ^monitor_ref, :process, ^channel_pid, :shutdown},
+                   TestTimeouts.out_of_band()
+
     # trap_exit で受けた {:EXIT, ...} も drain (test 分離のため)。
     assert_receive {:EXIT, ^channel_pid, :shutdown}
 
@@ -3375,7 +3378,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
                        event: "envelope",
                        payload: ^stamped
                      },
-                     500
+                     TestTimeouts.out_of_band()
     end
 
     test "payload.error の構造不正を拒否する (#131)" do
@@ -3428,7 +3431,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
                          }
                        }
                      },
-                     500
+                     TestTimeouts.out_of_band()
 
       # 合成 notice は turn/token に加算しない (対話ターンではない)。
       assert %{turns: 1} = KaoiroServer.ConversationStates.get(cid)
@@ -5220,7 +5223,9 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       down_ref = Process.monitor(socket.channel_pid)
       Process.unlink(socket.channel_pid)
       :ok = close(socket)
-      assert_receive {:DOWN, ^down_ref, :process, _pid, _reason}, 500
+
+      assert_receive {:DOWN, ^down_ref, :process, _pid, _reason},
+                     TestTimeouts.out_of_band()
 
       assert %{^agent_id => %{"t-new-owner" => ^task_envelope}} =
                TaskStates.snapshot()

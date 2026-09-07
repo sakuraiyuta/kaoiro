@@ -37,4 +37,54 @@ defmodule KaoiroServer.TestTimeouts do
   def purge_reply(base) when is_integer(base) and base > 0 do
     @purge_multiplier * base
   end
+
+  @out_of_band_multiplier 5
+
+  @doc """
+  Budget for a receive that waits on an effect reaching this process
+  through ANOTHER one — a monitor's `:DOWN`, a link's `:EXIT`, a file
+  watcher's broadcast — instead of on a direct reply.
+  #{@out_of_band_multiplier}x the base, so 500 ms locally, unchanged from
+  the literal these sites carried.
+
+  The multiplier equals `purge_reply/1`'s by coincidence, not by shared
+  derivation, so the two are kept apart: that one comes from issue #266's
+  sizing of the purge chain, this one from the literal 500 these sites
+  carried when the base was 100. Merging them would let a change made for
+  one reason move the other silently.
+  """
+  def out_of_band(base \\ Application.fetch_env!(:ex_unit, :assert_receive_timeout))
+
+  def out_of_band(base) when is_integer(base) and base > 0 do
+    @out_of_band_multiplier * base
+  end
+
+  @slow_path_multiplier 10
+
+  @doc """
+  Budget for a wait whose completion depends on another process finishing
+  work this one cannot observe — a `GenServer.stop/1` cycle deliberately
+  raced against a signal, or a loop of channel round-trips inside a single
+  test. #{@slow_path_multiplier}x the base, so 1000 ms locally, unchanged
+  from the literal these sites carried.
+  """
+  def slow_path(base \\ Application.fetch_env!(:ex_unit, :assert_receive_timeout))
+
+  def slow_path(base) when is_integer(base) and base > 0 do
+    @slow_path_multiplier * base
+  end
+
+  @supervised_restart_multiplier 50
+
+  @doc """
+  Budget for stopping a supervised process and waiting for its `:DOWN`,
+  where the supervisor's restart competes for the same scheduler.
+  #{@supervised_restart_multiplier}x the base, so 5000 ms locally,
+  unchanged from the literal the site carried.
+  """
+  def supervised_restart(base \\ Application.fetch_env!(:ex_unit, :assert_receive_timeout))
+
+  def supervised_restart(base) when is_integer(base) and base > 0 do
+    @supervised_restart_multiplier * base
+  end
 end

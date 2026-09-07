@@ -215,8 +215,7 @@ defmodule KaoiroServer.PlannedDisconnectsTest do
              )
 
     assert_receive {:timeout, "agent.timeout", "tr-timeout",
-                    %{targets: [{"cid-timeout", ["peer.timeout"]}]}},
-                   100
+                    %{targets: [{"cid-timeout", ["peer.timeout"]}]}}
 
     refute PlannedDisconnects.active?("agent.timeout", name)
 

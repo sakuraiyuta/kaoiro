@@ -4,6 +4,7 @@ defmodule KaoiroServer.SessionLifecycleEventsTest do
   import KaoiroServer.TestTeardown
 
   alias KaoiroServer.SessionLifecycleEvents
+  alias KaoiroServer.TestTimeouts
 
   setup do
     name = :"session_lifecycle_events_#{System.unique_integer([:positive])}"
@@ -603,7 +604,7 @@ defmodule KaoiroServer.SessionLifecycleEventsTest do
                  name
                )
 
-      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 1000
+      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, TestTimeouts.slow_path()
     end)
 
     refute Process.alive?(pid)

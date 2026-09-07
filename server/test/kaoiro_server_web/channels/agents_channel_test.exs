@@ -16,6 +16,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
   alias KaoiroServer.SessionLifecycleEvents
   alias KaoiroServer.SessionPointers
   alias KaoiroServer.TaskStates
+  alias KaoiroServer.TestTimeouts
   alias KaoiroServer.TokenDenylist
   alias KaoiroServer.TransportLimits
   alias KaoiroServerWeb.AgentsChannel
@@ -5698,8 +5699,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
             "session_id" => "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
           })
 
-        assert_receive {:DOWN, ^monitor_ref, :process, ^channel_pid, _reason}, 500
-        assert_receive {:EXIT, ^channel_pid, _reason}, 500
+        assert_receive {:DOWN, ^monitor_ref, :process, ^channel_pid, _reason},
+                       TestTimeouts.out_of_band()
+
+        assert_receive {:EXIT, ^channel_pid, _reason}, TestTimeouts.out_of_band()
         refute PlannedDisconnects.active?(agent_id)
       after
         assert {:ok, _pid} =
@@ -7765,7 +7768,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       for event <- @non_map_events do
         ref = push(socket, event, "not-a-map")
-        assert_reply ref, :error, %{reason: reason}, 1000
+        assert_reply ref, :error, %{reason: reason}, TestTimeouts.slow_path()
         assert reason == "missing_agent_id", "#{event}: got #{inspect(reason)}"
       end
     end
@@ -7781,7 +7784,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       for event <- @non_map_events do
         ref = push(socket, event, "not-a-map")
-        assert_reply ref, :error, %{reason: "missing_agent_id"}, 1000
+        assert_reply ref, :error, %{reason: "missing_agent_id"}, TestTimeouts.slow_path()
       end
     end
 
@@ -7802,7 +7805,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       for payload <- [["a"], 42, nil] do
         ref = push(socket, "attach_open", payload)
-        assert_reply ref, :error, %{reason: "missing_agent_id"}, 1000
+        assert_reply ref, :error, %{reason: "missing_agent_id"}, TestTimeouts.slow_path()
       end
     end
   end

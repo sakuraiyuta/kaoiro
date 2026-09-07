@@ -1,6 +1,8 @@
 defmodule KaoiroServer.TestTeardownTest do
   use ExUnit.Case, async: true
 
+  alias KaoiroServer.TestTimeouts
+
   import ExUnit.CaptureLog
   import KaoiroServer.TestTeardown
 
@@ -94,7 +96,7 @@ defmodule KaoiroServer.TestTeardownTest do
     {:ok, pid} = GenServer.start(Wedged, self())
     task = Task.async(fn -> catch_exit(GenServer.stop(pid)) end)
 
-    assert_receive {:terminating, ^pid}, 1_000
+    assert_receive {:terminating, ^pid}, TestTimeouts.slow_path()
     Process.exit(pid, signal)
 
     Task.await(task, 5_000)
@@ -138,7 +140,7 @@ defmodule KaoiroServer.TestTeardownTest do
       # 変わったらここが落ちる (ふじ #171-S2)。
       {:ok, pid} = GenServer.start(Busy, self())
       send(pid, :block)
-      assert_receive {:blocking, ^pid}, 1_000
+      assert_receive {:blocking, ^pid}, TestTimeouts.slow_path()
 
       task = Task.async(fn -> catch_exit(GenServer.stop(pid)) end)
       wait_for_system_terminate(pid)

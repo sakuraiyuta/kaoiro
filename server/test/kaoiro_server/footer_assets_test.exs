@@ -6,6 +6,7 @@ defmodule KaoiroServer.FooterAssetsTest do
 
   alias KaoiroServer.FooterAssets
   alias KaoiroServer.PersonaAssets
+  alias KaoiroServer.TestTimeouts
 
   setup do
     original = Application.get_env(:kaoiro_server, :footer_dir)
@@ -164,7 +165,7 @@ defmodule KaoiroServer.FooterAssetsTest do
     pid = Process.whereis(FooterAssets)
     ref = Process.monitor(pid)
     :ok = GenServer.stop(FooterAssets)
-    assert_receive {:DOWN, ^ref, :process, ^pid, _}, 5_000
+    assert_receive {:DOWN, ^ref, :process, ^pid, _}, TestTimeouts.supervised_restart()
 
     # `GenServer.stop/1` returns only after the process is gone, so the
     # supervisor's exit signal is already queued; this synchronous call
