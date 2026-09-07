@@ -574,6 +574,15 @@ continuing. Recorded in the transaction's `journal.json`
 old image ID, rollback tag, old SHA, compose artifact SHA. Nothing to run
 manually.
 
+**The old SHA comes from the running container's own `/api/health`
+(issue #322 S2), never `git rev-parse HEAD` in the local checkout.** Nothing
+keeps the checkout in lockstep with what the container was actually built
+from — an operator can `git checkout` between deploys without touching the
+running container, and a resumed transaction runs an arbitrary time after
+prepare. `update` refuses outright if that health check is unreachable or
+does not report a valid `build_revision`, rather than silently falling back
+to a possibly-wrong git guess.
+
 **(2) Prepare the server image (automatic, no downtime)**
 
 Still part of the same `update` call. `KAOIRO_BUILD_VERSION` /

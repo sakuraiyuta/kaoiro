@@ -567,8 +567,15 @@ let bin;
 // unset (the "no server up yet" case) reports a value that can never
 // match a real 40-hex target. KAOIRO_TEST_HEALTH_DIRTY defaults to
 // "false" (director ruling 2026-09-06: healthy requires build_dirty ===
-// false too, not just a matching revision).
+// false too, not just a matching revision). issue #322 S2:
+// KAOIRO_TEST_HEALTH_CURL_FAIL simulates a genuine connection failure
+// (curl's own `--fail` exit) — distinct from "reachable but reports an
+// unexpected shape", which the JSON body path above already covers.
 const FAKE_CURL = `#!/bin/sh
+if [ -n "$KAOIRO_TEST_HEALTH_CURL_FAIL" ]; then
+  echo 'curl: (7) Failed to connect' >&2
+  exit 7
+fi
 printf '{"build_revision":"%s","build_dirty":%s}' \\
   "\${KAOIRO_TEST_HEALTH_REVISION:-no-server-yet}" "\${KAOIRO_TEST_HEALTH_DIRTY:-false}"
 `;
@@ -600,8 +607,23 @@ afterEach(() => {
 // backup_root is pinned under the test's own tmpdir — leaving it null
 // would make resolveBackupRoot() fall back to the real $HOME, coupling
 // this test's outcome to whatever happens to exist there.
+//
+// issue #322 S2: health_url is ALSO pinned here (never null) — runUpdate
+// now derives old_sha from the RUNNING container's own health endpoint
+// during prepare (not just the later post-commit poll), so every test
+// using this config needs a resolvable health_url by default, the same
+// way configWithCleanStopMeasured's own explicit override already did
+// for a narrower set of tests. A test that specifically wants
+// `docker compose port`'s own derivation/failure paths overrides this
+// field itself (KAOIRO_DEPLOY_CURL_BIN never actually dials it either
+// way).
 function configWithOverride() {
-  return { ...DEFAULT_CONFIG, allow_docker_override: true, backup_root: join(root, "kaoiro-deploy") };
+  return {
+    ...DEFAULT_CONFIG,
+    allow_docker_override: true,
+    backup_root: join(root, "kaoiro-deploy"),
+    health_url: "http://fake-server.invalid/api/health",
+  };
 }
 
 // A separate helper, not a default on configWithOverride(): most tests
@@ -1104,6 +1126,89 @@ test("runUpdate --dry-run refuses --transaction", () => {
       ),
     DeployError,
   );
+});
+
+// issue #322 S2 (should-fix): old_sha used to come from `git rev-parse
+// HEAD` in the local checkout — nothing keeps that in lockstep with
+// what the RUNNING container was actually built from. Set
+// KAOIRO_TEST_HEALTH_REVISION to a DIFFERENT valid sha than headSha
+// (the checkout's own HEAD) so this test can tell which source the code
+// actually used. old_sha is recorded at the OLD_IMAGE_SAVED phase
+// during PREPARE — no --maintenance-approved needed, and no need to
+// drive the fixture through the LATER post-commit health poll (which
+// polls for the TARGET's own build_revision, a separate concern this
+// test does not exercise).
+test("runUpdate derives old_sha from the running container's own health endpoint, not git rev-parse HEAD", () => {
+  const healthReportedOldSha = "b".repeat(40);
+  const priorHealthRevision = process.env.KAOIRO_TEST_HEALTH_REVISION;
+  process.env.KAOIRO_TEST_HEALTH_REVISION = healthReportedOldSha;
+  try {
+    let caught;
+    try {
+      withScenario("running", () => runUpdate({ repo: workDir, target: headSha }, configWithOverride()));
+    } catch (err) {
+      caught = err;
+    }
+    assert.ok(caught instanceof DeployError, "must still stop at the maintenance gate without approval");
+    const backupRoot = join(root, "kaoiro-deploy");
+    const [transactionDir] = readdirSyncNonHidden(backupRoot);
+    const journal = readJournal(join(backupRoot, transactionDir));
+    const oldEntry = journal.history.find((e) => e.phase === "old_image_saved");
+    assert.equal(oldEntry.observation.old_sha, healthReportedOldSha);
+    assert.notEqual(oldEntry.observation.old_sha, headSha, "must not have fallen back to git rev-parse HEAD");
+    assert.equal(oldEntry.observation.rollback_tag, `kaoiro-server:rollback-${healthReportedOldSha}`);
+  } finally {
+    if (priorHealthRevision === undefined) delete process.env.KAOIRO_TEST_HEALTH_REVISION;
+    else process.env.KAOIRO_TEST_HEALTH_REVISION = priorHealthRevision;
+  }
+});
+
+// issue #322 S2: an unparseable/unexpected build_revision (the
+// "no server up yet" sentinel FAKE_CURL prints when
+// KAOIRO_TEST_HEALTH_REVISION is unset — never a real 40-hex sha)
+// refuses rather than silently falling back to a git-derived guess.
+// Journal never leaves PREFLIGHT: this runs before the transaction
+// records anything durable about old_sha.
+test("runUpdate refuses when the running container's health does not report a valid build_revision", () => {
+  const priorHealthRevision = process.env.KAOIRO_TEST_HEALTH_REVISION;
+  // withOverrideEnv's own default fills in headSha whenever this var is
+  // undefined (the common "already at target" case) — an explicit
+  // non-sha value is required to actually reach the "unexpected shape"
+  // branch, `delete` alone gets silently overridden back to headSha.
+  process.env.KAOIRO_TEST_HEALTH_REVISION = "not-a-real-sha";
+  let caught;
+  try {
+    withScenario("running", () => runUpdate({ repo: workDir, target: headSha }, configWithOverride()));
+  } catch (err) {
+    caught = err;
+  } finally {
+    if (priorHealthRevision === undefined) delete process.env.KAOIRO_TEST_HEALTH_REVISION;
+    else process.env.KAOIRO_TEST_HEALTH_REVISION = priorHealthRevision;
+  }
+  assert.ok(caught instanceof DeployError);
+  const backupRoot = join(root, "kaoiro-deploy");
+  const [transactionDir] = readdirSyncNonHidden(backupRoot);
+  const journal = readJournal(join(backupRoot, transactionDir));
+  assert.equal(journal.phase, "preflight");
+});
+
+// issue #322 S2: a genuine connection failure (not merely an
+// unexpected body) also refuses rather than falling back.
+test("runUpdate refuses when the running container's health endpoint is unreachable", () => {
+  process.env.KAOIRO_TEST_HEALTH_CURL_FAIL = "1";
+  let caught;
+  try {
+    withScenario("running", () => runUpdate({ repo: workDir, target: headSha }, configWithOverride()));
+  } catch (err) {
+    caught = err;
+  } finally {
+    delete process.env.KAOIRO_TEST_HEALTH_CURL_FAIL;
+  }
+  assert.ok(caught instanceof DeployError);
+  const backupRoot = join(root, "kaoiro-deploy");
+  const [transactionDir] = readdirSyncNonHidden(backupRoot);
+  const journal = readJournal(join(backupRoot, transactionDir));
+  assert.equal(journal.phase, "preflight");
 });
 
 // クロエ round 1 review N-5: alpine is pulled, pinned to alpine:3, during
