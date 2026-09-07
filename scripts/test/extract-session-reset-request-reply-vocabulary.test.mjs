@@ -67,6 +67,13 @@ test("accepts a trailing comma and newlines in the reply vocabulary", async () =
   );
 });
 
+test("rejects a non-literal reply vocabulary", async () => {
+  await assertRejected(
+    'const SESSION_RESET_ERROR_REASONS: ReadonlySet<string> = new Set(["agent_busy", ...reasons]);\n',
+    /Malformed SESSION_RESET_ERROR_REASONS literal/
+  );
+});
+
 test("rejects a comment inside the reply vocabulary literal", async () => {
   await assertRejected(
     `const SESSION_RESET_ERROR_REASONS: ReadonlySet<string> = new Set([
