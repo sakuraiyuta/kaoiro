@@ -57,6 +57,7 @@ import type {
   WhoamiSnapshot,
   WrapperConfig,
 } from "@kaoiro/agent-common";
+import { writeRedactedStderr } from "@kaoiro/agent-common";
 import {
   clipText,
   computeResumeDrift,
@@ -1090,7 +1091,7 @@ export class CodexHost implements EngineAdapter {
       );
     } catch (error) {
       if (error instanceof CodexClientVersionTooOldError) {
-        process.stderr.write(`codex: ${error.message}\n`);
+        writeRedactedStderr(`codex: ${error.message}\n`);
         this.#switchErrorOnce = {
           kind: "model",
           requested: value,
@@ -1202,7 +1203,7 @@ export class CodexHost implements EngineAdapter {
     } catch (error) {
       // Retention is diagnostic-only; an unreadable trace root must not
       // prevent a real SDK turn or a default Codex factory from starting.
-      process.stderr.write(`codex turn trace failed: ${String(error)}\n`);
+      writeRedactedStderr(`codex turn trace failed: ${String(error)}\n`);
     }
     const descriptors = this.#options.toolDescriptors ?? [];
     const toolHost =
@@ -1357,7 +1358,7 @@ export class CodexHost implements EngineAdapter {
       } catch (error) {
         // A local diagnostic filesystem failure must never replace the SDK
         // turn's original outcome or suppress its fixed peer-error notice.
-        process.stderr.write(`codex turn trace failed: ${String(error)}\n`);
+        writeRedactedStderr(`codex turn trace failed: ${String(error)}\n`);
       }
     };
     try {
@@ -1365,7 +1366,7 @@ export class CodexHost implements EngineAdapter {
       await this.#options.afterDiagnosticsBegin?.();
     } catch (error) {
       // Match persistFailure's non-interference rule for the capture window.
-      process.stderr.write(`codex turn trace failed: ${String(error)}\n`);
+      writeRedactedStderr(`codex turn trace failed: ${String(error)}\n`);
     }
     // A rejoin can replace the transport barrier while diagnostics performs
     // I/O. Recheck immediately before capture; no callback can interleave
@@ -1725,7 +1726,7 @@ export class CodexHost implements EngineAdapter {
             }
             if (repaired && repairedBackupPath !== null) {
               try {
-                process.stderr.write(
+                writeRedactedStderr(
                   `codex rollout repaired for session ${resumeSessionId}; backup: ${repairedBackupPath}\n`,
                 );
               } catch {
@@ -1821,7 +1822,7 @@ export class CodexHost implements EngineAdapter {
         // this stderr line is what a runner-side log tail (or the
         // supervisor's own crash-loop diagnosis) can grep for without
         // reaching into the envelope stream.
-        process.stderr.write(
+        writeRedactedStderr(
           resumeSessionId !== null &&
             resumeSessionId === this.#corruptedRolloutSessionId
             ? // Same double-wrap concern as the `detail` computation above:
@@ -1902,7 +1903,7 @@ export class CodexHost implements EngineAdapter {
   }
 
   #warn = (message: string): void => {
-    process.stderr.write(`${message}\n`);
+    writeRedactedStderr(`${message}\n`);
   };
 
   #beginPermissionExecution(submission: PermissionSubmission): void {
@@ -1929,7 +1930,7 @@ export class CodexHost implements EngineAdapter {
     const waitForSync = this.#options.waitForPermissionSync;
     if (waitForSync !== undefined) {
       const warning = setTimeout(() => {
-        process.stderr.write(
+        writeRedactedStderr(
           "codex: waiting for permission_sync; next exec remains gated\n",
         );
       }, this.#permissionSyncWarningMs);
@@ -1988,7 +1989,7 @@ export class CodexHost implements EngineAdapter {
         };
     const expected = permission.submission.requested;
     if (context.approvalPolicy !== "never" || observation === null) {
-      process.stderr.write(
+      writeRedactedStderr(
         `codex: permission policy mismatch: expected approval=never; observed approval=${context.approvalPolicy}\n`,
       );
       this.#permissionObservationFailed(
@@ -2003,7 +2004,7 @@ export class CodexHost implements EngineAdapter {
       expected.network_access,
     );
     if (context.sandbox !== expected.sandbox || context.networkAccess !== expectedNetwork) {
-      process.stderr.write(
+      writeRedactedStderr(
         "codex: permission policy mismatch: " +
           `expected sandbox=${expected.sandbox} network_access=${expectedNetwork}; ` +
           `observed sandbox=${context.sandbox} network_access=${context.networkAccess}\n`,

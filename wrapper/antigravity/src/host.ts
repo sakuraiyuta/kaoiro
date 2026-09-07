@@ -24,6 +24,7 @@ import {
   type ToolDescriptor,
   type WrapperConfig,
 } from "@kaoiro/agent-common";
+import { boundErrorDetail, writeRedactedStderr } from "@kaoiro/agent-common";
 import type { EngineModelInfo } from "@kaoiro/protocol";
 import {
   agyEventToEvents,
@@ -695,7 +696,11 @@ export class AntigravityHost implements EngineAdapter {
   }
 
   #warn(message: string): void {
-    (this.#options.warn ?? ((line) => process.stderr.write(`${line}\n`)))(message);
+    if (this.#options.warn !== undefined) {
+      this.#options.warn(boundErrorDetail(message));
+      return;
+    }
+    writeRedactedStderr(`${message}\n`);
   }
 
   #defaultSpawn(command: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv }): SpawnedAgy {

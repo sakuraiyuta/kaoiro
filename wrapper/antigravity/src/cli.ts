@@ -11,6 +11,7 @@ import {
   type WhoamiSnapshot,
   type WrapperConfig,
 } from "@kaoiro/agent-common";
+import { writeRedactedStderr } from "@kaoiro/agent-common";
 import {
   loadConfig,
   loadWrapperBuildInfo,
@@ -118,15 +119,15 @@ export async function runAntigravityCli(
     onSetModel: (model) => { void host?.setModel(model); },
     onSetEffort: (effort) => {
       void host?.setEffort(effort).catch((error: unknown) => {
-        process.stderr.write(`antigravity: ${String(error)}\n`);
+        writeRedactedStderr(`antigravity: ${String(error)}\n`);
       });
     },
     onSetPermission: (selection) => {
       void host?.setPermission(selection).catch((error: unknown) => {
-        process.stderr.write(`antigravity: ${String(error)}\n`);
+        writeRedactedStderr(`antigravity: ${String(error)}\n`);
       });
     },
-    onSetPermissionMode: () => process.stderr.write("antigravity: permission axes are fixed at spawn in Stage A\n"),
+    onSetPermissionMode: () => writeRedactedStderr("antigravity: permission axes are fixed at spawn in Stage A\n"),
     onRenameDisplayName: (displayName, revision) => host?.renameDisplayName(displayName, revision),
   });
   const timer = setTimeout(() => rejectPersona(new Error("timed out waiting for persona_prompt")), PERSONA_PROMPT_TIMEOUT_MS);
@@ -173,7 +174,7 @@ export async function runAntigravityCli(
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   runAntigravityCli().catch((error: unknown) => {
-    process.stderr.write(`${String(error)}\n`);
+    writeRedactedStderr(`${String(error)}\n`);
     process.exitCode = 1;
   });
 }

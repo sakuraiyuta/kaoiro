@@ -33,6 +33,7 @@ import type {
   KaoiroState,
   ModelSource,
 } from "@kaoiro/agent-common";
+import { writeRedactedStderr } from "@kaoiro/agent-common";
 import {
   loadConfig,
   loadWrapperBuildInfo,
@@ -135,7 +136,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   );
   const turnWatchdogSettings = readTurnWatchdogSettings(
     process.env,
-    (message) => process.stderr.write(message),
+    (message) => writeRedactedStderr(message),
   );
 
   // Codex CLI env source (ADR-0032 F4bc addendum, phase-15 15-3):
@@ -170,12 +171,12 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   // (permission_mode, allowed_tools) surface loudly instead of being
   // silently ignored when written into a Codex config (D3 rationale).
   if (config.permission_mode !== undefined) {
-    process.stderr.write(
+    writeRedactedStderr(
       "config warn: permission_mode is claude-code-only, ignored on codex\n",
     );
   }
   if (config.allowed_tools !== undefined) {
-    process.stderr.write(
+    writeRedactedStderr(
       "config warn: allowed_tools is claude-code-only, ignored on codex\n",
     );
   }
@@ -215,7 +216,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       config.allowed_tools !== undefined
         ? ` allowed_tools=${config.allowed_tools.length}(ignored)`
         : "";
-    process.stderr.write(
+    writeRedactedStderr(
       `[wrapper resolved] engine=codex ` +
         `model=${resolvedModel}${resolvedModelTag}${effortPart} ` +
         `sandbox=${sandbox}(source=${sandboxSource}) ` +
@@ -284,7 +285,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
           batch.conversationIds,
           batch.turnToken,
         ).catch((err: unknown) => {
-          process.stderr.write(`inter-agent inject failed: ${String(err)}\n`);
+          writeRedactedStderr(`inter-agent inject failed: ${String(err)}\n`);
           const settled = interAgentTurns.settle(batch.turnToken);
           const classified = classifyInterAgentError({ detail: String(err) });
           for (const notice of interAgent?.resolveTurnEnd(
@@ -343,7 +344,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       const last = event.seqLast ?? range?.seqLast;
       if (first !== undefined) record.seq_first = first;
       if (last !== undefined) record.seq_last = last;
-      process.stderr.write(
+      writeRedactedStderr(
         `[kaoiro][codex-lifecycle] ${JSON.stringify(record)}\n`,
       );
     } catch {
@@ -386,7 +387,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   const turnWatchdog = new TurnWatchdog({
     settings: turnWatchdogSettings,
     onWarning: (warning) => {
-      process.stderr.write(`${describeTurnWatchdogWarning(warning)}\n`);
+      writeRedactedStderr(`${describeTurnWatchdogWarning(warning)}\n`);
     },
     requestInterrupt: (turnToken) => host.requestInterruptForTurn(turnToken),
     failStop: (turnToken) => host.failStopTurnForWatchdog(turnToken),
@@ -453,7 +454,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   const recordInboundIa = (envelope: Envelope): void => {
     const stamp = (envelope as { ingress_stamp?: unknown }).ingress_stamp;
     if (!isIngressStamp(stamp)) {
-      process.stderr.write(
+      writeRedactedStderr(
         "inter_agent_message without ingress_stamp; not recorded\n",
       );
       return;
@@ -544,7 +545,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       );
       instructionChain = instructionChain.then(() =>
         host.send(text, attachmentIds).catch((err: unknown) => {
-          process.stderr.write(`send failed: ${String(err)}\n`);
+          writeRedactedStderr(`send failed: ${String(err)}\n`);
         }),
       );
     },
@@ -556,7 +557,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     onSetModel: (value) => {
       process.stdout.write(`  set_model: ${value}\n`);
       void host.setModel(value).catch((err: unknown) => {
-        process.stderr.write(`set_model failed: ${String(err)}\n`);
+        writeRedactedStderr(`set_model failed: ${String(err)}\n`);
       });
     },
     onSetEffort: (level) => {
@@ -572,7 +573,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
         return;
       }
       void host.setPermission(selection).catch((error: unknown) => {
-        process.stderr.write(`set_permission failed: ${String(error)}\n`);
+        writeRedactedStderr(`set_permission failed: ${String(error)}\n`);
       });
     },
     onSetPermissionMode: (mode) => {
@@ -723,7 +724,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     onWatchdogFailStop: ({ turnToken, attribution }) => {
       watchdogFailStopped = true;
       const frozen = interAgentTurns.freezeForWatchdogFailStop(turnToken);
-      process.stderr.write(
+      writeRedactedStderr(
         `[kaoiro] turn watchdog fail-stop: token=${turnToken ?? "<unknown>"} ` +
           `attribution=${attribution}; discarded unstarted ` +
           `dispatched=${frozen.droppedDispatched}, pending=${frozen.droppedPending}; ` +
@@ -777,7 +778,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   }
   if (pendingPermissionSelection !== undefined) {
     void host.setPermission(pendingPermissionSelection).catch((error: unknown) => {
-      process.stderr.write(`set_permission failed: ${String(error)}\n`);
+      writeRedactedStderr(`set_permission failed: ${String(error)}\n`);
     });
   }
 
@@ -826,7 +827,7 @@ if (
   resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
   runCodexCli().catch((error: unknown) => {
-    process.stderr.write(`${String(error)}\n`);
+    writeRedactedStderr(`${String(error)}\n`);
     process.exitCode = 1;
   });
 }

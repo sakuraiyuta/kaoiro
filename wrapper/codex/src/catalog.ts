@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import { mergeExtraModels } from "@kaoiro/agent-common";
+import { mergeExtraModels, writeRedactedStderr } from "@kaoiro/agent-common";
 import type { EngineModelInfo } from "@kaoiro/protocol";
 
 export type CodexAuthMode = "chatgpt" | "apikey" | "unknown";
@@ -201,14 +201,14 @@ function filterCatalogByClientVersion(
         !warnedUndeclaredOperatorModels.has(model.value)
       ) {
         warnedUndeclaredOperatorModels.add(model.value);
-        process.stderr.write(
+        writeRedactedStderr(
           `codex: warn — minimal_client_version is not declared for operator model ${model.value}; CLI compatibility is the operator's responsibility\n`,
         );
       }
       return true;
     }
     if (isAtLeast(clientVersion, model.minimal_client_version)) return true;
-    process.stderr.write(
+    writeRedactedStderr(
       `codex: warn — excluding ${model.value}: requires Codex >= ${model.minimal_client_version}, bundled version is ${clientVersion}\n`,
     );
     return false;
@@ -223,19 +223,19 @@ export function resolveCodexCatalog(
 ): EngineModelInfo[] {
   let catalog: EngineModelInfo[];
   if (authMode === "unknown") {
-    process.stderr.write(
+    writeRedactedStderr(
       "codex: warn — auth mode is unknown; model catalog is empty\n",
     );
     catalog = [];
   } else if (authMode === "apikey") {
     if (plan !== undefined) {
-      process.stderr.write(
+      writeRedactedStderr(
         "codex: warn — chatgpt_plan is ignored for API-key auth\n",
       );
     }
     catalog = copyCatalog(APIKEY_MODELS);
   } else if (plan === undefined) {
-    process.stderr.write(
+    writeRedactedStderr(
       "codex: warn — chatgpt_plan is not configured; " +
         "model catalog is empty\n",
     );

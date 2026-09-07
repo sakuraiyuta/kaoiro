@@ -62,6 +62,7 @@ import {
   stepState,
   TASKLIST_TASK_ID,
 } from "@kaoiro/agent-common";
+import { boundErrorDetail, writeRedactedStderr } from "@kaoiro/agent-common";
 import type { TaskEvent, TasklistTrigger } from "./adapter.js";
 import {
   cwdChangedHookToCwd,
@@ -557,7 +558,7 @@ export interface AgentHostOptions {
    *  指示 2026-08-09 — an unrecognized `task_*` subtype/status, or a
    *  `task_progress`/`task_notification` for a task_id this host never
    *  saw `task_started` for). Injectable for tests. Defaults to
-   *  `process.stderr.write`, mirroring `IaSidecar`'s `warn` option
+   *  `writeRedactedStderr`, mirroring `IaSidecar`'s `warn` option
    *  (@kaoiro/agent-common). */
   warn?: (message: string) => void;
 }
@@ -839,8 +840,13 @@ export class AgentHost implements EngineAdapter {
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#nowMs = options.nowMs ?? Date.now;
     this.#readTasklist = options.readTasklist ?? readClaudeTasklist;
-    this.#warn =
-      options.warn ?? ((message) => process.stderr.write(`${message}\n`));
+    this.#warn = (message): void => {
+      if (options.warn !== undefined) {
+        options.warn(boundErrorDetail(message));
+        return;
+      }
+      writeRedactedStderr(`${message}\n`);
+    };
     // ADR-0039 F9 追補: prefer the runner-transported catalog so fresh
     // idle wrappers (deferQueryUntilFirstInput=true, #query still null,
     // supportedModels() unreachable) already surface a rich model +
@@ -901,7 +907,7 @@ export class AgentHost implements EngineAdapter {
           this.#effortLastGoodSource = "default";
           this.#effortSource = "default";
         } else {
-          process.stderr.write(
+          writeRedactedStderr(
             `resume: unsupported claude-code effort hint ` +
               `'${hintEffort}', dropped (value and source both)\n`,
           );
@@ -2556,7 +2562,7 @@ export class AgentHost implements EngineAdapter {
         // Diagnostic breadcrumb for dogfood: after the cap the host stays
         // silent, so surface the give-up moment once. Per-retry noise is
         // intentionally omitted.
-        process.stderr.write(
+        writeRedactedStderr(
           "claude-code: supportedModels() failed " +
             `${MAX_MODEL_REFRESH_RETRIES}× in a row; giving up until manual retry\n`,
         );
@@ -2954,7 +2960,7 @@ export class AgentHost implements EngineAdapter {
       // unlike the B1 notice, there is no budget to re-arm: a fired-but-
       // undelivered resume note re-injected later would land detached from
       // the boundary it was meant to follow.
-      process.stderr.write(`resume_prompt injection not queued: ${String(err)}\n`);
+      writeRedactedStderr(`resume_prompt injection not queued: ${String(err)}\n`);
     });
   }
 
@@ -3029,7 +3035,7 @@ export class AgentHost implements EngineAdapter {
       if (generation === this.#contextGeneration) {
         this.#contextNoticeSent = false;
       }
-      process.stderr.write(
+      writeRedactedStderr(
         `context threshold notice not queued: ${String(err)}\n`,
       );
     });

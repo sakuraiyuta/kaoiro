@@ -45,6 +45,7 @@ import {
   isIngressStamp,
   mergePendingDisplayNameSync,
 } from "@kaoiro/agent-common";
+import { writeRedactedStderr } from "@kaoiro/agent-common";
 import { buildKaoiroMcpServer } from "./inter_agent_sdk.js";
 import { READ_ONLY_TOOLS } from "./read_only_tools.js";
 import {
@@ -167,7 +168,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   // dashboard/server/runner configuration surface (issue #248).
   const turnWatchdogSettings = readTurnWatchdogSettings(
     process.env,
-    (message) => process.stderr.write(message),
+    (message) => writeRedactedStderr(message),
   );
 
   // Engine-split default-model env (ADR-0032 F4bc addendum, phase-15 D1).
@@ -180,7 +181,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     process.env.KAOIRO_CLAUDE_CODE_DEFAULT_MODEL === undefined &&
     process.env.KAOIRO_WRAPPER_DEFAULT_MODEL !== undefined
   ) {
-    process.stderr.write(
+    writeRedactedStderr(
       "deprecation warn: KAOIRO_WRAPPER_DEFAULT_MODEL is deprecated; " +
         "use KAOIRO_CLAUDE_CODE_DEFAULT_MODEL instead (removal: #103)\n",
     );
@@ -200,19 +201,19 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     | (typeof CLAUDE_EFFORT_LEVELS)[number]
     | undefined;
   const resolvedEffortSource = sources.effortSource;
-  for (const w of sources.warnings) process.stderr.write(w);
+  for (const w of sources.warnings) writeRedactedStderr(w);
 
   // Engine-mismatch config warns (phase-15 15-7). Codex-only fields
   // (sandbox, network_access) surface loudly instead of being silently
   // ignored when written into a Claude config, so operator settings never
   // disappear into a black hole (D3 rationale).
   if (config.sandbox !== undefined) {
-    process.stderr.write(
+    writeRedactedStderr(
       "config warn: sandbox is codex-only, ignored on claude-code\n",
     );
   }
   if (config.network_access !== undefined) {
-    process.stderr.write(
+    writeRedactedStderr(
       "config warn: network_access is codex-only, ignored on claude-code\n",
     );
   }
@@ -242,7 +243,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       config.network_access !== undefined
         ? ` network_access=${config.network_access}(ignored)`
         : "";
-    process.stderr.write(
+    writeRedactedStderr(
       `[wrapper resolved] engine=claude-code ` +
         `model=${resolvedModel}${resolvedModelTag} ` +
         `${effortPart}` +
@@ -335,7 +336,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   ): void => {
     if (settlement.kind === "untracked") return;
     if (settlement.kind === "stale") {
-      process.stderr.write(
+      writeRedactedStderr(
         `[kaoiro] stale inter-agent turn settlement ignored: token=${settlement.turnToken}\n`,
       );
       return;
@@ -368,7 +369,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
             batch.turnToken,
           )
           .catch((err: unknown) => {
-            process.stderr.write(`inter-agent inject failed: ${String(err)}\n`);
+            writeRedactedStderr(`inter-agent inject failed: ${String(err)}\n`);
             // failStop already terminally froze unstarted coordinator work;
             // an instructionChain task that resumes afterwards is a retired
             // no-op, not a fresh error to settle against the unknown active
@@ -460,7 +461,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     settings: turnWatchdogSettings,
     onWarning: (warning) => {
       const text = describeTurnWatchdogWarning(warning);
-      process.stderr.write(`${text}\n`);
+      writeRedactedStderr(`${text}\n`);
       emitSystemLog(text);
     },
     requestInterrupt: (turnToken) => host.requestInterruptForTurn(turnToken),
@@ -545,7 +546,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   const recordInboundIa = (envelope: Envelope): void => {
     const stamp = (envelope as { ingress_stamp?: unknown }).ingress_stamp;
     if (!isIngressStamp(stamp)) {
-      process.stderr.write(
+      writeRedactedStderr(
         "inter_agent_message without ingress_stamp; not recorded\n",
       );
       return;
@@ -628,7 +629,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       // so one bad turn does not break the chain.
       void enqueueInstruction(() =>
         host.send(text, attachmentIds).catch((err: unknown) => {
-          process.stderr.write(`send failed: ${String(err)}\n`);
+          writeRedactedStderr(`send failed: ${String(err)}\n`);
         }),
       );
     },
@@ -654,7 +655,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     },
     onSetPermission: (selection) => {
       void host.setPermission(selection).catch((error: unknown) => {
-        process.stderr.write(`set_permission failed: ${String(error)}\n`);
+        writeRedactedStderr(`set_permission failed: ${String(error)}\n`);
       });
     },
     onRefreshModels: (payload) => {
@@ -679,7 +680,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
               reason: "cli_error";
               models_count?: number;
             } => {
-              process.stderr.write(
+              writeRedactedStderr(
                 `refresh_models handler unexpectedly threw: ${
                   err instanceof Error ? err.message : String(err)
                 }\n`,
@@ -854,7 +855,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       watchdogFailStopped = true;
       const pendingIngress = interAgentIngress.close();
       const frozen = interAgentTurns.freezeForWatchdogFailStop(turnToken);
-      process.stderr.write(
+      writeRedactedStderr(
         `[kaoiro] turn watchdog fail-stop: token=${turnToken ?? "<unknown>"} ` +
           `attribution=${attribution}; ` +
           `closed ingress=${pendingIngress}, discarded unstarted ` +
@@ -1073,7 +1074,7 @@ if (
   resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
   runClaudeCli().catch((error: unknown) => {
-    process.stderr.write(`${String(error)}\n`);
+    writeRedactedStderr(`${String(error)}\n`);
     process.exitCode = 1;
   });
 }

@@ -696,6 +696,13 @@ same `boundErrorDetail` credential-redaction and 16,384-byte head clip as
 allow-list projection because they store structured trace data, while stderr
 retains failure diagnosis as bounded text.
 
+The `result` row's payload scope does not exclude this wrapper-owned
+diagnostic sink. In `@openai/codex-sdk` 0.153.4, the child process stderr is
+piped into the SDK error message; `@anthropic-ai/claude-agent-sdk` 0.3.258
+also pipes child stderr into its callback or error tail. Kaoiro does not pass
+the Claude stderr callback, so runner-inherited stderr receives only these
+wrapper-owned writes.
+
 ### `task_type: "tasklist"` addendum (issue #178, ADR-0049 F4)
 
 In addition to the general `task` rules, an agent's own todo is always the single entity

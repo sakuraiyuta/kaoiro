@@ -3131,6 +3131,38 @@ describe("CodexHost", () => {
       });
     });
 
+    it("the default CodexHost stderr sink masks the raw SDK rejection", async () => {
+      const logs: Envelope[] = [];
+      const secret = "abcdef123456";
+      const { client } = makeClient([
+        new Error(`Codex Exec exited with code 1: api_key=${secret}`),
+      ]);
+      const turnEnded = deferred<void>();
+      const writes: string[] = [];
+      const originalWrite = process.stderr.write.bind(process.stderr);
+      process.stderr.write = ((chunk: string) => {
+        writes.push(chunk);
+        return true;
+      }) as typeof process.stderr.write;
+      try {
+        const host = new CodexHost(CONFIG, {
+          onState: () => {},
+          onLog: (e) => logs.push(e),
+          onTurnEnd: () => turnEnded.resolve(),
+          appendSystemPrompt: "p",
+          codexFactory: () => client,
+          now: () => "T",
+        });
+        await runOneTurn(host, "inbound", client, turnEnded.promise);
+      } finally {
+        process.stderr.write = originalWrite;
+      }
+
+      expect(writes.join("")).toContain("api_key=********3456");
+      expect(writes.join("")).not.toContain(secret);
+      expect(JSON.stringify(logs)).not.toContain(secret);
+    });
+
     it("negative control: turn.failed with a plain (non-JSON) message keeps the current shape", async () => {
       const logs: Envelope[] = [];
       const { client } = makeClient([

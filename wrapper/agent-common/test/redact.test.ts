@@ -10,6 +10,23 @@ const TOKEN = "abcdef1234567890";
 const MASKED_TOKEN = "************7890";
 
 describe("redactCredentials (issue #300 round 2)", () => {
+  it("uses the production stderr sink when no writer is injected", () => {
+    const writes: string[] = [];
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string) => {
+      writes.push(chunk);
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      const input = "diagnostic api_key=abcdef123456";
+      expect(writeRedactedStderr(input)).toBe(boundErrorDetail(input));
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+
+    expect(writes).toEqual(["diagnostic api_key=********3456"]);
+  });
+
   it("masks an sk-style API key to its last 4 characters", () => {
     expect(redactCredentials("key=sk-abcdefghijklmnopqrstuvwxyz")).toBe(
       "key=sk-**********************wxyz",

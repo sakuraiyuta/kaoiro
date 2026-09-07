@@ -93,7 +93,7 @@ describe("Antigravity CLI", () => {
       state: "idle" as const,
       statusExtSnapshot: () => ({ engine: "antigravity" }),
       setEffort: async () => {
-        throw new Error("antigravity effort switching is unavailable in Stage A");
+        throw new Error("antigravity effort switching is unavailable: api_key=abcdef123456");
       },
       run: async () => {
         onSetEffort?.("high");
@@ -118,7 +118,7 @@ describe("Antigravity CLI", () => {
       });
 
       expect(stderr).toHaveBeenCalledWith(
-        "antigravity: Error: antigravity effort switching is unavailable in Stage A\n",
+        "antigravity: Error: antigravity effort switching is unavailable: api_key=********3456\n",
       );
     } finally {
       stderr.mockRestore();
