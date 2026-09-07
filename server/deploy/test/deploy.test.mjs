@@ -89,6 +89,11 @@ case "$1" in
           if [ -f "$KAOIRO_TEST_STOP_FILE" ]; then
             case "$FAKE_DOCKER_SCENARIO" in
               rollback-running-reappears) printf 'sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\\n' ;;
+              rollback-running-after-forensic)
+                if [ -f "$KAOIRO_TEST_FORENSIC_FILE" ]; then
+                  printf 'sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\\n'
+                fi
+                ;;
             esac
             exit 0
           fi
@@ -350,7 +355,7 @@ case "$1" in
             if [ -f "$KAOIRO_TEST_STOP_FILE" ]; then printf 'exited\\n'; exit 0; fi
             case "$FAKE_DOCKER_SCENARIO" in
               stopped) printf 'exited\\n' ;;
-              running|retag-drift|running-clean-stop|running-clean-stop-retag-drift|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty|compose-config-renamed-service|compose-config-missing-environment-key|mount-vanishes-after-stop|system-df-fails|system-df-invalid-json|system-df-not-array|target-id-mismatch|target-remains-running|rollback-target-remains-running|rollback-id-mismatch|up-fails-container|up-fails-no-container|rollback-running-reappears|rollback-volume-filter-foreign-running|rollback-forensic-corrupt|rollback-restore-drifts|multiple-containers)
+              running|retag-drift|running-clean-stop|running-clean-stop-retag-drift|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty|compose-config-renamed-service|compose-config-missing-environment-key|mount-vanishes-after-stop|system-df-fails|system-df-invalid-json|system-df-not-array|target-id-mismatch|target-remains-running|rollback-target-remains-running|rollback-id-mismatch|up-fails-container|up-fails-no-container|rollback-running-reappears|rollback-running-after-forensic|rollback-volume-filter-foreign-running|rollback-forensic-corrupt|rollback-restore-drifts|multiple-containers)
                 printf 'running\\n' ;;
             esac
             ;;
@@ -528,6 +533,9 @@ case "$1" in
               tar --owner=1000 --group=1000 --mode=600 -czf "$hostdir/$outfile" -C "$hostdir/.fakesrc" .
               ;;
           esac
+          if [ "$FAKE_DOCKER_SCENARIO" = "rollback-running-after-forensic" ] && [ "$outfile" = "rollback-forensic.tar.gz" ] && [ -n "$KAOIRO_TEST_FORENSIC_FILE" ]; then
+            : > "$KAOIRO_TEST_FORENSIC_FILE"
+          fi
         fi
         exit 0
         ;;
@@ -4267,6 +4275,40 @@ test("runRollback rechecks that compose reports no running container before wipi
   } finally {
     delete process.env.KAOIRO_TEST_CALL_LOG;
   }
+  assert.ok(caught instanceof DeployError);
+  assert.match(caught.message, /compose still reports running/);
+  const log = readCallLog(logPath);
+  assert.ok(!log.some((line) => line.includes("rollback-forensic.tar.gz")));
+  assert.ok(!log.some((line) => line.includes("find \/data -mindepth")));
+});
+
+test("runRollback refuses before wiping when a container resumes after forensic archiving", () => {
+  let transactionId;
+  const backupRoot = join(root, "kaoiro-deploy");
+  withScenario("running-clean-stop", () => {
+    transactionId = runUpdate(
+      { repo: workDir, target: headSha, maintenanceApproved: true },
+      configWithCleanStopMeasured(),
+    ).transactionId;
+  });
+  const logPath = join(root, "docker-calls.log");
+  const forensicMarker = join(root, "forensic-created");
+  const priorMarker = process.env.KAOIRO_TEST_FORENSIC_FILE;
+  process.env.KAOIRO_TEST_CALL_LOG = logPath;
+  process.env.KAOIRO_TEST_FORENSIC_FILE = forensicMarker;
+  let caught;
+  try {
+    withScenario("rollback-running-after-forensic", () =>
+      runRollback({ repo: workDir, transaction: transactionId, confirmRestore: true }, configWithCleanStopMeasured()),
+    );
+  } catch (err) {
+    caught = err;
+  } finally {
+    delete process.env.KAOIRO_TEST_CALL_LOG;
+    if (priorMarker === undefined) delete process.env.KAOIRO_TEST_FORENSIC_FILE;
+    else process.env.KAOIRO_TEST_FORENSIC_FILE = priorMarker;
+  }
+  assert.ok(existsSync(forensicMarker), "fixture did not reach forensic archive creation");
   assert.ok(caught instanceof DeployError);
   assert.match(caught.message, /compose still reports running/);
   assert.ok(!readCallLog(logPath).some((line) => line.includes("find \/data -mindepth")));

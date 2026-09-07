@@ -371,6 +371,32 @@ function rollbackCandidateIds(bin, serverDir, recoveryArgs, volumeId) {
   return new Set(ids);
 }
 
+function requireRollbackContainersStopped(
+  bin,
+  serverDir,
+  recoveryArgs,
+  resolvedIds,
+  identity,
+  volumeId,
+  position,
+) {
+  const runningTargetIds = dockerComposeContainerIds(bin, serverDir, SERVICE);
+  const runningRecoveryIds = dockerComposeContainerIds(bin, serverDir, SERVICE, recoveryArgs);
+  if (runningTargetIds.length !== 0 || runningRecoveryIds.length !== 0) {
+    fail(
+      `compose still reports running ${SERVICE} containers ${position} (target ${JSON.stringify(runningTargetIds)}, recovery ${JSON.stringify(runningRecoveryIds)}) — refusing before storage mutation`,
+    );
+  }
+  for (const containerId of resolvedIds) {
+    const candidate = readRollbackCandidate(bin, containerId, identity, volumeId);
+    if (candidate.running) {
+      fail(
+        `rollback candidate ${containerId} is running ${position} — refusing before storage mutation`,
+      );
+    }
+  }
+}
+
 /** Parses a docker inspect `{{.State.ExitCode}}`-shaped field. Returns
  *  `null` on anything that is not a plain integer string — "取得不能"
  *  (unreadable) is a real outcome (a crashed/unsupported docker, a
@@ -2646,20 +2672,22 @@ export function runRollback(flags, config) {
         );
       }
     }
-    const runningTargetIds = dockerComposeContainerIds(bin, serverDir, SERVICE);
-    const runningRecoveryIds = dockerComposeContainerIds(bin, serverDir, SERVICE, recoveryArgs);
-    if (runningTargetIds.length !== 0 || runningRecoveryIds.length !== 0) {
-      fail(
-        `compose still reports running ${SERVICE} containers (target ${JSON.stringify(runningTargetIds)}, recovery ${JSON.stringify(runningRecoveryIds)}) — refusing before storage mutation`,
-      );
-    }
+    requireRollbackContainersStopped(
+      bin,
+      serverDir,
+      recoveryArgs,
+      resolvedIds,
+      identity,
+      volumeId,
+      "before forensic archive",
+    );
     journal = advancePhase(
       dir,
       journal,
       PHASE.ROLLBACK_STOPPED,
       {
         stopped_container: resolvedIds.length === 0 ? null : resolvedIds.join(","),
-        resolved_container_ids: candidateIds,
+        resolved_container_ids: resolvedIds,
       },
       validateJournalAgainstStateMachine,
     );
@@ -2730,6 +2758,16 @@ export function runRollback(flags, config) {
         restore_from: { path: manifest.archive.path, sha256: preDeployArchiveSha },
       },
       validateJournalAgainstStateMachine,
+    );
+
+    requireRollbackContainersStopped(
+      bin,
+      serverDir,
+      recoveryArgs,
+      resolvedIds,
+      identity,
+      volumeId,
+      "immediately before restore",
     );
 
     runDocker(bin, [
