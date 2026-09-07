@@ -864,7 +864,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   #
   # issue #305 M7-S: `check_and_acquire/6`'s lock acquisition is the same
   # commit `AgentsChannel`'s operator `session_reset` and `set_permission`
-  # already serialize through `AgentAcceptance.run/2` (see that module's
+  # already serialize through `AgentAcceptance.run/3` (see that module's
   # moduledoc) — this agent-self path reaches the identical `SessionResets`
   # lock but had been calling it directly, outside the choke point. That
   # reopened the exact race M7 closed: a `set_permission` past its own
@@ -873,7 +873,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # either saw the other (reproduced: suspend `PermissionSettings`, push
   # `set_permission`, then complete a `session_reset_request` on this
   # channel within the suspend window — both succeeded). Wrapping the lock
-  # acquisition in the same `AgentAcceptance.run/2` closure makes this
+  # acquisition in the same `AgentAcceptance.run/3` closure makes this
   # origin mutually exclusive with the other two at the actual commit
   # point too, not just at each handler's own early check.
   defp handle_wrapper_in("session_reset_request", payload, socket) do
@@ -885,7 +885,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
          :ok <- require_reset_capability(envelope, mode),
          {:ok, state} <- fetch_kaoiro_state(envelope),
          {:ok, request_id, prev_sid} <-
-           AgentAcceptance.run(agent_id, fn ->
+           AgentAcceptance.run(agent_id, :session_reset, fn ->
              SessionResets.check_and_acquire(
                agent_id,
                mode,
@@ -2092,32 +2092,21 @@ defmodule KaoiroServerWeb.WrapperChannel do
   defp fetch_reset_reason(%{"reason" => _}), do: {:error, {:invalid_value, "reason"}}
   defp fetch_reset_reason(payload) when is_map(payload), do: {:ok, nil}
 
-  # `session_reset_request` is a control wire, not a human-facing form: its
-  # reply reason must stay in ADR-0036 F7's fixed lifecycle vocabulary. A
-  # malformed mode/reason cannot safely be more specific without adding a new
-  # wire word, so it fails closed as an unsupported reset request.
+  # `unsupported_session_reset` tells a wrapper that the capability is absent,
+  # so only the explicit capability result may emit it. Unknown failures stay
+  # transient rather than disabling the tool.
+  defp reset_request_reason(:unsupported_session_reset), do: "unsupported_session_reset"
+
   defp reset_request_reason(reason)
        when reason in [
               :agent_busy,
               :session_reset_pending,
-              :unsupported_session_reset,
-              :runner_unavailable
+              :runner_unavailable,
+              :timeout
             ],
        do: Atom.to_string(reason)
 
-  # issue #305 M7-S (クロエ round 3 S-3): `AgentAcceptance.run/2` degrading
-  # to `:acceptance_unavailable` (its own worker timed out or crashed) is a
-  # TRANSIENT failure, not a fixed capability fact — the catch-all below
-  # would otherwise fold it into "unsupported_session_reset", which
-  # `session_reset_started`/`session_reset_failed` readers (and this
-  # command's OWN client) treat as permanent. Mirrors
-  # `agents_channel.ex`'s `session_reset_error_reason/1` mapping for the
-  # operator path, and reuses "timeout" from ADR-0036's own closed
-  # vocabulary (already used for `session_reset_failed`) rather than
-  # adding a new wire word.
-  defp reset_request_reason(:acceptance_unavailable), do: "timeout"
-
-  defp reset_request_reason(_reason), do: "unsupported_session_reset"
+  defp reset_request_reason(_reason), do: "timeout"
 
   defp begin_planned_reset(agent_id, request_id) do
     case PlannedDisconnects.begin(agent_id, request_id, :reset) do

@@ -91,7 +91,7 @@ defmodule KaoiroServer.Application do
       # Shared commit-serialization point between a session_reset
       # acquisition and a set_permission submit for the same agent
       # (issue #305 M7) — one ephemeral worker per agent_id, registered
-      # here and started on demand by `KaoiroServer.AgentAcceptance.run/2`
+      # here and started on demand by `KaoiroServer.AgentAcceptance.run/3`
       # (director round-2 correction: per-agent, not one global process).
       # In-memory only, same lifetime as the two stores above it
       # coordinates.
