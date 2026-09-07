@@ -1548,7 +1548,30 @@ export function runUpdate(flags, config) {
       writeJournal(dir, journal, validateJournalAgainstStateMachine);
 
       oldImageId = dockerInspect(bin, container, "{{.Image}}");
-      oldSha = gitOutput(["rev-parse", "HEAD"], repo);
+      // issue #322 S2 (should-fix): was `gitOutput(["rev-parse", "HEAD"],
+      // repo)` — the LOCAL checkout's HEAD, which nothing keeps in
+      // lockstep with what `container` was actually built from (an
+      // operator can `git checkout` the repo between deploys without
+      // touching the running container; a resumed transaction runs an
+      // arbitrary time after prepare). A wrong old_sha here silently
+      // mislabels the rollback tag and archive provenance with a sha the
+      // running container never was. The running container's own
+      // `/api/health` (already this file's one source of truth for
+      // "what build is actually live", pollHealth's own contract) is
+      // asked instead; unreachable REFUSES rather than falling back to
+      // the possibly-wrong git guess — a silent wrong answer here is
+      // worse than an explicit stop before any mutation past PREFLIGHT.
+      const oldHealthUrl = resolveHealthUrl(bin, serverDir, config);
+      const oldHealth = fetchHealth(resolveCurlBin(), oldHealthUrl);
+      if (!oldHealth.ok) {
+        fail(
+          `could not reach ${oldHealthUrl} to determine the running container's own build_revision (needed as old_sha before recording anything about it): ${oldHealth.error}`,
+        );
+      }
+      if (typeof oldHealth.body.build_revision !== "string" || !SHA_RE.test(oldHealth.body.build_revision)) {
+        fail(`${oldHealthUrl} reported an unexpected build_revision: ${JSON.stringify(oldHealth.body.build_revision)}`);
+      }
+      oldSha = oldHealth.body.build_revision;
       const composeArtifactPath = join(serverDir, "docker-compose.yaml");
       composeArtifact = { path: composeArtifactPath, sha256: sha256File(composeArtifactPath) };
 
