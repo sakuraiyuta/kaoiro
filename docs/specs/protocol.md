@@ -314,9 +314,14 @@ model/effort `ext.switch_error`:
 `PermissionSubmission` is `{revision, requested, execution_id}`.
 `PermissionObservation` extends it with `{session_id, turn_id, permission,
 network_access}`; `permission` is the existing `PermissionAxesExt`.
-An applied state requires both submitted and effective, with matching revision,
-requested pair, and execution_id. The observation adds the engine identities;
-it does not replace the immutable submission.
+In `applying`, `applied`, and `unknown`, the submission must match the control's
+own revision and raw requested pair. An applied state also requires effective
+evidence with the same revision, requested pair, and execution_id as submitted.
+`pending` and `failed` may carry evidence for a different selection: a pending
+successor, a rejected successor with its predecessor's evidence, or a detected
+request/submission mismatch. The observation adds the engine identities; it does
+not replace the immutable submission. Never combine the server's requested pair
+with a wrapper execution_id to manufacture evidence of what that exec captured.
 `execution_id` is a wrapper-generated correlation ID for one exec; `session_id`
 and `turn_id` are engine-observed identities. Requested/submitted values retain
 raw network configuration. Expected network access is normalized: full access
@@ -362,6 +367,49 @@ failure with the actually observed policy, not a silent substitution. An
 approval value other than the fixed `never` is a contract violation; do not
 continue dispatch until reconciled. The effective claim is an observation of
 the engine's policy, not a proof that every OS isolation primitive succeeded.
+
+**Mismatch representation.** A detected mismatch after submission uses
+`status:"failed", reason:"policy_mismatch"`, with `rolled_back_to` absent.
+Keep the server-authorized selection as `next`; stop dispatch until the operator
+reconciles it. Preserve the actual submission and any actual observation in
+`submitted` and `effective`, respectively. Do not rewrite them to match the
+authorized pair, substitute historical evidence as current, or use `unknown`
+to carry a submission that disagrees with the top-level selection. If no
+observation exists, omit `effective`; do not fabricate one to fill the record.
+
+For example, the server accepted read-only at revision 8, but exec `e8` captured
+workspace-write and its turn_context confirmed that policy. This complete sync
+payload carries the discrepancy and keeps revision 8 blocked:
+
+```ts
+const authorized = { sandbox: "read-only", network_access: false };
+const submitted = {
+  revision: 8,
+  requested: { sandbox: "workspace-write", network_access: true },
+  execution_id: "e8",
+};
+const sync = {
+  version: "0",
+  control: {
+    revision: 8,
+    requested: authorized,
+    constraints: { approval: "never", enforcement: "os" },
+    status: "failed",
+    reason: "policy_mismatch",
+    submitted,
+    effective: {
+      ...submitted,
+      session_id: "s1",
+      turn_id: "t8",
+      permission: {
+        sandbox: "workspace-write", approval: "never", enforcement: "os",
+      },
+      network_access: true,
+    },
+  },
+  next: { revision: 8, requested: authorized },
+};
+```
 
 Once policy is confirmed, subsequent API failure does not roll it back. Only a
 definitive rejection before application can set `rolled_back_to`; missing
@@ -439,20 +487,63 @@ After **every** negotiated wrapper join, the server sends `permission_sync`:
  next: {revision: number, requested: {sandbox, network_access}} | null}
 ```
 
-`null/null` explicitly means no saved settings. Seed from the wrapper's raw
-launch baseline, not from normalized `ext.effective`. Otherwise `next` is the
-saved next-execution selection. The retained `control` may describe a failed
-latest request, but `next` never replays that rejected pair; retain the prior
-selection only when rejection was definitively before application. If the first
-operator request is rejected before application, `next` is the persisted
-`{revision:0, requested:<launch baseline>}`; non-null failed control therefore
-still has a non-null next. Do not allocate a new revision or publish the launch
-baseline as observed merely to restore it. Unknown requests remain next, and applied selections are reasserted on process restart.
+`null/null` explicitly means no saved settings. Both fields are null together or
+non-null together. Inside a non-null control, absent optional fields must be
+**omitted**, never sent as JSON `null`. This includes `submitted`, `effective`,
+`last_effective`, `reason`, and `rolled_back_to`; omission is legal only where
+the `PermissionControlExt` arm permits it. A required field cannot be omitted,
+and a forbidden field cannot be sent even as `null`. The explicit empty sync is
+the exception for the two top-level fields, not a null convention for nested
+records. Apply the same omission rule to live control publications.
+
+Seed empty settings from the wrapper's raw launch baseline, not from normalized
+`ext.effective`. Otherwise `next` is the saved next-execution selection.
+
+**Rejection before application.** At request acceptance, the server must bind
+the then-current accepted `next` selection (revision and raw pair) into that
+request's ledger entry as its recovery target. On a definitive pre-application
+rejection, retain failed control for the rejected request, restore `next` from
+that recorded target, and derive the wire `rolled_back_to` pair from the same
+server record. The wrapper's reported rollback pair is never the source of
+either value. Do not search for the highest lower revision: it may itself have
+been rejected. Ledger pruning must preserve recovery targets still referenced
+by unresolved requests. For the first request, the target is the persisted
+`{revision:0, requested:<launch baseline>}`. Do not allocate a new revision or
+claim an effective observation merely to restore that selection.
+
+For example, A (revision 1) is the accepted next selection, followed by three
+requests rejected before application:
+
+| Request | Recovery target bound when accepted | Next after rejection | Latest control |
+|---|---|---|---|
+| B, revision 2 | A, revision 1 | A, revision 1 | B/failed, rolled_back_to = A's pair |
+| C, revision 3 | A, revision 1 | A, revision 1 | C/failed, rolled_back_to = A's pair |
+| D, revision 4 | A, revision 1 | A, revision 1 | D/failed, rolled_back_to = A's pair |
+
+Neither B nor C becomes C's or D's recovery target. A block on revision 1 is
+not cleared merely because failed control advances to revision 4: clearing
+requires `next.revision > blocked.revision`, reflecting a newer server-accepted
+selection, whether delivered by live relay or sync.
+
+**Join projection.** Apply these rules after every negotiated join, including
+server restart, wrapper restart, and same-process rejoin:
+
+| Stored control | Control sent in sync |
+|---|---|
+| `pending` | Keep `pending` and any permitted evidence. |
+| `applying` | Send `pending`; omit `submitted` and `effective`, retaining any `last_effective`. |
+| `applied` | Send `pending`; omit `submitted` and `effective`, retaining the confirmed observation as `last_effective`. |
+| `unknown` | Keep `unknown` with its bound `submitted` and `reason`; omit `effective` and `rolled_back_to`. |
+| `failed` | Keep `failed`, its reason and permitted evidence; retain a server-derived rollback pair only for a definitive pre-application rejection. |
+
+Unknown requests remain `next` and remain blocked across restart/rejoin; do not
+round them to pending or replay them without operator reconciliation. A mismatch
+also keeps its authorized `next` and its failed block. A pre-application rejection
+uses its ledger-derived recovery target instead. Applied selections are
+reasserted on process restart, with historical evidence rather than a claim of
+fresh application.
 Reasserting a saved widening request is delayed execution of the authenticated
 operator selection, not permission to choose a wider policy autonomously.
-Both fields are null together or non-null together. For a mismatch after
-submission, retain the requested selection as next but stop dispatch until the
-operator reconciles it; do not substitute a previous policy automatically.
 
 Synchronization is a readiness barrier, including the explicit empty response.
 Buffer messages received before host construction. Process the authoritative
