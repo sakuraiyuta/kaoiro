@@ -51,8 +51,12 @@ limits, and the turn-number contract).
 - A conversation ends only after both parties have sent `done=true`. Send it
   yourself even if the other party sent it first.
 - Save flaky-test output before rerunning. The test name, stack trace, and seed
-  are lost the moment a rerun is green (on failure, ExUnit prints a
-  `mix test --seed <N>` reproduction command).
+  are lost the moment a rerun is green, and ExUnit does not hand them back:
+  the seed appears only in the run's header (`Running ExUnit with seed: <N>,
+  max_cases: <M>`), and a failing run ends with the counts alone — no seed,
+  no reproduction command (measured on Elixir 1.20.1). Keeping the tail of
+  the output therefore drops the seed. Use `scripts/mix-test.sh`, which tees
+  the whole run to a file and keeps it whenever the run does not pass.
 - A completion report states, for every gate command, the exit code and
   whether unhandled errors or warnings were emitted, not the pass count
   alone. A suite can report every test green and still exit non-zero
