@@ -1,4 +1,5 @@
-import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { mergeExtraModels, writeRedactedStderr } from "@kaoiro/agent-common";
 import type { EngineModelInfo } from "@kaoiro/protocol";
 
@@ -119,8 +120,17 @@ function isAtLeast(version: string, minimum: string): boolean {
 }
 
 function bundledCodexVersion(): string {
-  const codexPackage = createRequire(import.meta.url)(
-    "@openai/codex/package.json",
+  const resolver = (import.meta as ImportMeta & {
+    resolve?: (specifier: string) => string;
+  }).resolve;
+  const codexPackage = JSON.parse(
+    readFileSync(
+      fileURLToPath(
+        resolver?.("@openai/codex/package.json") ??
+          new URL("../node_modules/@openai/codex/package.json", import.meta.url),
+      ),
+      "utf8",
+    ),
   ) as { version?: unknown };
   if (typeof codexPackage.version !== "string") {
     throw new Error("bundled @openai/codex package.json has no version");
