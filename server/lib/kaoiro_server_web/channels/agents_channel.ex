@@ -733,7 +733,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
          # check above ran on THIS channel process before the actual
          # commit — a `session_reset` accepted on a DIFFERENT channel
          # process in between could still slip through. Re-checking the
-         # guard AND persisting inside the same `AgentAcceptance.run/2`
+         # guard AND persisting inside the same `AgentAcceptance.run/3`
          # closure as `session_reset`'s own commit (below) makes the two
          # mutually exclusive at the actual commit point, not just at
          # each handler's own early check.
@@ -752,7 +752,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
          # serialization point is released either way, so a stuck Users
          # store cannot also block an unrelated `session_reset`.
          {:ok, revision, requested, actor, at, previous} <-
-           AgentAcceptance.run(agent_id, fn ->
+           AgentAcceptance.run(agent_id, :set_permission, fn ->
              with :ok <- SessionResets.guard_instruction(agent_id),
                   {:ok, actor} <- resolve_permission_actor(socket),
                   at = DateTime.utc_now() |> DateTime.to_iso8601(),
@@ -834,7 +834,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
          # through the shared `AgentAcceptance` choke point so it cannot
          # straddle a `set_permission` commit for the same agent either.
          {:ok, request_id, prev_sid} <-
-           AgentAcceptance.run(agent_id, fn ->
+           AgentAcceptance.run(agent_id, :session_reset, fn ->
              SessionResets.check_and_acquire(
                agent_id,
                mode,
@@ -877,7 +877,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
       {:reply, :ok, socket}
     else
       {:error, reason} ->
-        {:reply, {:error, %{reason: safe_reason(session_reset_error_reason(reason))}}, socket}
+        {:reply, {:error, %{reason: safe_reason(reason)}}, socket}
     end
   end
 
@@ -3356,12 +3356,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   defp permission_error_reason(reason) when reason in [:invalid_agent_id, :missing_agent_id],
     do: :invalid_payload
 
-  defp permission_error_reason(:acceptance_unavailable), do: :persistence_failed
-
   defp permission_error_reason(reason), do: reason
-
-  defp session_reset_error_reason(:acceptance_unavailable), do: :timeout
-  defp session_reset_error_reason(reason), do: reason
 
   # `permission_requested`'s optional `previous` (protocol.md "Permission
   # lifecycle audit"): the most recent CONFIRMED observation before this

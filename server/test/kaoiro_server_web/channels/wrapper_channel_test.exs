@@ -287,7 +287,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
           assert_reply ref, :error, %{reason: "invalid value: replay_ia"}
 
         "session_reset_request" ->
-          assert_reply ref, :error, %{reason: "unsupported_session_reset"}
+          assert_reply ref, :error, %{reason: "timeout"}
 
         _ ->
           assert_reply ref, :ok
@@ -4908,11 +4908,11 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert %{transition_id: "switch-won"} = PlannedDisconnects.get(agent_id)
     end
 
-    test "契約外の mode / reason は fixed lifecycle vocabulary へ正規化する" do
+    test "unknown reset-request failure stays transient instead of claiming capability loss" do
       socket = seed_reset_agent("self-reset.reason")
 
       invalid = push(socket, "session_reset_request", %{"mode" => "new", "reason" => 42})
-      assert_reply invalid, :error, %{reason: "unsupported_session_reset"}
+      assert_reply invalid, :error, %{reason: "timeout"}
 
       too_large =
         push(socket, "session_reset_request", %{
@@ -4920,10 +4920,10 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
           "reason" => String.duplicate("x", 65_537)
         })
 
-      assert_reply too_large, :error, %{reason: "unsupported_session_reset"}
+      assert_reply too_large, :error, %{reason: "timeout"}
 
       invalid_mode = push(socket, "session_reset_request", %{"mode" => "restart"})
-      assert_reply invalid_mode, :error, %{reason: "unsupported_session_reset"}
+      assert_reply invalid_mode, :error, %{reason: "timeout"}
       refute_broadcast "session_reset_started", _
     end
   end

@@ -1259,11 +1259,11 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
     # AgentAcceptance serializes per agent_id (issue #305 M7, director
     # round-2 correction) via an on-demand Registry-backed worker, not a
-    # single module-named process — a no-op `run/2` call guarantees the
+    # single module-named process — a no-op `run/3` call guarantees the
     # worker exists before the Registry lookup, so tests that need to
     # `:sys.suspend/1` it directly can get its pid.
     defp agent_acceptance_worker(agent_id) do
-      _ = KaoiroServer.AgentAcceptance.run(agent_id, fn -> :ok end)
+      _ = KaoiroServer.AgentAcceptance.run(agent_id, :set_permission, fn -> :ok end)
       [{pid, _value}] = Registry.lookup(KaoiroServer.AgentAcceptance.Registry, agent_id)
       pid
     end
@@ -1501,7 +1501,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         assert :ok ==
                  wait_until_permission(fn ->
                    {:messages, messages} = Process.info(accept_pid, :messages)
-                   Enum.any?(messages, &match?({:"$gen_call", _, {:run, _}}, &1))
+                   Enum.any?(messages, &match?({:"$gen_call", _, {:run, :set_permission, _}}, &1))
                  end)
 
         capture_log(fn ->
@@ -1673,7 +1673,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         assert :ok ==
                  wait_until_permission(fn ->
                    {:messages, messages} = Process.info(accept_pid, :messages)
-                   Enum.count(messages, &match?({:"$gen_call", _, {:run, _}}, &1)) == 2
+                   Enum.count(messages, &match?({:"$gen_call", _, {:run, _, _}}, &1)) == 2
                  end)
 
         effective = %{
@@ -6482,7 +6482,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         assert :ok ==
                  wait_until_permission(fn ->
                    {:messages, messages} = Process.info(accept_pid, :messages)
-                   Enum.any?(messages, &match?({:"$gen_call", _, {:run, _}}, &1))
+                   Enum.any?(messages, &match?({:"$gen_call", _, {:run, :session_reset, _}}, &1))
                  end)
 
         capture_log(fn ->
@@ -8235,7 +8235,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert :ok ==
                wait_until_permission(fn ->
                  {:messages, messages} = Process.info(accept_pid, :messages)
-                 Enum.any?(messages, &match?({:"$gen_call", _, {:run, _}}, &1))
+                 Enum.any?(messages, &match?({:"$gen_call", _, {:run, :session_reset, _}}, &1))
                end)
 
       capture_log(fn ->
@@ -8288,7 +8288,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
                  {:messages, messages} = Process.info(accept_pid, :messages)
 
                  Enum.any?(messages, fn message ->
-                   match?({:"$gen_call", _, {:run, _}}, message)
+                   match?({:"$gen_call", _, {:run, _, _}}, message)
                  end)
                end)
 
@@ -8347,7 +8347,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
                  {:messages, messages} = Process.info(accept_pid, :messages)
 
                  Enum.any?(messages, fn message ->
-                   match?({:"$gen_call", _, {:run, _}}, message)
+                   match?({:"$gen_call", _, {:run, _, _}}, message)
                  end)
                end)
 

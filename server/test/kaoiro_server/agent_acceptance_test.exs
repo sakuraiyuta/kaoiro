@@ -14,17 +14,17 @@ defmodule KaoiroServer.AgentAcceptanceTest do
 
   test "runs the closure and returns its result" do
     agent_id = unique_agent_id("aa.basic")
-    assert AgentAcceptance.run(agent_id, fn -> {:ok, 42} end) == {:ok, 42}
+    assert AgentAcceptance.run(agent_id, :set_permission, fn -> {:ok, 42} end) == {:ok, 42}
   end
 
-  test "two run/2 calls for the SAME agent_id still serialize" do
+  test "two run/3 calls for the SAME agent_id still serialize" do
     agent_id = unique_agent_id("aa.same")
     order = :ets.new(:order, [:public])
     parent = self()
 
     task1 =
       Task.async(fn ->
-        AgentAcceptance.run(agent_id, fn ->
+        AgentAcceptance.run(agent_id, :set_permission, fn ->
           :ets.insert(order, {1, :start})
           Process.sleep(30)
           :ets.insert(order, {1, :finish})
@@ -38,7 +38,7 @@ defmodule KaoiroServer.AgentAcceptanceTest do
 
     task2 =
       Task.async(fn ->
-        AgentAcceptance.run(agent_id, fn -> :ets.insert(order, {2, :start}) end)
+        AgentAcceptance.run(agent_id, :session_reset, fn -> :ets.insert(order, {2, :start}) end)
       end)
 
     assert Task.await(task1) == :ok
@@ -61,7 +61,7 @@ defmodule KaoiroServer.AgentAcceptanceTest do
 
     task_a =
       Task.async(fn ->
-        AgentAcceptance.run(agent_a, fn ->
+        AgentAcceptance.run(agent_a, :set_permission, fn ->
           Process.sleep(1_000)
           :a_done
         end)
@@ -71,7 +71,7 @@ defmodule KaoiroServer.AgentAcceptanceTest do
     Process.sleep(100)
 
     {microseconds, result_b} =
-      :timer.tc(fn -> AgentAcceptance.run(agent_b, fn -> :b_done end) end)
+      :timer.tc(fn -> AgentAcceptance.run(agent_b, :session_reset, fn -> :b_done end) end)
 
     assert result_b == :b_done
     # Comfortably under A's 1s sleep — B never queued behind it.
@@ -85,13 +85,27 @@ defmodule KaoiroServer.AgentAcceptanceTest do
   # must degrade to an error reply for that ONE caller, not crash that
   # agent's worker in a way that also breaks a LATER call for the same
   # agent_id (a fresh worker must be started transparently).
-  test "a closure that exits does not crash the process or block later callers for the same agent" do
+  test "an unavailable worker returns the command's closed transient reason" do
     agent_id = unique_agent_id("aa.exits")
 
-    assert AgentAcceptance.run(agent_id, fn -> exit(:boom) end) ==
-             {:error, :acceptance_unavailable}
+    assert AgentAcceptance.run(agent_id, :set_permission, fn -> exit(:boom) end) ==
+             {:error, :persistence_failed}
 
-    assert AgentAcceptance.run(agent_id, fn -> :still_working end) == :still_working
+    assert AgentAcceptance.run(agent_id, :session_reset, fn -> exit(:boom) end) ==
+             {:error, :timeout}
+
+    assert AgentAcceptance.run(agent_id, :set_permission, fn -> :still_working end) ==
+             :still_working
+  end
+
+  test "requires a closed command tag and exports no raw run/2 path" do
+    agent_id = unique_agent_id("aa.closed-command")
+
+    refute function_exported?(AgentAcceptance, :run, 2)
+
+    assert_raise FunctionClauseError, fn ->
+      apply(AgentAcceptance, :run, [agent_id, :future_command, fn -> :ok end])
+    end
   end
 
   # code-review-assessment finding (issue #305 round 1): without a
@@ -100,7 +114,7 @@ defmodule KaoiroServer.AgentAcceptanceTest do
   # `agents_channel.ex`'s `delete_agent` purge path must reclaim it.
   test "delete/1 terminates the worker; delete of an unknown agent_id is a no-op" do
     agent_id = unique_agent_id("aa.delete")
-    assert AgentAcceptance.run(agent_id, fn -> :ok end) == :ok
+    assert AgentAcceptance.run(agent_id, :set_permission, fn -> :ok end) == :ok
     assert [{pid, _}] = Registry.lookup(KaoiroServer.AgentAcceptance.Registry, agent_id)
     assert Process.alive?(pid)
 
@@ -109,7 +123,7 @@ defmodule KaoiroServer.AgentAcceptanceTest do
     assert Registry.lookup(KaoiroServer.AgentAcceptance.Registry, agent_id) == []
 
     # A respawn under the same agent_id gets a fresh worker transparently.
-    assert AgentAcceptance.run(agent_id, fn -> :ok end) == :ok
+    assert AgentAcceptance.run(agent_id, :session_reset, fn -> :ok end) == :ok
     assert [{new_pid, _}] = Registry.lookup(KaoiroServer.AgentAcceptance.Registry, agent_id)
     assert new_pid != pid
 
@@ -126,7 +140,7 @@ defmodule KaoiroServer.AgentAcceptanceTest do
   # instead of logging and returning `:ok`.
   test "delete/1 stops waiting when the Registry entry never clears" do
     agent_id = unique_agent_id("aa.registry-stuck")
-    assert AgentAcceptance.run(agent_id, fn -> :ok end) == :ok
+    assert AgentAcceptance.run(agent_id, :set_permission, fn -> :ok end) == :ok
     partition = Process.whereis(KaoiroServer.AgentAcceptance.Registry.PIDPartition0)
     :ok = :sys.suspend(partition)
 

@@ -18,12 +18,12 @@ defmodule KaoiroServer.AgentAcceptance do
   commit point before either one's result is visible to the other,
   demonstrated by ふじ's real test (suspending `PermissionSettings` for
   2.1s after the channel-level guard, then completing a `session_reset` on
-  a separate channel, then resuming — both commands succeeded). `run/2`
+  a separate channel, then resuming — both commands succeeded). `run/3`
   closes this by making the ACTUAL commit — not just the early guard — go
   through one shared choke point PER AGENT: `set_permission` re-checks
   `SessionResets.guard_instruction/1` and calls `submit_request/6` inside
   it; `session_reset` calls `SessionResets.check_and_acquire/4` inside it.
-  Whichever commit's `run/2` call is processed first by that agent's
+  Whichever commit's `run/3` call is processed first by that agent's
   worker fully completes (guard + persist) before the other one's
   function even starts, so the two can never straddle each other's
   commit FOR THAT AGENT.
@@ -38,7 +38,7 @@ defmodule KaoiroServer.AgentAcceptance do
   via `Registry` and started on demand under a `DynamicSupervisor`, so a
   slow/stuck closure for agent A (e.g. `Users.get_or_create/4` waiting
   out its own bounded timeout) never delays agent B's `session_reset` —
-  they run on entirely separate processes. `run/2` looks the worker up
+  they run on entirely separate processes. `run/3` looks the worker up
   (or starts it) on every call rather than caching a pid, so a crashed
   worker is transparently replaced by the next call. `delete/1` (called
   from `agents_channel.ex`'s `delete_agent` purge path, alongside
@@ -56,17 +56,16 @@ defmodule KaoiroServer.AgentAcceptance do
   uncaught `exit` INSIDE this module's `handle_call`, crashing the
   worker for that one agent — every OTHER agent is on a different
   process and is unaffected either way, but a crash still loses the
-  in-flight reply for THIS caller. A caught exit degrades to
-  `{:error, :acceptance_unavailable}` for that ONE `run/2` call instead.
+  in-flight reply for THIS caller. A caught exit instead returns that
+  command's closed transient wire reason for that ONE `run/3` call.
 
-  `run/2`'s own OUTER call uses a bounded timeout longer than every
+  `run/3`'s own OUTER call uses a bounded timeout longer than every
   inner closure's own worst case (director round-2 correction: `:infinity`
   was rejected — an unbounded wait would freeze the calling channel
   process, and therefore the operator's whole dashboard socket,
   indefinitely if a worker ever truly wedges) rather than `:infinity`.
-  A timeout here is caught and ALSO degrades to
-  `{:error, :acceptance_unavailable}`, so `run/2` never raises to its
-  caller either way.
+  A timeout here returns the same command-specific transient reason, so
+  `run/3` never raises to its caller either way.
   """
 
   use GenServer
@@ -79,7 +78,7 @@ defmodule KaoiroServer.AgentAcceptance do
   # Longer than every inner closure's own worst-case bounded wait
   # (`Users.get_or_create/4`, `PermissionSettings.submit_request/6`,
   # `SessionResets.*` are all default-5000ms `GenServer.call`s) so a
-  # slow-but-answering inner call has room to finish and have `safe_run/1`
+  # slow-but-answering inner call has room to finish and have `safe_run/2`
   # reply gracefully before this OUTER call's own timeout would otherwise
   # fire first and mask that graceful reply with a raw `exit`.
   @run_timeout_ms 15_000
@@ -92,29 +91,33 @@ defmodule KaoiroServer.AgentAcceptance do
 
   defp via(agent_id), do: {:via, Registry, {@registry, agent_id}}
 
+  @type command :: :set_permission | :session_reset
+
   @doc """
-  Runs `fun` (a 0-arity function) to completion on `agent_id`'s own
-  worker before any OTHER `run/2` call FOR THAT SAME agent_id begins —
-  a call for a DIFFERENT agent_id runs concurrently on its own worker
-  (see moduledoc). Returns whatever `fun` returns, or
-  `{:error, :acceptance_unavailable}` if `fun` raised an `exit`, or if
-  this call's own outer wait exceeded `#{@run_timeout_ms}`ms. `fun`
-  should be the smallest closure that covers the actual commit
-  (re-check + persist), not surrounding broadcast/audit side effects
-  that do not need to be inside the lock.
+  Runs `fun` (a 0-arity function) to completion on `agent_id`'s own worker
+  before any other `run/3` call for the same agent begins. A call for a
+  different agent runs concurrently. Returns `fun`'s result, or the closed
+  transient reason for `command` if the closure exits or the outer wait exceeds
+  `#{@run_timeout_ms}`ms.
   """
-  def run(agent_id, fun) when is_binary(agent_id) and is_function(fun, 0) do
+  @spec run(String.t(), command(), (-> term())) :: term()
+  def run(agent_id, command, fun)
+      when is_binary(agent_id) and command in [:set_permission, :session_reset] and
+             is_function(fun, 0) do
     pid = ensure_worker(agent_id)
-    GenServer.call(pid, {:run, fun}, @run_timeout_ms)
+    GenServer.call(pid, {:run, command, fun}, @run_timeout_ms)
   catch
     :exit, reason ->
       Logger.warning(
-        "AgentAcceptance: run/2 did not complete for agent_id=#{agent_id} " <>
+        "AgentAcceptance: run/3 did not complete for agent_id=#{agent_id} " <>
           "(#{inspect(reason)})"
       )
 
-      {:error, :acceptance_unavailable}
+      {:error, availability_reason(command)}
   end
+
+  defp availability_reason(:set_permission), do: :persistence_failed
+  defp availability_reason(:session_reset), do: :timeout
 
   defp ensure_worker(agent_id) do
     case Registry.lookup(@registry, agent_id) do
@@ -139,8 +142,8 @@ defmodule KaoiroServer.AgentAcceptance do
   long-running server's worker/Registry-entry count tracks the
   concurrently-live agent set instead of every distinct agent_id it has
   EVER seen. A respawn under the same agent_id afterward simply starts a
-  fresh worker on its next `run/2` call, with no state to carry over
-  (workers hold no state of their own — `handle_call({:run, fun}, ...)`
+  fresh worker on its next `run/3` call, with no state to carry over
+  (workers hold no state of their own — `handle_call({:run, command, fun}, ...)`
   is stateless).
   """
   def delete(agent_id) when is_binary(agent_id) do
@@ -191,15 +194,15 @@ defmodule KaoiroServer.AgentAcceptance do
   def init(:ok), do: {:ok, nil}
 
   @impl true
-  def handle_call({:run, fun}, _from, state) do
-    {:reply, safe_run(fun), state}
+  def handle_call({:run, command, fun}, _from, state) do
+    {:reply, safe_run(command, fun), state}
   end
 
-  defp safe_run(fun) do
+  defp safe_run(command, fun) do
     fun.()
   catch
     :exit, reason ->
       Logger.warning("AgentAcceptance: closure raised an exit (#{inspect(reason)})")
-      {:error, :acceptance_unavailable}
+      {:error, availability_reason(command)}
   end
 end
