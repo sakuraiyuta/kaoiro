@@ -38,23 +38,13 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
   # this via `apply_custom_name` on the spawn path.
   @ao %{"id" => "ao", "name" => "あお", "sprite_set" => "ao"}
 
-  # issue #266: `assert_reply` for a SUCCESSFUL `delete_agent` (not an
-  # early-rejected one — `not_disconnected`/`forbidden`/`unknown_agent`
-  # return before any of this) waits on a reply that only follows FOUR
-  # independent, directly-executed fsync-gated DETS writes (TokenDenylist
-  # + ClearWatermarks + SessionStarts + DeliveryStates, each `GenServer.call`
-  # + `:dets.sync/1` before its own reply -- see `purge_agent_records` in
-  # agents_channel.ex). Measured directly (instrumented timing, reverted
-  # before commit): under a 2-core CPU restriction (approximating a shared
-  # CI runner) this chain alone took 30-40ms, no other single test failure
-  # observed in 17 repeated runs at the exact CI-captured seed/max_cases.
-  # ExUnit's default `assert_receive_timeout` (100ms, unconfigured in this
-  # project) leaves little headroom against that baseline once a shared
-  # runner's real disk I/O degrades further -- this is the OSS-release-wave
-  # flaky capture from issue #266 (GitHub Actions run 33306440623, seed
-  # 225358). Not a race to fix -- delete_agent's real, measured cost against
-  # a timeout that assumed it would be fast.
-  @purge_reply_timeout 500
+  # A SUCCESSFUL `delete_agent` only replies after `purge_agent_records/1`
+  # (an early-rejected one — `not_disconnected`/`forbidden`/`unknown_agent`
+  # — returns before any of it), which is why this path needs a budget of
+  # its own. `KaoiroServer.TestTimeouts.purge_reply/1` documents the cost
+  # and why the budget is a multiple of ExUnit's base rather than a literal
+  # (issue #266, then issue #320 flake C).
+  @purge_reply_timeout KaoiroServer.TestTimeouts.purge_reply()
 
   defp register_host(host_id, opts \\ []) do
     :ok =
