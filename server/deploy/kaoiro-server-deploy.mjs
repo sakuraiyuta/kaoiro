@@ -24,7 +24,12 @@ import { computeBuildIdentity } from "../../scripts/build-identity.mjs";
 import { fsyncExistingPath, writeFileDurably } from "./kaoiro-deploy-atomic-write.mjs";
 import { BRANCH, BranchError, classify, requireRunningContainer } from "./kaoiro-deploy-branch.mjs";
 import { loadConfig } from "./kaoiro-deploy-config.mjs";
-import { dockerComposeContainerNames, dockerInspect, resolveDockerBin, runDocker } from "./kaoiro-deploy-docker.mjs";
+import {
+  dockerComposeContainerIds,
+  dockerInspect,
+  resolveDockerBin,
+  runDocker,
+} from "./kaoiro-deploy-docker.mjs";
 import { advancePhase, readJournal, writeJournal } from "./kaoiro-deploy-journal.mjs";
 import { readManifest, writeManifest } from "./kaoiro-deploy-manifest.mjs";
 import { PHASE, TRANSITIONS, validateJournalAgainstStateMachine } from "./kaoiro-deploy-phase.mjs";
@@ -148,6 +153,38 @@ function normalizeJson(value) {
   return value;
 }
 
+function composeIdentity(parsed) {
+  if (typeof parsed?.name !== "string" || parsed.name === "") {
+    fail("effective compose plan does not declare a project name — refusing to bind a destructive deployment");
+  }
+  if (parsed.services === null || typeof parsed.services !== "object") {
+    fail("effective compose plan does not declare services — refusing to bind a destructive deployment");
+  }
+  const serviceNames = Object.keys(parsed.services).sort();
+  const service = parsed.services[SERVICE];
+  if (service === undefined) {
+    fail(`effective compose plan has no service named ${SERVICE}`);
+  }
+  if (service === null || typeof service !== "object" || !Array.isArray(service.volumes)) {
+    fail(`effective compose plan does not declare volumes for service ${SERVICE} — refusing to bind a destructive deployment`);
+  }
+  const declaredVolumes = parsed.volumes ?? {};
+  const mounts = service.volumes.map((mount) => {
+    if (mount === null || typeof mount !== "object" || typeof mount.type !== "string" || typeof mount.source !== "string") {
+      fail(`effective compose plan has an invalid volume declaration for service ${SERVICE}`);
+    }
+    if (mount.type === "volume") {
+      const volume = declaredVolumes[mount.source];
+      const source = typeof volume?.name === "string" && volume.name !== "" ? volume.name : mount.source;
+      return { type: "volume", source };
+    }
+    if (mount.type === "bind") return { type: "bind", source: mount.source };
+    return { type: mount.type, source: mount.source };
+  });
+  mounts.sort((a, b) => `${a.type}:${a.source}`.localeCompare(`${b.type}:${b.source}`));
+  return { project_name: parsed.name, services: serviceNames, service_mounts: mounts };
+}
+
 function composePlan(bin, serverDir, composeArgs = []) {
   let rendered;
   try {
@@ -171,6 +208,7 @@ function composePlan(bin, serverDir, composeArgs = []) {
   return {
     compose_sha256: sha256Bytes(JSON.stringify(normalizeJson(parsed))),
     env_sha256: sha256Bytes(envBytes),
+    identity: composeIdentity(parsed),
   };
 }
 
@@ -216,6 +254,50 @@ function requirePlanMatch(recorded, current, label) {
         `${label} effective compose plan ${field} has changed since it was recorded (recorded ${JSON.stringify(recorded?.[field])}, now ${current[field]}) — refusing before Docker mutation`,
       );
     }
+  }
+}
+
+function requirePlanIdentityMatch(recoveryPlan, targetPlan) {
+  const isIdentity = (identity) =>
+    typeof identity === "object" &&
+    identity !== null &&
+    typeof identity.project_name === "string" &&
+    identity.project_name !== "" &&
+    Array.isArray(identity.services) &&
+    identity.services.every((service) => typeof service === "string" && service !== "") &&
+    Array.isArray(identity.service_mounts) &&
+    identity.service_mounts.every(
+      (mount) =>
+        typeof mount === "object" &&
+        mount !== null &&
+        typeof mount.type === "string" &&
+        typeof mount.source === "string",
+    );
+  if (!isIdentity(recoveryPlan?.identity) || !isIdentity(targetPlan?.identity)) {
+    fail("recorded compose plan lacks a usable project identity; refusing before Docker mutation");
+  }
+  if (JSON.stringify(recoveryPlan.identity) !== JSON.stringify(targetPlan.identity)) {
+    fail(
+      `recovery and target compose plans have different project identity (recovery ${JSON.stringify(recoveryPlan.identity)}, target ${JSON.stringify(targetPlan.identity)}) — project or service-volume changes are migration work, not a rolling update`,
+    );
+  }
+}
+
+function requireSingleBoundContainer(ids, expectedId, label) {
+  if (ids.length !== 1 || ids[0] !== expectedId) {
+    fail(
+      `${label} compose plan resolves ${ids.length} containers for service ${SERVICE}; expected 0 or 1 matching the captured container id ${expectedId} — refusing before stop or storage mutation`,
+    );
+  }
+}
+
+function requireStoppedContainer(bin, containerId, label) {
+  const running = parseDockerBoolField(dockerInspect(bin, containerId, "{{.State.Running}}"));
+  const status = dockerInspect(bin, containerId, "{{.State.Status}}");
+  if (running !== false || status !== "exited") {
+    fail(
+      `${label} container ${containerId} is not confirmed stopped (running=${running}, status=${JSON.stringify(status)}) — refusing before storage mutation`,
+    );
   }
 }
 
@@ -1637,6 +1719,7 @@ export function runUpdate(flags, config) {
     let rollbackTag;
     let buildResult;
     let container;
+    let oldContainerId;
     let composeArtifact;
     let recoveryComposeFile;
     let recoveryPlan;
@@ -1663,6 +1746,12 @@ export function runUpdate(flags, config) {
       }
       oldImageId = oldEntry.observation.old_image_id;
       oldSha = oldEntry.observation.old_sha;
+      oldContainerId = oldEntry.observation.old_container_id;
+      if (typeof oldContainerId !== "string" || oldContainerId === "") {
+        fail(
+          `transaction ${transactionId} predates container-id binding; do not resume it automatically — recover it through the deployment runbook`,
+        );
+      }
       rollbackTag = oldEntry.observation.rollback_tag;
       composeArtifact = oldEntry.observation.compose_artifact;
       recoveryComposeFile = recoveryComposePath(dir);
@@ -1692,6 +1781,7 @@ export function runUpdate(flags, config) {
       }
 
       container = requireRunningContainer(bin, serverDir, SERVICE);
+      oldContainerId = dockerInspect(bin, container, "{{.Id}}");
 
       // #303 operator decision (5), クロエ manual round-1 review M1:
       // measured and gated BEFORE any mutation — even before this
@@ -1765,6 +1855,7 @@ export function runUpdate(flags, config) {
         {
           old_image_id: oldImageId,
           old_sha: oldSha,
+          old_container_id: oldContainerId,
           compose_artifact: composeArtifact,
           recovery_plan: recoveryPlan,
           rollback_tag: rollbackTag,
@@ -1774,6 +1865,7 @@ export function runUpdate(flags, config) {
 
       buildResult = buildUnderLock({ repo, target }, config);
       targetPlan = composePlan(bin, serverDir);
+      requirePlanIdentityMatch(recoveryPlan, targetPlan);
       journal = advancePhase(
         dir,
         journal,
@@ -1904,6 +1996,7 @@ export function runUpdate(flags, config) {
       recoveryPlanAt(bin, repo, serverDir, oldSha, recoveryComposeFile),
       "recovery",
     );
+    requirePlanIdentityMatch(recoveryPlan, targetPlan);
     journal = advancePhase(dir, journal, PHASE.MAINTENANCE_GATE_PASSED, {}, validateJournalAgainstStateMachine);
 
     // クロエ round 1 review N-5: pulled here, before the stop window
@@ -1926,10 +2019,16 @@ export function runUpdate(flags, config) {
     // this line is documented as no-downtime in runUpdate's own doc
     // comment; nothing below it may run before the checkpoint above it
     // completed (S1 item ii).
+    requireSingleBoundContainer(
+      dockerComposeContainerIds(bin, serverDir, SERVICE),
+      oldContainerId,
+      "target",
+    );
     runDocker(bin, ["compose", "stop", "-t", "30"], { cwd: serverDir, stdio: "inherit" });
 
-    const stopExitCode = parseDockerIntField(dockerInspect(bin, container, "{{.State.ExitCode}}"));
-    const stopOomKilled = parseDockerBoolField(dockerInspect(bin, container, "{{.State.OOMKilled}}"));
+    requireStoppedContainer(bin, oldContainerId, "target");
+    const stopExitCode = parseDockerIntField(dockerInspect(bin, oldContainerId, "{{.State.ExitCode}}"));
+    const stopOomKilled = parseDockerBoolField(dockerInspect(bin, oldContainerId, "{{.State.OOMKilled}}"));
     journal = advancePhase(
       dir,
       journal,
@@ -2410,6 +2509,7 @@ export function runRollback(flags, config) {
       recoveryPlanAt(bin, repo, serverDir, oldSha, recoveryComposeFile),
       "recovery",
     );
+    requirePlanIdentityMatch(manifest.recovery_plan, manifest.target_plan);
 
     // issue #322 M3 (must-fix): the recovery PAIR this rollback depends on
     // — the old image, the pre-deploy archive, and a compose file that
@@ -2440,22 +2540,25 @@ export function runRollback(flags, config) {
         `pre-deploy archive at ${manifest.archive.path} failed full-traversal verification: ${err.message} — refusing before stopping or touching anything`,
       );
     }
-    let stoppedContainer = null;
-    const currentNames = dockerComposeContainerNames(bin, serverDir, SERVICE, recoveryArgs);
-    if (currentNames.length > 1) {
+    const upEntry = journal.history.find((entry) => entry.phase === PHASE.UP);
+    const targetContainerId = upEntry?.observation?.container_id;
+    if (typeof targetContainerId !== "string" || targetContainerId === "") {
       fail(
-        `${currentNames.length} containers match service ${SERVICE}; expected 0 or 1 — investigate before rollback can proceed`,
+        `transaction ${flags.transaction} has no recorded target container id; refusing before rollback can touch storage`,
       );
     }
-    if (currentNames.length === 1) {
-      [stoppedContainer] = currentNames;
-      runDocker(bin, ["compose", ...recoveryArgs, "stop", "-t", "30"], { cwd: serverDir, stdio: "inherit" });
-    }
+    requireSingleBoundContainer(
+      dockerComposeContainerIds(bin, serverDir, SERVICE, recoveryArgs),
+      targetContainerId,
+      "recovery",
+    );
+    runDocker(bin, ["compose", ...recoveryArgs, "stop", "-t", "30"], { cwd: serverDir, stdio: "inherit" });
+    requireStoppedContainer(bin, targetContainerId, "rollback target");
     journal = advancePhase(
       dir,
       journal,
       PHASE.ROLLBACK_STOPPED,
-      { stopped_container: stoppedContainer },
+      { stopped_container: targetContainerId },
       validateJournalAgainstStateMachine,
     );
 
@@ -2621,7 +2724,7 @@ export function runRollback(flags, config) {
       transactionId: flags.transaction,
       destructive: true,
       restoredImageId: oldImageId,
-      stoppedContainer,
+      stoppedContainer: targetContainerId,
       health,
     };
   } finally {

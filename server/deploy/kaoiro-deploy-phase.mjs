@@ -150,6 +150,8 @@ const OBSERVATION_SCHEMAS = {
     IMAGE_ID_RE.test(obs.old_image_id) &&
     typeof obs.old_sha === "string" &&
     SHA_RE.test(obs.old_sha) &&
+    (obs.old_container_id === undefined ||
+      (typeof obs.old_container_id === "string" && obs.old_container_id !== "")) &&
     isPathSha(obs.compose_artifact) &&
     typeof obs.rollback_tag === "string" &&
     ROLLBACK_TAG_RE.test(obs.rollback_tag) &&
