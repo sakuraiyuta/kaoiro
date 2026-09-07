@@ -361,6 +361,8 @@ export interface PermissionSelection {
   requested: PermissionConfiguration;
 }
 
+/** Immutable selection captured by the wrapper for one exec, not a server
+ * reconstruction from its requested pair and a reported execution_id. */
 export interface PermissionSubmission extends PermissionSelection {
   execution_id: string;
 }
@@ -394,6 +396,13 @@ export interface PermissionControlBase extends PermissionSelection {
   last_effective?: PermissionObservation;
 }
 
+/** Applying/applied/unknown bind submitted to this control's revision and raw
+ * requested pair; applied also binds effective to that submission and exec.
+ * Pending/failed may carry another selection's evidence. After a mismatch use
+ * failed + policy_mismatch, preserve actual evidence, omit rolled_back_to and
+ * retain the authorized next selection with dispatch blocked.
+ * Optional fields are omitted on the wire, never encoded as null. Required
+ * and forbidden fields follow the selected union arm. */
 export type PermissionControlExt = PermissionControlBase & (
   | {
       status: "pending";
@@ -421,6 +430,10 @@ export type PermissionControlExt = PermissionControlBase & (
       submitted?: PermissionSubmission;
       effective?: PermissionObservation;
       reason: string;
+      /** Definitive pre-application rejection only. The server derives this
+       * pair and sync.next from the accepted prior-next selection bound into
+       * the request's ledger entry, never from a wrapper-named pair or the
+       * highest lower revision. Referenced recovery targets survive pruning. */
       rolled_back_to?: PermissionConfiguration;
     }
   | {
@@ -460,8 +473,14 @@ export type SetPermissionErrorReason =
   | "revision_exhausted"
   | "persistence_failed";
 
-/** An after-join barrier, including when no settings have been saved. A
- * settled failed request is retained in control but never replayed as next. */
+/** An after-join barrier, including when no settings have been saved.
+ * Pre-application rejection retains failed control and restores the ledger's
+ * acceptance-time prior-next target. Mismatch retains authorized next, failed
+ * control and its block. Unknown retains next, submitted, reason and its block;
+ * it is never rounded to pending. Applying/applied project to pending without
+ * submitted/effective; confirmed history stays in last_effective. A block is
+ * cleared only by a newer accepted next.revision, not a newer failed control.
+ * Null/null means no saved settings; nested optional fields must be omitted. */
 export type PermissionSyncMessage = {
   version: "0";
 } & (
