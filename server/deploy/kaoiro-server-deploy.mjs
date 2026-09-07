@@ -21,6 +21,7 @@ import {
 import { basename, dirname, isAbsolute, join } from "node:path";
 
 import { computeBuildIdentity } from "../../scripts/build-identity.mjs";
+import { fsyncExistingPath } from "./kaoiro-deploy-atomic-write.mjs";
 import { BRANCH, BranchError, classify, requireRunningContainer } from "./kaoiro-deploy-branch.mjs";
 import { loadConfig } from "./kaoiro-deploy-config.mjs";
 import { dockerComposeContainerNames, dockerInspect, resolveDockerBin, runDocker } from "./kaoiro-deploy-docker.mjs";
@@ -1486,6 +1487,19 @@ export function runUpdate(flags, config) {
       // rather than silently reusing whatever is already there.
       mkdirSync(backupRoot, { recursive: true });
       mkdirSync(dir, { recursive: false });
+      // issue #322 M4 (must-fix): fsync backupRoot itself — the new
+      // directory ENTRY for `dir` — so it survives a crash the same way
+      // writeJournal below already makes the journal FILE survive one.
+      // Before any further mutation (director ruling): a failed fsync
+      // here must abort before the journal is even written, not merely
+      // logged and continued past.
+      try {
+        fsyncExistingPath(backupRoot);
+      } catch (err) {
+        fail(
+          `could not fsync ${backupRoot} after creating transaction directory ${dir} — the new directory entry may not survive a crash: ${err.message}`,
+        );
+      }
       journal = {
         schema_version: 1,
         transaction_id: transactionId,
@@ -1747,6 +1761,16 @@ export function runUpdate(flags, config) {
       fail(
         `archive at ${archivePath} contains no entries — archiving an empty volume would not be a usable backup`,
       );
+    }
+    // issue #322 M4 (must-fix): the archive's bytes were written by the
+    // `docker run ... tar` above, a process this module never opened
+    // itself — fsync it now, before recording its sha256 as a durable
+    // fact below, so a crash cannot leave the journal claiming an
+    // archive that never actually reached disk.
+    try {
+      fsyncExistingPath(archivePath);
+    } catch (err) {
+      fail(`could not fsync pre-deploy archive ${archivePath} — its bytes may not survive a crash: ${err.message}`);
     }
     const archive = { path: archivePath, sha256: sha256File(archivePath) };
 
@@ -2210,6 +2234,14 @@ export function runRollback(flags, config) {
     } catch (err) {
       fail(`forensic archive of the current (pre-restore) volume state failed verification: ${err.message}`);
     }
+    // issue #322 M4 (must-fix): same reasoning as the pre-deploy archive
+    // above — fsync before the checkpoint records this archive as a
+    // durable fact.
+    try {
+      fsyncExistingPath(forensicPath);
+    } catch (err) {
+      fail(`could not fsync forensic archive ${forensicPath} — its bytes may not survive a crash: ${err.message}`);
+    }
     journal = advancePhase(
       dir,
       journal,
@@ -2287,6 +2319,17 @@ export function runRollback(flags, config) {
       restoreVerifyOutput = execFileSync("tar", ["tvzf", restoreVerifyPath, "--numeric-owner"], { encoding: "utf8" });
     } catch (err) {
       fail(`could not verify the restored volume's contents: ${err.message}`);
+    }
+    // issue #322 M4 (must-fix): same reasoning as the other two
+    // archives — this is forensic evidence of what the restore actually
+    // produced, and must survive a crash as reliably as the volume it
+    // verifies.
+    try {
+      fsyncExistingPath(restoreVerifyPath);
+    } catch (err) {
+      fail(
+        `could not fsync restore-verify archive ${restoreVerifyPath} — its bytes may not survive a crash: ${err.message}`,
+      );
     }
     const restoredEntries = parseTarEntries(restoreVerifyOutput);
     if (!requiredEntriesMatch(restoredEntries, manifest.required_entries)) {

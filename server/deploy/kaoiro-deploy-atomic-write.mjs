@@ -15,6 +15,13 @@
 // checkpoint means for an in-flight deploy transaction is the caller's
 // job (M3 review note: "checkpoint failure -> next Docker mutation must
 // be zero" is verified at CLI integration, not here).
+//
+// Also exports `fsyncExistingPath` (issue #322 M4, must-fix): the SAME
+// durability gap applies to paths this module's own writer never
+// touches — an archive `tar`'d by a docker container onto a bind mount,
+// or a transaction directory this process just `mkdirSync`'d — where
+// nothing here controlled the write, only the fact that it needs to
+// survive a crash too.
 import { closeSync, fsyncSync, openSync, renameSync, writeSync } from "node:fs";
 import { dirname } from "node:path";
 
@@ -39,10 +46,26 @@ export function writeFileDurably(target, content, fsImpl = REAL_FS) {
     fsImpl.closeSync(fd);
   }
   fsImpl.renameSync(tmp, target);
-  const dirFd = fsImpl.openSync(dir, "r");
+  fsyncExistingPath(dir, fsImpl);
+}
+
+/** issue #322 M4 (must-fix): fsync a path this process did NOT itself
+ *  write — a docker/tar-produced archive, or a directory this process
+ *  just added an entry to (`mkdirSync`) — so its data (file) or its new
+ *  entry (directory) survives a crash the same way `writeFileDurably`'s
+ *  own steps already do. Opening with `"r"` works for both a regular
+ *  file and a directory on POSIX (Linux is this project's only deploy
+ *  target — deployment.md's runbook is systemd/Linux throughout), which
+ *  is why one function covers both call shapes instead of two. Every
+ *  step throws on failure, same contract as `writeFileDurably`: the
+ *  caller decides what a failed checkpoint means for the in-flight
+ *  transaction, this module only refuses to claim success it did not
+ *  measure. */
+export function fsyncExistingPath(path, fsImpl = REAL_FS) {
+  const fd = fsImpl.openSync(path, "r");
   try {
-    fsImpl.fsyncSync(dirFd);
+    fsImpl.fsyncSync(fd);
   } finally {
-    fsImpl.closeSync(dirFd);
+    fsImpl.closeSync(fd);
   }
 }
