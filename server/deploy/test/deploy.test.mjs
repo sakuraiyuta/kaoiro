@@ -62,7 +62,7 @@ case "$1" in
     case "$2" in
       ps)
         case "$FAKE_DOCKER_SCENARIO" in
-          stopped|running|retag-drift|running-clean-stop|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty|compose-config-renamed-service|compose-config-missing-environment-key|mount-vanishes-after-stop|system-df-fails|system-df-invalid-json|system-df-not-array)
+          stopped|running|retag-drift|running-clean-stop|running-clean-stop-retag-drift|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty|compose-config-renamed-service|compose-config-missing-environment-key|mount-vanishes-after-stop|system-df-fails|system-df-invalid-json|system-df-not-array)
             printf 'kaoiro-c1\\n' ;;
           # round 4 review B-1 (expanded): rollback's own "2+ containers,
           # refuse" guard, distinct from requireRunningContainer's own
@@ -154,7 +154,19 @@ case "$1" in
         ;;
     esac
     ;;
-  tag) exit 0 ;;
+  tag)
+    # issue #322 M2: kaoiro-server:latest is a MUTABLE tag both runUpdate's
+    # own commit retag and runRollback's own restore retag point at — a
+    # fixed canned inspect response could not reflect whichever of the two
+    # actually ran last. Recording what was last tagged onto it (read back
+    # by the inspect case below) is what lets EITHER caller's own
+    # tag-then-inspect verify see reality, the way a real docker
+    # tag/inspect roundtrip would.
+    if [ "$3" = "kaoiro-server:latest" ]; then
+      printf '%s' "$2" > "$KAOIRO_TEST_LATEST_TAG_FILE"
+    fi
+    exit 0
+    ;;
   pull) exit 0 ;;
   rmi) exit 0 ;;
   inspect)
@@ -191,8 +203,25 @@ case "$1" in
       # for update's own rollback tag.
       kaoiro-server:latest)
         case "$FAKE_DOCKER_SCENARIO" in
-          retag-drift) printf 'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\\n' ;;
-          *) printf '${OLD_IMAGE_ID}\\n' ;;
+          # running-clean-stop-retag-drift (issue #322 M2): the SAME
+          # simulated drift as retag-drift, but with a clean stop reported
+          # too — retag-drift alone is reached before the stop window
+          # (env_consistency's own abort-retag), so it never sets a clean
+          # stop expectation; commit's OWN post-stop retag needs one to
+          # get there at all.
+          retag-drift|running-clean-stop-retag-drift) printf 'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\\n' ;;
+          # issue #322 M2: reflects whatever the tag case above last wrote
+          # (real docker's own tag/inspect roundtrip), falling back to
+          # OLD_IMAGE_ID only if nothing has tagged :latest yet this run —
+          # the same default every EXISTING test that never calls tag
+          # before inspecting :latest already relied on.
+          *)
+            if [ -f "$KAOIRO_TEST_LATEST_TAG_FILE" ]; then
+              printf '%s\\n' "$(cat "$KAOIRO_TEST_LATEST_TAG_FILE")"
+            else
+              printf '${OLD_IMAGE_ID}\\n'
+            fi
+            ;;
         esac
         ;;
       *)
@@ -200,20 +229,20 @@ case "$1" in
           '{{.State.Status}}')
             case "$FAKE_DOCKER_SCENARIO" in
               stopped) printf 'exited\\n' ;;
-              running|retag-drift|running-clean-stop|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty|compose-config-renamed-service|compose-config-missing-environment-key|mount-vanishes-after-stop|system-df-fails|system-df-invalid-json|system-df-not-array)
+              running|retag-drift|running-clean-stop|running-clean-stop-retag-drift|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty|compose-config-renamed-service|compose-config-missing-environment-key|mount-vanishes-after-stop|system-df-fails|system-df-invalid-json|system-df-not-array)
                 printf 'running\\n' ;;
             esac
             ;;
           '{{.State.ExitCode}}')
             case "$FAKE_DOCKER_SCENARIO" in
-              running-clean-stop|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-archive-drifts-empty|mount-vanishes-after-stop) printf '0\\n' ;;
+              running-clean-stop|running-clean-stop-retag-drift|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-archive-drifts-empty|mount-vanishes-after-stop) printf '0\\n' ;;
               running-dirty-stop) printf '137\\n' ;;
               *) printf 'unknown\\n' ;;
             esac
             ;;
           '{{.State.OOMKilled}}')
             case "$FAKE_DOCKER_SCENARIO" in
-              running-clean-stop|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-archive-drifts-empty|mount-vanishes-after-stop) printf 'false\\n' ;;
+              running-clean-stop|running-clean-stop-retag-drift|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-archive-drifts-empty|mount-vanishes-after-stop) printf 'false\\n' ;;
               running-dirty-stop) printf 'true\\n' ;;
               *) printf 'unknown\\n' ;;
             esac
@@ -404,7 +433,7 @@ case "$1" in
         # -exec stat -c '%n %u:%g %04a' {} \\;) — only whether anything is
         # there, not what gets recorded (that comes from tar tvzf now).
         case "$FAKE_DOCKER_SCENARIO" in
-          running-clean-stop|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-broken-archive|alpine-missing|running-archive-drifts-empty) printf '/data/users.dets 1000:1000 0600\\n' ;;
+          running-clean-stop|running-clean-stop-retag-drift|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-broken-archive|alpine-missing|running-archive-drifts-empty) printf '/data/users.dets 1000:1000 0600\\n' ;;
           running-empty-vol) ;;
         esac
         exit 0
@@ -538,8 +567,14 @@ function withOverrideEnv(fn) {
   const priorDocker = process.env.KAOIRO_DEPLOY_DOCKER_BIN;
   const priorCurl = process.env.KAOIRO_DEPLOY_CURL_BIN;
   const priorHealthRevision = process.env.KAOIRO_TEST_HEALTH_REVISION;
+  const priorLatestTagFile = process.env.KAOIRO_TEST_LATEST_TAG_FILE;
   process.env.KAOIRO_DEPLOY_DOCKER_BIN = bin;
   process.env.KAOIRO_DEPLOY_CURL_BIN = curlBin;
+  // issue #322 M2: always set (not conditional like HEALTH_REVISION below)
+  // — every test's fake `kaoiro-server:latest` tag/inspect roundtrip reads
+  // and writes this same path, under this test's own `root`, so it never
+  // leaks across tests.
+  process.env.KAOIRO_TEST_LATEST_TAG_FILE = join(root, "latest-tag-id");
   // Default: "the server is already running the target" — the common
   // case every test not specifically exercising a health mismatch wants.
   // Set before the call, never mutated by this helper afterward, so a
@@ -556,6 +591,8 @@ function withOverrideEnv(fn) {
     else process.env.KAOIRO_DEPLOY_CURL_BIN = priorCurl;
     if (priorHealthRevision === undefined) delete process.env.KAOIRO_TEST_HEALTH_REVISION;
     else process.env.KAOIRO_TEST_HEALTH_REVISION = priorHealthRevision;
+    if (priorLatestTagFile === undefined) delete process.env.KAOIRO_TEST_LATEST_TAG_FILE;
+    else process.env.KAOIRO_TEST_LATEST_TAG_FILE = priorLatestTagFile;
   }
 }
 
@@ -1454,6 +1491,72 @@ test("runUpdate completes through DONE with --maintenance-approved and a clean s
   assert.equal(manifest.image_id, result.build.imageId);
   assert.equal(manifest.source_sha, headSha);
   assert.deepEqual(manifest.required_entries, result.requiredEntries);
+});
+
+// issue #322 M2 (must-fix): compose_artifact was recorded at prepare but
+// nothing re-verified it before commit's own `compose up` — an operator
+// editing docker-compose.yaml between prepare and commit/resume took
+// effect silently, unpinned to what this transaction actually approved.
+test("runUpdate refuses to resume/commit when docker-compose.yaml changed since this transaction's own prepare", () => {
+  try {
+    withScenario("running", () => runUpdate({ repo: workDir, target: headSha }, configWithOverride()));
+  } catch (err) {
+    assert.ok(err instanceof DeployError);
+  }
+  const backupRoot = join(root, "kaoiro-deploy");
+  const [transactionId] = readdirSyncNonHidden(backupRoot);
+
+  const composePath = join(workDir, "server", "docker-compose.yaml");
+  writeFileSync(composePath, "# fixture\n# drifted after prepare\n");
+
+  const logPath = join(root, "docker-calls.log");
+  process.env.KAOIRO_TEST_CALL_LOG = logPath;
+  let caught;
+  try {
+    withScenario("running-clean-stop", () =>
+      runUpdate(
+        { repo: workDir, target: headSha, transaction: transactionId, maintenanceApproved: true },
+        configWithCleanStopMeasured(),
+      ),
+    );
+  } catch (err) {
+    caught = err;
+  } finally {
+    delete process.env.KAOIRO_TEST_CALL_LOG;
+  }
+  assert.ok(caught instanceof DeployError, `expected a DeployError, got: ${caught}`);
+  assert.match(caught.message, /docker-compose\.yaml.*has changed/);
+
+  // The stop window itself already ran BEFORE this transaction reached
+  // ARCHIVED (in this same call, since it resumes straight through) —
+  // that is not what M2 is closing. What must never happen is starting
+  // the NEW (drifted) config: `compose up` is the actual mutation this
+  // check exists to prevent.
+  const log = readCallLog(logPath);
+  assert.ok(!log.some((l) => l.startsWith("compose up")), "must never call compose up against a drifted config");
+  const journal = readJournal(join(backupRoot, transactionId));
+  assert.equal(
+    journal.phase,
+    "archived",
+    "a refused compose-drift check must leave the journal at archived — 'never attempted starting', not starting with no up ever run",
+  );
+});
+
+// issue #322 M2 (must-fix): kaoiro-server:latest is a MUTABLE tag —
+// `compose up --no-build` at commit resolves whatever it currently is,
+// not necessarily what THIS transaction's own build produced (an
+// unrelated build between prepare and commit/resume would have
+// repointed it). running-clean-stop-retag-drift's fake docker
+// deliberately answers the post-tag inspect with a DIFFERENT id than
+// what was just tagged, simulating exactly that.
+test("runUpdate refuses to commit when kaoiro-server:latest cannot be pinned back to this transaction's own built image", () => {
+  assert.throws(
+    () =>
+      withScenario("running-clean-stop-retag-drift", () =>
+        runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+      ),
+    (err) => err instanceof DeployError && /could not pin kaoiro-server:latest/.test(err.message),
+  );
 });
 
 // director ruling 2026-09-06 (#306 (c3) review): a hardcoded health_url
@@ -3302,6 +3405,53 @@ test("runRollback (destructive) refuses end to end when the restored volume drif
   // AFTER that, so RESTORED itself is correctly never reached.
   const journal = readJournal(join(backupRoot, transactionId));
   assert.equal(journal.phase, "rollback_restoring");
+});
+
+// issue #322 M2 (must-fix): manifest.compose_artifact was recorded at the
+// ORIGINAL update's own prepare, but nothing re-verified it before
+// rollback's own `compose up` — the same defect M2 closed for commit,
+// applied to rollback ("Rollback has the same defect (restores the
+// image, not the compose)" per the review's own text). Checked before
+// ANY destructive step, so the wipe count below stays 0.
+test("runRollback (destructive) refuses when docker-compose.yaml changed since the original update's own prepare", () => {
+  let transactionId;
+  const backupRoot = join(root, "kaoiro-deploy");
+  withScenario("running-clean-stop", () => {
+    const update = runUpdate(
+      { repo: workDir, target: headSha, maintenanceApproved: true },
+      configWithCleanStopMeasured(),
+    );
+    transactionId = update.transactionId;
+  });
+
+  const composePath = join(workDir, "server", "docker-compose.yaml");
+  writeFileSync(composePath, "# fixture\n# drifted after the update this rollback targets\n");
+
+  const logPath = join(root, "docker-calls.log");
+  process.env.KAOIRO_TEST_CALL_LOG = logPath;
+  let caught;
+  try {
+    withScenario("running-clean-stop", () =>
+      runRollback(
+        { repo: workDir, transaction: transactionId, confirmRestore: true },
+        configWithCleanStopMeasured(),
+      ),
+    );
+  } catch (err) {
+    caught = err;
+  } finally {
+    delete process.env.KAOIRO_TEST_CALL_LOG;
+  }
+  assert.ok(caught instanceof DeployError, `expected a DeployError, got: ${caught}`);
+  assert.match(caught.message, /docker-compose\.yaml.*has changed/);
+
+  const log = readCallLog(logPath);
+  assert.ok(!log.some((l) => l.startsWith("compose stop")), "must refuse before stopping the container");
+  assert.ok(!log.some((l) => l.includes("find /data -mindepth")), "must refuse before wiping the volume");
+  // Refused before the FIRST rollback checkpoint — still "done", exactly
+  // like the multiple-containers refusal right below.
+  const journal = readJournal(join(backupRoot, transactionId));
+  assert.equal(journal.phase, "done");
 });
 
 test("runRollback (destructive) refuses when 2 or more containers currently match the service", () => {

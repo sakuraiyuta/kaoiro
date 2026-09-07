@@ -500,6 +500,15 @@ right before the stop window; steps (5)/(6) run automatically inside a second
 **Do not count server-image build time as server downtime.** The old container
 keeps running with its old image ID throughout (1)/(2).
 
+**Do not edit `server/docker-compose.yaml` between prepare and commit/resume.**
+The CLI records its sha256 at prepare and re-verifies it before the stop
+window; a change since prepare refuses the commit/resume outright (`update`
+exits non-zero, nothing is stopped) rather than starting against a compose
+file this transaction never approved. The same check applies to `rollback`
+(against the compose sha256 the ORIGINAL update recorded), before any
+destructive step. If the compose change is intentional, start a fresh
+transaction instead of resuming the old one.
+
 **Whether runner build time is downtime depends on the host installation
 shape** (unchanged — the runner is a separate system, outside issue #306's
 scope).
