@@ -242,6 +242,24 @@ jobs:
             console.log(PERSISTENCE_PATHS_BEAM_GLOB);
           ')
           docker run --rm --entrypoint /bin/sh kaoiro-server:ci -c "ls $GLOB"
+      # old_sha is read from the old image's own build info, so prove the
+      # deploy CLI's exported path exists in the image we just built. This CI
+      # build has no revision argument and intentionally reports "unknown".
+      - name: deploy CLI old-image build info
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUILD_INFO_PATH=$(node --input-type=module -e '
+            import { OLD_IMAGE_BUILD_INFO_PATH } from "./server/deploy/kaoiro-server-deploy.mjs";
+            console.log(OLD_IMAGE_BUILD_INFO_PATH);
+          ')
+          docker run --rm --entrypoint cat kaoiro-server:ci "$BUILD_INFO_PATH" > build-info.json
+          node -e '
+            const buildInfo = JSON.parse(require("fs").readFileSync("build-info.json", "utf8"));
+            if (typeof buildInfo.revision !== "string") {
+              throw new Error("build-info revision is not a string");
+            }
+          '
       # The deploy CLI reads the persistence-path manifest out of the image
       # with exactly this command and passes NO env (docs/specs/deployment.md
       # 4.3). Addressing by image id is the CLI's own property, not this

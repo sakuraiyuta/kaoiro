@@ -31,11 +31,16 @@ import { PHASE, TRANSITIONS, validateJournalAgainstStateMachine } from "./kaoiro
 import { acquireLock, releaseLock } from "./kaoiro-deploy-lock.mjs";
 import { findUnfinishedTransaction, newTransactionId } from "./kaoiro-deploy-transaction.mjs";
 
+// The pre-existing four fsyncExistingPath checkpoints have no isolated
+// integration fault path: tar verification and findUnfinishedTransaction read
+// each path first. Pinning fsync-only failures would require a CLI filesystem seam.
+
 // The compose service name in server/docker-compose.yaml. Resolved through
 // `docker compose ps`, never guessed as `<dir>-<service>-1`, so this is the
 // only place the service name itself needs to be named.
 const SERVICE = "kaoiro";
 const SHA_RE = /^[0-9a-f]{40}$/;
+export const OLD_IMAGE_BUILD_INFO_PATH = "/app/build-info.json";
 
 // クロエ round 1 review N-5: pinned (not bare `alpine`, which floats) and
 // pulled once, up front, during preflight — before the stop window opens,
@@ -81,11 +86,38 @@ function gitOutput(args, cwd) {
  *  `--dry-run` reader assume a live check ran. */
 function targetKnownLocally(target, repo) {
   try {
-    execFileSync("git", ["cat-file", "-e", `${target}^{commit}`], { cwd: repo });
+    execFileSync("git", ["cat-file", "-e", `${target}^{commit}`], { cwd: repo, stdio: "ignore" });
     return true;
   } catch {
     return false;
   }
+}
+
+// The rollback tag, manifest source_sha, and rollback health check identify
+// this image, so derive their shared revision from the image itself.
+function oldImageRevision(bin, oldImageId) {
+  let output;
+  try {
+    output = runDocker(bin, ["run", "--rm", "--entrypoint", "cat", oldImageId, OLD_IMAGE_BUILD_INFO_PATH]);
+  } catch (err) {
+    fail(
+      `could not read ${OLD_IMAGE_BUILD_INFO_PATH} from old image ${oldImageId}: ${err.message} — rebuild the image with build arguments before updating`,
+    );
+  }
+  let buildInfo;
+  try {
+    buildInfo = JSON.parse(output);
+  } catch {
+    fail(
+      `${OLD_IMAGE_BUILD_INFO_PATH} in old image ${oldImageId} is not valid JSON — rebuild the image with build arguments before updating`,
+    );
+  }
+  if (typeof buildInfo?.revision !== "string" || !SHA_RE.test(buildInfo.revision)) {
+    fail(
+      `${OLD_IMAGE_BUILD_INFO_PATH} in old image ${oldImageId} has an invalid revision ${JSON.stringify(buildInfo?.revision)} — rebuild the image with build arguments before updating`,
+    );
+  }
+  return buildInfo.revision;
 }
 
 function sha256File(path) {
@@ -1465,6 +1497,7 @@ export function runUpdate(flags, config) {
         unfinished !== null
           ? [`resume transaction ${unfinished.id} (phase: ${unfinished.journal.phase})`]
           : [
+              "git fetch origin",
               `git merge --ff-only ${target}`,
               "docker compose build",
               "docker tag <old_image_id> kaoiro-server:rollback-<old-sha>",
@@ -1540,6 +1573,10 @@ export function runUpdate(flags, config) {
       // transaction's own directory exists — so an insufficient host
       // leaves nothing behind to clean up.
       const capacity = checkCapacity(bin, container, backupRoot, config);
+      oldImageId = dockerInspect(bin, container, "{{.Image}}");
+      oldSha = oldImageRevision(bin, oldImageId);
+      const composeArtifactPath = join(serverDir, "docker-compose.yaml");
+      composeArtifact = { path: composeArtifactPath, sha256: sha256File(composeArtifactPath) };
 
       transactionId = newTransactionId();
       dir = join(backupRoot, transactionId);
@@ -1548,7 +1585,16 @@ export function runUpdate(flags, config) {
       // nothing under it to collide with), but the transaction's OWN
       // leaf directory must fail loudly on a same-second collision
       // rather than silently reusing whatever is already there.
-      mkdirSync(backupRoot, { recursive: true });
+      const createdBackupRoot = mkdirSync(backupRoot, { recursive: true });
+      if (createdBackupRoot !== undefined) {
+        try {
+          fsyncExistingPath(dirname(createdBackupRoot));
+        } catch (err) {
+          fail(
+            `could not fsync ${dirname(createdBackupRoot)} after creating ${createdBackupRoot} — the backup root entry may not survive a crash: ${err.message}`,
+          );
+        }
+      }
       mkdirSync(dir, { recursive: false });
       // issue #322 M4 (must-fix): fsync backupRoot itself — the new
       // directory ENTRY for `dir` — so it survives a crash the same way
@@ -1576,34 +1622,6 @@ export function runUpdate(flags, config) {
         ],
       };
       writeJournal(dir, journal, validateJournalAgainstStateMachine);
-
-      oldImageId = dockerInspect(bin, container, "{{.Image}}");
-      // issue #322 S2 (should-fix): was `gitOutput(["rev-parse", "HEAD"],
-      // repo)` — the LOCAL checkout's HEAD, which nothing keeps in
-      // lockstep with what `container` was actually built from (an
-      // operator can `git checkout` the repo between deploys without
-      // touching the running container; a resumed transaction runs an
-      // arbitrary time after prepare). A wrong old_sha here silently
-      // mislabels the rollback tag and archive provenance with a sha the
-      // running container never was. The running container's own
-      // `/api/health` (already this file's one source of truth for
-      // "what build is actually live", pollHealth's own contract) is
-      // asked instead; unreachable REFUSES rather than falling back to
-      // the possibly-wrong git guess — a silent wrong answer here is
-      // worse than an explicit stop before any mutation past PREFLIGHT.
-      const oldHealthUrl = resolveHealthUrl(bin, serverDir, config);
-      const oldHealth = fetchHealth(resolveCurlBin(), oldHealthUrl);
-      if (!oldHealth.ok) {
-        fail(
-          `could not reach ${oldHealthUrl} to determine the running container's own build_revision (needed as old_sha before recording anything about it): ${oldHealth.error}`,
-        );
-      }
-      if (typeof oldHealth.body.build_revision !== "string" || !SHA_RE.test(oldHealth.body.build_revision)) {
-        fail(`${oldHealthUrl} reported an unexpected build_revision: ${JSON.stringify(oldHealth.body.build_revision)}`);
-      }
-      oldSha = oldHealth.body.build_revision;
-      const composeArtifactPath = join(serverDir, "docker-compose.yaml");
-      composeArtifact = { path: composeArtifactPath, sha256: sha256File(composeArtifactPath) };
 
       // クロエ round 1 review MF-2: retagged from the RUNNING container's
       // own image id, never from `latest` — `compose build` below is
