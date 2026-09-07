@@ -100,6 +100,16 @@ case "$1" in
       # here, matching this fixture's own service name.
       config)
         case "$FAKE_DOCKER_SCENARIO" in
+          # issue #322 M3: rollback's pre-destructive recovery-pair check
+          # also confirms \`docker compose config\` itself renders (a
+          # syntax/reference error in docker-compose.yaml, distinct from
+          # M2's own sha256-drift check above it — this exercises a
+          # compose file that fails to PARSE at all, not one that merely
+          # changed).
+          rollback-compose-config-broken)
+            echo 'Error: services.kaoiro.image is required' >&2
+            exit 1
+            ;;
           # クロエ round 5 review SF-7: composeDeclaredEnv's own shape
           # guard, pinned via a compose config response naming a DIFFERENT
           # service ("kaoiro" is not present at all) and one whose service
@@ -177,6 +187,22 @@ case "$1" in
         case "$FAKE_DOCKER_SCENARIO" in
           alpine-missing) exit 1 ;;
           *) printf 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\n' ;;
+        esac
+        ;;
+      # issue #322 M3: rollback's pre-destructive recovery-pair check
+      # inspects the OLD image (by bare id, before ever tagging or
+      # touching it) to confirm it still exists. rollback-missing-old-image
+      # is the ONLY scenario where this fails — every other scenario falls
+      # through to whatever the fallback \`*)\` branch below would have
+      # answered anyway (this id is never used as a container/other-tag
+      # target in this fixture, so only \`--format {{.Id}}\` ever reaches it).
+      ${OLD_IMAGE_ID})
+        case "$FAKE_DOCKER_SCENARIO" in
+          rollback-missing-old-image)
+            echo 'Error: No such image: ${OLD_IMAGE_ID}' >&2
+            exit 1
+            ;;
+          *) printf 'sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\\n' ;;
         esac
         ;;
       # Rollback-tag verify-by-inspect (MF-2): echoes back the SAME id
@@ -3279,6 +3305,8 @@ test("runRollback (destructive) refuses when the pre-deploy archive no longer ma
   // "changed archive" scenario the mutation pin below exists to catch.
   writeFileSync(join(dir, "archive.tar.gz"), Buffer.concat([readFileSync(join(dir, "archive.tar.gz")), Buffer.from("tampered")]));
 
+  const logPath = join(root, "docker-calls.log");
+  process.env.KAOIRO_TEST_CALL_LOG = logPath;
   let caught;
   try {
     withScenario("running-clean-stop", () =>
@@ -3289,13 +3317,19 @@ test("runRollback (destructive) refuses when the pre-deploy archive no longer ma
     );
   } catch (err) {
     caught = err;
+  } finally {
+    delete process.env.KAOIRO_TEST_CALL_LOG;
   }
   assert.ok(caught instanceof DeployError);
   assert.ok(caught.message.includes("does not match its recorded sha256"));
-  // Refused BEFORE the destructive wipe — journal must not have advanced
-  // past the forensic checkpoint.
+  // issue #322 M3: refused as part of the pre-destructive recovery-pair
+  // check now — BEFORE stopping the container at all, not merely before
+  // the wipe. Journal stays at "done" (the state runUpdate itself left
+  // it in); no rollback checkpoint is ever written.
   const journal = readJournal(dir);
-  assert.equal(journal.phase, "rollback_forensic_archived");
+  assert.equal(journal.phase, "done");
+  const log = readCallLog(logPath);
+  assert.ok(!log.some((l) => l.startsWith("compose stop")), "must refuse before stopping the container");
 });
 
 // クロエ round 4 review B-1 (expanded, e3785ba3 measurement): only the
@@ -3329,6 +3363,8 @@ test("runRollback (destructive) refuses when the pre-deploy archive fails full-t
   manifest.archive.sha256 = createHash("sha256").update(corrupt).digest("hex");
   writeFileSync(manifestPath, JSON.stringify(manifest));
 
+  const logPath = join(root, "docker-calls.log");
+  process.env.KAOIRO_TEST_CALL_LOG = logPath;
   let caught;
   try {
     withScenario("running-clean-stop", () =>
@@ -3339,11 +3375,17 @@ test("runRollback (destructive) refuses when the pre-deploy archive fails full-t
     );
   } catch (err) {
     caught = err;
+  } finally {
+    delete process.env.KAOIRO_TEST_CALL_LOG;
   }
   assert.ok(caught instanceof DeployError);
   assert.ok(caught.message.includes("failed full-traversal verification"));
+  // issue #322 M3: same pre-destructive recovery-pair check as the
+  // sha256-mismatch test above — refused before stopping anything.
   const journal = readJournal(dir);
-  assert.equal(journal.phase, "rollback_forensic_archived");
+  assert.equal(journal.phase, "done");
+  const log = readCallLog(logPath);
+  assert.ok(!log.some((l) => l.startsWith("compose stop")), "must refuse before stopping the container");
 });
 
 test("runRollback (destructive) refuses when the forensic archive of the current volume state fails verification", () => {
@@ -3450,6 +3492,85 @@ test("runRollback (destructive) refuses when docker-compose.yaml changed since t
   assert.ok(!log.some((l) => l.includes("find /data -mindepth")), "must refuse before wiping the volume");
   // Refused before the FIRST rollback checkpoint — still "done", exactly
   // like the multiple-containers refusal right below.
+  const journal = readJournal(join(backupRoot, transactionId));
+  assert.equal(journal.phase, "done");
+});
+
+// issue #322 M3 (must-fix): before this fix, rollback's destructive path
+// went stop -> forensic -> wipe -> restore, first touching the old image
+// at the retag right at the end — a missing image was discovered only
+// AFTER the volume had already been wiped and restored, leaving the
+// journal at rollback_restored with nothing able to serve it. The image,
+// archive, and compose config are now verified as one recovery PAIR
+// before any of stop/forensic/wipe runs.
+test("runRollback (destructive) refuses when the old image no longer exists, before touching anything", () => {
+  let transactionId;
+  const backupRoot = join(root, "kaoiro-deploy");
+  withScenario("running-clean-stop", () => {
+    const update = runUpdate(
+      { repo: workDir, target: headSha, maintenanceApproved: true },
+      configWithCleanStopMeasured(),
+    );
+    transactionId = update.transactionId;
+  });
+
+  const logPath = join(root, "docker-calls.log");
+  process.env.KAOIRO_TEST_CALL_LOG = logPath;
+  let caught;
+  try {
+    withScenario("rollback-missing-old-image", () =>
+      runRollback(
+        { repo: workDir, transaction: transactionId, confirmRestore: true },
+        configWithCleanStopMeasured(),
+      ),
+    );
+  } catch (err) {
+    caught = err;
+  } finally {
+    delete process.env.KAOIRO_TEST_CALL_LOG;
+  }
+  assert.ok(caught instanceof DeployError, `expected a DeployError, got: ${caught}`);
+  assert.match(caught.message, /no longer exists/);
+
+  const log = readCallLog(logPath);
+  assert.ok(!log.some((l) => l.startsWith("compose stop")), "must refuse before stopping the container");
+  assert.ok(!log.some((l) => l.includes("find /data -mindepth")), "must refuse before wiping the volume");
+  const journal = readJournal(join(backupRoot, transactionId));
+  assert.equal(journal.phase, "done");
+});
+
+test("runRollback (destructive) refuses when docker-compose.yaml does not render, before touching anything", () => {
+  let transactionId;
+  const backupRoot = join(root, "kaoiro-deploy");
+  withScenario("running-clean-stop", () => {
+    const update = runUpdate(
+      { repo: workDir, target: headSha, maintenanceApproved: true },
+      configWithCleanStopMeasured(),
+    );
+    transactionId = update.transactionId;
+  });
+
+  const logPath = join(root, "docker-calls.log");
+  process.env.KAOIRO_TEST_CALL_LOG = logPath;
+  let caught;
+  try {
+    withScenario("rollback-compose-config-broken", () =>
+      runRollback(
+        { repo: workDir, transaction: transactionId, confirmRestore: true },
+        configWithCleanStopMeasured(),
+      ),
+    );
+  } catch (err) {
+    caught = err;
+  } finally {
+    delete process.env.KAOIRO_TEST_CALL_LOG;
+  }
+  assert.ok(caught instanceof DeployError, `expected a DeployError, got: ${caught}`);
+  assert.match(caught.message, /does not render/);
+
+  const log = readCallLog(logPath);
+  assert.ok(!log.some((l) => l.startsWith("compose stop")), "must refuse before stopping the container");
+  assert.ok(!log.some((l) => l.includes("find /data -mindepth")), "must refuse before wiping the volume");
   const journal = readJournal(join(backupRoot, transactionId));
   assert.equal(journal.phase, "done");
 });

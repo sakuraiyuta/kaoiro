@@ -2045,6 +2045,41 @@ export function runRollback(flags, config) {
       );
     }
 
+    // issue #322 M3 (must-fix): the recovery PAIR this rollback depends on
+    // — the old image, the pre-deploy archive, and a compose file that
+    // still renders — is verified as a WHOLE before any destructive step
+    // (stop/forensic/wipe), not discovered piecemeal after some of them
+    // have already run. Before this fix, a missing old image was first
+    // touched at the retag (well after stop -> forensic -> wipe -> restore
+    // had already happened): the CLI exited 1, but the wipe had already
+    // happened and the journal read `rollback_restored` — a state with no
+    // image left to serve the just-restored volume.
+    try {
+      dockerInspect(bin, oldImageId, "{{.Id}}");
+    } catch (err) {
+      fail(
+        `old image ${oldImageId} (this transaction's own rollback target) no longer exists — refusing before stopping or touching anything: ${err.message}`,
+      );
+    }
+    const preflightArchiveSha = sha256File(manifest.archive.path);
+    if (preflightArchiveSha !== manifest.archive.sha256) {
+      fail(
+        `pre-deploy archive at ${manifest.archive.path} does not match its recorded sha256 (expected ${manifest.archive.sha256}, got ${preflightArchiveSha}) — refusing before stopping or touching anything`,
+      );
+    }
+    try {
+      execFileSync("tar", ["tzf", manifest.archive.path]);
+    } catch (err) {
+      fail(
+        `pre-deploy archive at ${manifest.archive.path} failed full-traversal verification: ${err.message} — refusing before stopping or touching anything`,
+      );
+    }
+    try {
+      runDocker(bin, ["compose", "config"], { cwd: serverDir });
+    } catch (err) {
+      fail(`docker-compose.yaml at ${serverDir} does not render: ${err.message}`);
+    }
+
     let stoppedContainer = null;
     const currentNames = dockerComposeContainerNames(bin, serverDir, SERVICE);
     if (currentNames.length > 1) {
