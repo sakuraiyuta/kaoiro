@@ -502,6 +502,9 @@ explicit signal that this reflects refs as of the last real `git fetch`, not
 a live query. Run a real `git fetch origin` yourself first if the answer
 needs to be current.
 
+A non-dry `update` fetches `origin` inside `runBuild` before its fast-forward
+merge. The dry-run plan includes that future fetch without performing it.
+
 **Separate prepare (no downtime) from commit (the stop window)** — steps
 (1)/(2) below now run automatically, inside one `update` invocation, ending
 right before the stop window; steps (5)/(6) run automatically inside a second
@@ -574,14 +577,18 @@ continuing. Recorded in the transaction's `journal.json`
 old image ID, rollback tag, old SHA, compose artifact SHA. Nothing to run
 manually.
 
-**The old SHA comes from the running container's own `/api/health`
-(issue #322 S2), never `git rev-parse HEAD` in the local checkout.** Nothing
-keeps the checkout in lockstep with what the container was actually built
-from — an operator can `git checkout` between deploys without touching the
-running container, and a resumed transaction runs an arbitrary time after
-prepare. `update` refuses outright if that health check is unreachable or
-does not report a valid `build_revision`, rather than silently falling back
-to a possibly-wrong git guess.
+**The old SHA comes from the old image's own `/app/build-info.json` (issue
+#322 S2), never `git rev-parse HEAD` in the local checkout or the running
+container's health endpoint.** `update` reads it without networking:
+
+```sh
+docker run --rm --entrypoint cat <old-image-id> /app/build-info.json
+```
+
+It requires `revision` to be a full 40-hex SHA. A pre-build-info image, a
+missing file, or a build with no revision is refused before the transaction
+directory is created; rebuild the old image with build arguments before
+updating rather than silently naming a rollback after an unrelated checkout.
 
 **(2) Prepare the server image (automatic, no downtime)**
 

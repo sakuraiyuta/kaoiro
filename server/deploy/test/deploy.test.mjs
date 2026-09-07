@@ -25,6 +25,7 @@ import {
   DeployError,
   deploymentLockKey,
   hasPriorTransactions,
+  OLD_IMAGE_BUILD_INFO_PATH,
   parseArgs,
   parseTarEntries,
   pruneOldTransactions,
@@ -430,6 +431,22 @@ case "$1" in
         fi
         exit 0
         ;;
+      *"${OLD_IMAGE_BUILD_INFO_PATH}"*)
+        case "$*" in
+          *"${OLD_IMAGE_ID}"*)
+            if [ "$KAOIRO_TEST_OLD_BUILD_INFO" = "__missing__" ]; then
+              echo "cat: ${OLD_IMAGE_BUILD_INFO_PATH}: No such file or directory" >&2
+              exit 1
+            fi
+            if [ -n "$KAOIRO_TEST_OLD_BUILD_INFO" ]; then
+              printf '%s\\n' "$KAOIRO_TEST_OLD_BUILD_INFO"
+            else
+              printf '{"revision":"%s"}\\n' "$KAOIRO_TEST_OLD_IMAGE_REVISION"
+            fi
+            ;;
+          *) exit 1 ;;
+        esac
+        ;;
       # issue #322 M5: the module-presence PROBE (ls the beam file via
       # /bin/sh, entirely separate from the eval call below) — matched on
       # the beam glob's own filename (unique to this one call in the
@@ -629,15 +646,9 @@ afterEach(() => {
 // would make resolveBackupRoot() fall back to the real $HOME, coupling
 // this test's outcome to whatever happens to exist there.
 //
-// issue #322 S2: health_url is ALSO pinned here (never null) — runUpdate
-// now derives old_sha from the RUNNING container's own health endpoint
-// during prepare (not just the later post-commit poll), so every test
-// using this config needs a resolvable health_url by default, the same
-// way configWithCleanStopMeasured's own explicit override already did
-// for a narrower set of tests. A test that specifically wants
-// `docker compose port`'s own derivation/failure paths overrides this
-// field itself (KAOIRO_DEPLOY_CURL_BIN never actually dials it either
-// way).
+// This fixed override means runUpdate does not exercise compose-port
+// derivation. resolveHealthUrl's five direct tests cover that source of
+// truth; prepare no longer reads health at all.
 function configWithOverride() {
   return {
     ...DEFAULT_CONFIG,
@@ -672,6 +683,7 @@ function withOverrideEnv(fn) {
   const priorCurl = process.env.KAOIRO_DEPLOY_CURL_BIN;
   const priorHealthRevision = process.env.KAOIRO_TEST_HEALTH_REVISION;
   const priorLatestTagFile = process.env.KAOIRO_TEST_LATEST_TAG_FILE;
+  const priorOldImageRevision = process.env.KAOIRO_TEST_OLD_IMAGE_REVISION;
   process.env.KAOIRO_DEPLOY_DOCKER_BIN = bin;
   process.env.KAOIRO_DEPLOY_CURL_BIN = curlBin;
   // issue #322 M2: always set (not conditional like HEALTH_REVISION below)
@@ -679,6 +691,7 @@ function withOverrideEnv(fn) {
   // and writes this same path, under this test's own `root`, so it never
   // leaks across tests.
   process.env.KAOIRO_TEST_LATEST_TAG_FILE = join(root, "latest-tag-id");
+  process.env.KAOIRO_TEST_OLD_IMAGE_REVISION = headSha;
   // Default: "the server is already running the target" — the common
   // case every test not specifically exercising a health mismatch wants.
   // Set before the call, never mutated by this helper afterward, so a
@@ -697,6 +710,8 @@ function withOverrideEnv(fn) {
     else process.env.KAOIRO_TEST_HEALTH_REVISION = priorHealthRevision;
     if (priorLatestTagFile === undefined) delete process.env.KAOIRO_TEST_LATEST_TAG_FILE;
     else process.env.KAOIRO_TEST_LATEST_TAG_FILE = priorLatestTagFile;
+    if (priorOldImageRevision === undefined) delete process.env.KAOIRO_TEST_OLD_IMAGE_REVISION;
+    else process.env.KAOIRO_TEST_OLD_IMAGE_REVISION = priorOldImageRevision;
   }
 }
 
@@ -708,6 +723,17 @@ function withScenario(scenario, fn) {
   } finally {
     if (prior === undefined) delete process.env.FAKE_DOCKER_SCENARIO;
     else process.env.FAKE_DOCKER_SCENARIO = prior;
+  }
+}
+
+function withOldBuildInfo(value, fn) {
+  const prior = process.env.KAOIRO_TEST_OLD_BUILD_INFO;
+  process.env.KAOIRO_TEST_OLD_BUILD_INFO = value;
+  try {
+    return fn();
+  } finally {
+    if (prior === undefined) delete process.env.KAOIRO_TEST_OLD_BUILD_INFO;
+    else process.env.KAOIRO_TEST_OLD_BUILD_INFO = prior;
   }
 }
 
@@ -1119,6 +1145,7 @@ test("runUpdate --dry-run reports the plan", () => {
   assert.equal(result.dryRun, true);
   assert.equal(result.container, "kaoiro-c1");
   assert.equal(result.unfinishedTransactionId, null);
+  assert.equal(result.wouldRun[0], "git fetch origin");
   assert.ok(result.wouldRun.some((line) => line.includes("compose stop")));
   // issue #322 S1: fetched is always false (dry-run never fetches), and
   // headSha is workDir's own HEAD (present since clone), so it reads as
@@ -1170,87 +1197,46 @@ test("runUpdate --dry-run refuses --transaction", () => {
   );
 });
 
-// issue #322 S2 (should-fix): old_sha used to come from `git rev-parse
-// HEAD` in the local checkout — nothing keeps that in lockstep with
-// what the RUNNING container was actually built from. Set
-// KAOIRO_TEST_HEALTH_REVISION to a DIFFERENT valid sha than headSha
-// (the checkout's own HEAD) so this test can tell which source the code
-// actually used. old_sha is recorded at the OLD_IMAGE_SAVED phase
-// during PREPARE — no --maintenance-approved needed, and no need to
-// drive the fixture through the LATER post-commit health poll (which
-// polls for the TARGET's own build_revision, a separate concern this
-// test does not exercise).
-test("runUpdate derives old_sha from the running container's own health endpoint, not git rev-parse HEAD", () => {
-  const healthReportedOldSha = "b".repeat(40);
-  const priorHealthRevision = process.env.KAOIRO_TEST_HEALTH_REVISION;
-  process.env.KAOIRO_TEST_HEALTH_REVISION = healthReportedOldSha;
-  try {
-    let caught;
+test("runUpdate derives old_sha from the old image build info, not git rev-parse HEAD", () => {
+  const imageRevision = "b".repeat(40);
+  let caught;
+  withOldBuildInfo(JSON.stringify({ revision: imageRevision }), () => {
     try {
       withScenario("running", () => runUpdate({ repo: workDir, target: headSha }, configWithOverride()));
     } catch (err) {
       caught = err;
     }
-    assert.ok(caught instanceof DeployError, "must still stop at the maintenance gate without approval");
-    const backupRoot = join(root, "kaoiro-deploy");
-    const [transactionDir] = readdirSyncNonHidden(backupRoot);
-    const journal = readJournal(join(backupRoot, transactionDir));
-    const oldEntry = journal.history.find((e) => e.phase === "old_image_saved");
-    assert.equal(oldEntry.observation.old_sha, healthReportedOldSha);
-    assert.notEqual(oldEntry.observation.old_sha, headSha, "must not have fallen back to git rev-parse HEAD");
-    assert.equal(oldEntry.observation.rollback_tag, `kaoiro-server:rollback-${healthReportedOldSha}`);
-  } finally {
-    if (priorHealthRevision === undefined) delete process.env.KAOIRO_TEST_HEALTH_REVISION;
-    else process.env.KAOIRO_TEST_HEALTH_REVISION = priorHealthRevision;
-  }
-});
-
-// issue #322 S2: an unparseable/unexpected build_revision (the
-// "no server up yet" sentinel FAKE_CURL prints when
-// KAOIRO_TEST_HEALTH_REVISION is unset — never a real 40-hex sha)
-// refuses rather than silently falling back to a git-derived guess.
-// Journal never leaves PREFLIGHT: this runs before the transaction
-// records anything durable about old_sha.
-test("runUpdate refuses when the running container's health does not report a valid build_revision", () => {
-  const priorHealthRevision = process.env.KAOIRO_TEST_HEALTH_REVISION;
-  // withOverrideEnv's own default fills in headSha whenever this var is
-  // undefined (the common "already at target" case) — an explicit
-  // non-sha value is required to actually reach the "unexpected shape"
-  // branch, `delete` alone gets silently overridden back to headSha.
-  process.env.KAOIRO_TEST_HEALTH_REVISION = "not-a-real-sha";
-  let caught;
-  try {
-    withScenario("running", () => runUpdate({ repo: workDir, target: headSha }, configWithOverride()));
-  } catch (err) {
-    caught = err;
-  } finally {
-    if (priorHealthRevision === undefined) delete process.env.KAOIRO_TEST_HEALTH_REVISION;
-    else process.env.KAOIRO_TEST_HEALTH_REVISION = priorHealthRevision;
-  }
-  assert.ok(caught instanceof DeployError);
+  });
+  assert.ok(caught instanceof DeployError, "must still stop at the maintenance gate without approval");
   const backupRoot = join(root, "kaoiro-deploy");
   const [transactionDir] = readdirSyncNonHidden(backupRoot);
   const journal = readJournal(join(backupRoot, transactionDir));
-  assert.equal(journal.phase, "preflight");
+  const oldEntry = journal.history.find((e) => e.phase === "old_image_saved");
+  assert.equal(oldEntry.observation.old_sha, imageRevision);
+  assert.notEqual(oldEntry.observation.old_sha, headSha, "must not have fallen back to git rev-parse HEAD");
+  assert.equal(oldEntry.observation.rollback_tag, `kaoiro-server:rollback-${imageRevision}`);
 });
 
-// issue #322 S2: a genuine connection failure (not merely an
-// unexpected body) also refuses rather than falling back.
-test("runUpdate refuses when the running container's health endpoint is unreachable", () => {
-  process.env.KAOIRO_TEST_HEALTH_CURL_FAIL = "1";
-  let caught;
-  try {
-    withScenario("running", () => runUpdate({ repo: workDir, target: headSha }, configWithOverride()));
-  } catch (err) {
-    caught = err;
-  } finally {
-    delete process.env.KAOIRO_TEST_HEALTH_CURL_FAIL;
-  }
-  assert.ok(caught instanceof DeployError);
-  const backupRoot = join(root, "kaoiro-deploy");
-  const [transactionDir] = readdirSyncNonHidden(backupRoot);
-  const journal = readJournal(join(backupRoot, transactionDir));
-  assert.equal(journal.phase, "preflight");
+test("runUpdate refuses an old image build info revision that is not a full SHA before creating a transaction", () => {
+  assert.throws(
+    () =>
+      withOldBuildInfo(JSON.stringify({ revision: "unknown" }), () =>
+        withScenario("running", () => runUpdate({ repo: workDir, target: headSha }, configWithOverride())),
+      ),
+    (err) => err instanceof DeployError && /invalid revision/.test(err.message),
+  );
+  assert.deepEqual(readdirSyncNonHidden(join(root, "kaoiro-deploy")), []);
+});
+
+test("runUpdate refuses a pre-build-info old image before creating a transaction", () => {
+  assert.throws(
+    () =>
+      withOldBuildInfo("__missing__", () =>
+        withScenario("running", () => runUpdate({ repo: workDir, target: headSha }, configWithOverride())),
+      ),
+    (err) => err instanceof DeployError && new RegExp(OLD_IMAGE_BUILD_INFO_PATH).test(err.message),
+  );
+  assert.deepEqual(readdirSyncNonHidden(join(root, "kaoiro-deploy")), []);
 });
 
 // クロエ round 1 review N-5: alpine is pulled, pinned to alpine:3, during
