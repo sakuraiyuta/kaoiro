@@ -430,20 +430,55 @@ case "$1" in
         fi
         exit 0
         ;;
+      # issue #322 M5: the module-presence PROBE (ls the beam file via
+      # /bin/sh, entirely separate from the eval call below) — matched on
+      # the beam glob's own filename (unique to this one call in the
+      # fixture). KAOIRO_TEST_BEAM_ABSENT=1 simulates a pre-#310 TARGET
+      # image; KAOIRO_TEST_OLD_BEAM_ABSENT=1 simulates a pre-#310 OLD
+      # image (the id this probe is called with — \${OLD_IMAGE_ID} — is
+      # what tells the two apart, the same distinction the CLI's own
+      # M5 fix makes by calling this probe once per image).
+      # KAOIRO_TEST_BEAM_PROBE_EXIT set simulates the probe ITSELF
+      # failing (image cannot start, daemon unreachable) — a hard
+      # DeployError, not skipped, per M5's own fail-closed design.
+      # Defaults to "present" for BOTH images, matching every EXISTING
+      # test's assumption that the eval call below actually runs.
+      *"PersistencePaths.beam"*)
+        if [ -n "$KAOIRO_TEST_BEAM_PROBE_EXIT" ]; then
+          exit "$KAOIRO_TEST_BEAM_PROBE_EXIT"
+        fi
+        case "$*" in
+          *"${OLD_IMAGE_ID}"*)
+            if [ "$KAOIRO_TEST_OLD_BEAM_ABSENT" = "1" ]; then
+              printf 'absent\\n'
+            else
+              printf 'present\\n'
+            fi
+            ;;
+          *)
+            if [ "$KAOIRO_TEST_BEAM_ABSENT" = "1" ]; then
+              printf 'absent\\n'
+            else
+              printf 'present\\n'
+            fi
+            ;;
+        esac
+        ;;
       # issue #220 absorption: the target image's own persistence-path
       # eval — matched on the entrypoint string alone (unique to this
       # call in the whole fixture), regardless of image id or the exact
       # eval expression content. KAOIRO_TEST_EVAL_EXIT=1 simulates the
-      # querying module not having landed on this image (a pre-#310
-      # image, or an old image rollback targets) — the fake's own
-      # "eval process itself failed" outcome, distinct from a malformed
-      # 0-exit output (KAOIRO_TEST_EVAL_OUTPUT set to something that is
-      # not a valid JSON array). Defaults to ONE agreeing store, matching
-      # the compose/container defaults above and below, so scenarios that
-      # do not care about env consistency see zero disagreement. It used
-      # to default to \`[]\`, which encoded the very premise クロエ #310
-      # round 1 S-1 rejected — an empty manifest sailing through as a
-      # clean result.
+      # eval process itself failing on an image the beam probe above
+      # already reported present (issue #322 M5: a hard DeployError now,
+      # never a skip — see imageHasPersistencePathsModule's own doc
+      # comment for why the module's presence is no longer inferred from
+      # THIS call's exit code at all). KAOIRO_TEST_EVAL_OUTPUT overrides
+      # the 0-exit body for the malformed-shape tests. Defaults to ONE
+      # agreeing store, matching the compose/container defaults above and
+      # below, so scenarios that do not care about env consistency see
+      # zero disagreement. It used to default to \`[]\`, which encoded the
+      # very premise クロエ #310 round 1 S-1 rejected — an empty manifest
+      # sailing through as a clean result.
       *"/app/bin/kaoiro_server"*)
         if [ "$KAOIRO_TEST_EVAL_EXIT" = "1" ]; then
           exit 1
@@ -660,12 +695,23 @@ function withCallLog(scenario, fn) {
 // the running container's effective env independently. Undefined values
 // are deleted rather than set, so a test only overriding one of the four
 // leaves the others at FAKE_DOCKER's own defaults (one agreeing store).
-function withEnvConsistencyFixture({ evalExit, evalOutput, composeEnvJson, containerEnvJson } = {}, fn) {
+function withEnvConsistencyFixture(
+  { evalExit, evalOutput, composeEnvJson, containerEnvJson, beamAbsent, oldBeamAbsent, beamProbeExit } = {},
+  fn,
+) {
   const vars = {
     KAOIRO_TEST_EVAL_EXIT: evalExit,
     KAOIRO_TEST_EVAL_OUTPUT: evalOutput,
     KAOIRO_TEST_COMPOSE_ENV_JSON: composeEnvJson,
     KAOIRO_TEST_CONTAINER_ENV_JSON: containerEnvJson,
+    // issue #322 M5: separate from evalExit above — the module-presence
+    // probe (a DIFFERENT docker call, see the fake script's own
+    // "PersistencePaths.beam" case) defaults to reporting "present" for
+    // BOTH the target and old image, so every test not specifically
+    // about M5 reaches the eval call at all.
+    KAOIRO_TEST_BEAM_ABSENT: beamAbsent,
+    KAOIRO_TEST_OLD_BEAM_ABSENT: oldBeamAbsent,
+    KAOIRO_TEST_BEAM_PROBE_EXIT: beamProbeExit,
   };
   const prior = {};
   for (const [key, value] of Object.entries(vars)) {
@@ -1055,9 +1101,15 @@ test("runUpdate stops at the maintenance gate without --maintenance-approved, bu
 
 // --- issue #220 absorption -----------------------------------------------
 
-test("runUpdate records env_consistency as skipped when the target image's own eval process fails", () => {
+// issue #322 M5 (must-fix): "the module is absent" is now decided by a
+// SEPARATE beam-file probe, not by whether the eval call itself failed
+// (see imageHasPersistencePathsModule's own doc comment for the measured
+// reason: eval boots the full release and fails on missing env vars
+// BEFORE the module lookup, for every real invocation, so its own exit
+// code could never distinguish "absent" from "OOM/daemon failure").
+test("runUpdate records env_consistency as skipped when the target image's beam probe reports the module absent", () => {
   const result = withScenario("running-clean-stop", () =>
-    withEnvConsistencyFixture({ evalExit: "1" }, () =>
+    withEnvConsistencyFixture({ beamAbsent: "1" }, () =>
       runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
     ),
   );
@@ -1065,7 +1117,66 @@ test("runUpdate records env_consistency as skipped when the target image's own e
   const backupRoot = join(root, "kaoiro-deploy");
   const manifest = readManifest(join(backupRoot, result.transactionId));
   assert.equal(manifest.env_consistency.skipped, true);
-  assert.ok(manifest.env_consistency.reason.includes("persistence-path eval failed"));
+  assert.ok(manifest.env_consistency.reason.includes("has no"));
+});
+
+test("runUpdate throws (never skips) when eval fails on an image the beam probe reports has the module", () => {
+  assert.throws(
+    () =>
+      withScenario("running-clean-stop", () =>
+        withEnvConsistencyFixture({ evalExit: "1" }, () =>
+          runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+        ),
+      ),
+    (err) => err instanceof DeployError && /has the persistence-paths module but its eval call failed/.test(err.message),
+  );
+});
+
+test("runUpdate throws when the module-presence probe itself fails (image start or daemon failure)", () => {
+  assert.throws(
+    () =>
+      withScenario("running-clean-stop", () =>
+        withEnvConsistencyFixture({ beamProbeExit: "125" }, () =>
+          runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+        ),
+      ),
+    (err) => err instanceof DeployError && /could not probe image/.test(err.message),
+  );
+});
+
+// issue #322 M5 (must-fix, second half): default_path came from the
+// TARGET image's own manifest even for the OLD (currently running)
+// container's fallback — an assumption, not a measurement, unless old
+// and new happen to compile the same default. When the old image CAN
+// answer (its own beam probe reports present), checkEnvConsistency now
+// prefers ITS default_path and records assumed_default_source:
+// "old_image" (pinned above, in the status tests). This test covers the
+// other branch: the old image cannot answer (a pre-#310 old image is
+// the common real case), so the fallback to the target's own
+// default_path is used, and the observation says so explicitly.
+test("runUpdate falls back to the target image's own default_path, and records the assumption, when the old image's beam probe reports absent", () => {
+  const result = withScenario("running-clean-stop", () =>
+    withEnvConsistencyFixture(
+      {
+        // Declare the same path FAKE_DOCKER's default eval output gives
+        // as the target image's own default_path, so falling back to it
+        // (this test's whole point) is a match, not a genuine migration
+        // — that failure mode already has its own dedicated tests.
+        composeEnvJson: '{"KAOIRO_USERS_PATH":"/tmp/kaoiro-dets/users.dets"}',
+        containerEnvJson: "[]",
+        oldBeamAbsent: "1",
+      },
+      () => runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+    ),
+  );
+  assert.equal(result.phase, "done");
+  const backupRoot = join(root, "kaoiro-deploy");
+  const manifest = readManifest(join(backupRoot, result.transactionId));
+  const entry = manifest.env_consistency.entries.KAOIRO_USERS_PATH;
+  assert.equal(entry.assumed_default_source, "target_image");
+  assert.equal(entry.container_source, "default");
+  assert.equal(entry.container_effective, "/tmp/kaoiro-dets/users.dets");
+  assert.equal(entry.match, true);
 });
 
 test("runUpdate throws when the target image's eval exits 0 but does not print valid JSON", () => {
@@ -2887,6 +2998,11 @@ test("status surfaces an unfinished transaction's id and phase", () => {
         compose: "/var/lib/kaoiro/users.dets",
         container_effective: "/var/lib/kaoiro/users.dets",
         container_source: "env",
+        // issue #322 M5: the old image's own beam probe defaults to
+        // "present" in this fixture too, so its own default_path answers
+        // this — the common case (a routine update, not the first-ever
+        // #310 upgrade).
+        assumed_default_source: "old_image",
         declared: null,
         match: true,
       },
@@ -2933,6 +3049,7 @@ test("status lists a completed transaction with its source/target SHA and comple
         compose: "/var/lib/kaoiro/users.dets",
         container_effective: "/var/lib/kaoiro/users.dets",
         container_source: "env",
+        assumed_default_source: "old_image",
         declared: null,
         match: true,
       },

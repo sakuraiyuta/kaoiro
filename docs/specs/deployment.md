@@ -578,8 +578,18 @@ container keeps running with its old image ID; failure here has zero impact
 on the live system.
 
 **Issue #220 absorption — persistence-path / env consistency.** The target
-image exposes `KaoiroServer.PersistencePaths.manifest/0` (issue #310), and
-`update` queries it by image ID:
+image exposes `KaoiroServer.PersistencePaths.manifest/0` (issue #310).
+`update` first checks whether the image even carries that module — a plain
+`ls` of its own compiled beam file inside the image, needing no config boot
+at all:
+
+```sh
+docker run --rm --entrypoint /bin/sh <image_id> -c \
+  'ls /app/lib/kaoiro_server-*/ebin/Elixir.KaoiroServer.PersistencePaths.beam \
+    >/dev/null 2>&1 && echo present || echo absent'
+```
+
+Only when that reports `present` does `update` go on to query the manifest:
 
 ```sh
 docker run --rm --entrypoint /app/bin/kaoiro_server <image_id> eval \
@@ -590,36 +600,59 @@ docker run --rm --entrypoint /app/bin/kaoiro_server <image_id> eval \
 exactly the keys `store` (string), `env` (the persistence-path env var name),
 `default_file` (the bare filename under the fallback dir), and `default_path`
 (the ABSOLUTE path `runtime.exs`'s own fallback resolves to when `env` is
-unset — A-MF-2 below). Two DIFFERENT failure modes, handled differently: the
-eval **process** exiting non-zero means this module has not landed on this
-image (a pre-#310 image, or an old image a rollback targets) — recorded as
-`env_consistency: {skipped: true, reason}`, never a failure. The eval process
-exiting **0 but printing anything else** (not a JSON array, an element
-missing one of the four keys, an empty `env`/`default_path`) is treated as
-actively wrong, not absent — `update` throws `DeployError` rather than
-skipping, the same way `docker compose config` returning garbage does
-elsewhere in this section.
+unset — A-MF-2 below). issue #322 M5: module presence is decided FIRST, by
+the beam-file check above, never by the eval call's own exit code — passing
+no env vars to `eval` makes `runtime.exs`'s config raise
+(`SECRET_KEY_BASE`/`PHX_HOST` missing) fire identically on EVERY real
+invocation regardless of whether the module exists, so treating any eval
+failure as "module absent" was fail-open by construction: it could never
+distinguish an absent module from an OOM, a daemon hiccup, or any other
+infrastructure failure. Now: the beam file absent means this module has not
+landed on this image (a pre-#310 image, or an old image a rollback targets)
+— recorded as `env_consistency: {skipped: true, reason}`, never a failure.
+The beam file present but the eval process failing (non-zero exit, exiting 0
+but printing anything other than a valid JSON array, an element missing one
+of the four keys, an empty `env`/`default_path`) is always treated as
+actively wrong — `update` throws `DeployError` rather than skipping, the
+same way `docker compose config` returning garbage does elsewhere in this
+section. Also fail-closed: the presence probe's own `docker run` failing to
+even start (image missing, daemon unreachable) throws `DeployError` too,
+distinct from its controlled `present`/`absent` answer.
 
-Two image-side conditions make that probe work at all, and the `server-image`
-CI job runs this exact command against the image it just built to keep both
-pinned. `config/runtime.exs` skips its required-variable raises when
-`RELEASE_COMMAND == "eval"` — the probe deliberately passes no env, so the
-production guard would otherwise abort it and every image would read as
-pre-#310, permanently. And the runtime image installs `libsctp1`: without it
-the VM prints an esock warning to STDOUT ahead of the JSON, which this
-section treats as actively wrong rather than absent, so every update would
-fail. Both apply to any custom image built from this Dockerfile.
+Two image-side conditions make the eval-based manifest query work at all (the
+beam-file presence check above needs neither — it boots no config and starts
+no VM), and the `server-image` CI job runs this exact command against the
+image it just built to keep both pinned. `config/runtime.exs` skips its
+required-variable raises when `RELEASE_COMMAND == "eval"` — the query
+deliberately passes no env, so the production guard would otherwise abort it
+and every present-module image would read as actively wrong. And the runtime
+image installs `libsctp1`: without it the VM prints an esock warning to
+STDOUT ahead of the JSON, which this section treats as actively wrong rather
+than absent, so every update would fail. Both apply to any custom image
+built from this Dockerfile.
 
 `update` then, for every reported persistence-path env var, compares
 **compose's resolved
 declaration** against **the currently-running (old) container's EFFECTIVE
-path for that store** — the container's own env value if it is set, else the
-image's own documented `default_path` for it (what the app itself falls back
-to) — not the literal `.env` file, recorded separately as `declared` for
-reference only (the bundled `docker-compose.yaml` sets every canonical
-persistence-path var as a literal `environment:` entry, so `.env`'s own line
-legitimately differs on every correctly-configured host; folding it into the
-comparison would fail-close every update).
+path for that store** — the container's own env value if it is set, else a
+`default_path` for it (what the app itself falls back to) — not the literal
+`.env` file, recorded separately as `declared` for reference only (the
+bundled `docker-compose.yaml` sets every canonical persistence-path var as a
+literal `environment:` entry, so `.env`'s own line legitimately differs on
+every correctly-configured host; folding it into the comparison would
+fail-close every update).
+
+**Which image's `default_path` (issue #322 M5).** Substituting the TARGET
+image's own manifest value for the OLD container's fallback is only a
+measurement if the old and new images compile the SAME default for that
+store — not guaranteed across a #310 manifest change. `update` runs the same
+beam-presence-then-manifest probe above against the OLD image too, and
+prefers ITS `default_path` when it can answer at all; only when the old
+image cannot answer (no beam file — the common case on the very first #310
+upgrade) does it fall back to the target's own value. Each entry records
+`assumed_default_source` (`"old_image"` when measured this way, or
+`"target_image"` when it fell back), so the observation never silently
+passes an assumption off as a measurement.
 
 **Effective, not raw env, on purpose.** On the first application that adds a
 NEW persistence-path var to compose, the old container was never recreated
