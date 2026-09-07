@@ -237,7 +237,7 @@ describe("AgentDetail log render window (#184)", () => {
       onClose: vi.fn(),
     });
     expect(target.querySelectorAll(".transcript-entry").length).toBe(LOG_WINDOW_SIZE);
-    expect(target.querySelector(".load-earlier")?.textContent).toContain("50");
+    expect(target.querySelector(".load-earlier")?.textContent).toContain("(50 件)");
   });
 
   it("「以前のログを表示」で全件展開する", async () => {
