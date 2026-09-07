@@ -123,12 +123,13 @@ function bundledCodexVersion(): string {
   const resolver = (import.meta as ImportMeta & {
     resolve?: (specifier: string) => string;
   }).resolve;
+  const packageUrl = resolver?.("@openai/codex/package.json");
+  if (packageUrl === undefined) {
+    throw new Error("import.meta.resolve is required to locate bundled @openai/codex");
+  }
   const codexPackage = JSON.parse(
     readFileSync(
-      fileURLToPath(
-        resolver?.("@openai/codex/package.json") ??
-          new URL("../node_modules/@openai/codex/package.json", import.meta.url),
-      ),
+      fileURLToPath(packageUrl),
       "utf8",
     ),
   ) as { version?: unknown };

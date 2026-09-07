@@ -5,6 +5,9 @@ import { defineConfig } from "vitest/config";
 // against fresh code without a prior `pnpm -r build` (package.json main
 // points at dist for runtime).
 export default defineConfig({
+  define: {
+    "import.meta.resolve": "globalThis.__kaoiroTestImportMetaResolve",
+  },
   resolve: {
     alias: {
       "@kaoiro/wrapper-core": fileURLToPath(
@@ -17,5 +20,6 @@ export default defineConfig({
   },
   test: {
     include: ["test/**/*.test.ts"],
+    setupFiles: ["test/vitest.setup.ts"],
   },
 });
