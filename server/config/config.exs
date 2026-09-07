@@ -65,6 +65,13 @@ config :kaoiro_server,
     sweep_interval_ms: 60_000
   ]
 
+# Whether this node runs the detector at all. ON everywhere but `mix test`:
+# the sweep above is a wall-clock timer, so under test it fires in whatever
+# test happens to be running and broadcasts a conversation an EARLIER test
+# left behind into that test's socket (issue #320). Tests that want the
+# detector start their own — KaoiroServer.Application.quagmire_watch_children/1.
+config :kaoiro_server, start_quagmire_watch: true
+
 # Configure the endpoint
 config :kaoiro_server, KaoiroServerWeb.Endpoint,
   url: [host: "localhost"],

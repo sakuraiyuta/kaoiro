@@ -475,6 +475,13 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     # Pins the resweep wiring: without the cast the detector would not notice
     # the lowered threshold until its own 60-second tick.
     test "lowering the threshold makes the detector announce without waiting for a tick" do
+      # issue #320: this node runs no detector — its 60-second sweep fired
+      # inside whatever test happened to be running and broadcast a
+      # conversation an earlier test had left behind. Start the PRODUCTION
+      # spec here, so the on_notice wiring this test depends on is still the
+      # one the release uses.
+      start_supervised!(hd(KaoiroServer.Application.quagmire_watch_children(true)))
+
       {a, b, _c} = rally_pair()
       operator = join_as(:operator)
       assert_push "snapshot", %{"agents" => _}
