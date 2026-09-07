@@ -308,6 +308,64 @@ function isValidPersistencePathEntry(entry) {
   );
 }
 
+// issue #322 M5: the beam file the persistence-paths module compiles to,
+// inside the release layout the Dockerfile assembles under /app —
+// measured live against a real image (`docker run ... ls
+// /app/lib/kaoiro_server-*/ebin/`) rather than guessed from release
+// layout docs.
+const PERSISTENCE_PATHS_BEAM_GLOB =
+  "/app/lib/kaoiro_server-*/ebin/Elixir.KaoiroServer.PersistencePaths.beam";
+
+/** issue #322 M5 (must-fix): queryPersistencePaths below used to treat
+ *  EVERY eval failure as "the module is absent" — but `eval` boots the
+ *  FULL release first (runtime.exs's Config.Reader), and that boot fails
+ *  on missing SECRET_KEY_BASE/PHX_HOST/... BEFORE the module lookup ever
+ *  runs, for EVERY invocation (this CLI never passes those env vars: the
+ *  list it queries is static, not env-dependent). Measured live against
+ *  a real pre-#310 image built from df416447: `eval` with no env prints
+ *  `RuntimeError: environment variable SECRET_KEY_BASE is missing` — a
+ *  config-boot failure, not `UndefinedFunctionError`, so the ORIGINAL
+ *  eval-based skip logic could never have told a genuinely absent module
+ *  apart from a live OOM, image corruption, or daemon failure; it was
+ *  fail-OPEN by construction.
+ *
+ *  This checks module presence a different way: `ls` the module's own
+ *  beam file, which needs no config boot at all. `--rm --entrypoint
+ *  /bin/sh ... -c` (a `run`, not the CLI's own `eval` verb) reads a
+ *  purely-inert file already sitting in the image, matching the
+ *  read-only spirit `--dry-run` already holds every OTHER docker call to
+ *  in this file — this one is simply never reached from --dry-run at
+ *  all (queryPersistencePaths' only caller is inside the real,
+ *  non-dry-run BUILD_PREPARED branch). The shell script's own `&&`/`||`
+ *  make BOTH "present" and "absent" a controlled, printed outcome (exit
+ *  0 either way) — reserving a non-zero `docker run` exit for what it
+ *  actually means here: the image would not even START, or the daemon
+ *  itself is unreachable. Measured live: `docker run <nonexistent-image>`
+ *  exits 125 (docker's own "the docker command itself failed" code,
+ *  distinct from a CONTAINED command's propagated exit status), never
+ *  colliding with a controlled `present`/`absent` answer. */
+function imageHasPersistencePathsModule(bin, imageId) {
+  let raw;
+  try {
+    raw = runDocker(bin, [
+      "run",
+      "--rm",
+      "--entrypoint",
+      "/bin/sh",
+      imageId,
+      "-c",
+      `ls ${PERSISTENCE_PATHS_BEAM_GLOB} >/dev/null 2>&1 && echo present || echo absent`,
+    ]);
+  } catch (err) {
+    fail(
+      `could not probe image ${imageId} for the persistence-paths module (image start or docker daemon failure): ${err.message}`,
+    );
+  }
+  if (raw === "present") return true;
+  if (raw === "absent") return false;
+  fail(`persistence-paths module probe for image ${imageId} printed an unexpected shape: ${JSON.stringify(raw)}`);
+}
+
 /** Queries `imageId`'s own canonical persistence-path list: `docker run
  *  --rm --entrypoint /app/bin/kaoiro_server <imageId> eval
  *  '<PERSISTENCE_PATHS_EVAL_EXPR>'`, addressed by Id (never a tag, which
@@ -315,18 +373,23 @@ function isValidPersistencePathEntry(entry) {
  *  the EXACT image about to run. No env vars are passed; the list this
  *  queries is static, not env-dependent.
  *
- *  Two failure modes, deliberately handled differently:
- *  - the eval PROCESS itself exits non-zero: the querying module has not
- *    landed on this image (#310 — a pre-#310 image, or an old image a
- *    rollback targets). Returns `{skipped: true, reason}`, never
- *    throws — the caller proceeds without this check rather than
- *    blocking on a capability this image was never going to have.
- *  - the eval process exits 0 but stdout is not the expected JSON
- *    shape: something is actively wrong (a real bug in the module, or
- *    this expression drifting from #310's contract) — a 0 exit means
- *    the check RAN and produced garbage, materially different from "did
- *    not run", so this throws DeployError instead of skipping. */
+ *  issue #322 M5: module presence is decided FIRST, and separately, by
+ *  imageHasPersistencePathsModule above — not by this eval call's own
+ *  exit code (see that function's doc comment for why treating every
+ *  eval failure as "absent" was fail-open). Absent: `{skipped: true,
+ *  reason}`, never throws — the caller proceeds without this check
+ *  rather than blocking on a capability this image was never going to
+ *  have. Present: every OTHER failure below — the eval process itself
+ *  exiting non-zero, or exiting 0 with an unexpected shape — throws
+ *  DeployError. A module that exists but cannot be queried is not "this
+ *  image lacks the capability"; it is something actively wrong. */
 function queryPersistencePaths(bin, imageId) {
+  if (!imageHasPersistencePathsModule(bin, imageId)) {
+    return {
+      skipped: true,
+      reason: `image ${imageId} has no ${PERSISTENCE_PATHS_BEAM_GLOB} — built before #310 landed, or an old image a rollback targets`,
+    };
+  }
   let raw;
   try {
     raw = runDocker(bin, [
@@ -339,7 +402,7 @@ function queryPersistencePaths(bin, imageId) {
       PERSISTENCE_PATHS_EVAL_EXPR,
     ]);
   } catch (err) {
-    return { skipped: true, reason: `persistence-path eval failed for image ${imageId}: ${err.message}` };
+    fail(`image ${imageId} has the persistence-paths module but its eval call failed: ${err.message}`);
   }
   let parsed;
   try {
@@ -506,13 +569,28 @@ function containerEffectiveEnv(bin, container) {
  *  interpolation), while `.env.example`/`mix kaoiro.env` emit the same
  *  vars as commented-out hints. `declared` stays in the record purely
  *  for an operator's own reference — a value never compared, never gates
- *  the outcome. */
-function checkEnvConsistency(paths, envPath, composeEnv, containerEnv) {
+ *  the outcome.
+ *
+ *  issue #322 M5 (must-fix): `default_path` here is a FALLBACK for
+ *  "what the container would be reading if it never had this var set" —
+ *  but `paths` is the TARGET image's own manifest, so substituting
+ *  `default_path` FROM IT is only an observation of the OLD container's
+ *  actual effective path if the OLD and NEW images are known to compile
+ *  the SAME default for this store (not guaranteed — #310's manifest
+ *  could change a default between versions). `oldPathsByEnv` (from a
+ *  SEPARATE queryPersistencePaths call against the OLD image, when it
+ *  can answer at all) is preferred; `assumed_default_source` records
+ *  which one actually supplied the value used, so the observation never
+ *  silently passes off an assumption as a measurement. */
+function checkEnvConsistency(paths, envPath, composeEnv, containerEnv, oldPathsByEnv) {
   const entries = {};
-  for (const { env: envName, default_path: defaultPath } of paths) {
+  for (const { env: envName, default_path: targetDefaultPath } of paths) {
     const declared = readEnvFileValue(envPath, envName);
     const compose = Object.hasOwn(composeEnv, envName) ? composeEnv[envName] : null;
     const containerRaw = Object.hasOwn(containerEnv, envName) ? containerEnv[envName] : null;
+    const oldDefaultPath = oldPathsByEnv?.get(envName);
+    const defaultPath = oldDefaultPath ?? targetDefaultPath;
+    const assumedDefaultSource = oldDefaultPath !== undefined ? "old_image" : "target_image";
     const containerEffective = containerRaw !== null ? containerRaw : defaultPath;
     const containerSource = containerRaw !== null ? "env" : "default";
     entries[envName] = {
@@ -520,6 +598,7 @@ function checkEnvConsistency(paths, envPath, composeEnv, containerEnv) {
       compose,
       container_effective: containerEffective,
       container_source: containerSource,
+      assumed_default_source: assumedDefaultSource,
       match: compose === containerEffective,
     };
   }
@@ -1478,11 +1557,22 @@ export function runUpdate(flags, config) {
       if (persistencePaths.skipped) {
         envConsistency = { skipped: true, reason: persistencePaths.reason };
       } else {
+        // issue #322 M5: ask the OLD (currently running) image for its
+        // OWN default_path per store, when it can answer at all — the
+        // measured fallback checkEnvConsistency prefers over the
+        // target's own manifest. A pre-#310 old image (the common case
+        // for the FIRST #310 upgrade) simply cannot answer; that skip is
+        // expected here too, not itself an error.
+        const oldPersistencePaths = queryPersistencePaths(bin, oldImageId);
+        const oldPathsByEnv = oldPersistencePaths.skipped
+          ? null
+          : new Map(oldPersistencePaths.paths.map((p) => [p.env, p.default_path]));
         const entries = checkEnvConsistency(
           persistencePaths.paths,
           join(serverDir, ".env"),
           composeDeclaredEnv(bin, serverDir),
           containerEffectiveEnv(bin, container),
+          oldPathsByEnv,
         );
         envConsistency = { skipped: false, entries };
         if (!Object.values(entries).every((e) => e.match)) {
