@@ -27,6 +27,7 @@
 //   0 files under ~/.claude/projects/).
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import { writeRedactedStderr } from "@kaoiro/agent-common";
 import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -95,7 +96,7 @@ function parseArgs(argv: string[]): CliArgs {
       timeoutMs = n;
       i++;
     } else if (arg === "--help" || arg === "-h") {
-      process.stderr.write(
+      writeRedactedStderr(
         "usage: kaoiro-claude-probe [--timeout-ms N]\n" +
           "emits ProbeResult JSON on stdout; exit 0 on success, 1 on failure.\n",
       );

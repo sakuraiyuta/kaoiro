@@ -1,4 +1,5 @@
 import { createConnection, type Socket } from "node:net";
+import { writeRedactedStderr } from "@kaoiro/agent-common";
 
 interface Reply {
   id: number;
@@ -80,7 +81,7 @@ class ToolHostClient {
 }
 
 function fail(message: string): never {
-  process.stderr.write(`${message}\n`);
+  writeRedactedStderr(`${message}\n`);
   process.exitCode = 1;
   throw new Error(message);
 }
@@ -119,6 +120,6 @@ async function main(): Promise<void> {
 }
 
 void main().catch((error: unknown) => {
-  process.stderr.write(`${String(error)}\n`);
+  writeRedactedStderr(`${String(error)}\n`);
   process.exitCode = 1;
 });

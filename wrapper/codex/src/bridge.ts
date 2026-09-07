@@ -8,8 +8,11 @@
 
 import { appendFileSync } from "node:fs";
 import { createConnection, type Socket } from "node:net";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { writeRedactedStderr } from "@kaoiro/agent-common";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -24,16 +27,16 @@ interface BridgeResponse {
 
 /** Keep bridge-side startup/socket failures with the local host trace. This
  * does not alter MCP stdout; it only mirrors wrapper-owned stderr locally. */
-function reportStderr(text: string): void {
+export function reportStderr(text: string): void {
+  const safeText = writeRedactedStderr(text);
   const path = process.env.KAOIRO_BRIDGE_STDERR_PATH;
   if (path !== undefined) {
     try {
-      appendFileSync(path, text, { encoding: "utf8", mode: 0o600 });
+      appendFileSync(path, safeText, { encoding: "utf8", mode: 0o600 });
     } catch {
       // Diagnostics must never make the bridge unusable.
     }
   }
-  process.stderr.write(text);
 }
 
 /** Line-buffered request/response client over the wrapper's unix socket. */
@@ -137,7 +140,12 @@ async function main(): Promise<void> {
   await server.connect(new StdioServerTransport());
 }
 
-main().catch((error: unknown) => {
-  reportStderr(`${String(error)}\n`);
-  process.exitCode = 1;
-});
+if (
+  process.argv[1] !== undefined &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+  main().catch((error: unknown) => {
+    reportStderr(`${String(error)}\n`);
+    process.exitCode = 1;
+  });
+}

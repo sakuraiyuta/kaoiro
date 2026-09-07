@@ -3,7 +3,13 @@ import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { PermissionBroker, type PermissionDecision, type WrapperConfig } from "@kaoiro/agent-common";
+import {
+  PermissionBroker,
+  boundErrorDetail,
+  writeRedactedStderr,
+  type PermissionDecision,
+  type WrapperConfig,
+} from "@kaoiro/agent-common";
 import { effectiveNetworkAccess } from "./network_access.js";
 
 export type AntigravityLaunchConfig = WrapperConfig & {
@@ -201,7 +207,13 @@ export class AntigravityGate {
     this.#approval = options.config.approval ?? "on-request";
     this.#networkAccess = effectiveNetworkAccess(this.#sandbox, options.config.network_access ?? false);
     this.#waitMsBeforeAsyncFloor = options.waitMsBeforeAsyncFloor ?? 5_000;
-    this.#warn = options.warn ?? ((message) => process.stderr.write(`${message}\n`));
+    this.#warn = (message): void => {
+      if (options.warn !== undefined) {
+        options.warn(boundErrorDetail(message));
+        return;
+      }
+      writeRedactedStderr(`${message}\n`);
+    };
     this.#onPermissionRequest = options.onPermissionRequest;
     this.#onPermissionResolved = options.onPermissionResolved;
   }
