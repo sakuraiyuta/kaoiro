@@ -687,6 +687,15 @@ are refined incrementally ([ADR-0010](../adr/0010-protocol-precisification.md)).
 | `session_boundary` | **settled** | `{ mode: "new" \| "clear", request_id: string, ts, previous_session_id?: string, to_session_id?: string \| null }`. Session-lifecycle marker for `/new` and `/clear`. The normal `envelope` path broadcasts it; `/new` appends to existing history and `/clear` reduces that agent's history to one marker row (ADR-0036 F3 restoration, 2026-07-24). `history_reset` is resume-replay-only and neither command emits it. For lazy Codex allocation, `to_session_id: null` is patched in the first envelope. Viewer payload is sanitized to `{ "mode" }`. |
 | `refresh_models_result` | **settled** | `{ request_id: string, ok: boolean, reason?: string, models_count?: number }`. Wrapper completion report for the operator's `refresh_models` ([ADR-0039](../adr/0039-engine-catalog-live-probe.md) F9 v2). `agent_id` is in the outer envelope and is **not duplicated**. `reason` appears only on failure and shares the engine-catalog probe vocabulary (`auth_failed` / `spawn_failed` / `cli_error` / `invalid_output` / `timeout` / `unsupported_engine`; non-Claude adapters no-op the control and return `unsupported_engine`). `models_count` is a success-only size signal; the updated catalog is carried by the immediately preceding `state_change.ext.models`. This envelope is transient: the server does not put it into `AgentStates`, and the client special-dispatches it before normal envelope handling. **Operator-only delivery**. |
 
+#### Wrapper-owned stderr error diagnostics
+
+When a wrapper writes an error-derived diagnostic to stderr, it applies the
+same `boundErrorDetail` credential-redaction and 16,384-byte head clip as
+`result.error_detail`. This does not widen the redaction scope of `log` or
+`permission_request`; persistent Codex turn diagnostics instead use an
+allow-list projection because they store structured trace data, while stderr
+retains failure diagnosis as bounded text.
+
 ### `task_type: "tasklist"` addendum (issue #178, ADR-0049 F4)
 
 In addition to the general `task` rules, an agent's own todo is always the single entity
