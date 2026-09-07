@@ -216,8 +216,12 @@ const OBSERVATION_SCHEMAS = {
   // ambiguity STARTING's own schema comment above describes) — finding
   // nothing to stop is a legitimate, recorded outcome, not a failure.
   [PHASE.ROLLBACK_STOPPED]: (obs) =>
-    obs.stopped_container === null ||
-    (typeof obs.stopped_container === "string" && obs.stopped_container !== ""),
+    (obs.stopped_container === null ||
+      (typeof obs.stopped_container === "string" && obs.stopped_container !== "")) &&
+    (obs.resolved_container_ids === undefined ||
+      (Array.isArray(obs.resolved_container_ids) &&
+        obs.resolved_container_ids.every((id) => typeof id === "string" && id !== "") &&
+        new Set(obs.resolved_container_ids).size === obs.resolved_container_ids.length)),
   [PHASE.ROLLBACK_FORENSIC_ARCHIVED]: (obs) => isPathSha(obs.archive),
   // SF-9: self-contained like every other phase's observation (not just
   // "trust the prior entry") — the forensic archive already recorded at
