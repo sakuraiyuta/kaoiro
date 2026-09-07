@@ -305,7 +305,7 @@ describe("issue #237 review: suppressBottomRevert ownership (must-fix 1+2)", () 
     stubScrollTo();
     installScrollGeometry();
     const mermaid = installControllableMermaid();
-    const logs = buildLogs("agent-a", 1000);
+    const logs = buildLogs("agent-a", 250);
     const targetA = conversationEntryKey(logs[10]);
     const targetB = conversationEntryKey(logs[5]);
 
@@ -320,22 +320,32 @@ describe("issue #237 review: suppressBottomRevert ownership (must-fix 1+2)", () 
     await vi.advanceTimersByTimeAsync(0);
     const logEl = target.querySelector(".log") as HTMLElement;
 
-    // Jump A: index 10, outside the default [800,1000) window -> expands.
+    // Jump A: index 10, outside the default [50,250) window -> expands.
     props.scrollToEntryKey = targetA;
     await tick();
     await vi.advanceTimersByTimeAsync(0);
-    expect(target.querySelectorAll(".transcript-entry").length).toBe(990);
+    expect(target.querySelectorAll(".transcript-entry").length).toBe(240);
+    // issue #308: the count alone cannot distinguish "window genuinely
+    // expanded to start AT the target" (frozenWindow.start = absoluteIndex,
+    // the actual trigger condition this whole file exists to pin) from some
+    // other, coincidentally-same-length window — checking the DOM's own
+    // FIRST rendered row's key against targetA is what makes that
+    // distinction, and is what stays true regardless of how large the
+    // fixture built above is.
+    expect(target.querySelector(".transcript-entry")?.getAttribute("data-envelope-key")).toBe(
+      targetA,
+    );
     mermaid.resolveNext(); // A's renderMermaidIn -> scrollToTimelineEntry -> arms failsafe A at t=0
     await vi.advanceTimersByTimeAsync(0);
 
     // Half a second later, before A's failsafe (1000ms) fires, re-arm with
-    // jump B (index 5, still outside the now-[5,1000) window boundary at
+    // jump B (index 5, still outside the now-[5,250) window boundary at
     // the time of the click -- window currently starts at 10).
     await vi.advanceTimersByTimeAsync(500);
     props.scrollToEntryKey = targetB;
     await tick();
     await vi.advanceTimersByTimeAsync(0);
-    expect(target.querySelectorAll(".transcript-entry").length).toBe(995);
+    expect(target.querySelectorAll(".transcript-entry").length).toBe(245);
     mermaid.resolveNext(); // B's renderMermaidIn -> scrollToTimelineEntry -> arms failsafe B at t=500
     await vi.advanceTimersByTimeAsync(0);
 
@@ -353,14 +363,14 @@ describe("issue #237 review: suppressBottomRevert ownership (must-fix 1+2)", () 
     // would have cleared suppression at t=1000, letting THIS event collapse
     // the window straight back to the default tail before B's target ever
     // settles.
-    expect(target.querySelectorAll(".transcript-entry").length).toBe(995);
+    expect(target.querySelectorAll(".transcript-entry").length).toBe(245);
   });
 
   it("must-fix 1: agent 切替後の新 jump が、切替前 agent の failsafe に解除されない", async () => {
     stubScrollTo();
     installScrollGeometry();
     const mermaid = installControllableMermaid();
-    const logsA = buildLogs("agent-a", 1000);
+    const logsA = buildLogs("agent-a", 250);
     const targetA = conversationEntryKey(logsA[10]);
 
     const { target, props } = await renderReactive({
@@ -380,7 +390,7 @@ describe("issue #237 review: suppressBottomRevert ownership (must-fix 1+2)", () 
     await vi.advanceTimersByTimeAsync(0);
     mermaid.resolveNext();
     await vi.advanceTimersByTimeAsync(0);
-    expect(target.querySelectorAll(".transcript-entry").length).toBe(990);
+    expect(target.querySelectorAll(".transcript-entry").length).toBe(240);
 
     // At t=200, switch to agent B (300 logs) with its OWN deep jump
     // (index 5, outside B's default [100,300) window) -- the realistic
@@ -412,7 +422,7 @@ describe("issue #237 review: suppressBottomRevert ownership (must-fix 1+2)", () 
     stubScrollTo();
     installScrollGeometry();
     const mermaid = installControllableMermaid();
-    const logs = buildLogs("agent-a", 1000);
+    const logs = buildLogs("agent-a", 250);
     const target10 = conversationEntryKey(logs[10]);
 
     const { target, props } = await renderReactive({
@@ -432,7 +442,7 @@ describe("issue #237 review: suppressBottomRevert ownership (must-fix 1+2)", () 
     // scrollToTimelineEntry runs) is still pending.
     props.scrollToEntryKey = target10;
     await tick();
-    expect(target.querySelectorAll(".transcript-entry").length).toBe(990);
+    expect(target.querySelectorAll(".transcript-entry").length).toBe(240);
 
     // Let 1500ms of fake time pass WITHOUT resolving renderMermaidIn --
     // longer than the 1000ms failsafe. A pre-fix (arm-time-started) timer
@@ -443,7 +453,7 @@ describe("issue #237 review: suppressBottomRevert ownership (must-fix 1+2)", () 
     // time during this unbounded wait.
     scrollLogTo(logEl, naturalBottom(logEl));
     await tick();
-    expect(target.querySelectorAll(".transcript-entry").length).toBe(990);
+    expect(target.querySelectorAll(".transcript-entry").length).toBe(240);
 
     // Now let the slow render finally resolve -- scrollToTimelineEntry
     // must still find the target (window never collapsed) and succeed.
@@ -457,7 +467,7 @@ describe("issue #237 review: suppressBottomRevert ownership (must-fix 1+2)", () 
     stubScrollTo();
     installScrollGeometry();
     const mermaid = installControllableMermaid();
-    const logs = buildLogs("agent-a", 1000);
+    const logs = buildLogs("agent-a", 250);
     const target10 = conversationEntryKey(logs[10]);
 
     const { target, props } = await renderReactive({
@@ -495,7 +505,7 @@ describe("issue #237 review: suppressBottomRevert ownership (must-fix 1+2)", () 
     stubScrollTo();
     installScrollGeometry();
     const mermaid = installControllableMermaid();
-    const logs = buildLogs("agent-a", 1000);
+    const logs = buildLogs("agent-a", 250);
     const target10 = conversationEntryKey(logs[10]);
 
     const { target, props } = await renderReactive({
@@ -517,7 +527,7 @@ describe("issue #237 review: suppressBottomRevert ownership (must-fix 1+2)", () 
 
     // No departure event at all -- advance straight past the failsafe.
     await vi.advanceTimersByTimeAsync(FAILSAFE_MS + 10);
-    expect(target.querySelectorAll(".transcript-entry").length).toBe(990); // still intact until an actual event
+    expect(target.querySelectorAll(".transcript-entry").length).toBe(240); // still intact until an actual event
 
     scrollLogTo(logEl, naturalBottom(logEl));
     await tick();
@@ -531,7 +541,7 @@ describe("issue #237 review: suppressBottomRevert ownership (must-fix 1+2)", () 
     stubScrollTo();
     installScrollGeometry();
     const mermaid = installControllableMermaid();
-    const logs = buildLogs("agent-a", 1000);
+    const logs = buildLogs("agent-a", 250);
     const targetOld = conversationEntryKey(logs[10]); // requested first
     const targetNew = conversationEntryKey(logs[5]); // requested second
 
@@ -546,21 +556,21 @@ describe("issue #237 review: suppressBottomRevert ownership (must-fix 1+2)", () 
     await vi.advanceTimersByTimeAsync(0);
     const logEl = target.querySelector(".log") as HTMLElement;
 
-    // Dispatch OLD first: expands to [10,1000), arms generation 1, but its
+    // Dispatch OLD first: expands to [10,250), arms generation 1, but its
     // renderMermaidIn call is held pending (not resolved yet) — simulating
     // a diagram-heavy message taking longer to render.
     props.scrollToEntryKey = targetOld;
     await tick();
     await vi.advanceTimersByTimeAsync(0);
-    expect(target.querySelectorAll(".transcript-entry").length).toBe(990);
+    expect(target.querySelectorAll(".transcript-entry").length).toBe(240);
 
     // Dispatch NEW before OLD's render resolves: expands further to
-    // [5,1000), arms generation 2. Its OWN renderMermaidIn call is also
+    // [5,250), arms generation 2. Its OWN renderMermaidIn call is also
     // held pending.
     props.scrollToEntryKey = targetNew;
     await tick();
     await vi.advanceTimersByTimeAsync(0);
-    expect(target.querySelectorAll(".transcript-entry").length).toBe(995);
+    expect(target.querySelectorAll(".transcript-entry").length).toBe(245);
     expect(mermaid.resolvers.length).toBe(2); // OLD's and NEW's, both pending
 
     // Resolve OUT OF ORDER: NEW's render finishes first (it started
@@ -572,7 +582,7 @@ describe("issue #237 review: suppressBottomRevert ownership (must-fix 1+2)", () 
 
     // THEN OLD's render finally resolves, 300ms later -> its own
     // scrollToTimelineEntry(gen=1) still succeeds (index 10 is within the
-    // current [5,1000) window) and calls armSuppressFailsafe(1) — a STALE
+    // current [5,250) window) and calls armSuppressFailsafe(1) — a STALE
     // generation. Must-fix round 2: this call must be a no-op and must NOT
     // cancel/replace NEW's already-armed, current timer.
     await vi.advanceTimersByTimeAsync(300);
@@ -601,7 +611,7 @@ describe("issue #237 review: suppressBottomRevert ownership (must-fix 1+2)", () 
     stubScrollTo();
     installScrollGeometry();
     const mermaid = installControllableMermaid();
-    const logs = buildLogs("agent-a", 1000);
+    const logs = buildLogs("agent-a", 250);
     const targetOld = conversationEntryKey(logs[10]);
     const targetNew = conversationEntryKey(logs[5]);
 
@@ -632,7 +642,7 @@ describe("issue #237 review: suppressBottomRevert ownership (must-fix 1+2)", () 
     props.scrollToEntryKey = targetNew;
     await tick();
     await vi.advanceTimersByTimeAsync(0);
-    expect(target.querySelectorAll(".transcript-entry").length).toBe(995);
+    expect(target.querySelectorAll(".transcript-entry").length).toBe(245);
 
     // Advance to t=1050 (past OLD's t=1000 deadline) WITHOUT resolving
     // NEW's render, then apply the same spurious "still at the bottom"
@@ -643,12 +653,12 @@ describe("issue #237 review: suppressBottomRevert ownership (must-fix 1+2)", () 
 
     // With both guards intact, OLD's timer cannot have fired (cancelled at
     // t=50) so this event must not revert the freeze.
-    expect(target.querySelectorAll(".transcript-entry").length).toBe(995);
+    expect(target.querySelectorAll(".transcript-entry").length).toBe(245);
 
     // NEW's render finally resolves and must still find its target.
     mermaid.resolveNext();
     await vi.advanceTimersByTimeAsync(0);
-    expect(target.querySelectorAll(".transcript-entry").length).toBe(995);
+    expect(target.querySelectorAll(".transcript-entry").length).toBe(245);
   });
 
   it("must-fix round 3 (M1) probe 1: 完了順が逆転しても、最終着地は NEW のまま (OLD に上書きされない)", async () => {
@@ -656,7 +666,7 @@ describe("issue #237 review: suppressBottomRevert ownership (must-fix 1+2)", () 
     installScrollGeometry();
     installRowGeometry();
     const mermaid = installControllableMermaid();
-    const logs = buildLogs("agent-a", 1000);
+    const logs = buildLogs("agent-a", 250);
     const targetOld = conversationEntryKey(logs[10]);
     const targetNew = conversationEntryKey(logs[5]);
 
@@ -670,19 +680,19 @@ describe("issue #237 review: suppressBottomRevert ownership (must-fix 1+2)", () 
     mermaid.resolveNext(); // mount
     await vi.advanceTimersByTimeAsync(0);
 
-    // Dispatch OLD (expands to [10,1000)); its renderMermaidIn is held
+    // Dispatch OLD (expands to [10,250)); its renderMermaidIn is held
     // pending (e.g. a diagram-heavy message taking longer to render).
     props.scrollToEntryKey = targetOld;
     await tick();
     await vi.advanceTimersByTimeAsync(0);
-    expect(target.querySelectorAll(".transcript-entry").length).toBe(990);
+    expect(target.querySelectorAll(".transcript-entry").length).toBe(240);
 
-    // Dispatch NEW before OLD resolves (expands further to [5,1000)); its
+    // Dispatch NEW before OLD resolves (expands further to [5,250)); its
     // own renderMermaidIn is also held pending.
     props.scrollToEntryKey = targetNew;
     await tick();
     await vi.advanceTimersByTimeAsync(0);
-    expect(target.querySelectorAll(".transcript-entry").length).toBe(995);
+    expect(target.querySelectorAll(".transcript-entry").length).toBe(245);
     expect(mermaid.resolvers.length).toBe(2);
     const [resolveOld, resolveNew] = mermaid.resolvers;
 
@@ -717,7 +727,7 @@ describe("issue #237 review: suppressBottomRevert ownership (must-fix 1+2)", () 
     installScrollGeometry();
     installRowGeometry();
     const mermaid = installControllableMermaid();
-    const logsA = buildLogs("agent-a", 1000);
+    const logsA = buildLogs("agent-a", 250);
     const targetA = conversationEntryKey(logsA[10]);
 
     const { target, props } = await renderReactive({
@@ -737,7 +747,7 @@ describe("issue #237 review: suppressBottomRevert ownership (must-fix 1+2)", () 
     props.scrollToEntryKey = targetA;
     await tick();
     await vi.advanceTimersByTimeAsync(0);
-    expect(target.querySelectorAll(".transcript-entry").length).toBe(990);
+    expect(target.querySelectorAll(".transcript-entry").length).toBe(240);
 
     // Switch to agent B (300 logs) with its OWN deep jump (index 5,
     // outside B's default [100,300) window) before A's render resolves —
