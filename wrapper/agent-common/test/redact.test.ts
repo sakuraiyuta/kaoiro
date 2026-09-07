@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { MAX_LOG_BYTES } from "../src/logpayload.js";
-import { boundErrorDetail, redactCredentials } from "../src/redact.js";
+import {
+  boundErrorDetail,
+  redactCredentials,
+  writeRedactedStderr,
+} from "../src/redact.js";
 
 const TOKEN = "abcdef1234567890";
 const MASKED_TOKEN = "************7890";
@@ -365,5 +369,19 @@ describe("boundErrorDetail (issue #300 round 3, finding M-B: the mask-then-clip 
   it("leaves short, non-secret text unchanged", () => {
     const text = "tool crashed: EACCES";
     expect(boundErrorDetail(text)).toBe(text);
+  });
+});
+
+describe("writeRedactedStderr", () => {
+  it("writes exactly the shared mask-then-head-clip result through an injected writer", () => {
+    const writes: string[] = [];
+    const raw = `api_key=abcdef123456\n${"x".repeat(MAX_LOG_BYTES)}`;
+
+    writeRedactedStderr(raw, (chunk) => writes.push(chunk));
+
+    expect(writes).toEqual([boundErrorDetail(raw)]);
+    expect(writes[0]).toContain("api_key=********3456");
+    expect(writes[0]).not.toContain("api_key=abcdef123456");
+    expect(Buffer.byteLength(writes[0]!, "utf8")).toBe(MAX_LOG_BYTES);
   });
 });

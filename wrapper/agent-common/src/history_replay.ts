@@ -14,6 +14,7 @@
 
 import type { Envelope } from "./types.js";
 import type { SidecarRecord } from "./ia_sidecar.js";
+import { boundErrorDetail, writeRedactedStderr } from "./redact.js";
 
 /** Join-reply verdict. `null` means the reply carried no `hydration` key at
  *  all — an old server, where the wrapper falls back to its previous
@@ -154,9 +155,9 @@ export class HistoryReplayer {
 
   #warn(message: string): void {
     if (this.#options.warn) {
-      this.#options.warn(message);
+      this.#options.warn(boundErrorDetail(message));
       return;
     }
-    process.stderr.write(`${message}\n`);
+    writeRedactedStderr(`${message}\n`);
   }
 }

@@ -5,24 +5,12 @@
 // so the two never drift on truncation / oversized-input handling.
 
 import type { LogEntry, LogPayload } from "./types.js";
+import { MAX_LOG_BYTES, clipText } from "@kaoiro/wrapper-core";
 
 /** Relayed log text/output above this UTF-8 size is clipped (protocol.md
  *  truncated); oversized tool input is dropped wholesale like the
  *  permission payload. Keeps each envelope well under the server cap. */
-export const MAX_LOG_BYTES = 16_384;
-
-/** Clips text to MAX_LOG_BYTES of UTF-8, flagging truncation. A cut may
- *  land mid-codepoint; toString renders the partial byte as U+FFFD,
- *  which is harmless for a transcript. */
-export function clipText(text: string): { text: string; truncated: boolean } {
-  if (Buffer.byteLength(text, "utf8") <= MAX_LOG_BYTES) {
-    return { text, truncated: false };
-  }
-  const clipped = Buffer.from(text, "utf8")
-    .subarray(0, MAX_LOG_BYTES)
-    .toString("utf8");
-  return { text: clipped, truncated: true };
-}
+export { MAX_LOG_BYTES, clipText };
 
 /** Builds the wire LogPayload (size-clipped) for one normalized LogEntry.
  *  `toolNames` maps a tool_use_id to its tool_name so a tool_result can name

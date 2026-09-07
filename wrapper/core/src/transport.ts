@@ -34,6 +34,7 @@ import {
   normalizeWrapperBuildInfo,
   type WrapperBuildInfo,
 } from "./build_info.js";
+import { writeRedactedStderr } from "./redact.js";
 
 type ServerSocketFactory = (
   serverUrl: string,
@@ -160,7 +161,7 @@ function describeVersion(value: unknown): string {
  *  message on this topic to carry a `version` key at all). */
 function warnOnVersionMismatch(event: string, version: unknown): void {
   if (version === WRAPPER_PROTOCOL_VERSION) return;
-  process.stderr.write(
+  writeRedactedStderr(
     `${event}: server declared protocol version ${describeVersion(version)}; ` +
       `accepting as ${JSON.stringify(WRAPPER_PROTOCOL_VERSION)} (ADR-0015 best-effort accept)\n`,
   );
@@ -1411,12 +1412,12 @@ export class ServerLink {
         );
       })
       .receive("error", (reason: unknown) => {
-        process.stderr.write(
+        writeRedactedStderr(
           `ServerLink join error: ${JSON.stringify(reason)}\n`,
         );
       })
       .receive("timeout", () => {
-        process.stderr.write("ServerLink join timeout\n");
+        writeRedactedStderr("ServerLink join timeout\n");
       });
   }
 
@@ -1693,7 +1694,7 @@ export class ServerLink {
   #warnActiveTaskCacheOverflow(): void {
     if (this.#activeTaskCacheOverflowWarned) return;
     this.#activeTaskCacheOverflowWarned = true;
-    process.stderr.write(
+    writeRedactedStderr(
       "ServerLink active-task replay cache reached its 5000-entity / 6000000-byte bound; oldest task entries were not retained for reconnect replay\n",
     );
   }
@@ -1715,7 +1716,7 @@ export class ServerLink {
       // An old server acks without a stamp. The message was delivered;
       // it just cannot be restored after a restart (ADR-0051 D6
       // rollout: this mixed pairing is the documented degradation).
-      process.stderr.write(
+      writeRedactedStderr(
         "inter-agent ack carried no ingress_stamp; not recorded\n",
       );
       return null;
@@ -1752,7 +1753,7 @@ export class ServerLink {
     const chunks = chunkReplayIaItems(items);
     const sent = chunks.reduce((n, chunk) => n + chunk.length, 0);
     if (sent < items.length) {
-      process.stderr.write(
+      writeRedactedStderr(
         `replay_ia: dropped ${items.length - sent} oversize sidecar row(s)\n`,
       );
     }

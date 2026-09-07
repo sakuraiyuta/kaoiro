@@ -11,6 +11,13 @@ export {
 } from "./build_info.js";
 export type { WrapperBuildInfo } from "./build_info.js";
 export {
+  MAX_LOG_BYTES,
+  boundErrorDetail,
+  clipText,
+  redactCredentials,
+  writeRedactedStderr,
+} from "./redact.js";
+export {
   MAX_REPLAY_IA_PUSH_BYTES,
   ServerLink,
   chunkReplayIaItems,

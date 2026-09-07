@@ -24,6 +24,7 @@
 import { appendFileSync, closeSync, constants, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { boundErrorDetail, writeRedactedStderr } from "./redact.js";
 import type { Envelope } from "./types.js";
 
 /** One sidecar line. `ingress_stamp` is the server's ordering-domain value
@@ -89,8 +90,13 @@ export class IaSidecar {
     this.#agentId = options.agentId;
     this.#resolveSessionPath = options.resolveSessionPath;
     this.#pendingDir = options.pendingDir ?? defaultPendingDir();
-    this.#warn =
-      options.warn ?? ((message) => process.stderr.write(`${message}\n`));
+    this.#warn = (message): void => {
+      if (options.warn !== undefined) {
+        options.warn(boundErrorDetail(message));
+        return;
+      }
+      writeRedactedStderr(`${message}\n`);
+    };
     this.#pendingPath = join(
       this.#pendingDir,
       `${sanitizeComponent(options.agentId)}__${sanitizeComponent(options.generation)}${PENDING_SUFFIX}`,
