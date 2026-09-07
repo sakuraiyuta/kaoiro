@@ -68,7 +68,28 @@ case "$1" in
     done
     case "$1" in
       ps)
+        if [ "$2" = "-a" ] && [ "$3" = "-q" ]; then
+          case "$FAKE_DOCKER_SCENARIO" in
+            up-fails-no-container) ;;
+            multiple-containers) printf 'sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\\nsha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\\n' ;;
+            rollback-id-mismatch)
+              if [ -n "$compose_file" ]; then
+                printf 'sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\\n'
+              else
+                printf 'sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\\n'
+              fi
+              ;;
+            *) printf 'sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\\n' ;;
+          esac
+          exit 0
+        fi
         if [ "$2" = "-q" ]; then
+          if [ -f "$KAOIRO_TEST_STOP_FILE" ]; then
+            case "$FAKE_DOCKER_SCENARIO" in
+              rollback-running-reappears) printf 'sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\\n' ;;
+            esac
+            exit 0
+          fi
           case "$FAKE_DOCKER_SCENARIO" in
             stopped) ;;
             multiple-containers) printf 'sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\\nsha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\\n' ;;
@@ -78,7 +99,7 @@ case "$1" in
           exit 0
         fi
         case "$FAKE_DOCKER_SCENARIO" in
-          stopped|running|retag-drift|running-clean-stop|running-clean-stop-retag-drift|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty|compose-config-renamed-service|compose-config-missing-environment-key|mount-vanishes-after-stop|system-df-fails|system-df-invalid-json|system-df-not-array|target-id-mismatch|target-remains-running|rollback-target-remains-running|rollback-id-mismatch)
+          stopped|running|retag-drift|running-clean-stop|running-clean-stop-retag-drift|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty|compose-config-renamed-service|compose-config-missing-environment-key|mount-vanishes-after-stop|system-df-fails|system-df-invalid-json|system-df-not-array|target-id-mismatch|target-remains-running|rollback-target-remains-running|rollback-id-mismatch|up-fails-container|up-fails-no-container|rollback-running-reappears)
             printf 'kaoiro-c1\\n' ;;
           # round 4 review B-1 (expanded): rollback's own "2+ containers,
           # refuse" guard, distinct from requireRunningContainer's own
@@ -88,6 +109,14 @@ case "$1" in
         ;;
       build) exit 0 ;;
       up)
+        case "$FAKE_DOCKER_SCENARIO" in
+          up-fails-container|up-fails-no-container)
+            if [ ! -f "$KAOIRO_TEST_UP_FAILURE_FILE" ]; then
+              : > "$KAOIRO_TEST_UP_FAILURE_FILE"
+              exit 1
+            fi
+            ;;
+        esac
         rm -f "$KAOIRO_TEST_STOP_FILE"
         exit 0
         ;;
@@ -210,6 +239,10 @@ case "$1" in
     ;;
   pull) exit 0 ;;
   rmi) exit 0 ;;
+  stop)
+    : > "$KAOIRO_TEST_STOP_FILE"
+    exit 0
+    ;;
   inspect)
     case "$2" in
       # Preflight image check (N-5): the missing-alpine scenario is the
@@ -290,7 +323,7 @@ case "$1" in
             if [ -f "$KAOIRO_TEST_STOP_FILE" ]; then printf 'exited\\n'; exit 0; fi
             case "$FAKE_DOCKER_SCENARIO" in
               stopped) printf 'exited\\n' ;;
-              running|retag-drift|running-clean-stop|running-clean-stop-retag-drift|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty|compose-config-renamed-service|compose-config-missing-environment-key|mount-vanishes-after-stop|system-df-fails|system-df-invalid-json|system-df-not-array|target-id-mismatch|target-remains-running|rollback-target-remains-running|rollback-id-mismatch)
+              running|retag-drift|running-clean-stop|running-clean-stop-retag-drift|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty|compose-config-renamed-service|compose-config-missing-environment-key|mount-vanishes-after-stop|system-df-fails|system-df-invalid-json|system-df-not-array|target-id-mismatch|target-remains-running|rollback-target-remains-running|rollback-id-mismatch|up-fails-container|up-fails-no-container|rollback-running-reappears)
                 printf 'running\\n' ;;
             esac
             ;;
@@ -302,14 +335,14 @@ case "$1" in
             ;;
           '{{.State.ExitCode}}')
             case "$FAKE_DOCKER_SCENARIO" in
-              running-clean-stop|running-clean-stop-retag-drift|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-archive-drifts-empty|mount-vanishes-after-stop) printf '0\\n' ;;
+              running-clean-stop|running-clean-stop-retag-drift|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-archive-drifts-empty|mount-vanishes-after-stop|up-fails-container|up-fails-no-container) printf '0\\n' ;;
               running-dirty-stop) printf '137\\n' ;;
               *) printf 'unknown\\n' ;;
             esac
             ;;
           '{{.State.OOMKilled}}')
             case "$FAKE_DOCKER_SCENARIO" in
-              running-clean-stop|running-clean-stop-retag-drift|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-archive-drifts-empty|mount-vanishes-after-stop) printf 'false\\n' ;;
+              running-clean-stop|running-clean-stop-retag-drift|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-archive-drifts-empty|mount-vanishes-after-stop|up-fails-container|up-fails-no-container) printf 'false\\n' ;;
               running-dirty-stop) printf 'true\\n' ;;
               *) printf 'unknown\\n' ;;
             esac
@@ -572,7 +605,7 @@ case "$1" in
         # -exec stat -c '%n %u:%g %04a' {} \\;) — only whether anything is
         # there, not what gets recorded (that comes from tar tvzf now).
         case "$FAKE_DOCKER_SCENARIO" in
-          running-clean-stop|running-clean-stop-retag-drift|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-broken-archive|alpine-missing|running-archive-drifts-empty) printf '/data/users.dets 1000:1000 0600\\n' ;;
+          running-clean-stop|running-clean-stop-retag-drift|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-broken-archive|alpine-missing|running-archive-drifts-empty|up-fails-container|up-fails-no-container) printf '/data/users.dets 1000:1000 0600\\n' ;;
           running-empty-vol) ;;
         esac
         exit 0
@@ -734,7 +767,9 @@ function withOverrideEnv(fn) {
   // leaks across tests.
   process.env.KAOIRO_TEST_LATEST_TAG_FILE = join(root, "latest-tag-id");
   process.env.KAOIRO_TEST_OLD_IMAGE_REVISION = headSha;
-  process.env.KAOIRO_TEST_STOP_FILE = join(root, "stopped");
+  if (process.env.KAOIRO_TEST_STOP_FILE === undefined) {
+    process.env.KAOIRO_TEST_STOP_FILE = join(root, "stopped");
+  }
   // Default: "the server is already running the target" — the common
   // case every test not specifically exercising a health mismatch wants.
   // Set before the call, never mutated by this helper afterward, so a
@@ -3932,13 +3967,13 @@ test("runRollback (destructive) runs the full stop/forensic/restore/retag/up/hea
   assert.ok(result.health, "expected a health poll result for the destructive path");
 
   const log = readCallLog(logPath);
-  assert.ok(log.some((l) => l.includes(" stop")));
+  assert.ok(log.some((l) => l.startsWith("stop -t 30 sha256:")));
   assert.ok(log.includes(`tag ${OLD_IMAGE_ID} kaoiro-server:latest`));
   assert.ok(log.some((l) => l.includes(" up") && l.includes("--force-recreate")));
   const recoveryComposeFile = join(backupRoot, transactionId, "recovery-compose.yaml");
   const recoveryPrefix = `compose -f ${recoveryComposeFile} --project-directory ${join(workDir, "server")}`;
   assert.ok(log.some((l) => l.startsWith(`${recoveryPrefix} config`)));
-  assert.ok(log.some((l) => l.startsWith(`${recoveryPrefix} stop`)));
+  assert.ok(!log.some((l) => l.startsWith(`${recoveryPrefix} stop`)));
   assert.ok(log.some((l) => l.startsWith(`${recoveryPrefix} up`) && l.includes("--force-recreate")));
 
   const journal = readJournal(join(backupRoot, transactionId));
@@ -4021,7 +4056,117 @@ test("runRollback does not restore when the recorded target container remains ru
   assert.ok(!readCallLog(logPath).some((line) => line.includes("find \/data -mindepth")), "must not restore a live volume");
 });
 
-test("runRollback binds recovery compose stop to the target container recorded at commit", () => {
+test("runRollback stops the union of target and recovery compose candidates", () => {
+  let transactionId;
+  const backupRoot = join(root, "kaoiro-deploy");
+  withScenario("running-clean-stop", () => {
+    transactionId = runUpdate(
+      { repo: workDir, target: headSha, maintenanceApproved: true },
+      configWithCleanStopMeasured(),
+    ).transactionId;
+  });
+  const logPath = join(root, "docker-calls.log");
+  process.env.KAOIRO_TEST_CALL_LOG = logPath;
+  let result;
+  try {
+    result = withScenario("rollback-id-mismatch", () =>
+      runRollback({ repo: workDir, transaction: transactionId, confirmRestore: true }, configWithCleanStopMeasured()),
+    );
+  } finally {
+    delete process.env.KAOIRO_TEST_CALL_LOG;
+  }
+  assert.equal(result.phase, "rolled_back");
+  const log = readCallLog(logPath);
+  assert.ok(log.includes("stop -t 30 sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"));
+  assert.ok(
+    log.includes("inspect sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee --format {{.State.Running}}"),
+  );
+  assert.ok(!log.some((line) => line.includes(" compose stop")));
+});
+
+test("runRollback restores a STARTING transaction when compose up failed after creating a container", () => {
+  const backupRoot = join(root, "kaoiro-deploy");
+  const failureFile = join(root, "first-up-failed");
+  const priorFailureFile = process.env.KAOIRO_TEST_UP_FAILURE_FILE;
+  process.env.KAOIRO_TEST_UP_FAILURE_FILE = failureFile;
+  let caught;
+  try {
+    withScenario("up-fails-container", () => {
+      try {
+        runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured());
+      } catch (err) {
+        caught = err;
+      }
+    });
+    assert.ok(caught);
+    const [transactionId] = readdirSyncNonHidden(backupRoot);
+    assert.equal(readJournal(join(backupRoot, transactionId)).phase, "starting");
+
+    const result = withScenario("up-fails-container", () =>
+      runRollback({ repo: workDir, transaction: transactionId, confirmRestore: true }, configWithCleanStopMeasured()),
+    );
+    assert.equal(result.phase, "rolled_back");
+    assert.equal(result.destructive, true);
+  } finally {
+    if (priorFailureFile === undefined) delete process.env.KAOIRO_TEST_UP_FAILURE_FILE;
+    else process.env.KAOIRO_TEST_UP_FAILURE_FILE = priorFailureFile;
+  }
+});
+
+test("runRollback restores a STARTING transaction when compose up created no container", () => {
+  const backupRoot = join(root, "kaoiro-deploy");
+  const failureFile = join(root, "first-up-failed");
+  const priorFailureFile = process.env.KAOIRO_TEST_UP_FAILURE_FILE;
+  process.env.KAOIRO_TEST_UP_FAILURE_FILE = failureFile;
+  let caught;
+  try {
+    withScenario("up-fails-no-container", () => {
+      try {
+        runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured());
+      } catch (err) {
+        caught = err;
+      }
+    });
+    assert.ok(caught);
+    const [transactionId] = readdirSyncNonHidden(backupRoot);
+    assert.equal(readJournal(join(backupRoot, transactionId)).phase, "starting");
+
+    const result = withScenario("up-fails-no-container", () =>
+      runRollback({ repo: workDir, transaction: transactionId, confirmRestore: true }, configWithCleanStopMeasured()),
+    );
+    assert.equal(result.phase, "rolled_back");
+    assert.equal(result.destructive, true);
+  } finally {
+    if (priorFailureFile === undefined) delete process.env.KAOIRO_TEST_UP_FAILURE_FILE;
+    else process.env.KAOIRO_TEST_UP_FAILURE_FILE = priorFailureFile;
+  }
+});
+
+test("runRollback restores when the target container has already exited", () => {
+  let transactionId;
+  const backupRoot = join(root, "kaoiro-deploy");
+  withScenario("running-clean-stop", () => {
+    transactionId = runUpdate(
+      { repo: workDir, target: headSha, maintenanceApproved: true },
+      configWithCleanStopMeasured(),
+    ).transactionId;
+  });
+  const stopFile = join(root, "stopped-before-rollback");
+  writeFileSync(stopFile, "");
+  const priorStopFile = process.env.KAOIRO_TEST_STOP_FILE;
+  process.env.KAOIRO_TEST_STOP_FILE = stopFile;
+  try {
+    const result = withScenario("running-clean-stop", () =>
+      runRollback({ repo: workDir, transaction: transactionId, confirmRestore: true }, configWithCleanStopMeasured()),
+    );
+    assert.equal(result.phase, "rolled_back");
+  } finally {
+    if (priorStopFile === undefined) delete process.env.KAOIRO_TEST_STOP_FILE;
+    else process.env.KAOIRO_TEST_STOP_FILE = priorStopFile;
+  }
+});
+
+test("runRollback refuses before wiping when a container remains running after stop", () => {
   let transactionId;
   const backupRoot = join(root, "kaoiro-deploy");
   withScenario("running-clean-stop", () => {
@@ -4034,7 +4179,7 @@ test("runRollback binds recovery compose stop to the target container recorded a
   process.env.KAOIRO_TEST_CALL_LOG = logPath;
   let caught;
   try {
-    withScenario("rollback-id-mismatch", () =>
+    withScenario("rollback-target-remains-running", () =>
       runRollback({ repo: workDir, transaction: transactionId, confirmRestore: true }, configWithCleanStopMeasured()),
     );
   } catch (err) {
@@ -4043,10 +4188,34 @@ test("runRollback binds recovery compose stop to the target container recorded a
     delete process.env.KAOIRO_TEST_CALL_LOG;
   }
   assert.ok(caught instanceof DeployError);
-  assert.match(caught.message, /captured container id/);
-  const log = readCallLog(logPath);
-  assert.ok(!log.some((line) => line.includes(" compose stop")));
-  assert.ok(!log.some((line) => line.includes("find \/data -mindepth")));
+  assert.match(caught.message, /not confirmed stopped/);
+  assert.ok(!readCallLog(logPath).some((line) => line.includes("find \/data -mindepth")));
+});
+
+test("runRollback rechecks that compose reports no running container before wiping", () => {
+  let transactionId;
+  const backupRoot = join(root, "kaoiro-deploy");
+  withScenario("running-clean-stop", () => {
+    transactionId = runUpdate(
+      { repo: workDir, target: headSha, maintenanceApproved: true },
+      configWithCleanStopMeasured(),
+    ).transactionId;
+  });
+  const logPath = join(root, "docker-calls.log");
+  process.env.KAOIRO_TEST_CALL_LOG = logPath;
+  let caught;
+  try {
+    withScenario("rollback-running-reappears", () =>
+      runRollback({ repo: workDir, transaction: transactionId, confirmRestore: true }, configWithCleanStopMeasured()),
+    );
+  } catch (err) {
+    caught = err;
+  } finally {
+    delete process.env.KAOIRO_TEST_CALL_LOG;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.match(caught.message, /compose still reports running/);
+  assert.ok(!readCallLog(logPath).some((line) => line.includes("find \/data -mindepth")));
 });
 
 test("runRollback (destructive) refuses when the pre-deploy archive no longer matches its recorded sha256", () => {
@@ -4363,7 +4532,7 @@ test("runRollback (destructive) refuses when docker-compose.yaml does not render
   assert.equal(journal.phase, "done");
 });
 
-test("runRollback (destructive) refuses when 2 or more containers currently match the service", () => {
+test("runRollback stops every stopped-or-running candidate currently associated with the service", () => {
   let transactionId;
   const backupRoot = join(root, "kaoiro-deploy");
   withScenario("running-clean-stop", () => {
@@ -4374,22 +4543,15 @@ test("runRollback (destructive) refuses when 2 or more containers currently matc
     transactionId = update.transactionId;
   });
 
-  let caught;
-  try {
-    withScenario("multiple-containers", () =>
-      runRollback(
-        { repo: workDir, transaction: transactionId, confirmRestore: true },
-        configWithCleanStopMeasured(),
-      ),
-    );
-  } catch (err) {
-    caught = err;
-  }
-  assert.ok(caught instanceof DeployError);
-  assert.ok(caught.message.includes("expected 0 or 1"));
-  // Refused before the FIRST rollback checkpoint — still "done".
+  const result = withScenario("multiple-containers", () =>
+    runRollback(
+      { repo: workDir, transaction: transactionId, confirmRestore: true },
+      configWithCleanStopMeasured(),
+    ),
+  );
+  assert.equal(result.phase, "rolled_back");
   const journal = readJournal(join(backupRoot, transactionId));
-  assert.equal(journal.phase, "done");
+  assert.equal(journal.phase, "rolled_back");
 });
 
 test("runRollback (destructive) refuses when the retag read-back disagrees with the old image id", () => {
