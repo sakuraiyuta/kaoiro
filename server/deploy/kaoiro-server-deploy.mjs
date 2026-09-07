@@ -62,6 +62,25 @@ function gitOutput(args, cwd) {
   }
 }
 
+/** issue #322 S1 (should-fix): whether `target` is already a known commit
+ *  object in the LOCAL repo — `git cat-file -e <sha>^{commit}` is a pure
+ *  read of `.git`'s own object store, no network I/O, unlike the `git
+ *  fetch origin` this replaces inside `update --dry-run` (which mutated
+ *  the checkout's remote-tracking refs and downloaded new objects even
+ *  under --dry-run, despite --dry-run's own read-only contract). A
+ *  `false` result says nothing about whether `origin` actually has
+ *  `target` — only that this repo has not (yet, or ever) fetched it;
+ *  callers must report `fetched: false` explicitly rather than let a
+ *  `--dry-run` reader assume a live check ran. */
+function targetKnownLocally(target, repo) {
+  try {
+    execFileSync("git", ["cat-file", "-e", `${target}^{commit}`], { cwd: repo });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function sha256File(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
@@ -1256,9 +1275,13 @@ function readAvailableBytes(path) {
 /** Docker's own `units.HumanSize` formatting (measured live, docker
  *  29.6.1, 2026-09-07: `docker system df -v`'s Size column reports
  *  "213.6kB" for ~213 KB, "1.302MB", "0B" with no decimal) — SI, base
- *  1000, not 1024. Base 1024 here would UNDERESTIMATE the real size
- *  (the dangerous direction: a genuine shortage would then read as
- *  "enough room"). Accepts exactly the five units this formatter emits
+ *  1000, not 1024. issue #322 N1: base 1024 here would OVERESTIMATE the
+ *  volume's own used size for the same mantissa (1024 > 1000 per unit
+ *  step) — the SAFE direction, since checkCapacity multiplies this
+ *  value up into the threshold `free_bytes` must clear; an
+ *  overestimate demands MORE free space than actually required, so it
+ *  fails closed rather than letting a genuine shortage read as "enough
+ *  room". Accepts exactly the five units this formatter emits
  *  (`B`/`kB`/`MB`/`GB`/`TB` — lowercase `k`, everything else uppercase),
  *  with or without a decimal mantissa. Any other spelling (`KB`, `KiB`,
  *  a different docker version's format, ...) returns `null` — an
@@ -1348,11 +1371,13 @@ function checkCapacity(bin, container, backupRoot, config) {
  *
  *  `--dry-run` (クロエ round 1 review MF-1) performs only reads — the
  *  same `compose ps`/`inspect` requireRunningContainer already needs,
- *  plus `git fetch origin` to report whether the target is even
- *  reachable — and returns a plan. It never acquires the deploy lock,
- *  creates a transaction directory, or resumes one via `--transaction`
- *  (an unrelated feature this commit does not attempt to give a
- *  meaningful non-mutating definition to).
+ *  plus (issue #322 S1: `targetKnownLocally`, never a real `git fetch
+ *  origin` — that mutated remote-tracking refs even under --dry-run,
+ *  see its own doc comment) whether the target is a commit this repo
+ *  already has locally — and returns a plan. It never acquires the
+ *  deploy lock, creates a transaction directory, or resumes one via
+ *  `--transaction` (an unrelated feature this commit does not attempt
+ *  to give a meaningful non-mutating definition to).
  *
  *  `--transaction <id>` resumes a transaction that reached the
  *  maintenance gate but has not been approved yet: it re-verifies the
@@ -1384,7 +1409,13 @@ export function runUpdate(flags, config) {
     }
     const container = requireRunningContainer(bin, serverDir, SERVICE);
     const unfinished = findUnfinishedTransaction(backupRoot);
-    gitOutput(["fetch", "origin"], repo);
+    // issue #322 S1 (should-fix): was `gitOutput(["fetch", "origin"],
+    // repo)` — a real network fetch that mutated remote-tracking refs
+    // and the object store, despite --dry-run's own read-only contract.
+    // See targetKnownLocally's own doc comment for what this reports
+    // instead, and why `fetched: false` is always present here.
+    const fetched = false;
+    const targetKnownLocallyResult = targetKnownLocally(target, repo);
     // #303 operator decision (5): the capacity preflight is a pure read
     // (statfsSync + 'docker system df -v', no container started) and
     // fail-closed, so a dry-run reports the SAME pass/fail answer a real
@@ -1396,6 +1427,8 @@ export function runUpdate(flags, config) {
       docker: overridden ? "fake" : "docker",
       container,
       target,
+      fetched,
+      targetKnownLocally: targetKnownLocallyResult,
       unfinishedTransactionId: unfinished === null ? null : unfinished.id,
       capacity,
       wouldRun:

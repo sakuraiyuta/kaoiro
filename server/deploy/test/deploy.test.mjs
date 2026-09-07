@@ -1056,6 +1056,44 @@ test("runUpdate --dry-run reports the plan", () => {
   assert.equal(result.container, "kaoiro-c1");
   assert.equal(result.unfinishedTransactionId, null);
   assert.ok(result.wouldRun.some((line) => line.includes("compose stop")));
+  // issue #322 S1: fetched is always false (dry-run never fetches), and
+  // headSha is workDir's own HEAD (present since clone), so it reads as
+  // known locally with no fetch needed.
+  assert.equal(result.fetched, false);
+  assert.equal(result.targetKnownLocally, true);
+});
+
+// issue #322 S1 (should-fix): the OLD `gitOutput(["fetch", "origin"],
+// repo)` mutated remote-tracking refs and downloaded objects even under
+// --dry-run. This proves the replacement genuinely never touches
+// origin: `origin` here points at a path that does not exist, so a real
+// fetch attempt would throw (gitOutput's own fail()) and this test
+// would go red if the fetch call were reinstated.
+test("runUpdate --dry-run does not fetch from origin — succeeds even when origin is unreachable", () => {
+  const brokenOriginDir = join(root, "work-broken-origin");
+  execFileSync("git", ["clone", "-q", bareDir, brokenOriginDir]);
+  execFileSync("git", [
+    "-C",
+    brokenOriginDir,
+    "remote",
+    "set-url",
+    "origin",
+    join(root, "does-not-exist.git"),
+  ]);
+  const result = withScenario("running", () =>
+    runUpdate({ repo: brokenOriginDir, target: headSha, dryRun: true }, configWithOverride()),
+  );
+  assert.equal(result.fetched, false);
+  assert.equal(result.targetKnownLocally, true);
+});
+
+test("runUpdate --dry-run reports targetKnownLocally: false for a target this repo has never fetched", () => {
+  const neverFetchedSha = "f".repeat(40);
+  const result = withScenario("running", () =>
+    runUpdate({ repo: workDir, target: neverFetchedSha, dryRun: true }, configWithOverride()),
+  );
+  assert.equal(result.fetched, false);
+  assert.equal(result.targetKnownLocally, false);
 });
 
 test("runUpdate --dry-run refuses --transaction", () => {
