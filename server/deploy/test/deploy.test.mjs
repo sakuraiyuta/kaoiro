@@ -986,6 +986,12 @@ test("runStart on branch C with --initialize and --dry-run reports the plan", ()
   assert.equal(result.branch, "C");
   assert.equal(result.dryRun, true);
   assert.ok(result.wouldRun.some((line) => line.includes("compose up")));
+  // クロエ M1〜M3 review should S-1: runStart's own real path takes the
+  // deployment lock via acquireLock, which mkdirSync's backup_root as a
+  // side effect (recursive: true) — --dry-run must never reach that,
+  // the same guarantee runUpdate --dry-run already pins.
+  const backupRoot = join(root, "kaoiro-deploy");
+  assert.equal(existsSync(backupRoot), false, "dry-run must not create backup_root");
 });
 
 // issue #322 M1 (must-fix): before this fix, runStart took no lock at
