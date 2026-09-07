@@ -421,6 +421,7 @@ const SESSION_RESET_ERROR_REASONS: ReadonlySet<string> = new Set([
   "session_reset_pending",
   "unsupported_session_reset",
   "runner_unavailable",
+  "negative_control_only",
 ]);
 
 /** Lifecycle results use the broader closed vocabulary. They are delivered
