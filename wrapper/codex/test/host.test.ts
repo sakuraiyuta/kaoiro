@@ -3131,7 +3131,7 @@ describe("CodexHost", () => {
       });
     });
 
-    it("the default CodexHost stderr sink masks the raw SDK rejection", async () => {
+    it("a scripted CodexHost rejection masks a replaced stderr writer", async () => {
       const logs: Envelope[] = [];
       const secret = "abcdef123456";
       const { client } = makeClient([

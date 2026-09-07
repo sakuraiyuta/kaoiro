@@ -150,18 +150,9 @@ export function redactCredentials(text: string): string {
   return masked;
 }
 
-/** The `result.error_detail` mask-then-clip transform (issue #300 round 3,
- *  finding M-B). `clipText` keeps the FIRST MAX_LOG_BYTES bytes (a head
- *  clip), so a keyword+value pair near the start of the text -- the
- *  common case here -- keeps its own anchor in either order; masking
- *  first is still the chosen order for defensive consistency with
- *  `codexExecFailureRelay`'s own clip (a TAIL clip, where the ordering IS
- *  load-bearing: clipping first there can discard a secret's keyword
- *  anchor while keeping the value's tail, masking nothing). Called from
- *  exactly one place, `makeResult` (state.ts) -- the actual choke point,
- *  since every `EngineAdapter`'s result envelope funnels through it
- *  unconditionally, unlike a per-engine `#emitResult` an engine could
- *  omit or bypass. */
+/** Applies the shared error-text mask-then-head-clip transform. `makeResult`
+ * uses it for wire errors; wrapper-owned stderr diagnostics call it through
+ * writeRedactedStderr. */
 export function boundErrorDetail(text: string): string {
   return clipText(redactCredentials(text)).text;
 }

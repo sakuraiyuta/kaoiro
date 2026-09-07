@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { reportStderr } from "../src/bridge.js";
 
 describe("Codex bridge stderr diagnostics", () => {
-  it("masks the production stderr write and its local mirror", async () => {
+  it("masks a replaced stderr writer and its local mirror", async () => {
     const directory = await mkdtemp(join(tmpdir(), "kaoiro-codex-bridge-"));
     const mirror = join(directory, "stderr.log");
     const originalPath = process.env.KAOIRO_BRIDGE_STDERR_PATH;
