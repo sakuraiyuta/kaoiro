@@ -620,13 +620,14 @@ exactly the keys `store` (string), `env` (the persistence-path env var name),
 `default_file` (the bare filename under the fallback dir), and `default_path`
 (the ABSOLUTE path `runtime.exs`'s own fallback resolves to when `env` is
 unset — A-MF-2 below). issue #322 M5: module presence is decided FIRST, by
-the beam-file check above, never by the eval call's own exit code — passing
-no env vars to `eval` makes `runtime.exs`'s config raise
-(`SECRET_KEY_BASE`/`PHX_HOST` missing) fire identically on EVERY real
-invocation regardless of whether the module exists, so treating any eval
-failure as "module absent" was fail-open by construction: it could never
-distinguish an absent module from an OOM, a daemon hiccup, or any other
-infrastructure failure. Now: the beam file absent means this module has not
+the beam-file check above, never by the eval call's own exit code — `eval`
+can fail for several DISTINCT reasons its exit code cannot tell apart: a
+pre-#310 image (before `config/runtime.exs` relaxed its required-variable
+raises for `RELEASE_COMMAND=="eval"`) raising on missing
+`SECRET_KEY_BASE`/`PHX_HOST`, an OOM, image corruption, or a docker daemon
+failure. Deciding any of those means "module absent" was fail-open by
+construction, regardless of which one actually fired. Now: the beam file
+absent means this module has not
 landed on this image (a pre-#310 image, or an old image a rollback targets)
 — recorded as `env_consistency: {skipped: true, reason}`, never a failure.
 The beam file present but the eval process failing (non-zero exit, exiting 0

@@ -88,6 +88,11 @@ function isEnvConsistencyEntry(value) {
     typeof value.container_effective === "string" &&
     value.container_effective !== "" &&
     (value.container_source === "env" || value.container_source === "default") &&
+    // issue #322 M5 follow-up (nit-1): records which image's own
+    // manifest actually supplied container_effective's fallback value
+    // (kaoiro-server-deploy.mjs's checkEnvConsistency, M5) — validated
+    // the same shape as container_source just above it.
+    (value.assumed_default_source === "old_image" || value.assumed_default_source === "target_image") &&
     typeof value.match === "boolean"
   );
 }
@@ -99,20 +104,26 @@ function isEnvConsistencyEntry(value) {
  *  definition rather than two independently drifting ones (the same
  *  pattern as ROLLBACK_TAG_RE above).
  *
- *  `{skipped: true, reason}`: the target image's persistence-path `eval`
- *  itself exited non-zero — the querying module has not landed on that
- *  image (a pre-#310 image, or an old image a rollback targets). Recorded
- *  rather than silently treated as "no keys to check", so an operator
- *  reading the manifest later can tell "checked, found nothing to flag"
- *  apart from "never actually checked".
+ *  `{skipped: true, reason}`: either the target image lacks the
+ *  persistence-path module entirely (issue #322 M5: decided by a
+ *  SEPARATE beam-file probe run BEFORE `eval` at all — never by `eval`'s
+ *  own exit code, which now throws DeployError instead of skipping when
+ *  the module IS present but eval still fails), or the module is
+ *  present but the OLD image's own manifest could not be trusted (M5
+ *  follow-up should-2: a shape violation there, not this transaction's
+ *  own defect). Recorded rather than silently treated as "no keys to
+ *  check", so an operator reading the manifest later can tell "checked,
+ *  found nothing to flag" apart from "never actually checked".
  *
- *  `{skipped: false, entries: {<env var name>: {env_file, compose,
- *  container, match}}}`: the eval succeeded — one three-way comparison
- *  per canonical persistence-path key it reported. A bare per-key map
- *  (the shape before this discriminator existed) is no longer valid on
- *  its own; every writer already produces the new shape, and silently
- *  accepting the old one would make a writer bug indistinguishable from
- *  an intentional skip. */
+ *  `{skipped: false, entries: {<env var name>: {declared, compose,
+ *  container_effective, container_source, assumed_default_source,
+ *  match}}}`: the target image's eval succeeded — one comparison per
+ *  canonical persistence-path key it reported, each entry validated by
+ *  isEnvConsistencyEntry below (see its own doc comment for what each
+ *  field means). A bare per-key map (the shape before this
+ *  discriminator existed) is no longer valid on its own; every writer
+ *  already produces the new shape, and silently accepting the old one
+ *  would make a writer bug indistinguishable from an intentional skip. */
 export function isValidEnvConsistency(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return false;

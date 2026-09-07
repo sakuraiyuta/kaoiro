@@ -24,6 +24,7 @@ function validManifest() {
           compose: "set",
           container_effective: "set",
           container_source: "env",
+          assumed_default_source: "old_image",
           match: true,
         },
       },
@@ -166,6 +167,13 @@ test("isValidManifestShape rejects an env_consistency entry with a null containe
 test("isValidManifestShape rejects an env_consistency entry with an unknown container_source", () => {
   const bad = validManifest();
   bad.env_consistency.entries.KAOIRO_CLIENT_TOKENS.container_source = "guessed";
+  assert.equal(isValidManifestShape(bad), false);
+});
+
+// issue #322 M5 follow-up (nit-1): same shape as container_source above.
+test("isValidManifestShape rejects an env_consistency entry with an unknown assumed_default_source", () => {
+  const bad = validManifest();
+  bad.env_consistency.entries.KAOIRO_CLIENT_TOKENS.assumed_default_source = "guessed";
   assert.equal(isValidManifestShape(bad), false);
 });
 
