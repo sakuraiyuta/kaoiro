@@ -492,6 +492,16 @@ shown, so a file only needs to state what it overrides):
 | `health_url` | `null` (derived via `docker compose port <service> 4000`) | Override only if the derived URL is wrong for this host |
 | `expected_clean_stop_exit_code` / `expected_clean_stop_oom_killed` | `null` / `null` | **Must be set from a measurement on this host** (step 5) — until then every stop is treated as abnormal, the safe direction to fail in |
 
+**`update --dry-run --target <target-sha>` performs only reads.** It never
+fetches from `origin` (issue #322 S1) — an EARLIER version did, which mutated
+the checkout's remote-tracking refs and object store despite `--dry-run`'s
+own read-only contract. It instead checks whether `target` is already a known
+commit object in the LOCAL repo (`git cat-file -e`, no network at all) and
+reports that under `targetKnownLocally` alongside `fetched: false` — an
+explicit signal that this reflects refs as of the last real `git fetch`, not
+a live query. Run a real `git fetch origin` yourself first if the answer
+needs to be current.
+
 **Separate prepare (no downtime) from commit (the stop window)** — steps
 (1)/(2) below now run automatically, inside one `update` invocation, ending
 right before the stop window; steps (5)/(6) run automatically inside a second
