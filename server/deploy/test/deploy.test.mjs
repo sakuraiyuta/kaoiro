@@ -70,7 +70,9 @@ case "$1" in
       ps)
         if [ "$2" = "-a" ] && [ "$3" = "-q" ]; then
           case "$FAKE_DOCKER_SCENARIO" in
+            rollback-compose-ps-a-fails) exit 1 ;;
             up-fails-no-container) ;;
+            rollback-volume-filter-foreign-running) ;;
             multiple-containers) printf 'sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\\nsha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\\n' ;;
             rollback-id-mismatch)
               if [ -n "$compose_file" ]; then
@@ -91,7 +93,7 @@ case "$1" in
             exit 0
           fi
           case "$FAKE_DOCKER_SCENARIO" in
-            stopped) ;;
+            stopped|rollback-compose-ps-a-fails|rollback-volume-filter-foreign-running) ;;
             multiple-containers) printf 'sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\\nsha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\\n' ;;
             target-id-mismatch|rollback-id-mismatch) printf 'sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\\n' ;;
             *) printf 'sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\\n' ;;
@@ -208,6 +210,18 @@ case "$1" in
       *) exit 0 ;;
     esac
     ;;
+  ps)
+    if [ "$2" = "-a" ] && [ "$3" = "--filter" ] && [ "$5" = "-q" ]; then
+      case "$FAKE_DOCKER_SCENARIO" in
+        rollback-volume-filter-fails) exit 1 ;;
+        up-fails-no-container) ;;
+        rollback-volume-filter-foreign-running) printf 'sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\\n' ;;
+        *) printf 'sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\\n' ;;
+      esac
+      exit 0
+    fi
+    exit 1
+    ;;
   # クロエ round 4 review N-3: existence-only, matching \`docker volume
   # inspect\` (measured live: exit 0 for an existing volume, 1 for a
   # missing one). Defaults to "does not exist" — most branch-C/FRESH
@@ -316,6 +330,19 @@ case "$1" in
         ;;
       *)
         case "$4" in
+          '{{json .Config.Labels}}')
+            case "$FAKE_DOCKER_SCENARIO" in
+              rollback-volume-filter-foreign-running)
+                printf '{"com.docker.compose.project":"other","com.docker.compose.service":"other"}\\n'
+                ;;
+              *)
+                printf '{"com.docker.compose.project":"kaoiro","com.docker.compose.service":"kaoiro"}\\n'
+                ;;
+            esac
+            ;;
+          '{{json .Mounts}}')
+            printf '[{"Type":"volume","Name":"kaoiro_kaoiro-state"}]\\n'
+            ;;
           '{{.State.Status}}')
             case "$FAKE_DOCKER_SCENARIO" in
               target-remains-running|rollback-target-remains-running) printf 'running\\n'; exit 0 ;;
@@ -323,7 +350,7 @@ case "$1" in
             if [ -f "$KAOIRO_TEST_STOP_FILE" ]; then printf 'exited\\n'; exit 0; fi
             case "$FAKE_DOCKER_SCENARIO" in
               stopped) printf 'exited\\n' ;;
-              running|retag-drift|running-clean-stop|running-clean-stop-retag-drift|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty|compose-config-renamed-service|compose-config-missing-environment-key|mount-vanishes-after-stop|system-df-fails|system-df-invalid-json|system-df-not-array|target-id-mismatch|target-remains-running|rollback-target-remains-running|rollback-id-mismatch|up-fails-container|up-fails-no-container|rollback-running-reappears)
+              running|retag-drift|running-clean-stop|running-clean-stop-retag-drift|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty|compose-config-renamed-service|compose-config-missing-environment-key|mount-vanishes-after-stop|system-df-fails|system-df-invalid-json|system-df-not-array|target-id-mismatch|target-remains-running|rollback-target-remains-running|rollback-id-mismatch|up-fails-container|up-fails-no-container|rollback-running-reappears|rollback-volume-filter-foreign-running|rollback-forensic-corrupt|rollback-restore-drifts|multiple-containers)
                 printf 'running\\n' ;;
             esac
             ;;
@@ -3987,6 +4014,10 @@ test("runRollback (destructive) runs the full stop/forensic/restore/retag/up/hea
   ]) {
     assert.ok(journal.history.some((e) => e.phase === phase), `expected a ${phase} checkpoint`);
   }
+  assert.deepEqual(
+    journal.history.find((entry) => entry.phase === "rollback_stopped").observation.resolved_container_ids,
+    ["sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"],
+  );
   // SF-9: the checkpoint's own observation is self-contained (not "trust
   // the prior entry") — both the forensic archive and the pre-deploy
   // archive it is about to restore from are recorded with it.
@@ -4026,6 +4057,8 @@ test("runRollback refuses a recorded target plan whose project identity differs 
   assert.ok(caught instanceof DeployError);
   assert.match(caught.message, /migration work, not a rolling update/);
   const log = readCallLog(logPath);
+  assert.ok(!log.some((line) => line.includes(" compose ps -a")));
+  assert.ok(!log.some((line) => line.includes("ps -a --filter volume=")));
   assert.ok(!log.some((line) => line.includes(" compose stop")));
   assert.ok(!log.some((line) => line.includes("find \/data -mindepth")));
 });
@@ -4077,7 +4110,10 @@ test("runRollback stops the union of target and recovery compose candidates", ()
   }
   assert.equal(result.phase, "rolled_back");
   const log = readCallLog(logPath);
-  assert.ok(log.includes("stop -t 30 sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"));
+  assert.ok(log.some((line) => line.startsWith("stop -t 30 sha256:")));
+  assert.ok(
+    log.includes("inspect sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff --format {{json .Config.Labels}}"),
+  );
   assert.ok(
     log.includes("inspect sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee --format {{.State.Running}}"),
   );
@@ -4087,7 +4123,9 @@ test("runRollback stops the union of target and recovery compose candidates", ()
 test("runRollback restores a STARTING transaction when compose up failed after creating a container", () => {
   const backupRoot = join(root, "kaoiro-deploy");
   const failureFile = join(root, "first-up-failed");
+  const stoppedFile = join(root, "exited-before-rollback");
   const priorFailureFile = process.env.KAOIRO_TEST_UP_FAILURE_FILE;
+  const priorStopFile = process.env.KAOIRO_TEST_STOP_FILE;
   process.env.KAOIRO_TEST_UP_FAILURE_FILE = failureFile;
   let caught;
   try {
@@ -4102,6 +4140,9 @@ test("runRollback restores a STARTING transaction when compose up failed after c
     const [transactionId] = readdirSyncNonHidden(backupRoot);
     assert.equal(readJournal(join(backupRoot, transactionId)).phase, "starting");
 
+    writeFileSync(stoppedFile, "");
+    process.env.KAOIRO_TEST_STOP_FILE = stoppedFile;
+
     const result = withScenario("up-fails-container", () =>
       runRollback({ repo: workDir, transaction: transactionId, confirmRestore: true }, configWithCleanStopMeasured()),
     );
@@ -4110,12 +4151,15 @@ test("runRollback restores a STARTING transaction when compose up failed after c
   } finally {
     if (priorFailureFile === undefined) delete process.env.KAOIRO_TEST_UP_FAILURE_FILE;
     else process.env.KAOIRO_TEST_UP_FAILURE_FILE = priorFailureFile;
+    if (priorStopFile === undefined) delete process.env.KAOIRO_TEST_STOP_FILE;
+    else process.env.KAOIRO_TEST_STOP_FILE = priorStopFile;
   }
 });
 
 test("runRollback restores a STARTING transaction when compose up created no container", () => {
   const backupRoot = join(root, "kaoiro-deploy");
   const failureFile = join(root, "first-up-failed");
+  const logPath = join(root, "docker-calls.log");
   const priorFailureFile = process.env.KAOIRO_TEST_UP_FAILURE_FILE;
   process.env.KAOIRO_TEST_UP_FAILURE_FILE = failureFile;
   let caught;
@@ -4131,11 +4175,21 @@ test("runRollback restores a STARTING transaction when compose up created no con
     const [transactionId] = readdirSyncNonHidden(backupRoot);
     assert.equal(readJournal(join(backupRoot, transactionId)).phase, "starting");
 
-    const result = withScenario("up-fails-no-container", () =>
-      runRollback({ repo: workDir, transaction: transactionId, confirmRestore: true }, configWithCleanStopMeasured()),
-    );
+    process.env.KAOIRO_TEST_CALL_LOG = logPath;
+    let result;
+    try {
+      result = withScenario("up-fails-no-container", () =>
+        runRollback({ repo: workDir, transaction: transactionId, confirmRestore: true }, configWithCleanStopMeasured()),
+      );
+    } finally {
+      delete process.env.KAOIRO_TEST_CALL_LOG;
+    }
     assert.equal(result.phase, "rolled_back");
     assert.equal(result.destructive, true);
+    assert.ok(
+      readCallLog(logPath).includes("ps -a --filter volume=kaoiro_kaoiro-state -q"),
+      "the empty candidate decision must query Docker's volume filter",
+    );
   } finally {
     if (priorFailureFile === undefined) delete process.env.KAOIRO_TEST_UP_FAILURE_FILE;
     else process.env.KAOIRO_TEST_UP_FAILURE_FILE = priorFailureFile;
@@ -4215,6 +4269,109 @@ test("runRollback rechecks that compose reports no running container before wipi
   }
   assert.ok(caught instanceof DeployError);
   assert.match(caught.message, /compose still reports running/);
+  assert.ok(!readCallLog(logPath).some((line) => line.includes("find \/data -mindepth")));
+});
+
+test("runRollback refuses before wiping when a foreign deployment still mounts the rollback volume", () => {
+  let transactionId;
+  const backupRoot = join(root, "kaoiro-deploy");
+  withScenario("running-clean-stop", () => {
+    transactionId = runUpdate(
+      { repo: workDir, target: headSha, maintenanceApproved: true },
+      configWithCleanStopMeasured(),
+    ).transactionId;
+  });
+  const logPath = join(root, "docker-calls.log");
+  process.env.KAOIRO_TEST_CALL_LOG = logPath;
+  let caught;
+  try {
+    withScenario("rollback-volume-filter-foreign-running", () =>
+      runRollback({ repo: workDir, transaction: transactionId, confirmRestore: true }, configWithCleanStopMeasured()),
+    );
+  } catch (err) {
+    caught = err;
+  } finally {
+    delete process.env.KAOIRO_TEST_CALL_LOG;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.match(caught.message, /does not belong to kaoiro\/kaoiro/);
+  const log = readCallLog(logPath);
+  assert.ok(log.includes("ps -a --filter volume=kaoiro_kaoiro-state -q"));
+  assert.ok(!log.some((line) => line.startsWith("stop -t 30")));
+  assert.ok(!log.some((line) => line.includes("find \/data -mindepth")));
+});
+
+test("runRollback refuses before wiping when compose candidate enumeration fails", () => {
+  const backupRoot = join(root, "kaoiro-deploy");
+  const failureFile = join(root, "first-up-failed");
+  const priorFailureFile = process.env.KAOIRO_TEST_UP_FAILURE_FILE;
+  process.env.KAOIRO_TEST_UP_FAILURE_FILE = failureFile;
+  let updateError;
+  try {
+    withScenario("up-fails-no-container", () => {
+      try {
+        runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured());
+      } catch (err) {
+        updateError = err;
+      }
+    });
+    assert.ok(updateError);
+  } finally {
+    if (priorFailureFile === undefined) delete process.env.KAOIRO_TEST_UP_FAILURE_FILE;
+    else process.env.KAOIRO_TEST_UP_FAILURE_FILE = priorFailureFile;
+  }
+  const [transactionId] = readdirSyncNonHidden(backupRoot);
+  const logPath = join(root, "docker-calls.log");
+  process.env.KAOIRO_TEST_CALL_LOG = logPath;
+  let caught;
+  try {
+    withScenario("rollback-compose-ps-a-fails", () =>
+      runRollback({ repo: workDir, transaction: transactionId, confirmRestore: true }, configWithCleanStopMeasured()),
+    );
+  } catch (err) {
+    caught = err;
+  } finally {
+    delete process.env.KAOIRO_TEST_CALL_LOG;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.match(caught.message, /could not enumerate containers/);
+  assert.ok(!readCallLog(logPath).some((line) => line.includes("find \/data -mindepth")));
+});
+
+test("runRollback refuses before wiping when the volume-filter query fails", () => {
+  const backupRoot = join(root, "kaoiro-deploy");
+  const failureFile = join(root, "first-up-failed");
+  const priorFailureFile = process.env.KAOIRO_TEST_UP_FAILURE_FILE;
+  process.env.KAOIRO_TEST_UP_FAILURE_FILE = failureFile;
+  let updateError;
+  try {
+    withScenario("up-fails-no-container", () => {
+      try {
+        runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured());
+      } catch (err) {
+        updateError = err;
+      }
+    });
+    assert.ok(updateError);
+  } finally {
+    if (priorFailureFile === undefined) delete process.env.KAOIRO_TEST_UP_FAILURE_FILE;
+    else process.env.KAOIRO_TEST_UP_FAILURE_FILE = priorFailureFile;
+  }
+  const [transactionId] = readdirSyncNonHidden(backupRoot);
+  const logPath = join(root, "docker-calls.log");
+  process.env.KAOIRO_TEST_CALL_LOG = logPath;
+  let caught;
+  try {
+    withScenario("rollback-volume-filter-fails", () =>
+      runRollback({ repo: workDir, transaction: transactionId, confirmRestore: true }, configWithCleanStopMeasured()),
+    );
+  } catch (err) {
+    caught = err;
+  } finally {
+    delete process.env.KAOIRO_TEST_CALL_LOG;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.match(caught.message, /could not enumerate containers/);
   assert.ok(!readCallLog(logPath).some((line) => line.includes("find \/data -mindepth")));
 });
 

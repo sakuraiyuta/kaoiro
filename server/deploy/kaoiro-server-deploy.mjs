@@ -27,6 +27,7 @@ import { loadConfig } from "./kaoiro-deploy-config.mjs";
 import {
   dockerComposeContainerIds,
   dockerInspect,
+  dockerVolumeContainerIds,
   resolveDockerBin,
   runDocker,
 } from "./kaoiro-deploy-docker.mjs";
@@ -299,6 +300,75 @@ function requireStoppedContainer(bin, containerId, label) {
       `${label} container ${containerId} is not confirmed stopped (running=${running}, status=${JSON.stringify(status)}) — refusing before storage mutation`,
     );
   }
+}
+
+function readRollbackCandidate(bin, containerId, identity, volumeId) {
+  let runningRaw;
+  let status;
+  let labelsRaw;
+  let mountsRaw;
+  try {
+    runningRaw = dockerInspect(bin, containerId, "{{.State.Running}}");
+    status = dockerInspect(bin, containerId, "{{.State.Status}}");
+    labelsRaw = dockerInspect(bin, containerId, "{{json .Config.Labels}}");
+    mountsRaw = dockerInspect(bin, containerId, "{{json .Mounts}}");
+  } catch (err) {
+    fail(`could not inspect rollback candidate ${containerId}: ${err.message}`);
+  }
+  const running = parseDockerBoolField(runningRaw);
+  if (running === null || typeof status !== "string" || status === "") {
+    fail(`rollback candidate ${containerId} has an unreadable state — refusing before storage mutation`);
+  }
+  let labels;
+  let mounts;
+  try {
+    labels = JSON.parse(labelsRaw);
+    mounts = JSON.parse(mountsRaw);
+  } catch (err) {
+    fail(`rollback candidate ${containerId} has unreadable Docker metadata: ${err.message}`);
+  }
+  if (labels === null || typeof labels !== "object" || Array.isArray(labels) || !Array.isArray(mounts)) {
+    fail(`rollback candidate ${containerId} has malformed Docker metadata — refusing before storage mutation`);
+  }
+  let mountsTargetVolume = false;
+  for (const mount of mounts) {
+    if (
+      mount === null ||
+      typeof mount !== "object" ||
+      typeof mount.Type !== "string" ||
+      typeof mount.Name !== "string"
+    ) {
+      fail(`rollback candidate ${containerId} has malformed Docker mount metadata — refusing before storage mutation`);
+    }
+    if (mount.Type === "volume" && mount.Name === volumeId) mountsTargetVolume = true;
+  }
+  return {
+    id: containerId,
+    running,
+    status,
+    mountsTargetVolume,
+    belongsToDeployment:
+      labels["com.docker.compose.project"] === identity.project_name &&
+      labels["com.docker.compose.service"] === SERVICE &&
+      mountsTargetVolume,
+  };
+}
+
+function rollbackCandidateIds(bin, serverDir, recoveryArgs, volumeId) {
+  let ids;
+  try {
+    ids = [
+      ...dockerComposeContainerIds(bin, serverDir, SERVICE, [], true),
+      ...dockerComposeContainerIds(bin, serverDir, SERVICE, recoveryArgs, true),
+      ...dockerVolumeContainerIds(bin, volumeId),
+    ];
+  } catch (err) {
+    fail(`could not enumerate containers that may mount ${volumeId}: ${err.message}`);
+  }
+  if (ids.some((id) => typeof id !== "string" || id === "" || /\s/.test(id))) {
+    fail(`container enumeration for ${volumeId} returned an invalid id — refusing before storage mutation`);
+  }
+  return new Set(ids);
 }
 
 /** Parses a docker inspect `{{.State.ExitCode}}`-shaped field. Returns
@@ -2509,7 +2579,14 @@ export function runRollback(flags, config) {
       recoveryPlanAt(bin, repo, serverDir, oldSha, recoveryComposeFile),
       "recovery",
     );
+    requirePlanMatch(manifest.target_plan, composePlan(bin, serverDir), "target");
     requirePlanIdentityMatch(manifest.recovery_plan, manifest.target_plan);
+    const identity = manifest.target_plan.identity;
+    if (!identity.service_mounts.some((mount) => mount.type === "volume" && mount.source === volumeId)) {
+      fail(
+        `recorded compose plan does not bind ${SERVICE} to rollback volume ${volumeId} — refusing before Docker mutation`,
+      );
+    }
 
     // issue #322 M3 (must-fix): the recovery PAIR this rollback depends on
     // — the old image, the pre-deploy archive, and a compose file that
@@ -2542,17 +2619,32 @@ export function runRollback(flags, config) {
     }
     const upEntry = journal.history.find((entry) => entry.phase === PHASE.UP);
     const recordedTargetId = upEntry?.observation?.container_id;
-    const candidates = new Set([
-      ...(typeof recordedTargetId === "string" && recordedTargetId !== "" ? [recordedTargetId] : []),
-      ...dockerComposeContainerIds(bin, serverDir, SERVICE, [], true),
-      ...dockerComposeContainerIds(bin, serverDir, SERVICE, recoveryArgs, true),
-    ]);
-    for (const candidate of candidates) {
-      const running = parseDockerBoolField(dockerInspect(bin, candidate, "{{.State.Running}}"));
-      if (running === true) {
-        runDocker(bin, ["stop", "-t", "30", candidate], { stdio: "inherit" });
+    const candidates = rollbackCandidateIds(bin, serverDir, recoveryArgs, volumeId);
+    if (typeof recordedTargetId === "string" && recordedTargetId !== "") {
+      candidates.add(recordedTargetId);
+    }
+    const candidateIds = [...candidates].sort();
+    const resolvedIds = [];
+    for (const candidateId of candidateIds) {
+      let candidate = readRollbackCandidate(bin, candidateId, identity, volumeId);
+      if (!candidate.belongsToDeployment) {
+        if (candidate.running && candidate.mountsTargetVolume) {
+          fail(
+            `rollback candidate ${candidateId} mounts ${volumeId} but does not belong to ${identity.project_name}/${SERVICE} — refusing before storage mutation`,
+          );
+        }
+        continue;
       }
-      requireStoppedContainer(bin, candidate, "rollback candidate");
+      resolvedIds.push(candidateId);
+      if (candidate.running) {
+        runDocker(bin, ["stop", "-t", "30", candidateId], { stdio: "inherit" });
+        candidate = readRollbackCandidate(bin, candidateId, identity, volumeId);
+      }
+      if (candidate.running || candidate.status !== "exited") {
+        fail(
+          `rollback candidate ${candidateId} is not confirmed stopped (running=${candidate.running}, status=${JSON.stringify(candidate.status)}) — refusing before storage mutation`,
+        );
+      }
     }
     const runningTargetIds = dockerComposeContainerIds(bin, serverDir, SERVICE);
     const runningRecoveryIds = dockerComposeContainerIds(bin, serverDir, SERVICE, recoveryArgs);
@@ -2565,7 +2657,10 @@ export function runRollback(flags, config) {
       dir,
       journal,
       PHASE.ROLLBACK_STOPPED,
-      { stopped_container: candidates.size === 0 ? null : [...candidates].join(",") },
+      {
+        stopped_container: resolvedIds.length === 0 ? null : resolvedIds.join(","),
+        resolved_container_ids: candidateIds,
+      },
       validateJournalAgainstStateMachine,
     );
 
@@ -2731,7 +2826,7 @@ export function runRollback(flags, config) {
       transactionId: flags.transaction,
       destructive: true,
       restoredImageId: oldImageId,
-      stoppedContainer: candidates.size === 0 ? null : [...candidates].join(","),
+      stoppedContainer: resolvedIds.length === 0 ? null : resolvedIds.join(","),
       health,
     };
   } finally {

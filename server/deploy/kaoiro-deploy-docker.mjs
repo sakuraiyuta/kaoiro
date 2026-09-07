@@ -93,3 +93,11 @@ export function dockerComposeContainerIds(bin, cwd, service, composeArgs = [], i
   const output = runDocker(bin, args, { cwd });
   return output === "" ? [] : output.split("\n");
 }
+
+/** Resolves every stopped or running container that mounts a named volume.
+ *  This is deliberately outside Compose: a broken or replaced project file
+ *  must not make a live consumer of data about to be restored invisible. */
+export function dockerVolumeContainerIds(bin, volume) {
+  const output = runDocker(bin, ["ps", "-a", "--filter", `volume=${volume}`, "-q"]);
+  return output === "" ? [] : output.split("\n");
+}
