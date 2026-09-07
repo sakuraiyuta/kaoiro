@@ -2541,24 +2541,31 @@ export function runRollback(flags, config) {
       );
     }
     const upEntry = journal.history.find((entry) => entry.phase === PHASE.UP);
-    const targetContainerId = upEntry?.observation?.container_id;
-    if (typeof targetContainerId !== "string" || targetContainerId === "") {
+    const recordedTargetId = upEntry?.observation?.container_id;
+    const candidates = new Set([
+      ...(typeof recordedTargetId === "string" && recordedTargetId !== "" ? [recordedTargetId] : []),
+      ...dockerComposeContainerIds(bin, serverDir, SERVICE, [], true),
+      ...dockerComposeContainerIds(bin, serverDir, SERVICE, recoveryArgs, true),
+    ]);
+    for (const candidate of candidates) {
+      const running = parseDockerBoolField(dockerInspect(bin, candidate, "{{.State.Running}}"));
+      if (running === true) {
+        runDocker(bin, ["stop", "-t", "30", candidate], { stdio: "inherit" });
+      }
+      requireStoppedContainer(bin, candidate, "rollback candidate");
+    }
+    const runningTargetIds = dockerComposeContainerIds(bin, serverDir, SERVICE);
+    const runningRecoveryIds = dockerComposeContainerIds(bin, serverDir, SERVICE, recoveryArgs);
+    if (runningTargetIds.length !== 0 || runningRecoveryIds.length !== 0) {
       fail(
-        `transaction ${flags.transaction} has no recorded target container id; refusing before rollback can touch storage`,
+        `compose still reports running ${SERVICE} containers (target ${JSON.stringify(runningTargetIds)}, recovery ${JSON.stringify(runningRecoveryIds)}) — refusing before storage mutation`,
       );
     }
-    requireSingleBoundContainer(
-      dockerComposeContainerIds(bin, serverDir, SERVICE, recoveryArgs),
-      targetContainerId,
-      "recovery",
-    );
-    runDocker(bin, ["compose", ...recoveryArgs, "stop", "-t", "30"], { cwd: serverDir, stdio: "inherit" });
-    requireStoppedContainer(bin, targetContainerId, "rollback target");
     journal = advancePhase(
       dir,
       journal,
       PHASE.ROLLBACK_STOPPED,
-      { stopped_container: targetContainerId },
+      { stopped_container: candidates.size === 0 ? null : [...candidates].join(",") },
       validateJournalAgainstStateMachine,
     );
 
@@ -2724,7 +2731,7 @@ export function runRollback(flags, config) {
       transactionId: flags.transaction,
       destructive: true,
       restoredImageId: oldImageId,
-      stoppedContainer: targetContainerId,
+      stoppedContainer: candidates.size === 0 ? null : [...candidates].join(","),
       health,
     };
   } finally {

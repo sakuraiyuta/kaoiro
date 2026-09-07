@@ -86,7 +86,10 @@ export function dockerComposeContainerNames(bin, cwd, service, composeArgs = [])
 /** Resolves the live container ids Compose associates with one service.
  *  Callers bind this answer to the container captured before the deploy
  *  window, so a different Compose project cannot select another target. */
-export function dockerComposeContainerIds(bin, cwd, service, composeArgs = []) {
-  const output = runDocker(bin, ["compose", ...composeArgs, "ps", "-q", service], { cwd });
+export function dockerComposeContainerIds(bin, cwd, service, composeArgs = [], includeStopped = false) {
+  const args = ["compose", ...composeArgs, "ps"];
+  if (includeStopped) args.push("-a");
+  args.push("-q", service);
+  const output = runDocker(bin, args, { cwd });
   return output === "" ? [] : output.split("\n");
 }
