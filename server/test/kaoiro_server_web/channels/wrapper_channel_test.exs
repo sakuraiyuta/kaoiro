@@ -12,6 +12,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
   alias KaoiroServer.PlannedDisconnects
   alias KaoiroServer.SessionLifecycleEvents
   alias KaoiroServer.SessionPointers
+  alias KaoiroServer.SessionResetRequestReplyReasons
   alias KaoiroServer.TaskStates
   alias KaoiroServer.TokenDenylist
   alias KaoiroServer.TransportLimits
@@ -20,17 +21,14 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
   # Source: wrapper/core/src/transport.ts SESSION_RESET_ERROR_REASONS. This
   # is the complete reply vocabulary, not the broader lifecycle vocabulary.
-  @session_reset_request_reply_reasons MapSet.new([
-                                         "agent_busy",
-                                         "session_reset_pending",
-                                         "unsupported_session_reset",
-                                         "runner_unavailable"
-                                       ])
+  # CI cross-checks this server source of truth against the wrapper source.
+  defp session_reset_request_reply_reasons,
+    do: MapSet.new(SessionResetRequestReplyReasons.values())
 
   defp assert_session_reset_request_error(ref, expected) do
     assert_reply ref, :error, %{reason: reason}
     assert reason == expected
-    assert MapSet.member?(@session_reset_request_reply_reasons, reason)
+    assert MapSet.member?(session_reset_request_reply_reasons(), reason)
   end
 
   defp envelope(agent_id, state) do
@@ -4965,7 +4963,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       for {source_error, expected} <- source_errors do
         actual = WrapperChannel.reset_request_reason(source_error)
         assert actual == expected
-        assert MapSet.member?(@session_reset_request_reply_reasons, actual)
+        assert MapSet.member?(session_reset_request_reply_reasons(), actual)
       end
     end
   end

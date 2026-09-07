@@ -32,6 +32,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   alias KaoiroServer.PlannedDisconnects
   alias KaoiroServer.SessionLifecycleEvents
   alias KaoiroServer.SessionPointers
+  alias KaoiroServer.SessionResetRequestReplyReasons
   alias KaoiroServer.SessionResets
   alias KaoiroServer.SessionStarts
   alias KaoiroServer.TaskStates
@@ -2093,21 +2094,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   defp fetch_reset_reason(payload) when is_map(payload), do: {:ok, nil}
 
   @doc false
-  # The reply is limited to wrapper/core's SESSION_RESET_ERROR_REASONS. In
-  # particular, timeout is transport-owned: it means no reply arrived.
-  def reset_request_reason(:invalid_mode), do: "unsupported_session_reset"
-  def reset_request_reason({:invalid_value, _field}), do: "unsupported_session_reset"
-  def reset_request_reason(:unsupported_session_reset), do: "unsupported_session_reset"
-
-  def reset_request_reason(reason)
-      when reason in [
-             :agent_busy,
-             :session_reset_pending,
-             :runner_unavailable
-           ],
-      do: Atom.to_string(reason)
-
-  def reset_request_reason(_reason), do: "agent_busy"
+  def reset_request_reason(reason), do: SessionResetRequestReplyReasons.normalize(reason)
 
   defp begin_planned_reset(agent_id, request_id) do
     case PlannedDisconnects.begin(agent_id, request_id, :reset) do
