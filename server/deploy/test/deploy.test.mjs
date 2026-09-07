@@ -479,15 +479,36 @@ case "$1" in
       # zero disagreement. It used to default to \`[]\`, which encoded the
       # very premise クロエ #310 round 1 S-1 rejected — an empty manifest
       # sailing through as a clean result.
+      #
+      # issue #322 M5 follow-up (must-2): KAOIRO_TEST_OLD_EVAL_OUTPUT lets
+      # a test give the OLD image's own eval a DIFFERENT manifest than the
+      # target's — the same \${OLD_IMAGE_ID} distinction the beam case
+      # above already makes. Falls back to KAOIRO_TEST_EVAL_OUTPUT (then
+      # the same default) when unset, so every EXISTING test — none of
+      # which distinguish old from target — keeps its current behavior
+      # unchanged.
       *"/app/bin/kaoiro_server"*)
         if [ "$KAOIRO_TEST_EVAL_EXIT" = "1" ]; then
           exit 1
         fi
-        if [ -n "$KAOIRO_TEST_EVAL_OUTPUT" ]; then
-          printf '%s\\n' "$KAOIRO_TEST_EVAL_OUTPUT"
-        else
-          printf '[{"store":"users","env":"KAOIRO_USERS_PATH","default_file":"users.dets","default_path":"/tmp/kaoiro-dets/users.dets"}]\\n'
-        fi
+        case "$*" in
+          *"${OLD_IMAGE_ID}"*)
+            if [ -n "$KAOIRO_TEST_OLD_EVAL_OUTPUT" ]; then
+              printf '%s\\n' "$KAOIRO_TEST_OLD_EVAL_OUTPUT"
+            elif [ -n "$KAOIRO_TEST_EVAL_OUTPUT" ]; then
+              printf '%s\\n' "$KAOIRO_TEST_EVAL_OUTPUT"
+            else
+              printf '[{"store":"users","env":"KAOIRO_USERS_PATH","default_file":"users.dets","default_path":"/tmp/kaoiro-dets/users.dets"}]\\n'
+            fi
+            ;;
+          *)
+            if [ -n "$KAOIRO_TEST_EVAL_OUTPUT" ]; then
+              printf '%s\\n' "$KAOIRO_TEST_EVAL_OUTPUT"
+            else
+              printf '[{"store":"users","env":"KAOIRO_USERS_PATH","default_file":"users.dets","default_path":"/tmp/kaoiro-dets/users.dets"}]\\n'
+            fi
+            ;;
+        esac
         ;;
       *)
         # Pre-archive empty-volume guard (find -mindepth 1 -maxdepth 1
@@ -718,12 +739,27 @@ function withCallLog(scenario, fn) {
 // are deleted rather than set, so a test only overriding one of the four
 // leaves the others at FAKE_DOCKER's own defaults (one agreeing store).
 function withEnvConsistencyFixture(
-  { evalExit, evalOutput, composeEnvJson, containerEnvJson, beamAbsent, oldBeamAbsent, beamProbeExit } = {},
+  {
+    evalExit,
+    evalOutput,
+    oldEvalOutput,
+    composeEnvJson,
+    containerEnvJson,
+    beamAbsent,
+    oldBeamAbsent,
+    beamProbeExit,
+  } = {},
   fn,
 ) {
   const vars = {
     KAOIRO_TEST_EVAL_EXIT: evalExit,
     KAOIRO_TEST_EVAL_OUTPUT: evalOutput,
+    // issue #322 M5 follow-up (must-2): independent of evalOutput above —
+    // lets a test give the OLD image's own eval a manifest DIFFERENT from
+    // the target's, needed to pin checkEnvConsistency's old-image
+    // preference by VALUE (not merely by the assumed_default_source
+    // label it also records).
+    KAOIRO_TEST_OLD_EVAL_OUTPUT: oldEvalOutput,
     KAOIRO_TEST_COMPOSE_ENV_JSON: composeEnvJson,
     KAOIRO_TEST_CONTAINER_ENV_JSON: containerEnvJson,
     // issue #322 M5: separate from evalExit above — the module-presence
@@ -1260,7 +1296,9 @@ test("runUpdate records env_consistency as skipped when the target image's beam 
   const backupRoot = join(root, "kaoiro-deploy");
   const manifest = readManifest(join(backupRoot, result.transactionId));
   assert.equal(manifest.env_consistency.skipped, true);
-  assert.ok(manifest.env_consistency.reason.includes("has no"));
+  // issue #322 M5 follow-up (must-1): reason now states the OBSERVATION
+  // (beam not found at this glob, in this image), not an inferred cause.
+  assert.ok(manifest.env_consistency.reason.includes("PersistencePaths beam not found"));
 });
 
 test("runUpdate throws (never skips) when eval fails on an image the beam probe reports has the module", () => {
@@ -1272,6 +1310,35 @@ test("runUpdate throws (never skips) when eval fails on an image the beam probe 
         ),
       ),
     (err) => err instanceof DeployError && /has the persistence-paths module but its eval call failed/.test(err.message),
+  );
+});
+
+// issue #322 M5 follow-up (should-1, クロエ review): an eval failure past
+// BUILD_PREPARED is exactly the case `compose build` (inside runBuild,
+// above) already repointed `latest` at the new, now-unreviewable image —
+// this must restore it to the old image before propagating, the same as
+// the (separately pinned) env_consistency-mismatch path already does.
+test("runUpdate restores kaoiro-server:latest to the old image when an eval failure throws past BUILD_PREPARED", () => {
+  const logPath = join(root, "docker-calls.log");
+  process.env.KAOIRO_TEST_CALL_LOG = logPath;
+  let caught;
+  try {
+    withScenario("running-clean-stop", () =>
+      withEnvConsistencyFixture({ evalExit: "1" }, () =>
+        runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+      ),
+    );
+  } catch (err) {
+    caught = err;
+  } finally {
+    delete process.env.KAOIRO_TEST_CALL_LOG;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.ok(/has the persistence-paths module but its eval call failed/.test(caught.message));
+  const log = existsSync(logPath) ? readFileSync(logPath, "utf8") : "";
+  assert.ok(
+    log.trim().split("\n").includes(`tag ${OLD_IMAGE_ID} kaoiro-server:latest`),
+    "expected kaoiro-server:latest to be retagged back to the old image on failure",
   );
 });
 
@@ -1318,6 +1385,72 @@ test("runUpdate falls back to the target image's own default_path, and records t
   const entry = manifest.env_consistency.entries.KAOIRO_USERS_PATH;
   assert.equal(entry.assumed_default_source, "target_image");
   assert.equal(entry.container_source, "default");
+  assert.equal(entry.container_effective, "/tmp/kaoiro-dets/users.dets");
+  assert.equal(entry.match, true);
+});
+
+// issue #322 M5 follow-up (must-2, クロエ review): the earlier "falls
+// back to target" test above only pinned assumed_default_source's own
+// LABEL when the old image cannot answer — the (default) case where the
+// old image CAN answer, and its VALUE is actually preferred over the
+// target's, had no dedicated pin. oldEvalOutput gives the OLD image a
+// default_path DIFFERENT from the target's own, so container_effective
+// can only equal the old one if the preference is genuinely applied, not
+// merely labeled.
+test("runUpdate prefers the OLD image's own default_path over the target's, when the old image's beam probe reports present", () => {
+  const oldDefaultPath = "/tmp/old-image-dets/users.dets";
+  const oldEvalOutput = JSON.stringify([
+    { store: "users", env: "KAOIRO_USERS_PATH", default_file: "users.dets", default_path: oldDefaultPath },
+  ]);
+  const result = withScenario("running-clean-stop", () =>
+    withEnvConsistencyFixture(
+      {
+        oldEvalOutput,
+        composeEnvJson: `{"KAOIRO_USERS_PATH":"${oldDefaultPath}"}`,
+        containerEnvJson: "[]",
+      },
+      () => runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+    ),
+  );
+  assert.equal(result.phase, "done");
+  const backupRoot = join(root, "kaoiro-deploy");
+  const manifest = readManifest(join(backupRoot, result.transactionId));
+  const entry = manifest.env_consistency.entries.KAOIRO_USERS_PATH;
+  assert.equal(entry.assumed_default_source, "old_image");
+  assert.equal(entry.container_source, "default");
+  assert.equal(entry.container_effective, oldDefaultPath);
+  assert.notEqual(
+    entry.container_effective,
+    "/tmp/kaoiro-dets/users.dets",
+    "must not have used the target image's own default_path",
+  );
+  assert.equal(entry.match, true);
+});
+
+// issue #322 M5 follow-up (should-2, クロエ review): the OLD image's own
+// manifest is an OPTIONAL enhancement (a fact about that image's history,
+// not this transaction's own defect) — a shape violation there must fall
+// back to the target's own default_path, the same as the old image being
+// unable to answer at all (beam absent), not abort an otherwise-clean
+// update. oldEvalOutput reports only 3 of the 4 required keys (missing
+// default_path) — a genuine shape violation per isValidPersistencePathEntry.
+test("runUpdate falls back to the target image's own default_path, and does not abort, when the old image's manifest has a shape violation", () => {
+  const oldEvalOutput = JSON.stringify([{ store: "users", env: "KAOIRO_USERS_PATH", default_file: "users.dets" }]);
+  const result = withScenario("running-clean-stop", () =>
+    withEnvConsistencyFixture(
+      {
+        oldEvalOutput,
+        composeEnvJson: '{"KAOIRO_USERS_PATH":"/tmp/kaoiro-dets/users.dets"}',
+        containerEnvJson: "[]",
+      },
+      () => runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+    ),
+  );
+  assert.equal(result.phase, "done");
+  const backupRoot = join(root, "kaoiro-deploy");
+  const manifest = readManifest(join(backupRoot, result.transactionId));
+  const entry = manifest.env_consistency.entries.KAOIRO_USERS_PATH;
+  assert.equal(entry.assumed_default_source, "target_image");
   assert.equal(entry.container_effective, "/tmp/kaoiro-dets/users.dets");
   assert.equal(entry.match, true);
 });
@@ -1505,6 +1638,11 @@ test("runUpdate fails closed and restores kaoiro-server:latest to the old image 
     log.trim().split("\n").includes(`tag ${OLD_IMAGE_ID} kaoiro-server:latest`),
     "expected kaoiro-server:latest to be retagged back to the old image on failure",
   );
+  // issue #322 M5 follow-up (should-1): this branch already restores
+  // itself — the GENERIC catch added for should-1 must not redo it and
+  // issue a second, redundant retag+read-back for the same failure.
+  const tagLines = log.trim().split("\n").filter((line) => line === `tag ${OLD_IMAGE_ID} kaoiro-server:latest`);
+  assert.equal(tagLines.length, 1, "expected exactly one retag, not a redundant second one");
 });
 
 // クロエ round 4 review B-1 (expanded further, WORKLOG 2026-09-07 00:14:

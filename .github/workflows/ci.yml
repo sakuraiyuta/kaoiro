@@ -235,16 +235,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build -f server/Dockerfile -t kaoiro-server:ci .
+      # issue #322 M5 follow-up (must-1): the deploy CLI decides module
+      # PRESENCE from this beam-file glob BEFORE ever calling eval — pins
+      # the glob this image's own release layout actually has it at,
+      # reading the CLI's own exported constant (never a literal copied
+      # here, which would drift silently if the release layout changes
+      # and the CLI's probe kept using the real one).
+      - name: deploy CLI persistence-path beam probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          GLOB=$(node --input-type=module -e '
+            import { PERSISTENCE_PATHS_BEAM_GLOB } from "./server/deploy/kaoiro-server-deploy.mjs";
+            console.log(PERSISTENCE_PATHS_BEAM_GLOB);
+          ')
+          docker run --rm --entrypoint /bin/sh kaoiro-server:ci -c "ls $GLOB"
       # The deploy CLI reads the persistence-path manifest out of the image
       # with exactly this command and passes NO env (docs/specs/deployment.md
       # 4.3). Addressing by image id is the CLI's own property, not this
       # step's: here the tag names the image the previous step just built,
       # and nothing can move it in between. Two accidents are pinned, both
       # measured 2026-09-07 and both invisible to `mix test`: runtime.exs
-      # raising under an env-less Config.Provider (the CLI then records every
-      # image as "issue #310 has not landed"), and anything the VM prints to
-      # stdout ahead of the JSON (a missing libsctp1 did) — which the CLI
-      # treats as actively wrong and fails the update on.
+      # raising under an env-less Config.Provider before ce0ef832's
+      # RELEASE_COMMAND=="eval" relaxation landed (issue #310), and
+      # anything the VM prints to stdout ahead of the JSON (a missing
+      # libsctp1 did) — which the CLI treats as actively wrong and fails
+      # the update on.
       - name: deploy CLI persistence-path probe
         shell: bash
         run: |

@@ -50,8 +50,15 @@ export class DeployError extends Error {
   }
 }
 
-function fail(message, exitCode = 1) {
-  throw new DeployError(message, exitCode);
+// issue #322 M5 follow-up (should-1): `extra` merges arbitrary fields
+// onto the thrown error — used ONLY to mark `retagHandled: true` where a
+// call site already restores `kaoiro-server:latest` itself (the
+// env_consistency mismatch branch), so the generic BUILD_PREPARED catch
+// does not try to redo it and double up the error message.
+function fail(message, exitCode = 1, extra) {
+  const err = new DeployError(message, exitCode);
+  if (extra) Object.assign(err, extra);
+  throw err;
 }
 
 function gitOutput(args, cwd) {
@@ -332,22 +339,28 @@ function isValidPersistencePathEntry(entry) {
 // inside the release layout the Dockerfile assembles under /app —
 // measured live against a real image (`docker run ... ls
 // /app/lib/kaoiro_server-*/ebin/`) rather than guessed from release
-// layout docs.
-const PERSISTENCE_PATHS_BEAM_GLOB =
+// layout docs. Exported (M5 follow-up, must-1) so CI's own
+// server-image job can probe the SAME glob this file actually uses —
+// a literal duplicated into ci.yml would drift silently if the
+// release layout ever changes.
+export const PERSISTENCE_PATHS_BEAM_GLOB =
   "/app/lib/kaoiro_server-*/ebin/Elixir.KaoiroServer.PersistencePaths.beam";
 
 /** issue #322 M5 (must-fix): queryPersistencePaths below used to treat
- *  EVERY eval failure as "the module is absent" — but `eval` boots the
- *  FULL release first (runtime.exs's Config.Reader), and that boot fails
- *  on missing SECRET_KEY_BASE/PHX_HOST/... BEFORE the module lookup ever
- *  runs, for EVERY invocation (this CLI never passes those env vars: the
- *  list it queries is static, not env-dependent). Measured live against
- *  a real pre-#310 image built from df416447: `eval` with no env prints
- *  `RuntimeError: environment variable SECRET_KEY_BASE is missing` — a
- *  config-boot failure, not `UndefinedFunctionError`, so the ORIGINAL
- *  eval-based skip logic could never have told a genuinely absent module
- *  apart from a live OOM, image corruption, or daemon failure; it was
- *  fail-OPEN by construction.
+ *  EVERY eval failure as "the module is absent" — but eval's own exit
+ *  code cannot distinguish that from several OTHER, unrelated failure
+ *  causes, so deciding "any failure means absent" was fail-open by
+ *  construction regardless of which cause actually fired. Measured live
+ *  against a real pre-#310 image built from df416447 (config/runtime.exs
+ *  had not yet landed ce0ef832's RELEASE_COMMAND=="eval" relaxation, the
+ *  #310 commit itself): `eval` with no env prints `RuntimeError:
+ *  environment variable SECRET_KEY_BASE is missing` — a config-boot
+ *  failure, not `UndefinedFunctionError`. A CURRENT (post-#310) image
+ *  does not hit that specific raise (ce0ef832 already relaxes it for
+ *  `RELEASE_COMMAND=="eval"`), but eval can still fail for reasons that
+ *  have nothing to do with the module's presence at all — an OOM, image
+ *  corruption, docker daemon failure — none of which the exit code alone
+ *  tells apart from "the module is absent".
  *
  *  This checks module presence a different way: `ls` the module's own
  *  beam file, which needs no config boot at all. `--rm --entrypoint
@@ -399,15 +412,32 @@ function imageHasPersistencePathsModule(bin, imageId) {
  *  eval failure as "absent" was fail-open). Absent: `{skipped: true,
  *  reason}`, never throws — the caller proceeds without this check
  *  rather than blocking on a capability this image was never going to
- *  have. Present: every OTHER failure below — the eval process itself
- *  exiting non-zero, or exiting 0 with an unexpected shape — throws
- *  DeployError. A module that exists but cannot be queried is not "this
- *  image lacks the capability"; it is something actively wrong. */
-function queryPersistencePaths(bin, imageId) {
+ *  have. Present: the eval process itself exiting non-zero always
+ *  throws DeployError — that is always "something actively wrong",
+ *  regardless of which image.
+ *
+ *  issue #322 M5 follow-up (should-2, クロエ review): a SHAPE violation
+ *  (exiting 0 but printing something other than the expected array of
+ *  4-key entries) is different: `throwOnShapeViolation` (default true)
+ *  governs whether it throws too, or degrades to the same
+ *  skipped+reason shape the absent case uses. The TARGET image keeps
+ *  the default — this transaction's own build MUST behave correctly,
+ *  since its manifest decides which env vars are even checked. A
+ *  caller querying an OLD image passes `false`: a shape violation there
+ *  means that image "could not answer" the OPTIONAL default_path
+ *  preference checkEnvConsistency asks it for — a fact about that
+ *  image's own history, not a defect in the transaction being run —
+ *  so it should not abort an otherwise-clean update. */
+function queryPersistencePaths(bin, imageId, { throwOnShapeViolation = true } = {}) {
   if (!imageHasPersistencePathsModule(bin, imageId)) {
+    // issue #322 M5 follow-up (クロエ round M5 review must-1): states
+    // what was OBSERVED (the beam file is absent at this glob, in this
+    // image), not an inferred cause — "built before #310 landed" is a
+    // guess this probe cannot actually confirm, and a release-layout
+    // change would make it print a misleading reason forever.
     return {
       skipped: true,
-      reason: `image ${imageId} has no ${PERSISTENCE_PATHS_BEAM_GLOB} — built before #310 landed, or an old image a rollback targets`,
+      reason: `PersistencePaths beam not found at ${PERSISTENCE_PATHS_BEAM_GLOB} in ${imageId}`,
     };
   }
   let raw;
@@ -433,9 +463,9 @@ function queryPersistencePaths(bin, imageId) {
     );
   }
   if (!Array.isArray(parsed) || !parsed.every(isValidPersistencePathEntry)) {
-    fail(
-      `persistence-path eval for image ${imageId} exited 0 but printed an unexpected shape: ${JSON.stringify(parsed)}`,
-    );
+    const message = `persistence-path eval for image ${imageId} exited 0 but printed an unexpected shape: ${JSON.stringify(parsed)}`;
+    if (throwOnShapeViolation) fail(message);
+    return { skipped: true, reason: message };
   }
   // クロエ #310 round 1 S-1: an empty array is not "nothing to check". The
   // module always declares at least one store, so an empty one means the
@@ -444,9 +474,9 @@ function queryPersistencePaths(bin, imageId) {
   // consumer) compares nothing and the update proceeds as if every store
   // agreed.
   if (parsed.length === 0) {
-    fail(
-      `persistence-path eval for image ${imageId} reported an empty manifest — the image declares no persistence paths at all`,
-    );
+    const emptyMessage = `persistence-path eval for image ${imageId} reported an empty manifest — the image declares no persistence paths at all`;
+    if (!throwOnShapeViolation) return { skipped: true, reason: emptyMessage };
+    fail(emptyMessage);
   }
   return { skipped: false, paths: parsed };
 }
@@ -1622,59 +1652,91 @@ export function runUpdate(flags, config) {
     // BUILD_PREPARED -> ENV_CONSISTENCY_CHECKED jump from a journal
     // already one phase further along.
     if (journal.phase === PHASE.BUILD_PREPARED) {
-      const persistencePaths = queryPersistencePaths(bin, buildResult.imageId);
       let envConsistency;
-      if (persistencePaths.skipped) {
-        envConsistency = { skipped: true, reason: persistencePaths.reason };
-      } else {
-        // issue #322 M5: ask the OLD (currently running) image for its
-        // OWN default_path per store, when it can answer at all — the
-        // measured fallback checkEnvConsistency prefers over the
-        // target's own manifest. A pre-#310 old image (the common case
-        // for the FIRST #310 upgrade) simply cannot answer; that skip is
-        // expected here too, not itself an error.
-        const oldPersistencePaths = queryPersistencePaths(bin, oldImageId);
-        const oldPathsByEnv = oldPersistencePaths.skipped
-          ? null
-          : new Map(oldPersistencePaths.paths.map((p) => [p.env, p.default_path]));
-        const entries = checkEnvConsistency(
-          persistencePaths.paths,
-          join(serverDir, ".env"),
-          composeDeclaredEnv(bin, serverDir),
-          containerEffectiveEnv(bin, container),
-          oldPathsByEnv,
-        );
-        envConsistency = { skipped: false, entries };
-        if (!Object.values(entries).every((e) => e.match)) {
-          // director ruling 2026-09-06: abort cleanup before the stop
-          // window — `compose build` (inside runBuild, above) already
-          // repointed `latest` at the new image; leaving it there would
-          // let the next `compose up` (an operator retry, or another
-          // tool) switch an unreviewed deployment into production.
-          // Restored to the SAME image the already-verified rollback
-          // tag names, verified again here by read-back.
-          runDocker(bin, ["tag", oldImageId, "kaoiro-server:latest"]);
-          const revertedId = dockerInspect(bin, "kaoiro-server:latest", "{{.Id}}");
-          if (revertedId !== oldImageId) {
+      try {
+        const persistencePaths = queryPersistencePaths(bin, buildResult.imageId);
+        if (persistencePaths.skipped) {
+          envConsistency = { skipped: true, reason: persistencePaths.reason };
+        } else {
+          // issue #322 M5: ask the OLD (currently running) image for its
+          // OWN default_path per store, when it can answer at all — the
+          // measured fallback checkEnvConsistency prefers over the
+          // target's own manifest. A pre-#310 old image (the common case
+          // for the FIRST #310 upgrade) simply cannot answer; that skip is
+          // expected here too, not itself an error. should-2: a SHAPE
+          // violation in the old image's own manifest is the same kind
+          // of "could not answer" — never this transaction's own defect
+          // to abort over.
+          const oldPersistencePaths = queryPersistencePaths(bin, oldImageId, { throwOnShapeViolation: false });
+          const oldPathsByEnv = oldPersistencePaths.skipped
+            ? null
+            : new Map(oldPersistencePaths.paths.map((p) => [p.env, p.default_path]));
+          const entries = checkEnvConsistency(
+            persistencePaths.paths,
+            join(serverDir, ".env"),
+            composeDeclaredEnv(bin, serverDir),
+            containerEffectiveEnv(bin, container),
+            oldPathsByEnv,
+          );
+          envConsistency = { skipped: false, entries };
+          if (!Object.values(entries).every((e) => e.match)) {
+            // director ruling 2026-09-06: abort cleanup before the stop
+            // window — `compose build` (inside runBuild, above) already
+            // repointed `latest` at the new image; leaving it there would
+            // let the next `compose up` (an operator retry, or another
+            // tool) switch an unreviewed deployment into production.
+            // Restored to the SAME image the already-verified rollback
+            // tag names, verified again here by read-back.
+            runDocker(bin, ["tag", oldImageId, "kaoiro-server:latest"]);
+            const revertedId = dockerInspect(bin, "kaoiro-server:latest", "{{.Id}}");
+            if (revertedId !== oldImageId) {
+              fail(
+                `env_consistency check failed AND could not restore kaoiro-server:latest to the old image ${oldImageId} (now ${revertedId}) — investigate before retrying`,
+                1,
+                { retagHandled: true },
+              );
+            }
+            // クロエ round 5 review A-MF-2: distinguishes the two DIFFERENT
+            // remediations a mismatching entry can need — an operator
+            // reading either sentence knows what to actually go do,
+            // instead of a single generic "mismatch" naming three fields.
+            const problems = Object.entries(entries)
+              .filter(([, e]) => !e.match)
+              .map(([envName, e]) =>
+                e.compose === null
+                  ? `${envName}: compose does not declare this persistence-path var at all (the #217 class — a required var missing from compose can silently escape backup)`
+                  : `${envName}: compose declares "${e.compose}" but the running container's effective path is "${e.container_effective}" (${e.container_source}) — this looks like a first-application migration; follow docs/specs/deployment.md 4.3 (5-b) before retrying`,
+              );
             fail(
-              `env_consistency check failed AND could not restore kaoiro-server:latest to the old image ${oldImageId} (now ${revertedId}) — investigate before retrying`,
+              `env_consistency check found a problem for one or more persistence-path env vars (.env's own line is recorded as "declared" for reference only — it is never compared; restored kaoiro-server:latest to the old image): ${problems.join("; ")} — full detail: ${JSON.stringify(entries)}`,
+              1,
+              { retagHandled: true },
             );
           }
-          // クロエ round 5 review A-MF-2: distinguishes the two DIFFERENT
-          // remediations a mismatching entry can need — an operator
-          // reading either sentence knows what to actually go do,
-          // instead of a single generic "mismatch" naming three fields.
-          const problems = Object.entries(entries)
-            .filter(([, e]) => !e.match)
-            .map(([envName, e]) =>
-              e.compose === null
-                ? `${envName}: compose does not declare this persistence-path var at all (the #217 class — a required var missing from compose can silently escape backup)`
-                : `${envName}: compose declares "${e.compose}" but the running container's effective path is "${e.container_effective}" (${e.container_source}) — this looks like a first-application migration; follow docs/specs/deployment.md 4.3 (5-b) before retrying`,
-            );
-          fail(
-            `env_consistency check found a problem for one or more persistence-path env vars (.env's own line is recorded as "declared" for reference only — it is never compared; restored kaoiro-server:latest to the old image): ${problems.join("; ")} — full detail: ${JSON.stringify(entries)}`,
-          );
         }
+      } catch (err) {
+        // issue #322 M5 follow-up (should-1, クロエ review): ANY OTHER
+        // exception in this block (a shape violation, an eval failure on
+        // an image the beam probe reported present, the beam probe
+        // itself failing) leaves `kaoiro-server:latest` pointing at the
+        // new, UNREVIEWED image `compose build` (inside runBuild, above)
+        // already repointed it at — the mismatch branch above already
+        // restores itself (marked retagHandled) and is skipped here to
+        // avoid a redundant double retag with a different message shape.
+        // Restore failure is appended to the ORIGINAL error's own
+        // message, never a new error that would hide the real cause.
+        if (!err.retagHandled) {
+          try {
+            runDocker(bin, ["tag", oldImageId, "kaoiro-server:latest"]);
+            const revertedId = dockerInspect(bin, "kaoiro-server:latest", "{{.Id}}");
+            if (revertedId !== oldImageId) {
+              err.message += ` (also: could not restore kaoiro-server:latest to the old image ${oldImageId} — now ${revertedId})`;
+            }
+          } catch (restoreErr) {
+            err.message += ` (also: restoring kaoiro-server:latest to the old image failed: ${restoreErr.message})`;
+          }
+        }
+        throw err;
       }
       journal = advancePhase(
         dir,

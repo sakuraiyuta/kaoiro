@@ -226,6 +226,7 @@ test("validateJournalAgainstStateMachine accepts an ENV_CONSISTENCY_CHECKED obse
         compose: "/var/lib/kaoiro/users.dets",
         container_effective: "/var/lib/kaoiro/users.dets",
         container_source: "env",
+        assumed_default_source: "old_image",
         match: true,
       },
     },
