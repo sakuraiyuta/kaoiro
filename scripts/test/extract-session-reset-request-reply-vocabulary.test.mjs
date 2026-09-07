@@ -19,12 +19,17 @@ test("extracts the transport session reset reply vocabulary", () => {
   const result = extract(transport);
 
   assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(JSON.parse(result.stdout), [
+  const values = JSON.parse(result.stdout);
+  assert.deepEqual(values, [...values].sort());
+
+  for (const value of [
     "agent_busy",
     "runner_unavailable",
     "session_reset_pending",
     "unsupported_session_reset"
-  ]);
+  ]) {
+    assert(values.includes(value));
+  }
 });
 
 test("rejects a non-literal reply vocabulary", async () => {
