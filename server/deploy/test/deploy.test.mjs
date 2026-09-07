@@ -68,8 +68,17 @@ case "$1" in
     done
     case "$1" in
       ps)
+        if [ "$2" = "-q" ]; then
+          case "$FAKE_DOCKER_SCENARIO" in
+            stopped) ;;
+            multiple-containers) printf 'sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\\nsha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\\n' ;;
+            target-id-mismatch|rollback-id-mismatch) printf 'sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\\n' ;;
+            *) printf 'sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\\n' ;;
+          esac
+          exit 0
+        fi
         case "$FAKE_DOCKER_SCENARIO" in
-          stopped|running|retag-drift|running-clean-stop|running-clean-stop-retag-drift|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty|compose-config-renamed-service|compose-config-missing-environment-key|mount-vanishes-after-stop|system-df-fails|system-df-invalid-json|system-df-not-array)
+          stopped|running|retag-drift|running-clean-stop|running-clean-stop-retag-drift|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty|compose-config-renamed-service|compose-config-missing-environment-key|mount-vanishes-after-stop|system-df-fails|system-df-invalid-json|system-df-not-array|target-id-mismatch|target-remains-running|rollback-target-remains-running|rollback-id-mismatch)
             printf 'kaoiro-c1\\n' ;;
           # round 4 review B-1 (expanded): rollback's own "2+ containers,
           # refuse" guard, distinct from requireRunningContainer's own
@@ -77,7 +86,15 @@ case "$1" in
           multiple-containers) printf 'kaoiro-c1\\nkaoiro-c2\\n' ;;
         esac
         ;;
-      build|up|stop) exit 0 ;;
+      build) exit 0 ;;
+      up)
+        rm -f "$KAOIRO_TEST_STOP_FILE"
+        exit 0
+        ;;
+      stop)
+        : > "$KAOIRO_TEST_STOP_FILE"
+        exit 0
+        ;;
       # director ruling 2026-09-06 (#306 (c3) review): resolveHealthUrl's
       # own source of truth when config.health_url is not overridden.
       # Unhandled scenarios fall through with empty output (no explicit
@@ -123,10 +140,10 @@ case "$1" in
           # exists but has no "environment" key at all (neither \`{}\` nor
           # \`null\` — genuinely absent).
           compose-config-renamed-service)
-            printf '{"services":{"other-service":{"environment":{},"volumes":[{"type":"volume","source":"kaoiro-state","target":"/var/lib/kaoiro","volume":{}}]}},"volumes":{"kaoiro-state":{"name":"kaoiro_kaoiro-state"}}}\\n'
+            printf '{"name":"kaoiro","services":{"other-service":{"environment":{},"volumes":[{"type":"volume","source":"kaoiro-state","target":"/var/lib/kaoiro","volume":{}}]}},"volumes":{"kaoiro-state":{"name":"kaoiro_kaoiro-state"}}}\\n'
             ;;
           compose-config-missing-environment-key)
-            printf '{"services":{"kaoiro":{"volumes":[{"type":"volume","source":"kaoiro-state","target":"/var/lib/kaoiro","volume":{}}]}},"volumes":{"kaoiro-state":{"name":"kaoiro_kaoiro-state"}}}\\n'
+            printf '{"name":"kaoiro","services":{"kaoiro":{"volumes":[{"type":"volume","source":"kaoiro-state","target":"/var/lib/kaoiro","volume":{}}]}},"volumes":{"kaoiro-state":{"name":"kaoiro_kaoiro-state"}}}\\n'
             ;;
           *)
             if [ -n "$compose_file" ] && [ -n "$KAOIRO_TEST_RECOVERY_COMPOSE_CONFIG_JSON" ]; then
@@ -134,13 +151,13 @@ case "$1" in
             elif [ -z "$compose_file" ] && [ -n "$KAOIRO_TEST_COMPOSE_CONFIG_JSON" ]; then
               printf '%s\\n' "$KAOIRO_TEST_COMPOSE_CONFIG_JSON"
             elif [ -z "$compose_file" ] && grep -q 'legitimate target compose change' docker-compose.yaml; then
-              printf '{"services":{"kaoiro":{"image":"target-compose","environment":{"KAOIRO_USERS_PATH":"/var/lib/kaoiro/users.dets"},"volumes":[{"type":"volume","source":"kaoiro-state","target":"/var/lib/kaoiro","volume":{}}]}},"volumes":{"kaoiro-state":{"name":"kaoiro_kaoiro-state"}}}\\n'
+              printf '{"name":"kaoiro","services":{"kaoiro":{"image":"target-compose","environment":{"KAOIRO_USERS_PATH":"/var/lib/kaoiro/users.dets"},"volumes":[{"type":"volume","source":"kaoiro-state","target":"/var/lib/kaoiro","volume":{}}]}},"volumes":{"kaoiro-state":{"name":"kaoiro_kaoiro-state"}}}\\n'
             elif [ -n "$KAOIRO_TEST_COMPOSE_ENV_JSON" ]; then
               env_json="$KAOIRO_TEST_COMPOSE_ENV_JSON"
-              printf '{"services":{"kaoiro":{"environment":%s,"volumes":[{"type":"volume","source":"kaoiro-state","target":"/var/lib/kaoiro","volume":{}}]}},"volumes":{"kaoiro-state":{"name":"kaoiro_kaoiro-state"}}}\\n' "$env_json"
+              printf '{"name":"kaoiro","services":{"kaoiro":{"environment":%s,"volumes":[{"type":"volume","source":"kaoiro-state","target":"/var/lib/kaoiro","volume":{}}]}},"volumes":{"kaoiro-state":{"name":"kaoiro_kaoiro-state"}}}\\n' "$env_json"
             else
               env_json='{"KAOIRO_USERS_PATH":"/var/lib/kaoiro/users.dets"}'
-              printf '{"services":{"kaoiro":{"environment":%s,"volumes":[{"type":"volume","source":"kaoiro-state","target":"/var/lib/kaoiro","volume":{}}]}},"volumes":{"kaoiro-state":{"name":"kaoiro_kaoiro-state"}}}\\n' "$env_json"
+              printf '{"name":"kaoiro","services":{"kaoiro":{"environment":%s,"volumes":[{"type":"volume","source":"kaoiro-state","target":"/var/lib/kaoiro","volume":{}}]}},"volumes":{"kaoiro-state":{"name":"kaoiro_kaoiro-state"}}}\\n' "$env_json"
             fi
             ;;
         esac
@@ -268,9 +285,19 @@ case "$1" in
         case "$4" in
           '{{.State.Status}}')
             case "$FAKE_DOCKER_SCENARIO" in
+              target-remains-running|rollback-target-remains-running) printf 'running\\n'; exit 0 ;;
+            esac
+            if [ -f "$KAOIRO_TEST_STOP_FILE" ]; then printf 'exited\\n'; exit 0; fi
+            case "$FAKE_DOCKER_SCENARIO" in
               stopped) printf 'exited\\n' ;;
-              running|retag-drift|running-clean-stop|running-clean-stop-retag-drift|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty|compose-config-renamed-service|compose-config-missing-environment-key|mount-vanishes-after-stop|system-df-fails|system-df-invalid-json|system-df-not-array)
+              running|retag-drift|running-clean-stop|running-clean-stop-retag-drift|running-clean-stop-restarts|running-clean-stop-restartcount-unreadable|running-clean-stop-torture|running-dirty-stop|running-no-mount|running-empty-vol|running-broken-archive|alpine-missing|running-tag-drift|running-archive-drifts-empty|compose-config-renamed-service|compose-config-missing-environment-key|mount-vanishes-after-stop|system-df-fails|system-df-invalid-json|system-df-not-array|target-id-mismatch|target-remains-running|rollback-target-remains-running|rollback-id-mismatch)
                 printf 'running\\n' ;;
+            esac
+            ;;
+          '{{.State.Running}}')
+            case "$FAKE_DOCKER_SCENARIO" in
+              target-remains-running|rollback-target-remains-running) printf 'true\\n' ;;
+              *) if [ -f "$KAOIRO_TEST_STOP_FILE" ]; then printf 'false\\n'; else printf 'true\\n'; fi ;;
             esac
             ;;
           '{{.State.ExitCode}}')
@@ -698,6 +725,7 @@ function withOverrideEnv(fn) {
   const priorLatestTagFile = process.env.KAOIRO_TEST_LATEST_TAG_FILE;
   const priorOldImageRevision = process.env.KAOIRO_TEST_OLD_IMAGE_REVISION;
   const priorRecoveryComposeConfigJson = process.env.KAOIRO_TEST_RECOVERY_COMPOSE_CONFIG_JSON;
+  const priorStopFile = process.env.KAOIRO_TEST_STOP_FILE;
   process.env.KAOIRO_DEPLOY_DOCKER_BIN = bin;
   process.env.KAOIRO_DEPLOY_CURL_BIN = curlBin;
   // issue #322 M2: always set (not conditional like HEALTH_REVISION below)
@@ -706,6 +734,7 @@ function withOverrideEnv(fn) {
   // leaks across tests.
   process.env.KAOIRO_TEST_LATEST_TAG_FILE = join(root, "latest-tag-id");
   process.env.KAOIRO_TEST_OLD_IMAGE_REVISION = headSha;
+  process.env.KAOIRO_TEST_STOP_FILE = join(root, "stopped");
   // Default: "the server is already running the target" — the common
   // case every test not specifically exercising a health mismatch wants.
   // Set before the call, never mutated by this helper afterward, so a
@@ -728,6 +757,8 @@ function withOverrideEnv(fn) {
     else process.env.KAOIRO_TEST_OLD_IMAGE_REVISION = priorOldImageRevision;
     if (priorRecoveryComposeConfigJson === undefined) delete process.env.KAOIRO_TEST_RECOVERY_COMPOSE_CONFIG_JSON;
     else process.env.KAOIRO_TEST_RECOVERY_COMPOSE_CONFIG_JSON = priorRecoveryComposeConfigJson;
+    if (priorStopFile === undefined) delete process.env.KAOIRO_TEST_STOP_FILE;
+    else process.env.KAOIRO_TEST_STOP_FILE = priorStopFile;
   }
 }
 
@@ -739,6 +770,34 @@ function withScenario(scenario, fn) {
   } finally {
     if (prior === undefined) delete process.env.FAKE_DOCKER_SCENARIO;
     else process.env.FAKE_DOCKER_SCENARIO = prior;
+  }
+}
+
+function composePlanJson(name, source = "kaoiro_kaoiro-state") {
+  return JSON.stringify({
+    name,
+    services: {
+      kaoiro: {
+        environment: { KAOIRO_USERS_PATH: "/var/lib/kaoiro/users.dets" },
+        volumes: [{ type: "volume", source: "kaoiro-state", target: "/var/lib/kaoiro", volume: {} }],
+      },
+    },
+    volumes: { "kaoiro-state": { name: source } },
+  });
+}
+
+function withComposePlans(recovery, target, fn) {
+  const priorRecovery = process.env.KAOIRO_TEST_RECOVERY_COMPOSE_CONFIG_JSON;
+  const priorTarget = process.env.KAOIRO_TEST_COMPOSE_CONFIG_JSON;
+  process.env.KAOIRO_TEST_RECOVERY_COMPOSE_CONFIG_JSON = recovery;
+  process.env.KAOIRO_TEST_COMPOSE_CONFIG_JSON = target;
+  try {
+    return fn();
+  } finally {
+    if (priorRecovery === undefined) delete process.env.KAOIRO_TEST_RECOVERY_COMPOSE_CONFIG_JSON;
+    else process.env.KAOIRO_TEST_RECOVERY_COMPOSE_CONFIG_JSON = priorRecovery;
+    if (priorTarget === undefined) delete process.env.KAOIRO_TEST_COMPOSE_CONFIG_JSON;
+    else process.env.KAOIRO_TEST_COMPOSE_CONFIG_JSON = priorTarget;
   }
 }
 
@@ -1970,6 +2029,86 @@ test("runUpdate completes through DONE with --maintenance-approved and a clean s
   assert.deepEqual(manifest.required_entries, result.requiredEntries);
 });
 
+test("runUpdate refuses a target compose project or service-volume migration before stopping", () => {
+  const logPath = join(root, "docker-calls.log");
+  process.env.KAOIRO_TEST_CALL_LOG = logPath;
+  let caught;
+  try {
+    withComposePlans(composePlanJson("kaoiro-old"), composePlanJson("kaoiro-new", "kaoiro_new-state"), () =>
+      withScenario("running-clean-stop", () =>
+        runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+      ),
+    );
+  } catch (err) {
+    caught = err;
+  } finally {
+    delete process.env.KAOIRO_TEST_CALL_LOG;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.match(caught.message, /migration work, not a rolling update/);
+  const log = readCallLog(logPath);
+  assert.ok(!log.some((line) => line.includes(" compose stop")), "must not stop for a plan identity migration");
+  assert.ok(!log.some((line) => line.includes("tar czf")), "must not archive for a plan identity migration");
+});
+
+test("runUpdate refuses a target service-volume migration even when the project name is unchanged", () => {
+  const logPath = join(root, "docker-calls.log");
+  process.env.KAOIRO_TEST_CALL_LOG = logPath;
+  let caught;
+  try {
+    withComposePlans(composePlanJson("kaoiro"), composePlanJson("kaoiro", "kaoiro_replaced-state"), () =>
+      withScenario("running-clean-stop", () =>
+        runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+      ),
+    );
+  } catch (err) {
+    caught = err;
+  } finally {
+    delete process.env.KAOIRO_TEST_CALL_LOG;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.match(caught.message, /service-volume changes/);
+  const log = readCallLog(logPath);
+  assert.ok(!log.some((line) => line.includes(" compose stop")));
+  assert.ok(!log.some((line) => line.includes("tar czf")));
+});
+
+test("runUpdate binds target compose stop to the preflight container id", () => {
+  const logPath = join(root, "docker-calls.log");
+  process.env.KAOIRO_TEST_CALL_LOG = logPath;
+  let caught;
+  try {
+    withScenario("target-id-mismatch", () =>
+      runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+    );
+  } catch (err) {
+    caught = err;
+  } finally {
+    delete process.env.KAOIRO_TEST_CALL_LOG;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.match(caught.message, /captured container id/);
+  assert.ok(!readCallLog(logPath).some((line) => line.includes(" compose stop")));
+});
+
+test("runUpdate does not archive when the captured container remains running after stop", () => {
+  const logPath = join(root, "docker-calls.log");
+  process.env.KAOIRO_TEST_CALL_LOG = logPath;
+  let caught;
+  try {
+    withScenario("target-remains-running", () =>
+      runUpdate({ repo: workDir, target: headSha, maintenanceApproved: true }, configWithCleanStopMeasured()),
+    );
+  } catch (err) {
+    caught = err;
+  } finally {
+    delete process.env.KAOIRO_TEST_CALL_LOG;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.match(caught.message, /not confirmed stopped/);
+  assert.ok(!readCallLog(logPath).some((line) => line.includes("tar czf")), "must not archive a live volume");
+});
+
 test("runUpdate refuses before stopping when the target effective compose plan changes after prepare", () => {
   try {
     withScenario("running", () => runUpdate({ repo: workDir, target: headSha }, configWithOverride()));
@@ -1982,7 +2121,7 @@ test("runUpdate refuses before stopping when the target effective compose plan c
   const composePath = join(workDir, "server", "docker-compose.yaml");
   writeFileSync(composePath, "# fixture\n# drifted after prepare\n");
   const priorPlan = process.env.KAOIRO_TEST_COMPOSE_CONFIG_JSON;
-  process.env.KAOIRO_TEST_COMPOSE_CONFIG_JSON = JSON.stringify({ services: { kaoiro: { image: "unexpected" } } });
+  process.env.KAOIRO_TEST_COMPOSE_CONFIG_JSON = JSON.stringify({ name: "kaoiro", services: { kaoiro: { image: "unexpected", volumes: [] } } });
 
   const logPath = join(root, "docker-calls.log");
   process.env.KAOIRO_TEST_CALL_LOG = logPath;
@@ -3821,6 +3960,93 @@ test("runRollback (destructive) runs the full stop/forensic/restore/retag/up/hea
   assert.equal(restoring.restore_from.path, readManifest(join(backupRoot, transactionId)).archive.path);
   assert.equal(restoring.restore_from.sha256, readManifest(join(backupRoot, transactionId)).archive.sha256);
   assert.ok(existsSync(join(backupRoot, transactionId, "rollback-forensic.tar.gz")));
+});
+
+test("runRollback refuses a recorded target plan whose project identity differs from recovery", () => {
+  let transactionId;
+  const backupRoot = join(root, "kaoiro-deploy");
+  withScenario("running-clean-stop", () => {
+    transactionId = runUpdate(
+      { repo: workDir, target: headSha, maintenanceApproved: true },
+      configWithCleanStopMeasured(),
+    ).transactionId;
+  });
+  const dir = join(backupRoot, transactionId);
+  const manifestPath = join(dir, "manifest.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  manifest.target_plan.identity.project_name = "different-project";
+  writeFileSync(manifestPath, JSON.stringify(manifest));
+  const logPath = join(root, "docker-calls.log");
+  process.env.KAOIRO_TEST_CALL_LOG = logPath;
+  let caught;
+  try {
+    withScenario("running-clean-stop", () =>
+      runRollback({ repo: workDir, transaction: transactionId, confirmRestore: true }, configWithCleanStopMeasured()),
+    );
+  } catch (err) {
+    caught = err;
+  } finally {
+    delete process.env.KAOIRO_TEST_CALL_LOG;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.match(caught.message, /migration work, not a rolling update/);
+  const log = readCallLog(logPath);
+  assert.ok(!log.some((line) => line.includes(" compose stop")));
+  assert.ok(!log.some((line) => line.includes("find \/data -mindepth")));
+});
+
+test("runRollback does not restore when the recorded target container remains running", () => {
+  let transactionId;
+  const backupRoot = join(root, "kaoiro-deploy");
+  withScenario("running-clean-stop", () => {
+    transactionId = runUpdate(
+      { repo: workDir, target: headSha, maintenanceApproved: true },
+      configWithCleanStopMeasured(),
+    ).transactionId;
+  });
+  const logPath = join(root, "docker-calls.log");
+  process.env.KAOIRO_TEST_CALL_LOG = logPath;
+  let caught;
+  try {
+    withScenario("rollback-target-remains-running", () =>
+      runRollback({ repo: workDir, transaction: transactionId, confirmRestore: true }, configWithCleanStopMeasured()),
+    );
+  } catch (err) {
+    caught = err;
+  } finally {
+    delete process.env.KAOIRO_TEST_CALL_LOG;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.match(caught.message, /not confirmed stopped/);
+  assert.ok(!readCallLog(logPath).some((line) => line.includes("find \/data -mindepth")), "must not restore a live volume");
+});
+
+test("runRollback binds recovery compose stop to the target container recorded at commit", () => {
+  let transactionId;
+  const backupRoot = join(root, "kaoiro-deploy");
+  withScenario("running-clean-stop", () => {
+    transactionId = runUpdate(
+      { repo: workDir, target: headSha, maintenanceApproved: true },
+      configWithCleanStopMeasured(),
+    ).transactionId;
+  });
+  const logPath = join(root, "docker-calls.log");
+  process.env.KAOIRO_TEST_CALL_LOG = logPath;
+  let caught;
+  try {
+    withScenario("rollback-id-mismatch", () =>
+      runRollback({ repo: workDir, transaction: transactionId, confirmRestore: true }, configWithCleanStopMeasured()),
+    );
+  } catch (err) {
+    caught = err;
+  } finally {
+    delete process.env.KAOIRO_TEST_CALL_LOG;
+  }
+  assert.ok(caught instanceof DeployError);
+  assert.match(caught.message, /captured container id/);
+  const log = readCallLog(logPath);
+  assert.ok(!log.some((line) => line.includes(" compose stop")));
+  assert.ok(!log.some((line) => line.includes("find \/data -mindepth")));
 });
 
 test("runRollback (destructive) refuses when the pre-deploy archive no longer matches its recorded sha256", () => {
