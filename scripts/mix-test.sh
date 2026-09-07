@@ -4,12 +4,10 @@
 # ExUnit prints the seed only in its HEADER line (`Running ExUnit with
 # seed: <N>, max_cases: <M>`) and prints neither the seed nor a
 # reproduction command at the end of a failing run (measured on Elixir
-# 1.20.1). Keeping only the tail of the output therefore discards the one
-# value a flake needs to be replayed — which is how issue #282's data
-# points 6, 7, 9 and 10 lost their test names. This wrapper removes the
-# choice: the run is teed in full, the path is announced before the run
-# starts (so an interrupted run is still recoverable), and the file
-# survives exactly when the run did not pass.
+# 1.20.1), so keeping only the tail of the output discards the one value
+# a flake needs to be replayed. The run is teed in full, the path is
+# announced before the run starts (an interrupted run stays recoverable),
+# and the file survives exactly when the run did not pass.
 #
 # Arguments are passed through: scripts/mix-test.sh test/foo_test.exs:42
 set -euo pipefail
