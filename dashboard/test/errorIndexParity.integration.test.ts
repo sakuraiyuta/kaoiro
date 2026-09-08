@@ -15,11 +15,10 @@
 // comparing the incrementally-maintained index against the reference after
 // every operation. The sequence is seeded (mulberry32) and the
 // seed/step/op are embedded in the assertion message, so a failure is
-// reproducible without rerunning with instrumentation. (`onHistoryReplayEnvelope`
-// is NOT exercised here: its only reachable input, `inter_agent_message`,
-// can never be an is_error result, so it cannot affect the index -- see
-// its call site comment in App.svelte.)
-//
+// reproducible without rerunning with instrumentation. The randomized
+// sequence excludes `onHistoryReplayEnvelope`: its only reachable input,
+// `inter_agent_message`, can never affect the error index. The deterministic
+// replacement-writer case covers that actual ingress.
 // `randomEnvelope` deliberately reuses the previous (ts, seq) pair for a
 // given agent some of the time, so the sequence exercises BOTH cases
 // noteIfNewestError's CONTRACT depends on: two entries that tie on (ts,
@@ -46,6 +45,7 @@ const captured = vi.hoisted(() => ({
   handlers: null as KaoiroHandlers | null,
   latestIndex: null as ErrorIndexState | null,
   fullMergeCalls: 0,
+  liveSidecars: [] as Array<{ source: Envelope[]; keys: Set<string> } | undefined>,
 }));
 
 vi.mock("../src/lib/protocol", async (importOriginal) => {
@@ -84,6 +84,17 @@ vi.mock("../src/lib/protocol", async (importOriginal) => {
     ) => track(actual.recomputeLatestError(...args)),
     dropLatestError: (...args: Parameters<typeof actual.dropLatestError>) =>
       track(actual.dropLatestError(...args)),
+    mergeLiveTranscriptEntry: (
+      ...args: Parameters<typeof actual.mergeLiveTranscriptEntry>
+    ) => {
+      const index = args[1];
+      captured.liveSidecars.push(
+        index === undefined
+          ? undefined
+          : { source: [...index.source], keys: new Set(index.keys) },
+      );
+      return actual.mergeLiveTranscriptEntry(...args);
+    },
   };
 });
 
@@ -95,6 +106,7 @@ const {
   filterAfterHistoryCleared,
   referenceLatestErrorKeyByAgent,
   setTranscriptMergeObserverForTest,
+  transcriptEntryKey,
 } = await import("../src/lib/protocol");
 
 let component: object | null = null;
@@ -191,6 +203,7 @@ beforeEach(() => {
   captured.handlers = null;
   captured.latestIndex = null;
   captured.fullMergeCalls = 0;
+  captured.liveSidecars = [];
   setTranscriptMergeObserverForTest(() => {
     captured.fullMergeCalls += 1;
   });
@@ -225,6 +238,35 @@ afterEach(async () => {
   vi.restoreAllMocks();
   setTranscriptMergeObserverForTest(undefined);
 });
+
+function latestLiveSidecar(): { source: Envelope[]; keys: Set<string> } | undefined {
+  if (captured.liveSidecars.length === 0) {
+    throw new Error("expected a live sidecar observation");
+  }
+  return captured.liveSidecars.at(-1);
+}
+
+function replayInterAgentEnvelope(sequence: number): Envelope {
+  return {
+    version: "0",
+    agent_id: "a2",
+    persona: { id: "a2", name: "a2", sprite_set: "a2" },
+    session_id: "s1",
+    ts: `2026-10-01T00:01:${String(sequence).padStart(2, "0")}Z`,
+    seq: sequence,
+    type: "inter_agent_message",
+    state: "thinking",
+    payload: {
+      to: "a1",
+      conversation_id: `replay-${sequence}`,
+      turn_number: sequence,
+      kind: "inform",
+      body: "restored inter-agent message",
+      meta: { done: false, propose_next: "" },
+      owner: { kind: "agent", id: "a2" },
+    },
+  } as unknown as Envelope;
+}
 
 const AGENT_IDS = ["a1", "a2", "a3"] as const;
 const SESSION_IDS = ["s1", "s2"] as const;
@@ -306,11 +348,11 @@ describe("App.svelte error index parity (issue #304)", () => {
     };
 
     const first = live();
-    h.onHistory?.({ a1: [first] }, {}, "epoch-1");
+    h.onHistory?.({ a1: [first] }, {}, "per-pane-v1", "epoch-1");
     await tick();
 
-    const replacement = { ...live(), ts: first.ts, seq: first.seq };
-    h.onHistory?.({ a1: [replacement] }, {}, "epoch-2");
+    const replacement = live();
+    h.onHistory?.({ a1: [replacement] }, {}, "per-pane-v1", "epoch-2");
     await tick();
     await assertWarm("same-length history replacement");
 
@@ -322,7 +364,7 @@ describe("App.svelte error index parity (issue #304)", () => {
     await tick();
     await assertWarm("history reset");
 
-    h.onHistoryReplayEnvelope?.("a1", live());
+    h.onHistoryReplayEnvelope?.("a1", replayInterAgentEnvelope(1));
     await tick();
     await assertWarm("replay envelope");
 
@@ -331,17 +373,58 @@ describe("App.svelte error index parity (issue #304)", () => {
     await assertWarm("replay completion does not replace logs");
   });
 
-  it("starts a fresh sidecar after agent deletion and logout", async () => {
+  it("rebuilds the command-clear sidecar before the next live envelope", async () => {
+    const h = await mountApp();
+    const first = {
+      ...randomEnvelope(mulberry32(45), "a1", "s1", false),
+      ts: "2026-10-01T00:00:01Z",
+      seq: 1,
+    };
+    const marker = {
+      ...randomEnvelope(mulberry32(46), "a1", "s1", false),
+      ts: "2026-10-01T00:00:02Z",
+      seq: 2,
+      type: "session_boundary",
+      payload: { request_id: "clear-1", mode: "clear" },
+    } as unknown as Envelope;
+    h.onHistory?.({ a1: [first] }, {}, "per-pane-v1", "epoch-1");
+    h.onEnvelope(marker);
+    await tick();
+    h.onSessionResetCompleted?.({
+      request_id: "clear-1",
+      agent_id: "a1",
+      mode: "clear",
+      to_session_id: null,
+    });
+    await tick();
+
+    captured.fullMergeCalls = 0;
+    captured.liveSidecars = [];
+    h.onEnvelope({
+      ...randomEnvelope(mulberry32(47), "a1", "s1", false),
+      ts: "2026-10-01T00:00:03Z",
+      seq: 3,
+    });
+    await tick();
+    const afterClear = latestLiveSidecar();
+    expect(afterClear?.keys).toEqual(new Set([transcriptEntryKey(marker)]));
+    expect(afterClear?.source).toEqual([marker]);
+    expect(captured.fullMergeCalls).toBe(0);
+  });
+
+  it("releases sidecar ownership immediately after agent deletion and logout", async () => {
     const h = await mountApp();
     const first = randomEnvelope(mulberry32(51), "a1", "s1", false);
-    h.onHistory?.({ a1: [first] }, {}, "epoch-1");
+    h.onHistory?.({ a1: [first] }, {}, "per-pane-v1", "epoch-1");
     await tick();
 
     h.onAgentDeleted?.("a1");
     await tick();
     captured.fullMergeCalls = 0;
+    captured.liveSidecars = [];
     h.onEnvelope(randomEnvelope(mulberry32(52), "a1", "s1", false));
     await tick();
+    expect(latestLiveSidecar()).toBeUndefined();
     expect(captured.fullMergeCalls).toBe(1);
 
     document.querySelector<HTMLButtonElement>("button.logout")?.click();
@@ -361,10 +444,12 @@ describe("App.svelte error index parity (issue #304)", () => {
       if (captured.handlers === null) throw new Error("not reconnected yet");
     });
     captured.fullMergeCalls = 0;
+    captured.liveSidecars = [];
     captured.handlers!.onEnvelope(
       randomEnvelope(mulberry32(53), "a1", "s2", false),
     );
     await tick();
+    expect(latestLiveSidecar()).toBeUndefined();
     expect(captured.fullMergeCalls).toBe(1);
   });
 

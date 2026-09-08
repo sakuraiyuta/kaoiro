@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build, preview } from "vite";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
+import { validateIssue304Acceptance } from "./issue304Acceptance.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
@@ -278,6 +279,30 @@ async function armMetrics(page, tick) {
   }, { tick, disconnected: negative === "disconnect-input-observer" });
 }
 
+async function captureMetricsSnapshot(page) {
+  try {
+    const metrics = await page.evaluate(() => {
+      const current = window.__issue304Metrics;
+      if (!current) return null;
+      return {
+        ...current,
+        timer: undefined,
+        formatCalls: window.__issue304FormatCalls ?? null,
+      };
+    });
+    if (metrics === null) {
+      return { available: false, metrics: null, error: "metrics are unavailable" };
+    }
+    return { available: true, metrics, error: null };
+  } catch (error) {
+    return {
+      available: false,
+      metrics: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
 function monotonicNow() {
   return Number(process.hrtime.bigint()) / 1_000_000;
 }
@@ -313,10 +338,19 @@ async function queueBusyRenderer(page) {
   await page.waitForTimeout(10);
 }
 
-async function sendInputs(page, cdp, mode, clock) {
-  let expectedInputs = 0;
-  const dispatches = [];
+async function sendInputs(page, cdp, mode, clock, progress) {
+  let { expectedInputs } = progress;
+  const { dispatches } = progress;
   const browserNow = () => monotonicNow() + clock.offset;
+  const failAfterFiveInputs = async () => {
+    if (negative !== "fail-after-five-inputs" || expectedInputs !== 5) return;
+    await page.waitForFunction(
+      (count) => window.__issue304Metrics.inputs.length >= count,
+      expectedInputs,
+      { timeout: 5_000 },
+    );
+    throw new Error("intentional failure after five input events");
+  };
   for (let action = 0; action < actions; action += 1) {
     if (negative === "busy-renderer") await queueBusyRenderer(page);
     if (mode === "ascii") {
@@ -333,6 +367,8 @@ async function sendInputs(page, cdp, mode, clock) {
         code: "KeyA",
       });
       expectedInputs += 1;
+      progress.expectedInputs = expectedInputs;
+      await failAfterFiveInputs();
     } else {
       const text = ["に", "にほ", "にほん", "日本", "日本語"][action % 5];
       dispatches.push(browserNow());
@@ -342,10 +378,14 @@ async function sendInputs(page, cdp, mode, clock) {
         selectionEnd: text.length,
       });
       expectedInputs += 1;
+      progress.expectedInputs = expectedInputs;
+      await failAfterFiveInputs();
       if (action % 5 === 4) {
         dispatches.push(browserNow());
         await cdp.send("Input.insertText", { text: "日本語" });
         expectedInputs += 1;
+        progress.expectedInputs = expectedInputs;
+        await failAfterFiveInputs();
       }
     }
     await page.waitForFunction(
@@ -355,7 +395,7 @@ async function sendInputs(page, cdp, mode, clock) {
     );
     await page.waitForTimeout(30);
   }
-  return { expectedInputs, dispatches };
+  return progress;
 }
 
 class MeasurementFailure extends Error {
@@ -371,7 +411,9 @@ async function measureRun(browser, server, variant, scenario, mode, run, source)
   const pageErrors = [];
   let stage = "open";
   let shape = {};
-  let partialRaw = null;
+  const progress = { expectedInputs: 0, dispatches: [] };
+  const clock = { start: null, end: null, drift: null };
+  let browserSnapshot = { available: false, metrics: null, error: "not captured" };
   page.on("pageerror", (error) => pageErrors.push(String(error)));
   try {
     stage = "format-work";
@@ -401,23 +443,23 @@ async function measureRun(browser, server, variant, scenario, mode, run, source)
     await page.locator("textarea").first().focus();
     const cdp = await context.newCDPSession(page);
     stage = "clock-calibration";
-    const startClock = await calibrateBrowserClock(cdp);
-    if (startClock.uncertainty > 20) {
-      throw new Error(`clock calibration uncertainty exceeds 20ms: ${startClock.uncertainty}`);
+    clock.start = await calibrateBrowserClock(cdp);
+    if (clock.start.uncertainty > 20) {
+      throw new Error(`clock calibration uncertainty exceeds 20ms: ${clock.start.uncertainty}`);
     }
     stage = "arm-metrics";
     await armMetrics(page, negative === "busy-renderer" ? 0 : scenario.tick);
     stage = "inputs";
-    const { expectedInputs, dispatches } = await sendInputs(page, cdp, mode, startClock);
+    await sendInputs(page, cdp, mode, clock.start, progress);
+    const { expectedInputs, dispatches } = progress;
     await page.evaluate(() => window.clearInterval(window.__issue304Metrics.timer));
     await page.waitForTimeout(100);
     stage = "read-metrics";
-    const raw = await page.evaluate(() => ({
-      ...window.__issue304Metrics,
-      timer: undefined,
-      formatCalls: window.__issue304FormatCalls ?? null,
-    }));
-    partialRaw = raw;
+    browserSnapshot = await captureMetricsSnapshot(page);
+    if (!browserSnapshot.available) {
+      throw new Error(`could not read browser metrics: ${browserSnapshot.error}`);
+    }
+    const raw = browserSnapshot.metrics;
     stage = "final-shape";
     const finalRows = await page.locator(".transcript-entry").count();
     const expectedFinalRows = scenario.expand
@@ -430,13 +472,9 @@ async function measureRun(browser, server, variant, scenario, mode, run, source)
     }
     shape = { ...shape, finalRows, expectedFinalRows };
     stage = "clock-drift";
-    const endClock = await calibrateBrowserClock(cdp);
-    const clock = {
-      start: startClock,
-      end: endClock,
-      drift: endClock.offset - startClock.offset,
-    };
-    if (endClock.uncertainty > 20 || Math.abs(clock.drift) > 5) {
+    clock.end = await calibrateBrowserClock(cdp);
+    clock.drift = clock.end.offset - clock.start.offset;
+    if (clock.end.uncertainty > 20 || Math.abs(clock.drift) > 5) {
       throw new Error(`clock drift is incompatible with this run: ${JSON.stringify(clock)}`);
     }
     const dispatchToInput = raw.inputs.map((input, index) => input.at - dispatches[index]);
@@ -483,6 +521,9 @@ async function measureRun(browser, server, variant, scenario, mode, run, source)
       pageErrors,
     };
   } catch (error) {
+    if (!browserSnapshot.available) {
+      browserSnapshot = await captureMetricsSnapshot(page);
+    }
     throw new MeasurementFailure(error, {
       schema: 1,
       issue: 304,
@@ -494,50 +535,23 @@ async function measureRun(browser, server, variant, scenario, mode, run, source)
       source,
       stage,
       shape,
-      raw: partialRaw,
+      clock: {
+        ...clock,
+        unavailable: Object.entries(clock)
+          .filter(([, value]) => value === null)
+          .map(([name]) => name),
+      },
+      parent: {
+        expectedInputs: progress.expectedInputs,
+        dispatches: progress.dispatches,
+      },
+      raw: browserSnapshot,
       pageErrors,
       error: error instanceof Error ? error.message : String(error),
     });
   } finally {
     await context.close();
   }
-}
-
-function validateAcceptance(results) {
-  const afterResults = results.filter((result) => result.variant === "after");
-  const advisories = [];
-  for (const result of afterResults) {
-    const p95 = result.primary.dispatchToInput.p95;
-    if (p95 === null || p95 > 35 || result.longTasks.length > 1) {
-      throw new Error(`acceptance failure for ${result.variant}/${result.scenario}/${result.mode}/run${result.run}`);
-    }
-  }
-  for (const variant of ["after"]) {
-    for (const mode of modes) {
-      for (const scenario of scenarios.filter((item) => item.tick > 0)) {
-        const group = afterResults
-          .filter((result) => result.variant === variant && result.mode === mode && result.scenario === scenario.name)
-          .map((result) => result.primary.dispatchToInput.p95);
-        if (stats(group).median > 25) {
-          throw new Error(`p95 median acceptance failure for ${variant}/${scenario.name}/${mode}`);
-        }
-      }
-      const expanded = stats(afterResults.filter((result) => result.variant === variant && result.mode === mode && result.scenario === "h1000-expanded").map((result) => result.primary.dispatchToInput.p95)).median;
-      const tail = stats(afterResults.filter((result) => result.variant === variant && result.mode === mode && result.scenario === "h1000-tail").map((result) => result.primary.dispatchToInput.p95)).median;
-      if (expanded === null || tail === null || expanded > tail + 8) {
-        advisories.push({
-          name: "expanded-tail-p95-delta",
-          variant,
-          mode,
-          expanded,
-          tail,
-          limit: tail === null ? null : tail + 8,
-          delta: tail === null ? null : expanded - tail,
-        });
-      }
-    }
-  }
-  return advisories;
 }
 
 function writeArtifact(record) {
@@ -559,6 +573,7 @@ async function main() {
     baselineRevision,
     currentRevision: git(["rev-parse", "HEAD"]),
     generatorSha256: hashFile(fileURLToPath(import.meta.url)),
+    acceptanceVerifierSha256: hashFile(path.join(__dirname, "issue304Acceptance.mjs")),
     current: {
       appSha256: hashFile(path.join(root, "src/App.svelte")),
       detailSha256: hashFile(path.join(root, "src/lib/AgentDetail.svelte")),
@@ -627,7 +642,7 @@ async function main() {
       selectedModes.length === modes.length &&
       runs === 3
     ) {
-      const advisories = validateAcceptance(results);
+      const advisories = validateIssue304Acceptance(results);
       for (const advisory of advisories) {
         process.stdout.write(`${JSON.stringify({ status: "advisory", ...advisory })}\n`);
       }
@@ -640,7 +655,17 @@ async function main() {
   }
 }
 
-main().catch((error) => {
+async function run() {
+  if (process.env.ISSUE304_VALIDATE_FIXTURE !== undefined) {
+    const fixture = JSON.parse(process.env.ISSUE304_VALIDATE_FIXTURE);
+    const advisories = validateIssue304Acceptance(fixture);
+    process.stdout.write(`${JSON.stringify({ status: "validated", advisories })}\n`);
+    return;
+  }
+  await main();
+}
+
+run().catch((error) => {
   console.error(error instanceof Error ? error.stack : error);
   process.exitCode = 1;
 });
