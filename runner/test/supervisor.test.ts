@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { chmodSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type {
   RunnerSessions,
   SessionMeta,
@@ -17,6 +20,7 @@ import {
 } from "../src/supervisor.js";
 import type { ManagedChild } from "../src/supervisor.js";
 import type { AgyExecutableResolution } from "@kaoiro/antigravity";
+import { resolveAgyExecutable } from "@kaoiro/antigravity";
 
 const spawnMsg = {
   version: "0",
@@ -602,19 +606,19 @@ describe("Supervisor.handleSpawn", () => {
       codexAuthMode: undefined, codexChatgptPlan: undefined,
       codexInternalSubagents: undefined, codexExtraModels: undefined,
       antigravityExtraModels: undefined,
-      antigravityExecutable: { ok: true, path: "/recovered/agy" },
+      antigravityExecutable: { ok: true, path: process.execPath },
       antigravityProbeTimeoutMs: 45_000,
       contextWorkBudgetPercent: undefined, getClaudeEngineCatalog: undefined,
     });
     h.sup.handleSpawn(antigravity);
     expect(h.configs.at(-1)).toMatchObject({
-      antigravity_cli_path: "/recovered/agy",
+      antigravity_cli_path: process.execPath,
       antigravity_probe_timeout_ms: 45_000,
     });
   });
 
   it("does not replace an existing child when reload makes Antigravity unavailable", () => {
-    const h = harness({ antigravityExecutable: { ok: true, path: "/before/agy" } });
+    const h = harness({ antigravityExecutable: { ok: true, path: process.execPath } });
     const antigravity = { ...spawnMsg, engine: "antigravity" };
     h.sup.handleSpawn(antigravity);
     h.sup.updateRuntimeConfig({
@@ -628,7 +632,7 @@ describe("Supervisor.handleSpawn", () => {
     });
     h.sup.handleRestart({ agent_id: antigravity.agent_id });
     expect(h.children[0]!.kills).toBe(0);
-    expect(h.configs[0]).toMatchObject({ antigravity_cli_path: "/before/agy" });
+    expect(h.configs[0]).toMatchObject({ antigravity_cli_path: process.execPath });
   });
 });
 
@@ -1098,7 +1102,7 @@ describe("Supervisor.handleResetSession (ADR-0036 F2, phase-17 17-5)", () => {
   });
 
   it("rejects an unavailable Antigravity reset before terminating its old wrapper", () => {
-    const h = harness({ antigravityExecutable: { ok: true, path: "/old/agy" } });
+    const h = harness({ antigravityExecutable: { ok: true, path: process.execPath } });
     const antigravity = { ...spawnMsg, agent_id: "lab-pc-1.antigravity-a", engine: "antigravity" };
     h.sup.handleSpawn(antigravity);
     h.sup.updateRuntimeConfig({
@@ -1121,6 +1125,43 @@ describe("Supervisor.handleResetSession (ADR-0036 F2, phase-17 17-5)", () => {
     expect(h.resetResults).toEqual([
       expect.objectContaining({ ok: false, reason: "spawn_failed" }),
     ]);
+  });
+
+  it.each([
+    ["is removed", (path: string) => unlinkSync(path)],
+    ["loses execute permission", (path: string) => chmodSync(path, 0o644)],
+  ])("keeps the existing wrapper when the selected executable %s", (_case, makeUnavailable) => {
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-agy-stale-"));
+    const executable = join(root, "agy");
+    writeFileSync(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    try {
+      const resolution = resolveAgyExecutable(executable);
+      expect(resolution).toEqual({ ok: true, path: executable });
+      const h = harness({ antigravityExecutable: resolution });
+      const antigravity = {
+        ...spawnMsg,
+        agent_id: "lab-pc-1.antigravity-stale",
+        engine: "antigravity",
+      };
+      h.sup.handleSpawn(antigravity);
+      makeUnavailable(executable);
+
+      h.sup.handleResetSession({
+        agent_id: antigravity.agent_id,
+        mode: "new",
+        request_id: "rs_stale_binary",
+        previous_session_id: "sess-old-xyz",
+      });
+
+      expect(h.children).toHaveLength(1);
+      expect(h.children[0]!.kills).toBe(0);
+      expect(h.resetResults).toContainEqual(
+        expect.objectContaining({ ok: false, reason: "spawn_failed" }),
+      );
+      h.children[0]!.exit();
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
   });
 
   it("正常 fresh relaunch: kill + fresh child spawn (resume なし) + ok=true / to_session_id=null 報告", () => {

@@ -36,6 +36,7 @@ export interface AntigravityCliDependencies {
   loadWrapperBuildInfo?: typeof loadWrapperBuildInfo;
   createServerLink?: CreateServerLink;
   createHost?: CreateAntigravityHost;
+  onHostCreated?: (host: AntigravityHost) => void;
 }
 
 export function relayAntigravityInstruction(
@@ -151,6 +152,7 @@ export async function runAntigravityCli(
     ],
     ...(resumeSessionId === undefined ? {} : { resumeSessionId }),
   });
+  dependencies.onHostCreated?.(host);
   send(
     makeStateChange(
       config,

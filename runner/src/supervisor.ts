@@ -24,7 +24,11 @@ import type {
 } from "@kaoiro/protocol";
 import type { CodexAuthMode } from "./codex-auth.js";
 import type { ChatGptPlan } from "./config.js";
-import { agyFailureDetail, type AgyExecutableResolution } from "@kaoiro/antigravity";
+import {
+  agyFailureDetail,
+  resolveAgyExecutable,
+  type AgyExecutableResolution,
+} from "@kaoiro/antigravity";
 import {
   applyResumeSnapshot,
   validateResolvedSnapshot,
@@ -1247,9 +1251,16 @@ export class Supervisor {
   #antigravityLaunchable(agentId: string, parsed: ParsedSpawn): boolean {
     if (parsed.engine !== "antigravity") return true;
     const executable = this.#antigravityExecutable;
-    if (executable === undefined || executable.ok) return true;
+    if (executable === undefined) return true;
+    // A config snapshot fixes the executable spelling, but not the file's
+    // continued availability. Recheck that exact path before a lifecycle
+    // transition can terminate an existing wrapper; never rediscover PATH.
+    const current = executable.ok
+      ? resolveAgyExecutable(executable.path)
+      : executable;
+    if (current.ok) return true;
     process.stderr.write(
-      `runner: antigravity launch refused for ${agentId}: ${agyFailureDetail(executable.reason)}\n`,
+      `runner: antigravity launch refused for ${agentId}: ${agyFailureDetail(current.reason)}\n`,
     );
     return false;
   }

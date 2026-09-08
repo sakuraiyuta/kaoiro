@@ -206,7 +206,7 @@ describe("AntigravityHost", () => {
     host.close();
   });
 
-  it("waits for hook-probe stdout completion after close before starting a turn", async () => {
+  it("waits for exit, remaining stdout, and close before accepting hook registration", async () => {
     const cfg = config();
     const probe = new FakeAgy();
     const calls: FakeAgy[] = [];
@@ -228,11 +228,14 @@ describe("AntigravityHost", () => {
     });
     await host.send("hello");
     await waitFor(() => hookSource !== "");
-    probe.emit("close", 0, null);
+    probe.emit("exit", 0, null);
     await new Promise((resolve) => setTimeout(resolve, 1));
     expect(calls).toHaveLength(0);
     const command = `${process.execPath} ${new URL("../dist/hook.js", import.meta.url).pathname}`;
     probe.stdout.end(JSON.stringify({ hooks: [{ source: hookSource, actions: [{ event: "PreToolUse", matcher: "*", command, timeout_seconds: 3600 }] }] }));
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    expect(calls).toHaveLength(0);
+    probe.emit("close", 0, null);
     await waitFor(() => calls.length === 1);
     calls[0]!.finish();
     host.close();
@@ -283,6 +286,47 @@ describe("AntigravityHost", () => {
       expect(commands).toEqual([executable, executable, executable]);
       host.close();
     } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("uses the configured executable through default child processes for models, hooks, and a turn", async () => {
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-agy-default-host-"));
+    const executable = join(root, "agy fixture with spaces.mjs");
+    const hook = `${process.execPath} ${new URL("../dist/hook.js", import.meta.url).pathname}`;
+    writeFileSync(executable, `#!${process.execPath}
+const args = process.argv.slice(2);
+if (args[0] === "models") {
+  process.stdout.write("fixture-model\\tFixture Model\\n");
+} else if (args[0] === "-p" && args[1] === "/hooks") {
+  const customization = args[args.lastIndexOf("--add-dir") + 1];
+  process.stdout.write(JSON.stringify({ hooks: [{ source: customization + "/.agents/hooks.json", actions: [{ event: "PreToolUse", matcher: "*", command: ${JSON.stringify(hook)}, timeout_seconds: 3600 }] }] }));
+} else if (args[0] === "--print") {
+  process.stdout.write(JSON.stringify({ event: "result", result: { status: "SUCCESS", response: "fixture turn" } }) + "\\n");
+} else {
+  process.exitCode = 2;
+}
+`);
+    chmodSync(executable, 0o755);
+    const cfg = config({ antigravity_cli_path: executable });
+    const logs: Envelope[] = [];
+    const host = new AntigravityHost(cfg, {
+      cwd: root,
+      appendSystemPrompt: "persona",
+      permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
+      onState: () => {},
+      onLog: (envelope) => logs.push(envelope),
+    });
+    try {
+      await waitFor(() => (
+        (host.statusExtSnapshot().models as { value: string }[])
+          .some((model) => model.value === "fixture-model")
+      ));
+      await host.send("hello");
+      await waitFor(() => logs.some((envelope) => envelope.type === "result"));
+      expect(logs.at(-1)?.payload).toMatchObject({ text: "fixture turn" });
+    } finally {
+      host.close();
       rmSync(root, { force: true, recursive: true });
     }
   });
@@ -687,6 +731,34 @@ describe("AntigravityHost", () => {
     await waitFor(() => logs.some((envelope) => envelope.type === "result"));
     expect(turnSpawns).toBe(0);
     expect(logs.at(-1)?.payload).toMatchObject({ error_detail: errorDetail });
+    host.close();
+  });
+
+  it("settles a timeout, probe error, and close race once without spawning a turn", async () => {
+    const cfg = config();
+    const logs: Envelope[] = [];
+    const probe = new FakeAgy();
+    let turnSpawns = 0;
+    const host = new AntigravityHost(cfg, {
+      cwd: process.cwd(), appendSystemPrompt: "persona",
+      permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
+      onState: () => {}, onLog: (envelope) => logs.push(envelope), runtimeAssetsAvailable: () => true,
+      agyPath: "/test/agy", probeModels: async () => null, gateProbeTimeoutMs: 5,
+      probeSpawn: () => probe as unknown as GateProbe,
+      spawn: () => {
+        turnSpawns += 1;
+        return new FakeAgy() as unknown as SpawnedAgy;
+      },
+    });
+    await host.send("hello");
+    await waitFor(() => probe.killed === "SIGTERM");
+    probe.emit("error", new Error("late EACCES"));
+    probe.stdout.end("{}");
+    probe.emit("close", 0, null);
+    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
+    expect(logs.filter((envelope) => envelope.type === "result")).toHaveLength(1);
+    expect(logs.at(-1)?.payload).toMatchObject({ error_detail: "antigravity_gate_not_registered:timeout" });
+    expect(turnSpawns).toBe(0);
     host.close();
   });
 

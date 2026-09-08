@@ -1,3 +1,6 @@
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
 import { relayAntigravityInstruction, runAntigravityCli } from "../src/cli.js";
@@ -165,6 +168,72 @@ describe("Antigravity CLI", () => {
       );
     } finally {
       stderr.mockRestore();
+    }
+  });
+
+  it("reads a config-file executable into the default host without spawn injection", async () => {
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-agy-cli-default-"));
+    const executable = join(root, "fixture agy with spaces.mjs");
+    const record = join(root, "commands.jsonl");
+    const hook = `${process.execPath} ${new URL("../dist/hook.js", import.meta.url).pathname}`;
+    const configPath = join(root, "wrapper.config.json");
+    writeFileSync(executable, `#!${process.execPath}
+import { appendFileSync } from "node:fs";
+const args = process.argv.slice(2);
+appendFileSync(${JSON.stringify(record)}, JSON.stringify(args) + "\\n");
+if (args[0] === "models") {
+  process.stdout.write("fixture-model\\tFixture Model\\n");
+} else if (args[0] === "-p" && args[1] === "/hooks") {
+  const customization = args[args.lastIndexOf("--add-dir") + 1];
+  process.stdout.write(JSON.stringify({ hooks: [{ source: customization + "/.agents/hooks.json", actions: [{ event: "PreToolUse", matcher: "*", command: ${JSON.stringify(hook)}, timeout_seconds: 3600 }] }] }));
+} else if (args[0] === "--print") {
+  process.stdout.write(JSON.stringify({ event: "result", result: { status: "SUCCESS", response: "default cli turn" } }) + "\\n");
+} else {
+  process.exitCode = 2;
+}
+`);
+    chmodSync(executable, 0o755);
+    writeFileSync(configPath, JSON.stringify({
+      ...config(),
+      antigravity_cli_path: executable,
+      antigravity_probe_timeout_ms: 45_000,
+    }));
+    const envelopes: Envelope[] = [];
+    let liveHost: { close(): void } | undefined;
+    let resultSeen!: () => void;
+    const result = new Promise<void>((resolve) => { resultSeen = resolve; });
+    try {
+      const run = runAntigravityCli({
+        parseCliArgs: () => ({ configPath, prompt: undefined, resume: undefined }),
+        onHostCreated: (host) => { liveHost = host; },
+        createServerLink: (_url, _agentId, options) => {
+          queueMicrotask(() => {
+            options.onPersonaPrompt?.("persona");
+            queueMicrotask(() => options.onInstruction?.("hello"));
+          });
+          return {
+            close: () => {},
+            send: (envelope: Envelope) => {
+              envelopes.push(envelope);
+              if (envelope.type === "result") resultSeen();
+            },
+          } as never;
+        },
+      });
+      await result;
+      liveHost?.close();
+      await run;
+      expect(envelopes.find((envelope) => envelope.type === "result")?.payload)
+        .toMatchObject({ text: "default cli turn" });
+      const commands = readFileSync(record, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as string[]);
+      expect(commands.map((args) => args[0])).toEqual(
+        expect.arrayContaining(["models", "-p", "--print"]),
+      );
+    } finally {
+      rmSync(root, { force: true, recursive: true });
     }
   });
 });

@@ -13,6 +13,8 @@
 //   server-minted signed-token path (issue #138).
 
 import type { EngineCatalogResult, EngineModelInfo } from "@kaoiro/protocol";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseRunnerArgs } from "./args.js";
 import {
   formatBuildIdentity,
@@ -42,8 +44,8 @@ import {
   extraModelsRuntimeUpdate,
 } from "./extra-models-options.js";
 import { makeLauncher } from "./spawn.js";
-import { Supervisor } from "./supervisor.js";
-import { RunnerLink } from "./transport.js";
+import { Supervisor, type SupervisorOptions } from "./supervisor.js";
+import { RunnerLink, type RunnerLinkOptions } from "./transport.js";
 
 /** Liveness ping cadence; matches the phoenix transport heartbeat default. */
 const HEARTBEAT_MS = 30_000;
@@ -53,18 +55,20 @@ const HEARTBEAT_MS = 30_000;
 // runner with no context in runner.log — dogfood sessions surface as
 // "spawn押しても何も起きない" hours later. Log + exit(1) preserves Node
 // 15+'s default fail-visible behavior while making the cause traceable.
-process.on("unhandledRejection", (reason) => {
-  process.stderr.write(
-    `runner: unhandledRejection: ${reason instanceof Error ? reason.stack ?? reason.message : String(reason)}\n`,
-  );
-  process.exit(1);
-});
-process.on("uncaughtException", (error) => {
-  process.stderr.write(
-    `runner: uncaughtException: ${error.stack ?? error.message}\n`,
-  );
-  process.exit(1);
-});
+function installUnhandledHandlers(): void {
+  process.on("unhandledRejection", (reason) => {
+    process.stderr.write(
+      `runner: unhandledRejection: ${reason instanceof Error ? reason.stack ?? reason.message : String(reason)}\n`,
+    );
+    process.exit(1);
+  });
+  process.on("uncaughtException", (error) => {
+    process.stderr.write(
+      `runner: uncaughtException: ${error.stack ?? error.message}\n`,
+    );
+    process.exit(1);
+  });
+}
 
 function isCodexEnabled(config: RunnerConfig): boolean {
   // Absent = bundled default (["claude-code", "codex"]), so codex ON.
@@ -77,8 +81,51 @@ function isAntigravityEnabled(config: RunnerConfig): boolean {
   return config.capabilities?.includes("antigravity") ?? true;
 }
 
-async function main(): Promise<void> {
-  const { configPath, version } = parseRunnerArgs(process.argv.slice(2));
+type RunnerLinkLike = Pick<
+  RunnerLink,
+  "sendSpawnResult" | "sendSessions" | "sendResetResult" | "sendCatalogResult" | "updateRegister" | "reconnect" | "close"
+>;
+
+export interface RunnerCliDependencies {
+  parseRunnerArgs?: typeof parseRunnerArgs;
+  loadRunnerConfig?: typeof loadRunnerConfig;
+  applyServerUrlOverride?: typeof applyServerUrlOverride;
+  resolveCodexAuthMode?: typeof resolveCodexAuthMode;
+  resolveAgyExecutable?: typeof resolveAgyExecutable;
+  resolveAntigravityCatalog?: typeof resolveAntigravityCatalog;
+  makeLauncher?: typeof makeLauncher;
+  createSupervisor?: (options: SupervisorOptions) => Supervisor;
+  createRunnerLink?: (
+    serverUrl: string,
+    hostId: string,
+    options: RunnerLinkOptions,
+  ) => RunnerLinkLike;
+  watchRunnerConfig?: typeof watchRunnerConfig;
+  installSignalHandlers?: boolean;
+}
+
+export interface RunnerCliRuntime {
+  supervisor: Supervisor;
+  waitForReloads(): Promise<void>;
+  close(): void;
+}
+
+export async function runRunnerCli(
+  dependencies: RunnerCliDependencies = {},
+  argv: string[] = process.argv.slice(2),
+): Promise<RunnerCliRuntime | undefined> {
+  const parseArgs = dependencies.parseRunnerArgs ?? parseRunnerArgs;
+  const loadConfig = dependencies.loadRunnerConfig ?? loadRunnerConfig;
+  const applyOverride = dependencies.applyServerUrlOverride ?? applyServerUrlOverride;
+  const resolveCodex = dependencies.resolveCodexAuthMode ?? resolveCodexAuthMode;
+  const resolveExecutable = dependencies.resolveAgyExecutable ?? resolveAgyExecutable;
+  const resolveCatalog = dependencies.resolveAntigravityCatalog ?? resolveAntigravityCatalog;
+  const createLauncher = dependencies.makeLauncher ?? makeLauncher;
+  const createSupervisor = dependencies.createSupervisor ?? ((options) => new Supervisor(options));
+  const createRunnerLink = dependencies.createRunnerLink
+    ?? ((serverUrl, hostId, options) => new RunnerLink(serverUrl, hostId, options));
+  const watchConfig = dependencies.watchRunnerConfig ?? watchRunnerConfig;
+  const { configPath, version } = parseArgs(argv);
   // issue #228: checked BEFORE loadRunnerConfig — a first-run host with no
   // config yet (setup wizard not run) must still be able to answer
   // --version, and it must never touch the network.
@@ -90,7 +137,7 @@ async function main(): Promise<void> {
   // KAOIRO_RUNNER_SERVER_URL outranks the file (issue #140) — applied here
   // and again on every config-watcher reload below, so the precedence
   // holds across hot-reloads too.
-  let config = applyServerUrlOverride(loadRunnerConfig(configPath));
+  let config = applyOverride(loadConfig(configPath));
   const token = process.env.KAOIRO_RUNNER_TOKEN;
 
   // Phase-24: explicit `codex.auth_mode` > doctor detection > "unknown"。
@@ -99,7 +146,7 @@ async function main(): Promise<void> {
   // binary still gets the correct catalog (dogfood 環境依存回帰対策)。
   // Detection fails closed internally and never relays doctor output,
   // which may contain credential-presence details alongside the auth mode.
-  let codexAuthMode: CodexAuthMode = await resolveCodexAuthMode({
+  let codexAuthMode: CodexAuthMode = await resolveCodex({
     nextCodex: config.codex,
     nextEnabled: isCodexEnabled(config),
   });
@@ -110,25 +157,25 @@ async function main(): Promise<void> {
   // refresh_engine_catalog support, engine_catalog_refresh.ts).
   let antigravityExecutable: AgyExecutableResolution | undefined =
     isAntigravityEnabled(config)
-      ? resolveAgyExecutable(config.antigravity?.cli_path)
+      ? resolveExecutable(config.antigravity?.cli_path)
       : undefined;
   let antigravityProbeTimeoutMs: number | undefined =
     config.antigravity?.probe_timeout_ms ?? DEFAULT_AGY_PROBE_TIMEOUT_MS;
   let antigravityCatalog: EngineModelInfo[] | undefined =
     antigravityExecutable === undefined
       ? undefined
-      : await resolveAntigravityCatalog(
+      : await resolveCatalog(
           antigravityExecutable,
           antigravityProbeTimeoutMs,
         );
 
   // link is assigned just below; the supervisor only calls sendResult after a
   // spawn arrives, long after assignment (mirrors the wrapper's host/link wiring).
-  let link: RunnerLink;
-  const supervisor = new Supervisor({
+  let link: RunnerLinkLike;
+  const supervisor = createSupervisor({
     hostId: config.host_id,
     cwdAllowlist: config.cwd_allowlist,
-    launch: makeLauncher(),
+    launch: createLauncher(),
     wrapperServerUrl: wrapperUrlFrom(config.server_url),
     codexAuthMode,
     ...(config.codex?.chatgpt_plan === undefined
@@ -170,7 +217,7 @@ async function main(): Promise<void> {
     buildInfo,
   });
 
-  link = new RunnerLink(config.server_url, config.host_id, {
+  link = createRunnerLink(config.server_url, config.host_id, {
     ...(token === undefined || token === "" ? {} : { token }),
     register: buildRegister(
       config,
@@ -217,7 +264,7 @@ async function main(): Promise<void> {
     // Phase-24: hot reload の分岐は resolver に集約。explicit → explicit /
     // explicit → absent / absent → explicit / off → on / on → off の 5
     // 遷移が一貫して policy に従う。explicit set 時は必ず doctor 非呼出。
-    codexAuthMode = await resolveCodexAuthMode({
+    codexAuthMode = await resolveCodex({
       nextCodex: next.codex,
       nextEnabled: nextCodexEnabled,
       prevCodex: config.codex,
@@ -228,13 +275,13 @@ async function main(): Promise<void> {
     // TTL cache to preserve); clear the catalog when the operator disables
     // the capability so a stale probe result cannot outlive it.
     antigravityExecutable = nextAntigravityEnabled
-      ? resolveAgyExecutable(next.antigravity?.cli_path)
+      ? resolveExecutable(next.antigravity?.cli_path)
       : undefined;
     antigravityProbeTimeoutMs =
       next.antigravity?.probe_timeout_ms ?? DEFAULT_AGY_PROBE_TIMEOUT_MS;
     antigravityCatalog = antigravityExecutable === undefined
       ? undefined
-      : await resolveAntigravityCatalog(
+      : await resolveCatalog(
           antigravityExecutable,
           antigravityProbeTimeoutMs,
         );
@@ -274,14 +321,14 @@ async function main(): Promise<void> {
     }
     config = next;
   };
-  const watcher = watchRunnerConfig(
+  const watcher = watchConfig(
     configPath,
     (next) => {
       reloadQueue = reloadQueue
         // Re-apply the env override on every reload (issue #140): without
         // this, a file save would silently revert server_url to the file
         // value and reconnect the runner to the wrong host.
-        .then(() => applyReload(applyServerUrlOverride(next)))
+        .then(() => applyReload(applyOverride(next)))
         .catch((error) => {
           process.stderr.write(
             `runner: config apply failed: ${String(error)}\n`,
@@ -297,14 +344,34 @@ async function main(): Promise<void> {
     },
   );
 
-  const shutdown = (): void => {
+  const close = (): void => {
     watcher.close();
     supervisor.stopAll();
     link.close();
-    process.exit(0);
   };
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
+  if (dependencies.installSignalHandlers ?? true) {
+    const shutdown = (): void => {
+      close();
+      process.exit(0);
+    };
+    process.on("SIGINT", shutdown);
+    process.on("SIGTERM", shutdown);
+  }
+  return {
+    supervisor,
+    waitForReloads: async () => reloadQueue,
+    close,
+  };
 }
 
-void main();
+async function main(): Promise<void> {
+  installUnhandledHandlers();
+  await runRunnerCli();
+}
+
+if (
+  process.argv[1] !== undefined
+  && resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+  void main();
+}
