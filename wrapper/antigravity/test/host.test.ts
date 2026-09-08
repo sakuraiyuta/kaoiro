@@ -46,6 +46,18 @@ async function waitFor(predicate: () => boolean): Promise<void> {
   throw new Error("timed out waiting for host");
 }
 
+async function waitForDefaultChild(
+  predicate: () => boolean,
+  diagnostic: () => Record<string, unknown>,
+): Promise<void> {
+  const deadline = performance.now() + 2_000;
+  while (performance.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`timed out waiting for default child: ${JSON.stringify(diagnostic())}`);
+}
+
 function hostHarness(options: {
   resumeSessionId?: string;
   dangerouslySkipPermissions?: boolean;
@@ -181,7 +193,7 @@ describe("AntigravityHost", () => {
     expect(isGateRegistered({ hooks: [{ source, actions: [{ event: "PreToolUse", matcher: "*", command, timeout_seconds: 3600 }, { event: "PreToolUse", matcher: "*", command, timeout_seconds: 3600 }] }] }, expected)).toBe(false);
   });
 
-  it("default verifier control-flowが実機形fixtureを通してspawnする", async () => {
+  it("verifier control-flowは明示したtest executableでprobeをspawnする", async () => {
     const calls: { command: string; args: string[]; child: FakeAgy }[] = [];
     const cfg = config();
     const host = new AntigravityHost(cfg, {
@@ -198,6 +210,7 @@ describe("AntigravityHost", () => {
         });
         return child as unknown as GateProbe;
       },
+      agyPath: "/test/agy",
       spawn: (command, args) => { const child = new FakeAgy(); calls.push({ command, args, child }); return child as unknown as SpawnedAgy; },
     });
     await host.send("hello");
@@ -318,12 +331,15 @@ if (args[0] === "models") {
       onLog: (envelope) => logs.push(envelope),
     });
     try {
-      await waitFor(() => (
+      await waitForDefaultChild(() => (
         (host.statusExtSnapshot().models as { value: string }[])
           .some((model) => model.value === "fixture-model")
-      ));
+      ), () => ({ status: host.statusExtSnapshot(), logs }));
       await host.send("hello");
-      await waitFor(() => logs.some((envelope) => envelope.type === "result"));
+      await waitForDefaultChild(
+        () => logs.some((envelope) => envelope.type === "result"),
+        () => ({ status: host.statusExtSnapshot(), logs }),
+      );
       expect(logs.at(-1)?.payload).toMatchObject({ text: "fixture turn" });
     } finally {
       host.close();
@@ -595,13 +611,14 @@ if (args[0] === "models") {
     host.close();
   });
 
-  it("default models probe control-flowの成功時はsnapshotではなく実測catalogをstampする", async () => {
+  it("models probe control-flowの成功時はsnapshotではなく実測catalogをstampする", async () => {
     const states: Envelope[] = [];
     const cfg = config();
     const calls: string[][] = [];
     const host = new AntigravityHost(cfg, {
       cwd: process.cwd(), appendSystemPrompt: "persona", permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
       onState: (envelope) => states.push(envelope), runtimeAssetsAvailable: () => true,
+      agyPath: "/test/agy",
       modelsProbeSpawn: (_command, args) => {
         calls.push(args);
         const child = new FakeAgy();
@@ -631,6 +648,7 @@ if (args[0] === "models") {
     const host = new AntigravityHost(cfg, {
       cwd: process.cwd(), appendSystemPrompt: "persona", permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
       onState: (envelope) => states.push(envelope), runtimeAssetsAvailable: () => true,
+      agyPath: "/test/agy",
       modelsProbeSpawn: () => {
         const child = new FakeAgy();
         queueMicrotask(() => {
@@ -683,7 +701,7 @@ if (args[0] === "models") {
     const host = new AntigravityHost(cfg, {
       cwd: process.cwd(), appendSystemPrompt: "persona", permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
       onState: () => {}, onLog: (envelope) => logs.push(envelope), runtimeAssetsAvailable: () => true,
-      verifyGate: async () => new Promise<boolean>(() => {}), gateProbeTimeoutMs: 5,
+      agyPath: "/test/agy", verifyGate: async () => new Promise<boolean>(() => {}), gateProbeTimeoutMs: 5,
       spawn: () => { const child = new FakeAgy(); calls.push(child); return child as unknown as SpawnedAgy; },
     });
     await host.send("hello");
