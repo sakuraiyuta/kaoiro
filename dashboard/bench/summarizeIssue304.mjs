@@ -19,9 +19,19 @@ const rawFiles = fs
   .sort();
 
 const grouped = new Map();
+const failures = [];
 const raw = rawFiles.map((file) => {
   const absolutePath = path.join(rawRoot, file);
   const result = JSON.parse(fs.readFileSync(absolutePath, "utf8"));
+  const manifest = { file, sha256: sha256(absolutePath) };
+  if (result.status === "failed") {
+    failures.push({
+      ...manifest,
+      stage: result.stage,
+      error: result.error,
+    });
+    return manifest;
+  }
   const key = `${result.scenario}\u0000${result.mode}\u0000${result.run}`;
   const entry = grouped.get(key) ?? {
     scenario: result.scenario,
@@ -37,7 +47,7 @@ const raw = rawFiles.map((file) => {
   };
   grouped.set(key, entry);
 
-  return { file, sha256: sha256(absolutePath) };
+  return manifest;
 });
 
 const summary = {
@@ -46,6 +56,7 @@ const summary = {
     sha256: sha256(fileURLToPath(import.meta.url)),
   },
   raw: { path: rawRoot, files: raw },
+  failures,
   results: [...grouped.values()].sort(
     (left, right) =>
       left.scenario.localeCompare(right.scenario) ||

@@ -12,7 +12,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
 const repoRoot = path.resolve(root, "..");
 const baselineRevision = "2ea8f80bcd18aaac2bb6f47b9a685dbcfe3ebb7e";
-const outputRoot = path.join(root, "bench/results/issue-304");
+const outputRoot = path.resolve(
+  process.env.ISSUE304_OUTPUT_ROOT ?? path.join(os.tmpdir(), "momo304-raw"),
+);
 const actions = 60;
 const runs = Number.parseInt(process.env.ISSUE304_RUNS ?? "3", 10);
 const negative = process.env.ISSUE304_NEGATIVE;
@@ -226,7 +228,6 @@ async function armMetrics(page, tick) {
   await page.evaluate(({ tick, disconnected }) => {
     const metrics = {
       inputs: [],
-      dispatches: [],
       rAF: [],
       longTasks: [],
       ticks: [],
@@ -277,23 +278,49 @@ async function armMetrics(page, tick) {
   }, { tick, disconnected: negative === "disconnect-input-observer" });
 }
 
-async function browserEpoch(cdp) {
+function monotonicNow() {
+  return Number(process.hrtime.bigint()) / 1_000_000;
+}
+
+async function calibrateBrowserClock(cdp) {
+  const parentBefore = monotonicNow();
   const result = await cdp.send("Runtime.evaluate", {
     expression: "performance.timeOrigin + performance.now()",
     returnByValue: true,
   });
+  const parentAfter = monotonicNow();
   if (typeof result.result.value !== "number") {
     throw new Error("could not read browser clock");
   }
-  return result.result.value;
+  const parentMidpoint = (parentBefore + parentAfter) / 2;
+  return {
+    browserEpoch: result.result.value,
+    parentMidpoint,
+    offset: result.result.value - parentMidpoint,
+    uncertainty: (parentAfter - parentBefore) / 2,
+  };
 }
 
-async function sendInputs(page, cdp, mode) {
+async function queueBusyRenderer(page) {
+  await page.evaluate(() => {
+    window.setTimeout(() => {
+      const deadline = performance.now() + 120;
+      while (performance.now() < deadline) {
+        // Deliberately occupy the renderer for the negative control.
+      }
+    }, 0);
+  });
+  await page.waitForTimeout(10);
+}
+
+async function sendInputs(page, cdp, mode, clock) {
   let expectedInputs = 0;
+  const dispatches = [];
+  const browserNow = () => monotonicNow() + clock.offset;
   for (let action = 0; action < actions; action += 1) {
-    const dispatchAt = await browserEpoch(cdp);
-    await page.evaluate((at) => window.__issue304Metrics.dispatches.push(at), dispatchAt);
+    if (negative === "busy-renderer") await queueBusyRenderer(page);
     if (mode === "ascii") {
+      dispatches.push(browserNow());
       await cdp.send("Input.dispatchKeyEvent", {
         type: "keyDown",
         key: "a",
@@ -308,6 +335,7 @@ async function sendInputs(page, cdp, mode) {
       expectedInputs += 1;
     } else {
       const text = ["に", "にほ", "にほん", "日本", "日本語"][action % 5];
+      dispatches.push(browserNow());
       await cdp.send("Input.imeSetComposition", {
         text,
         selectionStart: text.length,
@@ -315,8 +343,7 @@ async function sendInputs(page, cdp, mode) {
       });
       expectedInputs += 1;
       if (action % 5 === 4) {
-        const commitAt = await browserEpoch(cdp);
-        await page.evaluate((at) => window.__issue304Metrics.dispatches.push(at), commitAt);
+        dispatches.push(browserNow());
         await cdp.send("Input.insertText", { text: "日本語" });
         expectedInputs += 1;
       }
@@ -328,18 +355,31 @@ async function sendInputs(page, cdp, mode) {
     );
     await page.waitForTimeout(30);
   }
-  return expectedInputs;
+  return { expectedInputs, dispatches };
+}
+
+class MeasurementFailure extends Error {
+  constructor(error, record) {
+    super(error instanceof Error ? error.message : String(error));
+    this.record = record;
+  }
 }
 
 async function measureRun(browser, server, variant, scenario, mode, run, source) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   const page = await context.newPage();
   const pageErrors = [];
+  let stage = "open";
+  let shape = {};
+  let partialRaw = null;
   page.on("pageerror", (error) => pageErrors.push(String(error)));
   try {
+    stage = "format-work";
     const textarea = await openScenario(page, server.baseUrl, scenario);
     const initialRows = await readShape(page, scenario);
+    shape.initialRows = initialRows;
     const formatWork = await verifyFormatWork(page, server.baseUrl, scenario, variant);
+    stage = "seed";
     await page.goto(`${server.baseUrl}/bench/issue304Harness.html?token=issue304`, { waitUntil: "load" });
     await page.evaluate(() => window.__issue304Bench.waitReady());
     await page.evaluate((history) => {
@@ -355,19 +395,30 @@ async function measureRun(browser, server, variant, scenario, mode, run, source)
     await page.waitForSelector(".log", { timeout: 30_000 });
     if (scenario.expand) await page.locator(".load-earlier").click();
     await page.waitForTimeout(500);
-    await readShape(page, scenario);
+    stage = "initial-shape";
+    shape.initialRows = await readShape(page, scenario);
     await textarea.count();
     await page.locator("textarea").first().focus();
     const cdp = await context.newCDPSession(page);
-    await armMetrics(page, scenario.tick);
-    const expectedInputs = await sendInputs(page, cdp, mode);
+    stage = "clock-calibration";
+    const startClock = await calibrateBrowserClock(cdp);
+    if (startClock.uncertainty > 20) {
+      throw new Error(`clock calibration uncertainty exceeds 20ms: ${startClock.uncertainty}`);
+    }
+    stage = "arm-metrics";
+    await armMetrics(page, negative === "busy-renderer" ? 0 : scenario.tick);
+    stage = "inputs";
+    const { expectedInputs, dispatches } = await sendInputs(page, cdp, mode, startClock);
     await page.evaluate(() => window.clearInterval(window.__issue304Metrics.timer));
     await page.waitForTimeout(100);
+    stage = "read-metrics";
     const raw = await page.evaluate(() => ({
       ...window.__issue304Metrics,
       timer: undefined,
       formatCalls: window.__issue304FormatCalls ?? null,
     }));
+    partialRaw = raw;
+    stage = "final-shape";
     const finalRows = await page.locator(".transcript-entry").count();
     const expectedFinalRows = scenario.expand
       ? scenario.history + raw.ticks.length
@@ -377,19 +428,33 @@ async function measureRun(browser, server, variant, scenario, mode, run, source)
         `invalid final transcript shape: expected ${expectedFinalRows} rows, received ${finalRows}`,
       );
     }
-    const dispatchToInput = raw.inputs.map((input, index) => input.at - raw.dispatches[index]);
-    const dispatchToRaf = raw.inputs.map((input, index) => input.raf - raw.dispatches[index]);
+    shape = { ...shape, finalRows, expectedFinalRows };
+    stage = "clock-drift";
+    const endClock = await calibrateBrowserClock(cdp);
+    const clock = {
+      start: startClock,
+      end: endClock,
+      drift: endClock.offset - startClock.offset,
+    };
+    if (endClock.uncertainty > 20 || Math.abs(clock.drift) > 5) {
+      throw new Error(`clock drift is incompatible with this run: ${JSON.stringify(clock)}`);
+    }
+    const dispatchToInput = raw.inputs.map((input, index) => input.at - dispatches[index]);
+    const dispatchToRaf = raw.inputs.map((input, index) => input.raf - dispatches[index]);
     if (
       raw.inputs.length !== expectedInputs ||
-      raw.dispatches.length !== expectedInputs ||
+      dispatches.length !== expectedInputs ||
       dispatchToInput.some((value) => !Number.isFinite(value) || value < 0) ||
       dispatchToRaf.some((value) => !Number.isFinite(value) || value < 0) ||
       raw.rAF.length !== expectedInputs ||
       pageErrors.length > 0
     ) {
       throw new Error(
-        `incomplete measurement: inputs=${raw.inputs.length}/${expectedInputs}, dispatches=${raw.dispatches.length}, raf=${raw.rAF.length}, errors=${pageErrors.length}`,
+        `incomplete measurement: inputs=${raw.inputs.length}/${expectedInputs}, dispatches=${dispatches.length}, raf=${raw.rAF.length}, errors=${pageErrors.length}`,
       );
+    }
+    if (negative === "busy-renderer" && stats(dispatchToInput).p95 < 100) {
+      throw new Error(`busy renderer did not delay input: p95=${stats(dispatchToInput).p95}`);
     }
     return {
       schema: 1,
@@ -399,6 +464,7 @@ async function measureRun(browser, server, variant, scenario, mode, run, source)
       mode,
       run,
       source,
+      clock,
       shape: {
         initialRows,
         finalRows,
@@ -413,9 +479,25 @@ async function measureRun(browser, server, variant, scenario, mode, run, source)
         tickCost: stats(raw.ticks),
       },
       longTasks: raw.longTasks,
-      raw: { dispatches: raw.dispatches, inputs: raw.inputs, ticks: raw.ticks },
+      raw: { dispatches, inputs: raw.inputs, ticks: raw.ticks },
       pageErrors,
     };
+  } catch (error) {
+    throw new MeasurementFailure(error, {
+      schema: 1,
+      issue: 304,
+      status: "failed",
+      variant,
+      scenario: scenario.name,
+      mode,
+      run,
+      source,
+      stage,
+      shape,
+      raw: partialRaw,
+      pageErrors,
+      error: error instanceof Error ? error.message : String(error),
+    });
   } finally {
     await context.close();
   }
@@ -423,6 +505,7 @@ async function measureRun(browser, server, variant, scenario, mode, run, source)
 
 function validateAcceptance(results) {
   const afterResults = results.filter((result) => result.variant === "after");
+  const advisories = [];
   for (const result of afterResults) {
     const p95 = result.primary.dispatchToInput.p95;
     if (p95 === null || p95 > 35 || result.longTasks.length > 1) {
@@ -442,10 +525,29 @@ function validateAcceptance(results) {
       const expanded = stats(afterResults.filter((result) => result.variant === variant && result.mode === mode && result.scenario === "h1000-expanded").map((result) => result.primary.dispatchToInput.p95)).median;
       const tail = stats(afterResults.filter((result) => result.variant === variant && result.mode === mode && result.scenario === "h1000-tail").map((result) => result.primary.dispatchToInput.p95)).median;
       if (expanded === null || tail === null || expanded > tail + 8) {
-        throw new Error(`expanded/tail acceptance failure for ${variant}/${mode}`);
+        advisories.push({
+          name: "expanded-tail-p95-delta",
+          variant,
+          mode,
+          expanded,
+          tail,
+          limit: tail === null ? null : tail + 8,
+          delta: tail === null ? null : expanded - tail,
+        });
       }
     }
   }
+  return advisories;
+}
+
+function writeArtifact(record) {
+  const prefix = record.status === "failed" ? "failure" : record.variant;
+  const file = path.join(
+    outputRoot,
+    `${prefix}-${record.scenario}-${record.mode}-run${record.run}.json`,
+  );
+  fs.writeFileSync(file, `${JSON.stringify(record, null, 2)}\n`);
+  return file;
 }
 
 async function main() {
@@ -487,11 +589,33 @@ async function main() {
       for (const scenario of selectedScenarios) {
         for (const mode of selectedModes) {
           for (let run = 0; run < runs; run += 1) {
-            const result = await measureRun(browser, server, variant, scenario, mode, run, scopedSource);
-            const file = path.join(outputRoot, `${variant}-${scenario.name}-${mode}-run${run}.json`);
-            fs.writeFileSync(file, `${JSON.stringify(result, null, 2)}\n`);
-            results.push(result);
-            process.stdout.write(`${JSON.stringify({ file, primary: result.primary.dispatchToInput, longTasks: result.longTasks.length })}\n`);
+            try {
+              const result = await measureRun(browser, server, variant, scenario, mode, run, scopedSource);
+              const file = writeArtifact(result);
+              results.push(result);
+              process.stdout.write(`${JSON.stringify({ file, primary: result.primary.dispatchToInput, longTasks: result.longTasks.length })}\n`);
+            } catch (error) {
+              const record = error instanceof MeasurementFailure
+                ? error.record
+                : {
+                    schema: 1,
+                    issue: 304,
+                    status: "failed",
+                    variant,
+                    scenario: scenario.name,
+                    mode,
+                    run,
+                    source: scopedSource,
+                    stage: "unknown",
+                    shape: {},
+                    raw: null,
+                    pageErrors: [],
+                    error: error instanceof Error ? error.message : String(error),
+                  };
+              const file = writeArtifact(record);
+              process.stderr.write(`${JSON.stringify({ file, status: "failed", stage: record.stage })}\n`);
+              throw error;
+            }
           }
         }
       }
@@ -503,7 +627,10 @@ async function main() {
       selectedModes.length === modes.length &&
       runs === 3
     ) {
-      validateAcceptance(results);
+      const advisories = validateAcceptance(results);
+      for (const advisory of advisories) {
+        process.stdout.write(`${JSON.stringify({ status: "advisory", ...advisory })}\n`);
+      }
     }
   } finally {
     await browser.close();

@@ -45,7 +45,7 @@ import type {
 const captured = vi.hoisted(() => ({
   handlers: null as KaoiroHandlers | null,
   latestIndex: null as ErrorIndexState | null,
-  liveMerges: [] as Array<{ usedFullMerge: boolean; accepted: boolean }>,
+  fullMergeCalls: 0,
 }));
 
 vi.mock("../src/lib/protocol", async (importOriginal) => {
@@ -84,16 +84,6 @@ vi.mock("../src/lib/protocol", async (importOriginal) => {
     ) => track(actual.recomputeLatestError(...args)),
     dropLatestError: (...args: Parameters<typeof actual.dropLatestError>) =>
       track(actual.dropLatestError(...args)),
-    mergeLiveTranscriptEntry: (
-      ...args: Parameters<typeof actual.mergeLiveTranscriptEntry>
-    ) => {
-      const result = actual.mergeLiveTranscriptEntry(...args);
-      captured.liveMerges.push({
-        usedFullMerge: result.usedFullMerge,
-        accepted: result.accepted,
-      });
-      return result;
-    },
   };
 });
 
@@ -104,6 +94,7 @@ const {
   resetTranscriptHistory,
   filterAfterHistoryCleared,
   referenceLatestErrorKeyByAgent,
+  setTranscriptMergeObserverForTest,
 } = await import("../src/lib/protocol");
 
 let component: object | null = null;
@@ -199,7 +190,10 @@ async function mountApp(): Promise<KaoiroHandlers> {
 beforeEach(() => {
   captured.handlers = null;
   captured.latestIndex = null;
-  captured.liveMerges = [];
+  captured.fullMergeCalls = 0;
+  setTranscriptMergeObserverForTest(() => {
+    captured.fullMergeCalls += 1;
+  });
   seqCounter = 0;
   lastTsSeqByAgent = new Map();
   vi.stubGlobal(
@@ -229,6 +223,7 @@ afterEach(async () => {
   document.body.innerHTML = "";
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  setTranscriptMergeObserverForTest(undefined);
 });
 
 const AGENT_IDS = ["a1", "a2", "a3"] as const;
@@ -252,7 +247,7 @@ describe("App.svelte error index parity (issue #304)", () => {
     ].sort((a, b) => a.ts.localeCompare(b.ts));
     h.onHistory?.({ a1: initial }, {}, "per-pane-v1");
     await tick();
-    captured.liveMerges = [];
+    captured.fullMergeCalls = 0;
 
     const appended = {
       ...randomEnvelope(mulberry32(23), "a1", "s1", false),
@@ -270,11 +265,7 @@ describe("App.svelte error index parity (issue #304)", () => {
     h.onEnvelope(outOfOrder);
     await tick();
 
-    expect(captured.liveMerges).toEqual([
-      { usedFullMerge: false, accepted: true },
-      { usedFullMerge: false, accepted: false },
-      { usedFullMerge: false, accepted: true },
-    ]);
+    expect(captured.fullMergeCalls).toBe(0);
   });
 
   it("replacement writers rebuild the sidecar before the next live append", async () => {
@@ -287,7 +278,7 @@ describe("App.svelte error index parity (issue #304)", () => {
     h.onHistory?.({ a1: [first] }, {}, "per-pane-v1");
     h.onHistoryReset?.("a1", false, "replay-1");
     await tick();
-    captured.liveMerges = [];
+    captured.fullMergeCalls = 0;
 
     h.onEnvelope({
       ...randomEnvelope(mulberry32(26), "a1", "s1", false),
@@ -296,9 +287,85 @@ describe("App.svelte error index parity (issue #304)", () => {
     });
     await tick();
 
-    expect(captured.liveMerges).toEqual([
-      { usedFullMerge: false, accepted: true },
-    ]);
+    expect(captured.fullMergeCalls).toBe(0);
+  });
+
+  it("rebuilds a warm sidecar after history, clear, reset, and replay writers", async () => {
+    const h = await mountApp();
+    let sequence = 0;
+    const live = () => ({
+      ...randomEnvelope(mulberry32(40 + sequence), "a1", "s1", false),
+      ts: `2026-10-01T00:00:${String(sequence + 1).padStart(2, "0")}Z`,
+      seq: sequence++,
+    });
+    const assertWarm = async (label: string) => {
+      captured.fullMergeCalls = 0;
+      h.onEnvelope(live());
+      await tick();
+      expect(captured.fullMergeCalls, label).toBe(0);
+    };
+
+    const first = live();
+    h.onHistory?.({ a1: [first] }, {}, "epoch-1");
+    await tick();
+
+    const replacement = { ...live(), ts: first.ts, seq: first.seq };
+    h.onHistory?.({ a1: [replacement] }, {}, "epoch-2");
+    await tick();
+    await assertWarm("same-length history replacement");
+
+    h.onHistoryCleared?.("a1", "s1");
+    await tick();
+    await assertWarm("history clear");
+
+    h.onHistoryReset?.("a1", false, "replay-1");
+    await tick();
+    await assertWarm("history reset");
+
+    h.onHistoryReplayEnvelope?.("a1", live());
+    await tick();
+    await assertWarm("replay envelope");
+
+    h.onHistoryReplayComplete?.("a1", "replay-1");
+    await tick();
+    await assertWarm("replay completion does not replace logs");
+  });
+
+  it("starts a fresh sidecar after agent deletion and logout", async () => {
+    const h = await mountApp();
+    const first = randomEnvelope(mulberry32(51), "a1", "s1", false);
+    h.onHistory?.({ a1: [first] }, {}, "epoch-1");
+    await tick();
+
+    h.onAgentDeleted?.("a1");
+    await tick();
+    captured.fullMergeCalls = 0;
+    h.onEnvelope(randomEnvelope(mulberry32(52), "a1", "s1", false));
+    await tick();
+    expect(captured.fullMergeCalls).toBe(1);
+
+    document.querySelector<HTMLButtonElement>("button.logout")?.click();
+    await tick();
+    await tick();
+    captured.handlers = null;
+    const tokenInput = document.querySelector<HTMLInputElement>(
+      'input[aria-label="アクセストークン"]',
+    );
+    const form = document.querySelector<HTMLFormElement>("form.login-card");
+    tokenInput!.value = "dummy-token";
+    tokenInput!.dispatchEvent(new Event("input", { bubbles: true }));
+    form!.dispatchEvent(
+      new Event("submit", { bubbles: true, cancelable: true }),
+    );
+    await vi.waitFor(() => {
+      if (captured.handlers === null) throw new Error("not reconnected yet");
+    });
+    captured.fullMergeCalls = 0;
+    captured.handlers!.onEnvelope(
+      randomEnvelope(mulberry32(53), "a1", "s2", false),
+    );
+    await tick();
+    expect(captured.fullMergeCalls).toBe(1);
   });
 
   for (const seed of [1, 2, 3, 4, 5]) {

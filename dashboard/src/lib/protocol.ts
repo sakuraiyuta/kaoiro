@@ -1626,10 +1626,23 @@ export function transcriptEntryKey(
  *  overlap, and restore chronological order. This also handles resume replay:
  *  retained structured IA lines may be newer than JSONL logs arriving later,
  *  so append order is not display order (#105). */
+let transcriptMergeObserver: (() => void) | undefined;
+
+/**
+ * Lexical calls cannot be observed through an export spy, so tests install
+ * this counter at the actual full-merge entry point.
+ */
+export function setTranscriptMergeObserverForTest(
+  observer: (() => void) | undefined,
+): void {
+  transcriptMergeObserver = observer;
+}
+
 export function mergeTranscriptEntries(
   history: Envelope[],
   buffered: Envelope[],
 ): Envelope[] {
+  transcriptMergeObserver?.();
   const seen = new Set<string>();
   const merged: Envelope[] = [];
   for (const envelope of [...history, ...buffered]) {

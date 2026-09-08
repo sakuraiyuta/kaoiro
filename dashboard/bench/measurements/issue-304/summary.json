@@ -1,213 +1,214 @@
 {
   "generator": {
     "path": "../../summarizeIssue304.mjs",
-    "sha256": "098e4925e618e02e5f95583978230f6a5657b772ddb2b9f1833e2393b1cfedc2"
+    "sha256": "2e18898bfd74d0ed0f54215dee7c1d4d6d1f48a2c44432a227d29aa5abbb5cfd"
   },
   "raw": {
-    "path": "/tmp/momo304-raw",
+    "path": "/tmp/momo304-r2-final-raw.BBjQmM",
     "files": [
       {
         "file": "after-h1000-expanded-ascii-run0.json",
-        "sha256": "4afb6f0f82252e60f680d54f65f88559b8fff0e209deadb12b69eece7eea6282"
+        "sha256": "b64ccf40aeefa09e16eedda78ea1d7b9083e3327b9c0ea5e5c1f007040b0c1c3"
       },
       {
         "file": "after-h1000-expanded-ascii-run1.json",
-        "sha256": "a4dcb5b95ec1c853f12554d1a7d066f67087c449c04d17a9ab6d71e40a354671"
+        "sha256": "03ddd8d12fa143ad4706dea3631b04c755116f97bf69c237c9bba4fa74b1bda7"
       },
       {
         "file": "after-h1000-expanded-ascii-run2.json",
-        "sha256": "4626ceed2b294001c015e3cd1b4ba43a1fc1e3bc7ad6fb85fc6bc1adb958b5ef"
+        "sha256": "7ffe16fe51a8633a03fd0a0efcff0adb15f4569bebdf073c4b950e671c42daca"
       },
       {
         "file": "after-h1000-expanded-ime-run0.json",
-        "sha256": "7e72bcad0d815d2c9c49c46c2819b468cbb9c68dbcd02f3b958a47203fcb75e9"
+        "sha256": "c63e2ff24bbbdee49632f24a9ac1a09580fb9f436daa069f950415fae800ffce"
       },
       {
         "file": "after-h1000-expanded-ime-run1.json",
-        "sha256": "a96b6c0c7fd7c495054b36c53f86191069c86e5392865da779717aee5951dfde"
+        "sha256": "b24d43530121d0f6b764a5c812fd115efb61bb8333244c5d14e3a2f0a39a0116"
       },
       {
         "file": "after-h1000-expanded-ime-run2.json",
-        "sha256": "2437c875a2a3879b98fce778602e52754da8639d9e84b82307e803e9ac19eb76"
+        "sha256": "0bebcdeff4bfbd383494fe1b22089f24c66e2d04db0cd0df42d887d2c16fa737"
       },
       {
         "file": "after-h1000-tail-ascii-run0.json",
-        "sha256": "190c4ff4e06185280bb96b2efb326a9b0c28fba34c41253003aa6a7739f9a402"
+        "sha256": "b737dc0291036063af3e221269239579fe692fe7b5e145c4a68ed76742f00a94"
       },
       {
         "file": "after-h1000-tail-ascii-run1.json",
-        "sha256": "9ace31467ef28b38371220f2591222f1c71fdcadbac04b2abd329675a3dd3ac0"
+        "sha256": "7240565bd6e4733fd7a2190967c68ccd1847c6a8270fe8a9384ce88e28cd28ba"
       },
       {
         "file": "after-h1000-tail-ascii-run2.json",
-        "sha256": "ab8646bf890eedf3c5b23dc5905f520da5322cf6a3a4b6427b8bc62492af015c"
+        "sha256": "eb9075c144c4f17cda0fbbffdc80dc59c30ac0b50bcd62dd01d9636690493e4b"
       },
       {
         "file": "after-h1000-tail-ime-run0.json",
-        "sha256": "e512aabe67d9f69d8eb15d8753698b855241ffe1b46a235b7374d62572f2b980"
+        "sha256": "912cf9866ff062f5f1b549551cea497dadb19fdc7d989adc3f7e87f72719dc92"
       },
       {
         "file": "after-h1000-tail-ime-run1.json",
-        "sha256": "7410d7b9eef1a530360ee9f20f5851d8bfba149e7386bb1f91c116d563b9644c"
+        "sha256": "4aa7782792c9e54d20ddf1f65c99b3b3f7ed4d5f16234e5a6a25735c993e4f25"
       },
       {
         "file": "after-h1000-tail-ime-run2.json",
-        "sha256": "a3de91b650be2084f00125fab44d5a05fb20cab5cf07994a30a8f658f38801cf"
+        "sha256": "c2b7adebabcf7385870a9d516ea4f1d4787718872f326dbec838676ccf24e08e"
       },
       {
         "file": "after-h1000-tail-tick-off-ascii-run0.json",
-        "sha256": "86600824390c6bfd6513d5e295a0fc53867e11799b1e8a419c77ef8018775a48"
+        "sha256": "0e71c1b1aaccad2e9d52bf54db4a176645315993204e45e0536b550769c86167"
       },
       {
         "file": "after-h1000-tail-tick-off-ascii-run1.json",
-        "sha256": "eea26bfec10a6a32d670e472e6f481974c9aa9f28a8a63c29b8db8f13a72dde7"
+        "sha256": "3bf6ea53954b679c60bcb6fbbf2795b2cc3b06e94521a0bae8e5700ebf3e34d3"
       },
       {
         "file": "after-h1000-tail-tick-off-ascii-run2.json",
-        "sha256": "07cb74dded220f41e956660b8ac4cc864b51ba65648bdb032063c3db462d75e0"
+        "sha256": "9fc03ffd922206d2dc0f5f1e61b62512996d51735bf6b250e6907fa4f9ab088e"
       },
       {
         "file": "after-h1000-tail-tick-off-ime-run0.json",
-        "sha256": "a2f702eab9d8f5005557532735ccac167373439071056f636e3cbe647db3c265"
+        "sha256": "6b19acdd6ee4636017a7aa7d4a2a158754ea31d6896430cd49d1f34e5dc3b322"
       },
       {
         "file": "after-h1000-tail-tick-off-ime-run1.json",
-        "sha256": "51307b33a10482ccd9a8e328edb27ec9af56d7c6db6daf1dff41b13d48630f20"
+        "sha256": "eeb005b94486cc2431c144db86a821519ccf1937dda7333d0c6b3220516996d7"
       },
       {
         "file": "after-h1000-tail-tick-off-ime-run2.json",
-        "sha256": "0c9d964512e00aba5216b784ddb66ca2fa81ae7755f0fb18832d6acb6bab8107"
+        "sha256": "bb103236a1d71d12bcc3e2f94906ddf74ad8d7bb9930120a5529ae908b44ca10"
       },
       {
         "file": "after-h5000-tail-ascii-run0.json",
-        "sha256": "298e5b391963b19c22fef0c974ebb79dad54c7a146ca79e655ac3dbd2fb08620"
+        "sha256": "1f6c27c804b8ea8ef256c5db5c99bd396e999c6ed86155c36e9659b434ba2d17"
       },
       {
         "file": "after-h5000-tail-ascii-run1.json",
-        "sha256": "e0f5253c823bad0a04cb304b5d0e7a1ec2b94f7c6d76c197cb97ce61aba4600c"
+        "sha256": "b000d1667d3ead462a213cb573a772ef561f93595348ed9a3863e04856e4267e"
       },
       {
         "file": "after-h5000-tail-ascii-run2.json",
-        "sha256": "c2db81cb7d5be45eab274306bec82355aa4af795705506e2c09d8a16f2512457"
+        "sha256": "5eeecf3f696483286ba00ccf7013a52fdf49790c36ee75c536b5be4dfe526e80"
       },
       {
         "file": "after-h5000-tail-ime-run0.json",
-        "sha256": "7ad3fd717a4a18cad142fd9f29e3c67449078068dfc5d68cf0cc8da2e1d0e795"
+        "sha256": "f06660abd358172fbceea9e15edd0f0eb750cb07310145596ec7a1c4d30cbdff"
       },
       {
         "file": "after-h5000-tail-ime-run1.json",
-        "sha256": "52bbde9f147c8d03b3c5e2c527f529d3f52be46b515c2f93cfb87d85f92ba228"
+        "sha256": "9ab3ccc07dcc64dd1e4c8f20ccca4721e5905540ebc102625ef1a40e516e3e47"
       },
       {
         "file": "after-h5000-tail-ime-run2.json",
-        "sha256": "5940e93335e5a807a0506d53bf1ac6ec3521987a70455578a34d7db30072896f"
+        "sha256": "23ae09d0cc3bc2548538cb2485a267c4b21263f5abb83785dab086460ed73e87"
       },
       {
         "file": "baseline-h1000-expanded-ascii-run0.json",
-        "sha256": "d376d0c7589f778d88854261b87a8e930b0970df3bfc9b358c6ad3ce145c57f3"
+        "sha256": "85dac8fc66eed770eac8d4aac790312da52860f9c0455bafcf36a99a23e7c9f5"
       },
       {
         "file": "baseline-h1000-expanded-ascii-run1.json",
-        "sha256": "9bdc3a0b7ee756734ed9193906083a242dfe766f7d23a4fea7c95c4a3796734f"
+        "sha256": "e35d3d1d5edf0cd6d99effe816e645683ab10e27ace197664cd9a707e70ce6ea"
       },
       {
         "file": "baseline-h1000-expanded-ascii-run2.json",
-        "sha256": "f8cdb5d6e4c6ec49cdfa768430a6eedbc06a2be425217ea95dd6454d198daec6"
+        "sha256": "9f35b942e4bf9c01d68fdfe461f0cb4f218840072abafa95d8ee19919049a665"
       },
       {
         "file": "baseline-h1000-expanded-ime-run0.json",
-        "sha256": "326163e343228742d36ea6b59e2c86ba83f903c45be8920195254ab9e32761cd"
+        "sha256": "f7ca7486a7b9952e3ce3251b3364a1e48ab07af40c06d94b524c9d1b745489f2"
       },
       {
         "file": "baseline-h1000-expanded-ime-run1.json",
-        "sha256": "ef74e2325275e748d6af22618d84fa187795627750883698b1a4ae61ff70bf4d"
+        "sha256": "7efd3065805b2328d558284e7c4a4ba2f3e2c5ccd41d3ebfacccc8ee72eff9d0"
       },
       {
         "file": "baseline-h1000-expanded-ime-run2.json",
-        "sha256": "55d2d7f2b075e4a7dd98f8a8f85c480420db716cfcbb3a34be3698c388ff462f"
+        "sha256": "c5d69f4f8fc44d7cd11113adf615df1d6d9ebc5f478bc7b02ec406c1ada7fdfd"
       },
       {
         "file": "baseline-h1000-tail-ascii-run0.json",
-        "sha256": "824b110402d2811102c5ac2c261775b7f294ec90c9c4ea91d48b6b457d767c04"
+        "sha256": "a22a961d2b32b577354853be4e89e4bef1387c4edba8d16b8618f1e81d22fe91"
       },
       {
         "file": "baseline-h1000-tail-ascii-run1.json",
-        "sha256": "284bcd2b587ab92e0ec5c7ff8d83d6df7f7861eecaceae930d345d618127ee20"
+        "sha256": "92404ba211eb1dae25e9ac7bfa1cae5071fa0d3c8dd9fd542c7603149c45d624"
       },
       {
         "file": "baseline-h1000-tail-ascii-run2.json",
-        "sha256": "551181a368372ccf4e782502a88392d6f1b51e36534b25ce299e64c92162a09b"
+        "sha256": "d97c76e3b973bc1cc35bca47455ed903ba6c1c159af860624ddade03150215f2"
       },
       {
         "file": "baseline-h1000-tail-ime-run0.json",
-        "sha256": "9f86db0f3af4ee31d4339e60306c53ff8bace45efa752e906df350644e3f927a"
+        "sha256": "711c3e62012b8e0fd5b26840495dc47ee81ab3c0306ac3f11bbddc8f2a350a80"
       },
       {
         "file": "baseline-h1000-tail-ime-run1.json",
-        "sha256": "01e00a2d2dafbe309920849dd1b465d869ee71598c61e22d0d658a318f115492"
+        "sha256": "fc88200b3a84b249e23f4f8b2166827de7a2989b8520d7e88a7336a838c342c6"
       },
       {
         "file": "baseline-h1000-tail-ime-run2.json",
-        "sha256": "cc82c3fb35981e6d883f83f1871e9acad4974e6ed1e7b510507bbee8653f305a"
+        "sha256": "5fc523b690261c5207a7716c738ffd1952352876ecab36531c69bc55bd5dd0b3"
       },
       {
         "file": "baseline-h1000-tail-tick-off-ascii-run0.json",
-        "sha256": "1c75e2c05c5910a6982ce9fc0b4388a55095c184ce19c6b7f2af41d34bf968ba"
+        "sha256": "3b5fe5245b9fd7eb4fbfa86c34b596a9bc68e5ceeeaa5bb5d2aebe74112f976b"
       },
       {
         "file": "baseline-h1000-tail-tick-off-ascii-run1.json",
-        "sha256": "38ef3923f4cb63e1a9f44f68f4efbbfbe7d3b70045b9f5102142122cf0d29c56"
+        "sha256": "90654025069b124773c3a7539ed02c225817d336a8ebec5374ee9505f3c21571"
       },
       {
         "file": "baseline-h1000-tail-tick-off-ascii-run2.json",
-        "sha256": "cc022eb22cc6011ca818fbd638e1d87dec896c32874f7ddf0014872d9c36b819"
+        "sha256": "0248d20837d72e5bfc100b2c6bddf977edc64d870431e2776b972629e16e7115"
       },
       {
         "file": "baseline-h1000-tail-tick-off-ime-run0.json",
-        "sha256": "2003f937edb7ee3f03d4bf065fafcef0d75486b8a66cbd6ece336fb275952de3"
+        "sha256": "10136ed23bb1db6b9c244713c8a66980795bcff4a396cfc853b418b9efe9f89d"
       },
       {
         "file": "baseline-h1000-tail-tick-off-ime-run1.json",
-        "sha256": "fcd474ebeaaceb0d8ec65b7618dfe987ff12716e2f294d9be6465d47d456f7a8"
+        "sha256": "2e727a696c0baab0f646ca6b17a2154c372df902ead7a9fb5231e8c53d3e8052"
       },
       {
         "file": "baseline-h1000-tail-tick-off-ime-run2.json",
-        "sha256": "92787d14ae4ff1f565cc2c2b6de40b7ca1a8ee0ebf33478a20c34effb298b9a8"
+        "sha256": "aca2190d33634d90cb89ff18564e0300d9c811fe6f52928e0939f560576d5e79"
       },
       {
         "file": "baseline-h5000-tail-ascii-run0.json",
-        "sha256": "24bd4e6339b9181d95a6c5abe13517f2d8f90b63a7c30bf48487e7c93afcf1a2"
+        "sha256": "8c4fdc7eda67ae75121eed68a4d42876af8cd0bf76de991baf65c3b22ccfb95f"
       },
       {
         "file": "baseline-h5000-tail-ascii-run1.json",
-        "sha256": "833763001a7955dbf5a9e7efcf6c61c9b149736879f9a7b61a2dde9c89fa1683"
+        "sha256": "78ffd655e555e2805f80711adb03df9be81347e25001b84dca77f0f793e4ba28"
       },
       {
         "file": "baseline-h5000-tail-ascii-run2.json",
-        "sha256": "aa02c114f2805d4974db86485086f198aca0b0c46dfa59b86c9fef0690a685af"
+        "sha256": "039d6bcd8818ba74933aed9844ed57cdf15cbf0e11faaa4a96c1f25a329a5de2"
       },
       {
         "file": "baseline-h5000-tail-ime-run0.json",
-        "sha256": "cfbf627e4853c4421149f0c9a669221ac4cae7b5e7b6462657e5f2df644b3031"
+        "sha256": "578e4c9224cd871cab0da13f27d836695878f97a95595a30e8273357774317ae"
       },
       {
         "file": "baseline-h5000-tail-ime-run1.json",
-        "sha256": "691e95a332ee1c3ad5d01d727c9396442f393e56b819b0edc18bac15c82d90c6"
+        "sha256": "6c73aa286d22acaa86e9f065f8f0df5ea12e99c7d7f3227ab3eee2c4f307437d"
       },
       {
         "file": "baseline-h5000-tail-ime-run2.json",
-        "sha256": "80604f226b456ac8ad7c74b5ef6426f46adb032f418f00ba96e992188a75e649"
+        "sha256": "7ec58ba20fcc874bc0e0b3e143af60bf53bdff3fa1350e2b8fc54d5a38659f26"
       }
     ]
   },
+  "failures": [],
   "results": [
     {
       "scenario": "h1000-expanded",
       "mode": "ascii",
       "run": 0,
       "after": {
-        "p95": 14.199951171875,
-        "median": 8.400146484375,
+        "p95": 17.330810546875,
+        "median": 8.934814453125,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -216,9 +217,9 @@
         }
       },
       "baseline": {
-        "p95": 144.300048828125,
-        "median": 9,
-        "longtasks": 89,
+        "p95": 99.533447265625,
+        "median": 65.77587890625,
+        "longtasks": 128,
         "formatTime": {
           "backgroundCalls": 0,
           "viewedCalls": 10055,
@@ -231,8 +232,8 @@
       "mode": "ascii",
       "run": 1,
       "after": {
-        "p95": 13.699951171875,
-        "median": 12,
+        "p95": 19.585693359375,
+        "median": 7.947998046875,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -241,9 +242,9 @@
         }
       },
       "baseline": {
-        "p95": 132.5,
-        "median": 8.89990234375,
-        "longtasks": 89,
+        "p95": 115.412353515625,
+        "median": 66.1337890625,
+        "longtasks": 107,
         "formatTime": {
           "backgroundCalls": 0,
           "viewedCalls": 10055,
@@ -256,8 +257,8 @@
       "mode": "ascii",
       "run": 2,
       "after": {
-        "p95": 14.10009765625,
-        "median": 12.199951171875,
+        "p95": 17.402587890625,
+        "median": 8.626953125,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -266,9 +267,9 @@
         }
       },
       "baseline": {
-        "p95": 132.39990234375,
-        "median": 8.5,
-        "longtasks": 74,
+        "p95": 135.949951171875,
+        "median": 72.12353515625,
+        "longtasks": 132,
         "formatTime": {
           "backgroundCalls": 0,
           "viewedCalls": 10055,
@@ -281,8 +282,8 @@
       "mode": "ime",
       "run": 0,
       "after": {
-        "p95": 13.5,
-        "median": 7.60009765625,
+        "p95": 18.386962890625,
+        "median": 7.7314453125,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -291,9 +292,9 @@
         }
       },
       "baseline": {
-        "p95": 126.699951171875,
-        "median": 8.699951171875,
-        "longtasks": 84,
+        "p95": 135.475341796875,
+        "median": 73.4296875,
+        "longtasks": 134,
         "formatTime": {
           "backgroundCalls": 0,
           "viewedCalls": 10055,
@@ -306,8 +307,8 @@
       "mode": "ime",
       "run": 1,
       "after": {
-        "p95": 17.900146484375,
-        "median": 8.39990234375,
+        "p95": 15.875,
+        "median": 6.9228515625,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -316,9 +317,9 @@
         }
       },
       "baseline": {
-        "p95": 130.199951171875,
-        "median": 8.39990234375,
-        "longtasks": 71,
+        "p95": 107.3203125,
+        "median": 66.37890625,
+        "longtasks": 107,
         "formatTime": {
           "backgroundCalls": 0,
           "viewedCalls": 10055,
@@ -331,8 +332,8 @@
       "mode": "ime",
       "run": 2,
       "after": {
-        "p95": 12.900146484375,
-        "median": 7.7998046875,
+        "p95": 14.59716796875,
+        "median": 7.62548828125,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -341,9 +342,9 @@
         }
       },
       "baseline": {
-        "p95": 137.2998046875,
-        "median": 8.599853515625,
-        "longtasks": 82,
+        "p95": 129.31494140625,
+        "median": 67.272705078125,
+        "longtasks": 116,
         "formatTime": {
           "backgroundCalls": 0,
           "viewedCalls": 10055,
@@ -356,8 +357,8 @@
       "mode": "ascii",
       "run": 0,
       "after": {
-        "p95": 8.5,
-        "median": 3.800048828125,
+        "p95": 4.61376953125,
+        "median": 2.54443359375,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -366,8 +367,8 @@
         }
       },
       "baseline": {
-        "p95": 23,
-        "median": 3.89990234375,
+        "p95": 18.078369140625,
+        "median": 2.615966796875,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -381,8 +382,8 @@
       "mode": "ascii",
       "run": 1,
       "after": {
-        "p95": 8.099853515625,
-        "median": 3.599853515625,
+        "p95": 4.233154296875,
+        "median": 2.3974609375,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -391,8 +392,8 @@
         }
       },
       "baseline": {
-        "p95": 23.2998046875,
-        "median": 3.7998046875,
+        "p95": 16.379638671875,
+        "median": 2.368408203125,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -406,8 +407,8 @@
       "mode": "ascii",
       "run": 2,
       "after": {
-        "p95": 7.900146484375,
-        "median": 3.699951171875,
+        "p95": 4.819580078125,
+        "median": 2.549072265625,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -416,8 +417,8 @@
         }
       },
       "baseline": {
-        "p95": 23.89990234375,
-        "median": 3.699951171875,
+        "p95": 16.223876953125,
+        "median": 2.477294921875,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -431,8 +432,8 @@
       "mode": "ime",
       "run": 0,
       "after": {
-        "p95": 4.7001953125,
-        "median": 3.300048828125,
+        "p95": 6.04150390625,
+        "median": 2.38720703125,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -441,8 +442,8 @@
         }
       },
       "baseline": {
-        "p95": 21.300048828125,
-        "median": 3.400146484375,
+        "p95": 17.556640625,
+        "median": 2.28173828125,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -456,8 +457,8 @@
       "mode": "ime",
       "run": 1,
       "after": {
-        "p95": 7,
-        "median": 3.39990234375,
+        "p95": 4.45068359375,
+        "median": 2.42236328125,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -466,8 +467,8 @@
         }
       },
       "baseline": {
-        "p95": 9.10009765625,
-        "median": 3.5,
+        "p95": 19.7001953125,
+        "median": 2.299072265625,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -481,8 +482,8 @@
       "mode": "ime",
       "run": 2,
       "after": {
-        "p95": 4.89990234375,
-        "median": 3.39990234375,
+        "p95": 6.20556640625,
+        "median": 2.3349609375,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -491,8 +492,8 @@
         }
       },
       "baseline": {
-        "p95": 21.400146484375,
-        "median": 3.400146484375,
+        "p95": 18.394287109375,
+        "median": 2.261474609375,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -506,8 +507,8 @@
       "mode": "ascii",
       "run": 0,
       "after": {
-        "p95": 4,
-        "median": 3.5,
+        "p95": 4.265380859375,
+        "median": 2.508544921875,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -516,8 +517,8 @@
         }
       },
       "baseline": {
-        "p95": 4.400146484375,
-        "median": 3.5,
+        "p95": 3.688720703125,
+        "median": 2.579833984375,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -531,8 +532,8 @@
       "mode": "ascii",
       "run": 1,
       "after": {
-        "p95": 4,
-        "median": 3.5,
+        "p95": 3.550048828125,
+        "median": 2.318359375,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -541,8 +542,8 @@
         }
       },
       "baseline": {
-        "p95": 4,
-        "median": 3.599853515625,
+        "p95": 3.521484375,
+        "median": 2.358642578125,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -556,8 +557,8 @@
       "mode": "ascii",
       "run": 2,
       "after": {
-        "p95": 4.199951171875,
-        "median": 3.599853515625,
+        "p95": 3.754150390625,
+        "median": 2.578125,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -566,8 +567,8 @@
         }
       },
       "baseline": {
-        "p95": 4.400146484375,
-        "median": 3.5,
+        "p95": 3.302490234375,
+        "median": 2.455078125,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -581,8 +582,8 @@
       "mode": "ime",
       "run": 0,
       "after": {
-        "p95": 3.900146484375,
-        "median": 3.39990234375,
+        "p95": 3.293701171875,
+        "median": 2.484619140625,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -591,8 +592,8 @@
         }
       },
       "baseline": {
-        "p95": 3.89990234375,
-        "median": 3.400146484375,
+        "p95": 3.568603515625,
+        "median": 2.396240234375,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -606,8 +607,8 @@
       "mode": "ime",
       "run": 1,
       "after": {
-        "p95": 4,
-        "median": 3.300048828125,
+        "p95": 3.54150390625,
+        "median": 2.350830078125,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -616,8 +617,8 @@
         }
       },
       "baseline": {
-        "p95": 3.89990234375,
-        "median": 3.39990234375,
+        "p95": 3.399658203125,
+        "median": 2.36083984375,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -631,8 +632,8 @@
       "mode": "ime",
       "run": 2,
       "after": {
-        "p95": 3.89990234375,
-        "median": 3.300048828125,
+        "p95": 3.485595703125,
+        "median": 2.37158203125,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -641,8 +642,8 @@
         }
       },
       "baseline": {
-        "p95": 4.5,
-        "median": 3.39990234375,
+        "p95": 3.17626953125,
+        "median": 2.342041015625,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -656,8 +657,8 @@
       "mode": "ascii",
       "run": 0,
       "after": {
-        "p95": 16.89990234375,
-        "median": 3.7998046875,
+        "p95": 14.263916015625,
+        "median": 2.483642578125,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -666,9 +667,9 @@
         }
       },
       "baseline": {
-        "p95": 15.5,
-        "median": 4.10009765625,
-        "longtasks": 0,
+        "p95": 33.02197265625,
+        "median": 4.28759765625,
+        "longtasks": 1,
         "formatTime": {
           "backgroundCalls": 0,
           "viewedCalls": 2000,
@@ -681,8 +682,8 @@
       "mode": "ascii",
       "run": 1,
       "after": {
-        "p95": 8.39990234375,
-        "median": 3.89990234375,
+        "p95": 11.38525390625,
+        "median": 2.66552734375,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -691,8 +692,8 @@
         }
       },
       "baseline": {
-        "p95": 14.599853515625,
-        "median": 4.5,
+        "p95": 28.623779296875,
+        "median": 3.550048828125,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -706,8 +707,8 @@
       "mode": "ascii",
       "run": 2,
       "after": {
-        "p95": 7.599853515625,
-        "median": 3.699951171875,
+        "p95": 12.209228515625,
+        "median": 2.637939453125,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -716,9 +717,9 @@
         }
       },
       "baseline": {
-        "p95": 15.5,
-        "median": 4,
-        "longtasks": 0,
+        "p95": 29.853515625,
+        "median": 4.636474609375,
+        "longtasks": 1,
         "formatTime": {
           "backgroundCalls": 0,
           "viewedCalls": 2000,
@@ -731,8 +732,8 @@
       "mode": "ime",
       "run": 0,
       "after": {
-        "p95": 7.60009765625,
-        "median": 3.5,
+        "p95": 15.36328125,
+        "median": 2.5107421875,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -741,8 +742,8 @@
         }
       },
       "baseline": {
-        "p95": 11.2998046875,
-        "median": 3.699951171875,
+        "p95": 32.037109375,
+        "median": 2.8798828125,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -756,8 +757,8 @@
       "mode": "ime",
       "run": 1,
       "after": {
-        "p95": 7.199951171875,
-        "median": 3.699951171875,
+        "p95": 12.944580078125,
+        "median": 2.43994140625,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -766,8 +767,8 @@
         }
       },
       "baseline": {
-        "p95": 9.89990234375,
-        "median": 3.89990234375,
+        "p95": 33.7666015625,
+        "median": 3.096435546875,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -781,8 +782,8 @@
       "mode": "ime",
       "run": 2,
       "after": {
-        "p95": 7.89990234375,
-        "median": 3.5,
+        "p95": 14.0732421875,
+        "median": 2.39404296875,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,
@@ -791,8 +792,8 @@
         }
       },
       "baseline": {
-        "p95": 11,
-        "median": 3.800048828125,
+        "p95": 30.436767578125,
+        "median": 2.76953125,
         "longtasks": 0,
         "formatTime": {
           "backgroundCalls": 0,

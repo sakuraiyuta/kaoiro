@@ -946,4 +946,36 @@ describe("AgentDetail log render window (#184)", () => {
     const firstEntry = target.querySelector(".transcript-entry");
     expect(firstEntry?.querySelector(".day-divider")).not.toBeNull();
   });
+  it("fuji keeps retry bound after a hidden entry shifts the raw index", async () => {
+    updateSettings({ hideNonMessageLogEntries: true });
+    const agentId = "fuji-index";
+    const user: Envelope = {
+      ...assistantLog(agentId, 1),
+      payload: { kind: "user", text: "original prompt" },
+    };
+    const result: Envelope = {
+      ...assistantLog(agentId, 2),
+      type: "result",
+      payload: { is_error: true, error_detail: "failure" },
+    };
+    const sendInstruction = vi.fn(async () => undefined);
+    const initial = {
+      envelope: state(agentId),
+      logs: [user, result],
+      agents: {},
+      scrollToEntryKey: null,
+      onClose: () => {},
+      connection: { sendInstruction },
+    };
+    const { target, props } = await renderReactive(initial);
+    expect(target.querySelector("button.retry")).not.toBeNull();
+    props.logs = [toolUse(agentId, 0, "hidden"), ...props.logs];
+    await tick();
+    expect(target.querySelectorAll(".transcript-entry")).toHaveLength(2);
+    const button = target.querySelector<HTMLButtonElement>("button.retry");
+    expect(button).not.toBeNull();
+    button!.click();
+    await tick();
+    expect(sendInstruction).toHaveBeenCalledWith(agentId, "original prompt");
+  });
 });
