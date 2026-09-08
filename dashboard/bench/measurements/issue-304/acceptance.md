@@ -57,14 +57,20 @@ Synthetic interval scheduling and OS IME limitations must remain explicit.
 Version 2 gates each input/shape group on a median of three per-run
 dispatch-to-input p95 values <=25ms, no run >35ms, and a median longtask count
 of zero with no run above one. The expanded-versus-matched-tail p95 delta is
-advisory: it includes remaining display/filter work outside this scope.
+advisory. It can include out-of-scope whole-list work; a follow-up must profile
+the breakdown before attributing the remaining difference to any component.
 
-Version 1 additionally gated expanded p95 <= matched H=1000 tail p95 +8ms.
-The recalibrated measurement exceeded that relation by 3.356ms for ASCII and
-0.026ms for IME while passing every Version 2 gate; preserve the comparison
-in the summary, but do not treat it as a failure. These are reference-host
-performance targets, not universal CI-machine timing promises. If a Version 2
-gate fails, retain the failed run and report before changing thresholds or rerunning.
+Version 2 explicitly relaxes Version 1's expanded-p95 relation; it does not
+certify Version 1 as passing. Version 1 gated expanded p95 <= matched H=1000
+tail p95 +8ms. Its generator exited 1 after saving 48 bound raw records: the
+recalibrated measurement exceeded that relation by 3.356ms for ASCII and
+0.026ms for IME. Preserve the failed invocation, raw manifest, generator/source
+hashes, and advisory comparison in the summary. Only that relative relation is
+advisory in Version 2: negative controls, missing reads, invalid shape, clock
+calibration/drift, and absolute latency or longtask failures still stop the run.
+These are reference-host performance targets, not universal CI-machine timing
+promises. If a Version 2 gate fails, retain the failed run and report before
+changing thresholds or rerunning.
 Baseline ASCII H1000 expanded dispatch-to-input median/p95 was 59.6/85.3ms;
 matched tail 3.8/19.0ms. Baseline H5000 tail ASCII p95 was 37.1/41.6/37.1ms.
 
