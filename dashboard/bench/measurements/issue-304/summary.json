@@ -1,0 +1,805 @@
+{
+  "generator": {
+    "path": "../../summarizeIssue304.mjs",
+    "sha256": "098e4925e618e02e5f95583978230f6a5657b772ddb2b9f1833e2393b1cfedc2"
+  },
+  "raw": {
+    "path": "/tmp/momo304-raw",
+    "files": [
+      {
+        "file": "after-h1000-expanded-ascii-run0.json",
+        "sha256": "4afb6f0f82252e60f680d54f65f88559b8fff0e209deadb12b69eece7eea6282"
+      },
+      {
+        "file": "after-h1000-expanded-ascii-run1.json",
+        "sha256": "a4dcb5b95ec1c853f12554d1a7d066f67087c449c04d17a9ab6d71e40a354671"
+      },
+      {
+        "file": "after-h1000-expanded-ascii-run2.json",
+        "sha256": "4626ceed2b294001c015e3cd1b4ba43a1fc1e3bc7ad6fb85fc6bc1adb958b5ef"
+      },
+      {
+        "file": "after-h1000-expanded-ime-run0.json",
+        "sha256": "7e72bcad0d815d2c9c49c46c2819b468cbb9c68dbcd02f3b958a47203fcb75e9"
+      },
+      {
+        "file": "after-h1000-expanded-ime-run1.json",
+        "sha256": "a96b6c0c7fd7c495054b36c53f86191069c86e5392865da779717aee5951dfde"
+      },
+      {
+        "file": "after-h1000-expanded-ime-run2.json",
+        "sha256": "2437c875a2a3879b98fce778602e52754da8639d9e84b82307e803e9ac19eb76"
+      },
+      {
+        "file": "after-h1000-tail-ascii-run0.json",
+        "sha256": "190c4ff4e06185280bb96b2efb326a9b0c28fba34c41253003aa6a7739f9a402"
+      },
+      {
+        "file": "after-h1000-tail-ascii-run1.json",
+        "sha256": "9ace31467ef28b38371220f2591222f1c71fdcadbac04b2abd329675a3dd3ac0"
+      },
+      {
+        "file": "after-h1000-tail-ascii-run2.json",
+        "sha256": "ab8646bf890eedf3c5b23dc5905f520da5322cf6a3a4b6427b8bc62492af015c"
+      },
+      {
+        "file": "after-h1000-tail-ime-run0.json",
+        "sha256": "e512aabe67d9f69d8eb15d8753698b855241ffe1b46a235b7374d62572f2b980"
+      },
+      {
+        "file": "after-h1000-tail-ime-run1.json",
+        "sha256": "7410d7b9eef1a530360ee9f20f5851d8bfba149e7386bb1f91c116d563b9644c"
+      },
+      {
+        "file": "after-h1000-tail-ime-run2.json",
+        "sha256": "a3de91b650be2084f00125fab44d5a05fb20cab5cf07994a30a8f658f38801cf"
+      },
+      {
+        "file": "after-h1000-tail-tick-off-ascii-run0.json",
+        "sha256": "86600824390c6bfd6513d5e295a0fc53867e11799b1e8a419c77ef8018775a48"
+      },
+      {
+        "file": "after-h1000-tail-tick-off-ascii-run1.json",
+        "sha256": "eea26bfec10a6a32d670e472e6f481974c9aa9f28a8a63c29b8db8f13a72dde7"
+      },
+      {
+        "file": "after-h1000-tail-tick-off-ascii-run2.json",
+        "sha256": "07cb74dded220f41e956660b8ac4cc864b51ba65648bdb032063c3db462d75e0"
+      },
+      {
+        "file": "after-h1000-tail-tick-off-ime-run0.json",
+        "sha256": "a2f702eab9d8f5005557532735ccac167373439071056f636e3cbe647db3c265"
+      },
+      {
+        "file": "after-h1000-tail-tick-off-ime-run1.json",
+        "sha256": "51307b33a10482ccd9a8e328edb27ec9af56d7c6db6daf1dff41b13d48630f20"
+      },
+      {
+        "file": "after-h1000-tail-tick-off-ime-run2.json",
+        "sha256": "0c9d964512e00aba5216b784ddb66ca2fa81ae7755f0fb18832d6acb6bab8107"
+      },
+      {
+        "file": "after-h5000-tail-ascii-run0.json",
+        "sha256": "298e5b391963b19c22fef0c974ebb79dad54c7a146ca79e655ac3dbd2fb08620"
+      },
+      {
+        "file": "after-h5000-tail-ascii-run1.json",
+        "sha256": "e0f5253c823bad0a04cb304b5d0e7a1ec2b94f7c6d76c197cb97ce61aba4600c"
+      },
+      {
+        "file": "after-h5000-tail-ascii-run2.json",
+        "sha256": "c2db81cb7d5be45eab274306bec82355aa4af795705506e2c09d8a16f2512457"
+      },
+      {
+        "file": "after-h5000-tail-ime-run0.json",
+        "sha256": "7ad3fd717a4a18cad142fd9f29e3c67449078068dfc5d68cf0cc8da2e1d0e795"
+      },
+      {
+        "file": "after-h5000-tail-ime-run1.json",
+        "sha256": "52bbde9f147c8d03b3c5e2c527f529d3f52be46b515c2f93cfb87d85f92ba228"
+      },
+      {
+        "file": "after-h5000-tail-ime-run2.json",
+        "sha256": "5940e93335e5a807a0506d53bf1ac6ec3521987a70455578a34d7db30072896f"
+      },
+      {
+        "file": "baseline-h1000-expanded-ascii-run0.json",
+        "sha256": "d376d0c7589f778d88854261b87a8e930b0970df3bfc9b358c6ad3ce145c57f3"
+      },
+      {
+        "file": "baseline-h1000-expanded-ascii-run1.json",
+        "sha256": "9bdc3a0b7ee756734ed9193906083a242dfe766f7d23a4fea7c95c4a3796734f"
+      },
+      {
+        "file": "baseline-h1000-expanded-ascii-run2.json",
+        "sha256": "f8cdb5d6e4c6ec49cdfa768430a6eedbc06a2be425217ea95dd6454d198daec6"
+      },
+      {
+        "file": "baseline-h1000-expanded-ime-run0.json",
+        "sha256": "326163e343228742d36ea6b59e2c86ba83f903c45be8920195254ab9e32761cd"
+      },
+      {
+        "file": "baseline-h1000-expanded-ime-run1.json",
+        "sha256": "ef74e2325275e748d6af22618d84fa187795627750883698b1a4ae61ff70bf4d"
+      },
+      {
+        "file": "baseline-h1000-expanded-ime-run2.json",
+        "sha256": "55d2d7f2b075e4a7dd98f8a8f85c480420db716cfcbb3a34be3698c388ff462f"
+      },
+      {
+        "file": "baseline-h1000-tail-ascii-run0.json",
+        "sha256": "824b110402d2811102c5ac2c261775b7f294ec90c9c4ea91d48b6b457d767c04"
+      },
+      {
+        "file": "baseline-h1000-tail-ascii-run1.json",
+        "sha256": "284bcd2b587ab92e0ec5c7ff8d83d6df7f7861eecaceae930d345d618127ee20"
+      },
+      {
+        "file": "baseline-h1000-tail-ascii-run2.json",
+        "sha256": "551181a368372ccf4e782502a88392d6f1b51e36534b25ce299e64c92162a09b"
+      },
+      {
+        "file": "baseline-h1000-tail-ime-run0.json",
+        "sha256": "9f86db0f3af4ee31d4339e60306c53ff8bace45efa752e906df350644e3f927a"
+      },
+      {
+        "file": "baseline-h1000-tail-ime-run1.json",
+        "sha256": "01e00a2d2dafbe309920849dd1b465d869ee71598c61e22d0d658a318f115492"
+      },
+      {
+        "file": "baseline-h1000-tail-ime-run2.json",
+        "sha256": "cc82c3fb35981e6d883f83f1871e9acad4974e6ed1e7b510507bbee8653f305a"
+      },
+      {
+        "file": "baseline-h1000-tail-tick-off-ascii-run0.json",
+        "sha256": "1c75e2c05c5910a6982ce9fc0b4388a55095c184ce19c6b7f2af41d34bf968ba"
+      },
+      {
+        "file": "baseline-h1000-tail-tick-off-ascii-run1.json",
+        "sha256": "38ef3923f4cb63e1a9f44f68f4efbbfbe7d3b70045b9f5102142122cf0d29c56"
+      },
+      {
+        "file": "baseline-h1000-tail-tick-off-ascii-run2.json",
+        "sha256": "cc022eb22cc6011ca818fbd638e1d87dec896c32874f7ddf0014872d9c36b819"
+      },
+      {
+        "file": "baseline-h1000-tail-tick-off-ime-run0.json",
+        "sha256": "2003f937edb7ee3f03d4bf065fafcef0d75486b8a66cbd6ece336fb275952de3"
+      },
+      {
+        "file": "baseline-h1000-tail-tick-off-ime-run1.json",
+        "sha256": "fcd474ebeaaceb0d8ec65b7618dfe987ff12716e2f294d9be6465d47d456f7a8"
+      },
+      {
+        "file": "baseline-h1000-tail-tick-off-ime-run2.json",
+        "sha256": "92787d14ae4ff1f565cc2c2b6de40b7ca1a8ee0ebf33478a20c34effb298b9a8"
+      },
+      {
+        "file": "baseline-h5000-tail-ascii-run0.json",
+        "sha256": "24bd4e6339b9181d95a6c5abe13517f2d8f90b63a7c30bf48487e7c93afcf1a2"
+      },
+      {
+        "file": "baseline-h5000-tail-ascii-run1.json",
+        "sha256": "833763001a7955dbf5a9e7efcf6c61c9b149736879f9a7b61a2dde9c89fa1683"
+      },
+      {
+        "file": "baseline-h5000-tail-ascii-run2.json",
+        "sha256": "aa02c114f2805d4974db86485086f198aca0b0c46dfa59b86c9fef0690a685af"
+      },
+      {
+        "file": "baseline-h5000-tail-ime-run0.json",
+        "sha256": "cfbf627e4853c4421149f0c9a669221ac4cae7b5e7b6462657e5f2df644b3031"
+      },
+      {
+        "file": "baseline-h5000-tail-ime-run1.json",
+        "sha256": "691e95a332ee1c3ad5d01d727c9396442f393e56b819b0edc18bac15c82d90c6"
+      },
+      {
+        "file": "baseline-h5000-tail-ime-run2.json",
+        "sha256": "80604f226b456ac8ad7c74b5ef6426f46adb032f418f00ba96e992188a75e649"
+      }
+    ]
+  },
+  "results": [
+    {
+      "scenario": "h1000-expanded",
+      "mode": "ascii",
+      "run": 0,
+      "after": {
+        "p95": 14.199951171875,
+        "median": 8.400146484375,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 10,
+          "typingOnlyCalls": 0
+        }
+      },
+      "baseline": {
+        "p95": 144.300048828125,
+        "median": 9,
+        "longtasks": 89,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 10055,
+          "typingOnlyCalls": 0
+        }
+      }
+    },
+    {
+      "scenario": "h1000-expanded",
+      "mode": "ascii",
+      "run": 1,
+      "after": {
+        "p95": 13.699951171875,
+        "median": 12,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 10,
+          "typingOnlyCalls": 0
+        }
+      },
+      "baseline": {
+        "p95": 132.5,
+        "median": 8.89990234375,
+        "longtasks": 89,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 10055,
+          "typingOnlyCalls": 0
+        }
+      }
+    },
+    {
+      "scenario": "h1000-expanded",
+      "mode": "ascii",
+      "run": 2,
+      "after": {
+        "p95": 14.10009765625,
+        "median": 12.199951171875,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 10,
+          "typingOnlyCalls": 0
+        }
+      },
+      "baseline": {
+        "p95": 132.39990234375,
+        "median": 8.5,
+        "longtasks": 74,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 10055,
+          "typingOnlyCalls": 0
+        }
+      }
+    },
+    {
+      "scenario": "h1000-expanded",
+      "mode": "ime",
+      "run": 0,
+      "after": {
+        "p95": 13.5,
+        "median": 7.60009765625,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 10,
+          "typingOnlyCalls": 0
+        }
+      },
+      "baseline": {
+        "p95": 126.699951171875,
+        "median": 8.699951171875,
+        "longtasks": 84,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 10055,
+          "typingOnlyCalls": 0
+        }
+      }
+    },
+    {
+      "scenario": "h1000-expanded",
+      "mode": "ime",
+      "run": 1,
+      "after": {
+        "p95": 17.900146484375,
+        "median": 8.39990234375,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 10,
+          "typingOnlyCalls": 0
+        }
+      },
+      "baseline": {
+        "p95": 130.199951171875,
+        "median": 8.39990234375,
+        "longtasks": 71,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 10055,
+          "typingOnlyCalls": 0
+        }
+      }
+    },
+    {
+      "scenario": "h1000-expanded",
+      "mode": "ime",
+      "run": 2,
+      "after": {
+        "p95": 12.900146484375,
+        "median": 7.7998046875,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 10,
+          "typingOnlyCalls": 0
+        }
+      },
+      "baseline": {
+        "p95": 137.2998046875,
+        "median": 8.599853515625,
+        "longtasks": 82,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 10055,
+          "typingOnlyCalls": 0
+        }
+      }
+    },
+    {
+      "scenario": "h1000-tail",
+      "mode": "ascii",
+      "run": 0,
+      "after": {
+        "p95": 8.5,
+        "median": 3.800048828125,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 10,
+          "typingOnlyCalls": 0
+        }
+      },
+      "baseline": {
+        "p95": 23,
+        "median": 3.89990234375,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 2000,
+          "typingOnlyCalls": 0
+        }
+      }
+    },
+    {
+      "scenario": "h1000-tail",
+      "mode": "ascii",
+      "run": 1,
+      "after": {
+        "p95": 8.099853515625,
+        "median": 3.599853515625,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 10,
+          "typingOnlyCalls": 0
+        }
+      },
+      "baseline": {
+        "p95": 23.2998046875,
+        "median": 3.7998046875,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 2000,
+          "typingOnlyCalls": 0
+        }
+      }
+    },
+    {
+      "scenario": "h1000-tail",
+      "mode": "ascii",
+      "run": 2,
+      "after": {
+        "p95": 7.900146484375,
+        "median": 3.699951171875,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 10,
+          "typingOnlyCalls": 0
+        }
+      },
+      "baseline": {
+        "p95": 23.89990234375,
+        "median": 3.699951171875,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 2000,
+          "typingOnlyCalls": 0
+        }
+      }
+    },
+    {
+      "scenario": "h1000-tail",
+      "mode": "ime",
+      "run": 0,
+      "after": {
+        "p95": 4.7001953125,
+        "median": 3.300048828125,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 10,
+          "typingOnlyCalls": 0
+        }
+      },
+      "baseline": {
+        "p95": 21.300048828125,
+        "median": 3.400146484375,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 2000,
+          "typingOnlyCalls": 0
+        }
+      }
+    },
+    {
+      "scenario": "h1000-tail",
+      "mode": "ime",
+      "run": 1,
+      "after": {
+        "p95": 7,
+        "median": 3.39990234375,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 10,
+          "typingOnlyCalls": 0
+        }
+      },
+      "baseline": {
+        "p95": 9.10009765625,
+        "median": 3.5,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 2000,
+          "typingOnlyCalls": 0
+        }
+      }
+    },
+    {
+      "scenario": "h1000-tail",
+      "mode": "ime",
+      "run": 2,
+      "after": {
+        "p95": 4.89990234375,
+        "median": 3.39990234375,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 10,
+          "typingOnlyCalls": 0
+        }
+      },
+      "baseline": {
+        "p95": 21.400146484375,
+        "median": 3.400146484375,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 2000,
+          "typingOnlyCalls": 0
+        }
+      }
+    },
+    {
+      "scenario": "h1000-tail-tick-off",
+      "mode": "ascii",
+      "run": 0,
+      "after": {
+        "p95": 4,
+        "median": 3.5,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 10,
+          "typingOnlyCalls": 0
+        }
+      },
+      "baseline": {
+        "p95": 4.400146484375,
+        "median": 3.5,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 2000,
+          "typingOnlyCalls": 0
+        }
+      }
+    },
+    {
+      "scenario": "h1000-tail-tick-off",
+      "mode": "ascii",
+      "run": 1,
+      "after": {
+        "p95": 4,
+        "median": 3.5,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 10,
+          "typingOnlyCalls": 0
+        }
+      },
+      "baseline": {
+        "p95": 4,
+        "median": 3.599853515625,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 2000,
+          "typingOnlyCalls": 0
+        }
+      }
+    },
+    {
+      "scenario": "h1000-tail-tick-off",
+      "mode": "ascii",
+      "run": 2,
+      "after": {
+        "p95": 4.199951171875,
+        "median": 3.599853515625,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 10,
+          "typingOnlyCalls": 0
+        }
+      },
+      "baseline": {
+        "p95": 4.400146484375,
+        "median": 3.5,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 2000,
+          "typingOnlyCalls": 0
+        }
+      }
+    },
+    {
+      "scenario": "h1000-tail-tick-off",
+      "mode": "ime",
+      "run": 0,
+      "after": {
+        "p95": 3.900146484375,
+        "median": 3.39990234375,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 10,
+          "typingOnlyCalls": 0
+        }
+      },
+      "baseline": {
+        "p95": 3.89990234375,
+        "median": 3.400146484375,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 2000,
+          "typingOnlyCalls": 0
+        }
+      }
+    },
+    {
+      "scenario": "h1000-tail-tick-off",
+      "mode": "ime",
+      "run": 1,
+      "after": {
+        "p95": 4,
+        "median": 3.300048828125,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 10,
+          "typingOnlyCalls": 0
+        }
+      },
+      "baseline": {
+        "p95": 3.89990234375,
+        "median": 3.39990234375,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 2000,
+          "typingOnlyCalls": 0
+        }
+      }
+    },
+    {
+      "scenario": "h1000-tail-tick-off",
+      "mode": "ime",
+      "run": 2,
+      "after": {
+        "p95": 3.89990234375,
+        "median": 3.300048828125,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 10,
+          "typingOnlyCalls": 0
+        }
+      },
+      "baseline": {
+        "p95": 4.5,
+        "median": 3.39990234375,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 2000,
+          "typingOnlyCalls": 0
+        }
+      }
+    },
+    {
+      "scenario": "h5000-tail",
+      "mode": "ascii",
+      "run": 0,
+      "after": {
+        "p95": 16.89990234375,
+        "median": 3.7998046875,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 10,
+          "typingOnlyCalls": 0
+        }
+      },
+      "baseline": {
+        "p95": 15.5,
+        "median": 4.10009765625,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 2000,
+          "typingOnlyCalls": 0
+        }
+      }
+    },
+    {
+      "scenario": "h5000-tail",
+      "mode": "ascii",
+      "run": 1,
+      "after": {
+        "p95": 8.39990234375,
+        "median": 3.89990234375,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 10,
+          "typingOnlyCalls": 0
+        }
+      },
+      "baseline": {
+        "p95": 14.599853515625,
+        "median": 4.5,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 2000,
+          "typingOnlyCalls": 0
+        }
+      }
+    },
+    {
+      "scenario": "h5000-tail",
+      "mode": "ascii",
+      "run": 2,
+      "after": {
+        "p95": 7.599853515625,
+        "median": 3.699951171875,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 10,
+          "typingOnlyCalls": 0
+        }
+      },
+      "baseline": {
+        "p95": 15.5,
+        "median": 4,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 2000,
+          "typingOnlyCalls": 0
+        }
+      }
+    },
+    {
+      "scenario": "h5000-tail",
+      "mode": "ime",
+      "run": 0,
+      "after": {
+        "p95": 7.60009765625,
+        "median": 3.5,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 10,
+          "typingOnlyCalls": 0
+        }
+      },
+      "baseline": {
+        "p95": 11.2998046875,
+        "median": 3.699951171875,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 2000,
+          "typingOnlyCalls": 0
+        }
+      }
+    },
+    {
+      "scenario": "h5000-tail",
+      "mode": "ime",
+      "run": 1,
+      "after": {
+        "p95": 7.199951171875,
+        "median": 3.699951171875,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 10,
+          "typingOnlyCalls": 0
+        }
+      },
+      "baseline": {
+        "p95": 9.89990234375,
+        "median": 3.89990234375,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 2000,
+          "typingOnlyCalls": 0
+        }
+      }
+    },
+    {
+      "scenario": "h5000-tail",
+      "mode": "ime",
+      "run": 2,
+      "after": {
+        "p95": 7.89990234375,
+        "median": 3.5,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 10,
+          "typingOnlyCalls": 0
+        }
+      },
+      "baseline": {
+        "p95": 11,
+        "median": 3.800048828125,
+        "longtasks": 0,
+        "formatTime": {
+          "backgroundCalls": 0,
+          "viewedCalls": 2000,
+          "typingOnlyCalls": 0
+        }
+      }
+    }
+  ]
+}
