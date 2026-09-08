@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { RunnerLinkOptions } from "../src/transport.js";
-import { runRunnerCli } from "../src/cli.js";
+import { runRunnerCli } from "../src/runner-cli.js";
 import { loadRunnerConfig } from "../src/config.js";
 import type { ManagedChild } from "../src/supervisor.js";
 import type { WrapperConfig } from "@kaoiro/protocol";
