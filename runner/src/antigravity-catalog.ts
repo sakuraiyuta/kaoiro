@@ -8,25 +8,34 @@
 import { execFile } from "node:child_process";
 import type { EngineModelInfo } from "@kaoiro/protocol";
 import {
+  DEFAULT_AGY_PROBE_TIMEOUT_MS,
+  agyFailureDetail,
   antigravityCatalogSnapshot,
   parseAgyModelsOutput,
+  type AgyExecutableResolution,
 } from "@kaoiro/antigravity";
 
 interface AgyModelsResult {
   stdout: string;
 }
 
-type RunAgyModels = () => Promise<AgyModelsResult>;
+export type RunAgyModels = (
+  path: string,
+  timeoutMs: number,
+) => Promise<AgyModelsResult>;
 
-function runAgyModels(): Promise<AgyModelsResult> {
+function runAgyModels(
+  path: string,
+  timeoutMs: number,
+): Promise<AgyModelsResult> {
   return new Promise((resolve, reject) => {
     execFile(
-      "agy",
+      path,
       ["models"],
       {
         encoding: "utf8",
         maxBuffer: 1024 * 1024,
-        timeout: 10_000,
+        timeout: timeoutMs,
       },
       (error, stdout) => {
         if (error !== null) {
@@ -47,11 +56,20 @@ function runAgyModels(): Promise<AgyModelsResult> {
  *  cannot make sense of (docs/specs/antigravity-cli-events.md — the format
  *  drifts with the vendor). */
 export async function resolveAntigravityCatalog(
+  executable: AgyExecutableResolution,
+  probeTimeoutMs: number = DEFAULT_AGY_PROBE_TIMEOUT_MS,
   runModels: RunAgyModels = runAgyModels,
 ): Promise<EngineModelInfo[]> {
+  if (!executable.ok) {
+    process.stderr.write(
+      "runner: warn — antigravity `agy models` probe unavailable: " +
+        `${agyFailureDetail(executable.reason)}; publishing the pinned 1.1.26 snapshot\n`,
+    );
+    return antigravityCatalogSnapshot();
+  }
   let stdout: string;
   try {
-    ({ stdout } = await runModels());
+    ({ stdout } = await runModels(executable.path, probeTimeoutMs));
   } catch {
     process.stderr.write(
       "runner: warn — antigravity `agy models` probe failed; " +

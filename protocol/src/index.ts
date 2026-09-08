@@ -266,6 +266,11 @@ export interface WrapperConfig {
    *  model too, not only the register's launch-time list. Absent / empty
    *  = no declarations (a pre-#292 runner, or an operator who set none). */
   antigravity_extra_models?: EngineModelInfo[];
+  /** Runner-local resolved Antigravity executable. This is never supplied by
+   * the server or dashboard. */
+  antigravity_cli_path?: string;
+  /** Timeout for Antigravity readiness probes only, in milliseconds. */
+  antigravity_probe_timeout_ms?: number;
   /** Claude-only: live-probed engine catalog snapshot from the runner's
    *  memory cache (ADR-0039 F9 追補). When set, the Claude adapter seeds
    *  its #models with this rich list instead of the ADR-0037 F1 single

@@ -81,7 +81,8 @@ node dist/setup-cli.js            # 直接叩く場合 (runner/ から)
 聞かれるのは host_id / server URL / 起動許可 cwd / engine(capabilities)/
 Codex を選んだ場合はその auth mode / トークン / node の絶対パス。
 `codex.chatgpt_plan` / `codex.extra_models` / `codex.internal_subagents` /
-`antigravity.extra_models` / `context_work_budget_percent` は
+`antigravity.extra_models` / `antigravity.cli_path` /
+`antigravity.probe_timeout_ms` / `context_work_budget_percent` は
 ウィザードでは聞かず、必要なら生成後の `runner.config.json` に手で足す。出力先は OS 別ユーザ設定ディレクトリ(Linux
 `${XDG_CONFIG_HOME:-~/.config}/kaoiro`、macOS
 `~/Library/Application Support/kaoiro`。`KAOIRO_RUNNER_DIR` で上書き可)で、
@@ -454,6 +455,16 @@ wrapper プロセスは launch 時の値を保持し、即時には変わらな�
 `runner.config.json`'s `antigravity` block passes Antigravity-engine-specific
 settings (phase-34 Stage B6, issue #292).
 
+- `cli_path` is an optional absolute path to `agy`. It is used unchanged for
+  the model probe, hook registration, and every Antigravity turn. When it is
+  absent, the runner searches only absolute directories in its own `PATH`.
+  A bad explicit path never falls back to `PATH`; a newly spawned Antigravity
+  wrapper is refused while existing wrappers retain their launch snapshot.
+- `probe_timeout_ms` is an optional integer from 1000 through 120000, with a
+  default of 30000. It bounds only `agy models` and `/hooks` probes, not a
+  model turn or permission deadline. `KAOIRO_NODE` selects Node for runner
+  helpers and is unrelated to this executable path.
+
 - `extra_models` (`EngineModelInfo[]`) — the same operator-declaration
   mechanism as Codex's `extra_models` above, reusing the identical
   `parseExtraModels` / `mergeExtraModels` helpers: lets the operator
@@ -479,7 +490,10 @@ settings (phase-34 Stage B6, issue #292).
   ```
 
 **live reload**: same semantics as the Codex block above — a config change
-reaches only spawns after the reload.
+reaches only spawns after the reload. A reload resolves the path again, so a
+fixed executable can recover without a config-text change. A catalog snapshot
+fallback merely preserves model choices; it does not prove that a wrapper can
+start.
 
 ## 開発
 

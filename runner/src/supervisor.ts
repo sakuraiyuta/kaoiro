@@ -24,6 +24,7 @@ import type {
 } from "@kaoiro/protocol";
 import type { CodexAuthMode } from "./codex-auth.js";
 import type { ChatGptPlan } from "./config.js";
+import { agyFailureDetail, type AgyExecutableResolution } from "@kaoiro/antigravity";
 import {
   applyResumeSnapshot,
   validateResolvedSnapshot,
@@ -163,6 +164,8 @@ export interface SupervisorOptions {
    *  for the same value-collision merge the runner's own `buildRegister`
    *  already applied to the register's launch catalog. */
   antigravityExtraModels?: EngineModelInfo[];
+  antigravityExecutable?: AgyExecutableResolution | undefined;
+  antigravityProbeTimeoutMs?: number | undefined;
   /** Global soft context-work budget from runner.config.json. The wrapper
    * derives a per-model token denominator at measurement time (issue #264). */
   contextWorkBudgetPercent?: number;
@@ -407,6 +410,8 @@ export function resolveWrapperConfig(
   // Same appended-last rationale as codexExtraModels immediately above
   // (phase-34 Stage B6).
   antigravityExtraModels?: EngineModelInfo[],
+  antigravityCliPath?: string,
+  antigravityProbeTimeoutMs?: number,
 ): WrapperConfig {
   const config: WrapperConfig = {
     agent_id: agentId,
@@ -462,6 +467,12 @@ export function resolveWrapperConfig(
     // Same relay rationale as codex_extra_models above (phase-34 Stage B6).
     if (antigravityExtraModels !== undefined && antigravityExtraModels.length > 0) {
       config.antigravity_extra_models = antigravityExtraModels;
+    }
+    if (antigravityCliPath !== undefined) {
+      config.antigravity_cli_path = antigravityCliPath;
+    }
+    if (antigravityProbeTimeoutMs !== undefined) {
+      config.antigravity_probe_timeout_ms = antigravityProbeTimeoutMs;
     }
   }
   if (
@@ -563,6 +574,8 @@ export interface SupervisorRuntimeUpdate {
   codexInternalSubagents: boolean | undefined;
   codexExtraModels: EngineModelInfo[] | undefined;
   antigravityExtraModels: EngineModelInfo[] | undefined;
+  antigravityExecutable?: AgyExecutableResolution | undefined;
+  antigravityProbeTimeoutMs?: number | undefined;
   contextWorkBudgetPercent: number | undefined;
   /** Live getter for the runner's Claude engine-catalog cache (ADR-0039
    *  F9 追補). Preserved on hot-reload so a config file change does not
@@ -596,6 +609,8 @@ export class Supervisor {
   #codexInternalSubagents: boolean | undefined;
   #codexExtraModels: EngineModelInfo[] | undefined;
   #antigravityExtraModels: EngineModelInfo[] | undefined;
+  #antigravityExecutable: AgyExecutableResolution | undefined;
+  #antigravityProbeTimeoutMs: number | undefined;
   #contextWorkBudgetPercent: number | undefined;
   #getClaudeEngineCatalog:
     | (() => WrapperConfig["claude_engine_catalog"] | null | undefined)
@@ -634,6 +649,8 @@ export class Supervisor {
     this.#codexInternalSubagents = options.codexInternalSubagents;
     this.#codexExtraModels = options.codexExtraModels;
     this.#antigravityExtraModels = options.antigravityExtraModels;
+    this.#antigravityExecutable = options.antigravityExecutable;
+    this.#antigravityProbeTimeoutMs = options.antigravityProbeTimeoutMs;
     this.#contextWorkBudgetPercent = options.contextWorkBudgetPercent;
     this.#getClaudeEngineCatalog = options.getClaudeEngineCatalog;
   }
@@ -653,6 +670,8 @@ export class Supervisor {
     this.#codexInternalSubagents = update.codexInternalSubagents;
     this.#codexExtraModels = update.codexExtraModels;
     this.#antigravityExtraModels = update.antigravityExtraModels;
+    this.#antigravityExecutable = update.antigravityExecutable;
+    this.#antigravityProbeTimeoutMs = update.antigravityProbeTimeoutMs;
     this.#contextWorkBudgetPercent = update.contextWorkBudgetPercent;
     this.#getClaudeEngineCatalog = update.getClaudeEngineCatalog;
   }
@@ -769,6 +788,7 @@ export class Supervisor {
     if (agentId === null) return;
     const entry = this.#children.get(agentId);
     if (entry === undefined) return;
+    if (!this.#antigravityLaunchable(agentId, entry.parsed)) return;
     if (isObject(payload)) {
       const requestId = nonEmptyString(payload.request_id);
       if (requestId !== undefined) {
@@ -864,6 +884,10 @@ export class Supervisor {
         `runner: switch_session target not found under cwd (agent ${agentId})\n`,
       );
       this.#fail(agentId, "session_not_found", requestId);
+      return;
+    }
+    if (!this.#antigravityLaunchable(agentId, entry.parsed)) {
+      this.#fail(agentId, "error", requestId);
       return;
     }
     // Resume snapshot (ADR-0014 F1 追補「resume 時の privilege 三軸再適用」,
@@ -973,6 +997,18 @@ export class Supervisor {
     const mode = payload.mode;
     if (requestId === undefined || requestId === "") return;
     if (mode !== "new" && mode !== "clear") return;
+    if (!this.#antigravityLaunchable(agentId, entry.parsed)) {
+      this.#sendResetResult({
+        version: "0",
+        host_id: this.#hostId,
+        agent_id: agentId,
+        mode: mode as SessionResetMode,
+        request_id: requestId,
+        ok: false,
+        reason: "spawn_failed",
+      });
+      return;
+    }
     this.#pendingSwitches.delete(agentId);
     const previousSessionId = optionalString(payload.previous_session_id);
     // Capture the spawn-time F4-lock holder BEFORE stripping it below;
@@ -1160,7 +1196,11 @@ export class Supervisor {
   #launchSpawn(agentId: string, parsed: ParsedSpawn): void {
     const resume = parsed.resumeSessionId;
     try {
-      this.#start(agentId, parsed);
+      if (!this.#start(agentId, parsed)) {
+        if (resume !== undefined) this.#activeSessions.delete(resume);
+        this.#fail(agentId, "error", parsed.requestId);
+        return;
+      }
     } catch (error) {
       // A synchronous launch failure (the config write or spawn raising) must
       // still surface to the operator and leave no stranded slot or lock.
@@ -1204,21 +1244,38 @@ export class Supervisor {
     });
   }
 
-  #start(agentId: string, parsed: ParsedSpawn): void {
+  #antigravityLaunchable(agentId: string, parsed: ParsedSpawn): boolean {
+    if (parsed.engine !== "antigravity") return true;
+    const executable = this.#antigravityExecutable;
+    if (executable === undefined || executable.ok) return true;
+    process.stderr.write(
+      `runner: antigravity launch refused for ${agentId}: ${agyFailureDetail(executable.reason)}\n`,
+    );
+    return false;
+  }
+
+  #wrapperConfig(agentId: string, parsed: ParsedSpawn): WrapperConfig {
+    return resolveWrapperConfig(
+      agentId,
+      parsed,
+      this.#wrapperServerUrl,
+      this.#codexAuthMode,
+      this.#codexChatgptPlan,
+      this.#codexInternalSubagents,
+      this.#getClaudeEngineCatalog?.() ?? null,
+      this.#contextWorkBudgetPercent,
+      this.#codexExtraModels,
+      this.#antigravityExtraModels,
+      this.#antigravityExecutable?.ok ? this.#antigravityExecutable.path : undefined,
+      this.#antigravityProbeTimeoutMs,
+    );
+  }
+
+  #start(agentId: string, parsed: ParsedSpawn): boolean {
+    if (!this.#antigravityLaunchable(agentId, parsed)) return false;
     const child = this.#launch(
       agentId,
-      resolveWrapperConfig(
-        agentId,
-        parsed,
-        this.#wrapperServerUrl,
-        this.#codexAuthMode,
-        this.#codexChatgptPlan,
-        this.#codexInternalSubagents,
-        this.#getClaudeEngineCatalog?.() ?? null,
-        this.#contextWorkBudgetPercent,
-        this.#codexExtraModels,
-        this.#antigravityExtraModels,
-      ),
+      this.#wrapperConfig(agentId, parsed),
       parsed.cwd,
       parsed.resumeSessionId,
       parsed.initialPrompt,
@@ -1234,6 +1291,7 @@ export class Supervisor {
     };
     this.#children.set(agentId, entry);
     child.on("exit", () => this.#onExit(agentId));
+    return true;
   }
 
   /** Drives the old reset target to a definitive outcome. The old process is
@@ -1372,6 +1430,10 @@ export class Supervisor {
   }
 
   #relaunch(agentId: string, entry: ChildEntry): void {
+    if (!this.#antigravityLaunchable(agentId, entry.parsed)) {
+      this.#remove(agentId, entry);
+      return;
+    }
     let child: ManagedChild;
     try {
       // initialPrompt is deliberately NOT re-sent on an auto-restart: re-running
@@ -1379,18 +1441,7 @@ export class Supervisor {
       // agent comes back idle and awaits the next instruction.
       child = this.#launch(
         agentId,
-        resolveWrapperConfig(
-          agentId,
-          entry.parsed,
-          this.#wrapperServerUrl,
-          this.#codexAuthMode,
-          this.#codexChatgptPlan,
-          this.#codexInternalSubagents,
-          this.#getClaudeEngineCatalog?.() ?? null,
-          this.#contextWorkBudgetPercent,
-          this.#codexExtraModels,
-          this.#antigravityExtraModels,
-        ),
+        this.#wrapperConfig(agentId, entry.parsed),
         entry.parsed.cwd,
         entry.parsed.resumeSessionId,
         undefined,
@@ -1424,22 +1475,15 @@ export class Supervisor {
   #relaunchForReset(agentId: string, entry: ChildEntry): void {
     const pending = entry.pendingReset;
     if (pending === undefined) return;
+    if (!this.#antigravityLaunchable(agentId, entry.parsed)) {
+      this.#rollback(agentId, entry, "spawn_failed");
+      return;
+    }
     let child: ManagedChild;
     try {
       child = this.#launch(
         agentId,
-        resolveWrapperConfig(
-          agentId,
-          entry.parsed,
-          this.#wrapperServerUrl,
-          this.#codexAuthMode,
-          this.#codexChatgptPlan,
-          this.#codexInternalSubagents,
-          this.#getClaudeEngineCatalog?.() ?? null,
-          this.#contextWorkBudgetPercent,
-          this.#codexExtraModels,
-          this.#antigravityExtraModels,
-        ),
+        this.#wrapperConfig(agentId, entry.parsed),
         entry.parsed.cwd,
         undefined, // fresh: no --resume
         undefined, // no initial prompt
@@ -1523,22 +1567,25 @@ export class Supervisor {
     }
     // Restore entry.parsed to the pre-reset state.
     entry.parsed = { ...entry.parsed, resumeSessionId: rollbackSid };
+    if (!this.#antigravityLaunchable(agentId, entry.parsed)) {
+      this.#sendResetResult({
+        version: "0",
+        host_id: this.#hostId,
+        agent_id: agentId,
+        mode: pending.mode,
+        request_id: pending.requestId,
+        ok: false,
+        reason: "rollback_failed",
+      });
+      delete entry.pendingReset;
+      this.#remove(agentId, entry);
+      return;
+    }
     let child: ManagedChild;
     try {
       child = this.#launch(
         agentId,
-        resolveWrapperConfig(
-          agentId,
-          entry.parsed,
-          this.#wrapperServerUrl,
-          this.#codexAuthMode,
-          this.#codexChatgptPlan,
-          this.#codexInternalSubagents,
-          this.#getClaudeEngineCatalog?.() ?? null,
-          this.#contextWorkBudgetPercent,
-          this.#codexExtraModels,
-          this.#antigravityExtraModels,
-        ),
+        this.#wrapperConfig(agentId, entry.parsed),
         entry.parsed.cwd,
         rollbackSid,
         undefined,

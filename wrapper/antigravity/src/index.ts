@@ -5,6 +5,14 @@ export { CustomizationDir, sweepStaleCustomizationDirs } from "./customization.j
 export { ToolHost } from "./toolhost.js";
 export { effectiveNetworkAccess } from "./network_access.js";
 export { applyAntigravityEnvDefaultModel, resolveAntigravitySources } from "./source_resolution.js";
+export {
+  DEFAULT_AGY_PROBE_TIMEOUT_MS,
+  MAX_AGY_PROBE_TIMEOUT_MS,
+  MIN_AGY_PROBE_TIMEOUT_MS,
+  agyFailureDetail,
+  resolveAgyExecutable,
+} from "./cli-path.js";
+export type { AgyExecutableFailureReason, AgyExecutableResolution } from "./cli-path.js";
 export { runAntigravityCli } from "./cli.js";
 export {
   agyEventToErrorDetail,

@@ -1124,15 +1124,15 @@ rejects a spawn race with `spawn_result.reason = already_running`. A wrapper joi
 `agent_id` that already has a live owner is also explicitly rejected, making accidental
 double starts visible instead of silently applying last-write-wins ([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) D5).
 
-### WrapperConfig fields relayed by the runner (issue #292)
+### WrapperConfig fields relayed by the runner (issues #181 and #292)
 
 `WrapperConfig` (protocol/src/index.ts) is the runner's per-spawn config
 handoff to the wrapper process it launches — a process-boundary data
 structure, not a `runner:<host_id>` channel message like the table above.
 Most of its ~20 fields mirror the `spawn` payload verbatim
 (`resolveWrapperConfig`, runner/src/supervisor.ts); this section documents
-only the two fields that instead come from `runner.config.json`'s
-per-engine blocks, since nothing else in this spec names `WrapperConfig`.
+only the fields that instead come from `runner.config.json`'s per-engine
+blocks, since nothing else in this spec names `WrapperConfig`.
 
 - `codex_extra_models` / `antigravity_extra_models` (`EngineModelInfo[]`)
   — the operator's `codex.extra_models` / `antigravity.extra_models`
@@ -1145,6 +1145,13 @@ per-engine blocks, since nothing else in this spec names `WrapperConfig`.
   engine. See [codex-model-catalog](codex-model-catalog.md) (D) and
   runner/README.md's "Codex 設定" / "Antigravity configuration" sections
   for the declaration syntax and merge semantics.
+
+- `antigravity_cli_path` / `antigravity_probe_timeout_ms` — runner-local
+  values derived from `antigravity.cli_path` / `antigravity.probe_timeout_ms`.
+  They are not accepted from a server `spawn` payload and introduce no
+  server/dashboard error vocabulary. The wrapper snapshots them at launch;
+  path resolution or probe failure is reported only by an existing bounded,
+  redacted local diagnostic.
 
 ### Client → server launch control (#22, [ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md))
 

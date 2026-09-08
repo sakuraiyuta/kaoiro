@@ -7,11 +7,16 @@
   "context_work_budget_percent": 60,
   "capabilities": [
     "claude-code",
-    "codex"
+    "codex",
+    "antigravity"
   ],
   "codex": {
     "auth_mode": "chatgpt",
     "chatgpt_plan": "plus",
     "internal_subagents": true
+  },
+  "antigravity": {
+    "cli_path": "/home/user/.local/bin/agy",
+    "probe_timeout_ms": 30000
   }
 }

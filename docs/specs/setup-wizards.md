@@ -128,13 +128,14 @@ startup**.
 | Host ID | `runner.config.json` `host_id` | Required | `^[A-Za-z0-9._-]+$` (used in the channel topic). |
 | Server URL | Same, `server_url` | Required | `ws://` or `wss://`. Production requires `wss://` through `force_ssl`. |
 | Launch-permitted cwd | Same, `cwd_allowlist` | Required | At least one absolute path; a blank line finishes input. |
-| Capabilities | Same, `capabilities` | Optional | Enable/disable `claude-code` / `codex` independently. Fall back to `claude-code` if all are off. |
+| Capabilities | Same, `capabilities` | Optional | Enable/disable `claude-code` / `codex` / `antigravity` independently. Fall back to `claude-code` if all are off. |
 | Codex auth mode | Same, `codex.auth_mode` | Optional | Only if capabilities include Codex. An explicit value avoids running `codex doctor` (phase-24). |
 | Runner token | `KAOIRO_RUNNER_TOKEN` in `runner.env` | Required when exposed | Manual entry / automatic generation. **Never write it to config JSON.** |
 | Node path | Same, `KAOIRO_NODE` | Optional | systemd user units / launchd start with a minimal PATH, so fix it to an absolute path when using a version manager. |
 
 - Fields the wizard does not ask (`codex.chatgpt_plan` / `codex.extra_models`
   / `codex.internal_subagents` / `antigravity.extra_models` /
+  `antigravity.cli_path` / `antigravity.probe_timeout_ms` /
   `context_work_budget_percent`) are manual-edit only, added to the
   generated `runner.config.json` by hand — see runner/README.md's
   "設定ウィザード" / "Codex 設定" / "Antigravity configuration" sections.

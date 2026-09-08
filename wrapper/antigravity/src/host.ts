@@ -35,6 +35,7 @@ import {
   type AgyStreamEvent,
 } from "./adapter.js";
 import { antigravityCatalogSnapshot, parseAgyModelsOutput } from "./catalog.js";
+import { DEFAULT_AGY_PROBE_TIMEOUT_MS, resolveAgyExecutable, type AgyExecutableFailureReason, type AgyExecutableResolution } from "./cli-path.js";
 import { CustomizationDir, GATE_DEADLINE_MS, HOOK_TIMEOUT_SECONDS, sweepStaleCustomizationDirs } from "./customization.js";
 import { AntigravityGate, GateServer, type AntigravityLaunchConfig } from "./gate.js";
 import { effectiveNetworkAccess } from "./network_access.js";
@@ -55,7 +56,7 @@ export interface SpawnedAgy {
 export interface GateProbe {
   stdout: NodeJS.ReadableStream;
   stderr?: NodeJS.ReadableStream | null;
-  once(event: "exit", listener: (code: number | null, signal: NodeJS.Signals | null) => void): this;
+  once(event: "close" | "exit", listener: (code: number | null, signal: NodeJS.Signals | null) => void): this;
   once(event: "error", listener: (error: Error) => void): this;
   kill?(signal?: NodeJS.Signals): boolean;
 }
@@ -189,6 +190,8 @@ export class AntigravityHost implements EngineAdapter {
   #gateProbe: GateProbe | null = null;
   #cancelGateProbe: (() => void) | null = null;
   #catalog: EngineModelInfo[] = antigravityCatalogSnapshot();
+  readonly #agyExecutable: AgyExecutableResolution;
+  readonly #probeTimeoutMs: number;
   #pendingModel: string | null = null;
   #switchError: Record<string, unknown> | null = null;
   readonly #toolNames = new Map<string, string>();
@@ -208,6 +211,12 @@ export class AntigravityHost implements EngineAdapter {
       this.#config.antigravity_extra_models,
     );
     this.#options = options;
+    this.#agyExecutable = options.agyPath === undefined
+      ? resolveAgyExecutable(this.#config.antigravity_cli_path)
+      : { ok: true, path: options.agyPath };
+    this.#probeTimeoutMs = options.gateProbeTimeoutMs
+      ?? this.#config.antigravity_probe_timeout_ms
+      ?? DEFAULT_AGY_PROBE_TIMEOUT_MS;
     this.#sessionId = options.resumeSessionId ?? null;
     this.#now = () => new Date().toISOString();
     sweepStaleCustomizationDirs();
@@ -331,6 +340,10 @@ export class AntigravityHost implements EngineAdapter {
   }
 
   async #runTurn(text: string, generation: number): Promise<void> {
+    if (!this.#agyExecutable.ok) {
+      throw new Error(`antigravity_cli_unavailable:${this.#agyExecutable.reason}`);
+    }
+    const executable = this.#agyExecutable.path;
     this.#customization ??= CustomizationDir.create({
       cwd: this.#options.cwd,
       personaPrompt: this.#options.appendSystemPrompt,
@@ -370,23 +383,30 @@ export class AntigravityHost implements EngineAdapter {
       if (!this.#isCurrent(generation)) return;
       this.#toolHost = toolHost;
       this.#gateServer = gateServer;
-      if (!(await this.#verifyGateRegistration(generation))) {
-        throw new Error("antigravity_gate_not_registered");
+      const registration = await this.#verifyGateRegistration(generation);
+      if (!registration.ok) {
+        throw new Error(`antigravity_gate_not_registered:${registration.reason}`);
       }
       if (!this.#isCurrent(generation)) return;
       const attemptedModel = this.#pendingModel;
       const args = this.#turnArguments(text, customization.path, attemptedModel ?? this.#config.model);
-      const child = (this.#options.spawn ?? this.#defaultSpawn)(this.#options.agyPath ?? "agy", args, {
-        cwd: this.#options.cwd,
-        env: {
-          ...process.env,
-          KAOIRO_GATE_SOCKET: gateServer.socketPath,
-          KAOIRO_GATE_NONCE: gateServer.nonce,
-          KAOIRO_GATE_DEADLINE_MS: String(GATE_DEADLINE_MS),
-          KAOIRO_BRIDGE_SOCKET: toolHost.socketPath,
-          KAOIRO_BRIDGE_NONCE: toolHost.nonce,
-        },
-      });
+      let child: SpawnedAgy;
+      try {
+        child = (this.#options.spawn ?? this.#defaultSpawn)(executable, args, {
+          cwd: this.#options.cwd,
+          env: {
+            ...process.env,
+            KAOIRO_GATE_SOCKET: gateServer.socketPath,
+            KAOIRO_GATE_NONCE: gateServer.nonce,
+            KAOIRO_GATE_DEADLINE_MS: String(GATE_DEADLINE_MS),
+            KAOIRO_BRIDGE_SOCKET: toolHost.socketPath,
+            KAOIRO_BRIDGE_NONCE: toolHost.nonce,
+          },
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`antigravity_cli_${this.#spawnFailureReason(error)}: ${boundErrorDetail(message)}`);
+      }
       this.#running = child;
       child.stdin.end();
       child.stderr.on("data", () => {});
@@ -396,7 +416,7 @@ export class AntigravityHost implements EngineAdapter {
       readableLines(child.stdout, (line) => {
         const event = parseAgyStreamLine(line);
         if (event === null) {
-          this.#warn(`antigravity: ignored malformed stream line from ${basename(this.#options.agyPath ?? "agy")}`);
+          this.#warn(`antigravity: ignored malformed stream line from ${basename(executable)}`);
           return;
         }
         if (event.event === "result") {
@@ -438,7 +458,10 @@ export class AntigravityHost implements EngineAdapter {
         this.#gateBroken = true;
         this.#terminalError(`antigravity_gate_unobserved_tool:${correlationFailure}`, attemptedModel);
       } else if (childError !== null) {
-        this.#terminalError(`agy_child_error: ${childError.message}`, attemptedModel);
+        this.#terminalError(
+          `antigravity_cli_${this.#spawnFailureReason(childError)}: ${boundErrorDetail(childError.message)}`,
+          attemptedModel,
+        );
       } else if (terminalResult === null) {
         this.#terminalError("agy_exit_without_result", attemptedModel);
       } else {
@@ -544,13 +567,15 @@ export class AntigravityHost implements EngineAdapter {
     return args;
   }
 
-  async #verifyGateRegistration(generation: number): Promise<boolean> {
+  async #verifyGateRegistration(generation: number): Promise<{ ok: true } | { ok: false; reason: string }> {
+    if (!this.#agyExecutable.ok) return { ok: false, reason: this.#agyExecutable.reason };
+    const executable = this.#agyExecutable.path;
     const args = ["-p", "/hooks", "--add-dir", this.#options.cwd, "--add-dir", this.#customization!.path, "--output-format", "json"];
-    return new Promise<boolean>((resolveProbe) => {
+    return new Promise((resolveProbe) => {
       let settled = false;
       let child: GateProbe | null = null;
       let timeout: ReturnType<typeof setTimeout> | null = null;
-      const settle = (value: boolean): void => {
+      const settle = (value: { ok: true } | { ok: false; reason: string }): void => {
         if (settled) return;
         settled = true;
         if (timeout !== null) clearTimeout(timeout);
@@ -560,35 +585,62 @@ export class AntigravityHost implements EngineAdapter {
       };
       const cancel = (): void => {
         child?.kill?.("SIGTERM");
-        settle(false);
+        settle({ ok: false, reason: "timeout" });
       };
-      timeout = setTimeout(cancel, this.#options.gateProbeTimeoutMs ?? 10_000);
+      timeout = setTimeout(cancel, this.#probeTimeoutMs);
       this.#cancelGateProbe = cancel;
       if (this.#options.verifyGate !== undefined) {
         void this.#options.verifyGate(args).then(
-          (registered) => settle(registered && this.#isCurrent(generation)),
-          () => settle(false),
+          (registered) => settle(registered && this.#isCurrent(generation)
+            ? { ok: true }
+            : { ok: false, reason: "registration_mismatch" }),
+          () => settle({ ok: false, reason: "spawn_failure" }),
         );
         return;
       }
-      const probeChild = this.#options.probeSpawn?.(this.#options.agyPath ?? "agy", args, { cwd: this.#options.cwd })
-        ?? spawn(this.#options.agyPath ?? "agy", args, { cwd: this.#options.cwd, stdio: ["ignore", "pipe", "ignore"] });
+      let probeChild: GateProbe;
+      try {
+        probeChild = this.#options.probeSpawn?.(executable, args, { cwd: this.#options.cwd })
+          ?? spawn(executable, args, { cwd: this.#options.cwd, stdio: ["ignore", "pipe", "pipe"] });
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        settle({ ok: false, reason: `spawn_failure:${boundErrorDetail(detail)}` });
+        return;
+      }
       child = probeChild;
       this.#gateProbe = probeChild;
       let output = "";
-      probeChild.stdout.setEncoding("utf8");
-      probeChild.stdout.on("data", (chunk: string) => { output += chunk; });
-      probeChild.once("error", () => settle(false));
-      probeChild.once("exit", (code) => {
-        if (code !== 0) { settle(false); return; }
+      let stderr = "";
+      let stdoutEnded = false;
+      let closeCode: number | null | undefined;
+      const finishClose = (): void => {
+        if (!stdoutEnded || closeCode === undefined) return;
+        if (closeCode !== 0) {
+          settle({ ok: false, reason: `nonzero_exit${stderr === "" ? "" : `:${boundErrorDetail(stderr)}`}` });
+          return;
+        }
         try {
-          settle(isGateRegistered(JSON.parse(output) as unknown, {
+          const registered = isGateRegistered(JSON.parse(output) as unknown, {
             source: join(this.#customization!.path, ".agents", "hooks.json"),
             command: `${this.#options.nodePath ?? process.execPath} ${HOOK_SCRIPT}`,
             timeoutSeconds: HOOK_TIMEOUT_SECONDS,
-          }));
-        } catch { settle(false); }
+          });
+          settle(registered && this.#isCurrent(generation)
+            ? { ok: true }
+            : { ok: false, reason: "registration_mismatch" });
+        } catch {
+          settle({ ok: false, reason: "invalid_json" });
+        }
+      };
+      probeChild.stdout.setEncoding("utf8");
+      probeChild.stdout.on("data", (chunk: string) => { output += chunk; });
+      probeChild.stdout.once("end", () => { stdoutEnded = true; finishClose(); });
+      probeChild.stderr?.setEncoding("utf8");
+      probeChild.stderr?.on("data", (chunk: string) => { stderr += chunk; });
+      probeChild.once("error", (error) => {
+        settle({ ok: false, reason: `spawn_failure:${boundErrorDetail(error.message)}` });
       });
+      probeChild.once("close", (code) => { closeCode = code; finishClose(); });
     });
   }
 
@@ -609,17 +661,25 @@ export class AntigravityHost implements EngineAdapter {
   }
 
   #defaultProbeModels(): Promise<EngineModelInfo[] | null> {
+    if (!this.#agyExecutable.ok) return Promise.resolve(null);
+    const executable = this.#agyExecutable.path;
     return new Promise((resolveProbe) => {
       let output = "";
-      const child = this.#options.modelsProbeSpawn?.(this.#options.agyPath ?? "agy", ["models"], { cwd: this.#options.cwd })
-        ?? spawn(this.#options.agyPath ?? "agy", ["models"], {
-          cwd: this.#options.cwd,
-          stdio: ["ignore", "pipe", "pipe"],
-        });
+      let child: GateProbe;
+      try {
+        child = this.#options.modelsProbeSpawn?.(executable, ["models"], { cwd: this.#options.cwd })
+          ?? spawn(executable, ["models"], {
+            cwd: this.#options.cwd,
+            stdio: ["ignore", "pipe", "pipe"],
+          });
+      } catch {
+        resolveProbe(null);
+        return;
+      }
       const timeout = setTimeout(() => {
         child.kill?.("SIGTERM");
         resolveProbe(null);
-      }, 10_000);
+      }, this.#probeTimeoutMs);
       child.stdout.setEncoding("utf8");
       child.stdout.on("data", (chunk: string) => { output += chunk; });
       child.stderr?.on("data", () => {});
@@ -701,6 +761,13 @@ export class AntigravityHost implements EngineAdapter {
       return;
     }
     writeRedactedStderr(`${message}\n`);
+  }
+
+  #spawnFailureReason(error: unknown): AgyExecutableFailureReason {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ENOENT" || code === "ENOTDIR") return "executable_missing";
+    if (code === "EACCES" || code === "EPERM") return "permission_denied";
+    return "spawn_failure";
   }
 
   #defaultSpawn(command: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv }): SpawnedAgy {

@@ -47,6 +47,8 @@ const ROUND_TRIP_CASES: {
   antigravity_extra_models: {
     value: [{ value: "gemini-3.7-flash", display_name: "Gemini 3.7 Flash" }],
   },
+  antigravity_cli_path: { value: "/opt/agy tools/agy" },
+  antigravity_probe_timeout_ms: { value: 30_000 },
   codex_internal_subagents: { value: true },
   claude_engine_catalog: {
     value: [{ value: "sonnet", display_name: "Sonnet", description: "" }],
@@ -68,6 +70,15 @@ describe("parseConfig", () => {
 
   it("正しい設定をそのまま受け入れる", () => {
     expect(parseConfig(valid)).toEqual(valid);
+  });
+
+  it("antigravity CLI fields reject relative, empty, NUL, and invalid timeout values", () => {
+    for (const cliPath of ["", "agy", "./agy", "/opt/agy\0shim"]) {
+      expect(() => parseConfig({ ...valid, antigravity_cli_path: cliPath })).toThrow(ConfigError);
+    }
+    for (const timeout of [999, 120_001, 1.5, "30000"]) {
+      expect(() => parseConfig({ ...valid, antigravity_probe_timeout_ms: timeout })).toThrow(ConfigError);
+    }
   });
 
   it.each([60.5, 100])(

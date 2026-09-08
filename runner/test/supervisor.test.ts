@@ -16,6 +16,7 @@ import {
   resolveWrapperConfig,
 } from "../src/supervisor.js";
 import type { ManagedChild } from "../src/supervisor.js";
+import type { AgyExecutableResolution } from "@kaoiro/antigravity";
 
 const spawnMsg = {
   version: "0",
@@ -75,6 +76,8 @@ function harness(
       | null
       | undefined;
     contextWorkBudgetPercent?: number;
+    antigravityExecutable?: AgyExecutableResolution;
+    antigravityProbeTimeoutMs?: number;
   } = {},
 ) {
   const children: FakeChild[] = [];
@@ -112,6 +115,12 @@ function harness(
     ...(opts.contextWorkBudgetPercent === undefined
       ? {}
       : { contextWorkBudgetPercent: opts.contextWorkBudgetPercent }),
+    ...(opts.antigravityExecutable === undefined
+      ? {}
+      : { antigravityExecutable: opts.antigravityExecutable }),
+    ...(opts.antigravityProbeTimeoutMs === undefined
+      ? {}
+      : { antigravityProbeTimeoutMs: opts.antigravityProbeTimeoutMs }),
     ...(opts.now === undefined ? {} : { now: opts.now }),
     ...(opts.resetTerminationGraceMs === undefined
       ? {}
@@ -365,6 +374,29 @@ describe("parseSpawn / resolveWrapperConfig", () => {
     );
     expect(config.antigravity_extra_models).toBeUndefined();
   });
+  it("relays the runner-resolved Antigravity executable and probe timeout", () => {
+    const parsed = parseSpawn({ ...spawnMsg, engine: "antigravity" })!;
+    expect(resolveWrapperConfig(
+      "lab-pc-1.antigravity-a", parsed, "ws://localhost:4000/wrapper",
+      undefined, undefined, undefined, null, undefined, undefined, undefined,
+      "/opt/agy tools/agy", 45_000,
+    )).toMatchObject({
+      antigravity_cli_path: "/opt/agy tools/agy",
+      antigravity_probe_timeout_ms: 45_000,
+    });
+  });
+  it("does not accept an executable path from a server spawn payload", () => {
+    const parsed = parseSpawn({
+      ...spawnMsg,
+      engine: "antigravity",
+      antigravity_cli_path: "/server-controlled/agy",
+    })!;
+    expect(resolveWrapperConfig(
+      "lab-pc-1.antigravity-a", parsed, "ws://localhost:4000/wrapper",
+      undefined, undefined, undefined, null, undefined, undefined, undefined,
+      "/runner-local/agy", 30_000,
+    )).toMatchObject({ antigravity_cli_path: "/runner-local/agy" });
+  });
   it("server_url 省略を許す(案A: runner が補完)", () => {
     const { server_url: _omit, ...rest } = spawnMsg;
     void _omit;
@@ -553,6 +585,50 @@ describe("Supervisor.handleSpawn", () => {
     sup.handleSpawn(spawnMsg);
     expect(calls).toBe(2);
     expect(results[1]).toMatchObject({ ok: false, reason: "error" });
+  });
+
+  it("rejects unavailable Antigravity before fresh launch and lets a later reload recover", () => {
+    const h = harness({
+      antigravityExecutable: { ok: false, reason: "executable_missing" },
+      antigravityProbeTimeoutMs: 30_000,
+    });
+    const antigravity = { ...spawnMsg, engine: "antigravity" };
+    h.sup.handleSpawn(antigravity);
+    expect(h.children).toHaveLength(0);
+    expect(h.results.at(-1)).toMatchObject({ ok: false, reason: "error" });
+
+    h.sup.updateRuntimeConfig({
+      cwdAllowlist: allowlist, wrapperServerUrl: "ws://localhost:4000/wrapper",
+      codexAuthMode: undefined, codexChatgptPlan: undefined,
+      codexInternalSubagents: undefined, codexExtraModels: undefined,
+      antigravityExtraModels: undefined,
+      antigravityExecutable: { ok: true, path: "/recovered/agy" },
+      antigravityProbeTimeoutMs: 45_000,
+      contextWorkBudgetPercent: undefined, getClaudeEngineCatalog: undefined,
+    });
+    h.sup.handleSpawn(antigravity);
+    expect(h.configs.at(-1)).toMatchObject({
+      antigravity_cli_path: "/recovered/agy",
+      antigravity_probe_timeout_ms: 45_000,
+    });
+  });
+
+  it("does not replace an existing child when reload makes Antigravity unavailable", () => {
+    const h = harness({ antigravityExecutable: { ok: true, path: "/before/agy" } });
+    const antigravity = { ...spawnMsg, engine: "antigravity" };
+    h.sup.handleSpawn(antigravity);
+    h.sup.updateRuntimeConfig({
+      cwdAllowlist: allowlist, wrapperServerUrl: "ws://localhost:4000/wrapper",
+      codexAuthMode: undefined, codexChatgptPlan: undefined,
+      codexInternalSubagents: undefined, codexExtraModels: undefined,
+      antigravityExtraModels: undefined,
+      antigravityExecutable: { ok: false, reason: "executable_missing" },
+      antigravityProbeTimeoutMs: undefined,
+      contextWorkBudgetPercent: undefined, getClaudeEngineCatalog: undefined,
+    });
+    h.sup.handleRestart({ agent_id: antigravity.agent_id });
+    expect(h.children[0]!.kills).toBe(0);
+    expect(h.configs[0]).toMatchObject({ antigravity_cli_path: "/before/agy" });
   });
 });
 
@@ -1019,6 +1095,32 @@ describe("Supervisor.handleResetSession (ADR-0036 F2, phase-17 17-5)", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("rejects an unavailable Antigravity reset before terminating its old wrapper", () => {
+    const h = harness({ antigravityExecutable: { ok: true, path: "/old/agy" } });
+    const antigravity = { ...spawnMsg, agent_id: "lab-pc-1.antigravity-a", engine: "antigravity" };
+    h.sup.handleSpawn(antigravity);
+    h.sup.updateRuntimeConfig({
+      cwdAllowlist: allowlist, wrapperServerUrl: "ws://localhost:4000/wrapper",
+      codexAuthMode: undefined, codexChatgptPlan: undefined,
+      codexInternalSubagents: undefined, codexExtraModels: undefined,
+      antigravityExtraModels: undefined,
+      antigravityExecutable: { ok: false, reason: "executable_missing" },
+      antigravityProbeTimeoutMs: undefined,
+      contextWorkBudgetPercent: undefined, getClaudeEngineCatalog: undefined,
+    });
+    h.sup.handleResetSession({
+      agent_id: antigravity.agent_id,
+      mode: "new",
+      request_id: "rs_test123",
+      previous_session_id: "sess-old-xyz",
+    });
+    expect(h.children).toHaveLength(1);
+    expect(h.children[0]!.kills).toBe(0);
+    expect(h.resetResults).toEqual([
+      expect.objectContaining({ ok: false, reason: "spawn_failed" }),
+    ]);
   });
 
   it("正常 fresh relaunch: kill + fresh child spawn (resume なし) + ok=true / to_session_id=null 報告", () => {

@@ -5,6 +5,7 @@
 // (persona-personality-injection spec, protocol.md「人格プロンプト配送」).
 
 import { readFileSync } from "node:fs";
+import { isAbsolute } from "node:path";
 import type {
   EngineModelInfo,
   ModelSource,
@@ -397,6 +398,32 @@ export function parseConfig(raw: unknown): WrapperConfig {
       raw,
       "antigravity_extra_models",
     );
+  }
+  if (raw.antigravity_cli_path !== undefined) {
+    if (
+      typeof raw.antigravity_cli_path !== "string" ||
+      raw.antigravity_cli_path.trim() === "" ||
+      raw.antigravity_cli_path.includes("\0") ||
+      !isAbsolute(raw.antigravity_cli_path)
+    ) {
+      throw new ConfigError(
+        "antigravity_cli_path must be a non-empty absolute path without NUL",
+      );
+    }
+    config.antigravity_cli_path = raw.antigravity_cli_path;
+  }
+  if (raw.antigravity_probe_timeout_ms !== undefined) {
+    if (
+      typeof raw.antigravity_probe_timeout_ms !== "number" ||
+      !Number.isInteger(raw.antigravity_probe_timeout_ms) ||
+      raw.antigravity_probe_timeout_ms < 1_000 ||
+      raw.antigravity_probe_timeout_ms > 120_000
+    ) {
+      throw new ConfigError(
+        "antigravity_probe_timeout_ms must be an integer from 1000 through 120000",
+      );
+    }
+    config.antigravity_probe_timeout_ms = raw.antigravity_probe_timeout_ms;
   }
   if (raw.claude_engine_catalog !== undefined) {
     // Defensive shape + per-row validation (ADR-0039 F9 v2 = 藤 review

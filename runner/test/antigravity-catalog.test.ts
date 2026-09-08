@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { resolveAntigravityCatalog } from "../src/antigravity-catalog.js";
 
+const READY = { ok: true as const, path: "/opt/agy" };
+
 const AGY_MODELS_FIXTURE = readFileSync(
   new URL("./fixtures/agy-models.stdout", import.meta.url),
   "utf8",
@@ -9,7 +11,7 @@ const AGY_MODELS_FIXTURE = readFileSync(
 
 describe("resolveAntigravityCatalog (ADR-0057 F6)", () => {
   it("agy models 成功時は実出力 (slug<TAB>display name, 一部 bare slug) を account default つき catalog にする", async () => {
-    const models = await resolveAntigravityCatalog(async () => ({
+    const models = await resolveAntigravityCatalog(READY, 30_000, async () => ({
       stdout: AGY_MODELS_FIXTURE,
     }));
     expect(models[0]).toEqual({ value: "", display_name: "account default" });
@@ -29,7 +31,7 @@ describe("resolveAntigravityCatalog (ADR-0057 F6)", () => {
       .spyOn(process.stderr, "write")
       .mockImplementation(() => true);
     try {
-      const models = await resolveAntigravityCatalog(async () =>
+      const models = await resolveAntigravityCatalog(READY, 30_000, async () =>
         Promise.reject(new Error("ENOENT: agy not found")),
       );
       expect(models[0]).toEqual({ value: "", display_name: "account default" });
@@ -48,9 +50,13 @@ describe("resolveAntigravityCatalog (ADR-0057 F6)", () => {
       .spyOn(process.stderr, "write")
       .mockImplementation(() => true);
     try {
-      const models = await resolveAntigravityCatalog(async () => ({
-        stdout: "gemini-3.6-flash-high\tDisplay\textra\n",
-      }));
+      const models = await resolveAntigravityCatalog(
+        READY,
+        30_000,
+        async () => ({
+          stdout: "gemini-3.6-flash-high\tDisplay\textra\n",
+        }),
+      );
       expect(models[0]).toEqual({ value: "", display_name: "account default" });
       expect(models.length).toBeGreaterThan(1);
       const warning = stderr.mock.calls.flat().join("");
@@ -66,9 +72,13 @@ describe("resolveAntigravityCatalog (ADR-0057 F6)", () => {
       .spyOn(process.stderr, "write")
       .mockImplementation(() => true);
     try {
-      const models = await resolveAntigravityCatalog(async () => ({
-        stdout: "",
-      }));
+      const models = await resolveAntigravityCatalog(
+        READY,
+        30_000,
+        async () => ({
+          stdout: "",
+        }),
+      );
       expect(models[0]).toEqual({ value: "", display_name: "account default" });
       expect(models.length).toBeGreaterThan(1);
       const warning = stderr.mock.calls.flat().join("");
@@ -76,5 +86,25 @@ describe("resolveAntigravityCatalog (ADR-0057 F6)", () => {
     } finally {
       stderr.mockRestore();
     }
+  });
+
+  it("keeps the snapshot without starting a child when the executable is unavailable", async () => {
+    const runModels = vi.fn();
+    await resolveAntigravityCatalog(
+      { ok: false, reason: "permission_denied" },
+      30_000,
+      runModels,
+    );
+    expect(runModels).not.toHaveBeenCalled();
+  });
+
+  it("passes the resolved executable and configured timeout to the model child", async () => {
+    const runModels = vi.fn(async () => ({ stdout: AGY_MODELS_FIXTURE }));
+    await resolveAntigravityCatalog(
+      { ok: true, path: "/opt/agy tools/agy" },
+      45_000,
+      runModels,
+    );
+    expect(runModels).toHaveBeenCalledWith("/opt/agy tools/agy", 45_000);
   });
 });

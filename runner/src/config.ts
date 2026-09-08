@@ -5,9 +5,14 @@
 // the env (KAOIRO_RUNNER_TOKEN).
 
 import { readFileSync } from "node:fs";
+import { isAbsolute } from "node:path";
 import { resolveCodexCatalog } from "@kaoiro/codex";
 import { claudeBootstrapCatalog } from "@kaoiro/claude-code/catalog";
-import { antigravityCatalogSnapshot } from "@kaoiro/antigravity";
+import {
+  antigravityCatalogSnapshot,
+  MAX_AGY_PROBE_TIMEOUT_MS,
+  MIN_AGY_PROBE_TIMEOUT_MS,
+} from "@kaoiro/antigravity";
 import type { CodexAuthMode } from "./codex-auth.js";
 import { isBuildInfoConsistent, type BuildInfo } from "./build_info.js";
 import type {
@@ -106,6 +111,8 @@ export interface CodexConfig {
 }
 
 export interface AntigravityConfig {
+  cli_path?: string;
+  probe_timeout_ms?: number;
   /** Operator-declared models to add to the resolved catalog, on top of
    *  whatever the register-time `agy models` probe already returns (issue
    *  #292 part A for this engine, phase-34 Stage B6) — the same mechanism
@@ -426,6 +433,34 @@ export function parseRunnerConfig(raw: unknown): RunnerConfig {
       throw new ConfigError("antigravity must be an object");
     }
     const antigravity: AntigravityConfig = {};
+    if (raw.antigravity.cli_path !== undefined) {
+      const path = raw.antigravity.cli_path;
+      if (
+        typeof path !== "string" ||
+        path.trim() === "" ||
+        path.includes("\0") ||
+        !isAbsolute(path)
+      ) {
+        throw new ConfigError(
+          "antigravity.cli_path must be a non-empty absolute path without NUL",
+        );
+      }
+      antigravity.cli_path = path;
+    }
+    if (raw.antigravity.probe_timeout_ms !== undefined) {
+      const timeout = raw.antigravity.probe_timeout_ms;
+      if (
+        typeof timeout !== "number" ||
+        !Number.isInteger(timeout) ||
+        timeout < MIN_AGY_PROBE_TIMEOUT_MS ||
+        timeout > MAX_AGY_PROBE_TIMEOUT_MS
+      ) {
+        throw new ConfigError(
+          `antigravity.probe_timeout_ms must be an integer from ${MIN_AGY_PROBE_TIMEOUT_MS} to ${MAX_AGY_PROBE_TIMEOUT_MS}`,
+        );
+      }
+      antigravity.probe_timeout_ms = timeout;
+    }
     if (raw.antigravity.extra_models !== undefined) {
       antigravity.extra_models = parseExtraModels(
         raw.antigravity.extra_models,

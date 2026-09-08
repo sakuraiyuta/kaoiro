@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
-import { readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
@@ -66,6 +67,7 @@ function hostHarness(options: {
     verifyGate: async () => typeof options.verifyGate === "function" ? options.verifyGate() : options.verifyGate ?? true,
     ...(options.resumeSessionId === undefined ? {} : { resumeSessionId: options.resumeSessionId }),
     ...(options.dangerouslySkipPermissions === undefined ? {} : { dangerouslySkipPermissions: options.dangerouslySkipPermissions }),
+    agyPath: "/test/agy",
     spawn: (command, args) => {
       const child = new FakeAgy();
       calls.push({ command, args, child });
@@ -192,6 +194,7 @@ describe("AntigravityHost", () => {
         queueMicrotask(() => {
           child.stdout.end(JSON.stringify({ hooks: [{ source, actions: [{ event: "PreToolUse", matcher: "*", command, timeout_seconds: 3600 }] }] }));
           child.emit("exit", 0, null);
+          child.emit("close", 0, null);
         });
         return child as unknown as GateProbe;
       },
@@ -203,6 +206,107 @@ describe("AntigravityHost", () => {
     host.close();
   });
 
+  it("waits for hook-probe stdout completion after close before starting a turn", async () => {
+    const cfg = config();
+    const probe = new FakeAgy();
+    const calls: FakeAgy[] = [];
+    let hookSource = "";
+    const host = new AntigravityHost(cfg, {
+      cwd: process.cwd(), appendSystemPrompt: "persona",
+      permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
+      onState: () => {}, runtimeAssetsAvailable: () => true, agyPath: "/test/agy",
+      probeModels: async () => null,
+      probeSpawn: (_command, args) => {
+        hookSource = join(args[args.lastIndexOf("--add-dir") + 1]!, ".agents", "hooks.json");
+        return probe as unknown as GateProbe;
+      },
+      spawn: () => {
+        const child = new FakeAgy();
+        calls.push(child);
+        return child as unknown as SpawnedAgy;
+      },
+    });
+    await host.send("hello");
+    await waitFor(() => hookSource !== "");
+    probe.emit("close", 0, null);
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    expect(calls).toHaveLength(0);
+    const command = `${process.execPath} ${new URL("../dist/hook.js", import.meta.url).pathname}`;
+    probe.stdout.end(JSON.stringify({ hooks: [{ source: hookSource, actions: [{ event: "PreToolUse", matcher: "*", command, timeout_seconds: 3600 }] }] }));
+    await waitFor(() => calls.length === 1);
+    calls[0]!.finish();
+    host.close();
+  });
+
+  it("uses one configured executable for models, hook verification, and the turn child", async () => {
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-agy-host-"));
+    const executable = join(root, "agy with spaces");
+    writeFileSync(executable, "#!/bin/sh\nexit 0\n");
+    chmodSync(executable, 0o755);
+    const cfg = config({ antigravity_cli_path: executable, antigravity_probe_timeout_ms: 45_000 });
+    const commands: string[] = [];
+    try {
+      const host = new AntigravityHost(cfg, {
+        cwd: process.cwd(), appendSystemPrompt: "persona",
+        permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
+        onState: () => {}, runtimeAssetsAvailable: () => true,
+        modelsProbeSpawn: (command) => {
+          commands.push(command);
+          const child = new FakeAgy();
+          queueMicrotask(() => {
+            child.stdout.end("gemini-3.6-flash-high\tGemini 3.6 Flash High\n");
+            child.emit("exit", 0, null);
+          });
+          return child as unknown as GateProbe;
+        },
+        probeSpawn: (command, args) => {
+          commands.push(command);
+          const child = new FakeAgy();
+          const source = join(args[args.lastIndexOf("--add-dir") + 1]!, ".agents", "hooks.json");
+          const hook = `${process.execPath} ${new URL("../dist/hook.js", import.meta.url).pathname}`;
+          queueMicrotask(() => {
+            child.stdout.end(JSON.stringify({ hooks: [{ source, actions: [{ event: "PreToolUse", matcher: "*", command: hook, timeout_seconds: 3600 }] }] }));
+            child.emit("close", 0, null);
+          });
+          return child as unknown as GateProbe;
+        },
+        spawn: (command) => {
+          commands.push(command);
+          const child = new FakeAgy();
+          queueMicrotask(() => child.finish());
+          return child as unknown as SpawnedAgy;
+        },
+      });
+      await waitFor(() => commands.length >= 1);
+      await host.send("hello");
+      await waitFor(() => commands.length === 3);
+      expect(commands).toEqual([executable, executable, executable]);
+      host.close();
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("does not spawn a turn when the configured executable is unavailable", async () => {
+    const cfg = config({ antigravity_cli_path: "/definitely/not/agy" });
+    const logs: Envelope[] = [];
+    let turnSpawns = 0;
+    const host = new AntigravityHost(cfg, {
+      cwd: process.cwd(), appendSystemPrompt: "persona",
+      permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
+      onState: () => {}, onLog: (envelope) => logs.push(envelope), runtimeAssetsAvailable: () => true,
+      spawn: () => {
+        turnSpawns += 1;
+        return new FakeAgy() as unknown as SpawnedAgy;
+      },
+    });
+    await host.send("hello");
+    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
+    expect(turnSpawns).toBe(0);
+    expect(logs.at(-1)?.payload).toMatchObject({ error_detail: "antigravity_cli_unavailable:executable_missing" });
+    host.close();
+  });
+
   it("F2のspawn引数、closed stdin、init session idとresultを結ぶ", async () => {
     const { host, states, logs, calls } = hostHarness();
     const sessionIds: string[] = [];
@@ -210,12 +314,13 @@ describe("AntigravityHost", () => {
       cwd: process.cwd(), appendSystemPrompt: "persona", permissionBroker: new PermissionBroker({ config: config(), send: () => {} }),
       onState: (envelope) => states.push(envelope), onLog: (envelope) => logs.push(envelope), onSessionId: (id) => sessionIds.push(id),
       verifyGate: async () => true, runtimeAssetsAvailable: () => true,
+      agyPath: "/test/agy",
       spawn: (command, args) => { const child = new FakeAgy(); calls.push({ command, args, child }); return child as unknown as SpawnedAgy; },
     });
     await onSessionHost.send("hello");
     await waitFor(() => calls.length === 1);
     const call = calls[0]!;
-    expect(call.command).toBe("agy");
+    expect(call.command).toBe("/test/agy");
     expect(call.args).toEqual(expect.arrayContaining(["--print", "hello", "--output-format", "stream-json", "--print-timeout", "24h", "--disable-slash-commands", "--dangerously-skip-permissions"]));
     const addDirIndexes = call.args.flatMap((arg, index) => arg === "--add-dir" ? [index] : []);
     expect(addDirIndexes).toHaveLength(2);
@@ -539,8 +644,49 @@ describe("AntigravityHost", () => {
     });
     await host.send("hello");
     await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-    expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ error_detail: "antigravity_gate_not_registered" });
+    expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ error_detail: "antigravity_gate_not_registered:timeout" });
     expect(calls).toHaveLength(0);
+    host.close();
+  });
+
+  it.each([
+    ["nonzero exit", (child: FakeAgy) => {
+      child.stderr.end("permission denied");
+      child.stdout.end("{}");
+      child.emit("close", 1, null);
+    }, "antigravity_gate_not_registered:nonzero_exit:permission denied"],
+    ["invalid JSON", (child: FakeAgy) => {
+      child.stdout.end("{");
+      child.emit("close", 0, null);
+    }, "antigravity_gate_not_registered:invalid_json"],
+    ["registration mismatch", (child: FakeAgy) => {
+      child.stdout.end(JSON.stringify({ hooks: [] }));
+      child.emit("close", 0, null);
+    }, "antigravity_gate_not_registered:registration_mismatch"],
+    ["probe error", (child: FakeAgy) => child.emit("error", new Error("EACCES")), "antigravity_gate_not_registered:spawn_failure:EACCES"],
+  ] as const)("gate probe %s is classified and fail-closed", async (_name, finishProbe, errorDetail) => {
+    const cfg = config();
+    const logs: Envelope[] = [];
+    let turnSpawns = 0;
+    const host = new AntigravityHost(cfg, {
+      cwd: process.cwd(), appendSystemPrompt: "persona",
+      permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
+      onState: () => {}, onLog: (envelope) => logs.push(envelope), runtimeAssetsAvailable: () => true,
+      agyPath: "/test/agy", probeModels: async () => null,
+      probeSpawn: () => {
+        const child = new FakeAgy();
+        queueMicrotask(() => finishProbe(child));
+        return child as unknown as GateProbe;
+      },
+      spawn: () => {
+        turnSpawns += 1;
+        return new FakeAgy() as unknown as SpawnedAgy;
+      },
+    });
+    await host.send("hello");
+    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
+    expect(turnSpawns).toBe(0);
+    expect(logs.at(-1)?.payload).toMatchObject({ error_detail: errorDetail });
     host.close();
   });
 
@@ -549,7 +695,7 @@ describe("AntigravityHost", () => {
     await host.send("hello");
     await waitFor(() => calls.length === 1);
     const child = calls[0]!.child;
-    child.emit("error", new Error("ENOENT"));
+    child.emit("error", Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
     await new Promise((resolve) => setTimeout(resolve, 1));
     expect(logs).not.toContainEqual(expect.objectContaining({ type: "result" }));
     const stdoutEnded = new Promise<void>((resolve) => child.stdout.once("end", () => resolve()));
@@ -558,7 +704,8 @@ describe("AntigravityHost", () => {
     expect(logs).not.toContainEqual(expect.objectContaining({ type: "result" }));
     child.emit("close", 0, null);
     await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-    expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ error_detail: "agy_child_error: ENOENT" });
+    expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ error_detail: "antigravity_cli_executable_missing: ENOENT" });
+    expect(logs.filter((envelope) => envelope.type === "result")).toHaveLength(1);
     host.close();
   });
 
@@ -597,7 +744,7 @@ describe("AntigravityHost", () => {
     child.emit("close", 0, null);
     await waitFor(() => logs.some((envelope) => envelope.type === "result"));
     expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({
-      error_detail: "agy_child_error: Authorization: ***************3456",
+      error_detail: "antigravity_cli_spawn_failure: Authorization: ***************3456",
     });
     host.close();
   });

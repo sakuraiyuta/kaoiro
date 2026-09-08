@@ -24,6 +24,11 @@ import { makeRefreshEngineCatalogHandler } from "./engine_catalog_refresh.js";
 import { type CodexAuthMode, resolveCodexAuthMode } from "./codex-auth.js";
 import { resolveAntigravityCatalog } from "./antigravity-catalog.js";
 import {
+  DEFAULT_AGY_PROBE_TIMEOUT_MS,
+  resolveAgyExecutable,
+  type AgyExecutableResolution,
+} from "@kaoiro/antigravity";
+import {
   applyServerUrlOverride,
   buildRegister,
   loadRunnerConfig,
@@ -103,8 +108,19 @@ async function main(): Promise<void> {
   // probe on every startup/reload is the whole refresh story — this engine
   // carries no TTL cache and is absent from LIVE_PROBE_ENGINES (no manual
   // refresh_engine_catalog support, engine_catalog_refresh.ts).
+  let antigravityExecutable: AgyExecutableResolution | undefined =
+    isAntigravityEnabled(config)
+      ? resolveAgyExecutable(config.antigravity?.cli_path)
+      : undefined;
+  let antigravityProbeTimeoutMs: number | undefined =
+    config.antigravity?.probe_timeout_ms ?? DEFAULT_AGY_PROBE_TIMEOUT_MS;
   let antigravityCatalog: EngineModelInfo[] | undefined =
-    isAntigravityEnabled(config) ? await resolveAntigravityCatalog() : undefined;
+    antigravityExecutable === undefined
+      ? undefined
+      : await resolveAntigravityCatalog(
+          antigravityExecutable,
+          antigravityProbeTimeoutMs,
+        );
 
   // link is assigned just below; the supervisor only calls sendResult after a
   // spawn arrives, long after assignment (mirrors the wrapper's host/link wiring).
@@ -122,6 +138,8 @@ async function main(): Promise<void> {
       ? {}
       : { codexInternalSubagents: config.codex.internal_subagents }),
     ...extraModelsOptions(config),
+    antigravityExecutable,
+    antigravityProbeTimeoutMs,
     ...(config.context_work_budget_percent === undefined
       ? {}
       : { contextWorkBudgetPercent: config.context_work_budget_percent }),
@@ -189,10 +207,11 @@ async function main(): Promise<void> {
   let reloadQueue: Promise<void> = Promise.resolve();
   const applyReload = async (next: RunnerConfig): Promise<void> => {
     const diff = changedFields(config, next);
-    if (diff.length === 0) return;
-    process.stderr.write(
-      `runner: config reload — ${diff.join(", ")}\n`,
-    );
+    const nextAntigravityEnabled = isAntigravityEnabled(next);
+    if (diff.length === 0 && !nextAntigravityEnabled) return;
+    if (diff.length > 0) {
+      process.stderr.write(`runner: config reload — ${diff.join(", ")}\n`);
+    }
     const prevCodexEnabled = isCodexEnabled(config);
     const nextCodexEnabled = isCodexEnabled(next);
     // Phase-24: hot reload の分岐は resolver に集約。explicit → explicit /
@@ -208,9 +227,17 @@ async function main(): Promise<void> {
     // ADR-0057 F6: re-probe on every reload while enabled (quota-free, no
     // TTL cache to preserve); clear the catalog when the operator disables
     // the capability so a stale probe result cannot outlive it.
-    antigravityCatalog = isAntigravityEnabled(next)
-      ? await resolveAntigravityCatalog()
+    antigravityExecutable = nextAntigravityEnabled
+      ? resolveAgyExecutable(next.antigravity?.cli_path)
       : undefined;
+    antigravityProbeTimeoutMs =
+      next.antigravity?.probe_timeout_ms ?? DEFAULT_AGY_PROBE_TIMEOUT_MS;
+    antigravityCatalog = antigravityExecutable === undefined
+      ? undefined
+      : await resolveAntigravityCatalog(
+          antigravityExecutable,
+          antigravityProbeTimeoutMs,
+        );
     supervisor.updateRuntimeConfig({
       cwdAllowlist: next.cwd_allowlist,
       wrapperServerUrl: wrapperUrlFrom(next.server_url),
@@ -218,6 +245,8 @@ async function main(): Promise<void> {
       codexChatgptPlan: next.codex?.chatgpt_plan,
       codexInternalSubagents: next.codex?.internal_subagents,
       ...extraModelsRuntimeUpdate(next),
+      antigravityExecutable,
+      antigravityProbeTimeoutMs,
       contextWorkBudgetPercent: next.context_work_budget_percent,
       // Preserve the live probe getter across reloads (ADR-0039 F9 追補).
       getClaudeEngineCatalog: () => claudeCatalog.getStale(),

@@ -483,6 +483,38 @@ describe("parseRunnerConfig", () => {
     });
   });
 
+  describe("antigravity CLI configuration", () => {
+    it("accepts an absolute executable path and bounded probe timeout", () => {
+      expect(parseRunnerConfig({
+        ...valid,
+        antigravity: { cli_path: "/opt/agy tools/agy", probe_timeout_ms: 30_000 },
+      }).antigravity).toEqual({
+        cli_path: "/opt/agy tools/agy",
+        probe_timeout_ms: 30_000,
+      });
+    });
+
+    it.each(["", "agy", "./agy", "~/bin/agy", "/opt/agy\0shim"])(
+      "rejects an invalid CLI path: %j",
+      (cliPath) => {
+        expect(() => parseRunnerConfig({
+          ...valid,
+          antigravity: { cli_path: cliPath },
+        })).toThrowError("antigravity.cli_path must be a non-empty absolute path without NUL");
+      },
+    );
+
+    it.each([999, 120_001, 1.5, "30000"])(
+      "rejects an invalid probe timeout: %j",
+      (probeTimeoutMs) => {
+        expect(() => parseRunnerConfig({
+          ...valid,
+          antigravity: { probe_timeout_ms: probeTimeoutMs },
+        })).toThrowError("antigravity.probe_timeout_ms must be an integer from 1000 to 120000");
+      },
+    );
+  });
+
   // Phase-24: explicit `codex.auth_mode` closed enum for the dogfood
   // 環境依存回帰対策。旧 config 互換 (auth_mode 省略 = doctor fallback)
   // も同時に pin する。
