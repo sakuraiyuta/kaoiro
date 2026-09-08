@@ -321,6 +321,8 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     type?: string;
     authoritative?: boolean;
     terminalSeen?: boolean;
+    revision?: number;
+    reason?: string;
     seq?: number;
     seqFirst?: number;
     seqLast?: number;
@@ -339,6 +341,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
           ? {}
           : { terminal_seen: event.terminalSeen }),
         ...(event.seq === undefined ? {} : { seq: event.seq }),
+        ...(event.revision === undefined ? {} : { revision: event.revision, reason: event.reason }),
       } as Record<string, unknown>;
       const first = event.seqFirst ?? range?.seqFirst;
       const last = event.seqLast ?? range?.seqLast;
@@ -673,6 +676,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
         ...(event.kind === "stream_eof"
           ? { terminalSeen: event.terminalSeen }
           : {}),
+        ...("revision" in event ? { revision: event.revision, reason: event.reason } : {}),
       });
     },
     onTurnFinalized: ({ turnToken }) => {
@@ -690,7 +694,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     // bypasses the model/tool path entirely since the turn just failed to
     // produce one, so no broker approval applies.
     onTurnEnd: ({ turnToken, conversationIds, error, cancellation }) => {
-      if (cancellation !== undefined) {
+      if (cancellation?.kind === "watchdog_fail_stop") {
         // A watchdog cancellation is for a never-started token. Resolve its
         // own peer notices, but never dispatch a successor; the active token
         // is retained for supervisor recovery.

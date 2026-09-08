@@ -382,8 +382,8 @@ export function captureCodexPermissionRolloutCursor(
   }
 }
 
-/** Reads exactly one newly appended policy context. A changed session/path,
- * an incomplete line, or multiple candidates is deliberately unconfirmed. */
+/** Accepts one new turn's consistent policy evidence, including compaction
+ * repeats. Distinct turns or conflicting axes cannot identify one exec. */
 export function codexPermissionContextAfter(
   cursor: CodexPermissionRolloutCursor,
   sessionId: string,
@@ -411,19 +411,27 @@ export function codexPermissionContextAfter(
     const complete = bytes.subarray(0, read).toString("utf8");
     const finalNewline = complete.lastIndexOf("\n");
     if (finalNewline < 0) return null;
-    const candidates: CodexPermissionTurnContext[] = [];
+    let candidate: CodexPermissionTurnContext | null = null;
     for (const line of complete.slice(0, finalNewline).split("\n")) {
       try {
         const context = turnContextFrom(JSON.parse(line), sessionId);
         if (context !== null && !cursor.knownTurnIds.has(context.turnId)) {
-          candidates.push(context);
+          // Compaction repeats turn_context for the same execution. A repeat
+          // is evidence only when every observed policy axis still agrees.
+          if (candidate !== null && (
+            candidate.turnId !== context.turnId ||
+            candidate.sandbox !== context.sandbox ||
+            candidate.networkAccess !== context.networkAccess ||
+            candidate.approvalPolicy !== context.approvalPolicy
+          )) return null;
+          candidate = context;
         }
       } catch {
         // Ignore malformed non-terminal records; a candidate must be a
         // complete, independently parseable turn_context line.
       }
     }
-    return candidates.length === 1 ? candidates[0]! : null;
+    return candidate;
   } catch {
     return null;
   } finally {

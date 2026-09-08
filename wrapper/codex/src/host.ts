@@ -5,9 +5,8 @@
 // (docs/specs/codex-sdk-events.md, ADR-0032). The Claude twin is
 // @kaoiro/claude-code's AgentHost; both implement EngineAdapter.
 //
-// Permission model (ADR-0033 F3): the sandbox axis is fixed at launch and
-// the approval axis is pinned to "never" — codex exec cannot deliver
-// approval requests to the caller, so waiting_permission never occurs here.
+// Approval is pinned to "never" (ADR-0033); waiting_permission represents
+// the dispatch gate, not an SDK approval callback.
 
 import { randomUUID } from "node:crypto";
 import { Codex } from "@openai/codex-sdk";
@@ -148,6 +147,21 @@ type CodexCatalog = ReturnType<typeof resolveCodexCatalog>;
 
 const DEFAULT_CODEX_TERMINAL_DRAIN_GRACE_MS = 5_000;
 const DEFAULT_PERMISSION_SYNC_WARNING_MS = 10_000;
+/** Bounds an unstarted turn's hang, rather than budgeting human recovery time. */
+export const DEFAULT_PERMISSION_GATE_TIMEOUT_MS = 30_000;
+const PERMISSION_GATE_RECOVERY = "Permission dispatch is blocked. The operator can reapply the same sandbox/network values to allocate a new revision, then resend the cancelled instruction. No automatic resend occurs.";
+
+class PermissionDispatchError extends Error {
+  constructor(readonly reason: "permission_gate_blocked" | "interrupted") {
+    super(PERMISSION_GATE_RECOVERY);
+  }
+}
+
+type PermissionDispatchWait = {
+  generation: number;
+  deadline: number | null;
+  blocked: { revision: number; reason: string } | null;
+};
 
 export type CodexLifecycleEvent =
   | { kind: "turn_start"; turnToken: string }
@@ -158,7 +172,13 @@ export type CodexLifecycleEvent =
       type: "turn.completed" | "turn.failed";
       authoritative: boolean;
     }
-  | { kind: "stream_eof"; turnToken: string; terminalSeen: boolean };
+  | { kind: "stream_eof"; turnToken: string; terminalSeen: boolean }
+  | {
+      kind: "permission_gate_blocked" | "permission_gate_released" | "permission_gate_timeout";
+      turnToken: string;
+      revision: number;
+      reason: string;
+    };
 
 type NextEventOutcome<T> =
   | { kind: "result"; result: IteratorResult<T> }
@@ -278,33 +298,15 @@ export interface CodexHostOptions {
   /** Invoked for the parent agent's whole-list todo snapshot (issue #188,
    * ADR-0049). It is distinct from transcript logs and child-task progress. */
   onTask?: (envelope: Envelope) => void;
-  /** Invoked once per turn boundary (success or error), alongside (not
-   *  instead of) onLog's result envelope (issue #131; extended issue #221
-   *  段階3 direction 2 for coalescing). `conversationIds` is the inter-agent
-   *  conversation(s) that turn's injection came from (the value passed as
-   *  send()'s third argument for that queued turn) — empty for an ordinary
-   *  operator-instruction turn, one entry for an ordinary inter-agent turn,
-   *  MULTIPLE entries when several same-peer pending messages were coalesced
-   *  into this one turn — must-fix 1: turn-scoped, so the CLI never resolves
-   *  a conversation the current turn was not actually answering. `error` is
-   *  present only when the turn ended with is_error=true. Codex has no
-   *  structured failure taxonomy like Claude's terminal_reason —
-   *  `error.reason` is never populated here; `error.detail` carries whatever
-   *  raw message is available (ThreadError.message / the runStreamed
-   *  rejection), or is omitted when the stream simply ended without a
-   *  terminal event. The CLI feeds `error` into the shared inter-agent error
-   *  classifier, which keyword-sniffs `detail` and otherwise degrades to
-   *  "api_error", then resolves exactly this turn's conversation(s) via
-   *  InterAgentTool#resolveTurnEnd — on error, EVERY conversationId in the
-   *  list gets its own peer_error notice (the wrapper cannot tell which one
-   *  message in a coalesced batch caused the failure). Omitted = no notice
-   *  is ever emitted (unit tests only — production wires it). */
+  /** Settles only this token's conversations. SDK failures carry free-form
+   * detail; unstarted cancellations carry a structured reason. The CLI maps
+   * both through the shared safe classifier before resolving peer notices. */
   onTurnEnd?: (info: {
     /** Immutable identity of this exact host turn. */
     turnToken: string;
     conversationIds: readonly string[];
     error?: { reason?: string; detail?: string };
-    cancellation?: { kind: "watchdog_fail_stop"; started: false };
+    cancellation?: { kind: "watchdog_fail_stop" | "permission_gate"; started: false };
   }) => void;
   /** The exact boundary at which an already-queued input begins an SDK turn.
    * Queue insertion intentionally does not count as dispatch (#247). */
@@ -393,6 +395,8 @@ export interface CodexHostOptions {
   waitForPermissionSync?: () => Promise<void>;
   /** Warns after this wait without releasing the barrier. */
   permissionSyncWarningMs?: number;
+  /** Deadline override for deterministic dispatch-gate tests. */
+  permissionGateTimeoutMs?: number;
   /** Rollout root used for per-exec permission confirmation. */
   permissionRolloutRoot?: string;
   /** Persists a wrapper-observed permission lifecycle event. */
@@ -923,6 +927,8 @@ export class CodexHost implements EngineAdapter {
 
   async interrupt(): Promise<void> {
     this.#lifecycleGeneration += 1;
+    this.#permissionCloseWake?.();
+    this.#permissionDispatchWake?.();
     this.#dropPendingUploads("interrupted");
     await this.#dropQueuedTempTurns();
     this.#abort?.abort();
@@ -1345,10 +1351,34 @@ export class CodexHost implements EngineAdapter {
     retryAfterRepair = false,
     settled: { value: boolean } = { value: false },
   ): Promise<void> {
-    await this.#awaitPermissionDispatch();
-    if (this.#closed) return;
-    this.#activeTurnToken = turnToken;
-    this.#activeTurnConversationIds = conversationIds;
+    const gate: PermissionDispatchWait = {
+      generation: this.#lifecycleGeneration, deadline: null, blocked: null,
+    };
+    const cancel = async (reason: "permission_gate_blocked" | "interrupted"): Promise<void> => {
+      // Repair retries belong to an already-started outer turn. Its catch
+      // and finally own failure settlement and finalization, not cancellation.
+      if (retryAfterRepair) throw new PermissionDispatchError(reason);
+      if (tempDir !== undefined) await this.#cleanupTempDir(tempDir);
+      if (!settled.value) {
+        settled.value = true;
+        this.#machine = initialMachineState("waiting_input");
+        this.#emitState("waiting_input");
+        try {
+          this.#options.onTurnEnd?.({
+            turnToken, conversationIds,
+            error: { reason, detail: PERMISSION_GATE_RECOVERY },
+            cancellation: { kind: "permission_gate", started: false },
+          });
+        } finally {
+          this.#options.onTurnFinalized?.({ turnToken });
+        }
+      }
+    };
+    const firstGate = await this.#awaitPermissionDispatch(turnToken, gate);
+    if (firstGate !== null || this.#closed || gate.generation !== this.#lifecycleGeneration) {
+      await cancel(firstGate ?? "interrupted");
+      return;
+    }
     const diagnostics = new CodexTurnDiagnostics(this.#turnTraceCaptureDir);
     const persistFailure = async (
       input: Parameters<CodexTurnDiagnostics["writeFailure"]>[0],
@@ -1371,8 +1401,13 @@ export class CodexHost implements EngineAdapter {
     // A rejoin can replace the transport barrier while diagnostics performs
     // I/O. Recheck immediately before capture; no callback can interleave
     // between this await and the synchronous SDK construction below.
-    await this.#awaitPermissionDispatch();
-    if (this.#closed) return;
+    const finalGate = await this.#awaitPermissionDispatch(turnToken, gate);
+    if (finalGate !== null || this.#closed || gate.generation !== this.#lifecycleGeneration) {
+      await cancel(finalGate ?? "interrupted");
+      return;
+    }
+    this.#activeTurnToken = turnToken;
+    this.#activeTurnConversationIds = conversationIds;
     const resolutionGeneration = ++this.#modelResolutionGeneration;
     const attempted = {
       model: this.#modelPending,
@@ -1813,7 +1848,10 @@ export class CodexHost implements EngineAdapter {
         this.#options.onTurnEnd?.({
           turnToken,
           conversationIds,
-          error: { detail },
+          error: {
+            detail,
+            ...(terminalError instanceof PermissionDispatchError ? { reason: terminalError.reason } : {}),
+          },
         });
       }
       if (!this.#closed) {
@@ -1914,40 +1952,69 @@ export class CodexHost implements EngineAdapter {
     this.#emitState(this.#machine.state);
   }
 
-  async #waitForPermissionSyncOrClose(
-    waitForSync: () => Promise<void>,
-  ): Promise<void> {
-    await Promise.race([
-      waitForSync(),
-      new Promise<void>((resolve) => {
-        this.#permissionCloseWake = resolve;
-      }),
-    ]);
-    this.#permissionCloseWake = null;
-  }
-
-  async #awaitPermissionDispatch(): Promise<void> {
-    const waitForSync = this.#options.waitForPermissionSync;
-    if (waitForSync !== undefined) {
+  async #awaitPermissionDispatch(
+    turnToken: string,
+    gate: PermissionDispatchWait,
+  ): Promise<"permission_gate_blocked" | "interrupted" | null> {
+    const cancelled = () => this.#closed || gate.generation !== this.#lifecycleGeneration;
+    const noteBlocked = () => {
+      const blocked = this.#permissionState.blocked;
+      if (blocked === null) return;
+      gate.deadline ??= performance.now() + Math.max(0,
+        this.#options.permissionGateTimeoutMs ?? DEFAULT_PERMISSION_GATE_TIMEOUT_MS);
+      if (gate.blocked?.revision !== blocked.revision || gate.blocked.reason !== blocked.reason) {
+        gate.blocked = blocked;
+        this.#machine = initialMachineState("waiting_permission");
+        this.#emitState("waiting_permission");
+        this.#options.onLifecycle?.({ kind: "permission_gate_blocked", turnToken, ...blocked });
+      }
+    };
+    // Every wake rechecks transport readiness. A relay can clear the block
+    // while a rejoin's sync barrier is still unresolved.
+    for (;;) {
+      if (cancelled()) return "interrupted";
+      noteBlocked();
+      if (gate.deadline !== null && performance.now() >= gate.deadline) {
+        this.#options.onLifecycle?.({ kind: "permission_gate_timeout", turnToken, ...gate.blocked! });
+        return "permission_gate_blocked";
+      }
+      let wake!: () => void;
+      const awakened = new Promise<false>((resolve) => { wake = () => resolve(false); });
+      this.#permissionDispatchWake = wake;
+      this.#permissionCloseWake = wake;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      if (gate.deadline !== null) timer = setTimeout(wake, Math.max(0, gate.deadline - performance.now()));
       const warning = setTimeout(() => {
-        writeRedactedStderr(
-          "codex: waiting for permission_sync; next exec remains gated\n",
-        );
+        writeRedactedStderr("codex: waiting for permission_sync; next exec remains gated\n");
       }, this.#permissionSyncWarningMs);
       try {
-        await this.#waitForPermissionSyncOrClose(waitForSync);
-      } finally {
-        this.#permissionCloseWake = null;
+        const ready = await Promise.race([
+          (this.#options.waitForPermissionSync?.() ?? Promise.resolve()).then(() => true),
+          awakened,
+        ]);
         clearTimeout(warning);
+        if (cancelled()) return "interrupted";
+        if (!ready) continue;
+        noteBlocked();
+        if (this.#permissionState.blocked === null) {
+          if (gate.blocked !== null) {
+            this.#options.onLifecycle?.({ kind: "permission_gate_released", turnToken, ...gate.blocked });
+            this.#machine = initialMachineState("sending");
+            this.#emitState("sending");
+            gate.blocked = null;
+            gate.deadline = null;
+          }
+          return null;
+        }
+        // The first sync may itself have supplied the block and its deadline.
+        if (timer === undefined) timer = setTimeout(wake, Math.max(0, gate.deadline! - performance.now()));
+        await awakened;
+      } finally {
+        clearTimeout(warning);
+        clearTimeout(timer);
+        this.#permissionDispatchWake = null;
+        this.#permissionCloseWake = null;
       }
-    }
-    while (this.#permissionState.blocked !== null && !this.#closed) {
-      await new Promise<void>((resolve) => {
-        this.#permissionDispatchWake = resolve;
-      });
-      this.#permissionDispatchWake = null;
-      if (this.#closed) return;
-      if (waitForSync !== undefined) await this.#waitForPermissionSyncOrClose(waitForSync);
     }
   }
 
@@ -2213,6 +2280,7 @@ export class CodexHost implements EngineAdapter {
   }
 
   #apply(event: AdapterEvent): void {
+    if (event.kind === "user_send" && this.#machine.state === "waiting_permission") return;
     const { next, emitted } = stepState(this.#machine, event);
     this.#machine = next;
     for (const state of emitted) {

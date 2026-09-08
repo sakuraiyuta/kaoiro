@@ -3247,6 +3247,9 @@
                   </span>
                   {#if permRequestView.reason}
                     <span class="axes-hint">理由: {permRequestView.reason}</span>
+                    {#if permRequestView.status === "unknown" || ["policy_mismatch", "approval_policy_mismatch"].includes(permRequestView.reason)}
+                      <span class="axes-hint">同じ権限値を再適用すると新しい revision になります。適用後、キャンセルされた指示を再送してください。</span>
+                    {/if}
                   {/if}
                   {#if permRequestView.rolledBackTo}
                     <span class="axes-hint">

@@ -625,3 +625,73 @@ describe("Codex CLI delivery composition (issue #247)", () => {
     expect(fallbackStops).toBe(1);
   });
 });
+
+describe("permission gate cancellation notice composition", () => {
+  it("real Host timeout reaches the sending peer without delivery acknowledgement or SDK dispatch", async () => {
+    const { CodexHost } = await import("../src/host.js");
+    const { mkdtemp, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const root = await mkdtemp(join(tmpdir(), "fuji340-cli-notice-"));
+    const sent: Envelope[] = [];
+    const acknowledgements: number[] = [];
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    // The CLI builds its real coordinator, classifier, notice resolver and
+    // Host. Transport and SDK process construction are replaced so delivery
+    // and attempted execution can be counted independently.
+    let onMessage!: (envelope: Envelope) => void | Promise<void>;
+    let host: InstanceType<typeof CodexHost> | undefined;
+    let sdkCalls = 0;
+    const running = runCodexCli({
+      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      loadConfig: () => ({ ...config, sandbox: "read-only", network_access: false }),
+      createServerLink: (_url, _id, options) => {
+        onMessage = options.onInterAgentMessage!;
+        queueMicrotask(() => options.onPersonaPrompt?.("test"));
+        return {
+          close() {}, currentSessionId: () => null,
+          send: (envelope: Envelope) => sent.push(envelope),
+          acknowledgeInterAgentDelivery: (seq: number) => acknowledgements.push(seq),
+          waitForPermissionSyncNegotiation: async () => true,
+          waitForPermissionSync: async () => {},
+        } as never;
+      },
+      createHost: (cfg, options) => {
+        host = new CodexHost(cfg, { ...options, permissionGateTimeoutMs: 50,
+          turnTraceDir: root, permissionRolloutRoot: root,
+          rateLimitResolver: async () => new Map(),
+          codexFactory: () => {
+            const unexpected = () => { sdkCalls++; throw new Error("SDK must not start"); };
+            return { startThread: unexpected, resumeThread: unexpected };
+          },
+        });
+        const next = { revision: 4, requested: { sandbox: "read-only" as const, network_access: false } };
+        host.applyPermissionSync({ version: "0", next, control: { ...next,
+          status: "unknown", reason: "observation_unavailable",
+          submitted: { ...next, execution_id: "previous-execution" },
+          constraints: { approval: "never", enforcement: "os" },
+        } });
+        return host;
+      },
+      prepareStartup: async () => {},
+    });
+    try {
+      await vi.waitFor(() => expect(host).toBeDefined());
+      await onMessage(inboundEnvelope(1));
+      await vi.waitFor(() => expect(sent.some((e) => JSON.stringify(e).includes('"permission_gate_blocked"'))).toBe(true));
+      const notices = sent.filter((e) => e.type === "inter_agent_message");
+      expect(notices).toHaveLength(1);
+      expect(notices[0]).toMatchObject({ payload: { to: "peer.agent", conversation_id: "c-1",
+        error: { code: "permission_gate_blocked", message: expect.stringContaining("reapply the same sandbox/network") } } });
+      expect(acknowledgements).toEqual([]); expect(sdkCalls).toBe(0);
+      expect(host!.state).toBe("waiting_input");
+      const output = stderr.mock.calls.map(([text]) => String(text)).join("");
+      expect(output).toContain('"event":"permission_gate_timeout"');
+      expect(output).toContain('"revision":4');
+      expect(output).toContain('"reason":"observation_unavailable"');
+    } finally {
+      host?.close(); await running;
+      stderr.mockRestore(); await rm(root, { recursive: true, force: true });
+    }
+  });
+});

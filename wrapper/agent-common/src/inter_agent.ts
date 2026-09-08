@@ -128,6 +128,8 @@ const KIND_VALUES = [
  *  formatInboundMessage()'s error-notice line so both surfaces agree. Codes
  *  outside this table (open vocabulary) fall back to a generic caution. */
 const ERROR_CODE_GUIDANCE: Readonly<Record<string, string>> = {
+  permission_gate_blocked:
+    "ask the operator to reapply the same sandbox/network values (a new revision), then resend; do not retry automatically",
   rate_limit: "wait before retrying",
   context_overflow:
     "retrying is pointless — summarize the context or escalate to the operator",
@@ -206,6 +208,8 @@ function classifyByDetailKeywords(detail: string): string | null {
  *  `receiveInbound()`'s stale branch, not routed through that turn-failure
  *  classifier at all. */
 const ERROR_CODE_MESSAGE: Readonly<Record<string, string>> = {
+  permission_gate_blocked:
+    "the peer stopped waiting to start an execution because permission dispatch remained blocked; the operator must reapply the same sandbox/network values to create a new revision before you resend",
   rate_limit: "the peer hit a rate limit",
   context_overflow: "the peer's context window overflowed",
   api_error: "the peer reported an unspecified error",
@@ -253,6 +257,9 @@ export function classifyInterAgentError(
   input: InterAgentErrorClassifyInput,
 ): InterAgentErrorPayload {
   const reason = input.reason;
+  if (reason === "permission_gate_blocked") {
+    return { code: reason, message: messageForCode(reason) };
+  }
   if (reason !== undefined) {
     if (RATE_LIMIT_REASONS.has(reason)) {
       return { code: "rate_limit", message: messageForCode("rate_limit") };

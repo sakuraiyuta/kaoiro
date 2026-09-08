@@ -1168,6 +1168,7 @@ added later. Treat an unknown code as `api_error`.
 | `context_overflow` | context length exceeded | Retry with the same content is futile; summarize/split or escalate. |
 | `api_error` | engine/API error or classification fallback | One retry is allowed; escalate if it repeats. |
 | `timeout` | peer processing timed out | Wait, then retry. |
+| `permission_gate_blocked` | peer reached the permission dispatch deadline before an execution started | Ask the operator to reapply the same sandbox/network values (allocating a new revision), then resend. Never retry automatically. |
 | `interrupted` | peer turn was interrupted | It may be operator-driven; check state before retrying. |
 | `reconnecting` | server announced a wrapper restart | Do not escalate; wait for `reconnected`, then retry the same `conversation_id`. |
 | `disconnected` | peer wrapper disconnected | Retry is futile until it returns; escalate. |

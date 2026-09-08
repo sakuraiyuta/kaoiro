@@ -293,6 +293,19 @@ serialize their exclusion: neither can pass a check and commit across the other.
 
 #### Requested, submitted, and effective state
 
+Codex coalesces repeated `turn_context` records only when the execution turn ID
+and all observed policy axes agree. Compaction may emit such repeats; conflicting
+observations remain unconfirmed.
+
+A blocked Codex dispatch publishes `waiting_permission` without starting the SDK turn.
+After 30 seconds it cancels that never-started instruction, reports
+`permission_gate_blocked` to its sending peer, and returns to `waiting_input`.
+Interrupt and close also cancel a waiting instruction without a start acknowledgement.
+Cancellation, timeout, session reset, and rejoin do not clear the permission block.
+The operator can reapply the same raw sandbox/network values to allocate a newer
+revision; after reconciliation the sender can resend the cancelled instruction.
+No automatic resend occurs.
+
 `ext.permission_control` (`PermissionControlExt`) is the latest request and its
 progress. It is independent of approval-broker `ext.pending_permission` and
 model/effort `ext.switch_error`:

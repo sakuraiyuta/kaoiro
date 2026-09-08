@@ -261,6 +261,10 @@ describe("AgentDetail sandbox / network control (issue #305 D)", () => {
     const dd = rowByLabel(target, "権限要求");
     expect(dd?.textContent).toContain("rev 7");
     expect(dd?.textContent).toContain(label);
+    if (status === "unknown") {
+      expect(dd?.textContent).toContain("同じ権限値を再適用すると新しい revision");
+      expect(dd?.textContent).toContain("キャンセルされた指示を再送");
+    }
   });
 
   it("shows reason and rolled_back_to when the request failed", async () => {
