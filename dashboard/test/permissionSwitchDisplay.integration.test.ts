@@ -267,6 +267,65 @@ describe("AgentDetail sandbox / network control (issue #305 D)", () => {
     }
   });
 
+  it("renders an actionable recovery prompt for a Codex permission gate without a tool approval", async () => {
+    const ack: SetPermissionAck = {
+      revision: 8,
+      status: "pending",
+      requested: { sandbox: "workspace-write", network_access: false },
+    };
+    const { target, onSetPermission } = await render(
+      {
+        engine: "codex",
+        session_capabilities: SWITCH_CAPS,
+        permission_control: conformingControl("unknown"),
+      },
+      {
+        state: "waiting_permission",
+        onSetPermission: vi.fn(async () => ack),
+      },
+    );
+    const dock = target.querySelector(".permission-dock");
+    expect(dock?.textContent).toContain("Codex の権限確認が止まっています");
+    expect(dock?.textContent).toContain("同じ sandbox / network を再適用");
+
+    const retry = Array.from(dock?.querySelectorAll("button") ?? []).find((button) =>
+      button.textContent?.includes("同じ権限値を再適用"),
+    ) as HTMLButtonElement | undefined;
+    expect(retry).toBeDefined();
+    retry?.click();
+    await tick();
+    await tick();
+    expect(onSetPermission).toHaveBeenCalledWith("host-a.p", {
+      sandbox: "workspace-write",
+      network_access: false,
+    });
+    expect(rowByLabel(target, "権限要求")?.textContent).toContain("rev 8");
+  });
+
+  it("keeps the normal tool-approval dock in charge when pending_permission exists", async () => {
+    const { target, onSetPermission } = await render(
+      {
+        engine: "codex",
+        session_capabilities: SWITCH_CAPS,
+        permission_control: conformingControl("unknown"),
+        pending_permission: {
+          request_id: "perm-1",
+          tool_name: "Bash",
+          input: { command: "pnpm test" },
+        },
+      },
+      { state: "waiting_permission" },
+    );
+    const dock = target.querySelector(".permission-dock");
+    expect(dock?.textContent).toContain("Bash");
+    expect(dock?.textContent).not.toContain("Codex の権限確認");
+    const retry = Array.from(dock?.querySelectorAll("button") ?? []).find((button) =>
+      button.textContent?.includes("同じ権限値を再適用"),
+    );
+    expect(retry).toBeUndefined();
+    expect(onSetPermission).not.toHaveBeenCalled();
+  });
+
   it("shows reason and rolled_back_to when the request failed", async () => {
     const { target } = await render({
       engine: "codex",

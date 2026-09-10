@@ -1362,17 +1362,6 @@
   const dialogAvailability = $derived(
     userInputDialogAvailability(sessionCaps, displayPermLabel),
   );
-  // Handle lamp for the status sheet (phase-31 31-6): while the sheet is
-  // open the in-flow permission/question docks sit behind it, so the
-  // current agent's pending decision must stay noticeable on the handle
-  // (responsive-layout.md MUST). Mirrors the dock render gates.
-  const sheetPendingTone = $derived(
-    permission
-      ? "waiting_permission"
-      : question && dialogAvailability !== "unsupported"
-        ? "waiting_question"
-        : null,
-  );
   // Optimistic model selection shown the instant the operator switches:
   // ext.model (which may be the authoritative resolved id) only catches up
   // a turn later, so without this the model row stays on the old value until
@@ -1825,6 +1814,42 @@
   const permissionPickerVisible = $derived(
     permissionSwitchSupported && onSetPermission !== undefined,
   );
+  const PERMISSION_GATE_RECOVERY_REASONS = new Set([
+    "observation_unavailable",
+    "policy_mismatch",
+    "approval_policy_mismatch",
+  ]);
+  function needsPermissionGateRecovery(view: PermRequestView): boolean {
+    return (
+      view.status === "unknown" ||
+      (view.status === "failed" &&
+        view.rolledBackTo === undefined &&
+        view.reason !== undefined &&
+        PERMISSION_GATE_RECOVERY_REASONS.has(view.reason))
+    );
+  }
+  const codexPermissionGateRecovery = $derived.by(() =>
+    permission !== null ||
+    !isCodexAgent ||
+    !permissionSwitchSupported ||
+    onSetPermission === undefined ||
+    permRequestView === null ||
+    !needsPermissionGateRecovery(permRequestView)
+      ? null
+      : permRequestView,
+  );
+
+  // Handle lamp for the status sheet (phase-31 31-6): while the sheet is
+  // open the in-flow permission/question docks sit behind it, so the
+  // current agent's pending decision must stay noticeable on the handle
+  // (responsive-layout.md MUST). Mirrors the dock render gates.
+  const sheetPendingTone = $derived(
+    permission || codexPermissionGateRecovery
+      ? "waiting_permission"
+      : question && dialogAvailability !== "unsupported"
+        ? "waiting_question"
+        : null,
+  );
 
   function sendPermission(patch: SetPermissionPatch): void {
     sandboxMenuOpen = false;
@@ -1855,6 +1880,14 @@
         permActionError = PERMISSION_ERROR_TEXTS[reason] ?? reason;
       }
     })();
+  }
+  function retryPermissionGate(): void {
+    const view = codexPermissionGateRecovery;
+    if (view === null) return;
+    sendPermission({
+      sandbox: view.requested.sandbox,
+      network_access: view.requested.network_access,
+    });
   }
   // tool_use_id under the pointer, so its tool_use and tool_result both
   // highlight while hovered (#40).
@@ -3769,6 +3802,43 @@
                 <div class="permission-actions">
                   <button class="allow" onclick={() => decide(true)}>許可</button>
                   <button class="deny" onclick={() => decide(false)}>拒否</button>
+                </div>
+              </div>
+            </div>
+          {/if}
+        {:else if codexPermissionGateRecovery}
+          {#if permMinimized}
+            <button
+              type="button"
+              class="dock-bar dock-bar-perm"
+              title="Codex 権限復旧プロンプトを展開"
+              onclick={() => (permMinimized = false)}
+            >
+              <span class="dock-bar-lamp"></span>
+              権限復旧待ち(クリックで展開)
+            </button>
+          {:else}
+            <div class="permission-dock">
+              <button
+                class="dock-min"
+                type="button"
+                title="最小化"
+                aria-label="Codex 権限復旧プロンプトを最小化"
+                onclick={() => (permMinimized = true)}></button>
+              <div class="permission-scroll">
+                <p class="permission-tool">
+                  Codex の権限確認が止まっています
+                </p>
+                <p class="permission-note">
+                  rev {codexPermissionGateRecovery.revision}: {codexPermissionGateRecovery.reason ?? "permission_gate_blocked"}
+                </p>
+                <p class="permission-note">
+                  同じ sandbox / network を再適用して新しい revision を作ると、次の turn で復旧できます。キャンセルされた指示は再送してください。
+                </p>
+                <div class="permission-actions">
+                  <button class="allow" onclick={retryPermissionGate}>
+                    同じ権限値を再適用
+                  </button>
                 </div>
               </div>
             </div>
