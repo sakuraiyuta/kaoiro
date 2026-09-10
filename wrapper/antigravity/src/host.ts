@@ -67,6 +67,20 @@ export interface AntigravityHostOptions {
   onState: (envelope: Envelope) => void;
   onLog?: (envelope: Envelope) => void;
   onSessionId?: (sessionId: string) => void;
+  onTurnStart?: (info: { turnToken: string; conversationIds: readonly string[] }) => void;
+  onTurnEnd?: (info: {
+    turnToken: string;
+    conversationIds: readonly string[];
+    error?: { detail?: string };
+    cancellation?: { kind: "watchdog_fail_stop"; started: false };
+  }) => void;
+  onTurnBoundary?: (info: { turnToken: string }) => void;
+  onTurnProgress?: (info: { turnToken: string }) => void;
+  onWatchdogFailStop?: (info: {
+    turnToken?: string;
+    conversationIds: readonly string[];
+    attribution: "exact" | "unattributed";
+  }) => void;
   toolDescriptors?: ToolDescriptor[];
   permissionBroker: PermissionBroker;
   questionBroker?: Pick<QuestionBroker, "close">;
@@ -177,13 +191,20 @@ export class AntigravityHost implements EngineAdapter {
   #closed = false;
   #running: SpawnedAgy | null = null;
   #sessionId: string | null;
-  #turnQueue: string[] = [];
+  #turnQueue: Array<{
+    text: string;
+    conversationIds?: readonly string[];
+    turnToken?: string;
+  }> = [];
   #customization: CustomizationDir | null = null;
   #pendingPermission: PendingPermissionExt | null = null;
   #pendingQuestion: PendingQuestionExt | null = null;
   #lastRevision = 0;
   #gateBroken = false;
   #turnActive = false;
+  #activeTurnToken: string | null = null;
+  #activeTurnConversationIds: readonly string[] = [];
+  #watchdogFailStopped = false;
   #lifecycleGeneration = 0;
   #toolHost: ToolHost | null = null;
   #gateServer: GateServer | null = null;
@@ -239,15 +260,29 @@ export class AntigravityHost implements EngineAdapter {
     });
   }
 
-  async send(text: string, attachmentIds?: string[]): Promise<void> {
-    if (this.#closed || this.#gateBroken) return;
+  async send(
+    text: string,
+    attachmentIds?: string[],
+    conversationIds?: readonly string[],
+    turnToken?: string,
+  ): Promise<void> {
+    if (this.#closed || this.#gateBroken || this.#watchdogFailStopped) return;
     if (attachmentIds !== undefined && attachmentIds.length > 0) {
       this.#warn("antigravity: attachments are unsupported");
       return;
     }
     this.#apply({ kind: "user_send" });
-    this.#turnQueue.push(text);
+    this.#turnQueue.push({
+      text,
+      ...(conversationIds === undefined ? {} : { conversationIds }),
+      ...(turnToken === undefined ? {} : { turnToken }),
+    });
     void this.#drainTurns();
+  }
+
+  /** The capability supplied to inter-agent tools only while this agy turn runs. */
+  activeInterAgentTurnToken(): string | null {
+    return this.#activeTurnToken;
   }
 
   async interrupt(): Promise<void> {
@@ -261,6 +296,33 @@ export class AntigravityHost implements EngineAdapter {
     this.#cancelGateProbe?.();
     this.#gateProbe?.kill?.("SIGTERM");
     this.#running?.kill("SIGTERM");
+  }
+
+  requestInterruptForTurn(turnToken: string): boolean {
+    if (
+      this.#activeTurnToken !== turnToken ||
+      this.#watchdogFailStopped ||
+      this.#closed
+    ) {
+      return false;
+    }
+    return this.#running?.kill("SIGTERM") ?? false;
+  }
+
+  failStopTurnForWatchdog(turnToken: string): boolean {
+    if (
+      this.#activeTurnToken !== turnToken ||
+      this.#watchdogFailStopped ||
+      this.#closed
+    ) {
+      return false;
+    }
+    return this.#failStopForWatchdog("exact");
+  }
+
+  failStopForWatchdogAttributionUnknown(): boolean {
+    if (this.#watchdogFailStopped) return false;
+    return this.#failStopForWatchdog("unattributed");
   }
 
   close(): void {
@@ -323,23 +385,43 @@ export class AntigravityHost implements EngineAdapter {
   }
 
   async #drainTurns(): Promise<void> {
-    if (this.#turnActive || this.#closed || this.#gateBroken) return;
-    const text = this.#turnQueue.shift();
-    if (text === undefined) return;
+    if (this.#turnActive || this.#closed || this.#gateBroken || this.#watchdogFailStopped) return;
+    const turn = this.#turnQueue.shift();
+    if (turn === undefined) return;
     this.#turnActive = true;
     const generation = this.#lifecycleGeneration;
+    let error: { detail?: string } | undefined;
     try {
-      await this.#runTurn(text, generation);
-    } catch (error) {
-      if (this.#isCurrent(generation)) this.#terminalError(error instanceof Error ? error.message : String(error));
+      error = await this.#runTurn(turn.text, generation, turn.turnToken, turn.conversationIds ?? []);
+    } catch (caught) {
+      const detail = caught instanceof Error ? caught.message : String(caught);
+      error = { detail };
+      if (this.#isCurrent(generation)) this.#terminalError(detail);
     } finally {
       this.#running = null;
       this.#turnActive = false;
+      if (turn.turnToken !== undefined && !this.#watchdogFailStopped) {
+        this.#options.onTurnBoundary?.({ turnToken: turn.turnToken });
+        this.#options.onTurnEnd?.({
+          turnToken: turn.turnToken,
+          conversationIds: turn.conversationIds ?? [],
+          ...(error === undefined ? {} : { error }),
+        });
+      }
+      if (this.#activeTurnToken === turn.turnToken) {
+        this.#activeTurnToken = null;
+        this.#activeTurnConversationIds = [];
+      }
       void this.#drainTurns();
     }
   }
 
-  async #runTurn(text: string, generation: number): Promise<void> {
+  async #runTurn(
+    text: string,
+    generation: number,
+    turnToken?: string,
+    conversationIds: readonly string[] = [],
+  ): Promise<{ detail?: string } | undefined> {
     if (!this.#agyExecutable.ok) {
       throw new Error(`antigravity_cli_unavailable:${this.#agyExecutable.reason}`);
     }
@@ -360,7 +442,7 @@ export class AntigravityHost implements EngineAdapter {
     let gateServer: GateServer | null = null;
     try {
       toolHost = await ToolHost.listen(this.#options.toolDescriptors ?? []);
-      if (!this.#isCurrent(generation)) return;
+      if (!this.#isCurrent(generation)) return undefined;
       const gate = new AntigravityGate({
         config: this.#config,
         cwd: this.#options.cwd,
@@ -380,7 +462,7 @@ export class AntigravityHost implements EngineAdapter {
           this.#clearPendingPermission();
         },
       });
-      if (!this.#isCurrent(generation)) return;
+      if (!this.#isCurrent(generation)) return undefined;
       this.#toolHost = toolHost;
       this.#gateServer = gateServer;
       const registration = await this.#verifyGateRegistration(generation);
@@ -408,12 +490,18 @@ export class AntigravityHost implements EngineAdapter {
         throw new Error(`antigravity_cli_${this.#spawnFailureReason(error)}: ${boundErrorDetail(message)}`);
       }
       this.#running = child;
+      if (turnToken !== undefined) {
+        this.#activeTurnToken = turnToken;
+        this.#activeTurnConversationIds = conversationIds;
+        this.#options.onTurnStart?.({ turnToken, conversationIds });
+      }
       child.stdin.end();
       child.stderr.on("data", () => {});
       let terminalResult: AgyStreamEvent | null = null;
       let correlationFailure: string | null = null;
       const assistantText = new Map<number, string>();
       readableLines(child.stdout, (line) => {
+        if (turnToken !== undefined) this.#options.onTurnProgress?.({ turnToken });
         const event = parseAgyStreamLine(line);
         if (event === null) {
           this.#warn(`antigravity: ignored malformed stream line from ${basename(executable)}`);
@@ -448,27 +536,35 @@ export class AntigravityHost implements EngineAdapter {
         }
       });
       const childError = await this.#waitForChild(child);
-      if (this.#closed) return;
+      if (this.#closed || this.#watchdogFailStopped) return undefined;
       if (customization.verify() !== true) {
         this.#gateBroken = true;
-        this.#terminalError("antigravity_customization_tampered", attemptedModel);
+        const detail = "antigravity_customization_tampered";
+        this.#terminalError(detail, attemptedModel);
+        return { detail };
       } else if (!this.#isCurrent(generation)) {
-        return;
+        return undefined;
       } else if (correlationFailure !== null) {
         this.#gateBroken = true;
-        this.#terminalError(`antigravity_gate_unobserved_tool:${correlationFailure}`, attemptedModel);
+        const detail = `antigravity_gate_unobserved_tool:${correlationFailure}`;
+        this.#terminalError(detail, attemptedModel);
+        return { detail };
       } else if (childError !== null) {
-        this.#terminalError(
-          `antigravity_cli_${this.#spawnFailureReason(childError)}: ${boundErrorDetail(childError.message)}`,
-          attemptedModel,
-        );
+        const detail = `antigravity_cli_${this.#spawnFailureReason(childError)}: ${boundErrorDetail(childError.message)}`;
+        this.#terminalError(detail, attemptedModel);
+        return { detail };
       } else if (terminalResult === null) {
-        this.#terminalError("agy_exit_without_result", attemptedModel);
+        const detail = "agy_exit_without_result";
+        this.#terminalError(detail, attemptedModel);
+        return { detail };
       } else {
         const result = agyEventToResult(terminalResult);
         if (result?.is_error === true) this.#rollbackPendingModel(attemptedModel);
         else this.#promotePendingModel(attemptedModel);
         this.#publishTerminalResult(terminalResult);
+        return result?.is_error === true
+          ? { detail: "antigravity turn failed" }
+          : undefined;
       }
     } finally {
       gateServer?.close();
@@ -476,6 +572,41 @@ export class AntigravityHost implements EngineAdapter {
       if (this.#gateServer === gateServer) this.#gateServer = null;
       if (this.#toolHost === toolHost) this.#toolHost = null;
     }
+  }
+
+  #failStopForWatchdog(attribution: "exact" | "unattributed"): boolean {
+    this.#watchdogFailStopped = true;
+    this.#closed = true;
+    this.#lifecycleGeneration += 1;
+    const queued = this.#turnQueue.splice(0);
+    this.#options.permissionBroker.close();
+    this.#options.questionBroker?.close();
+    this.#clearPendingAfterInterrupt();
+    this.#gateServer?.close();
+    this.#toolHost?.close();
+    this.#cancelGateProbe?.();
+    this.#gateProbe?.kill?.("SIGTERM");
+    this.#running?.kill("SIGTERM");
+    const error = {
+      detail: attribution === "exact"
+        ? "turn watchdog interrupt grace expired; host admission stopped pending operator recovery"
+        : "turn watchdog token attribution unavailable; host admission stopped pending operator recovery",
+    };
+    for (const turn of queued) {
+      if (turn.turnToken === undefined) continue;
+      this.#options.onTurnEnd?.({
+        turnToken: turn.turnToken,
+        conversationIds: turn.conversationIds ?? [],
+        error,
+        cancellation: { kind: "watchdog_fail_stop", started: false },
+      });
+    }
+    this.#options.onWatchdogFailStop?.({
+      ...(this.#activeTurnToken === null ? {} : { turnToken: this.#activeTurnToken }),
+      conversationIds: this.#activeTurnConversationIds,
+      attribution,
+    });
+    return true;
   }
 
   #isCurrent(generation: number): boolean {

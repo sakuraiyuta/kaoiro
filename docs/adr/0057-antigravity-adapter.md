@@ -19,6 +19,7 @@ Revised 2026-09-04 after design review (kuroe): version pin corrected to
 1.1.26, gate self-verification (F4b), bridge argv validation (F5), advisory
 sandbox and `network_access` (F4), tool-class source of truth (F4), and
 axes fixed at spawn in Stage A (F4c). Q1–Q3 are closed by measurement.
+Revised 2026-09-10 for inbound inter-agent turn delivery (F5a).
 
 ## Context
 
@@ -261,6 +262,34 @@ the per-spawn nonce; a shell the agent runs can reach it directly, which is
 inside the agent's own privilege — the bridge rule is a convenience, not a
 security boundary, and the whole-string match is what protects the
 *auto-allow*.
+
+### F5a — Inbound inter-agent messages are agy turns
+
+`ServerLink.onInterAgentMessage` is handled in the Antigravity package. The
+handler gives `InterAgentTool.receiveInbound()` first refusal: a consumed
+reply, terminal closure, or stale delivery is not injected; each of those
+non-injected dispositions completes delivery acknowledgement immediately.
+Only a reply-owed or close-proposal message enters an `agy --print` turn.
+
+`AntigravityInterAgentTurnCoordinator` is local to this adapter, rather than
+an agent-common promotion. It owns same-peer FIFO batching, immutable turn
+tokens, and delivery-sequence ownership. The coordinator records pending
+injections immediately before dispatch to `AntigravityHost`; a host completion
+settles only its matching token before a successor batch is released.
+
+The delivery acknowledgement runtime observes the server watermark, immediate
+non-injection acknowledgements, and host `onTurnStart`. For injected work,
+`onTurnStart` occurs only after gate registration and successful `agy` child
+spawn; queue admission alone is not a start. The token and all coalesced
+conversation ids stay with the host turn so tool calls and failure notices
+cannot settle a later reuse of the same conversation id.
+
+Antigravity has an adapter-local `TurnWatchdog`, configured by
+`KAOIRO_ANTIGRAVITY_TURN_WATCHDOG_INACTIVITY_MS` and
+`KAOIRO_ANTIGRAVITY_TURN_WATCHDOG_ABORT_GRACE_MS`. Parsed agy stream records
+reset inactivity. Timeout requests SIGTERM only for the active token; expiry
+of the grace period freezes new coordinator work and leaves the uncertain
+active delivery for supervisor recovery.
 
 ### F6 — Catalog: `agy models` at runner register, static snapshot fallback, account default entry
 

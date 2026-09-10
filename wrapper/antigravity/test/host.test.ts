@@ -90,6 +90,46 @@ function hostHarness(options: {
 }
 
 describe("AntigravityHost", () => {
+  it("starts an inter-agent turn only after the agy child is spawned and preserves its token through completion", async () => {
+    const cfg = config();
+    const calls: FakeAgy[] = [];
+    const starts: string[] = [];
+    const ends: Array<{ token: string; conversationIds: readonly string[] }> = [];
+    let host!: AntigravityHost;
+    host = new AntigravityHost(cfg, {
+      cwd: process.cwd(),
+      appendSystemPrompt: "persona",
+      permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
+      onState: () => {},
+      runtimeAssetsAvailable: () => true,
+      verifyGate: async () => true,
+      agyPath: "/test/agy",
+      spawn: () => {
+        const child = new FakeAgy();
+        calls.push(child);
+        return child as unknown as SpawnedAgy;
+      },
+      onTurnStart: ({ turnToken, conversationIds }) => {
+        expect(calls).toHaveLength(1);
+        expect(host.activeInterAgentTurnToken()).toBe(turnToken);
+        expect(conversationIds).toEqual(["cid-1"]);
+        starts.push(turnToken);
+      },
+      onTurnEnd: ({ turnToken, conversationIds }) => ends.push({ token: turnToken, conversationIds }),
+    });
+
+    await host.send("inbound", undefined, ["cid-1"], "turn-1");
+    await waitFor(() => starts.length === 1);
+    calls[0]!.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
+    calls[0]!.finish();
+    await waitFor(() => ends.length === 1);
+
+    expect(starts).toEqual(["turn-1"]);
+    expect(ends).toEqual([{ token: "turn-1", conversationIds: ["cid-1"] }]);
+    expect(host.activeInterAgentTurnToken()).toBeNull();
+    host.close();
+  });
+
   it("set_permission は Stage A では明示的に拒否する", async () => {
     const { host } = hostHarness();
     await expect(host.setPermission({

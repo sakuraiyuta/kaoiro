@@ -4,7 +4,7 @@ description: Implement ADR-0057 — wrapper/antigravity package driving the agy 
 status: planned
 phase: 34
 depends_on: [phase-14-codex-adapter, phase-33-compaction-resume-lifecycle]
-last_updated: 2026-09-05
+last_updated: 2026-09-10
 ---
 
 # Phase 34 — Antigravity adapter (third engine, agy CLI headless)
@@ -62,6 +62,7 @@ through the CLI bridge. Measured substrate:
 | A2 | `wrapper/antigravity` skeleton copied from `wrapper/codex` (package.json with `kaoiro.runtimeAssets`, tsconfigs, vitest config, `src/index.ts`) | |
 | A3 | `adapter.ts`: stream-json line → `AdapterEvent` (pure, table-driven) + tests from recorded fixtures | fixtures: the 2026-09-04 probe outputs |
 | A4 | `host.ts`: per-turn spawn, closed stdin, `--conversation`, interrupt (SIGTERM), exit-without-result → error, session_capabilities stamp | reuse Codex `TurnWatchdog` |
+| A4a | Inbound inter-agent delivery: local turn coordinator and handler, delivery acknowledgement at actual child spawn, immutable turn token propagation, and watchdog fail-stop | Done in issue #344; ADR-0057 F5a |
 | A5 | customization dir writer: `.agents/rules/AGENTS.md`, `.agents/hooks.json`, `.agents/skills/kaoiro/SKILL.md`; regenerate before every spawn, SHA verify after every turn (tamper → error); stale sweep deletes only dirs carrying a valid owner marker; cleanup on close | |
 | A6 | `hook.ts` (→ `dist/hook.js`): stdin → wrapper socket `permission` request (with per-spawn nonce) → stdout decision; fail-closed with client deadline | |
 | A6b | gate self-verification (F4b): `-p /hooks` registration check before first turn; completion-keyed tool-step ↔ gate-request correlation invariant (measured classes only) with kill + `antigravity_gate_unobserved_tool` on violation; gate-socket close resolves the broker entry; tests inject a missing hook and a missing nonce as negative controls | |
