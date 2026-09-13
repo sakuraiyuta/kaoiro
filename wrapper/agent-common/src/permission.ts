@@ -1,5 +1,7 @@
 // Permission broker — bridges canUseTool to the client approval UI
-// (protocol.md "承認フロー", ADR-0011 / ADR-0022). decide() sends a
+// (protocol.md "承認フロー", ADR-0011 / ADR-0022). On engines without a
+// canUseTool hook the gated tool handler itself calls decide() from inside
+// the MCP call (approval_gate.ts, ADR-0043 issue #347). decide() sends a
 // permission_request envelope (initial notification) AND fires
 // onPendingChange so the host can stamp the authoritative pending state
 // onto state_change.ext.pending_permission. The promise is held until
@@ -85,11 +87,25 @@ export class PermissionBroker {
     this.#registry = new PendingRegistry<PermissionDecision>(this.#timeoutMs);
   }
 
-  /** Compatible with AgentHostOptions#decidePermission. */
+  /** Compatible with AgentHostOptions#decidePermission.
+   *
+   *  `signal` binds the request to the lifetime of the tool call that asked
+   *  (issue #347): an already-aborted signal denies without ever showing the
+   *  operator a dialog for a call that cannot receive the answer, and an
+   *  abort while pending settles it as a deny — so a late operator "allow"
+   *  finds nothing to resolve. Callers without such a lifetime (the Claude
+   *  canUseTool path, which has its own turn-bound wait) omit it. */
   decide(
     toolName: string,
     input: Record<string, unknown>,
+    signal?: AbortSignal,
   ): Promise<PermissionDecision> {
+    if (signal?.aborted) {
+      return Promise.resolve({
+        allow: false,
+        message: "kaoiro: tool call is no longer live",
+      });
+    }
     const requestId = this.#newId();
     const ts = this.#now();
     const payload: Record<string, unknown> = {
@@ -111,20 +127,32 @@ export class PermissionBroker {
       pending.truncated = true;
     }
 
-    // Notify host SYNCHRONOUSLY so the next state_change emit carries
-    // ext.pending_permission (ADR-0022 F3). Must precede the legacy
-    // envelope so a subscriber draining its inbox sees them in order.
-    this.#live.set(requestId, pending);
-    this.#options.onPendingChange?.(this.#slot());
-
+    // Send the legacy permission_request notification FIRST, then notify
+    // the host synchronously so its state_change(waiting_permission) —
+    // carrying ext.pending_permission (ADR-0022 F3) — is the LAST non-reply
+    // envelope the dashboard renders. Same ordering rule as QuestionBroker:
+    // the codex host emits that state_change inside onPendingChange, so an
+    // ext-less permission_request sent after it would replace the rendered
+    // state and hide the dialog. The Claude host calls decide()
+    // synchronously and applies its own state transition afterwards, so
+    // for it the two orders are equivalent.
     this.#options.send(
       makePermissionRequest(this.#options.config, ts, payload),
     );
+    this.#live.set(requestId, pending);
+    this.#options.onPendingChange?.(this.#slot());
 
     return new Promise((resolve) => {
+      const onAbort = (): void => {
+        this.#registry.resolve(requestId, {
+          allow: false,
+          message: "kaoiro: tool call cancelled",
+        });
+      };
       // settle clears the ext pending-record before resolving; the registry
       // owns the pending map, timeout, and shutdown drain (ADR-0027 F5).
       const settle = (decision: PermissionDecision): void => {
+        signal?.removeEventListener("abort", onAbort);
         this.#live.delete(requestId);
         this.#options.onPendingChange?.(this.#slot());
         resolve(decision);
@@ -133,6 +161,7 @@ export class PermissionBroker {
         allow: false,
         message: "kaoiro: permission request timed out",
       }));
+      signal?.addEventListener("abort", onAbort, { once: true });
     });
   }
 

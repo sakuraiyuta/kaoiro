@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import {
   SessionResetCoordinator,
   requestSessionResetDescriptor,
+  validateRequestSessionResetInput,
 } from "../src/request_session_reset.js";
 import type {
   SessionResetAccepted,
@@ -67,6 +68,27 @@ describe("request_session_reset descriptor", () => {
     expect(tool.description).toContain("WORKLOG");
     expect(tool.description).toContain("nothing is carried across");
     expect(tool.description).not.toMatch(/second|minute/i);
+  });
+
+  it("offerCompact: false drops the request_compact hint, default keeps it (issue #347)", () => {
+    const { tool } = collector();
+    expect(tool.description).toContain("request_compact");
+    const bare = requestSessionResetDescriptor({
+      reserve: () => {},
+      offerCompact: false,
+    });
+    expect(bare.description).not.toContain("request_compact");
+    expect(bare.description).toContain("BEFORE calling this");
+  });
+
+  it("validateRequestSessionResetInput rejects a bad mode, a non-string reason and an oversized input", () => {
+    expect(validateRequestSessionResetInput({ mode: "new" })).toEqual({ ok: true });
+    expect(validateRequestSessionResetInput({ mode: "clear", reason: "x" })).toEqual({ ok: true });
+    expect(validateRequestSessionResetInput({ mode: "sideways" })).toMatchObject({ ok: false });
+    expect(validateRequestSessionResetInput({ mode: "new", reason: 3 })).toMatchObject({ ok: false });
+    expect(
+      validateRequestSessionResetInput({ mode: "new", reason: "x".repeat(20_000) }),
+    ).toMatchObject({ ok: false });
   });
 });
 
@@ -338,5 +360,92 @@ describe("SessionResetCoordinator", () => {
     h.coordinator.onTurnEnd();
     await settle();
     expect(h.requests).toHaveLength(2);
+  });
+});
+
+// issue #347 M1: a reservation bound to an engine turn rides only that
+// turn's authoritative terminal. Any other end consumes it with a notice.
+describe("SessionResetCoordinator — turn boundaries", () => {
+  it("dispatches on the owner turn's authoritative end", async () => {
+    const h = harness([{ requestId: "rs-1" }]);
+    h.coordinator.reserve("new", "why", "turn-A");
+    h.coordinator.onTurnEnd({ turnToken: "turn-A", authoritative: true });
+    await settle();
+    expect(h.requests).toEqual([{ mode: "new", reason: "why" }]);
+    expect(h.notices).toHaveLength(0);
+  });
+
+  it("a non-authoritative end drops the reservation with a notice, and a later end sends nothing", async () => {
+    const h = harness([{ requestId: "rs-1" }]);
+    h.coordinator.reserve("clear", undefined, "turn-A");
+    h.coordinator.onTurnEnd({ turnToken: "turn-A", authoritative: false });
+    await settle();
+    expect(h.requests).toHaveLength(0);
+    expect(h.coordinator.pending).toBe(false);
+    expect(h.notices).toHaveLength(1);
+    expect(h.notices[0]).toContain("was cancelled");
+    expect(h.notices[0]).toContain("context is unchanged");
+    expect(h.logs[0]).toContain("reservation cancelled");
+    h.coordinator.onTurnEnd({ turnToken: "turn-B", authoritative: true });
+    await settle();
+    expect(h.requests).toHaveLength(0);
+  });
+
+  it("another turn's authoritative end does not carry a reservation it did not make", async () => {
+    const h = harness([{ requestId: "rs-1" }]);
+    h.coordinator.reserve("new", undefined, "turn-A");
+    h.coordinator.onTurnEnd({ turnToken: "turn-B", authoritative: true });
+    await settle();
+    expect(h.requests).toHaveLength(0);
+    expect(h.notices[0]).toContain("no longer active");
+  });
+
+  it("an owner-bound reservation made while a dispatch is in flight is cancelled with the true cause", async () => {
+    let release!: (value: SessionResetAccepted) => void;
+    const h = harness([]);
+    const coordinator = new SessionResetCoordinator({
+      request: () =>
+        new Promise<SessionResetAccepted>((resolve) => {
+          release = resolve;
+        }),
+      notify: async (text) => {
+        h.notices.push(text);
+      },
+      log: (text) => h.logs.push(text),
+    });
+    coordinator.reserve("new", undefined, "turn-A");
+    coordinator.onTurnEnd({ turnToken: "turn-A", authoritative: true });
+    // Still dispatching turn-A's reset when turn-B reserves and ends.
+    coordinator.reserve("clear", undefined, "turn-B");
+    coordinator.onTurnEnd({ turnToken: "turn-B", authoritative: true });
+    await settle();
+    expect(coordinator.pending).toBe(false);
+    expect(h.notices).toHaveLength(1);
+    expect(h.notices[0]).toContain("another reset request is still in flight");
+    release({ requestId: "rs-1" });
+  });
+
+  it("an unowned reservation keeps the Claude semantics: any boundary dispatches", async () => {
+    const h = harness([{ requestId: "rs-1" }]);
+    h.coordinator.reserve("new");
+    h.coordinator.onTurnEnd({ turnToken: "turn-B", authoritative: true });
+    await settle();
+    expect(h.requests).toHaveLength(1);
+  });
+
+  it("a cancellation notice that cannot be injected is still logged", async () => {
+    const logs: string[] = [];
+    const coordinator = new SessionResetCoordinator({
+      request: async () => ({ requestId: "rs-1" }),
+      notify: async () => {
+        throw new Error("queue closed");
+      },
+      log: (text) => logs.push(text),
+    });
+    coordinator.reserve("new", undefined, "turn-A");
+    coordinator.onTurnEnd({ turnToken: "turn-A", authoritative: false });
+    await settle();
+    expect(logs).toHaveLength(2);
+    expect(logs[1]).toContain("queue closed");
   });
 });

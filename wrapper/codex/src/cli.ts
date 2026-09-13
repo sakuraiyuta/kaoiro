@@ -2,8 +2,10 @@
 // config, connects the ServerLink, waits fail-closed for the server-pushed
 // personality (ADR-0029 F3), then drives a CodexHost. Mirrors the Claude
 // composition (@kaoiro/claude-code/src/cli.ts) minus the Claude-only parts:
-// no permission broker wiring (approval is fixed to never, ADR-0033 F3), no
-// image-only upload rendering, rollout history replay.
+// no SDK-side canUseTool approval (the approval axis is fixed to never,
+// ADR-0033 F3 — the PermissionBroker here serves only the wrapper-gated
+// bridge tools, ADR-0043 amendment), no image-only upload rendering, rollout
+// history replay.
 //
 // Usage: node dist/cli.js [configPath] [prompt] [--resume <session_id>]
 
@@ -20,13 +22,19 @@ import {
   createDeliveryAcknowledgementRuntime,
   IaSidecar,
   InterAgentTool,
+  PermissionBroker,
   QuestionBroker,
+  REQUEST_SESSION_RESET_TOOL_FQN,
+  SessionResetCoordinator,
   askUserQuestionDescriptor,
   classifyInterAgentError,
   isIngressStamp,
   makeLog,
   makeStateChange,
   mergePendingDisplayNameSync,
+  operatorApprovalGated,
+  requestSessionResetDescriptor,
+  validateRequestSessionResetInput,
 } from "@kaoiro/agent-common";
 import type {
   Envelope,
@@ -40,7 +48,11 @@ import {
   parseCliArgs,
   ServerLink,
 } from "@kaoiro/wrapper-core";
-import { CodexHost, type CodexLifecycleEvent } from "./host.js";
+import {
+  CODEX_APPROVAL_TIMEOUT_MS,
+  CodexHost,
+  type CodexLifecycleEvent,
+} from "./host.js";
 import { handleInterAgentMessage } from "./inter_agent_message_handler.js";
 import { CodexInterAgentTurnCoordinator } from "./inter_agent_turn_coordinator.js";
 import { readCodexHistory } from "./history.js";
@@ -228,6 +240,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   }
 
   let host: CodexHost;
+  let permissionBroker: PermissionBroker | null = null;
   let questionBroker: QuestionBroker | null = null;
   let interAgent: InterAgentTool | null = null;
   let instructionChain: Promise<void> = Promise.resolve();
@@ -420,12 +433,46 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     rejectPersonaPrompt = reject;
   });
 
+  // Operator approval for the bridge tools that need it (issue #347,
+  // ADR-0043). codex auto-approves every bridge call, so the gated handler
+  // asks through this broker itself; the wait is bounded because codex
+  // cancels the MCP call at `tool_timeout_sec` (310 s) and a late allow
+  // must not act for a call the model already saw fail.
+  permissionBroker = new PermissionBroker({
+    config,
+    send: (envelope) => link?.send(envelope),
+    // Stamps ext.pending_permission AND drives waiting_permission on codex,
+    // exactly as the question broker below drives waiting_question.
+    onPendingChange: (pending) => host?.setPendingPermission(pending),
+    timeoutMs: Math.min(
+      config.permission_timeout_ms ?? CODEX_APPROVAL_TIMEOUT_MS,
+      CODEX_APPROVAL_TIMEOUT_MS,
+    ),
+  });
   questionBroker = new QuestionBroker({
     config,
     send: (envelope) => link?.send(envelope),
     // Stamps ext.pending_question AND drives waiting_question on codex —
     // CodexHost derives the state from this signal (no canUseTool hook).
     onPendingChange: (pending) => host?.setPendingQuestion(pending),
+  });
+  // Holds an operator-approved reset until the SDK's own turn terminal, then
+  // asks the server (ADR-0043 D3). Reservations are bound to the turn that
+  // made them: any other end — EOF, rejection, interrupt, watchdog — drops
+  // the reservation and tells the agent (issue #347 M1).
+  const sessionReset = new SessionResetCoordinator({
+    request: (mode, reason) => {
+      if (!link) return Promise.reject(new Error("server link unavailable"));
+      return link.requestSessionReset(mode, reason);
+    },
+    notify: (text) => {
+      // Same posture as every other chain writer here: the caller observes
+      // the rejection, the shared chain never carries it forward.
+      const queued = instructionChain.then(() => host.send(text));
+      instructionChain = queued.catch(() => {});
+      return queued;
+    },
+    log: (text) => writeRedactedStderr(`${text}\n`),
   });
   interAgent = new InterAgentTool({
     config,
@@ -552,7 +599,10 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
         }),
       );
     },
+    onPermissionDecision: (decision) => permissionBroker?.resolve(decision),
     onQuestionResponse: (response) => questionBroker?.resolve(response),
+    onSessionResetFailed: ({ requestId, reason }) =>
+      sessionReset.onResetFailed(requestId, reason),
     onInterrupt: () => {
       process.stdout.write("  interrupt\n");
       void host.interrupt().catch(() => {});
@@ -642,6 +692,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     appendSystemPrompt = await personaPromptPromise;
   } catch (err) {
     link?.close();
+    permissionBroker?.close();
     questionBroker?.close();
     throw err;
   } finally {
@@ -693,7 +744,15 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     // resulting notice envelope(s) straight through ServerLink — this
     // bypasses the model/tool path entirely since the turn just failed to
     // produce one, so no broker approval applies.
-    onTurnEnd: ({ turnToken, conversationIds, error, cancellation }) => {
+    onTurnEnd: ({ turnToken, conversationIds, error, cancellation, terminal }) => {
+      // ADR-0043 D3 on codex (issue #347 M1): only an SDK-declared terminal
+      // is the reset boundary. `terminal` is set by the host on exactly
+      // those two paths; a cancellation, a terminal-less EOF or a rejected
+      // run leaves it unset and the coordinator drops the reservation.
+      sessionReset.onTurnEnd({
+        turnToken,
+        authoritative: terminal !== undefined && !watchdogFailStopped,
+      });
       if (cancellation?.kind === "watchdog_fail_stop") {
         // A watchdog cancellation is for a never-started token. Resolve its
         // own peer notices, but never dispatch a successor; the active token
@@ -759,6 +818,28 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     toolDescriptors: [
       ...interAgent.descriptors(),
       askUserQuestionDescriptor((questions) => questionBroker!.decide(questions)),
+      // ADR-0043 Neutral amendment (issue #347): exposed to codex behind the
+      // wrapper-owned approval wait. `offerCompact: false` — codex has no
+      // compaction path, so the description must not point at
+      // request_compact. The reservation carries the turn that made it so
+      // the coordinator can refuse to ride any other turn's end.
+      operatorApprovalGated(
+        requestSessionResetDescriptor({
+          reserve: (mode, reason) =>
+            sessionReset.reserve(
+              mode,
+              reason,
+              host.activeInterAgentTurnToken() ?? undefined,
+            ),
+          offerCompact: false,
+        }),
+        {
+          decide: (toolName, input, signal) =>
+            permissionBroker!.decide(toolName, input, signal),
+          toolName: REQUEST_SESSION_RESET_TOOL_FQN,
+          validate: validateRequestSessionResetInput,
+        },
+      ),
     ],
     ...(resolvedModelSource !== undefined
       ? { modelSource: resolvedModelSource }
@@ -821,6 +902,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     await host.run(prompt);
   } finally {
     turnWatchdog.dispose();
+    permissionBroker?.close();
     questionBroker?.close();
     link?.close();
   }

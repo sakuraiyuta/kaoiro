@@ -20,6 +20,17 @@ import type { ToolDescriptor } from "@kaoiro/agent-common";
  *  ask_user_question's 4 questions x 4 options). */
 const MAX_LINE_BYTES = 1024 * 1024;
 
+export interface ToolHostOptions {
+  /** The signal of the engine turn currently executing, or null when none
+   *  is. Each call's handler context aborts when EITHER this turn signal or
+   *  the bridge connection aborts (issue #347 M2): the socket outlives the
+   *  call — codex keeps one bridge per turn and never forwards MCP
+   *  cancellation — so connection close alone would let a late operator
+   *  answer act on behalf of a turn that already ended. A call arriving
+   *  with no active turn gets an already-aborted signal. */
+  turnSignal?: () => AbortSignal | null;
+}
+
 interface ListToolsRequest {
   id: number;
   method: "list_tools";
@@ -35,25 +46,33 @@ type BridgeRequest = ListToolsRequest | CallToolRequest;
 export class ToolHost {
   readonly #descriptors: Map<string, ToolDescriptor>;
   readonly #server: Server;
+  readonly #options: ToolHostOptions;
+  /** Live bridge connections and the controller each one's calls hang off. */
+  readonly #connections = new Map<Socket, AbortController>();
   readonly socketPath: string;
 
   private constructor(
     descriptors: ToolDescriptor[],
     server: Server,
     socketPath: string,
+    options: ToolHostOptions,
   ) {
     this.#descriptors = new Map(descriptors.map((d) => [d.name, d]));
     this.#server = server;
     this.socketPath = socketPath;
+    this.#options = options;
   }
 
   /** Creates the socket in a fresh private tmp dir (0700 by mkdtemp) and
    *  starts listening. The path rides to the bridge via mcp_servers env. */
-  static async listen(descriptors: ToolDescriptor[]): Promise<ToolHost> {
+  static async listen(
+    descriptors: ToolDescriptor[],
+    options: ToolHostOptions = {},
+  ): Promise<ToolHost> {
     const dir = mkdtempSync(join(tmpdir(), "kaoiro-codex-"));
     const socketPath = join(dir, "bridge.sock");
     const server = createServer();
-    const host = new ToolHost(descriptors, server, socketPath);
+    const host = new ToolHost(descriptors, server, socketPath, options);
     server.on("connection", (socket) => host.#serve(socket));
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
@@ -65,16 +84,31 @@ export class ToolHost {
     return host;
   }
 
+  /** Stops listening AND severs every live bridge connection. `Server#close`
+   *  alone keeps accepted sockets open, so a handler still waiting on the
+   *  operator could deliver its result — and act — after the host was told
+   *  to shut down (measured in review of issue #347). */
   close(): void {
     this.#server.close();
+    for (const [socket, controller] of this.#connections) {
+      this.#connections.delete(socket);
+      controller.abort();
+      socket.destroy();
+    }
   }
 
   #serve(socket: Socket): void {
     let buffer = "";
+    const controller = new AbortController();
+    this.#connections.set(socket, controller);
     socket.setEncoding("utf8");
     socket.on("error", () => {
       // A bridge dying mid-call is normal at turn end; the pending handler
       // result is simply unwritable then.
+    });
+    socket.on("close", () => {
+      this.#connections.delete(socket);
+      controller.abort();
     });
     socket.on("data", (chunk: string) => {
       buffer += chunk;
@@ -86,13 +120,27 @@ export class ToolHost {
       while (newline !== -1) {
         const line = buffer.slice(0, newline);
         buffer = buffer.slice(newline + 1);
-        if (line.trim() !== "") void this.#handleLine(socket, line);
+        if (line.trim() !== "") {
+          void this.#handleLine(socket, controller.signal, line);
+        }
         newline = buffer.indexOf("\n");
       }
     });
   }
 
-  async #handleLine(socket: Socket, line: string): Promise<void> {
+  /** The signal a call's handler sees: connection OR active turn. */
+  #callSignal(connection: AbortSignal): AbortSignal {
+    const turn = this.#options.turnSignal?.();
+    if (turn === undefined) return connection;
+    if (turn === null) return AbortSignal.abort();
+    return AbortSignal.any([connection, turn]);
+  }
+
+  async #handleLine(
+    socket: Socket,
+    connection: AbortSignal,
+    line: string,
+  ): Promise<void> {
     let request: BridgeRequest;
     try {
       request = JSON.parse(line) as BridgeRequest;
@@ -121,7 +169,9 @@ export class ToolHost {
         return;
       }
       try {
-        const result = await descriptor.handler(request.input ?? {});
+        const result = await descriptor.handler(request.input ?? {}, {
+          signal: this.#callSignal(connection),
+        });
         reply({ result });
       } catch (err) {
         reply({ error: String(err) });

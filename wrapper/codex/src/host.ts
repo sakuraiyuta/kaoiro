@@ -307,6 +307,12 @@ export interface CodexHostOptions {
     conversationIds: readonly string[];
     error?: { reason?: string; detail?: string };
     cancellation?: { kind: "watchdog_fail_stop" | "permission_gate"; started: false };
+    /** Set only when the SDK itself declared the turn's end. A stream that
+     * merely ended, a rejected run, or a cancellation never sets it, so a
+     * consumer that must act only on a real turn boundary (the deferred
+     * session reset, ADR-0043 D3) reads this rather than inferring from
+     * `error` (issue #347 M1). */
+    terminal?: "turn.completed" | "turn.failed";
   }) => void;
   /** The exact boundary at which an already-queued input begins an SDK turn.
    * Queue insertion intentionally does not count as dispatch (#247). */
@@ -418,6 +424,21 @@ export interface CodexHostOptions {
  *  dist/ (runtime) and src/ (tsx dev) alike — both point at dist/bridge.js,
  *  so dev spawns need a prior `pnpm build` of @kaoiro/codex. */
 const BRIDGE_SCRIPT = new URL("../dist/bridge.js", import.meta.url).pathname;
+
+/** How long codex lets one kaoiro bridge tool call run. Must outlive the
+ *  300 s synchronous send_to_agent waiter; leaving codex's 60 s default
+ *  here could cancel the outer MCP call while the common-layer waiter
+ *  still consumes a late reply (#114 M1). */
+export const BRIDGE_TOOL_TIMEOUT_SEC = 310;
+
+/** Ceiling on an operator approval wait opened from inside a bridge tool
+ *  call (issue #347). Below `BRIDGE_TOOL_TIMEOUT_SEC` on purpose: codex
+ *  cancels the call at that point WITHOUT telling the bridge, so a wait
+ *  that outlived it could be answered "allow" for a call the model has
+ *  already seen fail. The wrapper denies first instead. The turn-scope
+ *  abort (see `#turnScope`) covers the other ways a call dies; this bound
+ *  is only for the timeout codex applies on its own. */
+export const CODEX_APPROVAL_TIMEOUT_MS = 300_000;
 
 function rateLimitsDiffer(
   a: Map<CodexRateLimitWindow, CodexRateLimitSnapshot>,
@@ -619,6 +640,13 @@ export class CodexHost implements EngineAdapter {
   #gcTimer: ReturnType<typeof setInterval> | null = null;
   #wake: (() => void) | null = null;
   #abort: AbortController | null = null;
+  /** Lifetime of the host turn as seen by bridge tool calls (issue #347
+   * M2). Aborted on interrupt, watchdog stop, close, and at every terminal
+   * path BEFORE the terminal state is emitted, so a handler waiting on the
+   * operator settles (as a deny) while the machine is still in the state
+   * that wait created. Distinct from `#abort`, the SDK-facing signal: that
+   * one is only ever aborted to cut the SDK short, never on normal end. */
+  #turnScope: AbortController | null = null;
   /** Present only while the SDK is executing one host turn. */
   #activeTurnToken: string | null = null;
   #activeTurnConversationIds: readonly string[] = [];
@@ -931,6 +959,7 @@ export class CodexHost implements EngineAdapter {
     this.#permissionDispatchWake?.();
     this.#dropPendingUploads("interrupted");
     await this.#dropQueuedTempTurns();
+    this.#turnScope?.abort();
     this.#abort?.abort();
   }
 
@@ -944,6 +973,7 @@ export class CodexHost implements EngineAdapter {
     ) {
       return false;
     }
+    this.#turnScope?.abort();
     this.#abort?.abort();
     return true;
   }
@@ -975,6 +1005,7 @@ export class CodexHost implements EngineAdapter {
     this.#closed = true;
     if (this.#gcTimer !== null) clearInterval(this.#gcTimer);
     this.#gcTimer = null;
+    this.#turnScope?.abort();
     this.#machine = initialMachineState("error");
     this.#emitState("error");
 
@@ -1030,6 +1061,7 @@ export class CodexHost implements EngineAdapter {
     if (this.#gcTimer !== null) clearInterval(this.#gcTimer);
     this.#gcTimer = null;
     void this.#dropQueuedTempTurns();
+    this.#turnScope?.abort();
     this.#abort?.abort();
     this.#permissionCloseWake?.();
     this.#permissionDispatchWake?.();
@@ -1179,10 +1211,30 @@ export class CodexHost implements EngineAdapter {
     this.#emitState(this.#machine.state);
   }
 
+  /** Permission twin of setPendingQuestion, and likewise the state driver
+   *  on codex: the SDK never asks (approval pinned to never), so the only
+   *  permission dialogs are the ones a bridge tool handler opens itself
+   *  through the broker (`operatorApprovalGated`, issue #347). Guarded so a
+   *  settle that lands after the turn already emitted its terminal state —
+   *  a timeout or connection close racing the terminal — clears the stamped
+   *  record without dragging a resting agent back into tool_running. */
   setPendingPermission(pending: PendingPermissionExt | null): void {
-    // Codex never produces permission requests (approval pinned to never);
-    // kept for EngineAdapter conformance.
-    this.#pendingPermission = pending;
+    if (pending !== null) {
+      // Unreachable through the gate (a call outside a turn is denied
+      // before it asks); kept fail-closed so a dialog nobody can answer is
+      // never stamped onto a resting agent.
+      if (this.#activeTurnToken === null) return;
+      this.#pendingPermission = pending;
+      this.#apply({ kind: "permission_request" });
+      return;
+    }
+    if (this.#pendingPermission === null) return;
+    this.#pendingPermission = null;
+    if (this.#machine.state === "waiting_permission") {
+      this.#apply({ kind: "permission_resolved" });
+    } else {
+      this.#emitState(this.#machine.state);
+    }
   }
 
   /** Question twin of setPendingPermission — and, unlike the Claude host,
@@ -1213,7 +1265,11 @@ export class CodexHost implements EngineAdapter {
     }
     const descriptors = this.#options.toolDescriptors ?? [];
     const toolHost =
-      descriptors.length > 0 ? await ToolHost.listen(descriptors) : null;
+      descriptors.length > 0
+        ? await ToolHost.listen(descriptors, {
+            turnSignal: () => this.#turnScope?.signal ?? null,
+          })
+        : null;
     const factory =
       this.#options.codexFactory ??
       ((options: CodexOptions) => new Codex(options) as CodexClientLike);
@@ -1249,10 +1305,7 @@ export class CodexHost implements EngineAdapter {
           // (send_to_agent per-call on Claude; ask_user_question IS the
           // operator prompt), so auto-approving them is safe.
           default_tools_approval_mode: "approve",
-          // Must outlive the 300s synchronous send_to_agent waiter. Leaving
-          // Codex's 60s default here could cancel the outer MCP call while
-          // the common-layer waiter still consumes a late reply (#114 M1).
-          tool_timeout_sec: 310,
+          tool_timeout_sec: BRIDGE_TOOL_TIMEOUT_SEC,
         },
       };
     }
@@ -1408,6 +1461,7 @@ export class CodexHost implements EngineAdapter {
     }
     this.#activeTurnToken = turnToken;
     this.#activeTurnConversationIds = conversationIds;
+    this.#turnScope = new AbortController();
     const resolutionGeneration = ++this.#modelResolutionGeneration;
     const attempted = {
       model: this.#modelPending,
@@ -1590,12 +1644,17 @@ export class CodexHost implements EngineAdapter {
         if (event.type === "turn.completed") {
           sawResult = true;
           settled.value = true;
+          this.#turnScope?.abort();
           await this.#observePermission(attempted);
           this.#finishTurn(true, attempted);
           this.#emitResult({
             ...(finalText !== null ? { text: finalText } : {}),
           });
-          this.#options.onTurnEnd?.({ turnToken, conversationIds });
+          this.#options.onTurnEnd?.({
+            turnToken,
+            conversationIds,
+            terminal: "turn.completed",
+          });
           // Resolve only after the terminal event: at turn.started an existing
           // rollout can still expose the previous turn_context and look
           // spuriously "resolved". Keep this background so filesystem timing
@@ -1610,6 +1669,7 @@ export class CodexHost implements EngineAdapter {
         } else if (event.type === "turn.failed") {
           sawResult = true;
           settled.value = true;
+          this.#turnScope?.abort();
           await this.#observePermission(attempted);
           this.#finishTurn(false, attempted);
           const detail = threadEventToErrorDetail(event);
@@ -1640,6 +1700,7 @@ export class CodexHost implements EngineAdapter {
             turnToken,
             conversationIds,
             error: detail !== null ? { detail } : {},
+            terminal: "turn.failed",
           });
           // Failure paths (429 / max-output / auth error) still write a
           // token_count event to the rollout, so refresh on both branches.
@@ -1661,6 +1722,7 @@ export class CodexHost implements EngineAdapter {
         // event, or process death): fold into the error path so the agent
         // never wedges in thinking/tool_running.
         settled.value = true;
+        this.#turnScope?.abort();
         await this.#observePermission(attempted);
         this.#finishTurn(false, attempted);
         // issue #300: recordedThreadError comes from a stream-level
@@ -1693,6 +1755,7 @@ export class CodexHost implements EngineAdapter {
     } catch (err) {
       // runStreamed rejection or mid-stream throw (exec exited non-zero).
       if (this.#watchdogFailStopped) return;
+      this.#turnScope?.abort();
       if (!sawResult) endSdkBoundary();
       let terminalError: unknown = err;
       if (!sawResult) {
@@ -1872,6 +1935,8 @@ export class CodexHost implements EngineAdapter {
         );
       }
     } finally {
+      this.#turnScope?.abort();
+      this.#turnScope = null;
       this.#abort = null;
       this.#activeTurnToken = null;
       this.#activeTurnConversationIds = [];

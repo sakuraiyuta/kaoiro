@@ -1,10 +1,12 @@
 // `request_session_reset` — the agent-initiated fresh-session tool
 // (phase-28 C2, ADR-0043). Same structural choices as `request_compact`
-// (request_compact.ts): it lives OUTSIDE InterAgentTool#descriptors() because
-// codex builds its stdio bridge from that list and has no reset path, and its
-// absence from the auto-allow default (read_only_tools.ts) is what routes the
-// call through canUseTool → PermissionBroker for per-call operator approval
-// (ADR-0043 D4 / #168 決定 P2).
+// (claude-code/src/request_compact.ts): it lives OUTSIDE
+// InterAgentTool#descriptors(), and each engine adapter registers it behind
+// its own per-call operator approval (ADR-0043 D4 / #168 決定 P2). On Claude
+// its absence from the auto-allow default (read_only_tools.ts) routes the
+// call through canUseTool → PermissionBroker; on codex the adapter wraps it
+// in `operatorApprovalGated` (approval_gate.ts), which calls the same broker
+// from inside the MCP call (issue #347).
 //
 // What differs from B2 is WHEN the effect happens. A compaction is queued as
 // an ordinary turn; a reset kills this wrapper process and relaunches it, so
@@ -14,6 +16,7 @@
 // boundary. The server then applies the same gate operator-initiated resets
 // go through, so a reservation can still be refused after approval.
 
+import { fitsApprovalPayload, MAX_INPUT_BYTES } from "./permission.js";
 import type { ToolDescriptor, ToolResult } from "./tooling.js";
 import { z } from "zod";
 
@@ -69,7 +72,13 @@ function classifyRefusal(reason: string): ResetRefusalOutcome {
 }
 
 const REQUEST_SESSION_RESET_DESCRIPTION =
-  "Ask the operator to approve starting this session over from empty. `mode: \"new\"` keeps the operator's visible transcript and begins a fresh session below it; `mode: \"clear\"` also blanks your pane, leaving only the boundary marker. Either way the new session starts with NO memory of this conversation — unlike compaction, nothing is summarized and nothing is carried across. Write down anything you still need BEFORE calling this: a file, WORKLOG, an issue, a message to a peer. Work that exists only in this conversation is gone once the reset runs. The call returns as soon as the reset is RESERVED; it is applied at the end of the current turn, not immediately, and the server can still refuse it then (you are told in the next turn if it does). Use this when the conversation itself has become the problem — accumulated dead ends, a finished task whose context is now noise — rather than as routine hygiene. If you only need headroom and want to keep continuity, request_compact is the smaller tool.";
+  "Ask the operator to approve starting this session over from empty. `mode: \"new\"` keeps the operator's visible transcript and begins a fresh session below it; `mode: \"clear\"` also blanks your pane, leaving only the boundary marker. Either way the new session starts with NO memory of this conversation — unlike compaction, nothing is summarized and nothing is carried across. Write down anything you still need BEFORE calling this: a file, WORKLOG, an issue, a message to a peer. Work that exists only in this conversation is gone once the reset runs. The call returns as soon as the reset is RESERVED; it is applied at the end of the current turn, not immediately, and the server can still refuse it then (you are told in the next turn if it does). Use this when the conversation itself has become the problem — accumulated dead ends, a finished task whose context is now noise — rather than as routine hygiene.";
+
+/** Appended only where `request_compact` is actually registered (Claude);
+ *  codex has no compaction path and must not be pointed at a tool it
+ *  cannot see. */
+const REQUEST_SESSION_RESET_COMPACT_HINT =
+  " If you only need headroom and want to keep continuity, request_compact is the smaller tool.";
 
 const REQUEST_SESSION_RESET_INPUT_SCHEMA: Record<string, unknown> = {
   type: "object",
@@ -102,16 +111,53 @@ export interface RequestSessionResetOptions {
   /** Records the approved reservation. Fires at the next turn boundary, not
    *  here — see `SessionResetCoordinator`. */
   reserve: (mode: SessionResetMode, reason?: string) => void;
+  /** Whether the description may point the model at `request_compact` as
+   *  the lighter alternative. Default true (Claude registers both); the
+   *  codex adapter passes false because it registers no compaction tool. */
+  offerCompact?: boolean;
 }
 
-/** The `request_session_reset` descriptor. Registered by the Claude adapter's
- *  `buildKaoiroMcpServer`; codex never sees it. */
+/** Validates a `request_session_reset` input before anything acts on it.
+ *  Exported for the codex approval gate, which runs it BEFORE the operator
+ *  is asked: the bridge does not validate against `inputSchema`, so
+ *  without this an oversized `reason` would reach the dialog as
+ *  `truncated` and a malformed mode would fail only after the operator
+ *  already approved. */
+export function validateRequestSessionResetInput(
+  input: Record<string, unknown>,
+): { ok: true } | { ok: false; message: string } {
+  const mode = input.mode;
+  if (mode !== "new" && mode !== "clear") {
+    return {
+      ok: false,
+      message: `needs mode "new" or "clear"; got ${JSON.stringify(mode)}`,
+    };
+  }
+  if (input.reason !== undefined && typeof input.reason !== "string") {
+    return { ok: false, message: "reason must be a string when given" };
+  }
+  if (!fitsApprovalPayload(input)) {
+    return {
+      ok: false,
+      message:
+        `the input is over the ${MAX_INPUT_BYTES} byte approval-payload ` +
+        "ceiling once serialized. Shorten reason and retry.",
+    };
+  }
+  return { ok: true };
+}
+
+/** The `request_session_reset` descriptor. The Claude adapter registers it
+ *  on its SDK MCP server; the codex adapter registers it on the bridge
+ *  wrapped in `operatorApprovalGated`. */
 export function requestSessionResetDescriptor(
   options: RequestSessionResetOptions,
 ): ToolDescriptor {
   return {
     name: "request_session_reset",
-    description: REQUEST_SESSION_RESET_DESCRIPTION,
+    description:
+      REQUEST_SESSION_RESET_DESCRIPTION +
+      (options.offerCompact === false ? "" : REQUEST_SESSION_RESET_COMPACT_HINT),
     inputSchema: REQUEST_SESSION_RESET_INPUT_SCHEMA,
     handler: async (input) => {
       const mode = input.mode;
@@ -172,6 +218,17 @@ export interface SessionResetAccepted {
   requestId: string;
 }
 
+/** How a turn ended, as far as the reset boundary is concerned (issue #347
+ *  M1). `authoritative` is true only when the engine itself declared the
+ *  turn's terminal — a Claude ResultMessage, a codex `turn.completed` /
+ *  `turn.failed`. A stream that merely ended, a rejected run, an interrupt
+ *  or a watchdog stop is NOT a boundary the reset may ride: the turn's
+ *  outcome is unknown and the model was never told its call completed. */
+export interface TurnBoundary {
+  turnToken: string;
+  authoritative: boolean;
+}
+
 /** Holds an approved reset until the wrapper's own turn boundary, then sends
  *  it (ADR-0043 D3).
  *
@@ -181,7 +238,13 @@ export interface SessionResetAccepted {
  *  as if its context were about to be replaced. */
 export class SessionResetCoordinator {
   readonly #options: SessionResetCoordinatorOptions;
-  #reserved: { mode: SessionResetMode; reason?: string } | null = null;
+  /** `owner` is the engine turn that made the reservation, when the
+   *  adapter tracks one; a boundary for any other turn discards it. */
+  #reserved: {
+    mode: SessionResetMode;
+    reason?: string;
+    owner?: string;
+  } | null = null;
   /** True from the moment a reservation is dispatched until its (possibly
    *  retried) outcome is known. A successful request replaces this process,
    *  so the flag mostly guards the failure path from re-entering on the
@@ -203,9 +266,14 @@ export class SessionResetCoordinator {
   /** Records an operator-approved reservation. A second reservation before
    *  the boundary replaces the first: both were approved individually, only
    *  one reset can happen, and the later call is the agent's current
-   *  intent. */
-  reserve(mode: SessionResetMode, reason?: string): void {
-    this.#reserved = { mode, ...(reason !== undefined ? { reason } : {}) };
+   *  intent. `owner` binds it to the engine turn that made it (see
+   *  `TurnBoundary`); adapters without a turn identity omit it. */
+  reserve(mode: SessionResetMode, reason?: string, owner?: string): void {
+    this.#reserved = {
+      mode,
+      ...(reason !== undefined ? { reason } : {}),
+      ...(owner !== undefined ? { owner } : {}),
+    };
   }
 
   /** True while a reservation is waiting for the next turn boundary. */
@@ -230,18 +298,62 @@ export class SessionResetCoordinator {
     }
   }
 
-  /** Call once per turn boundary, AFTER the turn's result has been handled.
+  /** Call once per turn end, AFTER the turn's result has been handled.
    *  Returns immediately; the request runs in the background so a slow or
-   *  retrying server never stalls the host's run loop. */
-  onTurnEnd(): void {
+   *  retrying server never stalls the host's run loop.
+   *
+   *  Without `boundary` (the Claude adapter, whose only turn end is the
+   *  SDK's ResultMessage) every call is a boundary. With it, the
+   *  reservation is consumed either way — dispatched on the owner turn's
+   *  authoritative terminal, discarded with a notice on anything else — so
+   *  it can never ride a later, unrelated turn's end. */
+  onTurnEnd(boundary?: TurnBoundary): void {
     const reservation = this.#reserved;
-    if (reservation === null || this.#dispatching) return;
+    if (reservation === null) return;
+    if (boundary !== undefined) {
+      // An owner-bound reservation cannot be held for a later boundary the
+      // way the unbound (Claude) one is: the next boundary belongs to
+      // another turn and would drop it with a misleading reason. Settle it
+      // now, with the true cause.
+      const why = !boundary.authoritative
+        ? "the turn that reserved it ended without a confirmed result"
+        : reservation.owner !== undefined &&
+            reservation.owner !== boundary.turnToken
+          ? "reserved by a turn that is no longer active"
+          : this.#dispatching
+            ? "another reset request is still in flight"
+            : null;
+      if (why !== null) {
+        this.#reserved = null;
+        void this.#reportCancelled(reservation.mode, why);
+        return;
+      }
+    }
+    if (this.#dispatching) return;
     this.#reserved = null;
     this.#earlyFailure = null;
     this.#dispatching = true;
     void this.#dispatch(reservation).finally(() => {
       this.#dispatching = false;
     });
+  }
+
+  /** A reservation dropped at a non-boundary is reported like a refusal:
+   *  the model was told "reserved" and must not keep acting as if its
+   *  context were about to be replaced. */
+  async #reportCancelled(mode: SessionResetMode, why: string): Promise<void> {
+    this.#options.log(`session reset (${mode}) reservation cancelled: ${why}`);
+    await this.#options
+      .notify(
+        `[kaoiro] The session reset you reserved (mode: ${mode}) was cancelled: ${why}. ` +
+          "Your context is unchanged, so continue as you were. You may request it " +
+          "again at a better moment; the operator has to approve it again.",
+      )
+      .catch((err: unknown) => {
+        this.#options.log(
+          `could not inject the session reset cancellation notice: ${String(err)}`,
+        );
+      });
   }
 
   async #dispatch(reservation: {

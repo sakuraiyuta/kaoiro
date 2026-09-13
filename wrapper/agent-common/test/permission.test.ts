@@ -218,4 +218,58 @@ describe("PermissionBroker", () => {
     await expect(a).resolves.toMatchObject({ allow: false });
     await expect(b).resolves.toMatchObject({ allow: false });
   });
+
+  // issue #347: the request is bound to the lifetime of the tool call that
+  // asked, and the envelope goes out before the host stamp.
+  it("sends permission_request BEFORE onPendingChange (codex emits state inside the stamp)", () => {
+    const order: string[] = [];
+    const broker = new PermissionBroker({
+      config,
+      send: () => order.push("send"),
+      onPendingChange: (pending) => order.push(pending === null ? "clear" : "stamp"),
+      now: () => "T",
+      newId: () => "req-1",
+    });
+    void broker.decide("Bash", {});
+    expect(order).toEqual(["send", "stamp"]);
+  });
+
+  it("signal abort settles the request as a deny and clears the slot", async () => {
+    const events: (PendingPermissionExt | null)[] = [];
+    const { broker, sent } = makeBroker({ onPendingChange: (p) => events.push(p) });
+    const controller = new AbortController();
+    const pending = broker.decide("Bash", {}, controller.signal);
+    expect(sent).toHaveLength(1);
+    controller.abort();
+    await expect(pending).resolves.toMatchObject({
+      allow: false,
+      message: "kaoiro: tool call cancelled",
+    });
+    expect(events.at(-1)).toBeNull();
+    // A late operator answer finds nothing to resolve.
+    broker.resolve({ request_id: "req-1", allow: true });
+    expect(events.at(-1)).toBeNull();
+  });
+
+  it("an already-aborted signal denies without sending a request", async () => {
+    const events: (PendingPermissionExt | null)[] = [];
+    const { broker, sent } = makeBroker({ onPendingChange: (p) => events.push(p) });
+    await expect(broker.decide("Bash", {}, AbortSignal.abort())).resolves.toMatchObject({
+      allow: false,
+    });
+    expect(sent).toHaveLength(0);
+    expect(events).toHaveLength(0);
+  });
+
+  it("removes its abort listener once the request settles", async () => {
+    const { broker } = makeBroker();
+    const controller = new AbortController();
+    const removed = vi.spyOn(controller.signal, "removeEventListener");
+    const pending = broker.decide("Bash", {}, controller.signal);
+    expect(removed).not.toHaveBeenCalled();
+    broker.resolve({ request_id: "req-1", allow: true });
+    await expect(pending).resolves.toMatchObject({ allow: true });
+    expect(removed).toHaveBeenCalledTimes(1);
+    expect(removed.mock.calls[0]![0]).toBe("abort");
+  });
 });

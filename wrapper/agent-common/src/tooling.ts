@@ -23,6 +23,17 @@ export interface ToolResult {
   [extra: string]: unknown;
 }
 
+/** Per-call context an engine adapter MAY hand to a handler. Absent on
+ *  adapters that do not track it (the Claude SDK server, antigravity). */
+export interface ToolHandlerContext {
+  /** Aborts once the call can no longer deliver its result to the model
+   *  or act on its behalf — the owning engine turn ended or was
+   *  interrupted, the bridge connection closed, or the host shut down. A
+   *  handler whose effect outlives the call (a reservation) must check it
+   *  after every await and do nothing once it has fired. */
+  signal?: AbortSignal;
+}
+
 /** One tool: JSON Schema definition + handler pair (ADR-0032 F5). */
 export interface ToolDescriptor {
   /** Bare tool name under the "kaoiro" MCP server (e.g. `send_to_agent`,
@@ -32,5 +43,8 @@ export interface ToolDescriptor {
   /** JSON Schema for the tool input (draft 2020-12 subset both engines
    *  accept). */
   inputSchema: Record<string, unknown>;
-  handler: (input: Record<string, unknown>) => Promise<ToolResult>;
+  handler: (
+    input: Record<string, unknown>,
+    context?: ToolHandlerContext,
+  ) => Promise<ToolResult>;
 }

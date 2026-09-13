@@ -100,13 +100,17 @@ export {
   SESSION_RESET_RETRY_DELAY_MS,
   SessionResetCoordinator,
   requestSessionResetDescriptor,
+  validateRequestSessionResetInput,
 } from "./request_session_reset.js";
 export type {
   RequestSessionResetOptions,
   SessionResetAccepted,
   SessionResetCoordinatorOptions,
   SessionResetMode,
+  TurnBoundary,
 } from "./request_session_reset.js";
+export { operatorApprovalGated } from "./approval_gate.js";
+export type { ApprovalGateOptions } from "./approval_gate.js";
 export {
   initialMachineState,
   makeAttachRejected,
@@ -125,6 +129,7 @@ export {
 export type { MachineState } from "./state.js";
 export type {
   ToolDescriptor,
+  ToolHandlerContext,
   ToolResult,
   ToolResultContent,
 } from "./tooling.js";
