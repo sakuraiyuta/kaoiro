@@ -7,9 +7,10 @@ kaoiro — 複数の CLI AI エージェントの状態をキャラクターと�
 ## Stack
 
 - ラッパー: TypeScript。engine ごとにパッケージを分け、Claude Code は
-  Claude Agent SDK(`@anthropic-ai/claude-agent-sdk`)、Codex は Codex SDK を
-  ホストする(`core` / `agent-common` / `claude-code` / `codex` の 4
-  パッケージ — ADR-0017 / ADR-0032)
+  Claude Agent SDK(`@anthropic-ai/claude-agent-sdk`)、Codex は Codex SDK、
+  Antigravity は Antigravity CLI をホストする(`core` / `agent-common` /
+  `claude-code` / `codex` / `antigravity` の 5 パッケージ — ADR-0017 /
+  ADR-0032 / ADR-0057)
 - サーバ: Elixir / OTP + Phoenix
 - クライアント: Web(TypeScript)。同梱ダッシュボードは Svelte 5 + Vite
   (`dashboard/`、pnpm workspace の非メンバで独立ルート・独立 lockfile)
