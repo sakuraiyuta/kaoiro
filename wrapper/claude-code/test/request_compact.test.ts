@@ -19,7 +19,7 @@ import {
   REQUEST_SESSION_RESET_INPUT_SHAPE,
   REQUEST_SESSION_RESET_TOOL_FQN,
   requestSessionResetDescriptor,
-} from "../src/request_session_reset.js";
+} from "@kaoiro/agent-common";
 import { kaoiroToolDescriptors } from "../src/inter_agent_sdk.js";
 import { READ_ONLY_TOOLS } from "../src/read_only_tools.js";
 import {

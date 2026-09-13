@@ -56,7 +56,7 @@ import {
   REQUEST_SESSION_RESET_INPUT_SHAPE,
   SessionResetCoordinator,
   requestSessionResetDescriptor,
-} from "./request_session_reset.js";
+} from "@kaoiro/agent-common";
 import { PermissionBroker } from "@kaoiro/agent-common";
 import { PERMISSION_MODES, loadConfig } from "@kaoiro/wrapper-core";
 import { QuestionBroker } from "@kaoiro/agent-common";

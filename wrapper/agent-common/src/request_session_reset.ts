@@ -14,7 +14,7 @@
 // boundary. The server then applies the same gate operator-initiated resets
 // go through, so a reservation can still be refused after approval.
 
-import type { ToolDescriptor, ToolResult } from "@kaoiro/agent-common";
+import type { ToolDescriptor, ToolResult } from "./tooling.js";
 import { z } from "zod";
 
 /** Full SDK-side tool name once mcpServers register the kaoiro server. */
