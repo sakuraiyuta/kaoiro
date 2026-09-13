@@ -744,14 +744,30 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     // resulting notice envelope(s) straight through ServerLink — this
     // bypasses the model/tool path entirely since the turn just failed to
     // produce one, so no broker approval applies.
-    onTurnEnd: ({ turnToken, conversationIds, error, cancellation, terminal }) => {
+    onTurnEnd: ({
+      turnToken,
+      conversationIds,
+      error,
+      cancellation,
+      terminal,
+      interrupted,
+    }) => {
       // ADR-0043 D3 on codex (issue #347 M1): only an SDK-declared terminal
       // is the reset boundary. `terminal` is set by the host on exactly
       // those two paths; a cancellation, a terminal-less EOF or a rejected
-      // run leaves it unset and the coordinator drops the reservation.
+      // run leaves it unset and the coordinator drops the reservation. A
+      // terminal the SDK delivered after an operator interrupt is an
+      // observation only (review R2): the operator cut the turn short, so
+      // the reservation it carried does not run.
       sessionReset.onTurnEnd({
         turnToken,
-        authoritative: terminal !== undefined && !watchdogFailStopped,
+        authoritative:
+          terminal !== undefined && !watchdogFailStopped && interrupted === undefined,
+        ...(interrupted === undefined
+          ? {}
+          : {
+              why: `the ${interrupted === "operator" ? "operator" : "turn watchdog"} interrupted the turn that reserved it`,
+            }),
       });
       if (cancellation?.kind === "watchdog_fail_stop") {
         // A watchdog cancellation is for a never-started token. Resolve its

@@ -478,16 +478,18 @@ describe("codex request_session_reset gate (issue #347)", () => {
     }
   });
 
-  it("an interrupt in the same task as the allow wins: nothing is reserved", async () => {
+  it("an operator interrupt in the same task as the allow wins: nothing is reserved (review R1)", async () => {
     const script: TurnScript = { tool: true, ending: deferred<Ending>() };
     const later: TurnScript = { tool: false, ending: deferred<Ending>() };
     const rig = await makeRig([script, later]);
     try {
-      const token = await startToolTurn(rig);
+      await startToolTurn(rig);
       const bridge = await rig.bridge();
       const { reply, requestId } = await askForReset(rig, bridge);
       rig.linkOptions.onPermissionDecision({ request_id: requestId, allow: true });
-      expect(rig.host.requestInterruptForTurn(token)).toBe(true);
+      // The production entry point, not the watchdog helper: host.interrupt()
+      // must invalidate the allow before its first await.
+      (rig.linkOptions.onInterrupt as () => void)();
       const result = await reply;
       expect((result.result as { isError?: boolean }).isError).toBe(true);
       await (rig.linkOptions.onInstruction as (text: string) => void)("carry on");
@@ -495,6 +497,68 @@ describe("codex request_session_reset gate (issue #347)", () => {
         expect(rig.sent.filter((e) => e.type === "result")).toHaveLength(2),
       );
       expect(rig.requests).toHaveLength(0);
+      bridge.destroy();
+    } finally {
+      await finish(rig);
+    }
+  });
+
+  for (const ending of ["completed", "failed"] as const) {
+    it(`a terminal (${ending}) already produced when the operator interrupts does not carry the reservation (review R2)`, async () => {
+      const script: TurnScript = { tool: true, ending: deferred<Ending>() };
+      const notice: TurnScript = { tool: false, ending: deferred<Ending>() };
+      const rig = await makeRig([script, notice]);
+      try {
+        await startToolTurn(rig);
+        const bridge = await rig.bridge();
+        const { reply, requestId } = await askForReset(rig, bridge);
+        rig.linkOptions.onPermissionDecision({ request_id: requestId, allow: true });
+        await reply;
+        // The SDK terminal is ready before the abort can win the race, so
+        // the host still observes turn.${ending} after the interrupt.
+        script.ending.resolve(ending);
+        (rig.linkOptions.onInterrupt as () => void)();
+        await vi.waitFor(() =>
+          expect(rig.sent.filter((e) => e.type === "result").length).toBeGreaterThan(0),
+        );
+        // The cancellation notice turn completes on its own; still nothing.
+        await vi.waitFor(() => expect(rig.turnTokens).toHaveLength(2));
+        await vi.waitFor(() =>
+          expect(rig.sent.filter((e) => e.type === "result")).toHaveLength(2),
+        );
+        expect(rig.requests).toHaveLength(0);
+        expect(
+          stderr.mock.calls.some(([line]) =>
+            String(line).includes("the operator interrupted the turn that reserved it"),
+          ),
+        ).toBe(true);
+        bridge.destroy();
+      } finally {
+        await finish(rig);
+      }
+    });
+  }
+
+  it("a watchdog interrupt names the watchdog, not the operator, in the cancellation", async () => {
+    const script: TurnScript = { tool: true, ending: deferred<Ending>() };
+    const notice: TurnScript = { tool: false, ending: deferred<Ending>() };
+    const rig = await makeRig([script, notice]);
+    try {
+      const token = await startToolTurn(rig);
+      const bridge = await rig.bridge();
+      const { reply, requestId } = await askForReset(rig, bridge);
+      rig.linkOptions.onPermissionDecision({ request_id: requestId, allow: true });
+      await reply;
+      script.ending.resolve("failed");
+      expect(rig.host.requestInterruptForTurn(token)).toBe(true);
+      await vi.waitFor(() => expect(rig.turnTokens).toHaveLength(2));
+      await vi.waitFor(() =>
+        expect(rig.sent.filter((e) => e.type === "result")).toHaveLength(2),
+      );
+      expect(rig.requests).toHaveLength(0);
+      const lines = stderr.mock.calls.map(([line]) => String(line));
+      expect(lines.some((l) => l.includes("the turn watchdog interrupted the turn that reserved it"))).toBe(true);
+      expect(lines.some((l) => l.includes("the operator interrupted"))).toBe(false);
       bridge.destroy();
     } finally {
       await finish(rig);

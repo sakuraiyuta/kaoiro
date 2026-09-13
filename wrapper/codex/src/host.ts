@@ -313,6 +313,11 @@ export interface CodexHostOptions {
      * session reset, ADR-0043 D3) reads this rather than inferring from
      * `error` (issue #347 M1). */
     terminal?: "turn.completed" | "turn.failed";
+    /** Set when an interrupt was requested for this turn before its end,
+     * naming who asked. Kept separate from `terminal`: the SDK may still
+     * deliver a terminal it had already produced, and that observation must
+     * not make an interrupted turn eligible for a deferred reset. */
+    interrupted?: "operator" | "watchdog";
   }) => void;
   /** The exact boundary at which an already-queued input begins an SDK turn.
    * Queue insertion intentionally does not count as dispatch (#247). */
@@ -647,6 +652,16 @@ export class CodexHost implements EngineAdapter {
    * that wait created. Distinct from `#abort`, the SDK-facing signal: that
    * one is only ever aborted to cut the SDK short, never on normal end. */
   #turnScope: AbortController | null = null;
+  /** Who interrupted the active turn before its end, if anyone. Recorded
+   * synchronously at the interrupt entry, before any await, and reported on
+   * the turn's `onTurnEnd` even when the SDK still delivers a terminal it
+   * had already produced: an interrupted turn's terminal is an observation,
+   * not a boundary a deferred reset may ride (issue #347 review R2). Only
+   * set while the turn scope is still live — a terminal branch aborts the
+   * scope first, so an interrupt landing after the terminal was observed
+   * does not retroactively mark a finished turn. Cleared when the next turn
+   * takes the token. */
+  #turnInterrupted: "operator" | "watchdog" | null = null;
   /** Present only while the SDK is executing one host turn. */
   #activeTurnToken: string | null = null;
   #activeTurnConversationIds: readonly string[] = [];
@@ -954,13 +969,22 @@ export class CodexHost implements EngineAdapter {
   }
 
   async interrupt(): Promise<void> {
+    // Before the first await: an operator interrupt in the same task as
+    // an operator "allow" must already have invalidated that allow when the
+    // gated handler's continuation runs (issue #347 review R1).
+    this.#markTurnInterrupted("operator");
     this.#lifecycleGeneration += 1;
     this.#permissionCloseWake?.();
     this.#permissionDispatchWake?.();
     this.#dropPendingUploads("interrupted");
     await this.#dropQueuedTempTurns();
-    this.#turnScope?.abort();
     this.#abort?.abort();
+  }
+
+  #markTurnInterrupted(by: "operator" | "watchdog"): void {
+    const scope = this.#turnScope;
+    if (scope !== null && !scope.signal.aborted) this.#turnInterrupted = by;
+    scope?.abort();
   }
 
   /** Requests an interrupt only while this exact token owns the SDK turn.
@@ -973,7 +997,7 @@ export class CodexHost implements EngineAdapter {
     ) {
       return false;
     }
-    this.#turnScope?.abort();
+    this.#markTurnInterrupted("watchdog");
     this.#abort?.abort();
     return true;
   }
@@ -1462,6 +1486,7 @@ export class CodexHost implements EngineAdapter {
     this.#activeTurnToken = turnToken;
     this.#activeTurnConversationIds = conversationIds;
     this.#turnScope = new AbortController();
+    this.#turnInterrupted = null;
     const resolutionGeneration = ++this.#modelResolutionGeneration;
     const attempted = {
       model: this.#modelPending,
@@ -1654,6 +1679,9 @@ export class CodexHost implements EngineAdapter {
             turnToken,
             conversationIds,
             terminal: "turn.completed",
+            ...(this.#turnInterrupted !== null
+              ? { interrupted: this.#turnInterrupted }
+              : {}),
           });
           // Resolve only after the terminal event: at turn.started an existing
           // rollout can still expose the previous turn_context and look
@@ -1701,6 +1729,9 @@ export class CodexHost implements EngineAdapter {
             conversationIds,
             error: detail !== null ? { detail } : {},
             terminal: "turn.failed",
+            ...(this.#turnInterrupted !== null
+              ? { interrupted: this.#turnInterrupted }
+              : {}),
           });
           // Failure paths (429 / max-output / auth error) still write a
           // token_count event to the rollout, so refresh on both branches.

@@ -422,7 +422,51 @@ describe("SessionResetCoordinator — turn boundaries", () => {
     expect(coordinator.pending).toBe(false);
     expect(h.notices).toHaveLength(1);
     expect(h.notices[0]).toContain("another reset request is still in flight");
+    // The earlier request's outcome is still open, so the notice must not
+    // promise an unchanged context or invite another request (review N1).
+    expect(h.notices[0]).toContain("earlier reset request is still being carried out");
+    expect(h.notices[0]).not.toContain("context is unchanged");
+    expect(h.notices[0]).not.toContain("You may request it again");
     release({ requestId: "rs-1" });
+  });
+
+  it("keeps the prior-pending wording on every drop while a dispatch is in flight", async () => {
+    let release!: (value: SessionResetAccepted) => void;
+    const notices: string[] = [];
+    const coordinator = new SessionResetCoordinator({
+      request: () =>
+        new Promise<SessionResetAccepted>((resolve) => {
+          release = resolve;
+        }),
+      notify: async (text) => {
+        notices.push(text);
+      },
+      log: () => {},
+    });
+    coordinator.reserve("new", undefined, "turn-A");
+    coordinator.onTurnEnd({ turnToken: "turn-A", authoritative: true });
+    // turn-B reserves during turn-A's dispatch and is then interrupted.
+    coordinator.reserve("clear", undefined, "turn-B");
+    coordinator.onTurnEnd({ turnToken: "turn-B", authoritative: false });
+    await settle();
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain("earlier reset request is still being carried out");
+    expect(notices[0]).not.toContain("context is unchanged");
+    release({ requestId: "rs-1" });
+  });
+
+  it("uses the adapter's cause for a non-authoritative end when given", async () => {
+    const h = harness([{ requestId: "rs-1" }]);
+    h.coordinator.reserve("new", undefined, "turn-A");
+    h.coordinator.onTurnEnd({
+      turnToken: "turn-A",
+      authoritative: false,
+      why: "the operator interrupted the turn that reserved it",
+    });
+    await settle();
+    expect(h.requests).toHaveLength(0);
+    expect(h.notices[0]).toContain("the operator interrupted the turn that reserved it");
+    expect(h.notices[0]).toContain("context is unchanged");
   });
 
   it("an unowned reservation keeps the Claude semantics: any boundary dispatches", async () => {

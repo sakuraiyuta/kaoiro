@@ -227,6 +227,10 @@ export interface SessionResetAccepted {
 export interface TurnBoundary {
   turnToken: string;
   authoritative: boolean;
+  /** Adapter-supplied cause for a non-authoritative end, used verbatim in
+   *  the agent's cancellation notice (e.g. an operator interrupt whose
+   *  terminal the SDK still delivered). Default wording when absent. */
+  why?: string;
 }
 
 /** Holds an approved reset until the wrapper's own turn boundary, then sends
@@ -314,9 +318,13 @@ export class SessionResetCoordinator {
       // An owner-bound reservation cannot be held for a later boundary the
       // way the unbound (Claude) one is: the next boundary belongs to
       // another turn and would drop it with a misleading reason. Settle it
-      // now, with the true cause.
+      // now, with the true cause. What the notice may promise depends on
+      // whether an earlier request is still being carried out, whichever
+      // branch drops this one.
+      const outcome = this.#dispatching ? "prior_pending" : "unchanged";
       const why = !boundary.authoritative
-        ? "the turn that reserved it ended without a confirmed result"
+        ? (boundary.why ??
+          "the turn that reserved it ended without a confirmed result")
         : reservation.owner !== undefined &&
             reservation.owner !== boundary.turnToken
           ? "reserved by a turn that is no longer active"
@@ -325,7 +333,7 @@ export class SessionResetCoordinator {
             : null;
       if (why !== null) {
         this.#reserved = null;
-        void this.#reportCancelled(reservation.mode, why);
+        void this.#reportCancelled(reservation.mode, why, outcome);
         return;
       }
     }
@@ -340,15 +348,29 @@ export class SessionResetCoordinator {
 
   /** A reservation dropped at a non-boundary is reported like a refusal:
    *  the model was told "reserved" and must not keep acting as if its
-   *  context were about to be replaced. */
-  async #reportCancelled(mode: SessionResetMode, why: string): Promise<void> {
+   *  context were about to be replaced. `outcome` says what the notice may
+   *  promise: `unchanged` — no reset of any kind is pending, so the
+   *  context stays; `prior_pending` — only this later reservation was
+   *  dropped while an earlier request is still being carried out, so
+   *  nothing about the context can be promised yet. */
+  async #reportCancelled(
+    mode: SessionResetMode,
+    why: string,
+    outcome: "unchanged" | "prior_pending",
+  ): Promise<void> {
     this.#options.log(`session reset (${mode}) reservation cancelled: ${why}`);
-    await this.#options
-      .notify(
-        `[kaoiro] The session reset you reserved (mode: ${mode}) was cancelled: ${why}. ` +
+    const text =
+      outcome === "unchanged"
+        ? `[kaoiro] The session reset you reserved (mode: ${mode}) was cancelled: ${why}. ` +
           "Your context is unchanged, so continue as you were. You may request it " +
-          "again at a better moment; the operator has to approve it again.",
-      )
+          "again at a better moment; the operator has to approve it again."
+        : `[kaoiro] The session reset you reserved (mode: ${mode}) was cancelled: ${why}. ` +
+          "Only this later reservation was dropped; the earlier reset request is " +
+          "still being carried out and its outcome is not known yet. Do not request " +
+          "another reset, and keep anything you still need written somewhere durable " +
+          "until the earlier request is resolved.";
+    await this.#options
+      .notify(text)
       .catch((err: unknown) => {
         this.#options.log(
           `could not inject the session reset cancellation notice: ${String(err)}`,
