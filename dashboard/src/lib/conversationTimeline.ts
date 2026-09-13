@@ -1,6 +1,7 @@
 // 実機検収 3 (2026-07-23 マスター指示): 右ペインを per-agent 最終応答
 // 一覧から「全 agent の会話ログを時系列マージ」に切り替えるための
-// 純関数モジュール。 latestReply.ts と対の位置付け。
+// 純関数モジュール。旧 latestReply.ts (per-agent 最終応答一覧側) は
+// consumer を失い issue #296 で削除、本モジュールが実質の後継。
 //
 // 含める envelope:
 //   - log kind=assistant  → agent の応答
@@ -25,7 +26,7 @@
 
 import { transcriptEntryKey, type Envelope } from "./protocol";
 
-/** 1 行のプレビュー最大文字数。 latestReply.ts と同じ 80 で揃える。 */
+/** 1 行のプレビュー最大文字数。 */
 export const SUMMARY_MAX_CHARS = 80;
 
 export type EntryKind = "user" | "agent" | "inter_agent";

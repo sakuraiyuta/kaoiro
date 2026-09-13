@@ -1,12 +1,11 @@
 // @vitest-environment jsdom
 // phase-28 A1 (#168): log kind="system" — session-level events the wrapper
 // observed (context compaction, conversation reset), which are neither party
-// speaking. Pins that AgentDetail renders them AND that they stay out of the
-// "latest reply" timeline, which is the whole reason they are not `assistant`.
+// speaking. Pins that AgentDetail renders them as their own line, not as an
+// assistant/user bubble.
 import { mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AgentDetail from "../src/lib/AgentDetail.svelte";
-import { latestReplies } from "../src/lib/latestReply";
 import type { Envelope } from "../src/lib/protocol";
 
 let component: object | null = null;
@@ -80,9 +79,5 @@ describe("log kind=system rendering (phase-28 A1 / #168)", () => {
     const target = await render([systemLog]);
     expect(target.querySelector(".msg.assistant")).toBeNull();
     expect(target.querySelector(".msg.user")).toBeNull();
-  });
-
-  it("返答タイムラインには載らない (assistant で代用しない理由)", () => {
-    expect(latestReplies({ "agent-a": [systemLog] })).toEqual([]);
   });
 });
