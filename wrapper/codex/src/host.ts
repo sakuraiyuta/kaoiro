@@ -163,6 +163,18 @@ type PermissionDispatchWait = {
   blocked: { revision: number; reason: string } | null;
 };
 
+/** Why a live host turn was abandoned from outside before its own end.
+ *  Every entry point that invalidates the turn scope for such a reason
+ *  records one of these (`#abandonTurn`), and `onTurnEnd` reports it next
+ *  to the SDK terminal it may still deliver — the terminal is then an
+ *  observation, never a boundary a deferred reset may ride (issue #347
+ *  reviews R2 / R3). */
+export type TurnAbandonment =
+  | "operator_interrupt"
+  | "watchdog_interrupt"
+  | "watchdog_fail_stop"
+  | "host_close";
+
 export type CodexLifecycleEvent =
   | { kind: "turn_start"; turnToken: string }
   | { kind: "sdk_event"; turnToken: string; type: string }
@@ -313,11 +325,11 @@ export interface CodexHostOptions {
      * session reset, ADR-0043 D3) reads this rather than inferring from
      * `error` (issue #347 M1). */
     terminal?: "turn.completed" | "turn.failed";
-    /** Set when an interrupt was requested for this turn before its end,
-     * naming who asked. Kept separate from `terminal`: the SDK may still
+    /** Set when the turn was abandoned from outside before its end (see
+     * `TurnAbandonment`). Kept separate from `terminal`: the SDK may still
      * deliver a terminal it had already produced, and that observation must
-     * not make an interrupted turn eligible for a deferred reset. */
-    interrupted?: "operator" | "watchdog";
+     * not make an abandoned turn eligible for a deferred reset. */
+    abandoned?: TurnAbandonment;
   }) => void;
   /** The exact boundary at which an already-queued input begins an SDK turn.
    * Queue insertion intentionally does not count as dispatch (#247). */
@@ -652,16 +664,14 @@ export class CodexHost implements EngineAdapter {
    * that wait created. Distinct from `#abort`, the SDK-facing signal: that
    * one is only ever aborted to cut the SDK short, never on normal end. */
   #turnScope: AbortController | null = null;
-  /** Who interrupted the active turn before its end, if anyone. Recorded
-   * synchronously at the interrupt entry, before any await, and reported on
-   * the turn's `onTurnEnd` even when the SDK still delivers a terminal it
-   * had already produced: an interrupted turn's terminal is an observation,
-   * not a boundary a deferred reset may ride (issue #347 review R2). Only
-   * set while the turn scope is still live — a terminal branch aborts the
-   * scope first, so an interrupt landing after the terminal was observed
-   * does not retroactively mark a finished turn. Cleared when the next turn
-   * takes the token. */
-  #turnInterrupted: "operator" | "watchdog" | null = null;
+  /** How the active turn was abandoned before its end, if it was. Set only
+   * through `#abandonTurn`, synchronously at each entry point and before any
+   * await there, and only while the turn scope is still live — the turn's
+   * own ends (`#endTurnScope`: terminal, EOF, rejected run) close the scope
+   * first, so an abandonment landing after the terminal was observed does
+   * not retroactively mark a finished turn. Cleared when the next turn takes
+   * the token. */
+  #turnAbandoned: TurnAbandonment | null = null;
   /** Present only while the SDK is executing one host turn. */
   #activeTurnToken: string | null = null;
   #activeTurnConversationIds: readonly string[] = [];
@@ -972,7 +982,7 @@ export class CodexHost implements EngineAdapter {
     // Before the first await: an operator interrupt in the same task as
     // an operator "allow" must already have invalidated that allow when the
     // gated handler's continuation runs (issue #347 review R1).
-    this.#markTurnInterrupted("operator");
+    this.#abandonTurn("operator_interrupt");
     this.#lifecycleGeneration += 1;
     this.#permissionCloseWake?.();
     this.#permissionDispatchWake?.();
@@ -981,10 +991,21 @@ export class CodexHost implements EngineAdapter {
     this.#abort?.abort();
   }
 
-  #markTurnInterrupted(by: "operator" | "watchdog"): void {
+  /** The single entry through which a live turn loses its deferred-reset
+   * eligibility from outside. Records the cause only while the scope is
+   * still live (see `#turnAbandoned`), then closes the scope so pending
+   * bridge tool waits settle. */
+  #abandonTurn(cause: TurnAbandonment): void {
     const scope = this.#turnScope;
-    if (scope !== null && !scope.signal.aborted) this.#turnInterrupted = by;
+    if (scope !== null && !scope.signal.aborted) this.#turnAbandoned = cause;
     scope?.abort();
+  }
+
+  /** The turn's own end: closes the scope without recording an abandonment.
+   * Called at the top of every terminal / EOF / rejection path, before the
+   * terminal state is emitted, and once more in `finally`. */
+  #endTurnScope(): void {
+    this.#turnScope?.abort();
   }
 
   /** Requests an interrupt only while this exact token owns the SDK turn.
@@ -997,7 +1018,7 @@ export class CodexHost implements EngineAdapter {
     ) {
       return false;
     }
-    this.#markTurnInterrupted("watchdog");
+    this.#abandonTurn("watchdog_interrupt");
     this.#abort?.abort();
     return true;
   }
@@ -1029,7 +1050,7 @@ export class CodexHost implements EngineAdapter {
     this.#closed = true;
     if (this.#gcTimer !== null) clearInterval(this.#gcTimer);
     this.#gcTimer = null;
-    this.#turnScope?.abort();
+    this.#abandonTurn("watchdog_fail_stop");
     this.#machine = initialMachineState("error");
     this.#emitState("error");
 
@@ -1085,7 +1106,10 @@ export class CodexHost implements EngineAdapter {
     if (this.#gcTimer !== null) clearInterval(this.#gcTimer);
     this.#gcTimer = null;
     void this.#dropQueuedTempTurns();
-    this.#turnScope?.abort();
+    // Recorded before the SDK abort: a terminal the SDK already produced
+    // may still be delivered, and it must not carry a reservation out of a
+    // wrapper that is shutting down (issue #347 review R3).
+    this.#abandonTurn("host_close");
     this.#abort?.abort();
     this.#permissionCloseWake?.();
     this.#permissionDispatchWake?.();
@@ -1486,7 +1510,7 @@ export class CodexHost implements EngineAdapter {
     this.#activeTurnToken = turnToken;
     this.#activeTurnConversationIds = conversationIds;
     this.#turnScope = new AbortController();
-    this.#turnInterrupted = null;
+    this.#turnAbandoned = null;
     const resolutionGeneration = ++this.#modelResolutionGeneration;
     const attempted = {
       model: this.#modelPending,
@@ -1669,7 +1693,7 @@ export class CodexHost implements EngineAdapter {
         if (event.type === "turn.completed") {
           sawResult = true;
           settled.value = true;
-          this.#turnScope?.abort();
+          this.#endTurnScope();
           await this.#observePermission(attempted);
           this.#finishTurn(true, attempted);
           this.#emitResult({
@@ -1679,8 +1703,8 @@ export class CodexHost implements EngineAdapter {
             turnToken,
             conversationIds,
             terminal: "turn.completed",
-            ...(this.#turnInterrupted !== null
-              ? { interrupted: this.#turnInterrupted }
+            ...(this.#turnAbandoned !== null
+              ? { abandoned: this.#turnAbandoned }
               : {}),
           });
           // Resolve only after the terminal event: at turn.started an existing
@@ -1697,7 +1721,7 @@ export class CodexHost implements EngineAdapter {
         } else if (event.type === "turn.failed") {
           sawResult = true;
           settled.value = true;
-          this.#turnScope?.abort();
+          this.#endTurnScope();
           await this.#observePermission(attempted);
           this.#finishTurn(false, attempted);
           const detail = threadEventToErrorDetail(event);
@@ -1729,8 +1753,8 @@ export class CodexHost implements EngineAdapter {
             conversationIds,
             error: detail !== null ? { detail } : {},
             terminal: "turn.failed",
-            ...(this.#turnInterrupted !== null
-              ? { interrupted: this.#turnInterrupted }
+            ...(this.#turnAbandoned !== null
+              ? { abandoned: this.#turnAbandoned }
               : {}),
           });
           // Failure paths (429 / max-output / auth error) still write a
@@ -1753,7 +1777,7 @@ export class CodexHost implements EngineAdapter {
         // event, or process death): fold into the error path so the agent
         // never wedges in thinking/tool_running.
         settled.value = true;
-        this.#turnScope?.abort();
+        this.#endTurnScope();
         await this.#observePermission(attempted);
         this.#finishTurn(false, attempted);
         // issue #300: recordedThreadError comes from a stream-level
@@ -1786,7 +1810,7 @@ export class CodexHost implements EngineAdapter {
     } catch (err) {
       // runStreamed rejection or mid-stream throw (exec exited non-zero).
       if (this.#watchdogFailStopped) return;
-      this.#turnScope?.abort();
+      this.#endTurnScope();
       if (!sawResult) endSdkBoundary();
       let terminalError: unknown = err;
       if (!sawResult) {
@@ -1966,7 +1990,7 @@ export class CodexHost implements EngineAdapter {
         );
       }
     } finally {
-      this.#turnScope?.abort();
+      this.#endTurnScope();
       this.#turnScope = null;
       this.#abort = null;
       this.#activeTurnToken = null;

@@ -503,67 +503,72 @@ describe("codex request_session_reset gate (issue #347)", () => {
     }
   });
 
-  for (const ending of ["completed", "failed"] as const) {
-    it(`a terminal (${ending}) already produced when the operator interrupts does not carry the reservation (review R2)`, async () => {
-      const script: TurnScript = { tool: true, ending: deferred<Ending>() };
-      const notice: TurnScript = { tool: false, ending: deferred<Ending>() };
-      const rig = await makeRig([script, notice]);
-      try {
-        await startToolTurn(rig);
-        const bridge = await rig.bridge();
-        const { reply, requestId } = await askForReset(rig, bridge);
-        rig.linkOptions.onPermissionDecision({ request_id: requestId, allow: true });
-        await reply;
-        // The SDK terminal is ready before the abort can win the race, so
-        // the host still observes turn.${ending} after the interrupt.
-        script.ending.resolve(ending);
-        (rig.linkOptions.onInterrupt as () => void)();
-        await vi.waitFor(() =>
-          expect(rig.sent.filter((e) => e.type === "result").length).toBeGreaterThan(0),
-        );
-        // The cancellation notice turn completes on its own; still nothing.
-        await vi.waitFor(() => expect(rig.turnTokens).toHaveLength(2));
-        await vi.waitFor(() =>
-          expect(rig.sent.filter((e) => e.type === "result")).toHaveLength(2),
-        );
-        expect(rig.requests).toHaveLength(0);
-        expect(
-          stderr.mock.calls.some(([line]) =>
-            String(line).includes("the operator interrupted the turn that reserved it"),
-          ),
-        ).toBe(true);
-        bridge.destroy();
-      } finally {
-        await finish(rig);
-      }
-    });
-  }
+  // Every entry that abandons a live turn from outside (reviews R2 / R3):
+  // a terminal the SDK had already produced must not carry the reservation,
+  // and the cancellation names the actual cause.
+  const ABANDON_ENTRIES: Record<
+    string,
+    { act: (rig: Rig, token: string) => void; cause: string; noticeTurn: boolean }
+  > = {
+    operator: {
+      act: (rig) => (rig.linkOptions.onInterrupt as () => void)(),
+      cause: "the operator interrupted the turn that reserved it",
+      noticeTurn: true,
+    },
+    watchdog: {
+      act: (rig, token) => {
+        expect(rig.host.requestInterruptForTurn(token)).toBe(true);
+      },
+      cause: "the turn watchdog interrupted the turn that reserved it",
+      noticeTurn: true,
+    },
+    close: {
+      act: (rig) => rig.host.close(),
+      cause: "the wrapper shut down before the turn that reserved it ended",
+      noticeTurn: false,
+    },
+  };
 
-  it("a watchdog interrupt names the watchdog, not the operator, in the cancellation", async () => {
-    const script: TurnScript = { tool: true, ending: deferred<Ending>() };
-    const notice: TurnScript = { tool: false, ending: deferred<Ending>() };
-    const rig = await makeRig([script, notice]);
-    try {
-      const token = await startToolTurn(rig);
-      const bridge = await rig.bridge();
-      const { reply, requestId } = await askForReset(rig, bridge);
-      rig.linkOptions.onPermissionDecision({ request_id: requestId, allow: true });
-      await reply;
-      script.ending.resolve("failed");
-      expect(rig.host.requestInterruptForTurn(token)).toBe(true);
-      await vi.waitFor(() => expect(rig.turnTokens).toHaveLength(2));
-      await vi.waitFor(() =>
-        expect(rig.sent.filter((e) => e.type === "result")).toHaveLength(2),
-      );
-      expect(rig.requests).toHaveLength(0);
-      const lines = stderr.mock.calls.map(([line]) => String(line));
-      expect(lines.some((l) => l.includes("the turn watchdog interrupted the turn that reserved it"))).toBe(true);
-      expect(lines.some((l) => l.includes("the operator interrupted"))).toBe(false);
-      bridge.destroy();
-    } finally {
-      await finish(rig);
+  for (const [entry, { act, cause, noticeTurn }] of Object.entries(ABANDON_ENTRIES)) {
+    for (const ending of ["completed", "failed"] as const) {
+      it(`${entry}: a terminal (${ending}) already produced when the turn is abandoned does not carry the reservation`, async () => {
+        const script: TurnScript = { tool: true, ending: deferred<Ending>() };
+        const notice: TurnScript = { tool: false, ending: deferred<Ending>() };
+        const rig = await makeRig([script, notice]);
+        try {
+          const token = await startToolTurn(rig);
+          const bridge = await rig.bridge();
+          const { reply, requestId } = await askForReset(rig, bridge);
+          rig.linkOptions.onPermissionDecision({ request_id: requestId, allow: true });
+          await reply;
+          // The SDK terminal is ready before the abort can win the race, so
+          // the host still observes turn.${ending} after the abandonment.
+          script.ending.resolve(ending);
+          act(rig, token);
+          if (noticeTurn) {
+            // The cancellation notice turn completes on its own; still nothing.
+            await vi.waitFor(() => expect(rig.turnTokens).toHaveLength(2));
+            await vi.waitFor(() =>
+              expect(rig.sent.filter((e) => e.type === "result")).toHaveLength(2),
+            );
+          } else {
+            await rig.done;
+          }
+          expect(rig.requests).toHaveLength(0);
+          const lines = stderr.mock.calls.map(([line]) => String(line));
+          expect(lines.some((l) => l.includes(cause))).toBe(true);
+          for (const other of Object.values(ABANDON_ENTRIES)) {
+            if (other.cause !== cause) {
+              expect(lines.some((l) => l.includes(other.cause))).toBe(false);
+            }
+          }
+          bridge.destroy();
+        } finally {
+          await finish(rig);
+        }
+      });
     }
-  });
+  }
 
   it("a call with no active turn is denied without a dialog", async () => {
     const script: TurnScript = { tool: false, ending: deferred<Ending>() };

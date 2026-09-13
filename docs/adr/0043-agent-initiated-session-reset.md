@@ -187,12 +187,13 @@ generalize embedded compact summaries to new/clear.
     same way through the host's per-turn scope signal, and a reservation
     already made by such a turn is dropped with a notice to the agent. On
     Codex only an SDK-declared terminal (`turn.completed` / `turn.failed`)
-    is the boundary that sends the reservation — and not even that when an
-    interrupt (operator or turn watchdog) was requested for the turn before
-    its end: the interrupt is recorded synchronously at its entry point, so
-    a terminal the SDK had already produced is an observation only and the
-    reservation is dropped, naming who interrupted. An interrupt that lands
-    after the terminal was observed does not retroactively drop it.
+    is the boundary that sends the reservation — and not even that when the
+    turn was abandoned from outside before its end (operator interrupt, turn
+    watchdog interrupt or fail-stop, wrapper close). Every such entry records
+    the cause synchronously through one host routine, so a terminal the SDK
+    had already produced is an observation only and the reservation is
+    dropped, naming the cause. An abandonment that lands after the terminal
+    was observed does not retroactively drop it.
   - `request_compact` stays Claude-only: Codex SDK 0.153.4 exposes no
     compaction entry point (`dist/` carries no such symbol; `codex exec
     --help` offers none; measured 2026-09-14). Whether a `/compact` prompt

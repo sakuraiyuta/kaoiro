@@ -52,6 +52,7 @@ import {
   CODEX_APPROVAL_TIMEOUT_MS,
   CodexHost,
   type CodexLifecycleEvent,
+  type TurnAbandonment,
 } from "./host.js";
 import { handleInterAgentMessage } from "./inter_agent_message_handler.js";
 import { CodexInterAgentTurnCoordinator } from "./inter_agent_turn_coordinator.js";
@@ -126,6 +127,22 @@ function printLog(envelope: Envelope): void {
     process.stdout.write(`\x1b[37m[${time}] ${name} -> ${text}\x1b[0m\n`);
   } else if (payload.kind === "assistant" && typeof payload.text === "string") {
     process.stdout.write(`\x1b[37m[${time}] ${name}: ${payload.text}\x1b[0m\n`);
+  }
+}
+
+/** Agent-facing cause for a reservation dropped because its turn was
+ *  abandoned (`TurnAbandonment`); used verbatim in the cancellation
+ *  notice, so each entry names itself and none masquerades as another. */
+function abandonmentCause(abandoned: TurnAbandonment): string {
+  switch (abandoned) {
+    case "operator_interrupt":
+      return "the operator interrupted the turn that reserved it";
+    case "watchdog_interrupt":
+      return "the turn watchdog interrupted the turn that reserved it";
+    case "watchdog_fail_stop":
+      return "the turn watchdog stopped the turn that reserved it";
+    case "host_close":
+      return "the wrapper shut down before the turn that reserved it ended";
   }
 }
 
@@ -750,24 +767,20 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       error,
       cancellation,
       terminal,
-      interrupted,
+      abandoned,
     }) => {
       // ADR-0043 D3 on codex (issue #347 M1): only an SDK-declared terminal
       // is the reset boundary. `terminal` is set by the host on exactly
       // those two paths; a cancellation, a terminal-less EOF or a rejected
       // run leaves it unset and the coordinator drops the reservation. A
-      // terminal the SDK delivered after an operator interrupt is an
-      // observation only (review R2): the operator cut the turn short, so
-      // the reservation it carried does not run.
+      // terminal the SDK delivered after the turn was abandoned from
+      // outside (interrupt, watchdog, host close — reviews R2 / R3) is an
+      // observation only: the reservation it carried does not run, and the
+      // agent is told the actual cause.
       sessionReset.onTurnEnd({
         turnToken,
-        authoritative:
-          terminal !== undefined && !watchdogFailStopped && interrupted === undefined,
-        ...(interrupted === undefined
-          ? {}
-          : {
-              why: `the ${interrupted === "operator" ? "operator" : "turn watchdog"} interrupted the turn that reserved it`,
-            }),
+        authoritative: terminal !== undefined && abandoned === undefined,
+        ...(abandoned === undefined ? {} : { why: abandonmentCause(abandoned) }),
       });
       if (cancellation?.kind === "watchdog_fail_stop") {
         // A watchdog cancellation is for a never-started token. Resolve its
