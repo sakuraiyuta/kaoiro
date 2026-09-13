@@ -40,6 +40,12 @@ limits, and the turn-number contract).
 - Git: do not amend a pushed commit. Do not use `git add -A`; explicitly add
   only files you changed. Do not insert a commit into the same branch while a
   peer's Git operation is pending.
+- Fix forward. Review fixes go on top as new commits; do not fold them into
+  earlier commits with `git reset --soft` / `--amend` / rebase, even before
+  the push. A director who wants N commits gets them as they were made plus
+  the fix commits. Why: every `git reset` is a permission prompt on the
+  operator's side (2026-09-14), and the fold gains nothing the landing step
+  (a rebase with patch-id verification) does not already provide.
 - Treat a peer's working clone or worktree like the shared work tree. Restrict
   yourself to read-only Git operations (`show` / `log` / `diff` / `cat-file` /
   `for-each-ref`); only its owner may run state-changing operations such as
@@ -114,6 +120,16 @@ limits, and the turn-number contract).
 
 ## Dispatch side (director)
 
+- Landing: fetch the implementer's branch, cherry-pick it onto `develop` in a
+  detached temporary worktree, compare `git patch-id --stable` per commit,
+  and run the affected gates there when the worktree has the dependencies
+  (link `node_modules` from the shared tree; the runner suite needs the
+  wrapper's `dist`, so run it in the shared tree after the fast-forward).
+  Then `git merge --ff-only` on `develop` and push. Do not embed a
+  `git reset` fallback in the same compound command: an ask rule matches a
+  nested subcommand even when it never runs, so the fallback prompts on
+  every landing (2026-09-14). If a post-fast-forward gate fails, revert the
+  fast-forward as a separate, explicitly approved step.
 - Do not impose a mechanism unavailable to a peer's engine as a completion
   criterion. Claude Code custom skills and hook pipelines (such as
   `/my-code-review-cycle`) are available only to peers with
