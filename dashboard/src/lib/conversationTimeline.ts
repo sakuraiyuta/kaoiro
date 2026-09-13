@@ -147,8 +147,8 @@ function classify(paneAgentId: string, env: Envelope): ConversationEntry | null 
 
 /** 全 agent の transcript を横断して assistant / user を取り出し、
  *  新しい順 (newest first) にマージした配列を返す。 マスター指示の
- *  「新しい順」は既存 latestReplies と揃った選択で、上部に最新の
- *  やり取りが積み上がる読み方になる。 */
+ *  「新しい順」は旧 latestReplies (issue #296 で削除) の並びを踏襲した
+ *  選択で、上部に最新のやり取りが積み上がる読み方になる。 */
 export function conversationEntries(
   logs: Record<string, Envelope[]>,
 ): ConversationEntry[] {
