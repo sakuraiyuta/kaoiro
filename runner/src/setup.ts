@@ -18,13 +18,13 @@ export function generateToken(): string {
 }
 
 /**
- * Per-OS user config dir. MUST stay in sync with the other two places this
- * rule is implemented: `deploy/kaoiro-runner-launch.sh` (resolves the same
- * paths at service start — a divergence would make the wizard write where
- * the service never looks) and `deploy/kaoiro-runner-common.sh`'s
- * `kaoiro_config_dir` (issue #314's bootstrap script, pinned against this
- * function directly in releaseBootstrap.test.ts). KAOIRO_RUNNER_DIR
- * overrides all three.
+ * Per-OS user config dir. MUST stay in sync with the other place this rule
+ * is implemented: `deploy/kaoiro-runner-common.sh`'s `kaoiro_config_dir`
+ * (issue #314's bootstrap script; issue #316 made
+ * `deploy/kaoiro-runner-launch.sh` source it too instead of carrying its own
+ * copy, so it no longer counts as a separate implementation). Pinned against
+ * this function directly in releaseBootstrap.test.ts. KAOIRO_RUNNER_DIR
+ * overrides both.
  */
 export function resolveConfigDir(
   env: Record<string, string | undefined>,

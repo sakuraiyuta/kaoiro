@@ -18,19 +18,42 @@ die_config() {
   exit 78
 }
 
-# Per-OS user config dir (ADR-0018). KAOIRO_RUNNER_DIR overrides it, but must
-# come from the service definition's environment rather than the env file
-# below — that file's own location depends on it.
+# Resolve our own directory first: kaoiro-runner-common.sh (sourced just
+# below) lives beside this script, so config resolution needs deploy_dir
+# before it can run. It is also needed for the entry point and for naming
+# the setup wizard when the config is missing.
+# (unset CDPATH so a stray value in the env file cannot redirect the cd)
+#
+# PHYSICAL, like kaoiro-runner-update.sh: the unit starts
+# <install-root>/current/deploy/kaoiro-runner-launch.sh, so a logical `pwd`
+# would make the release root below `<install-root>/current` — a SYMLINK,
+# which the verifier rejects outright (an archive whose top-level entry was a
+# link out of the install root is must-fix 1). Resolving once here pins the
+# whole start to the release `current` names right now, which is also what
+# keeps a switch landing mid-start from splitting one run across two releases.
+unset CDPATH
+deploy_dir=$(cd -P -- "$(dirname -- "$0")" && pwd -P)
+
+# Per-OS user config dir (ADR-0018), resolved by kaoiro-runner-common.sh's
+# kaoiro_config_dir (issue #316: this used to be its own inline copy of the
+# same rule; the shim now sources the shared implementation so the shell
+# side has one). KAOIRO_RUNNER_DIR overrides it, but must come from the
+# service definition's environment rather than the env file below — that
+# file's own location depends on it.
 #
 # MUST stay in sync with resolveConfigDir() in ../src/setup.ts: the wizard
 # writes where this resolves, so a divergence hides the config from the
 # service.
-if [ "$(uname -s)" = "Darwin" ]; then
-  default_dir="$HOME/Library/Application Support/kaoiro"
-else
-  default_dir="${XDG_CONFIG_HOME:-$HOME/.config}/kaoiro"
-fi
-conf_dir="${KAOIRO_RUNNER_DIR:-$default_dir}"
+common_sh="$deploy_dir/kaoiro-runner-common.sh"
+[ -f "$common_sh" ] ||
+  die_config "incomplete install: $common_sh is missing (release: reinstall it)"
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=kaoiro-runner-common.sh
+. "$common_sh"
+# kaoiro_config_dir dies on its own (exit 1) when HOME is unset; wrap it so
+# every launch.sh failure still maps to 78, matching RestartPreventExitStatus
+# below instead of restart-looping on a config error.
+conf_dir=$(kaoiro_config_dir) || exit 78
 env_file="${KAOIRO_RUNNER_ENV:-$conf_dir/runner.env}"
 
 # KAOIRO_RUNNER_TOKEN and any overrides live in the env file, which is SOURCED
@@ -54,20 +77,6 @@ if [ -f "$env_file" ]; then
   . "$env_file"
   set +a
 fi
-
-# Resolve our own directory before the config check: it is needed both for the
-# entry point and for naming the setup wizard when the config is missing.
-# (unset CDPATH so a stray value in the env file cannot redirect the cd)
-#
-# PHYSICAL, like kaoiro-runner-update.sh: the unit starts
-# <install-root>/current/deploy/kaoiro-runner-launch.sh, so a logical `pwd`
-# would make the release root below `<install-root>/current` — a SYMLINK,
-# which the verifier rejects outright (an archive whose top-level entry was a
-# link out of the install root is must-fix 1). Resolving once here pins the
-# whole start to the release `current` names right now, which is also what
-# keeps a switch landing mid-start from splitting one run across two releases.
-unset CDPATH
-deploy_dir=$(cd -P -- "$(dirname -- "$0")" && pwd -P)
 
 # --version (issue #228 round 2 MF-5, ふじ 差し戻し): forwarded to the
 # entry point BEFORE the config-existence check below. A first-run host

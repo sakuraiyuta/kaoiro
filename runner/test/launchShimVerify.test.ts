@@ -374,6 +374,35 @@ describe("kaoiro-runner-launch.sh の verify-only 起動 (issue #229)", () => {
     expect(existsSync(join(tree, "dist", "cli.js"))).toBe(false);
   });
 
+  // issue #316: kaoiro-runner-launch.sh now sources kaoiro-runner-common.sh
+  // instead of carrying its own inline copy of the config-dir rule. Both
+  // cases below pin the two failure modes that change adds: the shared file
+  // going missing, and kaoiro_config_dir's own HOME-unset failure staying
+  // mapped to exit 78 (not its default exit 1) so it still matches
+  // RestartPreventExitStatus and does not restart-loop.
+  it("kaoiro-runner-common.sh が欠けていれば exit 78 で起動しない (issue #316)", () => {
+    unlinkSync(join(tree, "deploy", "kaoiro-runner-common.sh"));
+
+    const result = launch();
+
+    expect(result.status).toBe(78);
+    expect(result.stderr).toContain("incomplete install");
+    expect(result.stderr).toContain("kaoiro-runner-common.sh");
+    expect(result.stdout).not.toContain("stub cli.js started");
+  });
+
+  it("HOME も KAOIRO_RUNNER_DIR も未設定なら exit 78 で起動しない (issue #316: kaoiro_config_dir の exit 1 を包む)", () => {
+    const result = launch({
+      KAOIRO_RUNNER_DIR: undefined,
+      HOME: undefined,
+      XDG_CONFIG_HOME: undefined,
+    });
+
+    expect(result.status).toBe(78);
+    expect(result.stderr).toContain("HOME is unset");
+    expect(result.stdout).not.toContain("stub cli.js started");
+  });
+
   // PRODUCTION NEVER STARTS THE SHIM BY ITS PHYSICAL PATH, AND EVERY CASE
   // ABOVE DOES. systemd runs <install-root>/current/deploy/kaoiro-runner-
   // launch.sh, and reaching the verifier through that symlink used to skip it

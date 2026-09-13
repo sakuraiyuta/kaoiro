@@ -26,6 +26,12 @@ const shimSource = readFileSync(
   fileURLToPath(new URL("../deploy/kaoiro-runner-launch.sh", import.meta.url)),
   "utf8",
 );
+// The shim sources this beside itself (issue #316); a fixture that omits it
+// would test a shape no real release has.
+const commonSource = readFileSync(
+  fileURLToPath(new URL("../deploy/kaoiro-runner-common.sh", import.meta.url)),
+  "utf8",
+);
 
 // Mimics ONLY the --version contract cli.ts actually implements (reads a
 // sibling build-info.json, prints the canonical identity, exits 0) — cli.ts's
@@ -55,6 +61,7 @@ function buildFixture(dir: string, buildInfo: BuildInfo): void {
   const shimPath = join(deployDir, "kaoiro-runner-launch.sh");
   writeFileSync(shimPath, shimSource);
   chmodSync(shimPath, 0o755);
+  writeFileSync(join(deployDir, "kaoiro-runner-common.sh"), commonSource);
   writeFileSync(join(distDir, "cli.js"), STUB_CLI);
   writeFileSync(join(distDir, "build-info.json"), JSON.stringify(buildInfo));
 }

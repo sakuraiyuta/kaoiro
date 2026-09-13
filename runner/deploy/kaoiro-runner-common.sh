@@ -1,12 +1,13 @@
 #!/bin/sh
 # Shared helpers for the release-based deployment scripts (issue #229):
-# kaoiro-runner-install.sh, kaoiro-runner-switch.sh and
-# kaoiro-runner-update.sh source this file. Never executed directly.
+# kaoiro-runner-install.sh, kaoiro-runner-switch.sh, kaoiro-runner-update.sh
+# and kaoiro-runner-launch.sh source this file. Never executed directly.
 #
-# kaoiro-runner-launch.sh deliberately does NOT source it. The shim runs on
-# every service start; keeping it self-contained means one more file missing
-# from a release cannot turn into a startup failure that is harder to read
-# than the artifact check it was supposed to perform.
+# kaoiro-runner-launch.sh sources it too (issue #316), unlike the other
+# callers, on every service start — so a missing common.sh must not turn
+# into a startup failure that is harder to read than the artifact check it
+# was supposed to perform. The shim checks for this file's existence itself,
+# with its own die_config (exit 78), before sourcing it; see the shim for why.
 #
 # Callers set `prog` before sourcing so diagnostics name the script the
 # operator actually ran.
@@ -49,12 +50,12 @@ kaoiro_install_root() {
 }
 
 # The CONFIG dir (runner.config.json, runner.env) — this mirrors the SAME
-# rule implemented THREE times over (issue #314 added this one; #144 and
-# #70 added the other two, listed so a future reader does not have to grep
-# for them): runner/src/setup.ts's resolveConfigDir() (the wizard, the
-# actual authority the config is written through) and
-# kaoiro-runner-launch.sh:29-33 (the service-start shim). KEEP ALL THREE IN
-# SYNC. This one is pinned against resolveConfigDir directly in
+# rule implemented TWICE (issue #314 added this one for the bootstrap
+# script; runner/src/setup.ts's resolveConfigDir() is the other — the
+# wizard, the actual authority the config is written through). KEEP BOTH IN
+# SYNC. kaoiro-runner-launch.sh (issue #316) sources this function directly
+# instead of carrying its own copy, so it is a caller, not a third
+# implementation. This one is pinned against resolveConfigDir directly in
 # releaseBootstrap.test.ts (same env/platform in, same path out via a
 # `KAOIRO_UNAME`-forced Darwin/Linux/XDG matrix, not assumed to match by
 # construction).
