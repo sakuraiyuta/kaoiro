@@ -2579,8 +2579,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       # Make the stored incumbent owner dead before its channel's terminate
       # callback runs. reject_if_connected then admits the replacement, while
       # the later old terminate loses AgentStates' exact owner check.
-      dead_owner = spawn(fn -> :ok end)
-      dead_ref = Process.monitor(dead_owner)
+      {dead_owner, dead_ref} = spawn_monitor(fn -> :ok end)
       assert_receive {:DOWN, ^dead_ref, :process, ^dead_owner, :normal}
       assert :ok = AgentStates.put(AgentStates.snapshot()[agent_id], owner: dead_owner)
 
