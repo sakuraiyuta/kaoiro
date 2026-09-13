@@ -1,6 +1,6 @@
 ---
 title: Codex app-server transport and in-flight turn steering
-status: proposed
+status: accepted
 date: 2026-09-14
 opened: 2026-09-14
 supersedes: []
@@ -13,9 +13,16 @@ related_adrs: [22, 32, 33, 34, 35, 51, 55]
 
 ## Status
 
-Proposed for [issue #346](https://github.com/sakuraiyuta/kaoiro/issues/346).
-The operator decides adoption. This document authorizes no implementation and
-changes no current permission or inter-agent delivery contract.
+Accepted (operator decision 2026-09-14, on kohaku's recommendation) for
+[issue #346](https://github.com/sakuraiyuta/kaoiro/issues/346): option A in
+stages. Stage 1 is tracked by
+[issue #348](https://github.com/sakuraiyuta/kaoiro/issues/348), which names the
+official Python SDK (`sdk/python/openai_codex`, an app-server JSON-RPC client)
+as the reference implementation for the TypeScript adapter; hosting the Python
+SDK itself was rejected (ADR-0023 D3, ADR-0057: no second language). Accepting
+this ADR authorizes Stage 1 only. Steering (Stage 2) and approvals (Stage 3)
+remain separate decisions, and no current permission or inter-agent delivery
+contract changes until they are accepted.
 
 ## Context
 
