@@ -151,6 +151,14 @@ or revoked credentials return 401; viewers return 403.
 - Other tools flow through SDK `canUseTool` → `PermissionBroker.decide/2` → a
   `permission_request` envelope to the dashboard (operator-only), then an
   operator allows or denies (`permission_decision`, operator-only relay).
+- Codex has no canUseTool and auto-approves every kaoiro bridge tool
+  (`default_tools_approval_mode: "approve"`), so a tool that needs per-use
+  approval there asks on its own behalf: `operatorApprovalGated`
+  (`wrapper/agent-common/src/approval_gate.ts`) calls the same
+  `PermissionBroker.decide/3` from inside the MCP call and runs the wrapped
+  handler only after allow. The wait is bound to the calling turn and capped
+  at 300 s (ADR-0043, 2026-09-14 amendment). Currently gated this way:
+  `request_session_reset`.
 - Broker timeout is `permission_timeout_ms` in wrapper config; when unset it waits
   indefinitely (SDK default), avoiding accidental denial when no operator is
   present ([ADR-0022](../adr/0022-pending-permission-authoritative-source.md)).

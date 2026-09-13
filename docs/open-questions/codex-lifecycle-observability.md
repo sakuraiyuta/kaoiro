@@ -34,6 +34,15 @@ caused by compaction cannot be investigated afterward.
 Whether a confirmed compaction-boundary event appears in the Codex SDK event
 specification ([codex-sdk-events](../specs/codex-sdk-events.md)).
 
+Re-measured 2026-09-14 (issue #347): `@openai/codex-sdk` 0.153.4 ships no
+compaction symbol in `dist/` and `codex exec --help` offers no compaction
+option, so `request_compact` stays Claude-only. Unmeasured: whether a
+`/compact` prompt passed to `codex exec` compacts (the Track S measurement
+exists only for Claude). If it does, reusing the Codex approval gate that now
+serves `request_session_reset` (ADR-0043 amendment) can be considered for
+`request_compact` — a working `/compact` alone does not prove the whole
+descriptor carries over. Candidate for a separate issue.
+
 ## 暫定方針
 
 B (operator ruling 2026-08-31: treat this, including surrounding unimplemented

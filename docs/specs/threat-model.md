@@ -154,10 +154,13 @@ boundary ([ADR-0036](../adr/0036-session-lifecycle-commands.md)).
   `require_operator/1`, so a viewer is forbidden. An agent's own
   `WrapperChannel.handle_in("session_reset_request", ...)` affects only that
   agent bound to the wrapper topic and is sent only at completion of that turn,
-  after per-request permission_broker approval for Claude's
-  `request_session_reset` tool
-  ([ADR-0043](../adr/0043-agent-initiated-session-reset.md)). There is no
-  dedicated path originated by another agent.
+  after per-request permission_broker approval of the `request_session_reset`
+  tool — reached through canUseTool on Claude, and through the wrapper-side
+  `operatorApprovalGated` handler inside the bridge tool call on Codex
+  ([ADR-0043](../adr/0043-agent-initiated-session-reset.md), 2026-09-14
+  amendment). Both routes end in the same broker and the same operator-only
+  `permission_decision` relay. There is no dedicated path originated by
+  another agent.
 - **Capability advertisement**: The wrapper adapter stamps
   `ext.session_capabilities.supports_session_reset` - `session_reset_modes`
   directly after spawn. An unstamped / false / true+empty modes value fails

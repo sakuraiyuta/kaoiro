@@ -1469,16 +1469,20 @@ deferred until dogfooding.
 
 Tool for an agent to ask the operator to rebuild its own session
 ([ADR-0043](../adr/0043-agent-initiated-session-reset.md)). Like
-`request_compact`, it is Claude-only and requires per-call approval, but its
-**effect occurs at a different point**.
+`request_compact` it requires per-call approval, but its **effect occurs at a
+different point** — and unlike `request_compact` it is registered on **both
+engines**: Claude gates it through canUseTool, Codex through the wrapper-side
+`operatorApprovalGated` handler that calls the same `PermissionBroker` from
+inside the bridge tool call (ADR-0043 2026-09-14 amendment, issue #347).
 
 | item | content |
 |---|---|
 | input | `{ mode: "new" \| "clear", reason?: string }`; `mode` is required. |
 | approval | Wrapper returns a **reservation only**; execution follows that turn's `result` processing. |
 | turn boundary | Wrapper sends `session_reset_request {mode, reason?}` to the server, which applies the same capability/pending-lock/state/cooldown gates as operator requests. |
-| denial | SDK returns a deny message as the tool result; no reservation is created. |
-| engine | **Claude only**; not exposed to Codex. |
+| denial | Claude: the SDK returns a deny message as the tool result. Codex: the gated handler returns an `isError` result in the same turn. Either way no reservation is created. |
+| Codex lifetime | The approval wait is bounded at 300 s (`CODEX_APPROVAL_TIMEOUT_MS`, below codex's 310 s `tool_timeout_sec`) and denies on timeout. It is also bound to the calling turn: interrupt, a stream ending without a terminal, a rejected run, watchdog stop or host close deny a pending wait, and drop an already-made reservation with a notice to the agent. Only `turn.completed` / `turn.failed` is the boundary that sends `session_reset_request`. |
+| engine | Both. Claude via canUseTool → PermissionBroker; Codex via the wrapper-side `operatorApprovalGated` handler inside the bridge tool call (ADR-0043 2026-09-14 amendment). |
 
 Rules:
 

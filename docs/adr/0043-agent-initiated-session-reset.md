@@ -6,7 +6,7 @@ opened: 2026-07-28
 supersedes: []
 superseded_by: null
 related_specs: [protocol, threat-model]
-related_adrs: [21, 22, 33, 36, 44, 55]
+related_adrs: [21, 22, 32, 33, 36, 44, 55]
 ---
 
 # ADR-0043 — Session reset initiated by the agent
@@ -106,6 +106,15 @@ can restore the gate by setting its mode to the `default` family. This semantics
 is common to all tools through canUseTool, including `request_compact` /
 `send_to_agent`.
 
+### D4 Addendum (2026-09-14 — Codex has no mode-derived auto-allow)
+
+The mode-dependence above is a property of the Claude SDK's canUseTool. On
+Codex the approval is asked by the tool handler itself (see the Neutral
+amendment below) and no permission mode can pre-approve it: every
+`request_session_reset` call on Codex opens the operator dialog. This is an
+independent clause — it neither changes the Claude semantics above nor
+introduces a kaoiro-owned auto-allow.
+
 ### D5 — Do not mechanize handoff; encourage externalization in the tool description
 
 Do not create a mechanism that stores a handoff summary before reset in the
@@ -135,15 +144,56 @@ generalize embedded compact summaries to new/clear.
   learns of the failure on the next turn.
 - Externalizing handoff is an operational responsibility of the agent and has no
   mechanized completeness guarantee.
+- On Codex, a reservation dropped because its turn ended without an SDK
+  terminal is reported to the agent through the same injected-turn notice
+  the server-refusal path uses (2026-09-14 amendment). After an operator
+  interrupt this means one system turn starts right after the interrupt.
+  Accepted so the agent never keeps acting on a reservation that no longer
+  exists; flagged as a review point rather than a settled preference.
 
 ### Neutral
 
-- Do not expose `request_session_reset` to Codex. The target is the Claude
-  wrapper's MCP tool path.
+- ~~Do not expose `request_session_reset` to Codex. The target is the Claude
+  wrapper's MCP tool path.~~ Superseded by the 2026-09-14 amendment below.
 - Addendum (2026-08-28): retain the above non-exposure based on measurement of
   issue #246. `codex exec` has its approval axis fixed at `never` and no per-request
   approval path (`wrapper/codex/src/host.ts`); exposing it would allow a self-reset
   without operator approval. Reconsider once Codex has an approval path.
+- Amendment (2026-09-14, issue #347): `request_session_reset` is exposed to
+  Codex through a **wrapper-side approval gate**. The Codex tool handler
+  (`operatorApprovalGated`, `wrapper/agent-common/src/approval_gate.ts`)
+  invokes the same `PermissionBroker` that Claude reaches through canUseTool,
+  before reserving anything; the MCP call blocks in `waiting_permission`
+  until the operator decides in the same dashboard dock, deny is returned
+  to the model in the same turn, and an approved reservation rides the
+  existing `session_reset_request` path at the turn boundary (D3).
+  - The 2026-08-28 addendum's "no per-request approval path" refers to
+    Codex's OWN execution approval (`codex exec` pins `approval_policy=never`
+    for sandbox / command approvals, ADR-0033). That remains unchanged and
+    is not what gates this tool. The August ruling generalized from "Codex
+    exec has no native execution approval channel" to "a wrapper-owned
+    approval wait cannot be implemented in a kaoiro MCP handler"; only the
+    latter is opened here. The path is different in kind: the kaoiro MCP
+    bridge tool call itself blocks inside the wrapper (ADR-0032 F5 / F6, the
+    `ask_user_question` precedent) while the wrapper's broker runs the
+    operator round-trip. The sandbox / network / native-approval axes and
+    the effective policy of issue #305 / #340 are untouched.
+  - The wait is bounded at 300 s (`CODEX_APPROVAL_TIMEOUT_MS`) and a timeout
+    denies: codex cancels a bridge tool call at `tool_timeout_sec` (310 s)
+    without telling the bridge, so a wait that outlived it could be
+    answered "allow" for a call the model has already seen fail. A call
+    abandoned by its turn — interrupt, a stream that ends without a
+    terminal, a rejected run, watchdog stop, host close — is denied the
+    same way through the host's per-turn scope signal, and a reservation
+    already made by such a turn is dropped with a notice to the agent. On
+    Codex only an SDK-declared terminal (`turn.completed` / `turn.failed`)
+    is the boundary that sends the reservation.
+  - `request_compact` stays Claude-only: Codex SDK 0.153.4 exposes no
+    compaction entry point (`dist/` carries no such symbol; `codex exec
+    --help` offers none; measured 2026-09-14). Whether a `/compact` prompt
+    to `codex exec` compacts is unmeasured and tracked in
+    [codex-lifecycle-observability](../open-questions/codex-lifecycle-observability.md);
+    if it does, reusing this approval gate can be considered there.
 - The information boundary to viewers remains ADR-0021; do not disclose origin /
   reason to viewers.
 
