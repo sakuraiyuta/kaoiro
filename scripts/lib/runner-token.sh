@@ -3,7 +3,9 @@
 #
 # runner_token_for_host HOST_ID
 #   Reads a KAOIRO_RUNNER_TOKENS value ("host_id:token,...") on stdin and
-#   prints the token paired with HOST_ID, or nothing when there is none.
+#   prints the token paired with HOST_ID, or nothing when there is none. Its
+#   stdin is the exact value the server receives as an environment variable;
+#   callers must not append a record-terminating newline.
 #   Mirrors the server's Auth.parse_pairs/1: split on ",", split each pair
 #   on the FIRST ":" only (a token may contain ":"), reject raw empty keys and
 #   values before ASCII whitespace trimming, and let the last entry for a host
@@ -53,5 +55,27 @@ runner_token_for_host() {
   fi
 
   [[ -n "$found" ]] && printf '%s\n' "$found"
+  return 0
+}
+
+# runner_tokens_from_env_file FILE
+#   Prints the value from the last KAOIRO_RUNNER_TOKENS assignment, without its
+#   record terminator. Leading whitespace before the key is accepted; comments
+#   are not assignments. Matching outer quotes are removed.
+runner_tokens_from_env_file() {
+  local env_file="$1" line value="" found=0
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    if [[ "$line" =~ ^[[:space:]]*KAOIRO_RUNNER_TOKENS=(.*)$ ]]; then
+      value="${BASH_REMATCH[1]}"
+      if [[ "$value" == \"*\" || "$value" == \'*\' ]]; then
+        value="${value:1:${#value}-2}"
+      fi
+      found=1
+    fi
+  done < "$env_file"
+
+  [[ "$found" -eq 1 ]] && printf '%s' "$value"
   return 0
 }
