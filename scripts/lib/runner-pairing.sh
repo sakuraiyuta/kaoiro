@@ -19,8 +19,7 @@ pairing_host_id() {
 }
 
 pairing_ensure_runner_env() {
-  local path="$1" token line
-  local -a lines
+  local path="$1" token line extra
 
   if [[ ! -e "$path" ]]; then
     token="$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")" || {
@@ -36,12 +35,19 @@ pairing_ensure_runner_env() {
     return 0
   fi
 
-  mapfile -t lines <"$path"
-  if [[ ${#lines[@]} -ne 1 ]]; then
+  exec 3<"$path" || return 1
+  if ! IFS= read -r line <&3 && [[ -z "$line" ]]; then
+    exec 3<&-
     echo "runner pairing: error — $path is not in the launcher format; fix or delete it" >&2
     return 1
   fi
-  line="${lines[0]%$'\r'}"
+  if IFS= read -r extra <&3 || [[ -n "$extra" ]]; then
+    exec 3<&-
+    echo "runner pairing: error — $path is not in the launcher format; fix or delete it" >&2
+    return 1
+  fi
+  exec 3<&-
+  line="${line%$'\r'}"
   if [[ "$line" =~ ^KAOIRO_RUNNER_TOKEN=([0-9a-f]{64})$ ]]; then
     token="${BASH_REMATCH[1]}"
   elif [[ "$line" =~ ^KAOIRO_RUNNER_TOKEN=\'([0-9a-f]{64})\'$ ]]; then
