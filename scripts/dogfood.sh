@@ -217,12 +217,11 @@ fi
 # shellcheck source=scripts/lib/runner-token.sh
 . "$root/scripts/lib/runner-token.sh"
 if [[ -z "${KAOIRO_RUNNER_TOKEN:-}" ]]; then
-  # Last assignment wins, matching how compose reads env_file. The value
-  # is piped (not passed as an argv) so it stays out of the process list.
+  # Extract the value without the .env record terminator, then pass that value
+  # (not an argv) to the parser so it stays out of the process list.
+  runner_tokens="$(runner_tokens_from_env_file "$env_file")"
   KAOIRO_RUNNER_TOKEN="$(
-    grep -E '^[[:space:]]*KAOIRO_RUNNER_TOKENS=' "$env_file" | tail -n 1 |
-      sed -E "s/^[[:space:]]*KAOIRO_RUNNER_TOKENS=//; s/^['\"]//; s/['\"]$//" |
-      runner_token_for_host "$host_id"
+    printf '%s' "$runner_tokens" | runner_token_for_host "$host_id"
   )"
   if [[ -z "$KAOIRO_RUNNER_TOKEN" ]]; then
     echo "dogfood: error — server/.env sets KAOIRO_RUNNER_TOKENS but has no" \
