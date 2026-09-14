@@ -167,6 +167,10 @@ function composeArgs(command) {
   return `compose -f docker-compose.yaml -f docker-compose.dogfood.yaml ${command}`;
 }
 
+function dockerComposeVersion() {
+  return spawnSync("docker", ["compose", "version"], { encoding: "utf8" });
+}
+
 test("dev launcher appends a matching runner pair before every launch", () => {
   for (const runnerList of ["", "other:operator", "dev-host:stale"]) {
     const { result, log } = runLauncher("dev.sh", runnerList);
@@ -206,11 +210,13 @@ test("dogfood launcher injects a matching override and rejects comma presets", (
 });
 
 test("dogfood preserves a Compose-resolved trailing newline before appending", (t) => {
-  const dockerPath = spawnSync("sh", ["-c", "command -v docker"], { encoding: "utf8" });
-  if (dockerPath.status !== 0) {
+  const version = dockerComposeVersion();
+  if (version.status !== 0) {
     t.skip("docker compose is unavailable; trailing-newline caller probe skipped");
     return;
   }
+  const dockerPath = spawnSync("sh", ["-c", "command -v docker"], { encoding: "utf8" });
+  assert.equal(dockerPath.status, 0, dockerPath.stderr);
 
   const resolvedList = "other:old,other:\n";
   const { result, log } = runLauncher("dogfood.sh", resolvedList, {
@@ -223,7 +229,7 @@ test("dogfood preserves a Compose-resolved trailing newline before appending", (
 });
 
 test("dogfood override produces the appended Compose environment", (t) => {
-  const version = spawnSync("docker", ["compose", "version"], { encoding: "utf8" });
+  const version = dockerComposeVersion();
   if (version.status !== 0) {
     t.skip("docker compose is unavailable; Compose environment probe skipped");
     return;
