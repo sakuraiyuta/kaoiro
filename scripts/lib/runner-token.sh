@@ -6,21 +6,23 @@
 #   prints the token paired with HOST_ID, or nothing when there is none.
 #   Mirrors the server's Auth.parse_pairs/1: split on ",", split each pair
 #   on the FIRST ":" only (a token may contain ":"), reject raw empty keys and
-#   values before ASCII space/tab trimming, and let the last entry for a host
+#   values before ASCII whitespace trimming, and let the last entry for a host
 #   win. Non-ASCII whitespace (such as NBSP) is unsupported here, so this
-#   compatibility claim is limited to ASCII space/tab trimming, first-colon
-#   splitting, last-wins replacement, and pre-trim empty checks. The list
-#   travels on stdin, never argv, so it stays out of the process list. Trailing
-#   CR/LF is removed; a remaining CR/LF rejects the whole list.
+#   compatibility claim is limited to ASCII space/tab/CR/LF trimming,
+#   first-colon splitting, last-wins replacement, and pre-trim empty checks.
+#   The list travels on stdin, never argv, so it stays out of the process list.
+#   CR/LF is allowed only as trailing whitespace; a remaining CR/LF rejects the
+#   whole list without returning a stale token.
 runner_token_for_host() {
-  local host_id="$1" raw pair key value found=""
+  local host_id="$1" raw normalized pair key value found=""
 
-  raw=$(cat)
-  while [[ "$raw" == *$'\r' || "$raw" == *$'\n' ]]; do
-    raw="${raw%$'\r'}"
-    raw="${raw%$'\n'}"
+  IFS= read -r -d '' raw || true
+  normalized="$raw"
+  while [[ "$normalized" == *$'\r' || "$normalized" == *$'\n' ]]; do
+    normalized="${normalized%$'\r'}"
+    normalized="${normalized%$'\n'}"
   done
-  [[ "$raw" == *$'\r'* || "$raw" == *$'\n'* ]] && return 0
+  [[ "$normalized" == *$'\r'* || "$normalized" == *$'\n'* ]] && return 0
 
   while [[ "$raw" == *,* ]]; do
     pair="${raw%%,*}"
@@ -29,10 +31,10 @@ runner_token_for_host() {
       key="${pair%%:*}"
       value="${pair#*:}"
       if [[ -n "$key" && -n "$value" ]]; then
-        key="${key#"${key%%[!$' \t']*}"}"
-        key="${key%"${key##*[!$' \t']}"}"
-        value="${value#"${value%%[!$' \t']*}"}"
-        value="${value%"${value##*[!$' \t']}"}"
+        key="${key#"${key%%[!$' \t\r\n']*}"}"
+        key="${key%"${key##*[!$' \t\r\n']}"}"
+        value="${value#"${value%%[!$' \t\r\n']*}"}"
+        value="${value%"${value##*[!$' \t\r\n']}"}"
         [[ "$key" == "$host_id" ]] && found="$value"
       fi
     fi
@@ -42,10 +44,10 @@ runner_token_for_host() {
     key="${raw%%:*}"
     value="${raw#*:}"
     if [[ -n "$key" && -n "$value" ]]; then
-      key="${key#"${key%%[!$' \t']*}"}"
-      key="${key%"${key##*[!$' \t']}"}"
-      value="${value#"${value%%[!$' \t']*}"}"
-      value="${value%"${value##*[!$' \t']}"}"
+      key="${key#"${key%%[!$' \t\r\n']*}"}"
+      key="${key%"${key##*[!$' \t\r\n']}"}"
+      value="${value#"${value%%[!$' \t\r\n']*}"}"
+      value="${value%"${value##*[!$' \t\r\n']}"}"
       [[ "$key" == "$host_id" ]] && found="$value"
     fi
   fi
