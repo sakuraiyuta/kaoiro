@@ -118,16 +118,19 @@ dogfood does not write `server/.env` and does not read it. Instead:
 
 1. Resolve what Compose will hand the server from the base file only:
    `docker compose -f docker-compose.yaml config --format json`, read
-   `.services.server.environment.KAOIRO_RUNNER_TOKENS` (absent → empty)
-   with node. This is Compose's own env_file parser, so the value is exact
-   by construction, including `export` forms, quoting and comments.
+   `.services.kaoiro.environment.KAOIRO_RUNNER_TOKENS` with node. The
+   service `kaoiro` must exist in the output (otherwise stop: the base file
+   is not the one this launcher knows); only a missing variable on an
+   existing service is treated as an empty list. This is Compose's own
+   env_file parser, so the value is exact by construction, including
+   `export` forms, quoting and comments.
 2. Append the launcher's pair exactly as D3 does.
 3. Inject the result through a **tracked, launcher-only override file**
    `server/docker-compose.dogfood.yaml`:
 
    ```yaml
    services:
-     server:
+     kaoiro:
        environment:
          KAOIRO_RUNNER_TOKENS: ${KAOIRO_LAUNCHER_RUNNER_TOKENS:?dogfood.sh sets this}
    ```
@@ -181,7 +184,7 @@ real bash functions):
   list, an operator list for other hosts, a stale `dev-host` line, a preset
   token, and a preset token with a comma (must stop before any launch).
 - Compose effective environment: when `docker compose` is available, run
-  `config --format json` with both files and assert the server's
+  `config --format json` with both files and assert the `kaoiro` service's
   `KAOIRO_RUNNER_TOKENS` equals the appended value; skip with a visible
   notice otherwise. Negative control: unset `KAOIRO_LAUNCHER_RUNNER_TOKENS`
   → `config` exits non-zero.
