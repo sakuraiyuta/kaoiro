@@ -32,6 +32,14 @@ function runPairing(functionName, ...args) {
   );
 }
 
+function runPairingWithoutMapfile(functionName, ...args) {
+  return spawnSync(
+    "bash",
+    ["-c", 'mapfile() { return 127; }; source "$1"; "$2" "${@:3}"', "bash", library, functionName, ...args],
+    { encoding: "utf8" },
+  );
+}
+
 function writeRunnerEnv(path, content) {
   writeFileSync(path, content, { mode: 0o600 });
 }
@@ -68,6 +76,11 @@ test("runner pairing creates and validates the launcher runner.env format", () =
       assert.notEqual(result.status, 0, content);
       assert.match(result.stderr, /not in the launcher format/);
     }
+
+    writeRunnerEnv(envFile, `KAOIRO_RUNNER_TOKEN=${managedToken}\n`);
+    const withoutMapfile = runPairingWithoutMapfile("pairing_ensure_runner_env", envFile);
+    assert.equal(withoutMapfile.status, 0, withoutMapfile.stderr);
+    assert.equal(withoutMapfile.stdout, `${managedToken}\n`);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -88,7 +101,7 @@ function writeStub(path, body) {
   chmodSync(path, 0o755);
 }
 
-function launcherFixture(scriptName, runnerList) {
+function launcherFixture(scriptName, runnerList, options = {}) {
   const root = temporaryDirectory();
   const scripts = join(root, "scripts");
   const lib = join(scripts, "lib");
@@ -107,8 +120,8 @@ function launcherFixture(scriptName, runnerList) {
   copyFileSync(library, join(lib, "runner-pairing.sh"));
   if (scriptName === "dogfood.sh") {
     copyFileSync(join(repo, "server/docker-compose.dogfood.yaml"), join(server, "docker-compose.dogfood.yaml"));
-    writeFileSync(join(server, "docker-compose.yaml"), "services:\n  kaoiro:\n    image: example\n");
-    writeFileSync(join(server, ".env"), "KAOIRO_CLIENT_TOKENS=client:operator\n");
+    writeFileSync(join(server, "docker-compose.yaml"), "services:\n  kaoiro:\n    image: example\n    env_file:\n      - .env\n");
+    writeFileSync(join(server, ".env"), options.envFile ?? "KAOIRO_CLIENT_TOKENS=client:operator\n");
   } else {
     writeFileSync(join(server, ".env"), runnerList ? `KAOIRO_RUNNER_TOKENS=${runnerList}\n` : "");
   }
@@ -119,30 +132,39 @@ function launcherFixture(scriptName, runnerList) {
   writeStub(join(stubBin, "pnpm"), 'printf "pnpm|%s|%s\\n" "${KAOIRO_RUNNER_TOKENS:-}" "${KAOIRO_RUNNER_TOKEN:-}" >> "$MOCK_LOG"');
   writeStub(join(stubBin, "docker"), `
 if [[ "$*" == "compose version" ]]; then exit 0; fi
+printf 'docker|%s|%s|%s\\n' "$*" "\${KAOIRO_LAUNCHER_RUNNER_TOKENS:-}" "\${KAOIRO_RUNNER_TOKEN:-}" >> "\$MOCK_LOG"
 if [[ "$*" == *"config --format json" ]]; then
-  printf '{"services":{"kaoiro":{"environment":{"KAOIRO_RUNNER_TOKENS":"%s"}}}}\\n' "${runnerList}"
+  if [[ -n "\${REAL_DOCKER:-}" ]]; then
+    exec "\$REAL_DOCKER" "\$@"
+  fi
+  node -e 'process.stdout.write(JSON.stringify({ services: { kaoiro: { environment: { KAOIRO_RUNNER_TOKENS: process.env.MOCK_RUNNER_LIST } } } }))'
   exit 0
 fi
-printf 'docker|%s|%s\\n' "\${KAOIRO_LAUNCHER_RUNNER_TOKENS:-}" "\${KAOIRO_RUNNER_TOKEN:-}" >> "\$MOCK_LOG"
 `);
 
   return { root, script: join(scripts, scriptName), stubBin, log };
 }
 
 function runLauncher(scriptName, runnerList, options = {}) {
-  const fixture = launcherFixture(scriptName, runnerList);
+  const fixture = launcherFixture(scriptName, runnerList, options);
   try {
     const env = {
       ...process.env,
       PATH: `${fixture.stubBin}:${process.env.PATH}`,
       MOCK_LOG: fixture.log,
+      MOCK_RUNNER_LIST: runnerList,
       KAOIRO_RUNNER_TOKEN: options.preset ?? "",
+      REAL_DOCKER: options.realDocker ?? "",
     };
     const result = spawnSync("bash", [fixture.script], { encoding: "utf8", env, timeout: 10_000 });
     return { result, log: readFileSync(fixture.log, "utf8") };
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
+}
+
+function composeArgs(command) {
+  return `compose -f docker-compose.yaml -f docker-compose.dogfood.yaml ${command}`;
 }
 
 test("dev launcher appends a matching runner pair before every launch", () => {
@@ -168,17 +190,36 @@ test("dogfood launcher injects a matching override and rejects comma presets", (
     const { result, log } = runLauncher("dogfood.sh", runnerList);
     const expected = `${runnerList ? `${runnerList},` : ""}dev-host:${managedToken}`;
     assert.equal(result.status, 0, result.stderr);
-    assert.match(log, new RegExp(`docker\\|${expected}\\|${managedToken}`));
+    assert.match(log, new RegExp(`docker\\|${composeArgs("up -d --build")}\\|${expected}\\|${managedToken}`));
+    assert.match(log, new RegExp(`docker\\|${composeArgs("logs -f --tail=0")}\\|${expected}\\|${managedToken}`));
+    assert.match(log, new RegExp(`docker\\|${composeArgs("down")}\\|${expected}\\|${managedToken}`));
     assert.match(log, new RegExp(`runner\\|${managedToken}`));
   }
 
   const { result, log } = runLauncher("dogfood.sh", "other:operator", { preset: presetToken });
   assert.equal(result.status, 0, result.stderr);
-  assert.match(log, new RegExp(`docker\\|other:operator,dev-host:${presetToken}\\|${presetToken}`));
+  assert.match(log, new RegExp(`docker\\|${composeArgs("up -d --build")}\\|other:operator,dev-host:${presetToken}\\|${presetToken}`));
 
   const rejected = runLauncher("dogfood.sh", "", { preset: "one,dev-host:two" });
   assert.notEqual(rejected.result.status, 0);
   assert.doesNotMatch(rejected.log, /^(docker|runner)\|/m);
+});
+
+test("dogfood preserves a Compose-resolved trailing newline before appending", (t) => {
+  const dockerPath = spawnSync("sh", ["-c", "command -v docker"], { encoding: "utf8" });
+  if (dockerPath.status !== 0) {
+    t.skip("docker compose is unavailable; trailing-newline caller probe skipped");
+    return;
+  }
+
+  const resolvedList = "other:old,other:\n";
+  const { result, log } = runLauncher("dogfood.sh", resolvedList, {
+    envFile: "KAOIRO_CLIENT_TOKENS=client:operator\nKAOIRO_RUNNER_TOKENS='other:old,other:\n'\n",
+    realDocker: dockerPath.stdout.trim(),
+  });
+  const expected = `${resolvedList},dev-host:${managedToken}`;
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(log.includes(`docker|${composeArgs("up -d --build")}|${expected}|${managedToken}`));
 });
 
 test("dogfood override produces the appended Compose environment", (t) => {

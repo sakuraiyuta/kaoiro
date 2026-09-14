@@ -181,7 +181,9 @@ if ! compose_config="$(cd "$root/server" && "${dc[@]}" -f docker-compose.yaml co
   trap - EXIT
   exit 1
 fi
-if ! runner_tokens="$(printf '%s' "$compose_config" | node -e '
+# shellcheck disable=SC2016
+if ! KAOIRO_LAUNCHER_RUNNER_TOKENS="$(printf '%s' "$compose_config" | \
+  PAIRING_HOST_ID="$host_id" PAIRING_RUNNER_TOKEN="$runner_token" node -e '
   const input = require("fs").readFileSync(0, "utf8");
   const config = JSON.parse(input);
   const service = config.services?.kaoiro;
@@ -192,12 +194,13 @@ if ! runner_tokens="$(printf '%s' "$compose_config" | node -e '
   if (value !== undefined && typeof value !== "string") {
     throw new Error("kaoiro KAOIRO_RUNNER_TOKENS is not a string");
   }
-  process.stdout.write(value ?? "");
+  const pair = `${process.env.PAIRING_HOST_ID}:${process.env.PAIRING_RUNNER_TOKEN}`;
+  const list = value ?? "";
+  process.stdout.write(list === "" ? pair : `${list},${pair}`);
 ')"; then
   trap - EXIT
   exit 1
 fi
-KAOIRO_LAUNCHER_RUNNER_TOKENS="$(pairing_append "$runner_tokens" "$host_id" "$runner_token")"
 export KAOIRO_LAUNCHER_RUNNER_TOKENS
 export KAOIRO_RUNNER_TOKEN="$runner_token"
 
