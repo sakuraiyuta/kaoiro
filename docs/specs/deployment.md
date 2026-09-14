@@ -74,6 +74,10 @@ Unset behavior differs by env (client = fail-closed; runner = fail-closed in
 :prod and relaxed only in dev/test; wrapper = only signed tokens accepted in
 :prod and relaxed in dev/test; issue #133, revised 2026-08-02).
 
+`scripts/dogfood.sh` uses `server/docker-compose.dogfood.yaml` only for its
+local launcher-owned runner pair. Production deployments must use
+`docker-compose.yaml` alone; dogfood's override leaves `server/.env` unchanged.
+
 Persona-pack import is separated from the extraction cache by
 [ADR-0046](../adr/0046-persona-cache-relocation.md), so `KAOIRO_PERSONA_DIR` may
 be mounted `:ro`. To replace footers, mount the host directory
@@ -372,6 +376,12 @@ Set `KAOIRO_RUNNER_TOKEN=<token issued in 1.1>` in `runner.env` (pair it with
 `<host_id>:<token>` in server-side `KAOIRO_RUNNER_TOKENS`) and run `chmod 600`.
 Override `server_url` with `KAOIRO_RUNNER_SERVER_URL` in `runner.env` as well
 (issue #135; env takes precedence over the config file).
+
+For local launchers, `runner/runner.env` is a separate gitignored file that
+contains only `KAOIRO_RUNNER_TOKEN=<64 lowercase hex>`. `scripts/dev.sh` and
+`scripts/dogfood.sh` create it with mode 0600 when absent and append its pair
+to the server list for the configured host; a preset environment token wins
+after validation.
 
 ### Run as a service
 

@@ -7,3 +7,4 @@ dist/
 runner.config.json
 runner.config.*.json
 !runner.config.example.json
+runner.env

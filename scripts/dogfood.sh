@@ -103,7 +103,7 @@ cleanup() {
   if [[ -n "$runner_pid" ]]; then
     wait "$runner_pid" 2>/dev/null || true
   fi
-  ( cd "$root/server" && "${dc[@]}" down ) 2>&1 |
+  ( cd "$root/server" && "${dc[@]}" -f docker-compose.yaml -f docker-compose.dogfood.yaml down ) 2>&1 |
     tee -a "$logdir/stack.log" || true
   wait 2>/dev/null || true
 }
@@ -157,97 +157,63 @@ if [[ ! -f "$runner_config" ]]; then
 JSON
 fi
 
-# 4) Runner auth token (issue #138). dogfood runs the *release* image, so
-# the server evaluates auth in :prod — there an unset KAOIRO_RUNNER_TOKENS
-# rejects EVERY runner join (fail-closed), unlike dev.sh which runs mix in
-# :dev where the unset list still means "auth off". Wire both ends here:
-# mint a pair into server/.env on first run, then hand the matching value
-# to the runner via KAOIRO_RUNNER_TOKEN. The token deliberately never
-# enters runner.config.json (runner/README.md) — the runner reads it from
-# the env only.
-env_file="$root/server/.env"
-host_id="$(node -e \
-  'process.stdout.write(String(require(process.argv[1]).host_id ?? ""))' \
-  "$runner_config")"
-# Same charset the runner enforces on its side (HOST_ID_PATTERN in
-# runner/src/config.ts). Checked BEFORE the value reaches the env file: a
-# newline in host_id would otherwise append arbitrary KEY=VALUE lines
-# that compose loads with last-one-wins, silently overriding
-# SECRET_KEY_BASE or the client tokens. Every exit in this step clears
-# the EXIT trap first — nothing is up yet, so the cleanup handler would
-# otherwise `docker compose down` a stack this run never started.
-if [[ ! "$host_id" =~ ^[A-Za-z0-9._-]+$ ]]; then
-  echo "dogfood: error — host_id in $runner_config must match" \
-    "[A-Za-z0-9._-]+" >&2
+# 4) Runner auth token. Compose resolves server/.env itself; read that base
+# service value, append this launcher's pair, then inject it only through the
+# dogfood override so no launcher parses or rewrites server/.env.
+# shellcheck source=scripts/lib/runner-pairing.sh
+. "$root/scripts/lib/runner-pairing.sh"
+if ! host_id="$(pairing_host_id "$runner_config")"; then
+  trap - EXIT
+  exit 1
+fi
+if [[ -n "${KAOIRO_RUNNER_TOKEN:-}" ]]; then
+  runner_token="$KAOIRO_RUNNER_TOKEN"
+elif ! runner_token="$(pairing_ensure_runner_env "$root/runner/runner.env")"; then
+  trap - EXIT
+  exit 1
+fi
+if ! pairing_check_token "$runner_token"; then
   trap - EXIT
   exit 1
 fi
 
-# Only mint when the key is absent entirely. An existing line is the
-# operator's own pairing (possibly shared with a real deployment), so it
-# is read, never rewritten.
-if ! grep -qE '^[[:space:]]*KAOIRO_RUNNER_TOKENS=' "$env_file"; then
-  echo "dogfood: server/.env has no KAOIRO_RUNNER_TOKENS — minting one for" \
-    "host_id=$host_id (the release rejects runners without it)"
-  # Mint into a variable first. A command substitution that fails inside
-  # printf's ARGUMENT list leaves printf's own status at 0, so set -e
-  # would not catch it and a valueless `<host_id>:` pair would land in
-  # the file — which the server drops as malformed (Auth.parse_pairs/1)
-  # while the grep above still sees the key, blocking every later re-mint.
-  minted_token="$(node -e "process.stdout.write(
-    require('crypto').randomBytes(32).toString('hex'))")"
-  if [[ ${#minted_token} -ne 64 ]]; then
-    echo "dogfood: error — runner token generation failed" >&2
-    trap - EXIT
-    exit 1
-  fi
-  {
-    printf '\n# Added by scripts/dogfood.sh: the release image rejects\n'
-    printf '# runner joins while this is unset (issue #138). dogfood hands\n'
-    printf '# the matching value to the runner as KAOIRO_RUNNER_TOKEN.\n'
-    printf 'KAOIRO_RUNNER_TOKENS=%s:%s\n' "$host_id" "$minted_token"
-  } >>"$env_file"
-  # The file now carries a secret this script minted, so match the 0600
-  # the runner wizard gives runner.env (runner/src/setup.ts).
-  chmod go-rwx "$env_file" 2>/dev/null || true
+if ! compose_config="$(cd "$root/server" && "${dc[@]}" -f docker-compose.yaml config --format json)"; then
+  trap - EXIT
+  exit 1
 fi
-
-# A pre-set env var wins, so an operator can point the runner at another
-# token without touching server/.env.
-# shellcheck source=scripts/lib/runner-token.sh
-. "$root/scripts/lib/runner-token.sh"
-if [[ -z "${KAOIRO_RUNNER_TOKEN:-}" ]]; then
-  # Extract the value without the .env record terminator, then pass that value
-  # (not an argv) to the parser so it stays out of the process list.
-  runner_tokens="$(runner_tokens_from_env_file "$env_file")"
-  KAOIRO_RUNNER_TOKEN="$(
-    printf '%s' "$runner_tokens" | runner_token_for_host "$host_id"
-  )"
-  if [[ -z "$KAOIRO_RUNNER_TOKEN" ]]; then
-    echo "dogfood: error — server/.env sets KAOIRO_RUNNER_TOKENS but has no" \
-      "entry for host_id=$host_id" >&2
-    echo "  add '$host_id:<token>' to it (an entry with an empty token" \
-      "counts as missing), or export KAOIRO_RUNNER_TOKEN=<token> before" \
-      "re-running" >&2
-    trap - EXIT
-    exit 1
-  fi
+if ! runner_tokens="$(printf '%s' "$compose_config" | node -e '
+  const input = require("fs").readFileSync(0, "utf8");
+  const config = JSON.parse(input);
+  const service = config.services?.kaoiro;
+  if (!service) {
+    throw new Error("docker compose config has no kaoiro service");
+  }
+  const value = service.environment?.KAOIRO_RUNNER_TOKENS;
+  if (value !== undefined && typeof value !== "string") {
+    throw new Error("kaoiro KAOIRO_RUNNER_TOKENS is not a string");
+  }
+  process.stdout.write(value ?? "");
+')"; then
+  trap - EXIT
+  exit 1
 fi
-export KAOIRO_RUNNER_TOKEN
+KAOIRO_LAUNCHER_RUNNER_TOKENS="$(pairing_append "$runner_tokens" "$host_id" "$runner_token")"
+export KAOIRO_LAUNCHER_RUNNER_TOKENS
+export KAOIRO_RUNNER_TOKEN="$runner_token"
 
 # 5) Start the docker stack (server + bundled dashboard). --build rebuilds
 # only when the image inputs changed, so re-runs after a no-op edit are
 # fast. Detached so we can tail logs into stack.log while the runner
 # takes the foreground.
 echo "dogfood: starting docker stack (rebuilds if inputs changed)..."
-( cd "$root/server" && "${dc[@]}" up -d --build ) 2>&1 |
+( cd "$root/server" && "${dc[@]}" -f docker-compose.yaml -f docker-compose.dogfood.yaml up -d --build ) 2>&1 |
   tee -a "$logdir/stack.log"
 
 # 6) Tail docker logs into stack.log for post-mortem. --tail=0 skips the
 # backlog so the file only carries the current session's output. Runner
 # has its own reconnect loop, so we do not gate its launch on a readiness
 # poll — if Phoenix is still binding :4000 the runner retries.
-( cd "$root/server" && "${dc[@]}" logs -f --tail=0 ) </dev/null \
+( cd "$root/server" && "${dc[@]}" -f docker-compose.yaml -f docker-compose.dogfood.yaml logs -f --tail=0 ) </dev/null \
   >>"$logdir/stack.log" 2>&1 &
 pids+=("$!")
 
