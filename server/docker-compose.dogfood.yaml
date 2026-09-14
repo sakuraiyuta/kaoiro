@@ -1,0 +1,4 @@
+services:
+  kaoiro:
+    environment:
+      KAOIRO_RUNNER_TOKENS: ${KAOIRO_LAUNCHER_RUNNER_TOKENS:?dogfood.sh sets this}

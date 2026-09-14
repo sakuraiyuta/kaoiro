@@ -64,31 +64,21 @@ if [[ ! -f "$runner_config" ]]; then
 JSON
 fi
 
-# Runner auth token. In :dev an unset KAOIRO_RUNNER_TOKENS leaves runner
-# auth off, but scripts/dogfood.sh mints a `<host_id>:<token>` pair into
-# server/.env on its first run and the source above hands that list to the
-# server — from then on the join is gated per host_id and the runner must
-# present the matching value as KAOIRO_RUNNER_TOKEN (runner/src/runner-cli.ts
-# reads it from the env only). Resolved here, before anything is launched,
-# so a missing entry fails without leaving a half-started stack behind. A
-# pre-set KAOIRO_RUNNER_TOKEN wins, as with the DETS paths below.
-# shellcheck source=scripts/lib/runner-token.sh
-. "$root/scripts/lib/runner-token.sh"
-if [[ -n "${KAOIRO_RUNNER_TOKENS:-}" && -z "${KAOIRO_RUNNER_TOKEN:-}" ]]; then
-  host_id="$(node -e \
-    'process.stdout.write(String(require(process.argv[1]).host_id ?? ""))' \
-    "$runner_config")"
-  KAOIRO_RUNNER_TOKEN="$(printf '%s' "$KAOIRO_RUNNER_TOKENS" |
-    runner_token_for_host "$host_id")"
-  if [[ -z "$KAOIRO_RUNNER_TOKEN" ]]; then
-    echo "dev: error — server/.env sets KAOIRO_RUNNER_TOKENS but has no" \
-      "entry for host_id=$host_id (from $runner_config)" >&2
-    echo "  add '$host_id:<token>' to it (an empty token counts as missing)," \
-      "or export KAOIRO_RUNNER_TOKEN=<token> before re-running" >&2
-    exit 1
-  fi
-  export KAOIRO_RUNNER_TOKEN
+# Runner auth is launcher-owned: append this host's fresh or preset token to
+# the value mix inherits from server/.env, so the server and runner agree by
+# construction without parsing either file.
+# shellcheck source=scripts/lib/runner-pairing.sh
+. "$root/scripts/lib/runner-pairing.sh"
+host_id="$(pairing_host_id "$runner_config")"
+if [[ -n "${KAOIRO_RUNNER_TOKEN:-}" ]]; then
+  runner_token="$KAOIRO_RUNNER_TOKEN"
+else
+  runner_token="$(pairing_ensure_runner_env "$root/runner/runner.env")"
 fi
+pairing_check_token "$runner_token"
+KAOIRO_RUNNER_TOKENS="$(pairing_append "${KAOIRO_RUNNER_TOKENS:-}" "$host_id" "$runner_token")"
+export KAOIRO_RUNNER_TOKENS
+export KAOIRO_RUNNER_TOKEN="$runner_token"
 
 # Isolate dev DETS stores under $root/tmp/dev-data/ (issue #121). Unset
 # envs would otherwise fall through to each store's default_path (a shared

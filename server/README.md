@@ -88,8 +88,17 @@ mix dashboard.build   # cd ../dashboard && pnpm build → server/priv/static へ
 - **`KAOIRO_RUNNER_TOKENS` 未設定 → 同じ規則を host_id 単位でランナーに適用
   (ADR-0023)**。`:prod` では join が `unauthorized` で全拒否される。
   docker compose と [`scripts/dogfood.sh`](../scripts/dogfood.sh) は
-  リリースイメージを起動するのでこちらに該当する(dogfood は未設定を検出
-  すると `.env` にエントリを自動生成し、同じ値を runner へ渡す)。
+  リリースイメージを起動するのでこちらに該当する。`dogfood.sh` は
+  `runner/runner.env` の launcher-owned token を、Compose が解決した既存の
+  list へ追加して専用 override から渡す。
+
+`docker-compose.dogfood.yaml` is for `scripts/dogfood.sh` only. Production
+deployments use `docker-compose.yaml` alone; the override is how dogfood adds
+its local runner pair without changing `server/.env`.
+
+`runner/runner.env` is a separate gitignored launcher file containing only a
+64-character lowercase-hex `KAOIRO_RUNNER_TOKEN`. Both local launchers create
+it with mode 0600 when absent and append its host pair to the server value.
 
 いずれも未設定なら起動時に警告をログ出力する([threat-model](../docs/specs/threat-model.md))。
 
