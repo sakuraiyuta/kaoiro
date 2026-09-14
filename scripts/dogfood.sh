@@ -214,25 +214,15 @@ fi
 
 # A pre-set env var wins, so an operator can point the runner at another
 # token without touching server/.env.
+# shellcheck source=scripts/lib/runner-token.sh
+. "$root/scripts/lib/runner-token.sh"
 if [[ -z "${KAOIRO_RUNNER_TOKEN:-}" ]]; then
   # Last assignment wins, matching how compose reads env_file. The value
-  # is piped (not passed as an argv) so it stays out of the process list,
-  # and the pair split honours only the FIRST colon — server-side
-  # parsing (Auth.parse_pairs/1) allows a colon inside the token.
+  # is piped (not passed as an argv) so it stays out of the process list.
   KAOIRO_RUNNER_TOKEN="$(
     grep -E '^[[:space:]]*KAOIRO_RUNNER_TOKENS=' "$env_file" | tail -n 1 |
       sed -E "s/^[[:space:]]*KAOIRO_RUNNER_TOKENS=//; s/^['\"]//; s/['\"]$//" |
-      awk -v host="$host_id" -F, '{
-        for (i = 1; i <= NF; i++) {
-          at = index($i, ":")
-          if (at == 0) continue
-          key = substr($i, 1, at - 1)
-          value = substr($i, at + 1)
-          gsub(/^[ \t]+|[ \t]+$/, "", key)
-          gsub(/^[ \t]+|[ \t]+$/, "", value)
-          if (key == host) { print value; exit }
-        }
-      }'
+      runner_token_for_host "$host_id"
   )"
   if [[ -z "$KAOIRO_RUNNER_TOKEN" ]]; then
     echo "dogfood: error — server/.env sets KAOIRO_RUNNER_TOKENS but has no" \
