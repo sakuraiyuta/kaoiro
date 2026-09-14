@@ -41,6 +41,10 @@ function deferred<T = void>(): {
 interface TurnScript {
   tool: boolean;
   ending: ReturnType<typeof deferred<Ending>>;
+  /** How the stream reacts to the SDK abort signal: end quietly (the
+   *  default) or throw, the way a killed `codex exec` surfaces as a
+   *  runStreamed rejection (issue #349). */
+  onAbort?: "eof" | "throw";
 }
 
 function turnCompleted(): ThreadEvent {
@@ -78,9 +82,10 @@ function makeThread(scripts: TurnScript[]): CodexClientLike {
             status: "in_progress",
           },
         };
+        const onAbort = script!.onAbort ?? "eof";
         const aborted = new Promise<Ending>((resolve) => {
-          if (signal?.aborted) resolve("eof");
-          signal?.addEventListener("abort", () => resolve("eof"), { once: true });
+          if (signal?.aborted) resolve(onAbort);
+          signal?.addEventListener("abort", () => resolve(onAbort), { once: true });
         });
         const ending = await Promise.race([script!.ending.promise, aborted]);
         switch (ending) {
@@ -379,27 +384,39 @@ describe("codex request_session_reset gate (issue #347)", () => {
     });
   }
 
-  it("allow → reserve → interrupt drops the reservation", async () => {
-    const script: TurnScript = { tool: true, ending: deferred<Ending>() };
-    const notice: TurnScript = { tool: false, ending: deferred<Ending>() };
-    const rig = await makeRig([script, notice]);
-    try {
-      await startToolTurn(rig);
-      const bridge = await rig.bridge();
-      const { reply, requestId } = await askForReset(rig, bridge);
-      rig.linkOptions.onPermissionDecision({ request_id: requestId, allow: true });
-      await reply;
-      (rig.linkOptions.onInterrupt as () => void)();
-      await vi.waitFor(() => expect(rig.turnTokens).toHaveLength(2));
-      await vi.waitFor(() =>
-        expect(rig.sent.filter((e) => e.type === "result")).toHaveLength(2),
-      );
-      expect(rig.requests).toHaveLength(0);
-      bridge.destroy();
-    } finally {
-      await finish(rig);
-    }
-  });
+  // An operator interrupt aborts the SDK run; depending on timing the stream
+  // then ends quietly (terminal-less EOF) or rejects (run_streamed_rejected).
+  // Both must drop the reservation AND name the operator (issue #349).
+  for (const onAbort of ["eof", "throw"] as const) {
+    it(`allow → reserve → interrupt (${onAbort}) drops the reservation and names the operator`, async () => {
+      const script: TurnScript = { tool: true, ending: deferred<Ending>(), onAbort };
+      const notice: TurnScript = { tool: false, ending: deferred<Ending>() };
+      const rig = await makeRig([script, notice]);
+      try {
+        await startToolTurn(rig);
+        const bridge = await rig.bridge();
+        const { reply, requestId } = await askForReset(rig, bridge);
+        rig.linkOptions.onPermissionDecision({ request_id: requestId, allow: true });
+        await reply;
+        (rig.linkOptions.onInterrupt as () => void)();
+        await vi.waitFor(() => expect(rig.turnTokens).toHaveLength(2));
+        await vi.waitFor(() =>
+          expect(rig.sent.filter((e) => e.type === "result")).toHaveLength(2),
+        );
+        expect(rig.requests).toHaveLength(0);
+        const lines = stderr.mock.calls.map(([line]) => String(line));
+        expect(
+          lines.some((l) => l.includes("the operator interrupted the turn that reserved it")),
+        ).toBe(true);
+        expect(
+          lines.some((l) => l.includes("ended without a confirmed result")),
+        ).toBe(false);
+        bridge.destroy();
+      } finally {
+        await finish(rig);
+      }
+    });
+  }
 
   it("allow → reserve → watchdog fail-stop sends nothing", async () => {
     const script: TurnScript = { tool: true, ending: deferred<Ending>() };

@@ -1805,6 +1805,9 @@ export class CodexHost implements EngineAdapter {
           conversationIds,
           error:
             recordedThreadError === null ? {} : { detail: recordedThreadError },
+          ...(this.#turnAbandoned !== null
+            ? { abandoned: this.#turnAbandoned }
+            : {}),
         });
       }
     } catch (err) {
@@ -1963,6 +1966,10 @@ export class CodexHost implements EngineAdapter {
         // `detail` ONLY to keyword-sniff a code and never copies it into the
         // produced notice's message — the raw string itself never leaves
         // this process.
+        // An operator interrupt aborts the SDK run and lands here (or on
+        // the terminal-less EOF above), so these sites must carry the
+        // recorded abandonment too, or the agent's cancellation notice
+        // falls back to the generic cause (issue #349).
         this.#options.onTurnEnd?.({
           turnToken,
           conversationIds,
@@ -1970,6 +1977,9 @@ export class CodexHost implements EngineAdapter {
             detail,
             ...(terminalError instanceof PermissionDispatchError ? { reason: terminalError.reason } : {}),
           },
+          ...(this.#turnAbandoned !== null
+            ? { abandoned: this.#turnAbandoned }
+            : {}),
         });
       }
       if (!this.#closed) {
