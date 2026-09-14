@@ -1,6 +1,6 @@
 ---
 title: Launcher-owned runner token pairing for dev.sh and dogfood.sh
-status: proposed
+status: accepted
 date: 2026-09-14
 opened: 2026-09-14
 supersedes: []
@@ -13,8 +13,11 @@ related_adrs: [23, 31]
 
 ## Status
 
-Proposed (kohaku, 2026-09-14; revision 2 after fuji's design review, which
-replaced the `.env` line matching of revision 1 with a Compose override).
+Accepted (operator, 2026-09-14). Implemented on `develop` at e63f312b
+(`scripts/lib/runner-pairing.sh`, `server/docker-compose.dogfood.yaml`,
+`scripts/test/runner-pairing.test.mjs`); design reviewed twice by fuji
+(revision 2 replaced the `.env` line matching of revision 1 with a Compose
+override), implementation reviewed by fuji in two further rounds.
 Redesign requested by the operator after the branch `fix-dev-runner-token`
 (f4597dd5 + three fix-forward commits) failed to converge in four review
 rounds.
