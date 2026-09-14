@@ -149,6 +149,12 @@ limits, and the turn-number contract).
   require the recipient to measure and decide, and to report its decision and
   evidence. Giving only a declarative premise risks implementing it unchanged
   even when it is wrong.
+- Name a delegation's deliverable as a **unit of result** (“N items merged with
+  the checker green”), and state the review-round budget explicitly. Exceeding
+  the budget produces a reporting obligation, not another round.
+- Observe the deliverable's progress, not the volume of activity. A rising
+  message count while the unit of result stands still is the best available
+  signal of a review quagmire.
 - The round budget is a process rule, and this document is where it lives. The
   server also detects a long rally structurally and shows the operator a
   notice — counted per agent PAIR across conversations, because opening a
@@ -162,3 +168,42 @@ limits, and the turn-number contract).
   detection off (∞), rather than reading past banners that never clear —
   a notice nobody acts on is worth nothing. The threshold is
   deployment-wide, not per director.
+
+## Round budget for review cycles
+
+Applies to reviews run between peers, a reviewer and an implementer. Depth
+itself has value where it belongs—what is bounded here is how that depth is
+allocated and how many round trips it may take, and every trigger is judged by
+**something you can simply count**.
+
+| Trigger | Threshold | Obligation on firing |
+|---|---|---|
+| Cumulative must-fix rounds on one deliverable | more than 3 rounds | Both reviewer and implementer stop and report to the director |
+| Findings confined to failure modes of a tool built during the task | 2 consecutive rounds | Stop; the director rules on whether the tool should exist |
+| Change of the target or the verifier during a review round | 0 (freeze) | Change only at a round boundary. Evidence from a round that broke the freeze is void |
+| Cumulative conversation round trips on one deliverable | 20 round trips | Close the conversation and escalate the judgment to the director with a summary |
+
+- The counter's population is the deliverable, and **the parties cannot reset
+  it**. Swapping the artifact, moving the verifier, or reopening the
+  conversation does not return it to 0 (a swap at a round boundary is a
+  legitimate change, but the count carries over). The director holds the
+  running total and states its current value at dispatch and at the start of
+  each round. **The ledger holder (the director) dispatches the review rounds
+  personally**—once the ledger and the dispatch sit in different hands, the
+  accuracy of the total depends on reconciling conversations. Counted per
+  artifact, the M18 quagmire, where the verifier moved three times, still read
+  as 1: a counter whose population moves is not a valve.
+- Reaching a threshold is a valve by design, not anyone's fault. Escalation is
+  an obligation, not a defeat. Precise in-round procedure such as permits and
+  hash binding is no substitute for the reporting obligation—the better the
+  procedure looks, the more legitimate staying inside the loop appears.
+- Allocation of verification depth (not subjecting a throwaway tool to
+  adversarial review) is governed by each agent's global rules (Claude:
+  rules/verification.md “Depth is set by blast radius”; Codex: the verification
+  section of AGENTS.md). It is not duplicated here.
+
+Why: during the translation wave for issue #91 on 2026-08-24, must-fix rounds
+on a throwaway merge script reached M18 (dozens of round trips, zero
+deliverable progress, no escalation). Each round was locally faithful to the
+discipline, and the only anomalies observable from outside were the round count
+and the stalled result.
