@@ -101,15 +101,16 @@ enabled = false
         { kind: "log", payload: { kind: "assistant", text: "DONE" } },
       ]);
       expect(events.some(event => event.kind === "adapter" && event.event.kind === "assistant")).toBe(true);
-      expect(events.some(event => event.kind === "log" && event.payload.kind === "tool_use" && event.payload.tool_name === "mcp__kaoiro__probe")).toBe(true);
       // A completed model turn can hide a failed MCP call. Keep both sides of
       // the bridge visible when the CLI behaves differently on a CI runner.
-      expect(events.some(event => event.kind === "log" && event.payload.kind === "tool_result" && event.payload.output?.includes(`BRIDGE_OK_${index}`)), JSON.stringify({
+      const toolDiagnostic = JSON.stringify({
         index, toolCalls, events, diagnostics, node: process.version,
         stderrTail: session.stderrTail,
         toolOutputs: requests[index * 2 - 1]?.input.filter(item =>
           item.type === "custom_tool_call_output" || item.type === "function_call_output"),
-      }, null, 2)).toBe(true);
+      }, null, 2);
+      expect(events.some(event => event.kind === "log" && event.payload.kind === "tool_use" && event.payload.tool_name === "mcp__kaoiro__probe"), toolDiagnostic).toBe(true);
+      expect(events.some(event => event.kind === "log" && event.payload.kind === "tool_result" && event.payload.output?.includes(`BRIDGE_OK_${index}`)), toolDiagnostic).toBe(true);
       expect(turn.identity).toMatchObject({ threadId, hostTurnToken: `host-${index}`, clientUserMessageId: `user-${index}` });
       expect(typeof turn.identity.requestId).toBe("number");
       expect(typeof turn.identity.turnId).toBe("string");
