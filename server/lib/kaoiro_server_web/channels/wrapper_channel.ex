@@ -798,31 +798,51 @@ defmodule KaoiroServerWeb.WrapperChannel do
        )
        when kind in ["permission_applied", "permission_failed"] and is_binary(at) do
     agent_id = socket.assigns.agent_id
+    engine = socket.assigns[:permission_sync_engine]
 
-    case Map.get(payload, "trigger") do
-      nil ->
-        details = resolve_permission_previous(agent_id, Map.get(payload, "details"))
+    cond do
+      # issue #359 M1: a permission_applied observation may omit turn_id ONLY for
+      # an advisory engine with no per-turn identity (Antigravity, its negotiated
+      # permission_sync engine). Reject the omission from any other engine's
+      # wrapper so the audit contract is not weakened; the sanitizer itself
+      # accepts turn_id-optional, because it also handles a server-derived
+      # `previous` observation and boot-load re-validation, where the engine is
+      # not in hand. This is the one place the "antigravity" engine name gates
+      # the relaxation.
+      kind == "permission_applied" and engine != "antigravity" and
+          permission_observation_missing_turn_id?(Map.get(payload, "details")) ->
+        Logger.warning(
+          "session_lifecycle: permission_applied observation omits turn_id but " <>
+            "engine #{inspect(engine)} is not an advisory engine that may omit it " <>
+            "(issue #359 M1); dropped (agent_id=#{agent_id})"
+        )
 
-        case details do
-          %{"revision" => revision} when is_integer(revision) and revision >= 0 ->
-            if KaoiroServer.PermissionSettings.known_revision?(agent_id, revision) do
-              SessionLifecycleEvents.record_permission_event(agent_id, kind, at, details)
-            else
-              Logger.warning(
-                "session_lifecycle: #{kind} revision #{revision} exceeds the known " <>
-                  "allocation ledger, dropped (agent_id=#{agent_id})"
-              )
+      true ->
+        case Map.get(payload, "trigger") do
+          nil ->
+            details = resolve_permission_previous(agent_id, Map.get(payload, "details"))
+
+            case details do
+              %{"revision" => revision} when is_integer(revision) and revision >= 0 ->
+                if KaoiroServer.PermissionSettings.known_revision?(agent_id, revision) do
+                  SessionLifecycleEvents.record_permission_event(agent_id, kind, at, details)
+                else
+                  Logger.warning(
+                    "session_lifecycle: #{kind} revision #{revision} exceeds the known " <>
+                      "allocation ledger, dropped (agent_id=#{agent_id})"
+                  )
+                end
+
+              _malformed ->
+                SessionLifecycleEvents.record_permission_event(agent_id, kind, at, details)
             end
 
-          _malformed ->
-            SessionLifecycleEvents.record_permission_event(agent_id, kind, at, details)
+          trigger ->
+            Logger.warning(
+              "session_lifecycle: #{kind} carries a non-null trigger " <>
+                "(#{inspect(trigger)}); dropped (agent_id=#{agent_id})"
+            )
         end
-
-      trigger ->
-        Logger.warning(
-          "session_lifecycle: #{kind} carries a non-null trigger " <>
-            "(#{inspect(trigger)}); dropped (agent_id=#{agent_id})"
-        )
     end
 
     {:reply, :ok, socket}
@@ -1076,6 +1096,15 @@ defmodule KaoiroServerWeb.WrapperChannel do
   end
 
   defp resolve_permission_previous(_agent_id, details), do: details
+
+  # issue #359 M1: true when a permission_applied observation map carries no
+  # turn_id. A non-map (malformed) details is NOT flagged here — it falls
+  # through to record_permission_event's own shape validation, which rejects it
+  # with an accurate message rather than this turn_id-specific one.
+  defp permission_observation_missing_turn_id?(%{} = details),
+    do: not Map.has_key?(details, "turn_id")
+
+  defp permission_observation_missing_turn_id?(_details), do: false
 
   # Non-IA envelopes: retain, then fan out. Unchanged from pre-ADR-0051
   # except that `inter_agent_message` no longer reaches it (see

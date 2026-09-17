@@ -2225,6 +2225,16 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       socket
     end
 
+    # issue #359 M1: a socket whose join negotiated permission_sync for a given
+    # engine, so socket.assigns[:permission_sync_engine] gates the turn_id
+    # omission at the permission_applied audit ingestion.
+    defp seed_known_with_engine(agent_id, engine) do
+      socket = join_wrapper(agent_id, "default", %{"permission_sync" => %{"engine" => engine}})
+      ref = push(socket, "envelope", envelope(agent_id, "idle"))
+      assert_reply ref, :ok
+      socket
+    end
+
     # ADR-0051 D3-1: an accepted IA is stamped at ingress, and the stamped
     # envelope — not the raw one — is what gets projected, pushed to the
     # peer and broadcast. The stamp comes back on the acceptance ack.
@@ -2533,6 +2543,93 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert_reply ref, :ok
 
       assert [%{kind: "permission_applied", trigger: nil, details: stored}] =
+               SessionLifecycleEvents.list_for_agent(agent_id)
+
+      assert stored == details
+    end
+
+    test "permission_applied observation omitting turn_id is recorded for an antigravity socket (issue #359 M1)" do
+      agent_id = "test.lifecycle-applied-noturn-antigravity"
+      socket = seed_known_with_engine(agent_id, "antigravity")
+
+      details = %{
+        "revision" => 0,
+        "requested" => %{"sandbox" => "workspace-write", "network_access" => false},
+        "execution_id" => "e1",
+        "session_id" => "s1",
+        "network_access" => false,
+        "permission" => %{"sandbox" => "workspace-write", "approval" => "never"}
+      }
+
+      ref =
+        push(socket, "session_lifecycle", %{
+          "kind" => "permission_applied",
+          "at" => "2026-09-06T00:00:00Z",
+          "details" => details
+        })
+
+      assert_reply ref, :ok
+
+      assert [%{kind: "permission_applied", details: stored}] =
+               SessionLifecycleEvents.list_for_agent(agent_id)
+
+      assert stored == details
+      refute Map.has_key?(stored, "turn_id")
+    end
+
+    test "permission_applied observation omitting turn_id is DROPPED for a codex socket (issue #359 M1)" do
+      agent_id = "test.lifecycle-applied-noturn-codex"
+      socket = seed_known_with_engine(agent_id, "codex")
+
+      details = %{
+        "revision" => 0,
+        "requested" => %{"sandbox" => "workspace-write", "network_access" => false},
+        "execution_id" => "e1",
+        "session_id" => "s1",
+        "network_access" => false,
+        "permission" => %{"sandbox" => "workspace-write", "approval" => "never"}
+      }
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          ref =
+            push(socket, "session_lifecycle", %{
+              "kind" => "permission_applied",
+              "at" => "2026-09-06T00:00:00Z",
+              "details" => details
+            })
+
+          assert_reply ref, :ok
+        end)
+
+      assert SessionLifecycleEvents.list_for_agent(agent_id) == []
+      assert log =~ "omits turn_id"
+    end
+
+    test "permission_applied with turn_id present is recorded for an antigravity socket (future-proof, issue #359 M1)" do
+      agent_id = "test.lifecycle-applied-turnid-antigravity"
+      socket = seed_known_with_engine(agent_id, "antigravity")
+
+      details = %{
+        "revision" => 0,
+        "requested" => %{"sandbox" => "workspace-write", "network_access" => false},
+        "execution_id" => "e1",
+        "session_id" => "s1",
+        "turn_id" => "t1",
+        "network_access" => false,
+        "permission" => %{"sandbox" => "workspace-write", "approval" => "never"}
+      }
+
+      ref =
+        push(socket, "session_lifecycle", %{
+          "kind" => "permission_applied",
+          "at" => "2026-09-06T00:00:00Z",
+          "details" => details
+        })
+
+      assert_reply ref, :ok
+
+      assert [%{kind: "permission_applied", details: stored}] =
                SessionLifecycleEvents.list_for_agent(agent_id)
 
       assert stored == details

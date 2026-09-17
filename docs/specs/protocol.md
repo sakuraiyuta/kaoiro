@@ -355,7 +355,14 @@ request/submission mismatch. The observation adds the engine identities; it does
 not replace the immutable submission. Never combine the server's requested pair
 with a wrapper execution_id to manufacture evidence of what that exec captured.
 `execution_id` is a wrapper-generated correlation ID for one exec; `session_id`
-and `turn_id` are engine-observed identities. Requested/submitted values retain
+and `turn_id` are engine-observed identities. `turn_id` is optional and omitted
+ONLY by an advisory engine that has no per-turn identifier (Antigravity resumes
+by conversation and emits no turn id, ADR-0057 F4c); Codex and Claude Code keep
+it required, and manufacturing one from a session id or a wrapper token stays
+forbidden. Because the engine that may omit it is the wrapper's self-reported
+one, the server relaxes the audit-event shape to accept a missing `turn_id`
+only when that engine is Antigravity, rejecting the omission for every other
+engine (issue #359 M1). Requested/submitted values retain
 raw network configuration. Expected network access is normalized: full access
 is true, read-only is false, and workspace-write uses the configured toggle.
 Confirm this against the new policy record, including its workspace-write

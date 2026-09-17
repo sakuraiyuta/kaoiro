@@ -414,13 +414,17 @@ function permissionSubmissionOf(value: unknown): PermissionSubmission | null {
 /** `PermissionObservation` extends a submission with the engine identities
  *  `{session_id, turn_id, permission, network_access}`. Without them the
  *  record is a second copy of the submission, so an "observed" claim built
- *  on it would have no observation behind it. */
+ *  on it would have no observation behind it. `turn_id` is optional: an
+ *  advisory engine with no per-turn identity (Antigravity) omits it (issue
+ *  #359 M1); when present it must be a non-empty string. */
 function permissionObservationOf(value: unknown): PermissionSubmission | null {
   const submission = permissionSubmissionOf(value);
   if (submission === null) return null;
   const r = value as Record<string, unknown>;
   if (typeof r.session_id !== "string" || r.session_id === "") return null;
-  if (typeof r.turn_id !== "string" || r.turn_id === "") return null;
+  if (r.turn_id !== undefined && (typeof r.turn_id !== "string" || r.turn_id === "")) {
+    return null;
+  }
   if (typeof r.network_access !== "boolean") return null;
   if (permissionPolicyOf(r.permission) === null) return null;
   return submission;

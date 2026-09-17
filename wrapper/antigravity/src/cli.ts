@@ -20,6 +20,7 @@ import {
   parseCliArgs,
   ServerLink,
 } from "@kaoiro/wrapper-core";
+import type { PermissionSyncMessage } from "@kaoiro/protocol";
 import { AntigravityHost } from "./host.js";
 import { handleAntigravityInterAgentMessage } from "./inter_agent_message_handler.js";
 import { AntigravityInterAgentTurnCoordinator } from "./inter_agent_turn_coordinator.js";
@@ -95,6 +96,11 @@ export async function runAntigravityCli(
 
   let host: AntigravityHost | undefined;
   let link: ServerLink | undefined;
+  // issue #359 M1: permission_sync negotiation state. onSync can fire before the
+  // host is created (during the join / persona-prompt await), so hold the
+  // message and apply it once the host exists (Codex parity).
+  let permissionSyncSupported = false;
+  let pendingPermissionSync: PermissionSyncMessage | undefined;
   let instructionChain: Promise<void> = Promise.resolve();
   let watchdogFailStopped = false;
   let resolvePersona!: (value: string) => void;
@@ -249,6 +255,23 @@ export async function runAntigravityCli(
     ...(config.server_token === undefined ? {} : { token: config.server_token }),
     ...(config.transition_id === undefined ? {} : { transitionId: config.transition_id }),
     buildInfo,
+    // issue #359 M1: negotiate permission_sync so the server seeds this
+    // session's permission ledger and relays a durable control/next on
+    // reconnect. Gates the supports_permission_switch advertisement.
+    permissionSync: {
+      engine: "antigravity",
+      onNegotiated: (supported) => {
+        permissionSyncSupported = supported;
+        host?.setPermissionSyncSupported(supported);
+      },
+      onSync: (message) => {
+        if (host === undefined) {
+          pendingPermissionSync = message;
+          return;
+        }
+        host.applyPermissionSync(message);
+      },
+    },
     onPersonaPrompt: resolvePersona,
     onInstruction: (text) => {
       if (host === undefined) return;
@@ -287,6 +310,17 @@ export async function runAntigravityCli(
     appendSystemPrompt = await personaPrompt;
   } finally {
     clearTimeout(timer);
+  }
+  // issue #359 M1: settle permission_sync negotiation before the host is built
+  // so the constructor knows whether to advertise the selector and seed the
+  // baseline (Codex parity). A test double without the method leaves the
+  // negotiated flag false (fail-closed).
+  if (
+    link !== undefined &&
+    "waitForPermissionSyncNegotiation" in link &&
+    typeof link.waitForPermissionSyncNegotiation === "function"
+  ) {
+    permissionSyncSupported = await link.waitForPermissionSyncNegotiation();
   }
   host = createHost(config, deliveryAcknowledgementRuntime.withHostOptions({
     cwd: process.cwd(),
@@ -358,11 +392,29 @@ export async function runAntigravityCli(
       askUserQuestionDescriptor((questions) => questionBroker.decide(questions)),
     ],
     ...(resumeSessionId === undefined ? {} : { resumeSessionId }),
+    // issue #359 M1: relay the negotiated permission_sync state and the barrier
+    // so the host advertises/seeds correctly and each turn's gate waits for a
+    // durable control/next relayed on reconnect.
+    permissionSyncSupported,
+    waitForPermissionSync: () => {
+      if (
+        link !== undefined &&
+        "waitForPermissionSync" in link &&
+        typeof link.waitForPermissionSync === "function"
+      ) {
+        return link.waitForPermissionSync();
+      }
+      return Promise.resolve();
+    },
   }, (turnToken) => {
     writeAntigravityLifecycle({ event: "turn_start", turnToken });
     turnWatchdog.start(turnToken);
   }));
   dependencies.onHostCreated?.(host);
+  // issue #359 M1: apply a permission_sync that arrived before the host existed.
+  if (pendingPermissionSync !== undefined) {
+    host.applyPermissionSync(pendingPermissionSync);
+  }
   send(
     makeStateChange(
       config,

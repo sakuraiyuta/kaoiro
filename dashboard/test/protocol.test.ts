@@ -35,6 +35,7 @@ import {
   parseTasks,
   pendingPermissionFrom,
   pendingQuestionFrom,
+  permissionControlFrom,
   parseHistoryReplayComplete,
   parseHistoryReset,
   parseHistoryPayload,
@@ -475,6 +476,57 @@ describe("pendingQuestionFrom (ADR-0027)", () => {
         ext: { pending_question: { request_id: "q-1", questions: "no" } },
       }),
     ).toBeNull();
+  });
+});
+
+describe("permissionControlFrom — turn_id optional (issue #359 M1)", () => {
+  const base: Envelope = {
+    version: "0",
+    agent_id: "a",
+    ts: "2026-09-17T00:00:00Z",
+    type: "state_change",
+    state: "idle",
+  };
+
+  const cell = { sandbox: "workspace-write", network_access: false };
+  const submitted = { revision: 1, requested: cell, execution_id: "e1" };
+  const effectiveNoTurn = {
+    revision: 1,
+    requested: cell,
+    execution_id: "e1",
+    session_id: "s1",
+    network_access: false,
+    permission: { sandbox: "workspace-write", approval: "never", enforcement: "advisory" },
+  };
+  const appliedControl = {
+    revision: 1,
+    requested: cell,
+    status: "applied",
+    constraints: { approval: "never", enforcement: "advisory" },
+    submitted,
+    effective: effectiveNoTurn,
+  };
+
+  it("accepts an applied control whose effective observation omits turn_id (advisory antigravity)", () => {
+    const parsed = permissionControlFrom({
+      ...base,
+      ext: { permission_control: appliedControl },
+    });
+    expect(parsed).not.toBeNull();
+    expect(parsed?.status).toBe("applied");
+  });
+
+  it("still rejects an applied control whose effective turn_id is present but empty", () => {
+    const parsed = permissionControlFrom({
+      ...base,
+      ext: {
+        permission_control: {
+          ...appliedControl,
+          effective: { ...effectiveNoTurn, turn_id: "" },
+        },
+      },
+    });
+    expect(parsed).toBeNull();
   });
 });
 
