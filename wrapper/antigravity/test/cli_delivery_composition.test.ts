@@ -38,6 +38,7 @@ function inbound(deliverySeq: number, turnNumber: number, body = "hello"): Envel
 describe("Antigravity CLI delivery composition", () => {
   it("connects the server handler, agy turn start, token, and delivery acknowledgement", async () => {
     const acknowledgements: number[] = [];
+    const disconnectReasons: string[] = [];
     const sends: Array<{ text: string; conversationIds: readonly string[]; turnToken: string }> = [];
     const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     let linkOptions!: Record<string, any>;
@@ -45,6 +46,10 @@ describe("Antigravity CLI delivery composition", () => {
     const link = {
       close: () => {},
       send: () => {},
+      reportDisconnectIntent: async (reason: string) => {
+        disconnectReasons.push(reason);
+        return true;
+      },
       acknowledgeInterAgentDelivery: (sequence: number) => acknowledgements.push(sequence),
     };
     let startHost!: () => void;
@@ -120,6 +125,7 @@ describe("Antigravity CLI delivery composition", () => {
       await running;
       stderr.mockRestore();
     }
+    expect(disconnectReasons).toEqual(["stop"]);
   });
 
   it("runs an inbound delivery through the production default CLI and host to an agy child", async () => {
@@ -187,5 +193,32 @@ if (args[0] === "models") {
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
+  });
+
+  it("acknowledges a caught fatal disconnect intent before closing the link", async () => {
+    const events: string[] = [];
+
+    await expect(runAntigravityCli({
+      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      loadConfig: () => ({ ...config }),
+      createServerLink: (_url, _agentId, options) => {
+        queueMicrotask(() => options.onPersonaPrompt?.("system prompt"));
+        return {
+          close: () => events.push("close"),
+          send: () => {},
+          reportDisconnectIntent: async (reason: string) => {
+            events.push(`intent:${reason}`);
+            return true;
+          },
+        } as never;
+      },
+      createHost: () => ({
+        state: "idle",
+        statusExtSnapshot: () => ({}),
+        run: async () => { throw new Error("caught fatal"); },
+      }) as never,
+    })).rejects.toThrow("caught fatal");
+
+    expect(events).toEqual(["intent:crash", "close"]);
   });
 });

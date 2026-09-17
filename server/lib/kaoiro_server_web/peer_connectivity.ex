@@ -19,14 +19,14 @@ defmodule KaoiroServerWeb.PeerConnectivity do
   peers. Returns `:planned` when `reconnecting` was emitted, otherwise
   `:unexpected` after emitting the ordinary terminal `disconnected` notice.
   """
-  def disconnect(agent_id, ts) do
+  def disconnect(agent_id, ts, disconnect \\ nil) do
     case PlannedDisconnects.disconnect(agent_id) do
       {:planned, intent} ->
         deliver_reconnecting(agent_id, intent, ts)
         :planned
 
       :noop ->
-        deliver_disconnected(agent_id, ts)
+        deliver_disconnected(agent_id, ts, [], false, disconnect)
         :unexpected
     end
   end
@@ -66,10 +66,10 @@ defmodule KaoiroServerWeb.PeerConnectivity do
     do: close_for_authoritative_state(agent_id, intent)
 
   @doc "Cancels a planned transition for operator stop and closes it terminally."
-  def stop(agent_id) do
+  def stop(agent_id, disconnect \\ nil) do
     case PlannedDisconnects.cancel(agent_id) do
       {:cancelled, intent} ->
-        deliver_disconnected(agent_id, now(), intent.targets)
+        deliver_disconnected(agent_id, now(), intent.targets, false, disconnect)
         :disconnected
 
       :noop ->
@@ -168,9 +168,13 @@ defmodule KaoiroServerWeb.PeerConnectivity do
     :ok
   end
 
-  defp deliver_disconnected(agent_id, ts, required_targets \\ [], fill_remaining \\ false)
+  defp deliver_disconnected(agent_id, ts, required_targets),
+    do: deliver_disconnected(agent_id, ts, required_targets, false, nil)
 
-  defp deliver_disconnected(agent_id, ts, required_targets, fill_remaining) do
+  defp deliver_disconnected(agent_id, ts, required_targets, fill_remaining),
+    do: deliver_disconnected(agent_id, ts, required_targets, fill_remaining, nil)
+
+  defp deliver_disconnected(agent_id, ts, required_targets, fill_remaining, disconnect) do
     message = "peer #{agent_id} is unreachable: wrapper disconnected"
 
     {targets, unclaimed} =
@@ -200,13 +204,17 @@ defmodule KaoiroServerWeb.PeerConnectivity do
       end
 
     for {cid, peers} <- targets, peer <- peers do
+      error =
+        %{"code" => "disconnected", "message" => message}
+        |> maybe_merge_disconnect(disconnect)
+
       payload = %{
         "to" => peer,
         "conversation_id" => cid,
         "turn_number" => 0,
         "kind" => "inform",
         "body" => message,
-        "error" => %{"code" => "disconnected", "message" => message},
+        "error" => error,
         "meta" => %{"done" => false, "propose_next" => ""},
         "owner" => %{"kind" => "user", "id" => "system"}
       }
@@ -222,6 +230,11 @@ defmodule KaoiroServerWeb.PeerConnectivity do
     warn_on_cap("disconnect", agent_id, unclaimed)
     :ok
   end
+
+  defp maybe_merge_disconnect(error, %{"origin" => origin, "reason" => reason}),
+    do: Map.merge(error, %{"origin" => origin, "reason" => reason})
+
+  defp maybe_merge_disconnect(error, _disconnect), do: error
 
   defp warn_on_cap(_label, _agent_id, 0), do: :ok
 

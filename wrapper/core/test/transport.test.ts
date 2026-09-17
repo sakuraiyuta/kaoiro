@@ -1362,6 +1362,26 @@ describe("ServerLink — requestDirectory (protocol-inter-agent companion)", () 
     });
   });
 
+  it("keeps only closed disconnect origin/reason pairs in directory entries", async () => {
+    const valid = await narrowOne({
+      state: "disconnected",
+      disconnect: { origin: "agent_self", reason: "crash" },
+    });
+    expect(valid?.disconnect).toEqual({ origin: "agent_self", reason: "crash" });
+
+    const invalid = await narrowOne({
+      state: "disconnected",
+      disconnect: { origin: "operator", reason: "crash" },
+    });
+    expect(invalid).not.toHaveProperty("disconnect");
+
+    const live = await narrowOne({
+      state: "idle",
+      disconnect: { origin: "agent_self", reason: "crash" },
+    });
+    expect(live).not.toHaveProperty("disconnect");
+  });
+
   // issue #269 W1 (S1 再発防止): persona キーが無い payload は narrow が
   // entry ごと落とす — この挙動が変わると directory-only entry は
   // wrapper に届かず、ログも残らず消える (S1 が言っていた defect そのもの)。
@@ -1434,6 +1454,7 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
 
   const fire: Record<VersionedWrapperEvent, (link: ServerLink) => void> = {
     delivery_ack: (link) => link.acknowledgeInterAgentDelivery(1),
+    disconnect_intent: (link) => void link.reportDisconnectIntent("stop"),
     delivery_status_request: (link) => void link.requestInterAgentDeliveryStatus(),
     delivery_resync: (link) => void link.requestInterAgentDeliveryResync({ request_id: "request", cutoff: 1, missing_ranges: [[1, 1]] }),
     history_reset: (link) => link.sendHistoryReset("r"),
@@ -1454,7 +1475,7 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
     expect(Object.keys(fire).sort()).toEqual(versioned());
   });
 
-  it("T1-2: 9種すべてを実際に送る", () => {
+  it("T1-2: 10種すべてを実際に送る", () => {
     const link = new ServerLink("ws://x/wrapper", "a.agent", {
       personaId: "ao",
       buildInfo: {
@@ -1468,7 +1489,7 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
     expect(mock.pushes.map((push) => push.event).sort()).toEqual(versioned());
   });
 
-  it("T1-3: 9種すべての payload に flat version を stamp する", () => {
+  it("T1-3: 10種すべての payload に flat version を stamp する", () => {
     const link = new ServerLink("ws://x/wrapper", "a.agent", {
       personaId: "ao",
       buildInfo: {
@@ -1505,6 +1526,21 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
   it("T1-4: control call site は funnel を迂回しない", async () => {
     const source = await import("node:fs/promises").then((fs) => fs.readFile(new URL("../src/transport.ts", import.meta.url), "utf8"));
     expect((source.match(/this\.\#channel\.push\(/g) ?? [])).toHaveLength(2);
+  });
+
+  it("waits for the disconnect intent acknowledgement", async () => {
+    const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
+    const accepted = link.reportDisconnectIntent("crash");
+    expect(mock.lastPush).toMatchObject({
+      event: "disconnect_intent",
+      payload: { version: "0", reason: "crash" },
+    });
+    mock.lastPush!.receivers.get("ok")!({});
+    await expect(accepted).resolves.toBe(true);
+
+    const rejected = link.reportDisconnectIntent("stop");
+    mock.lastPush!.receivers.get("error")!({ reason: "stale_disconnect_owner" });
+    await expect(rejected).resolves.toBe(false);
   });
 });
 
@@ -1986,6 +2022,24 @@ describe("ServerLink — hydration verdict と IA acceptance ack (ADR-0051)", ()
       reason: "unknown_agent",
     });
     expect(acks).toEqual([]);
+  });
+
+  it("narrowly carries disconnect attribution on a preflight rejection", async () => {
+    const link = new ServerLink("ws://localhost:4000/wrapper", "host-1.self", {
+      personaId: "ao",
+    });
+
+    const pending = link.sendInterAgent(interAgentEnvelope());
+    mock.lastPush?.receivers.get("error")?.({
+      reason: "disconnected",
+      disconnect: { origin: "unplanned", reason: "socket_lost" },
+    });
+
+    await expect(pending).resolves.toEqual({
+      kind: "rejected",
+      reason: "disconnected",
+      disconnect: { origin: "unplanned", reason: "socket_lost" },
+    });
   });
 
   // issue #177 / こはく合意の Stage 3 回帰: server が :conversation_closed を

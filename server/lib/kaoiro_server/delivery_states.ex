@@ -59,6 +59,10 @@ defmodule KaoiroServer.DeliveryStates do
   def retire(agent_id, generation, owner, cutoff, ranges, server \\ __MODULE__),
     do: GenServer.call(server, {:retire, agent_id, generation, owner, cutoff, ranges})
 
+  @doc "Retires every unresolved sequence owned by one live wrapper generation."
+  def retire_owned_generation(agent_id, generation, owner, server \\ __MODULE__),
+    do: GenServer.call(server, {:retire_owned_generation, agent_id, generation, owner})
+
   @doc "Reserves capacity before conversation accounting; reservations never issue a sequence."
   def reserve(agent_id, owner, server \\ __MODULE__),
     do: GenServer.call(server, {:reserve, agent_id, owner})
@@ -309,6 +313,53 @@ defmodule KaoiroServer.DeliveryStates do
             )
 
         {:reply, {:ok, public(next)}, %{state | entries: Map.put(state.entries, agent_id, next)}}
+    end
+  end
+
+  def handle_call({:retire_owned_generation, agent_id, generation, owner}, _from, state) do
+    if owns_recovery?(state, agent_id, generation, owner) do
+      entry = state.entries[agent_id]
+      already_skipped = MapSet.new(entry.skipped)
+
+      unresolved =
+        if entry.acked_seq < entry.issued_seq do
+          Enum.reject(
+            (entry.acked_seq + 1)..entry.issued_seq,
+            &MapSet.member?(already_skipped, &1)
+          )
+        else
+          []
+        end
+
+      next = %{
+        entry
+        | skipped: MapSet.union(already_skipped, MapSet.new(unresolved)) |> MapSet.to_list(),
+          lost_count: entry.lost_count + length(unresolved)
+      }
+
+      next =
+        if unresolved == [] do
+          next
+        else
+          %{
+            next
+            | last_loss: %{
+                at: DateTime.utc_now() |> DateTime.to_iso8601(),
+                first_seq: Enum.min(unresolved),
+                last_seq: Enum.max(unresolved),
+                count: length(unresolved),
+                reason: "interrupted"
+              }
+          }
+        end
+
+      {next, state} = record_losses(agent_id, next, unresolved, "interrupted", state)
+      next = advance_skipped(next)
+      persist_with_losses(state, agent_id, next)
+
+      {:reply, {:ok, public(next)}, %{state | entries: Map.put(state.entries, agent_id, next)}}
+    else
+      {:reply, {:error, :stale_delivery_owner}, state}
     end
   end
 

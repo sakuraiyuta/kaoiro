@@ -391,6 +391,36 @@ describe("InterAgentTool", () => {
     });
   });
 
+  it.each([
+    [{ origin: "agent_self", reason: "crash" }, { origin: "agent_self", reason: "crash" }],
+    [{ origin: "operator", reason: "crash" }, {}],
+  ] as const)("waited disconnected notice narrows the closed attribution pair %#", async (wire, expected) => {
+    const { tool } = makeTool("self.agent");
+    const pending = callTool(tool, {
+      to: "peer.agent",
+      body: "please reply",
+      kind: "request",
+      conversation_id: "cnv-disconnect-detail",
+      wait_for_response: true,
+      timeout_ms: 1_000,
+    });
+
+    const inbound = inboundEnvelope("cnv-disconnect-detail", "inform", {
+      code: "disconnected",
+      message: "peer disconnected",
+      ...wire,
+    } as InterAgentErrorPayload);
+    expect((await tool.receiveInbound(inbound)).consumed).toBe(true);
+
+    const { result } = await pending;
+    expect(JSON.parse(result.content[0]!.text).peer_error).toEqual({
+      code: "disconnected",
+      message: "peer disconnected",
+      from: "peer.agent",
+      ...expected,
+    });
+  });
+
   it("optional フィールド(confidence/reject_reason/propose_next)を payload.meta に反映する", async () => {
     const { tool, capture } = makeTool("agent-a");
     await callTool(tool, {
@@ -1459,6 +1489,25 @@ describe("formatInboundMessage", () => {
     expect(text).not.toContain("[from peer.agent] inform:");
   });
 
+  it("disconnected attribution is rendered only for a valid closed pair", () => {
+    const valid = formatInboundMessage(inboundEnvelope("cnv-disc-valid", "inform", {
+      code: "disconnected",
+      message: "peer disconnected",
+      origin: "runner",
+      reason: "stop",
+    }));
+    expect(valid).toContain("peer-error(disconnected, origin=runner, reason=stop)");
+
+    const invalid = formatInboundMessage(inboundEnvelope("cnv-disc-invalid", "inform", {
+      code: "disconnected",
+      message: "peer disconnected",
+      origin: "operator",
+      reason: "crash",
+    } as InterAgentErrorPayload));
+    expect(invalid).toContain("peer-error(disconnected):");
+    expect(invalid).not.toContain("origin=");
+  });
+
   it("未知の error code は既定の行動指針にフォールバックする", () => {
     const env = inboundEnvelope("cnv-unknown-code", "inform", {
       code: "some_future_code",
@@ -1915,7 +1964,11 @@ describe("send_to_agent の acceptance ack 連動 (ADR-0051 D3-2)", () => {
         attempt += 1;
         return Promise.resolve(
           attempt === 1
-            ? { kind: "rejected", reason: "disconnected" }
+            ? {
+                kind: "rejected",
+                reason: "disconnected",
+                disconnect: { origin: "operator", reason: "stop" },
+              }
             : { kind: "accepted", stamp: [1, 0] },
         );
       },
@@ -1936,6 +1989,8 @@ describe("send_to_agent の acceptance ack 連動 (ADR-0051 D3-2)", () => {
         code: "disconnected",
         message: "the peer disconnected",
         from: "peer.agent",
+        origin: "operator",
+        reason: "stop",
       },
     });
 

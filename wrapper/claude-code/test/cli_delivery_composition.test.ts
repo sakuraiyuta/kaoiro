@@ -133,6 +133,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
 
   it("actual entrypoint connects status, handler, and host turn-start to one acknowledgement flow", async () => {
     const acknowledgements: number[] = [];
+    const disconnectReasons: string[] = [];
     let linkOptions!: Record<string, any>;
     let hostOptions!: Record<string, any>;
 
@@ -141,6 +142,10 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       close: () => {},
       currentSessionId: () => null,
       send: () => {},
+      reportDisconnectIntent: async (reason: string) => {
+        disconnectReasons.push(reason);
+        return true;
+      },
     };
     let startHost!: () => void;
     let finishHost!: () => void;
@@ -192,5 +197,6 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     await vi.waitFor(() => expect(acknowledgements).toEqual([2, 3]));
     hostOptions.onHostEnd({ error: {} });
     } finally { finishHost(); await running; }
+    expect(disconnectReasons).toEqual(["stop"]);
   });
 });

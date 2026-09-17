@@ -362,15 +362,26 @@ export async function runAntigravityCli(
   process.on("SIGINT", () => {
     void host?.interrupt().finally(() => host?.close());
   });
+  let disconnectReason: "stop" | "crash" = "stop";
   try {
     await host.run(prompt);
+  } catch (error) {
+    disconnectReason = "crash";
+    throw error;
   } finally {
     interAgentTurns.freezeForWatchdogFailStop(undefined, (envelopes) => link?.retireInterAgentDeliveries?.(envelopes));
-    await link?.flushInterAgentRetirements?.();
-    turnWatchdog.dispose();
-    questionBroker.close();
-    permissionBroker.close();
-    link.close();
+    try {
+      await link?.flushInterAgentRetirements?.();
+    } finally {
+      turnWatchdog.dispose();
+      questionBroker.close();
+      permissionBroker.close();
+      try {
+        await link.reportDisconnectIntent?.(disconnectReason);
+      } finally {
+        link.close();
+      }
+    }
   }
 }
 

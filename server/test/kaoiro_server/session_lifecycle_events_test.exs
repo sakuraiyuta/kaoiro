@@ -119,6 +119,64 @@ defmodule KaoiroServer.SessionLifecycleEventsTest do
     assert SessionLifecycleEvents.list_for_agent("a.any", name) == []
   end
 
+  describe "record_disconnect_event/4" do
+    test "stores only a closed server-authored disconnect pair", %{name: name} do
+      details = %{"origin" => "operator", "reason" => "stop"}
+
+      assert :ok =
+               SessionLifecycleEvents.record_disconnect_event(
+                 "a.disconnect",
+                 "2026-09-18T00:00:00Z",
+                 details,
+                 name
+               )
+
+      assert [%{kind: "disconnected", trigger: nil, details: ^details}] =
+               SessionLifecycleEvents.list_for_agent("a.disconnect", name)
+    end
+
+    test "rejects invalid pairs and the generic validator stays closed", %{name: name} do
+      invalid = %{"origin" => "operator", "reason" => "crash"}
+
+      refute SessionLifecycleEvents.valid_event?(
+               "disconnected",
+               nil,
+               "2026-09-18T00:00:00Z",
+               invalid
+             )
+
+      assert :ok =
+               SessionLifecycleEvents.record_disconnect_event(
+                 "a.disconnect-invalid",
+                 "2026-09-18T00:00:00Z",
+                 invalid,
+                 name
+               )
+
+      assert SessionLifecycleEvents.list_for_agent("a.disconnect-invalid", name) == []
+    end
+
+    test "retains a legacy disconnected event without details across restart", %{
+      name: name,
+      path: path
+    } do
+      assert :ok =
+               SessionLifecycleEvents.append(
+                 "a.disconnect-legacy",
+                 "disconnected",
+                 nil,
+                 "2026-09-18T00:00:00Z",
+                 name
+               )
+
+      GenServer.stop(Process.whereis(name))
+      {:ok, _pid} = SessionLifecycleEvents.start_link(name: name, path: path, cap: 3)
+
+      assert [%{kind: "disconnected", details: nil}] =
+               SessionLifecycleEvents.list_for_agent("a.disconnect-legacy", name)
+    end
+  end
+
   describe "record_permission_event/5 (issue #305, typed permission audit)" do
     defp valid_observation do
       %{

@@ -815,6 +815,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   }, PERSONA_PROMPT_TIMEOUT_MS);
 
   let appendSystemPrompt: string;
+  let disconnectReason: "stop" | "crash" = "stop";
   try {
     appendSystemPrompt = await personaPromptPromise;
   } catch (err) {
@@ -825,9 +826,13 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     // active, not `.unref()`'d), so without an explicit close the
     // process would hang instead of exiting loudly. Close everything
     // we constructed, then rethrow so main().catch surfaces the error.
-    link?.close();
-    broker?.close();
-    questionBroker?.close();
+    try {
+      await link?.reportDisconnectIntent?.("crash");
+    } finally {
+      link?.close();
+      broker?.close();
+      questionBroker?.close();
+    }
     throw err;
   } finally {
     clearTimeout(timeoutHandle);
@@ -1077,13 +1082,23 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     // falls back to the pre-ADR-0051 startup replay inside the replayer.
     replayer.markReady();
     await host.run(prompt);
+  } catch (error) {
+    disconnectReason = "crash";
+    throw error;
   } finally {
     // Deny in-flight permission requests, then release the socket so the
     // process can exit.
-    await link?.flushInterAgentRetirements?.();
-    broker?.close();
-    questionBroker?.close();
-    link?.close();
+    try {
+      await link?.flushInterAgentRetirements?.();
+    } finally {
+      broker?.close();
+      questionBroker?.close();
+      try {
+        await link?.reportDisconnectIntent?.(disconnectReason);
+      } finally {
+        link?.close();
+      }
+    }
   }
 }
 

@@ -2,6 +2,7 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
   use KaoiroServerWeb.ChannelCase, async: false
 
   alias KaoiroServer.HostRegistry
+  alias KaoiroServer.AgentStates
 
   defp join_runner(host_id) do
     {:ok, _reply, socket} =
@@ -14,6 +15,34 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
 
   defp register_payload(extra \\ %{}) do
     Map.merge(%{"cwd_allowlist" => ["/home/user/proj"]}, extra)
+  end
+
+  test "stop_agent records a runner intent only for an agent owned by the host" do
+    host_id = "runner-stop-origin"
+    agent_id = host_id <> ".a"
+    socket = join_runner(host_id)
+    assert_reply push(socket, "register", register_payload()), :ok
+
+    :ok =
+      AgentStates.put(
+        %{"agent_id" => agent_id, "state" => "idle"},
+        owner: self()
+      )
+
+    assert_reply push(socket, "stop_agent", %{"version" => "0", "agent_id" => agent_id}),
+                 :ok
+
+    assert {:ok, disconnected} =
+             AgentStates.disconnect(agent_id, self(), "2026-09-18T00:00:00Z")
+
+    assert get_in(disconnected, ["ext", "disconnect"]) == %{
+             "origin" => "runner",
+             "reason" => "stop"
+           }
+
+    assert_reply push(socket, "stop_agent", %{"agent_id" => "other-host.a"}), :error, %{
+      reason: "agent_not_owned"
+    }
   end
 
   describe "register (ADR-0031 persona trust policy)" do

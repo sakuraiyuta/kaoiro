@@ -5119,6 +5119,41 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       end
     end
 
+    test "operator stop records the highest-precedence disconnect intent before relay" do
+      host_id = "lab-pc-stop-origin"
+      agent_id = host_id <> ".a"
+      register_host(host_id)
+
+      :ok =
+        AgentStates.put(
+          %{
+            "version" => "0",
+            "agent_id" => agent_id,
+            "ts" => "2026-09-18T00:00:00Z",
+            "type" => "state_change",
+            "state" => "idle"
+          },
+          owner: self()
+        )
+
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      ref = push(socket, "stop", %{"host_id" => host_id, "agent_id" => agent_id})
+      assert_reply ref, :ok
+      assert_broadcast "stop", %{"agent_id" => ^agent_id}
+
+      assert :ok = AgentStates.record_disconnect_intent(agent_id, "runner", "stop")
+
+      assert {:ok, envelope} =
+               AgentStates.disconnect(agent_id, self(), "2026-09-18T00:00:01Z")
+
+      assert get_in(envelope, ["ext", "disconnect"]) == %{
+               "origin" => "operator",
+               "reason" => "stop"
+             }
+    end
+
     test "live agent の restart は server-issued request_id を runner と planned intent に共有する" do
       host_id = "lab-pc-restart-planned"
       agent_id = host_id <> ".a"

@@ -82,7 +82,7 @@ function isAntigravityEnabled(config: RunnerConfig): boolean {
 
 type RunnerLinkLike = Pick<
   RunnerLink,
-  "sendSpawnResult" | "sendSessions" | "sendResetResult" | "sendCatalogResult" | "updateRegister" | "reconnect" | "close"
+  "sendSpawnResult" | "sendSessions" | "sendResetResult" | "sendStopAgent" | "sendCatalogResult" | "updateRegister" | "reconnect" | "close"
 >;
 
 export interface RunnerCliDependencies {
@@ -196,6 +196,7 @@ export async function runRunnerCli(
     sendResult: (result) => link.sendSpawnResult(result),
     sendSessions: (sessions) => link.sendSessions(sessions),
     sendResetResult: (result) => link.sendResetResult(result),
+    sendStopAgent: (agentId) => link.sendStopAgent(agentId),
   });
 
   // Option E, ADR-0039: memory-only last-known-good cache for the Claude

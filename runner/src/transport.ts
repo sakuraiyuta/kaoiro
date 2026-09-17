@@ -420,6 +420,14 @@ export class RunnerLink {
     this.#channel.push("session_reset_result", result);
   }
 
+  /** Announces a deliberate child stop before the signal is delivered. */
+  sendStopAgent(agentId: string): void {
+    this.#channel.push("stop_agent", {
+      version: "0",
+      agent_id: agentId,
+    });
+  }
+
   /** Reports an engine-catalog probe outcome (phase-20, ADR-0039). Server
    *  forwards this to operators on agents:lobby so LaunchDialog can toast
    *  success/failure. The refreshed catalog itself reaches the client via

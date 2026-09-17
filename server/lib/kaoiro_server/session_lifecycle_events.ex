@@ -34,6 +34,8 @@ defmodule KaoiroServer.SessionLifecycleEvents do
 
   require Logger
 
+  alias KaoiroServer.DisconnectAttribution
+
   @wrapper_kinds ~w(
     compacting compact_boundary compact_failed resume_reserved resume_fired
     threshold_notice conversation_reset permission_applied permission_failed
@@ -143,6 +145,18 @@ defmodule KaoiroServer.SessionLifecycleEvents do
       cast_append(server, agent_id, kind, nil, at, sanitized)
     else
       _ -> log_rejected(agent_id, kind, nil, at)
+    end
+
+    :ok
+  end
+
+  @doc "Records one server-authored disconnected event with optional typed attribution."
+  def record_disconnect_event(agent_id, at, details, server \\ __MODULE__)
+      when is_binary(agent_id) do
+    if valid_event?("disconnected", nil, at) and DisconnectAttribution.valid?(details) do
+      cast_append(server, agent_id, "disconnected", nil, at, details)
+    else
+      log_rejected(agent_id, "disconnected", nil, at)
     end
 
     :ok
@@ -560,6 +574,11 @@ defmodule KaoiroServer.SessionLifecycleEvents do
   # `Map.get/2` defaults `details` to `nil` for a record stored before
   # this field existed (migration compatibility) — absent and explicit
   # `nil` are the same value to a pre-existing non-permission event.
+  defp valid_stored_event?(%{kind: "disconnected", trigger: nil, at: at, details: details}),
+    do:
+      valid_event?("disconnected", nil, at) and
+        (is_nil(details) or DisconnectAttribution.valid?(details))
+
   defp valid_stored_event?(%{kind: kind, trigger: trigger, at: at} = event),
     do: valid_event?(kind, trigger, at, Map.get(event, :details))
 

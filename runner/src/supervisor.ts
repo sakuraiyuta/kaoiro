@@ -189,6 +189,7 @@ export interface SupervisorOptions {
    *  now the supervisor can handle a `reset_session` command; the CLI
    *  wires this to `RunnerLink.sendResetResult`. */
   sendResetResult: (result: SessionResetResult) => void;
+  sendStopAgent: (agentId: string) => void;
   /** Injectable for tests; defaults read the local session stores
    *  (sessions.ts — Claude JSONLs / codex rollouts, per engine). */
   listSessions?: (
@@ -597,6 +598,7 @@ export class Supervisor {
   readonly #sendResult: (result: SpawnResult) => void;
   readonly #sendSessions: (sessions: RunnerSessions) => void;
   readonly #sendResetResult: (result: SessionResetResult) => void;
+  readonly #sendStopAgent: (agentId: string) => void;
   readonly #listSessions: (
     cwd: string,
     engine: EngineKind,
@@ -643,6 +645,7 @@ export class Supervisor {
     this.#sendResult = options.sendResult;
     this.#sendSessions = options.sendSessions;
     this.#sendResetResult = options.sendResetResult;
+    this.#sendStopAgent = options.sendStopAgent;
     this.#listSessions = options.listSessions ?? defaultListSessions;
     this.#sessionExists = options.sessionExists ?? defaultSessionExists;
     this.#now = options.now ?? (() => Date.now());
@@ -782,6 +785,7 @@ export class Supervisor {
     const entry = this.#children.get(agentId);
     if (entry === undefined) return;
     this.#pendingSwitches.delete(agentId);
+    this.#sendStopAgent(agentId);
     entry.stopping = true;
     entry.child.kill();
   }
@@ -1153,7 +1157,8 @@ export class Supervisor {
     // compare tokens before acting, so clearing the map is sufficient.
     this.#pendingSpawns.clear();
     this.#pendingSwitches.clear();
-    for (const entry of this.#children.values()) {
+    for (const [agentId, entry] of this.#children) {
+      this.#sendStopAgent(agentId);
       entry.stopping = true;
       entry.child.kill();
     }

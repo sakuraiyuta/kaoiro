@@ -27,6 +27,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   alias KaoiroServer.ClearWatermarks
   alias KaoiroServer.ConversationStates
   alias KaoiroServer.DeliveryStates
+  alias KaoiroServer.DisconnectAttribution
   alias KaoiroServer.IngressOrder
   alias KaoiroServer.PersonaAssets
   alias KaoiroServer.PlannedDisconnects
@@ -100,6 +101,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
     "delivery_ack" => :versioned,
     "delivery_status_request" => :versioned,
     "delivery_resync" => :versioned,
+    "disconnect_intent" => :versioned,
     "directory_request" => :versioned,
     "history_reset" => :versioned,
     "history_replay_complete" => :versioned,
@@ -541,6 +543,9 @@ defmodule KaoiroServerWeb.WrapperChannel do
           store_and_broadcast(envelope, agent_id, received_at, socket)
       end
     else
+      {:error, {:disconnected, disconnect}} ->
+        {:reply, {:error, %{reason: "disconnected", disconnect: disconnect}}, socket}
+
       {:error, reason} when is_atom(reason) ->
         {:reply, {:error, %{reason: to_string(reason)}}, socket}
 
@@ -621,6 +626,22 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
     {:reply, {:ok, reply}, socket}
   end
+
+  defp handle_wrapper_in("disconnect_intent", %{"reason" => reason}, socket)
+       when reason in ["stop", "quota_exhausted", "crash"] do
+    case AgentStates.record_disconnect_intent(
+           socket.assigns.agent_id,
+           "agent_self",
+           reason,
+           owner: self()
+         ) do
+      :ok -> {:reply, :ok, socket}
+      {:error, error} -> {:reply, {:error, %{reason: to_string(error)}}, socket}
+    end
+  end
+
+  defp handle_wrapper_in("disconnect_intent", _payload, socket),
+    do: {:reply, {:error, %{reason: "invalid_disconnect_intent"}}, socket}
 
   defp handle_wrapper_in("delivery_ack", %{"delivery_seq" => seq}, socket)
        when is_integer(seq) and seq > 0 do
@@ -1335,11 +1356,20 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
     entry = maybe_put_context(entry, ext)
     entry = maybe_put_rate_limits(entry, ext, id)
+    entry = maybe_put_disconnect(entry, state, ext["disconnect"])
 
     entry
     |> put_activity_fields(id, envelope, activity)
     |> maybe_put_optional_field("inter_agent_delivery", delivery)
   end
+
+  defp maybe_put_disconnect(entry, "disconnected", disconnect) do
+    if DisconnectAttribution.valid?(disconnect),
+      do: Map.put(entry, "disconnect", disconnect),
+      else: entry
+  end
+
+  defp maybe_put_disconnect(entry, _state, _disconnect), do: entry
 
   defp broadcast_delivery_status(agent_id) do
     case DeliveryStates.get(agent_id) do
@@ -1870,7 +1900,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # never reached the successful join branch below and therefore has no
   # `:agent_id` assign. It has never owned AgentStates, so there is no
   # disconnect or hydration work to do.
-  def terminate(_reason, %Phoenix.Socket{assigns: %{agent_id: agent_id}}) do
+  def terminate(_reason, %Phoenix.Socket{assigns: %{agent_id: agent_id}} = socket) do
     # Server-derived disconnected (specs/protocol.md). AgentStates only
     # applies it while this channel still owns the entry, so a stale
     # terminate after a reconnect cannot clobber the new state.
@@ -1891,7 +1921,9 @@ defmodule KaoiroServerWeb.WrapperChannel do
     # not roll back the NEW connection's attempt.
     AgentStates.release_hydration(agent_id, self())
 
-    case AgentStates.disconnect(agent_id, self(), ts) do
+    planned? = PlannedDisconnects.active?(agent_id)
+
+    case AgentStates.disconnect(agent_id, self(), ts, planned: planned?) do
       {:ok, envelope} ->
         # ADR-0048 F1: the parent's departure discards its tasks. Piggy-
         # backs on AgentStates.disconnect/3's own owner check succeeding
@@ -1918,6 +1950,19 @@ defmodule KaoiroServerWeb.WrapperChannel do
         # missed the one broadcast for this disconnect.
         TaskStates.discard_for_agent(agent_id)
 
+        disconnect = get_in(envelope, ["ext", "disconnect"])
+
+        if not planned? and KaoiroServer.DisconnectAttribution.intentional?(disconnect) do
+          case DeliveryStates.retire_owned_generation(
+                 agent_id,
+                 socket.assigns.delivery_generation,
+                 self()
+               ) do
+            {:ok, _status} -> broadcast_delivery_status(agent_id)
+            {:error, :stale_delivery_owner} -> :ok
+          end
+        end
+
         KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
         # Only on an adopted disconnect: a stale terminate that lost the
         # entry to a reconnect must not tell peers the agent is gone.
@@ -1925,9 +1970,12 @@ defmodule KaoiroServerWeb.WrapperChannel do
         # same timeline as wrapper-observed compact/resume events. `:planned`
         # means `reconnecting` was the peer-facing notice (a reconnect is
         # expected); `:unexpected` means the terminal `disconnected` was.
-        case PeerConnectivity.disconnect(agent_id, ts) do
-          :planned -> SessionLifecycleEvents.append(agent_id, "reconnecting", nil, ts)
-          :unexpected -> SessionLifecycleEvents.append(agent_id, "disconnected", nil, ts)
+        case PeerConnectivity.disconnect(agent_id, ts, disconnect) do
+          :planned ->
+            SessionLifecycleEvents.append(agent_id, "reconnecting", nil, ts)
+
+          :unexpected ->
+            SessionLifecycleEvents.record_disconnect_event(agent_id, ts, disconnect)
         end
 
       :noop ->
@@ -2337,7 +2385,13 @@ defmodule KaoiroServerWeb.WrapperChannel do
             # message touches ConversationStates/DeliveryStates, so the
             # sender's tool result is the only signal it needs.
             if not AgentStates.connected?(to) do
-              {:error, :disconnected}
+              disconnect =
+                AgentStates.snapshot()
+                |> get_in([to, "ext", "disconnect"])
+
+              if DisconnectAttribution.valid?(disconnect),
+                do: {:error, {:disconnected, disconnect}},
+                else: {:error, :disconnected}
             else
               with {:ok, reservation} <- DeliveryStates.reserve(to, self()) do
                 case ConversationStates.record_message(

@@ -241,6 +241,90 @@ defmodule KaoiroServer.AgentStatesTest do
       assert AgentStates.snapshot(store)["agent-dh"]["state"] == "disconnected"
       assert length(AgentStates.histories(store)["agent-dh"]) == 1
     end
+
+    test "records the highest-precedence owner-bound disconnect intent", %{store: store} do
+      owner = self()
+      :ok = AgentStates.put(envelope("agent-intent"), server: store, owner: owner)
+
+      assert :ok =
+               AgentStates.record_disconnect_intent("agent-intent", "agent_self", "crash",
+                 server: store,
+                 owner: owner
+               )
+
+      assert :ok =
+               AgentStates.record_disconnect_intent("agent-intent", "runner", "stop",
+                 server: store
+               )
+
+      assert :ok =
+               AgentStates.record_disconnect_intent("agent-intent", "operator", "stop",
+                 server: store
+               )
+
+      assert {:ok, %{"ext" => %{"disconnect" => disconnect}}} =
+               AgentStates.disconnect("agent-intent", owner, "2026-09-18T00:00:00Z",
+                 server: store
+               )
+
+      assert disconnect == %{"origin" => "operator", "reason" => "stop"}
+    end
+
+    test "expired intents and owner replacements cannot be misattributed" do
+      {:ok, clock} = Agent.start_link(fn -> 1_000 end)
+
+      store =
+        start_supervised!(
+          {AgentStates,
+           name: :agent_states_disc_expiry_test, now_ms: fn -> Agent.get(clock, & &1) end},
+          id: :agent_states_disc_expiry_child
+        )
+
+      old_owner = self()
+      :ok = AgentStates.put(envelope("agent-expiry"), server: store, owner: old_owner)
+      :ok = AgentStates.record_disconnect_intent("agent-expiry", "runner", "stop", server: store)
+      Agent.update(clock, fn _ -> 31_000 end)
+
+      assert {:ok, expired} =
+               AgentStates.disconnect("agent-expiry", old_owner, "2026-09-18T00:00:00Z",
+                 server: store
+               )
+
+      assert get_in(expired, ["ext", "disconnect"]) == %{
+               "origin" => "unplanned",
+               "reason" => "socket_lost"
+             }
+
+      new_owner = spawn(fn -> Process.sleep(:infinity) end)
+      :ok = AgentStates.put(envelope("agent-expiry"), server: store, owner: new_owner)
+
+      assert {:error, :stale_disconnect_owner} =
+               AgentStates.record_disconnect_intent(
+                 "agent-expiry",
+                 "agent_self",
+                 "crash",
+                 server: store,
+                 owner: old_owner
+               )
+
+      Process.exit(new_owner, :kill)
+    end
+
+    test "planned disconnects consume intents without exposing terminal attribution", %{
+      store: store
+    } do
+      owner = self()
+      :ok = AgentStates.put(envelope("agent-planned"), server: store, owner: owner)
+      :ok = AgentStates.record_disconnect_intent("agent-planned", "runner", "stop", server: store)
+
+      assert {:ok, planned} =
+               AgentStates.disconnect("agent-planned", owner, "2026-09-18T00:00:00Z",
+                 server: store,
+                 planned: true
+               )
+
+      assert planned["ext"] == %{}
+    end
   end
 
   describe "reply-log history" do

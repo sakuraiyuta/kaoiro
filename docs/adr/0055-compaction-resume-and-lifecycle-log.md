@@ -92,3 +92,14 @@ Separate the requirements into two layers.
   [codex-lifecycle-observability](../open-questions/codex-lifecycle-observability.md).
 - This does not touch the mechanism that triggers automatic compaction
   (decision P2 for issue #158: operator approval required).
+
+## Addendum — typed disconnect attribution (2026-09-18)
+
+Server-authored `disconnected` entries may carry validated
+`details {origin, reason}`. Intentional stops are recorded before process
+termination and are owner-bound; operator and runner intents expire after 30
+seconds, while an acknowledged wrapper-self intent remains bound to that
+channel owner. Missing or expired intent is recorded honestly as
+`unplanned/socket_lost`. Planned restart events remain `reconnecting` and do
+not acquire terminal attribution. The wrapper-originated `session_lifecycle`
+validator remains unchanged: only the server may add disconnect details.

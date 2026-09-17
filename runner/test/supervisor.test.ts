@@ -91,6 +91,7 @@ function harness(
   const resumes: Array<string | undefined> = [];
   const prompts: Array<string | undefined> = [];
   const sessionsSent: RunnerSessions[] = [];
+  const stopIntents: string[] = [];
   let launchCall = 0;
   const sup = new Supervisor({
     hostId: "lab-pc-1",
@@ -111,6 +112,7 @@ function harness(
     sendResult: (r) => results.push(r),
     sendSessions: (s) => sessionsSent.push(s),
     sendResetResult: (r) => resetResults.push(r),
+    sendStopAgent: (agentId) => stopIntents.push(agentId),
     listSessions: () => opts.sessions ?? [],
     sessionExists: () => opts.exists ?? false,
     ...(opts.getClaudeEngineCatalog === undefined
@@ -139,6 +141,7 @@ function harness(
     resumes,
     prompts,
     sessionsSent,
+    stopIntents,
     last: () => children[children.length - 1]!,
   };
 }
@@ -582,6 +585,7 @@ describe("Supervisor.handleSpawn", () => {
       sendResult: (r) => results.push(r),
       sendSessions: () => {},
       sendResetResult: () => {},
+      sendStopAgent: () => {},
     });
     sup.handleSpawn(spawnMsg);
     expect(results[0]).toMatchObject({ ok: false, reason: "error" });
@@ -750,6 +754,33 @@ describe("Supervisor resume (T3 / F4)", () => {
     expect(h.results[1]).toMatchObject({ ok: true });
   });
 
+  it("reports runner stop intent before terminating one live child", () => {
+    const h = harness();
+    h.sup.handleSpawn(spawnMsg);
+    let intentVisibleAtKill = false;
+    h.last().onKill = () => {
+      intentVisibleAtKill = h.stopIntents.includes(spawnMsg.agent_id);
+      return true;
+    };
+    h.sup.handleStop({ agent_id: spawnMsg.agent_id });
+
+    expect(h.stopIntents).toEqual([spawnMsg.agent_id]);
+    expect(h.last().kills).toBe(1);
+    expect(intentVisibleAtKill).toBe(true);
+  });
+
+  it("reports runner stop intent for every child during shutdown", () => {
+    const h = harness();
+    h.sup.handleSpawn(spawnMsg);
+    h.sup.handleSpawn({ ...spawnMsg, agent_id: "lab-pc-1.claude-b" });
+    h.sup.stopAll();
+
+    expect(h.stopIntents).toEqual([
+      spawnMsg.agent_id,
+      "lab-pc-1.claude-b",
+    ]);
+  });
+
   it("relaunch の同期失敗でプロセスを落とさずロックを解放する", () => {
     const results: SpawnResult[] = [];
     const children: FakeChild[] = [];
@@ -770,6 +801,7 @@ describe("Supervisor resume (T3 / F4)", () => {
       sendResult: (r) => results.push(r),
       sendSessions: () => {},
       sendResetResult: () => {},
+      sendStopAgent: () => {},
       sessionExists: () => true,
     });
     sup.handleSpawn(resumeMsg); // ok, lock held
@@ -846,6 +878,7 @@ describe("Supervisor.handleEnumerate", () => {
       sendResult: () => {},
       sendSessions: (sessions) => sent.push(sessions),
       sendResetResult: () => {},
+      sendStopAgent: () => {},
       listSessions: () => listing,
     });
     sup.handleEnumerate({ cwd: "/home/user/git/kaoiro", engine: "codex" });
@@ -996,6 +1029,7 @@ describe("Supervisor.handleSwitchSession", () => {
       sendResult: () => {},
       sendSessions: () => {},
       sendResetResult: () => {},
+      sendStopAgent: () => {},
       sessionExists: () => exists,
     });
     sup.handleSpawn({ ...resumeMsg, engine: "codex" });
@@ -1038,6 +1072,7 @@ describe("Supervisor.handleSwitchSession", () => {
       sendResult: (r) => results.push(r),
       sendSessions: () => {},
       sendResetResult: () => {},
+      sendStopAgent: () => {},
       sessionExists: () => exists,
     });
     sup.handleSpawn(resumeMsg);

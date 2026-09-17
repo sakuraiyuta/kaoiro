@@ -42,6 +42,33 @@ export interface Envelope {
   ext?: Record<string, unknown>;
 }
 
+export interface DisconnectInfo {
+  origin: "operator" | "runner" | "agent_self" | "unplanned";
+  reason: "stop" | "quota_exhausted" | "crash" | "socket_lost";
+}
+
+export function disconnectFrom(envelope: Envelope): DisconnectInfo | null {
+  const value = envelope.ext?.disconnect;
+  if (typeof value !== "object" || value === null) return null;
+  const { origin, reason } = value as Record<string, unknown>;
+  const valid =
+    (origin === "operator" && reason === "stop") ||
+    (origin === "runner" && reason === "stop") ||
+    (origin === "agent_self" &&
+      (reason === "stop" || reason === "quota_exhausted" || reason === "crash")) ||
+    (origin === "unplanned" && reason === "socket_lost");
+  return valid ? { origin, reason } as DisconnectInfo : null;
+}
+
+export function disconnectLabel(disconnect: DisconnectInfo): string {
+  if (disconnect.origin === "operator") return "オペレーターによる停止";
+  if (disconnect.origin === "runner") return "ランナーによる停止";
+  if (disconnect.reason === "quota_exhausted") return "利用枠の枯渇による停止";
+  if (disconnect.reason === "crash") return "エージェントの異常終了";
+  if (disconnect.origin === "agent_self") return "エージェント自身による停止";
+  return "不慮の接続断";
+}
+
 /** Shape of a pending tool-permission request — carried on
  *  state_change.ext.pending_permission (ADR-0022, #59) as the
  *  authoritative source, and on the legacy permission_request envelope's

@@ -547,13 +547,18 @@ export type SessionLifecycleEvent =
         | "resume_fired"
         | "threshold_notice"
         | "conversation_reset"
-        | "disconnected"
         | "reconnecting"
         | "reconnected"
         | "session_reset_started"
         | "session_reset_completed";
       at: string;
       trigger?: null;
+    }
+  | {
+      kind: "disconnected";
+      at: string;
+      trigger?: null;
+      details?: DisconnectExt;
     }
   | (PermissionLifecycleEvent & { trigger?: null });
 
@@ -843,10 +848,20 @@ export interface ContextBudgetExt {
   work_budget_percentage: number;
 }
 
+export type DisconnectOrigin = "operator" | "runner" | "agent_self" | "unplanned";
+export type DisconnectReason = "stop" | "quota_exhausted" | "crash" | "socket_lost";
+
+/** Server-authored attribution for a terminal disconnected transition. */
+export interface DisconnectExt {
+  origin: DisconnectOrigin;
+  reason: DisconnectReason;
+}
+
 /** Typed state_change extension fields. The index signature preserves v0's
  *  forward-compatible extension space while making established wire fields
  *  first-class to producers and consumers. */
 export interface EnvelopeExt extends Record<string, unknown> {
+  disconnect?: DisconnectExt;
   permission_control?: PermissionControlExt;
   context_budget?: ContextBudgetExt;
   pending_model?: string;
@@ -1011,6 +1026,9 @@ export interface InterAgentErrorPayload {
   loss_id?: string;
   code: string;
   message: string;
+  /** Present on server-authored disconnected notices. */
+  origin?: DisconnectOrigin;
+  reason?: DisconnectReason;
 }
 
 /** payload of a type="inter_agent_message" envelope (protocol-inter-agent
@@ -1123,6 +1141,8 @@ export interface DirectoryEntry {
   conversation?: DirectoryConversation;
   rate_limits?: Record<string, DirectoryRateLimitWindow>;
   inter_agent_delivery?: InterAgentDeliveryStatus;
+  /** Present only while the latest state is disconnected. */
+  disconnect?: DisconnectExt;
   /** Present only for a persistent entry with no live envelope; absence
    * means live, rather than unknown. It cannot receive `send_to_agent`. */
   directory_only?: true;

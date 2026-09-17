@@ -51,6 +51,7 @@ class FakeRunnerLink {
   sendSpawnResult(): void {}
   sendSessions(): void {}
   sendResetResult(): void {}
+  sendStopAgent(): void {}
   sendCatalogResult(): void {}
   updateRegister(): void {}
   reconnect(): void {}

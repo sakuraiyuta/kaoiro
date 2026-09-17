@@ -26,6 +26,7 @@ defmodule KaoiroServerWeb.RunnerChannel do
 
   alias KaoiroServer.Auth
   alias KaoiroServer.AgentActivity
+  alias KaoiroServer.AgentStates
   alias KaoiroServer.BuildIdentity
   alias KaoiroServer.HostRegistry
   alias KaoiroServer.PersonaAssets
@@ -80,6 +81,22 @@ defmodule KaoiroServerWeb.RunnerChannel do
     # registered then dropped is not an error worth surfacing).
     _ = HostRegistry.heartbeat(socket.assigns.host_id)
     {:reply, :ok, socket}
+  end
+
+  def handle_in("stop_agent", payload, socket) do
+    host_id = socket.assigns.host_id
+
+    with :ok <- check_size(payload),
+         %{"agent_id" => agent_id} when is_binary(agent_id) <- payload,
+         true <- AgentId.valid?(agent_id),
+         :ok <- require_host_owns_agent(host_id, agent_id),
+         :ok <- AgentStates.record_disconnect_intent(agent_id, "runner", "stop") do
+      {:reply, :ok, socket}
+    else
+      false -> {:reply, {:error, %{reason: "invalid_agent_id"}}, socket}
+      {:error, reason} -> {:reply, {:error, %{reason: to_string(reason)}}, socket}
+      _ -> {:reply, {:error, %{reason: "invalid_stop_agent"}}, socket}
+    end
   end
 
   # Runner's response to enumerate_sessions: forward to operators by

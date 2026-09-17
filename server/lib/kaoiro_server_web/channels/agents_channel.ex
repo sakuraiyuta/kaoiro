@@ -1891,7 +1891,9 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
   defp reserve_lifecycle_intent(%{"agent_id" => agent_id}, :stop)
        when is_binary(agent_id) do
-    _ = PeerConnectivity.stop(agent_id)
+    disconnect = %{"origin" => "operator", "reason" => "stop"}
+    _ = AgentStates.record_disconnect_intent(agent_id, "operator", "stop")
+    _ = PeerConnectivity.stop(agent_id, disconnect)
     :ok
   end
 

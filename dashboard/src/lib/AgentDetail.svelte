@@ -13,6 +13,8 @@
   import { formatBuildIdentity } from "./buildIdentity";
   import {
     engineFrom,
+    disconnectFrom,
+    disconnectLabel,
     errorSubtypeLabel,
     findPrecedingUserPrompt,
     formatAgentLabel,
@@ -193,6 +195,12 @@
   $effect(() => () => display.dispose());
 
   const expression = $derived(expressionFor(display.shown));
+  const disconnectText = $derived.by(() => {
+    const value = disconnectFrom(envelope);
+    return envelope.state === "disconnected" && value !== null
+      ? disconnectLabel(value)
+      : null;
+  });
   const name = $derived(envelope.display_name ?? envelope.agent_id);
   // issue #232: the persona image's click opens the persona pack detail
   // modal (manifest.json + personality.md for this envelope's persona).
@@ -2914,6 +2922,7 @@
           {#key display.shown}
             <p class="state">{expression.label}</p>
           {/key}
+          {#if disconnectText}<p class="disconnect-reason">{disconnectText}</p>{/if}
           <!-- name は h2 で既出なので、 id ペインは bare id のままにする
                (name(id) の二重表示は冗長)。一方 inter-agent bubble の peer
                は name(id) 表記でクリック可能、 spawn トーストも name(id)。 -->
@@ -4590,6 +4599,12 @@
     font-weight: 600;
     color: var(--tone);
     animation: dissolve 0.35s ease-out;
+  }
+
+  .disconnect-reason {
+    margin: 0.2rem 0 0;
+    color: var(--fg-muted);
+    font-size: var(--fs-body-sm);
   }
 
   .id {

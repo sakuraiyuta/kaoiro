@@ -6,6 +6,8 @@
   import TaskRing from "./TaskRing.svelte";
   import {
     engineFrom,
+    disconnectFrom,
+    disconnectLabel,
     pendingPermissionFrom,
     pendingQuestionFrom,
     RUNNING_STATES,
@@ -141,6 +143,12 @@
   });
 
   const expression = $derived(expressionFor(display.shown));
+  const disconnectText = $derived.by(() => {
+    const value = disconnectFrom(envelope);
+    return envelope.state === "disconnected" && value !== null
+      ? disconnectLabel(value)
+      : null;
+  });
   const name = $derived(envelope.display_name ?? envelope.agent_id);
   const fatigued = $derived(isFatigued(envelope));
   const spriteUrl = $derived(
@@ -567,6 +575,7 @@
     {#key display.shown}
       <p class="state">{expression.label}</p>
     {/key}
+    {#if disconnectText}<p class="disconnect-reason">{disconnectText}</p>{/if}
     <p class="id">{envelope.agent_id}</p>
     {#if hasStats}
       <div class="stats">
@@ -810,6 +819,12 @@
     font-weight: 600;
     color: var(--tone);
     animation: dissolve 0.35s ease-out;
+  }
+
+  .disconnect-reason {
+    margin: 0.2rem 0 0;
+    color: var(--fg-muted);
+    font-size: var(--fs-body-sm);
   }
 
   .id {

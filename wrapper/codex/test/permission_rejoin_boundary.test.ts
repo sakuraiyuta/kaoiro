@@ -35,8 +35,13 @@ class TestChannel {
     return chain;
   }
 
-  push(): { receive: () => unknown } {
-    const chain = { receive: () => chain };
+  push(event: string): { receive: (status: string, receiver: Receiver) => unknown } {
+    const chain = {
+      receive(status: string, receiver: Receiver) {
+        if (event === "disconnect_intent" && status === "ok") receiver({});
+        return chain;
+      },
+    };
     return chain;
   }
 

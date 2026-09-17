@@ -65,6 +65,7 @@ defmodule KaoiroServer.AgentStates do
   require Logger
 
   alias KaoiroServer.TransportLimits
+  alias KaoiroServer.DisconnectAttribution
 
   # Wrapper connections may be unauthenticated (dev mode), so cap the map
   # to keep fabricated agent_ids from growing memory without bound.
@@ -81,6 +82,8 @@ defmodule KaoiroServer.AgentStates do
   # read time (agents_channel `merged_histories/0`); this one only keeps a
   # single pane's map from growing without bound between merges.
   @max_ia 200
+  @disconnect_intent_ttl_ms 30_000
+  @disconnect_precedence ~w(operator runner agent_self)
 
   @wire_projection_bytes TransportLimits.snapshot_payload_budget(
                            "snapshot",
@@ -90,7 +93,7 @@ defmodule KaoiroServer.AgentStates do
 
   def start_link(opts) do
     name = Keyword.get(opts, :name, __MODULE__)
-    GenServer.start_link(__MODULE__, %{}, name: name)
+    GenServer.start_link(__MODULE__, %{now_ms: Keyword.get(opts, :now_ms)}, name: name)
   end
 
   @doc """
@@ -143,7 +146,15 @@ defmodule KaoiroServer.AgentStates do
   """
   def disconnect(agent_id, owner, ts, opts \\ []) do
     server = Keyword.get(opts, :server, __MODULE__)
-    GenServer.call(server, {:disconnect, agent_id, owner, ts})
+    planned? = Keyword.get(opts, :planned, false)
+    GenServer.call(server, {:disconnect, agent_id, owner, ts, planned?})
+  end
+
+  @doc "Records one owner-bound disconnect intent after validating its closed origin/reason pair."
+  def record_disconnect_intent(agent_id, origin, reason, opts \\ []) do
+    server = Keyword.get(opts, :server, __MODULE__)
+    expected_owner = Keyword.get(opts, :owner)
+    GenServer.call(server, {:record_disconnect_intent, agent_id, expected_owner, origin, reason})
   end
 
   @doc """
@@ -436,8 +447,9 @@ defmodule KaoiroServer.AgentStates do
   end
 
   @impl true
-  def init(_arg) do
-    {:ok, %{agents: %{}, hydration: %{}, epoch: new_epoch()}}
+  def init(arg) do
+    now_ms = arg[:now_ms] || fn -> System.monotonic_time(:millisecond) end
+    {:ok, %{agents: %{}, hydration: %{}, epoch: new_epoch(), now_ms: now_ms}}
   end
 
   @impl true
@@ -459,7 +471,8 @@ defmodule KaoiroServer.AgentStates do
         # pending_boundary_patch preserved across puts so a state_change
         # arriving between reset acquire and its confirming envelope does
         # not clear the stash (put/2 is called on every state_change).
-        pending_boundary_patch: entry_field(existing, :pending_boundary_patch, nil)
+        pending_boundary_patch: entry_field(existing, :pending_boundary_patch, nil),
+        disconnect_intents: preserve_owner_intents(existing, owner)
       }
 
       {:reply, :ok, put_agent(state, agent_id, entry)}
@@ -490,11 +503,42 @@ defmodule KaoiroServer.AgentStates do
     end
   end
 
-  def handle_call({:disconnect, agent_id, owner, ts}, _from, state) do
+  def handle_call(
+        {:record_disconnect_intent, agent_id, expected_owner, origin, reason},
+        _from,
+        state
+      ) do
+    disconnect = %{"origin" => origin, "reason" => reason}
+
+    case state.agents do
+      %{^agent_id => %{owner: owner} = entry}
+      when is_pid(owner) and (is_nil(expected_owner) or expected_owner == owner) ->
+        if DisconnectAttribution.valid?(disconnect) and origin != "unplanned" do
+          expires_at =
+            if origin in ["operator", "runner"],
+              do: state.now_ms.() + @disconnect_intent_ttl_ms,
+              else: nil
+
+          intent = %{owner: owner, disconnect: disconnect, expires_at: expires_at}
+          intents = Map.put(entry.disconnect_intents, origin, intent)
+          {:reply, :ok, put_agent(state, agent_id, %{entry | disconnect_intents: intents})}
+        else
+          {:reply, {:error, :invalid_disconnect_intent}, state}
+        end
+
+      _ ->
+        {:reply, {:error, :stale_disconnect_owner}, state}
+    end
+  end
+
+  def handle_call({:disconnect, agent_id, owner, ts, planned?}, _from, state) do
     case state.agents do
       %{^agent_id => %{envelope: envelope, owner: ^owner} = entry} ->
-        derived = disconnected_envelope(envelope, ts)
-        {:reply, {:ok, derived}, put_agent(state, agent_id, %{entry | envelope: derived})}
+        disconnect = select_disconnect(entry.disconnect_intents, owner, state.now_ms.())
+        derived = disconnected_envelope(envelope, ts, if(planned?, do: nil, else: disconnect))
+
+        updated = %{entry | envelope: derived, disconnect_intents: %{}}
+        {:reply, {:ok, derived}, put_agent(state, agent_id, updated)}
 
       _ ->
         {:reply, :noop, state}
@@ -849,7 +893,9 @@ defmodule KaoiroServer.AgentStates do
   # Server-derived envelope: keep identity (persona) and session_id so a
   # disconnected agent still reports its current session (issue #48); drop
   # seq — seq is the wrapper's series (specs/protocol.md).
-  defp disconnected_envelope(envelope, ts) do
+  defp disconnected_envelope(envelope, ts, disconnect) do
+    ext = if is_map(disconnect), do: %{"disconnect" => disconnect}, else: %{}
+
     envelope
     |> Map.take(["version", "agent_id", "persona", "session_id"])
     |> Map.merge(%{
@@ -857,7 +903,26 @@ defmodule KaoiroServer.AgentStates do
       "type" => "state_change",
       "state" => "disconnected",
       "payload" => %{},
-      "ext" => %{}
+      "ext" => ext
     })
+  end
+
+  defp preserve_owner_intents(%{owner: owner, disconnect_intents: intents}, owner), do: intents
+  defp preserve_owner_intents(_existing, _owner), do: %{}
+
+  defp select_disconnect(intents, owner, now_ms) do
+    Enum.find_value(@disconnect_precedence, DisconnectAttribution.default(), fn origin ->
+      case intents[origin] do
+        %{owner: ^owner, disconnect: disconnect, expires_at: nil} ->
+          disconnect
+
+        %{owner: ^owner, disconnect: disconnect, expires_at: expires_at}
+        when is_integer(expires_at) and expires_at > now_ms ->
+          disconnect
+
+        _ ->
+          nil
+      end
+    end)
   end
 end

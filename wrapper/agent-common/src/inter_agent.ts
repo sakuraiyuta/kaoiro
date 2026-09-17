@@ -21,6 +21,7 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type {
+  DisconnectExt,
   DirectoryContext,
   DirectoryEntry,
   DirectoryRateLimitWindow,
@@ -149,6 +150,19 @@ const DEFAULT_ERROR_GUIDANCE = "confirm the peer's state before retrying";
  *  text (issue #131). */
 function errorGuidance(code: string): string {
   return ERROR_CODE_GUIDANCE[code] ?? DEFAULT_ERROR_GUIDANCE;
+}
+
+function disconnectErrorFrom(error: InterAgentErrorPayload): DisconnectExt | undefined {
+  if (error.code !== "disconnected") return undefined;
+  const origin: unknown = error.origin;
+  const reason: unknown = error.reason;
+  const valid =
+    (origin === "operator" && reason === "stop") ||
+    (origin === "runner" && reason === "stop") ||
+    (origin === "agent_self" &&
+      (reason === "stop" || reason === "quota_exhausted" || reason === "crash")) ||
+    (origin === "unplanned" && reason === "socket_lost");
+  return valid ? { origin, reason } as DisconnectExt : undefined;
 }
 
 const ERROR_CODE_GUIDANCE_SUMMARY = Object.entries(ERROR_CODE_GUIDANCE)
@@ -1936,7 +1950,7 @@ export class InterAgentTool {
             if (acceptance.reason === "disconnected") {
               return {
                 kind: "peer-error",
-                result: peerErrorResult(args.to, "disconnected"),
+                result: peerErrorResult(args.to, "disconnected", acceptance.disconnect),
               };
             }
             // issue #262: an actionable hint over the generic reason string —
@@ -2052,6 +2066,7 @@ export class InterAgentTool {
     // "got a reply" apart from "the peer never got the chance to reply" —
     // both otherwise share the same wait_for_response=true return path.
     if (inboundPayload.error) {
+      const disconnect = disconnectErrorFrom(inboundPayload.error);
       return {
         content: [
           {
@@ -2063,6 +2078,7 @@ export class InterAgentTool {
                   code: inboundPayload.error.code,
                   message: inboundPayload.error.message,
                   from: inbound.agent_id === "server" ? inboundPayload.error.peer ?? inbound.agent_id : inbound.agent_id,
+                  ...(disconnect ?? {}),
                 },
               },
               null,
@@ -2200,12 +2216,15 @@ export function formatInboundMessage(
   const conversationId = payload.conversation_id ?? "";
   const turnNumber = payload.turn_number ?? 0;
   const error = payload.error;
+  const disconnect = error === undefined ? undefined : disconnectErrorFrom(error);
   const mode = opts?.mode ?? "reply-owed";
   // issue #131: an error notice gets its own line format — a plain
   // "kind: body" render would bury the machine-readable code the receiving
   // model needs to decide whether retrying is worthwhile.
   const messageLine = error
-    ? `[from ${from}] peer-error(${error.code}): ${error.message} — ${errorGuidance(error.code)}.`
+    ? `[from ${from}] peer-error(${error.code}${
+        disconnect === undefined ? "" : `, origin=${disconnect.origin}, reason=${disconnect.reason}`
+      }): ${error.message} — ${errorGuidance(error.code)}.`
     : `[from ${from}] ${kind}: ${body}`;
   return [
     markerLine(conversationId, mode),
@@ -2251,7 +2270,11 @@ function errorResult(text: string): InterAgentToolResult {
   };
 }
 
-function peerErrorResult(from: string, code: string): InterAgentToolResult {
+function peerErrorResult(
+  from: string,
+  code: string,
+  disconnect?: DisconnectExt,
+): InterAgentToolResult {
   return {
     content: [
       {
@@ -2262,6 +2285,7 @@ function peerErrorResult(from: string, code: string): InterAgentToolResult {
               code,
               message: messageForCode(code),
               from,
+              ...(disconnect === undefined ? {} : disconnect),
             },
           },
           null,

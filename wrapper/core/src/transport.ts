@@ -15,6 +15,7 @@ import { randomUUID } from "node:crypto";
 import type {
   DirectoryContext,
   DirectoryConversation,
+  DisconnectExt,
   DirectoryEntry,
   DirectoryRateLimitWindow,
   DirectoryResult,
@@ -105,7 +106,7 @@ export interface ReplayIaItem {
  *  present it as a failure the model can safely retry. */
 export type InterAgentAcceptance =
   | { kind: "accepted"; stamp: [number, number] | null }
-  | { kind: "rejected"; reason: string }
+  | { kind: "rejected"; reason: string; disconnect?: DisconnectExt }
   | { kind: "unknown"; reason: string };
 
 /** Byte budget for ONE `replay_ia` push.
@@ -219,6 +220,7 @@ export const WRAPPER_CONTROL_EVENT_POLICY = {
   delivery_ack: "versioned",
   delivery_status_request: "versioned",
   delivery_resync: "versioned",
+  disconnect_intent: "versioned",
   history_reset: "versioned",
   replay_ia: "versioned",
   history_replay_complete: "versioned",
@@ -855,6 +857,19 @@ function projectConversation(
   return { active: value.active, peers: value.peers };
 }
 
+function disconnectFrom(value: unknown): DisconnectExt | undefined {
+  if (!isPlainObject(value)) return undefined;
+  const origin = value.origin;
+  const reason = value.reason;
+  const valid =
+    (origin === "operator" && reason === "stop") ||
+    (origin === "runner" && reason === "stop") ||
+    (origin === "agent_self" &&
+      (reason === "stop" || reason === "quota_exhausted" || reason === "crash")) ||
+    (origin === "unplanned" && reason === "socket_lost");
+  return valid ? { origin, reason } as DisconnectExt : undefined;
+}
+
 /** Structural narrow for a single `directory_request` entry. Asserts every
  *  field DirectoryEntry declares non-optional, so a server response that
  *  drops `persona` or `state` cannot smuggle a malformed entry through the
@@ -907,6 +922,8 @@ function directoryEntryFrom(value: unknown): DirectoryEntry | null {
   if (conversation !== undefined) entry.conversation = conversation;
   const rateLimits = projectRateLimits(v.rate_limits);
   if (rateLimits !== undefined) entry.rate_limits = rateLimits;
+  const disconnect = disconnectFrom(v.disconnect);
+  if (v.state === "disconnected" && disconnect !== undefined) entry.disconnect = disconnect;
   // issue #269: server は true のときだけ載せる。それ以外の値 (false /
   // 文字列 / 数値) は「server が閉じたものを client が開け直さない」規約
   // に従って落とす。
@@ -1052,10 +1069,14 @@ function ingressStampFrom(reply: unknown): [number, number] | null {
 /** Closed-vocabulary reason from a rejected push reply. The channel always
  *  answers `{reason: "..."}`; anything else is normalised rather than
  *  interpolated into the tool result verbatim. */
-function pushRejectReason(reply: unknown): string {
-  if (!isObject(reply)) return "unknown";
+function pushRejection(reply: unknown): { reason: string; disconnect?: DisconnectExt } {
+  if (!isObject(reply)) return { reason: "unknown" };
   const reason = (reply as { reason?: unknown }).reason;
-  return typeof reason === "string" && reason !== "" ? reason : "unknown";
+  const result = {
+    reason: typeof reason === "string" && reason !== "" ? reason : "unknown",
+  };
+  const disconnect = disconnectFrom((reply as { disconnect?: unknown }).disconnect);
+  return disconnect === undefined ? result : { ...result, disconnect };
 }
 
 export class ServerLink {
@@ -1643,7 +1664,7 @@ export class ServerLink {
           resolve({ kind: "accepted", stamp: this.#recordInterAgentAck(wire, reply) });
         })
         .receive("error", (reply: unknown) => {
-          resolve({ kind: "rejected", reason: pushRejectReason(reply) });
+          resolve({ kind: "rejected", ...pushRejection(reply) });
         })
         .receive("timeout", () => {
           resolve({ kind: "unknown", reason: "timeout" });
@@ -1902,6 +1923,18 @@ export class ServerLink {
         .receive("timeout", () => {
           reject(new Error("timeout"));
         });
+    });
+  }
+
+  /** Records a terminal self-disconnect intent and waits for the server ack. */
+  reportDisconnectIntent(
+    reason: "stop" | "quota_exhausted" | "crash",
+  ): Promise<boolean> {
+    return new Promise((resolve) => {
+      this.#pushVersioned("disconnect_intent", { reason })
+        .receive("ok", () => resolve(true))
+        .receive("error", () => resolve(false))
+        .receive("timeout", () => resolve(false));
     });
   }
 

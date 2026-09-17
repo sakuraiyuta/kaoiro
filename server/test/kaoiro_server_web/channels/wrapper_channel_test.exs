@@ -7,8 +7,10 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
   alias KaoiroServer.AgentDirectory
   alias KaoiroServer.AgentStates
   alias KaoiroServer.AgentActivity
+  alias KaoiroServer.Auth
   alias KaoiroServer.ConversationStates
   alias KaoiroServer.DeliveryStates
+  alias KaoiroServer.HostRegistry
   alias KaoiroServer.PlannedDisconnects
   alias KaoiroServer.SessionLifecycleEvents
   alias KaoiroServer.SessionPointers
@@ -3926,6 +3928,171 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       on_exit(fn -> AgentStates.delete(to_id) end)
     end
 
+    test "acked self intent reaches state, peer error, directory, lifecycle, and retirement" do
+      Process.flag(:trap_exit, true)
+
+      from_id = "test.disconnect-origin-from"
+      to_id = "test.disconnect-origin-to"
+      cid = "cnv-disconnect-origin-#{System.unique_integer([:positive])}"
+
+      to_socket =
+        join_wrapper(to_id, "default", %{
+          "inter_agent_delivery_ack" => "dispatch-v1",
+          "delivery_resync" => "skip-v1",
+          "delivery_generation" => "generation-origin"
+        })
+
+      from_socket = seed_known(from_id)
+      push(to_socket, "envelope", envelope(to_id, "idle")) |> assert_reply(:ok)
+
+      ref = push(from_socket, "envelope", inter_envelope(from_id, to_id, cid: cid))
+      assert_reply ref, :ok
+      assert %{issued_seq: 1, acked_seq: 0} = DeliveryStates.get(to_id)
+
+      @endpoint.subscribe("agents:lobby")
+      @endpoint.subscribe("wrapper:" <> from_id)
+
+      intent_ref = push(to_socket, "disconnect_intent", %{"version" => "0", "reason" => "crash"})
+      assert_reply intent_ref, :ok
+      :ok = close(to_socket)
+
+      assert_broadcast "delivery_status", %{
+        "agent_id" => ^to_id,
+        "delivery" => %{issued_seq: 1, acked_seq: 1, lost_count: 1}
+      }
+
+      assert_broadcast "envelope", %{
+        "agent_id" => ^to_id,
+        "state" => "disconnected",
+        "ext" => %{
+          "disconnect" => %{"origin" => "agent_self", "reason" => "crash"}
+        }
+      }
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       topic: "wrapper:" <> ^from_id,
+                       event: "envelope",
+                       payload: %{
+                         "payload" => %{
+                           "error" => %{
+                             "code" => "disconnected",
+                             "origin" => "agent_self",
+                             "reason" => "crash"
+                           }
+                         }
+                       }
+                     },
+                     TestTimeouts.out_of_band()
+
+      assert [%{kind: "disconnected", details: details}] =
+               SessionLifecycleEvents.list_for_agent(to_id)
+
+      assert details == %{"origin" => "agent_self", "reason" => "crash"}
+
+      directory_ref = push(from_socket, "directory_request", %{"version" => "0"})
+      assert_reply directory_ref, :ok, %{"agents" => agents}
+      entry = Enum.find(agents, &(&1["agent_id"] == to_id))
+      assert entry["disconnect"] == details
+
+      retry_ref = push(from_socket, "envelope", inter_envelope(from_id, to_id, cid: cid))
+      assert_reply retry_ref, :error, %{reason: "disconnected", disconnect: ^details}
+
+      on_exit(fn -> AgentStates.delete(to_id) end)
+    end
+
+    test "operator stop reaches state, peer error, directory, lifecycle, and retirement" do
+      Process.flag(:trap_exit, true)
+      host_id = "lab-pc-operator-disconnect"
+      from_id = "test.disconnect-operator-from"
+      to_id = host_id <> ".to"
+      cid = "cnv-disconnect-operator-#{System.unique_integer([:positive])}"
+      token = "tok-disconnect-operator"
+      fingerprint = Auth.socket_id(token)
+
+      Application.put_env(:kaoiro_server, :client_tokens, token <> ":operator")
+      on_exit(fn -> Application.delete_env(:kaoiro_server, :client_tokens) end)
+
+      :ok =
+        HostRegistry.register(
+          host_id,
+          %{policy: :accept_all, cwd_allowlist: ["/workspace"], capabilities: ["codex"]},
+          self()
+        )
+
+      to_socket =
+        join_wrapper(to_id, "default", %{
+          "inter_agent_delivery_ack" => "dispatch-v1",
+          "delivery_resync" => "skip-v1",
+          "delivery_generation" => "generation-operator-origin"
+        })
+
+      from_socket = seed_known(from_id)
+      push(to_socket, "envelope", envelope(to_id, "idle")) |> assert_reply(:ok)
+
+      ref = push(from_socket, "envelope", inter_envelope(from_id, to_id, cid: cid))
+      assert_reply ref, :ok
+      assert %{issued_seq: 1, acked_seq: 0} = DeliveryStates.get(to_id)
+
+      @endpoint.subscribe("agents:lobby")
+      @endpoint.subscribe("wrapper:" <> from_id)
+
+      {:ok, _reply, operator_socket} =
+        KaoiroServerWeb.ClientSocket
+        |> socket(nil, %{
+          role: :operator,
+          credential: {:token_fingerprint, fingerprint},
+          socket_id: fingerprint
+        })
+        |> subscribe_and_join(KaoiroServerWeb.AgentsChannel, "agents:lobby")
+
+      stop_ref = push(operator_socket, "stop", %{"host_id" => host_id, "agent_id" => to_id})
+      assert_reply stop_ref, :ok
+      :ok = close(to_socket)
+
+      assert_broadcast "delivery_status", %{
+        "agent_id" => ^to_id,
+        "delivery" => %{issued_seq: 1, acked_seq: 1, lost_count: 1}
+      }
+
+      assert_broadcast "envelope", %{
+        "agent_id" => ^to_id,
+        "state" => "disconnected",
+        "ext" => %{
+          "disconnect" => %{"origin" => "operator", "reason" => "stop"}
+        }
+      }
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       topic: "wrapper:" <> ^from_id,
+                       event: "envelope",
+                       payload: %{
+                         "payload" => %{
+                           "error" => %{
+                             "code" => "disconnected",
+                             "origin" => "operator",
+                             "reason" => "stop"
+                           }
+                         }
+                       }
+                     },
+                     TestTimeouts.out_of_band()
+
+      details = %{"origin" => "operator", "reason" => "stop"}
+
+      assert [%{kind: "disconnected", details: ^details}] =
+               SessionLifecycleEvents.list_for_agent(to_id)
+
+      directory_ref = push(from_socket, "directory_request", %{"version" => "0"})
+      assert_reply directory_ref, :ok, %{"agents" => agents}
+      entry = Enum.find(agents, &(&1["agent_id"] == to_id))
+      assert entry["disconnect"] == details
+
+      retry_ref = push(from_socket, "envelope", inter_envelope(from_id, to_id, cid: cid))
+      assert_reply retry_ref, :error, %{reason: "disconnected", disconnect: ^details}
+
+      on_exit(fn -> AgentStates.delete(to_id) end)
+    end
+
     test "stale terminate (再接続で entry を失った側) では合成しない (#131)" do
       Process.flag(:trap_exit, true)
 
@@ -4275,6 +4442,65 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       refute Map.has_key?(entry, "engine")
       refute Map.has_key?(entry, "model")
       refute Map.has_key?(entry, "effort")
+    end
+
+    test "disconnect attribution is exposed only for a valid disconnected state" do
+      self_socket = join_wrapper("test.dir-disconnect-self")
+
+      for {peer_id, state, disconnect} <- [
+            {"test.dir-disconnect-live", "idle",
+             %{"origin" => "agent_self", "reason" => "crash"}},
+            {"test.dir-disconnect-invalid", "disconnected",
+             %{"origin" => "operator", "reason" => "crash"}}
+          ] do
+        peer_socket = join_wrapper(peer_id)
+
+        ref =
+          push(
+            peer_socket,
+            "envelope",
+            envelope(peer_id, state) |> put_in(["ext", "disconnect"], disconnect)
+          )
+
+        assert_reply ref, :ok
+      end
+
+      ref = push(self_socket, "directory_request", %{})
+      assert_reply ref, :ok, %{"agents" => agents}
+
+      for peer_id <- ["test.dir-disconnect-live", "test.dir-disconnect-invalid"] do
+        entry = Enum.find(agents, &(&1["agent_id"] == peer_id))
+        refute Map.has_key?(entry, "disconnect")
+      end
+
+      dead_owner = spawn(fn -> :ok end)
+      monitor = Process.monitor(dead_owner)
+      assert_receive {:DOWN, ^monitor, :process, ^dead_owner, :normal}
+
+      preflight_id = "test.dir-disconnect-invalid-preflight"
+
+      :ok =
+        AgentStates.put(
+          envelope(preflight_id, "disconnected")
+          |> put_in(["ext", "disconnect"], %{"origin" => "operator", "reason" => "crash"}),
+          owner: dead_owner
+        )
+
+      retry_ref =
+        push(
+          self_socket,
+          "envelope",
+          inter_envelope(
+            "test.dir-disconnect-self",
+            preflight_id,
+            cid: "cnv-invalid-disconnect-attribution"
+          )
+        )
+
+      assert_reply retry_ref, :error, reply
+      assert reply.reason == "disconnected"
+      refute Map.has_key?(reply, :disconnect)
+      on_exit(fn -> AgentStates.delete(preflight_id) end)
     end
 
     test "context は capability=true と完全な有限数の組でのみ公開する" do

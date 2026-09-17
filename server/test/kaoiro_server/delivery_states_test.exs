@@ -109,6 +109,37 @@ defmodule KaoiroServer.DeliveryStatesTest do
     refute Map.has_key?(DeliveryStates.get("legacy", name), :lost_count)
   end
 
+  test "whole-generation retirement is owner and generation fenced", %{name: name} do
+    owner = self()
+    DeliveryStates.bind_resync("recipient", "generation", owner, name)
+
+    assert 1 =
+             DeliveryStates.issue_synthetic(
+               "recipient",
+               %{sender: "sender", conversation_id: "cid", turn_number: 1, kind: "request"},
+               name
+             )
+
+    assert 2 = DeliveryStates.issue("recipient", name)
+
+    assert {:error, :stale_delivery_owner} =
+             DeliveryStates.retire_owned_generation("recipient", "old", owner, name)
+
+    assert {:error, :stale_delivery_owner} =
+             DeliveryStates.retire_owned_generation("recipient", "generation", :stale, name)
+
+    assert %{acked_seq: 0, lost_count: 0} = DeliveryStates.get("recipient", name)
+
+    assert {:ok,
+            %{acked_seq: 2, issued_seq: 2, pending_since: nil, lost_count: 2, last_loss: loss}} =
+             DeliveryStates.retire_owned_generation("recipient", "generation", owner, name)
+
+    assert loss.reason == "interrupted"
+
+    assert [%{reason: "interrupted", recipient: "recipient"}] =
+             DeliveryStates.pending_losses(name)
+  end
+
   test "same generation reconnect retains a real gap; new process generation abandons it", %{
     name: name
   } do

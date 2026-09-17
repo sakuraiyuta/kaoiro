@@ -12,10 +12,15 @@ const config: WrapperConfig = {
 describe("Codex CLI whoami composition (issue #254)", () => {
   it("actual entrypoint gives whoami the live host rate-limit snapshot", async () => {
     let hostOptions!: Record<string, unknown>;
+    const disconnectReasons: string[] = [];
     const link = {
       close: () => {},
       currentSessionId: () => null,
       send: () => {},
+      reportDisconnectIntent: async (reason: string) => {
+        disconnectReasons.push(reason);
+        return true;
+      },
     };
     const host = {
       state: "idle",
@@ -56,6 +61,7 @@ describe("Codex CLI whoami composition (issue #254)", () => {
         seven_day: { utilization: 0.25, resets_at: 1787371200 },
       },
     });
+    expect(disconnectReasons).toEqual(["stop"]);
   });
 
   it("actual composition passes the loaded build identity to ServerLink", async () => {
