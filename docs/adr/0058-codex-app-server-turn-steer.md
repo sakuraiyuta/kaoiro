@@ -858,3 +858,16 @@ and read/turn/close races are fixture cases rather than claimed real CLI faults.
 Host and `HistoryReplayer` wiring remains stage (5); the latter's synchronous
 transcript callback is not silently replaced with an asynchronous reader here.
 Normal launch, protocol, capabilities, and this ADR's status remain unchanged.
+
+
+The (4c) review found that the live converter's empty output conflated corrupt
+known items with intentionally ignored ones. History now decodes display,
+ignored, and invalid items before either snapshot or page admission. Known
+assistant/user messages, commands, file changes, MCP calls, web searches, and
+function outputs validate their stable display fields, including nested text
+and tool result/error shapes. Invalid items report `incomplete/invalid_response`;
+unknown item kinds and normal hidden items remain forward-compatible. This is
+a display-boundary check, not a full schema validator for unused extensions or
+MCP's explicitly arbitrary JSON content. The live converter remains unchanged.
+Tests cover each known family through both history sources, retention of prior
+page logs on a later invalid item, and ignored-item pagination progress.

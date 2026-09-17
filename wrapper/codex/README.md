@@ -150,6 +150,11 @@ limit omits older rows, and `incomplete` on an RPC rejection, malformed response
 cursor/identity non-progress, or the separate 100-page safety bound. The bound
 stops abnormal changing cursors even if every page contains only hidden items.
 Partial page logs remain explicitly incomplete; connection failure throws.
+Known display items are decoded separately from ignored items: missing or
+malformed required display data makes either history source incomplete with
+`invalid_response`. Normal non-display items and future item kinds remain
+ignored without reducing coverage. The decoder checks the stable display
+boundary, not opaque/unused extension fields or arbitrary MCP content JSON.
 Unknown items are not guessed into display events. IA framing uses the same
 exclusion as exec history. Projection produces only log envelopes, using the
 supplied `now()` because stable items have no timestamp; it does not replay

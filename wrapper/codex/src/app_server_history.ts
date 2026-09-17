@@ -13,15 +13,71 @@ export interface AppServerHistory {
 }
 
 type HistoryRequest = (method: "thread/read" | "thread/items/list", params: RpcObject) => Promise<unknown>;
-type Entry = { turnId: string; item: RpcObject & { id: string } };
+type Entry = { turnId: string; item: RpcObject & { id: string }; display: boolean };
 // A changing cursor can still loop forever; this bounds work independently of
 // the display-row cap when pages contain only non-display items.
 const MAX_HISTORY_PAGES = 100;
 
+type ItemDecode = "display" | "ignored" | "invalid";
+const nullableString = (value: unknown): boolean => value == null || typeof value === "string";
+
+function textContent(value: unknown, output: boolean): boolean {
+  if (!Array.isArray(value)) return false;
+  return value.every(block => {
+    if (!rpcObject(block) || typeof block.type !== "string") return false;
+    if (block.type === (output ? "input_text" : "text")) return typeof block.text === "string";
+    // Known non-text blocks are valid but not displayed; future block kinds
+    // remain opaque instead of narrowing the extensible input/output surface.
+    const fields: Record<string, string[]> = output
+      ? { input_image: ["image_url"], input_audio: ["audio_url"], encrypted_content: ["encrypted_content"] }
+      : { image: ["url"], audio: ["url"], localImage: ["path"], localAudio: ["path"], skill: ["name", "path"], mention: ["name", "path"] };
+    return (Object.hasOwn(fields, block.type) ? fields[block.type]! : []).every(key => typeof block[key] === "string");
+  });
+}
+
+/** Validate the stable v2 display boundary before the lenient live converter.
+ * Empty conversion output alone cannot distinguish corruption from an ignored
+ * item. Opaque/unused extension fields are deliberately not schema-validated. */
+function decodeItem(item: RpcObject): ItemDecode {
+  let valid: boolean;
+  const toolStatus = (allowDeclined: boolean) => item.status === "inProgress" || item.status === "completed"
+    || item.status === "failed" || (allowDeclined && item.status === "declined");
+  switch (item.type) {
+    case "agentMessage": valid = typeof item.text === "string"; break;
+    case "userMessage": valid = textContent(item.content, false); break;
+    case "commandExecution":
+      valid = typeof item.command === "string" && typeof item.cwd === "string" && Array.isArray(item.commandActions)
+        && toolStatus(true) && nullableString(item.aggregatedOutput)
+        && (item.exitCode == null || (typeof item.exitCode === "number" && Number.isInteger(item.exitCode)));
+      break;
+    case "fileChange":
+      valid = toolStatus(true) && Array.isArray(item.changes) && item.changes.every(change =>
+        rpcObject(change) && typeof change.path === "string" && typeof change.diff === "string" && rpcObject(change.kind)
+        && (change.kind.type === "add" || change.kind.type === "delete"
+          || (change.kind.type === "update" && nullableString(change.kind.move_path))));
+      break;
+    case "mcpToolCall":
+      valid = typeof item.server === "string" && typeof item.tool === "string" && Object.hasOwn(item, "arguments")
+        && toolStatus(false)
+        // The schema deliberately leaves MCP content entries as arbitrary JSON.
+        && (item.result == null || (rpcObject(item.result) && Array.isArray(item.result.content)))
+        && (item.error == null || (rpcObject(item.error) && typeof item.error.message === "string"));
+      break;
+    case "webSearch": valid = typeof item.query === "string"; break;
+    case "functionCallOutput":
+      valid = typeof item.name === "string" && (typeof item.output === "string" || textContent(item.output, true));
+      break;
+    default: return "ignored";
+  }
+  return valid ? "display" : "invalid";
+}
+
 function entry(value: unknown): Entry | null {
   if (!rpcObject(value) || typeof value.turnId !== "string" || !rpcObject(value.item)
     || typeof value.item.id !== "string" || typeof value.item.type !== "string") return null;
-  return { turnId: value.turnId, item: { ...value.item, id: value.item.id } };
+  const decoded = decodeItem(value.item);
+  if (decoded === "invalid") return null;
+  return { turnId: value.turnId, item: { ...value.item, id: value.item.id }, display: decoded === "display" };
 }
 
 function payloads(item: Entry["item"], names: Map<string, string>): LogPayload[] {
@@ -33,7 +89,9 @@ function payloads(item: Entry["item"], names: Map<string, string>): LogPayload[]
     return [{ kind: "user", text: clipped.text, ...(clipped.truncated ? { truncated: true } : {}) }];
   }
   const logs = appServerItemLogs(item, false);
-  if (item.status !== "inProgress") logs.push(...appServerItemLogs(item, true));
+  const pending = (item.type === "commandExecution" || item.type === "fileChange" || item.type === "mcpToolCall")
+    && item.status === "inProgress";
+  if (!pending) logs.push(...appServerItemLogs(item, true));
   return logs.map(log => logEntryToPayload(log, names));
 }
 
@@ -55,6 +113,7 @@ export async function readAppServerHistory(
     const names = new Map<string, Map<string, string>>();
     const logs: Envelope[] = [];
     for (const value of descending ? [...entries].reverse() : entries) {
+      if (!value.display) continue;
       let turnNames = names.get(value.turnId);
       if (!turnNames) names.set(value.turnId, turnNames = new Map());
       for (const payload of payloads(value.item, turnNames)) {
@@ -115,7 +174,7 @@ export async function readAppServerHistory(
       if (values.some(value => value === null)) return finish("incomplete", "invalid_response");
       const added = unique(values as Entry[]);
       entries.push(...added);
-      for (const value of added) rows += payloads(value.item, new Map()).length;
+      for (const value of added) if (value.display) rows += payloads(value.item, new Map()).length;
       if (response.nextCursor == null) return finish("full");
       if (added.length === 0 || cursors.has(response.nextCursor as string)) return finish("incomplete", "cursor_stalled");
       if (rows >= MAX_HISTORY) return finish("tail");

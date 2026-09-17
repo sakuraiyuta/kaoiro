@@ -79,9 +79,9 @@ describe("app-server history", () => {
       { type: "hookPrompt", id: "hook" }, { type: "futureTool", id: "future" }, { type: "plan", id: "plan" },
       { type: "result", id: "result", text: "not a log" }, { type: "delivery_ack", id: "ack" },
       { type: "mcpToolCall", id: "mcp", server: "kaoiro", tool: "probe", arguments: {}, status: "completed", result: { content: [{ type: "text", text: "OK" }] } },
-      { type: "commandExecution", id: "cmd", command: "pwd", status: "inProgress" },
-      { type: "fileChange", id: "edit", status: "inProgress", changes: [{ path: "/file", kind: { type: "add" } }] },
-      { type: "functionCallOutput", id: "output", output: [{ type: "input_text", text: "external" }] },
+      { type: "commandExecution", id: "cmd", command: "pwd", cwd: "/", commandActions: [], status: "inProgress" },
+      { type: "fileChange", id: "edit", status: "inProgress", changes: [{ path: "/file", diff: "", kind: { type: "add" } }] },
+      { type: "functionCallOutput", id: "output", name: "exec", output: [{ type: "input_text", text: "external" }] },
       assistant("final"),
     ])])]);
     const result = await f.read();
@@ -101,7 +101,7 @@ describe("app-server history", () => {
     const result = await f.read();
     expect(result.coverage).toBe("tail");
     expect(texts(result)).toEqual(Array.from({ length: MAX_HISTORY }, (_, n) => String(n + 5)));
-    const tools = Array.from({ length: 101 }, (_, n) => ({ type: "commandExecution", id: String(n), command: `echo ${n}`, status: "completed", aggregatedOutput: String(n) }));
+    const tools = Array.from({ length: 101 }, (_, n) => ({ type: "commandExecution", id: String(n), command: `echo ${n}`, cwd: "/", commandActions: [], status: "completed", aggregatedOutput: String(n) }));
     const g = fixture([thread(), thread([turn(tools)])]);
     const toolResult = await g.read();
     expect(toolResult.logs).toHaveLength(MAX_HISTORY);
@@ -155,4 +155,83 @@ describe("app-server history", () => {
     expect(texts(result)).toEqual(["known"]);
     await expect(fixture([new AppServerConnectionError("EOF")]).read()).rejects.toThrow("EOF");
   });
+});
+
+// Required display fields come from pinned stable v2 ThreadItem, UserInput,
+// FileUpdateChange and FunctionCallOutputBody, not from converter fallbacks.
+const displayItems: Array<{ item: RpcObject; required: string[] }> = [
+  { item: { type: "agentMessage", id: "agent", text: "answer" }, required: ["text"] },
+  { item: user("question"), required: ["content"] },
+  { item: { type: "commandExecution", id: "cmd", command: "pwd", cwd: "/", commandActions: [], status: "completed", aggregatedOutput: "/" }, required: ["command", "cwd", "commandActions", "status"] },
+  { item: { type: "fileChange", id: "edit", changes: [{ path: "/file", diff: "", kind: { type: "add" } }], status: "completed" }, required: ["changes", "status"] },
+  { item: { type: "mcpToolCall", id: "mcp", server: "kaoiro", tool: "probe", arguments: null, status: "completed", result: { content: [{ type: "text", text: "ok" }] } }, required: ["server", "tool", "arguments", "status"] },
+  { item: { type: "webSearch", id: "web", query: "query" }, required: ["query"] },
+  { item: { type: "functionCallOutput", id: "output", name: "exec", output: "output" }, required: ["name", "output"] },
+];
+const invalidDisplayItems: Array<[string, RpcObject]> = displayItems.flatMap(({ item, required }) => required.map(key => {
+  const incomplete = { ...item }; delete incomplete[key];
+  return [`${item.type} missing ${key}`, incomplete] as [string, RpcObject];
+}));
+for (const [index, changes] of [
+  [0, { text: null }], [1, { content: "not an array" }], [1, { content: [{ type: "text" }] }],
+  [1, { content: [{ type: "text", text: 12 }] }], [1, { content: [null] }],
+  [1, { content: [{ type: "localImage", path: 1 }] }],
+  [2, { command: 1 }], [2, { status: "future" }], [2, { commandActions: null }],
+  [2, { aggregatedOutput: {} }], [2, { exitCode: "0" }],
+  [3, { changes: {} }], [3, { changes: [{ path: 1, diff: "", kind: { type: "add" } }] }],
+  [3, { changes: [{ path: "/f", kind: { type: "add" } }] }],
+  [3, { changes: [{ path: "/f", diff: "", kind: { type: "future" } }] }],
+  [4, { result: { content: "bad" } }], [4, { error: {} }], [4, { status: "declined" }],
+  [5, { query: null }], [6, { output: {} }], [6, { output: [{ type: "input_text" }] }],
+  [6, { output: [{ type: "input_text", text: 5 }] }], [6, { output: [null] }],
+] as Array<[number, RpcObject]>) {
+  invalidDisplayItems.push([`${displayItems[index]!.item.type} ${JSON.stringify(changes)}`, { ...displayItems[index]!.item, ...changes }]);
+}
+
+describe.each(["legacy", "page"] as const)("%s known display item decoding", route => {
+  const response = (items: unknown[]) => route === "legacy"
+    ? [thread(), thread([turn(items)])] : [thread([], "paginated"), page(items)];
+
+  it.each(invalidDisplayItems)("reports incomplete for %s", async (_name, item) => {
+    expect(await fixture(response([item])).read()).toEqual({ logs: [], coverage: "incomplete", reason: "invalid_response" });
+  });
+
+  it("converts every valid known display family", async () => {
+    const items = displayItems.map(value => value.item);
+    const f = fixture(response(route === "page" ? [...items].reverse() : items));
+    const result = await f.read();
+    expect(result.coverage).toBe("full");
+    expect(result.logs.map(log => (log.payload as { kind: string }).kind)).toEqual([
+      "assistant", "user", "tool_use", "tool_result", "tool_use", "tool_result", "tool_use", "tool_result", "tool_use", "tool_result", "tool_result",
+    ]);
+  });
+
+  it("ignores future and non-display types without reducing coverage", async () => {
+    const result = await fixture(response([
+      { id: "future", type: "futureDisplayType", text: null },
+      { id: "reason", type: "reasoning", summary: [], content: [] },
+      { id: "compact", type: "contextCompaction" },
+      { id: "media", type: "userMessage", content: [{ type: "image", url: "image" }, { type: "futureBlock" }, { type: "constructor" }] },
+    ])).read();
+    expect(result).toEqual({ logs: [], coverage: "full" });
+  });
+});
+
+it("retains earlier page logs as incomplete when a later page contains an invalid known item", async () => {
+  const result = await fixture([thread([], "paginated"), page([assistant("kept")], "next"), page([{ type: "agentMessage", id: "broken" }])]).read();
+  expect(result).toMatchObject({ coverage: "incomplete", reason: "invalid_response" });
+  expect(texts(result)).toEqual(["kept"]);
+});
+
+it("counts ignored page identities as progress and does not mistake valid empty text for corruption", async () => {
+  const result = await fixture([thread([], "paginated"), page([{ id: "future", type: "future" }], "next"), page([assistant("empty", "")])]).read();
+  expect(result.coverage).toBe("full");
+  expect(result.logs).toHaveLength(1);
+});
+
+
+it("does not interpret undeclared status extensions as missing completion on messages", async () => {
+  const result = await fixture([thread(), thread([turn([{ ...assistant("answer"), status: "inProgress" }])])]).read();
+  expect(result.coverage).toBe("full");
+  expect(texts(result)).toEqual(["answer"]);
 });
