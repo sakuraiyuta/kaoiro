@@ -2102,6 +2102,75 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       # pre-switch-error baseline, not "m2".
       assert SessionPointers.get(agent_id).snapshot == %{"model" => "m1"}
     end
+
+    test "confirmed permission snapshot carries the approval axis under a pending model switch (issue #359)" do
+      agent_id = "test.permsync-approval-snapshot"
+      socket = join_wrapper(agent_id)
+
+      baseline =
+        envelope(agent_id, "idle")
+        |> Map.put("session_id", "sess-ag")
+        |> Map.put("ext", %{"effective" => %{"model" => "gemini"}})
+
+      ref = push(socket, "envelope", baseline)
+      assert_reply(ref, :ok)
+      :ok = wait_until(fn -> SessionPointers.get(agent_id) != nil end)
+
+      cell = %{
+        "sandbox" => "workspace-write",
+        "network_access" => false,
+        "approval" => "local"
+      }
+
+      applied = %{
+        "revision" => 0,
+        "requested" => cell,
+        "status" => "applied",
+        "constraints" => %{"approval" => "local", "enforcement" => "advisory"},
+        "submitted" => %{"revision" => 0, "requested" => cell, "execution_id" => "e0"},
+        "effective" => %{
+          "revision" => 0,
+          "requested" => cell,
+          "execution_id" => "e0",
+          "session_id" => "sess-ag",
+          "turn_id" => "t0",
+          "permission" => %{
+            "sandbox" => "workspace-write",
+            "approval" => "local",
+            "enforcement" => "advisory"
+          },
+          "network_access" => false
+        }
+      }
+
+      # pending_model triggers record_snapshot_from_ext/2's whole-snapshot skip,
+      # but the applied approval must still confirm into SessionPointers on the
+      # independent permission path (issue #359).
+      env =
+        envelope(agent_id, "thinking")
+        |> Map.put("session_id", "sess-ag")
+        |> Map.put("ext", %{
+          "engine" => "antigravity",
+          "effective" => %{"model" => "gemini-2"},
+          "pending_model" => "gemini-2",
+          "permission_control" => applied
+        })
+
+      ref = push(socket, "envelope", env)
+      assert_reply(ref, :ok)
+
+      :ok =
+        wait_until(fn ->
+          snap = SessionPointers.get(agent_id).snapshot
+          Map.get(snap, "approval") == "local"
+        end)
+
+      snap = SessionPointers.get(agent_id).snapshot
+      assert snap["approval"] == "local"
+      assert snap["sandbox"] == "workspace-write"
+      # The model switch is still pending, so the model snapshot stays baseline.
+      assert snap["model"] == "gemini"
+    end
   end
 
   describe "inter_agent_message ルーティング (protocol-inter-agent, phase-8)" do

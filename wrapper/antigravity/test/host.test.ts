@@ -151,24 +151,23 @@ describe("AntigravityHost", () => {
     host.close();
   });
 
-  it("set_permission stages an in-ceiling switch and applies it at the next turn (issue #359)", async () => {
+  it("stages an in-ceiling switch, applies config at the boundary, and confirms applied only at engine init (issue #359, M4)", async () => {
     const cfg = config({
       approval: "on-request",
       max_sandbox: "workspace-write",
       max_approval: "local",
       max_network_access: false,
     });
-    const { host, states, permissionLifecycle } = hostHarness({
-      config: cfg,
-      resumeSessionId: "sess-1",
-    });
+    // Fresh spawn (no resumeSessionId): #sessionId starts null, so a fabricated
+    // token would show up as the observation session_id if M4 regressed.
+    const { host, states, permissionLifecycle, calls } = hostHarness({ config: cfg });
     await host.setPermission({
       revision: 2,
       requested: { sandbox: "workspace-write", network_access: false, approval: "local" },
     });
-    // Pending control echoed; the running gate's cell is untouched until the
-    // next boundary, so ext.permission still shows the pre-switch approval.
-    const pending = states.at(-1)?.ext?.permission_control as Record<string, unknown>;
+    // Pending control echoed; the running gate's cell is untouched, so
+    // ext.permission still shows the pre-switch approval.
+    const pending = states.at(-1)?.ext?.permission_control as unknown as Record<string, unknown>;
     expect(pending.status).toBe("pending");
     expect((pending.requested as Record<string, unknown>).approval).toBe("local");
     expect((states.at(-1)?.ext?.permission as Record<string, unknown>).approval).toBe(
@@ -176,15 +175,34 @@ describe("AntigravityHost", () => {
     );
     expect(permissionLifecycle).toHaveLength(0);
 
-    await host.send("hello");
+    void host.send("hello");
+    // Config applies at the boundary -> control is `applying`, but no applied
+    // observation is fabricated before the engine confirms the session id.
+    await waitFor(() => {
+      const c = states.at(-1)?.ext?.permission_control as unknown as
+        | Record<string, unknown>
+        | undefined;
+      return c?.status === "applying";
+    });
+    expect(permissionLifecycle).toHaveLength(0);
+    await waitFor(() => calls.length === 1);
+
+    // The engine's init event confirms the session identity; only now does the
+    // switch promote to `applied` with an engine-observed session_id.
+    calls[0]!.child.stdout.write(
+      '{"event":"init","conversation_id":"engine-sess-42","init":{"tools":[]}}\n',
+    );
     await waitFor(() => permissionLifecycle.length === 1);
     const applied = permissionLifecycle[0] as Record<string, any>;
     expect(applied.kind).toBe("permission_applied");
     expect(applied.details.permission.approval).toBe("local");
     expect(applied.details.permission.enforcement).toBe("advisory");
-    expect(applied.details.session_id).toBe("sess-1");
-    expect(applied.details.execution_id).toBe(applied.details.turn_id);
-    const appliedControl = states.at(-1)?.ext?.permission_control as Record<string, unknown>;
+    expect(applied.details.session_id).toBe("engine-sess-42");
+    expect(applied.details.turn_id).toBe("engine-sess-42");
+    // execution_id is the wrapper's own per-exec correlation id, distinct from
+    // the engine session identity (protocol.md).
+    expect(applied.details.execution_id).not.toBe("engine-sess-42");
+    const appliedControl = states.at(-1)?.ext?.permission_control as unknown as Record<string, unknown>;
     expect(appliedControl.status).toBe("applied");
     host.close();
   });
@@ -206,7 +224,7 @@ describe("AntigravityHost", () => {
     expect(failed.kind).toBe("permission_failed");
     expect(failed.details.reason).toBe("exceeds_launch_ceiling");
     expect(failed.details.rolled_back_to.approval).toBe("on-request");
-    const control = states.at(-1)?.ext?.permission_control as Record<string, unknown>;
+    const control = states.at(-1)?.ext?.permission_control as unknown as Record<string, unknown>;
     expect(control.status).toBe("failed");
     expect((control.rolled_back_to as Record<string, unknown>).approval).toBe("on-request");
     // The effective cell is unchanged (no config mutation on a rejected switch).

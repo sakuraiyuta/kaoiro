@@ -1875,24 +1875,43 @@ defmodule KaoiroServerWeb.WrapperChannel do
   defp record_confirmed_permission_snapshot(agent_id) do
     case KaoiroServer.PermissionSettings.get(agent_id) do
       %{
+        engine: engine,
         control: %{
           status: :applied,
           effective: %{
-            "permission" => %{"sandbox" => sandbox},
+            "permission" => %{"sandbox" => sandbox} = permission,
             "network_access" => network_access
           }
         }
       }
       when is_binary(sandbox) and is_boolean(network_access) ->
-        SessionPointers.record_snapshot(agent_id, %{
-          "sandbox" => sandbox,
-          "network_access" => network_access
-        })
+        # issue #359: approval is Antigravity's mutable axis, so a confirmed
+        # applied observation must carry it into the resume snapshot on the
+        # same independent path as sandbox/network_access — otherwise an
+        # approval switch applied while a model switch is pending never
+        # reaches SessionPointers (protocol.md field-level persistence). Only
+        # Antigravity re-applies approval on resume; Codex's approval is
+        # host-fixed and not a resume axis, so it is NOT persisted here (its
+        # snapshot stays sandbox/network only). record_snapshot validates
+        # approval against its own enum and merges field-level.
+        approval =
+          if engine == "antigravity", do: Map.get(permission, "approval"), else: nil
+
+        SessionPointers.record_snapshot(
+          agent_id,
+          %{"sandbox" => sandbox, "network_access" => network_access}
+          |> put_snapshot_approval(approval)
+        )
 
       _other ->
         :ok
     end
   end
+
+  defp put_snapshot_approval(map, approval) when is_binary(approval),
+    do: Map.put(map, "approval", approval)
+
+  defp put_snapshot_approval(map, _approval), do: map
 
   @impl true
   # Phoenix.Channel.Server invokes this callback even when `join/3` returned
