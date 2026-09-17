@@ -23,11 +23,13 @@ defmodule KaoiroServer.AgentActivity do
   @doc """
   Records an accepted envelope. `received_at` MUST be captured by the caller
   that accepted the envelope, rather than when this cast is eventually read.
+  `:replay` is channel-derived provenance, never an envelope-supplied flag.
   """
   def record_envelope(%{"agent_id" => agent_id} = envelope, owner, received_at, opts \\ [])
       when is_pid(owner) and is_binary(received_at) do
     server = Keyword.get(opts, :server, __MODULE__)
-    GenServer.cast(server, {:record_envelope, agent_id, envelope, owner, received_at})
+    replay? = Keyword.get(opts, :replay, false)
+    GenServer.cast(server, {:record_envelope, agent_id, envelope, owner, received_at, replay?})
   end
 
   @doc """
@@ -88,23 +90,27 @@ defmodule KaoiroServer.AgentActivity do
   end
 
   @impl true
-  def handle_cast({:record_envelope, agent_id, envelope, owner, received_at}, state) do
+  def handle_cast({:record_envelope, agent_id, envelope, owner, received_at, replay?}, state) do
     case Map.get(state.entries, agent_id) do
       nil ->
         if map_size(state.entries) >= @max_agents do
           {:noreply, state}
         else
           entry =
-            base_entry(owner, envelope_session_id(envelope), false, received_at)
-            |> count_and_touch(envelope, received_at)
+            base_entry(
+              owner,
+              if(replay?, do: nil, else: envelope_session_id(envelope)),
+              false,
+              received_at
+            )
+            |> record_activity(envelope, received_at, replay?)
 
           {:noreply, put_entry(state, agent_id, entry)}
         end
 
       %{owner: ^owner} = entry ->
         entry
-        |> transition_from_envelope(envelope, received_at)
-        |> count_and_touch(envelope, received_at)
+        |> record_activity(envelope, received_at, replay?)
         |> then(&{:noreply, put_entry(state, agent_id, &1)})
 
       _old_owner ->
@@ -227,6 +233,18 @@ defmodule KaoiroServer.AgentActivity do
       true ->
         entry
     end
+  end
+
+  # Replayed transcript rows are accepted activity, but neither a live turn
+  # completion nor evidence that the current session changed.
+  defp record_activity(entry, _envelope, received_at, true) do
+    %{entry | last_activity_at: latest_time(entry.last_activity_at, received_at)}
+  end
+
+  defp record_activity(entry, envelope, received_at, false) do
+    entry
+    |> transition_from_envelope(envelope, received_at)
+    |> count_and_touch(envelope, received_at)
   end
 
   defp count_and_touch(entry, envelope, received_at) do

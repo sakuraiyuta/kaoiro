@@ -42,6 +42,33 @@ defmodule KaoiroServer.AgentActivityTest do
     assert %{last_result_at: nil} = AgentActivity.get("completion", store)
   end
 
+  test "replayed results touch activity without adopting or changing a live session", %{
+    store: store
+  } do
+    AgentActivity.record_envelope(env("replay", "result", "historical"), self(), ts(1),
+      server: store,
+      replay: true
+    )
+
+    assert %{session_id: nil, turns: 0, last_result_at: nil, last_activity_at: activity} =
+             AgentActivity.get("replay", store)
+
+    assert activity == ts(1)
+
+    AgentActivity.record_envelope(env("live", "result", "current"), self(), ts(2), server: store)
+
+    AgentActivity.record_envelope(env("live", "result", "historical"), self(), ts(3),
+      server: store,
+      replay: true
+    )
+
+    assert %{session_id: "current", turns: 1, last_result_at: result, last_activity_at: activity} =
+             AgentActivity.get("live", store)
+
+    assert result == ts(2)
+    assert activity == ts(3)
+  end
+
   test "unknown agent is bound to its owner and result increments once", %{store: store} do
     AgentActivity.record_envelope(env("a", "result"), self(), ts(1), server: store)
     :sys.get_state(store)

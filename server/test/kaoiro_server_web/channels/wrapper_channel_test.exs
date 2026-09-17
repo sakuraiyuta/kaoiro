@@ -193,9 +193,23 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     result =
       envelope(id, "idle") |> Map.put("type", "result") |> Map.put("ts", "2000-01-01T00:00:00Z")
 
+    assert_reply push(socket, "history_reset", %{"replay_id" => "completion-replay"}), :ok
     assert_reply push(socket, "envelope", result), :ok
     :sys.get_state(AgentActivity)
-    assert %{last_result_at: at} = AgentActivity.get(id)
+    assert %{last_result_at: nil, turns: 0} = AgentActivity.get(id)
+    KaoiroServer.QuagmireWatch.sweep()
+
+    refute_receive %Phoenix.Socket.Broadcast{
+      event: "quagmire_notice",
+      payload: %{"agent_id" => ^id}
+    }
+
+    assert_reply push(socket, "history_replay_complete", %{"replay_id" => "completion-replay"}),
+                 :ok
+
+    assert_reply push(socket, "envelope", result), :ok
+    :sys.get_state(AgentActivity)
+    assert %{last_result_at: at, turns: 1} = AgentActivity.get(id)
     assert at > pending
     KaoiroServer.QuagmireWatch.sweep()
 
@@ -1240,6 +1254,112 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       # last accepted LWW snapshot is still exactly the same.
       assert %{^agent_id => %{"tasklist" => unchanged}} = TaskStates.snapshot()
       assert unchanged == stored
+    end
+  end
+
+  describe "activity replay windows" do
+    defp result_for_activity(id, sid \\ "current") do
+      envelope(id, "idle")
+      |> Map.put("type", "result")
+      |> Map.put("session_id", sid)
+      |> Map.put("ts", "2000-01-01T00:00:00Z")
+    end
+
+    test "a superseding replay requires its own completion and preserves the live session" do
+      id = "test.activity-replay-superseded"
+
+      AgentActivity.begin_transition(
+        id,
+        "initial",
+        :spawn,
+        DateTime.to_iso8601(DateTime.utc_now())
+      )
+
+      socket = join_wrapper(id, "default", %{"transition_id" => "initial"})
+      assert_reply push(socket, "envelope", envelope(id, "idle")), :ok
+      assert_reply push(socket, "envelope", result_for_activity(id)), :ok
+      :sys.get_state(AgentActivity)
+      before_replay = AgentActivity.get(id)
+
+      assert_reply push(socket, "history_reset", %{"replay_id" => "old"}), :ok
+      assert_reply push(socket, "history_reset", %{"replay_id" => "new"}), :ok
+      assert_reply push(socket, "history_replay_complete", %{"replay_id" => "old"}), :ok
+      assert_reply push(socket, "history_replay_complete", %{}), :ok
+      assert_reply push(socket, "envelope", result_for_activity(id, "historical")), :ok
+      :sys.get_state(AgentActivity)
+      during_replay = AgentActivity.get(id)
+      assert during_replay.turns == before_replay.turns
+      assert during_replay.last_result_at == before_replay.last_result_at
+      assert during_replay.session_id == "current"
+      assert during_replay.last_activity_at >= before_replay.last_activity_at
+      assert [%{"session_id" => "historical"}] = AgentStates.histories()[id]
+
+      assert_reply push(socket, "history_replay_complete", %{"replay_id" => "new"}), :ok
+      assert_reply push(socket, "envelope", result_for_activity(id)), :ok
+      :sys.get_state(AgentActivity)
+      assert %{turns: 2, session_id: "current"} = AgentActivity.get(id)
+    end
+
+    test "terminating a replay owner cannot leave suppression on its replacement" do
+      id = "test.activity-replay-terminated"
+      socket = join_wrapper(id)
+      assert_reply push(socket, "envelope", envelope(id, "idle")), :ok
+      assert_reply push(socket, "history_reset", %{"replay_id" => "abandoned"}), :ok
+      down = Process.monitor(socket.channel_pid)
+      Process.unlink(socket.channel_pid)
+      :ok = close(socket)
+      assert_receive {:DOWN, ^down, :process, _pid, _reason}, TestTimeouts.out_of_band()
+
+      replacement = join_wrapper(id)
+      assert_reply push(replacement, "envelope", envelope(id, "idle")), :ok
+
+      for payload <- [%{}, %{"replay_id" => ""}, %{"replay_id" => 42}] do
+        assert_reply push(replacement, "history_reset", payload), :ok
+      end
+
+      assert_reply push(replacement, "envelope", result_for_activity(id)), :ok
+      :sys.get_state(AgentActivity)
+      assert %{turns: 1, last_result_at: at} = AgentActivity.get(id)
+      assert is_binary(at)
+    end
+
+    test "a stale owner cannot start or complete the replacement owner's window" do
+      id = "test.activity-replay-owner"
+
+      AgentActivity.begin_transition(
+        id,
+        "initial",
+        :spawn,
+        DateTime.to_iso8601(DateTime.utc_now())
+      )
+
+      old = join_wrapper(id, "default", %{"transition_id" => "initial"})
+      assert_reply push(old, "envelope", envelope(id, "idle")), :ok
+      assert_reply push(old, "history_reset", %{"replay_id" => "shared-id"}), :ok
+      # Simulate the registry handoff before the old channel finishes terminating.
+      :ok = AgentStates.put(envelope(id, "idle"), owner: nil)
+      current = join_wrapper(id)
+      assert_reply push(current, "envelope", envelope(id, "idle")), :ok
+      assert_reply push(old, "history_reset", %{"replay_id" => "shared-id"}), :ok
+      assert_reply push(current, "envelope", result_for_activity(id)), :ok
+      :sys.get_state(AgentActivity)
+      assert %{turns: 1} = AgentActivity.get(id)
+
+      assert_reply push(current, "history_reset", %{"replay_id" => "shared-id"}), :ok
+      assert_reply push(old, "history_replay_complete", %{"replay_id" => "shared-id"}), :ok
+      assert_reply push(old, "envelope", result_for_activity(id, "stale")), :ok
+      down = Process.monitor(old.channel_pid)
+      Process.unlink(old.channel_pid)
+      :ok = close(old)
+      assert_receive {:DOWN, ^down, :process, _pid, _reason}, TestTimeouts.out_of_band()
+      assert_reply push(current, "envelope", result_for_activity(id, "historical")), :ok
+      :sys.get_state(AgentActivity)
+      assert %{turns: 1, session_id: "current"} = AgentActivity.get(id)
+
+      assert_reply push(current, "history_replay_complete", %{"replay_id" => "shared-id"}), :ok
+      assert_reply push(current, "envelope", result_for_activity(id)), :ok
+      :sys.get_state(AgentActivity)
+      assert %{turns: 2} = AgentActivity.get(id)
     end
   end
 

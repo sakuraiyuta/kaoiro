@@ -151,6 +151,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
       {:ok, reply,
        socket
        |> assign(:agent_id, agent_id)
+       |> assign(:activity_replay_id, nil)
        |> assign(:delivery_generation, params["delivery_generation"])
        |> assign(:delivery_resync, delivery != nil and params["delivery_resync"] == "skip-v1")
        |> assign(:persona_id, persona_id)
@@ -831,6 +832,14 @@ defmodule KaoiroServerWeb.WrapperChannel do
     agent_id = socket.assigns.agent_id
     replay_id = if is_map(payload), do: Map.get(payload, "replay_id"), else: nil
 
+    # Channel-local ownership prevents an abandoned or stale connection from
+    # suppressing live results on its replacement. Every new reset supersedes
+    # the previous token; only its matching completion can close the window.
+    socket =
+      if is_binary(replay_id) and replay_id != "",
+        do: assign(socket, :activity_replay_id, replay_id),
+        else: socket
+
     case AgentStates.reset_history(agent_id) do
       :ok ->
         # ADR-0051 D3-3: IA is re-projected from the wrapper's sidecar via
@@ -880,6 +889,11 @@ defmodule KaoiroServerWeb.WrapperChannel do
     # strand the timeline half-rebuilt. The dashboard pairing above is
     # independent of the CAS and always broadcasts.
     _ = AgentStates.complete_hydration(agent_id, replay_id, self())
+
+    socket =
+      if socket.assigns[:activity_replay_id] == replay_id,
+        do: assign(socket, :activity_replay_id, nil),
+        else: socket
 
     {:reply, :ok, socket}
   end
@@ -1052,7 +1066,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
         # accepted the envelope. In particular an orphan reply must not
         # consume an AgentActivity entry merely because it reached the
         # channel.
-        record_accepted_envelope(envelope, agent_id, received_at)
+        record_accepted_envelope(envelope, agent_id, received_at, socket)
         # The full envelope (incl. operator-only log/result tool I/O)
         # goes onto agents:lobby unfiltered; role gating is per-
         # subscriber in AgentsChannel.handle_out. Invariant: ONLY
@@ -1124,15 +1138,18 @@ defmodule KaoiroServerWeb.WrapperChannel do
     # accepted, and the sender's sidecar is what restores its own pane
     # once an entry exists.
     if retained == :ok do
-      record_accepted_envelope(envelope, from, received_at)
+      record_accepted_envelope(envelope, from, received_at, socket)
       KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", stamped)
     end
 
     {:reply, {:ok, %{"ingress_stamp" => wire_stamp}}, socket}
   end
 
-  defp record_accepted_envelope(envelope, agent_id, received_at) do
-    AgentActivity.record_envelope(envelope, self(), received_at)
+  defp record_accepted_envelope(envelope, agent_id, received_at, socket) do
+    replayed_result? =
+      envelope["type"] == "result" and is_binary(socket.assigns[:activity_replay_id])
+
+    AgentActivity.record_envelope(envelope, self(), received_at, replay: replayed_result?)
     record_session_pointer(envelope)
     # phase-17 17-7: fill the pending boundary marker's to_session_id
     # when a fresh Codex session finally reports its thread ID
