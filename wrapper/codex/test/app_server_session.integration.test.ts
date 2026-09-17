@@ -30,7 +30,10 @@ it("uses the default session and real MCP bridge for images and instructions acr
     const output = n % 2 === 1 ? [item] : [
       { ...item, id: `msg_${n}_first`, content: [{ type: "output_text", text: "FIRST", annotations: [] }] }, item,
     ];
-    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.writeHead(200, { "content-type": "text/event-stream",
+      "x-codex-primary-used-percent": "12", "x-codex-primary-window-minutes": "300",
+      "x-codex-secondary-used-percent": "34", "x-codex-secondary-window-minutes": "10080",
+    });
     for (const event of [
       { type: "response.created", response: { id: `r${n}`, object: "response", status: "in_progress", output: [] } },
       ...output.flatMap((value, output_index) => [
@@ -90,11 +93,16 @@ enabled = false
         transport: { onDiagnostic: message => diagnostics.push(message) },
       });
       threadId = threadId === undefined ? await session.startThread() : await session.resumeThread(threadId);
+      expect(session.rateLimits.readStatus).toBe("unavailable");
       const turn = await session.startProjectedTurn({ threadId, hostTurnToken: `host-${index}`, clientUserMessageId: `user-${index}`, input: [
         { type: "text", text: `USER_${index}` }, { type: "local_image", path: image }, { type: "text", text: `AFTER_${index}` },
       ] });
       const events: AppServerProjection[] = [];
       for await (const event of turn.events) events.push(event);
+      expect(turn.usage).toMatchObject({ last: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } });
+      expect(session.rateLimits).toEqual({ readStatus: "unavailable", buckets: [
+        { limitId: "codex", windows: { five_hour: { utilization: 0.12 }, seven_day: { utilization: 0.34 } } },
+      ] });
       expect(events.filter(event => event.kind === "result")).toEqual([
         { kind: "result", status: "completed", payload: { text: "DONE", is_error: false } },
       ]);

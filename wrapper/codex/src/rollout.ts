@@ -546,14 +546,23 @@ function snapshotFromSlot(slot: unknown): {
 } | null {
   if (slot === null || typeof slot !== "object") return null;
   const s = slot as TokenCountSlot;
-  const window = windowFromMinutes(s.window_minutes);
+  return codexRateLimitWindow(s.window_minutes, s.used_percent, s.resets_at);
+}
+
+/** Shared numeric conversion; wire field names and bucket identity belong
+ * to their callers. Preserve exec's finite values without clamping. */
+export function codexRateLimitWindow(minutes: unknown, usedPercent: unknown, resetsAt: unknown): {
+  window: CodexRateLimitWindow;
+  snapshot: CodexRateLimitSnapshot;
+} | null {
+  const window = windowFromMinutes(minutes);
   if (window === null) return null;
   const snapshot: CodexRateLimitSnapshot = {};
-  if (typeof s.used_percent === "number" && Number.isFinite(s.used_percent)) {
-    snapshot.utilization = s.used_percent / 100;
+  if (typeof usedPercent === "number" && Number.isFinite(usedPercent)) {
+    snapshot.utilization = usedPercent / 100;
   }
-  if (typeof s.resets_at === "number" && Number.isFinite(s.resets_at)) {
-    snapshot.resets_at = s.resets_at;
+  if (typeof resetsAt === "number" && Number.isFinite(resetsAt)) {
+    snapshot.resets_at = resetsAt;
   }
   // A window name alone is not an observed limit. Keeping this out of the
   // map preserves the protocol's absent = unknown contract for whoami and

@@ -2,8 +2,15 @@ import { describe, expect, it } from "vitest";
 import { appServerInput, type AppServerInput } from "../src/app_server_input.js";
 
 describe("app-server input conversion", () => {
-  it.each(["image.png", "../image.png", "./image.png"])("rejects relative image path %s", path => {
+  it.each(["image.png", "../image.png", "./image.png", "~/x"])("rejects relative image path %s", path => {
     expect(() => appServerInput([{ type: "local_image", path }])).toThrow(TypeError);
+  });
+  it("uses native absolute paths: rejects Windows paths on POSIX and accepts them on Windows", () => {
+    for (const path of [String.raw`C:\tmp\x`, String.raw`\\server\share\x`]) {
+      const convert = () => appServerInput([{ type: "local_image", path }]);
+      if (process.platform === "win32") expect(convert()).toEqual([{ type: "localImage", path }]);
+      else expect(convert).toThrow(TypeError);
+    }
   });
   it("keeps text and local image ordering without retaining caller objects", () => {
     expect(appServerInput("hello")).toEqual([{ type: "text", text: "hello", text_elements: [] }]);

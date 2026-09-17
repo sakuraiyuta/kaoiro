@@ -1,9 +1,10 @@
 import {
-  AppServerConnectionError, AppServerRpc, rpcObject,
+  AppServerConnectionError, AppServerRpc, AppServerRpcError, rpcObject,
   type AppServerNotification, type AppServerRpcOptions, type RpcObject,
 } from "./app_server_rpc.js";
 import { appServerInput, type AppServerInput } from "./app_server_input.js";
 import { AppServerTurnStream } from "./app_server_stream.js";
+import { AppServerAccountTelemetry, type AppServerRateLimits } from "./app_server_telemetry.js";
 
 export interface AppServerThreadOptions {
   config?: RpcObject;
@@ -49,6 +50,7 @@ export class AppServerTransport {
   #failure: Error | undefined;
   #version: string | undefined;
   #opening = false;
+  readonly #account = new AppServerAccountTelemetry();
 
   constructor(options: Omit<AppServerRpcOptions, "onNotification" | "onFailure"> & { threadOpenTimeoutMs?: number } = {}) {
     this.#threadOpenTimeoutMs = options.threadOpenTimeoutMs;
@@ -67,6 +69,19 @@ export class AppServerTransport {
 
   get version(): string | undefined { return this.#version; }
   get stderrTail(): string { return this.#rpc.stderrTail; }
+  get rateLimits(): AppServerRateLimits { return this.#account.snapshot; }
+
+  async readRateLimits(): Promise<AppServerRateLimits> {
+    await this.#initialize();
+    const token = this.#account.beginRead();
+    try {
+      this.#account.finishRead(token, await this.#rpc.request("account/rateLimits/read", {}).result);
+    } catch (error) {
+      if (!(error instanceof AppServerRpcError)) throw error;
+      this.#account.finishRead(token, null);
+    }
+    return this.rateLimits;
+  }
 
   async startThread(options: AppServerThreadOptions = {}): Promise<string> {
     return this.#openThread("thread/start", { ...options });
@@ -163,6 +178,10 @@ export class AppServerTransport {
   }
 
   #notification(event: AppServerNotification): void {
+    if (event.method === "account/rateLimits/updated") {
+      this.#account.update(event.params.rateLimits);
+      return;
+    }
     const active = this.#active;
     if (!active || event.params.threadId !== active.threadId) return;
     if (active.turnId === undefined) active.beforeResponse.push(event);

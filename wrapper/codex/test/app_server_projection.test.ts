@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import { MAX_LOG_BYTES, makeResult } from "@kaoiro/agent-common";
 import { projectAppServerTurn, type AppServerProjection } from "../src/app_server_projection.js";
 import { AppServerConnectionError, type AppServerNotification, type RpcObject } from "../src/app_server_rpc.js";
@@ -27,6 +28,58 @@ const results = (events: AppServerProjection[]) => events.filter(e => e.kind ===
 const adapters = (events: AppServerProjection[]) => events.flatMap(e => e.kind === "adapter" ? [e.event] : []);
 
 describe("app-server result and progress projection", () => {
+  it("projects the captured pinned-CLI compaction without requiring thread/compacted", async () => {
+    const capture = JSON.parse(readFileSync(new URL("./fixtures/app_server_compaction.json", import.meta.url), "utf8")) as {
+      binarySha256: string; events: AppServerNotification[];
+    };
+    expect(capture.binarySha256).toBe("56ef98ab4032d317ab26e9b5e5a175650717351edb16ed9cde0cb6d1734d62da");
+    const start = capture.events.find(e => e.method === "item/started")!;
+    const params = start.params;
+    const actualIdentity = { ...identity, threadId: params.threadId as string, turnId: params.turnId as string };
+    const projected = projectAppServerTurn({ identity: actualIdentity, events: (async function* () { yield* capture.events; })() });
+    const out = await collect(projected.events);
+    const itemId = (params.item as RpcObject).id;
+    expect(out.filter(e => e.kind === "compaction")).toEqual([
+      { kind: "compaction", phase: "started", itemId }, { kind: "compaction", phase: "completed", itemId },
+    ]);
+    expect(results(out)).toEqual([{ kind: "result", status: "completed", payload: { is_error: false } }]);
+  });
+  it("keeps native usage snapshots across terminal completion and isolates consumers", async () => {
+    const counts = { inputTokens: 2000, cachedInputTokens: 30, outputTokens: 70, reasoningOutputTokens: 2, totalTokens: 2070 };
+    const usage = { last: counts, total: { ...counts, totalTokens: 4000 }, modelContextWindow: 1000 };
+    const turn = project([event("thread/tokenUsage/updated", { tokenUsage: usage }),
+      event("thread/tokenUsage/updated", { turnId: "foreign", tokenUsage: { ...usage, modelContextWindow: 9999 } }),
+      event("thread/tokenUsage/updated", { tokenUsage: {} }), terminal()]);
+    expect(turn.usage).toBeNull();
+    const first = await turn.events.next();
+    expect(first.value).toMatchObject({ kind: "usage", snapshot: { last: { inputTokens: 2000 }, total: { totalTokens: 4000 }, modelContextWindow: 1000 } });
+    if (first.value?.kind === "usage") first.value.snapshot.last.inputTokens = 99;
+    await collect(turn.events);
+    expect(turn.usage).toEqual({ last: { ...counts, cacheWriteInputTokens: 0 }, total: { ...counts, totalTokens: 4000, cacheWriteInputTokens: 0 }, modelContextWindow: 1000 });
+    const copy = turn.usage!; copy.last.inputTokens = 0;
+    expect(turn.usage!.last.inputTokens).toBe(2000);
+  });
+
+  it.each([false, true])("confirms one compaction item pair at terminal success with legacy companion=%s", async legacy => {
+    const compact = item("contextCompaction", "compact");
+    const extra = legacy ? [event("thread/compacted")] : [];
+    const turn = project([started(compact), started(compact), ...extra, completed(compact), completed(compact), ...extra, terminal()]);
+    expect((await turn.events.next()).value).toEqual({ kind: "compaction", phase: "started", itemId: "compact" });
+    const rest = await collect(turn.events);
+    expect(rest.filter(e => e.kind === "compaction")).toEqual([{ kind: "compaction", phase: "completed", itemId: "compact" }]);
+    expect(results(rest)).toHaveLength(1);
+  });
+
+  it("does not invent compaction completion from legacy-only, incomplete, failed, or foreign evidence", async () => {
+    const compact = item("contextCompaction", "compact");
+    for (const raw of [
+      [event("thread/compacted"), terminal()], [started(compact), event("thread/compacted"), terminal()],
+      [completed(compact), terminal()], [started(compact), completed(compact), terminal("failed")],
+      [started(compact), completed(compact), terminal("interrupted")],
+      [started(compact), event("item/completed", { turnId: "foreign", item: compact }), terminal()],
+    ]) expect((await collect(project(raw).events)).filter(e => e.kind === "compaction" && e.phase === "completed")).toEqual([]);
+    await expect(collect(project([started(compact), completed(compact)]).events)).rejects.toThrow("without a terminal");
+  });
   it("retains two final answers and waits for the sole terminal instead of replacing history with its summary", async () => {
     const raw = [answer("a", "FIRST"), completed(item("functionCallOutput", "external", { name: "external", output: "JOINED" })),
       answer("b", "SECOND"), terminal("completed", { items: [item("agentMessage", "b", { text: "SECOND" })] }), terminal()];

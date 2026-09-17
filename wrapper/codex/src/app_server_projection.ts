@@ -7,8 +7,11 @@ import {
 import { threadEventToEvents, threadEventToLogs } from "./adapter.js";
 import { AppServerConnectionError, rpcObject, type RpcObject } from "./app_server_rpc.js";
 import type { AppServerTurn, AppServerTurnIdentity } from "./app_server_transport.js";
+import { appServerUsage, type AppServerUsage } from "./app_server_telemetry.js";
 
 export type AppServerProjection =
+  | { kind: "usage"; snapshot: AppServerUsage }
+  | { kind: "compaction"; phase: "started" | "completed"; itemId: string }
   | { kind: "adapter"; event: AdapterEvent }
   | { kind: "log"; payload: LogPayload }
   | { kind: "tasklist"; snapshot: TasklistSnapshot }
@@ -17,6 +20,7 @@ export type AppServerProjection =
 export interface AppServerProjectedTurn {
   identity: AppServerTurnIdentity;
   events: AsyncIterableIterator<AppServerProjection>;
+  readonly usage: AppServerUsage | null;
 }
 
 function status(value: unknown): "in_progress" | "completed" | "failed" | null {
@@ -96,11 +100,14 @@ function plan(value: unknown): TasklistSourceItem[] | null {
 /** One generator owns the raw stream and all per-turn display state. A terminal
  * summary is deliberately never used to replace completed-item history. */
 export function projectAppServerTurn(turn: AppServerTurn): AppServerProjectedTurn {
-  return { identity: turn.identity, events: project(turn) };
+  const state: { usage: AppServerUsage | null } = { usage: null };
+  return { identity: turn.identity, events: project(turn, state),
+    get usage() { return structuredClone(state.usage); } };
 }
 
-async function* project(turn: AppServerTurn): AsyncGenerator<AppServerProjection> {
+async function* project(turn: AppServerTurn, state: { usage: AppServerUsage | null }): AsyncGenerator<AppServerProjection> {
   const started = new Set<string>(), completed = new Set<string>();
+  const compactions = new Set<string>(), compacted = new Set<string>();
   const toolNames = new Map<string, string>();
   let turnStarted = false;
   let finalText: string | undefined, fallbackText: string | undefined;
@@ -111,6 +118,19 @@ async function* project(turn: AppServerTurn): AsyncGenerator<AppServerProjection
     const turnId = p.turnId ?? nested?.id;
     if (p.threadId !== turn.identity.threadId || turnId !== turn.identity.turnId) continue;
     switch (notification.method) {
+      case "thread/tokenUsage/updated": {
+        const usage = appServerUsage(p.tokenUsage);
+        if (usage !== null) {
+          state.usage = usage;
+          yield { kind: "usage", snapshot: structuredClone(usage) };
+        }
+        break;
+      }
+      case "thread/compacted":
+        // Pinned 0.153.4 capture emitted only the contextCompaction item pair.
+        // A legacy companion must not create a second completion or substitute
+        // for an unobserved item completion; the turn terminal confirms success.
+        break;
       case "turn/started":
         if (!turnStarted) {
           turnStarted = true;
@@ -147,6 +167,14 @@ async function* project(turn: AppServerTurn): AsyncGenerator<AppServerProjection
         const isComplete = notification.method === "item/completed";
         if (completed.has(item.id) || (!isComplete && started.has(item.id))) break;
         (isComplete ? completed : started).add(item.id);
+        if (item.type === "contextCompaction") {
+          if (isComplete) compacted.add(item.id);
+          else {
+            compactions.add(item.id);
+            yield { kind: "compaction", phase: "started", itemId: item.id };
+          }
+          break;
+        }
         if (isComplete && item.type === "agentMessage" && typeof item.text === "string") {
           if (item.phase === "final_answer") finalText = item.text;
           else if (item.phase == null) fallbackText = item.text;
@@ -175,6 +203,11 @@ async function* project(turn: AppServerTurn): AsyncGenerator<AppServerProjection
         const s = nested?.status;
         if (s !== "completed" && s !== "failed" && s !== "interrupted") {
           throw new AppServerConnectionError("Invalid app-server terminal status");
+        }
+        if (s === "completed") {
+          for (const itemId of compactions) {
+            if (compacted.has(itemId)) yield { kind: "compaction", phase: "completed", itemId };
+          }
         }
         const error = nested && rpcObject(nested.error) ? nested.error : null;
         const text = finalText ?? fallbackText;

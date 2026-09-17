@@ -9,6 +9,7 @@ import {
 } from "./app_server_transport.js";
 import type { AppServerRpcOptions } from "./app_server_rpc.js";
 import { projectAppServerTurn, type AppServerProjectedTurn } from "./app_server_projection.js";
+import type { AppServerRateLimits } from "./app_server_telemetry.js";
 
 export interface AppServerSessionOptions {
   thread?: Omit<AppServerThreadOptions, "config">;
@@ -79,6 +80,7 @@ export class AppServerSession {
 
   get version(): string | undefined { return this.#transport.version; }
   get stderrTail(): string { return this.#transport.stderrTail; }
+  get rateLimits(): AppServerRateLimits { return this.#transport.rateLimits; }
 
   async startThread(): Promise<string> { return this.#openThread(); }
   async resumeThread(threadId: string): Promise<string> { return this.#openThread(threadId); }
@@ -91,6 +93,7 @@ export class AppServerSession {
       this.#threadId = threadId === undefined
         ? await this.#transport.startThread(this.#threadOptions)
         : await this.#transport.resumeThread(threadId, this.#threadOptions);
+      await this.#transport.readRateLimits();
       return this.#threadId;
     } catch (error) {
       await this.close();
@@ -102,7 +105,7 @@ export class AppServerSession {
 
   async startTurn(input: AppServerTurnInput): Promise<AppServerTurn> {
     if (this.#closing) throw new Error("App-server session is closed");
-    if (this.#threadId === undefined || input.threadId !== this.#threadId) {
+    if (this.#opening || this.#threadId === undefined || input.threadId !== this.#threadId) {
       throw new Error("App-server session thread is not ready or does not match");
     }
     return this.#transport.startTurn(input);

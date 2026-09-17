@@ -1,0 +1,140 @@
+{
+  "binarySha256": "56ef98ab4032d317ab26e9b5e5a175650717351edb16ed9cde0cb6d1734d62da",
+  "traceSha256": "a7642eb8629fc5e3ee95f21242ebcb4163100f4ff292dc7c4ce69f9f0602dc8a",
+  "events": [
+    {
+      "method": "turn/started",
+      "params": {
+        "threadId": "01a0b10e-2b9b-7b20-a63d-87e253d0494f",
+        "turn": {
+          "id": "01a0b10e-2ccf-7551-81c5-f4f70cc49f30",
+          "items": [],
+          "itemsView": "notLoaded",
+          "status": "inProgress",
+          "error": null,
+          "startedAt": 1789676891,
+          "completedAt": null,
+          "durationMs": null
+        }
+      }
+    },
+    {
+      "method": "item/started",
+      "params": {
+        "item": {
+          "type": "contextCompaction",
+          "id": "01a0b10e-2cd6-77a0-be06-66cbe4577240"
+        },
+        "threadId": "01a0b10e-2b9b-7b20-a63d-87e253d0494f",
+        "turnId": "01a0b10e-2ccf-7551-81c5-f4f70cc49f30",
+        "startedAtMs": 1789676891350
+      }
+    },
+    {
+      "method": "thread/tokenUsage/updated",
+      "params": {
+        "threadId": "01a0b10e-2b9b-7b20-a63d-87e253d0494f",
+        "turnId": "01a0b10e-2ccf-7551-81c5-f4f70cc49f30",
+        "tokenUsage": {
+          "total": {
+            "totalTokens": 12,
+            "inputTokens": 10,
+            "cachedInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "outputTokens": 2,
+            "reasoningOutputTokens": 0
+          },
+          "last": {
+            "totalTokens": 12,
+            "inputTokens": 10,
+            "cachedInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "outputTokens": 2,
+            "reasoningOutputTokens": 0
+          },
+          "modelContextWindow": 258400
+        }
+      }
+    },
+    {
+      "method": "thread/tokenUsage/updated",
+      "params": {
+        "threadId": "01a0b10e-2b9b-7b20-a63d-87e253d0494f",
+        "turnId": "01a0b10e-2ccf-7551-81c5-f4f70cc49f30",
+        "tokenUsage": {
+          "total": {
+            "totalTokens": 24,
+            "inputTokens": 20,
+            "cachedInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "outputTokens": 4,
+            "reasoningOutputTokens": 0
+          },
+          "last": {
+            "totalTokens": 12,
+            "inputTokens": 10,
+            "cachedInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "outputTokens": 2,
+            "reasoningOutputTokens": 0
+          },
+          "modelContextWindow": 258400
+        }
+      }
+    },
+    {
+      "method": "thread/tokenUsage/updated",
+      "params": {
+        "threadId": "01a0b10e-2b9b-7b20-a63d-87e253d0494f",
+        "turnId": "01a0b10e-2ccf-7551-81c5-f4f70cc49f30",
+        "tokenUsage": {
+          "total": {
+            "totalTokens": 24,
+            "inputTokens": 20,
+            "cachedInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "outputTokens": 4,
+            "reasoningOutputTokens": 0
+          },
+          "last": {
+            "totalTokens": 4690,
+            "inputTokens": 0,
+            "cachedInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "outputTokens": 0,
+            "reasoningOutputTokens": 0
+          },
+          "modelContextWindow": 258400
+        }
+      }
+    },
+    {
+      "method": "item/completed",
+      "params": {
+        "item": {
+          "type": "contextCompaction",
+          "id": "01a0b10e-2cd6-77a0-be06-66cbe4577240"
+        },
+        "threadId": "01a0b10e-2b9b-7b20-a63d-87e253d0494f",
+        "turnId": "01a0b10e-2ccf-7551-81c5-f4f70cc49f30",
+        "completedAtMs": 1789676891539
+      }
+    },
+    {
+      "method": "turn/completed",
+      "params": {
+        "threadId": "01a0b10e-2b9b-7b20-a63d-87e253d0494f",
+        "turn": {
+          "id": "01a0b10e-2ccf-7551-81c5-f4f70cc49f30",
+          "items": [],
+          "itemsView": "notLoaded",
+          "status": "completed",
+          "error": null,
+          "startedAt": 1789676891,
+          "completedAt": 1789676891,
+          "durationMs": 201
+        }
+      }
+    }
+  ]
+}

@@ -34,6 +34,7 @@ function childFixture(closeDelayMs = 0, openDelayMs = 0) {
     if (request.id !== undefined && !ignored.has(request.method)) {
       const reply = () => stdout.write(JSON.stringify(fail ? { id: request.id, error: { code: -1, message: "fixture failure" } } : {
         id: request.id, result: request.method === "initialize" ? { userAgent: "kaoiro/test" }
+          : request.method === "account/rateLimits/read" ? { rateLimits: { limitId: "codex", primary: { usedPercent: 25, windowDurationMins: 300 } } }
           : request.method === "turn/start" ? { turn: { id: "turn" } } : { thread: { id: "thread" } },
       }) + "\n");
       if (openDelayMs && (request.method === "thread/start" || request.method === "thread/resume")) setTimeout(reply, openDelayMs);
@@ -62,6 +63,10 @@ it.each([undefined, false, true])("uses exec-equivalent bridge settings and expl
     transport: { spawnChild: () => fixture.child },
   }); sessions.push(session);
   expect(await session.resumeThread("thread")).toBe("thread");
+  expect(fixture.sent.filter(r => r.method === "account/rateLimits/read")).toHaveLength(1);
+  expect(session.rateLimits).toEqual({ readStatus: "available", buckets: [
+    { limitId: "codex", windows: { five_hour: { utilization: 0.25 } } },
+  ] });
   const params = fixture.sent.find(r => r.method === "thread/resume")!.params;
   expect(params).toMatchObject({ developerInstructions: "persona", sandbox: "read-only", cwd: "/tmp", approvalPolicy: "never", approvalsReviewer: "user" });
   const config = params.config as { features: unknown; mcp_servers: { kaoiro: { command: string; args: string[]; env: Record<string, string>; tool_timeout_sec: number; default_tools_approval_mode: string } } };
@@ -205,6 +210,7 @@ it.each([
   ["thread/start", false, undefined, 25_000],
   ["thread/start", true, 200, 200],
   ["initialize", true, undefined, 25_000],
+  ["account/rateLimits/read", true, undefined, 25_000],
   ["turn/start", true, undefined, 25_000],
 ] as const)("bounds %s (MCP=%s, override=%s) at %s ms", async (method, withTools, override, timeout) => {
   const fixture = childFixture(); fixture.ignore(method);

@@ -32,7 +32,7 @@ and `experimentalApi` false. Unexpected server requests receive an explicit
 JSON-RPC rejection and an optional diagnostic without their payload. The
 `stderrTail` accessor retains up to 16,384 characters for diagnostics; callers
 must redact it before logging. There is no steer or external-message submission
-API. Telemetry, compaction, history restoration, and host/IA lifecycle
+API. History restoration and host/IA lifecycle
 integration remain later stages.
 
 `AppServerSession` composes the transport with the existing `ToolHost` and
@@ -102,3 +102,36 @@ test verifies two final answers, one result, and MCP call/result logs through
 the real CLI on both start and resume. Failure/interruption, duplicate frames,
 foreign identities, malformed items, and EOF projection use deterministic
 fixtures. This API is internal and does not connect to `CodexHost` or launch.
+
+Turn projection retains native `last` and `total` token counts plus the nullable
+model context window. Usage notifications yield detached snapshots, and the
+projected turn's `usage` getter retains the latest valid snapshot after terminal
+completion. No percentage or peer-facing context payload is inferred from those
+counts. Unsupported/malformed usage does not replace the last known value.
+
+`AppServerTransport` receives `account/rateLimits/updated` independently of any
+active turn. `AppServerSession` reads account limits once during start/resume;
+RPC errors, including unauthenticated reads, yield `readStatus=unavailable`
+without erasing notification evidence. Connection failures remain errors.
+Read responses cannot overwrite notifications received during that read or a
+newer read's result. Snapshots distinguish each `limitId`, including an anonymous
+null id, and each supported window; the keyed multi-bucket read is authoritative
+when present. Credits, plan, account identity, and opaque backend data are not
+retained. Numeric window conversion is shared with the exec rollout reader,
+whose finite-value conversion and existing routing remain unchanged.
+
+Compaction projection emits `started` for a `contextCompaction` item and
+`completed` only after the matching item completion and successful turn terminal.
+Failed/interrupted turns and incomplete pairs do not report compaction success.
+Duplicate item notifications are suppressed. `thread/compacted` is treated as
+a redundant companion, not a requirement or a substitute for missing item
+evidence. The pinned 0.153.4 capture recorded zero such legacy notifications;
+this is a statement about that capture, not a guarantee it can never appear.
+The captured item pair is also replayed through the projector in a test.
+
+Real-CLI tests cover usage, limit notifications, and the unauthenticated read
+path. Successful account reads, multiple buckets, stale-read races, and invalid
+telemetry use schema fixtures. The compaction trace used a local provider and
+manual `thread/compact/start`; automatic model-triggered compaction and actual
+account quotas have not been measured. Native path conversion rejects `~/x`
+and accepts Windows absolute paths only when running on Windows.

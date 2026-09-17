@@ -738,3 +738,59 @@ plugins-clone startup, unlike the preceding default-config capture. Production
 plugin settings are unchanged. Update checks and other CLI startup traffic
 remain possible. CI's PATH-alias and bundled-bubblewrap fallback warnings are
 separate observations, not evidence of the missing-tool cause.
+
+### Increment (4b): telemetry and compaction
+
+`app_server_telemetry.ts` preserves native token counts (`last`, `total`, and
+nullable `modelContextWindow`) without deriving a context percentage. The
+projected turn retains its latest valid usage and emits detached snapshots.
+Account notifications are routed before the transport's active-turn filter.
+Start/resume performs one `account/rateLimits/read`; an RPC error means unknown
+read availability, while independently observed notification buckets survive.
+Connection failure is not converted to unknown. Newer reads and notifications
+fence older read results. Buckets remain separate by `limitId`; credits, plan,
+account identity, and opaque response fields are excluded. Only the numeric
+window conversion is shared with `rollout.ts`, with exec routing and finite
+out-of-range semantics pinned unchanged.
+
+On the same pinned 0.153.4 binary (SHA-256
+`56ef98ab4032d317ab26e9b5e5a175650717351edb16ed9cde0cb6d1734d62da`),
+an isolated, unauthenticated home and loopback provider captured:
+
+- One `contextCompaction` item start and matching completion, followed by that
+  compaction turn's successful `turn/completed`.
+- Zero `thread/compacted` notifications **in this capture**. Projection therefore
+  requires only the item pair and successful terminal; a legacy companion is
+  ignored as duplicate evidence, not required for completion.
+- Four `account/rateLimits/updated` notifications without thread/turn ids.
+  Provider headers produced `limitId=codex`, primary `usedPercent=12` /
+  `windowDurationMins=300`, and secondary `34` / `10080`.
+- Both `resetsAt` fields were null in this capture. The probe's reset-header
+  names were not established as valid; no CLI reset-time behavior is inferred.
+- `account/rateLimits/read` before and after a turn returned `-32600`,
+  `codex account authentication required to read rate limits`.
+
+Capture drained both stdout (including an unterminated final line) and child
+close before saving. Probe and checker exited 0. Removing exactly the
+`contextCompaction` item completion from a copy of the trace made the same checker
+exit 1 (`compaction pair missing`, 1 start / 0 completions); the unchanged
+original trace still exited 0. The retained notification subset in
+`wrapper/codex/test/fixtures/app_server_compaction.json` is replayed through the
+production projector, rather than a handwritten compaction shape.
+
+Evidence hashes:
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Full trace | `a7642eb8629fc5e3ee95f21242ebcb4163100f4ff292dc7c4ce69f9f0602dc8a` |
+| Probe | `b2183de9b6eccfe4021f8540fa3c3b76eb49329d944d694768b0d7aae3ab2973` |
+| Checker | `4aa6c6236a5675ecfb0a29f6973bf66091a36fc8de42377a533c165fd052d47c` |
+
+The default-session real-CLI test additionally verifies usage and account
+notifications across start/resume. Successful account reads and multiple
+meters remain unmeasured against a real account: tests use the generated
+`GetAccountRateLimitsResponse` / `RateLimitSnapshot` schema. Invalid values and
+stale-read races are also fixture tests. Manual compaction used a controlled
+local response; automatic compaction and external model/account behavior are
+not claimed. History (4c), host/IA integration, launch selection, protocol,
+capabilities, and ADR status remain outside this increment.

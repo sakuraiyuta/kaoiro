@@ -61,6 +61,31 @@ function transportFixture() {
 }
 
 describe("app-server JSONL process", () => {
+  it("routes account notifications outside turns and retains them when initial read is unavailable", async () => {
+    const f = transportFixture();
+    f.handle(request => {
+      if (request.method === "initialize") f.respond(request, { userAgent: "test/0.153.4" });
+      if (request.method === "account/rateLimits/read") {
+        f.send({ method: "account/rateLimits/updated", params: { rateLimits: { limitId: "codex", primary: { usedPercent: 70, windowDurationMins: 300 } } } });
+        f.send({ id: request.id, error: { code: -32600, message: "account auth required" } });
+      }
+    });
+    expect(await f.transport.readRateLimits()).toEqual({ readStatus: "unavailable", buckets: [
+      { limitId: "codex", windows: { five_hour: { utilization: 0.7 } } },
+    ] });
+    f.send({ method: "account/rateLimits/updated", params: { rateLimits: { limitId: "images", primary: { usedPercent: 20, windowDurationMins: 300 } } } });
+    await tick();
+    expect(f.transport.rateLimits.buckets.map(b => b.limitId)).toEqual(["codex", "images"]);
+  });
+
+  it("does not convert connection failure during account read into unknown telemetry", async () => {
+    const f = transportFixture();
+    f.handle(request => {
+      if (request.method === "initialize") f.respond(request, { userAgent: "test/0.153.4" });
+      if (request.method === "account/rateLimits/read") f.exit();
+    });
+    await expect(f.transport.readRateLimits()).rejects.toBeInstanceOf(AppServerConnectionError);
+  });
   it("rejects relative images before turn RPC or admission changes", async () => {
     const f = transportFixture();
     f.handle(request => {
