@@ -1384,6 +1384,8 @@ value peers read through `list_agents`.
   matches the weekly window, and using a canonical key keeps existing consumers
   interoperable. The current `result.error` shape is inferred from the CLI's
   internal log output; it has not been measured in a raw terminal stream event.
+  Only the observed compact `h`/`m`/`s` reset format is accepted. If a raw event
+  demonstrates another format, replace this grammar using that evidence.
 
 #### Session operation tool — `request_compact` (phase-28 B2)
 

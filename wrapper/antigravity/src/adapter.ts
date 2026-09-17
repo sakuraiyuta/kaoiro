@@ -200,7 +200,16 @@ export function agyEventToQuotaExhaustion(
   ) {
     return null;
   }
-  const match = /\bResets in\s+(?:(\d+)\s*h\s*)?(?:(\d+)\s*m\s*)?(?:(\d+)\s*s\s*)?(?=[.,;:!?)]|$)/i.exec(detail);
+  const tokenMatch = /\bResets in\s+(\S+)([\s\S]*)$/i.exec(detail);
+  if (tokenMatch === null) {
+    return null;
+  }
+  const rawToken = tokenMatch[1]!;
+  if (tokenMatch[2]!.trim().length > 0 && !/[.,;:!?)]$/.test(rawToken)) {
+    return null;
+  }
+  const token = rawToken.replace(/[.,;:!?)]$/, "");
+  const match = /^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/i.exec(token);
   if (match === null || (match[1] === undefined && match[2] === undefined && match[3] === undefined)) {
     return null;
   }
