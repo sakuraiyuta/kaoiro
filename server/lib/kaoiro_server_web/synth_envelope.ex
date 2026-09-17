@@ -58,12 +58,20 @@ defmodule KaoiroServerWeb.SynthEnvelope do
   private `deliver_synth_inter_agent/2`) always performed.
   """
   @spec deliver(String.t(), map()) :: :ok
-  def deliver(recipient, envelope) do
+  def deliver(recipient, envelope, descriptor \\ nil) do
+    descriptor =
+      descriptor ||
+        %{
+          synthetic: true,
+          kind: envelope["payload"]["kind"],
+          conversation_id: envelope["payload"]["conversation_id"]
+        }
+
     {us, seq} = stamp = IngressOrder.allocate()
     stamped = Map.put(envelope, "ingress_stamp", [us, seq])
 
     routed =
-      case DeliveryStates.issue(recipient) do
+      case DeliveryStates.issue_synthetic(recipient, descriptor) do
         delivery_seq when is_integer(delivery_seq) ->
           Map.put(stamped, "delivery_seq", delivery_seq)
 
@@ -128,7 +136,11 @@ defmodule KaoiroServerWeb.SynthEnvelope do
         "owner" => %{"kind" => "user", "id" => "system"}
       }
 
-      deliver(recipient, build(payload, ts))
+      deliver(recipient, build(payload, ts), %{
+        synthetic: true,
+        kind: "conversation_closed",
+        conversation_id: conversation_id
+      })
     end
 
     :ok

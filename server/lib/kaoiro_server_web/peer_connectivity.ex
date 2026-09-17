@@ -131,7 +131,12 @@ defmodule KaoiroServerWeb.PeerConnectivity do
         "owner" => %{"kind" => "user", "id" => "system"}
       }
 
-      SynthEnvelope.deliver(peer, SynthEnvelope.build(payload, ts))
+      SynthEnvelope.deliver(peer, SynthEnvelope.build(payload, ts), %{
+        synthetic: true,
+        kind: "reconnecting",
+        subject: agent_id,
+        conversation_id: cid
+      })
     end
 
     warn_on_snapshot_overflow(agent_id, intent.dropped_targets, intent.unclaimed)
@@ -152,7 +157,12 @@ defmodule KaoiroServerWeb.PeerConnectivity do
         "owner" => %{"kind" => "user", "id" => "system"}
       }
 
-      SynthEnvelope.deliver(peer, SynthEnvelope.build(payload, ts))
+      SynthEnvelope.deliver(peer, SynthEnvelope.build(payload, ts), %{
+        synthetic: true,
+        kind: "reconnected",
+        subject: agent_id,
+        conversation_id: cid
+      })
     end
 
     :ok
@@ -201,7 +211,12 @@ defmodule KaoiroServerWeb.PeerConnectivity do
         "owner" => %{"kind" => "user", "id" => "system"}
       }
 
-      SynthEnvelope.deliver(peer, SynthEnvelope.build(payload, ts))
+      SynthEnvelope.deliver(peer, SynthEnvelope.build(payload, ts), %{
+        synthetic: true,
+        kind: "disconnected",
+        subject: agent_id,
+        conversation_id: cid
+      })
     end
 
     warn_on_cap("disconnect", agent_id, unclaimed)

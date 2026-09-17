@@ -5,6 +5,7 @@ export interface DeliveryResyncRequest {
   request_id: string;
   cutoff: number;
   missing_ranges: [number, number][];
+  reason?: "interrupted";
 }
 
 export interface DeliveryResyncReply {
@@ -18,12 +19,14 @@ export class DeliveryRecovery {
   #resolved = 0;
   #issued = 0;
   #received = new Set<number>();
+  #retiring = new Set<number>();
   #supported = false;
   #connected = false;
   #disposed = false;
   #timer: ReturnType<typeof setTimeout> | undefined;
   #pending: DeliveryResyncRequest | undefined;
   #inFlight = false;
+  #settledWaiters = new Set<() => void>();
   #quarantined = new Map<number, Envelope>();
 
   constructor(private readonly callbacks: {
@@ -44,6 +47,7 @@ export class DeliveryRecovery {
       this.#quarantined.set(seq!, envelope);
       return false;
     }
+    this.#issued = Math.max(this.#issued, seq!);
     this.#received.add(seq!);
     this.#schedule();
     return true;
@@ -52,7 +56,7 @@ export class DeliveryRecovery {
   confirm(seq: number): void {
     this.#resolved = Math.max(this.#resolved, seq);
     for (const received of this.#received) {
-      if (received <= this.#resolved) this.#received.delete(received);
+      if (received <= this.#resolved) { this.#received.delete(received); this.#retiring.delete(received); }
     }
     this.#schedule();
   }
@@ -81,6 +85,21 @@ export class DeliveryRecovery {
     else if (status !== null) this.#start(status.issued_seq);
   }
 
+  retire(envelopes: readonly Envelope[]): boolean {
+    if (!this.#supported) return false;
+    for (const envelope of envelopes) {
+      const seq = (envelope as Envelope & { delivery_seq?: number }).delivery_seq;
+      if (Number.isSafeInteger(seq) && seq! > this.#resolved && this.#received.has(seq!)) this.#retiring.add(seq!);
+    }
+    if (this.#connected && this.#pending === undefined) this.#start(this.#issued);
+    return true;
+  }
+
+  async flushRetirements(): Promise<void> {
+    if (!this.#supported || !this.#connected || (this.#retiring.size === 0 && this.#pending === undefined)) return;
+    await new Promise<void>((resolve) => this.#settledWaiters.add(resolve));
+  }
+
   disconnected(): void {
     this.#connected = false;
     clearTimeout(this.#timer);
@@ -90,6 +109,8 @@ export class DeliveryRecovery {
   dispose(): void {
     this.disconnected();
     this.#disposed = true;
+    for (const resolve of this.#settledWaiters) resolve();
+    this.#settledWaiters.clear();
   }
 
   #missing(cutoff: number): [number, number][] {
@@ -107,7 +128,7 @@ export class DeliveryRecovery {
 
   #schedule(): void {
     if (this.#disposed || !this.#connected || !this.#supported) return;
-    if (this.#pending === undefined && this.#missing(this.#issued).length === 0) {
+    if (this.#pending === undefined && this.#retiring.size === 0 && this.#missing(this.#issued).length === 0) {
       clearTimeout(this.#timer);
       this.#timer = undefined;
       return;
@@ -124,9 +145,10 @@ export class DeliveryRecovery {
   }
 
   #start(cutoff: number): void {
-    const ranges = this.#missing(cutoff);
+    const retiring = [...this.#retiring].filter((seq) => seq > this.#resolved && seq <= cutoff).sort((a, b) => a - b).slice(0, 256);
+    const ranges: [number, number][] = retiring.length > 0 ? retiring.map((seq) => [seq, seq]) : this.#missing(cutoff);
     if (ranges.length === 0 || this.#disposed) return;
-    this.#pending = { request_id: randomUUID(), cutoff, missing_ranges: ranges };
+    this.#pending = { request_id: randomUUID(), cutoff, missing_ranges: ranges, ...(retiring.length > 0 ? { reason: "interrupted" as const } : {}) };
     void this.#request();
   }
 
@@ -140,14 +162,20 @@ export class DeliveryRecovery {
       for (const [first, last] of reply.skipped_ranges) {
         for (let seq = first; seq <= last; seq++) {
           this.#received.add(seq);
+          this.#retiring.delete(seq);
           this.#quarantined.delete(seq);
         }
       }
       this.#pending = undefined;
       this.observe(reply.delivery);
       this.callbacks.resolved(reply);
+      if (this.#retiring.size === 0 && this.#pending === undefined) {
+        for (const resolve of this.#settledWaiters) resolve();
+        this.#settledWaiters.clear();
+      }
     } finally {
       this.#inFlight = false;
+      if (this.#pending === undefined && this.#retiring.size > 0) this.#start(this.#issued);
       this.#schedule();
     }
   }

@@ -60,10 +60,13 @@ describe("Codex CLI delivery composition (issue #247)", () => {
       currentSessionId: () => null,
       send: () => {},
     };
+    const hostFinished = deferred();
+    const hostStarted = deferred();
+    let running: Promise<void> | undefined;
     const host = {
       state: "idle",
       statusExtSnapshot: () => ({}),
-      run: async () => {},
+      run: async () => { hostStarted.resolve(); await hostFinished.promise; },
       send: async (
         _text: string,
         _attachments: unknown,
@@ -96,7 +99,7 @@ describe("Codex CLI delivery composition (issue #247)", () => {
     };
 
     try {
-      await runCodexCli({
+      running = runCodexCli({
         parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
         loadConfig: () => ({ ...config }),
         createServerLink: (_url, _agentId, options) => {
@@ -112,6 +115,7 @@ describe("Codex CLI delivery composition (issue #247)", () => {
         },
         prepareStartup: async () => {},
       });
+      await hostStarted.promise;
 
     expect(linkOptions.onInterAgentDeliveryStatus).toBeTypeOf("function");
     expect(linkOptions.onInterAgentMessage).toBeTypeOf("function");
@@ -208,6 +212,8 @@ describe("Codex CLI delivery composition (issue #247)", () => {
         expect(JSON.stringify(record)).not.toContain("INBOUND_BODY_SENTINEL");
       }
     } finally {
+      hostFinished.resolve();
+      await running;
       stderr.mockRestore();
     }
   });
@@ -229,10 +235,13 @@ describe("Codex CLI delivery composition (issue #247)", () => {
       currentSessionId: () => null,
       send: () => {},
     };
+    const hostFinished = deferred();
+    const hostStarted = deferred();
+    let running: Promise<void> | undefined;
     const host = {
       state: "idle",
       statusExtSnapshot: () => ({}),
-      run: async () => {},
+      run: async () => { hostStarted.resolve(); await hostFinished.promise; },
       send: async (
         text: string,
         _attachments: unknown,
@@ -245,7 +254,7 @@ describe("Codex CLI delivery composition (issue #247)", () => {
     };
 
     try {
-      await runCodexCli({
+      running = runCodexCli({
         parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
         loadConfig: () => ({ ...config }),
         createServerLink: (_url, _agentId, options) => {
@@ -261,6 +270,7 @@ describe("Codex CLI delivery composition (issue #247)", () => {
         },
         prepareStartup: async () => {},
       });
+      await hostStarted.promise;
 
       (linkOptions.onInterAgentDeliveryStatus as (status: { acked_seq: number }) => void)({
         acked_seq: 19,
@@ -274,8 +284,63 @@ describe("Codex CLI delivery composition (issue #247)", () => {
       });
       expect(sends[0]).toContain("hello");
     } finally {
+      hostFinished.resolve();
+      await running;
       stderr.mockRestore();
     }
+  });
+
+  it("retires unstarted CLI-owned batches on fail-stop before closing the link", async () => {
+    const initialSigint = new Set(process.listeners("SIGINT"));
+    const started = deferred();
+    const finished = deferred();
+    const retired: number[] = [];
+    const sends: string[] = [];
+    let options!: Record<string, any>;
+    let hostOptions!: Record<string, any>;
+    const closing: string[] = [];
+    const running = runCodexCli({
+      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      loadConfig: () => ({ ...config }),
+      prepareStartup: async () => {},
+      createServerLink: (_url, _id, callbacks) => {
+        options = callbacks;
+        queueMicrotask(() => callbacks.onPersonaPrompt?.("system"));
+        return {
+          currentSessionId: () => null, send: () => {},
+          acknowledgeInterAgentDelivery: () => {},
+          retireInterAgentDeliveries: (envelopes: Envelope[]) => retired.push(...envelopes.map((envelope) => (envelope as Envelope & { delivery_seq: number }).delivery_seq)),
+          flushInterAgentRetirements: async () => { closing.push("flush"); },
+          close: () => { closing.push("close"); },
+        } as never;
+      },
+      createHost: (_config, callbacks) => {
+        hostOptions = callbacks;
+        return {
+          state: "idle", statusExtSnapshot: () => ({}),
+          run: async () => { started.resolve(); await finished.promise; },
+          send: async (text: string) => { sends.push(text); },
+        } as never;
+      },
+    });
+    void running.catch(() => {});
+    try {
+      await started.promise;
+      options.onInterAgentDeliveryStatus({ acked_seq: 0 });
+      await options.onInterAgentMessage(inboundEnvelope(1, 1));
+      await options.onInterAgentMessage(inboundEnvelope(2, 2));
+      await vi.waitFor(() => expect(sends).toHaveLength(1));
+      hostOptions.onWatchdogFailStop({ attribution: "unknown" });
+      expect(retired).toEqual([1, 2]);
+    } finally {
+      finished.resolve();
+      try { await running; } finally {
+        for (const listener of process.listeners("SIGINT")) {
+          if (!initialSigint.has(listener)) process.off("SIGINT", listener);
+        }
+      }
+    }
+    expect(closing).toEqual(["flush", "close"]);
   });
 
   it.each([

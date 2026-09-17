@@ -351,7 +351,8 @@ describe("issue #177 review M4: adapter-level lifecycle glue (claude-code)", () 
 
   it("issue #226: close 済み ingress は receive 前に handler が止まり lease を完了する", async () => {
     const ingress = new InterAgentIngressGate();
-    ingress.close();
+    const retiredIngress = vi.fn();
+    ingress.close(retiredIngress);
     const receiveInbound = vi.fn(async () => ({
       consumed: false as const,
       inject: true as const,
@@ -361,6 +362,7 @@ describe("issue #177 review M4: adapter-level lifecycle glue (claude-code)", () 
     const send = vi.fn();
     const inject = vi.fn();
     const acknowledgeDelivery = vi.fn();
+    const retireDelivery = vi.fn(() => true);
     const logs: string[] = [];
     const finish = vi.spyOn(ingress, "finish");
 
@@ -371,6 +373,7 @@ describe("issue #177 review M4: adapter-level lifecycle glue (claude-code)", () 
         recordInboundIa,
         send,
         acknowledgeDelivery,
+        retireDelivery,
         inject,
         log: (line) => logs.push(line),
       },
@@ -381,7 +384,9 @@ describe("issue #177 review M4: adapter-level lifecycle glue (claude-code)", () 
     expect(receiveInbound).not.toHaveBeenCalled();
     expect(send).not.toHaveBeenCalled();
     expect(inject).not.toHaveBeenCalled();
-    expect(acknowledgeDelivery).toHaveBeenCalledWith(expect.any(Object));
+    expect(retiredIngress).toHaveBeenCalledWith([recordInboundIa.mock.calls[0]![0]]);
+    expect(retireDelivery).toHaveBeenCalledWith(recordInboundIa.mock.calls[0]![0]);
+    expect(acknowledgeDelivery).not.toHaveBeenCalled();
     expect(logs).toEqual([
       "  inter_agent_message terminal ingress skipped before receive: peer.agent\n",
     ]);

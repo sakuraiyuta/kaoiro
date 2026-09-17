@@ -45,18 +45,20 @@ export class AntigravityInterAgentTurnCoordinator {
   readonly #onDispatch: (batch: DispatchedAntigravityInterAgentBatch) => void;
   readonly #createTurnToken: () => string;
   #closed = false;
+  #retireDiscarded: ((envelopes: readonly Envelope[]) => void) | undefined;
 
   constructor(options: AntigravityInterAgentTurnCoordinatorOptions) {
     this.#onDispatch = options.onDispatch;
     this.#createTurnToken = options.createTurnToken ?? randomUUID;
   }
 
-  freezeForWatchdogFailStop(activeTurnToken?: string): {
+  freezeForWatchdogFailStop(activeTurnToken?: string, retire?: (envelopes: readonly Envelope[]) => void): {
     droppedDispatched: number;
     droppedPending: number;
   } {
     if (this.#closed) return { droppedDispatched: 0, droppedPending: 0 };
     this.#closed = true;
+    this.#retireDiscarded = retire;
     let droppedDispatched = 0;
     let droppedPending = 0;
     for (const [turnToken, batch] of this.#batchByTurnToken) {
@@ -65,9 +67,11 @@ export class AntigravityInterAgentTurnCoordinator {
       if (this.#activeTokenByPeer.get(batch.peer) === turnToken) {
         this.#activeTokenByPeer.delete(batch.peer);
       }
+      retire?.(batch.items.map((item) => item.envelope));
       droppedDispatched += 1;
     }
     for (const batches of this.#pendingBatches.values()) {
+      retire?.(batches.flatMap((batch) => batch.items.map((item) => item.envelope)));
       droppedPending += batches.length;
     }
     this.#pendingBatches.clear();
@@ -75,7 +79,7 @@ export class AntigravityInterAgentTurnCoordinator {
   }
 
   receive(envelope: Envelope, mode: InboundReplyMode): void {
-    if (this.#closed) return;
+    if (this.#closed) { this.#retireDiscarded?.([envelope]); return; }
     const peer = envelope.agent_id;
     const item: AntigravityInterAgentBatchItem = { envelope, mode };
     const itemBytes = Buffer.byteLength(formatInboundMessage(envelope, { mode }), "utf8");

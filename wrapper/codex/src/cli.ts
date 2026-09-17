@@ -812,7 +812,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     },
     onWatchdogFailStop: ({ turnToken, attribution }) => {
       watchdogFailStopped = true;
-      const frozen = interAgentTurns.freezeForWatchdogFailStop(turnToken);
+      const frozen = interAgentTurns.freezeForWatchdogFailStop(turnToken, (envelopes) => link?.retireInterAgentDeliveries?.(envelopes));
       writeRedactedStderr(
         `[kaoiro] turn watchdog fail-stop: token=${turnToken ?? "<unknown>"} ` +
           `attribution=${attribution}; discarded unstarted ` +
@@ -927,6 +927,8 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     replayer.markReady();
     await host.run(prompt);
   } finally {
+    interAgentTurns.freezeForWatchdogFailStop(undefined, (envelopes) => link?.retireInterAgentDeliveries?.(envelopes));
+    await link?.flushInterAgentRetirements?.();
     turnWatchdog.dispose();
     permissionBroker?.close();
     questionBroker?.close();

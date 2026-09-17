@@ -533,8 +533,8 @@ defmodule KaoiroServerWeb.WrapperChannel do
       received_at = DateTime.utc_now() |> DateTime.to_iso8601()
 
       case inter_agent do
-        {:accept, to, escalate} ->
-          accept_inter_agent(envelope, agent_id, to, escalate, received_at, socket)
+        {:accept, to, escalate, reservation} ->
+          accept_inter_agent(envelope, agent_id, to, escalate, reservation, received_at, socket)
 
         :not_inter_agent ->
           store_and_broadcast(envelope, agent_id, received_at, socket)
@@ -652,11 +652,23 @@ defmodule KaoiroServerWeb.WrapperChannel do
            "request_id" => request_id,
            "cutoff" => cutoff,
            "missing_ranges" => ranges
-         },
+         } = payload,
          socket
        )
        when is_binary(request_id) and byte_size(request_id) in 1..128 do
-    case DeliveryStates.resync(socket.assigns.agent_id, generation, self(), cutoff, ranges) do
+    result =
+      case payload["reason"] do
+        nil ->
+          DeliveryStates.resync(socket.assigns.agent_id, generation, self(), cutoff, ranges)
+
+        "interrupted" ->
+          DeliveryStates.retire(socket.assigns.agent_id, generation, self(), cutoff, ranges)
+
+        _ ->
+          {:error, :invalid_delivery_resync}
+      end
+
+    case result do
       {:ok, status} ->
         broadcast_delivery_status(socket.assigns.agent_id)
 
@@ -1082,7 +1094,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   #      upsert) and broadcast to operators.
   #   5. reply the stamp as the acceptance ack — this, not the MCP tool
   #      result, is what triggers the sender's sidecar append (D3-2).
-  defp accept_inter_agent(envelope, from, to, escalate, received_at, socket) do
+  defp accept_inter_agent(envelope, from, to, escalate, reservation, received_at, socket) do
     stamp = IngressOrder.allocate()
     wire_stamp = encode_stamp(stamp)
     stamped = Map.put(envelope, "ingress_stamp", wire_stamp)
@@ -1090,7 +1102,12 @@ defmodule KaoiroServerWeb.WrapperChannel do
     retained = AgentStates.upsert_ia(from, stamp, stamped)
 
     {recipient_envelope, delivery_changed?} =
-      case DeliveryStates.issue(to) do
+      case DeliveryStates.issue_reserved(to, reservation, %{
+             sender: from,
+             conversation_id: envelope["payload"]["conversation_id"],
+             turn_number: envelope["payload"]["turn_number"],
+             kind: envelope["payload"]["kind"]
+           }) do
         seq when is_integer(seq) -> {Map.put(stamped, "delivery_seq", seq), true}
         nil -> {stamped, false}
       end
@@ -2305,30 +2322,33 @@ defmodule KaoiroServerWeb.WrapperChannel do
             if not AgentStates.connected?(to) do
               {:error, :disconnected}
             else
-              case ConversationStates.record_message(
-                     cid,
-                     from,
-                     to,
-                     body,
-                     turn_number,
-                     done?,
-                     new_conversation?
-                   ) do
-                # Within limits. `:both_done` means every participating agent
-                # has now signalled done; the tracker has already closed the
-                # entry into a tombstone atomically (issue #177; spec MUST: 両
-                # owner-side done で対話完了). No extra close needed.
-                ok when ok in [:ok, :both_done] ->
-                  {:ok, {:accept, to, nil}}
+              with {:ok, reservation} <- DeliveryStates.reserve(to, self()) do
+                case ConversationStates.record_message(
+                       cid,
+                       from,
+                       to,
+                       body,
+                       turn_number,
+                       done?,
+                       new_conversation?
+                     ) do
+                  # Within limits. `:both_done` means every participating agent
+                  # has now signalled done; the tracker has already closed the
+                  # entry into a tombstone atomically (issue #177; spec MUST: 両
+                  # owner-side done で対話完了). No extra close needed.
+                  ok when ok in [:ok, :both_done] ->
+                    {:ok, {:accept, to, nil, reservation}}
 
-                {:exceeded, reason} ->
-                  {:ok, {:accept, to, {cid, from, to, reason}}}
+                  {:exceeded, reason} ->
+                    {:ok, {:accept, to, {cid, from, to, reason}, reservation}}
 
-                # Cross-conversation pollution attempt, global cap reached,
-                # or an explicitly-named conversation_id with no entry at all
-                # (issue #262): reject at the routing boundary.
-                {:error, reason} ->
-                  {:error, reason}
+                  # Cross-conversation pollution attempt, global cap reached,
+                  # or an explicitly-named conversation_id with no entry at all
+                  # (issue #262): reject at the routing boundary.
+                  {:error, reason} ->
+                    :ok = DeliveryStates.release(reservation)
+                    {:error, reason}
+                end
               end
             end
         end

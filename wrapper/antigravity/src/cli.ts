@@ -333,7 +333,7 @@ export async function runAntigravityCli(
     },
     onWatchdogFailStop: ({ turnToken, attribution }) => {
       watchdogFailStopped = true;
-      const frozen = interAgentTurns.freezeForWatchdogFailStop(turnToken);
+      const frozen = interAgentTurns.freezeForWatchdogFailStop(turnToken, (envelopes) => link?.retireInterAgentDeliveries?.(envelopes));
       writeRedactedStderr(
         `[kaoiro] antigravity turn watchdog fail-stop: token=${turnToken ?? "<unknown>"} ` +
           `attribution=${attribution}; discarded unstarted dispatched=${frozen.droppedDispatched}, ` +
@@ -365,6 +365,8 @@ export async function runAntigravityCli(
   try {
     await host.run(prompt);
   } finally {
+    interAgentTurns.freezeForWatchdogFailStop(undefined, (envelopes) => link?.retireInterAgentDeliveries?.(envelopes));
+    await link?.flushInterAgentRetirements?.();
     turnWatchdog.dispose();
     questionBroker.close();
     permissionBroker.close();

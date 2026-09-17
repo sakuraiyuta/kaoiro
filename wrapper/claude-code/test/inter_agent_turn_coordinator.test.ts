@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
-import { InterAgentTurnCoordinator } from "../src/inter_agent_turn_coordinator.js";
+import { InterAgentIngressGate, InterAgentTurnCoordinator } from "../src/inter_agent_turn_coordinator.js";
 
 const config: WrapperConfig = {
   agent_id: "self.agent",
@@ -32,6 +32,19 @@ function inbound(peer: string, conversationId: string, turnNumber: number): Enve
 }
 
 describe("InterAgentTurnCoordinator (issue #246)", () => {
+  it("retires pending and late ingress after its terminal generation closes", () => {
+    const ingress = new InterAgentIngressGate();
+    const first = inbound("peer", "pending", 1);
+    const late = inbound("peer", "late", 2);
+    const retired: Envelope[] = [];
+    const lease = ingress.begin(first);
+    expect(ingress.close((envelopes) => retired.push(...envelopes))).toBe(1);
+    expect(ingress.isTerminal(lease)).toBe(true);
+    ingress.begin(late);
+    expect(retired).toEqual([first, late]);
+    ingress.finish(lease);
+  });
+
   it("delivery sequence belongs to the exact dispatched turn", () => {
     const coordinator = new InterAgentTurnCoordinator({
       createTurnToken: () => "turn-1",
@@ -154,10 +167,12 @@ describe("InterAgentTurnCoordinator (issue #246)", () => {
     coordinator.receive(inbound("peer-b", "cid-b1", 1), "reply-owed");
     expect(dispatched).toEqual(["token-1", "token-2"]);
 
-    expect(coordinator.freezeForWatchdogFailStop("token-1")).toEqual({
+    const retired: Envelope[] = [];
+    expect(coordinator.freezeForWatchdogFailStop("token-1", (envelopes) => retired.push(...envelopes))).toEqual({
       droppedDispatched: 1,
       droppedPending: 1,
     });
+    expect(retired.map((envelope) => envelope.payload.conversation_id)).toEqual(["cid-b1", "cid-a2"]);
     // The terminal result can still settle the exact started generation, but
     // no peer becomes dispatchable and no successor is created afterwards.
     expect(coordinator.settle("token-1")).toMatchObject({

@@ -17,6 +17,7 @@ export interface InterAgentMessageHandlerContext {
   /** Completes intentional non-injection paths only. Injected messages are
    * confirmed by the host's actual SDK turn-start callback. */
   acknowledgeDelivery?: (envelope: Envelope) => void;
+  retireDelivery?: (envelope: Envelope) => boolean;
   inject: (envelope: Envelope, mode: InboundReplyMode) => void;
   log: (line: string) => void;
 }
@@ -28,16 +29,15 @@ export async function handleInterAgentMessage(
   context: InterAgentMessageHandlerContext,
   envelope: Envelope,
 ): Promise<void> {
-  const ingressLease = context.ingress.begin();
+  const ingressLease = context.ingress.begin(envelope);
   // The sidecar documents delivery even when this inbound never reaches the
   // coordinator (ADR-0051 D3-2).
   context.recordInboundIa(envelope);
   try {
     if (context.ingress.isTerminal(ingressLease)) {
-      // The handler deliberately declined this inbound before the SDK-facing
-      // classifier. It cannot ever reach a turn in a host that has already
-      // become terminal, so leave no false delivery gap behind.
-      context.acknowledgeDelivery?.(envelope);
+      // Retirement must precede any acknowledgement: an offline ack could
+      // otherwise erase routing metadata before the loss is reported.
+      if (!context.retireDelivery?.(envelope)) context.acknowledgeDelivery?.(envelope);
       context.log(
         `  inter_agent_message terminal ingress skipped before receive: ${envelope.agent_id}\n`,
       );
@@ -50,9 +50,9 @@ export async function handleInterAgentMessage(
     };
     if (context.ingress.isTerminal(ingressLease)) {
       // `receiveInbound()` may have yielded while the host closed. This is
-      // likewise an intentional non-injection, not an unacknowledged SDK
-      // dispatch.
-      context.acknowledgeDelivery?.(envelope);
+      // likewise a retirement; legacy servers retain intentional-non-injection
+      // acknowledgement because they do not support explicit loss.
+      if (!context.retireDelivery?.(envelope)) context.acknowledgeDelivery?.(envelope);
       context.log(
         `  inter_agent_message terminal ingress skipped after receive: ${envelope.agent_id}\n`,
       );

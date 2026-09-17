@@ -121,6 +121,21 @@ async function callTool(
   return { result: await tool.invoke(args) };
 }
 
+describe("delivery loss notifications", () => {
+  it("deduplicates recovered notices by server loss identity rather than ingress", async () => {
+    const { tool } = makeTool("recipient");
+    const inbound = inboundEnvelope("loss-cid", "inform", { code: "delivery_lost", message: "not dispatched" }, "server");
+    const payload = inbound.payload;
+    payload.turn_number = 0;
+    payload.loss_id = "stable-loss-id";
+    expect((await tool.receiveInbound(inbound)).inject).toBe(true);
+    expect(await tool.receiveInbound({ ...inbound, ts: "2026-09-18T00:00:00Z" })).toMatchObject({
+      inject: false, noticeSkipReason: "duplicate delivery loss notice",
+    });
+
+  });
+});
+
 describe("InterAgentTool", () => {
   it("exposes the SDK-side tool name as mcp__kaoiro__send_to_agent", () => {
     expect(INTER_AGENT_TOOL_FQN).toBe("mcp__kaoiro__send_to_agent");

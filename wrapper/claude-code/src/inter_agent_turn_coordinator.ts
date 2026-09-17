@@ -75,11 +75,13 @@ export class InterAgentIngressGate {
   #closed = false;
   #generation = 0;
   #nextId = 0;
-  readonly #pending = new Set<number>();
+  readonly #pending = new Map<number, Envelope | undefined>();
+  #retire: ((envelopes: readonly Envelope[]) => void) | undefined;
 
-  begin(): InterAgentIngressLease {
+  begin(envelope?: Envelope): InterAgentIngressLease {
     const lease = { id: ++this.#nextId, generation: this.#generation };
-    this.#pending.add(lease.id);
+    this.#pending.set(lease.id, envelope);
+    if (this.#closed && envelope !== undefined) this.#retire?.([envelope]);
     return lease;
   }
 
@@ -94,9 +96,11 @@ export class InterAgentIngressGate {
   /** Makes all existing and future leases terminal. Pending handlers stay
    * registered only until their own finally runs, so the count is diagnostic
    * rather than a second ownership ledger. */
-  close(): number {
+  close(retire?: (envelopes: readonly Envelope[]) => void): number {
     if (!this.#closed) {
       this.#closed = true;
+      this.#retire = retire;
+      retire?.([...this.#pending.values()].filter((envelope): envelope is Envelope => envelope !== undefined));
       this.#generation += 1;
     }
     return this.#pending.size;
@@ -211,7 +215,7 @@ export class InterAgentTurnCoordinator {
    * ownership and reported through the caller's controlled-recovery warning;
    * server disconnect remains the peer-visible fallback on operator restore.
    */
-  freezeForWatchdogFailStop(activeTurnToken?: string): {
+  freezeForWatchdogFailStop(activeTurnToken?: string, retire?: (envelopes: readonly Envelope[]) => void): {
     droppedDispatched: number;
     droppedPending: number;
   } {
@@ -227,9 +231,11 @@ export class InterAgentTurnCoordinator {
       if (this.#activeTokenByPeer.get(batch.peer) === turnToken) {
         this.#activeTokenByPeer.delete(batch.peer);
       }
+      retire?.(batch.items.map((item) => item.envelope));
       droppedDispatched += 1;
     }
     for (const batches of this.#pendingBatches.values()) {
+      retire?.(batches.flatMap((batch) => batch.items.map((item) => item.envelope)));
       droppedPending += batches.length;
     }
     this.#pendingBatches.clear();

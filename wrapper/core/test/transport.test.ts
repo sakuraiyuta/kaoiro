@@ -405,6 +405,16 @@ describe("ServerLink — join params (phase-27 transition_id, #160)", () => {
       expect(mock.lastPush).toMatchObject({ event: "delivery_ack", payload: { delivery_seq: 69 } });
       emit("envelope", { version: "0", type: "inter_agent_message", delivery_seq: 69 });
       expect(arrivals).toEqual([69]);
+      const discarded = { version: "0", type: "inter_agent_message", delivery_seq: 70 };
+      emit("envelope", discarded);
+      link.retireInterAgentDeliveries([discarded as unknown as Envelope]);
+      expect(mock.lastPush).toMatchObject({ event: "delivery_resync", payload: { missing_ranges: [[70, 70]], reason: "interrupted" } });
+      const retirement = mock.lastPush!;
+      const drained = link.flushInterAgentRetirements();
+      retirement.receivers.get("ok")?.({ request_id: (retirement.payload as { request_id: string }).request_id,
+        delivery: { issued_seq: 70, acked_seq: 70, pending_since: null }, skipped_ranges: [[70, 70]] });
+      await vi.advanceTimersByTimeAsync(0);
+      await drained;
     } finally {
       link.close();
       vi.useRealTimers();

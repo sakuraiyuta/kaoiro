@@ -1568,6 +1568,20 @@ export class ServerLink {
     });
   }
 
+  retireInterAgentDeliveries(envelopes: readonly Envelope[]): boolean {
+    return this.#deliveryRecovery.retire(envelopes);
+  }
+
+  async flushInterAgentRetirements(): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        this.#deliveryRecovery.flushRetirements(),
+        new Promise<void>((resolve) => { timer = setTimeout(resolve, 5_000); }),
+      ]);
+    } finally { clearTimeout(timer); }
+  }
+
   requestInterAgentDeliveryResync(request: DeliveryResyncRequest): Promise<DeliveryResyncReply | null> {
     return new Promise((resolve) => {
       this.#pushVersioned("delivery_resync", { ...request, generation: this.#deliveryGeneration })

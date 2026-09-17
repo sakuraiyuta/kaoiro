@@ -73,12 +73,15 @@ describe("AntigravityInterAgentTurnCoordinator", () => {
     coordinator.receive(inbound("active"), "reply-owed");
     coordinator.receive(inbound("pending"), "reply-owed");
 
-    expect(coordinator.freezeForWatchdogFailStop("active")).toEqual({
+    const retired: Envelope[] = [];
+    expect(coordinator.freezeForWatchdogFailStop("active", (envelopes) => retired.push(...envelopes))).toEqual({
       droppedDispatched: 0,
       droppedPending: 1,
     });
+    expect(retired.map((envelope) => envelope.payload.conversation_id)).toEqual(["pending"]);
     coordinator.dispatchNextForPeer("peer.agent");
     coordinator.receive(inbound("after-freeze"), "reply-owed");
     expect(dispatched).toHaveLength(1);
+    expect(retired.map((envelope) => envelope.payload.conversation_id)).toEqual(["pending", "after-freeze"]);
   });
 });

@@ -2995,6 +2995,239 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       }
     end
 
+    test "delivery capacity and conversation rejection preserve every accounting surface" do
+      to_id = "test.delivery-cap"
+      from_id = "test.delivery-cap-sender"
+
+      recipient =
+        join_wrapper(to_id, "default", %{
+          "inter_agent_delivery_ack" => "dispatch-v1",
+          "delivery_generation" => "cap-process",
+          "delivery_resync" => "skip-v1"
+        })
+
+      assert_reply push(recipient, "envelope", envelope(to_id, "idle")), :ok
+      sender = seed_known(from_id)
+      cid = "cap-reject-#{System.unique_integer([:positive])}"
+
+      snapshot = fn ->
+        {ConversationStates.get(cid), AgentStates.ia_projection(), DeliveryStates.get(to_id),
+         :sys.get_state(DeliveryStates).entries[to_id].metadata,
+         :sys.get_state(DeliveryStates).reservations}
+      end
+
+      before = snapshot.()
+
+      assert_reply push(
+                     sender,
+                     "envelope",
+                     inter_envelope(from_id, to_id, cid: cid, new_conversation: false)
+                   ),
+                   :error,
+                   %{reason: "unknown_conversation_id"}
+
+      assert snapshot.() == before
+
+      tokens =
+        for _ <- 1..1000 do
+          {:ok, token} = DeliveryStates.reserve(to_id, self())
+          token
+        end
+
+      full = snapshot.()
+
+      assert_reply push(sender, "envelope", inter_envelope(from_id, to_id, cid: cid)), :error, %{
+        reason: "delivery_backlog"
+      }
+
+      assert snapshot.() == full
+      for token <- tokens, do: DeliveryStates.release(token)
+      assert snapshot.() == before
+      on_exit(fn -> DeliveryStates.delete(to_id) end)
+    end
+
+    test "lost reachability notices are regenerated from current state and closure from tombstones" do
+      to_id = "test.regenerated-recipient"
+      subject = "test.regenerated-subject"
+
+      recipient =
+        join_wrapper(to_id, "default", %{
+          "inter_agent_delivery_ack" => "dispatch-v1",
+          "delivery_generation" => "regenerate",
+          "delivery_resync" => "skip-v1"
+        })
+
+      assert_reply push(recipient, "envelope", envelope(to_id, "idle")), :ok
+      subject_socket = seed_known(subject)
+      topic = "wrapper:" <> to_id
+      @endpoint.subscribe(topic)
+      cid = "regenerate-#{System.unique_integer([:positive])}"
+      assert :ok = ConversationStates.record_message(cid, subject, to_id, "hello", 1, false, true)
+
+      Process.unlink(subject_socket.channel_pid)
+      :ok = close(subject_socket)
+      assert %{issued_seq: 1} = DeliveryStates.get(to_id)
+      seed_known(subject)
+
+      request = %{
+        "version" => "0",
+        "generation" => "regenerate",
+        "request_id" => "regenerate-1",
+        "cutoff" => 1,
+        "missing_ranges" => [[1, 1]]
+      }
+
+      assert_reply push(recipient, "delivery_resync", request), :ok
+      KaoiroServerWeb.DeliveryLossDispatcher.flush()
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        topic: ^topic,
+        event: "envelope",
+        payload: %{
+          "payload" => %{"conversation_id" => ^cid, "body" => body, "loss_id" => _} = payload
+        }
+      }
+
+      assert body =~ "reconnected"
+      refute Map.has_key?(payload, "error")
+      assert_reply push(recipient, "delivery_ack", %{"delivery_seq" => 2}), :ok
+      {:ok, participants} = ConversationStates.close_by_operator(cid)
+
+      KaoiroServerWeb.SynthEnvelope.deliver_conversation_closed(
+        cid,
+        participants,
+        :operator_closed
+      )
+
+      seq = DeliveryStates.get(to_id).issued_seq
+
+      request = %{
+        request
+        | "request_id" => "regenerate-closed",
+          "cutoff" => seq,
+          "missing_ranges" => [[seq, seq]]
+      }
+
+      assert_reply push(recipient, "delivery_resync", request), :ok
+      KaoiroServerWeb.DeliveryLossDispatcher.flush()
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        topic: ^topic,
+        event: "envelope",
+        payload: %{"payload" => %{"conversation_id" => ^cid, "kind" => "done", "loss_id" => id}}
+      }
+
+      assert is_binary(id)
+
+      KaoiroServerWeb.SynthEnvelope.deliver(
+        to_id,
+        KaoiroServerWeb.SynthEnvelope.build(
+          %{
+            "to" => to_id,
+            "conversation_id" => cid,
+            "turn_number" => 0,
+            "kind" => "escalate-to-user",
+            "body" => "closed by limit",
+            "meta" => %{"done" => true, "propose_next" => ""},
+            "owner" => %{"kind" => "user", "id" => "system"}
+          },
+          DateTime.to_iso8601(DateTime.utc_now())
+        )
+      )
+
+      seq = DeliveryStates.get(to_id).issued_seq
+
+      request = %{
+        request
+        | "request_id" => "regenerate-fallback",
+          "cutoff" => seq,
+          "missing_ranges" => [[seq, seq]]
+      }
+
+      assert_reply push(recipient, "delivery_resync", Map.put(request, "reason", "interrupted")),
+                   :ok
+
+      KaoiroServerWeb.DeliveryLossDispatcher.flush()
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        topic: ^topic,
+        event: "envelope",
+        payload: %{
+          "payload" => %{
+            "conversation_id" => ^cid,
+            "error" => %{
+              "code" => "delivery_lost",
+              "synthetic" => true,
+              "kind" => "escalate-to-user"
+            }
+          }
+        }
+      }
+
+      on_exit(fn -> DeliveryStates.delete(to_id) end)
+    end
+
+    test "a routed message loss reaches its sender without raw body disclosure" do
+      to_id = "test.delivery-loss-recipient"
+      from_id = "test.delivery-loss-sender"
+
+      recipient =
+        join_wrapper(to_id, "default", %{
+          "inter_agent_delivery_ack" => "dispatch-v1",
+          "delivery_generation" => "loss-process",
+          "delivery_resync" => "skip-v1"
+        })
+
+      assert_reply push(recipient, "envelope", envelope(to_id, "idle")), :ok
+      sender = seed_known(from_id)
+      topic = "wrapper:" <> from_id
+      cid = "loss-#{System.unique_integer([:positive])}"
+
+      assert_reply push(
+                     sender,
+                     "envelope",
+                     inter_envelope(from_id, to_id, cid: cid, body: "secret original content")
+                   ),
+                   :ok
+
+      request = %{
+        "version" => "0",
+        "generation" => "loss-process",
+        "request_id" => "loss-request",
+        "cutoff" => 1,
+        "missing_ranges" => [[1, 1]]
+      }
+
+      assert_reply push(recipient, "delivery_resync", request), :ok
+      KaoiroServerWeb.DeliveryLossDispatcher.flush()
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        topic: ^topic,
+        event: "envelope",
+        payload: %{
+          "agent_id" => "server",
+          "payload" =>
+            %{
+              "conversation_id" => ^cid,
+              "error" => %{"code" => "delivery_lost", "peer" => ^to_id, "loss_id" => loss_id}
+            } = payload
+        }
+      }
+
+      assert is_binary(loss_id)
+      refute inspect(payload) =~ "secret original content"
+      assert_reply push(recipient, "delivery_resync", request), :ok
+      KaoiroServerWeb.DeliveryLossDispatcher.flush()
+
+      refute_receive %Phoenix.Socket.Broadcast{
+        topic: ^topic,
+        event: "envelope",
+        payload: %{"payload" => %{"loss_id" => ^loss_id}}
+      }
+
+      on_exit(fn -> DeliveryStates.delete(to_id) end)
+    end
+
     test "negotiated recovery retires a dropped route and broadcasts the new prefix" do
       to_id = "test.delivery-recovery"
       from_id = "test.delivery-recovery-from"

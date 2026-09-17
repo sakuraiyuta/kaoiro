@@ -17,6 +17,17 @@ function setup() {
 }
 
 describe("delivery recovery", () => {
+  it("retires an explicitly discarded queued input without retiring its active sibling", async () => {
+    const { recovery, request } = setup();
+    recovery.join(true, status(0, 0));
+    recovery.receive(envelope(1));
+    recovery.receive(envelope(2));
+    recovery.observe(status(2, 0));
+    recovery.retire([envelope(2)]);
+    expect(request).toHaveBeenCalledWith(expect.objectContaining({ missing_ranges: [[2, 2]], reason: "interrupted" }));
+    recovery.dispose();
+  });
+
   it("finds an interior loss after the join cutoff without retiring a received queued turn", async () => {
     const { recovery, request } = setup();
     recovery.join(true, status(67, 67));

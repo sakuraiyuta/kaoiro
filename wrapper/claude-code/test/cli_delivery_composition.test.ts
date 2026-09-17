@@ -142,10 +142,15 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       currentSessionId: () => null,
       send: () => {},
     };
+    let startHost!: () => void;
+    let finishHost!: () => void;
+    const ready = new Promise<void>((resolve) => { startHost = resolve; });
+    const finished = new Promise<void>((resolve) => { finishHost = resolve; });
+    let running: Promise<void> | undefined;
     const host = {
       state: "idle",
       statusExtSnapshot: () => ({}),
-      run: async () => {},
+      run: async () => { startHost(); await finished; },
       send: async (
         _text: string,
         _attachments: unknown,
@@ -156,7 +161,8 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       },
     };
 
-    await runClaudeCli({
+    try {
+    running = runClaudeCli({
       parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
       loadConfig: () => ({ ...config }),
       createServerLink: (_url, _agentId, options) => {
@@ -171,6 +177,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
         return host as never;
       },
     });
+    await ready;
 
     expect(linkOptions.onInterAgentDeliveryStatus).toBeTypeOf("function");
     expect(linkOptions.onInterAgentMessage).toBeTypeOf("function");
@@ -184,5 +191,6 @@ describe("Claude CLI delivery composition (issue #247)", () => {
 
     await vi.waitFor(() => expect(acknowledgements).toEqual([2, 3]));
     hostOptions.onHostEnd({ error: {} });
+    } finally { finishHost(); await running; }
   });
 });

@@ -47,6 +47,11 @@ describe("Antigravity CLI delivery composition", () => {
       send: () => {},
       acknowledgeInterAgentDelivery: (sequence: number) => acknowledgements.push(sequence),
     };
+    let startHost!: () => void;
+    let finishHost!: () => void;
+    const ready = new Promise<void>((resolve) => { startHost = resolve; });
+    const finished = new Promise<void>((resolve) => { finishHost = resolve; });
+    let running: Promise<void> | undefined;
     const host = {
       state: "idle",
       statusExtSnapshot: () => ({}),
@@ -54,7 +59,7 @@ describe("Antigravity CLI delivery composition", () => {
       requestInterruptForTurn: () => true,
       failStopTurnForWatchdog: () => true,
       failStopForWatchdogAttributionUnknown: () => true,
-      run: async () => {},
+      run: async () => { startHost(); await finished; },
       send: async (
         text: string,
         _attachments: unknown,
@@ -71,7 +76,7 @@ describe("Antigravity CLI delivery composition", () => {
     };
 
     try {
-      await runAntigravityCli({
+      running = runAntigravityCli({
         parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
         loadConfig: () => ({ ...config }),
         createServerLink: (_url, _agentId, options) => {
@@ -84,6 +89,7 @@ describe("Antigravity CLI delivery composition", () => {
           return host as never;
         },
       });
+      await ready;
 
       (linkOptions.onInterAgentDeliveryStatus as (status: { acked_seq: number }) => void)({
         acked_seq: 1,
@@ -110,6 +116,8 @@ describe("Antigravity CLI delivery composition", () => {
         expect.stringMatching(/^\[kaoiro\]\[antigravity-lifecycle\] .*"event":"turn_start"/),
       );
     } finally {
+      finishHost();
+      await running;
       stderr.mockRestore();
     }
   });

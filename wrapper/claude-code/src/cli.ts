@@ -791,6 +791,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
           interAgent,
           ingress: interAgentIngress,
           recordInboundIa,
+          retireDelivery: (envelope: Envelope) => link?.retireInterAgentDeliveries?.([envelope]) ?? false,
           send: (notice) => link?.send(notice),
           inject: (inbound, mode) => interAgentTurns.receive(inbound, mode),
           log: (line) => process.stdout.write(line),
@@ -869,8 +870,8 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     },
     onWatchdogFailStop: ({ turnToken, attribution }) => {
       watchdogFailStopped = true;
-      const pendingIngress = interAgentIngress.close();
-      const frozen = interAgentTurns.freezeForWatchdogFailStop(turnToken);
+      const pendingIngress = interAgentIngress.close((envelopes) => link?.retireInterAgentDeliveries?.(envelopes));
+      const frozen = interAgentTurns.freezeForWatchdogFailStop(turnToken, (envelopes) => link?.retireInterAgentDeliveries?.(envelopes));
       writeRedactedStderr(
         `[kaoiro] turn watchdog fail-stop: token=${turnToken ?? "<unknown>"} ` +
           `attribution=${attribution}; ` +
@@ -881,7 +882,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     },
     onHostEnd: ({ error }) => {
       turnWatchdog.dispose();
-      const pendingIngress = interAgentIngress.close();
+      const pendingIngress = interAgentIngress.close((envelopes) => link?.retireInterAgentDeliveries?.(envelopes));
       if (pendingIngress > 0) {
         process.stdout.write(
           `  inter_agent_message terminal ingress gate closed: pending=${pendingIngress}\n`,
@@ -896,6 +897,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       // the link closes before delivery, the server's disconnected notice is
       // the fail-visible fallback (issue #246).
       for (const batch of interAgentTurns.closeAndDrain()) {
+        link?.retireInterAgentDeliveries?.(batch.items.map((item) => item.envelope));
         for (const item of batch.items) {
           interAgent?.notePendingInjection(item.envelope, batch.turnToken);
         }
@@ -1078,6 +1080,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   } finally {
     // Deny in-flight permission requests, then release the socket so the
     // process can exit.
+    await link?.flushInterAgentRetirements?.();
     broker?.close();
     questionBroker?.close();
     link?.close();

@@ -24,9 +24,9 @@ Add envelope `type: "inter_agent_message"` as a reserved supplement to
 
 `ingress_stamp` records server acceptance, not confirmation that the receiving
 wrapper read an SDK turn. Per-recipient
-`inter_agent_delivery = {issued_seq, acked_seq, pending_since?}` is a ledger that
-observes later **dispatch confirmation** only; it does not retain payloads or
-guarantee retransmission or delivery.
+`inter_agent_delivery = {issued_seq, acked_seq, pending_since?, lost_count?, last_loss?}`
+observes later dispatch confirmation and negotiated explicit retirement. It
+retains no payloads and does not guarantee retransmission or delivery.
 
 - For live/synthetic messages to a wrapper that joined with capability
   `inter_agent_delivery_ack: "dispatch-v1"`, the server adds a recipient-local
@@ -86,10 +86,47 @@ skip ranges to its completion ledger and rebinds the post-skip prefix so later
 completed turns can acknowledge again. A locally confirmed ack lost during a
 disconnect is resent on rejoin.
 
-The recovery ledger currently records losses as `untraceable`: it retains no
-sender routing metadata or payload and does not regenerate lost notices.
-It writes an explicit recipient/sequence loss diagnostic without message
-contents. Recipient and sender panes can still contain the original accepted
+For skip-v1 recipients the ledger durably retains minimal routing descriptors
+(sender, conversation, turn and kind), never message bodies or credentials.
+A missing legacy descriptor is recorded as `untraceable`; the server never
+guesses its sender. Known ordinary losses produce a sender-addressed
+`delivery_lost` error. Each loss has a stable identifier derived from recipient,
+ledger incarnation, generation and sequence. The incarnation is persisted and
+changes after ledger deletion, so a recreated generation cannot reuse an ID.
+Skip and the durable notification intent are written together; notifications
+are dispatched outside the ledger process. Completion compares the intent's
+revision so an older dispatcher attempt cannot delete a newer loss of its
+recovery notice. A lost response or dispatcher
+restart may redeliver a notification with the same loss ID, which receivers
+deduplicate for the life of their wrapper process.
+
+Synthetic losses are never reported back to a sender. Reachability notices are
+regenerated from current connection/planned-restart state, and conversation
+closure notices from current tombstones. When that state is unavailable or the
+notice cannot be regenerated, the recipient receives a `delivery_lost` error
+with `synthetic: true`, its original kind and loss ID. Recovery notices retain
+their original loss ID if lost again; they do not create notification loops.
+
+Normal sends reserve one of 1,000 unresolved metadata slots before conversation
+accounting. A reservation is released when conversation preflight rejects or
+its owning channel dies, and becomes routing metadata when the sequence is
+issued. Full recipients reject with `delivery_backlog`: wait for recipient
+drain and do not retry automatically. Rejection changes neither conversation
+accounting, panes nor delivery sequence. Synthetic notices bypass this cap,
+so 1,000 is not a strict bound on all metadata. Legacy recipients neither store
+metadata nor enforce the cap. Active metadata is reclaimed on ack prefix,
+explicit skip, generation change, disarm and deletion; notification intents
+survive separately until dispatched. Generation changes explicitly retire
+remaining descriptors as interrupted before reclaiming the old ledger.
+
+A wrapper may explicitly retire received but permanently discarded, unstarted
+inputs using `delivery_resync` with `reason: "interrupted"`. This is distinct
+from missing-sequence detection: watchdog fail-stop preserves the active turn,
+while retiring discarded queued batches. Shutdown attempts retirement before
+closing transport, bounded to five seconds; it cannot promise acceptance after
+a broken connection. A subsequent generation bind retires surviving metadata.
+
+The server writes recipient/sequence loss diagnostics without message contents. Recipient and sender panes can still contain the original accepted
 envelope even though it was retired before dispatch; a later resend is a
 separate displayed message. Loss counts reset at a new process generation.
 
@@ -1049,7 +1086,7 @@ Errors for unknown `to`, self-routing, participant mismatch, invalid
 conversation IDs (`unknown_agent`, `self_routing`, `participants_mismatch`,
 `invalid value: payload.turn_number`, `stale_turn`, `conversation_closed`
  (the latter three from issue #167), `unknown_conversation_id` (issue #252),
-`peer_reconnecting`, `peer_reconnecting_capacity` (issue #256), and
+`delivery_backlog`, `peer_reconnecting`, `peer_reconnecting_capacity` (issue #256), and
 `disconnected` (issue #257, when `to` is known but not currently connected
 and no planned intent covers it)) are returned in the `envelope` reply.
 `peer_reconnecting` and `disconnected` are normalized by the wrapper to a
@@ -1248,6 +1285,7 @@ added later. Treat an unknown code as `api_error`.
 
 | code | meaning | recommended action for origin |
 |---|---|---|
+| `delivery_lost` | server explicitly retired an undelivered message or unrecoverable synthetic notice | Confirm current peer/conversation state before retrying; duplicate loss IDs do not require another action. |
 | `rate_limit` | usage or quota exceeded | Immediate retry is futile; wait or escalate. |
 | `context_overflow` | context length exceeded | Retry with the same content is futile; summarize/split or escalate. |
 | `api_error` | engine/API error or classification fallback | One retry is allowed; escalate if it repeats. |
@@ -1431,8 +1469,12 @@ can make their timestamps differ.
   constant viewing (avoid context anxiety; #158 comment-5384365227, P3).
 
 `inter_agent_delivery` (issue #237 addendum) exposes the server's
-recipient-local delivery ledger `{issued_seq, acked_seq, pending_since?}`. It
-is not a local snapshot. The wrapper sends `delivery_status_request` and adds
+recipient-local delivery ledger
+`{issued_seq, acked_seq, pending_since?, lost_count?, last_loss?}`. With
+`skip-v1`, `acked_seq` includes explicit losses: equal watermarks mean no
+unresolved deliveries, not proof that every message started an SDK turn. The
+same fields and interpretation apply to each `list_agents` entry. It is not a
+local snapshot. The wrapper sends `delivery_status_request` and adds
 the field only when a reply arrives. Omit each key—and treat **absent as
 unknown**—for an old or incapable server, a disconnect, or a failed query.
 This ledger observes delivery unconfirmed before SDK turn start; it is not a

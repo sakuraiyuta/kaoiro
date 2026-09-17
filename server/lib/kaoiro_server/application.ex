@@ -164,7 +164,8 @@ defmodule KaoiroServer.Application do
       # enforcing revocation.
       KaoiroServer.OAuthAllowlistWatcher,
       # Start to serve requests, typically the last entry
-      KaoiroServerWeb.Endpoint
+      KaoiroServerWeb.Endpoint,
+      KaoiroServerWeb.DeliveryLossDispatcher
     ]
     |> List.flatten()
   end
