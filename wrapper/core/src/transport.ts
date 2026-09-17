@@ -559,9 +559,22 @@ function permissionConfigurationFrom(
   ) {
     return null;
   }
+  // issue #359 (ADR-0057 F4c): `approval` is a MUTABLE axis on Antigravity.
+  // Optional and additive — a Codex/Claude request omits it (kept absent);
+  // present-but-invalid rejects the whole configuration (fail-closed, matching
+  // the sandbox/network narrows above) rather than being silently dropped.
+  if (
+    value.approval !== undefined &&
+    !PERMISSION_APPROVALS.has(value.approval as PermissionAxesExt["approval"])
+  ) {
+    return null;
+  }
   return {
     sandbox: value.sandbox as PermissionConfiguration["sandbox"],
     network_access: value.network_access,
+    ...(value.approval === undefined
+      ? {}
+      : { approval: value.approval as PermissionAxesExt["approval"] }),
   };
 }
 
@@ -734,6 +747,9 @@ function setPermissionSelectionFrom(value: unknown): PermissionSelection | null 
       requested: {
         sandbox: value.sandbox,
         network_access: value.network_access,
+        // issue #359: relay the mutable approval axis (Antigravity). Absent on
+        // a Codex set_permission; permissionConfigurationFrom keeps it optional.
+        ...(value.approval === undefined ? {} : { approval: value.approval }),
       },
     },
     1,

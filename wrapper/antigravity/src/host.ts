@@ -27,7 +27,15 @@ import {
   type WrapperConfig,
 } from "@kaoiro/agent-common";
 import { boundErrorDetail, writeRedactedStderr } from "@kaoiro/agent-common";
-import type { EngineModelInfo } from "@kaoiro/protocol";
+import type {
+  EngineModelInfo,
+  PermissionAxesExt,
+  PermissionConfiguration,
+  PermissionControlExt,
+  PermissionObservation,
+  PermissionSubmission,
+  WrapperPermissionLifecycleMessage,
+} from "@kaoiro/protocol";
 import {
   agyEventToEvents,
   agyEventIsSuccessfulResult,
@@ -43,6 +51,7 @@ import { DEFAULT_AGY_PROBE_TIMEOUT_MS, resolveAgyExecutable, type AgyExecutableF
 import { CustomizationDir, GATE_DEADLINE_MS, HOOK_TIMEOUT_SECONDS, sweepStaleCustomizationDirs } from "./customization.js";
 import { AntigravityGate, GateServer, type AntigravityLaunchConfig } from "./gate.js";
 import { effectiveNetworkAccess } from "./network_access.js";
+import { ceilingExceeded, type SwitchCeiling } from "./permission_switch.js";
 import { nonInteractiveToolEnv } from "./tool_child_env.js";
 import { ToolHost } from "./toolhost.js";
 import type { ToolTimeoutInfo, TurnWatchdogInterruptCause } from "./turn_watchdog.js";
@@ -73,6 +82,10 @@ export interface AntigravityHostOptions {
   onState: (envelope: Envelope) => void;
   onLog?: (envelope: Envelope) => void;
   onSessionId?: (sessionId: string) => void;
+  /** Persists a wrapper-observed permission lifecycle event (ADR-0057 F4c
+   *  Stage B0, issue #359). The CLI forwards it to the server as a
+   *  `session_lifecycle` report (permission_applied / permission_failed). */
+  onPermissionLifecycle?: (event: WrapperPermissionLifecycleMessage) => void;
   onTurnStart?: (info: { turnToken: string; conversationIds: readonly string[] }) => void;
   onTurnEnd?: (info: {
     turnToken: string;
@@ -183,6 +196,23 @@ export function initialStatusExt(
 ): Record<string, unknown> {
   const sandbox = config.sandbox ?? "workspace-write";
   const approval = config.approval ?? "on-request";
+  // ADR-0057 F4c Stage B0 (issue #359): advertise the per-axis runtime
+  // permission-switch ceilings the runner resolved and relayed. All three
+  // must be present (the runner always relays them together for antigravity);
+  // a legacy runner that omits them keeps Stage A behaviour — no advertised
+  // clamp, supports_permission_switch fail-closed absent. The wrapper is the
+  // source of truth for these; the server clamps against them (first gate)
+  // and setPermission re-checks fail-closed (final gate).
+  const switchAxes =
+    config.max_sandbox !== undefined &&
+    config.max_approval !== undefined &&
+    config.max_network_access !== undefined
+      ? {
+          sandbox: { max: config.max_sandbox },
+          network_access: { max: config.max_network_access },
+          approval: { max: config.max_approval },
+        }
+      : undefined;
   return {
     ...effectiveStatusEnvelopeFields({
       engine: "antigravity",
@@ -206,6 +236,12 @@ export function initialStatusExt(
       supports_model_switch: true,
       supports_effort_switch: false,
       supports_context_usage: false,
+      ...(switchAxes === undefined
+        ? {}
+        : {
+            supports_permission_switch: true,
+            permission_switch_axes: switchAxes,
+          }),
     },
   };
 }
@@ -243,6 +279,16 @@ export class AntigravityHost implements EngineAdapter {
   readonly #probeTimeoutMs: number;
   #pendingModel: string | null = null;
   #switchError: Record<string, unknown> | null = null;
+  // ADR-0057 F4c Stage B0 (issue #359): a server-accepted permission switch
+  // awaiting the next execution boundary (applied at the start of the next
+  // turn so a running gate is never mutated mid-turn), and the latest control
+  // record echoed to the server as ext.permission_control so it can advance
+  // pending -> applied / failed.
+  #pendingPermissionSwitch:
+    | { revision: number; requested: PermissionConfiguration }
+    | null = null;
+  #permissionControl: PermissionControlExt | null = null;
+  #lastEffectivePermission: PermissionObservation | null = null;
   readonly #toolNames = new Map<string, string>();
   readonly #rateLimits = new Map<
     string,
@@ -394,12 +440,170 @@ export class AntigravityHost implements EngineAdapter {
     throw new Error("antigravity effort switching is unavailable in Stage A");
   }
 
-  async setPermission(_selection: PermissionSelection): Promise<void> {
-    throw new Error("antigravity permission switching is unavailable in Stage A");
+  /** This session's advertised per-axis permission-switch ceiling, or null when
+   *  the runner relayed no clamp (a legacy runner — Stage A, switching off). */
+  #permissionCeiling(): SwitchCeiling | null {
+    const { max_sandbox, max_approval, max_network_access } = this.#config;
+    if (
+      max_sandbox === undefined ||
+      max_approval === undefined ||
+      max_network_access === undefined
+    ) {
+      return null;
+    }
+    return {
+      sandbox: max_sandbox,
+      approval: max_approval,
+      network_access: max_network_access,
+    };
+  }
+
+  /** The cell currently enforced (the launch defaults until a switch applies). */
+  #currentCell(): Required<PermissionConfiguration> {
+    return {
+      sandbox: this.#config.sandbox ?? "workspace-write",
+      network_access: this.#config.network_access ?? false,
+      approval: this.#config.approval ?? "on-request",
+    };
+  }
+
+  #permissionConstraints(
+    approval: PermissionAxesExt["approval"],
+  ): PermissionControlExt["constraints"] {
+    // enforcement is always "advisory" for antigravity (the --sandbox flag has
+    // no OS effect; the gate inspects tool arguments, ADR-0057 F4). approval is
+    // required by the control shape but, unlike Codex's fixed "never", is not
+    // rendered for antigravity (ext.permission carries the observed value); the
+    // current effective approval is the truthful contract to report.
+    return { approval, enforcement: "advisory" };
+  }
+
+  /** Applies a staged permission switch at the start of a turn (ADR-0057 F4c
+   *  Stage B0): mutates #config so the turn's fresh gate enforces the new cell,
+   *  then reports the applied observation as both ext.permission_control and a
+   *  `permission_applied` audit event. */
+  #applyPendingPermissionSwitch(turnToken: string): void {
+    const pending = this.#pendingPermissionSwitch;
+    if (pending === null) return;
+    this.#pendingPermissionSwitch = null;
+    const cell = pending.requested;
+    this.#config.sandbox = cell.sandbox;
+    this.#config.network_access = cell.network_access;
+    if (cell.approval !== undefined) this.#config.approval = cell.approval;
+    const approval = this.#config.approval ?? "on-request";
+    const requested: PermissionConfiguration = {
+      sandbox: cell.sandbox,
+      network_access: cell.network_access,
+      approval,
+    };
+    const submission: PermissionSubmission = {
+      revision: pending.revision,
+      requested,
+      execution_id: turnToken,
+    };
+    const observation: PermissionObservation = {
+      ...submission,
+      // A switch can only reach here after the agent joined and reported
+      // capability; #sessionId is set from the prior turn's init on a fresh
+      // spawn and from the resume id otherwise. turnToken is a non-empty
+      // fallback for the degenerate first-turn-before-init edge.
+      session_id: this.#sessionId ?? turnToken,
+      turn_id: turnToken,
+      permission: { sandbox: cell.sandbox, approval, enforcement: "advisory" },
+      network_access: effectiveNetworkAccess(cell.sandbox, cell.network_access),
+    };
+    this.#lastEffectivePermission = observation;
+    this.#permissionControl = {
+      revision: pending.revision,
+      requested,
+      status: "applied",
+      constraints: this.#permissionConstraints(approval),
+      submitted: submission,
+      effective: observation,
+      last_effective: observation,
+    };
+    this.#options.onPermissionLifecycle?.({
+      version: "0",
+      kind: "permission_applied",
+      at: this.#now(),
+      details: observation,
+    });
+    // Emit so the applied control (and the new effective cell) reaches the
+    // server promptly, not only whenever the next turn state emit happens.
+    this.#emitState(this.#machine.state);
+  }
+
+  /** Applies a server-originated permission switch at the NEXT execution
+   *  boundary (ADR-0057 F4c Stage B0, issue #359). The requested cell is
+   *  re-checked fail-closed against this session's advertised ceiling (the
+   *  wrapper's final gate); a violation is reported as `permission_failed`
+   *  with the current cell as `rolled_back_to` and the config is left
+   *  untouched. An accepted switch is staged and applied when the next turn
+   *  starts (`#applyPendingPermissionSwitch`), so a running gate is never
+   *  mutated mid-turn. */
+  async setPermission(selection: PermissionSelection): Promise<void> {
+    const ceiling = this.#permissionCeiling();
+    if (ceiling === null) {
+      throw new Error(
+        "antigravity: permission switching is not advertised for this session",
+      );
+    }
+    const current = this.#currentCell();
+    const requested = selection.requested;
+    const target: PermissionConfiguration = {
+      sandbox: requested.sandbox,
+      network_access: requested.network_access,
+      // The server relays approval for antigravity; keep the current value if a
+      // legacy sandbox/network-only request omits it.
+      approval: requested.approval ?? current.approval,
+    };
+    const violation = ceilingExceeded(target, ceiling);
+    if (violation !== null) {
+      this.#pendingPermissionSwitch = null;
+      this.#permissionControl = {
+        revision: selection.revision,
+        requested: target,
+        status: "failed",
+        constraints: this.#permissionConstraints(current.approval),
+        reason: "exceeds_launch_ceiling",
+        rolled_back_to: current,
+        ...(this.#lastEffectivePermission === null
+          ? {}
+          : { last_effective: this.#lastEffectivePermission }),
+      };
+      this.#emitState(this.#machine.state);
+      this.#options.onPermissionLifecycle?.({
+        version: "0",
+        kind: "permission_failed",
+        at: this.#now(),
+        details: {
+          revision: selection.revision,
+          requested: target,
+          reason: "exceeds_launch_ceiling",
+          rolled_back_to: current,
+        },
+      });
+      this.#warn(`antigravity: set_permission rejected: ${violation}`);
+      return;
+    }
+    this.#pendingPermissionSwitch = { revision: selection.revision, requested: target };
+    this.#permissionControl = {
+      revision: selection.revision,
+      requested: target,
+      status: "pending",
+      constraints: this.#permissionConstraints(current.approval),
+      ...(this.#lastEffectivePermission === null
+        ? {}
+        : { last_effective: this.#lastEffectivePermission }),
+    };
+    this.#emitState(this.#machine.state);
   }
 
   async setPermissionMode(_mode: PermissionMode): Promise<void> {
-    throw new Error("antigravity permission axes are fixed at spawn in Stage A");
+    throw new Error(
+      "antigravity: permission-mode switching is unsupported; use set_permission " +
+        "for the sandbox / approval / network_access axes (ADR-0057 F4c)",
+    );
   }
 
   setPendingPermission(pending: PendingPermissionExt | null): void {
@@ -490,6 +694,10 @@ export class AntigravityHost implements EngineAdapter {
     try {
       toolHost = await ToolHost.listen(this.#options.toolDescriptors ?? []);
       if (!this.#isCurrent(generation)) return undefined;
+      // ADR-0057 F4c Stage B0 (issue #359): apply a staged permission switch
+      // now, at the execution boundary, so this turn's fresh gate below reads
+      // the new cell while the just-ended turn's gate was left untouched.
+      this.#applyPendingPermissionSwitch(turnToken);
       const gate = new AntigravityGate({
         config: this.#config,
         cwd: this.#options.cwd,
@@ -950,6 +1158,9 @@ export class AntigravityHost implements EngineAdapter {
       if (consumeOneShot) this.#switchError = null;
     }
     if (this.#pendingPermission !== null) ext.pending_permission = this.#pendingPermission;
+    // ADR-0057 F4c Stage B0 (issue #359): echo the permission-switch control so
+    // the server advances pending -> applied / failed (record_observation).
+    if (this.#permissionControl !== null) ext.permission_control = this.#permissionControl;
     if (this.#pendingQuestion !== null) ext.pending_question = this.#pendingQuestion;
     if (this.#rateLimits.size > 0) ext.rate_limits = Object.fromEntries(this.#rateLimits);
     ext.cwd = this.#options.cwd;

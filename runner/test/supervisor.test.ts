@@ -82,6 +82,11 @@ function harness(
     contextWorkBudgetPercent?: number;
     antigravityExecutable?: AgyExecutableResolution;
     antigravityProbeTimeoutMs?: number;
+    antigravityMax?: {
+      max_sandbox?: "read-only" | "workspace-write" | "danger-full-access";
+      max_approval?: "untrusted" | "on-request" | "local" | "never";
+      max_network_access?: boolean;
+    };
   } = {},
 ) {
   const children: FakeChild[] = [];
@@ -127,6 +132,9 @@ function harness(
     ...(opts.antigravityProbeTimeoutMs === undefined
       ? {}
       : { antigravityProbeTimeoutMs: opts.antigravityProbeTimeoutMs }),
+    ...(opts.antigravityMax === undefined
+      ? {}
+      : { antigravityMax: opts.antigravityMax }),
     ...(opts.now === undefined ? {} : { now: opts.now }),
     ...(opts.resetTerminationGraceMs === undefined
       ? {}
@@ -380,6 +388,63 @@ describe("parseSpawn / resolveWrapperConfig", () => {
       [{ value: "gemini-4-nova", display_name: "Gemini 4 Nova" }],
     );
     expect(config.antigravity_extra_models).toBeUndefined();
+  });
+  // ADR-0057 F4c Stage B0 (issue #359): the runner relays the resolved
+  // permission-switch ceiling as WrapperConfig.max_*.
+  it("relays a default antigravity permission ceiling (approval widened to local)", () => {
+    const parsed = parseSpawn({
+      ...spawnMsg,
+      engine: "antigravity",
+      sandbox: "workspace-write",
+      approval: "on-request",
+      network_access: false,
+    })!;
+    const config = resolveWrapperConfig(
+      "lab-pc-1.antigravity-a",
+      parsed,
+      "ws://localhost:4000/wrapper",
+    );
+    expect(config.max_sandbox).toBe("workspace-write");
+    expect(config.max_approval).toBe("local");
+    expect(config.max_network_access).toBe(false);
+  });
+  it("relays an explicit antigravity permission ceiling via antigravityMax", () => {
+    const parsed = parseSpawn({
+      ...spawnMsg,
+      engine: "antigravity",
+      sandbox: "workspace-write",
+      approval: "on-request",
+      network_access: false,
+    })!;
+    const config = resolveWrapperConfig(
+      "lab-pc-1.antigravity-a",
+      parsed,
+      "ws://localhost:4000/wrapper",
+      undefined,
+      undefined,
+      undefined,
+      null,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { max_sandbox: "danger-full-access", max_approval: "never", max_network_access: true },
+    );
+    expect(config.max_sandbox).toBe("danger-full-access");
+    expect(config.max_approval).toBe("never");
+    expect(config.max_network_access).toBe(true);
+  });
+  it("does not set max_* for a non-antigravity engine", () => {
+    const parsed = parseSpawn({ ...spawnMsg, engine: "codex" })!;
+    const config = resolveWrapperConfig(
+      "lab-pc-1.codex-a",
+      parsed,
+      "ws://localhost:4000/wrapper",
+    );
+    expect(config.max_sandbox).toBeUndefined();
+    expect(config.max_approval).toBeUndefined();
+    expect(config.max_network_access).toBeUndefined();
   });
   it("relays the runner-resolved Antigravity executable and probe timeout", () => {
     const parsed = parseSpawn({ ...spawnMsg, engine: "antigravity" })!;
@@ -637,6 +702,42 @@ describe("Supervisor.handleSpawn", () => {
     h.sup.handleRestart({ agent_id: antigravity.agent_id });
     expect(h.children[0]!.kills).toBe(0);
     expect(h.configs[0]).toMatchObject({ antigravity_cli_path: process.execPath });
+  });
+
+  // ADR-0057 F4c Stage B0 (issue #359): a config ceiling narrower than the
+  // launch value is a contradiction and rejected fail-closed at spawn.
+  it("rejects an antigravity spawn whose max_* ceiling is narrower than its launch value", () => {
+    const h = harness({
+      antigravityExecutable: { ok: true, path: process.execPath },
+      antigravityMax: { max_approval: "on-request" },
+    });
+    h.sup.handleSpawn({
+      ...spawnMsg,
+      agent_id: "lab-pc-1.antigravity-conflict",
+      engine: "antigravity",
+      approval: "local",
+    });
+    expect(h.children).toHaveLength(0);
+    expect(h.results.at(-1)).toMatchObject({
+      ok: false,
+      reason: "permission_ceiling_conflict",
+    });
+  });
+
+  it("launches an antigravity spawn within its max_* ceiling and relays the ceiling", () => {
+    const h = harness({
+      antigravityExecutable: { ok: true, path: process.execPath },
+      antigravityMax: { max_approval: "local" },
+    });
+    h.sup.handleSpawn({
+      ...spawnMsg,
+      agent_id: "lab-pc-1.antigravity-ok",
+      engine: "antigravity",
+      approval: "on-request",
+    });
+    expect(h.children).toHaveLength(1);
+    expect(h.results.at(-1)).toMatchObject({ ok: true });
+    expect(h.configs.at(-1)).toMatchObject({ max_approval: "local" });
   });
 });
 

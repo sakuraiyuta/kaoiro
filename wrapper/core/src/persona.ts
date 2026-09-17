@@ -527,6 +527,42 @@ export function parseConfig(raw: unknown): WrapperConfig {
     config.approval = raw.approval;
   }
 
+  // Antigravity runtime permission-switch ceilings (ADR-0057 F4c Stage B0,
+  // issue #359). Runner-resolved; the host advertises them as
+  // permission_switch_axes and re-checks fail-closed on set_permission. Same
+  // closed enums as the sandbox / approval / network launch axes above.
+  if (raw.max_sandbox !== undefined) {
+    if (
+      raw.max_sandbox !== "read-only" &&
+      raw.max_sandbox !== "workspace-write" &&
+      raw.max_sandbox !== "danger-full-access"
+    ) {
+      throw new ConfigError(
+        "max_sandbox must be one of: read-only, workspace-write, danger-full-access",
+      );
+    }
+    config.max_sandbox = raw.max_sandbox;
+  }
+  if (raw.max_approval !== undefined) {
+    if (
+      raw.max_approval !== "untrusted" &&
+      raw.max_approval !== "on-request" &&
+      raw.max_approval !== "local" &&
+      raw.max_approval !== "never"
+    ) {
+      throw new ConfigError(
+        "max_approval must be one of: untrusted, on-request, local, never",
+      );
+    }
+    config.max_approval = raw.max_approval;
+  }
+  if (raw.max_network_access !== undefined) {
+    if (typeof raw.max_network_access !== "boolean") {
+      throw new ConfigError("max_network_access must be a boolean");
+    }
+    config.max_network_access = raw.max_network_access;
+  }
+
   // Resume snapshot (ADR-0014 F1 追補, phase-15 D8): passed through by the
   // runner on resume launches only. Loose shape check — the fields are all
   // optional and free-form strings/booleans; deeper validation is not worth

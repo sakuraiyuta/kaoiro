@@ -56,6 +56,9 @@ const ROUND_TRIP_CASES: {
   sandbox: { value: "workspace-write" },
   network_access: { value: true },
   approval: { value: "local" },
+  max_sandbox: { value: "danger-full-access" },
+  max_network_access: { value: true },
+  max_approval: { value: "never" },
   resume_snapshot: { value: { model: "sonnet" } },
   transition_id: { value: "tr-99" },
 };

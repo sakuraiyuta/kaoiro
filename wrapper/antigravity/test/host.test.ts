@@ -70,6 +70,7 @@ function hostHarness(options: {
 } = {}) {
   const states: Envelope[] = [];
   const logs: Envelope[] = [];
+  const permissionLifecycle: unknown[] = [];
   const calls: { command: string; args: string[]; env: NodeJS.ProcessEnv; child: FakeAgy }[] = [];
   const cfg = options.config ?? config();
   const broker = new PermissionBroker({ config: cfg, send: () => {} });
@@ -79,6 +80,7 @@ function hostHarness(options: {
     permissionBroker: broker,
     onState: (envelope) => states.push(envelope),
     onLog: (envelope) => logs.push(envelope),
+    onPermissionLifecycle: (event) => permissionLifecycle.push(event),
     runtimeAssetsAvailable: () => true,
     verifyGate: async () => typeof options.verifyGate === "function" ? options.verifyGate() : options.verifyGate ?? true,
     ...(options.resumeSessionId === undefined ? {} : { resumeSessionId: options.resumeSessionId }),
@@ -94,7 +96,7 @@ function hostHarness(options: {
       return child as unknown as SpawnedAgy;
     },
   });
-  return { host, states, logs, calls };
+  return { host, states, logs, calls, permissionLifecycle };
 }
 
 describe("AntigravityHost", () => {
@@ -138,13 +140,104 @@ describe("AntigravityHost", () => {
     host.close();
   });
 
-  it("set_permission は Stage A では明示的に拒否する", async () => {
+  it("set_permission rejects when no ceiling is advertised (legacy runner, no max_*)", async () => {
     const { host } = hostHarness();
-    await expect(host.setPermission({
-      revision: 1,
-      requested: { sandbox: "workspace-write", network_access: true },
-    })).rejects.toThrow("antigravity permission switching is unavailable in Stage A");
+    await expect(
+      host.setPermission({
+        revision: 1,
+        requested: { sandbox: "workspace-write", network_access: true, approval: "local" },
+      }),
+    ).rejects.toThrow("not advertised");
     host.close();
+  });
+
+  it("set_permission stages an in-ceiling switch and applies it at the next turn (issue #359)", async () => {
+    const cfg = config({
+      approval: "on-request",
+      max_sandbox: "workspace-write",
+      max_approval: "local",
+      max_network_access: false,
+    });
+    const { host, states, permissionLifecycle } = hostHarness({
+      config: cfg,
+      resumeSessionId: "sess-1",
+    });
+    await host.setPermission({
+      revision: 2,
+      requested: { sandbox: "workspace-write", network_access: false, approval: "local" },
+    });
+    // Pending control echoed; the running gate's cell is untouched until the
+    // next boundary, so ext.permission still shows the pre-switch approval.
+    const pending = states.at(-1)?.ext?.permission_control as Record<string, unknown>;
+    expect(pending.status).toBe("pending");
+    expect((pending.requested as Record<string, unknown>).approval).toBe("local");
+    expect((states.at(-1)?.ext?.permission as Record<string, unknown>).approval).toBe(
+      "on-request",
+    );
+    expect(permissionLifecycle).toHaveLength(0);
+
+    await host.send("hello");
+    await waitFor(() => permissionLifecycle.length === 1);
+    const applied = permissionLifecycle[0] as Record<string, any>;
+    expect(applied.kind).toBe("permission_applied");
+    expect(applied.details.permission.approval).toBe("local");
+    expect(applied.details.permission.enforcement).toBe("advisory");
+    expect(applied.details.session_id).toBe("sess-1");
+    expect(applied.details.execution_id).toBe(applied.details.turn_id);
+    const appliedControl = states.at(-1)?.ext?.permission_control as Record<string, unknown>;
+    expect(appliedControl.status).toBe("applied");
+    host.close();
+  });
+
+  it("set_permission rejects an over-ceiling switch fail-closed with rolled_back_to (issue #359)", async () => {
+    const cfg = config({
+      approval: "on-request",
+      max_sandbox: "workspace-write",
+      max_approval: "local",
+      max_network_access: false,
+    });
+    const { host, states, permissionLifecycle } = hostHarness({ config: cfg });
+    await host.setPermission({
+      revision: 3,
+      requested: { sandbox: "workspace-write", network_access: false, approval: "never" },
+    });
+    expect(permissionLifecycle).toHaveLength(1);
+    const failed = permissionLifecycle[0] as Record<string, any>;
+    expect(failed.kind).toBe("permission_failed");
+    expect(failed.details.reason).toBe("exceeds_launch_ceiling");
+    expect(failed.details.rolled_back_to.approval).toBe("on-request");
+    const control = states.at(-1)?.ext?.permission_control as Record<string, unknown>;
+    expect(control.status).toBe("failed");
+    expect((control.rolled_back_to as Record<string, unknown>).approval).toBe("on-request");
+    // The effective cell is unchanged (no config mutation on a rejected switch).
+    expect((states.at(-1)?.ext?.permission as Record<string, unknown>).approval).toBe(
+      "on-request",
+    );
+    host.close();
+  });
+
+  it("advertises permission_switch_axes and supports_permission_switch when max_* is present", () => {
+    const ext = initialStatusExt(
+      config({
+        max_sandbox: "workspace-write",
+        max_approval: "local",
+        max_network_access: false,
+      }),
+    );
+    const caps = ext.session_capabilities as Record<string, unknown>;
+    expect(caps.supports_permission_switch).toBe(true);
+    expect(caps.permission_switch_axes).toEqual({
+      sandbox: { max: "workspace-write" },
+      network_access: { max: false },
+      approval: { max: "local" },
+    });
+  });
+
+  it("omits permission_switch_axes when the runner relayed no ceiling (legacy)", () => {
+    const ext = initialStatusExt(config());
+    const caps = ext.session_capabilities as Record<string, unknown>;
+    expect(caps).not.toHaveProperty("permission_switch_axes");
+    expect(caps).not.toHaveProperty("supports_permission_switch");
   });
 
   it("on-failure approvalはspawn前に拒否する", () => {

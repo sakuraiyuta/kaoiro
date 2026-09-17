@@ -723,6 +723,88 @@ defmodule KaoiroServer.PermissionSettingsTest do
       entry = PermissionSettings.get("b.9", server)
       assert entry.ledger[1].requested == %{sandbox: "workspace-write", network_access: false}
     end
+
+    test "a failed control's rolled_back_to carries the approval axis (issue #359)", %{
+      server: server
+    } do
+      :ok =
+        PermissionSettings.record_observation(
+          "ag.rb1",
+          "antigravity",
+          %{
+            "revision" => 0,
+            "requested" => %{
+              "sandbox" => "danger-full-access",
+              "network_access" => true,
+              "approval" => "never"
+            },
+            "status" => "failed",
+            "reason" => "exceeds_launch_ceiling",
+            "rolled_back_to" => %{
+              "sandbox" => "workspace-write",
+              "network_access" => false,
+              "approval" => "on-request"
+            },
+            "constraints" => %{"approval" => "on-request", "enforcement" => "advisory"}
+          },
+          server
+        )
+
+      :ok =
+        wait_until(fn -> PermissionSettings.get("ag.rb1", server) != nil end)
+
+      entry = PermissionSettings.get("ag.rb1", server)
+      # The whole cell the failed switch reverted to, approval included — not
+      # the pre-#359 2-axis half-truth.
+      assert entry.control.rolled_back_to == %{
+               sandbox: "workspace-write",
+               network_access: false,
+               approval: "on-request"
+             }
+
+      # control_wire serialises the approval back onto rolled_back_to.
+      wire = State.control_wire(entry.control)
+
+      assert wire["rolled_back_to"] == %{
+               "sandbox" => "workspace-write",
+               "network_access" => false,
+               "approval" => "on-request"
+             }
+    end
+
+    test "a rolled_back_to with a malformed approval is dropped (issue #359 negative control)",
+         %{server: server} do
+      :ok =
+        PermissionSettings.record_observation(
+          "ag.rb2",
+          "antigravity",
+          %{
+            "revision" => 0,
+            "requested" => %{
+              "sandbox" => "workspace-write",
+              "network_access" => false,
+              "approval" => "on-request"
+            },
+            "status" => "failed",
+            "reason" => "exceeds_launch_ceiling",
+            "rolled_back_to" => %{
+              "sandbox" => "workspace-write",
+              "network_access" => false,
+              "approval" => "bogus"
+            },
+            "constraints" => %{"approval" => "on-request", "enforcement" => "advisory"}
+          },
+          server
+        )
+
+      :ok =
+        wait_until(fn -> PermissionSettings.get("ag.rb2", server) != nil end)
+
+      entry = PermissionSettings.get("ag.rb2", server)
+      # A malformed approval drops the whole rolled_back_to rather than
+      # reporting a 2-axis half-truth of which cell the switch reverted to.
+      assert entry.control.rolled_back_to == nil
+    end
   end
 
   # ---- M3 ledger (issue #305, ふじ round 1 store-probe findings) -----------

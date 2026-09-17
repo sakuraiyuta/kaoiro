@@ -34,6 +34,10 @@ import {
   validateResolvedSnapshot,
 } from "./resume_snapshot.js";
 import {
+  resolveAntigravityCeiling,
+  type AntigravityMaxConfig,
+} from "./permission_ceiling.js";
+import {
   listSessions as defaultListSessions,
   sessionExists as defaultSessionExists,
 } from "./sessions.js";
@@ -170,6 +174,12 @@ export interface SupervisorOptions {
   antigravityExtraModels?: EngineModelInfo[];
   antigravityExecutable?: AgyExecutableResolution | undefined;
   antigravityProbeTimeoutMs?: number | undefined;
+  /** Host-local antigravity permission-switch ceilings from
+   *  runner.config.json's `antigravity.max_*` (ADR-0057 F4c Stage B0, issue
+   *  #359). Resolved against each spawn's launch values and relayed to the
+   *  wrapper as `WrapperConfig.max_*`; a ceiling narrower than launch rejects
+   *  the spawn fail-closed. */
+  antigravityMax?: AntigravityMaxConfig | undefined;
   /** Global soft context-work budget from runner.config.json. The wrapper
    * derives a per-model token denominator at measurement time (issue #264). */
   contextWorkBudgetPercent?: number;
@@ -418,6 +428,8 @@ export function resolveWrapperConfig(
   antigravityExtraModels?: EngineModelInfo[],
   antigravityCliPath?: string,
   antigravityProbeTimeoutMs?: number,
+  // ADR-0057 F4c Stage B0 (issue #359), same appended-last rationale.
+  antigravityMax?: AntigravityMaxConfig,
 ): WrapperConfig {
   const config: WrapperConfig = {
     agent_id: agentId,
@@ -480,6 +492,23 @@ export function resolveWrapperConfig(
     if (antigravityProbeTimeoutMs !== undefined) {
       config.antigravity_probe_timeout_ms = antigravityProbeTimeoutMs;
     }
+    // ADR-0057 F4c Stage B0 (issue #359): resolve the per-axis permission
+    // ceiling from the launch values and the operator's `antigravity.max_*`
+    // config, and relay it as WrapperConfig.max_*. resolveAntigravityCeiling
+    // always returns a safe ceiling (a config conflict is rejected at spawn
+    // in #launchSpawn; here it defensively falls back to the launch-derived
+    // default). The wrapper advertises these as permission_switch_axes.
+    const { ceiling } = resolveAntigravityCeiling(
+      {
+        sandbox: parsed.sandbox,
+        approval: parsed.approval,
+        networkAccess: parsed.networkAccess,
+      },
+      antigravityMax,
+    );
+    config.max_sandbox = ceiling.max_sandbox;
+    config.max_approval = ceiling.max_approval;
+    config.max_network_access = ceiling.max_network_access;
   }
   if (
     parsed.engine === "claude-code" &&
@@ -582,6 +611,7 @@ export interface SupervisorRuntimeUpdate {
   antigravityExtraModels: EngineModelInfo[] | undefined;
   antigravityExecutable?: AgyExecutableResolution | undefined;
   antigravityProbeTimeoutMs?: number | undefined;
+  antigravityMax?: AntigravityMaxConfig | undefined;
   contextWorkBudgetPercent: number | undefined;
   /** Live getter for the runner's Claude engine-catalog cache (ADR-0039
    *  F9 追補). Preserved on hot-reload so a config file change does not
@@ -618,6 +648,7 @@ export class Supervisor {
   #antigravityExtraModels: EngineModelInfo[] | undefined;
   #antigravityExecutable: AgyExecutableResolution | undefined;
   #antigravityProbeTimeoutMs: number | undefined;
+  #antigravityMax: AntigravityMaxConfig | undefined;
   #contextWorkBudgetPercent: number | undefined;
   #getClaudeEngineCatalog:
     | (() => WrapperConfig["claude_engine_catalog"] | null | undefined)
@@ -659,6 +690,7 @@ export class Supervisor {
     this.#antigravityExtraModels = options.antigravityExtraModels;
     this.#antigravityExecutable = options.antigravityExecutable;
     this.#antigravityProbeTimeoutMs = options.antigravityProbeTimeoutMs;
+    this.#antigravityMax = options.antigravityMax;
     this.#contextWorkBudgetPercent = options.contextWorkBudgetPercent;
     this.#getClaudeEngineCatalog = options.getClaudeEngineCatalog;
   }
@@ -680,6 +712,7 @@ export class Supervisor {
     this.#antigravityExtraModels = update.antigravityExtraModels;
     this.#antigravityExecutable = update.antigravityExecutable;
     this.#antigravityProbeTimeoutMs = update.antigravityProbeTimeoutMs;
+    this.#antigravityMax = update.antigravityMax;
     this.#contextWorkBudgetPercent = update.contextWorkBudgetPercent;
     this.#getClaudeEngineCatalog = update.getClaudeEngineCatalog;
   }
@@ -1205,6 +1238,30 @@ export class Supervisor {
 
   #launchSpawn(agentId: string, parsed: ParsedSpawn): void {
     const resume = parsed.resumeSessionId;
+    // ADR-0057 F4c Stage B0 (issue #359): reject fail-closed when an
+    // antigravity `antigravity.max_*` ceiling is narrower than the value this
+    // agent is launching with — a contradictory config would otherwise launch
+    // above its own declared ceiling. Only the initial launch (fresh /
+    // restore / resume all flow through here) validates; a crash-restart or
+    // reset reuses the already-validated config.
+    if (parsed.engine === "antigravity") {
+      const { conflict } = resolveAntigravityCeiling(
+        {
+          sandbox: parsed.sandbox,
+          approval: parsed.approval,
+          networkAccess: parsed.networkAccess,
+        },
+        this.#antigravityMax,
+      );
+      if (conflict !== null) {
+        process.stderr.write(
+          `runner: antigravity spawn refused for ${agentId}: ${conflict}\n`,
+        );
+        if (resume !== undefined) this.#activeSessions.delete(resume);
+        this.#fail(agentId, "permission_ceiling_conflict", parsed.requestId);
+        return;
+      }
+    }
     try {
       if (!this.#start(agentId, parsed)) {
         if (resume !== undefined) this.#activeSessions.delete(resume);
@@ -1285,6 +1342,7 @@ export class Supervisor {
       this.#antigravityExtraModels,
       this.#antigravityExecutable?.ok ? this.#antigravityExecutable.path : undefined,
       this.#antigravityProbeTimeoutMs,
+      this.#antigravityMax,
     );
   }
 

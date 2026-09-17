@@ -129,7 +129,7 @@ describe("Antigravity CLI", () => {
     }
   });
 
-  it("rejects set_permission delivered through the server link in Stage A", async () => {
+  it("surfaces a rejected set_permission from the server link to stderr", async () => {
     const stderr = vi
       .spyOn(process.stderr, "write")
       .mockImplementation(() => true);
@@ -141,7 +141,9 @@ describe("Antigravity CLI", () => {
       state: "idle" as const,
       statusExtSnapshot: () => ({ engine: "antigravity" }),
       setPermission: async () => {
-        throw new Error("antigravity permission switching is unavailable in Stage A");
+        throw new Error(
+          "antigravity: permission switching is not advertised for this session",
+        );
       },
       run: async () => {
         onSetPermission?.({
@@ -165,7 +167,7 @@ describe("Antigravity CLI", () => {
       });
 
       expect(stderr).toHaveBeenCalledWith(
-        "antigravity: Error: antigravity permission switching is unavailable in Stage A\n",
+        "antigravity: Error: antigravity: permission switching is not advertised for this session\n",
       );
     } finally {
       stderr.mockRestore();

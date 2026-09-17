@@ -419,7 +419,7 @@ defmodule KaoiroServer.SessionLifecycleEventsTest do
 
     # issue #359 M2: requested carries the optional approval axis so a wrapper
     # (Stage B) can report an approval switch's applied/failed outcome.
-    test "permission_failed requested の approval axis を保存する", %{name: name} do
+    test "permission_failed stores the approval axis in requested", %{name: name} do
       details = %{
         "revision" => 4,
         "requested" => %{
@@ -445,7 +445,7 @@ defmodule KaoiroServer.SessionLifecycleEventsTest do
       assert stored["requested"]["approval"] == "local"
     end
 
-    test "permission_failed requested の malformed approval は drop される", %{name: name} do
+    test "permission_failed drops a malformed approval in requested", %{name: name} do
       details = %{
         "revision" => 4,
         "requested" => %{
