@@ -1820,7 +1820,7 @@
     "approval_policy_mismatch",
   ]);
   const CODEX_APPROVAL_CONFIG_RECOVERY =
-    'The host Codex config is overriding the approval policy. First, check ~/.codex/config.toml and set approvals_reviewer to "user". Reapplying permissions before fixing the config will block the next turn again. After fixing the config, reapply the same permission values once to assign a new revision, then resend the cancelled instruction.';
+    'wrapper は approval=never を明示しています。観測値が異なる場合は、host の $CODEX_HOME/config.toml（既定 ~/.codex/config.toml）の approvals_reviewer と Codex CLI のバージョンを確認してください。原因を直す前に再適用しても、次の turn で再びブロックされる可能性があります。修正後に同じ権限値を一度だけ再適用して新しい revision を割り当て、キャンセルされた指示を再送してください。';
   function needsPermissionGateRecovery(view: PermRequestView): boolean {
     return (
       view.status === "unknown" ||

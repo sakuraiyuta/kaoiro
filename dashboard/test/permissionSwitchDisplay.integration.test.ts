@@ -319,10 +319,12 @@ describe("AgentDetail sandbox / network control (issue #305 D)", () => {
     });
     const dock = target.querySelector(".permission-dock");
     for (const surface of [rowByLabel(target, "権限要求"), dock]) {
-      expect(surface?.textContent).toContain("First, check ~/.codex/config.toml");
-      expect(surface?.textContent).toContain('set approvals_reviewer to "user"');
-      expect(surface?.textContent).toContain("before fixing the config will block the next turn again");
-      expect(surface?.textContent).toContain("After fixing the config, reapply the same permission values once");
+      expect(surface?.textContent).toContain("wrapper は approval=never を明示しています");
+      expect(surface?.textContent).toContain("観測値が異なる場合は");
+      expect(surface?.textContent).toContain("$CODEX_HOME/config.toml（既定 ~/.codex/config.toml）");
+      expect(surface?.textContent).toContain("approvals_reviewer と Codex CLI のバージョン");
+      expect(surface?.textContent).toContain("原因を直す前に再適用しても");
+      expect(surface?.textContent).toContain("修正後に同じ権限値を一度だけ再適用");
       expect(surface?.textContent).not.toContain("同じ sandbox / network を再適用して");
       expect(surface?.textContent).not.toContain("同じ権限値を再適用すると新しい revision");
     }

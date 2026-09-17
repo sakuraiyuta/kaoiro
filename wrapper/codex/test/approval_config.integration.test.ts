@@ -7,6 +7,8 @@ import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
 import { expect, it, vi } from "vitest";
 import { CodexHost } from "../src/host.js";
 
+// Real CLI startup inherits outward traffic (including update checks), so
+// offline runners can be slower even with a local model endpoint.
 it("keeps the default SDK factory non-interactive despite host auto_review", async () => {
   const root = await mkdtemp(join(tmpdir(), "fuji-357-approval-"));
   const server = createServer(async (request, response) => {
@@ -32,6 +34,8 @@ base_url = "http://127.0.0.1:${address.port}/v1"
 wire_api = "responses"
 [features]
 shell_snapshot = false
+[analytics]
+enabled = false
 `;
   const observed = async (home: string) => {
     const sessions = join(home, "sessions");
@@ -58,7 +62,7 @@ shell_snapshot = false
     const control = new Codex({ env: { ...process.env, CODEX_HOME: baseline } });
     const { events } = await control.startThread({
       sandboxMode: "read-only", skipGitRepoCheck: true, workingDirectory: root,
-    }).runStreamed("Reply OK without tools.", { signal: AbortSignal.timeout(10_000) });
+    }).runStreamed("Reply OK without tools.", { signal: AbortSignal.timeout(20_000) });
     for await (const _event of events) {}
     expect(await observed(baseline)).toEqual([
       expect.objectContaining({ approval_policy: "on-request", approvals_reviewer: "auto_review" }),
@@ -102,4 +106,4 @@ shell_snapshot = false
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await rm(root, { recursive: true, force: true });
   }
-}, 30_000);
+}, 45_000);

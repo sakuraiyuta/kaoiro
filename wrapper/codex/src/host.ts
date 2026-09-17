@@ -1324,6 +1324,7 @@ export class CodexHost implements EngineAdapter {
     const codexConfig: Record<string, unknown> = {
       developer_instructions: this.#options.appendSystemPrompt,
       // Host-level auto_review can override exec's non-interactive policy.
+      // Pinning both reviewer and approvalPolicy is defense in depth.
       approvals_reviewer: "user",
     };
     // Runner config is authoritative over any user-global Codex config

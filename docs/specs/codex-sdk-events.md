@@ -132,15 +132,21 @@ the next turn's `ThreadOptions.model`.
 
 ### Permission (no approval flow exists)
 
-`codex exec` forces `approval_policy=never` through a harness override (even
-`-c approval_policy=...` is ineffective), and the JSON event stream has no
-approval-request event. Therefore:
+The wrapper explicitly sets `approvals_reviewer="user"` on the SDK client and
+`approvalPolicy="never"` for new and resumed threads. Both are CLI `--config`
+overrides that take precedence over host `config.toml` defaults. An unconfigured
+`codex exec` must not be assumed to force `never`: host
+`approvals_reviewer="auto_review"` can change its effective policy to
+`on-request`. The SDK/exec path has no approval-request callback wired into
+kaoiro. Therefore:
 
-- A Codex agent's authority is **fixed on two axes at spawn**
-  ([ADR-0033](../adr/0033-permission-model-dual-axis.md) F3): The wrapper stamps
-  `ext.permission = { sandbox: <spawn-time selection>, approval: "never" }`.
-- `waiting_permission` state, `pending_permission` ext, and
-  `permission_decision` envelope do not occur for Codex.
+- Codex permissions expose sandbox and network controls with approval fixed to
+  `never` ([ADR-0033](../adr/0033-permission-model-dual-axis.md) F3). The wrapper
+  checks rollout observations against the requested settings.
+- A permission-policy mismatch can produce `waiting_permission` to block further
+  execution. This is a permission gate, not an interactive tool approval;
+  `pending_permission` and `permission_decision` are not used for Codex tool
+  approval.
 - A command needing escalation outside the sandbox is automatically denied and
   returned to the model as failure (the model attempts an in-sandbox alternative).
 - Track upstream exec approval support (feature flag `exec_permission_approvals`,
