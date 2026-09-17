@@ -103,7 +103,6 @@ env 経由で流れるのは model のみ。
 |---|---|---|---|
 | `KAOIRO_CLAUDE_CODE_DEFAULT_MODEL` | ✓ | 無視 | Claude CLI の起動時既定 model |
 | `KAOIRO_CODEX_DEFAULT_MODEL` | 無視 | ✓ | Codex CLI の起動時既定 model |
-| `KAOIRO_WRAPPER_DEFAULT_MODEL` | ✓(deprecation warn) | 完全無視 | 旧 env。次リリース窓で撤去([issue #100](https://github.com/sakuraiyuta/kaoiro/issues/100)) |
 | `KAOIRO_WRAPPER_PERMISSION_TIMEOUT_MS` | ✓ | ✓ | 共通:ツール許可 timeout の override |
 
 ## 手動起動

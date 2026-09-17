@@ -170,12 +170,9 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
 
   // Codex CLI env source (ADR-0032 F4bc addendum, phase-15 15-3):
   // KAOIRO_CODEX_DEFAULT_MODEL is the env-tier default, applied when
-  // config.model is unset. Legacy KAOIRO_WRAPPER_DEFAULT_MODEL is
-  // deliberately NOT read here — it may hold a claude-* value that would
-  // fail with 400/404 under Codex ChatGPT auth (codex-model-catalog.md).
-  // Resolution: launch (config.model, SpawnMessage relay) > env > engine
-  // account default. Model source stamping to ext.model_source lands in
-  // 15-4c.
+  // config.model is unset. Resolution: launch (config.model, SpawnMessage
+  // relay) > env > engine account default. Model source stamping to
+  // ext.model_source lands in 15-4c.
   const envDefaultModel = process.env.KAOIRO_CODEX_DEFAULT_MODEL;
 
   // Source vocabulary for ext.model_source / ext.effort_source (ADR-0032

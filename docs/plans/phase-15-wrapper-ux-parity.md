@@ -4,7 +4,7 @@ description: Resolve the UX asymmetry between Claude / Codex exposed by operatio
 status: done
 phase: 15
 depends_on: [phase-14-codex-adapter]
-last_updated: 2026-07-12
+last_updated: 2026-09-17
 ---
 
 # Phase 15 — Wrapper UX Parity (Symmetric Claude Code and Codex Usability)
@@ -56,7 +56,7 @@ operational verification on 2026-07-11:
 
 ## Acceptance Criteria
 
-- [ ] D1: Both CLIs read engine-specific env vars (`KAOIRO_CLAUDE_CODE_DEFAULT_MODEL` / `KAOIRO_CODEX_DEFAULT_MODEL`) and explicitly implement the resolution priority `launch > env > config > default` internally. The old `KAOIRO_WRAPPER_DEFAULT_MODEL` receives a deprecation warning on the Claude CLI only for one release window; the Codex CLI ignores it (ADR-0032 F4bc addendum)
+- [ ] D1: Both CLIs read engine-specific env vars (`KAOIRO_CLAUDE_CODE_DEFAULT_MODEL` / `KAOIRO_CODEX_DEFAULT_MODEL`) and explicitly implement the resolution priority `launch > env > config > default` internally. The old `KAOIRO_WRAPPER_DEFAULT_MODEL` received a deprecation warning on the Claude CLI for one release window, then was removed ([issue #100](https://github.com/sakuraiyuta/kaoiro/issues/100)); the Codex CLI ignored it from the start (ADR-0032 F4bc addendum)
 - [ ] D1: Stamp `ext.model_source: "launch" | "env" | "config" | "default"` in the envelope. Implement both engines. Replace the AgentDetail “account default” label check from an engine-name branch to `model_source === "default"` (remove the Codex special case)
 - [ ] D2: AgentDetail's Claude switcher displays the selected effective values (write sandbox / approval) alongside its labels. The Codex side permanently displays an “approval: never (host-fixed, upstream constraint)” badge (ADR-0033 F4 addendum)
 - [ ] D2: Add a permission_mode selector to LaunchDialog when engine=claude-code is selected (six values, with a dual-axis tooltip). Relay SpawnMessage.permission_mode from server to wrapper and apply it to the startup mode
@@ -113,7 +113,7 @@ Priority legend: **initial** = now (D1/D2/D3/D7/D8), **next** = next scope
 ## Followups (next scope / future work)
 
 - **Verify `ask_user_question` unavailability on Free/Go plans (D5)**: It currently advertises `supports_user_input_dialog: true` unconditionally. Verify actual behavior in Free / Go authenticated environments; support advertising constraints as `user_input_modes` in the future. The session_capabilities axis itself (ADR-0034 F1/F2) is complete in this phase, so only adapter implementation is needed.
-- **Sunset the old env `KAOIRO_WRAPPER_DEFAULT_MODEL`**: Implement a one-release-window deprecation warning in this phase and **remove it in the next release window**. Track issue [#100](https://github.com/sakuraiyuta/kaoiro/issues/100) (chore / priority-low / deferred; start condition is the release after the D1 release). Leave a short TODO comment in 15-2 (Claude CLI deprecation-read path) and cross-link #100.
+- **Sunset the old env `KAOIRO_WRAPPER_DEFAULT_MODEL`**: done. This phase implemented a one-release-window deprecation warning; [issue #100](https://github.com/sakuraiyuta/kaoiro/issues/100) removed the old env read, the warning, and its remaining mentions on 2026-09-17.
 - **Machine detection of engine-name checks (lint)**: The F3 principle of [ADR-0034](../adr/0034-session-capabilities-advertisement.md), “the UI does not determine feature availability by engine name,” is currently enforced by this phase's review prohibition + the existing `/my-code-review-cycle`. **Keep it outside phase-15 scope**; reconsider machine detection (custom lint rule / ripgrep hook, etc.) as a chore issue if a violation slips through review.
 - **[codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md)**: Codex interactive approval awaits upstream stabilization of `exec_permission_approvals`. Keep the startup-fixed dual axes (ADR-0033 F3) for this phase.
 - **[codex-cwd-extraction](../open-questions/codex-cwd-extraction.md)**: Outside this phase's scope; retain the existing decision.

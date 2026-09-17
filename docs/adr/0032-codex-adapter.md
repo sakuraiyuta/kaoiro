@@ -198,10 +198,12 @@ and env separation explicit. Implement it in [phase-15-wrapper-ux-parity](../pla
   - `KAOIRO_CLAUDE_CODE_DEFAULT_MODEL` — read only by the Claude CLI
   - `KAOIRO_CODEX_DEFAULT_MODEL` — read only by the Codex CLI
   - Deprecate the old `KAOIRO_WRAPPER_DEFAULT_MODEL` for one release window
-    (Claude CLI reads it and warns to stderr; Codex CLI completely ignores it) →
-    remove it in the next release (same pattern as the personas legacy window in
+    (Claude CLI reads it and warns to stderr; Codex CLI completely ignores it),
+    then remove it (same pattern as the personas legacy window in
     [ADR-0031](0031-runner-persona-trust-mode.md) / [ADR-0032](0032-codex-adapter.md)
     F4a's `claude` legacy value). Rewrite dev.sh to use engine-specific env values too.
+    **Removed 2026-09-17** ([issue #100](https://github.com/sakuraiyuta/kaoiro/issues/100)):
+    neither CLI reads or warns about the old env anymore.
   - Rationale: the single shared env caused `KAOIRO_WRAPPER_DEFAULT_MODEL=claude-opus-4-7`
     in `scripts/dev.sh` to flow into Codex spawns, causing a 400/404 on the
     ChatGPT-plan authentication path ([codex-model-catalog](../specs/codex-model-catalog.md)

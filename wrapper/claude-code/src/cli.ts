@@ -172,20 +172,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   );
 
   // Engine-split default-model env (ADR-0032 F4bc addendum, phase-15 D1).
-  // TODO(#103): drop the legacy KAOIRO_WRAPPER_DEFAULT_MODEL read and its
-  // deprecation warn one release after the engine-split env ships.
-  const envDefaultModel =
-    process.env.KAOIRO_CLAUDE_CODE_DEFAULT_MODEL ??
-    process.env.KAOIRO_WRAPPER_DEFAULT_MODEL;
-  if (
-    process.env.KAOIRO_CLAUDE_CODE_DEFAULT_MODEL === undefined &&
-    process.env.KAOIRO_WRAPPER_DEFAULT_MODEL !== undefined
-  ) {
-    writeRedactedStderr(
-      "deprecation warn: KAOIRO_WRAPPER_DEFAULT_MODEL is deprecated; " +
-        "use KAOIRO_CLAUDE_CODE_DEFAULT_MODEL instead (removal: #103)\n",
-    );
-  }
+  const envDefaultModel = process.env.KAOIRO_CLAUDE_CODE_DEFAULT_MODEL;
 
   // Source vocabulary for ext.model_source (ADR-0032 F4bc addendum,
   // phase-15 15-4 + phase-23 P1 pair-aware apply). Priority, effort catalog
@@ -953,11 +940,9 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       cwd: process.cwd(),
       // Startup model precedence (ADR-0032 F4bc addendum, phase-15 15-2):
       // launch (config.model, SpawnMessage relay) > env > config > SDK
-      // default. The engine-split env KAOIRO_CLAUDE_CODE_DEFAULT_MODEL is
-      // primary; legacy KAOIRO_WRAPPER_DEFAULT_MODEL still resolves for
-      // one release window with a deprecation warn (tracked in issue
-      // #103, removed next release). Dashboard controls can still override
-      // model / effort at runtime.
+      // default, via the engine-split env KAOIRO_CLAUDE_CODE_DEFAULT_MODEL
+      // (the legacy shared env was removed in issue #100). Dashboard
+      // controls can still override model / effort at runtime.
       ...(config.model !== undefined
         ? { model: config.model }
         : envDefaultModel !== undefined
