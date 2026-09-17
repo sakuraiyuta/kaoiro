@@ -1022,13 +1022,14 @@ describe("permissionControlFrom per-status field table (ふじ round 1 M2)", () 
     expect(parsed?.rolled_back_to?.sandbox).toBe("read-only");
   });
 
-  it.each(["session_id", "turn_id", "permission", "network_access"])(
+  it.each(["session_id", "permission", "network_access"])(
     "rejects an observation missing the engine identity %s",
     (key) => {
       // Each identity is checked on its own. Dropping one at a time is
-      // what separates the guards — an observation stripped of all four
+      // what separates the guards — an observation stripped of all three
       // is rejected by whichever check happens to run first, so it
-      // measures none of them.
+      // measures none of them. turn_id is NOT in this list: it is optional
+      // (issue #359 M1, advisory antigravity omits it), covered separately.
       const pc = structuredClone(observedControl(9)) as Record<
         string,
         Record<string, unknown>
@@ -1037,6 +1038,20 @@ describe("permissionControlFrom per-status field table (ふじ round 1 M2)", () 
       expect(permissionControlFrom(envelope(ext(pc)))).toBeNull();
     },
   );
+
+  it("accepts an observation omitting turn_id (advisory antigravity, issue #359 M1)", () => {
+    // turn_id is optional: Antigravity has no per-turn engine identity, so an
+    // applied observation legitimately omits it (a present-but-empty turn_id
+    // is still rejected — covered by the unit parser tests).
+    const pc = structuredClone(observedControl(9)) as Record<
+      string,
+      Record<string, unknown>
+    >;
+    delete pc.effective.turn_id;
+    const parsed = permissionControlFrom(envelope(ext(pc)));
+    expect(parsed).not.toBeNull();
+    expect(parsed?.status).toBe("applied");
+  });
 
   it.each([
     ["requested", () => control({ requested: { sandbox: "banana", network_access: false } })],
