@@ -27,7 +27,7 @@ defmodule KaoiroServer.PermissionSettings.State do
 
   @max_safe_integer 9_007_199_254_740_991
   @sandbox_values ~w(read-only workspace-write danger-full-access)
-  @approval_values ~w(untrusted on-request on-failure never)
+  @approval_values ~w(untrusted on-request local on-failure never)
   @enforcement_values ~w(os mode advisory)
   @ledger_safety_cap 32
 

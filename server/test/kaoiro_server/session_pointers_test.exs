@@ -354,7 +354,7 @@ defmodule KaoiroServer.SessionPointersTest do
           "permission_mode" => "bypassPermissions",
           "sandbox" => "danger-full-access",
           "network_access" => true,
-          "approval" => "never"
+          "approval" => "local"
         },
         server
       )
@@ -368,7 +368,7 @@ defmodule KaoiroServer.SessionPointersTest do
                  "permission_mode" => "bypassPermissions",
                  "sandbox" => "danger-full-access",
                  "network_access" => true,
-                 "approval" => "never"
+                 "approval" => "local"
                }
              } = SessionPointers.get("a.sanitize.full", server)
     end

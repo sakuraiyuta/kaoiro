@@ -517,10 +517,11 @@ export function parseConfig(raw: unknown): WrapperConfig {
     if (
       raw.approval !== "untrusted" &&
       raw.approval !== "on-request" &&
+      raw.approval !== "local" &&
       raw.approval !== "never"
     ) {
       throw new ConfigError(
-        "approval must be one of: untrusted, on-request, never",
+        "approval must be one of: untrusted, on-request, local, never",
       );
     }
     config.approval = raw.approval;

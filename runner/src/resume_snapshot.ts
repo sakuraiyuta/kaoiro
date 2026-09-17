@@ -57,11 +57,11 @@ const MODEL_SOURCE_VALUES: readonly string[] = [
 
 /** Antigravity-only approval axis (ADR-0057 F4c). A subset of
  *  `PermissionAxesExt["approval"]` — `on-failure` is deliberately
- *  excluded: this engine rejects it at spawn (Stage A offers only these
- *  three values). */
+ *  excluded: this engine rejects it at spawn. */
 const APPROVAL_VALUES: readonly string[] = [
   "untrusted",
   "on-request",
+  "local",
   "never",
 ];
 

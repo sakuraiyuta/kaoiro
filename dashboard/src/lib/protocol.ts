@@ -218,6 +218,7 @@ const PERMISSION_SANDBOX_VALUES: ReadonlySet<string> = new Set([
 const PERMISSION_APPROVAL_VALUES: ReadonlySet<string> = new Set([
   "untrusted",
   "on-request",
+  "local",
   "on-failure",
   "never",
 ]);
@@ -2259,7 +2260,7 @@ export interface SpawnRequest {
   /** Antigravity-only launch approval axis (ADR-0057 F4c). "on-failure" is
    *  deliberately excluded: this engine rejects it at spawn. Omitted =
    *  "on-request". */
-  approval?: "untrusted" | "on-request" | "never";
+  approval?: "untrusted" | "on-request" | "local" | "never";
 }
 
 /** Outcome of a spawn, forwarded from the runner (operator-only). */

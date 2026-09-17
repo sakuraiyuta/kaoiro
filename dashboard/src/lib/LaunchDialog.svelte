@@ -100,7 +100,9 @@
   let networkAccess = $state(false);
   // Antigravity-only launch approval axis (ADR-0057 F4c). Codex has no
   // selectable approval (upstream-fixed to "never"); Claude ignores it.
-  let approval = $state<"untrusted" | "on-request" | "never">("on-request");
+  let approval = $state<"untrusted" | "on-request" | "local" | "never">(
+    "on-request",
+  );
   // Claude-only launch permission mode (phase-15 15-12, ADR-0033 F4 追補).
   // Priority "explicit spawn > persisted store" is enforced server-side:
   // when the operator picks something other than "" the server relays it
@@ -277,6 +279,11 @@
     engineCatalogEntry?.launch_permission_axes?.approval ??
       engine === "antigravity",
   );
+  $effect(() => {
+    if (engine !== "antigravity" && approval === "local") {
+      approval = "on-request";
+    }
+  });
   // Claude-only: the permission_mode picker only makes sense for engine=
   // claude-code (Codex ignores the field). Kept as a derived so the select
   // vanishes automatically when the operator swaps engines mid-dialog.
@@ -709,12 +716,17 @@
             <select bind:value={approval}>
               <option value="untrusted">untrusted — 常に確認</option>
               <option value="on-request">on-request — 必要な時だけ確認</option>
+              {#if engine === "antigravity"}
+                <option value="local">local — 読取と限定ローカル git は自動</option>
+              {/if}
               <option value="never">never — 確認しない</option>
             </select>
           </label>
           <p class="note">
             sandbox 軸はこのエンジンでは advisory (wrapper が引数を検査する
             だけで OS 強制ではありません)。
+            local も command shape の保守的な分類であり、hook や repo config
+            の動作までは保証しません。
           </p>
         {:else}
           <p class="note">

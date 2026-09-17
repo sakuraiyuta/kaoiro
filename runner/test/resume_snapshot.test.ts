@@ -25,7 +25,7 @@ describe("validateResolvedSnapshot (藤 D2 read-side sanitize)", () => {
       permission_mode: "bypassPermissions",
       sandbox: "danger-full-access",
       network_access: true,
-      approval: "never",
+      approval: "local",
     });
     expect(result).toEqual({
       model: "gpt-5",
@@ -35,7 +35,7 @@ describe("validateResolvedSnapshot (藤 D2 read-side sanitize)", () => {
       permission_mode: "bypassPermissions",
       sandbox: "danger-full-access",
       network_access: true,
-      approval: "never",
+      approval: "local",
     });
   });
 
@@ -257,13 +257,13 @@ describe("applyResumeSnapshot (藤 D1/D2 engine-aware apply)", () => {
         {
           sandbox: "danger-full-access",
           network_access: true,
-          approval: "never",
+          approval: "local",
         },
         "antigravity",
       );
       expect(next.sandbox).toBe("danger-full-access");
       expect(next.networkAccess).toBe(true);
-      expect(next.approval).toBe("never");
+      expect(next.approval).toBe("local");
     });
 
     test("snapshot.approval absent → safe default on-request に降格", () => {

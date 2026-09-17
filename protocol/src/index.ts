@@ -339,8 +339,9 @@ export interface PermissionAxesExt {
   sandbox: "read-only" | "workspace-write" | "danger-full-access";
   /** `on-failure` is a deprecated upstream alias of `on-request`; kaoiro
    *  wrappers never emit it but the enum keeps wire compatibility with
-   *  the Codex SDK vocabulary. */
-  approval: "untrusted" | "on-request" | "on-failure" | "never";
+   *  the Codex SDK vocabulary. `local` is Antigravity's advisory allowlist
+   *  between `on-request` and `never`. */
+  approval: "untrusted" | "on-request" | "local" | "on-failure" | "never";
   /** Adapter enforcement mechanism (ADR-0057 F4/F4c). While the current
    *  policy is unobserved, permission_control.constraints carries it without
    *  inventing a sandbox observation. Absence does not authorize a selector:
@@ -593,7 +594,7 @@ export interface EngineCatalogEntry {
     /** sandbox (read-only/workspace-write/danger-full-access) picker, plus
      *  the workspace-write network_access toggle. */
     sandbox: boolean;
-    /** approval (untrusted/on-request/never) picker. */
+    /** approval (untrusted/on-request/local/never) picker. */
     approval: boolean;
   };
 }
@@ -790,7 +791,8 @@ export interface ResolvedSnapshotExt {
   /** Antigravity-only approval axis (ADR-0057 F4c). Stage A fixes both
    *  sandbox and approval at spawn (mid-session change is Stage B0), so
    *  the resume snapshot must carry approval too, not sandbox alone.
-   *  Claude / Codex ignore this field. "on-failure" is a stale/invalid
+   *  Claude / Codex ignore this field. "local" enables Antigravity's
+   *  restricted local-command allowlist. "on-failure" is a stale/invalid
    *  value the runner falls back from (see resume_snapshot.ts). */
   approval?: PermissionAxesExt["approval"];
 }
@@ -1278,7 +1280,7 @@ export interface SpawnMessage {
   network_access?: boolean;
   /** Antigravity-only launch approval axis (ADR-0057 F4c). Stage A fixes
    *  both sandbox and approval at spawn; mid-session change is Stage B0.
-   *  Codex and Claude ignore this field. LaunchDialog offers three values
+   *  Codex and Claude ignore this field. LaunchDialog offers four values
    *  for this engine; the server rejects "on-failure" even though the
    *  type admits it (wire compatibility with the shared
    *  `PermissionAxesExt["approval"]` enum). Omitted = "on-request". */

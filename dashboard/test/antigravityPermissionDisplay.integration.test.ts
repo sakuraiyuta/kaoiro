@@ -87,7 +87,7 @@ describe("AgentDetail permission panel — antigravity (phase-34 A12, ADR-0057 F
     const target = await render({
       engine: "antigravity",
       effective: { network_access: true },
-      permission: { sandbox: "workspace-write", approval: "on-request" },
+      permission: { sandbox: "workspace-write", approval: "local" },
     });
     const dd = rowByLabel(target, "network_access");
     expect(dd).not.toBeNull();

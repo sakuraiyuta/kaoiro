@@ -143,7 +143,7 @@ describe("LaunchDialog antigravity sandbox/approval/network_access (phase-34 A12
     const { target, conn } = await render();
     await selectValue(labelledSelect(target, "エンジン"), "antigravity");
     await selectValue(labelledSelect(target, "sandbox"), "read-only");
-    await selectValue(labelledSelect(target, "承認"), "never");
+    await selectValue(labelledSelect(target, "承認"), "local");
 
     await submit(target);
 
@@ -151,10 +151,25 @@ describe("LaunchDialog antigravity sandbox/approval/network_access (phase-34 A12
       expect.objectContaining({
         engine: "antigravity",
         sandbox: "read-only",
-        approval: "never",
+        approval: "local",
       }),
     );
   });
+
+  it.each(["codex", "claude-code"])(
+    "does not send Antigravity local approval after switching to %s",
+    async (engine) => {
+      const { target, conn } = await render();
+      await selectValue(labelledSelect(target, "エンジン"), "antigravity");
+      await selectValue(labelledSelect(target, "承認"), "local");
+      await selectValue(labelledSelect(target, "エンジン"), engine);
+      await submit(target);
+
+      expect(conn.spawn).toHaveBeenCalledWith(
+        expect.not.objectContaining({ approval: "local" }),
+      );
+    },
+  );
 
   it("antigravity + workspace-write sandbox で network_access チェックが payload に載る", async () => {
     const { target, conn } = await render();
@@ -204,6 +219,8 @@ describe("LaunchDialog antigravity sandbox/approval/network_access (phase-34 A12
 
     expect(findLabel(target, "sandbox")).toBeDefined();
     expect(findLabel(target, "承認")).toBeDefined();
+    expect([...labelledSelect(target, "承認").options].map((option) => option.value))
+      .not.toContain("local");
   });
 
   it("宣言された engine で approval=false → 承認 select を出さない (値が false を上書きする)", async () => {

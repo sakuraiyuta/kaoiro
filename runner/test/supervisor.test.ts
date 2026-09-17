@@ -449,7 +449,7 @@ describe("parseSpawn / resolveWrapperConfig", () => {
   });
   // MF-6(d) end-to-end pin: wire (spawn payload) -> parseSpawn -> wrapper
   // config, for every valid approval value, plus the on-failure reject.
-  it.each(["untrusted", "on-request", "never"] as const)(
+  it.each(["untrusted", "on-request", "local", "never"] as const)(
     "approval=%s は wire から wrapper config まで一貫して通る (ADR-0057 F4c)",
     (value) => {
       const parsed = parseSpawn({ ...spawnMsg, approval: value })!;

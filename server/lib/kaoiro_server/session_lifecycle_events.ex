@@ -73,7 +73,7 @@ defmodule KaoiroServer.SessionLifecycleEvents do
   @max_audit_id_bytes 256
   @max_audit_reason_bytes 256
   @audit_sandbox_values ~w(read-only workspace-write danger-full-access)
-  @audit_approval_values ~w(untrusted on-request on-failure never)
+  @audit_approval_values ~w(untrusted on-request local on-failure never)
   @audit_enforcement_values ~w(os mode advisory)
   @max_safe_revision 9_007_199_254_740_991
 

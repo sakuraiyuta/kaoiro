@@ -19,7 +19,10 @@ function config(overrides: Partial<AntigravityLaunchConfig> = {}): AntigravityLa
   };
 }
 
-function makeGate(overrides: Partial<AntigravityLaunchConfig> = {}) {
+function makeGate(
+  overrides: Partial<AntigravityLaunchConfig> = {},
+  omitApproval = false,
+) {
   const root = mkdtempSync(join(tmpdir(), "agy-gate-test-"));
   const cwd = join(root, "workspace");
   const customizationDir = join(root, "custom");
@@ -28,14 +31,17 @@ function makeGate(overrides: Partial<AntigravityLaunchConfig> = {}) {
   const bridgePath = join(root, "bridge.js");
   writeFileSync(bridgePath, "");
   const warnings: string[] = [];
+  const configured = config(overrides);
+  const { approval: _approval, ...withoutApproval } = configured;
+  const launchConfig = omitApproval ? withoutApproval : configured;
   const gate = new AntigravityGate({
-    config: config(overrides),
+    config: launchConfig,
     cwd,
     customizationDir,
     nodePath: process.execPath,
     bridgePath,
     toolNames: () => new Set(["whoami"]),
-    broker: new PermissionBroker({ config: config(overrides), send: () => {} }),
+    broker: new PermissionBroker({ config: launchConfig, send: () => {} }),
     warn: (message) => warnings.push(message),
   });
   return { gate, root, cwd, customizationDir, bridgePath, warnings };
@@ -53,16 +59,19 @@ describe("AntigravityGate", () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  it("F4の9セルをread/write/shell/subagentとnetworkでtable-drivenにpinする", () => {
+  it("pins the F4 cells for read, write, shell, subagent, and network", () => {
     const expected: Record<string, Record<"read" | "write" | "shell" | "subagent", "allow" | "ask" | "deny">> = {
       "read-only/untrusted": { read: "allow", write: "deny", shell: "deny", subagent: "deny" },
       "read-only/on-request": { read: "allow", write: "deny", shell: "deny", subagent: "deny" },
+      "read-only/local": { read: "allow", write: "deny", shell: "deny", subagent: "deny" },
       "read-only/never": { read: "allow", write: "deny", shell: "deny", subagent: "deny" },
       "workspace-write/untrusted": { read: "allow", write: "ask", shell: "ask", subagent: "ask" },
       "workspace-write/on-request": { read: "allow", write: "allow", shell: "ask", subagent: "ask" },
+      "workspace-write/local": { read: "allow", write: "allow", shell: "allow", subagent: "ask" },
       "workspace-write/never": { read: "allow", write: "allow", shell: "allow", subagent: "allow" },
       "danger-full-access/untrusted": { read: "allow", write: "ask", shell: "ask", subagent: "ask" },
       "danger-full-access/on-request": { read: "allow", write: "allow", shell: "ask", subagent: "ask" },
+      "danger-full-access/local": { read: "allow", write: "allow", shell: "allow", subagent: "ask" },
       "danger-full-access/never": { read: "allow", write: "allow", shell: "allow", subagent: "allow" },
     };
     for (const [cell, decisions] of Object.entries(expected)) {
@@ -76,20 +85,147 @@ describe("AntigravityGate", () => {
       } finally { rmSync(root, { recursive: true, force: true }); }
     }
 
-    for (const networkAccess of [false, true]) {
-      const { gate, root } = makeGate({ sandbox: "workspace-write", approval: "on-request", network_access: networkAccess });
-      try {
-        expect(gate.evaluate({ name: "search_web", args: { query: "kaoiro" } }).decision, `network=${networkAccess}`).toBe(networkAccess ? "ask" : "deny");
-      } finally { rmSync(root, { recursive: true, force: true }); }
+    for (const approval of ["on-request", "local"] as const) {
+      for (const networkAccess of [false, true]) {
+        const { gate, root } = makeGate({ sandbox: "workspace-write", approval, network_access: networkAccess });
+        try {
+          expect(
+            gate.evaluate({ name: "search_web", args: { query: "kaoiro" } }).decision,
+            `${approval}:network=${networkAccess}`,
+          ).toBe(networkAccess ? "ask" : "deny");
+        } finally { rmSync(root, { recursive: true, force: true }); }
+      }
     }
 
-    for (const approval of ["untrusted", "on-request", "never"] as const) {
+    for (const approval of ["untrusted", "on-request", "local", "never"] as const) {
       const { gate, root } = makeGate({ approval, network_access: true });
       try {
         expect(gate.evaluate({ name: "ask_question", args: {} }).decision, `${approval}:internal`).toBe("deny");
         expect(gate.evaluate({ name: "future_vendor_tool", args: {} }).decision, `${approval}:unknown`).toBe(approval === "never" ? "deny" : "ask");
       } finally { rmSync(root, { recursive: true, force: true }); }
     }
+  });
+
+  it("defaults to on-request and does not silently enable local commands", () => {
+    const { gate, root, cwd } = makeGate({}, true);
+    try {
+      expect(gate.evaluate({
+        name: "run_command",
+        args: { CommandLine: "git status", Cwd: cwd },
+      })).toEqual({ decision: "ask" });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it.each([
+    "pwd",
+    "ls -la .",
+    "cat README.md",
+    "head -n 5 README.md",
+    "tail -n 5 README.md",
+    "wc -l README.md",
+    "stat README.md",
+    "file README.md",
+    "git status --short",
+    "git diff --stat",
+    "git log --oneline",
+    "git show HEAD",
+    "git rev-parse HEAD",
+    "git describe --always",
+    "git ls-files",
+    "git ls-tree HEAD",
+    "git cat-file -t HEAD",
+    "git branch --list feature",
+    "git tag --list v1",
+    "git worktree list --porcelain",
+    "git add README.md",
+    "git commit -F .gitmessage",
+    "git commit -c HEAD",
+    "git merge --squash feature",
+    "git merge --no-commit -s ort -X ours feature",
+    "git status && git diff",
+    "cat README.md | wc -l README.md",
+  ])("local approval allows a classified local command: %s", (command) => {
+    const { gate, root, cwd } = makeGate({ approval: "local" });
+    try {
+      writeFileSync(join(cwd, "README.md"), "hello\n");
+      writeFileSync(join(cwd, ".gitmessage"), "message\n");
+      expect(gate.evaluate({
+        name: "run_command",
+        args: { CommandLine: command, Cwd: cwd },
+      })).toEqual({ decision: "allow" });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it.each([
+    "git fetch origin",
+    "git push origin main",
+    "git pull",
+    "git clone https://example.invalid/repo",
+    "git ls-remote origin",
+    "git remote -v",
+    "git submodule update --init",
+    "git -C other status",
+    "git -c alias.x=!curl x",
+    "git --git-dir=.git status",
+    "git --work-tree=. status",
+    "git clean -fdx",
+    "git reset --hard",
+    "git restore .",
+    "git checkout -- .",
+    "git switch main",
+    "git rebase --exec id main",
+    "git config alias.x !curl",
+    "git future-command",
+    "git diff --ext-diff",
+    "git diff --output=/tmp/diff",
+    "git log --textconv",
+    "git add /tmp/outside",
+    "git commit --template /tmp/template",
+    "pnpm test",
+    "pnpm install",
+    "curl https://example.invalid",
+    "wget https://example.invalid",
+    "ssh example.invalid",
+    "scp a example.invalid:b",
+    "rm -rf build",
+    "chmod 777 README.md",
+    "sudo id",
+    "env FOO=bar git status",
+    "FOO=bar git status",
+    "echo $HOME",
+    "git status || git diff",
+    "git status; git diff",
+    "git status && git fetch",
+    "git status | curl example.invalid",
+    "$(git status)",
+    "(git status)",
+    "eval git status",
+  ])("local approval asks for an unclassified or elevated command: %s", (command) => {
+    const { gate, root, cwd } = makeGate({ approval: "local", network_access: true });
+    try {
+      expect(gate.evaluate({
+        name: "run_command",
+        args: { CommandLine: command, Cwd: cwd },
+      })).toEqual({ decision: "ask" });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("local approval rejects read paths that escape through a symlink", () => {
+    const { gate, root, cwd } = makeGate({ approval: "local" });
+    try {
+      const outside = join(root, "outside-read");
+      mkdirSync(outside);
+      writeFileSync(join(outside, "secret"), "secret\n");
+      symlinkSync(outside, join(cwd, "linked"));
+      expect(gate.evaluate({
+        name: "run_command",
+        args: { CommandLine: "cat linked/secret", Cwd: cwd },
+      })).toEqual({ decision: "ask" });
+      expect(gate.evaluate({
+        name: "run_command",
+        args: { CommandLine: `git commit --template ${join(cwd, "linked", "secret")}`, Cwd: cwd },
+      })).toEqual({ decision: "ask" });
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
   it("customization参照は常にdeny、Cwd外shellはaskにする", () => {

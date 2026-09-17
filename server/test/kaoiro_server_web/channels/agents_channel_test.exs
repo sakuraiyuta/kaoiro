@@ -4812,14 +4812,14 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "cwd" => "/home/user/proj",
           "engine" => "antigravity",
           "sandbox" => "workspace-write",
-          "approval" => "never"
+          "approval" => "local"
         })
 
       assert_reply ref, :ok, %{}
       assert_broadcast "spawn", payload
       assert payload["engine"] == "antigravity"
       assert payload["sandbox"] == "workspace-write"
-      assert payload["approval"] == "never"
+      assert payload["approval"] == "local"
     end
 
     test "operator の spawn: antigravity で on-failure など未知 approval は agent_id 割当前に error reply する (round 2 MF-R2-4)" do

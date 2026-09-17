@@ -13,7 +13,7 @@ import {
 import { effectiveNetworkAccess } from "./network_access.js";
 
 export type AntigravityLaunchConfig = WrapperConfig & {
-  approval?: "untrusted" | "on-request" | "on-failure" | "never";
+  approval?: "untrusted" | "on-request" | "local" | "on-failure" | "never";
 };
 
 export type AntigravityToolClass =
@@ -91,6 +91,20 @@ const WRITE_TARGET_KEYS: Readonly<Record<string, readonly string[]>> = {
   notebook_edit: ["TargetFile", "AbsolutePath"],
 };
 const MAX_BRIDGE_PAYLOAD_BYTES = 87 * 1024;
+const LOCAL_COMMAND_TOKEN = /^[A-Za-z0-9_./:@%+=,-]+$/;
+const REMOTE_GIT_SUBCOMMANDS = new Set([
+  "clone", "fetch", "ls-remote", "pull", "push", "remote", "submodule",
+]);
+const DESTRUCTIVE_OR_COMMAND_GIT_SUBCOMMANDS = new Set([
+  "checkout", "clean", "config", "filter-branch", "gc", "prune", "rebase",
+  "reflog", "replace", "reset", "restore", "switch", "update-ref",
+]);
+const LOCAL_GIT_SUBCOMMANDS = new Set([
+  "add", "branch", "cat-file", "commit", "describe", "diff", "log", "ls-files",
+  "ls-tree", "merge", "rev-parse", "show", "status", "tag", "worktree",
+  ...REMOTE_GIT_SUBCOMMANDS,
+  ...DESTRUCTIVE_OR_COMMAND_GIT_SUBCOMMANDS,
+]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -117,6 +131,148 @@ function canonical(path: string): string | null {
 function isInside(path: string, root: string): boolean {
   const rel = relative(root, path);
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+function localPathOperand(path: string, cwd: string): boolean {
+  if (path === "-") return false;
+  const resolved = canonical(isAbsolute(path) ? path : join(cwd, path));
+  return resolved !== null && isInside(resolved, cwd);
+}
+
+function splitLocalCommand(command: string): string[][] | null {
+  if (
+    command.trim() === "" ||
+    /[\0\r\n'"\\`$;<>()[\]{}*?!]/.test(command) ||
+    /\|\||(^|[^&])&([^&]|$)/.test(command)
+  ) {
+    return null;
+  }
+  const segments = command.split(/\s*(?:&&|\|)\s*/);
+  if (segments.some((segment) => segment === "")) return null;
+  const tokenized = segments.map((segment) => segment.trim().split(/\s+/));
+  return tokenized.every((tokens) => tokens.every((token) => LOCAL_COMMAND_TOKEN.test(token)))
+    ? tokenized
+    : null;
+}
+
+function readCommandAllowed(tokens: readonly string[], cwd: string): boolean {
+  const [command, ...args] = tokens;
+  if (command === "pwd") return args.length === 0;
+  const simpleFlags: Readonly<Record<string, RegExp>> = {
+    ls: /^(?:-[1AaCdFghilnqRrSstUuvX]+|--(?:all|almost-all|directory|human-readable|inode|numeric-uid-gid|recursive))$/,
+    cat: /^(?:-[AbEnsTtv]+|--(?:number|number-nonblank|show-all|show-ends|show-tabs|squeeze-blank))$/,
+    wc: /^(?:-[clmwL]+|--(?:bytes|chars|lines|max-line-length|words))$/,
+    stat: /^(?:-L|--dereference)$/,
+    file: /^(?:-[bL]+|--(?:brief|dereference))$/,
+  };
+  if (command === "head" || command === "tail") {
+    const paths: string[] = [];
+    for (let index = 0; index < args.length; index += 1) {
+      const arg = args[index]!;
+      if (arg === "-n" || arg === "-c" || arg === "--lines" || arg === "--bytes") {
+        const count = args[index + 1];
+        if (count === undefined || !/^\d+$/.test(count)) return false;
+        index += 1;
+      } else if (/^-(?:n|c)\d+$/.test(arg)) {
+        continue;
+      } else if (arg.startsWith("-")) {
+        return false;
+      } else {
+        paths.push(arg);
+      }
+    }
+    return paths.length > 0 && paths.every((path) => localPathOperand(path, cwd));
+  }
+  const flagPattern = command === undefined ? undefined : simpleFlags[command];
+  if (flagPattern === undefined) return false;
+  const paths: string[] = [];
+  let afterOptions = false;
+  for (const arg of args) {
+    if (!afterOptions && arg === "--") {
+      afterOptions = true;
+    } else if (!afterOptions && arg.startsWith("-")) {
+      if (!flagPattern.test(arg)) return false;
+    } else {
+      paths.push(arg);
+    }
+  }
+  if (command !== "ls" && paths.length === 0) return false;
+  return paths.every((path) => localPathOperand(path, cwd));
+}
+
+function commitPathOptionsStayLocal(args: readonly string[], cwd: string): boolean {
+  const separate = new Set(["-c", "-C", "-F", "--file", "--template", "--reuse-message", "--reedit-message"]);
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]!;
+    if (separate.has(arg)) {
+      const operand = args[index + 1];
+      if (operand === undefined || !localPathOperand(operand, cwd)) return false;
+      index += 1;
+      continue;
+    }
+    const attached = /^(?:-c|-C|-F|--file=|--template=|--reuse-message=|--reedit-message=)(.+)$/.exec(arg);
+    if (attached !== null && !localPathOperand(attached[1]!, cwd)) return false;
+  }
+  return true;
+}
+
+function addPathsStayLocal(args: readonly string[], cwd: string): boolean {
+  const flags = new Set([
+    "-A", "--all", "-u", "--update", "-p", "--patch", "-N", "--intent-to-add",
+    "-v", "--verbose", "-f", "--force", "--ignore-errors", "--ignore-missing",
+    "--renormalize", "--refresh",
+  ]);
+  let afterOptions = false;
+  const paths: string[] = [];
+  for (const arg of args) {
+    if (!afterOptions && arg === "--") {
+      afterOptions = true;
+    } else if (!afterOptions && arg.startsWith("-")) {
+      if (!flags.has(arg)) return false;
+    } else {
+      paths.push(arg);
+    }
+  }
+  return args.length > 0 &&
+    paths.every((path) => localPathOperand(path, cwd));
+}
+
+function gitCommandAllowed(tokens: readonly string[], cwd: string): boolean {
+  let index = 1;
+  if (tokens[index] === "--no-pager") index += 1;
+  const subcommand = tokens[index];
+  if (subcommand === undefined || subcommand.startsWith("-")) return false;
+  if (!LOCAL_GIT_SUBCOMMANDS.has(subcommand)) return false;
+  if (REMOTE_GIT_SUBCOMMANDS.has(subcommand)) return false;
+  if (DESTRUCTIVE_OR_COMMAND_GIT_SUBCOMMANDS.has(subcommand)) return false;
+  const args = tokens.slice(index + 1);
+  if (
+    (subcommand === "diff" || subcommand === "log" || subcommand === "show") &&
+    args.some((arg) =>
+      arg === "--ext-diff" ||
+      arg === "--textconv" ||
+      arg === "--output" ||
+      arg.startsWith("--output=")
+    )
+  ) {
+    return false;
+  }
+  if (subcommand === "worktree") {
+    return args[0] === "list" && args.slice(1).every((arg) => ["--porcelain", "-z", "-v"].includes(arg));
+  }
+  if (subcommand === "branch" || subcommand === "tag") {
+    return args.length === 0 || args[0] === "--list" || args[0] === "-l";
+  }
+  if (subcommand === "add") return addPathsStayLocal(args, cwd);
+  if (subcommand === "commit") return commitPathOptionsStayLocal(args, cwd);
+  return true;
+}
+
+function localCommandAllowed(command: string, cwd: string): boolean {
+  const segments = splitLocalCommand(command);
+  return segments !== null && segments.every((tokens) =>
+    tokens[0] === "git" ? gitCommandAllowed(tokens, cwd) : readCommandAllowed(tokens, cwd)
+  );
 }
 
 function referencesDirectory(args: Record<string, unknown>, directory: string): boolean {
@@ -277,6 +433,14 @@ export class AntigravityGate {
     }
     if (this.#sandbox === "read-only") {
       return { decision: "deny", reason: "kaoiro: read-only sandbox" };
+    }
+    if (
+      this.#approval === "local" &&
+      toolCall.name === "run_command" &&
+      typeof toolCall.args.CommandLine === "string" &&
+      localCommandAllowed(toolCall.args.CommandLine, this.#cwd)
+    ) {
+      return { decision: "allow" };
     }
     return this.#approval === "never" ? { decision: "allow" } : { decision: "ask" };
   }

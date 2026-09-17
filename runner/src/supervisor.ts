@@ -337,11 +337,12 @@ export function parseSpawn(payload: unknown): ParsedSpawn | null {
   }
   // Antigravity-only launch approval axis (ADR-0057 F4c). "on-failure" is
   // deliberately excluded from the whitelist — this engine rejects it at
-  // spawn (Stage A offers only these three values in LaunchDialog).
+  // spawn.
   if (payload.approval !== undefined) {
     if (
       payload.approval !== "untrusted" &&
       payload.approval !== "on-request" &&
+      payload.approval !== "local" &&
       payload.approval !== "never"
     ) {
       return null;

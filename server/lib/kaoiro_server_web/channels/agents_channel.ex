@@ -2339,9 +2339,8 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
   # Antigravity-only launch approval axis (ADR-0057 F4c). Same closed-enum
   # gate shape as maybe_put_sandbox; deliberately excludes "on-failure" —
-  # this engine rejects it at spawn (Stage A offers only these three
-  # values in LaunchDialog).
-  @approval_values ["untrusted", "on-request", "never"]
+  # this engine rejects it at spawn.
+  @approval_values ["untrusted", "on-request", "local", "never"]
   defp maybe_put_approval(map, value) when value in @approval_values,
     do: Map.put(map, "approval", value)
 

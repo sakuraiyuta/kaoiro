@@ -433,7 +433,7 @@ defmodule KaoiroServer.SessionPointers do
   @snapshot_model_source_values ~w(launch env config default)
   # Antigravity-only approval axis (ADR-0057 F4c). "on-failure" is
   # deliberately excluded: this engine rejects it at spawn.
-  @snapshot_approval_values ~w(untrusted on-request never)
+  @snapshot_approval_values ~w(untrusted on-request local never)
 
   # `record_snapshot/3` moduledoc: field-level merge with one replace-pair
   # exception. Building the merge base from `existing` first and layering

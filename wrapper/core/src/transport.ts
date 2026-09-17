@@ -530,6 +530,7 @@ const PERMISSION_SANDBOXES = new Set<PermissionConfiguration["sandbox"]>([
 const PERMISSION_APPROVALS = new Set<PermissionAxesExt["approval"]>([
   "untrusted",
   "on-request",
+  "local",
   "on-failure",
   "never",
 ]);
