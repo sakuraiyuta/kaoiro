@@ -655,6 +655,42 @@ describe("ServerLink — permission synchronization", () => {
     ]);
   });
 
+  it("relays the mutable approval axis on a set_permission (issue #359)", () => {
+    const selections: unknown[] = [];
+    new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      onSetPermission: (selection) => selections.push(selection),
+    });
+
+    // valid approval rides through into requested.
+    emit("set_permission", {
+      version: "0",
+      revision: 4,
+      sandbox: "workspace-write",
+      network_access: false,
+      approval: "local",
+    });
+    // a malformed approval rejects the whole selection fail-closed (not relayed).
+    emit("set_permission", {
+      version: "0",
+      revision: 5,
+      sandbox: "workspace-write",
+      network_access: false,
+      approval: "bogus",
+    });
+
+    expect(selections).toEqual([
+      {
+        revision: 4,
+        requested: {
+          sandbox: "workspace-write",
+          network_access: false,
+          approval: "local",
+        },
+      },
+    ]);
+  });
+
   it("permission outcome を versioned session_lifecycle audit として送る", () => {
     const link = new ServerLink("ws://x/wrapper", "a.agent", { personaId: "ao" });
     link.reportPermissionLifecycle({

@@ -43,6 +43,7 @@ import {
   extraModelsRuntimeUpdate,
 } from "./extra-models-options.js";
 import { makeLauncher } from "./spawn.js";
+import type { AntigravityMaxConfig } from "./permission_ceiling.js";
 import { Supervisor, type SupervisorOptions } from "./supervisor.js";
 import { RunnerLink, type RunnerLinkOptions } from "./transport.js";
 
@@ -78,6 +79,30 @@ function isAntigravityEnabled(config: RunnerConfig): boolean {
   // Absent = bundled default (config.ts BUNDLED_ENGINES includes
   // antigravity), so antigravity ON.
   return config.capabilities?.includes("antigravity") ?? true;
+}
+
+/** Host-local antigravity permission-switch ceilings for the supervisor
+ *  (ADR-0057 F4c Stage B0, issue #359). Returns undefined when no axis is
+ *  declared so the supervisor falls back to the launch-derived defaults. */
+function antigravityMaxFrom(
+  config: RunnerConfig,
+): AntigravityMaxConfig | undefined {
+  const a = config.antigravity;
+  if (
+    a === undefined ||
+    (a.max_sandbox === undefined &&
+      a.max_approval === undefined &&
+      a.max_network_access === undefined)
+  ) {
+    return undefined;
+  }
+  return {
+    ...(a.max_sandbox === undefined ? {} : { max_sandbox: a.max_sandbox }),
+    ...(a.max_approval === undefined ? {} : { max_approval: a.max_approval }),
+    ...(a.max_network_access === undefined
+      ? {}
+      : { max_network_access: a.max_network_access }),
+  };
 }
 
 type RunnerLinkLike = Pick<
@@ -186,6 +211,7 @@ export async function runRunnerCli(
     ...extraModelsOptions(config),
     antigravityExecutable,
     antigravityProbeTimeoutMs,
+    antigravityMax: antigravityMaxFrom(config),
     ...(config.context_work_budget_percent === undefined
       ? {}
       : { contextWorkBudgetPercent: config.context_work_budget_percent }),
@@ -294,6 +320,7 @@ export async function runRunnerCli(
       ...extraModelsRuntimeUpdate(next),
       antigravityExecutable,
       antigravityProbeTimeoutMs,
+      antigravityMax: antigravityMaxFrom(next),
       contextWorkBudgetPercent: next.context_work_budget_percent,
       // Preserve the live probe getter across reloads (ADR-0039 F9 追補).
       getClaudeEngineCatalog: () => claudeCatalog.getStale(),

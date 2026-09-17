@@ -293,6 +293,22 @@ export interface WrapperConfig {
    *  with the shared `PermissionAxesExt["approval"]` enum). Omitted =
    *  "on-request". */
   approval?: PermissionAxesExt["approval"];
+  /** Per-axis runtime permission-switch ceiling (ADR-0057 F4c Stage B0,
+   *  issue #359). Runner-resolved and relayed to the antigravity wrapper,
+   *  which advertises them verbatim as
+   *  `session_capabilities.permission_switch_axes` (source of truth) and
+   *  re-checks fail-closed as the final gate before applying a
+   *  server-originated `set_permission`. The runner resolves each ceiling
+   *  from the operator's `antigravity.max_*` config and the launch value:
+   *  an explicit ceiling narrower (less permissive) than the launch value
+   *  is a contradiction and rejected at spawn; when the operator declares
+   *  none, the default ceiling is `permissive_max(launch, "local")` for
+   *  approval and the launch value itself for sandbox / network_access
+   *  (no widening by default). Codex and Claude ignore these; absent on a
+   *  legacy runner or non-antigravity engine (no advertised clamp). */
+  max_sandbox?: PermissionAxesExt["sandbox"];
+  max_network_access?: boolean;
+  max_approval?: PermissionAxesExt["approval"];
   /** Resume snapshot relayed by the runner on a resume launch only
    *  (ADR-0014 F1 追補, phase-15 D8). Absent on fresh spawn. When present,
    *  the wrapper stamps it as ext.resume_snapshot and computes ext.resume_drift
@@ -1428,11 +1444,15 @@ export interface SwitchSessionMessage {
 /** Why a spawn failed (protocol.md). already_running = a live wrapper already
  *  owns the agent_id; cwd_not_found = the cwd is not in the host's allow-list;
  *  session_not_found = a resume/switch_session target failed the T3 existence
- *  check under the bound cwd; error = any other failure. */
+ *  check under the bound cwd; permission_ceiling_conflict = an antigravity
+ *  spawn declared an `antigravity.max_*` ceiling narrower than its own launch
+ *  value (ADR-0057 F4c Stage B0, issue #359), rejected fail-closed; error =
+ *  any other failure. */
 export type SpawnFailReason =
   | "already_running"
   | "cwd_not_found"
   | "session_not_found"
+  | "permission_ceiling_conflict"
   | "error";
 
 /** runner -> server: the outcome of a spawn; reason is set only on failure. */

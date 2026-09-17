@@ -268,7 +268,7 @@ export async function runAntigravityCli(
         writeRedactedStderr(`antigravity: ${String(error)}\n`);
       });
     },
-    onSetPermissionMode: () => writeRedactedStderr("antigravity: permission axes are fixed at spawn in Stage A\n"),
+    onSetPermissionMode: () => writeRedactedStderr("antigravity: permission-mode switching is unsupported; use set_permission (ADR-0057 F4c)\n"),
     onRenameDisplayName: (displayName, revision) => host?.renameDisplayName(displayName, revision),
     onInterAgentMessage: (envelope) =>
       handleAntigravityInterAgentMessage(
@@ -307,6 +307,7 @@ export async function runAntigravityCli(
           `session=${sessionId} path=${antigravityTranscriptPath(sessionId)}\n`,
       );
     },
+    onPermissionLifecycle: (event) => link?.reportPermissionLifecycle(event),
     onTurnBoundary: ({ turnToken }) => {
       turnWatchdog.end(turnToken);
     },

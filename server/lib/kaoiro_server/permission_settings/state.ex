@@ -608,9 +608,25 @@ defmodule KaoiroServer.PermissionSettings.State do
   defp sanitize_string(value) when is_binary(value), do: value
   defp sanitize_string(_other), do: nil
 
-  defp sanitize_rolled_back_to(%{"sandbox" => sandbox, "network_access" => network_access})
+  # issue #359: rolled_back_to is a PermissionConfiguration, so it carries the
+  # mutable approval axis on the same terms as requested (sanitize_requested
+  # above): absent keeps the legacy sandbox/network pair; a present-but-invalid
+  # approval drops the whole rolled_back_to (nil) rather than reporting a
+  # 2-axis half-truth of which cell a failed switch reverted to.
+  defp sanitize_rolled_back_to(
+         %{"sandbox" => sandbox, "network_access" => network_access} = rolled_back
+       )
        when sandbox in @sandbox_values and is_boolean(network_access) do
-    %{sandbox: sandbox, network_access: network_access}
+    case Map.fetch(rolled_back, "approval") do
+      :error ->
+        %{sandbox: sandbox, network_access: network_access}
+
+      {:ok, approval} when approval in @approval_values ->
+        %{sandbox: sandbox, network_access: network_access, approval: approval}
+
+      {:ok, _invalid} ->
+        nil
+    end
   end
 
   defp sanitize_rolled_back_to(_other), do: nil

@@ -483,6 +483,48 @@ describe("parseRunnerConfig", () => {
     });
   });
 
+  // ADR-0057 F4c Stage B0 (issue #359): host-local permission-switch ceilings.
+  describe("antigravity.max_* permission ceilings (issue #359)", () => {
+    it("accepts valid ceiling axes", () => {
+      expect(
+        parseRunnerConfig({
+          ...valid,
+          antigravity: {
+            max_sandbox: "danger-full-access",
+            max_approval: "never",
+            max_network_access: true,
+          },
+        }).antigravity,
+      ).toEqual({
+        max_sandbox: "danger-full-access",
+        max_approval: "never",
+        max_network_access: true,
+      });
+    });
+
+    it("rejects an unknown max_sandbox value", () => {
+      expect(() =>
+        parseRunnerConfig({ ...valid, antigravity: { max_sandbox: "root" } }),
+      ).toThrowError(
+        "antigravity.max_sandbox must be one of: read-only, workspace-write, danger-full-access",
+      );
+    });
+
+    it("rejects on-failure as a max_approval value", () => {
+      expect(() =>
+        parseRunnerConfig({ ...valid, antigravity: { max_approval: "on-failure" } }),
+      ).toThrowError(
+        "antigravity.max_approval must be one of: untrusted, on-request, local, never",
+      );
+    });
+
+    it("rejects a non-boolean max_network_access", () => {
+      expect(() =>
+        parseRunnerConfig({ ...valid, antigravity: { max_network_access: "yes" } }),
+      ).toThrowError("antigravity.max_network_access must be a boolean");
+    });
+  });
+
   describe("antigravity CLI configuration", () => {
     it("accepts an absolute executable path and bounded probe timeout", () => {
       expect(parseRunnerConfig({

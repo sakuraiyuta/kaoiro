@@ -122,6 +122,16 @@ export interface AntigravityConfig {
    *  relayed to the wrapper as `WrapperConfig.antigravity_extra_models` for
    *  the same merge on the host side (ext.models / setModel validation). */
   extra_models?: EngineModelInfo[];
+  /** Host-local runtime permission-switch ceilings (ADR-0057 F4c Stage B0,
+   *  issue #359). Each optional axis caps how far a server-originated
+   *  `set_permission` may widen this agent's cell beyond its launch value.
+   *  Absent axes default to the launch value (sandbox / network_access) or
+   *  `permissive_max(launch, "local")` (approval). A ceiling narrower than
+   *  the launch value is a contradiction and rejected at spawn. Relayed to
+   *  the wrapper as `WrapperConfig.max_*`. */
+  max_sandbox?: "read-only" | "workspace-write" | "danger-full-access";
+  max_approval?: "untrusted" | "on-request" | "local" | "never";
+  max_network_access?: boolean;
 }
 
 const CHATGPT_PLANS = new Set<ChatGptPlan>([
@@ -133,8 +143,34 @@ const CHATGPT_PLANS = new Set<ChatGptPlan>([
   "enterprise",
 ]);
 
+// Antigravity permission-switch ceiling axes (ADR-0057 F4c Stage B0). A subset
+// of `PermissionAxesExt`: `on-failure` is excluded — this engine rejects it at
+// spawn. Runtime arrays because `@kaoiro/protocol` is types-only.
+const MAX_SANDBOX_VALUES = [
+  "read-only",
+  "workspace-write",
+  "danger-full-access",
+] as const;
+const MAX_APPROVAL_VALUES = [
+  "untrusted",
+  "on-request",
+  "local",
+  "never",
+] as const;
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function parseEnum<T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+  field: string,
+): T {
+  if (typeof value !== "string" || !(allowed as readonly string[]).includes(value)) {
+    throw new ConfigError(`${field} must be one of: ${allowed.join(", ")}`);
+  }
+  return value as T;
 }
 
 function nonEmptyString(value: unknown, field: string): string {
@@ -466,6 +502,28 @@ export function parseRunnerConfig(raw: unknown): RunnerConfig {
         raw.antigravity.extra_models,
         "antigravity.extra_models",
       );
+    }
+    if (raw.antigravity.max_sandbox !== undefined) {
+      antigravity.max_sandbox = parseEnum(
+        raw.antigravity.max_sandbox,
+        MAX_SANDBOX_VALUES,
+        "antigravity.max_sandbox",
+      );
+    }
+    if (raw.antigravity.max_approval !== undefined) {
+      antigravity.max_approval = parseEnum(
+        raw.antigravity.max_approval,
+        MAX_APPROVAL_VALUES,
+        "antigravity.max_approval",
+      );
+    }
+    if (raw.antigravity.max_network_access !== undefined) {
+      if (typeof raw.antigravity.max_network_access !== "boolean") {
+        throw new ConfigError(
+          "antigravity.max_network_access must be a boolean",
+        );
+      }
+      antigravity.max_network_access = raw.antigravity.max_network_access;
     }
     config.antigravity = antigravity;
   }
