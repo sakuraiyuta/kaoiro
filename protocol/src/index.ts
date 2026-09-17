@@ -356,10 +356,18 @@ export interface PermissionAxesExt {
 }
 
 /** Raw operator configuration; network_access is not the normalized effective
- * value. See protocol.md, "Permission changes at an execution boundary". */
+ * value. See protocol.md, "Permission changes at an execution boundary".
+ *
+ * `approval` is present only for an engine that carries approval as a MUTABLE
+ * axis (Antigravity, ADR-0057 F4c Stage B0 / issue #359). Codex keeps its
+ * fixed `never` in `constraints.approval` and never sets it here; its absence
+ * is the discriminator the dashboard uses between a live selector and a fixed
+ * badge. Additive: an old wrapper/server omits it and the Codex sandbox/
+ * network four-quadrant flow is unchanged. */
 export interface PermissionConfiguration {
   sandbox: PermissionAxesExt["sandbox"];
   network_access: boolean;
+  approval?: PermissionAxesExt["approval"];
 }
 
 export interface PermissionSelection {
@@ -451,12 +459,17 @@ export type PermissionControlExt = PermissionControlBase & (
     }
 );
 
+/** At least one mutable axis must be present. `approval` is accepted only for
+ * an agent whose session advertises it mutable in `permission_switch_axes`
+ * (issue #359); the server rejects an unadvertised axis or an over-ceiling
+ * value. */
 export type SetPermissionRequest = {
   version: "0";
   agent_id: string;
 } & (
-  | { sandbox: PermissionConfiguration["sandbox"]; network_access?: boolean }
-  | { sandbox?: PermissionConfiguration["sandbox"]; network_access: boolean }
+  | { sandbox: PermissionConfiguration["sandbox"]; network_access?: boolean; approval?: PermissionConfiguration["approval"] }
+  | { sandbox?: PermissionConfiguration["sandbox"]; network_access: boolean; approval?: PermissionConfiguration["approval"] }
+  | { sandbox?: PermissionConfiguration["sandbox"]; network_access?: boolean; approval: PermissionConfiguration["approval"] }
 );
 
 export interface SetPermissionMessage extends PermissionConfiguration {
@@ -477,7 +490,10 @@ export type SetPermissionErrorReason =
   | "permission_not_ready"
   | "session_reset_pending"
   | "revision_exhausted"
-  | "persistence_failed";
+  | "persistence_failed"
+  /** A requested axis would widen past the launch ceiling advertised in
+   *  `permission_switch_axes` (ADR-0057 F4c Stage B0 clamp, issue #359). */
+  | "exceeds_launch_ceiling";
 
 /** An after-join barrier, including when no settings have been saved.
  * Pre-application rejection retains failed control and restores the ledger's
@@ -684,6 +700,23 @@ export interface SessionCapabilitiesExt {
   /** Absent/false rejects set_permission. Independent of Claude's mode
    * selector; enabled only with the permission sync and observation contract. */
   supports_permission_switch?: boolean;
+  /** Per-axis mutability + launch ceiling for post-launch permission changes
+   *  (ADR-0057 F4c Stage B0, issue #359). Presence of an axis key = that axis
+   *  is mutable at an execution boundary; `max` is the launch ceiling the
+   *  server must not let a change widen past (permissive order:
+   *  read-only < workspace-write < danger-full-access;
+   *  untrusted < on-request < local < never; false < true). An axis absent
+   *  here is fixed at its launch value even when `supports_permission_switch`
+   *  is true. The wrapper derives this from its runner-provided `max_*`
+   *  config and is the source of truth; the server honours it (first gate)
+   *  and the wrapper re-checks fail-closed (final gate). Absent whole field =
+   *  no advertised clamp; only the legacy sandbox/network flow (issue #305)
+   *  applies. */
+  permission_switch_axes?: {
+    sandbox?: { max: PermissionAxesExt["sandbox"] };
+    network_access?: { max: boolean };
+    approval?: { max: PermissionAxesExt["approval"] };
+  };
   /** Command availability, not an observed mode. True from Claude's first
    * state_change even without permission_mode; false overrides legacy metadata.
    * See protocol.md for the absent-capability compatibility rule. */

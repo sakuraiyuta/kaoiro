@@ -524,8 +524,15 @@ defmodule KaoiroServer.PermissionSettings.State do
 
   defp permission_pair_wire(nil), do: nil
 
-  defp permission_pair_wire(%{sandbox: sandbox, network_access: network_access}),
-    do: %{"sandbox" => sandbox, "network_access" => network_access}
+  defp permission_pair_wire(%{sandbox: sandbox, network_access: network_access} = pair) do
+    base = %{"sandbox" => sandbox, "network_access" => network_access}
+    # issue #359: approval rides inside requested only for an engine that
+    # carries it as a mutable axis (Antigravity). Absent for Codex/Claude.
+    case Map.get(pair, :approval) do
+      approval when approval in @approval_values -> Map.put(base, "approval", approval)
+      _ -> base
+    end
+  end
 
   defp maybe_put_wire(map, _key, nil), do: map
   defp maybe_put_wire(map, key, value), do: Map.put(map, key, value)
@@ -546,7 +553,7 @@ defmodule KaoiroServer.PermissionSettings.State do
   def sanitize_control(
         %{
           "revision" => revision,
-          "requested" => %{"sandbox" => sandbox, "network_access" => network_access},
+          "requested" => %{"sandbox" => sandbox, "network_access" => network_access} = requested,
           "status" => status,
           "constraints" => %{"approval" => approval, "enforcement" => enforcement}
         } = raw
@@ -554,10 +561,11 @@ defmodule KaoiroServer.PermissionSettings.State do
       when is_integer(revision) and revision >= 0 and
              sandbox in @sandbox_values and is_boolean(network_access) and
              approval in @approval_values and enforcement in @enforcement_values do
-    with {:ok, status_atom} <- sanitize_status(status) do
+    with {:ok, status_atom} <- sanitize_status(status),
+         {:ok, requested_pair} <- sanitize_requested(sandbox, network_access, requested) do
       %{
         revision: revision,
-        requested: %{sandbox: sandbox, network_access: network_access},
+        requested: requested_pair,
         status: status_atom,
         constraints: %{approval: approval, enforcement: enforcement},
         submitted: Map.get(raw, "submitted"),
@@ -578,6 +586,24 @@ defmodule KaoiroServer.PermissionSettings.State do
     do: {:ok, String.to_existing_atom(status)}
 
   defp sanitize_status(_other), do: :error
+
+  # issue #359: requested.approval is optional and, when present, must be a
+  # valid approval enum (fail-closed: a present-but-malformed approval rejects
+  # the whole control rather than being silently dropped, matching this
+  # sanitizer's stance elsewhere). Absent keeps the legacy sandbox/network
+  # pair unchanged (Codex/Claude).
+  defp sanitize_requested(sandbox, network_access, requested) do
+    case Map.fetch(requested, "approval") do
+      :error ->
+        {:ok, %{sandbox: sandbox, network_access: network_access}}
+
+      {:ok, approval} when approval in @approval_values ->
+        {:ok, %{sandbox: sandbox, network_access: network_access, approval: approval}}
+
+      {:ok, _invalid} ->
+        :error
+    end
+  end
 
   defp sanitize_string(value) when is_binary(value), do: value
   defp sanitize_string(_other), do: nil

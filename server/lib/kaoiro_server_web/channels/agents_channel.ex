@@ -235,7 +235,8 @@ defmodule KaoiroServerWeb.AgentsChannel do
                    unknown_conversation_id invalid_approval
                    invalid_payload agent_unavailable
                    unsupported_permission_switch permission_not_ready
-                   persistence_failed timeout invalid_rally_turns)a
+                   persistence_failed timeout invalid_rally_turns
+                   exceeds_launch_ceiling)a
 
   # session_id charset — mirrors runner/src/sessions.ts SESSION_ID_PATTERN
   # (Claude Code's UUID-shaped JSONL filenames). Validated at this boundary so
@@ -727,6 +728,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
          {:ok, envelope} <- fetch_agent_envelope(agent_id),
          :ok <- require_agent_connected(envelope),
          :ok <- require_permission_switch_capability(envelope),
+         :ok <- clamp_permission_patch(envelope, patch),
          {:ok, engine} <- fetch_agent_engine(envelope),
          # issue #305 M7, ふじ round 1 / director ruling 2026-09-06 +
          # round-2 correction: the early `guard_against_reset_pending/2`
@@ -779,12 +781,17 @@ defmodule KaoiroServerWeb.AgentsChannel do
           :noop
       end
 
-      KaoiroServerWeb.Endpoint.broadcast("wrapper:#{agent_id}", "set_permission", %{
-        "version" => "0",
-        "revision" => revision,
-        "sandbox" => requested.sandbox,
-        "network_access" => requested.network_access
-      })
+      KaoiroServerWeb.Endpoint.broadcast(
+        "wrapper:#{agent_id}",
+        "set_permission",
+        %{
+          "version" => "0",
+          "revision" => revision,
+          "sandbox" => requested.sandbox,
+          "network_access" => requested.network_access
+        }
+        |> maybe_put_approval(Map.get(requested, :approval))
+      )
 
       SessionLifecycleEvents.record_permission_event(
         agent_id,
@@ -798,10 +805,12 @@ defmodule KaoiroServerWeb.AgentsChannel do
         %{
           "revision" => revision,
           "status" => "pending",
-          "requested" => %{
-            "sandbox" => requested.sandbox,
-            "network_access" => requested.network_access
-          }
+          "requested" =>
+            %{
+              "sandbox" => requested.sandbox,
+              "network_access" => requested.network_access
+            }
+            |> maybe_put_approval(Map.get(requested, :approval))
         }}, socket}
     else
       {:error, reason} ->
@@ -2287,6 +2296,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   end
 
   @sandbox_values ["read-only", "workspace-write", "danger-full-access"]
+  @approval_values ["untrusted", "on-request", "local", "never"]
   defp maybe_put_sandbox(map, value) when value in @sandbox_values,
     do: Map.put(map, "sandbox", value)
 
@@ -2295,31 +2305,37 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # `set_permission`'s payload shape (issue #305, ADR-0033 F3/F4;
   # protocol.md "Request, relay, and acknowledgement"). Unlike
   # `check_keys/2`'s allow-list-of-required-keys shape, this REJECTS any
-  # key beyond the closed set — the contract explicitly calls out
-  # `approval`/`actor`/`revision` as forbidden fields (a client cannot
-  # supply what only the server/wrapper may authoritatively set), and a
-  # permissive extra-key pass-through here would let a client smuggle
-  # them through unnoticed. `network_access: false` must be ACCEPTED (a
-  # strict boolean, not a truthiness check) — `Map.has_key?/2` is what
-  # distinguishes "the axis was not sent" from "the axis was sent as
+  # key beyond the closed set. `actor`/`revision` stay forbidden fields (a
+  # client cannot supply what only the server/wrapper may authoritatively
+  # set). `approval` is accepted at the payload layer for issue #359 (ADR-0057
+  # F4c Stage B0), but only becomes effective when the agent's session
+  # advertises `permission_switch_axes.approval`; `clamp_permission_patch/2`
+  # rejects it otherwise, so an agent that does not carry approval as a
+  # mutable axis (Codex) still refuses it. `network_access: false` must be
+  # ACCEPTED (a strict boolean, not a truthiness check) — `Map.has_key?/2` is
+  # what distinguishes "the axis was not sent" from "the axis was sent as
   # false", `payload[key] == nil` cannot.
-  @permission_patch_keys ~w(version agent_id sandbox network_access)
+  @permission_patch_keys ~w(version agent_id sandbox network_access approval)
   defp fetch_permission_patch(payload) do
     unknown_keys = Map.keys(payload) -- @permission_patch_keys
     has_sandbox? = Map.has_key?(payload, "sandbox")
     has_network? = Map.has_key?(payload, "network_access")
+    has_approval? = Map.has_key?(payload, "approval")
 
     cond do
       unknown_keys != [] ->
         {:error, :invalid_payload}
 
-      not has_sandbox? and not has_network? ->
+      not has_sandbox? and not has_network? and not has_approval? ->
         {:error, :invalid_payload}
 
       has_sandbox? and payload["sandbox"] not in @sandbox_values ->
         {:error, :invalid_payload}
 
       has_network? and not is_boolean(payload["network_access"]) ->
+        {:error, :invalid_payload}
+
+      has_approval? and payload["approval"] not in @approval_values ->
         {:error, :invalid_payload}
 
       true ->
@@ -2331,6 +2347,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
             has_network?,
             payload["network_access"]
           )
+          |> maybe_put_permission_patch_field(:approval, has_approval?, payload["approval"])
 
         {:ok, patch}
     end
@@ -2342,7 +2359,6 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # Antigravity-only launch approval axis (ADR-0057 F4c). Same closed-enum
   # gate shape as maybe_put_sandbox; deliberately excludes "on-failure" —
   # this engine rejects it at spawn.
-  @approval_values ["untrusted", "on-request", "local", "never"]
   defp maybe_put_approval(map, value) when value in @approval_values,
     do: Map.put(map, "approval", value)
 
@@ -2372,6 +2388,67 @@ defmodule KaoiroServerWeb.AgentsChannel do
   end
 
   defp validate_antigravity_approval(_engine, _payload), do: :ok
+
+  # ADR-0057 F4c Stage B0 clamp (issue #359): a set_permission patch may only
+  # move each axis within the launch ceiling the wrapper advertises in
+  # `ext.session_capabilities.permission_switch_axes`. The wrapper (fed by the
+  # runner's `max_*`) is the source of truth; this is the server's first gate,
+  # the wrapper re-checks fail-closed. `approval` is special: it is accepted
+  # ONLY when advertised mutable (absent advertisement = the #305 contract's
+  # "approval forbidden", e.g. Codex). `sandbox`/`network_access` without an
+  # advertised axis fall back to the legacy #305 flow (no clamp) so existing
+  # agents are unchanged; when advertised they are clamped too. Permissive
+  # order is the list order of @sandbox_values / @approval_values and
+  # false < true for network_access.
+  defp clamp_permission_patch(envelope, patch) do
+    axes =
+      envelope
+      |> Map.get("ext", %{})
+      |> Map.get("session_capabilities", %{})
+      |> Map.get("permission_switch_axes", %{})
+
+    axes = if is_map(axes), do: axes, else: %{}
+
+    Enum.reduce_while(patch, :ok, fn {axis, value}, :ok ->
+      case clamp_axis(axis, value, Map.get(axes, Atom.to_string(axis))) do
+        :ok -> {:cont, :ok}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  # approval is mutable only when advertised; absent advertisement rejects it.
+  defp clamp_axis(:approval, _value, nil), do: {:error, :unsupported_permission_switch}
+
+  defp clamp_axis(:approval, value, %{"max" => max}) when max in @approval_values do
+    if permissive_rank(@approval_values, value) <= permissive_rank(@approval_values, max) do
+      :ok
+    else
+      {:error, :exceeds_launch_ceiling}
+    end
+  end
+
+  # sandbox / network_access without an advertised axis: legacy #305 flow.
+  defp clamp_axis(:sandbox, _value, nil), do: :ok
+  defp clamp_axis(:network_access, _value, nil), do: :ok
+
+  defp clamp_axis(:sandbox, value, %{"max" => max}) when max in @sandbox_values do
+    if permissive_rank(@sandbox_values, value) <= permissive_rank(@sandbox_values, max) do
+      :ok
+    else
+      {:error, :exceeds_launch_ceiling}
+    end
+  end
+
+  defp clamp_axis(:network_access, value, %{"max" => max}) when is_boolean(max) do
+    # false < true: enabling network past a false ceiling widens.
+    if value == false or max == true, do: :ok, else: {:error, :exceeds_launch_ceiling}
+  end
+
+  # A malformed advertisement is fail-closed: the axis is not switchable.
+  defp clamp_axis(_axis, _value, _malformed), do: {:error, :unsupported_permission_switch}
+
+  defp permissive_rank(order, value), do: Enum.find_index(order, &(&1 == value))
 
   # ADR-0033 F4 追補 (phase-15 D2 / task 15-12). Same closed-enum gate as
   # @permission_modes above so a malformed spawn payload never reaches the
