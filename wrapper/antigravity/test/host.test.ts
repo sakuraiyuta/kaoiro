@@ -371,16 +371,17 @@ describe("AntigravityHost", () => {
     host.close();
   });
 
-  it("applyPermissionSync refuses a durable next that exceeds the launch ceiling, fail-closed (issue #359 M1)", () => {
+  it("applyPermissionSync refuses an over-ceiling next fail-closed: failed + rolled_back_to, no config change (issue #359 M7)", () => {
     // Restrictive ceiling: a relayed next above it must NOT mutate config — the
-    // wrapper is the final gate and the server can never widen past launch.
+    // wrapper is the final gate and the server can never widen past launch. It
+    // reports failed with the SAME semantics as a live set_permission.
     const cfg = config({
       approval: "on-request",
       max_sandbox: "workspace-write",
       max_approval: "local",
       max_network_access: false,
     });
-    const { host } = hostHarness({ config: cfg, permissionSyncSupported: true });
+    const { host, permissionLifecycle } = hostHarness({ config: cfg, permissionSyncSupported: true });
     const overCell = {
       sandbox: "danger-full-access" as const,
       network_access: true,
@@ -401,6 +402,66 @@ describe("AntigravityHost", () => {
     // Config unchanged: the launch cell still governs the next gate.
     expect((ext.permission as Record<string, unknown>).sandbox).toBe("workspace-write");
     expect((ext.permission as Record<string, unknown>).approval).toBe("on-request");
+    // Reported failed against the current cell, not left as a pending over-cell.
+    const ctrl = ext.permission_control as Record<string, unknown>;
+    expect(ctrl.status).toBe("failed");
+    expect(ctrl.reason).toBe("exceeds_launch_ceiling");
+    expect((ctrl.rolled_back_to as Record<string, unknown>).sandbox).toBe("workspace-write");
+    expect((ctrl.rolled_back_to as Record<string, unknown>).approval).toBe("on-request");
+    const failed = permissionLifecycle.at(-1) as Record<string, any>;
+    expect(failed.kind).toBe("permission_failed");
+    expect(failed.details.reason).toBe("exceeds_launch_ceiling");
+    expect(failed.details.rolled_back_to.sandbox).toBe("workspace-write");
+    host.close();
+  });
+
+  it("applyPermissionSync does not adopt an over-ceiling control's forged applied evidence (issue #359 M7)", () => {
+    // A malicious/buggy server could relay an over-ceiling control claiming
+    // status:applied with a forged effective. The ceiling check runs BEFORE any
+    // adoption, so neither the effective nor last_effective is taken up.
+    const cfg = config({
+      approval: "on-request",
+      max_sandbox: "workspace-write",
+      max_approval: "local",
+      max_network_access: false,
+    });
+    const { host, permissionLifecycle } = hostHarness({ config: cfg, permissionSyncSupported: true });
+    const overCell = {
+      sandbox: "danger-full-access" as const,
+      network_access: true,
+      approval: "never" as const,
+    };
+    const submission = { revision: 5, requested: overCell, execution_id: "e5" };
+    const forgedEffective = {
+      ...submission,
+      session_id: "s5",
+      permission: { sandbox: "danger-full-access" as const, approval: "never" as const, enforcement: "advisory" as const },
+      network_access: true,
+    };
+    const message: PermissionSyncMessage = {
+      version: "0",
+      control: {
+        revision: 5,
+        requested: overCell,
+        status: "applied",
+        constraints: { approval: "never", enforcement: "advisory" },
+        submitted: submission,
+        effective: forgedEffective,
+        last_effective: forgedEffective,
+      },
+      next: { revision: 5, requested: overCell },
+    };
+    host.applyPermissionSync(message);
+    const ext = host.statusExtSnapshot();
+    // Config stays at launch; the forged applied control is reported failed and
+    // its evidence is not adopted.
+    expect((ext.permission as Record<string, unknown>).sandbox).toBe("workspace-write");
+    const ctrl = ext.permission_control as Record<string, unknown>;
+    expect(ctrl.status).toBe("failed");
+    expect(ctrl).not.toHaveProperty("effective");
+    expect(ctrl).not.toHaveProperty("last_effective");
+    const failed = permissionLifecycle.at(-1) as Record<string, any>;
+    expect(failed.kind).toBe("permission_failed");
     host.close();
   });
 

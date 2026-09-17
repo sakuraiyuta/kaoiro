@@ -542,47 +542,79 @@ export class AntigravityHost implements EngineAdapter {
 
   /** Applies the server's permission_sync for this connection (issue #359 M1).
    *  On reconnect the server relays the durable control and the cell that
-   *  should be enforced (`next`); this adopts the control and re-applies `next`
-   *  to #config so the next turn's gate reads it. The wrapper is the final gate:
-   *  a `next` exceeding the launch ceiling is refused fail-closed, leaving the
-   *  current cell. Unlike a live set_permission this emits no applied
-   *  observation — the switch already applied before the disconnect. */
+   *  should be enforced (`next`); this re-applies `next` to #config so the next
+   *  turn's gate reads it and adopts the durable control. Unlike a live
+   *  set_permission it emits no applied observation — the switch already applied
+   *  before the disconnect.
+   *
+   *  The wrapper is the final gate (M7): the relayed `next` is checked against
+   *  the launch ceiling BEFORE the server's control or its evidence is adopted.
+   *  A violation is refused fail-closed with the SAME semantics as a live
+   *  set_permission — permission_failed, reason "exceeds_launch_ceiling",
+   *  rolled_back_to = the current cell — and the over-ceiling control /
+   *  effective / last_effective is NOT adopted, so #config and the last
+   *  effective observation stay at their current in-ceiling values. */
   applyPermissionSync(message: PermissionSyncMessage): void {
     if (message.control === null) return;
     const control = message.control;
     // A stale relay cannot regress an already-adopted higher revision.
     if (control.revision < (this.#permissionControl?.revision ?? -1)) return;
-    this.#permissionControl = control;
-    if (control.status === "applied") {
-      this.#lastEffectivePermission = control.effective;
-    } else if (control.last_effective !== undefined) {
-      this.#lastEffectivePermission = control.last_effective;
-    }
+    const current = this.#currentCell();
     const next = message.next.requested;
     // The server relays approval for antigravity; keep the current value if a
     // legacy sandbox/network-only next omits it. Resolved to a concrete value so
     // #config.approval (non-optional) never receives undefined.
-    const approval = next.approval ?? this.#currentCell().approval;
+    const approval = next.approval ?? current.approval;
     const cell: PermissionConfiguration = {
       sandbox: next.sandbox,
       network_access: next.network_access,
       approval,
     };
     const ceiling = this.#permissionCeiling();
-    if (ceiling !== null && ceilingExceeded(cell, ceiling) !== null) {
-      this.#warn("antigravity: permission_sync next exceeds the launch ceiling; ignored");
-    } else {
-      this.#config.sandbox = cell.sandbox;
-      this.#config.network_access = cell.network_access;
-      this.#config.approval = approval;
+    const violation = ceiling === null ? null : ceilingExceeded(cell, ceiling);
+    if (violation !== null) {
+      // Fail-closed BEFORE adopting the control or its (possibly forged)
+      // evidence: report failed against the current cell, exactly as a live
+      // set_permission does, and leave #config / #lastEffectivePermission alone.
+      this.#permissionControl = {
+        revision: message.next.revision,
+        requested: cell,
+        status: "failed",
+        constraints: this.#permissionConstraints(current.approval),
+        reason: "exceeds_launch_ceiling",
+        rolled_back_to: current,
+        ...(this.#lastEffectivePermission === null
+          ? {}
+          : { last_effective: this.#lastEffectivePermission }),
+      };
+      this.#emitState(this.#machine.state);
+      this.#options.onPermissionLifecycle?.({
+        version: "0",
+        kind: "permission_failed",
+        at: this.#now(),
+        details: {
+          revision: message.next.revision,
+          requested: cell,
+          reason: "exceeds_launch_ceiling",
+          rolled_back_to: current,
+        },
+      });
+      this.#warn(`antigravity: permission_sync rejected: ${violation}`);
+      return;
     }
+    // Within ceiling: adopt the durable control and re-apply next to #config.
+    this.#permissionControl = control;
+    if (control.status === "applied") {
+      this.#lastEffectivePermission = control.effective;
+    } else if (control.last_effective !== undefined) {
+      this.#lastEffectivePermission = control.last_effective;
+    }
+    this.#config.sandbox = cell.sandbox;
+    this.#config.network_access = cell.network_access;
+    this.#config.approval = approval;
     this.#emitState(this.#machine.state);
   }
 
-  /** Applies a staged permission switch at the start of a turn (ADR-0057 F4c
-   *  Stage B0): mutates #config so the turn's fresh gate enforces the new cell,
-   *  then reports the applied observation as both ext.permission_control and a
-   *  `permission_applied` audit event. */
   /** Applies a staged permission switch at the start of a turn (ADR-0057 F4c
    *  Stage B0): mutates #config so the turn's fresh gate enforces the new cell.
    *  The switch is reported as `applying` here (submitted captured, no
