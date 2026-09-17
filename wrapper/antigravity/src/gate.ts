@@ -135,7 +135,7 @@ function isInside(path: string, root: string): boolean {
 }
 
 function localPathOperand(path: string, cwd: string): boolean {
-  if (path === "-") return false;
+  if (path === "-" || path.startsWith("~")) return false;
   const resolved = canonical(isAbsolute(path) ? path : join(cwd, path));
   return resolved !== null && isInside(resolved, cwd);
 }
@@ -264,7 +264,9 @@ function addPathsStayLocal(args: readonly string[], cwd: string): boolean {
 }
 
 const OBSERVED_GIT_FLAGS = new Set([
-  "--name-only", "--name-status", "--no-patch", "--oneline", "--patch", "--stat", "-p",
+  "--cached", "--decorate", "--graph", "--ignore-all-space", "--name-only", "--name-status",
+  "--no-patch", "--numstat", "--oneline", "--patch", "--shortstat", "--staged", "--stat",
+  "--unified", "-C", "-M", "-p", "-w",
 ]);
 const OBSERVED_GIT_VALUE_OPTIONS = new Set([
   "--author", "--grep", "--max-count", "--since", "--until", "-n",
@@ -278,7 +280,8 @@ function observedGitPathsStayLocal(args: readonly string[], cwd: string): boolea
       afterOptions = true;
     } else if (!afterOptions && arg.startsWith("-")) {
       if (OBSERVED_GIT_FLAGS.has(arg)) continue;
-      if (/^-n\d+$/.test(arg) || /^--max-count=\d+$/.test(arg)) continue;
+      if (/^-(?:n?\d+|U\d+)$/.test(arg) ||
+          /^--(?:max-count|unified)=\d+$/.test(arg)) continue;
       if (/^--(?:author|grep|since|until)=.+$/.test(arg)) continue;
       if (!OBSERVED_GIT_VALUE_OPTIONS.has(arg)) return false;
       const value = args[index + 1];
