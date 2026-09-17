@@ -730,7 +730,10 @@ host**, not the server (`InterAgentHistory` DETS is retired).
     later bind/read. This retains the existing no-fsync durability contract and
     relies on the runner's single-writer invariant; a continuously changing
     unsupported second writer can prevent compaction but cannot authorize a
-    lossy replacement.
+    lossy replacement when its change is detected. The final source stat and
+    rename are not atomic together: an unsupported writer that appends in that
+    interval can still lose its append. The runner's single-writer invariant is
+    what excludes that residual TOCTOU window in supported operation.
 - **Session lifecycle**: before a session_id is assigned, append to a pending
   journal namespaced by `{agent_id, reset_generation}`; once the session_id is
   known, bind it to that session's sidecar (rename, or append when the target

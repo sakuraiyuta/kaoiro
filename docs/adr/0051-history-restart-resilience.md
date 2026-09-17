@@ -217,6 +217,10 @@ Unknown or malformed marker versions are not trusted as growth bounds and
 fall back to a full scan. Compaction uses a mode-0600 sibling temporary file,
 source identity recheck, and atomic rename; failures keep the original source
 authoritative under the existing no-fsync and runner-single-writer assumptions.
+The recheck aborts a replacement when it detects a changed source, but the
+final source stat and rename are not atomic together. An unsupported writer's
+append in that interval can therefore be lost; supported operation excludes
+this residual TOCTOU window through the runner's single-writer invariant.
 
 This decision is irreversible: records outside the retained set are deleted
 without an archive, and later cap increases cannot restore them. Archive

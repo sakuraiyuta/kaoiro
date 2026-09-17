@@ -4,10 +4,10 @@
 // {agent_id, generation}, bound to the session file once one exists, and
 // GC'd fail-closed when a previous generation never got that far.
 
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { IaSidecar, capNewestByStamp, parseSidecarLine } from "../src/ia_sidecar.js";
 import type { Envelope } from "../src/types.js";
 
@@ -62,6 +62,11 @@ describe("IaSidecar", () => {
     pendingDir = mkdtempSync(join(tmpdir(), "kaoiro-ia-pending-"));
     sessionDir = mkdtempSync(join(tmpdir(), "kaoiro-ia-session-"));
     warnings.length = 0;
+  });
+
+  afterEach(() => {
+    rmSync(pendingDir, { recursive: true, force: true });
+    rmSync(sessionDir, { recursive: true, force: true });
   });
 
   function makeSidecar(
