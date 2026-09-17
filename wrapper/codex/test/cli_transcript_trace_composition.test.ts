@@ -83,12 +83,16 @@ describe("Codex CLI transcript-trace composition (issue #352)", () => {
     ]);
   });
 
-  it("emits no line when the rollout is not found under the session's HOME (fail-closed, not a guess)", async () => {
+  it("reports a search-pattern fallback when the rollout is not found yet under the session's HOME (issue #352 round 1 M1: a fresh thread's rollout may not exist when onSessionId fires, and it never fires again for the same id, so silence would defeat the whole point)", async () => {
     home = mkdtempSync(join(tmpdir(), "kaoiro-codex-transcript-missing-"));
     vi.stubEnv("HOME", home);
+    const sessionId = "no-such-session";
 
-    const lines = await runWithFakeHost("no-such-session");
+    const lines = await runWithFakeHost(sessionId);
 
-    expect(lines).toEqual([]);
+    expect(lines).toEqual([
+      `[kaoiro] transcript: agent=self.agent engine=codex session=${sessionId} ` +
+        `path=${join(home, ".codex", "sessions")}/**/rollout-*-${sessionId}.jsonl\n`,
+    ]);
   });
 });

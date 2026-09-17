@@ -849,16 +849,21 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     onSessionId: (id) => {
       link?.setSessionId(id);
       sidecar.bind(id);
-      // issue #352: the runner inherits this process's stdout into its own
-      // (systemd) journal, so one line here is the operator's only way to
-      // find this agent's engine-side transcript after the fact.
-      const path = rolloutPathIn(codexRolloutsRoot(), id);
-      if (path !== null) {
-        process.stdout.write(
-          `[kaoiro] transcript: agent=${config.agent_id} engine=codex ` +
-            `session=${id} path=${path}\n`,
-        );
-      }
+      // issue #352 round 1 M1 (クロエ): the runner inherits this process's
+      // stdout into its own (systemd) journal, so one line here is the
+      // operator's only way to find this agent's engine-side transcript
+      // after the fact. A fresh thread's rollout file may not exist yet
+      // when this fires (no SDK contract guarantees it precedes
+      // thread.started, and onSessionId never fires again for the same
+      // id) — silence here would defeat the whole point, so an unresolved
+      // path falls back to the search pattern instead of staying silent.
+      const path =
+        rolloutPathIn(codexRolloutsRoot(), id) ??
+        `${codexRolloutsRoot()}/**/rollout-*-${id}.jsonl`;
+      process.stdout.write(
+        `[kaoiro] transcript: agent=${config.agent_id} engine=codex ` +
+          `session=${id} path=${path}\n`,
+      );
     },
     toolDescriptors: [
       ...interAgent.descriptors(),
