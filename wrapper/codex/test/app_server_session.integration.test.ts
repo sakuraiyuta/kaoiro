@@ -55,7 +55,8 @@ enabled = false
     await writeFile(join(home, "config.toml"), config);
     const image = join(home, "image.png");
     // A complete 64x64 PNG: decoding is performed by the real CLI.
-    await writeFile(image, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAb0lEQVR4nO3PAQkAAAyEwO9feoshgnABdLep8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3IPanc8OLDQitxAAAAAElFTkSuQmCC", "base64"));
+    const imageBytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAb0lEQVR4nO3PAQkAAAyEwO9feoshgnABdLep8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3IPanc8OLDQitxAAAAAElFTkSuQmCC", "base64");
+    await writeFile(image, imageBytes);
     vi.stubEnv("CODEX_HOME", home);
     vi.stubEnv("HOME", home);
     for (const name of ["OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL", "OPENAI_ORG_ID"]) vi.stubEnv(name, undefined);
@@ -91,7 +92,12 @@ enabled = false
       const user = beforeTool.input.filter(item => item.role === "user").at(-1)!;
       const serializedUser = JSON.stringify(user);
       expect(serializedUser).toContain(`USER_${index}`);
-      expect(serializedUser).toContain("data:image/");
+      const content = user.content as Array<{ type: string; image_url?: string }>;
+      const images = content.filter(item => item.type === "input_image");
+      expect(images).toHaveLength(1);
+      const encodedImage = images[0]!.image_url!.match(/^data:image\/png;base64,([A-Za-z0-9+/=]+)$/);
+      expect(encodedImage).not.toBeNull();
+      expect(Buffer.from(encodedImage![1]!, "base64")).toEqual(imageBytes);
       expect(serializedUser.indexOf(`USER_${index}`)).toBeLessThan(serializedUser.indexOf("data:image/"));
       expect(serializedUser.indexOf("data:image/")).toBeLessThan(serializedUser.indexOf(`AFTER_${index}`));
       expect(JSON.stringify(requests[index * 2 - 1])).toContain(`BRIDGE_OK_${index}`);

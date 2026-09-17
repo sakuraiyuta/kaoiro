@@ -1,4 +1,5 @@
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
+import { createConnection } from "node:net";
 import { PassThrough, Writable } from "node:stream";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { access, rm, stat } from "node:fs/promises";
@@ -22,7 +23,7 @@ afterEach(async () => {
   }
   vi.restoreAllMocks();
 });
-function childFixture() {
+function childFixture(closeDelayMs = 0) {
   const child = new EventEmitter() as ChildProcessWithoutNullStreams;
   const stdout = new PassThrough(), stderr = new PassThrough();
   const sent: Array<{ method: string; params: Record<string, unknown> }> = [];
@@ -37,7 +38,11 @@ function childFixture() {
     cb();
   } });
   Object.assign(child, { stdin, stdout, stderr, exitCode: null, signalCode: null });
-  stdin.on("finish", () => { stdout.end(); stderr.end(); child.emit("close", 0); });
+  const finish = () => { stdout.end(); stderr.end(); child.emit("close", 0); };
+  stdin.on("finish", () => {
+    if (closeDelayMs === 0) finish();
+    else setTimeout(finish, closeDelayMs);
+  });
   return { child, sent, fail() { fail = true; } };
 }
 const tool = { name: "probe", description: "probe", inputSchema: { type: "object" }, handler: async () => ({ content: [] }) };
@@ -101,4 +106,70 @@ it.each(["construction", "initialization"])("releases the real private socket on
   }
   const host = await listen.mock.results[0]!.value as ToolHost;
   await expect(access(dirname(host.socketPath))).rejects.toThrow();
+});
+
+it("rejects new tool connections as soon as close starts and waits for child exit", async () => {
+  const fixture = childFixture(300);
+  const listen = vi.spyOn(ToolHost, "listen");
+  let childClosed = false, calls = 0;
+  fixture.child.once("close", () => { childClosed = true; });
+  const session = await AppServerSession.create({
+    tools: [{ ...tool, handler: async () => { calls += 1; return { content: [] }; } }],
+    turnSignal: () => new AbortController().signal,
+    transport: { spawnChild: () => fixture.child },
+  }); sessions.push(session);
+  await session.startThread();
+  const host = await listen.mock.results[0]!.value as ToolHost;
+  const closing = session.close();
+  expect(session.close()).toBe(closing);
+  expect(childClosed).toBe(false);
+  const socket = createConnection(host.socketPath);
+  socket.once("connect", () => socket.write(JSON.stringify({ id: 1, method: "call_tool", name: "probe", input: {} }) + "\n"));
+  try {
+    await expect(once(socket, "connect")).rejects.toThrow();
+    await closing;
+    expect(childClosed).toBe(true);
+    expect(calls).toBe(0);
+    await expect(access(dirname(host.socketPath))).rejects.toThrow();
+  } finally {
+    socket.destroy();
+    await closing;
+  }
+});
+
+it("aborts an active tool handler synchronously before waiting for child exit", async () => {
+  const fixture = childFixture(300);
+  const listen = vi.spyOn(ToolHost, "listen");
+  let childClosed = false;
+  fixture.child.once("close", () => { childClosed = true; });
+  let enter!: (signal: AbortSignal) => void;
+  const entered = new Promise<AbortSignal>(resolve => { enter = resolve; });
+  const session = await AppServerSession.create({
+    tools: [{ ...tool, handler: async (_input, context) => {
+      const signal = context!.signal!;
+      enter(signal);
+      return new Promise(resolve => signal.addEventListener("abort", () => resolve({ content: [] }), { once: true }));
+    } }],
+    turnSignal: () => new AbortController().signal,
+    transport: { spawnChild: () => fixture.child },
+  }); sessions.push(session);
+  await session.startThread();
+  const host = await listen.mock.results[0]!.value as ToolHost;
+  const socket = createConnection(host.socketPath);
+  const disconnected = once(socket, "close");
+  try {
+    await once(socket, "connect");
+    socket.write(JSON.stringify({ id: 1, method: "call_tool", name: "probe", input: {} }) + "\n");
+    const signal = await entered;
+    expect(signal.aborted).toBe(false);
+    const closing = session.close();
+    expect(signal.aborted).toBe(true);
+    expect(childClosed).toBe(false);
+    await disconnected;
+    await closing;
+    expect(childClosed).toBe(true);
+  } finally {
+    socket.destroy();
+    await session.close();
+  }
 });

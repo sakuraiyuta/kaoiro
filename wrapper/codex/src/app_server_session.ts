@@ -17,9 +17,8 @@ export interface AppServerSessionOptions {
   transport?: Omit<AppServerRpcOptions, "onNotification" | "onFailure">;
 }
 
-async function disposeToolHost(host: ToolHost | null): Promise<void> {
+async function removeToolHostDirectory(host: ToolHost | null): Promise<void> {
   if (!host) return;
-  host.close();
   // ToolHost.listen creates and owns this private directory; no caller path
   // or attachment path participates in this cleanup.
   await rm(dirname(host.socketPath), { recursive: true, force: true });
@@ -41,7 +40,8 @@ export class AppServerSession {
     try {
       return new AppServerSession(options, host);
     } catch (error) {
-      await disposeToolHost(host);
+      host?.close();
+      await removeToolHostDirectory(host);
       throw error;
     }
   }
@@ -106,10 +106,15 @@ export class AppServerSession {
   }
 
   close(): Promise<void> {
-    this.#closing ??= (async () => {
-      try { await this.#transport.close(); }
-      finally { await disposeToolHost(this.#toolHost); }
-    })();
+    if (!this.#closing) {
+      // Mark closing before abort listeners run; stop tool access synchronously,
+      // without waiting for the child's bounded graceful shutdown.
+      this.#closing = Promise.resolve().then(async () => {
+        try { await this.#transport.close(); }
+        finally { await removeToolHostDirectory(this.#toolHost); }
+      });
+      this.#toolHost?.close();
+    }
     return this.#closing;
   }
 }

@@ -40,17 +40,19 @@ integration remain later stages.
 resume, and supplies the same thread configuration in both cases. Developer
 instructions are a thread field; user text and local images use an ordered,
 closed input converter. Other input kinds, including external messages, are
-rejected. Caller-owned image files are neither copied nor removed.
+rejected. Caller-owned image files are neither copied nor removed. Host/launch
+integration must supply materialized absolute image paths.
 
 The bridge retains exec's `default_tools_approval_mode = "approve"` and
 310-second tool timeout. `features.multi_agent` is always explicit and defaults
 to true, matching `CodexHost`; false disables internal subagents. No descriptors
 means the session adds no kaoiro MCP server configuration. Socket creation uses
 `ToolHost.listen` unchanged, inside its fresh private directory. Session shutdown
-and failed initial setup
-close the tool host and remove only that directory. The caller supplies the
-active turn's abort signal; connecting that callback to `CodexHost` and its
-coordinator/lease/queue is still pending.
+and failed initial setup close the tool host and remove only that directory.
+Shutdown stops new tool connections and aborts existing handlers synchronously
+before waiting for the child. The caller supplies the active turn's abort signal;
+connecting that callback to `CodexHost` and its coordinator/lease/queue is still
+pending.
 
 Tests cover protocol faults, request correlation, pre-response notifications,
 consumer abandonment, buffered termination, and process shutdown. The real CLI
