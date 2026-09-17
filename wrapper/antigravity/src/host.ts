@@ -287,6 +287,11 @@ export class AntigravityHost implements EngineAdapter {
   #pendingPermissionSwitch:
     | { revision: number; requested: PermissionConfiguration }
     | null = null;
+  // A switch whose config took effect this turn but whose applied observation
+  // waits for the engine's init to confirm session identity (M4).
+  #pendingAppliedObservation:
+    | { submission: PermissionSubmission; approval: PermissionAxesExt["approval"] }
+    | null = null;
   #permissionControl: PermissionControlExt | null = null;
   #lastEffectivePermission: PermissionObservation | null = null;
   readonly #toolNames = new Map<string, string>();
@@ -482,6 +487,13 @@ export class AntigravityHost implements EngineAdapter {
    *  Stage B0): mutates #config so the turn's fresh gate enforces the new cell,
    *  then reports the applied observation as both ext.permission_control and a
    *  `permission_applied` audit event. */
+  /** Applies a staged permission switch at the start of a turn (ADR-0057 F4c
+   *  Stage B0): mutates #config so the turn's fresh gate enforces the new cell.
+   *  The switch is reported as `applying` here (submitted captured, no
+   *  effective yet) and only PROMOTED to `applied` once the engine's `init`
+   *  event confirms this turn's session identity — session_id / turn_id are
+   *  engine-observed and must never be manufactured from a wrapper token
+   *  (protocol.md, PermissionObservation; #confirmAppliedPermission). */
   #applyPendingPermissionSwitch(turnToken: string): void {
     const pending = this.#pendingPermissionSwitch;
     if (pending === null) return;
@@ -501,21 +513,42 @@ export class AntigravityHost implements EngineAdapter {
       requested,
       execution_id: turnToken,
     };
+    this.#pendingAppliedObservation = { submission, approval };
+    this.#permissionControl = {
+      revision: pending.revision,
+      requested,
+      status: "applying",
+      constraints: this.#permissionConstraints(approval),
+      submitted: submission,
+      ...(this.#lastEffectivePermission === null
+        ? {}
+        : { last_effective: this.#lastEffectivePermission }),
+    };
+    this.#emitState(this.#machine.state);
+  }
+
+  /** Promotes an `applying` permission switch to `applied` once the engine's
+   *  `init` event has set this turn's session identity (M4). Builds the
+   *  observation from engine-observed session_id / turn_id (the conversation
+   *  id — antigravity resumes by conversation and emits no separate turn id)
+   *  and the wrapper's own execution_id, then reports permission_applied. */
+  #confirmAppliedPermission(): void {
+    const pending = this.#pendingAppliedObservation;
+    if (pending === null || this.#sessionId === null) return;
+    this.#pendingAppliedObservation = null;
+    const { submission, approval } = pending;
+    const cell = submission.requested;
     const observation: PermissionObservation = {
       ...submission,
-      // A switch can only reach here after the agent joined and reported
-      // capability; #sessionId is set from the prior turn's init on a fresh
-      // spawn and from the resume id otherwise. turnToken is a non-empty
-      // fallback for the degenerate first-turn-before-init edge.
-      session_id: this.#sessionId ?? turnToken,
-      turn_id: turnToken,
+      session_id: this.#sessionId,
+      turn_id: this.#sessionId,
       permission: { sandbox: cell.sandbox, approval, enforcement: "advisory" },
       network_access: effectiveNetworkAccess(cell.sandbox, cell.network_access),
     };
     this.#lastEffectivePermission = observation;
     this.#permissionControl = {
-      revision: pending.revision,
-      requested,
+      revision: submission.revision,
+      requested: cell,
       status: "applied",
       constraints: this.#permissionConstraints(approval),
       submitted: submission,
@@ -528,8 +561,6 @@ export class AntigravityHost implements EngineAdapter {
       at: this.#now(),
       details: observation,
     });
-    // Emit so the applied control (and the new effective cell) reaches the
-    // server promptly, not only whenever the next turn state emit happens.
     this.#emitState(this.#machine.state);
   }
 
@@ -939,6 +970,10 @@ export class AntigravityHost implements EngineAdapter {
       if (sessionId !== null) {
         this.#sessionId = sessionId;
         this.#options.onSessionId?.(sessionId);
+        // M4: now that the engine has confirmed this turn's session identity,
+        // promote any applied-but-unconfirmed permission switch to `applied`
+        // with engine-observed session_id / turn_id.
+        this.#confirmAppliedPermission();
       }
     }
     const step = event.event === "step_update" ? event.step_update : null;

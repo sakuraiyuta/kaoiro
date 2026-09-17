@@ -643,7 +643,12 @@ function samePermissionSelection(
 ): boolean {
   return left.revision === right.revision &&
     left.requested.sandbox === right.requested.sandbox &&
-    left.requested.network_access === right.requested.network_access;
+    left.requested.network_access === right.requested.network_access &&
+    // issue #359: approval is a mutable axis on Antigravity, so an applied
+    // observation whose approval disagrees with the submission is NOT the same
+    // selection. Optional (both undefined on Codex/Claude = equal); a present
+    // mismatch (submitted local / effective never) fails strict equality.
+    left.requested.approval === right.requested.approval;
 }
 
 function permissionControlFrom(value: unknown): PermissionControlExt | null {

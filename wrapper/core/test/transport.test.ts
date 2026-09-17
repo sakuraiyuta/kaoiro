@@ -607,6 +607,65 @@ describe("ServerLink — permission synchronization", () => {
     ]);
   });
 
+  it("rejects an applied permission_sync whose approval disagrees between submitted and effective (issue #359)", async () => {
+    const received: unknown[] = [];
+    const link = new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      permissionSync: {
+        engine: "antigravity",
+        onSync: (message) => received.push(message),
+      },
+    });
+    mock.joinReceivers.get("ok")?.({ permission_sync: true });
+    await expect(link.waitForPermissionSyncNegotiation()).resolves.toBe(true);
+
+    const makeControl = (effectiveApproval: string): Record<string, unknown> => ({
+      revision: 5,
+      requested: { sandbox: "workspace-write", network_access: false, approval: "local" },
+      status: "applied",
+      constraints: { approval: "local", enforcement: "advisory" },
+      submitted: {
+        revision: 5,
+        requested: { sandbox: "workspace-write", network_access: false, approval: "local" },
+        execution_id: "e5",
+      },
+      effective: {
+        revision: 5,
+        requested: {
+          sandbox: "workspace-write",
+          network_access: false,
+          approval: effectiveApproval,
+        },
+        execution_id: "e5",
+        session_id: "s",
+        turn_id: "t",
+        permission: {
+          sandbox: "workspace-write",
+          approval: effectiveApproval,
+          enforcement: "advisory",
+        },
+        network_access: false,
+      },
+    });
+    const next = {
+      revision: 5,
+      requested: { sandbox: "workspace-write", network_access: false, approval: "local" },
+    };
+
+    // submitted.approval=local vs effective.requested.approval=never: not the
+    // same selection, so the applied evidence is rejected (permissionSyncFrom
+    // → null, onSync never fires) and #permissionSyncAccepting stays open.
+    emit("permission_sync", { version: "0", control: makeControl("never"), next });
+    // A matching approval is accepted.
+    emit("permission_sync", { version: "0", control: makeControl("local"), next });
+
+    await vi.waitFor(() => expect(received.length).toBe(1));
+    const only = received[0] as {
+      control: { effective: { requested: { approval: string } } };
+    };
+    expect(only.control.effective.requested.approval).toBe("local");
+  });
+
   it("legacy join は capability false で既存 dispatch を止めない", async () => {
     const negotiated: boolean[] = [];
     const link = new ServerLink("ws://x/wrapper", "a.agent", {

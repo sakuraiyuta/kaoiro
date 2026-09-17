@@ -35,6 +35,7 @@ import {
 } from "./resume_snapshot.js";
 import {
   resolveAntigravityCeiling,
+  type AntigravityCeiling,
   type AntigravityMaxConfig,
 } from "./permission_ceiling.js";
 import {
@@ -428,8 +429,13 @@ export function resolveWrapperConfig(
   antigravityExtraModels?: EngineModelInfo[],
   antigravityCliPath?: string,
   antigravityProbeTimeoutMs?: number,
-  // ADR-0057 F4c Stage B0 (issue #359), same appended-last rationale.
-  antigravityMax?: AntigravityMaxConfig,
+  // ADR-0057 F4c Stage B0 (issue #359): the ALREADY-RESOLVED per-axis ceiling,
+  // relayed verbatim as WrapperConfig.max_*. Resolution + the fail-closed
+  // conflict reject happen once at the initial launch (#start / #launchSpawn);
+  // this function never recomputes from the (snapshot-mutable) launch values,
+  // so a switch / reset cannot silently widen the ceiling. Same appended-last
+  // rationale as the params above.
+  antigravityCeiling?: AntigravityCeiling,
 ): WrapperConfig {
   const config: WrapperConfig = {
     agent_id: agentId,
@@ -492,23 +498,16 @@ export function resolveWrapperConfig(
     if (antigravityProbeTimeoutMs !== undefined) {
       config.antigravity_probe_timeout_ms = antigravityProbeTimeoutMs;
     }
-    // ADR-0057 F4c Stage B0 (issue #359): resolve the per-axis permission
-    // ceiling from the launch values and the operator's `antigravity.max_*`
-    // config, and relay it as WrapperConfig.max_*. resolveAntigravityCeiling
-    // always returns a safe ceiling (a config conflict is rejected at spawn
-    // in #launchSpawn; here it defensively falls back to the launch-derived
-    // default). The wrapper advertises these as permission_switch_axes.
-    const { ceiling } = resolveAntigravityCeiling(
-      {
-        sandbox: parsed.sandbox,
-        approval: parsed.approval,
-        networkAccess: parsed.networkAccess,
-      },
-      antigravityMax,
-    );
-    config.max_sandbox = ceiling.max_sandbox;
-    config.max_approval = ceiling.max_approval;
-    config.max_network_access = ceiling.max_network_access;
+    // ADR-0057 F4c Stage B0 (issue #359): relay the caller-resolved ceiling
+    // verbatim. It was resolved once at the initial launch and is held
+    // immutable on the ChildEntry, so a relaunch (crash restart / switch /
+    // reset) cannot recompute a wider one from a snapshot-overwritten launch
+    // value. The wrapper advertises these as permission_switch_axes.
+    if (antigravityCeiling !== undefined) {
+      config.max_sandbox = antigravityCeiling.max_sandbox;
+      config.max_approval = antigravityCeiling.max_approval;
+      config.max_network_access = antigravityCeiling.max_network_access;
+    }
   }
   if (
     parsed.engine === "claude-code" &&
@@ -592,6 +591,13 @@ interface ChildEntry {
   resetTerminationTimer?: ReturnType<typeof setTimeout>;
   /** SIGTERM has already been escalated to SIGKILL for this reset. */
   resetTerminationEscalated?: boolean;
+  /** ADR-0057 F4c Stage B0 (issue #359): the antigravity permission-switch
+   *  ceiling resolved ONCE at the initial launch and held immutable for this
+   *  child's whole lifecycle. Every relaunch (crash restart / switch / reset /
+   *  rollback) relays THIS value rather than recomputing from the launch axes,
+   *  which a resume snapshot can overwrite — otherwise a switch / reset could
+   *  silently widen the host-local ceiling. Absent for non-antigravity. */
+  permissionCeiling?: AntigravityCeiling;
 }
 
 /** Fields the runner's config watcher can hot-swap while the supervisor
@@ -957,6 +963,28 @@ export class Supervisor {
       }
       nextSnapshot = sanitized;
     }
+    // ADR-0057 F4c Stage B0 (issue #359): a switch_session must not widen the
+    // immutable launch ceiling via a snapshot value more permissive than it.
+    // Validate BEFORE the F4 lock mutation and the kill below, so a rejected
+    // switch leaves activeSessions and the running wrapper untouched.
+    if (entry.permissionCeiling !== undefined) {
+      const wouldApply = applyResumeSnapshot(
+        entry.parsed,
+        nextSnapshot,
+        entry.parsed.engine,
+      );
+      const conflict = this.#ceilingConflictAgainst(
+        wouldApply,
+        entry.permissionCeiling,
+      );
+      if (conflict !== null) {
+        process.stderr.write(
+          `runner: switch_session refused for ${agentId}: ${conflict}\n`,
+        );
+        this.#fail(agentId, "permission_ceiling_conflict", requestId);
+        return;
+      }
+    }
     const old = entry.parsed.resumeSessionId;
     // F4: another agent already resuming the target session blocks the swap.
     // Self (same session already bound) is a no-op we could early-return, but
@@ -1108,6 +1136,32 @@ export class Supervisor {
       nextSnapshot,
       entry.parsed.engine,
     );
+    // ADR-0057 F4c Stage B0 (issue #359): a reset_session must not widen the
+    // immutable launch ceiling via a snapshot value more permissive than it.
+    // On conflict, fall to a terminal reset result (no fresh spawn) and clear
+    // the pending reset stashed above, leaving the old wrapper untouched.
+    if (entry.permissionCeiling !== undefined) {
+      const conflict = this.#ceilingConflictAgainst(
+        applied,
+        entry.permissionCeiling,
+      );
+      if (conflict !== null) {
+        process.stderr.write(
+          `runner: reset_session refused for ${agentId}: ${conflict}\n`,
+        );
+        delete entry.pendingReset;
+        this.#sendResetResult({
+          version: "0",
+          host_id: this.#hostId,
+          agent_id: agentId,
+          mode: mode as SessionResetMode,
+          request_id: requestId,
+          ok: false,
+          reason: "spawn_failed",
+        });
+        return;
+      }
+    }
     // Fresh: strip resumeSessionId so #relaunchForReset launches without
     // --resume. resumeSnapshot stays (phase-15 D8 last-effective values).
     // Destructure-and-drop instead of assigning `undefined` because the
@@ -1328,7 +1382,11 @@ export class Supervisor {
     return false;
   }
 
-  #wrapperConfig(agentId: string, parsed: ParsedSpawn): WrapperConfig {
+  #wrapperConfig(
+    agentId: string,
+    parsed: ParsedSpawn,
+    antigravityCeiling?: AntigravityCeiling,
+  ): WrapperConfig {
     return resolveWrapperConfig(
       agentId,
       parsed,
@@ -1342,15 +1400,57 @@ export class Supervisor {
       this.#antigravityExtraModels,
       this.#antigravityExecutable?.ok ? this.#antigravityExecutable.path : undefined,
       this.#antigravityProbeTimeoutMs,
+      antigravityCeiling,
+    );
+  }
+
+  /** Resolves the antigravity permission ceiling for a launch (issue #359).
+   *  Null for non-antigravity. `resolveAntigravityCeiling` always returns a
+   *  safe ceiling; the caller inspects `.conflict` to reject fail-closed. */
+  #resolveCeiling(parsed: ParsedSpawn): {
+    ceiling: AntigravityCeiling | undefined;
+    conflict: string | null;
+  } {
+    if (parsed.engine !== "antigravity") return { ceiling: undefined, conflict: null };
+    const { ceiling, conflict } = resolveAntigravityCeiling(
+      {
+        sandbox: parsed.sandbox,
+        approval: parsed.approval,
+        networkAccess: parsed.networkAccess,
+      },
       this.#antigravityMax,
     );
+    return { ceiling, conflict };
+  }
+
+  /** True when `parsed`'s launch values would widen past an already-resolved,
+   *  immutable ceiling (a switch / reset carrying a snapshot value more
+   *  permissive than the launch ceiling). Returns the conflict detail or null.
+   *  Reuses resolveAntigravityCeiling with the stored ceiling as the explicit
+   *  config bound. */
+  #ceilingConflictAgainst(
+    parsed: ParsedSpawn,
+    ceiling: AntigravityCeiling,
+  ): string | null {
+    return resolveAntigravityCeiling(
+      {
+        sandbox: parsed.sandbox,
+        approval: parsed.approval,
+        networkAccess: parsed.networkAccess,
+      },
+      ceiling,
+    ).conflict;
   }
 
   #start(agentId: string, parsed: ParsedSpawn): boolean {
     if (!this.#antigravityLaunchable(agentId, parsed)) return false;
+    // Resolve the permission ceiling ONCE here and pin it on the ChildEntry;
+    // #launchSpawn already rejected a conflicting initial config, so the
+    // resolution is safe (issue #359).
+    const { ceiling } = this.#resolveCeiling(parsed);
     const child = this.#launch(
       agentId,
-      this.#wrapperConfig(agentId, parsed),
+      this.#wrapperConfig(agentId, parsed, ceiling),
       parsed.cwd,
       parsed.resumeSessionId,
       parsed.initialPrompt,
@@ -1363,6 +1463,7 @@ export class Supervisor {
       windowStart: this.#now(),
       stopping: false,
       restarting: false,
+      ...(ceiling === undefined ? {} : { permissionCeiling: ceiling }),
     };
     this.#children.set(agentId, entry);
     child.on("exit", () => this.#onExit(agentId));
@@ -1516,7 +1617,7 @@ export class Supervisor {
       // agent comes back idle and awaits the next instruction.
       child = this.#launch(
         agentId,
-        this.#wrapperConfig(agentId, entry.parsed),
+        this.#wrapperConfig(agentId, entry.parsed, entry.permissionCeiling),
         entry.parsed.cwd,
         entry.parsed.resumeSessionId,
         undefined,
@@ -1558,7 +1659,7 @@ export class Supervisor {
     try {
       child = this.#launch(
         agentId,
-        this.#wrapperConfig(agentId, entry.parsed),
+        this.#wrapperConfig(agentId, entry.parsed, entry.permissionCeiling),
         entry.parsed.cwd,
         undefined, // fresh: no --resume
         undefined, // no initial prompt
@@ -1660,7 +1761,7 @@ export class Supervisor {
     try {
       child = this.#launch(
         agentId,
-        this.#wrapperConfig(agentId, entry.parsed),
+        this.#wrapperConfig(agentId, entry.parsed, entry.permissionCeiling),
         entry.parsed.cwd,
         rollbackSid,
         undefined,

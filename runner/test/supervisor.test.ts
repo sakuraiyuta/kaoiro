@@ -391,24 +391,11 @@ describe("parseSpawn / resolveWrapperConfig", () => {
   });
   // ADR-0057 F4c Stage B0 (issue #359): the runner relays the resolved
   // permission-switch ceiling as WrapperConfig.max_*.
-  it("relays a default antigravity permission ceiling (approval widened to local)", () => {
-    const parsed = parseSpawn({
-      ...spawnMsg,
-      engine: "antigravity",
-      sandbox: "workspace-write",
-      approval: "on-request",
-      network_access: false,
-    })!;
-    const config = resolveWrapperConfig(
-      "lab-pc-1.antigravity-a",
-      parsed,
-      "ws://localhost:4000/wrapper",
-    );
-    expect(config.max_sandbox).toBe("workspace-write");
-    expect(config.max_approval).toBe("local");
-    expect(config.max_network_access).toBe(false);
-  });
-  it("relays an explicit antigravity permission ceiling via antigravityMax", () => {
+  // issue #359: resolveWrapperConfig relays the ALREADY-RESOLVED ceiling
+  // verbatim; the resolution + default derivation live in
+  // resolveAntigravityCeiling (see permission_ceiling.test.ts) and run once at
+  // the initial launch, so this function never recomputes from launch values.
+  it("relays the resolved antigravity ceiling verbatim as max_*", () => {
     const parsed = parseSpawn({
       ...spawnMsg,
       engine: "antigravity",
@@ -434,6 +421,17 @@ describe("parseSpawn / resolveWrapperConfig", () => {
     expect(config.max_sandbox).toBe("danger-full-access");
     expect(config.max_approval).toBe("never");
     expect(config.max_network_access).toBe(true);
+  });
+  it("omits max_* for an antigravity spawn when no ceiling is supplied", () => {
+    const parsed = parseSpawn({ ...spawnMsg, engine: "antigravity" })!;
+    const config = resolveWrapperConfig(
+      "lab-pc-1.antigravity-a",
+      parsed,
+      "ws://localhost:4000/wrapper",
+    );
+    expect(config.max_sandbox).toBeUndefined();
+    expect(config.max_approval).toBeUndefined();
+    expect(config.max_network_access).toBeUndefined();
   });
   it("does not set max_* for a non-antigravity engine", () => {
     const parsed = parseSpawn({ ...spawnMsg, engine: "codex" })!;
@@ -1115,6 +1113,64 @@ describe("Supervisor.handleSwitchSession", () => {
     expect(h.resumes[1]).toBe(otherSession);
   });
 
+  // issue #359 M2: a switch_session must not widen the immutable launch ceiling
+  // via a snapshot approval more permissive than it. Rejected before the kill.
+  it("rejects a switch_session whose snapshot approval exceeds the stored ceiling", () => {
+    const h = harness({
+      exists: true,
+      antigravityExecutable: { ok: true, path: process.execPath },
+    });
+    h.sup.handleSpawn({
+      ...resumeMsg,
+      agent_id: "lab-pc-1.antigravity-sw",
+      engine: "antigravity",
+      approval: "on-request",
+    });
+    const first = h.last();
+    // Ceiling derived from launch on-request is `local`, relayed on the child.
+    expect(h.configs.at(-1)!.max_approval).toBe("local");
+
+    h.sup.handleSwitchSession({
+      agent_id: "lab-pc-1.antigravity-sw",
+      request_id: "sw-1",
+      resume_session_id: otherSession,
+      resume_snapshot: { approval: "never" },
+    });
+
+    expect(first.kills).toBe(0);
+    expect(h.children).toHaveLength(1);
+    expect(h.results.at(-1)).toMatchObject({
+      ok: false,
+      reason: "permission_ceiling_conflict",
+    });
+  });
+
+  it("allows a switch_session whose snapshot approval is within the stored ceiling", () => {
+    const h = harness({
+      exists: true,
+      antigravityExecutable: { ok: true, path: process.execPath },
+    });
+    h.sup.handleSpawn({
+      ...resumeMsg,
+      agent_id: "lab-pc-1.antigravity-sw2",
+      engine: "antigravity",
+      approval: "on-request",
+    });
+    const first = h.last();
+
+    h.sup.handleSwitchSession({
+      agent_id: "lab-pc-1.antigravity-sw2",
+      request_id: "sw-2",
+      resume_session_id: otherSession,
+      resume_snapshot: { approval: "local" },
+    });
+    expect(first.kills).toBe(1);
+    first.exit();
+    expect(h.children).toHaveLength(2);
+    // The relaunch relays the SAME immutable ceiling, never a widened one.
+    expect(h.configs.at(-1)!.max_approval).toBe("local");
+  });
+
   it("Codex の async T3 完了までは live child を止めず、成功後に切替える (#100)", async () => {
     let exists: boolean | Promise<boolean> = true;
     const children: FakeChild[] = [];
@@ -1261,6 +1317,35 @@ describe("Supervisor.handleResetSession (ADR-0036 F2, phase-17 17-5)", () => {
     expect(h.resetResults).toEqual([
       expect.objectContaining({ ok: false, reason: "spawn_failed" }),
     ]);
+  });
+
+  // issue #359 M2: a reset_session must not widen the immutable launch ceiling
+  // via a snapshot approval more permissive than it — it falls to a terminal
+  // reset result and leaves the old wrapper running.
+  it("rejects a reset_session whose snapshot approval exceeds the stored ceiling", () => {
+    const h = harness({ antigravityExecutable: { ok: true, path: process.execPath } });
+    h.sup.handleSpawn({
+      ...spawnMsg,
+      agent_id: "lab-pc-1.antigravity-rs",
+      engine: "antigravity",
+      approval: "on-request",
+    });
+    expect(h.configs.at(-1)!.max_approval).toBe("local");
+
+    h.sup.handleResetSession({
+      agent_id: "lab-pc-1.antigravity-rs",
+      mode: "new",
+      request_id: "rs_ceiling",
+      previous_session_id: "sess-old-xyz",
+      resume_snapshot: { approval: "never" },
+    });
+
+    expect(h.children).toHaveLength(1);
+    expect(h.children[0]!.kills).toBe(0);
+    expect(h.resetResults.at(-1)).toMatchObject({
+      ok: false,
+      reason: "spawn_failed",
+    });
   });
 
   it.each([
