@@ -181,3 +181,41 @@ export function agyEventToErrorDetail(event: AgyStreamEvent): string | null {
     ? event.result.error
     : null;
 }
+
+export function agyEventIsSuccessfulResult(event: AgyStreamEvent): boolean {
+  return event.event === "result" && event.result.status === "SUCCESS";
+}
+
+export interface AgyQuotaExhaustion {
+  resetDelaySeconds: number;
+}
+
+export function agyEventToQuotaExhaustion(
+  event: AgyStreamEvent,
+): AgyQuotaExhaustion | null {
+  const detail = agyEventToErrorDetail(event);
+  if (
+    detail === null ||
+    !/(?:RESOURCE_EXHAUSTED|\bHTTP\s*429\b|\bcode\s*429\b)/i.test(detail)
+  ) {
+    return null;
+  }
+  const match = /\bResets in\s+(?:(\d+)\s*h\s*)?(?:(\d+)\s*m\s*)?(?:(\d+)\s*s)?\b/i.exec(detail);
+  if (match === null || (match[1] === undefined && match[2] === undefined && match[3] === undefined)) {
+    return null;
+  }
+  const hours = Number(match[1] ?? 0);
+  const minutes = Number(match[2] ?? 0);
+  const seconds = Number(match[3] ?? 0);
+  if (
+    !Number.isSafeInteger(hours) ||
+    !Number.isSafeInteger(minutes) ||
+    !Number.isSafeInteger(seconds) ||
+    minutes >= 60 ||
+    seconds >= 60
+  ) {
+    return null;
+  }
+  const resetDelaySeconds = hours * 3_600 + minutes * 60 + seconds;
+  return Number.isSafeInteger(resetDelaySeconds) ? { resetDelaySeconds } : null;
+}

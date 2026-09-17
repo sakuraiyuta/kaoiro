@@ -12,6 +12,7 @@ import {
   stepState,
   type EngineAdapter,
   type Envelope,
+  type InterAgentErrorClassifyInput,
   type KaoiroState,
   type LogEntry,
   type MachineState,
@@ -28,6 +29,8 @@ import { boundErrorDetail, writeRedactedStderr } from "@kaoiro/agent-common";
 import type { EngineModelInfo } from "@kaoiro/protocol";
 import {
   agyEventToEvents,
+  agyEventIsSuccessfulResult,
+  agyEventToQuotaExhaustion,
   agyEventToLogs,
   agyEventToResult,
   agyEventToSessionId,
@@ -71,7 +74,7 @@ export interface AntigravityHostOptions {
   onTurnEnd?: (info: {
     turnToken: string;
     conversationIds: readonly string[];
-    error?: { detail?: string };
+    error?: InterAgentErrorClassifyInput;
     cancellation?: { kind: "watchdog_fail_stop"; started: false };
   }) => void;
   onTurnBoundary?: (info: { turnToken: string }) => void;
@@ -96,6 +99,7 @@ export interface AntigravityHostOptions {
   probeModels?: () => Promise<EngineModelInfo[] | null>;
   runtimeAssetsAvailable?: () => boolean;
   warn?: (message: string) => void;
+  now?: () => string;
 }
 
 function readableLines(stream: NodeJS.ReadableStream, onLine: (line: string) => void): void {
@@ -216,6 +220,10 @@ export class AntigravityHost implements EngineAdapter {
   #pendingModel: string | null = null;
   #switchError: Record<string, unknown> | null = null;
   readonly #toolNames = new Map<string, string>();
+  readonly #rateLimits = new Map<
+    string,
+    { status?: string; utilization?: number; resets_at?: number }
+  >();
 
   constructor(config: WrapperConfig, options: AntigravityHostOptions) {
     this.#config = config as AntigravityLaunchConfig;
@@ -239,7 +247,7 @@ export class AntigravityHost implements EngineAdapter {
       ?? this.#config.antigravity_probe_timeout_ms
       ?? DEFAULT_AGY_PROBE_TIMEOUT_MS;
     this.#sessionId = options.resumeSessionId ?? null;
-    this.#now = () => new Date().toISOString();
+    this.#now = options.now ?? (() => new Date().toISOString());
     sweepStaleCustomizationDirs();
     void this.#refreshCatalog();
   }
@@ -390,7 +398,7 @@ export class AntigravityHost implements EngineAdapter {
     if (turn === undefined) return;
     this.#turnActive = true;
     const generation = this.#lifecycleGeneration;
-    let error: { detail?: string } | undefined;
+    let error: InterAgentErrorClassifyInput | undefined;
     try {
       error = await this.#runTurn(turn.text, generation, turn.turnToken, turn.conversationIds ?? []);
     } catch (caught) {
@@ -421,7 +429,7 @@ export class AntigravityHost implements EngineAdapter {
     generation: number,
     turnToken?: string,
     conversationIds: readonly string[] = [],
-  ): Promise<{ detail?: string } | undefined> {
+  ): Promise<InterAgentErrorClassifyInput | undefined> {
     if (!this.#agyExecutable.ok) {
       throw new Error(`antigravity_cli_unavailable:${this.#agyExecutable.reason}`);
     }
@@ -559,12 +567,26 @@ export class AntigravityHost implements EngineAdapter {
         return { detail };
       } else {
         const result = agyEventToResult(terminalResult);
+        const quota = agyEventToQuotaExhaustion(terminalResult);
+        if (quota !== null) {
+          this.#rateLimits.set("seven_day", {
+            status: "blocked",
+            utilization: 1,
+            resets_at: Math.floor(Date.parse(this.#now()) / 1_000) + quota.resetDelaySeconds,
+          });
+        } else if (agyEventIsSuccessfulResult(terminalResult)) {
+          this.#rateLimits.delete("seven_day");
+        }
         if (result?.is_error === true) this.#rollbackPendingModel(attemptedModel);
         else this.#promotePendingModel(attemptedModel);
         this.#publishTerminalResult(terminalResult);
-        return result?.is_error === true
-          ? { detail: "antigravity turn failed" }
-          : undefined;
+        if (quota !== null) {
+          return {
+            reason: "blocking_limit",
+            rateLimitResetSeconds: quota.resetDelaySeconds,
+          };
+        }
+        return result?.is_error === true ? { detail: "antigravity turn failed" } : undefined;
       }
     } finally {
       gateServer?.close();
@@ -882,6 +904,7 @@ export class AntigravityHost implements EngineAdapter {
     }
     if (this.#pendingPermission !== null) ext.pending_permission = this.#pendingPermission;
     if (this.#pendingQuestion !== null) ext.pending_question = this.#pendingQuestion;
+    if (this.#rateLimits.size > 0) ext.rate_limits = Object.fromEntries(this.#rateLimits);
     ext.cwd = this.#options.cwd;
     return ext;
   }

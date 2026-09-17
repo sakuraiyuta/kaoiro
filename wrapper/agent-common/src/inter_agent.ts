@@ -168,6 +168,8 @@ const ERROR_CODE_GUIDANCE_SUMMARY = Object.entries(ERROR_CODE_GUIDANCE)
 export interface InterAgentErrorClassifyInput {
   reason?: string;
   detail?: string;
+  /** Adapter-parsed reset delay. Raw engine text must never be placed here. */
+  rateLimitResetSeconds?: number;
 }
 
 const RATE_LIMIT_REASONS = new Set(["blocking_limit", "rapid_refill_breaker"]);
@@ -244,6 +246,28 @@ function messageForCode(code: string): string {
   return ERROR_CODE_MESSAGE[code] ?? DEFAULT_ERROR_MESSAGE;
 }
 
+function rateLimitMessage(resetDelaySeconds: number | undefined): string {
+  const base = messageForCode("rate_limit");
+  if (
+    resetDelaySeconds === undefined ||
+    !Number.isSafeInteger(resetDelaySeconds) ||
+    resetDelaySeconds < 0
+  ) {
+    return base;
+  }
+  let remainder = resetDelaySeconds;
+  const hours = Math.floor(remainder / 3_600);
+  remainder %= 3_600;
+  const minutes = Math.floor(remainder / 60);
+  const seconds = remainder % 60;
+  const duration = [
+    hours > 0 ? `${hours}h` : "",
+    minutes > 0 ? `${minutes}m` : "",
+    seconds > 0 || resetDelaySeconds === 0 ? `${seconds}s` : "",
+  ].join("");
+  return `${base}; Resets in ${duration}`;
+}
+
 /** Maps adapter-reported engine error info to the open error-code vocabulary
  *  (issue #131: rate_limit / context_overflow / api_error / timeout /
  *  interrupted / reconnecting / disconnected). Unrecognized input degrades
@@ -262,7 +286,7 @@ export function classifyInterAgentError(
   }
   if (reason !== undefined) {
     if (RATE_LIMIT_REASONS.has(reason)) {
-      return { code: "rate_limit", message: messageForCode("rate_limit") };
+      return { code: "rate_limit", message: rateLimitMessage(input.rateLimitResetSeconds) };
     }
     if (CONTEXT_OVERFLOW_REASONS.has(reason)) {
       return { code: "context_overflow", message: messageForCode("context_overflow") };
@@ -280,7 +304,12 @@ export function classifyInterAgentError(
   if (input.detail !== undefined) {
     const byKeyword = classifyByDetailKeywords(input.detail);
     if (byKeyword !== null) {
-      return { code: byKeyword, message: messageForCode(byKeyword) };
+      return {
+        code: byKeyword,
+        message: byKeyword === "rate_limit"
+          ? rateLimitMessage(input.rateLimitResetSeconds)
+          : messageForCode(byKeyword),
+      };
     }
   }
   return { code: "api_error", message: messageForCode("api_error") };

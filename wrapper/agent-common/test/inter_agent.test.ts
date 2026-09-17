@@ -1235,6 +1235,28 @@ describe("classifyInterAgentError (issue #131)", () => {
     });
   });
 
+  it("adapter が構造化した reset delay だけを rate_limit message に加える", () => {
+    expect(classifyInterAgentError({
+      reason: "blocking_limit",
+      detail: "RESOURCE_EXHAUSTED token=secret-value",
+      rateLimitResetSeconds: 535_768,
+    })).toEqual({
+      code: "rate_limit",
+      message: "the peer hit a rate limit; Resets in 148h49m28s",
+    });
+  });
+
+  it("reset delay が無い既存 engine の rate_limit 出力は変えない", () => {
+    expect(classifyInterAgentError({ reason: "blocking_limit" })).toEqual({
+      code: "rate_limit",
+      message: "the peer hit a rate limit",
+    });
+    expect(classifyInterAgentError({ detail: "HTTP 429 Too Many Requests" })).toEqual({
+      code: "rate_limit",
+      message: "the peer hit a rate limit",
+    });
+  });
+
   it("未知の reason は detail のキーワードで rate_limit/context_overflow を推定する", () => {
     expect(
       classifyInterAgentError({

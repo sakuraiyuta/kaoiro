@@ -1379,6 +1379,10 @@ value peers read through `list_agents`.
 - Omit each key until the engine has reported it once. **Absent = unknown**, not
   unlimited (Claude before the first usage refresh; Codex immediately after a
   spawn with no rollout tail).
+- Antigravity reports an observed individual quota exhaustion in the canonical
+  `seven_day` window: its terminal reset delay can span about 149 hours, which
+  matches the weekly window, and using a canonical key keeps existing consumers
+  interoperable.
 
 #### Session operation tool — `request_compact` (phase-28 B2)
 

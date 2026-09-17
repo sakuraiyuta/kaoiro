@@ -33,9 +33,12 @@ export { runAntigravityCli } from "./cli.js";
 export {
   agyEventToErrorDetail,
   agyEventToEvents,
+  agyEventIsSuccessfulResult,
   agyEventToLogs,
+  agyEventToQuotaExhaustion,
   agyEventToResult,
   agyEventToSessionId,
   parseAgyStreamLine,
 } from "./adapter.js";
 export type { AgyStreamEvent } from "./adapter.js";
+export type { AgyQuotaExhaustion } from "./adapter.js";

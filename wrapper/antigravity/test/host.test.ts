@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
-import { PermissionBroker, QuestionBroker, type Envelope, type WrapperConfig } from "@kaoiro/agent-common";
-import { AntigravityHost, initialStatusExt, isGateRegistered, type GateProbe, type SpawnedAgy } from "../src/host.js";
+import { PermissionBroker, QuestionBroker, classifyInterAgentError, type Envelope, type InterAgentErrorClassifyInput, type WrapperConfig } from "@kaoiro/agent-common";
+import { AntigravityHost, initialStatusExt, isGateRegistered, type AntigravityHostOptions, type GateProbe, type SpawnedAgy } from "../src/host.js";
 import type { AntigravityLaunchConfig } from "../src/gate.js";
 
 class FakeAgy extends EventEmitter {
@@ -63,6 +63,8 @@ function hostHarness(options: {
   dangerouslySkipPermissions?: boolean;
   verifyGate?: boolean | (() => Promise<boolean>);
   config?: WrapperConfig;
+  now?: () => string;
+  onTurnEnd?: AntigravityHostOptions["onTurnEnd"];
 } = {}) {
   const states: Envelope[] = [];
   const logs: Envelope[] = [];
@@ -80,6 +82,8 @@ function hostHarness(options: {
     ...(options.resumeSessionId === undefined ? {} : { resumeSessionId: options.resumeSessionId }),
     ...(options.dangerouslySkipPermissions === undefined ? {} : { dangerouslySkipPermissions: options.dangerouslySkipPermissions }),
     agyPath: "/test/agy",
+    ...(options.now === undefined ? {} : { now: options.now }),
+    ...(options.onTurnEnd === undefined ? {} : { onTurnEnd: options.onTurnEnd }),
     spawn: (command, args) => {
       const child = new FakeAgy();
       calls.push({ command, args, child });
@@ -472,6 +476,72 @@ if (args[0] === "models") {
     calls[0]!.child.finish();
     await waitFor(() => logs.some((envelope) => envelope.type === "result"));
     expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ is_error: true, error_detail: "agy_exit_without_result" });
+    host.close();
+  });
+
+  it("quota exhaustion を peer error と seven_day snapshot に写像し、成功後に解除する", async () => {
+    const turnErrors: Array<InterAgentErrorClassifyInput | undefined> = [];
+    const now = "2026-09-17T00:00:00.000Z";
+    const { host, states, calls } = hostHarness({
+      now: () => now,
+      onTurnEnd: ({ error }) => turnErrors.push(error),
+    });
+    await host.send("quota", undefined, ["cid"], "turn-quota");
+    await waitFor(() => calls.length === 1);
+    calls[0]!.child.stdout.write(`${JSON.stringify({
+      event: "result",
+      result: {
+        status: "ERROR",
+        error: "RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 148h49m28s.",
+      },
+    })}\n`);
+    calls[0]!.child.finish();
+    await waitFor(() => turnErrors.length === 1);
+    const expected = {
+      seven_day: {
+        status: "blocked",
+        utilization: 1,
+        resets_at: Math.floor(Date.parse(now) / 1_000) + 535_768,
+      },
+    };
+    expect(turnErrors).toEqual([{
+      reason: "blocking_limit",
+      rateLimitResetSeconds: 535_768,
+    }]);
+    expect(classifyInterAgentError(turnErrors[0]!)).toEqual({
+      code: "rate_limit",
+      message: "the peer hit a rate limit; Resets in 148h49m28s",
+    });
+    expect(states.at(-1)?.ext?.rate_limits).toEqual(expected);
+    expect(host.statusSnapshot().rate_limits).toEqual(expected);
+
+    await host.send("recovered", undefined, ["cid"], "turn-success");
+    await waitFor(() => calls.length === 2);
+    calls[1]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"ok"}}\n');
+    calls[1]!.child.finish();
+    await waitFor(() => turnErrors.length === 2);
+    expect(turnErrors[1]).toBeUndefined();
+    expect(host.statusSnapshot()).not.toHaveProperty("rate_limits");
+    expect(states.at(-1)?.ext).not.toHaveProperty("rate_limits");
+    host.close();
+  });
+
+  it("unrecognized terminal error は api_error fallback 用 detail のままにする", async () => {
+    const turnErrors: Array<InterAgentErrorClassifyInput | undefined> = [];
+    const { host, calls } = hostHarness({
+      onTurnEnd: ({ error }) => turnErrors.push(error),
+    });
+    await host.send("failure", undefined, ["cid"], "turn-failure");
+    await waitFor(() => calls.length === 1);
+    calls[0]!.child.stdout.write('{"event":"result","result":{"status":"ERROR","error":"HTTP 500 backend unavailable"}}\n');
+    calls[0]!.child.finish();
+    await waitFor(() => turnErrors.length === 1);
+    expect(turnErrors).toEqual([{ detail: "antigravity turn failed" }]);
+    expect(classifyInterAgentError(turnErrors[0]!)).toEqual({
+      code: "api_error",
+      message: "the peer reported an unspecified error",
+    });
+    expect(host.statusSnapshot()).not.toHaveProperty("rate_limits");
     host.close();
   });
 

@@ -4,7 +4,9 @@ import { reduceStates } from "@kaoiro/agent-common";
 import {
   agyEventToErrorDetail,
   agyEventToEvents,
+  agyEventIsSuccessfulResult,
   agyEventToLogs,
+  agyEventToQuotaExhaustion,
   agyEventToResult,
   agyEventToSessionId,
   parseAgyStreamLine,
@@ -31,6 +33,7 @@ describe("agy stream-json adapter", () => {
       "waiting_input",
     ]);
     expect(agyEventToResult(events.at(-1)!)).toEqual({ text: "PONG\n" });
+    expect(agyEventIsSuccessfulResult(events.at(-1)!)).toBe(true);
   });
 
   it("実測 tool fixtureをtool_runningからthinkingへ戻し、入力とhook denyをrelayする", () => {
@@ -76,6 +79,30 @@ describe("agy stream-json adapter", () => {
       error_detail: "timeout waiting for response",
     });
     expect(agyEventToErrorDetail(result)).toBe("timeout waiting for response");
+    expect(agyEventIsSuccessfulResult(result)).toBe(false);
+  });
+
+  it.each([
+    ["RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 148h49m28s.", 535_768],
+    ["HTTP 429: quota exhausted. Resets in 2h 3m 4s", 7_384],
+    ["RESOURCE_EXHAUSTED: quota exhausted. Resets in 52m13s", 3_133],
+  ])("quota exhaustion の reset delay を構造化する: %s", (error, resetDelaySeconds) => {
+    expect(agyEventToQuotaExhaustion({
+      event: "result",
+      result: { status: "ERROR", error },
+    })).toEqual({ resetDelaySeconds });
+  });
+
+  it.each([
+    "HTTP 500: Resets in 1h2m3s",
+    "RESOURCE_EXHAUSTED (code 429): reset time unavailable",
+    "RESOURCE_EXHAUSTED (code 429): Resets in tomorrow",
+    "RESOURCE_EXHAUSTED (code 429): Resets in 1h60m0s",
+  ])("quota/reset 形式を証明できない error は分類しない: %s", (error) => {
+    expect(agyEventToQuotaExhaustion({
+      event: "result",
+      result: { status: "ERROR", error },
+    })).toBeNull();
   });
 
   it("壊れた行と未知eventは安全に無視する", () => {
