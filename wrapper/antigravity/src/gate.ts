@@ -263,13 +263,30 @@ function addPathsStayLocal(args: readonly string[], cwd: string): boolean {
     paths.every((path) => localPathOperand(path, cwd));
 }
 
+const OBSERVED_GIT_FLAGS = new Set([
+  "--name-only", "--name-status", "--no-patch", "--oneline", "--patch", "--stat", "-p",
+]);
+const OBSERVED_GIT_VALUE_OPTIONS = new Set([
+  "--author", "--grep", "--max-count", "--since", "--until", "-n",
+]);
+
 function observedGitPathsStayLocal(args: readonly string[], cwd: string): boolean {
   let afterOptions = false;
-  for (const arg of args) {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]!;
     if (!afterOptions && arg === "--") {
       afterOptions = true;
     } else if (!afterOptions && arg.startsWith("-")) {
-      if (arg === "-" || arg === "--no-index") return false;
+      if (OBSERVED_GIT_FLAGS.has(arg)) continue;
+      if (/^-n\d+$/.test(arg) || /^--max-count=\d+$/.test(arg)) continue;
+      if (/^--(?:author|grep|since|until)=.+$/.test(arg)) continue;
+      if (!OBSERVED_GIT_VALUE_OPTIONS.has(arg)) return false;
+      const value = args[index + 1];
+      if (value === undefined || value === "" ||
+          ((arg === "-n" || arg === "--max-count") && !/^\d+$/.test(value))) {
+        return false;
+      }
+      index += 1;
     } else if (!observedGitOperandAllowed(arg, cwd)) {
       return false;
     }
@@ -292,17 +309,6 @@ function gitCommandAllowed(tokens: readonly string[], cwd: string): boolean {
   if (REMOTE_GIT_SUBCOMMANDS.has(subcommand)) return false;
   if (DESTRUCTIVE_OR_COMMAND_GIT_SUBCOMMANDS.has(subcommand)) return false;
   const args = tokens.slice(index + 1);
-  if (
-    (subcommand === "diff" || subcommand === "log" || subcommand === "show") &&
-    args.some((arg) =>
-      arg === "--ext-diff" ||
-      arg === "--textconv" ||
-      arg === "--output" ||
-      arg.startsWith("--output=")
-    )
-  ) {
-    return false;
-  }
   if (
     (subcommand === "diff" || subcommand === "log" || subcommand === "show") &&
     !observedGitPathsStayLocal(args, cwd)

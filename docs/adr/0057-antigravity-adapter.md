@@ -183,7 +183,10 @@ file, ask so the model cannot install a Git execution path and then invoke it
 without approval. Pre-existing repository or global configuration can still
 name helpers such as `diff.external`, `core.fsmonitor`, or a clean filter used
 by `git add`; trusting those is an operator responsibility. This is an advisory
-classification, not an OS safety guarantee.
+classification, not an OS safety guarantee. `git add` is included because it
+updates the index without running hooks. Its effects are repository-relative:
+`git add -A` or `git add .` invoked from a repository subdirectory can stage
+paths beyond the agent cwd.
 
 Default launch axes: `workspace-write` (the Codex sandbox default) ×
 `on-request` (approval is selectable for the first time on this engine) ×

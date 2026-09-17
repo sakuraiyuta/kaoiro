@@ -127,7 +127,10 @@ ranges, and `<revision>:<path>`; that last path is checked independently and
 ambiguous syntax asks. Pre-existing repository or global configuration can
 still name helpers such as `diff.external`, `core.fsmonitor`, or a clean filter
 used by `git add`, and remains within the operator's trust boundary rather than
-this advisory classifier's guarantee.
+this advisory classifier's guarantee. `git add` is included because it updates
+the index without running hooks. Its scope remains repository-relative:
+invoking `git add -A` or `git add .` from a repository subdirectory can stage
+paths beyond the agent cwd.
 
 **Deprecation of `ext.permission_mode`**: `ext.permission` is the successor.
 Emit both fields for one release window, then remove `permission_mode` in the
