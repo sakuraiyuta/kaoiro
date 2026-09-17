@@ -289,7 +289,11 @@ Antigravity has an adapter-local `TurnWatchdog`, configured by
 `KAOIRO_ANTIGRAVITY_TURN_WATCHDOG_ABORT_GRACE_MS`. Parsed agy stream records
 reset inactivity. Timeout requests SIGTERM only for the active token; expiry
 of the grace period freezes new coordinator work and leaves the uncertain
-active delivery for supervisor recovery.
+active delivery for supervisor recovery. The same watchdog also owns the
+absolute per-tool deadline `KAOIRO_ANTIGRAVITY_TOOL_TIMEOUT_MS` (issue
+#350): a tool step still `ACTIVE` after it is terminated through the same
+interrupt / grace path and the turn ends as `tool_timeout`
+([antigravity-cli-events](../specs/antigravity-cli-events.md)).
 
 ### F6 — Catalog: `agy models` at runner register, static snapshot fallback, account default entry
 

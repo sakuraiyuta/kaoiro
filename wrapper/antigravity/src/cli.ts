@@ -24,6 +24,8 @@ import { AntigravityHost } from "./host.js";
 import { handleAntigravityInterAgentMessage } from "./inter_agent_message_handler.js";
 import { AntigravityInterAgentTurnCoordinator } from "./inter_agent_turn_coordinator.js";
 import { applyAntigravityEnvDefaultModel, applyAntigravitySources, resolveAntigravitySources } from "./source_resolution.js";
+import { probeSshAgentIdentities } from "./ssh_agent_probe.js";
+import { nonInteractiveToolEnv } from "./tool_child_env.js";
 import { readTurnWatchdogSettings, TurnWatchdog } from "./turn_watchdog.js";
 import type { TurnWatchdogWarning } from "./turn_watchdog.js";
 
@@ -43,6 +45,7 @@ export interface AntigravityCliDependencies {
   createServerLink?: CreateServerLink;
   createHost?: CreateAntigravityHost;
   onHostCreated?: (host: AntigravityHost) => void;
+  probeSshAgentIdentities?: typeof probeSshAgentIdentities;
 }
 
 export function relayAntigravityInstruction(
@@ -73,6 +76,15 @@ export async function runAntigravityCli(
     process.env,
     (message) => writeRedactedStderr(message),
   );
+  if (nonInteractiveToolEnv(process.env).preservedGitSshCommand) {
+    writeRedactedStderr("[kaoiro] antigravity respects the operator's GIT_SSH_COMMAND; ssh BatchMode is not injected\n");
+  }
+  const probeSshAgent = dependencies.probeSshAgentIdentities ?? probeSshAgentIdentities;
+  void probeSshAgent({ env: process.env }).then((identities) => {
+    if (identities === "no_identities") {
+      writeRedactedStderr("[kaoiro] antigravity SSH_AUTH_SOCK has no identities; SSH Git operations will fail in BatchMode\n");
+    }
+  });
   const { modelSource, effortSource } = resolveAntigravitySources(
     config,
     process.env.KAOIRO_ANTIGRAVITY_DEFAULT_MODEL,
@@ -161,6 +173,7 @@ export async function runAntigravityCli(
     seq?: number;
     seqFirst?: number;
     seqLast?: number;
+    details?: Record<string, number | string>;
   }): void => {
     try {
       const range = lifecycleRange(event.turnToken);
@@ -169,6 +182,7 @@ export async function runAntigravityCli(
         event: event.event,
         ...(event.turnToken === undefined ? {} : { turn_token: event.turnToken }),
         ...(event.seq === undefined ? {} : { seq: event.seq }),
+        ...event.details,
       };
       const first = event.seqFirst ?? range?.seqFirst;
       const last = event.seqLast ?? range?.seqLast;
@@ -183,6 +197,8 @@ export async function runAntigravityCli(
     switch (warning.kind) {
       case "inactivity_timeout":
         return `[kaoiro] antigravity turn watchdog inactivity timeout: token=${warning.turnToken} idle=${warning.idleMs}ms threshold=${warning.inactivityMs}ms; requesting child interrupt`;
+      case "tool_timeout":
+        return `[kaoiro] antigravity turn watchdog tool timeout: token=${warning.turnToken} step=${warning.stepIndex} tool=${warning.toolName} elapsed=${warning.elapsedMs}ms threshold=${warning.toolTimeoutMs}ms; requesting child interrupt`;
       case "abort_grace_expired":
         return `[kaoiro] antigravity turn watchdog interrupt grace expired: token=${warning.turnToken} grace=${warning.abortGraceMs}ms; stopping host admission pending operator recovery`;
       case "interrupt_unavailable":
@@ -195,8 +211,22 @@ export async function runAntigravityCli(
   };
   const turnWatchdog = new TurnWatchdog({
     settings: turnWatchdogSettings,
-    onWarning: (warning) => writeRedactedStderr(`${describeTurnWatchdogWarning(warning)}\n`),
-    requestInterrupt: (turnToken) => host?.requestInterruptForTurn(turnToken) ?? false,
+    onWarning: (warning) => {
+      writeRedactedStderr(`${describeTurnWatchdogWarning(warning)}\n`);
+      if (warning.kind === "tool_timeout") {
+        writeAntigravityLifecycle({
+          event: "tool_timeout",
+          turnToken: warning.turnToken,
+          details: {
+            step_index: warning.stepIndex,
+            tool_name: warning.toolName,
+            elapsed_ms: warning.elapsedMs,
+            threshold_ms: warning.toolTimeoutMs,
+          },
+        });
+      }
+    },
+    requestInterrupt: (turnToken, cause) => host?.requestInterruptForTurn(turnToken, cause) ?? false,
     failStop: (turnToken) => host?.failStopTurnForWatchdog(turnToken) ?? false,
     failStopUnattributed: () => { host?.failStopForWatchdogAttributionUnknown(); },
   });
@@ -270,6 +300,12 @@ export async function runAntigravityCli(
     },
     onTurnProgress: ({ turnToken }) => {
       turnWatchdog.progress(turnToken);
+    },
+    onToolStart: ({ turnToken, stepIndex, toolName }) => {
+      turnWatchdog.toolStart(turnToken, stepIndex, toolName);
+    },
+    onToolEnd: ({ turnToken, stepIndex }) => {
+      turnWatchdog.toolEnd(turnToken, stepIndex);
     },
     onTurnEnd: ({ turnToken, conversationIds, error, cancellation }) => {
       if (cancellation?.kind === "watchdog_fail_stop") {

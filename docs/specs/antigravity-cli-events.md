@@ -217,6 +217,57 @@ hook command receives the tool call on stdin and answers on stdout:
 - Hooks are also the only PostToolUse / Stop observation channel; not used
   by the adapter in Stage A.
 
+### Tool children: prompts disabled, absolute tool deadline (issue #350)
+
+An `agy` tool child owns a PTY, so an interactive prompt inside a tool
+(`ssh` passphrase, `git` credential, host-key confirmation) blocks there even
+though the wrapper closes the parent's stdin; the CLI's own "waiting for
+input" detection is model-backed and was unavailable in the incident. The
+wrapper therefore does both of the following.
+
+- **Prompts disabled through the environment.** Every `agy` turn is spawned
+  with `GIT_TERMINAL_PROMPT=0` and `SSH_ASKPASS_REQUIRE=never`, and with
+  `GIT_SSH_COMMAND=ssh -o BatchMode=yes` unless the operator already set a
+  `GIT_SSH_COMMAND` (then it is left untouched and the CLI prints one
+  launch-time line saying BatchMode was not injected). `BatchMode=yes`
+  disables passphrase and host-key interaction (`man ssh_config`), so
+  `git ls-remote` over SSH exits non-zero at once without an identity and
+  succeeds unchanged with one *(measured against GitHub and Gitea)*. At
+  launch, when `SSH_AUTH_SOCK` is set and `LC_ALL=C ssh-add -l` exits 1 with
+  `The agent has no identities.` *(measured shape)*, the CLI warns once on
+  stderr; a missing `ssh-add`, a dead socket, a timeout, or identities present
+  stay silent.
+- **Absolute tool deadline in the turn watchdog.** Every turn carries a
+  watchdog token — an inter-agent delivery keeps its own, an operator
+  instruction gets one synthesized by the host (Codex parity; the
+  inter-agent bookkeeping ignores a token it never issued) — so both kinds
+  are bounded. The single `TurnWatchdog` also tracks every parsed
+  `step_update` `tool` step from `ACTIVE` to its `DONE` / `ERROR` (keyed by
+  `step_index`). The oldest active step is bounded
+  by `KAOIRO_ANTIGRAVITY_TOOL_TIMEOUT_MS` (default 600000 = 10 minutes, the
+  Claude Code Bash ceiling; minimum 1000). Stream progress extends only the
+  inactivity bound, never this deadline. On expiry the wrapper logs
+  `[kaoiro] antigravity turn watchdog tool timeout: … step=<n> tool=<name>
+  elapsed=<ms> threshold=<ms>` plus a `[kaoiro][antigravity-lifecycle]`
+  record `{"event":"tool_timeout",…}` (tool name and index only — never the
+  raw tool input), SIGTERMs the child through the existing interrupt path,
+  and reuses the existing abort grace (`…_ABORT_GRACE_MS`) and fail-stop.
+  Whatever the CLI prints on the way out, the turn ends as
+  `result{is_error: true, error_subtype: "error_during_execution",
+  error_detail: "tool_timeout"}` (state `error` → `waiting_input`) and an
+  inter-agent injection in that turn gets `peer_error.code = "timeout"`. No
+  new wire type.
+
+The deadline is the last safety net, not a scheduler: when `agy` keeps a step
+`ACTIVE` while a long-running command works in the background, healthy work
+past 10 minutes is also cut with the whole turn. A visible failure is
+preferred to a silent `tool_running` that only an operator's `kill` ends.
+The inactivity watchdog alone would have ended the incident's shape, but
+only after its 30-minute default: a blocked tool emits no stdout events, so
+inactivity does accrue *(measured: 22.6 s without stdout events during a
+mock passphrase prompt; the indefinite hang itself was not reproduced because
+the CLI backgrounded the child and the print timeout ended the turn)*.
+
 ### Customization discovery (persona, hooks, skills)
 
 *(measured)* A directory passed with `--add-dir <dir>` is scanned as a
