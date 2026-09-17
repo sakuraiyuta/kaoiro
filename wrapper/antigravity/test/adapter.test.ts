@@ -86,7 +86,7 @@ describe("agy stream-json adapter", () => {
     ["RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 148h49m28s.", 535_768],
     ["HTTP 429: quota exhausted. Resets in 148h49m28s\n", 535_768],
     ["HTTP 429: quota exhausted. Resets in 5m)", 300],
-    ["HTTP 429: quota exhausted. Resets in 30s. Please upgrade your plan.", 30],
+    ["HTTP 429: quota exhausted. Resets in 30s. Please upgrade your subscription", 30],
     ["RESOURCE_EXHAUSTED: quota exhausted. Resets in 52m13s", 3_133],
   ])("structures the quota reset delay: %s", (error, resetDelaySeconds) => {
     expect(agyEventToQuotaExhaustion({
@@ -105,6 +105,7 @@ describe("agy stream-json adapter", () => {
     "HTTP 429: Resets in 1h,2m",
     "HTTP 429: Resets in 1h)2m",
     "HTTP 429: Resets in 1h.5m",
+    "HTTP 429: Resets in 1h. 5m",
     "HTTP 429: Resets in 2h 3m 4s",
     "HTTP 429: Resets in 28s49m",
     "NOT_RESOURCE_EXHAUSTED: Resets in 1h",

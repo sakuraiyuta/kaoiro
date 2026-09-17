@@ -205,7 +205,12 @@ export function agyEventToQuotaExhaustion(
     return null;
   }
   const rawToken = tokenMatch[1]!;
-  if (tokenMatch[2]!.trim().length > 0 && !/[.,;:!?)]$/.test(rawToken)) {
+  const hasTrailingPunctuation = /[.,;:!?)]$/.test(rawToken);
+  const remainder = tokenMatch[2]!.trimStart();
+  if (
+    (!hasTrailingPunctuation && remainder.length > 0) ||
+    (hasTrailingPunctuation && /^\d/.test(remainder))
+  ) {
     return null;
   }
   const token = rawToken.replace(/[.,;:!?)]$/, "");
