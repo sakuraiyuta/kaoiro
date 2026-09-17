@@ -127,6 +127,7 @@ describe("AntigravityGate", () => {
     "file README.md",
     "git status --short",
     "git diff --stat",
+    "git diff -- README.md",
     "git log --oneline",
     "git show HEAD",
     "git rev-parse HEAD",
@@ -138,17 +139,13 @@ describe("AntigravityGate", () => {
     "git tag --list v1",
     "git worktree list --porcelain",
     "git add README.md",
-    "git commit -F .gitmessage",
-    "git commit -c HEAD",
-    "git merge --squash feature",
-    "git merge --no-commit -s ort -X ours feature",
     "git status && git diff",
     "cat README.md | wc -l README.md",
+    "cat future.txt",
   ])("local approval allows a classified local command: %s", (command) => {
     const { gate, root, cwd } = makeGate({ approval: "local" });
     try {
       writeFileSync(join(cwd, "README.md"), "hello\n");
-      writeFileSync(join(cwd, ".gitmessage"), "message\n");
       expect(gate.evaluate({
         name: "run_command",
         args: { CommandLine: command, Cwd: cwd },
@@ -176,10 +173,18 @@ describe("AntigravityGate", () => {
     "git rebase --exec id main",
     "git config alias.x !curl",
     "git future-command",
+    "git diff /etc/passwd /dev/null",
+    "git diff --no-index a b",
+    "git diff -- sub/../../x",
     "git diff --ext-diff",
     "git diff --output=/tmp/diff",
     "git log --textconv",
     "git add /tmp/outside",
+    "git add :/",
+    "git branch --list -D main",
+    "git tag -l -f v1 HEAD",
+    "git commit -m x",
+    "git merge feature",
     "git commit --template /tmp/template",
     "pnpm test",
     "pnpm install",
@@ -200,6 +205,7 @@ describe("AntigravityGate", () => {
     "$(git status)",
     "(git status)",
     "eval git status",
+    "git　status",
   ])("local approval asks for an unclassified or elevated command: %s", (command) => {
     const { gate, root, cwd } = makeGate({ approval: "local", network_access: true });
     try {
@@ -207,6 +213,62 @@ describe("AntigravityGate", () => {
         name: "run_command",
         args: { CommandLine: command, Cwd: cwd },
       })).toEqual({ decision: "ask" });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("local approval asks before writes to Git metadata", () => {
+    const { gate, root, cwd } = makeGate({ approval: "local" });
+    try {
+      mkdirSync(join(cwd, ".git"));
+      mkdirSync(join(cwd, ".git", "hooks"));
+      expect(gate.evaluate({
+        name: "write_to_file",
+        args: { TargetFile: join(cwd, ".git", "config") },
+      })).toEqual({ decision: "ask" });
+      expect(gate.evaluate({
+        name: "write_to_file",
+        args: { TargetFile: join(cwd, ".git", "hooks", "pre-commit") },
+      })).toEqual({ decision: "ask" });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("local approval protects a worktree .git file", () => {
+    const { gate, root, cwd } = makeGate({ approval: "local" });
+    try {
+      writeFileSync(join(cwd, ".git"), "gitdir: ../metadata\n");
+      expect(gate.evaluate({
+        name: "replace_file_content",
+        args: { TargetFile: join(cwd, ".git") },
+      })).toEqual({ decision: "ask" });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it.each(["on-request", "never"] as const)(
+    "%s preserves the existing in-workspace Git metadata write behavior",
+    (approval) => {
+      const { gate, root, cwd } = makeGate({ approval });
+      try {
+        mkdirSync(join(cwd, ".git"));
+        expect(gate.evaluate({
+          name: "write_to_file",
+          args: { TargetFile: join(cwd, ".git", "config") },
+        })).toEqual({ decision: "allow" });
+      } finally { rmSync(root, { recursive: true, force: true }); }
+    },
+  );
+
+  it.each([
+    ["on-request", "ask"],
+    ["never", "allow"],
+  ] as const)("%s preserves commit and merge behavior", (approval, decision) => {
+    const { gate, root, cwd } = makeGate({ approval });
+    try {
+      for (const command of ["git commit -m x", "git merge feature"]) {
+        expect(gate.evaluate({
+          name: "run_command",
+          args: { CommandLine: command, Cwd: cwd },
+        }).decision, command).toBe(decision);
+      }
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 

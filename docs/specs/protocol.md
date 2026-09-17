@@ -115,12 +115,16 @@ no effect; the wrapper enforces the cell by inspecting tool arguments,
 never by the OS (ADR-0057 F4).
 
 Antigravity `local` is an advisory command-shape allowlist between
-`on-request` and `never`: read tools, in-workspace writes, restricted
-read-only shell commands, and explicitly classified non-remote Git commands
-may proceed without a dialog. Unknown syntax, remote/network commands,
-package installation, destructive commands, and any compound command with a
-non-allowed segment ask the operator. This classification does not guarantee
-the behavior of repository hooks or Git configuration.
+`on-request` and `never`: read tools, in-workspace writes outside `.git`,
+restricted read-only shell commands, and explicitly classified observational
+Git commands may proceed without a dialog. Unknown syntax, `.git` writes,
+commit, merge, remote/network commands, package installation, destructive
+commands, and any compound command with a non-allowed segment ask the
+operator. Git path operands must resolve inside the agent cwd; nonexistent
+in-cwd paths are accepted because they only fail with `ENOENT`. Pre-existing
+repository or global configuration can still name helpers such as
+`diff.external` or `core.fsmonitor`, and remains within the operator's trust
+boundary rather than this advisory classifier's guarantee.
 
 **Deprecation of `ext.permission_mode`**: `ext.permission` is the successor.
 Emit both fields for one release window, then remove `permission_mode` in the

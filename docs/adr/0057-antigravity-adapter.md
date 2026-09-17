@@ -148,8 +148,8 @@ Rows are ordered strict → permissive, columns likewise:
 | sandbox \ approval | `untrusted` | `on-request` | `local` | `never` |
 |---|---|---|---|---|
 | `read-only` | read allowed; everything else denied | same | same | same |
-| `workspace-write` | read allowed; write in-cwd, shell, subagent ask; write out-of-cwd denied | read and in-cwd write allowed; shell and subagent ask; out-of-cwd write denied | same, except restricted read-only and non-remote Git command shapes are allowed | read, in-cwd write, shell, subagent allowed (shell is not sandboxed — badge) |
-| `danger-full-access` | read allowed; every other class asks | read and write allowed; shell and subagent ask | read and write allowed; restricted read-only and non-remote Git command shapes allowed; other shell and subagent ask | everything allowed |
+| `workspace-write` | read allowed; write in-cwd, shell, subagent ask; write out-of-cwd denied | read and in-cwd write allowed; shell and subagent ask; out-of-cwd write denied | same, except `.git` writes ask while restricted read-only and observational Git command shapes are allowed | read, in-cwd write, shell, subagent allowed (shell is not sandboxed — badge) |
+| `danger-full-access` | read allowed; every other class asks | read and write allowed; shell and subagent ask | read and write allowed except `.git` writes ask; restricted read-only and observational Git command shapes allowed; other shell and subagent ask | everything allowed |
 
 `network` class: denied when the *effective* `network_access` is false;
 when true it follows the shell column of the row (`browser_subagent` sits
@@ -171,12 +171,16 @@ still applies). Operator decisions reuse
 expansion, environment assignment, redirection, subshells, `eval`, unknown
 executables/options, and Git repository relocation/config overrides. A `|` or
 `&&` composition is allowed only when every segment independently matches the
-allowlist. Remote Git subcommands, network clients, package installation, and
-destructive commands ask. Read operands and commit message/template operands
-must resolve inside the agent cwd, including through existing symlinks. Local
-Git commands can still invoke repository hooks or configured helpers, so this
-is an advisory classification that the command shape does not directly start
-a remote operation, not an OS safety guarantee.
+allowlist. Remote Git subcommands, network clients, package installation,
+commit, merge, and destructive commands ask. Git observation path operands
+must resolve inside the agent cwd, including through existing symlinks;
+nonexistent in-cwd paths are accepted because the command will fail with
+`ENOENT`. Writes to `.git`, whether it is a directory or a worktree metadata
+file, ask so the model cannot install a Git execution path and then invoke it
+without approval. Pre-existing repository or global configuration can still
+name helpers such as `diff.external` or `core.fsmonitor`; trusting those is an
+operator responsibility. This is an advisory classification, not an OS safety
+guarantee.
 
 Default launch axes: `workspace-write` (the Codex sandbox default) ×
 `on-request` (approval is selectable for the first time on this engine) ×

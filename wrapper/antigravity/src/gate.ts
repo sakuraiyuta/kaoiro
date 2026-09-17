@@ -96,8 +96,9 @@ const REMOTE_GIT_SUBCOMMANDS = new Set([
   "clone", "fetch", "ls-remote", "pull", "push", "remote", "submodule",
 ]);
 const DESTRUCTIVE_OR_COMMAND_GIT_SUBCOMMANDS = new Set([
-  "checkout", "clean", "config", "filter-branch", "gc", "prune", "rebase",
-  "reflog", "replace", "reset", "restore", "switch", "update-ref",
+  "checkout", "clean", "commit", "config", "filter-branch", "gc", "merge",
+  "prune", "rebase", "reflog", "replace", "reset", "restore", "switch",
+  "update-ref",
 ]);
 const LOCAL_GIT_SUBCOMMANDS = new Set([
   "add", "branch", "cat-file", "commit", "describe", "diff", "log", "ls-files",
@@ -139,17 +140,29 @@ function localPathOperand(path: string, cwd: string): boolean {
   return resolved !== null && isInside(resolved, cwd);
 }
 
+function pathspecMagic(path: string): boolean {
+  return path.startsWith(":");
+}
+
+function gitMetadataPath(path: string, cwd: string): boolean {
+  const metadataRoot = canonical(join(cwd, ".git"));
+  return metadataRoot === null || isInside(path, metadataRoot);
+}
+
 function splitLocalCommand(command: string): string[][] | null {
+  const normalized = command.replace(/^[ \t]+|[ \t]+$/g, "");
   if (
-    command.trim() === "" ||
+    normalized === "" ||
     /[\0\r\n'"\\`$;<>()[\]{}*?!]/.test(command) ||
     /\|\||(^|[^&])&([^&]|$)/.test(command)
   ) {
     return null;
   }
-  const segments = command.split(/\s*(?:&&|\|)\s*/);
+  const segments = normalized.split(/[ \t]*(?:&&|\|)[ \t]*/);
   if (segments.some((segment) => segment === "")) return null;
-  const tokenized = segments.map((segment) => segment.trim().split(/\s+/));
+  const tokenized = segments.map((segment) =>
+    segment.replace(/^[ \t]+|[ \t]+$/g, "").split(/[ \t]+/)
+  );
   return tokenized.every((tokens) => tokens.every((token) => LOCAL_COMMAND_TOKEN.test(token)))
     ? tokenized
     : null;
@@ -200,22 +213,6 @@ function readCommandAllowed(tokens: readonly string[], cwd: string): boolean {
   return paths.every((path) => localPathOperand(path, cwd));
 }
 
-function commitPathOptionsStayLocal(args: readonly string[], cwd: string): boolean {
-  const separate = new Set(["-c", "-C", "-F", "--file", "--template", "--reuse-message", "--reedit-message"]);
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index]!;
-    if (separate.has(arg)) {
-      const operand = args[index + 1];
-      if (operand === undefined || !localPathOperand(operand, cwd)) return false;
-      index += 1;
-      continue;
-    }
-    const attached = /^(?:-c|-C|-F|--file=|--template=|--reuse-message=|--reedit-message=)(.+)$/.exec(arg);
-    if (attached !== null && !localPathOperand(attached[1]!, cwd)) return false;
-  }
-  return true;
-}
-
 function addPathsStayLocal(args: readonly string[], cwd: string): boolean {
   const flags = new Set([
     "-A", "--all", "-u", "--update", "-p", "--patch", "-N", "--intent-to-add",
@@ -230,11 +227,32 @@ function addPathsStayLocal(args: readonly string[], cwd: string): boolean {
     } else if (!afterOptions && arg.startsWith("-")) {
       if (!flags.has(arg)) return false;
     } else {
+      if (pathspecMagic(arg)) return false;
       paths.push(arg);
     }
   }
   return args.length > 0 &&
     paths.every((path) => localPathOperand(path, cwd));
+}
+
+function observedGitPathsStayLocal(args: readonly string[], cwd: string): boolean {
+  let afterOptions = false;
+  for (const arg of args) {
+    if (!afterOptions && arg === "--") {
+      afterOptions = true;
+    } else if (!afterOptions && arg.startsWith("-")) {
+      if (arg === "--no-index") return false;
+    } else if (pathspecMagic(arg) || !localPathOperand(arg, cwd)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function gitListCommandAllowed(args: readonly string[]): boolean {
+  if (args.length === 0) return true;
+  if (args[0] !== "--list" && args[0] !== "-l") return false;
+  return args.slice(1).every((arg) => !arg.startsWith("-") && !pathspecMagic(arg));
 }
 
 function gitCommandAllowed(tokens: readonly string[], cwd: string): boolean {
@@ -257,14 +275,19 @@ function gitCommandAllowed(tokens: readonly string[], cwd: string): boolean {
   ) {
     return false;
   }
+  if (
+    (subcommand === "diff" || subcommand === "log" || subcommand === "show") &&
+    !observedGitPathsStayLocal(args, cwd)
+  ) {
+    return false;
+  }
   if (subcommand === "worktree") {
     return args[0] === "list" && args.slice(1).every((arg) => ["--porcelain", "-z", "-v"].includes(arg));
   }
   if (subcommand === "branch" || subcommand === "tag") {
-    return args.length === 0 || args[0] === "--list" || args[0] === "-l";
+    return gitListCommandAllowed(args);
   }
   if (subcommand === "add") return addPathsStayLocal(args, cwd);
-  if (subcommand === "commit") return commitPathOptionsStayLocal(args, cwd);
   return true;
 }
 
@@ -428,6 +451,12 @@ export class AntigravityGate {
       }
       if (this.#sandbox === "read-only" || (this.#sandbox === "workspace-write" && paths.all.some((path) => !isInside(path, this.#cwd)))) {
         return { decision: "deny", reason: "kaoiro: write is outside the permitted workspace" };
+      }
+      if (
+        this.#approval === "local" &&
+        paths.targets.some((path) => gitMetadataPath(path, this.#cwd))
+      ) {
+        return { decision: "ask" };
       }
       return this.#approval === "untrusted" ? { decision: "ask" } : { decision: "allow" };
     }

@@ -717,7 +717,7 @@
               <option value="untrusted">untrusted — 常に確認</option>
               <option value="on-request">on-request — 必要な時だけ確認</option>
               {#if engine === "antigravity"}
-                <option value="local">local — 読取と限定ローカル git は自動</option>
+                <option value="local">local — 読取と観察系 git は自動</option>
               {/if}
               <option value="never">never — 確認しない</option>
             </select>
@@ -725,8 +725,9 @@
           <p class="note">
             sandbox 軸はこのエンジンでは advisory (wrapper が引数を検査する
             だけで OS 強制ではありません)。
-            local も command shape の保守的な分類であり、hook や repo config
-            の動作までは保証しません。
+            local は read-only coreutils と working tree 内の観察系 git を
+            保守的に分類します。.git への書込と commit / merge は確認し、既存の
+            repo / global config が指定する helper は operator の信頼範囲です。
           </p>
         {:else}
           <p class="note">
