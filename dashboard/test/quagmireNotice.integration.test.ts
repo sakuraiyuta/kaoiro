@@ -8,7 +8,7 @@
 import { mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { KaoiroHandlers, QuagmireNotice } from "../src/lib/protocol";
-import { parseQuagmireNotice, parseQuagmireSettings } from "../src/lib/protocol";
+import { parseDeliveryStatus, parseQuagmireNotice, parseQuagmireSettings } from "../src/lib/protocol";
 
 const captured = vi.hoisted(() => ({
   handlers: null as KaoiroHandlers | null,
@@ -321,5 +321,37 @@ describe("parseQuagmireNotice", () => {
         pending_since: "2026-09-05T00:00:00Z",
       }),
     ).toBeNull();
+  });
+});
+
+
+describe("delivery confirmation recovery", () => {
+  it("clears only explicitly resolved recipients through the parser and App handlers", async () => {
+    const h = await mountApp(); h.onHosts?.([]);
+    const notice = (id: string) => parseQuagmireNotice({kind: "stall", agent_id: id,
+      undelivered: 2, pending_since: "2026-09-18T00:00:00Z", threshold_ms: 1,
+      reason: "delivery_confirmation_gap"})!;
+    h.onQuagmireNotice?.(rally);
+    h.onQuagmireNotice?.(notice("a")); h.onQuagmireNotice?.(notice("b"));
+    await tick();
+    expect(banners()).toHaveLength(3);
+    expect(banners()[1].textContent).toContain("配送確認の遅延");
+    expect(banners()[1].textContent).toContain("期間内に処理完了あり");
+    expect(banners()[1].textContent).not.toContain("未着");
+    h.onDeliveryStatus?.("a", null);
+    h.onDeliverySnapshot?.({}); h.onDeliverySnapshotIncomplete?.(true);
+    h.onDeliveryStatus?.("other", {issued_seq: 2, acked_seq: 2});
+    h.onDeliveryStatus?.("a", {issued_seq: 2, acked_seq: 1, pending_since: "2026-09-18T00:00:00Z"});
+    await tick(); expect(banners()).toHaveLength(3);
+    const resolved = parseDeliveryStatus({issued_seq: 2, acked_seq: 2, pending_since: null});
+    expect(resolved).not.toBeNull();
+    h.onDeliveryStatus?.("a", resolved!);
+    await tick(); expect(banners()).toHaveLength(2);
+    h.onDeliverySnapshot?.({b: resolved!});
+    await tick(); expect(banners()).toHaveLength(1);
+    expect(banners()[0].textContent).toContain("18");
+    h.onQuagmireNotice?.(notice("a"));
+    await tick(); expect(banners()).toHaveLength(2);
+    expect(parseDeliveryStatus({issued_seq: 2, acked_seq: 1, pending_since: null})).toBeNull();
   });
 });

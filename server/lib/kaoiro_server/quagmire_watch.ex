@@ -4,7 +4,7 @@ defmodule KaoiroServer.QuagmireWatch do
 
   Two conditions, both derived from state other modules already keep — this
   module stores no observation of its own beyond which conditions it has
-  already reported:
+  already reported (including a stall reason change):
 
     * **rally** — one agent group has exchanged `rally_turns` or more
       messages within `rally_window_ms`, counted ACROSS conversations by
@@ -20,7 +20,8 @@ defmodule KaoiroServer.QuagmireWatch do
       `DeliveryStates`' own `pending_since`. Known limit, spec'd: the ledger
       is a watermark, and a wrapper process replacing its predecessor
       abandons the gap (`acked` moves to `issued`), so a stall is detected
-      only while one wrapper generation persists.
+      only while one wrapper generation persists. A live result received after
+      the pending boundary relabels the notice as a confirmation gap.
 
   The edge-trigger memory is process-local and starts empty, so a restart
   (this process, or the whole server) re-announces every condition still
@@ -49,6 +50,7 @@ defmodule KaoiroServer.QuagmireWatch do
 
   require Logger
 
+  alias KaoiroServer.AgentActivity
   alias KaoiroServer.ConversationStates
   alias KaoiroServer.DeliveryStates
   alias KaoiroServer.QuagmireSettings
@@ -111,9 +113,10 @@ defmodule KaoiroServer.QuagmireWatch do
       conversations: Keyword.get(opts, :conversations, ConversationStates),
       settings_store: Keyword.get(opts, :settings_store, QuagmireSettings),
       deliveries: Keyword.get(opts, :deliveries, DeliveryStates),
+      activity: Keyword.get(opts, :activity, AgentActivity),
       now_wall: Keyword.get(opts, :now_wall, &DateTime.utc_now/0),
       notified_rally: MapSet.new(),
-      notified_stall: MapSet.new()
+      notified_stall: %{}
     }
 
     schedule_sweep(settings.sweep_interval_ms)
@@ -212,20 +215,38 @@ defmodule KaoiroServer.QuagmireWatch do
       |> Enum.filter(fn {_agent_id, status} -> stalled?(status, now, threshold) end)
       |> Map.new()
 
-    subjects = over |> Map.keys() |> MapSet.new()
+    activity = AgentActivity.snapshot(state.activity)
 
-    for {agent_id, status} <- over, not MapSet.member?(state.notified_stall, agent_id) do
+    subjects =
+      Map.new(over, fn {id, status} -> {id, stall_reason(activity[id], status.pending_since)} end)
+
+    for {agent_id, status} <- over,
+        not Map.has_key?(state.notified_stall, agent_id) or
+          state.notified_stall[agent_id] != subjects[agent_id] do
       state.on_notice.(%{
         "kind" => "stall",
         "agent_id" => agent_id,
         "undelivered" => status.issued_seq - status.acked_seq,
         "pending_since" => status.pending_since,
-        "threshold_ms" => threshold
+        "threshold_ms" => threshold,
+        "reason" => subjects[agent_id]
       })
     end
 
     %{state | notified_stall: subjects}
   end
+
+  defp stall_reason(%{last_result_at: completed}, pending) when is_binary(completed) do
+    with {:ok, result, _} <- DateTime.from_iso8601(completed),
+         {:ok, since, _} <- DateTime.from_iso8601(pending),
+         :gt <- DateTime.compare(result, since) do
+      "delivery_confirmation_gap"
+    else
+      _ -> nil
+    end
+  end
+
+  defp stall_reason(_, _), do: nil
 
   # A malformed pending_since is not evidence of a stall. DeliveryStates
   # writes ISO8601 and validates on DETS load, so this only guards a value

@@ -160,6 +160,51 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     )
   end
 
+  test "live result receipts relabel delivery stalls through the production observer" do
+    id = "test.completion-stall"
+    @endpoint.subscribe("agents:lobby")
+
+    child =
+      Enum.find(KaoiroServer.Application.children(true), fn
+        {KaoiroServer.QuagmireWatch, _} -> true
+        _ -> false
+      end)
+
+    start_supervised!(child)
+    socket = join_wrapper(id)
+    assert_reply push(socket, "envelope", envelope(id, "idle")), :ok
+    DeliveryStates.bind(id, "completion-generation")
+    DeliveryStates.issue(id)
+    pending = DateTime.add(DateTime.utc_now(), -7200, :second) |> DateTime.to_iso8601()
+
+    :sys.replace_state(DeliveryStates, fn state ->
+      put_in(state, [:entries, id, :pending_since], pending)
+    end)
+
+    KaoiroServer.QuagmireWatch.sweep()
+
+    assert_receive %Phoenix.Socket.Broadcast{
+      event: "quagmire_notice",
+      payload: %{"agent_id" => ^id, "reason" => nil}
+    }
+
+    result =
+      envelope(id, "idle") |> Map.put("type", "result") |> Map.put("ts", "2000-01-01T00:00:00Z")
+
+    assert_reply push(socket, "envelope", result), :ok
+    :sys.get_state(AgentActivity)
+    assert %{last_result_at: at} = AgentActivity.get(id)
+    assert at > pending
+    KaoiroServer.QuagmireWatch.sweep()
+
+    assert_receive %Phoenix.Socket.Broadcast{
+      event: "quagmire_notice",
+      payload: %{"agent_id" => ^id, "reason" => "delivery_confirmation_gap"}
+    }
+
+    on_exit(fn -> DeliveryStates.delete(id) end)
+  end
+
   test "envelope を受けて agents:lobby へ中継し最新状態を保持する" do
     agent_id = "test.relay-1"
     @endpoint.subscribe("agents:lobby")

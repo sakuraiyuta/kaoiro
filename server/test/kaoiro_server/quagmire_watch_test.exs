@@ -82,6 +82,7 @@ defmodule KaoiroServer.QuagmireWatchTest do
         settings: settings,
         conversations: ctx.conversations,
         deliveries: ctx.deliveries,
+        activity: Keyword.get(opts, :activity, KaoiroServer.AgentActivity),
         settings_store: settings_store,
         now_wall: Keyword.get(opts, :now_wall, fn -> ~U[2026-09-05 12:00:00Z] end),
         on_notice: fn payload -> Agent.update(ctx.notices, &[payload | &1]) end
@@ -204,6 +205,42 @@ defmodule KaoiroServer.QuagmireWatchTest do
       assert :ok = QuagmireWatch.sweep(watch)
       assert length(notices(ctx)) == 2
     end
+  end
+
+  test "completion after the pending boundary relabels an existing notice once", ctx do
+    activity =
+      start_supervised!({KaoiroServer.AgentActivity, name: :quagmire_completion_activity})
+
+    DeliveryStates.bind("completion", "gen", ctx.deliveries)
+    DeliveryStates.issue("completion", ctx.deliveries)
+    %{pending_since: pending} = DeliveryStates.get("completion", ctx.deliveries)
+    {:ok, since, _} = DateTime.from_iso8601(pending)
+
+    watch =
+      start_watch(ctx, activity: activity, now_wall: now_wall_after(ctx, "completion", 30_001))
+
+    record = fn type, at ->
+      KaoiroServer.AgentActivity.record_envelope(
+        %{"agent_id" => "completion", "type" => type},
+        self(),
+        at,
+        server: activity
+      )
+
+      :sys.get_state(activity)
+      QuagmireWatch.sweep(watch)
+    end
+
+    record.("result", pending)
+    assert [%{"reason" => nil}] = notices(ctx)
+    later = DateTime.add(since, 1, :second) |> DateTime.to_iso8601()
+    record.("state_change", later)
+    record.("log", later)
+    assert length(notices(ctx)) == 1
+    record.("result", later)
+    assert [_, %{"reason" => "delivery_confirmation_gap"}] = notices(ctx)
+    QuagmireWatch.sweep(watch)
+    assert length(notices(ctx)) == 2
   end
 
   describe "stall" do

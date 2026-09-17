@@ -15,6 +15,33 @@ defmodule KaoiroServer.AgentActivityTest do
     %{store: start_supervised!({AgentActivity, name: name, pending_ttl_ms: 20})}
   end
 
+  test "completion uses live result receipt time and resets with the session", %{store: store} do
+    AgentActivity.record_envelope(Map.put(env("completion", "log"), "ts", ts(9)), self(), ts(1),
+      server: store
+    )
+
+    AgentActivity.record_envelope(env("completion"), self(), ts(2), server: store)
+    assert %{last_result_at: nil} = AgentActivity.get("completion", store)
+
+    AgentActivity.record_envelope(
+      Map.put(env("completion", "result"), "ts", ts(9)),
+      self(),
+      ts(3),
+      server: store
+    )
+
+    assert %{last_result_at: at} = AgentActivity.get("completion", store)
+    assert at == ts(3)
+    AgentActivity.record_envelope(env("completion", "log"), self(), ts(4), server: store)
+    assert %{last_result_at: ^at} = AgentActivity.get("completion", store)
+
+    AgentActivity.record_envelope(env("completion", "state_change", "new"), self(), ts(5),
+      server: store
+    )
+
+    assert %{last_result_at: nil} = AgentActivity.get("completion", store)
+  end
+
   test "unknown agent is bound to its owner and result increments once", %{store: store} do
     AgentActivity.record_envelope(env("a", "result"), self(), ts(1), server: store)
     :sys.get_state(store)

@@ -311,7 +311,7 @@
   // issue #273: review-quagmire notices. Deliberately NOT the 6-second
   // spawn-notice toast — the whole point is that nobody was watching, so a
   // notice that expires on its own reproduces the problem it reports. One
-  // banner per subject, dismissed by the operator. The server only sends
+  // banner per subject, dismissed by the operator or explicit delivery resolution. The server only sends
   // these to operators; the render gates on isOperator too, so a role
   // downgrade mid-session stops showing them without waiting for a rejoin.
   let quagmireNotices = $state<QuagmireNotice[]>([]);
@@ -328,6 +328,14 @@
       ...quagmireNotices.filter((n) => quagmireKey(n) !== key),
       notice,
     ];
+  }
+
+  function resolveDeliveryNotices(next: Record<string, InterAgentDeliveryStatus>): void {
+    quagmireNotices = quagmireNotices.filter((notice) => {
+      if (notice.kind !== "stall" || !Object.hasOwn(next, notice.agentId)) return true;
+      const status = next[notice.agentId];
+      return status.issued_seq !== status.acked_seq;
+    });
   }
 
   // issue #307: the threshold in force. Held here rather than in the drawer
@@ -357,7 +365,10 @@
     // Not asserted: an unacknowledged delivery also looks like this while the
     // recipient is simply mid-turn (director addendum).
     const label = formatAgentLabel(agents, notice.agentId);
-    return `${label} 宛のメッセージ ${notice.undelivered} 件が未着です (${notice.pendingSince ?? "時刻不明"} から)。停滞の疑いがあります。`;
+    const diagnosis = notice.reason === "delivery_confirmation_gap"
+      ? "配送確認の遅延が疑われます (期間内に処理完了あり)。"
+      : "停滞の疑いがあります。";
+    return `${label} 宛のメッセージ ${notice.undelivered} 件の配送確認が未完了です (${notice.pendingSince ?? "時刻不明"} から)。${diagnosis}`;
   }
   let spawnNotice = $state<string | null>(null);
   let spawnNoticeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -778,7 +789,7 @@
         onTaskSnapshot: (next) => (tasks = next),
         onQuagmireNotice: recordQuagmire,
         onQuagmireSettings: applyQuagmireSettings,
-        onDeliverySnapshot: (next) => (deliveries = next),
+        onDeliverySnapshot: (next) => { deliveries = next; resolveDeliveryNotices(next); },
         onDeliverySnapshotIncomplete: (incomplete) => (deliverySnapshotIncomplete = incomplete),
         onDeliveryStatus: (agentId, delivery) => {
           if (delivery === null) {
@@ -786,6 +797,7 @@
             deliveries = remaining;
           } else {
             deliveries = { ...deliveries, [agentId]: delivery };
+            resolveDeliveryNotices({ [agentId]: delivery });
           }
         },
         onWrapperBuildInfoSnapshot: (next, incomplete) => {

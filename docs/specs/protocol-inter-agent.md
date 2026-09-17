@@ -170,7 +170,13 @@ on a violation.
 
 A stall is an unacknowledged dispatch gap: `acked_seq < issued_seq` with
 `pending_since` older than `stall_ms`, read from the dispatch-confirmation
-ledger above.
+ledger above. A live `result` received by the server after `pending_since`
+changes the notice reason to `delivery_confirmation_gap`: the recipient has
+completed work during the unresolved period, so missing dispatch confirmation
+must not be presented as proof that it stopped processing. This observation
+uses server receipt time, resets on session changes, and excludes replayed
+logs, idle states and wrapper timestamps. It does not prove every delivery
+was processed. Changing the reason updates an existing notice.
 
 **It is a suspicion, not a verdict.** The same shape appears while the
 recipient is simply mid-turn: a wrapper acknowledges only when an SDK turn
@@ -195,14 +201,19 @@ signal above would be muted with it.
 - `quagmire_notice` is an operator-only push on `agents:lobby`, gated in
   `handle_out` like `delivery_status`. It is **edge-triggered**: one notice
   per condition per subject when it first crosses, and again only after the
-  subject has fallen back below. It is deliberately not a join snapshot
+  subject has fallen back below or its stall reason changes. It is deliberately not a join snapshot
   frame — a joining operator reads the current picture from
   `list_conversations` and `delivery_snapshot`. A sweep whose store is
   unavailable skips that detector alone and keeps what the other already
   announced, so one outage does not re-announce an unrelated condition on
   every tick.
   - rally: `{kind: "rally", participants, turns, conversations, threshold, window_ms}`
-  - stall: `{kind: "stall", agent_id, undelivered, pending_since, threshold_ms}`
+  - stall: `{kind: "stall", agent_id, undelivered, pending_since, threshold_ms, reason?}`
+- A dashboard removes a stall notice only when a delivery status or snapshot
+  explicitly shows that recipient's `issued_seq == acked_seq`. A missing/null
+  ledger, incomplete snapshot omission or another recipient's status is not
+  resolution evidence. Resolved status permits `pending_since: null`.
+  Rally notices are unaffected.
 - `list_conversations` rows additionally carry `rally_turns`,
   `rally_conversations`, and `quagmire`. The verdict is computed server-side
   rather than shipping the threshold for a client to compare, so one place

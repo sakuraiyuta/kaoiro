@@ -2329,6 +2329,7 @@ export type QuagmireNotice =
       undelivered: number;
       pendingSince: string | null;
       thresholdMs: number;
+      reason?: "delivery_confirmation_gap";
     };
 
 /** Operator-facing user-list entry (issue #207). Wire shape from
@@ -3037,7 +3038,7 @@ export function parseDeliveryStatus(value: unknown): InterAgentDeliveryStatus | 
   if (
     typeof issued !== "number" || !Number.isSafeInteger(issued) || issued < 0 ||
     typeof acked !== "number" || !Number.isSafeInteger(acked) || acked < 0 || acked > issued ||
-    (raw.pending_since !== undefined && typeof raw.pending_since !== "string") ||
+    (raw.pending_since !== undefined && raw.pending_since !== null && typeof raw.pending_since !== "string") ||
     (issued > acked && typeof raw.pending_since !== "string")
   ) return null;
   return {
@@ -3769,6 +3770,7 @@ export function parseQuagmireNotice(raw: unknown): QuagmireNotice | null {
       undelivered: p.undelivered,
       pendingSince: typeof p.pending_since === "string" ? p.pending_since : null,
       thresholdMs: p.threshold_ms,
+      ...(p.reason === "delivery_confirmation_gap" ? { reason: p.reason } : {}),
     };
   }
   return null;
