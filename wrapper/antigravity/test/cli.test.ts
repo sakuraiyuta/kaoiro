@@ -1,7 +1,8 @@
+import { execFileSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
 import { relayAntigravityInstruction, runAntigravityCli } from "../src/cli.js";
 
@@ -235,5 +236,74 @@ if (args[0] === "models") {
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
+  });
+
+  describe("launch notices for SSH tool children (issue #350)", () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+      vi.restoreAllMocks();
+    });
+
+    async function launch(probe?: () => Promise<"no_identities" | "unknown">): Promise<string[]> {
+      const stderr: string[] = [];
+      vi.spyOn(process.stderr, "write").mockImplementation(((chunk: string | Uint8Array) => {
+        stderr.push(String(chunk));
+        return true;
+      }) as never);
+      await runAntigravityCli({
+        parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+        loadConfig: () => config(),
+        createServerLink: (_url, _agentId, options) => {
+          queueMicrotask(() => options.onPersonaPrompt?.("system prompt"));
+          return { close: () => {}, send: () => {} } as never;
+        },
+        createHost: () => ({ state: "idle", statusExtSnapshot: () => ({}), run: async () => {} }) as never,
+        ...(probe === undefined ? {} : { probeSshAgentIdentities: probe }),
+      });
+      // The probe resolves off the launch path; let its continuation run.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      return stderr;
+    }
+
+    it("tells the operator when their GIT_SSH_COMMAND is respected and warns on an empty agent", async () => {
+      vi.stubEnv("GIT_SSH_COMMAND", "/opt/wrap-ssh");
+      const stderr = await launch(async () => "no_identities");
+      expect(stderr).toContainEqual(expect.stringContaining("respects the operator's GIT_SSH_COMMAND; ssh BatchMode is not injected"));
+      expect(stderr).toContainEqual(expect.stringContaining("SSH_AUTH_SOCK has no identities; SSH Git operations will fail in BatchMode"));
+    });
+
+    it("stays silent when BatchMode is injected and the agent state is unknown", async () => {
+      vi.stubEnv("GIT_SSH_COMMAND", "");
+      const stderr = await launch(async () => "unknown");
+      expect(stderr.join("")).not.toContain("GIT_SSH_COMMAND");
+      expect(stderr.join("")).not.toContain("SSH_AUTH_SOCK");
+    });
+
+    const sshAgentAvailable = (() => {
+      try {
+        execFileSync("ssh-agent", ["-h"], { stdio: "ignore" });
+        return true;
+      } catch (error) {
+        return (error as { code?: unknown }).code !== "ENOENT";
+      }
+    })();
+
+    it.skipIf(!sshAgentAvailable)("warns through the default probe against a real empty ssh-agent", async () => {
+      const output = execFileSync("ssh-agent", ["-s"], { encoding: "utf8" });
+      const socket = /SSH_AUTH_SOCK=([^;]+);/.exec(output)?.[1];
+      const pid = /SSH_AGENT_PID=([0-9]+);/.exec(output)?.[1];
+      if (socket === undefined || pid === undefined) throw new Error(`unexpected ssh-agent output: ${output}`);
+      vi.stubEnv("SSH_AUTH_SOCK", socket);
+      try {
+        const stderr = await launch();
+        const deadline = performance.now() + 3_000;
+        while (performance.now() < deadline && !stderr.some((line) => line.includes("has no identities"))) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        expect(stderr).toContainEqual(expect.stringContaining("SSH_AUTH_SOCK has no identities; SSH Git operations will fail in BatchMode"));
+      } finally {
+        process.kill(Number(pid), "SIGTERM");
+      }
+    });
   });
 });

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import { basename, join } from "node:path";
@@ -42,7 +43,9 @@ import { DEFAULT_AGY_PROBE_TIMEOUT_MS, resolveAgyExecutable, type AgyExecutableF
 import { CustomizationDir, GATE_DEADLINE_MS, HOOK_TIMEOUT_SECONDS, sweepStaleCustomizationDirs } from "./customization.js";
 import { AntigravityGate, GateServer, type AntigravityLaunchConfig } from "./gate.js";
 import { effectiveNetworkAccess } from "./network_access.js";
+import { nonInteractiveToolEnv } from "./tool_child_env.js";
 import { ToolHost } from "./toolhost.js";
+import type { ToolTimeoutInfo, TurnWatchdogInterruptCause } from "./turn_watchdog.js";
 
 const BRIDGE_SCRIPT = new URL("../dist/bridge.js", import.meta.url).pathname;
 const HOOK_SCRIPT = new URL("../dist/hook.js", import.meta.url).pathname;
@@ -79,6 +82,10 @@ export interface AntigravityHostOptions {
   }) => void;
   onTurnBoundary?: (info: { turnToken: string }) => void;
   onTurnProgress?: (info: { turnToken: string }) => void;
+  /** A parsed `step_update` tool step went ACTIVE / left ACTIVE. The
+   *  watchdog keys its absolute tool deadline on `stepIndex`. */
+  onToolStart?: (info: { turnToken: string; stepIndex: number; toolName: string }) => void;
+  onToolEnd?: (info: { turnToken: string; stepIndex: number }) => void;
   onWatchdogFailStop?: (info: {
     turnToken?: string;
     conversationIds: readonly string[];
@@ -100,6 +107,22 @@ export interface AntigravityHostOptions {
   runtimeAssetsAvailable?: () => boolean;
   warn?: (message: string) => void;
   now?: () => string;
+}
+
+function validToolName(value: unknown): value is string {
+  return typeof value === "string" && value !== "";
+}
+
+/** One identity for a tool step: the top-level `tool_name` and
+ *  `tool_info.name` must agree when both are present (ADR-0057 F4b). */
+function correlatedToolName(topLevelName: unknown, nestedName: unknown): unknown {
+  return topLevelName === undefined
+    ? nestedName
+    : nestedName === undefined
+      ? topLevelName
+      : validToolName(topLevelName) && validToolName(nestedName) && topLevelName === nestedName
+        ? topLevelName
+        : null;
 }
 
 function readableLines(stream: NodeJS.ReadableStream, onLine: (line: string) => void): void {
@@ -208,6 +231,7 @@ export class AntigravityHost implements EngineAdapter {
   #turnActive = false;
   #activeTurnToken: string | null = null;
   #activeTurnConversationIds: readonly string[] = [];
+  #activeTurnToolTimeout: ToolTimeoutInfo | null = null;
   #watchdogFailStopped = false;
   #lifecycleGeneration = 0;
   #toolHost: ToolHost | null = null;
@@ -306,7 +330,7 @@ export class AntigravityHost implements EngineAdapter {
     this.#running?.kill("SIGTERM");
   }
 
-  requestInterruptForTurn(turnToken: string): boolean {
+  requestInterruptForTurn(turnToken: string, cause?: TurnWatchdogInterruptCause): boolean {
     if (
       this.#activeTurnToken !== turnToken ||
       this.#watchdogFailStopped ||
@@ -314,6 +338,9 @@ export class AntigravityHost implements EngineAdapter {
     ) {
       return false;
     }
+    // The CLI already logs the watchdog warning; the host only keeps the
+    // cause so settlement can override the CLI's terminal record.
+    if (cause?.kind === "tool_timeout") this.#activeTurnToolTimeout = cause;
     return this.#running?.kill("SIGTERM") ?? false;
   }
 
@@ -398,9 +425,13 @@ export class AntigravityHost implements EngineAdapter {
     if (turn === undefined) return;
     this.#turnActive = true;
     const generation = this.#lifecycleGeneration;
+    // Every turn gets a token (Codex parity) so the watchdog bounds operator
+    // instructions too; inter-agent bookkeeping ignores a token it never
+    // issued.
+    const turnToken = turn.turnToken ?? randomUUID();
     let error: InterAgentErrorClassifyInput | undefined;
     try {
-      error = await this.#runTurn(turn.text, generation, turn.turnToken, turn.conversationIds ?? []);
+      error = await this.#runTurn(turn.text, generation, turnToken, turn.conversationIds ?? []);
     } catch (caught) {
       const detail = caught instanceof Error ? caught.message : String(caught);
       error = { detail };
@@ -408,15 +439,15 @@ export class AntigravityHost implements EngineAdapter {
     } finally {
       this.#running = null;
       this.#turnActive = false;
-      if (turn.turnToken !== undefined && !this.#watchdogFailStopped) {
-        this.#options.onTurnBoundary?.({ turnToken: turn.turnToken });
+      if (!this.#watchdogFailStopped) {
+        this.#options.onTurnBoundary?.({ turnToken });
         this.#options.onTurnEnd?.({
-          turnToken: turn.turnToken,
+          turnToken,
           conversationIds: turn.conversationIds ?? [],
           ...(error === undefined ? {} : { error }),
         });
       }
-      if (this.#activeTurnToken === turn.turnToken) {
+      if (this.#activeTurnToken === turnToken) {
         this.#activeTurnToken = null;
         this.#activeTurnConversationIds = [];
       }
@@ -427,8 +458,8 @@ export class AntigravityHost implements EngineAdapter {
   async #runTurn(
     text: string,
     generation: number,
-    turnToken?: string,
-    conversationIds: readonly string[] = [],
+    turnToken: string,
+    conversationIds: readonly string[],
   ): Promise<InterAgentErrorClassifyInput | undefined> {
     if (!this.#agyExecutable.ok) {
       throw new Error(`antigravity_cli_unavailable:${this.#agyExecutable.reason}`);
@@ -486,6 +517,7 @@ export class AntigravityHost implements EngineAdapter {
           cwd: this.#options.cwd,
           env: {
             ...process.env,
+            ...nonInteractiveToolEnv(process.env).additions,
             KAOIRO_GATE_SOCKET: gateServer.socketPath,
             KAOIRO_GATE_NONCE: gateServer.nonce,
             KAOIRO_GATE_DEADLINE_MS: String(GATE_DEADLINE_MS),
@@ -498,18 +530,17 @@ export class AntigravityHost implements EngineAdapter {
         throw new Error(`antigravity_cli_${this.#spawnFailureReason(error)}: ${boundErrorDetail(message)}`);
       }
       this.#running = child;
-      if (turnToken !== undefined) {
-        this.#activeTurnToken = turnToken;
-        this.#activeTurnConversationIds = conversationIds;
-        this.#options.onTurnStart?.({ turnToken, conversationIds });
-      }
+      this.#activeTurnToolTimeout = null;
+      this.#activeTurnToken = turnToken;
+      this.#activeTurnConversationIds = conversationIds;
+      this.#options.onTurnStart?.({ turnToken, conversationIds });
       child.stdin.end();
       child.stderr.on("data", () => {});
       let terminalResult: AgyStreamEvent | null = null;
       let correlationFailure: string | null = null;
       const assistantText = new Map<number, string>();
       readableLines(child.stdout, (line) => {
-        if (turnToken !== undefined) this.#options.onTurnProgress?.({ turnToken });
+        this.#options.onTurnProgress?.({ turnToken });
         const event = parseAgyStreamLine(line);
         if (event === null) {
           this.#warn(`antigravity: ignored malformed stream line from ${basename(executable)}`);
@@ -520,27 +551,28 @@ export class AntigravityHost implements EngineAdapter {
           return;
         }
         this.#handleEvent(event, gate, assistantText);
-        if (event.event === "step_update" && event.step_update.step_type === "tool" && (event.step_update.state === "DONE" || event.step_update.state === "ERROR")) {
-          const stepIndex = event.step_update.step_index;
-          const topLevelName = event.step_update.tool_name;
-          const nestedName = event.step_update.tool_info?.name;
-          const validName = (value: unknown): value is string => typeof value === "string" && value !== "";
-          const toolName =
-            topLevelName === undefined
-              ? nestedName
-              : nestedName === undefined
-                ? topLevelName
-                : validName(topLevelName) && validName(nestedName) && topLevelName === nestedName
-                  ? topLevelName
-                  : null;
-          if (!Number.isSafeInteger(stepIndex) || !validName(toolName)) {
-            correlationFailure = validName(topLevelName) ? topLevelName : validName(nestedName) ? nestedName : "unknown";
-            this.#warn(`antigravity: completed tool correlation is unprovable: ${correlationFailure}`);
-            child.kill("SIGTERM");
-          } else if (!gate.observeCompletedTool(stepIndex!, toolName)) {
-            correlationFailure = toolName;
-            child.kill("SIGTERM");
+        if (event.event !== "step_update" || event.step_update.step_type !== "tool") return;
+        const stepIndex = event.step_update.step_index;
+        const topLevelName = event.step_update.tool_name;
+        const nestedName = event.step_update.tool_info?.name;
+        const toolName = correlatedToolName(topLevelName, nestedName);
+        if (event.step_update.state === "ACTIVE") {
+          if (Number.isSafeInteger(stepIndex) && validToolName(toolName)) {
+            this.#options.onToolStart?.({ turnToken, stepIndex: stepIndex as number, toolName });
           }
+          return;
+        }
+        if (event.step_update.state !== "DONE" && event.step_update.state !== "ERROR") return;
+        if (Number.isSafeInteger(stepIndex)) {
+          this.#options.onToolEnd?.({ turnToken, stepIndex: stepIndex as number });
+        }
+        if (!Number.isSafeInteger(stepIndex) || !validToolName(toolName)) {
+          correlationFailure = validToolName(topLevelName) ? topLevelName : validToolName(nestedName) ? nestedName : "unknown";
+          this.#warn(`antigravity: completed tool correlation is unprovable: ${correlationFailure}`);
+          child.kill("SIGTERM");
+        } else if (!gate.observeCompletedTool(stepIndex as number, toolName)) {
+          correlationFailure = toolName;
+          child.kill("SIGTERM");
         }
       });
       const childError = await this.#waitForChild(child);
@@ -557,6 +589,11 @@ export class AntigravityHost implements EngineAdapter {
         const detail = `antigravity_gate_unobserved_tool:${correlationFailure}`;
         this.#terminalError(detail, attemptedModel);
         return { detail };
+      } else if (this.#activeTurnToolTimeout !== null) {
+        // Whatever agy printed after SIGTERM, the turn outcome is the
+        // deadline, not the CLI's own terminal record.
+        this.#terminalError("tool_timeout", attemptedModel);
+        return { reason: "timeout" };
       } else if (childError !== null) {
         const detail = `antigravity_cli_${this.#spawnFailureReason(childError)}: ${boundErrorDetail(childError.message)}`;
         this.#terminalError(detail, attemptedModel);
@@ -589,6 +626,7 @@ export class AntigravityHost implements EngineAdapter {
         return result?.is_error === true ? { detail: "antigravity turn failed" } : undefined;
       }
     } finally {
+      this.#activeTurnToolTimeout = null;
       gateServer?.close();
       toolHost?.close();
       if (this.#gateServer === gateServer) this.#gateServer = null;

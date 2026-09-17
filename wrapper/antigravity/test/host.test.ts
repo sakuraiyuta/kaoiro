@@ -3,7 +3,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { PermissionBroker, QuestionBroker, classifyInterAgentError, type Envelope, type InterAgentErrorClassifyInput, type WrapperConfig } from "@kaoiro/agent-common";
 import { AntigravityHost, initialStatusExt, isGateRegistered, type AntigravityHostOptions, type GateProbe, type SpawnedAgy } from "../src/host.js";
 import type { AntigravityLaunchConfig } from "../src/gate.js";
@@ -65,10 +65,12 @@ function hostHarness(options: {
   config?: WrapperConfig;
   now?: () => string;
   onTurnEnd?: AntigravityHostOptions["onTurnEnd"];
+  onToolStart?: AntigravityHostOptions["onToolStart"];
+  onToolEnd?: AntigravityHostOptions["onToolEnd"];
 } = {}) {
   const states: Envelope[] = [];
   const logs: Envelope[] = [];
-  const calls: { command: string; args: string[]; child: FakeAgy }[] = [];
+  const calls: { command: string; args: string[]; env: NodeJS.ProcessEnv; child: FakeAgy }[] = [];
   const cfg = options.config ?? config();
   const broker = new PermissionBroker({ config: cfg, send: () => {} });
   const host = new AntigravityHost(cfg, {
@@ -84,9 +86,11 @@ function hostHarness(options: {
     agyPath: "/test/agy",
     ...(options.now === undefined ? {} : { now: options.now }),
     ...(options.onTurnEnd === undefined ? {} : { onTurnEnd: options.onTurnEnd }),
-    spawn: (command, args) => {
+    ...(options.onToolStart === undefined ? {} : { onToolStart: options.onToolStart }),
+    ...(options.onToolEnd === undefined ? {} : { onToolEnd: options.onToolEnd }),
+    spawn: (command, args, spawnOptions) => {
       const child = new FakeAgy();
-      calls.push({ command, args, child });
+      calls.push({ command, args, env: spawnOptions.env, child });
       return child as unknown as SpawnedAgy;
     },
   });
@@ -419,7 +423,7 @@ if (args[0] === "models") {
       onState: (envelope) => states.push(envelope), onLog: (envelope) => logs.push(envelope), onSessionId: (id) => sessionIds.push(id),
       verifyGate: async () => true, runtimeAssetsAvailable: () => true,
       agyPath: "/test/agy",
-      spawn: (command, args) => { const child = new FakeAgy(); calls.push({ command, args, child }); return child as unknown as SpawnedAgy; },
+      spawn: (command, args, spawnOptions) => { const child = new FakeAgy(); calls.push({ command, args, env: spawnOptions.env, child }); return child as unknown as SpawnedAgy; },
     });
     await onSessionHost.send("hello");
     await waitFor(() => calls.length === 1);
@@ -960,5 +964,152 @@ if (args[0] === "models") {
     const detail = logs.find((envelope) => envelope.type === "result")?.payload.error_detail as string;
     expect(Buffer.byteLength(detail, "utf8")).toBe(16_384);
     host.close();
+  });
+
+  describe("tool prompts and deadlines (issue #350)", () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it("spawns agy with git/ssh prompts disabled and stdin closed", async () => {
+      vi.stubEnv("GIT_SSH_COMMAND", "");
+      const { host, calls } = hostHarness();
+      await host.send("hello");
+      await waitFor(() => calls.length === 1);
+      expect(calls[0]!.env).toMatchObject({
+        GIT_TERMINAL_PROMPT: "0",
+        SSH_ASKPASS_REQUIRE: "never",
+        GIT_SSH_COMMAND: "ssh -o BatchMode=yes",
+      });
+      expect(calls[0]!.child.stdin.writableEnded).toBe(true);
+      host.close();
+    });
+
+    it("keeps an operator GIT_SSH_COMMAND while still disabling the other prompts", async () => {
+      vi.stubEnv("GIT_SSH_COMMAND", "/opt/wrap-ssh --audit");
+      const { host, calls } = hostHarness();
+      await host.send("hello");
+      await waitFor(() => calls.length === 1);
+      expect(calls[0]!.env).toMatchObject({
+        GIT_TERMINAL_PROMPT: "0",
+        SSH_ASKPASS_REQUIRE: "never",
+        GIT_SSH_COMMAND: "/opt/wrap-ssh --audit",
+      });
+      host.close();
+    });
+
+    it("reports tool ACTIVE and DONE by step index to the watchdog callbacks", async () => {
+      const starts: unknown[] = [];
+      const ends: unknown[] = [];
+      const { host, calls, logs } = hostHarness({
+        onToolStart: (info) => starts.push(info),
+        onToolEnd: (info) => ends.push(info),
+      });
+      await host.send("hello", undefined, ["cid-1"], "turn-1");
+      await waitFor(() => calls.length === 1);
+      const child = calls[0]!.child;
+      child.stdout.write('{"event":"init","conversation_id":"cid","init":{"tools":["call_mcp_tool"]}}\n');
+      child.stdout.write('{"event":"step_update","step_update":{"step_index":2,"state":"ACTIVE","step_type":"tool","tool_name":"call_mcp_tool","tool_info":{"name":"call_mcp_tool","parameters":{}}}}\n');
+      child.stdout.write('{"event":"step_update","step_update":{"step_index":2,"state":"ACTIVE","step_type":"tool","tool_name":"call_mcp_tool","tool_info":{"name":"call_mcp_tool","parameters":{}}}}\n');
+      child.stdout.write('{"event":"step_update","step_update":{"step_index":2,"state":"DONE","step_type":"tool","tool_name":"call_mcp_tool","tool_info":{"name":"call_mcp_tool","output":"ok"}}}\n');
+      // An unsafe or nameless ACTIVE cannot be tracked and is skipped, not fatal.
+      child.stdout.write('{"event":"step_update","step_update":{"step_index":"x","state":"ACTIVE","step_type":"tool","tool_name":"call_mcp_tool"}}\n');
+      child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
+      child.finish();
+      await waitFor(() => logs.some((envelope) => envelope.type === "result"));
+      expect(starts).toEqual([
+        { turnToken: "turn-1", stepIndex: 2, toolName: "call_mcp_tool" },
+        { turnToken: "turn-1", stepIndex: 2, toolName: "call_mcp_tool" },
+      ]);
+      expect(ends).toEqual([{ turnToken: "turn-1", stepIndex: 2 }]);
+      expect(child.killed).toBeUndefined();
+      host.close();
+    });
+
+    it("overrides the CLI terminal result with tool_timeout after a watchdog tool deadline", async () => {
+      const ends: Array<{ error?: InterAgentErrorClassifyInput }> = [];
+      const cfg = config();
+      const states: Envelope[] = [];
+      const logs: Envelope[] = [];
+      const calls: FakeAgy[] = [];
+      const host = new AntigravityHost(cfg, {
+        cwd: process.cwd(), appendSystemPrompt: "persona",
+        permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
+        onState: (envelope) => states.push(envelope), onLog: (envelope) => logs.push(envelope),
+        runtimeAssetsAvailable: () => true, verifyGate: async () => true, agyPath: "/test/agy",
+        onTurnEnd: (info) => ends.push(info),
+        spawn: () => { const child = new FakeAgy(); calls.push(child); return child as unknown as SpawnedAgy; },
+      });
+      await host.send("hello", undefined, ["cid-1"], "turn-1");
+      await waitFor(() => calls.length === 1);
+      const child = calls[0]!;
+      child.stdout.write('{"event":"init","conversation_id":"cid","init":{"tools":["run_command"]}}\n');
+      child.stdout.write('{"event":"step_update","step_update":{"step_index":2,"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command","parameters":{"CommandLine":"git fetch origin"}}}}\n');
+      expect(host.requestInterruptForTurn("turn-1", {
+        kind: "tool_timeout", stepIndex: 2, toolName: "run_command", elapsedMs: 600_004, toolTimeoutMs: 600_000,
+      })).toBe(true);
+      expect(child.killed).toBe("SIGTERM");
+      // Whatever agy prints on the way out is not the turn outcome.
+      child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"still running"}}\n');
+      child.finish();
+      await waitFor(() => ends.length === 1);
+      expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({
+        is_error: true, error_subtype: "error_during_execution", error_detail: "tool_timeout",
+      });
+      expect(states.map((envelope) => envelope.state).slice(-2)).toEqual(["error", "waiting_input"]);
+      expect(ends[0]!.error).toEqual({ reason: "timeout" });
+      expect(classifyInterAgentError(ends[0]!.error!)).toMatchObject({ code: "timeout" });
+      // The next turn starts clean: no leftover cause.
+      await host.send("again", undefined, ["cid-2"], "turn-2");
+      await waitFor(() => calls.length === 2);
+      calls[1]!.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"fine"}}\n');
+      calls[1]!.finish();
+      await waitFor(() => ends.length === 2);
+      expect(ends[1]!.error).toBeUndefined();
+      host.close();
+    });
+
+    it("synthesizes a turn token for an operator instruction so the watchdog can bound it", async () => {
+      const starts: Array<{ turnToken: string; conversationIds: readonly string[] }> = [];
+      const toolStarts: string[] = [];
+      const ends: string[] = [];
+      const cfg = config();
+      const calls: FakeAgy[] = [];
+      let host!: AntigravityHost;
+      host = new AntigravityHost(cfg, {
+        cwd: process.cwd(), appendSystemPrompt: "persona",
+        permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
+        onState: () => {}, runtimeAssetsAvailable: () => true, verifyGate: async () => true, agyPath: "/test/agy",
+        onTurnStart: (info) => {
+          starts.push(info);
+          expect(host.activeInterAgentTurnToken()).toBe(info.turnToken);
+        },
+        onToolStart: ({ turnToken }) => toolStarts.push(turnToken),
+        onTurnEnd: ({ turnToken }) => ends.push(turnToken),
+        spawn: () => { const child = new FakeAgy(); calls.push(child); return child as unknown as SpawnedAgy; },
+      });
+      await host.send("hello");
+      await waitFor(() => calls.length === 1);
+      calls[0]!.stdout.write('{"event":"step_update","step_update":{"step_index":2,"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command"}}}\n');
+      calls[0]!.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
+      calls[0]!.finish();
+      await waitFor(() => ends.length === 1);
+      expect(starts).toEqual([{ turnToken: expect.stringMatching(/^[0-9a-f-]{36}$/), conversationIds: [] }]);
+      expect(toolStarts).toEqual([starts[0]!.turnToken]);
+      expect(ends).toEqual([starts[0]!.turnToken]);
+      expect(host.activeInterAgentTurnToken()).toBeNull();
+      host.close();
+    });
+
+    it("ignores a tool timeout request for a token that is not the active turn", async () => {
+      const { host, calls } = hostHarness();
+      await host.send("hello", undefined, ["cid-1"], "turn-1");
+      await waitFor(() => calls.length === 1);
+      expect(host.requestInterruptForTurn("turn-other", {
+        kind: "tool_timeout", stepIndex: 1, toolName: "run_command", elapsedMs: 1, toolTimeoutMs: 1,
+      })).toBe(false);
+      expect(calls[0]!.child.killed).toBeUndefined();
+      host.close();
+    });
   });
 });
