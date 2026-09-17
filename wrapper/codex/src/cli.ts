@@ -57,7 +57,11 @@ import {
 import { handleInterAgentMessage } from "./inter_agent_message_handler.js";
 import { CodexInterAgentTurnCoordinator } from "./inter_agent_turn_coordinator.js";
 import { readCodexHistory } from "./history.js";
-import { codexSidecarPath } from "./rollout.js";
+import {
+  codexRolloutsRoot,
+  codexSidecarPath,
+  rolloutPathIn,
+} from "./rollout.js";
 import { effectiveNetworkAccess } from "./network_access.js";
 import { prepareCodexStartup } from "./startup.js";
 import {
@@ -845,6 +849,16 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     onSessionId: (id) => {
       link?.setSessionId(id);
       sidecar.bind(id);
+      // issue #352: the runner inherits this process's stdout into its own
+      // (systemd) journal, so one line here is the operator's only way to
+      // find this agent's engine-side transcript after the fact.
+      const path = rolloutPathIn(codexRolloutsRoot(), id);
+      if (path !== null) {
+        process.stdout.write(
+          `[kaoiro] transcript: agent=${config.agent_id} engine=codex ` +
+            `session=${id} path=${path}\n`,
+        );
+      }
     },
     toolDescriptors: [
       ...interAgent.descriptors(),

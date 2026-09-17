@@ -24,7 +24,11 @@ import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadWrapperBuildInfo, parseCliArgs } from "@kaoiro/wrapper-core";
-import { readSessionHistory, sessionSidecarPath } from "./history.js";
+import {
+  readSessionHistory,
+  sessionLogPath,
+  sessionSidecarPath,
+} from "./history.js";
 import { AgentHost, CLAUDE_EFFORT_LEVELS } from "./host.js";
 import type {
   SessionLifecycleKind,
@@ -927,6 +931,13 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       // Binds (or re-binds) the sidecar to this session's file, carrying
       // whatever the pending journal already holds (ADR-0051 D3-5).
       sidecar.bind(id);
+      // issue #352: the runner inherits this process's stdout into its own
+      // (systemd) journal, so one line here is the operator's only way to
+      // find this agent's engine-side transcript after the fact.
+      process.stdout.write(
+        `[kaoiro] transcript: agent=${config.agent_id} engine=claude-code ` +
+          `session=${id} path=${sessionLogPath(process.cwd(), id)}\n`,
+      );
     },
     decidePermission: (toolName, input) => broker!.decide(toolName, input),
     // AskUserQuestion path (ADR-0027): server-connected wrappers always

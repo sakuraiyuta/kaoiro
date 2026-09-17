@@ -53,8 +53,9 @@ function encodeCwd(cwd: string): string {
   return cwd.replace(/[^a-zA-Z0-9]/g, "-");
 }
 
-/** Absolute path to the resumed session's transcript JSONL. */
-function sessionLogPath(cwd: string, sessionId: string): string {
+/** Absolute path to a session's transcript JSONL (issue #352: also used to
+ *  report the transcript location on `onSessionId`, not only on resume). */
+export function sessionLogPath(cwd: string, sessionId: string): string {
   return join(
     homedir(),
     ".claude",

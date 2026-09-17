@@ -27,6 +27,7 @@ import { applyAntigravityEnvDefaultModel, applyAntigravitySources, resolveAntigr
 import { probeSshAgentIdentities } from "./ssh_agent_probe.js";
 import { nonInteractiveToolEnv } from "./tool_child_env.js";
 import { readTurnWatchdogSettings, TurnWatchdog } from "./turn_watchdog.js";
+import { antigravityTranscriptPath } from "./transcript_path.js";
 import type { TurnWatchdogWarning } from "./turn_watchdog.js";
 
 const PERSONA_PROMPT_TIMEOUT_MS = 10_000;
@@ -294,7 +295,18 @@ export async function runAntigravityCli(
     questionBroker,
     onState: send,
     onLog: send,
-    onSessionId: (sessionId) => link?.setSessionId(sessionId),
+    onSessionId: (sessionId) => {
+      link?.setSessionId(sessionId);
+      // issue #352: the runner inherits this process's stdout into its own
+      // (systemd) journal, so one line here is the operator's only way to
+      // find this agent's engine-side transcript after the fact. Reported
+      // as an expected path (no existence check): the CLI may not have
+      // written the transcript file yet at this point.
+      process.stdout.write(
+        `[kaoiro] transcript: agent=${config.agent_id} engine=antigravity ` +
+          `session=${sessionId} path=${antigravityTranscriptPath(sessionId)}\n`,
+      );
+    },
     onTurnBoundary: ({ turnToken }) => {
       turnWatchdog.end(turnToken);
     },
