@@ -374,6 +374,36 @@ async function runOneTurn(
 }
 
 describe("CodexHost", () => {
+  it("pins non-interactive approvals on new and resumed threads", async () => {
+    const { client, calls } = makeClient([
+      [{ type: "thread.started", thread_id: "approval-contract" }, usageEvent()],
+      [usageEvent()],
+    ]);
+    let captured: CodexOptions | undefined;
+    const host = new CodexHost(CONFIG, {
+      onState: () => {},
+      appendSystemPrompt: "p",
+      codexFactory: (options) => {
+        captured = options;
+        return client;
+      },
+    });
+    const running = host.run("first");
+    try {
+      await client.waitForTurn(0);
+      await host.send("second");
+      await client.waitForTurn(1);
+      expect(captured?.config?.approvals_reviewer).toBe("user");
+      expect(calls.resume).toEqual([null, "approval-contract"]);
+      expect(calls.options.map((options) => options?.approvalPolicy)).toEqual([
+        "never", "never",
+      ]);
+    } finally {
+      host.close();
+      await running;
+    }
+  });
+
   it("fails startup for a curated model newer than the bundled Codex CLI", () => {
     expect(
       () =>
@@ -1371,9 +1401,6 @@ describe("CodexHost", () => {
   });
 
   it("toolDescriptors 指定時、mcp_servers.kaoiro に default_tools_approval_mode: approve を載せる", async () => {
-    // codex exec は approval_policy=never を強制するため、この設定が無いと
-    // MCP tool 呼び出しが "user cancelled MCP tool call" で自動拒否される
-    // (2026-07-11 実機検証)。SDK に渡す config を捕捉して回帰を防ぐ。
     const { client } = makeClient([[usageEvent()]]);
     let captured: CodexOptions | null = null;
     const descriptor: ToolDescriptor = {

@@ -302,6 +302,54 @@ describe("AgentDetail sandbox / network control (issue #305 D)", () => {
     expect(rowByLabel(target, "権限要求")?.textContent).toContain("rev 8");
   });
 
+  it.each(["failed", "unknown"])("explains the host config fix before retrying an approval mismatch (%s)", async (status) => {
+    const ack: SetPermissionAck = {
+      revision: 8,
+      status: "pending",
+      requested: { sandbox: "workspace-write", network_access: false },
+    };
+    const { target, onSetPermission } = await render({
+      engine: "codex",
+      session_capabilities: SWITCH_CAPS,
+      permission_control: {
+        ...conformingControl(status), reason: "approval_policy_mismatch",
+      },
+    }, {
+      state: "waiting_permission", onSetPermission: vi.fn(async () => ack),
+    });
+    const dock = target.querySelector(".permission-dock");
+    for (const surface of [rowByLabel(target, "権限要求"), dock]) {
+      expect(surface?.textContent).toContain("First, check ~/.codex/config.toml");
+      expect(surface?.textContent).toContain('set approvals_reviewer to "user"');
+      expect(surface?.textContent).toContain("before fixing the config will block the next turn again");
+      expect(surface?.textContent).toContain("After fixing the config, reapply the same permission values once");
+      expect(surface?.textContent).not.toContain("同じ sandbox / network を再適用して");
+      expect(surface?.textContent).not.toContain("同じ権限値を再適用すると新しい revision");
+    }
+    const retry = Array.from(dock?.querySelectorAll("button") ?? []).find((button) =>
+      button.textContent?.includes("同じ権限値を再適用"),
+    ) as HTMLButtonElement | undefined;
+    expect(retry).toBeDefined();
+    retry?.click();
+    await tick();
+    await tick();
+    expect(onSetPermission).toHaveBeenCalledWith("host-a.p", {
+      sandbox: "workspace-write", network_access: false,
+    });
+    expect(rowByLabel(target, "権限要求")?.textContent).toContain("rev 8");
+  });
+
+  it("keeps same-value recovery guidance for a sandbox policy mismatch", async () => {
+    const { target } = await render({
+      engine: "codex",
+      session_capabilities: SWITCH_CAPS,
+      permission_control: control({ status: "failed", reason: "policy_mismatch" }),
+    }, { state: "waiting_permission" });
+    expect(rowByLabel(target, "権限要求")?.textContent).toContain("同じ権限値を再適用すると新しい revision");
+    expect(target.querySelector(".permission-dock")?.textContent).toContain("同じ sandbox / network を再適用");
+    expect(target.textContent).not.toContain("~/.codex/config.toml");
+  });
+
   it("keeps the normal tool-approval dock in charge when pending_permission exists", async () => {
     const { target, onSetPermission } = await render(
       {

@@ -1323,6 +1323,8 @@ export class CodexHost implements EngineAdapter {
       ((options: CodexOptions) => new Codex(options) as CodexClientLike);
     const codexConfig: Record<string, unknown> = {
       developer_instructions: this.#options.appendSystemPrompt,
+      // Host-level auto_review can override exec's non-interactive policy.
+      approvals_reviewer: "user",
     };
     // Runner config is authoritative over any user-global Codex config
     // (ADR-0038 F2): always inject the effective toggle so a positive
@@ -1344,14 +1346,15 @@ export class CodexHost implements EngineAdapter {
             KAOIRO_BRIDGE_STDERR_PATH:
               `${this.#turnTraceCaptureDir}/bridge.stderr.log`,
           },
-          // `codex exec` forces approval_policy=never, which otherwise
+          // The wrapper pins approval_policy=never, which otherwise
           // auto-cancels every MCP tool call ("user cancelled MCP tool
           // call"). "approve" auto-approves the kaoiro tools so they run
           // (verified 2026-07-11; the other accepted values auto/prompt/
           // writes all leave the call cancelled). These tools are
           // wrapper-provided and gated by the operator elsewhere
           // (send_to_agent per-call on Claude; ask_user_question IS the
-          // operator prompt), so auto-approving them is safe.
+          // operator prompt), so auto-approving them is safe. Behavior
+          // under approval_policy=on-request has not been verified.
           default_tools_approval_mode: "approve",
           tool_timeout_sec: BRIDGE_TOOL_TIMEOUT_SEC,
         },
@@ -1407,6 +1410,7 @@ export class CodexHost implements EngineAdapter {
     const sandbox = requestedPermission?.sandbox ?? this.#sandbox;
     const networkAccess = requestedPermission?.network_access ?? this.#networkAccess;
     const options: ThreadOptions = {
+      approvalPolicy: "never",
       sandboxMode: sandbox,
       workingDirectory: this.#cwd,
       skipGitRepoCheck: true,

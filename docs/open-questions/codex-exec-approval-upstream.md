@@ -1,6 +1,6 @@
 ---
 title: Tracking upstream support for the Codex exec approval flow
-description: codex exec forces approval_policy to never and cannot return approval requests to the caller. Track stabilization of the upstream feature flag exec_permission_approvals (under development) and redesign kaoiro's Codex approval UX when it becomes available.
+description: The wrapper explicitly configures non-interactive Codex exec approvals. Track upstream approval-request support and redesign kaoiro's Codex approval UX when it becomes available.
 status: open
 urgency: low
 blocks: []
@@ -8,14 +8,22 @@ opened: 2026-07-10
 decided: null
 ---
 
-## 背景
+## Background
 
-Live SDK verification for [ADR-0033](../adr/0033-permission-model-dual-axis.md)
-(2026-07-10) confirmed that `codex exec`
-(the execution path of `@openai/codex-sdk`) forces `approval_policy=never` through
-a harness override and has no approval-request event in the JSON event stream.
-Therefore Codex-agent permissions use a fixed two-axis choice at spawn, and the
-design does not produce `waiting_permission` for Codex.
+The wrapper configures `approvals_reviewer="user"` on the Codex SDK client and
+`approvalPolicy="never"` on every new or resumed thread. Both become CLI
+`--config` overrides, which take precedence over host `config.toml` defaults
+([configuration precedence](https://learn.chatgpt.com/docs/config-file/config-basic#configuration-precedence)).
+An unconfigured `codex exec` must not be assumed to force `never`: host
+`approvals_reviewer="auto_review"` can change its effective approval policy to
+`on-request` ([upstream report](https://github.com/openai/codex/issues/36570)).
+
+The SDK/exec path has no approval-request callback wired into kaoiro. Codex-agent
+permissions therefore expose sandbox and network controls with approval fixed
+to `never` ([ADR-0033](../adr/0033-permission-model-dual-axis.md)). The wrapper
+checks rollout observations against that contract and blocks further execution
+on a mismatch. Such a permission gate can produce `waiting_permission`; it is
+not an interactive tool-approval channel.
 
 The upstream has a feature flag `exec_permission_approvals` (under development
 as of 0.144.1), so an approval flow may eventually be provided even in exec mode.

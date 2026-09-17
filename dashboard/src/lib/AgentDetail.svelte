@@ -1819,6 +1819,8 @@
     "policy_mismatch",
     "approval_policy_mismatch",
   ]);
+  const CODEX_APPROVAL_CONFIG_RECOVERY =
+    'The host Codex config is overriding the approval policy. First, check ~/.codex/config.toml and set approvals_reviewer to "user". Reapplying permissions before fixing the config will block the next turn again. After fixing the config, reapply the same permission values once to assign a new revision, then resend the cancelled instruction.';
   function needsPermissionGateRecovery(view: PermRequestView): boolean {
     return (
       view.status === "unknown" ||
@@ -3280,7 +3282,9 @@
                   </span>
                   {#if permRequestView.reason}
                     <span class="axes-hint">理由: {permRequestView.reason}</span>
-                    {#if permRequestView.status === "unknown" || ["policy_mismatch", "approval_policy_mismatch"].includes(permRequestView.reason)}
+                    {#if permRequestView.reason === "approval_policy_mismatch"}
+                      <span class="axes-hint">{CODEX_APPROVAL_CONFIG_RECOVERY}</span>
+                    {:else if permRequestView.status === "unknown" || permRequestView.reason === "policy_mismatch"}
                       <span class="axes-hint">同じ権限値を再適用すると新しい revision になります。適用後、キャンセルされた指示を再送してください。</span>
                     {/if}
                   {/if}
@@ -3833,7 +3837,11 @@
                   rev {codexPermissionGateRecovery.revision}: {codexPermissionGateRecovery.reason ?? "permission_gate_blocked"}
                 </p>
                 <p class="permission-note">
-                  同じ sandbox / network を再適用して新しい revision を作ると、次の turn で復旧できます。キャンセルされた指示は再送してください。
+                  {#if codexPermissionGateRecovery.reason === "approval_policy_mismatch"}
+                    {CODEX_APPROVAL_CONFIG_RECOVERY}
+                  {:else}
+                    同じ sandbox / network を再適用して新しい revision を作ると、次の turn で復旧できます。キャンセルされた指示は再送してください。
+                  {/if}
                 </p>
                 <div class="permission-actions">
                   <button class="allow" onclick={retryPermissionGate}>
