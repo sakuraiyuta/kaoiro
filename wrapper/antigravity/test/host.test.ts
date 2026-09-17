@@ -1012,8 +1012,6 @@ if (args[0] === "models") {
       child.stdout.write('{"event":"step_update","step_update":{"step_index":2,"state":"ACTIVE","step_type":"tool","tool_name":"call_mcp_tool","tool_info":{"name":"call_mcp_tool","parameters":{}}}}\n');
       child.stdout.write('{"event":"step_update","step_update":{"step_index":2,"state":"ACTIVE","step_type":"tool","tool_name":"call_mcp_tool","tool_info":{"name":"call_mcp_tool","parameters":{}}}}\n');
       child.stdout.write('{"event":"step_update","step_update":{"step_index":2,"state":"DONE","step_type":"tool","tool_name":"call_mcp_tool","tool_info":{"name":"call_mcp_tool","output":"ok"}}}\n');
-      // An unsafe or nameless ACTIVE cannot be tracked and is skipped, not fatal.
-      child.stdout.write('{"event":"step_update","step_update":{"step_index":"x","state":"ACTIVE","step_type":"tool","tool_name":"call_mcp_tool"}}\n');
       child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
       child.finish();
       await waitFor(() => logs.some((envelope) => envelope.type === "result"));
@@ -1066,6 +1064,28 @@ if (args[0] === "models") {
       calls[1]!.finish();
       await waitFor(() => ends.length === 2);
       expect(ends[1]!.error).toBeUndefined();
+      host.close();
+    });
+
+    it.each([
+      ["tool_name and tool_info.name disagree", '{"step_index":2,"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"view_file"}}', "run_command"],
+      ["step_index is unsafe", '{"step_index":"x","state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command"}}', "run_command"],
+      ["no name at all", '{"step_index":2,"state":"ACTIVE","step_type":"tool"}', "unknown"],
+    ])("fails closed on an ACTIVE tool the deadline cannot key on (%s)", async (_label, step, failure) => {
+      const starts: unknown[] = [];
+      const { host, logs, calls } = hostHarness({ onToolStart: (info) => starts.push(info) });
+      await host.send("hello");
+      await waitFor(() => calls.length === 1);
+      const child = calls[0]!.child;
+      child.stdout.write('{"event":"init","conversation_id":"cid","init":{"tools":["run_command"]}}\n');
+      child.stdout.write(`{"event":"step_update","step_update":${step}}\n`);
+      await waitFor(() => child.killed === "SIGTERM");
+      child.finish();
+      await waitFor(() => logs.some((envelope) => envelope.type === "result"));
+      expect(starts).toEqual([]);
+      expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({
+        is_error: true, error_detail: `antigravity_gate_unobserved_tool:${failure}`,
+      });
       host.close();
     });
 

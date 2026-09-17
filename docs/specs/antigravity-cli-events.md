@@ -243,7 +243,9 @@ wrapper therefore does both of the following.
   inter-agent bookkeeping ignores a token it never issued) — so both kinds
   are bounded. The single `TurnWatchdog` also tracks every parsed
   `step_update` `tool` step from `ACTIVE` to its `DONE` / `ERROR` (keyed by
-  `step_index`). The oldest active step is bounded
+  `step_index`); an `ACTIVE` step whose `step_index` or tool name cannot be
+  correlated is fail-closed like an unprovable completion (SIGTERM, ADR-0057
+  F4b) rather than left untracked. The oldest active step is bounded
   by `KAOIRO_ANTIGRAVITY_TOOL_TIMEOUT_MS` (default 600000 = 10 minutes, the
   Claude Code Bash ceiling; minimum 1000). Stream progress extends only the
   inactivity bound, never this deadline. On expiry the wrapper logs

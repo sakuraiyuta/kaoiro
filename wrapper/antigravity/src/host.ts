@@ -555,22 +555,23 @@ export class AntigravityHost implements EngineAdapter {
         const stepIndex = event.step_update.step_index;
         const topLevelName = event.step_update.tool_name;
         const nestedName = event.step_update.tool_info?.name;
+        const state = event.step_update.state;
+        if (state !== "ACTIVE" && state !== "DONE" && state !== "ERROR") return;
         const toolName = correlatedToolName(topLevelName, nestedName);
-        if (event.step_update.state === "ACTIVE") {
-          if (Number.isSafeInteger(stepIndex) && validToolName(toolName)) {
-            this.#options.onToolStart?.({ turnToken, stepIndex: stepIndex as number, toolName });
-          }
+        if (!Number.isSafeInteger(stepIndex) || !validToolName(toolName)) {
+          // An ACTIVE step the deadline cannot key on is as unprovable as a
+          // completion the gate cannot correlate: fail closed either way.
+          correlationFailure = validToolName(topLevelName) ? topLevelName : validToolName(nestedName) ? nestedName : "unknown";
+          this.#warn(`antigravity: ${state === "ACTIVE" ? "started" : "completed"} tool correlation is unprovable: ${correlationFailure}`);
+          child.kill("SIGTERM");
           return;
         }
-        if (event.step_update.state !== "DONE" && event.step_update.state !== "ERROR") return;
-        if (Number.isSafeInteger(stepIndex)) {
-          this.#options.onToolEnd?.({ turnToken, stepIndex: stepIndex as number });
+        if (state === "ACTIVE") {
+          this.#options.onToolStart?.({ turnToken, stepIndex: stepIndex as number, toolName });
+          return;
         }
-        if (!Number.isSafeInteger(stepIndex) || !validToolName(toolName)) {
-          correlationFailure = validToolName(topLevelName) ? topLevelName : validToolName(nestedName) ? nestedName : "unknown";
-          this.#warn(`antigravity: completed tool correlation is unprovable: ${correlationFailure}`);
-          child.kill("SIGTERM");
-        } else if (!gate.observeCompletedTool(stepIndex as number, toolName)) {
+        this.#options.onToolEnd?.({ turnToken, stepIndex: stepIndex as number });
+        if (!gate.observeCompletedTool(stepIndex as number, toolName)) {
           correlationFailure = toolName;
           child.kill("SIGTERM");
         }
