@@ -45,9 +45,20 @@ avoiding ambiguity between the child process and thread working directories.
 Caller-owned image files are neither copied nor removed. Host/launch
 integration must supply materialized absolute image paths.
 
-The bridge retains exec's `default_tools_approval_mode = "approve"` and
-310-second tool timeout. `features.multi_agent` is always explicit and defaults
-to true, matching `CodexHost`; false disables internal subagents. No descriptors
+Both exec and app-server use `BRIDGE_MCP_POLICY`: `required = true`,
+`startup_timeout_sec = 30`, `default_tools_approval_mode = "approve"`, and a
+310-second tool timeout. This changes normal launch behavior: a bridge startup
+failure now fails the turn through the existing operator-visible result/error
+path, instead of continuing silently without kaoiro tools. The pinned CLI
+otherwise omits pending optional MCP servers after a one-second grace. See
+[ADR-0058 Appendix C](../../docs/adr/0058-codex-app-server-turn-steer.md#ci-follow-up-required-bridge-startup)
+for the source references and measurements.
+App-server thread start/resume with a bridge has a 35-second RPC deadline to
+receive the CLI's 30-second startup outcome. Other RPCs retain 25 seconds;
+an explicit transport timeout still takes precedence. The session does not
+send a turn before thread opening succeeds.
+
+`features.multi_agent` is always explicit and defaults to true, matching `CodexHost`; false disables internal subagents. No descriptors
 means the session adds no kaoiro MCP server configuration. Socket creation uses
 `ToolHost.listen` unchanged, inside its fresh private directory. Session shutdown
 and failed initial setup close the tool host and remove only that directory.
@@ -61,7 +72,10 @@ consumer abandonment, buffered termination, and process shutdown. The real CLI
 integration test uses the default constructor and an isolated Codex home with
 a local Responses provider. It needs neither external model access nor auth,
 but inherits CLI startup traffic and therefore does not assume fast offline
-startup. Network namespaces are not required by the test.
+startup. Its isolated configuration disables analytics and plugins; external
+plugin clones otherwise write into the temporary home and can outlive child
+shutdown, racing cleanup. Other startup traffic, such as update checks, is
+still possible. Network namespaces are not required by the test.
 The session integration test also executes a real bridge handler, checks image
 bytes and developer instructions at the provider, closes the child, then resumes
 with a new bridge and repeats those checks. Its attachments come from the real

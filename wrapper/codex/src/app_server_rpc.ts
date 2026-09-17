@@ -107,7 +107,7 @@ export class AppServerRpc {
 
   get stderrTail(): string { return this.#stderrTail; }
 
-  request(method: string, params: RpcObject): RpcTicket {
+  request(method: string, params: RpcObject, defaultTimeoutMs = 25_000): RpcTicket {
     const id = this.#nextId++;
     const result = new Promise<unknown>((resolve, reject) => {
       if (this.#failure || this.#closing) {
@@ -117,7 +117,7 @@ export class AppServerRpc {
       const timer = setTimeout(() => {
         // Once submitted, a timeout cannot establish that the operation was rejected.
         this.#fail(new AppServerConnectionError(`App-server response timeout: ${method}`));
-      }, this.#options.requestTimeoutMs ?? 25_000);
+      }, this.#options.requestTimeoutMs ?? defaultTimeoutMs);
       this.#pending.set(id, { resolve, reject, timer });
       this.#write({ id, method, params });
     });

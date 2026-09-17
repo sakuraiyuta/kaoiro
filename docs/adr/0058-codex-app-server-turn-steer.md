@@ -683,3 +683,58 @@ are tested with fixtures, not claimed as live model behavior.
 Telemetry/compaction (4b) and history (4c) are separate review/landing units.
 Normal launch, `CodexHost`, IA lifecycle, capabilities, protocol version, and
 this ADR's status remain unchanged.
+
+
+### CI follow-up: required bridge startup
+
+After (4a), the fixed local response could finish a resumed turn without an MCP
+item. CI run 35274497630 attempt 4 captured `TypeError:
+tools.mcp__kaoiro__probe is not a function` in the code-mode tool output;
+the first turn had called the bridge successfully. The model turn still
+completed. This is distinct from a sandbox failure: code-mode executed, but
+its tool catalog omitted the bridge.
+
+The same 0.153.4 binary (SHA-256 recorded above) reproduces that failure when
+bridge startup is delayed 2.5 seconds. Upstream's
+[optional MCP grace schema](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/core/config.schema.json#L6515)
+defaults to 1000 ms; the
+[tool catalog](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/codex-mcp/src/connection_manager/tool_catalog.rs#L173)
+can omit an optional server still starting at that deadline. Both wrapper
+transports had inherited that default.
+
+The fix uses a shared `BRIDGE_MCP_POLICY` in the production exec host and
+app-server session: `required = true`, `startup_timeout_sec = 30`. The
+[required field](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/core/config.schema.json#L3211)
+is supported by this pin, and 30 seconds explicitly preserves its
+[existing startup timeout](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/codex-mcp/src/rmcp_client.rs#L98).
+[Required-server validation](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/codex-mcp/src/connection_manager/required.rs#L15)
+waits for initialization and rejects startup on failure. No wrapper polling or
+global change to other optional MCP servers is needed. Tool approval and the
+310-second tool-call timeout are unchanged.
+
+This is also a **normal launch behavior change**: exec now fails the turn if
+the kaoiro bridge cannot initialize, instead of silently proceeding without
+its tools. The existing `makeResult`/`error_detail` path presents that failure
+to the operator; it is not a reason to retry a turn automatically. The
+app-server session closes on failed thread opening and cannot submit a turn.
+Its bridge-bearing thread/start and thread/resume requests allow 35 seconds
+(30-second startup plus 5 seconds for the response); other RPCs retain their
+25-second default. Explicit transport timeout overrides remain authoritative.
+
+The real CLI tests use the actual SDK/exec host and app-server session with a
+2.5-second delayed entry point into the built bridge. The policy still comes
+from production composition. They check successful calls (including app-server
+resume), and a shorter test-only startup timeout checks zero model requests
+and the operator-visible exec error. Removing required is the negative control.
+The 35/25-second boundaries and premature-turn rejection are tested with a
+controlled child and fake clocks, rather than timing assertions on CI runners.
+
+A separate observation was `ENOTEMPTY` during home cleanup: external plugin
+clone processes could keep writing after the CLI child closed. The isolated
+integration configurations now disable plugins as well as analytics.
+Upstream [curated repository synchronization](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/core-plugins/src/manager.rs#L693)
+is gated by plugins_enabled; execve traces with plugins=false contained no
+plugins-clone startup, unlike the preceding default-config capture. Production
+plugin settings are unchanged. Update checks and other CLI startup traffic
+remain possible. CI's PATH-alias and bundled-bubblewrap fallback warnings are
+separate observations, not evidence of the missing-tool cause.

@@ -43,13 +43,15 @@ interface ActiveTurn {
 
 export class AppServerTransport {
   readonly #rpc: AppServerRpc;
+  readonly #threadOpenTimeoutMs: number | undefined;
   #initializing: Promise<void> | undefined;
   #active: ActiveTurn | undefined;
   #failure: Error | undefined;
   #version: string | undefined;
   #opening = false;
 
-  constructor(options: Omit<AppServerRpcOptions, "onNotification" | "onFailure"> = {}) {
+  constructor(options: Omit<AppServerRpcOptions, "onNotification" | "onFailure"> & { threadOpenTimeoutMs?: number } = {}) {
+    this.#threadOpenTimeoutMs = options.threadOpenTimeoutMs;
     this.#rpc = new AppServerRpc({
       ...options,
       onNotification: (event) => this.#notification(event),
@@ -148,7 +150,7 @@ export class AppServerTransport {
       await this.#initialize();
       const result = await this.#rpc.request(method, {
         ...params, approvalPolicy: "never", approvalsReviewer: "user",
-      }).result;
+      }, this.#threadOpenTimeoutMs).result;
       if (!rpcObject(result) || !rpcObject(result.thread) || typeof result.thread.id !== "string") {
         this.#failure = new AppServerConnectionError(`Invalid ${method} response`);
         await this.#rpc.close();

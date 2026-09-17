@@ -23,17 +23,21 @@ afterEach(async () => {
   }
   vi.restoreAllMocks();
 });
-function childFixture(closeDelayMs = 0) {
+function childFixture(closeDelayMs = 0, openDelayMs = 0) {
   const child = new EventEmitter() as ChildProcessWithoutNullStreams;
   const stdout = new PassThrough(), stderr = new PassThrough();
   const sent: Array<{ method: string; params: Record<string, unknown> }> = [];
   let fail = false;
+  const ignored = new Set<string>();
   const stdin = new Writable({ write(chunk: Buffer, _encoding, cb) {
     const request = JSON.parse(chunk.toString()); sent.push(request);
-    if (request.id !== undefined) {
-      stdout.write(JSON.stringify(fail ? { id: request.id, error: { code: -1, message: "fixture failure" } } : {
-        id: request.id, result: request.method === "initialize" ? { userAgent: "kaoiro/test" } : { thread: { id: "thread" } },
+    if (request.id !== undefined && !ignored.has(request.method)) {
+      const reply = () => stdout.write(JSON.stringify(fail ? { id: request.id, error: { code: -1, message: "fixture failure" } } : {
+        id: request.id, result: request.method === "initialize" ? { userAgent: "kaoiro/test" }
+          : request.method === "turn/start" ? { turn: { id: "turn" } } : { thread: { id: "thread" } },
       }) + "\n");
+      if (openDelayMs && (request.method === "thread/start" || request.method === "thread/resume")) setTimeout(reply, openDelayMs);
+      else reply();
     }
     cb();
   } });
@@ -43,7 +47,7 @@ function childFixture(closeDelayMs = 0) {
     if (closeDelayMs === 0) finish();
     else setTimeout(finish, closeDelayMs);
   });
-  return { child, sent, fail() { fail = true; } };
+  return { child, sent, fail() { fail = true; }, ignore(method: string) { ignored.add(method); } };
 }
 const tool = { name: "probe", description: "probe", inputSchema: { type: "object" }, handler: async () => ({ content: [] }) };
 
@@ -67,6 +71,7 @@ it.each([undefined, false, true])("uses exec-equivalent bridge settings and expl
   expect(bridge.args[0]).toMatch(/\/dist\/bridge\.js$/);
   expect(bridge.tool_timeout_sec).toBe(BRIDGE_TOOL_TIMEOUT_SEC);
   expect(bridge.default_tools_approval_mode).toBe("approve");
+  expect(bridge).toMatchObject({ required: true, startup_timeout_sec: 30 });
   expect(bridge.env.KAOIRO_BRIDGE_STDERR_PATH).toBe("/tmp/bridge.stderr.log");
   const host = await listen.mock.results[0]!.value as ToolHost;
   expect(bridge.env.KAOIRO_BRIDGE_SOCKET).toBe(host.socketPath);
@@ -172,4 +177,59 @@ it("aborts an active tool handler synchronously before waiting for child exit", 
     socket.destroy();
     await session.close();
   }
+});
+
+
+it.each(["start", "resume"])("waits for required MCP during %s and permits a response after 30 seconds", async mode => {
+  const fixture = childFixture(0, 31_000);
+  const session = await AppServerSession.create({ tools: [tool], turnSignal: () => null,
+    transport: { spawnChild: () => fixture.child } }); sessions.push(session);
+  vi.useFakeTimers();
+  try {
+    const opening = mode === "start" ? session.startThread() : session.resumeThread("thread");
+    const ready = expect(opening).resolves.toBe("thread");
+    void ready.catch(() => {});
+    await vi.advanceTimersByTimeAsync(30_000);
+    await expect(session.startTurn({ threadId: "thread", hostTurnToken: "early", input: "hello" })).rejects.toThrow("not ready");
+    expect(fixture.sent.filter(r => r.method === "turn/start")).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1000);
+    await ready;
+    await session.startTurn({ threadId: "thread", hostTurnToken: "ready", input: "hello" });
+    expect(fixture.sent.filter(r => r.method === "turn/start")).toHaveLength(1);
+  } finally { vi.useRealTimers(); }
+});
+
+it.each([
+  ["thread/start", true, undefined, 35_000],
+  ["thread/resume", true, undefined, 35_000],
+  ["thread/start", false, undefined, 25_000],
+  ["thread/start", true, 200, 200],
+  ["initialize", true, undefined, 25_000],
+  ["turn/start", true, undefined, 25_000],
+] as const)("bounds %s (MCP=%s, override=%s) at %s ms", async (method, withTools, override, timeout) => {
+  const fixture = childFixture(); fixture.ignore(method);
+  const session = await AppServerSession.create({ ...(withTools ? { tools: [tool] } : {}), turnSignal: () => null,
+    transport: { spawnChild: () => fixture.child, ...(override === undefined ? {} : { requestTimeoutMs: override }) } });
+  sessions.push(session);
+  vi.useFakeTimers();
+  try {
+    if (method === "turn/start") await session.startThread();
+    const operation = method === "turn/start"
+      ? session.startTurn({ threadId: "thread", hostTurnToken: "timeout", input: "hello" })
+      : method === "thread/resume" ? session.resumeThread("thread") : session.startThread();
+    let settled = false;
+    void operation.then(() => { settled = true; }, () => { settled = true; });
+    const failure = expect(operation).rejects.toThrow(`App-server response timeout: ${method}`);
+    void failure.catch(() => {});
+    await vi.advanceTimersByTimeAsync(timeout - 1);
+    expect(settled).toBe(false);
+    expect(fixture.child.stdin.writableEnded).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fixture.child.stdin.writableEnded).toBe(true);
+    await failure;
+    if (method !== "turn/start") {
+      expect(fixture.sent.filter(r => r.method === "turn/start")).toHaveLength(0);
+      await expect(session.startTurn({ threadId: "thread", hostTurnToken: "after", input: "hello" })).rejects.toThrow("closed");
+    }
+  } finally { vi.useRealTimers(); }
 });

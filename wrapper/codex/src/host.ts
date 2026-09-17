@@ -8,6 +8,8 @@
 // Approval is pinned to "never" (ADR-0033); waiting_permission represents
 // the dispatch gate, not an SDK approval callback.
 
+import { BRIDGE_MCP_POLICY } from "./bridge_policy.js";
+export { BRIDGE_TOOL_TIMEOUT_SEC } from "./bridge_policy.js";
 import { randomUUID } from "node:crypto";
 import { Codex } from "@openai/codex-sdk";
 import type {
@@ -441,12 +443,6 @@ export interface CodexHostOptions {
  *  dist/ (runtime) and src/ (tsx dev) alike — both point at dist/bridge.js,
  *  so dev spawns need a prior `pnpm build` of @kaoiro/codex. */
 const BRIDGE_SCRIPT = new URL("../dist/bridge.js", import.meta.url).pathname;
-
-/** How long codex lets one kaoiro bridge tool call run. Must outlive the
- *  300 s synchronous send_to_agent waiter; leaving codex's 60 s default
- *  here could cancel the outer MCP call while the common-layer waiter
- *  still consumes a late reply (#114 M1). */
-export const BRIDGE_TOOL_TIMEOUT_SEC = 310;
 
 /** Ceiling on an operator approval wait opened from inside a bridge tool
  *  call (issue #347). Below `BRIDGE_TOOL_TIMEOUT_SEC` on purpose: codex
@@ -1356,8 +1352,7 @@ export class CodexHost implements EngineAdapter {
           // (send_to_agent per-call on Claude; ask_user_question IS the
           // operator prompt), so auto-approving them is safe. Behavior
           // under approval_policy=on-request has not been verified.
-          default_tools_approval_mode: "approve",
-          tool_timeout_sec: BRIDGE_TOOL_TIMEOUT_SEC,
+          ...BRIDGE_MCP_POLICY,
         },
       };
     }

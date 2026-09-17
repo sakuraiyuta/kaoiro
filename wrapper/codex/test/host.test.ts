@@ -1425,6 +1425,8 @@ describe("CodexHost", () => {
     const mcp = config.mcp_servers as Record<string, Record<string, unknown>>;
     expect(mcp.kaoiro!.default_tools_approval_mode).toBe("approve");
     expect(mcp.kaoiro!.tool_timeout_sec).toBe(310);
+    expect(mcp.kaoiro!.required).toBe(true);
+    expect(mcp.kaoiro!.startup_timeout_sec).toBe(30);
     expect(config.developer_instructions).toBe("persona");
   });
 

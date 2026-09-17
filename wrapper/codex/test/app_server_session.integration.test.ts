@@ -8,7 +8,8 @@ import type { AppServerProjection } from "../src/app_server_projection.js";
 import { materializeLocalImages, cleanupLocalImages } from "../src/upload.js";
 
 // Real CLI startup inherits outward traffic, including update checks. Analytics
-// is off; the provider/auth are local, but offline runners may start more slowly.
+// and plugins are off (external plugin clones can outlive child shutdown and
+// race HOME cleanup). The provider/auth are local; offline startup can be slow.
 it("uses the default session and real MCP bridge for images and instructions across resume", async () => {
   const home = await mkdtemp(join(tmpdir(), "fuji-348-session-"));
   const requests: Array<{ input: Array<Record<string, unknown>> }> = [];
@@ -53,6 +54,7 @@ base_url = "http://127.0.0.1:${address.port}/v1"
 wire_api = "responses"
 [features]
 shell_snapshot = false
+plugins = false
 [analytics]
 enabled = false
 `;

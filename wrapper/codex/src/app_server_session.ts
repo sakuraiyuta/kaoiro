@@ -2,6 +2,7 @@ import { rm } from "node:fs/promises";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ToolDescriptor } from "@kaoiro/agent-common";
+import { BRIDGE_MCP_POLICY, BRIDGE_THREAD_OPEN_TIMEOUT_MS } from "./bridge_policy.js";
 import { ToolHost } from "./toolhost.js";
 import {
   AppServerTransport, type AppServerThreadOptions, type AppServerTurn, type AppServerTurnInput,
@@ -64,15 +65,16 @@ export class AppServerSession {
                   KAOIRO_BRIDGE_STDERR_PATH: options.bridgeStderrPath,
                 }),
               },
-              // Keep these equal to CodexHost.run's exec bridge policy.
-              default_tools_approval_mode: "approve",
-              tool_timeout_sec: 310,
+              ...BRIDGE_MCP_POLICY,
             },
           },
         }),
       },
     };
-    this.#transport = new AppServerTransport(options.transport);
+    this.#transport = new AppServerTransport({
+      ...options.transport,
+      ...(host === null ? {} : { threadOpenTimeoutMs: BRIDGE_THREAD_OPEN_TIMEOUT_MS }),
+    });
   }
 
   get version(): string | undefined { return this.#transport.version; }
