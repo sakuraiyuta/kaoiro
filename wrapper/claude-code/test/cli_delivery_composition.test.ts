@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
 import { runClaudeCli } from "../src/cli.js";
+import { AgentHost, type AgentHostOptions } from "../src/host.js";
+import type { Query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 
 const config: WrapperConfig = {
   agent_id: "self.agent",
@@ -30,6 +32,105 @@ function inboundEnvelope(deliverySeq: number, turnNumber = 1): Envelope {
 }
 
 describe("Claude CLI delivery composition (issue #247)", () => {
+  it.each([false, true])(
+    "acks a mid-turn arrival only when the real host yields the next input (stderr failure: %s)",
+    async (stderrFails) => {
+      const acknowledgements: number[] = [];
+      const inputs: SDKUserMessage[] = [];
+      const lifecycle: Record<string, unknown>[] = [];
+      const output = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+        const line = String(chunk);
+        const prefix = "[kaoiro][claude-code-lifecycle] ";
+        if (line.startsWith(prefix)) {
+          if (stderrFails) throw new Error("diagnostic sink unavailable");
+          lifecycle.push(JSON.parse(line.slice(prefix.length)));
+        }
+        return true;
+      });
+      let releaseFirst!: () => void;
+      const firstBoundary = new Promise<void>((resolve) => { releaseFirst = resolve; });
+      let releaseSecond!: () => void;
+      const secondBoundary = new Promise<void>((resolve) => { releaseSecond = resolve; });
+      let linkOptions!: Record<string, any>;
+      let host!: AgentHost;
+      const queryFn: NonNullable<AgentHostOptions["queryFn"]> = (args) => {
+        async function* frames(): AsyncGenerator<SDKMessage, void> {
+          const input = (args.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+          inputs.push((await input.next()).value!);
+          yield { type: "assistant", message: { content: [
+            { type: "tool_use", id: "held-tool", name: "Read", input: {} },
+          ] } } as unknown as SDKMessage;
+          await firstBoundary;
+          yield { type: "result", subtype: "success", result: "first done" } as SDKMessage;
+          inputs.push((await input.next()).value!);
+          await secondBoundary;
+          yield { type: "result", subtype: "success", result: "second done" } as SDKMessage;
+        }
+        return Object.assign(frames(), { interrupt: async () => {} }) as unknown as Query;
+      };
+      const running = runClaudeCli({
+        parseCliArgs: () => ({ configPath: "test", prompt: "first instruction", resume: undefined }),
+        loadConfig: () => ({ ...config }),
+        createServerLink: (_url, _agentId, options) => {
+          linkOptions = options as unknown as Record<string, any>;
+          queueMicrotask(() => {
+            linkOptions.onInterAgentDeliveryStatus({ issued_seq: 0, acked_seq: 0 });
+            linkOptions.onPersonaPrompt("system prompt");
+          });
+          return {
+            acknowledgeInterAgentDelivery: (seq: number) => acknowledgements.push(seq),
+            close: () => {}, currentSessionId: () => null, send: () => {},
+            reportSessionLifecycle: () => {},
+          } as never;
+        },
+        createHost: (config, options) => {
+          host = new AgentHost(config, { ...options, queryFn });
+          return host;
+        },
+      });
+      // Observe early failures while assertions are waiting; cleanup below
+      // still awaits the original promise and propagates its rejection.
+      void running.catch(() => {});
+      try {
+        await vi.waitFor(() => expect(host?.state).toBe("tool_running"));
+        await linkOptions.onInterAgentMessage(inboundEnvelope(1));
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(inputs).toHaveLength(1);
+        expect(acknowledgements).toEqual([]);
+        if (!stderrFails) {
+          expect(lifecycle.filter((event) => event.seq_first === 1).map((event) => event.event))
+            .toEqual(["dispatch_queued"]);
+        }
+        releaseFirst();
+        await vi.waitFor(() => expect(inputs).toHaveLength(2));
+        expect(acknowledgements).toEqual([1]);
+        if (!stderrFails) {
+          const queued = lifecycle.find((event) => event.event === "dispatch_queued")!;
+          expect(lifecycle).toContainEqual(expect.objectContaining({
+            agent_id: config.agent_id, event: "turn_start", turn_token: queued.turn_token,
+            seq_first: 1, seq_last: 1,
+          }));
+          expect(lifecycle).toContainEqual(expect.objectContaining({
+            agent_id: config.agent_id, event: "delivery_ack", seq: 1, phase: "send_attempt",
+          }));
+          expect(JSON.stringify(lifecycle)).not.toContain("first instruction");
+          expect(JSON.stringify(lifecycle)).not.toContain("hello");
+        }
+      } finally {
+        releaseFirst();
+        releaseSecond();
+        host?.close();
+        try {
+          await running;
+        } finally {
+          stderr.mockRestore();
+          output.mockRestore();
+        }
+      }
+    },
+  );
+
   it("actual entrypoint connects status, handler, and host turn-start to one acknowledgement flow", async () => {
     const acknowledgements: number[] = [];
     let linkOptions!: Record<string, any>;

@@ -342,6 +342,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
 
   interAgentTurns = new InterAgentTurnCoordinator({
     onDispatch: (batch) => {
+      writeDeliveryLifecycle("dispatch_queued", batch.turnToken);
       // Register at dispatch time, not receipt time: a same-CID next
       // generation cannot overwrite this record while this token is active.
       for (const item of batch.items) {
@@ -373,6 +374,31 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       );
     },
   });
+
+  const writeDeliveryLifecycle = (
+    event: "dispatch_queued" | "turn_start" | "delivery_ack",
+    turnToken?: string,
+    seq?: number,
+  ): void => {
+    try {
+      const sequences = turnToken === undefined
+        ? []
+        : interAgentTurns.deliverySequencesForTurn(turnToken);
+      writeRedactedStderr(`[kaoiro][claude-code-lifecycle] ${JSON.stringify({
+        at: new Date().toISOString(),
+        agent_id: config.agent_id,
+        event,
+        ...(turnToken === undefined ? {} : { turn_token: turnToken }),
+        ...(sequences.length === 0 ? {} : {
+          seq_first: Math.min(...sequences),
+          seq_last: Math.max(...sequences),
+        }),
+        ...(seq === undefined ? {} : { seq, phase: "send_attempt" }),
+      })}\n`);
+    } catch {
+      // Diagnostic output must not interrupt dispatch or acknowledgement.
+    }
+  };
 
   const onState = (envelope: Envelope): void => {
     printState(envelope);
@@ -570,7 +596,10 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   });
 
   const deliveryAcknowledgementRuntime = createDeliveryAcknowledgementRuntime(
-    (deliverySeq) => link?.acknowledgeInterAgentDelivery(deliverySeq),
+    (deliverySeq) => {
+      writeDeliveryLifecycle("delivery_ack", undefined, deliverySeq);
+      link?.acknowledgeInterAgentDelivery(deliverySeq);
+    },
     interAgentTurns,
   );
 
@@ -989,6 +1018,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       ...(resumeSessionId !== undefined ? { resume: resumeSessionId } : {}),
     },
   }, (turnToken) => {
+    writeDeliveryLifecycle("turn_start", turnToken);
     // Dispatch may have happened long before this point; only this host
     // input-yield boundary is an actual SDK turn start (issue #248).
     turnWatchdog.start(turnToken);

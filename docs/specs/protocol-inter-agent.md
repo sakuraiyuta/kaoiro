@@ -48,6 +48,17 @@ boundary that lost the old process memory, so the server atomically abandons old
 gaps with `acked_seq := issued_seq`. The sequence remains monotonic; nothing is
 resent to the new process.
 
+The Claude wrapper emits `claude-code-lifecycle` diagnostic records for
+`dispatch_queued`, `turn_start`, and `delivery_ack`, correlated by `agent_id`,
+turn token and delivery sequence where available. `dispatch_queued` does not
+prove SDK dispatch: an input arriving mid-turn waits for the current turn's
+boundary. `turn_start` is emitted at the host's input-yield callback;
+`delivery_ack` with `phase: "send_attempt"` records an attempted watermark
+send, not server acceptance. The acknowledgement and turn-start records come
+from the same callback, with the acknowledgement logged first. Server ledger
+status remains the confirmation source. These records omit message bodies,
+and diagnostic write failures do not change turn or acknowledgement control.
+
 ## Review-quagmire detection (issue #273)
 
 Two failure modes of multi-agent review are invisible until an operator goes
