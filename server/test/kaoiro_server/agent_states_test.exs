@@ -114,6 +114,38 @@ defmodule KaoiroServer.AgentStatesTest do
     refute AgentStates.known?("agent-k2", server: store)
   end
 
+  describe "get_envelope/2" do
+    setup do
+      %{store: start_supervised!({AgentStates, name: :agent_states_get_envelope_test})}
+    end
+
+    test "returns the stored envelope and nil for an unknown agent", %{store: store} do
+      stored = envelope("agent.present")
+      :ok = AgentStates.put(stored, server: store)
+
+      assert AgentStates.get_envelope("agent.present", server: store) == stored
+      assert AgentStates.get_envelope("agent.absent", server: store) == nil
+    end
+
+    test "returns the stored disconnect attribution", %{store: store} do
+      disconnect = %{"origin" => "operator", "reason" => "stop"}
+
+      :ok =
+        AgentStates.put(
+          envelope("agent.disconnected", %{
+            "state" => "disconnected",
+            "ext" => %{"disconnect" => disconnect}
+          }),
+          server: store
+        )
+
+      assert get_in(
+               AgentStates.get_envelope("agent.disconnected", server: store),
+               ["ext", "disconnect"]
+             ) == disconnect
+    end
+  end
+
   describe "connected?/2 (ADR-0024 D5)" do
     setup do
       %{store: start_supervised!({AgentStates, name: :agent_states_connected_test})}

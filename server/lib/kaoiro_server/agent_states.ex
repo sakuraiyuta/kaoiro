@@ -427,6 +427,12 @@ defmodule KaoiroServer.AgentStates do
     GenServer.call(server, {:known?, agent_id})
   end
 
+  @doc "Returns one agent's latest envelope without copying the whole snapshot."
+  def get_envelope(agent_id, opts \\ []) do
+    server = Keyword.get(opts, :server, __MODULE__)
+    GenServer.call(server, {:get_envelope, agent_id})
+  end
+
   @doc """
   True when `agent_id` has an entry whose owning channel is still alive —
   i.e. a wrapper is currently connected for it (ADR-0024 D5). Used at
@@ -514,6 +520,7 @@ defmodule KaoiroServer.AgentStates do
       %{^agent_id => %{owner: owner} = entry}
       when is_pid(owner) and (is_nil(expected_owner) or expected_owner == owner) ->
         if DisconnectAttribution.valid?(disconnect) and origin != "unplanned" do
+          # Self intents need no TTL: all three CLIs await the ack, then immediately close the link.
           expires_at =
             if origin in ["operator", "runner"],
               do: state.now_ms.() + @disconnect_intent_ttl_ms,
@@ -745,6 +752,16 @@ defmodule KaoiroServer.AgentStates do
 
   def handle_call({:known?, agent_id}, _from, state) do
     {:reply, Map.has_key?(state.agents, agent_id), state}
+  end
+
+  def handle_call({:get_envelope, agent_id}, _from, state) do
+    envelope =
+      case state.agents do
+        %{^agent_id => %{envelope: envelope}} -> envelope
+        _ -> nil
+      end
+
+    {:reply, envelope, state}
   end
 
   def handle_call({:connected?, agent_id}, _from, state) do

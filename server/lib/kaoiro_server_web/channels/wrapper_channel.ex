@@ -2386,8 +2386,10 @@ defmodule KaoiroServerWeb.WrapperChannel do
             # sender's tool result is the only signal it needs.
             if not AgentStates.connected?(to) do
               disconnect =
-                AgentStates.snapshot()
-                |> get_in([to, "ext", "disconnect"])
+                case AgentStates.get_envelope(to) do
+                  %{} = envelope -> get_in(envelope, ["ext", "disconnect"])
+                  nil -> nil
+                end
 
               if DisconnectAttribution.valid?(disconnect),
                 do: {:error, {:disconnected, disconnect}},
