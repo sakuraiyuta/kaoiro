@@ -346,10 +346,26 @@ defmodule KaoiroServer.SessionLifecycleEvents do
     end
   end
 
+  # issue #359 M2: `approval` is an OPTIONAL third key so a permission audit
+  # (`permission_requested` / `permission_failed` / `permission_applied` /
+  # `rolled_back_to`) can carry the mutable approval axis. Absent = the legacy
+  # two-key shape; present must be a known value; anything else (a malformed
+  # approval, an extra key) is rejected rather than silently dropped.
   defp sanitize_requested(%{"sandbox" => sandbox, "network_access" => network_access} = requested)
-       when sandbox in @audit_sandbox_values and is_boolean(network_access) and
-              map_size(requested) == 2 do
-    {:ok, %{"sandbox" => sandbox, "network_access" => network_access}}
+       when sandbox in @audit_sandbox_values and is_boolean(network_access) do
+    base = %{"sandbox" => sandbox, "network_access" => network_access}
+
+    case requested do
+      %{"approval" => approval}
+      when approval in @audit_approval_values and map_size(requested) == 3 ->
+        {:ok, Map.put(base, "approval", approval)}
+
+      %{} when map_size(requested) == 2 ->
+        {:ok, base}
+
+      _ ->
+        :error
+    end
   end
 
   defp sanitize_requested(_other), do: :error

@@ -359,6 +359,59 @@ defmodule KaoiroServer.SessionLifecycleEventsTest do
       assert stored == details
     end
 
+    # issue #359 M2: requested carries the optional approval axis so a wrapper
+    # (Stage B) can report an approval switch's applied/failed outcome.
+    test "permission_failed requested の approval axis を保存する", %{name: name} do
+      details = %{
+        "revision" => 4,
+        "requested" => %{
+          "sandbox" => "workspace-write",
+          "network_access" => false,
+          "approval" => "local"
+        },
+        "reason" => "policy_mismatch"
+      }
+
+      :ok =
+        SessionLifecycleEvents.record_permission_event(
+          "a.pf-approval",
+          "permission_failed",
+          "2026-09-06T00:00:00Z",
+          details,
+          name
+        )
+
+      assert [%{kind: "permission_failed", details: stored}] =
+               SessionLifecycleEvents.list_for_agent("a.pf-approval", name)
+
+      assert stored["requested"]["approval"] == "local"
+    end
+
+    test "permission_failed requested の malformed approval は drop される", %{name: name} do
+      details = %{
+        "revision" => 4,
+        "requested" => %{
+          "sandbox" => "workspace-write",
+          "network_access" => false,
+          "approval" => "yolo"
+        },
+        "reason" => "policy_mismatch"
+      }
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        :ok =
+          SessionLifecycleEvents.record_permission_event(
+            "a.pf-approval-bad",
+            "permission_failed",
+            "2026-09-06T00:00:00Z",
+            details,
+            name
+          )
+      end)
+
+      assert SessionLifecycleEvents.list_for_agent("a.pf-approval-bad", name) == []
+    end
+
     test "permission_failed の reason が256 byteを超えると drop される", %{name: name} do
       details = %{
         "revision" => 1,
