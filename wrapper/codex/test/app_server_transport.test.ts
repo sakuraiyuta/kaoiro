@@ -414,3 +414,135 @@ it("releases history admission after an explicit RPC rejection without retrying 
   expect(await f.transport.readHistory("thread-1", historyConfig, historyNow)).toEqual({ coverage: "full", logs: [] });
   expect(f.sent.filter(r => r.method === "thread/read")).toHaveLength(3);
 });
+
+it("defers an early interrupt to the matching identity and waits for terminal after its acknowledgement", async () => {
+  const f = transportFixture();
+  await f.transport.startThread();
+  let start: RpcObject | undefined;
+  f.handle(r => {
+    if (r.method === "turn/start") start = r;
+    if (r.method === "turn/interrupt") f.respond(r, {});
+  });
+  const onDispatch = vi.fn(identity => {
+    expect(identity).toEqual({ threadId: "thread-1", hostTurnToken: "host-a", clientUserMessageId: "client-a" });
+    expect(start).toBeUndefined();
+  });
+  const opening = f.transport.startTurn({ threadId: "thread-1", hostTurnToken: "host-a", clientUserMessageId: "client-a", input: "a", onDispatch });
+  const interrupted = f.transport.interrupt("host-a");
+  const stale = f.transport.interrupt("stale");
+  await tick();
+  expect(f.sent.filter(r => r.method === "turn/interrupt")).toEqual([]);
+  f.respond(start!, { turn: { id: "actual-turn-a" } });
+  const turn = await opening;
+  expect(await interrupted).toBe(true);
+  expect(await stale).toBe(false);
+  expect(await f.transport.interrupt("host-a")).toBe(true);
+  expect(f.sent.filter(r => r.method === "turn/interrupt")).toEqual([
+    expect.objectContaining({ params: { threadId: "thread-1", turnId: "actual-turn-a" } }),
+  ]);
+  expect(onDispatch).toHaveBeenCalledTimes(1);
+  expect(turn.identity).toEqual({ threadId: "thread-1", turnId: "actual-turn-a", hostTurnToken: "host-a", clientUserMessageId: "client-a", requestId: start!.id });
+  await expect(f.transport.startTurn(historyInput)).rejects.toThrow("active or submitting");
+  f.send(notification("turn/completed", "actual-turn-a"));
+  expect(await collect(turn.events)).toHaveLength(1);
+  expect(await f.transport.interrupt("host-a")).toBe(false);
+  f.handle(r => { f.respond(r, { turn: { id: "actual-turn-b" } }); });
+  const next = await f.transport.startTurn({ ...historyInput, hostTurnToken: "host-b" });
+  expect(await f.transport.interrupt("host-a")).toBe(false);
+  expect(f.sent.filter(r => r.method === "turn/interrupt")).toHaveLength(1);
+  f.send(notification("turn/completed", "actual-turn-b"));
+  await collect(next.events);
+});
+
+it("does not interrupt a buffered terminal or a rejected submission", async () => {
+  const f = transportFixture();
+  await f.transport.startThread();
+  f.handle(r => { f.send(notification("turn/completed")); f.respond(r, { turn: { id: "turn-1" } }); });
+  const opening = f.transport.startTurn(historyInput);
+  const interrupted = f.transport.interrupt("host");
+  await collect((await opening).events);
+  expect(await interrupted).toBe(false);
+  f.handle(r => f.send({ id: r.id, error: { code: -32600, message: "rejected" } }));
+  const failed = f.transport.startTurn(historyInput);
+  const pending = f.transport.interrupt("host");
+  await expect(failed).rejects.toBeInstanceOf(AppServerRpcError);
+  expect(await pending).toBe(false);
+  expect(f.sent.filter(r => r.method === "turn/interrupt")).toEqual([]);
+});
+
+it("keeps interrupt failure distinct from terminal and releases pending work on close", async () => {
+  const f = transportFixture();
+  await f.transport.startThread();
+  f.handle(r => {
+    if (r.method === "turn/start") f.respond(r, { turn: { id: "turn-1" } });
+    if (r.method === "turn/interrupt") f.send({ id: r.id, error: { code: -32600, message: "rejected" } });
+  });
+  const turn = await f.transport.startTurn(historyInput);
+  await expect(f.transport.interrupt("host")).rejects.toBeInstanceOf(AppServerRpcError);
+  await expect(f.transport.startTurn(historyInput)).rejects.toThrow("active or submitting");
+  await f.transport.close();
+  await expect(collect(turn.events)).rejects.toBeInstanceOf(AppServerConnectionError);
+  const g = transportFixture();
+  await g.transport.startThread();g.handle(() => {});
+  const opening = g.transport.startTurn(historyInput);
+  const rejected = expect(opening).rejects.toBeInstanceOf(AppServerConnectionError);
+  const interrupted = g.transport.interrupt("host");
+  await tick();await g.transport.close();await rejected;
+  expect(await interrupted).toBe(false);
+});
+
+it("resolves settings before dispatch and never submits an unresolved switch", async () => {
+  const f = transportFixture();
+  await f.transport.startThread();
+  let config: RpcObject | undefined;
+  f.handle(r => {
+    if (r.method === "config/read") config = r;
+    if (r.method === "model/list") f.respond(r, { data: [], nextCursor: null });
+    if (r.method === "turn/start") { f.respond(r, { turn: { id: "turn-1" } }); f.send(notification("turn/completed")); }
+  });
+  const onDispatch = vi.fn();
+  const settings = { cwd: "/work", model: "target", resetEffort: true,
+    permission: { sandbox: "workspace-write" as const, networkAccess: false } };
+  const opening = f.transport.startTurn({ ...historyInput, settings, onDispatch });
+  await tick();
+  expect(onDispatch).not.toHaveBeenCalled();
+  await expect(f.transport.startTurn(historyInput)).rejects.toThrow("active or submitting");
+  expect(config).toMatchObject({ params: { cwd: "/work" } });
+  f.respond(config!, { config: { model_reasoning_effort: "low" } });
+  await collect((await opening).events);
+  expect(onDispatch).toHaveBeenCalledTimes(1);
+  expect(f.sent.find(r => r.method === "turn/start")).toMatchObject({ params: {
+    model: "target", effort: "low", cwd: "/work", approvalPolicy: "never", approvalsReviewer: "user",
+    sandboxPolicy: { type: "workspaceWrite", networkAccess: false, writableRoots: ["/work"] },
+  } });
+  const unavailable = f.transport.startTurn({ ...historyInput, settings, onDispatch });
+  const rejected = expect(unavailable).rejects.toMatchObject({ reason: "default_effort_unavailable" });
+  await tick();f.respond(config!, { config: { model_reasoning_effort: null } });await rejected;
+  expect(onDispatch).toHaveBeenCalledTimes(1);
+  expect(f.sent.filter(r => r.method === "turn/start")).toHaveLength(1);
+  await collect((await f.transport.startTurn(historyInput)).events);
+});
+
+it("honors a synchronous dispatch veto and a close during default resolution", async () => {
+  const f = transportFixture();await f.transport.startThread();
+  await expect(f.transport.startTurn({ ...historyInput, onDispatch: () => { throw new Error("permission changed"); } })).rejects.toThrow("permission changed");
+  expect(f.sent.filter(r => r.method === "turn/start")).toEqual([]);
+  f.handle(() => {});
+  const onDispatch = vi.fn();
+  const opening = f.transport.startTurn({ ...historyInput, settings: { model: "x", resetEffort: true }, onDispatch });
+  const rejected = expect(opening).rejects.toBeInstanceOf(AppServerConnectionError);
+  await tick();await f.transport.close();await rejected;
+  expect(onDispatch).not.toHaveBeenCalled();
+  expect(f.sent.filter(r => r.method === "turn/start")).toEqual([]);
+});
+
+it("does not dispatch when close wins the settings preparation microtask", async () => {
+  const f = transportFixture();await f.transport.startThread();
+  const onDispatch = vi.fn();
+  const opening = f.transport.startTurn({ ...historyInput, onDispatch });
+  const rejected = expect(opening).rejects.toBeInstanceOf(AppServerConnectionError);
+  const closing = Promise.resolve().then(() => f.transport.close());
+  await rejected;await closing;
+  expect(onDispatch).not.toHaveBeenCalled();
+  expect(f.sent.filter(r => r.method === "turn/start")).toEqual([]);
+});

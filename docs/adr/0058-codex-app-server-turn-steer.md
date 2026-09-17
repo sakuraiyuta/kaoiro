@@ -871,3 +871,74 @@ a display-boundary check, not a full schema validator for unused extensions or
 MCP's explicitly arbitrary JSON content. The live converter remains unchanged.
 Tests cover each known family through both history sources, retention of prior
 page logs on a later invalid item, and ignored-item pagination progress.
+
+### Increment (5a): internal turn control and settings
+
+The transport accepts per-turn settings and a synchronous pre-dispatch admission
+callback. Host token/client message id are captured separately from the RPC
+request id and returned app-server turn id. Interrupts are host-token fenced:
+a request before the start reply waits for the actual turn id, a buffered
+terminal retires it, and repeated requests share one RPC. RPC acknowledgement
+neither closes the event stream nor permits another turn. `CodexHost`, its IA
+queue/lease/watchdog, and normal launch remain unconnected in this increment.
+
+Pre-implementation measurement used the same pinned 0.153.4 binary and isolated
+unauthenticated loopback provider as earlier increments. Five terminal turns
+exposed their matching `turn_context` while the child stayed alive, without an
+intervening history RPC. The first direct file read succeeded in each case;
+this does not establish a universal flush deadline. Same-thread read-only,
+workspace-write/network-off, workspace-write/network-on, then read-only policies
+were observed with `never/user` throughout.
+
+Effort is sticky: high followed by a changed model plus null or omitted effort
+remained high in both provider requests and rollout. Exec with no explicit
+effort used the config's medium value. Resuming the running thread with a
+`model_reasoning_effort` override also retained high, even though the RPC
+succeeded. Thread id/path and prior history were preserved, the next turn had a
+new id, and the rollout retained its previous bytes. No MCP restart claim is
+made for that probe, which configured no MCP server.
+
+The accepted restricted contract samples `config/read(cwd)` at model-switch
+submission, preferring explicit `model_reasoning_effort`, otherwise finding the
+target model's `model/list.defaultReasoningEffort`, and sends a concrete effort.
+It neither treats null as reset nor resumes to reset. Missing/malformed defaults,
+RPC rejection, or exhausted/non-progressing catalog pages fail before dispatch
+with the closed `default_effort_unavailable` reason; connection failures remain
+connection errors. Host pending/rollback and operator switch-error projection
+are deferred to the next increments. The exec path remains unchanged.
+
+| Real CLI comparison | Resolved app-server effort | Fresh exec effort |
+| --- | --- | --- |
+| Config changed from medium to low before resolution | low | low |
+| No configured effort, gpt-5.6-sol catalog default | low | low |
+| Base medium; exec selects probe profile containing low | medium (base only) | low |
+| Config changed medium to low after resolution | medium (sampled value) | low |
+
+This is deliberately not universal exec equivalence. The pin rejects
+`--profile` for app-server, and rejects legacy `profile`/`profiles` configuration;
+its runtime profile option layers `<name>.config.toml`. Current CodexHost/SDK and
+AppServerRpc do not expose/send that option, so the restricted contract removes
+no current Host selection. **Profile support remains unsupported** and must be
+addressed separately before exposing profile selection. The sampling-time
+race in the final row is part of the contract, not an implicit reset guarantee.
+The model/auth/account matrix beyond these local cases was not measured.
+
+| Evidence / generated stable v2 schema | SHA-256 |
+| --- | --- |
+| Permission/sticky-effort trace | `e765a6a2695e8e85ebb02fb2ce1b3195324489896dd6f765f3c31af0b3956675` |
+| Reset alternatives trace | `9c683566e3b44f736afd9137c74596fabdabd004bfca40cd6b12158768116d8c` |
+| Reset probe | `c3c119a6bf49e89b9a2cb0ee3b75f2470e31e6c8011bf3fca80ea53263d1d980` |
+| Reset checker | `9c3830b240eb69d37c492ed2a766c12d422499824bca9cf3f27a173bf8bea866` |
+| TurnStartParams.json | `a3835e8c1e942e4b358e1a670939b89918b16c4d13105a579899892b7ade6dea` |
+| TurnInterruptParams.json | `6dff382dae73d1dbc58406ed045605f647e7a49660e2540fbd2c6c24d60c5f2b` |
+| TurnInterruptResponse.json | `531de6be06fe979b5963f249bab82498a175e614bf65ac12fb2e849dfe60bcf1` |
+| ConfigReadParams.json | `257c54a423b47c1d209ff1076765a1564d82322fd5161670fd489a2874de1bac` |
+| ConfigReadResponse.json | `bd72c94e2c7d49ead6a20bcf54afedc8db11044bf8cadb387e42135dd5d1e342` |
+| ModelListParams.json | `de29a536c00a5b8f46f34dba417dabd93365305571a8ed200e33bea85db68b5a` |
+| ModelListResponse.json | `c7b58b332f6cf18fd64235409a6daf27bb9e6c09d12dcd0daa2f3dc628b55f6f` |
+
+The capture checker exited zero; replacing the observed resolved low effort
+with high made it fail. The production-default session integration separately
+exercises settings, rollout observation, interrupt, and subsequent turns on the
+real CLI. Schema/error/race boundaries use fixtures. Shared HistoryReplayer,
+protocol, capabilities, server/dashboard, and ADR status are unchanged.

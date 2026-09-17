@@ -115,7 +115,12 @@ export class AppServerSession {
     if (this.#opening || this.#threadId === undefined || input.threadId !== this.#threadId) {
       throw new Error("App-server session thread is not ready or does not match");
     }
-    return this.#transport.startTurn(input);
+    return this.#transport.startTurn({ ...input, settings: { ...(this.#threadOptions.cwd === undefined ? {} : { cwd: this.#threadOptions.cwd }), ...input.settings } });
+  }
+
+  interrupt(hostTurnToken: string): Promise<boolean> {
+    if (this.#closing) return Promise.resolve(false);
+    return this.#transport.interrupt(hostTurnToken);
   }
 
   async startProjectedTurn(input: AppServerTurnInput): Promise<AppServerProjectedTurn> {

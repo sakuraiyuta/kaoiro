@@ -8,6 +8,8 @@ import { appServerInput, type AppServerInput } from "./app_server_input.js";
 import { AppServerTurnStream } from "./app_server_stream.js";
 import { AppServerAccountTelemetry, type AppServerRateLimits } from "./app_server_telemetry.js";
 
+import { appServerTurnSettings, type AppServerTurnSettings } from "./app_server_settings.js";
+
 export interface AppServerThreadOptions {
   config?: RpcObject;
   cwd?: string;
@@ -21,7 +23,12 @@ export interface AppServerTurnInput {
   hostTurnToken: string;
   input: AppServerInput;
   clientUserMessageId?: string;
+  settings?: AppServerTurnSettings;
+  /** Synchronous admission check immediately before turn/start; throwing sends no turn. */
+  onDispatch?: (identity: AppServerDispatchIdentity) => void;
 }
+
+export type AppServerDispatchIdentity = Pick<AppServerTurnIdentity, "threadId" | "hostTurnToken" | "clientUserMessageId">;
 
 export interface AppServerTurnIdentity {
   readonly threadId: string;
@@ -38,6 +45,9 @@ export interface AppServerTurn {
 
 interface ActiveTurn {
   threadId: string;
+  hostTurnToken: string;
+  ready: Promise<void>;
+  interrupt?: Promise<boolean>;
   stream: AppServerTurnStream;
   beforeResponse: AppServerNotification[];
   turnId?: string;
@@ -110,15 +120,24 @@ export class AppServerTransport {
     if (this.#failure) throw this.#failure;
     if (this.#active || this.#opening || this.#readingHistory) throw new Error("App-server already has an active or submitting operation");
     const wireInput = appServerInput(input.input);
-    const active: ActiveTurn = { threadId: input.threadId, stream: new AppServerTurnStream(), beforeResponse: [] };
+    const dispatch: AppServerDispatchIdentity = {
+      threadId: input.threadId, hostTurnToken: input.hostTurnToken,
+      ...(input.clientUserMessageId === undefined ? {} : { clientUserMessageId: input.clientUserMessageId }),
+    };
+    let release!: () => void;
+    const active: ActiveTurn = { ...dispatch, stream: new AppServerTurnStream(), beforeResponse: [],
+      ready: new Promise<void>(resolve => { release = resolve; }) };
     // Reserve before initialize/request awaits; overlapping calls must never become implicit steering.
     this.#active = active;
     try {
       await this.#initialize();
+      const settings = await appServerTurnSettings(input.settings ?? {}, (method, params) => this.#rpc.request(method, params).result);
+      if (this.#failure) throw this.#failure;
+      input.onDispatch?.(dispatch);
       const ticket = this.#rpc.request("turn/start", {
-        threadId: input.threadId,
+        ...settings, threadId: dispatch.threadId,
         input: wireInput,
-        ...(input.clientUserMessageId === undefined ? {} : { clientUserMessageId: input.clientUserMessageId }),
+        ...(dispatch.clientUserMessageId === undefined ? {} : { clientUserMessageId: dispatch.clientUserMessageId }),
         approvalPolicy: "never", approvalsReviewer: "user",
       });
       const result = await ticket.result;
@@ -131,9 +150,7 @@ export class AppServerTransport {
       if (active.failure) active.stream.fail(active.failure);
       return {
         identity: {
-          threadId: input.threadId, turnId: active.turnId,
-          hostTurnToken: input.hostTurnToken, requestId: ticket.id,
-          ...(input.clientUserMessageId === undefined ? {} : { clientUserMessageId: input.clientUserMessageId }),
+          ...dispatch, turnId: active.turnId, requestId: ticket.id,
         },
         events: active.stream,
       };
@@ -144,7 +161,22 @@ export class AppServerTransport {
         await this.#rpc.close();
       }
       throw error;
+    } finally {
+      release();
     }
+  }
+
+  interrupt(hostTurnToken: string): Promise<boolean> {
+    const active = this.#active;
+    if (!active || active.hostTurnToken !== hostTurnToken) return Promise.resolve(false);
+    active.interrupt ??= (async () => {
+      await active.ready;
+      // A buffered terminal may have retired this turn before its start reply.
+      if (this.#active !== active || active.turnId === undefined) return false;
+      await this.#rpc.request("turn/interrupt", { threadId: active.threadId, turnId: active.turnId }).result;
+      return true;
+    })();
+    return active.interrupt;
   }
 
   async close(): Promise<void> { await this.#rpc.close(); }

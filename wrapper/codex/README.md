@@ -168,3 +168,29 @@ output, IA exclusion, and the 200-row tail with a local provider. Legacy/full
 views, malformed responses, cursor failures, and race conditions use schema
 fixtures. This API is internal: `CodexHost` still uses exec, and the existing
 synchronous `HistoryReplayer` is not yet connected to the asynchronous reader.
+
+The internal session accepts per-turn model, effort, cwd, and sandbox/network
+settings. Approval remains `never` with reviewer `user`. A synchronous
+`onDispatch` callback runs after default resolution, immediately before
+`turn/start`; throwing prevents submission. Its host token and client message
+id remain separate from the eventual app-server turn id and RPC request id.
+`interrupt(hostTurnToken)` targets only that active turn, defers until its start
+response supplies an id, and skips an already buffered terminal. An interrupt
+RPC acknowledgement does not release turn admission; the terminal still does.
+
+`resetEffort` requires a target model and cannot accompany an explicit effort.
+The pinned CLI retains thread effort on null/omission. The session instead reads
+`config/read(cwd)` immediately before submission and uses its explicit effort,
+or the target model's `model/list.defaultReasoningEffort`. An unavailable default
+rejects with `default_effort_unavailable` before dispatch; the prior effort is
+never silently retained. Configuration changes after this read do not change
+the submitted value, whereas a newly spawned exec samples at process startup.
+App-server does not support `--profile`; current Host/SDK/session launch does not
+expose that option. Exec behavior is unchanged. Host switch-error reporting and
+pending/rollback wiring remain subsequent increments; these APIs are internal.
+
+The default-session control integration exercises live rollout visibility before
+child shutdown, sequential policy changes, both effort resolution paths,
+unresolvable defaults, interruption, and a following turn in the same session.
+Pre-response interruption, dispatch rejection, catalog faults/cursor bounds,
+and connection/close races have deterministic fixture coverage.
