@@ -91,7 +91,7 @@ const WRITE_TARGET_KEYS: Readonly<Record<string, readonly string[]>> = {
   notebook_edit: ["TargetFile", "AbsolutePath"],
 };
 const MAX_BRIDGE_PAYLOAD_BYTES = 87 * 1024;
-const LOCAL_COMMAND_TOKEN = /^[A-Za-z0-9_./:@%+=,-]+$/;
+const LOCAL_COMMAND_TOKEN = /^[A-Za-z0-9_./:@%+=,~-]+$/;
 const REMOTE_GIT_SUBCOMMANDS = new Set([
   "clone", "fetch", "ls-remote", "pull", "push", "remote", "submodule",
 ]);
@@ -142,6 +142,34 @@ function localPathOperand(path: string, cwd: string): boolean {
 
 function pathspecMagic(path: string): boolean {
   return path.startsWith(":");
+}
+
+function revisionAtom(value: string): boolean {
+  if (/^HEAD(?:~\d+)?$/.test(value)) return true;
+  return /^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(value) &&
+    !value.includes("..") &&
+    !value.includes("//") &&
+    !value.endsWith(".") &&
+    !value.endsWith("/");
+}
+
+function observedGitOperandAllowed(operand: string, cwd: string): boolean {
+  if (pathspecMagic(operand)) return false;
+  const revisionPath = /^([^:]+):(.*)$/.exec(operand);
+  if (revisionPath !== null) {
+    const [, revision, path] = revisionPath;
+    return revision !== undefined && path !== undefined && path !== "" &&
+      revisionAtom(revision) && localPathOperand(path, cwd);
+  }
+  if (operand.includes("..")) {
+    const range = /^(.+?)(\.\.\.?)(.+)$/.exec(operand);
+    if (range === null || !revisionAtom(range[1]!) || !revisionAtom(range[3]!)) {
+      return false;
+    }
+  } else if (operand.includes("~") && !revisionAtom(operand)) {
+    return false;
+  }
+  return localPathOperand(operand, cwd);
 }
 
 function gitMetadataPath(path: string, cwd: string): boolean {
@@ -241,8 +269,8 @@ function observedGitPathsStayLocal(args: readonly string[], cwd: string): boolea
     if (!afterOptions && arg === "--") {
       afterOptions = true;
     } else if (!afterOptions && arg.startsWith("-")) {
-      if (arg === "--no-index") return false;
-    } else if (pathspecMagic(arg) || !localPathOperand(arg, cwd)) {
+      if (arg === "-" || arg === "--no-index") return false;
+    } else if (!observedGitOperandAllowed(arg, cwd)) {
       return false;
     }
   }

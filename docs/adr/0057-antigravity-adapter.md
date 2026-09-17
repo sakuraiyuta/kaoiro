@@ -175,12 +175,15 @@ allowlist. Remote Git subcommands, network clients, package installation,
 commit, merge, and destructive commands ask. Git observation path operands
 must resolve inside the agent cwd, including through existing symlinks;
 nonexistent in-cwd paths are accepted because the command will fail with
-`ENOENT`. Writes to `.git`, whether it is a directory or a worktree metadata
+`ENOENT`. The classifier recognizes only `HEAD`, `HEAD~n`, branch-like names,
+two-dot/three-dot ranges, and `<revision>:<path>` as revision syntax; the path
+part of the last form is checked separately, and ambiguous syntax asks. Writes
+to `.git`, whether it is a directory or a worktree metadata
 file, ask so the model cannot install a Git execution path and then invoke it
 without approval. Pre-existing repository or global configuration can still
-name helpers such as `diff.external` or `core.fsmonitor`; trusting those is an
-operator responsibility. This is an advisory classification, not an OS safety
-guarantee.
+name helpers such as `diff.external`, `core.fsmonitor`, or a clean filter used
+by `git add`; trusting those is an operator responsibility. This is an advisory
+classification, not an OS safety guarantee.
 
 Default launch axes: `workspace-write` (the Codex sandbox default) ×
 `on-request` (approval is selectable for the first time on this engine) ×

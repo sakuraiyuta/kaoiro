@@ -1,4 +1,5 @@
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createConnection } from "node:net";
@@ -129,7 +130,13 @@ describe("AntigravityGate", () => {
     "git diff --stat",
     "git diff -- README.md",
     "git log --oneline",
+    "git log HEAD",
+    "git log HEAD~2",
+    "git log main",
+    "git log main..dev",
+    "git log main...dev",
     "git show HEAD",
+    "git show HEAD:README.md",
     "git rev-parse HEAD",
     "git describe --always",
     "git ls-files",
@@ -175,7 +182,11 @@ describe("AntigravityGate", () => {
     "git future-command",
     "git diff /etc/passwd /dev/null",
     "git diff --no-index a b",
+    "git diff - README.md",
     "git diff -- sub/../../x",
+    "git show HEAD:/etc/passwd",
+    "git log main....dev",
+    "git log HEAD~x",
     "git diff --ext-diff",
     "git diff --output=/tmp/diff",
     "git log --textconv",
@@ -221,13 +232,44 @@ describe("AntigravityGate", () => {
     try {
       mkdirSync(join(cwd, ".git"));
       mkdirSync(join(cwd, ".git", "hooks"));
+      symlinkSync(join(cwd, ".git"), join(cwd, "g"));
+      for (const [name, args] of [
+        ["write_to_file", { TargetFile: join(cwd, ".git", "config") }],
+        ["replace_file_content", { AbsolutePath: join(cwd, ".git", "hooks", "pre-commit") }],
+        ["multi_replace_file_content", { TargetFile: join(cwd, ".git", "..", ".git", "config") }],
+        ["sed_file", { TargetFile: join(cwd, "g", "config") }],
+        ["notebook_edit", { AbsolutePath: join(cwd, "g", "hooks", "pre-commit") }],
+      ] as const) {
+        expect(gate.evaluate({ name, args }), name).toEqual({ decision: "ask" });
+      }
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("git add needs configured metadata to invoke a clean filter", () => {
+    const { gate, root, cwd } = makeGate({ approval: "local" });
+    try {
+      execFileSync("git", ["init", "-q"], { cwd });
+      const marker = join(cwd, "filter-ran");
+      const filterScript = join(cwd, "filter.mjs");
+      writeFileSync(filterScript, [
+        'import { readFileSync, writeFileSync } from "node:fs";',
+        `writeFileSync(${JSON.stringify(marker)}, "ran\\n");`,
+        "process.stdout.write(readFileSync(0));",
+      ].join("\n"));
+      writeFileSync(join(cwd, ".gitattributes"), "*.txt filter=x\n");
+      writeFileSync(join(cwd, "input.txt"), "payload\n");
+      execFileSync("git", ["config", "filter.x.clean", `${process.execPath} ${filterScript}`], { cwd });
+      execFileSync("git", ["add", "input.txt"], { cwd });
+      expect(existsSync(marker)).toBe(true);
+
+      execFileSync("git", ["config", "--unset-all", "filter.x.clean"], { cwd });
+      rmSync(marker);
+      rmSync(join(cwd, ".git", "index"));
+      execFileSync("git", ["add", "input.txt"], { cwd });
+      expect(existsSync(marker)).toBe(false);
       expect(gate.evaluate({
         name: "write_to_file",
         args: { TargetFile: join(cwd, ".git", "config") },
-      })).toEqual({ decision: "ask" });
-      expect(gate.evaluate({
-        name: "write_to_file",
-        args: { TargetFile: join(cwd, ".git", "hooks", "pre-commit") },
       })).toEqual({ decision: "ask" });
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
@@ -282,6 +324,10 @@ describe("AntigravityGate", () => {
       expect(gate.evaluate({
         name: "run_command",
         args: { CommandLine: "cat linked/secret", Cwd: cwd },
+      })).toEqual({ decision: "ask" });
+      expect(gate.evaluate({
+        name: "run_command",
+        args: { CommandLine: "git diff linked/secret README.md", Cwd: cwd },
       })).toEqual({ decision: "ask" });
       expect(gate.evaluate({
         name: "run_command",

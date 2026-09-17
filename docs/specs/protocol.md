@@ -121,10 +121,13 @@ Git commands may proceed without a dialog. Unknown syntax, `.git` writes,
 commit, merge, remote/network commands, package installation, destructive
 commands, and any compound command with a non-allowed segment ask the
 operator. Git path operands must resolve inside the agent cwd; nonexistent
-in-cwd paths are accepted because they only fail with `ENOENT`. Pre-existing
-repository or global configuration can still name helpers such as
-`diff.external` or `core.fsmonitor`, and remains within the operator's trust
-boundary rather than this advisory classifier's guarantee.
+in-cwd paths are accepted because they only fail with `ENOENT`. Revision
+syntax is limited to `HEAD`, `HEAD~n`, branch-like names, two-dot/three-dot
+ranges, and `<revision>:<path>`; that last path is checked independently and
+ambiguous syntax asks. Pre-existing repository or global configuration can
+still name helpers such as `diff.external`, `core.fsmonitor`, or a clean filter
+used by `git add`, and remains within the operator's trust boundary rather than
+this advisory classifier's guarantee.
 
 **Deprecation of `ext.permission_mode`**: `ext.permission` is the successor.
 Emit both fields for one release window, then remove `permission_mode` in the
