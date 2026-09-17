@@ -2393,60 +2393,90 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # move each axis within the launch ceiling the wrapper advertises in
   # `ext.session_capabilities.permission_switch_axes`. The wrapper (fed by the
   # runner's `max_*`) is the source of truth; this is the server's first gate,
-  # the wrapper re-checks fail-closed. `approval` is special: it is accepted
-  # ONLY when advertised mutable (absent advertisement = the #305 contract's
-  # "approval forbidden", e.g. Codex). `sandbox`/`network_access` without an
-  # advertised axis fall back to the legacy #305 flow (no clamp) so existing
-  # agents are unchanged; when advertised they are clamped too. Permissive
-  # order is the list order of @sandbox_values / @approval_values and
+  # the wrapper re-checks fail-closed. Two states must stay distinct
+  # (round 1 M1): the `permission_switch_axes` field being TRULY ABSENT (key
+  # missing) means the legacy #305 contract — sandbox/network_access switch
+  # freely, `approval` is forbidden (e.g. Codex). The field being PRESENT (any
+  # value) means each axis is launch-fixed UNLESS it carries a well-formed
+  # `%{"max" => ...}`: an axis missing from the advertisement, a malformed axis
+  # spec, or a non-map field are all fail-closed as `unsupported_permission_switch`.
+  # Permissive order is the list order of @sandbox_values / @approval_values and
   # false < true for network_access.
   defp clamp_permission_patch(envelope, patch) do
-    axes =
-      envelope
-      |> Map.get("ext", %{})
-      |> Map.get("session_capabilities", %{})
-      |> Map.get("permission_switch_axes", %{})
+    case advertised_axes(envelope) do
+      :absent ->
+        reduce_patch(patch, &clamp_unadvertised_axis/2)
 
-    axes = if is_map(axes), do: axes, else: %{}
+      {:present, axes} when is_map(axes) ->
+        reduce_patch(patch, fn axis, value ->
+          clamp_advertised_axis(axis, value, Map.fetch(axes, Atom.to_string(axis)))
+        end)
 
+      {:present, _malformed} ->
+        # The field is advertised but not a map: no axis is trustworthy, so
+        # every switch is rejected rather than silently falling back to legacy.
+        reduce_patch(patch, fn _axis, _value -> {:error, :unsupported_permission_switch} end)
+    end
+  end
+
+  # `{:present, value}` ONLY when the `permission_switch_axes` key exists (its
+  # value may be a map, null, or non-map); a missing key — including a missing
+  # `ext` / `session_capabilities` — is `:absent`, the legacy #305 signal.
+  # `Map.fetch` is deliberate: `Map.get(_, %{})` would collapse "key absent"
+  # into "key present with an empty/partial map" and reopen the M1 fail-open.
+  defp advertised_axes(envelope) do
+    with %{} = ext <- Map.get(envelope, "ext", %{}),
+         %{} = caps <- Map.get(ext, "session_capabilities", %{}),
+         {:ok, axes} <- Map.fetch(caps, "permission_switch_axes") do
+      {:present, axes}
+    else
+      _ -> :absent
+    end
+  end
+
+  defp reduce_patch(patch, fun) do
     Enum.reduce_while(patch, :ok, fn {axis, value}, :ok ->
-      case clamp_axis(axis, value, Map.get(axes, Atom.to_string(axis))) do
+      case fun.(axis, value) do
         :ok -> {:cont, :ok}
         {:error, _} = error -> {:halt, error}
       end
     end)
   end
 
-  # approval is mutable only when advertised; absent advertisement rejects it.
-  defp clamp_axis(:approval, _value, nil), do: {:error, :unsupported_permission_switch}
+  # No advertisement: sandbox/network keep the legacy #305 flow (no clamp);
+  # approval requires an advertisement, so it is forbidden.
+  defp clamp_unadvertised_axis(:approval, _value), do: {:error, :unsupported_permission_switch}
+  defp clamp_unadvertised_axis(:sandbox, _value), do: :ok
+  defp clamp_unadvertised_axis(:network_access, _value), do: :ok
 
-  defp clamp_axis(:approval, value, %{"max" => max}) when max in @approval_values do
-    if permissive_rank(@approval_values, value) <= permissive_rank(@approval_values, max) do
-      :ok
-    else
-      {:error, :exceeds_launch_ceiling}
-    end
-  end
+  # Advertisement present: an axis absent from it (`:error`) or carrying a
+  # malformed spec is launch-fixed and cannot be switched. A well-formed
+  # `%{"max" => ...}` is clamped within the ceiling.
+  defp clamp_advertised_axis(_axis, _value, :error),
+    do: {:error, :unsupported_permission_switch}
 
-  # sandbox / network_access without an advertised axis: legacy #305 flow.
-  defp clamp_axis(:sandbox, _value, nil), do: :ok
-  defp clamp_axis(:network_access, _value, nil), do: :ok
+  defp clamp_advertised_axis(:approval, value, {:ok, %{"max" => max}})
+       when max in @approval_values,
+       do: within_ceiling(@approval_values, value, max)
 
-  defp clamp_axis(:sandbox, value, %{"max" => max}) when max in @sandbox_values do
-    if permissive_rank(@sandbox_values, value) <= permissive_rank(@sandbox_values, max) do
-      :ok
-    else
-      {:error, :exceeds_launch_ceiling}
-    end
-  end
+  defp clamp_advertised_axis(:sandbox, value, {:ok, %{"max" => max}})
+       when max in @sandbox_values,
+       do: within_ceiling(@sandbox_values, value, max)
 
-  defp clamp_axis(:network_access, value, %{"max" => max}) when is_boolean(max) do
+  defp clamp_advertised_axis(:network_access, value, {:ok, %{"max" => max}})
+       when is_boolean(max) do
     # false < true: enabling network past a false ceiling widens.
     if value == false or max == true, do: :ok, else: {:error, :exceeds_launch_ceiling}
   end
 
-  # A malformed advertisement is fail-closed: the axis is not switchable.
-  defp clamp_axis(_axis, _value, _malformed), do: {:error, :unsupported_permission_switch}
+  defp clamp_advertised_axis(_axis, _value, {:ok, _malformed}),
+    do: {:error, :unsupported_permission_switch}
+
+  defp within_ceiling(order, value, max) do
+    if permissive_rank(order, value) <= permissive_rank(order, max),
+      do: :ok,
+      else: {:error, :exceeds_launch_ceiling}
+  end
 
   defp permissive_rank(order, value), do: Enum.find_index(order, &(&1 == value))
 
@@ -3455,10 +3485,12 @@ defmodule KaoiroServerWeb.AgentsChannel do
   defp permission_requested_details(revision, requested, actor, previous) do
     %{
       "revision" => revision,
-      "requested" => %{
-        "sandbox" => requested.sandbox,
-        "network_access" => requested.network_access
-      },
+      "requested" =>
+        %{
+          "sandbox" => requested.sandbox,
+          "network_access" => requested.network_access
+        }
+        |> maybe_put_approval(Map.get(requested, :approval)),
       "actor" => actor
     }
     |> maybe_put_permission_previous(previous)

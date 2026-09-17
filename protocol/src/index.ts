@@ -469,7 +469,11 @@ export type SetPermissionRequest = {
 } & (
   | { sandbox: PermissionConfiguration["sandbox"]; network_access?: boolean; approval?: PermissionConfiguration["approval"] }
   | { sandbox?: PermissionConfiguration["sandbox"]; network_access: boolean; approval?: PermissionConfiguration["approval"] }
-  | { sandbox?: PermissionConfiguration["sandbox"]; network_access?: boolean; approval: PermissionConfiguration["approval"] }
+  // `approval` is required on this arm, so it MUST exclude undefined: indexing
+  // the optional `PermissionConfiguration["approval"]` would admit undefined
+  // and let an axis-less `{approval: undefined}` type-check yet serialise empty
+  // (issue #359 S1). See src/set_permission_request.type-test.ts.
+  | { sandbox?: PermissionConfiguration["sandbox"]; network_access?: boolean; approval: NonNullable<PermissionConfiguration["approval"]> }
 );
 
 export interface SetPermissionMessage extends PermissionConfiguration {

@@ -1411,7 +1411,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     # issue #359 (ADR-0057 F4c Stage B0): approval is a mutable axis only when
     # the session advertises permission_switch_axes.approval, and only within
     # the launch ceiling.
-    test "approval を advertised ceiling 内で受理し relay / ack / 永続に載せる" do
+    test "accepts approval within the advertised ceiling on relay / ack / persistence" do
       agent_id = "test.setperm359-ok"
 
       put_permission_agent(agent_id,
@@ -1434,7 +1434,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert entry.control.requested.approval == "local"
     end
 
-    test "approval が launch ceiling を超えると exceeds_launch_ceiling" do
+    test "approval above the launch ceiling is exceeds_launch_ceiling" do
       agent_id = "test.setperm359-over"
 
       put_permission_agent(agent_id,
@@ -1450,7 +1450,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_reply ref, :error, %{reason: "exceeds_launch_ceiling"}
     end
 
-    test "approval を mutable 広告しない agent (Codex) は unsupported_permission_switch" do
+    test "an agent not advertising approval as mutable (Codex) is unsupported_permission_switch" do
       agent_id = "test.setperm359-codex"
       put_permission_agent(agent_id, engine: "codex")
       seed_permission_baseline(agent_id)
@@ -1461,7 +1461,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_reply ref, :error, %{reason: "unsupported_permission_switch"}
     end
 
-    test "sandbox は advertised ceiling で clamp され、超過は exceeds_launch_ceiling" do
+    test "sandbox is clamped to the advertised ceiling; over is exceeds_launch_ceiling" do
       agent_id = "test.setperm359-sandbox"
 
       put_permission_agent(agent_id,
@@ -1484,6 +1484,66 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         push(socket, "set_permission", %{"agent_id" => agent_id, "sandbox" => "workspace-write"})
 
       assert_reply within, :ok, %{"status" => "pending"}
+    end
+
+    # issue #359 round 1 M1: a PRESENT `permission_switch_axes` fixes every axis
+    # it does not advertise well-formed. Empty, approval-only, non-map, null,
+    # and a null axis spec must all reject the switch instead of falling back to
+    # the legacy free-switch flow (ふじ round 1 negative controls).
+    for {label, axes, patch} <- [
+          {"empty axes, sandbox switch", %{}, %{"sandbox" => "danger-full-access"}},
+          {"empty axes, network switch", %{}, %{"network_access" => true}},
+          {"approval-only axes, sandbox switch", %{"approval" => %{"max" => "local"}},
+           %{"sandbox" => "danger-full-access"}},
+          {"non-map axes, sandbox switch", "bad", %{"sandbox" => "danger-full-access"}},
+          {"null axes, network switch", nil, %{"network_access" => true}},
+          {"null sandbox spec, sandbox switch", %{"sandbox" => nil},
+           %{"sandbox" => "danger-full-access"}}
+        ] do
+      test "advertised-but-unswitchable axis is unsupported_permission_switch: #{label}" do
+        agent_id = "test.setperm359-fixed-#{System.unique_integer([:positive])}"
+
+        put_permission_agent(agent_id,
+          engine: "antigravity",
+          permission_switch_axes: unquote(Macro.escape(axes))
+        )
+
+        seed_permission_baseline(agent_id, engine: "antigravity")
+        socket = join_as(:operator)
+
+        payload = Map.merge(%{"agent_id" => agent_id}, unquote(Macro.escape(patch)))
+        ref = push(socket, "set_permission", payload)
+        assert_reply ref, :error, %{reason: "unsupported_permission_switch"}
+      end
+    end
+
+    # issue #359 round 1 M2: an approval switch must reach the audit trail. The
+    # event is dropped unless BOTH permission_requested_details carries approval
+    # AND SessionLifecycleEvents.sanitize_requested accepts it, so an empty list
+    # here means either half regressed.
+    test "permission_requested audit carries the approval axis when switched" do
+      agent_id = "test.setperm359-audit-approval"
+
+      put_permission_agent(agent_id,
+        engine: "antigravity",
+        permission_switch_axes: %{"approval" => %{"max" => "local"}}
+      )
+
+      seed_permission_baseline(agent_id, engine: "antigravity")
+      socket = join_as(:operator)
+
+      ref = push(socket, "set_permission", %{"agent_id" => agent_id, "approval" => "local"})
+      assert_reply ref, :ok
+
+      :ok =
+        wait_until_permission(fn ->
+          KaoiroServer.SessionLifecycleEvents.list_for_agent(agent_id) != []
+        end)
+
+      assert [%{kind: "permission_requested", details: details}] =
+               KaoiroServer.SessionLifecycleEvents.list_for_agent(agent_id)
+
+      assert details["requested"]["approval"] == "local"
     end
 
     test "session_reset は PermissionSettings に触れない" do
