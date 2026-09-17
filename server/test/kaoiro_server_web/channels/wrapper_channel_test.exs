@@ -193,6 +193,9 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     result =
       envelope(id, "idle") |> Map.put("type", "result") |> Map.put("ts", "2000-01-01T00:00:00Z")
 
+    # Accepted limitation: a live result interleaved with replay is also excluded.
+    # This may undercount turns and retain a stall warning instead of relabeling
+    # it as a delivery confirmation gap; it cannot invent a live completion.
     assert_reply push(socket, "history_reset", %{"replay_id" => "completion-replay"}), :ok
     assert_reply push(socket, "envelope", result), :ok
     :sys.get_state(AgentActivity)
