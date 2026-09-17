@@ -98,7 +98,9 @@ are dispatched outside the ledger process. Completion compares the intent's
 revision so an older dispatcher attempt cannot delete a newer loss of its
 recovery notice. A lost response or dispatcher
 restart may redeliver a notification with the same loss ID, which receivers
-deduplicate for the life of their wrapper process.
+deduplicate against the latest 10,000 distinct loss IDs in FIFO order within
+one wrapper process. Duplicate arrivals do not refresh that order. An older,
+evicted loss ID is treated as a new notification if it arrives again.
 
 Synthetic losses are never reported back to a sender. Reachability notices are
 regenerated from current connection/planned-restart state, and conversation

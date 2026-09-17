@@ -122,6 +122,24 @@ async function callTool(
 }
 
 describe("delivery loss notifications", () => {
+  it("evicts the oldest loss ID after 10000 distinct notices without refreshing duplicates", async () => {
+    const { tool } = makeTool("recipient");
+    const receive = (id: number) => {
+      const inbound = inboundEnvelope("bounded-loss-cid", "inform", { code: "delivery_lost", message: "not dispatched" }, "server");
+      inbound.payload.turn_number = 0;
+      inbound.payload.loss_id = `loss-${id}`;
+      return tool.receiveInbound(inbound);
+    };
+    for (let id = 0; id < 10_000; id++) {
+      expect((await receive(id)).inject).toBe(true);
+    }
+    expect((await receive(0)).inject).toBe(false);
+    expect((await receive(10_000)).inject).toBe(true);
+    expect((await receive(1)).inject).toBe(false);
+    expect((await receive(0)).inject).toBe(true);
+    expect((await receive(1)).inject).toBe(true);
+  });
+
   it("deduplicates recovered notices by server loss identity rather than ingress", async () => {
     const { tool } = makeTool("recipient");
     const inbound = inboundEnvelope("loss-cid", "inform", { code: "delivery_lost", message: "not dispatched" }, "server");

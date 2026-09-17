@@ -535,6 +535,7 @@ const CLOSED_TRACK_TTL_MS = 24 * 60 * 60 * 1000;
  *  bound. When exceeded, the OLDEST closed tracks (by `closedAtMs`) are
  *  evicted first — see `#pruneClosedTracks()`. */
 const DEFAULT_MAX_CLOSED_TRACKS = 10_000;
+const DEFAULT_MAX_SEEN_LOSS_IDS = 10_000;
 
 /** Idle-age bound for OPEN tracks (issue #177 review round 2, "open track
  *  の unbounded 経路"): `#pruneClosedTracks()` only ever prunes tracks this
@@ -1070,6 +1071,9 @@ export class InterAgentTool {
     if (typeof lossId === "string") {
       if (this.#seenLossIds.has(lossId)) return { consumed: false, inject: false, mode: "reply-owed", noticeSkipReason: "duplicate delivery loss notice" };
       this.#seenLossIds.add(lossId);
+      if (this.#seenLossIds.size > DEFAULT_MAX_SEEN_LOSS_IDS) {
+        this.#seenLossIds.delete(this.#seenLossIds.values().next().value!);
+      }
     }
     const conversationId = payload.conversation_id;
     const turnNumber = payload.turn_number;
