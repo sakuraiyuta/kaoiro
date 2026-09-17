@@ -223,14 +223,21 @@ defmodule KaoiroServer.QuagmireWatch do
     for {agent_id, status} <- over,
         not Map.has_key?(state.notified_stall, agent_id) or
           state.notified_stall[agent_id] != subjects[agent_id] do
-      state.on_notice.(%{
+      payload = %{
         "kind" => "stall",
         "agent_id" => agent_id,
         "undelivered" => status.issued_seq - status.acked_seq,
         "pending_since" => status.pending_since,
-        "threshold_ms" => threshold,
-        "reason" => subjects[agent_id]
-      })
+        "threshold_ms" => threshold
+      }
+
+      payload =
+        case subjects[agent_id] do
+          nil -> payload
+          reason -> Map.put(payload, "reason", reason)
+        end
+
+      state.on_notice.(payload)
     end
 
     %{state | notified_stall: subjects}

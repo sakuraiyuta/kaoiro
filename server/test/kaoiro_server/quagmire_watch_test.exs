@@ -232,7 +232,8 @@ defmodule KaoiroServer.QuagmireWatchTest do
     end
 
     record.("result", pending)
-    assert [%{"reason" => nil}] = notices(ctx)
+    assert [notice] = notices(ctx)
+    refute Map.has_key?(notice, "reason")
     later = DateTime.add(since, 1, :second) |> DateTime.to_iso8601()
     record.("state_change", later)
     record.("log", later)

@@ -185,8 +185,10 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
     assert_receive %Phoenix.Socket.Broadcast{
       event: "quagmire_notice",
-      payload: %{"agent_id" => ^id, "reason" => nil}
+      payload: %{"agent_id" => ^id} = notice
     }
+
+    refute Map.has_key?(notice, "reason")
 
     result =
       envelope(id, "idle") |> Map.put("type", "result") |> Map.put("ts", "2000-01-01T00:00:00Z")
