@@ -93,6 +93,16 @@ enabled = false
         transport: { onDiagnostic: message => diagnostics.push(message) },
       });
       threadId = threadId === undefined ? await session.startThread() : await session.resumeThread(threadId);
+      if (index === 2) {
+        const history = await session.readHistory({ agent_id: "history", persona: { id: "fuji", name: "Fuji", sprite_set: "fuji" },
+          display_name: "Fuji", server_url: "ws://localhost/wrapper" }, () => "2026-09-18T00:00:00Z");
+        expect(history.coverage).toBe("full");
+        expect(history.logs.every(log => log.type === "log" && log.session_id === threadId)).toBe(true);
+        const payloads = history.logs.map(log => log.payload as { kind: string; text?: string; output?: string });
+        expect(payloads.filter(p => p.kind === "assistant").map(p => p.text)).toEqual(["FIRST", "DONE"]);
+        expect(payloads.some(p => p.kind === "tool_result" && p.output?.includes("BRIDGE_OK_1"))).toBe(true);
+        expect(toolCalls).toBe(1);
+      }
       expect(session.rateLimits.readStatus).toBe("unavailable");
       const turn = await session.startProjectedTurn({ threadId, hostTurnToken: `host-${index}`, clientUserMessageId: `user-${index}`, input: [
         { type: "text", text: `USER_${index}` }, { type: "local_image", path: image }, { type: "text", text: `AFTER_${index}` },

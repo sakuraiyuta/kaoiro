@@ -18,7 +18,7 @@ import type {
 import { codexRolloutsRoot, rolloutPathIn } from "./rollout.js";
 
 // Keep parity with Claude history.ts and AgentStates.@max_history.
-const MAX_HISTORY = 200;
+export const MAX_HISTORY = 200;
 const HISTORY_STATE = "idle" as const;
 
 interface RolloutLine {

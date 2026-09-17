@@ -32,8 +32,7 @@ and `experimentalApi` false. Unexpected server requests receive an explicit
 JSON-RPC rejection and an optional diagnostic without their payload. The
 `stderrTail` accessor retains up to 16,384 characters for diagnostics; callers
 must redact it before logging. There is no steer or external-message submission
-API. History restoration and host/IA lifecycle
-integration remain later stages.
+API. Host/IA lifecycle and wiring history into `HistoryReplayer` remain later stages.
 
 `AppServerSession` composes the transport with the existing `ToolHost` and
 `dist/bridge.js`. It binds one thread per lifetime, using either start or
@@ -135,3 +134,32 @@ telemetry use schema fixtures. The compaction trace used a local provider and
 manual `thread/compact/start`; automatic model-triggered compaction and actual
 account quotas have not been measured. Native path conversion rejects `~/x`
 and accepts Windows absolute paths only when running on Windows.
+
+
+`AppServerSession.readHistory(config, now)` reconstructs display logs for its
+bound thread. It reads metadata first; only legacy turns with full item views
+are accepted directly. Paginated history and summary/not-loaded views use
+`thread/items/list` in descending order until the source ends or enough display
+rows have been collected. Full-read and paged snapshots are never spliced.
+Deduplication uses thread, turn, and item identity. Results return chronological
+logs capped by the existing `history.ts` `MAX_HISTORY` (200 display rows).
+Completed tools may contribute two rows; ignored items do not consume the cap.
+
+Coverage is `full` when the source ends within the cap, `tail` when the display
+limit omits older rows, and `incomplete` on an RPC rejection, malformed response,
+cursor/identity non-progress, or the separate 100-page safety bound. The bound
+stops abnormal changing cursors even if every page contains only hidden items.
+Partial page logs remain explicitly incomplete; connection failure throws.
+Unknown items are not guessed into display events. IA framing uses the same
+exclusion as exec history. Projection produces only log envelopes, using the
+supplied `now()` because stable items have no timestamp; it does not replay
+results, acknowledgements, lifecycle transitions, or compaction notices.
+
+History reading excludes live turn submission, thread changes, and concurrent
+history reads; conflicting operations reject immediately rather than queue.
+Close/EOF rejects outstanding requests. Normal RPC deadlines still apply.
+The default-session CLI tests verify persisted resume, two final answers, MCP
+output, IA exclusion, and the 200-row tail with a local provider. Legacy/full
+views, malformed responses, cursor failures, and race conditions use schema
+fixtures. This API is internal: `CodexHost` still uses exec, and the existing
+synchronous `HistoryReplayer` is not yet connected to the asynchronous reader.

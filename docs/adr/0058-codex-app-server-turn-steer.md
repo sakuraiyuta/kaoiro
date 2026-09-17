@@ -794,3 +794,67 @@ stale-read races are also fixture tests. Manual compaction used a controlled
 local response; automatic compaction and external model/account behavior are
 not claimed. History (4c), host/IA integration, launch selection, protocol,
 capabilities, and ADR status remain outside this increment.
+
+
+### Increment (4c): display history
+
+`app_server_history.ts` acquires metadata with `thread/read(includeTurns=false)`
+before choosing a source. The generated schema defaults absent `historyMode`
+to legacy and absent `itemsView` to full. Only a legacy full-item snapshot is
+accepted directly; paginated mode or any summary/notLoaded turn causes a
+complete switch to `thread/items/list`. Earlier full/summary rows are not mixed
+with pages. Descending pages are restored to chronological order, deduplicated
+by `(threadId, turnId, item.id)`, and limited by the existing exec reader's
+exported `MAX_HISTORY` of 200 **display rows**, after filtering. Repeated/cyclic
+cursors, pages without new identities, and a separate 100-page bound stop reads.
+The last bound handles abnormal but continually changing cursors independently
+of the display cap.
+
+The returned coverage distinguishes full history, a bounded tail, and an
+incomplete read with a closed reason. RPC rejection does not become an empty
+full result. Disconnect/timeout remains a connection error. Live and history
+share item-to-log conversion; history constructs log envelopes only. It reuses
+`isFormattedInterAgentMessage`, retains both final-answer rows, and uses the
+provided clock because ThreadItem/ThreadItemEntry contain no timestamp. No turn
+result, lifecycle transition, acknowledgement, or compaction event is replayed.
+History and live turn admission are mutually exclusive; a turn submitted during
+history acquisition is rejected immediately. Close/EOF releases request waiters.
+
+The pinned 0.153.4 binary (path and SHA-256 recorded in Appendix C above) was
+measured with an isolated unauthenticated home, analytics/plugins disabled, and
+a loopback provider. Three turns were persisted, the child was closed, and a
+new child resumed the thread with `experimentalApi=false`. Metadata reported
+`historyMode=paginated` and no embedded turns. A separate diagnostic
+`includeTurns=true` read returned all three turns with `itemsView=full`, but the
+reader still follows the paginated source selected by metadata.
+
+`thread/items/list(limit=2)` worked in both ascending and descending directions:
+three pages each, non-null progressing cursors on the first two, null on the
+third. Each direction contained exactly the six full-read items in the expected
+order. Thus pagination is measured on this pin, not merely fixture coverage.
+The capture checker compared complete item/turn identities with the full read
+and verified child/stdout shutdown. Removing one page item made that checker
+exit 1; the original capture exited 0.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `ThreadReadParams.json` | `dfe040c6ac71d30795b8be3f3ff232e66f362a37f883b491e5d1ea367f470db4` |
+| `ThreadReadResponse.json` | `a76583d07f6096fee33045da2dc9caed84d858f8f2d39b37bb38528dbaf32511` |
+| `ThreadItemsListParams.json` | `ff56040c327ecdd30ef02affac9bc71fab64031e8980f2b4fea9fd8a888160b4` |
+| `ThreadItemsListResponse.json` | `886369490fec07067597460301b3d5c1dc9aedc41ea42522cae397d8babe6156` |
+| Full history trace | `f7143042002ff87532dcca5aa45e06ace33652a846f896c7e98a4f6b7af9d1d0` |
+| Probe | `462abd953953bdd5d36a587c225f7db687d68bf43c3d376b6108e0e6a5fc7195` |
+| Checker | `29f33f9418c7c88bc2b3580c82120520aee3fbc03b0398a14fad542cd854cd42` |
+
+Schemas were generated into `stable/v2` from the same pinned executable;
+reference types are the corresponding v2 definitions in the official
+[app-server protocol](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/app-server-protocol/src/protocol/v2.rs).
+The default-session integration tests additionally read persisted assistant and
+MCP output after resume, exclude injected IA text, and retain the last 200 rows
+from a 205-answer local response. Legacy defaults/full views, summary/notLoaded
+fallback, unknown/malformed responses, cursor failure, page-budget exhaustion,
+and read/turn/close races are fixture cases rather than claimed real CLI faults.
+
+Host and `HistoryReplayer` wiring remains stage (5); the latter's synchronous
+transcript callback is not silently replaced with an asynchronous reader here.
+Normal launch, protocol, capabilities, and this ADR's status remain unchanged.

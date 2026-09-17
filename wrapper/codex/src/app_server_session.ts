@@ -1,7 +1,7 @@
 import { rm } from "node:fs/promises";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ToolDescriptor } from "@kaoiro/agent-common";
+import type { ToolDescriptor, WrapperConfig } from "@kaoiro/agent-common";
 import { BRIDGE_MCP_POLICY, BRIDGE_THREAD_OPEN_TIMEOUT_MS } from "./bridge_policy.js";
 import { ToolHost } from "./toolhost.js";
 import {
@@ -9,6 +9,7 @@ import {
 } from "./app_server_transport.js";
 import type { AppServerRpcOptions } from "./app_server_rpc.js";
 import { projectAppServerTurn, type AppServerProjectedTurn } from "./app_server_projection.js";
+import type { AppServerHistory } from "./app_server_history.js";
 import type { AppServerRateLimits } from "./app_server_telemetry.js";
 
 export interface AppServerSessionOptions {
@@ -101,6 +102,12 @@ export class AppServerSession {
     } finally {
       this.#opening = false;
     }
+  }
+
+  async readHistory(config: WrapperConfig, now: () => string): Promise<AppServerHistory> {
+    if (this.#closing) throw new Error("App-server session is closed");
+    if (this.#opening || this.#threadId === undefined) throw new Error("App-server session thread is not ready");
+    return this.#transport.readHistory(this.#threadId, config, now);
   }
 
   async startTurn(input: AppServerTurnInput): Promise<AppServerTurn> {

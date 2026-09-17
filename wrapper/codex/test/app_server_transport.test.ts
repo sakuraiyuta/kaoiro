@@ -350,3 +350,67 @@ it("wakes a waiting consumer and rejects concurrent readers", async () => {
   await stream.return();
   expect((await done).done).toBe(true);
 });
+
+const historyConfig = { agent_id: "history", persona: { id: "fuji", name: "Fuji", sprite_set: "fuji" },
+  display_name: "Fuji", server_url: "ws://localhost/wrapper" };
+const historyNow = () => "2026-09-18T00:00:00Z";
+const historyInput = { threadId: "thread-1", hostTurnToken: "host", input: "hello" };
+
+it("reserves the entire history read, rejects turns immediately, and releases the reservation on completion", async () => {
+  const f = transportFixture();
+  await f.transport.startThread();
+  const reads: RpcObject[] = [];
+  f.handle(r => { if (r.method === "thread/read") reads.push(r); });
+  const history = f.transport.readHistory("thread-1", historyConfig, historyNow);
+  await expect(f.transport.startTurn(historyInput)).rejects.toThrow("active or submitting");
+  await expect(f.transport.resumeThread("thread-1")).rejects.toThrow("active operation");
+  await expect(f.transport.readHistory("thread-1", historyConfig, historyNow)).rejects.toThrow("active operation");
+  await tick();
+  expect(reads).toHaveLength(1);
+  f.respond(reads[0]!, { thread: { id: "thread-1", turns: [] } });
+  await tick();
+  expect(reads).toHaveLength(2);
+  await expect(f.transport.startTurn(historyInput)).rejects.toThrow("active or submitting");
+  expect(f.sent.filter(r => r.method === "turn/start")).toEqual([]);
+  f.respond(reads[1]!, { thread: { id: "thread-1", turns: [{ id: "old-turn", items: [{ id: "old-item", type: "agentMessage", text: "restored" }] }] } });
+  expect(await history).toMatchObject({ coverage: "full", logs: [{ type: "log", payload: { text: "restored" } }] });
+  f.handle(r => { f.respond(r, { turn: { id: "turn-1" } }); f.send(notification("turn/completed")); });
+  await collect((await f.transport.startTurn(historyInput)).events);
+  expect(f.sent.filter(r => r.method === "turn/start")).toHaveLength(1);
+});
+
+it("rejects history while a turn or thread setup is active without sending history RPCs", async () => {
+  const f = transportFixture();
+  const opening = f.transport.startThread();
+  await expect(f.transport.readHistory("thread-1", historyConfig, historyNow)).rejects.toThrow("active operation");
+  await opening;
+  f.handle(r => f.respond(r, { turn: { id: "turn-1" } }));
+  const turn = await f.transport.startTurn(historyInput);
+  await expect(f.transport.readHistory("thread-1", historyConfig, historyNow)).rejects.toThrow("active operation");
+  expect(f.sent.filter(r => r.method === "thread/read")).toEqual([]);
+  f.send(notification("turn/completed"));
+  await collect(turn.events);
+});
+
+it.each(["close", "disconnect"])("releases an outstanding history read on %s and fences later work", async how => {
+  const f = transportFixture();
+  await f.transport.startThread();
+  f.handle(() => {});
+  const history = f.transport.readHistory("thread-1", historyConfig, historyNow);
+  const rejected = expect(history).rejects.toBeInstanceOf(AppServerConnectionError);
+  await tick();
+  if (how === "close") await f.transport.close(); else f.exit();
+  await rejected;
+  await expect(f.transport.readHistory("thread-1", historyConfig, historyNow)).rejects.toBeInstanceOf(AppServerConnectionError);
+  await expect(f.transport.startTurn(historyInput)).rejects.toBeInstanceOf(AppServerConnectionError);
+});
+
+it("releases history admission after an explicit RPC rejection without retrying it", async () => {
+  const f = transportFixture();
+  await f.transport.startThread();
+  f.handle(r => f.send({ id: r.id, error: { code: -32600, message: "not supported" } }));
+  expect(await f.transport.readHistory("thread-1", historyConfig, historyNow)).toMatchObject({ coverage: "incomplete", reason: "rpc_rejected" });
+  f.handle(r => f.respond(r, { thread: { id: "thread-1", turns: [] } }));
+  expect(await f.transport.readHistory("thread-1", historyConfig, historyNow)).toEqual({ coverage: "full", logs: [] });
+  expect(f.sent.filter(r => r.method === "thread/read")).toHaveLength(3);
+});

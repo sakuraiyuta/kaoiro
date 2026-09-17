@@ -1,3 +1,5 @@
+import type { WrapperConfig } from "@kaoiro/agent-common";
+import { readAppServerHistory, type AppServerHistory } from "./app_server_history.js";
 import {
   AppServerConnectionError, AppServerRpc, AppServerRpcError, rpcObject,
   type AppServerNotification, type AppServerRpcOptions, type RpcObject,
@@ -50,6 +52,7 @@ export class AppServerTransport {
   #failure: Error | undefined;
   #version: string | undefined;
   #opening = false;
+  #readingHistory = false;
   readonly #account = new AppServerAccountTelemetry();
 
   constructor(options: Omit<AppServerRpcOptions, "onNotification" | "onFailure"> & { threadOpenTimeoutMs?: number } = {}) {
@@ -83,6 +86,18 @@ export class AppServerTransport {
     return this.rateLimits;
   }
 
+  async readHistory(threadId: string, config: WrapperConfig, now: () => string): Promise<AppServerHistory> {
+    if (this.#failure) throw this.#failure;
+    if (this.#active || this.#opening || this.#readingHistory) throw new Error("Cannot read history during an active operation");
+    this.#readingHistory = true;
+    try {
+      await this.#initialize();
+      return await readAppServerHistory((method, params) => this.#rpc.request(method, params).result, threadId, config, now);
+    } finally {
+      this.#readingHistory = false;
+    }
+  }
+
   async startThread(options: AppServerThreadOptions = {}): Promise<string> {
     return this.#openThread("thread/start", { ...options });
   }
@@ -93,7 +108,7 @@ export class AppServerTransport {
 
   async startTurn(input: AppServerTurnInput): Promise<AppServerTurn> {
     if (this.#failure) throw this.#failure;
-    if (this.#active || this.#opening) throw new Error("App-server already has an active or submitting operation");
+    if (this.#active || this.#opening || this.#readingHistory) throw new Error("App-server already has an active or submitting operation");
     const wireInput = appServerInput(input.input);
     const active: ActiveTurn = { threadId: input.threadId, stream: new AppServerTurnStream(), beforeResponse: [] };
     // Reserve before initialize/request awaits; overlapping calls must never become implicit steering.
@@ -159,7 +174,7 @@ export class AppServerTransport {
   }
 
   async #openThread(method: string, params: RpcObject): Promise<string> {
-    if (this.#active || this.#opening) throw new Error("Cannot change threads during an active operation");
+    if (this.#active || this.#opening || this.#readingHistory) throw new Error("Cannot change threads during an active operation");
     this.#opening = true;
     try {
       await this.#initialize();

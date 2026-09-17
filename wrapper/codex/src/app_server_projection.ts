@@ -85,6 +85,22 @@ function sdkItem(item: RpcObject & { id: string }): ThreadItem | null {
   }
 }
 
+/** Shared display-only conversion; history must not replay live lifecycle events. */
+export function appServerItemLogs(item: RpcObject & { id: string }, isComplete: boolean): LogEntry[] {
+  const converted = sdkItem(item);
+  if (converted) return threadEventToLogs({ type: isComplete ? "item.completed" : "item.started", item: converted });
+  if (!isComplete && item.type === "fileChange" && item.status === "inProgress") {
+    const c = changes(item.changes);
+    return c === null ? [] : [{ kind: "tool_use", tool_use_id: item.id, tool_name: "edit", input: { changes: c } }];
+  }
+  if (isComplete && item.type === "functionCallOutput") {
+    const output = typeof item.output === "string" ? item.output : Array.isArray(item.output)
+      ? item.output.flatMap(block => rpcObject(block) && block.type === "input_text" && typeof block.text === "string" ? [block.text] : []).join("\n") : null;
+    return output === null ? [] : [{ kind: "tool_result", tool_use_id: item.id, output }];
+  }
+  return [];
+}
+
 function plan(value: unknown): TasklistSourceItem[] | null {
   if (!Array.isArray(value)) return null;
   const result: TasklistSourceItem[] = [];
@@ -183,20 +199,15 @@ async function* project(turn: AppServerTurn, state: { usage: AppServerUsage | nu
         if (converted) {
           const event = { type: isComplete ? "item.completed" as const : "item.started" as const, item: converted };
           for (const e of threadEventToEvents(event)) yield { kind: "adapter", event: e };
-          for (const entry of threadEventToLogs(event)) yield log(entry);
         } else if (!isComplete && item.type === "fileChange" && item.status === "inProgress") {
           // Exec exposes file changes only after application; app-server also
           // reports their start. Do not invent an SDK completed status for it.
           const c = changes(item.changes);
           if (c !== null) {
             yield { kind: "adapter", event: { kind: "assistant", blocks: ["tool_use"], toolUseIds: [item.id] } };
-            yield log({ kind: "tool_use", tool_use_id: item.id, tool_name: "edit", input: { changes: c } });
           }
-        } else if (isComplete && item.type === "functionCallOutput") {
-          const output = typeof item.output === "string" ? item.output : Array.isArray(item.output)
-            ? item.output.flatMap(block => rpcObject(block) && block.type === "input_text" && typeof block.text === "string" ? [block.text] : []).join("\n") : null;
-          if (output !== null) yield log({ kind: "tool_result", tool_use_id: item.id, output });
         }
+        for (const entry of appServerItemLogs(item, isComplete)) yield log(entry);
         break;
       }
       case "turn/completed": {

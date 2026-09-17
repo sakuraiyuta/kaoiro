@@ -239,3 +239,23 @@ it.each([
     }
   } finally { vi.useRealTimers(); }
 });
+
+it("fences history before binding and after close, and rejects turns during a pending read", async () => {
+  const fixture = childFixture();
+  fixture.ignore("thread/read");
+  const session = await AppServerSession.create({ turnSignal: () => null, transport: { spawnChild: () => fixture.child } });
+  sessions.push(session);
+  const config = { agent_id: "history", persona: { id: "fuji", name: "Fuji", sprite_set: "fuji" }, display_name: "Fuji", server_url: "ws://localhost/wrapper" };
+  const read = () => session.readHistory(config, () => "2026-09-18T00:00:00Z");
+  await expect(read()).rejects.toThrow("not ready");
+  const opening = session.startThread();
+  await expect(read()).rejects.toThrow("not ready");
+  await opening;
+  const pending = read();
+  const rejected = expect(pending).rejects.toThrow("closed");
+  await expect(session.startTurn({ threadId: "thread", hostTurnToken: "host", input: "hello" })).rejects.toThrow("active or submitting");
+  expect(fixture.sent.some(r => r.method === "turn/start")).toBe(false);
+  await session.close();
+  await rejected;
+  await expect(read()).rejects.toThrow("closed");
+});
