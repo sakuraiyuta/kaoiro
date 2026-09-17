@@ -1272,12 +1272,15 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       supports = Keyword.get(opts, :supports_permission_switch, true)
       with_capabilities = Keyword.get(opts, :with_capabilities, true)
 
+      axes = Keyword.get(opts, :permission_switch_axes, :absent)
+
       caps =
         %{
           "supports_attachments" => true,
           "supports_user_input_dialog" => true
         }
         |> maybe_put_caps_field("supports_permission_switch", supports)
+        |> maybe_put_caps_field("permission_switch_axes", axes)
 
       ext =
         if with_capabilities do
@@ -1403,6 +1406,84 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         push(socket, "set_permission", %{"agent_id" => agent_id, "sandbox" => "workspace-write"})
 
       assert_reply ref, :error, %{reason: "unsupported_permission_switch"}
+    end
+
+    # issue #359 (ADR-0057 F4c Stage B0): approval is a mutable axis only when
+    # the session advertises permission_switch_axes.approval, and only within
+    # the launch ceiling.
+    test "approval を advertised ceiling 内で受理し relay / ack / 永続に載せる" do
+      agent_id = "test.setperm359-ok"
+
+      put_permission_agent(agent_id,
+        engine: "antigravity",
+        permission_switch_axes: %{"approval" => %{"max" => "local"}}
+      )
+
+      seed_permission_baseline(agent_id, engine: "antigravity")
+      @endpoint.subscribe("wrapper:" <> agent_id)
+      socket = join_as(:operator)
+
+      ref = push(socket, "set_permission", %{"agent_id" => agent_id, "approval" => "local"})
+
+      assert_reply ref, :ok, %{"revision" => 1, "status" => "pending", "requested" => requested}
+      assert requested["approval"] == "local"
+      assert_broadcast "set_permission", payload
+      assert payload["approval"] == "local"
+
+      entry = KaoiroServer.PermissionSettings.get(agent_id)
+      assert entry.control.requested.approval == "local"
+    end
+
+    test "approval が launch ceiling を超えると exceeds_launch_ceiling" do
+      agent_id = "test.setperm359-over"
+
+      put_permission_agent(agent_id,
+        engine: "antigravity",
+        permission_switch_axes: %{"approval" => %{"max" => "local"}}
+      )
+
+      seed_permission_baseline(agent_id, engine: "antigravity")
+      socket = join_as(:operator)
+
+      ref = push(socket, "set_permission", %{"agent_id" => agent_id, "approval" => "never"})
+
+      assert_reply ref, :error, %{reason: "exceeds_launch_ceiling"}
+    end
+
+    test "approval を mutable 広告しない agent (Codex) は unsupported_permission_switch" do
+      agent_id = "test.setperm359-codex"
+      put_permission_agent(agent_id, engine: "codex")
+      seed_permission_baseline(agent_id)
+      socket = join_as(:operator)
+
+      ref = push(socket, "set_permission", %{"agent_id" => agent_id, "approval" => "local"})
+
+      assert_reply ref, :error, %{reason: "unsupported_permission_switch"}
+    end
+
+    test "sandbox は advertised ceiling で clamp され、超過は exceeds_launch_ceiling" do
+      agent_id = "test.setperm359-sandbox"
+
+      put_permission_agent(agent_id,
+        engine: "antigravity",
+        permission_switch_axes: %{"sandbox" => %{"max" => "workspace-write"}}
+      )
+
+      seed_permission_baseline(agent_id, engine: "antigravity")
+      socket = join_as(:operator)
+
+      over =
+        push(socket, "set_permission", %{
+          "agent_id" => agent_id,
+          "sandbox" => "danger-full-access"
+        })
+
+      assert_reply over, :error, %{reason: "exceeds_launch_ceiling"}
+
+      within =
+        push(socket, "set_permission", %{"agent_id" => agent_id, "sandbox" => "workspace-write"})
+
+      assert_reply within, :ok, %{"status" => "pending"}
     end
 
     test "session_reset は PermissionSettings に触れない" do
@@ -1536,7 +1617,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           {"unknown sandbox 値", %{"sandbox" => "yolo"}},
           {"network_access が boolean でない", %{"network_access" => "true"}},
           {"空の patch", %{}},
-          {"approval フィールド混入", %{"sandbox" => "workspace-write", "approval" => "never"}},
+          {"invalid approval 値", %{"sandbox" => "workspace-write", "approval" => "yolo"}},
           {"revision フィールド混入", %{"sandbox" => "workspace-write", "revision" => 5}},
           {"actor フィールド混入", %{"sandbox" => "workspace-write", "actor" => %{"id" => "x"}}}
         ] do
