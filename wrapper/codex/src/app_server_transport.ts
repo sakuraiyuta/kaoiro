@@ -2,9 +2,11 @@ import {
   AppServerConnectionError, AppServerRpc, rpcObject,
   type AppServerNotification, type AppServerRpcOptions, type RpcObject,
 } from "./app_server_rpc.js";
+import { appServerInput, type AppServerInput } from "./app_server_input.js";
 import { AppServerTurnStream } from "./app_server_stream.js";
 
 export interface AppServerThreadOptions {
+  config?: RpcObject;
   cwd?: string;
   model?: string;
   developerInstructions?: string;
@@ -14,7 +16,7 @@ export interface AppServerThreadOptions {
 export interface AppServerTurnInput {
   threadId: string;
   hostTurnToken: string;
-  text: string;
+  input: AppServerInput;
   clientUserMessageId?: string;
 }
 
@@ -75,6 +77,7 @@ export class AppServerTransport {
   async startTurn(input: AppServerTurnInput): Promise<AppServerTurn> {
     if (this.#failure) throw this.#failure;
     if (this.#active || this.#opening) throw new Error("App-server already has an active or submitting operation");
+    const wireInput = appServerInput(input.input);
     const active: ActiveTurn = { threadId: input.threadId, stream: new AppServerTurnStream(), beforeResponse: [] };
     // Reserve before initialize/request awaits; overlapping calls must never become implicit steering.
     this.#active = active;
@@ -82,7 +85,7 @@ export class AppServerTransport {
       await this.#initialize();
       const ticket = this.#rpc.request("turn/start", {
         threadId: input.threadId,
-        input: [{ type: "text", text: input.text, text_elements: [] }],
+        input: wireInput,
         ...(input.clientUserMessageId === undefined ? {} : { clientUserMessageId: input.clientUserMessageId }),
         approvalPolicy: "never", approvalsReviewer: "user",
       });

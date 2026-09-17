@@ -586,3 +586,51 @@ IA steering or prove that an in-flight model request was interrupted.
 {"direction":"receive","message":{"method":"item/completed","params":{"item":{"type":"agentMessage","id":"msg_5","text":"LOCAL_OK_5","phase":"final_answer","memoryCitation":null,"delivery":null,"questions":null},"threadId":"01a0b08c-d1d7-7403-831e-1ac09eeea395","turnId":"01a0b08c-e77c-7dd0-a1fe-830bcefae88c","completedAtMs":1789668419716},"emittedAtMs":1789668419720}}
 {"direction":"receive","message":{"method":"turn/completed","params":{"threadId":"01a0b08c-d1d7-7403-831e-1ac09eeea395","turn":{"id":"01a0b08c-e77c-7dd0-a1fe-830bcefae88c","items":[{"type":"agentMessage","id":"msg_5","text":"LOCAL_OK_5","phase":"final_answer","memoryCitation":null,"delivery":null,"questions":null}],"itemsView":"summary","status":"completed","error":null,"startedAt":1789668419,"completedAt":1789668419,"durationMs":278}},"emittedAtMs":1789668419735}}
 ```
+
+### Stage 1 implementation increment (3): internal session composition
+
+`AppServerSession` now owns the persistent transport, an optional `ToolHost`,
+and thread configuration for start/resume. It uses the existing bridge and
+`ToolHost.listen` socket construction unchanged. The closed input conversion
+accepts text and local-image paths; developer instructions are sent as the
+thread's `developerInstructions`, outside user content. Approval remains
+`never` / `user`, and `experimentalApi` remains false.
+
+These settings reproduce existing `CodexHost.run` configuration, rather than
+introducing new privileges or timeout defaults:
+
+| App-server configuration | Existing exec configuration |
+| --- | --- |
+| `mcp_servers.kaoiro.default_tools_approval_mode = "approve"` | Same value in `CodexHost.run` |
+| `mcp_servers.kaoiro.tool_timeout_sec = 310` | `BRIDGE_TOOL_TIMEOUT_SEC`, allowing the 300-second inter-agent wait to finish |
+| `features.multi_agent = internalSubagents ?? true` | `codex_internal_subagents ?? true`, explicitly enabled or disabled |
+| MCP command, bridge path, private socket environment | `process.execPath`, `dist/bridge.js`, `ToolHost.listen` |
+
+The stable generated `ThreadStartParams` / `ThreadResumeParams` schemas above
+permit `config` and `developerInstructions`; `TurnStartParams.UserInput`
+provides `text` and `localImage`. The Python reference's thread start/resume
+and local-image conversion map to these same fields. Its default approval
+handler is not reused.
+
+The real-CLI session test uses the default executable resolution and the same
+pinned 0.153.4 binary recorded above. A local Responses endpoint emits a
+code-mode `exec` call invoking the actual kaoiro MCP bridge handler, then a
+terminal answer. After closing the first session, a new child resumes the
+persisted thread with a new private socket. Both turns execute their handler,
+send decoded image data in order between user text, and include exactly one
+copy of the developer instruction marker. Both rollout contexts retain
+`never` / `user` despite `auto_review` in the isolated host config; no auth file
+or approval request is needed. Internal subagents are explicitly true in the
+first session and false in the resumed session. No subagent is spawned by this
+fixture, so its observation is configuration delivery, not subagent behavior.
+
+The test requires no external model/auth service or network namespace. Analytics
+is disabled; outward CLI startup attempts remain possible, as in the original
+compatibility gate. This is not a measurement of model reasoning, long-running
+inter-agent waits, cancellation/watchdog handling, or non-Linux socket behavior.
+
+This increment is still internal: `CodexHost`, package exports, and normal
+launch selection remain on exec. Result/usage/compaction/history projection,
+host lifecycle and inter-agent integration, and launch parity acceptance are
+separate remaining increments. No steering or external-message input has been
+enabled, and this increment does not change the ADR's status.

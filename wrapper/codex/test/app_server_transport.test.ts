@@ -188,7 +188,7 @@ describe("app-server turn lifecycle", () => {
       f.send(notification("turn/completed"));
       f.respond(request, { turn: { id: "turn-1" } });
     });
-    const turn = await f.transport.startTurn({ threadId: "thread-1", hostTurnToken: "host-7", text: "hello", clientUserMessageId: "user-9" });
+    const turn = await f.transport.startTurn({ threadId: "thread-1", hostTurnToken: "host-7", input: "hello", clientUserMessageId: "user-9" });
     expect(turn.identity).toEqual({ threadId: "thread-1", turnId: "turn-1", hostTurnToken: "host-7", requestId: 3, clientUserMessageId: "user-9" });
     expect((await collect(turn.events)).map(x => x.method)).toEqual(["item/completed", "turn/completed"]);
     expect(f.sent.at(-1)).toMatchObject({ params: { approvalPolicy: "never", approvalsReviewer: "user", clientUserMessageId: "user-9" } });
@@ -204,17 +204,17 @@ describe("app-server turn lifecycle", () => {
       f.stdout.write(JSON.stringify({ id: request.id, result: { turn: { id: "turn-1" } } }));
       f.exit();
     });
-    const turn = await f.transport.startTurn({ threadId: "thread-1", hostTurnToken: "host", text: "hello" });
+    const turn = await f.transport.startTurn({ threadId: "thread-1", hostTurnToken: "host", input: "hello" });
     await tick();
     expect((await collect(turn.events)).map(x => x.method)).toEqual(["item/completed", "turn/completed"]);
-    await expect(f.transport.startTurn({ threadId: "thread-1", hostTurnToken: "next", text: "next" })).rejects.toBeInstanceOf(AppServerConnectionError);
+    await expect(f.transport.startTurn({ threadId: "thread-1", hostTurnToken: "next", input: "next" })).rejects.toBeInstanceOf(AppServerConnectionError);
   });
 
   it("unblocks a turn reader on EOF after delivering prior events", async () => {
     const f = transportFixture();
     await f.transport.startThread();
     f.handle(request => f.respond(request, { turn: { id: "turn-1" } }));
-    const turn = await f.transport.startTurn({ threadId: "thread-1", hostTurnToken: "host", text: "hello" });
+    const turn = await f.transport.startTurn({ threadId: "thread-1", hostTurnToken: "host", input: "hello" });
     f.send(notification("item/completed"));
     f.exit();
     const iterator = turn.events[Symbol.asyncIterator]();
@@ -227,7 +227,7 @@ describe("app-server turn lifecycle", () => {
     await f.transport.startThread();
     let request: RpcObject | undefined;
     f.handle(r => { request = r; });
-    const input = { threadId: "thread-1", hostTurnToken: "host", text: "hello" };
+    const input = { threadId: "thread-1", hostTurnToken: "host", input: "hello" };
     const first = f.transport.startTurn(input);
     await expect(f.transport.startTurn(input)).rejects.toThrow("active or submitting");
     await tick();
@@ -247,7 +247,7 @@ describe("app-server turn lifecycle", () => {
   it("reserves thread setup across await and pins permissions on resume", async () => {
     const f = transportFixture();
     const opening = f.transport.resumeThread("thread-1");
-    await expect(f.transport.startTurn({ threadId: "thread-1", hostTurnToken: "host", text: "hello" })).rejects.toThrow("active or submitting");
+    await expect(f.transport.startTurn({ threadId: "thread-1", hostTurnToken: "host", input: "hello" })).rejects.toThrow("active or submitting");
     await expect(f.transport.startThread()).rejects.toThrow("active operation");
     expect(await opening).toBe("thread-1");
     expect(f.sent.at(-1)).toMatchObject({ method: "thread/resume", params: { threadId: "thread-1", approvalPolicy: "never", approvalsReviewer: "user" } });
@@ -257,9 +257,9 @@ describe("app-server turn lifecycle", () => {
     const f = transportFixture();
     await f.transport.startThread();
     f.handle(r => f.send({ id: r.id, error: { code: -32600, message: "rejected" } }));
-    await expect(f.transport.startTurn({ threadId: "thread-1", hostTurnToken: "one", text: "bad" })).rejects.toBeInstanceOf(AppServerRpcError);
+    await expect(f.transport.startTurn({ threadId: "thread-1", hostTurnToken: "one", input: "bad" })).rejects.toBeInstanceOf(AppServerRpcError);
     f.handle(r => { f.respond(r, { turn: { id: "accepted" } }); f.send(notification("turn/completed", "accepted")); });
-    await collect((await f.transport.startTurn({ threadId: "thread-1", hostTurnToken: "two", text: "good" })).events);
+    await collect((await f.transport.startTurn({ threadId: "thread-1", hostTurnToken: "two", input: "good" })).events);
     expect(f.sent.filter(r => r.method === "initialize")).toHaveLength(1);
     expect(f.sent.filter(r => r.method === "turn/start")).toHaveLength(2);
   });
@@ -268,7 +268,7 @@ describe("app-server turn lifecycle", () => {
     const f = transportFixture();
     await f.transport.startThread();
     f.handle(r => f.respond(r, { turn: { id: 5 } }));
-    const input = { threadId: "thread-1", hostTurnToken: "one", text: "hello" };
+    const input = { threadId: "thread-1", hostTurnToken: "one", input: "hello" };
     await expect(f.transport.startTurn(input)).rejects.toThrow("Invalid turn/start response");
     await expect(f.transport.startTurn(input)).rejects.toThrow("Invalid turn/start response");
     expect(f.sent.filter(r => r.method === "turn/start")).toHaveLength(1);
@@ -281,7 +281,7 @@ describe("app-server turn lifecycle", () => {
       if (r.method === "thread/start") f.respond(r, { thread: { id: null } });
     });
     await expect(f.transport.startThread()).rejects.toThrow("Invalid thread/start response");
-    await expect(f.transport.startTurn({ threadId: "thread-1", hostTurnToken: "one", text: "hello" })).rejects.toThrow("Invalid thread/start response");
+    await expect(f.transport.startTurn({ threadId: "thread-1", hostTurnToken: "one", input: "hello" })).rejects.toThrow("Invalid thread/start response");
     expect(f.sent.filter(r => r.method === "turn/start")).toHaveLength(0);
   });
 

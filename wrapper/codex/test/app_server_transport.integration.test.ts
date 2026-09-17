@@ -61,7 +61,7 @@ enabled = false
         transport = new AppServerTransport();
         expect(await transport.resumeThread(threadId, { cwd: home, sandbox: "read-only" })).toBe(threadId);
       }
-      const turn = await transport.startTurn({ threadId, hostTurnToken: `host-${index}`, clientUserMessageId: `user-${index}`, text: "Reply briefly without tools." });
+      const turn = await transport.startTurn({ threadId, hostTurnToken: `host-${index}`, clientUserMessageId: `user-${index}`, input: "Reply briefly without tools." });
       expect(turn.identity).toMatchObject({ threadId, hostTurnToken: `host-${index}`, clientUserMessageId: `user-${index}` });
       expect(typeof turn.identity.requestId).toBe("number");
       turnIds.add(turn.identity.turnId);
