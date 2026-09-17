@@ -1085,6 +1085,11 @@ export interface InterAgentDeliveryStatus {
   issued_seq: number;
   acked_seq: number;
   pending_since?: string;
+  /** Explicit retirements are unresolved-delivery outcomes, not dispatches. */
+  lost_count?: number;
+  last_loss?: { at: string; first_seq: number; last_seq: number; count: number; reason: string };
+  /** Bounded resync response only; not part of directory snapshots. */
+  skipped_ranges?: [number, number][];
 }
 
 /** One agent in the `directory_request` response. Runtime traits are optional

@@ -99,6 +99,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
     "wrapper_build_info" => :versioned,
     "delivery_ack" => :versioned,
     "delivery_status_request" => :versioned,
+    "delivery_resync" => :versioned,
     "directory_request" => :versioned,
     "history_reset" => :versioned,
     "history_replay_complete" => :versioned,
@@ -139,6 +140,10 @@ defmodule KaoiroServerWeb.WrapperChannel do
         %{"hydration" => hydration_verdict(agent_id)}
         |> maybe_put_optional_field("delivery", delivery)
         |> maybe_put_optional_field(
+          "delivery_resync",
+          if(delivery != nil and params["delivery_resync"] == "skip-v1", do: "skip-v1")
+        )
+        |> maybe_put_optional_field(
           "permission_sync",
           if(permission_sync_engine, do: true)
         )
@@ -146,6 +151,8 @@ defmodule KaoiroServerWeb.WrapperChannel do
       {:ok, reply,
        socket
        |> assign(:agent_id, agent_id)
+       |> assign(:delivery_generation, params["delivery_generation"])
+       |> assign(:delivery_resync, delivery != nil and params["delivery_resync"] == "skip-v1")
        |> assign(:persona_id, persona_id)
        |> assign(:transition_id, transition_id)
        |> assign(:permission_sync_engine, permission_sync_engine)
@@ -158,12 +165,19 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # `transition_id` identifies a session transition, not a wrapper process:
   # runner crash relaunch intentionally reuses it.  The random generation is
   # therefore the only lifetime identity for #247's dispatch observation.
-  defp bind_delivery(agent_id, %{
-         "inter_agent_delivery_ack" => "dispatch-v1",
-         "delivery_generation" => generation
-       })
+  defp bind_delivery(
+         agent_id,
+         %{
+           "inter_agent_delivery_ack" => "dispatch-v1",
+           "delivery_generation" => generation
+         } = params
+       )
        when is_binary(generation) and byte_size(generation) in 1..128 do
-    DeliveryStates.bind(agent_id, generation)
+    if params["delivery_resync"] == "skip-v1" do
+      DeliveryStates.bind_resync(agent_id, generation, self())
+    else
+      DeliveryStates.bind(agent_id, generation)
+    end
   end
 
   defp bind_delivery(agent_id, _params) do
@@ -609,10 +623,54 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   defp handle_wrapper_in("delivery_ack", %{"delivery_seq" => seq}, socket)
        when is_integer(seq) and seq > 0 do
-    status = DeliveryStates.ack(socket.assigns.agent_id, seq)
-    broadcast_delivery_status(socket.assigns.agent_id)
-    {:reply, {:ok, %{"delivery" => status}}, socket}
+    status =
+      if socket.assigns.delivery_resync do
+        DeliveryStates.acknowledge(
+          socket.assigns.agent_id,
+          socket.assigns.delivery_generation,
+          self(),
+          seq
+        )
+      else
+        DeliveryStates.ack(socket.assigns.agent_id, seq)
+      end
+
+    case status do
+      {:error, reason} ->
+        {:reply, {:error, %{reason: to_string(reason)}}, socket}
+
+      _ ->
+        broadcast_delivery_status(socket.assigns.agent_id)
+        {:reply, {:ok, %{"delivery" => status}}, socket}
+    end
   end
+
+  defp handle_wrapper_in(
+         "delivery_resync",
+         %{
+           "generation" => generation,
+           "request_id" => request_id,
+           "cutoff" => cutoff,
+           "missing_ranges" => ranges
+         },
+         socket
+       )
+       when is_binary(request_id) and byte_size(request_id) in 1..128 do
+    case DeliveryStates.resync(socket.assigns.agent_id, generation, self(), cutoff, ranges) do
+      {:ok, status} ->
+        broadcast_delivery_status(socket.assigns.agent_id)
+
+        {:reply,
+         {:ok, %{"request_id" => request_id, "delivery" => status, "skipped_ranges" => ranges}},
+         socket}
+
+      {:error, reason} ->
+        {:reply, {:error, %{reason: to_string(reason)}}, socket}
+    end
+  end
+
+  defp handle_wrapper_in("delivery_resync", _, socket),
+    do: {:reply, {:error, %{reason: "invalid_delivery_resync"}}, socket}
 
   defp handle_wrapper_in("delivery_ack", _payload, socket) do
     {:reply, :ok, socket}

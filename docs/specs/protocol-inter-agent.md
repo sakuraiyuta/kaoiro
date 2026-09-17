@@ -48,6 +48,51 @@ boundary that lost the old process memory, so the server atomically abandons old
 gaps with `acked_seq := issued_seq`. The sequence remains monotonic; nothing is
 resent to the new process.
 
+### Negotiated gap recovery
+
+An additional join capability, `delivery_resync: "skip-v1"`, enables explicit
+retirement of missing deliveries without changing envelope version `"0"`.
+The server echoes that capability only when supported. Without the echo, a
+new wrapper records recovery as unavailable and sends no resync requests;
+an old wrapper keeps the original dispatch-only behavior on a new server.
+
+The wrapper tracks receipt separately from dispatch. At rejoin, missing
+sequences at or below the join's `issued_seq` are resynchronized immediately.
+For later status updates, a 30-second grace period detects both trailing and
+interior holes above the local resolved prefix. The grace cutoff is fixed
+when the timer starts: newer sequences receive their own grace period.
+Received inputs waiting for an SDK turn are never candidates. Immediately
+before a request, candidates are checked again and quarantined; late copies
+cannot enter an SDK turn while retirement is unresolved.
+
+`delivery_resync` carries `generation`, `request_id`, `cutoff`, and sorted,
+disjoint inclusive `missing_ranges`. Each request covers at most 256 sequence
+numbers, all positive and at or below the cutoff. The server validates the
+current channel owner, bound generation, negotiated capability, and
+`cutoff <= issued_seq` before any mutation. It durably records retirements
+and replies with the same `request_id`, `skipped_ranges`, and post-skip
+`delivery` status; it also broadcasts the updated status. Repeated requests
+are idempotent. A lost reply leaves the same request quarantined for retry,
+including across rejoin. A replacement process never replays the old process's
+messages, and an old channel cannot acknowledge or retire its replacement's
+deliveries.
+
+For negotiated recipients, `acked_seq` denotes a **resolved prefix**, which
+can include explicit losses, not proof that every message was dispatched.
+`lost_count` and `last_loss {at, first_seq, last_seq, count, reason}` distinguish
+those outcomes. A retirement behind an earlier received-but-unstarted input
+does not move the prefix past that input. The wrapper applies the response's
+skip ranges to its completion ledger and rebinds the post-skip prefix so later
+completed turns can acknowledge again. A locally confirmed ack lost during a
+disconnect is resent on rejoin.
+
+The recovery ledger currently records losses as `untraceable`: it retains no
+sender routing metadata or payload and does not regenerate lost notices.
+It writes an explicit recipient/sequence loss diagnostic without message
+contents. Recipient and sender panes can still contain the original accepted
+envelope even though it was retired before dispatch; a later resend is a
+separate displayed message. Loss counts reset at a new process generation.
+
 The Claude wrapper emits `claude-code-lifecycle` diagnostic records for
 `dispatch_queued`, `turn_start`, and `delivery_ack`, correlated by `agent_id`,
 turn token and delivery sequence where available. `dispatch_queued` does not

@@ -52,6 +52,7 @@ class TestSocket {
     transport.onOpen = callback;
   }
   disconnect(): void {}
+  onClose(_callback: () => void): void {}
 }
 
 vi.stubGlobal("WebSocket", class {});

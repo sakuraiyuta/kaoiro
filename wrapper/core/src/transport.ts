@@ -35,6 +35,7 @@ import {
   type WrapperBuildInfo,
 } from "./build_info.js";
 import { writeRedactedStderr } from "./redact.js";
+import { DeliveryRecovery, type DeliveryResyncRequest, type DeliveryResyncReply } from "./delivery_recovery.js";
 
 type ServerSocketFactory = (
   serverUrl: string,
@@ -217,6 +218,7 @@ export const WRAPPER_CONTROL_EVENT_POLICY = {
   wrapper_build_info: "versioned",
   delivery_ack: "versioned",
   delivery_status_request: "versioned",
+  delivery_resync: "versioned",
   history_reset: "versioned",
   replay_ia: "versioned",
   history_replay_complete: "versioned",
@@ -740,12 +742,14 @@ function deliveryStatusFrom(value: unknown): InterAgentDeliveryStatus | undefine
   const issued = nonNegativeInteger(value.issued_seq);
   const acked = nonNegativeInteger(value.acked_seq);
   if (issued === undefined || acked === undefined || acked > issued) return undefined;
-  if (value.pending_since !== undefined && typeof value.pending_since !== "string") return undefined;
-  if (issued === acked && value.pending_since !== undefined) return undefined;
+  if (value.pending_since != null && typeof value.pending_since !== "string") return undefined;
+  if (issued === acked && value.pending_since != null) return undefined;
   if (issued > acked && typeof value.pending_since !== "string") return undefined;
   return {
     issued_seq: issued,
     acked_seq: acked,
+    ...(nonNegativeInteger(value.lost_count) === undefined ? {} : { lost_count: nonNegativeInteger(value.lost_count)! }),
+    ...(isPlainObject(value.last_loss) && typeof value.last_loss.at === "string" && typeof value.last_loss.reason === "string" && nonNegativeInteger(value.last_loss.first_seq) !== undefined && nonNegativeInteger(value.last_loss.last_seq) !== undefined && nonNegativeInteger(value.last_loss.count) !== undefined ? { last_loss: value.last_loss as unknown as NonNullable<InterAgentDeliveryStatus["last_loss"]> } : {}),
     ...(typeof value.pending_since === "string" ? { pending_since: value.pending_since } : {}),
   };
 }
@@ -1054,6 +1058,9 @@ function pushRejectReason(reply: unknown): string {
 }
 
 export class ServerLink {
+  readonly #deliveryGeneration = randomUUID();
+  readonly #deliveryRecovery: DeliveryRecovery;
+
   readonly #socket: Socket;
   readonly #channel: Channel;
   #seq = 0;
@@ -1102,6 +1109,12 @@ export class ServerLink {
     socketFactory: ServerSocketFactory = (url, socketOptions) =>
       new Socket(url, socketOptions),
   ) {
+    this.#deliveryRecovery = new DeliveryRecovery({
+      request: (request) => this.requestInterAgentDeliveryResync(request),
+      resolved: ({ delivery, skipped_ranges }) => options.onInterAgentDeliveryStatus?.({ ...delivery, skipped_ranges }),
+      resendAck: (seq) => this.acknowledgeInterAgentDelivery(seq),
+      unavailable: () => writeRedactedStderr("[kaoiro] delivery recovery unavailable: server did not negotiate skip-v1\n"),
+    });
     this.#onInterAgentAck = options.onInterAgentAck;
     this.#permissionSync = options.permissionSync;
     this.#permissionSyncNegotiated = new Promise<boolean>((resolve) => {
@@ -1122,7 +1135,8 @@ export class ServerLink {
     this.#channel = this.#socket.channel(`wrapper:${agentId}`, {
       persona_id: options.personaId,
       inter_agent_delivery_ack: "dispatch-v1",
-      delivery_generation: randomUUID(),
+      delivery_generation: this.#deliveryGeneration,
+      delivery_resync: "skip-v1",
       ...(this.#permissionSync === undefined
         ? {}
         : { permission_sync: { engine: this.#permissionSync.engine } }),
@@ -1361,10 +1375,13 @@ export class ServerLink {
     // to wrapper:<self>, but a future broker should not see them).
     this.#bindServerEvent("envelope", (payload: unknown) => {
       if (!isObject(payload) || payload.type !== "inter_agent_message") return;
-      options.onInterAgentMessage?.(payload as unknown as Envelope);
+      const envelope = payload as unknown as Envelope;
+      if (this.#deliveryRecovery.receive(envelope)) options.onInterAgentMessage?.(envelope);
     });
     this.#bindServerEvent("delivery_status", (payload: unknown) => {
-      options.onInterAgentDeliveryStatus?.(deliveryStatusFrom(payload) ?? null);
+      const status = deliveryStatusFrom(payload) ?? null;
+      this.#deliveryRecovery.observe(status);
+      options.onInterAgentDeliveryStatus?.(status);
     });
     // #258: a self-reset's request reply proves only that the server acquired
     // its lock. If the runner later cannot terminate this old wrapper, the
@@ -1381,6 +1398,7 @@ export class ServerLink {
     // snapshot dedupe must not prevent this restoration. On the first open
     // both caches are empty (no-op); on reconnects pushes are buffered by the
     // client until the channel rejoins. send() stamps a fresh seq.
+    this.#socket.onClose(() => this.#deliveryRecovery.disconnected());
     this.#socket.onOpen(() => {
       this.#beginPermissionSyncBarrier();
       if (this.#lastEnvelope) this.send(this.#lastEnvelope);
@@ -1407,9 +1425,9 @@ export class ServerLink {
           });
         }
         options.onHydration?.(hydrationVerdictFrom(reply));
-        options.onInterAgentDeliveryStatus?.(
-          isObject(reply) ? deliveryStatusFrom(reply.delivery) ?? null : null,
-        );
+        const delivery = isObject(reply) ? deliveryStatusFrom(reply.delivery) ?? null : null;
+        options.onInterAgentDeliveryStatus?.(delivery);
+        this.#deliveryRecovery.join(isObject(reply) && reply.delivery_resync === "skip-v1", delivery);
       })
       .receive("error", (reason: unknown) => {
         writeRedactedStderr(
@@ -1516,6 +1534,7 @@ export class ServerLink {
    * future, or duplicate watermark as a harmless no-op. */
   acknowledgeInterAgentDelivery(deliverySeq: number): void {
     if (!Number.isSafeInteger(deliverySeq) || deliverySeq <= 0) return;
+    this.#deliveryRecovery.confirm(deliverySeq);
     this.#pushVersioned("delivery_ack", { delivery_seq: deliverySeq });
   }
 
@@ -1548,12 +1567,30 @@ export class ServerLink {
     });
   }
 
+  requestInterAgentDeliveryResync(request: DeliveryResyncRequest): Promise<DeliveryResyncReply | null> {
+    return new Promise((resolve) => {
+      this.#pushVersioned("delivery_resync", { ...request, generation: this.#deliveryGeneration })
+        .receive("ok", (payload: unknown) => {
+          const delivery = isObject(payload) ? deliveryStatusFrom(payload.delivery) : undefined;
+          // The server must confirm the exact quarantined page, not a partial
+          // or unrelated request that would reopen an unresolved late frame.
+          if (isObject(payload) && payload.request_id === request.request_id && delivery !== undefined &&
+              JSON.stringify(payload.skipped_ranges) === JSON.stringify(request.missing_ranges)) {
+            resolve({ delivery, skipped_ranges: request.missing_ranges });
+          } else resolve(null);
+        })
+        .receive("error", () => resolve(null))
+        .receive("timeout", () => resolve(null));
+    });
+  }
+
   /** Reads this wrapper's ledger independently of directory peers. */
   requestInterAgentDeliveryStatus(): Promise<InterAgentDeliveryStatus | null> {
     return new Promise((resolve) => {
       this.#pushVersioned("delivery_status_request", {})
         .receive("ok", (payload: unknown) =>
-          resolve(isObject(payload) ? deliveryStatusFrom(payload.delivery) ?? null : null),
+          { const status = isObject(payload) ? deliveryStatusFrom(payload.delivery) ?? null : null;
+            this.#deliveryRecovery.observe(status); resolve(status); },
         )
         .receive("error", () => resolve(null))
         .receive("timeout", () => resolve(null));
@@ -1855,6 +1892,7 @@ export class ServerLink {
 
   /** Leaves the channel and closes the socket. */
   close(): void {
+    this.#deliveryRecovery.dispose();
     this.#channel.leave();
     this.#socket.disconnect();
   }

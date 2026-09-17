@@ -1,8 +1,9 @@
 defmodule KaoiroServer.DeliveryStates do
   @moduledoc """
   Durable, recipient-local observation ledger for inter-agent dispatch
-  confirmation (issue #247).  This is deliberately *not* a message queue:
-  it keeps only monotonic watermarks and never replays payloads.
+  confirmation (issue #237). Negotiated recovery records explicit losses
+  separately from dispatch; a resolved prefix is not proof of delivery.
+  This ledger retains no payloads and never replays them.
 
   A wrapper process binds a random `delivery_generation` when it joins.  A
   rejoin with the same generation is a websocket reconnect and preserves an
@@ -13,6 +14,7 @@ defmodule KaoiroServer.DeliveryStates do
   the same session-transition id while replacing the wrapper process.
   """
   use GenServer
+  require Logger
 
   alias KaoiroServer.AgentStates
   alias KaoiroServer.TransportLimits
@@ -39,6 +41,19 @@ defmodule KaoiroServer.DeliveryStates do
   def bind(agent_id, generation, server \\ __MODULE__)
       when is_binary(agent_id) and is_binary(generation) and generation != "" do
     GenServer.call(server, {:bind, agent_id, generation})
+  end
+
+  @doc "Binds resynchronization to the current channel owner and process generation."
+  def bind_resync(agent_id, generation, owner, server \\ __MODULE__) do
+    GenServer.call(server, {:bind_resync, agent_id, generation, owner})
+  end
+
+  def acknowledge(agent_id, generation, owner, seq, server \\ __MODULE__) do
+    GenServer.call(server, {:acknowledge, agent_id, generation, owner, seq})
+  end
+
+  def resync(agent_id, generation, owner, cutoff, ranges, server \\ __MODULE__) do
+    GenServer.call(server, {:resync, agent_id, generation, owner, cutoff, ranges})
   end
 
   @doc "Disarms an old wrapper's projection; absence means unknown, not zero."
@@ -117,7 +132,7 @@ defmodule KaoiroServer.DeliveryStates do
     KaoiroServer.DetsStorePath.prepare_parent!(path)
     table = open_table(name, path)
     _ = File.chmod(path, 0o600)
-    {:ok, %{table: table, entries: load_entries(table)}}
+    {:ok, %{table: table, entries: load_entries(table), owners: %{}}}
   end
 
   defp priority_delivery?(agent_id, status, connected_agent_ids) do
@@ -146,8 +161,100 @@ defmodule KaoiroServer.DeliveryStates do
           {%{generation: generation, issued_seq: 0, acked_seq: 0, pending_since: nil}, true}
       end
 
-    if changed?, do: persist(state.table, agent_id, entry)
-    {:reply, public(entry), %{state | entries: Map.put(state.entries, agent_id, entry)}}
+    entry = if changed?, do: Map.merge(entry, recovery_defaults()), else: entry
+    entry = Map.put(entry, :resync, false)
+    persist(state.table, agent_id, entry)
+
+    {:reply, public(entry),
+     %{
+       state
+       | entries: Map.put(state.entries, agent_id, entry),
+         owners: Map.delete(state.owners, agent_id)
+     }}
+  end
+
+  def handle_call({:bind_resync, agent_id, generation, owner}, _from, state) do
+    old = state.entries[agent_id]
+
+    entry =
+      if old != nil and old.generation == generation do
+        Map.merge(recovery_defaults(), old)
+      else
+        issued = if old, do: old.issued_seq, else: 0
+
+        Map.merge(recovery_defaults(), %{
+          generation: generation,
+          issued_seq: issued,
+          acked_seq: issued,
+          pending_since: nil
+        })
+      end
+      |> Map.put(:resync, true)
+
+    persist(state.table, agent_id, entry)
+
+    {:reply, public(entry),
+     %{
+       state
+       | entries: Map.put(state.entries, agent_id, entry),
+         owners: Map.put(state.owners, agent_id, owner)
+     }}
+  end
+
+  def handle_call({:acknowledge, agent_id, generation, owner, seq}, _from, state) do
+    if owns_recovery?(state, agent_id, generation, owner) do
+      acknowledge_entry(agent_id, seq, state)
+    else
+      {:reply, {:error, :stale_delivery_owner}, state}
+    end
+  end
+
+  def handle_call({:resync, agent_id, generation, owner, cutoff, ranges}, _from, state) do
+    entry = state.entries[agent_id]
+
+    cond do
+      not owns_recovery?(state, agent_id, generation, owner) ->
+        {:reply, {:error, :stale_delivery_owner}, state}
+
+      not valid_ranges?(ranges, cutoff, entry.issued_seq) ->
+        {:reply, {:error, :invalid_delivery_resync}, state}
+
+      true ->
+        requested = for [first, last] <- ranges, seq <- first..last, do: seq
+        previous = MapSet.new(entry.skipped)
+        added = Enum.reject(requested, &(&1 <= entry.acked_seq or MapSet.member?(previous, &1)))
+
+        next = %{
+          entry
+          | skipped: MapSet.union(previous, MapSet.new(added)) |> MapSet.to_list(),
+            lost_count: entry.lost_count + length(added)
+        }
+
+        next =
+          if added == [],
+            do: next,
+            else: %{
+              next
+              | last_loss: %{
+                  at: DateTime.utc_now() |> DateTime.to_iso8601(),
+                  first_seq: Enum.min(added),
+                  last_seq: Enum.max(added),
+                  count: length(added),
+                  reason: "untraceable"
+                }
+            }
+
+        next = advance_skipped(next)
+        persist(state.table, agent_id, next)
+
+        if added != [],
+          do:
+            Logger.warning(
+              "inter-agent delivery loss recipient=#{agent_id} count=#{length(added)} first=#{Enum.min(added)} last=#{Enum.max(added)} reason=untraceable"
+            )
+
+        {:reply, {:ok, public(next)}, %{state | entries: Map.put(state.entries, agent_id, next)}}
+    end
   end
 
   def handle_call({:disarm, agent_id}, _from, state) do
@@ -156,7 +263,12 @@ defmodule KaoiroServer.DeliveryStates do
       :ok = :dets.sync(state.table)
     end
 
-    {:reply, :ok, %{state | entries: Map.delete(state.entries, agent_id)}}
+    {:reply, :ok,
+     %{
+       state
+       | entries: Map.delete(state.entries, agent_id),
+         owners: Map.delete(state.owners, agent_id)
+     }}
   end
 
   def handle_call({:issue, agent_id}, _from, state) do
@@ -175,22 +287,10 @@ defmodule KaoiroServer.DeliveryStates do
   end
 
   def handle_call({:ack, agent_id, seq}, _from, state) do
-    case Map.get(state.entries, agent_id) do
-      %{issued_seq: issued, acked_seq: acked} = entry when seq > acked and seq <= issued ->
-        next = %{
-          entry
-          | acked_seq: seq,
-            pending_since: if(seq == issued, do: nil, else: entry.pending_since)
-        }
-
-        persist(state.table, agent_id, next)
-        {:reply, public(next), %{state | entries: Map.put(state.entries, agent_id, next)}}
-
-      entry when is_map(entry) ->
-        {:reply, public(entry), state}
-
-      nil ->
-        {:reply, nil, state}
+    if get_in(state.entries, [agent_id, :resync]) do
+      {:reply, {:error, :stale_delivery_owner}, state}
+    else
+      acknowledge_entry(agent_id, seq, state)
     end
   end
 
@@ -203,21 +303,99 @@ defmodule KaoiroServer.DeliveryStates do
   def handle_call({:delete, agent_id}, _from, state) do
     :ok = :dets.delete(state.table, agent_id)
     :ok = :dets.sync(state.table)
-    {:reply, :ok, %{state | entries: Map.delete(state.entries, agent_id)}}
+
+    {:reply, :ok,
+     %{
+       state
+       | entries: Map.delete(state.entries, agent_id),
+         owners: Map.delete(state.owners, agent_id)
+     }}
   end
 
   @impl true
   def terminate(_reason, state), do: :dets.close(state.table)
 
-  defp public(%{issued_seq: issued, acked_seq: acked, pending_since: pending}) do
-    %{issued_seq: issued, acked_seq: acked, pending_since: pending}
+  defp acknowledge_entry(agent_id, seq, state) do
+    case Map.get(state.entries, agent_id) do
+      %{issued_seq: issued, acked_seq: acked} = entry
+      when is_integer(seq) and seq > acked and seq <= issued ->
+        next = %{
+          entry
+          | acked_seq: seq,
+            pending_since: if(seq == issued, do: nil, else: entry.pending_since)
+        }
+
+        next = advance_skipped(next)
+        persist(state.table, agent_id, next)
+        {:reply, public(next), %{state | entries: Map.put(state.entries, agent_id, next)}}
+
+      entry when is_map(entry) ->
+        {:reply, public(entry), state}
+
+      nil ->
+        {:reply, nil, state}
+    end
+  end
+
+  defp recovery_defaults, do: %{resync: false, skipped: [], lost_count: 0, last_loss: nil}
+
+  defp owns_recovery?(state, id, generation, owner) do
+    case state.entries[id] do
+      %{generation: ^generation, resync: true} -> state.owners[id] == owner
+      _ -> false
+    end
+  end
+
+  defp valid_ranges?(ranges, cutoff, issued)
+       when is_list(ranges) and is_integer(cutoff) and cutoff >= 0 and cutoff <= issued do
+    length(ranges) in 1..256 and
+      Enum.all?(ranges, fn
+        [first, last] when is_integer(first) and is_integer(last) ->
+          first > 0 and last >= first and last <= cutoff and last - first < 256
+
+        _ ->
+          false
+      end) and
+      Enum.reduce(ranges, 0, fn [first, last], count -> count + last - first + 1 end) <= 256 and
+      Enum.reduce_while(ranges, 0, fn [first, last], previous ->
+        if first > previous, do: {:cont, last}, else: {:halt, :invalid}
+      end) != :invalid
+  end
+
+  defp valid_ranges?(_, _, _), do: false
+
+  defp advance_skipped(entry) do
+    skipped = MapSet.new(entry.skipped)
+    acked = consume_skipped(entry.acked_seq, skipped)
+
+    %{
+      entry
+      | acked_seq: acked,
+        skipped: Enum.reject(entry.skipped, &(&1 <= acked)),
+        pending_since: if(acked == entry.issued_seq, do: nil, else: entry.pending_since)
+    }
+  end
+
+  defp consume_skipped(acked, skipped) do
+    if MapSet.member?(skipped, acked + 1), do: consume_skipped(acked + 1, skipped), else: acked
+  end
+
+  defp public(%{issued_seq: issued, acked_seq: acked, pending_since: pending} = entry) do
+    status = %{issued_seq: issued, acked_seq: acked, pending_since: pending}
+
+    if entry.resync do
+      Map.merge(status, %{lost_count: entry.lost_count, last_loss: entry.last_loss})
+    else
+      status
+    end
   end
 
   defp persist(table, agent_id, %{generation: generation} = entry) do
     :ok =
       :dets.insert(
         table,
-        {agent_id, generation, entry.issued_seq, entry.acked_seq, entry.pending_since}
+        {agent_id, generation, entry.issued_seq, entry.acked_seq, entry.pending_since,
+         Map.take(entry, [:resync, :skipped, :lost_count, :last_loss])}
       )
 
     :ok = :dets.sync(table)
@@ -226,16 +404,35 @@ defmodule KaoiroServer.DeliveryStates do
   defp load_entries(table) do
     case :dets.foldl(
            fn
+             {id, generation, issued, acked, pending, recovery}, acc when is_map(recovery) ->
+               Map.put(
+                 acc,
+                 id,
+                 Map.merge(
+                   recovery_defaults(),
+                   Map.merge(recovery, %{
+                     generation: generation,
+                     issued_seq: issued,
+                     acked_seq: acked,
+                     pending_since: pending
+                   })
+                 )
+               )
+
              {id, generation, issued, acked, pending}, acc
              when is_binary(id) and is_binary(generation) and is_integer(issued) and issued >= 0 and
                     is_integer(acked) and acked >= 0 and acked <= issued and
                     (is_nil(pending) or is_binary(pending)) ->
-               Map.put(acc, id, %{
-                 generation: generation,
-                 issued_seq: issued,
-                 acked_seq: acked,
-                 pending_since: pending
-               })
+               Map.put(
+                 acc,
+                 id,
+                 Map.merge(recovery_defaults(), %{
+                   generation: generation,
+                   issued_seq: issued,
+                   acked_seq: acked,
+                   pending_since: pending
+                 })
+               )
 
              _, acc ->
                acc

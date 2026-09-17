@@ -775,6 +775,7 @@ The complete coverage and the permanent `attach_chunk` exception are normative i
 | wrapper → server | `delivery_ack` | `{ delivery_seq: positive integer }`, the SDK-dispatch confirmation watermark (issue #237); unnegotiated, duplicate, or future values are no-op, not resend requests. |
 | wrapper → server | `wrapper_build_info` | `{ build_revision, build_dirty, build_version, build_channel }` reports the wrapper artifact immediately after each successful channel join. The server derives `agent_id` from the topic, validates the complete identity pair, keeps only the latest connected value, and broadcasts it to operator-capable clients. `build_version` is `"unknown"` or `YYYY.M.PATCH`: a four-digit year, month `1` through `12`, and one to six decimal patch digits. The flat protocol `version` is added by the wrapper control-event funnel. |
 | wrapper → server | `delivery_status_request` | `{}`; reads the sender's `{ delivery?: {issued_seq, acked_seq, pending_since?} }`. Absence is legacy/disarmed unknown. |
+| wrapper → server | `delivery_resync` | Negotiated by the additional join capability `delivery_resync: "skip-v1"`, echoed in the join reply. `{generation, request_id, cutoff, missing_ranges}` retires a bounded page of missing sequences under the current channel owner and generation. The reply echoes `request_id` and `skipped_ranges` with post-skip `delivery`; errors are `invalid_delivery_resync` or `stale_delivery_owner`. Version remains `"0"`. See [gap recovery](protocol-inter-agent.md#negotiated-gap-recovery). |
 | wrapper → server | `history_reset` | `{ replay_id }` starts replay. Use the server ID when the join verdict requires replay, otherwise a legacy wrapper ID. Clear display projection, retain IA for `replay_ia`, and acknowledge an absent entry as no-op ([ADR-0051](../adr/0051-history-restart-resilience.md), [ADR-0014](../adr/0014-session-resume-and-restore.md)). |
 | wrapper → server | `history_replay_complete` | `{ replay_id }` follows the final JSONL/sidecar row. The server broadcasts it and CAS-transitions matching in-flight hydration ([ADR-0051](../adr/0051-history-restart-resilience.md)). |
 | wrapper → server | `replay_ia` | `{ replay_id, items: [{ envelope, ingress_stamp }] }` restores one pane from the sidecar. Bind to the topic agent, upsert only that pane, reject stale/malformed stamps, and broadcast `history_replay_envelope`; operator-only ([ADR-0051](../adr/0051-history-restart-resilience.md)). |
@@ -1250,7 +1251,7 @@ same funnel. The unimplemented `revoke_wrapper_token` has only server-side recei
 
 #### Wrapper → server (stage 2, completed in issue #260; wrapper identity in issue #288 Stage 3)
 
-`envelope` is stamped by its frame key. `delivery_ack` / `delivery_status_request` /
+`envelope` is stamped by its frame key. `delivery_ack` / `delivery_status_request` / `delivery_resync` /
 `history_reset` / `replay_ia` / `history_replay_complete` / `directory_request` /
 `session_reset_request` / `wrapper_build_info` / `session_lifecycle` are declared in `WRAPPER_CONTROL_EVENT_POLICY`;
 the wrapper's sole send point `#pushVersioned` adds flat `version`. The server's

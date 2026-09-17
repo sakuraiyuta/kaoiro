@@ -19,6 +19,96 @@ defmodule KaoiroServer.DeliveryStatesTest do
     %{name: name, path: path}
   end
 
+  test "legacy DETS watermarks migrate without inventing sender information", %{
+    name: name,
+    path: path
+  } do
+    GenServer.stop(Process.whereis(name))
+    {:ok, table} = :dets.open_file(name, file: String.to_charlist(path))
+    :ok = :dets.insert(table, {"recipient", "generation", 3, 1, "2026-09-18T00:00:00Z"})
+    :ok = :dets.close(table)
+    start_supervised!({DeliveryStates, name: name, path: path})
+
+    assert %{issued_seq: 3, acked_seq: 1} =
+             DeliveryStates.bind_resync("recipient", "generation", self(), name)
+
+    assert {:ok, %{acked_seq: 3, lost_count: 2, last_loss: %{reason: "untraceable"}}} =
+             DeliveryStates.resync("recipient", "generation", self(), 3, [[2, 3]], name)
+  end
+
+  test "retiring the first missing sequence immediately releases the prefix", %{name: name} do
+    DeliveryStates.bind_resync("recipient", "generation", self(), name)
+    for _ <- 1..3, do: DeliveryStates.issue("recipient", name)
+
+    assert {:ok, %{acked_seq: 1, lost_count: 1}} =
+             DeliveryStates.resync("recipient", "generation", self(), 3, [[1, 1]], name)
+
+    assert %{acked_seq: 3, pending_since: nil} =
+             DeliveryStates.acknowledge("recipient", "generation", self(), 3, name)
+  end
+
+  test "skip advances only a resolved prefix and persists idempotent loss", %{
+    name: name,
+    path: path
+  } do
+    DeliveryStates.bind_resync("recipient", "generation", self(), name)
+    for _ <- 1..3, do: DeliveryStates.issue("recipient", name)
+
+    assert {:ok, %{acked_seq: 0, lost_count: 1}} =
+             DeliveryStates.resync("recipient", "generation", self(), 3, [[2, 2]], name)
+
+    assert {:ok, %{acked_seq: 0, lost_count: 1}} =
+             DeliveryStates.resync("recipient", "generation", self(), 3, [[2, 2]], name)
+
+    GenServer.stop(Process.whereis(name))
+    start_supervised!({DeliveryStates, name: name, path: path})
+
+    assert {:error, :stale_delivery_owner} =
+             DeliveryStates.resync("recipient", "generation", self(), 3, [[2, 2]], name)
+
+    DeliveryStates.bind_resync("recipient", "generation", self(), name)
+
+    assert %{acked_seq: 2, lost_count: 1} =
+             DeliveryStates.acknowledge("recipient", "generation", self(), 1, name)
+
+    assert %{acked_seq: 3, pending_since: nil, last_loss: %{reason: "untraceable"}} =
+             DeliveryStates.acknowledge("recipient", "generation", self(), 3, name)
+  end
+
+  test "recovery rejects stale owners, generations, unnegotiated and invalid ranges", %{
+    name: name
+  } do
+    DeliveryStates.bind_resync("recipient", "generation", self(), name)
+    DeliveryStates.issue("recipient", name)
+
+    for ranges <- [[], [[0, 1]], [[1, 2]], [[1, 1], [1, 1]], [[1, 1.5]], "bad"] do
+      assert {:error, :invalid_delivery_resync} =
+               DeliveryStates.resync("recipient", "generation", self(), 1, ranges, name)
+    end
+
+    assert {:error, :stale_delivery_owner} =
+             DeliveryStates.resync("recipient", "old", self(), 1, [[1, 1]], name)
+
+    assert {:error, :stale_delivery_owner} =
+             DeliveryStates.resync("recipient", "generation", :wrong_owner, 1, [[1, 1]], name)
+
+    assert {:error, :stale_delivery_owner} = DeliveryStates.ack("recipient", 1, name)
+    assert %{acked_seq: 0, lost_count: 0} = DeliveryStates.get("recipient", name)
+    DeliveryStates.bind_resync("recipient", "new", self(), name)
+
+    assert {:error, :stale_delivery_owner} =
+             DeliveryStates.acknowledge("recipient", "generation", self(), 1, name)
+
+    assert %{acked_seq: 1, lost_count: 0} = DeliveryStates.get("recipient", name)
+    DeliveryStates.bind("legacy", "generation", name)
+    DeliveryStates.issue("legacy", name)
+
+    assert {:error, :stale_delivery_owner} =
+             DeliveryStates.resync("legacy", "generation", self(), 1, [[1, 1]], name)
+
+    refute Map.has_key?(DeliveryStates.get("legacy", name), :lost_count)
+  end
+
   test "same generation reconnect retains a real gap; new process generation abandons it", %{
     name: name
   } do

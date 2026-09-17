@@ -285,6 +285,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     @versioned_wrapper_events ~w(
       delivery_ack
       delivery_status_request
+      delivery_resync
       directory_request
       history_reset
       history_replay_complete
@@ -294,6 +295,10 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     )
 
     defp control_payload(_event), do: %{}
+
+    defp assert_control_reply(ref, "delivery_resync") do
+      assert_reply ref, :error, %{reason: "invalid_delivery_resync"}
+    end
 
     defp assert_control_reply(ref, event) do
       case event do
@@ -2968,6 +2973,86 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
             "error" => %{"code" => "disconnected"}
           }
         }
+      }
+    end
+
+    test "a replacement join broadcasts the abandoned generation prefix" do
+      id = "test.delivery-new-generation"
+      on_exit(fn -> DeliveryStates.delete(id) end)
+      DeliveryStates.bind(id, "old-generation")
+      DeliveryStates.issue(id)
+      @endpoint.subscribe("wrapper:" <> id)
+
+      join_wrapper(id, "default", %{
+        "inter_agent_delivery_ack" => "dispatch-v1",
+        "delivery_generation" => "new-generation",
+        "delivery_resync" => "skip-v1"
+      })
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "delivery_status",
+        payload: %{acked_seq: 1, issued_seq: 1, pending_since: nil, lost_count: 0}
+      }
+    end
+
+    test "negotiated recovery retires a dropped route and broadcasts the new prefix" do
+      to_id = "test.delivery-recovery"
+      from_id = "test.delivery-recovery-from"
+      on_exit(fn -> KaoiroServer.DeliveryStates.delete(to_id) end)
+
+      recipient =
+        join_wrapper(to_id, "default", %{
+          "inter_agent_delivery_ack" => "dispatch-v1",
+          "delivery_generation" => "recovery-process",
+          "delivery_resync" => "skip-v1"
+        })
+
+      assert_reply push(recipient, "envelope", envelope(to_id, "idle")), :ok
+      sender = seed_known(from_id)
+      @endpoint.subscribe("wrapper:" <> to_id)
+      assert 1 = KaoiroServer.DeliveryStates.issue(to_id)
+      assert_reply push(sender, "envelope", inter_envelope(from_id, to_id)), :ok
+
+      assert_received %Phoenix.Socket.Broadcast{
+        event: "envelope",
+        payload: %{"delivery_seq" => 2}
+      }
+
+      request = %{
+        "version" => "0",
+        "generation" => "recovery-process",
+        "request_id" => "recovery-1",
+        "cutoff" => 2,
+        "missing_ranges" => [[1, 1]]
+      }
+
+      assert_reply push(recipient, "delivery_resync", request), :ok, %{
+        "request_id" => "recovery-1",
+        "delivery" => %{acked_seq: 1, lost_count: 1},
+        "skipped_ranges" => [[1, 1]]
+      }
+
+      assert_received %Phoenix.Socket.Broadcast{
+        event: "delivery_status",
+        payload: %{acked_seq: 1, lost_count: 1}
+      }
+
+      assert_reply push(recipient, "delivery_ack", %{"delivery_seq" => 2}), :ok, %{
+        "delivery" => %{acked_seq: 2, pending_since: nil, lost_count: 1}
+      }
+
+      assert_reply push(recipient, "delivery_resync", request), :ok, %{
+        "delivery" => %{acked_seq: 2, lost_count: 1}
+      }
+
+      KaoiroServer.DeliveryStates.bind_resync(to_id, "replacement", self())
+
+      assert_reply push(recipient, "delivery_resync", request), :error, %{
+        reason: "stale_delivery_owner"
+      }
+
+      assert_reply push(recipient, "delivery_ack", %{"delivery_seq" => 2}), :error, %{
+        reason: "stale_delivery_owner"
       }
     end
 

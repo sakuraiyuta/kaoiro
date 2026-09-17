@@ -77,6 +77,7 @@ vi.mock("phoenix", () => {
       mock.onOpen = cb;
     }
     disconnect(): void {}
+    onClose(_callback: () => void): void {}
   }
   return { Channel, Socket };
 });
@@ -309,6 +310,7 @@ describe("ServerLink — join params (phase-27 transition_id, #160)", () => {
       persona_id: "ao",
       transition_id: "tr-1",
       inter_agent_delivery_ack: "dispatch-v1",
+      delivery_resync: "skip-v1",
       delivery_generation: expect.any(String),
     }));
   });
@@ -319,6 +321,7 @@ describe("ServerLink — join params (phase-27 transition_id, #160)", () => {
     expect(mock.lastChannelParams).toEqual(expect.objectContaining({
       persona_id: "ao",
       inter_agent_delivery_ack: "dispatch-v1",
+      delivery_resync: "skip-v1",
       delivery_generation: expect.any(String),
     }));
   });
@@ -334,6 +337,7 @@ describe("ServerLink — join params (phase-27 transition_id, #160)", () => {
     expect(mock.lastChannelParams).toEqual(expect.objectContaining({
       persona_id: "ao",
       inter_agent_delivery_ack: "dispatch-v1",
+      delivery_resync: "skip-v1",
       delivery_generation: expect.any(String),
     }));
   });
@@ -374,6 +378,37 @@ describe("ServerLink — join params (phase-27 transition_id, #160)", () => {
     const pending = link.requestInterAgentDeliveryStatus();
     mock.lastPush?.receivers.get("ok")?.({ delivery: { issued_seq: 4, acked_seq: 3, pending_since: "T" } });
     await expect(pending).resolves.toEqual({ issued_seq: 4, acked_seq: 3, pending_since: "T" });
+  });
+
+  it("uses default recovery composition to retire a dropped seq and deliver a later input once", async () => {
+    vi.useFakeTimers();
+    const arrivals: number[] = [];
+    const statuses: unknown[] = [];
+    const link = new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      onInterAgentMessage: (envelope) => arrivals.push((envelope as unknown as { delivery_seq: number }).delivery_seq),
+      onInterAgentDeliveryStatus: (status) => statuses.push(status),
+    });
+    try {
+      mock.joinReceivers.get("ok")?.({ delivery_resync: "skip-v1", delivery: { issued_seq: 67, acked_seq: 67, pending_since: null } });
+      emit("envelope", { version: "0", type: "inter_agent_message", delivery_seq: 69 });
+      emit("delivery_status", { version: "0", issued_seq: 69, acked_seq: 67, pending_since: "T" });
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(mock.lastPush).toMatchObject({ event: "delivery_resync", payload: { cutoff: 69, missing_ranges: [[68, 68]] } });
+      const pending = mock.lastPush!;
+      emit("envelope", { version: "0", type: "inter_agent_message", delivery_seq: 68 });
+      expect(arrivals).toEqual([69]);
+      pending.receivers.get("ok")?.({ request_id: (pending.payload as { request_id: string }).request_id, delivery: { issued_seq: 69, acked_seq: 68, pending_since: "T", lost_count: 1 }, skipped_ranges: [[68, 68]] });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(statuses.at(-1)).toEqual({ issued_seq: 69, acked_seq: 68, pending_since: "T", lost_count: 1, skipped_ranges: [[68, 68]] });
+      link.acknowledgeInterAgentDelivery(69);
+      expect(mock.lastPush).toMatchObject({ event: "delivery_ack", payload: { delivery_seq: 69 } });
+      emit("envelope", { version: "0", type: "inter_agent_message", delivery_seq: 69 });
+      expect(arrivals).toEqual([69]);
+    } finally {
+      link.close();
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -1390,6 +1425,7 @@ describe("ServerLink — ADR-0015 stage 2 wrapper -> server stamps", () => {
   const fire: Record<VersionedWrapperEvent, (link: ServerLink) => void> = {
     delivery_ack: (link) => link.acknowledgeInterAgentDelivery(1),
     delivery_status_request: (link) => void link.requestInterAgentDeliveryStatus(),
+    delivery_resync: (link) => void link.requestInterAgentDeliveryResync({ request_id: "request", cutoff: 1, missing_ranges: [[1, 1]] }),
     history_reset: (link) => link.sendHistoryReset("r"),
     replay_ia: (link) => link.sendReplayIa("r", [{ ingress_stamp: [1, 1], envelope: replayEnvelope() }]),
     history_replay_complete: (link) => link.sendHistoryReplayComplete("r"),

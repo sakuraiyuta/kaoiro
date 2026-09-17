@@ -1,11 +1,31 @@
 import { describe, expect, it } from "vitest";
 import {
   DeliveryAcknowledger,
+  DeliveryAcknowledgement,
   createDeliveryAcknowledgementWiring,
 } from "../src/delivery_ack.js";
 import type { Envelope } from "../src/types.js";
 
 describe("DeliveryAcknowledger (issue #247)", () => {
+  it("continues completed turns after the server retires a missing sequence", () => {
+    const sent: number[] = [];
+    const acknowledgement = new DeliveryAcknowledgement((seq) => sent.push(seq));
+    acknowledgement.observe({ acked_seq: 67 });
+    acknowledgement.acknowledgeEnvelope({ delivery_seq: 69 } as unknown as Envelope);
+    acknowledgement.acknowledgeEnvelope({ delivery_seq: 70 } as unknown as Envelope);
+    expect(sent).toEqual([]);
+    acknowledgement.observe({ acked_seq: 68 });
+    expect(sent).toEqual([70]);
+  });
+
+  it("retains an out-of-order retirement behind a received unstarted input", () => {
+    const sent: number[] = [];
+    const acknowledgement = new DeliveryAcknowledgement((seq) => sent.push(seq));
+    acknowledgement.observe({ acked_seq: 0, skipped_ranges: [[2, 2]] });
+    expect(sent).toEqual([]);
+    acknowledgement.acknowledgeEnvelope({ delivery_seq: 1 } as unknown as Envelope);
+    expect(sent).toEqual([2]);
+  });
   it("out-of-order SDK starts only acknowledge the contiguous prefix", () => {
     const ledger = new DeliveryAcknowledger();
     expect(ledger.bind(4)).toBeNull();

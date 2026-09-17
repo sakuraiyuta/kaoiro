@@ -55,9 +55,14 @@ export class DeliveryAcknowledgement {
   }
 
   /** Reconcile the server's authoritative baseline after a join/rejoin. */
-  observe(status: { acked_seq: number } | null): void {
+  observe(status: { acked_seq: number; skipped_ranges?: [number, number][] } | null): void {
     if (status === null) return;
     this.#sendIfAdvanced(this.#ledger.bind(status.acked_seq));
+    for (const [first, last] of status.skipped_ranges ?? []) {
+      for (let seq = first; seq <= last; seq++) {
+        this.#sendIfAdvanced(this.#ledger.complete(seq));
+      }
+    }
   }
 
   /** Intentional non-injection has completed locally and cannot reach SDK. */
