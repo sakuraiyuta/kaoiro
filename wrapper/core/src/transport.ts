@@ -594,14 +594,18 @@ function permissionSelectionFrom(
 function permissionObservationFrom(value: unknown): PermissionControlExt["last_effective"] | null {
   if (!isPlainObject(value)) return null;
   const selection = permissionSelectionFrom(value, 0);
+  // issue #359 M1: turn_id is optional for an advisory engine with no per-turn
+  // identity (Antigravity resumes by conversation and emits no turn id). Reject
+  // a present-but-invalid value; accept its absence so a durable control relayed
+  // back on reconnect still parses.
+  const turnId = value.turn_id;
   if (
     selection === null ||
     typeof value.execution_id !== "string" ||
     value.execution_id === "" ||
     typeof value.session_id !== "string" ||
     value.session_id === "" ||
-    typeof value.turn_id !== "string" ||
-    value.turn_id === "" ||
+    (turnId !== undefined && (typeof turnId !== "string" || turnId === "")) ||
     !isPlainObject(value.permission) ||
     !PERMISSION_SANDBOXES.has(value.permission.sandbox as PermissionConfiguration["sandbox"]) ||
     !PERMISSION_APPROVALS.has(value.permission.approval as PermissionAxesExt["approval"]) ||
@@ -614,7 +618,7 @@ function permissionObservationFrom(value: unknown): PermissionControlExt["last_e
     ...selection,
     execution_id: value.execution_id,
     session_id: value.session_id,
-    turn_id: value.turn_id,
+    ...(turnId === undefined ? {} : { turn_id: turnId }),
     permission: {
       sandbox: value.permission.sandbox as PermissionConfiguration["sandbox"],
       approval: value.permission.approval as PermissionAxesExt["approval"],

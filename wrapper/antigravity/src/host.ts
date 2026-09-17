@@ -34,6 +34,7 @@ import type {
   PermissionControlExt,
   PermissionObservation,
   PermissionSubmission,
+  PermissionSyncMessage,
   WrapperPermissionLifecycleMessage,
 } from "@kaoiro/protocol";
 import {
@@ -108,6 +109,17 @@ export interface AntigravityHostOptions {
   permissionBroker: PermissionBroker;
   questionBroker?: Pick<QuestionBroker, "close">;
   resumeSessionId?: string;
+  /** Whether the server accepted this session's permission_sync negotiation
+   *  (ADR-0057 F4c Stage B0, issue #359 M1). Gates the supports_permission_switch
+   *  advertisement (Codex parity): a legacy server that cannot sync leaves the
+   *  selector unadvertised, fail-closed. When true, the constructor seeds the
+   *  revision-0 baseline control so the server can allocate switch revisions. */
+  permissionSyncSupported?: boolean;
+  /** Resolves once the server's permission_sync for the current connection has
+   *  been applied (or immediately when sync is unsupported). Awaited before each
+   *  turn's gate is built so a durable control/next relayed on reconnect lands
+   *  before the gate reads the cell. */
+  waitForPermissionSync?: () => Promise<void>;
   dangerouslySkipPermissions?: boolean;
   nodePath?: string;
   agyPath?: string;
@@ -193,6 +205,11 @@ export function initialStatusExt(
   // declared model, not only the production call site which always
   // passes the current #catalog explicitly.
   models = mergeExtraModels(antigravityCatalogSnapshot(), config.antigravity_extra_models),
+  // issue #359 M1: gate the supports_permission_switch advertisement on a
+  // successful permission_sync negotiation (Codex parity). Defaults false so a
+  // caller computing the pre-negotiation status advertises no selector, and a
+  // legacy server that cannot sync stays fail-closed.
+  permissionSyncSupported = false,
 ): Record<string, unknown> {
   const sandbox = config.sandbox ?? "workspace-write";
   const approval = config.approval ?? "on-request";
@@ -236,7 +253,7 @@ export function initialStatusExt(
       supports_model_switch: true,
       supports_effort_switch: false,
       supports_context_usage: false,
-      ...(switchAxes === undefined
+      ...(switchAxes === undefined || !permissionSyncSupported
         ? {}
         : {
             supports_permission_switch: true,
@@ -294,6 +311,10 @@ export class AntigravityHost implements EngineAdapter {
     | null = null;
   #permissionControl: PermissionControlExt | null = null;
   #lastEffectivePermission: PermissionObservation | null = null;
+  // issue #359 M1: whether the server accepted permission_sync for this
+  // connection. Gates the supports_permission_switch advertisement and seeds
+  // the revision-0 baseline; updated on every join reply (setPermissionSyncSupported).
+  #permissionSyncSupported = false;
   readonly #toolNames = new Map<string, string>();
   readonly #rateLimits = new Map<
     string,
@@ -323,6 +344,15 @@ export class AntigravityHost implements EngineAdapter {
       ?? DEFAULT_AGY_PROBE_TIMEOUT_MS;
     this.#sessionId = options.resumeSessionId ?? null;
     this.#now = options.now ?? (() => new Date().toISOString());
+    // issue #359 M1: with sync negotiated, seed the revision-0 baseline control
+    // (Codex parity) so the first status snapshot carries ext.permission_control
+    // and the server can allocate switch revisions against it. Without it the
+    // first set_permission is rejected as permission_not_ready. A reconnect's
+    // durable control (applyPermissionSync) later supersedes this baseline.
+    this.#permissionSyncSupported = options.permissionSyncSupported ?? false;
+    if (this.#permissionSyncSupported) {
+      this.#permissionControl = this.#baselineControl();
+    }
     sweepStaleCustomizationDirs();
     void this.#refreshCatalog();
   }
@@ -483,6 +513,72 @@ export class AntigravityHost implements EngineAdapter {
     return { approval, enforcement: "advisory" };
   }
 
+  /** The revision-0 baseline control emitted once permission_sync is negotiated
+   *  (Codex parity, issue #359 M1): the launch cell as `pending` with no
+   *  submitted / effective evidence, so the server seeds its ledger and
+   *  allocates switch revisions against it. */
+  #baselineControl(): PermissionControlExt {
+    const cell = this.#currentCell();
+    return {
+      revision: 0,
+      requested: cell,
+      status: "pending",
+      constraints: this.#permissionConstraints(cell.approval),
+    };
+  }
+
+  /** Called by the CLI after each join reply (Codex parity, issue #359 M1). A
+   *  legacy server that cannot sync leaves the selector unadvertised. A
+   *  re-negotiated connection re-seeds the baseline only when no control exists
+   *  yet — a durable control adopted by applyPermissionSync is preserved. */
+  setPermissionSyncSupported(supported: boolean): void {
+    if (this.#permissionSyncSupported === supported) return;
+    this.#permissionSyncSupported = supported;
+    if (supported && this.#permissionControl === null) {
+      this.#permissionControl = this.#baselineControl();
+    }
+    this.#emitState(this.#machine.state);
+  }
+
+  /** Applies the server's permission_sync for this connection (issue #359 M1).
+   *  On reconnect the server relays the durable control and the cell that
+   *  should be enforced (`next`); this adopts the control and re-applies `next`
+   *  to #config so the next turn's gate reads it. The wrapper is the final gate:
+   *  a `next` exceeding the launch ceiling is refused fail-closed, leaving the
+   *  current cell. Unlike a live set_permission this emits no applied
+   *  observation — the switch already applied before the disconnect. */
+  applyPermissionSync(message: PermissionSyncMessage): void {
+    if (message.control === null) return;
+    const control = message.control;
+    // A stale relay cannot regress an already-adopted higher revision.
+    if (control.revision < (this.#permissionControl?.revision ?? -1)) return;
+    this.#permissionControl = control;
+    if (control.status === "applied") {
+      this.#lastEffectivePermission = control.effective;
+    } else if (control.last_effective !== undefined) {
+      this.#lastEffectivePermission = control.last_effective;
+    }
+    const next = message.next.requested;
+    // The server relays approval for antigravity; keep the current value if a
+    // legacy sandbox/network-only next omits it. Resolved to a concrete value so
+    // #config.approval (non-optional) never receives undefined.
+    const approval = next.approval ?? this.#currentCell().approval;
+    const cell: PermissionConfiguration = {
+      sandbox: next.sandbox,
+      network_access: next.network_access,
+      approval,
+    };
+    const ceiling = this.#permissionCeiling();
+    if (ceiling !== null && ceilingExceeded(cell, ceiling) !== null) {
+      this.#warn("antigravity: permission_sync next exceeds the launch ceiling; ignored");
+    } else {
+      this.#config.sandbox = cell.sandbox;
+      this.#config.network_access = cell.network_access;
+      this.#config.approval = approval;
+    }
+    this.#emitState(this.#machine.state);
+  }
+
   /** Applies a staged permission switch at the start of a turn (ADR-0057 F4c
    *  Stage B0): mutates #config so the turn's fresh gate enforces the new cell,
    *  then reports the applied observation as both ext.permission_control and a
@@ -528,10 +624,11 @@ export class AntigravityHost implements EngineAdapter {
   }
 
   /** Promotes an `applying` permission switch to `applied` once the engine's
-   *  `init` event has set this turn's session identity (M4). Builds the
-   *  observation from engine-observed session_id / turn_id (the conversation
-   *  id — antigravity resumes by conversation and emits no separate turn id)
-   *  and the wrapper's own execution_id, then reports permission_applied. */
+   *  `init` event has set this turn's session identity (M4). session_id is the
+   *  engine-observed conversation id; turn_id is OMITTED — Antigravity has no
+   *  per-turn identifier and manufacturing one from the session id or a wrapper
+   *  token is forbidden (issue #359 M1, protocol.md "engine-observed
+   *  identities"). execution_id is the wrapper's own correlation token. */
   #confirmAppliedPermission(): void {
     const pending = this.#pendingAppliedObservation;
     if (pending === null || this.#sessionId === null) return;
@@ -541,7 +638,6 @@ export class AntigravityHost implements EngineAdapter {
     const observation: PermissionObservation = {
       ...submission,
       session_id: this.#sessionId,
-      turn_id: this.#sessionId,
       permission: { sandbox: cell.sandbox, approval, enforcement: "advisory" },
       network_access: effectiveNetworkAccess(cell.sandbox, cell.network_access),
     };
@@ -724,6 +820,12 @@ export class AntigravityHost implements EngineAdapter {
     let gateServer: GateServer | null = null;
     try {
       toolHost = await ToolHost.listen(this.#options.toolDescriptors ?? []);
+      if (!this.#isCurrent(generation)) return undefined;
+      // issue #359 M1: block this turn's gate until the server's permission_sync
+      // for the current connection has been applied, so a durable control/next
+      // relayed on reconnect lands before the gate reads the cell. A no-op once
+      // the sync arrived, or when sync is unsupported.
+      await (this.#options.waitForPermissionSync?.() ?? Promise.resolve());
       if (!this.#isCurrent(generation)) return undefined;
       // ADR-0057 F4c Stage B0 (issue #359): apply a staged permission switch
       // now, at the execution boundary, so this turn's fresh gate below reads
@@ -1186,7 +1288,7 @@ export class AntigravityHost implements EngineAdapter {
   }
 
   #statusExt(consumeOneShot = false): Record<string, unknown> {
-    const ext = initialStatusExt(this.#config, this.#catalog);
+    const ext = initialStatusExt(this.#config, this.#catalog, this.#permissionSyncSupported);
     if (this.#pendingModel !== null) ext.pending_model = this.#pendingModel;
     if (this.#switchError !== null) {
       ext.switch_error = this.#switchError;

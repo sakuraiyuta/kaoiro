@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { PermissionBroker, QuestionBroker, classifyInterAgentError, type Envelope, type InterAgentErrorClassifyInput, type WrapperConfig } from "@kaoiro/agent-common";
 import { AntigravityHost, initialStatusExt, isGateRegistered, type AntigravityHostOptions, type GateProbe, type SpawnedAgy } from "../src/host.js";
 import type { AntigravityLaunchConfig } from "../src/gate.js";
+import type { PermissionSyncMessage } from "@kaoiro/protocol";
 
 class FakeAgy extends EventEmitter {
   readonly stdout = new PassThrough();
@@ -67,6 +68,8 @@ function hostHarness(options: {
   onTurnEnd?: AntigravityHostOptions["onTurnEnd"];
   onToolStart?: AntigravityHostOptions["onToolStart"];
   onToolEnd?: AntigravityHostOptions["onToolEnd"];
+  permissionSyncSupported?: boolean;
+  waitForPermissionSync?: () => Promise<void>;
 } = {}) {
   const states: Envelope[] = [];
   const logs: Envelope[] = [];
@@ -90,6 +93,8 @@ function hostHarness(options: {
     ...(options.onTurnEnd === undefined ? {} : { onTurnEnd: options.onTurnEnd }),
     ...(options.onToolStart === undefined ? {} : { onToolStart: options.onToolStart }),
     ...(options.onToolEnd === undefined ? {} : { onToolEnd: options.onToolEnd }),
+    ...(options.permissionSyncSupported === undefined ? {} : { permissionSyncSupported: options.permissionSyncSupported }),
+    ...(options.waitForPermissionSync === undefined ? {} : { waitForPermissionSync: options.waitForPermissionSync }),
     spawn: (command, args, spawnOptions) => {
       const child = new FakeAgy();
       calls.push({ command, args, env: spawnOptions.env, child });
@@ -198,7 +203,10 @@ describe("AntigravityHost", () => {
     expect(applied.details.permission.approval).toBe("local");
     expect(applied.details.permission.enforcement).toBe("advisory");
     expect(applied.details.session_id).toBe("engine-sess-42");
-    expect(applied.details.turn_id).toBe("engine-sess-42");
+    // turn_id is OMITTED — antigravity has no engine per-turn identity and
+    // manufacturing one from the session id or a wrapper token is forbidden
+    // (issue #359 M1, protocol.md "engine-observed identities").
+    expect(applied.details).not.toHaveProperty("turn_id");
     // execution_id is the wrapper's own per-exec correlation id, distinct from
     // the engine session identity (protocol.md).
     expect(applied.details.execution_id).not.toBe("engine-sess-42");
@@ -234,13 +242,15 @@ describe("AntigravityHost", () => {
     host.close();
   });
 
-  it("advertises permission_switch_axes and supports_permission_switch when max_* is present", () => {
+  it("advertises permission_switch_axes and supports_permission_switch when max_* is present and permission_sync is negotiated (issue #359 M1)", () => {
     const ext = initialStatusExt(
       config({
         max_sandbox: "workspace-write",
         max_approval: "local",
         max_network_access: false,
       }),
+      undefined,
+      true,
     );
     const caps = ext.session_capabilities as Record<string, unknown>;
     expect(caps.supports_permission_switch).toBe(true);
@@ -251,11 +261,171 @@ describe("AntigravityHost", () => {
     });
   });
 
-  it("omits permission_switch_axes when the runner relayed no ceiling (legacy)", () => {
-    const ext = initialStatusExt(config());
+  it("gates the selector on negotiation: max_* present but permission_sync NOT negotiated advertises nothing (issue #359 M1)", () => {
+    const ext = initialStatusExt(
+      config({
+        max_sandbox: "workspace-write",
+        max_approval: "local",
+        max_network_access: false,
+      }),
+      undefined,
+      false,
+    );
     const caps = ext.session_capabilities as Record<string, unknown>;
     expect(caps).not.toHaveProperty("permission_switch_axes");
     expect(caps).not.toHaveProperty("supports_permission_switch");
+  });
+
+  it("omits permission_switch_axes when the runner relayed no ceiling (legacy)", () => {
+    const ext = initialStatusExt(config(), undefined, true);
+    const caps = ext.session_capabilities as Record<string, unknown>;
+    expect(caps).not.toHaveProperty("permission_switch_axes");
+    expect(caps).not.toHaveProperty("supports_permission_switch");
+  });
+
+  it("seeds a revision-0 baseline control when permission_sync is negotiated so the server can allocate revisions (issue #359 M1)", () => {
+    const cfg = config({
+      approval: "on-request",
+      max_sandbox: "workspace-write",
+      max_approval: "local",
+      max_network_access: false,
+    });
+    const { host } = hostHarness({ config: cfg, permissionSyncSupported: true });
+    const ext = host.statusExtSnapshot();
+    expect((ext.session_capabilities as Record<string, unknown>).supports_permission_switch).toBe(
+      true,
+    );
+    const ctrl = ext.permission_control as Record<string, unknown>;
+    expect(ctrl.revision).toBe(0);
+    expect(ctrl.status).toBe("pending");
+    expect(ctrl.requested).toEqual({
+      sandbox: "workspace-write",
+      network_access: false,
+      approval: "on-request",
+    });
+    // A baseline carries no submitted / effective evidence yet.
+    expect(ctrl).not.toHaveProperty("submitted");
+    expect(ctrl).not.toHaveProperty("effective");
+    host.close();
+  });
+
+  it("advertises nothing and seeds no baseline when permission_sync was not negotiated (issue #359 M1)", () => {
+    const cfg = config({
+      max_sandbox: "workspace-write",
+      max_approval: "local",
+      max_network_access: false,
+    });
+    const { host } = hostHarness({ config: cfg, permissionSyncSupported: false });
+    const ext = host.statusExtSnapshot();
+    expect(ext).not.toHaveProperty("permission_control");
+    expect(ext.session_capabilities as Record<string, unknown>).not.toHaveProperty(
+      "supports_permission_switch",
+    );
+    host.close();
+  });
+
+  it("applyPermissionSync re-applies the durable next to config and adopts the control on reconnect (issue #359 M1)", () => {
+    // Permissive ceiling so the durable next (a previously accepted switch) passes
+    // the wrapper's final gate.
+    const cfg = config({
+      approval: "on-request",
+      max_sandbox: "danger-full-access",
+      max_approval: "never",
+      max_network_access: true,
+    });
+    const { host } = hostHarness({ config: cfg, permissionSyncSupported: true });
+    const nextCell = {
+      sandbox: "danger-full-access" as const,
+      network_access: true,
+      approval: "never" as const,
+    };
+    const submission = { revision: 2, requested: nextCell, execution_id: "exec-2" };
+    // A durable effective observation with turn_id OMITTED (antigravity).
+    const effective = {
+      ...submission,
+      session_id: "sess-old",
+      permission: { sandbox: "danger-full-access" as const, approval: "never" as const, enforcement: "advisory" as const },
+      network_access: true,
+    };
+    const message: PermissionSyncMessage = {
+      version: "0",
+      control: {
+        revision: 2,
+        requested: nextCell,
+        status: "applied",
+        constraints: { approval: "never", enforcement: "advisory" },
+        submitted: submission,
+        effective,
+        last_effective: effective,
+      },
+      next: { revision: 2, requested: nextCell },
+    };
+    host.applyPermissionSync(message);
+    const ext = host.statusExtSnapshot();
+    // The next-turn gate reads the re-applied cell.
+    expect((ext.permission as Record<string, unknown>).sandbox).toBe("danger-full-access");
+    expect((ext.permission as Record<string, unknown>).approval).toBe("never");
+    const ctrl = ext.permission_control as Record<string, unknown>;
+    expect(ctrl.revision).toBe(2);
+    expect(ctrl.status).toBe("applied");
+    host.close();
+  });
+
+  it("applyPermissionSync refuses a durable next that exceeds the launch ceiling, fail-closed (issue #359 M1)", () => {
+    // Restrictive ceiling: a relayed next above it must NOT mutate config — the
+    // wrapper is the final gate and the server can never widen past launch.
+    const cfg = config({
+      approval: "on-request",
+      max_sandbox: "workspace-write",
+      max_approval: "local",
+      max_network_access: false,
+    });
+    const { host } = hostHarness({ config: cfg, permissionSyncSupported: true });
+    const overCell = {
+      sandbox: "danger-full-access" as const,
+      network_access: true,
+      approval: "never" as const,
+    };
+    const message: PermissionSyncMessage = {
+      version: "0",
+      control: {
+        revision: 5,
+        requested: overCell,
+        status: "pending",
+        constraints: { approval: "local", enforcement: "advisory" },
+      },
+      next: { revision: 5, requested: overCell },
+    };
+    host.applyPermissionSync(message);
+    const ext = host.statusExtSnapshot();
+    // Config unchanged: the launch cell still governs the next gate.
+    expect((ext.permission as Record<string, unknown>).sandbox).toBe("workspace-write");
+    expect((ext.permission as Record<string, unknown>).approval).toBe("on-request");
+    host.close();
+  });
+
+  it("blocks a turn's gate until the permission_sync barrier resolves (issue #359 M1)", async () => {
+    const cfg = config({
+      max_sandbox: "workspace-write",
+      max_approval: "local",
+      max_network_access: false,
+    });
+    let releaseBarrier!: () => void;
+    const barrier = new Promise<void>((resolve) => {
+      releaseBarrier = resolve;
+    });
+    const { host, calls } = hostHarness({
+      config: cfg,
+      permissionSyncSupported: true,
+      waitForPermissionSync: () => barrier,
+    });
+    void host.send("hello");
+    // While the barrier is pending, the gate is not built and no child is spawned.
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(calls.length).toBe(0);
+    releaseBarrier();
+    await waitFor(() => calls.length === 1);
+    host.close();
   });
 
   it("on-failure approvalはspawn前に拒否する", () => {

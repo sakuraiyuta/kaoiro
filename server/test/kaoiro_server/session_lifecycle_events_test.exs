@@ -355,6 +355,26 @@ defmodule KaoiroServer.SessionLifecycleEventsTest do
       assert stored == valid_observation()
     end
 
+    test "permission_applied は turn_id を省いた observation も受理・保存する (advisory antigravity, issue #359 M1)",
+         %{name: name} do
+      no_turn = Map.delete(valid_observation(), "turn_id")
+
+      :ok =
+        SessionLifecycleEvents.record_permission_event(
+          "a.pa-noturn",
+          "permission_applied",
+          "2026-09-06T00:00:00Z",
+          no_turn,
+          name
+        )
+
+      assert [%{kind: "permission_applied", details: stored}] =
+               SessionLifecycleEvents.list_for_agent("a.pa-noturn", name)
+
+      assert stored == no_turn
+      refute Map.has_key?(stored, "turn_id")
+    end
+
     test "permission_applied の enforcement は closed enum で検証される", %{name: name} do
       bad = put_in(valid_observation(), ["permission", "enforcement"], "yolo")
 
@@ -857,5 +877,41 @@ defmodule KaoiroServer.SessionLifecycleEventsTest do
     {:ok, _pid} = SessionLifecycleEvents.start_link(name: name, path: path, cap: 3)
 
     assert [%{kind: "compacting"}] = SessionLifecycleEvents.list_for_agent("a.legacy", name)
+  end
+
+  # issue #359 M1: a permission_applied observation that legitimately omits
+  # turn_id (advisory antigravity) must survive boot-load re-validation, not be
+  # dropped as malformed.
+  test "a stored observation that omits turn_id survives restart re-validation (issue #359 M1)",
+       %{name: name, path: path} do
+    no_turn = %{
+      "revision" => 1,
+      "requested" => %{"sandbox" => "workspace-write", "network_access" => false},
+      "execution_id" => "e1",
+      "session_id" => "s1",
+      "network_access" => false,
+      "permission" => %{"sandbox" => "workspace-write", "approval" => "never"}
+    }
+
+    :ok =
+      SessionLifecycleEvents.record_permission_event(
+        "a.pa-restart",
+        "permission_applied",
+        "2026-09-06T00:00:00Z",
+        no_turn,
+        name
+      )
+
+    # Force the append cast through before stopping (a list read drains the
+    # same FIFO mailbox).
+    assert [%{details: ^no_turn}] = SessionLifecycleEvents.list_for_agent("a.pa-restart", name)
+    GenServer.stop(Process.whereis(name))
+
+    {:ok, _pid} = SessionLifecycleEvents.start_link(name: name, path: path, cap: 3)
+
+    assert [%{kind: "permission_applied", details: stored}] =
+             SessionLifecycleEvents.list_for_agent("a.pa-restart", name)
+
+    assert stored == no_turn
   end
 end

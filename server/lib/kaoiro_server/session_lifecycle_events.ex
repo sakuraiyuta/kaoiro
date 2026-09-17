@@ -298,24 +298,36 @@ defmodule KaoiroServer.SessionLifecycleEvents do
   defp maybe_put_previous(map, previous), do: Map.put(map, "previous", previous)
 
   @observation_keys ~w(revision requested execution_id session_id turn_id network_access permission)
+  # issue #359 M1: turn_id is optional. An advisory engine with no per-turn
+  # identity (Antigravity) omits it, and manufacturing one from a session id or
+  # a wrapper token is forbidden (protocol.md, "engine-observed identities").
+  # The match requires the six always-present keys; turn_id, when present, must
+  # be a valid audit id. This sanitizer is engine-agnostic on purpose: it is also
+  # reached by a server-derived `previous` observation (resolve_permission_previous
+  # relays a prior effective, which is 6-key for Antigravity) and by boot-load
+  # re-validation, neither of which has the wrapper's engine in hand. The wire
+  # gate that keeps the omission exclusive to Antigravity — rejecting a missing
+  # turn_id from any other engine's wrapper — lives at the permission_applied
+  # ingestion in WrapperChannel, keyed on the negotiated permission_sync engine.
   defp sanitize_observation_core(
          %{
            "revision" => revision,
            "requested" => requested,
            "execution_id" => execution_id,
            "session_id" => session_id,
-           "turn_id" => turn_id,
            "network_access" => network_access,
            "permission" => permission
          } = details
        )
        when is_boolean(network_access) and map_size(details) <= 7 do
+    turn_id = Map.get(details, "turn_id")
+
     with [] <- Map.keys(details) -- @observation_keys,
          true <- valid_revision?(revision),
          {:ok, sanitized_requested} <- sanitize_requested(requested),
          true <- valid_audit_id?(execution_id),
          true <- valid_audit_id?(session_id),
-         true <- valid_audit_id?(turn_id),
+         true <- is_nil(turn_id) or valid_audit_id?(turn_id),
          {:ok, sanitized_permission} <- sanitize_permission_axes(permission) do
       {:ok,
        %{
@@ -323,10 +335,10 @@ defmodule KaoiroServer.SessionLifecycleEvents do
          "requested" => sanitized_requested,
          "execution_id" => execution_id,
          "session_id" => session_id,
-         "turn_id" => turn_id,
          "network_access" => network_access,
          "permission" => sanitized_permission
-       }}
+       }
+       |> maybe_put_field("turn_id", turn_id)}
     else
       _ -> :error
     end

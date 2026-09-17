@@ -399,7 +399,14 @@ export interface PermissionSubmission extends PermissionSelection {
 
 export interface PermissionObservation extends PermissionSubmission {
   session_id: string;
-  turn_id: string;
+  /** Engine-observed turn identity. Omitted ONLY by an advisory engine that
+   * has no per-turn identifier of its own (Antigravity resumes by conversation
+   * and emits no turn id, ADR-0057 F4c). Codex/Claude Code keep it required —
+   * fabricating one from a session id or a wrapper token is forbidden
+   * (see protocol.md, "engine-observed identities"). The engine that may omit
+   * it is the wrapper's self-reported one, so the server relaxes the audit
+   * shape only for that engine (issue #359 M1). */
+  turn_id?: string;
   permission: PermissionAxesExt;
   /** Normalized observation; requested.network_access remains the raw toggle. */
   network_access: boolean;

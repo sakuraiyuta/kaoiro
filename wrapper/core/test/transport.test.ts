@@ -666,6 +666,83 @@ describe("ServerLink — permission synchronization", () => {
     expect(only.control.effective.requested.approval).toBe("local");
   });
 
+  it("accepts an applied permission_sync whose effective observation omits turn_id (advisory antigravity, issue #359 M1)", async () => {
+    const received: unknown[] = [];
+    const link = new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      permissionSync: {
+        engine: "antigravity",
+        onSync: (message) => received.push(message),
+      },
+    });
+    mock.joinReceivers.get("ok")?.({ permission_sync: true });
+    await expect(link.waitForPermissionSyncNegotiation()).resolves.toBe(true);
+
+    const cell = { sandbox: "workspace-write", network_access: false, approval: "local" };
+    const submission = { revision: 6, requested: cell, execution_id: "e6" };
+    const control = {
+      revision: 6,
+      requested: cell,
+      status: "applied",
+      constraints: { approval: "local", enforcement: "advisory" },
+      submitted: submission,
+      // effective OMITS turn_id — antigravity has no engine per-turn identity.
+      effective: {
+        ...submission,
+        session_id: "s6",
+        permission: { sandbox: "workspace-write", approval: "local", enforcement: "advisory" },
+        network_access: false,
+      },
+    };
+    emit("permission_sync", {
+      version: "0",
+      control,
+      next: { revision: 6, requested: cell },
+    });
+    await vi.waitFor(() => expect(received.length).toBe(1));
+    const only = received[0] as { control: { effective: Record<string, unknown> } };
+    expect(only.control.effective).not.toHaveProperty("turn_id");
+    expect(only.control.effective.session_id).toBe("s6");
+  });
+
+  it("still rejects an applied permission_sync whose effective turn_id is present but empty (issue #359 M1)", async () => {
+    const received: unknown[] = [];
+    const link = new ServerLink("ws://x/wrapper", "a.agent", {
+      personaId: "ao",
+      permissionSync: {
+        engine: "antigravity",
+        onSync: (message) => received.push(message),
+      },
+    });
+    mock.joinReceivers.get("ok")?.({ permission_sync: true });
+    await expect(link.waitForPermissionSyncNegotiation()).resolves.toBe(true);
+
+    const cell = { sandbox: "workspace-write", network_access: false, approval: "local" };
+    const submission = { revision: 7, requested: cell, execution_id: "e7" };
+    const control = {
+      revision: 7,
+      requested: cell,
+      status: "applied",
+      constraints: { approval: "local", enforcement: "advisory" },
+      submitted: submission,
+      effective: {
+        ...submission,
+        session_id: "s7",
+        // Present-but-invalid turn_id: optional means absent, NOT empty.
+        turn_id: "",
+        permission: { sandbox: "workspace-write", approval: "local", enforcement: "advisory" },
+        network_access: false,
+      },
+    };
+    emit("permission_sync", {
+      version: "0",
+      control,
+      next: { revision: 7, requested: cell },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(received.length).toBe(0);
+  });
+
   it("legacy join は capability false で既存 dispatch を止めない", async () => {
     const negotiated: boolean[] = [];
     const link = new ServerLink("ws://x/wrapper", "a.agent", {

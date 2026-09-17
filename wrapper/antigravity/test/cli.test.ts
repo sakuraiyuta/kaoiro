@@ -84,6 +84,44 @@ describe("Antigravity CLI", () => {
     ]);
   });
 
+  it("declares permission_sync to the server link and threads the negotiated flag to the host (issue #359 M1)", async () => {
+    let capturedServerOptions: Record<string, unknown> | undefined;
+    let capturedHostOptions: Record<string, unknown> | undefined;
+    const link = {
+      close: () => {},
+      send: () => {},
+      setSessionId: () => {},
+      reportPermissionLifecycle: () => {},
+      waitForPermissionSyncNegotiation: async () => true,
+      waitForPermissionSync: async () => {},
+    };
+    const host = {
+      state: "idle" as const,
+      statusExtSnapshot: () => ({ engine: "antigravity" }),
+      run: async () => {},
+    };
+
+    await runAntigravityCli({
+      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      loadConfig: () => config(),
+      createServerLink: (_url, _agentId, options) => {
+        capturedServerOptions = options as unknown as Record<string, unknown>;
+        queueMicrotask(() => options.onPersonaPrompt?.("system prompt"));
+        return link as never;
+      },
+      createHost: (_config, options) => {
+        capturedHostOptions = options as unknown as Record<string, unknown>;
+        return host as never;
+      },
+    });
+
+    expect(capturedServerOptions?.permissionSync).toEqual(
+      expect.objectContaining({ engine: "antigravity" }),
+    );
+    expect(capturedHostOptions?.permissionSyncSupported).toBe(true);
+    expect(typeof capturedHostOptions?.waitForPermissionSync).toBe("function");
+  });
+
   it("absorbs an unavailable effort switch delivered through the server link", async () => {
     const stderr = vi
       .spyOn(process.stderr, "write")
