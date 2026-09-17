@@ -79,6 +79,19 @@ agy --print "<turn text>" \
   resumable by id afterwards *(measured after ERROR-terminated turns)*. What
   the child prints on receiving a signal mid-stream is *(unverified)*; the
   adapter must treat child exit without a `result` as end of turn.
+- **Ordinary interrupt preserves queued turns** (issue #358). Interrupt aborts
+  only the active turn; turns already queued behind it are kept, and the drain
+  loop runs each afterwards under the new lifecycle generation with its own
+  delivery token. A queued inter-agent turn is an already-accepted delivery, so
+  dropping it silently would strand the sender's ledger with no ack and no
+  notice; preserving it lets the normal `onTurnStart` ack and `onTurnEnd`
+  settlement close it. Antigravity rejects attachments at `send()`, so the
+  queue never holds a temp turn to discard (unlike Codex's `#dropQueuedTempTurns`,
+  which keeps text turns and drops attachment turns). The active turn's own
+  attribution is unchanged, and any interrupted-notice for it is out of scope
+  here (a separate #351-class question). Queue retirement on close / fail-stop
+  (`reason: interrupted`) is issue #354's explicit path, at the coordinator
+  level, and is independent of the host queue.
 - **`--print-timeout`** is a Go duration; `24h` is accepted *(measured)*.
   Set it long because a turn can legitimately block on an operator decision
   (permission gate, ask_user_question) — see below.
