@@ -25,6 +25,13 @@ by live verification are recorded under “Live verification notes” below.
 
 ## Definition
 
+The internal app-server projection is specified separately in
+[the Codex wrapper internals](../../wrapper/codex/README.md) and
+[ADR-0058 Appendix C](../adr/0058-codex-app-server-turn-steer.md).
+Normal launch continues to use the exec mapping below. The app-server path
+reuses its known-item adapter functions, but preserves phase-aware final text,
+all completed assistant rows, and the app-server terminal status independently.
+
 ### Main API and process model
 
 ```typescript

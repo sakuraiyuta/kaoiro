@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { AppServerSession } from "../src/app_server_session.js";
-import type { AppServerNotification } from "../src/app_server_rpc.js";
+import type { AppServerProjection } from "../src/app_server_projection.js";
+import { materializeLocalImages, cleanupLocalImages } from "../src/upload.js";
 
 // Real CLI startup inherits outward traffic, including update checks. Analytics
 // is off; the provider/auth are local, but offline runners may start more slowly.
@@ -25,12 +26,17 @@ it("uses the default session and real MCP bridge for images and instructions acr
       type: "message", id: `msg_${n}`, role: "assistant", status: "completed",
       content: [{ type: "output_text", text: "DONE", annotations: [] }], phase: "final_answer",
     };
+    const output = n % 2 === 1 ? [item] : [
+      { ...item, id: `msg_${n}_first`, content: [{ type: "output_text", text: "FIRST", annotations: [] }] }, item,
+    ];
     response.writeHead(200, { "content-type": "text/event-stream" });
     for (const event of [
       { type: "response.created", response: { id: `r${n}`, object: "response", status: "in_progress", output: [] } },
-      { type: "response.output_item.added", output_index: 0, item: { ...item, status: "in_progress" } },
-      { type: "response.output_item.done", output_index: 0, item },
-      { type: "response.completed", response: { id: `r${n}`, object: "response", status: "completed", output: [item],
+      ...output.flatMap((value, output_index) => [
+        { type: "response.output_item.added", output_index, item: { ...value, status: "in_progress" } },
+        { type: "response.output_item.done", output_index, item: value },
+      ]),
+      { type: "response.completed", response: { id: `r${n}`, object: "response", status: "completed", output,
         usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } },
     ]) response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
     response.end();
@@ -51,12 +57,16 @@ shell_snapshot = false
 enabled = false
 `;
   let session: AppServerSession | undefined;
+  let materialized: Awaited<ReturnType<typeof materializeLocalImages>> | undefined;
   try {
     await writeFile(join(home, "config.toml"), config);
-    const image = join(home, "image.png");
     // A complete 64x64 PNG: decoding is performed by the real CLI.
     const imageBytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAb0lEQVR4nO3PAQkAAAyEwO9feoshgnABdLep8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3IPanc8OLDQitxAAAAAElFTkSuQmCC", "base64");
-    await writeFile(image, imageBytes);
+    materialized = await materializeLocalImages("fuji-348-session-test", [{
+      meta: { upload_id: "image", filename: "image.png", mime: "image/png", size: imageBytes.length, chunks: 1 },
+      chunks: new Map([[0, imageBytes]]), sealed: true, accumulatedBytes: imageBytes.length, addedAt: Date.now(),
+    }]);
+    const image = materialized.paths[0]!;
     vi.stubEnv("CODEX_HOME", home);
     vi.stubEnv("HOME", home);
     for (const name of ["OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL", "OPENAI_ORG_ID"]) vi.stubEnv(name, undefined);
@@ -78,12 +88,24 @@ enabled = false
         transport: { onDiagnostic: message => diagnostics.push(message) },
       });
       threadId = threadId === undefined ? await session.startThread() : await session.resumeThread(threadId);
-      const turn = await session.startTurn({ threadId, hostTurnToken: `host-${index}`, input: [
+      const turn = await session.startProjectedTurn({ threadId, hostTurnToken: `host-${index}`, clientUserMessageId: `user-${index}`, input: [
         { type: "text", text: `USER_${index}` }, { type: "local_image", path: image }, { type: "text", text: `AFTER_${index}` },
       ] });
-      const events: AppServerNotification[] = [];
+      const events: AppServerProjection[] = [];
       for await (const event of turn.events) events.push(event);
-      expect(events.at(-1)).toMatchObject({ method: "turn/completed", params: { turn: { status: "completed" } } });
+      expect(events.filter(event => event.kind === "result")).toEqual([
+        { kind: "result", status: "completed", payload: { text: "DONE", is_error: false } },
+      ]);
+      expect(events.filter(event => event.kind === "log" && event.payload.kind === "assistant")).toEqual([
+        { kind: "log", payload: { kind: "assistant", text: "FIRST" } },
+        { kind: "log", payload: { kind: "assistant", text: "DONE" } },
+      ]);
+      expect(events.some(event => event.kind === "adapter" && event.event.kind === "assistant")).toBe(true);
+      expect(events.some(event => event.kind === "log" && event.payload.kind === "tool_use" && event.payload.tool_name === "mcp__kaoiro__probe")).toBe(true);
+      expect(events.some(event => event.kind === "log" && event.payload.kind === "tool_result" && event.payload.output?.includes(`BRIDGE_OK_${index}`))).toBe(true);
+      expect(turn.identity).toMatchObject({ threadId, hostTurnToken: `host-${index}`, clientUserMessageId: `user-${index}` });
+      expect(typeof turn.identity.requestId).toBe("number");
+      expect(typeof turn.identity.turnId).toBe("string");
       expect(toolCalls).toBe(index);
       expect(requests).toHaveLength(index * 2);
       const beforeTool = requests[index * 2 - 2]!;
@@ -120,6 +142,7 @@ enabled = false
     expect(await readdir(home)).not.toContain("auth.json");
   } finally {
     await session?.close();
+    if (materialized) await cleanupLocalImages(materialized.dir, message => { throw new Error(message); });
     vi.unstubAllEnvs();
     server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));

@@ -634,3 +634,52 @@ launch selection remain on exec. Result/usage/compaction/history projection,
 host lifecycle and inter-agent integration, and launch parity acceptance are
 separate remaining increments. No steering or external-message input has been
 enabled, and this increment does not change the ADR's status.
+
+### Increment (4a): result and progress projection
+
+The internal `AppServerSession.startProjectedTurn` wraps one raw turn stream
+with `app_server_projection.ts`. Thread/turn identity gates precede item
+projection; started/completed item ids deduplicate within that turn. Known
+assistant, reasoning, command, file-change, MCP and web-search items reuse
+the exec adapter after closed shape conversion. File-change `inProgress`
+has no exec SDK counterpart, so its start is projected explicitly rather
+than cast into a completed SDK item. Textual `functionCallOutput` content has
+an explicit display-only mapping; unsupported item kinds are not inferred.
+Plan updates use the existing bounded `normalizeTasklist` implementation.
+
+Completed assistant items each produce a log. `turn/completed.itemsView=summary`
+does not overwrite those logs. Only the matching terminal notification yields
+one result, retaining completed/failed/interrupted status. The last
+`final_answer` supplies result text, or the last unphased message when no final
+answer exists. EOF without a terminal is an error; a retry notification is
+not itself terminal. Log and result bounds reuse agent-common, including the
+error-detail boundary used by `makeResult`; envelope emission remains the
+future host's responsibility.
+
+External shape references are the same pinned stable schema artifact as the
+compatibility gate above: `ItemStartedNotification`, `ItemCompletedNotification`
+(`ThreadItem`), `TurnStartedNotification`, `TurnCompletedNotification` (`Turn`,
+`TurnStatus`), `AgentMessageDeltaNotification`, reasoning/command output delta
+notifications, `McpToolCallProgressNotification`, `TurnPlanUpdatedNotification`,
+and `ErrorNotification`. The schema's deprecated `FileChangeOutputDeltaNotification`
+also maps to tool progress; its schema explicitly says the server no longer
+emits it, so coverage is fixture-only. Final-answer selection
+also follows the recorded Python reference's `_run.py` phase fallback.
+
+The default-session integration test now takes an attachment produced by
+`materializeLocalImages` and verifies its exact PNG bytes at the local Responses
+endpoint. Relative paths are rejected before RPC to avoid ambiguity between
+the process and thread working directories. Session close
+does not remove the caller-owned materialized image.
+
+For both start and resume, the real 0.153.4 child executes the kaoiro MCP probe
+and projects its call/result logs. The local provider then supplies two ordinary
+assistant messages with `phase=final_answer` in one response: both completed
+rows survive, and exactly one terminal result uses the second answer. This
+requires neither steering nor external-message input. Malformed/duplicate
+notifications, foreign identities, interruption/failure, and missing terminals
+are tested with fixtures, not claimed as live model behavior.
+
+Telemetry/compaction (4b) and history (4c) are separate review/landing units.
+Normal launch, `CodexHost`, IA lifecycle, capabilities, protocol version, and
+this ADR's status remain unchanged.

@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import { appServerInput, type AppServerInput } from "../src/app_server_input.js";
 
 describe("app-server input conversion", () => {
+  it.each(["image.png", "../image.png", "./image.png"])("rejects relative image path %s", path => {
+    expect(() => appServerInput([{ type: "local_image", path }])).toThrow(TypeError);
+  });
   it("keeps text and local image ordering without retaining caller objects", () => {
     expect(appServerInput("hello")).toEqual([{ type: "text", text: "hello", text_elements: [] }]);
     const input: AppServerInput = [{ type: "text", text: "one" }, { type: "local_image", path: "/tmp/image.png" }, { type: "text", text: "two" }];

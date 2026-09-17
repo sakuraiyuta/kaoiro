@@ -7,6 +7,7 @@ import {
   AppServerTransport, type AppServerThreadOptions, type AppServerTurn, type AppServerTurnInput,
 } from "./app_server_transport.js";
 import type { AppServerRpcOptions } from "./app_server_rpc.js";
+import { projectAppServerTurn, type AppServerProjectedTurn } from "./app_server_projection.js";
 
 export interface AppServerSessionOptions {
   thread?: Omit<AppServerThreadOptions, "config">;
@@ -103,6 +104,10 @@ export class AppServerSession {
       throw new Error("App-server session thread is not ready or does not match");
     }
     return this.#transport.startTurn(input);
+  }
+
+  async startProjectedTurn(input: AppServerTurnInput): Promise<AppServerProjectedTurn> {
+    return projectAppServerTurn(await this.startTurn(input));
   }
 
   close(): Promise<void> {

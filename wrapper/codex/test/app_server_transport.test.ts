@@ -61,6 +61,21 @@ function transportFixture() {
 }
 
 describe("app-server JSONL process", () => {
+  it("rejects relative images before turn RPC or admission changes", async () => {
+    const f = transportFixture();
+    f.handle(request => {
+      if (request.method === "initialize") f.respond(request, { userAgent: "test/0.153.4" });
+      if (request.method === "turn/start") {
+        f.respond(request, { turn: { id: "turn-1" } });
+        f.send(notification("turn/completed"));
+      }
+    });
+    await expect(f.transport.startTurn({ threadId: "thread-1", hostTurnToken: "bad",
+      input: [{ type: "local_image", path: "relative.png" }] })).rejects.toThrow(TypeError);
+    expect(f.sent).toEqual([]);
+    await collect((await f.transport.startTurn({ threadId: "thread-1", hostTurnToken: "good", input: "valid" })).events);
+    expect(f.sent.filter(r => r.method === "turn/start")).toHaveLength(1);
+  });
   it("correlates out-of-order responses and rejects server requests without echoing their payload", async () => {
     const f = fixture();
     const diagnostics: string[] = [];

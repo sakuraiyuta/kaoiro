@@ -32,7 +32,7 @@ and `experimentalApi` false. Unexpected server requests receive an explicit
 JSON-RPC rejection and an optional diagnostic without their payload. The
 `stderrTail` accessor retains up to 16,384 characters for diagnostics; callers
 must redact it before logging. There is no steer or external-message submission
-API. Result projection, compaction, history restoration, and host/IA lifecycle
+API. Telemetry, compaction, history restoration, and host/IA lifecycle
 integration remain later stages.
 
 `AppServerSession` composes the transport with the existing `ToolHost` and
@@ -40,7 +40,9 @@ integration remain later stages.
 resume, and supplies the same thread configuration in both cases. Developer
 instructions are a thread field; user text and local images use an ordered,
 closed input converter. Other input kinds, including external messages, are
-rejected. Caller-owned image files are neither copied nor removed. Host/launch
+rejected. Relative image paths are rejected before turn admission or RPC,
+avoiding ambiguity between the child process and thread working directories.
+Caller-owned image files are neither copied nor removed. Host/launch
 integration must supply materialized absolute image paths.
 
 The bridge retains exec's `default_tools_approval_mode = "approve"` and
@@ -62,5 +64,27 @@ but inherits CLI startup traffic and therefore does not assume fast offline
 startup. Network namespaces are not required by the test.
 The session integration test also executes a real bridge handler, checks image
 bytes and developer instructions at the provider, closes the child, then resumes
-with a new bridge and repeats those checks. It verifies transport and tool
-execution against a fixed local response, not external model reasoning.
+with a new bridge and repeats those checks. Its attachments come from the real
+`materializeLocalImages` function. It verifies transport and tool execution
+against a fixed local response, not external model reasoning.
+
+`startProjectedTurn` returns the same independent identities and one projection
+iterator owning the raw notification stream. Known items reuse the exec adapter
+for progress and bounded log payloads; file-change starts and textual function
+outputs have explicit app-server mappings. Unknown item kinds are ignored.
+Plan snapshots use `normalizeTasklist`. Started/completed item ids are deduplicated
+within a turn; unrelated thread/turn notifications cannot affect its projection.
+Deltas affect progress only, while completed assistant messages each yield a
+transcript row. Two final answers therefore remain two rows, including when the
+terminal contains only a summary of the last one.
+
+Only `turn/completed` produces a terminal result. Its status retains the
+completed/failed/interrupted distinction; retry notifications alone do not end
+a turn, and EOF without a terminal throws. Result text uses the last
+`final_answer`, falling back to the last unphased message only when no final
+answer exists. Text and error details use the existing shared bounds; eventual
+host relay still goes through `makeResult`. The local-provider integration
+test verifies two final answers, one result, and MCP call/result logs through
+the real CLI on both start and resume. Failure/interruption, duplicate frames,
+foreign identities, malformed items, and EOF projection use deterministic
+fixtures. This API is internal and does not connect to `CodexHost` or launch.

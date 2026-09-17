@@ -1,3 +1,5 @@
+import { isAbsolute } from "node:path";
+
 export type AppServerInput = string | ReadonlyArray<
   { type: "text"; text: string } | { type: "local_image"; path: string }
 >;
@@ -15,7 +17,7 @@ export function appServerInput(input: AppServerInput): AppServerWireInput[] {
     if (value.type === "text" && typeof value.text === "string") {
       return { type: "text", text: value.text, text_elements: [] };
     }
-    if (value.type === "local_image" && typeof value.path === "string" && value.path !== "") {
+    if (value.type === "local_image" && typeof value.path === "string" && isAbsolute(value.path)) {
       return { type: "localImage", path: value.path };
     }
     throw new TypeError("Unsupported app-server input item");
