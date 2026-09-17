@@ -319,7 +319,15 @@ export class AntigravityHost implements EngineAdapter {
 
   async interrupt(): Promise<void> {
     this.#lifecycleGeneration += 1;
-    this.#turnQueue = [];
+    // Preserve queued turns (issue #358): an ordinary interrupt aborts only
+    // the active turn (via the generation bump + SIGTERM below). Queued
+    // inter-agent turns are already accepted deliveries, so dropping them
+    // silently would strand the sender's delivery ledger with no ack and no
+    // notice. The drain loop's `finally` re-kick picks them up after the
+    // active turn unwinds, running each under the new generation with its
+    // own delivery token. Antigravity rejects attachments at `send()`, so
+    // the queue never holds a temp turn to discard (unlike Codex). Queue
+    // retirement on close / fail-stop is issue #354's explicit path.
     this.#options.permissionBroker.close();
     this.#options.questionBroker?.close();
     this.#clearPendingAfterInterrupt();
