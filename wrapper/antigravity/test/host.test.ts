@@ -479,7 +479,7 @@ if (args[0] === "models") {
     host.close();
   });
 
-  it("quota exhaustion を peer error と seven_day snapshot に写像し、成功後に解除する", async () => {
+  it("maps quota exhaustion to a peer error and seven_day snapshot until success", async () => {
     const turnErrors: Array<InterAgentErrorClassifyInput | undefined> = [];
     const now = "2026-09-17T00:00:00.000Z";
     const { host, states, calls } = hostHarness({
@@ -526,7 +526,7 @@ if (args[0] === "models") {
     host.close();
   });
 
-  it("unrecognized terminal error は api_error fallback 用 detail のままにする", async () => {
+  it("keeps an unrecognized terminal error on the api_error fallback", async () => {
     const turnErrors: Array<InterAgentErrorClassifyInput | undefined> = [];
     const { host, calls } = hostHarness({
       onTurnEnd: ({ error }) => turnErrors.push(error),

@@ -86,7 +86,7 @@ describe("agy stream-json adapter", () => {
     ["RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 148h49m28s.", 535_768],
     ["HTTP 429: quota exhausted. Resets in 2h 3m 4s", 7_384],
     ["RESOURCE_EXHAUSTED: quota exhausted. Resets in 52m13s", 3_133],
-  ])("quota exhaustion の reset delay を構造化する: %s", (error, resetDelaySeconds) => {
+  ])("structures the quota reset delay: %s", (error, resetDelaySeconds) => {
     expect(agyEventToQuotaExhaustion({
       event: "result",
       result: { status: "ERROR", error },
@@ -98,7 +98,10 @@ describe("agy stream-json adapter", () => {
     "RESOURCE_EXHAUSTED (code 429): reset time unavailable",
     "RESOURCE_EXHAUSTED (code 429): Resets in tomorrow",
     "RESOURCE_EXHAUSTED (code 429): Resets in 1h60m0s",
-  ])("quota/reset 形式を証明できない error は分類しない: %s", (error) => {
+    "HTTP 429: Resets in 1h 2m 3ms",
+    "HTTP 429: Resets in 1h 2.5m",
+    "NOT_RESOURCE_EXHAUSTED: Resets in 1h",
+  ])("does not classify an unproven quota/reset format: %s", (error) => {
     expect(agyEventToQuotaExhaustion({
       event: "result",
       result: { status: "ERROR", error },

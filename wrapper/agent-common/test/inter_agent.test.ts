@@ -1235,7 +1235,7 @@ describe("classifyInterAgentError (issue #131)", () => {
     });
   });
 
-  it("adapter が構造化した reset delay だけを rate_limit message に加える", () => {
+  it("adds only an adapter-structured reset delay to the rate_limit message", () => {
     expect(classifyInterAgentError({
       reason: "blocking_limit",
       detail: "RESOURCE_EXHAUSTED token=secret-value",
@@ -1246,7 +1246,7 @@ describe("classifyInterAgentError (issue #131)", () => {
     });
   });
 
-  it("reset delay が無い既存 engine の rate_limit 出力は変えない", () => {
+  it("preserves rate_limit output for existing engines without a reset delay", () => {
     expect(classifyInterAgentError({ reason: "blocking_limit" })).toEqual({
       code: "rate_limit",
       message: "the peer hit a rate limit",

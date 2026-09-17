@@ -1382,7 +1382,8 @@ value peers read through `list_agents`.
 - Antigravity reports an observed individual quota exhaustion in the canonical
   `seven_day` window: its terminal reset delay can span about 149 hours, which
   matches the weekly window, and using a canonical key keeps existing consumers
-  interoperable.
+  interoperable. The current `result.error` shape is inferred from the CLI's
+  internal log output; it has not been measured in a raw terminal stream event.
 
 #### Session operation tool — `request_compact` (phase-28 B2)
 

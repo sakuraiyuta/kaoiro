@@ -196,11 +196,11 @@ export function agyEventToQuotaExhaustion(
   const detail = agyEventToErrorDetail(event);
   if (
     detail === null ||
-    !/(?:RESOURCE_EXHAUSTED|\bHTTP\s*429\b|\bcode\s*429\b)/i.test(detail)
+    !/(?:\bRESOURCE_EXHAUSTED\b|\bHTTP\s*429\b|\bcode\s*429\b)/i.test(detail)
   ) {
     return null;
   }
-  const match = /\bResets in\s+(?:(\d+)\s*h\s*)?(?:(\d+)\s*m\s*)?(?:(\d+)\s*s)?\b/i.exec(detail);
+  const match = /\bResets in\s+(?:(\d+)\s*h\s*)?(?:(\d+)\s*m\s*)?(?:(\d+)\s*s\s*)?(?=[.,;:!?)]|$)/i.exec(detail);
   if (match === null || (match[1] === undefined && match[2] === undefined && match[3] === undefined)) {
     return null;
   }
