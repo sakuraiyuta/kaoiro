@@ -4,9 +4,12 @@
 // `replay_required: false` verdict doing nothing at all, and (d) a fresh
 // session answering with an empty replay so the server can mark it hydrated.
 
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { HistoryReplayer } from "../src/history_replay.js";
-import type { SidecarRecord } from "../src/ia_sidecar.js";
+import { IaSidecar, type SidecarRecord } from "../src/ia_sidecar.js";
 import type { Envelope } from "../src/types.js";
 
 function logEnvelope(text: string): Envelope {
@@ -218,5 +221,42 @@ describe("HistoryReplayer", () => {
     replayer.onVerdict({ replay_required: true, replay_id: "hydr-noia" });
 
     expect(events.some((e) => e.startsWith("replay_ia:"))).toBe(false);
+  });
+
+  it("replays only canonical messages from a compacted sidecar", () => {
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-history-sidecar-"));
+    const path = join(root, "self__generation.ia.jsonl");
+    const sidecar = new IaSidecar({
+      agentId: "self",
+      generation: "generation",
+      pendingDir: root,
+      resolveSessionPath: () => null,
+    });
+    writeFileSync(
+      path,
+      Array.from({ length: 205 }, (_, index) =>
+        `${JSON.stringify(sidecarRecord(index + 1))}\n`
+      ).join(""),
+    );
+    sidecar.read();
+    const restarted = new IaSidecar({
+      agentId: "self",
+      generation: "generation",
+      pendingDir: root,
+      resolveSessionPath: () => null,
+    });
+    const { replayer, replayIaItems } = harness({
+      readSidecar: () => restarted.read(),
+    });
+
+    replayer.markReady();
+    replayer.onVerdict({ replay_required: true, replay_id: "hydr-compact" });
+
+    expect(readFileSync(path, "utf8").split("\n")[0]).toContain(
+      '"type":"kaoiro_ia_sidecar_compaction"',
+    );
+    expect(replayIaItems[0]).toHaveLength(200);
+    expect(replayIaItems[0]?.[0]?.ingress_stamp).toEqual([6, 0]);
+    expect(replayIaItems[0]?.at(-1)?.ingress_stamp).toEqual([205, 0]);
   });
 });

@@ -4,11 +4,11 @@
 // {agent_id, generation}, bound to the session file once one exists, and
 // GC'd fail-closed when a previous generation never got that far.
 
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
-import { IaSidecar, parseSidecarLine } from "../src/ia_sidecar.js";
+import { IaSidecar, capNewestByStamp, parseSidecarLine } from "../src/ia_sidecar.js";
 import type { Envelope } from "../src/types.js";
 
 function iaEnvelope(body: string): Envelope {
@@ -32,6 +32,27 @@ function iaEnvelope(body: string): Envelope {
   } as unknown as Envelope;
 }
 
+function sidecarRecord(stamp: number, body = `m${stamp}`) {
+  return { ingress_stamp: [stamp, 0] as [number, number], envelope: iaEnvelope(body) };
+}
+
+function recordLine(stamp: number, body = `m${stamp}`): string {
+  return `${JSON.stringify(sidecarRecord(stamp, body))}\n`;
+}
+
+function markerLine(retainedCap = 200, baselineBytes = 0, version = 1): string {
+  return `${JSON.stringify({
+    type: "kaoiro_ia_sidecar_compaction",
+    version,
+    retained_cap: retainedCap,
+    baseline_bytes: baselineBytes,
+  })}\n`;
+}
+
+function physicalLines(path: string): string[] {
+  return readFileSync(path, "utf8").trimEnd().split("\n");
+}
+
 describe("IaSidecar", () => {
   let pendingDir: string;
   let sessionDir: string;
@@ -43,7 +64,10 @@ describe("IaSidecar", () => {
     warnings.length = 0;
   });
 
-  function makeSidecar(generation = "gen-1"): IaSidecar {
+  function makeSidecar(
+    generation = "gen-1",
+    overrides: Partial<ConstructorParameters<typeof IaSidecar>[0]> = {},
+  ): IaSidecar {
     return new IaSidecar({
       agentId: "host-1.self",
       generation,
@@ -51,6 +75,7 @@ describe("IaSidecar", () => {
       resolveSessionPath: (sessionId) =>
         join(sessionDir, `${sessionId}.ia.jsonl`),
       warn: (message) => warnings.push(message),
+      ...overrides,
     });
   }
 
@@ -218,6 +243,238 @@ describe("IaSidecar", () => {
     ]);
   });
 
+  it("matches the full reducer across reversed stamps, duplicates, and repeated compactions", () => {
+    const sidecar = makeSidecar();
+    const all = [];
+    const payload = "x".repeat(15_000);
+    for (let index = 0; index < 650; index += 1) {
+      const stamp = index % 2 === 0 ? 650 - index : index;
+      const record = sidecarRecord(stamp, `${payload}:${index}`);
+      all.push(record);
+      sidecar.append(record);
+      if (index % 75 === 0) {
+        const replacement = sidecarRecord(stamp, `${payload}:replacement:${index}`);
+        all.push(replacement);
+        sidecar.append(replacement);
+      }
+    }
+
+    const restarted = makeSidecar();
+    expect(restarted.read()).toEqual(capNewestByStamp(all));
+    expect(physicalLines(restarted.path())[0]).toContain(
+      '"type":"kaoiro_ia_sidecar_compaction"',
+    );
+  });
+
+  it("proves a physical tail is not an exact newest-stamp reducer", () => {
+    const physical = [];
+    for (let stamp = 2; stamp <= 401; stamp += 1) {
+      physical.push(sidecarRecord(stamp));
+    }
+    physical.push(sidecarRecord(1));
+
+    const oracle = capNewestByStamp(physical);
+    const blindTail = physical.slice(-200);
+    expect(oracle[0]?.ingress_stamp).toEqual([202, 0]);
+    expect(blindTail.map((record) => record.ingress_stamp[0])).toContain(1);
+    expect(blindTail.map((record) => record.ingress_stamp[0])).not.toContain(202);
+    expect(blindTail).not.toEqual(oracle);
+  });
+
+  it("compacts at the production 4 MiB budget and survives restart", () => {
+    const sidecar = makeSidecar();
+    const all = [];
+    let appendedBytes = 0;
+    for (let stamp = 1; appendedBytes < 4 * 1024 * 1024; stamp += 1) {
+      const record = sidecarRecord(stamp, "x".repeat(18_000));
+      const line = `${JSON.stringify(record)}\n`;
+      appendedBytes += Buffer.byteLength(line);
+      all.push(record);
+      sidecar.append(record);
+    }
+
+    const lines = physicalLines(sidecar.path());
+    expect(lines[0]).toContain('"type":"kaoiro_ia_sidecar_compaction"');
+    expect(lines).toHaveLength(201);
+    expect(lines.slice(1).map((line) => parseSidecarLine(line))).toEqual(
+      capNewestByStamp(all),
+    );
+
+    const restarted = makeSidecar();
+    expect(restarted.read()).toEqual(capNewestByStamp(all));
+    let restartGrowth = 0;
+    for (let stamp = 10_000; restartGrowth < 4 * 1024 * 1024; stamp += 1) {
+      const record = sidecarRecord(stamp, "y".repeat(18_000));
+      const line = `${JSON.stringify(record)}\n`;
+      restartGrowth += Buffer.byteLength(line);
+      all.push(record);
+      restarted.append(record);
+    }
+    expect(physicalLines(restarted.path())).toHaveLength(201);
+    expect(restarted.read()).toEqual(capNewestByStamp(all));
+  });
+
+  it("migrates an over-budget legacy file during bind without read", () => {
+    const target = join(sessionDir, "sess-large.ia.jsonl");
+    const rows = [];
+    let bytes = 0;
+    for (let stamp = 1; bytes <= 4 * 1024 * 1024; stamp += 1) {
+      const line = recordLine(stamp, "x".repeat(18_000));
+      rows.push(line);
+      bytes += Buffer.byteLength(line);
+    }
+    writeFileSync(target, rows.join(""));
+
+    const sidecar = makeSidecar();
+    sidecar.bind("sess-large");
+    const lines = physicalLines(target);
+    expect(lines[0]).toContain('"type":"kaoiro_ia_sidecar_compaction"');
+    expect(lines).toHaveLength(201);
+    sidecar.append(sidecarRecord(10_000, "after-bind"));
+    expect(sidecar.read().at(-1)?.envelope.payload.body).toBe("after-bind");
+  });
+
+  it("uses read as a backstop for a small unmarked legacy file", () => {
+    const sidecar = makeSidecar();
+    writeFileSync(
+      sidecar.path(),
+      [
+        ...Array.from({ length: 205 }, (_, index) => recordLine(index + 1)),
+        recordLine(205, "last duplicate wins"),
+        "{broken tail",
+      ].join(""),
+    );
+
+    const records = sidecar.read();
+    expect(records).toHaveLength(200);
+    expect(records.at(-1)?.envelope.payload.body).toBe("last duplicate wins");
+    expect(physicalLines(sidecar.path())).toHaveLength(201);
+    expect(makeSidecar().read()).toEqual(records);
+  });
+
+  it("keeps last-wins duplicate semantics when binding into a compacted target", () => {
+    const target = join(sessionDir, "sess-merge.ia.jsonl");
+    writeFileSync(
+      target,
+      Array.from({ length: 205 }, (_, index) => recordLine(index + 1)).join(""),
+    );
+    const existing = makeSidecar("existing");
+    existing.bind("sess-merge");
+    existing.read();
+
+    const pending = makeSidecar("pending");
+    pending.append(sidecarRecord(10, "pending duplicate wins"));
+    pending.bind("sess-merge");
+
+    const records = pending.read();
+    expect(records.find((record) => record.ingress_stamp[0] === 10)?.envelope.payload.body)
+      .toBe("pending duplicate wins");
+    expect(records).toEqual(capNewestByStamp([
+      ...Array.from({ length: 205 }, (_, index) => sidecarRecord(index + 1)),
+      sidecarRecord(10, "pending duplicate wins"),
+    ]));
+  });
+
+  it.each(["write", "rename"] as const)(
+    "leaves original bytes intact and backs off after a %s failure",
+    (failure) => {
+      const sidecar = makeSidecar("failure", {
+        testFileOperations: failure === "write"
+          ? { writeTemp: (path) => {
+              writeFileSync(path, "partial", { flag: "wx", mode: 0o600 });
+              throw new Error("write failed");
+            } }
+          : { rename: () => { throw new Error("rename failed"); } },
+      });
+      writeFileSync(
+        sidecar.path(),
+        Array.from({ length: 205 }, (_, index) => recordLine(index + 1)).join(""),
+      );
+      const before = readFileSync(sidecar.path(), "utf8");
+
+      expect(sidecar.read()).toEqual(
+        capNewestByStamp(Array.from({ length: 205 }, (_, index) => sidecarRecord(index + 1))),
+      );
+      expect(readFileSync(sidecar.path(), "utf8")).toBe(before);
+      const warningCount = warnings.length;
+      sidecar.append(sidecarRecord(300, "below next budget"));
+      expect(warnings).toHaveLength(warningCount);
+      expect(readdirSync(dirname(sidecar.path())).some((name) => name.includes(".compact-")))
+        .toBe(false);
+    },
+  );
+
+  it("aborts replacement when the source changes after its scan", () => {
+    let nextStamp = 300;
+    const sidecar = makeSidecar("source-change", {
+      testFileOperations: {
+        beforeReplace: (path) => {
+          appendFileSync(path, recordLine(nextStamp, `concurrent-${nextStamp}`));
+          nextStamp += 1;
+        },
+      },
+    });
+    writeFileSync(
+      sidecar.path(),
+      Array.from({ length: 205 }, (_, index) => recordLine(index + 1)).join(""),
+    );
+
+    sidecar.read();
+    sidecar.read();
+    const text = readFileSync(sidecar.path(), "utf8");
+    expect(text).toContain("concurrent-300");
+    expect(text).toContain("concurrent-301");
+    expect(text).not.toContain("kaoiro_ia_sidecar_compaction");
+    expect(warnings.filter((warning) => warning.includes("source changed"))).toHaveLength(2);
+  });
+
+  it("treats unknown and mid-file markers conservatively and keeps the minimum cap", () => {
+    const sidecar = makeSidecar();
+    writeFileSync(
+      sidecar.path(),
+      [
+        recordLine(1),
+        markerLine(150),
+        recordLine(2),
+        markerLine(100),
+        `${JSON.stringify({ type: "kaoiro_ia_sidecar_compaction", version: 1 })}\n`,
+        markerLine(50, 0, 2),
+        ...Array.from({ length: 203 }, (_, index) => recordLine(index + 3)),
+      ].join(""),
+    );
+
+    expect(sidecar.read()).toHaveLength(200);
+    const lines = physicalLines(sidecar.path());
+    expect(JSON.parse(lines[0]!).retained_cap).toBe(100);
+    expect(lines.slice(1).some((line) => line.includes("compaction"))).toBe(false);
+    expect(warnings.join("\n")).toContain("unreadable line");
+    expect(warnings.join("\n")).toContain("history is incomplete");
+  });
+
+  it("makes lossy retention explicit and creates no archive", () => {
+    const sidecar = makeSidecar();
+    writeFileSync(
+      sidecar.path(),
+      Array.from({ length: 205 }, (_, index) => recordLine(index + 1)).join(""),
+    );
+
+    sidecar.read();
+    const text = readFileSync(sidecar.path(), "utf8");
+    expect(text).not.toContain('"body":"m1"');
+    expect(text).toContain('"body":"m205"');
+    expect(readdirSync(dirname(sidecar.path())).filter((name) => name.includes("archive")))
+      .toEqual([]);
+  });
+
+  it("cleans an orphan compaction temp on activation", () => {
+    const pendingPath = join(pendingDir, "host-1.self__orphan.ia.jsonl");
+    const orphan = `${pendingPath}.compact-1-orphan.tmp`;
+    writeFileSync(orphan, "partial");
+
+    makeSidecar("orphan");
+    expect(existsSync(orphan)).toBe(false);
+  });
+
   it("起動時に同 agent の別 generation の pending journal を GC する", () => {
     const orphan = join(pendingDir, "host-1.self__gen-old.ia.jsonl");
     const otherAgent = join(pendingDir, "host-1.other__gen-old.ia.jsonl");
@@ -281,5 +538,6 @@ describe("sidecar file mode", () => {
     });
     sidecar.append({ ingress_stamp: [1, 0], envelope: iaEnvelope("a") });
     expect(readFileSync(sidecar.path(), "utf8")).toContain('"ingress_stamp"');
+    expect(statSync(sidecar.path()).mode & 0o777).toBe(0o600);
   });
 });

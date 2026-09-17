@@ -200,6 +200,31 @@ exact path and schema are finalized in the protocol-inter-agent revision).
   fsync is not required. Fix the sidecar path to the transcript directory,
   sanitize session_id, and do not follow symlinks.
 
+##### 2026-09-18 addendum — lossy replay-cache compaction
+
+The sidecar storage semantics change from an accidentally complete append-only
+record to a deliberately lossy replay cache. Once 4 MiB has been appended
+after a successful canonicalization, the wrapper atomically rewrites the file
+to the exact newest 200 records in ingress-stamp order. Bind/path activation
+migrates an over-budget legacy file, and read-time canonicalization is the
+backstop for smaller legacy files containing excess, duplicate, or malformed
+rows.
+
+Every canonical file begins with a non-message format marker. Its
+`retained_cap` is the minimum historical lossy cap and never increases, so a
+future reader cannot mistake a larger configured cap for recoverable history.
+Unknown or malformed marker versions are not trusted as growth bounds and
+fall back to a full scan. Compaction uses a mode-0600 sibling temporary file,
+source identity recheck, and atomic rename; failures keep the original source
+authoritative under the existing no-fsync and runner-single-writer assumptions.
+
+This decision is irreversible: records outside the retained set are deleted
+without an archive, and later cap increases cannot restore them. Archive
+rotation was rejected because it would add a permanent audit-store retention
+and crash-recovery surface while preserving linear disk growth. Any future
+forensic-retention requirement must define a separate audit log rather than
+depend on the replay cache.
+
 #### D3-3 Restoration (replay-only ingress)
 
 Restore the sidecar through a **display-replay-only W→S ingress**, and do not

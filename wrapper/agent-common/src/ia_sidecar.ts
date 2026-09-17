@@ -21,9 +21,10 @@
 // lost send-side ack simply means that message is not restorable. The
 // alternative — blocking a turn on disk — costs more than the loss.
 
-import { appendFileSync, closeSync, constants, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
+import { appendFileSync, closeSync, constants, fstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { boundErrorDetail, writeRedactedStderr } from "./redact.js";
 import type { Envelope } from "./types.js";
 
@@ -39,6 +40,10 @@ export interface SidecarRecord {
 /** Mirrors the server's per-pane projection cap (ADR-0051 D6). Replaying
  *  more could only ever be discarded on arrival. */
 const MAX_REPLAY_RECORDS = 200;
+const GROWTH_BUDGET_BYTES = 4 * 1024 * 1024;
+const COMPACTION_MARKER_TYPE = "kaoiro_ia_sidecar_compaction";
+const COMPACTION_MARKER_VERSION = 1;
+const COMPACTION_TEMP_INFIX = ".compact-";
 
 /** Same charset the engines allow in a transcript filename. A session_id
  *  reaches us over the wire, so it is validated before it becomes a path
@@ -46,6 +51,49 @@ const MAX_REPLAY_RECORDS = 200;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9-]{1,128}$/;
 
 const PENDING_SUFFIX = ".ia.jsonl";
+
+interface CompactionMarker {
+  type: typeof COMPACTION_MARKER_TYPE;
+  version: typeof COMPACTION_MARKER_VERSION;
+  retained_cap: number;
+  baseline_bytes: number;
+}
+
+interface SourceIdentity {
+  dev: bigint;
+  ino: bigint;
+  size: bigint;
+  mtimeNs: bigint;
+}
+
+interface SourceSnapshot {
+  text: string;
+  identity: SourceIdentity;
+  stable: boolean;
+}
+
+interface SidecarScan {
+  records: SidecarRecord[];
+  canonical: SidecarRecord[];
+  duplicateCount: number;
+  malformedCount: number;
+  validMarkers: Array<{ marker: CompactionMarker; lineBytes: number; lineIndex: number }>;
+  unknownMarkerCount: number;
+}
+
+interface IaSidecarTestFileOperations {
+  writeTemp?: (
+    path: string,
+    content: string,
+    writeDefault: () => void,
+  ) => void;
+  beforeReplace?: (sourcePath: string) => void;
+  rename?: (
+    from: string,
+    to: string,
+    renameDefault: () => void,
+  ) => void;
+}
 
 export function isValidSidecarSessionId(sessionId: string): boolean {
   return SESSION_ID_PATTERN.test(sessionId);
@@ -75,6 +123,8 @@ export interface IaSidecarOptions {
   resolveSessionPath: (sessionId: string) => string | null;
   pendingDir?: string;
   warn?: (message: string) => void;
+  /** Deterministic failure/source-change seam for sidecar tests only. */
+  testFileOperations?: IaSidecarTestFileOperations;
 }
 
 export class IaSidecar {
@@ -83,13 +133,16 @@ export class IaSidecar {
   readonly #pendingDir: string;
   readonly #pendingPath: string;
   readonly #warn: (message: string) => void;
+  readonly #testFileOperations: IaSidecarTestFileOperations | undefined;
   #path: string;
   #boundSessionId: string | null = null;
+  #growthBytes = 0;
 
   constructor(options: IaSidecarOptions) {
     this.#agentId = options.agentId;
     this.#resolveSessionPath = options.resolveSessionPath;
     this.#pendingDir = options.pendingDir ?? defaultPendingDir();
+    this.#testFileOperations = options.testFileOperations;
     this.#warn = (message): void => {
       if (options.warn !== undefined) {
         options.warn(boundErrorDetail(message));
@@ -103,6 +156,7 @@ export class IaSidecar {
     );
     this.#path = this.#pendingPath;
     this.#collectOrphanJournals();
+    this.#activatePath();
   }
 
   /** Where appends currently land — the pending journal until a session is
@@ -139,6 +193,10 @@ export class IaSidecar {
       } finally {
         closeSync(fd);
       }
+      this.#growthBytes += Buffer.byteLength(line);
+      if (this.#growthBytes >= GROWTH_BUDGET_BYTES) {
+        this.#compactCurrent("growth budget");
+      }
     } catch (err) {
       this.#warn(`ia sidecar: append failed (${this.#path}): ${String(err)}`);
     }
@@ -163,55 +221,41 @@ export class IaSidecar {
     }
     if (target === this.#path) {
       this.#boundSessionId = sessionId;
+      this.#activatePath();
       return;
     }
-    this.#move(this.#path, target);
+    const merged = this.#move(this.#path, target);
     this.#path = target;
     this.#boundSessionId = sessionId;
+    if (merged) {
+      this.#compactCurrent("bind merge");
+    } else {
+      this.#activatePath();
+    }
   }
 
   /** Reads back what this generation recorded, in INGRESS order and capped.
    *  Malformed / truncated lines are skipped with a warning so one bad tail
    *  cannot stop the rest of the timeline from being restored (D3-2). */
   read(): SidecarRecord[] {
-    let text: string;
-    try {
-      const fd = openSync(this.#path, constants.O_RDONLY | constants.O_NOFOLLOW);
-      try {
-        text = readFileSync(fd, "utf8");
-      } finally {
-        closeSync(fd);
-      }
-    } catch {
-      return [];
+    const snapshot = this.#readSnapshot();
+    if (snapshot === null) return [];
+    const scan = scanSidecar(snapshot.text);
+    this.#warnUnreadable(scan);
+    this.#warnIfHistoryIncomplete(scan);
+    if (needsCanonicalRewrite(scan, snapshot.identity.size)) {
+      this.#rewrite(snapshot, scan, "read backstop");
     }
-
-    const records: SidecarRecord[] = [];
-    let skipped = 0;
-    for (const raw of text.split("\n")) {
-      if (raw.trim() === "") continue;
-      const record = parseSidecarLine(raw);
-      if (record === null) {
-        skipped += 1;
-        continue;
-      }
-      records.push(record);
-    }
-    if (skipped > 0) {
-      this.#warn(
-        `ia sidecar: skipped ${skipped} unreadable line(s) in ${this.#path}`,
-      );
-    }
-    return capNewestByStamp(records, MAX_REPLAY_RECORDS);
+    return scan.canonical;
   }
 
-  #move(from: string, to: string): void {
+  #move(from: string, to: string): boolean {
     let content: string;
     try {
       content = readFileSync(from, "utf8");
     } catch {
       // Nothing recorded yet; the next append creates the target.
-      return;
+      return false;
     }
     try {
       mkdirSync(dirname(to), { recursive: true });
@@ -226,11 +270,166 @@ export class IaSidecar {
         // than clobber, and let the server's stamp identity dedupe.
         appendFileSync(to, content, { mode: 0o600 });
         rmSync(from, { force: true });
+        return true;
       } else {
         renameSync(from, to);
+        return false;
       }
     } catch (err) {
       this.#warn(`ia sidecar: bind ${from} -> ${to} failed: ${String(err)}`);
+      return false;
+    }
+  }
+
+  #activatePath(): void {
+    this.#cleanupCompactionTemps();
+    const snapshot = this.#readSnapshot();
+    if (snapshot === null) {
+      this.#growthBytes = 0;
+      return;
+    }
+    const scan = scanSidecar(snapshot.text);
+    this.#warnUnreadable(scan);
+    this.#warnIfHistoryIncomplete(scan);
+    const marker = trustedBaselineMarker(scan, snapshot.identity.size);
+    if (marker !== null) {
+      this.#growthBytes = Number(
+        snapshot.identity.size - BigInt(marker.lineBytes + marker.marker.baseline_bytes),
+      );
+      if (this.#growthBytes >= GROWTH_BUDGET_BYTES) {
+        this.#rewrite(snapshot, scan, "persisted growth budget");
+      }
+      return;
+    }
+    this.#growthBytes = Number(snapshot.identity.size);
+    if (
+      snapshot.identity.size >= BigInt(GROWTH_BUDGET_BYTES) ||
+      scan.validMarkers.length > 0 ||
+      scan.unknownMarkerCount > 0
+    ) {
+      this.#rewrite(snapshot, scan, "path activation");
+    }
+  }
+
+  #compactCurrent(reason: string): void {
+    const snapshot = this.#readSnapshot();
+    if (snapshot === null) {
+      this.#growthBytes = 0;
+      return;
+    }
+    const scan = scanSidecar(snapshot.text);
+    this.#rewrite(snapshot, scan, reason);
+  }
+
+  #rewrite(snapshot: SourceSnapshot, scan: SidecarScan, reason: string): boolean {
+    const retainedCap = scan.validMarkers.reduce(
+      (minimum, { marker }) => Math.min(minimum, marker.retained_cap),
+      MAX_REPLAY_RECORDS,
+    );
+    const data = scan.canonical.map((record) => `${JSON.stringify(record)}\n`).join("");
+    const marker: CompactionMarker = {
+      type: COMPACTION_MARKER_TYPE,
+      version: COMPACTION_MARKER_VERSION,
+      retained_cap: retainedCap,
+      baseline_bytes: Buffer.byteLength(data),
+    };
+    const content = `${JSON.stringify(marker)}\n${data}`;
+    const tempPath = `${this.#path}${COMPACTION_TEMP_INFIX}${process.pid}-${randomUUID()}.tmp`;
+    try {
+      if (!snapshot.stable) {
+        throw new Error("source changed while reading");
+      }
+      mkdirSync(dirname(this.#path), { recursive: true });
+      const writeDefault = (): void => writeCanonicalTemp(tempPath, content);
+      if (this.#testFileOperations?.writeTemp !== undefined) {
+        this.#testFileOperations.writeTemp(tempPath, content, writeDefault);
+      } else {
+        writeDefault();
+      }
+      this.#testFileOperations?.beforeReplace?.(this.#path);
+      const current = sourceIdentity(statSync(this.#path, { bigint: true }));
+      if (!sameSource(snapshot.identity, current)) {
+        throw new Error("source changed before replace");
+      }
+      const renameDefault = (): void => renameSync(tempPath, this.#path);
+      if (this.#testFileOperations?.rename !== undefined) {
+        this.#testFileOperations.rename(tempPath, this.#path, renameDefault);
+      } else {
+        renameDefault();
+      }
+      this.#growthBytes = 0;
+      return true;
+    } catch (err) {
+      this.#warn(
+        `ia sidecar: ${reason} compaction failed (${this.#path}): ${String(err)}`,
+      );
+      try {
+        rmSync(tempPath, { force: true });
+      } catch {
+        // A failed best-effort cleanup leaves an ignored sibling temp.
+      }
+      this.#growthBytes = 0;
+      return false;
+    }
+  }
+
+  #readSnapshot(): SourceSnapshot | null {
+    try {
+      const fd = openSync(this.#path, constants.O_RDONLY | constants.O_NOFOLLOW);
+      try {
+        const before = sourceIdentity(fstatSync(fd, { bigint: true }));
+        const text = readFileSync(fd, "utf8");
+        const after = sourceIdentity(fstatSync(fd, { bigint: true }));
+        return {
+          text,
+          identity: after,
+          stable: sameSource(before, after),
+        };
+      } finally {
+        closeSync(fd);
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  #warnIfHistoryIncomplete(scan: SidecarScan): void {
+    const retainedCap = scan.validMarkers.reduce<number | null>(
+      (minimum, { marker }) =>
+        minimum === null ? marker.retained_cap : Math.min(minimum, marker.retained_cap),
+      null,
+    );
+    if (retainedCap !== null && retainedCap < MAX_REPLAY_RECORDS) {
+      this.#warn(
+        `ia sidecar: history is incomplete; retained_cap=${retainedCap}, replay_cap=${MAX_REPLAY_RECORDS}`,
+      );
+    }
+  }
+
+  #warnUnreadable(scan: SidecarScan): void {
+    const skipped = scan.malformedCount + scan.unknownMarkerCount;
+    if (skipped > 0) {
+      this.#warn(
+        `ia sidecar: skipped ${skipped} unreadable line(s) in ${this.#path}`,
+      );
+    }
+  }
+
+  #cleanupCompactionTemps(): void {
+    let names: string[];
+    try {
+      names = readdirSync(dirname(this.#path));
+    } catch {
+      return;
+    }
+    const prefix = `${basename(this.#path)}${COMPACTION_TEMP_INFIX}`;
+    for (const name of names) {
+      if (!name.startsWith(prefix) || !name.endsWith(".tmp")) continue;
+      try {
+        rmSync(join(dirname(this.#path), name), { force: true });
+      } catch (err) {
+        this.#warn(`ia sidecar: compaction temp cleanup failed: ${String(err)}`);
+      }
     }
   }
 
@@ -259,6 +458,137 @@ export class IaSidecar {
       }
     }
   }
+}
+
+function writeCanonicalTemp(path: string, content: string): void {
+  const fd = openSync(
+    path,
+    constants.O_WRONLY |
+      constants.O_CREAT |
+      constants.O_EXCL |
+      constants.O_NOFOLLOW,
+    0o600,
+  );
+  try {
+    writeFileSync(fd, content, "utf8");
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function sourceIdentity(stat: {
+  dev: bigint;
+  ino: bigint;
+  size: bigint;
+  mtimeNs: bigint;
+}): SourceIdentity {
+  return {
+    dev: stat.dev,
+    ino: stat.ino,
+    size: stat.size,
+    mtimeNs: stat.mtimeNs,
+  };
+}
+
+function sameSource(left: SourceIdentity, right: SourceIdentity): boolean {
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeNs === right.mtimeNs
+  );
+}
+
+function scanSidecar(text: string): SidecarScan {
+  const records: SidecarRecord[] = [];
+  const validMarkers: SidecarScan["validMarkers"] = [];
+  let malformedCount = 0;
+  let unknownMarkerCount = 0;
+  const lines = text.split("\n");
+  for (const [lineIndex, raw] of lines.entries()) {
+    if (raw.trim() === "") continue;
+    const marker = parseCompactionMarker(raw);
+    if (marker === "unknown") {
+      unknownMarkerCount += 1;
+      continue;
+    }
+    if (marker !== null) {
+      validMarkers.push({
+        marker,
+        lineBytes: Buffer.byteLength(
+          lineIndex < lines.length - 1 ? `${raw}\n` : raw,
+        ),
+        lineIndex,
+      });
+      continue;
+    }
+    const record = parseSidecarLine(raw);
+    if (record === null) {
+      malformedCount += 1;
+    } else {
+      records.push(record);
+    }
+  }
+  const canonical = capNewestByStamp(records, MAX_REPLAY_RECORDS);
+  return {
+    records,
+    canonical,
+    duplicateCount: records.length - new Set(
+      records.map(({ ingress_stamp: stamp }) => `${stamp[0]}|${stamp[1]}`),
+    ).size,
+    malformedCount,
+    validMarkers,
+    unknownMarkerCount,
+  };
+}
+
+function parseCompactionMarker(raw: string): CompactionMarker | "unknown" | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const candidate = parsed as Partial<CompactionMarker>;
+  if (candidate.type !== COMPACTION_MARKER_TYPE) return null;
+  if (
+    candidate.version !== COMPACTION_MARKER_VERSION ||
+    !Number.isSafeInteger(candidate.retained_cap) ||
+    candidate.retained_cap! <= 0 ||
+    !Number.isSafeInteger(candidate.baseline_bytes) ||
+    candidate.baseline_bytes! < 0
+  ) {
+    return "unknown";
+  }
+  return candidate as CompactionMarker;
+}
+
+function trustedBaselineMarker(
+  scan: SidecarScan,
+  sourceSize: bigint,
+): SidecarScan["validMarkers"][number] | null {
+  if (
+    scan.validMarkers.length !== 1 ||
+    scan.validMarkers[0]!.lineIndex !== 0 ||
+    scan.unknownMarkerCount > 0
+  ) {
+    return null;
+  }
+  const marker = scan.validMarkers[0]!;
+  return BigInt(marker.lineBytes + marker.marker.baseline_bytes) <= sourceSize
+    ? marker
+    : null;
+}
+
+function needsCanonicalRewrite(scan: SidecarScan, sourceSize: bigint): boolean {
+  return (
+    scan.records.length !== scan.canonical.length ||
+    scan.duplicateCount > 0 ||
+    scan.malformedCount > 0 ||
+    scan.unknownMarkerCount > 0 ||
+    (scan.validMarkers.length > 0 && trustedBaselineMarker(scan, sourceSize) === null)
+  );
 }
 
 /** Newest `max` records in the server's ORDERING domain, not in file order.

@@ -706,6 +706,31 @@ host**, not the server (`InterAgentHistory` DETS is retired).
     message (low stamp) is appended after its ack. Cutting by file order would
     keep the old notice and drop the new message. Collapse duplicate rows with
     the same stamp into one row (from bind-time appends).
+  - **Compaction** (issue #192, 2026-09-18): the sidecar is a lossy replay
+    cache, not an append-only audit log. After 4 MiB has been appended since
+    the last successful canonicalization, rewrite it to the exact newest 200
+    records by `ingress_stamp`. The canonical file starts with a recognized
+    non-message marker containing format version, the minimum historical
+    `retained_cap`, and the canonical data byte baseline. `retained_cap` never
+    increases: a future larger replay cap must report that discarded history
+    is incomplete rather than implying it can be recovered. No archive is
+    created, so rows outside the retained set are irreversibly deleted.
+  - On path activation, immediately compact an unmarked legacy file whose
+    existing growth exceeds 4 MiB. `read()` is the backstop for smaller legacy
+    files with more than 200 unique valid rows, duplicates, malformed rows, or
+    an untrusted marker. A marker with an unknown version, a malformed marker,
+    multiple markers, or a marker outside the first line is not trusted as a
+    growth bound; perform a full scan and canonicalize from the valid message
+    rows.
+  - Canonicalization writes a mode-0600 sibling temporary file exclusively,
+    closes it, rechecks the source inode, size, and modification time, then
+    atomically renames it over the source. Temp write, source-change, or rename
+    failure leaves the append-only source authoritative, warns, and returns the
+    already computed replay result. Retry after another 4 MiB of growth or a
+    later bind/read. This retains the existing no-fsync durability contract and
+    relies on the runner's single-writer invariant; a continuously changing
+    unsupported second writer can prevent compaction but cannot authorize a
+    lossy replacement.
 - **Session lifecycle**: before a session_id is assigned, append to a pending
   journal namespaced by `{agent_id, reset_generation}`; once the session_id is
   known, bind it to that session's sidecar (rename, or append when the target
