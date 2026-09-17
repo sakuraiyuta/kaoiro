@@ -72,6 +72,26 @@ defmodule KaoiroServer.ReceiveBudgetConventionTest do
     assert [{_, 2, :assert_receive, 250}] = violations_in_source(source, "inline")
   end
 
+  test "a literal in assert_push's timeout position is reported" do
+    source = """
+    test "x" do
+      assert_push "agent_deleted", %{"agent_id" => ^id}, 500
+    end
+    """
+
+    assert [{_, 2, :assert_push, 500}] = violations_in_source(source, "inline")
+  end
+
+  test "a literal in assert_broadcast's timeout position is reported" do
+    source = """
+    test "x" do
+      assert_broadcast "agent_deleted", %{"agent_id" => ^id}, 500
+    end
+    """
+
+    assert [{_, 2, :assert_broadcast, 500}] = violations_in_source(source, "inline")
+  end
+
   test "a derived budget is not reported" do
     source = """
     test "x" do

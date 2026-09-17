@@ -10,10 +10,12 @@ defmodule KaoiroServer.TestTimeouts do
   A literal picked to sit above the local default therefore equals the
   base in CI, and the headroom it was written for silently becomes zero.
 
-  Call sites bind a budget into a module attribute, so it is evaluated at
-  COMPILE time. It still picks up the configured base because `mix test`
-  requires `test_helper.exs` before it compiles any test file (verified
-  against Mix 1.20.1 `test.ex` and by a compile-time probe under `CI=1`).
+  A call site that binds a budget into a module attribute (as
+  `@purge_reply_timeout` does) evaluates it at COMPILE time. It still
+  picks up the configured base because `mix test` requires
+  `test_helper.exs` before it compiles any test file (verified against
+  Mix 1.20.1 `test.ex` and by a compile-time probe under `CI=1`). A call
+  site inside a test body instead evaluates at RUN time, same base.
   """
 
   @purge_multiplier 5
