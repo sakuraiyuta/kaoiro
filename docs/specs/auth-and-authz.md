@@ -402,7 +402,7 @@ document and keep it synchronized with the issue checklist.
 ## See Also
 
 - Related specs: [protocol](protocol.md), [threat-model](threat-model.md),
-  [architecture](architecture.md), [protocol-inter-agent](protocol-inter-agent.md)
+  [architecture](../architecture/system-overview.md), [protocol-inter-agent](protocol-inter-agent.md)
 - ADRs: [0011](../adr/0011-phase3-reliability-and-auth.md) (wrapper token),
   [0012](../adr/0012-response-display-and-dashboard-scope.md) (log/result delivery),
   [0013](../adr/0013-user-token-cookie-persistence.md) (cookie / ticket),

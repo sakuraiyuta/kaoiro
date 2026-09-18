@@ -45,6 +45,6 @@ None.
 
 ## See Also
 
-- Specs: [overview](../specs/overview.md),
+- Specs: [overview](../architecture/overview.md),
   [plugin-model](../specs/plugin-model.md)
 - Previous: [phase-5-i18n](phase-5-i18n.md)

@@ -207,6 +207,6 @@ The phase-7 stage-A spike is complete (see the plan’s “Spike results” sect
 
 ## Related
 
-- specs: [file-upload](../specs/file-upload.md) (consolidates this specification), [protocol](../specs/protocol.md) (wire details), and [non-goals](../specs/non-goals.md) (no AV scanning support).
+- specs: [file-upload](../specs/file-upload.md) (consolidates this specification), [protocol](../specs/protocol.md) (wire details), and [non-goals](../architecture/scope.md) (no AV scanning support).
 - Related ADRs: [0009](0009-client-transport.md) (one Channels path, maintained by F2), [0015](0015-protocol-version-stamping.md) (version policy, addenda keep the version unchanged), [0020](0020-dashboard-battery-included-client.md) (the upper boundary for this decision, F2 / F3), and [0021](0021-role-information-disclosure-policy.md) (delivery policy; attach_* is operator-only).
 - Origin: my-spec-elicitation (#52).

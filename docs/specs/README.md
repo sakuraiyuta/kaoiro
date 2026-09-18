@@ -7,8 +7,8 @@ Feature specifications, organized by topic. Each file has `status` and
 
 | Slug | Status | Description |
 |------|--------|------|
-| [overview](overview.md) | accepted | kaoiro's purpose, two goals, and intended users |
-| [architecture](architecture.md) | accepted | Three-layer architecture and data flow |
+| [overview](../architecture/overview.md) | accepted | kaoiro's purpose, two goals, and intended users |
+| [architecture](../architecture/system-overview.md) | accepted | Three-layer architecture and data flow |
 | [plugin-model](plugin-model.md) | accepted | Two adapter/filter extension points and their shared boundary |
 | [protocol](protocol.md) | accepted | Common events; envelope, state machine, persona, bidirectionality, and authentication |
 | [protocol-inter-agent](protocol-inter-agent.md) | provisional | Inter-agent messaging envelope schema, nine kinds, and hard limits |
@@ -30,8 +30,8 @@ Feature specifications, organized by topic. Each file has `status` and
 | [setup-wizards](setup-wizards.md) | accepted | Configuration / env generation wizards (runner config and server .env) |
 | [deployment](deployment.md) | accepted | Multi-host deployment guide (nginx, env inventory, DETS paths, and wss constraints) |
 | [agent-operations](agent-operations.md) | accepted | Operating rules for multiple agents working concurrently in the same work tree (implementation and director sides). Engine-independent and referenced by both CLAUDE.md and AGENTS.md |
-| [non-goals](non-goals.md) | accepted | Out of scope |
-| [glossary](glossary.md) | accepted | Glossary |
+| [non-goals](../architecture/scope.md) | accepted | Out of scope |
+| [glossary](../reference/glossary.md) | accepted | Glossary |
 
 ## Status legend
 

@@ -3,7 +3,7 @@ defmodule KaoiroServer.AgentStates do
   Holds the latest envelope per agent_id.
 
   State *derivation* happens in the wrapper; the server only stores and
-  fans out, staying agent-agnostic (docs/specs/architecture.md). The map
+  fans out, staying agent-agnostic (docs/architecture/system-overview.md). The map
   lets a late-joining client start from the current picture instead of
   waiting for the next state change.
 

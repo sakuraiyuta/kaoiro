@@ -278,7 +278,7 @@ costs. Design decisions live in ADR-0057; boundary mechanics live in
 
 ## See Also
 
-- Related specs: [protocol](protocol.md), [architecture](architecture.md)
+- Related specs: [protocol](protocol.md), [architecture](../architecture/system-overview.md)
 - ADRs: [0002](../adr/0002-local-wrapper-websocket-topology.md),
   [0005](../adr/0005-access-control-oauth-stub.md),
   [0011](../adr/0011-phase3-reliability-and-auth.md),

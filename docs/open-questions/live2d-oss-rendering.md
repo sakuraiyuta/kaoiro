@@ -51,7 +51,7 @@ Additional candidates excluded after consideration:
   permits **staged introduction per persona** and can coexist with existing
   static-variant rendering (a rendering-type field is needed on persona —
   [ADR-0003](../adr/0003-persona-identity-persistence.md) / ADR-0004).
-- [non-goals.md](../specs/non-goals.md) puts "advanced animation/3D rendering"
+- [non-goals.md](../architecture/scope.md) puts "advanced animation/3D rendering"
   out of scope. This issue is **not an immediate removal of that non-goal**;
   it evaluates next-stage options limited to lightweight idle motion (issue #20
   explicitly lists "immediate removal of the non-goal" outside its scope).

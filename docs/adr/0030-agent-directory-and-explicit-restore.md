@@ -221,4 +221,4 @@ is explicit operator action only; it is not automatic ([#41](https://github.com/
   [#88](https://github.com/sakuraiyuta/kaoiro/issues/88) (the same pattern for
   future per-persona setting persistence)
 - Related specs: [protocol](../specs/protocol.md) (spawn / resume path),
-  [architecture](../specs/architecture.md)
+  [architecture](../architecture/system-overview.md)

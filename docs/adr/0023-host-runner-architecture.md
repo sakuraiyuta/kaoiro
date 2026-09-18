@@ -123,7 +123,7 @@ Decision:
 
 - ADR amended: [ADR-0002](0002-local-wrapper-websocket-topology.md) (maintains the direct topology and adds a supervisory layer in this ADR).
 - Related ADRs: [0014](0014-session-resume-and-restore.md) (runner as the unit of survival, resume / summoning), [0018](0018-runner-distribution.md) (runner distribution).
-- Related specs: [architecture](../specs/architecture.md), [protocol](../specs/protocol.md) (control messages), and [threat-model](../specs/threat-model.md).
+- Related specs: [architecture](../architecture/system-overview.md), [protocol](../specs/protocol.md) (control messages), and [threat-model](../specs/threat-model.md).
 - Control schema: fixed in #66 (the “Control-message schema” section above, [protocol](../specs/protocol.md), “runner control messages”).
 - Implementation: phase 4 ([phase-4-host-runner](../plans/phase-4-host-runner.md)).
 - Origin: issue [#23](https://github.com/sakuraiyuta/kaoiro/issues/23).

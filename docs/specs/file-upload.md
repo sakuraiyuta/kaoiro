@@ -224,7 +224,7 @@ client failures / instructions that never arrive.
 ## See Also
 
 - Related specs: [protocol](protocol.md),
-  [architecture](architecture.md), [non-goals](non-goals.md),
+  [architecture](../architecture/system-overview.md), [non-goals](../architecture/scope.md),
   [threat-model](threat-model.md)
 - ADRs:
   [0009](../adr/0009-client-transport.md) (single Channels route),

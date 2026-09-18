@@ -1614,7 +1614,7 @@ None; protocol reliability was settled by [ADR-0011](../adr/0011-phase3-reliabil
 
 ## See Also
 
-- Related specs: [architecture](architecture.md),
+- Related specs: [architecture](../architecture/system-overview.md),
   [plugin-model](plugin-model.md), [personas](personas.md),
   [subagent-tasks](subagent-tasks.md),
   [file-upload](file-upload.md)

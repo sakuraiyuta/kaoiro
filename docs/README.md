@@ -4,7 +4,9 @@ kaoiro documentation. Each subfolder has a README index.
 
 | Folder | Content |
 |--------|------|
-| [specs/](specs/) | Feature specifications (by topic) — being dissolved into `architecture/` and `reference/` ([ADR-0060](adr/0060-documentation-taxonomy-and-migration.md), [issue #368](https://github.com/sakuraiyuta/kaoiro/issues/368)) |
+| [architecture/](architecture/) | How kaoiro is built today and why — start at [overview](architecture/overview.md) and [system-overview](architecture/system-overview.md) |
+| [reference/](reference/) | Exact current contracts (protocol, configuration, engines, ui) and the [glossary](reference/glossary.md) |
+| [specs/](specs/) | Pre-taxonomy feature specifications — being dissolved into `architecture/` and `reference/` ([ADR-0060](adr/0060-documentation-taxonomy-and-migration.md), [issue #368](https://github.com/sakuraiyuta/kaoiro/issues/368), progress in [plans/phase-35](plans/phase-35-docs-migration.md)); moved pages leave a stub |
 | [operations/](operations/) | Operator runbooks |
 | [contributing/](contributing/) | How to change the project, including [where a doc page goes](contributing/documentation.md) |
 | [plans/](plans/) | Phase-based implementation plans and status |
@@ -13,7 +15,7 @@ kaoiro documentation. Each subfolder has a README index.
 
 ## What to read first
 
-1. [specs/overview.md](specs/overview.md) — What kaoiro is
+1. [architecture/overview.md](architecture/overview.md) — What kaoiro is
 2. [plans/README.md](plans/README.md) — Current phases and remaining work
 3. [open-questions/README.md](open-questions/README.md) — Items requiring decisions
 

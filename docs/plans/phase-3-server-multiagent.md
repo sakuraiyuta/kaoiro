@@ -49,7 +49,7 @@ None.
 
 ## See Also
 
-- Specs: [architecture](../specs/architecture.md),
+- Specs: [architecture](../architecture/system-overview.md),
   [protocol](../specs/protocol.md)
 - ADRs: [0002](../adr/0002-local-wrapper-websocket-topology.md),
   [0003](../adr/0003-persona-identity-persistence.md),

@@ -50,6 +50,6 @@ None.
 
 ## See Also
 
-- Specs: [architecture](../specs/architecture.md)
+- Specs: [architecture](../architecture/system-overview.md)
 - ADRs: [0004](../adr/0004-client-rendering-staged.md)
 - Previous: [phase-1.5-minimal-server-client](phase-1.5-minimal-server-client.md)

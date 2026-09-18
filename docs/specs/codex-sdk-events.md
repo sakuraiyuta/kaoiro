@@ -337,7 +337,7 @@ engines ([ADR-0032](../adr/0032-codex-adapter.md) F3).
 ## See Also
 
 - Related specs: [protocol](protocol.md), [plugin-model](plugin-model.md),
-  [architecture](architecture.md), [agent-sdk-events](agent-sdk-events.md)
+  [architecture](../architecture/system-overview.md), [agent-sdk-events](agent-sdk-events.md)
   (paired with Claude version)
 - ADR: [ADR-0032](../adr/0032-codex-adapter.md) (introducing Codex adapter),
   [ADR-0033](../adr/0033-permission-model-dual-axis.md) (two permission axes)

@@ -321,7 +321,7 @@ None. The common-envelope type/payload design is settled in
 ## See Also
 
 - Related specs: [protocol](protocol.md), [plugin-model](plugin-model.md),
-  [architecture](architecture.md), [subagent-tasks](subagent-tasks.md)
+  [architecture](../architecture/system-overview.md), [subagent-tasks](subagent-tasks.md)
 - ADRs: [0001](../adr/0001-agent-sdk-integration.md),
   [0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md)
 - Sources: code.claude.com/docs/en/agent-sdk/typescript and others (verified

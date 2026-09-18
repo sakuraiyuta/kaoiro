@@ -136,7 +136,7 @@ Three layers plus a host-resident supervision layer (the runner):
   wrapper processes, registers the host, and lists sessions. It does not
   terminate the data path: wrappers remain directly connected to the server.
 
-See [docs/specs/architecture.md](docs/specs/architecture.md) for the detailed
+See [docs/architecture/system-overview.md](docs/architecture/system-overview.md) for the detailed
 data flow.
 
 ### Technology stack
@@ -173,8 +173,8 @@ See [docs/](docs/) for structured documentation.
 
 | Entry point | Contents |
 |---|---|
-| [docs/specs/overview.md](docs/specs/overview.md) | What kaoiro is (purpose, two goals, and users) |
-| [docs/specs/architecture.md](docs/specs/architecture.md) | Three-layer structure and data flow |
+| [docs/architecture/overview.md](docs/architecture/overview.md) | What kaoiro is (purpose, two goals, and users) |
+| [docs/architecture/system-overview.md](docs/architecture/system-overview.md) | Three-layer structure and data flow |
 | [docs/specs/protocol.md](docs/specs/protocol.md) | Common events, envelopes, and state machine |
 | [docs/operations/production.md](docs/operations/production.md) | Production deployment manual (install / update / rollback / troubleshooting) |
 | [docs/plans/](docs/plans/) | Plans and status by phase |

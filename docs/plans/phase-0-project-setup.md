@@ -40,5 +40,5 @@ None.
 
 ## See Also
 
-- Specs: [overview](../specs/overview.md)
+- Specs: [overview](../architecture/overview.md)
 - Next: [phase-1-wrapper-state-machine](phase-1-wrapper-state-machine.md)

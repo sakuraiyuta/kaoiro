@@ -77,6 +77,6 @@ None (all closed). Former Q1 (personality injection effectiveness) was closed by
 
 ## See Also
 
-- Specs covered: [plugin-model](../specs/plugin-model.md), [protocol](../specs/protocol.md), [personas](../specs/personas.md), [architecture](../specs/architecture.md), [codex-sdk-events](../specs/codex-sdk-events.md) (new)
+- Specs covered: [plugin-model](../specs/plugin-model.md), [protocol](../specs/protocol.md), [personas](../specs/personas.md), [architecture](../architecture/system-overview.md), [codex-sdk-events](../specs/codex-sdk-events.md) (new)
 - Related ADRs: [ADR-0032](../adr/0032-codex-adapter.md) (main ADR for this phase), [ADR-0033](../adr/0033-permission-model-dual-axis.md) (dual-axis permissions), [ADR-0027](../adr/0027-askuserquestion-envelope.md) (question envelope), [ADR-0014](../adr/0014-session-resume-and-restore.md) (resume separation), [ADR-0031](../adr/0031-runner-persona-trust-mode.md) (compatibility-window pattern)
 - Previous phase: [phase-13-wrapper-multipackage-restructure](phase-13-wrapper-multipackage-restructure.md)

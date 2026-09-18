@@ -12,7 +12,7 @@ related: [architecture, protocol]
 
 Defines two extension points (adapters / filters) and the common event boundary
 into which both are inserted. Overall composition is in
-[architecture](architecture.md).
+[architecture](../architecture/system-overview.md).
 
 ## Definition
 
@@ -323,5 +323,5 @@ field was added.
 
 ## See Also
 
-- Related specs: [architecture](architecture.md), [protocol](protocol.md)
+- Related specs: [architecture](../architecture/system-overview.md), [protocol](protocol.md)
 - ADRs: [0001](../adr/0001-agent-sdk-integration.md), [0037](../adr/0037-claude-model-catalog-live-refresh.md)

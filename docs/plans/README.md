@@ -46,6 +46,7 @@ when follow-ups have been spun out into issues.
 | | | | Implementation complete, under internal review (awaiting こはく confirmation, external review, and commit/push) |
 | 33 | [phase-33-compaction-resume-lifecycle](phase-33-compaction-resume-lifecycle.md) | 🟡 | Automatic resume after compaction (wrapper-local `resume_prompt`) and a server-retained `session_lifecycle` timeline with an operator pull query, [ADR-0055](../adr/0055-compaction-resume-and-lifecycle-log.md). Live verification of automatic resume on an actual `compact_boundary` awaits the master's confirmation |
 | 34 | [phase-34-antigravity-adapter](phase-34-antigravity-adapter.md) | ⏳ | Third engine `antigravity` driving the `agy` CLI headless per turn — hook-based permission gate with mid-session two-axis policy, CLI bridge for kaoiro tools, rules-file persona injection, [ADR-0057](../adr/0057-antigravity-adapter.md). Stage 0 HITL (Q1 permission substrate) pending |
+| 35 | [phase-35-docs-migration](phase-35-docs-migration.md) | 🔄 | Move docs/specs into the layered taxonomy (ADR-0060, issue #368) after the semantic sync |
 
 ## Feature-local plans
 

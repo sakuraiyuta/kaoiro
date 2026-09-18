@@ -73,7 +73,7 @@ None. This phase only moves boundaries; Q1–Q6 are all gates on the phase-14 si
 
 ## See Also
 
-- Specs covered: [plugin-model](../specs/plugin-model.md), [architecture](../specs/architecture.md)
+- Specs covered: [plugin-model](../specs/plugin-model.md), [architecture](../architecture/system-overview.md)
 - Related ADRs: [ADR-0017](../adr/0017-wrapper-multientity-packages.md) (materialization target), [ADR-0023](../adr/0023-host-runner-architecture.md) D3 (rename `@kaoiro/wrapper` → `@kaoiro/claude-code` in this phase), [ADR-0032](../adr/0032-codex-adapter.md) F1 (origin of this phase)
 - Previous phase: [phase-12-runner-persona-trust-mode](phase-12-runner-persona-trust-mode.md)
 - Next phase: [phase-14-codex-adapter](phase-14-codex-adapter.md)

@@ -41,7 +41,7 @@ implementation and conformance verification.
 - Server settings can **disable only static delivery** of the simple dashboard
   (the channel/API is always enabled). The default is on.
 - Fix the scope at the minimum (state list, expressions, approvals, and
-  instruction input) ([non-goals](../specs/non-goals.md)).
+  instruction input) ([non-goals](../architecture/scope.md)).
 
 ## Consequences
 

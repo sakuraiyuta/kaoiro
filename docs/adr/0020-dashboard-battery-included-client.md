@@ -34,7 +34,7 @@ Public policy: kaoiro aims to be “battery included,” so that a user can do m
   - Persistence of conversations / files on the server (future issue #24). Files such as uploads follow the principle of **wrapper-local landing and server pass-through**.
   - Feature richness at the level of external clients (the domain of custom clients).
 - **(F4) Track concrete functions in individual issues.** For items with heavy specification work (file upload), run my-spec-elicitation before implementation.
-- Update [non-goals](../specs/non-goals.md) to match this decision.
+- Update [non-goals](../architecture/scope.md) to match this decision.
 
 ## Consequences
 
@@ -63,7 +63,7 @@ Public policy: kaoiro aims to be “battery included,” so that a user can do m
 
 ## Related
 
-- specs: [non-goals](../specs/non-goals.md) (updated by this decision), [overview](../specs/overview.md), [architecture](../specs/architecture.md), and [protocol](../specs/protocol.md) (additional operations).
+- specs: [non-goals](../architecture/scope.md) (updated by this decision), [overview](../architecture/overview.md), [architecture](../architecture/system-overview.md), and [protocol](../specs/protocol.md) (additional operations).
 - Related ADRs: [0007](0007-client-separation-reference-dashboard.md) (client separation and bundled-client policy), [0012](0012-response-display-and-dashboard-scope.md) (this decision revises its boundary).
 - Tracking issues: interrupt / upload / skill completion (#34) / client update / model and effort selection / actual token count / confirmation of operation files.
 - Origin: my-idea-brief (scratch note “implement a full set of functions equivalent to the claude.ai GUI for dogfooding”).

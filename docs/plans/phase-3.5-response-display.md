@@ -71,6 +71,6 @@ None (resolved by [ADR-0012](../adr/0012-response-display-and-dashboard-scope.md
   [0007](../adr/0007-client-separation-reference-dashboard.md),
   [0010](../adr/0010-protocol-precisification.md)
 - Specs: [protocol](../specs/protocol.md),
-  [non-goals](../specs/non-goals.md),
+  [non-goals](../architecture/scope.md),
   [threat-model](../specs/threat-model.md)
 - Previous: [phase-3-server-multiagent](phase-3-server-multiagent.md)

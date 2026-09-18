@@ -130,7 +130,7 @@ denylist is [#72](https://github.com/sakuraiyuta/kaoiro/issues/72).
   [0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) (spawn authentication /
   instance identity), [0014](../adr/0014-session-resume-and-restore.md) (resume unit),
   [0018](../adr/0018-runner-distribution.md) (distribution).
-- Specs: [architecture](../specs/architecture.md),
+- Specs: [architecture](../architecture/system-overview.md),
   [protocol](../specs/protocol.md), [threat-model](../specs/threat-model.md).
 - Related issues:
   [#23](https://github.com/sakuraiyuta/kaoiro/issues/23) (this phase),

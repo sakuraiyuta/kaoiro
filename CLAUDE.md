@@ -19,7 +19,7 @@ kaoiro — 複数の CLI AI エージェントの状態をキャラクターと�
 
 ## Documentation
 
-- 入口: [docs/specs/overview.md](docs/specs/overview.md)
+- 入口: [docs/architecture/overview.md](docs/architecture/overview.md)
 - [docs/specs/](docs/specs/) — 機能仕様(トピック別)
 - [docs/plans/](docs/plans/) — フェーズ別の実装計画
 - [docs/open-questions/](docs/open-questions/) — 未決の論点

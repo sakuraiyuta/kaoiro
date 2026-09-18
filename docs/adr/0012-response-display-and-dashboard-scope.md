@@ -24,7 +24,7 @@ bidirectional functionality substantially less useful because "the instruction
 arrives, but you cannot see what was answered" (the former open question
 `response-display`).
 
-[non-goals](../specs/non-goals.md) and
+[non-goals](../architecture/scope.md) and
 [ADR-0007](0007-client-separation-reference-dashboard.md) had fixed the included
 dashboard at the minimum of "state list, expressions, approvals, and instruction
 input", and response display was not included in that list. In light of the goal
@@ -44,7 +44,7 @@ functions were settled.
   console**. The boundary criterion is not the "number of functions" but
   whether it **requires a new public protocol surface / server persistence**.
   Richening that stays within public API consumption and no persistence is
-  allowed ([non-goals](../specs/non-goals.md) updated).
+  allowed ([non-goals](../architecture/scope.md) updated).
 - **(F3) The default screen is a tile list (bird's-eye view)**. Clicking an
   agent triggers an animated transition and displays **full-screen details**.
 - **(F2/F6) Grid cards retain the current display items** (face, name, state,

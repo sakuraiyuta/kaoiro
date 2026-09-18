@@ -55,7 +55,7 @@ protocol-precisification is resolved by
 ## See Also
 
 - Specs: [protocol](../specs/protocol.md),
-  [architecture](../specs/architecture.md)
+  [architecture](../architecture/system-overview.md)
 - ADRs: [0002](../adr/0002-local-wrapper-websocket-topology.md),
   [0007](../adr/0007-client-separation-reference-dashboard.md),
   [0009](../adr/0009-client-transport.md)
