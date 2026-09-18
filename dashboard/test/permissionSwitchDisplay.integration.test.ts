@@ -1137,3 +1137,152 @@ describe("Fuji round 2 contract boundaries", () => {
     expect(rowByLabel(target, "権限要求")?.textContent).toContain("workspace-write");
   });
 });
+
+describe("AgentDetail approval control (issue #359, ADR-0057 F4c)", () => {
+  // Antigravity advertises approval as a mutable axis by stamping
+  // permission_switch_axes.approval.max next to supports_permission_switch.
+  const approvalCaps = (max: string) => ({
+    supports_attachments: false,
+    supports_user_input_dialog: true,
+    supports_permission_switch: true,
+    permission_switch_axes: { approval: { max } },
+  });
+
+  function approvalControl(
+    over: Record<string, unknown> = {},
+  ): Record<string, unknown> {
+    return {
+      revision: 7,
+      requested: {
+        sandbox: "workspace-write",
+        network_access: false,
+        approval: "on-request",
+      },
+      constraints: { approval: "on-request", enforcement: "advisory" },
+      status: "pending",
+      ...over,
+    };
+  }
+
+  function approvalOption(
+    target: HTMLElement,
+    value: string,
+  ): HTMLButtonElement | undefined {
+    const dd = rowByLabel(target, "承認 変更");
+    return Array.from(dd?.querySelectorAll('[role="option"]') ?? []).find(
+      (o) => o.textContent?.trim().startsWith(value),
+    ) as HTMLButtonElement | undefined;
+  }
+
+  async function openApprovalMenu(target: HTMLElement): Promise<void> {
+    const dd = rowByLabel(target, "承認 変更");
+    (dd?.querySelector(".cc-perm-switch") as HTMLButtonElement).click();
+    await tick();
+  }
+
+  it("shows the approval picker when the axis is advertised", async () => {
+    const { target } = await render({
+      engine: "antigravity",
+      session_capabilities: approvalCaps("never"),
+      permission_control: approvalControl(),
+    });
+    expect(rowByLabel(target, "承認 変更")).not.toBeNull();
+  });
+
+  it("hides the approval picker when the axis is not advertised (fail-closed)", async () => {
+    // supports_permission_switch alone must not open the approval picker:
+    // without permission_switch_axes.approval the axis is launch-fixed. The
+    // sandbox picker still shows — only the approval axis is gated off.
+    const { target } = await render({
+      engine: "antigravity",
+      session_capabilities: SWITCH_CAPS,
+      permission_control: approvalControl(),
+    });
+    expect(rowByLabel(target, "承認 変更")).toBeNull();
+    expect(rowByLabel(target, "sandbox 変更")).not.toBeNull();
+  });
+
+  it("hides the approval picker from a viewer (operator prop withheld)", async () => {
+    // The two-layer gate on the approval axis: capability stamped and axis
+    // advertised, but withholding the operator-only prop hides the control.
+    const { target } = await render(
+      {
+        engine: "antigravity",
+        session_capabilities: approvalCaps("never"),
+        permission_control: approvalControl(),
+      },
+      { onSetPermission: undefined },
+    );
+    expect(rowByLabel(target, "承認 変更")).toBeNull();
+  });
+
+  it("disables and labels options above the ceiling", async () => {
+    const { target } = await render({
+      engine: "antigravity",
+      session_capabilities: approvalCaps("on-request"),
+      permission_control: approvalControl(),
+    });
+    await openApprovalMenu(target);
+    expect(approvalOption(target, "untrusted")?.disabled).toBe(false);
+    expect(approvalOption(target, "on-request")?.disabled).toBe(false);
+    expect(approvalOption(target, "local")?.disabled).toBe(true);
+    expect(approvalOption(target, "never")?.disabled).toBe(true);
+    expect(approvalOption(target, "never")?.textContent).toContain("上限超");
+  });
+
+  it("enables every option when the ceiling is the most permissive (negative control)", async () => {
+    const { target } = await render({
+      engine: "antigravity",
+      session_capabilities: approvalCaps("never"),
+      permission_control: approvalControl(),
+    });
+    await openApprovalMenu(target);
+    for (const value of ["untrusted", "on-request", "local", "never"]) {
+      expect(approvalOption(target, value)?.disabled).toBe(false);
+    }
+  });
+
+  it("sends an in-ceiling approval patch for the next execution", async () => {
+    const { target, onSetPermission } = await render(
+      {
+        engine: "antigravity",
+        session_capabilities: approvalCaps("local"),
+        permission_control: approvalControl(),
+      },
+      { state: "thinking" },
+    );
+    await openApprovalMenu(target);
+    approvalOption(target, "local")?.click();
+    await tick();
+    expect(onSetPermission).toHaveBeenCalledWith("host-a.p", {
+      approval: "local",
+    });
+  });
+
+  it("does not send an over-ceiling approval (disabled option)", async () => {
+    const { target, onSetPermission } = await render({
+      engine: "antigravity",
+      session_capabilities: approvalCaps("on-request"),
+      permission_control: approvalControl(),
+    });
+    await openApprovalMenu(target);
+    approvalOption(target, "never")?.click();
+    await tick();
+    expect(onSetPermission).not.toHaveBeenCalled();
+  });
+
+  it("shows the requested approval in the status line", async () => {
+    const { target } = await render({
+      engine: "antigravity",
+      session_capabilities: approvalCaps("never"),
+      permission_control: approvalControl({
+        requested: {
+          sandbox: "workspace-write",
+          network_access: false,
+          approval: "local",
+        },
+      }),
+    });
+    expect(rowByLabel(target, "権限要求")?.textContent).toContain("承認 local");
+  });
+});

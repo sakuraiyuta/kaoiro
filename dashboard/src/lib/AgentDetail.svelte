@@ -33,6 +33,7 @@
     resultOf,
     resumeDriftFrom,
     RUNNING_STATES,
+    SELECTABLE_APPROVAL_VALUES,
     sessionCapabilitiesFrom,
     shouldInterceptAsSessionReset,
     STOP_SAFE_STATES,
@@ -1298,6 +1299,9 @@
   // control. Declared here so the agent-switch reset effect below can clear
   // it — the component is reused across agents, not re-keyed.
   let sandboxMenuOpen = $state(false);
+  // issue #359: sibling popover for the antigravity approval axis. Same reset
+  // lifecycle as sandboxMenuOpen — cleared on agent switch and outside click.
+  let approvalMenuOpen = $state(false);
   let permActionError = $state<string | null>(null);
   // The server's ack, shown as a REQUESTED state until its own or a newer
   // control state arrives. It never promotes an effective value: the ack
@@ -1475,6 +1479,7 @@
       permMenuOpen = false;
       renameMenuOpen = false;
       sandboxMenuOpen = false;
+      approvalMenuOpen = false;
       permActionError = null;
       permAck = null;
       permSeenRevision = -1;
@@ -1488,7 +1493,8 @@
       !effortMenuOpen &&
       !permMenuOpen &&
       !renameMenuOpen &&
-      !sandboxMenuOpen
+      !sandboxMenuOpen &&
+      !approvalMenuOpen
     )
       return;
     function onDocClick(event: MouseEvent): void {
@@ -1499,6 +1505,7 @@
         permMenuOpen = false;
         renameMenuOpen = false;
         sandboxMenuOpen = false;
+        approvalMenuOpen = false;
       }
     }
     document.addEventListener("click", onDocClick);
@@ -1723,6 +1730,11 @@
     session_reset_pending: "session reset の完了待ちです",
     revision_exhausted: "revision を使い切りました",
     persistence_failed: "サーバ側の保存に失敗しました",
+    // issue #359: defense-in-depth. The approval picker disables over-ceiling
+    // options, but sandbox/network are not clamped in the UI, so this reason
+    // can still arrive. Kept axis-agnostic: a specific ceiling value would be
+    // wrong for whichever axis was not the one that exceeded.
+    exceeds_launch_ceiling: "要求値が起動時の上限を超えています",
   });
   // How far a revision has progressed. The contract lets a state update
   // move a revision forward but never back: "Client ack/state updates
@@ -1822,6 +1834,32 @@
   const permissionPickerVisible = $derived(
     permissionSwitchSupported && onSetPermission !== undefined,
   );
+  // issue #359: the approval picker (antigravity's mutable approval axis).
+  // Its launch ceiling is `permission_switch_axes.approval.max`; the axis is
+  // switchable only when that ceiling is advertised. Mirrors the server's two
+  // gates (supports_permission_switch AND a well-formed approval axis) so the
+  // UI never offers a control the server would reject. Value-driven, NOT an
+  // engine-name allowlist (round 2 MF-R2-6: ext.engine is display-only).
+  const approvalCeiling = $derived(
+    sessionCaps?.permission_switch_axes?.approval?.max ?? null,
+  );
+  const approvalPickerVisible = $derived(
+    permissionPickerVisible && approvalCeiling !== null,
+  );
+  // An option is offered only up to the ceiling (permissive order matches the
+  // server's @approval_values). A value at or below the ceiling's rank is
+  // selectable; anything above is disabled and labelled, so the operator sees
+  // WHY the wider values are unavailable rather than them silently vanishing.
+  function approvalOverCeiling(value: string): boolean {
+    if (approvalCeiling === null) return true;
+    const rank = SELECTABLE_APPROVAL_VALUES.indexOf(
+      value as (typeof SELECTABLE_APPROVAL_VALUES)[number],
+    );
+    const ceilingRank = SELECTABLE_APPROVAL_VALUES.indexOf(
+      approvalCeiling as (typeof SELECTABLE_APPROVAL_VALUES)[number],
+    );
+    return rank > ceilingRank;
+  }
   const PERMISSION_GATE_RECOVERY_REASONS = new Set([
     "observation_unavailable",
     "policy_mismatch",
@@ -1863,6 +1901,7 @@
 
   function sendPermission(patch: SetPermissionPatch): void {
     sandboxMenuOpen = false;
+    approvalMenuOpen = false;
     if (onSetPermission === undefined) return;
     permActionError = null;
     // The detail view is reused across agents rather than re-keyed, so
@@ -3278,6 +3317,57 @@
                 </dd>
               </div>
             {/if}
+            {#if approvalPickerVisible}
+              <!-- issue #359: the antigravity approval axis. Options above the
+                   launch ceiling are disabled and labelled, not hidden, so the
+                   operator sees WHY the wider values are unavailable. The order
+                   is SELECTABLE_APPROVAL_VALUES, kept in sync with the server's
+                   @approval_values so the UI clamp and the server clamp agree. -->
+              <div class="cc-row">
+                <dt>承認 変更</dt>
+                <dd>
+                  <div class="cc-switchbox cc-perm-switchbox">
+                    <button
+                      type="button"
+                      class="cc-switch cc-perm-switch"
+                      aria-haspopup="listbox"
+                      aria-expanded={approvalMenuOpen}
+                      onclick={() => (approvalMenuOpen = !approvalMenuOpen)}
+                    >
+                      {permRequestView?.requested.approval ?? "未確認"}
+                      <span class="axes-hint"
+                        >上限 {approvalCeiling}・次の turn から適用</span
+                      >
+                    </button>
+                    {#if approvalMenuOpen}
+                      <ul
+                        class="switch-menu"
+                        role="listbox"
+                        aria-label="承認 候補"
+                      >
+                        {#each SELECTABLE_APPROVAL_VALUES as value (value)}
+                          <li>
+                            <button
+                              type="button"
+                              role="option"
+                              aria-selected={permRequestView?.requested
+                                .approval === value}
+                              aria-disabled={approvalOverCeiling(value)}
+                              disabled={approvalOverCeiling(value)}
+                              onclick={() => sendPermission({ approval: value })}
+                            >
+                              {value}{#if approvalOverCeiling(value)}<span
+                                  class="axes-hint">上限超</span
+                                >{/if}
+                            </button>
+                          </li>
+                        {/each}
+                      </ul>
+                    {/if}
+                  </div>
+                </dd>
+              </div>
+            {/if}
             {#if permRequestView !== null}
               <div class="cc-row">
                 <dt>権限要求</dt>
@@ -3287,7 +3377,9 @@
                   ]}
                   <span class="axes-hint">
                     要求: 書込 {permRequestView.requested.sandbox} / network
-                    {permRequestView.requested.network_access}
+                    {permRequestView.requested.network_access}{#if permRequestView
+                      .requested.approval} / 承認 {permRequestView.requested
+                      .approval}{/if}
                   </span>
                   {#if permRequestView.reason}
                     <span class="axes-hint">理由: {permRequestView.reason}</span>
@@ -3301,7 +3393,9 @@
                     <span class="axes-hint">
                       適用前に戻した設定: 書込 {permRequestView.rolledBackTo
                         .sandbox} / network {permRequestView.rolledBackTo
-                        .network_access}
+                        .network_access}{#if permRequestView.rolledBackTo
+                        .approval} / 承認 {permRequestView.rolledBackTo
+                        .approval}{/if}
                     </span>
                   {/if}
                 </dd>

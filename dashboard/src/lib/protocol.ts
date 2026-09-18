@@ -186,10 +186,15 @@ export function permissionFrom(envelope: Envelope): PermissionAxes | null {
 
 /** The raw operator selection for the next execution (issue #305).
  *  `network_access` is the configured toggle, NOT the sandbox-aware
- *  effective value — that one rides ext.effective.network_access. */
+ *  effective value — that one rides ext.effective.network_access.
+ *  `approval` is present only for an engine that carries approval as a
+ *  MUTABLE axis (Antigravity, ADR-0057 F4c / issue #359); Codex fixes it
+ *  to `never` in `constraints.approval` and omits it here. Additive: an
+ *  older wrapper omits it and the sandbox/network flow is unaffected. */
 export interface PermissionConfiguration {
   sandbox: string;
   network_access: boolean;
+  approval?: string;
 }
 
 /** Adapter constraints that hold without a current observation (issue
@@ -249,6 +254,24 @@ const PERMISSION_APPROVAL_VALUES: ReadonlySet<string> = new Set([
   "on-failure",
   "never",
 ]);
+
+/** The approval values an operator may SELECT for a switch, in permissive
+ *  order (issue #359). Narrower than {@link PERMISSION_APPROVAL_VALUES}:
+ *  "on-failure" is a display-only observed value, never a selectable request
+ *  target, and the server's set_permission enum (agents_channel.ex
+ *  @approval_values) excludes it. A `requested` config carrying it is
+ *  malformed. The order MUST match the server's @approval_values so the
+ *  ceiling clamp the UI applies and the one the server enforces agree. */
+export const SELECTABLE_APPROVAL_VALUES = [
+  "untrusted",
+  "on-request",
+  "local",
+  "never",
+] as const;
+
+const SELECTABLE_APPROVAL_SET: ReadonlySet<string> = new Set(
+  SELECTABLE_APPROVAL_VALUES,
+);
 
 const PERMISSION_ENFORCEMENT_VALUES: ReadonlySet<string> = new Set([
   "os",
@@ -362,7 +385,20 @@ function permissionConfigurationOf(
   if (typeof r.sandbox !== "string") return null;
   if (!PERMISSION_SANDBOX_VALUES.has(r.sandbox)) return null;
   if (typeof r.network_access !== "boolean") return null;
-  return { sandbox: r.sandbox, network_access: r.network_access };
+  const config: PermissionConfiguration = {
+    sandbox: r.sandbox,
+    network_access: r.network_access,
+  };
+  // `approval` rides only for a mutable-approval engine (issue #359). An
+  // out-of-domain value is malformed, not a dropped extra field: the
+  // selectable domain excludes the display-only "on-failure".
+  const rawApproval = r.approval;
+  if (rawApproval !== undefined) {
+    if (typeof rawApproval !== "string") return null;
+    if (!SELECTABLE_APPROVAL_SET.has(rawApproval)) return null;
+    config.approval = rawApproval;
+  }
+  return config;
 }
 
 function sameConfiguration(
@@ -520,13 +556,16 @@ export function permissionControlFrom(
   };
 }
 
-/** A `set_permission` patch (issue #305). The union shape is the
- *  non-empty-patch rule from the contract expressed in the type: an
- *  object carrying neither axis matches no branch and fails to compile,
- *  so the client cannot send a patch the server must reject. */
+/** A `set_permission` patch (issue #305; `approval` axis added for issue
+ *  #359, ADR-0057 F4c). The union shape is the non-empty-patch rule from the
+ *  contract expressed in the type: an object carrying none of the three axes
+ *  matches no branch and fails to compile, so the client cannot send a patch
+ *  the server must reject. `approval` is offered only when the session
+ *  advertises it mutable in `permission_switch_axes`. */
 export type SetPermissionPatch =
-  | { sandbox: string; network_access?: boolean }
-  | { sandbox?: string; network_access: boolean };
+  | { sandbox: string; network_access?: boolean; approval?: string }
+  | { sandbox?: string; network_access: boolean; approval?: string }
+  | { sandbox?: string; network_access?: boolean; approval: string };
 
 /** The server's `set_permission` acknowledgement (issue #305). It confirms
  *  the SAVED request only — not delivery, SDK application, or an audit
@@ -672,6 +711,16 @@ export interface SessionCapabilities {
    *  Absent = rolling upgrade; only then may affirmative legacy metadata
    *  stand in for it. */
   supports_permission_mode_switch?: boolean;
+  /** Launch ceilings for the engine-neutral `set_permission` switch (ADR-0057
+   *  F4c Stage B0 clamp, issue #359). Only the `approval` arm is read today —
+   *  its presence means approval is a mutable axis, and `max` caps the
+   *  approval picker's selectable options; absence keeps approval
+   *  launch-fixed. Fail-closed: a `max` outside the selectable domain drops
+   *  the arm, so the picker stays hidden rather than offering an unclamped
+   *  choice. */
+  permission_switch_axes?: {
+    approval?: { max: string };
+  };
 }
 
 /** Reads ext.session_capabilities off an envelope (ADR-0034 F1). Returns
@@ -709,6 +758,20 @@ export function sessionCapabilitiesFrom(
   }
   if (typeof r.supports_permission_mode_switch === "boolean") {
     out.supports_permission_mode_switch = r.supports_permission_mode_switch;
+  }
+  // permission_switch_axes.approval.max (issue #359): the launch ceiling for
+  // the approval picker. Fail-closed — any malformed shape or an out-of-domain
+  // max drops the arm, matching the server clamp that treats such a max as
+  // unsupported rather than falling back to an unbounded switch.
+  const axes = r.permission_switch_axes;
+  if (typeof axes === "object" && axes !== null) {
+    const approval = (axes as Record<string, unknown>).approval;
+    if (typeof approval === "object" && approval !== null) {
+      const max = (approval as Record<string, unknown>).max;
+      if (typeof max === "string" && SELECTABLE_APPROVAL_SET.has(max)) {
+        out.permission_switch_axes = { approval: { max } };
+      }
+    }
   }
   if (Array.isArray(r.attachment_types)) {
     const types: Array<"image"> = [];

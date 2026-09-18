@@ -1,6 +1,6 @@
 ---
 title: Add a Google Antigravity adapter as the third engine, driving the agy CLI headless with a hook-based permission gate
-status: proposed
+status: accepted
 date: 2026-09-04
 opened: 2026-09-04
 supersedes: []
@@ -13,13 +13,16 @@ related_adrs: [14, 17, 23, 32, 33, 34, 35, 36, 39]
 
 ## Status
 
-Proposed (issue #181). Implementation is
+Accepted (issue #181). Implementation is
 [phase-34-antigravity-adapter](../plans/phase-34-antigravity-adapter.md).
 Revised 2026-09-04 after design review (kuroe): version pin corrected to
 1.1.26, gate self-verification (F4b), bridge argv validation (F5), advisory
 sandbox and `network_access` (F4), tool-class source of truth (F4), and
 axes fixed at spawn in Stage A (F4c). Q1–Q3 are closed by measurement.
 Revised 2026-09-10 for inbound inter-agent turn delivery (F5a).
+Accepted 2026-09-18 after Stage A dogfood and F4c Stage B0 (mid-session
+approval/sandbox/network switching under a host-local launch ceiling,
+issue #359).
 
 ## Context
 
@@ -244,14 +247,19 @@ does not prevent — a tool that ran without a gate request has already run.
 (F4) is added to `PermissionAxesExt` (resume re-applies them; the
 phase-15 D8 rule of dropping a stale `danger-full-access` to the safe
 default applies to `approval = never` as well). `setPermissionMode` and
-`set_permission` reject in Stage A. Unlike Codex, this engine does not advertise
-`supports_permission_switch`. Enabling the shared control message and dashboard
-controls is scheduled as Stage B0 (issue #359).
+`set_permission` reject in Stage A, where this engine does not advertise
+`supports_permission_switch`. Stage B0 (issue #359) enables the shared
+`set_permission` control end to end: after negotiation the wrapper advertises
+`supports_permission_switch` and `permission_switch_axes`, applies a switch by
+mutating its per-turn advisory gate between turns, and the dashboard offers
+sandbox / network / approval pickers with options above the ceiling disabled and
+labelled (approval picker gated on the advertised `permission_switch_axes.approval`).
 Precondition for B0: the threat-model MUST that the server cannot widen a
 wrapper's execution ceiling still holds — on this engine the cell matrix
 *is* the ceiling — so B0 adds wrapper-config clamps (`max_sandbox`,
-`max_approval`, `max_network_access`) and server-originated changes apply
-only in the narrowing direction beyond the launch values.
+`max_approval`, `max_network_access`), and both the server and the wrapper
+(fail-closed) reject a switch outside the narrowing direction from the launch
+values with `exceeds_launch_ceiling`.
 
 ### F5 — kaoiro tools through a CLI bridge, not MCP
 
