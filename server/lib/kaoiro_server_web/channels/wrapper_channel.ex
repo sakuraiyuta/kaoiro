@@ -2486,7 +2486,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # pushing without the field. Not a hard limit on how long this is
   # honoured -- once every connected wrapper is confirmed to be issue-#262-
   # or-later, `validate_live_inter_agent_payload/1` can go back to requiring
-  # the key (see protocol-inter-agent.md).
+  # the key (see docs/reference/inter-agent/conversation-admission.md).
   defp warn_legacy_new_conversation_absent do
     Logger.warning(
       "inter_agent_message: client declared new_conversation (absent); " <>
@@ -2638,7 +2638,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   end
 
   # Structural check on the inter-agent payload. The body text is left
-  # opaque per protocol-inter-agent spec; only the routing/quota fields
+  # opaque per docs/reference/inter-agent/messages.md; only the routing/quota fields
   # need to be present and well-shaped.
   defp validate_inter_agent_payload(%{} = payload) do
     cond do

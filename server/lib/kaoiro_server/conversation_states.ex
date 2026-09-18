@@ -1,14 +1,14 @@
 defmodule KaoiroServer.ConversationStates do
   @moduledoc """
-  Per-conversation tracker for inter-agent messaging (protocol-inter-agent
-  spec, phase-8 Stage B). In-memory only — a conversation that lives across
+  Per-conversation tracker for inter-agent messaging (docs/reference/inter-agent/conversations.md,
+  phase-8 Stage B). In-memory only — a conversation that lives across
   a server restart starts fresh (Phase 2 / ADR-0014 will address durability).
 
   For each `conversation_id` we keep the turn count, the highest
   `turn_number` seen (`max_turn_number`, issue #177 review M1 — a
   wrapper-supplied sequence distinct from `turns`, which merely counts
   accepted messages), the running token approximation (`byte_size(body)
-  ÷ 3` per message — protocol-inter-agent spec, intentionally coarse),
+  ÷ 3` per message — docs/reference/inter-agent/conversations.md, intentionally coarse),
   the monotonic start time (`started_at`, the TTL clock GC reads) and
   its wallclock counterpart for display (`started_at_wall`, ISO8601,
   issue #276 — monotonic time has no fixed epoch, so it cannot be shown
@@ -795,8 +795,7 @@ defmodule KaoiroServer.ConversationStates do
     end
   end
 
-  # Coarse token estimate — divide body bytes by 3 (protocol-inter-agent
-  # spec). Good enough to prevent runaway, not a billing-grade count.
+  # Coarse token estimate — divide body bytes by 3 (docs/reference/inter-agent/conversations.md). Good enough to prevent runaway, not a billing-grade count.
   defp token_estimate(body) when is_binary(body) do
     div(byte_size(body), 3) + 1
   end

@@ -108,7 +108,7 @@ defmodule KaoiroServer.Application do
       # serving those requests.
       KaoiroServer.Users,
       # Per-conversation hard limits for inter-agent messaging
-      # (protocol-inter-agent spec, phase-8 Stage B). `:on_auto_closed`
+      # (docs/reference/inter-agent/conversations.md, phase-8 Stage B). `:on_auto_closed`
       # (issue #221 direction 2) is the ONLY place this otherwise
       # web-independent module's data crosses into KaoiroServerWeb — see
       # ConversationStates' own moduledoc for why that boundary is kept.

@@ -58,7 +58,7 @@ The dashboard interface is currently Japanese-only.
 - **Agents message each other** — a delegation, a review request or an approval
   between agents is a first-class message, grouped into conversations the
   operator can list and close
-  ([protocol-inter-agent.md](docs/specs/protocol-inter-agent.md)).
+  ([inter-agent conversations](docs/reference/inter-agent/conversations.md)).
 - **One merged timeline** — every agent's replies and their messages to each
   other in a single time-ordered pane, with unread marks and click-through to
   the full transcript.

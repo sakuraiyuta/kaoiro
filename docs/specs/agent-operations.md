@@ -16,9 +16,9 @@ then, **regardless of engine**. Claude Code users are directed here from
 
 This file contains only rules that arise from multiple agents operating at the
 same time. CLAUDE.md is the source of truth for project structure, commands,
-and branch operation; [protocol-inter-agent](protocol-inter-agent.md) is the
-source of truth for the inter-agent messaging protocol (envelope schema, hard
-limits, and the turn-number contract).
+and branch operation; [messages](../reference/inter-agent/messages.md) and
+[conversations](../reference/inter-agent/conversations.md) define the inter-agent
+envelope schema, hard limits, and turn-number contract.
 
 ## Implementation side
 

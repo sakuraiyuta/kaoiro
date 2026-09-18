@@ -80,7 +80,7 @@ Decide whether to proceed to Stage C in a subsequent session.
   “unagreed termination” status in the dashboard (issue #211 removed
   `max_wallclock` from the hard limits—the current limit set and the memory-
   reclamation TTL are defined by the “Hard limits” section of the
-  [protocol-inter-agent spec](../specs/protocol-inter-agent.md))
+  [conversation contract](../reference/inter-agent/conversations.md#hard-limits-config--mechanical-enforcement))
 
 ### OUT (explicitly excluded, Stage C onward or future)
 
@@ -174,7 +174,7 @@ settled, create it as a separate plan (or an addendum to this plan).
 
 ## References
 
-- [protocol-inter-agent spec](../specs/protocol-inter-agent.md) (mechanical
+- [message contract](../reference/inter-agent/messages.md) (mechanical
   envelope definition to be created in follow-up work)
 - [protocol spec](../specs/protocol.md) — Existing common envelope foundation
 - [ADR-0010 protocol-precisification](../adr/0010-protocol-precisification.md)

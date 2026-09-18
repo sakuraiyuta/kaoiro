@@ -1076,7 +1076,7 @@ export interface InstructionRejectedPayload {
   detail?: string;
 }
 
-/** Closed enum of inter-agent message kinds (protocol-inter-agent spec). 9
+/** Closed enum of inter-agent message kinds (docs/reference/inter-agent/messages.md). 9
  *  kinds derived from FIPA-ACL performatives, compressed to cover request /
  *  response / consultation (query+inform) / discussion
  *  (propose/accept/reject) plus tie-breaker (escalate-to-user) and
@@ -1111,7 +1111,7 @@ export interface InterAgentErrorPayload {
   reason?: DisconnectReason;
 }
 
-/** payload of a type="inter_agent_message" envelope (protocol-inter-agent
+/** payload of a type="inter_agent_message" envelope (docs/reference/inter-agent/messages.md
  *  spec). The sender lives in the surrounding envelope's `agent_id`; `to`
  *  is the destination agent_id used by the server for routing. `meta.done`
  *  must be true from both owner-side agents for the conversation to

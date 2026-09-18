@@ -106,3 +106,7 @@ Writer rules: one writer per destination file; units that touch the same file
 | specs/auth-and-authz.md (release checklist) | [operations/security-release-audit.md](../operations/security-release-audit.md) | U10 |
 | specs/threat-model.md | [architecture/security-threat-model.md](../architecture/security-threat-model.md) | U10 |
 | specs/threat-model.md (constraints) | [reference/security/enforcement-boundaries.md](../reference/security/enforcement-boundaries.md) | U10 |
+| specs/protocol-inter-agent.md (Purpose; Overview) | [architecture/inter-agent-messaging.md](../architecture/inter-agent-messaging.md) | U11 |
+| specs/protocol-inter-agent.md (envelope.type: "inter_agent_message"; Inner envelope(`payload` schema); kind enum (nine values); Reserved `envelope.type` and version) | [reference/inter-agent/messages.md](../reference/inter-agent/messages.md) | U11 |
+| specs/protocol-inter-agent.md (Conversation owner and tie-breaker; Hard limits (config + mechanical enforcement); Memory-reclamation TTL (config, not a hard limit); Conversation lifecycle and post-close handling (issue #167); CID reuse is not a contract (issue #167 review S2)) | [reference/inter-agent/conversations.md](../reference/inter-agent/conversations.md) | U11 |
+| specs/protocol-inter-agent.md (Explicitly supplied unknown conversation_id (issue #252)) | [reference/inter-agent/conversation-admission.md](../reference/inter-agent/conversation-admission.md) | U11 |

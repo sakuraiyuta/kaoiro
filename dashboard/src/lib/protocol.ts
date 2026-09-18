@@ -1606,7 +1606,7 @@ export function findPrecedingUserPrompt(
   return null;
 }
 
-/** payload of a type="inter_agent_message" envelope (protocol-inter-agent
+/** payload of a type="inter_agent_message" envelope (docs/reference/inter-agent/messages.md
  *  spec, phase-8). The sender is the surrounding envelope's agent_id; `to` is
  *  the destination agent_id. Both sides' transcripts hold the same envelope —
  *  the rendering decides direction by comparing agent_id against the viewer's

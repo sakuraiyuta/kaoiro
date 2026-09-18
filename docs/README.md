@@ -117,3 +117,10 @@ Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh do
 - Permission recovery: [authentication and authorization](reference/security/authentication-authorization.md) and [tool authorization](reference/security/tool-authorization.md).
 - Adapter implementation: [enforcement boundaries](reference/security/enforcement-boundaries.md).
 - Architecture: [security boundaries](architecture/security-boundaries.md) and [threat model](architecture/security-threat-model.md).
+
+## Inter-agent messaging documentation
+
+- Architecture and adapter entry: [message flow](architecture/inter-agent-messaging.md).
+- Exact contracts: [messages](reference/inter-agent/messages.md), [conversations and limits](reference/inter-agent/conversations.md), and [conversation admission](reference/inter-agent/conversation-admission.md).
+- Permission recovery: [approval flow](specs/protocol-inter-agent.md#approval-flow-permission_broker-integration).
+- Delivery, observation, and remaining topics: [protocol entry](specs/protocol-inter-agent.md).

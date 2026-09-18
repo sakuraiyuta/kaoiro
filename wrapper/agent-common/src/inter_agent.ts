@@ -534,7 +534,7 @@ interface ConversationTrack {
  *  wrapper の memory leak を防ぐ"). The wrapper has no visibility into the
  *  server's own tombstone TTL config (`tombstone_ttl_ms`, also 24h by
  *  default as of issue #221 — deliberately matched to this constant, see
- *  protocol-inter-agent spec「CID 再利用は契約にしない」), so this value is
+ *  docs/reference/inter-agent/conversations.md「CID 再利用は契約にしない」), so this value is
  *  chosen independently: a track surviving longer than the server's costs
  *  only a few bytes of memory, while pruning too early would let
  *  `invoke()`'s local closed-CID guard (AC10) miss a conversation_id the
@@ -1216,7 +1216,7 @@ export class InterAgentTool {
       mutated = true;
     }
     // issue #177 (review must-fix): closed(terminal) has two independent
-    // routes, not one — protocol-inter-agent.md's lifecycle section: "両
+    // routes, not one — docs/reference/inter-agent/conversations.md's lifecycle section: "両
     // owner-side の done=true が揃った、または hard limit 超過". A
     // server-synthesized hard-limit termination (turn_number=0,
     // meta.done=true, e.g. kind="escalate-to-user") ends the conversation
@@ -1864,7 +1864,7 @@ export class InterAgentTool {
               // once the server's own (much shorter) tombstone TTL
               // elapses, succeed, directly undermining the wrapper's 24h
               // guard being the real enforced CID-reuse boundary
-              // (protocol-inter-agent.md "CID 再利用は契約にしない").
+              // (docs/reference/inter-agent/conversations.md "CID 再利用は契約にしない").
               if (!track.closed) {
                 track.closed = true;
                 track.closedAtMs = this.#nowMs();

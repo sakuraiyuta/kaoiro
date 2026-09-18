@@ -358,7 +358,7 @@ export interface ServerLinkOptions {
   /** attach_close relayed by the server. The wrapper verifies the upload
    *  is complete; an incomplete or oversize upload emits attach_rejected. */
   onAttachClose?: (uploadId: string) => void;
-  /** Inbound inter_agent_message envelope (protocol-inter-agent spec). The
+  /** Inbound inter_agent_message envelope (docs/reference/inter-agent/messages.md). The
    *  server pushes both routed messages (from peer wrapper) and synthesized
    *  ones (e.g. escalate-to-user on quota overshoot) to the receiving
    *  wrapper's topic — both flow through here. */
@@ -1414,7 +1414,7 @@ export class ServerLink {
         options.onAttachClose?.(payload.upload_id);
       }
     });
-    // Inter-agent routing (protocol-inter-agent spec): the server pushes the
+    // Inter-agent routing (docs/architecture/inter-agent-messaging.md): the server pushes the
     // full envelope (type=inter_agent_message) onto wrapper:<self> for every
     // message routed to this agent, including the server-synthesized
     // escalate-to-user on quota overshoot. Trust the topic for addressing —

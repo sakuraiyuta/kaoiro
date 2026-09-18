@@ -362,7 +362,7 @@ export function makeQuestionRequest(
 }
 
 /** Wraps an inter-agent message into the common envelope v0
- *  (protocol-inter-agent spec). `state` is the sender's current wrapper state
+ *  (docs/reference/inter-agent/messages.md). `state` is the sender's current wrapper state
  *  (typically `tool_running` because the send happens inside the tool
  *  handler). Not an authoritative state update — server-side handlers skip
  *  the state store for this envelope type. */

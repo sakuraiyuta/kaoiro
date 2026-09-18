@@ -2492,7 +2492,7 @@ describe("acceptance と #131 pending injection / reply waiter の整合", () =>
   // discarded), so the wrapper never LEARNED the CID was closed — the next
   // identical explicit-CID attempt round-tripped to the server again, every
   // time, undermining the wrapper's 24h TTL as the real enforced CID-reuse
-  // guard (protocol-inter-agent.md "CID 再利用は契約にしない").
+  // guard (docs/reference/inter-agent/conversations.md "CID 再利用は契約にしない").
   // Mutation-tested: with the conversation_closed branch removed (falling
   // through to the brand-new-delete branch), the second call's dispatchCount
   // assertion fails (2 instead of 1) and it no longer reports "already
