@@ -46,9 +46,22 @@ validates the structured payload (including kind, meta, and owner shape), reads
 `new_conversation`, and body byte length for admission, lifecycle, and quotas.
 These mechanical checks do not decide whether an agent agrees with the body.
 
+## Dispatch and coalescing
+
+When a wrapper is busy (at least one SDK injection is queued) and multiple
+inbound messages arrive from the **same peer**, coalesce them into **one SDK
+turn** instead of separate turns. Coalescing may span conversation IDs but
+never spans peers (Chloe ruling, 2026-08-11). The goal is to reduce model-call
+count and the high cost of xhigh effort.
+
+See [Send and wait](../reference/inter-agent/send-and-wait.md) for the
+receiver, batching, and synchronous-wait contracts.
+
 ## Related inter-agent topics
 
 - [Inter-agent message contract](../reference/inter-agent/messages.md).
 - [Inter-agent conversation contract](../reference/inter-agent/conversations.md).
 - [Inter-agent conversation admission](../reference/inter-agent/conversation-admission.md).
-- [Remaining protocol topics](../specs/protocol-inter-agent.md), including delivery, approval, observation, and companion tools.
+- [Remaining protocol topics](../specs/protocol-inter-agent.md), including approval, observation, and companion tools.
+- [Delivery confirmation and recovery](../reference/inter-agent/delivery.md).
+- [Send and wait](../reference/inter-agent/send-and-wait.md).

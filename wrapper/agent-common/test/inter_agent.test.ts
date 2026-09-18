@@ -1170,7 +1170,7 @@ describe("pending-injection error notices (issue #131, turn-scoped resolveTurnEn
     // one bundled turn failing produces ONE notice PER cid in the batch —
     // the wrapper cannot tell which single message actually caused it, so
     // every peer whose message was bundled gets its own peer_error
-    // (protocol-inter-agent.md「保留メッセージの合流」トレードオフ節).
+    // (docs/reference/inter-agent/send-and-wait.md「保留メッセージの合流」トレードオフ節).
     expect(notices).toHaveLength(2);
     const byConversation = new Map(
       notices.map((envelope) => [

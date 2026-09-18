@@ -125,6 +125,6 @@ Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh do
 ## Inter-agent messaging documentation
 
 - Architecture and adapter entry: [message flow](architecture/inter-agent-messaging.md).
-- Exact contracts: [messages](reference/inter-agent/messages.md), [conversations and limits](reference/inter-agent/conversations.md), and [conversation admission](reference/inter-agent/conversation-admission.md).
+- Exact contracts: [messages](reference/inter-agent/messages.md), [conversations and limits](reference/inter-agent/conversations.md), [conversation admission](reference/inter-agent/conversation-admission.md), [delivery](reference/inter-agent/delivery.md), and [send and wait](reference/inter-agent/send-and-wait.md).
 - Permission recovery: [approval flow](specs/protocol-inter-agent.md#approval-flow-permission_broker-integration).
-- Delivery, observation, and remaining topics: [protocol entry](specs/protocol-inter-agent.md).
+- Observation and remaining topics: [protocol entry](specs/protocol-inter-agent.md).

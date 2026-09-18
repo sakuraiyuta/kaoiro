@@ -159,7 +159,7 @@ issue #346. It does not advertise mid-turn IA injection. This preserves
 5. Preserve the direct `wait_for_response` waiter path: a reply consumed as a
    tool result is not also enqueued or steered.
 
-See [protocol-inter-agent](../specs/protocol-inter-agent.md) for batching and
+See [send and wait](../reference/inter-agent/send-and-wait.md) for batching and
 reply semantics, and
 [delivery_ack.ts](../../wrapper/agent-common/src/delivery_ack.ts) for watermark
 wiring. App-server turn completion must settle an active IA batch exactly once,

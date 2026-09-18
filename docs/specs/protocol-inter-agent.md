@@ -15,134 +15,11 @@ Moved to [Inter-agent messaging](../architecture/inter-agent-messaging.md#purpos
 
 ## Dispatch-confirmation ledger (issue #237)
 
-`ingress_stamp` records server acceptance, not confirmation that the receiving
-wrapper read an SDK turn. Per-recipient
-`inter_agent_delivery = {issued_seq, acked_seq, pending_since?, lost_count?, last_loss?}`
-observes later dispatch confirmation and negotiated explicit retirement. It
-retains no payloads and does not guarantee retransmission or delivery.
-
-- For live/synthetic messages to a wrapper that joined with capability
-  `inter_agent_delivery_ack: "dispatch-v1"`, the server adds a recipient-local
-  positive `delivery_seq` to the outer envelope and advances `issued_seq`.
-- A wrapper does not ack queue insertion or `receiveInbound` arrival. It confirms
-  a contiguous prefix as `delivery_ack {delivery_seq}` when an actual SDK turn
-  starts, or when intentional non-injection (consumed/terminal/stale) is fully
-  classified. Until then, a gap remains as `issued_seq > acked_seq`;
-  `pending_since` is the timestamp of the first divergence.
-- `whoami`, `list_agents` entries, and the operator dashboard's
-  `snapshot.deliveries` / `delivery_status` all read the same server ledger. An
-  absent field is **unknown** (legacy/disarmed), not zero.
-
-`transition_id` correlates session transitions and cannot identify a process because
-a runner crash relaunch may reuse it. An ack-capable `ServerLink` joins with a
-random per-process `delivery_generation`. WebSocket reconnects with the same
-generation retain gaps. A different generation (reset/crash/explicit restart) is a
-boundary that lost the old process memory, so the server atomically abandons old
-gaps with `acked_seq := issued_seq`. The sequence remains monotonic; nothing is
-resent to the new process.
+Moved to [Inter-agent delivery](../reference/inter-agent/delivery.md#dispatch-confirmation-ledger-issue-237).
 
 ### Negotiated gap recovery
 
-An additional join capability, `delivery_resync: "skip-v1"`, enables explicit
-retirement of missing deliveries without changing envelope version `"0"`.
-The server echoes that capability only when supported. Without the echo, a
-new wrapper records recovery as unavailable and sends no resync requests;
-an old wrapper keeps the original dispatch-only behavior on a new server.
-
-The wrapper tracks receipt separately from dispatch. At rejoin, missing
-sequences at or below the join's `issued_seq` are resynchronized immediately.
-For later status updates, a 30-second grace period detects both trailing and
-interior holes above the local resolved prefix. The grace cutoff is fixed
-when the timer starts: newer sequences receive their own grace period.
-Received inputs waiting for an SDK turn are never candidates. Immediately
-before a request, candidates are checked again and quarantined; late copies
-cannot enter an SDK turn while retirement is unresolved.
-
-`delivery_resync` carries `generation`, `request_id`, `cutoff`, and sorted,
-disjoint inclusive `missing_ranges`. Each request covers at most 256 sequence
-numbers, all positive and at or below the cutoff. The server validates the
-current channel owner, bound generation, negotiated capability, and
-`cutoff <= issued_seq` before any mutation. It durably records retirements
-and replies with the same `request_id`, `skipped_ranges`, and post-skip
-`delivery` status; it also broadcasts the updated status. Repeated requests
-are idempotent. A lost reply leaves the same request quarantined for retry,
-including across rejoin. A replacement process never replays the old process's
-messages, and an old channel cannot acknowledge or retire its replacement's
-deliveries.
-
-For negotiated recipients, `acked_seq` denotes a **resolved prefix**, which
-can include explicit losses, not proof that every message was dispatched.
-`lost_count` and `last_loss {at, first_seq, last_seq, count, reason}` distinguish
-those outcomes. A retirement behind an earlier received-but-unstarted input
-does not move the prefix past that input. The wrapper applies the response's
-skip ranges to its completion ledger and rebinds the post-skip prefix so later
-completed turns can acknowledge again. A locally confirmed ack lost during a
-disconnect is resent on rejoin.
-
-For skip-v1 recipients the ledger durably retains minimal routing descriptors
-(sender, conversation, turn and kind), never message bodies or credentials.
-A missing legacy descriptor is recorded as `untraceable`; the server never
-guesses its sender. Known ordinary losses produce a sender-addressed
-`delivery_lost` error. Each loss has a stable identifier derived from recipient,
-ledger incarnation, generation and sequence. The incarnation is persisted and
-changes after ledger deletion, so a recreated generation cannot reuse an ID.
-Skip and the durable notification intent are written together; notifications
-are dispatched outside the ledger process. Completion compares the intent's
-revision so an older dispatcher attempt cannot delete a newer loss of its
-recovery notice. A lost response or dispatcher
-restart may redeliver a notification with the same loss ID, which receivers
-deduplicate against the latest 10,000 distinct loss IDs in FIFO order within
-one wrapper process. Duplicate arrivals do not refresh that order. An older,
-evicted loss ID is treated as a new notification if it arrives again.
-
-Synthetic losses are never reported back to a sender. Reachability notices are
-regenerated from current connection/planned-restart state, and conversation
-closure notices from current tombstones. When that state is unavailable or the
-notice cannot be regenerated, the recipient receives a `delivery_lost` error
-with `synthetic: true`, its original kind and loss ID. Recovery notices retain
-their original loss ID if lost again; they do not create notification loops.
-
-Normal sends reserve one of 1,000 unresolved metadata slots before conversation
-accounting. A reservation is released when conversation preflight rejects or
-its owning channel dies, and becomes routing metadata when the sequence is
-issued. Full recipients reject with `delivery_backlog`: wait for recipient
-drain and do not retry automatically. Rejection changes neither conversation
-accounting, panes nor delivery sequence. Synthetic notices bypass this cap,
-so 1,000 is not a strict bound on all metadata. Legacy recipients neither store
-metadata nor enforce the cap. Active metadata is reclaimed on ack prefix,
-explicit skip, generation change, disarm and deletion; notification intents
-survive separately until dispatched. Generation changes explicitly retire
-remaining descriptors as interrupted before reclaiming the old ledger.
-
-A wrapper may explicitly retire received but permanently discarded, unstarted
-inputs using `delivery_resync` with `reason: "interrupted"`. This is distinct
-from missing-sequence detection: watchdog fail-stop preserves the active turn,
-while retiring discarded queued batches. Shutdown attempts retirement before
-closing transport, bounded to five seconds; it cannot promise acceptance after
-a broken connection. A subsequent generation bind retires surviving metadata.
-
-A terminal intentional disconnect (`operator`, `runner`, or `agent_self`) also
-retires every unresolved sequence of the channel's exact owner and generation.
-The owner/generation fence makes a stale terminate a no-op. The retirement and
-its durable loss intents complete before the delivery-status broadcast, which
-precedes the disconnected state, peer notice, and lifecycle entry. An
-`unplanned/socket_lost` disconnect and a planned restart preserve the ledger so
-skip-v1 reconnect recovery remains possible.
-
-The server writes recipient/sequence loss diagnostics without message contents. Recipient and sender panes can still contain the original accepted
-envelope even though it was retired before dispatch; a later resend is a
-separate displayed message. Loss counts reset at a new process generation.
-
-The Claude wrapper emits `claude-code-lifecycle` diagnostic records for
-`dispatch_queued`, `turn_start`, and `delivery_ack`, correlated by `agent_id`,
-turn token and delivery sequence where available. `dispatch_queued` does not
-prove SDK dispatch: an input arriving mid-turn waits for the current turn's
-boundary. `turn_start` is emitted at the host's input-yield callback;
-`delivery_ack` with `phase: "send_attempt"` records an attempted watermark
-send, not server acceptance. The acknowledgement and turn-start records come
-from the same callback, with the acknowledgement logged first. Server ledger
-status remains the confirmation source. These records omit message bodies,
-and diagnostic write failures do not change turn or acknowledgement control.
+Moved to [Inter-agent delivery](../reference/inter-agent/delivery.md#negotiated-gap-recovery).
 
 ## Review-quagmire detection (issue #273)
 
@@ -171,7 +48,7 @@ on a violation.
 
 A stall is an unacknowledged dispatch gap: `acked_seq < issued_seq` with
 `pending_since` older than `stall_ms`, read from the dispatch-confirmation
-ledger above. A live `result` received by the server after `pending_since`
+[delivery ledger](../reference/inter-agent/delivery.md). A live `result` received by the server after `pending_since`
 changes the notice reason to `delivery_confirmation_gap`: the recipient has
 completed work during the unresolved period, so missing dispatch confirmation
 must not be presented as proof that it stopped processing. This observation
@@ -789,90 +666,17 @@ pair**.
 
 ### Receiver-side behavior (wrapper-B)
 
-For an inbound `envelope` (type `inter_agent_message`, `agent_id` not self)
-selected for next-turn SDK injection, the following is the body/meta excerpt
-for an ordinary message, not the complete injected text. The formatter prepends
-a conversation marker with reply or close-proposal guidance. Error notices use
-a dedicated `peer-error(...)` line; a multi-message batch also has a preamble
-and separators between the individual formatted messages:
-
-```text
-[from <agent_id>] <kind>: <body>
-
-(meta: done=<done>, propose_next=<propose_next>, conversation_id=<conversation_id>, turn_number=<turn_number>)
-```
-
-An agent replies with `send_to_agent` when it chooses to respond. Otherwise a
-normal `result` envelope is sufficient; it need not send `done`. The
-conversation remains open until both sides send `done=true`, a hard limit is
-exceeded, or `open_conversation_ttl_ms` elapses (default 24 hours, issue
-#211). The former server `max_wallclock` hard limit automatically attached
-`done` on timeout; issue #211 removed it. `open_conversation_ttl_ms` is now
-memory reclamation rather than a hard-limit escalation or evidence of mutual
-agreement. GC closes the server entry and sends a synthetic `kind: "done"`,
-`meta.done: true` notice; a receiving wrapper learns that closure without
-injecting the terminal notice into an SDK turn (see
-[conversation lifecycle](../reference/inter-agent/conversations.md#conversation-lifecycle-and-post-close-handling-issue-167)).
+Moved to [Send and wait](../reference/inter-agent/send-and-wait.md#receiver-side-behavior-wrapper-b).
 
 #### Coalescing pending messages (issue #211 phase 3)
 
-When a wrapper is busy (at least one SDK injection is queued) and multiple
-inbound messages arrive from the **same peer**, coalesce them into **one SDK
-turn** instead of separate turns. Coalescing may span conversation IDs but
-never spans peers (Chloe ruling, 2026-08-11). The goal is to reduce model-call
-count and the high cost of xhigh effort.
-
-- **The trigger is busy state, not a time debounce.** An idle wrapper injects a
-  lone message immediately with no added delay. Only messages from the same
-  peer that arrive while an injection is pending join the next flush batch.
-- **Preserve receive order.** Each message keeps its own
-  `[from <agent_id>] <kind>: <body>` block (including its conversation_id) and
-  blocks are concatenated in arrival order. The model can select the matching
-  conversation from each block.
-- **Cap count and total size.** A batch has at most **10 messages** (the same
-  order as `MAX_ATTACHMENTS_PER_INSTRUCTION`) and formatted text totals at most
-  **16,384 bytes** (the wrapper's `MAX_INPUT_BYTES`,
-  `MAX_TASKLIST_ITEMS_JSON_BYTES`, and `MAX_LOG_BYTES`). Overflow is **not
-  dropped**; defer it to the next batch/turn. A single oversized message still
-  delivers by itself; the first item is always included regardless of the cap.
-
-**Trade-off: one turn failure affects every conversation in the batch.**
-After sending a turn to the SDK the wrapper cannot identify which message
-caused a failure. If a coalesced turn fails with `context_overflow`,
-`api_error`, or similar, send a `payload.error` notice (see “Unresponsive
-notices”) **separately for each still-pending conversation_id owned by that
-turn's token**, addressed to its recorded sender. Already-resolved entries and
-entries owned by another turn are skipped. Because a batch contains only one
-peer's messages, the same peer can receive notices for multiple conversations;
-messages from other peers are not part of that batch. This is an intentional cost of reducing
-turn count (Chloe ruling, 2026-08-11); the total-size cap also limits how often
-large batches trigger context overflow.
-
-Replies consumed by a `send_to_agent.wait_for_response` waiter are not
-coalesced: the waiter consumes the inbound envelope immediately, so no SDK
-turn injection occurs (below).
+Moved to [Send and wait](../reference/inter-agent/send-and-wait.md#coalescing-pending-messages-issue-211-phase-3). The batching structure and purpose are in
+[Dispatch and coalescing](../architecture/inter-agent-messaging.md#dispatch-and-coalescing);
+the send-and-wait reference holds the trigger, ordering, limits, and failure contract.
 
 #### Synchronous reply wait (`send_to_agent.wait_for_response`)
 
-Normal reception injects the next SDK turn as above. When the current SDK turn
-needs the peer's answer, the sender may set `wait_for_response: true`. After
-sending, the wrapper waits for the next inbound envelope for the same
-`conversation_id` and returns the complete envelope (including `body` and
-`meta`) in the **same tool result**.
-
-- Default is `false`; existing fire-and-forget and next-turn injection are
-  unchanged.
-- `timeout_ms` defaults to 300,000 ms, must be a positive integer, and is
-  capped at 300,000 ms. On timeout return the send ack and `reply_pending=true`;
-  do not cancel the send.
-- Do not inject an envelope consumed by the waiter into the next SDK turn.
-  An envelope arriving after timeout is injected normally.
-- Allow one waiter per `conversation_id`; reject duplicate synchronous waits
-  before sending.
-- If the server rejects the send (`unknown_agent`, etc.) or no acceptance ack
-  arrives, **release the waiter immediately** and return a reject or delivery-
-  unknown result (Fujino 30-10 M5, 2026-08-08). Do not wait the full timeout for
-  a peer that cannot answer.
+Moved to [Send and wait](../reference/inter-agent/send-and-wait.md#synchronous-reply-wait-send_to_agentwait_for_response).
 
 ### Unresponsive notices (`payload.error`)
 

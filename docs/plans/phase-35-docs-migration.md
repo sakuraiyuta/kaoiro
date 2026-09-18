@@ -43,7 +43,7 @@ implementation — the emphasis marks; all three are walked at every close.
 | U09 | persona delivery / injection / pack | ops impl | ⏳ |
 | U10 | security / threat model / release audit | ops perm impl | ✅ |
 | U11 | IA messages / conversations / admission | impl | ✅ |
-| U12 | IA dispatch / delivery ledger | perm impl | ⏳ |
+| U12 | IA dispatch / delivery ledger | perm impl | In review |
 | U13 | coordination monitoring | perm impl | ⏳ |
 | U14 | directory / companion tools / peer routing | impl | ⏳ |
 | U15 | per-engine IA tool authorization | perm impl | ⏳ |
@@ -111,3 +111,6 @@ Writer rules: one writer per destination file; units that touch the same file
 | specs/protocol-inter-agent.md (envelope.type: "inter_agent_message"; Inner envelope(`payload` schema); kind enum (nine values); Reserved `envelope.type` and version) | [reference/inter-agent/messages.md](../reference/inter-agent/messages.md) | U11 |
 | specs/protocol-inter-agent.md (Conversation owner and tie-breaker; Hard limits (config + mechanical enforcement); Memory-reclamation TTL (config, not a hard limit); Conversation lifecycle and post-close handling (issue #167); CID reuse is not a contract (issue #167 review S2)) | [reference/inter-agent/conversations.md](../reference/inter-agent/conversations.md) | U11 |
 | specs/protocol-inter-agent.md (Explicitly supplied unknown conversation_id (issue #252)) | [reference/inter-agent/conversation-admission.md](../reference/inter-agent/conversation-admission.md) | U11 |
+| specs/protocol-inter-agent.md (Dispatch-confirmation ledger; Negotiated gap recovery) | [reference/inter-agent/delivery.md](../reference/inter-agent/delivery.md) | U12 |
+| specs/protocol-inter-agent.md (Receiver-side behavior; Coalescing contract; Synchronous reply wait) | [reference/inter-agent/send-and-wait.md](../reference/inter-agent/send-and-wait.md) | U12 |
+| specs/protocol-inter-agent.md (Coalescing opening paragraph) | [architecture/inter-agent-messaging.md#dispatch-and-coalescing](../architecture/inter-agent-messaging.md#dispatch-and-coalescing) | U12; replaces v1 separate architecture/inter-agent-dispatch page |

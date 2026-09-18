@@ -1328,7 +1328,7 @@ export class InterAgentTool {
    *  batch caused the turn to fail, so every peer whose message was bundled
    *  into it gets its own peer_error notice, addressed back to ITS own
    *  sender. This fan-out is a deliberate, documented tradeoff of coalescing
-   *  (protocol-inter-agent.md「保留メッセージの合流」) — trading fewer turns
+   *  (docs/reference/inter-agent/send-and-wait.md「保留メッセージの合流」) — trading fewer turns
    *  for a wider blast radius on a single turn-level failure, not an
    *  oversight. Each notice: kind="inform" (no new enum value), meta.done=
    *  false (ending the conversation is the sender's call), payload.error
@@ -2192,7 +2192,7 @@ function markerLine(conversationId: string, mode: InboundReplyMode): string {
 }
 
 /** Formats an inbound inter_agent_message envelope into the user-message text
- *  injected into the receiving wrapper's SDK input (protocol-inter-agent spec
+ *  injected into the receiving wrapper's SDK input (docs/reference/inter-agent/send-and-wait.md
  *  「受信側 (wrapper-B) の挙動」). Leads with a role directive so the model
  *  treats this as an inter-agent reply context — without it, models tend to
  *  pause and ask the human operator "should I respond with X?" before each
