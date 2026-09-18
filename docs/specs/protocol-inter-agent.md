@@ -1098,7 +1098,7 @@ array; the wrapper narrows both cases to `users: []` because consumers
 
 | event (direction) | shape | server behavior |
 |---|---|---|
-| `envelope` (W→S, type=inter_agent_message) | Inner envelope above | Preserve causal order ([ADR-0051](../adr/0051-history-restart-resilience.md) D3-1): (1) **validate / preflight** participants, hard limits, planned intents (`peer_reconnecting` / `peer_reconnecting_capacity`), an unexpectedly disconnected target (`disconnected`, issue #257), and conversation quota. `ConversationStates.record_message/5` checks and atomically updates turn/token/wallclock counters in one call, so **counter updates happen here** (splitting them opens a TOCTOU gap; fixed at implementation, 2026-08-08). Complete every check that could determine rejection before proceeding; return a planned reject before ConversationStates, pane, or delivery ledger. (2) **Allocate ingress stamp** (globally unique ingress-order domain, wire form `[us, seq]`). (3) Upsert sender and receiver panes with the same stamp (`identity = ingress_stamp\|pane_agent_id`). (4) Push the stamped envelope to `wrapper:<to>` and broadcast to `agents:lobby` (operator-only). (5) Return `{ingress_stamp}` to the sender wrapper as the **acceptance ack**, which triggers sender-side sidecar recording. Routing after upsert is only the peer push; rejected IA must not remain in a pane. |
+| `envelope` (W→S, type=inter_agent_message) | Inner envelope above | Preserve causal order ([ADR-0051](../adr/0051-history-restart-resilience.md) D3-1): (1) **validate / preflight** participants, hard limits, planned intents (`peer_reconnecting` / `peer_reconnecting_capacity`), an unexpectedly disconnected target (`disconnected`, issue #257), and conversation quota. `ConversationStates.record_message/8` checks and atomically updates turn/token/wallclock counters in one call, so **counter updates happen here** (splitting them opens a TOCTOU gap; fixed at implementation, 2026-08-08). Complete every check that could determine rejection before proceeding; return a planned reject before ConversationStates, pane, or delivery ledger. (2) **Allocate ingress stamp** (globally unique ingress-order domain, wire form `[us, seq]`). (3) Upsert sender and receiver panes with the same stamp (`identity = ingress_stamp\|pane_agent_id`). (4) Push the stamped envelope to `wrapper:<to>` and broadcast to `agents:lobby` (operator-only). (5) Return `{ingress_stamp}` to the sender wrapper as the **acceptance ack**, which triggers sender-side sidecar recording. Routing after upsert is only the peer push; rejected IA must not remain in a pane. |
 | synthesized `envelope` (S→W) | hard-limit exceeded | Push to both `wrapper:<id>` and `agents:lobby`. |
 | synthesized `envelope` (S→W) | wrapper disconnect / matching recovery | For each other participant in conversations of the wrapper, push `kind=inform` with `error.code=reconnecting` for planned disconnect, `error.code=disconnected` plus optional `error.origin` / `error.reason` for a terminal disconnect, or error-free `kind=inform` (`reconnected`) after exact-token recovery (see “Unresponsive notices”). |
 | `directory_request` (W→S) | `{}` (empty payload) | wrapper-A receives all peer entries **except itself** in `{:ok, %{agents: [...], users: [...]}}`. Agent fields and omission rules follow “Peer-directory information boundary”; users follow “Exposed user fields” (issue #187 phase 2). Used by `list_agents` (below). |
@@ -1123,8 +1123,10 @@ wording asks the sender to retry later with the same conversation_id.
 
 ### Approval flow (permission_broker integration)
 
-When wrapper-A invokes `send_to_agent`, it asks the operator for approval
-through the existing `canUseTool` path ([ADR-0022](../adr/0022-pending-permission-authoritative-source.md)).
+This flow applies to Claude Code only; see the engine-scope note near the end
+of this section for Codex and Antigravity. When wrapper-A invokes
+`send_to_agent`, it asks the operator for approval through the existing
+`canUseTool` path ([ADR-0022](../adr/0022-pending-permission-authoritative-source.md)).
 
 - Tool name: `send_to_agent`.
 - `input` contains destination `to`, kind, a body excerpt, and
@@ -1185,6 +1187,12 @@ pair**.
   approval to `never` and has no canUseTool-equivalent route ([ADR-0033](../adr/0033-permission-model-dual-axis.md)
   F3), so `send_to_agent` is already unconditionally allowed and this
   whitelist has no additional role.
+- Antigravity's inter-agent tools (`send_to_agent` / `list_agents` /
+  `whoami`) are registered through `ToolHost.listen` (`wrapper/antigravity/src/host.ts`),
+  a separate MCP-serving path that never passes through `AntigravityGate`'s
+  tool-class table (`wrapper/antigravity/src/gate.ts`) — they carry no
+  approval axis at all, unconditionally allowed by construction, not merely
+  fixed to `never` like Codex.
 - Kind does not affect the decision (query/response and request/propose share
   the whitelist). Responsibility scope from ADR-0044 F2 is not an auto-allow
   axis; only first approval per conversation is the gate.
