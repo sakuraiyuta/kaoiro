@@ -405,7 +405,16 @@ function sameConfiguration(
   a: PermissionConfiguration,
   b: PermissionConfiguration,
 ): boolean {
-  return a.sandbox === b.sandbox && a.network_access === b.network_access;
+  return (
+    a.sandbox === b.sandbox &&
+    a.network_access === b.network_access &&
+    // issue #359: approval is a mutable axis on Antigravity, so evidence whose
+    // approval disagrees with this record's selection describes a different
+    // request. Strict equality mirrors the wrapper's samePermissionSelection
+    // (wrapper/core transport.ts): both undefined (Codex / legacy) is equal; a
+    // present mismatch (requested local, evidence never) is not.
+    a.approval === b.approval
+  );
 }
 
 /** A control revision. Revision zero is the wrapper's launch baseline, so

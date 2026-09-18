@@ -3775,6 +3775,58 @@ describe("permission approval axis (issue #359, ADR-0057 F4c)", () => {
       "never",
     ]);
   });
+
+  // The `applied` arm binds its evidence to THIS record's selection. With
+  // approval mutable, an observation of `never` must not stand as proof that
+  // `local` was applied (もも round 1 M1).
+  function appliedWith(
+    topApproval: string,
+    evidenceApproval: string,
+  ) {
+    const requestedTop = {
+      sandbox: "workspace-write",
+      network_access: false,
+      approval: topApproval,
+    };
+    const requestedEvidence = { ...requestedTop, approval: evidenceApproval };
+    const submitted = {
+      revision: 3,
+      requested: requestedEvidence,
+      execution_id: "e3",
+    };
+    return permissionControlFrom({
+      ...base,
+      ext: {
+        permission_control: {
+          revision: 3,
+          requested: requestedTop,
+          constraints: { approval: "on-request", enforcement: "advisory" },
+          status: "applied",
+          submitted,
+          effective: {
+            ...submitted,
+            session_id: "s3",
+            network_access: false,
+            permission: {
+              sandbox: "workspace-write",
+              approval: evidenceApproval,
+              enforcement: "advisory",
+            },
+          },
+        },
+      },
+    });
+  }
+
+  it("rejects an applied control whose evidence approval disagrees with the requested approval", () => {
+    expect(appliedWith("local", "never")).toBeNull();
+  });
+
+  it("binds an applied control whose evidence approval matches (positive control)", () => {
+    const parsed = appliedWith("local", "local");
+    expect(parsed?.status).toBe("applied");
+    expect(parsed?.requested.approval).toBe("local");
+  });
 });
 
 describe("sessionCapabilitiesFrom — permission_switch_axes.approval (issue #359)", () => {
