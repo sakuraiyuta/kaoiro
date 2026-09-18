@@ -103,3 +103,9 @@ Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh do
 - Permission recovery: [exec permission boundary](reference/engines/codex-exec-events.md#permission-no-approval-flow-exists) and the [permission protocol](specs/protocol.md).
 - Operational updates: [production runbook](operations/production.md).
 - Dated evidence: [exec verification](evidence/codex/exec-contract.md) and [catalog observations](evidence/codex/model-catalog.md).
+
+## Codex app-server documentation
+
+- Architecture and adapter entry: [backend ownership](architecture/codex-backends.md).
+- Exact contracts: [transport](reference/engines/codex-app-server.md), [session/bridge](reference/engines/codex-app-server-session.md), [events/telemetry](reference/engines/codex-app-server-events.md), [settings/permission](reference/engines/codex-app-server-settings.md), [display history](reference/engines/codex-app-server-history.md).
+- Dated measurements: [transport spikes](evidence/codex-app-server/transport-spikes-2026-09-14.md), [compatibility](evidence/codex-app-server/stage1-compatibility.md), [session/bridge](evidence/codex-app-server/session-and-bridge.md), [projection/history](evidence/codex-app-server/projection-and-history.md), [settings/permission](evidence/codex-app-server/settings-and-permission.md), [Host composition](evidence/codex-app-server/host-composition.md).

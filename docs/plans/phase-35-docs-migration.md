@@ -55,10 +55,10 @@ implementation — the emphasis marks; all three are walked at every close.
 | U21 | runner update / rollback / artifacts / service verification | ops | ⏳ |
 | U22 | deployment troubleshooting | ops | ⏳ |
 | U23 | UI design group (visual language, tokens, layout, motion) | perm | ⏳ |
-| U24 | codex app-server architecture / reference + ADR-0058 evidence extraction | perm impl | ⏳ |
+| U24 | codex app-server architecture / reference + ADR-0058 evidence extraction | perm impl | Implemented; review pending |
 | U25 | codex backend switch runbook | ops perm impl | ⏳ |
 | U26 | antigravity adapter / events / tools-permissions / evidence | perm impl | ⏳ |
-| U27 | codex exec events / model catalog | perm impl | Implemented; review pending |
+| U27 | codex exec events / model catalog | perm impl | ✅ |
 | U28 | claude events | perm impl | ⏳ |
 | U29a | entry pages: overview, system-overview, scope, glossary; folder scaffolding; this plan | ops perm impl | ✅ |
 | U29b | plugin-model split (extensions, adapter contract, claude model catalog) | impl | ⏳ |
@@ -84,3 +84,15 @@ Writer rules: one writer per destination file; units that touch the same file
 | specs/codex-model-catalog.md | [reference/engines/codex-model-catalog.md](../reference/engines/codex-model-catalog.md) | U27 |
 | specs/codex-model-catalog.md | [operations/codex-model-settings.md](../operations/codex-model-settings.md) | U27 |
 | specs/codex-model-catalog.md | [evidence/codex/model-catalog.md](../evidence/codex/model-catalog.md) | U27 |
+| ../../wrapper/codex/README.md (implementation) | [reference/engines/codex-app-server.md](../reference/engines/codex-app-server.md) | U24 |
+| ../../wrapper/codex/README.md (implementation) | [reference/engines/codex-app-server-session.md](../reference/engines/codex-app-server-session.md) | U24 |
+| ../../wrapper/codex/README.md (implementation) | [reference/engines/codex-app-server-events.md](../reference/engines/codex-app-server-events.md) | U24 |
+| ../../wrapper/codex/README.md (implementation) | [reference/engines/codex-app-server-settings.md](../reference/engines/codex-app-server-settings.md) | U24 |
+| ../../wrapper/codex/README.md (implementation) | [reference/engines/codex-app-server-history.md](../reference/engines/codex-app-server-history.md) | U24 |
+| adr/0058-codex-app-server-turn-steer.md (Appendices A–C through increment 5e) | [evidence/codex-app-server/transport-spikes-2026-09-14.md](../evidence/codex-app-server/transport-spikes-2026-09-14.md) | U24 |
+| adr/0058-codex-app-server-turn-steer.md (Appendices A–C through increment 5e) | [evidence/codex-app-server/stage1-compatibility.md](../evidence/codex-app-server/stage1-compatibility.md) | U24 |
+| adr/0058-codex-app-server-turn-steer.md (Appendices A–C through increment 5e) | [evidence/codex-app-server/session-and-bridge.md](../evidence/codex-app-server/session-and-bridge.md) | U24 |
+| adr/0058-codex-app-server-turn-steer.md (Appendices A–C through increment 5e) | [evidence/codex-app-server/projection-and-history.md](../evidence/codex-app-server/projection-and-history.md) | U24 |
+| adr/0058-codex-app-server-turn-steer.md (Appendices A–C through increment 5e) | [evidence/codex-app-server/settings-and-permission.md](../evidence/codex-app-server/settings-and-permission.md) | U24 |
+| adr/0058-codex-app-server-turn-steer.md (Appendices A–C through increment 5e) | [evidence/codex-app-server/host-composition.md](../evidence/codex-app-server/host-composition.md) | U24 |
+| ../../wrapper/codex/README.md (implementation) | [architecture/codex-backends.md](../architecture/codex-backends.md) | U24 |

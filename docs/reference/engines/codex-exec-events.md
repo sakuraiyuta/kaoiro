@@ -13,7 +13,7 @@ related: [protocol, plugin-model, system-overview, agent-sdk-events]
 Codex defaults to the exec SDK path documented below. Runner-local
 `codex.backend = "app-server"` explicitly selects the app-server adapter for
 subsequent wrapper launches/resumes; its pinned notification mappings and
-acceptance evidence are in [ADR-0058 Appendix C](../../adr/0058-codex-app-server-turn-steer.md#appendix-c--stage-1-compatibility-gate-2026-09-18-jst)
+acceptance evidence are in [ADR-0058 Appendix C](../../evidence/codex-app-server/stage1-compatibility.md#appendix-c--stage-1-compatibility-gate-2026-09-18-jst)
 and the [wrapper README](../../../wrapper/codex/README.md). Both paths preserve
 queued IA, fixed `approval=never`, permission observation, and the existing
 log/result/lifecycle wire. App-server does not silently fall back to exec.
@@ -238,7 +238,7 @@ Both backends use the shared
 [`BRIDGE_MCP_POLICY`](../../../wrapper/codex/src/bridge_policy.ts): the bridge is
 required, so startup failure fails the turn rather than silently omitting kaoiro
 tools. See the [Host setup](../../../wrapper/codex/src/host.ts) and
-[startup measurements](../../adr/0058-codex-app-server-turn-steer.md#ci-follow-up-required-bridge-startup).
+[startup measurements](../../evidence/codex-app-server/session-and-bridge.md#ci-follow-up-required-bridge-startup).
 
 ```typescript
 const codex = new Codex({
