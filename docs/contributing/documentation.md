@@ -70,7 +70,15 @@ the migration of the pre-2026-09 tree is tracked in
    page, and who checks it. Agree the table before editing.
 2. **Sync second.** Correct meaning only (wrong, stale, missing). Do not
    rewrite the old page for style; it is about to move.
-3. **Move third, one unit per commit.** In the same commit: update every
+3. **Move third, one unit per commit.** A move is information-preserving:
+   every paragraph, table and code block of the old page lands in a named
+   new page (contracts and event shapes in `reference/`, dated inputs,
+   outputs and negative controls in `evidence/`, reasons in
+   `architecture/`) or is dropped as a duplicate of a specific surviving
+   page, and the report lists that old-section → new-location mapping.
+   Shortening, paraphrasing into a table, or pointing at source code as
+   "the canon" is not a move; a doubtful claim found on the way is a
+   separate semantic-sync commit. In the same commit: update every
    in-repo reference (docs, code comments, `AGENTS.md`, `CLAUDE.md`);
    remove the old text (no second canon); at the old path keep a stub
    whose headings or explicit anchors still resolve the existing
