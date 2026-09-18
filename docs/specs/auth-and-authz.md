@@ -62,8 +62,9 @@ does not affect `:dev` execution through `scripts/dev.sh` (issue #133).
 
 ### Topic authorization (channel `join/3`)
 
-- Wrapper: `wrapper_channel.ex:32` validates the agent ID charset (`AgentId.valid?`)
-  and duplicate connections (`reject_if_connected/1`, ADR-0024 D5 reject-newcomer).
+- Wrapper: `WrapperChannel.join/3` (`wrapper_channel.ex:117-127`) validates the agent ID
+  charset (`validate_agent_id/1`) and duplicate connections (`reject_if_connected/1`,
+  ADR-0024 D5 reject-newcomer).
 - Runner: `runner_channel.ex` validates the host ID charset.
 - Client: `agents_channel.ex` permits only `agents:lobby`; the role is stored in
   socket assigns.
@@ -98,6 +99,8 @@ does not affect `:dev` execution through `scripts/dev.sh` (issue #133).
 - `state_change` (remove `ext`, hiding cwd / model / context / rate_limits / pending_permission)
 - `agent_deleted`
 - `permission_request` (rewrite as synthetic `state_change(waiting_permission)`, removing tool_name / input / request_id)
+- `question_request` (rewrite as synthetic `state_change(waiting_question)`, removing the questions)
+- `session_boundary` (payload trimmed to `{mode}`)
 
 All others (`log` / `result` / `inter_agent_message` / `runner_sessions` /
 `spawn_result` / `hosts` / `history_cleared` / `history_reset`) are completely
