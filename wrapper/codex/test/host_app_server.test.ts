@@ -141,9 +141,13 @@ it("does not treat intentional idle close as a disconnect error", async () => {
 });
 
 it("settles and finalizes once even if the result sink throws", async () => {
-  const f = fixture({ onLog: e => { if (e.type === "result") throw new Error("sink failure"); } });
+  const result = vi.fn(() => { throw new Error("sink failure"); });
+  const f = fixture({ onLog: e => { if (e.type === "result") result(); } });
   await f.host.send("A");await f.until(1);f.terminal();await vi.waitFor(() => expect(f.finals).toHaveBeenCalledTimes(1));
+  expect(result).toHaveBeenCalledTimes(1);
   expect(f.ends).toHaveBeenCalledTimes(1);expect(f.boundaries).toHaveBeenCalledTimes(1);
+  expect(f.states.at(-1)?.state).toBe("waiting_input");
+  expect(f.host.statusSnapshot().state).toBe("waiting_input");
 });
 
 

@@ -1465,7 +1465,10 @@ export class CodexHost implements EngineAdapter {
     const settle = (payload: ResultPayload, info: Parameters<NonNullable<CodexHostOptions["onTurnEnd"]>>[0]) => {
       if (settled || this.#watchdogFailStopped) return;
       settled = true;
-      try { this.#emitResult(payload);this.#apply({ kind: "result", subtype: payload.is_error ? "error_during_execution" : "success" }); }
+      try {
+        try { this.#emitResult(payload); }
+        finally { this.#apply({ kind: "result", subtype: payload.is_error ? "error_during_execution" : "success" }); }
+      }
       finally {
         if (this.#appFailure !== null) { this.#machine = initialMachineState("error");this.#emitState("error"); }
         this.#options.onTurnEnd?.(info);
