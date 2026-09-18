@@ -45,7 +45,7 @@ implementation — the emphasis marks; all three are walked at every close.
 | U11 | IA messages / conversations / admission | impl | ✅ |
 | U12 | IA dispatch / delivery ledger | perm impl | ✅ |
 | U13 | coordination monitoring | perm impl | ✅ |
-| U14 | directory / companion tools / peer routing | impl | In review |
+| U14 | directory / companion tools / peer routing | impl | ✅ |
 | U15 | per-engine IA tool authorization | perm impl | ⏳ |
 | U16 | peer errors / synthetic notices | perm impl | ⏳ |
 | U17 | session tools (compact / reset) | perm impl | ⏳ |
