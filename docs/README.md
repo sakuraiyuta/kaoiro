@@ -4,7 +4,9 @@ kaoiro documentation. Each subfolder has a README index.
 
 | Folder | Content |
 |--------|------|
-| [specs/](specs/) | Feature specifications (by topic) |
+| [specs/](specs/) | Feature specifications (by topic) — being dissolved into `architecture/` and `reference/` ([ADR-0060](adr/0060-documentation-taxonomy-and-migration.md), [issue #368](https://github.com/sakuraiyuta/kaoiro/issues/368)) |
+| [operations/](operations/) | Operator runbooks |
+| [contributing/](contributing/) | How to change the project, including [where a doc page goes](contributing/documentation.md) |
 | [plans/](plans/) | Phase-based implementation plans and status |
 | [open-questions/](open-questions/) | Unresolved issues |
 | [adr/](adr/) | Architecture decision records |
@@ -76,9 +78,13 @@ kaoiro documentation. Each subfolder has a README index.
 | [0054](adr/0054-fatigue-as-orthogonal-persona-modifier.md) | Treat fatigue as a persona modifier separate from protocol state | accepted |
 | [0055](adr/0055-compaction-resume-and-lifecycle-log.md) | Automatic resume after compaction and retaining a session-lifecycle timeline | accepted |
 | [0056](adr/0056-project-calver-build-version.md) | Adopt one lockstep CalVer project version and explicit build channels | accepted |
+| [0057](adr/0057-antigravity-adapter.md) | Add a Google Antigravity adapter as the third engine, driving the agy CLI headless with a hook-based permission gate | accepted |
+| [0058](adr/0058-codex-app-server-turn-steer.md) | Codex app-server transport and in-flight turn steering | accepted |
+| [0059](adr/0059-launcher-owned-runner-pairing.md) | Launcher-owned runner token pairing for dev.sh and dogfood.sh | accepted |
+| [0060](adr/0060-documentation-taxonomy-and-migration.md) | Layered documentation taxonomy and the migration order for docs/ | accepted |
 <!-- adr-index:end -->
 
-Regenerate: `scripts/build-adr-index.sh docs` (skill `my-docs-restructure`). Do not edit inside the markers manually.
+Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh docs` (the script lives in the skill, not in this repository). Do not edit inside the markers manually.
 
 ## Update flow
 
