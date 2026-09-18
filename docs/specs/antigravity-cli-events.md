@@ -1,467 +1,84 @@
 ---
-title: Antigravity adapter — Antigravity CLI (agy) headless event specification
-description: Measured behaviour of the Antigravity CLI (`agy` 1.1.26) in headless print mode — stream-json events, resume, customization discovery, hooks-as-permission-gate, and their derivation to kaoiro state. Third engine counterpart to agent-sdk-events / codex-sdk-events.
-status: provisional
-related: [protocol, plugin-model, architecture, agent-sdk-events, codex-sdk-events]
+title: Antigravity CLI events migration stub
+description: Stable links from the pre-taxonomy Antigravity CLI event specification to its architecture, reference, and evidence pages.
+status: moved
+last_updated: 2026-09-18
 ---
-<!-- markdownlint-disable MD033 -->
 
 # Antigravity adapter — Antigravity CLI (agy) headless event specification
 
+This URL is retained for existing links. Its current pages are:
+
+- [adapter architecture](../architecture/antigravity-adapter.md)
+- [event contract](../reference/engines/antigravity-events.md)
+- [tools and permissions contract](../reference/engines/antigravity-tools-permissions.md)
+- [dated CLI evidence](../evidence/antigravity/cli-contract.md)
+
 ## Purpose
 
-Establishes the **measured** behaviour of the Antigravity CLI (`agy`) in
-headless print mode as the substrate of the third engine `antigravity`
-([ADR-0057](../adr/0057-antigravity-adapter.md)), and defines its derivation
-to kaoiro state ([protocol](protocol.md)). Paired with
-[agent-sdk-events](agent-sdk-events.md) (Claude) and
-[codex-sdk-events](codex-sdk-events.md) (Codex).
-
-**Status: provisional** — every claim below marked *(measured)* was observed
-on 2026-09-04 with `agy` 1.1.26 (x86-64 Linux, OAuth personal login) on the
-development host (the binary self-updated from 1.1.8 to 1.1.26 at the start
-of the session, so vendor drift is a live risk and the adapter records the
-version it measured against), using `--print` / `--output-format stream-json` runs in a
-scratch directory. Claims marked *(unverified)* come from the vendor
-changelog or docs and must be re-measured before relying on them. Promote
-to `accepted` after the phase-34 Stage A dogfood.
+Moved to the pages above.
 
 ## Why the CLI and not the Python SDK
 
-The issue #181 premise was the Antigravity **SDK**. It is Python-only
-(`google-antigravity` 0.1.16, no Node/TS SDK exists), which conflicts with
-the TS in-process hosting premise of [ADR-0023](../adr/0023-host-runner-architecture.md)
-D3. The CLI `agy` (Go binary, self-updating, already installed on hosts that use
-Antigravity) exposes a single NDJSON event stream in headless mode that maps
-onto kaoiro's state machine at least as well as `codex exec` does, so the
-adapter drives the CLI as a child process and no Python bridge is needed.
-The SDK route stays available as a future alternative
-(`LocalAgentConfig(system_instructions=…, mcp_servers=[…])`,
-`ask_user(handler=…)` policies) but is out of scope.
+Moved to [adapter architecture](../architecture/antigravity-adapter.md).
 
 ## Definition
 
+Moved to the event and permission references.
+
 ### Main API and process model
 
-```text
-agy --print "<turn text>" \
-    --output-format stream-json \
-    --print-timeout <duration> \
-    [--conversation <conversation_id>] \
-    [--model <slug>] [--effort low|medium|high] \
-    --add-dir <agent cwd> --add-dir <per-agent customization dir> \
-    [--dangerously-skip-permissions] --disable-slash-commands \
-    </dev/null
-```
-
-- **One `agy` process per turn** *(measured)*, the same spawn-per-turn model
-  as `codex exec`. The first turn creates a conversation (its id arrives in
-  the `init` event); every later turn passes `--conversation <id>`.
-  Spawning from Node `child_process.spawn` with piped stdio works; running
-  under `setsid` (no controlling tty) works *(measured)*.
-- **stdin must be closed** *(measured)*: with stdin left open the run ends
-  after ~3 s with `result.status = "ERROR"`, `error: "timeout waiting for
-  response"`, and no assistant output. The conversation still persists.
-- **Resident alternative** *(measured, not adopted for Stage A)*:
-  `agy --print='' --input-format stream-json --output-format stream-json`
-  keeps one process open and runs one turn per stdin line
-  `{"event":"user","message":{"content":"<text>"}}`. Only the `user` event
-  is recognised; any other `event` value is ignored with a stderr warning
-  (`warning: ignoring unsupported stream input message event "…"`), so there
-  is no in-band interrupt, permission, or model-switch channel. Each turn
-  emits its own `result`.
-- **`--disable-slash-commands`** *(flag present in 1.1.26)*: print mode
-  otherwise expands slash commands and skills found in the prompt text, so an
-  operator instruction starting with `/` would enter the CLI control plane.
-  Every instruction turn passes the flag; the wrapper's registration probe
-  (`-p /hooks`) runs without it.
-- **Interrupt** = terminate the child (SIGTERM). The conversation remains
-  resumable by id afterwards *(measured after ERROR-terminated turns)*. What
-  the child prints on receiving a signal mid-stream is *(unverified)*; the
-  adapter must treat child exit without a `result` as end of turn.
-- **Ordinary interrupt preserves queued turns** (issue #358). Interrupt aborts
-  only the active turn; turns already queued behind it are kept, and the drain
-  loop runs each afterwards under the new lifecycle generation with its own
-  delivery token. A queued inter-agent turn is an already-accepted delivery, so
-  dropping it silently would strand the sender's ledger with no ack and no
-  notice; preserving it lets the normal `onTurnStart` ack and `onTurnEnd`
-  settlement close it. Antigravity rejects attachments at `send()`, so the
-  queue never holds a temp turn to discard (unlike Codex's `#dropQueuedTempTurns`,
-  which keeps text turns and drops attachment turns). The active turn's own
-  attribution is unchanged, and any interrupted-notice for it is out of scope
-  here (a separate #351-class question). Queue retirement on close / fail-stop
-  (`reason: interrupted`) is issue #354's explicit path, at the coordinator
-  level, and is independent of the host queue.
-- **`--print-timeout`** is a Go duration; `24h` is accepted *(measured)*.
-  Set it long because a turn can legitimately block on an operator decision
-  (permission gate, ask_user_question) — see below.
-- `--mode accept-edits|plan` is accepted but does not change
-  `init.permission_mode` *(measured)*; its runtime effect is *(unverified)*
-  and not used by the adapter. `--sandbox` is likewise accepted and had no
-  observable effect (see Permission).
+Moved to [event contract](../reference/engines/antigravity-events.md).
 
 ### stream-json events (actual 1.1.26 shapes)
 
-Three top-level `event` kinds, one JSON object per line *(measured)*:
-
-```jsonc
-{"event":"init","conversation_id":"<uuid>",
- "init":{"cwd":"/abs/path","permission_mode":"request-review",
-         "tools":["ask_permission","ask_question","call_mcp_tool","run_command", "..."],
-         "model":"gemini-3.6-flash-low",   // present only when --model was given
-         "agent":"kaoiro"}}                // present only when --agent was given
-
-{"event":"step_update","step_update":{
-  "conversation_id":"<uuid>","step_index":1,
-  "state":"ACTIVE|DONE|ERROR",
-  "step_type":"user_input|agent_response|tool|system_message",
-  "text_delta":"PONG",                       // agent_response only (may be absent)
-  "tool_name":"run_command",                 // tool only
-  "tool_info":{"name":"run_command","parameters":{"CommandLine":"ls -1"},
-               "output":"a.txt\r\n",         // DONE, some tools
-               "error":{"type":"TOOL_ERROR","message":"…"}},   // ERROR
-  "duration_seconds":4.8,
-  "usage":{"input_tokens":5718,"output_tokens":34,"thinking_tokens":32,
-           "cache_read_tokens":8130,"total_tokens":5752}}}     // DONE agent_response
-
-{"event":"result","result":{
-  "conversation_id":"<uuid>","status":"SUCCESS|ERROR|CANCELED",
-  "response":"PONG\n","error":"…",           // error present on ERROR
-  "duration_seconds":4.9,"num_turns":1,
-  "usage":{…},
-  "denied_actions":[{"action":"command","display_name":"RunCommand"}]}}  // optional
-```
-
-Observed details:
-
-- `permission_mode` values seen: `request-review` (default) and
-  `always-proceed` (when `settings.json` `toolPermission` is
-  `always-proceed`). `init.tools` is the full tool inventory (57 names in
-  1.1.26); it is not filtered by permission.
-- `agent_response` steps stream `text_delta` fragments while `ACTIVE` and
-  close with `DONE` + `usage`. A thinking-only step emits `DONE` with
-  `thinking_tokens > 0` and no `text_delta`.
-- `tool` steps go `ACTIVE` → `DONE|ERROR`; `tool_info.parameters` carries
-  the raw tool arguments (`CommandLine`, `AbsolutePath`, `DirectoryPath`,
-  `Query`, …). `output` is present on `DONE` for `run_command`, `grep_search`,
-  `find_by_name`, `view_file` (summary), not guaranteed for every tool.
-- `system_message` steps appear on resumed conversations.
-- `result.status = "CANCELED"` was observed once together with
-  `denied_actions` after a permission auto-deny; treat it as a normal end of
-  turn, not an error.
-- Non-ASCII in `text_delta` is passed through *(changelog fix, unverified)*.
-- Per-turn baseline is ~5.7k `input_tokens` (system prompt) *(measured)*.
+Moved to [event contract](../reference/engines/antigravity-events.md).
 
 ### State derivation
 
-| Observation | kaoiro state / envelope |
-|---|---|
-| child spawned | `thinking` |
-| `step_update` `agent_response` `ACTIVE` (+`text_delta`) | `thinking`; `text_delta` accumulates into the assistant text (log payload) |
-| `step_update` `tool` `ACTIVE` | `tool_running`, `ext.tool_name = tool_name`, input = `tool_info.parameters` |
-| `step_update` `tool` `DONE` / `ERROR` | back to `thinking`; ERROR logs `tool_info.error.message` |
-| hook gate awaiting operator (see Permission) | `waiting_permission` with `ext.pending_permission` (ADR-0022) |
-| bridge `ask_user_question` pending (see Tool definition) | `waiting_input` with `ext.pending_question` (ADR-0027) |
-| `result` `SUCCESS` / `CANCELED` | `done`; `response` is the final text |
-| `result` `ERROR` | `error` with `result.error` |
-| child exit without `result` | `error` (`agy_exit_without_result`) |
-| `init` (first turn) | session id = `conversation_id` (SessionPointers) |
+Moved to [event contract](../reference/engines/antigravity-events.md).
 
 ### Permission (hooks are the approval channel)
 
-Headless `agy` cannot prompt. Measured behaviour by configuration:
-
-| Configuration | `run_command` needing approval |
-|---|---|
-| default (`request-review`) | auto-denied: `TOOL_ERROR … user denied permission to run command`, stderr `jetski: … headless mode cannot prompt for, so it was auto-denied`, `result.denied_actions` |
-| `settings.json` `permissions.allow: ["command(ls -1)"]` | exact command allowed and executed; other commands still auto-denied |
-| PreToolUse hook returning `{"decision":"allow"}` or `permissionOverrides` under `request-review` | **still auto-denied** — hooks cannot lift the headless denial |
-| `settings.json` `toolPermission: "always-proceed"` + PreToolUse hook | hook decides: `allow` → executed (`output` present); `deny` → `TOOL_ERROR: tool call denied by pre-tool hook: <reason>`; the model sees the reason and continues |
-| `--dangerously-skip-permissions` + PreToolUse hook | `init.permission_mode = "always-proceed"` for that process only; the hook fired for both `run_command` steps (stepIdx 2, 4) and the commands ran *(measured by the operator, 2026-09-04; host `settings.json` untouched)* |
-| `--sandbox` (always-proceed, hook allow) | **no effect observed**: `touch` outside cwd and `curl https://example.com` both succeeded *(measured on WSL2; the terminal sandbox is advisory for this adapter)* |
-
-Therefore the adapter's approval channel is a **PreToolUse hook** shipped in
-the per-agent customization dir (`.agents/hooks.json`, matcher `*`). The
-hook command receives the tool call on stdin and answers on stdout:
-
-```jsonc
-// stdin (camelCase, protojson)
-{"conversationId":"<uuid>","workspacePaths":["…"],
- "transcriptPath":"~/.gemini/antigravity-cli/brain/<uuid>/.system_generated/logs/transcript_full.jsonl",
- "artifactDirectoryPath":"~/.gemini/antigravity-cli/brain/<uuid>",
- "modelName":"gemini-3.8-flash-high","stepIdx":2,
- "toolCall":{"name":"run_command","args":{"CommandLine":"ls -1","Cwd":"/…","WaitMsBeforeAsync":5000,
-             "toolAction":"Listing directory contents","toolSummary":"List directory contents"}}}
-// stdout
-{"decision":"allow"}                                     // or
-{"decision":"deny","reason":"kaoiro: operator rejected"}
-```
-
-- Hook `timeout` is per handler in seconds (default 30). `timeout: 3600`
-  with a handler that blocked for 100 s was honoured: the `run_command` step
-  stayed `ACTIVE` for 110 s and then ran *(measured)*. CLI behaviour on hook
-  timeout is *(unverified)*; the wrapper fails closed (answers `deny`) before
-  its own deadline, and the ordering **gate deadline < hook timeout <
-  `--print-timeout`** is a hard constraint.
-- A long `run_command` holds the turn: `sleep 70; echo …` stayed `ACTIVE`
-  for 77 s, then `DONE` with output, and the model waited for it
-  *(measured; `WaitMsBeforeAsync: 5000` in the args did not detach it)*. A
-  bridge call that blocks on an operator answer therefore holds the turn.
-- The hook payload's `stepIdx` equals the stream's `step_index` of the
-  matching `tool` step (4 of 4 tool calls across 3 conversations,
-  *measured*), which is what the ADR-0057 F4b correlation invariant keys on.
-- `agy -p /hooks --add-dir <dir> --output-format json` lists the gate
-  (`name`, `source` path, `matcher`, `timeout_seconds`) without a model turn
-  *(measured)*; without `--add-dir` the list is empty. This is the quota-free
-  registration check the wrapper runs before the first turn.
-- `PreToolUse` fires for every tool including reads. The 57 names in
-  `init.tools` (1.1.26), classified for ADR-0057 F4 — the table is the
-  source of truth and any name outside it is *unclassified*:
-
-  | class | tools |
-  |---|---|
-  | read (local, side-effect free) | `view_file`, `list_dir`, `grep_search`, `find_by_name`, `command_status`, `list_permissions`, `manage_task`, `wait`, `wait_5_seconds`, `finish` |
-  | write (local files) | `write_to_file`, `replace_file_content`, `multi_replace_file_content`, `sed_file`, `notebook_edit` |
-  | shell | `run_command`, `send_command_input`, `notebook_execution` |
-  | network | `read_url_content`, `search_web`, `open_browser_url`, `generate_image`, `read_browser_page`, `list_browser_pages`, `browser_*` (15 names), `capture_browser_console_logs`, `capture_browser_screenshot`, `click_browser_pixel`, `execute_browser_javascript`, `browser_subagent` |
-  | subagent | `define_subagent`, `invoke_subagent`, `manage_subagents` (`browser_subagent` is in network so the `network_access` toggle can switch it off) |
-  | agent-internal (deny in headless) | `ask_question`, `ask_permission`, `ask_custom_permission`, `schedule`, `send_message`, `manage_inbox`, `delete_knowledge`, `call_mcp_tool`, `list_resources`, `read_resource` |
-
-- Hooks are also the only PostToolUse / Stop observation channel; not used
-  by the adapter in Stage A.
+Moved to [tools and permissions contract](../reference/engines/antigravity-tools-permissions.md).
 
 ### Tool children: prompts disabled, absolute tool deadline (issue #350)
 
-An `agy` tool child owns a PTY, so an interactive prompt inside a tool
-(`ssh` passphrase, `git` credential, host-key confirmation) blocks there even
-though the wrapper closes the parent's stdin; the CLI's own "waiting for
-input" detection is model-backed and was unavailable in the incident. The
-wrapper therefore does both of the following.
-
-- **Prompts disabled through the environment.** Every `agy` turn is spawned
-  with `GIT_TERMINAL_PROMPT=0` and `SSH_ASKPASS_REQUIRE=never`, and with
-  `GIT_SSH_COMMAND=ssh -o BatchMode=yes` unless the operator already set a
-  `GIT_SSH_COMMAND` (then it is left untouched and the CLI prints one
-  launch-time line saying BatchMode was not injected). `BatchMode=yes`
-  disables passphrase and host-key interaction (`man ssh_config`), so
-  `git ls-remote` over SSH exits non-zero at once without an identity and
-  succeeds unchanged with one *(measured against GitHub and Gitea)*. At
-  launch, when `SSH_AUTH_SOCK` is set and `LC_ALL=C ssh-add -l` exits 1 with
-  `The agent has no identities.` *(measured shape)*, the CLI warns once on
-  stderr; a missing `ssh-add`, a dead socket, a timeout, or identities present
-  stay silent.
-- **Absolute tool deadline in the turn watchdog.** Every turn carries a
-  watchdog token — an inter-agent delivery keeps its own, an operator
-  instruction gets one synthesized by the host (Codex parity; the
-  inter-agent bookkeeping ignores a token it never issued) — so both kinds
-  are bounded. The single `TurnWatchdog` also tracks every parsed
-  `step_update` `tool` step from `ACTIVE` to its `DONE` / `ERROR` (keyed by
-  `step_index`); an `ACTIVE` step whose `step_index` or tool name cannot be
-  correlated is fail-closed like an unprovable completion (SIGTERM, ADR-0057
-  F4b) rather than left untracked. The oldest active step is bounded
-  by `KAOIRO_ANTIGRAVITY_TOOL_TIMEOUT_MS` (default 600000 = 10 minutes, the
-  Claude Code Bash ceiling; minimum 1000). Stream progress extends only the
-  inactivity bound, never this deadline. On expiry the wrapper logs
-  `[kaoiro] antigravity turn watchdog tool timeout: … step=<n> tool=<name>
-  elapsed=<ms> threshold=<ms>` plus a `[kaoiro][antigravity-lifecycle]`
-  record `{"event":"tool_timeout",…}` (tool name and index only — never the
-  raw tool input), SIGTERMs the child through the existing interrupt path,
-  and reuses the existing abort grace (`…_ABORT_GRACE_MS`) and fail-stop.
-  Whatever the CLI prints on the way out, the turn ends as
-  `result{is_error: true, error_subtype: "error_during_execution",
-  error_detail: "tool_timeout"}` (state `error` → `waiting_input`) and an
-  inter-agent injection in that turn gets `peer_error.code = "timeout"`. No
-  new wire type.
-
-The deadline is the last safety net, not a scheduler: when `agy` keeps a step
-`ACTIVE` while a long-running command works in the background, healthy work
-past 10 minutes is also cut with the whole turn. A visible failure is
-preferred to a silent `tool_running` that only an operator's `kill` ends.
-The inactivity watchdog alone would have ended the incident's shape, but
-only after its 30-minute default: a blocked tool emits no stdout events, so
-inactivity does accrue *(measured: 22.6 s without stdout events during a
-mock passphrase prompt; the indefinite hang itself was not reproduced because
-the CLI backgrounded the child and the print timeout ended the turn)*.
+Moved to [tools and permissions contract](../reference/engines/antigravity-tools-permissions.md).
 
 ### Customization discovery (persona, hooks, skills)
 
-*(measured)* A directory passed with `--add-dir <dir>` is scanned as a
-customization root **without** being listed in
-`settings.json.trustedWorkspaces`:
-
-- `<dir>/.agents/rules/AGENTS.md` — always-on rule; verified as the persona
-  injection point (the rule "begin every reply with BANANA-OK" was obeyed on
-  every run). This is the `systemPrompt.append` / `developer_instructions`
-  equivalent (ADR-0032 F3).
-- `<dir>/.agents/hooks.json` — PreToolUse hooks fired from here. The same
-  file placed under the **cwd**'s `.agents/` did not fire in two probes
-  (once untrusted, once trusted + `git init`); root cause not isolated, so
-  the adapter relies on `--add-dir` only.
-- `<dir>/.agents/skills/<name>/SKILL.md` — progressive-disclosure skill
-  (name + description always in context) *(format from the bundled
-  `agy-customizations` docs; loading from `--add-dir` unverified)*.
-- `<dir>/.agents/agents/<name>/agent.md` + `--agent <name>` — markdown
-  custom agent with YAML frontmatter and an H1 system prompt; measured to
-  take effect (`init.agent = "kaoiro"`, prompt obeyed). Not used: whether it
-  replaces the default scaffolding is unknown.
-- **Workspace roots (measured, Stage 0.2)**: in print mode the process cwd
-  is **not** a workspace root by itself — with no `--add-dir` the model ran
-  `pwd` in `~/.gemini/antigravity-cli/scratch`, and a `.agents/hooks.json`
-  under the cwd never fired (this is the root cause of the earlier
-  "cwd hooks did not fire" observation; trusting the cwd in
-  `settings.json` did not change it). With `--add-dir <customization dir>`
-  alone, that dir became the only root and the model's `Cwd`. With
-  **both** `--add-dir <cwd> --add-dir <customization dir>` (either order),
-  `hook.workspacePaths` lists both and `run_command` ran in the real cwd.
-  The adapter therefore always passes both, the rules text names the
-  working directory, and the gate rejects a `Cwd` outside the agent cwd.
-- **Environment inheritance (measured, Stage 0.3)**: a variable set on the
-  `agy` process reached both the hook command and the `run_command` shell,
-  so the bridge socket path and per-spawn nonce can travel in the
-  environment.
-- **Hook timeout exceeded (measured, Stage 0.3)**: a handler that outlived
-  its `timeout` was killed and the tool step ended in `ERROR`
-  (`JSON hook "jsonhook__kaoiro-gate_PreToolUse_0_0" failed: command
-  failed: signal: killed`) — the tool did **not** run. Timeout is
-  fail-closed on the CLI side as well.
-- `.agents/mcp_config.json`, `.agents/plugins/<p>/mcp_config.json`,
-  `.agents/permissions.json`, `.agents/settings.json` — **not loaded** in
-  headless mode *(measured)*.
+Moved to [adapter architecture](../architecture/antigravity-adapter.md).
 
 ### MCP is not available in headless mode
 
-*(measured)* No MCP server was ever spawned in print mode: a stdio server
-registered via `agy mcp add` (global `~/.gemini/config/mcp_config.json`),
-via a plugin under `--add-dir`, and via a custom agent with
-`inheritMcp: true` never started (startup marker absent), and the CLI log
-shows `declarative_config_loader.go: skipping component during resolution:
-empty component: prompt section "mcp_servers"` on every run. `call_mcp_tool`
-is listed in `init.tools` but the model reports no MCP tools. Consequently
-kaoiro's tool surface cannot ride on MCP as it does for Codex
-(ADR-0032 F5) and uses a CLI bridge instead (next section). Re-check on
-each `agy` upgrade; an MCP path would simplify the bridge.
+Moved to [dated CLI evidence](../evidence/antigravity/cli-contract.md).
 
 ### Tool definition (CLI bridge over the wrapper tool host)
 
-The wrapper reuses the Codex `ToolHost` (NDJSON over a per-agent unix
-socket: `list_tools` / `call_tool`) and ships `dist/bridge.js` as a **CLI**
-instead of an MCP server:
-
-```text
-node <pkg>/dist/bridge.js call <tool_name> '<json input>'   # prints the tool result
-node <pkg>/dist/bridge.js list                              # prints the tool list
-```
-
-- The model learns the bridge from the always-on rules file (tool names,
-  one-line contracts, the exact invocation form) and a skill with fuller
-  examples. The socket path and per-spawn nonce travel in the environment
-  of the `agy` child, which `run_command` inherits *(measured)*.
-- The gate auto-allows a `run_command` only when its `CommandLine`
-  full-matches the bridge grammar of ADR-0057 F5 (absolute paths, tool
-  name, base64url payload; no shell metacharacters possible). `run_command`
-  runs through `bash` *(measured: `$0` = bash, `/proc/$$/exe` = bash)*, so
-  `;`, `&&`, `$(…)` in a command line are interpreted *(measured)*.
-- `ask_user_question` goes through the same bridge; the bridge blocks until
-  the operator answers, which holds the `run_command` step and therefore the
-  turn *(a 70 s tool call held the turn, measured)* — the same mechanism
-  that makes `waiting_question` hold on Codex (ADR-0032 F6).
-  `--print-timeout` and the hook timeout must both exceed the question wait.
-- PreToolUse fired for every tool step observed so far: `write_to_file`,
-  `view_file`, `list_dir`, `manage_task`, `run_command`, `define_subagent`,
-  `search_web` *(measured; `stepIdx` matched `step_index` in all 9 cases)*.
-  `wait_5_seconds` and `finish`, when asked for, produced no `tool` step
-  in the stream.
+Moved to [tools and permissions contract](../reference/engines/antigravity-tools-permissions.md).
 
 ### System-prompt equivalent (persona personality injection)
 
-`<dir>/.agents/rules/AGENTS.md` is created lazily before the first turn from
-the server-pushed persona prompt (personality + footer, ADR-0029 F9) plus
-the kaoiro operating preamble (working directory, bridge usage). It is
-rewritten before every turn and read by that turn's spawn. `display_name_sync`
-updates the displayed name only; it does not rewrite the persona prompt.
-Persona packs stay engine-independent (ADR-0032 F3).
+Moved to [adapter architecture](../architecture/antigravity-adapter.md).
 
 ### Session / conversation resume and enumeration
 
-- Resume: `--conversation <id>` *(measured)*; `--continue` resumes the most
-  recent conversation (not used: ambiguous across agents on one host).
-- Store: `~/.gemini/antigravity-cli/conversations/<id>.db` (sqlite, one per
-  conversation) and `conversation_summaries.db` *(paths measured; schema
-  unverified)*.
-- Transcript for history replay:
-  `~/.gemini/antigravity-cli/brain/<id>/.system_generated/logs/transcript_full.jsonl`
-  *(path from the hook payload; format unverified — Stage B)*.
-- A conversation opened in two processes at once is only advised against
-  by a banner *(changelog)*; the wrapper serialises turns anyway.
+Moved to [event contract](../reference/engines/antigravity-events.md).
 
 ### Models, effort, usage, rate limits
 
-- `agy models` prints one model per line as `<slug><TAB><display name>`
-  on stdout (progress goes to stderr) *(measured 2026-09-04 evening via a
-  pipe and via `execFile`: 14 lines, e.g. `gemini-3.8-flash-high\tGemini
-  3.8 Flash (High)`; 1.1.26 rejects `--output-format` on this subcommand)*.
-  An earlier run the same day printed bare slugs without the 3.8 family, so
-  the format and the list both drift with the vendor; the parser takes the
-  first tab-separated column as the slug, the second as display name,
-  accepts a bare-slug line, and falls back to the static snapshot on
-  anything else. `--model` must receive the slug only (a value containing
-  the display name fails with exit 1, measured by the reviewer).
-- `--model <slug>` echoes into `init.model` *(measured)*; `--effort
-  low|medium|high` is accepted *(measured; effect not separately
-  observable — gemini slugs already encode the tier)*.
-- Slash commands answered without a model turn or quota spend
-  *(measured)*: `agy -p /usage --output-format json` →
-  `command.data.groups[].buckets[]` with `window: "weekly"`,
-  `remaining_fraction`, `reset_time` (two groups: "Gemini Models" and
-  "Claude and GPT models"); `-p /model` → current model/effort;
-  `-p /permissions`, `-p /hooks`, `-p /help`.
-- **Wrapper quota projection:** a terminal `result.error` that contains a
-  `RESOURCE_EXHAUSTED` / HTTP 429 marker and a compact `Resets in <NhNmNs>`
-  duration is fail-soft mapped to `peer_error.code = "rate_limit"` and
-  `rate_limits.seven_day = {status: "blocked", utilization: 1, resets_at}`.
-  The parser accepts only the observed compact duration grammar; an
-  unrecognised terminal error remains the ordinary API error. The actual CLI
-  `result.error` terminal shape has not yet been measured; this mapping is
-  inferred from the internal-log string shape.
-- Context window sizes are not exposed; `usage.input_tokens` of the last
-  `agent_response` step approximates context in use.
+Moved to [event contract](../reference/engines/antigravity-events.md).
 
 ### Authentication and host requirements
 
-- OAuth personal login stored under `~/.gemini/` (`selectedAuthType:
-  "oauth-personal"`); the child inherits the wrapper's environment and HOME,
-  so no credential handling in kaoiro (ADR-0032 F7 convention).
-  `GEMINI_API_KEY` is the API-key alternative *(docs, unverified)*.
-- Requires `agy` on `PATH`. The runner probes `agy models` at register
-  time (quota-free); reporting `agy --version` and re-triggering checks on
-  a version change is Stage B4. This spec was measured against 1.1.26, and
-  a version change is the trigger to re-run the measurements marked
-  *(measured)* here, because the binary self-updates.
+Moved to [dated CLI evidence](../evidence/antigravity/cli-contract.md).
 
 ## Constraints
 
-- Every approval decision has to be made by the wrapper's hook gate — the
-  CLI itself is run with prompts disabled. The gate must fail closed on
-  socket failure, timeout, or malformed payload.
-- The permission substrate is the per-process flag
-  `--dangerously-skip-permissions` (ADR-0057 Q1, measured); the host-wide
-  `toolPermission` setting is not used.
-- No attachments in Stage A (`--print` takes text only).
-- No context-usage capability until a per-model window table exists.
-- The sandbox axis is advisory for this engine (`--sandbox` measured
-  ineffective; enforcement is the wrapper's argument inspection only).
-  The envelope must say so (ADR-0057 F4).
-- When permission-sync negotiation succeeds and the runner supplies all three
-  launch ceilings, the wrapper advertises `supports_permission_switch` with
-  sandbox, network-access, and approval maxima. It applies an accepted
-  `set_permission` at the next turn boundary and rejects an over-ceiling value
-  again in the wrapper; this does not make sandbox enforcement non-advisory.
+Moved to [adapter architecture](../architecture/antigravity-adapter.md) and
+[tools and permissions contract](../reference/engines/antigravity-tools-permissions.md).
 
 ## See Also
 
-- [ADR-0057](../adr/0057-antigravity-adapter.md) — decisions
-- [phase-34-antigravity-adapter](../plans/phase-34-antigravity-adapter.md) — implementation plan
-- [ADR-0032](../adr/0032-codex-adapter.md) / [ADR-0033](../adr/0033-permission-model-dual-axis.md)
-- Vendor: https://antigravity.google/docs/cli/overview ,
-  https://antigravity.google/docs/sdk/overview , bundled
-  `~/.gemini/antigravity-cli/builtin/skills/agy-customizations/docs/*.md`
+Moved to the pages above.

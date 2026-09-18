@@ -16,7 +16,9 @@ Implement [ADR-0057](../adr/0057-antigravity-adapter.md) F1–F7 so that an
 granularity as the other engines, carries its persona, answers operator
 permission requests, and uses `send_to_agent` / `ask_user_question`
 through the CLI bridge. Measured substrate:
-[antigravity-cli-events](../specs/antigravity-cli-events.md).
+[Antigravity adapter architecture](../architecture/antigravity-adapter.md),
+[event contract](../reference/engines/antigravity-events.md), and
+[tools and permissions contract](../reference/engines/antigravity-tools-permissions.md).
 
 ## Acceptance Criteria
 
@@ -96,5 +98,7 @@ through the CLI bridge. Measured substrate:
 ## See Also
 
 - [ADR-0057](../adr/0057-antigravity-adapter.md)
-- [antigravity-cli-events](../specs/antigravity-cli-events.md)
+- [Antigravity adapter architecture](../architecture/antigravity-adapter.md)
+- [Antigravity event contract](../reference/engines/antigravity-events.md)
+- [Antigravity tools and permissions](../reference/engines/antigravity-tools-permissions.md)
 - [phase-14-codex-adapter](phase-14-codex-adapter.md) (template phase)

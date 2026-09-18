@@ -5,7 +5,7 @@ date: 2026-09-04
 opened: 2026-09-04
 supersedes: []
 superseded_by: null
-related_specs: [antigravity-cli-events, plugin-model, protocol, codex-sdk-events, threat-model]
+related_specs: [antigravity-adapter, antigravity-events, antigravity-tools-permissions, plugin-model, protocol, codex-sdk-events, threat-model]
 related_adrs: [14, 17, 23, 32, 33, 34, 35, 36, 39]
 ---
 
@@ -28,7 +28,7 @@ issue #359).
 
 Issue #181 asks for Google Antigravity as a third kaoiro engine next to
 `claude-code` and `codex`, premised on the Antigravity SDK. Investigation on
-2026-09-04 ([antigravity-cli-events](../specs/antigravity-cli-events.md))
+2026-09-04 ([Antigravity CLI contract evidence](../evidence/antigravity/cli-contract.md))
 established:
 
 - The SDK is Python-only; there is no Node/TS SDK. Hosting it would need a
@@ -328,7 +328,7 @@ active delivery for supervisor recovery. The same watchdog also owns the
 absolute per-tool deadline `KAOIRO_ANTIGRAVITY_TOOL_TIMEOUT_MS` (issue
 #350): a tool step still `ACTIVE` after it is terminated through the same
 interrupt / grace path and the turn ends as `tool_timeout`
-([antigravity-cli-events](../specs/antigravity-cli-events.md)).
+([Antigravity tools and permissions](../reference/engines/antigravity-tools-permissions.md)).
 
 ### F6 — Catalog: `agy models` at runner register, static snapshot fallback, account default entry
 

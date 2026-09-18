@@ -5,6 +5,9 @@ kaoiro documentation. Each subfolder has a README index.
 | Folder | Content |
 |--------|------|
 | [specs/](specs/) | Feature specifications (by topic) — being dissolved into `architecture/` and `reference/` ([ADR-0060](adr/0060-documentation-taxonomy-and-migration.md), [issue #368](https://github.com/sakuraiyuta/kaoiro/issues/368)) |
+| [architecture/](architecture/) | How current systems are built and why |
+| [reference/](reference/) | Exact current contracts by topic |
+| [evidence/](evidence/) | Dated measurements and their limits |
 | [operations/](operations/) | Operator runbooks |
 | [contributing/](contributing/) | How to change the project, including [where a doc page goes](contributing/documentation.md) |
 | [plans/](plans/) | Phase-based implementation plans and status |

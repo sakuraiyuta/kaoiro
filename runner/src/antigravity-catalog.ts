@@ -53,7 +53,7 @@ function runAgyModels(
  *  it prepends the `{ value: "", display_name: "account default" }` entry
  *  itself). Falls back to the pinned 1.1.26 snapshot with a stderr warn on
  *  any failure: binary absent, non-zero exit, timeout, or output the parser
- *  cannot make sense of (docs/specs/antigravity-cli-events.md — the format
+ *  cannot make sense of (docs/reference/engines/antigravity-events.md — the format
  *  drifts with the vendor). */
 export async function resolveAntigravityCatalog(
   executable: AgyExecutableResolution,
