@@ -55,8 +55,8 @@ implementation — the emphasis marks; all three are walked at every close.
 | U21 | runner update / rollback / artifacts / service verification | ops | ⏳ |
 | U22 | deployment troubleshooting | ops | ⏳ |
 | U23 | UI design group (visual language, tokens, layout, motion) | perm | ⏳ |
-| U24 | codex app-server architecture / reference + ADR-0058 evidence extraction | perm impl | Implemented; review pending |
-| U25 | codex backend switch runbook | ops perm impl | ⏳ |
+| U24 | codex app-server architecture / reference + ADR-0058 evidence extraction | perm impl | ✅ |
+| U25 | codex backend switch runbook | ops perm impl | Implemented; review pending |
 | U26 | antigravity adapter / events / tools-permissions / evidence | perm impl | ⏳ |
 | U27 | codex exec events / model catalog | perm impl | ✅ |
 | U28 | claude events | perm impl | ⏳ |
@@ -96,3 +96,7 @@ Writer rules: one writer per destination file; units that touch the same file
 | adr/0058-codex-app-server-turn-steer.md (Appendices A–C through increment 5e) | [evidence/codex-app-server/settings-and-permission.md](../evidence/codex-app-server/settings-and-permission.md) | U24 |
 | adr/0058-codex-app-server-turn-steer.md (Appendices A–C through increment 5e) | [evidence/codex-app-server/host-composition.md](../evidence/codex-app-server/host-composition.md) | U24 |
 | ../../wrapper/codex/README.md (implementation) | [architecture/codex-backends.md](../architecture/codex-backends.md) | U24 |
+| docs/adr/0058-codex-app-server-turn-steer.md (increment 6) | [evidence/codex-app-server/backend-rollback-artifact.md](../evidence/codex-app-server/backend-rollback-artifact.md) | U25 |
+| docs/operations/production.md (Codex backend section) | [operations/codex-backend-switch.md](../operations/codex-backend-switch.md) | U25 |
+| wrapper/codex/README.md (backend contract) | [reference/configuration/runner.md](../reference/configuration/runner.md) | U25 |
+| operations/production.md (Release note) | [Stage 6 landing record](https://github.com/sakuraiyuta/kaoiro/issues/348#issuecomment-5726375118) | U25; duplicate of existing issue record |

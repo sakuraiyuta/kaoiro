@@ -275,43 +275,11 @@ class as the reboot issue above; the fix is the same boot-order drop-in.
 
 ## Codex backend selection and rollback
 
-Use a runner release containing ADR-0058 Stage 1. In `runner.config.json`, merge
-`"backend": "app-server"` into the existing `codex` object without deleting its
-auth or model settings. The default is `"exec"`. This selects all subsequent
-Codex wrapper lifetimes on that runner, not one dashboard agent. Running
-wrappers keep their backend. No environment variable, backend flag or dashboard
-control overrides it. Check the wrapper's `codex: backend=...` startup diagnostic.
-
-To roll back to exec while preserving a session:
-
-1. Record the Codex session ID, host and working directory. Stop the target agent
-   through the existing operator stop action and wait for it to exit. Do not
-   merely drop its socket or race the Supervisor's automatic restart.
-2. Set `codex.backend` to `"exec"`. Wait for the runner diagnostic
-   `runner: codex backend=exec for subsequent wrappers`. The earlier
-   `config reload` line alone is insufficient; a skipped/failed reload must be
-   corrected before proceeding. Other future Codex launches also use exec.
-3. Use the existing session selection/restore flow to resume that recorded ID
-   on the same host and cwd, with the same Codex session store. Do not select
-   a fresh session/reset. The runner enforces its existing session existence
-   check and exclusive resume lock.
-4. Confirm `codex: backend=exec`, the resumed session ID and the next successful
-   result. An ambiguous or failed turn is not automatically resubmitted.
-
-This changes backend selection, not the installed release. App-server startup
-failure remains an operator-visible error and closes admission; there is no
-implicit exec fallback. Unexpected wrapper exits retain the Supervisor's
-bounded restart policy. A deliberate stop does not restart.
+See [Codex backend switching and rollback](codex-backend-switch.md#codex-backend-selection-and-rollback).
 
 ### Release note
 
-Codex now offers an explicit app-server backend through runner-local
-`codex.backend: "app-server"`; exec remains the default. Steering is disabled
-and approval remains `never`. Selection applies to new wrapper lifetimes only.
-To roll back, stop the agent, set `codex.backend: "exec"`, confirm the runner's
-applied-config diagnostic, then resume the same session ID on the same host and
-cwd. Linux x64 packaged execution is the measured release path; Darwin execution
-and production account/model behavior are not established by loopback tests.
+The release note is retained in the [Stage 6 landing record](https://github.com/sakuraiyuta/kaoiro/issues/348#issuecomment-5726375118).
 
 ## See Also
 
