@@ -164,27 +164,31 @@ confirmation**.
 - Resolution priority: `launch > env > config > default`.
 - Startup stamp: **when explicitly supplied**, stamp `model` and
   `model_source=launch|env|config` immediately (optimistic stamp, phase-15
-  [15-4b/4c]). SDK confirmation may update only the value (for example alias
-  expansion in Claude), never the source; replacing it with `default` would
-  falsely claim an account default.
+  [15-4b/4c]). An SDK report rewrites neither: the pick keeps the spelling it
+  was given (an alias `opus[1m]` is reported back as `claude-opus-5[1m]` and
+  stays `opus[1m]`), and replacing the source with `default` would falsely
+  claim an account default.
 - **When unspecified**: stamp neither `model` nor `model_source` at startup;
   the first SDK report emits `model` with `model_source="default"`.
 - **Engine-side switch away from an explicit pick** (issue #363, Claude
-  `model_refusal_fallback`): the SDK report is taken as the same model only
-  when it is another spelling of the pick (equal string, or the catalog
-  resolves both to one id — an alias `opus[1m]` is reported back as
-  `claude-opus-5[1m]`); an undecidable comparison (catalog not yet loaded)
-  changes nothing. A report that is a different model is DISPLAY-ONLY: the
-  top-level `ext.model` / whoami `model` show the running model with
-  `model_source: "fallback"` (`DisplayedModelSource`), while `ext.effective`
-  — and therefore the resume snapshot — keeps the explicit pick and its
-  source, so a relaunch re-sends the operator's model (explicit `model`
-  beats the CLI's resumed session state; measured on SDK 0.3.258). The
-  wrapper also emits a one-shot `switch_error{reason:"sdk_fallback",
+  `model_refusal_fallback`): the engine's latest report (init, context usage,
+  or a session-scope fallback notice) is compared with the pick. Another
+  spelling of the pick (equal string, or the catalog resolves both to one id)
+  is the same model and shows nothing; an undecidable comparison (catalog not
+  yet loaded) is held and judged once the catalog lands — a fallback notice
+  is authoritative on its own. A report that is a different model is
+  DISPLAY-ONLY: the top-level `ext.model` / whoami `model` show the running
+  model with `model_source: "fallback"` (`DisplayedModelSource`), while
+  `ext.effective` — and therefore the resume snapshot — keeps the explicit
+  pick and its source, so a relaunch re-sends the operator's model (explicit
+  `model` beats the CLI's resumed session state; measured on SDK 0.3.258).
+  The wrapper also emits a one-shot `switch_error{reason:"sdk_fallback",
   requested:<pick>, rolled_back_to:<running>}`, a transcript system line,
-  and a stderr diagnostic. `"fallback"` never appears in `ext.effective`;
-  the runner pair rule and the server snapshot sanitizer do not accept it.
-  A subagent-only fallback (`scope: "local"`) is logged and changes nothing.
+  and a stderr diagnostic, and re-emits `state_change` whenever a report or
+  the catalog moves the displayed model, not only at the next transition.
+  `"fallback"` never appears in `ext.effective`; the runner pair rule and
+  the server snapshot sanitizer do not accept it. A subagent-only fallback
+  (`scope: "local"`) is logged and changes nothing.
   An explicit `set_model` supersedes the divergence and persists as
   `config` as before.
 - Effort follows the same semantics (`ext.effort_source`): without an explicit

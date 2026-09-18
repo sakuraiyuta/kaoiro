@@ -226,11 +226,17 @@ relaunch. Decision:
 - The source vocabulary above stays the config / launch / snapshot vocabulary.
   A display-only widening `DisplayedModelSource = ModelSource | "fallback"`
   rides the top-level `ext.model_source` and whoami only.
-- With an explicit pick, an SDK report is adopted only as another spelling of
-  the same model (catalog-resolved); a different model becomes the displayed
-  fallback while `ext.effective` keeps the pick — so relaunch restores the
-  operator's model. Without an explicit pick the wrapper follows the engine as
-  before.
+- With an explicit pick, no SDK report rewrites it: the pick is held in the
+  spelling the operator gave (`ext.effective`, the resume snapshot,
+  `switch_error.requested`), and the engine's latest report is kept beside it.
+  A report that is another spelling of the same model (catalog-resolved) shows
+  nothing; a different model becomes the displayed fallback — so relaunch
+  restores the operator's model. The verdict is derived from the latest
+  report and the current catalog at each snapshot, so a catalog that lands
+  after a fallback judges the fallback, not the report before it, and a
+  report that only moves the displayed model is announced without waiting for
+  a state transition. Without an explicit pick the wrapper follows the engine
+  as before.
 - The switch is surfaced (stderr, transcript, one-shot `switch_error`
   `sdk_fallback`); it is not prevented. Declining the fallback
   (`refusal_fallback_prompt` dialog kind, `CLAUDE_CODE_REFUSAL_FALLBACK_CATCH_ALL`)

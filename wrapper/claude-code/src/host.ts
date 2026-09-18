@@ -663,23 +663,23 @@ export class AgentHost implements EngineAdapter {
 
   /** Latest Claude Code status meta (#16), stamped into state_change ext:
    *  active model, working directory, context-window usage, and per-window
-   *  rate limits. All best-effort — absent until the SDK surfaces them. */
+   *  rate limits. All best-effort — absent until the SDK surfaces them.
+   *  With an explicit #modelSource the model is the operator's pick in the
+   *  spelling it was given (issue #363): it is what ext.effective, the
+   *  resume snapshot and switch_error.requested carry, and no engine report
+   *  rewrites it — only setModel / the persist validation do. */
   #model: string | null = null;
   /** Source of #model (ADR-0032 F4bc addendum, phase-15). Set by the
    *  constructor from options.modelSource; auto-becomes "default" when
    *  #applyInitMeta stamps a model without a prior explicit source. */
   #modelSource: ModelSource | null = null;
-  /** Engine-reported model that diverges from an explicit #model pick
-   *  (issue #363). Display-only: it rides the top-level ext.model /
-   *  whoami as `model_source: "fallback"` while #model / #modelSource —
-   *  and therefore ext.effective and the resume snapshot — keep the pick
-   *  a relaunch re-sends. null = no divergence. */
-  #sdkModel: string | null = null;
-  /** The last model the SDK reported (init / context usage), retained so
-   *  the divergence verdict can be re-taken once the account catalog
-   *  lands: the bootstrap catalog cannot resolve aliases, and an alias pick
-   *  reported back in its resolved spelling must not read as a switch. */
-  #lastReportedModel: string | null = null;
+  /** The latest model the engine says it runs (issue #363): an init or
+   *  context-usage report, or the target of a session-scope refusal
+   *  fallback notice. Kept apart from #model so an explicit pick survives
+   *  every report; the display-only divergence between the two is derived
+   *  by #engineFallbackModel() whenever a snapshot is taken, so a catalog
+   *  that lands late judges this latest report and never an earlier one. */
+  #engineModel: { model: string; from_notice: boolean } | null = null;
   #effort: string | null = null;
   #effortPending: string | null = null;
   #effortLastGood: string | null = null;
@@ -980,12 +980,13 @@ export class AgentHost implements EngineAdapter {
   /** Single engine-neutral SoT for both state_change.ext and whoami (#113). */
   #effectiveStatusSnapshot(): EffectiveStatusSnapshot {
     const axes = PERMISSION_MODE_AXES[this.#permissionMode as PermissionMode];
+    const fallbackModel = this.#engineFallbackModel();
     return {
       engine: "claude-code",
       // Display-only divergence (issue #363): the top-level index and whoami
       // show the engine's model; `resolved` (ext.effective, the snapshot)
       // keeps the explicit pick so a relaunch re-sends it.
-      ...(this.#sdkModel !== null ? { displayed_model: this.#sdkModel } : {}),
+      ...(fallbackModel !== null ? { displayed_model: fallbackModel } : {}),
       resolved: {
         ...(this.#model !== null ? { model: this.#model } : {}),
         ...(this.#modelSource !== null
@@ -1461,9 +1462,8 @@ export class AgentHost implements EngineAdapter {
       this.#model = value;
       this.#modelSource = "config";
       // An explicit pick supersedes any SDK-side divergence (issue #363);
-      // the next init / usage report re-takes the verdict against it.
-      this.#sdkModel = null;
-      this.#lastReportedModel = null;
+      // the next init / usage report is judged against the new pick.
+      this.#engineModel = null;
       this.#operatorSwitchedFields.add("model");
       this.#operatorSwitchedFields.add("model_source");
       if (invalidEffort) {
@@ -1492,9 +1492,8 @@ export class AgentHost implements EngineAdapter {
       this.#model = value;
       this.#modelSource = "config";
       // An explicit pick supersedes any SDK-side divergence (issue #363);
-      // the next init / usage report re-takes the verdict against it.
-      this.#sdkModel = null;
-      this.#lastReportedModel = null;
+      // the next init / usage report is judged against the new pick.
+      this.#engineModel = null;
       this.#operatorSwitchedFields.add("model");
       this.#operatorSwitchedFields.add("model_source");
       // Invalidate the cached context snapshot AS SOON AS the model has been
@@ -2419,55 +2418,63 @@ export class AgentHost implements EngineAdapter {
     if (meta.fast_mode !== undefined) this.#fastMode = meta.fast_mode;
   }
 
-  /** Takes an SDK-reported model (init / context usage) into the host's
-   *  view (issue #363). Without an explicit pick the host follows the
-   *  engine as before. With one, the pick is what a relaunch re-sends, so
-   *  the report only adopts the engine's canonical spelling when the
-   *  catalog says it is the same model; a different model becomes the
-   *  display-only #sdkModel instead of overwriting the pick. An
-   *  undecidable comparison (catalog not yet loaded) changes nothing and is
-   *  retaken by #reconcileReportedModel once the catalog lands. */
-  #observeReportedModel(reported: string): void {
-    this.#lastReportedModel = reported;
-    if (
-      this.#model === null ||
-      this.#modelSource === null ||
-      this.#modelSource === "default"
-    ) {
-      // SDK-delegated: this is the engine's own default (or a mid-session
-      // setModel confirmation); stamp "default" so ext.model never ships
-      // without ext.model_source.
-      this.#model = reported;
-      if (this.#modelSource === null) this.#modelSource = "default";
-      this.#sdkModel = null;
-      return;
-    }
-    switch (this.#compareWithPin(reported)) {
+  /** Records the model the engine says it runs (issue #363): an init or
+   *  context-usage report, or — `fromNotice` — the target of a session-scope
+   *  refusal fallback. Without an explicit pick the host follows the engine
+   *  as before. With one, #model is left alone whatever the report says;
+   *  the divergence the operator sees is derived by #engineFallbackModel. */
+  #observeReportedModel(reported: string, fromNotice = false): void {
+    this.#engineModel = { model: reported, from_notice: fromNotice };
+    if (this.#hasExplicitPick()) return;
+    // SDK-delegated: this is the engine's own default (or a mid-session
+    // setModel confirmation); stamp "default" so ext.model never ships
+    // without ext.model_source.
+    this.#model = reported;
+    if (this.#modelSource === null) this.#modelSource = "default";
+  }
+
+  /** An operator / config / env pick is in force, as opposed to the host
+   *  following whatever the engine reports (source "default"). */
+  #hasExplicitPick(): boolean {
+    return (
+      this.#model !== null &&
+      this.#modelSource !== null &&
+      this.#modelSource !== "default"
+    );
+  }
+
+  /** The display-only fallback model (issue #363): the engine's latest
+   *  report when it names a model other than the explicit pick, else null.
+   *  Derived on every snapshot rather than stored, so the verdict always
+   *  reflects the current catalog and the latest report: a catalog that
+   *  lands after a fallback judges the fallback, not the report before it.
+   *  An undecidable report (catalog cannot resolve the pick yet) shows
+   *  nothing — an alias reported in its resolved spelling must not read as
+   *  a switch — unless it came from a fallback notice, which is
+   *  authoritative for the swap on its own. */
+  #engineFallbackModel(): string | null {
+    const engine = this.#engineModel;
+    if (engine === null || !this.#hasExplicitPick()) return null;
+    switch (this.#compareWithPin(engine.model)) {
       case "same":
-        this.#model = reported;
-        this.#sdkModel = null;
-        return;
+        return null;
       case "different":
-        this.#sdkModel = reported;
-        return;
+        return engine.model;
       case "unknown":
-        return;
+        return engine.from_notice ? engine.model : null;
     }
   }
 
-  /** Re-takes the divergence verdict for the last report after the account
-   *  catalog replaces the bootstrap one. Only an explicit pick can have a
-   *  pending verdict; an SDK-delegated host follows reports live, and the
-   *  persist_alias_unknown rollback that runs just before this must keep
-   *  its "default" placeholder until the next report, as before. */
-  #reconcileReportedModel(): void {
-    if (
-      this.#lastReportedModel !== null &&
-      this.#modelSource !== null &&
-      this.#modelSource !== "default"
-    ) {
-      this.#observeReportedModel(this.#lastReportedModel);
-    }
+  /** Identity of what the model index projects (issue #363), for the emit
+   *  dedups that run outside a state transition — context usage and catalog
+   *  arrival: a reading that only moves the displayed model must still reach
+   *  the dashboard before the next transition. */
+  #modelViewKey(): string {
+    return JSON.stringify([
+      this.#model,
+      this.#modelSource,
+      this.#engineFallbackModel(),
+    ]);
   }
 
   /** Whether `reported` names the same model as the explicit pick #model,
@@ -2509,10 +2516,10 @@ export class AgentHost implements EngineAdapter {
 
   /** Surfaces an SDK refusal fallback (issue #363): stderr diagnostic,
    *  transcript line, and — for a session-scope swap — the one-shot
-   *  switch_error plus the display-only fallback model, taken directly from
-   *  the notice so the operator sees it even while the catalog cannot
-   *  resolve the report. A local (subagent-only) swap leaves the session
-   *  model alone and is only logged. */
+   *  switch_error plus the fallback model as the engine's latest report,
+   *  which the display shows even while the catalog cannot resolve the pick.
+   *  A local (subagent-only) swap leaves the session model alone and is
+   *  only logged. */
   #applyModelFallback(notice: ModelFallbackNotice): void {
     this.#warn(
       `[kaoiro] model refusal ${notice.kind === "refusal_fallback" ? "fallback" : "without fallback"}: ` +
@@ -2530,18 +2537,7 @@ export class AgentHost implements EngineAdapter {
       reason: "sdk_fallback",
       rolled_back_to: fallbackModel,
     };
-    if (
-      this.#model !== null &&
-      this.#modelSource !== null &&
-      this.#modelSource !== "default" &&
-      this.#compareWithPin(fallbackModel) !== "same"
-    ) {
-      // The notice is authoritative for the swap; do not wait for the next
-      // init / usage report or for the catalog to resolve it.
-      this.#sdkModel = fallbackModel;
-    } else {
-      this.#observeReportedModel(fallbackModel);
-    }
+    this.#observeReportedModel(fallbackModel, true);
     this.#emitState(this.#machine.state);
   }
 
@@ -2691,6 +2687,7 @@ export class AgentHost implements EngineAdapter {
     try {
       const models = await current.supportedModels();
       if (!models) return;
+      const viewBefore = this.#modelViewKey();
       this.#models = models.map((m) => ({
         value: m.value,
         display_name: m.displayName,
@@ -2707,7 +2704,14 @@ export class AgentHost implements EngineAdapter {
       }));
       this.#modelsSucceeded = true;
       this.#validatePersistModelAgainstCatalog();
-      this.#reconcileReportedModel();
+      // The account catalog can settle a report that was undecidable against
+      // the bootstrap one (issue #363) or roll a stale persisted pick back;
+      // either moves the model index, so announce it now rather than at the
+      // next transition. The catalog itself keeps riding the next transition
+      // as before when the index did not move.
+      if (this.#modelViewKey() !== viewBefore) {
+        this.#emitState(this.#machine.state);
+      }
     } catch {
       if (this.#modelsRetryCount >= MAX_MODEL_REFRESH_RETRIES) {
         // Diagnostic breadcrumb for dogfood: after the cap the host stays
@@ -2904,7 +2908,6 @@ export class AgentHost implements EngineAdapter {
       })) as SupportedModel[];
       this.#modelsSucceeded = true;
       this.#validatePersistModelAgainstCatalog();
-      this.#reconcileReportedModel();
       this.#emitState(this.#machine.state);
       return { ok: true, models_count: this.#models.length };
     }
@@ -2948,6 +2951,10 @@ export class AgentHost implements EngineAdapter {
         max_tokens: usage.maxTokens,
         used_percentage: usage.percentage,
       };
+      // The reading also names the model (issue #363): a report that only
+      // moves the model index counts as a change for the emit below, or the
+      // fallback display would wait for the next transition.
+      const viewBefore = this.#modelViewKey();
       if (typeof usage.model === "string" && usage.model !== "") {
         this.#observeReportedModel(usage.model);
       }
@@ -2956,7 +2963,8 @@ export class AgentHost implements EngineAdapter {
         prev === null ||
         prev.used_tokens !== next.used_tokens ||
         prev.max_tokens !== next.max_tokens ||
-        prev.used_percentage !== next.used_percentage;
+        prev.used_percentage !== next.used_percentage ||
+        this.#modelViewKey() !== viewBefore;
       this.#context = next;
       // Runs on EVERY successful reading of this generation, deliberately
       // ahead of the equality dedup (BR MF1-R2). The settling gate counts

@@ -2737,7 +2737,8 @@ describe("AgentHost — query injection", () => {
           // SDK init が別綴り (正規化名) を返しても source は "config" のまま
           // 維持されること — 値の由来を伝える field なので default に書き換えない。
           // 同一 model かどうかは catalog が裏付ける (issue #363): pick の
-          // resolvedModel が init の綴りに一致するので正規化名を採用する。
+          // resolvedModel が init の綴りに一致するので fallback ではなく、
+          // pick はそのままの綴りで保持される (effective / 表示ともに)。
           yield msg({
             type: "system",
             subtype: "init",
@@ -2762,13 +2763,14 @@ describe("AgentHost — query injection", () => {
     });
     await host.run();
     expect(host.statusExtSnapshot()).toMatchObject({
-      model: "claude-opus-4-7-normalized",
+      model: "claude-opus-4-7",
       model_source: "config",
       effective: {
-        model: "claude-opus-4-7-normalized",
+        model: "claude-opus-4-7",
         model_source: "config",
       },
     });
+    expect(envs.some((e) => e.ext?.model_source === "fallback")).toBe(false);
   });
 
   it("楽観 stamp: options.modelSource='env' でも SDK init 後 source を維持する (phase-15 15-4b)", async () => {
@@ -5544,7 +5546,11 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
     });
   });
 
-  it("init aliasはcanonical startup stateを上書きしてexact catalog rowを使う", async () => {
+  it("init が同一 model の別綴り (alias) を報告しても canonical の explicit pick はそのまま (issue #363)", async () => {
+    // Pre-#363 the init report overwrote #model, so the alias won the
+    // catalog lookup. The pick is now the operator's (the resume snapshot
+    // re-sends it), so the lookup stays keyed on the canonical pick and the
+    // alias report is neither adopted nor shown as a fallback.
     const envs: Envelope[] = [];
     const queryFn = makeQueryFn(() => {
       async function* gen(): AsyncGenerator<SDKMessage, void> {
@@ -5579,18 +5585,21 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
     );
 
     await host.run();
-    // init's SDK-reported alias is authoritative for current #model, while
-    // the explicit source remains the launch/config provenance.
     expect(host.statusSnapshot()).toMatchObject({
-      model: "sonnet",
+      model: "claude-sonnet-5",
       model_source: "config",
     });
     const ext = host.statusExtSnapshot();
-    // default resolves to the same canonical ID but lacks effort. True proves
-    // the post-init alias got the value-exact sonnet row, not the first
-    // resolved_model match.
+    expect(ext).toMatchObject({
+      model: "claude-sonnet-5",
+      model_source: "config",
+      effective: { model: "claude-sonnet-5", model_source: "config" },
+    });
+    // The canonical pick matches both rows; default lacks effort, and the
+    // canonical intersection fails closed (ADR-0037 追補) — the alias report
+    // no longer narrows the lookup to the value-exact sonnet row.
     expect(ext.session_capabilities).toMatchObject({
-      supports_effort_switch: true,
+      supports_effort_switch: false,
     });
     expect(ext.models).toEqual(
       expect.arrayContaining([
@@ -5600,7 +5609,8 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
         }),
       ]),
     );
-    expect(envs.some((env) => env.ext.model === "sonnet")).toBe(true);
+    expect(envs.some((env) => env.ext.model === "sonnet")).toBe(false);
+    expect(envs.some((env) => env.ext.model_source === "fallback")).toBe(false);
   });
 
   it("canonical lookup rowのeffort_levelsでinvalid effortを判定する", async () => {
@@ -7760,7 +7770,8 @@ describe("AgentHost — SDK-side model fallback (issue #363)", () => {
     pin?: string;
     source?: "config" | "env";
     initModel: string;
-    catalog?: unknown[] | null;
+    /** null = supportedModels() throws; a function defers the catalog. */
+    catalog?: unknown[] | null | (() => Promise<unknown[]>);
     usageModel?: string;
   }) {
     const envs: Envelope[] = [];
@@ -7769,6 +7780,7 @@ describe("AgentHost — SDK-side model fallback (issue #363)", () => {
     const initConsumed = deferred<void>();
     const feed = signalQueue();
     const queued: SDKMessage[] = [];
+    let usageModel = params.usageModel;
     const queryFn = makeQueryFn((args: QueryArgs) => {
       async function* gen(): AsyncGenerator<SDKMessage, void> {
         yield msg({ type: "system", subtype: "init", model: params.initModel, cwd: "/repo" });
@@ -7786,12 +7798,14 @@ describe("AgentHost — SDK-side model fallback (issue #363)", () => {
         async () => {},
         params.usageModel === undefined
           ? undefined
-          : async () => ({ totalTokens: 10, maxTokens: 1000, percentage: 1, model: params.usageModel }),
+          : async () => ({ totalTokens: 10, maxTokens: 1000, percentage: 1, model: usageModel }),
         {
           setModel: async () => {},
           supportedModels: params.catalog === null
             ? async () => { throw new Error("no catalog"); }
-            : async () => params.catalog ?? catalog,
+            : typeof params.catalog === "function"
+              ? params.catalog
+              : async () => params.catalog ?? catalog,
         },
       );
     });
@@ -7807,7 +7821,15 @@ describe("AgentHost — SDK-side model fallback (issue #363)", () => {
     const done = host.run();
     const push = (m: SDKMessage): void => { queued.push(m); feed.signal(); };
     const finish = async (): Promise<void> => { feed.signal(); host.close(); await done; };
-    return { host, envs, logs, warnings, initConsumed, push, finish };
+    const setUsageModel = (m: string): void => { usageModel = m; };
+    /** The account catalog replaced the bootstrap one (async after init). */
+    const catalogLanded = (): Promise<void> =>
+      vi.waitFor(() =>
+        expect(host.statusExtSnapshot().models).toEqual(
+          expect.arrayContaining([expect.objectContaining({ value: "opus[1m]" })]),
+        ),
+      );
+    return { host, envs, logs, warnings, initConsumed, push, finish, setUsageModel, catalogLanded };
   }
 
   it("t1: an init report that differs from an explicit pick is displayed as fallback while effective keeps the pick", async () => {
@@ -7820,6 +7842,9 @@ describe("AgentHost — SDK-side model fallback (issue #363)", () => {
       effective: { model: "opus[1m]", model_source: "config" },
     });
     expect(h.host.statusSnapshot()).toMatchObject({ model: "claude-opus-4-8", model_source: "fallback" });
+    // The verdict was settled by the account catalog landing (the bootstrap
+    // one cannot resolve the pick); that alone must announce the change.
+    await vi.waitFor(() => expect(h.envs.some((e) => e.ext?.model_source === "fallback")).toBe(true));
     await h.finish();
     expect(effectiveNeverFallback(h.envs)).toBe(true);
   });
@@ -7830,16 +7855,16 @@ describe("AgentHost — SDK-side model fallback (issue #363)", () => {
     await vi.waitFor(() => expect(h.host.statusExtSnapshot().model_source).toBe("fallback"));
     expect(h.host.statusExtSnapshot()).toMatchObject({
       model: "claude-opus-4-8",
-      effective: { model: "claude-opus-5[1m]", model_source: "config" },
+      effective: { model: "opus[1m]", model_source: "config" },
     });
     await h.finish();
     expect(effectiveNeverFallback(h.envs)).toBe(true);
   });
 
-  it("t3: a session-scope model_refusal_fallback warns, logs, and emits a one-shot sdk_fallback switch_error", async () => {
+  it("t3: a session-scope model_refusal_fallback warns, logs, and emits a one-shot sdk_fallback switch_error naming the pick", async () => {
     const h = liveHost({ pin: "opus[1m]", source: "config", initModel: "claude-opus-5[1m]" });
     await h.initConsumed.promise;
-    await vi.waitFor(() => expect(h.host.statusExtSnapshot().model).toBe("claude-opus-5[1m]"));
+    await h.catalogLanded();
     h.push(refusalFallback());
     await vi.waitFor(() => expect(h.host.statusExtSnapshot().model_source).toBe("fallback"));
     expect(h.warnings.some((w) => w.includes("model refusal fallback") && w.includes("category=cyber"))).toBe(true);
@@ -7847,9 +7872,10 @@ describe("AgentHost — SDK-side model fallback (issue #363)", () => {
       "モデルが応答を拒否したため claude-opus-5[1m] から claude-opus-4-8 に退避しました [cyber]",
     ]);
     const errEnv = h.envs.find((e) => e.ext?.switch_error !== undefined);
+    // requested is the operator's pick in its own spelling, not the SDK's.
     expect(errEnv?.ext?.switch_error).toEqual({
       kind: "model",
-      requested: "claude-opus-5[1m]",
+      requested: "opus[1m]",
       reason: "sdk_fallback",
       rolled_back_to: "claude-opus-4-8",
     });
@@ -7858,7 +7884,7 @@ describe("AgentHost — SDK-side model fallback (issue #363)", () => {
     expect(h.host.statusExtSnapshot()).toMatchObject({
       model: "claude-opus-4-8",
       model_source: "fallback",
-      effective: { model: "claude-opus-5[1m]", model_source: "config" },
+      effective: { model: "opus[1m]", model_source: "config" },
     });
     await h.finish();
     expect(effectiveNeverFallback(h.envs)).toBe(true);
@@ -7867,12 +7893,12 @@ describe("AgentHost — SDK-side model fallback (issue #363)", () => {
   it("t4: a local-scope (subagent) fallback is logged only; the session model and effective are untouched", async () => {
     const h = liveHost({ pin: "opus[1m]", source: "config", initModel: "claude-opus-5[1m]" });
     await h.initConsumed.promise;
-    await vi.waitFor(() => expect(h.host.statusExtSnapshot().model).toBe("claude-opus-5[1m]"));
+    await h.catalogLanded();
     const before = h.envs.length;
     h.push(refusalFallback({ scope: "local" }));
     await vi.waitFor(() => expect(h.logs.filter((l) => l.payload.kind === "system")).toHaveLength(1));
     expect(h.logs[0]?.payload.text).toContain("subagent のみ");
-    expect(h.host.statusExtSnapshot()).toMatchObject({ model: "claude-opus-5[1m]", model_source: "config" });
+    expect(h.host.statusExtSnapshot()).toMatchObject({ model: "opus[1m]", model_source: "config" });
     expect(h.envs.slice(before).some((e) => e.ext?.switch_error !== undefined)).toBe(false);
     await h.finish();
   });
@@ -7906,17 +7932,21 @@ describe("AgentHost — SDK-side model fallback (issue #363)", () => {
     expect(effectiveNeverFallback(h.envs)).toBe(true);
   });
 
-  it("t7 (negative control): an alias pick reported back in its resolved spelling is the same model, not a fallback", async () => {
-    const h = liveHost({ pin: "opus[1m]", source: "config", initModel: "claude-opus-5[1m]" });
+  it("t7 (negative control, M1): an alias pick reported back in its resolved spelling is the same model — no fallback, and the pick keeps its own spelling everywhere", async () => {
+    const h = liveHost({ pin: "opus[1m]", source: "config", initModel: "claude-opus-5[1m]", usageModel: "claude-opus-5[1m]" });
     await h.initConsumed.promise;
-    await vi.waitFor(() => expect(h.host.statusExtSnapshot().model).toBe("claude-opus-5[1m]"));
+    await h.catalogLanded();
+    await vi.waitFor(() => expect(h.host.statusExtSnapshot().context).toBeDefined());
     expect(h.host.statusExtSnapshot()).toMatchObject({
-      model: "claude-opus-5[1m]",
+      model: "opus[1m]",
       model_source: "config",
-      effective: { model: "claude-opus-5[1m]", model_source: "config" },
+      effective: { model: "opus[1m]", model_source: "config" },
     });
+    expect(h.host.statusSnapshot()).toMatchObject({ model: "opus[1m]", model_source: "config" });
     await h.finish();
     expect(h.envs.some((e) => e.ext?.model_source === "fallback")).toBe(false);
+    expect(h.envs.some((e) => e.ext?.model === "claude-opus-5[1m]")).toBe(false);
+    expect(h.envs.some((e) => (e.ext?.effective as { model?: unknown } | undefined)?.model === "claude-opus-5[1m]")).toBe(false);
   });
 
   it("t9: with no usable catalog a differing report is held as undecided — the pick is kept and nothing is called a fallback", async () => {
@@ -7929,15 +7959,59 @@ describe("AgentHost — SDK-side model fallback (issue #363)", () => {
     expect(h.envs.some((e) => e.ext?.model_source === "fallback")).toBe(false);
   });
 
+  it("t10 (M2): a context-usage reading that only moves the model still emits state with the same token figures", async () => {
+    const h = liveHost({ pin: "opus[1m]", source: "config", initModel: "claude-opus-5[1m]", usageModel: "claude-opus-5[1m]" });
+    await h.initConsumed.promise;
+    await h.catalogLanded();
+    await vi.waitFor(() => expect(h.host.statusExtSnapshot().context).toBeDefined());
+    expect(h.envs.some((e) => e.ext?.model_source === "fallback")).toBe(false);
+    // Same tokens, different model: the result-time refresh is the only
+    // trigger, and the idle transition it follows precedes the reading.
+    h.setUsageModel("claude-opus-4-8");
+    h.push(result("success", { result: "ok" }));
+    await vi.waitFor(() =>
+      expect(h.envs.some((e) => e.ext?.model_source === "fallback" && e.ext?.model === "claude-opus-4-8")).toBe(true),
+    );
+    expect(h.host.statusExtSnapshot()).toMatchObject({
+      context: { used_tokens: 10, max_tokens: 1000, used_percentage: 1 },
+      effective: { model: "opus[1m]", model_source: "config" },
+    });
+    await h.finish();
+    expect(effectiveNeverFallback(h.envs)).toBe(true);
+  });
+
+  it("t11 (M3): a catalog that lands after a session fallback judges the fallback, not the report before it", async () => {
+    const gate = deferred<unknown[]>();
+    const h = liveHost({ pin: "opus[1m]", source: "config", initModel: "claude-opus-5[1m]", catalog: () => gate.promise });
+    await h.initConsumed.promise;
+    // Bootstrap catalog cannot resolve the pick: the init report is held.
+    expect(h.host.statusExtSnapshot()).toMatchObject({ model: "opus[1m]", model_source: "config" });
+    h.push(refusalFallback());
+    await vi.waitFor(() => expect(h.host.statusExtSnapshot().model_source).toBe("fallback"));
+    gate.resolve(catalog);
+    await h.catalogLanded();
+    h.push(assistant([{ type: "text", text: "hi" }]));
+    await vi.waitFor(() => expect(h.envs.some((e) => e.state === "thinking")).toBe(true));
+    expect(h.host.statusExtSnapshot()).toMatchObject({
+      model: "claude-opus-4-8",
+      model_source: "fallback",
+      effective: { model: "opus[1m]", model_source: "config" },
+    });
+    expect(h.envs.at(-1)?.ext).toMatchObject({ model: "claude-opus-4-8", model_source: "fallback" });
+    await h.finish();
+    expect(effectiveNeverFallback(h.envs)).toBe(true);
+  });
+
   it("model_refusal_no_fallback is surfaced on stderr and in the transcript without touching the model", async () => {
     const h = liveHost({ pin: "opus[1m]", source: "config", initModel: "claude-opus-5[1m]" });
     await h.initConsumed.promise;
+    await h.catalogLanded();
     h.push(msg({ type: "system", subtype: "model_refusal_no_fallback", original_model: "claude-opus-5[1m]", api_refusal_category: "bio", content: "refused", uuid: "u-2", session_id: "s-1" }));
     await vi.waitFor(() => expect(h.logs.filter((l) => l.payload.kind === "system")).toHaveLength(1));
     expect(h.logs[0]?.payload.text).toBe("モデルが応答を拒否し、退避せずに turn が終了しました [bio]");
     expect(h.warnings.some((w) => w.includes("without fallback") && w.includes("category=bio"))).toBe(true);
-    await vi.waitFor(() => expect(h.host.statusExtSnapshot().model).toBe("claude-opus-5[1m]"));
-    expect(h.host.statusExtSnapshot().model_source).toBe("config");
+    expect(h.host.statusExtSnapshot()).toMatchObject({ model: "opus[1m]", model_source: "config" });
     await h.finish();
+    expect(h.envs.some((e) => e.ext?.model_source === "fallback")).toBe(false);
   });
 });
