@@ -40,7 +40,7 @@ implementation — the emphasis marks; all three are walked at every close.
 | U06 | tasks / subagent visibility | impl | ⏳ |
 | U07 | attachments | impl | ⏳ |
 | U08 | runner control / wrapper config | ops impl | ⏳ |
-| U09 | persona delivery / injection / pack | ops impl | In review (pack-format only) |
+| U09 | persona delivery / injection / pack | ops impl | ✅ pack-format (U09a); delivery / injection pending |
 | U10 | security / threat model / release audit | ops perm impl | ✅ |
 | U11 | IA messages / conversations / admission | impl | ✅ |
 | U12 | IA dispatch / delivery ledger | perm impl | ✅ |
