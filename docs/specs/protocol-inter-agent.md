@@ -2,6 +2,7 @@
 title: Inter-agent messaging protocol
 description: Envelope schema, nine kinds, hard limits, routing, and observation paths for direct interaction between multiple AI agents through the kaoiro server.
 status: provisional
+last_updated: 2026-09-18
 related: [protocol, subagent-tasks, plugin-model, security-threat-model]
 ---
 <!-- markdownlint-disable MD033 -->
@@ -310,9 +311,11 @@ flowchart LR
   `agents:lobby` broadcast (operator-only delivery, below). The dashboard can
   display the inter-agent message in both A and B log panes.
 
-The server does not interpret payload semantics (kind / payload text / meta). It
-reads only `to` for routing, the minimum structural access that preserves the
-agent-independent principle.
+The server does not interpret the natural-language meaning of the body. It
+validates the structured payload (including kind, meta, and owner shape), reads
+`to` for routing, and uses `conversation_id`, `turn_number`, `meta.done`,
+`new_conversation`, and body byte length for admission, lifecycle, and quotas.
+These mechanical checks do not decide whether an agent agrees with the body.
 
 ### envelope.type: "inter_agent_message"
 
@@ -365,7 +368,7 @@ Only the `type` value and `payload` schema are new.
 | `error.code` | optional | Open-string error code indicating the peer became unable to respond (see “Unresponsive-error notices”) |
 | `error.message` | MUST when `error` exists | Human-readable reason with secrets masked and truncated |
 | `owner.kind` | MUST | `"user"` or `"agent"` |
-| `owner.id` | MUST | Owner identifier: user_id bound to the connection token for a user, or `agent_id` for an agent |
+| `owner.id` | MUST | Declared owner identifier. The current shared sender emits the placeholder `"operator"`, not an authenticated user ID; the server validates its string shape, not a binding to the connection principal. See “Conversation owner and tie-breaker” |
 
 ### kind enum (nine values)
 
@@ -394,20 +397,33 @@ Covered cases:
 
 ### Conversation owner and tie-breaker
 
-`owner` is the subject that started the conversation. In Phase 1 it is always the
-user (the operator explicitly starts it). `owner.kind: "agent"` appears only if
-Phase 3 permits autonomous agent initiation.
+`owner` records the intended subject responsible for a conversation. The current
+shared wrapper sender emits `{kind: "user", id: "operator"}` for ordinary
+messages; this is a placeholder, not a user identity resolved from the wrapper's
+connection token. The server validates the field's shape but does not use it to
+authorize a tie-breaker or cancellation. Conversation completion is determined
+by the participating sender IDs and their `meta.done` values, not `owner.id`.
 
-- The owner makes the final decision when discussion stalls.
-- For `owner.kind: "user"`, the server presents an intervention dialog in the
-  dashboard on `escalate-to-user` (reuse the AskUserQuestion structured dialog,
-  concretely `question_request` / `waiting_question` from
-  [ADR-0027](../adr/0027-askuserquestion-envelope.md)).
-- For `owner.kind: "agent"`, route `escalate-to-owner` to the owner agent instead
-  of `escalate-to-user` (settled in Phase 3; this spec mechanically enforces only
-  Phase 1–2).
-- The owner also has authority to stop a runaway conversation and can cancel the
-  whole conversation (`cancel` event, Phase 2 onward).
+The original staged design below describes owner-driven coordination, not
+implemented server controls. The Phase 3 owner/escalation policy remains future
+work in [phase-8](../plans/phase-8-inter-agent-messaging.md#future--stage-d--phase-3-after-87):
+
+- The intended owner makes the final decision when discussion stalls.
+- The Phase 1 design assigned ownership to the user explicitly starting the
+  conversation; agent ownership was reserved for autonomous initiation in
+  Phase 3. The current placeholder does not establish either provenance.
+- For `owner.kind: "user"`, the proposed server intervention dialog on
+  `escalate-to-user` would reuse AskUserQuestion's `question_request` /
+  `waiting_question` ([ADR-0027](../adr/0027-askuserquestion-envelope.md)).
+  Today inter-agent messages, including this kind, are displayed as transcript
+  entries; the kind does not itself create that dialog.
+- Routing `escalate-to-owner` to an agent owner was a Phase 3 proposal. It is not
+  a supported `kind` in the current nine-value enum.
+- An owner-authorized whole-conversation `cancel` event was proposed for Phase 2
+  onward. The implemented operator/admin `close_conversation` control instead
+  checks the caller's role, not `owner.id`, and closes the tracked conversation
+  with reason `operator_closed`, notifying its participants. It is distinct
+  from the proposed owner-authorized event.
 
 ### Hard limits (config + mechanical enforcement)
 
@@ -419,11 +435,13 @@ wrappers inject it as SDK input.
 | Config key | Unit | Default (Phase 1) | Use |
 |---|---|---|---|
 | `max_turns` | turns (= message count) | 20 | Total turns in one conversation |
-| `max_tokens` | tokens | 100_000 | Cumulative body tokens (coarsely estimated server-side as ceil(`length(body)/3`)) |
+| `max_tokens` | tokens | 100_000 | Cumulative body tokens (coarsely estimated server-side as `floor(byte_size(body)/3) + 1` (UTF-8 bytes, including 1 for an empty body)) |
 | `max_concurrent_agents` | agents | 2 | Agents allowed in one conversation_id (fixed at 2 in Phase 1; 3+ considered in Phase 3) |
 
-Configure in two kaoiro-server layers, per-agent and global; per-agent values may
-override global.
+The implemented configuration is server-global: `ConversationStates` reads
+`:kaoiro_server, :inter_agent` once at startup and applies the same limits to
+every conversation. The originally proposed per-agent override layer is not
+implemented.
 
 **The former `max_wallclock` was removed in issue #211.** Cutting off based on
 elapsed conversation time reached `max_turns` before a runaway fast ping-pong
@@ -716,15 +734,17 @@ now fails fast and visibly.
     inter-agent send** until the old wrapper is updated. The high frequency is
     not itself an anomaly; this paragraph is normative so operators do not
     misread the growing log share during a long migration.
-  - **`ConversationStates.record_message/8` has no default** (director ruling,
+  - **`ConversationStates.record_message` requires `new_conversation?`** (director ruling,
     issue #252 delta round 2): the initial implementation gave
     `new_conversation?` a `\\ true` default so channel callers could omit the
     branch, merely moving the “silently allow when forgotten” defect from the
     wire layer into the internal API. Making the argument mandatory forces
     every future caller to state the decision explicitly; the absent branch in
     `preflight_inter_agent/2` above is the only legal place to choose the
-    permissive side. The cost is mechanical argument updates for existing
-    callers (mostly tests, about 90 sites).
+    permissive side. The separate eighth `server` argument does have a default
+    (`__MODULE__`), so normal callers use `/7`; this does not default the
+    mandatory seventh `new_conversation?` argument. The cost was mechanical
+    argument updates for existing callers (mostly tests, about 90 sites).
   - **Removal criterion**: this absent-field branch is not permanent. Once
     operations confirms that every running wrapper is built after issue #252,
     make `validate_live_inter_agent_payload/1` require the key again and remove
