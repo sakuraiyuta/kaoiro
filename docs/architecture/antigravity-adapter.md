@@ -120,12 +120,9 @@ successful permission-sync negotiation and only when all three launch ceilings
 were supplied by the runner. These are current implementation constraints,
 not claims about all `agy` versions.
 
-Headless MCP was investigated and not adopted. A stdio server registered via
-`agy mcp add` globally, through a plugin below `--add-dir`, or by a custom
-agent with `inheritMcp: true` never started (its startup marker was absent).
-The CLI log repeatedly said `declarative_config_loader.go: skipping component
-during resolution: empty component: prompt section "mcp_servers"`.
-`call_mcp_tool` still appeared in `init.tools`, but the model had no MCP tools.
+Headless MCP was investigated and not adopted. The dated marker-based negative
+control and CLI-log observation are in
+[the evidence record](../evidence/antigravity/cli-contract.md#raw-shapes-and-negative-controls).
 The bridge therefore remains the adapter's tool surface. This is an observed
 version-specific limitation, not an assertion about a future `agy` release.
 

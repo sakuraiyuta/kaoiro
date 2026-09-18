@@ -56,7 +56,9 @@ vendor binary behaves identically. The current wrapper contract is in
 
 ## Raw shapes and negative controls
 
-The resident-mode input was one line per turn:
+The resident-mode command was
+`agy --print='' --input-format stream-json --output-format stream-json`; its
+input was one line per turn:
 
 ```json
 {"event":"user","message":{"content":"<text>"}}
@@ -80,19 +82,15 @@ empty component: prompt section "mcp_servers"
 tools. This is the negative control behind the CLI bridge design; it is not a
 claim that every future `agy` version lacks MCP.
 
-The observed hook input included:
-
-```jsonc
-{"conversationId":"<uuid>","workspacePaths":["…"],
- "transcriptPath":"~/.gemini/antigravity-cli/brain/<uuid>/.system_generated/logs/transcript_full.jsonl",
- "artifactDirectoryPath":"~/.gemini/antigravity-cli/brain/<uuid>",
- "modelName":"gemini-3.8-flash-high","stepIdx":2}
-```
-
-The `transcriptPath` value above is the observed path pattern. It is not a
-validated transcript schema. The measured conversation database paths were
+The observed hook input, including `transcriptPath`, is the authorization
+contract in [the tools and permissions reference](../../reference/engines/antigravity-tools-permissions.md#authorization-boundary).
+The observed path was
+`~/.gemini/antigravity-cli/brain/<id>/.system_generated/logs/transcript_full.jsonl`.
+Its JSONL schema is not established. The measured conversation database paths were
 `~/.gemini/antigravity-cli/conversations/<id>.db` and
-`conversation_summaries.db`; their schema was also unmeasured.
+`conversation_summaries.db`; their schema was also unmeasured. `--continue`
+resumed the most recent conversation, but was not adopted because it is
+ambiguous across agents on one host.
 
 The quota-free slash-command capture was:
 
@@ -106,6 +104,22 @@ Models` and `Claude and GPT models`. `-p /model`, `-p /permissions`,
 `-p /hooks`, and `-p /help` were also observed without a model turn or quota
 spend. This was a dated CLI observation, not the source of the wrapper's 429
 projection.
+
+## Catalog and authentication observations
+
+The 2026-09-04 evening `agy models` capture contained 14 lines in
+`<slug><TAB><display name>` form, for example
+`gemini-3.8-flash-high<TAB>Gemini 3.8 Flash (High)`, and 1.1.26 rejected
+`--output-format` for that subcommand. An earlier capture returned bare slugs
+without the 3.8 family. Passing a display name rather than the slug to
+`--model` exited 1 in a reviewer measurement. `--model <slug>` echoed into
+`init.model`; `--effort low|medium|high` was accepted, although its effect was
+not separately observable because Gemini slugs encode tier.
+
+Personal OAuth was stored under `~/.gemini/` with
+`selectedAuthType: "oauth-personal"`; the child inherited the wrapper HOME and
+environment. `GEMINI_API_KEY` as an alternative was vendor documentation, not
+a measurement. The runner's `agy models` registration probe was quota-free.
 
 ## Explicitly unmeasured or non-guaranteed
 

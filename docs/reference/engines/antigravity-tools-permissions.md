@@ -78,19 +78,25 @@ the adapter did not use them for that purpose in Stage A.
 
 ## Non-interactive child policy
 
+An `agy` tool child owns a PTY, so an interactive prompt inside a tool can
+block even after the wrapper closed the parent stdin. The CLI's own waiting-for
+input detection was model-backed and unavailable for the incident shape.
 Every child receives `GIT_TERMINAL_PROMPT=0` and
 `SSH_ASKPASS_REQUIRE=never`. Unless the operator already supplied
 `GIT_SSH_COMMAND`, the host sets it to `ssh -o BatchMode=yes`; preserving an
-operator value produces a launch warning. If `SSH_AUTH_SOCK` is present but
-has no identities, the CLI warns that SSH Git operations will fail in batch
-mode. These controls make credential and passphrase prompts fail fast; they
-do not grant credentials or authorize a network operation.
+operator value produces a launch warning. The no-identity warning is narrowly
+defined: only when `SSH_AUTH_SOCK` is set and `LC_ALL=C ssh-add -l` exits 1
+with `The agent has no identities.` does the CLI warn that SSH Git operations
+will fail in batch mode. A missing `ssh-add`, dead socket, timeout, or existing
+identities is silent. These controls make credential and passphrase prompts
+fail fast; they do not grant credentials or authorize a network operation.
 
 The tool wall-clock deadline is a separate last-resort guard. Its exact
 settings and terminal projection are in
 [the event reference](antigravity-events.md#watchdog-contract).
 
-Hook timeout is seconds per handler. A `timeout: 3600` handler blocked for
+The CLI handler default is 30 seconds; the wrapper-generated hook sets
+`timeout: 3600`. A `timeout: 3600` handler blocked for
 100 seconds, kept `run_command` ACTIVE for 110 seconds, and then ran. The
 CLI's complete timeout behaviour was not established, but the wrapper answers
 deny before its deadline. The required ordering is:

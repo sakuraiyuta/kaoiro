@@ -35,18 +35,10 @@ without a controlling TTY both worked. Leaving stdin open ended after roughly
 three seconds with `result.status = "ERROR"`, `error: "timeout waiting for
 response"`, and no assistant output, although the conversation persisted.
 
-The resident alternative,
-`agy --print='' --input-format stream-json --output-format stream-json`, was
-measured but not adopted. It accepted one stdin line per turn in this form:
-
-```json
-{"event":"user","message":{"content":"<text>"}}
-```
-
-Only `user` was recognized; another event value yielded
-`warning: ignoring unsupported stream input message event "…"` on stderr.
-It provided no in-band interrupt, permission, or model-switch channel and
-each turn emitted its own `result`.
+The resident alternative was measured but not adopted because it has no
+in-band interrupt, permission, or model-switch channel. Its dated input shape
+and unsupported-event negative control are in
+[the evidence record](../../evidence/antigravity/cli-contract.md#raw-shapes-and-negative-controls).
 
 `--disable-slash-commands` is passed for every instruction turn because print
 mode otherwise expands prompt slash commands and skills. The registration
@@ -128,11 +120,13 @@ baseline input usage was about 5.7k tokens for the system prompt.
 | `step_update` `tool` `ERROR` | Emit tool error/result and return to `thinking`; end watchdog tracking for the step. |
 | `result` `SUCCESS` or `CANCELED` | Emit one successful terminal result and `done`. |
 | `result` `ERROR` | Emit the terminal error and `error`. |
+| hook gate awaiting an operator | Enter `waiting_permission` with `ext.pending_permission`. |
+| bridge `ask_user_question` pending | Enter `waiting_input` with `ext.pending_question`. |
 
 `system_message` is log-only. The adapter does not infer a new event type from
-an unrecognized step. The host creates `waiting_permission` and
-`waiting_input` from the wrapper hook and bridge protocols, respectively;
-they are not native `agy` state names.
+an unrecognized step. `ext.tool_name` is populated from `tool_name` while a
+tool is active; its input is `tool_info.parameters`. `waiting_permission` and
+`waiting_input` are wrapper states rather than native `agy` state names.
 
 ## Watchdog contract
 
@@ -147,11 +141,29 @@ uses these settings:
 | tool wall-clock deadline | 10 minutes | 1 second | `KAOIRO_ANTIGRAVITY_TOOL_TIMEOUT_MS` |
 
 All values are integer milliseconds and are bounded by the Node timer maximum.
+An inter-agent delivery retains its own watchdog token; an operator instruction
+gets a synthesized token, which inter-agent bookkeeping does not treat as a
+delivery. Stream progress extends the inactivity bound only and never the
+absolute tool deadline.
 On inactivity or tool expiry the watchdog requests interruption; after grace
 it fail-stops host admission. A tool deadline emits a lifecycle record with
 the step index and tool name, then the terminal turn is projected as
 `error_during_execution` with `error_detail: "tool_timeout"`. An
 inter-agent delivery in that turn receives `peer_error.code: "timeout"`.
+The warning is `[kaoiro] antigravity turn watchdog tool timeout: …` with
+token, step, tool, elapsed time, and threshold; the lifecycle record is
+`{"event":"tool_timeout",…}` with index/name/timing only, never raw tool
+input. It SIGTERMs the child through the existing interrupt path, then reuses
+the abort grace and fail-stop. The terminal state moves `error` to
+`waiting_input`; this remains the existing wire path rather than a new type.
+
+Every parsed tool `ACTIVE` must be correlated to a `step_index` and tool name.
+If either cannot be proven, the wrapper does not leave an untracked tool
+running: it sends SIGTERM through the same fail-closed path used for an
+unprovable completion (ADR-0057 F4b). The deadline is a last safety net, not a
+scheduler. A healthy background operation that remains `ACTIVE` beyond the
+ten-minute deadline is still terminated with the whole turn; a visible error
+is preferred to a silent `tool_running` that only an operator kill can end.
 
 ## Models and usage
 
@@ -165,43 +177,19 @@ The adapter projects usage from `agent_response` and terminal `result` data
 where present. It does not advertise `supports_context_usage`, because there
 is no per-model context-window contract.
 
-The 2026-09-04 evening `agy models` capture had 14 lines in
-`<slug><TAB><display name>` form, for example
-`gemini-3.8-flash-high<TAB>Gemini 3.8 Flash (High)`, and rejected
-`--output-format` for this subcommand. An earlier capture returned bare slugs
-without the 3.8 family. `--model` must receive a slug rather than the display
-name; the latter failed with exit 1 in a reviewer measurement. `--model`
-echoed to `init.model`; `--effort low|medium|high` was accepted, though its
-effect was not separately observable because Gemini slugs encode tier.
-
-The CLI slash-command observation was:
-
-```text
-agy -p /usage --output-format json
-```
-
-It returned `command.data.groups[].buckets[]` with `window: "weekly"`,
-`remaining_fraction`, and `reset_time`, in two groups named `Gemini Models`
-and `Claude and GPT models`. `-p /model` returned the current model and
-effort; `-p /permissions`, `-p /hooks`, and `-p /help` were also observed
-without a model turn or quota spend. Context-window size itself is not exposed;
-the last `agent_response.usage.input_tokens` is only an approximation.
+The dated catalog formats, model/effort CLI observations, and slash-command
+response shape are in [the evidence record](../../evidence/antigravity/cli-contract.md#raw-shapes-and-negative-controls).
+Context-window size itself is not exposed; the last
+`agent_response.usage.input_tokens` is only an approximation.
 
 ## Conversation storage and host prerequisites
 
-`--continue` resumes the most recent conversation and is not used because it
-is ambiguous across agents on one host. The measured conversation store was
-`~/.gemini/antigravity-cli/conversations/<id>.db` plus
-`conversation_summaries.db`; its schema was not established. A simultaneous
-open in two processes had only a CLI banner warning, while the wrapper itself
-serializes turns.
-
-Personal OAuth was stored below `~/.gemini/` with
-`selectedAuthType: "oauth-personal"`. The child inherits HOME and its
-environment, so kaoiro does not handle those credentials. `GEMINI_API_KEY` as
-an alternative is vendor documentation, not a measurement. `agy` must be on
-PATH. The runner probes `agy models` at registration; the wrapper should
-re-measure vendor behaviour after a binary version change.
+`--continue` is not used because it is ambiguous across agents on one host;
+the wrapper serializes turns instead. The measured storage/authentication
+paths and vendor limits are in
+[the evidence record](../../evidence/antigravity/cli-contract.md#raw-shapes-and-negative-controls).
+`agy` must be on PATH. The runner probes `agy models` at registration, and a
+version change requires the vendor observations to be re-measured.
 
 ## Rate-limit projection
 
