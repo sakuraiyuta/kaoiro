@@ -25,8 +25,8 @@ Feature specifications, organized by topic. Each file has `status` and
 | [personas](personas.md) | accepted | Design policy, image specification, and generation workflow for persona standing illustrations |
 | [persona-pack-schema](persona-pack-schema.md) | accepted | Internal schema of persona packs (zip) and `manifest.json` field definitions |
 | [persona-personality-injection](persona-personality-injection.md) | provisional | Mechanism for injecting personality prompts, such as speech style and first-person pronouns, into the Claude Agent SDK |
-| [threat-model](threat-model.md) | accepted | Threats to bidirectional routing and their mitigations |
-| [auth-and-authz](auth-and-authz.md) | accepted | Current map of authentication and authorization boundaries for each node. Starting point for the pre-OSS-release audit (private Gitea issue 91) |
+| [threat-model](../architecture/security-threat-model.md) | accepted | Threats to bidirectional routing and their mitigations |
+| [auth-and-authz](../architecture/security-boundaries.md) | accepted | Current map of authentication and authorization boundaries for each node. Starting point for the pre-OSS-release audit (private Gitea issue 91) |
 | [setup-wizards](setup-wizards.md) | accepted | Configuration / env generation wizards (runner config and server .env) |
 | [deployment](deployment.md) | accepted | Multi-host deployment guide (nginx, env inventory, DETS paths, and wss constraints) |
 | [agent-operations](agent-operations.md) | accepted | Operating rules for multiple agents working concurrently in the same work tree (implementation and director sides). Engine-independent and referenced by both CLAUDE.md and AGENTS.md |

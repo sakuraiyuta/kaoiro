@@ -27,7 +27,7 @@ defmodule KaoiroServer.Auth do
     misconfigured deployment never silently grants operator (issue #28).
 
   Either unset state is logged at startup via `warn_token_config/0`
-  (specs/protocol.md, specs/threat-model.md).
+  (specs/protocol.md, docs/reference/security/enforcement-boundaries.md).
   """
 
   require Logger
@@ -373,7 +373,7 @@ defmodule KaoiroServer.Auth do
   @doc """
   Logs a startup warning for each token list that is unset, so the
   locked / dev-mode / fail-closed state is visible in logs rather than
-  silent (specs/threat-model.md, issue #28, issue #138):
+  silent (docs/reference/security/enforcement-boundaries.md, issue #28, issue #138):
 
   - `:client_tokens` unset — client connections are rejected
     (fail-closed in every env); the env must be set to grant access.

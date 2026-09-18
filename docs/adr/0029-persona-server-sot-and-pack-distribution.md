@@ -5,7 +5,7 @@ date: 2026-07-05
 opened: 2026-07-05
 supersedes: [8, 26]
 superseded_by: null
-related_specs: [personas, persona-pack-schema, persona-personality-injection, setup-wizards, protocol, threat-model]
+related_specs: [personas, persona-pack-schema, persona-personality-injection, setup-wizards, protocol, security-threat-model]
 related_adrs: [2, 3, 8, 24, 26, 31, 44, 45, 46]
 ---
 
@@ -222,6 +222,6 @@ Adopt and fix in this ADR the provisional policy from the old open question `per
 
 ## See Also
 
-- Related specs: [personas](../specs/personas.md), [persona-pack-schema](../specs/persona-pack-schema.md), [persona-personality-injection](../specs/persona-personality-injection.md), [setup-wizards](../specs/setup-wizards.md), [protocol](../specs/protocol.md), and [threat-model](../specs/threat-model.md)
+- Related specs: [personas](../specs/personas.md), [persona-pack-schema](../specs/persona-pack-schema.md), [persona-personality-injection](../specs/persona-personality-injection.md), [setup-wizards](../specs/setup-wizards.md), [protocol](../specs/protocol.md), and [threat-model](../architecture/security-threat-model.md)
 - ADRs: [ADR-0002](0002-local-wrapper-websocket-topology.md) (WS path), [ADR-0003](0003-persona-identity-persistence.md) (persona identity), [ADR-0008](0008-persona-asset-distribution.md) (superseded), [ADR-0024](0024-agent-instance-identity-and-spawn-auth.md) (spawn authentication), and [ADR-0026](0026-persona-personality-injection.md) (superseded)
 - Plan: [phase-10-persona-server-sot](../plans/phase-10-persona-server-sot.md)

@@ -213,7 +213,7 @@ export interface WrapperConfig {
   permission_mode?: PermissionMode;
   /** Tool-permission ceiling passed to the SDK as allowedTools. Local
    *  config only — cannot be widened from the server side
-   *  (specs/threat-model.md). Omitted = the CLI's read-only default. */
+   *  (docs/reference/security/enforcement-boundaries.md). Omitted = the CLI's read-only default. */
   allowed_tools?: string[];
   /** Launch-time model pick relayed from SpawnMessage (ADR-0032 F4bc).
    *  Omitted = engine default. */

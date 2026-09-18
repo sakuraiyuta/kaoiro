@@ -5,7 +5,7 @@ date: 2026-06-22
 opened: 2026-06-22
 supersedes: []
 superseded_by: null
-related_specs: [protocol, threat-model, protocol-inter-agent]
+related_specs: [protocol, security-threat-model, protocol-inter-agent]
 related_adrs: [11, 12, 13, 22, 25, 27, 28, 30, 40, 41, 42, 43, 44, 50]
 ---
 
@@ -125,7 +125,7 @@ F1–F6 cover `agents:lobby` (WebSocket envelope delivery) and the peer director
 
 Current target: `GET /api/personas/:id` (all metadata in the persona pack’s manifest.json + the full personality.md). A custom pack’s personality.md is a system prompt and may contain proprietary operational instructions, so it is operator/admin-only (director decision, 2026-08-28). If viewer disclosure is considered in the future, decide the byte limit for personality.md (deferred as S-232-1) at the same time (see the issue #232 closing comment).
 
-The implementation is `KaoiroServerWeb.RequireOperatorPlug` (reuse `ClientSocket.role_for/1` from the WebSocket side as-is, live-revalidate the session cookie credential on every request—the same determination as the F1 three-role revision, so admin also passes). Details are in the “Operator-only HTTP endpoints” section of [auth-and-authz](../specs/auth-and-authz.md).
+The implementation is `KaoiroServerWeb.RequireOperatorPlug` (reuse `ClientSocket.role_for/1` from the WebSocket side as-is, live-revalidate the session cookie credential on every request—the same determination as the F1 three-role revision, so admin also passes). Details are in the “Operator-only HTTP endpoints” section of [auth-and-authz](../architecture/security-boundaries.md).
 
 The procedure for adding a new HTTP endpoint is the same as F5: explicitly decide whether viewers should see it, operator-only is the default, explicitly choose not to pass through `RequireOperatorPlug` if viewers should see it, and cover anonymous/viewer/operator/admin visibility in tests.
 
@@ -160,7 +160,7 @@ The procedure for adding a new HTTP endpoint is the same as F5: explicitly decid
 
 ## Related
 
-- specs: [protocol](../specs/protocol.md) (unify destination notation with this ADR), [threat-model](../specs/threat-model.md) (quote the matrix).
+- specs: [protocol](../specs/protocol.md) (unify destination notation with this ADR), [threat-model](../architecture/security-threat-model.md) (quote the matrix).
 - Related ADRs: [0011](0011-phase3-reliability-and-auth.md) (foundation for role/token authentication), [0012](0012-response-display-and-dashboard-scope.md) (starting point for operator-only log/result), and [0013](0013-user-token-cookie-persistence.md) (token storage).
 - Origin of F6: [issue #150](https://github.com/sakuraiyuta/kaoiro/issues/150); implementation is [phase-27](../plans/phase-27-list-agents-metadata.md). The wire contract for disclosure fields is the “Information boundary of the peer directory” section of [protocol-inter-agent](../specs/protocol-inter-agent.md).
 - Origin: [issue #46](https://github.com/sakuraiyuta/kaoiro/issues/46).

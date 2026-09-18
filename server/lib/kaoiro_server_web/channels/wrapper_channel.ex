@@ -1122,7 +1122,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
         # subscriber in AgentsChannel.handle_out. Invariant: ONLY
         # AgentsChannel may subscribe to this topic — any new
         # subscriber MUST apply the same role gate (#27,
-        # specs/threat-model.md).
+        # docs/reference/security/enforcement-boundaries.md).
         KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", envelope)
         {:reply, :ok, socket}
 

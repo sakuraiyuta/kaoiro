@@ -5,7 +5,7 @@ date: 2026-06-16
 opened: 2026-06-15
 supersedes: []
 superseded_by: null
-related_specs: [protocol, threat-model, architecture]
+related_specs: [protocol, security-threat-model, architecture]
 related_adrs: [1, 11, 12, 15, 23, 24, 30, 36]
 ---
 
@@ -102,7 +102,7 @@ flowchart LR
   exposure of JSONL metadata is limited to operators and kept minimal; T3
   verifies that the target session_id exists under the cwd bound to the
   relevant agent (reject other cwds and arbitrary paths). See
-  [threat-model](../specs/threat-model.md) for details.
+  [threat-model](../architecture/security-threat-model.md) for details.
 - **F7 protocol**: Add an optional top-level `session_id` to the envelope, so
   the wrapper reports the actual session_id and the server updates the F1
   pointer. Resume control (spawn-with-resume + session enumeration) is defined
@@ -637,7 +637,7 @@ From phase-1 onward, the #22/#23 runner implementation is assumed.
   [#23](https://github.com/sakuraiyuta/kaoiro/issues/23) (runner), and
   [#24](https://github.com/sakuraiyuta/kaoiro/issues/24) (history persistence).
 - Related specs: [protocol](../specs/protocol.md),
-  [threat-model](../specs/threat-model.md).
+  [threat-model](../architecture/security-threat-model.md).
 - Related ADRs: [0001](0001-agent-sdk-integration.md),
   [0011](0011-phase3-reliability-and-auth.md), and
   [0012](0012-response-display-and-dashboard-scope.md).

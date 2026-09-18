@@ -3,7 +3,7 @@ title: Setup wizards (configuration / env generation)
 description: Specification for interactive question-and-answer wizards that generate the server .env and runner configuration (runner.config.json / runner.env).
 status: accepted
 last_updated: 2026-07-27
-related: [protocol, threat-model]
+related: [protocol, security-threat-model]
 ---
 
 # Setup wizards (configuration / env generation)
@@ -182,7 +182,7 @@ startup**.
 
 ## See Also
 
-- Related specs: [protocol](protocol.md), [threat-model](threat-model.md)
+- Related specs: [protocol](protocol.md), [threat-model](../architecture/security-threat-model.md)
 - ADRs: [0011](../adr/0011-phase3-reliability-and-auth.md)—token authentication;
   [0018](../adr/0018-runner-distribution.md)—distribution form;
   [0023](../adr/0023-host-runner-architecture.md)—runner residency;

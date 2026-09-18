@@ -17,7 +17,7 @@ defmodule KaoiroServer.OAuthAllowlistWatcher do
   (already-normalized) keys. No live-socket registry or enumeration is
   needed anywhere — measured: none exists in this codebase (no
   `Phoenix.Presence` dependency, no `Registry` tracking client
-  credentials; see `docs/specs/auth-and-authz.md`).
+  credentials; see `docs/reference/security/authentication-authorization.md`).
 
   `AgentsChannel.join/3` closes the companion race window: a socket
   whose `connect/3` resolved a role that the allow-list changed out
@@ -117,7 +117,7 @@ defmodule KaoiroServer.OAuthAllowlistWatcher do
   a demoted/removed operator keeps their stale role for however long
   the file stays broken — a fail-OPEN window this module exists
   specifically to close. The operational mitigation is a temp-file +
-  atomic-rename edit workflow (`docs/specs/auth-and-authz.md`), which
+  atomic-rename edit workflow (`docs/reference/security/authentication-authorization.md`), which
   only LOWERS THE PROBABILITY of ever reading a half-written file — it
   is not a guarantee, and must not be read as one.
 

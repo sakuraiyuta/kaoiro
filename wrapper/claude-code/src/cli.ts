@@ -16,7 +16,7 @@
 // として自動承認するため dialog は出ない。厳格な都度承認が必要な agent
 // は operator が mode を default 系に設定して gate を回復する。ceiling
 // itself (allowedTools) cannot be widened from the server side
-// (specs/threat-model.md).
+// (docs/reference/security/enforcement-boundaries.md).
 //
 // Usage: node dist/cli.js [configPath] [prompt] [--resume <session_id>]
 

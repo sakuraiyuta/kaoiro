@@ -407,7 +407,7 @@ export function isCwdAllowed(cwd: string, allowlist: string[]): boolean {
 
 /** Builds the wrapper init config from a spawn. allowed_tools is intentionally
  *  NOT taken from the spawn: the tool ceiling is wrapper-local and cannot be
- *  widened from the server side (threat-model.md), so the wrapper keeps its
+ *  widened from the server side (docs/reference/security/enforcement-boundaries.md), so the wrapper keeps its
  *  read-only default. Under ADR-0029 the wrapper's `server_url` is required,
  *  so a spawn without it falls back to the runner's own — its absence would
  *  otherwise leave the wrapper with no server to hand back to for the

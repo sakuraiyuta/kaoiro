@@ -2,7 +2,7 @@
 // Stage B0, issue #359). Pure helpers so the supervisor and its tests can
 // reason about the clamp rules in isolation.
 //
-// The threat-model MUST (specs/threat-model.md) is that a server-originated
+// The threat-model MUST (docs/reference/security/enforcement-boundaries.md) is that a server-originated
 // `set_permission` cannot widen a wrapper's execution ceiling. On Antigravity
 // the sandbox x approval cell matrix *is* the ceiling, so the runner resolves
 // a per-axis ceiling from the operator's host-local `antigravity.max_*` config

@@ -19,7 +19,7 @@ defmodule KaoiroServerWeb.SecurityHeaders do
   # X-Frame-Options duplicates `frame-ancestors 'none'` below for
   # browsers that predate CSP Level 2: without it a framing page can
   # steer operator clicks, and instruct/approve are one click away
-  # (docs/specs/threat-model.md).
+  # (docs/reference/security/enforcement-boundaries.md).
   @fixed_headers [
     {"x-content-type-options", "nosniff"},
     {"x-frame-options", "DENY"},

@@ -2,7 +2,7 @@
 title: File uploads (attachment intake)
 description: Common specification by which the operator passes dashboard attachments (images/text/PDF/Office) to an agent after a wrapper renders them into SDK content blocks.
 status: provisional
-related: [protocol, architecture, non-goals, threat-model]
+related: [protocol, architecture, non-goals, security-threat-model]
 ---
 
 # File uploads (attachment intake)
@@ -225,7 +225,7 @@ client failures / instructions that never arrive.
 
 - Related specs: [protocol](protocol.md),
   [architecture](../architecture/system-overview.md), [non-goals](../architecture/scope.md),
-  [threat-model](threat-model.md)
+  [threat-model](../architecture/security-threat-model.md)
 - ADRs:
   [0009](../adr/0009-client-transport.md) (single Channels route),
   [0015](../adr/0015-protocol-version-stamping.md) (version convention),

@@ -135,7 +135,7 @@ canUseTool → PostToolUse.
 >   the denial message is reflected in tool_result.
 >
 > **Implications**: (1) The primary defense limiting tools remains
-> `allowedTools` (a local ceiling; [threat-model](threat-model.md)).
+> `allowedTools` (a local ceiling; [threat-model](../architecture/security-threat-model.md)).
 > (2) `waiting_permission` is driven in practice only by dangerous operations
 > that cannot be resolved automatically or occur outside the sandbox, so the
 > approval UI (Phase 3) operates only where human approval is required — as

@@ -70,7 +70,7 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
 
 - Scope = **medium** (host + persona selection + initial prompt + registered cwd selection).
   Arbitrary cwd / arbitrary repo clone are out of the initial version because they
-  expand the RCE surface ([threat-model](../specs/threat-model.md) T1/T5, rejected).
+  expand the RCE surface ([threat-model](../architecture/security-threat-model.md) T1/T5, rejected).
 - The **runner config** holds the allowlist of selectable cwd values and declares it
   alongside the persona at registration (move complexity to the host,
   [ADR-0023](../adr/0023-host-runner-architecture.md)). The schema is 4-1 /
@@ -131,7 +131,7 @@ denylist is [#72](https://github.com/sakuraiyuta/kaoiro/issues/72).
   instance identity), [0014](../adr/0014-session-resume-and-restore.md) (resume unit),
   [0018](../adr/0018-runner-distribution.md) (distribution).
 - Specs: [architecture](../architecture/system-overview.md),
-  [protocol](../specs/protocol.md), [threat-model](../specs/threat-model.md).
+  [protocol](../specs/protocol.md), [threat-model](../architecture/security-threat-model.md).
 - Related issues:
   [#23](https://github.com/sakuraiyuta/kaoiro/issues/23) (this phase),
   [#22](https://github.com/sakuraiyuta/kaoiro/issues/22) (launch-instruction UI +

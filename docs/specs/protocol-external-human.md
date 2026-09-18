@@ -2,7 +2,7 @@
 title: External human messaging protocol
 description: Specification for the envelope schema, discord-wrapper topology, Tier A/B reception, and safeguards for AI agents exchanging bidirectional messages (with one-way authority) with humans through external channels such as Discord.
 status: provisional
-related: [protocol, protocol-inter-agent, plugin-model, threat-model]
+related: [protocol, protocol-inter-agent, plugin-model, security-threat-model]
 ---
 <!-- markdownlint-disable MD033 -->
 
@@ -160,7 +160,7 @@ configuration is persistent.
   `external_message` type extension),
   [protocol-inter-agent](protocol-inter-agent.md) (the source superset and
   routing/quota mechanisms), [plugin-model](plugin-model.md) (Tier B filter
-  insertion point), and [threat-model](threat-model.md) (operator-only delivery
+  insertion point), and [threat-model](../architecture/security-threat-model.md) (operator-only delivery
   and untrusted input)
 - Related plans:
   [phase-9-external-human-messaging](../plans/phase-9-external-human-messaging.md)

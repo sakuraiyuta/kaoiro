@@ -2,7 +2,7 @@
 title: Multi-host deployment guide
 description: Canonical manual procedure for operating a server (separate host, docker compose + nginx) and runners on multiple hosts. Covers nginx locations, env variables, DETS paths, auth token issuance, wss constraints, and updating existing deployments (interim until automation).
 status: accepted
-related: [auth-and-authz, setup-wizards, threat-model]
+related: [security-boundaries, setup-wizards, security-threat-model]
 ---
 
 # Multi-host deployment guide
@@ -40,7 +40,7 @@ Only deployments restricted to a VPN may use the direct, nginx-free option (1.5)
 ### 1.1 Issue authentication tokens (three required)
 
 For public operation on an arbitrary host, configure all three
-([auth-and-authz](auth-and-authz.md)). Generate them with
+([auth-and-authz](../architecture/security-boundaries.md)). Generate them with
 `openssl rand -hex 32` (32-byte hex).
 
 ```sh
@@ -187,7 +187,7 @@ build time, so this constraint does not apply.
 For hosts reachable only inside a VPN (WireGuard), you may deploy without nginx
 and connect directly to `http://<host>:<port>`. Tokens and cookies travel in
 plaintext inside the VPN, so **the VPN is responsible for path confidentiality**
-([threat-model](threat-model.md)). Never expose this mode to the public Internet.
+([threat-model](../architecture/security-threat-model.md)). Never expose this mode to the public Internet.
 
 Add these two variables to `.env` (all other steps are the same as 1.1–1.3):
 
@@ -247,7 +247,7 @@ Because nginx is absent in this mode, the server itself adds the security header
 nginx normally supplies (CSP / `nosniff` / `X-Frame-Options` /
 `Referrer-Policy`) to every response (#145,
 `KaoiroServerWeb.SecurityHeaders`; intent and details are in the
-[threat-model](threat-model.md) mitigations). CSP `connect-src` copies to `ws:` /
+[threat-model](../architecture/security-threat-model.md) mitigations). CSP `connect-src` copies to `ws:` /
 `wss:` **only the `check_origin` entry matching the origin serving that response**;
 changing `PHX_HOST` / `PORT` follows automatically and never puts a loopback WS
 target on an external-host page. Conversely, **CSP rejects changes that bring
@@ -257,7 +257,7 @@ scripts, styles, or images from external origins into the dashboard**.
 
 The dashboard can add Google / GitHub / Nextcloud OAuth login. See
 [ADR-0042](../adr/0042-oauth-allowlist-login.md) for mechanism and design
-decisions and [auth-and-authz](auth-and-authz.md) for the boundary map. If
+decisions and [auth-and-authz](../architecture/security-boundaries.md) for the boundary map. If
 `KAOIRO_CLIENT_TOKENS` is unset, token auth is disabled (OAuth only); when set,
 the two paths coexist.
 
@@ -1393,7 +1393,7 @@ If it reports `cannot assign requested address`, check whether
 `KAOIRO_PUBLISH_IP` is present on a host interface. A VPN address that is absent
 while Docker starts causes the published port bind to fail.
 
-**Remedy.** Install and verify the VPN ordering drop-in from [1.5](#15-direct-vpn-deployment-no-nginx-plain-http-2026-07-26), then start the existing
+**Remedy.** Install and verify the VPN ordering drop-in from [1.5](deployment.md#15-direct-vpn-deployment-no-nginx-plain-http-2026-07-26), then start the existing
 container with `docker start <container>` once the publish address is present.
 Do not treat `docker compose up --no-build` as the general recovery command: a
 prepared `latest` tag can point to a newer image, while the existing container
@@ -1401,12 +1401,12 @@ identifies the known deployment state.
 
 ## See Also
 
-- [auth-and-authz](auth-and-authz.md) — details of unset behavior for the three tokens
+- [auth-and-authz](../architecture/security-boundaries.md) — details of unset behavior for the three tokens
 - [setup-wizards](setup-wizards.md) — interactive wizard automating env / config
   generation for **initial deployment**; section 4 updates are out of scope
   (automation in #218 / #219 / #220)
 - [runner/README.md](../../runner/README.md) — full service and tarball-distribution guide
 - [server/README.md](../../server/README.md) — local development and Docker basics
-- [threat-model](threat-model.md) — risk assessment for dev fallback / unset tokens
+- [threat-model](../architecture/security-threat-model.md) — risk assessment for dev fallback / unset tokens
 - [docs/operations/production.md](../operations/production.md) — Codex
   `codex.backend` selection and its rollback procedure, not covered here

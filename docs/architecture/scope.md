@@ -29,7 +29,7 @@ Not done initially; may be considered in the future:
   approver role nor an agent-ownership boundary (a single-tenant assumption).
   The original stub policy is [ADR-0005](../adr/0005-access-control-oauth-stub.md);
   current boundaries are documented in the Known gaps of
-  [auth-and-authz](../specs/auth-and-authz.md).
+  [auth-and-authz](security-boundaries.md).
 - **Advanced animation/3D rendering**. The prototype switches between static
   expression variants
   ([ADR-0004](../adr/0004-client-rendering-staged.md)).

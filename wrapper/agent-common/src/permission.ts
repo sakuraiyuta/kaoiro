@@ -16,7 +16,7 @@ import { makePermissionRequest } from "./state.js";
 import type { Envelope, PendingPermissionExt, WrapperConfig } from "./types.js";
 
 /** Tool input above this serialized size is dropped from the request
- *  payload (specs/protocol.md, specs/threat-model.md). Exported so a
+ *  payload (specs/protocol.md, docs/reference/security/enforcement-boundaries.md). Exported so a
  *  caller that wants to fail closed on an oversized input BEFORE it ever
  *  reaches an approval dialog can compare against the same ceiling
  *  {@link fitsApprovalPayload} enforces here. */

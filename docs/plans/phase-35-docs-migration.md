@@ -41,7 +41,7 @@ implementation — the emphasis marks; all three are walked at every close.
 | U07 | attachments | impl | ⏳ |
 | U08 | runner control / wrapper config | ops impl | ⏳ |
 | U09 | persona delivery / injection / pack | ops impl | ⏳ |
-| U10 | security / threat model / release audit | ops perm impl | ⏳ |
+| U10 | security / threat model / release audit | ops perm impl | In review |
 | U11 | IA messages / conversations / admission | impl | ⏳ |
 | U12 | IA dispatch / delivery ledger | perm impl | ⏳ |
 | U13 | coordination monitoring | perm impl | ⏳ |
@@ -100,3 +100,9 @@ Writer rules: one writer per destination file; units that touch the same file
 | docs/operations/production.md (Codex backend section) | [operations/codex-backend-switch.md](../operations/codex-backend-switch.md) | U25 |
 | wrapper/codex/README.md (backend contract) | [reference/configuration/runner.md](../reference/configuration/runner.md) | U25 |
 | operations/production.md (Release note) | [Stage 6 landing record](https://github.com/sakuraiyuta/kaoiro/issues/348#issuecomment-5726375118) | U25; duplicate of existing issue record |
+| specs/auth-and-authz.md | [architecture/security-boundaries.md](../architecture/security-boundaries.md) | U10 |
+| specs/auth-and-authz.md; specs/protocol.md (Connection authentication) | [reference/security/authentication-authorization.md](../reference/security/authentication-authorization.md) | U10 |
+| specs/auth-and-authz.md (common tool authorization; IA sections retained for U15) | [reference/security/tool-authorization.md](../reference/security/tool-authorization.md) | U10 |
+| specs/auth-and-authz.md (release checklist) | [operations/security-release-audit.md](../operations/security-release-audit.md) | U10 |
+| specs/threat-model.md | [architecture/security-threat-model.md](../architecture/security-threat-model.md) | U10 |
+| specs/threat-model.md (constraints) | [reference/security/enforcement-boundaries.md](../reference/security/enforcement-boundaries.md) | U10 |

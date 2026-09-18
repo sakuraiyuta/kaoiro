@@ -52,7 +52,7 @@ The dashboard interface is currently Japanese-only.
   an earlier session without touching a terminal.
 - **Permission approval in the UI** — a tool call waiting for approval is
   routed to the client and answered there, so an agent never blocks on an
-  unattended terminal ([threat-model.md](docs/specs/threat-model.md)).
+  unattended terminal ([threat-model.md](docs/architecture/security-threat-model.md)).
 - **Questions become dialogs** — when an agent asks a multiple-choice question,
   it arrives as a dialog on the same routing path as permissions.
 - **Agents message each other** — a delegation, a review request or an approval
@@ -76,7 +76,7 @@ The dashboard interface is currently Japanese-only.
   ([persona-pack-schema.md](docs/specs/persona-pack-schema.md)).
 - **Operator and viewer roles** — sign in with a token or through OAuth; reply
   logs, controls and persona internals are operator-only and fail closed
-  ([auth-and-authz.md](docs/specs/auth-and-authz.md)).
+  ([auth-and-authz.md](docs/architecture/security-boundaries.md)).
 - **Notifications, and a layout that folds** — a desktop notification and a
   per-state sound when an agent hands control back, and a dashboard that
   collapses down to a phone
@@ -180,7 +180,7 @@ See [docs/](docs/) for structured documentation.
 | [docs/plans/](docs/plans/) | Plans and status by phase |
 | [docs/open-questions/](docs/open-questions/) | Open questions |
 | [docs/adr/](docs/adr/) | Architecture Decision Records (ADRs) |
-| [Rationale](#rationale) | Why it exists (motivation) |
+| [Rationale](README.md#rationale) | Why it exists (motivation) |
 
 ## History and issue numbering
 

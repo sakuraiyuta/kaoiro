@@ -2,7 +2,7 @@
 title: Inter-agent messaging protocol
 description: Envelope schema, nine kinds, hard limits, routing, and observation paths for direct interaction between multiple AI agents through the kaoiro server.
 status: provisional
-related: [protocol, subagent-tasks, plugin-model, threat-model]
+related: [protocol, subagent-tasks, plugin-model, security-threat-model]
 ---
 <!-- markdownlint-disable MD033 -->
 
@@ -1802,7 +1802,7 @@ Add `inter_agent_message` to the type list in [protocol.md](protocol.md) as a
 - Related specs: [protocol](protocol.md) (common envelope foundation),
   [subagent-tasks](subagent-tasks.md) (similar reserved-type patterns),
   [plugin-model](plugin-model.md) (future filter insertion point), and
-  [threat-model](threat-model.md) (basis for operator-only delivery).
+  [threat-model](../architecture/security-threat-model.md) (basis for operator-only delivery).
 - Related plans: [phase-8-inter-agent-messaging](../plans/phase-8-inter-agent-messaging.md)
   and [phase-27-list-agents-metadata](../plans/phase-27-list-agents-metadata.md)
   (six peer-directory liveness fields).

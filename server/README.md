@@ -100,7 +100,7 @@ its local runner pair without changing `server/.env`.
 64-character lowercase-hex `KAOIRO_RUNNER_TOKEN`. Both local launchers create
 it with mode 0600 when absent and append its host pair to the server value.
 
-いずれも未設定なら起動時に警告をログ出力する([threat-model](../docs/specs/threat-model.md))。
+いずれも未設定なら起動時に警告をログ出力する([threat-model](../docs/architecture/security-threat-model.md))。
 
 | env | 形式 | 例 |
 |---|---|---|

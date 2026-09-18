@@ -5,7 +5,7 @@ date: 2026-09-14
 opened: 2026-09-14
 supersedes: []
 superseded_by: null
-related_specs: [auth-and-authz, deployment, setup-wizards]
+related_specs: [security-boundaries, deployment, setup-wizards]
 related_adrs: [23, 31]
 ---
 

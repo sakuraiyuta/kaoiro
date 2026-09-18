@@ -2,7 +2,7 @@
 title: Personality-prompt injection
 description: A mechanism for injecting each persona's manner of speech, first-person pronoun, sentence endings, and response style into the engine SDK (Claude uses systemPrompt.append; Codex uses developer_instructions). The prompt body SoT is a server-side persona pack and is delivered by the WS handshake.
 status: provisional
-related: [personas, persona-pack-schema, protocol, threat-model]
+related: [personas, persona-pack-schema, protocol, security-threat-model]
 ---
 
 # Personality-prompt injection
@@ -155,7 +155,7 @@ footer composition becomes the prompt.
   takes effect in the snapshot of their next connection.
 - There is no path to override / extend personality description from the server
   or dashboard (the same treatment as allowed_tools in
-  [threat-model](threat-model.md)).
+  [threat-model](../architecture/security-threat-model.md)).
 - No Envelope (state_change / log / result) carries a personality string. As
   before, only `persona.id` / `persona.name` (canonical and immutable in the
   session) flow to the dashboard. The display name is the separate top-level
@@ -168,7 +168,7 @@ footer composition becomes the prompt.
   not discard `preset` and replace it with a hand-built string. Codex uses
   `developer_instructions`.
 - MUST: Do not put a personality string in wrapper→server Envelopes
-  ([threat-model](threat-model.md)).
+  ([threat-model](../architecture/security-threat-model.md)).
 - MUST: Compose and deliver `personality + common footer` server-side. The
   wrapper has no composition logic
   ([ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md) F5).
@@ -207,7 +207,7 @@ footer composition becomes the prompt.
 
 - Related specs: [personas](personas.md),
   [persona-pack-schema](persona-pack-schema.md),
-  [protocol](protocol.md), [threat-model](threat-model.md)
+  [protocol](protocol.md), [threat-model](../architecture/security-threat-model.md)
 - ADRs: [ADR-0003](../adr/0003-persona-identity-persistence.md) (persona
   identity), [ADR-0006](../adr/0006-doc-language-i18n.md) (language policy),
   [ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)

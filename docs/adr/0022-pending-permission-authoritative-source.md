@@ -5,7 +5,7 @@ date: 2026-06-22
 opened: 2026-06-22
 supersedes: []
 superseded_by: null
-related_specs: [protocol, threat-model]
+related_specs: [protocol, security-threat-model]
 related_adrs: [10, 11, 12, 21, 27, 32, 33, 34, 40, 41, 43, 44]
 ---
 
@@ -120,6 +120,6 @@ Do not retain a compatibility fallback. All clients (the dashboard) in-tree stop
 
 ## Related
 
-- specs: [protocol](../specs/protocol.md) (addendum for `state_change.ext.pending_permission`; demotes the `permission_request` envelope to an initial notification), [threat-model](../specs/threat-model.md) (viewer leakage is automatically covered through ADR-0021).
+- specs: [protocol](../specs/protocol.md) (addendum for `state_change.ext.pending_permission`; demotes the `permission_request` envelope to an initial notification), [threat-model](../architecture/security-threat-model.md) (viewer leakage is automatically covered through ADR-0021).
 - ADRs: [0010](0010-protocol-precisification.md) (progressive-precision policy), [0011](0011-phase3-reliability-and-auth.md) (updates the broker-timeout rule in this ADR), [0012](0012-response-display-and-dashboard-scope.md) (protocol = single source of truth), and [0021](0021-role-information-disclosure-policy.md) (foundation for protecting viewers with an allow-list).
 - Origin: [issue #59](https://github.com/sakuraiyuta/kaoiro/issues/59). Related follow-up: [#60](https://github.com/sakuraiyuta/kaoiro/issues/60) (make the broker timeout configurable; low priority).

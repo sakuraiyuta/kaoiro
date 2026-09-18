@@ -5,7 +5,7 @@ date: 2026-06-24
 opened: 2026-06-23
 supersedes: []
 superseded_by: null
-related_specs: [architecture, protocol, threat-model, setup-wizards]
+related_specs: [architecture, protocol, security-threat-model, setup-wizards]
 related_adrs: [2, 14, 18, 24, 30, 31, 32, 39]
 ---
 
@@ -61,7 +61,7 @@ Adopt the provisional name `runner` as the formal name (already established thro
 - When restoring / summoning, **enumerate** session JSONL files under the relevant cwd and start a resume.
 - Use a **local lock to prevent duplicate starts** (physically prevent concurrent resume of the same session, [ADR-0014](0014-session-resume-and-restore.md) F4).
 
-### Invariants (threat constraint, [threat-model](../specs/threat-model.md))
+### Invariants (threat constraint, [threat-model](../architecture/security-threat-model.md))
 
 Remote spawn from the UI is effectively remote code execution (issue #22). Since the runner is the execution point, spawn / instructions are **operator-only**, and the session_id targeted for resume must be **verified to exist under the cwd bound to that agent** (T1/T2/T3, ADR-0014 F6).
 
@@ -123,7 +123,7 @@ Decision:
 
 - ADR amended: [ADR-0002](0002-local-wrapper-websocket-topology.md) (maintains the direct topology and adds a supervisory layer in this ADR).
 - Related ADRs: [0014](0014-session-resume-and-restore.md) (runner as the unit of survival, resume / summoning), [0018](0018-runner-distribution.md) (runner distribution).
-- Related specs: [architecture](../architecture/system-overview.md), [protocol](../specs/protocol.md) (control messages), and [threat-model](../specs/threat-model.md).
+- Related specs: [architecture](../architecture/system-overview.md), [protocol](../specs/protocol.md) (control messages), and [threat-model](../architecture/security-threat-model.md).
 - Control schema: fixed in #66 (the “Control-message schema” section above, [protocol](../specs/protocol.md), “runner control messages”).
 - Implementation: phase 4 ([phase-4-host-runner](../plans/phase-4-host-runner.md)).
 - Origin: issue [#23](https://github.com/sakuraiyuta/kaoiro/issues/23).

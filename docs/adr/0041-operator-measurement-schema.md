@@ -5,7 +5,7 @@ date: 2026-07-21
 opened: 2026-07-21
 supersedes: []
 superseded_by: null
-related_specs: [protocol, architecture, threat-model]
+related_specs: [protocol, architecture, security-threat-model]
 related_adrs: [12, 20, 21, 22, 33]
 ---
 

@@ -5,7 +5,7 @@ date: 2026-06-14
 opened: 2026-06-11
 supersedes: []
 superseded_by: null
-related_specs: [non-goals, protocol, threat-model, overview]
+related_specs: [non-goals, protocol, security-threat-model, overview]
 related_adrs: [7, 10, 11, 14, 16, 20, 21, 22, 27, 30, 36, 41, 52]
 ---
 
@@ -71,7 +71,7 @@ functions were settled.
 - **(F9) Deliver response logs (`log`/`result`, especially tool input/output)
   only to the operator role**. Viewers receive only the grid (face and state).
   The roles match the screen: viewer = bird's-eye view / operator = operations +
-  details ([threat-model](../specs/threat-model.md)).
+  details ([threat-model](../architecture/security-threat-model.md)).
 
 Protocol details (`log`/`result` payload, delivery control, and history
 resynchronization) are in [protocol](../specs/protocol.md), and the

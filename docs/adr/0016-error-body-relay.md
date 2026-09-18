@@ -5,7 +5,7 @@ date: 2026-06-16
 opened: 2026-06-16
 supersedes: []
 superseded_by: null
-related_specs: [protocol, threat-model]
+related_specs: [protocol, security-threat-model]
 related_adrs: [10, 12]
 ---
 
@@ -73,7 +73,7 @@ The current wire specification is the `result` row in
 - An implementation is needed to reliably send just before a wrapper crash (a
   process-exit hook).
 - Error bodies may contain sensitive information (mitigated by operator-only
-  delivery, [threat-model](../specs/threat-model.md)).
+  delivery, [threat-model](../architecture/security-threat-model.md)).
 
 ### Neutral
 
@@ -92,7 +92,7 @@ The current wire specification is the `result` row in
 ## Related
 
 - Specs: the result payload in [protocol](../specs/protocol.md) and
-  [threat-model](../specs/threat-model.md).
+  [threat-model](../architecture/security-threat-model.md).
 - Related ADRs: [0010](0010-protocol-precisification.md) and
   [0012](0012-response-display-and-dashboard-scope.md).
 - Origin: my-idea-brief (rough note "relay the error body to the client," high

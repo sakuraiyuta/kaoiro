@@ -14,7 +14,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   Operators additionally get a `history` push (the per-agent reply log)
   on join and the live `log` / `result` reply envelopes; viewers receive
   neither, since reply lines carry tool I/O that may hold secrets
-  (ADR-0012, specs/threat-model.md).
+  (ADR-0012, docs/reference/security/enforcement-boundaries.md).
 
   `handle_out`'s role gate above reads `socket.assigns[:role]`, the
   role `ClientSocket.connect/3` resolved — a snapshot, not re-checked
@@ -3045,7 +3045,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
     do: require_operator_role(current_role(socket))
 
   # The name still says `operator` because it gates the operator-only
-  # inbound set (~22 types, docs/specs/auth-and-authz.md) and that set is
+  # inbound set (~22 types, docs/reference/security/authentication-authorization.md) and that set is
   # what its call sites mean; admin passes as a superset (ADR-0050 D2).
   # Anything not in the list stays fail-closed.
   defp require_operator_role(role) when role in @operator_capable_roles, do: :ok
@@ -3396,7 +3396,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # Deliberately NOT `socket.assigns[:socket_id]` — this field's contract
   # is to carry the `Users` ledger's PRINCIPAL id, and `socket_id` is a
   # credential FINGERPRINT instead (issue #47's force-disconnect
-  # target): a secret-derived correlation handle that auth-and-authz.md
+  # target): a secret-derived correlation handle that docs/reference/security/authentication-authorization.md
   # and protocol.ts both require never reach a log line or wire payload.
   # Note this does NOT make holders of one SHARED token individually
   # distinguishable — `client_token_hash/1` is a pure function of the

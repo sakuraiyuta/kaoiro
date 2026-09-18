@@ -147,7 +147,7 @@ with a shared-token + role stub. phase-26 implemented individual OAuth
 authentication with Google / GitHub / Nextcloud and a text allowlist
 ([ADR-0042](../adr/0042-oauth-allowlist-login.md)). The two coexist: token
 authentication is enabled only when `KAOIRO_CLIENT_TOKENS` is configured. See
-[auth-and-authz](../specs/auth-and-authz.md) for details.
+[auth-and-authz](security-boundaries.md) for details.
 
 ### Elixir / OTP mapping (server side)
 

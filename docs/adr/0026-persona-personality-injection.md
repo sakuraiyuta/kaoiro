@@ -5,7 +5,7 @@ date: 2026-07-02
 opened: 2026-07-02
 supersedes: []
 superseded_by: 29
-related_specs: [persona-personality-injection, personas, threat-model]
+related_specs: [persona-personality-injection, personas, security-threat-model]
 related_adrs: [3, 6, 29]
 ---
 
@@ -38,7 +38,7 @@ The main design questions:
   common-footer` as an open question (the provisional initial implementation hard-coded “one sentence recognising the environment,” equivalent to “this agent is operated through the kaoiro client”). This open question was merged into D5 of [ADR-0029](0029-persona-server-sot-and-pack-distribution.md) on 2026-07-05, and closed with the provisional policy confirmed as-is.
 - **D4 Language**: add an optional `language?: string` field to Persona (default `"ja"` when unspecified). In phase-0, only read it and do not implement dispatch logic; track multilingual dispatch in [persona-language-dispatch](../open-questions/persona-language-dispatch.md).
 - **D5 Character-count limit**: state a SHOULD guideline (200–1000 characters) in the spec. Do not impose a hard limit.
-- **Inject only at wrapper startup**. Do not permit replacement mid-session. Do not provide an overwrite path from the server ([threat-model](../specs/threat-model.md) treats this like allowed_tools).
+- **Inject only at wrapper startup**. Do not permit replacement mid-session. Do not provide an overwrite path from the server ([threat-model](../architecture/security-threat-model.md) treats this like allowed_tools).
 - **Do not expose it in envelopes**: do not put the personality string in state_change / log / result envelopes. IDs sent to the dashboard remain only `persona.id` / `persona.name` (canonical values from the pack, unchanged during the session). **A display name that can change while running is handled by a separate top-level `display_name` field** (issues #209 D19/D23)—consistent with this section’s intent not to make `persona.name` subject to renaming.
 
 ## Consequences

@@ -5,7 +5,7 @@ date: 2026-07-29
 opened: 2026-07-28
 supersedes: []
 superseded_by: null
-related_specs: [protocol-inter-agent, persona-personality-injection, threat-model]
+related_specs: [protocol-inter-agent, persona-personality-injection, security-threat-model]
 related_adrs: [21, 22, 29, 43, 45]
 ---
 

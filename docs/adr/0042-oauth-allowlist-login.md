@@ -5,7 +5,7 @@ date: 2026-07-26
 opened: 2026-07-26
 supersedes: []
 superseded_by: null
-related_specs: [auth-and-authz, threat-model]
+related_specs: [security-boundaries, security-threat-model]
 related_adrs: [5, 11, 13, 21]
 ---
 

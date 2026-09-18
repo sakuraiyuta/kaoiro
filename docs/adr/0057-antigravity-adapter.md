@@ -5,7 +5,7 @@ date: 2026-09-04
 opened: 2026-09-04
 supersedes: []
 superseded_by: null
-related_specs: [antigravity-cli-events, plugin-model, protocol, codex-exec-events, threat-model]
+related_specs: [antigravity-cli-events, plugin-model, protocol, codex-exec-events, security-threat-model]
 related_adrs: [14, 17, 23, 32, 33, 34, 35, 36, 39]
 ---
 
