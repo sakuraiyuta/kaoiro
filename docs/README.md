@@ -1,6 +1,6 @@
 # docs
 
-kaoiro documentation. Each subfolder has a README index.
+kaoiro documentation. The pre-taxonomy folders (specs / plans / open-questions) have a README index; architecture/ and reference/ are indexed from this page.
 
 | Folder | Content |
 |--------|------|

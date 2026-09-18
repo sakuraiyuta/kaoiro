@@ -2,6 +2,7 @@
 title: kaoiro overview
 description: The purpose, goals, and intended users of a system that visualizes CLI AI agents as characters.
 status: accepted
+last_updated: 2026-09-18
 related: [system-overview, scope, glossary]
 ---
 

@@ -2,6 +2,7 @@
 title: Architecture
 description: A three-layer structure of wrapper (TS/engine SDK), server (Elixir/Phoenix), and client (Web), with a host-resident runner, and its data flow.
 status: accepted
+last_updated: 2026-09-18
 related: [plugin-model, protocol]
 ---
 <!-- markdownlint-disable MD033 -->

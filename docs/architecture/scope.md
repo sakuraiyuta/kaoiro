@@ -2,6 +2,7 @@
 title: Non-goals
 description: Areas kaoiro does not address initially: multi-user RBAC/multi-tenancy, animation/3D rendering, modification of agent implementations, advanced sentiment analysis, and turning the bundled dashboard into a conversation-authoring environment or persistent history.
 status: accepted
+last_updated: 2026-08-30
 related: [overview]
 ---
 

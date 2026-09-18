@@ -2,6 +2,7 @@
 title: Glossary
 description: kaoiro domain terminology (wrapper, server, client, adapter, filter, persona, and state names).
 status: accepted
+last_updated: 2026-08-30
 related: [overview, system-overview, protocol]
 ---
 
