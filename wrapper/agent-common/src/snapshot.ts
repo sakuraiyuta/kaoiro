@@ -4,6 +4,7 @@
 // stamped into ext.resume_drift.
 
 import type {
+  DisplayedModelSource,
   EngineKind,
   PermissionAxesExt,
   ResolvedSnapshotExt,
@@ -23,19 +24,46 @@ export interface EffectiveStatusSnapshot {
   resolved: ResolvedSnapshotExt;
   permission?: PermissionAxesExt;
   fast_mode?: string;
+  /** Engine-reported model that diverges from `resolved.model` (issue #363):
+   *  the engine switched on its own (Claude safeguard fallback) while the
+   *  host keeps the explicit pick for relaunch. When set, ONLY the top-level
+   *  display index and whoami show it, stamped `model_source: "fallback"`;
+   *  `effective` (the resume snapshot) is projected from `resolved`
+   *  untouched, so the pick survives a relaunch. Hosts that never diverge
+   *  leave it undefined and their projection is byte-identical to before. */
+  displayed_model?: string;
 }
 
 /** The engine-neutral fields exposed by the read-only whoami tool. */
 export interface EffectiveWhoamiFields {
   engine: EngineKind;
   model?: string;
-  model_source?: NonNullable<ResolvedSnapshotExt["model_source"]>;
+  model_source?: DisplayedModelSource;
   effort?: string;
   effort_source?: NonNullable<ResolvedSnapshotExt["effort_source"]>;
   permission_mode?: NonNullable<ResolvedSnapshotExt["permission_mode"]>;
   permission?: PermissionAxesExt;
   network_access?: boolean;
   fast_mode?: string;
+}
+
+/** The top-level model / model_source index shared by state_change.ext and
+ *  whoami. A diverging engine-reported model replaces the value and stamps
+ *  the display-only "fallback" source; otherwise the resolved pair is
+ *  projected as-is. Never used for `effective`. */
+function displayedModelFields(
+  snapshot: EffectiveStatusSnapshot,
+): Pick<EffectiveWhoamiFields, "model" | "model_source"> {
+  const { resolved, displayed_model } = snapshot;
+  if (displayed_model !== undefined) {
+    return { model: displayed_model, model_source: "fallback" };
+  }
+  return {
+    ...(resolved.model === undefined ? {} : { model: resolved.model }),
+    ...(resolved.model_source === undefined
+      ? {}
+      : { model_source: resolved.model_source }),
+  };
 }
 
 /** Projects one effective snapshot onto state_change.ext. The top-level
@@ -47,10 +75,7 @@ export function effectiveStatusEnvelopeFields(
   const { resolved } = snapshot;
   return {
     engine: snapshot.engine,
-    ...(resolved.model === undefined ? {} : { model: resolved.model }),
-    ...(resolved.model_source === undefined
-      ? {}
-      : { model_source: resolved.model_source }),
+    ...displayedModelFields(snapshot),
     ...(resolved.effort === undefined ? {} : { effort: resolved.effort }),
     ...(resolved.effort_source === undefined
       ? {}
@@ -77,10 +102,7 @@ export function effectiveStatusWhoamiFields(
   const { resolved } = snapshot;
   return {
     engine: snapshot.engine,
-    ...(resolved.model === undefined ? {} : { model: resolved.model }),
-    ...(resolved.model_source === undefined
-      ? {}
-      : { model_source: resolved.model_source }),
+    ...displayedModelFields(snapshot),
     ...(resolved.effort === undefined ? {} : { effort: resolved.effort }),
     ...(resolved.effort_source === undefined
       ? {}

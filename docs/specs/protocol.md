@@ -169,6 +169,24 @@ confirmation**.
   falsely claim an account default.
 - **When unspecified**: stamp neither `model` nor `model_source` at startup;
   the first SDK report emits `model` with `model_source="default"`.
+- **Engine-side switch away from an explicit pick** (issue #363, Claude
+  `model_refusal_fallback`): the SDK report is taken as the same model only
+  when it is another spelling of the pick (equal string, or the catalog
+  resolves both to one id — an alias `opus[1m]` is reported back as
+  `claude-opus-5[1m]`); an undecidable comparison (catalog not yet loaded)
+  changes nothing. A report that is a different model is DISPLAY-ONLY: the
+  top-level `ext.model` / whoami `model` show the running model with
+  `model_source: "fallback"` (`DisplayedModelSource`), while `ext.effective`
+  — and therefore the resume snapshot — keeps the explicit pick and its
+  source, so a relaunch re-sends the operator's model (explicit `model`
+  beats the CLI's resumed session state; measured on SDK 0.3.258). The
+  wrapper also emits a one-shot `switch_error{reason:"sdk_fallback",
+  requested:<pick>, rolled_back_to:<running>}`, a transcript system line,
+  and a stderr diagnostic. `"fallback"` never appears in `ext.effective`;
+  the runner pair rule and the server snapshot sanitizer do not accept it.
+  A subagent-only fallback (`scope: "local"`) is logged and changes nothing.
+  An explicit `set_model` supersedes the divergence and persists as
+  `config` as before.
 - Effort follows the same semantics (`ext.effort_source`): without an explicit
   startup value the wrapper does not know the SDK default and waits for its
   report.

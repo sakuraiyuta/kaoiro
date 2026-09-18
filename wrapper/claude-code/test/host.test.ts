@@ -2732,24 +2732,42 @@ describe("AgentHost — query injection", () => {
       onState: (e) => envs.push(e),
       modelSource: "config",
       queryOptions: { model: "claude-opus-4-7" },
-      queryFn: scriptedQuery([
-        // SDK init が別値 (正規化名等) を返しても source は "config" のまま維持されること
-        // — 値の由来を伝える field なので default に書き換えない。
-        msg({
-          type: "system",
-          subtype: "init",
-          model: "claude-opus-4-7-normalized",
-          cwd: "/repo",
-        }),
-        assistant([{ type: "text", text: "hi" }]),
-      ]),
+      queryFn: makeQueryFn(() => {
+        async function* gen(): AsyncGenerator<SDKMessage, void> {
+          // SDK init が別綴り (正規化名) を返しても source は "config" のまま
+          // 維持されること — 値の由来を伝える field なので default に書き換えない。
+          // 同一 model かどうかは catalog が裏付ける (issue #363): pick の
+          // resolvedModel が init の綴りに一致するので正規化名を採用する。
+          yield msg({
+            type: "system",
+            subtype: "init",
+            model: "claude-opus-4-7-normalized",
+            cwd: "/repo",
+          });
+          yield assistant([{ type: "text", text: "hi" }]);
+          yield result("success", { result: "ok" });
+        }
+        return asQuery(gen(), async () => {}, undefined, {
+          supportedModels: async () => [
+            {
+              value: "claude-opus-4-7",
+              displayName: "Opus 4.7",
+              description: "o",
+              resolvedModel: "claude-opus-4-7-normalized",
+            },
+          ],
+        });
+      }),
       now: () => "T",
     });
     await host.run();
-    const afterInit = envs.find((e) => e.state === "thinking");
-    expect(afterInit?.ext).toMatchObject({
+    expect(host.statusExtSnapshot()).toMatchObject({
       model: "claude-opus-4-7-normalized",
       model_source: "config",
+      effective: {
+        model: "claude-opus-4-7-normalized",
+        model_source: "config",
+      },
     });
   });
 
@@ -7705,5 +7723,221 @@ describe("resume Case 2 display hint fallback (P1 dogfood 回帰対策)", () => 
     expect(supportedModels).toHaveBeenCalled();
     host.close();
     await done;
+  });
+});
+
+describe("AgentHost — SDK-side model fallback (issue #363)", () => {
+  // Account catalog as the SDK reports it (measured on 0.3.258): an alias
+  // value resolves to the suffixed canonical id, which is also what init /
+  // context usage report back.
+  const catalog = [
+    { value: "opus[1m]", displayName: "Opus (1M)", description: "o", resolvedModel: "claude-opus-5[1m]" },
+    { value: "default", displayName: "Default", description: "d", resolvedModel: "claude-opus-5[1m]" },
+    { value: "haiku", displayName: "Haiku", description: "h", resolvedModel: "claude-haiku-4-5" },
+  ];
+  const refusalFallback = (over: Record<string, unknown> = {}): SDKMessage =>
+    msg({
+      type: "system",
+      subtype: "model_refusal_fallback",
+      trigger: "refusal",
+      direction: "retry",
+      scope: "session",
+      original_model: "claude-opus-5[1m]",
+      fallback_model: "claude-opus-4-8",
+      api_refusal_category: "cyber",
+      content: "Opus 5 (1M context)'s safeguards flagged this message. Switched to Opus 4.8.",
+      uuid: "u-1",
+      session_id: "s-1",
+      ...over,
+    });
+  /** t8 invariant: the display-only source never reaches the snapshot. */
+  const effectiveNeverFallback = (envs: Envelope[]): boolean =>
+    envs.every(
+      (e) => (e.ext?.effective as { model_source?: unknown } | undefined)?.model_source !== "fallback",
+    );
+
+  function liveHost(params: {
+    pin?: string;
+    source?: "config" | "env";
+    initModel: string;
+    catalog?: unknown[] | null;
+    usageModel?: string;
+  }) {
+    const envs: Envelope[] = [];
+    const logs: Envelope[] = [];
+    const warnings: string[] = [];
+    const initConsumed = deferred<void>();
+    const feed = signalQueue();
+    const queued: SDKMessage[] = [];
+    const queryFn = makeQueryFn((args: QueryArgs) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        yield msg({ type: "system", subtype: "init", model: params.initModel, cwd: "/repo" });
+        initConsumed.resolve();
+        for (;;) {
+          await feed.wait();
+          const next = queued.shift();
+          if (next === undefined) return;
+          yield next;
+        }
+      }
+      void args;
+      return asQuery(
+        gen(),
+        async () => {},
+        params.usageModel === undefined
+          ? undefined
+          : async () => ({ totalTokens: 10, maxTokens: 1000, percentage: 1, model: params.usageModel }),
+        {
+          setModel: async () => {},
+          supportedModels: params.catalog === null
+            ? async () => { throw new Error("no catalog"); }
+            : async () => params.catalog ?? catalog,
+        },
+      );
+    });
+    const host = new AgentHost(config, {
+      onState: (e) => envs.push(e),
+      onLog: (e) => logs.push(e),
+      warn: (message) => warnings.push(message),
+      queryFn,
+      now: () => "T",
+      ...(params.pin === undefined ? {} : { queryOptions: { model: params.pin } }),
+      ...(params.source === undefined ? {} : { modelSource: params.source }),
+    });
+    const done = host.run();
+    const push = (m: SDKMessage): void => { queued.push(m); feed.signal(); };
+    const finish = async (): Promise<void> => { feed.signal(); host.close(); await done; };
+    return { host, envs, logs, warnings, initConsumed, push, finish };
+  }
+
+  it("t1: an init report that differs from an explicit pick is displayed as fallback while effective keeps the pick", async () => {
+    const h = liveHost({ pin: "opus[1m]", source: "config", initModel: "claude-opus-4-8" });
+    await h.initConsumed.promise;
+    await vi.waitFor(() => expect(h.host.statusExtSnapshot().model_source).toBe("fallback"));
+    expect(h.host.statusExtSnapshot()).toMatchObject({
+      model: "claude-opus-4-8",
+      model_source: "fallback",
+      effective: { model: "opus[1m]", model_source: "config" },
+    });
+    expect(h.host.statusSnapshot()).toMatchObject({ model: "claude-opus-4-8", model_source: "fallback" });
+    await h.finish();
+    expect(effectiveNeverFallback(h.envs)).toBe(true);
+  });
+
+  it("t2: the context-usage report is judged the same way as init", async () => {
+    const h = liveHost({ pin: "opus[1m]", source: "config", initModel: "claude-opus-5[1m]", usageModel: "claude-opus-4-8" });
+    await h.initConsumed.promise;
+    await vi.waitFor(() => expect(h.host.statusExtSnapshot().model_source).toBe("fallback"));
+    expect(h.host.statusExtSnapshot()).toMatchObject({
+      model: "claude-opus-4-8",
+      effective: { model: "claude-opus-5[1m]", model_source: "config" },
+    });
+    await h.finish();
+    expect(effectiveNeverFallback(h.envs)).toBe(true);
+  });
+
+  it("t3: a session-scope model_refusal_fallback warns, logs, and emits a one-shot sdk_fallback switch_error", async () => {
+    const h = liveHost({ pin: "opus[1m]", source: "config", initModel: "claude-opus-5[1m]" });
+    await h.initConsumed.promise;
+    await vi.waitFor(() => expect(h.host.statusExtSnapshot().model).toBe("claude-opus-5[1m]"));
+    h.push(refusalFallback());
+    await vi.waitFor(() => expect(h.host.statusExtSnapshot().model_source).toBe("fallback"));
+    expect(h.warnings.some((w) => w.includes("model refusal fallback") && w.includes("category=cyber"))).toBe(true);
+    expect(h.logs.filter((l) => l.payload.kind === "system").map((l) => l.payload.text)).toEqual([
+      "モデルが応答を拒否したため claude-opus-5[1m] から claude-opus-4-8 に退避しました [cyber]",
+    ]);
+    const errEnv = h.envs.find((e) => e.ext?.switch_error !== undefined);
+    expect(errEnv?.ext?.switch_error).toEqual({
+      kind: "model",
+      requested: "claude-opus-5[1m]",
+      reason: "sdk_fallback",
+      rolled_back_to: "claude-opus-4-8",
+    });
+    // One-shot notice, persistent display source.
+    expect(h.host.statusExtSnapshot()).not.toHaveProperty("switch_error");
+    expect(h.host.statusExtSnapshot()).toMatchObject({
+      model: "claude-opus-4-8",
+      model_source: "fallback",
+      effective: { model: "claude-opus-5[1m]", model_source: "config" },
+    });
+    await h.finish();
+    expect(effectiveNeverFallback(h.envs)).toBe(true);
+  });
+
+  it("t4: a local-scope (subagent) fallback is logged only; the session model and effective are untouched", async () => {
+    const h = liveHost({ pin: "opus[1m]", source: "config", initModel: "claude-opus-5[1m]" });
+    await h.initConsumed.promise;
+    await vi.waitFor(() => expect(h.host.statusExtSnapshot().model).toBe("claude-opus-5[1m]"));
+    const before = h.envs.length;
+    h.push(refusalFallback({ scope: "local" }));
+    await vi.waitFor(() => expect(h.logs.filter((l) => l.payload.kind === "system")).toHaveLength(1));
+    expect(h.logs[0]?.payload.text).toContain("subagent のみ");
+    expect(h.host.statusExtSnapshot()).toMatchObject({ model: "claude-opus-5[1m]", model_source: "config" });
+    expect(h.envs.slice(before).some((e) => e.ext?.switch_error !== undefined)).toBe(false);
+    await h.finish();
+  });
+
+  it("t5: an operator set_model supersedes the fallback and persists as config", async () => {
+    const h = liveHost({ pin: "opus[1m]", source: "config", initModel: "claude-opus-4-8" });
+    await h.initConsumed.promise;
+    await vi.waitFor(() => expect(h.host.statusExtSnapshot().model_source).toBe("fallback"));
+    await h.host.setModel("haiku");
+    expect(h.host.statusExtSnapshot()).toMatchObject({
+      model: "haiku",
+      model_source: "config",
+      effective: { model: "haiku", model_source: "config" },
+    });
+    await h.finish();
+    expect(effectiveNeverFallback(h.envs)).toBe(true);
+  });
+
+  it("t6: without an explicit pick the host follows the engine (source default) and still surfaces the notice", async () => {
+    const h = liveHost({ initModel: "claude-opus-5[1m]" });
+    await h.initConsumed.promise;
+    h.push(refusalFallback());
+    await vi.waitFor(() => expect(h.host.statusExtSnapshot().model).toBe("claude-opus-4-8"));
+    expect(h.host.statusExtSnapshot()).toMatchObject({
+      model: "claude-opus-4-8",
+      model_source: "default",
+      effective: { model: "claude-opus-4-8", model_source: "default" },
+    });
+    expect(h.envs.some((e) => (e.ext?.switch_error as { reason?: unknown } | undefined)?.reason === "sdk_fallback")).toBe(true);
+    await h.finish();
+    expect(effectiveNeverFallback(h.envs)).toBe(true);
+  });
+
+  it("t7 (negative control): an alias pick reported back in its resolved spelling is the same model, not a fallback", async () => {
+    const h = liveHost({ pin: "opus[1m]", source: "config", initModel: "claude-opus-5[1m]" });
+    await h.initConsumed.promise;
+    await vi.waitFor(() => expect(h.host.statusExtSnapshot().model).toBe("claude-opus-5[1m]"));
+    expect(h.host.statusExtSnapshot()).toMatchObject({
+      model: "claude-opus-5[1m]",
+      model_source: "config",
+      effective: { model: "claude-opus-5[1m]", model_source: "config" },
+    });
+    await h.finish();
+    expect(h.envs.some((e) => e.ext?.model_source === "fallback")).toBe(false);
+  });
+
+  it("t9: with no usable catalog a differing report is held as undecided — the pick is kept and nothing is called a fallback", async () => {
+    const h = liveHost({ pin: "opus[1m]", source: "config", initModel: "claude-opus-5[1m]", catalog: null });
+    await h.initConsumed.promise;
+    h.push(assistant([{ type: "text", text: "hi" }]));
+    await vi.waitFor(() => expect(h.envs.some((e) => e.state === "thinking")).toBe(true));
+    expect(h.host.statusExtSnapshot()).toMatchObject({ model: "opus[1m]", model_source: "config" });
+    await h.finish();
+    expect(h.envs.some((e) => e.ext?.model_source === "fallback")).toBe(false);
+  });
+
+  it("model_refusal_no_fallback is surfaced on stderr and in the transcript without touching the model", async () => {
+    const h = liveHost({ pin: "opus[1m]", source: "config", initModel: "claude-opus-5[1m]" });
+    await h.initConsumed.promise;
+    h.push(msg({ type: "system", subtype: "model_refusal_no_fallback", original_model: "claude-opus-5[1m]", api_refusal_category: "bio", content: "refused", uuid: "u-2", session_id: "s-1" }));
+    await vi.waitFor(() => expect(h.logs.filter((l) => l.payload.kind === "system")).toHaveLength(1));
+    expect(h.logs[0]?.payload.text).toBe("モデルが応答を拒否し、退避せずに turn が終了しました [bio]");
+    expect(h.warnings.some((w) => w.includes("without fallback") && w.includes("category=bio"))).toBe(true);
+    await vi.waitFor(() => expect(h.host.statusExtSnapshot().model).toBe("claude-opus-5[1m]"));
+    expect(h.host.statusExtSnapshot().model_source).toBe("config");
+    await h.finish();
   });
 });

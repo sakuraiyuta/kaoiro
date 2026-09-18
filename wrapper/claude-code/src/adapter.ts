@@ -621,6 +621,71 @@ export function sdkMessageToCompactNotice(
   return null;
 }
 
+/** An SDK-side model switch notice (issue #363). `refusal_fallback` is the
+ *  CLI retrying a refused turn on another model (`SDKModelRefusalFallbackMessage`);
+ *  `refusal_no_fallback` is a refusal that ended the turn with no retry.
+ *  `scope: "local"` means only a subagent / side question fell back and the
+ *  session model is unchanged — callers must not treat it as a switch. */
+export interface ModelFallbackNotice {
+  kind: "refusal_fallback" | "refusal_no_fallback";
+  scope: "session" | "local";
+  original_model?: string;
+  fallback_model?: string;
+  category?: string;
+  text: string;
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value !== "" ? value : undefined;
+}
+
+/** Maps the SDK's refusal-fallback system messages (SDK 0.3.258 sdk.d.ts:
+ *  `model_refusal_fallback` / `model_refusal_no_fallback`) to a notice.
+ *  Fields are read defensively: `scope` absent means "session" per the SDK
+ *  contract (older CLIs), and the human-prose explanation is display-only. */
+export function sdkMessageToModelFallback(
+  message: SDKMessage,
+): ModelFallbackNotice | null {
+  if (message.type !== "system") return null;
+  const subtype = (message as { subtype?: unknown }).subtype;
+  if (
+    subtype !== "model_refusal_fallback" &&
+    subtype !== "model_refusal_no_fallback"
+  ) {
+    return null;
+  }
+  const m = message as {
+    scope?: unknown;
+    original_model?: unknown;
+    fallback_model?: unknown;
+    api_refusal_category?: unknown;
+    content?: unknown;
+  };
+  const scope = m.scope === "local" ? "local" : "session";
+  const original = nonEmptyString(m.original_model);
+  const fallback = nonEmptyString(m.fallback_model);
+  const category = nonEmptyString(m.api_refusal_category);
+  const detail = category === undefined ? "" : ` [${category}]`;
+  if (subtype === "model_refusal_no_fallback") {
+    return {
+      kind: "refusal_no_fallback",
+      scope,
+      ...(original === undefined ? {} : { original_model: original }),
+      ...(category === undefined ? {} : { category }),
+      text: `モデルが応答を拒否し、退避せずに turn が終了しました${detail}`,
+    };
+  }
+  const where = scope === "local" ? " (subagent のみ、session の model は不変)" : "";
+  return {
+    kind: "refusal_fallback",
+    scope,
+    ...(original === undefined ? {} : { original_model: original }),
+    ...(fallback === undefined ? {} : { fallback_model: fallback }),
+    ...(category === undefined ? {} : { category }),
+    text: `モデルが応答を拒否したため ${original ?? "?"} から ${fallback ?? "?"} に退避しました${detail}${where}`,
+  };
+}
+
 /** The SDK conversation session id carried by a message (every SDKMessage
  *  variant has one), or null when absent/empty. The host reports it so the
  *  server can group history by session (protocol.md / ADR-0014 phase-0). */

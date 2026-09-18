@@ -147,6 +147,7 @@ export type {
   LogEntry,
   LogKind,
   LogPayload,
+  DisplayedModelSource,
   ModelSource,
   PendingPermissionExt,
   PendingQuestionExt,
