@@ -1,8 +1,10 @@
-import { access, mkdtemp, rm } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  materializeLocalImages,
   sweepOrphanLocalImages,
   tempDirPrefix,
   validateOpen,
@@ -49,4 +51,17 @@ describe("Codex local_image upload", () => {
   ])("rejects invalid finite integer metadata %#", ({ size, chunks }) => {
     expect(validateOpen({ upload_id: "u", filename: "x.png", mime: "image/png", size, chunks })).toMatchObject({ ok: false, reason: "size_over" });
   });
+});
+
+it("keeps a materialized image readable when another test owner sweeps before CLI consumption", async () => {
+  const owner = `image-owner-${randomUUID()}`, otherOwner = `image-owner-${randomUUID()}`;
+  const bytes = Buffer.from("image-fixture");
+  const image = await materializeLocalImages(owner, [{
+    meta: { upload_id: "image", filename: "image.png", mime: "image/png", size: bytes.length, chunks: 1 },
+    chunks: new Map([[0, bytes]]), sealed: true, accumulatedBytes: bytes.length, addedAt: 0,
+  }]);
+  try {
+    await sweepOrphanLocalImages(otherOwner, () => {});
+    expect(await readFile(image.paths[0]!)).toEqual(bytes);
+  } finally { await rm(image.dir, { recursive: true, force: true }); }
 });

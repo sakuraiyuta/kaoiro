@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { SessionResetCoordinator, type Envelope, type WrapperConfig } from "@kaoiro/agent-common";
 import { CodexHost, type CodexHostOptions } from "../src/host.js";
 import { AppServerSession } from "../src/app_server_session.js";
+import * as turnDiagnostics from "../src/turn_diagnostics.js";
 import type { RpcObject } from "../src/app_server_rpc.js";
 
 const config: WrapperConfig = { agent_id: "host-app", persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P",
@@ -12,6 +13,15 @@ const config: WrapperConfig = { agent_id: "host-app", persona: { id: "p", name: 
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const fn of cleanup.splice(0)) await fn();vi.restoreAllMocks(); });
 function deferred() { let resolve!: () => void;const promise = new Promise<void>(r => { resolve = r; });return { promise, resolve }; }
+function holdStartup() {
+  const entered = deferred(), release = deferred();
+  const prune = turnDiagnostics.pruneCodexTurnTraceCaptureDirs;
+  vi.spyOn(turnDiagnostics, "pruneCodexTurnTraceCaptureDirs").mockImplementation(async (...args) => {
+    entered.resolve();await release.promise;return prune(...args);
+  });
+  cleanup.push(async () => release.resolve());
+  return { entered: entered.promise, release: release.resolve };
+}
 function fixture(overrides: Partial<CodexHostOptions> = {}, launch = config) {
   const child = new EventEmitter() as ChildProcessWithoutNullStreams;
   const stdout = new PassThrough(), stderr = new PassThrough(), sent: RpcObject[] = [];
@@ -167,10 +177,25 @@ it("does not dispatch a reserved session reset after an externally interrupted t
   expect(request).not.toHaveBeenCalled();expect(coordinator.pending).toBe(false);expect(notify).toHaveBeenCalledTimes(1);
 });
 
-it("cancels unsent preparation on operator interrupt and preserves the next text input", async () => {
-  const gate = deferred(), f = fixture({ waitForPermissionSync: () => gate.promise });
+it("preserves queued text when operator interrupt precedes preparation", async () => {
+  const startup = holdStartup(), gate = deferred(), wait = vi.fn(() => gate.promise);
+  const f = fixture({ waitForPermissionSync: wait });
   await f.host.send("A", undefined, [], "A");await f.host.send("B", undefined, [], "B");
-  await new Promise(r => setTimeout(r, 10));await f.host.interrupt();
+  await startup.entered;expect(wait).not.toHaveBeenCalled();await f.host.interrupt();
+  expect(f.finals).not.toHaveBeenCalled();expect(f.starts).not.toHaveBeenCalled();
+  startup.release();await vi.waitFor(() => expect(wait).toHaveBeenCalled());
+  gate.resolve();await f.until(1);expect(f.starts.mock.calls[0]?.[0].turnToken).toBe("A");
+  f.terminal();await f.until(2);expect(f.starts.mock.calls[1]?.[0].turnToken).toBe("B");
+  f.terminal();await vi.waitFor(() => expect(f.finals).toHaveBeenCalledTimes(2));
+  expect(f.ends.mock.calls.map(([end]) => end.terminal)).toEqual(["turn.completed", "turn.completed"]);
+});
+
+it("cancels unsent preparation on operator interrupt and preserves the next text input", async () => {
+  const startup = holdStartup(), gate = deferred(), wait = vi.fn(() => gate.promise);
+  const f = fixture({ waitForPermissionSync: wait });
+  await f.host.send("A", undefined, [], "A");await f.host.send("B", undefined, [], "B");
+  await startup.entered;expect(wait).not.toHaveBeenCalled();startup.release();
+  await vi.waitFor(() => expect(wait).toHaveBeenCalled());await f.host.interrupt();
   await vi.waitFor(() => expect(f.finals).toHaveBeenCalledTimes(1));
   expect(f.starts).not.toHaveBeenCalled();gate.resolve();await f.until(1);
   expect(f.starts.mock.calls[0]?.[0].turnToken).toBe("B");f.terminal();
@@ -269,7 +294,10 @@ it("coalesces pending history after settlement and holds the next turn through p
     const snapshot = await read();expect(snapshot.coverage).toBe("full");
     order.push("publish");await publication.promise;order.push("complete");
   });
-  await new Promise(r => setTimeout(r, 10));expect(order).toEqual([]);
+  f.send({ method: "item/completed", params: { threadId: "thread", turnId: "turn-1",
+    item: { id: "active", type: "agentMessage", text: "STILL_ACTIVE" } } });
+  await vi.waitFor(() => expect(f.logs.some(e => e.payload.text === "STILL_ACTIVE")).toBe(true));
+  expect(order).toEqual([]);
   f.terminal();await vi.waitFor(() => expect(order).toEqual(["read"]));
   expect(f.turns()).toHaveLength(1);gate.resolve();await vi.waitFor(() => expect(order).toEqual(["read", "publish"]));
   expect(f.turns()).toHaveLength(1);publication.resolve();await f.until(2);

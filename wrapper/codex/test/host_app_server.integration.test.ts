@@ -48,6 +48,7 @@ it.each([null, "low"])("runs the default app backend through real ServerLink syn
   };
   let host: CodexHost | undefined, running: Promise<void> | undefined, link: ServerLink | undefined;
   const ends: Array<Parameters<NonNullable<ConstructorParameters<typeof CodexHost>[1]["onTurnEnd"]>>[0]> = [];
+  const permissionWaits: Array<{ ready: boolean }> = [];
   const starts: string[] = [], logs: Envelope[] = [], policies: unknown[] = [], imagePaths: string[] = [];
   const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAb0lEQVR4nO3PAQkAAAyEwO9feoshgnABdLep8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3IPanc8OLDQitxAAAAAElFTkSuQmCC", "base64");
   try {
@@ -74,7 +75,10 @@ enabled = false
     const config: WrapperConfig = { agent_id: agentId, persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P", server_url: wire.url,
       model: "gpt-5.6-sol", effort: "high", sandbox: "workspace-write", network_access: false, codex_auth_mode: "chatgpt", codex_chatgpt_plan: "plus" };
     host = new CodexHost(config, { backend: "app-server", appendSystemPrompt: "HOST_PERSONA", permissionSyncSupported: true,
-      waitForPermissionSync: () => link!.waitForPermissionSync(),
+      waitForPermissionSync: () => {
+        const wait = { ready: false };permissionWaits.push(wait);
+        return link!.waitForPermissionSync().then(() => { wait.ready = true; });
+      },
       onState: e => link!.send(e), onLog: e => { logs.push(e);link!.send(e); }, onSessionId: id => link!.setSessionId(id),
       onTurnStart: ({ turnToken }) => { starts.push(turnToken);link!.acknowledgeInterAgentDelivery(starts.length); },
       onTurnEnd: info => ends.push(info), onPermissionLifecycle: event => { if (event.kind === "permission_applied") policies.push(event.details); },
@@ -93,7 +97,9 @@ enabled = false
     wire.push("instruction", { version: "0", text: "A", attachment_ids: ["image"] });
     wire.push("instruction", { version: "0", text: "B" });wire.push("instruction", { version: "0", text: "C" });
     wire.push("permission_sync", { version: "0", control: null, next: {} });
-    await new Promise(r => setTimeout(r, 50));expect(requests).toHaveLength(0);expect(starts).toHaveLength(0);
+    await vi.waitFor(() => expect(permissionWaits.length > 0 || starts.length > 0).toBe(true), { timeout: 25_000 });
+    expect(requests).toHaveLength(0);expect(starts).toHaveLength(0);
+    expect(permissionWaits.at(-1)?.ready).toBe(false);
     expect(wire.received.filter(r => r.event === "delivery_ack")).toHaveLength(0);
     wire.push("permission_sync", sync(1, false));
     await vi.waitFor(() => expect(held).toBeDefined(), { timeout: 25_000 });
@@ -109,8 +115,11 @@ enabled = false
     await host.setEffort("low");wire.push("set_permission", { version: "0", revision: 2, sandbox: "workspace-write", network_access: true });
     await vi.waitFor(() => expect(relays).toBe(1));
     wire.drop();await vi.waitFor(() => expect(wire.joins).toBe(2), { timeout: 10_000 });
+    const waitsBeforeNextTurn = permissionWaits.length;
     respond(held!);await vi.waitFor(() => expect(ends).toHaveLength(1));
-    await new Promise(r => setTimeout(r, 50));expect(requests).toHaveLength(1);expect(starts).toEqual(["A"]);
+    await vi.waitFor(() => expect(permissionWaits.length > waitsBeforeNextTurn || starts.length > 1).toBe(true), { timeout: 25_000 });
+    expect(requests).toHaveLength(1);expect(starts).toEqual(["A"]);
+    expect(permissionWaits.at(-1)?.ready).toBe(false);
     wire.push("permission_sync", sync(2, true));
     await vi.waitFor(() => expect(ends).toHaveLength(3), { timeout: 10_000 });expect(starts).toEqual(["A", "B", "C"]);
     expect(ends.every(e => e.terminal === "turn.completed")).toBe(true);
