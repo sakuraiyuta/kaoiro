@@ -117,7 +117,7 @@ than engine names
   server is the SoT that aggregates persona-pack ingestion, `/api/personas`
   manifest delivery, and `persona_prompt` push
   ([ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md),
-  [persona-pack-schema](../specs/persona-pack-schema.md); the old bundled distribution
+  [persona-pack-format](../reference/personas/pack-format.md); the old bundled distribution
   [ADR-0008](../adr/0008-persona-asset-distribution.md) is superseded).
 - **client**: Character and expression visualization, multiplexer UI, and
   approval UI. Its implementation is separated into another project. The main
@@ -191,7 +191,7 @@ None.
 ## See Also
 
 - Related specs: [plugin-model](../specs/plugin-model.md), [protocol](../specs/protocol.md),
-  [persona-pack-schema](../specs/persona-pack-schema.md)
+  [persona-pack-format](../reference/personas/pack-format.md)
 - ADRs: [0001](../adr/0001-agent-sdk-integration.md),
   [0002](../adr/0002-local-wrapper-websocket-topology.md),
   [0004](../adr/0004-client-rendering-staged.md),

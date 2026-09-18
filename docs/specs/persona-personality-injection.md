@@ -2,7 +2,7 @@
 title: Personality-prompt injection
 description: A mechanism for injecting each persona's manner of speech, first-person pronoun, sentence endings, and response style into the engine SDK (Claude uses systemPrompt.append; Codex uses developer_instructions). The prompt body SoT is a server-side persona pack and is delivered by the WS handshake.
 status: provisional
-related: [personas, persona-pack-schema, protocol, security-threat-model]
+related: [personas, pack-format, protocol, security-threat-model]
 ---
 
 # Personality-prompt injection
@@ -57,7 +57,7 @@ spawn, the server initializes it with an operator-specified custom name or, if
 unspecified, a copy of `persona.name`.
 
 The personality-prompt body resides in `personality.md` in the server-side
-persona pack ([persona-pack-schema](persona-pack-schema.md)). Authors edit it
+persona pack ([persona-pack-format](../reference/personas/pack-format.md)). Authors edit it
 inside the persona-pack ZIP.
 
 ### Prompt delivery (WS handshake)
@@ -206,7 +206,7 @@ footer composition becomes the prompt.
 ## See Also
 
 - Related specs: [personas](personas.md),
-  [persona-pack-schema](persona-pack-schema.md),
+  [persona-pack-format](../reference/personas/pack-format.md),
   [protocol](protocol.md), [threat-model](../architecture/security-threat-model.md)
 - ADRs: [ADR-0003](../adr/0003-persona-identity-persistence.md) (persona
   identity), [ADR-0006](../adr/0006-doc-language-i18n.md) (language policy),

@@ -5,7 +5,7 @@ date: 2026-07-07
 opened: 2026-07-07
 supersedes: []
 superseded_by: null
-related_specs: [personas, persona-pack-schema, protocol]
+related_specs: [personas, pack-format, protocol]
 related_adrs: [23, 29]
 ---
 

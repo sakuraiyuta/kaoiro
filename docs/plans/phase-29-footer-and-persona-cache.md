@@ -36,5 +36,5 @@ Status legend: ✅ done, 🟡 in progress, ⚠ partial, ⏳ not started, ⛔ blo
 
 - ADRs: [0045](../adr/0045-footer-file-externalization.md),
   [0046](../adr/0046-persona-cache-relocation.md)
-- Specs: [persona-pack-schema](../specs/persona-pack-schema.md),
+- Specs: [persona-pack-format](../reference/personas/pack-format.md),
   [deployment](../specs/deployment.md)

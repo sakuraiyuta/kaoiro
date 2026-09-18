@@ -1481,7 +1481,7 @@ initially covered sprites only; [ADR-0029](../adr/0029-persona-server-sot-and-pa
 expanded it on 2026-07-05 to persona-pack zip distribution, a server aggregate SoT, and
 auto-watch. It is independent of Channels and not gated by `:serve_dashboard` (public API).
 Asset layout and format are defined by [personas](personas.md); the pack schema is
-[persona-pack-schema](persona-pack-schema.md).
+[persona-pack-format](../reference/personas/pack-format.md).
 
 - `GET /api/personas` — manifest JSON:
 
@@ -1507,7 +1507,7 @@ Asset layout and format are defined by [personas](personas.md); the pack schema 
 - `version` is the aggregate version derived from asset contents; clients refetch sprite URLs
   only when it changes (incremental sync).
 - `name` / `pack_version` / `description` come from the persona pack `manifest.json`
-  ([persona-pack-schema](persona-pack-schema.md)). `personality.md` is not exposed by this API;
+  ([persona-pack-format](../reference/personas/pack-format.md)). `personality.md` is not exposed by this API;
   it is pushed only during the WS wrapper handshake (see "Personality prompt delivery").
 - Hashed `url` forms are immutable with `cache-control: public, max-age=31536000, immutable`;
   URLs without `?v=` are `no-cache`.

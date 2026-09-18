@@ -5,7 +5,7 @@ date: 2026-08-03
 opened: 2026-08-02
 supersedes: []
 superseded_by: null
-related_specs: [persona-personality-injection, persona-pack-schema]
+related_specs: [persona-personality-injection, pack-format]
 related_adrs: [29, 44, 46]
 ---
 
