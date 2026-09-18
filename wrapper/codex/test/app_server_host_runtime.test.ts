@@ -305,7 +305,7 @@ it.each(["terminal callback", "observation wait"])("rejects an interrupt after t
   expect(result.terminal.status).toBe("completed");
   expect(f.runtime.baseline).toEqual({ model: "changed", effort: "low", effortIntent: "explicit" });
   expect(await interrupt).toBe(false);expect(f.session.interrupt).not.toHaveBeenCalled();
-  f.hooks.onTerminal = undefined;f.pending = { model: null, effort: null, effortReset: false };
+  delete f.hooks.onTerminal;f.pending = { model: null, effort: null, effortReset: false };
   await f.runtime.run(input("next"), f.hooks);
-  expect(f.sent[1].model).toBeUndefined();expect(f.sent[1].effort).toBe("low");
+  expect(f.sent[1]).toMatchObject({ effort: "low" });expect(f.sent[1]).not.toHaveProperty("model");
 });
