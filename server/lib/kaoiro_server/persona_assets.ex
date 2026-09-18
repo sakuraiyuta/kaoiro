@@ -19,7 +19,7 @@ defmodule KaoiroServer.PersonaAssets do
   (F3). A failed rebuild aborts the boot, but a later one only logs and
   keeps the current manifest (F4).
 
-  Zip validation follows persona-pack-schema.md — required manifest
+  Zip validation follows docs/reference/personas/pack-format.md — required manifest
   fields, the 7 sprite states, `min_kaoiro_version` under the server's
   own version — and a zip that fails any check is dropped with a warning
   (partial ingest, not fatal, so one bad drop cannot lock the whole set).
@@ -52,12 +52,12 @@ defmodule KaoiroServer.PersonaAssets do
   # produces. Reclaim only ever considers entries matching this.
   @cache_key_name ~r/^[0-9a-f]{16}$/
 
-  # The 7 UI states a pack MUST provide sprites for (persona-pack-schema
+  # The 7 UI states a pack MUST provide sprites for (docs/reference/personas/pack-format.md
   # states MUST). Order does not matter here — the check is set equality.
   @required_states ~w(idle thinking tool_running waiting_input
                        waiting_permission done error)
 
-  # Optional sprite states a pack MAY provide (persona-pack-schema.md,
+  # Optional sprite states a pack MAY provide (docs/reference/personas/pack-format.md,
   # issue #172 A). `fatigued` is an orthogonal client-side modifier, not a
   # protocol state value. Keep this allowlist narrow so optional does not
   # silently admit arbitrary sprite ids.
@@ -218,7 +218,7 @@ defmodule KaoiroServer.PersonaAssets do
 
   @doc """
   Full persona pack detail for `GET /api/personas/:id` (issue #232): every
-  manifest.json field the schema defines (persona-pack-schema.md allowlist)
+  manifest.json field the schema defines (docs/reference/personas/pack-format.md allowlist)
   plus the full `personality.md` body. Static per-pack information, not an
   individual agent's state. `nil` for the reserved `default` persona (no
   pack backs it) or any id the current manifest does not know.
@@ -2105,7 +2105,7 @@ defmodule KaoiroServer.PersonaAssets do
     end
   end
 
-  # Required fields + charset + states (persona-pack-schema.md).
+  # Required fields + charset + states (docs/reference/personas/pack-format.md).
   # Rejects a whole zip on any breach; better to skip a malformed pack
   # than half-ingest it.
   defp validate_manifest(manifest, _zip_path) do
@@ -2277,7 +2277,7 @@ defmodule KaoiroServer.PersonaAssets do
     Enum.uniq(@required_states ++ Enum.filter(states, &(&1 in @optional_states)))
   end
 
-  # First-writer-wins on duplicate manifest.id (persona-pack-schema.md
+  # First-writer-wins on duplicate manifest.id (docs/reference/personas/pack-format.md
   # MUST). Deterministic thanks to the sorted zip listing so the winner
   # is stable across restarts.
   defp drop_duplicate_ids(packs) do
@@ -2383,7 +2383,7 @@ defmodule KaoiroServer.PersonaAssets do
 
   defp maybe_put(map, _key, _value), do: map
 
-  # Every manifest.json field persona-pack-schema.md defines (issue #232),
+  # Every manifest.json field docs/reference/personas/pack-format.md defines (issue #232),
   # for GET /api/personas/:id. An explicit allowlist rather than the raw
   # manifest map: `validate_manifest/2` only checks the required fields'
   # presence/shape, and the schema's own "MAY add unknown keys, forward-

@@ -23,7 +23,7 @@ Feature specifications, organized by topic. Each file has `status` and
 | [responsive-layout](responsive-layout.md) | provisional | Responsive rules that treat three sizes equally: breakpoint definitions, area-specific layouts, sheet mechanisms, and safe areas |
 | [responsive-reachability](responsive-reachability.md) | provisional | Inventory of reachability paths by size: each element's path, scroll owner, and permanently fixed operations |
 | [personas](personas.md) | accepted | Design policy, image specification, and generation workflow for persona standing illustrations |
-| [persona-pack-schema](persona-pack-schema.md) | accepted | Internal schema of persona packs (zip) and `manifest.json` field definitions |
+| [persona-pack-schema](../reference/personas/pack-format.md) | accepted | Internal schema of persona packs (zip) and `manifest.json` field definitions |
 | [persona-personality-injection](persona-personality-injection.md) | provisional | Mechanism for injecting personality prompts, such as speech style and first-person pronouns, into the Claude Agent SDK |
 | [threat-model](../architecture/security-threat-model.md) | accepted | Threats to bidirectional routing and their mitigations |
 | [auth-and-authz](../architecture/security-boundaries.md) | accepted | Current map of authentication and authorization boundaries for each node. Starting point for the pre-OSS-release audit (private Gitea issue 91) |

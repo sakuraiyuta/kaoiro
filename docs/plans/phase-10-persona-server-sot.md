@@ -14,7 +14,7 @@ decided in [ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md).
 Completely replace the distributed model (wrapper-side md + server-side PNG +
 runner-side allowlist) with the server-centralized model.
 
-See ADR-0029 and [persona-pack-schema](../specs/persona-pack-schema.md) for the
+See ADR-0029 and [persona-pack-format](../reference/personas/pack-format.md) for the
 policy and background. This plan lists the implementation tasks.
 
 ## Completion Criteria (Stage 0)
@@ -79,7 +79,7 @@ following are in place.
 
 ### Docs side
 
-- [x] Update the status of the new spec [persona-pack-schema](../specs/persona-pack-schema.md)
+- [x] Update the status of the new spec [persona-pack-format](../reference/personas/pack-format.md)
       from `provisional` → `accepted`
 - [x] Update [personas](../specs/personas.md) to “creation = zip workflow”
       (completed before starting this phase)
@@ -125,7 +125,7 @@ Follow-ups.
 ## See Also
 
 - ADR: [ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
-- Specs: [persona-pack-schema](../specs/persona-pack-schema.md),
+- Specs: [persona-pack-format](../reference/personas/pack-format.md),
   [personas](../specs/personas.md),
   [persona-personality-injection](../specs/persona-personality-injection.md),
   [setup-wizards](../specs/setup-wizards.md),

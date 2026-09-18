@@ -73,7 +73,7 @@ The dashboard interface is currently Japanese-only.
   engine names ([plugin-model.md](docs/specs/plugin-model.md)).
 - **Personas as zip packs** — characters are versioned, hash-checked packs read
   from an ingest directory, with a bundled set as the default
-  ([persona-pack-schema.md](docs/specs/persona-pack-schema.md)).
+  ([persona-pack-format.md](docs/reference/personas/pack-format.md)).
 - **Operator and viewer roles** — sign in with a token or through OAuth; reply
   logs, controls and persona internals are operator-only and fail closed
   ([security boundaries](docs/architecture/security-boundaries.md)).

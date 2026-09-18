@@ -40,7 +40,7 @@ implementation — the emphasis marks; all three are walked at every close.
 | U06 | tasks / subagent visibility | impl | ⏳ |
 | U07 | attachments | impl | ⏳ |
 | U08 | runner control / wrapper config | ops impl | ⏳ |
-| U09 | persona delivery / injection / pack | ops impl | ⏳ |
+| U09 | persona delivery / injection / pack | ops impl | In review (pack-format only) |
 | U10 | security / threat model / release audit | ops perm impl | ✅ |
 | U11 | IA messages / conversations / admission | impl | ✅ |
 | U12 | IA dispatch / delivery ledger | perm impl | ⏳ |
@@ -85,6 +85,7 @@ Writer rules: one writer per destination file; units that touch the same file
 | specs/codex-model-catalog.md | [operations/codex-model-settings.md](../operations/codex-model-settings.md) | U27 |
 | specs/codex-model-catalog.md | [evidence/codex/model-catalog.md](../evidence/codex/model-catalog.md) | U27 |
 | specs/agent-sdk-events.md | [reference/engines/claude-events.md](../reference/engines/claude-events.md) | U28 |
+| specs/persona-pack-schema.md | [reference/personas/pack-format.md](../reference/personas/pack-format.md) | U09 |
 | ../../wrapper/codex/README.md (implementation) | [reference/engines/codex-app-server.md](../reference/engines/codex-app-server.md) | U24 |
 | ../../wrapper/codex/README.md (implementation) | [reference/engines/codex-app-server-session.md](../reference/engines/codex-app-server-session.md) | U24 |
 | ../../wrapper/codex/README.md (implementation) | [reference/engines/codex-app-server-events.md](../reference/engines/codex-app-server-events.md) | U24 |

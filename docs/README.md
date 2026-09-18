@@ -108,6 +108,10 @@ Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh do
 
 - Adapter event contract and verification notes: [Claude events](reference/engines/claude-events.md).
 
+## Persona documentation
+
+- Pack layout and `manifest.json` contract: [Persona pack format](reference/personas/pack-format.md).
+
 ## Codex app-server documentation
 
 - Architecture and adapter entry: [backend ownership](architecture/codex-backends.md).
