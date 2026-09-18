@@ -59,7 +59,7 @@ implementation — the emphasis marks; all three are walked at every close.
 | U25 | codex backend switch runbook | ops perm impl | ✅ |
 | U26 | antigravity adapter / events / tools-permissions / evidence | perm impl | ⏳ |
 | U27 | codex exec events / model catalog | perm impl | ✅ |
-| U28 | claude events | perm impl | In review |
+| U28 | claude events | perm impl | ✅ |
 | U29a | entry pages: overview, system-overview, scope, glossary; folder scaffolding; this plan | ops perm impl | ✅ |
 | U29b | plugin-model split (extensions, adapter contract, claude model catalog) | impl | ⏳ |
 | U30 | kept pages (personas, agent-operations): update references only | impl | ⏳ |
