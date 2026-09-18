@@ -5,7 +5,7 @@ date: 2026-06-11
 opened: 2026-06-04
 supersedes: []
 superseded_by: null
-related_specs: [protocol, agent-sdk-events]
+related_specs: [protocol, claude-events]
 related_adrs: [9, 11, 12, 15, 16, 19, 22, 27, 28, 47]
 ---
 
@@ -30,7 +30,7 @@ Options considered:
 | C | Defer finalization and proceed as provisional | Abandon the purpose of Phase 1.5 (finalizing with real consumers) |
 
 Basis for the judgment: The SDK-side event specification is finalized
-([agent-sdk-events](../specs/agent-sdk-events.md)). The Phase 1.5 tracer bullet
+([agent-sdk-events](../reference/engines/claude-events.md)). The Phase 1.5 tracer bullet
 brought the real consumers (server and client) together, and the only things
 that actually traveled over the wire were `type: state_change` envelopes and
 server → client `snapshot`/`envelope` events (Phase 2/3 features do not yet

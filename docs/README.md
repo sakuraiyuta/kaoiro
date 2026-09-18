@@ -104,6 +104,10 @@ Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh do
 - Operational updates: [production runbook](operations/production.md).
 - Dated evidence: [exec verification](evidence/codex/exec-contract.md) and [catalog observations](evidence/codex/model-catalog.md).
 
+## Claude documentation
+
+- Adapter event contract and verification notes: [Claude events](reference/engines/claude-events.md).
+
 ## Codex app-server documentation
 
 - Architecture and adapter entry: [backend ownership](architecture/codex-backends.md).

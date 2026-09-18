@@ -29,7 +29,7 @@ graph TD
 ```
 
 仕様: [docs/specs/protocol.md](../docs/specs/protocol.md)、
-[docs/specs/agent-sdk-events.md](../docs/specs/agent-sdk-events.md) (Claude)、
+[docs/reference/engines/claude-events.md](../docs/reference/engines/claude-events.md) (Claude)、
 [docs/specs/codex-sdk-events.md](../docs/reference/engines/codex-exec-events.md) (Codex)。
 
 ## 開発

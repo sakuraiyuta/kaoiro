@@ -5,7 +5,7 @@ date: 2026-07-16
 opened: 2026-07-16
 supersedes: []
 superseded_by: null
-related_specs: [protocol, plugin-model, agent-sdk-events, codex-exec-events]
+related_specs: [protocol, plugin-model, claude-events, codex-exec-events]
 related_adrs: [21, 22, 32, 34, 35, 37, 39]
 ---
 

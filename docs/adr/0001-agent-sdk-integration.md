@@ -5,7 +5,7 @@ date: 2026-06-04
 opened: 2026-06-04
 supersedes: []
 superseded_by: null
-related_specs: [architecture, plugin-model, protocol, agent-sdk-events]
+related_specs: [architecture, plugin-model, protocol, claude-events]
 related_adrs: [2, 14, 17]
 ---
 
@@ -50,7 +50,7 @@ claude-agent-sdk`).
 - The wrapper is limited to Python/TS (Elixir cannot be used). This results in
   a two-language configuration with the server (Elixir).
 - The SDK details (streaming input / `Query.interrupt()` / `canUseTool` return
-  values) are **confirmed** ([agent-sdk-events](../specs/agent-sdk-events.md),
+  values) are **confirmed** ([agent-sdk-events](../reference/engines/claude-events.md),
   verified in 2026-06).
 
 ### Neutral

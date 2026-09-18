@@ -211,7 +211,7 @@ by both pre-init `Options.model` and live `Query.setModel()`. The representation
 such that either alias or canonical is safe.
 
 The specification SSOT is the relevant section of [plugin-model](../specs/plugin-model.md),
-and measured raw values are in [agent-sdk-events](../specs/agent-sdk-events.md).
+and measured raw values are in [agent-sdk-events](../reference/engines/claude-events.md).
 Do not show canonical IDs in LaunchDialog because of precision differences (the
 register path uses the last-known-good cache from the last successful probe and may
 remain unchanged after TTL expiry); externalise this to Gitea

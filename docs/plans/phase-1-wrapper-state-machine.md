@@ -29,7 +29,7 @@ agent can be reliably derived into the state machine defined by the
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 1-1 | Confirm SDK details from the official docs | ✅ | Finalized in [agent-sdk-events](../specs/agent-sdk-events.md) |
+| 1-1 | Confirm SDK details from the official docs | ✅ | Finalized in [agent-sdk-events](../reference/engines/claude-events.md) |
 | 1-2 | Adapter (SDK messages → common envelope) | ✅ | `wrapper/src/adapter.ts` (`sdkMessageToEvents`). Real SDK types → `AdapterEvent`. Unit-tested |
 | 1-3 | Implement the state machine | ✅ | `wrapper/src/state.ts` (`deriveStates`/`reduceStates`). Unit-tested |
 | 1-4 | Load persona and stable ID configuration | ✅ | `wrapper/src/persona.ts` (`loadConfig`/`parseConfig`). Unit-tested |
@@ -41,7 +41,7 @@ Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blo
 
 - **Live driving of `waiting_permission`**: In the headless SDK, the ask path of
   `canUseTool` does not start automatically, and tool permission is resolved by
-  `allowedTools` (verification note: [agent-sdk-events](../specs/agent-sdk-events.md)).
+  `allowedTools` (verification note: [agent-sdk-events](../reference/engines/claude-events.md)).
   Wiring and unit verification are complete. Investigate the conditions that start
   the ask path (a candidate for my-trouble-shooter), or finalize them when the Phase
   2/3 approval UI is implemented.
@@ -53,7 +53,7 @@ None (resolved by [ADR-0010](../adr/0010-protocol-precisification.md)).
 ## See Also
 
 - Specs: [protocol](../specs/protocol.md),
-  [agent-sdk-events](../specs/agent-sdk-events.md),
+  [agent-sdk-events](../reference/engines/claude-events.md),
   [architecture](../architecture/system-overview.md),
   [plugin-model](../specs/plugin-model.md)
 - ADRs: [0001](../adr/0001-agent-sdk-integration.md),

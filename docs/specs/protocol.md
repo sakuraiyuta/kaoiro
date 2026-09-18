@@ -2,7 +2,7 @@
 title: Common event protocol
 description: Common event envelopes v0, state machines, and persona identity shared by wrapper, server, and client.
 status: accepted
-related: [architecture, plugin-model, agent-sdk-events, personas, security-threat-model, subagent-tasks, protocol-inter-agent]
+related: [architecture, plugin-model, claude-events, personas, security-threat-model, subagent-tasks, protocol-inter-agent]
 ---
 <!-- markdownlint-disable MD033 -->
 
@@ -1428,7 +1428,7 @@ server state.
 
 ### State-machine state set v0 (draft)
 
-Core of practical goal (A), derived from Agent SDK messages. See [agent-sdk-events](agent-sdk-events.md)
+Core of practical goal (A), derived from Agent SDK messages. See [agent-sdk-events](../reference/engines/claude-events.md)
 for the SDK's **settled message/callback contract and derivation mapping**.
 
 | State | Meaning | Source (SDK) | Future expression |
@@ -1445,7 +1445,7 @@ for the SDK's **settled message/callback contract and derivation mapping**.
 | `disconnected` | Wrapper connection lost; `ext.disconnect?` identifies a validated origin/reason pair when the disconnect was terminal | Server-derived | Unknown/absent |
 
 Control (gap 1) is also settled: streaming input (`AsyncIterable<SDKUserMessage>`),
-`Query.interrupt()`, and `canUseTool` complete within one Query ([agent-sdk-events](agent-sdk-events.md)).
+`Query.interrupt()`, and `canUseTool` complete within one Query ([agent-sdk-events](../reference/engines/claude-events.md)).
 
 ```mermaid
 stateDiagram-v2

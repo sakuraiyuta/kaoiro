@@ -1,6 +1,6 @@
 // Adapter — bridges real Claude Agent SDK messages into the normalized
 // AdapterEvent stream consumed by the state machine (state.ts). Pure: it only
-// reads message shape, never calls the SDK. See docs/specs/agent-sdk-events.md.
+// reads message shape, never calls the SDK. See docs/reference/engines/claude-events.md.
 
 import type {
   HookInput,

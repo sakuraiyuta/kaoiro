@@ -34,7 +34,7 @@ direction and boundaries are defined by [ADR-0012](../adr/0012-response-display-
 | # | Task | Status | Notes |
 |---|------|--------|-------|
 | R-1 | protocol: reserve → define `log`/`result` payloads and deliver to operators only | ✅ | [protocol](../specs/protocol.md). `log.kind` = assistant/tool_use/tool_result |
-| R-2 | wrapper: relay assistant text, tool_use/tool_result, and result | ✅ | SDK message → `log` type mapping is in [agent-sdk-events](../specs/agent-sdk-events.md). `d5d120c` |
+| R-2 | wrapper: relay assistant text, tool_use/tool_result, and result | ✅ | SDK message → `log` type mapping is in [agent-sdk-events](../reference/engines/claude-events.md). `d5d120c` |
 | R-3 | server: in-memory ring-buffer history in `AgentStates`, snapshot + history on join, operator-role filter for log/result | ✅ | No new DB dependency. Persistence is issue #24. `7410d68`/`f7af05f` |
 | R-4 | dashboard: grid → click → full-screen detail (chat-like log, collapsible tools, instruction, approval, blind-spot indicator) | ✅ | Cards display face, name, state, and agent_id (instruction input removed 2026-06-16). Instruction and approval operations are in detail. `8319576` |
 

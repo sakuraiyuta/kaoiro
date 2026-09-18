@@ -13,7 +13,7 @@ Feature specifications, organized by topic. Each file has `status` and
 | [protocol](protocol.md) | accepted | Common events; envelope, state machine, persona, bidirectionality, and authentication |
 | [protocol-inter-agent](protocol-inter-agent.md) | provisional | Inter-agent messaging envelope schema, nine kinds, and hard limits |
 | [protocol-external-human](protocol-external-human.md) | provisional | External human messaging (Discord), one-way authority, discord-wrapper, and Tier A/B |
-| [agent-sdk-events](agent-sdk-events.md) | accepted | Settled Agent SDK event specification and state derivation (Claude edition) |
+| [agent-sdk-events](../reference/engines/claude-events.md) | accepted | Settled Agent SDK event specification and state derivation (Claude edition) |
 | [codex-exec-events](../reference/engines/codex-exec-events.md) | accepted | Exec SDK event contract and state derivation; [dated verification](../evidence/codex/exec-contract.md) |
 | [codex-model-catalog](../reference/engines/codex-model-catalog.md) | accepted | Catalog contract; [model-change procedures](../operations/codex-model-settings.md) and [dated plan/auth/doctor evidence](../evidence/codex/model-catalog.md) |
 | [antigravity-cli-events](antigravity-cli-events.md) | provisional | Measured Antigravity CLI (agy) headless event specification, hooks-as-permission-gate, and state derivation (third engine, ADR-0057) |

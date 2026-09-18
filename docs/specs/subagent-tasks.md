@@ -2,7 +2,7 @@
 title: Client notifications for subagent/workflow tasks
 description: Specification for notifying clients through a dedicated envelope about the existence, concurrency, type/name, and state of subagents/workflows launched by a wrapped agent.
 status: accepted
-related: [protocol, agent-sdk-events]
+related: [protocol, claude-events]
 ---
 <!-- markdownlint-disable MD033 -->
 
@@ -21,7 +21,7 @@ The source of truth for the decision is
 ### Source data (SDK messages)
 
 They appear in the parent session's `query()` message stream. For details, see
-[agent-sdk-events](agent-sdk-events.md).
+[agent-sdk-events](../reference/engines/claude-events.md).
 
 | Message | type/subtype | Main fields |
 |---|---|---|
@@ -33,7 +33,7 @@ They appear in the parent session's `query()` message stream. For details, see
 `task` envelope (implemented on 2026-08-09 in issue #170). For the handling of
 undocumented fields found by measurement (`task_started.prompt` /
 `task_notification.output_file`) and the fourth subtype `task_updated`, see the
-addenda to [agent-sdk-events](agent-sdk-events.md),
+addenda to [agent-sdk-events](../reference/engines/claude-events.md),
 [ADR-0047](../adr/0047-task-envelope-schema.md), and
 [ADR-0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md): all are
 intentionally unwired and out of scope. For terminal fallback and `raw_status`
@@ -100,7 +100,7 @@ These are separate from the global `plans/` roadmap phase numbers (numbering:
 
 | Stage | Scope | Status | in / out |
 |---|---|---|---|
-| Stage 1: wrapper + protocol | Minimal detection/delivery slice | Implemented | in: adapter interprets task_* / emits dedicated envelope / computes concurrency / parent state_change remains unchanged / unit tests (vitest) for adapter transformation / protocol and agent-sdk-events extensions. out: server aggregation and client display |
+| Stage 1: wrapper + protocol | Minimal detection/delivery slice | Implemented | in: adapter interprets task_* / emits dedicated envelope / computes concurrency / parent state_change remains unchanged / unit tests (vitest) for adapter transformation / protocol and claude-events extensions. out: server aggregation and client display |
 | Stage 2: server aggregation and relay | Retention and delivery of child tasks | Implemented | in: aggregation through a flat task table plus parent `agent_id` reference ([ADR-0048](../adr/0048-task-aggregation-delivery.md) F1) / retain active set (discard when the parent leaves) / relay to client / one-time delivery at connection through the existing snapshot frame for later connections (same F3) / operator-only delivery (same addendum). out: client visual representation |
 | Stage 3: client reception + overhead-ring UI (AgentCard) | Visualizes active subagents on AgentCard | Implemented | in: receives the `task` envelope; passes active task count from `AgentGridShell` to `AgentCard` (a dedicated accumulator in `App.svelte`, not folded into the `agents` map) / an overhead ring surrounding `.sprite` in `AgentCard.svelte` (CSS-only orbiting-light animation, no image asset; existing global rules automatically cover `prefers-reduced-motion`) / on-off only, with no numeric display. out: numeric display (active task count) and additional `AgentDetail` display (initially considered out of scope for issue #170, then added in stage 4 because that judgment had not been approved by the master) |
 | Stage 4: overhead-ring UI (add AgentDetail) | Visualizes active subagents in AgentDetail too (issue #170 follow-up, 2026-08-10—the master had requested consideration in issue #170 on 2026-08-04, but it was not included during stage-3 implementation; this was found through the master's feedback and added) | Implemented | in: shared `TaskRing.svelte` for `AgentCard`/`AgentDetail` (centralizes overhead-ring markup + CSS + `@keyframes` to avoid duplicated `@keyframes`) / place the ring in `.portrait` of `AgentDetail.svelte` (outside `{#key}`, on-off only as in AgentCard) / because `.portrait` has variable width (the flex ratio of `.status` on desktop, `max-width: 8rem` on tablet and below), add `container-type: inline-size` and specify orbital radius in `cqw`: sprite values preserve the orbit ratio to the displayed element (same ratio as AgentCard's 2rem/8rem etc.); face values preserve the ratio to the face itself (AgentCard is an independent 5.4rem element, AgentDetail is 70% of `.portrait` width), so use cqw-converted values (fuji round1 N1). However, desktop's variable `.status` width can make `.portrait` greatly exceed 8rem; a live-master check (2026-08-10) found that cqw alone enlarged the orbit and made it overflow. Cap it with `min(cqw value, AgentCard absolute value)`, so desktop widths above 8rem stop at the same absolute size as AgentCard. After capping, real measurement still found overflow because `.portrait` padding (0.8rem) is narrower than AgentCard `.card` (1.4rem); add the `topOffset` prop (default `-2%`) to `TaskRing.svelte`, and shift the overhead-clearance anchor toward the face with `topOffset="6%"` from AgentDetail. Verify with Playwright T11 (1600px wide desktop + 844px BottomSheet, both sprite/face branches, freeze animation at its farthest point and fix non-overlap with `.bar`; it was also confirmed to fail with the prior value. The narrow-width case was additionally tested after Kuroe round2 noted that “safe when wider, therefore proportionally safe” must not be concluded without measuring; in measurement `.bar` and `.portrait` (BottomSheet) are spatially separate and never coexist) / wire from `App.svelte` through the pure `activeTaskCountForDetail()` function in `protocol.ts`, forcibly using 0 for disconnected/directory-only tiles (a pass-through wire would let stale `tasks` entries for disconnected agents leak). out: numeric display (active-task count; unchanged from stage 3) |
@@ -157,7 +157,7 @@ policy can be reconsidered.
 
 ## See Also
 
-- Related specs: [protocol](protocol.md), [agent-sdk-events](agent-sdk-events.md)
+- Related specs: [protocol](protocol.md), [agent-sdk-events](../reference/engines/claude-events.md)
 - ADR: [0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md)
   (entity model and transport),
   [0047](../adr/0047-task-envelope-schema.md) (envelope schema),

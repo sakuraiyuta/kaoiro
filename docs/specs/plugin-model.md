@@ -283,7 +283,7 @@ display resolution / active selection). This resolves two defects:
   checked exact `value` matches, rolling back to `default` with
   `switch_error{reason: "persist_alias_unknown"}`.
 - When `ext.model` is canonical — init / status reports the canonical value and
-  the “value-only overwrite” contract in [agent-sdk-events](agent-sdk-events.md)
+  the “value-only overwrite” contract in [agent-sdk-events](../reference/engines/claude-events.md)
   replaces `#model`, or an operator calls `setModel` with the canonical directly —
   catalog matching missed on every path, so `supports_effort_switch` was not
   stamped and the client's effort choices disappeared. Which representation
@@ -309,7 +309,7 @@ independent UX decision.
 **Unobserved**: The representation (alias / canonical) of `model` returned by
 SDK `system/init` is not settled. Observation requires first user input (and
 incurs cost), so it has not been measured (scope and raw values are in the
-follow-up measurement notes in [agent-sdk-events](agent-sdk-events.md)). Wrapper
+follow-up measurement notes in [agent-sdk-events](../reference/engines/claude-events.md)). Wrapper
 tests pin that either representation works.
 
 The Codex catalog is static and does not distinguish canonical from alias, so it

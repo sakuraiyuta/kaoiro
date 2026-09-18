@@ -24,7 +24,7 @@ kaoiro — 複数の CLI AI エージェントの状態をキャラクターと�
 - [docs/plans/](docs/plans/) — フェーズ別の実装計画
 - [docs/open-questions/](docs/open-questions/) — 未決の論点
 - [docs/adr/](docs/adr/) — アーキテクチャ決定記録
-- [docs/specs/agent-sdk-events.md](docs/specs/agent-sdk-events.md) 「検証メモ」 — broker 経路の手動 verify で使えるコマンドの境界
+- [docs/reference/engines/claude-events.md](docs/reference/engines/claude-events.md#commands-for-manual-verification-canusetool-firing-boundary) 「検証メモ」 — broker 経路の手動 verify で使えるコマンドの境界
 
 ## Commands
 

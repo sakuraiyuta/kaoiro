@@ -5,7 +5,7 @@ date: 2026-08-04
 opened: 2026-06-16
 supersedes: []
 superseded_by: null
-related_specs: [protocol, subagent-tasks, agent-sdk-events]
+related_specs: [protocol, subagent-tasks, claude-events]
 related_adrs: [10, 15, 19, 48, 49]
 ---
 
@@ -61,7 +61,7 @@ Require the following four fields for every kind:
 Treat `subagent_type` / `workflow_name` / `description` / `usage` /
 `last_tool_name` / `summary` / `skip_transcript` as optional progress metadata.
 The SDK-side fields available differ by kind
-([agent-sdk-events](../specs/agent-sdk-events.md)), so do not require them.
+([agent-sdk-events](../reference/engines/claude-events.md)), so do not require them.
 
 ### F4: `task_type` is an extensible enum
 
@@ -104,7 +104,7 @@ display (forward compatibility).
 
 - Specs: [protocol](../specs/protocol.md) (type and payload table),
   [subagent-tasks](../specs/subagent-tasks.md) (feature specification), and
-  [agent-sdk-events](../specs/agent-sdk-events.md) (source messages).
+  [agent-sdk-events](../reference/engines/claude-events.md) (source messages).
 - Related ADRs: [0019](0019-subagent-workflow-entity-and-task-envelope.md)
   (source of the entity-model and transport decision),
   [0048](0048-task-aggregation-delivery.md) (server aggregation and delivery),
