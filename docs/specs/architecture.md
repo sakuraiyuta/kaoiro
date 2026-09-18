@@ -18,7 +18,8 @@ flow. See [plugin-model](plugin-model.md) for the plugin extension model and
 
 ### Wrapper package structure (added 2026-07-10, [ADR-0032](../adr/0032-codex-adapter.md) F1)
 
-The wrapper is a four-package pnpm workspace. This structure implements
+The wrapper is a five-package pnpm workspace (`core` / `agent-common` /
+`claude-code` / `codex` / `antigravity`, [ADR-0057](../adr/0057-antigravity-adapter.md) added the fifth). This structure implements
 [ADR-0017](../adr/0017-wrapper-multientity-packages.md) and was completed in
 [phase-13-wrapper-multipackage-restructure](../plans/phase-13-wrapper-multipackage-restructure.md):
 
