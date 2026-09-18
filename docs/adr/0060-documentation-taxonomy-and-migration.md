@@ -65,9 +65,10 @@ index. `specs/` dissolves into `architecture/` and `reference/`.
 - **Size is a trigger, not a cap.** 300–500 lines is where a split is
   considered; the reader question decides.
 - **Axes are separate.** `status: accepted` in an ADR does not mean
-  implemented, deployed or measured. Current contracts state which of
-  accepted / implemented / released / measured applies, and evidence
-  records carry the date, commit or binary hash and the conditions.
+  implemented, deployed or measured, and a page's folder never implies
+  a status either. Current contracts state which of accepted /
+  implemented / released / measured applies, and evidence records carry
+  the date, commit or binary hash and the conditions.
 - **Types are the structural canon; documents are the semantic canon.**
   A conflict between `@kaoiro/protocol` and a reference page is resolved
   by deciding which is wrong, not by "updating the doc to match the code".
@@ -83,11 +84,14 @@ index. `specs/` dissolves into `architecture/` and `reference/`.
   avoiding writing the same text twice.
 - **Move safety.** In-repo references (docs, code comments, `AGENTS.md`,
   `CLAUDE.md`) change in the same commit as the move; a one-line stub at
-  the old path is not enough because `#fragment` links break. External
-  references (issues, ADRs) get an old-heading → new-location map. Three
-  representative reading paths (operations update, permission recovery,
-  adapter implementation) are walked before a unit is closed. Link-check
-  tooling is a separate review, not a prerequisite.
+  the old path is not enough because `#fragment` links break. For
+  external references (issues, ADRs) the old path keeps a stub whose
+  headings or explicit anchors still resolve the existing fragments and
+  link to each new location — a map kept elsewhere does not rescue an
+  old URL. Three representative reading paths (operations update,
+  permission recovery, adapter implementation) are walked before a unit
+  is closed. Link-check tooling is a separate review, not a
+  prerequisite.
 - **Not done:** rewriting ADR bodies; blanket-archiving `plans/` (pending
   items are re-homed first, then completed plans leave the entry page);
   treating a refreshed date as a verified page.

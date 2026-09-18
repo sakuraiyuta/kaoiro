@@ -29,16 +29,19 @@ the migration of the pre-2026-09 tree is tracked in
 
 ## Placement test
 
-1. Write the question the reader brings. One question → one file. Two
+1. Write the question the reader brings. One question → one file. Three
    questions about the same theme (for example the rationale for the
    permission axes, the operator's recovery steps, and the wire request)
    are three files that link to each other.
 2. Do not split one question across files just to shorten them. 300–500
    lines is where a split is *considered*; the question decides.
-3. State which axis a page speaks for: accepted (ADR), implemented
-   (architecture / reference), released (operations), measured
-   (evidence). An ADR marked `accepted` is not evidence that anything
-   shipped.
+3. State which axis a page speaks for: accepted, implemented, released,
+   measured. The folders are the typical homes (ADR / architecture and
+   reference / operations / evidence), not a classification rule: never
+   infer implementation, release or measurement status from the folder a
+   page sits in. A status that matters is written on the page with the
+   target version or commit and the conditions. An ADR marked
+   `accepted` is not evidence that anything shipped.
 4. Types in `@kaoiro/protocol` are the canon for structure; the reference
    page is the canon for meaning the types cannot express (ownership,
    ordering, rejection). When they disagree, decide which one is wrong.
@@ -69,9 +72,11 @@ the migration of the pre-2026-09 tree is tracked in
    rewrite the old page for style; it is about to move.
 3. **Move third, one unit per commit.** In the same commit: update every
    in-repo reference (docs, code comments, `AGENTS.md`, `CLAUDE.md`);
-   remove the old text (no second canon); keep an old-heading-anchor →
-   new-location map for references outside the repo, because a one-line
-   stub does not preserve `#fragment` links.
+   remove the old text (no second canon); at the old path keep a stub
+   whose headings or explicit anchors still resolve the existing
+   `#fragment` links and point each one at its new location, because a
+   one-line stub does not preserve them and a mapping kept in another
+   file does not rescue an old URL either.
 4. Before closing a unit, walk three reading paths from the entry page:
    an operations update, a permission recovery, and an adapter
    implementation. Fix broken relative links and fragments found on the
