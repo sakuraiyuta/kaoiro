@@ -241,11 +241,17 @@ const PERMISSION_CONTROL_STATUSES: ReadonlySet<string> = new Set([
  *  rendered "applied". Kept separate from the display path on purpose: an
  *  engine value the badge shows is not evidence, and tightening
  *  {@link permissionFrom} would change what an existing session renders. */
-const PERMISSION_SANDBOX_VALUES: ReadonlySet<string> = new Set([
+/** Sandbox values an operator may select, in the server's permissive order.
+ *  The dashboard uses the same order to mirror the launch-ceiling clamp. */
+export const SELECTABLE_SANDBOX_VALUES = [
   "read-only",
   "workspace-write",
   "danger-full-access",
-]);
+] as const;
+
+const PERMISSION_SANDBOX_VALUES: ReadonlySet<string> = new Set(
+  SELECTABLE_SANDBOX_VALUES,
+);
 
 const PERMISSION_APPROVAL_VALUES: ReadonlySet<string> = new Set([
   "untrusted",
@@ -721,14 +727,14 @@ export interface SessionCapabilities {
    *  stand in for it. */
   supports_permission_mode_switch?: boolean;
   /** Launch ceilings for the engine-neutral `set_permission` switch (ADR-0057
-   *  F4c Stage B0 clamp, issue #359). Only the `approval` arm is read today —
-   *  its presence means approval is a mutable axis, and `max` caps the
-   *  approval picker's selectable options; absence keeps approval
-   *  launch-fixed. Fail-closed: a `max` outside the selectable domain drops
-   *  the arm, so the picker stays hidden rather than offering an unclamped
-   *  choice. */
+   *  F4c Stage B0 clamp, issues #359/#364). A valid arm makes that axis mutable
+   *  and caps its picker. A present whole field with a missing or malformed arm
+   *  keeps that axis launch-fixed; an absent whole field preserves the legacy
+   *  unclamped sandbox/network contract. */
   permission_switch_axes?: {
-    approval?: { max: string };
+    sandbox?: { max: (typeof SELECTABLE_SANDBOX_VALUES)[number] };
+    network_access?: { max: boolean };
+    approval?: { max: (typeof SELECTABLE_APPROVAL_VALUES)[number] };
   };
 }
 
@@ -768,17 +774,38 @@ export function sessionCapabilitiesFrom(
   if (typeof r.supports_permission_mode_switch === "boolean") {
     out.supports_permission_mode_switch = r.supports_permission_mode_switch;
   }
-  // permission_switch_axes.approval.max (issue #359): the launch ceiling for
-  // the approval picker. Fail-closed — any malformed shape or an out-of-domain
-  // max drops the arm, matching the server clamp that treats such a max as
-  // unsupported rather than falling back to an unbounded switch.
-  const axes = r.permission_switch_axes;
-  if (typeof axes === "object" && axes !== null) {
-    const approval = (axes as Record<string, unknown>).approval;
-    if (typeof approval === "object" && approval !== null) {
-      const max = (approval as Record<string, unknown>).max;
-      if (typeof max === "string" && SELECTABLE_APPROVAL_SET.has(max)) {
-        out.permission_switch_axes = { approval: { max } };
+  // Preserve the server's distinction between an absent whole field (legacy
+  // sandbox/network flow) and a present advertisement whose malformed or
+  // missing arm fixes that axis at launch. Each arm fails closed independently.
+  if (Object.prototype.hasOwnProperty.call(r, "permission_switch_axes")) {
+    out.permission_switch_axes = {};
+    const axes = r.permission_switch_axes;
+    if (typeof axes === "object" && axes !== null) {
+      const axisMap = axes as Record<string, unknown>;
+      const sandbox = axisMap.sandbox;
+      if (typeof sandbox === "object" && sandbox !== null) {
+        const max = (sandbox as Record<string, unknown>).max;
+        if (typeof max === "string" && PERMISSION_SANDBOX_VALUES.has(max)) {
+          out.permission_switch_axes.sandbox = {
+            max: max as (typeof SELECTABLE_SANDBOX_VALUES)[number],
+          };
+        }
+      }
+      const network = axisMap.network_access;
+      if (typeof network === "object" && network !== null) {
+        const max = (network as Record<string, unknown>).max;
+        if (typeof max === "boolean") {
+          out.permission_switch_axes.network_access = { max };
+        }
+      }
+      const approval = axisMap.approval;
+      if (typeof approval === "object" && approval !== null) {
+        const max = (approval as Record<string, unknown>).max;
+        if (typeof max === "string" && SELECTABLE_APPROVAL_SET.has(max)) {
+          out.permission_switch_axes.approval = {
+            max: max as (typeof SELECTABLE_APPROVAL_VALUES)[number],
+          };
+        }
       }
     }
   }

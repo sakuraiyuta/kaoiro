@@ -1138,6 +1138,179 @@ describe("Fuji round 2 contract boundaries", () => {
   });
 });
 
+describe("AgentDetail sandbox / network launch ceilings (issue #364)", () => {
+  const ceilingCaps = (axes: Record<string, unknown>) => ({
+    ...SWITCH_CAPS,
+    permission_switch_axes: axes,
+  });
+
+  function sandboxOption(
+    target: HTMLElement,
+    value: string,
+  ): HTMLButtonElement | undefined {
+    const dd = rowByLabel(target, "sandbox 変更");
+    return Array.from(dd?.querySelectorAll('[role="option"]') ?? []).find(
+      (o) => o.textContent?.trim().startsWith(value),
+    ) as HTMLButtonElement | undefined;
+  }
+
+  async function openSandboxMenu(target: HTMLElement): Promise<void> {
+    const dd = rowByLabel(target, "sandbox 変更");
+    (dd?.querySelector(".cc-perm-switch") as HTMLButtonElement).click();
+    await tick();
+  }
+
+  it("keeps the legacy unclamped controls when the whole advertisement is absent", async () => {
+    const { target } = await render({
+      engine: "codex",
+      session_capabilities: SWITCH_CAPS,
+      permission_control: control(),
+    });
+    await openSandboxMenu(target);
+    expect(sandboxOption(target, "danger-full-access")?.disabled).toBe(false);
+    expect(rowByLabel(target, "sandbox 変更")?.textContent).not.toContain("上限");
+    expect(rowByLabel(target, "network 変更")?.querySelector("button")?.disabled).toBe(
+      false,
+    );
+  });
+
+  it("hides each picker whose arm is missing from a present advertisement", async () => {
+    const { target } = await render({
+      engine: "antigravity",
+      session_capabilities: ceilingCaps({ approval: { max: "local" } }),
+      permission_control: control(),
+    });
+    expect(rowByLabel(target, "sandbox 変更")).toBeNull();
+    expect(rowByLabel(target, "network 変更")).toBeNull();
+    expect(rowByLabel(target, "承認 変更")).not.toBeNull();
+  });
+
+  it("hides a picker for a malformed arm while preserving its valid sibling", async () => {
+    const { target } = await render({
+      engine: "antigravity",
+      session_capabilities: ceilingCaps({
+        sandbox: { max: "outside" },
+        network_access: { max: true },
+      }),
+      permission_control: control(),
+    });
+    expect(rowByLabel(target, "sandbox 変更")).toBeNull();
+    expect(rowByLabel(target, "network 変更")).not.toBeNull();
+  });
+
+  it("disables and labels sandbox values above a middle ceiling", async () => {
+    const { target } = await render({
+      engine: "antigravity",
+      session_capabilities: ceilingCaps({
+        sandbox: { max: "workspace-write" },
+        network_access: { max: true },
+      }),
+      permission_control: control(),
+    });
+    await openSandboxMenu(target);
+    expect(sandboxOption(target, "read-only")?.disabled).toBe(false);
+    expect(sandboxOption(target, "workspace-write")?.disabled).toBe(false);
+    expect(sandboxOption(target, "danger-full-access")?.disabled).toBe(true);
+    expect(sandboxOption(target, "danger-full-access")?.textContent).toContain(
+      "上限超",
+    );
+    expect(rowByLabel(target, "sandbox 変更")?.textContent).toContain(
+      "上限 workspace-write",
+    );
+  });
+
+  it("pins both ends of the sandbox ceiling order", async () => {
+    const narrow = await render({
+      engine: "antigravity",
+      session_capabilities: ceilingCaps({ sandbox: { max: "read-only" } }),
+      permission_control: control(),
+    });
+    await openSandboxMenu(narrow.target);
+    expect(sandboxOption(narrow.target, "read-only")?.disabled).toBe(false);
+    expect(sandboxOption(narrow.target, "workspace-write")?.disabled).toBe(true);
+    expect(sandboxOption(narrow.target, "danger-full-access")?.disabled).toBe(true);
+
+    const wide = await render({
+      engine: "antigravity",
+      session_capabilities: ceilingCaps({
+        sandbox: { max: "danger-full-access" },
+      }),
+      permission_control: control(),
+    });
+    await openSandboxMenu(wide.target);
+    for (const value of ["read-only", "workspace-write", "danger-full-access"]) {
+      expect(sandboxOption(wide.target, value)?.disabled).toBe(false);
+    }
+  });
+
+  it("disables network enable above false and allows both directions under true", async () => {
+    const blocked = await render({
+      engine: "antigravity",
+      session_capabilities: ceilingCaps({
+        sandbox: { max: "workspace-write" },
+        network_access: { max: false },
+      }),
+      permission_control: control(),
+    });
+    const blockedToggle = rowByLabel(blocked.target, "network 変更")?.querySelector(
+      "button",
+    ) as HTMLButtonElement;
+    expect(blockedToggle.disabled).toBe(true);
+    expect(blockedToggle.textContent).toContain("上限超");
+    expect(rowByLabel(blocked.target, "network 変更")?.textContent).toContain(
+      "上限 無効",
+    );
+
+    const allowed = await render({
+      engine: "antigravity",
+      session_capabilities: ceilingCaps({
+        sandbox: { max: "workspace-write" },
+        network_access: { max: true },
+      }),
+      permission_control: control(),
+    });
+    expect(
+      (rowByLabel(allowed.target, "network 変更")?.querySelector(
+        "button",
+      ) as HTMLButtonElement).disabled,
+    ).toBe(false);
+
+    const narrowing = await render({
+      engine: "antigravity",
+      session_capabilities: ceilingCaps({
+        sandbox: { max: "workspace-write" },
+        network_access: { max: false },
+      }),
+      permission_control: control({
+        requested: { sandbox: "workspace-write", network_access: true },
+      }),
+    });
+    expect(
+      (rowByLabel(narrowing.target, "network 変更")?.querySelector(
+        "button",
+      ) as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  it("hides all permission pickers from a viewer", async () => {
+    const { target } = await render(
+      {
+        engine: "antigravity",
+        session_capabilities: ceilingCaps({
+          sandbox: { max: "danger-full-access" },
+          network_access: { max: true },
+          approval: { max: "never" },
+        }),
+        permission_control: control(),
+      },
+      { onSetPermission: undefined },
+    );
+    expect(rowByLabel(target, "sandbox 変更")).toBeNull();
+    expect(rowByLabel(target, "network 変更")).toBeNull();
+    expect(rowByLabel(target, "承認 変更")).toBeNull();
+  });
+});
+
 describe("AgentDetail approval control (issue #359, ADR-0057 F4c)", () => {
   // Antigravity advertises approval as a mutable axis by stamping
   // permission_switch_axes.approval.max next to supports_permission_switch.

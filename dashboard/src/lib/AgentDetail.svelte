@@ -34,6 +34,7 @@
     resumeDriftFrom,
     RUNNING_STATES,
     SELECTABLE_APPROVAL_VALUES,
+    SELECTABLE_SANDBOX_VALUES,
     sessionCapabilitiesFrom,
     shouldInterceptAsSessionReset,
     STOP_SAFE_STATES,
@@ -1706,11 +1707,6 @@
   // execution, so a request while a turn runs is accepted rather than
   // blocked, and nothing here promotes an effective badge — the observed
   // values keep arriving through ext.permission / ext.effective.
-  const SANDBOX_VALUES = [
-    "read-only",
-    "workspace-write",
-    "danger-full-access",
-  ] as const;
   const PERMISSION_STATUS_LABELS: Record<PermissionControlStatus, string> = {
     pending: "要求済み (次の turn から適用)",
     applying: "適用中 (次の実行が取得済み)",
@@ -1732,10 +1728,9 @@
     session_reset_pending: "session reset の完了待ちです",
     revision_exhausted: "revision を使い切りました",
     persistence_failed: "サーバ側の保存に失敗しました",
-    // issue #359: defense-in-depth. The approval picker disables over-ceiling
-    // options, but sandbox/network are not clamped in the UI, so this reason
-    // can still arrive. Kept axis-agnostic: a specific ceiling value would be
-    // wrong for whichever axis was not the one that exceeded.
+    // Defense-in-depth: every picker mirrors its advertised ceiling, but the
+    // server remains authoritative and may reject stale or forged requests.
+    // Kept axis-agnostic because the error does not identify the failed axis.
     exceeds_launch_ceiling: "要求値が起動時の上限を超えています",
   });
   // How far a revision has progressed. The contract lets a state update
@@ -1836,6 +1831,23 @@
   const permissionPickerVisible = $derived(
     permissionSwitchSupported && onSetPermission !== undefined,
   );
+  const permissionAxesAdvertised = $derived(
+    sessionCaps?.permission_switch_axes !== undefined,
+  );
+  const sandboxCeiling = $derived(
+    sessionCaps?.permission_switch_axes?.sandbox?.max ?? null,
+  );
+  const sandboxPickerVisible = $derived(
+    permissionPickerVisible &&
+      (!permissionAxesAdvertised || sandboxCeiling !== null),
+  );
+  const networkCeiling = $derived(
+    sessionCaps?.permission_switch_axes?.network_access?.max ?? null,
+  );
+  const networkPickerVisible = $derived(
+    permissionPickerVisible &&
+      (!permissionAxesAdvertised || networkCeiling !== null),
+  );
   // issue #359: the approval picker (antigravity's mutable approval axis).
   // Its launch ceiling is `permission_switch_axes.approval.max`; the axis is
   // switchable only when that ceiling is advertised. Mirrors the server's two
@@ -1852,16 +1864,35 @@
   // server's @approval_values). A value at or below the ceiling's rank is
   // selectable; anything above is disabled and labelled, so the operator sees
   // WHY the wider values are unavailable rather than them silently vanishing.
+  function orderedValueOverCeiling(
+    values: readonly string[],
+    value: string,
+    ceiling: string,
+  ): boolean {
+    const rank = values.indexOf(value);
+    const ceilingRank = values.indexOf(ceiling);
+    return rank < 0 || ceilingRank < 0 || rank > ceilingRank;
+  }
   function approvalOverCeiling(value: string): boolean {
     if (approvalCeiling === null) return true;
-    const rank = SELECTABLE_APPROVAL_VALUES.indexOf(
-      value as (typeof SELECTABLE_APPROVAL_VALUES)[number],
+    return orderedValueOverCeiling(
+      SELECTABLE_APPROVAL_VALUES,
+      value,
+      approvalCeiling,
     );
-    const ceilingRank = SELECTABLE_APPROVAL_VALUES.indexOf(
-      approvalCeiling as (typeof SELECTABLE_APPROVAL_VALUES)[number],
-    );
-    return rank > ceilingRank;
   }
+  function sandboxOverCeiling(value: string): boolean {
+    if (sandboxCeiling === null) return false;
+    return orderedValueOverCeiling(
+      SELECTABLE_SANDBOX_VALUES,
+      value,
+      sandboxCeiling,
+    );
+  }
+  const networkToggleOverCeiling = $derived(
+    networkCeiling === false &&
+      permRequestView?.requested.network_access === false,
+  );
   const PERMISSION_GATE_RECOVERY_REASONS = new Set([
     "observation_unavailable",
     "policy_mismatch",
@@ -3258,45 +3289,54 @@
                  captured, so the control stays usable while busy, and an
                  ack means "request saved" only — the effective badge above
                  is never moved from here. -->
-            <div class="cc-row">
-              <dt>sandbox 変更</dt>
-              <dd>
-                <div class="cc-switchbox cc-perm-switchbox">
-                  <button
-                    type="button"
-                    class="cc-switch cc-perm-switch"
-                    aria-haspopup="listbox"
-                    aria-expanded={sandboxMenuOpen}
-                    onclick={() => (sandboxMenuOpen = !sandboxMenuOpen)}
-                  >
-                    {permRequestView?.requested.sandbox ?? "未確認"}
-                    <span class="axes-hint">次の turn から適用</span>
-                  </button>
-                  {#if sandboxMenuOpen}
-                    <ul
-                      class="switch-menu"
-                      role="listbox"
-                      aria-label="sandbox 候補"
+            {#if sandboxPickerVisible}
+              <div class="cc-row">
+                <dt>sandbox 変更</dt>
+                <dd>
+                  <div class="cc-switchbox cc-perm-switchbox">
+                    <button
+                      type="button"
+                      class="cc-switch cc-perm-switch"
+                      aria-haspopup="listbox"
+                      aria-expanded={sandboxMenuOpen}
+                      onclick={() => (sandboxMenuOpen = !sandboxMenuOpen)}
                     >
-                      {#each SANDBOX_VALUES as value (value)}
-                        <li>
-                          <button
-                            type="button"
-                            role="option"
-                            aria-selected={permRequestView?.requested
-                              .sandbox === value}
-                            onclick={() => sendPermission({ sandbox: value })}
-                          >
-                            {value}
-                          </button>
-                        </li>
-                      {/each}
-                    </ul>
-                  {/if}
-                </div>
-              </dd>
-            </div>
-            {#if permRequestView?.requested.sandbox === "workspace-write"}
+                      {permRequestView?.requested.sandbox ?? "未確認"}
+                      <span class="axes-hint"
+                        >{#if sandboxCeiling !== null}上限 {sandboxCeiling}・{/if}次の
+                        turn から適用</span
+                      >
+                    </button>
+                    {#if sandboxMenuOpen}
+                      <ul
+                        class="switch-menu"
+                        role="listbox"
+                        aria-label="sandbox 候補"
+                      >
+                        {#each SELECTABLE_SANDBOX_VALUES as value (value)}
+                          <li>
+                            <button
+                              type="button"
+                              role="option"
+                              aria-selected={permRequestView?.requested
+                                .sandbox === value}
+                              aria-disabled={sandboxOverCeiling(value)}
+                              disabled={sandboxOverCeiling(value)}
+                              onclick={() => sendPermission({ sandbox: value })}
+                            >
+                              {value}{#if sandboxOverCeiling(value)}<span
+                                  class="axes-hint">上限超</span
+                                >{/if}
+                            </button>
+                          </li>
+                        {/each}
+                      </ul>
+                    {/if}
+                  </div>
+                </dd>
+              </div>
+            {/if}
+            {#if networkPickerVisible && permRequestView?.requested.sandbox === "workspace-write"}
               <!-- The raw network toggle only reaches the SDK for
                    workspace-write (ADR-0033 F3 addendum), so no control is
                    offered for the other sandboxes. -->
@@ -3306,6 +3346,8 @@
                   <button
                     type="button"
                     class="cc-switch"
+                    aria-disabled={networkToggleOverCeiling}
+                    disabled={networkToggleOverCeiling}
                     onclick={() =>
                       sendPermission({
                         network_access:
@@ -3314,8 +3356,13 @@
                   >
                     {permRequestView.requested.network_access
                       ? "無効にする"
-                      : "有効にする"}
+                      : "有効にする"}{#if networkToggleOverCeiling}<span
+                        class="axes-hint">上限超</span
+                      >{/if}
                   </button>
+                  {#if networkCeiling !== null}<span class="axes-hint"
+                      >上限 {networkCeiling ? "有効" : "無効"}</span
+                    >{/if}
                 </dd>
               </div>
             {/if}

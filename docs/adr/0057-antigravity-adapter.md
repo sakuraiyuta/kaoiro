@@ -252,10 +252,14 @@ default applies to `approval = never` as well). `setPermissionMode` and
 `set_permission` control end to end: after negotiation the wrapper advertises
 `supports_permission_switch` and `permission_switch_axes`, applies a switch by
 mutating its per-turn advisory gate between turns, and the dashboard offers the
-three controls. Only the approval picker reads the ceiling in the UI — it is
-gated on the advertised `permission_switch_axes.approval` and disables and
-labels options above `max` — while the server and the wrapper enforce the
-ceiling on every axis; a sandbox / network UI clamp is a follow-up.
+three controls. Each picker mirrors its advertised axis ceiling: sandbox and
+approval options above `max` are disabled and labelled, while a false network
+ceiling disables enabling network but still permits narrowing from true to
+false. If the whole `permission_switch_axes` field is absent, the legacy
+sandbox/network controls remain available; if the field is present but an axis
+arm is absent or malformed, that axis is launch-fixed and its picker is hidden.
+The dashboard clamp is advisory: the server and wrapper still enforce every
+axis as the authoritative gates.
 Precondition for B0: the threat-model MUST that the server cannot widen a
 wrapper's execution ceiling still holds — on this engine the cell matrix
 *is* the ceiling — so B0 adds wrapper-config clamps (`max_sandbox`,

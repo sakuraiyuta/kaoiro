@@ -57,6 +57,7 @@ import {
   resolveLaunchDefaultEffort,
   resumeDriftFrom,
   SELECTABLE_APPROVAL_VALUES,
+  SELECTABLE_SANDBOX_VALUES,
   parseSessionResetCompleted,
   parseSessionResetFailed,
   parseSessionResetStarted,
@@ -3829,7 +3830,7 @@ describe("permission approval axis (issue #359, ADR-0057 F4c)", () => {
   });
 });
 
-describe("sessionCapabilitiesFrom — permission_switch_axes.approval (issue #359)", () => {
+describe("sessionCapabilitiesFrom — permission_switch_axes ceilings", () => {
   const base: Envelope = {
     version: "0",
     agent_id: "a",
@@ -3852,23 +3853,76 @@ describe("sessionCapabilitiesFrom — permission_switch_axes.approval (issue #35
     });
   }
 
+  function capsWithoutAxes() {
+    return sessionCapabilitiesFrom({
+      ...base,
+      ext: {
+        session_capabilities: {
+          supports_attachments: false,
+          supports_user_input_dialog: true,
+          supports_permission_switch: true,
+        },
+      },
+    });
+  }
+
+  it("SELECTABLE_SANDBOX_VALUES stays in server @sandbox_values order", () => {
+    expect([...SELECTABLE_SANDBOX_VALUES]).toEqual([
+      "read-only",
+      "workspace-write",
+      "danger-full-access",
+    ]);
+  });
+
+  it("exposes all well-formed ceilings independently", () => {
+    expect(
+      capsWith({
+        sandbox: { max: "workspace-write" },
+        network_access: { max: false },
+        approval: { max: "local" },
+      })?.permission_switch_axes,
+    ).toEqual({
+      sandbox: { max: "workspace-write" },
+      network_access: { max: false },
+      approval: { max: "local" },
+    });
+  });
+
   it("exposes a well-formed approval ceiling", () => {
     expect(capsWith({ approval: { max: "local" } })?.permission_switch_axes).toEqual(
       { approval: { max: "local" } },
     );
   });
 
-  it("drops an out-of-domain max (fail-closed)", () => {
+  it("drops an out-of-domain approval max without erasing valid siblings", () => {
     // on-failure is not a selectable ceiling; the server treats such a max as
     // unsupported, so the arm is dropped and the picker stays hidden.
     expect(
-      capsWith({ approval: { max: "on-failure" } })?.permission_switch_axes,
-    ).toBeUndefined();
+      capsWith({
+        sandbox: { max: "read-only" },
+        approval: { max: "on-failure" },
+      })?.permission_switch_axes,
+    ).toEqual({ sandbox: { max: "read-only" } });
   });
 
-  it("drops a malformed approval arm (fail-closed)", () => {
-    expect(capsWith({ approval: { max: 3 } })?.permission_switch_axes).toBeUndefined();
-    expect(capsWith({ approval: "danger" })?.permission_switch_axes).toBeUndefined();
-    expect(capsWith({})?.permission_switch_axes).toBeUndefined();
+  it("drops malformed sandbox and network arms independently", () => {
+    expect(
+      capsWith({
+        sandbox: { max: "outside" },
+        network_access: { max: "true" },
+        approval: { max: "never" },
+      })?.permission_switch_axes,
+    ).toEqual({ approval: { max: "never" } });
+    expect(
+      capsWith({ sandbox: { max: 3 }, network_access: 1 })
+        ?.permission_switch_axes,
+    ).toEqual({});
+  });
+
+  it("distinguishes absent legacy axes from a present malformed advertisement", () => {
+    expect(capsWithoutAxes()?.permission_switch_axes).toBeUndefined();
+    expect(capsWith({})?.permission_switch_axes).toEqual({});
+    expect(capsWith(null)?.permission_switch_axes).toEqual({});
+    expect(capsWith("broken")?.permission_switch_axes).toEqual({});
   });
 });

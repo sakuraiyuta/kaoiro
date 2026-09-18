@@ -483,10 +483,16 @@ creating a new turn automatically. A new operator selection may supersede it.
 Clients render unknown as unknown, not as the previous observed badge. They may
 show `last_effective` with an explicit historical label. `whoami` uses the same
 observation/status distinction. Busy execution does not disable the picker;
-network editing is offered for workspace-write, and an approval picker is offered
-when `permission_switch_axes.approval` advertises the axis mutable (Antigravity,
-issue #359) — with options above the ceiling disabled and labelled rather than
-hidden — otherwise approval stays host-fixed (Codex).
+network editing is offered for workspace-write. When
+`permission_switch_axes` is advertised, the dashboard offers each sandbox,
+network, or approval picker only when that axis arm is well formed. Sandbox and
+approval options above `max` are disabled and labelled rather than hidden; a
+false network ceiling disables enabling network while preserving the narrowing
+true-to-false action. A missing or malformed arm keeps that axis launch-fixed
+and hides its picker. When the whole field is absent, the legacy unclamped
+sandbox/network controls remain available while approval stays host-fixed.
+These client clamps mirror the authoritative server and wrapper gates; they do
+not replace either gate.
 Client ack/state updates cannot reduce the latest known revision or restore
 pending after that revision settled. The server projects its authoritative
 latest request to operator snapshots/live state so reloads and other clients
