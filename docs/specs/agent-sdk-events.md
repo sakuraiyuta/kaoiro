@@ -232,11 +232,13 @@ in streaming-input mode. Boundaries settled by a headless live run:
   receives and applies server → wrapper `set_model` / `set_effort` control
   ([protocol.md](protocol.md)).
 
-### Hooks used (optional; auxiliary)
+### Hooks (SDK surface; kaoiro wires only `CwdChanged`)
 
-`PreToolUse` / `PostToolUse` / `Notification` / `UserPromptSubmit` / `Stop` /
-`SubagentStop` / `SessionStart` / `SessionEnd` / `PreCompact`. State derivation
-is mostly covered by the message sequence + `canUseTool`; hooks are auxiliary.
+The SDK offers `PreToolUse` / `PostToolUse` / `Notification` /
+`UserPromptSubmit` / `Stop` / `SubagentStop` / `SessionStart` / `SessionEnd` /
+`PreCompact`. kaoiro does not consume them for state derivation: the message
+sequence + `canUseTool` cover it, and the host registers only `CwdChanged`
+(merged with caller-supplied hooks).
 
 The `CwdChanged` hook (#64) is the only path that reflects cwd changes after
 init in `state_change.ext.cwd` by piggyback (messages other than `init` do not
@@ -300,7 +302,7 @@ state_change directly after spawn (the idle announce emitted by cli.ts):
   187–190).
 
 Implemented in phase-15 15-4b by removing the null guard on `#statusExt` in
-`wrapper/claude-code/src/host.ts` (host.ts:842–852) only when explicitly
+`wrapper/claude-code/src/host.ts` (`#statusExt`) only when explicitly
 specified. Necessary ext values appear in a state_change directly after startup
 even before `SDKSystemMessage` (init) arrives.
 
