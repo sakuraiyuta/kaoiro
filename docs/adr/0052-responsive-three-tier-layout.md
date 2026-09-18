@@ -47,7 +47,7 @@ Make the dashboard **equally viable at PC / tablet / smartphone sizes**. This AD
 withdraws design.md's statement that “mobile / narrow widths are not first-class.”
 The dimensions and rules are canonical in
 [responsive-layout.md](../specs/responsive-layout.md), and the complete reachability
-table is in [responsive-reachability.md](../specs/responsive-reachability.md).
+table is in [responsive-reachability.md](../reference/ui/responsive-reachability.md).
 
 - **F1**: At smartphone widths, move the lobby response timeline into a bottom
   sheet in the same screen and make the grid full-width.

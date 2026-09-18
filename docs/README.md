@@ -112,6 +112,10 @@ Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh do
 
 - Pack layout and `manifest.json` contract: [Persona pack format](reference/personas/pack-format.md).
 
+## UI documentation
+
+- Per-size reachability paths and scroll owners: [Responsive reachability](reference/ui/responsive-reachability.md).
+
 ## Codex app-server documentation
 
 - Architecture and adapter entry: [backend ownership](architecture/codex-backends.md).

@@ -54,7 +54,7 @@ implementation — the emphasis marks; all three are walked at every close.
 | U20 | server update / rollback / transactions | ops | ⏳ |
 | U21 | runner update / rollback / artifacts / service verification | ops | ⏳ |
 | U22 | deployment troubleshooting | ops | ⏳ |
-| U23 | UI design group (visual language, tokens, layout, motion) | perm | ⏳ |
+| U23 | UI design group (visual language, tokens, layout, motion) | perm | In review (reachability only) |
 | U24 | codex app-server architecture / reference + ADR-0058 evidence extraction | perm impl | ✅ |
 | U25 | codex backend switch runbook | ops perm impl | ✅ |
 | U26 | antigravity adapter / events / tools-permissions / evidence | perm impl | ⏳ |
@@ -86,6 +86,7 @@ Writer rules: one writer per destination file; units that touch the same file
 | specs/codex-model-catalog.md | [evidence/codex/model-catalog.md](../evidence/codex/model-catalog.md) | U27 |
 | specs/agent-sdk-events.md | [reference/engines/claude-events.md](../reference/engines/claude-events.md) | U28 |
 | specs/persona-pack-schema.md | [reference/personas/pack-format.md](../reference/personas/pack-format.md) | U09 |
+| specs/responsive-reachability.md | [reference/ui/responsive-reachability.md](../reference/ui/responsive-reachability.md) | U23 |
 | ../../wrapper/codex/README.md (implementation) | [reference/engines/codex-app-server.md](../reference/engines/codex-app-server.md) | U24 |
 | ../../wrapper/codex/README.md (implementation) | [reference/engines/codex-app-server-session.md](../reference/engines/codex-app-server-session.md) | U24 |
 | ../../wrapper/codex/README.md (implementation) | [reference/engines/codex-app-server-events.md](../reference/engines/codex-app-server-events.md) | U24 |

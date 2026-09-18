@@ -16,14 +16,14 @@ dashboard usable at PC / tablet / smartphone sizes, including confirmation,
 instruction sending, and permission approval from a smartphone. The source of
 truth for dimensions and rules is [responsive-layout.md](../specs/responsive-layout.md);
 display conditions and reachability for each element are in
-[responsive-reachability.md](../specs/responsive-reachability.md).
+[responsive-reachability.md](../reference/ui/responsive-reachability.md).
 
 This phase proceeds in 4 stages. The stages live as Stages in this file; do not
 split them into files under `plans/`.
 
 ## Acceptance Criteria
 
-- [ ] Every element in responsive-reachability.md is reachable from all 3 sizes
+- [ ] Every element in docs/reference/ui/responsive-reachability.md is reachable from all 3 sizes
       when its display condition holds (Tasklist float rows are excluded until
       the #178 implementation)
 - [ ] Elements marked “always” remain in view regardless of scroll position while
@@ -83,7 +83,7 @@ badge returns to the list.
 | 31-8 | Apply vertical-compression overrides for `short` | こはく | ✅ | Header vertical padding / composer's initial height (1 line, expands on focus) / dock maximum height 45% + internal scroll (permission dock changes to the same shell+scroll structure as question dock) / dialog and drawer `max-block-size` and scroll owner. Do not change horizontal layout, sheet maximum height, or dock expanded state. Collapse `main` block padding to 0.5rem/2.6rem (reserve bottom escape space for the handle) |
 
 **Stage C completion:** header / drawer / dialog / offline behavior matches the
-responsive-reachability.md table / dialog, drawer, and dock are not clipped at
+docs/reference/ui/responsive-reachability.md table / dialog, drawer, and dock are not clipped at
 low height and scroll internally / at height 390px, an expanded permission dock,
 a question dock with many choices, a one-line composer, and the handle coexist,
 with nonzero log display height and scrolling / dock minimize and composer send
@@ -133,7 +133,7 @@ None.
 ## See Also
 
 - Specs covered: [responsive-layout](../specs/responsive-layout.md),
-  [responsive-reachability](../specs/responsive-reachability.md),
+  [responsive-reachability](../reference/ui/responsive-reachability.md),
   [design](../specs/design.md)
 - ADR: [0052-responsive-three-tier-layout](../adr/0052-responsive-three-tier-layout.md)
 - Implementation issue: [#197](https://github.com/sakuraiyuta/kaoiro/issues/197)
