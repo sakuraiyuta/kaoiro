@@ -121,9 +121,11 @@ it("keeps the baseline, pending settings, and rollback clear after input_skipped
 });
 
 it("waits for initial server sync before creating the child", async () => {
-  const f = fixture(), sync = deferred();f.hooks.waitForPermissionSync = vi.fn(() => sync.promise);
+  const f = fixture(), sync = deferred(), waiting = vi.fn(() => sync.promise);f.hooks.waitForPermissionSync = waiting;
   const running = f.runtime.run(input(), f.hooks);
-  await Promise.resolve();expect(f.createSession).not.toHaveBeenCalled();expect(f.sent).toHaveLength(0);
+  await vi.waitFor(() => expect(waiting.mock.calls.length > 0 || f.createSession.mock.calls.length > 0).toBe(true));
+  expect(f.hooks.waitForPermissionSync).toHaveBeenCalledTimes(1);
+  expect(f.createSession).not.toHaveBeenCalled();expect(f.sent).toHaveLength(0);
   sync.resolve();await running;expect(f.sent).toHaveLength(1);
 });
 

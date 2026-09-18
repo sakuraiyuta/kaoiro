@@ -4,6 +4,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
+import { ServerLink } from "@kaoiro/wrapper-core";
 import { runCodexCli } from "../src/cli.js";
 import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
 import { watchdogClock } from "./fixtures/cli_app_server.js";
@@ -53,6 +54,8 @@ it.each([false, true])("runs CLI components through MCP IA wait, mid-turn batchi
   await new Promise<void>(resolve => provider.listen(0, "127.0.0.1", resolve));
   const address = provider.address();if (!address || typeof address === "string") throw new Error("Missing local port");
   const signals = process.listeners("SIGINT");
+  const output = vi.spyOn(process.stdout, "write");
+  const ackSent = vi.spyOn(ServerLink.prototype, "acknowledgeInterAgentDelivery");
   let running: Promise<void> | undefined;
   const outbound = () => wire.received.filter(e => e.event === "envelope" && e.payload.type === "inter_agent_message");
   const results = () => wire.received.filter(e => e.event === "envelope" && e.payload.type === "result");
@@ -77,7 +80,13 @@ it.each([false, true])("runs CLI components through MCP IA wait, mid-turn batchi
     await vi.waitFor(() => expect(outbound().some(e => (e.payload.payload as { body?: string }).body === "WAITING")).toBe(true), { timeout: 35_000 });
     expect(acks()).toEqual([1]);expect(wire.received.some(e => e.event === "directory_request")).toBe(true);
     inbound(2, "c2", "SECOND");inbound(3, "c3", "THIRD");inbound(4, "c4", "OTHER", "other.peer");
-    await new Promise(resolve => setTimeout(resolve, 100));expect(acks()).toEqual([1]);expect(userTurns).toHaveLength(1);
+    // The inbound log and coordinator injection share a synchronous segment.
+    // Observing it does not substitute for observing the outbound socket.
+    await vi.waitFor(() => expect(output.mock.calls.filter(([line]) =>
+      /^  inter_agent_message: (peer\.agent|other\.peer)\n$/.test(String(line)))).toHaveLength(4));
+    expect(ackSent.mock.calls.map(([seq]) => seq)).toEqual([1]);
+    await (ackSent.mock.contexts[0] as ServerLink).requestDirectory();
+    expect(acks()).toEqual([1]);expect(userTurns).toHaveLength(1);
     // The live waiter consumes this reply; it must not create another Host turn.
     if (interrupt) {
       clock.advance(60000);
@@ -100,7 +109,7 @@ it.each([false, true])("runs CLI components through MCP IA wait, mid-turn batchi
     release();
     // Invoke only the handler installed by this CLI lifetime, never unrelated listeners.
     for (const listener of process.listeners("SIGINT")) if (!signals.includes(listener)) { listener("SIGINT");process.removeListener("SIGINT", listener); }
-    await running;await wire.close();provider.closeAllConnections();
+    await running;output.mockRestore();ackSent.mockRestore();await wire.close();provider.closeAllConnections();
     await new Promise<void>(resolve => provider.close(() => resolve()));vi.unstubAllEnvs();await rm(home, { recursive: true, force: true });
   }
 }, 90_000);

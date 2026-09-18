@@ -7,6 +7,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, vi } from "vitest";
+import { ServerLink } from "@kaoiro/wrapper-core";
 import { CodexHost, type CodexHostOptions } from "../../src/host.js";
 import { AppServerSession } from "../../src/app_server_session.js";
 import { runCodexCli } from "../../src/cli.js";
@@ -74,30 +75,61 @@ export async function cliAppFixture(permissionSync = false, backend: "exec" | "a
   vi.stubEnv("KAOIRO_CODEX_TURN_WATCHDOG_INACTIVITY_MS", "60000");
   vi.stubEnv("KAOIRO_CODEX_TURN_WATCHDOG_ABORT_GRACE_MS", "1000");
   let host!: CodexHost;
+  let link!: ServerLink, session: AppServerSession | undefined;
+  let permissionWaits = 0;
+  let nextInbound: { enter: () => void; pending: Promise<void> } | undefined;
+  const received: number[] = [], finalized: string[] = [], queued: string[] = [];
   let callbacks!: CodexHostOptions;
   const running = runCodexCli({ backend, watchdogClock: clock,
     parseCliArgs: () => ({ configPath: "fixture", prompt: undefined, resume: undefined }),
     loadConfig: () => ({ agent_id: agentId, persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P", server_url: wire.url, model: "gpt-5.6-sol" }),
-    createHost: (config, options) => { callbacks = options;return (host = new CodexHost(config, { ...options,
+    createServerLink: (url, id, options) => (link = new ServerLink(url, id, { ...options,
+      onInterAgentMessage: async envelope => {
+        const held = nextInbound;nextInbound = undefined;
+        if (held) { held.enter();await held.pending; }
+        await options.onInterAgentMessage?.(envelope);
+        received.push((envelope as typeof envelope & { delivery_seq: number }).delivery_seq);
+      },
+    })),
+    createHost: (config, options) => { callbacks = options;host = new CodexHost(config, { ...options,
       startupRateLimitResolver: async () => new Map(),
+      waitForPermissionSync: () => { permissionWaits += 1;return options.waitForPermissionSync!(); },
+      onTurnFinalized: info => { options.onTurnFinalized?.(info);finalized.push(info.turnToken); },
       codexFactory: () => { spawned += 1;const thread = { runStreamed: async () => { sent.push({ method: "turn/start" });return { events: (async function* () {
         yield { type: "thread.started" as const, thread_id: "thread" };await execTerminal;
         yield { type: "turn.completed" as const, usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0, cache_write_input_tokens: 0 } };
       })() }; } };return { startThread: () => thread, resumeThread: () => thread }; },
-      appServerSessionFactory: options => AppServerSession.create({ ...options, transport: { spawnChild: () => { spawned += 1;return child; }, shutdownTimeoutMs: 20 } }),
-    })); },
+      appServerSessionFactory: async options => (session = await AppServerSession.create({ ...options, transport: { spawnChild: () => { spawned += 1;return child; }, shutdownTimeoutMs: 20 } })),
+    });
+      const send = host.send.bind(host);
+      host.send = async (...args) => { await send(...args);queued.push(args[0]); };
+      return host;
+    },
   });
   await vi.waitFor(() => expect(wire.joins).toBe(1));wire.push("persona_prompt", { prompt: "Fixture" });
   await vi.waitFor(() => expect(host).toBeDefined());
   const envelopes = (type: string) => wire.received.filter(e => e.event === "envelope" && e.payload.type === type).map(e => e.payload);
   return {
-    clock, wire, host, callbacks, sent, send, terminal, exit, running, envelopes, releaseExec, get spawned() { return spawned; },
+    clock, wire, host, callbacks, sent, send, terminal, exit, running, envelopes, releaseExec, finalized, queued,
+    get spawned() { return spawned; }, get permissionWaits() { return permissionWaits; }, get rateLimits() { return session?.rateLimits; },
+    // After the application callback finishes, a round trip drains earlier
+    // writes on this same WebSocket; JSONL child writes cannot do that.
+    drain: () => link.requestDirectory(),
+    holdNextInbound() {
+      let enter!: () => void, release!: () => void;
+      const entered = new Promise<void>(resolve => { enter = resolve; });
+      const pending = new Promise<void>(resolve => { release = resolve; });
+      nextInbound = { enter, pending };
+      return { entered, release };
+    },
     turns: () => sent.filter(r => r.method === "turn/start"), interrupts: () => sent.filter(r => r.method === "turn/interrupt"),
     acks: () => wire.received.filter(e => e.event === "delivery_ack").map(e => e.payload.delivery_seq),
-    inbound(seq: number, cid: string, body = cid, peer = "peer.agent", number = 1) {
+    waitForAcks: (seqs: number[]) => vi.waitFor(() => expect(wire.received.filter(e => e.event === "delivery_ack").map(e => e.payload.delivery_seq)).toEqual(seqs)),
+    async inbound(seq: number, cid: string, body = cid, peer = "peer.agent", number = 1) {
       wire.push("envelope", { version: "0", agent_id: peer, persona: { id: "p", name: "Peer", sprite_set: "p" }, display_name: "Peer",
         ts: new Date().toISOString(), type: "inter_agent_message", state: "tool_running", delivery_seq: seq, ingress_stamp: [1, seq],
         payload: { to: agentId, conversation_id: cid, turn_number: number, kind: "inform", body } });
+      await vi.waitFor(() => expect(received).toContain(seq));
     },
     tool(name: string, input: Record<string, unknown> = {}): Promise<any> {
       return new Promise((resolve, reject) => {

@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
+import { ServerLink } from "@kaoiro/wrapper-core";
 import { AppServerSession } from "../src/app_server_session.js";
 import { CodexHost } from "../src/host.js";
 import { runCodexCli } from "../src/cli.js";
@@ -16,6 +17,15 @@ it("wires full and tail history through the CLI, default Host session and real S
   let calls = 0;
   let release!: () => void;
   const hold = new Promise<void>(resolve => { release = resolve; });
+  const responses = new Map([3, 4].map(n => {
+    let release!: () => void;
+    const ready = new Promise<void>(resolve => { release = resolve; });
+    return [n, { ready, release }] as const;
+  }));
+  let resumeWire: (() => unknown) | undefined;
+  const sent = vi.spyOn(ServerLink.prototype, "send");
+  const scheduled = vi.spyOn(CodexHost.prototype, "scheduleHistoryReplay");
+  const queued = vi.spyOn(CodexHost.prototype, "send");
   const wire = await phoenixLoopback(n => ({ hydration: { replay_required: true, replay_id: `r${n}` } }));
   let host: CodexHost | undefined, running: Promise<void> | undefined;
   const starts: string[] = [], finals: string[] = [];
@@ -24,6 +34,7 @@ it("wires full and tail history through the CLI, default Host session and real S
     for await (const _chunk of request) {}
     calls += 1;
     if (calls === 2) await hold;
+    await responses.get(calls)?.ready;
     const output = Array.from({ length: calls === 2 ? 205 : 2 }, (_, n) => ({
       type: "message", id: `message_${calls}_${n}`, role: "assistant", status: "completed", phase: "final_answer",
       content: [{ type: "output_text", text: `ANSWER_${calls}_${n}`, annotations: [] }],
@@ -79,6 +90,8 @@ enabled = false
       },
     });
     const completes = () => wire.received.filter(e => e.event === "history_replay_complete");
+    const results = () => wire.received.filter(e => e.event === "envelope" && e.payload.type === "result");
+    const waitForResults = (count: number) => vi.waitFor(() => expect(results()).toHaveLength(count), { timeout: 25_000 });
     const window = (id: string) => {
       const begin = wire.received.findIndex(e => e.event === "history_reset" && e.payload.replay_id === id);
       const end = wire.received.findIndex(e => e.event === "history_replay_complete" && e.payload.replay_id === id);
@@ -96,15 +109,23 @@ enabled = false
     await vi.waitFor(() => expect(calls).toBe(2), { timeout: 25_000 });
     wire.drop();await vi.waitFor(() => expect(wire.joins).toBe(2), { timeout: 10_000 });
     wire.push("instruction", { version: "0", text: "AFTER" });
-    await new Promise(r => setTimeout(r, 50));expect(completes()).toHaveLength(1);expect(starts).toHaveLength(1);
+    await vi.waitFor(() => expect(scheduled).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(queued).toHaveBeenCalledWith("AFTER", undefined));
+    await (sent.mock.contexts[0] as ServerLink).requestDirectory();
+    expect(completes()).toHaveLength(1);expect(starts).toHaveLength(1);
     release();await vi.waitFor(() => expect(completes()).toHaveLength(2), { timeout: 25_000 });
     expect(window("r2").map(e => e.payload)).toEqual(Array.from({ length: MAX_HISTORY }, (_, n) => ({ kind: "assistant", text: `ANSWER_2_${n + 5}` })));
     expect(window("r2").every(e => e.type === "log" && e.session_id === threadId)).toBe(true);
+    // Finalization is local; deliberately leave the wire receiver behind it.
+    resumeWire = wire.pauseInbound();responses.get(3)!.release();
     await vi.waitFor(() => expect(finals).toHaveLength(2), { timeout: 25_000 });
+    expect(results()).toHaveLength(1);
+    const receivedSecond = waitForResults(2);
+    resumeWire();resumeWire = undefined;await receivedSecond;
     const completedReplay = wire.received.findIndex(e => e.event === "history_replay_complete" && e.payload.replay_id === "r2");
     const thirdAnswer = wire.received.findIndex(e => e.event === "envelope" && (e.payload.payload as { text?: string })?.text === "ANSWER_3_0");
     expect(thirdAnswer).toBeGreaterThan(completedReplay);
-    expect(wire.received.filter(e => e.event === "envelope" && e.payload.type === "result")).toHaveLength(2);
+    expect(results()).toHaveLength(2);
     expect(wire.received.filter(e => e.event === "delivery_ack")).toHaveLength(0);
     expect(calls).toBe(3);expect(starts).toHaveLength(2);
     // The first two cycles above use the untouched default path. Hold one read
@@ -122,15 +143,24 @@ enabled = false
     expect(priorUsers).toHaveLength(0);
       wire.push("instruction", { version: "0", text: "DURING_READ" });
       await vi.waitFor(() => expect(output.mock.calls.some(([line]) => String(line).includes("DURING_READ"))).toBe(true));
+      expect(sent.mock.calls.filter(([e]) => (e.payload as { text?: string })?.text === "DURING_READ")).toHaveLength(0);
+      await (sent.mock.contexts[0] as ServerLink).requestDirectory();
       expect(wire.received.filter(e => e.event === "envelope" && (e.payload.payload as { text?: string })?.text === "DURING_READ")).toHaveLength(0);
       expect(calls).toBe(3);unblock();
+      await vi.waitFor(() => expect(completes()).toHaveLength(3));
+      resumeWire = wire.pauseInbound();responses.get(4)!.release();
       await vi.waitFor(() => expect(finals).toHaveLength(3), { timeout: 25_000 });
+      expect(results()).toHaveLength(2);
+      const receivedThird = waitForResults(3);
+      resumeWire();resumeWire = undefined;await receivedThird;
       const complete = wire.received.findIndex(e => e.event === "history_replay_complete" && e.payload.replay_id === "r3");
       const user = wire.received.findIndex(e => e.event === "envelope" && (e.payload.payload as { text?: string })?.text === "DURING_READ");
       expect(complete).toBeGreaterThan(-1);expect(user).toBeGreaterThan(complete);expect(calls).toBe(4);
     } finally { unblock();reader.mockRestore();output.mockRestore(); }
   } finally {
+    resumeWire?.();for (const response of responses.values()) response.release();
     release();host?.close();await running;await session?.close();await wire.close();
+    sent.mockRestore();scheduled.mockRestore();queued.mockRestore();
     for (const listener of process.listeners("SIGINT")) if (!signals.includes(listener)) process.removeListener("SIGINT", listener);
     vi.unstubAllEnvs();
     server.closeAllConnections();

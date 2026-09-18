@@ -50,6 +50,7 @@ await runCodexCli({backend:'app-server',
 .finally(()=>process.disconnect?.());`);
   const children: ChildProcess[] = [], prompts: Array<string | undefined> = [];
   const messages: Array<Array<{ kind: string; envelope?: { type: string; state: string } }>> = [];
+  // close follows the Supervisor exit handler and drains the child IPC/stdout.
   const exits: Promise<void>[] = [], stderr: string[] = [];
   const supervisor = new Supervisor({ hostId: "fixture", cwdAllowlist: [home], wrapperServerUrl: "ws://fixture",
     launch: (_id, config, cwd, resume, prompt, engine) => {
@@ -59,7 +60,7 @@ await runCodexCli({backend:'app-server',
       const child = spawn(process.execPath, [entry, configPath, ...(prompt === undefined ? [] : [prompt])], {
         cwd, env: { ...process.env, HOME: home, CODEX_HOME: home }, stdio: ["ignore", "ignore", "pipe", "ipc"],
       });
-      children.push(child);exits.push(new Promise(resolve => child.once("exit", () => resolve())));
+      children.push(child);exits.push(new Promise(resolve => child.once("close", () => resolve())));
       child.on("message", message => messages[index]!.push(message as { kind: string }));
       child.stderr?.on("data", chunk => { stderr[index] += String(chunk); });
       return toManagedChild(child);
@@ -89,7 +90,7 @@ await runCodexCli({backend:'app-server',
     // A deliberate new spawn resets the budget, but stop is never a restart.
     supervisor.handleSpawn(spawnMessage);const stopped = children.length - 1;await started(stopped);
     supervisor.handleStop(spawnMessage);await exits[stopped];
-    await new Promise(resolve => setTimeout(resolve, 100));expect(children).toHaveLength(MAX_RESTARTS + 2);
+    expect(children).toHaveLength(MAX_RESTARTS + 2);
   } finally {
     supervisor.stopAll();
     for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");

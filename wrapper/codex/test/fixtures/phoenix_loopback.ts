@@ -51,6 +51,10 @@ export async function phoenixLoopback(
       if (!joined) throw new Error("No joined socket");
       frame(joined.socket, [joined.ref, null, joined.topic, event, payload]);
     },
+    pauseInbound() {
+      if (!joined) throw new Error("No joined socket");
+      const socket = joined.socket;socket.pause();return () => socket.resume();
+    },
     drop() { joined?.socket.destroy(); },
     async close() { for (const socket of sockets) socket.destroy();await new Promise<void>(resolve => server.close(() => resolve())); },
   };
