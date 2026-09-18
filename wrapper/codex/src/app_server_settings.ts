@@ -84,3 +84,40 @@ export async function appServerTurnSettings(settings: AppServerTurnSettings, req
   if (resetEffort) result.effort = await defaultEffort(request, model!, cwd);
   return result;
 }
+
+export interface AppServerPreparedSettings { readonly model?: string; readonly effort?: string }
+export interface AppServerSettingsSnapshot { model: string; effort: string | null }
+export interface AppServerSettingsIntent extends AppServerSettingsSnapshot { effortIntent: "explicit" | "default" }
+export interface AppServerPendingSettings { model: string | null; effort: string | null; effortReset: boolean }
+
+export function appServerSettingsForAttempt(
+  baseline: AppServerSettingsIntent | null, pending: AppServerPendingSettings, rollback = false,
+): AppServerTurnSettings {
+  if (!baseline || !nonempty(baseline.model)) throw new AppServerSettingsError("default_effort_unavailable");
+  const reset = pending.effort === null && (pending.effortReset ||
+    (baseline.effortIntent === "default" && (pending.model !== null || rollback)));
+  const explicit = pending.effort ?? (baseline.effortIntent === "explicit" ? baseline.effort : null);
+  if (!reset && baseline.effortIntent === "explicit" && !nonempty(explicit)) {
+    throw new AppServerSettingsError("default_effort_unavailable");
+  }
+  return {
+    ...((pending.model !== null || rollback || reset) ? { model: pending.model ?? baseline.model } : {}),
+    ...(reset ? { resetEffort: true } : explicit === null ? {} : { effort: explicit }),
+  };
+}
+
+export function appServerSettingsAfterSuccess(
+  baseline: AppServerSettingsIntent, pending: AppServerPendingSettings, prepared: AppServerPreparedSettings, rollback = false,
+): AppServerSettingsIntent {
+  const attempted = appServerSettingsForAttempt(baseline, pending, rollback);
+  if (attempted.resetEffort && !nonempty(prepared.effort)) throw new AppServerSettingsError("default_effort_unavailable");
+  return {
+    model: pending.model ?? baseline.model,
+    effort: pending.effort ?? (attempted.resetEffort ? prepared.effort! : baseline.effort),
+    effortIntent: pending.effort !== null ? "explicit" : attempted.resetEffort ? "default" : baseline.effortIntent,
+  };
+}
+
+export function successfulResetEffort(resolved: string | undefined, catalogDefault: string | null): string | null {
+  return resolved ?? catalogDefault;
+}

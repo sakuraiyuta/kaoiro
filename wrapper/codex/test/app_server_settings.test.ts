@@ -65,3 +65,33 @@ it.each([
 ] as const)("maps %s without widening its effective network policy", async (sandbox, networkAccess, sandboxPolicy) => {
   expect(await appServerTurnSettings({ permission: { sandbox, networkAccess } }, vi.fn())).toEqual({ sandboxPolicy });
 });
+
+it("keeps explicit intent across model changes and resolves only reset or default intent", async () => {
+  const { appServerSettingsForAttempt: prepare, appServerSettingsAfterSuccess: commit, successfulResetEffort } = await import("../src/app_server_settings.js");
+  const baseline = { model: "old", effort: "high", effortIntent: "explicit" as const };
+  const pending = { model: "new", effort: null, effortReset: false };
+  expect(prepare(baseline, pending)).toEqual({ model: "new", effort: "high" });
+  expect(prepare(baseline, { ...pending, effort: "medium", effortReset: true })).toEqual({ model: "new", effort: "medium" });
+  expect(prepare(baseline, { ...pending, effortReset: true })).toEqual({ model: "new", resetEffort: true });
+  expect(prepare({ ...baseline, effortIntent: "default" }, pending)).toEqual({ model: "new", resetEffort: true });
+  expect(prepare({ ...baseline, effortIntent: "default" }, { ...pending, model: null })).toEqual({});
+  expect(commit(baseline, pending, { model: "new", effort: "high" })).toEqual({ ...baseline, model: "new" });
+  expect(commit(baseline, { ...pending, effortReset: true }, { model: "new", effort: "medium" })).toEqual({ model: "new", effort: "medium", effortIntent: "default" });
+  expect(successfulResetEffort("medium", "low")).toBe("medium");
+  expect(successfulResetEffort(undefined, "low")).toBe("low");
+  expect(successfulResetEffort(undefined, null)).toBeNull();
+});
+
+it("resends the successful baseline on rollback and resamples default intent", async () => {
+  const { appServerSettingsForAttempt: prepare, appServerSettingsAfterSuccess: commit } = await import("../src/app_server_settings.js");
+  const baseline = { model: "good", effort: "high", effortIntent: "explicit" as const };
+  const pending = { model: null, effort: null, effortReset: false };
+  expect(prepare(baseline, pending, true)).toEqual({ model: "good", effort: "high" });
+  const defaults = { ...baseline, effortIntent: "default" as const };
+  expect(prepare(defaults, pending, true)).toEqual({ model: "good", resetEffort: true });
+  expect(commit(defaults, pending, { model: "good", effort: "medium" }, true)).toEqual({ ...defaults, effort: "medium" });
+  for (const unknown of [null, { ...baseline, model: "" }, { ...baseline, effort: null }]) {
+    expect(() => prepare(unknown, pending, true)).toThrow(expect.objectContaining({ reason: "default_effort_unavailable" }));
+  }
+  expect(() => commit(defaults, { ...pending, model: "new" }, {})).toThrow(expect.objectContaining({ reason: "default_effort_unavailable" }));
+});

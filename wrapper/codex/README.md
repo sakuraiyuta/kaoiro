@@ -194,3 +194,30 @@ child shutdown, sequential policy changes, both effort resolution paths,
 unresolvable defaults, interruption, and a following turn in the same session.
 Pre-response interruption, dispatch rejection, catalog faults/cursor bounds,
 and connection/close races have deterministic fixture coverage.
+
+Permission/settings helpers are internal preparation for Host integration.
+`beforeDispatch` waits for permission synchronization after default-effort
+resolution; the synchronous `onDispatch` callback then validates the captured
+selection and receives an immutable concrete model/effort receipt. A changed
+selection or blocked gate raises `permission_superseded` before `turn/start`.
+The Host integration must prepare the same unstarted queued turn again with a
+new snapshot. Close/EOF releases a pending synchronization wait.
+
+The permission attempt captures a separate execution id and a rollout boundary.
+Only the first dispatch of a known newly started thread may use a fresh boundary:
+`thread/start` can return before its rollout exists. A missing resume baseline is
+not trusted. Completion requires matching thread, host token, current submission
+(revision, requested axes, execution id), and the terminal's app-server turn id.
+A newer pending selection does not invalidate the current execution. Missing or
+contradictory evidence remains unknown; RPC acceptance never means applied.
+Assessment, diagnostics and observation fields share the existing exec rules;
+exec's rollout reader still permits omission of the expected turn id.
+
+Initial settings come from the thread start/resume response. Explicit effort
+survives compatible model changes. Only reset intent or a model change with
+default intent resolves a new default. Successful reset uses the resolved
+receipt, not the display catalog's default. Rollback explicitly resends the
+previous successful model/effort; default intent resolves again. Unknown
+baseline/default fails with `default_effort_unavailable`, without exposing raw
+RPC errors. Host queue/lifecycle wiring and normal launch selection remain
+pending; existing exec behavior is unchanged.

@@ -546,3 +546,64 @@ it("does not dispatch when close wins the settings preparation microtask", async
   expect(onDispatch).not.toHaveBeenCalled();
   expect(f.sent.filter(r => r.method === "turn/start")).toEqual([]);
 });
+
+it("waits for asynchronous permission synchronization and rechecks selection before turn/start", async () => {
+  const { captureAppServerPermission } = await import("../src/app_server_permission.js");
+  const { createPermissionState, requestPermission } = await import("../src/permission_state.js");
+  const f = transportFixture();
+  let release!: () => void;
+  const sync = new Promise<void>(resolve => { release = resolve; });
+  const selection = { revision: 1, requested: { sandbox: "read-only" as const, network_access: false } };
+  let state = createPermissionState(selection, true);
+  const order: string[] = [];
+  f.handle(request => {
+    if (request.method === "initialize") f.respond(request, {});
+    if (request.method === "config/read") { order.push("resolve");f.respond(request, { config: { model_reasoning_effort: "medium" } }); }
+    if (request.method === "turn/start") { f.respond(request, { turn: { id: "turn-1" } });f.send(notification("turn/completed")); }
+  });
+  const prepare = f.transport.startTurn({ threadId: "thread-1", hostTurnToken: "host", input: "hello",
+    settings: { model: "new", resetEffort: true },
+    beforeDispatch: async settings => { expect(settings).toEqual({ model: "new", effort: "medium" });order.push("sync");await sync; },
+    onDispatch: identity => { order.push("capture");captureAppServerPermission("/nonexistent", state, selection, identity); },
+  });
+  const outcome = expect(prepare).rejects.toMatchObject({ reason: "permission_superseded" });
+  await tick();expect(order).toEqual(["resolve", "sync"]);
+  expect(f.sent.filter(r => r.method === "turn/start")).toHaveLength(0);
+  state = requestPermission(state, { ...selection, revision: 2 });release();await outcome;
+  expect(order).toEqual(["resolve", "sync", "capture"]);
+  expect(f.sent.filter(r => r.method === "turn/start")).toHaveLength(0);
+  const reprepare = await f.transport.startTurn({ threadId: "thread-1", hostTurnToken: "host", input: "hello",
+    beforeDispatch: async () => {}, onDispatch: (identity, settings) => {
+      expect(settings).toEqual({});expect(Object.isFrozen(settings)).toBe(true);
+      captureAppServerPermission("/nonexistent", state, state.next, identity);
+    },
+  });
+  await collect(reprepare.events);expect(f.sent.filter(r => r.method === "turn/start")).toHaveLength(1);
+});
+
+it.each(["close", "EOF"])("releases admission and interrupt during a never-ending permission sync on %s", async action => {
+  const f = transportFixture();let entered = false;
+  const start = f.transport.startTurn({ threadId: "thread-1", hostTurnToken: "host", input: "hello",
+    beforeDispatch: () => { entered = true;return new Promise(() => {}); },
+  });
+  const rejected = expect(start).rejects.toBeInstanceOf(AppServerConnectionError);
+  await tick();expect(entered).toBe(true);
+  const interrupt = f.transport.interrupt("host");
+  if (action === "close") await f.transport.close();else f.exit();
+  await rejected;expect(await interrupt).toBe(false);
+  expect(f.sent.filter(r => r.method === "turn/start")).toHaveLength(0);
+});
+
+it.each(["startThread", "resumeThread"] as const)("captures initial settings from %s without sharing a mutable snapshot", async method => {
+  const f = transportFixture();
+  f.handle(request => {
+    if (request.method === "initialize") f.respond(request, {});
+    if (request.method === "thread/start" || request.method === "thread/resume") f.respond(request, {
+      thread: { id: "thread-1" }, model: "initial", reasoningEffort: "medium",
+    });
+  });
+  if (method === "startThread") await f.transport.startThread();else await f.transport.resumeThread("thread-1");
+  expect(f.transport.initialSettings).toEqual({ model: "initial", effort: "medium" });
+  f.transport.initialSettings!.model = "modified";
+  expect(f.transport.initialSettings?.model).toBe("initial");
+});

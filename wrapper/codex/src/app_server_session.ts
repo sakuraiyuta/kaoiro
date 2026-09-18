@@ -79,6 +79,7 @@ export class AppServerSession {
     });
   }
 
+  get initialSettings() { return this.#transport.initialSettings; }
   get version(): string | undefined { return this.#transport.version; }
   get stderrTail(): string { return this.#transport.stderrTail; }
   get rateLimits(): AppServerRateLimits { return this.#transport.rateLimits; }

@@ -942,3 +942,46 @@ with high made it fail. The production-default session integration separately
 exercises settings, rollout observation, interrupt, and subsequent turns on the
 real CLI. Schema/error/race boundaries use fixtures. Shared HistoryReplayer,
 protocol, capabilities, server/dashboard, and ADR status are unchanged.
+
+### Increment (5b): permission and settings preparation
+
+The accepted effort precedence retains an operator's explicit effort (including
+compatible config effort) across model changes. The restricted default-resolution
+contract above applies only to reset intent or model changes under default
+intent. Successful reset records the concrete resolved receipt rather than the
+catalog display default. A failed switch leaves the successful baseline intact;
+rollback resends that model/effort, resolving default intent again. Initial
+baseline comes from `thread/start` or `thread/resume` response model and
+reasoningEffort. Unavailable baseline/default produces the existing closed switch
+failure reason, never an implicit reuse of the thread's sticky settings.
+
+Transport admission now permits asynchronous permission synchronization after
+effort resolution, followed by a failure check and synchronous dispatch callback.
+The latter captures the rollout cursor and independent execution id only if the
+selected revision/requested axes still match `next` and the gate is unblocked.
+`permission_superseded` occurs before RPC submission. The later Host integration
+must prepare the same unstarted queued turn again, not retry a sent turn.
+Close/EOF releases an outstanding synchronization wait.
+
+App-server observation requires the terminal's turn id, thread id and Host token,
+and fences the result against the current submission's revision/requested axes
+and execution id, including after a delayed flush. Newer pending selections do
+not erase valid current-execution evidence. Assessment and diagnostic strings
+are shared with exec; exec's optional expected-turn-id behavior and existing
+permission transitions/audit payload remain unchanged. No RPC success is
+promoted to applied policy.
+
+The production-default local-provider test observes terminal policy while the
+same real child remains alive, switches workspace-write network access between
+turns, rejects a prior turn id, retains explicit high effort despite a changed
+config default, then restores model/effort after a provider-rejected switch. It
+also resets to a changed config and re-resolves default intent on rollback.
+The initial thread/start response can precede creation of the rollout file:
+only the first dispatch of an explicitly fresh thread uses a fresh boundary.
+The existing missing-resume-baseline rejection is retained and fixture-tested.
+Fixtures additionally cover asynchronous synchronization, obsolete execution
+completion, malformed/missing settings, conflicting/partial rollout records,
+close/EOF, and response metadata for resume. No external model/auth/profile
+behavior is claimed. Host app-server execution, queue, watchdog, history replay,
+and normal launch selection are still deferred; protocol and ADR status stay
+unchanged.

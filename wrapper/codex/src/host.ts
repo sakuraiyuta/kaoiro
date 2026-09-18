@@ -8,6 +8,8 @@
 // Approval is pinned to "never" (ADR-0033); waiting_permission represents
 // the dispatch gate, not an SDK approval callback.
 
+import { assessCodexPermission } from "./app_server_permission.js";
+import { successfulResetEffort, type AppServerSettingsError } from "./app_server_settings.js";
 import { BRIDGE_MCP_POLICY } from "./bridge_policy.js";
 export { BRIDGE_TOOL_TIMEOUT_SEC } from "./bridge_policy.js";
 import { randomUUID } from "node:crypto";
@@ -200,6 +202,7 @@ type NextEventOutcome<T> =
   | { kind: "timeout"; pending: Promise<IteratorResult<T>> };
 
 type AttemptedTurnSettings = {
+  appServer?: { resolvedEffort?: string; switchFailureReason?: AppServerSettingsError["reason"] };
   model: string | null;
   effort: string | null;
   effortReset: boolean;
@@ -469,20 +472,6 @@ function rateLimitsDiffer(
     }
   }
   return false;
-}
-
-function permissionApprovalFromRollout(
-  approval: string,
-): PermissionObservation["permission"]["approval"] | null {
-  switch (approval) {
-    case "untrusted":
-    case "on-request":
-    case "on-failure":
-    case "never":
-      return approval;
-    default:
-      return null;
-  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -2163,56 +2152,13 @@ export class CodexHost implements EngineAdapter {
         ? null
         : codexPermissionContextAfter(permission.cursor, sessionId);
     }
-    if (context === null) {
-      this.#permissionObservationFailed(
-        permission.submission,
-        "observation_unavailable",
-      );
+    const assessment = assessCodexPermission(permission.submission, context);
+    if (!assessment.applied) {
+      if (assessment.diagnostic) writeRedactedStderr(assessment.diagnostic);
+      this.#permissionObservationFailed(permission.submission, assessment.reason, assessment.observation);
       return;
     }
-    const approval = permissionApprovalFromRollout(context.approvalPolicy);
-    const observation = approval === null
-      ? null
-      : {
-          ...permission.submission,
-          session_id: context.sessionId,
-          turn_id: context.turnId,
-          permission: {
-            sandbox: context.sandbox,
-            approval,
-            enforcement: "os" as const,
-          },
-          network_access: context.networkAccess,
-        };
-    const expected = permission.submission.requested;
-    if (context.approvalPolicy !== "never" || observation === null) {
-      writeRedactedStderr(
-        `codex: permission policy mismatch: expected approval=never; observed approval=${context.approvalPolicy}\n`,
-      );
-      this.#permissionObservationFailed(
-        permission.submission,
-        "approval_policy_mismatch",
-        observation,
-      );
-      return;
-    }
-    const expectedNetwork = effectiveNetworkAccess(
-      expected.sandbox,
-      expected.network_access,
-    );
-    if (context.sandbox !== expected.sandbox || context.networkAccess !== expectedNetwork) {
-      writeRedactedStderr(
-        "codex: permission policy mismatch: " +
-          `expected sandbox=${expected.sandbox} network_access=${expectedNetwork}; ` +
-          `observed sandbox=${context.sandbox} network_access=${context.networkAccess}\n`,
-      );
-      this.#permissionObservationFailed(
-        permission.submission,
-        "policy_mismatch",
-        observation,
-      );
-      return;
-    }
+    const observation = assessment.observation;
     const applied = permissionObservationApplied(this.#permissionState, observation);
     this.#permissionState = applied.state;
     if (applied.emitAudit) {
@@ -2289,9 +2235,8 @@ export class CodexHost implements EngineAdapter {
         this.#operatorSwitchedFields.add("effort_source");
       } else if (attempted.effortReset) {
         const model = attempted.model ?? this.#model;
-        this.#effort =
-          this.#catalog.find((entry) => entry.value === model)
-            ?.default_effort ?? null;
+        this.#effort = successfulResetEffort(attempted.appServer?.resolvedEffort,
+          this.#catalog.find((entry) => entry.value === model)?.default_effort ?? null);
         this.#effortSource = "default";
         this.#operatorSwitchedFields.add("effort");
         this.#operatorSwitchedFields.add("effort_source");
@@ -2318,7 +2263,7 @@ export class CodexHost implements EngineAdapter {
       this.#switchErrorOnce = {
         kind,
         requested,
-        reason: "turn_failed",
+        reason: attempted.appServer?.switchFailureReason ?? "turn_failed",
         ...(rolledBackTo === null ? {} : { rolled_back_to: rolledBackTo }),
       };
     }

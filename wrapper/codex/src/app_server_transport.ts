@@ -8,7 +8,7 @@ import { appServerInput, type AppServerInput } from "./app_server_input.js";
 import { AppServerTurnStream } from "./app_server_stream.js";
 import { AppServerAccountTelemetry, type AppServerRateLimits } from "./app_server_telemetry.js";
 
-import { appServerTurnSettings, type AppServerTurnSettings } from "./app_server_settings.js";
+import { appServerTurnSettings, type AppServerTurnSettings, type AppServerPreparedSettings, type AppServerSettingsSnapshot } from "./app_server_settings.js";
 
 export interface AppServerThreadOptions {
   config?: RpcObject;
@@ -24,8 +24,9 @@ export interface AppServerTurnInput {
   input: AppServerInput;
   clientUserMessageId?: string;
   settings?: AppServerTurnSettings;
+  beforeDispatch?: (settings: AppServerPreparedSettings) => Promise<void>;
   /** Synchronous admission check immediately before turn/start; throwing sends no turn. */
-  onDispatch?: (identity: AppServerDispatchIdentity) => void;
+  onDispatch?: (identity: AppServerDispatchIdentity, settings: AppServerPreparedSettings) => void;
 }
 
 export type AppServerDispatchIdentity = Pick<AppServerTurnIdentity, "threadId" | "hostTurnToken" | "clientUserMessageId">;
@@ -61,6 +62,8 @@ export class AppServerTransport {
   #active: ActiveTurn | undefined;
   #failure: Error | undefined;
   #version: string | undefined;
+  #initialSettings: AppServerSettingsSnapshot | null = null;
+  readonly #disconnected = new AbortController();
   #opening = false;
   #readingHistory = false;
   readonly #account = new AppServerAccountTelemetry();
@@ -72,6 +75,7 @@ export class AppServerTransport {
       onNotification: (event) => this.#notification(event),
       onFailure: (error) => {
         this.#failure ??= error;
+        this.#disconnected.abort(error);
         if (this.#active) {
           this.#active.failure ??= error;
           if (this.#active.turnId !== undefined) this.#active.stream.fail(error);
@@ -80,6 +84,7 @@ export class AppServerTransport {
     });
   }
 
+  get initialSettings(): AppServerSettingsSnapshot | null { return this.#initialSettings && { ...this.#initialSettings }; }
   get version(): string | undefined { return this.#version; }
   get stderrTail(): string { return this.#rpc.stderrTail; }
   get rateLimits(): AppServerRateLimits { return this.#account.snapshot; }
@@ -132,8 +137,13 @@ export class AppServerTransport {
     try {
       await this.#initialize();
       const settings = await appServerTurnSettings(input.settings ?? {}, (method, params) => this.#rpc.request(method, params).result);
+      const prepared: AppServerPreparedSettings = Object.freeze({
+        ...(typeof settings.model === "string" ? { model: settings.model } : {}),
+        ...(typeof settings.effort === "string" ? { effort: settings.effort } : {}),
+      });
+      if (input.beforeDispatch) await this.#beforeDispatch(() => input.beforeDispatch!(prepared));
       if (this.#failure) throw this.#failure;
-      input.onDispatch?.(dispatch);
+      input.onDispatch?.(dispatch, prepared);
       const ticket = this.#rpc.request("turn/start", {
         ...settings, threadId: dispatch.threadId,
         input: wireInput,
@@ -164,6 +174,17 @@ export class AppServerTransport {
     } finally {
       release();
     }
+  }
+
+  async #beforeDispatch(prepare: () => Promise<void>): Promise<void> {
+    if (this.#failure) throw this.#failure;
+    let abort!: () => void;
+    const disconnected = new Promise<never>((_, reject) => {
+      abort = () => reject(this.#failure);
+      this.#disconnected.signal.addEventListener("abort", abort, { once: true });
+    });
+    try { await Promise.race([disconnected, prepare()]); }
+    finally { this.#disconnected.signal.removeEventListener("abort", abort); }
   }
 
   interrupt(hostTurnToken: string): Promise<boolean> {
@@ -218,6 +239,9 @@ export class AppServerTransport {
         await this.#rpc.close();
         throw this.#failure;
       }
+      this.#initialSettings = typeof result.model === "string" &&
+        (result.reasoningEffort === null || typeof result.reasoningEffort === "string")
+        ? { model: result.model, effort: result.reasoningEffort } : null;
       return result.thread.id;
     } finally {
       this.#opening = false;

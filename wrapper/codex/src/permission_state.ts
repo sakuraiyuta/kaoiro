@@ -59,6 +59,15 @@ export function samePermissionSelection(
     left.requested.network_access === right.requested.network_access;
 }
 
+export function canSubmitPermission(state: PermissionState, selection: PermissionSelection): boolean {
+  return state.blocked === null && samePermissionSelection(state.next, selection);
+}
+
+export function isCurrentPermissionExecution(state: PermissionState, submission: PermissionSubmission): boolean {
+  return state.current !== null && samePermissionSelection(state.current.submission, submission) &&
+    state.current.submission.execution_id === submission.execution_id;
+}
+
 function pendingControl(
   selection: PermissionSelection,
   lastEffective: PermissionObservation | null,

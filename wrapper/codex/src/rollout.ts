@@ -387,6 +387,7 @@ export function captureCodexPermissionRolloutCursor(
 export function codexPermissionContextAfter(
   cursor: CodexPermissionRolloutCursor,
   sessionId: string,
+  expectedTurnId?: string,
 ): CodexPermissionTurnContext | null {
   if (cursor.sessionId !== null && cursor.sessionId !== sessionId) return null;
   if (cursor.resumeBaselineUnavailable) return null;
@@ -431,7 +432,7 @@ export function codexPermissionContextAfter(
         // complete, independently parseable turn_context line.
       }
     }
-    return candidate;
+    return expectedTurnId !== undefined && candidate?.turnId !== expectedTurnId ? null : candidate;
   } catch {
     return null;
   } finally {
