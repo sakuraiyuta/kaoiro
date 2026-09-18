@@ -32,12 +32,11 @@ into which both are inserted. Overall composition is in
 - This separation is essential to making “core = agent independent” work.
 - Examples of additional properties: `ext.cost` (cumulative USD cost, #8,
   attached to result) and `ext.model` / `ext.context` / `ext.rate_limits`
-  (Claude Code-specific metrics, #16, attached to state_change). Because the
-  filter sequence is unimplemented, the Claude Code adapter presently attaches
-  all of them directly (best effort only when exposed by SDK). `model` /
-  `context` / `rate_limits` are CC-specific, so belong on the adapter rather
-  than in a general filter. Move generalizable `cost`, etc. into agent-agnostic
-  filters when the filter mechanism is introduced.
+  (attached to state_change when an adapter can observe them). Because the
+  filter sequence is unimplemented, adapters attach these fields directly.
+  Context usage remains engine-specific; model and rate-limit snapshots can
+  come from more than one adapter. Move generalizable `cost`, etc. into
+  agent-agnostic filters when the filter mechanism is introduced.
   - **Codex treatment of `ext.context`**
     ([ADR-0040](../adr/0040-context-usage-capability.md), phase-21): The Codex
     adapter does **not stamp** `ext.context` (because
@@ -89,14 +88,10 @@ declares the contract concrete adapters must implement:
 
 - State derivation: engine-specific event stream (Claude `SDKMessage` /
   Codex `ThreadEvent`) → common `AdapterEvent`
-- Control: `interrupt` / `setModel` / `applyFlagSettings` /
-  `setPermissionMode` (delegated to the SDK for Claude; relaunch equivalent for
-  Codex)
-- Permission: bridge a `canUseTool`-equivalent callback to the permission broker
-- cwd notification: `onCwdChanged(newCwd)` hook contract (implementation is
-  engine-specific)
-- Capability declaration: `supportedModels()` / `effortOptions?()`
-  (`EngineCapability`)
+- Lifecycle and control: `run` / `send` / `interrupt` / `close` /
+  `setModel` / `setEffort` / `setPermission` / `setPermissionMode`
+- Pending-state projection: `setPendingPermission` / `setPendingQuestion`
+  and revision-fenced `renameDisplayName`
 - Convert the common Tool description layer (JSON Schema + handler pair) to
   engine-specific APIs (Claude: Zod + `createSdkMcpServer` in-process / Codex:
   `dynamicTools`)
@@ -134,6 +129,9 @@ to `#statusExt`) and advertises it in the envelope
     `attachment_types: ["image"]` / `supports_user_input_dialog: true`. The UI
     limits picker / paste / drop to images (changed from the original planned
     `false` when attachments were added in phase-14)
+  - `wrapper/antigravity`: `supports_attachments: false` /
+    `supports_user_input_dialog: true` / `supports_model_switch: true` /
+    `supports_effort_switch: false` / `supports_context_usage: false`
 - **`supports_model_switch` / `supports_effort_switch`** (implemented in
   phase-16, 2026-07-13, [ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md)
   F4): Advertise whether `set_model` / `set_effort` are accepted mid-session.
@@ -141,6 +139,11 @@ to `#statusExt`) and advertises it in the envelope
   the catalog resolver can return `EngineModelInfo[]` (auth mode and plan are
   known), and `false` when unknown / the catalog is empty. The engine updates
   the advertisement whenever catalog / auth mode changes.
+- **`supports_permission_switch` / `permission_switch_axes`**: Codex and
+  Antigravity advertise runtime permission selection only after permission-sync
+  negotiation. Antigravity additionally requires all runner-supplied sandbox,
+  network-access, and approval ceilings; absent capability fields remain
+  fail-closed for legacy peers.
 
 ### Claude model catalog live refresh and bootstrap default floor ([ADR-0037](../adr/0037-claude-model-catalog-live-refresh.md), implemented in Phase 18)
 
