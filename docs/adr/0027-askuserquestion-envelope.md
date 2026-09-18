@@ -5,7 +5,7 @@ date: 2026-07-03
 opened: 2026-07-03
 supersedes: []
 superseded_by: null
-related_specs: [protocol, protocol-inter-agent, agent-sdk-events, security-threat-model]
+related_specs: [protocol, protocol-inter-agent, claude-events, security-threat-model]
 related_adrs: [10, 11, 12, 21, 22]
 ---
 
@@ -128,6 +128,6 @@ Deliver `question_request` only to operators; completely remove it from viewers 
 
 ## Related
 
-- specs: [protocol](../specs/protocol.md) (add `question_request` type, `ext.pending_question`, direction-specific `question_response`, and `waiting_question` state), [conversation owner contract](../reference/inter-agent/conversations.md#conversation-owner-and-tie-breaker) (the “reuse the existing AskUserQuestion UI” for escalate-to-user points to this ADR’s implementation), [agent-sdk-events](../specs/agent-sdk-events.md) (the AskUserQuestion branch and answer return in the canUseTool path), and [threat-model](../architecture/security-threat-model.md) (viewer leakage automatically covered through ADR-0021).
+- specs: [protocol](../specs/protocol.md) (add `question_request` type, `ext.pending_question`, direction-specific `question_response`, and `waiting_question` state), [conversation owner contract](../reference/inter-agent/conversations.md#conversation-owner-and-tie-breaker) (the “reuse the existing AskUserQuestion UI” for escalate-to-user points to this ADR’s implementation), [agent-sdk-events](../reference/engines/claude-events.md) (the AskUserQuestion branch and answer return in the canUseTool path), and [threat-model](../architecture/security-threat-model.md) (viewer leakage automatically covered through ADR-0021).
 - ADRs: [0021](0021-role-information-disclosure-policy.md) (allow-list foundation for operator-only delivery), [0022](0022-pending-permission-authoritative-source.md) (prototype of the same pattern: ext = truth for pending state).
 - Origin: [issue #78](https://github.com/sakuraiyuta/kaoiro/issues/78).

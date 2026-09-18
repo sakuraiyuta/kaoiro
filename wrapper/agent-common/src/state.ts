@@ -1,6 +1,6 @@
 // State machine — pure functions that derive the kaoiro state from the
 // adapter's normalized events. The mapping mirrors the "state derivation
-// mapping" section of docs/specs/agent-sdk-events.md.
+// mapping" section of docs/reference/engines/claude-events.md.
 //
 // Parallel tool execution (issue #3): an assistant message may carry several
 // tool_use blocks whose results arrive as separate messages. The machine

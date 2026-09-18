@@ -5477,7 +5477,7 @@ describe("AgentHost — model/effort 切替 (#54)", () => {
 
     // This pins the wrapper's pre-init transfer contract. It is not evidence
     // that the SDK accepts canonical input; that acceptance comes from the
-    // separate runtime observation documented in agent-sdk-events.md.
+    // separate runtime observation documented in docs/reference/engines/claude-events.md.
     await host.setModel("claude-sonnet-5");
     expect(host.statusSnapshot()).toMatchObject({ model: "claude-sonnet-5" });
     await host.run();

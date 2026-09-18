@@ -59,7 +59,7 @@ implementation — the emphasis marks; all three are walked at every close.
 | U25 | codex backend switch runbook | ops perm impl | ✅ |
 | U26 | antigravity adapter / events / tools-permissions / evidence | perm impl | ⏳ |
 | U27 | codex exec events / model catalog | perm impl | ✅ |
-| U28 | claude events | perm impl | ⏳ |
+| U28 | claude events | perm impl | In review |
 | U29a | entry pages: overview, system-overview, scope, glossary; folder scaffolding; this plan | ops perm impl | ✅ |
 | U29b | plugin-model split (extensions, adapter contract, claude model catalog) | impl | ⏳ |
 | U30 | kept pages (personas, agent-operations): update references only | impl | ⏳ |
@@ -84,6 +84,7 @@ Writer rules: one writer per destination file; units that touch the same file
 | specs/codex-model-catalog.md | [reference/engines/codex-model-catalog.md](../reference/engines/codex-model-catalog.md) | U27 |
 | specs/codex-model-catalog.md | [operations/codex-model-settings.md](../operations/codex-model-settings.md) | U27 |
 | specs/codex-model-catalog.md | [evidence/codex/model-catalog.md](../evidence/codex/model-catalog.md) | U27 |
+| specs/agent-sdk-events.md | [reference/engines/claude-events.md](../reference/engines/claude-events.md) | U28 |
 | ../../wrapper/codex/README.md (implementation) | [reference/engines/codex-app-server.md](../reference/engines/codex-app-server.md) | U24 |
 | ../../wrapper/codex/README.md (implementation) | [reference/engines/codex-app-server-session.md](../reference/engines/codex-app-server-session.md) | U24 |
 | ../../wrapper/codex/README.md (implementation) | [reference/engines/codex-app-server-events.md](../reference/engines/codex-app-server-events.md) | U24 |

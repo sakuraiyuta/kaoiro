@@ -1555,7 +1555,7 @@ export class AgentHost implements EngineAdapter {
    *  (an effort_levels entry); symmetric with setModel, the SDK is the
    *  validator. The persisted Settings.effortLevel type stops at "xhigh", but
    *  the runtime accepts the full domain including "max" (#54 実機検証;
-   *  agent-sdk-events.md model/effort 検証メモ), so the cast widens it
+   *  docs/reference/engines/claude-events.md model/effort 検証メモ), so the cast widens it
    *  deliberately. Next-message granularity. */
   async setEffort(level: string): Promise<void> {
     const current = this.#query;

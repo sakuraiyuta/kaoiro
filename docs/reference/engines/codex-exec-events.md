@@ -2,7 +2,7 @@
 title: Codex exec event reference
 status: accepted
 last_updated: 2026-09-18
-related: [protocol, plugin-model, system-overview, agent-sdk-events]
+related: [protocol, plugin-model, system-overview, claude-events]
 ---
 <!-- markdownlint-disable MD033 -->
 
@@ -25,7 +25,7 @@ SDK used by the Codex adapter (currently `@openai/codex-sdk` 0.153.4 in
 [`pnpm-lock.yaml`](../../../pnpm-lock.yaml))
 ([plugin-model](../../specs/plugin-model.md)), and defines its derivation to kaoiro state
 ([protocol](../../specs/protocol.md)). This specification is paired with the Claude version
-in [agent-sdk-events](../../specs/agent-sdk-events.md) and is converted to the common
+in [agent-sdk-events](claude-events.md) and is converted to the common
 `AdapterEvent`.
 
 **Status: accepted** — In addition to validation of type definitions, SDK
@@ -302,7 +302,7 @@ engines ([ADR-0032](../../adr/0032-codex-adapter.md) F3).
 ## See Also
 
 - Related specs: [protocol](../../specs/protocol.md), [plugin-model](../../specs/plugin-model.md),
-  [architecture](../../architecture/system-overview.md), [agent-sdk-events](../../specs/agent-sdk-events.md)
+  [architecture](../../architecture/system-overview.md), [agent-sdk-events](claude-events.md)
   (paired with Claude version)
 - ADR: [ADR-0032](../../adr/0032-codex-adapter.md) (introducing Codex adapter),
   [ADR-0033](../../adr/0033-permission-model-dual-axis.md) (two permission axes)

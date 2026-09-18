@@ -43,7 +43,7 @@ export type {
   TasklistOmitted,
 } from "@kaoiro/protocol";
 
-/** SDKResultMessage.subtype (agent-sdk-events.md). */
+/** SDKResultMessage.subtype (docs/reference/engines/claude-events.md). */
 export type ResultSubtype =
   | "success"
   | "error_max_turns"
