@@ -9,11 +9,61 @@ description: The current agy stream-json to AdapterEvent, state, session, watchd
 
 ## Process contract
 
+The observed command shape was:
+
+```text
+agy --print "<turn text>" \
+    --output-format stream-json \
+    --print-timeout <duration> \
+    [--conversation <conversation_id>] \
+    [--model <slug>] [--effort low|medium|high] \
+    --add-dir <agent cwd> --add-dir <per-agent customization dir> \
+    [--dangerously-skip-permissions] --disable-slash-commands \
+    </dev/null
+```
+
 For each turn the host runs `agy` with `--print`, `--output-format
 stream-json`, `--print-timeout 24h`, `--disable-slash-commands`, both
 `--add-dir` paths, and (after the first turn) `--conversation <id>`. A selected
 model or effort is passed as `--model` or `--effort`; the permission broker may
 add `--dangerously-skip-permissions`. The host closes stdin after spawn.
+
+The measured process model was one `agy` child per turn. The first turn
+created a conversation and its id arrived in `init`; later turns passed it by
+`--conversation`. Node `child_process.spawn` with piped stdio and `setsid`
+without a controlling TTY both worked. Leaving stdin open ended after roughly
+three seconds with `result.status = "ERROR"`, `error: "timeout waiting for
+response"`, and no assistant output, although the conversation persisted.
+
+The resident alternative,
+`agy --print='' --input-format stream-json --output-format stream-json`, was
+measured but not adopted. It accepted one stdin line per turn in this form:
+
+```json
+{"event":"user","message":{"content":"<text>"}}
+```
+
+Only `user` was recognized; another event value yielded
+`warning: ignoring unsupported stream input message event "…"` on stderr.
+It provided no in-band interrupt, permission, or model-switch channel and
+each turn emitted its own `result`.
+
+`--disable-slash-commands` is passed for every instruction turn because print
+mode otherwise expands prompt slash commands and skills. The registration
+probe `-p /hooks` runs without it. `--print-timeout` accepts Go durations;
+`24h` was accepted. `--mode accept-edits|plan` was accepted but did not change
+`init.permission_mode`; its runtime effect was not established. `--sandbox`
+was also accepted but did not demonstrate enforcement.
+
+Interrupt terminates the child with `SIGTERM`; the conversation remained
+resumable by id after observed ERROR-terminated turns. The exact mid-stream
+signal output remains unmeasured, so an exit without `result` is an error.
+An ordinary interrupt aborts only the active turn and preserves queued turns:
+the drain loop runs each later turn under the new lifecycle generation with its
+own delivery token. This is distinct from close or fail-stop, which retire
+unstarted delivery batches with `reason: "interrupted"`. Antigravity rejects
+attachments at `send()`, so its host queue never holds a temporary attachment
+turn to discard.
 
 The adapter parses one JSON object per stdout line. Malformed JSON, a
 non-object, or an unknown `event` is ignored; a terminal child exit without a
@@ -22,6 +72,51 @@ turn. The observed vendor shapes and their measurement limits are retained in
 [the CLI contract evidence](../../evidence/antigravity/cli-contract.md).
 
 ## stream-json mapping
+
+The following are the measured 1.1.26 shapes, one object per line:
+
+```jsonc
+{"event":"init","conversation_id":"<uuid>",
+ "init":{"cwd":"/abs/path","permission_mode":"request-review",
+         "tools":["ask_permission","ask_question","call_mcp_tool","run_command", "..."],
+         "model":"gemini-3.6-flash-low",   // present only when --model was given
+         "agent":"kaoiro"}}                // present only when --agent was given
+
+{"event":"step_update","step_update":{
+  "conversation_id":"<uuid>","step_index":1,
+  "state":"ACTIVE|DONE|ERROR",
+  "step_type":"user_input|agent_response|tool|system_message",
+  "text_delta":"PONG",                       // agent_response only (may be absent)
+  "tool_name":"run_command",                 // tool only
+  "tool_info":{"name":"run_command","parameters":{"CommandLine":"ls -1"},
+               "output":"a.txt\r\n",         // DONE, some tools
+               "error":{"type":"TOOL_ERROR","message":"…"}},   // ERROR
+  "duration_seconds":4.8,
+  "usage":{"input_tokens":5718,"output_tokens":34,"thinking_tokens":32,
+           "cache_read_tokens":8130,"total_tokens":5752}}}     // DONE agent_response
+
+{"event":"result","result":{
+  "conversation_id":"<uuid>","status":"SUCCESS|ERROR|CANCELED",
+  "response":"PONG\n","error":"…",           // error present on ERROR
+  "duration_seconds":4.9,"num_turns":1,
+  "usage":{…},
+  "denied_actions":[{"action":"command","display_name":"RunCommand"}]}}  // optional
+```
+
+`permission_mode` was observed as `request-review` by default and
+`always-proceed` when `settings.json` set `toolPermission` accordingly.
+`init.tools` had 57 names in 1.1.26 and was not permission-filtered.
+`agent_response` streamed `text_delta` while `ACTIVE` and closed with `DONE`
+plus usage; a thinking-only step could be `DONE` with `thinking_tokens > 0`
+and no text delta. Tool steps were `ACTIVE` then `DONE` or `ERROR`;
+`tool_info.parameters` held raw arguments such as `CommandLine`,
+`AbsolutePath`, `DirectoryPath`, and `Query`. `output` was observed on DONE
+for `run_command`, `grep_search`, `find_by_name`, and the `view_file` summary,
+but is not guaranteed for every tool. ERROR carried `tool_info.error.message`.
+`system_message` appeared on resumed conversations. `CANCELED` with
+`denied_actions` after a permission auto-denial is a normal terminal turn.
+Non-ASCII text pass-through came from an unverified changelog claim. Measured
+baseline input usage was about 5.7k tokens for the system prompt.
 
 | CLI observation | AdapterEvent and state meaning |
 | --- | --- |
@@ -69,6 +164,44 @@ catalog.
 The adapter projects usage from `agent_response` and terminal `result` data
 where present. It does not advertise `supports_context_usage`, because there
 is no per-model context-window contract.
+
+The 2026-09-04 evening `agy models` capture had 14 lines in
+`<slug><TAB><display name>` form, for example
+`gemini-3.8-flash-high<TAB>Gemini 3.8 Flash (High)`, and rejected
+`--output-format` for this subcommand. An earlier capture returned bare slugs
+without the 3.8 family. `--model` must receive a slug rather than the display
+name; the latter failed with exit 1 in a reviewer measurement. `--model`
+echoed to `init.model`; `--effort low|medium|high` was accepted, though its
+effect was not separately observable because Gemini slugs encode tier.
+
+The CLI slash-command observation was:
+
+```text
+agy -p /usage --output-format json
+```
+
+It returned `command.data.groups[].buckets[]` with `window: "weekly"`,
+`remaining_fraction`, and `reset_time`, in two groups named `Gemini Models`
+and `Claude and GPT models`. `-p /model` returned the current model and
+effort; `-p /permissions`, `-p /hooks`, and `-p /help` were also observed
+without a model turn or quota spend. Context-window size itself is not exposed;
+the last `agent_response.usage.input_tokens` is only an approximation.
+
+## Conversation storage and host prerequisites
+
+`--continue` resumes the most recent conversation and is not used because it
+is ambiguous across agents on one host. The measured conversation store was
+`~/.gemini/antigravity-cli/conversations/<id>.db` plus
+`conversation_summaries.db`; its schema was not established. A simultaneous
+open in two processes had only a CLI banner warning, while the wrapper itself
+serializes turns.
+
+Personal OAuth was stored below `~/.gemini/` with
+`selectedAuthType: "oauth-personal"`. The child inherits HOME and its
+environment, so kaoiro does not handle those credentials. `GEMINI_API_KEY` as
+an alternative is vendor documentation, not a measurement. `agy` must be on
+PATH. The runner probes `agy models` at registration; the wrapper should
+re-measure vendor behaviour after a binary version change.
 
 ## Rate-limit projection
 

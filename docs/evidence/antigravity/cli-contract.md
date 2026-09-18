@@ -54,6 +54,59 @@ vendor binary behaves identically. The current wrapper contract is in
   child and its print timeout ended the turn. The wrapper consequently keeps
   both inactivity and absolute tool deadlines.
 
+## Raw shapes and negative controls
+
+The resident-mode input was one line per turn:
+
+```json
+{"event":"user","message":{"content":"<text>"}}
+```
+
+An unsupported event value emitted
+`warning: ignoring unsupported stream input message event "…"` to stderr.
+This evidence is why the resident process was not selected as a control plane.
+
+For the headless MCP negative control, a stdio server was registered with
+`agy mcp add` globally at `~/.gemini/config/mcp_config.json`, through a plugin
+under `--add-dir`, and through a custom agent with `inheritMcp: true`. In every
+case the server startup marker was absent. The CLI log contained:
+
+```text
+declarative_config_loader.go: skipping component during resolution:
+empty component: prompt section "mcp_servers"
+```
+
+`call_mcp_tool` remained listed in `init.tools`, but the model reported no MCP
+tools. This is the negative control behind the CLI bridge design; it is not a
+claim that every future `agy` version lacks MCP.
+
+The observed hook input included:
+
+```jsonc
+{"conversationId":"<uuid>","workspacePaths":["…"],
+ "transcriptPath":"~/.gemini/antigravity-cli/brain/<uuid>/.system_generated/logs/transcript_full.jsonl",
+ "artifactDirectoryPath":"~/.gemini/antigravity-cli/brain/<uuid>",
+ "modelName":"gemini-3.8-flash-high","stepIdx":2}
+```
+
+The `transcriptPath` value above is the observed path pattern. It is not a
+validated transcript schema. The measured conversation database paths were
+`~/.gemini/antigravity-cli/conversations/<id>.db` and
+`conversation_summaries.db`; their schema was also unmeasured.
+
+The quota-free slash-command capture was:
+
+```text
+agy -p /usage --output-format json
+```
+
+Its response had `command.data.groups[].buckets[]` values with `window:
+"weekly"`, `remaining_fraction`, and `reset_time`, in groups named `Gemini
+Models` and `Claude and GPT models`. `-p /model`, `-p /permissions`,
+`-p /hooks`, and `-p /help` were also observed without a model turn or quota
+spend. This was a dated CLI observation, not the source of the wrapper's 429
+projection.
+
 ## Explicitly unmeasured or non-guaranteed
 
 - The actual `stream-json` terminal `result.error` containing both a 429

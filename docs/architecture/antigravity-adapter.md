@@ -44,6 +44,43 @@ The host also refreshes the model catalog with `agy models`. A failed probe
 does not replace the static catalog snapshot. Display-name synchronization is
 state-only; it does not rewrite the persona text until the next turn rewrite.
 
+## Customization discovery and persona injection
+
+The following behaviour was measured for a directory passed by `--add-dir`
+without adding it to `settings.json.trustedWorkspaces`:
+
+- `<dir>/.agents/rules/AGENTS.md` was always-on and was the persona injection
+  point. A rule requiring replies to begin `BANANA-OK` was obeyed in every
+  probe. This is the engine equivalent of `systemPrompt.append` or developer
+  instructions.
+- `<dir>/.agents/hooks.json` supplied PreToolUse hooks. The same file below
+  the process cwd did not fire in two probes (untrusted and trusted +
+  `git init`), so the adapter relies on `--add-dir` rather than the cwd.
+- `<dir>/.agents/skills/<name>/SKILL.md` has the documented
+  progressive-disclosure format; its loading from `--add-dir` was not
+  established.
+- `<dir>/.agents/agents/<name>/agent.md` with `--agent <name>` is a markdown
+  custom agent with YAML frontmatter and an H1 system prompt. It took effect
+  in a measurement (`init.agent = "kaoiro"`), though replacement of default
+  scaffolding was not established.
+- In print mode the process cwd alone was not a workspace root: without
+  `--add-dir`, `pwd` ran in `~/.gemini/antigravity-cli/scratch` and a cwd hook
+  did not fire. The customization directory alone became the only root. With
+  both the real cwd and customization directory, in either order,
+  `hook.workspacePaths` listed both and `run_command` used the real cwd. The
+  adapter therefore passes both, names the working directory in its rules, and
+  rejects a gate `Cwd` outside it.
+- Environment variables from `agy` reached the hook and `run_command`, which
+  lets the bridge pass its socket path and nonce. `.agents/mcp_config.json`,
+  plugin MCP config, `.agents/permissions.json`, and `.agents/settings.json`
+  were not loaded in headless mode.
+
+The host creates `<dir>/.agents/rules/AGENTS.md` lazily before the first turn
+from the server-provided persona prompt (personality plus footer) and its
+working-directory/bridge preamble. It rewrites that file before each turn;
+`display_name_sync` changes displayed state only and never rewrites persona
+text. Persona packs remain engine-independent.
+
 ## Bridge and permission boundary
 
 Headless `agy` does not provide kaoiro's MCP integration. The adapter instead
@@ -82,6 +119,15 @@ sandbox. The adapter can advertise runtime permission switching only after a
 successful permission-sync negotiation and only when all three launch ceilings
 were supplied by the runner. These are current implementation constraints,
 not claims about all `agy` versions.
+
+Headless MCP was investigated and not adopted. A stdio server registered via
+`agy mcp add` globally, through a plugin below `--add-dir`, or by a custom
+agent with `inheritMcp: true` never started (its startup marker was absent).
+The CLI log repeatedly said `declarative_config_loader.go: skipping component
+during resolution: empty component: prompt section "mcp_servers"`.
+`call_mcp_tool` still appeared in `init.tools`, but the model had no MCP tools.
+The bridge therefore remains the adapter's tool surface. This is an observed
+version-specific limitation, not an assertion about a future `agy` release.
 
 ## Related pages
 
