@@ -73,8 +73,8 @@ agy --print "<turn text>" \
 - **`--disable-slash-commands`** *(flag present in 1.1.26)*: print mode
   otherwise expands slash commands and skills found in the prompt text, so an
   operator instruction starting with `/` would enter the CLI control plane.
-  Every instruction turn passes the flag; the wrapper's own quota-free
-  probes (`-p /usage`, `-p /hooks`) run without it.
+  Every instruction turn passes the flag; the wrapper's registration probe
+  (`-p /hooks`) runs without it.
 - **Interrupt** = terminate the child (SIGTERM). The conversation remains
   resumable by id afterwards *(measured after ERROR-terminated turns)*. What
   the child prints on receiving a signal mid-stream is *(unverified)*; the
@@ -374,11 +374,12 @@ node <pkg>/dist/bridge.js list                              # prints the tool li
 
 ### System-prompt equivalent (persona personality injection)
 
-`<dir>/.agents/rules/AGENTS.md` is written by the wrapper at startup from
+`<dir>/.agents/rules/AGENTS.md` is created lazily before the first turn from
 the server-pushed persona prompt (personality + footer, ADR-0029 F9) plus
 the kaoiro operating preamble (working directory, bridge usage). It is
-regenerated on every startup and on `display_name_sync`, and read by every
-per-turn spawn. Persona packs stay engine-independent (ADR-0032 F3).
+rewritten before every turn and read by that turn's spawn. `display_name_sync`
+updates the displayed name only; it does not rewrite the persona prompt.
+Persona packs stay engine-independent (ADR-0032 F3).
 
 ### Session / conversation resume and enumeration
 
@@ -414,6 +415,14 @@ per-turn spawn. Persona packs stay engine-independent (ADR-0032 F3).
   `remaining_fraction`, `reset_time` (two groups: "Gemini Models" and
   "Claude and GPT models"); `-p /model` → current model/effort;
   `-p /permissions`, `-p /hooks`, `-p /help`.
+- **Wrapper quota projection:** a terminal `result.error` that contains a
+  `RESOURCE_EXHAUSTED` / HTTP 429 marker and a compact `Resets in <NhNmNs>`
+  duration is fail-soft mapped to `peer_error.code = "rate_limit"` and
+  `rate_limits.seven_day = {status: "blocked", utilization: 1, resets_at}`.
+  The parser accepts only the observed compact duration grammar; an
+  unrecognised terminal error remains the ordinary API error. The actual CLI
+  `result.error` terminal shape has not yet been measured; this mapping is
+  inferred from the internal-log string shape.
 - Context window sizes are not exposed; `usage.input_tokens` of the last
   `agent_response` step approximates context in use.
 
@@ -442,6 +451,11 @@ per-turn spawn. Persona packs stay engine-independent (ADR-0032 F3).
 - The sandbox axis is advisory for this engine (`--sandbox` measured
   ineffective; enforcement is the wrapper's argument inspection only).
   The envelope must say so (ADR-0057 F4).
+- When permission-sync negotiation succeeds and the runner supplies all three
+  launch ceilings, the wrapper advertises `supports_permission_switch` with
+  sandbox, network-access, and approval maxima. It applies an accepted
+  `set_permission` at the next turn boundary and rejects an over-ceiling value
+  again in the wrapper; this does not make sandbox enforcement non-advisory.
 
 ## See Also
 
