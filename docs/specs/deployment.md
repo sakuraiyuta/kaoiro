@@ -309,12 +309,9 @@ github:octocat:viewer
 nextcloud:alice:operator
 ```
 
-For compose, put the file in `server/` and add one read-only mount under
-`volumes:` in `docker-compose.yaml`:
-
-```yaml
-      - ./oauth-allowlist.txt:/etc/kaoiro/oauth-allowlist.txt:ro
-```
+For compose, put the file in `server/`. The bundled `docker-compose.yaml`
+already mounts it read-only (`server/docker-compose.yaml:112`); no compose
+edit is needed, only creating the plain file at that path.
 
 **Verify**:
 
@@ -324,11 +321,13 @@ curl http://<PHX_HOST>:<PORT>/session/auth-methods
 ```
 
 The login screen lists buttons for enabled providers; accounts outside the
-allowlist are rejected with `auth_error=not_allowed`. Removing a line applies on
-the next connection / refresh (up to 12h). **A known gap (issue #148) means an
-operator→viewer demotion does not reach an active socket.** Rejection WARN logs
-include `provider:uid`, so the identifier to copy into the allowlist can be read
-from the log.
+allowlist are rejected with `auth_error=not_allowed`. Removing a line applies
+immediately on an active socket too: issue #158 closed the earlier gap by
+re-resolving the role from the credential on every HTTP request
+(`RequireOperatorPlug`) and every operator WS action
+(`AgentsChannel.require_operator_role/1`), rather than caching it at connect
+time. Rejection WARN logs include `provider:uid`, so the identifier to copy
+into the allowlist can be read from the log.
 
 ## 2. Deploy runners (multiple hosts)
 
@@ -368,7 +367,7 @@ one host with the other.
   "host_id": "lab-pc-1",
   "server_url": "wss://kaoiro.example.com/runner",
   "cwd_allowlist": ["/home/agent/repos"],
-  "capabilities": ["claude-code", "codex"]
+  "capabilities": ["claude-code", "codex", "antigravity"]
 }
 ```
 
@@ -1167,9 +1166,10 @@ The default `<install-root>` is Linux `${XDG_DATA_HOME:-~/.local/share}/kaoiro`
 and macOS `~/Library/Application Support/kaoiro`. Override with
 `KAOIRO_RUNNER_INSTALL_DIR` or each script's `--install-dir`.
 
-**Estimate disk space.** An expanded release is **about 1.2 GB each** (measured
-linux-x64 on 2026-08-16); the engine CLI itself is about 920 MB. The default
-retention is three generations (`--keep`), using 3–4 GB in steady state.
+**Estimate disk space.** An expanded release is **about 1 GB each** (measured
+993 MB linux-x64 on 2026-09-18); the engine CLI itself is about 920 MB. The
+default retention is three generations (`--keep`), using about 3 GB in
+steady state.
 
 `.lock.*` (exclusive locks) and `.staging.*` (expansion/build work areas) are
 created directly under the install root. Staging from a run that missed its EXIT
@@ -1408,3 +1408,5 @@ identifies the known deployment state.
 - [runner/README.md](../../runner/README.md) — full service and tarball-distribution guide
 - [server/README.md](../../server/README.md) — local development and Docker basics
 - [threat-model](threat-model.md) — risk assessment for dev fallback / unset tokens
+- [docs/operations/production.md](../operations/production.md) — Codex
+  `codex.backend` selection and its rollback procedure, not covered here
