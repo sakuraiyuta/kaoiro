@@ -9,6 +9,7 @@
 //
 // Usage: node dist/cli.js [configPath] [prompt] [--resume <session_id>]
 
+import { CodexHistoryReplay } from "./app_server_replay.js";
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,7 +19,6 @@ import type {
   WrapperPermissionLifecycleMessage,
 } from "@kaoiro/protocol";
 import {
-  HistoryReplayer,
   createDeliveryAcknowledgementRuntime,
   IaSidecar,
   InterAgentTool,
@@ -436,7 +436,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   };
   const onLog = (envelope: Envelope): void => {
     printLog(envelope);
-    link?.send(envelope);
+    replayer.sendLiveLog(envelope);
   };
   // Tasklist snapshots, like child task envelopes, are dashboard-only relay
   // data rather than this agent's console transcript.
@@ -532,7 +532,10 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
 
   // Constructed before the link: the join reply can arrive before `host`
   // exists, so the verdict has to be held until markReady() (ADR-0051 D2).
-  const replayer = new HistoryReplayer({
+  const replayer = new CodexHistoryReplay({
+    backend: () => host?.historyBackend ?? "exec",
+    schedule: job => host.scheduleHistoryReplay(job),
+    captureFence: () => link?.captureHistoryReplayFence?.() ?? (() => false),
     seedState: () =>
       link?.send(
         makeStateChange(
@@ -954,6 +957,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     disconnectReason = "crash";
     throw error;
   } finally {
+    replayer.close();
     interAgentTurns.freezeForWatchdogFailStop(undefined, (envelopes) => link?.retireInterAgentDeliveries?.(envelopes));
     try {
       await link?.flushInterAgentRetirements?.();

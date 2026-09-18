@@ -1079,3 +1079,45 @@ queue assertions distinguish ordered starts, maximum one active operation, and
 success of every input (concurrency guards may reject inputs instead of allowing
 parallel execution). Full IA/watchdog composition, history replay and launch
 selection remain later increments; ADR status is unchanged.
+
+
+### Increment (5d): internal Host history replay
+
+The asynchronous reader now feeds the unchanged synchronous `HistoryReplayer`
+through a Codex-only coordinator. The CLI selects this path from the constructed
+Host's internal backend, retaining exec rollout replay and exposing no new
+launch selection. Host coalesces pending hydration into one job and runs it
+between settled/cleaned-up turns, before the next queued turn. Resume opens the
+single session for reading when needed. Fresh, unassigned sessions replay an
+empty window without allocating a thread.
+
+`full` and `tail` retain their internal coverage and both publish reset, ordered
+log entries, existing sidecar IA replay, and complete. Complete means restoration
+of the retained display window, consistent with the shared 200-row cap and
+server projection contract; it does not claim archival completeness. Incomplete
+history produces one closed-reason operational diagnostic and no replay cycle.
+Admission remains open. A new modern replay id permits one retry; duplicate ids
+and legacy reconnects do not. Legacy resume retains its initial attempt only.
+Child failure still follows the existing connection-failure path.
+
+The shared transport adds only a read-only join-generation fence. A completed
+read must still match a connected, joined generation before publication, so an
+old reset cannot be buffered and flushed into a replacement join. Other engines'
+send behavior and the wire remain unchanged. During read through publication,
+Codex retains up to `MAX_HISTORY` incoming user logs, without stopping console
+output or Host.send. These rows follow replay completion, or incomplete
+diagnosis without reset, and transfer to a superseding hydration job. Previously
+logged but unexecuted instructions outside this window remain a known limitation
+of transcript-only rebuilding; this increment does not redesign the input queue.
+
+Evidence uses the production-default Host/session and fixed CLI through the real
+CLI composition and ServerLink, with a local Responses provider and test-only
+Phoenix-wire peer. It observes persisted resume, ordered full display, 200-row
+tail, active-turn reconnect, and next-turn ordering. A separately delayed read
+segment pins printing/admission versus deferred user-log relay. Deterministic
+fixtures cover incomplete/retry, stale socket results, duplicate verdicts,
+legacy behavior, bounded buffering, fresh empty replay, and read/close exclusion.
+No actual Phoenix server, external account/model, or new protocol behavior is
+claimed. The existing analytics/plugins-off startup caveats apply. Full IA and
+watchdog supervision and normal launch parity remain later units; ADR status
+is unchanged.

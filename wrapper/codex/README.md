@@ -32,7 +32,7 @@ and `experimentalApi` false. Unexpected server requests receive an explicit
 JSON-RPC rejection and an optional diagnostic without their payload. The
 `stderrTail` accessor retains up to 16,384 characters for diagnostics; callers
 must redact it before logging. There is no steer or external-message submission
-API. Full IA composition and wiring history into `HistoryReplayer` remain later stages.
+API. Full IA composition remains a later stage.
 
 `AppServerSession` composes the transport with the existing `ToolHost` and
 `dist/bridge.js`. It binds one thread per lifetime, using either start or
@@ -165,8 +165,8 @@ Close/EOF rejects outstanding requests. Normal RPC deadlines still apply.
 The default-session CLI tests verify persisted resume, two final answers, MCP
 output, IA exclusion, and the 200-row tail with a local provider. Legacy/full
 views, malformed responses, cursor failures, and race conditions use schema
-fixtures. The existing synchronous `HistoryReplayer` is not yet connected to
-the asynchronous reader, including in the internal app-server Host backend.
+fixtures. The internal app-server Host prepares successful snapshots before
+passing them to the existing synchronous `HistoryReplayer`.
 
 The internal session accepts per-turn model, effort, cwd, and sandbox/network
 settings. Approval remains `never` with reviewer `user`. A synchronous
@@ -281,4 +281,39 @@ and operator effort priority, image bytes/cleanup, failed-switch rollback, and
 real MCP handler abortion followed by another turn. Deterministic child fixtures
 cover exact queue order/maximum active/all-input-success separately, cancellation,
 callback exceptions, idle/active EOF, and reserved-reset rejection. This does not
-claim full IA coordinator/watchdog composition, history replay, or launch parity.
+claim full IA coordinator/watchdog composition or launch parity.
+
+
+The CLI reads the constructed Host's internal backend; no config, environment,
+flag, or runner option selects app-server. Exec retains its synchronous rollout
+reader. App-server hydration occupies one replaceable Host job, after current
+turn settlement and image cleanup but before the next queued turn. Resume can
+read before its first turn; a fresh Host with no session id replays an empty
+window without opening a thread. History does not require turn permission.
+
+`full` and `tail` both publish the existing reset/log/IA/complete cycle. Complete
+means restoration of the retained display window, not retrieval of the entire
+transcript. `incomplete` emits one `history_unavailable` diagnostic without any
+reset, entries, IA replay, or completion; turn admission stays open. A new modern
+hydration `replay_id` retries once, while duplicate verdicts do not. Legacy
+servers retain the single resume-startup attempt, including after incomplete
+history. Child failure remains a connection failure and closes admission.
+
+`ServerLink.captureHistoryReplayFence()` is read-only. The asynchronous result
+must still belong to the joined, connected socket generation before publication;
+obsolete results never enter Phoenix's disconnected push buffer. User logs
+received during the read-to-publication window are retained separately, capped
+by `MAX_HISTORY`, then sent after completion (or after incomplete diagnosis
+without a reset). Console output and Host instruction admission continue. A
+superseded read passes these rows to the replacement job. Instructions logged
+before this window but not yet executed are not in the transcript and are not
+restored by this buffer; solving that wider queued-instruction case is deferred.
+
+The CLI history integration uses the pinned binary, default Host runtime/session,
+real ServerLink, and a loopback Phoenix-wire fixture (not the actual server).
+It checks persisted resume order, a 200-row tail, active-turn rejoin, and replay
+before queued work. Only its final user-arrival timing segment delays a real
+history read. Incomplete responses, exact duplicate/stale verdict ordering,
+legacy compatibility, close/EOF, and buffer limits use deterministic fixtures.
+Replay does not manufacture result, delivery acknowledgement, compaction, or
+turn lifecycle events. Protocol and other engines' replay APIs are unchanged.

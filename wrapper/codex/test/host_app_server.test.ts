@@ -16,7 +16,8 @@ function fixture(overrides: Partial<CodexHostOptions> = {}, launch = config) {
   const child = new EventEmitter() as ChildProcessWithoutNullStreams;
   const stdout = new PassThrough(), stderr = new PassThrough(), sent: RpcObject[] = [];
   let number = 0, active = 0, maxActive = 0;
-  let holdConfig: Promise<void> | null = null;
+  let holdConfig: Promise<void> | null = null, holdHistory: Promise<void> | null = null;
+  let invalidHistory = false;
   let interrupted = true, autocomplete = false;
   const send = (value: unknown) => stdout.write(JSON.stringify(value) + "\n");
   const reply = (request: RpcObject, result: unknown) => send({ id: request.id, result });
@@ -29,6 +30,9 @@ function fixture(overrides: Partial<CodexHostOptions> = {}, launch = config) {
     if (request.method === "thread/start" || request.method === "thread/resume") reply(request, { thread: { id: "thread" }, model: "gpt-5.6-sol", reasoningEffort: "medium" });
     if (request.method === "account/rateLimits/read") send({ id: request.id, error: { code: -32600, message: "no account" } });
     if (request.method === "config/read") void (holdConfig ?? Promise.resolve()).then(() => reply(request, { config: { model_reasoning_effort: "low" } }));
+    if (request.method === "thread/read") void (holdHistory ?? Promise.resolve()).then(() => reply(request, invalidHistory ? {} : {
+      thread: { id: "thread", turns: [{ id: "past", items: [{ id: "answer", type: "agentMessage", text: "PAST" }] }] },
+    }));
     if (request.method === "turn/start") {
       number += 1;active += 1;maxActive = Math.max(active, maxActive);
       reply(request, { turn: { id: `turn-${number}` } });
@@ -54,6 +58,7 @@ function fixture(overrides: Partial<CodexHostOptions> = {}, launch = config) {
   const turns = () => sent.filter(r => r.method === "turn/start");
   const until = (count: number) => vi.waitFor(() => expect(turns()).toHaveLength(count));
   return { host, sent, states, logs, tasks, starts, ends, finals, boundaries, createSession, send, terminal, exit, running, turns, until,
+    set holdHistory(value: Promise<void>) { holdHistory = value; }, set invalidHistory(value: boolean) { invalidHistory = value; },
     get maxActive() { return maxActive; }, set autocomplete(value: boolean) { autocomplete = value; }, set holdConfig(value: Promise<void>) { holdConfig = value; }, set interrupted(value: boolean) { interrupted = value; } };
 }
 
@@ -234,4 +239,58 @@ it("keeps watchdog fail-stop closed without a late active result or settlement",
   expect(f.ends.mock.calls[0]?.[0]).toMatchObject({ cancellation: { kind: "watchdog_fail_stop", started: false } });
   expect(f.finals.mock.calls.map(([x]) => x.turnToken).sort()).toEqual(["A", "B"]);
   expect(f.states.at(-1)?.state).toBe("error");
+});
+
+
+it("reads resume history before any turn, using one session without lifecycle callbacks", async () => {
+  const f = fixture({ resumeSessionId: "thread" }), snapshots: unknown[] = [];
+  f.host.scheduleHistoryReplay(async read => { snapshots.push(await read()); });
+  await vi.waitFor(() => expect(snapshots).toHaveLength(1));
+  expect(snapshots[0]).toMatchObject({ coverage: "full", logs: [{ payload: { text: "PAST" } }] });
+  expect(f.sent.filter(r => r.method === "thread/resume")).toHaveLength(1);expect(f.turns()).toHaveLength(0);
+  expect(f.starts).not.toHaveBeenCalled();expect(f.ends).not.toHaveBeenCalled();expect(f.finals).not.toHaveBeenCalled();
+  await f.host.send("next");await f.until(1);f.terminal();expect(f.createSession).toHaveBeenCalledTimes(1);
+});
+
+it("replays an empty fresh display without allocating a child or thread", async () => {
+  const f = fixture(), snapshots: unknown[] = [];
+  f.host.scheduleHistoryReplay(async read => { snapshots.push(await read()); });
+  await vi.waitFor(() => expect(snapshots).toEqual([{ coverage: "full", logs: [] }]));
+  expect(f.createSession).not.toHaveBeenCalled();expect(f.sent).toEqual([]);
+});
+
+it("coalesces pending history after settlement and holds the next turn through publication", async () => {
+  const f = fixture(), gate = deferred(), publication = deferred(), order: string[] = [];
+  await f.host.send("A");await f.until(1);await f.host.send("B");
+  f.host.scheduleHistoryReplay(async () => { order.push("obsolete"); });
+  f.holdHistory = gate.promise;
+  f.host.scheduleHistoryReplay(async read => {
+    order.push("read");expect(f.finals).toHaveBeenCalledTimes(1);
+    const snapshot = await read();expect(snapshot.coverage).toBe("full");
+    order.push("publish");await publication.promise;order.push("complete");
+  });
+  await new Promise(r => setTimeout(r, 10));expect(order).toEqual([]);
+  f.terminal();await vi.waitFor(() => expect(order).toEqual(["read"]));
+  expect(f.turns()).toHaveLength(1);gate.resolve();await vi.waitFor(() => expect(order).toEqual(["read", "publish"]));
+  expect(f.turns()).toHaveLength(1);publication.resolve();await f.until(2);
+  expect(order).toEqual(["read", "publish", "complete"]);expect(f.maxActive).toBe(1);f.terminal();
+  await vi.waitFor(() => expect(f.finals).toHaveBeenCalledTimes(2));expect(f.ends.mock.calls.every(([x]) => x.terminal === "turn.completed")).toBe(true);
+});
+
+it("keeps turn admission open after an incomplete resume history read", async () => {
+  const f = fixture({ resumeSessionId: "thread" });f.invalidHistory = true;let coverage: string | undefined;
+  f.host.scheduleHistoryReplay(async read => { coverage = (await read()).coverage; });
+  await vi.waitFor(() => expect(coverage).toBe("incomplete"));
+  await f.host.send("live");await f.until(1);f.terminal();await vi.waitFor(() => expect(f.finals).toHaveBeenCalledTimes(1));
+  expect(f.ends.mock.calls[0]?.[0].terminal).toBe("turn.completed");expect(f.createSession).toHaveBeenCalledTimes(1);
+});
+
+it.each(["close", "disconnect"])("releases a pending history read on %s without inventing a result", async mode => {
+  const f = fixture({ resumeSessionId: "thread" }), gate = deferred();f.holdHistory = gate.promise;
+  let published = false;
+  f.host.scheduleHistoryReplay(async read => { await read();published = true; });
+  await vi.waitFor(() => expect(f.sent.some(r => r.method === "thread/read")).toBe(true));
+  if (mode === "close") f.host.close();else f.exit();
+  await f.running;expect(published).toBe(false);expect(f.logs.filter(e => e.type === "result")).toHaveLength(0);
+  expect(f.starts).not.toHaveBeenCalled();expect(f.ends).not.toHaveBeenCalled();expect(f.finals).not.toHaveBeenCalled();
 });

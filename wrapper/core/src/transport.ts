@@ -1129,6 +1129,7 @@ export class ServerLink {
   /** Latest SDK session id reported by the host (ADR-0014 phase-0); stamped
    *  onto every outgoing envelope until a newer one replaces it. */
   #sessionId: string | null = null;
+  #historyJoinGeneration = 0;
   /** Kept because `send/1` needs it per push, unlike the inbound handlers
    *  which are bound once in the constructor. */
   readonly #onInterAgentAck: ServerLinkOptions["onInterAgentAck"];
@@ -1471,6 +1472,7 @@ export class ServerLink {
             build_channel: buildInfo.channel,
           });
         }
+        this.#historyJoinGeneration += 1;
         options.onHydration?.(hydrationVerdictFrom(reply));
         const delivery = isObject(reply) ? deliveryStatusFrom(reply.delivery) ?? null : null;
         options.onInterAgentDeliveryStatus?.(delivery);
@@ -1570,9 +1572,16 @@ export class ServerLink {
     this.#sessionId = sessionId;
   }
 
+  /** Async readers must not buffer an old replay into a replacement join. */
+  captureHistoryReplayFence(): () => boolean {
+    const generation = this.#historyJoinGeneration;
+    return () => generation > 0 && generation === this.#historyJoinGeneration
+      && this.#socket.isConnected() && this.#channel.state === "joined";
+  }
+
   /** The SDK session id currently stamped onto outgoing envelopes, or null
-   *  before the engine has reported one (ADR-0051 D2: a fresh session with
-   *  no id replays empty). */
+   * before the engine has reported one (ADR-0051 D2: a fresh session with
+   * no id replays empty). */
   currentSessionId(): string | null {
     return this.#sessionId;
   }

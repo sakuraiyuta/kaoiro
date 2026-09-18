@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import type { Duplex } from "node:stream";
 
 // Test-only Phoenix JSON wire peer. ServerLink and its WebSocket transport stay real.
-export async function phoenixLoopback() {
+export async function phoenixLoopback(joinReply: (joins: number) => Record<string, unknown> = () => ({ permission_sync: true })) {
   const server = createServer();
   const sockets = new Set<Duplex>();
   const received: Array<{ event: string; payload: Record<string, unknown> }> = [];
@@ -36,7 +36,7 @@ export async function phoenixLoopback() {
         const [joinRef, ref, topic, event, payload] = JSON.parse(body.toString()) as [string, string, string, string, Record<string, unknown>];
         received.push({ event, payload });
         if (event === "phx_join") { joins += 1;joined = { socket, ref: joinRef, topic }; }
-        frame(socket, [joinRef, ref, topic, "phx_reply", { status: "ok", response: event === "phx_join" ? { permission_sync: true } : {} }]);
+        frame(socket, [joinRef, ref, topic, "phx_reply", { status: "ok", response: event === "phx_join" ? joinReply(joins) : {} }]);
       }
     });
   });

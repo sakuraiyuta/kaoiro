@@ -27,6 +27,7 @@ function fixture(resume = false) {
   const initial = { model: "initial", effort: "high" };
   const session: AppServerHostSession = {
     initialSettings: initial,
+    readHistory: vi.fn(async () => ({ coverage: "full" as const, logs: [] })),
     startThread: vi.fn(async () => "thread"), resumeThread: vi.fn(async () => "thread"),
     interrupt: vi.fn(async () => true), close: vi.fn(async () => {}),
     startProjectedTurn: vi.fn(async request => {
@@ -315,4 +316,20 @@ it.each(["plain", "rpc"])("treats a non-admission %s hook rejection as a connect
   f.hooks.waitForPermissionSync = async () => { throw kind === "plain" ? new Error("gate failure") : new AppServerRpcError(1, "gate failure"); };
   await expect(f.runtime.run(input(), f.hooks)).rejects.toBeInstanceOf(AppServerConnectionError);
   expect(f.runtime.closed).toBe(true);expect(f.session.close).toHaveBeenCalledTimes(1);expect(f.sent).toHaveLength(0);
+});
+
+it("excludes turn dispatch and concurrent reads while history is pending, then releases admission", async () => {
+  const f = fixture(true), gate = deferred();
+  const config = { agent_id: "h", persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P", server_url: "ws://unused" };
+  vi.mocked(f.session.readHistory).mockImplementationOnce(async () => { await gate.promise;return { coverage: "full", logs: [] }; });
+  const read = f.runtime.readHistory(config, () => "T");
+  try {
+    await vi.waitFor(() => expect(f.session.readHistory).toHaveBeenCalledTimes(1));
+    await expect(f.runtime.run(input(), f.hooks)).rejects.toThrow("active");
+    await expect(f.runtime.readHistory(config, () => "T")).rejects.toThrow("active");
+    expect(f.sent).toHaveLength(0);
+  } finally { gate.resolve();await read; }
+  await expect(f.runtime.run(input(), f.hooks)).resolves.toMatchObject({ terminal: { status: "completed" } });
+  expect(f.createSession).toHaveBeenCalledTimes(1);expect(f.session.resumeThread).toHaveBeenCalledTimes(1);
+  await f.runtime.close();await expect(f.runtime.readHistory(config, () => "T")).rejects.toBeInstanceOf(AppServerConnectionError);
 });

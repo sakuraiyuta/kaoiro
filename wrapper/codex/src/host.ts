@@ -8,6 +8,7 @@
 // Approval is pinned to "never" (ADR-0033); waiting_permission represents
 // the dispatch gate, not an SDK approval callback.
 
+import type { AppServerHistoryJob } from "./app_server_replay.js";
 import { AppServerAdmissionError, AppServerHostRuntime, type AppServerHostRuntimeOptions } from "./app_server_host_runtime.js";
 import { AppServerConnectionError } from "./app_server_rpc.js";
 import { assessCodexPermission, type CodexPermissionAssessment } from "./app_server_permission.js";
@@ -582,6 +583,7 @@ export class CodexHost implements EngineAdapter {
   #appTurnToken: string | null = null;
   #appFirstDispatch = true;
   #appFailure: unknown = null;
+  #historyJob: AppServerHistoryJob | null = null;
   readonly #now: () => string;
   #machine: MachineState = initialMachineState();
   #sessionId: string | null = null;
@@ -1299,6 +1301,15 @@ export class CodexHost implements EngineAdapter {
     });
   }
 
+  get historyBackend(): "exec" | "app-server" { return this.#options.backend ?? "exec"; }
+
+  scheduleHistoryReplay(job: AppServerHistoryJob): void {
+    if (this.#closed) return;
+    if (this.historyBackend !== "app-server") throw new Error("App-server history requires the internal backend");
+    this.#historyJob = job;
+    this.#wake?.();
+  }
+
   async run(initialPrompt?: string): Promise<void> {
     // The CLI normally has already done this before its initial idle/sending
     // state. Keep the host self-sufficient for non-CLI callers; the per-
@@ -1384,6 +1395,15 @@ export class CodexHost implements EngineAdapter {
 
     try {
       while (!this.#closed) {
+        const history = this.#historyJob;this.#historyJob = null;
+        if (history !== null && this.#appRuntime !== null) {
+          try {
+            await history(() => this.#sessionId === null
+              ? Promise.resolve({ coverage: "full", logs: [] })
+              : this.#appRuntime!.readHistory(this.#config, this.#now));
+          } catch (error) { this.#stopAppServer(error); }
+          continue;
+        }
         const turn = this.#queue.shift();
         if (turn === undefined) {
           await new Promise<void>((resolve) => {

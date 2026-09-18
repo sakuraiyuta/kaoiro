@@ -14,6 +14,8 @@ type PushReceivers = Map<string, (payload: unknown) => void>;
 // raw `channel.on` added on top of an already-bound event (ふじ #218 レビュー
 // MF-4 — the structural meta-test below could not see it).
 const mock = vi.hoisted(() => ({
+  connected: true,
+  channelState: "joined",
   handlers: new Map<string, ((payload: unknown) => void)[]>(),
   lastPush: null as { event: string; payload: unknown; receivers: Map<string, (payload: unknown) => void> } | null,
   // Every push in order — `replay_ia` is chunked into several (M4), so a
@@ -29,6 +31,7 @@ const mock = vi.hoisted(() => ({
 
 vi.mock("phoenix", () => {
   class Channel {
+    get state() { return mock.channelState; }
     on(event: string, cb: (payload: unknown) => void): void {
       const bound = mock.handlers.get(event);
       if (bound === undefined) mock.handlers.set(event, [cb]);
@@ -68,6 +71,7 @@ vi.mock("phoenix", () => {
     leave(): void {}
   }
   class Socket {
+    isConnected(): boolean { return mock.connected; }
     connect(): void {}
     channel(_topic: string, params?: unknown): Channel {
       mock.lastChannelParams = params;
@@ -2435,4 +2439,18 @@ describe("ServerLink — server -> wrapper version check の構造 (issue #218)"
     }
     stderr.mockRestore();
   });
+});
+
+
+it("captures a read-only replay fence invalidated by disconnection, channel loss and replacement join", () => {
+  mock.connected = true;mock.channelState = "joined";mock.pushes = [];
+  const link = new ServerLink("ws://x/wrapper", "history.agent", { personaId: "p" });
+  const beforeJoin = link.captureHistoryReplayFence();expect(beforeJoin()).toBe(false);
+  mock.joinReceivers.get("ok")?.({});
+  const first = link.captureHistoryReplayFence(), pushes = [...mock.pushes];expect(first()).toBe(true);
+  mock.connected = false;expect(first()).toBe(false);
+  mock.connected = true;mock.channelState = "joining";expect(first()).toBe(false);
+  mock.channelState = "joined";mock.joinReceivers.get("ok")?.({});
+  expect(first()).toBe(false);expect(link.captureHistoryReplayFence()()).toBe(true);
+  expect(beforeJoin()).toBe(false);expect(mock.pushes).toEqual(pushes);
 });

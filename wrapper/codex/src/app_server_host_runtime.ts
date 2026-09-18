@@ -1,3 +1,5 @@
+import type { WrapperConfig } from "@kaoiro/agent-common";
+import type { AppServerHistory } from "./app_server_history.js";
 import { AppServerSession, type AppServerSessionOptions } from "./app_server_session.js";
 import { AppServerConnectionError, AppServerRpcError } from "./app_server_rpc.js";
 import {
@@ -14,7 +16,7 @@ import type { AppServerProjection } from "./app_server_projection.js";
 import type { AppServerDispatchIdentity, AppServerTurnIdentity, AppServerTurnInput } from "./app_server_transport.js";
 
 export type AppServerHostSession = Pick<AppServerSession,
-  "startThread" | "resumeThread" | "initialSettings" | "startProjectedTurn" | "interrupt" | "close">;
+  "readHistory" | "startThread" | "resumeThread" | "initialSettings" | "startProjectedTurn" | "interrupt" | "close">;
 export interface AppServerHostRuntimeOptions {
   session: AppServerSessionOptions;
   resumeThreadId?: string;
@@ -73,6 +75,7 @@ export class AppServerHostRuntime {
   #rollback = false;
   #active: Active | undefined;
   #closed = false;
+  #readingHistory = false;
   #closing: Promise<void> | undefined;
 
   constructor(options: AppServerHostRuntimeOptions) {
@@ -106,12 +109,20 @@ export class AppServerHostRuntime {
     return this.#opening;
   }
 
+  async readHistory(config: WrapperConfig, now: () => string): Promise<AppServerHistory> {
+    if (this.#closed) throw new AppServerConnectionError("App-server runtime closed");
+    if (this.#active || this.#readingHistory) throw new Error("App-server runtime already has an active operation");
+    this.#readingHistory = true;
+    try { await this.open();return await this.#session!.readHistory(config, now); }
+    finally { this.#readingHistory = false; }
+  }
+
   async run(
     input: Pick<AppServerTurnInput, "input" | "hostTurnToken" | "clientUserMessageId">,
     hooks: AppServerRuntimeHooks,
   ): Promise<AppServerRuntimeCompletion> {
     if (this.#closed) throw new AppServerConnectionError("App-server runtime closed");
-    if (this.#active) throw new Error("App-server runtime already has an active turn");
+    if (this.#active || this.#readingHistory) throw new Error("App-server runtime already has an active turn");
     const active: Active = { token: input.hostTurnToken, abort: new AbortController(), dispatched: false, interrupted: false };
     this.#active = active;
     const waitForAdmission = async () => {
