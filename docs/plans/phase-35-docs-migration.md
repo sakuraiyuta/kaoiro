@@ -45,7 +45,7 @@ implementation — the emphasis marks; all three are walked at every close.
 | U11 | IA messages / conversations / admission | impl | ✅ |
 | U12 | IA dispatch / delivery ledger | perm impl | ✅ |
 | U13 | coordination monitoring | perm impl | ✅ |
-| U14 | directory / companion tools / peer routing | impl | ⏳ |
+| U14 | directory / companion tools / peer routing | impl | In review |
 | U15 | per-engine IA tool authorization | perm impl | ⏳ |
 | U16 | peer errors / synthetic notices | perm impl | ⏳ |
 | U17 | session tools (compact / reset) | perm impl | ⏳ |
@@ -118,3 +118,7 @@ Writer rules: one writer per destination file; units that touch the same file
 | specs/protocol-inter-agent.md (Coalescing opening paragraph) | [architecture/inter-agent-messaging.md#dispatch-and-coalescing](../architecture/inter-agent-messaging.md#dispatch-and-coalescing) | U12; replaces v1 separate architecture/inter-agent-dispatch page |
 | specs/protocol-inter-agent.md (monitoring rationale; Stall interpretation; provisional defaults; deliberate omissions) | [architecture/coordination-monitoring.md](../architecture/coordination-monitoring.md) | U13 |
 | specs/protocol-inter-agent.md (Rally; Stall contract; Wire; Configuration; Observation path) | [reference/inter-agent/coordination-monitoring.md](../reference/inter-agent/coordination-monitoring.md) | U13 |
+
+| specs/protocol-inter-agent.md (Channel events; Peer-directory boundary; list_agents / whoami) | [reference/inter-agent/directory.md](../reference/inter-agent/directory.md) | U14 |
+| specs/protocol-inter-agent.md (send acceptance / rejection) | [reference/inter-agent/send-and-wait.md#send-acceptance-and-rejection](../reference/inter-agent/send-and-wait.md#send-acceptance-and-rejection) | U14 |
+| specs/protocol-inter-agent.md (Destination-resolution guidance) | [contributing/peer-routing.md](../contributing/peer-routing.md) | U14 |

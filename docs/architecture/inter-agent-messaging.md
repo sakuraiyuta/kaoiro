@@ -62,7 +62,8 @@ receiver, batching, and synchronous-wait contracts.
 - [Inter-agent message contract](../reference/inter-agent/messages.md).
 - [Inter-agent conversation contract](../reference/inter-agent/conversations.md).
 - [Inter-agent conversation admission](../reference/inter-agent/conversation-admission.md).
-- [Remaining protocol topics](../specs/protocol-inter-agent.md), including approval and companion tools.
+- [Remaining protocol topics](../specs/protocol-inter-agent.md), including approval and session-operation tools.
 - [Delivery confirmation and recovery](../reference/inter-agent/delivery.md).
 - [Send and wait](../reference/inter-agent/send-and-wait.md).
 - [Coordination monitoring and display](../reference/inter-agent/coordination-monitoring.md).
+- [Peer directory and companion tools](../reference/inter-agent/directory.md).

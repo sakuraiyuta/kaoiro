@@ -147,5 +147,5 @@ and diagnostic write failures do not change turn or acknowledgement control.
 - [Conversation lifecycle](conversations.md).
 - [Dispatch and coalescing](../../architecture/inter-agent-messaging.md#dispatch-and-coalescing).
 - [Approval flow](../../specs/protocol-inter-agent.md#approval-flow-permission_broker-integration).
-- [Companion tools](../../specs/protocol-inter-agent.md#companion-tools-wrapper-sdk-mcp).
+- [Companion tools](directory.md#companion-tools-wrapper-sdk-mcp).
 - [Send and wait](send-and-wait.md).

@@ -20,6 +20,9 @@ and branch operation; [messages](../reference/inter-agent/messages.md) and
 [conversations](../reference/inter-agent/conversations.md) define the inter-agent
 envelope schema, hard limits, and turn-number contract.
 
+For persona-name resolution and existing-peer routing, follow
+[Peer routing](../contributing/peer-routing.md).
+
 ## Implementation side
 
 - Do not decide independently on points identified as requiring judgment, or on

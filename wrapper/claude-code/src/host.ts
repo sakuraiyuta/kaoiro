@@ -946,7 +946,7 @@ export class AgentHost implements EngineAdapter {
   }
 
   /** Snapshot of the calling agent's identity and current status (used by the
-   *  `mcp__kaoiro__whoami` tool, protocol-inter-agent companion). Reads only
+   *  `mcp__kaoiro__whoami` tool, docs/reference/inter-agent/directory.md). Reads only
    *  local state — no server round-trip, since the wrapper holds the freshest
    *  view of these fields. Omits keys whose SDK has not yet reported a value
    *  so consumers can distinguish "unknown" from a stale stub. */

@@ -984,7 +984,7 @@ const displayNameSegmenter = new Intl.Segmenter(undefined, {
  *  (`[...s].length`). Both of those over-count a combining-character or
  *  ZWJ-emoji name relative to Elixir `String.length/1` (the unit the
  *  server actually bounds), which would make this narrow reject a value
- *  the server already accepted and sent — see protocol-inter-agent.md's
+ *  the server already accepted and sent — see docs/reference/inter-agent/directory.md's
  *  contract note for the measured divergence on one such string.
  *
  *  Returns the TRIMMED name on success (not merely `true`) and `null` on
@@ -1874,7 +1874,7 @@ export class ServerLink {
     this.#pushVersioned("history_replay_complete", { replay_id: replayId });
   }
 
-  /** Fetches the peer directory (protocol-inter-agent companion tool). The
+  /** Fetches the peer directory (docs/reference/inter-agent/directory.md). The
    *  server replies with `{agents: [...], users: [...]}` — `agents` is
    *  every currently-known agent except this wrapper, used by the
    *  `mcp__kaoiro__list_agents` tool to resolve persona names → agent_ids
@@ -1883,7 +1883,7 @@ export class ServerLink {
    *  key entirely — a 段階2+ server that opted the projection OUT still
    *  returns the key, just with an empty array (ふじ M4 レビュー指摘: an
    *  earlier draft of this comment conflated the two cases). Either way
-   *  narrows to `[]` here, not an error (protocol-inter-agent.md
+   *  narrows to `[]` here, not an error (docs/reference/inter-agent/directory.md
    *  back-compat note; see `UserDirectoryEntry`'s own doc above for the
    *  same distinction). Rejects on transport error or timeout so the
    *  tool surfaces the failure to the model rather than hanging. */

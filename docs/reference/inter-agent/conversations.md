@@ -289,7 +289,8 @@ Therefore:
 - [Inter-agent messaging](../../architecture/inter-agent-messaging.md).
 - [Inter-agent message contract](messages.md).
 - [Inter-agent conversation admission](conversation-admission.md).
-- [Remaining protocol topics](../../specs/protocol-inter-agent.md), including approval and companion tools.
+- [Remaining protocol topics](../../specs/protocol-inter-agent.md), including approval and session-operation tools.
 - [Delivery confirmation and recovery](delivery.md).
 - [Send and wait](send-and-wait.md).
 - [Coordination monitoring and display](coordination-monitoring.md).
+- [Peer directory and companion tools](directory.md).

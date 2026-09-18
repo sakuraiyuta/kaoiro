@@ -554,7 +554,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
     end
   end
 
-  # Peer directory request (protocol-inter-agent, phase-8 companion tool).
+  # Peer directory request (docs/reference/inter-agent/directory.md).
   # The wrapper's `mcp__kaoiro__list_agents` tool calls this to resolve
   # persona names → agent_ids before send_to_agent. Reply carries every
   # currently-known agent EXCEPT the requester. Phase-8's name-resolution

@@ -91,11 +91,31 @@ sending, the wrapper waits for the next inbound envelope for the same
   unknown result (Fujino 30-10 M5, 2026-08-08). Do not wait the full timeout for
   a peer that cannot answer.
 
+## Send acceptance and rejection
+
+Errors for unknown `to`, self-routing, participant mismatch, invalid
+`turn_number`, stale turns, closed conversations, or explicitly unknown
+conversation IDs (`unknown_agent`, `self_routing`, `participants_mismatch`,
+`invalid value: payload.turn_number`, `stale_turn`, `conversation_closed`
+ (the latter three from issue #167), `unknown_conversation_id` (issue #252),
+`delivery_backlog`, `peer_reconnecting`, `peer_reconnecting_capacity` (issue #256), and
+`disconnected` (issue #257, when `to` is known but not currently connected
+and no planned intent covers it)) are returned in the `envelope` reply.
+`peer_reconnecting` and `disconnected` are normalized by the wrapper to a
+structured `peer_error` (`code=reconnecting` / `code=disconnected`
+respectively). A disconnected rejection also carries optional
+`disconnect {origin, reason}` and maps it to the peer error's `origin` /
+`reason`, distinct from a generic tool error; either reject happens
+before `ConversationStates.record_message`, so it never mutates the delivery
+ledger or either pane. `peer_reconnecting_capacity` is a terminal tool error:
+the message was not accepted and no close notice was scheduled; fixed
+wording asks the sender to retry later with the same conversation_id.
+
 ## Related topics
 
 - [Message fields](messages.md).
 - [Conversation lifecycle](conversations.md).
 - [Dispatch and coalescing](../../architecture/inter-agent-messaging.md#dispatch-and-coalescing).
 - [Approval flow](../../specs/protocol-inter-agent.md#approval-flow-permission_broker-integration).
-- [Companion tools](../../specs/protocol-inter-agent.md#companion-tools-wrapper-sdk-mcp).
+- [Companion tools](directory.md#companion-tools-wrapper-sdk-mcp).
 - [Delivery confirmation and recovery](delivery.md).

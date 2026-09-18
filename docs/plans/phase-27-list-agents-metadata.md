@@ -1405,7 +1405,7 @@ addition to magnitude), and that requirement is unchanged.
 - [ADR-0010](../adr/0010-protocol-precisification.md) /
   [ADR-0015](../adr/0015-protocol-version-stamping.md) — unknown-key additions
   and the unchanged version rule
-- [protocol-inter-agent](../specs/protocol-inter-agent.md) — peer-directory
+- [peer directory](../reference/inter-agent/directory.md) — peer-directory
   information boundary (#99)
 - [phase-8-inter-agent-messaging](phase-8-inter-agent-messaging.md) — origin of
   directory_request
