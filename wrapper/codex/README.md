@@ -367,5 +367,5 @@ The image integration tests use unique agent IDs because temporary image sweeps
 are keyed by agent ID across processes. Failed assertions preserve diagnostic
 user content and materialized-path existence. This removes reproduced cross-test
 interference; it does not establish the cause of the earlier isolated CI-style
-fan-out failure. Public backend selection, deployed runner artifacts, cross-OS
-operation and rollout/rollback acceptance remain outside this increment.
+fan-out failure. Cross-OS execution and production deployment are not established
+by these local tests.

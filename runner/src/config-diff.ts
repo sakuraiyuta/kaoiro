@@ -2,8 +2,7 @@ import type { RunnerConfig } from "./config.js";
 
 /** Config-reload diff: which top-level fields differ. `codex` and
  * `antigravity` are whole-object compares so any change inside either
- * block — `auth_mode` (Phase-24), `chatgpt_plan`, `internal_subagents`,
- * `extra_models` (issue #292) — surfaces as one entry (`"codex"` /
+ * block, including `codex.backend`, surfaces as one entry (`"codex"` /
  * `"antigravity"`) and drives one reload. Uses JSON.stringify equality —
  * parseRunnerConfig builds fields in a stable order so a byte-identical
  * config produces byte-identical JSON.

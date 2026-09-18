@@ -710,10 +710,9 @@ export class Supervisor {
   /** Hot-swap runtime config on a config-file reload. Full replacement per
    *  field — the caller provides the current value for every field, so the
    *  supervisor never carries stale values from a prior config revision.
-   *  Existing children are untouched: only wrappers spawned AFTER this call
-   *  see the new values (relaunches use `entry.parsed`, not the config, so
-   *  a crashed agent relaunches with the SAME config as before but reads
-   *  the wrapperServerUrl from the current value). */
+   *  Existing children are untouched. Relaunches preserve the spawn values
+   *  in `entry.parsed`, but use current host-local runtime fields, including
+   *  the Codex backend and wrapperServerUrl. */
   updateRuntimeConfig(update: SupervisorRuntimeUpdate): void {
     this.#cwdAllowlist = update.cwdAllowlist;
     this.#wrapperServerUrl = update.wrapperServerUrl;
