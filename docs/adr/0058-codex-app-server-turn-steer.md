@@ -1028,3 +1028,54 @@ late interrupt acknowledgement and construction/close races use fixtures.
 The existing analytics/plugins-off startup caveats still apply. IA steering,
 Host queue/watchdog composition, history replay, normal launch and ADR status
 remain outside this unit.
+
+
+### Increment (5c-2): internal Host selection and serial execution
+
+`CodexHostOptions.backend` is the sole internal selection point, defaulting to
+exec. CLI, config, environment, runner, protocol and normal launch selection are
+unchanged. The existing Host queue awaits each app-server runtime completion;
+its adapter/log/tasklist projection uses the existing state and relay helpers,
+including the already-normalized tasklist's omitted counts. Result/settlement
+are emitted once, and finalization follows temporary-image cleanup. The default
+exec factory, thread options and callbacks remain independently pinned.
+
+The runtime hook now receives the complete Host permission-sync/blocked gate,
+both before thread opening and after asynchronous settings preparation. Gate
+timeout/cancellation reject with `AppServerAdmissionError`; other hook rejection
+is a connection failure and closes the session. Runtime's explicit blocked guard
+remains defense against a hook that incorrectly returns. Changed permission or
+pending model/effort/reset is re-prepared without restarting external lifecycle.
+Config effort is explicit on the first dispatch, operator effort wins, and
+resume display hints do not become explicit settings pins.
+
+The Host token and turn scope are captured before asynchronous interrupt cleanup.
+Unsent preparation is cancelled by lifecycle generation; queued text survives.
+Terminal consumption closes the scope and watchdog boundary before rollout
+observation. Settings authority is the runtime's completion and baseline, not
+Host-local interruption bookkeeping. The known transport-retired/runtime-not-yet-
+consumed microtask window can still mark an attempt abandoned despite a false
+interrupt return, causing one explicit rollback; this increment does not add a
+synchronous Session activity query. An `interrupted` terminal emits a boundary,
+but `onTurnEnd` omits terminal, reports `error.reason = "interrupted"` and only
+actual abandonment. It cannot authorize a reserved session reset.
+
+Once-only abnormal disconnection propagation reaches Host even while idle,
+closes admission and does not replace the child or implicitly select exec. Idle
+failure reports error without fabricating a result; active failure uses the
+existing turn settlement and retires queued work. Intentional close is separate.
+Tool scope abortion and immediate shutdown remain synchronous at the Host entry.
+
+Verification uses the pinned CLI, default Session/bridge, real ServerLink and a
+loopback Phoenix-wire test peer, not an actual Phoenix server. Two cases verify
+config effort and an initial operator override at the provider, alongside sync,
+rejoin, serial input, exact-turn policy observation before child shutdown,
+materialized absolute image bytes/cleanup, failed-switch rollback, and a real MCP
+handler interrupted before the next successful turn. No external model/auth is
+used; analytics/plugins are disabled and startup update traffic remains possible.
+Exact callback/race/failure ordering uses deterministic JSONL child fixtures.
+Negative controls remove the Host synchronization wait or queue await separately;
+queue assertions distinguish ordered starts, maximum one active operation, and
+success of every input (concurrency guards may reject inputs instead of allowing
+parallel execution). Full IA/watchdog composition, history replay and launch
+selection remain later increments; ADR status is unchanged.

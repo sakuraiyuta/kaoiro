@@ -18,6 +18,7 @@ export interface AppServerSessionOptions {
   tools?: ToolDescriptor[];
   turnSignal: () => AbortSignal | null;
   bridgeStderrPath?: string;
+  onDisconnect?: (error: Error) => void;
   transport?: Omit<AppServerRpcOptions, "onNotification" | "onFailure">;
 }
 
@@ -28,7 +29,7 @@ async function removeToolHostDirectory(host: ToolHost | null): Promise<void> {
   await rm(dirname(host.socketPath), { recursive: true, force: true });
 }
 
-/** Internal composition only; CodexHost still selects exec. */
+/** Internal composition only; normal launch still selects exec. */
 export class AppServerSession {
   readonly #transport: AppServerTransport;
   readonly #toolHost: ToolHost | null;
@@ -75,6 +76,7 @@ export class AppServerSession {
     };
     this.#transport = new AppServerTransport({
       ...options.transport,
+      ...(options.onDisconnect === undefined ? {} : { onDisconnect: options.onDisconnect }),
       ...(host === null ? {} : { threadOpenTimeoutMs: BRIDGE_THREAD_OPEN_TIMEOUT_MS }),
     });
   }

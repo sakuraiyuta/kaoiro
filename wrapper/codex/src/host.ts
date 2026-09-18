@@ -8,8 +8,10 @@
 // Approval is pinned to "never" (ADR-0033); waiting_permission represents
 // the dispatch gate, not an SDK approval callback.
 
-import { assessCodexPermission } from "./app_server_permission.js";
-import { successfulResetEffort, type AppServerSettingsError } from "./app_server_settings.js";
+import { AppServerAdmissionError, AppServerHostRuntime, type AppServerHostRuntimeOptions } from "./app_server_host_runtime.js";
+import { AppServerConnectionError } from "./app_server_rpc.js";
+import { assessCodexPermission, type CodexPermissionAssessment } from "./app_server_permission.js";
+import { successfulResetEffort, AppServerSettingsError } from "./app_server_settings.js";
 import { BRIDGE_MCP_POLICY } from "./bridge_policy.js";
 export { BRIDGE_TOOL_TIMEOUT_SEC } from "./bridge_policy.js";
 import { randomUUID } from "node:crypto";
@@ -53,9 +55,11 @@ import type {
   AttachRejectedPayload,
   InstructionRejectedPayload,
   ResolvedSnapshotExt,
+  ResultPayload,
   SwitchErrorExt,
   TaskPayload,
   TasklistSourceItem,
+  TasklistSnapshot,
   ToolDescriptor,
   WhoamiSnapshot,
   WrapperConfig,
@@ -308,6 +312,9 @@ export function initialStatusExt(
 }
 
 export interface CodexHostOptions {
+  /** Internal opt-in only; normal CLI/config/env launch always uses exec. */
+  backend?: "exec" | "app-server";
+  appServerSessionFactory?: AppServerHostRuntimeOptions["createSession"];
   /** Invoked on every state transition with the common envelope. */
   onState: (envelope: Envelope) => void;
   /** Invoked per relayable log line (assistant text / tool call / result). */
@@ -571,6 +578,10 @@ export class CodexHost implements EngineAdapter {
    *  engines. */
   #displayNameRevision = 0;
   readonly #options: CodexHostOptions;
+  #appRuntime: AppServerHostRuntime | null = null;
+  #appTurnToken: string | null = null;
+  #appFirstDispatch = true;
+  #appFailure: unknown = null;
   readonly #now: () => string;
   #machine: MachineState = initialMachineState();
   #sessionId: string | null = null;
@@ -967,12 +978,15 @@ export class CodexHost implements EngineAdapter {
     // Before the first await: an operator interrupt in the same task as
     // an operator "allow" must already have invalidated that allow when the
     // gated handler's continuation runs (issue #347 review R1).
+    const appToken = this.#appTurnToken;
     this.#abandonTurn("operator_interrupt");
     this.#lifecycleGeneration += 1;
     this.#permissionCloseWake?.();
     this.#permissionDispatchWake?.();
     this.#dropPendingUploads("interrupted");
+    const interrupted = appToken === null ? undefined : this.#appRuntime?.interrupt(appToken);
     await this.#dropQueuedTempTurns();
+    await interrupted;
     this.#abort?.abort();
   }
 
@@ -998,12 +1012,14 @@ export class CodexHost implements EngineAdapter {
   requestInterruptForTurn(turnToken: string): boolean {
     if (
       this.#activeTurnToken !== turnToken ||
+      (this.#appRuntime !== null && this.#appTurnToken !== turnToken) ||
       this.#watchdogFailStopped ||
       this.#closed
     ) {
       return false;
     }
     this.#abandonTurn("watchdog_interrupt");
+    void this.#appRuntime?.interrupt(turnToken).catch(error => this.#stopAppServer(error));
     this.#abort?.abort();
     return true;
   }
@@ -1036,6 +1052,7 @@ export class CodexHost implements EngineAdapter {
     if (this.#gcTimer !== null) clearInterval(this.#gcTimer);
     this.#gcTimer = null;
     this.#abandonTurn("watchdog_fail_stop");
+    void this.#appRuntime?.close();
     this.#machine = initialMachineState("error");
     this.#emitState("error");
 
@@ -1095,6 +1112,7 @@ export class CodexHost implements EngineAdapter {
     // may still be delivered, and it must not carry a reservation out of a
     // wrapper that is shutting down (issue #347 review R3).
     this.#abandonTurn("host_close");
+    void this.#appRuntime?.close();
     this.#abort?.abort();
     this.#permissionCloseWake?.();
     this.#permissionDispatchWake?.();
@@ -1296,9 +1314,10 @@ export class CodexHost implements EngineAdapter {
       // prevent a real SDK turn or a default Codex factory from starting.
       writeRedactedStderr(`codex turn trace failed: ${String(error)}\n`);
     }
+    const appServer = this.#options.backend === "app-server";
     const descriptors = this.#options.toolDescriptors ?? [];
     const toolHost =
-      descriptors.length > 0
+      !appServer && descriptors.length > 0
         ? await ToolHost.listen(descriptors, {
             turnSignal: () => this.#turnScope?.signal ?? null,
           })
@@ -1345,9 +1364,11 @@ export class CodexHost implements EngineAdapter {
         },
       };
     }
-    const codex = factory({
+    const codex = appServer ? null : factory({
       config: codexConfig as NonNullable<CodexOptions["config"]>,
     });
+
+    if (appServer) this.#appRuntime = this.#createAppServerRuntime();
 
     if (initialPrompt !== undefined) {
       this.#apply({ kind: "user_send" });
@@ -1371,8 +1392,12 @@ export class CodexHost implements EngineAdapter {
           this.#wake = null;
           continue;
         }
+        if (this.#appRuntime !== null) {
+          await this.#runAppServerTurn(turn.input, turn.tempDir, turn.conversationIds ?? [], turn.turnToken ?? randomUUID());
+          continue;
+        }
         await this.#runTurn(
-          codex,
+          codex!,
           turn.input,
           turn.tempDir,
           turn.conversationIds ?? [],
@@ -1386,6 +1411,136 @@ export class CodexHost implements EngineAdapter {
       await this.#dropQueuedTempTurns();
       await this.#watchdogQueuedCleanup;
       toolHost?.close();
+      await this.#appRuntime?.close();
+    }
+  }
+
+  #createAppServerRuntime(): AppServerHostRuntime {
+    return new AppServerHostRuntime({
+      session: {
+        thread: { cwd: this.#cwd, sandbox: this.#sandbox, developerInstructions: this.#options.appendSystemPrompt,
+          ...(this.#model !== null && this.#modelSource !== "default" ? { model: this.#model } : {}) },
+        tools: this.#options.toolDescriptors ?? [], internalSubagents: this.#config.codex_internal_subagents ?? true,
+        turnSignal: () => this.#turnScope?.signal ?? null,
+        bridgeStderrPath: `${this.#turnTraceCaptureDir}/bridge.stderr.log`,
+        onDisconnect: error => this.#stopAppServer(error),
+      },
+      effortIntent: this.#effort !== null && this.#effortSource !== "default" ? "explicit" : "default",
+      ...(this.#sessionId === null ? {} : { resumeThreadId: this.#sessionId }),
+      ...(this.#options.permissionRolloutRoot === undefined ? {} : { rolloutRoot: this.#options.permissionRolloutRoot }),
+      ...(this.#options.appServerSessionFactory === undefined ? {} : { createSession: this.#options.appServerSessionFactory }),
+    });
+  }
+
+  #stopAppServer(error: unknown): void {
+    if (this.#closed) return;
+    this.#appFailure = error;
+    const queued = this.#queue.splice(0);
+    this.close();
+    if (this.#appTurnToken === null) { this.#machine = initialMachineState("error");this.#emitState("error"); }
+    this.#watchdogQueuedCleanup = this.#cleanupWatchdogQueuedTurns(queued).then(() => {
+      for (const turn of queued) {
+        if (turn.turnToken === undefined) continue;
+        try { this.#options.onTurnEnd?.({ turnToken: turn.turnToken, conversationIds: turn.conversationIds ?? [], error: { detail: String(error) } }); }
+        finally { this.#options.onTurnFinalized?.({ turnToken: turn.turnToken }); }
+      }
+    });
+  }
+
+  async #runAppServerTurn(
+    input: string | Array<{ type: "text"; text: string } | { type: "local_image"; path: string }>,
+    tempDir: string | undefined, conversationIds: readonly string[], turnToken: string,
+  ): Promise<void> {
+    const runtime = this.#appRuntime!;
+    const gate: PermissionDispatchWait = { generation: this.#lifecycleGeneration, deadline: null, blocked: null };
+    let settled = false, boundary = false, started = false;
+    let attempted: AttemptedTurnSettings | null = null;
+    let pending = { model: this.#modelPending, effort: this.#effortPending, effortReset: this.#effortResetPending };
+    this.#appTurnToken = turnToken;
+    const endBoundary = () => {
+      if (boundary) return;
+      boundary = true;this.#appTurnToken = null;this.#endTurnScope();
+      if (started && !this.#watchdogFailStopped) this.#options.onTurnBoundary?.({ turnToken });
+    };
+    const settle = (payload: ResultPayload, info: Parameters<NonNullable<CodexHostOptions["onTurnEnd"]>>[0]) => {
+      if (settled || this.#watchdogFailStopped) return;
+      settled = true;
+      try { this.#emitResult(payload);this.#apply({ kind: "result", subtype: payload.is_error ? "error_during_execution" : "success" }); }
+      finally {
+        if (this.#appFailure !== null) { this.#machine = initialMachineState("error");this.#emitState("error"); }
+        this.#options.onTurnEnd?.(info);
+      }
+    };
+    try {
+      const completion = await runtime.run({ input, hostTurnToken: turnToken }, {
+        snapshot: () => {
+          pending = { model: this.#modelPending,
+            effort: this.#effortPending ?? (this.#appFirstDispatch && !this.#effortResetPending && this.#effortSource !== "default" ? this.#effort : null),
+            effortReset: this.#effortResetPending };
+          return { pending, permission: this.#permissionState };
+        },
+        waitForPermissionSync: async () => {
+          const reason = await this.#awaitPermissionDispatch(turnToken, gate);
+          if (reason !== null) throw new AppServerAdmissionError(reason);
+        },
+        onDispatch: (attempt, identity) => {
+          this.#appFirstDispatch = false;started = true;
+          this.#activeTurnToken = turnToken;this.#activeTurnConversationIds = conversationIds;
+          this.#turnScope = new AbortController();this.#turnAbandoned = null;
+          attempted = { ...attempt.pending, appServer: { ...(attempt.prepared.effort === undefined ? {} : { resolvedEffort: attempt.prepared.effort }) },
+            accountDefault: attempt.pending.model === null && (this.#model === null || this.#modelSource === "default"),
+            resolutionGeneration: ++this.#modelResolutionGeneration, permission: attempt.permission };
+          if (this.#sessionId !== identity.threadId) { this.#sessionId = identity.threadId;this.#options.onSessionId?.(identity.threadId); }
+          if (attempt.permission !== null) this.#beginPermissionExecution(attempt.permission.submission);
+          this.#options.onLifecycle?.({ kind: "turn_start", turnToken });this.#options.onTurnStart?.({ turnToken, conversationIds });
+        },
+        onTerminal: endBoundary,
+        onPermission: (assessment, attempt) => {
+          if (!this.#watchdogFailStopped && attempt.permission) this.#applyPermissionAssessment(attempt.permission.submission, assessment);
+        },
+        onProjection: event => {
+          if (this.#watchdogFailStopped) return;
+          this.#options.onTurnProgress?.({ turnToken });
+          if (event.kind === "adapter") this.#apply(event.event);
+          if (event.kind === "log") this.#options.onLog?.(makeLog(this.#config, this.#machine.state, this.#now(), event.payload));
+          if (event.kind === "tasklist") this.#emitTasklistSnapshot(event.snapshot);
+        },
+      });
+      if (this.#watchdogFailStopped) return;
+      const { terminal, settingsCommitted } = completion;
+      this.#finishTurn(settingsCommitted, attempted!);
+      const baseline = runtime.baseline;
+      if (settingsCommitted && baseline) {
+        this.#model = this.#modelLastGood = baseline.model;
+        this.#modelSource ??= "default";this.#modelLastGoodSource = this.#modelSource;
+        this.#effort = this.#effortLastGood = baseline.effort;
+        this.#effortSource = this.#effortLastGoodSource = baseline.effortIntent === "default" ? "default" : (this.#effortSource ?? "config");
+      }
+      const terminalType = terminal.status === "interrupted" ? undefined : terminal.status === "completed" ? "turn.completed" : "turn.failed";
+      if (terminalType) this.#options.onLifecycle?.({ kind: "terminal", turnToken, type: terminalType, authoritative: true });
+      settle(terminal.payload, { turnToken, conversationIds,
+        ...(terminalType === undefined ? {} : { terminal: terminalType }),
+        ...(terminal.status === "completed" ? {} : { error: { detail: terminal.payload.error_detail ?? "App-server turn failed", ...(terminal.status === "interrupted" ? { reason: "interrupted" } : {}) } }),
+        ...(this.#turnAbandoned === null ? {} : { abandoned: this.#turnAbandoned }),
+      });
+    } catch (error) {
+      endBoundary();
+      if (this.#watchdogFailStopped || settled) return;
+      if (!started && error instanceof AppServerAdmissionError && this.#appFailure === null) {
+        settled = true;this.#machine = initialMachineState("waiting_input");this.#emitState("waiting_input");
+        this.#options.onTurnEnd?.({ turnToken, conversationIds, error: { reason: error.reason, detail: PERMISSION_GATE_RECOVERY }, cancellation: { kind: "permission_gate", started: false } });
+      } else {
+        const failed: AttemptedTurnSettings = attempted ?? { ...pending, permission: null, accountDefault: false, resolutionGeneration: this.#modelResolutionGeneration };
+        if (error instanceof AppServerSettingsError) failed.appServer = { switchFailureReason: error.reason };
+        this.#finishTurn(false, failed);
+        settle({ is_error: true, ...codexExecFailureRelay(String(error)) }, { turnToken, conversationIds, error: { detail: String(error) },
+          ...(this.#turnAbandoned === null ? {} : { abandoned: this.#turnAbandoned }) });
+      }
+      if (runtime.closed || error instanceof AppServerConnectionError) this.#stopAppServer(error);
+    } finally {
+      this.#endTurnScope();this.#turnScope = null;this.#activeTurnToken = null;this.#activeTurnConversationIds = [];this.#appTurnToken = null;
+      try { if (tempDir !== undefined) await this.#cleanupTempDir(tempDir); }
+      finally { this.#options.onTurnFinalized?.({ turnToken }); }
     }
   }
 
@@ -2153,9 +2308,13 @@ export class CodexHost implements EngineAdapter {
         : codexPermissionContextAfter(permission.cursor, sessionId);
     }
     const assessment = assessCodexPermission(permission.submission, context);
+    this.#applyPermissionAssessment(permission.submission, assessment);
+  }
+
+  #applyPermissionAssessment(submission: PermissionSubmission, assessment: CodexPermissionAssessment): void {
     if (!assessment.applied) {
       if (assessment.diagnostic) writeRedactedStderr(assessment.diagnostic);
-      this.#permissionObservationFailed(permission.submission, assessment.reason, assessment.observation);
+      this.#permissionObservationFailed(submission, assessment.reason, assessment.observation);
       return;
     }
     const observation = assessment.observation;
@@ -2482,7 +2641,10 @@ export class CodexHost implements EngineAdapter {
    * progress, todo changes have no later token/tool signal that could flush a
    * throttle-suppressed update, so only an exact content duplicate is skipped. */
   #emitTasklist(sourceItems: readonly TasklistSourceItem[]): void {
-    const snapshot = normalizeTasklist(sourceItems);
+    this.#emitTasklistSnapshot(normalizeTasklist(sourceItems));
+  }
+
+  #emitTasklistSnapshot(snapshot: TasklistSnapshot): void {
     const encoded = JSON.stringify(snapshot);
     if (encoded === this.#lastTasklistJson) return;
     this.#lastTasklistJson = encoded;

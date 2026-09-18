@@ -309,3 +309,10 @@ it.each(["terminal callback", "observation wait"])("rejects an interrupt after t
   await f.runtime.run(input("next"), f.hooks);
   expect(f.sent[1]).toMatchObject({ effort: "low" });expect(f.sent[1]).not.toHaveProperty("model");
 });
+
+it.each(["plain", "rpc"])("treats a non-admission %s hook rejection as a connection failure", async kind => {
+  const f = fixture();await f.runtime.open();
+  f.hooks.waitForPermissionSync = async () => { throw kind === "plain" ? new Error("gate failure") : new AppServerRpcError(1, "gate failure"); };
+  await expect(f.runtime.run(input(), f.hooks)).rejects.toBeInstanceOf(AppServerConnectionError);
+  expect(f.runtime.closed).toBe(true);expect(f.session.close).toHaveBeenCalledTimes(1);expect(f.sent).toHaveLength(0);
+});

@@ -49,9 +49,9 @@ async function collect(events: AsyncIterable<AppServerNotification>) {
   for await (const event of events) result.push(event);
   return result;
 }
-function transportFixture() {
+function transportFixture(onDisconnect?: (error: Error) => void) {
   const f = fixture();
-  const transport = new AppServerTransport({ spawnChild: () => f.child, requestTimeoutMs: 1000 });
+  const transport = new AppServerTransport({ spawnChild: () => f.child, requestTimeoutMs: 1000, ...(onDisconnect ? { onDisconnect } : {}) });
   closers.push(() => transport.close());
   f.handle(request => {
     if (request.method === "initialize") f.respond(request, { userAgent: "kaoiro/0.153.4 (test)" });
@@ -606,4 +606,13 @@ it.each(["startThread", "resumeThread"] as const)("captures initial settings fro
   expect(f.transport.initialSettings).toEqual({ model: "initial", effort: "medium" });
   f.transport.initialSettings!.model = "modified";
   expect(f.transport.initialSettings?.model).toBe("initial");
+});
+
+
+it.each([false, true])("reports abnormal disconnection once but suppresses self-close (intentional=%s)", async intentional => {
+  const disconnected = vi.fn(), f = transportFixture(disconnected);
+  await f.transport.startThread();
+  if (intentional) await f.transport.close();else f.exit();
+  await tick();f.child.emit("error", new Error("duplicate failure"));await tick();
+  expect(disconnected).toHaveBeenCalledTimes(intentional ? 0 : 1);
 });

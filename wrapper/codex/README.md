@@ -24,15 +24,15 @@ request that loses its response has an unknown outcome; the transport does not
 retry or replace the process automatically. Graceful shutdown is bounded at five
 seconds before killing only the owned child. RPC waits default to 25 seconds.
 Stopping iteration detaches the consumer, not the running turn: admission stays
-closed until its terminal event. Host watchdog/interrupt integration is a later
-stage.
+closed until its terminal event. The internal Host backend wires token-fenced
+interrupt and immediate shutdown; full watchdog/IA supervision remains a later stage.
 
 Approval policy is pinned to `never`, reviewer to `user`, analytics disabled,
 and `experimentalApi` false. Unexpected server requests receive an explicit
 JSON-RPC rejection and an optional diagnostic without their payload. The
 `stderrTail` accessor retains up to 16,384 characters for diagnostics; callers
 must redact it before logging. There is no steer or external-message submission
-API. Host/IA lifecycle and wiring history into `HistoryReplayer` remain later stages.
+API. Full IA composition and wiring history into `HistoryReplayer` remain later stages.
 
 `AppServerSession` composes the transport with the existing `ToolHost` and
 `dist/bridge.js`. It binds one thread per lifetime, using either start or
@@ -41,8 +41,8 @@ instructions are a thread field; user text and local images use an ordered,
 closed input converter. Other input kinds, including external messages, are
 rejected. Relative image paths are rejected before turn admission or RPC,
 avoiding ambiguity between the child process and thread working directories.
-Caller-owned image files are neither copied nor removed. Host/launch
-integration must supply materialized absolute image paths.
+Caller-owned image files are neither copied nor removed by the session. The Host
+supplies materialized absolute image paths and removes its turn directory after completion.
 
 Both exec and app-server use `BRIDGE_MCP_POLICY`: `required = true`,
 `startup_timeout_sec = 30`, `default_tools_approval_mode = "approve"`, and a
@@ -62,9 +62,8 @@ means the session adds no kaoiro MCP server configuration. Socket creation uses
 `ToolHost.listen` unchanged, inside its fresh private directory. Session shutdown
 and failed initial setup close the tool host and remove only that directory.
 Shutdown stops new tool connections and aborts existing handlers synchronously
-before waiting for the child. The caller supplies the active turn's abort signal;
-connecting that callback to `CodexHost` and its coordinator/lease/queue is still
-pending.
+before waiting for the child. The Host supplies its active turn scope; interrupt,
+terminal and shutdown abort that signal. Full coordinator/lease composition is pending.
 
 Tests cover protocol faults, request correlation, pre-response notifications,
 consumer abandonment, buffered termination, and process shutdown. The real CLI
@@ -95,12 +94,12 @@ Only `turn/completed` produces a terminal result. Its status retains the
 completed/failed/interrupted distinction; retry notifications alone do not end
 a turn, and EOF without a terminal throws. Result text uses the last
 `final_answer`, falling back to the last unphased message only when no final
-answer exists. Text and error details use the existing shared bounds; eventual
-host relay still goes through `makeResult`. The local-provider integration
+answer exists. Text and error details use the existing shared bounds;
+Host relay goes through `makeResult`. The local-provider integration
 test verifies two final answers, one result, and MCP call/result logs through
 the real CLI on both start and resume. Failure/interruption, duplicate frames,
 foreign identities, malformed items, and EOF projection use deterministic
-fixtures. This API is internal and does not connect to `CodexHost` or launch.
+fixtures. The internal Host backend consumes this projection; normal launch remains exec.
 
 Turn projection retains native `last` and `total` token counts plus the nullable
 model context window. Usage notifications yield detached snapshots, and the
@@ -166,8 +165,8 @@ Close/EOF rejects outstanding requests. Normal RPC deadlines still apply.
 The default-session CLI tests verify persisted resume, two final answers, MCP
 output, IA exclusion, and the 200-row tail with a local provider. Legacy/full
 views, malformed responses, cursor failures, and race conditions use schema
-fixtures. This API is internal: `CodexHost` still uses exec, and the existing
-synchronous `HistoryReplayer` is not yet connected to the asynchronous reader.
+fixtures. The existing synchronous `HistoryReplayer` is not yet connected to
+the asynchronous reader, including in the internal app-server Host backend.
 
 The internal session accepts per-turn model, effort, cwd, and sandbox/network
 settings. Approval remains `never` with reviewer `user`. A synchronous
@@ -186,8 +185,8 @@ rejects with `default_effort_unavailable` before dispatch; the prior effort is
 never silently retained. Configuration changes after this read do not change
 the submitted value, whereas a newly spawned exec samples at process startup.
 App-server does not support `--profile`; current Host/SDK/session launch does not
-expose that option. Exec behavior is unchanged. Host switch-error reporting and
-pending/rollback wiring remain subsequent increments; these APIs are internal.
+expose that option. Exec behavior is unchanged. The internal Host backend wires
+switch-error reporting and pending/rollback; normal launch selection is still deferred.
 
 The default-session control integration exercises live rollout visibility before
 child shutdown, sequential policy changes, both effort resolution paths,
@@ -195,13 +194,12 @@ unresolvable defaults, interruption, and a following turn in the same session.
 Pre-response interruption, dispatch rejection, catalog faults/cursor bounds,
 and connection/close races have deterministic fixture coverage.
 
-Permission/settings helpers are internal preparation for Host integration.
+The internal Host backend uses the shared permission/settings helpers.
 `beforeDispatch` waits for permission synchronization after default-effort
 resolution; the synchronous `onDispatch` callback then validates the captured
 selection and receives an immutable concrete model/effort receipt. A changed
 selection or blocked gate raises `permission_superseded` before `turn/start`.
-The Host integration must prepare the same unstarted queued turn again with a
-new snapshot. Close/EOF releases a pending synchronization wait.
+The runtime prepares the same unstarted queued turn again with a new snapshot. Close/EOF releases a pending synchronization wait.
 
 The permission attempt captures a separate execution id and a rollout boundary.
 Only the first dispatch of a known newly started thread may use a fresh boundary:
@@ -219,17 +217,19 @@ default intent resolves a new default. Successful reset uses the resolved
 receipt, not the display catalog's default. Rollback explicitly resends the
 previous successful model/effort; default intent resolves again. Unknown
 baseline/default fails with `default_effort_unavailable`, without exposing raw
-RPC errors. Host queue/lifecycle wiring and normal launch selection remain
-pending; existing exec behavior is unchanged.
+RPC errors. Normal launch selection remains pending; existing exec behavior is unchanged.
 
 `AppServerHostRuntime` is an internal execution owner above `AppServerSession`;
-`CodexHost` and normal launch do not select it yet. It creates one session,
-opens or resumes once, and rejects overlapping calls. The future Host still
-owns the queue. Its synchronization hook must await both the current server
+`CodexHostOptions.backend = "app-server"` selects it explicitly. CLI, config,
+environment and runner do not transfer that option; normal launch stays exec.
+It creates one session, opens or resumes once, and rejects overlapping calls.
+The Host owns the existing serial queue. Its synchronization hook must await both the current server
 permission-sync barrier and the Host's blocked-permission gate. If the hook
 returns while the gate is still blocked, the runtime rejects with
-`permission_gate_blocked` without dispatching or replacing the session. The hook
-is awaited before opening and again after asynchronous settings resolution. The final
+`permission_gate_blocked` without dispatching or replacing the session. Admission
+rejections must be `AppServerAdmissionError` (`permission_gate_blocked` or
+`interrupted`); other hook rejections are connection failures and close the session.
+The Host translates its gate timeout into this admission type. The hook is awaited before opening and again after asynchronous settings resolution. The final
 synchronous dispatch check compares permission and pending model/effort/reset
 selection. Superseded preparation repeats without dispatch callbacks; fresh
 thread provenance is consumed only at the first actual dispatch.
@@ -249,3 +249,36 @@ owns completion. Pre-dispatch interrupt/close releases synchronization waits.
 Connection or unexpected stream failure closes the session and admission;
 there is no second child or implicit exec fallback. Normal terminal failure
 and closed admission/settings errors remain distinct from connection failure.
+
+
+The Host dispatch callback starts the turn scope and existing delivery/lifecycle
+callbacks only after synchronization and settings preparation. Queued inputs
+retain their order across interruption. Completion publishes one result and one
+settlement, with finalization after temporary-image cleanup. App-server
+`interrupted` still emits the turn boundary but omits `onTurnEnd.terminal`, uses
+`error.reason = "interrupted"`, and includes only an actual Host abandonment.
+It is not fabricated as `turn.failed`: reserved session resets require an
+authoritative terminal and do not advance on this interruption.
+
+Settings commit follows the runtime completion's `settingsCommitted` and
+`baseline`, never a Host-local interrupt record. A known narrow race remains:
+between transport retirement and runtime terminal consumption, an interrupt can
+return false while marking the runtime attempt abandoned. That completed turn
+then preserves the old baseline and explicitly rolls back on the next turn.
+After runtime terminal consumption, interrupts return false without that effect.
+
+Abnormal child disconnection propagates once through transport/session/runtime
+to Host. Idle disconnection closes admission and reports error without inventing
+a turn/result; active disconnection settles the existing turn once and retires
+queued inputs. Intentional close does not report an abnormal disconnect. Neither
+path creates a replacement child or falls back to exec.
+
+The Host integration test uses the production app-server session and real
+`ServerLink` with a test Phoenix-wire peer (not a Phoenix server), plus the pinned
+CLI and local Responses provider. It checks synchronization before dispatch,
+rejoin before queued work resumes, terminal rollout policy observations, config
+and operator effort priority, image bytes/cleanup, failed-switch rollback, and
+real MCP handler abortion followed by another turn. Deterministic child fixtures
+cover exact queue order/maximum active/all-input-success separately, cancellation,
+callback exceptions, idle/active EOF, and reserved-reset rejection. This does not
+claim full IA coordinator/watchdog composition, history replay, or launch parity.

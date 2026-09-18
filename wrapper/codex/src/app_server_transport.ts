@@ -64,22 +64,25 @@ export class AppServerTransport {
   #version: string | undefined;
   #initialSettings: AppServerSettingsSnapshot | null = null;
   readonly #disconnected = new AbortController();
+  #closing = false;
   #opening = false;
   #readingHistory = false;
   readonly #account = new AppServerAccountTelemetry();
 
-  constructor(options: Omit<AppServerRpcOptions, "onNotification" | "onFailure"> & { threadOpenTimeoutMs?: number } = {}) {
+  constructor(options: Omit<AppServerRpcOptions, "onNotification" | "onFailure"> & { threadOpenTimeoutMs?: number; onDisconnect?: (error: Error) => void } = {}) {
     this.#threadOpenTimeoutMs = options.threadOpenTimeoutMs;
     this.#rpc = new AppServerRpc({
       ...options,
       onNotification: (event) => this.#notification(event),
       onFailure: (error) => {
+        const first = this.#failure === undefined;
         this.#failure ??= error;
         this.#disconnected.abort(error);
         if (this.#active) {
           this.#active.failure ??= error;
           if (this.#active.turnId !== undefined) this.#active.stream.fail(error);
         }
+        if (first && !this.#closing) options.onDisconnect?.(error);
       },
     });
   }
@@ -200,7 +203,7 @@ export class AppServerTransport {
     return active.interrupt;
   }
 
-  async close(): Promise<void> { await this.#rpc.close(); }
+  async close(): Promise<void> { this.#closing = true;await this.#rpc.close(); }
 
   async #initialize(): Promise<void> {
     if (!this.#initializing) {

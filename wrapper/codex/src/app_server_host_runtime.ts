@@ -11,7 +11,7 @@ import {
 import { canSubmitPermission, type PermissionState } from "./permission_state.js";
 import { codexRolloutsRoot } from "./rollout.js";
 import type { AppServerProjection } from "./app_server_projection.js";
-import type { AppServerTurnIdentity, AppServerTurnInput } from "./app_server_transport.js";
+import type { AppServerDispatchIdentity, AppServerTurnIdentity, AppServerTurnInput } from "./app_server_transport.js";
 
 export type AppServerHostSession = Pick<AppServerSession,
   "startThread" | "resumeThread" | "initialSettings" | "startProjectedTurn" | "interrupt" | "close">;
@@ -29,9 +29,10 @@ export interface AppServerRuntimeAttempt {
 }
 export interface AppServerRuntimeHooks {
   snapshot: () => { pending: AppServerPendingSettings; permission: PermissionState };
-  /** Wait for both the current server sync barrier and the Host blocked gate; reject on cancellation or timeout. */
+  /** Wait for sync and the blocked gate. Reject admission with AppServerAdmissionError
+   * (permission_gate_blocked/interrupted); other failures close the session. */
   waitForPermissionSync: () => Promise<void>;
-  onDispatch: (attempt: AppServerRuntimeAttempt) => void;
+  onDispatch: (attempt: AppServerRuntimeAttempt, identity: AppServerDispatchIdentity) => void;
   onTerminal?: (identity: AppServerTurnIdentity) => void;
   onPermission: (assessment: CodexPermissionAssessment, attempt: AppServerRuntimeAttempt) => void;
   onProjection: (event: Exclude<AppServerProjection, { kind: "result" }>) => void;
@@ -41,6 +42,7 @@ export interface AppServerRuntimeCompletion {
   terminal: Extract<AppServerProjection, { kind: "result" }>;
   attempt: AppServerRuntimeAttempt;
   permission: CodexPermissionAssessment | null;
+  settingsCommitted: boolean;
 }
 export class AppServerAdmissionError extends Error {
   constructor(readonly reason: "interrupted" | "permission_gate_blocked") {
@@ -83,7 +85,12 @@ export class AppServerHostRuntime {
   open(): Promise<string> {
     if (this.#closed) return Promise.reject(new AppServerConnectionError("App-server runtime closed"));
     this.#opening ??= (async () => {
-      this.#creating = (this.#options.createSession ?? AppServerSession.create)(this.#options.session);
+      this.#creating = (this.#options.createSession ?? AppServerSession.create)({
+        ...this.#options.session, onDisconnect: error => {
+          if (this.#closed) return;
+          void this.close();this.#options.session.onDisconnect?.(error);
+        },
+      });
       this.#session = await this.#creating;
       if (this.#closed) throw new AppServerConnectionError("App-server runtime closed");
       const threadId = this.#options.resumeThreadId === undefined
@@ -107,8 +114,15 @@ export class AppServerHostRuntime {
     if (this.#active) throw new Error("App-server runtime already has an active turn");
     const active: Active = { token: input.hostTurnToken, abort: new AbortController(), dispatched: false, interrupted: false };
     this.#active = active;
+    const waitForAdmission = async () => {
+      try { await hooks.waitForPermissionSync(); }
+      catch (error) {
+        if (error instanceof AppServerAdmissionError) throw error;
+        throw new AppServerConnectionError("App-server admission synchronization failed");
+      }
+    };
     try {
-      await cancellable(hooks.waitForPermissionSync(), active.abort.signal);
+      await cancellable(waitForAdmission(), active.abort.signal);
       const threadId = await cancellable(this.open(), active.abort.signal);
       for (;;) {
         if (active.abort.signal.aborted) throw new AppServerAdmissionError("interrupted");
@@ -124,7 +138,7 @@ export class AppServerHostRuntime {
           const turn = await this.#session!.startProjectedTurn({
             ...input, threadId,
             settings: { ...settings, permission: { sandbox: selection.requested.sandbox, networkAccess: selection.requested.network_access } },
-            beforeDispatch: () => cancellable(hooks.waitForPermissionSync(), active.abort.signal),
+            beforeDispatch: () => cancellable(waitForAdmission(), active.abort.signal),
             onDispatch: (identity, prepared) => {
               if (active.abort.signal.aborted || this.#closed) throw new AppServerAdmissionError("interrupted");
               const current = hooks.snapshot();
@@ -136,7 +150,7 @@ export class AppServerHostRuntime {
                 ? captureAppServerPermission(this.#options.rolloutRoot ?? codexRolloutsRoot(), current.permission, selection, identity, this.#fresh) : null };
               active.dispatched = true;
               this.#fresh = false;
-              hooks.onDispatch(attempt);
+              hooks.onDispatch(attempt, identity);
             },
           });
           for await (const event of turn.events) {
@@ -152,11 +166,12 @@ export class AppServerHostRuntime {
               : await observeAppServerPermission(attempt.permission, turn.identity, () => hooks.snapshot().permission);
             if (this.#closed) throw new AppServerConnectionError("App-server runtime closed");
             if (permission !== null) hooks.onPermission(permission, attempt);
-            if (event.status === "completed" && !active.terminal.abandoned) {
+            const settingsCommitted = event.status === "completed" && !active.terminal.abandoned;
+            if (settingsCommitted) {
               this.#baseline = appServerSettingsAfterSuccess(baseline!, pending, attempt.prepared, rollback);
               this.#rollback = false;
             } else this.#rollback = true;
-            return { identity: turn.identity, terminal: event, attempt, permission };
+            return { identity: turn.identity, terminal: event, attempt, permission, settingsCommitted };
           }
           throw new AppServerConnectionError("App-server stream ended without a terminal turn");
         } catch (error) {
