@@ -221,3 +221,27 @@ previous successful model/effort; default intent resolves again. Unknown
 baseline/default fails with `default_effort_unavailable`, without exposing raw
 RPC errors. Host queue/lifecycle wiring and normal launch selection remain
 pending; existing exec behavior is unchanged.
+
+`AppServerHostRuntime` is an internal execution owner above `AppServerSession`;
+`CodexHost` and normal launch do not select it yet. It creates one session,
+opens or resumes once, and rejects overlapping calls. The future Host still
+owns the queue. Its synchronization hook must await both the current server
+permission-sync barrier and the Host's blocked-permission gate. It is awaited
+before opening and again after asynchronous settings resolution. The final
+synchronous dispatch check compares permission and pending model/effort/reset
+selection. Superseded preparation repeats without dispatch callbacks; fresh
+thread provenance is consumed only at the first actual dispatch.
+
+The runtime separates terminal-boundary notification from completion. It reports
+the boundary, observes policy, synchronously calls the permission-assessment
+sink, and only then updates the settings baseline and returns the terminal.
+The sink owns the existing permission state/audit transitions. Progress is
+forwarded, but the projection's terminal adapter state is withheld for the Host
+to publish with the completion. Only a completed, non-abandoned turn updates
+the baseline. Failure or interruption preserves it and requests explicit
+rollback on the next turn, including a late completed terminal after interrupt.
+Interrupt acceptance does not release admission; the token's terminal still
+owns completion. Pre-dispatch interrupt/close releases synchronization waits.
+Connection or unexpected stream failure closes the session and admission;
+there is no second child or implicit exec fallback. Normal terminal failure
+and closed admission/settings errors remain distinct from connection failure.

@@ -985,3 +985,42 @@ close/EOF, and response metadata for resume. No external model/auth/profile
 behavior is claimed. Host app-server execution, queue, watchdog, history replay,
 and normal launch selection are still deferred; protocol and ADR status stay
 unchanged.
+
+### Increment (5c-1): internal Host execution runtime
+
+The Host connection is split into an independently reviewed runtime and later
+Host selection/queue wiring. This first unit owns one `AppServerSession`, one
+thread start/resume, and the preparation/observation lifecycle. It adds no
+backend selection to CodexHost, CLI, config, environment, runner, or launch.
+Existing exec execution and Host callbacks are unchanged.
+
+The runtime's synchronization hook will receive the Host's full admission gate,
+including the current ServerLink permission-sync wait. Preparation waits before
+opening and after effort resolution; a final synchronous comparison covers
+permission and pending model/effort/reset. Superseded preparation retains its
+input/token and has no dispatch callback. The first actual dispatch alone
+consumes new-thread provenance. Completion observes exact-turn policy and calls
+the synchronous assessment sink before changing the successful settings
+baseline. A separate terminal callback lets the future Host end its watchdog
+boundary without waiting for rollout observation. Result/state publication and
+external lifecycle settlement remain the Host's responsibility.
+
+An interrupted turn does not commit a new baseline, including a completed
+terminal already in flight when interrupt was requested. Failed/interrupted
+attempts preserve the baseline and cause explicit next-turn rollback; default
+intent is resolved again. Interrupt is host-token fenced and acknowledgement
+does not retire the active operation. Overlapping run calls are rejected; the
+Host queue will be wired in (5c-2), not replicated inside this runtime.
+Connection/stream failure closes admission without creating another session or
+falling back to exec. Close during asynchronous construction also disposes the
+late-created session.
+
+A production-default runtime test uses the fixed CLI and isolated loopback
+provider for start/resume, terminal policy observation, next-turn network
+changes, explicit effort preservation, failed model-switch rollback, interrupt
+without baseline update, and the next successful turn. Special timing of
+synchronization/settings changes, missing baseline, callback ordering, EOF,
+late interrupt acknowledgement and construction/close races use fixtures.
+The existing analytics/plugins-off startup caveats still apply. IA steering,
+Host queue/watchdog composition, history replay, normal launch and ADR status
+remain outside this unit.
