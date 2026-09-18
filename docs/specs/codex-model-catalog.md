@@ -50,6 +50,13 @@ everything else.
 | Enterprise | custom | Sol / Terra / Luna / Astra (+ individual negotiation) | **Sol + medium** | Admin can change the default |
 | API-key | Usage based | Sol / Terra / Luna / Astra / 5.5 / 5.4 / 5.4-mini + some deprecated models | **Explicit selection required** | No 400/404 restriction |
 
+This table is an **upstream availability snapshot**, not kaoiro's advertised
+catalog. The current kaoiro snapshot advertises Sol / Terra / Luna / Astra for
+ChatGPT Plus and above, Terra for Free/Go, and additionally only `gpt-5.5` and
+`gpt-5.4-mini` for API-key authentication. It deliberately does not advertise
+`gpt-5.3-codex-spark` or non-mini `gpt-5.4`; an operator can still declare an
+unadvertised model through `codex.extra_models`.
+
 `gpt-6-astra` is marked `visibility: list` upstream. Its `models.json` plan
 list also names Free/Go, but that combination is unverified against the live
 Free/Go experience — kaoiro's own catalog (`wrapper/codex/src/catalog.ts`)
@@ -199,9 +206,9 @@ themselves in the meantime:
 - A Codex declaration may include `minimal_client_version` as a
   `major.minor.patch` string. When present, the runner and wrapper exclude
   the entry if the SDK-bundled Codex CLI is older. When absent, the entry
-  remains advertised and the runner and wrapper write one warning per model:
-  CLI compatibility is the operator's responsibility for that escape-hatch
-  declaration.
+  remains advertised and the wrapper writes one process-wide warning per
+  model; runner validation itself does not emit that warning. CLI compatibility
+  is the operator's responsibility for that escape-hatch declaration.
 
 ## Information granularity of `codex doctor`
 
