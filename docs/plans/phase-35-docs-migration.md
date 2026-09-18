@@ -43,7 +43,7 @@ implementation — the emphasis marks; all three are walked at every close.
 | U09 | persona delivery / injection / pack | ops impl | ⏳ |
 | U10 | security / threat model / release audit | ops perm impl | ✅ |
 | U11 | IA messages / conversations / admission | impl | ✅ |
-| U12 | IA dispatch / delivery ledger | perm impl | In review |
+| U12 | IA dispatch / delivery ledger | perm impl | ✅ |
 | U13 | coordination monitoring | perm impl | ⏳ |
 | U14 | directory / companion tools / peer routing | impl | ⏳ |
 | U15 | per-engine IA tool authorization | perm impl | ⏳ |
