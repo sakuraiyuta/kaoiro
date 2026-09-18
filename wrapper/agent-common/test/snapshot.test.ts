@@ -124,4 +124,37 @@ describe("EffectiveStatusSnapshot projection (#113)", () => {
       }),
     ).toEqual({ engine: "claude-code" });
   });
+
+  it("displayed_model は top-level と whoami だけを fallback に差し替え、effective は resolved のまま (issue #363)", () => {
+    const diverged = {
+      engine: "claude-code" as const,
+      resolved: { model: "claude-opus-5[1m]", model_source: "config" as const },
+      displayed_model: "claude-opus-4-8",
+    };
+    expect(effectiveStatusEnvelopeFields(diverged)).toEqual({
+      engine: "claude-code",
+      model: "claude-opus-4-8",
+      model_source: "fallback",
+      effective: { model: "claude-opus-5[1m]", model_source: "config" },
+    });
+    expect(effectiveStatusWhoamiFields(diverged)).toEqual({
+      engine: "claude-code",
+      model: "claude-opus-4-8",
+      model_source: "fallback",
+    });
+  });
+
+  it("displayed_model 未指定なら fallback はどこにも現れない (negative control)", () => {
+    const plain = {
+      engine: "claude-code" as const,
+      resolved: { model: "claude-opus-5[1m]", model_source: "config" as const },
+    };
+    expect(JSON.stringify(effectiveStatusEnvelopeFields(plain))).not.toContain("fallback");
+    expect(effectiveStatusEnvelopeFields(plain)).toEqual({
+      engine: "claude-code",
+      model: "claude-opus-5[1m]",
+      model_source: "config",
+      effective: plain.resolved,
+    });
+  });
 });

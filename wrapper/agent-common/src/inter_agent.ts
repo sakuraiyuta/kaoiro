@@ -37,6 +37,7 @@ import type {
   InterAgentErrorPayload,
   InterAgentMessageKind,
   InterAgentMessagePayload,
+  DisplayedModelSource,
   KaoiroState,
   ModelSource,
   PermissionAxesExt,
@@ -52,7 +53,7 @@ export interface WhoamiSnapshot {
   engine?: EngineKind;
   model?: string;
   effort?: string;
-  model_source?: ModelSource;
+  model_source?: DisplayedModelSource;
   effort_source?: ModelSource;
   permission?: PermissionAxesExt;
   network_access?: boolean;

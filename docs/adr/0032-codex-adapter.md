@@ -214,6 +214,28 @@ and env separation explicit. Implement it in [phase-15-wrapper-ux-parity](../pla
   Claude), fail loudly at startup without silently falling back. Do not confuse
   “unspecified → delegate to default” with “explicitly specified → reject”.
 
+#### F4bc Addendum 2 (2026-09-18, engine-side model switch — issue #363)
+
+A Claude safeguard refusal fallback (`model_refusal_fallback`) switched a
+session from the operator's explicit `claude-opus-5[1m]` to `claude-opus-4-8`;
+the wrapper adopted the SDK-reported model while keeping `model_source:
+"config"`, the server persisted that pair into the resume snapshot, and the
+runner pair rule (case 3) re-applied the fallback as an explicit pin on every
+relaunch. Decision:
+
+- The source vocabulary above stays the config / launch / snapshot vocabulary.
+  A display-only widening `DisplayedModelSource = ModelSource | "fallback"`
+  rides the top-level `ext.model_source` and whoami only.
+- With an explicit pick, an SDK report is adopted only as another spelling of
+  the same model (catalog-resolved); a different model becomes the displayed
+  fallback while `ext.effective` keeps the pick — so relaunch restores the
+  operator's model. Without an explicit pick the wrapper follows the engine as
+  before.
+- The switch is surfaced (stderr, transcript, one-shot `switch_error`
+  `sdk_fallback`); it is not prevented. Declining the fallback
+  (`refusal_fallback_prompt` dialog kind, `CLAUDE_CODE_REFUSAL_FALLBACK_CATCH_ALL`)
+  is a separate policy decision.
+
 ### F5 — Deliver the common Tool description layer to Codex through an MCP bridge (revised 2026-07-10)
 
 Keep the JSON Schema (definition) + handler-function pair in

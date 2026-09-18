@@ -742,6 +742,53 @@ describe("phase-16 dashboard model switch integration", () => {
     expect(notice?.classList.contains("error")).toBe(false);
   });
 
+  it("sdk_fallback は info tone で退避と設定保持を伝え、model_source=fallback の行に注記が出る (issue #363)", async () => {
+    // The engine's safeguard retried the turn on another model. Not an
+    // operator-initiated failure: info tone, and the row says the pick is
+    // kept so the operator knows a relaunch comes back on it.
+    const { target } = await renderDetail({
+      engine: "claude-code",
+      model: "claude-opus-4-8",
+      model_source: "fallback",
+      models: claudeBootstrap,
+      session_capabilities: {
+        supports_attachments: true,
+        supports_user_input_dialog: true,
+        supports_model_switch: true,
+        supports_effort_switch: true,
+      },
+      switch_error: {
+        kind: "model",
+        requested: "claude-opus-5[1m]",
+        reason: "sdk_fallback",
+        rolled_back_to: "claude-opus-4-8",
+      },
+    });
+    expect(target.textContent).toContain(
+      "安全機構により claude-opus-5[1m] から claude-opus-4-8 に退避しました",
+    );
+    expect(target.textContent).toContain("設定 claude-opus-5[1m] は保持され再起動で復帰します");
+    expect(target.textContent).not.toContain("モデル切替に失敗");
+    expect(target.querySelector(".switch-notice")?.classList.contains("error")).toBe(false);
+    expect(target.textContent).toContain("安全機構による退避 (設定は保持、再起動で復帰)");
+  });
+
+  it("model_source=config の通常表示には退避注記が出ない (issue #363 negative control)", async () => {
+    const { target } = await renderDetail({
+      engine: "claude-code",
+      model: "claude-opus-5[1m]",
+      model_source: "config",
+      models: claudeBootstrap,
+      session_capabilities: {
+        supports_attachments: true,
+        supports_user_input_dialog: true,
+        supports_model_switch: true,
+        supports_effort_switch: true,
+      },
+    });
+    expect(target.textContent).not.toContain("安全機構による退避");
+  });
+
   it("codex engine には models_error 通知も class も届かない (cross-engine, phase-18-10)", async () => {
     // Same negative surface as 18-9's button-hidden test, but for the toast
     // path — the effect gates naturally because host derive is Claude-only.

@@ -63,10 +63,15 @@ import {
   TASKLIST_TASK_ID,
 } from "@kaoiro/agent-common";
 import { boundErrorDetail, writeRedactedStderr } from "@kaoiro/agent-common";
-import type { TaskEvent, TasklistTrigger } from "./adapter.js";
+import type {
+  ModelFallbackNotice,
+  TaskEvent,
+  TasklistTrigger,
+} from "./adapter.js";
 import {
   cwdChangedHookToCwd,
   sdkMessageToCompactNotice,
+  sdkMessageToModelFallback,
   sdkMessageToCost,
   sdkMessageToEvents,
   sdkMessageToInitMeta,
@@ -664,6 +669,17 @@ export class AgentHost implements EngineAdapter {
    *  constructor from options.modelSource; auto-becomes "default" when
    *  #applyInitMeta stamps a model without a prior explicit source. */
   #modelSource: ModelSource | null = null;
+  /** Engine-reported model that diverges from an explicit #model pick
+   *  (issue #363). Display-only: it rides the top-level ext.model /
+   *  whoami as `model_source: "fallback"` while #model / #modelSource —
+   *  and therefore ext.effective and the resume snapshot — keep the pick
+   *  a relaunch re-sends. null = no divergence. */
+  #sdkModel: string | null = null;
+  /** The last model the SDK reported (init / context usage), retained so
+   *  the divergence verdict can be re-taken once the account catalog
+   *  lands: the bootstrap catalog cannot resolve aliases, and an alias pick
+   *  reported back in its resolved spelling must not read as a switch. */
+  #lastReportedModel: string | null = null;
   #effort: string | null = null;
   #effortPending: string | null = null;
   #effortLastGood: string | null = null;
@@ -966,6 +982,10 @@ export class AgentHost implements EngineAdapter {
     const axes = PERMISSION_MODE_AXES[this.#permissionMode as PermissionMode];
     return {
       engine: "claude-code",
+      // Display-only divergence (issue #363): the top-level index and whoami
+      // show the engine's model; `resolved` (ext.effective, the snapshot)
+      // keeps the explicit pick so a relaunch re-sends it.
+      ...(this.#sdkModel !== null ? { displayed_model: this.#sdkModel } : {}),
       resolved: {
         ...(this.#model !== null ? { model: this.#model } : {}),
         ...(this.#modelSource !== null
@@ -1440,6 +1460,10 @@ export class AgentHost implements EngineAdapter {
       }
       this.#model = value;
       this.#modelSource = "config";
+      // An explicit pick supersedes any SDK-side divergence (issue #363);
+      // the next init / usage report re-takes the verdict against it.
+      this.#sdkModel = null;
+      this.#lastReportedModel = null;
       this.#operatorSwitchedFields.add("model");
       this.#operatorSwitchedFields.add("model_source");
       if (invalidEffort) {
@@ -1467,6 +1491,10 @@ export class AgentHost implements EngineAdapter {
       modelApplied = true;
       this.#model = value;
       this.#modelSource = "config";
+      // An explicit pick supersedes any SDK-side divergence (issue #363);
+      // the next init / usage report re-takes the verdict against it.
+      this.#sdkModel = null;
+      this.#lastReportedModel = null;
       this.#operatorSwitchedFields.add("model");
       this.#operatorSwitchedFields.add("model_source");
       // Invalidate the cached context snapshot AS SOON AS the model has been
@@ -1946,6 +1974,12 @@ export class AgentHost implements EngineAdapter {
             this.#emitSessionLifecycle("compacting");
           }
         }
+        // An SDK-side model switch (issue #363): a safeguard refusal retried
+        // on another model. Surfaced on stderr and in the transcript, and —
+        // for a session-scope swap — as the display-only fallback model so
+        // the operator can see it and decide whether to switch back.
+        const fallback = sdkMessageToModelFallback(message);
+        if (fallback) this.#applyModelFallback(fallback);
         const result = sdkMessageToResult(message, this.#pendingAssistantErrorCode);
         if (result) {
           // issue #287: every result message closes the turn, so the
@@ -2374,17 +2408,7 @@ export class AgentHost implements EngineAdapter {
     permission_mode?: string;
     fast_mode?: string;
   }): void {
-    if (meta.model !== undefined) {
-      this.#model = meta.model;
-      // When the wrapper had no explicit source at startup, this init is the
-      // SDK's own default (or a mid-session setModel confirmation); stamp
-      // "default" so UI stops treating the value as "not yet reported".
-      // Explicit source (launch / env / config) is maintained — the field
-      // reports the value's origin, not the SDK's confirmation of it.
-      if (this.#modelSource === null) {
-        this.#modelSource = "default";
-      }
-    }
+    if (meta.model !== undefined) this.#observeReportedModel(meta.model);
     if (meta.cwd !== undefined) this.#cwd = meta.cwd;
     if (meta.slash_commands !== undefined) {
       this.#slashCommands = meta.slash_commands;
@@ -2393,6 +2417,132 @@ export class AgentHost implements EngineAdapter {
       this.#permissionMode = meta.permission_mode;
     }
     if (meta.fast_mode !== undefined) this.#fastMode = meta.fast_mode;
+  }
+
+  /** Takes an SDK-reported model (init / context usage) into the host's
+   *  view (issue #363). Without an explicit pick the host follows the
+   *  engine as before. With one, the pick is what a relaunch re-sends, so
+   *  the report only adopts the engine's canonical spelling when the
+   *  catalog says it is the same model; a different model becomes the
+   *  display-only #sdkModel instead of overwriting the pick. An
+   *  undecidable comparison (catalog not yet loaded) changes nothing and is
+   *  retaken by #reconcileReportedModel once the catalog lands. */
+  #observeReportedModel(reported: string): void {
+    this.#lastReportedModel = reported;
+    if (
+      this.#model === null ||
+      this.#modelSource === null ||
+      this.#modelSource === "default"
+    ) {
+      // SDK-delegated: this is the engine's own default (or a mid-session
+      // setModel confirmation); stamp "default" so ext.model never ships
+      // without ext.model_source.
+      this.#model = reported;
+      if (this.#modelSource === null) this.#modelSource = "default";
+      this.#sdkModel = null;
+      return;
+    }
+    switch (this.#compareWithPin(reported)) {
+      case "same":
+        this.#model = reported;
+        this.#sdkModel = null;
+        return;
+      case "different":
+        this.#sdkModel = reported;
+        return;
+      case "unknown":
+        return;
+    }
+  }
+
+  /** Re-takes the divergence verdict for the last report after the account
+   *  catalog replaces the bootstrap one. Only an explicit pick can have a
+   *  pending verdict; an SDK-delegated host follows reports live, and the
+   *  persist_alias_unknown rollback that runs just before this must keep
+   *  its "default" placeholder until the next report, as before. */
+  #reconcileReportedModel(): void {
+    if (
+      this.#lastReportedModel !== null &&
+      this.#modelSource !== null &&
+      this.#modelSource !== "default"
+    ) {
+      this.#observeReportedModel(this.#lastReportedModel);
+    }
+  }
+
+  /** Whether `reported` names the same model as the explicit pick #model,
+   *  modulo spelling: an alias pick (`opus[1m]`) is reported back in its
+   *  resolved form (`claude-opus-5[1m]`, measured on SDK 0.3.258 — init and
+   *  context usage both use the catalog's resolvedModel spelling). Equal
+   *  strings are the same model. Otherwise the verdict needs a catalog that
+   *  knows what the pick resolves to (the SDK's or the runner-transported
+   *  one): while the pick is unknown to the catalog, or its rows carry no
+   *  resolved id — the bootstrap catalog's bare `default` row — the answer
+   *  is "unknown", never "different", so a resolved spelling cannot read as
+   *  a switch. With the pick resolvable, a report that matches none of its
+   *  spellings is a different model even when the catalog does not list it
+   *  (a safeguard fallback lands on an older generation the catalog omits). */
+  #compareWithPin(reported: string): "same" | "different" | "unknown" {
+    const pin = this.#model;
+    if (pin === null || pin === reported) return "same";
+    const pinRows = this.#findCatalogEntries(pin);
+    const ids = new Set<string>();
+    let resolvable = false;
+    for (const row of pinRows) {
+      ids.add(row.value);
+      if (typeof row.resolved_model === "string" && row.resolved_model !== "") {
+        ids.add(row.resolved_model);
+        resolvable = true;
+      }
+    }
+    if (!resolvable) return "unknown";
+    const reportedRows = this.#findCatalogEntries(reported);
+    if (reportedRows.length === 0) return "different";
+    return reportedRows.some(
+      (row) =>
+        ids.has(row.value) ||
+        (typeof row.resolved_model === "string" && ids.has(row.resolved_model)),
+    )
+      ? "same"
+      : "different";
+  }
+
+  /** Surfaces an SDK refusal fallback (issue #363): stderr diagnostic,
+   *  transcript line, and — for a session-scope swap — the one-shot
+   *  switch_error plus the display-only fallback model, taken directly from
+   *  the notice so the operator sees it even while the catalog cannot
+   *  resolve the report. A local (subagent-only) swap leaves the session
+   *  model alone and is only logged. */
+  #applyModelFallback(notice: ModelFallbackNotice): void {
+    this.#warn(
+      `[kaoiro] model refusal ${notice.kind === "refusal_fallback" ? "fallback" : "without fallback"}: ` +
+        `scope=${notice.scope} original=${notice.original_model ?? "?"} ` +
+        `fallback=${notice.fallback_model ?? "-"} category=${notice.category ?? "-"}`,
+    );
+    this.#emitLog({ kind: "system", text: notice.text });
+    if (notice.kind !== "refusal_fallback" || notice.scope !== "session") return;
+    const fallbackModel = notice.fallback_model;
+    if (fallbackModel === undefined) return;
+    const requested = this.#model ?? notice.original_model ?? "?";
+    this.#switchErrorOnce = {
+      kind: "model",
+      requested,
+      reason: "sdk_fallback",
+      rolled_back_to: fallbackModel,
+    };
+    if (
+      this.#model !== null &&
+      this.#modelSource !== null &&
+      this.#modelSource !== "default" &&
+      this.#compareWithPin(fallbackModel) !== "same"
+    ) {
+      // The notice is authoritative for the swap; do not wait for the next
+      // init / usage report or for the catalog to resolve it.
+      this.#sdkModel = fallbackModel;
+    } else {
+      this.#observeReportedModel(fallbackModel);
+    }
+    this.#emitState(this.#machine.state);
   }
 
   /** Records the latest rate-limit snapshot for its window (#16). */
@@ -2557,6 +2707,7 @@ export class AgentHost implements EngineAdapter {
       }));
       this.#modelsSucceeded = true;
       this.#validatePersistModelAgainstCatalog();
+      this.#reconcileReportedModel();
     } catch {
       if (this.#modelsRetryCount >= MAX_MODEL_REFRESH_RETRIES) {
         // Diagnostic breadcrumb for dogfood: after the cap the host stays
@@ -2753,6 +2904,7 @@ export class AgentHost implements EngineAdapter {
       })) as SupportedModel[];
       this.#modelsSucceeded = true;
       this.#validatePersistModelAgainstCatalog();
+      this.#reconcileReportedModel();
       this.#emitState(this.#machine.state);
       return { ok: true, models_count: this.#models.length };
     }
@@ -2797,14 +2949,7 @@ export class AgentHost implements EngineAdapter {
         used_percentage: usage.percentage,
       };
       if (typeof usage.model === "string" && usage.model !== "") {
-        this.#model = usage.model;
-        // Same source semantics as #applyInitMeta: if the wrapper had no
-        // explicit source at startup, the model that surfaces here (a result
-        // message may fire this before init) is the SDK's own default —
-        // stamp "default" so ext.model never ships without ext.model_source.
-        if (this.#modelSource === null) {
-          this.#modelSource = "default";
-        }
+        this.#observeReportedModel(usage.model);
       }
       const prev = this.#context;
       const changed =

@@ -7,6 +7,7 @@ import {
   sdkMessageToEvents,
   sdkMessageToInitMeta,
   sdkMessageToLogs,
+  sdkMessageToModelFallback,
   sdkMessageToRateLimit,
   sdkMessageToResult,
   sdkMessageToResultMeta,
@@ -1110,5 +1111,62 @@ describe("sdkMessageToTask", () => {
   it("task_* 以外の system subtype、および system 以外の type は null", () => {
     expect(sdkMessageToTask(msg({ type: "system", subtype: "init" }))).toBeNull();
     expect(sdkMessageToTask(msg({ type: "result", subtype: "success" }))).toBeNull();
+  });
+});
+
+describe("sdkMessageToModelFallback (issue #363)", () => {
+  // Shape transcribed from SDK 0.3.258 sdk.d.ts SDKModelRefusalFallbackMessage.
+  const fallback = (over: Record<string, unknown> = {}): SDKMessage =>
+    msg({
+      type: "system",
+      subtype: "model_refusal_fallback",
+      trigger: "refusal",
+      direction: "retry",
+      scope: "session",
+      original_model: "claude-opus-5[1m]",
+      fallback_model: "claude-opus-4-8",
+      api_refusal_category: "cyber",
+      api_refusal_explanation: "unstable prose",
+      content: "Switched to Opus 4.8.",
+      uuid: "u",
+      session_id: "s",
+      ...over,
+    });
+
+  it("maps a session-scope refusal fallback with its models and category", () => {
+    expect(sdkMessageToModelFallback(fallback())).toEqual({
+      kind: "refusal_fallback",
+      scope: "session",
+      original_model: "claude-opus-5[1m]",
+      fallback_model: "claude-opus-4-8",
+      category: "cyber",
+      text: "モデルが応答を拒否したため claude-opus-5[1m] から claude-opus-4-8 に退避しました [cyber]",
+    });
+  });
+
+  it("treats an absent scope as session (older CLIs) and a local scope as subagent-only", () => {
+    expect(sdkMessageToModelFallback(fallback({ scope: undefined }))?.scope).toBe("session");
+    const local = sdkMessageToModelFallback(fallback({ scope: "local" }));
+    expect(local?.scope).toBe("local");
+    expect(local?.text).toContain("subagent のみ");
+  });
+
+  it("maps model_refusal_no_fallback and drops empty optional fields", () => {
+    expect(
+      sdkMessageToModelFallback(
+        msg({ type: "system", subtype: "model_refusal_no_fallback", original_model: "claude-opus-5[1m]", api_refusal_category: null, content: "refused" }),
+      ),
+    ).toEqual({
+      kind: "refusal_no_fallback",
+      scope: "session",
+      original_model: "claude-opus-5[1m]",
+      text: "モデルが応答を拒否し、退避せずに turn が終了しました",
+    });
+  });
+
+  it("returns null for every other message", () => {
+    expect(sdkMessageToModelFallback(msg({ type: "system", subtype: "init" }))).toBeNull();
+    expect(sdkMessageToModelFallback(msg({ type: "system", subtype: "compact_boundary" }))).toBeNull();
+    expect(sdkMessageToModelFallback(msg({ type: "result", subtype: "success" }))).toBeNull();
   });
 });

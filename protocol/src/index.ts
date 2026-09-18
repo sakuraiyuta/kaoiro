@@ -693,8 +693,21 @@ export interface PendingQuestionExt {
  *  config) stay stamped after the SDK confirms the value — the field
  *  reports the value's origin, not the SDK's confirmation. Only "default"
  *  means the wrapper never received an explicit pick and is reporting the
- *  engine's own default. */
+ *  engine's own default. This is the config / launch / resume-snapshot
+ *  vocabulary: every value here is a legitimate provenance the runner and
+ *  server persist. */
 export type ModelSource = "launch" | "env" | "config" | "default";
+
+/** The top-level `ext.model_source` / whoami display index (issue #363).
+ *  Adds "fallback": the engine switched the running model on its own (a
+ *  Claude safeguard refusal fallback) away from an explicit pick. It rides
+ *  only next to the engine-reported model in the display index;
+ *  `ext.effective` — and therefore the resume snapshot — keeps the explicit
+ *  pick and its {@link ModelSource}, so a relaunch comes back on the
+ *  operator's model. Kept out of {@link ModelSource} on purpose: config
+ *  parsing, the runner pair rule, and the server snapshot sanitizer must
+ *  never accept it. */
+export type DisplayedModelSource = ModelSource | "fallback";
 
 /** Engine-neutral attachment category. The initial closed vocabulary is
  * image only; adapters map it to their SDK representation internally. */
@@ -892,7 +905,12 @@ export interface SwitchErrorExt {
    *    env, or resume snapshot) not present in the SDK's measured catalog at
    *    startup; the wrapper falls back to `default` (ADR-0037 F8, phase-18-7).
    *    `rolled_back_to === "default"` in this case; `requested` carries the
-   *    dropped alias for operator visibility. */
+   *    dropped alias for operator visibility.
+   *  - `"sdk_fallback"` — the engine switched the running model on its own
+   *    (Claude `model_refusal_fallback`, issue #363). `requested` is the
+   *    explicit pick still held for relaunch; `rolled_back_to` is the model
+   *    the session now runs on. One-shot; the persistent signal is the
+   *    display-only `model_source: "fallback"`. */
   reason: string;
   rolled_back_to?: string;
 }

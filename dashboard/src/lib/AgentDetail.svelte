@@ -567,6 +567,10 @@
   // engines the dashboard hasn't been taught about.
   const modelSource = $derived(modelSourceFrom(envelope));
   const isAccountDefault = $derived(modelSource === "default");
+  // issue #363: the engine switched the running model on its own (Claude
+  // safeguard fallback). Display-only — the wrapper keeps the operator's
+  // pick in ext.effective, so a relaunch comes back on it.
+  const isFallbackModel = $derived(modelSource === "fallback");
   const ccContext = $derived(
     envelope.ext?.context as Record<string, unknown> | undefined,
   );
@@ -1671,6 +1675,14 @@
         switchNotice = {
           tone: "info",
           text: `保存されていた ${failure.requested} は現在の catalog にないので default で開始しました`,
+        };
+      } else if (failure.reason === "sdk_fallback") {
+        // issue #363: not an operator-initiated switch — the engine's
+        // safeguard retried the turn on another model. The pick is kept
+        // for relaunch; the operator decides whether to switch back now.
+        switchNotice = {
+          tone: "info",
+          text: `安全機構により ${failure.requested} から ${failure.rolled_back_to ?? "別の model"} に退避しました。設定 ${failure.requested} は保持され再起動で復帰します。今すぐ戻すなら切替から選び直してください`,
         };
       } else {
         const rollbackTarget =
@@ -2989,6 +3001,9 @@
                   <span class="cc-model">
                     {#if pendingModel}pending:{" "}{/if}{#if modelPrimary}{modelPrimary}{#if resolvedModel && resolvedModel !== modelPrimary}<span class="cc-model-resolved">{resolvedModel}</span>{/if}{:else if isAccountDefault}アカウント既定{:else}<span class="cc-pending">確認待ち</span>{/if}
                   </span>
+                  {#if isFallbackModel}
+                    <span class="axes-hint">安全機構による退避 (設定は保持、再起動で復帰)</span>
+                  {/if}
                   {#if connection && modelSwitchSupported && models.length > 0}
                     <button
                       type="button"

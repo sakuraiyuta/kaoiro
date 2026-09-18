@@ -27,6 +27,7 @@ export type {
   InterAgentMessagePayload,
   EngineKind,
   EngineModelInfo,
+  DisplayedModelSource,
   ModelSource,
   PermissionAxesExt,
   PermissionSelection,
