@@ -803,7 +803,10 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
         ) ?? []) {
           link?.send(envelope);
         }
-        interAgentTurns.settle(turnToken);
+        const cancelled = interAgentTurns.settle(turnToken);
+        if (cancelled !== undefined) {
+          link?.retireInterAgentDeliveries?.(cancelled.items.map(item => item.envelope));
+        }
         return;
       }
       const classified = error ? classifyInterAgentError(error) : undefined;

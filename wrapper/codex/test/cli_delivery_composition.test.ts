@@ -295,7 +295,7 @@ describe("Codex CLI delivery composition (issue #247)", () => {
     const started = deferred();
     const finished = deferred();
     const retired: number[] = [];
-    const sends: string[] = [];
+    const sends: Array<{ text: string; token: string }> = [];
     let options!: Record<string, any>;
     let hostOptions!: Record<string, any>;
     const closing: string[] = [];
@@ -319,7 +319,7 @@ describe("Codex CLI delivery composition (issue #247)", () => {
         return {
           state: "idle", statusExtSnapshot: () => ({}),
           run: async () => { started.resolve(); await finished.promise; },
-          send: async (text: string) => { sends.push(text); },
+          send: async (text: string, _attachments: unknown, _cids: string[], token: string) => { sends.push({ text, token }); },
         } as never;
       },
     });
@@ -328,10 +328,17 @@ describe("Codex CLI delivery composition (issue #247)", () => {
       await started.promise;
       options.onInterAgentDeliveryStatus({ acked_seq: 0 });
       await options.onInterAgentMessage(inboundEnvelope(1, 1));
-      await options.onInterAgentMessage(inboundEnvelope(2, 2));
       await vi.waitFor(() => expect(sends).toHaveLength(1));
-      hostOptions.onWatchdogFailStop({ attribution: "unknown" });
-      expect(retired).toEqual([1, 2]);
+      hostOptions.onTurnStart({ turnToken: sends[0]!.token });
+      await options.onInterAgentMessage(inboundEnvelope(2, 1));
+      await options.onInterAgentMessage(inboundEnvelope(3, 1, "queued", "other.peer"));
+      await vi.waitFor(() => expect(sends).toHaveLength(2));
+      // Real Host cancels its queued turns before notifying the coordinator freeze.
+      hostOptions.onTurnEnd({ turnToken: sends[1]!.token, conversationIds: ["c-3"],
+        error: { detail: "watchdog" }, cancellation: { kind: "watchdog_fail_stop", started: false } });
+      hostOptions.onWatchdogFailStop({ turnToken: sends[0]!.token, attribution: "exact" });
+      expect(retired.sort()).toEqual([2, 3]);
+      expect(sends).toHaveLength(2);
     } finally {
       finished.resolve();
       try { await running; } finally {
