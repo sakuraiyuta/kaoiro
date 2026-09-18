@@ -487,9 +487,11 @@
       : null,
   );
   // Engine + two-axis permission posture (ADR-0032 F4a / ADR-0033 F1). The
-  // badge renders engine-neutrally from ext.permission; the mode SWITCHER
-  // stays Claude-only — codex/antigravity permission is launch-fixed
-  // (ADR-0033 F3, ADR-0057 F4c).
+  // badge renders engine-neutrally from ext.permission; the six-value
+  // permission_mode SWITCHER stays Claude-only. Codex and Antigravity use the
+  // engine-neutral set_permission controls below instead — Codex with
+  // approval host-fixed to never (ADR-0033 F3), Antigravity with sandbox /
+  // network / approval mutable under a launch ceiling (ADR-0057 F4c B0).
   const agentEngine = $derived(engineFrom(envelope));
   const permAxes = $derived(permissionFrom(envelope));
   const isCodexAgent = $derived(agentEngine === "codex");

@@ -251,9 +251,11 @@ default applies to `approval = never` as well). `setPermissionMode` and
 `supports_permission_switch`. Stage B0 (issue #359) enables the shared
 `set_permission` control end to end: after negotiation the wrapper advertises
 `supports_permission_switch` and `permission_switch_axes`, applies a switch by
-mutating its per-turn advisory gate between turns, and the dashboard offers
-sandbox / network / approval pickers with options above the ceiling disabled and
-labelled (approval picker gated on the advertised `permission_switch_axes.approval`).
+mutating its per-turn advisory gate between turns, and the dashboard offers the
+three controls. Only the approval picker reads the ceiling in the UI — it is
+gated on the advertised `permission_switch_axes.approval` and disables and
+labels options above `max` — while the server and the wrapper enforce the
+ceiling on every axis; a sandbox / network UI clamp is a follow-up.
 Precondition for B0: the threat-model MUST that the server cannot widen a
 wrapper's execution ceiling still holds — on this engine the cell matrix
 *is* the ceiling — so B0 adds wrapper-config clamps (`max_sandbox`,
