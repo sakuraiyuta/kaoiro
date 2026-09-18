@@ -68,7 +68,7 @@ import {
   readTurnWatchdogSettings,
   TurnWatchdog,
 } from "./turn_watchdog.js";
-import type { TurnWatchdogWarning } from "./turn_watchdog.js";
+import type { TurnWatchdogOptions, TurnWatchdogWarning } from "./turn_watchdog.js";
 import {
   applyEnvDefaultModel,
   resolveCodexSources,
@@ -103,6 +103,9 @@ type CodexHostOptions = ConstructorParameters<typeof CodexHost>[1];
  * the concrete constructors; regressions capture the exact options and live
  * whoami provider the CLI gives those components (#247, #254). */
 export interface CodexCliDependencies {
+  /** Internal composition seam; the ordinary entrypoint does not select it. */
+  backend?: CodexHostOptions["backend"];
+  watchdogClock?: Pick<TurnWatchdogOptions, "nowMs" | "setTimer" | "clearTimer">;
   parseCliArgs?: typeof parseCliArgs;
   loadConfig?: typeof loadConfig;
   loadWrapperBuildInfo?: typeof loadWrapperBuildInfo;
@@ -419,6 +422,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   // The callbacks close over host, but the watchdog has no timer until the
   // real host turn-start callback runs after construction.
   const turnWatchdog = new TurnWatchdog({
+    ...dependencies.watchdogClock,
     settings: turnWatchdogSettings,
     onWarning: (warning) => {
       writeRedactedStderr(`${describeTurnWatchdogWarning(warning)}\n`);
@@ -736,6 +740,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   const hostOptions = deliveryAcknowledgementRuntime.withHostOptions<
     Omit<CodexHostOptions, "onTurnStart">
   >({
+    backend: dependencies.backend ?? "exec",
     onState,
     onLog,
     onTask,

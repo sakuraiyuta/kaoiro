@@ -1121,3 +1121,52 @@ No actual Phoenix server, external account/model, or new protocol behavior is
 claimed. The existing analytics/plugins-off startup caveats apply. Full IA and
 watchdog supervision and normal launch parity remain later units; ADR status
 is unchanged.
+
+
+### Increment (5e): CLI, watchdog, IA and Supervisor composition
+
+The internal CLI dependency object selects app-server explicitly; normal
+`runCodexCli()` remains exec and no config/environment/flag/runner selector is
+exposed. A clock-only seam permits deterministic watchdog boundary tests without
+replacing watchdog settings or its interrupt/fail-stop callbacks. Stage 6 would
+change the selector source at this composition point; public configuration and
+runner release support still require their own acceptance.
+
+The pinned CLI and default Host/Session/ToolHost/IA components completed an MCP
+`list_agents`/`send_to_agent` synchronous-wait roundtrip through real ServerLink
+and a Phoenix-format wire fixture. Same-peer arrivals coalesce behind their
+active turn; other peers retain separate batches. Only actual dispatch advances
+delivery acknowledgement. A consumed synchronous reply does not become a turn.
+A second native-CLI case uses the injected clock to invoke the real watchdog
+interrupt during that wait, then resumes queued work. The normal case does not
+inject a clock or substitute any Host, Session, ToolHost or IA constructor.
+
+JSONL child fixtures additionally exercise progress attribution, receipt versus
+terminal, exact token fencing, old-turn/same-conversation leases, approved reset
+boundaries and fail-stop. This composition exposed a pre-existing cancellation
+ordering defect: Host calls queued `onTurnEnd` before `onWatchdogFailStop`, but
+the former deleted the coordinator batch before the latter could retire its
+unstarted deliveries. The cancellation branch now retires the exact batch
+returned by `settle`. Exec and app-server both reproduced the missing seq 3 with
+seq 1 active and seq 2 pending; the normal settlement branch and Host callback
+order are unchanged. The repair is a separate commit from the acceptance seams.
+
+Supervision is explicitly layered. Host creates no replacement child and has no
+exec fallback. The existing runner Supervisor restarts unexpected wrapper exits
+within its bounded budget, creating a new wrapper lifetime and omitting the
+original prompt; deliberate stop does not restart. Real wrapper-process tests
+cover that contract with a simulated RPC child and server link. They are not
+native-CLI crash-injection evidence.
+
+A landing-time image assertion had failed once under whole-suite fan-out and
+passed subsequent isolated/full runs. A separate built-module probe showed
+same-agent, cross-process image sweeping removes a materialized file; the native
+CLI then sends a read-failure text instead of an image. Original failure inputs
+were not retained, so this is a demonstrated mechanism, not an attribution of
+that incident. Tests now use distinct agent IDs and emit diagnostic input/path
+existence only on image assertion failure; product cleanup is unchanged.
+
+Stage 6 requires an operator decision to expose an **explicit optional** backend
+selection, retaining exec as both default and rollback target. This increment
+does not claim deployed runner release selection, cross-backend resume rollback,
+non-Linux support or CI stability from local tests. ADR status is unchanged.

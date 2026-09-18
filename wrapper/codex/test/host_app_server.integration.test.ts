@@ -1,4 +1,5 @@
 import { createServer, type ServerResponse } from "node:http";
+import { randomUUID } from "node:crypto";
 import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
@@ -14,6 +15,8 @@ type Request = { model: string; reasoning: { effort: string }; input: Array<{ ty
 // model/auth use loopback, and the Phoenix peer is a test wire fixture, not Phoenix.
 it.each([null, "low"])("runs the default app backend through real ServerLink sync/rejoin, queued turns, policy, images, rollback and MCP interrupt (initial override=%s)", async initialOverride => {
   const home = await mkdtemp(join(tmpdir(), "fuji-348-host-live-")), codexHome = join(home, ".codex");await mkdir(codexHome);
+  // Image sweeping is keyed by agent ID across processes, not isolated HOME.
+  const agentId = `live-host-${randomUUID()}`;
   const wire = await phoenixLoopback(), requests: Request[] = [];
   let held: ServerResponse | undefined, rejectModel = false, toolSignal: AbortSignal | undefined;
   const respond = (response: ServerResponse, tool = false) => {
@@ -64,11 +67,11 @@ enabled = false
 `);
     vi.stubEnv("HOME", home);vi.stubEnv("CODEX_HOME", codexHome);
     for (const key of ["OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL", "OPENAI_ORG_ID"]) vi.stubEnv(key, undefined);
-    link = new ServerLink(wire.url, "live-host", { personaId: "p", permissionSync: { engine: "codex", onSync: message => host!.applyPermissionSync(message) },
+    link = new ServerLink(wire.url, agentId, { personaId: "p", permissionSync: { engine: "codex", onSync: message => host!.applyPermissionSync(message) },
       onSetPermission: selection => { void host!.setPermission(selection).then(() => { relays += 1; }); },
       onInstruction: (text, ids) => { instructionChain = instructionChain.then(() => host!.send(text, ids, [], text)); } });
     expect(await link.waitForPermissionSyncNegotiation()).toBe(true);
-    const config: WrapperConfig = { agent_id: "live-host", persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P", server_url: wire.url,
+    const config: WrapperConfig = { agent_id: agentId, persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P", server_url: wire.url,
       model: "gpt-5.6-sol", effort: "high", sandbox: "workspace-write", network_access: false, codex_auth_mode: "chatgpt", codex_chatgpt_plan: "plus" };
     host = new CodexHost(config, { backend: "app-server", appendSystemPrompt: "HOST_PERSONA", permissionSyncSupported: true,
       waitForPermissionSync: () => link!.waitForPermissionSync(),
@@ -96,7 +99,12 @@ enabled = false
     await vi.waitFor(() => expect(held).toBeDefined(), { timeout: 25_000 });
     expect(requests[0]?.reasoning.effort).toBe(initialOverride ?? "high");expect(starts).toEqual(["A"]);
     const url = requests[0]?.input.filter(i => i.role === "user").at(-1)?.content?.find(c => c.type === "input_image")?.image_url;
-    expect(typeof url).toBe("string");expect(Buffer.from(String(url).split(",")[1]!, "base64")).toEqual(png);
+    try {
+      expect(typeof url).toBe("string");expect(Buffer.from(String(url).split(",")[1]!, "base64")).toEqual(png);
+    } catch (error) {
+      const paths = await Promise.all(imagePaths.map(async path => ({ path, exists: await access(path).then(() => true, () => false) })));
+      throw new Error(JSON.stringify({ agentId, userContent: requests[0]?.input.filter(i => i.role === "user").at(-1)?.content, paths }), { cause: error });
+    }
     expect(imagePaths).toHaveLength(1);expect(imagePaths.every(isAbsolute)).toBe(true);
     await host.setEffort("low");wire.push("set_permission", { version: "0", revision: 2, sandbox: "workspace-write", network_access: true });
     await vi.waitFor(() => expect(relays).toBe(1));

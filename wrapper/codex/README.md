@@ -25,14 +25,14 @@ retry or replace the process automatically. Graceful shutdown is bounded at five
 seconds before killing only the owned child. RPC waits default to 25 seconds.
 Stopping iteration detaches the consumer, not the running turn: admission stays
 closed until its terminal event. The internal Host backend wires token-fenced
-interrupt and immediate shutdown; full watchdog/IA supervision remains a later stage.
+interrupt and immediate shutdown; the CLI composition is exercised below.
 
 Approval policy is pinned to `never`, reviewer to `user`, analytics disabled,
 and `experimentalApi` false. Unexpected server requests receive an explicit
 JSON-RPC rejection and an optional diagnostic without their payload. The
 `stderrTail` accessor retains up to 16,384 characters for diagnostics; callers
 must redact it before logging. There is no steer or external-message submission
-API. Full IA composition remains a later stage.
+API. IA continues through the existing coordinator and queue, without steering.
 
 `AppServerSession` composes the transport with the existing `ToolHost` and
 `dist/bridge.js`. It binds one thread per lifetime, using either start or
@@ -281,7 +281,7 @@ and operator effort priority, image bytes/cleanup, failed-switch rollback, and
 real MCP handler abortion followed by another turn. Deterministic child fixtures
 cover exact queue order/maximum active/all-input-success separately, cancellation,
 callback exceptions, idle/active EOF, and reserved-reset rejection. This does not
-claim full IA coordinator/watchdog composition or launch parity.
+claim public launch parity; CLI composition has separate coverage below.
 
 
 The CLI reads the constructed Host's internal backend; no config, environment,
@@ -317,3 +317,41 @@ history read. Incomplete responses, exact duplicate/stale verdict ordering,
 legacy compatibility, close/EOF, and buffer limits use deterministic fixtures.
 Replay does not manufacture result, delivery acknowledgement, compaction, or
 turn lifecycle events. Protocol and other engines' replay APIs are unchanged.
+
+
+## Internal CLI composition and supervision
+
+`runCodexCli({ backend: "app-server" })` is an internal composition seam. The
+ordinary entrypoint calls `runCodexCli()` with no arguments and selects exec;
+config, environment, flags and runner configuration do not forward a backend.
+The optional watchdog clock supplies only time and timer operations. Settings,
+interrupt, fail-stop and lifecycle callbacks are the production implementation.
+
+The pinned-CLI composition test uses default Host, Session, ToolHost, IA and
+clock components for a normal MCP inter-agent roundtrip. Mid-turn messages stay
+queued; acknowledgements advance at dispatch, and a reply consumed by a live
+synchronous waiter does not enqueue another turn. A second real-CLI case drives
+the watchdog clock during an MCP wait, interrupts the owning turn and processes
+the queued inputs. These use a local model provider and a Phoenix-format wire
+fixture, not an actual Phoenix server or a live remote peer.
+
+Deterministic child fixtures cover watchdog start/progress/end, token fencing,
+interrupt receipt before terminal, late same-conversation settlement, approved
+reset cancellation, and fail-stop. During fail-stop, the CLI explicitly retires
+each cancelled, unstarted Host batch before forgetting its ownership. Coordinator
+pending batches are retired at freeze; the SDK-active batch is not retired and
+cannot produce a late result. Both exec and app-server exercise this ordering.
+
+Host admission failure never creates another app-server child or selects exec.
+The runner Supervisor has a separate existing policy: unexpected wrapper exit
+can restart a **new wrapper lifetime**, within its restart budget, without
+replaying the initial prompt. Deliberate stop does not restart. The runner test
+uses real wrapper processes with a simulated app-server child and server link;
+it does not measure the native CLI's crash behavior.
+
+The image integration tests use unique agent IDs because temporary image sweeps
+are keyed by agent ID across processes. Failed assertions preserve diagnostic
+user content and materialized-path existence. This removes reproduced cross-test
+interference; it does not establish the cause of the earlier isolated CI-style
+fan-out failure. Public backend selection, deployed runner artifacts, cross-OS
+operation and rollout/rollback acceptance remain outside this increment.

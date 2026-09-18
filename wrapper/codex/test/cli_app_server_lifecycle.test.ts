@@ -1,0 +1,126 @@
+import { expect, it, vi } from "vitest";
+import { cliAppFixture } from "./fixtures/cli_app_server.js";
+
+it("starts the real watchdog only at dispatch, extends on matching progress, and stops at terminal", async () => {
+  const f = await cliAppFixture(true);
+  try {
+    f.inbound(1, "first");await new Promise(r => setTimeout(r, 20));
+    expect(f.turns()).toHaveLength(0);expect(f.clock.size).toBe(0);expect(f.acks()).toEqual([]);
+    f.clock.advance(120000);expect(f.interrupts()).toHaveLength(0);
+    f.wire.push("permission_sync", { version: "0", next: { revision: 1, requested: { sandbox: "workspace-write", network_access: false } }, control: { revision: 1, requested: { sandbox: "workspace-write", network_access: false }, status: "pending", constraints: { approval: "never", enforcement: "os" } } });
+    await vi.waitFor(() => expect(f.turns()).toHaveLength(1));expect(f.clock.size).toBe(1);expect(f.acks()).toEqual([1]);
+    f.clock.advance(59000);
+    f.send({ method: "item/completed", params: { threadId: "thread", turnId: "turn-1", item: { id: "progress", type: "agentMessage", text: "progress" } } });
+    await vi.waitFor(() => expect(f.envelopes("log").some(e => (e.payload as any).text === "progress")).toBe(true));
+    f.clock.advance(59000);expect(f.interrupts()).toHaveLength(0);
+    // Neither unrelated notifications nor incoming operator work is model progress.
+    f.send({ method: "item/completed", params: { threadId: "other", turnId: "turn-1", item: { id: "other", type: "agentMessage", text: "other" } } });
+    f.send({ method: "account/rateLimits/updated", params: { rateLimits: { primary: { usedPercent: 1, windowDurationMins: 300 } } } });
+    f.wire.push("instruction", { version: "0", text: "queued" });
+    await new Promise(r => setTimeout(r, 20));f.clock.advance(1000);
+    await vi.waitFor(() => expect(f.interrupts()).toHaveLength(1));expect(f.turns()).toHaveLength(1);
+    f.terminal("interrupted");await vi.waitFor(() => expect(f.envelopes("result")).toHaveLength(1));
+    // Queued work is now waiting on the observation gate, with no watchdog timer.
+    expect(f.clock.size).toBe(0);f.clock.advance(120000);expect(f.interrupts()).toHaveLength(1);
+  } finally { await f.close(); }
+});
+
+it("fences interrupt by Host token, keeps the queue until interrupted terminal, then resumes it", async () => {
+  const f = await cliAppFixture();
+  try {
+    f.inbound(1, "first");await vi.waitFor(() => expect(f.turns()).toHaveLength(1));
+    const token = f.host.activeInterAgentTurnToken()!;
+    f.inbound(2, "second");await new Promise(r => setTimeout(r, 20));
+    expect(f.host.requestInterruptForTurn("stale")).toBe(false);expect(f.interrupts()).toHaveLength(0);
+    expect(f.host.requestInterruptForTurn(token)).toBe(true);
+    await vi.waitFor(() => expect(f.interrupts()).toHaveLength(1));expect(f.turns()).toHaveLength(1);expect(f.acks()).toEqual([1]);
+    expect(f.interrupts()[0]?.params).toEqual({ threadId: "thread", turnId: "turn-1" });
+    f.terminal("interrupted");await vi.waitFor(() => expect(f.turns()).toHaveLength(2));
+    expect(f.host.requestInterruptForTurn(token)).toBe(false);
+    expect(f.acks()).toEqual([1, 2]);f.terminal();await vi.waitFor(() => expect(f.envelopes("result")).toHaveLength(2));
+    expect(f.spawned).toBe(1);expect(f.clock.size).toBe(0);
+  } finally { await f.close(); }
+});
+
+it.each(["exec", "app-server"] as const)("%s fail-stops once, retires pending and dispatched-but-unstarted IA, and ignores late terminal", async backend => {
+  const f = await cliAppFixture(false, backend);
+  const stderr = vi.spyOn(process.stderr, "write");
+  try {
+    f.inbound(1, "active");await vi.waitFor(() => expect(f.turns()).toHaveLength(1));
+    f.inbound(2, "pending");f.inbound(3, "queued", "queued", "other.peer");
+    await new Promise(r => setTimeout(r, 20));expect(f.acks()).toEqual([1]);
+    f.clock.advance(60000);
+    if (backend === "app-server") await vi.waitFor(() => expect(f.interrupts()).toHaveLength(1));
+    f.clock.advance(1000);
+    expect(stderr.mock.calls.filter(([text]) => String(text).includes("turn watchdog fail-stop:"))).toHaveLength(1);
+    f.releaseExec();await f.running;
+    expect(f.envelopes("result")).toHaveLength(0);expect(f.turns()).toHaveLength(1);expect(f.spawned).toBe(1);
+    expect(f.envelopes("state_change").filter(e => e.state === "error")).toHaveLength(1);
+    expect(stderr.mock.calls.filter(([text]) => String(text).includes("turn watchdog interrupt grace expired"))).toHaveLength(1);
+    const retire = f.wire.received.filter(e => e.event === "delivery_resync");
+    expect(retire.length).toBeGreaterThan(0);
+    expect(retire.flatMap(e => e.payload.missing_ranges as number[][]).sort((a, b) => a[0]! - b[0]!)).toEqual([[2, 2], [3, 3]]);
+    await f.host.send("after");f.clock.advance(120000);expect(f.turns()).toHaveLength(1);expect(f.acks()[0]).toBe(1);
+    expect(f.wire.received.filter(e => e.event === "session_reset_request")).toHaveLength(0);
+  } finally { stderr.mockRestore();await f.close(); }
+});
+
+it.each(["completed", "interrupted", "eof", "fail-stop"])("keeps approved reset bound to its %s terminal through the real broker and coordinator", async status => {
+  const f = await cliAppFixture();
+  try {
+    f.inbound(1, "reset");await vi.waitFor(() => expect(f.turns()).toHaveLength(1));
+    const call = f.tool("request_session_reset", { mode: "new", reason: "fixture" });
+    await vi.waitFor(() => expect(f.envelopes("permission_request")).toHaveLength(1));
+    const pending = f.envelopes("permission_request")[0]!.payload as { request_id: string };
+    expect(f.wire.received.filter(e => e.event === "session_reset_request")).toHaveLength(0);
+    f.wire.push("permission_decision", { version: "0", request_id: pending.request_id, allow: true });
+    expect(JSON.stringify(await call)).toContain("reserved");
+    expect(f.wire.received.filter(e => e.event === "session_reset_request")).toHaveLength(0);
+    if (status === "eof") { f.exit();await f.running; }
+    else if (status === "fail-stop") { f.clock.advance(60000);await vi.waitFor(() => expect(f.interrupts()).toHaveLength(1));f.clock.advance(1000);await f.running;expect(f.envelopes("result")).toHaveLength(0); }
+    else { f.terminal(status);await vi.waitFor(() => expect(f.envelopes("result")).toHaveLength(1)); }
+    if (status === "completed") await vi.waitFor(() => expect(f.wire.received.filter(e => e.event === "session_reset_request")).toHaveLength(1));
+    else { await new Promise(r => setTimeout(r, 30));expect(f.wire.received.filter(e => e.event === "session_reset_request")).toHaveLength(0); }
+  } finally { await f.close(); }
+});
+
+it("does not let an old Host settlement resolve the next same-conversation lease", async () => {
+  const f = await cliAppFixture();
+  try {
+    f.inbound(1, "lease");await vi.waitFor(() => expect(f.turns()).toHaveLength(1));
+    const old = f.host.activeInterAgentTurnToken()!;
+    expect(JSON.stringify(await f.tool("send_to_agent", { to: "peer.agent", conversation_id: "lease", kind: "response", body: "first reply" }))).toContain("sent");
+    f.inbound(2, "lease", "NEXT_GENERATION", "peer.agent", 3);
+    await new Promise(r => setTimeout(r, 20));expect(f.turns()).toHaveLength(1);expect(f.acks()).toEqual([1]);
+    f.terminal();await vi.waitFor(() => expect(f.turns()).toHaveLength(2));
+    const notices = () => f.envelopes("inter_agent_message").filter(e => (e.payload as any).error);
+    expect(notices()).toHaveLength(0);
+    // Inject a duplicate old boundary at the CLI callback surface, not the new token.
+    f.callbacks.onTurnEnd?.({ turnToken: old, conversationIds: ["lease"], terminal: "turn.failed", error: { detail: "old failure" } });
+    await new Promise(r => setTimeout(r, 20));expect(notices()).toHaveLength(0);
+    f.terminal("failed");await vi.waitFor(() => expect(notices()).toHaveLength(1));
+    expect(f.turns()).toHaveLength(2);expect(f.acks()).toEqual([1, 2]);
+  } finally { await f.close(); }
+});
+
+it("keeps the ordinary CLI backend exec despite config and environment hints", async () => {
+  const { runCodexCli } = await import("../src/cli.js");
+  const signals = process.listeners("SIGINT");let selected: unknown;
+  vi.stubEnv("KAOIRO_CODEX_BACKEND", "app-server");
+  try {
+    await runCodexCli({
+      parseCliArgs: () => ({ configPath: "fixture", prompt: undefined, resume: undefined }),
+      loadConfig: () => ({ agent_id: "ordinary", persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P", server_url: "ws://fixture", backend: "app-server" }),
+      createServerLink: (_url, _id, callbacks) => {
+        queueMicrotask(() => callbacks.onPersonaPrompt?.("Fixture"));
+        return { send() {}, close() {}, currentSessionId: () => null } as never;
+      },
+      createHost: (_config, options) => { selected = options.backend;return { state: "idle", statusExtSnapshot: () => ({}), run: async () => {} } as never; },
+      prepareStartup: async () => {},
+    });
+    expect(selected).toBe("exec");
+  } finally {
+    for (const listener of process.listeners("SIGINT")) if (!signals.includes(listener)) process.removeListener("SIGINT", listener);
+    vi.unstubAllEnvs();
+  }
+});
