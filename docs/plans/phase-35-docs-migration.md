@@ -42,7 +42,7 @@ implementation — the emphasis marks; all three are walked at every close.
 | U08 | runner control / wrapper config | ops impl | ⏳ |
 | U09 | persona delivery / injection / pack | ops impl | ⏳ |
 | U10 | security / threat model / release audit | ops perm impl | ✅ |
-| U11 | IA messages / conversations / admission | impl | ⏳ |
+| U11 | IA messages / conversations / admission | impl | ✅ |
 | U12 | IA dispatch / delivery ledger | perm impl | ⏳ |
 | U13 | coordination monitoring | perm impl | ⏳ |
 | U14 | directory / companion tools / peer routing | impl | ⏳ |
