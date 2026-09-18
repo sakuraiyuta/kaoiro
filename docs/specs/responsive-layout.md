@@ -16,7 +16,7 @@ layout-switching rules** layered on top of it.
 
 The exhaustive table of display conditions, reachability paths, and scroll
 owners for each element is in
-[responsive-reachability.md](responsive-reachability.md).
+[responsive-reachability.md](../reference/ui/responsive-reachability.md).
 
 The dashboard treats PC, tablet, and smartphone sizes equally
 ([ADR-0052](../adr/0052-responsive-three-tier-layout.md)). That ADR is canonical
@@ -133,7 +133,7 @@ flowchart TB
 The overlay stack is, from front to back, **global dialog / drawer (including
 backdrop) > bottom sheet > in-flow docks > page body**. The detailed order
 within a layer and ownership of anchor-relative menus are defined by
-[responsive-reachability.md](responsive-reachability.md).
+[responsive-reachability.md](../reference/ui/responsive-reachability.md).
 
 Sheet contract:
 
@@ -171,7 +171,7 @@ outside the spacing scale for other elements. CSS `env()` also requires
 - **MUST**: Switch layout with CSS media queries. The only Svelte state is sheet
   open/close.
 - **MUST**: All functionality and information are reachable from all sizes. The
-  exhaustive table is [responsive-reachability.md](responsive-reachability.md).
+  exhaustive table is [responsive-reachability.md](../reference/ui/responsive-reachability.md).
 - **MUST**: On smartphones, viewing, sending instructions, and approving
   permission are possible. Composer and send remain reachable with a software
   keyboard visible.
@@ -198,7 +198,7 @@ None.
 ## See Also
 
 - Related specs: [design](design.md),
-  [responsive-reachability](responsive-reachability.md),
+  [responsive-reachability](../reference/ui/responsive-reachability.md),
   [protocol](protocol.md)
 - ADRs: [0052-responsive-three-tier-layout](../adr/0052-responsive-three-tier-layout.md),
   [0012-response-display-and-dashboard-scope](../adr/0012-response-display-and-dashboard-scope.md)

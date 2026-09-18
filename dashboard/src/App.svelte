@@ -2211,7 +2211,7 @@
     min-width: 0;
   }
 
-  /* Smartphone header (responsive-reachability.md app chrome): the title
+  /* Smartphone header (docs/reference/ui/responsive-reachability.md app chrome): the title
      drops its "— 顔色" suffix, the connection badge shrinks to its dot,
      logout moves into SettingsDrawer, and the agent strip scrolls
      horizontally instead of wrapping the header taller.

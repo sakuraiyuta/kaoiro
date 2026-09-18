@@ -124,7 +124,7 @@
   <div class="handle">
     <!-- The handle is a CONTAINER: the open/close toggle and the attention
          badge are sibling buttons, never nested interactive elements
-         (responsive-reachability.md 盲点インジケータの扱い). -->
+         (docs/reference/ui/responsive-reachability.md 盲点インジケータの扱い). -->
     <button
       type="button"
       class="toggle"
@@ -135,7 +135,7 @@
       <span class="grip" aria-hidden="true"></span>
       <span class="toggle-label">{label}</span>
       {#if open && pendingTone}
-        <!-- 展開中のみ (responsive-reachability.md overlay 表): 閉時は
+        <!-- 展開中のみ (docs/reference/ui/responsive-reachability.md overlay 表): 閉時は
              シートが何も覆っておらず、dock / カード自身が signal になる。 -->
         <span
           class="pending-lamp"
@@ -315,7 +315,7 @@
     border-radius: 0.75rem 0.75rem 0 0;
     background: var(--bg);
     /* Non-scrolling wrapper: the slotted content owns the vertical scroll
-       (responsive-reachability.md スクロール所有者). */
+       (docs/reference/ui/responsive-reachability.md スクロール所有者). */
     overflow: hidden;
     z-index: 31;
     outline: none;

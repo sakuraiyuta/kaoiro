@@ -326,7 +326,7 @@ override)**, while **AgentDetail status moves there at tablet width and below**.
 
 Breakpoint values, region layout rules, sheet mechanism, and safe-area handling are
 canonical in [responsive-layout.md](responsive-layout.md). Per-element paths by
-size are in [responsive-reachability.md](responsive-reachability.md). The
+size are in [responsive-reachability.md](../reference/ui/responsive-reachability.md). The
 transition history and rejected alternatives are in [ADR-0052](../adr/0052-responsive-three-tier-layout.md).
 
 > Before 2026-08-09 this section said “mobile/narrow is not first-class, but does
@@ -552,7 +552,7 @@ intentional and may be ignored:
 
 - Implementation: [dashboard/src/app.css](../../dashboard/src/app.css), [App.svelte](../../dashboard/src/App.svelte), [AgentCard.svelte](../../dashboard/src/lib/AgentCard.svelte), [AgentDetail.svelte](../../dashboard/src/lib/AgentDetail.svelte), [LaunchDialog.svelte](../../dashboard/src/lib/LaunchDialog.svelte)
 - Dimensions and layout switching: [responsive-layout.md](responsive-layout.md) (breakpoints / region rules / sheet mechanism)
-- Per-size reachability: [responsive-reachability.md](responsive-reachability.md) (element paths / scroll owners)
+- Per-size reachability: [responsive-reachability.md](../reference/ui/responsive-reachability.md) (element paths / scroll owners)
 - State definitions: [protocol.md](protocol.md) (one-to-one state palette)
 - Expressions and persona portraits: [personas.md](personas.md)
 - Format specification: [DESIGN.md (Google, alpha)](https://github.com/google/design.md)
