@@ -191,9 +191,12 @@ confirmation**.
   (`scope: "local"`) is logged and changes nothing.
   An explicit `set_model` supersedes the divergence and persists as
   `config` as before.
-- Effort follows the same semantics (`ext.effort_source`): without an explicit
-  startup value the wrapper does not know the SDK default and waits for its
-  report.
+- Effort follows the same *startup* semantics (`ext.effort_source`): without
+  an explicit startup value the wrapper does not know the SDK default and
+  waits for its report. Unlike model, effort has no engine-side
+  fallback-divergence display — `#applyModelFallback` never touches
+  `#effort`/`#effortSource`, and `effort_source` stays typed `ModelSource`,
+  not `DisplayedModelSource`.
 
 #### `ext.session_capabilities` (2026-07-11, [ADR-0034](../adr/0034-session-capabilities-advertisement.md) F1/F2)
 
@@ -263,6 +266,10 @@ turn** ([ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) F1
   ADR-0035 F3). `rolled_back_to` is the previous pinned last-known-good value
   (normally the prior turn's effective value). UI reports failure and rollback;
   never put the failed value in effective or resume snapshots (phase-16 16-7).
+  The one exception is `reason: "sdk_fallback"` (issue #363, see the model
+  bullet above): there `requested` is the still-held explicit pick and
+  `rolled_back_to` is the model actually running now — the reverse direction
+  from every other reason.
 
 **Operator drift filter for `resume_drift`** (phase-16 addendum, [ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md) F2): do not include
 model/effort changes intentionally made by an operator mid-session (intentional
@@ -315,8 +322,11 @@ sandbox, and `false < true` for network access; the wrapper re-checks the same
 ceiling fail-closed.
 
 Server validation order is live operator/admin authorization, payload/size,
-agent identity/current connection, reset exclusion, current metadata readiness,
-capability, and raw baseline availability. Before the current connection has
+agent identity, reset exclusion (before the connection/capability checks that
+follow — a pending reset rejects even a disconnected or capability-less agent
+the same way), current connection, current metadata readiness, capability, the
+launch-ceiling clamp (`exceeds_launch_ceiling`), and raw baseline
+availability. Before the current connection has
 reported its first capability metadata, return `permission_not_ready`. Once that
 metadata is present, a missing/false supports_permission_switch means
 `unsupported_permission_switch`, not a transient wait. Busy states are accepted.
@@ -768,10 +778,10 @@ are refined incrementally ([ADR-0010](../adr/0010-protocol-precisification.md)).
 |---|---|---|
 | `state_change` | **settled** | `{ label?: string, summary?: string }`; optional short destination label (for example `"Edit src/foo.ts"`) and human-readable summary. |
 | `log` | **settled** | `{ kind: "assistant" \| "tool_use" \| "tool_result" \| "user" \| "system", text?, tool_name?, tool_use_id?, input?, output?, truncated? }`. Relays agent output: assistant model text; tool_use call; tool_result output; user echoes operator instructions (#31); system is a wrapper-observed session event such as compaction or reset (phase-28 A1, #158). Never substitute assistant for system or wrapper notices appear as model replies. `tool_use_id` links use/result when supplied by the SDK (#40). UI collapses tool I/O by default; wrapper truncates long text (`truncated: true`). **Operator role only** ([threat-model](threat-model.md), [ADR-0012](../adr/0012-response-display-and-dashboard-scope.md)). |
-| `permission_request` | **settled** | `{ request_id: string, tool_name: string, input?: object, truncated?: boolean }`. Wrapper-generated session-unique request ID ([ADR-0011](../adr/0011-phase3-reliability-and-auth.md)); tool input is clipped to about 16 KB with `truncated: true` and follows [threat-model](threat-model.md). State is `waiting_permission`. This is an initial notification only; authoritative pending state is `state_change.ext.pending_permission` ([ADR-0022](../adr/0022-pending-permission-authoritative-source.md)). Keep the envelope for compatibility and “new pending” notification, with payload/ext fields synchronized. New clients should read ext. Deliver operator-only; viewers receive a synthetic `state_change(waiting_permission)` with empty payload/ext ([ADR-0021](../adr/0021-role-information-disclosure-policy.md)). |
+| `permission_request` | **settled** | `{ request_id: string, tool_name: string, input?: object, truncated?: boolean }`. Wrapper-generated session-unique request ID ([ADR-0011](../adr/0011-phase3-reliability-and-auth.md)); tool input above 16 KB (`MAX_INPUT_BYTES`, serialized size) is dropped from the payload entirely — never partially clipped, to avoid splitting a secret mid-string — with `truncated: true` flagging the drop; follows [threat-model](threat-model.md). State is `waiting_permission`. This is an initial notification only; authoritative pending state is `state_change.ext.pending_permission` ([ADR-0022](../adr/0022-pending-permission-authoritative-source.md)). Keep the envelope for compatibility and “new pending” notification, with payload/ext fields synchronized. New clients should read ext. Deliver operator-only; viewers receive a synthetic `state_change(waiting_permission)` with empty payload/ext ([ADR-0021](../adr/0021-role-information-disclosure-policy.md)). |
 | `question_request` | **settled** | `{ request_id: string, questions: [...] }` structured SDK `AskUserQuestion` data (one to four questions, each with two to four options). Authoritative pending state is `state_change.ext.pending_question` ([ADR-0027](../adr/0027-askuserquestion-envelope.md)); retain this initial notification for compatibility with synchronized `request_id`/`questions`/`ts`. Answers use directional `question_response`. Operator-only; viewers receive synthetic `state_change(waiting_question)` with empty payload/ext ([ADR-0021](../adr/0021-role-information-disclosure-policy.md)). |
 | `result` | **settled** | `{ text?: string, is_error?: boolean, error_subtype?: string, error_detail?: string, error_code?: string, error_summary?: string, recovery_hint?: string }`. Final response when a turn completes. `is_error` distinguishes error termination; `error_subtype` carries the SDK termination subtype and `error_detail` relays the SDK body to the client (#123). Claude Code uses the closed vocabulary `error_max_turns` / `error_during_execution` / `error_max_budget_usd` / `error_max_structured_output_retries`; other values are rounded to `error_during_execution`, **including a `success`-subtype result that still carries `is_error: true`** (an SDK-classified API error — e.g. authentication failure — surfacing as error text in the success payload's own `result` field rather than an `errors[]` array; issue #287). `error_detail` joins `SDKResultError.errors` with `"; "` (or `stop_reason` when absent); it is **not summarized, but is not raw either**: credential-shaped substrings (an API key, an Authorization/Bearer header value, an api_key assignment) are redacted to security.md's last-4-visible convention before clipping to 16,384 UTF-8 bytes (`boundErrorDetail`, the same mask-then-clip transform `log` payload clipping otherwise follows; no `truncated` flag) — every engine adapter's own single error-emission choke point applies this transform (issue #300 rounds 2-3), not only Codex's. **This masking is scoped to `result.error_detail` alone**: `log` payload text (tool_use/tool_result I/O) and `permission_request.input` are relayed unmasked — see [threat-model](threat-model.md)'s mitigation table, where tool-input masking is tracked separately as future work. `error_code` / `error_summary` / `recovery_hint` (issue #287) are additive safe fields, set only when the wrapper's underlying SDK classifies the failure at the assistant/API level (independent of `error_subtype`, which is the turn-termination subtype): `error_code` is the SDK's own error-class string (e.g. `authentication_failed`) forwarded as-is, including a value the wrapper does not yet recognize; `error_summary`/`recovery_hint` are built by the wrapper from a closed, wrapper-owned code -> text table and contain **no raw SDK text at all**, so the client may render them directly with no further masking or clipping. **Display priority**: when `error_summary` is present the client shows it as the primary line in place of a generic `error_subtype` label; `error_detail` remains available as an optional detail-expansion (e.g. a collapsed `<details>`) rather than an always-on second line. All three are absent on success and absent whenever the wrapper has no code for the failure. Relaying the error body follows [ADR-0016](../adr/0016-error-body-relay.md); its single `error_message` proposal was not implemented, and the wire uses subtype plus body instead (the ADR's proposal to send the last error before wrapper process exit is also unimplemented). **The Codex adapter normally omits this subtype because its SDK has no such concept.** If resume failure detail matches a rollout-corruption candidate and full-file validation confirms it, create a backup, remove only invalid lines, validate every line with at least one non-empty entry, then atomically replace the file (issue #262). On repair success, retry the same resume immediately and return the successful result. If there are zero valid entries or backup/repair/revalidation fails, leave the original untouched, return `error_rollout_corrupted`, and skip later resume attempts until manual intervention. **When the candidate does not match, or the rollout is normal/unresolved, omit `error_subtype` and follow the normal `is_error: true` path.** State becomes `waiting_input` after `done`/`error`; a `success`-subtype `is_error: true` result (above) emits `error`, never `done` (issue #287). Total USD cost is attached in `ext.cost` (#8). As with `log`, **operator-only delivery** ([ADR-0012](../adr/0012-response-display-and-dashboard-scope.md)). |
-| `task` | **settled** | Dedicated type notifying subagent/workflow start, update, and completion (implemented—[subagent-tasks](subagent-tasks.md) stages 1–3, issue #170). `{ kind: "started" \| "updated" \| "completed", agent_id, task_id, task_type, status, subagent_type?, workflow_name?, description?, usage?, last_tool_name?, summary?, skip_transcript? }`. `kind` is the lifecycle event; `status` is coarse (`running`/`completed`/`failed`/`stopped`); `task_type` is an extensible enum (SDK values `local_agent`/`local_workflow`/`local_bash` pass through unchanged). `tasklist` is an additional single entity carrying the agent's complete todo list in optional `items`, with whole-list replacement ([ADR-0049](../adr/0049-tasklist-on-task-envelope.md)); unknown values fall back to generic display. `task_id` is limited to 256 bytes at ingress (**source of truth**: server `WrapperChannel.@max_task_id_field_bytes`; M1 round-3 fix, issue #170). In the task snapshot wire, `task_id` appears both as the payload value and as the outer key of the `tasks` map, so an unlimited length could exhaust the snapshot byte budget with few envelopes; ADR-0047 F2 does not state this cap and this row is authoritative. Tasks are independent of the parent `state_change` and reference the parent `agent_id`. `kind=updated` is throttled by the wrapper (three seconds plus either a token delta of 500 or a tool-name change; `started`/`completed` are immediate). Later connections receive the active set under `task_snapshot.tasks`. **Operator-only**: viewers receive no task events and their join always has `tasks: {}`; this uses the existing server gate for operator-only types (`log`/`result`/`hosts`) and adds no new branch ([ADR-0021](../adr/0021-role-information-disclosure-policy.md) + [ADR-0048](../adr/0048-task-aggregation-delivery.md) addendum). ([ADR-0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md) / [ADR-0047](../adr/0047-task-envelope-schema.md) / [ADR-0048](../adr/0048-task-aggregation-delivery.md)). `version` remains unchanged for this addendum. |
+| `task` | **settled** | Dedicated type notifying subagent/workflow start, update, and completion (implemented—[subagent-tasks](subagent-tasks.md) stages 1–3, issue #170). `{ kind: "started" \| "updated" \| "completed", agent_id, task_id, task_type, status, subagent_type?, workflow_name?, description?, usage?, last_tool_name?, summary?, skip_transcript? }`. `kind` is the lifecycle event; `status` is coarse (`running`/`completed`/`failed`/`stopped`); `task_type` is an extensible enum (SDK values `local_agent`/`local_workflow`/`local_bash` pass through unchanged). `tasklist` is an additional single entity carrying the agent's complete todo list in optional `items`, with whole-list replacement ([ADR-0049](../adr/0049-tasklist-on-task-envelope.md)); unknown values fall back to generic display. `task_id` is limited to 256 bytes at ingress (**source of truth**: server `WrapperChannel.@max_task_id_field_bytes`; M1 round-3 fix, issue #170). In the task snapshot wire, `task_id` appears both as the payload value and as the outer key of the `tasks` map, so an unlimited length could exhaust the snapshot byte budget with few envelopes; ADR-0047 F2 mentions the 256-byte cap only in passing and explicitly defers to this row as the source of truth. Tasks are independent of the parent `state_change` and reference the parent `agent_id`. `kind=updated` is throttled by the wrapper (three seconds plus either a token delta of 500 or a tool-name change; `started`/`completed` are immediate). Later connections receive the active set under `task_snapshot.tasks`. **Operator-only**: viewers receive no task events and their join always has `tasks: {}`; this uses the existing server gate for operator-only types (`log`/`result`/`hosts`) and adds no new branch ([ADR-0021](../adr/0021-role-information-disclosure-policy.md) + [ADR-0048](../adr/0048-task-aggregation-delivery.md) addendum). ([ADR-0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md) / [ADR-0047](../adr/0047-task-envelope-schema.md) / [ADR-0048](../adr/0048-task-aggregation-delivery.md)). `version` remains unchanged for this addendum. |
 | `attach_rejected` | **settled** | `{ upload_id, reason, detail? }`. Rejection of one upload (wrapper validation at `attach_close`, SDK error, or interrupt). The reason enum is defined by [file-upload](file-upload.md): `size_over` / `mime_denied` / `count_over` / `timeout` / `interrupted` / `unfittable_image` / `unfittable_pdf` / `text_too_large` / `total_request_over` / `sdk_error`. **Operator-only delivery** (allow-list, [ADR-0021](../adr/0021-role-information-disclosure-policy.md)). The aggregate specification is [file-upload](file-upload.md), with rationale in [ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md). `version` remains unchanged for this addendum. |
 | `instruction_rejected` | **settled** | `{ attachment_ids?, reason, detail? }`. Rejection of the whole instruction (aggregate limit, SDK error, interrupt, etc.). The reason enum and delivery gate are the same as `attach_rejected`; `version` remains unchanged. |
 | `inter_agent_message` | **settled** | Conversation message from agent A to B. Payload has `to` / `conversation_id` / `turn_number` / `kind` (nine-value enum) / `body` / `meta {done, propose_next, confidence?, reject_reason?}` / `owner {kind, id}` / `error? {code, message}`. `error` is an optional addendum sent back to the sender when the peer cannot respond (`kind` reuses `inform`; presence of `error` distinguishes it, #127). The server routes by `to` and broadcasts observations without interpreting semantics; carve-outs are structural `error` validation, synthesizing `code=reconnecting` / `code=disconnected` on wrapper disconnect, and synthesizing an error-free `reconnected` inform after an exact-token return. The normative text is [protocol-inter-agent](protocol-inter-agent.md). **Operator-only delivery**; `version` remains unchanged. |
@@ -820,8 +830,10 @@ limits and rejects violations; normal over-limit input is made displayable by wr
 `tasklist` is outside the three-second/token/tool-name throttle used for child-task
 `kind=updated`. Todo changes have no later token/tool signal to flush, so that throttle
 could permanently lose updates. The wrapper de-duplicates only consecutive snapshots with
-identical content and sends changed snapshots immediately. Claude Code `TodoWrite` maps
-`content` and the three-valued status. `activeForm` is Claude-local UI text; the wire item
+identical content and sends changed snapshots immediately. Claude Code's default source
+since SDK 0.3.228 is the `TaskCreate`/`TaskUpdate`/`TaskList` tool triggers ([ADR-0049](../adr/0049-tasklist-on-task-envelope.md)
+addendum); `TodoWrite`, which maps `content` and the three-valued status directly, remains
+only the `CLAUDE_CODE_ENABLE_TASKS=0` compatibility fallback. `activeForm` is Claude-local UI text; the wire item
 settled by ADR-0049 contains only text and status, so it is not sent. Showing it later
 requires a protocol extension rather than an implicit field addition. Codex
 `todo_list.completed: boolean` maps `false -> pending` and `true -> completed`.
@@ -861,8 +873,8 @@ The complete coverage and the permanent `attach_chunk` exception are normative i
 | wrapper → server | `directory_request` | `{}` requests the peer directory. The server allow-lists AgentStates, merges AgentDirectory-only disconnected entries, and removes the sending wrapper once. It replies with `{ agents: [...], users: [...] }` only when the complete production JSON reply fits the transport frame budget; otherwise its Phoenix error body is `{ reason: "directory_too_large" }`. It never returns a partial directory, so a wrapper cannot use incomplete data for peer name resolution. Projection rules are normative in [protocol-inter-agent](protocol-inter-agent.md). |
 | server → client | `snapshot` | `{ agents: { <agent_id>: envelope }, snapshot_incomplete?: true }` is pushed after join. The TransportLimits-bounded projection marks omission with `snapshot_incomplete`; compact entries may lose display-only fields while control state is unchanged. |
 | server → client | `task_snapshot` | `{ tasks: { <agent_id>: { <task_id>: envelope } } }` is the active subagent/workflow set, separate from agents. Viewer joins always receive `tasks: {}` ([ADR-0048](../adr/0048-task-aggregation-delivery.md)). |
-| server → client | `delivery_snapshot` | `{ deliveries: { <agent_id>: { issued_seq, acked_seq, pending_since? } }, snapshot_incomplete?: true }` reports recipient-local confirmation gaps, not a resend queue. Connected or gapped entries are prioritized; viewers receive `{ deliveries: {} }` ([ADR-0048](../adr/0048-task-aggregation-delivery.md)). |
-| server → client | `delivery_status` | `{ agent_id, delivery?: { issued_seq, acked_seq, pending_since? } }` reports a ledger update; capability loss omits `delivery`. Operator-only. |
+| server → client | `delivery_snapshot` | `{ deliveries: { <agent_id>: { issued_seq, acked_seq, pending_since?, lost_count?, last_loss? } }, snapshot_incomplete?: true }` reports recipient-local confirmation gaps, not a resend queue; `lost_count?`/`last_loss?: {at, first_seq, last_seq, count, reason}` are explicit-retirement outcomes, not dispatches (`InterAgentDeliveryStatus`). Connected or gapped entries are prioritized; viewers receive `{ deliveries: {} }` ([ADR-0048](../adr/0048-task-aggregation-delivery.md)). |
+| server → client | `delivery_status` | `{ agent_id, delivery?: { issued_seq, acked_seq, pending_since?, lost_count?, last_loss? } }` reports a ledger update; capability loss omits `delivery`. Operator-only. |
 | server → client | `wrapper_build_info` | Join snapshot is `{ builds: { "<agent_id>": { build_revision, build_dirty, build_version, build_channel } }, build_info_incomplete?: true }`; live update is the same flat identity plus `agent_id`, and disconnect is `{ agent_id, cleared: true }`. Only currently connected wrappers appear in the snapshot. `build_info_incomplete: true` means the join snapshot omits one or more complete entries to fit the transport frame budget; live update semantics are unchanged. Operator-only. |
 | server → client | `envelope` | The complete envelope, broadcast on each state change. |
 | server → client | `history` | `{ agents: { "<pane_agent_id>": [...] }, clear_watermarks: { ... }, history_projection: "per-pane-v1", projection_epoch, history_incomplete?: true }` is pushed after join. `history_incomplete: true` means one or more oldest history entries or clear-watermark entries were omitted to fit the transport frame budget. Each retained pane remains chronological and contains a newest suffix; it does not alter the server's history or clear-watermark state. Operator-only. |
@@ -906,6 +918,7 @@ The complete coverage and the permanent `attach_chunk` exception are normative i
 | server → wrapper | `permission_sync` | `{ version, control, next }`; authoritative permission settings after every join, including explicit nulls when empty. Gates the first/successor exec; see [permission synchronization](#persistence-join-synchronization-and-resume). |
 | server → wrapper | `persona_sync` | `{ version, name, revision }` is the legacy half of the dual emit with `display_name_sync`; both update only display_name and guard monotonic safe revisions (issue #209). |
 | server → wrapper | `display_name_sync` | `{ version, display_name, revision }` is the new dual-emitted form with the same contract and revision guard; wrappers route both forms through `renameDisplayName`. |
+| server → wrapper | `delivery_status` | `{ issued_seq, acked_seq, pending_since?, version }`, flat (the topic already scopes `agent_id`) — same ledger fields as the `server → client` row below, but distinct: this copy drives the wrapper's own gap-recovery bookkeeping (`wrapper/core/src/transport.ts` `#bindServerEvent("delivery_status", ...)`), broadcast alongside the client-bound copy from the same `broadcast_delivery_status/1` call. |
 | client → server | `session_reset` | `{ agent_id, mode: "new" \| "clear" }` is operator-only. Validate role, agent, mode, capability, idle state, and pending lock atomically, then broadcast `session_reset_started` and push runner `reset_session`; reserved literal commands are rejected ([ADR-0036](../adr/0036-session-lifecycle-commands.md)). |
 | wrapper → server | `session_reset_request` | `{ mode: "new" \| "clear", reason?: string }` is the agent-self deferred reset request. Bind agent_id to the connection, reuse SessionResets checks, and return `{ request_id }` as lock confirmation only; use existing lifecycle rejection vocabulary ([ADR-0043](../adr/0043-agent-initiated-session-reset.md)). |
 | wrapper → server | `session_lifecycle` | `{ kind, trigger?, at, details? }` records one session-lifecycle transition (phase-33, [ADR-0055](../adr/0055-compaction-resume-and-lifecycle-log.md)). `kind` — wrapper-produced: `compacting` \| `compact_boundary` \| `compact_failed` \| `resume_reserved` \| `resume_fired` \| `threshold_notice` \| `conversation_reset` plus `permission_applied` / `permission_failed` with typed [permission details](#permission-lifecycle-audit); server-only `permission_requested` uses the same timeline. Server-merged into the same per-agent timeline: `disconnected` \| `reconnecting` \| `reconnected` \| `session_reset_started` \| `session_reset_completed` (a reset-driven rejoin records only `session_reset_completed`, never also `reconnected`). A server-authored `disconnected` may carry `details {origin, reason}` using the closed disconnect pairs; wrapper ingress cannot author this shape. `trigger` applies only to `compact_boundary`: `request_compact` when the wrapper's own FIFO reservation queue attributes this boundary to a `request_compact` call; otherwise the SDK's own account (`sdk_auto` for its `"auto"`, `manual` for its `"manual"` — which also covers an operator-typed `/compact` directly, indistinguishable from the SDK's side); omitted when neither is determinable. `at` is the wrapper's own observation timestamp, not server receipt time. Server retains up to `SESSION_LIFECYCLE_MAX_EVENTS_PER_AGENT` events per agent (default 10,000, oldest discarded first) and does not notify peers. |
@@ -1113,17 +1126,16 @@ event_size::8, ...>>`) is handled by Phoenix. Each size field is 8-bit, so join_
 topic, and event are each at most 255 bytes (well above kaoiro's
 `wrapper:<agent_id>` / `attach_chunk`).
 
-**Transport safety**: The server enforces an 8 MB frame limit and 20 in-flight uploads per
-wrapper for DoS protection. Phoenix defaults `max_frame_size` to `:infinity`, so endpoint
-configuration sets it explicitly:
+**Transport safety**: The server enforces an 8 MB frame limit for DoS protection; the
+20-in-flight-uploads cap (`MAX_INFLIGHT_UPLOADS`) is wrapper-side, not server-enforced.
+Phoenix defaults `max_frame_size` to `:infinity`, so endpoint configuration sets it
+explicitly:
 
 ```elixir
-# lib/kaoiro_web/endpoint.ex
-socket "/wrapper", KaoiroWeb.WrapperSocket,
-  websocket: [
-    timeout: 60_000,
-    max_frame_size: 8_000_000  # 8 MB
-  ]
+# server/lib/kaoiro_server_web/endpoint.ex
+socket "/wrapper", KaoiroServerWeb.WrapperSocket,
+  websocket: [max_frame_size: TransportLimits.max_frame_bytes()],  # 8 MB
+  longpoll: false
 ```
 
 Leaving `:infinity` would let one 128 MB frame allocate 128 MB in a receiving process and
@@ -1138,8 +1150,11 @@ minutes) ([file-upload](file-upload.md), ADR-0025 F4/F6/F7/F13).
 **Fit-to-SDK responsibility**: The wrapper absorbs the gap between the 128 MB protocol
 limit and hard SDK limits (exact image/document block values are confirmed by a pre-
 implementation spike) using image downsize, PDF page extraction, text truncation, and
-Office → markitdown → text. If fitting is impossible, reject with a dedicated reason
-(`unfittable_image` / `unfittable_pdf` / `text_too_large`).
+Office → markitdown → text. Image and PDF fitting can fail and reject with a dedicated
+reason (`unfittable_image` / `unfittable_pdf`); oversized text is always fit by
+tail-truncation instead (`TEXT_SDK_BYTE_LIMIT`, 1 MB) and never rejects, so
+`text_too_large` — declared in the wire enum for other producers — does not currently
+fire from this wrapper.
 
 ### Session resume and restoration
 
@@ -1211,7 +1226,7 @@ double starts visible instead of silently applying last-write-wins ([ADR-0024](.
 `WrapperConfig` (protocol/src/index.ts) is the runner's per-spawn config
 handoff to the wrapper process it launches — a process-boundary data
 structure, not a `runner:<host_id>` channel message like the table above.
-Most of its ~20 fields mirror the `spawn` payload verbatim
+Most of its 30 fields mirror the `spawn` payload verbatim
 (`resolveWrapperConfig`, runner/src/supervisor.ts); this section documents
 only the fields that instead come from `runner.config.json`'s per-engine
 blocks, since nothing else in this spec names `WrapperConfig`.
@@ -1340,7 +1355,8 @@ same funnel. The unimplemented `revoke_wrapper_token` has only server-side recei
 
 `envelope` is stamped by its frame key. `delivery_ack` / `delivery_status_request` / `delivery_resync` /
 `history_reset` / `replay_ia` / `history_replay_complete` / `directory_request` /
-`session_reset_request` / `wrapper_build_info` / `session_lifecycle` are declared in `WRAPPER_CONTROL_EVENT_POLICY`;
+`session_reset_request` / `wrapper_build_info` / `session_lifecycle` / `disconnect_intent`
+are declared in `WRAPPER_CONTROL_EVENT_POLICY`;
 the wrapper's sole send point `#pushVersioned` adds flat `version`. The server's
 `@wrapper_event_policy` and single `handle_in/3` funnel warn on omission/mismatch and accept
 best-effort. `wrapper_build_info` is sent after every join/rejoin from the wrapper's own
@@ -1348,10 +1364,11 @@ generated artifact; it is not inferred from runner identity.
 
 #### Server → client (stage 2, completed in issue #260; wrapper identity in issue #288 Stage 3)
 
-`envelope` is stamped by its frame key. The remaining 19 events
+`envelope` is stamped by its frame key. The remaining 21 events
 (`history_replay_envelope` / `snapshot` / `task_snapshot` / `delivery_snapshot` / `history` /
 `hosts` / `directory` / `history_cleared` / `history_reset` / `history_replay_complete` /
-`agent_deleted` / `delivery_status` / `session_reset_started` / `session_reset_completed` /
+`agent_deleted` / `delivery_status` / `quagmire_notice` / `quagmire_settings` /
+`session_reset_started` / `session_reset_completed` /
 `session_reset_failed` / `spawn_result` / `runner_sessions` / `catalog_result` /
 `wrapper_build_info`) receive flat
 `version` from server `push_versioned/3`. Internal PubSub and runner claims are not wire SoT.
@@ -1382,8 +1399,8 @@ route from bypassing it. Each layer therefore has a test that turns red when byp
 |---|---|---|
 | Server | `require_operator/4` invokes `warn_on_version_mismatch/3` after the role check (viewers cannot forge versions to create logs). | Enumerate `handle_in` event names from the module AST, push an invalid version to each, and assert warnings; new clauses are included automatically. |
 | Wrapper | `#bindServerEvent` is the sole `channel.on` call and its event type must be a `SERVER_EVENT_VERSION_POLICY` key. | Assert the registered event set equals policy and each event is registered exactly once; Phoenix invokes every callback, so a raw duplicate `channel.on` is visible by count. |
-| Runner | `bindControlEvents` loops over the event table to bind. | — |
-| Client | `CLIENT_EVENT_VERSION_POLICY` and `bindServerEvent` validate 19 server → client events on receipt. | Integration tests cover every policy omission/match/mismatch and continued acceptance, and check `c.on(` appears only in the bind function. |
+| Runner | `bindControlEvents` loops over the event table to bind. | A source-regex test (`runner/test/transport.test.ts`) asserts `channel.on(` appears exactly once in `transport.ts` and that the one call is `bindControlEvents(channel, ...)` — a raw duplicate bind would fail it. |
+| Client | `CLIENT_EVENT_VERSION_POLICY` and `bindServerEvent` validate 21 server → client events on receipt. | Integration tests cover every policy omission/match/mismatch and continued acceptance, and check `c.on(` appears only in the bind function. |
 
 #### Non-map payload handling
 
@@ -1446,6 +1463,7 @@ stateDiagram-v2
   thinking --> done
   thinking --> error
   tool_running --> error
+  sending --> error
   done --> waiting_input
   error --> waiting_input
   idle --> disconnected
@@ -1542,7 +1560,7 @@ Heartbeats use the Channels built-in provided by the client library.
 | Connection | Method | Server setting |
 |---|---|---|
 | Wrapper (`/wrapper`) | **Per-agent token** presented as connection `token`; verify the pair on `wrapper:<agent_id>` join. | `KAOIRO_WRAPPER_TOKENS` (`id:token,id:token`) |
-| Client (`/client`) | **User token + role** in connection `token`; role is `viewer` or `operator`. | `KAOIRO_CLIENT_TOKENS` (`token:role,...`) |
+| Client (`/client`) | **User token + role** in connection `token`; role is `viewer`, `operator`, or `admin` ([ADR-0050](../adr/0050-principal-model-and-graded-access-control.md) D2). | `KAOIRO_CLIENT_TOKENS` (`token:role,...`) |
 
 - Token mismatch and unknown tokens reject the connection; unset env behavior differs by
   socket and `MIX_ENV` (issues #28/#133, with a startup warning):
