@@ -103,7 +103,7 @@ type CodexHostOptions = ConstructorParameters<typeof CodexHost>[1];
  * the concrete constructors; regressions capture the exact options and live
  * whoami provider the CLI gives those components (#247, #254). */
 export interface CodexCliDependencies {
-  /** Internal composition seam; the ordinary entrypoint does not select it. */
+  /** Internal override for composition tests; production selects from config. */
   backend?: CodexHostOptions["backend"];
   watchdogClock?: Pick<TurnWatchdogOptions, "nowMs" | "setTimer" | "clearTimer">;
   parseCliArgs?: typeof parseCliArgs;
@@ -167,6 +167,8 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     process.argv.slice(2),
   );
   const config = readConfig(configPath);
+  const backend = dependencies.backend ?? config.codex_backend ?? "exec";
+  writeRedactedStderr(`codex: backend=${backend}\n`);
   const buildInfo = readBuildInfo(
     fileURLToPath(new URL("../dist/build-info.json", import.meta.url)),
   );
@@ -740,7 +742,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   const hostOptions = deliveryAcknowledgementRuntime.withHostOptions<
     Omit<CodexHostOptions, "onTurnStart">
   >({
-    backend: dependencies.backend ?? "exec",
+    backend,
     onState,
     onLog,
     onTask,

@@ -214,7 +214,7 @@ it("keeps the default exec factory, arguments and callbacks despite unrelated co
   const prior = process.env.KAOIRO_CODEX_BACKEND;process.env.KAOIRO_CODEX_BACKEND = "app-server";
   const appFactory = vi.fn(), starts = vi.fn(), ends = vi.fn(), finals = vi.fn(), logs: Envelope[] = [];
   const threadOptions: unknown[] = [], options: unknown[] = [];
-  const launch = { ...config, backend: "app-server" };
+  const launch = { ...config, backend: "app-server", codex_backend: "app-server" as const };
   const host = new CodexHost(launch, { appServerSessionFactory: appFactory, appendSystemPrompt: "PERSONA",
     onState: () => {}, onLog: e => logs.push(e), onTurnStart: starts, onTurnEnd: ends, onTurnFinalized: finals,
     codexFactory: value => { options.push(value);return { startThread: value => { threadOptions.push(value);return {

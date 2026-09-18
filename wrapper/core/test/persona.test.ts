@@ -50,6 +50,7 @@ const ROUND_TRIP_CASES: {
   antigravity_cli_path: { value: "/opt/agy tools/agy" },
   antigravity_probe_timeout_ms: { value: 30_000 },
   codex_internal_subagents: { value: true },
+  codex_backend: { value: "app-server" },
   claude_engine_catalog: {
     value: [{ value: "sonnet", display_name: "Sonnet", description: "" }],
   },
@@ -637,4 +638,14 @@ describe("parseConfig", () => {
       });
     }
   });
+});
+
+it.each(["exec", "app-server"])("accepts the explicit Codex backend %s", backend => {
+  expect(parseConfig({ ...valid, codex_backend: backend }).codex_backend).toBe(backend);
+});
+it.each([null, "", "auto", true, {}, []])("rejects malformed Codex backend %#", backend => {
+  expect(() => parseConfig({ ...valid, codex_backend: backend })).toThrow("codex_backend must be one of");
+});
+it("does not infer a backend from unknown config fields", () => {
+  expect(parseConfig({ ...valid, backend: "app-server", codex: { backend: "app-server" } }).codex_backend).toBeUndefined();
 });

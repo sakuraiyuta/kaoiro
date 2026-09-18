@@ -384,6 +384,12 @@ export function parseConfig(raw: unknown): WrapperConfig {
         "business, enterprise",
     );
   }
+  if (raw.codex_backend !== undefined) {
+    if (raw.codex_backend !== "exec" && raw.codex_backend !== "app-server") {
+      throw new ConfigError("codex_backend must be one of: exec, app-server");
+    }
+    config.codex_backend = raw.codex_backend;
+  }
   if (raw.codex_internal_subagents !== undefined) {
     if (typeof raw.codex_internal_subagents !== "boolean") {
       throw new ConfigError("codex_internal_subagents must be a boolean");

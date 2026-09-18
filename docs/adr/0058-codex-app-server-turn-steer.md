@@ -22,7 +22,10 @@ as the reference implementation for the TypeScript adapter; hosting the Python
 SDK itself was rejected (ADR-0023 D3, ADR-0057: no second language). Accepting
 this ADR authorizes Stage 1 only. Steering (Stage 2) and approvals (Stage 3)
 remain separate decisions, and no current permission or inter-agent delivery
-contract changes until they are accepted.
+contract changes until they are accepted. The operator approved publication of
+an explicit optional Stage 1 backend selector on 2026-09-18; exec remains the
+default and rollback target. Stage 1 is implemented with this opt-in surface;
+this is not approval to replace the default.
 
 ## Context
 
@@ -1170,3 +1173,39 @@ Stage 6 requires an operator decision to expose an **explicit optional** backend
 selection, retaining exec as both default and rollback target. This increment
 does not claim deployed runner release selection, cross-backend resume rollback,
 non-Linux support or CI stability from local tests. ADR status is unchanged.
+
+
+### Increment (6): explicit launch selection and rollback
+
+Runner-local `codex.backend` is a closed enum (`exec` / `app-server`), defaulting
+to exec. It is relayed only for Codex as `WrapperConfig.codex_backend`, validated
+by the wrapper parser, and selected at the CLI's single Host composition point.
+The internal dependency override remains available to tests. Dashboard,
+server spawn payload, resume snapshot, environment and argv do not select it.
+The process-boundary config addition requires no wire-version change.
+
+The setting is host-wide and takes effect for subsequent wrapper lifetimes;
+config reload does not replace running children. Applied-config and wrapper
+startup diagnostics identify the selection without a new wire field. Agent-level
+selection is outside this increment. Both backends remain packaged, with no
+implicit fallback, no Host-owned replacement child, and no IA steering. Existing
+Supervisor restart limits and deliberate-stop behavior remain unchanged.
+
+The pinned 0.153.4 CLI was exercised with a loopback Responses provider: two
+app-server turns, complete child close, then exec SDK resume with the same UUID.
+Prior user/assistant items reached the next provider request, rollout-based
+display history retained the answers, and the new turn's permission observation
+remained workspace-write / network disabled / approval never. Dropping the resume
+ID produced a different UUID and failed the test. This measures persisted context
+handoff, not an external model's reasoning or account authentication.
+
+The runbook defines stop → explicit exec selection → applied-config receipt →
+same-session resume. The artifact gate builds the Linux x64 runner tarball,
+checks its manifest hashes, and exercises the packaged default launcher, wrapper
+and native CLI outside the repository dependency tree. The runner's existing
+session scan accepted the app-server rollout, its concurrent-resume lock rejected
+a duplicate, and the exec resume restored the bounded display history. Live child
+argv distinguished app-server execution from exec in this artifact probe.
+Deployment itself is a
+separate operator action. Darwin execution and production auth/model responses
+remain unmeasured. Stage 2 steering and Stage 3 approvals remain separate decisions.

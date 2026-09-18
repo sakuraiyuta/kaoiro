@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { parseCliArgs } from "@kaoiro/wrapper-core";
 import { cliAppFixture } from "./fixtures/cli_app_server.js";
 
 it("starts the real watchdog only at dispatch, extends on matching progress, and stops at terminal", async () => {
@@ -103,14 +104,15 @@ it("does not let an old Host settlement resolve the next same-conversation lease
   } finally { await f.close(); }
 });
 
-it("keeps the ordinary CLI backend exec despite config and environment hints", async () => {
+it.each([undefined, "exec", "app-server"] as const)("selects only the published config backend (%s), ignoring other hints", async backend => {
   const { runCodexCli } = await import("../src/cli.js");
-  const signals = process.listeners("SIGINT");let selected: unknown;
+  const signals = process.listeners("SIGINT"), argv = process.argv;let selected: unknown;
+  process.argv = [...argv.slice(0, 2), "--backend", "app-server"];
   vi.stubEnv("KAOIRO_CODEX_BACKEND", "app-server");
   try {
     await runCodexCli({
       parseCliArgs: () => ({ configPath: "fixture", prompt: undefined, resume: undefined }),
-      loadConfig: () => ({ agent_id: "ordinary", persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P", server_url: "ws://fixture", backend: "app-server" }),
+      loadConfig: () => ({ agent_id: "ordinary", persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P", server_url: "ws://fixture", backend: "app-server", ...(backend === undefined ? {} : { codex_backend: backend }) }),
       createServerLink: (_url, _id, callbacks) => {
         queueMicrotask(() => callbacks.onPersonaPrompt?.("Fixture"));
         return { send() {}, close() {}, currentSessionId: () => null } as never;
@@ -118,9 +120,42 @@ it("keeps the ordinary CLI backend exec despite config and environment hints", a
       createHost: (_config, options) => { selected = options.backend;return { state: "idle", statusExtSnapshot: () => ({}), run: async () => {} } as never; },
       prepareStartup: async () => {},
     });
-    expect(selected).toBe("exec");
+    expect(selected).toBe(backend ?? "exec");
   } finally {
     for (const listener of process.listeners("SIGINT")) if (!signals.includes(listener)) process.removeListener("SIGINT", listener);
-    vi.unstubAllEnvs();
+    process.argv = argv;vi.unstubAllEnvs();
+  }
+});
+
+it("does not accept a public backend CLI flag", () => {
+  expect(() => parseCliArgs(["--backend", "app-server"])).toThrow();
+  expect(() => parseCliArgs(["--codex-backend", "app-server"])).toThrow();
+});
+
+
+it("reports public app-server startup failure without exec fallback or another Session", async () => {
+  const { runCodexCli } = await import("../src/cli.js");
+  const { CodexHost } = await import("../src/host.js");
+  const { phoenixLoopback } = await import("./fixtures/phoenix_loopback.js");
+  const wire = await phoenixLoopback(() => ({})), signals = process.listeners("SIGINT");
+  const exec = vi.fn(() => { throw new Error("Unexpected exec fallback"); });
+  const session = vi.fn(async () => { throw new Error("Required bridge startup failed"); });
+  let host: InstanceType<typeof CodexHost> | undefined;
+  const running = runCodexCli({
+    parseCliArgs: () => ({ configPath: "fixture", prompt: "FIRST", resume: undefined }),
+    loadConfig: () => ({ agent_id: "startup-failure", persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P", server_url: wire.url, codex_backend: "app-server" }),
+    createHost: (config, options) => (host = new CodexHost(config, { ...options, codexFactory: exec, appServerSessionFactory: session })),
+  });
+  try {
+    await vi.waitFor(() => expect(wire.joins).toBe(1));wire.push("persona_prompt", { prompt: "Fixture" });
+    await running;
+    const envelopes = wire.received.filter(e => e.event === "envelope").map(e => e.payload);
+    expect(envelopes.some(e => e.type === "state_change" && e.state === "error")).toBe(true);
+    expect(envelopes.filter(e => e.type === "result")).toHaveLength(1);
+    expect(envelopes.find(e => e.type === "result")?.payload).toMatchObject({ is_error: true, error_detail: "Error: Required bridge startup failed" });
+    await host!.send("AFTER_FAILURE");expect(session).toHaveBeenCalledTimes(1);expect(exec).not.toHaveBeenCalled();
+  } finally {
+    host?.close();await running;await wire.close();
+    for (const listener of process.listeners("SIGINT")) if (!signals.includes(listener)) process.removeListener("SIGINT", listener);
   }
 });

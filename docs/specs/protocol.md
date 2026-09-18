@@ -1188,6 +1188,12 @@ Most of its ~20 fields mirror the `spawn` payload verbatim
 only the fields that instead come from `runner.config.json`'s per-engine
 blocks, since nothing else in this spec names `WrapperConfig`.
 
+- `codex_backend?: "exec" | "app-server"` — runner-local `codex.backend`,
+  resolved to `"exec"` when omitted and relayed only for Codex launches. The
+  wrapper validates the closed enum. It is not accepted from `spawn` or a
+  resume snapshot and is not a wire capability. Reload affects subsequent
+  wrapper lifetimes, including resumes; existing wrappers retain their backend.
+
 - `codex_extra_models` / `antigravity_extra_models` (`EngineModelInfo[]`)
   — the operator's `codex.extra_models` / `antigravity.extra_models`
   declaration (runner.config.json), already merged by the runner's

@@ -1098,3 +1098,13 @@ describe("mergeExtraModels", () => {
     expect(base).toEqual(snapshot);
   });
 });
+
+it.each(["exec", "app-server"])("accepts codex.backend=%s", backend => {
+  expect(parseRunnerConfig({ ...valid, codex: { backend } }).codex?.backend).toBe(backend);
+});
+it.each([null, "", "auto", true, {}, []])("rejects malformed codex.backend %#", backend => {
+  expect(() => parseRunnerConfig({ ...valid, codex: { backend } })).toThrow("codex.backend must be one of");
+});
+it("leaves an absent backend unspecified without accepting top-level hints", () => {
+  expect(parseRunnerConfig({ ...valid, backend: "app-server", codex_backend: "app-server", codex: {} }).codex?.backend).toBeUndefined();
+});

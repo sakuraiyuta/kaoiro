@@ -202,6 +202,7 @@ export async function runRunnerCli(
     launch: createLauncher(),
     wrapperServerUrl: wrapperUrlFrom(config.server_url),
     codexAuthMode,
+    codexBackend: config.codex?.backend,
     ...(config.codex?.chatgpt_plan === undefined
       ? {}
       : { codexChatgptPlan: config.codex.chatgpt_plan }),
@@ -315,6 +316,7 @@ export async function runRunnerCli(
       cwdAllowlist: next.cwd_allowlist,
       wrapperServerUrl: wrapperUrlFrom(next.server_url),
       codexAuthMode,
+      codexBackend: next.codex?.backend,
       codexChatgptPlan: next.codex?.chatgpt_plan,
       codexInternalSubagents: next.codex?.internal_subagents,
       ...extraModelsRuntimeUpdate(next),
@@ -347,6 +349,7 @@ export async function runRunnerCli(
       link.updateRegister(nextRegister);
     }
     config = next;
+    process.stderr.write(`runner: codex backend=${config.codex?.backend ?? "exec"} for subsequent wrappers\n`);
   };
   const watcher = watchConfig(
     configPath,

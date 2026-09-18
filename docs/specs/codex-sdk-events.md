@@ -8,6 +8,16 @@ related: [protocol, plugin-model, architecture, agent-sdk-events]
 
 # Codex adapter — Codex SDK event specification
 
+## Backend scope
+
+Codex defaults to the exec SDK path documented below. Runner-local
+`codex.backend = "app-server"` explicitly selects the app-server adapter for
+subsequent wrapper launches/resumes; its pinned notification mappings and
+acceptance evidence are in [ADR-0058 Appendix C](../adr/0058-codex-app-server-turn-steer.md#appendix-c--stage-1-compatibility-gate-2026-09-18-jst)
+and the [wrapper README](../../wrapper/codex/README.md). Both paths preserve
+queued IA, fixed `approval=never`, permission observation, and the existing
+log/result/lifecycle wire. App-server does not silently fall back to exec.
+
 ## Purpose
 
 Establishes the **actual event/callback specification** of the TypeScript Codex

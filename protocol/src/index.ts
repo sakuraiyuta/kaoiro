@@ -248,6 +248,8 @@ export interface WrapperConfig {
    *  value, so the runner option outranks any user-global Codex config: true
    *  force-enables, false disables (ADR-0038 F2). */
   codex_internal_subagents?: boolean;
+  /** Runner-local launch selection. Omitted = exec; never sourced from spawn. */
+  codex_backend?: "exec" | "app-server";
   /** Operator-declared extra models from `runner.config.json`'s
    *  `codex.extra_models` (issue #292), already merged by the runner's
    *  `buildRegister` into the launch catalog it advertises. Relayed here so

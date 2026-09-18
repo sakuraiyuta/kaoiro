@@ -161,6 +161,7 @@ export interface SupervisorOptions {
   codexAuthMode?: CodexAuthMode;
   codexChatgptPlan?: ChatGptPlan;
   codexInternalSubagents?: boolean;
+  codexBackend?: WrapperConfig["codex_backend"];
   /** Operator-declared extra models from runner.config.json's
    *  `codex.extra_models` (issue #292), relayed verbatim to the wrapper as
    *  `WrapperConfig.codex_extra_models` for the same value-collision merge
@@ -436,6 +437,7 @@ export function resolveWrapperConfig(
   // so a switch / reset cannot silently widen the ceiling. Same appended-last
   // rationale as the params above.
   antigravityCeiling?: AntigravityCeiling,
+  codexBackend?: WrapperConfig["codex_backend"],
 ): WrapperConfig {
   const config: WrapperConfig = {
     agent_id: agentId,
@@ -480,6 +482,7 @@ export function resolveWrapperConfig(
     // authoritative over user-global Codex config, so relay a concrete
     // boolean for every codex spawn (default true when unset).
     config.codex_internal_subagents = codexInternalSubagents ?? true;
+    config.codex_backend = codexBackend ?? "exec";
     // issue #292: relay codex.extra_models verbatim (empty/absent both fall
     // through) so the wrapper applies the same merge to its own catalog
     // resolution the runner already applied to the register's.
@@ -613,6 +616,7 @@ export interface SupervisorRuntimeUpdate {
   codexAuthMode: CodexAuthMode | undefined;
   codexChatgptPlan: ChatGptPlan | undefined;
   codexInternalSubagents: boolean | undefined;
+  codexBackend?: WrapperConfig["codex_backend"];
   codexExtraModels: EngineModelInfo[] | undefined;
   antigravityExtraModels: EngineModelInfo[] | undefined;
   antigravityExecutable?: AgyExecutableResolution | undefined;
@@ -650,6 +654,7 @@ export class Supervisor {
   #codexAuthMode: CodexAuthMode | undefined;
   #codexChatgptPlan: ChatGptPlan | undefined;
   #codexInternalSubagents: boolean | undefined;
+  #codexBackend: WrapperConfig["codex_backend"];
   #codexExtraModels: EngineModelInfo[] | undefined;
   #antigravityExtraModels: EngineModelInfo[] | undefined;
   #antigravityExecutable: AgyExecutableResolution | undefined;
@@ -692,6 +697,7 @@ export class Supervisor {
     this.#codexAuthMode = options.codexAuthMode;
     this.#codexChatgptPlan = options.codexChatgptPlan;
     this.#codexInternalSubagents = options.codexInternalSubagents;
+    this.#codexBackend = options.codexBackend;
     this.#codexExtraModels = options.codexExtraModels;
     this.#antigravityExtraModels = options.antigravityExtraModels;
     this.#antigravityExecutable = options.antigravityExecutable;
@@ -714,6 +720,7 @@ export class Supervisor {
     this.#codexAuthMode = update.codexAuthMode;
     this.#codexChatgptPlan = update.codexChatgptPlan;
     this.#codexInternalSubagents = update.codexInternalSubagents;
+    this.#codexBackend = update.codexBackend;
     this.#codexExtraModels = update.codexExtraModels;
     this.#antigravityExtraModels = update.antigravityExtraModels;
     this.#antigravityExecutable = update.antigravityExecutable;
@@ -1401,6 +1408,7 @@ export class Supervisor {
       this.#antigravityExecutable?.ok ? this.#antigravityExecutable.path : undefined,
       this.#antigravityProbeTimeoutMs,
       antigravityCeiling,
+      this.#codexBackend,
     );
   }
 

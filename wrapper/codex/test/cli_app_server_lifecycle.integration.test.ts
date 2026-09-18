@@ -67,9 +67,9 @@ it.each([false, true])("runs CLI components through MCP IA wait, mid-turn batchi
     vi.stubEnv("HOME", home);vi.stubEnv("CODEX_HOME", home);
     if (interrupt) vi.stubEnv("KAOIRO_CODEX_TURN_WATCHDOG_INACTIVITY_MS", "60000");
     for (const key of ["OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL", "OPENAI_ORG_ID"]) vi.stubEnv(key, undefined);
-    running = runCodexCli({ backend: "app-server", ...(interrupt ? { watchdogClock: clock } : {}),
+    running = runCodexCli({ ...(interrupt ? { watchdogClock: clock } : {}),
       parseCliArgs: () => ({ configPath: "fixture", prompt: undefined, resume: undefined }),
-      loadConfig: () => ({ agent_id: agentId, persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P", server_url: wire.url, model: "gpt-5.6-sol" }),
+      loadConfig: () => ({ agent_id: agentId, persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P", server_url: wire.url, model: "gpt-5.6-sol", codex_backend: "app-server" }),
     });
     await vi.waitFor(() => expect(wire.joins).toBe(1));wire.push("persona_prompt", { prompt: "Lifecycle test" });
     await vi.waitFor(() => expect(wire.received.some(e => e.event === "envelope" && e.payload.type === "state_change")).toBe(true));

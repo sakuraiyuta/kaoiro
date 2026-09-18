@@ -1,8 +1,20 @@
 # Codex wrapper internals
 
-The public engine still uses `CodexHost` and `codex exec`. The app-server
-modules are internal groundwork for [ADR-0058](../../docs/adr/0058-codex-app-server-turn-steer.md);
-they are not exported from the package entry point or selectable at launch.
+The public Codex engine defaults to `codex exec`. Set `codex.backend` to
+`"app-server"` in `runner.config.json` to select the persistent app-server child
+for subsequent Codex wrapper lifetimes on that host. `"exec"` or omission keeps
+the default. The runner relays only its local selection as `codex_backend` in
+the wrapper startup config; direct wrapper launches may use that same field.
+Unknown values are rejected. No environment variable, command-line backend flag,
+dashboard selector, spawn payload or resume snapshot selects a backend.
+
+Configuration reload does not switch running children. After the runner's
+`codex backend=... for subsequent wrappers` diagnostic, new launches and resumes
+use the new selection. The wrapper also logs its selected backend at startup.
+There is no automatic fallback to exec. See the
+[rollback runbook](../../docs/operations/production.md#codex-backend-selection-and-rollback)
+and [ADR-0058](../../docs/adr/0058-codex-app-server-turn-steer.md).
+Steering remains disabled and approval remains `never`.
 
 `AppServerTransport` owns one native child for its lifetime. `startThread` and
 `resumeThread` initialize that child once; `startTurn` returns independent
@@ -63,7 +75,8 @@ means the session adds no kaoiro MCP server configuration. Socket creation uses
 and failed initial setup close the tool host and remove only that directory.
 Shutdown stops new tool connections and aborts existing handlers synchronously
 before waiting for the child. The Host supplies its active turn scope; interrupt,
-terminal and shutdown abort that signal. Full coordinator/lease composition is pending.
+terminal and shutdown abort that signal. Coordinator/lease composition is
+covered by the CLI tests below.
 
 Tests cover protocol faults, request correlation, pre-response notifications,
 consumer abandonment, buffered termination, and process shutdown. The real CLI
@@ -99,7 +112,7 @@ Host relay goes through `makeResult`. The local-provider integration
 test verifies two final answers, one result, and MCP call/result logs through
 the real CLI on both start and resume. Failure/interruption, duplicate frames,
 foreign identities, malformed items, and EOF projection use deterministic
-fixtures. The internal Host backend consumes this projection; normal launch remains exec.
+fixtures. The internal Host backend consumes this projection; normal launch defaults to exec.
 
 Turn projection retains native `last` and `total` token counts plus the nullable
 model context window. Usage notifications yield detached snapshots, and the
@@ -186,7 +199,7 @@ never silently retained. Configuration changes after this read do not change
 the submitted value, whereas a newly spawned exec samples at process startup.
 App-server does not support `--profile`; current Host/SDK/session launch does not
 expose that option. Exec behavior is unchanged. The internal Host backend wires
-switch-error reporting and pending/rollback; normal launch selection is still deferred.
+switch-error reporting and pending/rollback for explicit app-server launches.
 
 The default-session control integration exercises live rollout visibility before
 child shutdown, sequential policy changes, both effort resolution paths,
@@ -217,11 +230,12 @@ default intent resolves a new default. Successful reset uses the resolved
 receipt, not the display catalog's default. Rollback explicitly resends the
 previous successful model/effort; default intent resolves again. Unknown
 baseline/default fails with `default_effort_unavailable`, without exposing raw
-RPC errors. Normal launch selection remains pending; existing exec behavior is unchanged.
+RPC errors. Exec settings behavior is unchanged.
 
 `AppServerHostRuntime` is an internal execution owner above `AppServerSession`;
-`CodexHostOptions.backend = "app-server"` selects it explicitly. CLI, config,
-environment and runner do not transfer that option; normal launch stays exec.
+`CodexHostOptions.backend = "app-server"` selects it explicitly. The CLI alone
+translates the validated startup config into that option; constructing a Host
+directly does not read config or environment hints.
 It creates one session, opens or resumes once, and rejects overlapping calls.
 The Host owns the existing serial queue. Its synchronization hook must await both the current server
 permission-sync barrier and the Host's blocked-permission gate. If the hook
@@ -284,9 +298,8 @@ callback exceptions, idle/active EOF, and reserved-reset rejection. This does no
 claim public launch parity; CLI composition has separate coverage below.
 
 
-The CLI reads the constructed Host's internal backend; no config, environment,
-flag, or runner option selects app-server. Exec retains its synchronous rollout
-reader. App-server hydration occupies one replaceable Host job, after current
+The history coordinator reads the constructed Host's backend. Exec retains
+its synchronous rollout reader. App-server hydration occupies one replaceable Host job, after current
 turn settlement and image cleanup but before the next queued turn. Resume can
 read before its first turn; a fresh Host with no session id replays an empty
 window without opening a thread. History does not require turn permission.
@@ -322,8 +335,9 @@ turn lifecycle events. Protocol and other engines' replay APIs are unchanged.
 ## Internal CLI composition and supervision
 
 `runCodexCli({ backend: "app-server" })` is an internal composition seam. The
-ordinary entrypoint calls `runCodexCli()` with no arguments and selects exec;
-config, environment, flags and runner configuration do not forward a backend.
+ordinary entrypoint calls `runCodexCli()` with no arguments and selects from
+`config.codex_backend ?? "exec"`. Only internal tests may override this with the
+dependency object; environment and flags cannot select a backend.
 The optional watchdog clock supplies only time and timer operations. Settings,
 interrupt, fail-stop and lifecycle callbacks are the production implementation.
 

@@ -76,6 +76,8 @@ export type ChatGptPlan =
   | "enterprise";
 
 export interface CodexConfig {
+  /** Applies to subsequent wrapper lifetimes, including resume. Omitted = exec. */
+  backend?: "exec" | "app-server";
   /** Explicit auth mode declaration for the Codex adapter's catalog resolve
    *  (Phase-24, dogfood 環境依存の catalog 空回帰対策)。closed-enum:
    *  `"chatgpt"` or `"apikey"`。Priority explicit > doctor detection >
@@ -426,6 +428,12 @@ export function parseRunnerConfig(raw: unknown): RunnerConfig {
       throw new ConfigError("codex must be an object");
     }
     const codex: CodexConfig = {};
+    if (raw.codex.backend !== undefined) {
+      if (raw.codex.backend !== "exec" && raw.codex.backend !== "app-server") {
+        throw new ConfigError("codex.backend must be one of: exec, app-server");
+      }
+      codex.backend = raw.codex.backend;
+    }
     if (raw.codex.auth_mode !== undefined) {
       if (
         raw.codex.auth_mode !== "chatgpt" &&

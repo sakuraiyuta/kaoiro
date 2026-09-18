@@ -399,6 +399,23 @@ cd kaoiro-runner-<rev>-linux-x64
 Gitea release への資産アップロードは
 [#140](https://github.com/sakuraiyuta/kaoiro/issues/140) で扱う。
 
+## Codex backend selection
+
+`runner.config.json` accepts `"codex": { "backend": "app-server" }` alongside
+existing auth/catalog options. Omission or `"exec"` selects exec. The setting
+is host-wide and applies only to new Codex wrapper lifetimes, including resume,
+reset, and automatic restart. Existing children are not switched by a reload.
+Invalid values reject startup (or skip a bad reload without replacing the last
+valid config). Wait for `runner: codex backend=... for subsequent wrappers`
+after editing; the earlier `config reload` line is not an application receipt.
+There is no backend environment variable, flag or dashboard launch selector.
+
+For rollback, stop the target agent, set `backend` to `"exec"`, wait for the
+applied-config diagnostic, then resume its recorded session on the same host
+and cwd. See [production operations](../docs/operations/production.md#codex-backend-selection-and-rollback).
+Use a runner release that bundles this selector and both backends; older
+wrapper releases may ignore the new field. No automatic exec fallback is used.
+
 ## Codex 設定
 
 `runner.config.json` の `codex` ブロックで Codex engine 固有の設定を渡す。
