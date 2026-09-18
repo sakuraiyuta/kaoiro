@@ -995,8 +995,10 @@ backend selection to CodexHost, CLI, config, environment, runner, or launch.
 Existing exec execution and Host callbacks are unchanged.
 
 The runtime's synchronization hook will receive the Host's full admission gate,
-including the current ServerLink permission-sync wait. Preparation waits before
-opening and after effort resolution; a final synchronous comparison covers
+including the current ServerLink permission-sync wait. If the hook returns with
+a blocked gate, the runtime rejects with `permission_gate_blocked` and retains
+the session for explicit reapplication rather than repeatedly preparing.
+Preparation waits before opening and after effort resolution; a final synchronous comparison covers
 permission and pending model/effort/reset. Superseded preparation retains its
 input/token and has no dispatch callback. The first actual dispatch alone
 consumes new-thread provenance. Completion observes exact-turn policy and calls
@@ -1006,8 +1008,10 @@ boundary without waiting for rollout observation. Result/state publication and
 external lifecycle settlement remain the Host's responsibility.
 
 An interrupted turn does not commit a new baseline, including a completed
-terminal already in flight when interrupt was requested. Failed/interrupted
-attempts preserve the baseline and cause explicit next-turn rollback; default
+terminal already in flight when interrupt was requested. The terminal boundary
+captures abandonment before callbacks and asynchronous policy observation; an
+interrupt after that boundary returns false without changing the baseline.
+Failed/interrupted attempts preserve the baseline and cause explicit next-turn rollback; default
 intent is resolved again. Interrupt is host-token fenced and acknowledgement
 does not retire the active operation. Overlapping run calls are rejected; the
 Host queue will be wired in (5c-2), not replicated inside this runtime.

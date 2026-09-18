@@ -57,7 +57,7 @@ function fixture(resume = false) {
     onPermission: vi.fn(result => { if (result.applied) permission = permissionObservationApplied(permission, result.observation).state; }),
     onProjection: vi.fn(),
   };
-  return { runtime, session, hooks, sent, configured, createSession,
+  return { runtime, session, hooks, sent, configured, createSession, path,
     set pending(value: AppServerPendingSettings) { pending = value; }, get pending() { return pending; },
     set permission(value) { permission = value; }, get permission() { return permission; },
     set status(value: typeof status) { status = value; }, set terminalWait(value: Promise<void>) { terminalWait = value; },
@@ -262,4 +262,50 @@ it("keeps an RPC-rejected attempt distinct from connection failure and rolls bac
   expect(f.runtime.baseline?.model).toBe("initial");
   f.pending = { model: null, effort: null, effortReset: false };await f.runtime.run(input("next"), f.hooks);
   expect(f.sent[1]).toMatchObject({ model: "initial", effort: "high" });expect(f.createSession).toHaveBeenCalledTimes(1);
+});
+
+
+it("rejects a stable blocked gate even when the sync hook returns, and permits explicit reapplication", async () => {
+  const f = fixture();
+  f.permission = { ...f.permission, blocked: { revision: 1, reason: "policy_mismatch" } };
+  await expect(f.runtime.run(input(), f.hooks)).rejects.toMatchObject({ reason: "permission_gate_blocked" });
+  expect(f.sent).toHaveLength(0);expect(f.hooks.onDispatch).not.toHaveBeenCalled();
+  expect(f.session.startProjectedTurn).not.toHaveBeenCalled();expect(f.createSession).toHaveBeenCalledTimes(1);
+  expect(f.runtime.closed).toBe(false);expect(f.session.close).not.toHaveBeenCalled();
+  f.permission = requestPermission(f.permission, { revision: 2, requested: { sandbox: "read-only", network_access: false } });
+  await f.runtime.run(input("reapplied"), f.hooks);
+  expect(f.sent).toHaveLength(1);expect(f.createSession).toHaveBeenCalledTimes(1);
+});
+
+it("rejects a block introduced during settings preparation without repeated configuration requests", async () => {
+  const f = fixture();f.pending = { model: "changed", effort: null, effortReset: true };
+  f.configured.mockImplementationOnce(async () => {
+    f.permission = { ...f.permission, blocked: { revision: 1, reason: "policy_mismatch" } };
+    return { config: { model_reasoning_effort: "medium" } };
+  });
+  await expect(f.runtime.run(input(), f.hooks)).rejects.toMatchObject({ reason: "permission_gate_blocked" });
+  expect(f.configured).toHaveBeenCalledTimes(1);expect(f.sent).toHaveLength(0);
+  expect(f.hooks.onDispatch).not.toHaveBeenCalled();expect(f.runtime.closed).toBe(false);
+});
+
+it.each(["terminal callback", "observation wait"])("rejects an interrupt after the terminal during %s without undoing a successful switch", async boundary => {
+  const f = fixture(), reached = deferred();
+  f.pending = { model: "changed", effort: "low", effortReset: false };
+  let interrupt: Promise<boolean> | undefined;
+  f.hooks.onTerminal = () => {
+    // Remove the evidence to keep observation pending after the terminal.
+    if (boundary === "observation wait") writeFileSync(f.path, "");
+    else interrupt = f.runtime.interrupt("host-1");
+    reached.resolve();
+  };
+  const running = f.runtime.run(input(), f.hooks);
+  await reached.promise;
+  if (boundary === "observation wait") interrupt = f.runtime.interrupt("host-1");
+  const result = await running;
+  expect(result.terminal.status).toBe("completed");
+  expect(f.runtime.baseline).toEqual({ model: "changed", effort: "low", effortIntent: "explicit" });
+  expect(await interrupt).toBe(false);expect(f.session.interrupt).not.toHaveBeenCalled();
+  f.hooks.onTerminal = undefined;f.pending = { model: null, effort: null, effortReset: false };
+  await f.runtime.run(input("next"), f.hooks);
+  expect(f.sent[1].model).toBeUndefined();expect(f.sent[1].effort).toBe("low");
 });

@@ -29,6 +29,7 @@ export interface AppServerRuntimeAttempt {
 }
 export interface AppServerRuntimeHooks {
   snapshot: () => { pending: AppServerPendingSettings; permission: PermissionState };
+  /** Wait for both the current server sync barrier and the Host blocked gate; reject on cancellation or timeout. */
   waitForPermissionSync: () => Promise<void>;
   onDispatch: (attempt: AppServerRuntimeAttempt) => void;
   onTerminal?: (identity: AppServerTurnIdentity) => void;
@@ -47,7 +48,7 @@ export class AppServerAdmissionError extends Error {
   }
 }
 
-type Active = { token: string; abort: AbortController; dispatched: boolean; interrupted: boolean };
+type Active = { token: string; abort: AbortController; dispatched: boolean; interrupted: boolean; terminal?: { abandoned: boolean } };
 async function cancellable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
   let abort!: () => void;
   const cancelled = new Promise<never>((_, reject) => {
@@ -112,6 +113,7 @@ export class AppServerHostRuntime {
       for (;;) {
         if (active.abort.signal.aborted) throw new AppServerAdmissionError("interrupted");
         const snapshot = hooks.snapshot();
+        if (snapshot.permission.blocked !== null) throw new AppServerAdmissionError("permission_gate_blocked");
         const pending = { ...snapshot.pending };
         const selection = { ...snapshot.permission.next, requested: { ...snapshot.permission.next.requested } };
         const baseline = this.#baseline;
@@ -143,12 +145,14 @@ export class AppServerHostRuntime {
               if (event.kind !== "adapter" || event.event.kind !== "result") hooks.onProjection(event);
               continue;
             }
+            // Observation can await rollout writes; later interrupts cannot abandon this completed boundary.
+            active.terminal = { abandoned: active.interrupted };
             hooks.onTerminal?.(turn.identity);
             const permission = attempt.permission === null ? null
               : await observeAppServerPermission(attempt.permission, turn.identity, () => hooks.snapshot().permission);
             if (this.#closed) throw new AppServerConnectionError("App-server runtime closed");
             if (permission !== null) hooks.onPermission(permission, attempt);
-            if (event.status === "completed" && !active.interrupted) {
+            if (event.status === "completed" && !active.terminal.abandoned) {
               this.#baseline = appServerSettingsAfterSuccess(baseline!, pending, attempt.prepared, rollback);
               this.#rollback = false;
             } else this.#rollback = true;
@@ -173,7 +177,7 @@ export class AppServerHostRuntime {
 
   async interrupt(hostTurnToken: string): Promise<boolean> {
     const active = this.#active;
-    if (this.#closed || !active || active.token !== hostTurnToken) return false;
+    if (this.#closed || !active || active.terminal || active.token !== hostTurnToken) return false;
     active.interrupted = true;
     if (!active.dispatched) { active.abort.abort();return true; }
     return this.#session!.interrupt(hostTurnToken);

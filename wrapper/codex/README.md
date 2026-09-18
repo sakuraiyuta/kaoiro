@@ -226,8 +226,10 @@ pending; existing exec behavior is unchanged.
 `CodexHost` and normal launch do not select it yet. It creates one session,
 opens or resumes once, and rejects overlapping calls. The future Host still
 owns the queue. Its synchronization hook must await both the current server
-permission-sync barrier and the Host's blocked-permission gate. It is awaited
-before opening and again after asynchronous settings resolution. The final
+permission-sync barrier and the Host's blocked-permission gate. If the hook
+returns while the gate is still blocked, the runtime rejects with
+`permission_gate_blocked` without dispatching or replacing the session. The hook
+is awaited before opening and again after asynchronous settings resolution. The final
 synchronous dispatch check compares permission and pending model/effort/reset
 selection. Superseded preparation repeats without dispatch callbacks; fresh
 thread provenance is consumed only at the first actual dispatch.
@@ -240,6 +242,8 @@ forwarded, but the projection's terminal adapter state is withheld for the Host
 to publish with the completion. Only a completed, non-abandoned turn updates
 the baseline. Failure or interruption preserves it and requests explicit
 rollback on the next turn, including a late completed terminal after interrupt.
+Abandonment is captured before the terminal callback; interrupts during subsequent
+policy observation return false and cannot undo that completed settings change.
 Interrupt acceptance does not release admission; the token's terminal still
 owns completion. Pre-dispatch interrupt/close releases synchronization waits.
 Connection or unexpected stream failure closes the session and admission;
