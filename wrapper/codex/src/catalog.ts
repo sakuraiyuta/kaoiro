@@ -56,7 +56,7 @@ const ASTRA: EngineModelInfo = {
 
 const CHATGPT_PLUS_MODELS = [SOL, TERRA, LUNA, ASTRA];
 // Free/Go exclusions follow the Plan × available-model table in
-// docs/specs/codex-model-catalog.md.
+// docs/reference/engines/codex-model-catalog.md.
 const CHATGPT_TERRA = [TERRA];
 
 const APIKEY_MODELS: EngineModelInfo[] = [

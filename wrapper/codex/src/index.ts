@@ -1,7 +1,7 @@
 // @kaoiro/codex — Codex CLI engine adapter (ADR-0032, phase-14): wraps
 // @openai/codex-sdk (one `codex exec` per turn), derives kaoiro states from
 // ThreadEvents, and serves the common tools through the bundled stdio MCP
-// bridge. See docs/specs/codex-sdk-events.md.
+// bridge. See docs/reference/engines/codex-exec-events.md.
 
 export {
   threadEventToEvents,

@@ -55,7 +55,7 @@ state_changes, updating values that can change during the session when they chan
 
 **Do not wait** for a session_init-equivalent event (Claude’s
 `SDKSystemMessage(init)` or Codex’s `thread.started`): Codex spawns a new
-`codex exec` process for every turn ([codex-sdk-events](../specs/codex-sdk-events.md)),
+`codex exec` process for every turn ([codex-sdk-events](../reference/engines/codex-exec-events.md)),
 so `thread.started` is not reached until the first turn. Combined with the
 fail-closed default at the end, waiting would incorrectly display a Codex agent
 that has just started as “unsupported” (pass it through the same optimistic-stamp
@@ -135,7 +135,7 @@ Initial implementation:
   translates `"image"` into the SDK’s `local_image` path input without leaking SDK
   terminology into the protocol. Claude does not advertise `attachment_types`,
   so it retains the existing unrestricted type behavior. We would like to derive
-  plan-tier checks from `codex doctor` information in [codex-model-catalog](../specs/codex-model-catalog.md),
+  plan-tier checks from `codex doctor` information in [codex-model-catalog](../evidence/codex/model-catalog.md),
   but plan tier itself cannot be obtained, so MVP is unconditionally true. If
   dialog unavailability is observed on Free/Go plans, then advertise
   `user_input_modes` at that point.

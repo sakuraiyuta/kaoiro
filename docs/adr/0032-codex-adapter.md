@@ -5,7 +5,7 @@ date: 2026-07-10
 opened: 2026-06-26
 supersedes: []
 superseded_by: null
-related_specs: [plugin-model, protocol, architecture, personas, codex-sdk-events, agent-sdk-events]
+related_specs: [plugin-model, protocol, architecture, personas, codex-exec-events, agent-sdk-events]
 related_adrs: [17, 22, 23, 33, 34, 35, 37, 38, 39, 40]
 ---
 
@@ -54,7 +54,7 @@ The correspondence between the Codex SDK and Claude Agent SDK (as of July 2026,
 | Authentication | `ANTHROPIC_API_KEY` / Claude subscription | `CODEX_API_KEY` env / ChatGPT login (`~/.codex/auth.json`). `OPENAI_API_KEY` is not used for runtime authentication in 0.144 (only for piping into login) |
 | System-prompt equivalent | `systemPrompt.append` | config `developer_instructions` (appended as a developer-role message, verified) / AGENTS.md (append) |
 | Tools | `tool()` + Zod, in-process MCP | **No dynamicTools in the TS SDK**. External MCP servers can be registered per run with a config override (`mcp_servers.*`) |
-| Streaming | `SDKMessage` (system/assistant/result/stream_event) | `ThreadEvent` (thread.*/turn.*/item.*), details in [codex-sdk-events](../specs/codex-sdk-events.md) |
+| Streaming | `SDKMessage` (system/assistant/result/stream_event) | `ThreadEvent` (thread.*/turn.*/item.*), details in [codex-sdk-events](../reference/engines/codex-exec-events.md) |
 | Hooks | PreToolUse / CwdChanged, etc. | Hooks introduced in v0.116 (not exposed on the exec/SDK surface) |
 
 (Added 2026-07-10: The table above was verified against the type definitions,
@@ -173,7 +173,7 @@ old Q5 closed):
   mid-session switch contract are decided in [ADR-0035](0035-codex-model-catalog-and-mid-session-switch.md)).
   The current Codex ecosystem situation (plan-specific model availability,
   asymmetry between the two authentication modes, and the information granularity
-  of `codex doctor`) is recorded in [codex-model-catalog](../specs/codex-model-catalog.md).
+  of `codex doctor`) is recorded in [codex-model-catalog](../evidence/codex/model-catalog.md).
 - **Effort is currently hidden in the UI because the catalog is empty**. Preserve
   the policy (E-B) of integrating it into Claude’s `ext.models` `effort_levels`
   when a model catalog returns in the future.
@@ -206,7 +206,7 @@ and env separation explicit. Implement it in [phase-15-wrapper-ux-parity](../pla
     neither CLI reads or warns about the old env anymore.
   - Rationale: the single shared env caused `KAOIRO_WRAPPER_DEFAULT_MODEL=claude-opus-4-7`
     in `scripts/dev.sh` to flow into Codex spawns, causing a 400/404 on the
-    ChatGPT-plan authentication path ([codex-model-catalog](../specs/codex-model-catalog.md)
+    ChatGPT-plan authentication path ([codex-model-catalog](../evidence/codex/model-catalog.md)
     documents the authentication asymmetry). Engine-specific env structurally
     prevents this.
 - **Unresolvable model handling** (both engines): if an explicitly specified model
@@ -464,5 +464,5 @@ Implement in these two phases:
 - Related ADRs: [0017](0017-wrapper-multientity-packages.md) (materialised by
   this ADR), [0022](0022-pending-permission-authoritative-source.md) /
   [0033](0033-permission-model-dual-axis.md) (two-axis permissions), [0023](0023-host-runner-architecture.md) D3 (execute the rename), [0001](0001-agent-sdk-integration.md) (adopt Claude SDK), [0027](0027-askuserquestion-envelope.md) (question envelope), [0014](0014-session-resume-and-restore.md) (resume), and [0034](0034-session-capabilities-advertisement.md) (extend the engine-neutralisation pattern through session capabilities).
-- Related specs: [plugin-model](../specs/plugin-model.md), [protocol](../specs/protocol.md), [architecture](../architecture/system-overview.md), [personas](../specs/personas.md), [agent-sdk-events](../specs/agent-sdk-events.md) (Claude version), and [codex-sdk-events](../specs/codex-sdk-events.md) (new Codex version).
+- Related specs: [plugin-model](../specs/plugin-model.md), [protocol](../specs/protocol.md), [architecture](../architecture/system-overview.md), [personas](../specs/personas.md), [agent-sdk-events](../specs/agent-sdk-events.md) (Claude version), and [codex-sdk-events](../reference/engines/codex-exec-events.md) (new Codex version).
 - Open questions (phase-14 period): [Q4 codex-cwd-extraction](../open-questions/codex-cwd-extraction.md), [codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md) (new 2026-07-10). Old Q1 (personality injection effectiveness) closed after real-machine verification on 2026-07-11; old Q2 (envelope schema) / Q3 (UI vocabulary) / Q5 (model catalog) / Q6 (compatibility window) were resolved and closed by real SDK verification + spec elicitation on 2026-07-10 (the decisions were added to this ADR and [ADR-0033](0033-permission-model-dual-axis.md)).

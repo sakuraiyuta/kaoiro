@@ -32,7 +32,7 @@ caused by compaction cannot be investigated afterward.
 ## 判断材料
 
 Whether a confirmed compaction-boundary event appears in the Codex SDK event
-specification ([codex-sdk-events](../specs/codex-sdk-events.md)).
+specification ([codex-sdk-events](../reference/engines/codex-exec-events.md)).
 
 Re-measured 2026-09-14 (issue #347): `@openai/codex-sdk` 0.153.4 ships no
 compaction symbol in `dist/` and `codex exec --help` offers no compaction

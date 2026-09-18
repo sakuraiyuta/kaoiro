@@ -77,7 +77,7 @@ persona packs (`kuroe-claude` / `kuroe-codex`) nor engine-specific sections in
 `personality.md`. Live verification on 2026-07-11 confirmed Codex injection is
 effective (reproducing manner of speech and attitude): kuroe / ao were clearly
 differentiated, and `developer_instructions` injection took effect faithfully
-per persona (“Live verification note” in [codex-sdk-events](codex-sdk-events.md)).
+per persona (“Live verification note” in [codex-sdk-events](../evidence/codex/exec-contract.md)).
 
 ### Default persona (plain AI)
 

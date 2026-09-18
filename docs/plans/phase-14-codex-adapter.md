@@ -25,7 +25,7 @@ momo) and major features.
 (Revised 2026-07-10: Former Q2/Q3/Q5/Q6 were resolved through real SDK
 verification + spec elicitation. The decisions are reflected in
 [ADR-0032](../adr/0032-codex-adapter.md) / [ADR-0033](../adr/0033-permission-model-dual-axis.md) /
-[codex-sdk-events](../specs/codex-sdk-events.md), and these criteria assume them.)
+[codex-sdk-events](../reference/engines/codex-exec-events.md), and these criteria assume them.)
 
 - [x] `wrapper/codex` implements the `EngineAdapter` interface and can be driven end to end through `thread.runStreamed()` / `codex.resumeThread(id)` (a process model that spawns `codex exec` every turn).
 - [x] Agent-level `ext.permission = {sandbox, approval}` from F1 of [ADR-0033](../adr/0033-permission-model-dual-axis.md) is carried in the envelope. The Claude six-mode → dual-axis mapping table (F2) is implemented in `wrapper/claude-code`, and `ext.permission_mode` is colocated for one release as a backward-compatibility window.
@@ -44,7 +44,7 @@ verification + spec elicitation. The decisions are reflected in
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 14-1 | Add the `@openai/codex-sdk` dependency to `wrapper/codex` and implement the adapter itself with the `EngineAdapter` interface | ✅ | Convert runStreamed events → common AdapterEvent. Process model that spawns exec every turn ([codex-sdk-events](../specs/codex-sdk-events.md)) |
+| 14-1 | Add the `@openai/codex-sdk` dependency to `wrapper/codex` and implement the adapter itself with the `EngineAdapter` interface | ✅ | Convert runStreamed events → common AdapterEvent. Process model that spawns exec every turn ([codex-sdk-events](../reference/engines/codex-exec-events.md)) |
 | 14-2 | Verify the ThreadEvent → common AdapterEvent mapping on a real turn and promote `codex-sdk-events.md` to accepted | ✅ | Spec updated based on actual types on 2026-07-10; real-turn confirmation after authentication remains |
 | 14-3 | Add `ext.permission = {sandbox, approval}` from ADR-0033 F1 to `@kaoiro/protocol` | ✅ | Colocate `permission_mode` for one release window (D-A) |
 | 14-4 | Implement the Claude six-mode → dual-axis mapping table in `wrapper/claude-code` (ADR-0033 F2 table) | ✅ | Implement it in the mapping-table placeholder created in phase-13 |
@@ -77,6 +77,6 @@ None (all closed). Former Q1 (personality injection effectiveness) was closed by
 
 ## See Also
 
-- Specs covered: [plugin-model](../specs/plugin-model.md), [protocol](../specs/protocol.md), [personas](../specs/personas.md), [architecture](../architecture/system-overview.md), [codex-sdk-events](../specs/codex-sdk-events.md) (new)
+- Specs covered: [plugin-model](../specs/plugin-model.md), [protocol](../specs/protocol.md), [personas](../specs/personas.md), [architecture](../architecture/system-overview.md), [codex-sdk-events](../reference/engines/codex-exec-events.md) (new)
 - Related ADRs: [ADR-0032](../adr/0032-codex-adapter.md) (main ADR for this phase), [ADR-0033](../adr/0033-permission-model-dual-axis.md) (dual-axis permissions), [ADR-0027](../adr/0027-askuserquestion-envelope.md) (question envelope), [ADR-0014](../adr/0014-session-resume-and-restore.md) (resume separation), [ADR-0031](../adr/0031-runner-persona-trust-mode.md) (compatibility-window pattern)
 - Previous phase: [phase-13-wrapper-multipackage-restructure](phase-13-wrapper-multipackage-restructure.md)

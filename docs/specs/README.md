@@ -14,8 +14,8 @@ Feature specifications, organized by topic. Each file has `status` and
 | [protocol-inter-agent](protocol-inter-agent.md) | provisional | Inter-agent messaging envelope schema, nine kinds, and hard limits |
 | [protocol-external-human](protocol-external-human.md) | provisional | External human messaging (Discord), one-way authority, discord-wrapper, and Tier A/B |
 | [agent-sdk-events](agent-sdk-events.md) | accepted | Settled Agent SDK event specification and state derivation (Claude edition) |
-| [codex-sdk-events](codex-sdk-events.md) | accepted | Settled Codex SDK (@openai/codex-sdk) event specification and state derivation (counterpart to agent-sdk-events) |
-| [codex-model-catalog](codex-model-catalog.md) | accepted | Codex model table by plan; three change paths (Web UI / CLI / config.toml); asymmetry between two authentication modes. Evidence for ADR-0032 F4bc |
+| [codex-exec-events](../reference/engines/codex-exec-events.md) | accepted | Exec SDK event contract and state derivation; [dated verification](../evidence/codex/exec-contract.md) |
+| [codex-model-catalog](../reference/engines/codex-model-catalog.md) | accepted | Catalog contract; [model-change procedures](../operations/codex-model-settings.md) and [dated plan/auth/doctor evidence](../evidence/codex/model-catalog.md) |
 | [antigravity-cli-events](antigravity-cli-events.md) | provisional | Measured Antigravity CLI (agy) headless event specification, hooks-as-permission-gate, and state derivation (third engine, ADR-0057) |
 | [subagent-tasks](subagent-tasks.md) | provisional | Detection of subagent/workflow tasks and dedicated envelope notifications |
 | [file-upload](file-upload.md) | provisional | Render dashboard attachments (images/text/PDF/Office) to the SDK in the wrapper |

@@ -5,7 +5,7 @@ date: 2026-08-04
 opened: 2026-08-04
 supersedes: []
 superseded_by: null
-related_specs: [protocol, subagent-tasks, codex-sdk-events]
+related_specs: [protocol, subagent-tasks, codex-exec-events]
 related_adrs: [47]
 ---
 
@@ -28,7 +28,7 @@ whether child tasks are running.
 The basis for the decision is that source events from both engines arrive as
 **whole-list updates** (Claude Code's todo update and Codex SDK 0.144.1's
 ThreadItem `todo_list` — `items[]: {text, completed}`,
-[codex-sdk-events](../specs/codex-sdk-events.md); the current Codex adapter drops
+[codex-sdk-events](../reference/engines/codex-exec-events.md); the current Codex adapter drops
 it). ADR-0047 makes `task_type` an extensible enum and explicitly plans a tasklist
 addendum.
 
@@ -136,7 +136,7 @@ tasklist is not displayed again after resume until a task tool_use occurs.
 
 - Specs: [protocol](../specs/protocol.md) (reserved `task` row),
   [subagent-tasks](../specs/subagent-tasks.md), and
-  [codex-sdk-events](../specs/codex-sdk-events.md) (`todo_list` source event).
+  [codex-sdk-events](../reference/engines/codex-exec-events.md) (`todo_list` source event).
 - Related ADR: [0047](0047-task-envelope-schema.md) (task envelope schema and
   `task_type` extension point).
 - Origin: settle the HITL questions of kaoiro issue #178 through consultation with

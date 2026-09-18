@@ -1,7 +1,7 @@
 // Adapter — bridges Codex SDK ThreadEvents into the normalized AdapterEvent
 // stream consumed by the state machine (@kaoiro/agent-common state.ts) and
 // into relayable log entries. Pure: it only reads event shape, never calls
-// the SDK. See docs/specs/codex-sdk-events.md; the Claude twin lives in
+// the SDK. See docs/reference/engines/codex-exec-events.md; the Claude twin lives in
 // @kaoiro/claude-code/src/adapter.ts.
 
 import type { ThreadEvent, ThreadItem } from "@openai/codex-sdk";

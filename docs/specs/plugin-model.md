@@ -115,7 +115,7 @@ to `#statusExt`) and advertises it in the envelope
   the first turn because it spawns a new `codex exec` process every turn; waiting
   for session_init would make a newly started Codex agent display falsely as
   “no capability” under the fail-closed default
-  ([codex-sdk-events](codex-sdk-events.md)). Claude also stamps from its first
+  ([codex-sdk-events](../reference/engines/codex-exec-events.md)). Claude also stamps from its first
   state_change for symmetry.
 - **UI decision principle**: The UI must not determine capability from the
   engine name (`ext.engine`) (review prohibition,

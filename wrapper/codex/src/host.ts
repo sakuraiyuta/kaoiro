@@ -2,7 +2,7 @@
 // `codex exec` per turn via @openai/codex-sdk (resume for turns 2+), derives
 // kaoiro states from the ThreadEvent stream (adapter.ts + the shared state
 // machine), and serves the common tools through the MCP bridge
-// (docs/specs/codex-sdk-events.md, ADR-0032). The Claude twin is
+// (docs/reference/engines/codex-exec-events.md, ADR-0032). The Claude twin is
 // @kaoiro/claude-code's AgentHost; both implement EngineAdapter.
 //
 // Approval is pinned to "never" (ADR-0033); waiting_permission represents
@@ -288,7 +288,7 @@ function initialStatusExtFromCatalog(
       // で縮み reasoning/output も含まないため context 使用率とは semantics
       // が異なる。max window 取得経路もない (catalog に context_window field
       // なし)。UI は「未対応」表示。upstream で compaction telemetry が
-      // 確定するまで estimated 投影も行わない (docs/specs/codex-sdk-events.md)。
+      // 確定するまで estimated 投影も行わない (docs/reference/engines/codex-exec-events.md)。
       supports_context_usage: false,
       supports_permission_switch: permissionSyncSupported,
     },

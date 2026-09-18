@@ -58,7 +58,7 @@ implementation — the emphasis marks; all three are walked at every close.
 | U24 | codex app-server architecture / reference + ADR-0058 evidence extraction | perm impl | ⏳ |
 | U25 | codex backend switch runbook | ops perm impl | ⏳ |
 | U26 | antigravity adapter / events / tools-permissions / evidence | perm impl | ⏳ |
-| U27 | codex exec events / model catalog | perm impl | ⏳ |
+| U27 | codex exec events / model catalog | perm impl | Implemented; review pending |
 | U28 | claude events | perm impl | ⏳ |
 | U29a | entry pages: overview, system-overview, scope, glossary; folder scaffolding; this plan | ops perm impl | ✅ |
 | U29b | plugin-model split (extensions, adapter contract, claude model catalog) | impl | ⏳ |
@@ -79,3 +79,8 @@ Writer rules: one writer per destination file; units that touch the same file
 | specs/architecture.md | [architecture/system-overview.md](../architecture/system-overview.md) | U29a |
 | specs/non-goals.md | [architecture/scope.md](../architecture/scope.md) | U29a |
 | specs/glossary.md | [reference/glossary.md](../reference/glossary.md) | U29a |
+| specs/codex-sdk-events.md | [reference/engines/codex-exec-events.md](../reference/engines/codex-exec-events.md) | U27 |
+| specs/codex-sdk-events.md | [evidence/codex/exec-contract.md](../evidence/codex/exec-contract.md) | U27 |
+| specs/codex-model-catalog.md | [reference/engines/codex-model-catalog.md](../reference/engines/codex-model-catalog.md) | U27 |
+| specs/codex-model-catalog.md | [operations/codex-model-settings.md](../operations/codex-model-settings.md) | U27 |
+| specs/codex-model-catalog.md | [evidence/codex/model-catalog.md](../evidence/codex/model-catalog.md) | U27 |

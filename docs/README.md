@@ -7,6 +7,7 @@ kaoiro documentation. The pre-taxonomy folders (specs / plans / open-questions) 
 | [architecture/](architecture/) | How kaoiro is built today and why — start at [overview](architecture/overview.md) and [system-overview](architecture/system-overview.md) |
 | [reference/](reference/) | Exact current contracts (protocol, configuration, engines, ui) and the [glossary](reference/glossary.md) |
 | [specs/](specs/) | Pre-taxonomy feature specifications — being dissolved into `architecture/` and `reference/` ([ADR-0060](adr/0060-documentation-taxonomy-and-migration.md), [issue #368](https://github.com/sakuraiyuta/kaoiro/issues/368), progress in [plans/phase-35](plans/phase-35-docs-migration.md)); moved pages leave a stub |
+| [evidence/](evidence/) | Dated measurements and their limits; [Codex exec](evidence/codex/exec-contract.md) and [model catalog](evidence/codex/model-catalog.md) |
 | [operations/](operations/) | Operator runbooks |
 | [contributing/](contributing/) | How to change the project, including [where a doc page goes](contributing/documentation.md) |
 | [plans/](plans/) | Phase-based implementation plans and status |
@@ -94,3 +95,11 @@ Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh do
 - Specification ambiguity → add `open-questions/<slug>.md`
 - Important decision → create `adr/NNNN-<slug>.md` and update the referenced spec
 - Phase progress → update the table in `plans/phase-N-<slug>.md`
+
+## Codex documentation
+
+- Adapter implementation: [exec event contract](reference/engines/codex-exec-events.md) and [catalog contract](reference/engines/codex-model-catalog.md).
+- Operator model changes: [model settings](operations/codex-model-settings.md).
+- Permission recovery: [exec permission boundary](reference/engines/codex-exec-events.md#permission-no-approval-flow-exists) and the [permission protocol](specs/protocol.md).
+- Operational updates: [production runbook](operations/production.md).
+- Dated evidence: [exec verification](evidence/codex/exec-contract.md) and [catalog observations](evidence/codex/model-catalog.md).

@@ -1,8 +1,8 @@
 ---
 title: Antigravity adapter — Antigravity CLI (agy) headless event specification
-description: Measured behaviour of the Antigravity CLI (`agy` 1.1.26) in headless print mode — stream-json events, resume, customization discovery, hooks-as-permission-gate, and their derivation to kaoiro state. Third engine counterpart to agent-sdk-events / codex-sdk-events.
+description: Measured behaviour of the Antigravity CLI (`agy` 1.1.26) in headless print mode — stream-json events, resume, customization discovery, hooks-as-permission-gate, and their derivation to kaoiro state. Third engine counterpart to agent-sdk-events / codex-exec-events.
 status: provisional
-related: [protocol, plugin-model, architecture, agent-sdk-events, codex-sdk-events]
+related: [protocol, plugin-model, architecture, agent-sdk-events, codex-exec-events]
 ---
 <!-- markdownlint-disable MD033 -->
 
@@ -15,7 +15,7 @@ headless print mode as the substrate of the third engine `antigravity`
 ([ADR-0057](../adr/0057-antigravity-adapter.md)), and defines its derivation
 to kaoiro state ([protocol](protocol.md)). Paired with
 [agent-sdk-events](agent-sdk-events.md) (Claude) and
-[codex-sdk-events](codex-sdk-events.md) (Codex).
+[codex-sdk-events](../reference/engines/codex-exec-events.md) (Codex).
 
 **Status: provisional** — every claim below marked *(measured)* was observed
 on 2026-09-04 with `agy` 1.1.26 (x86-64 Linux, OAuth personal login) on the

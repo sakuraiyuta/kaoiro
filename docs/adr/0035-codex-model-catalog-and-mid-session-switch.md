@@ -5,7 +5,7 @@ date: 2026-07-11
 opened: 2026-07-11
 supersedes: []
 superseded_by: null
-related_specs: [protocol, plugin-model, codex-model-catalog, codex-sdk-events]
+related_specs: [protocol, plugin-model, codex-model-catalog, codex-exec-events]
 related_adrs: [32, 34, 37, 39, 40]
 ---
 
@@ -232,7 +232,7 @@ Implement this in [phase-16-codex-model-switch](../plans/phase-16-codex-model-sw
 (Sol/Terra/Luna) to a quartet. Introduce operator-declared `extra_models`
 (`runner.config.json`'s `codex.extra_models`) as a fourth model-change
 path alongside the three in
-[codex-model-catalog](../specs/codex-model-catalog.md): it lets an
+[codex-model-catalog](../operations/codex-model-settings.md): it lets an
 operator advertise a brand-new upstream model the day it ships, without
 waiting for a kaoiro release to update the curated snapshot. Declared
 entries merge onto the resolved base catalog (a matching `value`
@@ -244,7 +244,7 @@ guessed one). This ADR's status remains Accepted.
 
 **Origin.** This is issue #292. Astra's addition follows F1's existing
 per-plan curation precedent (see the plan × model table in
-[codex-model-catalog](../specs/codex-model-catalog.md)); `extra_models`
+[codex-model-catalog](../operations/codex-model-settings.md)); `extra_models`
 generalises that same precedent into an operator-facing declaration so
 the curated snapshot's inherent lag behind upstream releases has a
 stopgap that does not require a kaoiro release.

@@ -220,7 +220,7 @@ cannot represent.
   - **absent** — unstamped capability from an old wrapper during rolling upgrade; hide the context row rather than treating it as unsupported.
   - **explicit `false`** — adapter cannot provide an exact snapshot (currently Codex); show “unsupported”.
   - **explicit `true`** — adapter promises to stamp `ext.context`; show a meter when it arrives and a loading placeholder before then.
-- Claude is `true`: SDK `getContextUsage()` can return exact `totalTokens`/`maxTokens`/`percentage` (best-effort even immediately after init; failures leave “loading”). Codex is `false`: `turn.completed.usage.input_tokens` is per-turn input only and shrinks on compaction, excluding reasoning/output, so it is not context usage (see [codex-sdk-events](codex-sdk-events.md)).
+- Claude is `true`: SDK `getContextUsage()` can return exact `totalTokens`/`maxTokens`/`percentage` (best-effort even immediately after init; failures leave “loading”). Codex is `false`: `turn.completed.usage.input_tokens` is per-turn input only and shrinks on compaction, excluding reasoning/output, so it is not context usage (see [codex-sdk-events](../reference/engines/codex-exec-events.md)).
 
 #### `ext.resume_snapshot` / `ext.effective` / `ext.resume_drift` (2026-07-11, [ADR-0032](../adr/0032-codex-adapter.md) F4bc + [ADR-0033](../adr/0033-permission-model-dual-axis.md) F4 addendum, phase 15)
 
@@ -1245,7 +1245,7 @@ blocks, since nothing else in this spec names `WrapperConfig`.
   effort-switch availability (Codex only), and `setModel` validation must
   all recognise a declared model too, not only the register's launch-time
   list. Absent / empty on either field means no declarations for that
-  engine. See [codex-model-catalog](codex-model-catalog.md) (D) and
+  engine. See [Codex model settings](../operations/codex-model-settings.md#d-kaoiros-own-extra_models-declaration-issue-292) (D) and
   runner/README.md's "Codex 設定" / "Antigravity configuration" sections
   for the declaration syntax and merge semantics.
 

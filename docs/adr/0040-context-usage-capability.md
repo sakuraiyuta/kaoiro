@@ -5,7 +5,7 @@ date: 2026-07-16
 opened: 2026-07-16
 supersedes: []
 superseded_by: null
-related_specs: [protocol, plugin-model, agent-sdk-events, codex-sdk-events]
+related_specs: [protocol, plugin-model, agent-sdk-events, codex-exec-events]
 related_adrs: [21, 22, 32, 34, 35, 37, 39]
 ---
 
@@ -188,5 +188,5 @@ best-effort and leave the UI stuck at “loading” (M-A, 藤 review turn-3).
 - ADR-0037 F6: precedent for the bounded retry + persistent state flag pattern
 - Wire spec: [protocol](../specs/protocol.md) L134-145
 - Plugin routing: [plugin-model](../specs/plugin-model.md) L32-37
-- Codex event contract: [codex-sdk-events](../specs/codex-sdk-events.md) L48, 84
+- Codex event contract: [codex-sdk-events](../reference/engines/codex-exec-events.md) L48, 84
 - Implementation plan: [phase-21-context-usage-capability](../plans/phase-21-context-usage-capability.md)

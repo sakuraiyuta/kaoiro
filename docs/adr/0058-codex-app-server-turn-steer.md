@@ -5,7 +5,7 @@ date: 2026-09-14
 opened: 2026-09-14
 supersedes: []
 superseded_by: null
-related_specs: [codex-sdk-events, protocol, protocol-inter-agent]
+related_specs: [codex-exec-events, protocol, protocol-inter-agent]
 related_adrs: [22, 32, 33, 34, 35, 51, 55]
 ---
 
