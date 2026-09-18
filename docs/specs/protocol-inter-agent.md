@@ -111,7 +111,9 @@ signal above would be muted with it.
 ### Configuration
 
 `config :kaoiro_server, :quagmire` — deliberately separate from
-`:inter_agent`, whose entries are all hard limits that reject or close.
+`:inter_agent`, which configures conversation hard limits and memory-reclamation
+TTLs. Quagmire thresholds produce notices rather than rejecting or closing
+conversations.
 `rally_turns` / `rally_window_ms` / `stall_ms` / `sweep_interval_ms`;
 `KAOIRO_QUAGMIRE_RALLY_TURNS` and `KAOIRO_QUAGMIRE_STALL_MS` override the two
 an operator would retune without a rebuild, and an invalid value raises at
