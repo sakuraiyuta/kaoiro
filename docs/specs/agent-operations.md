@@ -160,7 +160,7 @@ envelope schema, hard limits, and turn-number contract.
   notice — counted per agent PAIR across conversations, because opening a
   fresh `conversation_id` does not reset a review loop. That notice is
   advisory: it never closes a conversation and never messages an agent. See
-  [protocol-inter-agent](protocol-inter-agent.md) "Review-quagmire detection".
+  [coordination monitoring](../reference/inter-agent/coordination-monitoring.md).
 - The threshold that notice fires on is the operator's to set, from the
   dashboard settings drawer, without a server restart. Director-style
   operation holds several long review loops at once, so the shipped default

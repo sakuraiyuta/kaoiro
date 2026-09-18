@@ -3729,7 +3729,7 @@
               <time class="ts" datetime={env.ts}>{time}</time>
             </div>
           {:else if iam}
-            <!-- inter_agent_message (protocol-inter-agent, phase-8): the same
+            <!-- inter_agent_message (docs/reference/inter-agent/coordination-monitoring.md): the same
                  envelope rides on both sender and receiver transcripts; the
                  direction is decided here against the viewer's selected agent.
                  Body is untrusted text — render through DOMPurify (#30) via
@@ -5189,7 +5189,7 @@
     color: var(--fg);
   }
 
-  /* Inter-agent message bubble (protocol-inter-agent, phase-8): a tinted
+  /* Inter-agent message bubble (docs/reference/inter-agent/coordination-monitoring.md): a tinted
      border + small header line carrying direction (→ to / ← from), kind,
      short conversation_id, and turn number so the operator can follow a
      multi-turn discussion across both transcripts. `--iam-tone` swaps by

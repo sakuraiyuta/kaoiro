@@ -1683,7 +1683,7 @@ export function interAgentMessageOf(
  *  would corrupt the grid face — the boundary marker is a stateless
  *  cue, not a state_change). `log` / `result` are operator-only
  *  (ADR-0012); `inter_agent_message` is operator-only too
- *  (protocol-inter-agent spec) and lands on both the sender and the
+ *  (docs/reference/inter-agent/coordination-monitoring.md) and lands on both the sender and the
  *  receiver's transcript. `session_boundary` (ADR-0036 F3, phase-17
  *  17-7) IS viewer-visible after server-side sanitize (mode-only
  *  payload); the transcript-vs-state routing decision is orthogonal

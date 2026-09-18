@@ -131,4 +131,11 @@ Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh do
 - Architecture and adapter entry: [message flow](architecture/inter-agent-messaging.md).
 - Exact contracts: [messages](reference/inter-agent/messages.md), [conversations and limits](reference/inter-agent/conversations.md), [conversation admission](reference/inter-agent/conversation-admission.md), [delivery](reference/inter-agent/delivery.md), and [send and wait](reference/inter-agent/send-and-wait.md).
 - Permission recovery: [approval flow](specs/protocol-inter-agent.md#approval-flow-permission_broker-integration).
-- Observation and remaining topics: [protocol entry](specs/protocol-inter-agent.md).
+- Remaining topics: [protocol entry](specs/protocol-inter-agent.md).
+
+## Coordination monitoring documentation
+
+- Design: [notification boundaries and rationale](architecture/coordination-monitoring.md).
+- Operational updates: [monitoring configuration](reference/inter-agent/coordination-monitoring.md#configuration).
+- Permission recovery: [operator-only wire and display contracts](reference/inter-agent/coordination-monitoring.md#wire) and [authentication and authorization](reference/security/authentication-authorization.md).
+- Adapter and dashboard implementation: [detection and display contract](reference/inter-agent/coordination-monitoring.md).
