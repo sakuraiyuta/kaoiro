@@ -789,9 +789,12 @@ pair**.
 
 ### Receiver-side behavior (wrapper-B)
 
-When wrapper-B receives an `envelope` (type `inter_agent_message`,
-`agent_id` not self) on `wrapper:<id>`, it injects it as input to the next SDK
-turn in this form:
+For an inbound `envelope` (type `inter_agent_message`, `agent_id` not self)
+selected for next-turn SDK injection, the following is the body/meta excerpt
+for an ordinary message, not the complete injected text. The formatter prepends
+a conversation marker with reply or close-proposal guidance. Error notices use
+a dedicated `peer-error(...)` line; a multi-message batch also has a preamble
+and separators between the individual formatted messages:
 
 ```text
 [from <agent_id>] <kind>: <body>
@@ -805,8 +808,11 @@ conversation remains open until both sides send `done=true`, a hard limit is
 exceeded, or `open_conversation_ttl_ms` elapses (default 24 hours, issue
 #211). The former server `max_wallclock` hard limit automatically attached
 `done` on timeout; issue #211 removed it. `open_conversation_ttl_ms` is now
-memory reclamation only and never marks a conversation done (see “Conversation
-lifecycle” above).
+memory reclamation rather than a hard-limit escalation or evidence of mutual
+agreement. GC closes the server entry and sends a synthetic `kind: "done"`,
+`meta.done: true` notice; a receiving wrapper learns that closure without
+injecting the terminal notice into an SDK turn (see
+[conversation lifecycle](../reference/inter-agent/conversations.md#conversation-lifecycle-and-post-close-handling-issue-167)).
 
 #### Coalescing pending messages (issue #211 phase 3)
 
@@ -834,8 +840,11 @@ count and the high cost of xhigh effort.
 After sending a turn to the SDK the wrapper cannot identify which message
 caused a failure. If a coalesced turn fails with `context_overflow`,
 `api_error`, or similar, send a `payload.error` notice (see “Unresponsive
-notices”) **separately to every conversation_id in the batch**. Unrelated peers
-therefore receive the same peer_error. This is an intentional cost of reducing
+notices”) **separately for each still-pending conversation_id owned by that
+turn's token**, addressed to its recorded sender. Already-resolved entries and
+entries owned by another turn are skipped. Because a batch contains only one
+peer's messages, the same peer can receive notices for multiple conversations;
+messages from other peers are not part of that batch. This is an intentional cost of reducing
 turn count (Chloe ruling, 2026-08-11); the total-size cap also limits how often
 large batches trigger context overflow.
 
