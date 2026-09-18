@@ -2,6 +2,7 @@
 title: Threat model (bidirectional routing)
 description: Threats and mitigations from client → agent instructions and approvals (issue #10).
 status: accepted
+last_updated: 2026-09-18
 related: [protocol, architecture]
 ---
 
@@ -34,8 +35,10 @@ records threats and mitigations before full operation or external release
    tool execution that a human should have stopped can proceed.
 3. **Information leakage through tool input**: The `input` of
    `permission_request` can contain secrets such as command lines, file paths,
-   and environment values. It is delivered to viewers as well, so lax token
-   management can leak it.
+   and environment values. Viewers receive only a synthetic
+   `state_change(waiting_permission)` with an empty payload and no `ext`,
+   so they do not receive the input. Lax management of operator credentials
+   can still expose it.
 4. **Information leakage through statusline metadata (`ext`)**: cwd (the
    absolute working-directory path, exposing filesystem layout and project
    names) and model / context / rate_limits in a state_change's `ext` initially
@@ -71,7 +74,7 @@ records threats and mitigations before full operation or external release
 | Verify that a resumed session_id exists under the cwd bound to its agent; reject resumes to another cwd/arbitrary path (T3, verified by runner). Re-verify the replacement target of `switch_session` under the same cwd | Implemented in Phase 4 (4-5) |
 | The startup-instruction UI (#22) does not present arbitrary cwd / arbitrary repository clones; restrict selectable cwd to the runner-config allowlist to bound the RCE surface (scope=medium, T1/T5) | Implemented in Phase 4 (4-8) ([ADR-0023](../adr/0023-host-runner-architecture.md)) |
 | Consolidate spawn authentication through runner startup (daemon or one shot); authenticate with per-host runner tokens + server-issued per-agent tokens (secrets remain in the server and do not reach operators/clients). **Do not adopt** a wildcard shared token whose leakage affects the entire scope (consideration deferred to #71) | Implemented in Phase 4 (4-10) ([ADR-0024](../adr/0024-agent-instance-identity-and-spawn-auth.md) D2/D4). Revocation uses an agent_id-scoped denylist ([#72](https://github.com/sakuraiyuta/kaoiro/issues/72)) |
-| For an engine whose approval gate is enforced only by the wrapper (`antigravity`), disable the CLI's own prompts, make the wrapper hook the sole decision channel, and verify on the production path both that the gate is registered and that every completed tool call was gated (otherwise fail the spawn / freeze the session) | Planned — phase-34 ([ADR-0057](../adr/0057-antigravity-adapter.md) F4 / F4b; section below) |
+| For an engine whose approval gate is enforced only by the wrapper (`antigravity`), disable the CLI's own prompts, make the wrapper hook the sole decision channel, and verify on the production path both that the gate is registered and that completed calls in the measured hook classes (write / read / shell / subagent / network) were gated (otherwise fail the spawn / freeze the session). Unclassified names only warn; names outside those classes are not subject to completion correlation. The class scope is defined in ADR-0057 F4b | Implemented in phase-34 Stage A on 2026-09-04 (`6d48eab5`) ([ADR-0057](../adr/0057-antigravity-adapter.md) F4 / F4b; section below) |
 
 ## Constraints
 
@@ -119,9 +122,13 @@ records threats and mitigations before full operation or external release
   preservation of the launch-time ceiling. In particular, selecting
   `danger-full-access` does not retain the preceding sandbox restriction.
   This does not authorize changing `allowedTools` / `canUseTool` through the
-  server. Antigravity Stage A remains launch-fixed, and Stage B still requires
-  the wrapper-config clamps in ADR-0057 F4c. Enforcement of a selected policy
-  and an immutable ceiling are separate guarantees.
+  server. Antigravity Stage B0 switching was implemented on 2026-09-18
+  (`f1356d96`, permission sync in `9e1d9960`, reconnect ceiling check in
+  `15cfd94a`). It requires all three launch ceilings and permission-sync
+  support; the server and wrapper clamp selections before the next turn
+  captures its policy (ADR-0057 F4c). Legacy configurations without the
+  capability remain launch-fixed. Enforcement of a selected policy and an
+  immutable ceiling are separate guarantees.
   An accepted widening request survives a wrapper crash: the runner may restart
   with a narrower launch configuration, then permission_sync supplies the saved
   operator selection before the first exec. This is delayed application of an
@@ -220,10 +227,13 @@ costs. Design decisions live in ADR-0057; boundary mechanics live in
   which is what F4b exists to catch.
 - **Gate self-verification detects; it does not prevent**
   (ADR-0057 F4b). A quota-free registration check runs before the first
-  turn, and a correlation invariant runs on every tool call: a tool step
-  reaching `DONE` or `ERROR` with no gate request observed for its step
-  index terminates the child and freezes the session. Because the check is
-  keyed on completion, the tool has already run when the violation is
+  turn, and completion correlation applies only to measured hook classes
+  (write / read / shell / subagent / network; the scope in ADR-0057 F4b is
+  the class-list authority). A tool step in those classes reaching `DONE`
+  or `ERROR` with no gate request observed for its step index terminates
+  the child and freezes the session. Unclassified names only warn; names
+  outside the measured classes are not subject to this check. Because the check
+  is keyed on completion, the tool has already run when the violation is
   seen. It bounds how long an unenforced session continues, not whether
   the first unenforced call executes.
 - **F4b is not an authorization boundary.** The per-spawn nonce and the

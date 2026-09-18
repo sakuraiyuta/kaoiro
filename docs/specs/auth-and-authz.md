@@ -2,6 +2,7 @@
 title: Authentication and authorization map
 description: Current authentication and authorization boundaries for each kaoiro node (wrapper / runner / server / client). Starting point for the pre-OSS audit.
 status: accepted
+last_updated: 2026-09-18
 related: [protocol, threat-model, architecture, protocol-inter-agent]
 ---
 
@@ -57,7 +58,9 @@ the unauthenticated `GET /session/auth-methods`
 
 The wrapper/runner dev fallback does not operate in `:prod` (the runtime reads
 `env: config_env()` from `config.exs` via `Application.get_env(:kaoiro_server, :env)`).
-Starting a release with tokens unset rejects every wrapper/runner connection and
+In a release with the respective token registry unset, runner connections are
+rejected, while a valid server-minted signed wrapper token is still accepted
+unless its agent has been revoked. Other wrapper connections are rejected. This
 does not affect `:dev` execution through `scripts/dev.sh` (issue #133).
 
 ### Topic authorization (channel `join/3`)
@@ -169,8 +172,13 @@ or revoked credentials return 401; viewers return 403.
   sandbox/network policy may change through the operator-only `set_permission`
   control; approval stays `never`. Selection is not an immutable launch-time
   ceiling ([ADR-0033](../adr/0033-permission-model-dual-axis.md) F3).
-  Antigravity's tool-class table and hook-gate cell matrix remain launch-fixed in
-  Stage A; Stage B still requires the local clamps in ADR-0057 F4c.
+  Antigravity Stage B0 permission switching was implemented on 2026-09-18
+  (`f1356d96`, permission sync in `9e1d9960`, reconnect ceiling check in
+  `15cfd94a`). With all three launch ceilings and permission-sync support,
+  sandbox / approval / network selections can change at the next execution
+  boundary; the server and wrapper both enforce the launch ceilings
+  ([ADR-0057](../adr/0057-antigravity-adapter.md) F4c). The tool-class table
+  remains fixed; each turn's gate captures the selected policy.
 
 ### Permission configuration control
 
@@ -183,9 +191,12 @@ not a token, cookie, or OAuth credential.
 Server validation requires a connected current wrapper, advertised
 `supports_permission_switch`, a known raw configuration baseline, valid fields,
 and no pending session reset. Busy execution is allowed. The wrapper validates
-the relayed pair independently. Unsupported engines, including Antigravity Stage
-A, reject without changing their configuration. Confirmation UI is not required
-for widening. Audit acceptance and observation in the operator-only lifecycle
+the relayed configuration independently. Unsupported engines reject without
+changing their configuration. Antigravity advertises switching only when all
+three launch ceilings are present and permission sync is supported; legacy
+configurations without that advertisement retain launch-fixed behavior.
+Confirmation UI is not required for widening. Audit acceptance and observation
+in the operator-only lifecycle
 timeline; recording remains best-effort. See the complete
 [permission contract](protocol.md#permission-changes-at-an-execution-boundary).
 
@@ -201,8 +212,8 @@ timeline; recording remains best-effort. See the complete
 
 ### Antigravity gate socket and customization dir (phase-34)
 
-**Status: designed, implemented in phase-34 Stage A** — recorded here ahead
-of the code so the boundary map is complete when it lands.
+**Status: implemented in phase-34 Stage A** — gate registration and completion
+correlation were implemented on 2026-09-04 in `6d48eab5`.
 
 For the `antigravity` engine the approval decision does not come from an SDK
 callback. `agy` runs with its own prompts disabled and invokes a PreToolUse
