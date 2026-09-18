@@ -250,7 +250,8 @@ the process model in this specification:
   for session_init equivalent makes a directly started Codex agent display
   incorrectly as “unsupported.”
 - Mitigation: Assemble capabilities at adapter construction (Codex uses
-  `supports_attachments: false` / `supports_user_input_dialog: true`) and stamp
+  `supports_attachments: true` / `attachment_types: ["image"]` /
+  `supports_user_input_dialog: true`) and stamp
   them in `ext` of the first state_change (idle announce, issued by cli.ts).
   Retain the same ext on later state_change and update values that can change
   when they change (symmetric with Claude).
