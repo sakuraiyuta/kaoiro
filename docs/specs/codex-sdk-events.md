@@ -2,6 +2,7 @@
 title: Codex adapter — Codex SDK event specification
 description: Actual event/callback specification of the TypeScript @openai/codex-sdk and its derivation mapping to kaoiro state. Paired with the Claude version, agent-sdk-events.
 status: accepted
+last_updated: 2026-09-18
 related: [protocol, plugin-model, architecture, agent-sdk-events]
 ---
 <!-- markdownlint-disable MD033 -->
@@ -21,7 +22,8 @@ log/result/lifecycle wire. App-server does not silently fall back to exec.
 ## Purpose
 
 Establishes the **actual event/callback specification** of the TypeScript Codex
-SDK (`@openai/codex-sdk` 0.144.1) used by the Codex adapter
+SDK used by the Codex adapter (currently `@openai/codex-sdk` 0.153.4 in
+[`pnpm-lock.yaml`](../../pnpm-lock.yaml))
 ([plugin-model](plugin-model.md)), and defines its derivation to kaoiro state
 ([protocol](protocol.md)). This specification is paired with the Claude version
 in [agent-sdk-events](agent-sdk-events.md) and is converted to the common
@@ -32,13 +34,17 @@ implementation, bundled binary, and upstream `rust-v0.144.1` source
 (2026-07-10), it was promoted to accepted after running a real turn from the
 dashboard with ChatGPT-plan authentication on 2026-07-11. Three points settled
 by live verification are recorded under “Live verification notes” below.
+Those measurements and the explicitly labeled 0.144.1 type inventory retain
+their original version scope; they are not a new live verification of 0.153.4.
+The current backend boundary and bridge policy are described separately below.
 
 ## Definition
 
-The internal app-server projection is specified separately in
+The opt-in app-server projection is specified separately in
 [the Codex wrapper internals](../../wrapper/codex/README.md) and
 [ADR-0058 Appendix C](../adr/0058-codex-app-server-turn-steer.md).
-Normal launch continues to use the exec mapping below. The app-server path
+Normal launch defaults to the exec mapping below; the explicit backend selector
+described above also makes app-server available. The app-server path
 reuses its known-item adapter functions, but preserves phase-aware final text,
 all completed assistant rows, and the app-server terminal status independently.
 
@@ -68,8 +74,9 @@ for await (const ev of events) {
   supplied on every run) / `env`.
 - **`codex.startThread(threadOptions)`** — `model` / `sandboxMode` /
   `workingDirectory` / `skipGitRepoCheck` / `modelReasoningEffort` /
-  `networkAccessEnabled` / `webSearchMode` / `approvalPolicy` (ineffective in
-  exec; below) / `additionalDirectories`.
+  `networkAccessEnabled` / `webSearchMode` / `approvalPolicy` (serialized as a
+  CLI `--config approval_policy=...` override; the wrapper pins `never`, below)
+  / `additionalDirectories`.
 - **`codex.resumeThread(id, threadOptions)`** — Resume an existing thread. Pass
   the UUID retained by the wrapper as the opaque `session_id` value
   ([ADR-0014](../adr/0014-session-resume-and-restore.md)).
@@ -133,7 +140,7 @@ passes through the common `AdapterEvent` ([plugin-model](plugin-model.md)):
 | `item.started` / `item.updated` / `item.completed` (todo_list) | No state effect; emit parent agent's `task_type=tasklist` whole-list snapshot | Do not turn into transcript log. Map `completed: boolean` to protocol `pending` / `completed` (issue #178, tasklist addendum in [protocol](protocol.md)) |
 | `item.completed` (reasoning) | No state effect | Logging is optional (not adopted in MVP) |
 | `item.completed` (error item) | No state effect; record as `log` equivalent | Nonfatal |
-| `turn.completed` | `idle` — issue envelope `type=result`. Because USD is unavailable, **do not include** `ext.cost` for Codex. Also **do not include** `ext.context` ([ADR-0040](../adr/0040-context-usage-capability.md) phase-21), because `usage.input_tokens` is only per-turn input and not context utilization. Advertise “unsupported” to UI with `ext.session_capabilities.supports_context_usage=false` | Equivalent to Claude SDKResultMessage(success) |
+| `turn.completed` | `done` → `waiting_input` — issue envelope `type=result`. Because USD is unavailable, **do not include** `ext.cost` for Codex. Also **do not include** `ext.context` ([ADR-0040](../adr/0040-context-usage-capability.md) phase-21), because `usage.input_tokens` is only per-turn input and not context utilization. Advertise “unsupported” to UI with `ext.session_capabilities.supports_context_usage=false` | Success `AdapterEvent` consumed by the shared state machine |
 | `turn.failed` / `error` | `error` — issue `state_change(error)` | Equivalent to Claude SDKResultMessage(error_*) |
 
 Do not settle rollout resolution of an account-default model at `turn.started`,
@@ -261,6 +268,13 @@ On the Codex side, provide `wrapper/agent-common`'s common Tool description
 layer (JSON Schema + handler) through the stdio MCP bridge bundled in
 `@kaoiro/codex` ([ADR-0032](../adr/0032-codex-adapter.md) F5):
 
+The following is a bridge-configuration excerpt, not the complete Host setup.
+Both backends use the shared
+[`BRIDGE_MCP_POLICY`](../../wrapper/codex/src/bridge_policy.ts): the bridge is
+required, so startup failure fails the turn rather than silently omitting kaoiro
+tools. See the [Host setup](../../wrapper/codex/src/host.ts) and
+[startup measurements](../adr/0058-codex-app-server-turn-steer.md#ci-follow-up-required-bridge-startup).
+
 ```typescript
 const codex = new Codex({
   config: {
@@ -270,6 +284,10 @@ const codex = new Codex({
         command: process.execPath,
         args: [bridgeScriptPath],
         env: { KAOIRO_BRIDGE_SOCKET: socketPath },
+        required: true,
+        startup_timeout_sec: 30,
+        default_tools_approval_mode: "approve",
+        tool_timeout_sec: 310,
       },
     },
   },
