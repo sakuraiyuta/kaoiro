@@ -115,7 +115,7 @@ Existing `inter_agent_message` envelopes already provide provenance for tracing
 - The envelope stamps sender `agent_id` and `persona` (`makeInterAgentMessage`).
 - `conversation_id` / `turn_number` link the dialogue in total order.
 - An operator-only observation path shows both sides of send/receive in the
-  dashboard ([protocol-inter-agent](../specs/protocol-inter-agent.md) observation
+  dashboard ([coordination monitoring](../reference/inter-agent/coordination-monitoring.md#observation-path-dashboard-display) observation
   path).
 
 Existing tests (`wrapper/agent-common/test/inter_agent.test.ts`: assignment and

@@ -44,7 +44,7 @@ implementation — the emphasis marks; all three are walked at every close.
 | U10 | security / threat model / release audit | ops perm impl | ✅ |
 | U11 | IA messages / conversations / admission | impl | ✅ |
 | U12 | IA dispatch / delivery ledger | perm impl | ✅ |
-| U13 | coordination monitoring | perm impl | ⏳ |
+| U13 | coordination monitoring | perm impl | In review |
 | U14 | directory / companion tools / peer routing | impl | ⏳ |
 | U15 | per-engine IA tool authorization | perm impl | ⏳ |
 | U16 | peer errors / synthetic notices | perm impl | ⏳ |
@@ -116,3 +116,5 @@ Writer rules: one writer per destination file; units that touch the same file
 | specs/protocol-inter-agent.md (Dispatch-confirmation ledger; Negotiated gap recovery) | [reference/inter-agent/delivery.md](../reference/inter-agent/delivery.md) | U12 |
 | specs/protocol-inter-agent.md (Receiver-side behavior; Coalescing contract; Synchronous reply wait) | [reference/inter-agent/send-and-wait.md](../reference/inter-agent/send-and-wait.md) | U12 |
 | specs/protocol-inter-agent.md (Coalescing opening paragraph) | [architecture/inter-agent-messaging.md#dispatch-and-coalescing](../architecture/inter-agent-messaging.md#dispatch-and-coalescing) | U12; replaces v1 separate architecture/inter-agent-dispatch page |
+| specs/protocol-inter-agent.md (monitoring rationale; Stall interpretation; provisional defaults; deliberate omissions) | [architecture/coordination-monitoring.md](../architecture/coordination-monitoring.md) | U13 |
+| specs/protocol-inter-agent.md (Rally; Stall contract; Wire; Configuration; Observation path) | [reference/inter-agent/coordination-monitoring.md](../reference/inter-agent/coordination-monitoring.md) | U13 |
