@@ -13,8 +13,8 @@ For app-server, read [transport](../reference/engines/codex-app-server.md),
 [events and telemetry](../reference/engines/codex-app-server-events.md),
 [settings and permission](../reference/engines/codex-app-server-settings.md) and
 [display history](../reference/engines/codex-app-server-history.md).
-Launch selection and rollback remain in the [package entry](../../wrapper/codex/README.md)
-and [production runbook](../operations/production.md).
+The launch-selection contract is in [runner configuration](../reference/configuration/runner.md#codex-backend).
+The switching and rollback procedure is in the [backend switching runbook](../operations/codex-backend-switch.md).
 The [Host composition evidence](../evidence/codex-app-server/host-composition.md)
 separates real-CLI coverage from deterministic fixtures.
 

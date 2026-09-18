@@ -412,7 +412,7 @@ There is no backend environment variable, flag or dashboard launch selector.
 
 For rollback, stop the target agent, set `backend` to `"exec"`, wait for the
 applied-config diagnostic, then resume its recorded session on the same host
-and cwd. See [production operations](../docs/operations/codex-backend-switch.md#codex-backend-selection-and-rollback).
+and cwd. See [backend switching runbook](../docs/operations/codex-backend-switch.md#codex-backend-selection-and-rollback).
 Use a runner release that bundles this selector and both backends; older
 wrapper releases may ignore the new field. No automatic exec fallback is used.
 
