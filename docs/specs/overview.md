@@ -34,16 +34,18 @@ expressions, aiming both for situational awareness and attachment.
 
 ### Intended users
 
-Primarily the author (and their laboratory). It assumes development and
-research workflows that routinely run several AI agents in parallel.
+Originally the author (and their laboratory); public since 2026-08-26. It
+assumes development and research workflows that routinely run several AI
+agents in parallel.
 
 ### Scope (initial work)
 
 - Obtain one agent's state from the message sequence of an engine SDK and
   represent it as a state machine ([architecture](architecture.md)). Claude
-  Code was the first target; Codex was added in phase-14 behind the same
-  `EngineAdapter` boundary
-  ([ADR-0032](../adr/0032-codex-adapter.md)).
+  Code was the first target; Codex (phase-14,
+  [ADR-0032](../adr/0032-codex-adapter.md)) and Antigravity
+  ([ADR-0057](../adr/0057-antigravity-adapter.md)) were added behind the same
+  `EngineAdapter` boundary.
 - Aggregate the states of multiple agents on the server and visualize them in
   the client.
 - Send instructions to a specific agent (bidirectional).
