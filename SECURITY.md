@@ -49,4 +49,4 @@ Consequently:
 
 The full threat model and the mitigations implemented today are
 documented in
-[docs/specs/threat-model.md](docs/architecture/security-threat-model.md) (Japanese).
+[security threat model](docs/architecture/security-threat-model.md).

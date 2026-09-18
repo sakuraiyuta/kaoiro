@@ -10,8 +10,11 @@ Related security topics: [Security boundaries](../architecture/security-boundari
 
 ## Release-time audit checklist
 
-For the pre-OSS audit (private Gitea issue 91), verify the following against this
-document and keep it synchronized with the issue checklist.
+For the pre-OSS audit (private Gitea issue 91), verify the following against the
+[security boundaries](../architecture/security-boundaries.md) and the
+[authentication and authorization](../reference/security/authentication-authorization.md) /
+[tool authorization](../reference/security/tool-authorization.md) references,
+and keep this checklist synchronized with the issue checklist.
 
 - [ ] Each socket's unset-token behavior (warn + fallback / fail-closed) matches
   the document.
