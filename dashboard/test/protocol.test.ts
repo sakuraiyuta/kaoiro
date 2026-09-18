@@ -56,6 +56,7 @@ import {
   resetTranscriptHistory,
   resolveLaunchDefaultEffort,
   resumeDriftFrom,
+  SELECTABLE_APPROVAL_VALUES,
   parseSessionResetCompleted,
   parseSessionResetFailed,
   parseSessionResetStarted,
@@ -3696,5 +3697,126 @@ describe("error index (noteIfNewestError / recomputeLatestError / dropLatestErro
       true,
     );
     expect(result.__proto__).toBe(transcriptEntryKey(e1));
+  });
+});
+
+describe("permission approval axis (issue #359, ADR-0057 F4c)", () => {
+  const base: Envelope = {
+    version: "0",
+    agent_id: "a",
+    ts: "2026-09-18T00:00:00Z",
+    type: "state_change",
+    state: "idle",
+  };
+
+  function controlWith(requested: Record<string, unknown>) {
+    return permissionControlFrom({
+      ...base,
+      ext: {
+        permission_control: {
+          revision: 3,
+          requested,
+          constraints: { approval: "on-request", enforcement: "advisory" },
+          status: "pending",
+        },
+      },
+    });
+  }
+
+  it("parses a requested config carrying a selectable approval", () => {
+    const parsed = controlWith({
+      sandbox: "workspace-write",
+      network_access: false,
+      approval: "local",
+    });
+    expect(parsed?.requested.approval).toBe("local");
+  });
+
+  it("stays back-compatible when requested omits approval", () => {
+    const parsed = controlWith({
+      sandbox: "workspace-write",
+      network_access: false,
+    });
+    expect(parsed).not.toBeNull();
+    expect(parsed?.requested.approval).toBeUndefined();
+  });
+
+  it("rejects the display-only on-failure as a requested approval", () => {
+    // on-failure is an observed label, never a switch target — the server's
+    // set_permission enum excludes it, so a requested config carrying it is
+    // malformed, not a dropped extra field.
+    expect(
+      controlWith({
+        sandbox: "workspace-write",
+        network_access: false,
+        approval: "on-failure",
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects an out-of-domain approval", () => {
+    expect(
+      controlWith({
+        sandbox: "workspace-write",
+        network_access: false,
+        approval: "yolo",
+      }),
+    ).toBeNull();
+  });
+
+  it("SELECTABLE_APPROVAL_VALUES stays in server @approval_values order", () => {
+    // Permissive order the ceiling clamp depends on. MUST match the server's
+    // @approval_values (agents_channel.ex) — if the two orders diverge, the
+    // UI would disable different options than the server rejects.
+    expect([...SELECTABLE_APPROVAL_VALUES]).toEqual([
+      "untrusted",
+      "on-request",
+      "local",
+      "never",
+    ]);
+  });
+});
+
+describe("sessionCapabilitiesFrom — permission_switch_axes.approval (issue #359)", () => {
+  const base: Envelope = {
+    version: "0",
+    agent_id: "a",
+    ts: "2026-09-18T00:00:00Z",
+    type: "state_change",
+    state: "idle",
+  };
+
+  function capsWith(axes: unknown) {
+    return sessionCapabilitiesFrom({
+      ...base,
+      ext: {
+        session_capabilities: {
+          supports_attachments: false,
+          supports_user_input_dialog: true,
+          supports_permission_switch: true,
+          permission_switch_axes: axes,
+        },
+      },
+    });
+  }
+
+  it("exposes a well-formed approval ceiling", () => {
+    expect(capsWith({ approval: { max: "local" } })?.permission_switch_axes).toEqual(
+      { approval: { max: "local" } },
+    );
+  });
+
+  it("drops an out-of-domain max (fail-closed)", () => {
+    // on-failure is not a selectable ceiling; the server treats such a max as
+    // unsupported, so the arm is dropped and the picker stays hidden.
+    expect(
+      capsWith({ approval: { max: "on-failure" } })?.permission_switch_axes,
+    ).toBeUndefined();
+  });
+
+  it("drops a malformed approval arm (fail-closed)", () => {
+    expect(capsWith({ approval: { max: 3 } })?.permission_switch_axes).toBeUndefined();
+    expect(capsWith({ approval: "danger" })?.permission_switch_axes).toBeUndefined();
+    expect(capsWith({})?.permission_switch_axes).toBeUndefined();
   });
 });

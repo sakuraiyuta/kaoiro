@@ -251,12 +251,14 @@ after resume.
 ### Permission changes at an execution boundary
 
 **Contract: accepted; capability-gated rollout.** `set_permission` changes an
-engine's sandbox/network configuration. Codex implements it using fresh options
-for each `codex exec` while retaining its session ID. Antigravity Stage A rejects
-it; Stage B requires ADR-0057 F4c's local clamps. The operation is not Claude's
-`set_permission_mode`: its six values encode intent/classifier/approval semantics,
-map only approximately to sandbox, and cannot express network access. No reverse
-mapping from a sandbox pair to a Claude mode is defined.
+engine's sandbox/network/approval configuration for the next execution. Codex
+implements it using fresh options for each `codex exec` while retaining its
+session ID. Antigravity implements it as of ADR-0057 F4c Stage B0, mutating its
+per-turn advisory gate and clamping every axis to a host-local launch ceiling
+(below). The operation is not Claude's `set_permission_mode`: its six values
+encode intent/classifier/approval semantics, map only approximately to sandbox,
+and cannot express network access. No reverse mapping from a sandbox pair to a
+Claude mode is defined.
 
 #### Request, relay, and acknowledgement
 
@@ -266,11 +268,29 @@ Client to server:
 {"version":"0","agent_id":"host.agent","sandbox":"workspace-write","network_access":false}
 ```
 
-Either axis may be omitted, but at least one is required. Sandbox accepts only
-`read-only`, `workspace-write`, or `danger-full-access`; network access is a strict
-boolean, including `false`. Reject `null`, empty patches, and unknown fields
-(including `approval`, `actor`, and `revision`) as `invalid_payload`. Approval
-remains `never` on Codex and is not an operation parameter.
+At least one of `sandbox`, `network_access`, or `approval` is required; the rest
+may be omitted. Sandbox accepts only `read-only`, `workspace-write`, or
+`danger-full-access`; network access is a strict boolean, including `false`;
+approval accepts `untrusted`, `on-request`, `local`, or `never` (the observed-only
+`on-failure` is not a switch target). Reject `null`, empty patches, and unknown
+fields (`actor`, `revision`) as `invalid_payload`. The `approval` axis is accepted
+only for an engine that advertises it mutable in
+`session_capabilities.permission_switch_axes` (Antigravity, ADR-0057 F4c); Codex
+keeps approval launch-fixed to `never` and rejects an `approval` patch as
+`unsupported_permission_switch`.
+
+Each axis is clamped to the launch ceiling the wrapper advertises in
+`session_capabilities.permission_switch_axes`
+(`{sandbox?:{max}, network_access?:{max}, approval?:{max}}`) — a host-local
+operator bound the server cannot widen (ADR-0057 F4c Stage B0). A patch that
+would move an axis past its ceiling is rejected with `exceeds_launch_ceiling`,
+and an axis whose spec is missing or malformed is launch-fixed
+(`unsupported_permission_switch`). When `permission_switch_axes` is absent
+entirely the legacy contract holds: sandbox and network switch freely and
+`approval` is forbidden. Permissive order is `untrusted < on-request < local <
+never` for approval, `read-only < workspace-write < danger-full-access` for
+sandbox, and `false < true` for network access; the wrapper re-checks the same
+ceiling fail-closed.
 
 Server validation order is live operator/admin authorization, payload/size,
 agent identity/current connection, reset exclusion, current metadata readiness,
@@ -282,7 +302,9 @@ No new request is accepted against an offline or unsupported wrapper. Existing a
 The error body is `{reason}` with `SetPermissionErrorReason`: `forbidden`,
 `invalid_payload`, `unknown_agent`, `agent_unavailable`,
 `unsupported_permission_switch`, `permission_not_ready`,
-`session_reset_pending`, `revision_exhausted`, or `persistence_failed`.
+`session_reset_pending`, `revision_exhausted`, `persistence_failed`, or
+`exceeds_launch_ceiling` (a requested axis past the advertised launch ceiling,
+issue #359).
 
 The server merges the patch into the latest next-execution **raw** configuration
 in one serialized store operation, assigns a positive safe-integer revision,
@@ -461,7 +483,10 @@ creating a new turn automatically. A new operator selection may supersede it.
 Clients render unknown as unknown, not as the previous observed badge. They may
 show `last_effective` with an explicit historical label. `whoami` uses the same
 observation/status distinction. Busy execution does not disable the picker;
-network editing is offered for workspace-write and approval remains host-fixed.
+network editing is offered for workspace-write, and an approval picker is offered
+when `permission_switch_axes.approval` advertises the axis mutable (Antigravity,
+issue #359) — with options above the ceiling disabled and labelled rather than
+hidden — otherwise approval stays host-fixed (Codex).
 Client ack/state updates cannot reduce the latest known revision or restore
 pending after that revision settled. The server projects its authoritative
 latest request to operator snapshots/live state so reloads and other clients
@@ -471,9 +496,9 @@ permission control details under the existing ext removal rule.
 Fixed adapter constraints are required in every control state, including the
 initial revision-zero baseline: Codex sends `constraints:{approval:"never",
 enforcement:"os"}`. These fields survive omission of `ext.permission`; they
-state the configured contract, not an observation of an unstarted exec. Render
-the permanent approval host-fixed label from constraints and render sandbox and
-network as unknown until observed. If an observation contradicts a constraint,
+state the configured contract, not an observation of an unstarted exec. For an
+engine whose approval is launch-fixed (Codex), render the host-fixed approval
+label from constraints and render sandbox and network as unknown until observed. If an observation contradicts a constraint,
 show the observed value and a contract-violation error rather than concealing it
 behind the fixed label.
 
@@ -830,7 +855,7 @@ The complete coverage and the permanent `attach_chunk` exception are normative i
 | client → server | `set_effort` | `{ agent_id, effort }` selects one of the model's `effort_levels` and is relayed fire-and-forget; unknown agents are rejected (#54, [ADR-0020](../adr/0020-dashboard-battery-included-client.md), [ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md)). |
 | client → server | `refresh_models` | `{ agent_id }` asks the wrapper to retry its supported-model catalog fetch ([ADR-0037](../adr/0037-claude-model-catalog-live-refresh.md) F6). It is a no-op for an absent session and rejects while `session_reset` is pending. |
 | client → server | `set_permission_mode` | `{ agent_id, mode }` relays a six-value SDK mode and persists it per agent for the next wrapper join. Unknown mode/agent returns `invalid value: mode` / `unknown_agent` (#58). |
-| client → server | `set_permission` | `{ version, agent_id, sandbox?, network_access? }`; operator-only non-empty patch. Persists requested raw configuration and returns `{revision, status:"pending", requested}`; see [permission changes](#permission-changes-at-an-execution-boundary). |
+| client → server | `set_permission` | `{ version, agent_id, sandbox?, network_access?, approval? }`; operator-only non-empty patch. `approval` is accepted only when the session advertises it mutable in `permission_switch_axes` (Antigravity, issue #359); each axis is clamped to its launch ceiling. Persists requested raw configuration and returns `{revision, status:"pending", requested}`; see [permission changes](#permission-changes-at-an-execution-boundary). |
 | client → server | `set_quagmire_settings` | `{ rally_turns }` sets the deployment-wide review-quagmire rally threshold; `null` is ∞ (rally detection off). Operator-only, persisted, and applied without a restart. Out of range, non-integer, or an absent key returns `invalid_rally_turns` — an absent key is not a request to disable ([#307](https://github.com/sakuraiyuta/kaoiro/issues/307), [protocol-inter-agent](protocol-inter-agent.md)). |
 | client → server | `clear_history` | `{ agent_id }` purges prior-session display logs from the server ring buffer and broadcasts `history_cleared`; it never touches wrapper JSONL. Unknown agent/current session returns `unknown_agent` / `no_current_session` (#48). |
 | client → server | `delete_agent` | `{ agent_id }` is accepted only for disconnected agents. Requiring the disconnected pre-check, revoking and fsyncing the token, broadcasting `revoked`, closing planned targets, purging all server stores, then broadcasting `agent_deleted` preserves fail-closed ordering ([ADR-0051](../adr/0051-history-restart-resilience.md), [#14](https://github.com/sakuraiyuta/kaoiro/issues/14), [#72](https://github.com/sakuraiyuta/kaoiro/issues/72)). |
@@ -849,7 +874,7 @@ The complete coverage and the permanent `attach_chunk` exception are normative i
 | server → wrapper | `set_effort` | `{ effort }` calls `Query.applyFlagSettings({ effortLevel })` for subsequent turns; absent sessions are a no-op (#54). |
 | server → wrapper | `refresh_models` | `{}` resets retry state and kicks `#refreshSupportedModels()`; it remains usable after a silent cap and is a no-op without a session ([ADR-0037](../adr/0037-claude-model-catalog-live-refresh.md) F6). |
 | server → wrapper | `set_permission_mode` | `{ mode }` relays or pushes after join. Before a session it updates internal state for the next query; `bypassPermissions` is accepted only when startup enabled `allowDangerouslySkipPermissions` (#58). |
-| server → wrapper | `set_permission` | `{ version, revision, sandbox, network_access }`; complete raw pair for the next execution, never the current exec. Unsupported adapters reject. |
+| server → wrapper | `set_permission` | `{ version, revision, sandbox, network_access, approval? }`; complete raw configuration for the next execution, never the current exec. `approval` rides only for an engine carrying it as a mutable axis (Antigravity, issue #359). Unsupported adapters reject. |
 | server → wrapper | `permission_sync` | `{ version, control, next }`; authoritative permission settings after every join, including explicit nulls when empty. Gates the first/successor exec; see [permission synchronization](#persistence-join-synchronization-and-resume). |
 | server → wrapper | `persona_sync` | `{ version, name, revision }` is the legacy half of the dual emit with `display_name_sync`; both update only display_name and guard monotonic safe revisions (issue #209). |
 | server → wrapper | `display_name_sync` | `{ version, display_name, revision }` is the new dual-emitted form with the same contract and revision guard; wrappers route both forms through `renameDisplayName`. |
