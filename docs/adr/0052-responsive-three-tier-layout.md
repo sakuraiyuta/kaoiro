@@ -17,7 +17,7 @@ Accepted
 
 ## Context
 
-The Responsive section of [design.md](../specs/design.md) stated that “mobile /
+The Responsive section of [design.md](../reference/ui/design.md) stated that “mobile /
 narrow widths are not first-class, but must not break.” The implementation followed
 this with only two `@media (max-width: 640px)` rules and no systematic breakpoint
 design.
@@ -46,7 +46,7 @@ premise that “narrow widths are not first-class” must itself be reconsidered
 Make the dashboard **equally viable at PC / tablet / smartphone sizes**. This ADR
 withdraws design.md's statement that “mobile / narrow widths are not first-class.”
 The dimensions and rules are canonical in
-[responsive-layout.md](../specs/responsive-layout.md), and the complete reachability
+[responsive-layout.md](../reference/ui/responsive-layout.md), and the complete reachability
 table is in [responsive-reachability.md](../reference/ui/responsive-reachability.md).
 
 - **F1**: At smartphone widths, move the lobby response timeline into a bottom

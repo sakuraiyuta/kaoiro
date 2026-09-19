@@ -137,6 +137,8 @@ Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh do
 
 ## UI documentation
 
+- Visual design tokens and principles: [kaoiro design principles](reference/ui/design.md).
+- Breakpoints, layout switching, and sheet mechanism: [Responsive layout specification](reference/ui/responsive-layout.md).
 - Per-size reachability paths and scroll owners: [Responsive reachability](reference/ui/responsive-reachability.md).
 
 ## Codex app-server documentation

@@ -14,7 +14,7 @@ last_updated: 2026-08-09
 Implement [ADR-0052](../adr/0052-responsive-three-tier-layout.md): make the
 dashboard usable at PC / tablet / smartphone sizes, including confirmation,
 instruction sending, and permission approval from a smartphone. The source of
-truth for dimensions and rules is [responsive-layout.md](../specs/responsive-layout.md);
+truth for dimensions and rules is [responsive-layout.md](../reference/ui/responsive-layout.md);
 display conditions and reachability for each element are in
 [responsive-reachability.md](../reference/ui/responsive-reachability.md).
 
@@ -132,9 +132,9 @@ None.
 
 ## See Also
 
-- Specs covered: [responsive-layout](../specs/responsive-layout.md),
+- Specs covered: [responsive-layout](../reference/ui/responsive-layout.md),
   [responsive-reachability](../reference/ui/responsive-reachability.md),
-  [design](../specs/design.md)
+  [design](../reference/ui/design.md)
 - ADR: [0052-responsive-three-tier-layout](../adr/0052-responsive-three-tier-layout.md)
 - Implementation issue: [#197](https://github.com/sakuraiyuta/kaoiro/issues/197)
   (Stage A–C + 31-10 Playwright)

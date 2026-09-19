@@ -19,8 +19,8 @@ Feature specifications, organized by topic. Each file has `status` and
 | [antigravity-cli-events](../architecture/antigravity-adapter.md) | provisional | Measured Antigravity CLI (agy) headless event specification, hooks-as-permission-gate, and state derivation (third engine, ADR-0057) |
 | [subagent-tasks](../architecture/subagent-visibility.md) | provisional | Detection of subagent/workflow tasks and dedicated envelope notifications |
 | [file-upload](../architecture/attachments.md) | accepted | Render dashboard attachments (images/text/PDF/Office) to the SDK in the wrapper |
-| [design](design.md) | accepted | Visual design specification for the dashboard/UI. Uses the DESIGN.md format (YAML tokens + prose) and recognizes `dashboard/src/` as the canonical source |
-| [responsive-layout](responsive-layout.md) | provisional | Responsive rules that treat three sizes equally: breakpoint definitions, area-specific layouts, sheet mechanisms, and safe areas |
+| [design](../reference/ui/design.md) | accepted | Visual design specification for the dashboard/UI. Written in DESIGN.md format (YAML tokens + prose), affirming the existing implementation (dashboard/src/) as the canonical source |
+| [responsive-layout](../reference/ui/responsive-layout.md) | provisional | Breakpoint definitions, area-specific layout rules, sheet mechanism, and safe-area handling that make the dashboard equally viable at PC, tablet, and smartphone sizes |
 | [responsive-reachability](../reference/ui/responsive-reachability.md) | provisional | Inventory of reachability paths by size: each element's path, scroll owner, and permanently fixed operations |
 | [personas](personas.md) | accepted | Design policy, image specification, and generation workflow for persona standing illustrations |
 | [persona-pack-schema](../reference/personas/pack-format.md) | accepted | Internal schema of persona packs (zip) and `manifest.json` field definitions |

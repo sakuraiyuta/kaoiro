@@ -10,7 +10,7 @@ related: [responsive-layout, design]
 
 ## Purpose
 
-[responsive-layout.md](../../specs/responsive-layout.md) requires all functionality and
+[responsive-layout.md](responsive-layout.md) requires all functionality and
 information to be reachable from every size, but that principle is not
 verifiable on its own. This specification makes it verifiable by enumerating UI
 elements and settling their reachability paths per size. The acceptance criteria
@@ -177,8 +177,8 @@ None.
 
 ## See Also
 
-- Related specs: [responsive-layout](../../specs/responsive-layout.md),
-  [design](../../specs/design.md)
+- Related specs: [responsive-layout](responsive-layout.md),
+  [design](design.md)
 - ADRs: [0052-responsive-three-tier-layout](../../adr/0052-responsive-three-tier-layout.md),
   [0012-response-display-and-dashboard-scope](../../adr/0012-response-display-and-dashboard-scope.md)
 - Implementation plan: [phase-31-responsive-ui](../../plans/phase-31-responsive-ui.md)

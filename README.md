@@ -80,7 +80,7 @@ The dashboard interface is currently Japanese-only.
 - **Notifications, and a layout that folds** — a desktop notification and a
   per-state sound when an agent hands control back, and a dashboard that
   collapses down to a phone
-  ([responsive-layout.md](docs/specs/responsive-layout.md)).
+  ([responsive-layout.md](docs/reference/ui/responsive-layout.md)).
 
 ## Install & Quick start
 
