@@ -1,7 +1,7 @@
 ---
 title: Security boundaries
 status: accepted
-last_updated: 2026-09-18
+last_updated: 2026-09-19
 ---
 
 # Security boundaries
@@ -33,6 +33,16 @@ flowchart LR
   CS --> SRV
   SRV -->|"envelope (admin/operator/viewer)"| CS
 ```
+
+## Permission control (two-axis model)
+
+With the Codex adapter ([ADR-0032](../adr/0032-codex-adapter.md)), represent the
+common permission abstraction at agent level as two-axis `ext.permission` (do
+not duplicate axes inside `pending_permission`; ADR-0033 F1).
+
+See [Permission state](../reference/protocol/permission-state.md#two-axis-extpermission-2026-07-10-adr-0033)
+for the field contract, per-engine stamping, and the Antigravity local-mode
+allow rules.
 
 ## Known gaps (design choices and not yet addressed)
 

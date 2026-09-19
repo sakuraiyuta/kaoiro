@@ -53,7 +53,7 @@ configurations without that advertisement retain launch-fixed behavior.
 Confirmation UI is not required for widening. Audit acceptance and observation
 in the operator-only lifecycle
 timeline; recording remains best-effort. See the complete
-[permission contract](../../specs/protocol.md#permission-changes-at-an-execution-boundary).
+[permission contract](../protocol/permission-requests.md#permission-changes-at-an-execution-boundary).
 
 ### Antigravity gate socket and customization dir (phase-34)
 

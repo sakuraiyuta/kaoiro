@@ -139,3 +139,6 @@ server state.
 - [Event types and payloads](events.md).
 - [Channels and directional messages](channels.md).
 - [Message topology](../../architecture/message-topology.md).
+- [Permission requests](permission-requests.md).
+- [Permission state](permission-state.md).
+- [Permission synchronization and audit](permission-sync-audit.md).

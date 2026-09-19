@@ -149,7 +149,7 @@ Its existing best-effort durability is unchanged; the command ack does not
 promise an audit fsync.
 
 The normative command, synchronization, persistence, and observation contracts
-are in [protocol](../specs/protocol.md#permission-changes-at-an-execution-boundary).
+are in [protocol](../reference/protocol/permission-requests.md#permission-changes-at-an-execution-boundary).
 `PermissionSettings` retains requested configuration separately from the last
 observed effective snapshot in `SessionPointers`. Resume uses the latter and
 synchronizes the former before the first execution. A failed or pending request
@@ -163,7 +163,7 @@ Recover the selection through permission_sync after relaunch; neither a
 process-local switched-field set, revision-zero baseline, nor a newer pending
 selection establishes that attribution. This does not change
 undefined-versus-known drift for other fields or legacy engines. The detailed
-comparison contract is in [protocol](../specs/protocol.md#persistence-join-synchronization-and-resume).
+comparison contract is in [protocol](../reference/protocol/permission-sync-audit.md#persistence-join-synchronization-and-resume).
 
 #### Network configuration and effective access
 

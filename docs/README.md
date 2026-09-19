@@ -98,9 +98,9 @@ Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh do
 
 ## Protocol documentation
 
-- Architecture and design intent: [message topology](architecture/message-topology.md).
-- Exact contracts: [envelope](reference/protocol/envelope.md), [event types and payloads](reference/protocol/events.md), [channels and directional messages](reference/protocol/channels.md), and [versioning policy](reference/protocol/versioning.md).
-- Remaining topics (permission state, model/effort, session lifecycle, attachments, runner control, persona delivery, authentication): [protocol entry](specs/protocol.md).
+- Architecture and design intent: [message topology](architecture/message-topology.md), [permission control (two-axis model)](architecture/security-boundaries.md#permission-control-two-axis-model).
+- Exact contracts: [envelope](reference/protocol/envelope.md), [event types and payloads](reference/protocol/events.md), [channels and directional messages](reference/protocol/channels.md), [versioning policy](reference/protocol/versioning.md), [permission requests](reference/protocol/permission-requests.md), [permission state](reference/protocol/permission-state.md), and [permission synchronization and audit](reference/protocol/permission-sync-audit.md).
+- Remaining topics (model/effort, session lifecycle, attachments, runner control, persona delivery, authentication): [protocol entry](specs/protocol.md).
 
 ## Codex documentation
 

@@ -49,3 +49,6 @@ as `DEBUG_CLAUDE_AGENT_SDK`, is outside this sink and its policy.
 - [Message topology](../../architecture/message-topology.md).
 - [Channels and directional messages](channels.md).
 - [Versioning policy](versioning.md).
+- [Permission requests](permission-requests.md).
+- [Permission state](permission-state.md).
+- [Permission synchronization and audit](permission-sync-audit.md).

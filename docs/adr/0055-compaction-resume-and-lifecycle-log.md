@@ -86,7 +86,7 @@ Separate the requirements into two layers.
   because the wrapper disappeared.
 - Codex contributes disconnect-related events and, when permission switching is
   enabled, observed permission outcomes alongside server-recorded operator
-  requests. The [permission audit contract](../specs/protocol.md#permission-lifecycle-audit)
+  requests. The [permission audit contract](../reference/protocol/permission-sync-audit.md#permission-lifecycle-audit)
   defines the typed details and preserves this timeline's best-effort durability.
   Other engine lifecycle observations remain tracked in
   [codex-lifecycle-observability](../open-questions/codex-lifecycle-observability.md).

@@ -92,3 +92,6 @@ identity. **Never infer feature availability from the engine name** ([ADR-0034](
 - [Event types and payloads](events.md).
 - [Channels and directional messages](channels.md).
 - [Versioning policy](versioning.md).
+- [Permission requests](permission-requests.md).
+- [Permission state](permission-state.md).
+- [Permission synchronization and audit](permission-sync-audit.md).

@@ -32,3 +32,7 @@ For the envelope's terms, outer frame keys, and wire shape, see
 - [Event types and payloads](../reference/protocol/events.md).
 - [Channels and directional messages](../reference/protocol/channels.md).
 - [Versioning policy](../reference/protocol/versioning.md).
+- [Permission requests](../reference/protocol/permission-requests.md).
+- [Permission state](../reference/protocol/permission-state.md).
+- [Permission synchronization and audit](../reference/protocol/permission-sync-audit.md).
+- [Permission control (two-axis model)](security-boundaries.md#permission-control-two-axis-model).
