@@ -1110,31 +1110,31 @@ Moved to [Versioning policy](../reference/protocol/versioning.md#version-invento
 
 #### Client → server (stage 1, completed in #208)
 
-Moved to [Versioning policy](../reference/protocol/versioning.md#client-server-stage-1-completed-in-208).
+Moved to [Versioning policy](../reference/protocol/versioning.md#client--server-stage-1-completed-in-208).
 
 #### Server → wrapper (stage 1, completed in #208)
 
-Moved to [Versioning policy](../reference/protocol/versioning.md#server-wrapper-stage-1-completed-in-208).
+Moved to [Versioning policy](../reference/protocol/versioning.md#server--wrapper-stage-1-completed-in-208).
 
 #### Server → runner (stage 1, completed in issues #171/#172)
 
-Moved to [Versioning policy](../reference/protocol/versioning.md#server-runner-stage-1-completed-in-issues-171172).
+Moved to [Versioning policy](../reference/protocol/versioning.md#server--runner-stage-1-completed-in-issues-171172).
 
 #### Runner → server (complete; outside #208 scope)
 
-Moved to [Versioning policy](../reference/protocol/versioning.md#runner-server-complete-outside-208-scope).
+Moved to [Versioning policy](../reference/protocol/versioning.md#runner--server-complete-outside-208-scope).
 
 #### Wrapper → server (stage 2, completed in issue #260; wrapper identity in issue #288 Stage 3)
 
-Moved to [Versioning policy](../reference/protocol/versioning.md#wrapper-server-stage-2-completed-in-issue-260-wrapper-identity-in-issue-288-stage-3).
+Moved to [Versioning policy](../reference/protocol/versioning.md#wrapper--server-stage-2-completed-in-issue-260-wrapper-identity-in-issue-288-stage-3).
 
 #### Server → client (stage 2, completed in issue #260; wrapper identity in issue #288 Stage 3)
 
-Moved to [Versioning policy](../reference/protocol/versioning.md#server-client-stage-2-completed-in-issue-260-wrapper-identity-in-issue-288-stage-3).
+Moved to [Versioning policy](../reference/protocol/versioning.md#server--client-stage-2-completed-in-issue-260-wrapper-identity-in-issue-288-stage-3).
 
 #### Permanent carve-out — `attach_chunk`
 
-Moved to [Versioning policy](../reference/protocol/versioning.md#permanent-carve-out-attach_chunk).
+Moved to [Versioning policy](../reference/protocol/versioning.md#permanent-carve-out--attach_chunk).
 
 #### Receiver validation
 
