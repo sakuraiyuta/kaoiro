@@ -89,7 +89,8 @@ themselves in the meantime:
 - The same mechanism (identical `parseExtraModels` / `mergeExtraModels`
   helpers) is available for the Antigravity engine as
   `antigravity.extra_models` (phase-34 Stage B6, issue #292) — see
-  runner/README.md's "Antigravity configuration" section.
+  [Runner configuration](../reference/configuration/runner.md#antigravity-configuration)'s
+  "Antigravity configuration" section.
 - Declared entries are merged onto the resolved base catalog by
   `mergeExtraModels` (runner/src/config.ts, and the identical wrapper-side
   copy in `@kaoiro/agent-common`'s `catalog.ts`): a `value` matching an

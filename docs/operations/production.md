@@ -140,9 +140,9 @@ forces it; `--dry-run` previews). macOS orchestration is not yet verified in
 production (issue #242).
 
 Stuck? → the per-script manual path (install/switch + systemd/launchd by
-hand), exit codes, and log locations are in
-[runner/README.md](../../runner/README.md) "常駐化"; [runner install
-runbook](runner-install.md) for the multi-host specifics.
+hand), exit codes, and log locations are in [runner install
+runbook](runner-install.md) "常駐化(systemd / launchd)", which also covers the
+multi-host specifics.
 
 ## 3. Verify
 
@@ -267,7 +267,8 @@ error — restarting will not fix it. Check
 `systemctl --user status kaoiro-runner` / `journalctl --user -u kaoiro-runner`;
 common causes are a missing `dist` (release not built/installed) or the
 setup wizard never having run. See
-[runner/README.md](../../runner/README.md) "再起動ポリシーと終了コード".
+[Runner artifacts](../reference/deployment/runner-artifacts.md#restart-policy-and-exit-codes)
+"Restart policy and exit codes".
 
 **Port bind failure** (`cannot assign requested address`): the publish
 address is not yet present on any interface when docker starts — the same
@@ -287,6 +288,6 @@ The release note is retained in the [Stage 6 landing record](https://github.com/
   manual summarizes
 - [setup-wizards.md](../specs/setup-wizards.md) — what `mix kaoiro.env` and
   `kaoiro-runner-setup.sh` ask and why
-- [runner/README.md](../../runner/README.md) — full runner install /
+- [Runner install and distribution](runner-install.md) — full runner install /
   service / troubleshooting reference
 - Issue #303 (this manual's own tracking issue), #306 (the server deploy CLI)

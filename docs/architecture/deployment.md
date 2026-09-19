@@ -42,6 +42,16 @@ Only deployments restricted to a VPN may use the direct, nginx-free option (1.5)
 |---|---|---|
 | **In-place build** (checkout-direct hosts only) | Overwrites `dist` in the active checkout. Each wrapper spawn resolves on-disk `dist` (`resolveWrapperLaunch()` in `runner/src/spawn.ts`), so a spawn during build can capture a mixed old/new artifact. Even if the procedure says “build while stopped,” **one ordering mistake reproduces the failure** | #219 (implemented; **remains until the host moves to the release profile** — 4.6) |
 
+### Rollout ordering
+
+issue #256 を含む release の rollout は **runner / wrapper を先行し、server を
+後行**する。新 server は operator restart の `request_id` を wrapper の
+`transition_id` まで運べる runner と、`peer_reconnecting` / `reconnected` を
+解釈できる wrapper が配備済みであることを前提に planned window を開始する。
+逆順(server 先行)では旧 runner が token を relaunch へ運べず、当該 agent 宛 IA
+が最大 60 秒 bounce し、旧 wrapper は close notice を解釈できないため
+reconnecting 状態も解消されない。
+
 ## See Also
 
 - [Server install runbook](../operations/server-install.md).
@@ -51,7 +61,8 @@ Only deployments restricted to a VPN may use the direct, nginx-free option (1.5)
 - [setup-wizards](../specs/setup-wizards.md) — interactive wizard automating env / config
   generation for **initial deployment**; section 4 updates are out of scope
   (automation in #218 / #219 / #220)
-- [runner/README.md](../../runner/README.md) — full service and tarball-distribution guide
+- [runner/README.md](../../runner/README.md) — package entry point: current capabilities, usage, and the config wizard
+- [Runner install and distribution](../operations/runner-install.md) — full service and tarball-distribution guide
 - [server/README.md](../../server/README.md) — local development and Docker basics
 - [threat-model](security-threat-model.md) — risk assessment for dev fallback / unset tokens
 - [docs/operations/production.md](../operations/production.md) — Codex

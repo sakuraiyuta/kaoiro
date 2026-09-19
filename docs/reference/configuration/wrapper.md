@@ -34,8 +34,8 @@ blocks, since nothing else in this spec names `WrapperConfig`.
   all recognise a declared model too, not only the register's launch-time
   list. Absent / empty on either field means no declarations for that
   engine. See [Codex model settings](../../operations/codex-model-settings.md#d-kaoiros-own-extra_models-declaration-issue-292) (D) and
-  runner/README.md's "Codex 設定" / "Antigravity configuration" sections
-  for the declaration syntax and merge semantics.
+  [Runner configuration](runner.md)'s "Codex 設定" / "Antigravity
+  configuration" sections for the declaration syntax and merge semantics.
 
 - `antigravity_cli_path` / `antigravity_probe_timeout_ms` — runner-local
   values derived from `antigravity.cli_path` / `antigravity.probe_timeout_ms`.

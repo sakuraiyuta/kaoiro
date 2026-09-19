@@ -145,8 +145,9 @@ startup**.
   `context_work_budget_percent`) are manual-edit only, added to the generated
   `runner.config.json` by hand. `codex.backend` selects the next wrapper
   lifetime; the Antigravity `max_*` fields are host-local permission ceilings.
-  See runner/README.md's "設定ウィザード" / "Codex 設定" / "Antigravity
-  configuration" sections.
+  See runner/README.md's "設定ウィザード" section and
+  [Runner configuration](../reference/configuration/runner.md)'s "Codex 設定" /
+  "Antigravity configuration" sections.
 - **Use OS-specific user configuration directories** (Linux
   `${XDG_CONFIG_HOME:-~/.config}/kaoiro`; macOS
   `~/Library/Application Support/kaoiro`). `KAOIRO_RUNNER_DIR` can override it.
