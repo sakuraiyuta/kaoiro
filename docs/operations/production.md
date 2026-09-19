@@ -203,7 +203,7 @@ kaoiro-runner-update.sh --from-repo <repo-path> --target <os-arch>
 
 or, from a pre-built tarball: `kaoiro-runner-update.sh --tarball <path>`.
 
-Stuck? → [deployment.md 4.4](../specs/deployment.md#44-failure-handling).
+Stuck? → [Server update and rollback § 4.4](server-update-and-rollback.md#44-failure-handling).
 
 ## 5. Rollback
 
@@ -230,7 +230,7 @@ transaction id needed):
 kaoiro-runner-switch.sh --rollback
 ```
 
-Stuck? → [deployment.md 4.4 (3)](../specs/deployment.md#44-failure-handling).
+Stuck? → [Server update and rollback § 4.4 (3)](server-update-and-rollback.md#44-failure-handling).
 
 ## First run on an existing (pre-CLI) deployment
 

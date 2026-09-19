@@ -178,6 +178,6 @@ Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh do
 ## Deployment documentation
 
 - Architecture and design intent: [multi-host deployment architecture](architecture/deployment.md).
-- Operator runbooks: [server install](operations/server-install.md), [network and login](operations/network-and-login.md), and [production deployment manual](operations/production.md).
-- Exact contracts: [server configuration](reference/configuration/server.md).
-- Remaining topics (runner deployment, connectivity checks, updating an existing deployment, troubleshooting): [deployment entry](specs/deployment.md).
+- Operator runbooks: [server install](operations/server-install.md), [network and login](operations/network-and-login.md), [server update and rollback](operations/server-update-and-rollback.md), and [production deployment manual](operations/production.md).
+- Exact contracts: [server configuration](reference/configuration/server.md), [server deploy configuration](reference/configuration/server-deploy.md), and [transactions and identity](reference/deployment/transactions-and-identity.md).
+- Remaining topics (runner deployment, runner-side update/rollback steps, migrating to the release profile, troubleshooting): [deployment entry](specs/deployment.md).
