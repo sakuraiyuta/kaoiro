@@ -282,14 +282,14 @@ display resolution / active selection). This resolves two defects:
 - A persisted canonical (`claude-sonnet-5`) was rejected by validation that only
   checked exact `value` matches, rolling back to `default` with
   `switch_error{reason: "persist_alias_unknown"}`.
-- When `ext.model` is canonical — init / status reports the canonical value and
-  the “value-only overwrite” contract in [agent-sdk-events](../reference/engines/claude-events.md)
-  replaces `#model`, or an operator calls `setModel` with the canonical directly —
-  catalog matching missed on every path, so `supports_effort_switch` was not
-  stamped and the client's effort choices disappeared. Which representation
-  SDK `system/init` actually returns (alias or canonical) is unobserved (below),
-  so this is a conditional defect based on the existence of a path where a
-  canonical value can enter.
+- Before issue #363, an init / status report could replace `#model` with a
+  canonical value, so catalog matching missed on every path and
+  `supports_effort_switch` was not stamped. That overwrite path is no longer
+  current: with an explicit pick, reports are kept separately in
+  `#engineModel`, `#model` retains the input representation, and the top-level
+  display is derived after catalog comparison. An operator can still call
+  `setModel` with a canonical value directly, so two-pass matching remains
+  required.
 
 **Display (separate wire and UI)**: Pass `resolved_model` through catalog rows
 on the register path as well. Do not vary row shape by path, which would force
@@ -306,11 +306,9 @@ diverge from the actual startup result. Presenting these two accuracy levels wit
 the same appearance would mislead users, so the presentation method is an
 independent UX decision.
 
-**Unobserved**: The representation (alias / canonical) of `model` returned by
-SDK `system/init` is not settled. Observation requires first user input (and
-incurs cost), so it has not been measured (scope and raw values are in the
-follow-up measurement notes in [agent-sdk-events](../reference/engines/claude-events.md)). Wrapper
-tests pin that either representation works.
+**Measured**: On SDK 0.3.258, `system/init` and context-usage reports both use
+the catalog's `resolvedModel` spelling. Wrapper tests pin that either reporting
+representation works.
 
 The Codex catalog is static and does not distinguish canonical from alias, so it
 is unchanged. A row with absent `resolved_model` behaves as it did before the
