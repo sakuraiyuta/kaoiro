@@ -23,6 +23,7 @@ Revised 2026-09-10 for inbound inter-agent turn delivery (F5a).
 Accepted 2026-09-18 after Stage A dogfood and F4c Stage B0 (mid-session
 approval/sandbox/network switching under a host-local launch ceiling,
 issue #359).
+Revised 2026-09-19 for `run_command` Cwd containment (F4 addendum, issue #370).
 
 ## Context
 
@@ -164,11 +165,17 @@ path-bearing key, realpath of the longest existing ancestor) lies inside
 the customization dir; for `run_command` the string check is best-effort
 only (a bash command line cannot be canonicalised), and the real protection
 is the post-turn SHA verification of F3. A
-`run_command` whose `Cwd` is outside the agent cwd is escalated to ask
-regardless of cell (not denied — if the rules text fails to steer the model
-the fallback is one approval, not a dead engine; the write-target check
-still applies). Operator decisions reuse
-`PermissionBroker` (`waiting_permission`, `ext.pending_permission`).
+**F4 addendum — `run_command` Cwd containment (issue #370).** A canonical
+`Cwd` equal to or inside the agent cwd follows its ordinary shell policy.
+For an outside, absent, malformed, or uncanonicalizable `Cwd`,
+`workspace-write` asks except that `never` denies without a prompt;
+`danger-full-access` retains its ordinary advisory-shell policy; and
+`read-only` denies regardless of Cwd location. The prior gate returned `ask`
+for outside or missing Cwd before reaching the read-only shell denial; that
+would make an outside Cwd less restricted than an inside Cwd and is no longer
+permitted. The Cwd boundary is checked before the `local` command allowlist.
+Operator decisions reuse `PermissionBroker` (`waiting_permission`,
+`ext.pending_permission`).
 
 `local` recognizes only a deliberately small shell grammar. It rejects shell
 expansion, environment assignment, redirection, subshells, `eval`, unknown

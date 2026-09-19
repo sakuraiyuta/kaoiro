@@ -2,7 +2,7 @@
 title: Antigravity tools and permissions
 description: Current hook-gate, tool-child, bridge, and permission contract for the Antigravity CLI adapter.
 status: provisional
-last_updated: 2026-09-18
+last_updated: 2026-09-19
 related: [protocol, antigravity-adapter]
 ---
 
@@ -70,6 +70,20 @@ hook command receives the tool call on stdin and answers on stdout:
 
 - Hooks are also the only PostToolUse / Stop observation channel; not used
   by the adapter in Stage A.
+
+### `run_command` Cwd containment
+
+The gate canonicalizes `Cwd` and treats an equal or descendant path as inside
+the agent cwd. Inside paths use the ordinary sandbox and approval cell: `never`
+allows, `on-request` asks, `local` consults the restricted command allowlist,
+and `read-only` denies. For an outside, absent, non-string, or uncanonicalizable
+`Cwd`, `workspace-write` asks for `untrusted`, `on-request`, or `local`, while
+`never` denies with `kaoiro: command Cwd is outside the permitted workspace`.
+The outside check precedes the `local` allowlist, so an observational command
+cannot escape the agent workspace. `read-only` denies regardless of Cwd, and
+`danger-full-access` applies its ordinary shell policy because this adapter's
+sandbox axis is advisory. Bridge auto-allow remains restricted to its exact-cwd
+grammar.
 
 ### Tool children: prompts disabled, absolute tool deadline (issue #350)
 

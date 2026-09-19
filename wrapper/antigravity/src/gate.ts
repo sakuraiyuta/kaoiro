@@ -476,8 +476,22 @@ export class AntigravityGate {
     if (toolCall.name === "run_command" && this.#isBridgeCall(toolCall.args)) {
       return { decision: "allow" };
     }
-    if (toolCall.name === "run_command" && (typeof toolCall.args.Cwd !== "string" || canonical(toolCall.args.Cwd) !== this.#cwd)) {
-      return { decision: "ask" };
+    if (toolCall.name === "run_command") {
+      const commandCwd = typeof toolCall.args.Cwd === "string"
+        ? canonical(toolCall.args.Cwd)
+        : null;
+      const commandCwdInside = commandCwd !== null && isInside(commandCwd, this.#cwd);
+      if (!commandCwdInside && this.#sandbox !== "danger-full-access") {
+        if (this.#sandbox === "read-only") {
+          return { decision: "deny", reason: "kaoiro: read-only sandbox" };
+        }
+        if (this.#approval === "never") {
+          return { decision: "deny", reason: "kaoiro: command Cwd is outside the permitted workspace" };
+        }
+        // Check the Cwd before the local allowlist so an otherwise safe
+        // command cannot observe a workspace outside this agent's boundary.
+        return { decision: "ask" };
+      }
     }
     const policyClass = toolClass === "network" ? "shell" : toolClass;
     if (policyClass === "read") return { decision: "allow" };
