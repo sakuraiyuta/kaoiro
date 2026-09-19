@@ -103,7 +103,7 @@ None.
 
 - Covered specs:
   [protocol-external-human](../specs/protocol-external-human.md),
-  [protocol](../specs/protocol.md), [plugin-model](../specs/plugin-model.md)
+  [protocol](../specs/protocol.md), [extensions](../architecture/extensions.md)
 - ADR: [0028](../adr/0028-external-human-messaging.md)
 - Previous phase: [phase-8-inter-agent-messaging](phase-8-inter-agent-messaging.md)
 - kaoiro issue #95 (implementation), #93 (Tier B red-team spike), #94 (future

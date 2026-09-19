@@ -104,6 +104,13 @@ Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh do
 - Operational updates: [production runbook](operations/production.md).
 - Dated evidence: [exec verification](evidence/codex/exec-contract.md) and [catalog observations](evidence/codex/model-catalog.md).
 
+## Extension documentation
+
+- Extension architecture: [extensions](architecture/extensions.md).
+- Engine adapter contract: [adapter contract](reference/engines/adapter-contract.md).
+- Claude catalog contract: [Claude model catalog](reference/engines/claude-model-catalog.md).
+- Session capability advertisement remains in the [plugin-model stub](specs/plugin-model.md) until U03.
+
 ## Claude documentation
 
 - Adapter event contract and verification notes: [Claude events](reference/engines/claude-events.md).

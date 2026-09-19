@@ -5,7 +5,7 @@ date: 2026-07-14
 opened: 2026-07-14
 supersedes: []
 superseded_by: null
-related_specs: [plugin-model, protocol]
+related_specs: [claude-model-catalog, protocol]
 related_adrs: [32, 34, 35, 39, 40]
 ---
 
@@ -191,7 +191,7 @@ Reject selecting the first match. It is deterministic but has no semantic basis,
 and would display a pinned `opus[1m]` as floating `default` — the same semantic
 destruction as the rejected normalisation below, performed in the display path
 rather than the send path. The detailed rule is in the relevant section of
-[plugin-model](../specs/plugin-model.md).
+[Claude model catalog](../reference/engines/claude-model-catalog.md).
 
 F4’s “keep the protocol schema as-is” concerns the `EngineCatalogEntry` container
 shape (array, possibly empty); adding one optional row field does not conflict with
@@ -210,7 +210,7 @@ by both pre-init `Options.model` and live `Query.setModel()`. The representation
 `model` in `system/init` is unresolved because observing it incurs cost; keep tests
 such that either alias or canonical is safe.
 
-The specification SSOT is the relevant section of [plugin-model](../specs/plugin-model.md),
+The specification SSOT is the relevant section of [Claude model catalog](../reference/engines/claude-model-catalog.md),
 and measured raw values are in [agent-sdk-events](../reference/engines/claude-events.md).
 Do not show canonical IDs in LaunchDialog because of precision differences (the
 register path uses the last-known-good cache from the last successful probe and may

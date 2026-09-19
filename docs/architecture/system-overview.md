@@ -12,7 +12,7 @@ related: [plugin-model, protocol]
 ## Purpose
 
 Defines the three-layer structure, each layer's responsibilities, and the data
-flow. See [plugin-model](../specs/plugin-model.md) for the plugin extension model and
+flow. See [extensions](extensions.md) for the plugin extension model and
 [protocol](../specs/protocol.md) for event formats.
 
 ## Definition
@@ -190,7 +190,7 @@ None.
 
 ## See Also
 
-- Related specs: [plugin-model](../specs/plugin-model.md), [protocol](../specs/protocol.md),
+- Related specs: [extensions](extensions.md), [protocol](../specs/protocol.md),
   [persona-pack-format](../reference/personas/pack-format.md)
 - ADRs: [0001](../adr/0001-agent-sdk-integration.md),
   [0002](../adr/0002-local-wrapper-websocket-topology.md),

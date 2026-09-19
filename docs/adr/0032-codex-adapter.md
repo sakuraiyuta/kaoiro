@@ -5,7 +5,7 @@ date: 2026-07-10
 opened: 2026-06-26
 supersedes: []
 superseded_by: null
-related_specs: [plugin-model, protocol, architecture, personas, codex-exec-events, claude-events]
+related_specs: [extensions, protocol, architecture, personas, codex-exec-events, claude-events]
 related_adrs: [17, 22, 23, 33, 34, 35, 37, 38, 39, 40]
 ---
 
@@ -350,7 +350,7 @@ Implement in these two phases:
 
 - ADR-0017’s three-layer structure is realised as physical boundaries.
   `wrapper/core` contains no AI concepts, providing a package home for future
-  non-AI entities ([plugin-model](../specs/plugin-model.md)).
+  non-AI entities ([extensions](../architecture/extensions.md)).
 - The impact of adding an engine stays inside its adapter package; the common
   layer and core do not need another operation.
 - The Codex adapter is a plugin without changes to the existing state abstraction,
@@ -464,5 +464,5 @@ Implement in these two phases:
 - Related ADRs: [0017](0017-wrapper-multientity-packages.md) (materialised by
   this ADR), [0022](0022-pending-permission-authoritative-source.md) /
   [0033](0033-permission-model-dual-axis.md) (two-axis permissions), [0023](0023-host-runner-architecture.md) D3 (execute the rename), [0001](0001-agent-sdk-integration.md) (adopt Claude SDK), [0027](0027-askuserquestion-envelope.md) (question envelope), [0014](0014-session-resume-and-restore.md) (resume), and [0034](0034-session-capabilities-advertisement.md) (extend the engine-neutralisation pattern through session capabilities).
-- Related specs: [plugin-model](../specs/plugin-model.md), [protocol](../specs/protocol.md), [architecture](../architecture/system-overview.md), [personas](../specs/personas.md), [agent-sdk-events](../reference/engines/claude-events.md) (Claude version), and [codex-sdk-events](../reference/engines/codex-exec-events.md) (new Codex version).
+- Related specs: [extensions](../architecture/extensions.md), [protocol](../specs/protocol.md), [architecture](../architecture/system-overview.md), [personas](../specs/personas.md), [agent-sdk-events](../reference/engines/claude-events.md) (Claude version), and [codex-sdk-events](../reference/engines/codex-exec-events.md) (new Codex version).
 - Open questions (phase-14 period): [Q4 codex-cwd-extraction](../open-questions/codex-cwd-extraction.md), [codex-exec-approval-upstream](../open-questions/codex-exec-approval-upstream.md) (new 2026-07-10). Old Q1 (personality injection effectiveness) closed after real-machine verification on 2026-07-11; old Q2 (envelope schema) / Q3 (UI vocabulary) / Q5 (model catalog) / Q6 (compatibility window) were resolved and closed by real SDK verification + spec elicitation on 2026-07-10 (the decisions were added to this ADR and [ADR-0033](0033-permission-model-dual-axis.md)).

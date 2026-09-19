@@ -58,7 +58,7 @@ code. Retract the old fixed wording, “retrieved after the first response.”
       `docs/specs/codex-sdk-events.md`; instead advertise
       `ext.session_capabilities.supports_context_usage=false`.
 - [x] Add Codex handling of `ext.context` (directly attached by the adapter,
-      see ADR-0040) to `docs/specs/plugin-model.md` L32-37.
+      see ADR-0040) to `docs/architecture/extensions.md`.
 - [x] `dashboard/src/lib/protocol.ts`:
   - Add `supports_context_usage?: boolean` to `SessionCapabilities`, with a
       JSDoc note for the three-state UI contract.

@@ -9,7 +9,7 @@ Feature specifications, organized by topic. Each file has `status` and
 |------|--------|------|
 | [overview](../architecture/overview.md) | accepted | kaoiro's purpose, two goals, and intended users |
 | [architecture](../architecture/system-overview.md) | accepted | Three-layer architecture and data flow |
-| [plugin-model](plugin-model.md) | accepted | Two adapter/filter extension points and their shared boundary |
+| [plugin-model](../architecture/extensions.md) | accepted | Two adapter/filter extension points and their shared boundary |
 | [protocol](protocol.md) | accepted | Common events; envelope, state machine, persona, bidirectionality, and authentication |
 | [protocol-inter-agent](protocol-inter-agent.md) | provisional | Inter-agent messaging envelope schema, nine kinds, and hard limits |
 | [protocol-external-human](protocol-external-human.md) | provisional | External human messaging (Discord), one-way authority, discord-wrapper, and Tier A/B |

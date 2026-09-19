@@ -70,7 +70,7 @@ The dashboard interface is currently Japanese-only.
   ([deployment.md](docs/specs/deployment.md)).
 - **Two engines, one protocol** — Claude Code and Codex sit behind the same
   adapter boundary, and the UI branches on declared capabilities rather than on
-  engine names ([plugin-model.md](docs/specs/plugin-model.md)).
+  engine names ([adapter contract](docs/reference/engines/adapter-contract.md)).
 - **Personas as zip packs** — characters are versioned, hash-checked packs read
   from an ingest directory, with a bundled set as the default
   ([persona-pack-format.md](docs/reference/personas/pack-format.md)).
@@ -165,7 +165,7 @@ Claude Code was implemented first, followed by the **Codex** adapter. The
 engine is selectable at launch. Engine-specific differences are represented by
 `ext.session_capabilities` in the envelope, so the UI does not branch on engine
 names. Additional agents use the same **adapter/plugin** boundary
-(`docs/specs/plugin-model.md`).
+(`docs/architecture/extensions.md`).
 
 ## Documentation
 
