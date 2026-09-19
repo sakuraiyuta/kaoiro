@@ -15,7 +15,6 @@ edit the page it points at.
 | [personas](personas.md) | accepted | Japanese-language design policy for persona illustrations; the Japanese text is the specification |
 | [agent-operations](agent-operations.md) | accepted | Working rules for agents sharing one work tree; the entry named by [AGENTS.md](../../AGENTS.md) and [CLAUDE.md](../../CLAUDE.md) |
 | [protocol-external-human](protocol-external-human.md) | provisional | Unimplemented Discord design; moves once accepted (marker at the top of the page) |
-| [setup-wizards](setup-wizards.md) | accepted | Pending migration unit U19b in [phase-35](../plans/phase-35-docs-migration.md) |
 
 ## Where each former spec lives now
 
@@ -41,7 +40,7 @@ edit the page it points at.
 | [persona-personality-injection](../architecture/personality-injection.md) | provisional | Mechanism for injecting personality prompts, such as speech style and first-person pronouns, into the Claude Agent SDK |
 | [threat-model](../architecture/security-threat-model.md) | accepted | Threats to bidirectional routing and their mitigations |
 | [auth-and-authz](../architecture/security-boundaries.md) | accepted | Current map of authentication and authorization boundaries for each node. Starting point for the pre-OSS-release audit (private Gitea issue 91) |
-| [setup-wizards](setup-wizards.md) | accepted | Configuration / env generation wizards (runner config and server .env) |
+| [setup-wizards](../reference/configuration/setup-wizards.md) | accepted | Exact contract for the interactive wizards that generate the server .env and runner configuration (runner.config.json / runner.env); design intent in [architecture/deployment.md](../architecture/deployment.md#setup-wizards) |
 | [deployment](../architecture/deployment.md) | accepted | Why deployment is shaped as one server plus any number of runner hosts behind nginx, and the stop-boundary constraint an in-place build imposes on checkout-direct hosts |
 | [agent-operations](agent-operations.md) | accepted | Operating rules for multiple agents working concurrently in the same work tree (implementation and director sides). Engine-independent and referenced by both CLAUDE.md and AGENTS.md |
 | [non-goals](../architecture/scope.md) | accepted | Out of scope |

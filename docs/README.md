@@ -91,7 +91,7 @@ Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh do
 
 ## Update flow
 
-- Behaviour or contract change → edit the owning `architecture/` / `reference/` / `operations/` page and update its `status` / `last_updated`; the old `specs/<slug>.md` path is a stub (kept pages: personas, agent-operations, protocol-external-human, setup-wizards). Placement rules: [contributing/documentation.md](contributing/documentation.md)
+- Behaviour or contract change → edit the owning `architecture/` / `reference/` / `operations/` page and update its `status` / `last_updated`; the old `specs/<slug>.md` path is a stub (kept pages: personas, agent-operations, protocol-external-human). Placement rules: [contributing/documentation.md](contributing/documentation.md)
 - Specification ambiguity → add `open-questions/<slug>.md`
 - Important decision → create `adr/NNNN-<slug>.md` and update the referenced spec
 - Phase progress → update the table in `plans/phase-N-<slug>.md`
@@ -187,6 +187,6 @@ Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh do
 
 - Architecture and design intent: [multi-host deployment architecture](architecture/deployment.md).
 - Operator runbooks: [server install](operations/server-install.md), [network and login](operations/network-and-login.md), [server update and rollback](operations/server-update-and-rollback.md), [runner install and distribution](operations/runner-install.md), [runner update and rollback](operations/runner-update-and-rollback.md), [runner service verification](operations/runner-service-verification.md), [deployment troubleshooting](operations/deployment-troubleshooting.md), and [production deployment manual](operations/production.md).
-- Exact contracts: [server configuration](reference/configuration/server.md), [server deploy configuration](reference/configuration/server-deploy.md), [transactions and identity](reference/deployment/transactions-and-identity.md), [runner artifacts](reference/deployment/runner-artifacts.md), and [runner configuration](reference/configuration/runner.md).
+- Exact contracts: [server configuration](reference/configuration/server.md), [server deploy configuration](reference/configuration/server-deploy.md), [transactions and identity](reference/deployment/transactions-and-identity.md), [runner artifacts](reference/deployment/runner-artifacts.md), [runner configuration](reference/configuration/runner.md), and [setup wizards](reference/configuration/setup-wizards.md).
 - Contributor guide: [runner development](contributing/runner-development.md).
 - Dated evidence: [runner service isolation](evidence/deployment/runner-service-isolation.md).
