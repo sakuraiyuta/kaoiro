@@ -1,5 +1,6 @@
 ---
 title: Inter-agent tool authorization
+description: Which engine gate decides each kaoiro inter-agent MCP tool call (send_to_agent / list_agents / whoami and the session companions), and when a send_to_agent call reaches the operator.
 status: accepted
 last_updated: 2026-09-19
 ---
@@ -34,9 +35,12 @@ Per-engine authorization of the kaoiro inter-agent MCP tools (`send_to_agent` / 
 - Inject the in-process MCP server from `wrapper/agent-common/src/inter_agent.ts`
   into the engine (Claude via `Options.mcpServers`, Codex via the tool-host bridge,
   Antigravity via `ToolHost.listen` in `wrapper/antigravity/src/host.ts`).
-- On Claude, `send_to_agent` is **not in the default allowedTools**, so it always
-  goes through the broker. The colocated `list_agents` / `whoami` are read-only and
-  therefore auto-allowed (the `READ_ONLY_TOOLS` set above). Codex auto-approves
+- On Claude, `send_to_agent` is **not in the default allowedTools**, so every call
+  enters `canUseTool`, and it reaches the broker (operator dialog) unless the
+  conversation-scoped whitelist below allows it first
+  (`wrapper/claude-code/src/host.ts`, `#canUseTool`). The colocated
+  `list_agents` / `whoami` are read-only and therefore auto-allowed (the
+  `READ_ONLY_TOOLS` set above). Codex auto-approves
   every bridge tool (`default_tools_approval_mode: "approve"`,
   `wrapper/codex/src/bridge_policy.ts`) and `send_to_agent` is not wrapped in
   `operatorApprovalGated` (`wrapper/codex/src/cli.ts`); Antigravity registers the
@@ -65,9 +69,10 @@ of this section for Codex and Antigravity. When wrapper-A invokes
 ### Automatic approval (conversation-scoped whitelist, ADR-0044 F2 addendum, option B)
 
 Subsequent `send_to_agent` calls for the same `(conversation_id, to)` are
-automatically allowed without `canUseTool` (no operator dialog) **only when
-this wrapper process just received an accepted ack from the server for that
-pair**.
+automatically allowed inside `canUseTool` before the broker is asked (no
+`PermissionBroker.decide`, no operator dialog; `wrapper/claude-code/src/host.ts`
+`#canUseTool`) **only when this wrapper process just received an accepted ack
+from the server for that pair**.
 
 - The whitelist exists **only in wrapper-process memory** as
   `autoAllowedPeer` on the conversation lifecycle track (issue #167
@@ -81,10 +86,10 @@ pair**.
   an operator-approved conversation.
 - Each wrapper instance has an independent whitelist. When B first replies to
   a conversation started by A, B has no local entry and needs normal
-  `canUseTool` approval.
+  broker approval through `canUseTool`.
 - The first send of a new conversation (caller omitted `conversation_id`, and
-  the wrapper allocates one after sending) always goes through `canUseTool`;
-  no ID exists yet to match a whitelist entry.
+  the wrapper allocates one after sending) always reaches the broker through
+  `canUseTool`; no ID exists yet to match a whitelist entry.
 - **Establish a whitelist entry only for the first send that is both operator-
   approved and server-accepted** (issue #165 round-4 review, Fujino design
   approval, condition A — [issue #201 comment 5384486838](https://github.com/sakuraiyuta/kaoiro/issues/201#issuecomment-5384486838)).
