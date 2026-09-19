@@ -49,7 +49,7 @@ implementation — the emphasis marks; all three are walked at every close.
 | U15 | per-engine IA tool authorization | perm impl | ⏳ |
 | U16 | peer errors / synthetic notices | perm impl | ✅ |
 | U17 | session tools (compact / reset) | perm impl | ✅ |
-| U18 | server install / network / login / env | ops | ⏳ |
+| U18 | server install / network / login / env | ops | ✅ |
 | U19 | runner install / config / wizard | ops impl | ⏳ |
 | U20 | server update / rollback / transactions | ops | ⏳ |
 | U21 | runner update / rollback / artifacts / service verification | ops | ⏳ |
