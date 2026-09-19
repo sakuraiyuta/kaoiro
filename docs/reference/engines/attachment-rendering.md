@@ -73,6 +73,9 @@ route (referencing `file_id`).
 - MUST: Rendering (selecting image_block / document_block / text_block and
   converting Office files) is **wrapper-internal**. The protocol, client, and
   server contain no Anthropic API terminology.
+- MUST: attachment rendering (image/document/text block choice and Office conversion) is
+  **wrapper-internal**. Protocol, client, and server do not use Anthropic API
+  terms ([ADR-0025](../../adr/0025-file-upload-wire-and-wrapper-rendering.md) F1).
 
 ## Related protocol topics
 

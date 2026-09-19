@@ -198,6 +198,7 @@ wrapper-cycle contract and the resume/restore wire path.
   agent-independent.
 - MUST: Do not use PTY scraping
   ([ADR-0001](../adr/0001-agent-sdk-integration.md)).
+- MUST: `agent_id` is stable. MUST: state derivation is wrapper-side.
 
 ## Open Questions
 

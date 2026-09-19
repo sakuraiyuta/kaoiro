@@ -10,8 +10,8 @@ Feature specifications, organized by topic. Each file has `status` and
 | [overview](../architecture/overview.md) | accepted | kaoiro's purpose, two goals, and intended users |
 | [architecture](../architecture/system-overview.md) | accepted | Three-layer architecture and data flow |
 | [plugin-model](../architecture/extensions.md) | accepted | Two adapter/filter extension points and their shared boundary |
-| [protocol](protocol.md) | accepted | Common events; envelope, state machine, persona, bidirectionality, and authentication |
-| [protocol-inter-agent](protocol-inter-agent.md) | provisional | Inter-agent messaging envelope schema, nine kinds, and hard limits |
+| [protocol](../architecture/message-topology.md) | accepted | Why the common envelope has the shape it does, and the design intent behind its outer/payload split |
+| [protocol-inter-agent](../architecture/inter-agent-messaging.md) | provisional | Inter-agent messaging and its boundaries |
 | [protocol-external-human](protocol-external-human.md) | provisional | External human messaging (Discord), one-way authority, discord-wrapper, and Tier A/B |
 | [agent-sdk-events](../reference/engines/claude-events.md) | accepted | Settled Agent SDK event specification and state derivation (Claude edition) |
 | [codex-exec-events](../reference/engines/codex-exec-events.md) | accepted | Exec SDK event contract and state derivation; [dated verification](../evidence/codex/exec-contract.md) |

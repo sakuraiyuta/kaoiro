@@ -51,3 +51,26 @@ For the envelope's terms, outer frame keys, and wire shape, see
 - [Subagent visibility](subagent-visibility.md).
 - [Persona delivery](../reference/protocol/persona-delivery.md).
 - [Personality-prompt injection](personality-injection.md).
+- [personas](../specs/personas.md).
+
+### ADRs
+
+[0001](../adr/0001-agent-sdk-integration.md),
+[0003](../adr/0003-persona-identity-persistence.md),
+[0008](../adr/0008-persona-asset-distribution.md),
+[0009](../adr/0009-client-transport.md),
+[0010](../adr/0010-protocol-precisification.md),
+[0011](../adr/0011-phase3-reliability-and-auth.md),
+[0012](../adr/0012-response-display-and-dashboard-scope.md),
+[0014](../adr/0014-session-resume-and-restore.md),
+[0015](../adr/0015-protocol-version-stamping.md),
+[0016](../adr/0016-error-body-relay.md),
+[0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md),
+[0021](../adr/0021-role-information-disclosure-policy.md),
+[0022](../adr/0022-pending-permission-authoritative-source.md),
+[0023](../adr/0023-host-runner-architecture.md),
+[0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md)
+
+## Open Questions
+
+None; protocol reliability was settled by [ADR-0011](../adr/0011-phase3-reliability-and-auth.md).

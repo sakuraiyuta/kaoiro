@@ -62,9 +62,43 @@ receiver, batching, and synchronous-wait contracts.
 - [Inter-agent message contract](../reference/inter-agent/messages.md).
 - [Inter-agent conversation contract](../reference/inter-agent/conversations.md).
 - [Inter-agent conversation admission](../reference/inter-agent/conversation-admission.md).
-- [Remaining protocol topics](../specs/protocol-inter-agent.md), including [approval](../reference/security/inter-agent-tool-authorization.md#approval-flow-permission_broker-integration), and [session-operation tools](../reference/inter-agent/session-tools.md).
+- [Approval flow](../reference/security/inter-agent-tool-authorization.md#approval-flow-permission_broker-integration), and [session-operation tools](../reference/inter-agent/session-tools.md).
 - [Delivery confirmation and recovery](../reference/inter-agent/delivery.md).
 - [Send and wait](../reference/inter-agent/send-and-wait.md).
 - [Coordination monitoring and display](../reference/inter-agent/coordination-monitoring.md).
 - [Peer directory and companion tools](../reference/inter-agent/directory.md).
+- [protocol](../reference/protocol/envelope.md) (common envelope foundation),
+  [tasks](../reference/protocol/tasks.md) (similar reserved-type patterns),
+  [extensions](extensions.md) (future filter insertion point), and
+  [threat-model](security-threat-model.md) (basis for operator-only delivery).
+- Related plans: [phase-8-inter-agent-messaging](../plans/phase-8-inter-agent-messaging.md)
+  and [phase-27-list-agents-metadata](../plans/phase-27-list-agents-metadata.md)
+  (six peer-directory liveness fields).
+
+### ADRs
+
+[0010 protocol-precisification](../adr/0010-protocol-precisification.md),
+[0015 protocol-version-stamping](../adr/0015-protocol-version-stamping.md),
+[0021 role-information-disclosure-policy](../adr/0021-role-information-disclosure-policy.md)
+(F6 = allow-list for agent disclosure, F6-8 = user disclosure allow-set),
+[0022 pending-permission-authoritative-source](../adr/0022-pending-permission-authoritative-source.md),
+[0040 context-usage-capability](../adr/0040-context-usage-capability.md)
+(the `context` capability gate),
+[0050 principal-model-and-graded-access-control](../adr/0050-principal-model-and-graded-access-control.md)
+(D5 = identity disclosure policy)
+
+kaoiro issues #17 (implementation origin), #18 (message filter), #87
+(umbrella investigation), #127 (unresponsive notices), #150
+(peer-directory liveness), #154 (rate-limit display defect), #167
+(conversation lifecycle, tombstone, stale-turn rejection), and #187 (user
+disclosure, phase 2).
+
+## Open Questions
+
+- Conversation persistence (whether conversation_id survives a server restart
+  and how it connects to Phase 4 / ADR-0014) — settle in Phase 2.
+- Insertion point for the message filter (kaoiro issue #18) — begin review in
+  Phase 2.
+- Automatic escalation when starting an `owner.kind: "agent"` conversation —
+  pending Phase 3 / kaoiro issue #87.
 - [IA sidecar and display restoration](../reference/storage/inter-agent-sidecar.md).

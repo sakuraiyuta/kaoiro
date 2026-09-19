@@ -19,7 +19,7 @@ placement rules.
 Defines the protocol surface that lets AI agents (office staff) send messages to
 and receive replies from **external humans** who are operator contacts, through
 Discord. It is a **superset** of
-[protocol-inter-agent](protocol-inter-agent.md) (the counterpart is an external
+[protocol-inter-agent](../reference/inter-agent/conversations.md#hard-limits-config--mechanical-enforcement) (the counterpart is an external
 human, not an agent) and reuses its routing, observation, and quota mechanisms.
 
 The phased implementation plan is
@@ -164,7 +164,7 @@ configuration is persistent.
 
 - Related specs: [protocol](../reference/protocol/envelope.md#envelope-v0) (common envelope foundation and the
   `external_message` type extension),
-  [protocol-inter-agent](protocol-inter-agent.md) (the source superset and
+  [protocol-inter-agent](../reference/inter-agent/conversations.md#hard-limits-config--mechanical-enforcement) (the source superset and
   routing/quota mechanisms), [extensions](../architecture/extensions.md) (Tier B filter
   insertion point), and [threat-model](../architecture/security-threat-model.md) (operator-only delivery
   and untrusted input)

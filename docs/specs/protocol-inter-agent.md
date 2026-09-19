@@ -214,109 +214,53 @@ Moved to [Inter-agent message contract](../reference/inter-agent/messages.md#res
 
 ## Constraints
 
-- MUST: The server must not interpret payload semantics (`kind` / `body` /
-  `meta`); it may read only `to` for routing. Carve-out (issue #127): validate
-  `payload.error` structurally (`code` non-empty string, `message` string) but
-  do not interpret values. The server may synthesize `reconnecting` or
-  `disconnected` envelopes on wrapper disconnect and an error-free `reconnected`
-  inform after exact-token planned recovery; these are minimal structural hooks
-  for observability, not semantic interpretation.
-- MUST: An envelope with `payload.error` still uses one of the nine kinds;
-  unresponsive notices use `inform`.
-- MUST: Do not count server-synthesized error notices in turns or tokens.
-- MUST: Deliver `inter_agent_message` envelopes **to operators only**
-  ([ADR-0021](../adr/0021-role-information-disclosure-policy.md)); remove them
-  entirely for viewers.
-- MUST: In Phase 1 every `send_to_agent` call goes through per-call
-  `permission_broker` approval (effect depends on permission mode; auto modes
-  include approval). Do not add kaoiro autonomous approval skipping before
-  Phase 3.
-- MUST: Enforce config hard limits (`max_turns`, `max_tokens`,
-  `max_concurrent_agents`) mechanically. Issue #211 removed old
-  `max_wallclock` as a hard limit.
-- MUST: A conversation completes only when both owner-side agents send
-  `meta.done=true`; one side alone is not done.
-- MUST (issue #167): Retain a conversation closed by both done flags, a hard
-  limit, or `open_conversation_ttl_ms` (issue #211, GC only) as a tombstone
-  until `tombstone_ttl_ms` expires. While closed, do not relay, store, or
-  broadcast sends for that conversation; reject them with
-  `{:error, :conversation_closed}`. Discard counters (turns/tokens/started_at/
-  done_by) at closure and never reset them on retry.
-- MUST (issue #167): Closed conversations are inactive in `peer_index` and in
-  disconnect unresponsive notices.
-- MUST: Reject self-routing where `payload.to == agent_id`.
-- MUST: A `kind: "reject"` envelope carries a non-empty string
-  `meta.reject_reason`.
-- MUST: Accept only agent IDs in `send_to_agent.to` (charset constrained).
-  Resolve persona names through the wrapper `list_agents` tool and ask the
-  operator when ambiguous.
-- MUST: The peer directory is an **allow-list**. Expose only fields explicitly
-  listed by `directory_entry`; never pass `ext` through. Apply the allow-list at
-  nested levels and construct a new map of canonical keys
-  ([ADR-0021](../adr/0021-role-information-disclosure-policy.md) F6-2 and
-  [“Projection from `ext`”](../reference/inter-agent/directory.md#projection-from-ext)).
-- MUST (issue #187 phase 2): Apply the same allow-list discipline to `users`
-  ([ADR-0021](../adr/0021-role-information-disclosure-policy.md) F6-8). Build literal maps with per-value validation; do not use a
-  `Map.take/2`-style key-only filter that bypasses shape checks. Omit an entire
-  user entry when its role cannot be resolved.
-- MUST (issue #187 phase 2): Expose users by default—unset
-  `KAOIRO_EXPOSE_USERS_TO_AGENTS` means open, explicit `false` opts out. A
-  closed read-site fallback is only for the abnormal case where the config key
-  itself is missing, not normal boot.
-- MUST: Project `context` only when
-  `ext.session_capabilities.supports_context_usage == true`; with absent or
-  explicit false capability omit each field and emit neither `null` nor an
-  inferred value ([ADR-0040](../adr/0040-context-usage-capability.md)).
-- MUST: For `rate_limits` windows, accept absence only when the key is missing;
-  if present with an invalid value (including `null`), drop that window. Drop
-  windows left empty after projection.
-- MUST: Server and wrapper apply **identical projection rules and limits**; a
-  looser side must not reopen data closed by the other.
-- MUST: Return `{"active": false, "peers": []}` even without a conversation;
-  never disclose `conversation_id`.
-- MUST: `session_started_at` and `last_activity_at` are **server-observed
-  timestamps**, not wrapper measurements or envelope `ts`.
-- MUST: A `list_agents` consumer compares `rate_limits.resets_at` (Unix seconds)
-  with current time and, after expiry, does not trust that window's
-  `utilization` or `status`. Snapshots come from the peer's last turn and do
-  not update while idle. This is a best-effort model convention, not a
-  deterministic server/wrapper enforcement; dashboard parity is tracked in
-  [#154](https://github.com/sakuraiyuta/kaoiro/issues/154).
-- MUST: An omitted field means **unknown**, never zero, healthy, or unlimited.
-- SHOULD: Allocate `conversation_id` values from UUIDv4 for collision
-  resistance and easy grouping.
-- SHOULD: Truncate `body` at 16 KB on the wrapper like other protocol fields and
-  set `meta.truncated=true`.
+Moved: server payload-non-interpretation (with the issue #127 `payload.error`
+carve-out) and the 16 KB `body`-truncation SHOULD to
+[Inter-agent message contract](../reference/inter-agent/messages.md#constraints);
+server-synthesized error notices excluded from turn/token counts to
+[Inter-agent conversation contract](../reference/inter-agent/conversations.md#hard-limits-config--mechanical-enforcement);
+closed conversations inactive in `peer_index` to
+[Peer directory](../reference/inter-agent/directory.md#peer-directory-information-boundary-99--150);
+self-routing rejection to
+[Send and wait](../reference/inter-agent/send-and-wait.md#send-acceptance-and-rejection).
+
+The remaining bullets were already covered verbatim and are not duplicated
+here: `payload.error` still uses one of the nine kinds / unresponsive notices
+use `inform` ([Inter-agent error notices](../reference/inter-agent/errors.md#server-synthesized-reconnecting--reconnected--disconnected-rules));
+`inter_agent_message` operator-only delivery
+([Authentication and authorization](../reference/security/authentication-authorization.md#role-based-output-gate-adr-0021));
+hard limits (`max_turns`/`max_tokens`/`max_concurrent_agents`, `max_wallclock`
+removal) and both-owner-`done`/tombstone closure
+([Inter-agent conversation contract](../reference/inter-agent/conversations.md#hard-limits-config--mechanical-enforcement)
+and its [Conversation lifecycle](../reference/inter-agent/conversations.md#conversation-lifecycle-and-post-close-handling-issue-167));
+`kind: "reject"` requires `meta.reject_reason`
+([Inter-agent message contract](../reference/inter-agent/messages.md#kind-enum-nine-values));
+`send_to_agent.to` accepts only agent IDs, resolved via `list_agents`
+([Peer routing](../contributing/peer-routing.md#destination-resolution-guidance));
+the peer-directory allow-list, the `users` allow-list discipline, and the
+`KAOIRO_EXPOSE_USERS_TO_AGENTS` default, the `context` projection gate, the
+`rate_limits` window absence/invalid-value rule, and `session_started_at`/
+`last_activity_at` being server-observed timestamps (all in
+[Peer directory](../reference/inter-agent/directory.md#peer-directory-information-boundary-99--150));
+`rate_limits.resets_at` comparison by `list_agents` consumers and the general
+"absent = unknown" convention
+([Peer directory](../reference/inter-agent/directory.md#companion-tools-wrapper-sdk-mcp));
+and `conversation_id` allocation from UUIDv4
+([Inter-agent message contract](../reference/inter-agent/messages.md#inner-envelopepayload-schema)).
+
+**Sync note (not moved, flagged for director review):** the Phase-1
+per-call-approval bullet's "Do not add kaoiro autonomous approval skipping
+before Phase 3" clause is stale — a conversation-scoped auto-approval
+whitelist is already implemented under specific conditions
+([Inter-agent tool authorization](../reference/security/inter-agent-tool-authorization.md#automatic-approval-conversation-scoped-whitelist-adr-0044-f2-addendum-option-b),
+ADR-0044 F2 addendum). The per-call-approval fact itself is covered there
+too ([Approval flow](../reference/security/inter-agent-tool-authorization.md#approval-flow-permission_broker-integration)).
 
 ## Open Questions
 
-- Conversation persistence (whether conversation_id survives a server restart
-  and how it connects to Phase 4 / ADR-0014) — settle in Phase 2.
-- Insertion point for the message filter (kaoiro issue #18) — begin review in
-  Phase 2.
-- Automatic escalation when starting an `owner.kind: "agent"` conversation —
-  pending Phase 3 / kaoiro issue #87.
+Moved to [Inter-agent messaging](../architecture/inter-agent-messaging.md#open-questions).
 
 ## See Also
 
-- Related specs: [protocol](protocol.md) (common envelope foundation),
-  [tasks](../reference/protocol/tasks.md) (similar reserved-type patterns),
-  [extensions](../architecture/extensions.md) (future filter insertion point), and
-  [threat-model](../architecture/security-threat-model.md) (basis for operator-only delivery).
-- Related plans: [phase-8-inter-agent-messaging](../plans/phase-8-inter-agent-messaging.md)
-  and [phase-27-list-agents-metadata](../plans/phase-27-list-agents-metadata.md)
-  (six peer-directory liveness fields).
-- ADRs: [0010 protocol-precisification](../adr/0010-protocol-precisification.md),
-  [0015 protocol-version-stamping](../adr/0015-protocol-version-stamping.md),
-  [0021 role-information-disclosure-policy](../adr/0021-role-information-disclosure-policy.md)
-  (F6 = allow-list for agent disclosure, F6-8 = user disclosure allow-set),
-  [0022 pending-permission-authoritative-source](../adr/0022-pending-permission-authoritative-source.md),
-  [0040 context-usage-capability](../adr/0040-context-usage-capability.md)
-  (the `context` capability gate),
-  [0050 principal-model-and-graded-access-control](../adr/0050-principal-model-and-graded-access-control.md)
-  (D5 = identity disclosure policy)
-- kaoiro issues #17 (implementation origin), #18 (message filter), #87
-  (umbrella investigation), #127 (unresponsive notices), #150
-  (peer-directory liveness), #154 (rate-limit display defect), #167
-  (conversation lifecycle, tombstone, stale-turn rejection), and #187 (user
-  disclosure, phase 2).
+Moved to [Inter-agent messaging](../architecture/inter-agent-messaging.md#related-inter-agent-topics)
+and its [ADRs](../architecture/inter-agent-messaging.md#adrs) list.

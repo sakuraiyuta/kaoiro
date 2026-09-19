@@ -190,52 +190,39 @@ Moved to [Authentication and authorization](../reference/security/authentication
 
 ## Constraints
 
-- MUST: `agent_id` is stable. MUST: state derivation is wrapper-side.
-- MUST: `agent_id` uses `[A-Za-z0-9._-]`, 1–256 characters.
-- MUST: client connections use only Phoenix Channels (`vsn=2.0.0`).
-- MUST: receivers ignore unknown envelope keys (forward compatibility).
-- MUST: `instruction` / `permission_decision` / `interrupt` are operator-only.
-- MUST: permission waits are **unlimited** by default, matching the SDK (Promise remains
-  pending). Finite timeout is wrapper opt-in and then fails closed with deny ([ADR-0022](../adr/0022-pending-permission-authoritative-source.md), issue #60).
-- MUST: while `waiting_permission`, pending state persists in `state_change.ext.pending_permission`,
-  the authoritative source; `permission_request` is only the initial notification
-  ([ADR-0022](../adr/0022-pending-permission-authoritative-source.md)).
-- MUST: `log` / `result` envelopes are delivered only to operator role ([ADR-0012](../adr/0012-response-display-and-dashboard-scope.md)).
-- MUST: `agents:lobby` uses an **allow-list**. Viewers receive only `state_change` (with `ext`
-  removed) and `agent_deleted`; all other events/types are removed ([ADR-0021](../adr/0021-role-information-disclosure-policy.md)).
-  `permission_request` is replaced for viewers by synthetic `state_change(waiting_permission)` to keep the grid consistent.
-- MUST: file-upload operations (`attach_open` / `attach_chunk` / `attach_close` /
-  `attach_rejected` / `instruction_rejected` / `instruction.attachment_ids`) are **operator-only**
-  for both delivery and acceptance ([ADR-0021](../adr/0021-role-information-disclosure-policy.md) /
-  [ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md)).
-- MUST: the server neither interprets nor persists upload bytes; it transparently relays them
-  without disk access ([ADR-0020](../adr/0020-dashboard-battery-included-client.md) F3).
-- MUST: attachment rendering (image/document/text block choice and Office conversion) is
-  **wrapper-internal**. Protocol, client, and server do not use Anthropic API terms
-  ([attachment rendering by engine](../reference/engines/attachment-rendering.md), [ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md) F1).
+Moved: `agent_id` stability / state-derivation-is-wrapper-side to
+[System overview](../architecture/system-overview.md#constraints); `agent_id`
+charset to [Envelope contract](../reference/protocol/envelope.md#constraints);
+unlimited permission-wait default to
+[Tool authorization](../reference/security/tool-authorization.md#constraints-must);
+`log`/`result` operator-only to
+[Authentication and authorization](../reference/security/authentication-authorization.md#constraints-must);
+file-upload operator-only (delivery and acceptance) to
+[Attachment wire contract](../reference/protocol/attachments.md#constraints);
+attachment-rendering wrapper-internal (ADR-0025 F1) to
+[Attachment rendering by engine](../reference/engines/attachment-rendering.md#constraints).
+
+The remaining bullets (Phoenix Channels transport constraint, unknown-key
+forward compatibility, `instruction`/`permission_decision`/`interrupt`
+operator-only, `state_change.ext.pending_permission` as the authoritative
+pending-permission source, `agents:lobby` allow-list, and server
+non-persistence of upload bytes) were already covered verbatim and are not
+duplicated here — see
+[Channels and directional messages](../reference/protocol/channels.md#client-transport),
+[Versioning policy](../reference/protocol/versioning.md),
+[Authentication and authorization](../reference/security/authentication-authorization.md#operator-only-inbound-handle_in)
+and its
+[Role-based output gate](../reference/security/authentication-authorization.md#role-based-output-gate-adr-0021),
+[Event types and payloads](../reference/protocol/events.md#types-and-payload-v0-settled)
+and [Envelope contract](../reference/protocol/envelope.md#terms-and-hierarchy),
+and [Attachment wire contract](../reference/protocol/attachments.md#constraints)
+respectively.
 
 ## Open Questions
 
-None; protocol reliability was settled by [ADR-0011](../adr/0011-phase3-reliability-and-auth.md).
+Moved to [Message topology](../architecture/message-topology.md#open-questions).
 
 ## See Also
 
-- Related specs: [architecture](../architecture/system-overview.md),
-  [extensions](../architecture/extensions.md), [personas](personas.md),
-  [subagent-tasks](subagent-tasks.md),
-  [attachments](../architecture/attachments.md)
-- ADRs: [0001](../adr/0001-agent-sdk-integration.md),
-  [0003](../adr/0003-persona-identity-persistence.md),
-  [0008](../adr/0008-persona-asset-distribution.md),
-  [0009](../adr/0009-client-transport.md),
-  [0010](../adr/0010-protocol-precisification.md),
-  [0011](../adr/0011-phase3-reliability-and-auth.md),
-  [0012](../adr/0012-response-display-and-dashboard-scope.md),
-  [0014](../adr/0014-session-resume-and-restore.md),
-  [0015](../adr/0015-protocol-version-stamping.md),
-  [0016](../adr/0016-error-body-relay.md),
-  [0019](../adr/0019-subagent-workflow-entity-and-task-envelope.md),
-  [0021](../adr/0021-role-information-disclosure-policy.md),
-  [0022](../adr/0022-pending-permission-authoritative-source.md),
-  [0023](../adr/0023-host-runner-architecture.md),
-  [0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md)
+Moved to [Message topology](../architecture/message-topology.md#related-protocol-topics)
+and its [ADRs](../architecture/message-topology.md#adrs) list.
