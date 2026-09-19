@@ -96,6 +96,12 @@ Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh do
 - Important decision → create `adr/NNNN-<slug>.md` and update the referenced spec
 - Phase progress → update the table in `plans/phase-N-<slug>.md`
 
+## Protocol documentation
+
+- Architecture and design intent: [message topology](architecture/message-topology.md).
+- Exact contracts: [envelope](reference/protocol/envelope.md), [event types and payloads](reference/protocol/events.md), [channels and directional messages](reference/protocol/channels.md), and [versioning policy](reference/protocol/versioning.md).
+- Remaining topics (permission state, model/effort, session lifecycle, attachments, runner control, persona delivery, authentication): [protocol entry](specs/protocol.md).
+
 ## Codex documentation
 
 - Adapter implementation: [exec event contract](reference/engines/codex-exec-events.md) and [catalog contract](reference/engines/codex-model-catalog.md).
