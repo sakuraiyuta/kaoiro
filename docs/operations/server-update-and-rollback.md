@@ -17,6 +17,16 @@ build-identity provenance verification is in
 This page covers the server side; the interleaved runner-side steps are in
 [Runner update and rollback](../operations/runner-update-and-rollback.md).
 
+Sections 1–2 cover **initial deployment**. This section is canonical for moving
+an already-running deployment to a new version.
+
+> **The server side is a CLI** (`server/deploy/kaoiro-server-deploy.mjs`,
+> issue #306), driven by a transaction manifest + journal — [4.3](#43-update-procedure)/[4.4](#44-failure-handling) below
+> document it. **The runner side remains a separate, still-manual (or
+> checkout-direct) procedure** interleaved with the CLI calls; [4.6](../operations/runner-update-and-rollback.md#46-migrate-to-the-release-profile-and-update-thereafter-issue-219) covers the
+> release-profile automation for it. Automation does not remove the [4.1](../architecture/deployment.md#build-and-restart-boundaries)
+> limits by itself — they remain until their own resolving condition is met.
+
 ## 3. Connectivity checks
 
 1. server: verify with `docker compose ps`; open the dashboard at

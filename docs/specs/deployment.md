@@ -65,23 +65,11 @@ Moved to [Server update and rollback](../operations/server-update-and-rollback.m
 
 ## 4. Update an existing deployment
 
-Sections 1–2 cover **initial deployment**. This section is canonical for moving
-an already-running deployment to a new version.
-
-> **The server side is a CLI** (`server/deploy/kaoiro-server-deploy.mjs`,
-> issue #306), driven by a transaction manifest + journal — 4.3/4.4 below
-> document it. **The runner side remains a separate, still-manual (or
-> checkout-direct) procedure** interleaved with the CLI calls; 4.6 covers the
-> release-profile automation for it. Automation does not remove the 4.1
-> limits by itself — they remain until their own resolving condition is met.
+Moved to [Server update and rollback](../operations/server-update-and-rollback.md).
 
 ### 4.1 Known limits
 
-The In-place build limit row moved to
-[Multi-host deployment architecture](../architecture/deployment.md#build-and-restart-boundaries);
-the remaining status paragraphs below stay here (to be moved in U20).
-
-Moved to [Server update and rollback](../operations/server-update-and-rollback.md#update-related-resolved-limits).
+Moved to [Multi-host deployment architecture](../architecture/deployment.md#build-and-restart-boundaries) (the In-place build limit row) and [Server update and rollback](../operations/server-update-and-rollback.md#update-related-resolved-limits) (the remaining status paragraphs, U20).
 
 ### 4.2 Preconditions
 
