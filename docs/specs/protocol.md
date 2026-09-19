@@ -129,6 +129,10 @@ Moved to [Channels and directional messages](../reference/protocol/channels.md#d
 
 Moved to [Session lifecycle](../reference/protocol/session-lifecycle.md#planned-wrapper-cycle-issue-256).
 
+#### Projection hydration and restart resilience ([ADR-0051](../adr/0051-history-restart-resilience.md))
+
+Moved to [Session lifecycle](../reference/protocol/session-lifecycle.md#projection-hydration-and-restart-resilience-adr-0051).
+
 ### Session visibility semantics (#106 / ADR-0036 F3 restoration, 2026-07-24)
 
 Moved to [Session lifecycle](../reference/protocol/session-lifecycle.md#session-visibility-semantics-106--adr-0036-f3-restoration-2026-07-24).
