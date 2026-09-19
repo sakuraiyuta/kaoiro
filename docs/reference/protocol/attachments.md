@@ -197,6 +197,19 @@ client failures / instructions that never arrive.
 | Q9 | [file-upload-files-api-route](../../open-questions/file-upload-files-api-route.md) | low |
 | Q10 | [file-upload-markitdown-fallback](../../open-questions/file-upload-markitdown-fallback.md) | low |
 
+## See Also
+
+- Related specs: [protocol](../../specs/protocol.md),
+  [architecture](../../architecture/system-overview.md), [non-goals](../../architecture/scope.md),
+  [threat-model](../../architecture/security-threat-model.md)
+- ADRs:
+  [0009](../../adr/0009-client-transport.md) (single Channels route),
+  [0015](../../adr/0015-protocol-version-stamping.md) (version convention),
+  [0020](../../adr/0020-dashboard-battery-included-client.md)(battery-included),
+  [0021](../../adr/0021-role-information-disclosure-policy.md) (delivery policy),
+  [0025](../../adr/0025-file-upload-wire-and-wrapper-rendering.md) (decision
+  rationale for this specification)
+
 ## Related protocol topics
 
 - [Envelope contract](envelope.md).

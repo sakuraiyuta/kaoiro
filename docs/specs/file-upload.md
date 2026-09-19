@@ -70,5 +70,5 @@ Moved to [Attachment wire contract](../reference/protocol/attachments.md#open-qu
 ## See Also
 
 Moved to [Attachments](../architecture/attachments.md),
-[Attachment wire contract](../reference/protocol/attachments.md), and
+[Attachment wire contract](../reference/protocol/attachments.md#see-also), and
 [Attachment rendering by engine](../reference/engines/attachment-rendering.md).
