@@ -47,3 +47,12 @@ Only deployments restricted to a VPN may use the direct, nginx-free option (1.5)
 - [Server install runbook](../operations/server-install.md).
 - [Network and login runbook](../operations/network-and-login.md).
 - [Server configuration reference](../reference/configuration/server.md).
+- [auth-and-authz](security-boundaries.md) — details of unset behavior for the three tokens
+- [setup-wizards](../specs/setup-wizards.md) — interactive wizard automating env / config
+  generation for **initial deployment**; section 4 updates are out of scope
+  (automation in #218 / #219 / #220)
+- [runner/README.md](../../runner/README.md) — full service and tarball-distribution guide
+- [server/README.md](../../server/README.md) — local development and Docker basics
+- [threat-model](security-threat-model.md) — risk assessment for dev fallback / unset tokens
+- [docs/operations/production.md](../operations/production.md) — Codex
+  `codex.backend` selection and its rollback procedure, not covered here

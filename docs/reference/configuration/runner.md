@@ -1,19 +1,49 @@
 ---
 title: "Runner configuration"
 status: implemented
-last_updated: 2026-09-18
+last_updated: 2026-09-19
 ---
 
 # Runner configuration
 
 ## Coverage
 
-This page currently covers the Codex backend selector. Other runner settings
-remain in [deployment](../../specs/deployment.md#2-deploy-runners-multiple-hosts)
-until their migration unit. Operator steps are in the
-[backend switching runbook](../../operations/codex-backend-switch.md). The
-per-spawn config fields the runner relays to the wrapper process itself are
-in [Wrapper configuration](wrapper.md).
+This page covers the connection fields in `runner.config.json` (`host_id` /
+`server_url` / `cwd_allowlist` / `capabilities` / tokens, below) and the Codex
+backend selector. Codex-specific and Antigravity-specific `runner.config.json`
+fields remain documented in [runner/README.md](../../../runner/README.md)'s
+own "Codex 設定" and "Antigravity configuration" sections. Operator steps are
+in the [backend switching runbook](../../operations/codex-backend-switch.md).
+The per-spawn config fields the runner relays to the wrapper process itself
+are in [Wrapper configuration](wrapper.md).
+
+## `runner.config.json` example (`wss://` required)
+
+For prod deployments through nginx, `server_url` must be `wss://` (`ws://`
+direct connections receive 301 under the [1.4](../../operations/network-and-login.md#14-nginx-reverse-proxy) constraint). Only the direct VPN
+deployment ([1.5](../../operations/network-and-login.md#15-direct-vpn-deployment-no-nginx-plain-http-2026-07-26)) uses `ws://<PHX_HOST>:<PORT>/runner`. Make `host_id` unique per
+host: the server's `HostRegistry` registers by host ID, so duplicates overwrite
+one host with the other.
+
+```json
+{
+  "host_id": "lab-pc-1",
+  "server_url": "wss://kaoiro.example.com/runner",
+  "cwd_allowlist": ["/home/agent/repos"],
+  "capabilities": ["claude-code", "codex", "antigravity"]
+}
+```
+
+Set `KAOIRO_RUNNER_TOKEN=<token issued in 1.1>` in `runner.env` (pair it with
+`<host_id>:<token>` in server-side `KAOIRO_RUNNER_TOKENS`) and run `chmod 600`.
+Override `server_url` with `KAOIRO_RUNNER_SERVER_URL` in `runner.env` as well
+(issue #135; env takes precedence over the config file).
+
+For local launchers, `runner/runner.env` is a separate gitignored file that
+contains only `KAOIRO_RUNNER_TOKEN=<64 lowercase hex>`. `scripts/dev.sh` and
+`scripts/dogfood.sh` create it with mode 0600 when absent and append its pair
+to the server list for the configured host; a preset environment token wins
+after validation.
 
 ## Codex backend
 

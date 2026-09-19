@@ -49,68 +49,15 @@ Moved to [Network and login runbook](../operations/network-and-login.md#16-confi
 
 ## 2. Deploy runners (multiple hosts)
 
-Distribution currently uses tarballs (issue #70, revised 2026-07-25 in
-[ADR-0018](../adr/0018-runner-distribution.md)); expand one on each agent host.
-The full procedure and service setup (systemd user unit / launchd LaunchAgent)
-are canonical in [runner/README.md](../../runner/README.md); this section covers
-only points specific to multi-host deployment.
-
-```sh
-# ビルドホスト(1 台)で対象アーキテクチャごとに生成
-./scripts/build-runner-tarball.sh --target linux-x64
-./scripts/build-runner-tarball.sh --target darwin-arm64
-
-# 各エージェントホストへ転送し、release として install する
-# (展開先は <install-root>/releases/<rev>/、ADR-0018 2026-08-16 改訂)
-./kaoiro-runner-install.sh kaoiro-runner-<rev>-linux-x64.tar.gz
-./kaoiro-runner-switch.sh <release-id>
-```
-
-The install / switch scripts are in the package's `deploy/`. For the first
-installation, expand the archive once and run from there
-(`tar xzf ... && cd ... && ./deploy/kaoiro-runner-install.sh ../<archive>`).
-Afterward use `<install-root>/current/deploy/`. Section 4.6 is canonical for
-layout, updates, and rollback.
+Moved to [Runner install and distribution](../operations/runner-install.md).
 
 ### `runner.config.json` example (`wss://` required)
 
-For prod deployments through nginx, `server_url` must be `wss://` (`ws://`
-direct connections receive 301 under the 1.4 constraint). Only the direct VPN
-deployment (1.5) uses `ws://<PHX_HOST>:<PORT>/runner`. Make `host_id` unique per
-host: the server's `HostRegistry` registers by host ID, so duplicates overwrite
-one host with the other.
-
-```json
-{
-  "host_id": "lab-pc-1",
-  "server_url": "wss://kaoiro.example.com/runner",
-  "cwd_allowlist": ["/home/agent/repos"],
-  "capabilities": ["claude-code", "codex", "antigravity"]
-}
-```
-
-Set `KAOIRO_RUNNER_TOKEN=<token issued in 1.1>` in `runner.env` (pair it with
-`<host_id>:<token>` in server-side `KAOIRO_RUNNER_TOKENS`) and run `chmod 600`.
-Override `server_url` with `KAOIRO_RUNNER_SERVER_URL` in `runner.env` as well
-(issue #135; env takes precedence over the config file).
-
-For local launchers, `runner/runner.env` is a separate gitignored file that
-contains only `KAOIRO_RUNNER_TOKEN=<64 lowercase hex>`. `scripts/dev.sh` and
-`scripts/dogfood.sh` create it with mode 0600 when absent and append its pair
-to the server list for the configured host; a preset environment token wins
-after validation.
+Moved to [Runner configuration](../reference/configuration/runner.md#runnerconfigjson-example-wss-required).
 
 ### Run as a service
 
-Templates for systemd user units (Linux) and launchd LaunchAgents (macOS) ship
-in `runner/deploy/`. See the “Run as a service” section of
-[runner/README.md](../../runner/README.md) for installation, exit codes, and
-troubleshooting. In the release profile set `@@DEPLOY_DIR@@` to
-`<install-root>/current/deploy`; starting the unit through the symlink is what
-makes switching atomic. **Restarting a runner (including service restart) stops
-all wrappers beneath it** (`supervisor.stopAll()` on SIGTERM), so
-`systemctl --user restart` / `launchctl kickstart -k` with active agents
-disconnects every agent on that host.
+Moved to [Runner install and distribution](../operations/runner-install.md#run-as-a-service).
 
 ## 3. Connectivity checks
 
@@ -224,12 +171,4 @@ Moved to [Deployment troubleshooting](../operations/deployment-troubleshooting.m
 
 ## See Also
 
-- [auth-and-authz](../architecture/security-boundaries.md) — details of unset behavior for the three tokens
-- [setup-wizards](setup-wizards.md) — interactive wizard automating env / config
-  generation for **initial deployment**; section 4 updates are out of scope
-  (automation in #218 / #219 / #220)
-- [runner/README.md](../../runner/README.md) — full service and tarball-distribution guide
-- [server/README.md](../../server/README.md) — local development and Docker basics
-- [threat-model](../architecture/security-threat-model.md) — risk assessment for dev fallback / unset tokens
-- [docs/operations/production.md](../operations/production.md) — Codex
-  `codex.backend` selection and its rollback procedure, not covered here
+Moved to [Multi-host deployment architecture](../architecture/deployment.md#see-also).

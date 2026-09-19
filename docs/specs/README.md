@@ -28,7 +28,7 @@ Feature specifications, organized by topic. Each file has `status` and
 | [threat-model](../architecture/security-threat-model.md) | accepted | Threats to bidirectional routing and their mitigations |
 | [auth-and-authz](../architecture/security-boundaries.md) | accepted | Current map of authentication and authorization boundaries for each node. Starting point for the pre-OSS-release audit (private Gitea issue 91) |
 | [setup-wizards](setup-wizards.md) | accepted | Configuration / env generation wizards (runner config and server .env) |
-| [deployment](deployment.md) | accepted | Multi-host deployment guide (nginx, env inventory, DETS paths, and wss constraints) |
+| [deployment](../architecture/deployment.md) | accepted | Why deployment is shaped as one server plus any number of runner hosts behind nginx, and the stop-boundary constraint an in-place build imposes on checkout-direct hosts |
 | [agent-operations](agent-operations.md) | accepted | Operating rules for multiple agents working concurrently in the same work tree (implementation and director sides). Engine-independent and referenced by both CLAUDE.md and AGENTS.md |
 | [non-goals](../architecture/scope.md) | accepted | Out of scope |
 | [glossary](../reference/glossary.md) | accepted | Glossary |

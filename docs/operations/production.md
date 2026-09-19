@@ -141,9 +141,8 @@ production (issue #242).
 
 Stuck? → the per-script manual path (install/switch + systemd/launchd by
 hand), exit codes, and log locations are in
-[runner/README.md](../../runner/README.md) "常駐化"; deployment.md
-[2](../specs/deployment.md#2-deploy-runners-multiple-hosts) for the
-multi-host specifics.
+[runner/README.md](../../runner/README.md) "常駐化"; [runner install
+runbook](runner-install.md) for the multi-host specifics.
 
 ## 3. Verify
 
