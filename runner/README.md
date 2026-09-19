@@ -115,9 +115,11 @@ unit/plist の内容が変わっていなければ何もしない。稼働中サ
 対象外、`kaoiro-runner-bootstrap.sh` は初回専用)。
 
 > **既に稼働している配備を新しいバージョンへ更新する手順**は
-> [docs/specs/deployment.md](../docs/specs/deployment.md) の「既存配備の更新」が
-> 正本。本節は初回の設置手順のみを扱う。更新は停止順序・DETS バックアップ・
-> 失敗時の復旧が絡むため、ここには書かない。
+> [docs/operations/server-update-and-rollback.md](../docs/operations/server-update-and-rollback.md)
+> (server 側) と
+> [docs/operations/runner-update-and-rollback.md](../docs/operations/runner-update-and-rollback.md)
+> (runner 側) が正本。本節は初回の設置手順のみを扱う。更新は停止順序・DETS
+> バックアップ・失敗時の復旧が絡むため、ここには書かない。
 
 | ファイル | 用途 |
 |---|---|
@@ -190,7 +192,8 @@ profile では build も展開も `releases/<rev>/` の中で完結し、稼働�
 release には一切触れない。
 
 移行手順・更新手順・rollback は
-[docs/specs/deployment.md](../docs/specs/deployment.md) の 4.6 が正本。
+[docs/operations/runner-update-and-rollback.md](../docs/operations/runner-update-and-rollback.md)
+が正本。
 
 ### Linux(systemd user unit)
 

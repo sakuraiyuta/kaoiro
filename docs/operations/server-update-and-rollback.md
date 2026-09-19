@@ -14,8 +14,8 @@ CLI config keys and transaction states are documented in full in
 [Server deploy configuration](../reference/configuration/server-deploy.md);
 build-identity provenance verification is in
 [Transactions and identity](../reference/deployment/transactions-and-identity.md).
-This page covers the server side; the interleaved runner-side steps stay in
-[deployment.md](../specs/deployment.md) until U21 gives them their own page.
+This page covers the server side; the interleaved runner-side steps are in
+[Runner update and rollback](../operations/runner-update-and-rollback.md).
 
 ## 3. Connectivity checks
 
@@ -316,9 +316,9 @@ resume with --transaction <transaction-id> --target <target-sha> --maintenance-a
 once the operator has approved the maintenance window
 ```
 
-**(3) Stop the runner** -- the runner-side procedure stays in [deployment.md § 4.3](../specs/deployment.md#43-update-procedure) until U21 gives it its own page.
+**(3) Stop the runner** -- see [Runner update and rollback](../operations/runner-update-and-rollback.md#46-migrate-to-the-release-profile-and-update-thereafter-issue-219).
 
-**(4) Advance local to the target and build** -- the runner-side procedure stays in [deployment.md § 4.3](../specs/deployment.md#43-update-procedure) until U21 gives it its own page.
+**(4) Advance local to the target and build** -- see [Runner update and rollback](../operations/runner-update-and-rollback.md#46-migrate-to-the-release-profile-and-update-thereafter-issue-219).
 
 **(5) Stop the server and determine whether it stopped cleanly (automatic)**
 
@@ -444,7 +444,7 @@ prunes old transactions (`keep_generations`/`retention_days`). Any failure
 from here on cannot resume via `--transaction` — see 4.4 (3) once a manifest
 exists (it does, written in (5-c) before this step runs).
 
-**(7) Start the runner** -- the runner-side procedure stays in [deployment.md § 4.3](../specs/deployment.md#43-update-procedure) until U21 gives it its own page.
+**(7) Start the runner** -- see [Runner update and rollback](../operations/runner-update-and-rollback.md#46-migrate-to-the-release-profile-and-update-thereafter-issue-219).
 
 For the `status` command's output fields, the transaction phase table, and the container-branch classification, see [Server deploy configuration](../reference/configuration/server-deploy.md#transaction-states-and-status).
 
@@ -516,7 +516,7 @@ got — read the failing command's own error message, which names the phase.
   --confirm-restore` — is the supported recovery once you decide not to keep
   retrying forward.
 
-**(2) Runner build failed** -- the runner-side recovery procedure stays in [deployment.md § 4.4](../specs/deployment.md#44-failure-handling) until U21 gives it its own page.
+**(2) Runner build failed** -- see [Runner update and rollback](../operations/runner-update-and-rollback.md#46-migrate-to-the-release-profile-and-update-thereafter-issue-219).
 
 **(3) Roll back a committed transaction** (4.3 step 6)
 
