@@ -86,6 +86,10 @@ Engine identifier attached to `state_change`:
 identity. **Never infer feature availability from the engine name** ([ADR-0034](../../adr/0034-session-capabilities-advertisement.md) F3); use
 `ext.session_capabilities` for add/remove decisions.
 
+## Constraints
+
+- MUST: `agent_id` uses `[A-Za-z0-9._-]`, 1–256 characters.
+
 ## Related protocol topics
 
 - [Message topology](../../architecture/message-topology.md).

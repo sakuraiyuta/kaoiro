@@ -52,6 +52,9 @@ report peers that have been inactive for a long time.
 are not wrapper measurements and are independent of envelope `ts` (the
 wrapper host clock), avoiding cross-host clock skew in decisions.
 
+- MUST (issue #167): Closed conversations are inactive in `peer_index` and in
+  disconnect unresponsive notices.
+
 ##### Directory-only entry (issue #259)
 
 The `agents` array in a `directory_request` response merges live entries built

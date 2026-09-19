@@ -66,6 +66,8 @@ preferentially cutting off **slow but valid** conversations such as xhigh-effort
 reviews. This reversal of selectivity was measured on 2026-08-11. See issue #211
 for details and rationale.
 
+- MUST: Do not count server-synthesized error notices in turns or tokens.
+
 ### Memory-reclamation TTL (config, not a hard limit)
 
 These GC-only settings reclaim memory from conversation entries; they are not hard

@@ -176,6 +176,10 @@ client failures / instructions that never arrive.
 - MUST: `attach_open` / `attach_chunk` / `attach_close` / `attach_rejected`
   / `instruction_rejected` are delivered **to operators only**
   ([ADR-0021](../../adr/0021-role-information-disclosure-policy.md)).
+- MUST: file-upload operations (`attach_open` / `attach_chunk` / `attach_close` /
+  `attach_rejected` / `instruction_rejected` / `instruction.attachment_ids`) are **operator-only**
+  for both delivery and acceptance ([ADR-0021](../../adr/0021-role-information-disclosure-policy.md) /
+  [ADR-0025](../../adr/0025-file-upload-wire-and-wrapper-rendering.md)).
 - MUST: Transport retains [the single Phoenix Channels route](../../adr/0009-client-transport.md)
   (do not add a separate socket / HTTP POST upload).
 - MUST: Add extensions without changing the protocol `version`

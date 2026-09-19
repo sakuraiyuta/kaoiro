@@ -221,6 +221,8 @@ or revoked credentials return 401; viewers return 403.
 - MUST: Put `require_operator/1` first in the `with` for every new operator-only
   inbound event.
 
+- MUST: `log` / `result` envelopes are delivered only to operator role ([ADR-0012](../../adr/0012-response-display-and-dashboard-scope.md)).
+
 ### Connection authentication (v0 settled, [ADR-0011](../../adr/0011-phase3-reliability-and-auth.md))
 
 TLS terminates at the reverse proxy (decision 2026-06-11; Phoenix uses plain HTTP).

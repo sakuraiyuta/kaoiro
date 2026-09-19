@@ -102,3 +102,5 @@ child and the wrapper ([ADR-0057](../../adr/0057-antigravity-adapter.md) F4).
   Distinguish a mutable selected policy from an immutable ceiling. An engine
   whose gate is enforced only by the wrapper must fail closed on a verification
   failure — there is no engine-side backstop to fall back on.
+- MUST: permission waits are **unlimited** by default, matching the SDK (Promise remains
+  pending). Finite timeout is wrapper opt-in and then fails closed with deny ([ADR-0022](../../adr/0022-pending-permission-authoritative-source.md), issue #60).

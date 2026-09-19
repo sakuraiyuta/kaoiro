@@ -13,7 +13,7 @@ this page specifies the corresponding semantics.
 
 ### envelope.type: "inter_agent_message"
 
-The common envelope outer shape in [protocol.md](../../specs/protocol.md)
+The common envelope outer shape in [protocol.md](../protocol/envelope.md#terms-and-hierarchy)
 (`version`/`agent_id`/`session_id?`/`persona`/`display_name?`/`ts`/`seq`/`type`/`state`/`payload`/`ext`)
 is inherited unchanged. `agent_id` is the sending agent and `state` remains the
 current state of that wrapper (normally `tool_running`).
@@ -88,6 +88,18 @@ Covered cases:
 - Debate: `propose` → `accept` / `reject` → the other side proposes an alternative
   → both owner sides `accept` + `done` on the final `propose`
 - No conclusion: `escalate-to-user` at any point, or automatic cutoff on a hard-limit breach
+
+## Constraints
+
+- MUST: The server must not interpret payload semantics (`kind` / `body` /
+  `meta`); it may read only `to` for routing. Carve-out (issue #127): validate
+  `payload.error` structurally (`code` non-empty string, `message` string) but
+  do not interpret values. The server may synthesize `reconnecting` or
+  `disconnected` envelopes on wrapper disconnect and an error-free `reconnected`
+  inform after exact-token planned recovery; these are minimal structural hooks
+  for observability, not semantic interpretation.
+- SHOULD: Truncate `body` at 16 KB on the wrapper like other protocol fields and
+  set `meta.truncated=true`.
 
 ### Reserved `envelope.type` and version
 

@@ -111,6 +111,8 @@ ledger or either pane. `peer_reconnecting_capacity` is a terminal tool error:
 the message was not accepted and no close notice was scheduled; fixed
 wording asks the sender to retry later with the same conversation_id.
 
+- MUST: Reject self-routing where `payload.to == agent_id`.
+
 ## Related topics
 
 - [Message fields](messages.md).
