@@ -260,3 +260,5 @@ their new picker alone does not correct their legacy fallback.
 - [Permission control (two-axis model)](../../architecture/security-boundaries.md#permission-control-two-axis-model).
 - [Model and effort state](model-effort.md).
 - [Session capabilities](capabilities.md).
+- [Session lifecycle](session-lifecycle.md).
+- [State machine](state-machine.md).

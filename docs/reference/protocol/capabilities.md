@@ -72,3 +72,5 @@ cannot represent.
 - [Model and effort state](model-effort.md).
 - [Permission requests](permission-requests.md).
 - [Extension architecture](../../architecture/extensions.md).
+- [Session lifecycle](session-lifecycle.md).
+- [State machine](state-machine.md).

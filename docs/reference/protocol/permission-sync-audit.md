@@ -217,3 +217,5 @@ not a guaranteed durable security journal.
 - [Message topology](../../architecture/message-topology.md).
 - [Model and effort state](model-effort.md).
 - [Session capabilities](capabilities.md).
+- [Session lifecycle](session-lifecycle.md).
+- [State machine](state-machine.md).

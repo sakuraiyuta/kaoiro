@@ -2,7 +2,7 @@
 title: Architecture
 description: A three-layer structure of wrapper (TS/engine SDK), server (Elixir/Phoenix), and client (Web), with a host-resident runner, and its data flow.
 status: accepted
-last_updated: 2026-09-18
+last_updated: 2026-09-19
 related: [plugin-model, protocol]
 ---
 <!-- markdownlint-disable MD033 -->
@@ -176,6 +176,21 @@ authentication is enabled only when `KAOIRO_CLIENT_TOKENS` is configured. See
    update.
 6. Client instructions and approvals take the reverse route to the wrapper
    (SDK calls).
+
+## Session ownership and continuity
+
+Rolling deploy proceeds **runner/wrapper first, server second**. Before the new server emits
+restart `request_id` and `peer_reconnecting`, the runner must replace the wrapper config's
+restart token and the wrapper must understand structured peer-error guidance. Reversing the
+order leaves IA to that agent bounced as `peer_reconnecting` for up to 60 seconds while the
+old runner cannot carry the transition token into relaunch and the old wrapper cannot clear
+the receiver's reconnecting state.
+
+Wrapper restoration (continuing context after process loss) and recalling an existing session
+use one mechanism: **resume** with an existing `session_id` ([ADR-0014](../adr/0014-session-resume-and-restore.md)).
+
+See [Session lifecycle](../reference/protocol/session-lifecycle.md) for the planned
+wrapper-cycle contract and the resume/restore wire path.
 
 ## Constraints
 

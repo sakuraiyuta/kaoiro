@@ -116,4 +116,6 @@ after resume.
 - [Envelope contract](envelope.md).
 - [Session capabilities](capabilities.md).
 - [Permission state](permission-state.md).
+- [Session lifecycle](session-lifecycle.md).
+- [State machine](state-machine.md).
 - [Message topology](../../architecture/message-topology.md).

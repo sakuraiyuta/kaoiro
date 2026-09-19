@@ -39,3 +39,6 @@ For the envelope's terms, outer frame keys, and wire shape, see
 - [Model and effort state](../reference/protocol/model-effort.md).
 - [Session capabilities](../reference/protocol/capabilities.md).
 - [Session capability advertisement](extensions.md#session-capability-advertisement).
+- [Session lifecycle](../reference/protocol/session-lifecycle.md).
+- [State machine](../reference/protocol/state-machine.md).
+- [Session ownership and continuity](system-overview.md#session-ownership-and-continuity).

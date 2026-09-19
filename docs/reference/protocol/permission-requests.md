@@ -102,3 +102,5 @@ serialize their exclusion: neither can pass a check and commit across the other.
 - [Message topology](../../architecture/message-topology.md).
 - [Model and effort state](model-effort.md).
 - [Session capabilities](capabilities.md).
+- [Session lifecycle](session-lifecycle.md).
+- [State machine](state-machine.md).
