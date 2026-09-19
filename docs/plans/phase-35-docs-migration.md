@@ -50,7 +50,7 @@ implementation — the emphasis marks; all three are walked at every close.
 | U16 | peer errors / synthetic notices | perm impl | ✅ |
 | U17 | session tools (compact / reset) | perm impl | ✅ |
 | U18 | server install / network / login / env | ops | ✅ |
-| U19 | runner install / config / wizard | ops impl | ⏳ |
+| U19 | runner install / config / wizard | ops impl | ✅ |
 | U20 | server update / rollback / transactions | ops | ✅ (runner steps of 4.3 / 4.4 stay for U21; production.md kept as the CLI cheat-sheet) |
 | U21 | runner update / rollback / artifacts / service verification | ops | ✅ |
 | U22 | deployment troubleshooting | ops | ✅ |
