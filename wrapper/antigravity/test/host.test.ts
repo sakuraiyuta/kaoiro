@@ -1683,6 +1683,55 @@ if (args[0] === "models") {
       expect(host.statusSnapshot()).toMatchObject({ pending_model: "model-a" });
       host.close();
     });
+
+    it("interrupt() called from inside a successful turn's own onTurnEnd is an idle interrupt, not attributed to the turn that just finished (momo round-3 M4, kuroe design ruling B)", async () => {
+      const { host, calls, turnEnds, interruptRequests, interruptSettlements } = hostHarness({
+        onTurnEnd: (info) => {
+          if (info.turnToken === "turn-1") void host.interrupt();
+        },
+      });
+      await host.send("first", undefined, [], "turn-1");
+      await waitFor(() => calls.length === 1);
+      calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
+      calls[0]!.child.finish();
+      await waitFor(() => turnEnds.some((end) => end.turnToken === "turn-1"));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(interruptRequests).toEqual([]);
+      expect(interruptSettlements).toEqual([]);
+      expect(host.state).toBe("waiting_input");
+      // No stale #interruptRecord leaked into the next turn: it runs to a
+      // genuinely normal completion, not an interrupted one.
+      await host.send("second", undefined, [], "turn-2");
+      await waitFor(() => calls.length === 2);
+      calls[1]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
+      calls[1]!.child.finish();
+      await waitFor(() => turnEnds.some((end) => end.turnToken === "turn-2"));
+      const turn2End = turnEnds.find((end) => end.turnToken === "turn-2")!;
+      expect(turn2End.error).toBeUndefined();
+      expect(turn2End.cancellation).toBeUndefined();
+      expect(interruptRequests).toEqual([]);
+      expect(interruptSettlements).toEqual([]);
+      host.close();
+    });
+
+    it("interrupt() called after a watchdog fail-stop does not misattribute to the turn that was running (M4 fail-stop-safe cleanup, ao)", async () => {
+      // The M4 cleanup (above) must run even when `!this.#watchdogFailStopped`
+      // is false, so this turn's `#currentTurnToken` cannot survive the
+      // fail-stop and be picked up by a LATER `interrupt()` call -- e.g. an
+      // operator request that arrives after the fail-stop notification.
+      const { host, calls, interruptRequests, interruptSettlements } = hostHarness();
+      await host.send("hello", undefined, [], "turn-1");
+      await waitFor(() => calls.length === 1);
+      host.failStopForWatchdogAttributionUnknown();
+      // `failStopForWatchdogAttributionUnknown` only SIGTERMs the child; the
+      // turn's finally does not run (and so cannot clear `#currentTurnToken`)
+      // until the child actually reports its exit.
+      calls[0]!.child.finish();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      await host.interrupt();
+      expect(interruptRequests).toEqual([]);
+      expect(interruptSettlements).toEqual([]);
+    });
   });
 
   describe("tool prompts and deadlines (issue #350)", () => {

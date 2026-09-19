@@ -908,6 +908,10 @@ export class AntigravityHost implements EngineAdapter {
     // landing in that pre-spawn window would then roll back the wrong model.
     this.#currentAttemptedModel = null;
     let error: InterAgentErrorClassifyInput | undefined;
+    // issue #371 M4: declared here (not inside the settlement block below)
+    // because the onTurnEnd call that reads it now sits outside that
+    // block's scope -- see the M4 comment further down.
+    let cancellation: { kind: "interrupt"; reason: "interrupted" } | undefined;
     try {
       error = await this.#runTurn(turn.text, generation, turnToken, turn.conversationIds ?? []);
     } catch (caught) {
@@ -932,7 +936,6 @@ export class AntigravityHost implements EngineAdapter {
         // already withholds — the host is tearing down, not continuing.
         const normalAdmission = !this.#closed;
         const interrupted = normalAdmission && this.#interruptRecord?.turnToken === turnToken;
-        let cancellation: { kind: "interrupt"; reason: "interrupted" } | undefined;
         // Settle as "interrupted" only when THIS invariant is what settles
         // the turn. A branch inside `#runTurn` may have already applied its
         // own terminal transition for an unrelated reason (e.g. customization
@@ -955,21 +958,28 @@ export class AntigravityHost implements EngineAdapter {
               : Math.max(0, Date.parse(this.#now()) - Date.parse(requestedAt)),
           });
         }
-        if (this.#interruptRecord?.turnToken === turnToken) this.#interruptRecord = null;
-        this.#options.onTurnBoundary?.({ turnToken });
-        this.#options.onTurnEnd?.({
-          turnToken,
-          conversationIds: turn.conversationIds ?? [],
-          ...(error === undefined ? {} : { error }),
-          ...(cancellation === undefined ? {} : { cancellation }),
-        });
       }
-      // issue #371 M1 (momo round-1 review): `onTurnBoundary`/`onTurnEnd`
-      // above run synchronously, and a callback that calls `send()`
-      // re-enters `#drainTurns`, which sets `#currentTurnToken` /
-      // `#currentAttemptedModel` for the NEXT turn before this frame
-      // resumes here. Clear only when the fields still identify THIS
-      // turn -- mirrors the `#activeTurnToken` guard just below.
+      // issue #371 M4 (kuroe design ruling B, momo round-3 review): a
+      // turn's identity ends the moment its finally frame reaches this
+      // point, not after the external onTurnBoundary/onTurnEnd callbacks
+      // below run. Clearing this turn's bookkeeping BEFORE those
+      // callbacks (rather than after, as M1 originally had it) makes one
+      // mechanism satisfy both M1 and M4: a re-entrant `send()` from
+      // inside a callback cannot clobber the NEW turn's
+      // `#currentTurnToken` / `#currentAttemptedModel` (this turn's own
+      // copies are already cleared, so the guard below is moot for it),
+      // and an `interrupt()` called from inside a callback sees
+      // `#currentTurnToken` already null, so idle-interrupt's "no current
+      // turn -> no record" contract applies instead of misattributing the
+      // interrupt to the turn that just finished. `onTurnBoundary`/
+      // `onTurnEnd` below read the turn's identity from the local
+      // `turnToken` parameter, never these fields, so clearing first
+      // changes nothing they observe. This runs UNCONDITIONALLY (outside
+      // the `!this.#watchdogFailStopped` guard above): a fail-stop must
+      // not leave this turn's bookkeeping stale either, or a later
+      // `interrupt()` (e.g. an operator request arriving after fail-stop)
+      // would misattribute to a turn that already ended for a different
+      // reason.
       if (this.#currentTurnToken === turnToken) {
         this.#currentTurnToken = null;
         this.#currentAttemptedModel = null;
@@ -977,6 +987,16 @@ export class AntigravityHost implements EngineAdapter {
       if (this.#activeTurnToken === turnToken) {
         this.#activeTurnToken = null;
         this.#activeTurnConversationIds = [];
+      }
+      if (this.#interruptRecord?.turnToken === turnToken) this.#interruptRecord = null;
+      if (!this.#watchdogFailStopped) {
+        this.#options.onTurnBoundary?.({ turnToken });
+        this.#options.onTurnEnd?.({
+          turnToken,
+          conversationIds: turn.conversationIds ?? [],
+          ...(error === undefined ? {} : { error }),
+          ...(cancellation === undefined ? {} : { cancellation }),
+        });
       }
       void this.#drainTurns();
     }
