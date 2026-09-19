@@ -13,7 +13,7 @@ related: [architecture, plugin-model, claude-events, personas, security-threat-m
 Define the **outer envelope** for common events exchanged among wrapper, server,
 and client. This is a **living specification** whose details are refined by
 phase rather than frozen all at once. The insertion boundary is described in
-[plugin-model](plugin-model.md).
+[extensions](../architecture/extensions.md).
 
 ## Definition
 
@@ -1591,7 +1591,7 @@ None; protocol reliability was settled by [ADR-0011](../adr/0011-phase3-reliabil
 ## See Also
 
 - Related specs: [architecture](../architecture/system-overview.md),
-  [plugin-model](plugin-model.md), [personas](personas.md),
+  [extensions](../architecture/extensions.md), [personas](personas.md),
   [subagent-tasks](subagent-tasks.md),
   [file-upload](file-upload.md)
 - ADRs: [0001](../adr/0001-agent-sdk-integration.md),

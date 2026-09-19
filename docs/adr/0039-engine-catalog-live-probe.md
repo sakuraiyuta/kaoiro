@@ -5,7 +5,7 @@ date: 2026-07-15
 opened: 2026-07-15
 supersedes: []
 superseded_by: null
-related_specs: [protocol, plugin-model]
+related_specs: [protocol, claude-model-catalog]
 related_adrs: [23, 32, 35, 37, 40]
 ---
 
@@ -338,7 +338,7 @@ displayed value differ from the launched result. Do not stop passing it through:
 changing the row shape by path would force consumers to branch on anything other
 than “absent = unknown”. Make display a separate UX decision and externalise it to
 Gitea [issue #166](https://github.com/sakuraiyuta/kaoiro/issues/166) (details are in
-the relevant section of [plugin-model](../specs/plugin-model.md)).
+the relevant section of [Claude model catalog](../reference/engines/claude-model-catalog.md)).
 
 ## Implementation
 

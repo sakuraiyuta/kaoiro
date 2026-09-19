@@ -159,7 +159,7 @@ configuration is persistent.
 - Related specs: [protocol](protocol.md) (common envelope foundation and the
   `external_message` type extension),
   [protocol-inter-agent](protocol-inter-agent.md) (the source superset and
-  routing/quota mechanisms), [plugin-model](plugin-model.md) (Tier B filter
+  routing/quota mechanisms), [extensions](../architecture/extensions.md) (Tier B filter
   insertion point), and [threat-model](../architecture/security-threat-model.md) (operator-only delivery
   and untrusted input)
 - Related plans:

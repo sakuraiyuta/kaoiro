@@ -55,7 +55,7 @@ None (resolved by [ADR-0010](../adr/0010-protocol-precisification.md)).
 - Specs: [protocol](../specs/protocol.md),
   [agent-sdk-events](../reference/engines/claude-events.md),
   [architecture](../architecture/system-overview.md),
-  [plugin-model](../specs/plugin-model.md)
+  [extensions](../architecture/extensions.md)
 - ADRs: [0001](../adr/0001-agent-sdk-integration.md),
   [0003](../adr/0003-persona-identity-persistence.md)
 - Previous: [phase-0-project-setup](phase-0-project-setup.md)

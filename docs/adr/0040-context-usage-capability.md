@@ -5,7 +5,7 @@ date: 2026-07-16
 opened: 2026-07-16
 supersedes: []
 superseded_by: null
-related_specs: [protocol, plugin-model, claude-events, codex-exec-events]
+related_specs: [protocol, extensions, claude-events, codex-exec-events]
 related_adrs: [21, 22, 32, 34, 35, 37, 39]
 ---
 
@@ -125,7 +125,7 @@ Do not use the engine name (`ext.engine`) in context display decisions in UI cod
 - Add `supports_context_usage` to the session_capabilities section at
   `docs/specs/protocol.md` L134-145.
 - Add Codex's explicit false stamp and a reference to ADR-0040 at
-  `docs/specs/plugin-model.md` L32-37.
+  `docs/architecture/extensions.md`.
 - Withdraw “reflect usage (tokens) into ext” from `docs/specs/codex-sdk-events.md`
   L48 (description of the `usage` field) and L84 (`turn.completed` → state
   derivation), and switch to advertising the capability.
@@ -187,6 +187,6 @@ best-effort and leave the UI stuck at “loading” (M-A, 藤 review turn-3).
 - ADR-0034 F3: principle of not using engine names to determine feature availability
 - ADR-0037 F6: precedent for the bounded retry + persistent state flag pattern
 - Wire spec: [protocol](../specs/protocol.md) L134-145
-- Plugin routing: [plugin-model](../specs/plugin-model.md) L32-37
+- Plugin routing: [extensions](../architecture/extensions.md)
 - Codex event contract: [codex-sdk-events](../reference/engines/codex-exec-events.md) L48, 84
 - Implementation plan: [phase-21-context-usage-capability](../plans/phase-21-context-usage-capability.md)

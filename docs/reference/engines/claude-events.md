@@ -13,7 +13,7 @@ related: [protocol, plugin-model, architecture, subagent-tasks]
 
 Establishes the **actual message/callback specification** of the TypeScript
 Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`) used by the Claude Code
-adapter ([plugin-model](../../specs/plugin-model.md)), and defines its derivation to
+adapter ([adapter contract](adapter-contract.md)), and defines its derivation to
 kaoiro state ([protocol](../../specs/protocol.md)). Verified against the official
 documentation (code.claude.com / platform.claude.com; 2026-06).
 
@@ -321,7 +321,7 @@ None. The common-envelope type/payload design is settled in
 
 ## See Also
 
-- Related specs: [protocol](../../specs/protocol.md), [plugin-model](../../specs/plugin-model.md),
+- Related specs: [protocol](../../specs/protocol.md), [extensions](../../architecture/extensions.md),
   [architecture](../../architecture/system-overview.md), [subagent-tasks](../../specs/subagent-tasks.md)
 - ADRs: [0001](../../adr/0001-agent-sdk-integration.md),
   [0019](../../adr/0019-subagent-workflow-entity-and-task-envelope.md)

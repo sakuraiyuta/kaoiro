@@ -5,7 +5,7 @@ date: 2026-06-16
 opened: 2026-06-16
 supersedes: []
 superseded_by: null
-related_specs: [plugin-model, architecture]
+related_specs: [extensions, architecture]
 related_adrs: [1, 18, 28, 32]
 ---
 
@@ -26,7 +26,7 @@ Note: The “new wrapper/pnpm-workspace.yaml” proposed when this ADR was draft
 
 ## Context
 
-The wrapper is currently a single package, `@kaoiro/wrapper`. In the future we want to add things besides Claude Code (Codex, and further **non-AI entities** such as DB and host-resource monitors). The ultimate goal is to “remotely manage diverse entities and visualise their state as characters.” [plugin-model](../specs/plugin-model.md) already separates adapters (per agent) from filters (agent-independent), and an adapter abstraction also exists in code in `wrapper/src/adapter.ts`. This ADR brings that structure down into physical package structure.
+The wrapper is currently a single package, `@kaoiro/wrapper`. In the future we want to add things besides Claude Code (Codex, and further **non-AI entities** such as DB and host-resource monitors). The ultimate goal is to “remotely manage diverse entities and visualise their state as characters.” [extensions](../architecture/extensions.md) already separates adapters (per agent) from filters (agent-independent), and an adapter abstraction also exists in code in `wrapper/src/adapter.ts`. This ADR brings that structure down into physical package structure.
 
 ## Decision
 
@@ -75,7 +75,7 @@ Package boundaries and responsibilities at the time of materialisation:
 
 ## Related
 
-- spec: [plugin-model](../specs/plugin-model.md).
+- spec: [extensions](../architecture/extensions.md).
 - Related ADR: [0001](0001-agent-sdk-integration.md); distribution is covered by [0018](0018-runner-distribution.md).
 - Unresolved: details of the core boundary, state vocabulary for non-AI entities, and package naming (at implementation time). The broader goal (management and visualisation of entities in general) will be handled separately in a future vision / spec-elicitation.
 - Origin: my-idea-brief (scratch note “split wrapper into claude-code/codex, etc.”).

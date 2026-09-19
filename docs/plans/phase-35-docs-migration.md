@@ -61,7 +61,7 @@ implementation — the emphasis marks; all three are walked at every close.
 | U27 | codex exec events / model catalog | perm impl | ✅ |
 | U28 | claude events | perm impl | ✅ |
 | U29a | entry pages: overview, system-overview, scope, glossary; folder scaffolding; this plan | ops perm impl | ✅ |
-| U29b | plugin-model split (extensions, adapter contract, claude model catalog) | impl | ⏳ |
+| U29b | plugin-model split (extensions, adapter contract, claude model catalog) | impl | ⏳ In review |
 | U30 | kept pages (personas, agent-operations): update references only | impl | ⏳ |
 | U31 | protocol-external-human provisional marker | impl | ⏳ |
 | U32 | entry page and specs residue, final | ops perm impl | ⏳ |
@@ -87,6 +87,10 @@ Writer rules: one writer per destination file; units that touch the same file
 | specs/agent-sdk-events.md | [reference/engines/claude-events.md](../reference/engines/claude-events.md) | U28 |
 | specs/persona-pack-schema.md | [reference/personas/pack-format.md](../reference/personas/pack-format.md) | U09 |
 | specs/responsive-reachability.md | [reference/ui/responsive-reachability.md](../reference/ui/responsive-reachability.md) | U23 |
+| specs/plugin-model.md (extension architecture) | [architecture/extensions.md](../architecture/extensions.md) | U29b (In review) |
+| specs/plugin-model.md (EngineAdapter contract) | [reference/engines/adapter-contract.md](../reference/engines/adapter-contract.md) | U29b (In review) |
+| specs/plugin-model.md (Claude model catalog) | [reference/engines/claude-model-catalog.md](../reference/engines/claude-model-catalog.md) | U29b (In review) |
+| specs/plugin-model.md (session capability advertisement retained) | [specs/plugin-model.md](../specs/plugin-model.md) | U03 pending |
 | specs/antigravity-cli-events.md | [architecture/antigravity-adapter.md](../architecture/antigravity-adapter.md) | U26 (In review) |
 | specs/antigravity-cli-events.md | [reference/engines/antigravity-events.md](../reference/engines/antigravity-events.md) | U26 (In review) |
 | specs/antigravity-cli-events.md | [reference/engines/antigravity-tools-permissions.md](../reference/engines/antigravity-tools-permissions.md) | U26 (In review) |

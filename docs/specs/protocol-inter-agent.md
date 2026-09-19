@@ -488,7 +488,7 @@ Moved to [Inter-agent message contract](../reference/inter-agent/messages.md#res
 
 - Related specs: [protocol](protocol.md) (common envelope foundation),
   [subagent-tasks](subagent-tasks.md) (similar reserved-type patterns),
-  [plugin-model](plugin-model.md) (future filter insertion point), and
+  [extensions](../architecture/extensions.md) (future filter insertion point), and
   [threat-model](../architecture/security-threat-model.md) (basis for operator-only delivery).
 - Related plans: [phase-8-inter-agent-messaging](../plans/phase-8-inter-agent-messaging.md)
   and [phase-27-list-agents-metadata](../plans/phase-27-list-agents-metadata.md)

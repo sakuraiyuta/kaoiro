@@ -21,7 +21,7 @@ Standardizes kaoiro domain terminology.
 | Runner | A supervisory layer, one per host, that spawns, stops, and restarts wrapper processes; registers the host; and lists sessions ([ADR-0023](../adr/0023-host-runner-architecture.md)). It does not terminate the data path. |
 | Server | The Elixir/Phoenix component that aggregates multiple wrappers and retains and distributes state. |
 | Client | A frontend that visualizes state through characters and expressions. Its implementation is a separate project; this repository includes only a reference dashboard ([ADR-0007](../adr/0007-client-separation-reference-dashboard.md)). |
-| Adapter | An agent-specific plugin for launching, translation, and state derivation ([plugin-model](../specs/plugin-model.md)). |
+| Adapter | An agent-specific plugin for launching, translation, and state derivation ([adapter contract](engines/adapter-contract.md)). |
 | Filter | An additive-processing plugin that adds properties to common events. |
 | Common event envelope | Common JSON that wraps one event. It is a metaphor for an envelope in which common metadata (the addressee) wraps the `payload` (the contents). Definitions and hierarchy: [protocol](../specs/protocol.md), “Terminology and hierarchy.” |
 | Outer frame (frame keys) | The fixed set of keys immediately below an envelope (fixed in v0). [protocol](../specs/protocol.md) |

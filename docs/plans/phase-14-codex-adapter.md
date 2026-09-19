@@ -61,7 +61,7 @@ verification + spec elicitation. The decisions are reflected in
 | 14-14 | Implement Codex-side session enumeration and resume (match `session_meta.cwd` in `~/.codex/sessions/**/rollout-*.jsonl`) | ✅ | Method finalized in ADR-0032 F8 |
 | 14-15 | Q1 verification: tone and manner reproduction test with persona × Codex adapter | ✅ | Real-hardware verification 2026-07-11. Live confirmation of two representative personas (kuroe / ao); injection uses the common path for all personas. Former open question closed |
 | 14-16 | Reflect cwd at startup on the Codex side (tracking remains best-effort; Q4 continues) | ✅ | Minimal implementation that places startup cwd in `ext.cwd` (the wrapper stamps it because thread.started has no cwd) |
-| 14-17 | Add follow-ups to plugin-model.md / architecture.md / personas.md (reflect spec changes tied to docs/plans, such as documenting F3) | ✅ | protocol.md / codex-sdk-events.md updated 2026-07-10; bundle the rest immediately before phase completion |
+| 14-17 | Add follow-ups to extensions.md / architecture.md / personas.md (reflect spec changes tied to docs/plans, such as documenting F3) | ✅ | protocol.md / codex-sdk-events.md updated 2026-07-10; bundle the rest immediately before phase completion |
 | 14-18 | Confirm all wrapper / server / dashboard / runner tests pass | ✅ | Regression health maintained in two stages: phase-13 and this phase |
 
 Status legend: ✅ done, 🟡 mostly done, ⚠ partial, ⏳ not started, ⛔ blocked.
@@ -77,6 +77,6 @@ None (all closed). Former Q1 (personality injection effectiveness) was closed by
 
 ## See Also
 
-- Specs covered: [plugin-model](../specs/plugin-model.md), [protocol](../specs/protocol.md), [personas](../specs/personas.md), [architecture](../architecture/system-overview.md), [codex-sdk-events](../reference/engines/codex-exec-events.md) (new)
+- Specs covered: [extensions](../architecture/extensions.md), [protocol](../specs/protocol.md), [personas](../specs/personas.md), [architecture](../architecture/system-overview.md), [codex-sdk-events](../reference/engines/codex-exec-events.md) (new)
 - Related ADRs: [ADR-0032](../adr/0032-codex-adapter.md) (main ADR for this phase), [ADR-0033](../adr/0033-permission-model-dual-axis.md) (dual-axis permissions), [ADR-0027](../adr/0027-askuserquestion-envelope.md) (question envelope), [ADR-0014](../adr/0014-session-resume-and-restore.md) (resume separation), [ADR-0031](../adr/0031-runner-persona-trust-mode.md) (compatibility-window pattern)
 - Previous phase: [phase-13-wrapper-multipackage-restructure](phase-13-wrapper-multipackage-restructure.md)

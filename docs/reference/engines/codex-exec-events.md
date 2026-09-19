@@ -23,7 +23,7 @@ log/result/lifecycle wire. App-server does not silently fall back to exec.
 Establishes the **actual event/callback specification** of the TypeScript Codex
 SDK used by the Codex adapter (currently `@openai/codex-sdk` 0.153.4 in
 [`pnpm-lock.yaml`](../../../pnpm-lock.yaml))
-([plugin-model](../../specs/plugin-model.md)), and defines its derivation to kaoiro state
+([adapter contract](adapter-contract.md)), and defines its derivation to kaoiro state
 ([protocol](../../specs/protocol.md)). This specification is paired with the Claude version
 in [agent-sdk-events](claude-events.md) and is converted to the common
 `AdapterEvent`.
@@ -121,7 +121,7 @@ through the MCP bridge in [ADR-0032](../../adr/0032-codex-adapter.md) F5.
 ### State derivation
 
 Derivation from Codex ThreadEvent → kaoiro state ([protocol](../../specs/protocol.md))
-passes through the common `AdapterEvent` ([plugin-model](../../specs/plugin-model.md)):
+passes through the common `AdapterEvent` ([adapter contract](adapter-contract.md)):
 
 | ThreadEvent | kaoiro state | Notes |
 |---|---|---|
@@ -301,7 +301,7 @@ engines ([ADR-0032](../../adr/0032-codex-adapter.md) F3).
 
 ## See Also
 
-- Related specs: [protocol](../../specs/protocol.md), [plugin-model](../../specs/plugin-model.md),
+- Related specs: [protocol](../../specs/protocol.md), [extensions](../../architecture/extensions.md),
   [architecture](../../architecture/system-overview.md), [agent-sdk-events](claude-events.md)
   (paired with Claude version)
 - ADR: [ADR-0032](../../adr/0032-codex-adapter.md) (introducing Codex adapter),
