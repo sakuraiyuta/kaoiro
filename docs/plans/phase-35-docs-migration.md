@@ -34,7 +34,7 @@ implementation — the emphasis marks; all three are walked at every close.
 |---|---|---|---|
 | U01 | envelope / channel index / versioning | ops perm impl | ✅ |
 | U02 | permission state / requests / sync-audit | perm impl | ✅ (rationale folded into architecture/security-boundaries.md) |
-| U03 | model-effort / capabilities | perm impl | ⏳ |
+| U03 | model-effort / capabilities | perm impl | ✅ (capability advertisement from plugin-model.md folded in) |
 | U04 | session lifecycle / state machine | ops perm impl | ⏳ |
 | U05 | display-history / IA sidecar | ops impl | ⏳ |
 | U06 | tasks / subagent visibility | impl | ⏳ |
