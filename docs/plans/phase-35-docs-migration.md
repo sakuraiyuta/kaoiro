@@ -65,7 +65,7 @@ implementation — the emphasis marks; all three are walked at every close.
 | U29b | plugin-model split (extensions, adapter contract, claude model catalog) | impl | ✅ (capability advertisement retained for U03) |
 | U30 | kept pages (personas, agent-operations): update references only | impl | ✅ |
 | U31 | protocol-external-human provisional marker | impl | ✅ |
-| U32 | entry page and specs residue, final | ops perm impl | ✅ U32a (protocol residue), U32b part 1 (entry pages); part 2 (specs/README index) pending |
+| U32 | entry page and specs residue, final | ops perm impl | ✅ (U32a protocol residue; U32b entry pages and specs index) |
 | U33 | runner development / build procedures | ops impl | ✅ |
 
 Writer rules: one writer per destination file; units that touch the same file
