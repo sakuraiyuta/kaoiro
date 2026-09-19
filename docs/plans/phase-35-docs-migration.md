@@ -52,7 +52,7 @@ implementation — the emphasis marks; all three are walked at every close.
 | U18 | server install / network / login / env | ops | ✅ |
 | U19 | runner install / config / wizard | ops impl | ⏳ |
 | U20 | server update / rollback / transactions | ops | ✅ (runner steps of 4.3 / 4.4 stay for U21; production.md kept as the CLI cheat-sheet) |
-| U21 | runner update / rollback / artifacts / service verification | ops | ⏳ |
+| U21 | runner update / rollback / artifacts / service verification | ops | ✅ |
 | U22 | deployment troubleshooting | ops | ⏳ |
 | U23 | UI design group (visual language, tokens, layout, motion) | perm | ✅ reachability (U23a); design / layout pending |
 | U24 | codex app-server architecture / reference + ADR-0058 evidence extraction | perm impl | ✅ |
