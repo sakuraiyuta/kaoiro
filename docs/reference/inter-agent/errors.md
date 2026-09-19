@@ -193,4 +193,3 @@ remains; delivery gaps outside the planned window are out of scope.
 - For asynchronous next-turn injection, include `error.code` in the injected
   text (SHOULD), preferably as `error=<code>` on the existing metadata line.
   The originating agent must be able to choose an action from the code.
-
