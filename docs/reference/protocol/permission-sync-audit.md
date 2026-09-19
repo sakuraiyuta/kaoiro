@@ -215,3 +215,5 @@ not a guaranteed durable security journal.
 - [Permission requests](permission-requests.md).
 - [Permission state](permission-state.md).
 - [Message topology](../../architecture/message-topology.md).
+- [Model and effort state](model-effort.md).
+- [Session capabilities](capabilities.md).

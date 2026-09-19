@@ -100,3 +100,5 @@ serialize their exclusion: neither can pass a check and commit across the other.
 - [Permission state](permission-state.md).
 - [Permission synchronization and audit](permission-sync-audit.md).
 - [Message topology](../../architecture/message-topology.md).
+- [Model and effort state](model-effort.md).
+- [Session capabilities](capabilities.md).

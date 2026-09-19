@@ -119,3 +119,5 @@ Client ↔ server connections use **Phoenix Channels exclusively**
 - [Permission requests](permission-requests.md).
 - [Permission state](permission-state.md).
 - [Permission synchronization and audit](permission-sync-audit.md).
+- [Model and effort state](model-effort.md).
+- [Session capabilities](capabilities.md).

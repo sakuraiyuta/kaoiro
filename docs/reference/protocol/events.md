@@ -52,3 +52,5 @@ as `DEBUG_CLAUDE_AGENT_SDK`, is outside this sink and its policy.
 - [Permission requests](permission-requests.md).
 - [Permission state](permission-state.md).
 - [Permission synchronization and audit](permission-sync-audit.md).
+- [Model and effort state](model-effort.md).
+- [Session capabilities](capabilities.md).

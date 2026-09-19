@@ -81,6 +81,24 @@ read-only `whoami`. It is a boundary preventing status fields being implemented
 twice per adapter and omitted from one; unknown fields are omitted from both
 paths.
 
+## Session capability advertisement
+
+This path communicates **session-scoped capability** (auth mode / plan tier /
+wrapper implementation differences) that an engine name cannot express to the
+UI. Do **not add** a capability-getter hook to `EngineAdapter`; each adapter
+builds `ext.session_capabilities` directly in its state-stamp path (equivalent
+to `#statusExt`) and advertises it in the envelope
+(ADR-0034 F4).
+
+- **Reason**: A capability is not a “static fact” over the session lifetime;
+  it is the composition of adapter implementation + spawn-time selection + auth
+  mode. Building it inside the adapter in sync with state reflects reality, and
+  keeps the envelope consistent as SoT (the principle in
+  [ADR-0022](../adr/0022-pending-permission-authoritative-source.md)).
+
+See [Session capabilities](../reference/protocol/capabilities.md) for the
+field contract, stamp timing, and per-engine advertised values.
+
 ## Constraints
 
 - MUST: Filters may touch only `payload` / `ext`; do not over-depend on the outer

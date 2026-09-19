@@ -36,3 +36,6 @@ For the envelope's terms, outer frame keys, and wire shape, see
 - [Permission state](../reference/protocol/permission-state.md).
 - [Permission synchronization and audit](../reference/protocol/permission-sync-audit.md).
 - [Permission control (two-axis model)](security-boundaries.md#permission-control-two-axis-model).
+- [Model and effort state](../reference/protocol/model-effort.md).
+- [Session capabilities](../reference/protocol/capabilities.md).
+- [Session capability advertisement](extensions.md#session-capability-advertisement).

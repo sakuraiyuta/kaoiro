@@ -98,15 +98,15 @@ Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh do
 
 ## Protocol documentation
 
-- Architecture and design intent: [message topology](architecture/message-topology.md), [permission control (two-axis model)](architecture/security-boundaries.md#permission-control-two-axis-model).
-- Exact contracts: [envelope](reference/protocol/envelope.md), [event types and payloads](reference/protocol/events.md), [channels and directional messages](reference/protocol/channels.md), [versioning policy](reference/protocol/versioning.md), [permission requests](reference/protocol/permission-requests.md), [permission state](reference/protocol/permission-state.md), and [permission synchronization and audit](reference/protocol/permission-sync-audit.md).
-- Remaining topics (model/effort, session lifecycle, attachments, runner control, persona delivery, authentication): [protocol entry](specs/protocol.md).
+- Architecture and design intent: [message topology](architecture/message-topology.md), [permission control (two-axis model)](architecture/security-boundaries.md#permission-control-two-axis-model), [session capability advertisement](architecture/extensions.md#session-capability-advertisement).
+- Exact contracts: [envelope](reference/protocol/envelope.md), [event types and payloads](reference/protocol/events.md), [channels and directional messages](reference/protocol/channels.md), [versioning policy](reference/protocol/versioning.md), [permission requests](reference/protocol/permission-requests.md), [permission state](reference/protocol/permission-state.md), [permission synchronization and audit](reference/protocol/permission-sync-audit.md), [model and effort state](reference/protocol/model-effort.md), and [session capabilities](reference/protocol/capabilities.md).
+- Remaining topics (session lifecycle, attachments, runner control, persona delivery, authentication): [protocol entry](specs/protocol.md).
 
 ## Codex documentation
 
 - Adapter implementation: [exec event contract](reference/engines/codex-exec-events.md) and [catalog contract](reference/engines/codex-model-catalog.md).
 - Operator model changes: [model settings](operations/codex-model-settings.md).
-- Permission recovery: [exec permission boundary](reference/engines/codex-exec-events.md#permission-no-approval-flow-exists) and the [permission protocol](specs/protocol.md).
+- Permission recovery: [exec permission boundary](reference/engines/codex-exec-events.md#permission-no-approval-flow-exists) and the [permission requests contract](reference/protocol/permission-requests.md).
 - Operational updates: [production runbook](operations/production.md).
 - Dated evidence: [exec verification](evidence/codex/exec-contract.md) and [catalog observations](evidence/codex/model-catalog.md).
 
@@ -115,7 +115,7 @@ Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh do
 - Extension architecture: [extensions](architecture/extensions.md).
 - Engine adapter contract: [adapter contract](reference/engines/adapter-contract.md).
 - Claude catalog contract: [Claude model catalog](reference/engines/claude-model-catalog.md).
-- Session capability advertisement remains in the [plugin-model stub](specs/plugin-model.md) until U03.
+- Session capability advertisement: [architecture](architecture/extensions.md#session-capability-advertisement) and [field contract](reference/protocol/capabilities.md).
 
 ## Claude documentation
 

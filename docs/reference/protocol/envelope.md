@@ -95,3 +95,5 @@ identity. **Never infer feature availability from the engine name** ([ADR-0034](
 - [Permission requests](permission-requests.md).
 - [Permission state](permission-state.md).
 - [Permission synchronization and audit](permission-sync-audit.md).
+- [Model and effort state](model-effort.md).
+- [Session capabilities](capabilities.md).

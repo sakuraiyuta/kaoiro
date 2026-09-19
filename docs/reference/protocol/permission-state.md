@@ -258,3 +258,5 @@ their new picker alone does not correct their legacy fallback.
 - [Permission requests](permission-requests.md).
 - [Permission synchronization and audit](permission-sync-audit.md).
 - [Permission control (two-axis model)](../../architecture/security-boundaries.md#permission-control-two-axis-model).
+- [Model and effort state](model-effort.md).
+- [Session capabilities](capabilities.md).
