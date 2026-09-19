@@ -65,7 +65,7 @@ implementation — the emphasis marks; all three are walked at every close.
 | U30 | kept pages (personas, agent-operations): update references only | impl | ⏳ |
 | U31 | protocol-external-human provisional marker | impl | ⏳ |
 | U32 | entry page and specs residue, final | ops perm impl | ⏳ |
-| U33 | runner development / build procedures | ops impl | ⏳ |
+| U33 | runner development / build procedures | ops impl | ✅ |
 
 Writer rules: one writer per destination file; units that touch the same file
 (ADR-0058 and the codex README for U24 / U25 / U27; the runner README for U19
