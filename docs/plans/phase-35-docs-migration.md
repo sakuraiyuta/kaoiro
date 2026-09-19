@@ -62,8 +62,8 @@ implementation — the emphasis marks; all three are walked at every close.
 | U28 | claude events | perm impl | ✅ |
 | U29a | entry pages: overview, system-overview, scope, glossary; folder scaffolding; this plan | ops perm impl | ✅ |
 | U29b | plugin-model split (extensions, adapter contract, claude model catalog) | impl | ✅ (capability advertisement retained for U03) |
-| U30 | kept pages (personas, agent-operations): update references only | impl | ⏳ |
-| U31 | protocol-external-human provisional marker | impl | ⏳ |
+| U30 | kept pages (personas, agent-operations): update references only | impl | ✅ |
+| U31 | protocol-external-human provisional marker | impl | ✅ |
 | U32 | entry page and specs residue, final | ops perm impl | ⏳ |
 | U33 | runner development / build procedures | ops impl | ✅ |
 
