@@ -604,7 +604,7 @@ Rules:
 
 Whenever a `context` measurement updates, the wrapper evaluates
 `used_percentage` and injects one notice **per context epoch** at the default
-70% threshold (a user turn through the normal instruction queue). Deduplication
+60% threshold (a user turn through the normal instruction queue). Deduplication
 is per epoch and resets at compaction or conversation reset.
 
 - **MUST**: Do not notify on an unconfirmed reading immediately after an epoch
