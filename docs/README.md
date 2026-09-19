@@ -131,9 +131,14 @@ Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh do
 
 ## Persona documentation
 
+- Design policy: [Character-design policy](specs/personas.md).
 - Pack layout and `manifest.json` contract: [Persona pack format](reference/personas/pack-format.md).
 - Design intent: [Personality-prompt injection](architecture/personality-injection.md).
 - Exact contracts: [Persona delivery](reference/protocol/persona-delivery.md), [Personality-prompt injection by engine](reference/engines/personality-injection.md), and [Personality configuration](reference/configuration/personality.md).
+
+## Contributing documentation
+
+- Multi-agent workflow rules: [Agent operations](specs/agent-operations.md).
 
 ## UI documentation
 

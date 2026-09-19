@@ -95,7 +95,7 @@ the reference dashboard's CSS-face fallback (simple expressions by state,
   through `KAOIRO_PERSONA_DIR`); the server rejects it through
   `PersonaAssets.validate_manifest/2`. It is absent from the manifest, and the
   client falls back to sprite-free rendering (CSS face; “Persona asset delivery”
-  in [protocol](protocol.md)).
+  in [protocol](../reference/protocol/persona-delivery.md#persona-asset-distribution)).
 - It is outside the MUST (Constraints below) to provide all seven state
   expression images — it is deliberately the only persona using a CSS face.
 - It appears in the kaoiro client's startup dialog as the default candidate
@@ -117,7 +117,7 @@ the reference dashboard's CSS-face fallback (simple expressions by state,
 
 The required generation target is seven states. Do not generate `disconnected`;
 the client represents it by applying grayscale (a CSS filter) to idle (the
-state-set definition is in [protocol](protocol.md); mapping implementation is
+state-set definition is in [protocol](../reference/protocol/state-machine.md#state-machine-state-set-v0-draft); mapping implementation is
 the reference dashboard's `expression.ts`). `fatigued` is an optional sprite
 modifier derived from context utilization, not a protocol state; its supporting
 images are generated in issue #163
@@ -187,7 +187,7 @@ transparent PNG, background removed with rembg `birefnet-portrait`, untracked
 by git). Manage the distribution SoT in `persona-packs/<id>/` as a persona-pack
 ZIP ([persona-pack-format](../reference/personas/pack-format.md)), create the ZIP with
 `scripts/build-persona-pack.sh`, and place it in the server import directory.
-See “Persona asset delivery” in [protocol](protocol.md) for delivery API format.
+See “Persona asset delivery” in [protocol](../reference/protocol/persona-delivery.md#persona-asset-distribution) for delivery API format.
 
 For complete reproduction parameters such as prompt text and steps, see
 `persona-packs/<id>/provenance/<state>.json` (for field definitions and import
