@@ -48,7 +48,7 @@ implementation — the emphasis marks; all three are walked at every close.
 | U14 | directory / companion tools / peer routing | impl | ✅ |
 | U15 | per-engine IA tool authorization | perm impl | ⏳ |
 | U16 | peer errors / synthetic notices | perm impl | ⏳ |
-| U17 | session tools (compact / reset) | perm impl | ⏳ |
+| U17 | session tools (compact / reset) | perm impl | In review |
 | U18 | server install / network / login / env | ops | ⏳ |
 | U19 | runner install / config / wizard | ops impl | ⏳ |
 | U20 | server update / rollback / transactions | ops | ⏳ |
@@ -126,3 +126,4 @@ Writer rules: one writer per destination file; units that touch the same file
 | specs/protocol-inter-agent.md (Channel events; Peer-directory boundary; list_agents / whoami) | [reference/inter-agent/directory.md](../reference/inter-agent/directory.md) | U14 |
 | specs/protocol-inter-agent.md (send acceptance / rejection) | [reference/inter-agent/send-and-wait.md#send-acceptance-and-rejection](../reference/inter-agent/send-and-wait.md#send-acceptance-and-rejection) | U14 |
 | specs/protocol-inter-agent.md (Destination-resolution guidance) | [contributing/peer-routing.md](../contributing/peer-routing.md) | U14 |
+| specs/protocol-inter-agent.md (Session operation tool — request_compact; Threshold notice; request_session_reset) | [reference/inter-agent/session-tools.md](../reference/inter-agent/session-tools.md) | U17 (In review) |

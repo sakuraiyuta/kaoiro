@@ -302,7 +302,7 @@ function contextNoticeText(
  *  FIXED literal — matching the `/compact` MUST just above it in the spec —
  *  so the only agent-authored text in the injected turn is `resumePrompt`
  *  itself, appended verbatim and unparsed. Two things the prefix has to
- *  state (protocol-inter-agent.md "resume_prompt の発火規約"): where the
+ *  state (docs/reference/inter-agent/session-tools.md "resume_prompt の発火規約"): where the
  *  note came from (this agent's own past self, not the operator or another
  *  agent), and that resuming is not urgent (P3 register, same as
  *  `contextNoticeText` above) — a demand to "resume immediately at full
