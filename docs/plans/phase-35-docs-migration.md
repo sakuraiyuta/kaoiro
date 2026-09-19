@@ -38,7 +38,7 @@ implementation — the emphasis marks; all three are walked at every close.
 | U04 | session lifecycle / state machine | ops perm impl | ✅ (rationale folded into architecture/system-overview.md) |
 | U05 | display-history / IA sidecar | ops impl | ⏳ |
 | U06 | tasks / subagent visibility | impl | ⏳ |
-| U07 | attachments | impl | ⏳ |
+| U07 | attachments | impl | ✅ |
 | U08 | runner control / wrapper config | ops impl | ⏳ |
 | U09 | persona delivery / injection / pack | ops impl | ✅ pack-format (U09a); delivery / injection pending |
 | U10 | security / threat model / release audit | ops perm impl | ✅ |
