@@ -42,6 +42,11 @@ regardless of TTL. The TTL (default 1h) controls only whether to â€œprobe againâ
 existing cache entries and do not call `updateRegister`, so register remains on
 its previous successful result rather than returning to bootstrap.
 
+Rebuilding the register on a Claude refresh must not change another engine's
+catalog: Codex is re-derived fresh from the current auth mode and config on
+every call, and Antigravity's live-probed catalog is threaded through
+explicitly rather than defaulting to its pinned snapshot (issue #369).
+
 (ii) uses SDK observation as its single source of truth (Phase 18-4/5/6).
 `#refreshSupportedModels()` performs an automatic bounded retry (three total,
 counting init as trial 1; `MAX_MODEL_REFRESH_RETRIES = 3`) and retries on a

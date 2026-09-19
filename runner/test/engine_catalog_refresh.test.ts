@@ -7,7 +7,7 @@ import type {
 import { ClaudeCatalogCache } from "../src/claude_catalog_cache.js";
 import { makeRefreshEngineCatalogHandler } from "../src/engine_catalog_refresh.js";
 import type { ProbeOutcome } from "@kaoiro/claude-code/probe-client";
-import type { RunnerConfig } from "../src/config.js";
+import { buildRegister, type RunnerConfig } from "../src/config.js";
 import type { CodexAuthMode } from "../src/codex-auth.js";
 import type { BuildInfo } from "../src/build_info.js";
 
@@ -15,8 +15,20 @@ const CONFIG: RunnerConfig = {
   host_id: "lab-pc-1",
   server_url: "ws://localhost:4000/runner",
   cwd_allowlist: ["/tmp/x"],
-  capabilities: ["claude-code", "codex"],
+  capabilities: ["claude-code", "codex", "antigravity"],
+  codex: {
+    extra_models: [{ value: "gpt-extra", display_name: "GPT Extra" }],
+  },
+  antigravity: {
+    extra_models: [{ value: "agy-extra", display_name: "AGY Extra" }],
+  },
 };
+
+// A live-probed Antigravity catalog entry absent from the pinned snapshot
+// (issue #369): stands in for `runner-cli.ts`'s `antigravityCatalog`.
+const ANTIGRAVITY_LIVE_CATALOG: EngineModelInfo[] = [
+  { value: "gemini-3.8-flash-high", display_name: "Gemini 3.8 Flash High" },
+];
 
 const BUILD_INFO: BuildInfo = {
   revision: "unknown",
@@ -38,6 +50,7 @@ function makeHarness(
     elapsed_ms: 12,
     source: "init",
   }),
+  getAntigravityCatalog: () => EngineModelInfo[] | undefined = () => undefined,
 ) {
   const cache = new ClaudeCatalogCache({ ttlMs: 60_000 });
   const registers: RunnerRegister[] = [];
@@ -48,6 +61,7 @@ function makeHarness(
     cache,
     getCurrentConfig: () => CONFIG,
     getCodexAuthMode: () => codexAuthMode,
+    getAntigravityCatalog,
     updateRegister: (r) => registers.push(r),
     sendCatalogResult: (r) => results.push(r),
     buildInfo: BUILD_INFO,
@@ -198,6 +212,7 @@ describe("makeRefreshEngineCatalogHandler", () => {
       cache,
       getCurrentConfig: () => CONFIG,
       getCodexAuthMode: () => "unknown",
+      getAntigravityCatalog: () => undefined,
       updateRegister: () => {},
       sendCatalogResult: (r) => results.push(r),
       buildInfo: BUILD_INFO,
@@ -216,5 +231,33 @@ describe("makeRefreshEngineCatalogHandler", () => {
     const byId = Object.fromEntries(results.map((r) => [r.request_id, r]));
     expect(byId["req-old"]!.host_id).toBe("lab-pc-1");
     expect(byId["req-new"]!.host_id).toBe("lab-pc-2");
+  });
+
+  it("claude-code の refresh は Codex / Antigravity の catalog を退行させない (issue #369)", async () => {
+    const h = makeHarness(undefined, () => ANTIGRAVITY_LIVE_CATALOG);
+    h.handler({
+      version: "0",
+      engine: "claude-code",
+      request_id: "req-1",
+    });
+    await new Promise((r) => setImmediate(r));
+    expect(h.registers).toHaveLength(1);
+    const rebuilt = h.registers[0]!;
+
+    // 起動時相当 (runner-cli.ts の buildRegister 呼び出し) を直接計算し、
+    // refresh 後の register の非 Claude engine と突き合わせる。
+    const expected = buildRegister(
+      CONFIG,
+      "unknown",
+      undefined,
+      BUILD_INFO,
+      ANTIGRAVITY_LIVE_CATALOG,
+    );
+    expect(rebuilt.engines?.find((e) => e.id === "codex")).toEqual(
+      expected.engines?.find((e) => e.id === "codex"),
+    );
+    expect(rebuilt.engines?.find((e) => e.id === "antigravity")).toEqual(
+      expected.engines?.find((e) => e.id === "antigravity"),
+    );
   });
 });

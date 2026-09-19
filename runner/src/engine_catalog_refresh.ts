@@ -12,6 +12,7 @@ import type {
   EngineCatalogFailReason,
   EngineCatalogResult,
   EngineKind,
+  EngineModelInfo,
   RunnerRegister,
 } from "@kaoiro/protocol";
 import { buildRegister, type RunnerConfig } from "./config.js";
@@ -34,6 +35,13 @@ export interface RefreshEngineCatalogDeps {
   cache: ClaudeCatalogCache;
   getCurrentConfig: () => RunnerConfig;
   getCodexAuthMode: () => CodexAuthMode;
+  /** Live getter for the runner's memory-only Antigravity catalog probe
+   *  (ADR-0057 F6), same rationale as the getters above: a config reload or
+   *  a later re-probe between two Claude refreshes must reach the next
+   *  rebuilt register. Threaded into `buildRegister`'s 5th argument so a
+   *  Claude-only refresh does not regress Antigravity to the pinned
+   *  snapshot (issue #369). */
+  getAntigravityCatalog: () => EngineModelInfo[] | undefined;
   updateRegister: (register: RunnerRegister) => void;
   sendCatalogResult: (result: EngineCatalogResult) => void;
   /** issue #228: fixed for the process's whole lifetime (computed once at
@@ -114,6 +122,7 @@ async function handle(
         deps.getCodexAuthMode(),
         outcome.models,
         deps.buildInfo,
+        deps.getAntigravityCatalog(),
       );
       deps.updateRegister(nextRegister);
     }
