@@ -1780,6 +1780,186 @@ if (args[0] === "models") {
     });
   });
 
+  describe("issue #371 Design v2 (outcome union, single projection)", () => {
+    it("pin (i): a queued turn interrupted pre-spawn settles as interrupted, and the next queued turn runs (kohaku probe)", async () => {
+      // kohaku's actual defect (state.ts:142-153): `user_send` only moves
+      // the machine to "sending" when it is called while AT REST; a send
+      // while turn-1 is still mid-turn is silently queued with NO state
+      // change. So turn-2/turn-3 must be sent WHILE turn-1 is still
+      // running (before its result), not after -- sending them post-turn-1
+      // would give turn-2 its own "sending" transition and never reproduce
+      // the at-rest-proxy false positive this pin targets.
+      let resolveSync!: () => void;
+      const pending = new Promise<void>((resolve) => { resolveSync = resolve; });
+      let gate = false;
+      const { host, calls, turnEnds, interruptRequests, interruptSettlements } = hostHarness({
+        waitForPermissionSync: () => (gate ? pending : Promise.resolve()),
+      });
+      await host.send("first", undefined, [], "turn-1");
+      await waitFor(() => calls.length === 1);
+      gate = true;
+      await host.send("second", undefined, [], "turn-2");
+      await host.send("third", undefined, [], "turn-3");
+      calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
+      calls[0]!.child.finish();
+      await waitFor(() => turnEnds.some((end) => end.turnToken === "turn-1"));
+      await host.interrupt();
+      gate = false;
+      resolveSync();
+      await waitFor(() => turnEnds.some((end) => end.turnToken === "turn-2"));
+      const turn2End = turnEnds.find((end) => end.turnToken === "turn-2")!;
+      expect(turn2End.error).toEqual({ reason: "interrupted" });
+      expect(turn2End.cancellation).toEqual({ kind: "interrupt", reason: "interrupted" });
+      expect(interruptSettlements).toHaveLength(1);
+      expect(interruptRequests).toHaveLength(1);
+      await waitFor(() => calls.length === 2);
+      // turn-2 (pre-spawn interrupted) never spawned a child; this is turn-3's.
+      expect(calls[1]!.args).toContain("third");
+      calls[1]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
+      calls[1]!.child.finish();
+      await waitFor(() => turnEnds.some((end) => end.turnToken === "turn-3"));
+      expect(host.state).toBe("waiting_input");
+      host.close();
+    });
+
+    it("pin (ii): interrupt() inside onState(error) after agy_exit_without_result creates no record (momo M6 probe)", async () => {
+      const { host, calls, interruptRequests } = hostHarness({
+        onState: (envelope) => {
+          if (envelope.state === "error") void host.interrupt();
+        },
+      });
+      await host.send("hello", undefined, [], "turn-1");
+      await waitFor(() => calls.length === 1);
+      calls[0]!.child.finish();
+      await waitFor(() => host.state === "waiting_input");
+      expect(interruptRequests).toEqual([]);
+      host.close();
+    });
+
+    it("pin (iii): interrupt() called once from inside the success-path onState creates no record", async () => {
+      // Investigated on 7cea3f87 (scratch probe, removed): a successful
+      // result fires onState 3 times -- "sending" (from send()'s own
+      // user_send, before the turn is even dequeued -- interrupt() here is
+      // a genuine idle interrupt, not the class this pin targets), then
+      // "done" and "waiting_input" (both from #publishTerminalResult's
+      // projection of the result, while identity was still live pre-Design
+      // v2). "first onState after the result" means the first of THOSE,
+      // i.e. "done" -- calling interrupt() from "sending" measures nothing.
+      let fired = false;
+      const { host, calls, interruptRequests } = hostHarness({
+        onState: (envelope) => {
+          if (!fired && envelope.state === "done") {
+            fired = true;
+            void host.interrupt();
+          }
+        },
+      });
+      await host.send("hello", undefined, [], "turn-1");
+      await waitFor(() => calls.length === 1);
+      calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
+      calls[0]!.child.finish();
+      await waitFor(() => host.state === "waiting_input");
+      expect(interruptRequests).toEqual([]);
+      host.close();
+    });
+
+    it("pin (vi): verifyGate rejecting after interrupt() still settles as interrupted exactly once", async () => {
+      let rejectProbe!: (reason: unknown) => void;
+      const probe = new Promise<boolean>((_resolve, reject) => { rejectProbe = reject; });
+      const { host, states, turnEnds, interruptSettlements } = hostHarness({ verifyGate: () => probe });
+      await host.send("hello", undefined, [], "turn-1");
+      // Let `#verifyGateRegistration` actually register its `.then()` on
+      // `probe` before rejecting it, or the rejection can race ahead of the
+      // handler and surface as an unhandled rejection instead of being
+      // observed by `#runTurn`.
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      await host.interrupt();
+      rejectProbe(new Error("boom"));
+      await waitFor(() => turnEnds.length === 1);
+      expect(interruptSettlements).toHaveLength(1);
+      expect(turnEnds).toHaveLength(1);
+      expect(turnEnds[0]!.error).toEqual({ reason: "interrupted" });
+      expect(states.filter((envelope) => envelope.state === "error")).toHaveLength(1);
+      host.close();
+    });
+
+    it("pin (vii): interrupt() inside onState(error) after a current-generation throw creates no record (no double projection)", async () => {
+      const { host, states, logs, interruptRequests } = hostHarness({
+        verifyGate: async () => { throw new Error("boom"); },
+        onState: (envelope) => {
+          if (envelope.state === "error") void host.interrupt();
+        },
+      });
+      await host.send("hello", undefined, [], "turn-1");
+      await waitFor(() => host.state === "waiting_input");
+      expect(interruptRequests).toEqual([]);
+      expect(states.filter((envelope) => envelope.state === "error")).toHaveLength(1);
+      expect(logs.filter((envelope) => envelope.type === "result")).toHaveLength(1);
+      host.close();
+    });
+
+    it("pin (viii): interrupt() before a CANCELED result settles as interrupted, not a successful done", async () => {
+      const { host, calls, states, turnEnds, interruptSettlements } = hostHarness();
+      await host.send("hello", undefined, [], "turn-1");
+      await waitFor(() => calls.length === 1);
+      await host.interrupt();
+      calls[0]!.child.stdout.write('{"event":"result","result":{"status":"CANCELED"}}\n');
+      calls[0]!.child.finish();
+      await waitFor(() => turnEnds.length === 1);
+      expect(states.some((envelope) => envelope.state === "done")).toBe(false);
+      expect(turnEnds[0]!.error).toEqual({ reason: "interrupted" });
+      expect(turnEnds[0]!.cancellation).toEqual({ kind: "interrupt", reason: "interrupted" });
+      expect(interruptSettlements).toHaveLength(1);
+      host.close();
+    });
+
+    it("pin (ix): a pre-spawn throw rolls back a pending model unconditionally (M2 catch contract)", async () => {
+      const cfg: AntigravityLaunchConfig = { ...config({ model: "gemini-3.6-flash-low", model_source: "config" }), approval: "on-request" };
+      const { host, states } = hostHarness({
+        config: cfg,
+        verifyGate: async () => { throw new Error("boom"); },
+      });
+      await host.setModel("model-b");
+      await host.send("hello", undefined, [], "turn-1");
+      await waitFor(() => states.some((envelope) => (envelope.ext?.switch_error as { reason?: string } | undefined)?.reason === "turn_failed"));
+      expect(states.filter((envelope) => (envelope.ext?.switch_error as { reason?: string } | undefined)?.reason === "turn_failed")).toHaveLength(1);
+      expect(host.statusSnapshot()).not.toHaveProperty("pending_model");
+      host.close();
+    });
+
+    it("pin (x): two interrupt() calls on the same turn produce exactly one lifecycle pair (N3)", async () => {
+      let resolveSync!: () => void;
+      const pending = new Promise<void>((resolve) => { resolveSync = resolve; });
+      const { host, interruptRequests, interruptSettlements, turnEnds } = hostHarness({
+        waitForPermissionSync: () => pending,
+      });
+      await host.send("hello", undefined, [], "turn-1");
+      await host.interrupt();
+      await host.interrupt();
+      resolveSync();
+      await waitFor(() => turnEnds.length === 1);
+      expect(interruptRequests).toHaveLength(1);
+      expect(interruptSettlements).toHaveLength(1);
+      host.close();
+    });
+
+    it("pin (xi): a quota-exhausted result also rolls back a pending model (revision 1a, two independent axes)", async () => {
+      const { host, calls, states } = hostHarness();
+      await host.setModel("model-b");
+      await host.send("hello", undefined, [], "turn-1");
+      await waitFor(() => calls.length === 1);
+      calls[0]!.child.stdout.write(`${JSON.stringify({
+        event: "result",
+        result: { status: "ERROR", error: "RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 148h49m28s." },
+      })}\n`);
+      calls[0]!.child.finish();
+      await waitFor(() => states.some((envelope) => (envelope.ext?.switch_error as { reason?: string } | undefined)?.reason === "turn_failed"));
+      expect(host.statusSnapshot()).not.toHaveProperty("pending_model");
+      expect(host.statusSnapshot().rate_limits).toMatchObject({ seven_day: { status: "blocked" } });
+      host.close();
+    });
+  });
+
   describe("tool prompts and deadlines (issue #350)", () => {
     afterEach(() => {
       vi.unstubAllEnvs();

@@ -150,19 +150,23 @@ indefinitely, `onTurnEnd` fired without a `cancellation`, so an inter-agent
 sender's turn classified as `api_error` instead of `interrupted`, and nothing
 reached the `[antigravity-lifecycle]` stream.
 
-- **An operator-interrupted turn always ends at rest.** However the
-  interrupted turn's `#runTurn` call unwinds (an early return before the
-  `agy` child ever spawned, or the child's own exit), `#drainTurns`'s
-  `finally` settles it as `"interrupted"` when `interrupt()`'s own record
-  matches this turn, the host is still in normal admission (not `close()`d),
-  and the state machine is not already at `idle` / `waiting_input` / `done` /
-  `error`. The dashboard never shows a stale `tool_running` /
-  `waiting_permission` / `sending` after an interrupt. `close()` and a
-  watchdog fail-stop can trigger the same generation-mismatch early returns,
-  but deliberately do NOT get this synthetic settlement — they keep the
-  pre-issue-#371 behavior exactly (no fabricated result, no interrupt
-  lifecycle event): the host is tearing down in both cases, so there is
-  nothing left to settle for an observer.
+- **An operator-interrupted turn always ends at rest, including one still
+  queued.** `#runTurn` returns a discriminated outcome (`stale` / `error` /
+  `result`) instead of deciding its own terminal state, and `#drainTurns`'s
+  `finally` converts a `stale` outcome to `"interrupted"` when
+  `interrupt()`'s own record matches this turn and the host is still in
+  normal admission (not `close()`d) — regardless of what the machine's
+  CURRENT state happens to be. This matters for a turn that was only queued
+  behind another one: it dequeues already at the PRIOR turn's at-rest state
+  (its own `send()` never got the chance to move the machine to `sending`),
+  so a state-based "already settled" check cannot tell that turn apart from
+  a genuinely finished one. The dashboard never shows a stale `tool_running`
+  / `waiting_permission` / `sending` after an interrupt, queued or active.
+  `close()` and a watchdog fail-stop also produce `stale`, but with no
+  matching interrupt record, so they keep the pre-issue-#371 behavior
+  exactly (no fabricated result, no interrupt lifecycle event): the host is
+  tearing down in both cases, so there is nothing left to settle for an
+  observer.
 - **Lifecycle events.** `interrupt_requested` (turn token, whether a
   permission/question was pending, child pid) logs when `interrupt()` runs;
   `interrupt_settled` (exit code, signal, elapsed ms) logs once the turn

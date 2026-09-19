@@ -60,11 +60,25 @@ import type { ToolTimeoutInfo, TurnWatchdogInterruptCause } from "./turn_watchdo
 const BRIDGE_SCRIPT = new URL("../dist/bridge.js", import.meta.url).pathname;
 const HOOK_SCRIPT = new URL("../dist/hook.js", import.meta.url).pathname;
 
-/** States `stepState`'s `user_send` case (agent-common/state.ts) treats as
- *  "at rest" — mirrored here since that file exports no shared predicate.
- *  issue #371: `#drainTurns`'s settlement invariant uses this to detect a
- *  turn that ended without ever reaching one of these. */
-const AT_REST_STATES: ReadonlySet<KaoiroState> = new Set(["idle", "waiting_input", "done", "error"]);
+/** issue #371 Design v2: `#runTurn` decides no terminal outcome itself --
+ *  it returns one of these, and `#drainTurns`'s `finally` is the single
+ *  place that projects an outcome into callbacks (`#terminalError` /
+ *  `#publishTerminalResult` / rate-limit update / model promote-rollback /
+ *  `onInterruptSettled` / `onTurnBoundary` / `onTurnEnd`). Invariant:
+ *  `#currentTurnToken !== null` iff this turn's outcome has not yet been
+ *  projected. Exception: `onWatchdogFailStop` deliberately fires while
+ *  identity is still live (it reads `#activeTurnToken`); the queued turns
+ *  it also settles never held identity at all. */
+type TurnOutcome =
+  | { kind: "stale" }
+  | { kind: "error"; detail: string; classify: InterAgentErrorClassifyInput; attemptedModel: string | null | undefined }
+  | { kind: "result"; event: AgyStreamEvent; attemptedModel: string | null }
+  | {
+      kind: "interrupted";
+      attemptedModel: string | null;
+      exit: { code: number | null; signal: NodeJS.Signals | null } | null;
+      requestedAt: string | undefined;
+    };
 
 export interface SpawnedAgy {
   stdout: NodeJS.ReadableStream;
@@ -485,7 +499,12 @@ export class AntigravityHost implements EngineAdapter {
     // generation. No current turn (idle interrupt) leaves no record, so no
     // result / lifecycle event is produced and the next `send()` simply
     // starts under the new generation.
-    if (this.#currentTurnToken !== null) {
+    // issue #371 Design v2 N3 (kohaku design review round 1): a record is
+    // created -- and `onInterruptRequested` fires -- only the FIRST time
+    // this turn is interrupted, so a second press repeats the kill routine
+    // below without adding a duplicate lifecycle event ("once each" per
+    // the docs stays true).
+    if (this.#currentTurnToken !== null && this.#interruptRecord?.turnToken !== this.#currentTurnToken) {
       this.#interruptRecord = {
         turnToken: this.#currentTurnToken,
         generation: this.#lifecycleGeneration,
@@ -907,93 +926,46 @@ export class AntigravityHost implements EngineAdapter {
     // would leave the PRIOR turn's attempted model in place; an interrupt
     // landing in that pre-spawn window would then roll back the wrong model.
     this.#currentAttemptedModel = null;
-    let error: InterAgentErrorClassifyInput | undefined;
-    // issue #371 M4: declared here (not inside the settlement block below)
-    // because the onTurnEnd call that reads it now sits outside that
-    // block's scope -- see the M4 comment further down.
-    let cancellation: { kind: "interrupt"; reason: "interrupted" } | undefined;
+    let outcome: TurnOutcome = { kind: "stale" };
     try {
-      error = await this.#runTurn(turn.text, generation, turnToken, turn.conversationIds ?? []);
+      outcome = await this.#runTurn(turn.text, generation, turnToken, turn.conversationIds ?? []);
     } catch (caught) {
       const detail = caught instanceof Error ? caught.message : String(caught);
-      error = { detail };
-      if (this.#isCurrent(generation)) this.#terminalError(detail);
+      // issue #371 Design v2 M2 (kohaku design review): `attemptedModel:
+      // undefined` matches the pre-#371 `#terminalError(detail)` call this
+      // replaces -- an unconditional rollback, not a match-gated one.
+      outcome = this.#isCurrent(generation)
+        ? { kind: "error", detail, classify: { detail }, attemptedModel: undefined }
+        : { kind: "stale" };
     } finally {
       this.#running = null;
       this.#turnActive = false;
-      // issue #371 M5 (kuroe design ruling, momo round-4 review): the SAME
-      // defect class as M1/M4 -- a synchronous external callback observing
-      // this turn while `#currentTurnToken` still identifies it, and
-      // misattributing a callback-triggered `interrupt()` back to the turn
-      // that is already settling. M4 closed this for `onTurnBoundary`/
-      // `onTurnEnd`, but missed that `#terminalError` (called directly, not
-      // through a callback wrapper) synchronously fires `onState`/`onLog`,
-      // and `onInterruptSettled` fires right alongside it -- both BEFORE
-      // the identity cleanup used to run. Closing the class this time means
-      // ordering the whole block so identity cleanup precedes every
-      // external callback this turn's settlement can reach (onState,
-      // onLog, onInterruptSettled, onTurnBoundary, onTurnEnd -- 5 routes),
-      // not just the two M4 covered. Judge first, stash every value a
-      // deferred callback will need (the fields cleanup is about to null
-      // out), clean up, THEN fire callbacks from the stashed values.
-      let settledAsInterrupted = false;
-      let rollbackModel: string | null = null;
-      let interruptSettledPayload:
-        | { turnToken: string; exitCode: number | null; signal: NodeJS.Signals | null; elapsedMs: number }
-        | undefined;
-      if (!this.#watchdogFailStopped) {
-        // issue #371 settlement invariant, narrowed by the design addendum
-        // (kuroe + momo M1): a generation-mismatch early return in
-        // `#runTurn` (or a stale-generation throw the catch above
-        // deliberately left unsettled) gets a synthetic "interrupted"
-        // result ONLY when an operator `interrupt()` targeted this exact
-        // turn AND the host is still in normal admission. `close()` also
-        // bumps the generation (`#watchdogFailStopped`'s case is already
-        // excluded by the surrounding `if`), but its stale-generation
-        // return keeps its PRE-#371 termination semantics unchanged: no
-        // fabricated result, no interrupt lifecycle event, and no queue
-        // resume beyond what `#drainTurns`'s own top-of-function guard
-        // already withholds — the host is tearing down, not continuing.
-        const normalAdmission = !this.#closed;
-        const interrupted = normalAdmission && this.#interruptRecord?.turnToken === turnToken;
-        // Settle as "interrupted" only when THIS invariant is what settles
-        // the turn. A branch inside `#runTurn` may have already applied its
-        // own terminal transition for an unrelated reason (e.g. customization
-        // tampering discovered after the child exited) even though an
-        // interrupt also happened to be requested for the same turn — that
-        // turn's real outcome is the tampering, not the interrupt.
-        settledAsInterrupted = interrupted && !AT_REST_STATES.has(this.#machine.state);
-        if (settledAsInterrupted) {
-          rollbackModel = this.#currentAttemptedModel;
-          error = { reason: "interrupted" };
-          cancellation = { kind: "interrupt", reason: "interrupted" };
-          const exit = this.#lastChildExit;
-          const requestedAt = this.#interruptRecord?.at;
-          interruptSettledPayload = {
-            turnToken,
-            exitCode: exit?.code ?? null,
-            signal: exit?.signal ?? null,
-            elapsedMs: requestedAt === undefined
-              ? 0
-              : Math.max(0, Date.parse(this.#now()) - Date.parse(requestedAt)),
-          };
-        }
+      // issue #371 Design v2: a `stale` outcome (generation mismatch, or
+      // closed/fail-stopped) becomes `interrupted` only when the operator's
+      // one-shot interrupt record targeted THIS turn and the host is still
+      // in normal admission (`close()`/fail-stop already produce `stale`
+      // too, but with no matching record -- their pre-#371 termination
+      // semantics are unchanged: no fabricated result, no interrupt
+      // lifecycle event). Any other outcome kind (a real error or result,
+      // including one `#runTurn` decided AFTER an interrupt fired, e.g.
+      // customization tampering) keeps its own kind -- an interrupt does
+      // not override a turn's real outcome, only its absence.
+      if (outcome.kind === "stale" && !this.#closed && this.#interruptRecord?.turnToken === turnToken) {
+        outcome = {
+          kind: "interrupted",
+          attemptedModel: this.#currentAttemptedModel,
+          exit: this.#lastChildExit,
+          requestedAt: this.#interruptRecord.at,
+        };
       }
-      // issue #371 M4/M5: a turn's identity ends the moment its finally
-      // frame reaches this point, not when any external callback observes
-      // it. Clearing this turn's bookkeeping BEFORE every callback below
-      // (onState/onLog via `#terminalError`, onInterruptSettled,
-      // onTurnBoundary, onTurnEnd) makes one mechanism satisfy M1 (a
-      // callback's re-entrant `send()` cannot clobber a NEW turn's fields,
-      // since this turn's own copies are already cleared), M4 and M5 (a
-      // callback's `interrupt()` sees `#currentTurnToken` already null, so
-      // idle-interrupt's "no current turn -> no record" contract applies
-      // instead of misattributing to the turn that just finished). Runs
-      // UNCONDITIONALLY (outside the `!this.#watchdogFailStopped` guard
-      // above): a fail-stop must not leave this turn's bookkeeping stale
-      // either, or a later `interrupt()` (e.g. an operator request
-      // arriving after fail-stop) would misattribute to a turn that
-      // already ended for a different reason.
+      // issue #371: identity cleanup runs BEFORE every external callback
+      // this turn's settlement can reach (onState/onLog via
+      // `#terminalError`/`#publishTerminalResult`, onInterruptSettled,
+      // onTurnBoundary, onTurnEnd), and unconditionally (even under
+      // `#watchdogFailStopped`, so a later `interrupt()` cannot
+      // misattribute to a turn that already ended for a different
+      // reason). See the `TurnOutcome` comment for the invariant this
+      // maintains.
       if (this.#currentTurnToken === turnToken) {
         this.#currentTurnToken = null;
         this.#currentAttemptedModel = null;
@@ -1003,13 +975,49 @@ export class AntigravityHost implements EngineAdapter {
         this.#activeTurnConversationIds = [];
       }
       if (this.#interruptRecord?.turnToken === turnToken) this.#interruptRecord = null;
-      // Every external callback below is fired from values stashed above,
-      // AFTER identity cleanup -- see the M5 comment above.
-      if (settledAsInterrupted) {
-        this.#terminalError("interrupted", rollbackModel);
-        this.#options.onInterruptSettled?.(interruptSettledPayload!);
-      }
       if (!this.#watchdogFailStopped) {
+        let error: InterAgentErrorClassifyInput | undefined;
+        let cancellation: { kind: "interrupt"; reason: "interrupted" } | undefined;
+        if (outcome.kind === "interrupted") {
+          this.#terminalError("interrupted", outcome.attemptedModel);
+          error = { reason: "interrupted" };
+          cancellation = { kind: "interrupt", reason: "interrupted" };
+          this.#options.onInterruptSettled?.({
+            turnToken,
+            exitCode: outcome.exit?.code ?? null,
+            signal: outcome.exit?.signal ?? null,
+            elapsedMs: outcome.requestedAt === undefined
+              ? 0
+              : Math.max(0, Date.parse(this.#now()) - Date.parse(outcome.requestedAt)),
+          });
+        } else if (outcome.kind === "error") {
+          this.#terminalError(outcome.detail, outcome.attemptedModel);
+          error = outcome.classify;
+        } else if (outcome.kind === "result") {
+          // issue #371 Design v2 revision 1a: two independent axes, exactly
+          // reproducing the pre-#371 `#runTurn` success-path branches.
+          const quota = agyEventToQuotaExhaustion(outcome.event);
+          if (quota !== null) {
+            this.#rateLimits.set("seven_day", {
+              status: "blocked",
+              utilization: 1,
+              resets_at: Math.floor(Date.parse(this.#now()) / 1_000) + quota.resetDelaySeconds,
+            });
+          } else if (agyEventIsSuccessfulResult(outcome.event)) {
+            this.#rateLimits.delete("seven_day");
+          }
+          const result = agyEventToResult(outcome.event);
+          if (result?.is_error === true) this.#rollbackPendingModel(outcome.attemptedModel);
+          else this.#promotePendingModel(outcome.attemptedModel);
+          this.#publishTerminalResult(outcome.event);
+          if (quota !== null) {
+            error = { reason: "blocking_limit", rateLimitResetSeconds: quota.resetDelaySeconds };
+          } else if (result?.is_error === true) {
+            error = { detail: "antigravity turn failed" };
+          }
+        }
+        // outcome.kind === "stale" (close / fail-stop, no matching
+        // interrupt record) projects nothing, matching pre-#371 behaviour.
         this.#options.onTurnBoundary?.({ turnToken });
         this.#options.onTurnEnd?.({
           turnToken,
@@ -1027,7 +1035,7 @@ export class AntigravityHost implements EngineAdapter {
     generation: number,
     turnToken: string,
     conversationIds: readonly string[],
-  ): Promise<InterAgentErrorClassifyInput | undefined> {
+  ): Promise<TurnOutcome> {
     // Review finding (issue #371 round 1): without this reset, a turn
     // interrupted before its own child ever spawns would report a PRIOR
     // turn's leftover exit code/signal in `onInterruptSettled`, misleading
@@ -1053,13 +1061,13 @@ export class AntigravityHost implements EngineAdapter {
     let gateServer: GateServer | null = null;
     try {
       toolHost = await (this.#options.toolHostListen ?? ToolHost.listen)(this.#options.toolDescriptors ?? []);
-      if (!this.#isCurrent(generation)) return undefined;
+      if (!this.#isCurrent(generation)) return { kind: "stale" };
       // issue #359 M1: block this turn's gate until the server's permission_sync
       // for the current connection has been applied, so a durable control/next
       // relayed on reconnect lands before the gate reads the cell. A no-op once
       // the sync arrived, or when sync is unsupported.
       await (this.#options.waitForPermissionSync?.() ?? Promise.resolve());
-      if (!this.#isCurrent(generation)) return undefined;
+      if (!this.#isCurrent(generation)) return { kind: "stale" };
       // ADR-0057 F4c Stage B0 (issue #359): apply a staged permission switch
       // now, at the execution boundary, so this turn's fresh gate below reads
       // the new cell while the just-ended turn's gate was left untouched.
@@ -1083,14 +1091,14 @@ export class AntigravityHost implements EngineAdapter {
           this.#clearPendingPermission();
         },
       });
-      if (!this.#isCurrent(generation)) return undefined;
+      if (!this.#isCurrent(generation)) return { kind: "stale" };
       this.#toolHost = toolHost;
       this.#gateServer = gateServer;
       const registration = await this.#verifyGateRegistration(generation);
       if (!registration.ok) {
         throw new Error(`antigravity_gate_not_registered:${registration.reason}`);
       }
-      if (!this.#isCurrent(generation)) return;
+      if (!this.#isCurrent(generation)) return { kind: "stale" };
       const attemptedModel = this.#pendingModel;
       this.#currentAttemptedModel = attemptedModel;
       const args = this.#turnArguments(text, customization.path, attemptedModel ?? this.#config.model);
@@ -1160,54 +1168,38 @@ export class AntigravityHost implements EngineAdapter {
         }
       });
       const childError = await this.#waitForChild(child);
-      if (this.#closed || this.#watchdogFailStopped) return undefined;
+      // issue #371 Design v2 M1 (kohaku design review round 1): this
+      // post-exit precedence is unchanged from pre-Design-v2 -- closed/
+      // fail-stopped and generation-mismatch are `stale` (an operator
+      // interrupt is projected as `interrupted` only when nothing else
+      // outranks it); customization tampering is the one outcome that
+      // outranks a stale generation, since a broken gate is a heavier fact
+      // than the interrupt. A terminal event agy emits while dying (e.g.
+      // `CANCELED`, which `agyEventToResult` maps to success) is discarded
+      // as `stale` when the generation has moved, not treated as `result`.
+      if (this.#closed || this.#watchdogFailStopped) return { kind: "stale" };
       if (customization.verify() !== true) {
         this.#gateBroken = true;
         const detail = "antigravity_customization_tampered";
-        this.#terminalError(detail, attemptedModel);
-        return { detail };
+        return { kind: "error", detail, classify: { detail }, attemptedModel };
       } else if (!this.#isCurrent(generation)) {
-        return undefined;
+        return { kind: "stale" };
       } else if (correlationFailure !== null) {
         this.#gateBroken = true;
         const detail = `antigravity_gate_unobserved_tool:${correlationFailure}`;
-        this.#terminalError(detail, attemptedModel);
-        return { detail };
+        return { kind: "error", detail, classify: { detail }, attemptedModel };
       } else if (this.#activeTurnToolTimeout !== null) {
         // Whatever agy printed after SIGTERM, the turn outcome is the
         // deadline, not the CLI's own terminal record.
-        this.#terminalError("tool_timeout", attemptedModel);
-        return { reason: "timeout" };
+        return { kind: "error", detail: "tool_timeout", classify: { reason: "timeout" }, attemptedModel };
       } else if (childError !== null) {
         const detail = `antigravity_cli_${this.#spawnFailureReason(childError)}: ${boundErrorDetail(childError.message)}`;
-        this.#terminalError(detail, attemptedModel);
-        return { detail };
+        return { kind: "error", detail, classify: { detail }, attemptedModel };
       } else if (terminalResult === null) {
         const detail = "agy_exit_without_result";
-        this.#terminalError(detail, attemptedModel);
-        return { detail };
+        return { kind: "error", detail, classify: { detail }, attemptedModel };
       } else {
-        const result = agyEventToResult(terminalResult);
-        const quota = agyEventToQuotaExhaustion(terminalResult);
-        if (quota !== null) {
-          this.#rateLimits.set("seven_day", {
-            status: "blocked",
-            utilization: 1,
-            resets_at: Math.floor(Date.parse(this.#now()) / 1_000) + quota.resetDelaySeconds,
-          });
-        } else if (agyEventIsSuccessfulResult(terminalResult)) {
-          this.#rateLimits.delete("seven_day");
-        }
-        if (result?.is_error === true) this.#rollbackPendingModel(attemptedModel);
-        else this.#promotePendingModel(attemptedModel);
-        this.#publishTerminalResult(terminalResult);
-        if (quota !== null) {
-          return {
-            reason: "blocking_limit",
-            rateLimitResetSeconds: quota.resetDelaySeconds,
-          };
-        }
-        return result?.is_error === true ? { detail: "antigravity turn failed" } : undefined;
+        return { kind: "result", event: terminalResult, attemptedModel };
       }
     } finally {
       this.#activeTurnToolTimeout = null;

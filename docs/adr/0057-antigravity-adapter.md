@@ -178,52 +178,79 @@ permitted. The Cwd boundary is checked before the `local` command allowlist.
 Operator decisions reuse `PermissionBroker` (`waiting_permission`,
 `ext.pending_permission`).
 
-**F4 addendum — operator-interrupt turn settlement (issue #371).** `interrupt()`
-kills the `agy` child and every `PermissionBroker` / `QuestionBroker` /
-gate-socket resource, but that alone leaves the state machine parked at
-whatever the last applied event left (`sending`, `tool_running`,
-`waiting_permission`) — the child's death is not itself a state transition.
-`interrupt()` now also records a one-shot `{turnToken, generation, at}`
-marker, synchronously, before it bumps the lifecycle generation, binding to
-the turn `#drainTurns` established as inflight the moment it dequeued it —
-before the child ever spawns, not only after (`#activeTurnToken` alone would
-miss the four pre-spawn windows). `#drainTurns` applies a single settlement
-invariant in its `finally` block, the one place every turn (queued or
-active, however it ends) passes through: when the marker matches this turn
-AND the host is still in normal admission (not `close()`d) AND the state
-machine is not at rest (`idle` / `waiting_input` / `done` / `error`), it
-applies the terminal `result` transition there — `"interrupted"`, so
-`classifyInterAgentError` reports `interrupted` (not `api_error`) and
-`onTurnEnd` carries `cancellation: {kind: "interrupt", reason: "interrupted"}`.
-This replaces five separate generation-mismatch early returns inside
-`#runTurn` (after `ToolHost.listen`, after `waitForPermissionSync`, after
-`GateServer.listen`, after gate registration verification, after the child
-exits) that each individually skipped settlement — with one invariant instead
-of five call sites, no interrupt timing window is left unsettled. `close()`
-and watchdog fail-stop also bump the generation and can trigger the same five
-early returns, but a design addendum (kuroe + momo M1) deliberately narrows
-the invariant's terminal authority to the interrupted case only: those two
-keep their PRE-#371 termination semantics exactly (no fabricated result, no
-interrupt lifecycle event, no queue resume beyond what `#drainTurns`'s own
-top-of-function guard already withholds) — the host is tearing down, not
-continuing, so nothing needs settling for an observer. A turn that ends for
-an unrelated reason after also being interrupted (e.g. customization
-tampering discovered once the child exits) keeps its own reason; the
-`"interrupted"` classification applies only when this invariant is what
-actually settles the turn. An interrupt on an idle host (no turn in flight)
-records no marker and produces neither a result nor a lifecycle event; the
-next `send()` simply starts under the new generation. `interrupt_requested`
-(turn token, pending permission / question flags, child pid) and
-`interrupt_settled` (exit code, signal, elapsed ms) are logged once each to
-the `[antigravity-lifecycle]` stream. Separately, `send()`'s three silent
-non-start paths (closed / gate-broken / watchdog-fail-stopped) — which
-resolve without throwing, so a caller's `.catch()` never observes them — and
-an unclassified `send()` rejection are both now logged to the same stream
-(`send_not_started`, turn token and delivery seqs only, never inbound text)
-before classification, so the next unattributed incident is diagnosable from
-the journal. Escalating `SIGTERM` to `SIGKILL` on a wedged `agy` child is
-tracked separately (issue #379); this addendum does not change what
-`interrupt()` kills, only what settles afterward.
+**F4 addendum — operator-interrupt turn settlement (issue #371, Design v2).**
+`interrupt()` kills the `agy` child and every `PermissionBroker` /
+`QuestionBroker` / gate-socket resource, but the child's death is not itself
+a state transition. `#runTurn` decides no terminal outcome by itself: it
+returns a discriminated `TurnOutcome` —  `stale` (a generation mismatch,
+`close()`, or fail-stop), `error` (customization tampering, an unobserved
+tool, a tool timeout, a spawn/child error, `agy_exit_without_result`, or a
+converted throw), or `result` (agy's raw terminal event, unprocessed) — and
+`#drainTurns`'s `finally` is the single place that projects an outcome into
+every callback that carries terminal meaning: `onState` / `onLog` (via
+`#terminalError` / `#publishTerminalResult`), the rate-limit update, model
+promote/rollback, `onInterruptSettled`, `onTurnBoundary`, `onTurnEnd`.
+
+**Invariant:** `#currentTurnToken !== null` iff this turn's outcome has not
+yet been projected. No terminal-meaning callback may fire while any identity
+field (`#currentTurnToken`, `#currentAttemptedModel`, `#activeTurnToken`,
+`#activeTurnConversationIds`, `#interruptRecord`) still names the turn — the
+`finally` clears them, unconditionally and token-matched, before projecting.
+**Exception:** `onWatchdogFailStop` deliberately fires while identity is
+still live (it reads `#activeTurnToken`); the queued turns it also settles
+never held identity at all. **Boundary:** identity begins at dequeue, so a
+re-entrant `interrupt()` from inside the `onState("sending")` that `send()`
+itself emits sees no current turn yet and is an idle interrupt — documented,
+not fixed, since no production caller re-enters from there.
+
+`interrupt()` records a one-shot `{turnToken, generation, at}` marker,
+synchronously and only on the FIRST press per turn (a second press repeats
+the kill routine without a duplicate lifecycle event), before it bumps the
+lifecycle generation, binding to the turn `#drainTurns` established as
+inflight the moment it dequeued it — before the child ever spawns, not only
+after. In the `finally`, a `stale` outcome converts to `interrupted` only
+when the marker matches this turn AND the host is still in normal admission
+(not `close()`d); `close()` and fail-stop also produce `stale`, but with no
+matching marker, so they keep their PRE-#371 termination semantics exactly
+(no fabricated result, no interrupt lifecycle event, no queue resume beyond
+what `#drainTurns`'s own top-of-function guard already withholds). A turn
+whose child produces a real error after an interrupt keeps that error, not
+`interrupted` — customization tampering outranks a stale generation, since a
+broken gate is a heavier fact than the interrupt; a terminal event the child
+emits while dying (e.g. `CANCELED`, which the adapter maps to success) is
+still discarded as `stale` once the generation has moved, and is therefore
+projected as `interrupted` instead of a fabricated success.
+
+An at-rest state is deliberately never used as a proxy for "this turn
+already settled": `session_init` can emit `idle` for a queued turn
+(`state.ts:57-66`), and a queued turn dequeues already at rest from the
+PRIOR turn's own result — an at-rest check cannot tell "already settled" from
+"never got the chance to move." The outcome union replaces that check
+structurally: four generation-mismatch early returns inside `#runTurn`
+(after `ToolHost.listen`, after `waitForPermissionSync`, after
+`GateServer.listen`, after gate registration success) plus the throw path
+(gate registration failure, folded into `#drainTurns`'s `catch`) are `stale`
+by construction, not by reading machine state. Review checklist for this
+file: no terminal `#apply` / `#terminalError` / `#publishTerminalResult`
+outside `#drainTurns`'s `finally` — a new terminal path added to `#runTurn`
+must return a `TurnOutcome` member to typecheck, so the class this addendum
+closes has no site left to reopen on.
+
+An interrupt on an idle host (no turn in flight) records no marker and
+produces neither a result nor a lifecycle event; the next `send()` simply
+starts under the new generation. A turn interrupted before its own child
+ever spawns — including one still queued behind another turn — settles the
+same way: `interrupt_requested` (turn token, pending permission / question
+flags, child pid) and `interrupt_settled` (exit code, signal, elapsed ms)
+are logged once each to the `[antigravity-lifecycle]` stream. Separately,
+`send()`'s three silent non-start paths (closed / gate-broken / watchdog
+fail-stopped) and an unattached `attachments_unsupported` no-op — none of
+which throw, so a caller's `.catch()` never observes them — are all logged
+to the same stream (`send_not_started`, turn token and delivery seqs only,
+never inbound text) before classification, so the next unattributed
+incident is diagnosable from the journal. Escalating `SIGTERM` to `SIGKILL`
+on a wedged `agy` child is tracked separately (issue #379); this addendum
+does not change what `interrupt()` kills, only what settles afterward.
 
 `local` recognizes only a deliberately small shell grammar. It rejects shell
 expansion, environment assignment, redirection, subshells, `eval`, unknown
