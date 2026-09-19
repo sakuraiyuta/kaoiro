@@ -1622,6 +1622,37 @@ if (args[0] === "models") {
       expect(sendRejections).toEqual([{ turnToken: "turn-2", reason: "gate_broken" }]);
       host.close();
     });
+
+    it("send() with attachments reports onSendRejected without starting a turn (momo round-1 M2)", async () => {
+      const { host, calls, sendRejections } = hostHarness();
+      await host.send("hello", ["attachment-1"], [], "turn-1");
+      expect(calls).toHaveLength(0);
+      expect(sendRejections).toEqual([{ turnToken: "turn-1", reason: "attachments_unsupported" }]);
+      host.close();
+    });
+
+    it("a send() re-entered synchronously from onTurnEnd does not lose the next turn's interrupt marker (momo round-1 M1)", async () => {
+      const { host, calls, turnEnds, interruptSettlements } = hostHarness({
+        onTurnEnd: (info) => {
+          if (info.turnToken === "turn-1") void host.send("second", undefined, [], "turn-2");
+        },
+      });
+      await host.send("first", undefined, [], "turn-1");
+      await waitFor(() => calls.length === 1);
+      calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
+      calls[0]!.child.finish();
+      await waitFor(() => turnEnds.some((end) => end.turnToken === "turn-1"));
+      await waitFor(() => calls.length === 2);
+      await host.interrupt();
+      calls[1]!.child.finish();
+      await waitFor(() => turnEnds.some((end) => end.turnToken === "turn-2"));
+      const turn2End = turnEnds.find((end) => end.turnToken === "turn-2")!;
+      expect(turn2End.error).toEqual({ reason: "interrupted" });
+      expect(turn2End.cancellation).toEqual({ kind: "interrupt", reason: "interrupted" });
+      expect(interruptSettlements).toHaveLength(1);
+      expect(host.state).toBe("waiting_input");
+      host.close();
+    });
   });
 
   describe("tool prompts and deadlines (issue #350)", () => {

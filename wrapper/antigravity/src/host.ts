@@ -139,7 +139,7 @@ export interface AntigravityHostOptions {
    *  for this, so it cannot otherwise learn the reason. */
   onSendRejected?: (info: {
     turnToken?: string;
-    reason: "closed" | "gate_broken" | "watchdog_fail_stopped";
+    reason: "closed" | "gate_broken" | "watchdog_fail_stopped" | "attachments_unsupported";
   }) => void;
   toolDescriptors?: ToolDescriptor[];
   permissionBroker: PermissionBroker;
@@ -457,6 +457,10 @@ export class AntigravityHost implements EngineAdapter {
     }
     if (attachmentIds !== undefined && attachmentIds.length > 0) {
       this.#warn("antigravity: attachments are unsupported");
+      this.#options.onSendRejected?.({
+        ...(turnToken === undefined ? {} : { turnToken }),
+        reason: "attachments_unsupported",
+      });
       return;
     }
     this.#apply({ kind: "user_send" });
@@ -953,8 +957,16 @@ export class AntigravityHost implements EngineAdapter {
           ...(cancellation === undefined ? {} : { cancellation }),
         });
       }
-      this.#currentTurnToken = null;
-      this.#currentAttemptedModel = null;
+      // issue #371 M1 (momo round-1 review): `onTurnBoundary`/`onTurnEnd`
+      // above run synchronously, and a callback that calls `send()`
+      // re-enters `#drainTurns`, which sets `#currentTurnToken` /
+      // `#currentAttemptedModel` for the NEXT turn before this frame
+      // resumes here. Clear only when the fields still identify THIS
+      // turn -- mirrors the `#activeTurnToken` guard just below.
+      if (this.#currentTurnToken === turnToken) {
+        this.#currentTurnToken = null;
+        this.#currentAttemptedModel = null;
+      }
       if (this.#activeTurnToken === turnToken) {
         this.#activeTurnToken = null;
         this.#activeTurnConversationIds = [];
