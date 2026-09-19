@@ -239,10 +239,9 @@ export async function runRunnerCli(
     cache: claudeCatalog,
     getCurrentConfig: () => config,
     getCodexAuthMode: () => codexAuthMode,
-    // Live getter (issue #369): without it, a Claude-only refresh rebuilds
-    // the register with the 5th `buildRegister` argument omitted, regressing
-    // Antigravity to the pinned snapshot even though a live probe result is
-    // already held here.
+    // Live getter: threads the already-probed Antigravity catalog into a
+    // Claude-only refresh's rebuilt register, so it does not regress to the
+    // pinned snapshot.
     getAntigravityCatalog: () => antigravityCatalog,
     updateRegister: (register) => link.updateRegister(register),
     sendCatalogResult: (result) => link.sendCatalogResult(result),

@@ -24,10 +24,17 @@ const CONFIG: RunnerConfig = {
   },
 };
 
-// A live-probed Antigravity catalog entry absent from the pinned snapshot
-// (issue #369): stands in for `runner-cli.ts`'s `antigravityCatalog`.
+// A live-probed Antigravity catalog entry absent from the pinned snapshot:
+// stands in for `runner-cli.ts`'s `antigravityCatalog`.
 const ANTIGRAVITY_LIVE_CATALOG: EngineModelInfo[] = [
   { value: "gemini-3.8-flash-high", display_name: "Gemini 3.8 Flash High" },
+];
+
+// Distinct from ANTIGRAVITY_LIVE_CATALOG so a test can tell "the getter's
+// value at handler-construction time" apart from "the getter's value at
+// refresh time".
+const ANTIGRAVITY_STALE_CATALOG: EngineModelInfo[] = [
+  { value: "gemini-3.6-flash-high", display_name: "Gemini 3.6 Flash High" },
 ];
 
 const BUILD_INFO: BuildInfo = {
@@ -233,8 +240,16 @@ describe("makeRefreshEngineCatalogHandler", () => {
     expect(byId["req-new"]!.host_id).toBe("lab-pc-2");
   });
 
-  it("claude-code の refresh は Codex / Antigravity の catalog を退行させない (issue #369)", async () => {
-    const h = makeHarness(undefined, () => ANTIGRAVITY_LIVE_CATALOG);
+  it("a claude-code refresh reads getAntigravityCatalog live at refresh time and does not regress Codex", async () => {
+    // The getter's return value changes AFTER the handler is constructed
+    // but BEFORE the refresh fires, so a construction-time snapshot of the
+    // getter's value would carry the stale catalog into the rebuilt
+    // register instead of the live one.
+    let liveAntigravityCatalog: EngineModelInfo[] | undefined =
+      ANTIGRAVITY_STALE_CATALOG;
+    const h = makeHarness(undefined, () => liveAntigravityCatalog);
+    liveAntigravityCatalog = ANTIGRAVITY_LIVE_CATALOG;
+
     h.handler({
       version: "0",
       engine: "claude-code",
@@ -244,8 +259,8 @@ describe("makeRefreshEngineCatalogHandler", () => {
     expect(h.registers).toHaveLength(1);
     const rebuilt = h.registers[0]!;
 
-    // 起動時相当 (runner-cli.ts の buildRegister 呼び出し) を直接計算し、
-    // refresh 後の register の非 Claude engine と突き合わせる。
+    // Directly computed equivalent of the runner-cli.ts start-up call,
+    // cross-checked against the post-refresh register's non-Claude engines.
     const expected = buildRegister(
       CONFIG,
       "unknown",
