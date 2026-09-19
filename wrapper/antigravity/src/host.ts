@@ -50,7 +50,7 @@ import {
 import { antigravityCatalogSnapshot, parseAgyModelsOutput } from "./catalog.js";
 import { DEFAULT_AGY_PROBE_TIMEOUT_MS, resolveAgyExecutable, type AgyExecutableFailureReason, type AgyExecutableResolution } from "./cli-path.js";
 import { CustomizationDir, GATE_DEADLINE_MS, HOOK_TIMEOUT_SECONDS, sweepStaleCustomizationDirs } from "./customization.js";
-import { AntigravityGate, GateServer, type AntigravityLaunchConfig } from "./gate.js";
+import { AntigravityGate, GateServer, type AntigravityLaunchConfig, type GateServerOptions } from "./gate.js";
 import { effectiveNetworkAccess } from "./network_access.js";
 import { ceilingExceeded, type SwitchCeiling } from "./permission_switch.js";
 import { nonInteractiveToolEnv } from "./tool_child_env.js";
@@ -60,10 +60,20 @@ import type { ToolTimeoutInfo, TurnWatchdogInterruptCause } from "./turn_watchdo
 const BRIDGE_SCRIPT = new URL("../dist/bridge.js", import.meta.url).pathname;
 const HOOK_SCRIPT = new URL("../dist/hook.js", import.meta.url).pathname;
 
+/** States `stepState`'s `user_send` case (agent-common/state.ts) treats as
+ *  "at rest" — mirrored here since that file exports no shared predicate.
+ *  issue #371: `#drainTurns`'s settlement invariant uses this to detect a
+ *  turn that ended without ever reaching one of these. */
+const AT_REST_STATES: ReadonlySet<KaoiroState> = new Set(["idle", "waiting_input", "done", "error"]);
+
 export interface SpawnedAgy {
   stdout: NodeJS.ReadableStream;
   stderr: NodeJS.ReadableStream;
   stdin: NodeJS.WritableStream;
+  /** Diagnostic-only (issue #371 `interrupt_requested` lifecycle event).
+   *  Optional so existing fakes that construct a `SpawnedAgy` without it
+   *  still satisfy the interface. */
+  pid?: number | undefined;
   once(event: "close", listener: (code: number | null, signal: NodeJS.Signals | null) => void): this;
   once(event: "error", listener: (error: Error) => void): this;
   kill(signal?: NodeJS.Signals): boolean;
@@ -92,7 +102,9 @@ export interface AntigravityHostOptions {
     turnToken: string;
     conversationIds: readonly string[];
     error?: InterAgentErrorClassifyInput;
-    cancellation?: { kind: "watchdog_fail_stop"; started: false };
+    cancellation?:
+      | { kind: "watchdog_fail_stop"; started: false }
+      | { kind: "interrupt"; reason: "interrupted" };
   }) => void;
   onTurnBoundary?: (info: { turnToken: string }) => void;
   onTurnProgress?: (info: { turnToken: string }) => void;
@@ -104,6 +116,30 @@ export interface AntigravityHostOptions {
     turnToken?: string;
     conversationIds: readonly string[];
     attribution: "exact" | "unattributed";
+  }) => void;
+  /** issue #371: `interrupt()` targeted an active turn — fired synchronously
+   *  from `interrupt()` itself, once per call that has a turn to target
+   *  (an idle interrupt fires neither this nor `onInterruptSettled`). */
+  onInterruptRequested?: (info: {
+    turnToken: string;
+    pendingPermission: boolean;
+    pendingQuestion: boolean;
+    childPid: number | null;
+  }) => void;
+  /** issue #371: the interrupted turn reached settlement (state back at
+   *  rest). Fired at most once per `onInterruptRequested`. */
+  onInterruptSettled?: (info: {
+    turnToken: string;
+    exitCode: number | null;
+    signal: NodeJS.Signals | null;
+    elapsedMs: number;
+  }) => void;
+  /** issue #371 S1: `send()` resolved without starting a turn (closed /
+   *  gate-broken / fail-stopped) — the caller's own promise never rejects
+   *  for this, so it cannot otherwise learn the reason. */
+  onSendRejected?: (info: {
+    turnToken?: string;
+    reason: "closed" | "gate_broken" | "watchdog_fail_stopped";
   }) => void;
   toolDescriptors?: ToolDescriptor[];
   permissionBroker: PermissionBroker;
@@ -124,6 +160,13 @@ export interface AntigravityHostOptions {
   nodePath?: string;
   agyPath?: string;
   spawn?: (command: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv }) => SpawnedAgy;
+  /** Injectable for tests (issue #371): controls the timing of the
+   *  pre-spawn `ToolHost.listen` await so a test can interrupt while it is
+   *  still pending. Defaults to the real static method. */
+  toolHostListen?: (descriptors: ToolDescriptor[]) => Promise<ToolHost>;
+  /** Injectable for tests (issue #371), same rationale as `toolHostListen`
+   *  for the pre-spawn `GateServer.listen` await. */
+  gateServerListen?: (options: GateServerOptions) => Promise<GateServer>;
   probeSpawn?: (command: string, args: string[], options: { cwd: string }) => GateProbe;
   modelsProbeSpawn?: (command: string, args: string[], options: { cwd: string }) => GateProbe;
   verifyGate?: (args: string[]) => Promise<boolean>;
@@ -287,6 +330,26 @@ export class AntigravityHost implements EngineAdapter {
   #activeTurnToolTimeout: ToolTimeoutInfo | null = null;
   #watchdogFailStopped = false;
   #lifecycleGeneration = 0;
+  /** The turnToken `#drainTurns` is currently processing, from the moment
+   *  it dequeues a turn until the turn's `finally` clears it. Set earlier
+   *  than `#activeTurnToken` (which only appears once the agy child has
+   *  actually spawned), so `interrupt()` can record which turn it targets
+   *  even during the pre-spawn setup phase. */
+  #currentTurnToken: string | null = null;
+  /** The model `#runTurn` attempted for the current turn, once computed,
+   *  mirroring the `attemptedModel` local variable so a settlement outside
+   *  `#runTurn` can roll back the same attempt (and only that attempt). */
+  #currentAttemptedModel: string | null = null;
+  /** issue #371: a one-shot record of the turn `interrupt()` targeted,
+   *  written synchronously before the generation bump. Any later exit path
+   *  that notices the stale generation consults it to tell "this turn was
+   *  operator-interrupted" apart from any other cause (close, watchdog
+   *  fail-stop, a genuine error) — the generation counter itself has
+   *  already moved on by then. Cleared once the matching turn settles. */
+  #interruptRecord: { turnToken: string; generation: number; at: string } | null = null;
+  /** Exit info from the most recent agy child close, read by the interrupt
+   *  settlement path for the `interrupt_settled` lifecycle event. */
+  #lastChildExit: { code: number | null; signal: NodeJS.Signals | null } | null = null;
   #toolHost: ToolHost | null = null;
   #gateServer: GateServer | null = null;
   #gateProbe: GateProbe | null = null;
@@ -379,7 +442,19 @@ export class AntigravityHost implements EngineAdapter {
     conversationIds?: readonly string[],
     turnToken?: string,
   ): Promise<void> {
-    if (this.#closed || this.#gateBroken || this.#watchdogFailStopped) return;
+    // issue #371 S1: these resolve without starting a turn and without
+    // throwing, so a caller's `.catch()` never sees them — fire the
+    // diagnostic callback so the wrapper can still log the classified
+    // reason (never the inbound text) to the lifecycle stream.
+    if (this.#closed || this.#gateBroken || this.#watchdogFailStopped) {
+      this.#options.onSendRejected?.({
+        ...(turnToken === undefined ? {} : { turnToken }),
+        // Most specific first: a watchdog fail-stop also sets `#closed`, and
+        // a customization tamper (`#gateBroken`) can co-occur with either.
+        reason: this.#watchdogFailStopped ? "watchdog_fail_stopped" : this.#gateBroken ? "gate_broken" : "closed",
+      });
+      return;
+    }
     if (attachmentIds !== undefined && attachmentIds.length > 0) {
       this.#warn("antigravity: attachments are unsupported");
       return;
@@ -399,6 +474,26 @@ export class AntigravityHost implements EngineAdapter {
   }
 
   async interrupt(): Promise<void> {
+    // issue #371: record the interrupt target synchronously, before the
+    // generation bump, so the settlement invariant in `#drainTurns` can
+    // recognize this specific turn's ending as an operator interrupt no
+    // matter which exit path in `#runTurn` first notices the stale
+    // generation. No current turn (idle interrupt) leaves no record, so no
+    // result / lifecycle event is produced and the next `send()` simply
+    // starts under the new generation.
+    if (this.#currentTurnToken !== null) {
+      this.#interruptRecord = {
+        turnToken: this.#currentTurnToken,
+        generation: this.#lifecycleGeneration,
+        at: this.#now(),
+      };
+      this.#options.onInterruptRequested?.({
+        turnToken: this.#currentTurnToken,
+        pendingPermission: this.#pendingPermission !== null,
+        pendingQuestion: this.#pendingQuestion !== null,
+        childPid: this.#running?.pid ?? null,
+      });
+    }
     this.#lifecycleGeneration += 1;
     // Preserve queued turns (issue #358): an ordinary interrupt aborts only
     // the active turn (via the generation bump + SIGTERM below). Queued
@@ -800,6 +895,7 @@ export class AntigravityHost implements EngineAdapter {
     // instructions too; inter-agent bookkeeping ignores a token it never
     // issued.
     const turnToken = turn.turnToken ?? randomUUID();
+    this.#currentTurnToken = turnToken;
     let error: InterAgentErrorClassifyInput | undefined;
     try {
       error = await this.#runTurn(turn.text, generation, turnToken, turn.conversationIds ?? []);
@@ -811,13 +907,54 @@ export class AntigravityHost implements EngineAdapter {
       this.#running = null;
       this.#turnActive = false;
       if (!this.#watchdogFailStopped) {
+        // issue #371 settlement invariant, narrowed by the design addendum
+        // (kuroe + momo M1): a generation-mismatch early return in
+        // `#runTurn` (or a stale-generation throw the catch above
+        // deliberately left unsettled) gets a synthetic "interrupted"
+        // result ONLY when an operator `interrupt()` targeted this exact
+        // turn AND the host is still in normal admission. `close()` also
+        // bumps the generation (`#watchdogFailStopped`'s case is already
+        // excluded by the surrounding `if`), but its stale-generation
+        // return keeps its PRE-#371 termination semantics unchanged: no
+        // fabricated result, no interrupt lifecycle event, and no queue
+        // resume beyond what `#drainTurns`'s own top-of-function guard
+        // already withholds — the host is tearing down, not continuing.
+        const normalAdmission = !this.#closed;
+        const interrupted = normalAdmission && this.#interruptRecord?.turnToken === turnToken;
+        let cancellation: { kind: "interrupt"; reason: "interrupted" } | undefined;
+        // Settle as "interrupted" only when THIS invariant is what settles
+        // the turn. A branch inside `#runTurn` may have already applied its
+        // own terminal transition for an unrelated reason (e.g. customization
+        // tampering discovered after the child exited) even though an
+        // interrupt also happened to be requested for the same turn — that
+        // turn's real outcome is the tampering, not the interrupt.
+        const settledAsInterrupted = interrupted && !AT_REST_STATES.has(this.#machine.state);
+        if (settledAsInterrupted) {
+          this.#terminalError("interrupted", this.#currentAttemptedModel);
+          error = { reason: "interrupted" };
+          cancellation = { kind: "interrupt", reason: "interrupted" };
+          const exit = this.#lastChildExit;
+          const requestedAt = this.#interruptRecord?.at;
+          this.#options.onInterruptSettled?.({
+            turnToken,
+            exitCode: exit?.code ?? null,
+            signal: exit?.signal ?? null,
+            elapsedMs: requestedAt === undefined
+              ? 0
+              : Math.max(0, Date.parse(this.#now()) - Date.parse(requestedAt)),
+          });
+        }
+        if (this.#interruptRecord?.turnToken === turnToken) this.#interruptRecord = null;
         this.#options.onTurnBoundary?.({ turnToken });
         this.#options.onTurnEnd?.({
           turnToken,
           conversationIds: turn.conversationIds ?? [],
           ...(error === undefined ? {} : { error }),
+          ...(cancellation === undefined ? {} : { cancellation }),
         });
       }
+      this.#currentTurnToken = null;
+      this.#currentAttemptedModel = null;
       if (this.#activeTurnToken === turnToken) {
         this.#activeTurnToken = null;
         this.#activeTurnConversationIds = [];
@@ -832,6 +969,11 @@ export class AntigravityHost implements EngineAdapter {
     turnToken: string,
     conversationIds: readonly string[],
   ): Promise<InterAgentErrorClassifyInput | undefined> {
+    // Review finding (issue #371 round 1): without this reset, a turn
+    // interrupted before its own child ever spawns would report a PRIOR
+    // turn's leftover exit code/signal in `onInterruptSettled`, misleading
+    // an operator reading the lifecycle journal.
+    this.#lastChildExit = null;
     if (!this.#agyExecutable.ok) {
       throw new Error(`antigravity_cli_unavailable:${this.#agyExecutable.reason}`);
     }
@@ -851,7 +993,7 @@ export class AntigravityHost implements EngineAdapter {
     let toolHost: ToolHost | null = null;
     let gateServer: GateServer | null = null;
     try {
-      toolHost = await ToolHost.listen(this.#options.toolDescriptors ?? []);
+      toolHost = await (this.#options.toolHostListen ?? ToolHost.listen)(this.#options.toolDescriptors ?? []);
       if (!this.#isCurrent(generation)) return undefined;
       // issue #359 M1: block this turn's gate until the server's permission_sync
       // for the current connection has been applied, so a durable control/next
@@ -875,7 +1017,7 @@ export class AntigravityHost implements EngineAdapter {
         onPermissionResolved: () => this.#apply({ kind: "permission_resolved" }),
         ...(this.#options.warn === undefined ? {} : { warn: this.#options.warn }),
       });
-      gateServer = await GateServer.listen({
+      gateServer = await (this.#options.gateServerListen ?? GateServer.listen)({
         gate,
         onSocketClose: () => {
           this.#options.permissionBroker.close();
@@ -891,6 +1033,7 @@ export class AntigravityHost implements EngineAdapter {
       }
       if (!this.#isCurrent(generation)) return;
       const attemptedModel = this.#pendingModel;
+      this.#currentAttemptedModel = attemptedModel;
       const args = this.#turnArguments(text, customization.path, attemptedModel ?? this.#config.model);
       let child: SpawnedAgy;
       try {
@@ -1086,8 +1229,9 @@ export class AntigravityHost implements EngineAdapter {
         stdoutEnded = true;
         settleAfterTerminalIo();
       });
-      child.once("close", () => {
+      child.once("close", (code, signal) => {
         closed = true;
+        this.#lastChildExit = { code, signal };
         settleAfterTerminalIo();
       });
       child.once("error", (error) => {

@@ -13,7 +13,7 @@ import {
   type WhoamiSnapshot,
   type WrapperConfig,
 } from "@kaoiro/agent-common";
-import { writeRedactedStderr } from "@kaoiro/agent-common";
+import { boundErrorDetail, writeRedactedStderr } from "@kaoiro/agent-common";
 import {
   loadConfig,
   loadWrapperBuildInfo,
@@ -148,6 +148,14 @@ export async function runAntigravityCli(
           batch.conversationIds,
           batch.turnToken,
         ).catch((error: unknown) => {
+          // issue #371 S1: log before classifying so an unattributed
+          // rejection (root cause otherwise invisible from the journal) is
+          // still diagnosable next time.
+          writeAntigravityLifecycle({
+            event: "send_not_started",
+            turnToken: batch.turnToken,
+            details: { shape: "throw", reason: boundErrorDetail(String(error)) },
+          });
           const classified = classifyInterAgentError({ detail: String(error) });
           for (const notice of interAgent.resolveTurnEnd(
             batch.turnToken,
@@ -180,7 +188,7 @@ export async function runAntigravityCli(
     seq?: number;
     seqFirst?: number;
     seqLast?: number;
-    details?: Record<string, number | string>;
+    details?: Record<string, number | string | boolean>;
   }): void => {
     try {
       const range = lifecycleRange(event.turnToken);
@@ -386,6 +394,40 @@ export async function runAntigravityCli(
           `attribution=${attribution}; discarded unstarted dispatched=${frozen.droppedDispatched}, ` +
           `pending=${frozen.droppedPending}; operator recovery is required\n`,
       );
+    },
+    // issue #371 item 2: lifecycle events for an operator interrupt, next
+    // to `turn_start` in the same stream.
+    onInterruptRequested: ({ turnToken, pendingPermission, pendingQuestion, childPid }) => {
+      writeAntigravityLifecycle({
+        event: "interrupt_requested",
+        turnToken,
+        details: {
+          pending_permission: pendingPermission,
+          pending_question: pendingQuestion,
+          ...(childPid === null ? {} : { child_pid: childPid }),
+        },
+      });
+    },
+    onInterruptSettled: ({ turnToken, exitCode, signal, elapsedMs }) => {
+      writeAntigravityLifecycle({
+        event: "interrupt_settled",
+        turnToken,
+        details: {
+          ...(exitCode === null ? {} : { exit_code: exitCode }),
+          ...(signal === null ? {} : { signal }),
+          elapsed_ms: elapsedMs,
+        },
+      });
+    },
+    // issue #371 S1: `send()` resolved without starting a turn (closed /
+    // gate-broken / fail-stopped) — the caller's own promise never rejects
+    // for this, so `instructionChain`'s `.catch()` below cannot see it.
+    onSendRejected: ({ turnToken, reason }) => {
+      writeAntigravityLifecycle({
+        event: "send_not_started",
+        ...(turnToken === undefined ? {} : { turnToken }),
+        details: { shape: "no_op", reason },
+      });
     },
     toolDescriptors: [
       ...interAgent.descriptors(),

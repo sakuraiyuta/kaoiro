@@ -138,6 +138,46 @@ inactivity does accrue *(measured: 22.6 s without stdout events during a
 mock passphrase prompt; the indefinite hang itself was not reproduced because
 the CLI backgrounded the child and the print timeout ended the turn)*.
 
+### Operator interrupt: turn settlement (issue #371)
+
+`interrupt()` closes the permission/question brokers, the gate server, and
+the tool host, then sends the `agy` child one `SIGTERM` — killing the
+process was already reliable *(measured on production: agy and every hook
+child gone within tens of ms of the signal in all three reproduced cases)*.
+What was missing was settlement: the state machine stayed at whatever the
+last applied event left (`sending`, `tool_running`, `waiting_permission`)
+indefinitely, `onTurnEnd` fired without a `cancellation`, so an inter-agent
+sender's turn classified as `api_error` instead of `interrupted`, and nothing
+reached the `[antigravity-lifecycle]` stream.
+
+- **An operator-interrupted turn always ends at rest.** However the
+  interrupted turn's `#runTurn` call unwinds (an early return before the
+  `agy` child ever spawned, or the child's own exit), `#drainTurns`'s
+  `finally` settles it as `"interrupted"` when `interrupt()`'s own record
+  matches this turn, the host is still in normal admission (not `close()`d),
+  and the state machine is not already at `idle` / `waiting_input` / `done` /
+  `error`. The dashboard never shows a stale `tool_running` /
+  `waiting_permission` / `sending` after an interrupt. `close()` and a
+  watchdog fail-stop can trigger the same generation-mismatch early returns,
+  but deliberately do NOT get this synthetic settlement — they keep the
+  pre-issue-#371 behavior exactly (no fabricated result, no interrupt
+  lifecycle event): the host is tearing down in both cases, so there is
+  nothing left to settle for an observer.
+- **Lifecycle events.** `interrupt_requested` (turn token, whether a
+  permission/question was pending, child pid) logs when `interrupt()` runs;
+  `interrupt_settled` (exit code, signal, elapsed ms) logs once the turn
+  reaches the "interrupted" settlement above. An interrupt with no turn in
+  flight (idle) produces neither.
+- **`send()`'s silent non-start paths are now diagnosable.** `send()` on a
+  closed, customization-tampered (`gate_broken`), or watchdog-fail-stopped
+  host resolves without starting a turn and without throwing, so a caller's
+  `.catch()` never sees it. That reason, and any other unclassified `send()`
+  rejection, is now logged as `send_not_started` (turn token and delivery
+  seqs only, never the inbound instruction text) before classification.
+- **Out of scope.** Escalating past the single `SIGTERM` (process-group
+  kill, a `SIGKILL` grace timer for a wedged hook) is tracked separately
+  (issue #379); this only changes what settles after the existing kill.
+
 ### Tool definition (CLI bridge over the wrapper tool host)
 
 The wrapper reuses the Codex `ToolHost` (NDJSON over a per-agent unix

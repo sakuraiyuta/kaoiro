@@ -6,7 +6,8 @@ import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PermissionBroker, QuestionBroker, classifyInterAgentError, type Envelope, type InterAgentErrorClassifyInput, type WrapperConfig } from "@kaoiro/agent-common";
 import { AntigravityHost, initialStatusExt, isGateRegistered, type AntigravityHostOptions, type GateProbe, type SpawnedAgy } from "../src/host.js";
-import type { AntigravityLaunchConfig } from "../src/gate.js";
+import { AntigravityGate, GateServer, type AntigravityLaunchConfig } from "../src/gate.js";
+import { ToolHost } from "../src/toolhost.js";
 import type { PermissionSyncMessage } from "@kaoiro/protocol";
 
 class FakeAgy extends EventEmitter {
@@ -70,11 +71,17 @@ function hostHarness(options: {
   onToolEnd?: AntigravityHostOptions["onToolEnd"];
   permissionSyncSupported?: boolean;
   waitForPermissionSync?: () => Promise<void>;
+  toolHostListen?: AntigravityHostOptions["toolHostListen"];
+  gateServerListen?: AntigravityHostOptions["gateServerListen"];
 } = {}) {
   const states: Envelope[] = [];
   const logs: Envelope[] = [];
   const permissionLifecycle: unknown[] = [];
   const calls: { command: string; args: string[]; env: NodeJS.ProcessEnv; child: FakeAgy }[] = [];
+  const turnEnds: Array<Parameters<NonNullable<AntigravityHostOptions["onTurnEnd"]>>[0]> = [];
+  const interruptRequests: Array<Parameters<NonNullable<AntigravityHostOptions["onInterruptRequested"]>>[0]> = [];
+  const interruptSettlements: Array<Parameters<NonNullable<AntigravityHostOptions["onInterruptSettled"]>>[0]> = [];
+  const sendRejections: Array<Parameters<NonNullable<AntigravityHostOptions["onSendRejected"]>>[0]> = [];
   const cfg = options.config ?? config();
   const broker = new PermissionBroker({ config: cfg, send: () => {} });
   const host = new AntigravityHost(cfg, {
@@ -90,18 +97,26 @@ function hostHarness(options: {
     ...(options.dangerouslySkipPermissions === undefined ? {} : { dangerouslySkipPermissions: options.dangerouslySkipPermissions }),
     agyPath: "/test/agy",
     ...(options.now === undefined ? {} : { now: options.now }),
-    ...(options.onTurnEnd === undefined ? {} : { onTurnEnd: options.onTurnEnd }),
+    onTurnEnd: (info) => {
+      turnEnds.push(info);
+      options.onTurnEnd?.(info);
+    },
     ...(options.onToolStart === undefined ? {} : { onToolStart: options.onToolStart }),
     ...(options.onToolEnd === undefined ? {} : { onToolEnd: options.onToolEnd }),
     ...(options.permissionSyncSupported === undefined ? {} : { permissionSyncSupported: options.permissionSyncSupported }),
     ...(options.waitForPermissionSync === undefined ? {} : { waitForPermissionSync: options.waitForPermissionSync }),
+    ...(options.toolHostListen === undefined ? {} : { toolHostListen: options.toolHostListen }),
+    ...(options.gateServerListen === undefined ? {} : { gateServerListen: options.gateServerListen }),
+    onInterruptRequested: (info) => interruptRequests.push(info),
+    onInterruptSettled: (info) => interruptSettlements.push(info),
+    onSendRejected: (info) => sendRejections.push(info),
     spawn: (command, args, spawnOptions) => {
       const child = new FakeAgy();
       calls.push({ command, args, env: spawnOptions.env, child });
       return child as unknown as SpawnedAgy;
     },
   });
-  return { host, states, logs, calls, permissionLifecycle };
+  return { host, states, logs, calls, permissionLifecycle, turnEnds, interruptRequests, interruptSettlements, sendRejections };
 }
 
 describe("AntigravityHost", () => {
@@ -1306,6 +1321,307 @@ if (args[0] === "models") {
     const detail = logs.find((envelope) => envelope.type === "result")?.payload.error_detail as string;
     expect(Buffer.byteLength(detail, "utf8")).toBe(16_384);
     host.close();
+  });
+
+  describe("issue #371 interrupt settlement", () => {
+    it("settles to waiting_input, once, when interrupted while ToolHost.listen is pending (no spawn)", async () => {
+      let resolveListen!: (value: ToolHost) => void;
+      const pending = new Promise<ToolHost>((resolve) => { resolveListen = resolve; });
+      const { host, states, calls, turnEnds, interruptRequests, interruptSettlements } = hostHarness({
+        toolHostListen: () => pending,
+      });
+      await host.send("hello");
+      await host.interrupt();
+      const real = await ToolHost.listen([]);
+      resolveListen(real);
+      await waitFor(() => turnEnds.length === 1);
+      expect(calls).toHaveLength(0);
+      expect(states.at(-1)?.state).toBe("waiting_input");
+      expect(turnEnds).toHaveLength(1);
+      expect(turnEnds[0]!.error).toEqual({ reason: "interrupted" });
+      expect(turnEnds[0]!.cancellation).toEqual({ kind: "interrupt", reason: "interrupted" });
+      expect(interruptRequests).toHaveLength(1);
+      expect(interruptSettlements).toHaveLength(1);
+      real.close();
+      host.close();
+    });
+
+    it("does not leak a prior turn's exit code/signal into onInterruptSettled when this turn's child never spawned (review finding)", async () => {
+      let resolveSync!: () => void;
+      const pending = new Promise<void>((resolve) => { resolveSync = resolve; });
+      let gate = false;
+      const { host, calls, turnEnds, interruptSettlements } = hostHarness({
+        waitForPermissionSync: () => (gate ? pending : Promise.resolve()),
+      });
+      // Turn 1 runs a real child to completion with a real exit code.
+      await host.send("hello", undefined, [], "turn-1");
+      await waitFor(() => calls.length === 1);
+      calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
+      calls[0]!.child.finish();
+      await waitFor(() => turnEnds.length === 1);
+      // Turn 2 is interrupted before its own child ever spawns.
+      gate = true;
+      await host.send("world", undefined, [], "turn-2");
+      await host.interrupt();
+      resolveSync();
+      await waitFor(() => turnEnds.length === 2);
+      expect(calls).toHaveLength(1);
+      expect(interruptSettlements).toHaveLength(1);
+      expect(interruptSettlements[0]).toMatchObject({ turnToken: "turn-2", exitCode: null, signal: null });
+      host.close();
+    });
+
+    it("settles to waiting_input, once, when interrupted while waitForPermissionSync is pending (no spawn)", async () => {
+      let resolveSync!: () => void;
+      const pending = new Promise<void>((resolve) => { resolveSync = resolve; });
+      const { host, states, calls, turnEnds, interruptSettlements } = hostHarness({
+        waitForPermissionSync: () => pending,
+      });
+      await host.send("hello");
+      await host.interrupt();
+      resolveSync();
+      await waitFor(() => turnEnds.length === 1);
+      expect(calls).toHaveLength(0);
+      expect(states.at(-1)?.state).toBe("waiting_input");
+      expect(turnEnds[0]!.error).toEqual({ reason: "interrupted" });
+      expect(turnEnds[0]!.cancellation).toEqual({ kind: "interrupt", reason: "interrupted" });
+      expect(interruptSettlements).toHaveLength(1);
+      host.close();
+    });
+
+    it("settles to waiting_input, once, when interrupted while GateServer.listen is pending (no spawn)", async () => {
+      let resolveListen!: (value: GateServer) => void;
+      const pending = new Promise<GateServer>((resolve) => { resolveListen = resolve; });
+      const { host, states, calls, turnEnds, interruptSettlements } = hostHarness({
+        gateServerListen: () => pending,
+      });
+      await host.send("hello");
+      await host.interrupt();
+      const real = await GateServer.listen({ gate: new AntigravityGate({
+        config: config(),
+        cwd: process.cwd(),
+        customizationDir: process.cwd(),
+        nodePath: process.execPath,
+        bridgePath: "/test/bridge.js",
+        toolNames: () => new Set(),
+        broker: new PermissionBroker({ config: config(), send: () => {} }),
+      }) });
+      resolveListen(real);
+      await waitFor(() => turnEnds.length === 1);
+      expect(calls).toHaveLength(0);
+      expect(states.at(-1)?.state).toBe("waiting_input");
+      expect(turnEnds[0]!.error).toEqual({ reason: "interrupted" });
+      expect(turnEnds[0]!.cancellation).toEqual({ kind: "interrupt", reason: "interrupted" });
+      expect(interruptSettlements).toHaveLength(1);
+      real.close();
+      host.close();
+    });
+
+    it("settles to waiting_input, once, when interrupted while gate registration verification is pending (no spawn)", async () => {
+      let resolveProbe!: (value: boolean) => void;
+      const probe = new Promise<boolean>((resolve) => { resolveProbe = resolve; });
+      const { host, states, calls, turnEnds, interruptSettlements } = hostHarness({ verifyGate: () => probe });
+      await host.send("hello");
+      await host.interrupt();
+      resolveProbe(true);
+      await waitFor(() => turnEnds.length === 1);
+      expect(calls).toHaveLength(0);
+      expect(states.at(-1)?.state).toBe("waiting_input");
+      expect(turnEnds[0]!.error).toEqual({ reason: "interrupted" });
+      expect(turnEnds[0]!.cancellation).toEqual({ kind: "interrupt", reason: "interrupted" });
+      expect(interruptSettlements).toHaveLength(1);
+      host.close();
+    });
+
+    it("settles to waiting_input, once, when interrupted mid-tool-execution, and the next queued turn runs", async () => {
+      const { host, states, calls, turnEnds, interruptSettlements } = hostHarness();
+      await host.send("hello");
+      await waitFor(() => calls.length === 1);
+      calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"run_command"}}\n');
+      await waitFor(() => states.at(-1)?.state === "tool_running");
+      void host.send("queued while interrupting", undefined, [], "turn-2");
+      await host.interrupt();
+      calls[0]!.child.stdout.end();
+      calls[0]!.child.emit("close", null, "SIGTERM");
+      await waitFor(() => turnEnds.length === 1);
+      expect(states.find((s) => s.state === "waiting_input")).toBeDefined();
+      expect(turnEnds[0]!.error).toEqual({ reason: "interrupted" });
+      expect(turnEnds[0]!.cancellation).toEqual({ kind: "interrupt", reason: "interrupted" });
+      expect(interruptSettlements).toHaveLength(1);
+      expect(interruptSettlements[0]).toMatchObject({ signal: "SIGTERM" });
+      // The queued turn (issue #358) runs under the new generation.
+      await waitFor(() => calls.length === 2);
+      host.close();
+    });
+
+    it("an idle interrupt records nothing, and the next send starts a turn normally", async () => {
+      const { host, calls, turnEnds, interruptRequests, interruptSettlements } = hostHarness();
+      await host.interrupt();
+      expect(interruptRequests).toHaveLength(0);
+      expect(interruptSettlements).toHaveLength(0);
+      expect(turnEnds).toHaveLength(0);
+      await host.send("hello");
+      await waitFor(() => calls.length === 1);
+      calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
+      calls[0]!.child.finish();
+      await waitFor(() => turnEnds.length === 1);
+      expect(turnEnds[0]!.error).toBeUndefined();
+      expect(turnEnds[0]!.cancellation).toBeUndefined();
+      host.close();
+    });
+
+    it("close() racing a pending waitForPermissionSync keeps pre-#371 termination semantics: no synthetic result, no interrupt lifecycle, no queue resume (design addendum)", async () => {
+      let resolveSync!: () => void;
+      const pending = new Promise<void>((resolve) => { resolveSync = resolve; });
+      const { host, calls, turnEnds, interruptRequests, interruptSettlements } = hostHarness({
+        waitForPermissionSync: () => pending,
+      });
+      await host.send("hello", undefined, [], "turn-1");
+      void host.send("queued before close", undefined, [], "turn-2");
+      host.close();
+      resolveSync();
+      await waitFor(() => turnEnds.length === 1);
+      expect(calls).toHaveLength(0);
+      expect(turnEnds[0]!.error).toBeUndefined();
+      expect(turnEnds[0]!.cancellation).toBeUndefined();
+      expect(interruptRequests).toHaveLength(0);
+      expect(interruptSettlements).toHaveLength(0);
+      // The host is closed: #drainTurns's own top-of-function guard
+      // withholds the queued turn regardless of this invariant.
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(calls).toHaveLength(0);
+    });
+
+    it("a watchdog fail-stop racing a pending gate registration verification keeps pre-#371 termination semantics (design addendum)", async () => {
+      let resolveProbe!: (value: boolean) => void;
+      const probe = new Promise<boolean>((resolve) => { resolveProbe = resolve; });
+      const { host, calls, turnEnds, interruptSettlements } = hostHarness({ verifyGate: () => probe });
+      await host.send("hello");
+      host.failStopForWatchdogAttributionUnknown();
+      resolveProbe(true);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      // `#watchdogFailStopped` suppresses `#drainTurns`'s onTurnEnd entirely
+      // for the active turn (the existing, unmodified guard at the top of
+      // this block) — `onWatchdogFailStop` is that path's own notification.
+      expect(calls).toHaveLength(0);
+      expect(turnEnds).toHaveLength(0);
+      expect(interruptSettlements).toHaveLength(0);
+    });
+
+    it("operator interrupt settles exactly once and the next queued turn runs under the new generation (design addendum pin)", async () => {
+      let resolveSync!: () => void;
+      const pending = new Promise<void>((resolve) => { resolveSync = resolve; });
+      const { host, calls, turnEnds, interruptSettlements } = hostHarness({
+        waitForPermissionSync: () => pending,
+      });
+      await host.send("hello", undefined, [], "turn-1");
+      void host.send("queued while interrupting", undefined, [], "turn-2");
+      await host.interrupt();
+      resolveSync();
+      await waitFor(() => turnEnds.length === 1);
+      expect(interruptSettlements).toHaveLength(1);
+      expect(turnEnds).toHaveLength(1);
+      expect(turnEnds[0]!.cancellation).toEqual({ kind: "interrupt", reason: "interrupted" });
+      await waitFor(() => calls.length === 1);
+      host.close();
+    });
+
+    it("close() after interrupt() but before the turn settles suppresses the synthetic result too (normal-admission gate)", async () => {
+      let resolveSync!: () => void;
+      const pending = new Promise<void>((resolve) => { resolveSync = resolve; });
+      const { host, calls, turnEnds, interruptSettlements } = hostHarness({
+        waitForPermissionSync: () => pending,
+      });
+      await host.send("hello", undefined, [], "turn-1");
+      await host.interrupt();
+      host.close();
+      resolveSync();
+      await waitFor(() => turnEnds.length === 1);
+      expect(calls).toHaveLength(0);
+      // interrupt()'s record matched this turn, but close() moved the host
+      // out of normal admission before settlement -- the synthetic
+      // "interrupted" result must not fire even though the record matched.
+      expect(turnEnds[0]!.error).toBeUndefined();
+      expect(turnEnds[0]!.cancellation).toBeUndefined();
+      expect(interruptSettlements).toHaveLength(0);
+    });
+
+    it("a watchdog fail-stop after interrupt() but before the turn settles also suppresses the synthetic result (kuroe review, turn 10)", async () => {
+      // `normalAdmission` checks only `!this.#closed`, not
+      // `!this.#watchdogFailStopped`, because the WHOLE settlement
+      // invariant already sits inside `if (!this.#watchdogFailStopped)`
+      // (unchanged pre-#371 code) -- once fail-stop sets that flag, this
+      // entire block is skipped regardless of what interrupt() recorded
+      // first, synchronously and with no `await` in between, so there is
+      // no window where a fail-stop could land mid-invariant. This test
+      // pins that guarantee directly rather than leaving it as reasoning
+      // about the surrounding `if`.
+      let resolveSync!: () => void;
+      const pending = new Promise<void>((resolve) => { resolveSync = resolve; });
+      const { host, calls, turnEnds, interruptSettlements } = hostHarness({
+        waitForPermissionSync: () => pending,
+      });
+      await host.send("hello", undefined, [], "turn-1");
+      await host.interrupt();
+      host.failStopForWatchdogAttributionUnknown();
+      resolveSync();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      // `#watchdogFailStopped` suppresses `#drainTurns`'s onTurnEnd
+      // entirely for the active turn -- `onWatchdogFailStop` is that
+      // path's own notification, not exercised here.
+      expect(calls).toHaveLength(0);
+      expect(turnEnds).toHaveLength(0);
+      expect(interruptSettlements).toHaveLength(0);
+    });
+
+    it("a settlement for an unrelated reason after interrupt is not misreported as interrupted (regression guard)", async () => {
+      // Same scenario as "interrupt後でもturn後customization改ざんをfail-stopにする"
+      // above, extended to assert the new fields this issue adds.
+      const { host, logs, calls, turnEnds, interruptSettlements } = hostHarness();
+      await host.send("hello");
+      await waitFor(() => calls.length === 1);
+      const customizationDir = calls[0]!.args.at(-1)!;
+      writeFileSync(join(customizationDir, ".agents", "rules", "AGENTS.md"), "tampered");
+      await host.interrupt();
+      calls[0]!.child.finish();
+      await waitFor(() => logs.some((envelope) => envelope.type === "result"));
+      await waitFor(() => turnEnds.length === 1);
+      expect(turnEnds[0]!.error).toEqual({ detail: "antigravity_customization_tampered" });
+      expect(turnEnds[0]!.cancellation).toBeUndefined();
+      expect(interruptSettlements).toHaveLength(0);
+      host.close();
+    });
+
+    it("send() on a closed host reports onSendRejected without starting a turn", async () => {
+      const { host, calls, sendRejections } = hostHarness();
+      host.close();
+      await host.send("hello", undefined, [], "turn-1");
+      expect(calls).toHaveLength(0);
+      expect(sendRejections).toEqual([{ turnToken: "turn-1", reason: "closed" }]);
+    });
+
+    it("send() on a watchdog-fail-stopped host reports onSendRejected without starting a turn", async () => {
+      const { host, calls, sendRejections } = hostHarness();
+      host.failStopForWatchdogAttributionUnknown();
+      await host.send("hello");
+      expect(calls).toHaveLength(0);
+      expect(sendRejections).toEqual([{ reason: "watchdog_fail_stopped" }]);
+      host.close();
+    });
+
+    it("send() on a gate-broken host reports onSendRejected without starting a turn", async () => {
+      const { host, logs, calls, sendRejections } = hostHarness();
+      await host.send("hello");
+      await waitFor(() => calls.length === 1);
+      const customizationDir = calls[0]!.args.at(-1)!;
+      writeFileSync(join(customizationDir, ".agents", "rules", "AGENTS.md"), "tampered");
+      calls[0]!.child.finish();
+      await waitFor(() => logs.some((envelope) => envelope.type === "result"));
+      await host.send("must not start", undefined, [], "turn-2");
+      expect(calls).toHaveLength(1);
+      expect(sendRejections).toEqual([{ turnToken: "turn-2", reason: "gate_broken" }]);
+      host.close();
+    });
   });
 
   describe("tool prompts and deadlines (issue #350)", () => {

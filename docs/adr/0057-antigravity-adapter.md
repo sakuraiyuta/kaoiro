@@ -24,6 +24,7 @@ Accepted 2026-09-18 after Stage A dogfood and F4c Stage B0 (mid-session
 approval/sandbox/network switching under a host-local launch ceiling,
 issue #359).
 Revised 2026-09-19 for `run_command` Cwd containment (F4 addendum, issue #370).
+Revised 2026-09-19 for operator-interrupt turn settlement (F4 addendum, issue #371).
 
 ## Context
 
@@ -176,6 +177,53 @@ would make an outside Cwd less restricted than an inside Cwd and is no longer
 permitted. The Cwd boundary is checked before the `local` command allowlist.
 Operator decisions reuse `PermissionBroker` (`waiting_permission`,
 `ext.pending_permission`).
+
+**F4 addendum — operator-interrupt turn settlement (issue #371).** `interrupt()`
+kills the `agy` child and every `PermissionBroker` / `QuestionBroker` /
+gate-socket resource, but that alone leaves the state machine parked at
+whatever the last applied event left (`sending`, `tool_running`,
+`waiting_permission`) — the child's death is not itself a state transition.
+`interrupt()` now also records a one-shot `{turnToken, generation, at}`
+marker, synchronously, before it bumps the lifecycle generation, binding to
+the turn `#drainTurns` established as inflight the moment it dequeued it —
+before the child ever spawns, not only after (`#activeTurnToken` alone would
+miss the four pre-spawn windows). `#drainTurns` applies a single settlement
+invariant in its `finally` block, the one place every turn (queued or
+active, however it ends) passes through: when the marker matches this turn
+AND the host is still in normal admission (not `close()`d) AND the state
+machine is not at rest (`idle` / `waiting_input` / `done` / `error`), it
+applies the terminal `result` transition there — `"interrupted"`, so
+`classifyInterAgentError` reports `interrupted` (not `api_error`) and
+`onTurnEnd` carries `cancellation: {kind: "interrupt", reason: "interrupted"}`.
+This replaces five separate generation-mismatch early returns inside
+`#runTurn` (after `ToolHost.listen`, after `waitForPermissionSync`, after
+`GateServer.listen`, after gate registration verification, after the child
+exits) that each individually skipped settlement — with one invariant instead
+of five call sites, no interrupt timing window is left unsettled. `close()`
+and watchdog fail-stop also bump the generation and can trigger the same five
+early returns, but a design addendum (kuroe + momo M1) deliberately narrows
+the invariant's terminal authority to the interrupted case only: those two
+keep their PRE-#371 termination semantics exactly (no fabricated result, no
+interrupt lifecycle event, no queue resume beyond what `#drainTurns`'s own
+top-of-function guard already withholds) — the host is tearing down, not
+continuing, so nothing needs settling for an observer. A turn that ends for
+an unrelated reason after also being interrupted (e.g. customization
+tampering discovered once the child exits) keeps its own reason; the
+`"interrupted"` classification applies only when this invariant is what
+actually settles the turn. An interrupt on an idle host (no turn in flight)
+records no marker and produces neither a result nor a lifecycle event; the
+next `send()` simply starts under the new generation. `interrupt_requested`
+(turn token, pending permission / question flags, child pid) and
+`interrupt_settled` (exit code, signal, elapsed ms) are logged once each to
+the `[antigravity-lifecycle]` stream. Separately, `send()`'s three silent
+non-start paths (closed / gate-broken / watchdog-fail-stopped) — which
+resolve without throwing, so a caller's `.catch()` never observes them — and
+an unclassified `send()` rejection are both now logged to the same stream
+(`send_not_started`, turn token and delivery seqs only, never inbound text)
+before classification, so the next unattributed incident is diagnosable from
+the journal. Escalating `SIGTERM` to `SIGKILL` on a wedged `agy` child is
+tracked separately (issue #379); this addendum does not change what
+`interrupt()` kills, only what settles afterward.
 
 `local` recognizes only a deliberately small shell grammar. It rejects shell
 expansion, environment assignment, redirection, subshells, `eval`, unknown
