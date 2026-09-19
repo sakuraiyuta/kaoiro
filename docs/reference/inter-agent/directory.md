@@ -326,4 +326,4 @@ value peers read through `list_agents`.
 - [Send acceptance, rejection, and waiting](send-and-wait.md).
 - [Delivery ledger](delivery.md).
 - [Peer-routing rules](../../contributing/peer-routing.md).
-- [Approval flow](../../specs/protocol-inter-agent.md#approval-flow-permission_broker-integration).
+- [Approval flow](../security/inter-agent-tool-authorization.md#approval-flow-permission_broker-integration).

@@ -8,7 +8,7 @@ last_updated: 2026-09-18
 
 Related security topics: [Security boundaries](../../architecture/security-boundaries.md), [Security threat model](../../architecture/security-threat-model.md), [Authentication and authorization](authentication-authorization.md), [Security enforcement boundaries](enforcement-boundaries.md), [Security release audit](../../operations/security-release-audit.md).
 
-The structural type for permission configurations is `PermissionConfiguration` in [@kaoiro/protocol](../../../protocol/src/index.ts). Per-engine inter-agent tool authorization remains in the [retained U15 sections](../../specs/auth-and-authz.md#tool-authorization--canusetool--permissionbroker).
+The structural type for permission configurations is `PermissionConfiguration` in [@kaoiro/protocol](../../../protocol/src/index.ts). Per-engine inter-agent tool authorization is in [Inter-agent tool authorization](inter-agent-tool-authorization.md).
 
 ### Tool authorization — canUseTool / PermissionBroker
 

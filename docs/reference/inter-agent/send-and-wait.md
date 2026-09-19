@@ -116,6 +116,6 @@ wording asks the sender to retry later with the same conversation_id.
 - [Message fields](messages.md).
 - [Conversation lifecycle](conversations.md).
 - [Dispatch and coalescing](../../architecture/inter-agent-messaging.md#dispatch-and-coalescing).
-- [Approval flow](../../specs/protocol-inter-agent.md#approval-flow-permission_broker-integration).
+- [Approval flow](../security/inter-agent-tool-authorization.md#approval-flow-permission_broker-integration).
 - [Companion tools](directory.md#companion-tools-wrapper-sdk-mcp).
 - [Delivery confirmation and recovery](delivery.md).

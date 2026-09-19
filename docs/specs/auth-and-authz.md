@@ -10,7 +10,7 @@ related: [protocol, security-threat-model, architecture, protocol-inter-agent]
 
 This page preserves the original anchors; the moved sections are linked below.
 
-The retained per-engine inter-agent tool authorization sections will move in U15.
+The per-engine inter-agent tool authorization sections moved to [Inter-agent tool authorization](../reference/security/inter-agent-tool-authorization.md).
 
 ## Purpose
 
@@ -52,22 +52,7 @@ Moved to [Authentication and authorization](../reference/security/authentication
 
 Moved to [Tool authorization](../reference/security/tool-authorization.md#tool-authorization--canusetool--permissionbroker).
 
-- The default allow set (`READ_ONLY_TOOLS`,
-  `wrapper/claude-code/src/read_only_tools.ts`) contains read-only tools (Read /
-  Grep / Glob / LS / NotebookRead) plus side-effect-free inter-agent helpers
-  `mcp__kaoiro__list_agents` / `mcp__kaoiro__whoami`. **Membership is a security
-  decision, not a convenience**: omission is the per-use approval gate itself
-  (`mcp__kaoiro__send_to_agent` / `request_compact` /
-  `request_session_reset` are intentionally omitted).
-
-- Codex has no canUseTool and auto-approves every kaoiro bridge tool
-  (`default_tools_approval_mode: "approve"`), so a tool that needs per-use
-  approval there asks on its own behalf: `operatorApprovalGated`
-  (`wrapper/agent-common/src/approval_gate.ts`) calls the same
-  `PermissionBroker.decide/3` from inside the MCP call and runs the wrapped
-  handler only after allow. The wait is bound to the calling turn and capped
-  at 300 s (ADR-0043, 2026-09-14 amendment). Currently gated this way:
-  `request_session_reset`.
+Moved to [Inter-agent tool authorization](../reference/security/inter-agent-tool-authorization.md#default-allow-set-and-per-engine-approval-gates).
 
 ### Permission configuration control
 
@@ -75,21 +60,7 @@ Moved to [Tool authorization](../reference/security/tool-authorization.md#permis
 
 ### MCP (`mcp__kaoiro__send_to_agent`)
 
-- Inject the in-process MCP server from `wrapper/agent-common/src/inter_agent.ts`
-  into the engine (Claude via `Options.mcpServers`, Codex via the tool-host bridge,
-  Antigravity via `ToolHost.listen` in `wrapper/antigravity/src/host.ts`).
-- On Claude, `send_to_agent` is **not in the default allowedTools**, so it always
-  goes through the broker. The colocated `list_agents` / `whoami` are read-only and
-  therefore auto-allowed (the `READ_ONLY_TOOLS` set above). Codex auto-approves
-  every bridge tool (`default_tools_approval_mode: "approve"`,
-  `wrapper/codex/src/bridge_policy.ts`) and `send_to_agent` is not wrapped in
-  `operatorApprovalGated` (`wrapper/codex/src/cli.ts`); Antigravity registers the
-  same descriptors unwrapped through `ToolHost` (`wrapper/antigravity/src/cli.ts`),
-  which carries no approval axis. The engine-scope bullets under
-  [Automatic approval](protocol-inter-agent.md#automatic-approval-conversation-scoped-whitelist-adr-0044-f2-addendum-option-b)
-  state the same boundary.
-- Routing uses the server's `route_inter_agent`; quotas use `ConversationStates`.
-- Details: [protocol-inter-agent](protocol-inter-agent.md)
+Moved to [Inter-agent tool authorization](../reference/security/inter-agent-tool-authorization.md#mcp-mcp__kaoiro__send_to_agent).
 
 ### Antigravity gate socket and customization dir (phase-34)
 
@@ -117,9 +88,7 @@ Moved to [Authentication and authorization](../reference/security/authentication
 
 Moved to [Tool authorization](../reference/security/tool-authorization.md#constraints-must).
 
-- MUST: When injecting a new in-process MCP tool into the SDK, explicitly decide
-  whether it belongs in default allowedTools (omitted = per-use approval;
-  included = unsupervised).
+Moved to [Inter-agent tool authorization](../reference/security/inter-agent-tool-authorization.md#constraints-must).
 
 ## Release-time audit checklist
 

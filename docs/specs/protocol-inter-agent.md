@@ -145,79 +145,11 @@ Moved to [User backward compatibility (issue #187 phase 2)](../reference/inter-a
 
 ### Approval flow (permission_broker integration)
 
-This flow applies to Claude Code only; see the engine-scope note near the end
-of this section for Codex and Antigravity. When wrapper-A invokes
-`send_to_agent`, it asks the operator for approval through the existing
-`canUseTool` path ([ADR-0022](../adr/0022-pending-permission-authoritative-source.md)).
-
-- Tool name: `send_to_agent`.
-- `input` contains destination `to`, kind, a body excerpt, and
-  `conversation_id` so the operator can decide.
-- Phase 1 reuses the existing permission dialog; Phase 2 may provide a
-  dedicated UI.
-- On denial the tool call fails; wrapper-A returns a send-rejected error to the
-  SDK and the agent can try another response.
+Moved to [Inter-agent tool authorization](../reference/security/inter-agent-tool-authorization.md#approval-flow-permission_broker-integration).
 
 #### Automatic approval (conversation-scoped whitelist, ADR-0044 F2 addendum, option B)
 
-Subsequent `send_to_agent` calls for the same `(conversation_id, to)` are
-automatically allowed without `canUseTool` (no operator dialog) **only when
-this wrapper process just received an accepted ack from the server for that
-pair**.
-
-- The whitelist exists **only in wrapper-process memory** as
-  `autoAllowedPeer` on the conversation lifecycle track (issue #167
-  `ConversationTrack` extension). It is bound to both `conversation_id` and
-  the approved `to` (issue #165 round-3 review, Fujino M2); binding only the
-  conversation would allow an `unknown_agent` rejection to be replaced by a
-  different recipient without approval. It is not persisted by the server.
-  A wrapper restart (including relaunch), or track TTL/cap eviction, clears it
-  and requires first-send approval again. A transport reconnect does not clear
-  it: the same-process `InterAgentTool` survives, and reconnect does not revoke
-  an operator-approved conversation.
-- Each wrapper instance has an independent whitelist. When B first replies to
-  a conversation started by A, B has no local entry and needs normal
-  `canUseTool` approval.
-- The first send of a new conversation (caller omitted `conversation_id`, and
-  the wrapper allocates one after sending) always goes through `canUseTool`;
-  no ID exists yet to match a whitelist entry.
-- **Establish a whitelist entry only for the first send that is both operator-
-  approved and server-accepted** (issue #165 round-4 review, Fujino design
-  approval, condition A — [issue #201 comment 5384486838](https://github.com/sakuraiyuta/kaoiro/issues/201#issuecomment-5384486838)).
-  `canUseTool` approval (dialog or an existing auto-allow) merely permits the
-  attempt and does not write the whitelist. Register `(conversation_id, to)`
-  when `#dispatch()` returns `{kind: "accepted"}`. **Rejected sends and
-  `unknown` (delivery unknown because no ack arrived) never touch the
-  whitelist**. Keeping unknown state gated is consistent with the repository's
-  safe default of retaining approval requirements ([ADR-0051](../adr/0051-history-restart-resilience.md)
-  D3-2): the cost is repeated dialogs, whereas promoting unknown delivery
-  would create a permission-bypass risk. The former optimistic registration at
-  the canUseTool boundary was discarded after three review rounds; see
-  [#201 comment 5384486746](https://github.com/sakuraiyuta/kaoiro/issues/201#issuecomment-5384486746)
-  and the design decision in [#201 comment 5384486838](https://github.com/sakuraiyuta/kaoiro/issues/201#issuecomment-5384486838).
-- **Race with inbound during a non-`done` dispatch** (issue #165 round-3
-  review, Fujino M3, gitea issue #201): if a valid inbound (including a
-  server-synthesized hard-limit stop) arrives for the same conversation while
-  `#dispatch()` is pending, the accepted-only rule prevents a rejected send
-  from establishing a whitelist through the race. `mutationGen` protects
-  `closed` / `turnNumber` state so reject cleanup cannot overwrite inbound
-  writes such as `closed=true` (a counter increments only on actual value
-  changes; issue #165 round-4 review, Fujino condition C). The comments in
-  `wrapper/agent-common/src/inter_agent.ts` `invoke()` and `receiveInbound()`
-  are authoritative.
-- This section applies **only to Claude's canUseTool path**. Codex fixes
-  approval to `never` and has no canUseTool-equivalent route ([ADR-0033](../adr/0033-permission-model-dual-axis.md)
-  F3), so `send_to_agent` is already unconditionally allowed and this
-  whitelist has no additional role.
-- Antigravity's inter-agent tools (`send_to_agent` / `list_agents` /
-  `whoami`) are registered through `ToolHost.listen` (`wrapper/antigravity/src/host.ts`),
-  a separate MCP-serving path that never passes through `AntigravityGate`'s
-  tool-class table (`wrapper/antigravity/src/gate.ts`) — they carry no
-  approval axis at all, unconditionally allowed by construction, not merely
-  fixed to `never` like Codex.
-- Kind does not affect the decision (query/response and request/propose share
-  the whitelist). Responsibility scope from ADR-0044 F2 is not an auto-allow
-  axis; only first approval per conversation is the gate.
+Moved to [Inter-agent tool authorization](../reference/security/inter-agent-tool-authorization.md#automatic-approval-conversation-scoped-whitelist-adr-0044-f2-addendum-option-b).
 
 ### Receiver-side behavior (wrapper-B)
 
