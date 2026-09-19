@@ -33,7 +33,7 @@ implementation — the emphasis marks; all three are walked at every close.
 | Unit | Scope | Paths | Status |
 |---|---|---|---|
 | U01 | envelope / channel index / versioning | ops perm impl | ✅ |
-| U02 | permission state / requests / sync-audit | perm impl | ⏳ |
+| U02 | permission state / requests / sync-audit | perm impl | ✅ (rationale folded into architecture/security-boundaries.md) |
 | U03 | model-effort / capabilities | perm impl | ⏳ |
 | U04 | session lifecycle / state machine | ops perm impl | ⏳ |
 | U05 | display-history / IA sidecar | ops impl | ⏳ |
@@ -132,11 +132,11 @@ Writer rules: one writer per destination file; units that touch the same file
 | specs/protocol-inter-agent.md (Destination-resolution guidance) | [contributing/peer-routing.md](../contributing/peer-routing.md) | U14 |
 | specs/protocol-inter-agent.md (Unresponsive notices; Error codes; Sources; stale_turn notice structure; Server-synthesized rules; Receiver handling) | [reference/inter-agent/errors.md](../reference/inter-agent/errors.md) | U16 (In review) |
 | specs/protocol-inter-agent.md (Session operation tool — request_compact; Threshold notice; request_session_reset) | [reference/inter-agent/session-tools.md](../reference/inter-agent/session-tools.md) | U17 (In review) |
-| specs/protocol.md (Purpose; Design intent) | [architecture/message-topology.md](../architecture/message-topology.md) | U01 (In review) |
-| specs/protocol.md (Terms and hierarchy; Envelope v0; ext.engine) | [reference/protocol/envelope.md](../reference/protocol/envelope.md) | U01 (In review) |
-| specs/protocol.md (Types and payload (v0 settled); Wrapper-owned stderr error diagnostics) | [reference/protocol/events.md](../reference/protocol/events.md) | U01 (In review) |
-| specs/protocol.md (Directional message types (v0 settled); Client transport) | [reference/protocol/channels.md](../reference/protocol/channels.md) | U01 (In review) |
-| specs/protocol.md (Versioning policy; Version inventory — Client → server, Server → wrapper, Server → runner, Runner → server, Wrapper → server, Server → client, Permanent carve-out attach_chunk, Receiver validation, Non-map payload handling) | [reference/protocol/versioning.md](../reference/protocol/versioning.md) | U01 (In review) |
+| specs/protocol.md (Purpose; Design intent) | [architecture/message-topology.md](../architecture/message-topology.md) | U01 |
+| specs/protocol.md (Terms and hierarchy; Envelope v0; ext.engine) | [reference/protocol/envelope.md](../reference/protocol/envelope.md) | U01 |
+| specs/protocol.md (Types and payload (v0 settled); Wrapper-owned stderr error diagnostics) | [reference/protocol/events.md](../reference/protocol/events.md) | U01 |
+| specs/protocol.md (Directional message types (v0 settled); Client transport) | [reference/protocol/channels.md](../reference/protocol/channels.md) | U01 |
+| specs/protocol.md (Versioning policy; Version inventory — Client → server, Server → wrapper, Server → runner, Runner → server, Wrapper → server, Server → client, Permanent carve-out attach_chunk, Receiver validation, Non-map payload handling) | [reference/protocol/versioning.md](../reference/protocol/versioning.md) | U01 |
 | specs/protocol.md (Two-axis `ext.permission` — introductory paragraph only) | [architecture/security-boundaries.md#permission-control-two-axis-model](../architecture/security-boundaries.md#permission-control-two-axis-model) | U02 (In review; H2 section on the existing page, not a new architecture/permission-control.md — only 1 paragraph of design rationale after the field contract split out, per U12 precedent of not spinning up a page for 1-2 paragraphs) |
 | specs/protocol.md (Two-axis `ext.permission` — field contract, per-engine stamping, Antigravity local-mode rules, deprecation; Requested, submitted, and effective state) | [reference/protocol/permission-state.md](../reference/protocol/permission-state.md) | U02 (In review) |
 | specs/protocol.md (Permission changes at an execution boundary; Request, relay, and acknowledgement) | [reference/protocol/permission-requests.md](../reference/protocol/permission-requests.md) | U02 (In review) |
