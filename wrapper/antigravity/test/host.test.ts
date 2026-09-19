@@ -1653,6 +1653,36 @@ if (args[0] === "models") {
       expect(host.state).toBe("waiting_input");
       host.close();
     });
+
+    it("a send() re-entered synchronously from onTurnEnd does not leak the prior turn's attempted model into a pre-spawn interrupt rollback (momo round-2 M3)", async () => {
+      let resolveSync!: () => void;
+      const pending = new Promise<void>((resolve) => { resolveSync = resolve; });
+      let gate = false;
+      const { host, calls, turnEnds } = hostHarness({
+        waitForPermissionSync: () => (gate ? pending : Promise.resolve()),
+        onTurnEnd: (info) => {
+          if (info.turnToken === "turn-1") {
+            gate = true;
+            void host.setModel("model-a");
+            void host.send("second", undefined, [], "turn-2");
+          }
+        },
+      });
+      await host.setModel("model-a");
+      await host.send("first", undefined, [], "turn-1");
+      await waitFor(() => calls.length === 1);
+      calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
+      calls[0]!.child.finish();
+      await waitFor(() => turnEnds.some((end) => end.turnToken === "turn-1"));
+      // turn-2 is now blocked pre-spawn on waitForPermissionSync, with
+      // pending_model "model-a" staged by the re-entrant setModel() above.
+      await host.interrupt();
+      resolveSync();
+      await waitFor(() => turnEnds.some((end) => end.turnToken === "turn-2"));
+      expect(calls).toHaveLength(1);
+      expect(host.statusSnapshot()).toMatchObject({ pending_model: "model-a" });
+      host.close();
+    });
   });
 
   describe("tool prompts and deadlines (issue #350)", () => {

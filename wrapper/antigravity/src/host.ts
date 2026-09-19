@@ -900,6 +900,13 @@ export class AntigravityHost implements EngineAdapter {
     // issued.
     const turnToken = turn.turnToken ?? randomUUID();
     this.#currentTurnToken = turnToken;
+    // issue #371 M3 (momo round-2 review): `#runTurn` does not set
+    // `#currentAttemptedModel` for THIS turn until after gate registration
+    // (see the `attemptedModel` assignment below), so without this reset a
+    // synchronous re-entrant `send()` from a finishing turn's onTurnEnd
+    // would leave the PRIOR turn's attempted model in place; an interrupt
+    // landing in that pre-spawn window would then roll back the wrong model.
+    this.#currentAttemptedModel = null;
     let error: InterAgentErrorClassifyInput | undefined;
     try {
       error = await this.#runTurn(turn.text, generation, turnToken, turn.conversationIds ?? []);
