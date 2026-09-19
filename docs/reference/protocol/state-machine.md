@@ -64,3 +64,4 @@ stateDiagram-v2
 - [Message topology](../../architecture/message-topology.md).
 - [Runner control and launch](runner-control.md).
 - [Task and tasklist envelopes](tasks.md).
+- [Persona delivery](persona-delivery.md).

@@ -222,6 +222,6 @@ Adopt and fix in this ADR the provisional policy from the old open question `per
 
 ## See Also
 
-- Related specs: [personas](../specs/personas.md), [persona-pack-format](../reference/personas/pack-format.md), [persona-personality-injection](../specs/persona-personality-injection.md), [setup-wizards](../specs/setup-wizards.md), [protocol](../specs/protocol.md), and [threat-model](../architecture/security-threat-model.md)
+- Related specs: [personas](../specs/personas.md), [persona-pack-format](../reference/personas/pack-format.md), [personality-prompt injection](../architecture/personality-injection.md), [setup-wizards](../specs/setup-wizards.md), [protocol](../specs/protocol.md), and [threat-model](../architecture/security-threat-model.md)
 - ADRs: [ADR-0002](0002-local-wrapper-websocket-topology.md) (WS path), [ADR-0003](0003-persona-identity-persistence.md) (persona identity), [ADR-0008](0008-persona-asset-distribution.md) (superseded), [ADR-0024](0024-agent-instance-identity-and-spawn-auth.md) (spawn authentication), and [ADR-0026](0026-persona-personality-injection.md) (superseded)
 - Plan: [phase-10-persona-server-sot](../plans/phase-10-persona-server-sot.md)

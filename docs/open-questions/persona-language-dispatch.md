@@ -10,7 +10,7 @@ decided: null
 
 ## 背景
 
-[persona-personality-injection](../specs/persona-personality-injection.md)
+[personality-prompt injection](../architecture/personality-injection.md)
 added the `language?: string` field to `Persona` (default `"ja"` when omitted).
 Because only the foundation was laid for future-proofing, phase-0 only loads it
 and has no dispatch logic.

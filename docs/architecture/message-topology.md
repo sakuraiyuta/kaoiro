@@ -49,3 +49,5 @@ For the envelope's terms, outer frame keys, and wire shape, see
 - [Wrapper configuration](../reference/configuration/wrapper.md).
 - [Task and tasklist envelopes](../reference/protocol/tasks.md).
 - [Subagent visibility](subagent-visibility.md).
+- [Persona delivery](../reference/protocol/persona-delivery.md).
+- [Personality-prompt injection](personality-injection.md).

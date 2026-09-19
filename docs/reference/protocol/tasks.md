@@ -154,3 +154,4 @@ are **operator-only** and are not delivered to viewers
 - [Runner control and launch](runner-control.md).
 - [Wrapper configuration](../configuration/wrapper.md).
 - [Subagent visibility](../../architecture/subagent-visibility.md).
+- [Persona delivery](persona-delivery.md).

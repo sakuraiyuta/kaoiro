@@ -13,7 +13,7 @@ Establishes character-design decisions referenced by Phase 2 task 2-3 (bulk
 production of expression variants) and future persona additions. The subject is
 **illustrations, names, and expression-performance policy**. Runtime response
 manner such as speech style and first-person pronoun is delegated to
-[persona-personality-injection](persona-personality-injection.md) (on
+[personality-prompt injection](../architecture/personality-injection.md) (on
 2026-07-02 the “out of scope” clause was withdrawn,
 [ADR-0026](../adr/0026-persona-personality-injection.md)). For relationship to
 a future speech-balloon UI, see
@@ -56,7 +56,7 @@ to “Generation record” below.
 
 Personality is **design material for keeping expression performance consistent
 in standing-illustration prompts** and is also **consumed by runtime personality
-prompts** through [persona-personality-injection](persona-personality-injection.md)
+prompts** through [personality-prompt injection](../architecture/personality-injection.md)
 (its use was extended on 2026-07-02, [ADR-0026](../adr/0026-persona-personality-injection.md)).
 For example, for the same `done`, ao has a small proud face + modest comment,
 momo a beaming smile + over-reactive comment, and kuroe a restrained smile and
@@ -221,7 +221,7 @@ The complete create → distribute → operate flow is unified as follows under
 5. **Server**: auto-watch detects and expands it, then rebuilds the manifest
 6. **Wrapper**: receive the personality prompt from the server in the startup
    WS handshake and inject it into the SDK
-   ([persona-personality-injection](persona-personality-injection.md))
+   ([personality-prompt injection by engine](../reference/engines/personality-injection.md))
 
 For the internal ZIP schema, see
 [persona-pack-format](../reference/personas/pack-format.md).
@@ -277,7 +277,7 @@ None.
 
 - Related specs: [protocol](protocol.md),
   [persona-pack-format](../reference/personas/pack-format.md),
-  [persona-personality-injection](persona-personality-injection.md)
+  [personality-prompt injection](../architecture/personality-injection.md)
 - ADRs: [0003](../adr/0003-persona-identity-persistence.md),
   [0004](../adr/0004-client-rendering-staged.md),
   [0008](../adr/0008-persona-asset-distribution.md)(superseded),

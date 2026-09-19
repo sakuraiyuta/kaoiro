@@ -10,7 +10,7 @@ decided: null
 
 ## 背景
 
-[persona-personality-injection](../specs/persona-personality-injection.md)'s initial
+[personality-prompt injection](../architecture/personality-injection.md)'s initial
 scope was limited to "speech style, first person, sentence endings, and reply
 style," while task stance (caution, progress-reporting frequency, tool-use
 habits, etc.) was explicitly separated as a future task ([ADR-0026](../adr/0026-persona-personality-injection.md)).

@@ -10,7 +10,7 @@ decided: null
 
 ## 背景
 
-[persona-personality-injection](../specs/persona-personality-injection.md) leaves
+[personality-prompt injection](../architecture/personality-injection.md) leaves
 distinguishability at SHOULD. The goal is to "be able to identify at a glance
 which persona it is from the reply speech style when they are placed side by
 side," but there is no mechanical validation. The reasons were to avoid the

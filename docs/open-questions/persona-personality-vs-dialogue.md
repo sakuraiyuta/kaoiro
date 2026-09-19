@@ -13,7 +13,7 @@ decided: null
 [personas](../specs/personas.md) states on line 15 that "conversation settings
 such as speech style and first person ... will be decided separately when
 dialogue display or similar is introduced in the future." The current
-[persona-personality-injection](../specs/persona-personality-injection.md)
+[personality-prompt injection](../architecture/personality-injection.md)
 covers speech style, but only up to injection into the Claude Agent SDK; it
 does not consider constraints of a dialogue bubble / speech UI such as
 "brevity, sentence-finality, and the amount readable at once."

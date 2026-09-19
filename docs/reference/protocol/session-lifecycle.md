@@ -178,3 +178,4 @@ wrapper reports it and the server stores the `(agent_id, host, cwd, session_id)`
 - [Message topology](../../architecture/message-topology.md).
 - [Runner control and launch](runner-control.md).
 - [Task and tasklist envelopes](tasks.md).
+- [Persona delivery](persona-delivery.md).

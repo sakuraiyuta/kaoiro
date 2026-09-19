@@ -174,69 +174,11 @@ Moved to [State machine](../reference/protocol/state-machine.md#state-machine-st
 
 ### Persona asset distribution
 
-HTTP API resolving `persona.sprite_set` to images. [ADR-0008](../adr/0008-persona-asset-distribution.md)
-initially covered sprites only; [ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
-expanded it on 2026-07-05 to persona-pack zip distribution, a server aggregate SoT, and
-auto-watch. It is independent of Channels and not gated by `:serve_dashboard` (public API).
-Asset layout and format are defined by [personas](personas.md); the pack schema is
-[persona-pack-format](../reference/personas/pack-format.md).
-
-- `GET /api/personas` — manifest JSON:
-
-```json
-{
-  "version": "<16hex>",
-  "personas": {
-    "<sprite_set>": {
-      "name": "<display name>",
-      "pack_version": "<semver>",
-      "description": "<optional 1-line>",
-      "states": {
-        "<state>": {
-          "url": "/personas/<sprite_set>/<state>.png?v=<12hex>",
-          "hash": "sha256:<64hex>"
-        }
-      }
-    }
-  }
-}
-```
-
-- `version` is the aggregate version derived from asset contents; clients refetch sprite URLs
-  only when it changes (incremental sync).
-- `name` / `pack_version` / `description` come from the persona pack `manifest.json`
-  ([persona-pack-format](../reference/personas/pack-format.md)). `personality.md` is not exposed by this API;
-  it is pushed only during the WS wrapper handshake (see "Personality prompt delivery").
-- Hashed `url` forms are immutable with `cache-control: public, max-age=31536000, immutable`;
-  URLs without `?v=` are `no-cache`.
-- Only files listed in the manifest are served; unknown paths return 404.
-- A missing sprite falls back to the `idle` image. `disconnected` has no image (MUST NOT in
-  personas.md) and is shown as grayscale idle. Missing manifests or unlisted sprite sets fall
-  back to sprite-less rendering (CSS face in the reference implementation).
-- **Auto-watch**: the server watches the intake directory with Elixir `FileSystem`, detects zip
-  additions/updates/deletions, and rebuilds the manifest ([ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md) F6); no manual restart is needed.
+Moved to [Persona delivery](../reference/protocol/persona-delivery.md#persona-asset-distribution).
 
 ### Personality prompt delivery (ADR-0029)
 
-Under [ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md), the personality
-prompt is pushed from the server aggregate SoT (`personality.md` in the persona pack) to the
-wrapper during the WS handshake.
-
-- **Reject unknown persona.id at wrapper join**: when accepting `wrapper:<agent_id>`, the server
-  checks the persona ID from the agent-token mapping against the manifest. IDs absent from the
-  manifest are refused (enforcing no stray personas,
-  [ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
-  F3).
-- **after_join push**: server pushes the following message to the wrapper:
-
-  | Direction | Type | Payload | Notes |
-  |---|---|---|---|
-  | server → wrapper | `persona_prompt` | `{ prompt }` | Sent once after wrapper join. `prompt` is persona-pack `personality.md` plus the server-joined common footer ([ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md) F5). The wrapper injects it unchanged with SDK `systemPrompt.append` ([persona-personality-injection](persona-personality-injection.md)); no hot-swap push occurs during the session (F9). |
-
-- **Fail-closed when server is unreachable**: the wrapper cannot complete spawn until it
-  receives `persona_prompt`, including dev/local operation where a minimal server runs in
-  [ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
-  F10).
+Moved to [Persona delivery](../reference/protocol/persona-delivery.md#personality-prompt-delivery-adr-0029).
 
 ### Client transport
 

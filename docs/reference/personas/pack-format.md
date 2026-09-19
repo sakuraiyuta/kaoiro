@@ -195,7 +195,7 @@ None. Decided by ADR-0029.
   (persona.id identity and persistence)
 - Related specs: [personas](../../specs/personas.md) (generation recipe and standing-
   illustration design policy),
-  [persona-personality-injection](../../specs/persona-personality-injection.md)
+  [personality-prompt injection](../../architecture/personality-injection.md)
   (personality-prompt delivery and injection),
   [protocol](../../specs/protocol.md) (`/api/personas` response format)
 - Plan: [phase-10-persona-server-sot](../../plans/phase-10-persona-server-sot.md)
