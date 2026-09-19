@@ -57,7 +57,7 @@ injecting the terminal notice into an SDK turn (see
 After sending a turn to the SDK the wrapper cannot identify which message
 caused a failure. If a coalesced turn fails with `context_overflow`,
 `api_error`, or similar, send a `payload.error` notice (see [“Unresponsive
-notices”](../../specs/protocol-inter-agent.md#unresponsive-notices-payloaderror)) **separately for each still-pending conversation_id owned by that
+  notices”](errors.md#unresponsive-notices-payloaderror)) **separately for each still-pending conversation_id owned by that
 turn's token**, addressed to its recorded sender. Already-resolved entries and
 entries owned by another turn are skipped. Because a batch contains only one
 peer's messages, the same peer can receive notices for multiple conversations;

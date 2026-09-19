@@ -59,7 +59,7 @@ Only the `type` value and `payload` schema are new.
 | `meta.propose_next` | MUST | String describing the next expectation (may be empty) |
 | `meta.confidence` | optional | 0.0–1.0 |
 | `meta.reject_reason` | MUST when `kind=reject` | String with the concrete reason for rejecting a proposal |
-| `error.code` | optional | Open-string error code indicating the peer became unable to respond (see [“Unresponsive-error notices”](../../specs/protocol-inter-agent.md#unresponsive-notices-payloaderror)) |
+| `error.code` | optional | Open-string error code indicating the peer became unable to respond (see [“Unresponsive-error notices”](errors.md#unresponsive-notices-payloaderror)) |
 | `error.message` | MUST when `error` exists | Human-readable reason with secrets masked and truncated |
 | `owner.kind` | MUST | `"user"` or `"agent"` |
 | `owner.id` | MUST | Declared owner identifier. The current shared sender emits the placeholder `"operator"`, not an authenticated user ID; the server validates its string shape, not a binding to the connection principal. See [“Conversation owner and tie-breaker”](conversations.md#conversation-owner-and-tie-breaker) |

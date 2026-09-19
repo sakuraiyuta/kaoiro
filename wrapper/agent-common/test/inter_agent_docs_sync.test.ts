@@ -1,6 +1,6 @@
 // Regression test for issue #134: inter_agent.ts's error-code tables
 // (ERROR_CODE_GUIDANCE / ERROR_CODE_MESSAGE) and
-// docs/specs/protocol-inter-agent.md's "Error codes (initial set)" table
+// docs/reference/inter-agent/errors.md's "Error codes (initial set)" table
 // are both hand-written (the code side is a wire-notice template, the docs
 // side is spec prose for readers — translating one into the other
 // mechanically would not read naturally on either end, so nothing
@@ -28,10 +28,10 @@ import {
 // environment difference).
 const SPEC_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
-  "../../../docs/specs/protocol-inter-agent.md",
+  "../../../docs/reference/inter-agent/errors.md",
 );
 
-const SECTION_HEADING = "#### Error codes (initial set)";
+const SECTION_HEADING = "### Error codes (initial set)";
 
 /** Extracts the `code` column of the "Error codes (initial set)" markdown
  *  table. Matches only rows whose first cell is backtick-quoted
@@ -99,7 +99,7 @@ describe("inter-agent error-code table sync (issue #134)", () => {
       missingFromDocs.length === 0
         ? undefined
         : "wrapper/agent-common/src/inter_agent.ts の ERROR_CODE_GUIDANCE/" +
-          "ERROR_CODE_MESSAGE にあるが docs/specs/protocol-inter-agent.md の" +
+          "ERROR_CODE_MESSAGE にあるが docs/reference/inter-agent/errors.md の" +
           `"Error codes (initial set)" 表に無いコード: ${missingFromDocs.join(", ")}。` +
           "両テーブルは手書きの別文言(コード側は wire 通知文言、docs 側は" +
           "スペック説明)だが、コードの集合は同期している必要がある。" +
@@ -110,7 +110,7 @@ describe("inter-agent error-code table sync (issue #134)", () => {
       missingFromCode,
       missingFromCode.length === 0
         ? undefined
-        : "docs/specs/protocol-inter-agent.md の \"Error codes (initial set)\" 表に" +
+        : "docs/reference/inter-agent/errors.md の \"Error codes (initial set)\" 表に" +
           "あるが wrapper/agent-common/src/inter_agent.ts の " +
           "ERROR_CODE_GUIDANCE/ERROR_CODE_MESSAGE に無いコード: " +
           `${missingFromCode.join(", ")}。ERROR_CODE_GUIDANCE と ` +

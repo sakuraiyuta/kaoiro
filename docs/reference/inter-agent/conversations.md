@@ -221,7 +221,7 @@ The wrapper (`agent-common`) keeps corresponding local state
   also rejects this forge on the server, while the receiving wrapper checks
   provenance as a second defense. **Since issue #212 defect 3 this discard is
   not silent**: send a `stale_turn` notice to the envelope sender (see the
-  [“Error codes”](../../specs/protocol-inter-agent.md#error-codes-initial-set) and [“stale_turn notice structure”](../../specs/protocol-inter-agent.md#stale_turn-notice-structure-issue-212-defect-3) sections for exceptions and
+  [“Error codes”](errors.md#error-codes-initial-set) and [“stale_turn notice structure”](errors.md#stale_turn-notice-structure-issue-212-defect-3) sections for exceptions and
   resynchronization).
 - Garbage-collect wrapper-side closed tracks after a 24-hour TTL (to prevent
   leaks in long-lived wrappers).

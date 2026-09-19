@@ -4,7 +4,7 @@ description: Move docs/specs (and the operations manual, README runbook sections
 status: in_progress
 phase: 35
 depends_on: []
-last_updated: 2026-09-18
+last_updated: 2026-09-19
 ---
 
 # Phase 35 — Docs migration to the layered taxonomy
@@ -47,7 +47,7 @@ implementation — the emphasis marks; all three are walked at every close.
 | U13 | coordination monitoring | perm impl | ✅ |
 | U14 | directory / companion tools / peer routing | impl | ✅ |
 | U15 | per-engine IA tool authorization | perm impl | ⏳ |
-| U16 | peer errors / synthetic notices | perm impl | ⏳ |
+| U16 | peer errors / synthetic notices | perm impl | In review |
 | U17 | session tools (compact / reset) | perm impl | ✅ |
 | U18 | server install / network / login / env | ops | ⏳ |
 | U19 | runner install / config / wizard | ops impl | ⏳ |
@@ -126,4 +126,5 @@ Writer rules: one writer per destination file; units that touch the same file
 | specs/protocol-inter-agent.md (Channel events; Peer-directory boundary; list_agents / whoami) | [reference/inter-agent/directory.md](../reference/inter-agent/directory.md) | U14 |
 | specs/protocol-inter-agent.md (send acceptance / rejection) | [reference/inter-agent/send-and-wait.md#send-acceptance-and-rejection](../reference/inter-agent/send-and-wait.md#send-acceptance-and-rejection) | U14 |
 | specs/protocol-inter-agent.md (Destination-resolution guidance) | [contributing/peer-routing.md](../contributing/peer-routing.md) | U14 |
+| specs/protocol-inter-agent.md (Unresponsive notices; Error codes; Sources; stale_turn notice structure; Server-synthesized rules; Receiver handling) | [reference/inter-agent/errors.md](../reference/inter-agent/errors.md) | U16 (In review) |
 | specs/protocol-inter-agent.md (Session operation tool — request_compact; Threshold notice; request_session_reset) | [reference/inter-agent/session-tools.md](../reference/inter-agent/session-tools.md) | U17 (In review) |
