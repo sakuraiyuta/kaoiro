@@ -259,7 +259,7 @@ address existed): confirm the boot-order drop-in is installed
 (`systemctl show docker -p After` should list the VPN unit) — see
 [Network and login runbook](network-and-login.md#boot-order-for-a-vpn-publish-address)
 "Boot order for a VPN publish address" and
-[5. Troubleshooting](../specs/deployment.md#5-troubleshooting) for the full
+[Deployment troubleshooting](deployment-troubleshooting.md#container-does-not-start-after-a-reboot) for the full
 recovery sequence. Only applies to a direct-VPN publish address; the default
 `127.0.0.1`-behind-nginx setup is unaffected.
 

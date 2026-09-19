@@ -216,25 +216,11 @@ Moved to [Runner service verification](../operations/runner-service-verification
 
 ## 5. Troubleshooting
 
+Moved to [Deployment troubleshooting](../operations/deployment-troubleshooting.md).
+
 ### Container does not start after a reboot
 
-**Symptom.** The server container is not running after a host reboot.
-
-**Diagnosis.** Inspect the existing container's recorded error:
-
-```sh
-docker inspect --format '{{.State.Error}}' <container>
-```
-
-If it reports `cannot assign requested address`, check whether
-`KAOIRO_PUBLISH_IP` is present on a host interface. A VPN address that is absent
-while Docker starts causes the published port bind to fail.
-
-**Remedy.** Install and verify the VPN ordering drop-in from [1.5](deployment.md#15-direct-vpn-deployment-no-nginx-plain-http-2026-07-26), then start the existing
-container with `docker start <container>` once the publish address is present.
-Do not treat `docker compose up --no-build` as the general recovery command: a
-prepared `latest` tag can point to a newer image, while the existing container
-identifies the known deployment state.
+Moved to [Deployment troubleshooting](../operations/deployment-troubleshooting.md#container-does-not-start-after-a-reboot).
 
 ## See Also
 
