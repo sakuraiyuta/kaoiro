@@ -48,7 +48,7 @@ implementation — the emphasis marks; all three are walked at every close.
 | U14 | directory / companion tools / peer routing | impl | ✅ |
 | U15 | per-engine IA tool authorization | perm impl | ⏳ |
 | U16 | peer errors / synthetic notices | perm impl | ⏳ |
-| U17 | session tools (compact / reset) | perm impl | In review |
+| U17 | session tools (compact / reset) | perm impl | ✅ |
 | U18 | server install / network / login / env | ops | ⏳ |
 | U19 | runner install / config / wizard | ops impl | ⏳ |
 | U20 | server update / rollback / transactions | ops | ⏳ |
