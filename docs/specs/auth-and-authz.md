@@ -2,7 +2,7 @@
 title: Authentication and authorization map
 description: Current authentication and authorization boundaries for each kaoiro node (wrapper / runner / server / client). Starting point for the pre-OSS audit.
 status: accepted
-last_updated: 2026-09-18
+last_updated: 2026-09-19
 related: [protocol, security-threat-model, architecture, protocol-inter-agent]
 ---
 
@@ -76,10 +76,18 @@ Moved to [Tool authorization](../reference/security/tool-authorization.md#permis
 ### MCP (`mcp__kaoiro__send_to_agent`)
 
 - Inject the in-process MCP server from `wrapper/agent-common/src/inter_agent.ts`
-  into the engine (Claude via `Options.mcpServers`, Codex via the tool-host bridge).
-- `send_to_agent` is **not in the default allowedTools**, so it always goes through
-  the broker. The colocated `list_agents` / `whoami` are read-only and therefore
-  auto-allowed (the `READ_ONLY_TOOLS` set above).
+  into the engine (Claude via `Options.mcpServers`, Codex via the tool-host bridge,
+  Antigravity via `ToolHost.listen` in `wrapper/antigravity/src/host.ts`).
+- On Claude, `send_to_agent` is **not in the default allowedTools**, so it always
+  goes through the broker. The colocated `list_agents` / `whoami` are read-only and
+  therefore auto-allowed (the `READ_ONLY_TOOLS` set above). Codex auto-approves
+  every bridge tool (`default_tools_approval_mode: "approve"`,
+  `wrapper/codex/src/bridge_policy.ts`) and `send_to_agent` is not wrapped in
+  `operatorApprovalGated` (`wrapper/codex/src/cli.ts`); Antigravity registers the
+  same descriptors unwrapped through `ToolHost` (`wrapper/antigravity/src/cli.ts`),
+  which carries no approval axis. The engine-scope bullets under
+  [Automatic approval](protocol-inter-agent.md#automatic-approval-conversation-scoped-whitelist-adr-0044-f2-addendum-option-b)
+  state the same boundary.
 - Routing uses the server's `route_inter_agent`; quotas use `ConversationStates`.
 - Details: [protocol-inter-agent](protocol-inter-agent.md)
 
