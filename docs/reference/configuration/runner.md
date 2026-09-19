@@ -11,7 +11,9 @@ last_updated: 2026-09-18
 This page currently covers the Codex backend selector. Other runner settings
 remain in [deployment](../../specs/deployment.md#2-deploy-runners-multiple-hosts)
 until their migration unit. Operator steps are in the
-[backend switching runbook](../../operations/codex-backend-switch.md).
+[backend switching runbook](../../operations/codex-backend-switch.md). The
+per-spawn config fields the runner relays to the wrapper process itself are
+in [Wrapper configuration](wrapper.md).
 
 ## Codex backend
 

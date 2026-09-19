@@ -216,3 +216,4 @@ client failures / instructions that never arrive.
 - [Channels and directional messages](channels.md).
 - [Attachments](../../architecture/attachments.md).
 - [Attachment rendering by engine](../engines/attachment-rendering.md).
+- [Runner control and launch](runner-control.md).

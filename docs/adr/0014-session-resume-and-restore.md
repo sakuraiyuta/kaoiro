@@ -109,7 +109,7 @@ flowchart LR
   together with #23 as an extension of the #22 control path. Protocol changes
   are grouped into the same revision as versioning (the equivalent of #1) and
   error-body relay (the equivalent of #2). See
-  [protocol](../specs/protocol.md) for details.
+  [runner control and launch](../reference/protocol/runner-control.md) for details.
 
 #### F3 Addendum — Explicit detach at session reset (ADR-0036)
 

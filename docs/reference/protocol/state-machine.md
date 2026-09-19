@@ -62,3 +62,4 @@ stateDiagram-v2
 - [Attachment wire contract](attachments.md).
 - [Attachment rendering by engine](../engines/attachment-rendering.md).
 - [Message topology](../../architecture/message-topology.md).
+- [Runner control and launch](runner-control.md).

@@ -124,7 +124,7 @@ The docstring of `Auth.mint_wrapper_token/1` also specifies the two revoke chann
 
 - ADR amended: [ADR-0011](0011-phase3-reliability-and-auth.md) D3 (add a runner-mediated **issuance-based** authentication path to the pre-registered per-agent_id token; not a supersede).
 - Related ADRs: [0003](0003-persona-identity-persistence.md) (persona / agent_id identity), [0014](0014-session-resume-and-restore.md) (restart stability / F4 local lock), [0018](0018-runner-distribution.md) (distribution, single binary, one-shot), and [0023](0023-host-runner-architecture.md) (runner architecture / host token).
-- Related specs: [protocol](../specs/protocol.md) (server injection into the spawn payload / control messages), [threat-model](../architecture/security-threat-model.md) (spawn = RCE surface, operator-only), and [architecture](../architecture/system-overview.md).
+- Related specs: [runner control and launch](../reference/protocol/runner-control.md) (server injection into the spawn payload / control messages), [threat-model](../architecture/security-threat-model.md) (spawn = RCE surface, operator-only), and [architecture](../architecture/system-overview.md).
 - Deferred / reference: [#71](https://github.com/sakuraiyuta/kaoiro/issues/71) (wildcard token / allocate).
 - Implementation: phase 4 ([phase-4-host-runner](../plans/phase-4-host-runner.md)) #22 rewiring.
 - Origin: the discussion of decision 1 in issue [#22](https://github.com/sakuraiyuta/kaoiro/issues/22) (2026-06-24).

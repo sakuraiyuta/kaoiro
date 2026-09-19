@@ -67,7 +67,7 @@ Remote spawn from the UI is effectively remote code execution (issue #22). Since
 
 ### Control-message schema (#66, 2026-06-24 addendum)
 
-The runner ↔ server control messages were fixed in [#66](https://github.com/sakuraiyuta/kaoiro/issues/66) (the schema itself is in [protocol](../specs/protocol.md), “runner control messages”; this ADR records the decision).
+The runner ↔ server control messages were fixed in [#66](https://github.com/sakuraiyuta/kaoiro/issues/66) (the schema itself is in [runner control and launch](../reference/protocol/runner-control.md), “runner control messages”; this ADR records the decision).
 
 - **Topic**: dedicated `runner:<host_id>` (separate from the data path `wrapper:<agent_id>`). Do not piggyback on the existing `wrapper:` family, because that would complicate the role gate / `agents:lobby` subscription invariant (#27).
 - **Format**: the same **Channels event scheme** as existing control. Do not repurpose the envelope `type` addition, which is for observed data, as control.
@@ -101,7 +101,7 @@ Decision:
 
 - Duplicate-start prevention requires two layers: server owner fencing + runner-local lock.
 - Memory per runner process is relatively large because of the 1:1 model.
-- New control envelopes (spawn / stop / restart / enumerate-sessions) must be defined (#66 fixed them, in [protocol](../specs/protocol.md), “runner control messages”).
+- New control envelopes (spawn / stop / restart / enumerate-sessions) must be defined (#66 fixed them, in [runner control and launch](../reference/protocol/runner-control.md), “runner control messages”).
 
 ### Neutral
 
@@ -123,7 +123,7 @@ Decision:
 
 - ADR amended: [ADR-0002](0002-local-wrapper-websocket-topology.md) (maintains the direct topology and adds a supervisory layer in this ADR).
 - Related ADRs: [0014](0014-session-resume-and-restore.md) (runner as the unit of survival, resume / summoning), [0018](0018-runner-distribution.md) (runner distribution).
-- Related specs: [architecture](../architecture/system-overview.md), [protocol](../specs/protocol.md) (control messages), and [threat-model](../architecture/security-threat-model.md).
-- Control schema: fixed in #66 (the “Control-message schema” section above, [protocol](../specs/protocol.md), “runner control messages”).
+- Related specs: [architecture](../architecture/system-overview.md), [runner control and launch](../reference/protocol/runner-control.md) (control messages), and [threat-model](../architecture/security-threat-model.md).
+- Control schema: fixed in #66 (the “Control-message schema” section above, [runner control and launch](../reference/protocol/runner-control.md), “runner control messages”).
 - Implementation: phase 4 ([phase-4-host-runner](../plans/phase-4-host-runner.md)).
 - Origin: issue [#23](https://github.com/sakuraiyuta/kaoiro/issues/23).

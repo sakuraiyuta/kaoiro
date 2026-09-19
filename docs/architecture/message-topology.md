@@ -45,3 +45,5 @@ For the envelope's terms, outer frame keys, and wire shape, see
 - [Attachments](attachments.md).
 - [Attachment wire contract](../reference/protocol/attachments.md).
 - [Attachment rendering by engine](../reference/engines/attachment-rendering.md).
+- [Runner control and launch](../reference/protocol/runner-control.md).
+- [Wrapper configuration](../reference/configuration/wrapper.md).
