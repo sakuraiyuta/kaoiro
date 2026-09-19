@@ -1,7 +1,7 @@
 ---
 title: Phase 35 — Docs migration to the layered taxonomy
 description: Move docs/specs (and the operations manual, README runbook sections, ADR-0058 appendices) into architecture / operations / reference / adr / evidence / contributing, one unit per commit, after the semantic sync of issue #368 Phase A.
-status: in_progress
+status: done
 phase: 35
 depends_on: []
 last_updated: 2026-09-19
