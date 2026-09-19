@@ -57,7 +57,7 @@ implementation — the emphasis marks; all three are walked at every close.
 | U23 | UI design group (visual language, tokens, layout, motion) | perm | ✅ reachability (U23a); design / layout pending |
 | U24 | codex app-server architecture / reference + ADR-0058 evidence extraction | perm impl | ✅ |
 | U25 | codex backend switch runbook | ops perm impl | ✅ |
-| U26 | antigravity adapter / events / tools-permissions / evidence | perm impl | ⏳ |
+| U26 | antigravity adapter / events / tools-permissions / evidence | perm impl | ✅ (mechanical move; dedup pass optional) |
 | U27 | codex exec events / model catalog | perm impl | ✅ |
 | U28 | claude events | perm impl | ✅ |
 | U29a | entry pages: overview, system-overview, scope, glossary; folder scaffolding; this plan | ops perm impl | ✅ |
