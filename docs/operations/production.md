@@ -286,7 +286,7 @@ The release note is retained in the [Stage 6 landing record](https://github.com/
 
 - [deployment.md](../specs/deployment.md) — the normative reference this
   manual summarizes
-- [setup-wizards.md](../specs/setup-wizards.md) — what `mix kaoiro.env` and
+- [setup-wizards.md](../reference/configuration/setup-wizards.md) — what `mix kaoiro.env` and
   `kaoiro-runner-setup.sh` ask and why
 - [Runner install and distribution](runner-install.md) — full runner install /
   service / troubleshooting reference

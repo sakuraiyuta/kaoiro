@@ -146,7 +146,7 @@ endpoint `url`, so register exactly this form):
 | Nextcloud | Target instance Settings → Administration → Security → OAuth 2.0 clients → add a name + Redirection URI | No scope support (tokens have full access), but the server discards the token after obtaining identity (ADR-0042). No PKCE; CSRF protection is state only |
 
 **Generate settings automatically with `mix kaoiro.env`** (2026-07-27,
-[setup-wizards](../specs/setup-wizards.md)). The wizard's OAuth questions cover provider
+[setup-wizards](../reference/configuration/setup-wizards.md)). The wizard's OAuth questions cover provider
 selection → ID/secret entry → allowlist generation (prompting for at least one
 entry) → a compose-mount line, and write generated files with mode 0600. The
 following describes manual configuration (and what the wizard writes).

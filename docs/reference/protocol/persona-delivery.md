@@ -92,7 +92,7 @@ detailed message format.
 Wrapper configuration has no personality-related field. Only `persona.id` /
 `persona.name` / `persona.sprite_set` (canonical values from the pack,
 unchangeable during a session) remain in startup configuration
-([setup-wizards](../../specs/setup-wizards.md)). Separately, the independent top-level
+([setup-wizards](../configuration/setup-wizards.md)). Separately, the independent top-level
 `display_name` field holds a **display name that may change during operation**
 (issue #209 D19/D20 — `Principal.display_name`,
 [ADR-0050](../../adr/0050-principal-model-and-graded-access-control.md) D1). On

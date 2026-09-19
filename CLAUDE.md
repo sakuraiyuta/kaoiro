@@ -29,7 +29,7 @@ kaoiro — 複数の CLI AI エージェントの状態をキャラクターと�
 - [docs/contributing/](docs/contributing/) — 変更手順。文書の置き場所は
   [documentation.md](docs/contributing/documentation.md)
 - [docs/specs/](docs/specs/) — 旧 spec。据え置きは personas /
-  agent-operations / protocol-external-human (provisional) / setup-wizards、
+  agent-operations / protocol-external-human (provisional)、
   他は移動先への stub([ADR-0060](docs/adr/0060-documentation-taxonomy-and-migration.md))
 - [docs/plans/](docs/plans/) — フェーズ別の実装計画
 - [docs/open-questions/](docs/open-questions/) — 未決の論点

@@ -37,6 +37,10 @@ See [Server configuration](../reference/configuration/server.md) for the full
 env variable list, DETS persistence paths, and footer/persona-cache mount
 examples.
 
+Alternatively, run `mix kaoiro.env` to generate `.env` interactively; see
+[Setup wizards](../reference/configuration/setup-wizards.md) for what it asks
+and writes.
+
 `scripts/dogfood.sh` uses `server/docker-compose.dogfood.yaml` only for its
 local launcher-owned runner pair. Production deployments must use
 `docker-compose.yaml` alone; dogfood's override leaves `server/.env` unchanged.

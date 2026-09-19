@@ -17,13 +17,13 @@ Accepted (start deferred until the main functions are in place)
 
 ## Context
 
-The method for distributing and installing wrapper/runner on each host (including Linux/macOS/Windows and headless hosts) is undecided. Configuration generation already exists in [setup-wizards](../specs/setup-wizards.md) (provisional), but distribution (packaging) has not been specified. The ultimate goal, a “total resource-management solution,” requires it to run even on hosts with only a command-line interface.
+The method for distributing and installing wrapper/runner on each host (including Linux/macOS/Windows and headless hosts) is undecided. Configuration generation already exists in [setup-wizards](../reference/configuration/setup-wizards.md) (provisional), but distribution (packaging) has not been specified. The ultimate goal, a “total resource-management solution,” requires it to run even on hosts with only a command-line interface.
 
 ## Decision
 
 - The distribution form is a **single executable binary for each OS** (compiled with the runtime bundled, eliminating the Node prerequisite).
 - **CLI only (no GUI)**. It must run on hosts with only a command-line interface and on headless hosts.
-- Configuration generation is an extension of setup-wizards: (i) if no configuration exists, **automatically start the wizard on first launch**, and (ii) place the configuration in an **OS-specific user configuration directory** (Linux `~/.config`, macOS `~/Library/Application Support`, Windows `%APPDATA%`). **(i) has been withdrawn**—[setup-wizards](../specs/setup-wizards.md) (accepted 2026-07-25, issue #139) superseded it with “do not start automatically; the launch shim exits 78 and points to the wizard command.” An interactive prompt launched from a non-interactive session started by systemd / launchd would otherwise block indefinitely without a TTY. (ii) remains in effect.
+- Configuration generation is an extension of setup-wizards: (i) if no configuration exists, **automatically start the wizard on first launch**, and (ii) place the configuration in an **OS-specific user configuration directory** (Linux `~/.config`, macOS `~/Library/Application Support`, Windows `%APPDATA%`). **(i) has been withdrawn**—[setup-wizards](../reference/configuration/setup-wizards.md) (accepted 2026-07-25, issue #139) superseded it with “do not start automatically; the launch shim exits 78 and points to the wizard command.” An interactive prompt launched from a non-interactive session started by systemd / launchd would otherwise block indefinitely without a TTY. (ii) remains in effect.
 - The distribution channel is **a Gitea release (binary assets) for the time being**, and GitHub Releases once the project is made public on GitHub.
 
 **The start timing is after the main functions are in place** (low priority; deferred).
@@ -216,7 +216,7 @@ The trust boundary is the same as the `dependencies` map and no more. Anyone who
 
 ## Related
 
-- spec: [setup-wizards](../specs/setup-wizards.md).
+- spec: [setup-wizards](../reference/configuration/setup-wizards.md).
 - Related ADRs: [0017](0017-wrapper-multientity-packages.md), [0014](0014-session-resume-and-restore.md).
 - Unresolved (as of 2026-07-25): selection of a single-binary compilation tool awaits re-evaluation of `bun compile` (after the Rust version stabilises, target 2027-01). Whether runner/wrapper should be one binary is likewise on hold because it is a single-binary premise; with a tarball, both are in one archive and the practical issue is resolved. Cross-building is resolved with pnpm’s `supportedArchitectures` (measured that linux-x64 can be generated from a darwin host).
 - Origin: my-idea-brief (scratch note “distribution of wrapper/runner”).

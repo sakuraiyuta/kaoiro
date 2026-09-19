@@ -133,7 +133,7 @@ cookie を WS に乗せられないため)、dev でもリロード後の再接�
 ### Docker(推奨)
 
 `.env` は対話ウィザードで作れる(issue #139、
-[setup-wizards](../docs/specs/setup-wizards.md)):
+[setup-wizards](../docs/reference/configuration/setup-wizards.md)):
 
 ```sh
 cd server

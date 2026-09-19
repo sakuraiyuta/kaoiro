@@ -47,7 +47,7 @@ Moved to [Runner configuration](../docs/reference/configuration/runner.md#other-
 ## 設定ウィザード
 
 `runner.config.json` と `runner.env` を対話生成する(issue #139、
-[setup-wizards](../docs/specs/setup-wizards.md))。手で書くより取り違えが
+[setup-wizards](../docs/reference/configuration/setup-wizards.md))。手で書くより取り違えが
 少ないので、初回はこちらを使う。
 
 ```sh

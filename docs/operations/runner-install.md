@@ -114,6 +114,9 @@ chmod 600 "$conf/runner.env"
 `server_url` の env 上書き (`KAOIRO_RUNNER_SERVER_URL`) は
 [Runner configuration](../reference/configuration/runner.md) が正本。
 
+`kaoiro-runner-setup.sh` が尋ねる項目・生成先・検証規則は
+[Setup wizards](../reference/configuration/setup-wizards.md) が正本。
+
 ### 設置形態(issue #219、[ADR-0018](../adr/0018-runner-distribution.md))
 
 **source origin(どこから持ってくるか)と activation layout(どう置いて
