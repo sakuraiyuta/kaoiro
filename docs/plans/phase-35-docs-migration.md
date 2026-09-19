@@ -87,6 +87,10 @@ Writer rules: one writer per destination file; units that touch the same file
 | specs/agent-sdk-events.md | [reference/engines/claude-events.md](../reference/engines/claude-events.md) | U28 |
 | specs/persona-pack-schema.md | [reference/personas/pack-format.md](../reference/personas/pack-format.md) | U09 |
 | specs/responsive-reachability.md | [reference/ui/responsive-reachability.md](../reference/ui/responsive-reachability.md) | U23 |
+| specs/antigravity-cli-events.md | [architecture/antigravity-adapter.md](../architecture/antigravity-adapter.md) | U26 (In review) |
+| specs/antigravity-cli-events.md | [reference/engines/antigravity-events.md](../reference/engines/antigravity-events.md) | U26 (In review) |
+| specs/antigravity-cli-events.md | [reference/engines/antigravity-tools-permissions.md](../reference/engines/antigravity-tools-permissions.md) | U26 (In review) |
+| specs/antigravity-cli-events.md | [evidence/antigravity/cli-contract.md](../evidence/antigravity/cli-contract.md) | U26 (In review) |
 | ../../wrapper/codex/README.md (implementation) | [reference/engines/codex-app-server.md](../reference/engines/codex-app-server.md) | U24 |
 | ../../wrapper/codex/README.md (implementation) | [reference/engines/codex-app-server-session.md](../reference/engines/codex-app-server-session.md) | U24 |
 | ../../wrapper/codex/README.md (implementation) | [reference/engines/codex-app-server-events.md](../reference/engines/codex-app-server-events.md) | U24 |

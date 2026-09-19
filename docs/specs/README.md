@@ -16,7 +16,7 @@ Feature specifications, organized by topic. Each file has `status` and
 | [agent-sdk-events](../reference/engines/claude-events.md) | accepted | Settled Agent SDK event specification and state derivation (Claude edition) |
 | [codex-exec-events](../reference/engines/codex-exec-events.md) | accepted | Exec SDK event contract and state derivation; [dated verification](../evidence/codex/exec-contract.md) |
 | [codex-model-catalog](../reference/engines/codex-model-catalog.md) | accepted | Catalog contract; [model-change procedures](../operations/codex-model-settings.md) and [dated plan/auth/doctor evidence](../evidence/codex/model-catalog.md) |
-| [antigravity-cli-events](antigravity-cli-events.md) | provisional | Measured Antigravity CLI (agy) headless event specification, hooks-as-permission-gate, and state derivation (third engine, ADR-0057) |
+| [antigravity-cli-events](../architecture/antigravity-adapter.md) | provisional | Measured Antigravity CLI (agy) headless event specification, hooks-as-permission-gate, and state derivation (third engine, ADR-0057) |
 | [subagent-tasks](subagent-tasks.md) | provisional | Detection of subagent/workflow tasks and dedicated envelope notifications |
 | [file-upload](file-upload.md) | provisional | Render dashboard attachments (images/text/PDF/Office) to the SDK in the wrapper |
 | [design](design.md) | accepted | Visual design specification for the dashboard/UI. Uses the DESIGN.md format (YAML tokens + prose) and recognizes `dashboard/src/` as the canonical source |

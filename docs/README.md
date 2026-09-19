@@ -108,6 +108,13 @@ Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh do
 
 - Adapter event contract and verification notes: [Claude events](reference/engines/claude-events.md).
 
+## Antigravity documentation
+
+- Adapter rationale: [Antigravity adapter](architecture/antigravity-adapter.md).
+- Event and state contract: [Antigravity events](reference/engines/antigravity-events.md).
+- Tool and permission contract: [Antigravity tools and permissions](reference/engines/antigravity-tools-permissions.md).
+- Dated CLI evidence: [Antigravity CLI contract](evidence/antigravity/cli-contract.md).
+
 ## Persona documentation
 
 - Pack layout and `manifest.json` contract: [Persona pack format](reference/personas/pack-format.md).

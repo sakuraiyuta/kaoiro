@@ -152,7 +152,7 @@ costs. Design decisions live in ADR-0057; boundary mechanics live in
   does not fire means unrestricted execution, not a denial. That is not
   hypothetical: the same hook configuration placed under the cwd's
   `.agents/` was measured **not** to fire, root cause unresolved
-  ([antigravity-cli-events](../../specs/antigravity-cli-events.md)). Every gate failure
+  ([antigravity tools and permissions](../engines/antigravity-tools-permissions.md#permission-hooks-are-the-approval-channel)). Every gate failure
   the wrapper can observe — socket error, wrapper deadline, malformed
   payload, missing nonce, hook connection closed before an answer — is
   answered `deny`. The one it cannot observe is the hook never running,
