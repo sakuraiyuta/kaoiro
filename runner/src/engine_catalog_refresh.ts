@@ -40,7 +40,7 @@ export interface RefreshEngineCatalogDeps {
    *  a later re-probe between two Claude refreshes must reach the next
    *  rebuilt register. Threaded into `buildRegister`'s 5th argument so a
    *  Claude-only refresh does not regress Antigravity to the pinned
-   *  snapshot (issue #369). */
+   *  snapshot. */
   getAntigravityCatalog: () => EngineModelInfo[] | undefined;
   updateRegister: (register: RunnerRegister) => void;
   sendCatalogResult: (result: EngineCatalogResult) => void;
