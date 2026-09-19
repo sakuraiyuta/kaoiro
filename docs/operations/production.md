@@ -102,7 +102,8 @@ overwrites an existing deployment):
 node server/deploy/kaoiro-server-deploy.mjs start --initialize
 ```
 
-Stuck? → [deployment.md 1](../specs/deployment.md#1-deploy-the-server) for
+Stuck? → [Server install runbook](server-install.md) and
+[Network and login runbook](network-and-login.md) for
 token/`.env`/nginx/VPN/OAuth detail this manual skips.
 
 ## 2. Runner install (first time, per host)
@@ -256,7 +257,7 @@ running, the same way a first-ever `update` on a brand-new host would.
 **Container does not start after a reboot** (docker started before the VPN
 address existed): confirm the boot-order drop-in is installed
 (`systemctl show docker -p After` should list the VPN unit) — see
-[deployment.md 1.5](../specs/deployment.md#15-direct-vpn-deployment-no-nginx-plain-http-2026-07-26)
+[Network and login runbook](network-and-login.md#boot-order-for-a-vpn-publish-address)
 "Boot order for a VPN publish address" and
 [5. Troubleshooting](../specs/deployment.md#5-troubleshooting) for the full
 recovery sequence. Only applies to a direct-VPN publish address; the default

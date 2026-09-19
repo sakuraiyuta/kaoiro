@@ -174,3 +174,10 @@ Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh do
 - Operational lookup and destination resolution: [peer-routing rules](contributing/peer-routing.md).
 - Permission recovery: [send acceptance and rejection](reference/inter-agent/send-and-wait.md#send-acceptance-and-rejection) and [approval flow](specs/protocol-inter-agent.md#approval-flow-permission_broker-integration).
 - Adapter implementation: [directory event, projection, and tool contracts](reference/inter-agent/directory.md).
+
+## Deployment documentation
+
+- Architecture and design intent: [multi-host deployment architecture](architecture/deployment.md).
+- Operator runbooks: [server install](operations/server-install.md), [network and login](operations/network-and-login.md), and [production deployment manual](operations/production.md).
+- Exact contracts: [server configuration](reference/configuration/server.md).
+- Remaining topics (runner deployment, connectivity checks, updating an existing deployment, troubleshooting): [deployment entry](specs/deployment.md).

@@ -167,7 +167,7 @@ docker compose up -d --build
 `ports` マッピング)。LAN 公開時は両トークン必須 + 中央 nginx(WebSocket の
 Upgrade/Connection 転送・`proxy_read_timeout` > 60s)配下に置く。VPN 内
 限定なら nginx なしの plain-HTTP 直結も選べる(`KAOIRO_PLAIN_HTTP` +
-`KAOIRO_PUBLISH_IP`、[docs/specs/deployment.md](../docs/specs/deployment.md)
+`KAOIRO_PUBLISH_IP`、[docs/operations/network-and-login.md](../docs/operations/network-and-login.md#15-direct-vpn-deployment-no-nginx-plain-http-2026-07-26)
 1.5 参照)。
 
 コンテナ内の Phoenix 自体の bind IP(compose の `ports` とは別レイヤー)は

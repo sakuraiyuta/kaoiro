@@ -9,325 +9,43 @@ related: [security-boundaries, setup-wizards, security-threat-model]
 
 ## Purpose
 
-The canonical deployment procedure had been scattered across header comments in
-`server/docker-compose.yaml` and a few lines in `server/README.md`, omitting the
-information needed for public operation on an arbitrary host (nginx settings,
-env list, DETS paths, and wss constraints). This document is the **sole canonical
-manual procedure**. [setup-wizards](setup-wizards.md) automates env/config
-generation for **initial deployment**; this document fully records areas the
-wizard does not handle, such as DETS paths and nginx settings. **Updating an
-existing deployment (section 4) is outside the wizard** and is being automated in
-issues #218 / #219 / #220.
+Moved to [Multi-host deployment architecture](../architecture/deployment.md#purpose).
 
 ## Overall architecture
 
-```mermaid
-flowchart LR
-  U[Operator] -->|https/wss| N["nginx<br/>TLS termination"]
-  N -->|http/ws<br/>X-Forwarded-Proto| S["server (1 host)<br/>docker compose"]
-  R1[runner host A] -->|wss| N
-  R2[runner host B] -->|wss| N
-  S -.->|spawn| R1
-  S -.->|spawn| R2
-```
-
-Use one server and any number of runners per host ID. TLS terminates at nginx;
-the server remains plain HTTP (decision 2026-06-11, see `docker-compose.yaml`).
-Only deployments restricted to a VPN may use the direct, nginx-free option (1.5).
+Moved to [Multi-host deployment architecture](../architecture/deployment.md#overall-architecture).
 
 ## 1. Deploy the server
 
+Moved: 1.1-1.3 to [Server install runbook](../operations/server-install.md), the env variable table to [Server configuration](../reference/configuration/server.md), and 1.4-1.6 to [Network and login runbook](../operations/network-and-login.md).
+
 ### 1.1 Issue authentication tokens (three required)
 
-For public operation on an arbitrary host, configure all three
-([auth-and-authz](../architecture/security-boundaries.md)). Generate them with
-`openssl rand -hex 32` (32-byte hex).
-
-```sh
-openssl rand -hex 32   # KAOIRO_CLIENT_TOKENS の token 部分に使う
-openssl rand -hex 32   # KAOIRO_WRAPPER_TOKENS の token 部分に使う
-openssl rand -hex 32   # KAOIRO_RUNNER_TOKENS の token 部分に使う
-```
+Moved to [Server install runbook](../operations/server-install.md#11-issue-authentication-tokens-three-required).
 
 ### 1.2 Create `.env`
 
-```sh
-cd server && cp .env.example .env
-```
-
-| env | Required | Meaning |
-|---|---|---|
-| `SECRET_KEY_BASE` | Required | Generate with `mix phx.gen.secret` (64 characters); `openssl rand -hex 32` is too short |
-| `PHX_HOST` | Required | Public hostname. Unset raises at startup (fail-fast, issue #134) |
-| `PORT` | Optional | Defaults to 4000 |
-| `KAOIRO_BIND_IP` | Optional | Effective only in :prod; defaults to all interfaces, which is normally fine (issue #134) |
-| `KAOIRO_CLIENT_TOKENS` | Required | `<token>:<role>,...` (role = `operator`/`viewer`); unset rejects every client |
-| `KAOIRO_WRAPPER_TOKENS` | Optional | `<agent_id>:<token>,...` (reverse order from client). Not needed when runners deploy only through spawn—authenticate with server-minted signed tokens (ADR-0024, revised 2026-08-02). Set only to pre-register fixed wrappers |
-| `KAOIRO_RUNNER_TOKENS` | Required | `<host_id>:<token>,...`; pair the token issued in 1.1 with `KAOIRO_RUNNER_TOKEN` in the runner's `runner.env` |
-| `KAOIRO_PERSONA_DIR` | Optional | Container path for persona-pack import; may be mounted read-only |
-| `KAOIRO_FOOTER_DIR` | Optional | Container root for the two footer files |
-| | | When unset, use built-in defaults only |
-| `KAOIRO_PERSONA_CACHE_DIR` | Optional | Container path for the zip-extraction cache |
-| | | Compose default is `/var/lib/kaoiro/persona-cache` |
-
-Unset behavior differs by env (client = fail-closed; runner = fail-closed in
-:prod and relaxed only in dev/test; wrapper = only signed tokens accepted in
-:prod and relaxed in dev/test; issue #133, revised 2026-08-02).
-
-`scripts/dogfood.sh` uses `server/docker-compose.dogfood.yaml` only for its
-local launcher-owned runner pair. Production deployments must use
-`docker-compose.yaml` alone; dogfood's override leaves `server/.env` unchanged.
-
-Persona-pack import is separated from the extraction cache by
-[ADR-0046](../adr/0046-persona-cache-relocation.md), so `KAOIRO_PERSONA_DIR` may
-be mounted `:ro`. To replace footers, mount the host directory
-`/srv/kaoiro/footers` read-only:
-
-```yaml
-      - /srv/kaoiro/footers:/etc/kaoiro/footers:ro
-```
-
-The bundled compose sets `KAOIRO_PERSONA_CACHE_DIR=/var/lib/kaoiro/persona-cache`.
-Keep the cache on writable persistent storage, separate from the persona-pack
-mount.
-
-The existing DETS paths (locations of files that retain state across
-restarts) are configured by the bundled `docker-compose.yaml` through
-`environment:` and the named volume `kaoiro-state`; compose users need not put
-them in `.env`. When running a release directly on the host without compose,
-set the following paths explicitly to writable persistent locations, including
-the conditional PermissionSettings entry when enabling set_permission: `KAOIRO_SESSION_POINTERS_PATH` /
-`KAOIRO_AGENT_DIRECTORY_PATH` / `KAOIRO_PERMISSION_MODES_PATH` /
-`KAOIRO_CLEAR_WATERMARKS_PATH` / `KAOIRO_SESSION_STARTS_PATH` /
-`KAOIRO_INGRESS_ORDER_PATH` / `KAOIRO_USERS_PATH` /
-`KAOIRO_TOKEN_DENYLIST_PATH` / `KAOIRO_DELIVERY_STATES_PATH` /
-`KAOIRO_SESSION_LIFECYCLE_EVENTS_PATH` / `KAOIRO_QUAGMIRE_SETTINGS_PATH` /
-`KAOIRO_PERMISSION_SETTINGS_PATH` (required when set_permission is enabled).
-Unset paths fall under a container-equivalent of `/tmp` and disappear after `docker compose down`
-(the offline-agent list is lost).
-
-For deployments enabling `set_permission` (issue #305), the `PermissionSettings`
-store adds `KAOIRO_PERMISSION_SETTINGS_PATH=/var/lib/kaoiro/permission_settings.dets`
-to this required persistence set: the bundled `docker-compose.yaml` sets it, and
-`mix kaoiro.env`'s sample `.env` documents it alongside the other restart-surviving
-paths. Keep raw requested settings in this file; `session_pointers.dets` continues
-to hold observed effective snapshots.
-
-`SESSION_LIFECYCLE_MAX_EVENTS_PER_AGENT` (unprefixed, ADR-0055 phase-33
-Stage B) caps the per-agent event count the `session_lifecycle` DETS
-retains, oldest discarded first. Unset defaults to 10000.
-
-**These paths, including PermissionSettings when enabled, are the canonical
-persistence set.** The preflight in section 4
-checks that every path resolves under the named volume using this list. A DETS
-file not listed can **silently escape backup**—`KAOIRO_USERS_PATH` did exactly
-that, and the user ledger was lost when the container was recreated without it
-in compose (issue #217).
-
-**Note 2026-08-08:** Phase 30-7 removed the `InterAgentHistory` DETS, and the
-server no longer reads `KAOIRO_INTER_AGENT_HISTORY_PATH`. The unused exports in
-the bundled `docker-compose.yaml` and `scripts/dev.sh` were also removed when
-phase 30 closed. However, **`inter_agent_history.dets` created before removal
-may remain as debris in existing volumes** and is included in backups (about
-1.9 MB observed on 2026-08-12). It is harmless because runtime never reads it,
-but it appears in archive size and listings.
+Moved to [Server install runbook](../operations/server-install.md#12-create-env) (steps) and [Server configuration](../reference/configuration/server.md) (env variable table and DETS paths).
 
 ### 1.3 Start with docker compose
 
-**The build context is the repository root** because `dashboard/` is outside
-`server/` (issue #44). `docker-compose.yaml` already sets `context: ..`, so start
-normally from `server/`. For a manual `docker build`, run
-`docker build -f server/Dockerfile .` from the root.
-
-```sh
-cd server
-docker compose up -d --build
-```
-
-By default it binds only to `127.0.0.1:4000` (the compose `ports` mapping). nginx
-reaches it through the same host's loopback.
+Moved to [Server install runbook](../operations/server-install.md#13-start-with-docker-compose).
 
 ### 1.4 nginx reverse proxy
 
-Terminate TLS at nginx and forward the WebSocket Upgrade/Connection headers.
-Set `proxy_read_timeout` longer than the channel heartbeat (30 seconds).
-
-```nginx
-server {
-    listen 443 ssl;
-    server_name kaoiro.example.com;
-
-    ssl_certificate     /etc/letsencrypt/live/kaoiro.example.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/kaoiro.example.com/privkey.pem;
-
-    location / {
-        proxy_pass http://127.0.0.1:4000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_read_timeout 75s;
-    }
-}
-```
-
-**Read this constraint:** prod enables `force_ssl` (`server/config/prod.exs`) and
-redirects requests whose `X-Forwarded-Proto` is not `https` to `https` with 301.
-That fails a WebSocket handshake. Always set
-`proxy_set_header X-Forwarded-Proto $scheme;`; **direct `ws://<host>:4000`
-connections that bypass nginx are not supported** (only `localhost`/`127.0.0.1`
-`PHX_HOST` values are exempt from `force_ssl`). Wrappers and runners must use
-`wss://` through nginx. The VPN direct deployment (1.5) disables `force_ssl` at
-build time, so this constraint does not apply.
+Moved to [Network and login runbook](../operations/network-and-login.md#14-nginx-reverse-proxy).
 
 ### 1.5 Direct VPN deployment (no nginx, plain HTTP, 2026-07-26)
 
-For hosts reachable only inside a VPN (WireGuard), you may deploy without nginx
-and connect directly to `http://<host>:<port>`. Tokens and cookies travel in
-plaintext inside the VPN, so **the VPN is responsible for path confidentiality**
-([threat-model](../architecture/security-threat-model.md)). Never expose this mode to the public Internet.
-
-Add these two variables to `.env` (all other steps are the same as 1.1–1.3):
-
-| env | Value | Meaning |
-|---|---|---|
-| `KAOIRO_PLAIN_HTTP` | `true` | Build time: disable `force_ssl` and Secure cookies (compile-time). Runtime: switch URL generation and `check_origin` to `http://PHX_HOST:PORT`. Compose wires the same value to both build arg and runtime env; mismatch raises at server startup |
-| `KAOIRO_PUBLISH_IP` | Host's VPN-side interface IP | Compose bind address (default `127.0.0.1`); restrict to the VPN interface rather than publishing on all interfaces |
+Moved to [Network and login runbook](../operations/network-and-login.md#15-direct-vpn-deployment-no-nginx-plain-http-2026-07-26).
 
 #### Boot order for a VPN publish address
 
-If `KAOIRO_PUBLISH_IP` is an address that appears late during boot, such as a
-VPN address, `docker.service` **MUST** start after the unit that creates that
-address. This is unnecessary for the default `127.0.0.1` publish address behind
-nginx. The only shipped asset for this ordering is the
-[`docker-vpn-order.conf.example`](../../server/deploy/systemd/docker-vpn-order.conf.example)
-template; replace `@@VPN_UNIT@@` with the actual VPN systemd unit, rather than
-assuming a WireGuard interface name.
-
-From the checkout root, expand the template, reload systemd, and verify the
-result. This example uses `wg-quick@wg0.service`; substitute the unit that owns
-the configured publish address.
-
-```sh
-VPN_UNIT=wg-quick@wg0.service
-sudo install -d -m 0755 /etc/systemd/system/docker.service.d
-sed "s|@@VPN_UNIT@@|${VPN_UNIT}|g" server/deploy/systemd/docker-vpn-order.conf.example \
-  | sudo tee /etc/systemd/system/docker.service.d/kaoiro-vpn.conf >/dev/null
-sudo systemctl daemon-reload
-sudo systemctl show docker -p After -p Wants -p NeedDaemonReload
-```
-
-Do not restart Docker as part of this procedure: it affects every container
-under the same daemon. The ordering applies on the next Docker start or boot.
-`Wants=` and `After=` order the startup attempt; they do not guarantee that the
-VPN unit succeeds or that its address is ready. If the VPN unit fails, Docker
-may still start and the bind may still fail.
-
-As a host-wide alternative, an operator may opt into IPv4
-`net.ipv4.ip_nonlocal_bind=1`. It permits binding an address before the
-interface owns it, but also lets an incorrect publish address bind successfully
-and therefore makes configuration errors harder to notice. It is an explicit
-operator choice, not a shipped sysctl asset or default.
-
-`check_origin` allows only `http://PHX_HOST:PORT` and loopback (private Gitea
-issue 154 M1: comparing only the default host would let another port on the same
-host steal an operator socket). **Opening the dashboard with another name or a
-literal IP renders the page but the client socket receives 403**, so always use
-the same name as `PHX_HOST`.
-
-`PHX_HOST` is the FQDN used for connections (for example,
-`linux-host.example`). Rebuild with `docker compose up -d --build` after changing
-it (compile-time flag; images cannot be reused). The runner `server_url` is
-`ws://<PHX_HOST>:<PORT>/runner`; the dashboard is
-`http://<PHX_HOST>:<PORT>/?token=...`.
-
-Because nginx is absent in this mode, the server itself adds the security headers
-nginx normally supplies (CSP / `nosniff` / `X-Frame-Options` /
-`Referrer-Policy`) to every response (#145,
-`KaoiroServerWeb.SecurityHeaders`; intent and details are in the
-[threat-model](../architecture/security-threat-model.md) mitigations). CSP `connect-src` copies to `ws:` /
-`wss:` **only the `check_origin` entry matching the origin serving that response**;
-changing `PHX_HOST` / `PORT` follows automatically and never puts a loopback WS
-target on an external-host page. Conversely, **CSP rejects changes that bring
-scripts, styles, or images from external origins into the dashboard**.
+Moved to [Network and login runbook](../operations/network-and-login.md#boot-order-for-a-vpn-publish-address).
 
 ### 1.6 Configure OAuth login (optional, ADR-0042 / issue #65)
 
-The dashboard can add Google / GitHub / Nextcloud OAuth login. See
-[ADR-0042](../adr/0042-oauth-allowlist-login.md) for mechanism and design
-decisions and [auth-and-authz](../architecture/security-boundaries.md) for the boundary map. If
-`KAOIRO_CLIENT_TOKENS` is unset, token auth is disabled (OAuth only); when set,
-the two paths coexist.
-
-**Redirect URI** (common to all providers; the server derives it from the
-endpoint `url`, so register exactly this form):
-
-```text
-{scheme}://{PHX_HOST}[:{PORT}]/auth/{provider}/callback
-# 例: https://kaoiro.example.com/auth/github/callback
-#     http://localhost:4000/auth/google/callback   (dev)
-```
-
-**Register a client for each provider** (paths current as of 2026-07):
-
-| provider | Registration path | Notes |
-|---|---|---|
-| Google | [console.cloud.google.com](https://console.cloud.google.com) → Google Auth Platform (first use: Get started to configure Branding/Audience; for Testing add the account under Test users) → Clients → Create Client → Web application → Authorized redirect URIs | **Redirect URI must use https (http only for localhost)**; unavailable in plain-HTTP deployment (1.5) |
-| GitHub | Settings → Developer settings → OAuth Apps → New OAuth App → Authorization callback URL; after registration, Generate a new client secret | **One callback URL per App**; create a separate App per environment |
-| Nextcloud | Target instance Settings → Administration → Security → OAuth 2.0 clients → add a name + Redirection URI | No scope support (tokens have full access), but the server discards the token after obtaining identity (ADR-0042). No PKCE; CSRF protection is state only |
-
-**Generate settings automatically with `mix kaoiro.env`** (2026-07-27,
-[setup-wizards](setup-wizards.md)). The wizard's OAuth questions cover provider
-selection → ID/secret entry → allowlist generation (prompting for at least one
-entry) → a compose-mount line, and write generated files with mode 0600. The
-following describes manual configuration (and what the wizard writes).
-
-**Append to `.env`** (a provider is enabled only when both ID and secret exist;
-Nextcloud also requires `base_url`):
-
-```sh
-KAOIRO_OAUTH_GOOGLE_CLIENT_ID=...
-KAOIRO_OAUTH_GOOGLE_CLIENT_SECRET=...
-KAOIRO_OAUTH_GITHUB_CLIENT_ID=...
-KAOIRO_OAUTH_GITHUB_CLIENT_SECRET=...
-KAOIRO_OAUTH_NEXTCLOUD_CLIENT_ID=...
-KAOIRO_OAUTH_NEXTCLOUD_CLIENT_SECRET=...
-KAOIRO_OAUTH_NEXTCLOUD_BASE_URL=https://cloud.example.com
-KAOIRO_OAUTH_ALLOWLIST_PATH=/etc/kaoiro/oauth-allowlist.txt
-```
-
-**Allowlist** (unset, missing, or mismatched values all reject authentication =
-fail-closed; malformed lines warn and skip):
-
-```text
-# provider:identifier[:role]   omitted role means viewer
-# identifier: google=lowercase email / github=login / nextcloud=user id
-google:alice@example.com:operator
-github:octocat:viewer
-nextcloud:alice:operator
-```
-
-For compose, put the file in `server/`. The bundled `docker-compose.yaml`
-already mounts it read-only (`server/docker-compose.yaml:112`); no compose
-edit is needed, only creating the plain file at that path.
-
-**Verify**:
-
-```sh
-curl http://<PHX_HOST>:<PORT>/session/auth-methods
-# → {"token":true|false,"oauth":["github","nextcloud",...]}
-```
-
-The login screen lists buttons for enabled providers; accounts outside the
-allowlist are rejected with `auth_error=not_allowed`. Removing a line applies
-immediately on an active socket too: issue #158 closed the earlier gap by
-re-resolving the role from the credential on every HTTP request
-(`RequireOperatorPlug`) and every operator WS action
-(`AgentsChannel.require_operator_role/1`), rather than caching it at connect
-time. Rejection WARN logs include `provider:uid`, so the identifier to copy
-into the allowlist can be read from the log.
+Moved to [Network and login runbook](../operations/network-and-login.md#16-configure-oauth-login-optional-adr-0042--issue-65).
 
 ## 2. Deploy runners (multiple hosts)
 
@@ -417,9 +135,9 @@ an already-running deployment to a new version.
 
 ### 4.1 Known limits
 
-| Limit | Details | Resolving issue |
-|---|---|---|
-| **In-place build** (checkout-direct hosts only) | Overwrites `dist` in the active checkout. Each wrapper spawn resolves on-disk `dist` (`resolveWrapperLaunch()` in `runner/src/spawn.ts`), so a spawn during build can capture a mixed old/new artifact. Even if the procedure says “build while stopped,” **one ordering mistake reproduces the failure** | #219 (implemented; **remains until the host moves to the release profile** — 4.6) |
+The In-place build limit row moved to
+[Multi-host deployment architecture](../architecture/deployment.md#build-and-restart-boundaries);
+the remaining status paragraphs below stay here (to be moved in U20).
 
 **Missing artifact provenance (former #218) is resolved**: build identity
 ([ADR-0053](../adr/0053-build-identity.md)) exposes the full SHA through the
