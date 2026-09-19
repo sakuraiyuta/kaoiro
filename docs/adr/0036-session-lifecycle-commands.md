@@ -44,14 +44,14 @@ this ADR does not assume that path works.
 
 ### Addendum (2026-07-28 — Claude Agent SDK `/compact` measurement)
 
-In [phase-28 Track S measurement results](../plans/phase-28-agent-initiated-session-ops.md#track-s-実測結果-もも2026-07-28)
+In [phase-28 Track S measurement results](../plans/phase-28-agent-initiated-session-ops.md#track-s-measurement-results-もも-2026-07-28)
 on 2026-07-28, Claude Agent SDK 0.3.220 interpreted the string `/compact` as a
 CLI-native slash command even in streaming input mode and performed a manual
 compact. Therefore, the statement above that “neither Claude nor Codex passes
 through a CLI-native slash-command parser” applies only to the Codex measurement;
 do not apply it to Claude.
 
-In the [phase-28 real-machine acceptance](../plans/phase-28-agent-initiated-session-ops.md#実機受け入れ結果-あお2026-07-28)
+In the [phase-28 real-machine acceptance](../plans/phase-28-agent-initiated-session-ops.md#phase-c-live-acceptance-results-あお--マスター-2026-07-28)
 on the same day, manual compact through agent-originated `request_compact` also
 succeeded in a production session. Record two additional findings:
 

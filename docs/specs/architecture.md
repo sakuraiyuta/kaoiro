@@ -45,7 +45,7 @@ the new location.
 
 ### Elixir / OTP mapping (server side)
 
-→ [docs/architecture/system-overview.md#elixir-otp-mapping-server-side](../architecture/system-overview.md#elixir-otp-mapping-server-side)
+→ [docs/architecture/system-overview.md#elixir--otp-mapping-server-side](../architecture/system-overview.md#elixir--otp-mapping-server-side)
 
 ### Data flow
 

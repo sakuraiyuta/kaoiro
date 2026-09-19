@@ -15,7 +15,7 @@ related_adrs: [21, 22, 32, 33, 36, 44, 55]
 
 Accepted (2026-07-28, grounded in the decision record of [#158 comment-5384365227](https://github.com/sakuraiyuta/kaoiro/issues/158#issuecomment-5384365227)
 and the Phase B real-machine acceptance of [#158 comment-5384365348](https://github.com/sakuraiyuta/kaoiro/issues/158#issuecomment-5384365348)). Implementation is
-carried out in [Phase C of phase-28-agent-initiated-session-ops](../plans/phase-28-agent-initiated-session-ops.md#phase-c--自発-newclear-詳細化-2026-07-28クロエ裁定).
+carried out in [Phase C of phase-28-agent-initiated-session-ops](../plans/phase-28-agent-initiated-session-ops.md#phase-c--agent-initiated-newclear-detailed-2026-07-28-クロエ-ruling).
 
 ## Context
 
@@ -216,7 +216,7 @@ generalize embedded compact summaries to new/clear.
 
 - Decision record: [issue #158 comment-5384365227](https://github.com/sakuraiyuta/kaoiro/issues/158#issuecomment-5384365227)
 - Phase B real-machine acceptance: [issue #158 comment-5384365348](https://github.com/sakuraiyuta/kaoiro/issues/158#issuecomment-5384365348)
-- Implementation plan: [phase-28 Phase C](../plans/phase-28-agent-initiated-session-ops.md#phase-c--自発-newclear-詳細化-2026-07-28クロエ裁定)
+- Implementation plan: [phase-28 Phase C](../plans/phase-28-agent-initiated-session-ops.md#phase-c--agent-initiated-newclear-detailed-2026-07-28-クロエ-ruling)
 - Source revision: [ADR-0036](0036-session-lifecycle-commands.md) F1, F2, F6
 - Permission precedents: ADR-0022, ADR-0033
 - Viewer information boundary: ADR-0021

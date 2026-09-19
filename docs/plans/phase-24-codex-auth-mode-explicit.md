@@ -20,7 +20,7 @@ the priority as `explicit config > doctor detection >
 "unknown"`.
 
 Add the auth-mode decision priority to
-[ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md#auth-mode-決定の-priority-phase-24-追補2026-07-16),
+[ADR-0035](../adr/0035-codex-model-catalog-and-mid-session-switch.md#auth-mode-decision-priority-phase-24-addendum-2026-07-16),
 and record this regression and the Phase 24 dependency in the Risks / 23-9
 note of the Phase 23 [plan](phase-23-resume-model-effort-restoration.md).
 
