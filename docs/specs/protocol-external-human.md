@@ -8,6 +8,12 @@ related: [protocol, protocol-inter-agent, plugin-model, security-threat-model]
 
 # External human messaging protocol
 
+This spec is provisional: the Discord-wrapper external human messaging feature
+is not yet implemented, so it stays in `docs/specs/` rather than moving into
+the layered `architecture/` / `reference/` tree. Once it reaches `accepted`,
+place its content per [ADR-0060](../adr/0060-documentation-taxonomy-and-migration.md)'s
+placement rules.
+
 ## Purpose
 
 Defines the protocol surface that lets AI agents (office staff) send messages to
@@ -55,7 +61,7 @@ flowchart LR
 ### envelope.type: "external_message"
 
 This is a reserved extension of the common outer frame in
-[protocol.md](protocol.md) (`version` remains unchanged,
+[protocol.md](../reference/protocol/envelope.md#envelope-v0) (`version` remains unchanged,
 [ADR-0010](../adr/0010-protocol-precisification.md)). `agent_id` identifies the
 relevant agent (the outbound sender or inbound recipient). `payload` is below.
 
@@ -156,7 +162,7 @@ configuration is persistent.
 
 ## See Also
 
-- Related specs: [protocol](protocol.md) (common envelope foundation and the
+- Related specs: [protocol](../reference/protocol/envelope.md#envelope-v0) (common envelope foundation and the
   `external_message` type extension),
   [protocol-inter-agent](protocol-inter-agent.md) (the source superset and
   routing/quota mechanisms), [extensions](../architecture/extensions.md) (Tier B filter

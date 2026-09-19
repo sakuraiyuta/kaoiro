@@ -168,6 +168,7 @@ Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh do
 - Session tools: [compaction, threshold notices, and session reset](reference/inter-agent/session-tools.md).
 - Permission recovery: [approval flow](reference/security/inter-agent-tool-authorization.md#approval-flow-permission_broker-integration).
 - Remaining topics: [protocol entry](specs/protocol-inter-agent.md).
+- Provisional: external human messaging (Discord) — [protocol entry](specs/protocol-external-human.md).
 
 ## Coordination monitoring documentation
 
