@@ -254,6 +254,13 @@ Both the Claude Code and Codex engine adapters use the shared `agent-common`
 logic (`InterAgentTool#receiveInbound` / `#invoke`), so the state machine
 above is engine-independent.
 
+- MUST (issue #167): Retain a conversation closed by both done flags, a hard
+  limit, or `open_conversation_ttl_ms` (issue #211, GC only) as a tombstone
+  until `tombstone_ttl_ms` expires. While closed, do not relay, store, or
+  broadcast sends for that conversation; reject them with
+  `{:error, :conversation_closed}`. Discard counters (turns/tokens/started_at/
+  done_by) at closure and never reset them on retry.
+
 #### CID reuse is not a contract (issue #167 review S2)
 
 Looking only at the server tombstone TTL (`tombstone_ttl_ms`, default 24
