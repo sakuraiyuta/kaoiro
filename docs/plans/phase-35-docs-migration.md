@@ -36,7 +36,7 @@ implementation — the emphasis marks; all three are walked at every close.
 | U02 | permission state / requests / sync-audit | perm impl | ✅ (rationale folded into architecture/security-boundaries.md) |
 | U03 | model-effort / capabilities | perm impl | ✅ (capability advertisement from plugin-model.md folded in) |
 | U04 | session lifecycle / state machine | ops perm impl | ✅ (rationale folded into architecture/system-overview.md) |
-| U05 | display-history / IA sidecar | ops impl | ⏳ |
+| U05 | display-history / IA sidecar | ops impl | ✅ (sidecar → reference/storage; hydration stays in session-lifecycle.md; no architecture page) |
 | U06 | tasks / subagent visibility | impl | ✅ (measurement split to evidence/claude) |
 | U07 | attachments | impl | ✅ |
 | U08 | runner control / wrapper config | ops impl | ✅ (no architecture page; rationale = ADR-0024 D1) |
