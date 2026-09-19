@@ -67,6 +67,8 @@ function hostHarness(options: {
   config?: WrapperConfig;
   now?: () => string;
   onTurnEnd?: AntigravityHostOptions["onTurnEnd"];
+  onState?: AntigravityHostOptions["onState"];
+  onInterruptSettled?: AntigravityHostOptions["onInterruptSettled"];
   onToolStart?: AntigravityHostOptions["onToolStart"];
   onToolEnd?: AntigravityHostOptions["onToolEnd"];
   permissionSyncSupported?: boolean;
@@ -88,7 +90,10 @@ function hostHarness(options: {
     cwd: process.cwd(),
     appendSystemPrompt: "persona",
     permissionBroker: broker,
-    onState: (envelope) => states.push(envelope),
+    onState: (envelope) => {
+      states.push(envelope);
+      options.onState?.(envelope);
+    },
     onLog: (envelope) => logs.push(envelope),
     onPermissionLifecycle: (event) => permissionLifecycle.push(event),
     runtimeAssetsAvailable: () => true,
@@ -108,7 +113,10 @@ function hostHarness(options: {
     ...(options.toolHostListen === undefined ? {} : { toolHostListen: options.toolHostListen }),
     ...(options.gateServerListen === undefined ? {} : { gateServerListen: options.gateServerListen }),
     onInterruptRequested: (info) => interruptRequests.push(info),
-    onInterruptSettled: (info) => interruptSettlements.push(info),
+    onInterruptSettled: (info) => {
+      interruptSettlements.push(info);
+      options.onInterruptSettled?.(info);
+    },
     onSendRejected: (info) => sendRejections.push(info),
     spawn: (command, args, spawnOptions) => {
       const child = new FakeAgy();
@@ -1731,6 +1739,44 @@ if (args[0] === "models") {
       await host.interrupt();
       expect(interruptRequests).toEqual([]);
       expect(interruptSettlements).toEqual([]);
+    });
+
+    it("interrupt() called from inside the synthetic terminal's onState(error) does not re-attribute to the turn it just settled (momo round-4 M5, kuroe class-closing order)", async () => {
+      let resolveSync!: () => void;
+      const pending = new Promise<void>((resolve) => { resolveSync = resolve; });
+      const { host, turnEnds, interruptRequests, interruptSettlements } = hostHarness({
+        waitForPermissionSync: () => pending,
+        onState: (envelope) => {
+          if (envelope.state === "error") void host.interrupt();
+        },
+      });
+      await host.send("hello", undefined, [], "turn-1");
+      await host.interrupt();
+      resolveSync();
+      await waitFor(() => turnEnds.length === 1);
+      // Exactly the ONE interrupt() call from the test body itself, not a
+      // second one re-entered from inside `#terminalError`'s onState.
+      expect(interruptRequests).toHaveLength(1);
+      expect(interruptSettlements).toHaveLength(1);
+      expect(host.state).toBe("waiting_input");
+      host.close();
+    });
+
+    it("interrupt() called from inside onInterruptSettled does not re-attribute to the turn it just settled (momo round-4 M5, kuroe class-closing order)", async () => {
+      let resolveSync!: () => void;
+      const pending = new Promise<void>((resolve) => { resolveSync = resolve; });
+      const { host, turnEnds, interruptRequests, interruptSettlements } = hostHarness({
+        waitForPermissionSync: () => pending,
+        onInterruptSettled: () => { void host.interrupt(); },
+      });
+      await host.send("hello", undefined, [], "turn-1");
+      await host.interrupt();
+      resolveSync();
+      await waitFor(() => turnEnds.length === 1);
+      expect(interruptRequests).toHaveLength(1);
+      expect(interruptSettlements).toHaveLength(1);
+      expect(host.state).toBe("waiting_input");
+      host.close();
     });
   });
 

@@ -921,6 +921,26 @@ export class AntigravityHost implements EngineAdapter {
     } finally {
       this.#running = null;
       this.#turnActive = false;
+      // issue #371 M5 (kuroe design ruling, momo round-4 review): the SAME
+      // defect class as M1/M4 -- a synchronous external callback observing
+      // this turn while `#currentTurnToken` still identifies it, and
+      // misattributing a callback-triggered `interrupt()` back to the turn
+      // that is already settling. M4 closed this for `onTurnBoundary`/
+      // `onTurnEnd`, but missed that `#terminalError` (called directly, not
+      // through a callback wrapper) synchronously fires `onState`/`onLog`,
+      // and `onInterruptSettled` fires right alongside it -- both BEFORE
+      // the identity cleanup used to run. Closing the class this time means
+      // ordering the whole block so identity cleanup precedes every
+      // external callback this turn's settlement can reach (onState,
+      // onLog, onInterruptSettled, onTurnBoundary, onTurnEnd -- 5 routes),
+      // not just the two M4 covered. Judge first, stash every value a
+      // deferred callback will need (the fields cleanup is about to null
+      // out), clean up, THEN fire callbacks from the stashed values.
+      let settledAsInterrupted = false;
+      let rollbackModel: string | null = null;
+      let interruptSettledPayload:
+        | { turnToken: string; exitCode: number | null; signal: NodeJS.Signals | null; elapsedMs: number }
+        | undefined;
       if (!this.#watchdogFailStopped) {
         // issue #371 settlement invariant, narrowed by the design addendum
         // (kuroe + momo M1): a generation-mismatch early return in
@@ -942,44 +962,38 @@ export class AntigravityHost implements EngineAdapter {
         // tampering discovered after the child exited) even though an
         // interrupt also happened to be requested for the same turn — that
         // turn's real outcome is the tampering, not the interrupt.
-        const settledAsInterrupted = interrupted && !AT_REST_STATES.has(this.#machine.state);
+        settledAsInterrupted = interrupted && !AT_REST_STATES.has(this.#machine.state);
         if (settledAsInterrupted) {
-          this.#terminalError("interrupted", this.#currentAttemptedModel);
+          rollbackModel = this.#currentAttemptedModel;
           error = { reason: "interrupted" };
           cancellation = { kind: "interrupt", reason: "interrupted" };
           const exit = this.#lastChildExit;
           const requestedAt = this.#interruptRecord?.at;
-          this.#options.onInterruptSettled?.({
+          interruptSettledPayload = {
             turnToken,
             exitCode: exit?.code ?? null,
             signal: exit?.signal ?? null,
             elapsedMs: requestedAt === undefined
               ? 0
               : Math.max(0, Date.parse(this.#now()) - Date.parse(requestedAt)),
-          });
+          };
         }
       }
-      // issue #371 M4 (kuroe design ruling B, momo round-3 review): a
-      // turn's identity ends the moment its finally frame reaches this
-      // point, not after the external onTurnBoundary/onTurnEnd callbacks
-      // below run. Clearing this turn's bookkeeping BEFORE those
-      // callbacks (rather than after, as M1 originally had it) makes one
-      // mechanism satisfy both M1 and M4: a re-entrant `send()` from
-      // inside a callback cannot clobber the NEW turn's
-      // `#currentTurnToken` / `#currentAttemptedModel` (this turn's own
-      // copies are already cleared, so the guard below is moot for it),
-      // and an `interrupt()` called from inside a callback sees
-      // `#currentTurnToken` already null, so idle-interrupt's "no current
-      // turn -> no record" contract applies instead of misattributing the
-      // interrupt to the turn that just finished. `onTurnBoundary`/
-      // `onTurnEnd` below read the turn's identity from the local
-      // `turnToken` parameter, never these fields, so clearing first
-      // changes nothing they observe. This runs UNCONDITIONALLY (outside
-      // the `!this.#watchdogFailStopped` guard above): a fail-stop must
-      // not leave this turn's bookkeeping stale either, or a later
-      // `interrupt()` (e.g. an operator request arriving after fail-stop)
-      // would misattribute to a turn that already ended for a different
-      // reason.
+      // issue #371 M4/M5: a turn's identity ends the moment its finally
+      // frame reaches this point, not when any external callback observes
+      // it. Clearing this turn's bookkeeping BEFORE every callback below
+      // (onState/onLog via `#terminalError`, onInterruptSettled,
+      // onTurnBoundary, onTurnEnd) makes one mechanism satisfy M1 (a
+      // callback's re-entrant `send()` cannot clobber a NEW turn's fields,
+      // since this turn's own copies are already cleared), M4 and M5 (a
+      // callback's `interrupt()` sees `#currentTurnToken` already null, so
+      // idle-interrupt's "no current turn -> no record" contract applies
+      // instead of misattributing to the turn that just finished). Runs
+      // UNCONDITIONALLY (outside the `!this.#watchdogFailStopped` guard
+      // above): a fail-stop must not leave this turn's bookkeeping stale
+      // either, or a later `interrupt()` (e.g. an operator request
+      // arriving after fail-stop) would misattribute to a turn that
+      // already ended for a different reason.
       if (this.#currentTurnToken === turnToken) {
         this.#currentTurnToken = null;
         this.#currentAttemptedModel = null;
@@ -989,6 +1003,12 @@ export class AntigravityHost implements EngineAdapter {
         this.#activeTurnConversationIds = [];
       }
       if (this.#interruptRecord?.turnToken === turnToken) this.#interruptRecord = null;
+      // Every external callback below is fired from values stashed above,
+      // AFTER identity cleanup -- see the M5 comment above.
+      if (settledAsInterrupted) {
+        this.#terminalError("interrupted", rollbackModel);
+        this.#options.onInterruptSettled?.(interruptSettledPayload!);
+      }
       if (!this.#watchdogFailStopped) {
         this.#options.onTurnBoundary?.({ turnToken });
         this.#options.onTurnEnd?.({
