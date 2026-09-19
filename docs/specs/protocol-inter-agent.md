@@ -222,7 +222,11 @@ server-synthesized error notices excluded from turn/token counts to
 closed conversations inactive in `peer_index` to
 [Peer directory](../reference/inter-agent/directory.md#peer-directory-information-boundary-99--150);
 self-routing rejection to
-[Send and wait](../reference/inter-agent/send-and-wait.md#send-acceptance-and-rejection).
+[Send and wait](../reference/inter-agent/send-and-wait.md#send-acceptance-and-rejection);
+tombstone counter-discard-on-closure (issue #167) to
+[Inter-agent conversation contract](../reference/inter-agent/conversations.md#conversation-lifecycle-and-post-close-handling-issue-167);
+`users` allow-list literal-map discipline (issue #187 phase 2) to
+[Peer directory](../reference/inter-agent/directory.md#peer-directory-information-boundary-99--150).
 
 The remaining bullets were already covered verbatim and are not duplicated
 here: `payload.error` still uses one of the nine kinds / unresponsive notices
@@ -230,14 +234,19 @@ use `inform` ([Inter-agent error notices](../reference/inter-agent/errors.md#ser
 `inter_agent_message` operator-only delivery
 ([Authentication and authorization](../reference/security/authentication-authorization.md#role-based-output-gate-adr-0021));
 hard limits (`max_turns`/`max_tokens`/`max_concurrent_agents`, `max_wallclock`
-removal) and both-owner-`done`/tombstone closure
-([Inter-agent conversation contract](../reference/inter-agent/conversations.md#hard-limits-config--mechanical-enforcement)
-and its [Conversation lifecycle](../reference/inter-agent/conversations.md#conversation-lifecycle-and-post-close-handling-issue-167));
+removal), both-owner-`done` closure, and per-call `permission_broker` approval
+in Phase 1 (the sibling "no autonomous approval before Phase 3" clause is a
+confirmed-stale semantic-sync drop, director-verified against
+`wrapper/claude-code/src/host.ts` `#canUseTool` and the ADR-0044 F2 addendum
+auto-approval whitelist, not a documentation move)
+([Inter-agent conversation contract](../reference/inter-agent/conversations.md#hard-limits-config--mechanical-enforcement),
+its [Conversation lifecycle](../reference/inter-agent/conversations.md#conversation-lifecycle-and-post-close-handling-issue-167),
+and [Approval flow](../reference/security/inter-agent-tool-authorization.md#approval-flow-permission_broker-integration));
 `kind: "reject"` requires `meta.reject_reason`
 ([Inter-agent message contract](../reference/inter-agent/messages.md#kind-enum-nine-values));
 `send_to_agent.to` accepts only agent IDs, resolved via `list_agents`
 ([Peer routing](../contributing/peer-routing.md#destination-resolution-guidance));
-the peer-directory allow-list, the `users` allow-list discipline, and the
+the peer-directory allow-list, the
 `KAOIRO_EXPOSE_USERS_TO_AGENTS` default, the `context` projection gate, the
 `rate_limits` window absence/invalid-value rule, and `session_started_at`/
 `last_activity_at` being server-observed timestamps (all in
@@ -247,14 +256,6 @@ the peer-directory allow-list, the `users` allow-list discipline, and the
 ([Peer directory](../reference/inter-agent/directory.md#companion-tools-wrapper-sdk-mcp));
 and `conversation_id` allocation from UUIDv4
 ([Inter-agent message contract](../reference/inter-agent/messages.md#inner-envelopepayload-schema)).
-
-**Sync note (not moved, flagged for director review):** the Phase-1
-per-call-approval bullet's "Do not add kaoiro autonomous approval skipping
-before Phase 3" clause is stale — a conversation-scoped auto-approval
-whitelist is already implemented under specific conditions
-([Inter-agent tool authorization](../reference/security/inter-agent-tool-authorization.md#automatic-approval-conversation-scoped-whitelist-adr-0044-f2-addendum-option-b),
-ADR-0044 F2 addendum). The per-call-approval fact itself is covered there
-too ([Approval flow](../reference/security/inter-agent-tool-authorization.md#approval-flow-permission_broker-integration)).
 
 ## Open Questions
 

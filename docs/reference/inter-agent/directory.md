@@ -204,6 +204,11 @@ contract and drops only violating entries. Matching both sides of the double
 projection (D7) keeps rolling upgrades, malformed payloads, and future server
 regressions consistent.
 
+- MUST (issue #187 phase 2): Apply the same allow-list discipline to `users`
+  ([ADR-0021](../../adr/0021-role-information-disclosure-policy.md) F6-8). Build literal maps with per-value validation; do not use a
+  `Map.take/2`-style key-only filter that bypasses shape checks. Omit an entire
+  user entry when its role cannot be resolved.
+
 ##### Meaning of a live role join
 
 For every response, resolve the user's source (`{:oauth, provider, uid}` or
