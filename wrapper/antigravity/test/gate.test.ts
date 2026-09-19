@@ -353,13 +353,61 @@ describe("AntigravityGate", () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  it("customization参照は常にdeny、Cwd外shellはaskにする", () => {
+  it.each([
+    ["read-only", "untrusted", "inside", "deny"],
+    ["read-only", "on-request", "outside", "deny"],
+    ["read-only", "local", "missing", "deny"],
+    ["read-only", "never", "malformed", "deny"],
+    ["workspace-write", "untrusted", "inside", "ask"],
+    ["workspace-write", "on-request", "inside", "ask"],
+    ["workspace-write", "local", "inside", "allow"],
+    ["workspace-write", "never", "inside", "allow"],
+    ["workspace-write", "untrusted", "outside", "ask"],
+    ["workspace-write", "on-request", "outside", "ask"],
+    ["workspace-write", "local", "outside", "ask"],
+    ["workspace-write", "never", "outside", "deny"],
+    ["workspace-write", "on-request", "missing", "ask"],
+    ["workspace-write", "local", "missing", "ask"],
+    ["workspace-write", "never", "missing", "deny"],
+    ["workspace-write", "never", "malformed", "deny"],
+    ["danger-full-access", "untrusted", "outside", "ask"],
+    ["danger-full-access", "on-request", "missing", "ask"],
+    ["danger-full-access", "local", "outside", "allow"],
+    ["danger-full-access", "never", "malformed", "allow"],
+  ] as const)(
+    "applies Cwd containment before shell approval: %s/%s/%s",
+    (sandbox, approval, location, expected) => {
+      const { gate, root, cwd } = makeGate({ sandbox, approval, network_access: true });
+      try {
+        mkdirSync(join(cwd, "nested"));
+        const args = {
+          CommandLine: "pwd",
+          ...(location === "inside"
+            ? { Cwd: join(cwd, "nested") }
+            : location === "outside"
+              ? { Cwd: root }
+              : location === "malformed"
+                ? { Cwd: "\0invalid" }
+                : {}),
+        };
+        const result = gate.evaluate({ name: "run_command", args });
+        expect(result.decision).toBe(expected);
+        if (result.decision === "deny") {
+          expect(result.reason).toBe(
+            sandbox === "read-only"
+              ? "kaoiro: read-only sandbox"
+              : "kaoiro: command Cwd is outside the permitted workspace",
+          );
+        }
+      } finally { rmSync(root, { recursive: true, force: true }); }
+    },
+  );
+
+  it("always denies customization references", () => {
     const { gate, root, customizationDir } = makeGate({ approval: "never", network_access: true });
     try {
       expect(gate.evaluate({ name: "write_to_file", args: { TargetFile: join(customizationDir, "x") } })).toMatchObject({ decision: "deny" });
-      expect(gate.evaluate({ name: "run_command", args: { CommandLine: "pwd", Cwd: root } })).toEqual({ decision: "ask" });
       expect(gate.evaluate({ name: "ask_question", args: {} })).toMatchObject({ decision: "deny" });
-      expect(gate.evaluate({ name: "run_command", args: { CommandLine: "pwd" } })).toEqual({ decision: "ask" });
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
