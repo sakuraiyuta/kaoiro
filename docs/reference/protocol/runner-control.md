@@ -113,3 +113,4 @@ and lifetime are defined by ADR-0024. Full runner-less direct `node wrapper` sup
 - [Attachment wire contract](attachments.md).
 - [Attachment rendering by engine](../engines/attachment-rendering.md).
 - [Wrapper configuration](../configuration/wrapper.md).
+- [Task and tasklist envelopes](tasks.md).

@@ -177,3 +177,4 @@ wrapper reports it and the server stores the `(agent_id, host, cwd, session_id)`
 - [Attachment rendering by engine](../engines/attachment-rendering.md).
 - [Message topology](../../architecture/message-topology.md).
 - [Runner control and launch](runner-control.md).
+- [Task and tasklist envelopes](tasks.md).

@@ -103,7 +103,7 @@ display (forward compatibility).
 ## Related
 
 - Specs: [protocol](../specs/protocol.md) (type and payload table),
-  [subagent-tasks](../specs/subagent-tasks.md) (feature specification), and
+  [tasks](../reference/protocol/tasks.md) (feature specification), and
   [agent-sdk-events](../reference/engines/claude-events.md) (source messages).
 - Related ADRs: [0019](0019-subagent-workflow-entity-and-task-envelope.md)
   (source of the entity-model and transport decision),

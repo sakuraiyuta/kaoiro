@@ -65,7 +65,7 @@ We want to pick these up and deliver them to the client, increasing the resoluti
 
 ## Related
 
-- specs: [subagent-tasks](../specs/subagent-tasks.md) (feature specification), [protocol](../specs/protocol.md) (type and payload), and [agent-sdk-events](../reference/engines/claude-events.md) (source messages).
+- specs: [subagent-visibility](../architecture/subagent-visibility.md) (feature specification), [protocol](../specs/protocol.md) (type and payload), and [agent-sdk-events](../reference/engines/claude-events.md) (source messages).
 - Related ADRs: [0010](0010-protocol-precisification.md) (reserved-type policy), [0015](0015-protocol-version-stamping.md) (version unchanged), [0047](0047-task-envelope-schema.md) (envelope schema), and [0048](0048-task-aggregation-delivery.md) (server aggregation and delivery).
 - Origin: my-idea-brief (scratch note “notify the client when subagents/workflows start, including their count and type”).
 

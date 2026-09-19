@@ -37,7 +37,7 @@
      *  in issue #233 comment 5450038052). One dot per root, evenly
      *  spaced by ANGLE (not arc length — a workflow's internal children
      *  fan out under one root task and are deliberately not counted
-     *  separately; see docs/specs/subagent-tasks.md). `count=1` is
+     *  separately; see docs/architecture/subagent-visibility.md). `count=1` is
      *  BIT-FOR-BIT the original single-dot geometry (issue #180): theta
      *  = -90deg (12 o'clock), zero phase delay, identical rest-state
      *  translate. */

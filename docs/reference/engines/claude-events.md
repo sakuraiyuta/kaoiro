@@ -54,7 +54,7 @@ Tool results are returned not as separate messages but as **`SDKUserMessage`
 
 The parent session yields the lifecycle of subagents / local workflows started
 by the Task tool as additional `type:"system"` subtypes. kaoiro derives these
-into subagent/workflow notifications ([subagent-tasks](../../specs/subagent-tasks.md),
+into subagent/workflow notifications ([tasks](../protocol/tasks.md),
 [ADR-0019](../../adr/0019-subagent-workflow-entity-and-task-envelope.md)).
 
 | subtype | Main fields |
@@ -74,7 +74,7 @@ F3, and is outside v1 scope (that ADR's addendum).
 
 These do **not enter** `KaoiroState` (they do not change the parent state).
 They are derived separately into the dedicated `task` envelope
-([subagent-tasks](../../specs/subagent-tasks.md); implemented — stage 1 (wrapper), stage 2
+([tasks](../protocol/tasks.md); implemented — stage 1 (wrapper), stage 2
 (server), stage 3 (dashboard overhead ring)).
 
 **Observed record (task_notification terminal guarantee, issue #170)**: SDK
@@ -263,7 +263,7 @@ stamps it on the next `state_change` (the same pattern as `pending_permission`).
 
 `system/task_*` (subagent/workflow) **does not map** to `KaoiroState` — it does
 not change the parent state and derives separately to a dedicated envelope
-([subagent-tasks](../../specs/subagent-tasks.md)).
+([tasks](../protocol/tasks.md)).
 
 ### session_capabilities and optimistic stamps (2026-07-11, [ADR-0034](../../adr/0034-session-capabilities-advertisement.md) F1 / phase-15 15-4b)
 
@@ -322,7 +322,7 @@ None. The common-envelope type/payload design is settled in
 ## See Also
 
 - Related specs: [protocol](../../specs/protocol.md), [extensions](../../architecture/extensions.md),
-  [architecture](../../architecture/system-overview.md), [subagent-tasks](../../specs/subagent-tasks.md)
+  [architecture](../../architecture/system-overview.md), [tasks](../protocol/tasks.md)
 - ADRs: [0001](../../adr/0001-agent-sdk-integration.md),
   [0019](../../adr/0019-subagent-workflow-entity-and-task-envelope.md)
 - Sources: code.claude.com/docs/en/agent-sdk/typescript and others (verified

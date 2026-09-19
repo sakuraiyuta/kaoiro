@@ -135,7 +135,7 @@ tasklist is not displayed again after resume until a task tool_use occurs.
 ## Related
 
 - Specs: [protocol](../specs/protocol.md) (reserved `task` row),
-  [subagent-tasks](../specs/subagent-tasks.md), and
+  [tasks](../reference/protocol/tasks.md), and
   [codex-sdk-events](../reference/engines/codex-exec-events.md) (`todo_list` source event).
 - Related ADR: [0047](0047-task-envelope-schema.md) (task envelope schema and
   `task_type` extension point).

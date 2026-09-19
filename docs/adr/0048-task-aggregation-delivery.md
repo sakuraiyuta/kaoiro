@@ -17,7 +17,7 @@ Accepted (2026-08-04, decided in consultation with マスター; kaoiro issue #1
 This settles the concrete details of the server requirement from
 [ADR-0019](0019-subagent-workflow-entity-and-task-envelope.md) to “maintain and
 deliver the active set of child tasks,” a prerequisite for Phase 2 of
-[subagent-tasks](../specs/subagent-tasks.md).
+[tasks](../reference/protocol/tasks.md).
 
 ## Context
 
@@ -93,7 +93,7 @@ protocol additions and rides directly on the existing last-write-wins semantics.
 
 ## Related
 
-- Specs: [subagent-tasks](../specs/subagent-tasks.md) (Phase 2) and
+- Specs: [tasks](../reference/protocol/tasks.md) (Phase 2) and
   [protocol](../specs/protocol.md) (existing snapshot semantics).
 - Related ADRs: [0019](0019-subagent-workflow-entity-and-task-envelope.md)
   (source of the responsibility decision),
