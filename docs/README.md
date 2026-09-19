@@ -149,7 +149,7 @@ Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh do
 ## Security documentation
 
 - Operational updates: [release audit checklist](operations/security-release-audit.md).
-- Permission recovery: [authentication and authorization](reference/security/authentication-authorization.md) and [tool authorization](reference/security/tool-authorization.md).
+- Permission recovery: [authentication and authorization](reference/security/authentication-authorization.md), [tool authorization](reference/security/tool-authorization.md), and [inter-agent tool authorization](reference/security/inter-agent-tool-authorization.md).
 - Adapter implementation: [enforcement boundaries](reference/security/enforcement-boundaries.md).
 - Architecture: [security boundaries](architecture/security-boundaries.md) and [threat model](architecture/security-threat-model.md).
 
@@ -159,7 +159,7 @@ Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh do
 - Exact contracts: [messages](reference/inter-agent/messages.md), [conversations and limits](reference/inter-agent/conversations.md), [conversation admission](reference/inter-agent/conversation-admission.md), [delivery](reference/inter-agent/delivery.md), [send and wait](reference/inter-agent/send-and-wait.md), and [IA sidecar and display restoration](reference/storage/inter-agent-sidecar.md).
 - Error and reachability notices: [error notices](reference/inter-agent/errors.md).
 - Session tools: [compaction, threshold notices, and session reset](reference/inter-agent/session-tools.md).
-- Permission recovery: [approval flow](specs/protocol-inter-agent.md#approval-flow-permission_broker-integration).
+- Permission recovery: [approval flow](reference/security/inter-agent-tool-authorization.md#approval-flow-permission_broker-integration).
 - Remaining topics: [protocol entry](specs/protocol-inter-agent.md).
 
 ## Coordination monitoring documentation
@@ -172,7 +172,7 @@ Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh do
 ## Peer directory and routing documentation
 
 - Operational lookup and destination resolution: [peer-routing rules](contributing/peer-routing.md).
-- Permission recovery: [send acceptance and rejection](reference/inter-agent/send-and-wait.md#send-acceptance-and-rejection) and [approval flow](specs/protocol-inter-agent.md#approval-flow-permission_broker-integration).
+- Permission recovery: [send acceptance and rejection](reference/inter-agent/send-and-wait.md#send-acceptance-and-rejection) and [approval flow](reference/security/inter-agent-tool-authorization.md#approval-flow-permission_broker-integration).
 - Adapter implementation: [directory event, projection, and tool contracts](reference/inter-agent/directory.md).
 
 ## Deployment documentation
