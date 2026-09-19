@@ -6,7 +6,7 @@ kaoiro documentation. The pre-taxonomy folders (specs / plans / open-questions) 
 |--------|------|
 | [architecture/](architecture/) | How kaoiro is built today and why — start at [overview](architecture/overview.md) and [system-overview](architecture/system-overview.md) |
 | [reference/](reference/) | Exact current contracts (protocol, configuration, engines, ui) and the [glossary](reference/glossary.md) |
-| [specs/](specs/) | Pre-taxonomy feature specifications — being dissolved into `architecture/` and `reference/` ([ADR-0060](adr/0060-documentation-taxonomy-and-migration.md), [issue #368](https://github.com/sakuraiyuta/kaoiro/issues/368), progress in [plans/phase-35](plans/phase-35-docs-migration.md)); moved pages leave a stub |
+| [specs/](specs/) | Pre-taxonomy feature specifications — dissolved into `architecture/`, `reference/`, `operations/`, `evidence/` and `contributing/` ([ADR-0060](adr/0060-documentation-taxonomy-and-migration.md), [issue #368](https://github.com/sakuraiyuta/kaoiro/issues/368), progress in [plans/phase-35](plans/phase-35-docs-migration.md)); moved pages leave a stub |
 | [evidence/](evidence/) | Dated measurements and their limits; [Codex exec](evidence/codex/exec-contract.md) and [model catalog](evidence/codex/model-catalog.md) |
 | [operations/](operations/) | Operator runbooks |
 | [contributing/](contributing/) | How to change the project, including [where a doc page goes](contributing/documentation.md) |
@@ -167,7 +167,7 @@ Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh do
 - Error and reachability notices: [error notices](reference/inter-agent/errors.md).
 - Session tools: [compaction, threshold notices, and session reset](reference/inter-agent/session-tools.md).
 - Permission recovery: [approval flow](reference/security/inter-agent-tool-authorization.md#approval-flow-permission_broker-integration).
-- Remaining topics: [protocol entry](specs/protocol-inter-agent.md).
+- Open questions carried from the former protocol spec: [inter-agent messaging](architecture/inter-agent-messaging.md#open-questions).
 - Provisional: external human messaging (Discord) — [protocol entry](specs/protocol-external-human.md).
 
 ## Coordination monitoring documentation

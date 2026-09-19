@@ -1,9 +1,23 @@
 # Specs
 
-Feature specifications, organized by topic. Each file has `status` and
-`related` frontmatter.
+The pre-taxonomy specification folder. [ADR-0060](../adr/0060-documentation-taxonomy-and-migration.md)
+dissolved it into `architecture/` (how it is built and why), `reference/`
+(exact contracts), `operations/` (runbooks), `evidence/` (dated measurements)
+and `contributing/`; the role-based entry is [docs/README.md](../README.md).
+Every other file here is a stub that keeps its original headings so old
+`#fragment` links resolve and points at each new location. Do not edit a stub;
+edit the page it points at.
 
-## Files
+## Pages that stay here
+
+| Slug | Status | Why it stays |
+|------|--------|------|
+| [personas](personas.md) | accepted | Japanese-language design policy for persona illustrations; the Japanese text is the specification |
+| [agent-operations](agent-operations.md) | accepted | Working rules for agents sharing one work tree; the entry named by [AGENTS.md](../../AGENTS.md) and [CLAUDE.md](../../CLAUDE.md) |
+| [protocol-external-human](protocol-external-human.md) | provisional | Unimplemented Discord design; moves once accepted (marker at the top of the page) |
+| [setup-wizards](setup-wizards.md) | accepted | Pending migration unit U19b in [phase-35](../plans/phase-35-docs-migration.md) |
+
+## Where each former spec lives now
 
 | Slug | Status | Description |
 |------|--------|------|
