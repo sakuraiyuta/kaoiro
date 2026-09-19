@@ -99,3 +99,5 @@ identity. **Never infer feature availability from the engine name** ([ADR-0034](
 - [Session capabilities](capabilities.md).
 - [Session lifecycle](session-lifecycle.md).
 - [State machine](state-machine.md).
+- [Attachment wire contract](attachments.md).
+- [Attachment rendering by engine](../engines/attachment-rendering.md).

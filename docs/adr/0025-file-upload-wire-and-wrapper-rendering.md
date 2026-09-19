@@ -42,7 +42,7 @@ Rejected:
 
 ### F2: Transfer wire = hybrid of (c) + (d)
 
-Use four operations: `attach_open` / `attach_chunk` (binary) / `attach_close` / an extension of `instruction` (referencing `attachment_ids`). Wire details are in [file-upload](../specs/file-upload.md) / [protocol](../specs/protocol.md).
+Use four operations: `attach_open` / `attach_chunk` (binary) / `attach_close` / an extension of `instruction` (referencing `attachment_ids`). Wire details are in [attachment wire contract](../reference/protocol/attachments.md).
 
 Rejected:
 
@@ -86,7 +86,7 @@ Rejected: unlimited—do not omit DoS protection and a reasonable UX range.
 
 ### F7: MIME allow-list
 
-See [file-upload spec](../specs/file-upload.md) for details.
+See [attachment wire contract](../reference/protocol/attachments.md#supported-file-types--mime) for details.
 
 Rejected: compressed files (zip/tar) / legacy Office (.doc/.xls/.ppt) / video and audio / executable families—larger attack surface / unsupported by the SDK / no use case.
 
@@ -105,7 +105,7 @@ Rejected: client-side pre-block (`ext.capabilities` publication)—duplicates wr
 - `attach_rejected { upload_id, reason, detail? }`
 - `instruction_rejected { attachment_ids?, reason, detail? }`
 
-The reason enum’s source of truth is the [file-upload spec](../specs/file-upload.md). Both envelopes are delivered only to operators ([ADR-0021](0021-role-information-disclosure-policy.md)).
+The reason enum’s source of truth is the [attachment wire contract](../reference/protocol/attachments.md#reject-path). Both envelopes are delivered only to operators ([ADR-0021](0021-role-information-disclosure-policy.md)).
 
 Rejected:
 
@@ -123,7 +123,7 @@ Absorb the gap between the 128 MB protocol limit and the SDK hard limits (image 
 - Truncate text: in-house + `countTokens` from `@anthropic-ai/sdk` to verify the context window
 - Office → text: **officeparser** (pure JS, one lib for docx/xlsx/pptx); the markitdown CLI remains a fallback possibility in Q10 ([file-upload-markitdown-fallback](../open-questions/file-upload-markitdown-fallback.md))
 
-Reject totals over 32 MB with `instruction_rejected{reason="total_request_over"}`. Reject individually impossible items with F9’s dedicated reasons (`unfittable_image` / `unfittable_pdf` / `text_too_large`). See [file-upload](../specs/file-upload.md) for the table.
+Reject totals over 32 MB with `instruction_rejected{reason="total_request_over"}`. Reject individually impossible items with F9’s dedicated reasons (`unfittable_image` / `unfittable_pdf` / `text_too_large`). See [attachment rendering by engine](../reference/engines/attachment-rendering.md#fit-to-sdk) for the table.
 
 Practical use of a single file over 32 MB is possible through the Files API path (reference a `file_id`, up to 500 MB per file). The adoption decision is Q9 ([file-upload-files-api-route](../open-questions/file-upload-files-api-route.md)).
 
@@ -207,6 +207,6 @@ The phase-7 stage-A spike is complete (see the plan’s “Spike results” sect
 
 ## Related
 
-- specs: [file-upload](../specs/file-upload.md) (consolidates this specification), [protocol](../specs/protocol.md) (wire details), and [non-goals](../architecture/scope.md) (no AV scanning support).
+- specs: [attachments](../architecture/attachments.md), [attachment wire contract](../reference/protocol/attachments.md) (consolidates this specification and protocol.md's wire details), [attachment rendering by engine](../reference/engines/attachment-rendering.md), and [non-goals](../architecture/scope.md) (no AV scanning support).
 - Related ADRs: [0009](0009-client-transport.md) (one Channels path, maintained by F2), [0015](0015-protocol-version-stamping.md) (version policy, addenda keep the version unchanged), [0020](0020-dashboard-battery-included-client.md) (the upper boundary for this decision, F2 / F3), and [0021](0021-role-information-disclosure-policy.md) (delivery policy; attach_* is operator-only).
 - Origin: my-spec-elicitation (#52).

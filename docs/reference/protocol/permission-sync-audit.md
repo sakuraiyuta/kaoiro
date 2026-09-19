@@ -219,3 +219,5 @@ not a guaranteed durable security journal.
 - [Session capabilities](capabilities.md).
 - [Session lifecycle](session-lifecycle.md).
 - [State machine](state-machine.md).
+- [Attachment wire contract](attachments.md).
+- [Attachment rendering by engine](../engines/attachment-rendering.md).

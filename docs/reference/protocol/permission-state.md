@@ -262,3 +262,5 @@ their new picker alone does not correct their legacy fallback.
 - [Session capabilities](capabilities.md).
 - [Session lifecycle](session-lifecycle.md).
 - [State machine](state-machine.md).
+- [Attachment wire contract](attachments.md).
+- [Attachment rendering by engine](../engines/attachment-rendering.md).

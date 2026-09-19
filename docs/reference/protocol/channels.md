@@ -47,7 +47,7 @@ The complete coverage and the permanent `attach_chunk` exception are normative i
 | client → server | `attach_open` | `{ agent_id, upload_id, filename, mime, size, chunks }` announces an attachment. Operator-only; upload IDs are client-assigned and relayed to the wrapper, with unknown agents rejected. See the file-upload wire section. |
 | client → server | `attach_chunk` | Binary V2 frame `<u32 upload_id_len><upload_id utf8><u32 chunk_index><chunk_bytes>`, relayed opaquely to the wrapper. This is the permanent `version` carve-out because no JSON object exists. |
 | client → server | `attach_close` | `{ agent_id, upload_id }` completes one upload (optional chunk-complete acknowledgement). Operator-only; wrapper validates MIME, size, count, and TTL. |
-| client → server | `instruction` | `{ agent_id, text, attachment_ids? }` is relayed without interpretation. The wrapper renders completed uploads as SDK content blocks and rejects unknown agents or invalid attachments ([file-upload](../../specs/file-upload.md), [ADR-0025](../../adr/0025-file-upload-wire-and-wrapper-rendering.md)). |
+| client → server | `instruction` | `{ agent_id, text, attachment_ids? }` is relayed without interpretation. The wrapper renders completed uploads as SDK content blocks and rejects unknown agents or invalid attachments ([attachment wire contract](attachments.md), [ADR-0025](../../adr/0025-file-upload-wire-and-wrapper-rendering.md)). |
 | client → server | `permission_decision` | `{ agent_id, request_id, allow, message? }`, operator-only relay matched to the pending permission. |
 | client → server | `question_response` | `{ agent_id, request_id, answers, cancelled? }`, operator-only relay matched to AskUserQuestion; `cancelled` denies and answers use option labels ([ADR-0027](../../adr/0027-askuserquestion-envelope.md)). |
 | client → server | `interrupt` | `{ agent_id }` requests an operator-only turn interrupt. Relay is fire-and-forget; SDK returns an error result and the wrapper drops pending upload bytes, emitting `attach_rejected{reason="interrupted"}` ([ADR-0025](../../adr/0025-file-upload-wire-and-wrapper-rendering.md)). |
@@ -66,7 +66,7 @@ The complete coverage and the permanent `attach_chunk` exception are normative i
 | server → wrapper | `attach_open` | `{ upload_id, filename, mime, size, chunks }` creates a five-minute pending upload. |
 | server → wrapper | `attach_chunk` | Binary relay parsed by the wrapper into the upload chunk buffer; the binary frame is the permanent `version` exception. |
 | server → wrapper | `attach_close` | `{ upload_id }` closes an upload; wrapper enforces MIME, 128 MB file size, 20 in-flight count, and emits `attach_rejected` when invalid. |
-| server → wrapper | `instruction` | `{ text, attachment_ids? }` enters the input queue; completed attachments render as image/document/text blocks (Office via markitdown), with whole-instruction rejection reported by `instruction_rejected` ([file-upload](../../specs/file-upload.md), [ADR-0025](../../adr/0025-file-upload-wire-and-wrapper-rendering.md)). |
+| server → wrapper | `instruction` | `{ text, attachment_ids? }` enters the input queue; completed attachments render as image/document/text blocks (Office via markitdown), with whole-instruction rejection reported by `instruction_rejected` ([attachment wire contract](attachments.md), [ADR-0025](../../adr/0025-file-upload-wire-and-wrapper-rendering.md)). |
 | server → wrapper | `permission_decision` | `{ request_id, allow, message? }` relays to the matching pending approval. |
 | server → wrapper | `question_response` | `{ request_id, answers, cancelled? }` relays to the matching pending question; cancelled is deny and allowed answers are returned through SDK `updatedInput.answers` ([ADR-0027](../../adr/0027-askuserquestion-envelope.md)). |
 | server → wrapper | `interrupt` | `{}` calls SDK `Query.interrupt()` and drops pending upload bytes, emitting interrupted attachment rejections when needed (#51, [ADR-0025](../../adr/0025-file-upload-wire-and-wrapper-rendering.md)). |
@@ -123,3 +123,5 @@ Client ↔ server connections use **Phoenix Channels exclusively**
 - [Session capabilities](capabilities.md).
 - [Session lifecycle](session-lifecycle.md).
 - [State machine](state-machine.md).
+- [Attachment wire contract](attachments.md).
+- [Attachment rendering by engine](../engines/attachment-rendering.md).

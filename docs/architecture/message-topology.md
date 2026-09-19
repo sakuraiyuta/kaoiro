@@ -42,3 +42,6 @@ For the envelope's terms, outer frame keys, and wire shape, see
 - [Session lifecycle](../reference/protocol/session-lifecycle.md).
 - [State machine](../reference/protocol/state-machine.md).
 - [Session ownership and continuity](system-overview.md#session-ownership-and-continuity).
+- [Attachments](attachments.md).
+- [Attachment wire contract](../reference/protocol/attachments.md).
+- [Attachment rendering by engine](../reference/engines/attachment-rendering.md).

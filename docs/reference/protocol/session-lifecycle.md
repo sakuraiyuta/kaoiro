@@ -173,4 +173,6 @@ wrapper reports it and the server stores the `(agent_id, host, cwd, session_id)`
 - [Envelope contract](envelope.md).
 - [State machine](state-machine.md).
 - [Model and effort state](model-effort.md).
+- [Attachment wire contract](attachments.md).
+- [Attachment rendering by engine](../engines/attachment-rendering.md).
 - [Message topology](../../architecture/message-topology.md).

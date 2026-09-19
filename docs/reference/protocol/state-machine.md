@@ -59,4 +59,6 @@ stateDiagram-v2
 
 - [Envelope contract](envelope.md).
 - [Session lifecycle](session-lifecycle.md).
+- [Attachment wire contract](attachments.md).
+- [Attachment rendering by engine](../engines/attachment-rendering.md).
 - [Message topology](../../architecture/message-topology.md).

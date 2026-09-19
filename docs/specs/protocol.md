@@ -139,77 +139,7 @@ Moved to [Session lifecycle](../reference/protocol/session-lifecycle.md#session-
 
 ### File-upload wire
 
-These incremental operations let an operator pass dashboard attachments (image, text, PDF,
-or Office) to an agent. The protocol surface of record is the directional message table
-above, the `attach_rejected` / `instruction_rejected` envelope types, and the binary frame
-layout below. Feature details are collected in [file-upload](file-upload.md), with rationale
-in [ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md).
-
-**Transport**: Keep the existing single Channels transport
-([ADR-0009](../adr/0009-client-transport.md)); do not add another socket or HTTP POST upload.
-The server neither interprets nor persists upload bytes and transparently relays them to the
-`wrapper:<agent_id>` channel (no disk access, [ADR-0020](../adr/0020-dashboard-battery-included-client.md) F3).
-
-**Order**: `attach_open` × N → `attach_chunk*` (parallel allowed) → `attach_close` × N
-→ `instruction(attachment_ids=[...])`. On instruction receipt the wrapper verifies every
-`attachment_id` completed `attach_close`; incomplete uploads are rejected with
-`instruction_rejected{reason="timeout"}` or a corresponding reason.
-
-**`attach_chunk` payload format** (MVP layout inside a V2 binary-frame payload):
-
-The Phoenix V2 binary serializer receives a WebSocket binary-opcode frame and passes the
-bytes below to server `handle_in("attach_chunk", {:binary, payload}, socket)` as a
-`{:binary, binary()}` tuple (V2 tuple form; do not confuse with V1). phoenix.js automatically
-creates the binary frame when an `ArrayBuffer` is passed directly to
-`channel.push("attach_chunk", arrayBuffer)`; a Blob must first be converted with
-`arrayBuffer()`.
-
-```text
-<u32 upload_id_len><upload_id utf8><u32 chunk_index><chunk_bytes>
-```
-
-- `upload_id_len`: big-endian unsigned 32-bit UTF-8 byte length of `upload_id`.
-- `upload_id`: UTF-8 string, a client-assigned ID unique within the session.
-- `chunk_index`: big-endian unsigned 32-bit, zero-based.
-- `chunk_bytes`: remaining bytes of the chunk.
-
-Concurrency and chunk size are client-defined (MVP recommendation: 64 KB per chunk,
-[ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md) F14).
-
-The V2 frame header (`<<kind::8, join_ref_size::8, ref_size::8, topic_size::8,
-event_size::8, ...>>`) is handled by Phoenix. Each size field is 8-bit, so join_ref, ref,
-topic, and event are each at most 255 bytes (well above kaoiro's
-`wrapper:<agent_id>` / `attach_chunk`).
-
-**Transport safety**: The server enforces an 8 MB frame limit for DoS protection; the
-20-in-flight-uploads cap (`MAX_INFLIGHT_UPLOADS`) is wrapper-side, not server-enforced.
-Phoenix defaults `max_frame_size` to `:infinity`, so endpoint configuration sets it
-explicitly:
-
-```elixir
-# server/lib/kaoiro_server_web/endpoint.ex
-socket "/wrapper", KaoiroServerWeb.WrapperSocket,
-  websocket: [max_frame_size: TransportLimits.max_frame_bytes()],  # 8 MB
-  longpoll: false
-```
-
-Leaving `:infinity` would let one 128 MB frame allocate 128 MB in a receiving process and
-risk OOM. The wrapper makes the final decision on per-file size (128 MB), allowed MIME,
-count (10 per instruction), and TTL (unreferenced or incomplete chunks are GC'd after five
-minutes) ([file-upload](file-upload.md), ADR-0025 F4/F6/F7/F13).
-
-**Delivery gate**: `attach_open` / `attach_chunk` / `attach_close` /
-`attach_rejected` / `instruction_rejected` are all **operator-only** (allow-list,
-[ADR-0021](../adr/0021-role-information-disclosure-policy.md)); remove them entirely for viewers.
-
-**Fit-to-SDK responsibility**: The wrapper absorbs the gap between the 128 MB protocol
-limit and hard SDK limits (exact image/document block values are confirmed by a pre-
-implementation spike) using image downsize, PDF page extraction, text truncation, and
-Office → markitdown → text. Image and PDF fitting can fail and reject with a dedicated
-reason (`unfittable_image` / `unfittable_pdf`); oversized text is always fit by
-tail-truncation instead (`TEXT_SDK_BYTE_LIMIT`, 1 MB) and never rejects, so
-`text_too_large` — declared in the wire enum for other producers — does not currently
-fire from this wrapper.
+Moved to [Attachment wire contract](../reference/protocol/attachments.md#file-upload-wire).
 
 ### Session resume and restoration
 
@@ -487,7 +417,7 @@ Moved to [Authentication and authorization](../reference/security/authentication
   without disk access ([ADR-0020](../adr/0020-dashboard-battery-included-client.md) F3).
 - MUST: attachment rendering (image/document/text block choice and Office conversion) is
   **wrapper-internal**. Protocol, client, and server do not use Anthropic API terms
-  ([file-upload](file-upload.md), [ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md) F1).
+  ([attachment rendering by engine](../reference/engines/attachment-rendering.md), [ADR-0025](../adr/0025-file-upload-wire-and-wrapper-rendering.md) F1).
 
 ## Open Questions
 
@@ -498,7 +428,7 @@ None; protocol reliability was settled by [ADR-0011](../adr/0011-phase3-reliabil
 - Related specs: [architecture](../architecture/system-overview.md),
   [extensions](../architecture/extensions.md), [personas](personas.md),
   [subagent-tasks](subagent-tasks.md),
-  [file-upload](file-upload.md)
+  [attachments](../architecture/attachments.md)
 - ADRs: [0001](../adr/0001-agent-sdk-integration.md),
   [0003](../adr/0003-persona-identity-persistence.md),
   [0008](../adr/0008-persona-asset-distribution.md),

@@ -118,4 +118,6 @@ after resume.
 - [Permission state](permission-state.md).
 - [Session lifecycle](session-lifecycle.md).
 - [State machine](state-machine.md).
+- [Attachment wire contract](attachments.md).
+- [Attachment rendering by engine](../engines/attachment-rendering.md).
 - [Message topology](../../architecture/message-topology.md).

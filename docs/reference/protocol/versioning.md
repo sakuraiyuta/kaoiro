@@ -95,7 +95,7 @@ Dashboard's `CLIENT_EVENT_VERSION_POLICY` and `bindServerEvent` funnel warn and 
 
 #### Permanent carve-out — `attach_chunk`
 
-`attach_chunk` is a V2 binary frame (fixed header plus raw bytes, [file-upload](../../specs/file-upload.md));
+`attach_chunk` is a V2 binary frame (fixed header plus raw bytes, [attachment wire contract](attachments.md));
 there is no JSON object on which to place a `version` key. Adding one would change the wire
 (and bump the protocol version), outside #208. It is therefore a **permanent exception**;
 the same rationale is recorded at the sender (`dashboard/src/lib/protocol.ts` `attachChunk`),
@@ -146,3 +146,5 @@ server state.
 - [Session capabilities](capabilities.md).
 - [Session lifecycle](session-lifecycle.md).
 - [State machine](state-machine.md).
+- [Attachment wire contract](attachments.md).
+- [Attachment rendering by engine](../engines/attachment-rendering.md).
