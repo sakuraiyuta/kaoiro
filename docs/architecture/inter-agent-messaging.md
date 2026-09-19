@@ -67,3 +67,4 @@ receiver, batching, and synchronous-wait contracts.
 - [Send and wait](../reference/inter-agent/send-and-wait.md).
 - [Coordination monitoring and display](../reference/inter-agent/coordination-monitoring.md).
 - [Peer directory and companion tools](../reference/inter-agent/directory.md).
+- [IA sidecar and display restoration](../reference/storage/inter-agent-sidecar.md).

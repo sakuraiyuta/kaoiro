@@ -1,6 +1,6 @@
 // IA sidecar — the wrapper-host record of structured inter-agent messages
-// (ADR-0051 D3-2 / D3-5, specs/protocol-inter-agent.md「IA sidecar と表示
-// 復元」). The server keeps only a volatile projection of these; the file
+// (ADR-0051 D3-2 / D3-5, docs/reference/storage/inter-agent-sidecar.md).
+// The server keeps only a volatile projection of these; the file
 // written here is what a restarted server is rebuilt from, so it has to
 // survive the wrapper process, not the session.
 //
