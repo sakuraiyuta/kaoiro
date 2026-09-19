@@ -91,7 +91,7 @@ Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh do
 
 ## Update flow
 
-- Specification change → edit `specs/<slug>.md` and update `status`
+- Behaviour or contract change → edit the owning `architecture/` / `reference/` / `operations/` page and update its `status` / `last_updated`; the old `specs/<slug>.md` path is a stub (kept pages: personas, agent-operations, protocol-external-human, setup-wizards). Placement rules: [contributing/documentation.md](contributing/documentation.md)
 - Specification ambiguity → add `open-questions/<slug>.md`
 - Important decision → create `adr/NNNN-<slug>.md` and update the referenced spec
 - Phase progress → update the table in `plans/phase-N-<slug>.md`
@@ -101,7 +101,7 @@ Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh do
 - Architecture and design intent: [message topology](architecture/message-topology.md), [permission control (two-axis model)](architecture/security-boundaries.md#permission-control-two-axis-model), [session capability advertisement](architecture/extensions.md#session-capability-advertisement), [session ownership and continuity](architecture/system-overview.md#session-ownership-and-continuity), [attachments](architecture/attachments.md), [subagent visibility](architecture/subagent-visibility.md).
 - Exact contracts: [envelope](reference/protocol/envelope.md), [event types and payloads](reference/protocol/events.md), [channels and directional messages](reference/protocol/channels.md), [versioning policy](reference/protocol/versioning.md), [permission requests](reference/protocol/permission-requests.md), [permission state](reference/protocol/permission-state.md), [permission synchronization and audit](reference/protocol/permission-sync-audit.md), [model and effort state](reference/protocol/model-effort.md), [session capabilities](reference/protocol/capabilities.md), [session lifecycle](reference/protocol/session-lifecycle.md), [state machine](reference/protocol/state-machine.md), [attachment wire contract](reference/protocol/attachments.md), [attachment rendering by engine](reference/engines/attachment-rendering.md), [runner control and launch](reference/protocol/runner-control.md), [wrapper configuration](reference/configuration/wrapper.md), and [task and tasklist envelopes](reference/protocol/tasks.md).
 - Dated evidence: [subagent workflow detection](evidence/claude/subagent-workflow-detection.md).
-- Remaining topics (authentication): [protocol entry](specs/protocol.md).
+- Connection authentication: [authentication and authorization](reference/security/authentication-authorization.md#socket-authentication-serverlibkaoiro_serverauthex).
 
 ## Codex documentation
 

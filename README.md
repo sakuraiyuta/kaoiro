@@ -46,7 +46,7 @@ The dashboard interface is currently Japanese-only.
 - **State as a face** — each agent's state (`thinking`, `waiting_permission`,
   `error`, …) is derived from engine SDK events and drawn as a character
   expression, not inferred from the text it writes
-  ([protocol.md](docs/specs/protocol.md)).
+  ([state machine](docs/reference/protocol/state-machine.md)).
 - **Launch and supervise from the browser** — choose host, persona, engine,
   working directory and permission mode, then stop, restart, restore or resume
   an earlier session without touching a terminal.
@@ -67,7 +67,7 @@ The dashboard interface is currently Japanese-only.
   travel the same channel.
 - **Multi-host** — one runner per machine registers that host, declares which
   engines it can spawn, and supervises the wrapper processes living there
-  ([deployment.md](docs/specs/deployment.md)).
+  ([deployment architecture](docs/architecture/deployment.md)).
 - **Two engines, one protocol** — Claude Code and Codex sit behind the same
   adapter boundary, and the UI branches on declared capabilities rather than on
   engine names ([adapter contract](docs/reference/engines/adapter-contract.md)).
@@ -117,8 +117,10 @@ settings or starting each component separately, see "Local development" in
 Start at [docs/operations/production.md](docs/operations/production.md) —
 a copy-paste manual (install, verify, update, rollback, troubleshooting)
 covering the server, one or more runner hosts, and the deploy CLI.
-[docs/specs/deployment.md](docs/specs/deployment.md) is the normative
-reference the manual is built against.
+[docs/architecture/deployment.md](docs/architecture/deployment.md) is the
+normative reference the manual is built against; the per-topic runbooks it
+links (server install, network and login, server and runner update / rollback,
+troubleshooting) hold the full procedures.
 
 ## Architecture
 
@@ -175,7 +177,7 @@ See [docs/](docs/) for structured documentation.
 |---|---|
 | [docs/architecture/overview.md](docs/architecture/overview.md) | What kaoiro is (purpose, two goals, and users) |
 | [docs/architecture/system-overview.md](docs/architecture/system-overview.md) | Three-layer structure and data flow |
-| [docs/specs/protocol.md](docs/specs/protocol.md) | Common events, envelopes, and state machine |
+| [docs/architecture/message-topology.md](docs/architecture/message-topology.md) | Message topology; exact contracts under [docs/reference/protocol/](docs/reference/protocol/) (envelope, events, state machine) |
 | [docs/operations/production.md](docs/operations/production.md) | Production deployment manual (install / update / rollback / troubleshooting) |
 | [docs/plans/](docs/plans/) | Plans and status by phase |
 | [docs/open-questions/](docs/open-questions/) | Open questions |

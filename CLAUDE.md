@@ -19,8 +19,18 @@ kaoiro — 複数の CLI AI エージェントの状態をキャラクターと�
 
 ## Documentation
 
-- 入口: [docs/architecture/overview.md](docs/architecture/overview.md)
-- [docs/specs/](docs/specs/) — 機能仕様(トピック別)
+- 入口: [docs/README.md](docs/README.md) (役割別の導線) と
+  [docs/architecture/overview.md](docs/architecture/overview.md)
+- [docs/architecture/](docs/architecture/) — 現在の構造と理由(トピック別)
+- [docs/reference/](docs/reference/) — 現行 contract の正本(protocol /
+  configuration / engines / inter-agent / security / ui / storage / deployment)
+- [docs/operations/](docs/operations/) — オペレータ向け runbook
+- [docs/evidence/](docs/evidence/) — 日付付きの測定記録
+- [docs/contributing/](docs/contributing/) — 変更手順。文書の置き場所は
+  [documentation.md](docs/contributing/documentation.md)
+- [docs/specs/](docs/specs/) — 旧 spec。据え置きは personas /
+  agent-operations / protocol-external-human (provisional) / setup-wizards、
+  他は移動先への stub([ADR-0060](docs/adr/0060-documentation-taxonomy-and-migration.md))
 - [docs/plans/](docs/plans/) — フェーズ別の実装計画
 - [docs/open-questions/](docs/open-questions/) — 未決の論点
 - [docs/adr/](docs/adr/) — アーキテクチャ決定記録
