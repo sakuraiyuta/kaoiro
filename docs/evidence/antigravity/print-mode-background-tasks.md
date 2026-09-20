@@ -160,9 +160,10 @@ process; times are seconds from spawn.
   exits. There is therefore no in-band interrupt or control channel in 1.2.7.
 - **Content blocks.** `message.content` accepts a string or an array of
   `{"type":"text","text":…}` blocks (reply `PONG-BLOCKS`).
-- **Continuity.** One `init` per process; every turn ends with its own
-  `result` carrying the same `conversation_id` and an incrementing
-  `num_turns` (1 → 4). Turn 2 ("what did you reply before?") answered
+- **Continuity.** One `init` per process; every turn's first stdout event
+  is a `step_update {step_type: "user_input", state: "DONE"}` for the line
+  just written, and every turn ends with its own `result` carrying the same
+  `conversation_id` and an incrementing `num_turns` (1 → 4). Turn 2 ("what did you reply before?") answered
   `PONG-BLOCKS` — context is kept in-process. A follow-up turn starts within
   ~0.1 s of the previous `result` (the first turn waits ~7.5 s for startup).
 - **Line sent mid-turn.** A `user` line written while turn 3's
