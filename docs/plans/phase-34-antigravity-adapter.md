@@ -1,7 +1,7 @@
 ---
 title: Phase 34 — Antigravity adapter (third engine, agy CLI headless)
 description: Implement ADR-0057 — wrapper/antigravity package driving the agy CLI per turn, hook-based permission gate with a wrapper-side two-axis policy (axes fixed at spawn in Stage A), CLI bridge for kaoiro tools, rules-file persona injection, catalog from `agy models`, and the protocol / runner / server / dashboard wiring for engine id `antigravity`.
-status: planned
+status: in_progress
 phase: 34
 depends_on: [phase-14-codex-adapter, phase-33-compaction-resume-lifecycle]
 last_updated: 2026-09-21

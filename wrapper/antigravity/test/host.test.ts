@@ -2194,9 +2194,34 @@ if (args[0] === "models") {
       stdinEnded = false;
       onWrite: (callback: (error?: Error | null) => void) => void = (callback) => callback(null);
       killed: NodeJS.Signals | undefined;
+      // issue #377 Stage 1 M1 (kohaku round 1): a real ChildProcess only
+      // sets these once the OS has actually reaped the process, never
+      // synchronously from the call that requested the kill -- `isAlive()`
+      // in subtree_termination.ts reads them to decide whether to signal
+      // again, so a fixture that set them eagerly would hide the real
+      // async-only semantics `#waitForChild` and `signalSubtree` rely on.
+      exitCode: number | null = null;
+      signalCode: NodeJS.Signals | null = null;
+
+      /** Ends stdout and emits exit + close, matching how a real
+       *  ChildProcess reports its own termination -- deferred via
+       *  `setTimeout` (a macrotask) so listeners attached synchronously
+       *  right after this call returns (as `#waitForChild` always is)
+       *  still observe it; a `queueMicrotask` here could fire before
+       *  those listeners exist and be silently missed. */
+      terminate(exitCode: number | null, signalCode: NodeJS.Signals | null): void {
+        setTimeout(() => {
+          this.exitCode = exitCode;
+          this.signalCode = signalCode;
+          this.stdout.end();
+          this.emit("exit", exitCode, signalCode);
+          this.emit("close", exitCode, signalCode);
+        }, 0);
+      }
 
       kill(signal?: NodeJS.Signals): boolean {
         this.killed = signal;
+        this.terminate(null, signal ?? null);
         return true;
       }
     }
@@ -2255,10 +2280,15 @@ if (args[0] === "models") {
           // `close` fires first; the write callback (no error) resolves
           // only afterward, in a later microtask -- the exact race M4
           // targets: a pipe write can still succeed into the kernel
-          // buffer on a process that has already exited.
+          // buffer on a process that has already exited. The immediate
+          // emit is what #deliverTurnInput's already-attached listener
+          // observes (setting closedBeforeAck); terminate()'s deferred
+          // exit/close is what #waitForChild (attached only once this
+          // turn's delivery-failure branch runs) actually resolves on.
           child.onWrite = (callback) => {
             queueMicrotask(() => {
               child.emit("close", 1, null);
+              child.terminate(1, null);
               queueMicrotask(() => callback(null));
             });
           };
@@ -2299,7 +2329,7 @@ if (args[0] === "models") {
             child.killed = signal;
             // The kill actually terminates the process -- close fires
             // before the deferred write callback ever resolves.
-            child.emit("close", null, signal ?? null);
+            child.terminate(null, signal ?? null);
             return true;
           };
           return child as unknown as SpawnedAgy;
@@ -2320,6 +2350,99 @@ if (args[0] === "models") {
       expect(end.cancellation).toEqual({ kind: "interrupt", reason: "interrupted" });
       expect(interruptSettlements).toHaveLength(1);
       racyHost.close();
+    });
+
+    it("a delivery race does not leak #activeTermination onto the next turn's interrupt (kohaku round 1 M1)", async () => {
+      const turnEnds: Array<Parameters<NonNullable<AntigravityHostOptions["onTurnEnd"]>>[0]> = [];
+      const rawCalls: RacyStdinAgy[] = [];
+      let turn1WriteCallback: ((error?: Error | null) => void) | null = null;
+      const cfg = config();
+      const h = new AntigravityHost(cfg, {
+        cwd: process.cwd(), appendSystemPrompt: "persona",
+        permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
+        onState: () => {}, onLog: () => {},
+        runtimeAssetsAvailable: () => true, verifyGate: async () => true,
+        agyPath: "/test/agy",
+        onTurnEnd: (info) => turnEnds.push(info),
+        spawn: () => {
+          const child = new RacyStdinAgy();
+          if (rawCalls.length === 0) {
+            // Turn 1: the write callback never resolves on its own; the
+            // test drives it manually, after interrupt(), to leave the
+            // turn's own #activeTermination handle armed (targeting an
+            // already-dead child) at the moment the turn settles.
+            child.onWrite = (callback) => { turn1WriteCallback = callback; };
+            child.kill = (signal): boolean => {
+              child.killed = signal;
+              child.terminate(null, signal ?? null);
+              return true;
+            };
+          }
+          rawCalls.push(child);
+          return child as unknown as SpawnedAgy;
+        },
+      });
+      await h.send("first", undefined, [], "turn-1");
+      await waitFor(() => turn1WriteCallback !== null);
+      await h.interrupt();
+      turn1WriteCallback!(null);
+      await waitFor(() => turnEnds.some((end) => end.turnToken === "turn-1"));
+
+      await h.send("second", undefined, [], "turn-2");
+      await waitFor(() => rawCalls.length === 2);
+      await h.interrupt();
+      // Turn 2's own child must receive a fresh SIGTERM -- a leaked
+      // #activeTermination handle from turn 1 would make this a no-op
+      // shortenGraceTo() on the wrong (already-dead) target instead.
+      expect(rawCalls[1]!.killed).toBe("SIGTERM");
+      h.close();
+    });
+
+    it("a failed delivery waits for the child to actually close before settling the turn (kohaku round 1 M1)", async () => {
+      const toolStarts: string[] = [];
+      const turnEnds: Array<Parameters<NonNullable<AntigravityHostOptions["onTurnEnd"]>>[0]> = [];
+      let rawChild!: RacyStdinAgy;
+      let writeCallback: ((error?: Error | null) => void) | null = null;
+      const cfg = config();
+      const h = new AntigravityHost(cfg, {
+        cwd: process.cwd(), appendSystemPrompt: "persona",
+        permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
+        onState: () => {}, onLog: () => {},
+        runtimeAssetsAvailable: () => true, verifyGate: async () => true,
+        agyPath: "/test/agy",
+        onTurnEnd: (info) => turnEnds.push(info),
+        onToolStart: (info) => toolStarts.push(info.turnToken),
+        spawn: () => {
+          const child = new RacyStdinAgy();
+          child.onWrite = (callback) => { writeCallback = callback; };
+          // The delivery-failure branch arms its own SIGTERM (M1) as soon
+          // as the write rejects, which would otherwise race this test's
+          // own, later close -- override kill() to only record the call,
+          // so this test keeps exact manual control of when the child
+          // actually closes.
+          child.kill = (signal): boolean => { child.killed = signal; return true; };
+          rawChild = child;
+          return child as unknown as SpawnedAgy;
+        },
+      });
+      await h.send("hello", undefined, [], "turn-1");
+      await waitFor(() => writeCallback !== null);
+      writeCallback!(new Error("EPIPE"));
+      // The write failed, but the child has not exited yet -- a stray
+      // tool step-update in this window still belongs to turn-1 and must
+      // fire normally, and the turn must NOT have settled prematurely.
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(turnEnds).toEqual([]);
+      rawChild.stdout.write('{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command"}}}\n');
+      await waitFor(() => toolStarts.length === 1);
+      expect(toolStarts).toEqual(["turn-1"]);
+      expect(turnEnds).toEqual([]);
+      // Only once the child actually closes does the turn settle.
+      rawChild.terminate(null, null);
+      await waitFor(() => turnEnds.some((end) => end.turnToken === "turn-1"));
+      const end = turnEnds.find((e) => e.turnToken === "turn-1")!;
+      expect(end.error).toEqual({ detail: "epoch_exit_before_turn" });
+      h.close();
     });
   });
 });

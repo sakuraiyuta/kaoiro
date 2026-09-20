@@ -1248,20 +1248,28 @@ export class AntigravityHost implements EngineAdapter {
       // where the child exits before or during this write never reports a
       // turn as started.
       const delivered = await this.#deliverTurnInput(child, text);
-      // Same precedence as the post-exit switch below: closed/fail-stopped
-      // and a stale generation (operator close()/interrupt() racing the
-      // delivery write) outrank this new detail -- epoch_exit_before_turn
-      // is for the CLI dying on its own (print-timeout, crash, quota), not
-      // for an admission the host itself already ended.
-      if (this.#closed || this.#watchdogFailStopped) {
-        return { kind: "stale" };
-      } else if (!this.#isCurrent(generation)) {
-        return { kind: "stale" };
-      } else if (!delivered) {
-        const detail = "epoch_exit_before_turn";
-        return { kind: "error", detail, classify: { detail }, attemptedModel };
+      if (delivered) {
+        this.#options.onTurnStart?.({ turnToken, conversationIds });
+      } else {
+        // issue #377 Stage 1 M1 (kohaku design review round 1): a failed
+        // delivery does not guarantee the child has exited (an EPIPE write
+        // error need not kill the whole process), and no ack means no
+        // TurnWatchdog is running to bound the wait below -- arm one
+        // explicitly so `#waitForChild` cannot hang. `closeGraceMs`, not
+        // `abortGraceMs`: nothing here is worth waiting a full abort grace
+        // for, so this mirrors `close()`'s own bound instead.
+        this.#armOrShortenTermination(this.#closeGraceMs);
       }
-      this.#options.onTurnStart?.({ turnToken, conversationIds });
+      // issue #377 Stage 1 M1: always await the child's actual exit before
+      // deciding an outcome, even when delivery failed above. Returning
+      // earlier (as a prior revision did) skipped `#waitForChild` entirely,
+      // which is the ONLY place that cancels `#activeTermination` on this
+      // child's `exit`/`close` -- a leaked handle then makes the NEXT
+      // turn's `interrupt()` a no-op `shortenGraceTo()` on the wrong
+      // (already-dead) target instead of arming a fresh SIGTERM for the
+      // new child. It is also the only place that drains `child.stdout` to
+      // completion, so a turn cannot settle while a stray stream event for
+      // it could still arrive.
       const childError = await this.#waitForChild(child);
       // issue #371 Design v2 M1 (kohaku design review round 1): this
       // post-exit precedence is unchanged from pre-Design-v2 -- closed/
@@ -1272,6 +1280,12 @@ export class AntigravityHost implements EngineAdapter {
       // than the interrupt. A terminal event agy emits while dying (e.g.
       // `CANCELED`, which `agyEventToResult` maps to success) is discarded
       // as `stale` when the generation has moved, not treated as `result`.
+      // issue #377 Stage 1 M1: `!delivered` (epoch_exit_before_turn) is
+      // folded into this same switch, ranked below customization
+      // tampering and a stale generation for the same reason those already
+      // outrank the other error kinds below -- a broken gate or an
+      // operator close()/interrupt() is a heavier fact than a delivery the
+      // CLI itself never confirmed.
       if (this.#closed || this.#watchdogFailStopped) return { kind: "stale" };
       if (customization.verify() !== true) {
         this.#gateBroken = true;
@@ -1279,6 +1293,9 @@ export class AntigravityHost implements EngineAdapter {
         return { kind: "error", detail, classify: { detail }, attemptedModel };
       } else if (!this.#isCurrent(generation)) {
         return { kind: "stale" };
+      } else if (!delivered) {
+        const detail = "epoch_exit_before_turn";
+        return { kind: "error", detail, classify: { detail }, attemptedModel };
       } else if (correlationFailure !== null) {
         this.#gateBroken = true;
         const detail = `antigravity_gate_unobserved_tool:${correlationFailure}`;
