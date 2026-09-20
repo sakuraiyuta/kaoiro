@@ -1,6 +1,6 @@
 ---
 title: "agy --print and background-task promotion (issue #377)"
-description: Measured on agy 1.2.7 — WaitMsBeforeAsync is clamped to 10 s by the CLI, an argv-prompt print run terminates promoted tasks 5 s after the model goes idle, --input-format stream-json waits for them instead, and run_command inherits the spawn PATH.
+description: Measured on agy 1.2.7 — WaitMsBeforeAsync is clamped to 10 s by the CLI, an argv-prompt print run terminates promoted tasks 5 s after the model goes idle, --input-format stream-json waits for them instead and keeps context across turns in one process (no in-band interrupt), and run_command inherits the spawn PATH.
 status: recorded
 last_updated: 2026-09-21
 related: [antigravity-adapter]
@@ -145,6 +145,40 @@ command.
   line from stdin and runs a turn for each; it requires
   `--output-format stream-json`"); nothing for background tasks.
 
+## Persistent-process observations (stream input, one process, several turns)
+
+Measured 03:20–03:32 JST, same binary / model / flags, for the ADR-0057 F2
+alternative "one `agy` per session" (issue #377 decision). Each run one
+process; times are seconds from spawn.
+
+- **Event vocabulary.** Unknown `event` names (`interrupt`, `cancel`,
+  `abort`, `stop`, `control`, `ping`, `keepalive`, `set_model`, …) are
+  ignored with stderr `warning: ignoring unsupported stream input message
+  event "<name>"`. `control_request` and `control_response` are recognised
+  but rejected: stderr `error: stream input message event "control_request"
+  is not supported yet`, a `result` with `status: "ERROR"`, and the process
+  exits. There is therefore no in-band interrupt or control channel in 1.2.7.
+- **Content blocks.** `message.content` accepts a string or an array of
+  `{"type":"text","text":…}` blocks (reply `PONG-BLOCKS`).
+- **Continuity.** One `init` per process; every turn ends with its own
+  `result` carrying the same `conversation_id` and an incrementing
+  `num_turns` (1 → 4). Turn 2 ("what did you reply before?") answered
+  `PONG-BLOCKS` — context is kept in-process. A follow-up turn starts within
+  ~0.1 s of the previous `result` (the first turn waits ~7.5 s for startup).
+- **Line sent mid-turn.** A `user` line written while turn 3's
+  `run_command` was `ACTIVE` was queued and ran as turn 4 immediately after
+  turn 3's `result`; no interleaving. (Turn 3 showed a 24 s gap between the
+  tool step's `DONE` at 34.1 s and the model's reply at 58.5 s; cause not
+  isolated, one observation.)
+- **SIGINT during a turn** (tool `ACTIVE`, ~4 s in): stderr
+  `error: interrupted`, `result` `{"status":"ERROR","error":"interrupted",
+  …}` at once, process exit code 1. The process does not survive an
+  interrupt; a persistent design must respawn after one.
+- **Resume after that exit.** A new process with `--conversation <same id>`
+  under `--input-format stream-json` answered "what command were you asked
+  to run?" with `sleep 9; echo S1-DONE`, `num_turns: 2`, exit 0 — resume
+  works with stream input.
+
 ## Limits
 
 - One run per cell (two for the stream-input mode: probes D and E). Not
@@ -152,8 +186,7 @@ command.
 - Run from a shell with a permissive logging hook, not through the wrapper's
   gate socket / `TurnWatchdog`; the wrapper's 10-minute tool deadline
   (`DEFAULT_TOOL_TIMEOUT_MS`) was not exercised against a long promoted task.
-- Not measured: `--conversation` resume under `--input-format stream-json`,
-  daemon tasks (`IsDaemon`), what the CLI does when a promoted task outlives
+- Not measured: daemon tasks (`IsDaemon`), what the CLI does when a promoted task outlives
   `--print-timeout`, and whether the 5 s grace / 10 s clamp differ in other
   agy versions.
 - "No flag / setting found" rests on `--help` and a `strings` search of the
