@@ -735,7 +735,17 @@ if (args[0] === "models") {
   const customization = args[args.lastIndexOf("--add-dir") + 1];
   process.stdout.write(JSON.stringify({ hooks: [{ source: customization + "/.agents/hooks.json", actions: [{ event: "PreToolUse", matcher: "*", command: ${JSON.stringify(hook)}, timeout_seconds: 3600 }] }] }));
 } else if (args[0] === "--print") {
-  process.stdout.write(JSON.stringify({ event: "result", result: { status: "SUCCESS", response: "fixture turn" } }) + "\\n");
+  // issue #377 Stage 1: the real prompt arrives as one NDJSON line on
+  // stdin (--input-format stream-json), not as an argv positional; echo
+  // its content back so this pin proves the real default-spawn path
+  // (real OS process, detached process group, real pipes) delivers it.
+  let input = "";
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", (chunk) => { input += chunk; });
+  process.stdin.on("end", () => {
+    const line = JSON.parse(input.trim());
+    process.stdout.write(JSON.stringify({ event: "result", result: { status: "SUCCESS", response: line.message.content } }) + "\\n");
+  });
 } else {
   process.exitCode = 2;
 }
@@ -760,7 +770,7 @@ if (args[0] === "models") {
         () => logs.some((envelope) => envelope.type === "result"),
         () => ({ status: host.statusExtSnapshot(), logs }),
       );
-      expect(logs.at(-1)?.payload).toMatchObject({ text: "fixture turn" });
+      expect(logs.at(-1)?.payload).toMatchObject({ text: "hello" });
     } finally {
       host.close();
       rmSync(root, { force: true, recursive: true });
@@ -787,7 +797,7 @@ if (args[0] === "models") {
     host.close();
   });
 
-  it("F2のspawn引数、closed stdin、init session idとresultを結ぶ", async () => {
+  it("F2のspawn引数、stdin NDJSON経由のprompt、init session idとresultを結ぶ", async () => {
     const { host, states, logs, calls } = hostHarness();
     const sessionIds: string[] = [];
     const onSessionHost = new AntigravityHost(config(), {
@@ -801,11 +811,27 @@ if (args[0] === "models") {
     await waitFor(() => calls.length === 1);
     const call = calls[0]!;
     expect(call.command).toBe("/test/agy");
-    expect(call.args).toEqual(expect.arrayContaining(["--print", "hello", "--output-format", "stream-json", "--print-timeout", "24h", "--disable-slash-commands", "--dangerously-skip-permissions"]));
+    // issue #377 Stage 1: the prompt travels over stdin, not argv.
+    expect(call.args).toEqual(expect.arrayContaining([
+      "--print", "", "--input-format", "stream-json", "--output-format", "stream-json",
+      "--print-timeout", "24h", "--disable-slash-commands", "--dangerously-skip-permissions",
+    ]));
+    expect(call.args).not.toContain("hello");
     const addDirIndexes = call.args.flatMap((arg, index) => arg === "--add-dir" ? [index] : []);
     expect(addDirIndexes).toHaveLength(2);
     expect(addDirIndexes.map((index) => call.args[index + 1])).toEqual([process.cwd(), expect.stringMatching(/kaoiro-agy-/)]);
+    let writtenToStdin = "";
+    call.child.stdin.on("data", (chunk: Buffer) => { writtenToStdin += chunk.toString("utf8"); });
+    // Wait for the actual buffered content, not just `writableEnded`: once
+    // the write callback resolves and `.end()` runs, delivering the
+    // buffered chunk to a newly-attached `data` listener is itself
+    // deferred (Node schedules the flowing-mode transition), so polling
+    // `writableEnded` alone can observe it true before the chunk arrives.
+    await waitFor(() => writtenToStdin.includes("\n"));
     expect(call.child.stdin.writableEnded).toBe(true);
+    const stdinLines = writtenToStdin.split("\n").filter((line) => line !== "");
+    expect(stdinLines).toHaveLength(1);
+    expect(JSON.parse(stdinLines[0]!)).toEqual({ event: "user", message: { role: "user", content: "hello" } });
     call.child.stdout.write('{"event":"init","conversation_id":"cid-1","init":{"tools":[]}}\n');
     call.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
     call.child.finish();
@@ -849,6 +875,10 @@ if (args[0] === "models") {
     const { host, logs, calls } = hostHarness();
     await host.send("hello");
     await waitFor(() => calls.length === 1);
+    // Wait past the stdin-delivery ack (issue #377 Stage 1 M4) before
+    // closing, so this pins a clean exit with no result -- not the
+    // separate epoch_exit_before_turn race pinned below.
+    await waitFor(() => calls[0]!.child.stdin.writableEnded);
     calls[0]!.child.finish();
     await waitFor(() => logs.some((envelope) => envelope.type === "result"));
     expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ is_error: true, error_detail: "agy_exit_without_result" });
@@ -1820,8 +1850,15 @@ if (args[0] === "models") {
       expect(interruptSettlements).toHaveLength(1);
       expect(interruptRequests).toHaveLength(1);
       await waitFor(() => calls.length === 2);
-      // turn-2 (pre-spawn interrupted) never spawned a child; this is turn-3's.
-      expect(calls[1]!.args).toContain("third");
+      // turn-2 (pre-spawn interrupted) never spawned a child; this is
+      // turn-3's -- confirmed via the stdin NDJSON line (issue #377 Stage
+      // 1: the prompt is no longer an argv positional).
+      let turn3Stdin = "";
+      calls[1]!.child.stdin.on("data", (chunk: Buffer) => { turn3Stdin += chunk.toString("utf8"); });
+      // Wait for the buffered content itself, not `writableEnded` (see the
+      // F2 test above for why the two are not interchangeable here).
+      await waitFor(() => turn3Stdin.includes("\n"));
+      expect(JSON.parse(turn3Stdin.trim())).toEqual({ event: "user", message: { role: "user", content: "third" } });
       calls[1]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
       calls[1]!.child.finish();
       await waitFor(() => turnEnds.some((end) => end.turnToken === "turn-3"));
@@ -1982,6 +2019,7 @@ if (args[0] === "models") {
         SSH_ASKPASS_REQUIRE: "never",
         GIT_SSH_COMMAND: "ssh -o BatchMode=yes",
       });
+      await waitFor(() => calls[0]!.child.stdin.writableEnded);
       expect(calls[0]!.child.stdin.writableEnded).toBe(true);
       host.close();
     });
@@ -2131,6 +2169,157 @@ if (args[0] === "models") {
       })).toBe(false);
       expect(calls[0]!.child.killed).toBeUndefined();
       host.close();
+    });
+  });
+
+  describe("issue #377 Stage 1 M4 (ack point / epoch_exit_before_turn race)", () => {
+    /** A `SpawnedAgy` fake whose `stdin.write` never behaves like a plain
+     *  `PassThrough` -- it lets each test control exactly when (and
+     *  whether) the write callback resolves, and whether `close` fires
+     *  first, to pin the M4 race without relying on real OS timing. */
+    class RacyStdinAgy extends EventEmitter {
+      readonly stdout = new PassThrough();
+      readonly stderr = new PassThrough();
+      writeCalls: string[] = [];
+      readonly stdin = {
+        write: (chunk: string, callback: (error?: Error | null) => void): boolean => {
+          this.writeCalls.push(chunk);
+          this.onWrite(callback);
+          return true;
+        },
+        end: (): void => { this.stdinEnded = true; },
+        on: (): void => {},
+        once: (): void => {},
+      } as unknown as NodeJS.WritableStream;
+      stdinEnded = false;
+      onWrite: (callback: (error?: Error | null) => void) => void = (callback) => callback(null);
+      killed: NodeJS.Signals | undefined;
+
+      kill(signal?: NodeJS.Signals): boolean {
+        this.killed = signal;
+        return true;
+      }
+    }
+
+    it("a write-callback rejection settles the turn as epoch_exit_before_turn with no ack and no retry", async () => {
+      const starts: string[] = [];
+      const turnEnds: Array<Parameters<NonNullable<AntigravityHostOptions["onTurnEnd"]>>[0]> = [];
+      const logs: Envelope[] = [];
+      const rawCalls: RacyStdinAgy[] = [];
+      const cfg = config();
+      const failingHost = new AntigravityHost(cfg, {
+        cwd: process.cwd(), appendSystemPrompt: "persona",
+        permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
+        onState: () => {}, onLog: (envelope) => logs.push(envelope),
+        runtimeAssetsAvailable: () => true, verifyGate: async () => true,
+        agyPath: "/test/agy",
+        onTurnStart: ({ turnToken }) => starts.push(turnToken),
+        onTurnEnd: (info) => turnEnds.push(info),
+        spawn: () => {
+          const child = new RacyStdinAgy();
+          child.onWrite = (callback) => queueMicrotask(() => callback(new Error("EPIPE")));
+          rawCalls.push(child);
+          return child as unknown as SpawnedAgy;
+        },
+      });
+      await failingHost.send("hello", undefined, [], "turn-1");
+      await waitFor(() => turnEnds.some((end) => end.turnToken === "turn-1"));
+      expect(starts).toEqual([]);
+      const end = turnEnds.find((e) => e.turnToken === "turn-1")!;
+      expect(end.error).toEqual({ detail: "epoch_exit_before_turn" });
+      expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({
+        is_error: true, error_detail: "epoch_exit_before_turn",
+      });
+      // No second spawn and no second write -- the host does not retry a
+      // delivery it cannot confirm the CLI never saw.
+      expect(rawCalls).toHaveLength(1);
+      expect(rawCalls[0]!.writeCalls).toHaveLength(1);
+      failingHost.close();
+    });
+
+    it("close arriving before the write ack also settles as epoch_exit_before_turn with no ack", async () => {
+      const starts: string[] = [];
+      const turnEnds: Array<Parameters<NonNullable<AntigravityHostOptions["onTurnEnd"]>>[0]> = [];
+      const rawCalls: RacyStdinAgy[] = [];
+      const cfg = config();
+      const racyHost = new AntigravityHost(cfg, {
+        cwd: process.cwd(), appendSystemPrompt: "persona",
+        permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
+        onState: () => {}, onLog: () => {},
+        runtimeAssetsAvailable: () => true, verifyGate: async () => true,
+        agyPath: "/test/agy",
+        onTurnStart: ({ turnToken }) => starts.push(turnToken),
+        onTurnEnd: (info) => turnEnds.push(info),
+        spawn: () => {
+          const child = new RacyStdinAgy();
+          // `close` fires first; the write callback (no error) resolves
+          // only afterward, in a later microtask -- the exact race M4
+          // targets: a pipe write can still succeed into the kernel
+          // buffer on a process that has already exited.
+          child.onWrite = (callback) => {
+            queueMicrotask(() => {
+              child.emit("close", 1, null);
+              queueMicrotask(() => callback(null));
+            });
+          };
+          rawCalls.push(child);
+          return child as unknown as SpawnedAgy;
+        },
+      });
+      await racyHost.send("hello", undefined, [], "turn-1");
+      await waitFor(() => turnEnds.some((end) => end.turnToken === "turn-1"));
+      expect(starts).toEqual([]);
+      const end = turnEnds.find((e) => e.turnToken === "turn-1")!;
+      expect(end.error).toEqual({ detail: "epoch_exit_before_turn" });
+      expect(rawCalls).toHaveLength(1);
+      expect(rawCalls[0]!.writeCalls).toHaveLength(1);
+      racyHost.close();
+    });
+
+    it("an interrupt() racing the in-flight delivery settles as interrupted, not epoch_exit_before_turn", async () => {
+      const turnEnds: Array<Parameters<NonNullable<AntigravityHostOptions["onTurnEnd"]>>[0]> = [];
+      const interruptSettlements: unknown[] = [];
+      let pendingWriteCallback: ((error?: Error | null) => void) | null = null;
+      const cfg = config();
+      const racyHost = new AntigravityHost(cfg, {
+        cwd: process.cwd(), appendSystemPrompt: "persona",
+        permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
+        onState: () => {}, onLog: () => {},
+        runtimeAssetsAvailable: () => true, verifyGate: async () => true,
+        agyPath: "/test/agy",
+        onTurnEnd: (info) => turnEnds.push(info),
+        onInterruptSettled: (info) => interruptSettlements.push(info),
+        spawn: () => {
+          const child = new RacyStdinAgy();
+          // The write callback never resolves on its own -- the test
+          // drives it manually, after `interrupt()`, to land exactly in
+          // the narrow window M4 and the outcome precedence both target.
+          child.onWrite = (callback) => { pendingWriteCallback = callback; };
+          child.kill = (signal): boolean => {
+            child.killed = signal;
+            // The kill actually terminates the process -- close fires
+            // before the deferred write callback ever resolves.
+            child.emit("close", null, signal ?? null);
+            return true;
+          };
+          return child as unknown as SpawnedAgy;
+        },
+      });
+      await racyHost.send("hello", undefined, [], "turn-1");
+      await waitFor(() => pendingWriteCallback !== null);
+      await racyHost.interrupt();
+      // The pipe write itself still succeeded into the kernel buffer even
+      // though the process was already killed by the interrupt above.
+      pendingWriteCallback!(null);
+      await waitFor(() => turnEnds.some((end) => end.turnToken === "turn-1"));
+      const end = turnEnds.find((e) => e.turnToken === "turn-1")!;
+      // An operator interrupt racing the delivery write outranks the new
+      // epoch_exit_before_turn detail (see the precedence comment in
+      // #runTurn): closed/stale-generation is checked before delivery.
+      expect(end.error).toEqual({ reason: "interrupted" });
+      expect(end.cancellation).toEqual({ kind: "interrupt", reason: "interrupted" });
+      expect(interruptSettlements).toHaveLength(1);
+      racyHost.close();
     });
   });
 });

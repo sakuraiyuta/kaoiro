@@ -26,6 +26,9 @@ issue #359).
 Revised 2026-09-19 for `run_command` Cwd containment (F4 addendum, issue #370).
 Revised 2026-09-19 for operator-interrupt turn settlement (F4 addendum, issue #371).
 Revised 2026-09-21 to note the close()-race `onTurnEnd` shape (F4 addendum, issue #380).
+Revised 2026-09-21 for the stdin prompt transport, the delivery-ack point,
+and the gate step-correlation ledger's move to `GateServer` (F2 / F4b /
+F5a, issue #377 Stage 1).
 
 ## Context
 
@@ -85,21 +88,48 @@ time (protocol union, runner `ENGINE_PACKAGES` / `BUNDLED_ENGINES` /
 `wrapper/package.json` fan-out, `pnpm-workspace.yaml`) **plus** the schema
 additions of F4c (`approval` on spawn / snapshot / P0).
 
-### F2 — Process model: spawn `agy` per turn, closed stdin, SIGTERM to interrupt
+### F2 — Process model: spawn `agy` per turn, prompt over stdin, SIGTERM to interrupt
 
-Each instruction turn spawns `agy --print <text> --output-format
-stream-json --print-timeout 24h --disable-slash-commands [--conversation
-<id>] [--model] [--effort] --add-dir <agent cwd> --add-dir <agent dir>`
-with stdin closed. Both `--add-dir` values are mandatory: in print mode
-the cwd is not a workspace root on its own (measured), and with only the
+Each instruction turn spawns `agy --print "" --input-format stream-json
+--output-format stream-json --print-timeout 24h --disable-slash-commands
+[--conversation <id>] [--model] [--effort] --add-dir <agent cwd> --add-dir
+<agent dir>`. Both `--add-dir` values are mandatory: in print mode the cwd
+is not a workspace root on its own (measured), and with only the
 customization dir added the model operates inside it.
 `--disable-slash-commands` keeps operator text out of the CLI control plane
 ([ADR-0036](0036-session-lifecycle-commands.md) only filters
 literal `/new` / `/clear`). `interrupt()` terminates the child; pending gate
 requests for that turn are resolved as `deny` and `waiting_permission` /
-`waiting_input` are cleared; the next turn resumes by id. The resident
-`--input-format stream-json` mode is recorded but not adopted (no in-band
-interrupt or control channel).
+`waiting_input` are cleared; the next turn resumes by id.
+
+**Prompt transport (issue #377 Stage 1): one NDJSON line on stdin, not
+argv.** `agy --print`'s argv-prompt mode clamps `WaitMsBeforeAsync` at 10s
+and terminates any `run_command` the CLI promoted to a background task 5s
+after the model's last text — measured
+([print-mode-background-tasks.md](../evidence/antigravity/print-mode-background-tasks.md))
+to silently lose any tool call longer than ~10s, including routine
+`pnpm lint` / `pnpm check` / build commands. `--input-format stream-json`
+instead waits for a promoted task before emitting `result`, so the
+wrapper's own `DEFAULT_TOOL_TIMEOUT_MS` (10 min) becomes the bound that
+actually governs a promoted step, as intended. The host writes exactly one
+line, `{"event":"user","message":{"role":"user","content":<text>}}\n`, to
+the child's stdin and calls `end()` -- still one `agy` process per turn
+(the "epoch" process-per-session model is issue #377 Stage 2, out of scope
+here). The delivery ack (`onTurnStart`, and the `TurnWatchdog`'s clock
+with it) fires only once the write callback has resolved without error on
+a child that has not emitted `close`, never on the bare return of
+`write()`, since a pipe write can still succeed into the kernel buffer on
+a process that is already dying. A write-callback error or a `close`
+racing the write settles the turn as an error (`epoch_exit_before_turn`)
+with the usual inter-agent failure notice and no ack; the host never
+re-sends the line on a fresh process by itself, since the model may
+already have read it and a duplicate turn is worse than a visible
+failure. This precedence sits below `close()` / a stale generation (an
+operator `interrupt()` racing the same write settles as `interrupted`,
+not `epoch_exit_before_turn`) and above every other terminal outcome. The
+CLI's in-band control channel (`control_request` / `control_response`)
+is rejected as unsupported (measured) and there is no interrupt over
+stdin; `interrupt()` still terminates the child via F2a's subtree kill.
 
 ### F2a — Subtree termination: own process group, grace, timer ownership (issue #379)
 
@@ -386,7 +416,15 @@ does not prevent — a tool that ran without a gate request has already run.
    `manage_task`, `search_web` fired; `wait_5_seconds` and `finish` did
    not appear as tool steps at all); an unmeasured name only logs loudly.
    Optional tightening (Stage B, needs a measured Δ): `ACTIVE` without a
-   gate request after Δ → kill before completion.
+   gate request after Δ → kill before completion. **Ledger ownership
+   (issue #377 Stage 1 M3):** the correlation set (`stepIdx`s with an
+   observed gate request) lives on `GateServer`, not on `AntigravityGate`
+   -- the server is the socket owner and, from Stage 2, the object a turn
+   boundary can keep across a `setGate()` policy swap, so the ledger
+   survives a swap unchanged while `AntigravityGate` stays pure policy
+   over its readonly axes. `GateServer.setGate()` exists from Stage 1 for
+   Stage 2 to call; nothing in Stage 1 invokes it (the server is still
+   one per turn here).
 3. The gate socket is **separate** from the `ToolHost` socket of F5 (two
    unix sockets, two nonces, two protocols): a gate decision and a tool
    execution must never share a trust role, and a shell reaching the
@@ -474,10 +512,13 @@ settles only its matching token before a successor batch is released.
 
 The delivery acknowledgement runtime observes the server watermark, immediate
 non-injection acknowledgements, and host `onTurnStart`. For injected work,
-`onTurnStart` occurs only after gate registration and successful `agy` child
-spawn; queue admission alone is not a start. The token and all coalesced
-conversation ids stay with the host turn so tool calls and failure notices
-cannot settle a later reuse of the same conversation id.
+`onTurnStart` occurs only after gate registration, a successful `agy` child
+spawn, AND (issue #377 Stage 1 M4) a confirmed stdin delivery of the turn's
+prompt line -- queue admission, spawn, or a bare `write()` return alone is
+not a start; see F2's ack-point paragraph for the exact condition and the
+`epoch_exit_before_turn` failure it guards against. The token and all
+coalesced conversation ids stay with the host turn so tool calls and
+failure notices cannot settle a later reuse of the same conversation id.
 
 Antigravity has an adapter-local `TurnWatchdog`, configured by
 `KAOIRO_ANTIGRAVITY_TURN_WATCHDOG_INACTIVITY_MS` and

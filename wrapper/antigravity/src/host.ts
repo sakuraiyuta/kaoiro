@@ -1174,7 +1174,7 @@ export class AntigravityHost implements EngineAdapter {
       if (!this.#isCurrent(generation)) return { kind: "stale" };
       const attemptedModel = this.#pendingModel;
       this.#currentAttemptedModel = attemptedModel;
-      const args = this.#turnArguments(text, customization.path, attemptedModel ?? this.#config.model);
+      const args = this.#turnArguments(customization.path, attemptedModel ?? this.#config.model);
       let child: SpawnedAgy;
       try {
         child = (this.#options.spawn ?? this.#defaultSpawn)(executable, args, {
@@ -1197,8 +1197,6 @@ export class AntigravityHost implements EngineAdapter {
       this.#activeTurnToolTimeout = null;
       this.#activeTurnToken = turnToken;
       this.#activeTurnConversationIds = conversationIds;
-      this.#options.onTurnStart?.({ turnToken, conversationIds });
-      child.stdin.end();
       child.stderr.on("data", () => {});
       let terminalResult: AgyStreamEvent | null = null;
       let correlationFailure: string | null = null;
@@ -1238,11 +1236,32 @@ export class AntigravityHost implements EngineAdapter {
           return;
         }
         this.#options.onToolEnd?.({ turnToken, stepIndex: stepIndex as number });
-        if (!gate.observeCompletedTool(stepIndex as number, toolName)) {
+        if (!gateServer!.observeCompletedTool(stepIndex as number, toolName)) {
           correlationFailure = toolName;
           this.#armOrShortenTermination(this.#abortGraceMs);
         }
       });
+      // issue #377 Stage 1 M4: deliver the prompt now, over stdin. The
+      // delivery ack (onTurnStart) fires only once the write is confirmed
+      // -- not merely once `write()` returns, since a pipe write can
+      // succeed into the kernel buffer on a dying process -- so a race
+      // where the child exits before or during this write never reports a
+      // turn as started.
+      const delivered = await this.#deliverTurnInput(child, text);
+      // Same precedence as the post-exit switch below: closed/fail-stopped
+      // and a stale generation (operator close()/interrupt() racing the
+      // delivery write) outrank this new detail -- epoch_exit_before_turn
+      // is for the CLI dying on its own (print-timeout, crash, quota), not
+      // for an admission the host itself already ended.
+      if (this.#closed || this.#watchdogFailStopped) {
+        return { kind: "stale" };
+      } else if (!this.#isCurrent(generation)) {
+        return { kind: "stale" };
+      } else if (!delivered) {
+        const detail = "epoch_exit_before_turn";
+        return { kind: "error", detail, classify: { detail }, attemptedModel };
+      }
+      this.#options.onTurnStart?.({ turnToken, conversationIds });
       const childError = await this.#waitForChild(child);
       // issue #371 Design v2 M1 (kohaku design review round 1): this
       // post-exit precedence is unchanged from pre-Design-v2 -- closed/
@@ -1341,6 +1360,46 @@ export class AntigravityHost implements EngineAdapter {
     }
   }
 
+  /** issue #377 Stage 1 M4: writes the turn's prompt as exactly one NDJSON
+   *  line (`--input-format stream-json`'s accepted shape, measured in
+   *  docs/evidence/antigravity/print-mode-background-tasks.md) and closes
+   *  stdin, replacing the previous bare `child.stdin.end()`. Resolves
+   *  `true` only once the write callback has resolved without error AND
+   *  the child has not emitted `close` in the meantime; resolves `false`
+   *  on a write error or on that close race, in which case the caller
+   *  reports `epoch_exit_before_turn` and does not fire the delivery ack
+   *  or re-send the line on its own -- the model may already have read it,
+   *  and a duplicate turn is worse than a visible failure. */
+  #deliverTurnInput(child: SpawnedAgy, text: string): Promise<boolean> {
+    return new Promise((resolveDelivery) => {
+      let settled = false;
+      let closedBeforeAck = false;
+      const settle = (delivered: boolean): void => {
+        if (settled) return;
+        settled = true;
+        resolveDelivery(delivered);
+      };
+      child.once("close", () => { closedBeforeAck = true; });
+      // A persistent (not `once`) listener: the write's own callback is the
+      // primary error path, but an EPIPE can also surface as a stream
+      // `error` event, which crashes the process if left unhandled.
+      child.stdin.on("error", () => settle(false));
+      const line = `${JSON.stringify({ event: "user", message: { role: "user", content: text } })}\n`;
+      child.stdin.write(line, (error) => {
+        if (error !== undefined && error !== null) {
+          settle(false);
+          return;
+        }
+        if (closedBeforeAck) {
+          settle(false);
+          return;
+        }
+        child.stdin.end();
+        settle(true);
+      });
+    });
+  }
+
   #waitForChild(child: SpawnedAgy): Promise<Error | null> {
     return new Promise((resolve) => {
       let settled = false;
@@ -1419,8 +1478,21 @@ export class AntigravityHost implements EngineAdapter {
     if (result !== null) this.#options.onLog?.(makeResult(this.#config, this.#now(), result));
   }
 
-  #turnArguments(text: string, customizationDir: string, model: string | undefined): string[] {
-    const args = ["--print", text, "--output-format", "stream-json", "--print-timeout", "24h", "--disable-slash-commands"];
+  /** issue #377 Stage 1: the prompt travels over stdin as one NDJSON line
+   *  (`#deliverTurnInput`), not as an argv positional -- `agy --print`'s
+   *  `--input-format stream-json` mode waits for a promoted `run_command`
+   *  background task before emitting `result` (measured,
+   *  docs/evidence/antigravity/print-mode-background-tasks.md probe E),
+   *  whereas an argv-prompt run clamps `WaitMsBeforeAsync` at 10s and kills
+   *  the task 5s after the model's last text (issue #377). */
+  #turnArguments(customizationDir: string, model: string | undefined): string[] {
+    const args = [
+      "--print", "",
+      "--input-format", "stream-json",
+      "--output-format", "stream-json",
+      "--print-timeout", "24h",
+      "--disable-slash-commands",
+    ];
     if (this.#options.dangerouslySkipPermissions ?? true) args.push("--dangerously-skip-permissions");
     if (this.#sessionId !== null) args.push("--conversation", this.#sessionId);
     if (model !== undefined && model !== "") args.push("--model", model);

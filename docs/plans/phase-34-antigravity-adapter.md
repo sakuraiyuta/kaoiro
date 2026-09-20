@@ -4,7 +4,7 @@ description: Implement ADR-0057 — wrapper/antigravity package driving the agy 
 status: planned
 phase: 34
 depends_on: [phase-14-codex-adapter, phase-33-compaction-resume-lifecycle]
-last_updated: 2026-09-10
+last_updated: 2026-09-21
 ---
 
 # Phase 34 — Antigravity adapter (third engine, agy CLI headless)
@@ -88,6 +88,21 @@ through the CLI bridge. Measured substrate:
 | B5 | context usage (per-model window table) — only if a source of truth exists |
 | B6 | `antigravity.extra_models` (issue #292 part A for this engine, reusing the codex helpers) — **done in #292** |
 | B7 | server test for an antigravity spawn with the `approval` key entirely absent (review advisory) |
+
+### Stage C — issue #377: `run_command` background-task loss under `--print`
+
+Measured: `agy --print`'s argv-prompt mode clamps `WaitMsBeforeAsync` at
+10s and terminates any promoted background task 5s after the model's last
+text, silently losing any tool call longer than ~10s
+([evidence](../evidence/antigravity/print-mode-background-tasks.md)).
+Chosen fix: keep the CLI's own per-turn task-promotion behaviour, but move
+the prompt off argv onto `--input-format stream-json` stdin, in two stages
+(design: issue #377 "Design v2 rev2").
+
+| # | Task | Notes |
+|---|---|---|
+| C1 | Stage 1 — prompt delivered as one NDJSON stdin line, still one `agy` process per turn; delivery-ack point moved to a confirmed stdin write (`epoch_exit_before_turn` on the write/close race); gate step-correlation ledger moved from `AntigravityGate` to `GateServer` (`setGate()` added for Stage 2) | Done. ADR-0057 F2 / F4b / F5a |
+| C2 | Stage 2 — "epoch" process model: one `agy` process spans several turns (lazy spawn, `EpochSpec` argv-tuple identity, epoch-end reasons, permission-switch-by-`setGate()` mid-epoch, idle TTL) | Not started; needs #379's subtree-kill helper for epoch termination |
 
 ## Open Questions Blocking This Phase
 

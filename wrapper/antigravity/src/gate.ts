@@ -410,7 +410,6 @@ export class AntigravityGate {
   readonly #warn: (message: string) => void;
   readonly #onPermissionRequest: (() => void) | undefined;
   readonly #onPermissionResolved: (() => void) | undefined;
-  readonly #observedSteps = new Set<number>();
 
   constructor(options: GatePolicyOptions) {
     this.#cwd = canonical(options.cwd) ?? resolve(options.cwd);
@@ -442,18 +441,13 @@ export class AntigravityGate {
     }
   }
 
-  observeGateRequest(stepIdx: number): void {
-    this.#observedSteps.add(stepIdx);
-  }
-
-  observeCompletedTool(stepIdx: number, toolName: string): boolean {
-    const toolClass = TOOL_CLASS_BY_NAME.get(toolName);
-    if (toolClass === undefined) {
-      this.#warn(`antigravity: unclassified completed tool: ${toolName}`);
-      return true;
-    }
-    if (!MEASURED_HOOK_CLASSES.has(toolClass)) return true;
-    return this.#observedSteps.delete(stepIdx);
+  /** issue #377 Stage 1 M3: exposed read-only so `GateServer` (the ledger's
+   *  new owner) can classify a completed tool without duplicating
+   *  `TOOL_CLASS_BY_NAME` / `MEASURED_HOOK_CLASSES` lookups or the warn
+   *  wiring. `AntigravityGate` stays pure policy over its readonly axes --
+   *  it holds no step-correlation state of its own. */
+  warnUnclassifiedTool(toolName: string): void {
+    this.#warn(`antigravity: unclassified completed tool: ${toolName}`);
   }
 
   evaluate(toolCall: HookToolCall): GateDecision {
@@ -564,9 +558,14 @@ export class GateServer {
   readonly #dir: string;
   readonly nonce: string;
   readonly socketPath: string;
-  readonly #gate: AntigravityGate;
+  #gate: AntigravityGate;
   readonly #onSocketClose: (() => void) | undefined;
   readonly #sockets = new Set<Socket>();
+  // issue #377 Stage 1 M3: moved out of `AntigravityGate` -- `GateServer` is
+  // the per-epoch object (Stage 2: several turns share one server across a
+  // `setGate()` swap), so the step-correlation ledger belongs here, not on
+  // the policy object a swap replaces.
+  readonly #observedSteps = new Set<number>();
   #closed = false;
 
   private constructor(server: Server, dir: string, nonce: string, gate: AntigravityGate, onSocketClose?: () => void) {
@@ -602,6 +601,28 @@ export class GateServer {
     rmSync(this.#dir, { recursive: true, force: true });
   }
 
+  /** issue #377 Stage 1 M3 (Stage 2 use): swaps the policy object a turn
+   *  boundary applies, without touching the socket or the step-correlation
+   *  ledger -- a step `ACTIVE` before the swap still resolves against the
+   *  same ledger once it goes `DONE` after it. */
+  setGate(gate: AntigravityGate): void {
+    this.#gate = gate;
+  }
+
+  observeGateRequest(stepIdx: number): void {
+    this.#observedSteps.add(stepIdx);
+  }
+
+  observeCompletedTool(stepIdx: number, toolName: string): boolean {
+    const toolClass = TOOL_CLASS_BY_NAME.get(toolName);
+    if (toolClass === undefined) {
+      this.#gate.warnUnclassifiedTool(toolName);
+      return true;
+    }
+    if (!MEASURED_HOOK_CLASSES.has(toolClass)) return true;
+    return this.#observedSteps.delete(stepIdx);
+  }
+
   #serve(socket: Socket): void {
     let buffer = "";
     let replied = false;
@@ -631,7 +652,7 @@ export class GateServer {
       deny("kaoiro: invalid gate request");
       return;
     }
-    this.#gate.observeGateRequest(request.stepIdx);
+    this.observeGateRequest(request.stepIdx);
     const decision = await this.#gate.decide({ name: request.toolCall.name, args: request.toolCall.args });
     markReplied();
     if (!socket.destroyed) socket.end(`${JSON.stringify(decision)}\n`);

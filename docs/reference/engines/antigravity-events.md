@@ -2,7 +2,7 @@
 title: Antigravity events
 description: Current event, state, session, model, usage, and host contract for the Antigravity CLI adapter.
 status: provisional
-last_updated: 2026-09-18
+last_updated: 2026-09-21
 related: [protocol, antigravity-adapter]
 ---
 
@@ -13,14 +13,14 @@ related: [protocol, antigravity-adapter]
 ### Main API and process model
 
 ```text
-agy --print "<turn text>" \
+agy --print "" \
+    --input-format stream-json \
     --output-format stream-json \
     --print-timeout <duration> \
     [--conversation <conversation_id>] \
     [--model <slug>] [--effort low|medium|high] \
     --add-dir <agent cwd> --add-dir <per-agent customization dir> \
-    [--dangerously-skip-permissions] --disable-slash-commands \
-    </dev/null
+    [--dangerously-skip-permissions] --disable-slash-commands
 ```
 
 - **One `agy` process per turn** *(measured)*, the same spawn-per-turn model
@@ -28,17 +28,31 @@ agy --print "<turn text>" \
   the `init` event); every later turn passes `--conversation <id>`.
   Spawning from Node `child_process.spawn` with piped stdio works; running
   under `setsid` (no controlling tty) works *(measured)*.
-- **stdin must be closed** *(measured)*: with stdin left open the run ends
-  after ~3 s with `result.status = "ERROR"`, `error: "timeout waiting for
-  response"`, and no assistant output. The conversation still persists.
-- **Resident alternative** *(measured, not adopted for Stage A)*:
-  `agy --print='' --input-format stream-json --output-format stream-json`
-  keeps one process open and runs one turn per stdin line
-  `{"event":"user","message":{"content":"<text>"}}`. Only the `user` event
-  is recognised; any other `event` value is ignored with a stderr warning
-  (`warning: ignoring unsupported stream input message event "…"`), so there
-  is no in-band interrupt, permission, or model-switch channel. Each turn
-  emits its own `result`.
+- **Prompt over stdin, not argv** (issue #377 Stage 1): the wrapper writes
+  exactly one NDJSON line,
+  `{"event":"user","message":{"role":"user","content":"<turn text>"}}\n`, to
+  the child's stdin and then closes it (`end()`); an unrecognised message
+  shape (missing the `event` key) is rejected with `result.status = "ERROR"`
+  *(measured)*. This replaces the earlier argv-positional prompt: `agy
+  --print`'s argv mode clamps `WaitMsBeforeAsync` at 10s and terminates any
+  `run_command` the CLI promoted to a background task 5s after the model's
+  last text, silently losing any tool call longer than ~10s
+  ([print-mode-background-tasks.md](../../evidence/antigravity/print-mode-background-tasks.md));
+  `--input-format stream-json` instead waits for a promoted task before
+  emitting `result` *(measured)*, so the wrapper's own tool deadline governs
+  it as intended. Still one process per turn (the "epoch"/resident process
+  model below stays out of scope) — the delivery ack fires only once this
+  write is confirmed, never merely once `write()` returns; see
+  [ADR-0057 F2](../../adr/0057-antigravity-adapter.md#f2--process-model-spawn-agy-per-turn-prompt-over-stdin-sigterm-to-interrupt)
+  for the exact ack point and its failure mode.
+- **Resident alternative** *(measured, not adopted — issue #377 Stage 2)*:
+  keeping one `agy --input-format stream-json` process open across several
+  turns, writing one stdin line per turn instead of respawning. Only the
+  `user` event is recognised; any other `event` value is ignored with a
+  stderr warning (`warning: ignoring unsupported stream input message event
+  "…"`), and `control_request` / `control_response` are rejected as
+  unsupported, so there is no in-band interrupt, permission, or model-switch
+  channel over stdin. Each turn still emits its own `result`.
 - **`--disable-slash-commands`** *(flag present in 1.1.26)*: print mode
   otherwise expands slash commands and skills found in the prompt text, so an
   operator instruction starting with `/` would enter the CLI control plane.

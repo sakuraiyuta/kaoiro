@@ -460,15 +460,49 @@ describe("AntigravityGate", () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  it("F4bは実測済みclassのcompleted toolにgate相関を要求する", () => {
+  it("issue #377 Stage 1 M3: GateServerがcompleted toolのgate相関ledgerを持つ", async () => {
     const { gate, root, warnings } = makeGate();
+    const broker = new PermissionBroker({ config: config(), send: () => {} });
+    const server = await GateServer.listen({ gate, onSocketClose: () => broker.close() });
     try {
-      expect(gate.observeCompletedTool(2, "run_command")).toBe(false);
-      gate.observeGateRequest(2);
-      expect(gate.observeCompletedTool(2, "run_command")).toBe(true);
-      expect(gate.observeCompletedTool(3, "future_vendor_tool")).toBe(true);
+      expect(server.observeCompletedTool(2, "run_command")).toBe(false);
+      server.observeGateRequest(2);
+      expect(server.observeCompletedTool(2, "run_command")).toBe(true);
+      expect(server.observeCompletedTool(3, "future_vendor_tool")).toBe(true);
       expect(warnings).toContain("antigravity: unclassified completed tool: future_vendor_tool");
-    } finally { rmSync(root, { recursive: true, force: true }); }
+    } finally {
+      server.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("issue #377 Stage 1 M3: setGate()はledgerを保持したまま policy を差し替える", async () => {
+    const { gate, root, warnings } = makeGate();
+    const secondWarnings: string[] = [];
+    const secondGate = new AntigravityGate({
+      config: config(),
+      cwd: join(root, "workspace"),
+      customizationDir: join(root, "custom"),
+      nodePath: process.execPath,
+      bridgePath: join(root, "bridge.js"),
+      toolNames: () => new Set(["whoami"]),
+      broker: new PermissionBroker({ config: config(), send: () => {} }),
+      warn: (message) => secondWarnings.push(message),
+    });
+    const server = await GateServer.listen({ gate });
+    try {
+      server.observeGateRequest(5);
+      server.setGate(secondGate);
+      expect(server.observeCompletedTool(5, "run_command")).toBe(true);
+      // A step the ledger never saw still fails closed after the swap.
+      expect(server.observeCompletedTool(6, "run_command")).toBe(false);
+      expect(server.observeCompletedTool(7, "future_vendor_tool")).toBe(true);
+      expect(secondWarnings).toContain("antigravity: unclassified completed tool: future_vendor_tool");
+      expect(warnings).not.toContain("antigravity: unclassified completed tool: future_vendor_tool");
+    } finally {
+      server.close();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("nonce欠落はdenyし、gate socket closeはpending brokerをdeny解決する", async () => {

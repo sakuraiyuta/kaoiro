@@ -62,14 +62,22 @@ if (args[0] === "models") {
   const customization = args[args.lastIndexOf("--add-dir") + 1];
   process.stdout.write(JSON.stringify({ hooks: [{ source: customization + "/.agents/hooks.json", actions: [{ event: "PreToolUse", matcher: "*", command: ${JSON.stringify(hook)}, timeout_seconds: 3600 }] }] }));
 } else if (args[0] === "--print") {
-  line({ event: "init", conversation_id: "cid", init: { tools: ["run_command"] } });
-  if (args[1].includes("KUROE358_BLOCK")) {
-    process.on("SIGTERM", () => process.exit(0));
-    setInterval(() => {}, 1000);
-  } else {
-    line({ event: "result", result: { conversation_id: "cid", status: "SUCCESS", response: "second turn ran" } });
-    process.exit(0);
-  }
+  // issue #377 Stage 1: the prompt arrives as one NDJSON line on stdin
+  // (--input-format stream-json), not as an argv positional.
+  let input = "";
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", (chunk) => { input += chunk; });
+  process.stdin.on("end", () => {
+    const prompt = JSON.parse(input.trim()).message.content;
+    line({ event: "init", conversation_id: "cid", init: { tools: ["run_command"] } });
+    if (prompt.includes("KUROE358_BLOCK")) {
+      process.on("SIGTERM", () => process.exit(0));
+      setInterval(() => {}, 1000);
+    } else {
+      line({ event: "result", result: { conversation_id: "cid", status: "SUCCESS", response: "second turn ran" } });
+      process.exit(0);
+    }
+  });
 } else {
   process.exitCode = 2;
 }
