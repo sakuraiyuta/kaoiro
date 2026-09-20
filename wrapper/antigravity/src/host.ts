@@ -55,10 +55,18 @@ import { effectiveNetworkAccess } from "./network_access.js";
 import { ceilingExceeded, type SwitchCeiling } from "./permission_switch.js";
 import { nonInteractiveToolEnv } from "./tool_child_env.js";
 import { ToolHost } from "./toolhost.js";
+import { DEFAULT_TURN_WATCHDOG_ABORT_GRACE_MS } from "./turn_watchdog.js";
 import type { ToolTimeoutInfo, TurnWatchdogInterruptCause } from "./turn_watchdog.js";
+import { signalSubtree, terminateWithGrace, type GraceTerminationHandle } from "./subtree_termination.js";
 
 const BRIDGE_SCRIPT = new URL("../dist/bridge.js", import.meta.url).pathname;
 const HOOK_SCRIPT = new URL("../dist/hook.js", import.meta.url).pathname;
+// issue #379 M2: must stay below the tightest outer bound that can SIGKILL
+// this wrapper PROCESS itself while `close()`'s own escalation is pending --
+// currently the runner's reset-relaunch grace (`RESET_TERMINATION_GRACE_MS`
+// = 5s, runner/src/supervisor.ts). systemd's `TimeoutStopSec` (30s) is looser
+// and not the binding constraint.
+const DEFAULT_CLOSE_GRACE_MS = 2_000;
 
 /** issue #371 Design v2: `#runTurn` decides no terminal outcome itself --
  *  it returns one of these, and `#drainTurns`'s `finally` is the single
@@ -88,7 +96,17 @@ export interface SpawnedAgy {
    *  Optional so existing fakes that construct a `SpawnedAgy` without it
    *  still satisfy the interface. */
   pid?: number | undefined;
+  /** issue #379 M3: read at SIGKILL-escalation fire time to confirm the
+   *  target is still running before signalling -- a pid can be reused once
+   *  the process has actually exited. Optional so a fake that never tracks
+   *  exit state is treated as always-alive (matches a real `ChildProcess`
+   *  before `exit`). */
+  exitCode?: number | null | undefined;
+  signalCode?: NodeJS.Signals | null | undefined;
   once(event: "close", listener: (code: number | null, signal: NodeJS.Signals | null) => void): this;
+  /** issue #379: fires before `close` (no stdio-drain wait), so cancelling
+   *  a pending escalation here frees it sooner than waiting for `close`. */
+  once(event: "exit", listener: (code: number | null, signal: NodeJS.Signals | null) => void): this;
   once(event: "error", listener: (error: Error) => void): this;
   kill(signal?: NodeJS.Signals): boolean;
 }
@@ -185,6 +203,19 @@ export interface AntigravityHostOptions {
   modelsProbeSpawn?: (command: string, args: string[], options: { cwd: string }) => GateProbe;
   verifyGate?: (args: string[]) => Promise<boolean>;
   gateProbeTimeoutMs?: number;
+  /** Grace period (issue #379) between the initial SIGTERM and the SIGKILL
+   *  escalation for an operator `interrupt()` or a gate-correlation-failure
+   *  kill. Defaults to the CLI's resolved `TurnWatchdog` abort grace so the
+   *  same "how long to wait for a clean exit" value applies everywhere. */
+  abortGraceMs?: number;
+  /** Grace period (issue #379 M2) between SIGTERM and SIGKILL specifically
+   *  for `close()`. Deliberately separate from `abortGraceMs` and much
+   *  shorter by default: an outer supervisor (runner reset:
+   *  `RESET_TERMINATION_GRACE_MS` = 5s, or systemd `TimeoutStopSec` = 30s)
+   *  may SIGKILL this wrapper PROCESS itself before a 60s abort grace could
+   *  ever fire, which would leave the agy subtree orphaned with only the
+   *  initial SIGTERM delivered. Keep this below the tightest outer bound. */
+  closeGraceMs?: number;
   probeModels?: () => Promise<EngineModelInfo[] | null>;
   runtimeAssetsAvailable?: () => boolean;
   warn?: (message: string) => void;
@@ -377,6 +408,13 @@ export class AntigravityHost implements EngineAdapter {
   #catalog: EngineModelInfo[] = antigravityCatalogSnapshot();
   readonly #agyExecutable: AgyExecutableResolution;
   readonly #probeTimeoutMs: number;
+  readonly #abortGraceMs: number;
+  readonly #closeGraceMs: number;
+  // issue #379: the single live SIGTERM->grace->SIGKILL escalation for
+  // `#running`, if any. Turns are sequential (a new child is only spawned
+  // after `#waitForChild` resolves for the previous one), so at most one
+  // of these is ever outstanding.
+  #activeTermination: GraceTerminationHandle | null = null;
   #pendingModel: string | null = null;
   #switchError: Record<string, unknown> | null = null;
   // ADR-0057 F4c Stage B0 (issue #359): a server-accepted permission switch
@@ -425,6 +463,8 @@ export class AntigravityHost implements EngineAdapter {
     this.#probeTimeoutMs = options.gateProbeTimeoutMs
       ?? this.#config.antigravity_probe_timeout_ms
       ?? DEFAULT_AGY_PROBE_TIMEOUT_MS;
+    this.#abortGraceMs = options.abortGraceMs ?? DEFAULT_TURN_WATCHDOG_ABORT_GRACE_MS;
+    this.#closeGraceMs = options.closeGraceMs ?? DEFAULT_CLOSE_GRACE_MS;
     this.#sessionId = options.resumeSessionId ?? null;
     this.#now = options.now ?? (() => new Date().toISOString());
     // issue #359 M1: with sync negotiated, seed the revision-0 baseline control
@@ -540,7 +580,24 @@ export class AntigravityHost implements EngineAdapter {
     this.#toolHost?.close();
     this.#cancelGateProbe?.();
     this.#gateProbe?.kill?.("SIGTERM");
-    this.#running?.kill("SIGTERM");
+    this.#armOrShortenTermination(this.#abortGraceMs);
+  }
+
+  /** issue #379: arms a SIGTERM->grace->SIGKILL escalation for `#running`
+   *  if none is active yet; otherwise shortens the already-armed one to
+   *  `graceMs` (never lengthens, never re-sends SIGTERM). This single
+   *  method is what keeps a repeat `interrupt()` from re-signalling
+   *  (calling it again with the SAME graceMs computes a later candidate
+   *  deadline, which `shortenGraceTo` treats as a no-op) and what lets
+   *  `close()` shrink an `interrupt()`-armed 60s grace down to its own
+   *  short `closeGraceMs` (M2) using the same call. */
+  #armOrShortenTermination(graceMs: number): void {
+    if (this.#activeTermination !== null) {
+      this.#activeTermination.shortenGraceTo(graceMs);
+      return;
+    }
+    if (this.#running === null) return;
+    this.#activeTermination = terminateWithGrace(this.#running, { graceMs });
   }
 
   requestInterruptForTurn(turnToken: string, cause?: TurnWatchdogInterruptCause): boolean {
@@ -554,7 +611,11 @@ export class AntigravityHost implements EngineAdapter {
     // The CLI already logs the watchdog warning; the host only keeps the
     // cause so settlement can override the CLI's terminal record.
     if (cause?.kind === "tool_timeout") this.#activeTurnToolTimeout = cause;
-    return this.#running?.kill("SIGTERM") ?? false;
+    // issue #379: no grace armed here -- `TurnWatchdog` already owns that
+    // timing itself (it arms its own `abortGraceMs` timer between this call
+    // and `failStopTurnForWatchdog`); arming a second one here would double
+    // the effective wait before an unresponsive watchdog-flagged turn dies.
+    return this.#running !== null && signalSubtree(this.#running, "SIGTERM");
   }
 
   failStopTurnForWatchdog(turnToken: string): boolean {
@@ -584,7 +645,13 @@ export class AntigravityHost implements EngineAdapter {
     this.#toolHost?.close();
     this.#cancelGateProbe?.();
     this.#gateProbe?.kill?.("SIGTERM");
-    this.#running?.kill("SIGTERM");
+    // issue #379 M2: closeGraceMs, not abortGraceMs -- an outer supervisor
+    // (runner reset / systemd stop) can SIGKILL this wrapper process well
+    // before a 60s abort grace would fire, so close() always shortens down
+    // to its own short bound rather than trusting whatever was already
+    // armed (including a longer grace an `interrupt()` call just started,
+    // e.g. the SIGINT handler's `interrupt().finally(() => close())`).
+    this.#armOrShortenTermination(this.#closeGraceMs);
     this.#customization?.close();
     this.#customization = null;
   }
@@ -1160,7 +1227,10 @@ export class AntigravityHost implements EngineAdapter {
           // completion the gate cannot correlate: fail closed either way.
           correlationFailure = validToolName(topLevelName) ? topLevelName : validToolName(nestedName) ? nestedName : "unknown";
           this.#warn(`antigravity: ${state === "ACTIVE" ? "started" : "completed"} tool correlation is unprovable: ${correlationFailure}`);
-          child.kill("SIGTERM");
+          // issue #379: a gate-correlation failure means the safety gate
+          // itself may be compromised, so this kill escalates to SIGKILL
+          // (grace-bounded) rather than trusting a bare SIGTERM.
+          this.#armOrShortenTermination(this.#abortGraceMs);
           return;
         }
         if (state === "ACTIVE") {
@@ -1170,7 +1240,7 @@ export class AntigravityHost implements EngineAdapter {
         this.#options.onToolEnd?.({ turnToken, stepIndex: stepIndex as number });
         if (!gate.observeCompletedTool(stepIndex as number, toolName)) {
           correlationFailure = toolName;
-          child.kill("SIGTERM");
+          this.#armOrShortenTermination(this.#abortGraceMs);
         }
       });
       const childError = await this.#waitForChild(child);
@@ -1228,7 +1298,10 @@ export class AntigravityHost implements EngineAdapter {
     this.#toolHost?.close();
     this.#cancelGateProbe?.();
     this.#gateProbe?.kill?.("SIGTERM");
-    this.#running?.kill("SIGTERM");
+    // issue #379: no grace here either -- by the time TurnWatchdog calls
+    // this, its OWN abortGraceMs has already elapsed since
+    // requestInterruptForTurn's SIGTERM, so escalate straight to SIGKILL.
+    if (this.#running !== null) signalSubtree(this.#running, "SIGKILL");
     const error = {
       detail: attribution === "exact"
         ? "turn watchdog interrupt grace expired; host admission stopped pending operator recovery"
@@ -1286,9 +1359,20 @@ export class AntigravityHost implements EngineAdapter {
         stdoutEnded = true;
         settleAfterTerminalIo();
       });
+      // issue #379: cancel any pending SIGKILL escalation for THIS child as
+      // soon as it is known to have exited. `exit` fires before `close`
+      // (no stdio-drain wait), so it frees the escalation sooner; `close`
+      // is a defensive second call (`cancel()` is idempotent) for the rare
+      // case `exit` was not observed.
+      child.once("exit", () => {
+        this.#activeTermination?.cancel();
+        this.#activeTermination = null;
+      });
       child.once("close", (code, signal) => {
         closed = true;
         this.#lastChildExit = { code, signal };
+        this.#activeTermination?.cancel();
+        this.#activeTermination = null;
         settleAfterTerminalIo();
       });
       child.once("error", (error) => {
@@ -1553,6 +1637,12 @@ export class AntigravityHost implements EngineAdapter {
   }
 
   #defaultSpawn(command: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv }): SpawnedAgy {
-    return spawn(command, args, { cwd: options.cwd, env: options.env, stdio: ["pipe", "pipe", "pipe"] }) as ChildProcessWithoutNullStreams;
+    // issue #379: `detached: true` starts agy as its own process-group
+    // leader (POSIX `setsid`), so `signalSubtree`'s `process.kill(-pid,
+    // signal)` reaches every descendant it spawns (e.g. a `run_command`
+    // promoted background task, issue #377) instead of only the leader.
+    // No `unref()` -- the wrapper must keep observing this child for its
+    // full lifetime, not let it run detached from supervision.
+    return spawn(command, args, { cwd: options.cwd, env: options.env, stdio: ["pipe", "pipe", "pipe"], detached: true }) as ChildProcessWithoutNullStreams;
   }
 }

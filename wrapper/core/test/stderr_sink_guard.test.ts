@@ -58,6 +58,7 @@ const ALLOWED_PROCESS_MEMBERS = new Set([
   "exitCode",
   "getuid",
   "kill",
+  "off",
   "on",
   "pid",
   "stdin",

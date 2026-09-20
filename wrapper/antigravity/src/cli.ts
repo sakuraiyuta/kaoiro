@@ -448,6 +448,11 @@ export async function runAntigravityCli(
       }
       return Promise.resolve();
     },
+    // issue #379: the same grace TurnWatchdog uses for its own interrupt ->
+    // SIGKILL sequencing also bounds an operator `interrupt()` and a
+    // gate-correlation-failure kill (the Host arms its own timer for those,
+    // since TurnWatchdog does not orchestrate them).
+    abortGraceMs: turnWatchdogSettings.abortGraceMs,
   }, (turnToken) => {
     writeAntigravityLifecycle({ event: "turn_start", turnToken });
     turnWatchdog.start(turnToken);
@@ -469,6 +474,22 @@ export async function runAntigravityCli(
   process.on("SIGINT", () => {
     void host?.interrupt().finally(() => host?.close());
   });
+  // issue #379 M1: without a handler, Node's default SIGTERM behavior kills
+  // this process immediately -- no `close()`, no group signal, no
+  // escalation -- and the runner's stop / delete / restart / reset paths
+  // (`entry.child.kill()`, a bare SIGTERM) all rely on exactly that signal.
+  // `close()` (not `interrupt()`) directly: SIGTERM is an external "stop
+  // now", not an operator action, so it should not manufacture an
+  // `interrupt_requested` / `interrupted` settlement record for what the
+  // operator never asked to interrupt. Registering this handler also
+  // suppresses Node's default immediate-exit behavior, so the process
+  // naturally stays alive (child stdio + the pending escalation timer keep
+  // the event loop open) until `close()`'s SIGKILL escalation actually
+  // finishes the agy subtree -- no explicit `process.exit()` here.
+  const onSigterm = (): void => {
+    host?.close();
+  };
+  process.on("SIGTERM", onSigterm);
   let disconnectReason: "stop" | "crash" = "stop";
   try {
     await host.run(prompt);
@@ -476,6 +497,13 @@ export async function runAntigravityCli(
     disconnectReason = "crash";
     throw error;
   } finally {
+    // Remove this invocation's own listener once `run()` settles -- this
+    // process only ever runs one `runAntigravityCli()` in production, but
+    // leaving the listener registered would accumulate a stale one per
+    // invocation for any caller (tests included) that runs it more than
+    // once in the same process, each closing over an already-finished
+    // `host`.
+    process.off("SIGTERM", onSigterm);
     interAgentTurns.freezeForWatchdogFailStop(undefined, (envelopes) => link?.retireInterAgentDeliveries?.(envelopes));
     try {
       await link?.flushInterAgentRetirements?.();

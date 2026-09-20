@@ -2,7 +2,7 @@
 title: Antigravity tools and permissions
 description: Current hook-gate, tool-child, bridge, and permission contract for the Antigravity CLI adapter.
 status: provisional
-last_updated: 2026-09-19
+last_updated: 2026-09-21
 related: [protocol, antigravity-adapter]
 ---
 
@@ -178,9 +178,14 @@ reached the `[antigravity-lifecycle]` stream.
   `.catch()` never sees it. That reason, and any other unclassified `send()`
   rejection, is now logged as `send_not_started` (turn token and delivery
   seqs only, never the inbound instruction text) before classification.
-- **Out of scope.** Escalating past the single `SIGTERM` (process-group
-  kill, a `SIGKILL` grace timer for a wedged hook) is tracked separately
-  (issue #379); this only changes what settles after the existing kill.
+- **Escalation past the single `SIGTERM`** (process-group kill reaching a
+  `run_command` grandchild, a `SIGKILL` grace timer for a child that ignores
+  the initial signal) is issue #379, not this section — this section only
+  covers what settles after the existing kill. See
+  [ADR-0057](../../adr/0057-antigravity-adapter.md) F2a for the
+  process-group / grace / timer-ownership contract, including the same
+  escalation now applied to the ADR-0057 F4b correlation-failure kill above
+  (line ~123 of this document).
 
 ### Tool definition (CLI bridge over the wrapper tool host)
 

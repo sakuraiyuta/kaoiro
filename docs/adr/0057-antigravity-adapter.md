@@ -101,6 +101,77 @@ requests for that turn are resolved as `deny` and `waiting_permission` /
 `--input-format stream-json` mode is recorded but not adopted (no in-band
 interrupt or control channel).
 
+### F2a — Subtree termination: own process group, grace, timer ownership (issue #379)
+
+The production default spawn (`#defaultSpawn`) starts `agy` with `detached:
+true`, making it its own process-group leader. Every path that stops the
+active agy (`interrupt()`, `close()`, and a gate-correlation-failure kill)
+routes through `subtree_termination.ts`'s `terminateWithGrace`: it sends
+SIGTERM via `signalSubtree` (`process.kill(-pid, signal)` when the group is
+known, falling back to a single-process `kill()` otherwise — Linux is the
+verified platform; elsewhere the fallback applies and a `run_command`
+grandchild may be left behind, a documented gap, not a silent claim of
+coverage) and arms a SIGKILL escalation after a grace period. The escalation
+re-checks `exitCode` / `signalCode` immediately before signalling: a pid can
+be reused once its process has actually exited, so "the target already
+looked dead when we cancelled" is not trusted — liveness is confirmed again
+at the moment of signalling. Turns are strictly sequential (a new child only
+spawns after the previous one's `close`/`exit` cancelled its own escalation),
+so at most one escalation is ever outstanding and no cross-turn timer can
+target a different turn's child.
+
+Two grace values, not one: `abortGraceMs` (default: the CLI's resolved
+`TurnWatchdog` abort grace, ~60s) bounds `interrupt()` and the
+correlation-failure kill; `close()` uses its own much shorter
+`closeGraceMs` (default 2s) instead, and if an `interrupt()`-armed
+`abortGraceMs` escalation is already pending, `close()` SHORTENS it down
+to `closeGraceMs` rather than trusting the longer one (never lengthens an
+already-shorter deadline; never re-sends SIGTERM, already sent once by the
+`interrupt()` call). This matters because `close()` can run while the
+*wrapper process itself* is a live target of an outer supervisor's own
+timeout: the runner's reset-relaunch grace (`RESET_TERMINATION_GRACE_MS` =
+5s) or systemd's `TimeoutStopSec` (30s) can SIGKILL this process before a
+60s abort grace would ever fire, orphaning the agy subtree with only the
+initial SIGTERM delivered. `closeGraceMs` must stay below the tightest of
+those outer bounds; if either changes, revisit this default together with
+it.
+
+The watchdog's own two calls (`requestInterruptForTurn`,
+`failStopTurnForWatchdog`) do NOT arm a grace of their own: `TurnWatchdog`
+(`turn_watchdog.ts`) already owns that timing externally (it calls
+`requestInterrupt`, arms its own `abortGraceMs` timer, then calls
+`failStop` only after that elapses), so `requestInterruptForTurn` sends a
+bare SIGTERM and `failStopTurnForWatchdog` escalates straight to SIGKILL —
+stacking a second grace window here would double the effective wait before
+an unresponsive watchdog-flagged turn actually dies. An operator
+`interrupt()` landing after a watchdog SIGTERM has already gone out is a
+harmless duplicate signal to an already-terminating process.
+
+`runAntigravityCli` also registers a SIGTERM handler on the wrapper process
+itself (mirroring the existing SIGINT handler, but calling `close()`
+directly rather than `interrupt().finally(close)` — SIGTERM is an external
+"stop now", not an operator action, and should not manufacture an
+`interrupt_requested` / `interrupted` settlement record for something the
+operator never asked to interrupt). Without it, Node's default SIGTERM
+behavior kills the process immediately: no `close()`, no group signal, no
+escalation — and the runner's stop / delete / restart / reset paths all
+rely on exactly that signal (`entry.child.kill()`, runner/src/spawn.ts).
+Registering the handler also suppresses that default so the process stays
+alive — via the child's stdio pipes and the pending escalation timer
+holding the event loop open — until the escalation actually finishes the
+subtree; no explicit `process.exit()` is used or needed. Codex and Claude
+Code have the same missing-SIGTERM-handler gap; fixing it there is tracked
+separately, out of scope here. One residual gap this cannot close: if an
+outer supervisor SIGKILLs the WRAPPER process itself (uncatchable), no
+handler runs at all and the subtree can still be orphaned — this is a
+smaller window than before issue #379 (bounded by `closeGraceMs` /
+`abortGraceMs` instead of being unconditional), not a claim that it is
+eliminated.
+
+`terminateWithGrace` is deliberately generic (`{ child, group } -> grace ->
+SIGKILL`, not `interrupt()`-specific) — issue #377 Stage 2 (epoch
+termination) is expected to reuse it for the same operation.
+
 ### F3 — Persona injection through an always-on rules file in a per-agent customization dir
 
 The wrapper owns a per-agent directory (`mkdtemp`, 0700) passed with
