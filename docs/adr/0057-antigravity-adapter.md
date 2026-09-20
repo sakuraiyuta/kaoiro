@@ -25,6 +25,7 @@ approval/sandbox/network switching under a host-local launch ceiling,
 issue #359).
 Revised 2026-09-19 for `run_command` Cwd containment (F4 addendum, issue #370).
 Revised 2026-09-19 for operator-interrupt turn settlement (F4 addendum, issue #371).
+Revised 2026-09-21 to note the close()-race `onTurnEnd` shape (F4 addendum, issue #380).
 
 ## Context
 
@@ -230,7 +231,13 @@ structurally: four generation-mismatch early returns inside `#runTurn`
 (after `ToolHost.listen`, after `waitForPermissionSync`, after
 `GateServer.listen`, after gate registration success) plus the throw path
 (gate registration failure, folded into `#drainTurns`'s `catch`) are `stale`
-by construction, not by reading machine state. Review checklist for this
+by construction, not by reading machine state. The `catch` reads the
+generation before it builds an `error` outcome, so a `#runTurn` throw that
+races `close()` is `stale` too and ends the turn with no `error` on
+`onTurnEnd`; before 3d73a50d the `catch` kept `error: { detail }` for a
+stale generation, which produced an `api_error` notice for a planned close.
+The close race is now consistent with the close-race early returns, and
+its notices come from the disconnect path (issues #351 / #360). Review checklist for this
 file: no terminal `#apply` / `#terminalError` / `#publishTerminalResult`
 outside `#drainTurns`'s `finally` — a new terminal path added to `#runTurn`
 must return a `TurnOutcome` member to typecheck, so the class this addendum

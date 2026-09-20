@@ -1863,7 +1863,7 @@ if (args[0] === "models") {
       host.close();
     });
 
-    it("pin (vi): verifyGate rejecting after interrupt() still settles as interrupted exactly once", async () => {
+    it("pin (vi): an interrupt in the gate-verification window settles exactly once as interrupted via the throw path (cancelGateProbe settles the probe as timeout first; the fixture's later rejection is a no-op)", async () => {
       let rejectProbe!: (reason: unknown) => void;
       const probe = new Promise<boolean>((_resolve, reject) => { rejectProbe = reject; });
       const { host, states, turnEnds, interruptSettlements } = hostHarness({ verifyGate: () => probe });
