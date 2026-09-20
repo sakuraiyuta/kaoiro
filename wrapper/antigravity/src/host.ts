@@ -310,6 +310,12 @@ export function initialStatusExt(
       supports_model_switch: true,
       supports_effort_switch: false,
       supports_context_usage: false,
+      // issue #381: `new` and `clear` both map to the same fresh-relaunch
+      // operation for this engine (no distinct primitive in the agy CLI
+      // surface); the server's AgentStates/ClearWatermarks produce the
+      // display difference (ADR-0057 F7).
+      supports_session_reset: true,
+      session_reset_modes: ["new", "clear"],
       ...(switchAxes === undefined || !permissionSyncSupported
         ? {}
         : {

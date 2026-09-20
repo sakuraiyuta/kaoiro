@@ -265,6 +265,13 @@ describe("AntigravityHost", () => {
     host.close();
   });
 
+  it("advertises supports_session_reset unconditionally with both modes (issue #381)", () => {
+    const ext = initialStatusExt(config());
+    const caps = ext.session_capabilities as Record<string, unknown>;
+    expect(caps.supports_session_reset).toBe(true);
+    expect(caps.session_reset_modes).toEqual(["new", "clear"]);
+  });
+
   it("advertises permission_switch_axes and supports_permission_switch when max_* is present and permission_sync is negotiated (issue #359 M1)", () => {
     const ext = initialStatusExt(
       config({
