@@ -41,12 +41,12 @@ defmodule KaoiroServer.RuntimeConfigTest do
   # 起こせなくする (issue #310)。以前は delivery_states /
   # session_lifecycle_events / quagmire_settings の 3 store だけを手書きで
   # 見ていた。
-  test "全 canonical store が compose / dev launcher / .env.example / runbook に配線されている" do
+  test "全 canonical store が compose / dev launcher / .env.example / server config reference に配線されている" do
     repo_root = Path.expand("../../..", __DIR__)
     compose = File.read!(Path.join(repo_root, "server/docker-compose.yaml"))
     dev_launcher = File.read!(Path.join(repo_root, "scripts/dev.sh"))
     env_example = File.read!(Path.join(repo_root, "server/.env.example"))
-    deployment = File.read!(Path.join(repo_root, "docs/specs/deployment.md"))
+    server_config = File.read!(Path.join(repo_root, "docs/reference/configuration/server.md"))
 
     for store <- PersistencePaths.stores() do
       volume_path = PersistencePaths.volume_path(store)
@@ -61,8 +61,8 @@ defmodule KaoiroServer.RuntimeConfigTest do
       assert env_example =~ "#{store.env}=#{volume_path}",
              "server/.env.example does not document #{store.env}"
 
-      assert deployment =~ "`#{store.env}`",
-             "docs/specs/deployment.md does not list #{store.env}"
+      assert server_config =~ "`#{store.env}`",
+             "docs/reference/configuration/server.md does not list #{store.env}"
     end
   end
 end
