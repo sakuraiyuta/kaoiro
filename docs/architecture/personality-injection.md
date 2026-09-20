@@ -2,7 +2,7 @@
 title: Personality-prompt injection
 description: Why each persona's manner of speech is injected into the engine SDK from a server-side pack, and what stays out of scope.
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-09-21
 related: [protocol, personas]
 ---
 
@@ -18,7 +18,10 @@ itself, it became valuable to give runtime conversations a consistent persona.
 This specification defines a mechanism to inject each persona's personality
 description (manner of speech, first-person pronoun, sentence endings, and
 response style) into the engine SDK (Claude uses `systemPrompt.append`; Codex
-uses `developer_instructions`; see “Injection into the SDK” below). It extends
+uses `developer_instructions`; Antigravity, which has no SDK, an always-on
+rules file in a per-agent customization directory —
+[ADR-0057](../adr/0057-antigravity-adapter.md) F3; see
+[Personality-prompt injection by engine](../reference/engines/personality-injection.md)). It extends
 [ADR-0003](../adr/0003-persona-identity-persistence.md) (persistence of persona
 identity) to ensure “the same persona speaks in the same **manner** across
 restarts.”
