@@ -91,6 +91,28 @@ describe("signalSubtree", () => {
     expect(signalSubtree(target, "SIGTERM")).toBe(false);
     spy.mockRestore();
   });
+
+  // issue #379 M4: a real ChildProcess.kill() already no-ops after exit
+  // (measured: returns false, no syscall), but process.kill(-pid, signal)
+  // has no such awareness -- a dead pid can be reused by an unrelated
+  // process/group. signalSubtree must refuse BEFORE attempting either path.
+  it("refuses to signal (either path) when the target already exited (exitCode set) (M4)", () => {
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const target = fakeProcess({ exitCode: 0 });
+    expect(signalSubtree(target, "SIGTERM")).toBe(false);
+    expect(killSpy).not.toHaveBeenCalled();
+    expect(target.killCalls).toEqual([]);
+    killSpy.mockRestore();
+  });
+
+  it("refuses to signal (either path) when the target already exited (signalCode set) (M4)", () => {
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const target = fakeProcess({ signalCode: "SIGTERM" });
+    expect(signalSubtree(target, "SIGKILL")).toBe(false);
+    expect(killSpy).not.toHaveBeenCalled();
+    expect(target.killCalls).toEqual([]);
+    killSpy.mockRestore();
+  });
 });
 
 describe("terminateWithGrace", () => {
@@ -111,6 +133,29 @@ describe("terminateWithGrace", () => {
     timers.advance(1);
     expect(spy).toHaveBeenCalledTimes(2);
     expect(spy).toHaveBeenNthCalledWith(2, -12345, "SIGKILL");
+    spy.mockRestore();
+  });
+
+  // issue #379 M4: the liveness check now lives in signalSubtree itself
+  // (single choke point), so calling terminateWithGrace on a target that
+  // is ALREADY dead at call time must send no SIGTERM and arm no timer --
+  // there is nothing left to escalate against.
+  it("sends no SIGTERM and arms no timer for a target already dead at call time (M4)", () => {
+    const timers = new FakeTimers();
+    const target = fakeProcess({ exitCode: 0 });
+    const spy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const handle = terminateWithGrace(target, {
+      graceMs: 1_000,
+      nowMs: () => timers.now,
+      setTimer: timers.set,
+      clearTimer: timers.clear,
+    });
+    expect(spy).not.toHaveBeenCalled();
+    expect(target.killCalls).toEqual([]);
+    timers.advance(1_000);
+    expect(spy).not.toHaveBeenCalled(); // no stray timer fired late
+    expect(() => handle.cancel()).not.toThrow();
+    expect(() => handle.shortenGraceTo(1)).not.toThrow();
     spy.mockRestore();
   });
 

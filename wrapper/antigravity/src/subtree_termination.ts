@@ -15,6 +15,14 @@ export interface TerminableProcess {
   kill(signal: NodeJS.Signals): boolean;
 }
 
+/** True when `target` has not yet exited, per its own `exitCode` /
+ *  `signalCode` (absent/undefined counts as alive, matching a real
+ *  `ChildProcess` before `exit` and a test fake that never tracks exit
+ *  state). */
+function isAlive(target: TerminableProcess): boolean {
+  return (target.exitCode ?? null) === null && (target.signalCode ?? null) === null;
+}
+
 /** Sends `signal` to the process GROUP (`process.kill(-pid, signal)`) when
  *  `pid` is known, so a grandchild the target spawned (e.g. a `run_command`
  *  promoted background task, issue #377) is reached too -- the production
@@ -23,8 +31,22 @@ export interface TerminableProcess {
  *  ESRCH, or a platform where negative-pid group signalling is not
  *  meaningful) so a caller never needs its own try/catch. Linux is the
  *  only platform this is verified on; the fallback keeps other platforms
- *  best-effort rather than throwing. */
+ *  best-effort rather than throwing.
+ *
+ *  Checks `isAlive(target)` FIRST, unconditionally (issue #379 M4): a
+ *  `ChildProcess`'s own `.kill()` already no-ops after `exit` (measured:
+ *  returns `false`, no syscall) because it tracks its own handle's
+ *  liveness, but `process.kill(-pid, signal)` is a raw OS-level call with
+ *  no such awareness -- once the process has actually exited, that pid (or
+ *  a process group sharing its number) can be reused by something
+ *  completely unrelated, and a signal sent to it then would hit that
+ *  unrelated target instead. This is the single choke point for every
+ *  caller (the initial SIGTERM, the SIGKILL escalation, and the
+ *  watchdog's direct SIGTERM/SIGKILL calls all route through here), so
+ *  fixing it once here closes the class rather than requiring every call
+ *  site to remember its own check. */
 export function signalSubtree(target: TerminableProcess, signal: NodeJS.Signals): boolean {
+  if (!isAlive(target)) return false;
   if (target.pid !== undefined) {
     try {
       process.kill(-target.pid, signal);
@@ -64,13 +86,15 @@ export interface GraceTerminationHandle {
 }
 
 /** Sends SIGTERM to `target` now (via `signalSubtree`) and arms a SIGKILL
- *  escalation after `graceMs` unless cancelled first. The escalation
- *  re-checks `target.exitCode` / `target.signalCode` immediately before
- *  signalling (issue #379 M3): if either is already non-null the target
- *  has exited and its pid may have been reused, so no signal is sent.
- *  Generic on purpose, not interrupt-specific -- issue #377 Stage 2
- *  (epoch termination) is expected to reuse this for the same "end this
- *  active child + its group, with a grace" operation. */
+ *  escalation after `graceMs` unless cancelled first. `signalSubtree`
+ *  itself re-checks liveness immediately before every signal it sends
+ *  (issue #379 M4), so a `target` that is already dead when this is
+ *  called -- or dies between the initial SIGTERM and the escalation --
+ *  never gets a raw pid-based signal that could reach a reused pid; when
+ *  it is already dead at call time, no timer is armed at all (nothing to
+ *  escalate). Generic on purpose, not interrupt-specific -- issue #377
+ *  Stage 2 (epoch termination) is expected to reuse this for the same
+ *  "end this active child + its group, with a grace" operation. */
 export function terminateWithGrace(
   target: TerminableProcess,
   options: GraceTerminationOptions,
@@ -81,17 +105,13 @@ export function terminateWithGrace(
 
   signalSubtree(target, "SIGTERM");
 
-  let fired = false;
+  let fired = !isAlive(target);
   let deadlineMs = nowMs() + options.graceMs;
-  let timer: unknown = setTimer(onFire, options.graceMs);
+  let timer: unknown = fired ? null : setTimer(onFire, options.graceMs);
 
   function onFire(): void {
     fired = true;
-    // Still alive (both null/undefined): escalate. Already exited: skip --
-    // signalling now could reach a reused pid instead of this target.
-    if ((target.exitCode ?? null) === null && (target.signalCode ?? null) === null) {
-      signalSubtree(target, "SIGKILL");
-    }
+    signalSubtree(target, "SIGKILL");
   }
 
   return {
