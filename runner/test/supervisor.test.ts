@@ -1385,6 +1385,50 @@ describe("Supervisor.handleResetSession (ADR-0036 F2, phase-17 17-5)", () => {
     }
   });
 
+  // issue #381: antigravity の reset_session 経路自体は他 engine と共通
+  // (#relaunchForReset) だが、`#antigravityLaunchable` gate を通した上での
+  // 正常系は今まで pin されていなかった。ここで pin する責務は relaunch の
+  // resumeSessionId が落ちることだけ — その後 wrapper (host.ts
+  // #turnArguments) が `--conversation` を付けないことは
+  // wrapper/antigravity/test/host.test.ts が別途 pin 済み。
+  it("Antigravity 正常 fresh relaunch: resume_session_id が落ちて fresh child が起動する", () => {
+    const h = harness({
+      exists: true,
+      antigravityExecutable: { ok: true, path: process.execPath },
+    });
+    const antigravityResumeMsg = {
+      ...spawnMsg,
+      agent_id: "lab-pc-1.antigravity-reset",
+      engine: "antigravity" as const,
+      resume_session_id: "66666666-7777-8888-9999-aaaaaaaaaaaa",
+    };
+    h.sup.handleSpawn(antigravityResumeMsg);
+    expect(h.resumes[0]).toBe(antigravityResumeMsg.resume_session_id);
+
+    h.sup.handleResetSession({
+      agent_id: antigravityResumeMsg.agent_id,
+      mode: "new",
+      request_id: "rs_agy_fresh",
+      previous_session_id: antigravityResumeMsg.resume_session_id,
+    });
+    expect(h.children[0]!.kills).toBe(1);
+    h.children[0]!.exit();
+
+    expect(h.children).toHaveLength(2);
+    expect(h.resumes[1]).toBeUndefined();
+
+    expect(h.resetResults).toHaveLength(1);
+    expect(h.resetResults[0]).toEqual({
+      version: "0",
+      host_id: "lab-pc-1",
+      agent_id: "lab-pc-1.antigravity-reset",
+      mode: "new",
+      request_id: "rs_agy_fresh",
+      ok: true,
+      to_session_id: null,
+    });
+  });
+
   it("正常 fresh relaunch: kill + fresh child spawn (resume なし) + ok=true / to_session_id=null 報告", () => {
     const h = harness();
     h.sup.handleSpawn(spawnMsg);

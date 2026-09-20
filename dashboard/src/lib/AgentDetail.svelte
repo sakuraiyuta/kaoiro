@@ -2390,18 +2390,30 @@
     // phase-17 17-8 (ADR-0036 F1): exact `/new`・`/clear` + no attachments
     // + capability=on for the requested mode → route to session_reset
     // control event, not send_instruction. Anything else (引数付き /
-    // attachment 付き / capability 未 stamp) falls through as normal.
+    // attachment 付き) falls through as normal.
     // Attachment presence is decided here (stagedFiles is the caller's
     // truth) and the helper is only asked about text + capability.
-    const resetTarget =
+    const reservedMode: SessionResetMode | null =
       stagedFiles.length === 0
-        ? shouldInterceptAsSessionReset(text, undefined, sessionCaps)
+        ? text === "/new" ? "new" : text === "/clear" ? "clear" : null
         : null;
+    const resetTarget =
+      reservedMode === null
+        ? null
+        : shouldInterceptAsSessionReset(text, undefined, sessionCaps);
     if (resetTarget !== null) {
       void run(async () => {
         await connection!.sendSessionReset(envelope.agent_id, resetTarget);
         instruction = "";
       });
+      return;
+    }
+    // issue #381: capability unstamped/false/conditional-off for the
+    // requested mode. Do not fall through to send_instruction — the server
+    // rejects an exact `/new`・`/clear` with the raw `reserved_session_command`
+    // reason (agents_channel.ex), which would otherwise surface verbatim.
+    if (reservedMode !== null) {
+      actionError = `このセッションでは ${text} は使えません`;
       return;
     }
     const entries = stagedFiles;

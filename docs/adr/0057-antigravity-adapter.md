@@ -444,6 +444,20 @@ Session enumeration
 (Stage B3) reads `~/.gemini/antigravity-cli/conversations/*.db`; history
 replay is Stage B2. Stage A ships with enumeration returning an empty list.
 
+`supports_session_reset: true` / `session_reset_modes: ["new", "clear"]`
+(issue #381): the agy CLI surface has no primitive that distinguishes the
+two, so both modes drive the same fresh-relaunch operation the runner
+already provides for every engine (`--conversation` dropped, a genuinely
+new agy conversation on the next turn). The visible difference between
+`new` and `clear` is entirely server-owned: `commit_connection`
+(`session_resets.ex`) runs `ClearWatermarks.record` +
+`AgentStates.clear_history_with_boundary` only for `clear`, and appends a
+plain boundary for `new`. Consequence: ADR-0036 F3's "resume the old
+session from the picker after `/clear`" does not hold for this engine in
+Stage A, since session enumeration returns an empty list (above); the
+underlying agy conversation db is not deleted, so this recovers once
+Stage B3 ships enumeration.
+
 ### F8 — Documents that change with the trust story
 
 threat-model.md gains a section for this engine (engine prompts disabled

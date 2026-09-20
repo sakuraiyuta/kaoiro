@@ -1,7 +1,7 @@
 ---
 title: Session capabilities contract
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-09-21
 description: The ext.session_capabilities shape, stamp timing, and per-engine advertised values.
 ---
 
@@ -52,7 +52,10 @@ cannot represent.
     `false` when attachments were added in phase-14)
   - `wrapper/antigravity`: `supports_attachments: false` /
     `supports_user_input_dialog: true` / `supports_model_switch: true` /
-    `supports_effort_switch: false` / `supports_context_usage: false`
+    `supports_effort_switch: false` / `supports_context_usage: false` /
+    `supports_session_reset: true` / `session_reset_modes: ["new", "clear"]`
+    (unconditional from Stage A, issue #381; both modes drive the same
+    fresh-relaunch operation for this engine — [ADR-0057](../../adr/0057-antigravity-adapter.md) F7)
 - **`supports_model_switch` / `supports_effort_switch`** (implemented in
   phase-16, 2026-07-13, [ADR-0035](../../adr/0035-codex-model-catalog-and-mid-session-switch.md)
   F4): Advertise whether `set_model` / `set_effort` are accepted mid-session.
