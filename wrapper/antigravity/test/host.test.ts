@@ -84,6 +84,8 @@ function hostHarness(options: {
   const interruptRequests: Array<Parameters<NonNullable<AntigravityHostOptions["onInterruptRequested"]>>[0]> = [];
   const interruptSettlements: Array<Parameters<NonNullable<AntigravityHostOptions["onInterruptSettled"]>>[0]> = [];
   const sendRejections: Array<Parameters<NonNullable<AntigravityHostOptions["onSendRejected"]>>[0]> = [];
+  const outOfTurnEvents: Array<Parameters<NonNullable<AntigravityHostOptions["onOutOfTurnEvent"]>>[0]> = [];
+  const epochEnded: Array<Parameters<NonNullable<AntigravityHostOptions["onEpochEnded"]>>[0]> = [];
   const cfg = options.config ?? config();
   const broker = new PermissionBroker({ config: cfg, send: () => {} });
   const host = new AntigravityHost(cfg, {
@@ -118,13 +120,15 @@ function hostHarness(options: {
       options.onInterruptSettled?.(info);
     },
     onSendRejected: (info) => sendRejections.push(info),
+    onOutOfTurnEvent: (info) => outOfTurnEvents.push(info),
+    onEpochEnded: (info) => epochEnded.push(info),
     spawn: (command, args, spawnOptions) => {
       const child = new FakeAgy();
       calls.push({ command, args, env: spawnOptions.env, child });
       return child as unknown as SpawnedAgy;
     },
   });
-  return { host, states, logs, calls, permissionLifecycle, turnEnds, interruptRequests, interruptSettlements, sendRejections };
+  return { host, states, logs, calls, permissionLifecycle, turnEnds, interruptRequests, interruptSettlements, sendRejections, outOfTurnEvents, epochEnded };
 }
 
 describe("AntigravityHost", () => {
@@ -735,15 +739,20 @@ if (args[0] === "models") {
   const customization = args[args.lastIndexOf("--add-dir") + 1];
   process.stdout.write(JSON.stringify({ hooks: [{ source: customization + "/.agents/hooks.json", actions: [{ event: "PreToolUse", matcher: "*", command: ${JSON.stringify(hook)}, timeout_seconds: 3600 }] }] }));
 } else if (args[0] === "--print") {
-  // issue #377 Stage 1: the real prompt arrives as one NDJSON line on
+  // issue #377 Stage 1/2: the real prompt arrives as one NDJSON line on
   // stdin (--input-format stream-json), not as an argv positional; echo
   // its content back so this pin proves the real default-spawn path
   // (real OS process, detached process group, real pipes) delivers it.
+  // issue #377 Stage 2: stdin is never closed (an epoch's process outlives
+  // its first turn), so respond on the first complete line instead of
+  // waiting for "end".
   let input = "";
   process.stdin.setEncoding("utf8");
-  process.stdin.on("data", (chunk) => { input += chunk; });
-  process.stdin.on("end", () => {
-    const line = JSON.parse(input.trim());
+  process.stdin.on("data", (chunk) => {
+    input += chunk;
+    const newline = input.indexOf("\\n");
+    if (newline === -1) return;
+    const line = JSON.parse(input.slice(0, newline));
     process.stdout.write(JSON.stringify({ event: "result", result: { status: "SUCCESS", response: line.message.content } }) + "\\n");
   });
 } else {
@@ -814,7 +823,7 @@ if (args[0] === "models") {
     // issue #377 Stage 1: the prompt travels over stdin, not argv.
     expect(call.args).toEqual(expect.arrayContaining([
       "--print", "", "--input-format", "stream-json", "--output-format", "stream-json",
-      "--print-timeout", "24h", "--disable-slash-commands", "--dangerously-skip-permissions",
+      "--print-timeout", "0", "--disable-slash-commands", "--dangerously-skip-permissions",
     ]));
     expect(call.args).not.toContain("hello");
     const addDirIndexes = call.args.flatMap((arg, index) => arg === "--add-dir" ? [index] : []);
@@ -828,7 +837,10 @@ if (args[0] === "models") {
     // deferred (Node schedules the flowing-mode transition), so polling
     // `writableEnded` alone can observe it true before the chunk arrives.
     await waitFor(() => writtenToStdin.includes("\n"));
-    expect(call.child.stdin.writableEnded).toBe(true);
+    // issue #377 Stage 2: stdin stays open across turns -- an epoch's
+    // process outlives its first turn, so `#deliverTurnInput` no longer
+    // calls `.end()` (Stage 1 did).
+    expect(call.child.stdin.writableEnded).toBe(false);
     const stdinLines = writtenToStdin.split("\n").filter((line) => line !== "");
     expect(stdinLines).toHaveLength(1);
     expect(JSON.parse(stdinLines[0]!)).toEqual({ event: "user", message: { role: "user", content: "hello" } });
@@ -877,8 +889,11 @@ if (args[0] === "models") {
     await waitFor(() => calls.length === 1);
     // Wait past the stdin-delivery ack (issue #377 Stage 1 M4) before
     // closing, so this pins a clean exit with no result -- not the
-    // separate epoch_exit_before_turn race pinned below.
-    await waitFor(() => calls[0]!.child.stdin.writableEnded);
+    // separate epoch_exit_before_turn race pinned below. issue #377 Stage
+    // 2: stdin is never ended, so wait for the actual write instead.
+    let delivered = false;
+    calls[0]!.child.stdin.once("data", () => { delivered = true; });
+    await waitFor(() => delivered);
     calls[0]!.child.finish();
     await waitFor(() => logs.some((envelope) => envelope.type === "result"));
     expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ is_error: true, error_detail: "agy_exit_without_result" });
@@ -997,7 +1012,10 @@ if (args[0] === "models") {
     await host.send("hello");
     await waitFor(() => calls.length === 1);
     const child = calls[0]!.child;
-    child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"must not publish"}}\n');
+    // In-turn (before this turn's own result), matching the sibling F4b
+    // tests above -- issue #377 Stage 2 M4(c) routes the SAME mismatch
+    // arriving AFTER a result as an out-of-turn log instead, covered by the
+    // dedicated out-of-turn tests below.
     child.stdout.write('{"event":"step_update","step_update":{"step_index":2,"state":"DONE","step_type":"tool","tool_name":"future_vendor_tool","tool_info":{"name":"run_command","output":"done"}}}\n');
     await waitFor(() => child.killed === "SIGTERM");
     child.finish();
@@ -1006,51 +1024,102 @@ if (args[0] === "models") {
     host.close();
   });
 
-  it("child exit後のlate tool completionをstdout EOFまで待ってfail-stopにする", async () => {
-    const { host, logs, calls } = hostHarness();
+  // issue #377 Stage 2: a turn's own completion is now its `result` event on
+  // the epoch's shared stream, not the process draining to exit (Stage 1's
+  // model, which these two tests originally pinned) -- an epoch persists
+  // across turns, so waiting for process exit would defeat the whole point
+  // of reuse. A stray stream event arriving AFTER a turn's own `result` is
+  // therefore out-of-turn (logged, not retroactively correlated); a
+  // gate-correlation failure detected WHILE a turn is still in flight (the
+  // scenario that actually matters -- issue #377's background-task
+  // promotion is exactly a completion arriving late) is unaffected: it is
+  // still detected the moment it arrives, still outranks any later kill
+  // failure, and still ends the epoch.
+  it("a stray tool completion after a turn's own result is logged as out-of-turn, not retroactively correlated", async () => {
+    const toolStarts: string[] = [];
+    const { host, logs, calls, outOfTurnEvents, states } = hostHarness({
+      onToolStart: (info) => toolStarts.push(info.turnToken),
+    });
     await host.send("hello");
     await waitFor(() => calls.length === 1);
     const child = calls[0]!.child;
-    child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"must not publish"}}\n');
-    child.emit("exit", 0, null);
-    await new Promise((resolve) => setTimeout(resolve, 1));
-    expect(logs).not.toContainEqual(expect.objectContaining({ type: "result" }));
-    child.stdout.write('{"event":"step_update","step_update":{"step_index":2,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
-    await waitFor(() => child.killed === "SIGTERM");
-    const stdoutEnded = new Promise<void>((resolve) => child.stdout.once("end", () => resolve()));
-    child.stdout.end();
-    await stdoutEnded;
-    expect(logs).not.toContainEqual(expect.objectContaining({ type: "result" }));
-    child.emit("close", 0, null);
+    child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
     await waitFor(() => logs.some((envelope) => envelope.type === "result"));
-    expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ error_detail: "antigravity_gate_unobserved_tool:run_command" });
-    await host.send("must not spawn");
+    expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ text: "done" });
+    const statesBefore = states.length;
+    // A tool DONE that was never observed as ACTIVE would be a
+    // gate-correlation failure IN TURN -- here it arrives once the turn has
+    // already settled, so no turn owns the stream to correlate it against.
+    child.stdout.write('{"event":"step_update","step_update":{"step_index":2,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
+    await waitFor(() => outOfTurnEvents.length === 1);
+    expect(outOfTurnEvents[0]).toEqual({ eventKind: "step_update", stepIndex: 2, stepType: "tool", state: "DONE" });
+    // No state change and no onToolStart -- the event changes nothing.
+    expect(states.length).toBe(statesBefore);
+    expect(toolStarts).toEqual([]);
+    expect(child.killed).toBeUndefined();
+    // The epoch stays alive -- the next turn reuses the same process.
+    await host.send("again");
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(calls).toHaveLength(1);
     host.close();
   });
 
-  it("child error後の未観測tool完了はclose時にgate errorを優先してfreezeする", async () => {
+  it("a stray event appended in the SAME stdout chunk as a turn's own result is still out-of-turn, not projected onto the ended turn", async () => {
+    // issue #377 Stage 2 review finding: `readableLines` drains every line
+    // already buffered in one `data` chunk synchronously, back to back, with
+    // no microtask yield between them -- so a single write carrying this
+    // turn's `result` immediately followed by a stray tool-completion line
+    // must not let the stray line see the just-ended turn as still in
+    // flight. The prior test above proves the SEPARATE-write case (a real
+    // gap lets `#runTurn`'s microtask clear `#inFlightTurn` first); this one
+    // proves the same-chunk case, where that microtask cannot have run yet.
+    const toolStarts: string[] = [];
+    const { host, logs, calls, outOfTurnEvents, states } = hostHarness({
+      onToolStart: (info) => toolStarts.push(info.turnToken),
+    });
+    await host.send("hello");
+    await waitFor(() => calls.length === 1);
+    const child = calls[0]!.child;
+    child.stdout.write(
+      '{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n' +
+        '{"event":"step_update","step_update":{"step_index":2,"state":"ACTIVE","step_type":"tool","tool_name":"run_command"}}\n',
+    );
+    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
+    expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ text: "done" });
+    await waitFor(() => outOfTurnEvents.length === 1);
+    expect(outOfTurnEvents[0]).toEqual({ eventKind: "step_update", stepIndex: 2, stepType: "tool", state: "ACTIVE" });
+    // The turn's own result and the stray ACTIVE arrive in ONE synchronous
+    // chunk flush, so there is no intermediate checkpoint to snapshot a
+    // "before" state count against -- assert directly that the leaked event
+    // never drove the machine into tool_running instead.
+    expect(states.some((envelope) => (envelope as { state?: string }).state === "tool_running")).toBe(false);
+    expect(toolStarts).toEqual([]);
+    // A DONE half-cycle would previously have set #gateBroken -- confirm the
+    // epoch is still healthy and a following turn is not rejected.
+    expect(child.killed).toBeUndefined();
+    await host.send("again");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(calls).toHaveLength(1);
+    host.close();
+  });
+
+  it("a kill failure after an in-turn gate-correlation violation still reports the gate error, not the kill error", async () => {
     const { host, logs, calls } = hostHarness();
     await host.send("hello");
     await waitFor(() => calls.length === 1);
     const child = calls[0]!.child;
-    child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"must not publish"}}\n');
+    // An unobserved tool completion, still in-turn (before this turn's own
+    // result) -- triggers the correlation-failure kill.
     child.stdout.write('{"event":"step_update","step_update":{"step_index":2,"state":"DONE","step_type":"tool","tool_name":"run_command"}}\n');
     await waitFor(() => child.killed === "SIGTERM");
+    // The kill itself errors (e.g. ESRCH) -- must not surface as the turn's
+    // own error ahead of the gate-correlation detail.
     child.emit("error", new Error("kill failed"));
     await new Promise((resolve) => setTimeout(resolve, 1));
     expect(logs).not.toContainEqual(expect.objectContaining({ type: "result" }));
-    const stdoutEnded = new Promise<void>((resolve) => child.stdout.once("end", () => resolve()));
-    child.stdout.end();
-    await stdoutEnded;
-    expect(logs).not.toContainEqual(expect.objectContaining({ type: "result" }));
-    child.emit("close", 0, null);
+    child.finish();
     await waitFor(() => logs.some((envelope) => envelope.type === "result"));
     expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ error_detail: "antigravity_gate_unobserved_tool:run_command" });
-    await host.send("must not spawn");
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(calls).toHaveLength(1);
     host.close();
   });
 
@@ -1083,15 +1152,16 @@ if (args[0] === "models") {
     host.close();
   });
 
-  it("vendor resultはturn integrityが通るまでrelayしない", async () => {
+  it("issue #377 Stage 2: a turn's result publishes on its own result event, not on process exit", async () => {
     const { host, logs, calls } = hostHarness();
     await host.send("hello");
     await waitFor(() => calls.length === 1);
     calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
-    await new Promise((resolve) => setTimeout(resolve, 1));
-    expect(logs).not.toContainEqual(expect.objectContaining({ type: "result" }));
-    calls[0]!.child.finish();
     await waitFor(() => logs.some((envelope) => envelope.type === "result"));
+    expect(logs.find((envelope) => envelope.type === "result")?.payload).toMatchObject({ text: "done" });
+    // The epoch's process is still alive -- Stage 2 does not kill it
+    // between turns (unlike Stage 1, which spawned fresh every turn).
+    expect(calls[0]!.child.killed).toBeUndefined();
     host.close();
   });
 
@@ -2009,7 +2079,7 @@ if (args[0] === "models") {
       vi.unstubAllEnvs();
     });
 
-    it("spawns agy with git/ssh prompts disabled and stdin closed", async () => {
+    it("spawns agy with git/ssh prompts disabled", async () => {
       vi.stubEnv("GIT_SSH_COMMAND", "");
       const { host, calls } = hostHarness();
       await host.send("hello");
@@ -2019,8 +2089,6 @@ if (args[0] === "models") {
         SSH_ASKPASS_REQUIRE: "never",
         GIT_SSH_COMMAND: "ssh -o BatchMode=yes",
       });
-      await waitFor(() => calls[0]!.child.stdin.writableEnded);
-      expect(calls[0]!.child.stdin.writableEnded).toBe(true);
       host.close();
     });
 
@@ -2443,6 +2511,381 @@ if (args[0] === "models") {
       const end = turnEnds.find((e) => e.turnToken === "turn-1")!;
       expect(end.error).toEqual({ detail: "epoch_exit_before_turn" });
       h.close();
+    });
+
+    it("a step_update arriving after a turn has already settled fires neither onToolStart nor an onState change", async () => {
+      const toolStarts: string[] = [];
+      const turnEnds: Array<Parameters<NonNullable<AntigravityHostOptions["onTurnEnd"]>>[0]> = [];
+      const states: string[] = [];
+      let rawChild!: RacyStdinAgy;
+      const cfg = config();
+      const h = new AntigravityHost(cfg, {
+        cwd: process.cwd(), appendSystemPrompt: "persona",
+        permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
+        onState: (envelope) => states.push(envelope.state), onLog: () => {},
+        runtimeAssetsAvailable: () => true, verifyGate: async () => true,
+        agyPath: "/test/agy",
+        onTurnEnd: (info) => turnEnds.push(info),
+        onToolStart: (info) => toolStarts.push(info.turnToken),
+        spawn: () => {
+          const child = new RacyStdinAgy();
+          child.onWrite = (callback) => queueMicrotask(() => callback(new Error("EPIPE")));
+          rawChild = child;
+          return child as unknown as SpawnedAgy;
+        },
+      });
+      await h.send("hello", undefined, [], "turn-1");
+      await waitFor(() => turnEnds.some((end) => end.turnToken === "turn-1"));
+      const statesBefore = states.length;
+      // issue #377 Stage 2: the turn already settled as epoch_exit_before_turn
+      // (no #inFlightTurn owns the stream anymore) -- a stray step_update now
+      // is out-of-turn and must not be projected onto anything.
+      rawChild.stdout.write('{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command"}}}\n');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(toolStarts).toEqual([]);
+      expect(states.length).toBe(statesBefore);
+      h.close();
+    });
+  });
+
+  describe("issue #377 Stage 2 (epoch lifetime)", () => {
+    it("two sends against an idle epoch spawn once and deliver two lines, the second only after the first turn's result", async () => {
+      const { host, calls } = hostHarness();
+      const writes: string[] = [];
+      await host.send("first");
+      await waitFor(() => calls.length === 1);
+      const child = calls[0]!.child;
+      child.stdin.on("data", (chunk: Buffer) => writes.push(chunk.toString("utf8")));
+      await waitFor(() => writes.length === 1);
+      expect(JSON.parse(writes[0]!.trim())).toEqual({ event: "user", message: { role: "user", content: "first" } });
+      // Negative control: queuing the second turn now must not write its
+      // line before the first turn's own result, and must not spawn a
+      // second process.
+      void host.send("second");
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(calls).toHaveLength(1);
+      expect(writes).toHaveLength(1);
+      child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"one"}}\n');
+      await waitFor(() => writes.length === 2);
+      expect(calls).toHaveLength(1);
+      expect(JSON.parse(writes[1]!.trim())).toEqual({ event: "user", message: { role: "user", content: "second" } });
+      child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"two"}}\n');
+      host.close();
+    });
+
+    it("M6: the epoch adopts its own conversation id from its own init, so turn 2 does not spuriously respawn", async () => {
+      // A fresh epoch spawns with conversationId: null; only once its OWN
+      // init confirms the engine session id must the recorded spec pick it
+      // up too -- otherwise turn 2's freshly computed spec (which reads the
+      // now-confirmed #sessionId) would permanently mismatch the epoch's
+      // still-null recorded spec, forcing a respawn on every turn 2.
+      const { host, calls } = hostHarness();
+      await host.send("first");
+      await waitFor(() => calls.length === 1);
+      expect(calls[0]!.args).not.toContain("--conversation");
+      calls[0]!.child.stdout.write('{"event":"init","conversation_id":"cid-m6","init":{"tools":[]}}\n');
+      calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"one"}}\n');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      let writtenToStdin = "";
+      calls[0]!.child.stdin.on("data", (chunk: Buffer) => { writtenToStdin += chunk.toString("utf8"); });
+      await host.send("second");
+      await waitFor(() => writtenToStdin.includes("second"));
+      // No respawn -- same process, same epoch.
+      expect(calls).toHaveLength(1);
+      host.close();
+    });
+
+    it("interrupt ends the epoch; the next send respawns with --conversation for the same session", async () => {
+      const { host, calls, turnEnds } = hostHarness();
+      await host.send("first");
+      await waitFor(() => calls.length === 1);
+      calls[0]!.child.stdout.write('{"event":"init","conversation_id":"cid-respawn","init":{"tools":[]}}\n');
+      calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"one"}}\n');
+      await waitFor(() => turnEnds.length === 1);
+      // Idle now (turn 1 settled) -- interrupt() must still end the live
+      // epoch, unlike Stage 1 where idle meant no process existed at all.
+      await host.interrupt();
+      await waitFor(() => calls[0]!.child.killed === "SIGTERM");
+      calls[0]!.child.finish();
+      await host.send("second");
+      await waitFor(() => calls.length === 2);
+      expect(calls[1]!.args).toEqual(expect.arrayContaining(["--conversation", "cid-respawn"]));
+      host.close();
+    });
+
+    it("a send queued while the interrupted epoch is still dying waits it out and respawns, even though its spec still matches", async () => {
+      const { host, calls, turnEnds } = hostHarness();
+      await host.send("first");
+      await waitFor(() => calls.length === 1);
+      calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"one"}}\n');
+      await waitFor(() => turnEnds.length === 1);
+      // Interrupt the idle epoch, but do NOT simulate its death yet -- the
+      // second send is queued while `#epoch` is still the SAME (dying)
+      // object, with a matching spec. Reusing it here would deliver a line
+      // to a process that is already being killed.
+      await host.interrupt();
+      await waitFor(() => calls[0]!.child.killed === "SIGTERM");
+      await host.send("second");
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(calls).toHaveLength(1);
+      calls[0]!.child.finish();
+      await waitFor(() => calls.length === 2);
+      let writtenToStdin = "";
+      calls[1]!.child.stdin.on("data", (chunk: Buffer) => { writtenToStdin += chunk.toString("utf8"); });
+      await waitFor(() => writtenToStdin.includes("second"));
+      host.close();
+    });
+
+    it("a rolled-back model switch respawns on the next turn; the turn after that (same spec) does not (negative control)", async () => {
+      const cfg = config({ model: "model-a", model_source: "config" });
+      const { host, calls } = hostHarness({ config: cfg });
+      await host.setModel("model-b");
+      await host.send("first");
+      await waitFor(() => calls.length === 1);
+      expect(calls[0]!.args).toEqual(expect.arrayContaining(["--model", "model-b"]));
+      calls[0]!.child.stdout.write('{"event":"result","result":{"status":"ERROR","error":"bad model"}}\n');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      // The rollback (is_error) does not itself end the epoch -- only the
+      // NEXT turn's dequeue notices the spec no longer matches.
+      expect(calls).toHaveLength(1);
+      await host.send("second");
+      // The spec mismatch ends the OLD epoch first (SIGTERM); the fixture
+      // must actually "die" for that grace-bounded end to resolve before
+      // the new epoch spawns.
+      await waitFor(() => calls[0]!.child.killed === "SIGTERM");
+      calls[0]!.child.finish();
+      await waitFor(() => calls.length === 2);
+      expect(calls[1]!.args).toEqual(expect.arrayContaining(["--model", "model-a"]));
+      // Attach before turn 2's own delivery so buffered vs. live delivery
+      // order cannot make an exact write count racy; match on content
+      // instead.
+      let writtenToStdin = "";
+      calls[1]!.child.stdin.on("data", (chunk: Buffer) => { writtenToStdin += chunk.toString("utf8"); });
+      calls[1]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
+      // Negative control: a third turn under the identical (now-restored)
+      // spec reuses the same epoch -- no second respawn.
+      await host.send("third");
+      await waitFor(() => writtenToStdin.includes("third"));
+      expect(calls).toHaveLength(2);
+      host.close();
+    });
+
+    it("an effort change respawns on the next turn", async () => {
+      const cfg = config({ effort: "low" });
+      const { host, calls } = hostHarness({ config: cfg });
+      await host.send("first");
+      await waitFor(() => calls.length === 1);
+      expect(calls[0]!.args).toEqual(expect.arrayContaining(["--effort", "low"]));
+      calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"one"}}\n');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      // The host has no live effort-switch API yet (Stage A); mutate the
+      // shared config object directly, matching how the wrapper itself
+      // would apply a resolved config change between turns.
+      (cfg as { effort?: string }).effort = "high";
+      await host.send("second");
+      await waitFor(() => calls[0]!.child.killed === "SIGTERM");
+      calls[0]!.child.finish();
+      await waitFor(() => calls.length === 2);
+      expect(calls[1]!.args).toEqual(expect.arrayContaining(["--effort", "high"]));
+      host.close();
+    });
+
+    it("an unsolicited idle exit logs epoch_ended{idle_exit}; the next send respawns", async () => {
+      const { host, calls, epochEnded } = hostHarness();
+      await host.send("first");
+      await waitFor(() => calls.length === 1);
+      calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"one"}}\n');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(calls).toHaveLength(1);
+      // Idle now -- the process exits on its own (print-timeout / crash /
+      // quota), unrequested.
+      calls[0]!.child.finish();
+      await waitFor(() => epochEnded.length === 1);
+      expect(epochEnded[0]).toMatchObject({ reason: "idle_exit", code: 0, turns: 1 });
+      await host.send("second");
+      await waitFor(() => calls.length === 2);
+      host.close();
+    });
+
+    it("a permission switch applied between turn 1 and turn 2 uses setGate on the live epoch, with no respawn", async () => {
+      const cfg: AntigravityLaunchConfig = {
+        ...config({ approval: "on-request", max_sandbox: "workspace-write", max_approval: "local", max_network_access: false }),
+      };
+      const { host, calls, permissionLifecycle } = hostHarness({ config: cfg });
+      await host.send("first", undefined, [], "turn-1");
+      await waitFor(() => calls.length === 1);
+      calls[0]!.child.stdout.write('{"event":"init","conversation_id":"cid-switch","init":{"tools":[]}}\n');
+      calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"one"}}\n');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      await host.setPermission({
+        revision: 2,
+        requested: { sandbox: "workspace-write", network_access: false, approval: "local" },
+      });
+      await host.send("second", undefined, [], "turn-2");
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      // Negative control: no stream event for turn-2 has arrived yet, so
+      // the switch is still `applying`, not `applied`.
+      expect(permissionLifecycle).toHaveLength(0);
+      expect(calls).toHaveLength(1);
+      calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"hi"}}\n');
+      await waitFor(() => permissionLifecycle.length === 1);
+      const applied = permissionLifecycle[0] as Record<string, any>;
+      expect(applied.kind).toBe("permission_applied");
+      expect(applied.details.permission.approval).toBe("local");
+      expect(applied.details.session_id).toBe("cid-switch");
+      expect(applied.details).not.toHaveProperty("turn_id");
+      expect(applied.details.execution_id).toBe("turn-2");
+      calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"two"}}\n');
+      expect(calls).toHaveLength(1);
+      host.close();
+    });
+
+    it("a permission switch applied confirms even when the turn's own first (and only) stream event is result", async () => {
+      // issue #377 Stage 2 review finding: M1's confirmation must be
+      // type-agnostic -- it must fire on the FIRST stream event of the turn
+      // after a mid-epoch swap "whatever its type", including a bare
+      // `result` with no preceding step_update. The sibling test above only
+      // ever exercises a `step_update` as that first event.
+      const cfg: AntigravityLaunchConfig = {
+        ...config({ approval: "on-request", max_sandbox: "workspace-write", max_approval: "local", max_network_access: false }),
+      };
+      const { host, calls, permissionLifecycle } = hostHarness({ config: cfg });
+      await host.send("first", undefined, [], "turn-1");
+      await waitFor(() => calls.length === 1);
+      calls[0]!.child.stdout.write('{"event":"init","conversation_id":"cid-switch-2","init":{"tools":[]}}\n');
+      calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"one"}}\n');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      await host.setPermission({
+        revision: 2,
+        requested: { sandbox: "workspace-write", network_access: false, approval: "local" },
+      });
+      await host.send("second", undefined, [], "turn-2");
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(permissionLifecycle).toHaveLength(0);
+      calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"two"}}\n');
+      await waitFor(() => permissionLifecycle.length === 1);
+      const applied = permissionLifecycle[0] as Record<string, any>;
+      expect(applied.kind).toBe("permission_applied");
+      expect(applied.details.execution_id).toBe("turn-2");
+      expect(calls).toHaveLength(1);
+      host.close();
+    });
+
+    it("a watchdog tool-timeout SIGTERM ends the epoch with reason watchdog", async () => {
+      const { host, calls, epochEnded } = hostHarness();
+      await host.send("hello", undefined, [], "turn-1");
+      await waitFor(() => calls.length === 1);
+      expect(host.requestInterruptForTurn("turn-1", {
+        kind: "tool_timeout", stepIndex: 1, toolName: "run_command", elapsedMs: 999_999, toolTimeoutMs: 1,
+      })).toBe(true);
+      await waitFor(() => calls[0]!.child.killed === "SIGTERM");
+      calls[0]!.child.finish();
+      await waitFor(() => epochEnded.length === 1);
+      expect(epochEnded[0]).toMatchObject({ reason: "watchdog" });
+      host.close();
+    });
+
+    describe("M7 (idle TTL)", () => {
+      /** Mirrors turn_watchdog.test.ts's FakeTimers -- a controllable
+       *  setTimeout/clearTimeout pair so the idle-TTL pins do not depend on
+       *  real wall-clock waits. */
+      class FakeTimers {
+        now = 0;
+        #next = 0;
+        #timers = new Map<number, { at: number; callback: () => void }>();
+        set = (callback: () => void, delayMs: number): number => {
+          const id = ++this.#next;
+          this.#timers.set(id, { at: this.now + delayMs, callback });
+          return id;
+        };
+        clear = (timer: unknown): void => {
+          this.#timers.delete(timer as number);
+        };
+        advance(ms: number): void {
+          const target = this.now + ms;
+          while (true) {
+            const due = [...this.#timers.entries()]
+              .filter(([, timer]) => timer.at <= target)
+              .sort((left, right) => left[1].at - right[1].at)[0];
+            if (due === undefined) break;
+            this.#timers.delete(due[0]);
+            this.now = due[1].at;
+            due[1].callback();
+          }
+          this.now = target;
+        }
+      }
+
+      it("ends an idle epoch with idle_ttl once the TTL elapses after a turn settles", async () => {
+        const timers = new FakeTimers();
+        const epochEnded: Array<Parameters<NonNullable<AntigravityHostOptions["onEpochEnded"]>>[0]> = [];
+        const turnEnds: Array<Parameters<NonNullable<AntigravityHostOptions["onTurnEnd"]>>[0]> = [];
+        const calls: FakeAgy[] = [];
+        const cfg = config();
+        const host = new AntigravityHost(cfg, {
+          cwd: process.cwd(), appendSystemPrompt: "persona",
+          permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
+          onState: () => {}, onLog: () => {},
+          runtimeAssetsAvailable: () => true, verifyGate: async () => true,
+          agyPath: "/test/agy",
+          epochIdleMs: 1_000,
+          epochIdleSetTimer: timers.set,
+          epochIdleClearTimer: timers.clear,
+          onEpochEnded: (info) => epochEnded.push(info),
+          onTurnEnd: (info) => turnEnds.push(info),
+          spawn: () => { const child = new FakeAgy(); calls.push(child); return child as unknown as SpawnedAgy; },
+        });
+        await host.send("hello");
+        await waitFor(() => calls.length === 1);
+        calls[0]!.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
+        await waitFor(() => turnEnds.length === 1);
+        // Re-armed only after the result -- just short of the TTL, nothing
+        // fires yet.
+        timers.advance(999);
+        expect(epochEnded).toEqual([]);
+        timers.advance(1);
+        await waitFor(() => calls[0]!.killed === "SIGTERM");
+        calls[0]!.finish();
+        await waitFor(() => epochEnded.length === 1);
+        expect(epochEnded[0]).toMatchObject({ reason: "idle_ttl", turns: 1 });
+        host.close();
+      });
+
+      it("negative control: a turn's own dequeue clears the TTL before its ack, so it cannot fire before that turn completes", async () => {
+        const timers = new FakeTimers();
+        const epochEnded: Array<Parameters<NonNullable<AntigravityHostOptions["onEpochEnded"]>>[0]> = [];
+        const turnEnds: Array<Parameters<NonNullable<AntigravityHostOptions["onTurnEnd"]>>[0]> = [];
+        const calls: FakeAgy[] = [];
+        const cfg = config();
+        const host = new AntigravityHost(cfg, {
+          cwd: process.cwd(), appendSystemPrompt: "persona",
+          permissionBroker: new PermissionBroker({ config: cfg, send: () => {} }),
+          onState: () => {}, onLog: () => {},
+          runtimeAssetsAvailable: () => true, verifyGate: async () => true,
+          agyPath: "/test/agy",
+          epochIdleMs: 1_000,
+          epochIdleSetTimer: timers.set,
+          epochIdleClearTimer: timers.clear,
+          onEpochEnded: (info) => epochEnded.push(info),
+          onTurnEnd: (info) => turnEnds.push(info),
+          spawn: () => { const child = new FakeAgy(); calls.push(child); return child as unknown as SpawnedAgy; },
+        });
+        await host.send("first");
+        await waitFor(() => calls.length === 1);
+        calls[0]!.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"one"}}\n');
+        await waitFor(() => turnEnds.length === 1);
+        // The TTL is now armed (idle after turn 1). Dequeuing turn 2 clears
+        // it immediately, before turn 2's own ack -- advancing the clock
+        // well past the TTL here must not touch the in-flight turn.
+        await host.send("second");
+        timers.advance(10_000);
+        expect(epochEnded).toEqual([]);
+        expect(calls[0]!.killed).toBeUndefined();
+        calls[0]!.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"two"}}\n');
+        await waitFor(() => turnEnds.length === 2);
+        expect(calls).toHaveLength(1);
+        host.close();
+      });
     });
   });
 });

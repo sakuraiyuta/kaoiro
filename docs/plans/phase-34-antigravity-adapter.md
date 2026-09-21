@@ -102,7 +102,7 @@ the prompt off argv onto `--input-format stream-json` stdin, in two stages
 | # | Task | Notes |
 |---|---|---|
 | C1 | Stage 1 — prompt delivered as one NDJSON stdin line, still one `agy` process per turn; delivery-ack point moved to a confirmed stdin write (`epoch_exit_before_turn` on the write/close race); gate step-correlation ledger moved from `AntigravityGate` to `GateServer` (`setGate()` added for Stage 2) | Done. ADR-0057 F2 / F4b / F5a |
-| C2 | Stage 2 — "epoch" process model: one `agy` process spans several turns (lazy spawn, `EpochSpec` argv-tuple identity, epoch-end reasons, permission-switch-by-`setGate()` mid-epoch, idle TTL) | Not started; needs #379's subtree-kill helper for epoch termination |
+| C2 | Stage 2 — "epoch" process model: one `agy` process spans several turns (lazy spawn, `EpochSpec` argv-tuple identity, epoch-end reasons, permission-switch-by-`setGate()` mid-epoch, idle TTL) | Implemented, pending implementation review and landing. ADR-0057 F2 / F3 / F4b / F5a; reuses #379's subtree-kill helper for epoch termination |
 
 ## Open Questions Blocking This Phase
 

@@ -144,6 +144,11 @@ the CLI backgrounded the child and the print timeout ended the turn)*.
 the tool host, then sends the `agy` child one `SIGTERM` — killing the
 process was already reliable *(measured on production: agy and every hook
 child gone within tens of ms of the signal in all three reproduced cases)*.
+Since issue #377 Stage 2 this ends the whole EPOCH, not just the active
+turn: an idle `interrupt()` (no turn in flight) now has a live process to
+stop, where Stage 1's per-turn process meant idle already meant no process
+existed. The next `send()` respawns with `--conversation <id>` for the
+same session ([ADR-0057 F2](../../adr/0057-antigravity-adapter.md#f2--process-model-one-agy-process-per-epoch-prompt-over-stdin-sigterm-to-end-it)).
 What was missing was settlement: the state machine stayed at whatever the
 last applied event left (`sending`, `tool_running`, `waiting_permission`)
 indefinitely, `onTurnEnd` fired without a `cancellation`, so an inter-agent
@@ -185,7 +190,9 @@ reached the `[antigravity-lifecycle]` stream.
   [ADR-0057](../../adr/0057-antigravity-adapter.md) F2a for the
   process-group / grace / timer-ownership contract, including the same
   escalation now applied to the ADR-0057 F4b correlation-failure kill above
-  (line ~123 of this document).
+  (line ~123 of this document) and, since issue #377 Stage 2, to every
+  other epoch-end reason (`tamper`, `spec_change`, `close`, `idle_ttl`,
+  `watchdog`) via the same generic `terminateWithGrace` helper.
 
 ### Tool definition (CLI bridge over the wrapper tool host)
 

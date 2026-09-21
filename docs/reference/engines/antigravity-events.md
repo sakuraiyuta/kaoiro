@@ -23,45 +23,52 @@ agy --print "" \
     [--dangerously-skip-permissions] --disable-slash-commands
 ```
 
-- **One `agy` process per turn** *(measured)*, the same spawn-per-turn model
-  as `codex exec`. The first turn creates a conversation (its id arrives in
-  the `init` event); every later turn passes `--conversation <id>`.
-  Spawning from Node `child_process.spawn` with piped stdio works; running
-  under `setsid` (no controlling tty) works *(measured)*.
-- **Prompt over stdin, not argv** (issue #377 Stage 1): the wrapper writes
-  exactly one NDJSON line,
+- **One `agy` process per epoch, several turns each** *(measured; issue
+  #377 Stage 2)* — an "epoch" spans every turn whose spec (conversation id,
+  model, effort, `--add-dir` set) matches the live process's; a mismatch
+  ends it and spawns fresh. The first turn of a fresh epoch creates a
+  conversation (its id arrives in the `init` event, and the epoch adopts it
+  as its own from that point on); a respawn passes `--conversation <id>`
+  to continue the same logical conversation in a new process. Spawning from
+  Node `child_process.spawn` with piped stdio works; running under `setsid`
+  (no controlling tty) works *(measured)*. Only the `user` event is
+  recognised on stdin; any other `event` value is ignored with a stderr
+  warning (`warning: ignoring unsupported stream input message event "…"`),
+  and `control_request` / `control_response` are rejected as unsupported,
+  so there is no in-band interrupt, permission, or model-switch channel
+  over stdin *(measured, [print-mode-background-tasks.md](../../evidence/antigravity/print-mode-background-tasks.md))*.
+  Each turn still emits its own `result`, in order, including one
+  `num_turns` incrementing across the epoch's turns *(measured)*.
+- **Prompt over stdin, not argv** (issue #377 Stage 1, adapted for Stage
+  2's epoch reuse): the wrapper writes exactly one NDJSON line,
   `{"event":"user","message":{"role":"user","content":"<turn text>"}}\n`, to
-  the child's stdin and then closes it (`end()`); an unrecognised message
-  shape (missing the `event` key) is rejected with `result.status = "ERROR"`
-  *(measured)*. This replaces the earlier argv-positional prompt: `agy
-  --print`'s argv mode clamps `WaitMsBeforeAsync` at 10s and terminates any
-  `run_command` the CLI promoted to a background task 5s after the model's
-  last text, silently losing any tool call longer than ~10s
+  the epoch's stdin per turn -- kept OPEN across turns (Stage 1 additionally
+  closed it after the turn's only line; Stage 2 does not, since the process
+  outlives its first turn); an unrecognised message shape (missing the
+  `event` key) is rejected with `result.status = "ERROR"` *(measured)*.
+  This replaces the earlier argv-positional prompt: `agy --print`'s argv
+  mode clamps `WaitMsBeforeAsync` at 10s and terminates any `run_command`
+  the CLI promoted to a background task 5s after the model's last text,
+  silently losing any tool call longer than ~10s
   ([print-mode-background-tasks.md](../../evidence/antigravity/print-mode-background-tasks.md));
   `--input-format stream-json` instead waits for a promoted task before
   emitting `result` *(measured)*, so the wrapper's own tool deadline governs
-  it as intended. Still one process per turn (the "epoch"/resident process
-  model below stays out of scope) — the delivery ack fires only once this
-  write is confirmed, never merely once `write()` returns; see
-  [ADR-0057 F2](../../adr/0057-antigravity-adapter.md#f2--process-model-spawn-agy-per-turn-prompt-over-stdin-sigterm-to-interrupt)
-  for the exact ack point and its failure mode.
-- **Resident alternative** *(measured, not adopted — issue #377 Stage 2)*:
-  keeping one `agy --input-format stream-json` process open across several
-  turns, writing one stdin line per turn instead of respawning. Only the
-  `user` event is recognised; any other `event` value is ignored with a
-  stderr warning (`warning: ignoring unsupported stream input message event
-  "…"`), and `control_request` / `control_response` are rejected as
-  unsupported, so there is no in-band interrupt, permission, or model-switch
-  channel over stdin. Each turn still emits its own `result`.
+  it as intended. The delivery ack fires only once this write is confirmed,
+  never merely once `write()` returns; see
+  [ADR-0057 F2](../../adr/0057-antigravity-adapter.md#f2--process-model-one-agy-process-per-epoch-prompt-over-stdin-sigterm-to-end-it)
+  for the exact ack point, the `EpochSpec`/respawn model, and the epoch-end
+  reasons.
 - **`--disable-slash-commands`** *(flag present in 1.1.26)*: print mode
   otherwise expands slash commands and skills found in the prompt text, so an
   operator instruction starting with `/` would enter the CLI control plane.
   Every instruction turn passes the flag; the wrapper's registration probe
   (`-p /hooks`) runs without it.
-- **Interrupt** = terminate the child (SIGTERM). The conversation remains
-  resumable by id afterwards *(measured after ERROR-terminated turns)*. What
-  the child prints on receiving a signal mid-stream is *(unverified)*; the
-  adapter must treat child exit without a `result` as end of turn.
+- **Interrupt** = end the epoch (SIGTERM, then a grace-bounded SIGKILL). The
+  conversation remains resumable by id afterwards *(measured after
+  ERROR-terminated turns)*; the next turn respawns with `--conversation
+  <id>`. What the child prints on receiving a signal mid-stream is
+  *(unverified)*; the adapter must treat epoch exit without a `result` as
+  end of turn.
 - **Ordinary interrupt preserves queued turns** (issue #358). Interrupt aborts
   only the active turn; turns already queued behind it are kept, and the drain
   loop runs each afterwards under the new lifecycle generation with its own
@@ -75,9 +82,14 @@ agy --print "" \
   here (a separate #351-class question). Queue retirement on close / fail-stop
   (`reason: interrupted`) is issue #354's explicit path, at the coordinator
   level, and is independent of the host queue.
-- **`--print-timeout`** is a Go duration; `24h` is accepted *(measured)*.
-  Set it long because a turn can legitimately block on an operator decision
-  (permission gate, ask_user_question) — see below.
+- **`--print-timeout`** is a Go duration; `0` is the CLI's own documented
+  default ("waits until the turn completes", `agy --help` *(measured)*) and
+  is what the wrapper passes (issue #377 Stage 2; Stage 1 used the shorter
+  `24h`, measured not to change promotion or error behaviour either way --
+  [print-mode-background-tasks.md](../../evidence/antigravity/print-mode-background-tasks.md)).
+  A turn can legitimately block on an operator decision (permission gate,
+  ask_user_question) or a promoted background task; the wrapper's own
+  `TurnWatchdog` is what actually bounds a turn, not this flag.
 - `--mode accept-edits|plan` is accepted but does not change
   `init.permission_mode` *(measured)*; its runtime effect is *(unverified)*
   and not used by the adapter. `--sandbox` is likewise accepted and had no
@@ -147,7 +159,7 @@ Observed details:
 | bridge `ask_user_question` pending (see Tool definition) | `waiting_input` with `ext.pending_question` (ADR-0027) |
 | `result` `SUCCESS` / `CANCELED` | `done`; `response` is the final text |
 | `result` `ERROR` | `error` with `result.error` |
-| child exit without `result` | `error` (`agy_exit_without_result`) |
+| epoch exit without this turn's own `result` | `error` (`agy_exit_without_result`) |
 | `init` (first turn) | session id = `conversation_id` (SessionPointers) |
 
 ### Session / conversation resume and enumeration
