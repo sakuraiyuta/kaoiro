@@ -80,14 +80,14 @@ through the CLI bridge. Measured substrate:
 
 | # | Task |
 |---|---|
-| B0 | two-axis mid-session control message + dashboard controls (ADR-0057 F4c) |
-| B1 | `-p /usage` rate-limit probe per turn boundary → `rate_limits` |
-| B2 | history replay from `transcript_full.jsonl` (format measurement first) |
-| B3 | session enumeration metadata from `conversation_summaries.db` |
-| B4 | setup wizard: `agy` presence check; runner reports `agy --version` and re-runs the gate registration check on a version change |
-| B5 | context usage (per-model window table) — only if a source of truth exists |
+| B0 | two-axis mid-session control message + dashboard controls (ADR-0057 F4c) — **done in #359** |
+| B1 | `-p /usage` rate-limit probe per turn boundary → `rate_limits` — issue #384 |
+| B2 | history replay from `transcript_full.jsonl` (format measurement first) — issue #385 |
+| B3 | session enumeration metadata from `conversation_summaries.db` — issue #386 |
+| B4 | setup wizard: `agy` presence check; runner reports `agy --version` and re-runs the gate registration check on a version change — issue #387 |
+| B5 | context usage (per-model window table) — only if a source of truth exists — issue #388 |
 | B6 | `antigravity.extra_models` (issue #292 part A for this engine, reusing the codex helpers) — **done in #292** |
-| B7 | server test for an antigravity spawn with the `approval` key entirely absent (review advisory) |
+| B7 | server test for an antigravity spawn with the `approval` key entirely absent (review advisory) — issue #389 |
 
 ### Stage C — issue #377: `run_command` background-task loss under `--print`
 
