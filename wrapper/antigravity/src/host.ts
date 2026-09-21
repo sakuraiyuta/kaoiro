@@ -50,6 +50,7 @@ import {
 import { antigravityCatalogSnapshot, parseAgyModelsOutput } from "./catalog.js";
 import { DEFAULT_AGY_PROBE_TIMEOUT_MS, resolveAgyExecutable, type AgyExecutableFailureReason, type AgyExecutableResolution } from "./cli-path.js";
 import { CustomizationDir, GATE_DEADLINE_MS, HOOK_TIMEOUT_SECONDS, sweepStaleCustomizationDirs } from "./customization.js";
+import { DEFAULT_EPOCH_IDLE_MS, epochSpecsEqual, type EpochEndReason, type EpochSpec } from "./epoch.js";
 import { AntigravityGate, GateServer, type AntigravityLaunchConfig, type GateServerOptions } from "./gate.js";
 import { effectiveNetworkAccess } from "./network_access.js";
 import { ceilingExceeded, type SwitchCeiling } from "./permission_switch.js";
@@ -67,6 +68,15 @@ const HOOK_SCRIPT = new URL("../dist/hook.js", import.meta.url).pathname;
 // = 5s, runner/src/supervisor.ts). systemd's `TimeoutStopSec` (30s) is looser
 // and not the binding constraint.
 const DEFAULT_CLOSE_GRACE_MS = 2_000;
+
+/** issue #377 Stage 2: the two fixed background-task lifecycle lines agy
+ *  prints to stderr (measured verbatim,
+ *  docs/evidence/antigravity/print-mode-background-tasks.md probe 2 --
+ *  `root agent idle; waiting up to %s for %d background task(s)` /
+ *  `terminating %d background task(s) on exit`). Matched exactly so no
+ *  other, unbounded stderr text is ever forwarded to the lifecycle log. */
+const EPOCH_STDERR_WAITING_PATTERN = /^root agent idle; waiting up to \S+ for \d+ background task\(s\)$/;
+const EPOCH_STDERR_TERMINATING_PATTERN = /^terminating \d+ background task\(s\) on exit$/;
 
 /** issue #371 Design v2: `#runTurn` decides no terminal outcome itself --
  *  it returns one of these, and `#drainTurns`'s `finally` is the single
@@ -87,6 +97,42 @@ type TurnOutcome =
       exit: { code: number | null; signal: NodeJS.Signals | null } | null;
       requestedAt: string | undefined;
     };
+
+/** issue #377 Stage 2: the live state of one epoch (one `agy` process
+ *  spanning several turns). `endingReason` is set BEFORE the process is
+ *  actually signalled to end, by whichever call site (interrupt/close/
+ *  watchdog/tamper/gate_broken/spec_change/idle_ttl) decided to end it --
+ *  the epoch's own close handler reads it to know this death was requested,
+ *  as opposed to a spontaneous exit (`null`). `resolveDeath` lets `#endEpoch`
+ *  await the child's actual closure instead of merely arming a signal. */
+interface EpochRuntime {
+  child: SpawnedAgy;
+  spec: EpochSpec;
+  toolHost: ToolHost;
+  gateServer: GateServer;
+  turns: number;
+  idleTtlTimer: unknown | null;
+  endingReason: EpochEndReason | null;
+  deathPromise: Promise<void> | null;
+  resolveDeath: (() => void) | null;
+  stdinErrored: boolean;
+  pendingDeliverySettle: ((delivered: boolean) => void) | null;
+}
+
+/** The turn currently owning the epoch's shared stdout stream. The epoch-
+ *  level reader routes `result` events to `resolveResult` and folds every
+ *  other event into this turn's own state (mirroring Stage 1's per-turn
+ *  `#handleEvent` + tool ACTIVE/DONE correlation) -- exactly the
+ *  `readableLines`/`#waitForChild` role Stage 1 attached per turn, now
+ *  attached once per epoch and keyed off whichever turn is in flight. */
+interface InFlightTurn {
+  turnToken: string;
+  gate: AntigravityGate;
+  assistantText: Map<number, string>;
+  correlationFailure: string | null;
+  epochDeathError: Error | null;
+  resolveResult: (event: AgyStreamEvent | null) => void;
+}
 
 export interface SpawnedAgy {
   stdout: NodeJS.ReadableStream;
@@ -140,6 +186,31 @@ export interface AntigravityHostOptions {
   }) => void;
   onTurnBoundary?: (info: { turnToken: string }) => void;
   onTurnProgress?: (info: { turnToken: string }) => void;
+  /** issue #377 Stage 2 N4: one epoch (agy process) ended, for any of the
+   *  reasons in `EpochEndReason`. Fired at most once per epoch, from the
+   *  moment its child is confirmed closed. Excludes a spontaneous exit
+   *  while a turn was in flight -- that settles as the turn's own error
+   *  (`agy_exit_without_result` / `epoch_exit_before_turn`), not this. */
+  onEpochEnded?: (info: {
+    reason: EpochEndReason;
+    code: number | null;
+    signal: NodeJS.Signals | null;
+    turns: number;
+  }) => void;
+  /** issue #377 Stage 2: a stream-json line arrived while no turn owned the
+   *  epoch's stream (no in-flight turn to attribute it to). Bounded on
+   *  purpose -- no free text -- mirroring the stderr capture below. */
+  onOutOfTurnEvent?: (
+    info:
+      | { eventKind: "init" }
+      | { eventKind: "step_update"; stepIndex?: number; stepType?: string; state?: string }
+      | { eventKind: "result"; status?: string },
+  ) => void;
+  /** issue #377 Stage 2: one of the two fixed background-task lifecycle
+   *  lines agy prints to stderr (`EPOCH_STDERR_LINE_PATTERNS`), and only
+   *  those -- every other stderr line is drained and discarded, never
+   *  forwarded, so no free-form CLI text reaches the lifecycle log. */
+  onEpochStderrLine?: (info: { kind: "waiting" | "terminating" }) => void;
   /** A parsed `step_update` tool step went ACTIVE / left ACTIVE. The
    *  watchdog keys its absolute tool deadline on `stepIndex`. */
   onToolStart?: (info: { turnToken: string; stepIndex: number; toolName: string }) => void;
@@ -216,6 +287,16 @@ export interface AntigravityHostOptions {
    *  ever fire, which would leave the agy subtree orphaned with only the
    *  initial SIGTERM delivered. Keep this below the tightest outer bound. */
   closeGraceMs?: number;
+  /** issue #377 Stage 2 M7: idle-epoch lifetime bound (`KAOIRO_ANTIGRAVITY_EPOCH_IDLE_MS`,
+   *  read by the CLI entrypoint via `readEpochIdleMs`). Cleared at turn
+   *  dequeue (before spec comparison / a possible respawn) and re-armed only
+   *  once that turn's own result/error has settled, so the TTL can never
+   *  fire mid-spawn or mid-delivery-ack. */
+  epochIdleMs?: number;
+  /** Injectable for tests (fake-timer pins): controls the idle-TTL timer
+   *  only, independent of `subtree_termination`'s own grace timers. */
+  epochIdleSetTimer?: (callback: () => void, delayMs: number) => unknown;
+  epochIdleClearTimer?: (timer: unknown) => void;
   probeModels?: () => Promise<EngineModelInfo[] | null>;
   runtimeAssetsAvailable?: () => boolean;
   warn?: (message: string) => void;
@@ -403,6 +484,21 @@ export class AntigravityHost implements EngineAdapter {
   #lastChildExit: { code: number | null; signal: NodeJS.Signals | null } | null = null;
   #toolHost: ToolHost | null = null;
   #gateServer: GateServer | null = null;
+  // issue #377 Stage 2: the live epoch (one agy process spanning several
+  // turns), if any is currently spawned. `#toolHost`/`#gateServer`/
+  // `#running` mirror `#epoch`'s own fields while it is alive (kept in sync
+  // by `#spawnEpoch` and the epoch's close handler), so `interrupt()` and
+  // `close()`'s existing kill calls need no changes of their own -- ending
+  // `#running` already ends the epoch that owns it. `#failStopForWatchdog`
+  // and `requestInterruptForTurn` keep the same kill calls too, but each
+  // gained one new line, `#markEpochEnding(...)`, since a SIGTERM/SIGKILL
+  // now ends the whole multi-turn epoch rather than a single per-turn
+  // process, and the epoch's close handler needs that reason recorded.
+  #epoch: EpochRuntime | null = null;
+  #inFlightTurn: InFlightTurn | null = null;
+  readonly #epochIdleMs: number;
+  readonly #setEpochIdleTimer: (callback: () => void, delayMs: number) => unknown;
+  readonly #clearEpochIdleTimer: (timer: unknown) => void;
   #gateProbe: GateProbe | null = null;
   #cancelGateProbe: (() => void) | null = null;
   #catalog: EngineModelInfo[] = antigravityCatalogSnapshot();
@@ -411,9 +507,11 @@ export class AntigravityHost implements EngineAdapter {
   readonly #abortGraceMs: number;
   readonly #closeGraceMs: number;
   // issue #379: the single live SIGTERM->grace->SIGKILL escalation for
-  // `#running`, if any. Turns are sequential (a new child is only spawned
-  // after `#waitForChild` resolves for the previous one), so at most one
-  // of these is ever outstanding.
+  // `#running`, if any. issue #377 Stage 2: a new epoch is only spawned
+  // after the previous one's close is confirmed (`#endEpoch` awaits its
+  // `deathPromise`), and `#armOrShortenTermination` reuses this same handle
+  // via `shortenGraceTo` rather than creating a second one -- so at most
+  // one of these is ever outstanding.
   #activeTermination: GraceTerminationHandle | null = null;
   #pendingModel: string | null = null;
   #switchError: Record<string, unknown> | null = null;
@@ -465,6 +563,9 @@ export class AntigravityHost implements EngineAdapter {
       ?? DEFAULT_AGY_PROBE_TIMEOUT_MS;
     this.#abortGraceMs = options.abortGraceMs ?? DEFAULT_TURN_WATCHDOG_ABORT_GRACE_MS;
     this.#closeGraceMs = options.closeGraceMs ?? DEFAULT_CLOSE_GRACE_MS;
+    this.#epochIdleMs = options.epochIdleMs ?? DEFAULT_EPOCH_IDLE_MS;
+    this.#setEpochIdleTimer = options.epochIdleSetTimer ?? ((callback, delayMs) => setTimeout(callback, delayMs));
+    this.#clearEpochIdleTimer = options.epochIdleClearTimer ?? ((timer) => clearTimeout(timer as never));
     this.#sessionId = options.resumeSessionId ?? null;
     this.#now = options.now ?? (() => new Date().toISOString());
     // issue #359 M1: with sync negotiated, seed the revision-0 baseline control
@@ -580,7 +681,12 @@ export class AntigravityHost implements EngineAdapter {
     this.#toolHost?.close();
     this.#cancelGateProbe?.();
     this.#gateProbe?.kill?.("SIGTERM");
-    this.#armOrShortenTermination(this.#abortGraceMs);
+    // issue #377 Stage 2: ends the whole epoch, not just the active turn --
+    // an idle interrupt (no `#currentTurnToken`) now has a live process to
+    // stop, unlike Stage 1 where idle meant no process existed at all. The
+    // next `send()` sees `#epoch === null` and spawns fresh with
+    // `--conversation <this session's id>` (M6 keeps `#sessionId` current).
+    void this.#endEpoch("interrupt");
   }
 
   /** issue #379: arms a SIGTERM->grace->SIGKILL escalation for `#running`
@@ -615,6 +721,7 @@ export class AntigravityHost implements EngineAdapter {
     // timing itself (it arms its own `abortGraceMs` timer between this call
     // and `failStopTurnForWatchdog`); arming a second one here would double
     // the effective wait before an unresponsive watchdog-flagged turn dies.
+    this.#markEpochEnding("watchdog");
     return this.#running !== null && signalSubtree(this.#running, "SIGTERM");
   }
 
@@ -651,7 +758,7 @@ export class AntigravityHost implements EngineAdapter {
     // to its own short bound rather than trusting whatever was already
     // armed (including a longer grace an `interrupt()` call just started,
     // e.g. the SIGINT handler's `interrupt().finally(() => close())`).
-    this.#armOrShortenTermination(this.#closeGraceMs);
+    void this.#endEpoch("close");
     this.#customization?.close();
     this.#customization = null;
   }
@@ -1011,7 +1118,11 @@ export class AntigravityHost implements EngineAdapter {
         ? { kind: "error", detail, classify: { detail }, attemptedModel: undefined }
         : { kind: "stale" };
     } finally {
-      this.#running = null;
+      // issue #377 Stage 2: `#running` is NOT reset here -- it now mirrors
+      // the live EPOCH's child (which can outlive this one turn), not a
+      // turn-scoped process. It is set once by `#spawnEpoch` and cleared
+      // only by `#attachEpochWatcher`'s close handler, once the epoch's
+      // child actually closes.
       this.#turnActive = false;
       // issue #371 Design v2: a `stale` outcome (generation mismatch, or
       // closed/fail-stopped) becomes `interrupted` only when the operator's
@@ -1109,11 +1220,17 @@ export class AntigravityHost implements EngineAdapter {
     turnToken: string,
     conversationIds: readonly string[],
   ): Promise<TurnOutcome> {
+    // issue #377 Stage 2 M7: the idle TTL clears at DEQUEUE -- before spec
+    // comparison or a possible respawn -- and is re-armed (in the `finally`
+    // below) only once this turn's own result/error has settled. That keeps
+    // the TTL from ever firing mid-spawn or mid-delivery-ack.
+    this.#clearIdleTtl();
     // Review finding (issue #371 round 1): without this reset, a turn
     // interrupted before its own child ever spawns would report a PRIOR
     // turn's leftover exit code/signal in `onInterruptSettled`, misleading
     // an operator reading the lifecycle journal.
     this.#lastChildExit = null;
+    this.#activeTurnToolTimeout = null;
     if (!this.#agyExecutable.ok) {
       throw new Error(`antigravity_cli_unavailable:${this.#agyExecutable.reason}`);
     }
@@ -1126,15 +1243,10 @@ export class AntigravityHost implements EngineAdapter {
       bridgePath: BRIDGE_SCRIPT,
     });
     const customization = this.#customization;
-    customization.rewrite();
     if (!(this.#options.runtimeAssetsAvailable?.() ?? (existsSync(HOOK_SCRIPT) && existsSync(BRIDGE_SCRIPT)))) {
       throw new Error("antigravity runtime assets are not built");
     }
-    let toolHost: ToolHost | null = null;
-    let gateServer: GateServer | null = null;
     try {
-      toolHost = await (this.#options.toolHostListen ?? ToolHost.listen)(this.#options.toolDescriptors ?? []);
-      if (!this.#isCurrent(generation)) return { kind: "stale" };
       // issue #359 M1: block this turn's gate until the server's permission_sync
       // for the current connection has been applied, so a durable control/next
       // relayed on reconnect lands before the gate reads the cell. A no-op once
@@ -1145,150 +1257,116 @@ export class AntigravityHost implements EngineAdapter {
       // now, at the execution boundary, so this turn's fresh gate below reads
       // the new cell while the just-ended turn's gate was left untouched.
       this.#applyPendingPermissionSwitch(turnToken);
+      const attemptedModel = this.#pendingModel;
+      this.#currentAttemptedModel = attemptedModel;
+      const spec: EpochSpec = {
+        conversationId: this.#sessionId,
+        model: attemptedModel ?? this.#config.model,
+        effort: this.#config.effort,
+        addDirs: [this.#options.cwd, customization.path],
+      };
+
+      // issue #377 Stage 2: a live epoch whose spec no longer matches this
+      // turn's requirements (model/effort rollback or switch, a different
+      // conversation) is ended first -- respawning below picks up the new
+      // spec. M2: a model rollback after an is_error result is absorbed by
+      // this same comparison (the next turn's spec reverts to the
+      // pre-switch model, which mismatches the still-live epoch). An epoch
+      // already ending for another reason (e.g. an idle `interrupt()` that
+      // raced this turn's dequeue) is also waited out and respawned here,
+      // even when its recorded spec still matches -- reusing a dying
+      // process is never correct.
+      if (this.#epoch !== null && (this.#epoch.endingReason !== null || !epochSpecsEqual(this.#epoch.spec, spec))) {
+        await this.#endEpoch(this.#epoch.endingReason ?? "spec_change");
+      }
+      if (!this.#isCurrent(generation)) return { kind: "stale" };
+
+      if (this.#epoch === null) {
+        const spawned = await this.#spawnEpoch(spec, generation, customization, executable);
+        if (!spawned.ok) return { kind: "stale" };
+      }
+      const epoch = this.#epoch!;
+      this.#activeTurnToken = turnToken;
+      this.#activeTurnConversationIds = conversationIds;
+
+      // ADR-0057 F4c Stage B0 (issue #359) / issue #377 Stage 2: a live
+      // epoch's gate is swapped at the turn boundary via `setGate()` --
+      // never mutated mid-turn -- so a step ACTIVE before the swap still
+      // resolves against the same `GateServer`-owned ledger once it goes
+      // DONE after it (Stage 1 M3).
       const gate = new AntigravityGate({
         config: this.#config,
         cwd: this.#options.cwd,
         customizationDir: customization.path,
         nodePath: this.#options.nodePath ?? process.execPath,
         bridgePath: BRIDGE_SCRIPT,
-        toolNames: () => toolHost!.toolNames(),
+        toolNames: () => epoch.toolHost.toolNames(),
         broker: this.#options.permissionBroker,
         onPermissionRequest: () => this.#apply({ kind: "permission_request" }),
         onPermissionResolved: () => this.#apply({ kind: "permission_resolved" }),
         ...(this.#options.warn === undefined ? {} : { warn: this.#options.warn }),
       });
-      gateServer = await (this.#options.gateServerListen ?? GateServer.listen)({
+      epoch.gateServer.setGate(gate);
+
+      const inFlight: InFlightTurn = {
+        turnToken,
         gate,
-        onSocketClose: () => {
-          this.#options.permissionBroker.close();
-          this.#clearPendingPermission();
-        },
+        assistantText: new Map(),
+        correlationFailure: null,
+        epochDeathError: null,
+        resolveResult: () => {},
+      };
+      const terminalResultPromise = new Promise<AgyStreamEvent | null>((resolve) => {
+        inFlight.resolveResult = resolve;
       });
-      if (!this.#isCurrent(generation)) return { kind: "stale" };
-      this.#toolHost = toolHost;
-      this.#gateServer = gateServer;
-      const registration = await this.#verifyGateRegistration(generation);
-      if (!registration.ok) {
-        throw new Error(`antigravity_gate_not_registered:${registration.reason}`);
-      }
-      if (!this.#isCurrent(generation)) return { kind: "stale" };
-      const attemptedModel = this.#pendingModel;
-      this.#currentAttemptedModel = attemptedModel;
-      const args = this.#turnArguments(customization.path, attemptedModel ?? this.#config.model);
-      let child: SpawnedAgy;
-      try {
-        child = (this.#options.spawn ?? this.#defaultSpawn)(executable, args, {
-          cwd: this.#options.cwd,
-          env: {
-            ...process.env,
-            ...nonInteractiveToolEnv(process.env).additions,
-            KAOIRO_GATE_SOCKET: gateServer.socketPath,
-            KAOIRO_GATE_NONCE: gateServer.nonce,
-            KAOIRO_GATE_DEADLINE_MS: String(GATE_DEADLINE_MS),
-            KAOIRO_BRIDGE_SOCKET: toolHost.socketPath,
-            KAOIRO_BRIDGE_NONCE: toolHost.nonce,
-          },
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        throw new Error(`antigravity_cli_${this.#spawnFailureReason(error)}: ${boundErrorDetail(message)}`);
-      }
-      this.#running = child;
-      this.#activeTurnToolTimeout = null;
-      this.#activeTurnToken = turnToken;
-      this.#activeTurnConversationIds = conversationIds;
-      child.stderr.on("data", () => {});
-      let terminalResult: AgyStreamEvent | null = null;
-      let correlationFailure: string | null = null;
-      const assistantText = new Map<number, string>();
-      readableLines(child.stdout, (line) => {
-        this.#options.onTurnProgress?.({ turnToken });
-        const event = parseAgyStreamLine(line);
-        if (event === null) {
-          this.#warn(`antigravity: ignored malformed stream line from ${basename(executable)}`);
-          return;
-        }
-        if (event.event === "result") {
-          terminalResult ??= event;
-          return;
-        }
-        this.#handleEvent(event, gate, assistantText);
-        if (event.event !== "step_update" || event.step_update.step_type !== "tool") return;
-        const stepIndex = event.step_update.step_index;
-        const topLevelName = event.step_update.tool_name;
-        const nestedName = event.step_update.tool_info?.name;
-        const state = event.step_update.state;
-        if (state !== "ACTIVE" && state !== "DONE" && state !== "ERROR") return;
-        const toolName = correlatedToolName(topLevelName, nestedName);
-        if (!Number.isSafeInteger(stepIndex) || !validToolName(toolName)) {
-          // An ACTIVE step the deadline cannot key on is as unprovable as a
-          // completion the gate cannot correlate: fail closed either way.
-          correlationFailure = validToolName(topLevelName) ? topLevelName : validToolName(nestedName) ? nestedName : "unknown";
-          this.#warn(`antigravity: ${state === "ACTIVE" ? "started" : "completed"} tool correlation is unprovable: ${correlationFailure}`);
-          // issue #379: a gate-correlation failure means the safety gate
-          // itself may be compromised, so this kill escalates to SIGKILL
-          // (grace-bounded) rather than trusting a bare SIGTERM.
-          this.#armOrShortenTermination(this.#abortGraceMs);
-          return;
-        }
-        if (state === "ACTIVE") {
-          this.#options.onToolStart?.({ turnToken, stepIndex: stepIndex as number, toolName });
-          return;
-        }
-        this.#options.onToolEnd?.({ turnToken, stepIndex: stepIndex as number });
-        if (!gateServer!.observeCompletedTool(stepIndex as number, toolName)) {
-          correlationFailure = toolName;
-          this.#armOrShortenTermination(this.#abortGraceMs);
-        }
-      });
-      // issue #377 Stage 1 M4: deliver the prompt now, over stdin. The
-      // delivery ack (onTurnStart) fires only once the write is confirmed
-      // -- not merely once `write()` returns, since a pipe write can
-      // succeed into the kernel buffer on a dying process -- so a race
-      // where the child exits before or during this write never reports a
-      // turn as started.
-      const delivered = await this.#deliverTurnInput(child, text);
+      this.#inFlightTurn = inFlight;
+
+      // issue #377 Stage 1 M4 (kept for Stage 2): the delivery ack
+      // (onTurnStart) fires only once the write is confirmed -- not merely
+      // once `write()` returns, since a pipe write can succeed into the
+      // kernel buffer on a dying process -- so a race where the epoch dies
+      // before or during this write never reports a turn as started.
+      const delivered = await this.#deliverTurnInput(epoch, text);
       if (delivered) {
         this.#options.onTurnStart?.({ turnToken, conversationIds });
       } else {
-        // issue #377 Stage 1 M1 (kohaku design review round 1): a failed
-        // delivery does not guarantee the child has exited (an EPIPE write
-        // error need not kill the whole process), and no ack means no
-        // TurnWatchdog is running to bound the wait below -- arm one
-        // explicitly so `#waitForChild` cannot hang. `closeGraceMs`, not
-        // `abortGraceMs`: nothing here is worth waiting a full abort grace
-        // for, so this mirrors `close()`'s own bound instead.
+        // issue #377 Stage 1 M1 (kept for Stage 2): a failed delivery does
+        // not guarantee the epoch has exited (an EPIPE write error need not
+        // kill the whole process), and no ack means no TurnWatchdog is
+        // running to bound the wait below -- arm one explicitly.
+        // `closeGraceMs`, not `abortGraceMs`: nothing here is worth waiting
+        // a full abort grace for, so this mirrors `close()`'s own bound.
         this.#armOrShortenTermination(this.#closeGraceMs);
       }
-      // issue #377 Stage 1 M1: always await the child's actual exit before
-      // deciding an outcome, even when delivery failed above. Returning
-      // earlier (as a prior revision did) skipped `#waitForChild` entirely,
-      // which is the ONLY place that cancels `#activeTermination` on this
-      // child's `exit`/`close` -- a leaked handle then makes the NEXT
-      // turn's `interrupt()` a no-op `shortenGraceTo()` on the wrong
-      // (already-dead) target instead of arming a fresh SIGTERM for the
-      // new child. It is also the only place that drains `child.stdout` to
-      // completion, so a turn cannot settle while a stray stream event for
-      // it could still arrive.
-      const childError = await this.#waitForChild(child);
-      // issue #371 Design v2 M1 (kohaku design review round 1): this
-      // post-exit precedence is unchanged from pre-Design-v2 -- closed/
-      // fail-stopped and generation-mismatch are `stale` (an operator
-      // interrupt is projected as `interrupted` only when nothing else
-      // outranks it); customization tampering is the one outcome that
-      // outranks a stale generation, since a broken gate is a heavier fact
-      // than the interrupt. A terminal event agy emits while dying (e.g.
-      // `CANCELED`, which `agyEventToResult` maps to success) is discarded
-      // as `stale` when the generation has moved, not treated as `result`.
-      // issue #377 Stage 1 M1: `!delivered` (epoch_exit_before_turn) is
-      // folded into this same switch, ranked below customization
-      // tampering and a stale generation for the same reason those already
-      // outrank the other error kinds below -- a broken gate or an
-      // operator close()/interrupt() is a heavier fact than a delivery the
-      // CLI itself never confirmed.
+
+      // issue #377 Stage 2: this turn's own completion signal is now its
+      // `result` event on the epoch's shared stream (routed by
+      // `#attachEpochStreamReader`), not the process exiting -- an epoch
+      // that stays alive across turns must not make every turn wait for a
+      // process death that need not happen. A dead epoch still resolves
+      // this (with `null`) via its close handler, so a mid-turn crash is
+      // never missed.
+      const terminalResult = await terminalResultPromise;
+      if (this.#inFlightTurn === inFlight) this.#inFlightTurn = null;
+      epoch.turns += 1;
+
+      // issue #371 Design v2 M1 (kohaku design review round 1, kept for
+      // Stage 2): closed/fail-stopped and generation-mismatch are `stale`
+      // (an operator interrupt is projected as `interrupted` only when
+      // nothing else outranks it); customization tampering outranks a
+      // stale generation, since a broken gate is a heavier fact than the
+      // interrupt. issue #377 Stage 1 M1: `!delivered`
+      // (epoch_exit_before_turn) ranks below tampering and a stale
+      // generation for the same reason.
       if (this.#closed || this.#watchdogFailStopped) return { kind: "stale" };
       if (customization.verify() !== true) {
         this.#gateBroken = true;
+        // issue #377 Stage 2: tamper is detected only after the process has
+        // had a chance to run this turn (mirroring Stage 1's post-hoc
+        // check), but an epoch persists across turns -- so unlike Stage 1
+        // (where the process was already dead by the time this fired) this
+        // must actively end the epoch, not just report the error.
+        await this.#endEpoch("tamper");
         const detail = "antigravity_customization_tampered";
         return { kind: "error", detail, classify: { detail }, attemptedModel };
       } else if (!this.#isCurrent(generation)) {
@@ -1296,16 +1374,17 @@ export class AntigravityHost implements EngineAdapter {
       } else if (!delivered) {
         const detail = "epoch_exit_before_turn";
         return { kind: "error", detail, classify: { detail }, attemptedModel };
-      } else if (correlationFailure !== null) {
+      } else if (inFlight.correlationFailure !== null) {
         this.#gateBroken = true;
-        const detail = `antigravity_gate_unobserved_tool:${correlationFailure}`;
+        const detail = `antigravity_gate_unobserved_tool:${inFlight.correlationFailure}`;
         return { kind: "error", detail, classify: { detail }, attemptedModel };
       } else if (this.#activeTurnToolTimeout !== null) {
         // Whatever agy printed after SIGTERM, the turn outcome is the
         // deadline, not the CLI's own terminal record.
         return { kind: "error", detail: "tool_timeout", classify: { reason: "timeout" }, attemptedModel };
-      } else if (childError !== null) {
-        const detail = `antigravity_cli_${this.#spawnFailureReason(childError)}: ${boundErrorDetail(childError.message)}`;
+      } else if (inFlight.epochDeathError !== null) {
+        const error = inFlight.epochDeathError;
+        const detail = `antigravity_cli_${this.#spawnFailureReason(error)}: ${boundErrorDetail(error.message)}`;
         return { kind: "error", detail, classify: { detail }, attemptedModel };
       } else if (terminalResult === null) {
         const detail = "agy_exit_without_result";
@@ -1315,10 +1394,7 @@ export class AntigravityHost implements EngineAdapter {
       }
     } finally {
       this.#activeTurnToolTimeout = null;
-      gateServer?.close();
-      toolHost?.close();
-      if (this.#gateServer === gateServer) this.#gateServer = null;
-      if (this.#toolHost === toolHost) this.#toolHost = null;
+      if (this.#epoch !== null) this.#armIdleTtl();
     }
   }
 
@@ -1337,6 +1413,7 @@ export class AntigravityHost implements EngineAdapter {
     // issue #379: no grace here either -- by the time TurnWatchdog calls
     // this, its OWN abortGraceMs has already elapsed since
     // requestInterruptForTurn's SIGTERM, so escalate straight to SIGKILL.
+    this.#markEpochEnding("watchdog");
     if (this.#running !== null) signalSubtree(this.#running, "SIGKILL");
     const error = {
       detail: attribution === "exact"
@@ -1377,85 +1454,366 @@ export class AntigravityHost implements EngineAdapter {
     }
   }
 
-  /** issue #377 Stage 1 M4: writes the turn's prompt as exactly one NDJSON
-   *  line (`--input-format stream-json`'s accepted shape, measured in
-   *  docs/evidence/antigravity/print-mode-background-tasks.md) and closes
-   *  stdin, replacing the previous bare `child.stdin.end()`. Resolves
-   *  `true` only once the write callback has resolved without error AND
-   *  the child has not emitted `close` in the meantime; resolves `false`
-   *  on a write error or on that close race, in which case the caller
-   *  reports `epoch_exit_before_turn` and does not fire the delivery ack
-   *  or re-send the line on its own -- the model may already have read it,
-   *  and a duplicate turn is worse than a visible failure. */
-  #deliverTurnInput(child: SpawnedAgy, text: string): Promise<boolean> {
+  /** issue #377 Stage 1 M4, adapted for Stage 2: writes the turn's prompt as
+   *  exactly one NDJSON line (`--input-format stream-json`'s accepted
+   *  shape, measured in docs/evidence/antigravity/print-mode-background-tasks.md).
+   *  Unlike Stage 1 this does NOT close stdin -- an epoch's stdin stays open
+   *  for every turn it serves. Resolves `true` only once the write callback
+   *  has resolved without error AND the epoch has not already ended in the
+   *  meantime; resolves `false` on a write error or that race, in which
+   *  case the caller reports `epoch_exit_before_turn` and does not re-send
+   *  the line on its own -- the model may already have read it, and a
+   *  duplicate turn is worse than a visible failure. Checks `this.#epoch !==
+   *  epoch` (rather than each call installing its own `close` listener) so
+   *  an epoch serving many turns accumulates no listeners on its child. */
+  #deliverTurnInput(epoch: EpochRuntime, text: string): Promise<boolean> {
     return new Promise((resolveDelivery) => {
       let settled = false;
-      let closedBeforeAck = false;
       const settle = (delivered: boolean): void => {
         if (settled) return;
         settled = true;
+        if (epoch.pendingDeliverySettle === settle) epoch.pendingDeliverySettle = null;
         resolveDelivery(delivered);
       };
-      child.once("close", () => { closedBeforeAck = true; });
-      // A persistent (not `once`) listener: the write's own callback is the
-      // primary error path, but an EPIPE can also surface as a stream
-      // `error` event, which crashes the process if left unhandled.
-      child.stdin.on("error", () => settle(false));
+      epoch.pendingDeliverySettle = settle;
+      if (epoch.stdinErrored || this.#epoch !== epoch) {
+        settle(false);
+        return;
+      }
       const line = `${JSON.stringify({ event: "user", message: { role: "user", content: text } })}\n`;
-      child.stdin.write(line, (error) => {
+      epoch.child.stdin.write(line, (error) => {
         if (error !== undefined && error !== null) {
           settle(false);
           return;
         }
-        if (closedBeforeAck) {
+        if (this.#epoch !== epoch) {
           settle(false);
           return;
         }
-        child.stdin.end();
         settle(true);
       });
     });
   }
 
-  #waitForChild(child: SpawnedAgy): Promise<Error | null> {
-    return new Promise((resolve) => {
-      let settled = false;
-      let closed = false;
-      let stdoutEnded = false;
-      let childError: Error | null = null;
-      const settle = (error: Error | null): void => {
-        if (settled) return;
-        settled = true;
-        resolve(error);
-      };
-      const settleAfterTerminalIo = (): void => {
-        if (closed && stdoutEnded) settle(childError);
-      };
-      child.stdout.once("end", () => {
-        stdoutEnded = true;
-        settleAfterTerminalIo();
-      });
-      // issue #379: cancel any pending SIGKILL escalation for THIS child as
-      // soon as it is known to have exited. `exit` fires before `close`
-      // (no stdio-drain wait), so it frees the escalation sooner; `close`
-      // is a defensive second call (`cancel()` is idempotent) for the rare
-      // case `exit` was not observed.
-      child.once("exit", () => {
-        this.#activeTermination?.cancel();
-        this.#activeTermination = null;
-      });
-      child.once("close", (code, signal) => {
-        closed = true;
-        this.#lastChildExit = { code, signal };
-        this.#activeTermination?.cancel();
-        this.#activeTermination = null;
-        settleAfterTerminalIo();
-      });
-      child.once("error", (error) => {
-        childError ??= error;
-        settleAfterTerminalIo();
-      });
+  /** issue #377 Stage 2: attaches the ONE-TIME (per epoch) listeners that
+   *  detect the epoch's own death, whatever the cause. A stdin `error`
+   *  (e.g. EPIPE) is tracked persistently -- rather than the per-delivery
+   *  listener Stage 1 used -- so an epoch serving many turns accumulates no
+   *  listeners; `pendingDeliverySettle` lets it settle an in-flight
+   *  `#deliverTurnInput` immediately instead of waiting for `write()`'s own
+   *  callback, which may never fire on a truly broken pipe. */
+  #attachEpochWatcher(epoch: EpochRuntime): void {
+    epoch.child.stdin.on("error", () => {
+      epoch.stdinErrored = true;
+      epoch.pendingDeliverySettle?.(false);
     });
+    // issue #379: cancel any pending SIGKILL escalation for THIS child as
+    // soon as it is known to have exited. `exit` fires before `close` (no
+    // stdio-drain wait), so it frees the escalation sooner; `close` below is
+    // a defensive second call (`cancel()` is idempotent) for the rare case
+    // `exit` was not observed.
+    epoch.child.once("exit", () => {
+      this.#activeTermination?.cancel();
+      this.#activeTermination = null;
+    });
+    epoch.child.once("close", (code, signal) => {
+      this.#activeTermination?.cancel();
+      this.#activeTermination = null;
+      this.#lastChildExit = { code, signal };
+      if (this.#epoch !== epoch) return;
+      this.#epoch = null;
+      if (this.#running === epoch.child) this.#running = null;
+      if (this.#gateServer === epoch.gateServer) this.#gateServer = null;
+      if (this.#toolHost === epoch.toolHost) this.#toolHost = null;
+      this.#clearIdleTtlTimer(epoch);
+      epoch.gateServer.close();
+      epoch.toolHost.close();
+      const reason = epoch.endingReason;
+      if (reason === null) {
+        // A spontaneous, unrequested death. Idle (no turn owns the stream)
+        // is its own lifecycle event (N4 `idle_exit`); mid-turn is folded
+        // into that turn's own error below instead (agy_exit_without_result
+        // / epoch_exit_before_turn) -- no separate log for that case,
+        // matching Stage 1 fidelity.
+        if (this.#inFlightTurn === null) {
+          this.#options.onEpochEnded?.({ reason: "idle_exit", code, signal, turns: epoch.turns });
+        }
+      } else {
+        this.#options.onEpochEnded?.({ reason, code, signal, turns: epoch.turns });
+      }
+      // Always unblock an in-flight turn, whatever the reason -- its own
+      // outcome-precedence switch decides the turn's error detail from
+      // `terminalResult === null` (plus `epochDeathError`, if any).
+      this.#inFlightTurn?.resolveResult(null);
+      epoch.resolveDeath?.();
+    });
+    epoch.child.once("error", (error) => {
+      if (this.#inFlightTurn !== null) this.#inFlightTurn.epochDeathError = error;
+    });
+  }
+
+  /** issue #377 Stage 2: the epoch-level, continuous stream reader --
+   *  attached ONCE per epoch spawn (not per turn). Routes `result` events to
+   *  the in-flight turn's `resolveResult`; folds every other event into
+   *  that turn's state (mirroring Stage 1's per-turn `#handleEvent` + tool
+   *  ACTIVE/DONE correlation); logs anything arriving while no turn owns
+   *  the stream as `out_of_turn_event` instead of projecting it onto a
+   *  turn that never asked for it. */
+  #attachEpochStreamReader(epoch: EpochRuntime, executable: string): void {
+    readableLines(epoch.child.stdout, (line) => {
+      const inFlight = this.#inFlightTurn;
+      if (inFlight !== null) this.#options.onTurnProgress?.({ turnToken: inFlight.turnToken });
+      const event = parseAgyStreamLine(line);
+      if (event === null) {
+        this.#warn(`antigravity: ignored malformed stream line from ${basename(executable)}`);
+        return;
+      }
+      if (inFlight === null) {
+        this.#logOutOfTurnEvent(event);
+        return;
+      }
+      // ADR-0057 F4c Stage B0 (issue #359 M4) / issue #377 Stage 2 M1: a mid-
+      // epoch permission switch has no fresh `init` to confirm against (that
+      // only fires once, on the epoch's first turn) -- so the FIRST stream
+      // event of the turn after the swap confirms it instead, whatever its
+      // type -- including `result` itself, so this must run before the
+      // `result` branch's early return below, not after it.
+      // `#confirmAppliedPermission` is itself idempotent (no-ops once there
+      // is no pending observation), so calling it on every in-turn event,
+      // including `init` itself, is safe.
+      this.#confirmAppliedPermission();
+      if (event.event === "result") {
+        // issue #377 Stage 2 M4: clear synchronously, in the same pass.
+        // `readableLines` drains every line already buffered in one stdout
+        // chunk back to back with no microtask yield between them, so a
+        // stray event appended after this turn's own `result` in the SAME
+        // chunk must see `#inFlightTurn === null` right here -- waiting for
+        // `#runTurn`'s `await terminalResultPromise` continuation to clear
+        // it would let that stray event still be routed to `#handleEvent`
+        // with this turn's stale token instead of `#logOutOfTurnEvent`.
+        if (this.#inFlightTurn === inFlight) this.#inFlightTurn = null;
+        inFlight.resolveResult(event);
+        return;
+      }
+      this.#handleEvent(event, inFlight.gate, inFlight.assistantText);
+      if (event.event !== "step_update" || event.step_update.step_type !== "tool") return;
+      const stepIndex = event.step_update.step_index;
+      const topLevelName = event.step_update.tool_name;
+      const nestedName = event.step_update.tool_info?.name;
+      const state = event.step_update.state;
+      if (state !== "ACTIVE" && state !== "DONE" && state !== "ERROR") return;
+      const toolName = correlatedToolName(topLevelName, nestedName);
+      if (!Number.isSafeInteger(stepIndex) || !validToolName(toolName)) {
+        // An ACTIVE step the deadline cannot key on is as unprovable as a
+        // completion the gate cannot correlate: fail closed either way.
+        inFlight.correlationFailure = validToolName(topLevelName) ? topLevelName : validToolName(nestedName) ? nestedName : "unknown";
+        this.#warn(`antigravity: ${state === "ACTIVE" ? "started" : "completed"} tool correlation is unprovable: ${inFlight.correlationFailure}`);
+        // issue #379: a gate-correlation failure means the safety gate
+        // itself may be compromised, so this kill escalates to SIGKILL
+        // (grace-bounded) rather than trusting a bare SIGTERM.
+        this.#gateBroken = true;
+        this.#markEpochEnding("gate_broken");
+        this.#armOrShortenTermination(this.#abortGraceMs);
+        return;
+      }
+      if (state === "ACTIVE") {
+        this.#options.onToolStart?.({ turnToken: inFlight.turnToken, stepIndex: stepIndex as number, toolName });
+        return;
+      }
+      this.#options.onToolEnd?.({ turnToken: inFlight.turnToken, stepIndex: stepIndex as number });
+      if (!epoch.gateServer.observeCompletedTool(stepIndex as number, toolName)) {
+        inFlight.correlationFailure = toolName;
+        this.#gateBroken = true;
+        this.#markEpochEnding("gate_broken");
+        this.#armOrShortenTermination(this.#abortGraceMs);
+      }
+    });
+  }
+
+  /** issue #377 Stage 2 M4: `out_of_turn_event {step_index, step_type, state}`
+   *  for a `step_update` -- a `result` arriving out of turn "is logged the
+   *  same way and discarded" (its own status only, no turn projection). */
+  #logOutOfTurnEvent(event: AgyStreamEvent): void {
+    if (event.event === "init") {
+      this.#options.onOutOfTurnEvent?.({ eventKind: "init" });
+    } else if (event.event === "step_update") {
+      const step = event.step_update;
+      this.#options.onOutOfTurnEvent?.({
+        eventKind: "step_update",
+        ...(step.step_index === undefined ? {} : { stepIndex: step.step_index }),
+        ...(step.step_type === undefined ? {} : { stepType: step.step_type }),
+        ...(step.state === undefined ? {} : { state: step.state }),
+      });
+    } else {
+      this.#options.onOutOfTurnEvent?.({
+        eventKind: "result",
+        ...(event.result.status === undefined ? {} : { status: event.result.status }),
+      });
+    }
+  }
+
+  /** issue #377 Stage 2: spawns a fresh epoch for `spec`. Moves what Stage 1
+   *  did per turn (ToolHost/GateServer/gate-registration probe) to per-epoch
+   *  scope -- these now span every turn the epoch serves until it ends. */
+  async #spawnEpoch(
+    spec: EpochSpec,
+    generation: number,
+    customization: CustomizationDir,
+    executable: string,
+  ): Promise<{ ok: true } | { ok: false; stale: true }> {
+    customization.rewrite();
+    let toolHost: ToolHost | null = null;
+    let gateServer: GateServer | null = null;
+    let succeeded = false;
+    try {
+      toolHost = await (this.#options.toolHostListen ?? ToolHost.listen)(this.#options.toolDescriptors ?? []);
+      if (!this.#isCurrent(generation)) return { ok: false, stale: true };
+      const gate = new AntigravityGate({
+        config: this.#config,
+        cwd: this.#options.cwd,
+        customizationDir: customization.path,
+        nodePath: this.#options.nodePath ?? process.execPath,
+        bridgePath: BRIDGE_SCRIPT,
+        toolNames: () => toolHost!.toolNames(),
+        broker: this.#options.permissionBroker,
+        onPermissionRequest: () => this.#apply({ kind: "permission_request" }),
+        onPermissionResolved: () => this.#apply({ kind: "permission_resolved" }),
+        ...(this.#options.warn === undefined ? {} : { warn: this.#options.warn }),
+      });
+      gateServer = await (this.#options.gateServerListen ?? GateServer.listen)({
+        gate,
+        onSocketClose: () => {
+          this.#options.permissionBroker.close();
+          this.#clearPendingPermission();
+        },
+      });
+      if (!this.#isCurrent(generation)) return { ok: false, stale: true };
+      this.#toolHost = toolHost;
+      this.#gateServer = gateServer;
+      const registration = await this.#verifyGateRegistration(generation);
+      if (!registration.ok) {
+        // issue #371 Design v2 fidelity: a throw here (not a returned error)
+        // lets `#drainTurns`'s catch convert this into `stale` when the
+        // generation has ALSO moved (e.g. an `interrupt()` raced this same
+        // window via `cancelGateProbe`) -- exactly the "via the throw path"
+        // pin (vi) below relies on.
+        throw new Error(`antigravity_gate_not_registered:${registration.reason}`);
+      }
+      if (!this.#isCurrent(generation)) return { ok: false, stale: true };
+      const args = this.#epochArguments(spec);
+      let child: SpawnedAgy;
+      try {
+        child = (this.#options.spawn ?? this.#defaultSpawn)(executable, args, {
+          cwd: this.#options.cwd,
+          env: {
+            ...process.env,
+            ...nonInteractiveToolEnv(process.env).additions,
+            KAOIRO_GATE_SOCKET: gateServer.socketPath,
+            KAOIRO_GATE_NONCE: gateServer.nonce,
+            KAOIRO_GATE_DEADLINE_MS: String(GATE_DEADLINE_MS),
+            KAOIRO_BRIDGE_SOCKET: toolHost.socketPath,
+            KAOIRO_BRIDGE_NONCE: toolHost.nonce,
+          },
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`antigravity_cli_${this.#spawnFailureReason(error)}: ${boundErrorDetail(message)}`);
+      }
+      readableLines(child.stderr, (line) => {
+        if (EPOCH_STDERR_WAITING_PATTERN.test(line)) {
+          this.#options.onEpochStderrLine?.({ kind: "waiting" });
+        } else if (EPOCH_STDERR_TERMINATING_PATTERN.test(line)) {
+          this.#options.onEpochStderrLine?.({ kind: "terminating" });
+        }
+      });
+      const epoch: EpochRuntime = {
+        child,
+        spec,
+        toolHost,
+        gateServer,
+        turns: 0,
+        idleTtlTimer: null,
+        endingReason: null,
+        deathPromise: null,
+        resolveDeath: null,
+        stdinErrored: false,
+        pendingDeliverySettle: null,
+      };
+      this.#epoch = epoch;
+      this.#running = child;
+      this.#attachEpochWatcher(epoch);
+      this.#attachEpochStreamReader(epoch, executable);
+      succeeded = true;
+      return { ok: true };
+    } finally {
+      if (!succeeded) {
+        gateServer?.close();
+        toolHost?.close();
+        if (this.#gateServer === gateServer) this.#gateServer = null;
+        if (this.#toolHost === toolHost) this.#toolHost = null;
+      }
+    }
+  }
+
+  /** issue #377 Stage 2: records that the live epoch is ending for `reason`
+   *  (first cause wins -- a later call while one is already in flight never
+   *  overwrites the original attribution) and lazily creates the shared
+   *  `deathPromise` every caller can await, however many of them mark the
+   *  same epoch ending. Returns `null` when no epoch is live. Callers that
+   *  need immediate termination with NO grace (the watchdog's SIGKILL fail-
+   *  stop, which owns its own timing already) call this directly instead of
+   *  `#endEpoch`, so this method itself performs no signalling. */
+  #markEpochEnding(reason: EpochEndReason): EpochRuntime | null {
+    const epoch = this.#epoch;
+    if (epoch === null) return null;
+    if (epoch.endingReason === null) {
+      epoch.endingReason = reason;
+      this.#clearIdleTtlTimer(epoch);
+    }
+    epoch.deathPromise ??= new Promise<void>((resolve) => {
+      epoch.resolveDeath = resolve;
+    });
+    return epoch;
+  }
+
+  /** issue #377 Stage 2: ends the live epoch for `reason` (SIGTERM, then a
+   *  grace-bounded SIGKILL escalation) and waits for its child to actually
+   *  close before resolving -- a no-op if no epoch is live. Safe to call
+   *  more than once on the same epoch (e.g. `interrupt()`'s own fire-and-
+   *  forget call racing a freshly dequeued turn's reuse check): every
+   *  caller shares the one `deathPromise` `#markEpochEnding` creates.
+   *  `#attachEpochWatcher`'s close handler reads `endingReason` (set here
+   *  BEFORE the signal goes out) to log the right `epoch_ended` reason. */
+  async #endEpoch(reason: EpochEndReason): Promise<void> {
+    const epoch = this.#markEpochEnding(reason);
+    if (epoch === null) return;
+    this.#armOrShortenTermination(reason === "close" ? this.#closeGraceMs : this.#abortGraceMs);
+    await epoch.deathPromise;
+  }
+
+  /** issue #377 Stage 2 M7: clears the CURRENT epoch's idle-TTL timer, if
+   *  armed. Called at turn dequeue, before spec comparison/spawn. */
+  #clearIdleTtl(): void {
+    if (this.#epoch !== null) this.#clearIdleTtlTimer(this.#epoch);
+  }
+
+  #clearIdleTtlTimer(epoch: EpochRuntime): void {
+    if (epoch.idleTtlTimer === null) return;
+    this.#clearEpochIdleTimer(epoch.idleTtlTimer);
+    epoch.idleTtlTimer = null;
+  }
+
+  /** issue #377 Stage 2 M7: (re-)arms the idle-TTL timer for the current
+   *  epoch. Called only once a turn's own result/error has settled (never
+   *  at dequeue), so the TTL can never fire mid-spawn or mid-delivery-ack. */
+  #armIdleTtl(): void {
+    const epoch = this.#epoch;
+    if (epoch === null) return;
+    this.#clearIdleTtlTimer(epoch);
+    epoch.idleTtlTimer = this.#setEpochIdleTimer(() => {
+      epoch.idleTtlTimer = null;
+      void this.#endEpoch("idle_ttl");
+    }, this.#epochIdleMs);
   }
 
   #handleEvent(event: AgyStreamEvent, gate: AntigravityGate, assistantText: Map<number, string>): void {
@@ -1465,6 +1823,15 @@ export class AntigravityHost implements EngineAdapter {
       if (sessionId !== null) {
         this.#sessionId = sessionId;
         this.#options.onSessionId?.(sessionId);
+        // issue #377 Stage 2 M6: the epoch adopts its OWN conversation id
+        // from its own init -- this is the only writer of a LIVE epoch's
+        // recorded spec. Without it, a freshly spawned epoch's spec
+        // (conversationId: null) would permanently mismatch every later
+        // turn's freshly computed spec (which reads the now-confirmed
+        // #sessionId), forcing a spurious spec_change respawn on turn 2.
+        if (this.#epoch !== null && this.#epoch.spec.conversationId !== sessionId) {
+          this.#epoch.spec = { ...this.#epoch.spec, conversationId: sessionId };
+        }
         // M4: now that the engine has confirmed this turn's session identity,
         // promote any applied-but-unconfirmed permission switch to `applied`
         // with engine-observed session_id / turn_id.
@@ -1501,20 +1868,32 @@ export class AntigravityHost implements EngineAdapter {
    *  background task before emitting `result` (measured,
    *  docs/evidence/antigravity/print-mode-background-tasks.md probe E),
    *  whereas an argv-prompt run clamps `WaitMsBeforeAsync` at 10s and kills
-   *  the task 5s after the model's last text (issue #377). */
-  #turnArguments(customizationDir: string, model: string | undefined): string[] {
+   *  the task 5s after the model's last text (issue #377). issue #377 Stage
+   *  2: built from an `EpochSpec` (spawn time only, once per epoch) rather
+   *  than per-turn parameters -- `spec.conversationId` is `null` for a
+   *  fresh epoch (the epoch adopts its own id from its own `init`, M6) and
+   *  otherwise the id being continued (an interrupt-then-respawn, or a
+   *  resumed session). */
+  #epochArguments(spec: EpochSpec): string[] {
     const args = [
       "--print", "",
       "--input-format", "stream-json",
       "--output-format", "stream-json",
-      "--print-timeout", "24h",
+      // issue #377 Stage 2: `0` is the CLI's own documented "no timeout"
+      // value (`agy --help`: "0 waits until the turn completes (default
+      // 0s)"), measured live not to change promotion or error behaviour
+      // (docs/evidence/antigravity/print-mode-background-tasks.md). A
+      // background task outliving several turns is bounded by
+      // `TurnWatchdog`, not this flag; an unsolicited exit while idle
+      // becomes `epoch_ended{idle_exit}`.
+      "--print-timeout", "0",
       "--disable-slash-commands",
     ];
     if (this.#options.dangerouslySkipPermissions ?? true) args.push("--dangerously-skip-permissions");
-    if (this.#sessionId !== null) args.push("--conversation", this.#sessionId);
-    if (model !== undefined && model !== "") args.push("--model", model);
-    if (this.#config.effort !== undefined) args.push("--effort", this.#config.effort);
-    args.push("--add-dir", this.#options.cwd, "--add-dir", customizationDir);
+    if (spec.conversationId !== null) args.push("--conversation", spec.conversationId);
+    if (spec.model !== undefined && spec.model !== "") args.push("--model", spec.model);
+    if (spec.effort !== undefined) args.push("--effort", spec.effort);
+    for (const dir of spec.addDirs) args.push("--add-dir", dir);
     return args;
   }
 

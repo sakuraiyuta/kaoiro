@@ -29,6 +29,10 @@ Revised 2026-09-21 to note the close()-race `onTurnEnd` shape (F4 addendum, issu
 Revised 2026-09-21 for the stdin prompt transport, the delivery-ack point,
 and the gate step-correlation ledger's move to `GateServer` (F2 / F4b /
 F5a, issue #377 Stage 1).
+Revised 2026-09-21 for the epoch lifetime model -- one `agy` process per
+several turns, spec-change respawn, mid-epoch permission switching,
+`epoch_ended` / `out_of_turn_event`, and the idle-epoch TTL (F2 / F3 / F4b
+/ F5a, issue #377 Stage 2).
 
 ## Context
 
@@ -88,23 +92,77 @@ time (protocol union, runner `ENGINE_PACKAGES` / `BUNDLED_ENGINES` /
 `wrapper/package.json` fan-out, `pnpm-workspace.yaml`) **plus** the schema
 additions of F4c (`approval` on spawn / snapshot / P0).
 
-### F2 — Process model: spawn `agy` per turn, prompt over stdin, SIGTERM to interrupt
+### F2 — Process model: one `agy` process per epoch, prompt over stdin, SIGTERM to end it
 
-Each instruction turn spawns `agy --print "" --input-format stream-json
---output-format stream-json --print-timeout 24h --disable-slash-commands
-[--conversation <id>] [--model] [--effort] --add-dir <agent cwd> --add-dir
-<agent dir>`. Both `--add-dir` values are mandatory: in print mode the cwd
-is not a workspace root on its own (measured), and with only the
-customization dir added the model operates inside it.
-`--disable-slash-commands` keeps operator text out of the CLI control plane
-([ADR-0036](0036-session-lifecycle-commands.md) only filters
-literal `/new` / `/clear`). `interrupt()` terminates the child; pending gate
-requests for that turn are resolved as `deny` and `waiting_permission` /
-`waiting_input` are cleared; the next turn resumes by id.
+An **epoch** is one `agy` process spanning several turns (issue #377 Stage
+2). The first `send()` after no epoch is live lazily spawns one: `agy
+--print "" --input-format stream-json --output-format stream-json
+--print-timeout 0 --disable-slash-commands [--conversation <id>] [--model]
+[--effort] --add-dir <agent cwd> --add-dir <agent dir>`. `--print-timeout 0`
+is the CLI's own documented "no timeout" value (`agy --help`; measured not
+to change promotion or error behaviour,
+[print-mode-background-tasks.md](../evidence/antigravity/print-mode-background-tasks.md)),
+so a promoted background task outliving several turns is bounded by the
+wrapper's own `TurnWatchdog`, not this flag. Both `--add-dir` values are
+mandatory: in print mode the cwd is not a workspace root on its own
+(measured), and with only the customization dir added the model operates
+inside it. `--disable-slash-commands` keeps operator text out of the CLI
+control plane ([ADR-0036](0036-session-lifecycle-commands.md) only filters
+literal `/new` / `/clear`).
 
-**Prompt transport (issue #377 Stage 1): one NDJSON line on stdin, not
-argv.** `agy --print`'s argv-prompt mode clamps `WaitMsBeforeAsync` at 10s
-and terminates any `run_command` the CLI promoted to a background task 5s
+**Reuse vs. respawn.** Each turn computes an `EpochSpec`
+(`{conversationId, model, effort, addDirs}`); a live epoch is reused only
+when the next turn's spec matches its recorded one. A mismatch (a model or
+effort switch, a different conversation) ends the live epoch first
+(`epoch_ended{reason:"spec_change"}`) and spawns fresh. A fresh epoch's
+`conversationId` starts `null`; the epoch adopts the engine-confirmed id
+from its OWN `init` event (the only writer of a live epoch's recorded
+spec), so a later turn's freshly computed spec — which reads that now-
+confirmed id — matches instead of forcing a spurious respawn on turn 2.
+`ToolHost` / `GateServer` / the gate-registration probe / rewriting the
+customization dir happen once per epoch spawn, not per turn; the
+customization tamper check (`verify()`) still runs every turn, actively
+ending the epoch on failure (`epoch_ended{reason:"tamper"}`) since the
+process would otherwise keep running.
+
+**Turn completion.** A turn's own completion signal is its `result` event
+on the epoch's shared, continuous stdout stream — not the process exiting.
+One continuous reader (attached once per epoch spawn) routes `result` to
+whichever turn is currently in flight and folds every other event into
+that turn's state (gate correlation, tool ACTIVE/DONE, assistant text),
+exactly mirroring the per-turn logic Stage 1 ran per process. A stream
+event arriving while no turn is in flight is logged as `out_of_turn_event`
+(bounded: event kind and, for `step_update`/`result`, one coarse detail
+field) and never projected onto a turn — including a stray tool completion
+arriving just after a turn's own `result`; only a gate-correlation failure
+DURING a turn (before its `result`) still ends the epoch
+(`reason:"gate_broken"`). The next line is written to stdin only after the
+CURRENT turn's own `result` (a host-side queue; the CLI's own stream-input
+queue is never relied on) — the ack-point semantics are unchanged from
+Stage 1 below, just without ending stdin.
+
+**Ending an epoch.** `epoch_ended{reason, code, signal, turns}` is logged
+for every explicit end: `interrupt` (operator `interrupt()` — now ends the
+WHOLE epoch, including an idle one with no active turn, unlike Stage 1
+where idle meant no process existed), `watchdog` (a `TurnWatchdog`
+interrupt/fail-stop), `tamper`, `gate_broken`, `spec_change`, `close`
+(host `close()`), and `idle_ttl` (below). A spontaneous exit while idle is
+`epoch_ended{reason:"idle_exit"}`; the same exit while a turn is in flight
+is that turn's own error (`agy_exit_without_result` /
+`epoch_exit_before_turn`), not a separate lifecycle event, matching Stage
+1's per-turn error kinds. No end is auto-retried; the next `send()`
+lazily respawns.
+
+**Idle-epoch lifetime bound.** `KAOIRO_ANTIGRAVITY_EPOCH_IDLE_MS` (default
+30 min, minimum 1 s) ends an epoch that sits idle (no in-flight turn) that
+long (`reason:"idle_ttl"`). The timer clears at turn DEQUEUE — before spec
+comparison or a possible respawn — and re-arms only once that turn's own
+result/error has settled, so it can never fire mid-spawn or mid-delivery-
+ack.
+
+**Prompt transport: one NDJSON line on stdin, kept open across turns.**
+`agy --print`'s argv-prompt mode clamps `WaitMsBeforeAsync` at 10s and
+terminates any `run_command` the CLI promoted to a background task 5s
 after the model's last text — measured
 ([print-mode-background-tasks.md](../evidence/antigravity/print-mode-background-tasks.md))
 to silently lose any tool call longer than ~10s, including routine
@@ -113,23 +171,23 @@ instead waits for a promoted task before emitting `result`, so the
 wrapper's own `DEFAULT_TOOL_TIMEOUT_MS` (10 min) becomes the bound that
 actually governs a promoted step, as intended. The host writes exactly one
 line, `{"event":"user","message":{"role":"user","content":<text>}}\n`, to
-the child's stdin and calls `end()` -- still one `agy` process per turn
-(the "epoch" process-per-session model is issue #377 Stage 2, out of scope
-here). The delivery ack (`onTurnStart`, and the `TurnWatchdog`'s clock
+the epoch's stdin per turn; Stage 1 additionally called `end()` (one
+process per turn), Stage 2 does not (the process outlives its first
+turn). The delivery ack (`onTurnStart`, and the `TurnWatchdog`'s clock
 with it) fires only once the write callback has resolved without error on
-a child that has not emitted `close`, never on the bare return of
+an epoch that has not already ended, never on the bare return of
 `write()`, since a pipe write can still succeed into the kernel buffer on
-a process that is already dying. A write-callback error or a `close`
-racing the write settles the turn as an error (`epoch_exit_before_turn`)
-with the usual inter-agent failure notice and no ack; the host never
-re-sends the line on a fresh process by itself, since the model may
-already have read it and a duplicate turn is worse than a visible
-failure. This precedence sits below `close()` / a stale generation (an
-operator `interrupt()` racing the same write settles as `interrupted`,
+a process that is already dying. A write-callback error or the epoch
+ending racing the write settles the turn as an error
+(`epoch_exit_before_turn`) with the usual inter-agent failure notice and no
+ack; the host never re-sends the line on a fresh process by itself, since
+the model may already have read it and a duplicate turn is worse than a
+visible failure. This precedence sits below `close()` / a stale generation
+(an operator `interrupt()` racing the same write settles as `interrupted`,
 not `epoch_exit_before_turn`) and above every other terminal outcome. The
 CLI's in-band control channel (`control_request` / `control_response`)
 is rejected as unsupported (measured) and there is no interrupt over
-stdin; `interrupt()` still terminates the child via F2a's subtree kill.
+stdin; `interrupt()` ends the epoch via F2a's subtree kill.
 
 ### F2a — Subtree termination: own process group, grace, timer ownership (issue #379)
 
@@ -209,15 +267,24 @@ The wrapper owns a per-agent directory (`mkdtemp`, 0700) passed with
 (working directory pinned to the agent cwd, bridge contract, "never touch
 this directory") + server-pushed personality + footer. Persona packs stay
 engine-independent (ADR-0032 F3). The wrapper rewrites the files before
-**every** spawn from in-memory content, verifies their SHA-256 after
+**every epoch spawn** (issue #377 Stage 2: once per several turns, not per
+turn as under Stage 1) from in-memory content, verifies their SHA-256 after
 writing, and verifies them again after every turn: a mismatch marks the
-session `error` (`antigravity_customization_tampered`) and refuses further
-turns. This is **tamper detection, not prevention** — the agent runs as the
-same uid and a shell can rewrite the directory; the per-spawn regeneration
-bounds the damage to the remainder of one turn. It deletes the directory
+session `error` (`antigravity_customization_tampered`) and actively ends
+the epoch (`epoch_ended{reason:"tamper"}`) before refusing further turns.
+This is **tamper detection, not prevention** — the agent runs as the same
+uid and a shell can rewrite the directory; the per-epoch regeneration
+bounds the damage to the remainder of one epoch. It deletes the directory
 on close and on startup sweeps stale
 `kaoiro-agy-*` directories left by a SIGKILL (content is persona text and
 the gate config, low sensitivity, but the sweep keeps `/tmp` bounded).
+
+(N5, issue #377 Stage 2) A persona change has no live mechanism today
+(`appendSystemPrompt` is read once at construction; there is no setter),
+but if one is added it must END the epoch rather than rewrite this
+directory's content in place while the epoch's process is still reading
+it — the same treatment `EpochSpec` already gives a model/effort/
+conversation change, not a special case.
 
 ### F4 — Permission: prompts disabled at the CLI, wrapper gate decides
 
@@ -394,7 +461,8 @@ failure**, not a defence against an adversarial model (the nonce and the
 correlation map are readable by any shell the agent runs); it detects, it
 does not prevent — a tool that ran without a gate request has already run.
 
-1. Smoke test (not an execution gate): before the first turn, and after
+1. Smoke test (not an execution gate): before the first turn of each epoch
+   (issue #377 Stage 2: once per several turns, not per turn), and after
    every `agy` version change or customization-dir regeneration,
    `agy -p /hooks --add-dir <cwd> --add-dir <dir> --output-format json`
    (quota-free, measured) must list exactly the kaoiro gate with the
@@ -407,24 +475,28 @@ does not prevent — a tool that ran without a gate request has already run.
    calls across 4 conversations). `ACTIVE` arrives before the hook
    decision returns (a 100 s hook showed `ACTIVE` first and `DONE` 110 s
    later), so the check is order-independent and keyed on completion. A
-   completed tool step without a gate request terminates the child and
-   marks the session `error` with `antigravity_gate_unobserved_tool`
-   carrying the tool name; the session refuses further turns until item 1
-   passes again. Scope: tool names in classes where hook firing is
-   measured (write, read, shell, subagent, network — `write_to_file`,
-   `view_file`, `list_dir`, `run_command`, `define_subagent`,
-   `manage_task`, `search_web` fired; `wait_5_seconds` and `finish` did
-   not appear as tool steps at all); an unmeasured name only logs loudly.
-   Optional tightening (Stage B, needs a measured Δ): `ACTIVE` without a
-   gate request after Δ → kill before completion. **Ledger ownership
-   (issue #377 Stage 1 M3):** the correlation set (`stepIdx`s with an
-   observed gate request) lives on `GateServer`, not on `AntigravityGate`
-   -- the server is the socket owner and, from Stage 2, the object a turn
-   boundary can keep across a `setGate()` policy swap, so the ledger
-   survives a swap unchanged while `AntigravityGate` stays pure policy
-   over its readonly axes. `GateServer.setGate()` exists from Stage 1 for
-   Stage 2 to call; nothing in Stage 1 invokes it (the server is still
-   one per turn here).
+   completed tool step without a gate request -- while a turn is in
+   flight for it, the only case this can arise for (Stage 2: an unowned
+   stream event is `out_of_turn_event`, never gate-checked) -- ends the
+   epoch (`epoch_ended{reason:"gate_broken"}`) and marks the turn `error`
+   with `antigravity_gate_unobserved_tool` carrying the tool name; the
+   host refuses further turns until item 1 passes again on the next
+   epoch. Scope: tool names in classes where hook firing is measured
+   (write, read, shell, subagent, network — `write_to_file`, `view_file`,
+   `list_dir`, `run_command`, `define_subagent`, `manage_task`,
+   `search_web` fired; `wait_5_seconds` and `finish` did not appear as
+   tool steps at all); an unmeasured name only logs loudly. Optional
+   tightening (Stage B, needs a measured Δ): `ACTIVE` without a gate
+   request after Δ → kill before completion. **Ledger ownership (issue
+   #377 Stage 1 M3, used by Stage 2):** the correlation set (`stepIdx`s
+   with an observed gate request) lives on `GateServer`, not on
+   `AntigravityGate` -- the server is the socket owner and, since Stage
+   2, the one object a turn boundary keeps across a `setGate()` policy
+   swap (a new `AntigravityGate` built fresh every turn from the
+   turn-boundary config, swapped in via `GateServer.setGate()`), so the
+   ledger survives a swap unchanged while `AntigravityGate` stays pure
+   policy over its readonly axes. `GateServer` is now one per EPOCH, not
+   one per turn.
 3. The gate socket is **separate** from the `ToolHost` socket of F5 (two
    unix sockets, two nonces, two protocols): a gate decision and a tool
    execution must never share a trust role, and a shell reaching the
@@ -512,12 +584,14 @@ settles only its matching token before a successor batch is released.
 
 The delivery acknowledgement runtime observes the server watermark, immediate
 non-injection acknowledgements, and host `onTurnStart`. For injected work,
-`onTurnStart` occurs only after gate registration, a successful `agy` child
-spawn, AND (issue #377 Stage 1 M4) a confirmed stdin delivery of the turn's
-prompt line -- queue admission, spawn, or a bare `write()` return alone is
-not a start; see F2's ack-point paragraph for the exact condition and the
-`epoch_exit_before_turn` failure it guards against. The token and all
-coalesced conversation ids stay with the host turn so tool calls and
+`onTurnStart` occurs only after gate registration, a live epoch (issue
+#377 Stage 2: freshly spawned, or already running from a prior turn --
+either way, "the agy process this turn's line will reach" exists), AND
+(issue #377 Stage 1 M4) a confirmed stdin delivery of the turn's prompt
+line -- queue admission, a live epoch existing, or a bare `write()` return
+alone is not a start; see F2's ack-point paragraph for the exact condition
+and the `epoch_exit_before_turn` failure it guards against. The token and
+all coalesced conversation ids stay with the host turn so tool calls and
 failure notices cannot settle a later reuse of the same conversation id.
 
 Antigravity has an adapter-local `TurnWatchdog`, configured by

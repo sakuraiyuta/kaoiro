@@ -46,9 +46,10 @@ The SDK route stays available as a future alternative
 `<dir>/.agents/rules/AGENTS.md` is created lazily before the first turn from
 the server-pushed persona prompt (personality + footer, ADR-0029 F9) plus
 the kaoiro operating preamble (working directory, bridge usage). It is
-rewritten before every turn and read by that turn's spawn. `display_name_sync`
-updates the displayed name only; it does not rewrite the persona prompt.
-Persona packs stay engine-independent (ADR-0032 F3).
+rewritten before every epoch spawn (issue #377 Stage 2: one `agy` process
+per several turns, not per turn) and read by that epoch's spawn.
+`display_name_sync` updates the displayed name only; it does not rewrite the
+persona prompt. Persona packs stay engine-independent (ADR-0032 F3).
 
 ## See Also
 

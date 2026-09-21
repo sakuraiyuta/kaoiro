@@ -180,15 +180,50 @@ process; times are seconds from spawn.
   to run?" with `sleep 9; echo S1-DONE`, `num_turns: 2`, exit 0 — resume
   works with stream input.
 
+## `--print-timeout 0` (issue #377 Stage 2)
+
+Measured 2026-09-21 by ao on the dev host, same binary (`agy` 1.2.7, sha256
+`9991515b6d5307bcf701069622b0537b6b206e605f3c891c0cf3a3d208dea8b0`) and model
+(`gemini-3.8-flash-low`), same scratch-dir/logging-hook setup as probes D/E
+above, run from a shell — not through the wrapper.
+
+`agy --help` (1.2.7) documents the flag directly: `--print-timeout` —
+"Optional time limit for print mode; 0 waits until the turn completes
+(default 0s)". So `0` is not merely "unbounded" but the CLI's own default;
+Stage 1's `24h` was a MORE conservative (shorter) value than the default.
+
+Two live confirmation runs with `--print-timeout 0` (`--input-format
+stream-json`, one line, otherwise identical flags to probe E): a `sleep 12`
+and a `sleep 20` `run_command`, each with an instructed `WaitMsBeforeAsync`
+of 5000. Neither run was actually promoted to a background task this time
+(the tool step's own `ACTIVE`→`DONE` spanned the full sleep,
+`duration_seconds` 12.19 and 22.20 respectively — contrast probes A3/E above,
+where the same instruction WAS promoted at the 5 s/10 s marks). Both runs
+still exited 0 with a normal `result.status = SUCCESS`, no stderr, and no
+early termination — `--print-timeout 0` did not change anything about
+whether promotion happens, and did not cause any timeout-related failure.
+
+Decision: `wrapper/antigravity/src/host.ts`'s `#epochArguments` now passes
+`--print-timeout 0` instead of Stage 1's `24h` (issue #377 Stage 2) --
+per `--help`, this is the CLI's own "no timeout" value, so a background task
+that outlives an epoch's several turns cannot be cut short by this flag; the
+`TurnWatchdog`'s own inactivity/tool-timeout bounds are what limit a turn now,
+and an unsolicited exit while idle is absorbed as `epoch_ended{idle_exit}`.
+
 ## Limits
 
-- One run per cell (two for the stream-input mode: probes D and E). Not
-  repeated across models; `gemini-3.8-flash-low` only.
+- One run per cell (two for the stream-input mode: probes D and E; two for
+  `--print-timeout 0`). Not repeated across models; `gemini-3.8-flash-low`
+  only.
 - Run from a shell with a permissive logging hook, not through the wrapper's
   gate socket / `TurnWatchdog`; the wrapper's 10-minute tool deadline
   (`DEFAULT_TOOL_TIMEOUT_MS`) was not exercised against a long promoted task.
-- Not measured: daemon tasks (`IsDaemon`), what the CLI does when a promoted task outlives
-  `--print-timeout`, and whether the 5 s grace / 10 s clamp differ in other
-  agy versions.
+- Not measured: daemon tasks (`IsDaemon`), what the CLI does when a promoted
+  task outlives an OS-level bound (no `--print-timeout` bound exists to
+  outlive at `0`), and whether the 5 s grace / 10 s clamp or the
+  `--print-timeout` default differ in other agy versions. Promotion did not
+  reproduce in the two `--print-timeout 0` runs above (see that section) --
+  the promotion threshold looks non-deterministic across runs, not something
+  `--print-timeout` itself controls.
 - "No flag / setting found" rests on `--help` and a `strings` search of the
   binary, not on documentation.

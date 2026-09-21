@@ -27,6 +27,7 @@ import { AntigravityInterAgentTurnCoordinator } from "./inter_agent_turn_coordin
 import { applyAntigravityEnvDefaultModel, applyAntigravitySources, resolveAntigravitySources } from "./source_resolution.js";
 import { probeSshAgentIdentities } from "./ssh_agent_probe.js";
 import { nonInteractiveToolEnv } from "./tool_child_env.js";
+import { readEpochIdleMs } from "./epoch.js";
 import { readTurnWatchdogSettings, TurnWatchdog } from "./turn_watchdog.js";
 import { antigravityTranscriptPath } from "./transcript_path.js";
 import type { TurnWatchdogWarning } from "./turn_watchdog.js";
@@ -78,6 +79,7 @@ export async function runAntigravityCli(
     process.env,
     (message) => writeRedactedStderr(message),
   );
+  const epochIdleMs = readEpochIdleMs(process.env);
   if (nonInteractiveToolEnv(process.env).preservedGitSshCommand) {
     writeRedactedStderr("[kaoiro] antigravity respects the operator's GIT_SSH_COMMAND; ssh BatchMode is not injected\n");
   }
@@ -453,6 +455,33 @@ export async function runAntigravityCli(
     // gate-correlation-failure kill (the Host arms its own timer for those,
     // since TurnWatchdog does not orchestrate them).
     abortGraceMs: turnWatchdogSettings.abortGraceMs,
+    // issue #377 Stage 2: idle-epoch lifetime bound (`KAOIRO_ANTIGRAVITY_EPOCH_IDLE_MS`).
+    epochIdleMs,
+    onEpochEnded: ({ reason, code, signal, turns }) => {
+      writeAntigravityLifecycle({
+        event: "epoch_ended",
+        details: {
+          reason,
+          turns,
+          ...(code === null ? {} : { code }),
+          ...(signal === null ? {} : { signal }),
+        },
+      });
+    },
+    onOutOfTurnEvent: (info) => {
+      const details: Record<string, number | string | boolean> = { event_kind: info.eventKind };
+      if (info.eventKind === "step_update") {
+        if (info.stepIndex !== undefined) details.step_index = info.stepIndex;
+        if (info.stepType !== undefined) details.step_type = info.stepType;
+        if (info.state !== undefined) details.state = info.state;
+      } else if (info.eventKind === "result" && info.status !== undefined) {
+        details.status = info.status;
+      }
+      writeAntigravityLifecycle({ event: "out_of_turn_event", details });
+    },
+    onEpochStderrLine: ({ kind }) => {
+      writeAntigravityLifecycle({ event: "epoch_stderr", details: { kind } });
+    },
   }, (turnToken) => {
     writeAntigravityLifecycle({ event: "turn_start", turnToken });
     turnWatchdog.start(turnToken);
