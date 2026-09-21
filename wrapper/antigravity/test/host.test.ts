@@ -1103,6 +1103,33 @@ if (args[0] === "models") {
     host.close();
   });
 
+  it("a result arriving out of turn (epoch idle, no turn in flight) is logged as out_of_turn_event, not projected onto anything", async () => {
+    // issue #377 Stage 2 review finding (M-B): the step_update out-of-turn
+    // pins above never exercise the sibling `result` case in
+    // `#logOutOfTurnEvent` -- a stray/duplicate `result` arriving while the
+    // epoch is idle (no turn owns the stream) must be logged the same way,
+    // never mistaken for a turn nobody is waiting on.
+    const { host, logs, calls, outOfTurnEvents, states } = hostHarness();
+    await host.send("first");
+    await waitFor(() => calls.length === 1);
+    const child = calls[0]!.child;
+    child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"one"}}\n');
+    await waitFor(() => logs.some((envelope) => envelope.type === "result"));
+    const statesBefore = states.length;
+    const logsBefore = logs.length;
+    child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"stray"}}\n');
+    await waitFor(() => outOfTurnEvents.length === 1);
+    expect(outOfTurnEvents[0]).toEqual({ eventKind: "result", status: "SUCCESS" });
+    expect(states.length).toBe(statesBefore);
+    expect(logs.length).toBe(logsBefore);
+    expect(child.killed).toBeUndefined();
+    // The epoch stays alive -- the next turn reuses the same process.
+    await host.send("second");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(calls).toHaveLength(1);
+    host.close();
+  });
+
   it("a kill failure after an in-turn gate-correlation violation still reports the gate error, not the kill error", async () => {
     const { host, logs, calls } = hostHarness();
     await host.send("hello");
@@ -2591,6 +2618,42 @@ if (args[0] === "models") {
       await host.send("second");
       await waitFor(() => writtenToStdin.includes("second"));
       // No respawn -- same process, same epoch.
+      expect(calls).toHaveLength(1);
+      host.close();
+    });
+
+    it("tamper discovered by turn 2 (after turn 1 succeeded) ends the epoch and gate-breaks the host", async () => {
+      // issue #377 Stage 2 review finding (M-B): the existing tamper pins
+      // all corrupt the customization dir DURING the very first turn -- none
+      // of them exercise the epoch-spanning-turns case, where turn 1
+      // completes cleanly and only turn 2 (reusing the SAME live epoch)
+      // discovers the tamper. That is the scenario `#endEpoch("tamper")`
+      // actually exists for: Stage 1 never needed to actively end anything
+      // (the process was already dead by the time this fired).
+      const { host, logs, calls, epochEnded, sendRejections } = hostHarness();
+      await host.send("first", undefined, [], "turn-1");
+      await waitFor(() => calls.length === 1);
+      const child = calls[0]!.child;
+      const customizationDir = calls[0]!.args.at(-1)!;
+      child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"one"}}\n');
+      await waitFor(() => logs.some((envelope) => envelope.type === "result"));
+      expect(logs.find((envelope) => envelope.type === "result")?.payload).not.toHaveProperty("error_detail");
+      // Tamper AFTER turn 1 already settled cleanly -- the epoch is idle but
+      // still alive.
+      writeFileSync(join(customizationDir, ".agents", "rules", "AGENTS.md"), "tampered");
+      await host.send("second", undefined, [], "turn-2");
+      child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"two"}}\n');
+      await waitFor(() => child.killed === "SIGTERM");
+      // No respawn was attempted to serve turn 2 -- the SAME epoch reused
+      // for it is what discovers the tamper.
+      expect(calls).toHaveLength(1);
+      child.finish();
+      await waitFor(() => epochEnded.length === 1);
+      expect(epochEnded[0]).toMatchObject({ reason: "tamper" });
+      await waitFor(() => logs.filter((envelope) => envelope.type === "result").length === 2);
+      expect(logs.filter((envelope) => envelope.type === "result")[1]?.payload).toMatchObject({ error_detail: "antigravity_customization_tampered" });
+      await host.send("third", undefined, [], "turn-3");
+      expect(sendRejections).toEqual([{ turnToken: "turn-3", reason: "gate_broken" }]);
       expect(calls).toHaveLength(1);
       host.close();
     });

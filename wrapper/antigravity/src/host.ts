@@ -1668,6 +1668,11 @@ export class AntigravityHost implements EngineAdapter {
     try {
       toolHost = await (this.#options.toolHostListen ?? ToolHost.listen)(this.#options.toolDescriptors ?? []);
       if (!this.#isCurrent(generation)) return { ok: false, stale: true };
+      // A placeholder policy object -- `GateServer.listen` needs SOME gate to
+      // register the socket against, but `#runTurn` unconditionally builds a
+      // fresh gate and calls `setGate()` with it for EVERY turn, including
+      // turn 1, before any child process can reach it over the socket. This
+      // one is therefore live only across the registration probe below.
       const gate = new AntigravityGate({
         config: this.#config,
         cwd: this.#options.cwd,
