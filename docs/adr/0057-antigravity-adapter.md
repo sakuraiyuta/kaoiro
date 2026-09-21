@@ -507,7 +507,12 @@ does not prevent — a tool that ran without a gate request has already run.
    answers (the CLI killed the hook on `timeout`, measured; interrupt;
    crash), the pending `PermissionBroker` entry is resolved as deny and
    `waiting_permission` is cleared — the Codex `ToolHost` habit of
-   ignoring socket errors is not inherited on the gate path.
+   ignoring socket errors is not inherited on the gate path. issue #377
+   Stage 2: `interrupt()` closes `GateServer` / `ToolHost` synchronously,
+   before the SIGTERM/SIGKILL grace (up to `abortGraceMs`, ~60s) elapses —
+   if the still-alive `agy` process tries to call the hook or the bridge
+   during that window, it finds no socket and fails closed, same as any
+   other socket loss above.
 
 ### F4c — Stage A fixes both axes at spawn; mid-session change is Stage B
 

@@ -210,11 +210,39 @@ that outlives an epoch's several turns cannot be cut short by this flag; the
 `TurnWatchdog`'s own inactivity/tool-timeout bounds are what limit a turn now,
 and an unsolicited exit while idle is absorbed as `epoch_ended{idle_exit}`.
 
+## Host-level epoch reuse (issue #377 Stage 2, kohaku implementation review round 1 M-A)
+
+Measured 2026-09-21 by ao on the dev host, `agy` 1.2.7, model
+`gemini-3.8-flash-low`, run THROUGH `AntigravityHost` (not a raw CLI shell
+probe like the sections above) via
+`test/live_agy_stream_input.test.ts`'s `KAOIRO_LIVE_AGY=1`-gated live suite.
+A counting `spawn` injected into the host's options wraps the same
+detached-process-group spawn the production `#defaultSpawn` uses. Two runs:
+
+| Run | `spawn_count` | turn 1 elapsed | turn 2 elapsed | conversation id (turn 1 / turn 2) | turn 2 reply | `epoch_stderr` kinds |
+|---|---|---|---|---|---|---|
+| 1 | 1 | 41,363 ms | 2,502 ms | `1ad4f52d-…` / `1ad4f52d-…` (equal) | `RESULT=sleep 20 && echo done` | not captured |
+| 2 | 1 | 39,917 ms | 3,004 ms | `b870ac67-…` / `b870ac67-…` (equal) | `RESULT=sleep 20 && echo done` | `[]` (neither `waiting` nor `terminating`) |
+
+Turn 1: `sleep 20 && echo done` via `run_command`. Turn 2: "what exact shell
+command did you run in the previous turn?", answered from the epoch's own
+turn history without invoking any tool. Both runs: exactly one process
+spawned across both turns, the same engine-confirmed conversation id on
+both turns, turn 2 answering in well under a tenth of turn 1's elapsed time,
+and turn 2's reply correctly naming the `sleep` command turn 1 ran —
+consistent with one live `agy` process actually serving both turns (Stage
+2's own claim), not two independent processes coincidentally sharing state
+through `--conversation` resume. Run 2's `sleep 20` did not promote to a
+background task (no `waiting`/`terminating` stderr line) — consistent with
+the promotion non-determinism already noted under `--print-timeout 0` and
+Limits below, not a Stage 2 regression: promotion (or its absence) is
+orthogonal to whether the epoch's process is reused.
+
 ## Limits
 
 - One run per cell (two for the stream-input mode: probes D and E; two for
-  `--print-timeout 0`). Not repeated across models; `gemini-3.8-flash-low`
-  only.
+  `--print-timeout 0`; two for the host-level epoch reuse measurement).
+  Not repeated across models; `gemini-3.8-flash-low` only.
 - Run from a shell with a permissive logging hook, not through the wrapper's
   gate socket / `TurnWatchdog`; the wrapper's 10-minute tool deadline
   (`DEFAULT_TOOL_TIMEOUT_MS`) was not exercised against a long promoted task.
