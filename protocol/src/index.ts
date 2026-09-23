@@ -845,7 +845,28 @@ export type SessionResetErrorReason =
   | "runner_unavailable"
   | "spawn_failed"
   | "rollback_failed"
-  | "timeout";
+  | "timeout"
+  | "permission_ceiling_conflict";
+
+/** Per-axis detail for a `permission_ceiling_conflict` reset refusal
+ *  (issue #397): names the offending axis, the value the reset's resume
+ *  snapshot would have applied, and the ceiling it exceeds -- so the
+ *  operator sees which lever to narrow instead of a generic refusal.
+ *  Discriminated on `axis` so `current` / `ceiling` carry the matching
+ *  value type per axis. Antigravity-only (the ceiling itself is,
+ *  ADR-0057 F4c Stage B0). */
+export type PermissionCeilingConflictAxis =
+  | {
+      axis: "sandbox";
+      current: PermissionAxesExt["sandbox"];
+      ceiling: PermissionAxesExt["sandbox"];
+    }
+  | {
+      axis: "approval";
+      current: PermissionAxesExt["approval"];
+      ceiling: PermissionAxesExt["approval"];
+    }
+  | { axis: "network_access"; current: boolean; ceiling: boolean };
 
 /** Resolved launch/session-state snapshot used by D8 resume drift detection
  *  (ADR-0032 F4bc + ADR-0033 F4 addenda, phase-15). Same shape for both
@@ -1684,6 +1705,9 @@ export interface SessionResetResult {
   request_id: string;
   ok: boolean;
   reason?: SessionResetErrorReason;
+  /** Present only when `reason === "permission_ceiling_conflict"` (issue
+   *  #397): one entry per axis the reset's resume snapshot exceeded. */
+  ceiling_conflict?: PermissionCeilingConflictAxis[];
   to_session_id?: string | null;
 }
 
@@ -1728,6 +1752,9 @@ export interface SessionResetFailed {
   agent_id: string;
   mode: SessionResetMode;
   reason: SessionResetErrorReason;
+  /** Present only when `reason === "permission_ceiling_conflict"` (issue
+   *  #397): one entry per axis the reset's resume snapshot exceeded. */
+  ceiling_conflict?: PermissionCeilingConflictAxis[];
 }
 
 /** session_boundary log-marker payload (ADR-0036 F3, phase-17 17-1).

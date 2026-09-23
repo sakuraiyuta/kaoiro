@@ -44,33 +44,46 @@ describe("resolveAntigravityCeiling", () => {
   });
 
   it("flags an approval ceiling narrower than launch as a conflict and falls back to the default", () => {
-    const { ceiling, conflict } = resolveAntigravityCeiling(
+    const { ceiling, conflict, conflictAxes } = resolveAntigravityCeiling(
       { sandbox: "workspace-write", approval: "local", networkAccess: false },
       { max_approval: "on-request" },
     );
     expect(conflict).toContain("max_approval=on-request");
     // Defensive fallback: never relay a ceiling below the launch-derived default.
     expect(ceiling.max_approval).toBe("local");
+    expect(conflictAxes).toEqual([
+      { axis: "approval", current: "local", ceiling: "on-request" },
+    ]);
   });
 
   it("flags a sandbox ceiling narrower than launch as a conflict", () => {
-    const { conflict } = resolveAntigravityCeiling(
+    const { conflict, conflictAxes } = resolveAntigravityCeiling(
       { sandbox: "danger-full-access", approval: "on-request", networkAccess: false },
       { max_sandbox: "workspace-write" },
     );
     expect(conflict).toContain("max_sandbox=workspace-write");
+    expect(conflictAxes).toEqual([
+      {
+        axis: "sandbox",
+        current: "danger-full-access",
+        ceiling: "workspace-write",
+      },
+    ]);
   });
 
   it("flags max_network_access=false against a launch network_access=true", () => {
-    const { conflict } = resolveAntigravityCeiling(
+    const { conflict, conflictAxes } = resolveAntigravityCeiling(
       { sandbox: "workspace-write", approval: "on-request", networkAccess: true },
       { max_network_access: false },
     );
     expect(conflict).toContain("max_network_access=false");
+    expect(conflictAxes).toEqual([
+      { axis: "network_access", current: true, ceiling: false },
+    ]);
   });
 
   it("accepts an equal network_access ceiling and joins multiple conflicts", () => {
-    const { conflict } = resolveAntigravityCeiling(
+    const { conflict, conflictAxes } = resolveAntigravityCeiling(
       { sandbox: "danger-full-access", approval: "local", networkAccess: true },
       { max_sandbox: "read-only", max_approval: "untrusted", max_network_access: true },
     );
@@ -78,5 +91,15 @@ describe("resolveAntigravityCeiling", () => {
     expect(conflict).toContain("max_approval=untrusted");
     // network_access true<=true is not a conflict.
     expect(conflict).not.toContain("max_network_access");
+    expect(conflictAxes).toEqual([
+      { axis: "sandbox", current: "danger-full-access", ceiling: "read-only" },
+      { axis: "approval", current: "local", ceiling: "untrusted" },
+    ]);
+  });
+
+  it("returns an empty conflictAxes array when there is no conflict", () => {
+    const { conflict, conflictAxes } = resolveAntigravityCeiling(launch, undefined);
+    expect(conflict).toBeNull();
+    expect(conflictAxes).toEqual([]);
   });
 });

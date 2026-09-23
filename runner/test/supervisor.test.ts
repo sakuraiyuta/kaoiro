@@ -1321,7 +1321,10 @@ describe("Supervisor.handleResetSession (ADR-0036 F2, phase-17 17-5)", () => {
 
   // issue #359 M2: a reset_session must not widen the immutable launch ceiling
   // via a snapshot approval more permissive than it — it falls to a terminal
-  // reset result and leaves the old wrapper running.
+  // reset result and leaves the old wrapper running. issue #397: the
+  // terminal result reports the dedicated reason plus the offending axis
+  // instead of collapsing into the generic `spawn_failed` (no spawn was ever
+  // attempted here).
   it("rejects a reset_session whose snapshot approval exceeds the stored ceiling", () => {
     const h = harness({ antigravityExecutable: { ok: true, path: process.execPath } });
     h.sup.handleSpawn({
@@ -1344,7 +1347,10 @@ describe("Supervisor.handleResetSession (ADR-0036 F2, phase-17 17-5)", () => {
     expect(h.children[0]!.kills).toBe(0);
     expect(h.resetResults.at(-1)).toMatchObject({
       ok: false,
-      reason: "spawn_failed",
+      reason: "permission_ceiling_conflict",
+      ceiling_conflict: [
+        { axis: "approval", current: "never", ceiling: "local" },
+      ],
     });
   });
 
@@ -2096,6 +2102,80 @@ describe("resume-privilege-restoration apply (藤 D1/D2, P0)", () => {
       h.children[0]!.exit();
       expect(h.configs[1]!.sandbox).toBe("workspace-write");
       expect(h.configs[1]!.network_access).toBe(false);
+    });
+
+    // issue #397 V2: the escape already exists -- narrow the axis (here via
+    // the reset's own snapshot, mirroring what an operator's set_permission
+    // would leave on the pointer) so the value is within the ceiling, and
+    // the reset proceeds as an ordinary fresh relaunch.
+    it("allows a reset_session whose snapshot approval is narrowed to within the stored ceiling", () => {
+      const h = harness({
+        exists: true,
+        antigravityExecutable: { ok: true, path: process.execPath },
+      });
+      h.sup.handleSpawn({
+        ...spawnMsg,
+        agent_id: "lab-pc-1.antigravity-reset2",
+        engine: "antigravity",
+        approval: "on-request",
+      });
+      const first = h.last();
+
+      h.sup.handleResetSession({
+        agent_id: "lab-pc-1.antigravity-reset2",
+        mode: "new",
+        request_id: "rs_ceiling_2",
+        previous_session_id: "sess-old",
+        resume_snapshot: { approval: "local" },
+      });
+
+      expect(first.kills).toBe(1);
+      first.exit();
+      expect(h.children).toHaveLength(2);
+      expect(h.resetResults).toHaveLength(1);
+      expect(h.resetResults[0]).toMatchObject({ ok: true });
+    });
+
+    it("reports every exceeded axis when a reset_session snapshot conflicts on more than one", () => {
+      const h = harness({
+        exists: true,
+        antigravityExecutable: { ok: true, path: process.execPath },
+      });
+      h.sup.handleSpawn({
+        ...spawnMsg,
+        agent_id: "lab-pc-1.antigravity-reset3",
+        engine: "antigravity",
+        sandbox: "read-only",
+        approval: "on-request",
+        network_access: false,
+      });
+
+      h.sup.handleResetSession({
+        agent_id: "lab-pc-1.antigravity-reset3",
+        mode: "new",
+        request_id: "rs_ceiling_3",
+        previous_session_id: "sess-old",
+        resume_snapshot: {
+          sandbox: "danger-full-access",
+          network_access: true,
+        },
+      });
+
+      expect(h.resetResults).toHaveLength(1);
+      const result = h.resetResults[0]!;
+      expect(result.ok).toBe(false);
+      expect(result.reason).toBe("permission_ceiling_conflict");
+      expect(result.ceiling_conflict).toEqual(
+        expect.arrayContaining([
+          {
+            axis: "sandbox",
+            current: "danger-full-access",
+            ceiling: "read-only",
+          },
+          { axis: "network_access", current: true, ceiling: false },
+        ]),
+      );
+      expect(result.ceiling_conflict).toHaveLength(2);
     });
   });
 

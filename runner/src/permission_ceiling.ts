@@ -24,7 +24,10 @@
 //     permissive_max(launch, "local") for approval (so an on-request agent can
 //     be widened to the advisory allowlist at runtime, but never to "never").
 
-import type { PermissionAxesExt } from "@kaoiro/protocol";
+import type {
+  PermissionAxesExt,
+  PermissionCeilingConflictAxis,
+} from "@kaoiro/protocol";
 
 type Sandbox = PermissionAxesExt["sandbox"];
 type Approval = PermissionAxesExt["approval"];
@@ -78,6 +81,10 @@ export interface AntigravityCeilingResolution {
    *  an explicit config ceiling is less permissive than the launch value, else
    *  null. A non-null value fails the spawn closed. */
   conflict: string | null;
+  /** Structured mirror of `conflict`, one entry per exceeded axis (issue
+   *  #397) -- empty when `conflict` is null. Lets a reset refusal report
+   *  which axis to narrow instead of only a log-line string. */
+  conflictAxes: PermissionCeilingConflictAxis[];
 }
 
 function sandboxRank(value: Sandbox): number {
@@ -107,6 +114,7 @@ export function resolveAntigravityCeiling(
   const launchNetwork = launch.networkAccess ?? false;
 
   const conflicts: string[] = [];
+  const conflictAxes: PermissionCeilingConflictAxis[] = [];
 
   // Sandbox: default = launch; explicit must be >= launch.
   let maxSandbox = launchSandbox;
@@ -118,6 +126,11 @@ export function resolveAntigravityCeiling(
       conflicts.push(
         `max_sandbox=${cfgSandbox} is narrower than launch sandbox=${launchSandbox}`,
       );
+      conflictAxes.push({
+        axis: "sandbox",
+        current: launchSandbox,
+        ceiling: cfgSandbox,
+      });
     }
   }
 
@@ -132,6 +145,11 @@ export function resolveAntigravityCeiling(
       conflicts.push(
         `max_approval=${cfgApproval} is narrower than launch approval=${launchApproval}`,
       );
+      conflictAxes.push({
+        axis: "approval",
+        current: launchApproval,
+        ceiling: cfgApproval,
+      });
     }
   }
 
@@ -145,6 +163,11 @@ export function resolveAntigravityCeiling(
       conflicts.push(
         "max_network_access=false is narrower than launch network_access=true",
       );
+      conflictAxes.push({
+        axis: "network_access",
+        current: launchNetwork,
+        ceiling: cfgNetwork,
+      });
     }
   }
 
@@ -155,5 +178,6 @@ export function resolveAntigravityCeiling(
       max_network_access: maxNetwork,
     },
     conflict: conflicts.length === 0 ? null : conflicts.join("; "),
+    conflictAxes,
   };
 }
