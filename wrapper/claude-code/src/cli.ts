@@ -1077,6 +1077,21 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       .catch(() => {})
       .finally(() => host.close());
   });
+  // issue #391 (parity with issue #379's antigravity fix): without a
+  // handler, Node's default SIGTERM behavior kills this process immediately
+  // -- no close(), no SDK-side child cleanup -- and the runner's stop /
+  // delete / restart / reset paths all rely on exactly that signal.
+  // close() (not interrupt()) directly: SIGTERM is an external "stop now",
+  // not an operator action, so it should not manufacture an
+  // interrupt_requested/interrupted settlement for what the operator never
+  // asked to interrupt. Registering this handler also suppresses Node's
+  // default immediate-exit behavior, so the process naturally stays alive
+  // until the SDK's own escalation (see host.ts's `#abort`) finishes the
+  // child -- no explicit process.exit() here.
+  const onSigterm = (): void => {
+    host.close();
+  };
+  process.on("SIGTERM", onSigterm);
 
   try {
     // Idle-wait start: the SDK emits nothing until the first turn, so
@@ -1107,6 +1122,12 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     disconnectReason = "crash";
     throw error;
   } finally {
+    // issue #391: this process only ever runs one runClaudeCli() in
+    // production, but leaving the listener registered would accumulate a
+    // stale one per invocation for any caller (tests included) that runs it
+    // more than once in the same process, each closing over an
+    // already-finished host (issue #379's listener-accumulation lesson).
+    process.off("SIGTERM", onSigterm);
     // Deny in-flight permission requests, then release the socket so the
     // process can exit.
     try {

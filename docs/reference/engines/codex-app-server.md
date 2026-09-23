@@ -1,7 +1,7 @@
 ---
 title: "Codex app-server transport"
 status: implemented
-last_updated: 2026-09-18
+last_updated: 2026-09-23
 ---
 
 # Codex app-server transport
@@ -21,8 +21,12 @@ before ending, even if the process subsequently exits.
 
 EOF and request timeout fail pending operations and close the child. A submitted
 request that loses its response has an unknown outcome; the transport does not
-retry or replace the process automatically. Graceful shutdown is bounded at five
-seconds before killing only the owned child. RPC waits default to 25 seconds.
+retry or replace the process automatically. Graceful shutdown (`shutdownTimeoutMs`)
+defaults to five seconds before killing only the owned child; `CodexHost` overrides
+this to 2000ms (issue #391) so the child's own SIGKILL escalation stays below the
+runner's reset grace — see
+[adapter-contract.md](adapter-contract.md#sigterm-handling-and-process-termination-timing).
+RPC waits default to 25 seconds.
 Stopping iteration detaches the consumer, not the running turn: admission stays
 closed until its terminal event. The internal Host backend wires token-fenced
 interrupt and immediate shutdown; the CLI composition is exercised below.
