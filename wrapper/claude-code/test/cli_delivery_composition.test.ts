@@ -77,6 +77,7 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     });
     try {
       await ready;
+      expect(hostOptions.prepareInput).toBeTypeOf("function");
       linkOptions.onInterAgentDeliveryStatus({ acked_seq: 0 });
       const first = inboundEnvelope(1, 2);
       first.payload.conversation_id = "queued-closed";

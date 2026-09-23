@@ -355,6 +355,9 @@ export interface CodexHostOptions {
   /** The exact boundary at which an already-queued input begins an SDK turn.
    * Queue insertion intentionally does not count as dispatch (#237). */
   onTurnStart?: (info: { turnToken: string; conversationIds: readonly string[] }) => void;
+  /** Synchronous final input check. Undefined preserves the queued input;
+   * null skips it without starting an SDK turn. */
+  prepareInput?: (turnToken: string) => { text: string; conversationIds: readonly string[] } | null | undefined;
   /** Wrapper-local lifecycle evidence for the Codex stream. This is kept out
    * of transcript envelopes because it exists to diagnose SDK wedges. */
   onLifecycle?: (event: CodexLifecycleEvent) => void;
@@ -1682,6 +1685,21 @@ export class CodexHost implements EngineAdapter {
     if (finalGate !== null || this.#closed || gate.generation !== this.#lifecycleGeneration) {
       await cancel(finalGate ?? "interrupted");
       return;
+    }
+    if (!retryAfterRepair) {
+      const prepared = this.#options.prepareInput?.(turnToken);
+      if (prepared === null) {
+        if (this.#queue.length === 0) {
+          this.#machine = initialMachineState("waiting_input");
+          this.#emitState("waiting_input");
+        }
+        this.#options.onTurnFinalized?.({ turnToken });
+        return;
+      }
+      if (prepared !== undefined) {
+        input = prepared.text;
+        conversationIds = prepared.conversationIds;
+      }
     }
     this.#activeTurnToken = turnToken;
     this.#activeTurnConversationIds = conversationIds;

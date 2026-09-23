@@ -189,6 +189,29 @@ export class CodexInterAgentTurnCoordinator {
     this.#dispatchNext(peer);
   }
 
+  /** Rechecks a host-queued batch synchronously at the SDK input boundary. */
+  prepareInput(turnToken: string): { batch: DispatchedCodexInterAgentBatch | null; removedConversationIds: readonly string[] } | undefined {
+    const batch = this.#batchByTurnToken.get(turnToken);
+    if (batch === undefined) return undefined;
+    const items: CodexInterAgentBatchItem[] = [];
+    const removed: CodexInterAgentBatchItem[] = [];
+    for (const item of batch.items) {
+      const mode = this.#reclassifyQueued?.(item) ?? item.mode;
+      if (mode === "terminal") removed.push(item);
+      else items.push(mode === item.mode ? item : { ...item, mode });
+    }
+    const conversationIds = items.map((item) => (item.envelope.payload as Partial<InterAgentMessagePayload>).conversation_id)
+      .filter((cid): cid is string => typeof cid === "string");
+    const survivingIds = new Set(conversationIds);
+    const removedConversationIds = removed.map((item) => (item.envelope.payload as Partial<InterAgentMessagePayload>).conversation_id)
+      .filter((cid): cid is string => typeof cid === "string" && !survivingIds.has(cid));
+    for (const item of removed) this.#onTerminalQueued?.(item);
+    if (items.length === 0) return { batch: null, removedConversationIds };
+    const prepared = { ...batch, items, conversationIds, text: formatInboundMessages(items) };
+    this.#batchByTurnToken.set(turnToken, prepared);
+    return { batch: prepared, removedConversationIds };
+  }
+
   #dispatchNext(peer: string): void {
     if (this.#closed) return;
     if (this.#activeTokenByPeer.has(peer)) return;

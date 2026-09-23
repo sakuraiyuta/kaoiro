@@ -89,6 +89,7 @@ const EPOCH_STDERR_TERMINATING_PATTERN = /^terminating \d+ background task\(s\) 
  *  it also settles never held identity at all. */
 type TurnOutcome =
   | { kind: "stale" }
+  | { kind: "skipped" }
   | { kind: "error"; detail: string; classify: InterAgentErrorClassifyInput; attemptedModel: string | null | undefined }
   | { kind: "result"; event: AgyStreamEvent; attemptedModel: string | null }
   | {
@@ -176,6 +177,8 @@ export interface AntigravityHostOptions {
    *  `session_lifecycle` report (permission_applied / permission_failed). */
   onPermissionLifecycle?: (event: WrapperPermissionLifecycleMessage) => void;
   onTurnStart?: (info: { turnToken: string; conversationIds: readonly string[] }) => void;
+  /** Synchronous final check before writing the user input to the epoch. */
+  prepareInput?: (turnToken: string) => { text: string; conversationIds: readonly string[] } | null | undefined;
   onTurnEnd?: (info: {
     turnToken: string;
     conversationIds: readonly string[];
@@ -1159,7 +1162,12 @@ export class AntigravityHost implements EngineAdapter {
         this.#activeTurnConversationIds = [];
       }
       if (this.#interruptRecord?.turnToken === turnToken) this.#interruptRecord = null;
-      if (!this.#watchdogFailStopped) {
+      if (outcome.kind === "skipped") {
+        if (this.#turnQueue.length === 0 && !this.#closed) {
+          this.#machine = initialMachineState("waiting_input");
+          this.#emitState("waiting_input");
+        }
+      } else if (!this.#watchdogFailStopped) {
         let error: InterAgentErrorClassifyInput | undefined;
         let cancellation: { kind: "interrupt"; reason: "interrupted" } | undefined;
         if (outcome.kind === "interrupted") {
@@ -1286,6 +1294,13 @@ export class AntigravityHost implements EngineAdapter {
         if (!spawned.ok) return { kind: "stale" };
       }
       const epoch = this.#epoch!;
+      // A skipped input can leave an unused epoch until its ordinary idle TTL.
+      const prepared = this.#options.prepareInput?.(turnToken);
+      if (prepared === null) return { kind: "skipped" };
+      if (prepared !== undefined) {
+        text = prepared.text;
+        conversationIds = prepared.conversationIds;
+      }
       this.#activeTurnToken = turnToken;
       this.#activeTurnConversationIds = conversationIds;
 

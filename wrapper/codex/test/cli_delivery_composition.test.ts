@@ -120,6 +120,7 @@ describe("Codex CLI delivery composition (issue #247)", () => {
     expect(linkOptions.onInterAgentDeliveryStatus).toBeTypeOf("function");
     expect(linkOptions.onInterAgentMessage).toBeTypeOf("function");
     expect(hostOptions.onTurnStart).toBeTypeOf("function");
+    expect(hostOptions.prepareInput).toBeTypeOf("function");
 
     (linkOptions.onInterAgentDeliveryStatus as (status: { acked_seq: number }) => void)({
       acked_seq: 1,

@@ -95,6 +95,7 @@ describe("Antigravity CLI delivery composition", () => {
         },
       });
       await ready;
+      expect(hostOptions.prepareInput).toBeTypeOf("function");
 
       (linkOptions.onInterAgentDeliveryStatus as (status: { acked_seq: number }) => void)({
         acked_seq: 1,

@@ -859,6 +859,17 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     onLog,
     onTask,
     onSessionLifecycle,
+    prepareInput: (turnToken) => {
+      const prepared = interAgentTurns.prepareInput(turnToken);
+      if (prepared === undefined) return undefined;
+      resolveInterAgentConversationIds(turnToken, prepared.removedConversationIds);
+      if (prepared.batch !== null) return {
+        text: prepared.batch.text,
+        conversationIds: prepared.batch.conversationIds,
+      };
+      resolveInterAgentTurn(interAgentTurns.settle(turnToken));
+      return null;
+    },
     // phase-28 BR MF2: the B1 threshold notice is an injection like any
     // other, so it queues on the one chain instead of racing it.
     enqueueInjection: enqueueInstruction,

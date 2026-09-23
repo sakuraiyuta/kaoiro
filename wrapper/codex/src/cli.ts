@@ -756,6 +756,26 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     onState,
     onLog,
     onTask,
+    prepareInput: (turnToken) => {
+      const prepared = interAgentTurns.prepareInput(turnToken);
+      if (prepared === undefined) return undefined;
+      for (const notice of interAgent?.resolveTurnEnd(turnToken, prepared.removedConversationIds) ?? []) {
+        link?.send(notice);
+      }
+      if (prepared.batch !== null) {
+        const range = interAgentTurns.deliverySequenceRangeForTurn(turnToken);
+        if (range === undefined) lifecycleRanges.delete(turnToken);
+        else lifecycleRanges.set(turnToken, { seqFirst: range.first, seqLast: range.last });
+        return {
+          text: prepared.batch.text,
+          conversationIds: prepared.batch.conversationIds,
+        };
+      }
+      const settled = interAgentTurns.settle(turnToken);
+      lifecycleRanges.delete(turnToken);
+      if (settled !== undefined && !watchdogFailStopped) interAgentTurns.dispatchNextForPeer(settled.peer);
+      return null;
+    },
     onTurnBoundary: ({ turnToken }) => {
       turnWatchdog.end(turnToken);
     },
