@@ -638,7 +638,9 @@ export type SessionResetMode = "new" | "clear";
 
 /** Returns the reserved session-reset mode for text whose trimmed value is
  *  exactly `/new` or `/clear`. Leading and trailing whitespace is ignored;
- *  arguments and escaped forms remain ordinary instruction text. */
+ *  arguments and escaped forms remain ordinary instruction text. Whether a
+ *  match is intercepted (attachments present, reset capability off) is the
+ *  caller's decision. */
 export function reservedSessionResetMode(
   text: string,
 ): SessionResetMode | null {
