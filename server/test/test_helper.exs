@@ -8,7 +8,10 @@
 # into the `mix test` container by `.github/workflows/ci.yml`'s `-e CI`
 # (docker run does not inherit the runner's environment automatically).
 if System.get_env("CI") do
-  ExUnit.start(assert_receive_timeout: 500)
+  ExUnit.start(
+    assert_receive_timeout: 500,
+    formatters: [KaoiroServer.Test.RelayFailureDiagnosticsFormatter, ExUnit.CLIFormatter]
+  )
 else
   ExUnit.start()
 end
