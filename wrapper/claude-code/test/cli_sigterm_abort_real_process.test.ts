@@ -23,6 +23,7 @@
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { performance } from "node:perf_hooks";
 import { describe, expect, it } from "vitest";
 import type { WrapperConfig } from "@kaoiro/agent-common";
 import { runClaudeCli } from "../src/cli.js";
@@ -46,9 +47,13 @@ function isAlive(pid: number): boolean {
   }
 }
 
+// issue #391 round2 S2: monotonic, not wall-clock -- a WSL2 clock step (or
+// any NTP/VM-suspend adjustment) can move Date.now() by seconds without any
+// time actually elapsing, producing both a false timeout here and a false
+// pass/fail on the elapsedMs bounds below.
 async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
     if (predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -268,10 +273,10 @@ describe.skipIf(!isLinux)("Claude CLI SIGTERM -> abort() real-process escalation
       fixturePid = Number(readFileSync(pidFile, "utf8").trim());
       expect(isAlive(fixturePid)).toBe(true);
 
-      const t0 = Date.now();
+      const t0 = performance.now();
       process.emit("SIGTERM" as never);
       await waitFor(() => !isAlive(fixturePid!), 4_500);
-      const elapsedMs = Date.now() - t0;
+      const elapsedMs = performance.now() - t0;
       // Must actually wait for the SDK's SIGTERM step (~2000ms) -- a child
       // that dies too fast would mean the assertion below (well under the
       // reset grace) is vacuously true for the wrong reason (e.g. abort()

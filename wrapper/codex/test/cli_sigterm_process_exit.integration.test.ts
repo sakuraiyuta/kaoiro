@@ -24,6 +24,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -92,9 +93,13 @@ function findCodexExecPidOnce(parentPid: number): number | null {
   return direct[0]?.pid ?? null;
 }
 
+// issue #391 round2 S2: monotonic, not wall-clock -- a WSL2 clock step (or
+// any NTP/VM-suspend adjustment) can move Date.now() by seconds without any
+// time actually elapsing, producing both a false timeout here and a false
+// pass/fail on the elapsedMs bound below.
 async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
     if (predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 20));
   }

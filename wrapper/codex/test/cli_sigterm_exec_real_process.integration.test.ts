@@ -22,6 +22,7 @@ import { createServer } from "node:http";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { performance } from "node:perf_hooks";
 import { execSync } from "node:child_process";
 import { expect, it, vi } from "vitest";
 import { runCodexCli } from "../src/cli.js";
@@ -88,9 +89,12 @@ function findDescendantByArgs(rootPid: number, needle: string): number | null {
   return null;
 }
 
+// issue #391 round2 S2: monotonic, not wall-clock -- a WSL2 clock step (or
+// any NTP/VM-suspend adjustment) can move Date.now() by seconds without any
+// time actually elapsing, producing a false timeout here.
 async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
     if (predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
