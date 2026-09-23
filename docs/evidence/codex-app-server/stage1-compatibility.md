@@ -389,11 +389,19 @@ setModel resolved
 ```
 
 Both turns completed (`terminal: "turn.completed"`) with no 400/404 --
-the failure pre-0.155 CLIs return for these two slugs. Turn 2's `state`
-events report `ext.model: "gpt-6-sol"` during `sending`/`thinking` (the
-prior value; `setModel` "applies from the next turn" per the code comment at
-`host.ts:1174-1176`, and turn 2 IS that next turn) but settle to
-`"gpt-6-luna"` by `turn_end`/`done`/`waiting_input`, consistent with that
-design. No child process remained after the run (`ps aux` checked
+the failure pre-0.155 CLIs return for these two slugs. **Turn 2 actually ran
+against `gpt-6-luna`**, confirmed by reading `host.ts`: `setModel()` writes
+only `this.#modelPending` (`host.ts:1199`); turn start binds
+`attempted.model = this.#modelPending` (`host.ts:1682-1683`), so by the time
+`run()` was called for turn 2 -- after `setModel("gpt-6-luna")` had already
+resolved -- the turn was attempted with `gpt-6-luna`, not the prior model.
+The `ext.model` field that drives the `state` event display is a SEPARATE
+piece of state, `this.#model`, updated only on turn settle inside
+`#finishTurn` (`this.#model = attempted.model`, `host.ts:2402`). That is why
+turn 2's `state` events show `"gpt-6-sol"` (the last CONFIRMED value) during
+`sending`/`thinking` and only flip to `"gpt-6-luna"` at `turn_end`/`done`/
+`waiting_input` -- a display lag on the confirmed-value field, not evidence
+that the wrong model executed. No child process remained after the run
+(`ps aux` checked
 separately from the two long-lived production runner processes already on
 this host).
