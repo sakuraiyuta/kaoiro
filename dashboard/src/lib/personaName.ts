@@ -4,9 +4,10 @@ import type { DirectoryEntry, Envelope, Persona } from "./protocol";
  *  directory fallback is needed for durable history that names an agent no
  *  longer present in the live map. A live agent always has a concrete persona,
  *  including the `default` persona, so the fallback does not replace live
- *  identity. Keep this fallback for issue #234; the directory-only IA case in
- *  `responseTimeline.integration.test.ts` pins it. Unknown or unresolved ids
- *  stay visible as their raw id. */
+ *  identity. The "directory-only IA" case in
+ *  `responseTimeline.integration.test.ts` pins this fallback. Do not "fix" or
+ *  remove it as part of issue #234 work in App.svelte, AgentCard, or AgentDetail.
+ *  Unknown or unresolved ids stay visible as their raw id. */
 export function personaForAgent(
   agentId: string,
   agents: Record<string, Envelope>,
