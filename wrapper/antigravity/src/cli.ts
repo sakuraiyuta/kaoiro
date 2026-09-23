@@ -58,10 +58,16 @@ export interface AntigravityCliDependencies {
 
 // issue #396: human-readable cause for a session-reset reservation dropped
 // by a non-authoritative turn end, mirroring codex/src/cli.ts's
-// `abandonmentCause`. `watchdog_fail_stop` here only ever reaches this
-// helper via the ACTIVE-turn path (host.ts's normal `#drainTurns` finally,
-// not the queued-turns batch settlement in `#failStopForWatchdog`, which
-// never calls `onTurnEnd` for the reservation's own owner turn at all).
+// `abandonmentCause`. `watchdog_fail_stop` here reaches this helper ONLY
+// via the queued-turns batch settlement in host.ts's `#failStopForWatchdog`
+// (each not-yet-started queued turn gets a synthetic `onTurnEnd` with
+// `terminal: false`) -- never via the ACTIVE-turn path, whose own
+// `#drainTurns` finally block skips the whole onTurnEnd call once
+// `#watchdogFailStopped` is set (kohaku round-1 implementation review,
+// issue #396: an earlier version of this comment had the two reversed).
+// Because the cancelling `onTurnEnd` call belongs to an unrelated queued
+// turn, not the reservation's own owner, the wording below names the host
+// rather than "the turn that reserved it".
 function cancellationCause(cancellation: {
   kind: "watchdog_fail_stop" | "interrupt";
 }): string {
@@ -69,7 +75,7 @@ function cancellationCause(cancellation: {
     case "interrupt":
       return "the turn that reserved it was interrupted";
     case "watchdog_fail_stop":
-      return "the turn watchdog stopped the turn that reserved it";
+      return "the turn watchdog stopped the host while the reservation was pending";
   }
 }
 

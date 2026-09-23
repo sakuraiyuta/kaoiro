@@ -47,6 +47,7 @@ interface Rig {
   requests: { mode: string; reason?: string }[];
   requestSnapshots: { sentCount: number; state: string | undefined }[];
   turnEnds: Parameters<NonNullable<AntigravityHostOptions["onTurnEnd"]>>[0][];
+  sendRejections: Parameters<NonNullable<AntigravityHostOptions["onSendRejected"]>>[0][];
   linkOptions: Record<string, any>;
   hostOptions: Record<string, any>;
   host: AntigravityHost;
@@ -62,6 +63,7 @@ async function makeRig(
   const requests: Rig["requests"] = [];
   const requestSnapshots: Rig["requestSnapshots"] = [];
   const turnEnds: Rig["turnEnds"] = [];
+  const sendRejections: Rig["sendRejections"] = [];
   const agyChildren: FakeAgy[] = [];
   let linkOptions!: Record<string, any>;
   let hostOptions!: Record<string, any>;
@@ -98,6 +100,10 @@ async function makeRig(
           turnEnds.push(info);
           options.onTurnEnd?.(info);
         },
+        onSendRejected: (info) => {
+          sendRejections.push(info);
+          options.onSendRejected?.(info);
+        },
         spawn: () => {
           const child = new FakeAgy();
           agyChildren.push(child);
@@ -113,6 +119,7 @@ async function makeRig(
     requests,
     requestSnapshots,
     turnEnds,
+    sendRejections,
     get linkOptions() {
       return linkOptions;
     },
@@ -235,6 +242,51 @@ describe("Antigravity session-reset real lifetime semantics (issue #396)", () =>
 
     // Give the coordinator's onTurnEnd handling a tick to run to completion.
     await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(rig.requests).toHaveLength(0);
+  });
+
+  // S1 (kohaku round-1 should-fix): a watchdog fail-stop's ACTIVE-turn
+  // onTurnEnd never fires at all (see the finally block's
+  // `!this.#watchdogFailStopped` gate in host.ts), so a pending
+  // reservation freezes ONLY when the queue is empty at fail-stop time --
+  // ADR-0043 and antigravity-tools-permissions.md previously described
+  // this as unconditional. When an unstarted turn is still queued,
+  // `#failStopForWatchdog` settles IT with a synthetic `onTurnEnd`
+  // (`terminal: false`), which reaches the coordinator as
+  // non-authoritative -- and the coordinator drops ANY pending
+  // reservation on that signal alone, before ever checking which turn
+  // owns it. This pins that the reservation is genuinely CANCELLED (not
+  // silently frozen) in that case: no dispatch happens, and the
+  // cancellation's own `notify()` call reaches `host.send()`, which by
+  // then is already closed and rejects it -- an observable side effect a
+  // mutant that removed the queue-settlement-cancels-reservation
+  // behaviour (e.g. by moving the owner check before the authoritative
+  // check) would not produce.
+  it("a queued unstarted turn's settlement cancels (not freezes) a pending reservation on watchdog fail-stop", async () => {
+    const rig = await makeRig();
+    await rig.host.send("do the thing", undefined, ["cid-a"], "turn-a");
+    await vi.waitFor(() => expect(rig.agyChildren).toHaveLength(1));
+
+    const reset = resetDescriptor(rig);
+    const call = reset.handler({ mode: "new" });
+    await vi.waitFor(() => expect(rig.sent.filter((e) => e.type === "permission_request")).toHaveLength(1));
+    const requestId = (
+      rig.sent.filter((e) => e.type === "permission_request")[0]!.payload as { request_id: string }
+    ).request_id;
+    rig.linkOptions.onPermissionDecision({ request_id: requestId, allow: true });
+    await call;
+
+    // Queue a second turn behind the still-active turn-a; it must stay
+    // queued (agy never produces a result for turn-a) until fail-stop hits.
+    await rig.host.send("queued behind turn-a", undefined, ["cid-b"], "turn-b");
+    expect(rig.requests).toHaveLength(0);
+
+    expect(rig.host.failStopTurnForWatchdog("turn-a")).toBe(true);
+
+    // The cancellation's notify() call reaches host.send(), already
+    // closed by fail-stop, and is rejected rather than silently ignored.
+    await vi.waitFor(() => expect(rig.sendRejections).toHaveLength(1));
+    expect(rig.sendRejections[0]).toMatchObject({ reason: "watchdog_fail_stopped" });
     expect(rig.requests).toHaveLength(0);
   });
 });
