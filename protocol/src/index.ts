@@ -854,7 +854,17 @@ export type SessionResetErrorReason =
  *  operator sees which lever to narrow instead of a generic refusal.
  *  Discriminated on `axis` so `current` / `ceiling` carry the matching
  *  value type per axis. Antigravity-only (the ceiling itself is,
- *  ADR-0057 F4c Stage B0). */
+ *  ADR-0057 F4c Stage B0).
+ *
+ *  `approval`'s type reuses the full `PermissionAxesExt["approval"]` enum
+ *  (5 values, including the deprecated `"on-failure"` alias), which is
+ *  WIDER than the 4-value closed vocabulary the server's runner_channel.ex
+ *  parser and the dashboard's `SELECTABLE_APPROVAL_VALUES` both actually
+ *  accept for this field. No live path currently produces `"on-failure"`
+ *  here -- the runner's `approvalRank` (`permission_ceiling.ts`) treats it
+ *  as outside the closed order, so it can never be relayed as a ceiling or
+ *  a current value in the first place -- but the type itself does not
+ *  enforce the narrower 4-value set. */
 export type PermissionCeilingConflictAxis =
   | {
       axis: "sandbox";
