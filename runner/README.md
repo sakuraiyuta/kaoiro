@@ -79,23 +79,23 @@ Codex を選んだ場合はその auth mode / トークン / node の絶対パ�
 
 ## 常駐化(systemd / launchd)
 
-Moved to [Runner install and distribution](../docs/operations/runner-install.md#常駐化systemd--launchd).
+Moved to [Runner install and distribution](../docs/operations/runner-install.md#running-as-a-service-systemd--launchd).
 
 ### 共通の準備
 
-Moved to [Runner install and distribution](../docs/operations/runner-install.md#共通の準備).
+Moved to [Runner install and distribution](../docs/operations/runner-install.md#common-preparation).
 
 ### 設置形態(issue #219、[ADR-0018](../docs/adr/0018-runner-distribution.md))
 
-Moved to [Runner install and distribution](../docs/operations/runner-install.md#設置形態issue-219adr-0018).
+Moved to [Runner install and distribution](../docs/operations/runner-install.md#deployment-forms-issue-219-adr-0018).
 
 ### Linux(systemd user unit)
 
-Moved to [Runner install and distribution](../docs/operations/runner-install.md#linuxsystemd-user-unit).
+Moved to [Runner install and distribution](../docs/operations/runner-install.md#linux-systemd-user-unit).
 
 ### macOS(launchd LaunchAgent)
 
-Moved to [Runner install and distribution](../docs/operations/runner-install.md#macoslaunchd-launchagent).
+Moved to [Runner install and distribution](../docs/operations/runner-install.md#macos-launchd-launchagent).
 
 ### 再起動ポリシーと終了コード
 
@@ -103,19 +103,19 @@ Moved: the rollout-ordering rationale to [Multi-host deployment architecture](..
 
 ### 動作確認
 
-Moved to [Runner install and distribution](../docs/operations/runner-install.md#動作確認).
+Moved to [Runner install and distribution](../docs/operations/runner-install.md#verification).
 
 ### nvm / fnm / asdf を使っている場合
 
-Moved to [Runner install and distribution](../docs/operations/runner-install.md#nvm--fnm--asdf-を使っている場合).
+Moved to [Runner install and distribution](../docs/operations/runner-install.md#when-using-nvm--fnm--asdf).
 
 ## 配布物の作成(tarball)
 
-Moved to [Runner install and distribution](../docs/operations/runner-install.md#配布物の作成tarball).
+Moved to [Runner install and distribution](../docs/operations/runner-install.md#creating-distribution-tarballs).
 
 ### 配布先での設置
 
-Moved to [Runner install and distribution](../docs/operations/runner-install.md#配布先での設置).
+Moved to [Runner install and distribution](../docs/operations/runner-install.md#installation-on-the-target-host).
 
 ## Codex backend selection
 
@@ -123,7 +123,7 @@ Moved to [Runner configuration](../docs/reference/configuration/runner.md#codex-
 
 ## Codex 設定
 
-Moved to [Runner configuration](../docs/reference/configuration/runner.md#codex-設定).
+Moved to [Runner configuration](../docs/reference/configuration/runner.md#codex-configuration).
 
 ## Antigravity configuration
 
