@@ -115,7 +115,7 @@ defmodule Mix.Tasks.Kaoiro.Env do
       "#KAOIRO_FOOTER_DIR=/etc/kaoiro/footers",
       "",
       "# Restart-surviving state paths. docker-compose.yaml already sets",
-      "# these; only needed when running outside compose. See the deployment",
+      "# these; only needed when running outside compose.",
       "# See docs/reference/configuration/server.md for the full list and meanings.",
       Enum.map(PersistencePaths.stores(), fn store ->
         "##{store.env}=#{PersistencePaths.volume_path(store)}"
