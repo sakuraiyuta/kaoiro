@@ -145,7 +145,7 @@ runner_config="$root/runner/runner.config.json"
 if [[ ! -f "$runner_config" ]]; then
   echo "dogfood: generating $runner_config with server_url=ws://localhost:4000/runner" \
     "(gitignored; edit to taste, or override at any time via" \
-    "KAOIRO_RUNNER_SERVER_URL without touching this file — issue #140)"
+    "KAOIRO_RUNNER_SERVER_URL without touching this file)"
   cat >"$runner_config" <<JSON
 {
   "host_id": "dev-host",
