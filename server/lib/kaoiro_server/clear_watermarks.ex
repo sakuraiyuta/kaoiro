@@ -1,6 +1,6 @@
 defmodule KaoiroServer.ClearWatermarks do
   @moduledoc """
-  Restart-surviving per-agent **IA visibility watermark** (issue #109).
+  Restart-surviving per-agent **IA visibility watermark** (issue #106).
   `clear_history` alone records this cutoff by adopting the independently
   persisted `SessionStarts` record; session transitions never alter it. On
   subsequent history-merge paths, IA envelopes whose server-side
@@ -14,7 +14,7 @@ defmodule KaoiroServer.ClearWatermarks do
   This store only loads existing 5/4/3/2-field DETS rows so previously
   hidden IA never reappears after the migration.
 
-  **Ordering domain** (ふじ #109 M6 must-fix, 2026-07-23 + R5 must-fix
+  **Ordering domain** (ふじ #106 M6 must-fix, 2026-07-23 + R5 must-fix
   same date): the order tuple is allocated by `KaoiroServer.IngressOrder`,
   the single serialized allocator both this store and the live IA
   ingress stamp (`WrapperChannel`) share. The tuple shape is `{us, seq}`

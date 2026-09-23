@@ -1,6 +1,6 @@
 defmodule KaoiroServer.SessionStarts do
   @moduledoc """
-  Restart-surviving record of each agent's current session start (issue #109).
+  Restart-surviving record of each agent's current session start (issue #106).
 
   This is deliberately separate from `ClearWatermarks`: a session transition
   records a start here but never changes display visibility.  `clear_history`

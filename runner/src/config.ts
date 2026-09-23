@@ -59,7 +59,7 @@ export interface RunnerConfig {
   blocked_personas?: string[];
   cwd_allowlist: string[];
   /** Soft work-budget denominator as a percentage of every active model's
-   * SDK-reported context window (issue #264). Omitted lets the wrapper apply
+   * SDK-reported context window (issue #254). Omitted lets the wrapper apply
    * its 60% default. */
   context_work_budget_percent?: number;
   capabilities?: string[];
@@ -602,7 +602,7 @@ export function effectiveCapabilities(config: RunnerConfig): string[] {
  *  spawn without a separate mode enum on the wire. `engines` carries the
  *  launch catalog per capability (ADR-0032 F4bc). Claude advertises a
  *  versioned optimistic bootstrap snapshot which the SDK's account-aware
- *  ext.models replaces after init (#110); Codex resolves its curated list
+ *  ext.models replaces after init (#107); Codex resolves its curated list
  *  from the detected auth mode and operator-declared ChatGPT plan
  *  (ADR-0035); Antigravity's `antigravityCatalogOverride` is the caller's
  *  `resolveAntigravityCatalog()` result (ADR-0057 F6) — absent falls back
@@ -716,7 +716,7 @@ export function wrapperUrlFrom(serverUrl: string): string {
   return `${url.protocol}//${url.host}/wrapper`;
 }
 
-/** env override name for `server_url` (issue #140). */
+/** env override name for `server_url` (issue #135). */
 export const SERVER_URL_ENV = "KAOIRO_RUNNER_SERVER_URL";
 
 /** Set to `1` to include Phoenix's periodic heartbeat wire logs. They are
@@ -736,8 +736,8 @@ export function isPhoenixHeartbeatLoggingEnabled(
 
 /**
  * Applies the `KAOIRO_RUNNER_SERVER_URL` env override to a loaded config's
- * `server_url` (issue #140): distribution/service deployments (systemd/
- * launchd units, #141) inject the connection target via env rather than
+ * `server_url` (issue #135): distribution/service deployments (systemd/
+ * launchd units, #136) inject the connection target via env rather than
  * editing the gitignored `runner.config.json`. Precedence: env > config
  * file — unset/empty env leaves the config untouched. Re-validates the
  * same `ws://`/`wss://` shape `parseRunnerConfig` enforces on the file

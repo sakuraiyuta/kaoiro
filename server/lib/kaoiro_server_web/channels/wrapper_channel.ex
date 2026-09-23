@@ -61,7 +61,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   @max_directory_model_bytes 256
   @session_reset_modes ["new", "clear"]
 
-  # M1 round-3 fix (2026-08-09, ふじ round 3, issue #180): `task_id` on a
+  # M1 round-3 fix (2026-08-09, ふじ round 3, issue #170): `task_id` on a
   # `task` envelope had no length cap of its own — only the WHOLE
   # envelope was bounded (`@max_envelope_bytes` above). Since task_id
   # doubles as a JSON *map key* on the outbound `TaskStates` snapshot
@@ -79,7 +79,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # for its per-agent outer-key-overhead arithmetic.
   @max_task_id_field_bytes 256
 
-  # issue #188 / ADR-0049 F4: a tasklist is a bounded whole-list snapshot,
+  # issue #178 / ADR-0049 F4: a tasklist is a bounded whole-list snapshot,
   # not an unbounded transcript. These ingress caps deliberately mirror the
   # wrapper-side normalizer; the server still verifies them because wrappers
   # are a trust boundary, and a bypass must not inflate TaskStates/snapshots.
@@ -167,7 +167,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   # `transition_id` identifies a session transition, not a wrapper process:
   # runner crash relaunch intentionally reuses it.  The random generation is
-  # therefore the only lifetime identity for #247's dispatch observation.
+  # therefore the only lifetime identity for #237's dispatch observation.
   defp bind_delivery(
          agent_id,
          %{
@@ -271,7 +271,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
       case PersonaAssets.prompt(socket.assigns.persona_id) do
         prompt when is_binary(prompt) ->
-          # ADR-0015 (issue #218): flat `version` frame key, like the
+          # ADR-0015 (issue #208): flat `version` frame key, like the
           # `persona_sync` / `display_name_sync` pushes below.
           push(socket, "persona_prompt", %{version: "0", prompt: prompt})
 
@@ -285,7 +285,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
       case KaoiroServer.PermissionModes.get(socket.assigns.agent_id) do
         mode when is_binary(mode) ->
-          # ADR-0015 (issue #218): flat `version` frame key. The live relay
+          # ADR-0015 (issue #208): flat `version` frame key. The live relay
           # of this same event (`agents_channel.ex`'s `relay/5`) stamps it
           # server-side too, so the wrapper sees the same shape from both
           # producers.
@@ -333,7 +333,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
     end
   end
 
-  # issue #197 段階3 (D14 acceptance 1): pushes the AUTHORITATIVE current
+  # issue #187 段階3 (D14 acceptance 1): pushes the AUTHORITATIVE current
   # display_name + revision from `AgentDirectory` every join (fresh
   # connect AND reconnect alike), unconditionally — not only when it
   # differs from what the wrapper last applied. This is what closes the
@@ -348,17 +348,17 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # `rename_agent` racing this push is either seen here (AgentDirectory
   # already reflects it) or arrives moments later as its own sync
   # broadcast; either way nothing is lost. The wrapper's own revision
-  # check (issue #197 段階3, `AgentHost`/`CodexHost` `applyPersonaSync`/
+  # check (issue #187 段階3, `AgentHost`/`CodexHost` `applyPersonaSync`/
   # `applyDisplayNameSync`) makes this push idempotent against a live
   # relay arriving in either order (D15) — sending it unconditionally on
   # every join is simpler and no less correct than tracking a
   # per-connection "did I already push this revision" flag server-side.
   #
-  # issue #219 D22: DUAL-emits both `persona_sync` (legacy `name` key,
+  # issue #209 D22: DUAL-emits both `persona_sync` (legacy `name` key,
   # old wrapper builds) and `display_name_sync` (new `display_name` key)
   # at the SAME revision — same rationale as the live-relay dual-emit in
   # `agents_channel.ex`'s `rename_agent` handler. `AgentDirectory.get/1`
-  # never returns canonical persona data anymore (issue #219 D19) —
+  # never returns canonical persona data anymore (issue #209 D19) —
   # `display_name` is a pure instance-state field, no join against
   # `PersonaAssets` needed here.
   # `PermissionSyncMessage` (issue #305, protocol.md "Persistence, join
@@ -395,7 +395,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   defp push_persona_sync(socket, agent_id) do
     case AgentDirectory.get(agent_id) do
       %{display_name: display_name, revision: revision} ->
-        # ADR-0015 (issue #197 段階3, ふじ MF-1 レビュー指摘): flat
+        # ADR-0015 (issue #187 段階3, ふじ MF-1 レビュー指摘): flat
         # version stamp, matching the live-relay pushes from
         # `agents_channel.ex`'s `rename_agent` handler.
         push(socket, "persona_sync", %{
@@ -415,7 +415,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
         # branch should be unreachable: `AgentDirectory.record/4` is now
         # a synchronous `GenServer.call` that `agents_channel.ex`'s spawn
         # handler commits strictly BEFORE broadcasting `spawn` to the
-        # runner (issue #219 D22 corollary), so by the time the runner
+        # runner (issue #209 D22 corollary), so by the time the runner
         # can launch this wrapper process and it joins here, the entry
         # already exists. Kept as a defensive no-op rather than a crash
         # for any path this ordering guarantee does not cover. Nothing
@@ -493,7 +493,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
     if AgentId.valid?(agent_id), do: :ok, else: {:error, :invalid_agent_id}
   end
 
-  # ADR-0015 stage 2's only inbound funnel (issue #270 MF-2).
+  # ADR-0015 stage 2's only inbound funnel (issue #260 MF-2).
   @impl true
   def handle_in(event, payload, socket) do
     case Map.get(@wrapper_event_policy, event, :unknown) do
@@ -558,11 +558,11 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # The wrapper's `mcp__kaoiro__list_agents` tool calls this to resolve
   # persona names → agent_ids before send_to_agent. Reply carries every
   # currently-known agent EXCEPT the requester. Phase-8's name-resolution
-  # minimum was deliberately widened by #102: engine / model / effort are
+  # minimum was deliberately widened by #99: engine / model / effort are
   # peer-visible execution traits for delegation. Other operator-grade ext
   # (cwd / permission / session / context / capabilities / source) stays out.
   #
-  # issue #269: also merges AgentDirectory (DETS-persisted, ADR-0030)
+  # issue #259: also merges AgentDirectory (DETS-persisted, ADR-0030)
   # entries that have no live AgentStates envelope — the "落ちた peer"
   # case a server restart or AgentStates cleanup (issue #14) leaves behind.
   # Merged in-line (not a separate array) so persona-name resolution stays
@@ -586,7 +586,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
         )
       end)
 
-    # issue #269 仕様5: AgentStates 側を優先。同一 agent_id を重複させない。
+    # issue #259 仕様5: AgentStates 側を優先。同一 agent_id を重複させない。
     directory_only =
       AgentDirectory.all()
       |> Map.drop(Map.keys(states))
@@ -595,7 +595,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
       end)
       |> Enum.reject(&is_nil/1)
 
-    # issue #269 仕様5 / S9: requester 除外は合流後にここ 1 箇所だけ
+    # issue #259 仕様5 / S9: requester 除外は合流後にここ 1 箇所だけ
     # (live / directory_only の両方をこの 1 箇所でカバーする)。
     #
     # ふじ MF-1: この除外を N=32 の cap より前に置く。requester 自身が
@@ -1051,7 +1051,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
       # Acceptance reserves a server-side reset transaction but is not its
       # completion. Return its correlation id so this old wrapper can match a
-      # later terminal failure if the runner cannot actually replace it (#258).
+      # later terminal failure if the runner cannot actually replace it (#248).
       {:reply, {:ok, %{request_id: request_id}}, socket}
     else
       {:error, reason} ->
@@ -1226,7 +1226,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # Broadcast only; do NOT store.
   defp store(%{"type" => "refresh_models_result"}), do: :ok
 
-  # Subagent/workflow task lifecycle (issue #180, ADR-0019/0047/0048). A
+  # Subagent/workflow task lifecycle (issue #170, ADR-0019/0047/0048). A
   # dedicated flat table, not the per-agent_id AgentStates slot — see
   # TaskStates' moduledoc. Broadcast (below, unchanged for every type)
   # still fans this out to agents:lobby same as any other envelope.
@@ -1234,11 +1234,11 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   defp store(envelope), do: AgentStates.put(envelope, owner: self())
 
-  # "users" projection for directory_request (issue #197 段階2, ADR-0021
+  # "users" projection for directory_request (issue #187 段階2, ADR-0021
   # F6-8). Fail-closed (director D4): the third arg to get_env/3 is the
   # implementation default and it is `false` — only the exact `true`
   # config value (server/config/runtime.exs, KAOIRO_EXPOSE_USERS_TO_AGENTS)
-  # opens this. "原則見える" (issue #197 制約節) is realized as a config
+  # opens this. "原則見える" (issue #187 制約節) is realized as a config
   # DEFAULT, never as this implementation's own default.
   #
   # `== true` rather than a plain truthy `if`: Elixir treats every value
@@ -1256,7 +1256,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
     end
   end
 
-  # Peer directory "users" entry (issue #197 段階2). A LITERAL map with
+  # Peer directory "users" entry (issue #187 段階2). A LITERAL map with
   # every value re-validated at its own type/shape — deliberately NOT
   # Map.take/2 (director D1). Map.take only narrows which KEYS survive;
   # it passes the VALUES through unchecked, so a future shape change on
@@ -1329,20 +1329,20 @@ defmodule KaoiroServerWeb.WrapperChannel do
         _ -> %{}
       end
 
-    # issue #219 D19/D26 (ADR-0021 F6-3): `display_name` rides the same
+    # issue #209 D19/D26 (ADR-0021 F6-3): `display_name` rides the same
     # envelope top-level field this module's after-join persona_sync/
     # display_name_sync pushes keep in sync (see `push_persona_sync/2`),
     # so it is always fresh for a live agent. `persona{id,name,sprite_set}`
     # above stays the pack canonical value — unaffected by rename
-    # (issue #219 D19) — so a peer sees BOTH the stable identity and the
+    # (issue #209 D19) — so a peer sees BOTH the stable identity and the
     # current, possibly-renamed, label. Absent only for a not-yet-updated
     # legacy wrapper build; `maybe_put_directory_field/3` drops the key
     # entirely rather than emitting an empty string.
     #
-    # advisory (issue #219, クロエ実測検証): reuses `valid_display_name/1`
+    # advisory (issue #209, クロエ実測検証): reuses `valid_display_name/1`
     # — the same 1-64-grapheme / no-control-char bound `user_entry/1`
     # already applies to a user's `display_name` — rather than a bare
-    # `is_binary/1` check. issue #219 made this field the UI label's
+    # `is_binary/1` check. issue #209 made this field the UI label's
     # authoritative source while D24 tightened the pack `name` field's
     # own validation; leaving THIS projection unvalidated would have made
     # the authoritative label source the one unvalidated field in the
@@ -1413,7 +1413,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
         )
 
       status ->
-        # ADR-0015 (issue #218): flat `version` frame key on the
+        # ADR-0015 (issue #208): flat `version` frame key on the
         # wrapper-bound copy, same as `SynthEnvelope.deliver/2`'s.
         KaoiroServerWeb.Endpoint.broadcast(
           "wrapper:#{agent_id}",
@@ -1550,13 +1550,13 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   defp is_finite_number(_), do: false
 
-  # directory-only entry (issue #269)。AgentStates に envelope を持たない
+  # directory-only entry (issue #259)。AgentStates に envelope を持たない
   # AgentDirectory エントリの射影。identity + last_seen + conversation だけを
   # 出し、engine / model / effort / context / rate_limits / session 系は
   # 載せない — 値が存在しないのであって「0」でも「健全」でもない
   # (absent = unknown の既存規約)。
   #
-  # agent_id は AgentId.valid?/1 を通す (issue #269 S7): AgentDirectory の
+  # agent_id は AgentId.valid?/1 を通す (issue #259 S7): AgentDirectory の
   # DETS ロードは is_binary しか見ておらず、この経路が DETS 由来の id を
   # agent へ出す最初の経路になるため、user_entry/1 と同じ discipline を
   # ここで適用する。落ちたエントリは丸ごと drop。
@@ -1585,10 +1585,10 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   defp directory_only_entry(_id, _entry, _peers), do: nil
 
-  # persona の typed unresolved (issue #219 D21)。
+  # persona の typed unresolved (issue #209 D21)。
   # agents_channel.ex の join_directory_entry/1 と同じ規則 —
   # pack が解決すれば canonical、しなければ %{"id" => persona_id} を返し、
-  # persona キー自体は必ず present にする (issue #269 S1)。
+  # persona キー自体は必ず present にする (issue #259 S1)。
   # Map.take は F6-2 の nested allow-list 規律 (canonical map を素通しにしない)。
   defp directory_persona(persona_id) when is_binary(persona_id) do
     case PersonaAssets.get_persona(persona_id) do
@@ -1601,7 +1601,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   # last_seen は memory-only hint (AgentDirectory 由来の unix 秒)。ISO8601
   # UTC に変換して既存の directory 時刻 field (session_started_at /
-  # last_activity_at) と表現を揃える (issue #269 S5)。nil (server 再起動後
+  # last_activity_at) と表現を揃える (issue #259 S5)。nil (server 再起動後
   # / 未 touch) や domain 外の値は field ごと省略する。
   defp maybe_put_last_seen(entry, ts)
        when is_integer(ts) and ts >= 0 and ts <= @max_safe_integer do
@@ -1613,7 +1613,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   defp maybe_put_last_seen(entry, _ts), do: entry
 
-  # directory-only 分の件数上限 (issue #269 S6)。AgentDirectory は operator
+  # directory-only 分の件数上限 (issue #259 S6)。AgentDirectory は operator
   # が明示 delete するまで消えず、agent_id は spawn ごとに新規採番される
   # ため無制限に増える。過去の全 agent が毎回 model の context を食う構造を
   # 避けるため N=32 に切り、last_seen 降順 (unknown は最後尾、同着は
@@ -1772,7 +1772,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # AgentStates.snapshot (揮発): a dogfood restart + wrapper reconnect
   # with the SAME sid would appear as "AgentStates unknown → sid",
   # falsely advancing the boundary and hiding the very durable IA
-  # #105 restored. SessionPointers survives restart, so a resume of
+  # #102 restored. SessionPointers survives restart, so a resume of
   # the same session compares equal here → no advance.
   #
   # Also skips `prior_sid == nil` (未発話 agent の初回 sid 報告): a
@@ -1790,7 +1790,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # retries of the same transition now match idempotently.
   #
   # Visibility is unchanged here: `clear_history` alone adopts the recorded
-  # start and broadcasts the live client re-filter signal (#109).
+  # start and broadcasts the live client re-filter signal (#106).
   defp maybe_advance_session_boundary(%{"session_id" => new_sid}, agent_id)
        when is_binary(new_sid) and new_sid != "" do
     prior =
@@ -1992,7 +1992,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
         # returns), so a client that missed the broadcast (joined too
         # late to see it) can never observe stale tasks either — its
         # later snapshot read is already clean. Discarding AFTER (the
-        # original #180 order) left exactly that combination open: a
+        # original #170 order) left exactly that combination open: a
         # join whose snapshot read landed between broadcast and discard
         # got stale tasks it would never be told to drop, having already
         # missed the one broadcast for this disconnect.
@@ -2064,7 +2064,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   defp validate(_envelope, _agent_id), do: {:error, "envelope must be an object"}
 
-  # issue #177 review M1: live ingress (this path) is exclusively
+  # issue #167 review M1: live ingress (this path) is exclusively
   # wrapper-origin — a server-synthesized notice (hard-limit escalate,
   # disconnected) is never submitted through `handle_in("envelope", ...)`;
   # the server constructs and pushes it directly (`deliver_synth_inter_agent`).
@@ -2081,13 +2081,13 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # wrapper's own IA sidecar legitimately holds historical turn_number=0
   # rows from real server-synthesized notices it received.
   #
-  # `payload.new_conversation` (issue #262) is validated HERE, not in the
+  # `payload.new_conversation` (issue #252) is validated HERE, not in the
   # shared `validate_inter_agent_payload/1`, for the same reason: a stored
   # sidecar row from before this field existed must still replay.
   #
   # ABSENCE is allowed (review, クロエ M1) — only a present-but-non-boolean
   # value is rejected. Requiring the key would hard-reject every live send
-  # from a wrapper that predates issue #262, and that population is not
+  # from a wrapper that predates issue #252, and that population is not
   # hypothetical: the Phoenix client owns reconnect/heartbeat
   # (wrapper/core/src/transport.ts), so an old wrapper survives a server
   # deploy and keeps pushing without ever restarting. ADR-0015 already
@@ -2099,7 +2099,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # `Logger.warning`, see `warn_legacy_new_conversation_absent/0`) — this
   # is now the ONLY place that permissive default is allowed to live.
   # `ConversationStates.record_message/8` deliberately does NOT default
-  # `new_conversation?` (director ruling, issue #262 delta 2巡目): every
+  # `new_conversation?` (director ruling, issue #252 delta 2巡目): every
   # caller of that internal API, this one included, must state the value
   # explicitly, so a future caller cannot silently reproduce this same
   # bug through the internal API instead of the wire.
@@ -2119,7 +2119,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
     end
   end
 
-  # code-review (issue #180, round 1): `TaskStates` indexes/attributes every
+  # code-review (issue #170, round 1): `TaskStates` indexes/attributes every
   # task purely by `payload["agent_id"]` (self-contained per ADR-0047 F2),
   # never cross-checking it against the envelope's own topic-validated
   # `agent_id`. A mismatched payload.agent_id would file the task under the
@@ -2139,7 +2139,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # broadcast while `TaskStates.put/1`'s own defensive check quietly drops
   # it from the table. Leaving that inconsistency in place would let
   # operators see a task on the live wire that the snapshot never confirms
-  # existed. Deliberately NOT relaxed for "trusted" wrappers — #175's
+  # existed. Deliberately NOT relaxed for "trusted" wrappers — #165's
   # lesson (declared/self-reported values are forgeable) applies here too.
   defp validate_task_payload(%{"agent_id" => payload_agent_id} = payload, agent_id)
        when payload_agent_id == agent_id do
@@ -2378,9 +2378,9 @@ defmodule KaoiroServerWeb.WrapperChannel do
     body = payload["body"] || ""
     turn_number = payload["turn_number"]
     done? = get_in(payload, ["meta", "done"]) == true
-    # issue #262: true when the SENDING wrapper's own conversation_id was
+    # issue #252: true when the SENDING wrapper's own conversation_id was
     # omitted by its caller and freshly allocated (see record_message/8) —
-    # OR the field is simply absent, which this branch treats as a pre-#262
+    # OR the field is simply absent, which this branch treats as a pre-#252
     # wrapper rather than a validation failure (review, クロエ M1). Only an
     # EXPLICIT `false` narrows this to "confirm the id already exists";
     # `validate_live_inter_agent_payload/1` already rejects a
@@ -2455,7 +2455,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
                      ) do
                   # Within limits. `:both_done` means every participating agent
                   # has now signalled done; the tracker has already closed the
-                  # entry into a tombstone atomically (issue #177; spec MUST: 両
+                  # entry into a tombstone atomically (issue #167; spec MUST: 両
                   # owner-side done で対話完了). No extra close needed.
                   ok when ok in [:ok, :both_done] ->
                     {:ok, {:accept, to, nil, reservation}}
@@ -2465,7 +2465,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
                   # Cross-conversation pollution attempt, global cap reached,
                   # or an explicitly-named conversation_id with no entry at all
-                  # (issue #262): reject at the routing boundary.
+                  # (issue #252): reject at the routing boundary.
                   {:error, reason} ->
                     :ok = DeliveryStates.release(reservation)
                     {:error, reason}
@@ -2480,11 +2480,11 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   # Mirrors warn_relayed_version/3 in agents_channel.ex (ADR-0015 best-effort
   # accept) for the same shape of client/server skew: a wrapper that predates
-  # issue #262 never learned to send `new_conversation`, and the Phoenix
+  # issue #252 never learned to send `new_conversation`, and the Phoenix
   # client owns reconnect/heartbeat (wrapper/core/src/transport.ts), so such
   # a wrapper survives a server redeploy without restarting and keeps
   # pushing without the field. Not a hard limit on how long this is
-  # honoured -- once every connected wrapper is confirmed to be issue-#262-
+  # honoured -- once every connected wrapper is confirmed to be issue-#252-
   # or-later, `validate_live_inter_agent_payload/1` can go back to requiring
   # the key (see docs/reference/inter-agent/conversation-admission.md).
   defp warn_legacy_new_conversation_absent do
@@ -2568,7 +2568,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # form is a 2-element integer array (ADR-0051 D3-4 / protocol.md). Same
   # shape everywhere: delivered envelope, acceptance ack, sidecar row,
   # `replay_ia` item. (Envelope building + delivery for server-synthesized
-  # IA notices moved to `KaoiroServerWeb.SynthEnvelope` — issue #221 — but
+  # IA notices moved to `KaoiroServerWeb.SynthEnvelope` — issue #211 — but
   # `encode_stamp/1` stays here too since the live ingress path above
   # (`:619`) also needs it.)
   defp encode_stamp({us, seq}), do: [us, seq]
@@ -2699,7 +2699,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
   defp valid_inter_agent_owner?(_), do: false
 
-  # Optional 応答不能 notice (#131). Absent on ordinary messages. Shape only:
+  # Optional 応答不能 notice (#127). Absent on ordinary messages. Shape only:
   # `code` is an open string whose meaning belongs to the receiving agent,
   # not to the server (protocol-inter-agent Constraints carve-out).
   defp valid_inter_agent_error?(nil), do: true

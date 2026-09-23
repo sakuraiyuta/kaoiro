@@ -1,6 +1,6 @@
 defmodule KaoiroServer.TaskStates do
   @moduledoc """
-  In-memory nested table of active subagent/workflow tasks (issue #180,
+  In-memory nested table of active subagent/workflow tasks (issue #170,
   ADR-0019 F1-F4 / ADR-0047 / ADR-0048 F1).
 
   Keyed by `agent_id => %{task_id => envelope}` on the WIRE (`snapshot/0`'s
@@ -34,7 +34,7 @@ defmodule KaoiroServer.TaskStates do
   incrementally so the S2 cap check below is O(1)). A malformed payload
   (missing/empty `agent_id`/`task_id`, or an unrecognized `kind`) is
   logged and dropped rather than upserted/deleted or crashing the
-  GenServer — fail-visible, matching the wrapper's own #180 policy for
+  GenServer — fail-visible, matching the wrapper's own #170 policy for
   its analogous cases. The malformed-drop log (S3 fix-round) reports
   only which required fields were present/well-typed, never
   `inspect(envelope)` whole — the same content-boundary the
@@ -100,7 +100,7 @@ defmodule KaoiroServer.TaskStates do
   purged by the time it could possibly observe the broadcast (or have
   missed it entirely because it joined earlier still, in which case
   nothing changed for it). Reordering after `broadcast` (the original
-  #180 design) left a real gap — a join whose `snapshot` read landed
+  #170 design) left a real gap — a join whose `snapshot` read landed
   between the broadcast and the (then-later) discard call could receive
   already-broadcast-as-gone tasks and never get told, because the one
   `disconnected` broadcast for that agent had already passed. This

@@ -92,7 +92,7 @@
   let historyIncomplete = $state(false);
   let hostsIncomplete = $state(false);
   let directoryIncomplete = $state(false);
-  // Active subagent/workflow tasks (ADR-0019/0047/0048, issue #180),
+  // Active subagent/workflow tasks (ADR-0019/0047/0048, issue #170),
   // nested agent_id -> task_id -> latest task envelope (M1 fix-round
   // composite key, 2026-08-09). Operator-only, twin of `directory`'s
   // lifecycle: seeded by the join-time snapshot, upserted (kind=started/
@@ -188,11 +188,11 @@
       createTranscriptIdentityIndex(transcript),
     );
   }
-  // #124: read marker belongs to this session owner, rather than the
+  // #120: read marker belongs to this session owner, rather than the
   // response-timeline mount. Opening a detail unmounts the grid/timeline;
   // keeping it here prevents an already-read row from becoming unread again.
   let readTimelineEntryKeys = $state<ReadonlySet<string>>(new Set());
-  // #125: live socket envelope が実際に transcript へ追加されたときだけ
+  // #121: live socket envelope が実際に transcript へ追加されたときだけ
   // timeline に渡す one-shot CSS animation marker。history / snapshot は
   // この state を更新しないため、初回一括描画では点滅しない。
   let newTimelineEntryKeys = $state<ReadonlySet<string>>(new Set());
@@ -202,7 +202,7 @@
   // marker carries the connection generation that opened it, so an epoch
   // discard can drop the dead ones without cancelling a running replay.
   let activeTimelineReplays = $state<ActiveTimelineReplays>({});
-  // Per-agent IA visibility watermark (issue #109). It changes only after
+  // Per-agent IA visibility watermark (issue #106). It changes only after
   // operator clear_history; session transitions do not affect display.
   let clearWatermarks = $state<Record<string, string>>({});
   // ADR-0051 D4: the server projection lifetime `logs` was merged against.
@@ -251,7 +251,7 @@
     }
   });
   // Timeline click の発話位置。AgentDetail は stable entry identity を DOM
-  // anchor に照合して、該当箇所まで smooth scroll する (#122)。primitive の
+  // anchor に照合して、該当箇所まで smooth scroll する (#118)。primitive の
   // entryKey しか渡さないため、同じ行の再クリックでは reactive 変化として
   // 届かない (現状は開き直し = 別 selected → 別 target なので実運用では
   // 問題にならないが、同一 detail 内での repeat click は N/A)。
@@ -261,10 +261,10 @@
   let origin = $state<{ x: number; y: number } | null>(null);
   let status = $state<ConnectionStatus>("connecting");
   let manifest = $state<PersonaManifest | null>(null);
-  // issue #228: server's own build identity, so LaunchDialog can warn on a
+  // issue #218: server's own build identity, so LaunchDialog can warn on a
   // mismatch against a connected runner's build_revision (from the `hosts`
-  // push). null on a pre-#228 server / fetch failure — LaunchDialog still
-  // surfaces THAT as its own distinct warning (issue #228 round 2 MF-4,
+  // push). null on a pre-#218 server / fetch failure — LaunchDialog still
+  // surfaces THAT as its own distinct warning (issue #218 round 2 MF-4,
   // ふじ 差し戻し: round 1 silently showed nothing here, indistinguishable
   // from an operator's point of view from "revisions match").
   let serverHealth = $state<ServerHealth | null>(null);
@@ -276,7 +276,7 @@
   let serverHealthFetchGeneration = 0;
   let connection = $state<KaoiroConnection | null>(null);
 
-  // (Re)fetches the server's own build identity (issue #228 round 2 MF-4).
+  // (Re)fetches the server's own build identity (issue #218 round 2 MF-4).
   // Called on mount, on every channel (re)join (`onJoined` below — this IS
   // "server reconnect": a fresh join can follow a server redeploy), and
   // right before opening LaunchDialog, so the operator never launches
@@ -442,12 +442,12 @@
   // only their effects (connection, status) need to be reactive.
   let refreshTimer: ReturnType<typeof setInterval> | undefined;
   let destroyed = false;
-  // Handlers for tab-visibility / network-online wake-ups (issue #123).
+  // Handlers for tab-visibility / network-online wake-ups (issue #119).
   // Retained across startSession / endSession so removeEventListener can pair
   // the exact function references addEventListener registered.
   let wakeHandler: (() => void) | undefined;
   let visibilityHandler: (() => void) | undefined;
-  // Timestamp when the tab last went hidden (issue #123). shouldForceReconnectOnVisible
+  // Timestamp when the tab last went hidden (issue #119). shouldForceReconnectOnVisible
   // (protocol.ts) decides on visible-resume whether the gap crossed the
   // heartbeat-horizon threshold and a full socket rebuild is warranted.
   let hiddenAt: number | null = null;
@@ -467,7 +467,7 @@
   // is already the authoritative "currently active" set: kind=completed
   // removes the entry in the onEnvelope handler below, so every
   // remaining entry IS an active task). Drives AgentCard's 頭上リング
-  // (issue #180; issue #233: the active dot COUNT, one per task, not an
+  // (issue #170; issue #233: the active dot COUNT, one per task, not an
   // on/off flag — no separate numeric text display though, こはく scoping).
   // M2 fix-round (2026-08-09, ふじ round 2): the computation itself moved
   // to protocol.ts's `activeTaskCountByAgent` so it is unit-testable
@@ -497,7 +497,7 @@
         .filter((env) => env.state === "disconnected")
         .map((env): OfflineTile => ({
           id: env.agent_id,
-          // AgentDirectory name projection (issue #197 段階3, ふじ
+          // AgentDirectory name projection (issue #187 段階3, ふじ
           // MF-3 レビュー指摘) — see projectDirectoryName's own doc.
           envelope: projectDirectoryName(env, directory[env.agent_id]),
           directoryOnly: false,
@@ -505,8 +505,8 @@
     ].sort((a, b) => a.id.localeCompare(b.id)),
   );
 
-  // AgentDirectory is the authoritative display_name SoT (issue #197
-  // 段階3, ふじ MF-3 レビュー指摘, wire field revised issue #219 D19):
+  // AgentDirectory is the authoritative display_name SoT (issue #187
+  // 段階3, ふじ MF-3 レビュー指摘, wire field revised issue #209 D19):
   // a CONNECTED agent's own wrapper re-emits state_change immediately
   // after applying a rename (display_name sync), so its AgentStates
   // envelope converges on its own. A DISCONNECTED agent has no wrapper
@@ -516,7 +516,7 @@
   // `directory` broadcast) has already moved on. This projects the
   // current directory `display_name` onto a live envelope whenever the
   // two diverge; `persona` (canonical) is untouched — rename never
-  // mutates it (issue #219 D19, ADR-0030 D2), so the live envelope's own
+  // mutates it (issue #209 D19, ADR-0030 D2), so the live envelope's own
   // `persona` already has the correct, unchanging value.
   function projectDirectoryName(
     envelope: Envelope,
@@ -533,7 +533,7 @@
   // is what unlocks the restore button; live-disconnected tiles pass their
   // real envelope through instead (they carry the last session_id / ext).
   // `persona` carries through only when BOTH `name`/`sprite_set` resolved
-  // server-side (issue #219 D21 "typed unresolved") — a partial persona is
+  // server-side (issue #209 D21 "typed unresolved") — a partial persona is
   // never synthesized; `spriteUrlFor` already treats an absent `persona` /
   // `sprite_set` as "no sprite, fall back to the CSS face".
   function directoryEnvelope(id: string, entry: DirectoryEntry): Envelope {
@@ -655,7 +655,7 @@
     if (live === undefined) {
       return directory[selected] ? directoryEnvelope(selected, directory[selected]) : null;
     }
-    // AgentDirectory name projection (issue #197 段階3, ふじ MF-3 レビ
+    // AgentDirectory name projection (issue #187 段階3, ふじ MF-3 レビ
     // ュー指摘) — see projectDirectoryName's own doc. Applies even to a
     // LIVE (non-disconnected) selection: this closes the same gap for
     // the brief window between a rename reply landing and this agent's
@@ -776,7 +776,7 @@
           // DOES get a fresh "hosts" push) re-raises the flag.
           hosts = [];
           isOperator = false;
-          // issue #228 round 2 MF-4: every (re)join can follow a server
+          // issue #218 round 2 MF-4: every (re)join can follow a server
           // redeploy, so the health snapshot fetched at mount may already
           // be stale by the time this fires.
           refreshServerHealth();
@@ -815,7 +815,7 @@
           }
         },
         onEnvelope: (envelope) => {
-          // Subagent/workflow task lifecycle (ADR-0019/0047, issue #180):
+          // Subagent/workflow task lifecycle (ADR-0019/0047, issue #170):
           // neither a transcript reply line nor a parent state_change, so
           // it gets its own accumulator BEFORE the isReplyEnvelope branch
           // below — falling into that branch's `else` would overwrite the
@@ -922,7 +922,7 @@
           } else {
             const prevState = agents[envelope.agent_id]?.state;
             agents = { ...agents, [envelope.agent_id]: envelope };
-            // M3/クロエ M1 fix-round (2026-08-09, issue #180): the parent's
+            // M3/クロエ M1 fix-round (2026-08-09, issue #170): the parent's
             // own `disconnected` state_change is the client-side purge
             // trigger for its tasks — no new wire event was invented for
             // this (ADR-0019 F1: task lifecycle is bound to the parent
@@ -981,7 +981,7 @@
           }
         },
         onHistory: (histories, watermarks, projection, epoch, incomplete) => {
-          // issue #109 M6/M7 (2026-07-23): server pre-fans-out and
+          // issue #106 M6/M7 (2026-07-23): server pre-fans-out and
           // pre-filters IA per pane using its ingress ordering domain,
           // so `histories` already reflects the authoritative view for
           // every agent when the projection marker is present.
@@ -1083,7 +1083,7 @@
         },
         onHistoryReset: (agentId, preserveInterAgent, replayId) => {
           // history_reset is resume replay only; /new and /clear preserve
-          // the existing display projection (#109).
+          // the existing display projection (#106).
           const prev = logs[agentId] ?? [];
           const next = resetTranscriptHistory(prev, preserveInterAgent);
           pruneTimelineStateByKeys(
@@ -1321,16 +1321,16 @@
     if (slideNow) refresh();
     refreshTimer = setInterval(refresh, 12 * 60 * 60 * 1000);
 
-    // issue #123: macOS スリープ復帰時などブラウザが WS を切っても close
+    // issue #119: macOS スリープ復帰時などブラウザが WS を切っても close
     // event が届かず Phoenix 内蔵 reconnect が発火しないケースの救済。
     // タブ復帰 / ネット復帰時に status が disconnected なら明示的に socket を
     // 張り直す。connected の間は no-op なので誤検知で無限リトライしない。
-    // wake / visibility lifecycle (issue #123 round 3). Decision logic
+    // wake / visibility lifecycle (issue #119 round 3). Decision logic
     // is factored into decideWakeAction (protocol.ts) so every branch is
     // unit-testable without mounting this component.
     wakeHandler = () => {
       if (connection === null) return;
-      // dispatchOnlineWake (issue #162 advisory 2) picks exactly one of
+      // dispatchOnlineWake (issue #152 advisory 2) picks exactly one of
       // notifyOnline() / reconnect(): a healthy socket (decision "noop")
       // still needs notifyOnline() so a ticket-mint retry waiting under
       // exponential backoff runs immediately when the network returns, but
@@ -1789,7 +1789,7 @@
         type="button"
         class="launch"
         onclick={() => {
-          // issue #228 round 2 MF-4: refresh right before opening rather
+          // issue #218 round 2 MF-4: refresh right before opening rather
           // than relying on whatever onMount/onJoined last fetched — the
           // operator must not launch against a stale health snapshot.
           refreshServerHealth();
@@ -2216,7 +2216,7 @@
      logout moves into SettingsDrawer, and the agent strip scrolls
      horizontally instead of wrapping the header taller.
      Positioned AFTER the base `header`/`h1::after`/`.agent-strip` rules
-     (pre-#240 bug, found while implementing #240, not caused by it): this
+     (pre-#230 bug, found while implementing #230, not caused by it): this
      block used to sit BEFORE those base rules, so the properties they both
      set at equal specificity (`.agent-strip`'s flex-wrap/justify-content,
      `h1::after`'s content) lost to the later base rule regardless of the
@@ -2257,7 +2257,7 @@
 
   /* Each agent now reads as a miniature grid tile: the persona sprite shrunk
      into a small cell with its state lamp overlaid on the top-right corner.
-     Sized via clamp(dvh) rather than a fixed rem (issue #240): header has no
+     Sized via clamp(dvh) rather than a fixed rem (issue #230): header has no
      fixed height to take a literal percentage of (it's `flex: 0 0 auto`, and
      this chip is itself one of the things that decides that height), so dvh
      stands in as a non-circular proxy for "available header room".
@@ -2266,12 +2266,12 @@
      stays at the clamp value, squashing the square instead of the strip
      actually overflowing (measured pre-fix: 57.59px -> 39.61px at a 180px
      strip / 4 agents).
-     The floor is 3rem, not the pre-#240 2.4rem (ふじ must-fix): 8dvh falls
+     The floor is 3rem, not the pre-#230 2.4rem (ふじ must-fix): 8dvh falls
      under any floor at `short` (max-height: 500px) and below, so the floor
      alone decides the short/landscape-smartphone size, and the issue's
      acceptance criteria does not exempt that case — it must read as
      clearly bigger than before too (verified worst case 844x390 -> 48px,
-     +25% over the pre-#240 38.4px). Floor-to-curve crossover is 600px
+     +25% over the pre-#230 38.4px). Floor-to-curve crossover is 600px
      (3rem / 0.08); curve-to-cap is 720px; a representative portrait phone
      (iPhone SE class, ~667px, inside the curve) grows ~39%. */
   .chip {
@@ -2301,7 +2301,7 @@
   }
 
   /* Sprite/CSS-face fallback rendering itself lives in PersonaFace.svelte
-     (issue #245, size="chip") — this file only sizes the chip wrapper. */
+     (issue #235, size="chip") — this file only sizes the chip wrapper. */
 
   .chip .lamp {
     position: absolute;
@@ -2489,7 +2489,7 @@
     grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
     gap: 1.2rem;
     /* Kept identical to AgentGridShell's `.agents` (see its comment,
-       issue #193): directory-only tiles never show the stats block, but
+       issue #183): directory-only tiles never show the stats block, but
        stay consistent so the two grids never silently drift apart. */
     align-items: start;
   }

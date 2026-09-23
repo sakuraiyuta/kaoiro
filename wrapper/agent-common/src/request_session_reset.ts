@@ -2,7 +2,7 @@
 // (phase-28 C2, ADR-0043). Same structural choices as `request_compact`
 // (claude-code/src/request_compact.ts): it lives OUTSIDE
 // InterAgentTool#descriptors(), and each engine adapter registers it behind
-// its own per-call operator approval (ADR-0043 D4 / #168 決定 P2). On Claude
+// its own per-call operator approval (ADR-0043 D4 / #158 決定 P2). On Claude
 // its absence from the auto-allow default (read_only_tools.ts) routes the
 // call through canUseTool → PermissionBroker; on codex the adapter wraps it
 // in `operatorApprovalGated` (approval_gate.ts), which calls the same broker
@@ -197,7 +197,7 @@ export interface SessionResetCoordinatorOptions {
   /** Pushes `session_reset_request` and settles with the server's reply,
    *  normally `ServerLink#requestSessionReset`. Its requestId proves only
    *  that the server reserved the reset; it correlates any terminal failure
-   *  pushed back while this old wrapper is still alive (#258). */
+   *  pushed back while this old wrapper is still alive (#248). */
   request: (
     mode: SessionResetMode,
     reason?: string,

@@ -58,13 +58,13 @@ defmodule KaoiroServer.PersonaAssets do
                        waiting_permission done error)
 
   # Optional sprite states a pack MAY provide (docs/reference/personas/pack-format.md,
-  # issue #172 A). `fatigued` is an orthogonal client-side modifier, not a
+  # issue #162 A). `fatigued` is an orthogonal client-side modifier, not a
   # protocol state value. Keep this allowlist narrow so optional does not
   # silently admit arbitrary sprite ids.
   @optional_states ~w(fatigued)
 
   # manifest["name"] seeds a NEW agent/user's `display_name` at record
-  # time (issue #219 D20/D24 — the initial value must already satisfy the
+  # time (issue #209 D20/D24 — the initial value must already satisfy the
   # SAME domain `Principal.display_name` is validated against everywhere
   # else, or a valid pack could mint an invalid Principal). Matches
   # `AgentsChannel`'s display-name bounds exactly, so a canonical fallback
@@ -103,7 +103,7 @@ defmodule KaoiroServer.PersonaAssets do
   Rescans the ingest dir and replaces the cache.
 
   Serialized within this BEAM node via `KaoiroServer.PersonaRebuildLock`
-  (issue #195 must-fix 1): the rebuild operation has 3 real triggers in
+  (issue #185 must-fix 1): the rebuild operation has 3 real triggers in
   production (boot, via the lock's own `init/1` started with
   `warm: true`; `KaoiroServer.PersonaWatcher`; and this module's own
   cache-miss fallback in `cache/0` below) with no coordination between
@@ -200,12 +200,12 @@ defmodule KaoiroServer.PersonaAssets do
   @doc """
   Single canonical persona lookup by id — `%{"id"=>, "name"=>,
   "sprite_set"=>}`, or `nil` when unresolvable (pack removed from the
-  ingest dir since, or an id that never existed). issue #219 D19: the
+  ingest dir since, or an id that never existed). issue #209 D19: the
   join point every canonical-name consumer (restore payloads, directory
   projection, wrapper spawn payloads) uses INSTEAD OF trusting a stored
   snapshot — `AgentDirectory` only ever persists the stable `persona_id`
   reference, never this map, so every reader resolves it fresh here. A
-  `nil` here is the "typed unresolved" state issue #219 D21 calls for:
+  `nil` here is the "typed unresolved" state issue #209 D21 calls for:
   callers must NOT fall back to a cached/legacy name — they propagate
   the unresolved state onward (omit canonical fields on the wire, never
   synthesize one).
@@ -400,7 +400,7 @@ defmodule KaoiroServer.PersonaAssets do
   end
 
   defp build(cache_dir) do
-    # Runs first, before any pack is touched (issue #195 must-fix 1):
+    # Runs first, before any pack is touched (issue #185 must-fix 1):
     # `rebuild/0` is now serialized within this node via
     # `PersonaRebuildLock`, so no other rebuild can be mid-staging when
     # this line runs — any `.stage-*` matching F9's exact name shape is
@@ -734,7 +734,7 @@ defmodule KaoiroServer.PersonaAssets do
   end
 
   @doc false
-  # issue #195 (ふじ 2026-08-05 spec): preflight (`verify_archive/1`) and
+  # issue #185 (ふじ 2026-08-05 spec): preflight (`verify_archive/1`) and
   # `:zip.unzip/2` used to open `zip_path` — an ingest-writer-controlled
   # path — separately, several times each, with no guarantee any two of
   # those opens saw the same bytes. An ingest writer could pass a small
@@ -771,7 +771,7 @@ defmodule KaoiroServer.PersonaAssets do
       rescue
         # A `with`/`case` result carries a cache-vs-pack error through
         # `merge_cleanup_error/2` above; an EXCEPTION skips straight past
-        # that — a raise anywhere in the `with` body above (issue #195
+        # that — a raise anywhere in the `with` body above (issue #185
         # must-4, the "exception / raise 経路" all-exit-paths cleanup
         # case) — so it gets its own best-effort cleanup here before
         # re-raising. Only `rescue`-caught exceptions are handled: throw
@@ -895,14 +895,14 @@ defmodule KaoiroServer.PersonaAssets do
     end
   end
 
-  # issue #195: every staging directory this module creates carries this
+  # issue #185: every staging directory this module creates carries this
   # prefix, both for `reclaim_stage_orphans/1`'s sweep (below) and so a
   # `.stage-*` entry is unmistakably ours if an operator has to look at
   # the cache root by hand. Leading dot keeps it out of anything that
   # globs cache entries by the bare 16-hex `@cache_key_name` shape.
   @stage_prefix ".stage-"
 
-  # Exact shape `reclaim_stage_orphans/1` matches (issue #195 must-fix 2,
+  # Exact shape `reclaim_stage_orphans/1` matches (issue #185 must-fix 2,
   # ADR-0046 F3 追補): `@stage_prefix` followed by EXACTLY the 22-char
   # base64url encoding `random_stage_name/0` produces for 16 random bytes
   # (128 bits / 6 bits-per-char, no padding — charset `A-Za-z0-9_-`).
@@ -924,7 +924,7 @@ defmodule KaoiroServer.PersonaAssets do
   # Random, not content- or basename-derived (ふじ 2026-08-05 spec):
   # entropy here is purely for COLLISION avoidance, not a security
   # boundary (that is the exclusive create below plus the cache root's
-  # own permissions, ADR-0046 F6). `PersonaRebuildLock` (issue #195
+  # own permissions, ADR-0046 F6). `PersonaRebuildLock` (issue #185
   # must-fix 1) now serializes whole `rebuild/0` calls within this node,
   # so two stages are never created concurrently by DIFFERENT rebuilds —
   # but `reclaim_stage_orphans/1` runs best-effort (a listing or removal
@@ -958,7 +958,7 @@ defmodule KaoiroServer.PersonaAssets do
   end
 
   @doc false
-  # issue #195 must-fix 3: `File.mkdir/1` above already created `stage_dir`
+  # issue #185 must-fix 3: `File.mkdir/1` above already created `stage_dir`
   # by the time `File.chmod/2` can fail, so that failure (unlike the
   # `with`-else branch above, where nothing was created) must discard the
   # directory it just made — a `discard_stage/2` originally missing from
@@ -989,7 +989,7 @@ defmodule KaoiroServer.PersonaAssets do
   end
 
   # Reclaims a `.stage-*` left behind by a crash between `new_stage/1` and
-  # `discard_stage/2` (issue #195, ふじ round-2 spec, 2026-08-05).
+  # `discard_stage/2` (issue #185, ふじ round-2 spec, 2026-08-05).
   #
   # Runs unconditionally, no age gate: `build/1` calls this FIRST, before
   # any pack is touched, and `PersonaRebuildLock` (must-fix 1) guarantees
@@ -1037,7 +1037,7 @@ defmodule KaoiroServer.PersonaAssets do
     :ok
   end
 
-  # issue #195: source is opened exactly once and the SAME fd is read from
+  # issue #185: source is opened exactly once and the SAME fd is read from
   # start to finish, so a source path swapped mid-copy (rename/relink)
   # cannot affect an already-open fd — POSIX binds an open fd to the
   # inode, not the path. An in-place truncate/overwrite of that SAME inode
@@ -1244,7 +1244,7 @@ defmodule KaoiroServer.PersonaAssets do
   @local_header_signature 0x04034B50
   @local_header_size 30
 
-  # Extraction bounds (#189, ADR-0046 F8), decided 2026-08-04 by マスター:
+  # Extraction bounds (#179, ADR-0046 F8), decided 2026-08-04 by マスター:
   # a pack may expand to at most 1 GiB across at most 4096 entries.
   # Generous on purpose — high-resolution sprites now, 3D assets later —
   # so a pack that trips either bound is not a plausible legitimate one.
@@ -1253,7 +1253,7 @@ defmodule KaoiroServer.PersonaAssets do
   @max_extracted_bytes 1024 * 1024 * 1024
   @max_entries 4096
 
-  # Bound on the region `:zip.list_dir/1` may read while enumerating (#194,
+  # Bound on the region `:zip.list_dir/1` may read while enumerating (#184,
   # ADR-0046 F8 追補), decided 2026-08-04 by クロエ: @max_entries KiB, 4 MiB.
   # A healthy pack's central directory measures ~800 KB at the 4096-entry
   # ceiling (46 fixed bytes plus a ~100-byte name and ~30 bytes of extra per
@@ -1280,7 +1280,7 @@ defmodule KaoiroServer.PersonaAssets do
   @max_central_dir_bytes @max_entries * 1024
 
   # SHA256 of the whole zip file, capped at `@max_extracted_bytes + 1`
-  # bytes read (issue #195, ふじ 2026-08-05 spec) so a persistently
+  # bytes read (issue #185, ふじ 2026-08-05 spec) so a persistently
   # oversized ingest drop cannot burn a full read-and-hash pass on every
   # watcher-triggered rebuild attempt — PersonaWatcher's debounce is the
   # only throttle, so an ingest writer can trigger this path essentially
@@ -1311,7 +1311,7 @@ defmodule KaoiroServer.PersonaAssets do
     end
   end
 
-  # Shared bounded-read core (issue #195). Reads at most `limit + 1` bytes
+  # Shared bounded-read core (issue #185). Reads at most `limit + 1` bytes
   # from an already-open raw fd, 64 KiB at a time, folding each chunk
   # through `chunk_fun.(chunk, acc)`. Stopping at `limit + 1` rather than
   # `limit` is what lets a caller tell "exactly at the limit" (accept)
@@ -1430,7 +1430,7 @@ defmodule KaoiroServer.PersonaAssets do
   @count_sentinel 0xFFFF
 
   @doc false
-  # Bounds the extraction BEFORE anything is written (#189, ADR-0046 F8).
+  # Bounds the extraction BEFORE anything is written (#179, ADR-0046 F8).
   #
   # The declared sizes cannot carry this check. `:zip.list_dir/1` reports
   # what an archive SAYS each entry expands to, and that number is the
@@ -1449,7 +1449,7 @@ defmodule KaoiroServer.PersonaAssets do
   #
   # `verify_central_dir_bounds/2` comes before the listing because the
   # listing is itself the resource being bounded: `:zip.list_dir/1`
-  # materialises the whole central directory, and until #194 nothing capped
+  # materialises the whole central directory, and until #184 nothing capped
   # what that cost (ADR-0046 F8 追補).
   def verify_archive(zip_path) do
     with {:ok, size} <- verify_archive_bytes(zip_path),
@@ -1487,7 +1487,7 @@ defmodule KaoiroServer.PersonaAssets do
   # smaller declaration writes less (an entry declaring 0 — the streamed
   # `data descriptor` shape — makes it refuse the archive outright,
   # measured for both methods).
-  # Defense-in-depth only (issue #195): `verify_archive/1` runs against
+  # Defense-in-depth only (issue #185): `verify_archive/1` runs against
   # `stage_path`, so the AUTHORITATIVE size bound is already enforced by
   # `stage_archive/3`'s own `limit + 1` cap before this ever runs — a
   # file that got this far cannot be over the limit. Kept as a stat-based
@@ -1745,7 +1745,7 @@ defmodule KaoiroServer.PersonaAssets do
     end
   end
 
-  # Bounds what `:zip.list_dir/1` may spend BEFORE it is called (#194).
+  # Bounds what `:zip.list_dir/1` may spend BEFORE it is called (#184).
   #
   # Three declared fields carry the check, and every one is used only in the
   # refusing direction:
@@ -1810,7 +1810,7 @@ defmodule KaoiroServer.PersonaAssets do
   # disagree: OTP takes the first structural match walking FORWARD from
   # `eof - window`, doubling the window on a miss, so a decoy record planted
   # earlier in the tail wins there while a conventional backward scan takes
-  # the last one. #189 spent a review round on exactly that shape.
+  # the last one. #179 spent a review round on exactly that shape.
   #
   # `meta_bytes` is what resolving the record itself cost — 0 outside ZIP64,
   # header plus declared body inside it — so the caller can charge every
@@ -2164,23 +2164,23 @@ defmodule KaoiroServer.PersonaAssets do
 
   defp string?(value), do: is_binary(value) and value != ""
 
-  # issue #219 D24: same 1-64 / no-control-char domain every
+  # issue #209 D24: same 1-64 / no-control-char domain every
   # `Principal.display_name` is validated against — see the module
   # attributes' doc above.
   #
-  # MF-4 (issue #219, クロエ実測検証): also rejects leading/trailing
+  # MF-4 (issue #209, クロエ実測検証): also rejects leading/trailing
   # whitespace, including an all-whitespace value like `"   "` (non-empty
   # per `string?/1` above, so it would otherwise pass). Ingest-time
   # REJECT, not a silent trim: `agents_channel.ex`'s spawn fallback
   # copies an untrimmed canonical name verbatim into `display_name`
-  # (issue #219 D20, created-time persistence — no trim step there), and
+  # (issue #209 D20, created-time persistence — no trim step there), and
   # `wrapper/core/src/persona.ts`'s `validDisplayNameOrNull` rejects a
   # value whose `trim()` differs from itself. A pack author writing
   # `"Foo "` into the manifest would otherwise ingest successfully and
   # then fail every spawn for that persona — silently trimming here would
   # let the pack's OWN written value quietly diverge from what a user
   # ever sees displayed, exactly the kind of canonical/display_name
-  # confusion issue #219 exists to remove.
+  # confusion issue #209 exists to remove.
   defp valid_persona_name?(value) do
     string?(value) and
       String.trim(value) == value and

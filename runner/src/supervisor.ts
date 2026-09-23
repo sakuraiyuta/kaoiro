@@ -57,7 +57,7 @@ export const RESTART_WINDOW_MS = 60_000;
 /** A reset must not wait forever for the wrapper it is replacing. Give the
  *  wrapper one normal-termination grace period before escalating to SIGKILL;
  *  a second missed exit is reported as a reset failure rather than silently
- *  leaving the old process and a pending server lock behind (#258). */
+ *  leaving the old process and a pending server lock behind (#248). */
 export const RESET_TERMINATION_GRACE_MS = 5_000;
 
 /** agent_id rides a temp config filename and the spawn_result, so its charset
@@ -94,7 +94,7 @@ type MaybePromise<T> = T | Promise<T>;
  *  servers keep working (ADR-0032 F4a). */
 export interface ParsedSpawn {
   persona: WirePersona;
-  /** Initial `display_name` from the spawn message (issue #219 MF-1).
+  /** Initial `display_name` from the spawn message (issue #209 MF-1).
    *  Absent = legacy server that predates this field; `resolveWrapperConfig`
    *  falls back to `persona.name` as the one-time migration so
    *  `WrapperConfig.display_name` (required) always gets a value. */
@@ -134,7 +134,7 @@ export interface ParsedSpawn {
   resumeSnapshot?: ResolvedSnapshotExt;
   /** Session-transition correlation id from the command that launched (or
    *  relaunched) this wrapper — spawn, switch_session, or reset_session
-   *  (phase-27, #160). Rides into the wrapper as `config.transition_id`
+   *  (phase-27, #150). Rides into the wrapper as `config.transition_id`
    *  and is echoed back on `spawn_result`. Switch and reset overwrite it
    *  on `entry.parsed` so the relaunch carries the id of the transition
    *  that caused it, not the original spawn's. Absent = legacy server. */
@@ -183,7 +183,7 @@ export interface SupervisorOptions {
    *  the spawn fail-closed. */
   antigravityMax?: AntigravityMaxConfig | undefined;
   /** Global soft context-work budget from runner.config.json. The wrapper
-   * derives a per-model token denominator at measurement time (issue #264). */
+   * derives a per-model token denominator at measurement time (issue #254). */
   contextWorkBudgetPercent?: number;
   /** ADR-0039 F9 追補: reads the current Claude engine-catalog from the
    *  runner's live probe cache so every spawn/restart/relaunch relays the
@@ -229,7 +229,7 @@ function optionalString(value: unknown): string | undefined {
 }
 
 /** Like {@link optionalString} but also drops the empty string. Used for the
- *  transition correlation id (phase-27, #160): a present-but-blank value must
+ *  transition correlation id (phase-27, #150): a present-but-blank value must
  *  not reach the wrapper, because the server reads a blank `transition_id` as
  *  a mismatch rather than as the legacy "absent" case. */
 function nonEmptyString(value: unknown): string | undefined {
@@ -382,13 +382,13 @@ export function parseSpawn(payload: unknown): ParsedSpawn | null {
     if (typeof payload.apply_resume_snapshot !== "boolean") return null;
     if (payload.apply_resume_snapshot) parsed.applyResumeSnapshot = true;
   }
-  // Session-transition correlation id (phase-27, #160). Relayed verbatim;
+  // Session-transition correlation id (phase-27, #150). Relayed verbatim;
   // the runner never interprets it. An empty string is dropped so it cannot
   // reach the wrapper as a present-but-blank transition_id — the server
   // treats that as a mismatch, not as the legacy absent case.
   const requestId = nonEmptyString(payload.request_id);
   if (requestId !== undefined) parsed.requestId = requestId;
-  // display_name (issue #219 MF-1): absent = legacy server, the runner
+  // display_name (issue #209 MF-1): absent = legacy server, the runner
   // falls back to persona.name at resolveWrapperConfig time. A PRESENT
   // value must be a string — fail-loud reject (not a silent drop) so a
   // compromised/buggy sender cannot slip non-string garbage past the
@@ -442,7 +442,7 @@ export function resolveWrapperConfig(
   const config: WrapperConfig = {
     agent_id: agentId,
     persona: parsed.persona,
-    // One-time migration fallback (issue #219 MF-1): a legacy server that
+    // One-time migration fallback (issue #209 MF-1): a legacy server that
     // predates SpawnMessage.display_name omits it, so parsed.displayName is
     // undefined here. Falling back to persona.name keeps a new-wrapper /
     // old-server pairing spawnable — WrapperConfig.display_name is required,
@@ -455,7 +455,7 @@ export function resolveWrapperConfig(
   if (contextWorkBudgetPercent !== undefined) {
     config.context_work_budget_percent = contextWorkBudgetPercent;
   }
-  // Session-transition correlation id (phase-27, #160): the wrapper echoes
+  // Session-transition correlation id (phase-27, #150): the wrapper echoes
   // it in its channel join params so the server can recognise the
   // connection this transition produced.
   if (parsed.requestId !== undefined) config.transition_id = parsed.requestId;
@@ -573,7 +573,7 @@ interface PendingReset {
   /** The still-running old wrapper owns this launch configuration until it
    *  actually exits. Restore it if both termination signals time out: a later
    *  ordinary crash must resume the old session, not inherit the attempted
-   *  fresh-reset configuration (#258). */
+   *  fresh-reset configuration (#248). */
   previousParsed: ParsedSpawn;
 }
 
@@ -668,7 +668,7 @@ export class Supervisor {
   /** session_ids currently being resumed — the F4 local lock against a second
    *  concurrent resume of the same session. */
   readonly #activeSessions = new Set<string>();
-  /** Resume validation for Codex uses async filesystem I/O (#100). Reserve
+  /** Resume validation for Codex uses async filesystem I/O (#97). Reserve
    *  the agent_id while it is pending so duplicate spawn events cannot pass
    *  the ordinary #children guard before the first launch has started. */
   readonly #pendingSpawns = new Map<string, symbol>();
@@ -739,7 +739,7 @@ export class Supervisor {
       return;
     }
     // Read the correlation id before parsing so even a rejected payload
-    // reports against the right pending transition (phase-27, #160).
+    // reports against the right pending transition (phase-27, #150).
     const requestId = isObject(payload)
       ? nonEmptyString(payload.request_id)
       : undefined;
@@ -786,7 +786,7 @@ export class Supervisor {
       parsed.engine,
     );
 
-    // T3: Codex scans its date tree asynchronously (#100); Claude and test
+    // T3: Codex scans its date tree asynchronously (#97); Claude and test
     // injections may still answer synchronously. Preserve that fast path so
     // fresh/Claude spawn remains immediate while Codex I/O yields the event
     // loop instead of pausing status relay for every agent.
@@ -1015,7 +1015,7 @@ export class Supervisor {
       entry.parsed.engine,
     );
     // The relaunch belongs to THIS switch, so it must carry this command's
-    // correlation id — never the previous spawn's (phase-27, #160). Drop the
+    // correlation id — never the previous spawn's (phase-27, #150). Drop the
     // inherited value first so a legacy switch (no request_id) relaunches
     // with none rather than with a stale one; the server then declines to
     // activate and suppresses the affected metadata instead of trusting it.
@@ -1176,7 +1176,7 @@ export class Supervisor {
       ...applied,
       ...(nextSnapshot !== undefined ? { resumeSnapshot: nextSnapshot } : {}),
       // The fresh session belongs to THIS reset, so the relaunch carries the
-      // reset's request_id (phase-27, #160). Overwriting the inherited spawn
+      // reset's request_id (phase-27, #150). Overwriting the inherited spawn
       // value is what lets the server match the fresh wrapper's join against
       // the reset lock it is holding.
       requestId,
@@ -1351,7 +1351,7 @@ export class Supervisor {
   }
 
   /** `requestId` echoes the transition correlation id of the command that
-   *  failed (phase-27, #160) so the server can abort exactly that pending
+   *  failed (phase-27, #150) so the server can abort exactly that pending
    *  transition. Omitted when the id is unknown — a malformed payload, or a
    *  failure raised outside the originating command (e.g. a `stop` that
    *  cancels an in-flight spawn). The server then discards the result and

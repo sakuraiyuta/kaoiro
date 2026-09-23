@@ -105,7 +105,7 @@ defmodule KaoiroServerWeb.AuthController do
 
       _role ->
         # Resolves (or, on a first login, creates) this identity's kaoiro
-        # user_id (issue #197, ADR-0050 D1). display_name falls back to
+        # user_id (issue #187, ADR-0050 D1). display_name falls back to
         # uid when the provider gave none (マスター決裁 2026-08-09 #1).
         #
         # Authorization is already settled above (`OAuthAllowlist.role_for/2`);

@@ -42,14 +42,14 @@ export function resolveCodexSources(
 }
 
 /** Applies `KAOIRO_CODEX_DEFAULT_MODEL` to `config.model` IN PLACE, when
- *  `config.model` is unset and the env var is set (issue #197 段階3, ふじ
+ *  `config.model` is unset and the env var is set (issue #187 段階3, ふじ
  *  MF-1 レビュー指摘). Mutates rather than returning a clone deliberately:
  *  the CLI passes this SAME `config` object to every producer
  *  (`CodexHost`, `QuestionBroker`, `InterAgentTool`, `makeLog` /
  *  `makeStateChange` call sites) — a `{ ...config, model: ... }` shallow
  *  clone would still share `config`'s object reference at construction
  *  time, but `CodexHost.renameDisplayName` REASSIGNS `#config.display_name`
- *  (not an in-place field mutation, issue #219 D19/D23 — renamed from
+ *  (not an in-place field mutation, issue #209 D19/D23 — renamed from
  *  `renamePersona`/`#config.persona`) whenever a rename applies, which
  *  severs that shared reference. Two config objects meant two
  *  independently-diverging display_name sources of truth: whichever

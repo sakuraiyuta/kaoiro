@@ -73,7 +73,7 @@ defmodule KaoiroServer.AgentStates do
 
   # Base envelope cap per agent (ADR-0012 history A). Newest-first in
   # storage; reversed to chronological order when served. ADR-0051 D6
-  # drops the former `inter_agent_message` cap exemption (#105): IA now
+  # drops the former `inter_agent_message` cap exemption (#102): IA now
   # lives in the per-pane projection below, and the FINAL merged
   # projection — not each source — is what carries the cap.
   @max_history 200

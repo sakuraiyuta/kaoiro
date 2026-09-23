@@ -320,7 +320,7 @@ export interface CodexHostOptions {
   onState: (envelope: Envelope) => void;
   /** Invoked per relayable log line (assistant text / tool call / result). */
   onLog?: (envelope: Envelope) => void;
-  /** Invoked for the parent agent's whole-list todo snapshot (issue #188,
+  /** Invoked for the parent agent's whole-list todo snapshot (issue #178,
    * ADR-0049). It is distinct from transcript logs and child-task progress. */
   onTask?: (envelope: Envelope) => void;
   /** Settles only this token's conversations. SDK failures carry free-form
@@ -345,7 +345,7 @@ export interface CodexHostOptions {
     abandoned?: TurnAbandonment;
   }) => void;
   /** The exact boundary at which an already-queued input begins an SDK turn.
-   * Queue insertion intentionally does not count as dispatch (#247). */
+   * Queue insertion intentionally does not count as dispatch (#237). */
   onTurnStart?: (info: { turnToken: string; conversationIds: readonly string[] }) => void;
   /** Wrapper-local lifecycle evidence for the Codex stream. This is kept out
    * of transcript envelopes because it exists to diagnose SDK wedges. */
@@ -406,7 +406,7 @@ export interface CodexHostOptions {
     sessionId: string,
   ) => Promise<Map<CodexRateLimitWindow, CodexRateLimitSnapshot>>;
   /** Confirms whether a resume-failure CANDIDATE is real rollout corruption
-   *  (issue #263, ふじ MF-1/MF-2). Injectable so tests can point the real
+   *  (issue #253, ふじ MF-1/MF-2). Injectable so tests can point the real
    *  `verifyRolloutCorruption` at a fixture rollout root instead of
    *  `~/.codex/sessions` — the default wraps `verifyRolloutCorruption`
    *  itself (real fatal-UTF-8-decode + per-line JSON.parse), never a stub,
@@ -573,8 +573,8 @@ function isUsableThreadItem(item: unknown): boolean {
 
 export class CodexHost implements EngineAdapter {
   readonly #config: WrapperConfig;
-  /** Last-applied display_name sync revision (issue #197 段階3, D15,
-   *  renamed issue #219 D19/D23) — see `AgentHost`'s identical field in
+  /** Last-applied display_name sync revision (issue #187 段階3, D15,
+   *  renamed issue #209 D19/D23) — see `AgentHost`'s identical field in
    *  `@kaoiro/claude-code` for the reasoning shared across both
    *  engines. */
   #displayNameRevision = 0;
@@ -587,7 +587,7 @@ export class CodexHost implements EngineAdapter {
   readonly #now: () => string;
   #machine: MachineState = initialMachineState();
   #sessionId: string | null = null;
-  /** issue #263: session id whose rollout has been CONFIRMED permanently
+  /** issue #253: session id whose rollout has been CONFIRMED permanently
    *  corrupted — a resume failure whose detail matched the candidate
    *  pattern (`isRolloutCorruptionDetail`) AND whose rollout file itself
    *  verified as corrupted (`verifyRolloutCorruption`, ふじ MF-1). Once
@@ -599,7 +599,7 @@ export class CodexHost implements EngineAdapter {
    *  (a fresh thread has a fresh, presumably intact, rollout); this host
    *  never resets it pre-emptively. */
   #corruptedRolloutSessionId: string | null = null;
-  /** issue #263 (ふじ should-fix 1): the root-cause error detail from the
+  /** issue #253 (ふじ should-fix 1): the root-cause error detail from the
    *  FIRST turn that confirmed `#corruptedRolloutSessionId`. Later turns'
    *  synthetic "resume skipped" error would otherwise replace it and lose
    *  the original diagnostic text an operator needs. */
@@ -632,7 +632,7 @@ export class CodexHost implements EngineAdapter {
   #pendingQuestion: PendingQuestionExt | null = null;
   /** Queued SDK input. A local_image temp directory belongs to exactly one
    * turn and is deleted from #runTurn's finally path. `conversationIds`
-   * (issue #131 must-fix 1; extended issue #221 段階3 direction 2 for
+   * (issue #127 must-fix 1; extended issue #211 段階3 direction 2 for
    * coalescing) tags a turn injected to answer inter-agent message(s);
    * undefined for an ordinary operator instruction, one entry for an
    * ordinary inter-agent turn, multiple entries when several same-peer
@@ -832,7 +832,7 @@ export class CodexHost implements EngineAdapter {
     };
     out.cwd = this.#cwd;
     if (this.#sessionId !== null) out.session_id = this.#sessionId;
-    // issue #254: the agent's own rate limits, read from the SAME map that
+    // issue #244: the agent's own rate limits, read from the SAME map that
     // feeds ext.rate_limits, so the two agree at the moment this host stamps
     // them. That is the whole claim — a peer's copy travels through the
     // directory projection (core's projectRateLimits, which drops malformed
@@ -863,7 +863,7 @@ export class CodexHost implements EngineAdapter {
     await this.#refreshRateLimits();
   }
 
-  /** Single engine-neutral SoT for both state_change.ext and whoami (#113). */
+  /** Single engine-neutral SoT for both state_change.ext and whoami (#109). */
   #effectiveStatusSnapshot(): EffectiveStatusSnapshot {
     const permission = projectPermissionState(this.#permissionState);
     const observed = permission.observation ??
@@ -1256,7 +1256,7 @@ export class CodexHost implements EngineAdapter {
 
   /** See `AgentHost#renameDisplayName` in `@kaoiro/claude-code` —
    *  identical contract, both engines share the same `EngineAdapter`
-   *  surface (issue #197 段階3, renamed issue #219 D19/D23). */
+   *  surface (issue #187 段階3, renamed issue #209 D19/D23). */
   renameDisplayName(displayName: string, revision: number): void {
     if (revision <= this.#displayNameRevision) return;
     this.#displayNameRevision = revision;
@@ -1313,7 +1313,7 @@ export class CodexHost implements EngineAdapter {
   async run(initialPrompt?: string): Promise<void> {
     // The CLI normally has already done this before its initial idle/sending
     // state. Keep the host self-sufficient for non-CLI callers; the per-
-    // session guard makes the second call a no-op (issue #251).
+    // session guard makes the second call a no-op (issue #241).
     await this.initializeRateLimits();
     try {
       await pruneCodexTurnTraceCaptureDirs(
@@ -1703,7 +1703,7 @@ export class CodexHost implements EngineAdapter {
     if (attempted.permission !== null) {
       this.#beginPermissionExecution(attempted.permission.submission);
     }
-    // issue #263 (ふじ 必須pin): capture whether THIS turn is a resume
+    // issue #253 (ふじ 必須pin): capture whether THIS turn is a resume
     // attempt, and which session id it targets, BEFORE anything in the
     // stream below can move `#sessionId`. Only a resume has a pre-existing
     // rollout that could be corrupted — a fresh startThread's mid-stream
@@ -1741,7 +1741,7 @@ export class CodexHost implements EngineAdapter {
               this.#threadOptions(attempted),
             );
     // Creating/resuming the SDK thread is the last synchronous boundary
-    // before `runStreamed()` hands the input to Codex. Confirm #247 delivery
+    // before `runStreamed()` hands the input to Codex. Confirm #237 delivery
     // here, never when its coordinator merely accepted the queue item.
     if (!retryAfterRepair) {
       this.#options.onLifecycle?.({ kind: "turn_start", turnToken });
@@ -1847,7 +1847,7 @@ export class CodexHost implements EngineAdapter {
           // A fresh thread's first token_count can be absent, but a resumed
           // or reused rollout may already have a snapshot. Await its initial
           // read before the following SDK event emits state, so that state
-          // carries ext.rate_limits when the rollout has data (issue #251).
+          // carries ext.rate_limits when the rollout has data (issue #241).
           await this.initializeRateLimits();
         }
         for (const entry of threadEventToLogs(event)) {
@@ -1991,7 +1991,7 @@ export class CodexHost implements EngineAdapter {
         const alreadyConfirmedCorrupted =
           resumeSessionId !== null &&
           resumeSessionId === this.#corruptedRolloutSessionId;
-        // issue #263 (ふじ should-fix 1): once a session is confirmed
+        // issue #253 (ふじ should-fix 1): once a session is confirmed
         // corrupted, every later turn's `err` is this file's OWN synthetic
         // "resume skipped" Error, built from `#corruptedRolloutDetail`.
         // Re-stringifying it here would double-wrap that Error's own
@@ -2000,7 +2000,7 @@ export class CodexHost implements EngineAdapter {
         let detail = alreadyConfirmedCorrupted
           ? (this.#corruptedRolloutDetail ?? String(err))
           : String(err);
-        // issue #263 (ふじ MF-1 / 必須pin): a stderr keyword match alone
+        // issue #253 (ふじ MF-1 / 必須pin): a stderr keyword match alone
         // is only a CANDIDATE — several unrelated dependencies emit the
         // same generic wording (ふじ measured this directly against
         // codex-sdk 0.144.1's actual runStreamed stderr; neither pattern
@@ -2126,7 +2126,7 @@ export class CodexHost implements EngineAdapter {
           detail,
           outcome: "run_streamed_rejected",
         });
-        // issue #131 must-fix 2: String(err) is unstructured, untrusted text
+        // issue #127 must-fix 2: String(err) is unstructured, untrusted text
         // (subprocess/exception message, possibly containing paths or other
         // detail unsafe to inject verbatim into a peer's LLM context). Safe
         // to pass as `detail` regardless: classifyInterAgentError uses
@@ -2150,7 +2150,7 @@ export class CodexHost implements EngineAdapter {
         });
       }
       if (!this.#closed) {
-        // issue #263: operator/runner-log visibility for the permanent
+        // issue #253: operator/runner-log visibility for the permanent
         // classification — dashboard sees it via error_subtype above, but
         // this stderr line is what a runner-side log tail (or the
         // supervisor's own crash-loop diagnosis) can grep for without
@@ -2597,7 +2597,7 @@ export class CodexHost implements EngineAdapter {
       ext.resume_snapshot = this.#resumeSnapshot;
       ext.resume_drift = this.#resumeDrift(effectiveStatus.resolved);
     }
-    // Session capabilities (ADR-0034 F1/F4, #112): advertised
+    // Session capabilities (ADR-0034 F1/F4, #108): advertised
     // from the first state_change onward (adapter-static values, no
     // thread.started await — that event fires only once a turn runs,
     // so an idle-wait agent would stay "not yet reported"). Codex accepts
@@ -2688,7 +2688,7 @@ export class CodexHost implements EngineAdapter {
   #emitResult(payload: {
     text?: string;
     is_error?: boolean;
-    // issue #263: SDK-agnostic result fields (ResultPayload, issue #127) —
+    // issue #253: SDK-agnostic result fields (ResultPayload, issue #123) —
     // Claude's adapter fills these from the SDK's own subtype/errors; Codex
     // has no SDK-native equivalent, so this host sets error_subtype only for
     // its own rollout-corruption classification (see #runTurn's catch(err)).

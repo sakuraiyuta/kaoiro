@@ -50,7 +50,7 @@
     /** App session が所有する既読 marker。detail 表示でこの component が
      * unmount しても既読状態を失わない。 */
     readTimelineEntryKeys?: ReadonlySet<string>;
-    /** onEnvelope 経由で追加された行だけの一回限り arrival marker (#125)。
+    /** onEnvelope 経由で追加された行だけの一回限り arrival marker (#121)。
      * history / snapshot は App がこの set に入れないため、初期描画では
      * アニメーションしない。 */
     newTimelineEntryKeys?: ReadonlySet<string>;
@@ -124,7 +124,7 @@
   // test.ts. It is a no-op whenever the agent is still live: `default`
   // (unassigned) persona is always a concrete `{id:"default",...}`
   // object (personas.md), never `undefined`, so `??` never reaches
-  // `directory` for a live agent. issue #244's dashboard/App.svelte /
+  // `directory` for a live agent. issue #234's dashboard/App.svelte /
   // AgentCard.svelte / AgentDetail.svelte agree with this (verified) —
   // do not "fix" this fallback away as part of that issue.
   function personaName(agentId: string): string {
@@ -175,17 +175,17 @@
             }}
             title={`${personaName(entry.agentId)} の詳細を開く`}
           >
-            <!-- issue #244: sprite-less fallback mirrors agent-strip
+            <!-- issue #234: sprite-less fallback mirrors agent-strip
                  (App.svelte) / AgentCard.svelte / AgentDetail.svelte's
                  CSS face instead of a static emoji, so the views never
                  disagree again on an unassigned-persona agent.
-                 issue #245 extracted the shared render into
+                 issue #235 extracted the shared render into
                  PersonaFace.svelte (size="timeline"), but the look is
                  NOT byte-identical to the other 3 sites — the only
                  contract all 4 share is "sprite-or-CSS-face". Tone,
                  eye/mouth shape and animation differ per site and are
                  intentionally NOT unified (こはく裁定 2026-08-20, see
-                 issue #245 comment for the full drift matrix); agent-strip
+                 issue #235 comment for the full drift matrix); agent-strip
                  keeps eye/mouth fixed at its size, and neither `.chip`
                  nor AgentDetail's `.detail` carries a `waiting_question`
                  tone rule while `.card` and this `.portrait` do
@@ -304,7 +304,7 @@
     outline: none;
   }
 
-  /* #124: 静かな青紫の面で未閲覧を残す。hover 中も少しだけ明度を上げる
+  /* #120: 静かな青紫の面で未閲覧を残す。hover 中も少しだけ明度を上げる
      ので、既存の focus/hover 枠と区別しながら 300ms 後の既読化も分かる。 */
   .row.unread {
     background: color-mix(in srgb, var(--c-thinking) 14%, var(--bg-card));
@@ -315,8 +315,8 @@
     background: color-mix(in srgb, var(--c-thinking) 18%, var(--bg-card));
   }
 
-  /* #125: live stream で追加された行だけを 1 回パルスさせる。最終色を
-     未閲覧の背景色と揃えることで、アニメーション終了後も #124 の静的な
+  /* #121: live stream で追加された行だけを 1 回パルスさせる。最終色を
+     未閲覧の背景色と揃えることで、アニメーション終了後も #120 の静的な
      マーカーが自然に残る。 */
   .row.new-arrival {
     animation: timeline-arrival 1.35s ease-in-out;
@@ -354,11 +354,11 @@
     --tone: var(--c-idle);
   }
 
-  /* issue #244: state-tone. The contract shared by all 4 fallback sites
+  /* issue #234: state-tone. The contract shared by all 4 fallback sites
      (agent-strip / AgentCard / AgentDetail / here) is sprite-or-CSS-face,
      and nothing beyond it — the tone rules below are NOT uniform across
      the four (`.chip` and `.detail` have no `waiting_question` entry;
-     issue #245 kept this drift on purpose, see its comment for the full
+     issue #235 kept this drift on purpose, see its comment for the full
      matrix). Sprite/CSS-face rendering itself lives in
      PersonaFace.svelte (size="timeline"); this file only defines
      `--tone` per state for its `.portrait` wrapper. */
@@ -426,7 +426,7 @@
     color: var(--fg-dim);
     font-size: var(--fs-body-sm);
     line-height: 1.35;
-    /* #126: 短い preview も 3 行ぶんの面積を確保する。固定値ではなく
+    /* #122: 短い preview も 3 行ぶんの面積を確保する。固定値ではなく
        line-height と同じ em 基準にすることで、文字サイズの設定変更にも
        追従する。 */
     min-block-size: 4.05em;

@@ -133,7 +133,7 @@ function lineToPayloads(
     const text = userInstructionText(line.message?.content);
     // The structured inter_agent_message envelope is the display SoT. The
     // SDK also persists its injected framing as a user turn; replaying that
-    // text would duplicate the restored IA bubble as an operator log (#105).
+    // text would duplicate the restored IA bubble as an operator log (#102).
     if (text !== null && !isFormattedInterAgentMessage(text)) {
       const { text: clipped, truncated } = clipText(text);
       payloads.push(

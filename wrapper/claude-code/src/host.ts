@@ -160,7 +160,7 @@ interface TurnBoundWait {
 const MAX_MODEL_REFRESH_RETRIES = 3;
 
 /** Minimum gap between two emitted `task` envelopes of kind="updated" for
- *  the SAME task_id (issue #180, ADR-0048 F2 — "一定間隔 + 差分閾値" left
+ *  the SAME task_id (issue #170, ADR-0048 F2 — "一定間隔 + 差分閾値" left
  *  to段階1 implementation). A `task_progress` SDK message that arrives
  *  within this window of the last EMITTED update is dropped regardless of
  *  content — this is a hard rate cap, not a debounce (the next progress
@@ -214,25 +214,25 @@ export const CONTEXT_INIT_RETRY_DELAY_MS = 100;
 
 /** Context-usage share (percent) at or above which the wrapper tells the
  *  agent ONCE per context epoch that recovery is available (phase-28 B1,
- *  #168 決定 P3; threshold revised 70 -> 60 by issue #172 P4). The hybrid
+ *  #158 決定 P3; threshold revised 70 -> 60 by issue #162 P4). The hybrid
  *  split: the wrapper does the machine judgement, the agent decides whether
  *  to act. Deliberately a constant — a config field would have to travel
  *  through WrapperConfig in @kaoiro/protocol, and Phase B is scoped to close
- *  inside the wrapper. TODO(#168 Phase C or a follow-up): make configurable
+ *  inside the wrapper. TODO(#158 Phase C or a follow-up): make configurable
  *  once operators want per-agent thresholds.
  *
- *  NOTE (issue #172 Q2): this currently has the same numeric value as
+ *  NOTE (issue #162 Q2): this currently has the same numeric value as
  *  CONTEXT_WORK_BUDGET_DEFAULT_PERCENT, but they are distinct concepts. This
  *  threshold decides when to offer recovery; the work-budget constant chooses
  *  a soft token denominator. Never derive either constant from the other. */
 export const CONTEXT_NOTICE_THRESHOLD_PERCENT = 60;
 
 /** Default soft work budget, as a share of the SDK-reported context window
- * (issue #264). The runner can override it through
+ * (issue #254). The runner can override it through
  * `context_work_budget_percent`; deriving the token denominator from the live
  * model window makes 1M- and 200k-token models comparable.
  *
- * NOTE (issue #172 Q2): this currently has the same numeric value as
+ * NOTE (issue #162 Q2): this currently has the same numeric value as
  * CONTEXT_NOTICE_THRESHOLD_PERCENT, but they are distinct concepts. The
  * notice threshold decides when to offer recovery; this value chooses a soft
  * work-budget denominator. Never derive either constant from the other. */
@@ -362,7 +362,7 @@ export interface AgentHostOptions {
    */
   onLog?: (envelope: Envelope) => void;
   /** Invoked with each subagent/workflow task lifecycle envelope (issue
-   *  #180, ADR-0019 F2 / ADR-0047 F1). Separate from onLog/onState — a
+   *  #170, ADR-0019 F2 / ADR-0047 F1). Separate from onLog/onState — a
    *  dedicated envelope type per ADR-0019 F2, so it must not ride either
    *  existing channel. Omitted = task envelopes are not emitted (unit
    *  tests only; production always wires it). */
@@ -380,7 +380,7 @@ export interface AgentHostOptions {
   ) => void;
   /** Invoked immediately before #input() yields an accepted wrapper turn to
    * the SDK. This is the actual SDK-turn start: a turn waiting in #queue has
-   * not started and must not consume watchdog budget (issue #248). */
+   * not started and must not consume watchdog budget (issue #238). */
   onTurnStart?: (info: {
     turnToken: string;
     conversationIds: readonly string[];
@@ -388,10 +388,10 @@ export interface AgentHostOptions {
   /** Invoked for each real SDK stream frame while a wrapper-fed turn is
    * active. It deliberately excludes server instructions and wrapper-local
    * timers: only SDK output is evidence that the blocked SDK turn progressed
-   * (issue #248). */
+   * (issue #238). */
   onTurnProgress?: (info: { turnToken: string }) => void;
   /** Invoked for an SDK ResultMessage, alongside (not instead of) onLog's
-   *  result envelope (issue #131; extended issue #221 段階3 direction 2 for
+   *  result envelope (issue #127; extended issue #211 段階3 direction 2 for
    *  coalescing), OR for a stream-end cancellation of an accepted wrapper
    *  turn that never reached such a ResultMessage. `conversationIds` is the
    *  inter-agent conversation(s) that turn's injection came from (the value passed as
@@ -437,7 +437,7 @@ export interface AgentHostOptions {
    *  accepted (including queued cancellations). It runs before the CLI closes
    *  its ServerLink, so ownership layers outside AgentHost can synchronously
    *  settle work that was accepted but had not reached the host queue yet and
-   *  enqueue its terminal notices (issue #246). This callback does not await
+   *  enqueue its terminal notices (issue #236). This callback does not await
    *  transport delivery; link shutdown may instead leave the server's
    *  disconnected notice as the recipient-visible fallback. */
   onHostEnd?: (info: {
@@ -495,17 +495,17 @@ export interface AgentHostOptions {
    */
   cancelDecision?: (kind: "permission" | "question", requestId: string) => void;
   /**
-   * Conversation-unit auto-allow for `send_to_agent` (issue #175, ADR-0044
+   * Conversation-unit auto-allow for `send_to_agent` (issue #165, ADR-0044
    * F2 追補 — 案 B). When it returns true for the call's
    * `(conversation_id, to)` pair, `#canUseTool` allows the call without
    * invoking `decidePermission` at all — no dialog, no waiting_permission
-   * transition. Bound to `to` as well as `conversation_id` (issue #175
+   * transition. Bound to `to` as well as `conversation_id` (issue #165
    * review, ふじ M2) so a retry to a DIFFERENT peer on the same
    * conversation_id (e.g. after an `unknown_agent` reject from a typo'd
    * `to`) still goes through the dialog. Normally
    * `InterAgentTool#isConversationAutoAllowed`. Omitted = every
    * `send_to_agent` call goes through the normal `decidePermission` path
-   * (pre-#175 behaviour).
+   * (pre-#165 behaviour).
    */
   interAgentAutoAllow?: (conversationId: string, to: string) => boolean;
   /**
@@ -559,7 +559,7 @@ export interface AgentHostOptions {
    *  injectable for tests. Defaults to `Date.now`. */
   nowMs?: () => number;
   /** Diagnostic sink for fail-visible anomalies that must not silently
-   *  vanish but also must not corrupt derived state (issue #180, こはく
+   *  vanish but also must not corrupt derived state (issue #170, こはく
    *  指示 2026-08-09 — an unrecognized `task_*` subtype/status, or a
    *  `task_progress`/`task_notification` for a task_id this host never
    *  saw `task_started` for). Injectable for tests. Defaults to
@@ -571,7 +571,7 @@ export interface AgentHostOptions {
 /** One queued SDK input together with its immutable correlation metadata.
  * Keeping this as one record — rather than parallel queues plus a mutable
  * "current" tag — prevents an eager SDK input pull from retagging an earlier
- * turn before its result is observed (issue #246). */
+ * turn before its result is observed (issue #236). */
 interface QueuedTurn {
   message: SDKUserMessage;
   turnToken: string;
@@ -586,8 +586,8 @@ interface QueuedTurn {
  */
 export class AgentHost implements EngineAdapter {
   readonly #config: WrapperConfig;
-  /** Last-applied display_name sync revision (issue #197 段階3, D15,
-   *  renamed issue #219 D19/D23). Starts at 0 to match the baseline
+  /** Last-applied display_name sync revision (issue #187 段階3, D15,
+   *  renamed issue #209 D19/D23). Starts at 0 to match the baseline
    *  `AgentDirectory` gives a freshly-spawned agent (never renamed), so
    *  the join-time sync for a never-renamed agent is correctly a no-op
    *  (0 <= 0) rather than a spurious re-emit. See `renameDisplayName`
@@ -623,7 +623,7 @@ export class AgentHost implements EngineAdapter {
   readonly #toolNames = new Map<string, string>();
   readonly #warn: (message: string) => void;
 
-  /** task_id -> the fields only `task_started` carries (issue #180,
+  /** task_id -> the fields only `task_started` carries (issue #170,
    *  ADR-0047 F2) — `task_progress` / `task_notification` SDK messages
    *  have no `task_type` of their own (verified against the installed
    *  SDK's type declarations), so later `updated`/`completed` envelopes
@@ -639,7 +639,7 @@ export class AgentHost implements EngineAdapter {
     { task_type: string; subagent_type?: string; workflow_name?: string }
   >();
   /** task_id -> the last EMITTED `updated` envelope's throttle inputs
-   *  (issue #180, ADR-0048 F2). Absent entry = no `updated` has been
+   *  (issue #170, ADR-0048 F2). Absent entry = no `updated` has been
    *  emitted yet for this task_id (the next `task_progress` always
    *  emits, unthrottled). Cleared alongside `#taskCache` on `completed`. */
   readonly #taskThrottle = new Map<
@@ -959,11 +959,11 @@ export class AgentHost implements EngineAdapter {
     };
     if (this.#cwd !== null) out.cwd = this.#cwd;
     if (this.#sessionId !== null) out.session_id = this.#sessionId;
-    // phase-28 A2 (#168): the agent's own context usage, in the same shape
+    // phase-28 A2 (#158): the agent's own context usage, in the same shape
     // peers already read via list_agents. Null (never fetched, or dropped by
     // a model switch) omits the key so absent keeps meaning unknown.
     if (this.#context !== null) out.context = this.#context;
-    // issue #254: the agent's own rate limits, read from the SAME map that
+    // issue #244: the agent's own rate limits, read from the SAME map that
     // feeds ext.rate_limits, so the two agree at the moment this host stamps
     // them. That is the whole claim — a peer's copy travels through the
     // directory projection (core's projectRateLimits, which drops malformed
@@ -977,7 +977,7 @@ export class AgentHost implements EngineAdapter {
     return out;
   }
 
-  /** Single engine-neutral SoT for both state_change.ext and whoami (#113). */
+  /** Single engine-neutral SoT for both state_change.ext and whoami (#109). */
   #effectiveStatusSnapshot(): EffectiveStatusSnapshot {
     const axes = PERMISSION_MODE_AXES[this.#permissionMode as PermissionMode];
     const fallbackModel = this.#engineFallbackModel();
@@ -1020,7 +1020,7 @@ export class AgentHost implements EngineAdapter {
    *  serialises onInstruction calls through a promise chain so async render
    *  cost does not reorder concurrent instructions on the SDK queue.
    *
-   *  `interAgentConversationIds` (issue #131 must-fix 1; extended issue #221
+   *  `interAgentConversationIds` (issue #127 must-fix 1; extended issue #211
    *  段階3 direction 2) tags this specific queued turn with the inter-agent
    *  conversation(s) it was injected to answer — cli.ts passes it only from
    *  the inter-agent injection path, never for an ordinary operator
@@ -1029,7 +1029,7 @@ export class AgentHost implements EngineAdapter {
    *  into this one turn. `turnToken` is the opaque generation identity that
    *  owns that correlation in the CLI; ordinary callers omit it and the host
    *  creates one. Queue entry, token, and CIDs stay indivisible through the
-   *  result barrier (issue #246). */
+   *  result barrier (issue #236). */
   async send(
     text: string,
     attachmentIds?: string[],
@@ -1104,7 +1104,7 @@ export class AgentHost implements EngineAdapter {
       content = blocks;
       // renderAttachmentBlock() awaits. EOF/close or another sender can
       // change the host state while it is suspended; do not consume uploads
-      // or append a turn after that terminal boundary (issue #246).
+      // or append a turn after that terminal boundary (issue #236).
       this.#assertCanQueue();
       // Consume — uploads are one-shot per instruction.
       for (const id of attachmentIds) this.#pendingUploads.delete(id);
@@ -1342,7 +1342,7 @@ export class AgentHost implements EngineAdapter {
       // not when the current output stream has drained. Keep the active token
       // and input barrier intact until that turn's actual ResultMessage (or
       // stream EOF): otherwise a buffered result for A could settle B after
-      // B was yielded (issue #246 review must-fix 1).
+      // B was yielded (issue #236 review must-fix 1).
       await this.#reconcilePendingTasklistRefreshes("interrupt");
     }
   }
@@ -1350,7 +1350,7 @@ export class AgentHost implements EngineAdapter {
   /** Requests an interrupt only when this exact watchdog token still owns the
    * SDK input barrier. The control ACK is deliberately not a terminal event:
    * a buffered ResultMessage must still settle this token before another turn
-   * can begin (issue #246 / #248). */
+   * can begin (issue #236 / #238). */
   requestInterruptForTurn(turnToken: string): boolean {
     if (this.#activeTurn?.turnToken !== turnToken || this.#watchdogFailStopped) {
       return false;
@@ -1365,7 +1365,7 @@ export class AgentHost implements EngineAdapter {
    * inactivity limit and interrupt grace. Never settle #activeTurn here: in
    * the absence of a ResultMessage/EOF, attributing an outcome to it would be
    * a correctness bug. The CLI receives a distinct callback to stop its
-   * unstarted coordinator work and escalate to the operator (issue #248). */
+   * unstarted coordinator work and escalate to the operator (issue #238). */
   failStopTurnForWatchdog(turnToken: string): boolean {
     const activeTurn = this.#activeTurn;
     if (
@@ -1381,7 +1381,7 @@ export class AgentHost implements EngineAdapter {
   /** Fallback for a watchdog correlation invariant failure. It must not
    * guess that the stale watched token is still active; use the host's
    * current token if there is one, otherwise freeze all admission without an
-   * ownership claim (issue #248 must-fix 1). */
+   * ownership claim (issue #238 must-fix 1). */
   failStopForWatchdogAttributionUnknown(): boolean {
     if (this.#watchdogFailStopped || this.#hostEnded) return false;
     return this.#failStopForWatchdog(this.#activeTurn, "unattributed");
@@ -1644,9 +1644,9 @@ export class AgentHost implements EngineAdapter {
   }
 
   /** Applies a display_name sync push — `persona_sync` (legacy) or
-   *  `display_name_sync` (new), issue #219 D22 dual-emit; both funnel
-   *  into this one call (issue #197 段階3, renamed from `renamePersona`
-   *  in issue #219 D19/D23): the server's authoritative current display
+   *  `display_name_sync` (new), issue #209 D22 dual-emit; both funnel
+   *  into this one call (issue #187 段階3, renamed from `renamePersona`
+   *  in issue #209 D19/D23): the server's authoritative current display
    *  name, sent on every join (fresh AND reconnect, D14 acceptance 1)
    *  and on a live `rename_agent`.
    *
@@ -1658,13 +1658,13 @@ export class AgentHost implements EngineAdapter {
    *  (D15: two `rename_agent` calls racing on the server can complete
    *  their broadcasts in either order), a join-time sync that simply
    *  confirms the name this session already has (revision unchanged —
-   *  no re-emit needed), and issue #219 D22's dual-emit itself (both
+   *  no re-emit needed), and issue #209 D22's dual-emit itself (both
    *  `persona_sync` and `display_name_sync` arrive at the same revision
    *  — the second call here is a guaranteed no-op via this same guard).
    *
    *  Only `display_name` is mutable here — `persona.id` / `name` /
    *  `sprite_set` and the injected personality prompt stay fixed for the
-   *  session's lifetime (ADR-0029 F9, ADR-0030 D2 — issue #219 removed
+   *  session's lifetime (ADR-0029 F9, ADR-0030 D2 — issue #209 removed
    *  the D2 carve-out this method used to require by moving the mutable
    *  field OUT of `persona` entirely). Re-emits `state_change`
    *  immediately rather than waiting for the next natural turn event,
@@ -1887,7 +1887,7 @@ export class AgentHost implements EngineAdapter {
         // settled into; then relay the message's reply lines.
         for (const event of sdkMessageToEvents(message)) this.#apply(event);
         for (const entry of sdkMessageToLogs(message)) this.#emitLog(entry);
-        // Subagent/workflow task lifecycle (issue #180, ADR-0019 F2 / ADR-0047
+        // Subagent/workflow task lifecycle (issue #170, ADR-0019 F2 / ADR-0047
         // F1) — deliberately does NOT feed #apply()/state derivation above:
         // ADR-0019 F2 requires task info to stay off the parent's own
         // KaoiroState / state_change entirely.
@@ -1912,7 +1912,7 @@ export class AgentHost implements EngineAdapter {
           this.#recordTasklistTrigger(tasklistTrigger);
         }
         await this.#refreshTasklistAfterToolResults(message);
-        // Compaction / conversation-reset notices (phase-28 A1, #168). Emitted
+        // Compaction / conversation-reset notices (phase-28 A1, #158). Emitted
         // as their own log line rather than folded into sdkMessageToLogs: that
         // mapper is shared with resume history reconstruction (history.ts), and
         // these are live-session observations, not transcript content.
@@ -1931,7 +1931,7 @@ export class AgentHost implements EngineAdapter {
               // as a no-ResultMessage terminal boundary. Until that is measured,
               // conservatively retain the active correlation: only the actual
               // ResultMessage or stream EOF opens the input barrier. This avoids
-              // letting a buffered A result settle a newly-yielded B (#246).
+              // letting a buffered A result settle a newly-yielded B (#236).
               await this.#reconcilePendingTasklistRefreshes("conversation_reset");
               // ADR-0055 Stage A (code-review-assessment round 1): every
               // reservation still queued was written for a conversation
@@ -2139,9 +2139,9 @@ export class AgentHost implements EngineAdapter {
     if (toolName === "AskUserQuestion" && decideQuestion) {
       return this.#askUserQuestion(decideQuestion, input, signal);
     }
-    // issue #175 (ADR-0044 F2 追補, 案 B): a conversation-unit whitelist
+    // issue #165 (ADR-0044 F2 追補, 案 B): a conversation-unit whitelist
     // for send_to_agent. When this wrapper already had an approved send on
-    // the SAME `(input.conversation_id, input.to)` pair (issue #175
+    // the SAME `(input.conversation_id, input.to)` pair (issue #165
     // review, ふじ M2 — not conversation_id alone), skip the broker (and
     // the waiting_permission transition below) entirely — no dialog for
     // this call. A brand-new conversation (conversation_id omitted), one
@@ -3130,7 +3130,7 @@ export class AgentHost implements EngineAdapter {
   }
 
   /** Queues the one threshold notice this context epoch is allowed
-   *  (phase-28 B1, #168 P3). Called from `#refreshContextUsage` on every
+   *  (phase-28 B1, #158 P3). Called from `#refreshContextUsage` on every
    *  reading that actually changed, so the notice lands the first time usage
    *  crosses the line and never again until the epoch ends.
    *
@@ -3249,7 +3249,7 @@ export class AgentHost implements EngineAdapter {
   }
 
   /** Routes one {@link TaskEvent} to the task cache / throttle / emission
-   *  logic (issue #180, ADR-0019/0047/0048). Never touches `#machine` or
+   *  logic (issue #170, ADR-0019/0047/0048). Never touches `#machine` or
    *  `#apply()` — task envelopes are independent of `KaoiroState` by
    *  design (ADR-0019 F2). */
   #applyTaskEvent(event: TaskEvent): void {
@@ -3509,7 +3509,7 @@ export class AgentHost implements EngineAdapter {
     onTask(makeTask(this.#config, this.#machine.state, this.#now(), payload));
   }
 
-  /** Builds the task envelope and relays it via onTask (issue #180). */
+  /** Builds the task envelope and relays it via onTask (issue #170). */
   #emitTask(payload: Omit<TaskPayload, "agent_id">): void {
     const onTask = this.#options.onTask;
     if (!onTask) return;
@@ -3541,7 +3541,7 @@ export class AgentHost implements EngineAdapter {
     if (typeof payload.text === "string")
       out.text = clipText(payload.text).text;
     if (payload.is_error) out.is_error = true;
-    // issue #127/#287: only forward error metadata on error results. The
+    // issue #123/#287: only forward error metadata on error results. The
     // adapter never sets these on success, but the guard keeps the wire
     // payload minimal even if a future caller reuses this shape.
     if (typeof payload.error_subtype === "string") {
@@ -3719,7 +3719,7 @@ export class AgentHost implements EngineAdapter {
   /** Runs the one host-lifetime terminal pathway. This intentionally sits
    * outside the SDK stream loop so query construction and iteration errors,
    * and a close while waiting for the first input, cannot strand an accepted
-   * inter-agent batch outside #queue (issue #246). */
+   * inter-agent batch outside #queue (issue #236). */
   #finishHost(kind: "stream_eof" | "closed_before_query"): void {
     if (this.#hostEnded) return;
     this.#hostEnded = true;

@@ -40,7 +40,7 @@
      *  merely disconnected live entry. */
     directoryOnly?: boolean;
     /** Count of subagent/workflow tasks currently active under this agent
-     *  (ADR-0019/0047/0048, issue #180). Drives the 頭上リング (overhead
+     *  (ADR-0019/0047/0048, issue #170). Drives the 頭上リング (overhead
      *  ring) animation only when > 0 — the value itself is not displayed
      *  (numeric display was explicitly out of scope for this issue).
      *  Always 0 for a viewer session (App.svelte's task snapshot/live feed
@@ -170,8 +170,8 @@
       hasUnackedError,
   );
 
-  // --- engine·model·effort / ctx·5h·7day stats (issue #193) ---
-  // agent_id itself (the existing `.id` element below) predates #193 and is
+  // --- engine·model·effort / ctx·5h·7day stats (issue #183) ---
+  // agent_id itself (the existing `.id` element below) predates #183 and is
   // NOT part of this block or its settings toggle — it is a top-level
   // envelope field the server sends to viewers too, so it cannot be gated
   // by ext-presence, and this issue never asked it to be (director
@@ -181,7 +181,7 @@
   // delivers to viewers (ADR-0021) — so "render only when the field is
   // present" alone already satisfies the operator-only requirement without
   // a separate role check. Kept local (not shared with AgentDetail.svelte,
-  // which has its own richer capability-gated version): #193 scopes
+  // which has its own richer capability-gated version): #183 scopes
   // AgentDetail as out of bounds, and this card only needs a plain
   // "show if present" read, not AgentDetail's switch-state / capability
   // tri-state machinery.
@@ -260,7 +260,7 @@
     if (typeof raw !== "object" || raw === null) return null;
     return nonEmptyString((raw as Record<string, unknown>).effort);
   });
-  // Combined engine/model/effort line (issue #193 sketch: one row). Missing
+  // Combined engine/model/effort line (issue #183 sketch: one row). Missing
   // fields drop out of the join; the whole line hides only once ALL three
   // are absent, so a partial ext payload still shows what it has.
   const metaLine = $derived(
@@ -298,7 +298,7 @@
 
   /** rate_limits is a last-turn snapshot (does not update while idle) — once
    *  its resets_at has passed, its utilization/status describe a dead
-   *  window and must not read as live usage (issue #193). Equality stays
+   *  window and must not read as live usage (issue #183). Equality stays
    *  live, matching AgentDetail's identical rule. Returns null both when the
    *  window is absent AND when it carries nothing displayable (no pct, no
    *  reset, not reset-complete) — the row hides rather than showing a bare
@@ -342,7 +342,7 @@
   // grid (no new envelope to re-derive from) — wake once at that boundary so
   // a stale window falls to "リセット済み" without waiting on next activity.
   // ふじ round-2 S1: gated on the toggle (a grid can hold many cards, and
-  // #184 already paid down a dashboard input-lag regression from a similar
+  // #174 already paid down a dashboard input-lag regression from a similar
   // per-tile-timer cost — a hidden card must not keep one alive) and scoped
   // to only the two windows actually rendered, so an unrendered window
   // (`seven_day_opus`, `overage`, ...) cannot arm a timer for a bar nobody
@@ -554,8 +554,8 @@
         {/key}
       </button>
       {#if activeTaskCount > 0}
-        <!-- 頭上リング (issue #180, ADR-0019/0047/0048)。実装は
-             TaskRing.svelte(AgentDetail と共有、issue #180 follow-up
+        <!-- 頭上リング (issue #170, ADR-0019/0047/0048)。実装は
+             TaskRing.svelte(AgentDetail と共有、issue #170 follow-up
              2026-08-10)。{#key} の外に置き、state 遷移(dissolve
              remount)の影響を受けず単独で回り続ける。 -->
         <TaskRing faceOrbit={!spriteUrl} count={activeTaskCount} />
@@ -747,7 +747,7 @@
     cursor: help;
   }
 
-  /* Wraps the sprite/face so the 頭上リング (issue #180) can be
+  /* Wraps the sprite/face so the 頭上リング (issue #170) can be
      absolutely positioned around whichever is shown, and so the ring
      survives the {#key display.shown} remount below instead of
      restarting its rotation on every state change. inline-block
@@ -793,7 +793,7 @@
   }
 
   /* Sprite/CSS-face fallback rendering itself lives in PersonaFace.svelte
-     (issue #245, size="card") — this file only sizes the wrapper slot.
+     (issue #235, size="card") — this file only sizes the wrapper slot.
      `dissolve` stays here: `.state` below still uses it independently
      of the sprite/face. */
 
@@ -834,7 +834,7 @@
     overflow-wrap: anywhere;
   }
 
-  /* engine·model·effort / ctx·5h·7day (issue #193). Bottom
+  /* engine·model·effort / ctx·5h·7day (issue #183). Bottom
      margin reserves room for the terminate/interrupt/restore/delete chips,
      which are absolutely positioned in the card's bottom corners and would
      otherwise sit on top of the last bar. */

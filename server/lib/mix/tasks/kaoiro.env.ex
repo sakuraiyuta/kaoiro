@@ -2,7 +2,7 @@ defmodule Mix.Tasks.Kaoiro.Env do
   @shortdoc "server/.env を対話生成する"
 
   @moduledoc """
-  Interactive wizard that writes `server/.env` (issue #144, spec
+  Interactive wizard that writes `server/.env` (issue #139, spec
   `docs/specs/setup-wizards.md`).
 
       mix kaoiro.env [--path .env]
@@ -15,7 +15,7 @@ defmodule Mix.Tasks.Kaoiro.Env do
     * The DETS path variables are NOT asked. The bundled
       `docker-compose.yaml` already sets them, and they only matter outside
       compose — the generated file carries them as commented hints, and the
-      deployment runbook (issue #142) is the manual source of truth.
+      deployment runbook (issue #137) is the manual source of truth.
     * The runner-side counterpart is the runner's own wizard
       (`deploy/kaoiro-runner-setup.sh`). The two do not exchange tokens; this
       task prints what to paste where.
@@ -312,7 +312,7 @@ defmodule Mix.Tasks.Kaoiro.Env do
       when provider in ["google", "github", "nextcloud"] and identifier != "" ->
         normalize_allowlist_entry(provider, identifier, nil)
 
-      # `admin` accepted since issue #198. This generator is the standard
+      # `admin` accepted since issue #188. This generator is the standard
       # bootstrap surface, and admin is declarable ONLY through config
       # (ADR-0050 D2), so rejecting it here meant every generated .env
       # produced an admin-less deployment that could never be fixed except
@@ -343,7 +343,7 @@ defmodule Mix.Tasks.Kaoiro.Env do
   end
 
   # `token:role` entries. Roles are a closed set server-side, so only those
-  # three are offered. admin is asked FIRST and separately (issue #198):
+  # three are offered. admin is asked FIRST and separately (issue #188):
   # it is the only role that can be granted nowhere but config, so a
   # generator that never offers it hands back a zero-admin config that
   # requires manual recovery (ふじ must-fix 2).

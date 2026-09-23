@@ -5,7 +5,7 @@ defmodule KaoiroServer.ConversationStates do
   a server restart starts fresh (Phase 2 / ADR-0014 will address durability).
 
   For each `conversation_id` we keep the turn count, the highest
-  `turn_number` seen (`max_turn_number`, issue #177 review M1 — a
+  `turn_number` seen (`max_turn_number`, issue #167 review M1 — a
   wrapper-supplied sequence distinct from `turns`, which merely counts
   accepted messages), the running token approximation (`byte_size(body)
   ÷ 3` per message — docs/reference/inter-agent/conversations.md, intentionally coarse),
@@ -15,7 +15,7 @@ defmodule KaoiroServer.ConversationStates do
   to an operator), the participating agent_id set, the set of
   agent_ids that have signalled `meta.done=true` so far, and the set
   already reported unreachable to their peers
-  (`claim_unreachable_targets/3`, issue #131). `record_message/6`
+  (`claim_unreachable_targets/3`, issue #127). `record_message/6`
   increments the counters and returns:
 
     * `:ok` — within limits, conversation still open.
@@ -27,14 +27,14 @@ defmodule KaoiroServer.ConversationStates do
       / `:max_concurrent_agents`). The entry transitions to a tombstone
       carrying that reason.
     * `{:error, :conversation_closed}` — a message arrived for a
-      `conversation_id` that already holds a CLOSED tombstone (issue #177):
+      `conversation_id` that already holds a CLOSED tombstone (issue #167):
       a delayed / duplicate / out-of-order message reaching a conversation
       that already ended (both-done or a hard limit). Not relayed, stored,
       or broadcast — this is what stops a completed conversation from
       reopening into a done / escalate ping-pong.
     * `{:error, :stale_turn}` — `turn_number` is not greater than
       `max_turn_number` already recorded for this OPEN conversation (issue
-      #177 review M1): a late, duplicate, or out-of-order delivery. The
+      #167 review M1): a late, duplicate, or out-of-order delivery. The
       caller (channel ingress) only ever passes a positive integer here —
       `turn_number=0` is reserved for server-synthesized notices, which
       never reach this function (they are pushed directly, never submitted
@@ -48,7 +48,7 @@ defmodule KaoiroServer.ConversationStates do
       tombstoned) are unaffected.
     * `{:error, :unknown_conversation_id}` — `new_conversation?` is false (the
       sender explicitly named this `conversation_id` rather than omitting
-      it) and no entry exists for it, open or tombstoned (issue #262). A
+      it) and no entry exists for it, open or tombstoned (issue #252). A
       wrapper only omits the id when the CALLER omitted it too, so an
       explicit-but-unknown id here is a transcription error (a peer's id
       copied wrong, or a stale one from a prior session) — until this
@@ -78,19 +78,19 @@ defmodule KaoiroServer.ConversationStates do
   A periodic sweep (`:gc` self-message) transitions OPEN entries whose
   `started_at` is older than `open_conversation_ttl_ms` into an
   `:open_conversation_ttl` tombstone even without further messages —
-  without it, a stale entry (issue #221: e.g. one side crashed or was
+  without it, a stale entry (issue #211: e.g. one side crashed or was
   never going to reply) would pin memory indefinitely. This is a
   memory-DoS defense only, distinct from the `{:exceeded, reason}` hard
   limits above: it never synthesizes an `escalate-to-user` envelope (the
   caller only does that for a `record_message/6` reply, and this
   transition happens out-of-band on the sweep), so a slow-but-legitimate
-  conversation is not punished for taking a long time — see issue #221
+  conversation is not punished for taking a long time — see issue #211
   for why the previous `max_wallclock` hard-limit branch here was
   removed. The same sweep deletes tombstones once `tombstone_ttl_ms` has
   elapsed since `closed_at`, so a `conversation_id` may be reused for a
   brand-new conversation after that TTL (IDs are UUIDs, so this is not a
   permanent tombstone). Keeping this a separate key from
-  `open_conversation_ttl_ms` matters for issue #177: the tombstone must
+  `open_conversation_ttl_ms` matters for issue #167: the tombstone must
   outlive `open_conversation_ttl_ms` by enough margin that a genuinely
   late message cannot land on a freshly-reused `conversation_id`
   (wrapper-side `CLOSED_TRACK_TTL_MS` uses the same 24h value).
@@ -109,13 +109,13 @@ defmodule KaoiroServer.ConversationStates do
   @doc """
   Starts the tracker; tests can register an isolated instance via `:name`.
 
-  `:clock` (issue #177 review nit2, AGENTS.md「Avoid Process.sleep/1 in
+  `:clock` (issue #167 review nit2, AGENTS.md「Avoid Process.sleep/1 in
   tests」) overrides the monotonic-ms time source — a 0-arity function,
   default `&System.monotonic_time(:millisecond)/0`. Tests inject a
   deterministic clock (e.g. an `Agent` holding an integer) instead of
   sleeping real wallclock time to make GC / TTL behaviour observable.
 
-  `:on_auto_closed` (issue #221 direction 2) is a 3-arity callback invoked
+  `:on_auto_closed` (issue #211 direction 2) is a 3-arity callback invoked
   once per conversation the periodic GC sweep auto-closes via
   `open_conversation_ttl_ms` (never for a hard-limit closure, which the
   caller of `record_message/6` already learns from its own return value):
@@ -141,7 +141,7 @@ defmodule KaoiroServer.ConversationStates do
   @doc """
   Records a new message in `conversation_id` from `from` to `to`, weighing
   the body for token accounting. `turn_number` is the sender's claimed
-  sequence number for this message (issue #177 review M1) — the caller
+  sequence number for this message (issue #167 review M1) — the caller
   (channel ingress) validates it is a positive integer before this call;
   a value no greater than the conversation's already-recorded
   `max_turn_number` is rejected as `{:error, :stale_turn}` without
@@ -152,10 +152,10 @@ defmodule KaoiroServer.ConversationStates do
   having signalled done; the entry only closes once every participating
   agent has done so (spec MUST: both owner-side done で対話完了). A
   message for an already-CLOSED `conversation_id` is rejected outright
-  (`{:error, :conversation_closed}`, issue #177) — see the moduledoc for
+  (`{:error, :conversation_closed}`, issue #167) — see the moduledoc for
   the tombstone lifecycle.
 
-  `new_conversation?` (issue #262) is true only when the CALLING agent
+  `new_conversation?` (issue #252) is true only when the CALLING agent
   omitted `conversation_id` and the wrapper allocated a fresh one — the
   one case where an unknown id is legitimate. When it is false (the
   agent supplied this id explicitly) and no entry exists for it, the
@@ -163,8 +163,8 @@ defmodule KaoiroServer.ConversationStates do
   silently opening a new, context-less thread under a mistyped or
   stale id; see the moduledoc.
 
-  Deliberately NO default (review, issue #262 delta): an earlier version
-  defaulted this to `true` so ~90 pre-#262 test call sites would not need
+  Deliberately NO default (review, issue #252 delta): an earlier version
+  defaulted this to `true` so ~90 pre-#252 test call sites would not need
   editing. That convenience is exactly the shape of bug this whole issue
   exists to close, just moved one layer down — a FUTURE caller of this
   function (not only the channel) that forgets the argument would
@@ -308,7 +308,7 @@ defmodule KaoiroServer.ConversationStates do
   unreachable, marks them as notified, and returns
   `{[{conversation_id, other_participant_ids}], unclaimed_count}`. The
   wrapper channel calls it on disconnect (protocol-inter-agent
-  「応答不能エラーの通知」, issue #131).
+  「応答不能エラーの通知」, issue #127).
 
   Claiming — rather than plain listing — is what keeps a crash-looping or
   flapping wrapper from re-injecting the same notice into its peers on
@@ -370,7 +370,7 @@ defmodule KaoiroServer.ConversationStates do
       max_turns: Keyword.get(cfg, :max_turns, 20),
       max_tokens: Keyword.get(cfg, :max_tokens, 100_000),
       max_concurrent_agents: Keyword.get(cfg, :max_concurrent_agents, 2),
-      # GC-only TTLs (issue #221) — NOT hard limits: neither one rejects a
+      # GC-only TTLs (issue #211) — NOT hard limits: neither one rejects a
       # message or synthesizes an escalate-to-user envelope. Split from the
       # former single max_wallclock_ms because the two govern different
       # transitions on different base timestamps (see moduledoc).
@@ -394,7 +394,7 @@ defmodule KaoiroServer.ConversationStates do
     existing = Map.get(state.conversations, cid)
 
     cond do
-      # issue #177: a CLOSED tombstone accepts no further messages at all —
+      # issue #167: a CLOSED tombstone accepts no further messages at all —
       # checked before the participants check so a reused/delayed message
       # from ANY sender gets the same conversation_closed answer, not a
       # misleading participants_mismatch.
@@ -409,7 +409,7 @@ defmodule KaoiroServer.ConversationStates do
       existing != nil and not MapSet.subset?(MapSet.new([from, to]), existing.agents) ->
         {:reply, {:error, :participants_mismatch}, state}
 
-      # issue #177 review M1: a turn_number no greater than the highest
+      # issue #167 review M1: a turn_number no greater than the highest
       # already recorded for this OPEN conversation is late, duplicate, or
       # out-of-order — reject before it can corrupt turns/tokens. Checked
       # after participants_mismatch (only meaningful once from/to are
@@ -418,7 +418,7 @@ defmodule KaoiroServer.ConversationStates do
       existing != nil and turn_number <= existing.max_turn_number ->
         {:reply, {:error, :stale_turn}, state}
 
-      # issue #262: an explicitly-named id (new_conversation? == false) with
+      # issue #252: an explicitly-named id (new_conversation? == false) with
       # no entry at all — open or tombstoned — is a transcription error, not
       # a new thread. Checked before the capacity cap below: a mistyped id
       # never should have consumed quota to begin with, so its rejection
@@ -480,7 +480,7 @@ defmodule KaoiroServer.ConversationStates do
   def handle_call(:peer_index, _from, state) do
     index =
       state.conversations
-      # issue #177: a CLOSED tombstone is not an active conversation — it
+      # issue #167: a CLOSED tombstone is not an active conversation — it
       # must not appear as an "active peer" in the directory.
       |> Enum.filter(fn {_cid, entry} -> entry.status == :open end)
       |> Enum.reduce(%{}, fn {_cid, entry}, acc ->
@@ -613,7 +613,7 @@ defmodule KaoiroServer.ConversationStates do
             {Map.put(acc, cid, entry), tomb, drop, closed}
 
           {:tombstone, closed_entry} ->
-            # issue #221 direction 2: only THIS transition (open_conversation_
+            # issue #211 direction 2: only THIS transition (open_conversation_
             # ttl, a sweep-driven auto-close) needs peer propagation — a
             # hard-limit closure already notifies its participants from
             # `record_message/6`'s own return value (wrapper_channel.ex's
@@ -636,12 +636,12 @@ defmodule KaoiroServer.ConversationStates do
 
     # Isolate the callback from this GenServer's own survival: it is the
     # ONLY point where this otherwise web-independent module's data reaches
-    # web-layer code (issue #221 direction 2/D19 boundary — see
+    # web-layer code (issue #211 direction 2/D19 boundary — see
     # `:on_auto_closed`'s doc). An exception here (a bug in the delivery
     # side, not in anything this module owns) must not crash a singleton
     # GenServer holding every OTHER agent's still-open conversations too.
     #
-    # `rescue` alone is not enough (issue #221 段階3 MF-2, ふじレビュー差し
+    # `rescue` alone is not enough (issue #211 段階3 MF-2, ふじレビュー差し
     # 戻し): it only catches Elixir exceptions (`raise`), not `exit` — and
     # the callback's typical shape (IngressOrder.allocate/0,
     # AgentStates.upsert_ia/3) is a `GenServer.call/2` chain, where a
@@ -672,10 +672,10 @@ defmodule KaoiroServer.ConversationStates do
     {:noreply, %{state | conversations: conversations}}
   end
 
-  # issue #177: the periodic sweep must not silently delete an open entry —
+  # issue #167: the periodic sweep must not silently delete an open entry —
   # a delayed message reaching it afterwards would otherwise be treated as a
   # brand-new conversation instead of a stale one. Transition to an
-  # :open_conversation_ttl tombstone instead (issue #221: memory-DoS defense
+  # :open_conversation_ttl tombstone instead (issue #211: memory-DoS defense
   # only, not a hard limit — see moduledoc); a genuinely expired tombstone
   # (its own `closed_at` TTL elapsed) is the only case still deleted
   # outright.
@@ -713,7 +713,7 @@ defmodule KaoiroServer.ConversationStates do
     end
   end
 
-  # issue #177: transitions the OPEN entry in place to a CLOSED tombstone
+  # issue #167: transitions the OPEN entry in place to a CLOSED tombstone
   # (moduledoc) rather than deleting it, so a late message on the same cid
   # gets :conversation_closed instead of silently starting a new
   # conversation.
@@ -784,7 +784,7 @@ defmodule KaoiroServer.ConversationStates do
 
   defp unreachable_pending(conversations, agent_id, include_notified? \\ false) do
     for {cid, entry} <- conversations,
-        # issue #177: a CLOSED tombstone has no `notified_unreachable` set
+        # issue #167: a CLOSED tombstone has no `notified_unreachable` set
         # (dropped at close) and is not active — exclude it before the field
         # accesses below, and checked first so the comprehension's
         # short-circuit protects them.

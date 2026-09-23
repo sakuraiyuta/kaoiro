@@ -19,18 +19,18 @@ defmodule KaoiroServerWeb.AgentsChannel do
   `handle_out`'s role gate above reads `socket.assigns[:role]`, the
   role `ClientSocket.connect/3` resolved — a snapshot, not re-checked
   per envelope (the per-subscriber-per-envelope cost of doing so was
-  weighed and rejected, issue #158/#170). `join/3` re-resolves that
+  weighed and rejected, issue #148/#170). `join/3` re-resolves that
   snapshot live once, right before completing the join: an allow-list
   change landing in the connect-to-join gap can otherwise race past
   `KaoiroServer.OAuthAllowlistWatcher`'s disconnect broadcast (issue
-  #170 must-fix 2 — the transport's disconnect-topic subscription is
+  #160 must-fix 2 — the transport's disconnect-topic subscription is
   not yet live at `connect/3` return time, but always is by `join/3`).
   A mismatch here refuses the join instead of proceeding, so a stale
   role never gets the operator-only `snapshot`/`history`/`hosts` push
   in the first place. The re-solved role, once fan-out is under way,
   goes stale again until something forces a reconnect — the watcher's
   ongoing per-identity disconnects (triggered by allow-list edits) and
-  `current_role/1`'s per-operator-action re-resolution (#158) are what
+  `current_role/1`'s per-operator-action re-resolution (#148) are what
   keep that window bounded, not this gate on its own.
 
   Inbound (Phase 3, specs/protocol.md): `instruction`,
@@ -154,7 +154,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
     "session_reset_started",
     "session_reset_completed",
     "session_reset_failed",
-    # Recipient dispatch watermarks are an operator diagnostic (issue #247).
+    # Recipient dispatch watermarks are an operator diagnostic (issue #237).
     # Keep live updates behind the same role gate as their join-time snapshot.
     "delivery_status",
     # Review-quagmire notice (issue #273). Names agent pairs and their
@@ -170,7 +170,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
     # Connected wrapper artifact identity is operator-only, like host build
     # identity; viewers do not receive package provenance.
     "wrapper_build_info",
-    # Live directory refresh after a rename (issue #197 段階3, D16). The
+    # Live directory refresh after a rename (issue #187 段階3, D16). The
     # join-time push (`handle_info(:after_join, ...)` above) was the only
     # producer of this event before rename existed, so it was never
     # broadcast and therefore never needed interception; a rename now
@@ -257,20 +257,20 @@ defmodule KaoiroServerWeb.AgentsChannel do
   @session_id_pattern ~r/^[A-Za-z0-9-]{1,128}$/
 
   # Display-name bound shared by `apply_custom_name/2` (spawn-time, #22)
-  # and `validate_rename_name/1` (live rename, issue #197 段階3): both
+  # and `validate_rename_name/1` (live rename, issue #187 段階3): both
   # enforce the SAME 64-grapheme-cluster / no-control-char rule, so the
   # rule lives in one place rather than two independently-typed regexes
   # that could drift. `String.length/1` counts grapheme clusters, not
   # UTF-16 code units or code points (matches the bound this repo's other
   # display_name validators use, e.g. `WrapperChannel.valid_display_name/1`,
-  # issue #197 段階2 MF-1).
+  # issue #187 段階2 MF-1).
   @display_name_max_graphemes 64
   @display_name_max_bytes 256
   @display_name_control_char_pattern ~r/[\x00-\x1f\x7f]/
 
   @impl true
   def join("agents:lobby", _params, socket) do
-    # Re-resolve live before completing the join (issue #170 must-fix 2,
+    # Re-resolve live before completing the join (issue #160 must-fix 2,
     # ふじ 2026-08-05): connect/3 resolved a role that may have gone
     # stale in the window between connect and this join if the
     # allow-list changed in between and OAuthAllowlistWatcher's
@@ -312,7 +312,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
     {agents, snapshot_incomplete?} = AgentStates.wire_projection(agents)
 
-    # issue #180 (ADR-0048 F3): the active task set rides the dedicated
+    # issue #170 (ADR-0048 F3): the active task set rides the dedicated
     # join-time task_snapshot frame. Operator-only (こはく決定 2026-08-09):
     # F5's progress meta (summary/last_tool_name) is content-bearing, the
     # issue's own goal is operator-facing, and ADR-0021 F2's fail-closed
@@ -362,7 +362,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
     # directory carries persona (+ operator-picked custom name) so the client
     # can render offline agents' tiles for the restore UI (ADR-0030 D5).
     if role in @operator_capable_roles do
-      # `clear_watermarks` (issue #109) rides the same push as a
+      # `clear_watermarks` (issue #106) rides the same push as a
       # display-only hint (agent_id => ISO ts) so a live dashboard can
       # show "cleared at ..." without a follow-up round trip. The
       # authoritative filter has already run server-side inside
@@ -432,13 +432,13 @@ defmodule KaoiroServerWeb.AgentsChannel do
     {:noreply, socket}
   end
 
-  # Live directory refresh after a rename (issue #197 段階3, D16). Same
+  # Live directory refresh after a rename (issue #187 段階3, D16). Same
   # operator-only gate as the join-time push this event previously only
   # ever rode (`handle_info(:after_join, ...)` above) — a viewer must not
   # receive AgentDirectory contents (ADR-0030 D10).
   #
   # `payload` here is the RAW `persona_id` + `display_name` broadcast
-  # `AgentDirectory.rename/3` sends (issue #219 D19) — join against the
+  # `AgentDirectory.rename/3` sends (issue #209 D19) — join against the
   # CURRENT PersonaAssets manifest happens HERE, per subscriber, not at
   # broadcast time (see `agent_directory.ex`'s own broadcast comment for
   # why: this keeps `AgentDirectory` free of a PersonaAssets dependency
@@ -543,7 +543,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
     {:noreply, socket}
   end
 
-  # ADR-0015 stage 2's only client-facing egress point (issue #270 MF-4).
+  # ADR-0015 stage 2's only client-facing egress point (issue #260 MF-4).
   defp push_versioned(socket, event, payload) when is_map(payload) do
     unless MapSet.member?(@client_event_policy, event) do
       raise ArgumentError,
@@ -553,7 +553,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
     push(socket, event, Map.put(payload, "version", "0"))
   end
 
-  # Fail-closed SHAPE gate for every inbound JSON event (ふじ #218 レビュー
+  # Fail-closed SHAPE gate for every inbound JSON event (ふじ #208 レビュー
   # MF-1). `payload` is raw wire input: a client speaking the Phoenix
   # protocol directly can put any JSON term where the handlers all assume a
   # map, and map operations raise `BadMapError` / `FunctionClauseError` on a
@@ -568,7 +568,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   #
   # `missing_agent_id` keeps the closed reason vocabulary unchanged: it is
   # what `fetch_agent_id/1` already returns for this exact input, and what
-  # the pre-#218 ordering replied. `attach_chunk` is excluded because its
+  # the pre-#208 ordering replied. `attach_chunk` is excluded because its
   # payload is legitimately NOT a map (a `{:binary, data}` V2 frame); its
   # own clause below handles the valid shape and drops anything else.
   @impl true
@@ -579,7 +579,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
   def handle_in("instruction", payload, socket) do
     # One live resolution per handler, shared by the guard and the relay
-    # (ふじ must-fix B on issue #158).
+    # (ふじ must-fix B on issue #148).
     role = current_role(socket)
 
     with :ok <- reject_reserved_session_command(payload),
@@ -923,12 +923,12 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # on any failure — binary frames have no JSON reply path, and a chunk
   # without a prior open is a client bug not worth surfacing.
   #
-  # ADR-0015 carve-out (issue #218): the ONLY inbound client event that
+  # ADR-0015 carve-out (issue #208): the ONLY inbound client event that
   # gates on `require_operator_role/1` instead of the version-welded
   # `require_operator/4`. `payload` here is `{:binary, data}` — a fixed
   # length-prefixed header plus raw bytes, with no JSON object to hold a
   # `version` key. Stamping one would need a wire change (a protocol
-  # version bump), which #218 rules out of scope; running the check anyway
+  # version bump), which #208 rules out of scope; running the check anyway
   # would warn "(absent)" on every chunk of every upload. Recorded as a
   # permanent exception in `docs/specs/protocol.md`.
   def handle_in("attach_chunk", {:binary, data}, socket) when is_binary(data) do
@@ -1020,11 +1020,11 @@ defmodule KaoiroServerWeb.AgentsChannel do
            ) do
       # Persist the identity so operator-driven restore keeps working after
       # a server restart when AgentStates is empty (ADR-0030 D2 / D3).
-      # issue #219 D19: only `persona["id"]` (the stable reference) and
+      # issue #209 D19: only `persona["id"]` (the stable reference) and
       # `display_name` are persisted — canonical persona data is never
       # stored here anymore.
       #
-      # Ordered BEFORE the spawn broadcast (issue #219 D22):
+      # Ordered BEFORE the spawn broadcast (issue #209 D22):
       # `AgentDirectory.record/4` is now a synchronous call specifically so
       # this ordering closes the race where a wrapper joins immediately
       # after launch and its after-join `persona_sync`/`display_name_sync`
@@ -1289,7 +1289,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # log and treat it as a no-op. `:noop` (unknown agent / current session
   # not known yet) is surfaced as an error so the operator UI can tell.
   #
-  # #109: transition paths write SessionStarts only; this operator action
+  # #106: transition paths write SessionStarts only; this operator action
   # alone copies the known current-session start into ClearWatermarks.
   # Missing starts intentionally leave IA visibility unchanged rather than
   # using a clear-time fallback that could hide current-session IA.
@@ -1372,8 +1372,8 @@ defmodule KaoiroServerWeb.AgentsChannel do
     end
   end
 
-  # Operator-only live rename of an agent's display name (issue #197
-  # 段階3, D12 — operator-only until #198 per マスター決裁 2026-08-09 #4).
+  # Operator-only live rename of an agent's display name (issue #187
+  # 段階3, D12 — operator-only until #188 per マスター決裁 2026-08-09 #4).
   # `fetch_restorable_agent_id/1` accepts live OR disconnected agents,
   # same as `revoke_wrapper_token` — a disconnected agent still has a
   # valid rename target (the wrapper simply has nothing to relay to
@@ -1391,7 +1391,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # (via `restorable_agent?/1`'s `AgentStates.known?/1 or AgentDirectory.get/1
   # != nil` check) accepting an agent_id while `AgentDirectory.rename/3`'s own
   # lookup still saw `:not_found` — is now structurally closed for the
-  # ordinary spawn path (issue #219 D22 corollary, クロエ実測検証): the
+  # ordinary spawn path (issue #209 D22 corollary, クロエ実測検証): the
   # spawn handler's `AgentDirectory.record/4` call is a SYNCHRONOUS
   # `GenServer.call`, committed strictly BEFORE the `spawn` broadcast to the
   # runner. The runner only launches the wrapper process — the earliest
@@ -1411,7 +1411,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
          {:ok, display_name} <- validate_agent_rename_name(payload) do
       case AgentDirectory.rename(agent_id, display_name) do
         {:ok, %{display_name: display_name, revision: revision}} ->
-          # issue #219 D22: DUAL-EMIT, both at the SAME revision. Old
+          # issue #209 D22: DUAL-EMIT, both at the SAME revision. Old
           # wrapper builds only understand `persona_sync` (`name` key) —
           # they MUST keep receiving it during the compatibility window;
           # this is not an optional legacy shim, D22 rejected dropping it
@@ -1446,7 +1446,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
           # (join-time-only before this — see the `intercept` list
           # comment) is broadcast by `AgentDirectory.rename/2` ITSELF,
           # synchronously inside the same serialized call that performs
-          # the write (issue #197 段階3, ふじ MF-3 レビュー指摘) — NOT
+          # the write (issue #187 段階3, ふじ MF-3 レビュー指摘) — NOT
           # from here. Broadcasting a separately-read `AgentDirectory.all/1`
           # snapshot from this (caller) process, after the write already
           # completed, left a window where two concurrent renames could
@@ -1455,7 +1455,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
           # win the broadcast race and revert an already-joined
           # dashboard's directory copy.
           #
-          # Reply vocabulary is `display_name` (issue #219 D23) — no
+          # Reply vocabulary is `display_name` (issue #209 D23) — no
           # `persona` key; the operator's own dashboard reads the reply
           # directly, so there is no legacy client to keep compatible on
           # this leg.
@@ -1464,7 +1464,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
         {:error, :not_found} ->
           {:reply, {:error, %{reason: safe_reason(:unknown_agent)}}, socket}
 
-        # Wire-domain ceiling reached (issue #197 段階3, ふじ MF-5
+        # Wire-domain ceiling reached (issue #187 段階3, ふじ MF-5
         # レビュー指摘) — see `AgentDirectory.rename/3`'s own doc.
         {:error, :revision_exhausted} ->
           {:reply, {:error, %{reason: safe_reason(:revision_exhausted)}}, socket}
@@ -1506,7 +1506,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
     end
   end
 
-  # Operator-only live rename of a user's display name (issue #197 段階3,
+  # Operator-only live rename of a user's display name (issue #187 段階3,
   # D13 — operator-only, any existing user, no self-service distinction
   # per director's Q1 判定). No wrapper relay and no live broadcast: the
   # dashboard re-fetches via `list_users` (issue #207) after a rename
@@ -1553,7 +1553,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # The clear boundary must be the known beginning of the current session,
   # never "now": falling back to now can hide an IA emitted in the current
   # session. A missing start therefore leaves IA visible and emits a warning;
-  # non-IA history still receives the normal session_id sweep (#109).
+  # non-IA history still receives the normal session_id sweep (#106).
   defp adopt_session_start_watermark(agent_id) do
     case KaoiroServer.SessionStarts.get(agent_id) do
       {{_us, _seq} = order, display, _sid} ->
@@ -1614,7 +1614,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
       # would never be reclaimed, growing without bound over the
       # server's lifetime under ordinary agent churn.
       AgentAcceptance.delete(agent_id)
-      # issue #109: purge the clear watermark too, so an agent respawned
+      # issue #106: purge the clear watermark too, so an agent respawned
       # under the same agent_id starts fresh (no lingering hide-past
       # filter from a prior operator).
       ClearWatermarks.delete(agent_id)
@@ -1639,7 +1639,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # Per pane, IA whose stamp is `<= watermark(pane)` is dropped. Both
   # sender-view and receiver-view filters run in the same ordering domain
   # the watermark was recorded in, so a wrapper's producer clock skew
-  # cannot misclassify a cutoff crossing (ふじ #109 M6, ADR-0051 D3-4).
+  # cannot misclassify a cutoff crossing (ふじ #106 M6, ADR-0051 D3-4).
   # Peer transcripts stay untouched — hiding an entry in one pane by that
   # pane's watermark says nothing about the other pane.
   #
@@ -1800,13 +1800,13 @@ defmodule KaoiroServerWeb.AgentsChannel do
   defp relay(socket, payload, event, key_checks),
     do: relay(socket, payload, event, key_checks, current_role(socket))
 
-  # The wrapper-bound shape of an inbound client payload (issue #218).
+  # The wrapper-bound shape of an inbound client payload (issue #208).
   #
   # `agent_id` only addresses the `wrapper:<id>` topic, so it is dropped on
   # the way through — the wrapper already knows which agent it is.
   #
   # `version` is STAMPED here rather than passed through from the client,
-  # mirroring `relay_to_runner/4` (issue #182) on the other outbound leg.
+  # mirroring `relay_to_runner/4` (issue #172) on the other outbound leg.
   # The stamp normalizes the hop; it does not authenticate the client,
   # whose declared value was already warned about at the operator gate
   # (`require_operator/4`). Stamping server-side is what makes the
@@ -1820,8 +1820,8 @@ defmodule KaoiroServerWeb.AgentsChannel do
   #
   # `payload` is guaranteed to be a map here: the shape gate at the top of
   # `handle_in/3` rejects every non-map inbound payload before any clause
-  # runs (ふじ #218 レビュー MF-1). Kept inside each caller's `with`, after
-  # the role gate, so the ordering reads the same as the pre-#218 code.
+  # runs (ふじ #208 レビュー MF-1). Kept inside each caller's `with`, after
+  # the role gate, so the ordering reads the same as the pre-#208 code.
   defp wrapper_relay_payload(payload) do
     payload
     |> Map.delete("agent_id")
@@ -1919,7 +1919,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
         PlannedDisconnects.begin(agent_id, transition_id, :restart)
 
       true ->
-        # Preserve the pre-#266 opaque relay for unknown/already-disconnected
+        # Preserve the pre-#256 opaque relay for unknown/already-disconnected
         # entries. There is no outgoing live wrapper to classify, so opening
         # a planned downtime window would only bounce messages needlessly.
         :ok
@@ -1950,12 +1950,12 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # first. Warn-then-accept is ADR-0015's rule for a receiver.
   #
   # Absent used to be silent, because the dashboard omitted the field and
-  # warning would have logged on every operator click. #182 closed that: the
+  # warning would have logged on every operator click. #172 closed that: the
   # dashboard now stamps these payloads, so a missing version means an
   # unversioned client, which is exactly what ADR-0015 asks to surface. The
-  # runner runs the same check on delivery (#181), so both hops now agree.
+  # runner runs the same check on delivery (#171), so both hops now agree.
   #
-  # The WARN half of the check no longer lives here (issue #218): it is
+  # The WARN half of the check no longer lives here (issue #208): it is
   # welded to the operator gate in `require_operator/4`, which every caller
   # of this helper has already passed. This function keeps the NORMALIZE
   # half, which has no equivalent on the inbound side.
@@ -1979,7 +1979,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # match is normal, anything else (including an ABSENT field) warns, and
   # the message is processed either way. The sole caller is
   # `require_operator/4`, which welds this to the operator gate — see its
-  # own doc for why the two are bound together (issue #218).
+  # own doc for why the two are bound together (issue #208).
   #
   # `action` names what happens to the request AFTER acceptance, so the log
   # line reads correctly for both a pass-through (`relay/5`,
@@ -2018,18 +2018,18 @@ defmodule KaoiroServerWeb.AgentsChannel do
   end
 
   # Joins each directory entry's `persona_id` against the CURRENT
-  # PersonaAssets manifest (issue #219 D19) — `AgentDirectory` itself
+  # PersonaAssets manifest (issue #209 D19) — `AgentDirectory` itself
   # never stores canonical data, only the stable reference, so every
   # reader resolves fresh here instead of trusting a snapshot. Used by
   # BOTH the join-time push (`handle_info(:after_join, ...)`) and the
   # live `handle_out("directory", ...)` intercept, so the two paths
   # produce the IDENTICAL wire shape — a client that reconnects mid-
   # session must not see the payload shape change between its initial
-  # push and the next live update (issue #219 spec-gate, クロエ指摘).
+  # push and the next live update (issue #209 spec-gate, クロエ指摘).
   #
   # `persona` is `%{"id"=>, "name"=>, "sprite_set"=>}` when the pack
   # still resolves, or just `%{"id"=>}` (canonical fields OMITTED, never
-  # a stale/guessed value) when it does not — issue #219 D21's "typed
+  # a stale/guessed value) when it does not — issue #209 D21's "typed
   # unresolved". `display_name` is always present; it is the field
   # `AgentDirectory` actually owns and never depends on pack state.
   defp join_directory_entries(entries) do
@@ -2063,7 +2063,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
   defp resolve_persona(_host, _payload), do: {:error, :invalid_persona}
 
-  # issue #219 D23: accepts EITHER "display_name" (new wire key) or the
+  # issue #209 D23: accepts EITHER "display_name" (new wire key) or the
   # legacy "name" key (compatibility period — old client / wrapper
   # builds may still send it) but REJECTS outright when both are present
   # and disagree, rather than silently preferring one. Returns
@@ -2072,7 +2072,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # `{:error, :invalid_name}` (a present key is non-binary — including a
   # JSON `null`, see MF-3 below — or both keys present and conflicting).
   #
-  # MF-3 (issue #219, クロエ実測検証): a PRESENT key whose value is
+  # MF-3 (issue #209, クロエ実測検証): a PRESENT key whose value is
   # `null` must classify as "present but invalid", not "absent" — a
   # `Map.get/2` read cannot tell the two apart (both return `nil`), which
   # let `{"display_name" => null}` alone fall through to the `{:ok, nil}`
@@ -2114,19 +2114,19 @@ defmodule KaoiroServerWeb.AgentsChannel do
 
   # Shared length / control-char validation both spawn-time custom
   # naming and live rename apply — same rule `WrapperChannel.valid_display_name/1`
-  # and `PersonaAssets`' pack `name` field (issue #219 D24) enforce.
+  # and `PersonaAssets`' pack `name` field (issue #209 D24) enforce.
   defp valid_display_name_value?(trimmed) do
     String.length(trimmed) <= @display_name_max_graphemes and
       byte_size(trimmed) <= @display_name_max_bytes and
       not String.match?(trimmed, @display_name_control_char_pattern)
   end
 
-  # Optional per-instance INITIAL display_name (#22, revised issue #219
+  # Optional per-instance INITIAL display_name (#22, revised issue #209
   # D19/D20/D23): seeds a newly-spawned agent's `display_name`. Absent or
   # blank = fall back to the persona's own canonical name (created-time
   # persistence, D20 — this is the ONLY place a blank/absent value gets a
-  # fallback). Unlike the pre-#219 `apply_custom_name/2` this REPLACES,
-  # `persona` itself is never mutated — the whole point of issue #219 is
+  # fallback). Unlike the pre-#209 `apply_custom_name/2` this REPLACES,
+  # `persona` itself is never mutated — the whole point of issue #209 is
   # that a custom name is instance state, not a rewrite of the pack's
   # canonical name.
   defp resolve_spawn_display_name(persona, payload) do
@@ -2148,8 +2148,8 @@ defmodule KaoiroServerWeb.AgentsChannel do
     end
   end
 
-  # Live-rename name validation (issue #197 段階3, D12/D13, revised issue
-  # #219 D23). Unlike
+  # Live-rename name validation (issue #187 段階3, D12/D13, revised issue
+  # #209 D23). Unlike
   # `resolve_spawn_display_name/2` above, a blank/absent name has no
   # sensible "keep the existing name" default here — a rename request IS
   # the operator's request to CHANGE the name, so blank is rejected
@@ -2224,9 +2224,9 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # runner process.
   #
   # `persona` is the canonical pack data (id/name/sprite_set) — unchanged
-  # shape, ADR-0029 F9 unqualified again (issue #219 D19). `display_name`
+  # shape, ADR-0029 F9 unqualified again (issue #209 D19). `display_name`
   # is a NEW top-level field, independent of `persona`: the wrapper seeds
-  # its own instance state from it (issue #219 D19/D23) instead of
+  # its own instance state from it (issue #209 D19/D23) instead of
   # reading a custom name out of `persona["name"]`.
   defp build_spawn_payload(agent_id, persona, display_name, cwd, engine, payload) do
     spawn_payload =
@@ -2550,14 +2550,14 @@ defmodule KaoiroServerWeb.AgentsChannel do
   end
 
   # The agent's canonical persona + display_name from the restart-
-  # surviving identity ledger (ADR-0030 D3, revised issue #219 D19/D21);
+  # surviving identity ledger (ADR-0030 D3, revised issue #209 D19/D21);
   # restore re-spawns with both so the revived agent keeps its identity
   # even after a server restart cleared AgentStates. The canonical
   # persona is freshly joined against `PersonaAssets` here — NOT trusted
   # from a stored snapshot (`AgentDirectory` only ever persists
   # `persona_id`) — and restore fail-closes (`{:error, :unknown_persona}`)
   # when it no longer resolves: a pack that has since been removed from
-  # the ingest dir is not spawnable (ADR-0029 F3), and issue #219 D21
+  # the ingest dir is not spawnable (ADR-0029 F3), and issue #209 D21
   # explicitly rejects guessing a canonical from the ledger's old
   # evidence to route around that.
   defp agent_persona(agent_id) do
@@ -2931,7 +2931,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # new envelope type defaults to dropped for viewers until a `:viewer`
   # clause explicitly opts it in (fail-closed).
   # admin is 全可視 and MUST NOT be hideable (ADR-0050 D2), so it passes
-  # here exactly as operator does. When per-pair permissions (issue #199)
+  # here exactly as operator does. When per-pair permissions (issue #189)
   # start narrowing what an OPERATOR receives, admin must be split back
   # out of this clause rather than narrowed along with it.
   defp sanitize_envelope_for(role, envelope) when role in @operator_capable_roles,
@@ -3034,12 +3034,12 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # demotion (ADR-0042) would leave a socket that is already open acting
   # as operator until it happens to reconnect — the dashboard slides its
   # cookie only every 12 h, so the refresh path alone is far too slow to
-  # be the enforcement point (issue #158). Resolve from the credential
+  # be the enforcement point (issue #148). Resolve from the credential
   # instead, which reads the allow-list / token list live.
   # Takes either the socket (resolve here) or an already-resolved role, so
   # a handler that gates twice — reset-pending guard + relay — resolves
   # once and both decisions come from the same authority (ふじ must-fix B
-  # on issue #158). Resolving per call would let a role change land
+  # on issue #148). Resolving per call would let a role change land
   # between the two and fire a second disconnect broadcast.
   defp require_operator_role(%Phoenix.Socket{} = socket),
     do: require_operator_role(current_role(socket))
@@ -3052,14 +3052,14 @@ defmodule KaoiroServerWeb.AgentsChannel do
   defp require_operator_role(_role), do: {:error, :forbidden}
 
   # The operator gate with ADR-0015's receiver check WELDED to it (issue
-  # #218). Every inbound client message passes this, so binding the two
+  # #208). Every inbound client message passes this, so binding the two
   # together is what keeps the version gap from reopening: a new handler
   # cannot gate on operator role without also running the version check.
   #
-  # That arrangement is the point. Before #218 the check was an INDEPENDENT
+  # That arrangement is the point. Before #208 the check was an INDEPENDENT
   # line each handler had to remember, and the same omission became a
   # must-fix twice (`launch_defaults` in #88, `rename_agent` / `rename_user`
-  # in #197 段階3) under the same wrong premise — "this message is not
+  # in #187 段階3) under the same wrong premise — "this message is not
   # relayed to the runner, so it needs no version". ADR-0015 covers all
   # three parties and draws no such exception.
   #
@@ -3161,7 +3161,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
     AgentStates.known?(agent_id) or AgentDirectory.get(agent_id) != nil
   end
 
-  # user_id shape check for `rename_user` (issue #197 段階3, D13).
+  # user_id shape check for `rename_user` (issue #187 段階3, D13).
   # `AgentId.valid?/1` is reused rather than a new pattern: ADR-0050 D1
   # puts agent_id and user_id in the SAME id space (`[A-Za-z0-9._-]`,
   # issue #61). Unlike `fetch_agent_id/1`, this does NOT also check
@@ -3245,7 +3245,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   # accepted operator dispatches.
   #
   # The role is the one the handler resolved live, NOT the connect-time
-  # assign (ふじ must-fix B on issue #158): reading the snapshot here let
+  # assign (ふじ must-fix B on issue #148): reading the snapshot here let
   # a demoted socket stamp the cooldown before its relay was refused, and
   # let a promoted one skip the guard the relay would then honour.
   #

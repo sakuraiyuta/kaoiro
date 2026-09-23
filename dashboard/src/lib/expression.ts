@@ -59,12 +59,12 @@ export function expressionFor(state: string): Expression {
 }
 
 /** Context usage at or above which the dashboard renders the fatigue
- * modifier (issue #172 P4). This is intentionally an independent constant
+ * modifier (issue #162 P4). This is intentionally an independent constant
  * from the wrapper's notification threshold: both happen to be 60, but they
  * live in separate hosts and serve separate decisions. */
 const FATIGUE_THRESHOLD_PERCENT = 60;
 
-/** The sole fatigue predicate (issue #172 P1/P2). Keeping the envelope input
+/** The sole fatigue predicate (issue #162 P1/P2). Keeping the envelope input
  * and its signal lookup here means a future switch to context_budget changes
  * this function and its tests only. Unknown capability or malformed context
  * fails closed: do not infer fatigue from an unsupported session. */

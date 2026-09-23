@@ -3,16 +3,16 @@ defmodule KaoiroServerWeb.SynthEnvelope do
   Builds and delivers server-synthesized `inter_agent_message` envelopes
   (`agent_id: "server"`, protocol-inter-agent spec's server-derived
   notices: hard-limit escalation, planned reconnect lifecycle,
-  peer-unreachable, and — issue #221 — TTL auto-close propagation).
+  peer-unreachable, and — issue #211 — TTL auto-close propagation).
 
   Centralizing the envelope SHAPE here (rather than each call site building
   its own) is what keeps the Envelope contract's required fields
   (`protocol/src/index.ts`) from drifting between them: `display_name`
   went missing from exactly this shape before this module existed (issue
-  #219 added it as a required frame field; the synth-envelope builder was
-  never updated to match — caught and fixed as issue #221 direction 4).
+  #209 added it as a required frame field; the synth-envelope builder was
+  never updated to match — caught and fixed as issue #211 direction 4).
 
-  issue #221 D19-style boundary: `KaoiroServer.ConversationStates` (core)
+  issue #211 D19-style boundary: `KaoiroServer.ConversationStates` (core)
   passes only DATA to its `:on_auto_closed` callback — conversation_id,
   participant agent_ids, close reason atom — never wire vocabulary
   (`kind` / `turn_number` / `owner` / `persona` / `display_name`). This
@@ -38,7 +38,7 @@ defmodule KaoiroServerWeb.SynthEnvelope do
       # Synthesized server-side, no real persona — sentinel so the
       # envelope frame stays consistent with the Envelope contract
       # (protocol/src/index.ts; persona AND display_name are both
-      # required frame fields, issue #219).
+      # required frame fields, issue #209).
       "persona" => %{"id" => "server", "name" => "server", "sprite_set" => "server"},
       "display_name" => "server",
       "ts" => ts,
@@ -84,10 +84,10 @@ defmodule KaoiroServerWeb.SynthEnvelope do
     KaoiroServerWeb.Endpoint.broadcast("agents:lobby", "envelope", stamped)
     status = DeliveryStates.get(recipient)
 
-    # ADR-0015 (issue #218): the wrapper-bound copy carries the flat
+    # ADR-0015 (issue #208): the wrapper-bound copy carries the flat
     # `version` frame key like every other server -> wrapper message. The
     # `agents:lobby` copy below is server -> client and keeps its own shape
-    # (`agent_id` + nested `delivery`) — that leg is a documented #218
+    # (`agent_id` + nested `delivery`) — that leg is a documented #208
     # follow-up, not part of this issue's scope.
     KaoiroServerWeb.Endpoint.broadcast(
       "wrapper:#{recipient}",
@@ -106,15 +106,15 @@ defmodule KaoiroServerWeb.SynthEnvelope do
 
   @doc """
   Broadcasts a server-synthesized `kind: "done"` notice to every agent in
-  `agent_ids` telling them `conversation_id` auto-closed (issue #221 —
+  `agent_ids` telling them `conversation_id` auto-closed (issue #211 —
   `open_conversation_ttl` GC reclaim; deliberately NOT `escalate-to-user`,
   which invited the recipient to open a brand-new conversation "to
   continue" — see ConversationStates moduledoc). `turn_number: 0` +
   `agent_id: "server"` + `meta.done: true` together are what
   `agent-common`'s `receiveInbound()` recognises as server provenance
-  (`isSynthetic`, issue #177 review M1) and learns as `closed` — the
+  (`isSynthetic`, issue #167 review M1) and learns as `closed` — the
   receiving wrapper's track updates without ever waking the model (issue
-  #221 direction 1: `receiveInbound()` returns `inject: false` for a
+  #211 direction 1: `receiveInbound()` returns `inject: false` for a
   `terminal`-mode envelope).
 
   Callback target for `KaoiroServer.ConversationStates`'s `:on_auto_closed`

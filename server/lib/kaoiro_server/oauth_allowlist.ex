@@ -30,7 +30,7 @@ defmodule KaoiroServer.OAuthAllowlist do
 
   `snapshot/1` is the module's single parse entry point — both
   `role_for/2` (the live authorization decision) and
-  `KaoiroServer.OAuthAllowlistWatcher` (issue #170's change-detection
+  `KaoiroServer.OAuthAllowlistWatcher` (issue #160's change-detection
   checkpoint, which disconnects sockets whose identity's entry changed
   even if that socket never sends another operator action) read through
   it, so normalization / malformed-line skipping / duplicate-entry
@@ -43,7 +43,7 @@ defmodule KaoiroServer.OAuthAllowlist do
 
   # `admin` (ADR-0050 D2) rides the existing `provider:identifier:role`
   # text form rather than a separate file or env, so `OAuthAllowlistWatcher`
-  # (issue #170) keeps detecting changes exactly as before and role stays
+  # (issue #160) keeps detecting changes exactly as before and role stays
   # on the two sources of truth it already had. A role word outside this
   # map is a malformed line, skipped with a warning — never coerced.
   @roles %{"viewer" => :viewer, "operator" => :operator, "admin" => :admin}
@@ -64,7 +64,7 @@ defmodule KaoiroServer.OAuthAllowlist do
   The full parsed allow-list as a `{provider, identifier} => role` map,
   `identifier` already normalized per-provider (ADR-0042). The single
   source of truth `role_for/2` reads through, and `OAuthAllowlistWatcher`
-  (issue #170) reads the same way for its change-detection checkpoint —
+  (issue #160) reads the same way for its change-detection checkpoint —
   both go through this one function so normalization / malformed-line
   skipping / duplicate-entry last-wins can never drift between the two.
 

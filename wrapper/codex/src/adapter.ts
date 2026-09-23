@@ -238,7 +238,7 @@ export function threadEventToSessionId(event: ThreadEvent): string | null {
   return event.type === "thread.started" ? event.thread_id : null;
 }
 
-/** Free-form failure detail from a turn.failed event (issue #131). Codex's
+/** Free-form failure detail from a turn.failed event (issue #127). Codex's
  *  ThreadError carries no structured reason like Claude's terminal_reason —
  *  just a message string; the shared inter-agent error classifier
  *  (@kaoiro/agent-common) keyword-sniffs it. */

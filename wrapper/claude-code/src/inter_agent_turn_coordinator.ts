@@ -62,7 +62,7 @@ export interface InterAgentTurnCoordinatorOptions {
 /** A handler lease begins before `receiveInbound()`'s first await. It is not
  * turn ownership — no SDK turn may ever be created — but it closes the gap
  * between transport receipt and coordinator ownership when the host ends
- * during InterAgentTool's pending-done gate (issue #246). */
+ * during InterAgentTool's pending-done gate (issue #236). */
 export interface InterAgentIngressLease {
   id: number;
   generation: number;
@@ -111,7 +111,7 @@ export class InterAgentIngressGate {
  * Owns same-peer coalescing and the exact turn which is currently answering
  * each peer. This is deliberately a small standalone unit: CLI glue supplies
  * transport I/O, while tests exercise this production ownership state
- * directly instead of reimplementing it in a harness (issue #246).
+ * directly instead of reimplementing it in a harness (issue #236).
  */
 export class InterAgentTurnCoordinator {
   readonly #pendingBatches = new Map<string, PendingBatch[]>();
@@ -132,7 +132,7 @@ export class InterAgentTurnCoordinator {
 
   /** Adds one accepted inbound envelope and starts it immediately when that
    * peer has no active generation. Later arrivals for a busy peer accumulate
-   * behind its active turn, preserving the issue #221 busy-trigger behaviour.
+   * behind its active turn, preserving the issue #211 busy-trigger behaviour.
    */
   receive(envelope: Envelope, mode: InboundReplyMode): void {
     if (this.#closed) {
@@ -196,7 +196,7 @@ export class InterAgentTurnCoordinator {
   }
 
   /** The queue has accepted these items, but only the host turn-start boundary
-   * is allowed to confirm their dispatch to the server (#247). */
+   * is allowed to confirm their dispatch to the server (#237). */
   deliverySequencesForTurn(turnToken: string): readonly number[] {
     const batch = this.#batchByTurnToken.get(turnToken);
     if (batch === undefined) return [];
@@ -249,7 +249,7 @@ export class InterAgentTurnCoordinator {
    * closing transport. This cannot guarantee transport acceptance; a closed
    * link falls back to the server's disconnected notice. For a peer, a
    * previously dispatched generation is returned before its FIFO pending
-   * batches, preserving same-CID generation order (issue #246).
+   * batches, preserving same-CID generation order (issue #236).
    */
   closeAndDrain(): readonly DrainedInterAgentBatch[] {
     if (this.#closed) return [];

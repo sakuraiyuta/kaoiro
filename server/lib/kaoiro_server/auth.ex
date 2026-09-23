@@ -16,10 +16,10 @@ defmodule KaoiroServer.Auth do
     any wrapper may connect. In `:prod`, pair auth is simply absent:
     server-minted signed tokens (the spawn path, ADR-0024) still
     authenticate, everything else is rejected (fail-closed, issue
-    #138) — a runner-only deployment needs no pair entries.
+    #133) — a runner-only deployment needs no pair entries.
   - `:runner_tokens` unset — mirrors only the dev/test relaxation and
     the prod fail-closed (ADR-0011 per-entity tokens, extended to hosts
-    by ADR-0023; issue #138). Runners have NO signed-token path: unset
+    by ADR-0023; issue #133). Runners have NO signed-token path: unset
     in `:prod` rejects every runner, unlike the wrapper's ADR-0024
     exception above.
   - `:client_tokens` unset — fail-closed in every env: every client
@@ -38,7 +38,7 @@ defmodule KaoiroServer.Auth do
 
   @doc """
   Authorizes a wrapper connection for `agent_id`. `:ok` when wrapper auth
-  is disabled (dev/test convenience — never in `:prod`, issue #138), the
+  is disabled (dev/test convenience — never in `:prod`, issue #133), the
   token matches a pre-registered `:wrapper_tokens` entry, or it is a
   valid server-minted signed token for this agent_id (the spawn path,
   ADR-0024). Otherwise `{:error, :unauthorized}`.
@@ -64,7 +64,7 @@ defmodule KaoiroServer.Auth do
       KaoiroServer.TokenDenylist.revoked?(agent_id) -> {:error, :unauthorized}
       # Dev/test convenience: no wrapper tokens configured → any wrapper
       # connects. In :prod an empty registry must NOT silently open up
-      # (issue #138) — but it must not block the spawn path either: fall
+      # (issue #133) — but it must not block the spawn path either: fall
       # through so a server-minted signed token (ADR-0024) still
       # authenticates. A runner-only deployment has no pair entries at
       # all, and gating the signed branch on a non-empty registry refused
@@ -120,7 +120,7 @@ defmodule KaoiroServer.Auth do
   Mirrors `authorize_wrapper/2`'s pair auth against a separate
   `:runner_tokens` list since the host control channel is a distinct
   entity from the per-agent_id wrapper, and mirrors its :prod
-  fail-closed (issue #138) — but NOT its signed-token branch: there is
+  fail-closed (issue #133) — but NOT its signed-token branch: there is
   no minted-token concept for runners, so unset in :prod rejects every
   runner.
   """
@@ -166,7 +166,7 @@ defmodule KaoiroServer.Auth do
 
   @doc """
   The configured display name for a shared token (a `token:role:name`
-  entry — issue #197 マスター決裁 2026-08-09 #1), or nil when the entry
+  entry — issue #187 マスター決裁 2026-08-09 #1), or nil when the entry
   omits one or the token is unknown. Used only to seed
   `KaoiroServer.Users.get_or_create/4`'s initial_display_name on a
   token's first login; display_name is independently managed by the
@@ -185,11 +185,11 @@ defmodule KaoiroServer.Auth do
 
   @doc """
   Opaque digest of a shared token for use ONLY as a
-  `KaoiroServer.Users` secondary-index key (issue #197). Distinct from
+  `KaoiroServer.Users` secondary-index key (issue #187). Distinct from
   `socket_id/1` (which serves disconnect broadcasts and is itself
   exposed as a socket address) — this digest is not returned to any
   caller outside `KaoiroServer.Users` and MUST NOT reach a log line or
-  wire payload (director review, issue #197): sha256 cannot be reversed
+  wire payload (director review, issue #187): sha256 cannot be reversed
   to the token, but the digest is still an unnecessary correlation
   handle if it leaked into an audit trail.
 
@@ -206,7 +206,7 @@ defmodule KaoiroServer.Auth do
   end
 
   @doc """
-  `token_hash => role` for every configured client token (issue #197
+  `token_hash => role` for every configured client token (issue #187
   段階2, director D2/D10 判定). Built fresh from config on every call —
   never cached in socket/process state — so a caller building a single
   response (`KaoiroServer.Users.all_with_role/1`) can snapshot it ONCE
@@ -222,7 +222,7 @@ defmodule KaoiroServer.Auth do
   conversion between them; their digests are never compared or derived
   from one another anywhere in this codebase, and that must stay true —
   do not add a check or a test asserting a relationship between the two
-  (director D10 改訂, issue #197 段階2: an earlier draft of this doc
+  (director D10 改訂, issue #187 段階2: an earlier draft of this doc
   argued digest-space separation itself as a defense, which director
   review later withdrew as unfounded — reusing `socket_id/1` here would
   not actually "reopen" any correlation path, since the two functions'
@@ -266,7 +266,7 @@ defmodule KaoiroServer.Auth do
 
   @doc """
   Resolves a client token's role from its `socket_id/1` fingerprint
-  instead of the token itself (issue #158, ふじ must-fix A).
+  instead of the token itself (issue #148, ふじ must-fix A).
 
   A live socket has to re-resolve its role on every operator action, but
   retaining the shared token in socket/channel state to do so would put
@@ -290,7 +290,7 @@ defmodule KaoiroServer.Auth do
 
   @doc """
   Resolves a client token's `KaoiroServer.Users` lookup key + display
-  name (issue #197, ADR-0050 D1) from its `socket_id/1` fingerprint —
+  name (issue #187, ADR-0050 D1) from its `socket_id/1` fingerprint —
   the SAME reverse-scan `client_role_by_fingerprint/1` uses (issue #305
   M1, director/クロエ ruling 2026-09-06). The raw token is recovered only
   from the CONFIGURED `:client_tokens` candidates, one at a time, by
@@ -307,7 +307,7 @@ defmodule KaoiroServer.Auth do
   `{:error, :unauthorized}` on no match: a token rotated out of
   `:client_tokens` after this socket connected. In practice a caller
   reaches this only after `current_role/1`'s own live re-resolution
-  (issue #158) already re-checked the SAME fingerprint moments earlier
+  (issue #148) already re-checked the SAME fingerprint moments earlier
   in the SAME operator gate, so this failing here without `current_role/1`
   already having rejected the request would mean the two disagree — not
   expected, but this function still fails closed on its own rather than
@@ -373,7 +373,7 @@ defmodule KaoiroServer.Auth do
   @doc """
   Logs a startup warning for each token list that is unset, so the
   locked / dev-mode / fail-closed state is visible in logs rather than
-  silent (docs/reference/security/enforcement-boundaries.md, issue #28, issue #138):
+  silent (docs/reference/security/enforcement-boundaries.md, issue #28, issue #133):
 
   - `:client_tokens` unset — client connections are rejected
     (fail-closed in every env); the env must be set to grant access.
@@ -412,10 +412,10 @@ defmodule KaoiroServer.Auth do
     KaoiroServer.OAuth.warn_config()
   end
 
-  # issue #198 / ADR-0050 D2. The additive model starts with zero admins
+  # issue #188 / ADR-0050 D2. The additive model starts with zero admins
   # and zero edges, so config is the ONLY entry point for the first one;
   # a deployment without an admin has no way to edit the permission graph
-  # once issue #199 lands. Surface it at boot rather than at the moment
+  # once issue #189 lands. Surface it at boot rather than at the moment
   # someone needs it and finds themselves locked out.
   #
   # The token count routes through `parse_role/1` rather than comparing
@@ -437,7 +437,7 @@ defmodule KaoiroServer.Auth do
       |> Enum.count(fn {_token, %{role: role}} -> parse_role(role) == :admin end)
 
     # Gated on the provider actually being configured (ふじ must-fix 1,
-    # issue #198): an allow-list line grants nothing when its provider has
+    # issue #188): an allow-list line grants nothing when its provider has
     # no credentials, so counting it hides a genuinely admin-less
     # deployment. The measured case: GitHub OAuth disabled, the only admin
     # on a `github:` line, Google enabled with operators — zero admin can
@@ -479,7 +479,7 @@ defmodule KaoiroServer.Auth do
     end
   end
 
-  # issue #138: dev/test keep the pre-existing "unset → wide open"
+  # issue #133: dev/test keep the pre-existing "unset → wide open"
   # convenience; :prod fails closed instead so a release started without
   # KAOIRO_WRAPPER_TOKENS / KAOIRO_RUNNER_TOKENS never silently accepts
   # any wrapper/runner. Backed by config.exs' `env: config_env()` since
@@ -523,7 +523,7 @@ defmodule KaoiroServer.Auth do
   # "token:role[:name]" -> %{token => %{role: "admin"|"operator"|"viewer", name:
   # binary | nil}}. Kept separate from parse_pairs/1 (shared by
   # wrapper_tokens/runner_tokens, which have no name concept) so a ':'
-  # inside a configured name cannot desync those pair lists (issue #197
+  # inside a configured name cannot desync those pair lists (issue #187
   # マスター決裁 2026-08-09 #1, "共有トークン user は token の設定名を
   # 初期値とする").
   defp parse_client_pairs(raw) when is_binary(raw) and raw != "" do

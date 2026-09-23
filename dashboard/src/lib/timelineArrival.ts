@@ -41,7 +41,7 @@ export function completeTimelineReplay(
 /** Drops the active-replay marker for `agentId` (agent_deleted 経路など).
  * Shaped identically to `beginTimelineReplay(active, agentId, undefined)`
  * but named for the intent so callers read "clear" rather than "begin"
- * with a nullish id (クロエ #122 再レビュー advisory 1)。*/
+ * with a nullish id (クロエ #118 再レビュー advisory 1)。*/
 export function clearTimelineReplay(
   active: ActiveTimelineReplays,
   agentId: string,
@@ -74,7 +74,7 @@ export function isTimelineReplayEnvelope(
   return active[envelope.agent_id] !== undefined;
 }
 
-/** Entry keys that were present in `prev` but no longer in `next` (issue #122
+/** Entry keys that were present in `prev` but no longer in `next` (issue #118
  * ふじ再レビュー must-fix). Used by App.svelte's timeline-state prune to drop
  * read / new-pulse bookkeeping ONLY for rows actually being discarded. The
  * previous "all of prev is stale" implementation clobbered read state for

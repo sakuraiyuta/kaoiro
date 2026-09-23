@@ -20,12 +20,12 @@ defmodule KaoiroServerWeb.ClientSocket do
   resolution can be REPEATED while the socket is open: `role_for/1` is
   what `AgentsChannel`'s operator gate calls on every inbound operator
   action, so an allow-list demotion lands on a socket that is already
-  connected instead of waiting for its next connect (issue #158).
+  connected instead of waiting for its next connect (issue #148).
   `role_for/1` is also what `AgentsChannel.join/3` calls before
   completing the join, closing the connect-to-join race where an
   allow-list change lands between this module resolving the snapshot
   role and the transport finishing its disconnect-topic subscription
-  (issue #170). A shared token is reduced to its `Auth.socket_id/1`
+  (issue #160). A shared token is reduced to its `Auth.socket_id/1`
   fingerprint first — the raw token never enters socket or channel
   state, so it cannot resurface in a crash report or heap dump.
   """
@@ -65,7 +65,7 @@ defmodule KaoiroServerWeb.ClientSocket do
 
   # What the gate re-resolves from later. A shared token is replaced by
   # its fingerprint so the secret itself is not retained (ふじ must-fix A
-  # on issue #158); an OAuth identity is not a secret and is kept as is.
+  # on issue #148); an OAuth identity is not a secret and is kept as is.
   defp re_resolvable({:token, token}), do: {:token_fingerprint, Auth.socket_id(token)}
   defp re_resolvable({:oauth, _identity} = credential), do: credential
 
@@ -76,7 +76,7 @@ defmodule KaoiroServerWeb.ClientSocket do
   Both sources are consulted live rather than trusting a role captured
   at login time, so removing or downgrading an allow-list line lands at
   the next call — connect (ADR-0042) or an operator action on an
-  already-open socket (issue #158).
+  already-open socket (issue #148).
 
   `{:token, token}` is the connect-time shape (the presented secret);
   `{:token_fingerprint, fp}` is what an open socket carries, resolved by

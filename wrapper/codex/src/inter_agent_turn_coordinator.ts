@@ -1,7 +1,7 @@
 // Per-peer batching and dispatch ownership for Codex inbound inter-agent
 // turns. The CLI provides the host/transport edge, while this production
 // object owns every queue transition so lifecycle tests cannot reimplement
-// it separately (issue #226).
+// it separately (issue #216).
 
 import { randomUUID } from "node:crypto";
 
@@ -138,7 +138,7 @@ export class CodexInterAgentTurnCoordinator {
 
   /** Delivery sequences owned by the exact SDK turn.  Queueing is not an
    * acknowledgement: callers invoke this only from the host's turn-start
-   * hook, after the SDK turn has actually begun (#247). */
+   * hook, after the SDK turn has actually begun (#237). */
   deliverySequencesForTurn(turnToken: string): readonly number[] {
     const batch = this.#batchByTurnToken.get(turnToken);
     if (batch === undefined) return [];

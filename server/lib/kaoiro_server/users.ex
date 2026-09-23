@@ -1,7 +1,7 @@
 defmodule KaoiroServer.Users do
   @moduledoc """
   Restart-surviving user identity ledger — `user_id => %{kind,
-  display_name, source, created_at}` (issue #197, ADR-0050 D1 Phase A).
+  display_name, source, created_at}` (issue #187, ADR-0050 D1 Phase A).
   Mirrors `AgentDirectory`'s DETS-backed GenServer shape: tiny payload,
   in-memory mirror for fast reads.
 
@@ -20,7 +20,7 @@ defmodule KaoiroServer.Users do
   part of the id/kind/display_name (Principal, ADR-0050 D1) shape
   callers see, and a token_hash in particular must not reach a log line
   or wire payload even though sha256 cannot be reversed to the original
-  token (director review, issue #197).
+  token (director review, issue #187).
   """
 
   use GenServer
@@ -42,7 +42,7 @@ defmodule KaoiroServer.Users do
   on first sight. A repeat lookup for the same source returns the
   EXISTING entry unchanged — display_name is independently managed
   after creation and does not track upstream changes (IdP display name,
-  token config name) on later logins (issue #197 マスター決裁 2026-08-09
+  token config name) on later logins (issue #187 マスター決裁 2026-08-09
   #1). Serialized through the GenServer call, so concurrent first logins
   for the same source cannot double-allocate a user_id.
 
@@ -52,7 +52,7 @@ defmodule KaoiroServer.Users do
   a persona-less agent (`envelope.persona?.name ?? envelope.agent_id`).
 
   Returns `{:ok, user}` normally, or `{:error, :unavailable}` if this
-  store is down/wedged (issue #197/#305 M-B, director round-2 correction
+  store is down/wedged (issue #187/#305 M-B, director round-2 correction
   2026-09-06). Bounded here, at the SUPPLY side, rather than trusting
   every call site to wrap its own `try/catch` — 2 of the 3 real call
   sites (`session_controller.ex`, `auth_controller.ex`) had none before
@@ -60,7 +60,7 @@ defmodule KaoiroServer.Users do
   `:timeout` embeds the full call request — including `source`, e.g.
   `{:token, hash}` — so an uncaught exit anywhere risks the same
   token-hash leak `client_token_hash/1`'s own docstring forbids
-  (director review, issue #197), regardless of whether the crashing
+  (director review, issue #187), regardless of whether the crashing
   process happens to log it. Closing it once here covers every present
   and future caller.
   """
@@ -83,7 +83,7 @@ defmodule KaoiroServer.Users do
   end
 
   @doc """
-  Every known user with role live-joined from the auth SoT (issue #197
+  Every known user with role live-joined from the auth SoT (issue #187
   段階2). The two auth snapshots (`OAuthAllowlist.snapshot/1`,
   `Auth.client_token_hash_role_map/0`) are taken ONCE here, before the
   GenServer call, and passed in — so every entry resolved against the
@@ -119,10 +119,10 @@ defmodule KaoiroServer.Users do
   end
 
   @doc """
-  Renames `user_id`'s `display_name` (issue #197 段階3, D13). `name`
+  Renames `user_id`'s `display_name` (issue #187 段階3, D13). `name`
   must already be trimmed/validated by the caller (the same 64-grapheme
   / control-char rule `WrapperChannel.valid_display_name/1` enforces on
-  the `directory_request` wire, issue #197 段階2 MF-1) — this function
+  the `directory_request` wire, issue #187 段階2 MF-1) — this function
   only rejects an unknown `user_id`, it does not re-validate `name`'s
   shape (same division of labor `get_or_create/4` already has with its
   caller-supplied `initial_display_name`).
@@ -147,13 +147,13 @@ defmodule KaoiroServer.Users do
   `System.get_env/1`, so `nil` on unset) into the boolean
   `config/runtime.exs` stores under `:expose_users_to_agents`.
 
-  Config DEFAULT is `true` — unset takes this branch — per issue #197's
+  Config DEFAULT is `true` — unset takes this branch — per issue #187's
   constraint clause: "「原則見える」は実装のデフォルト挙動ではなく設定の
   デフォルト値として実現する". This is the config LAYER's default; it is
   separate from `WrapperChannel`'s own read-site fallback (`false`),
   which exists only to keep that call fail-closed if config is somehow
   absent entirely (e.g. a test that deletes the key) — not as the
-  everyday default (ふじ M1 レビュー指摘, issue #197 段階2: the two
+  everyday default (ふじ M1 レビュー指摘, issue #187 段階2: the two
   fallbacks were conflated in the first pass, closing the feature by
   default in ordinary boot instead of only on config absence).
 
@@ -318,7 +318,7 @@ defmodule KaoiroServer.Users do
   end
 
   # Role-bearing counterpart of public_entry/2 for all_with_role/1 (issue
-  # #197 段階2). Same rule: never includes `source`.
+  # #187 段階2). Same rule: never includes `source`.
   defp public_entry_with_role(user_id, entry, role) do
     %{id: user_id, kind: entry.kind, display_name: entry.display_name, role: role}
   end

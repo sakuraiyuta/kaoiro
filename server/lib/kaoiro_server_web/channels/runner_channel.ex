@@ -376,7 +376,7 @@ defmodule KaoiroServerWeb.RunnerChannel do
 
   defp valid_engine_model?(_model), do: false
 
-  # Build identity (issues #228/#288), distinct from ADR-0015's protocol
+  # Build identity (issues #218/#288), distinct from ADR-0015's protocol
   # version. Each pair is optional so old runners remain compatible, but a
   # pair must be complete and each value must be in its domain. The values
   # are stored as-is for the operator `hosts` push; the dashboard renders

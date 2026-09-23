@@ -1,6 +1,6 @@
 import type { Envelope } from "./types.js";
 
-/** Client-side contiguous-prefix tracker for issue #247.  Server state is
+/** Client-side contiguous-prefix tracker for issue #237.  Server state is
  * authoritative; this object only prevents a later coalesced batch from
  * acknowledging an earlier one that has not reached a real SDK turn yet. */
 export class DeliveryAcknowledger {
@@ -43,7 +43,7 @@ export interface DeliveryTurnSource {
   deliverySequencesForTurn(turnToken: string): readonly number[];
 }
 
-/** Delivery-acknowledgement semantics for issue #247. The runtime builder
+/** Delivery-acknowledgement semantics for issue #237. The runtime builder
  * below applies this object to each production component connection; focused
  * tests can exercise the watermark loop without duplicating it in a fixture. */
 export class DeliveryAcknowledgement {
@@ -130,7 +130,7 @@ export interface DeliveryAcknowledgementRuntime {
   };
 }
 
-/** Builds the actual three-way runtime connection for issue #247.  The
+/** Builds the actual three-way runtime connection for issue #237.  The
  * generic option/context wrappers keep agent-common independent of either
  * adapter's ServerLink and Host classes while ensuring their connection is
  * owned by production code in one place. */

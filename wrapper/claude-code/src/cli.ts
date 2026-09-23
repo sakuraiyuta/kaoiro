@@ -112,7 +112,7 @@ type AgentHostOptions = ConstructorParameters<typeof AgentHost>[1];
 
 /** Injectable construction seam for the composition root. Production keeps
  * the concrete constructors; regressions capture the actual delivery and
- * whoami composition that this CLI supplies (#247, #254). */
+ * whoami composition that this CLI supplies (#237, #244). */
 export interface ClaudeCliDependencies {
   parseCliArgs?: typeof parseCliArgs;
   loadConfig?: typeof loadConfig;
@@ -122,7 +122,7 @@ export interface ClaudeCliDependencies {
   buildMcpServer?: typeof buildKaoiroMcpServer;
 }
 
-// issue #219 D25: human-facing log lines show `display_name` (the
+// issue #209 D25: human-facing log lines show `display_name` (the
 // mutable, operator-chosen label), never the pack's canonical
 // `persona.name` — an agent instance can be renamed without any code
 // here changing which field it reads. Correlation-critical output
@@ -169,7 +169,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     fileURLToPath(new URL("../dist/build-info.json", import.meta.url)),
   );
   // Operational safety valve, deliberately wrapper-local rather than a
-  // dashboard/server/runner configuration surface (issue #248).
+  // dashboard/server/runner configuration surface (issue #238).
   const turnWatchdogSettings = readTurnWatchdogSettings(
     process.env,
     (message) => writeRedactedStderr(message),
@@ -264,8 +264,8 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   // host.run(), so host.ts's "setPermissionMode before run() sets initial
   // mode" contract still holds (host.ts #58 source order).
   let pendingPermissionMode: PermissionMode | undefined;
-  // Same race as pendingPermissionMode (issue #197 段階3, renamed issue
-  // #219 D19/D23): the after_join display_name sync push
+  // Same race as pendingPermissionMode (issue #187 段階3, renamed issue
+  // #209 D19/D23): the after_join display_name sync push
   // (WrapperChannel.after_join_handshake, pushed after
   // set_permission_mode) can also arrive before `host` exists. Buffer it
   // and apply after construction, same discipline as
@@ -289,7 +289,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   };
 
   /**
-   * issue #246: a CID is payload for peer_error fan-out, never the identity
+   * issue #236: a CID is payload for peer_error fan-out, never the identity
    * of an SDK turn. The coordinator owns same-peer batching by opaque token;
    * its production implementation is unit-tested directly rather than being
    * copied into a CLI-only harness.
@@ -297,12 +297,12 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   let interAgentTurns!: InterAgentTurnCoordinator;
   // Set only after the watchdog exhausted its interrupt grace. Once true the
   // current SDK token's outcome is unknown, so no later callback may reopen
-  // dispatch on this host generation (issue #248).
+  // dispatch on this host generation (issue #238).
   let watchdogFailStopped = false;
   // Transport deliberately does not await onInterAgentMessage. Register a
   // lease before receiveInbound() can await InterAgentTool's pending-done
   // gate, so host terminal teardown can stop a late handler before it enters
-  // turn ownership (issue #246).
+  // turn ownership (issue #236).
   const interAgentIngress = new InterAgentIngressGate();
 
   const resolveInterAgentConversationIds = (
@@ -622,7 +622,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     onHydration: (verdict) => replayer.onVerdict(verdict),
     onInterAgentAck: (envelope, stamp) =>
       sidecar.append({ ingress_stamp: stamp, envelope }),
-    // #258: acceptance of request_session_reset only means the server took
+    // #248: acceptance of request_session_reset only means the server took
     // the lock. If this old wrapper survives the runner's termination path,
     // correlate the terminal failure and inject the fixed failure notice into
     // the still-live SDK session rather than leaving the agent believing it
@@ -752,7 +752,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       void host.setPermissionMode(mode as PermissionMode).catch(() => {});
     },
     onRenameDisplayName: (displayName, revision) => {
-      // protocol.md (issue #197 段階3, renamed issue #219 D19/D23):
+      // protocol.md (issue #187 段階3, renamed issue #209 D19/D23):
       // authoritative display_name from the server — fresh-join /
       // reconnect sync OR a live `rename_agent` relay, delivered via
       // EITHER `persona_sync` (legacy) or `display_name_sync` (new,
@@ -855,7 +855,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     onTurnProgress: ({ turnToken }) => {
       turnWatchdog.progress(turnToken);
     },
-    // issue #246: settle by the immutable opaque generation token. CIDs are
+    // issue #236: settle by the immutable opaque generation token. CIDs are
     // intentionally ignored for ownership: they remain only the payload sent
     // to resolveTurnEnd once that exact token has been found.
     onTurnEnd: ({ turnToken, error, cancellation }) => {
@@ -904,7 +904,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       // synchronously while the ServerLink is still open. ServerLink#send()
       // only enqueues the notice; it does not await Phoenix acceptance. If
       // the link closes before delivery, the server's disconnected notice is
-      // the fail-visible fallback (issue #246).
+      // the fail-visible fallback (issue #236).
       for (const batch of interAgentTurns.closeAndDrain()) {
         link?.retireInterAgentDeliveries?.(batch.items.map((item) => item.envelope));
         for (const item of batch.items) {
@@ -920,7 +920,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     appendSystemPrompt,
     // Keep Query unconstructed during fresh idle so AgentDetail model /
     // effort picks become the first turn's Options, not initialization-bound
-    // SDK control requests (#110).
+    // SDK control requests (#107).
     deferQueryUntilFirstInput: prompt === undefined,
     // attach_rejected / instruction_rejected ride the same envelope path
     // as state/log — the link relays them to the server (file-upload spec).
@@ -962,9 +962,9 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
         });
       }
     },
-    // issue #175 (ADR-0044 F2 追補): conversation-unit send_to_agent
+    // issue #165 (ADR-0044 F2 追補): conversation-unit send_to_agent
     // auto-allow — InterAgentTool owns the per-(conversation_id, to)
-    // flag (issue #175 review, ふじ M2).
+    // flag (issue #165 review, ふじ M2).
     interAgentAutoAllow: (conversationId, to) =>
       interAgent!.isConversationAutoAllowed(conversationId, to),
     // Origin of the resolved startup model (phase-15 15-4). Undefined when
@@ -1038,7 +1038,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   }, (turnToken) => {
     writeDeliveryLifecycle("turn_start", turnToken);
     // Dispatch may have happened long before this point; only this host
-    // input-yield boundary is an actual SDK turn start (issue #248).
+    // input-yield boundary is an actual SDK turn start (issue #238).
     turnWatchdog.start(turnToken);
   });
   host = createHost(config, hostOptions);
@@ -1052,7 +1052,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   }
 
   // Apply the after_join display_name sync that arrived before host was
-  // constructed (issue #197 段階3, renamed issue #219 D19/D23), same
+  // constructed (issue #187 段階3, renamed issue #209 D19/D23), same
   // reasoning as pendingPermissionMode above.
   if (pendingDisplayNameSync !== undefined) {
     host.renameDisplayName(

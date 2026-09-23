@@ -1,12 +1,12 @@
 defmodule KaoiroServer.OAuthAllowlistWatcher do
   @moduledoc """
   Change-driven targeted disconnect for OAuth allow-list edits (issue
-  #170, ふじ 2026-08-05 spec).
+  #160, ふじ 2026-08-05 spec).
 
-  `AgentsChannel.current_role/1` (issue #158) already re-resolves role
+  `AgentsChannel.current_role/1` (issue #148) already re-resolves role
   live on every OPERATOR-INITIATED action, so a socket that keeps
   talking is caught the moment it acts on a role it no longer has. What
-  #158 left open is a socket that never sends anything after its
+  #148 left open is a socket that never sends anything after its
   allow-list entry changes: `handle_out`'s fan-out reads
   `socket.assigns[:role]`, the connect-time snapshot, for as long as
   nothing forces a reconnect. This module closes that gap by targeting
@@ -105,7 +105,7 @@ defmodule KaoiroServer.OAuthAllowlistWatcher do
   permanent hole — the event path is a latency optimization on top of
   it, not the enforcement mechanism itself.
 
-  ## Fail-closed on a broken allow-list (issue #170 懸念 B)
+  ## Fail-closed on a broken allow-list (issue #160 懸念 B)
 
   An unreadable or partially/mid-write file resolves to whatever
   `OAuthAllowlist.snapshot/1` can parse from it (malformed lines
@@ -139,13 +139,13 @@ defmodule KaoiroServer.OAuthAllowlistWatcher do
   @checkpoint_key {__MODULE__, :checkpoint}
 
   # First event in a burst reconciles within this bound; later events in
-  # the same window do NOT extend it (issue #170 must-fix 1 — the
+  # the same window do NOT extend it (issue #160 must-fix 1 — the
   # opposite of PersonaWatcher/FooterWatcher's trailing-edge debounce,
   # which can starve for as long as edits keep arriving).
   @debounce_ms 300
 
   # Backstop guarantee independent of the file_system event path (issue
-  # #170 must-fix 1). Seconds-scale: an authz control should not lag far
+  # #160 must-fix 1). Seconds-scale: an authz control should not lag far
   # behind an edit, but this is a floor under the event path, not the
   # primary latency.
   @reconcile_interval_ms 5_000
@@ -176,7 +176,7 @@ defmodule KaoiroServer.OAuthAllowlistWatcher do
             reconcile_interval_ms:
               Keyword.get(opts, :reconcile_interval_ms, @reconcile_interval_ms),
             # Injectable only for the "broadcast failure -> checkpoint not
-            # advanced" test (issue #170 必須テスト 10): Phoenix.PubSub's
+            # advanced" test (issue #160 必須テスト 10): Phoenix.PubSub's
             # real local broadcast has no practical way to fail in a test
             # without stopping the shared PubSub process, so the failure
             # path is exercised by injecting a stub here instead. Defaults
@@ -308,7 +308,7 @@ defmodule KaoiroServer.OAuthAllowlistWatcher do
 
   def handle_info(_msg, state), do: {:noreply, state}
 
-  # Bounded debounce (issue #170 must-fix 1): the FIRST relevant event in
+  # Bounded debounce (issue #160 must-fix 1): the FIRST relevant event in
   # a burst arms a timer; later events in the same window do not extend
   # it. Deliberately NOT PersonaWatcher/FooterWatcher's cancel+reschedule
   # pattern, which can defer a reconcile indefinitely under continuous

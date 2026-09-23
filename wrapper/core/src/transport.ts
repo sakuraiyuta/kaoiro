@@ -158,7 +158,7 @@ function describeVersion(value: unknown): string {
 /** ADR-0015's receiver rule: only an exact match is normal, a mismatch is
  *  warned about, and the message is processed EITHER WAY (best-effort
  *  accept). Mirrors `warnOnVersionMismatch` in `runner/src/transport.ts`
- *  (issue #197 段階3, ふじ MF-1 レビュー指摘: `persona_sync` predates
+ *  (issue #187 段階3, ふじ MF-1 レビュー指摘: `persona_sync` predates
  *  this wrapper-side check entirely — the first server -> wrapper
  *  message on this topic to carry a `version` key at all). */
 function warnOnVersionMismatch(event: string, version: unknown): void {
@@ -170,7 +170,7 @@ function warnOnVersionMismatch(event: string, version: unknown): void {
 }
 
 /** Every server -> wrapper event `ServerLink` binds, mapped to how
- *  ADR-0015's receiver check applies to it (issue #218).
+ *  ADR-0015's receiver check applies to it (issue #208).
  *
  *  - `"checked"` — a JSON payload with a flat `version` frame key.
  *    `warnOnVersionMismatch` runs in front of the handler: exact match is
@@ -178,7 +178,7 @@ function warnOnVersionMismatch(event: string, version: unknown): void {
  *    way (best-effort accept).
  *  - `"binaryFrame"` — a V2 binary frame: a fixed length-prefixed header
  *    plus raw bytes, with no JSON object to hold a `version` key. Stamping
- *    one would need a wire change (a protocol version bump), which #218
+ *    one would need a wire change (a protocol version bump), which #208
  *    rules out of scope, and running the check anyway would warn
  *    "(absent)" on every chunk of every upload. Recorded as a permanent
  *    exception in `docs/specs/protocol.md`.
@@ -186,8 +186,8 @@ function warnOnVersionMismatch(event: string, version: unknown): void {
  *  Bindings go through `#bindServerEvent`, whose `event` parameter is typed
  *  as a key of this table — a new event cannot be bound without first
  *  declaring which side of the line it falls on. That is the whole point:
- *  before #218 the check was an independent line each handler had to
- *  remember, and the same omission became a must-fix twice (#88, #197
+ *  before #208 the check was an independent line each handler had to
+ *  remember, and the same omission became a must-fix twice (#88, #187
  *  段階3). `bindControlEvents` gives the runner the same guarantee with a
  *  loop; the wrapper needs a table because these handlers' payload shapes
  *  differ too much to share one callback signature. */
@@ -282,7 +282,7 @@ export interface ServerLinkOptions {
    *  session. Required — there is no fallback under fail-closed. */
   personaId: string;
   /** Session-transition correlation id relayed from the command that
-   *  launched this wrapper (`config.transition_id`, phase-27 / #160). Sent
+   *  launched this wrapper (`config.transition_id`, phase-27 / #150). Sent
    *  verbatim as a join param so the server can recognise the connection a
    *  spawn / restore / reset produced — a session_id cannot identify it,
    *  because a same-session resume reuses the old one. Absent on a legacy
@@ -334,17 +334,17 @@ export interface ServerLinkOptions {
    *  choice. Payload is `{ mode: string }` — one of the SDK PermissionMode
    *  values; validation lives in the wrapper. */
   onSetPermissionMode?: (mode: string) => void;
-  /** The AUTHORITATIVE `display_name` state (issue #219 D19/D23 — renamed
+  /** The AUTHORITATIVE `display_name` state (issue #209 D19/D23 — renamed
    *  from `onRenamePersona`; `persona` canonical data is never mutated by
    *  either event this rides on), pushed by the server on every join (fresh
-   *  AND reconnect, issue #197 段階3 D14 acceptance 1) and on a live
+   *  AND reconnect, issue #187 段階3 D14 acceptance 1) and on a live
    *  `rename_agent` relay. `revision` is a monotonic per-agent_id counter
    *  (`AgentDirectory.rename/2`) — the handler MUST drop a push whose
    *  revision is <= the last one it applied (D15: two `rename_agent` calls
    *  racing on the server can broadcast in either order, and this is what
    *  lets the wrapper converge on the newer one regardless of arrival
    *  order). Fed by BOTH `persona_sync` (legacy `name` key) and
-   *  `display_name_sync` (new `display_name` key) — issue #219 D22
+   *  `display_name_sync` (new `display_name` key) — issue #209 D22
    *  dual-emit compatibility window; the server sends both at the same
    *  revision, and the revision guard above makes applying both idempotent
    *  (whichever arrives first wins, the second is a no-op). */
@@ -384,7 +384,7 @@ export interface ServerLinkOptions {
   /** Terminal reset failure for this wrapper topic. The requesting process
    *  normally exits on success, so this is intentionally only the failure
    *  leg: it lets an old wrapper that could not be terminated tell its agent
-   *  that the accepted reservation did not become a reset (#258). */
+   *  that the accepted reservation did not become a reset (#248). */
   onSessionResetFailed?: (failure: SessionResetFailure) => void;
   /** Hydration verdict from the join reply (ADR-0051 D2). Called on EVERY
    *  (re)join, with `null` when the reply carried no `hydration` key — a
@@ -488,7 +488,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return isObject(value) && !Array.isArray(value);
 }
 
-/** Bounds mirrored from the server's own projection (phase-27, #160). The two
+/** Bounds mirrored from the server's own projection (phase-27, #150). The two
  *  sides MUST agree: a looser client would re-open the pass-through the
  *  server closed, since the model reads whatever survives here. */
 const MAX_RATE_WINDOWS = 8;
@@ -506,7 +506,7 @@ const utf8Bytes = new TextEncoder();
  *  the safe-integer range, where a JS number has already lost precision
  *  against the arbitrary-precision integer the Elixir side accepted — the two
  *  would then disagree about the same wire value. The magnitude bound is the
- *  agreed common ceiling for every numeric field (phase-27, #160). */
+ *  agreed common ceiling for every numeric field (phase-27, #150). */
 function finiteNumber(value: unknown): number | undefined {
   return typeof value === "number" &&
     Number.isFinite(value) &&
@@ -804,7 +804,7 @@ function projectContext(value: unknown): DirectoryContext | undefined {
   return { used_tokens, max_tokens, used_percentage };
 }
 
-/** `utilization` is deliberately NOT range-checked to 0..1 here: #164 is
+/** `utilization` is deliberately NOT range-checked to 0..1 here: #154 is
  *  still reconciling what the engines actually report, and clamping now
  *  would hide the very values that investigation needs. */
 function projectRateLimitWindow(
@@ -920,7 +920,7 @@ function directoryEntryFrom(value: unknown): DirectoryEntry | null {
   };
   const delivery = deliveryStatusFrom(v.inter_agent_delivery);
   if (delivery !== undefined) entry.inter_agent_delivery = delivery;
-  // issue #219 D19/D26: same value-level narrow used everywhere else on
+  // issue #209 D19/D26: same value-level narrow used everywhere else on
   // this repo's display-name fields — a malformed value (overlong,
   // control chars) is omitted rather than passed through, matching this
   // function's own "omit what we cannot vouch for" rule for every other
@@ -949,7 +949,7 @@ function directoryEntryFrom(value: unknown): DirectoryEntry | null {
   if (rateLimits !== undefined) entry.rate_limits = rateLimits;
   const disconnect = disconnectFrom(v.disconnect);
   if (v.state === "disconnected" && disconnect !== undefined) entry.disconnect = disconnect;
-  // issue #269: server は true のときだけ載せる。それ以外の値 (false /
+  // issue #259: server は true のときだけ載せる。それ以外の値 (false /
   // 文字列 / 数値) は「server が閉じたものを client が開け直さない」規約
   // に従って落とす。
   if (v.directory_only === true) entry.directory_only = true;
@@ -965,7 +965,7 @@ function directoryEntryFrom(value: unknown): DirectoryEntry | null {
 const USER_ID_PATTERN = /^[A-Za-z0-9._-]{1,256}$/;
 
 // C0 controls + DEL — same set `WrapperChannel.valid_display_name/1`
-// rejects server-side (issue #197 段階2).
+// rejects server-side (issue #187 段階2).
 const DISPLAY_NAME_CONTROL_CHAR_PATTERN = /[\x00-\x1f\x7f]/;
 const DISPLAY_NAME_MAX_GRAPHEMES = 64;
 // Grapheme-cluster segmentation, NOT locale-sensitive collation — the
@@ -977,7 +977,7 @@ const displayNameSegmenter = new Intl.Segmenter(undefined, {
 });
 
 /** Same display_name contract the server enforces
- *  (`WrapperChannel.valid_display_name/1`, issue #197 段階2 ふじ MF-1
+ *  (`WrapperChannel.valid_display_name/1`, issue #187 段階2 ふじ MF-1
  *  レビュー指摘): trim-then-non-empty, no C0/DEL control chars, and — the
  *  part a plain-string check misses — **<= 64 GRAPHEME CLUSTERS**, not
  *  UTF-16 code units (JS's plain `.length`) and not Unicode code points
@@ -992,7 +992,7 @@ const displayNameSegmenter = new Intl.Segmenter(undefined, {
  *  the untrimmed original, or the boundary's own contract claim
  *  ("enforces the same trim contract the server enforces") would hold
  *  for the accept/reject decision only, not for the value that actually
- *  crosses it (code-review round finding, issue #197 段階2 MF-1
+ *  crosses it (code-review round finding, issue #187 段階2 MF-1
  *  follow-up: a well-behaved server always sends an already-trimmed
  *  value today, so this had no observable effect against it, but a
  *  malicious/legacy/future-buggy source sending e.g. `" Ao "` would
@@ -1011,7 +1011,7 @@ function validDisplayNameOrNull(name: string): string | null {
   return trimmed;
 }
 
-/** Structural narrow for a single `users` entry (issue #197 段階2). All
+/** Structural narrow for a single `users` entry (issue #187 段階2). All
  *  four fields are non-optional on the wire (server-side allow-list,
  *  ADR-0021 F6-8), so unlike `directoryEntryFrom` there is no
  *  field-by-field partial projection: any field missing, off-type, or
@@ -1020,7 +1020,7 @@ function validDisplayNameOrNull(name: string): string | null {
  *  against the exact allow-listed literal/enum, not merely `typeof
  *  === "string"` (ふじ M2 レビュー指摘: a plain-string check let an
  *  unrecognised `kind`/`role` value — e.g. a future `"agent"`, or
- *  `"admin"` back when issue #198 had not yet added it — pass through
+ *  `"admin"` back when issue #188 had not yet added it — pass through
  *  unnoticed). `id` is checked against the
  *  same charset the server enforces, `display_name` against the same
  *  trim/length/control-char contract the server enforces
@@ -1176,7 +1176,7 @@ export class ServerLink {
     // persona_id rides join params (channel-level) so the server can
     // reject an unknown-persona join before it consumes any state
     // (ADR-0029 F3, protocol.md「人格プロンプト配送」). transition_id rides
-    // the same params (phase-27, #160) so the server can tell this join
+    // the same params (phase-27, #150) so the server can tell this join
     // apart from any other connection for the agent; omitted entirely when
     // unknown, since the server reads a blank value as a mismatch rather
     // than as the legacy absent case.
@@ -1312,7 +1312,7 @@ export class ServerLink {
         options.onSetPermissionMode?.(payload.mode);
       }
     });
-    // protocol.md (issue #197 段階3): server -> wrapper `persona_sync`
+    // protocol.md (issue #187 段階3): server -> wrapper `persona_sync`
     // carries the authoritative current name + revision, both on join
     // (fresh AND reconnect) and on a live `rename_agent`. `name` gets the
     // SAME value-level narrow `userDirectoryEntryFrom` uses
@@ -1342,7 +1342,7 @@ export class ServerLink {
     // comparison itself still happens in `host.renamePersona`, not
     // here — same division of labor `set_permission_mode` has with
     // `host.setPermissionMode`.
-    // issue #219 D22: dual-emit compatibility window — the server sends
+    // issue #209 D22: dual-emit compatibility window — the server sends
     // BOTH `persona_sync` (legacy `name` key) and `display_name_sync`
     // (new `display_name` key) at the same revision. Both funnel through
     // this same validate+dispatch so the two events are indistinguishable
@@ -1350,10 +1350,10 @@ export class ServerLink {
     // carry; the revision guard in host.ts makes applying both idempotent
     // (D15 — whichever arrives first wins, the second is a no-op).
     //
-    // ADR-0015 warn-then-accept (issue #197 段階3, ふじ MF-1 レビュー指摘):
+    // ADR-0015 warn-then-accept (issue #187 段階3, ふじ MF-1 レビュー指摘):
     // a version mismatch/absence never blocks the rename itself, it only
     // logs. The check no longer lives in this closure — `#bindServerEvent`
-    // runs it for every event (issue #218), which also means a push this
+    // runs it for every event (issue #208), which also means a push this
     // function drops as malformed still surfaces its version mismatch.
     const applyDisplayNameSync = (
       rawValue: unknown,
@@ -1431,7 +1431,7 @@ export class ServerLink {
       this.#deliveryRecovery.observe(status);
       options.onInterAgentDeliveryStatus?.(status);
     });
-    // #258: a self-reset's request reply proves only that the server acquired
+    // #248: a self-reset's request reply proves only that the server acquired
     // its lock. If the runner later cannot terminate this old wrapper, the
     // server sends the terminal failure back to this topic. Correlation stays
     // in SessionResetCoordinator; a fresh wrapper ignores an old request id.
@@ -1538,7 +1538,7 @@ export class ServerLink {
   }
 
   /** Binds one server -> wrapper event with ADR-0015's receiver check in
-   *  front of the handler (issue #218). The single `channel.on` call site
+   *  front of the handler (issue #208). The single `channel.on` call site
    *  in this class — `SERVER_EVENT_VERSION_POLICY` decides whether the
    *  check runs, and typing `event` as a key of that table means a new
    *  event has to be declared there before it can be bound at all.
@@ -1878,7 +1878,7 @@ export class ServerLink {
    *  server replies with `{agents: [...], users: [...]}` — `agents` is
    *  every currently-known agent except this wrapper, used by the
    *  `mcp__kaoiro__list_agents` tool to resolve persona names → agent_ids
-   *  before send_to_agent. `users` is the issue #197 段階2 addition
+   *  before send_to_agent. `users` is the issue #187 段階2 addition
    *  (ADR-0021 F6-8); only a server that PREDATES it omits the `users`
    *  key entirely — a 段階2+ server that opted the projection OUT still
    *  returns the key, just with an empty array (ふじ M4 レビュー指摘: an
@@ -1927,7 +1927,7 @@ export class ServerLink {
    *  Resolves when the server accepted the request, including its opaque
    *  request_id. That is a reservation acknowledgement, not reset completion:
    *  a later `session_reset_failed` push is correlated through this id if the
-   *  old wrapper survives the runner's termination attempt (#258).
+   *  old wrapper survives the runner's termination attempt (#248).
    *  Rejects with the reply's closed-vocabulary reason — `agent_busy`,
    *  `session_reset_pending`, `unsupported_session_reset` or
    *  `runner_unavailable` (protocol.md `session_reset_request`) — or with

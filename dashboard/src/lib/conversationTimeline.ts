@@ -59,7 +59,7 @@ export function conversationEntryKey(envelope: Envelope): string {
   return transcriptEntryKey(envelope);
 }
 
-/** #125 のライブ到着シグナル対象。operator 自身が送った prompt は
+/** #121 のライブ到着シグナル対象。operator 自身が送った prompt は
  * 通知対象にせず、agent の応答と inter-agent 連携だけを視覚的に知らせる。 */
 export function isTimelineArrival(envelope: Envelope): boolean {
   if (envelope.type === "inter_agent_message") return true;

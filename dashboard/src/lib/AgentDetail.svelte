@@ -97,7 +97,7 @@
      * target the recipient pane even though its producer is `server`. */
     scrollToEntryKey?: string | null;
     /** Count of subagent/workflow tasks currently active under this agent
-     *  (ADR-0019/0047/0048, issue #180 follow-up 2026-08-10; issue #233:
+     *  (ADR-0019/0047/0048, issue #170 follow-up 2026-08-10; issue #233:
      *  the active dot COUNT, not an on/off flag). Drives the 頭上リング
      *  (overhead ring) the same way AgentCard's does. The caller
      *  (App.svelte) is responsible for zeroing this for a
@@ -106,7 +106,7 @@
      *  through — クロエ 2026-08-10); this component does not re-derive
      *  that guard itself. */
     activeTaskCount?: number;
-    /** Latest parent-owned todo snapshot (issue #188). This is intentionally
+    /** Latest parent-owned todo snapshot (issue #178). This is intentionally
      * separate from activeTaskCount: a tasklist is current state for the
      * conversation-log float, not a child task that may light the portrait
      * ring. An empty list remains state but the float itself stays hidden. */
@@ -119,14 +119,14 @@
      *  text, no navigation. */
     onSelectAgent?: (agentId: string) => void;
     /** Renames this agent's persona display name while it is running
-     *  (issue #197 段階3 unit B). Undefined hides the rename affordance
+     *  (issue #187 段階3 unit B). Undefined hides the rename affordance
      *  entirely — a viewer session never gets this prop (App.svelte gates
      *  it on `isOperator`, mirroring onInterrupt/onStop/onRestore/onDelete;
      *  `name` cannot ride the same `connection`-only implicit gate the
      *  model/effort/permission switchers use, since unlike ext.* it is a
      *  top-level envelope field the server sends to viewers too). Rejects
      *  like connection.renameAgent.
-     *  Takes `agentId` as its own argument (issue #197 段階3, ふじ MF-2
+     *  Takes `agentId` as its own argument (issue #187 段階3, ふじ MF-2
      *  レビュー指摘) rather than App.svelte closing over
      *  `selectedEnvelope.agent_id` — this component reads
      *  `envelope.agent_id` itself and passes it through, so
@@ -328,7 +328,7 @@
   /** A non-negative percentage that may exceed 100. The soft work-budget
    * denominator is intentionally below the raw context window, so clamping
    * its use rate would hide the very threshold this display must expose
-   * (issue #264). */
+   * (issue #254). */
   function pctUnbounded(value: unknown): number | null {
     return typeof value === "number" && Number.isFinite(value) && value >= 0
       ? Math.round(value)
@@ -456,7 +456,7 @@
     return rows;
   }
 
-  /** #164 supplements utilization from /usage, so pct is now populated even
+  /** #154 supplements utilization from /usage, so pct is now populated even
    *  for status="allowed" — pct and reset must render together, not as an
    *  either/or fallback, or the reset time a heavy user needs disappears
    *  whenever pct is available. */
@@ -535,7 +535,7 @@
     );
   });
   // The Codex / Antigravity sandbox's network axis (ADR-0033 F3, ADR-0057
-  // F4c, issue #118). This used to be written as the negation of
+  // F4c, issue #114). This used to be written as the negation of
   // permissionModeSwitchable; issue #305 made that one capability-driven,
   // so the original "does this session have a sandbox axis" condition is
   // spelled out here instead — an older wrapper that stamps no
@@ -553,7 +553,7 @@
   // A missing value is handled two ways. On a switch-capable session the
   // contract keeps the row and marks the value unknown. On a launch-fixed
   // session the older fail-closed behaviour stands: an absent or
-  // non-boolean value hides the row entirely (issue #118's pin).
+  // non-boolean value hides the row entirely (issue #114's pin).
   const networkRowVisible = $derived(
     effectiveNetworkAccess !== null || permissionSwitchSupported,
   );
@@ -841,7 +841,7 @@
     return labels;
   });
 
-  // #184: render only the most recent LOG_WINDOW_SIZE entries by default.
+  // #174: render only the most recent LOG_WINDOW_SIZE entries by default.
   // `logs` (full history, App.svelte's memory) is unchanged; only the DOM
   // render is windowed here. Unbounded per-entry DOM (markdown HTML +
   // mermaid SVG) made the composer's in-flow layout (e.g. the slash-menu
@@ -938,14 +938,14 @@
   const hiddenLogCount = $derived(effectiveWindowStart);
 
   // Expand the window to include `absoluteIndex` (a `logs[]` index) if it is
-  // currently hidden, else no-op. Shared by the timeline jump (#122) and the
+  // currently hidden, else no-op. Shared by the timeline jump (#118) and the
   // tool_use/tool_result partner jump (#40, ふじ round-1 S1) so both use the
   // same "expand -> tick -> query DOM" sequence instead of duplicating it.
   // A jump target is a reading-freeze (see frozenWindow above) — it reverts
   // once the operator scrolls back to the bottom.
   //
   // ふじ round-4 should-fix S2: `effectiveWindowStart` reads `frozenWindow`,
-  // so calling this from inside the main scroll $effect (the #122 path)
+  // so calling this from inside the main scroll $effect (the #118 path)
   // registered `frozenWindow` as one of THAT effect's tracked dependencies
   // whenever a timeline target was pending — an unrelated later write to
   // `frozenWindow` (e.g. handleLogScroll) could then re-trigger the whole
@@ -953,7 +953,7 @@
   // `handledTimelineScrollTarget` had a chance to settle. untrack here for
   // the same reason the effect's own shrink-guard read is untracked.
   //
-  // issue #237: expanding this window PREPENDS rows above the operator's
+  // issue #227: expanding this window PREPENDS rows above the operator's
   // current scroll position (they were previously pinned to the tail, per
   // the doc comment above). The browser's default CSS scroll anchoring
   // then relocates `scrollTop` to the bottom of the now much taller
@@ -968,7 +968,7 @@
   // outside the default window, so the scroll barely moves).
   //
   // ふじ review round 1 must-fix 1+2: two callers share `ensureIndexVisible`
-  // (this jump, #122, and the tool_use/tool_result partner jump, #40), and
+  // (this jump, #118, and the tool_use/tool_result partner jump, #40), and
   // a jump can be re-armed (a second click) or superseded (an agent
   // switch) before the first one settles. A single boolean + a single
   // unconditional `setTimeout` cannot express "this particular arming
@@ -1079,7 +1079,7 @@
   // the main $effect below only renders diagrams for the CURRENT logs.length
   // dependency, which does not change here), then restores the visual
   // offset against the POST-mermaid height so the prepend does not jump the
-  // viewport (#184). Kept independent of the pin/restore $effect below
+  // viewport (#174). Kept independent of the pin/restore $effect below
   // (different trigger, no shared state write).
   //
   // ふじ round-2 must-fix M3: capture the agent this click was for and
@@ -1179,7 +1179,7 @@
   const canStop = $derived(envelope.state !== "disconnected");
   let stopping = $state(false);
 
-  // Retry button (#128 round 2 must-fix 3): in-flight guard for the per-turn
+  // Retry button (#124 round 2 must-fix 3): in-flight guard for the per-turn
   // retry button. Keyed by conversationEntryKey(env) so multiple errored
   // turns can each show their own button in independent states. Matches the
   // uploading/interrupting/stopping pattern elsewhere in this file.
@@ -1316,7 +1316,7 @@
   // confirms the saved request only.
   let permAck = $state<SetPermissionAck | null>(null);
   let selectedEffort = $state<string | null>(null);
-  // --- rename (issue #197 段階3 unit B) --------------------------------
+  // --- rename (issue #187 段階3 unit B) --------------------------------
   // Same popover shape as the model/effort/permission switchers above
   // (`.cc-switchbox` class, shared outside-click close). renameDraft is
   // seeded from the current `name` on open so the operator edits rather
@@ -1555,7 +1555,7 @@
     // Unchanged: close quietly rather than round-tripping a no-op to the
     // server (mirrors chooseModel/chooseEffort's early-return on an
     // unchanged pick). A BLANK draft is deliberately NOT given the same
-    // treatment (issue #197 段階3, ふじ MF-4 レビュー指摘): the
+    // treatment (issue #187 段階3, ふじ MF-4 レビュー指摘): the
     // director's decision is server-authority-only validation (D5) — this
     // client does no name checking beyond `trim()`, so a blank name is
     // sent through like any other and the server's own `invalid_name`
@@ -1568,7 +1568,7 @@
     }
     renaming = true;
     // Reuses the shared `run()` error path (actionError) — the director's
-    // decision (issue #197 段階3 unit B) is to surface rename failures
+    // decision (issue #187 段階3 unit B) is to surface rename failures
     // through the SAME raw-reason display every other action error uses,
     // not a bespoke translated message, so unknown_agent / invalid_name /
     // forbidden / revision_exhausted all render identically to how
@@ -2017,7 +2017,7 @@
   // exactly once, at the point this function is actually done with its
   // (already fully synchronous, by this point) pre-scroll work — see the
   // `armSuppressFailsafe` doc comment for why this must not happen any
-  // earlier (issue #237 must-fix 2). `finish()` reads the LIVE suppression
+  // earlier (issue #227 must-fix 2). `finish()` reads the LIVE suppression
   // state rather than a token captured at this call's own start (ふじ
   // review round 3 must-fix 1, ownership-transfer half): the caller
   // (the main scroll $effect) now guarantees only the CURRENT, non-stale
@@ -2041,7 +2041,7 @@
       const envelope = [...logEl!.querySelectorAll<HTMLElement>("[data-envelope-key]")].find(
         (candidate) => candidate.dataset.envelopeKey === targetKey,
       );
-      // An envelope wrapper can start with a date divider when #184 expands
+      // An envelope wrapper can start with a date divider when #174 expands
       // the render window. Land on the visible message body, not that wrapper:
       // the operator's timeline selection denotes the message itself.
       return envelope?.querySelector<HTMLElement>(".msg") ?? envelope;
@@ -2129,7 +2129,7 @@
       // the tail once they return to the bottom. An explicit "show all" is
       // a deliberate request and must not silently collapse back.
       //
-      // issue #237: `suppressBottomRevert` masks the ONE spurious
+      // issue #227: `suppressBottomRevert` masks the ONE spurious
       // "at the bottom" reading that CSS scroll anchoring produces right
       // after ensureIndexVisible expands the window for a pending jump
       // (see its doc comment) — without this, that reading collapses the
@@ -2214,7 +2214,7 @@
       // here so a LATER switch back cannot reuse the same stale data.
       if (shrinkInvalidated) scrollMemory.delete(agentId);
       frozenWindow = shrinkInvalidated ? null : candidateFrozenWindow;
-      // issue #237 review: `suppressBottomRevert` is armed per-jump (see
+      // issue #227 review: `suppressBottomRevert` is armed per-jump (see
       // ensureIndexVisible), not per-agent, and is never persisted into
       // scrollMemory — unlike every other transient flag this component
       // resets/restores on a switch (frozenWindow/stickToBottom above,
@@ -2274,7 +2274,7 @@
       timelineTargetPresent &&
       timelineTarget !== handledTimelineScrollTarget;
     if (shouldScrollTimelineTarget) {
-      // #184: the target row must be in the rendered window before
+      // #174: the target row must be in the rendered window before
       // scrollToTimelineEntry can find it via data-envelope-key. Expand
       // synchronously so Svelte flushes the wider window before the tick()
       // below queries the DOM. The return value (a suppression generation,
@@ -2337,7 +2337,7 @@
       // silently overwrite a possibly-already-correct, newer landing with
       // stale data (ふじ probes 1+2).
       if (myScrollEffectGeneration !== scrollEffectGeneration) return;
-      // #122: timeline click has an explicit reading target. Do this before
+      // #118: timeline click has an explicit reading target. Do this before
       // the ordinary pin/restore path so its smooth scroll cannot be
       // overwritten by the default "latest message" position. If history has
       // not arrived yet, leave the target pending; the next logs update tries
@@ -2694,7 +2694,7 @@
   // Scroll to and flash the partner of a tool block (#40): from a tool_use to
   // its tool_result and vice versa, matched by tool_use_id. ふじ round-1
   // must-fix S1: the partner can be outside the current render window
-  // (#184) — expand to its absolute index (the same helper #122 uses)
+  // (#174) — expand to its absolute index (the same helper #118 uses)
   // before querying the DOM, or a partner beyond the window silently no-ops.
   async function jumpToTool(
     event: MouseEvent,
@@ -2711,7 +2711,7 @@
     });
     const suppressGenerationForThisJump = ensureIndexVisible(targetIndex);
     await tick();
-    // issue #237 must-fix 2: arm the failsafe only now, after the
+    // issue #227 must-fix 2: arm the failsafe only now, after the
     // (bounded, here — just one tick) pre-scroll async wait, not at
     // ensureIndexVisible's expansion time. Once, regardless of whether the
     // partner is actually found below — either way this jump attempt is
@@ -2917,7 +2917,7 @@
             {/key}
           </button>
           {#if activeTaskCount > 0}
-            <!-- 頭上リング (issue #180 follow-up, 2026-08-10 — マスター
+            <!-- 頭上リング (issue #170 follow-up, 2026-08-10 — マスター
                  指摘: AgentCard にはあるが AgentDetail には無かった。
                  実装は TaskRing.svelte(AgentCard と共有)。{#key} の外に
                  置き、state 遷移の影響を受けず単独で回り続ける。
@@ -2935,7 +2935,7 @@
                  (W3C css-contain-3 仕様 + 実 Chromium で実測検証済み、
                  2026-08-10)なので、PersonaFace.svelte の
                  `.portrait-sprite[data-size="detail"]`(width: 100%、
-                 同じく content box 基準。issue #245 でこのファイルから
+                 同じく content box 基準。issue #235 でこのファイルから
                  移設)と同じ基準で揃っており、上記比率換算
                  に border-box(padding 込み)とのズレは無い(クロエ
                  round2 で懸念提起 → 検証の結果、対応不要と判明)。
@@ -2980,7 +2980,7 @@
           <div class="name-row">
             <h2>{name}</h2>
             {#if onRename}
-              <!-- issue #197 段階3 unit B: operator-only rename affordance.
+              <!-- issue #187 段階3 unit B: operator-only rename affordance.
                    `.cc-switchbox` reuses the model/effort/permission
                    switcher's popover shell + outside-click close (the
                    $effect above tracks renameMenuOpen alongside those
@@ -3093,7 +3093,7 @@
             </div>
           {/if}
           {#if connection || effectiveEffort !== null || selectedEffort !== null || pendingEffort !== null}
-            <!-- #113: display and switch capability are separated so a
+            <!-- #109: display and switch capability are separated so a
                  non-switchable engine still shows its effective effort
                  read-only. Row renders when there is either an operator
                  (connection) or a value to show; the switch button is
@@ -3299,7 +3299,7 @@
           {/if}
           {#if networkRowVisible}
             <!-- The Codex / Antigravity network axis (ADR-0033 F3,
-                 ADR-0057 F4c, issue #118): network permission inside a
+                 ADR-0057 F4c, issue #114): network permission inside a
                  workspace-write sandbox, rendered as the raw boolean of
                  ext.effective.network_access. issue #305 keeps the row in
                  place before any observation and marks the value unknown
@@ -3566,7 +3566,7 @@
                   <!-- Claude API は status="allowed" (安全圏) では utilization を
                        送らず reset 時刻と status のみを push することがある。
                        ヘビーユーザは reset 時刻を見て次の枠再開を計画するので、
-                       hover tooltip ではなく inline に表示する。#164 で /usage
+                       hover tooltip ではなく inline に表示する。#154 で /usage
                        から utilization を補完するようになり pct が常時入るように
                        なったため、pct と reset は排他ではなく併記する(pct も
                        reset も無い真の未受信状態のみ "?" にフォールバック)。 -->
@@ -3685,7 +3685,7 @@
           <p class="empty">まだ返答はありません。</p>
         {/if}
         {#if hiddenLogCount > 0}
-          <!-- #184: render window — only the tail is DOM'd by default. -->
+          <!-- #174: render window — only the tail is DOM'd by default. -->
           <button type="button" class="load-earlier" onclick={showEarlierLogs}>
             以前のログを表示 ({hiddenLogCount} 件)
           </button>
@@ -3795,7 +3795,7 @@
             </div>
           {:else if log?.kind === "system"}
             <!-- Session-level event observed by the wrapper (phase-28 A1 /
-                 #168): context compaction, conversation reset. Wrapper-
+                 #158): context compaction, conversation reset. Wrapper-
                  authored text, so plain-text rendering — no markdown. -->
             <p class="sysline">
               {log.text ?? ""}
@@ -3859,11 +3859,11 @@
               : null}
             <!-- The reply text already shows as the final assistant log; the
                  result only marks the turn boundary, not a duplicate (#29).
-                 On error, issue #127: subtype label (max_turns 等) と SDK 由来
+                 On error, issue #123: subtype label (max_turns 等) と SDK 由来
                  detail (errors[] / stop_reason) を併記して原因特定を可能に。
                  issue #287: error_summary (wrapper 定型文、認証切れ等) が
                  あれば errLabel より優先して表示 — こはく裁定。
-                 issue #128: 直前の user プロンプトを findPrecedingUserPrompt で
+                 issue #124: 直前の user プロンプトを findPrecedingUserPrompt で
                  拾って再送ボタンを表示 (slash command と null は button 非表示)。 -->
             <p class="turn-end" class:error={res.is_error}>
               {res.is_error
@@ -4618,7 +4618,7 @@
 
   /* Persona portrait (#16): fills the pane width with a subtle top light,
      like the grid cards; a state-coloured lamp sits in the corner.
-     `container-type: inline-size` (issue #180 follow-up, 2026-08-10):
+     `container-type: inline-size` (issue #170 follow-up, 2026-08-10):
      lets the 頭上リング (TaskRing, absolutely positioned inside this
      element) size its orbit in `cqw` — relative to THIS element's own
      resolved width, which varies (`.status`'s flex share on desktop,
@@ -4676,7 +4676,7 @@
   }
 
   /* Sprite/CSS-face fallback rendering itself lives in PersonaFace.svelte
-     (issue #245, size="detail") — this file only sizes the portrait
+     (issue #235, size="detail") — this file only sizes the portrait
      wrapper. `dissolve` stays here: `.state` below still uses it
      independently of the sprite/face. */
 
@@ -4706,7 +4706,7 @@
     color: var(--fg);
   }
 
-  /* Rename affordance row (issue #197 段階3 unit B): the name plus its
+  /* Rename affordance row (issue #187 段階3 unit B): the name plus its
      operator-only ✎ toggle sit side by side, sharing .cc-switchbox's
      popover positioning so the form drops directly under the button. */
   .name-row {
@@ -5068,7 +5068,7 @@
     scroll-padding-top: 24px;
   }
 
-  /* #122: Each envelope exposes a stable DOM anchor for timeline navigation.
+  /* #118: Each envelope exposes a stable DOM anchor for timeline navigation.
      Keep the former direct-child rhythm by putting the date divider and its
      envelope body in the same small flex group. */
   .transcript-entry {
@@ -5180,7 +5180,7 @@
     color: var(--fg);
   }
 
-  /* Session-level wrapper notice (phase-28 A1 / #168): deliberately not a
+  /* Session-level wrapper notice (phase-28 A1 / #158): deliberately not a
      .msg bubble — it is neither party speaking, so it reads as a dim
      centred rule-like line between the surrounding turns. */
   .sysline {
@@ -5282,7 +5282,7 @@
     color: var(--c-error);
   }
 
-  /* Error detail (issue #127): SDK errors[] / stop_reason under the
+  /* Error detail (issue #123): SDK errors[] / stop_reason under the
      turn-end when an error terminated the turn. Same tone as turn-end but
      wraps normally instead of being centred. issue #287: promoted to
      <details> so the raw SDK text is an opt-in expansion, not always-on —
@@ -5316,7 +5316,7 @@
     word-break: break-word;
   }
 
-  /* Retry button (issue #128): inline on the error turn-end line, subtle
+  /* Retry button (issue #124): inline on the error turn-end line, subtle
      to avoid overshadowing the primary composer. */
   .turn-end .retry {
     margin-left: 0.5em;

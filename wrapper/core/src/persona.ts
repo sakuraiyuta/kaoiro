@@ -26,7 +26,7 @@ export const PERMISSION_MODES = [
 ] as const satisfies readonly PermissionMode[];
 
 // Same protocol-types-only duplication rationale as PERMISSION_MODES above,
-// for the ModelSource closed enum (#167, issue #160 follow-up: model_source /
+// for the ModelSource closed enum (#157, issue #150 follow-up: model_source /
 // effort_source were declared on WrapperConfig but never copied by
 // parseConfig's manual allow-list — the exact drift class this file's
 // round-trip test now guards against).
@@ -39,7 +39,7 @@ export const MODEL_SOURCES = [
 
 // The `satisfies` above only checks that MODEL_SOURCES' elements are valid
 // ModelSource values -- it says nothing about the OTHER direction (藤 review
-// #167 S1). Without this, a future ModelSource addition that forgets to
+// #157 S1). Without this, a future ModelSource addition that forgets to
 // join MODEL_SOURCES would still typecheck, and parseConfig would then
 // wrongly REJECT that legitimate new value as `ConfigError`. `_exhaustive`
 // fails to compile (`true` is not assignable to `false`) the moment
@@ -230,7 +230,7 @@ export function parseConfig(raw: unknown): WrapperConfig {
     sprite_set: nonEmptyString(raw.persona.sprite_set, "persona.sprite_set"),
   };
 
-  // issue #219 D19/D20: the server has already resolved this at spawn/
+  // issue #209 D19/D20: the server has already resolved this at spawn/
   // restore time (custom name, or persona.name's value at that moment) —
   // the wrapper just carries it, never re-derives it from `persona`.
   const display_name = nonEmptyString(raw.display_name, "display_name");
@@ -251,7 +251,7 @@ export function parseConfig(raw: unknown): WrapperConfig {
   }
 
   // transition_id is the runner-relayed spawn correlation id (phase-27,
-  // #160). A blank or ill-typed value is dropped silently rather than
+  // #150). A blank or ill-typed value is dropped silently rather than
   // thrown: the server already treats an absent id as legacy_absent, and
   // failing the whole config would break wrapper startup on a legacy
   // runner that never writes the field.
@@ -281,7 +281,7 @@ export function parseConfig(raw: unknown): WrapperConfig {
     }
   }
 
-  // issue #264: a soft work budget is a positive share of the SDK-reported
+  // issue #254: a soft work budget is a positive share of the SDK-reported
   // context window. It must not exceed that window: an over-100 setting
   // would name an unreachable denominator as a normal stopping point.
   if (raw.context_work_budget_percent !== undefined) {

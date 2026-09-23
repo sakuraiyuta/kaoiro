@@ -69,7 +69,7 @@ export type LogEntry =
     }
   | { kind: "tool_result"; tool_use_id?: string; output: string }
   /** Session-level event the wrapper observed rather than either party
-   *  speaking — context compaction, conversation reset (phase-28 A1 / #168).
+   *  speaking — context compaction, conversation reset (phase-28 A1 / #158).
    *  Authored by the wrapper, so the text is already operator-facing. */
   | { kind: "system"; text: string };
 

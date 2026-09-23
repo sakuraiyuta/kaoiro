@@ -86,7 +86,7 @@ defmodule KaoiroServerWeb.SessionController do
     case Auth.client_role(token) do
       {:ok, _role} ->
         # Resolves (or, on first use, creates) this token's kaoiro
-        # user_id (issue #197, ADR-0050 D1). The raw token never leaves
+        # user_id (issue #187, ADR-0050 D1). The raw token never leaves
         # this function; only its opaque hash becomes the store's lookup
         # key, and it is never logged.
         #

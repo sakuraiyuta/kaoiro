@@ -1,5 +1,5 @@
 // `request_compact` — the agent-initiated context-recovery tool (phase-28 B2,
-// #168). Lives beside the inter-agent tools on the same in-process `kaoiro`
+// #158). Lives beside the inter-agent tools on the same in-process `kaoiro`
 // MCP server, but deliberately NOT inside InterAgentTool#descriptors(): codex
 // builds its stdio bridge from that same list (codex/src/cli.ts), and codex
 // has no `/compact` path. Keeping the descriptor here makes "Claude only" a
@@ -9,7 +9,7 @@
 // from the wrapper's auto-allow default (cli.ts READ_ONLY_TOOLS), so the SDK
 // routes the call through canUseTool and the PermissionBroker runs the
 // operator's per-call dialog — the same都度承認 path send_to_agent uses
-// (ADR-0028 D4 / #168 決定 P2). This handler therefore runs ONLY after the
+// (ADR-0028 D4 / #158 決定 P2). This handler therefore runs ONLY after the
 // operator allowed it; a denial never reaches here (the SDK returns its deny
 // message to the model instead).
 //

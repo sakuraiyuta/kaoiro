@@ -1,10 +1,10 @@
 <script lang="ts">
-  // Shared fallback-face renderer (issue #245). Extracted from 4 manual
+  // Shared fallback-face renderer (issue #235). Extracted from 4 manual
   // copies: App.svelte's agent-strip (`.chip`), AgentCard.svelte
   // (`.card`), AgentDetail.svelte (`.detail`), ResponseTimeline.svelte
   // (`.portrait`). The 4 sites intentionally differ in size, per-state
   // eye/mouth shape, animation and a11y labelling (pre-existing drift,
-  // see issue #245 comment for the full matrix) — this component
+  // see issue #235 comment for the full matrix) — this component
   // reproduces each site's existing look byte-for-byte via the `size`
   // prop rather than unifying them; unifying is explicitly out of scope
   // (こはく裁定 2026-08-20). `--tone` itself stays defined on the
@@ -17,7 +17,7 @@
     sprite: string | null;
     /** State variant, drives the `data-state` CSS hook. */
     variant: KnownState;
-    /** Orthogonal fatigue modifier (issue #172), never a protocol state. */
+    /** Orthogonal fatigue modifier (issue #162), never a protocol state. */
     fatigued?: boolean;
     /** Human label (expression.label) for alt/aria-label. */
     label: string;

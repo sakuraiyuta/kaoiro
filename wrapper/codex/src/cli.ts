@@ -101,7 +101,7 @@ type CodexHostOptions = ConstructorParameters<typeof CodexHost>[1];
 
 /** Injectable construction seam for the composition root. Production keeps
  * the concrete constructors; regressions capture the exact options and live
- * whoami provider the CLI gives those components (#247, #254). */
+ * whoami provider the CLI gives those components (#237, #244). */
 export interface CodexCliDependencies {
   /** Internal override for composition tests; production selects from config. */
   backend?: CodexHostOptions["backend"];
@@ -114,7 +114,7 @@ export interface CodexCliDependencies {
   prepareStartup?: typeof prepareCodexStartup;
 }
 
-// issue #219 D25: human-facing log lines show `display_name` (the
+// issue #209 D25: human-facing log lines show `display_name` (the
 // mutable, operator-chosen label), never the pack's canonical
 // `persona.name` — see claude-code cli.ts's identical rationale.
 function printState(envelope: Envelope): void {
@@ -194,7 +194,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   const { modelSource: resolvedModelSource, effortSource: resolvedEffortSource } =
     resolveCodexSources(config, envDefaultModel);
 
-  // issue #197 段階3 (ふじ MF-1 レビュー指摘): mutates `config.model` in
+  // issue #187 段階3 (ふじ MF-1 レビュー指摘): mutates `config.model` in
   // place rather than cloning into a separate `effectiveConfig` — see
   // `applyEnvDefaultModel`'s own doc for why the split object was a bug
   // (two independently-diverging persona sources of truth after a
@@ -272,8 +272,8 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   // coordinator at the first terminal, while stream_eof is logged later.
   const lifecycleRanges = new Map<string, { seqFirst: number; seqLast: number }>();
   // The after_join display_name sync push
-  // (WrapperChannel.after_join_handshake, issue #197 段階3, renamed
-  // issue #219 D19/D23) can arrive before `host` is constructed below —
+  // (WrapperChannel.after_join_handshake, issue #187 段階3, renamed
+  // issue #209 D19/D23) can arrive before `host` is constructed below —
   // `personaPromptPromise` is awaited first (same ordering claude-code's
   // cli.ts documents for its own pendingPermissionMode buffer). Buffer it
   // and apply once `host` exists, rather than risk touching an
@@ -310,7 +310,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
           : { seqFirst: range.first, seqLast: range.last }),
       });
       // Register exactly the batch entering the host queue, never a later
-      // accepted arrival waiting behind it (issue #221 MF-1).
+      // accepted arrival waiting behind it (issue #211 MF-1).
       for (const item of batch.items) {
         interAgent?.notePendingInjection(item.envelope, batch.turnToken);
       }
@@ -664,7 +664,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       );
     },
     onRenameDisplayName: (displayName, revision) => {
-      // protocol.md (issue #197 段階3, renamed issue #219 D19/D23):
+      // protocol.md (issue #187 段階3, renamed issue #209 D19/D23):
       // authoritative display_name from the server — fresh-join /
       // reconnect sync OR a live `rename_agent` relay, delivered via
       // EITHER `persona_sync` (legacy) or `display_name_sync` (new,
@@ -769,9 +769,9 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     onTurnProgress: ({ turnToken }) => {
       turnWatchdog.progress(turnToken);
     },
-    // issue #131: resolve exactly the conversation(s) this turn was tagged
+    // issue #127: resolve exactly the conversation(s) this turn was tagged
     // with (must-fix 1 — turn-scoped, never a sweep of everything pending;
-    // extended issue #221 段階3 for a coalesced turn's multiple cids). On
+    // extended issue #211 段階3 for a coalesced turn's multiple cids). On
     // error, classify what codex reported (best-effort — no structured
     // reason, only a raw message when one is available) and push the
     // resulting notice envelope(s) straight through ServerLink — this
@@ -931,7 +931,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   }
 
   // Apply the after_join display_name sync that arrived before host was
-  // constructed (issue #197 段階3, renamed issue #219 D19/D23), same
+  // constructed (issue #187 段階3, renamed issue #209 D19/D23), same
   // reasoning as pendingDisplayNameSync above.
   if (pendingDisplayNameSync !== undefined) {
     host.renameDisplayName(

@@ -1,4 +1,4 @@
-// Interactive setup wizard for the runner (issue #144, spec setup-wizards).
+// Interactive setup wizard for the runner (issue #139, spec setup-wizards).
 // Writes runner.config.json and runner.env into the OS user config dir, so a
 // freshly unpacked distribution archive (issue #70) needs no hand-editing.
 //
@@ -290,7 +290,7 @@ export async function runSetup(
   return { configPath, envPath, skipped, token };
 }
 
-/** Follow-up steps. Deliberately terse: the deployment runbook (issue #142)
+/** Follow-up steps. Deliberately terse: the deployment runbook (issue #137)
  *  is the manual source of truth, this only says what to do next. */
 export function nextSteps(result: SetupResult, token: string): string[] {
   const steps = [

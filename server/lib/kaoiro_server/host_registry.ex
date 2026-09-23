@@ -120,7 +120,7 @@ defmodule KaoiroServer.HostRegistry do
         # Launch catalog per engine (ADR-0032 F4bc), flows to the operator
         # `hosts` push as-is (public_entry keeps it).
         engines: Map.get(attrs, :engines, []),
-        # Build identity (issues #228/#288) — optional, nil for a legacy
+        # Build identity (issues #218/#288) — optional, nil for a legacy
         # runner build. Flows to the operator `hosts` push as-is.
         build_revision: Map.get(attrs, :build_revision),
         build_dirty: Map.get(attrs, :build_dirty),

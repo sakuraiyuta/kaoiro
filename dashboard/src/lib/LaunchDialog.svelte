@@ -27,18 +27,18 @@
     hosts: HostInfo[];
     connection: KaoiroConnection;
     sessions: RunnerSessions | null;
-    /** Server's own build_revision (issue #228, GET /api/health via
-     *  fetchServerHealth) — null on a pre-#228 server or a failed fetch.
+    /** Server's own build_revision (issue #218, GET /api/health via
+     *  fetchServerHealth) — null on a pre-#218 server or a failed fetch.
      *  Unlike round 1, this NOW surfaces its own warning below rather than
-     *  silently matching "nothing to compare" (issue #228 round 2 MF-4,
+     *  silently matching "nothing to compare" (issue #218 round 2 MF-4,
      *  ふじ 差し戻し: an operator could not tell "revisions agree" apart
      *  from "server health was unreachable" — both showed no warning). */
     serverBuildRevision?: string | null;
-    /** Server's own build_dirty (issue #228 round 3 MF-1, ふじ 差し戻し:
+    /** Server's own build_dirty (issue #218 round 3 MF-1, ふじ 差し戻し:
      *  round 2 only surfaced the RUNNER's dirty flag — a dirty server with
      *  a clean, matching runner showed no warning, contradicting the "only
      *  a clean match stays silent" rule this same round established. null
-     *  mirrors serverBuildRevision's null (pre-#228 server / fetch
+     *  mirrors serverBuildRevision's null (pre-#218 server / fetch
      *  failure); by the time this is read below, serverBuildRevision has
      *  already been confirmed non-null, so a null here in practice only
      *  means "nothing to warn about on this axis". */
@@ -124,7 +124,7 @@
 
   const host = $derived(hosts.find((h) => h.host_id === hostId) ?? null);
 
-  // Build identity mismatch warning (issue #228). Observability only —
+  // Build identity mismatch warning (issue #218). Observability only —
   // never blocks launch (canLaunch/launch() never reference this). Round 2
   // (ふじ MF-4 差し戻し) widened the state matrix round 1 collapsed:
   // "absent runner" and "server health unreachable" used to silently
@@ -134,9 +134,9 @@
   // confirmed clean, matching pair stays silent.
   //
   // States, in the order checked:
-  //   1. host.build_revision absent  -- pre-#228 runner, no signal at all
+  //   1. host.build_revision absent  -- pre-#218 runner, no signal at all
   //   2. host.build_revision unknown -- runner determined nothing
-  //   3. serverBuildRevision null    -- pre-#228 server OR /api/health
+  //   3. serverBuildRevision null    -- pre-#218 server OR /api/health
   //                                     fetch failed (fetchServerHealth
   //                                     does not distinguish the two; both
   //                                     mean the operator has no server
@@ -150,7 +150,7 @@
   //   8. revisions agree, server dirty only  -- match, but the running
   //                                             server image was built
   //                                             from a dirty checkout
-  //                                             (issue #228 round 3 MF-1,
+  //                                             (issue #218 round 3 MF-1,
   //                                             ふじ 差し戻し: round 2
   //                                             only checked the runner's
   //                                             own dirty flag here, so a
@@ -880,7 +880,7 @@
     color: var(--fg-dim);
   }
 
-  /* issue #228: advisory, not blocking -- same warning color as
+  /* issue #218: advisory, not blocking -- same warning color as
    * AgentCard's .error-icon (no dedicated --c-warning token exists yet). */
   .build-revision-warning {
     margin: 0;

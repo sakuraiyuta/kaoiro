@@ -1,4 +1,4 @@
-// Entry point for the runner setup wizard (issue #144). The flow itself lives
+// Entry point for the runner setup wizard (issue #139). The flow itself lives
 // in setup.ts; this only wires readline to it.
 //
 // Usage: node dist/setup.js     (or deploy/kaoiro-runner-setup.sh)
@@ -12,7 +12,7 @@ async function main(): Promise<void> {
   // A wizard reached from a service manager (systemd / launchd) would have no
   // terminal and would loop forever on EOF, so refuse up front. 78 =
   // EX_CONFIG, matching the launch shim's configuration-error status.
-  // Non-interactive setup is issue #146.
+  // Non-interactive setup is issue #141.
   if (!process.stdin.isTTY) {
     process.stderr.write(
       "kaoiro-runner-setup: needs an interactive terminal" +

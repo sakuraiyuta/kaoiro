@@ -25,7 +25,7 @@ export interface Envelope {
    * wrapper reports one. Used to group/clear the transcript by session. */
   session_id?: string;
   persona?: Persona;
-  /** Mutable instance-scoped display name (ADR-0050 D1, issue #219
+  /** Mutable instance-scoped display name (ADR-0050 D1, issue #209
    *  D19/D23). `persona.name` above is the pack's canonical name and
    *  never changes for the session; THIS is what a rename mutates and
    *  what the UI shows — see `AgentDetail.svelte` / `AgentCard.svelte`.
@@ -658,7 +658,7 @@ export interface HistoryResetPayload {
   agent_id: string;
   preserve_inter_agent?: boolean;
   /** Pairs the reset with `history_replay_complete`. New wrappers always
-   * provide it; omission keeps the pre-#125 wire shape readable. */
+   * provide it; omission keeps the pre-#121 wire shape readable. */
   replay_id?: string;
 }
 
@@ -1090,7 +1090,7 @@ export function modelsFrom(envelope: Envelope): ModelOption[] {
 /** payload of a type="log" envelope (protocol.md / ADR-0012).
  *  kind=user is the operator's instruction echoed into the transcript (#31);
  *  kind=system is a session-level event the wrapper observed — context
- *  compaction, conversation reset (phase-28 A1 / #168) — not model speech. */
+ *  compaction, conversation reset (phase-28 A1 / #158) — not model speech. */
 export interface LogPayload {
   kind: "assistant" | "tool_use" | "tool_result" | "user" | "system";
   text?: string;
@@ -1157,19 +1157,19 @@ export function buildChunkPayload(
 export interface ResultPayload {
   text?: string;
   is_error?: boolean;
-  /** SDK error termination subtype relayed from the wrapper (issue #127).
+  /** SDK error termination subtype relayed from the wrapper (issue #123).
    *  Present on error results only, absent on success. The Claude Code
    *  adapter's values mirror its ResultSubtype (`error_max_turns` /
    *  `error_during_execution` / `error_max_budget_usd` /
    *  `error_max_structured_output_retries`). The Codex adapter has no
    *  SDK-native subtype of its own but sets one independent value,
-   *  `error_rollout_corrupted` (issue #263), when a resume failure is
+   *  `error_rollout_corrupted` (issue #253), when a resume failure is
    *  confirmed as permanent rollout corruption (candidate stderr pattern
    *  AND the rollout file itself verified corrupted — a text match alone
    *  never sets it). The UI treats any other unknown string as fallback
    *  wording. */
   error_subtype?: string;
-  /** SDK error termination detail text (issue #127) — the wrapper forwards
+  /** SDK error termination detail text (issue #123) — the wrapper forwards
    *  what the SDK returned alongside is_error (e.g. tool error message).
    *  Absent on success; may be omitted on error when the SDK provided no
    *  text. Credential-shaped substrings are redacted before clipping
@@ -1194,17 +1194,17 @@ export interface ResultPayload {
   recovery_hint?: string;
 }
 
-/** Human-readable Japanese label for a wrapper's error_subtype (issue #127).
+/** Human-readable Japanese label for a wrapper's error_subtype (issue #123).
  *  Falls back to null for absent / unknown subtypes so the caller can either
  *  omit the label or default to the plain "エラーで終了" wording. Kept
- *  co-located with ResultPayload so #128 (retry button) can share the same
+ *  co-located with ResultPayload so #124 (retry button) can share the same
  *  error-classification path. */
 const ERROR_SUBTYPE_LABELS: Record<string, string> = {
   error_max_turns: "最大ターン数到達",
   error_during_execution: "実行中エラー",
   error_max_budget_usd: "予算上限到達",
   error_max_structured_output_retries: "構造化出力リトライ上限",
-  // issue #263: Codex アダプタが resume 失敗の detail から rollout 破損
+  // issue #253: Codex アダプタが resume 失敗の detail から rollout 破損
   // (行途中の UTF-8 切断 / JSON 途切れ) を検知したときだけ独自に載せる
   // 値。他の4値と違い SDK 由来の subtype ではない — wrapper 側の判定
   // (isRolloutCorruptionDetail) が付与する。
@@ -1234,7 +1234,7 @@ export function resultOf(envelope: Envelope): ResultPayload | null {
  *  TaskStatus. */
 export type TaskStatus = "running" | "completed" | "failed" | "stopped";
 
-/** One visible item in an agent-owned tasklist snapshot (issue #188,
+/** One visible item in an agent-owned tasklist snapshot (issue #178,
  * ADR-0049). Codex only produces pending/completed, while Claude can also
  * report in_progress. The dashboard keeps the protocol's shared vocabulary
  * rather than inferring state from display text. */
@@ -1258,11 +1258,11 @@ export interface TasklistSnapshot {
   omitted?: TasklistOmitted;
 }
 
-/** payload of a type="task" envelope (ADR-0019/ADR-0047, issue #180):
+/** payload of a type="task" envelope (ADR-0019/ADR-0047, issue #170):
  *  normally a subagent/workflow child-task lifecycle, parent-linked via
  *  `agent_id`. The reserved `task_id/task_type="tasklist"` pair is the
  *  sole exception: it carries the parent agent's own LWW todo snapshot
- *  (ADR-0049, issue #188).
+ *  (ADR-0049, issue #178).
  *  Client mirror of @kaoiro/protocol TaskPayload, kept as a plain
  *  interface so protocol.ts stays runtime-free. Operator-only (ADR-0021,
  *  こはく 2026-08-09 access-control decision) — the server never sends
@@ -1290,7 +1290,7 @@ export interface TaskPayload {
   omitted?: TasklistOmitted;
 }
 
-/** Nested active-task table (issue #180): agent_id => task_id => latest
+/** Nested active-task table (issue #170): agent_id => task_id => latest
  *  task envelope. Composite-keyed (M1 fix-round, 2026-08-09, ふじ review)
  *  — ADR-0047 F2 only promises `task_id` is unique WITHIN one parent
  *  session, so a flat task_id-only map could let two different agents'
@@ -1422,7 +1422,7 @@ export function tasklistForDetail(
 }
 
 /** Applies a live `type: "task"` envelope to the nested active-task table
- *  (agent_id => task_id => latest envelope, issue #180). kind=started/
+ *  (agent_id => task_id => latest envelope, issue #170). kind=started/
  *  updated upserts; kind=completed removes (pruning the agent's now-
  *  empty inner map too, so a fully-drained agent does not leak an empty
  *  `{}` entry) — ADR-0019 F4 concurrency: +1 / in-place refresh / -1.
@@ -1441,7 +1441,7 @@ export function applyTaskEnvelope(tasks: TaskTable, envelope: Envelope): TaskTab
   // parent while every other UI read treats the envelope as another parent's
   // state (the snapshot parser below applies the analogous three-way check).
   if (!task || envelope.agent_id !== task.agent_id) return tasks;
-  // Security review round 2 (issue #180, 2026-08-09): read via
+  // Security review round 2 (issue #170, 2026-08-09): read via
   // `hasOwnProperty`, never a bare `tasks[task.agent_id]`. `tasks` starts
   // life as a plain `{}` (App.svelte's `$state<TaskTable>({})` initial
   // value and its `endSession()` reset), which still has `Object.prototype`
@@ -1493,7 +1493,7 @@ export function applyTaskEnvelope(tasks: TaskTable, envelope: Envelope): TaskTab
 }
 
 /** Removes every task belonging to one agent_id from the nested active-
- *  task table (issue #180, M3/クロエ M1 fix-round, 2026-08-09). Client-
+ *  task table (issue #170, M3/クロエ M1 fix-round, 2026-08-09). Client-
  *  side counterpart of the server's `TaskStates.discard_for_agent/1`:
  *  the server purges its own table on parent disconnect, but that alone
  *  never reaches an already-connected client's local `tasks` state — a
@@ -1508,7 +1508,7 @@ export function applyTaskEnvelope(tasks: TaskTable, envelope: Envelope): TaskTab
  *  reference when the agent_id had no tracked tasks, so callers can
  *  skip a redundant state write. */
 export function purgeTasksForAgent(tasks: TaskTable, agentId: string): TaskTable {
-  // Security review round 2 (issue #180, 2026-08-09): `hasOwnProperty`,
+  // Security review round 2 (issue #170, 2026-08-09): `hasOwnProperty`,
   // not `in` — `in` walks the prototype chain, so `"toString" in {}` is
   // true for any plain object regardless of its actual own keys. Same
   // reasoning as applyTaskEnvelope's `agentTasks` read above.
@@ -1519,7 +1519,7 @@ export function purgeTasksForAgent(tasks: TaskTable, agentId: string): TaskTable
 }
 
 /** Per-agent active-task tally (ADR-0019 F4 concurrency), driving
- *  AgentCard's 頭上リング (issue #180; issue #233: the active dot COUNT,
+ *  AgentCard's 頭上リング (issue #170; issue #233: the active dot COUNT,
  *  not an on/off flag — no separate numeric text display, こはく scoping).
  *  Extracted from App.svelte's `activeTaskCountByAgent`
  *  derived state (M2 fix-round, 2026-08-09, ふじ round 2) so it is
@@ -1554,7 +1554,7 @@ export function computeActiveTaskCountByAgent(
 }
 
 /** AgentDetail's effective activeTaskCount for the currently-selected
- *  envelope (issue #180 follow-up, 2026-08-10 — マスター指摘: AgentCard に
+ *  envelope (issue #170 follow-up, 2026-08-10 — マスター指摘: AgentCard に
  *  はある頭上リングが AgentDetail に無いのはマスター未承認のスコープ外
  *  判断だったため追加。詳細は phase-32 プラン参照)。
  *
@@ -1582,7 +1582,7 @@ export function activeTaskCountForDetail(
 }
 
 /** Locate the user prompt (log kind="user") that produced the errored result
- *  at `resultIndex` in the transcript (issue #128 エラー再送ボタン)。
+ *  at `resultIndex` in the transcript (issue #124 エラー再送ボタン)。
  *  Walks backwards through `entries` and returns the first user log's text,
  *  stopping at the previous turn's result envelope so a re-send is always
  *  paired with the SAME turn's user prompt. Returns null when no user
@@ -1646,7 +1646,7 @@ export interface InterAgentMessagePayload {
 }
 
 /** Formats an agent for human display as `<name>(<id>)`. Prefers the
- *  mutable `display_name` (issue #219 D19/D23) — a renamed agent must
+ *  mutable `display_name` (issue #209 D19/D23) — a renamed agent must
  *  show its current label, not the pack's canonical name, everywhere
  *  a human reads this label (spawn notices, IA conversation peers).
  *  Falls back to `persona.name` only for a legacy envelope that
@@ -1710,7 +1710,7 @@ export function isReplyEnvelope(envelope: Envelope): boolean {
 
 /** Chronological transcript order shared by history fan-out, reconnect merge,
  *  and live/replay insertion. `seq` only breaks equal producer timestamps,
- *  matching the server's merged-history ordering (#105). */
+ *  matching the server's merged-history ordering (#102). */
 export function compareTranscriptEnvelopes(
   a: Envelope,
   b: Envelope,
@@ -1730,7 +1730,7 @@ export function compareTranscriptEnvelopes(
  * timeline UI state; changing one without the others reintroduces collisions.
  *
  * `payload.to` alone is not enough when the SAME peer pair runs 2+
- * concurrent conversations and one side disconnects (issue #132): the
+ * concurrent conversations and one side disconnects (issue #128): the
  * server synthesizes one disconnected notice per conversation the
  * disconnecting wrapper participated in
  * (docs/specs/protocol-inter-agent.md 「server 合成 (disconnected) の
@@ -1766,7 +1766,7 @@ export function transcriptEntryKey(
 /** Merge an authoritative history with buffered/live entries, dedupe the
  *  overlap, and restore chronological order. This also handles resume replay:
  *  retained structured IA lines may be newer than JSONL logs arriving later,
- *  so append order is not display order (#105). */
+ *  so append order is not display order (#102). */
 let transcriptMergeObserver: (() => void) | undefined;
 
 /**
@@ -2046,7 +2046,7 @@ export function referenceLatestErrorKeyByAgent(
  *  the payload is already per-pane and running it again would duplicate
  *  the sender copy on the receiver's transcript.
  *
- *  `clearWatermarks` (issue #109, ISO ts per agent) is applied to the
+ *  `clearWatermarks` (issue #106, ISO ts per agent) is applied to the
  *  fan-out'd receiver copy only. The sender-side filter was already
  *  performed by the legacy server (its sender-keyed `all/1` was
  *  pre-filtered before the wire push). Peer transcripts stay unaffected
@@ -2221,7 +2221,7 @@ export async function fetchAuthMethods(
   }
 }
 
-/** Value domain for a build_revision string (issue #228 round 2, ふじ MF-3
+/** Value domain for a build_revision string (issue #218 round 2, ふじ MF-3
  *  差し戻し): either the literal "unknown" or a lowercase 40-hex-digit git
  *  SHA. Mirrors `KaoiroServer.BuildIdentity.valid_revision?/1` (server) and
  *  runner's own `BUILD_REVISION_RE` (build_info.ts) — kept as an
@@ -2257,14 +2257,14 @@ function isConsistentBuildIdentity(
   );
 }
 
-/** Server's own build identity (issues #228/#288), served at GET /api/health.
+/** Server's own build identity (issues #218/#288), served at GET /api/health.
  *  `build_version` / `build_channel` identify the lockstep CalVer project
  *  artifact; `build_channel` is a controlled `dev`/`release` value.
  *  `protocol_version` is ADR-0015's wire compatibility stamp — a
  *  DIFFERENT concept from `build_revision` (the git SHA the running image
  *  was built from); see HostInfo.build_revision's own doc for why the two
  *  are never conflated. `built_at` is deliberately absent — it is a
- *  runner-only diagnostic field (issue #228 round 2 advisory 2, ふじ 差し戻
+ *  runner-only diagnostic field (issue #218 round 2 advisory 2, ふじ 差し戻
  *  し), never part of the server's own identity response. */
 export interface ServerHealth {
   status: string;
@@ -2277,14 +2277,14 @@ export interface ServerHealth {
 
 /**
  * Fetches the server's build identity; null on any failure (including a
- * pre-#228 server with no /api/health route, or a malformed field outside
+ * pre-#218 server with no /api/health route, or a malformed field outside
  * BuildInfo's value domain). null does NOT mean "no warning" — LaunchDialog
- * (issue #228 round 2 MF-4) surfaces null as its own explicit "server の
+ * (issue #218 round 2 MF-4) surfaces null as its own explicit "server の
  * build revision を取得できません" warning rather than staying silent
  * (round 3 advisory 1, ふじ 差し戻し: this comment previously said null
  * meant "no mismatch warning", which stopped being true once MF-4 shipped
  * — stale documentation, not stale behavior). `cache: "no-store"` (issue
- * #228 round 2 MF-4): the caller re-fetches this on every LaunchDialog
+ * #218 round 2 MF-4): the caller re-fetches this on every LaunchDialog
  * open / reconnect, and a cached response would keep reporting a
  * pre-redeploy server identity after the operator's own /api/health would
  * answer differently.
@@ -2345,9 +2345,9 @@ export interface HostInfo {
   capabilities?: string[];
   /** Launch catalog per capability (ADR-0032 F4bc). */
   engines?: EngineCatalog[];
-  /** Build identity (issue #228) — the full 40-char git SHA the runner's
+  /** Build identity (issue #218) — the full 40-char git SHA the runner's
    *  own artifact was built from ("unknown" when undeterminable), and
-   *  whether that build had uncommitted changes. Absent = a pre-#228
+   *  whether that build had uncommitted changes. Absent = a pre-#218
    *  runner (no signal, not a claim of "unknown"). DISTINCT from ADR-0015's
    *  wire protocol `version` — this changes on every commit regardless of
    *  wire-shape compatibility, and is compared against the server's own
@@ -2488,9 +2488,9 @@ export interface UserSummary {
 }
 
 /** Canonical persona joined server-side against the CURRENT PersonaAssets
- *  manifest (issue #219 D19) — never a stored snapshot. `name` /
+ *  manifest (issue #209 D19) — never a stored snapshot. `name` /
  *  `sprite_set` are present when the pack still resolves; absent
- *  ("typed unresolved", issue #219 D21) when it does not — never a
+ *  ("typed unresolved", issue #209 D21) when it does not — never a
  *  stale/guessed value. `spriteUrlFor` already treats a missing
  *  `sprite_set` as "no sprite, fall back to the CSS face", so this
  *  degrades through the existing rendering path with no special-casing
@@ -2506,7 +2506,7 @@ export interface DirectoryPersona {
  *  snapshot; the client merges it with live envelopes to render offline
  *  agents' tiles for the restore UI. `last_seen` is memory-only on the
  *  server and resets to null on server restart. `display_name` (issue
- *  #219 D19) is the label to SHOW — always present, independent of
+ *  #209 D19) is the label to SHOW — always present, independent of
  *  whether `persona` resolved. */
 export interface DirectoryEntry {
   persona: DirectoryPersona;
@@ -2514,7 +2514,7 @@ export interface DirectoryEntry {
   last_seen: number | null;
 }
 
-/** Server-owned recipient-local dispatch watermark (issue #247). */
+/** Server-owned recipient-local dispatch watermark (issue #237). */
 export interface InterAgentDeliveryStatus {
   issued_seq: number;
   acked_seq: number;
@@ -2566,7 +2566,7 @@ export interface KaoiroHandlers {
   onSnapshotIncomplete?: (incomplete: boolean) => void;
   /** Active subagent/workflow task snapshot (nested {@link TaskTable}),
    *  pushed once alongside the AgentStates snapshot on join (ADR-0048
-   *  F3, issue #180). Operator-only: the server sends an empty map for a
+   *  F3, issue #170). Operator-only: the server sends an empty map for a
    *  `:viewer` role join — the same server-gate path as `hosts`/`log`/
    *  `result`, not a fail-closed special case (N3, クロエ 2026-08-09) —
    *  so this is a no-op there. Absent when the caller does not track
@@ -2593,7 +2593,7 @@ export interface KaoiroHandlers {
   onEnvelope: (envelope: Envelope) => void;
   /** Reply-log history per agent (operator-only, ADR-0012); pushed once
    *  on join, chronological. Absent for viewers. `clearWatermarks`
-   *  (issue #109): agent_id => ISO-8601 UTC ts of that agent's most
+   *  (issue #106): agent_id => ISO-8601 UTC ts of that agent's most
    *  recent operator `clear_history`; today display-only (server owns
    *  the filter). `projection` (ふじ R3, 2026-07-23): wire marker for
    *  how `histories` was projected — `"per-pane-v1"` means the server
@@ -2612,7 +2612,7 @@ export interface KaoiroHandlers {
   ) => void;
   /** A past-session log purge (issue #48): the named agent's transcript
    *  should drop every line outside `sessionId`. `clearWatermark`
-   *  (issue #109): the ts the server stamped for this clear so the
+   *  (issue #106): the ts the server stamped for this clear so the
    *  client can update its local watermark map for future fan-outs
    *  (undefined on legacy servers). Operator-only. */
   onHistoryCleared?: (
@@ -2738,7 +2738,7 @@ export interface SessionResetFailedPayload {
 export interface KaoiroConnection {
   disconnect: () => void;
   /** Force-cycles the Phoenix socket: disconnect then reconnect (issue
-   *  #123). Use when the tab or network reappears in a state where
+   *  #119). Use when the tab or network reappears in a state where
    *  Phoenix's built-in reconnect timer never fired — macOS sleep resume
    *  can drop the WebSocket without a close event, leaving Phoenix stuck.
    *  Phoenix's `socket.disconnect(cb)` first clears its internal reconnect
@@ -2836,8 +2836,8 @@ export interface KaoiroConnection {
     agentId: string,
     patch: SetPermissionPatch,
   ) => Promise<SetPermissionAck | null>;
-  /** Renames the agent's `display_name` while it is running (issue #197
-   *  段階3 unit B, wire vocabulary revised issue #219 D23 — `persona`
+  /** Renames the agent's `display_name` while it is running (issue #187
+   *  段階3 unit B, wire vocabulary revised issue #209 D23 — `persona`
    *  canonical data is never touched by this call); rejects like
    *  sendInstruction, plus `invalid_name` (server-side trim/64-grapheme/
    *  control-char rejection) and `revision_exhausted` (fail-closed
@@ -2920,7 +2920,7 @@ export interface KaoiroConnection {
    *  dropped, not the whole list). Rejects on forbidden / transport
    *  disconnect / timeout. */
   listUsers: () => Promise<UserSummary[]>;
-  /** Renames a user's `display_name` (server API from issue #197 段階3;
+  /** Renames a user's `display_name` (server API from issue #187 段階3;
    *  dashboard access added by issue #207). Operator-only, any existing
    *  user — no self-service distinction (director's Q1 判定, issue #187
    *  段階3). Rejects like sendInstruction, plus `unknown_user` /
@@ -2980,13 +2980,13 @@ export interface ConnectOptions {
    *  owns the resulting session teardown / login-form transition. */
   onTicketRefreshUnauthorized?: () => void;
   /** Test-only: WebSocket-compatible transport class handed to Phoenix
-   *  Socket (issue #123 regression tests). Production leaves this undefined
+   *  Socket (issue #119 regression tests). Production leaves this undefined
    *  and Phoenix falls through to global.WebSocket. Typed as `unknown`
    *  because Phoenix's own transport option is untyped. */
   transport?: unknown;
   /** Test-only: shortened Phoenix heartbeat interval (ms) so tests can
    *  exercise the heartbeatTimeout path in bounded wall-clock (issue
-   *  #123). Production leaves this undefined and Phoenix defaults to
+   *  #119). Production leaves this undefined and Phoenix defaults to
    *  30000. */
   heartbeatIntervalMs?: number;
   /** Test-only override for the HTTP ticket-mint deadline. Production uses
@@ -3049,15 +3049,15 @@ export function parseHosts(value: unknown): HostInfo[] {
           ? { capabilities: e.capabilities }
           : {}),
         ...(Array.isArray(e.engines) ? { engines: e.engines } : {}),
-        // issue #228: absent on a pre-#228 runner — only copy over when
+        // issue #218: absent on a pre-#218 runner — only copy over when
         // present AND correctly typed/in-domain, so a malformed/forged
         // value cannot spoof a build_revision that was never actually
-        // declared (issue #228 round 2 MF-3, ふじ 差し戻し: typeof alone
+        // declared (issue #218 round 2 MF-3, ふじ 差し戻し: typeof alone
         // let through any string, e.g. an attacker-controlled label
         // masquerading as a SHA).
         //
         // build_revision and build_dirty are narrowed as ONE PAIR, not two
-        // independent optionals (issue #228 round 3 MF-2, ふじ 差し戻し):
+        // independent optionals (issue #218 round 3 MF-2, ふじ 差し戻し):
         // the server's own runner_channel.ex rejects a register carrying
         // only one of the two ("both absent or both present" — round 2
         // MF-3), but this round-2 code independently copied each field,
@@ -3135,8 +3135,8 @@ export function parseWrapperBuildInfoSnapshot(
  *  ADR-0030 A5). `persona.id` is required (the stable reference is always
  *  present); `persona.name` / `sprite_set` are carried through AS-IS —
  *  present or absent, never synthesized — since an absent pair is the
- *  "typed unresolved" state issue #219 D21 defines (pack removed since).
- *  `display_name` (issue #219 D19) is required — a malformed/missing one
+ *  "typed unresolved" state issue #209 D21 defines (pack removed since).
+ *  `display_name` (issue #209 D19) is required — a malformed/missing one
  *  drops the WHOLE entry, same fail-closed discipline the rest of this
  *  parser already applies to `persona.id`. */
 export function parseDirectory(
@@ -3212,7 +3212,7 @@ export function parseDeliverySnapshot(value: unknown): Record<string, InterAgent
  *  operator-only server-gate path as `hosts`/`log`/`result`, ADR-0021),
  *  so this returns {} for that value regardless. */
 export function parseTasks(value: unknown): TaskTable {
-  // Security review (issue #180 fix-round, 2026-08-09): `Object.create(null)`
+  // Security review (issue #170 fix-round, 2026-08-09): `Object.create(null)`
   // instead of `{}` for both the outer table and each per-agent inner map.
   // This loop accumulates via repeated bracket ASSIGNMENT (`tasks[agentId] =
   // ...`, `agentTasks[taskId] = ...`), which is genuinely unsafe on a plain
@@ -3544,7 +3544,7 @@ export interface ParsedHistoryPayload {
  *  join. Split out so tests can exercise the wire-shape handling without
  *  spinning up a Phoenix channel mock (ふじ R3 must-fix, 2026-07-23):
  *   - `agents`: per-agent envelope array (skipped when non-array).
- *   - `clear_watermarks` (issue #109): agent_id => ISO ts display hint.
+ *   - `clear_watermarks` (issue #106): agent_id => ISO ts display hint.
  *     Missing/malformed values fall through to an empty map.
  *   - `history_projection`: wire marker `"per-pane-v1"` when the server
  *     has already fanned IA out per pane; absent (undefined) means a
@@ -4020,10 +4020,10 @@ export function resolveLaunchDefaultEffort(opts: {
  *
  *  Formerly `RUNNER_CONTROL_VERSION`, scoped to the runner-relay subset
  *  (`stop` / `enumerate_sessions` / `refresh_engine_catalog`). That name was
- *  itself part of the gap issue #218 closes: ADR-0015 covers EVERY client ->
+ *  itself part of the gap issue #208 closes: ADR-0015 covers EVERY client ->
  *  server message and draws no runner-relay exception, but a constant named
  *  for the subset invited exactly the "this one is not relayed, so it needs
- *  no version" misreading that became a must-fix twice (#88, #197 段階3). */
+ *  no version" misreading that became a must-fix twice (#88, #187 段階3). */
 const CLIENT_PROTOCOL_VERSION = "0";
 
 /** ADR-0015 receiver rule for server -> client JSON pushes. */
@@ -4043,7 +4043,7 @@ export function warnOnServerVersionMismatch(event: string, payload: unknown): vo
 /** Every server -> dashboard event is checked at the binding boundary.
  * `history_replay_envelope` is an ordinary JSON frame and is therefore
  * checked too: the server stamps its flat version when it leaves the final
- * egress funnel (issue #270). */
+ * egress funnel (issue #260). */
 export const CLIENT_EVENT_VERSION_POLICY = {
   snapshot: "checked",
   task_snapshot: "checked",
@@ -4086,7 +4086,7 @@ function bindServerEvent<T>(
   });
 }
 
-/** The single client -> server JSON send point (issue #218).
+/** The single client -> server JSON send point (issue #208).
  *
  *  ADR-0015 requires a flat `version` frame key on every message between the
  *  three parties. Stamping it HERE rather than at each call site makes an
@@ -4141,7 +4141,7 @@ function pushAsyncReply(
   });
 }
 
-/** Wake-guard threshold for the tab-visibility rebuild path (issue #123).
+/** Wake-guard threshold for the tab-visibility rebuild path (issue #119).
  *  On visible resume, if the tab was hidden longer than this, App.svelte
  *  calls connectKaoiro's reconnect() unconditionally to catch the
  *  macOS-sleep case where the WebSocket died silently but Phoenix's
@@ -4151,7 +4151,7 @@ function pushAsyncReply(
  *  up-front without brief tab switches triggering a rebuild. */
 export const HIDDEN_RECONNECT_THRESHOLD_MS = 60_000;
 
-/** Pure helper for App.svelte's visibilitychange handler (issue #123).
+/** Pure helper for App.svelte's visibilitychange handler (issue #119).
  *  `hiddenAt` is the timestamp the tab last went hidden (null if it never
  *  hid while this session was alive). Returns whether the visible-resume
  *  transition should trigger a full socket rebuild. Isolated here so the
@@ -4165,7 +4165,7 @@ export function shouldForceReconnectOnVisible(
   return now - hiddenAt >= thresholdMs;
 }
 
-/** Wake-signal reasons App.svelte forwards to decideWakeAction (issue #123
+/** Wake-signal reasons App.svelte forwards to decideWakeAction (issue #119
  *  round 3). Kept as a discriminated string union so tests can enumerate
  *  every branch. */
 export type WakeReason =
@@ -4188,7 +4188,7 @@ export type WakeDecision =
   | "force-reconnect"
   | "record-hidden";
 
-/** Pure lifecycle decision for App.svelte's wake handlers (issue #123
+/** Pure lifecycle decision for App.svelte's wake handlers (issue #119
  *  round 3, ふじ再レビュー must-fix 2 A). Concentrates the DOM-event ->
  *  action mapping in one testable function so the visibility / online
  *  branches can be pinned without mounting App.svelte. `hiddenAt` is the
@@ -4212,7 +4212,7 @@ export function decideWakeAction(
   return status === "disconnected" ? "reconnect" : "noop";
 }
 
-/** Dispatch for App.svelte's browser `online` handler (issue #162 advisory
+/** Dispatch for App.svelte's browser `online` handler (issue #152 advisory
  *  2). The old handler called `connection.notifyOnline()` unconditionally
  *  and THEN `connection.reconnect()` when `decideWakeAction` returned
  *  "reconnect" — both from the same event. `reconnect()` already performs
@@ -4224,7 +4224,7 @@ export function decideWakeAction(
  *  branch had just started a ticket mint, `reconnect()`'s
  *  `requireFreshTicket()` would abort THAT mint and start another,
  *  wasting an RTT (this turned out to be the dominant trigger for issue
- *  #162 advisory 1's "in-flight mint aborted by a near-simultaneous wake"
+ *  #152 advisory 1's "in-flight mint aborted by a near-simultaneous wake"
  *  symptom — see the analysis on `requireFreshTicket` below). Splitting
  *  the two calls here removes both the redundant call and that self-
  *  inflicted abort for the single-`online`-event case; only a genuine
@@ -4264,7 +4264,7 @@ export function connectKaoiro(
   const catalogPending = makeCatalogPendingStore();
   const refreshPending = makeRefreshPendingStore();
 
-  // ふじ review must-fix (issue #123): safe Socket+Channel rebuild state.
+  // ふじ review must-fix (issue #119): safe Socket+Channel rebuild state.
   //   disposed        — terminal flag; after disconnect() every pending
   //                     teardown callback is a no-op so a delayed
   //                     socket.disconnect(cb) cannot resurrect a zombie
@@ -4320,7 +4320,7 @@ export function connectKaoiro(
     rejectTicketRefresh?.(new Error("ticket refresh aborted"));
   }
 
-  // issue #162 advisory 1 design note — MEASURED, then SHELVED (あお
+  // issue #152 advisory 1 design note — MEASURED, then SHELVED (あお
   // 2026-08-05 判断). Left as analysis + decision record for whoever next
   // looks at this, so "investigated and shelved" isn't mistaken for
   // "missed":
@@ -4334,7 +4334,7 @@ export function connectKaoiro(
   //       ("The old request may be stuck behind a captive portal/proxy").
   // Today every caller gets (b)'s abort-and-restart behavior unconditionally,
   // which is what lets a reconnect() arriving while a mint is already in
-  // flight (issue #162 advisory 1) throw that mint away and start another —
+  // flight (issue #152 advisory 1) throw that mint away and start another —
   // wasting an RTT even though nothing about the mint itself was ever in
   // doubt.
   //
@@ -4348,7 +4348,7 @@ export function connectKaoiro(
   //     microtask boundary — rare, and costs exactly one wasted RTT, not a
   //     correctness failure.
   // Given how narrow the residual is, and that the (a)/(b) split touches the
-  // core of a reconnect state machine that took #123's 7 review rounds to
+  // core of a reconnect state machine that took #119's 7 review rounds to
   // harden — including the ONE caller ((b)) that has a real, stated need for
   // abort-and-restart (captive-portal/proxy recovery in notifyOnline()) — the
   // 1-RTT saving does not justify the risk of that path. Shelved, not fixed.
@@ -4536,7 +4536,7 @@ export function connectKaoiro(
         typeof payload.agent_id === "string" &&
         typeof payload.session_id === "string"
       ) {
-        // issue #109: clear_watermark is optional (legacy servers omit it);
+        // issue #106: clear_watermark is optional (legacy servers omit it);
         // when present it lets the live handler update the local watermark
         // map without waiting for a reload.
         const watermark =
@@ -4650,7 +4650,7 @@ export function connectKaoiro(
     return ch;
   }
 
-  // ふじ再レビュー must-fix 1 (issue #123 round 3): Socket instance を
+  // ふじ再レビュー must-fix 1 (issue #119 round 3): Socket instance を
   // 使い回す。cycle するのは Channel と WebSocket transport のみ。
   //   - Phoenix Socket constructor は remove 不能な window listener を 3 本
   //     (pagehide / pageshow / visibilitychange) 登録するため、cycle ごとに
@@ -4807,7 +4807,7 @@ export function connectKaoiro(
 
   socketWithConnect.connect = connectWithFreshTicket;
 
-  // Round 7 must-fix (issue #123): arm-time chain-provenance guard on
+  // Round 7 must-fix (issue #119): arm-time chain-provenance guard on
   // Phoenix's teardown. Phoenix's chain heartbeatTimeout → abnormalClose
   // → teardown(cb=scheduleTimeout) starts at teardown time; the eventual
   // cb (and its follow-on scheduleTimeout) must NOT execute if a rebuild
@@ -5089,7 +5089,7 @@ export function connectKaoiro(
           ...patch,
         }),
       ),
-    // `display_name` (issue #219 D23): the server's field-extraction
+    // `display_name` (issue #209 D23): the server's field-extraction
     // helper (`extract_name_field/1`) still accepts the legacy `name` key
     // during the compatibility window, but this client — built alongside
     // the server that introduces the new key — sends the new one.
@@ -5174,7 +5174,7 @@ export function connectKaoiro(
           )
           .receive("timeout", () => reject(new Error("timeout")));
       }),
-    // `display_name` (issue #219 D23 vocabulary, reused here per
+    // `display_name` (issue #209 D23 vocabulary, reused here per
     // renameAgent's own doc: this client sends the canonical key, the
     // server's extract_name_field/1 still accepts legacy `name` too).
     renameUser: (userId, name) =>
@@ -5200,11 +5200,11 @@ export function connectKaoiro(
       // ArrayBuffer payloads as a V2 binary frame. The server's handler
       // returns :noreply so awaiting a reply would only ever time out.
       //
-      // ADR-0015 carve-out (issue #218): the only client -> server message
+      // ADR-0015 carve-out (issue #208): the only client -> server message
       // that bypasses `pushVersioned`. A binary frame carries a fixed
       // length-prefixed header plus raw bytes — there is no JSON object to
       // put a `version` key in, so stamping one would need a wire change
-      // (i.e. a protocol version bump), which #218 rules out of scope.
+      // (i.e. a protocol version bump), which #208 rules out of scope.
       // Recorded as a permanent exception in `docs/specs/protocol.md`.
       channel.push("attach_chunk", data);
     },

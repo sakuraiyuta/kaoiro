@@ -1,4 +1,4 @@
-// Shared tasklist wire shaping (issue #188, ADR-0049). Both engine adapters
+// Shared tasklist wire shaping (issue #178, ADR-0049). Both engine adapters
 // receive whole-list snapshots, so keeping the bounds and omission accounting
 // here prevents Claude/Codex drift before either reaches the common task
 // envelope builder.

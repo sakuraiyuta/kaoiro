@@ -61,7 +61,7 @@ defmodule KaoiroServer.PersistencePaths do
       env: "KAOIRO_PERMISSION_SETTINGS_PATH",
       default_file: "permission_settings.dets"
     },
-    # issue #109 visibility data must survive a full container recreation:
+    # issue #106 visibility data must survive a full container recreation:
     # the cutoff it records is compared against ingress stamps the wrapper
     # hosts replay back after a restart (ADR-0051 D3-4). fsync-gated before
     # the clear ack.
@@ -83,7 +83,7 @@ defmodule KaoiroServer.PersistencePaths do
       env: "KAOIRO_INGRESS_ORDER_PATH",
       default_file: "ingress_order.dets"
     },
-    # issue #247's ledger holds recipient-local dispatch watermarks (no
+    # issue #237's ledger holds recipient-local dispatch watermarks (no
     # messages), but it must survive a server restart or a real pending gap
     # is silently forgotten.
     %{
@@ -93,7 +93,7 @@ defmodule KaoiroServer.PersistencePaths do
       default_file: "delivery_states.dets"
     },
     # Authoritative store of revoked agent_ids for fail-closed auth (ふじ
-    # issue #120 must-fix 1, 2026-07-25): a lost entry silently re-grants a
+    # issue #116 must-fix 1, 2026-07-25): a lost entry silently re-grants a
     # revoked identity.
     %{
       store: "token_denylist",
@@ -101,7 +101,7 @@ defmodule KaoiroServer.PersistencePaths do
       env: "KAOIRO_TOKEN_DENYLIST_PATH",
       default_file: "token_denylist.dets"
     },
-    # User identity ledger (issue #197, ADR-0050 D1). A lost entry re-issues
+    # User identity ledger (issue #187, ADR-0050 D1). A lost entry re-issues
     # a new user_id and resets display_name on that source's next login, so
     # the acceptance criterion "変更が再起動を跨いで保持される" depends on
     # this pointing at a persistent volume in production.

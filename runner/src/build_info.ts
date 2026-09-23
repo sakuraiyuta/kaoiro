@@ -1,11 +1,11 @@
-// Build identity (issue #228). Reads the build-time-generated
+// Build identity (issue #218). Reads the build-time-generated
 // dist/build-info.json (scripts/generate-build-info.mjs) instead of ever
 // calling `git` at runtime — a live `git rev-parse HEAD` would report
 // whatever the current checkout happens to be, NOT what the running
 // dist/ was actually built from (a repo-direct dist/ can predate HEAD by
 // days; a tarball deploy has no .git at all). Director's explicit steer,
-// issue #228 query round 1: this would silently repeat the exact failure
-// mode issue #227's runbook documents for file mtimes ("いつ書かれたか"
+// issue #218 query round 1: this would silently repeat the exact failure
+// mode issue #217's runbook documents for file mtimes ("いつ書かれたか"
 // answered, "どの commit 由来か" not) — just for git state instead of a
 // timestamp.
 import { readFileSync } from "node:fs";
@@ -19,11 +19,11 @@ export interface BuildInfo {
    *  docs/adr for why this is distinct from ADR-0015's protocol version. */
   revision: string;
   /** Whether the working tree had uncommitted changes (tracked OR
-   *  untracked — issue #228, decided round 1) at build time. Diagnostic,
+   *  untracked — issue #218, decided round 1) at build time. Diagnostic,
    *  not identity: two dirty builds of the SAME uncommitted diff are not
    *  claimed to be "the same" artifact by this flag alone. */
   dirty: boolean;
-  /** ISO-8601 build timestamp. Diagnostic ONLY (issue #228, decided round
+  /** ISO-8601 build timestamp. Diagnostic ONLY (issue #218, decided round
    *  1) — never compared for equality, never part of identity. Answers
    *  "how stale is this artifact", not "what commit is it". Not sent over
    *  the wire or included in the canonical `--version` label; read this file
@@ -42,7 +42,7 @@ const UNKNOWN_BUILD_INFO: BuildInfo = {
   built_at: "unknown",
 };
 
-/** Value domain for `revision` (issue #228 round 2, ふじ MF-3 差し戻し):
+/** Value domain for `revision` (issue #218 round 2, ふじ MF-3 差し戻し):
  *  either the literal "unknown" or a lowercase 40-hex-digit git SHA.
  *  Mirrors `KaoiroServer.BuildIdentity.valid_revision?/1` (server's own
  *  build-info.json read and its runner_channel.ex register parse) — kept
@@ -53,7 +53,7 @@ const UNKNOWN_BUILD_INFO: BuildInfo = {
 const BUILD_REVISION_RE = /^[0-9a-f]{40}$/;
 const BUILD_VERSION_RE = /^\d{4}\.(?:[1-9]|1[0-2])\.\d+$/;
 
-/** Value domain for `built_at` (issue #228 round 4, ふじ 差し戻し): the
+/** Value domain for `built_at` (issue #218 round 4, ふじ 差し戻し): the
  *  exact `new Date().toISOString()` value generate-build-info.mjs
  *  produces, or the literal "unknown" (`UNKNOWN_BUILD_INFO`'s own value).
  *  round 3's shape-only regex (`/^\d{4}-\d{2}-\d{2}T.../`) matched
@@ -140,14 +140,14 @@ export function loadBuildInfo(
 
 /** The human-facing string form of a revision — the startup log line uses
  *  this for backwards-compatible provenance output. The register payload
- *  does NOT (issue #228 round 2 advisory 1, ふじ 差し戻し: this doc
+ *  does NOT (issue #218 round 2 advisory 1, ふじ 差し戻し: this doc
  *  previously claimed it did) — `buildRegister` (config.ts) sends
  *  `build_revision`/`build_dirty` as two SEPARATE wire fields (the raw
  *  revision, undecorated) so the dashboard can independently compare
  *  revision-equality and dirty-flag, rather than parsing a combined
  *  human-readable string back apart. Same `$rev-dirty` suffix convention
  *  and same full-SHA format as scripts/build-runner-tarball.sh's VERSION
- *  file, since both now read the same dist/build-info.json (issue #228). */
+ *  file, since both now read the same dist/build-info.json (issue #218). */
 export function formatBuildRevision(info: BuildInfo): string {
   return info.dirty ? `${info.revision}-dirty` : info.revision;
 }

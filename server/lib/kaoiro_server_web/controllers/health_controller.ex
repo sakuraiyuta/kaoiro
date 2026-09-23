@@ -1,6 +1,6 @@
 defmodule KaoiroServerWeb.HealthController do
   @moduledoc """
-  GET /api/health (issue #228, build identity). Reports two DELIBERATELY
+  GET /api/health (issue #218, build identity). Reports two DELIBERATELY
   distinct concepts, never conflated:
 
   - `protocol_version` — ADR-0015's wire message-shape compatibility
@@ -18,7 +18,7 @@ defmodule KaoiroServerWeb.HealthController do
     rationale (docs-only commits / backports / rolling deploy windows all
     make a legitimate SHA mismatch that must not become a hard reject).
 
-  ## MF-1 (issue #228 round 2, ふじ 差し戻し): reads a build-time-baked
+  ## MF-1 (issue #218 round 2, ふじ 差し戻し): reads a build-time-baked
   FILE, never a runtime env var
 
   Round 1 read `System.get_env("KAOIRO_BUILD_REVISION")`, set once from a

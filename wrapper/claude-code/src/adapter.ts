@@ -301,7 +301,7 @@ export function sdkMessageToLogs(message: SDKMessage): LogEntry[] {
 
 /** Final-reply payload of a result message, or null for other messages.
  *  Only a non-error success subtype carries reply text; failures surface as
- *  is_error, plus (issue #127) an error_subtype for UI branching and,
+ *  is_error, plus (issue #123) an error_subtype for UI branching and,
  *  when present, an error_detail string joined from SDKResultError.errors
  *  (falling back to stop_reason) — otherwise the AgentDetail turn-end
  *  line shows a bare "エラーで終了" without cause.
@@ -358,7 +358,7 @@ export function sdkMessageToResult(
   return payload;
 }
 
-/** The SDK's terminal_reason for a result message (issue #131), or undefined
+/** The SDK's terminal_reason for a result message (issue #127), or undefined
  *  for other messages or when the SDK did not report one. Deliberately kept
  *  out of ResultPayload/the wire envelope (scope: no raw engine detail on
  *  the wire) — it exists only to feed the wrapper-local inter-agent error
@@ -471,7 +471,7 @@ export function cwdChangedHookToCwd(input: HookInput): string | null {
 }
 
 /** Compaction / conversation-reset notice extracted from one SDK message
- *  (phase-28 A1, #168), or null when the message carries none. The host turns
+ *  (phase-28 A1, #158), or null when the message carries none. The host turns
  *  it into a `system`-kind log line so the operator sees compaction happen —
  *  until this, a compact was completely invisible in kaoiro.
  *
@@ -796,7 +796,7 @@ export function sdkMessageToToolResultIds(message: SDKMessage): string[] {
   return toolResultIds(message.message.content).toolUseIds;
 }
 
-/** Raw fields extracted from one task_* SDK system message (issue #180,
+/** Raw fields extracted from one task_* SDK system message (issue #170,
  *  ADR-0019 F2-F4, ADR-0047), before the host backfills `task_type` for
  *  `updated`/`completed` from its own started-task cache — the SDK's
  *  `task_progress` / `task_notification` messages carry no `task_type` of
@@ -811,11 +811,11 @@ export function sdkMessageToToolResultIds(message: SDKMessage): string[] {
  *  enumerated optional-meta list: `task_started.prompt` (the subagent's
  *  full instructions, content-bearing) and `task_notification.output_file`
  *  (a local filesystem path). Neither is wired to the wire envelope
- *  (こはく判断 2026-08-09, issue #180).
+ *  (こはく判断 2026-08-09, issue #170).
  *
  *  `task_updated` (a real SDK subtype — richer status enum
  *  pending/running/completed/failed/killed/paused than ADR-0019 F3's
- *  coarse lifecycle) is likewise not extracted: #180 review captured the
+ *  coarse lifecycle) is likewise not extracted: #170 review captured the
  *  real SDK stream (2026-08-09, SDK 0.3.220) across natural completion,
  *  explicit `stopTask()`, session-level `interrupt()`, and
  *  `backgroundTasks()` — `task_notification` reliably followed every

@@ -6,12 +6,12 @@
 //
 // Usage: node dist/cli.js [configPath] [--version]
 //   configPath defaults to runner.config.json. --version prints the canonical
-//   build identity (issues #228/#288) and exits without touching config or
+//   build identity (issues #218/#288) and exits without touching config or
 //   network.
 //   The auth token is read from KAOIRO_RUNNER_TOKEN. Leaving it unset only
 //   disables the server's runner auth in :dev / :test — :prod is
 //   fail-closed and rejects every runner, since runners have no
-//   server-minted signed-token path (issue #138).
+//   server-minted signed-token path (issue #133).
 
 import type { EngineCatalogResult, EngineModelInfo } from "@kaoiro/protocol";
 import { parseRunnerArgs } from "./args.js";
@@ -150,7 +150,7 @@ export async function runRunnerCli(
     ?? ((serverUrl, hostId, options) => new RunnerLink(serverUrl, hostId, options));
   const watchConfig = dependencies.watchRunnerConfig ?? watchRunnerConfig;
   const { configPath, version } = parseArgs(argv);
-  // issue #228: checked BEFORE loadRunnerConfig — a first-run host with no
+  // issue #218: checked BEFORE loadRunnerConfig — a first-run host with no
   // config yet (setup wizard not run) must still be able to answer
   // --version, and it must never touch the network.
   const buildInfo = loadBuildInfo();
@@ -158,7 +158,7 @@ export async function runRunnerCli(
     process.stdout.write(`${formatBuildIdentity(buildInfo)}\n`);
     return;
   }
-  // KAOIRO_RUNNER_SERVER_URL outranks the file (issue #140) — applied here
+  // KAOIRO_RUNNER_SERVER_URL outranks the file (issue #135) — applied here
   // and again on every config-watcher reload below, so the precedence
   // holds across hot-reloads too.
   let config = applyOverride(loadConfig(configPath));
@@ -359,7 +359,7 @@ export async function runRunnerCli(
     configPath,
     (next) => {
       reloadQueue = reloadQueue
-        // Re-apply the env override on every reload (issue #140): without
+        // Re-apply the env override on every reload (issue #135): without
         // this, a file save would silently revert server_url to the file
         // value and reconnect the runner to the wrong host.
         .then(() => applyReload(applyOverride(next)))

@@ -207,7 +207,7 @@ defmodule KaoiroServer.OAuth do
   `display_name` is best-effort (the provider's `"name"` claim, nil when
   absent) and is used only once — to seed
   `KaoiroServer.Users.get_or_create/4`'s initial_display_name on this
-  identity's first login (issue #197 マスター決裁 2026-08-09 #1: "OAuth
+  identity's first login (issue #187 マスター決裁 2026-08-09 #1: "OAuth
   user は provider の表示名を初期値とし、以後は kaoiro 内で独立管理する
   — IdP 側の名前変更には追従しない"). It is not part of the allow-list
   identity (`provider`/`uid`) and is never persisted to the session.

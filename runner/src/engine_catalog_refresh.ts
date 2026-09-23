@@ -44,7 +44,7 @@ export interface RefreshEngineCatalogDeps {
   getAntigravityCatalog: () => EngineModelInfo[] | undefined;
   updateRegister: (register: RunnerRegister) => void;
   sendCatalogResult: (result: EngineCatalogResult) => void;
-  /** issue #228: fixed for the process's whole lifetime (computed once at
+  /** issue #218: fixed for the process's whole lifetime (computed once at
    *  startup from the built artifact, never reloaded), so — unlike the
    *  live getters above — a plain captured value, not a getter. */
   buildInfo: BuildInfo;

@@ -12,7 +12,7 @@ import type {
   ResumeDriftExt,
 } from "./types.js";
 
-/** Engine-neutral status SoT shared by state_change.ext and whoami (#113).
+/** Engine-neutral status SoT shared by state_change.ext and whoami (#109).
  *
  * `resolved` deliberately reuses the resume snapshot shape: it is the set of
  * effective values the host is enforcing now. `permission` keeps approval as

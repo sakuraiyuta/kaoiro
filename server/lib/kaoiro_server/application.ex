@@ -34,14 +34,14 @@ defmodule KaoiroServer.Application do
       {DNSCluster, query: Application.get_env(:kaoiro_server, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: KaoiroServer.PubSub},
       KaoiroServer.AgentStates,
-      # In-memory peer-directory activity projection (#160). Kept separate
+      # In-memory peer-directory activity projection (#150). Kept separate
       # from AgentStates, whose sole ownership is latest envelopes/history.
       KaoiroServer.AgentActivity,
       # Live-only wrapper artifact identities. A reconnect reports its own
       # package again; disconnect cleanup is owner-fenced.
       KaoiroServer.WrapperBuildInfos,
       # Flat table of active subagent/workflow tasks, keyed by task_id
-      # (issue #180, ADR-0019/0047/0048 F1). Kept separate from AgentStates
+      # (issue #170, ADR-0019/0047/0048 F1). Kept separate from AgentStates
       # for the same reason as AgentActivity above — a `task` envelope is
       # a distinct child entity's lifecycle, not the parent's state_change.
       KaoiroServer.TaskStates,
@@ -56,15 +56,15 @@ defmodule KaoiroServer.Application do
       KaoiroServer.PermissionSettings,
       # Per-agent clear watermarks so operator `clear_history` hides past
       # inter-agent messages from the cleared agent's transcript on
-      # subsequent reloads (issue #109). Peer panes are unaffected.
+      # subsequent reloads (issue #106). Peer panes are unaffected.
       KaoiroServer.ClearWatermarks,
       # Session-transition start records are intentionally independent from
-      # visibility: only clear_history adopts one into ClearWatermarks (#109).
+      # visibility: only clear_history adopts one into ClearWatermarks (#106).
       KaoiroServer.SessionStarts,
       # Restart-surviving per-agent session_lifecycle timeline (ADR-0055,
       # phase-33 Stage B) — recording only, no peer notification.
       KaoiroServer.SessionLifecycleEvents,
-      # Recipient-local dispatch-confirmation watermarks (#247).  This is
+      # Recipient-local dispatch-confirmation watermarks (#237).  This is
       # observational state only: no payloads and no retransmission queue.
       KaoiroServer.DeliveryStates,
       # Single serialized allocator for the server-side ingress ordering
@@ -102,19 +102,19 @@ defmodule KaoiroServer.Application do
       # AgentStates is empty.
       KaoiroServer.AgentDirectory,
       # Restart-surviving user identity ledger — user_id → {kind,
-      # display_name} (issue #197, ADR-0050 D1 Phase A). Resolved from
+      # display_name} (issue #187, ADR-0050 D1 Phase A). Resolved from
       # OAuth login / shared-token login before either writes its
       # session cookie, so it must be up before Endpoint (below) starts
       # serving those requests.
       KaoiroServer.Users,
       # Per-conversation hard limits for inter-agent messaging
       # (docs/reference/inter-agent/conversations.md, phase-8 Stage B). `:on_auto_closed`
-      # (issue #221 direction 2) is the ONLY place this otherwise
+      # (issue #211 direction 2) is the ONLY place this otherwise
       # web-independent module's data crosses into KaoiroServerWeb — see
       # ConversationStates' own moduledoc for why that boundary is kept.
       {KaoiroServer.ConversationStates,
        on_auto_closed: &KaoiroServerWeb.SynthEnvelope.deliver_conversation_closed/3},
-      # One-token-per-agent planned wrapper-cycle state (issue #266).
+      # One-token-per-agent planned wrapper-cycle state (issue #256).
       # ConversationStates supplies a read-only peer snapshot at disconnect;
       # timeout returns through the web boundary so authoritative reachability
       # selects terminal disconnected or neutral reconnected for its targets.
@@ -132,9 +132,9 @@ defmodule KaoiroServer.Application do
       # (ADR-0045). Must precede FooterWatcher, which rebuilds through it,
       # and the Endpoint, whose WrapperChannel reads the snapshot.
       KaoiroServer.FooterAssets,
-      # Serializes PersonaAssets.rebuild/0 within this node (issue #195
+      # Serializes PersonaAssets.rebuild/0 within this node (issue #185
       # must-fix 1) and OWNS the boot-time warm rebuild (ADR-0029) via
-      # its own `init/1` (`warm: true`, issue #195 round-3, ふじ
+      # its own `init/1` (`warm: true`, issue #185 round-3, ふじ
       # 2026-08-05 spec) — a raise there fails THIS Supervisor.start_link
       # outright (a root supervisor's initial child-start failure does
       # not enter the restart-intensity retry loop; measured OTP
@@ -151,7 +151,7 @@ defmodule KaoiroServer.Application do
       # absent — file-based footers are opt-in.
       KaoiroServer.FooterWatcher,
       # Change-driven targeted disconnect for OAuth allow-list edits
-      # (issue #170, ふじ 2026-08-05 spec). MUST start after
+      # (issue #160, ふじ 2026-08-05 spec). MUST start after
       # Phoenix.PubSub (broadcasts need it) and BEFORE Endpoint: no
       # client socket can exist yet when this runs its first reconcile,
       # so the :persistent_term checkpoint is seeded without diffing

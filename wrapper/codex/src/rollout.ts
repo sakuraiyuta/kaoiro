@@ -44,11 +44,11 @@ export function codexRolloutsRoot(): string {
 }
 
 /** Substrings a resume failure's free-form error detail carries when the
- *  underlying rollout JSONL is corrupted mid-write (issue #263 — ENOSPC or
+ *  underlying rollout JSONL is corrupted mid-write (issue #253 — ENOSPC or
  *  a host crash truncated a line while codex was appending to it; resume
  *  re-reads the whole file and fails every time thereafter).
  *
- *  - `did not contain valid utf-?8` is MEASURED (issue #255 comment 3338,
+ *  - `did not contain valid utf-?8` is MEASURED (issue #245 comment 3338,
  *    2026-08-17 incident: "stream did not contain valid UTF-8 (code
  *    -32603)", captured directly from a `run_streamed_rejected` detail).
  *  - `EOF while parsing` is UNVERIFIED — it is Rust `serde_json`'s
@@ -64,7 +64,7 @@ const ROLLOUT_CORRUPTION_PATTERNS = [
 ] as const;
 
 /** True when a resume/run failure's error detail matches a known rollout-
- *  corruption CANDIDATE pattern (issue #263). This is a hint, not a
+ *  corruption CANDIDATE pattern (issue #253). This is a hint, not a
  *  verdict — see `verifyRolloutCorruption`'s own doc for why a text match
  *  alone must never drive the permanent classification (ふじ MF-1: the
  *  codex-sdk 0.144.1 stderr this matches against is generic free-form text
@@ -76,7 +76,7 @@ export function isRolloutCorruptionDetail(detail: string): boolean {
   return ROLLOUT_CORRUPTION_PATTERNS.some((pattern) => pattern.test(detail));
 }
 
-/** Verdict from actually inspecting a session's rollout file (issue #263,
+/** Verdict from actually inspecting a session's rollout file (issue #253,
  *  ふじ MF-1). `"unknown"` means "cannot confirm either way" — callers MUST
  *  treat it the same as `"clean"` for classification purposes (fall back
  *  to the ordinary, non-permanent failure path), never as `"corrupted"`. */
@@ -254,7 +254,7 @@ function removeCorruptedRolloutLines(raw: Buffer): Buffer | null {
 }
 
 /** Finds one rollout by its validated opaque thread id. Shared by the tail
- * model resolver and full resume-history projection (#106). */
+ * model resolver and full resume-history projection (#103). */
 export function rolloutPathIn(root: string, sessionId: string): string | null {
   if (!SESSION_ID_PATTERN.test(sessionId)) return null;
   let names: string[];

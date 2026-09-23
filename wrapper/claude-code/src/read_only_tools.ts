@@ -2,7 +2,7 @@
 // permission_broker round-trip when the config names no explicit
 // `allowed_tools`. Membership here is a security decision, not a
 // convenience one — a tool NOT listed is what makes it 都度承認
-// (ADR-0028 D4, #168 決定 P2).
+// (ADR-0028 D4, #158 決定 P2).
 //
 // Split out of cli.ts (which runs main() on import) purely so tests can
 // assert the membership directly (phase-28 BR S1).

@@ -1,7 +1,7 @@
 defmodule KaoiroServer.PersonaRebuildLock do
   @moduledoc """
   Serializes `KaoiroServer.PersonaAssets` rebuilds within this BEAM node
-  (issue #195 must-fix 1) and owns the boot-time warm rebuild (ADR-0029).
+  (issue #185 must-fix 1) and owns the boot-time warm rebuild (ADR-0029).
 
   The rebuild operation has 3 triggers in production — boot (via this
   module's own `init/1`, started with `warm: true`),
@@ -21,7 +21,7 @@ defmodule KaoiroServer.PersonaRebuildLock do
   future caller to serialize unrelated work through this same process,
   which is not a risk this module is scoped to carry.
 
-  ## Boot ownership (issue #195 round-3, ふじ 2026-08-05 spec)
+  ## Boot ownership (issue #185 round-3, ふじ 2026-08-05 spec)
 
   Started with `warm: true` in `KaoiroServer.Application`'s children
   list. `init/1` runs `PersonaAssets.do_rebuild/0` synchronously BEFORE

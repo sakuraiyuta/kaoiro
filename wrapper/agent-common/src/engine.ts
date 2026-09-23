@@ -43,9 +43,9 @@ export interface EngineAdapter {
   /** Question-side twin of setPendingPermission (ADR-0027). */
   setPendingQuestion(pending: PendingQuestionExt | null): void;
   /** Applies a server-pushed display_name sync — `persona_sync` (legacy) or
-   *  `display_name_sync` (new), issue #219 D22 dual-emit; both funnel into
-   *  this one call (issue #197 段階3, D12/D14, renamed from `renamePersona`
-   *  in issue #219 D19/D23 — canonical `persona` data is never mutated by
+   *  `display_name_sync` (new), issue #209 D22 dual-emit; both funnel into
+   *  this one call (issue #187 段階3, D12/D14, renamed from `renamePersona`
+   *  in issue #209 D19/D23 — canonical `persona` data is never mutated by
    *  this call). Renames the live session's display name in place and
    *  re-emits `state_change` immediately. `revision` is a monotonic
    *  per-agent_id counter; a push whose revision is not strictly newer
@@ -54,13 +54,13 @@ export interface EngineAdapter {
    *  BOTH dual-emitted events idempotent). Only `display_name` is
    *  mutable; `persona.id` / `name` / `sprite_set` and the injected
    *  personality prompt stay fixed for the session's lifetime (ADR-0029
-   *  F9, ADR-0030 D2 — issue #219 removed the D2 carve-out this call used
+   *  F9, ADR-0030 D2 — issue #209 removed the D2 carve-out this call used
    *  to require). */
   renameDisplayName(displayName: string, revision: number): void;
 }
 
 /** Merges an incoming display_name sync push into a pre-host-construction
- *  buffer (issue #197 段階3, D15 review follow-up; renamed issue #219
+ *  buffer (issue #187 段階3, D15 review follow-up; renamed issue #209
  *  D19/D23). Both `cli.ts` entry points buffer a sync push that arrives
  *  before their `EngineAdapter` is constructed (the after-join sync and a
  *  live `rename_agent` relay can both land in that window, and PubSub

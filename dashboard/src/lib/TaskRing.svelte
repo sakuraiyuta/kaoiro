@@ -15,7 +15,7 @@
     /** Explicit override for the orbit's horizontal/vertical radius (any
      *  CSS length, including container-query units). Omit to fall back
      *  to the rem defaults below, keyed off `faceOrbit` — AgentCard's
-     *  original values (issue #180). AgentDetail (issue #180 follow-up,
+     *  original values (issue #170). AgentDetail (issue #170 follow-up,
      *  2026-08-10) passes `cqw` values instead since its portrait is a
      *  responsive percentage, not a fixed rem. */
     orbitRx?: string;
@@ -38,7 +38,7 @@
      *  spaced by ANGLE (not arc length — a workflow's internal children
      *  fan out under one root task and are deliberately not counted
      *  separately; see docs/architecture/subagent-visibility.md). `count=1` is
-     *  BIT-FOR-BIT the original single-dot geometry (issue #180): theta
+     *  BIT-FOR-BIT the original single-dot geometry (issue #170): theta
      *  = -90deg (12 o'clock), zero phase delay, identical rest-state
      *  translate. */
     count?: number;
@@ -87,12 +87,12 @@
   });
 </script>
 
-<!-- 頭上リング (issue #180, ADR-0019/0047/0048): サブエージェント/workflow
+<!-- 頭上リング (issue #170, ADR-0019/0047/0048): サブエージェント/workflow
      稼働の唯一のインジケータ(装飾ではない、N1: クロエ 2026-08-09 — 数値表示
      は無いため、この光点だけが操作者に「今何か動いている」ことを伝える)。
      呼び出し側は {#key state}...{/key} の外に置くこと — state 遷移
      (dissolve remount) の影響を受けず単独で回り続ける。AgentCard /
-     AgentDetail 共有(issue #180 follow-up, 2026-08-10 — マスター指摘:
+     AgentDetail 共有(issue #170 follow-up, 2026-08-10 — マスター指摘:
      頭上リングが AgentDetail に無いのはマスター未承認のスコープ外判断
      だったため追加)。
 
@@ -121,7 +121,7 @@
 {/each}
 
 <style>
-  /* 頭上リング(issue #180, ADR-0019/0047/0048): one achromatic light point
+  /* 頭上リング(issue #170, ADR-0019/0047/0048): one achromatic light point
      per active task (issue #233 — count, not an on/off flag), each
      orbiting the same ellipse above the sprite/face while at least one
      subagent/workflow task is active under this agent. CSS-only (no
@@ -156,8 +156,8 @@
      system makes increasing θ read as clockwise on screen without any
      extra sign flip. `--orbit-rx`/`--orbit-ry` default to the sprite
      radii; `.face-orbit` overrides them for the smaller placeholder face
-     (issue #180). A caller may instead override either variable directly
-     via inline style (issue #180 follow-up, 2026-08-10) — e.g. with
+     (issue #170). A caller may instead override either variable directly
+     via inline style (issue #170 follow-up, 2026-08-10) — e.g. with
      container-query units when its containing block is a responsive
      percentage rather than a fixed rem (AgentDetail's `.portrait`).
 

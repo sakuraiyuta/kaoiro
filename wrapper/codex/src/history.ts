@@ -1,4 +1,4 @@
-// Resume history reconstruction for Codex (#106). The SDK's resumeThread()
+// Resume history reconstruction for Codex (#103). The SDK's resumeThread()
 // continues the thread but does not emit past turns, so the wrapper projects
 // display logs from the persisted rollout JSONL before accepting live work.
 
@@ -123,7 +123,7 @@ function lineToPayloads(
       const text = textBlocks(payload.content, "input_text");
       // Structured inter_agent_message is the display SoT. Rollout JSONL also
       // records the injected framing as a user turn; do not replay that copy
-      // as an operator log beside the restored IA bubble (#105).
+      // as an operator log beside the restored IA bubble (#102).
       return text === null || isFormattedInterAgentMessage(text)
         ? []
         : [userPayload(text)];

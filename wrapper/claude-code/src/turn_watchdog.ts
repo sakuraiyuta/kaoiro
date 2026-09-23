@@ -1,4 +1,4 @@
-// Inactivity watchdog for one wrapper-fed Claude SDK turn (issue #248).
+// Inactivity watchdog for one wrapper-fed Claude SDK turn (issue #238).
 //
 // This is deliberately not a wall-clock turn limit. AgentHost starts it only
 // after #input() has made a token active, and every SDK output frame for that
@@ -26,7 +26,7 @@ export interface TurnWatchdogSettings {
 
 /** Reads the Claude-wrapper-local safety valve. It intentionally stays out of
  * WrapperConfig: dashboard/server/runner relay would be a materially larger
- * settings surface for an operational fail-stop (issue #248). */
+ * settings surface for an operational fail-stop (issue #238). */
 export function readTurnWatchdogSettings(
   env: Readonly<Record<string, string | undefined>>,
   warn: (message: string) => void,
@@ -147,7 +147,7 @@ export class TurnWatchdog {
     this.#failStopUnattributed = options.failStopUnattributed;
     // Performance#now validates its receiver in Node. Keeping the bare
     // method here made the first production start() throw ERR_INVALID_THIS;
-    // retain the Performance receiver inside a closure (issue #249).
+    // retain the Performance receiver inside a closure (issue #239).
     this.#nowMs = options.nowMs ?? (() => performance.now());
     this.#setTimer =
       options.setTimer ?? ((callback, delayMs) => setTimeout(callback, delayMs));

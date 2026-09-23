@@ -5,8 +5,8 @@
 export interface Settings {
   notificationSoundEnabled: boolean;
   notificationSoundVolume: number;
-  /** AgentCard の engine・model・effort / ctx・5h・7day 追加表示 (issue #193)。
-   *  agent_id 行は #193 以前からの既存表示でこのトグルの対象外 — 常に表示
+  /** AgentCard の engine・model・effort / ctx・5h・7day 追加表示 (issue #183)。
+   *  agent_id 行は #183 以前からの既存表示でこのトグルの対象外 — 常に表示
    *  する (envelope の top-level フィールドで viewer にも配信されるため
    *  ext の有無ではそもそも gate できない)。ext はそもそも viewer に配信
    *  されない (ADR-0021) ので、この設定は operator 限定表示を別途判定せず

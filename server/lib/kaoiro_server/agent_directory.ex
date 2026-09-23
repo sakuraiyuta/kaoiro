@@ -1,19 +1,19 @@
 defmodule KaoiroServer.AgentDirectory do
   @moduledoc """
   Restart-surviving identity ledger — `agent_id => %{persona_id,
-  display_name, last_seen, revision}` (ADR-0030, revised issue #219 D19).
+  display_name, last_seen, revision}` (ADR-0030, revised issue #209 D19).
   Persists a pure instance-state record so operator-driven restore
   (`agents_channel.ex agent_persona/1`) still works after a server
   restart when `AgentStates` is empty. Mirrors the `SessionPointers` /
   `PermissionModes` shape: tiny payload, DETS-backed, in-memory mirror
   for fast reads. Both mutating calls — `record/4` (spawn path) and
-  `rename/3` — are synchronous `GenServer.call`s (issue #219 D22
+  `rename/3` — are synchronous `GenServer.call`s (issue #209 D22
   corollary for `record/4`; `rename/3` was already synchronous, see its
   own doc for why); `touch/2` (the `last_seen` hint) remains the only
   fire-and-forget `GenServer.cast` in this module.
 
   **This module does NOT store canonical persona data** (`persona.name`
-  / `sprite_set`) — issue #219 D19. The canonical persona is a property
+  / `sprite_set`) — issue #209 D19. The canonical persona is a property
   of the PACK, not of an agent instance; its sole SoT is the current
   `KaoiroServer.PersonaAssets` manifest, keyed by `persona_id`. What
   THIS module persists is exactly the two things that ARE per-instance
@@ -22,14 +22,14 @@ defmodule KaoiroServer.AgentDirectory do
   needs the canonical name/sprite_set for display (restore payloads,
   directory projection, wrapper spawn payloads) joins `persona_id`
   against `PersonaAssets` itself — that join is deliberately NOT done in
-  this module (see D19/D21 in issue #219's spec-gate decision; keeping
+  this module (see D19/D21 in issue #209's spec-gate decision; keeping
   this ledger free of a PersonaAssets dependency keeps its tests
   independent of pack state and keeps the dependency direction
   persistence-layer -> asset-layer, never the reverse).
 
   `persona_id`, `display_name`, and `revision` are all written to disk
   (`last_seen` stays memory-only, see below). `revision` is a monotonic
-  per-agent_id counter bumped ONLY by `rename/3` (issue #197 段階3,
+  per-agent_id counter bumped ONLY by `rename/3` (issue #187 段階3,
   D12/D15): it lets a wrapper that receives two rename relays out of
   order (broadcast delivery has no ordering guarantee across two
   different `AgentsChannel` processes) drop the stale one instead of
@@ -56,13 +56,13 @@ defmodule KaoiroServer.AgentDirectory do
   # `display_name_sync` narrows enforce (2^53 - 1). `rename/3` must never
   # emit a revision past this: doing so would produce a value every
   # wrapper's narrow drops on receipt, leaving that agent's persona
-  # permanently unable to converge (issue #197 段階3, ふじ MF-5 レビュー
+  # permanently unable to converge (issue #187 段階3, ふじ MF-5 レビュー
   # 指摘).
   @max_safe_revision 9_007_199_254_740_991
 
   # Baseline for a brand-new entry, and the floor every loaded revision is
-  # clamped up to (issue #219 MF-2, クロエ実測検証). NOT 0 — a legacy
-  # (pre-issue-#219) wrapper build starts its own counter at
+  # clamped up to (issue #209 MF-2, クロエ実測検証). NOT 0 — a legacy
+  # (pre-issue-#209) wrapper build starts its own counter at
   # `#personaRevision = 0` and drops any sync push with `revision <= 0`
   # (`if (revision <= this.#personaRevision) return;`). A fresh spawn's
   # revision-0 entry would therefore push its FIRST persona_sync /
@@ -88,13 +88,13 @@ defmodule KaoiroServer.AgentDirectory do
 
   @doc """
   Records a NEW agent's identity at revision @initial_revision (issue
-  #219 MF-2 — see module doc for why not 0): `persona_id` (the stable
-  reference into `PersonaAssets`, issue #219 D19) and `display_name`
+  #209 MF-2 — see module doc for why not 0): `persona_id` (the stable
+  reference into `PersonaAssets`, issue #209 D19) and `display_name`
   (already resolved by the caller — spawn custom name, or the pack's
   current canonical name copied at record time, D20; this module does
   no fallback resolution of its own).
 
-  Synchronous (`GenServer.call`, issue #219 D22 — was fire-and-forget
+  Synchronous (`GenServer.call`, issue #209 D22 — was fire-and-forget
   `GenServer.cast` before this): the caller (`agents_channel.ex`'s spawn
   handler) MUST have this write committed before it broadcasts `spawn` to
   the runner, or a wrapper that joins immediately after launch can race
@@ -107,11 +107,11 @@ defmodule KaoiroServer.AgentDirectory do
   broadcast, closes that window: by the time any wrapper process can
   possibly exist and join, the entry is already committed.
 
-  Create-only (issue #197 段階3, ふじ MF-2 レビュー指摘): an `agent_id`
+  Create-only (issue #187 段階3, ふじ MF-2 レビュー指摘): an `agent_id`
   that already has an entry is left untouched, unconditionally — this
   call never overwrites an existing entry's `persona_id` / `display_name`
   / `revision`, even when the incoming values differ from what is
-  stored. Before this fix (predating issue #219), a duplicate/delayed
+  stored. Before this fix (predating issue #209), a duplicate/delayed
   `record/3` for an existing id (e.g. a retried or racing spawn call)
   bumped `revision` and overwrote the entry; since `rename/3` ALSO bumps
   `revision`, a stray delayed `record` landing after a `rename` could
@@ -144,7 +144,7 @@ defmodule KaoiroServer.AgentDirectory do
   agent, or nil. `last_seen` is nil until the wrapper's first envelope
   after the current process start (fresh load / restart). Callers that
   need the canonical persona (name / sprite_set) for display join
-  `persona_id` against `PersonaAssets` themselves (issue #219 D19) — this
+  `persona_id` against `PersonaAssets` themselves (issue #209 D19) — this
   function never does that join.
   """
   def get(agent_id, server \\ __MODULE__) do
@@ -157,8 +157,8 @@ defmodule KaoiroServer.AgentDirectory do
   end
 
   @doc """
-  Renames the agent's `display_name` (issue #197 段階3 D12, revised
-  issue #219 D19/D23 — the mutated field is `display_name`, never
+  Renames the agent's `display_name` (issue #187 段階3 D12, revised
+  issue #209 D19/D23 — the mutated field is `display_name`, never
   canonical persona data). `display_name` must already be
   trimmed/validated by the caller (`agents_channel.ex`'s rename
   validation, same 64-grapheme / control-char rule spawn-time custom
@@ -166,7 +166,7 @@ defmodule KaoiroServer.AgentDirectory do
   does not re-validate the value's shape (same division of labor
   `record/4` already has with its caller-built arguments).
 
-  Synchronous (`GenServer.call`, same as `record/4` since issue #219 D22
+  Synchronous (`GenServer.call`, same as `record/4` since issue #209 D22
   — see that function's own doc) for two reasons: the caller needs the
   bumped `revision` back before it can relay the rename to the wrapper
   (D15 — the revision is what lets a wrapper drop an out-of-order
@@ -178,7 +178,7 @@ defmodule KaoiroServer.AgentDirectory do
   entry), `{:error, :not_found}` for an agent_id this ledger has never
   recorded (never spawned, or already deleted), or `{:error,
   :revision_exhausted}` when the entry's current revision already sits
-  at `@max_safe_revision` (issue #197 段階3, ふじ MF-5 レビュー指摘):
+  at `@max_safe_revision` (issue #187 段階3, ふじ MF-5 レビュー指摘):
   bumping it further would emit a `revision` outside the wire's
   safe-integer domain, which every wrapper's narrow drops on receipt —
   permanently stranding that agent's persona. Fail-closed: the entry is
@@ -234,12 +234,12 @@ defmodule KaoiroServer.AgentDirectory do
     end
   end
 
-  # Current shape (issue #219 D19): `persona_id` and `display_name` are
+  # Current shape (issue #209 D19): `persona_id` and `display_name` are
   # independent scalars, no persona map. The persisted `revision` is
   # re-validated on load, not trusted as-is (ふじ MF-4/MF-5 レビュー指
-  # 摘, carried over from issue #197 段階3) — see `clamp_revision/1`.
+  # 摘, carried over from issue #187 段階3) — see `clamp_revision/1`.
   #
-  # `agent_id` MUST also be binary (issue #219 MF-6, ふじ最終レビュー指
+  # `agent_id` MUST also be binary (issue #209 MF-6, ふじ最終レビュー指
   # 摘): round 1's catch-all fail-soft only covers a shape mismatch on
   # the OTHER 3 elements — without this guard, a non-binary agent_id
   # (e.g. a corrupted map/atom) would still match this clause, land in
@@ -251,12 +251,12 @@ defmodule KaoiroServer.AgentDirectory do
     load_entry(acc, agent_id, persona_id, revision, display_name)
   end
 
-  # Legacy shape (issue #197 段階3): a persona MAP was baked into the
+  # Legacy shape (issue #187 段階3): a persona MAP was baked into the
   # entry instead of a bare `persona_id` reference, and `persona["name"]`
   # carried whatever `apply_custom_name/2` / `rename/3` had already
-  # destructively written over the pack's canonical name (issue #219's
+  # destructively written over the pack's canonical name (issue #209's
   # whole premise — see the issue body's "現物での裏付け"). Migration is
-  # UNCONDITIONAL, never a guess (issue #219 D21):
+  # UNCONDITIONAL, never a guess (issue #209 D21):
   #
   #   - `display_name` := the old `persona["name"]` value, verbatim. This
   #     can never be wrong in a way that loses information — whatever the
@@ -266,7 +266,7 @@ defmodule KaoiroServer.AgentDirectory do
   #   - `persona_id` := the old `persona["id"]` value, verbatim — this
   #     was always a stable reference, migration does not touch it.
   #   - The canonical name/sprite_set the old entry carried is DISCARDED,
-  #     not migrated anywhere: issue #219 D19 stops storing canonical
+  #     not migrated anywhere: issue #209 D19 stops storing canonical
   #     data in this ledger at all. Every reader that wants canonical
   #     data now joins `persona_id` against the pack's CURRENT manifest
   #     (`PersonaAssets`) instead of trusting a frozen snapshot — this is
@@ -274,10 +274,10 @@ defmodule KaoiroServer.AgentDirectory do
   #     might not equal the current pack name (ふじ's rejected short-cut:
   #     re-resolving `persona.id` against the manifest to DECIDE whether
   #     the old value was "the pack name" or "a custom name" is not
-  #     attempted here, or anywhere — see the issue #219 spec-gate D19/D21
+  #     attempted here, or anywhere — see the issue #209 spec-gate D19/D21
   #     decision for why guessing was rejected outright).
   #
-  #   `"name"` MUST be present and binary (issue #219 MF-5, クロエ実測検
+  #   `"name"` MUST be present and binary (issue #209 MF-5, クロエ実測検
   #   証): a record with `"id"` but no usable `"name"` does NOT fall back
   #   to inventing a display_name from `persona_id` — that would be
   #   exactly the kind of guess D21 already rejected for the canonical
@@ -285,7 +285,7 @@ defmodule KaoiroServer.AgentDirectory do
   #   fails to match this clause (and the 2-tuple clause below) and falls
   #   through to the catch-all, which skips it with a warning.
   #
-  #   `agent_id` MUST also be binary (issue #219 MF-6, ふじ最終レビュー
+  #   `agent_id` MUST also be binary (issue #209 MF-6, ふじ最終レビュー
   #   指摘) — this clause's `Logger.warning` call below string-interpolates
   #   `#{agent_id}` directly (`Kernel.to_string/1`, no `String.Chars`
   #   implementation for a bare map), so a non-binary agent_id would not
@@ -295,19 +295,19 @@ defmodule KaoiroServer.AgentDirectory do
   #   with it — precisely the regression round 1's catch-all fail-soft
   #   was meant to close, reopened on this one path (measured directly:
   #   `elixir -e 'IO.puts("x #{%{bad: true}}")'` raises;
-  #   `bddbcec`'s pre-#219 `load_fold` never interpolated `agent_id` at
+  #   `bddbcec`'s pre-#209 `load_fold` never interpolated `agent_id` at
   #   all, so it never had this failure mode).
   defp load_fold({agent_id, %{"id" => persona_id, "name" => display_name}, revision}, acc)
        when is_binary(agent_id) and is_binary(persona_id) and is_binary(display_name) do
     load_legacy_entry(acc, agent_id, persona_id, revision, display_name)
   end
 
-  # Even older shape (pre issue #197 段階3, no revision at all) — same
+  # Even older shape (pre issue #187 段階3, no revision at all) — same
   # unconditional migration and same `"name"` presence/binary requirement
-  # as the 3-tuple clause above (issue #219 MF-5), starting revision at
+  # as the 3-tuple clause above (issue #209 MF-5), starting revision at
   # @initial_revision (the same baseline `record/4` gives every
-  # freshly-created entry, issue #219 MF-2). Also requires `agent_id`
-  # binary for the same reason as the 3-tuple clause above (issue #219
+  # freshly-created entry, issue #209 MF-2). Also requires `agent_id`
+  # binary for the same reason as the 3-tuple clause above (issue #209
   # MF-6) — this clause's own `Logger.warning` below interpolates
   # `agent_id` too.
   defp load_fold({agent_id, %{"id" => persona_id, "name" => display_name}}, acc)
@@ -315,9 +315,9 @@ defmodule KaoiroServer.AgentDirectory do
     load_legacy_entry(acc, agent_id, persona_id, @initial_revision, display_name)
   end
 
-  # Catch-all (issue #219 must-fix, クロエ実測検証 2026-08-11): none of the
+  # Catch-all (issue #209 must-fix, クロエ実測検証 2026-08-11): none of the
   # 3 shapes above matched — a corrupted DETS record, or some other shape
-  # entirely. The 3 clauses above are now all guard-gated (issue #219
+  # entirely. The 3 clauses above are now all guard-gated (issue #209
   # D21 replaced the old unguarded 2-tuple/3-tuple clauses with
   # `is_binary` guards), so an unrecognised record no longer matches one
   # of them by accident — it falls through to here instead of raising
@@ -373,9 +373,9 @@ defmodule KaoiroServer.AgentDirectory do
   # `revision + 1` on whatever this returns, so a non-integer would crash
   # that arithmetic, and an out-of-domain value would carry forward into a
   # sync push every wrapper's narrow drops on receipt, permanently
-  # stranding that agent's persona (issue #197 段階3, ふじ MF-4/MF-5 レビュ
+  # stranding that agent's persona (issue #187 段階3, ふじ MF-4/MF-5 レビュ
   # ー指摘). This ALSO lifts a legitimately-persisted `0` (the pre-issue-
-  # #219 MF-2 baseline) up to @initial_revision on load — see the module
+  # #209 MF-2 baseline) up to @initial_revision on load — see the module
   # doc's `@initial_revision` note for why a bare 0 can no longer be
   # trusted as a safe first-sync-push value for a legacy wrapper build.
   defp clamp_revision(revision) do
@@ -406,7 +406,7 @@ defmodule KaoiroServer.AgentDirectory do
       nil ->
         # Fresh agent_id — the only expected case (agent_id is newly
         # allocated per spawn, ADR-0024 D3). Starts revision at
-        # @initial_revision (issue #219 MF-2 — see module doc for why
+        # @initial_revision (issue #209 MF-2 — see module doc for why
         # not 0).
         :ok =
           :dets.insert(state.table, {agent_id, persona_id, @initial_revision, display_name})
@@ -421,7 +421,7 @@ defmodule KaoiroServer.AgentDirectory do
         {:reply, :ok, %{state | entries: Map.put(state.entries, agent_id, entry)}}
 
       _existing ->
-        # Create-only (issue #197 段階3, ふじ MF-2 レビュー指摘): an
+        # Create-only (issue #187 段階3, ふじ MF-2 レビュー指摘): an
         # existing entry is never touched by `record/4` again, matched or
         # not — see `record/4`'s own doc for why. `rename/3` is the sole
         # mutation path once an entry exists.
@@ -447,7 +447,7 @@ defmodule KaoiroServer.AgentDirectory do
       nil ->
         {:reply, {:error, :not_found}, state}
 
-      # Fail-closed wire-domain ceiling (issue #197 段階3, ふじ MF-5
+      # Fail-closed wire-domain ceiling (issue #187 段階3, ふじ MF-5
       # レビュー指摘): at `@max_safe_revision`, bumping further would
       # emit a revision past every wrapper's sync-push narrow. Reject
       # explicitly — no DETS write, no broadcast, no relay — rather than
@@ -463,7 +463,7 @@ defmodule KaoiroServer.AgentDirectory do
         new_entry = %{entry | display_name: display_name, revision: new_revision}
         new_entries = Map.put(state.entries, agent_id, new_entry)
 
-        # D16/MF-3 (issue #197 段階3, ふじ レビュー指摘): broadcasting
+        # D16/MF-3 (issue #187 段階3, ふじ レビュー指摘): broadcasting
         # from INSIDE this GenServer — synchronously, as part of the SAME
         # serialized call that performs the write — is what guarantees
         # broadcast order matches write order. The previous design
@@ -476,7 +476,7 @@ defmodule KaoiroServer.AgentDirectory do
         # AFTER a newer one.
         #
         # The broadcast payload here is the RAW `persona_id` +
-        # `display_name` entries — no canonical join (issue #219 D19).
+        # `display_name` entries — no canonical join (issue #209 D19).
         # Joining `persona_id` against `PersonaAssets` here would give
         # this module a PersonaAssets dependency, which the whole point
         # of D19 is to avoid (persistence-layer -> asset-layer is the

@@ -63,7 +63,7 @@ interface ChannelCallbacks {
  *  `Record<keyof ChannelCallbacks, string>` requires EVERY key, so adding a
  *  command to `ChannelCallbacks` without listing its event here is a compile
  *  error — which is how the version check below stays impossible to forget
- *  (issue #181: "各ハンドラに散らすと漏れる"). */
+ *  (issue #171: "各ハンドラに散らすと漏れる"). */
 export const CONTROL_EVENT_BY_CALLBACK: Record<keyof ChannelCallbacks, string> =
   {
     onSpawn: "spawn",
@@ -110,8 +110,8 @@ function describeVersion(value: unknown): string {
  *  An ABSENT version warns too. The server stamps "0" on every runner-bound
  *  message — the four it relays and the three it builds itself — so a missing
  *  field means that invariant broke, not that some sender has yet to catch
- *  up. The server's relay-side check treats absent the same way since #182
- *  gave the dashboard its own stamp, so both hops now agree (#181 / #182). */
+ *  up. The server's relay-side check treats absent the same way since #172
+ *  gave the dashboard its own stamp, so both hops now agree (#171 / #172). */
 export function warnOnVersionMismatch(
   event: string,
   payload: unknown,
@@ -385,7 +385,7 @@ export class RunnerLink {
     // Operator lifecycle control, relayed by the server onto this topic
     // (ADR-0023). Payloads are forwarded opaquely to the supervisor, which
     // validates them — but the ADR-0015 version check runs for all of them
-    // here, before the payload leaves this layer (issue #181).
+    // here, before the payload leaves this layer (issue #171).
     bindControlEvents(channel, () => this.#callbacks);
 
     channel

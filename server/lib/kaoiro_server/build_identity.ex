@@ -1,6 +1,6 @@
 defmodule KaoiroServer.BuildIdentity do
   @moduledoc """
-  Shared value-domain validation for build identity (issue #228 round 2,
+  Shared value-domain validation for build identity (issue #218 round 2,
   ふじ MF-3 差し戻し): `revision` is either the literal `"unknown"` or a
   lowercase 40-hex-digit git SHA; `dirty` is a plain boolean; `version` is
   the CalVer project version and `channel` is `"dev"` or `"release"`.
@@ -14,7 +14,7 @@ defmodule KaoiroServer.BuildIdentity do
   rejected at its boundary (structural validation) — this module never
   judges whether a well-formed value is the "right" one; SHA equality
   checking against another artifact stays observability-only elsewhere
-  (dashboard warning), never enforcement (issue #230's scope).
+  (dashboard warning), never enforcement (issue #220's scope).
   """
 
   @revision_re ~r/\A[0-9a-f]{40}\z/

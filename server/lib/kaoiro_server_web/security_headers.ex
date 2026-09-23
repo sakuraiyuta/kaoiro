@@ -1,6 +1,6 @@
 defmodule KaoiroServerWeb.SecurityHeaders do
   @moduledoc """
-  Browser hardening headers on every response (issue #155).
+  Browser hardening headers on every response (issue #145).
 
   The VPN-only direct deployment (no nginx, plain HTTP — see
   `docs/specs/deployment.md` 1.5) has no reverse proxy left to add
@@ -43,7 +43,7 @@ defmodule KaoiroServerWeb.SecurityHeaders do
   `'self'` alone is not enough: it does not resolve to the `ws:`/`wss:`
   variant of the page origin in every browser, so the socket origin is
   listed explicitly. But `:check_origin` and `connect-src` sit on
-  opposite trust axes (ふじ advisory on issue #155): the former lists
+  opposite trust axes (ふじ advisory on issue #145): the former lists
   every origin a browser may open a socket FROM, the latter every
   destination THIS page may connect TO. Copying the whole list would put
   `ws://localhost:4000` into a page served to an external host.
@@ -129,7 +129,7 @@ defmodule KaoiroServerWeb.SecurityHeaders do
   scheme becomes `https` while the port stays at the internal listen
   port — a proxied request looks like `https://host:4000` and never
   matches the `https://host` in `:check_origin` (ふじ 2nd review
-  must-fix on issue #155; left unfixed, `connect-src` collapses to
+  must-fix on issue #145; left unfixed, `connect-src` collapses to
   `'self'` and the socket is CSP-blocked in the browsers that do not
   resolve `'self'` to `wss:`).
 

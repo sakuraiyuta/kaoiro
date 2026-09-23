@@ -22,7 +22,7 @@ defmodule KaoiroServer.TokenDenylist do
   revoke ack and the follow-up `revoked` / `agent_deleted` broadcast
   never fire ahead of disk persistence, so a crash inside the persist
   window cannot silently drop the revocation. `ClearWatermarks` also
-  adopted this synchronous+fsync policy (ふじ #109 M7-a must-fix,
+  adopted this synchronous+fsync policy (ふじ #106 M7-a must-fix,
   2026-07-23) — the only remaining lazy-sync sibling is
   `PermissionModes`, and only because a UI-reflector pick that is not
   yet on disk can be re-asserted from the same operator picker on the
@@ -50,7 +50,7 @@ defmodule KaoiroServer.TokenDenylist do
   returns only after the DETS insert AND the following `:dets.sync/1`
   return `:ok`, so an operator ack (or `delete_agent` broadcast) that
   follows this call is safe against a crash inside the persist window.
-  Same policy `ClearWatermarks` uses (ふじ #109 M7-a must-fix,
+  Same policy `ClearWatermarks` uses (ふじ #106 M7-a must-fix,
   2026-07-23); the only remaining lazy-sync sibling is
   `PermissionModes` (UI-reflector, re-assertable from the same
   operator picker on next connect). The denylist IS the per-agent
