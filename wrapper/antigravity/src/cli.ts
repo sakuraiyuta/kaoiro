@@ -63,11 +63,10 @@ export interface AntigravityCliDependencies {
 // (each not-yet-started queued turn gets a synthetic `onTurnEnd` with
 // `terminal: false`) -- never via the ACTIVE-turn path, whose own
 // `#drainTurns` finally block skips the whole onTurnEnd call once
-// `#watchdogFailStopped` is set (kohaku round-1 implementation review,
-// issue #396: an earlier version of this comment had the two reversed).
-// Because the cancelling `onTurnEnd` call belongs to an unrelated queued
-// turn, not the reservation's own owner, the wording below names the host
-// rather than "the turn that reserved it".
+// `#watchdogFailStopped` is set. Because the cancelling `onTurnEnd` call
+// belongs to an unrelated queued turn, not the reservation's own owner,
+// the wording below names the host rather than "the turn that reserved
+// it".
 function cancellationCause(cancellation: {
   kind: "watchdog_fail_stop" | "interrupt";
 }): string {
