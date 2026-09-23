@@ -17,12 +17,12 @@ unit / launchd LaunchAgent); this section covers only points specific to
 multi-host deployment.
 
 ```sh
-# ビルドホスト(1 台)で対象アーキテクチャごとに生成
+# Generate per target architecture on the build host (1 machine)
 ./scripts/build-runner-tarball.sh --target linux-x64
 ./scripts/build-runner-tarball.sh --target darwin-arm64
 
-# 各エージェントホストへ転送し、release として install する
-# (展開先は <install-root>/releases/<rev>/、ADR-0018 2026-08-16 改訂)
+# Transfer to each agent host and install as a release
+# (expanded destination is <install-root>/releases/<rev>/, revised 2026-08-16 in ADR-0018)
 ./kaoiro-runner-install.sh kaoiro-runner-<rev>-linux-x64.tar.gz
 ./kaoiro-runner-switch.sh <release-id>
 ```
@@ -35,7 +35,7 @@ Afterward use `<install-root>/current/deploy/`. [Runner artifacts](../reference/
 ### Run as a service
 
 Templates for systemd user units (Linux) and launchd LaunchAgents (macOS) ship
-in `runner/deploy/`. See "常駐化(systemd / launchd)" below for installation,
+in `runner/deploy/`. See "Running as a service (systemd / launchd)" below for installation,
 exit codes, and troubleshooting. In the release profile set `@@DEPLOY_DIR@@` to
 `<install-root>/current/deploy`; starting the unit through the symlink is what
 makes switching atomic. **Restarting a runner (including service restart) stops
@@ -43,108 +43,107 @@ all wrappers beneath it** (`supervisor.stopAll()` on SIGTERM), so
 `systemctl --user restart` / `launchctl kickstart -k` with active agents
 disconnects every agent on that host.
 
-## 常駐化(systemd / launchd)
+## Running as a service (systemd / launchd)
 
-ホスト常駐用のサービス定義は [`deploy/`](../../runner/deploy) にある(issue #136)。
+Service definitions for host residency are in [`deploy/`](../../runner/deploy) (issue #136).
 
-**初回設置は `kaoiro-runner-bootstrap.sh <tarball>` の1本で完結する**(issue
-#314): wizard(対話はここだけ) → install → switch → unit/plist 配置 →
-enable/start を順に行う。OS は `uname -s` で自動判定(Linux は systemd user
-unit、macOS は launchd LaunchAgent)。冪等 — 既に config があれば wizard を
-スキップし(`--reconfigure` で強制、既存 config は退避してから上書き)、
-unit/plist の内容が変わっていなければ何もしない。稼働中サービスを黙って
-再起動することはなく、変更があれば再起動コマンドを表示するだけに留める。
-`--dry-run` で計画のみ表示。以下は個別 script を手で叩く場合の参照(更新は
-対象外、`kaoiro-runner-bootstrap.sh` は初回専用)。
+**Initial installation is completed entirely with `kaoiro-runner-bootstrap.sh <tarball>`** (issue
+#314): wizard (the only interactive step) → install → switch → unit/plist placement →
+enable/start in order. The OS is automatically detected via `uname -s` (systemd user
+unit for Linux, launchd LaunchAgent for macOS). It is idempotent — if config already exists, it
+skips the wizard (forced with `--reconfigure`, backing up existing config before overwriting),
+and does nothing if the unit/plist content has not changed. It never restarts running services
+silently, but only prints the restart command if changes were made.
+`--dry-run` shows the plan only. The following is reference for running individual scripts manually (updates
+are out of scope; `kaoiro-runner-bootstrap.sh` is for initial installation only).
 
-> **既に稼働している配備を新しいバージョンへ更新する手順**は
+> The canonical sources for **updating an already running deployment to a new version** are
 > [docs/operations/server-update-and-rollback.md](server-update-and-rollback.md)
-> (server 側) と
+> (server side) and
 > [docs/operations/runner-update-and-rollback.md](runner-update-and-rollback.md)
-> (runner 側) が正本。本節は初回の設置手順のみを扱う。更新は停止順序・DETS
-> バックアップ・失敗時の復旧が絡むため、ここには書かない。
+> (runner side). This section covers only the initial installation procedure. Updates involve shutdown order, DETS
+> backup, and recovery on failure, so they are not described here.
 
-| ファイル | 用途 |
+| File | Purpose |
 |---|---|
-| [`deploy/kaoiro-runner-bootstrap.sh`](../../runner/deploy/kaoiro-runner-bootstrap.sh) | 初回設置の単一 entry point。wizard → install → switch → unit/plist → enable/start |
-| [`deploy/kaoiro-runner-launch.sh`](../../runner/deploy/kaoiro-runner-launch.sh) | 起動シム。env ファイル読込・config 解決・`exec` を集約 |
-| [`deploy/kaoiro-runner.service`](../../runner/deploy/kaoiro-runner.service) | systemd **user** unit(Linux) |
-| [`deploy/com.kaoiro.runner.plist`](../../runner/deploy/com.kaoiro.runner.plist) | launchd **LaunchAgent**(macOS) |
-| [`deploy/runner.env.example`](../../runner/deploy/runner.env.example) | `KAOIRO_RUNNER_TOKEN` 等を置く env ファイルの雛形 |
-| [`deploy/kaoiro-runner-install.sh`](../../runner/deploy/kaoiro-runner-install.sh) | tarball を `releases/<rev>/` へ install する(稼働中の release には触れない) |
-| [`deploy/kaoiro-runner-switch.sh`](../../runner/deploy/kaoiro-runner-switch.sh) | `current` を atomic に切り替える / `--rollback` |
-| [`deploy/kaoiro-runner-update.sh`](../../runner/deploy/kaoiro-runner-update.sh) | build → install → 停止 → 切替 → 起動 → 確認 → prune を一括で行う。`--detach` で自滅を避ける |
-| [`deploy/kaoiro-runner-common.sh`](../../runner/deploy/kaoiro-runner-common.sh) | 上記 3 本が source する共通処理(install root 解決・lock・symlink swap) |
+| [`deploy/kaoiro-runner-bootstrap.sh`](../../runner/deploy/kaoiro-runner-bootstrap.sh) | Single entry point for initial installation. wizard → install → switch → unit/plist → enable/start |
+| [`deploy/kaoiro-runner-launch.sh`](../../runner/deploy/kaoiro-runner-launch.sh) | Launch shim. Consolidates env file loading, config resolution, and `exec` |
+| [`deploy/kaoiro-runner.service`](../../runner/deploy/kaoiro-runner.service) | systemd **user** unit (Linux) |
+| [`deploy/com.kaoiro.runner.plist`](../../runner/deploy/com.kaoiro.runner.plist) | launchd **LaunchAgent** (macOS) |
+| [`deploy/runner.env.example`](../../runner/deploy/runner.env.example) | Template env file for `KAOIRO_RUNNER_TOKEN`, etc. |
+| [`deploy/kaoiro-runner-install.sh`](../../runner/deploy/kaoiro-runner-install.sh) | Installs tarball to `releases/<rev>/` (does not touch running releases) |
+| [`deploy/kaoiro-runner-switch.sh`](../../runner/deploy/kaoiro-runner-switch.sh) | Atomically switches `current` / `--rollback` |
+| [`deploy/kaoiro-runner-update.sh`](../../runner/deploy/kaoiro-runner-update.sh) | Performs build → install → stop → switch → start → verify → prune in one go. Avoids self-termination with `--detach` |
+| [`deploy/kaoiro-runner-common.sh`](../../runner/deploy/kaoiro-runner-common.sh) | Common logic sourced by the three scripts above (install root resolution, lock, symlink swap) |
 
-**user サービスとして動かす**(root の system service にはしない)。runner は
-ホストユーザの `~/.claude` / `~/.codex` の認証情報を読み、そのユーザのリポジトリ
-内で wrapper を spawn するため([ADR-0023](../adr/0023-host-runner-architecture.md))。
+**Run as a user service** (not as a root system service). This is because the runner reads the
+host user's `~/.claude` / `~/.codex` credentials and spawns wrappers inside that user's repositories
+([ADR-0023](../adr/0023-host-runner-architecture.md)).
 
-**トークンはユニット/plist に書かない**。起動シムが 0600 の env ファイルから
-読む。`token` は Phoenix transport のログでも `token=<REDACTED>` に伏せられる。
+**Do not write tokens in the unit/plist**. The launch shim reads from a 0600 env file.
+`token` is also masked as `token=<REDACTED>` in Phoenix transport logs.
 
-env ファイルは起動シムに **`source` される**ため、シェルとして妥当な内容でなければ
-ならない(`KEY=VALUE` の羅列、`=` の前後に空白を入れない、空白を含む値は
-クォート)。構文が壊れているとシムは exit 78 で止まる([Runner artifacts](../reference/deployment/runner-artifacts.md#restart-policy-and-exit-codes)「再起動ポリシーと
-終了コード」参照)。**0600 はシムでは検査しない**(モード確認の可搬性が OS 依存で、
-ACL 運用のホストを弾いてしまうため)ので、運用側で担保する。
+Because the env file is **`source`d** by the launch shim, its content must be valid shell syntax
+(a series of `KEY=VALUE`, no whitespace around `=`, quotes around values containing
+spaces). If the syntax is broken, the shim exits with 78 (see [Runner artifacts](../reference/deployment/runner-artifacts.md#restart-policy-and-exit-codes) "Restart
+policy and exit codes"). **Mode 0600 is not checked by the shim** (because portable mode checks are OS-dependent and
+would reject hosts using ACLs), so it must be ensured by operations.
 
-### 共通の準備
+### Common preparation
 
-以下のコマンドはすべて**リポジトリルートで実行する**(パスが相対のため)。
+Run all of the following commands **at the repository root** (because paths are relative).
 
 ```sh
 pnpm install --frozen-lockfile
-pnpm -C wrapper build && pnpm -C runner build   # dist/cli.js を作る
+pnpm -C wrapper build && pnpm -C runner build   # build dist/cli.js
 
-# 設定は runner/README.md の「設定ウィザード」で作るのが早い:
+# Generating config with the setup wizard in runner/README.md is fastest:
 ./runner/deploy/kaoiro-runner-setup.sh
 
-# 手で置く場合(Linux: ${XDG_CONFIG_HOME:-~/.config}/kaoiro、
-#              macOS: ~/Library/Application Support/kaoiro)
-conf="${XDG_CONFIG_HOME:-$HOME/.config}/kaoiro"   # macOS は上記に読み替え
+# When placing manually (Linux: ${XDG_CONFIG_HOME:-~/.config}/kaoiro,
+#                        macOS: ~/Library/Application Support/kaoiro)
+conf="${XDG_CONFIG_HOME:-$HOME/.config}/kaoiro"   # adjust as above on macOS
 mkdir -p "$conf"
 cp runner/runner.config.example.json "$conf/runner.config.json"
 cp runner/deploy/runner.env.example "$conf/runner.env"
 chmod 600 "$conf/runner.env"
-# runner.config.json の host_id / server_url / cwd_allowlist を実環境に合わせ、
-# runner.env に KAOIRO_RUNNER_TOKEN を書く
+# adjust host_id / server_url / cwd_allowlist in runner.config.json to the actual environment,
+# and write KAOIRO_RUNNER_TOKEN in runner.env
 ```
 
-`server_url` の env 上書き (`KAOIRO_RUNNER_SERVER_URL`) は
-[Runner configuration](../reference/configuration/runner.md) が正本。
+[Runner configuration](../reference/configuration/runner.md) is canonical for the
+`server_url` env override (`KAOIRO_RUNNER_SERVER_URL`).
 
-`kaoiro-runner-setup.sh` が尋ねる項目・生成先・検証規則は
-[Setup wizards](../reference/configuration/setup-wizards.md) が正本。
+[Setup wizards](../reference/configuration/setup-wizards.md) is canonical for the
+items asked, destinations, and validation rules in `kaoiro-runner-setup.sh`.
 
-### 設置形態(issue #219、[ADR-0018](../adr/0018-runner-distribution.md))
+### Deployment forms (issue #219, [ADR-0018](../adr/0018-runner-distribution.md))
 
-**source origin(どこから持ってくるか)と activation layout(どう置いて
-起動するか)は別の軸である**。後者は release profile なら 1 通りしかなく、
-`@@DEPLOY_DIR@@` に何を入れるかで決まる。
+**Source origin (where it is obtained from) and activation layout (how it is placed and
+started) are separate axes**. The latter has only one form under the release profile,
+determined by what is set in `@@DEPLOY_DIR@@`.
 
-| 形態 | `@@DEPLOY_DIR@@` | 用途 |
+| Form | `@@DEPLOY_DIR@@` | Purpose |
 |---|---|---|
-| **checkout 直挿し** | `<repo>/runner/deploy` | 開発時の手起動のみ。checkout がそのまま live path |
-| **local-build release** | `<install-root>/current/deploy` | **本番**。repo で tarball を作り、release として install する |
-| **Gitea release** | `<install-root>/current/deploy` | **本番**。配布 tarball を release として install する |
+| **Checkout-direct** | `<repo>/runner/deploy` | Manual launch during development only. The checkout is the live path directly |
+| **Local-build release** | `<install-root>/current/deploy` | **Production**. Build tarball in repo and install as release |
+| **Gitea release** | `<install-root>/current/deploy` | **Production**. Install distributed tarball as release |
 
-**本番ホストは release profile にする**。checkout を直挿ししたまま常駐させると、
-更新のたびに稼働中の `dist` を上書きすることになり、runner が新旧の混ざった
-wrapper を掴みうる(runner は wrapper を spawn するたびに on-disk の
-artifact を解決し、codex は初回 spawn まで lazy に解決する)。release
-profile では build も展開も `releases/<rev>/` の中で完結し、稼働中の
-release には一切触れない。
+**Production hosts must use the release profile**. Keeping a checkout-direct service resident
+overwrites `dist` in the active checkout on every update, so the runner can capture a mixed
+old/new wrapper (the runner resolves on-disk artifacts each time it spawns a wrapper, and
+codex resolves lazily until the first spawn). Under the release profile, building and
+extraction are completely self-contained within `releases/<rev>/`, never touching a running
+release.
 
-移行手順・更新手順・rollback は
 [docs/operations/runner-update-and-rollback.md](runner-update-and-rollback.md)
-が正本。
+is canonical for migration, update procedures, and rollback.
 
-### Linux(systemd user unit)
+### Linux (systemd user unit)
 
-**以下は release profile(本番)の設置例**。checkout 直挿しで開発時に手起動
-したい場合だけ、`$install_root/current/deploy` を `$PWD/runner/deploy` に
-読み替える。
+**The following is an installation example for the release profile (production)**. Only
+when manually launching during development with checkout-direct, replace
+`$install_root/current/deploy` with `$PWD/runner/deploy`.
 
 ```sh
 install_root="${XDG_DATA_HOME:-$HOME/.local/share}/kaoiro"
@@ -153,27 +152,28 @@ sed "s|@@DEPLOY_DIR@@|$install_root/current/deploy|" \
   > ~/.config/systemd/user/kaoiro-runner.service
 systemctl --user daemon-reload
 systemctl --user enable --now kaoiro-runner
-sudo loginctl enable-linger "$USER"   # ログインなしで boot 起動させる
+sudo loginctl enable-linger "$USER"   # Enable boot start without login
 ```
 
-- 状態: `systemctl --user status kaoiro-runner`
-- ログ: `journalctl --user -u kaoiro-runner -f`
-- `enable-linger` を忘れると boot 時に起動しない(ログイン時のみ起動)。
-  さらに **SSH セッションのたびに user systemd インスタンス自体が再起動され、
-  enabled unit も道連れで再起動される**(issue #142 実機検証で確認、2026-07-26)。
-  再起動ポリシー(`Restart=on-failure` / `RestartPreventExitStatus=78`)自体は
-  1 つの user systemd インスタンス内では正しく機能するが、`enable-linger` なし
-  のホストを SSH 越しに検証すると、接続のたびに unit が再起動しているように
-  見えて紛らわしい。「起動 → 異常時再起動」を確認するときは 1 回の SSH
-  セッション内で完結させ、接続を跨いだタイムスタンプ変化だけで再起動と
-  誤認しないこと。
+- Status: `systemctl --user status kaoiro-runner`
+- Logs: `journalctl --user -u kaoiro-runner -f`
+- Forgetting `enable-linger` prevents starting at boot (starts only on login).
+  Furthermore, **the user systemd instance itself restarts on each SSH session,
+  restarting enabled units along with it** (verified on actual hardware in issue
+  #142, 2026-07-26). The restart policy (`Restart=on-failure` /
+  `RestartPreventExitStatus=78`) functions correctly within a single user systemd
+  instance, but verifying over SSH on a host without `enable-linger` looks
+  confusingly as if the unit restarts on every connection. When verifying "start
+  → restart on failure", complete it within a single SSH session, and do not
+  mistake timestamp changes across connections for a restart.
 
-### macOS(launchd LaunchAgent)
+### macOS (launchd LaunchAgent)
 
-macOS の orchestration は未検証(後続 issue
-[#242](https://github.com/sakuraiyuta/kaoiro/issues/242))。
-release layout と install / switch は OS 共通に動くが、`@@DEPLOY_DIR@@` を
-`current/deploy` へ向けた運用の実機確認は済んでいない。
+macOS orchestration is unverified (follow-up issue
+[#242](https://github.com/sakuraiyuta/kaoiro/issues/242)).
+The release layout and install / switch work across operating systems, but operational validation
+on physical hardware with `@@DEPLOY_DIR@@` pointing to `current/deploy` has not
+been completed.
 
 ```sh
 mkdir -p ~/Library/Logs/kaoiro
@@ -185,48 +185,49 @@ launchctl bootstrap gui/"$(id -u)" \
   ~/Library/LaunchAgents/com.kaoiro.runner.plist
 ```
 
-- 停止/解除: `launchctl bootout gui/"$(id -u)"/com.kaoiro.runner`
-- 再起動: `launchctl kickstart -k gui/"$(id -u)"/com.kaoiro.runner`
-- ログ: `~/Library/Logs/kaoiro/runner.log`
-- `launchctl load` / `unload` は deprecated。`bootstrap` / `bootout` を使う
-- plist は `~` やシェル変数を展開しないため、絶対パスへ置換してから配置する
-- **launchd はログをローテートしない**。長期稼働ホストでは `newsyslog.d` に
-  設定を追加するか、定期的に切り詰める
+- Stop / unload: `launchctl bootout gui/"$(id -u)"/com.kaoiro.runner`
+- Restart: `launchctl kickstart -k gui/"$(id -u)"/com.kaoiro.runner`
+- Logs: `~/Library/Logs/kaoiro/runner.log`
+- `launchctl load` / `unload` are deprecated; use `bootstrap` / `bootout`
+- Because plist does not expand `~` or shell variables, substitute with absolute paths before placing
+- **launchd does not rotate logs**. On long-running hosts, add configuration to `newsyslog.d` or
+  truncate periodically
 
-### 動作確認
+### Verification
 
-サービス登録前に起動シムだけを試せる。**`server_url` を到達不能な値にし、かつ
-`host_id` を実環境と衝突しない値にする**。二重に必要な理由:
+The launch shim can be tested alone before registering the service. **Set `server_url`
+to an unreachable value and `host_id` to a value that does not collide with the
+production environment**. Why both are required:
 
-- `server_url` を実サーバに向けたまま起動すると、そのサーバへ register して
-  しまう
-- `HostRegistry.register/4` は `host_id` をキーに entry を**上書き**し(runner_pid
-  も差し替わる)、切断時の `drop/3` は pid 一致で**エントリを削除**する。実 runner
-  は socket を維持している間 re-register しないため(`updateRegister` は config
-  reload 時のみ発火)、**同じ host_id で一瞬繋ぐだけで実ホストの登録が消える**。
-  host_id が違えば `server_url` を間違えても上書きは起きない
+- Starting with `server_url` pointing to the real server registers with that server
+- `HostRegistry.register/4` **overwrites** the entry keyed by `host_id` (also
+  replacing `runner_pid`), and `drop/3` on disconnect **deletes the entry** by
+  matching pid. Because the real runner does not re-register while maintaining
+  its socket (`updateRegister` fires only on config reload), **connecting even
+  momentarily with the same host_id deletes the real host's registration**. If
+  `host_id` differs, overwriting does not occur even if `server_url` is mistaken
 
 ```sh
 tmp=$(mktemp -d)
 python3 - "$tmp/runner.config.json" <<'PY'
 import json, sys, os
 cfg = json.load(open("runner/runner.config.example.json"))
-cfg["host_id"] = f"test-host-{os.urandom(3).hex()}"   # 実環境と衝突しない
-cfg["server_url"] = "ws://127.0.0.1:59999/runner"     # 到達不能にする
+cfg["host_id"] = f"test-host-{os.urandom(3).hex()}"   # Avoid colliding with real environment
+cfg["server_url"] = "ws://127.0.0.1:59999/runner"     # Make unreachable
 cfg["cwd_allowlist"] = [os.getcwd()]
 json.dump(cfg, open(sys.argv[1], "w"), indent=2)
 PY
 printf 'KAOIRO_RUNNER_TOKEN=dummy\n' > "$tmp/runner.env"
 chmod 600 "$tmp/runner.env"
 KAOIRO_RUNNER_DIR="$tmp" timeout 6 sh runner/deploy/kaoiro-runner-launch.sh
-# 接続エラーを出しつつ生存すれば OK(timeout の 124 で終了)
+# Surviving while emitting connection errors is OK (exits with timeout's 124)
 ```
 
-`timeout` は GNU coreutils のコマンドで、macOS には標準で入っていない。
-`brew install coreutils` で入る `gtimeout` に読み替えるか、`timeout` を外して
-Ctrl-C で止める。
+`timeout` is a GNU coreutils command, not installed by default on macOS.
+Either replace with `gtimeout` from `brew install coreutils`, or omit `timeout` and
+stop with Ctrl-C.
 
-設定不備の扱いも同じ手順で確認できる(いずれも exit 78):
+Handling of configuration errors can also be checked with the same procedure (both exit 78):
 
 ```sh
 KAOIRO_RUNNER_DIR=$(mktemp -d) sh runner/deploy/kaoiro-runner-launch.sh
@@ -234,67 +235,73 @@ KAOIRO_RUNNER_DIR="$tmp" KAOIRO_NODE=/nonexistent sh \
   runner/deploy/kaoiro-runner-launch.sh
 ```
 
-### nvm / fnm / asdf を使っている場合
+### When using nvm / fnm / asdf
 
-systemd user unit と launchd agent は最小の PATH で起動するため、
-`node` が見つからない。`runner.env` に絶対パスを書く:
+Because systemd user units and launchd agents start with a minimal PATH,
+`node` is not found. Write the absolute path in `runner.env`:
 
 ```sh
 KAOIRO_NODE=/home/you/.nvm/versions/node/v22.20.0/bin/node
 ```
 
-## 配布物の作成(tarball)
+## Creating distribution tarballs
 
-Node ランタイムだけを前提とする自己完結アーカイブを作る(issue #70、
-[ADR-0018](../adr/0018-runner-distribution.md) の 2026-07-25 改訂)。
-wrapper 一式・エンジン CLI(Claude Code / codex は platform 別 npm パッケージ
-として実体が入る)・ネイティブモジュールがすべて同梱されるため、**配布先で
-`pnpm install` も build も要らない**。
+Create a self-contained archive requiring only the Node runtime (issue #70,
+revised 2026-07-25 in [ADR-0018](../adr/0018-runner-distribution.md)).
+Because wrappers, engine CLIs (Claude Code / codex are bundled as actual
+platform-specific npm packages), and native modules are all included, **neither
+`pnpm install` nor building is required on the target host**.
 
-**リポジトリルートで実行する**(スクリプトは自身の位置からルートを解決して
-`cd` する)。
+**Run at the repository root** (the script resolves the root from its own
+location and `cd`s there).
 
 ```sh
-./scripts/build-runner-tarball.sh                      # このホスト向け
-./scripts/build-runner-tarball.sh --target linux-x64   # クロス生成
-./scripts/build-runner-tarball.sh --out /path/to/dir   # 出力先を変える
+./scripts/build-runner-tarball.sh                      # For this host
+./scripts/build-runner-tarball.sh --target linux-x64   # Cross-generation
+./scripts/build-runner-tarball.sh --out /path/to/dir   # Change output destination
 ```
 
-対象は `darwin-arm64` / `linux-x64`(実需要の 2 arch)。それ以外のホスト
-(Intel mac、arm64 Linux)では `--target` を明示しないとエラーになる。出力先は
-既定で `dist-tarball/kaoiro-runner-<rev>-<os>-<arch>.tar.gz`(gitignore 済み)。
-`--out` に相対パスを渡した場合は**リポジトリルート基準**で解決される。
+Targets are `darwin-arm64` / `linux-x64` (the 2 architectures with actual
+demand). On other hosts (Intel mac, arm64 Linux), omitting an explicit
+`--target` produces an error. The output destination defaults to
+`dist-tarball/kaoiro-runner-<rev>-<os>-<arch>.tar.gz` (gitignored). When a
+relative path is passed to `--out`, it is resolved **relative to the repository
+root**.
 
-クロス生成は pnpm の `supportedArchitectures` をビルド中だけ
-`pnpm-workspace.yaml` に注入して行い、終了時(中断時も)復元する。この注入は
-追跡ファイルを書き換えるため **2 つのビルドを同時に走らせられない**。
-`.tarball-build.lock` で排他し、取得できなければ exit 75 で止まるので、
-**2 arch は逐次実行する**(異常終了でロックが残った場合はディレクトリを消す)。
+Cross-generation is performed by injecting pnpm's `supportedArchitectures` into
+`pnpm-workspace.yaml` only during the build, restoring it on exit (including on
+interruption). Because this injection modifies tracked files, **two builds
+cannot run concurrently**. Exclusive lock is enforced via `.tarball-build.lock`,
+exiting with 75 if it cannot be acquired, so **run the 2 architectures
+sequentially** (if a lock remains after abnormal termination, delete the
+directory).
 
-サイズ実測(tar.gz): darwin-arm64 **256 MB** / linux-x64 **368 MB**。エンジン
-CLI の実体が大半を占める。linux 版は musl 変種も含むため glibc / musl 両対応。
+Measured size (tar.gz): darwin-arm64 **256 MB** / linux-x64 **368 MB**. Engine
+CLI packages account for most of the size. The linux version includes musl
+variants as well, supporting both glibc and musl.
 
-### 配布先での設置
+### Installation on the target host
 
 ```sh
 tar xzf kaoiro-runner-<rev>-linux-x64.tar.gz
 cd kaoiro-runner-<rev>-linux-x64
 
-./deploy/kaoiro-runner-setup.sh    # 対話で設定を生成
-./deploy/kaoiro-runner-launch.sh   # 前景起動で疎通確認
+./deploy/kaoiro-runner-setup.sh    # Interactively generate configuration
+./deploy/kaoiro-runner-launch.sh   # Foreground launch for connectivity check
 ```
 
-ウィザードを使わず手で置く場合は、runner/README.md の「設定ウィザード」節に
-挙げた設定ディレクトリへ `runner.config.example.json` /
-`deploy/runner.env.example` をコピーして編集する(`runner.env` は
-`chmod 600`)。
+When placing manually without using the wizard, copy `runner.config.example.json`
+/ `deploy/runner.env.example` to the configuration directory listed in the
+"Setup wizard" section of runner/README.md and edit them (`chmod 600` for
+`runner.env`).
 
-常駐させるときは上記「常駐化」節の unit / plist を配置する
-(`@@DEPLOY_DIR@@` には展開先の `deploy/` の絶対パスを入れる)。**配布物内の
-シムは無改造でそのまま使える**。
+When running as a service, place the unit / plist from the "Running as a
+service" section above (set `@@DEPLOY_DIR@@` to the absolute path of `deploy/`
+in the extraction target). **The shims inside the distribution can be used
+as-is without modification**.
 
-Gitea release への資産アップロードは
-[#140](https://github.com/sakuraiyuta/kaoiro/issues/140) で扱う。
+Asset upload to Gitea releases is tracked in
+[#140](https://github.com/sakuraiyuta/kaoiro/issues/140).
 
 ## See Also
 
