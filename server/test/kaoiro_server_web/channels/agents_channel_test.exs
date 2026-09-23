@@ -4963,6 +4963,27 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert payload["approval"] == "local"
     end
 
+    test "antigravity spawn without an approval key relays the omission" do
+      host_id = "lab-pc-1e-approval-absent"
+      register_host(host_id, cwd_allowlist: ["/home/user/proj"])
+      @endpoint.subscribe("runner:" <> host_id)
+      socket = join_as(:operator)
+
+      ref =
+        push(socket, "spawn", %{
+          "host_id" => host_id,
+          "persona" => "ao",
+          "cwd" => "/home/user/proj",
+          "engine" => "antigravity"
+        })
+
+      assert_reply ref, :ok, %{"agent_id" => agent_id}
+      assert_broadcast "spawn", payload
+      assert payload["agent_id"] == agent_id
+      assert payload["engine"] == "antigravity"
+      refute Map.has_key?(payload, "approval")
+    end
+
     test "operator の spawn: antigravity で on-failure など未知 approval は agent_id 割当前に error reply する (round 2 MF-R2-4)" do
       host_id = "lab-pc-1e-approval-bad"
       register_host(host_id, cwd_allowlist: ["/home/user/proj"])
