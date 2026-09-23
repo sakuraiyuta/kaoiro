@@ -156,6 +156,14 @@ type CodexCatalog = ReturnType<typeof resolveCodexCatalog>;
 
 const DEFAULT_CODEX_TERMINAL_DRAIN_GRACE_MS = 5_000;
 const DEFAULT_PERMISSION_SYNC_WARNING_MS = 10_000;
+/** app-server child process shutdown timeout (issue #391). AppServerRpc's
+ *  own default (5000ms, `app_server_rpc.ts`) matches the runner's
+ *  `RESET_TERMINATION_GRACE_MS` (`runner/src/supervisor.ts`) almost exactly,
+ *  leaving no margin for the wrapper's own close() to finish before the
+ *  runner's SIGKILL lands. Set below that grace so the app-server child's
+ *  SIGKILL escalation (if the child ignores SIGTERM) completes with room to
+ *  spare. */
+const APP_SERVER_SHUTDOWN_TIMEOUT_MS = 2_000;
 /** Bounds an unstarted turn's hang, rather than budgeting human recovery time. */
 export const DEFAULT_PERMISSION_GATE_TIMEOUT_MS = 30_000;
 const PERMISSION_GATE_RECOVERY = "Permission dispatch is blocked. The operator can reapply the same sandbox/network values to allocate a new revision, then resend the cancelled instruction. No automatic resend occurs.";
@@ -1444,6 +1452,7 @@ export class CodexHost implements EngineAdapter {
         turnSignal: () => this.#turnScope?.signal ?? null,
         bridgeStderrPath: `${this.#turnTraceCaptureDir}/bridge.stderr.log`,
         onDisconnect: error => this.#stopAppServer(error),
+        transport: { shutdownTimeoutMs: APP_SERVER_SHUTDOWN_TIMEOUT_MS },
       },
       effortIntent: this.#effort !== null && this.#effortSource !== "default" ? "explicit" : "default",
       ...(this.#sessionId === null ? {} : { resumeThreadId: this.#sessionId }),

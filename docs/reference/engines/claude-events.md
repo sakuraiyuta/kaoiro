@@ -2,7 +2,7 @@
 title: Claude events
 description: Actual message/callback specification of the TypeScript Claude Agent SDK and its verified derivation mapping to kaoiro state.
 status: accepted
-last_updated: 2026-09-18
+last_updated: 2026-09-23
 related: [protocol, plugin-model, architecture, subagent-tasks]
 ---
 <!-- markdownlint-disable MD033 -->
@@ -171,6 +171,12 @@ solely from the SDK's built-in classifier.
   can be sent to the running session.
 - Interrupt: `Query.interrupt(): Promise<void>`.
 - Mode change: `Query.setPermissionMode(mode)`.
+- Process termination on `SIGTERM` (issue #391): the CLI's `SIGTERM` handler
+  calls `close()` directly, never `interrupt()`. `close()` aborts an
+  `AbortController` wired into `Options.abortController`, which drives the
+  SDK's own subprocess escalation. See
+  [adapter-contract.md](adapter-contract.md#sigterm-handling-and-process-termination-timing)
+  for the measured timing and the runner-grace interaction.
 - Observation (message sequence) and control (input + interrupt + canUseTool)
   **complete in the same Query** (no separate mechanism needed). This settles
   ADR-0001's “details settled during implementation.”

@@ -617,6 +617,16 @@ export class AgentHost implements EngineAdapter {
   #watchdogFailStopped = false;
   #hostEnded = false;
   #query: Query | null = null;
+  /** Forwarded to `Options.abortController` so `close()` can bound the SDK's
+   *  own subprocess teardown (issue #391). Constructed once per `run()` —
+   *  the wrapper drives a single long-lived Query, unlike Codex's
+   *  per-turn AbortController. Aborting it triggers the SDK's internal
+   *  stdin-EOF -> ~2000ms SIGTERM -> ~5000ms SIGKILL escalation
+   *  (`ProcessTransport.close()`, measured against `@anthropic-ai/claude-agent-sdk`
+   *  0.3.280's bundle); an unhandled `return` of the prompt generator alone
+   *  only closes stdin, with no escalation if the child never exits on its
+   *  own. */
+  #abort: AbortController | null = null;
   #machine: MachineState = initialMachineState();
   /** tool_use_id -> tool_name, so a tool_result log can name its tool.
    *  Cleared each turn (every tool is settled by the result). */
@@ -1298,6 +1308,12 @@ export class AgentHost implements EngineAdapter {
     // late tool_result/result for that same turn must retain its token.
     if (this.#queue.length === 0) this.#wakeTurnBoundary();
     this.#wake();
+    // issue #391: bound the SDK-managed `claude` CLI subprocess. Returning
+    // the prompt generator (above) only closes stdin on the SDK's own
+    // schedule, with no guarantee the child ever exits if it does not honor
+    // EOF; aborting triggers the SDK's own stdin-EOF -> SIGTERM -> SIGKILL
+    // escalation regardless of queue state.
+    this.#abort?.abort();
   }
 
   /** Drop pending_uploads whose age exceeds PENDING_UPLOAD_TTL_MS
@@ -1747,6 +1763,7 @@ export class AgentHost implements EngineAdapter {
       (this.#permissionMode as PermissionMode | null) ??
       this.#config.permission_mode ??
       "default";
+    this.#abort = new AbortController();
     const options: Options = {
       permissionMode: initialMode,
       ...(initialMode === "bypassPermissions"
@@ -1795,6 +1812,10 @@ export class AgentHost implements EngineAdapter {
       // waiting_permission.
       canUseTool: (toolName, input, options) =>
         this.#canUseTool(toolName, input, options.signal),
+      // Set last, same reasoning as canUseTool above: close() depends on
+      // aborting THIS controller (issue #391), so a caller-supplied
+      // queryOptions.abortController must never silently replace it.
+      abortController: this.#abort,
     };
     try {
       const session = this.#queryFn({ prompt: this.#input(), options });
@@ -2004,6 +2025,17 @@ export class AgentHost implements EngineAdapter {
           this.#toolNames.clear();
         }
       }
+    } catch (err) {
+      // issue #391: close() aborts #abort, and the SDK's ProcessTransport
+      // rejects the in-flight readMessages() iteration with an "aborted by
+      // user" error as part of that same abort (measured against
+      // @anthropic-ai/claude-agent-sdk 0.3.280's waitForExit()). That
+      // rejection is an expected SIDE EFFECT of our own close(), not a
+      // failure — propagating it would make a runner-initiated SIGTERM
+      // report disconnectReason="crash" and a non-zero exit code for what
+      // is an ordinary, requested shutdown. An error while NOT closed is a
+      // real fault and must still propagate.
+      if (!this.#closed) throw err;
     } finally {
       // A stream can end without a result (for example when its process dies),
       // and query construction/iteration can throw before a ResultMessage.

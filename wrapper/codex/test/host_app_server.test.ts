@@ -322,3 +322,19 @@ it.each(["close", "disconnect"])("releases a pending history read on %s without 
   await f.running;expect(published).toBe(false);expect(f.logs.filter(e => e.type === "result")).toHaveLength(0);
   expect(f.starts).not.toHaveBeenCalled();expect(f.ends).not.toHaveBeenCalled();expect(f.finals).not.toHaveBeenCalled();
 });
+
+// issue #391 S1: AppServerRpc's own shutdownTimeoutMs default (5000ms)
+// leaves almost no margin below the runner's RESET_TERMINATION_GRACE_MS
+// (5000ms, runner/src/supervisor.ts) -- a SIGKILL escalation racing the
+// runner's own SIGKILL. Pin that CodexHost's app-server wiring overrides
+// it below that grace, not that AppServerRpc's own default changed (that
+// default is a separate, deliberately conservative fallback for direct
+// AppServerRpc/AppServerTransport callers that never construct through
+// CodexHost).
+it("wires the app-server child's shutdownTimeoutMs below the runner's reset grace", async () => {
+  const f = fixture();
+  await f.host.send("A");
+  await vi.waitFor(() => expect(f.createSession).toHaveBeenCalledTimes(1));
+  const options = f.createSession.mock.calls[0]?.[0] as { transport?: { shutdownTimeoutMs?: number } };
+  expect(options.transport?.shutdownTimeoutMs).toBe(2_000);
+});

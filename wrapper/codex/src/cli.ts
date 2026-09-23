@@ -946,6 +946,20 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       .catch(() => {})
       .finally(() => host.close());
   });
+  // issue #391 (parity with issue #379's antigravity fix): without a
+  // handler, Node's default SIGTERM behavior kills this process immediately
+  // -- no close(), no exec/app-server child cleanup -- and the runner's
+  // stop / delete / restart / reset paths all rely on exactly that signal.
+  // close() (not interrupt()) directly, matching CodexHost's existing
+  // TurnAbandonment cause split ("operator_interrupt" vs "host_close"):
+  // SIGTERM is an external "stop now", not an operator action. Registering
+  // this handler also suppresses Node's default immediate-exit behavior, so
+  // the process naturally stays alive until close()'s own abort() settles
+  // the child -- no explicit process.exit() here.
+  const onSigterm = (): void => {
+    host.close();
+  };
+  process.on("SIGTERM", onSigterm);
 
   try {
     await prepareStartup({
@@ -967,6 +981,12 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     disconnectReason = "crash";
     throw error;
   } finally {
+    // issue #391: this process only ever runs one production CLI invocation,
+    // but leaving the listener registered would accumulate a stale one per
+    // invocation for any caller (tests included) that runs it more than
+    // once in the same process, each closing over an already-finished host
+    // (issue #379's listener-accumulation lesson).
+    process.off("SIGTERM", onSigterm);
     replayer.close();
     interAgentTurns.freezeForWatchdogFailStop(undefined, (envelopes) => link?.retireInterAgentDeliveries?.(envelopes));
     try {

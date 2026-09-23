@@ -1,7 +1,7 @@
 ---
 title: Codex exec event reference
 status: accepted
-last_updated: 2026-09-18
+last_updated: 2026-09-23
 related: [protocol, plugin-model, system-overview, claude-events]
 ---
 <!-- markdownlint-disable MD033 -->
@@ -70,7 +70,14 @@ for await (const ev of events) {
   `codex exec resume <thread_id>`. stdin closes directly after writing the
   prompt — **there is no path for a caller to provide input during execution**
   (neither approval nor extra input). Interrupt a turn by killing the process
-  through `TurnOptions.signal` (AbortSignal).
+  through `TurnOptions.signal` (AbortSignal). Process termination on `SIGTERM`
+  (issue #391): the CLI's `SIGTERM` handler calls `close()` directly, never
+  `interrupt()`, matching `CodexHost`'s existing `TurnAbandonment` cause split
+  (`"operator_interrupt"` vs `"host_close"`). `close()` aborts the same
+  `AbortController` passed as `TurnOptions.signal`. See
+  [adapter-contract.md](adapter-contract.md#sigterm-handling-and-process-termination-timing)
+  for the measured timing (Linux, both `workspace-write` and
+  `danger-full-access`) and the runner-grace interaction.
 - **`Codex(options)`** — `codexPathOverride` / `baseUrl` / `apiKey` (injected as
   env `CODEX_API_KEY`) / `config` (arbitrary `--config key=value` override,
   supplied on every run) / `env`.
