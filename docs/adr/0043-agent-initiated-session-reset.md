@@ -215,11 +215,16 @@ generalize embedded compact summaries to new/clear.
   apart from a turn ended by `close()` or a superseded generation -- both
   looked identical (no `error`, no `cancellation`) in the pre-existing
   payload. During a turn watchdog fail-stop, the ACTIVE turn's `onTurnEnd`
-  never fires at all (only queued-but-unstarted turns are settled) -- a
-  reservation made during that turn stays frozen, neither dispatched nor
-  cancelled, until operator recovery; same shape as Codex's
-  `onWatchdogFailStop`, which likewise never resolves the active
-  reservation.
+  never fires at all (only queued-but-unstarted turns are settled): a
+  reservation made during that turn freezes -- neither dispatched nor
+  cancelled, until operator recovery -- only when the queue is empty at
+  fail-stop time. If an unstarted turn is still queued, its own synthetic
+  `onTurnEnd` (`terminal: false`) arrives non-authoritative, and the
+  coordinator drops any pending reservation on that signal alone, before
+  checking which turn owns it -- so the active turn's reservation is
+  cancelled by the unrelated queued turn's settlement instead of freezing.
+  Same queue-dependent shape as Codex's
+  `onWatchdogFailStop`/`freezeForWatchdogFailStop`.
 - The information boundary to viewers remains ADR-0021; do not disclose origin /
   reason to viewers.
 

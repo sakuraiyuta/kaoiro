@@ -237,9 +237,12 @@ node <pkg>/dist/bridge.js list                              # prints the tool li
   and tells the agent, never firing a reset for a turn that no longer
   owns it. During a turn watchdog fail-stop specifically, the ACTIVE
   turn's `onTurnEnd` never fires at all (only queued-but-unstarted turns
-  are settled) — a reservation made during that turn is neither
-  dispatched nor cancelled; it stays frozen, exactly like every other
-  pending state, until operator recovery.
+  are settled), so a reservation made during that turn stays frozen —
+  neither dispatched nor cancelled — only if the queue is empty at
+  fail-stop time. An unstarted turn still in the queue settles with its
+  own non-authoritative `onTurnEnd`, which cancels ANY pending
+  reservation on sight (before checking which turn owns it), so the
+  active turn's reservation is dropped with a notice instead of freezing.
 - PreToolUse fired for every tool step observed so far: `write_to_file`,
   `view_file`, `list_dir`, `manage_task`, `run_command`, `define_subagent`,
   `search_web` *(measured; `stepIdx` matched `step_index` in all 9 cases)*.
