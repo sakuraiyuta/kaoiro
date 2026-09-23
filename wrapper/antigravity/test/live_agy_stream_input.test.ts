@@ -23,8 +23,8 @@ import type { AntigravityLaunchConfig } from "../src/gate.js";
 const LIVE = process.env.KAOIRO_LIVE_AGY === "1";
 
 async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
     if (predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
@@ -57,14 +57,14 @@ describe.skipIf(!LIVE)("Antigravity Stage 1 stdin transport against the real agy
       onLog: (envelope) => logs.push(envelope),
       onSessionId: (id) => { sessionId = id; },
     });
-    const startedAt = Date.now();
+    const startedAt = performance.now();
     try {
       await host.send(
         "Run `sleep 20 && echo done` via run_command (do not set a custom " +
           "WaitMsBeforeAsync) and reply with RESULT=<its stdout>.",
       );
       await waitFor(() => logs.some((envelope) => envelope.type === "result"), 90_000);
-      const elapsedMs = Date.now() - startedAt;
+      const elapsedMs = performance.now() - startedAt;
       const result = logs.find((envelope) => envelope.type === "result");
       const text = String((result?.payload as { text?: string } | undefined)?.text ?? "");
       // Recorded for the issue #377 comment this run's operator posts.
@@ -135,22 +135,22 @@ describe.skipIf(!LIVE)("Antigravity Stage 1 stdin transport against the real agy
     });
     const results = (): Envelope[] => logs.filter((envelope) => envelope.type === "result");
     try {
-      const turn1StartedAt = Date.now();
+      const turn1StartedAt = performance.now();
       await host.send(
         "Run `sleep 20 && echo done` via run_command (do not set a custom " +
           "WaitMsBeforeAsync) and reply with RESULT=<its stdout>.",
       );
       await waitFor(() => results().length === 1, 90_000);
-      const turn1ElapsedMs = Date.now() - turn1StartedAt;
+      const turn1ElapsedMs = performance.now() - turn1StartedAt;
       sessionIdsBySeq.push(sessionId);
 
-      const turn2StartedAt = Date.now();
+      const turn2StartedAt = performance.now();
       await host.send(
         "What exact shell command did you run via run_command in the previous " +
           "turn? Reply with RESULT=<the exact command>, without running any tool.",
       );
       await waitFor(() => results().length === 2, 90_000);
-      const turn2ElapsedMs = Date.now() - turn2StartedAt;
+      const turn2ElapsedMs = performance.now() - turn2StartedAt;
       sessionIdsBySeq.push(sessionId);
 
       const turn2Text = String(

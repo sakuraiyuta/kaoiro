@@ -42,8 +42,8 @@ function isAlive(pid: number): boolean {
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
     if (predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }

@@ -210,7 +210,7 @@ enabled=false
       expect(isAlive(execChildPid!), `stderr: ${stderr}`).toBe(true);
       expect(isAlive(sleepPid!), `stderr: ${stderr}`).toBe(true);
 
-      const t0 = Date.now();
+      const t0 = performance.now();
       // A real OS signal to a real separate process -- not process.emit().
       child.kill("SIGTERM");
       const outcome = await new Promise<{ code: number | null; signal: NodeJS.Signals | null; elapsedMs: number }>(
@@ -218,7 +218,7 @@ enabled=false
           const timer = setTimeout(() => reject(new Error(`wrapper process did not exit within 8000ms; stderr: ${stderr}`)), 8_000);
           child.once("exit", (code, signal) => {
             clearTimeout(timer);
-            resolve({ code, signal, elapsedMs: Date.now() - t0 });
+            resolve({ code, signal, elapsedMs: performance.now() - t0 });
           });
         },
       );
