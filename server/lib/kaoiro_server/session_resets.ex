@@ -181,7 +181,10 @@ defmodule KaoiroServer.SessionResets do
 
   On failure (`ok=false`) fires `session_reset_failed` immediately and
   releases the lock; the pointer is left untouched (the runner's
-  rollback branch may have recovered the old session).
+  rollback branch may have recovered the old session). `ceiling_conflict`
+  (issue #397) is the structured per-axis detail attached only when
+  `reason == "permission_ceiling_conflict"`; `nil` for every other
+  reason and for a legacy runner.
 
   Stale results (unknown agent, mismatched request_id after a prior
   timeout) are silently discarded per ADR-0036 F7's stale-completion
@@ -190,10 +193,18 @@ defmodule KaoiroServer.SessionResets do
   Asynchronous cast: the runner needs no reply and this keeps the
   runner_channel path non-blocking.
   """
-  def resolve(agent_id, request_id, ok, reason, to_session_id, server \\ __MODULE__) do
+  def resolve(
+        agent_id,
+        request_id,
+        ok,
+        reason,
+        to_session_id,
+        ceiling_conflict \\ nil,
+        server \\ __MODULE__
+      ) do
     GenServer.cast(
       server,
-      {:resolve, agent_id, request_id, ok, reason, to_session_id}
+      {:resolve, agent_id, request_id, ok, reason, to_session_id, ceiling_conflict}
     )
   end
 
@@ -484,7 +495,10 @@ defmodule KaoiroServer.SessionResets do
   end
 
   @impl true
-  def handle_cast({:resolve, agent_id, request_id, ok, reason, to_session_id}, s) do
+  def handle_cast(
+        {:resolve, agent_id, request_id, ok, reason, to_session_id, ceiling_conflict},
+        s
+      ) do
     case Map.get(s.pending, agent_id) do
       %{request_id: ^request_id} = lock ->
         if ok and lock.early_join_session_id != :none and early_waiter_alive?(lock) do
@@ -508,7 +522,7 @@ defmodule KaoiroServer.SessionResets do
             # Failure path: fire the loud broadcast immediately, no detach.
             reply_early(lock, :noop)
             _ = Process.cancel_timer(lock.timer_ref)
-            broadcast_failed(agent_id, lock, reason)
+            broadcast_failed(agent_id, lock, reason, ceiling_conflict)
             notify_failure(s.on_failure, agent_id, request_id, reason)
             {:noreply, %{s | pending: Map.delete(s.pending, agent_id)}}
           end
@@ -547,7 +561,7 @@ defmodule KaoiroServer.SessionResets do
         # both phases — a slow spawn AND a spawn that succeeds but whose
         # wrapper never joins.
         reply_early(lock, :noop)
-        broadcast_failed(agent_id, lock, "timeout")
+        broadcast_failed(agent_id, lock, "timeout", nil)
         notify_failure(s.on_failure, agent_id, request_id, "timeout")
 
         {:noreply, %{s | pending: Map.delete(s.pending, agent_id)}}
@@ -681,6 +695,12 @@ defmodule KaoiroServer.SessionResets do
 
   defp maybe_put_previous_session_id(payload, _sid), do: payload
 
+  # issue #397: present only for a permission_ceiling_conflict refusal.
+  defp maybe_put_ceiling_conflict(payload, ceiling_conflict) when is_list(ceiling_conflict),
+    do: Map.put(payload, "ceiling_conflict", ceiling_conflict)
+
+  defp maybe_put_ceiling_conflict(payload, _ceiling_conflict), do: payload
+
   # phase-17 17-7: build the session_boundary marker envelope. `state` is
   # fixed to "idle" — reset acquire only permits idle / waiting_input, and
   # a marker denotes the transition between sessions rather than any live
@@ -715,13 +735,15 @@ defmodule KaoiroServer.SessionResets do
     }
   end
 
-  defp broadcast_failed(agent_id, lock, reason) do
-    payload = %{
-      "request_id" => lock.request_id,
-      "agent_id" => agent_id,
-      "mode" => lock.mode,
-      "reason" => reason
-    }
+  defp broadcast_failed(agent_id, lock, reason, ceiling_conflict) do
+    payload =
+      %{
+        "request_id" => lock.request_id,
+        "agent_id" => agent_id,
+        "mode" => lock.mode,
+        "reason" => reason
+      }
+      |> maybe_put_ceiling_conflict(ceiling_conflict)
 
     KaoiroServerWeb.Endpoint.broadcast(
       "agents:lobby",

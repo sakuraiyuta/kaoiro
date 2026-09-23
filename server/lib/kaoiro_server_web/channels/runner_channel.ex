@@ -158,7 +158,7 @@ defmodule KaoiroServerWeb.RunnerChannel do
     host_id = socket.assigns.host_id
 
     with :ok <- check_size(payload),
-         {:ok, agent_id, request_id, ok?, reason, to_session_id} <-
+         {:ok, agent_id, request_id, ok?, reason, to_session_id, ceiling_conflict} <-
            parse_session_reset_result(payload),
          :ok <- require_host_owns_agent(host_id, agent_id) do
       KaoiroServer.SessionResets.resolve(
@@ -166,7 +166,8 @@ defmodule KaoiroServerWeb.RunnerChannel do
         request_id,
         ok?,
         reason,
-        to_session_id
+        to_session_id,
+        ceiling_conflict
       )
 
       {:reply, :ok, socket}
@@ -524,8 +525,9 @@ defmodule KaoiroServerWeb.RunnerChannel do
        when is_binary(agent_id) and is_binary(request_id) and is_boolean(ok?) do
     with true <- Map.get(payload, "mode", "new") in @session_reset_modes,
          {:ok, reason} <- parse_reset_reason(payload["reason"], ok?),
+         {:ok, ceiling_conflict} <- parse_ceiling_conflict(payload["ceiling_conflict"]),
          {:ok, to_sid} <- parse_optional_session_id(payload["to_session_id"]) do
-      {:ok, agent_id, request_id, ok?, reason, to_sid}
+      {:ok, agent_id, request_id, ok?, reason, to_sid, ceiling_conflict}
     else
       false -> {:error, :invalid_mode}
       {:error, reason} -> {:error, reason}
@@ -535,7 +537,9 @@ defmodule KaoiroServerWeb.RunnerChannel do
   defp parse_session_reset_result(_payload), do: {:error, :invalid_payload}
 
   # ADR-0036 F7 closed error vocabulary. Success carries no reason; a
-  # failure requires one from the whitelist.
+  # failure requires one from the whitelist. permission_ceiling_conflict
+  # (issue #397) is an antigravity-only reset refusal: the resume snapshot
+  # would widen the immutable launch ceiling (ADR-0057 F4c Stage B0).
   @reset_failure_reasons [
     "agent_busy",
     "unsupported_session_reset",
@@ -543,7 +547,8 @@ defmodule KaoiroServerWeb.RunnerChannel do
     "runner_unavailable",
     "spawn_failed",
     "rollback_failed",
-    "timeout"
+    "timeout",
+    "permission_ceiling_conflict"
   ]
   defp parse_reset_reason(nil, true), do: {:ok, nil}
 
@@ -552,6 +557,57 @@ defmodule KaoiroServerWeb.RunnerChannel do
        do: {:ok, reason}
 
   defp parse_reset_reason(_reason, _ok), do: {:error, :invalid_reason}
+
+  # issue #397: structured per-axis detail for a permission_ceiling_conflict
+  # refusal. Absent (any other reason, or a legacy runner) parses to `nil`
+  # rather than requiring the field -- SessionResets/broadcast simply omit
+  # it downstream. Present-but-malformed is refused like the rest of this
+  # payload (the runner has to fix its own bug).
+  @ceiling_conflict_axes ["sandbox", "approval", "network_access"]
+  @ceiling_conflict_sandbox_values ["read-only", "workspace-write", "danger-full-access"]
+  @ceiling_conflict_approval_values ["untrusted", "on-request", "local", "never"]
+
+  defp parse_ceiling_conflict(nil), do: {:ok, nil}
+
+  defp parse_ceiling_conflict(list) when is_list(list) do
+    list
+    |> Enum.reduce_while({:ok, []}, fn item, {:ok, acc} ->
+      case parse_ceiling_conflict_axis(item) do
+        {:ok, parsed} -> {:cont, {:ok, [parsed | acc]}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, acc} -> {:ok, Enum.reverse(acc)}
+      err -> err
+    end
+  end
+
+  defp parse_ceiling_conflict(_), do: {:error, :invalid_ceiling_conflict}
+
+  defp parse_ceiling_conflict_axis(%{
+         "axis" => axis,
+         "current" => current,
+         "ceiling" => ceiling
+       })
+       when axis in @ceiling_conflict_axes do
+    if ceiling_conflict_value_valid?(axis, current) and
+         ceiling_conflict_value_valid?(axis, ceiling) do
+      {:ok, %{"axis" => axis, "current" => current, "ceiling" => ceiling}}
+    else
+      {:error, :invalid_ceiling_conflict}
+    end
+  end
+
+  defp parse_ceiling_conflict_axis(_), do: {:error, :invalid_ceiling_conflict}
+
+  defp ceiling_conflict_value_valid?("network_access", value), do: is_boolean(value)
+
+  defp ceiling_conflict_value_valid?("sandbox", value),
+    do: value in @ceiling_conflict_sandbox_values
+
+  defp ceiling_conflict_value_valid?("approval", value),
+    do: value in @ceiling_conflict_approval_values
 
   defp parse_optional_session_id(nil), do: {:ok, nil}
   defp parse_optional_session_id(sid) when is_binary(sid), do: {:ok, sid}

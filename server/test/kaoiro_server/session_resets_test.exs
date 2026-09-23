@@ -155,7 +155,7 @@ defmodule KaoiroServer.SessionResetsTest do
       assert {:ok, failed_id, _} =
                SessionResets.check_and_acquire("a.failed", "new", "idle", nil, name)
 
-      :ok = SessionResets.resolve("a.failed", failed_id, false, "rollback_failed", nil, name)
+      :ok = SessionResets.resolve("a.failed", failed_id, false, "rollback_failed", nil, nil, name)
       assert_receive {:reset_failure, "a.failed", ^failed_id, "rollback_failed"}
 
       assert {:ok, timeout_id, _} =
@@ -168,7 +168,7 @@ defmodule KaoiroServer.SessionResetsTest do
       assert {:ok, request_id, _} =
                SessionResets.check_and_acquire("a.cas", "new", "idle", "old", sr)
 
-      :ok = SessionResets.resolve("a.cas", request_id, true, nil, "new", sr)
+      :ok = SessionResets.resolve("a.cas", request_id, true, nil, "new", nil, sr)
       :sys.get_state(sr)
       assert :mismatch = SessionResets.confirm_connection("a.cas", nil, "other", sr)
       assert SessionResets.pending?("a.cas", sr)
@@ -190,7 +190,7 @@ defmodule KaoiroServer.SessionResetsTest do
       :sys.get_state(sr)
       assert SessionResets.pending?(agent_id, sr)
 
-      :ok = SessionResets.resolve(agent_id, request_id, true, nil, "new", sr)
+      :ok = SessionResets.resolve(agent_id, request_id, true, nil, "new", nil, sr)
       :sys.get_state(sr)
       assert :matched = Task.await(caller)
       refute SessionResets.pending?(agent_id, sr)
@@ -210,7 +210,7 @@ defmodule KaoiroServer.SessionResetsTest do
         end)
 
       :sys.get_state(sr)
-      :ok = SessionResets.resolve("a.early-fail", request_id, false, "spawn_failed", nil, sr)
+      :ok = SessionResets.resolve("a.early-fail", request_id, false, "spawn_failed", nil, nil, sr)
       assert :noop = Task.await(caller)
       refute SessionResets.pending?("a.early-fail", sr)
     end
@@ -231,7 +231,7 @@ defmodule KaoiroServer.SessionResetsTest do
       assert SessionResets.pending?(agent_id, sr)
       refute_receive %Phoenix.Socket.Broadcast{event: "session_reset_completed"}
 
-      :ok = SessionResets.resolve(agent_id, request_id, true, nil, "new", sr)
+      :ok = SessionResets.resolve(agent_id, request_id, true, nil, "new", nil, sr)
 
       assert :legacy_absent = Task.await(caller)
       refute SessionResets.pending?(agent_id, sr)
@@ -256,7 +256,7 @@ defmodule KaoiroServer.SessionResetsTest do
       assert_waiter_stashed(sr, agent_id, waiter.pid)
       assert Task.yield(waiter, 5_100) == nil
 
-      :ok = SessionResets.resolve(agent_id, request_id, false, "spawn_failed", nil, sr)
+      :ok = SessionResets.resolve(agent_id, request_id, false, "spawn_failed", nil, nil, sr)
       assert :noop = Task.await(waiter)
     end
 
@@ -275,7 +275,7 @@ defmodule KaoiroServer.SessionResetsTest do
       assert_receive {:DOWN, ^ref, :process, _pid, _reason}
       :sys.get_state(sr)
 
-      :ok = SessionResets.resolve(agent_id, request_id, true, nil, "new", sr)
+      :ok = SessionResets.resolve(agent_id, request_id, true, nil, "new", nil, sr)
       :sys.get_state(sr)
       assert SessionResets.pending?(agent_id, sr)
       refute_receive %Phoenix.Socket.Broadcast{event: "session_reset_completed"}
@@ -293,7 +293,7 @@ defmodule KaoiroServer.SessionResetsTest do
       assert_waiter_stashed(sr, agent_id, first.pid)
       assert :duplicate_waiter = SessionResets.confirm_connection(agent_id, nil, request_id, sr)
 
-      :ok = SessionResets.resolve(agent_id, request_id, true, nil, "new", sr)
+      :ok = SessionResets.resolve(agent_id, request_id, true, nil, "new", nil, sr)
       assert :matched = Task.await(first)
     end
 
@@ -312,7 +312,7 @@ defmodule KaoiroServer.SessionResetsTest do
       assert :duplicate_waiter = Task.await(absent)
       assert_waiter_stashed(sr, agent_id, exact.pid)
 
-      :ok = SessionResets.resolve(agent_id, request_id, true, nil, "new", sr)
+      :ok = SessionResets.resolve(agent_id, request_id, true, nil, "new", nil, sr)
       assert :matched = Task.await(exact)
     end
 
@@ -328,7 +328,7 @@ defmodule KaoiroServer.SessionResetsTest do
       Process.exit(first, :kill)
       :sys.get_state(sr)
 
-      :ok = SessionResets.resolve(agent_id, request_id, true, nil, "new", sr)
+      :ok = SessionResets.resolve(agent_id, request_id, true, nil, "new", nil, sr)
       :sys.get_state(sr)
       assert :matched = SessionResets.confirm_connection(agent_id, nil, request_id, sr)
       refute SessionResets.pending?(agent_id, sr)
@@ -366,7 +366,7 @@ defmodule KaoiroServer.SessionResetsTest do
       replacement = Task.async(fn -> SessionResets.confirm_connection(agent_id, nil, sr) end)
       assert_waiter_stashed(sr, agent_id, replacement.pid)
 
-      :ok = SessionResets.resolve(agent_id, request_id, true, nil, "new", sr)
+      :ok = SessionResets.resolve(agent_id, request_id, true, nil, "new", nil, sr)
       assert :legacy_absent = Task.await(replacement)
 
       :ok =
@@ -398,7 +398,7 @@ defmodule KaoiroServer.SessionResetsTest do
       assert :ok = SessionResets.delete(agent_id, sr)
       assert :deleted = Task.await(waiter)
 
-      :ok = SessionResets.resolve(agent_id, request_id, true, nil, "new", sr)
+      :ok = SessionResets.resolve(agent_id, request_id, true, nil, "new", nil, sr)
       refute_receive %Phoenix.Socket.Broadcast{event: "session_reset_completed"}
     end
 
@@ -445,7 +445,7 @@ defmodule KaoiroServer.SessionResetsTest do
       assert {:ok, request_id, _} =
                SessionResets.check_and_acquire("a.res.ok", "new", "idle", "sess-old", sr)
 
-      :ok = SessionResets.resolve("a.res.ok", request_id, true, nil, "sess-new", sr)
+      :ok = SessionResets.resolve("a.res.ok", request_id, true, nil, "sess-new", nil, sr)
 
       _ = :sys.get_state(sr)
       # lock は保持されたまま (:awaiting_connect フェーズ)
@@ -465,7 +465,7 @@ defmodule KaoiroServer.SessionResetsTest do
                  sr
                )
 
-      :ok = SessionResets.resolve("a.res.confirm", request_id, true, nil, "sess-new", sr)
+      :ok = SessionResets.resolve("a.res.confirm", request_id, true, nil, "sess-new", nil, sr)
       _ = :sys.get_state(sr)
       assert SessionResets.pending?("a.res.confirm", sr)
 
@@ -530,7 +530,7 @@ defmodule KaoiroServer.SessionResetsTest do
       assert {:ok, request_id, _} =
                SessionResets.check_and_acquire(agent_id, "clear", "idle", "sess-old", sr)
 
-      :ok = SessionResets.resolve(agent_id, request_id, true, nil, "sess-new", sr)
+      :ok = SessionResets.resolve(agent_id, request_id, true, nil, "sess-new", nil, sr)
       :legacy_absent = SessionResets.confirm_connection(agent_id, nil, sr)
 
       # 表示 projection: history は session_boundary marker 1 行だけになる。
@@ -605,7 +605,7 @@ defmodule KaoiroServer.SessionResetsTest do
       assert {:ok, request_id, _} =
                SessionResets.check_and_acquire(agent_id, "new", "idle", "sess-old", sr)
 
-      :ok = SessionResets.resolve(agent_id, request_id, true, nil, "sess-new", sr)
+      :ok = SessionResets.resolve(agent_id, request_id, true, nil, "sess-new", nil, sr)
       :legacy_absent = SessionResets.confirm_connection(agent_id, nil, sr)
 
       # 表示 projection は保持され、末尾に marker が append される。
@@ -656,7 +656,7 @@ defmodule KaoiroServer.SessionResetsTest do
       {:ok, request_id, _} =
         SessionResets.check_and_acquire(agent_id, "new", "idle", "sess-old", sr)
 
-      :ok = SessionResets.resolve(agent_id, request_id, true, nil, "sess-new", sr)
+      :ok = SessionResets.resolve(agent_id, request_id, true, nil, "sess-new", nil, sr)
       # confirm_connection 直前は開始点未 seed。
       assert KaoiroServer.ClearWatermarks.get(agent_id) == nil
 
@@ -681,7 +681,7 @@ defmodule KaoiroServer.SessionResetsTest do
       {:ok, request_id, _} =
         SessionResets.check_and_acquire(agent_id, "clear", "idle", "sess-old", sr)
 
-      :ok = SessionResets.resolve(agent_id, request_id, true, nil, "sess-new", sr)
+      :ok = SessionResets.resolve(agent_id, request_id, true, nil, "sess-new", nil, sr)
       :legacy_absent = SessionResets.confirm_connection(agent_id, nil, sr)
 
       assert {{us, seq}, iso, "sess-new"} =
@@ -706,11 +706,66 @@ defmodule KaoiroServer.SessionResetsTest do
           false,
           "spawn_failed",
           nil,
+          nil,
           sr
         )
 
       _ = :sys.get_state(sr)
       refute SessionResets.pending?("a.res.fail", sr)
+    end
+
+    # issue #397: permission_ceiling_conflict carries the structured per-axis
+    # detail through resolve/6+ into the session_reset_failed broadcast.
+    test "ok=false かつ ceiling_conflict 付きの resolve は broadcast に detail を含める",
+         %{resets: sr} do
+      agent_id = "a.res.ceiling-#{System.unique_integer([:positive])}"
+      KaoiroServerWeb.Endpoint.subscribe("agents:lobby")
+
+      assert {:ok, request_id, _} =
+               SessionResets.check_and_acquire(agent_id, "new", "idle", "sess", sr)
+
+      ceiling_conflict = [
+        %{"axis" => "approval", "current" => "never", "ceiling" => "local"}
+      ]
+
+      :ok =
+        SessionResets.resolve(
+          agent_id,
+          request_id,
+          false,
+          "permission_ceiling_conflict",
+          nil,
+          ceiling_conflict,
+          sr
+        )
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "session_reset_failed",
+        payload: %{
+          "agent_id" => ^agent_id,
+          "reason" => "permission_ceiling_conflict",
+          "ceiling_conflict" => ^ceiling_conflict
+        }
+      }
+
+      refute SessionResets.pending?(agent_id, sr)
+    end
+
+    test "ceiling_conflict が nil の resolve は broadcast にキー自体を含めない", %{resets: sr} do
+      agent_id = "a.res.no-ceiling-#{System.unique_integer([:positive])}"
+      KaoiroServerWeb.Endpoint.subscribe("agents:lobby")
+
+      assert {:ok, request_id, _} =
+               SessionResets.check_and_acquire(agent_id, "new", "idle", "sess", sr)
+
+      :ok = SessionResets.resolve(agent_id, request_id, false, "spawn_failed", nil, nil, sr)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "session_reset_failed",
+        payload: payload
+      }
+
+      refute Map.has_key?(payload, "ceiling_conflict")
     end
 
     test "stale request_id は silent drop (ADR-0036 F7)", %{resets: sr} do
@@ -725,6 +780,7 @@ defmodule KaoiroServer.SessionResetsTest do
           true,
           nil,
           "sess-new",
+          nil,
           sr
         )
 
@@ -733,7 +789,7 @@ defmodule KaoiroServer.SessionResetsTest do
     end
 
     test "未 pending の agent は silent drop", %{resets: sr} do
-      :ok = SessionResets.resolve("a.res.none", "rs_x", true, nil, nil, sr)
+      :ok = SessionResets.resolve("a.res.none", "rs_x", true, nil, nil, nil, sr)
       _ = :sys.get_state(sr)
       refute SessionResets.pending?("a.res.none", sr)
     end
