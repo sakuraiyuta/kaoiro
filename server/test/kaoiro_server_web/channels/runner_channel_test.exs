@@ -996,19 +996,21 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
       host_id = "lab-pc-reset-ceiling-badvalue"
       socket = join_runner(host_id)
 
-      ref =
-        push(socket, "session_reset_result", %{
-          "agent_id" => "a.x",
-          "request_id" => "rs_x",
-          "mode" => "new",
-          "ok" => false,
-          "reason" => "permission_ceiling_conflict",
-          "ceiling_conflict" => [
-            %{"axis" => "network_access", "current" => "true", "ceiling" => false}
-          ]
-        })
+      capture_log(fn ->
+        ref =
+          push(socket, "session_reset_result", %{
+            "agent_id" => "a.x",
+            "request_id" => "rs_x",
+            "mode" => "new",
+            "ok" => false,
+            "reason" => "permission_ceiling_conflict",
+            "ceiling_conflict" => [
+              %{"axis" => "network_access", "current" => "true", "ceiling" => false}
+            ]
+          })
 
-      assert_reply ref, :error, %{reason: "invalid_ceiling_conflict"}
+        assert_reply ref, :error, %{reason: "invalid_ceiling_conflict"}
+      end)
     end
 
     # self-review round 1 finding (QUALITY, issue #397): ceiling_conflict must
