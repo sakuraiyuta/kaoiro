@@ -7,8 +7,13 @@ import {
   InterAgentTool,
   makeLog,
   makeStateChange,
+  operatorApprovalGated,
   PermissionBroker,
   QuestionBroker,
+  REQUEST_SESSION_RESET_TOOL_FQN,
+  requestSessionResetDescriptor,
+  SessionResetCoordinator,
+  validateRequestSessionResetInput,
   type Envelope,
   type WhoamiSnapshot,
   type WrapperConfig,
@@ -49,6 +54,23 @@ export interface AntigravityCliDependencies {
   createHost?: CreateAntigravityHost;
   onHostCreated?: (host: AntigravityHost) => void;
   probeSshAgentIdentities?: typeof probeSshAgentIdentities;
+}
+
+// issue #396: human-readable cause for a session-reset reservation dropped
+// by a non-authoritative turn end, mirroring codex/src/cli.ts's
+// `abandonmentCause`. `watchdog_fail_stop` here only ever reaches this
+// helper via the ACTIVE-turn path (host.ts's normal `#drainTurns` finally,
+// not the queued-turns batch settlement in `#failStopForWatchdog`, which
+// never calls `onTurnEnd` for the reservation's own owner turn at all).
+function cancellationCause(cancellation: {
+  kind: "watchdog_fail_stop" | "interrupt";
+}): string {
+  switch (cancellation.kind) {
+    case "interrupt":
+      return "the turn that reserved it was interrupted";
+    case "watchdog_fail_stop":
+      return "the turn watchdog stopped the turn that reserved it";
+  }
 }
 
 export function relayAntigravityInstruction(
@@ -121,6 +143,23 @@ export async function runAntigravityCli(
     config,
     send,
     onPendingChange: (pending) => host?.setPendingQuestion(pending),
+  });
+  // issue #396: holds an operator-approved reset until the wrapper's own
+  // turn boundary, then asks the server (ADR-0043 D3). Reservations are
+  // bound to the turn that made them: any other end (interrupt, watchdog,
+  // host close, or a skipped turn that never even started) drops the
+  // reservation and tells the agent (Codex parity, issue #347 M1).
+  const sessionReset = new SessionResetCoordinator({
+    request: (mode, reason) => {
+      if (!link) return Promise.reject(new Error("server link unavailable"));
+      return link.requestSessionReset(mode, reason);
+    },
+    notify: (text) => {
+      const queued = instructionChain.then(() => host!.send(text));
+      instructionChain = queued.catch(() => {});
+      return queued;
+    },
+    log: (text) => writeRedactedStderr(`${text}\n`),
   });
   const interAgent = new InterAgentTool({
     config,
@@ -298,6 +337,8 @@ export async function runAntigravityCli(
     },
     onPermissionDecision: (decision) => permissionBroker.resolve(decision),
     onQuestionResponse: (response) => questionBroker.resolve(response),
+    onSessionResetFailed: ({ requestId, reason }) =>
+      sessionReset.onResetFailed(requestId, reason),
     onInterrupt: () => { void host?.interrupt(); },
     onSetModel: (model) => { void host?.setModel(model); },
     onSetEffort: (effort) => {
@@ -387,7 +428,20 @@ export async function runAntigravityCli(
     onToolEnd: ({ turnToken, stepIndex }) => {
       turnWatchdog.toolEnd(turnToken, stepIndex);
     },
-    onTurnEnd: ({ turnToken, conversationIds, error, cancellation }) => {
+    onTurnEnd: ({ turnToken, conversationIds, error, cancellation, terminal }) => {
+      // issue #396 (ADR-0043 D3): the state_change this turn's own outcome
+      // produced (#publishTerminalResult/#terminalError, called earlier in
+      // the SAME host.ts finally block, before onTurnBoundary/onTurnEnd)
+      // has already reached the link SYNCHRONOUSLY by the time this handler
+      // runs -- so a reservation dispatched here can never race ahead of
+      // it onto the wire (the #395 bug, on the opposite side).
+      sessionReset.onTurnEnd({
+        turnToken,
+        authoritative: terminal && cancellation === undefined,
+        ...(cancellation !== undefined
+          ? { why: cancellationCause(cancellation) }
+          : {}),
+      });
       if (cancellation?.kind === "watchdog_fail_stop") {
         for (const notice of interAgent.resolveTurnEnd(
           turnToken,
@@ -457,6 +511,37 @@ export async function runAntigravityCli(
     toolDescriptors: [
       ...interAgent.descriptors(),
       askUserQuestionDescriptor((questions) => questionBroker.decide(questions)),
+      // issue #396 (ADR-0043 Neutral amendment): Antigravity has no
+      // canUseTool-style hook, so the wrapper asks the operator on the
+      // tool's own behalf via the same PermissionBroker the dashboard's
+      // other approval dialogs use (Codex parity, issue #347).
+      // `offerCompact: false` -- this engine has no compaction path, so the
+      // description must not point at a tool it cannot see. Blocks the
+      // bridge the same way `ask_user_question` does above, so the
+      // operator must answer within the turn watchdog's absolute tool
+      // deadline (`KAOIRO_ANTIGRAVITY_TOOL_TIMEOUT_MS`, default 10 min).
+      operatorApprovalGated(
+        requestSessionResetDescriptor({
+          reserve: (mode, reason) =>
+            sessionReset.reserve(
+              mode,
+              reason,
+              host?.activeInterAgentTurnToken() ?? undefined,
+            ),
+          offerCompact: false,
+        }),
+        {
+          decide: (toolName, input, signal) =>
+            permissionBroker.decide(toolName, input, signal),
+          // Matches Codex: the approval dialog shows the SDK-side FQN
+          // (`mcp__kaoiro__request_session_reset`), which differs from the
+          // bridge's own tool name (`request_session_reset`,
+          // descriptor.name) -- intentional, so the operator sees the same
+          // dialog shape regardless of engine.
+          toolName: REQUEST_SESSION_RESET_TOOL_FQN,
+          validate: validateRequestSessionResetInput,
+        },
+      ),
     ],
     ...(resumeSessionId === undefined ? {} : { resumeSessionId }),
     // issue #359 M1: relay the negotiated permission_sync state and the barrier
