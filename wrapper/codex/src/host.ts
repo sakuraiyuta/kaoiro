@@ -1857,6 +1857,7 @@ export class CodexHost implements EngineAdapter {
         if (tasklist !== null) this.#emitTasklist(tasklist);
         const last = threadEventToFinalText(event);
         if (last !== null) finalText = last;
+        let terminalTurnEnd: Parameters<NonNullable<CodexHostOptions["onTurnEnd"]>>[0] | null = null;
         if (event.type === "turn.completed") {
           sawResult = true;
           settled.value = true;
@@ -1866,14 +1867,14 @@ export class CodexHost implements EngineAdapter {
           this.#emitResult({
             ...(finalText !== null ? { text: finalText } : {}),
           });
-          this.#options.onTurnEnd?.({
+          terminalTurnEnd = {
             turnToken,
             conversationIds,
             terminal: "turn.completed",
             ...(this.#turnAbandoned !== null
               ? { abandoned: this.#turnAbandoned }
               : {}),
-          });
+          };
           // Resolve only after the terminal event: at turn.started an existing
           // rollout can still expose the previous turn_context and look
           // spuriously "resolved". Keep this background so filesystem timing
@@ -1915,7 +1916,7 @@ export class CodexHost implements EngineAdapter {
             ...(detail === null ? {} : { detail }),
             outcome: "turn_failed",
           });
-          this.#options.onTurnEnd?.({
+          terminalTurnEnd = {
             turnToken,
             conversationIds,
             error: detail !== null ? { detail } : {},
@@ -1923,7 +1924,7 @@ export class CodexHost implements EngineAdapter {
             ...(this.#turnAbandoned !== null
               ? { abandoned: this.#turnAbandoned }
               : {}),
-          });
+          };
           // Failure paths (429 / max-output / auth error) still write a
           // token_count event to the rollout, so refresh on both branches.
           void this.#refreshRateLimits();
@@ -1931,6 +1932,7 @@ export class CodexHost implements EngineAdapter {
         for (const adapterEvent of threadEventToEvents(event)) {
           this.#apply(adapterEvent);
         }
+        if (terminalTurnEnd !== null) this.#options.onTurnEnd?.(terminalTurnEnd);
         if (isTerminalEvent && terminalDrainDeadlineMs === null) {
           // The terminal event is the SDK turn boundary, but upstream still
           // flushes the rollout after publishing it. Drain normal EOF first;

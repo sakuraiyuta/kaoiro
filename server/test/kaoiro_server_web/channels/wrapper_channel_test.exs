@@ -5769,6 +5769,22 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       refute_broadcast "session_reset_started", _
     end
 
+    test "self reset sees the ready state sent immediately before it on the same channel" do
+      agent_id = "self-reset.ready-before-request"
+      socket = seed_reset_agent(agent_id, state: "tool_running")
+
+      busy_ref = push(socket, "session_reset_request", %{"mode" => "clear"})
+      assert_session_reset_request_error(busy_ref, "agent_busy")
+
+      state_ref = push(socket, "envelope", reset_envelope(agent_id, "waiting_input", %{}))
+      reset_ref = push(socket, "session_reset_request", %{"mode" => "clear"})
+
+      assert_reply state_ref, :ok
+      assert_reply reset_ref, :ok, %{request_id: request_id}
+      assert is_binary(request_id)
+      assert AgentStates.snapshot()[agent_id]["state"] == "waiting_input"
+    end
+
     test "reset capability 未 advertise は unsupported_session_reset で拒否する" do
       socket =
         seed_reset_agent("self-reset.no-cap",

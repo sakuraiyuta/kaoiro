@@ -12,7 +12,7 @@ import type { CodexOptions, ThreadEvent } from "@openai/codex-sdk";
 import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
 import { runCodexCli } from "../src/cli.js";
 import { CodexHost } from "../src/host.js";
-import type { CodexClientLike, CodexThreadLike } from "../src/host.js";
+import type { CodexClientLike, CodexHostOptions, CodexThreadLike } from "../src/host.js";
 
 const CONFIG: WrapperConfig = {
   agent_id: "host-1.codex-gate",
@@ -156,6 +156,8 @@ class FakeBridge {
 interface Rig {
   sent: Envelope[];
   requests: { mode: string; reason?: string }[];
+  requestSnapshots: { sentCount: number; state: string | undefined }[];
+  turnEnds: Parameters<NonNullable<CodexHostOptions["onTurnEnd"]>>[0][];
   linkOptions: Record<string, any>;
   hostOptions: Record<string, any>;
   host: CodexHost;
@@ -172,6 +174,8 @@ async function makeRig(
 ): Promise<Rig> {
   const sent: Envelope[] = [];
   const requests: { mode: string; reason?: string }[] = [];
+  const requestSnapshots: Rig["requestSnapshots"] = [];
+  const turnEnds: Rig["turnEnds"] = [];
   const turnTokens: string[] = [];
   let linkOptions!: Record<string, any>;
   let hostOptions!: Record<string, any>;
@@ -183,6 +187,10 @@ async function makeRig(
     currentSessionId: () => null,
     send: (envelope: Envelope) => sent.push(envelope),
     requestSessionReset: async (mode: string, reason?: string) => {
+      requestSnapshots.push({
+        sentCount: sent.length,
+        state: sent.filter((e) => e.type === "state_change").at(-1)?.state,
+      });
       requests.push({ mode, ...(reason !== undefined ? { reason } : {}) });
       return { requestId: "r-1" };
     },
@@ -205,6 +213,10 @@ async function makeRig(
           turnTokens.push(info.turnToken);
           options.onTurnStart?.(info);
         },
+        onTurnEnd: (info) => {
+          turnEnds.push(info);
+          options.onTurnEnd?.(info);
+        },
         codexFactory: (codexOptions) => {
           captured = codexOptions;
           return client;
@@ -219,6 +231,8 @@ async function makeRig(
   return {
     sent,
     requests,
+    requestSnapshots,
+    turnEnds,
     get linkOptions() {
       return linkOptions;
     },
@@ -258,9 +272,13 @@ function pendingPermissionOf(envelope: Envelope): unknown {
 
 /** Starts a turn by pushing an operator instruction through the real link
  *  callback and waits for the SDK turn to begin. */
-async function startToolTurn(rig: Rig): Promise<string> {
+async function startToolTurn(rig: Rig, conversationIds?: readonly string[]): Promise<string> {
   const before = rig.turnTokens.length;
-  await (rig.linkOptions.onInstruction as (text: string) => void)("reset yourself");
+  if (conversationIds === undefined) {
+    await (rig.linkOptions.onInstruction as (text: string) => void)("reset yourself");
+  } else {
+    await rig.host.send("reset yourself", undefined, conversationIds);
+  }
   await vi.waitFor(() => expect(rig.turnTokens.length).toBe(before + 1));
   return rig.turnTokens[before]!;
 }
@@ -296,7 +314,7 @@ describe("codex request_session_reset gate (issue #347)", () => {
     const script: TurnScript = { tool: true, ending: deferred<Ending>() };
     const rig = await makeRig([script]);
     try {
-      await startToolTurn(rig);
+      const turnToken = await startToolTurn(rig, ["conv-completed"]);
       const bridge = await rig.bridge();
       const { reply, requestId } = await askForReset(rig, bridge);
 
@@ -328,6 +346,14 @@ describe("codex request_session_reset gate (issue #347)", () => {
 
       script.ending.resolve("completed");
       await vi.waitFor(() => expect(rig.requests).toEqual([{ mode: "new", reason: "tired" }]));
+      const snapshot = rig.requestSnapshots[0]!;
+      expect(snapshot.state).toBe("waiting_input");
+      expect(rig.sent.slice(0, snapshot.sentCount).some((e) => e.type === "result")).toBe(true);
+      expect(rig.turnEnds).toEqual([{
+        turnToken,
+        conversationIds: ["conv-completed"],
+        terminal: "turn.completed",
+      }]);
       expect(rig.sent.some((e) => pendingPermissionOf(e) !== undefined && e.state !== "waiting_permission")).toBe(false);
       bridge.destroy();
     } finally {
@@ -339,13 +365,22 @@ describe("codex request_session_reset gate (issue #347)", () => {
     const script: TurnScript = { tool: true, ending: deferred<Ending>() };
     const rig = await makeRig([script]);
     try {
-      await startToolTurn(rig);
+      const turnToken = await startToolTurn(rig, ["conv-failed"]);
       const bridge = await rig.bridge();
       const { reply, requestId } = await askForReset(rig, bridge);
       rig.linkOptions.onPermissionDecision({ request_id: requestId, allow: true });
       await reply;
       script.ending.resolve("failed");
       await vi.waitFor(() => expect(rig.requests).toHaveLength(1));
+      const snapshot = rig.requestSnapshots[0]!;
+      expect(snapshot.state).toBe("waiting_input");
+      expect(rig.sent.slice(0, snapshot.sentCount).some((e) => e.type === "result")).toBe(true);
+      expect(rig.turnEnds).toEqual([{
+        turnToken,
+        conversationIds: ["conv-failed"],
+        terminal: "turn.failed",
+        error: { detail: "boom" },
+      }]);
       bridge.destroy();
     } finally {
       await finish(rig);
