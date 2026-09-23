@@ -1,7 +1,7 @@
 ---
 title: Event types and payloads
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-09-23
 description: The closed envelope.type enum, each type's payload shape, and the wrapper-owned stderr error diagnostic sink.
 ---
 
@@ -39,7 +39,7 @@ retains failure diagnosis as bounded text.
 The `result` row's payload scope does not exclude this wrapper-owned
 diagnostic sink. In the normal child-error relay path,
 `@openai/codex-sdk` 0.153.4 pipes child stderr into the SDK error message and
-`@anthropic-ai/claude-agent-sdk` 0.3.258 pipes it into its callback or error
+`@anthropic-ai/claude-agent-sdk` 0.3.280 pipes it into its callback or error
 tail; Kaoiro does not pass the Claude callback. SDK-owned debug output, such
 as `DEBUG_CLAUDE_AGENT_SDK`, is outside this sink and its policy.
 
