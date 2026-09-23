@@ -1,5 +1,5 @@
 defmodule KaoiroServer.Test.RelayFailureDiagnosticsFormatterTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias KaoiroServer.Test.RelayFailureDiagnosticsFormatter, as: Formatter
 
@@ -47,6 +47,21 @@ defmodule KaoiroServer.Test.RelayFailureDiagnosticsFormatterTest do
       end)
 
     assert output == ""
+  end
+
+  test "dumps diagnostics when a non-exception exit reason precedes a missing-message timeout" do
+    failure = ExUnit.AssertionError.exception(message: "no matching message after 500ms")
+
+    test = %ExUnit.Test{
+      state: {:failed, [{:exit, :unexpected_exit, []}, {:error, failure, []}]}
+    }
+
+    output =
+      ExUnit.CaptureIO.capture_io(:stderr, fn ->
+        assert {:noreply, :state} = Formatter.handle_cast({:test_finished, test}, :state)
+      end)
+
+    assert length(Regex.scan(~r/=== relay assertion diagnostics ===/, output)) == 1
   end
 
   test "continues when an optional process is absent" do
