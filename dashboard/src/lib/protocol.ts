@@ -683,9 +683,28 @@ export const SESSION_RESET_ERROR_REASONS = [
   "spawn_failed",
   "rollback_failed",
   "timeout",
+  "permission_ceiling_conflict",
 ] as const;
 export type SessionResetErrorReason =
   (typeof SESSION_RESET_ERROR_REASONS)[number];
+
+/** Client mirror of protocol/src/index.ts PermissionCeilingConflictAxis
+ *  (issue #397): one entry per axis a reset's resume snapshot exceeded on
+ *  the stored Antigravity permission ceiling (ADR-0057 F4c Stage B0),
+ *  present only when {@link SessionResetFailedPayload.reason} is
+ *  `"permission_ceiling_conflict"`. */
+export type PermissionCeilingConflictAxis =
+  | {
+      axis: "sandbox";
+      current: (typeof SELECTABLE_SANDBOX_VALUES)[number];
+      ceiling: (typeof SELECTABLE_SANDBOX_VALUES)[number];
+    }
+  | {
+      axis: "approval";
+      current: (typeof SELECTABLE_APPROVAL_VALUES)[number];
+      ceiling: (typeof SELECTABLE_APPROVAL_VALUES)[number];
+    }
+  | { axis: "network_access"; current: boolean; ceiling: boolean };
 
 /** Advertised session-level capabilities the wrapper stamps on every
  *  state_change (ADR-0034 F1/F2, ADR-0036 F5). Missing = fail-closed /
@@ -2733,6 +2752,9 @@ export interface SessionResetFailedPayload {
   agent_id: string;
   mode: SessionResetMode;
   reason: SessionResetErrorReason;
+  /** Present only when `reason === "permission_ceiling_conflict"` (issue
+   *  #397): one entry per axis to narrow before the reset can succeed. */
+  ceiling_conflict?: PermissionCeilingConflictAxis[];
 }
 
 export interface KaoiroConnection {
@@ -3342,6 +3364,65 @@ export function parseSessionResetCompleted(
   };
 }
 
+const CEILING_CONFLICT_AXES: ReadonlySet<string> = new Set([
+  "sandbox",
+  "approval",
+  "network_access",
+]);
+
+/** issue #397: validates one `ceiling_conflict` entry against its axis's own
+ *  value domain -- a malformed entry drops the WHOLE array (like the rest of
+ *  this payload's defensive parsing) rather than rendering a bogus axis. */
+function parseCeilingConflictAxis(
+  value: unknown,
+): PermissionCeilingConflictAxis | null {
+  if (typeof value !== "object" || value === null) return null;
+  const p = value as Record<string, unknown>;
+  if (typeof p.axis !== "string" || !CEILING_CONFLICT_AXES.has(p.axis)) return null;
+  if (p.axis === "network_access") {
+    if (typeof p.current !== "boolean" || typeof p.ceiling !== "boolean") return null;
+    return { axis: "network_access", current: p.current, ceiling: p.ceiling };
+  }
+  if (p.axis === "sandbox") {
+    if (
+      typeof p.current !== "string" ||
+      typeof p.ceiling !== "string" ||
+      !PERMISSION_SANDBOX_VALUES.has(p.current) ||
+      !PERMISSION_SANDBOX_VALUES.has(p.ceiling)
+    ) {
+      return null;
+    }
+    return {
+      axis: "sandbox",
+      current: p.current as (typeof SELECTABLE_SANDBOX_VALUES)[number],
+      ceiling: p.ceiling as (typeof SELECTABLE_SANDBOX_VALUES)[number],
+    };
+  }
+  if (
+    typeof p.current !== "string" ||
+    typeof p.ceiling !== "string" ||
+    !SELECTABLE_APPROVAL_SET.has(p.current) ||
+    !SELECTABLE_APPROVAL_SET.has(p.ceiling)
+  ) {
+    return null;
+  }
+  return {
+    axis: "approval",
+    current: p.current as (typeof SELECTABLE_APPROVAL_VALUES)[number],
+    ceiling: p.ceiling as (typeof SELECTABLE_APPROVAL_VALUES)[number],
+  };
+}
+
+function parseCeilingConflict(
+  value: unknown,
+): PermissionCeilingConflictAxis[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const parsed = value.map(parseCeilingConflictAxis);
+  return parsed.every((axis): axis is PermissionCeilingConflictAxis => axis !== null)
+    ? parsed
+    : undefined;
+}
+
 export function parseSessionResetFailed(
   value: unknown,
 ): SessionResetFailedPayload | null {
@@ -3351,7 +3432,14 @@ export function parseSessionResetFailed(
   const mode = parseResetMode(p.mode);
   const reason = parseResetReason(p.reason);
   if (mode === null || reason === null) return null;
-  return { request_id: p.request_id, agent_id: p.agent_id, mode, reason };
+  const ceiling_conflict = parseCeilingConflict(p.ceiling_conflict);
+  return {
+    request_id: p.request_id,
+    agent_id: p.agent_id,
+    mode,
+    reason,
+    ...(ceiling_conflict !== undefined ? { ceiling_conflict } : {}),
+  };
 }
 
 /** Normalizes the backwards-compatible `history_reset` payload. */
