@@ -201,6 +201,29 @@ export class InterAgentTurnCoordinator {
     this.#dispatchNext(peer);
   }
 
+  /** Rechecks a host-queued batch synchronously at the SDK input boundary. */
+  prepareInput(turnToken: string): { batch: DispatchedInterAgentBatch | null; removedConversationIds: readonly string[] } | undefined {
+    const batch = this.#batchByTurnToken.get(turnToken);
+    if (batch === undefined) return undefined;
+    const items: InterAgentBatchItem[] = [];
+    const removed: InterAgentBatchItem[] = [];
+    for (const item of batch.items) {
+      const mode = this.#reclassifyQueued?.(item) ?? item.mode;
+      if (mode === "terminal") removed.push(item);
+      else items.push(mode === item.mode ? item : { ...item, mode });
+    }
+    const conversationIds = items.map((item) => (item.envelope.payload as Partial<InterAgentMessagePayload>).conversation_id)
+      .filter((cid): cid is string => typeof cid === "string");
+    const survivingIds = new Set(conversationIds);
+    const removedConversationIds = removed.map((item) => (item.envelope.payload as Partial<InterAgentMessagePayload>).conversation_id)
+      .filter((cid): cid is string => typeof cid === "string" && !survivingIds.has(cid));
+    for (const item of removed) this.#onTerminalQueued?.(item);
+    if (items.length === 0) return { batch: null, removedConversationIds };
+    const prepared = { ...batch, items, conversationIds, text: formatInboundMessages(items) };
+    this.#batchByTurnToken.set(turnToken, prepared);
+    return { batch: prepared, removedConversationIds };
+  }
+
   /** The queue has accepted these items, but only the host turn-start boundary
    * is allowed to confirm their dispatch to the server (#237). */
   deliverySequencesForTurn(turnToken: string): readonly number[] {

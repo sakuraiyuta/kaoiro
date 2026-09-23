@@ -30,6 +30,35 @@ function inbound(cid: string, deliverySeq?: number): Envelope {
 }
 
 describe("AntigravityInterAgentTurnCoordinator", () => {
+  it("rechecks a dispatched host-queued proposal through the real conversation track", async () => {
+    const tool = new InterAgentTool({
+      config: { agent_id: "self.agent", persona: { id: "self", name: "Self", sprite_set: "self" }, display_name: "Self", server_url: "ws://localhost:4000/wrapper" },
+      getState: () => "idle", send: () => {},
+    });
+    const dispatched: DispatchedAntigravityInterAgentBatch[] = [];
+    const removed: Envelope[] = [];
+    let token = 0;
+    const coordinator = new AntigravityInterAgentTurnCoordinator({
+      createTurnToken: () => `turn-${++token}`,
+      reclassifyQueued: (item) => tool.queuedInboundMode(item.envelope, item.mode),
+      onTerminalQueued: (item) => removed.push(item.envelope),
+      onDispatch: (batch) => dispatched.push(batch),
+    });
+    const first = inbound("active");
+    coordinator.receive(first, (await tool.receiveInbound(first)).mode);
+    const proposal = inbound("closed");
+    proposal.payload.meta = { done: true, propose_next: "" };
+    coordinator.receive(proposal, (await tool.receiveInbound(proposal)).mode);
+    coordinator.settle("turn-1");
+    coordinator.dispatchNextForPeer("peer.agent");
+    expect(dispatched).toHaveLength(2);
+    await tool.invoke({ to: "peer.agent", kind: "done", body: "done", conversation_id: "closed", done: true });
+    const prepared = coordinator.prepareInput("turn-2");
+    expect(prepared?.batch).toBeNull();
+    expect(prepared?.removedConversationIds).toEqual(["closed"]);
+    expect(removed).toEqual([proposal]);
+  });
+
   it("suppresses an old queued proposal through the real conversation track and acknowledges it", async () => {
     const tool = new InterAgentTool({
       config: {

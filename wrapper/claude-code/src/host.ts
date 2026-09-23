@@ -385,6 +385,9 @@ export interface AgentHostOptions {
     turnToken: string;
     conversationIds: readonly string[];
   }) => void;
+  /** Synchronous final check before an input is yielded to the SDK. Undefined
+   * keeps the queued input; null consumes it without starting a turn. */
+  prepareInput?: (turnToken: string) => { text: string; conversationIds: readonly string[] } | null | undefined;
   /** Invoked for each real SDK stream frame while a wrapper-fed turn is
    * active. It deliberately excludes server instructions and wrapper-local
    * timers: only SDK output is evidence that the blocked SDK turn progressed
@@ -3581,6 +3584,18 @@ export class AgentHost implements EngineAdapter {
     while (true) {
       while (this.#queue.length > 0) {
         const turn = this.#queue.shift() as QueuedTurn;
+        const prepared = this.#options.prepareInput?.(turn.turnToken);
+        if (prepared === null) {
+          if (this.#queue.length === 0 && !this.#closed) {
+            this.#machine = initialMachineState("waiting_input");
+            this.#emitState("waiting_input");
+          }
+          continue;
+        }
+        if (prepared !== undefined) {
+          turn.message.message.content = prepared.text;
+          turn.conversationIds = prepared.conversationIds;
+        }
         this.#activeTurn = turn;
         this.#everStartedTurn = true;
         // This is the watchdog's only start point. In particular, dispatch

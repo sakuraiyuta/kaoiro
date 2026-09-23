@@ -24,6 +24,7 @@ import {
 } from "@kaoiro/agent-common";
 import type {
   Envelope,
+  InboundReplyMode,
   InterAgentMessagePayload,
   WrapperConfig,
 } from "@kaoiro/agent-common";
@@ -445,6 +446,8 @@ describe("queued inbound mode is rechecked at Claude dispatch", () => {
       get tokensCreated() { return nextToken; },
       get retireCalls() { return retireCalls; },
       start: (token: string) => delivery.onTurnStart(token),
+      prepare: (token: string) => coordinator.prepareInput(token),
+      deliverySequences: (token: string) => coordinator.deliverySequencesForTurn(token),
     };
   }
 
@@ -502,6 +505,26 @@ describe("queued inbound mode is rechecked at Claude dispatch", () => {
     expect(r.acknowledgements).toEqual([1, 2, 3]);
   });
 
+  it("rewrites a dispatched mixed batch at the host boundary", async () => {
+    const r = rig();
+    await r.receive(inboundEnvelope("active", 1, false, 1));
+    await r.receive(inboundEnvelope("closed-later", 1, true, 2));
+    await r.receive(inboundEnvelope("survivor", 1, false, 3));
+    r.start(r.dispatched[0]!.turnToken);
+    r.advance();
+    const token = r.dispatched[1]!.turnToken;
+    expect(r.deliverySequences(token)).toEqual([2, 3]);
+    await r.tool.invoke({ to: "peer.agent", kind: "done", body: "done", conversation_id: "closed-later", done: true });
+    const prepared = r.prepare(token);
+    expect(prepared?.batch?.conversationIds).toEqual(["survivor"]);
+    expect(prepared?.batch?.text).not.toContain("closed-later");
+    expect(prepared?.removedConversationIds).toEqual(["closed-later"]);
+    expect(r.deliverySequences(token)).toEqual([3]);
+    expect(r.acknowledgements).toEqual([1, 2]);
+    r.start(token);
+    expect(r.acknowledgements).toEqual([1, 2, 3]);
+  });
+
   it.each(["mutual", "synthetic"] as const)("drops queued reply-owed after %s closure", async (closure) => {
     const r = rig();
     await r.receive(inboundEnvelope("active", 1));
@@ -528,7 +551,7 @@ describe("queued inbound mode is rechecked at Claude dispatch", () => {
  *  Each release lets exactly the NEXT queued turn's result through, with
  *  the given outcome ("success" by default — MF-1's regression test needs
  *  to force a specific turn to end in error). */
-function makeControllableQueryFn(): {
+function makeControllableQueryFn(onInput?: (input: SDKUserMessage) => void): {
   queryFn: QueryFn;
   releaseNext: (outcome?: "success" | "error") => void;
 } {
@@ -536,7 +559,8 @@ function makeControllableQueryFn(): {
   let queuedOutcome: "success" | "error" | null = null;
   const queryFn = makeQueryFn((args: QueryArgs) => {
     async function* gen(): AsyncGenerator<SDKMessage, void> {
-      for await (const _m of args.prompt) {
+      for await (const input of args.prompt) {
+        onInput?.(input);
         const outcome =
           queuedOutcome ??
           (await new Promise<"success" | "error">((resolve) => {
@@ -572,7 +596,7 @@ function makeControllableQueryFn(): {
  * same-peer scheduling are deliberately NOT reproduced here: issue #246
  * extracted that state into InterAgentTurnCoordinator so these tests exercise
  * the same implementation used by cli.ts. */
-function makeCoalescingHarness(interAgent: InterAgentTool) {
+function makeCoalescingHarness(interAgent: InterAgentTool, recheckAtInput = false) {
   const sentBatches: { peer: string; cids: string[] }[] = [];
   const terminalIngressSkips: string[] = [];
   /** Envelopes production's onInterAgentMessage/onTurnEnd glue would hand
@@ -591,6 +615,12 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
   const ingressGate = new InterAgentIngressGate();
   const coordinator = new InterAgentTurnCoordinator({
     createTurnToken: () => `test-token-${++tokenSequence}`,
+    ...(recheckAtInput ? {
+      reclassifyQueued: (item: { envelope: Envelope; mode: InboundReplyMode }) =>
+        interAgent.queuedInboundMode(item.envelope, item.mode),
+      onTerminalQueued: (item: { envelope: Envelope }) =>
+        deliveryAcknowledgementWiring.acknowledgeDelivery(item.envelope),
+    } : {}),
     onDispatch: (batch) => {
       for (const item of batch.items) {
         interAgent.notePendingInjection(item.envelope, batch.turnToken);
@@ -627,6 +657,19 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
 
   function onTurnStart(turnToken: string): void {
     deliveryAcknowledgementWiring.onTurnStart(turnToken);
+  }
+
+  function prepareInput(turnToken: string): { text: string; conversationIds: readonly string[] } | null | undefined {
+    const prepared = coordinator.prepareInput(turnToken);
+    if (prepared === undefined) return undefined;
+    interAgent.resolveTurnEnd(turnToken, prepared.removedConversationIds);
+    if (prepared.batch !== null) return { text: prepared.batch.text, conversationIds: prepared.batch.conversationIds };
+    const settlement = coordinator.settle(turnToken);
+    if (settlement.kind === "settled") {
+      interAgent.resolveTurnEnd(turnToken, settlement.batch.conversationIds);
+      coordinator.dispatchNextForPeer(settlement.batch.peer);
+    }
+    return null;
   }
 
   function onTurnEnd(
@@ -685,6 +728,7 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
     notices,
     deliveryAcks,
     onTurnStart,
+    prepareInput,
     get sessionResetCalls(): number {
       return sessionResetCalls;
     },
@@ -697,6 +741,63 @@ function makeCoalescingHarness(interAgent: InterAgentTool) {
 }
 
 describe("issue #221 段階3: 同一peer busy-trigger coalescing (claude-code glue)", () => {
+  it("rechecks a host-queued close proposal only when the busy SDK turn releases input", async () => {
+    const inputs: string[] = [];
+    const states: string[] = [];
+    const { queryFn, releaseNext } = makeControllableQueryFn((input) => {
+      inputs.push(String(input.message.content));
+    });
+    const tool = new InterAgentTool({ config, getState: () => "idle", send: () => {} });
+    const harness = makeCoalescingHarness(tool, true);
+    const host = new AgentHost(config, {
+      onState: (envelope) => states.push(envelope.state),
+      onTurnStart: ({ turnToken }) => harness.onTurnStart(turnToken),
+      onTurnEnd: (info) => harness.onTurnEnd(info.turnToken, info.error),
+      prepareInput: harness.prepareInput,
+      queryFn,
+      now: () => "T",
+    });
+    harness.bindHost(host);
+    void host.run();
+    await host.send("operator turn", undefined, [], "operator-token");
+    await vi.waitFor(() => expect(inputs).toEqual(["operator turn"]));
+
+    await harness.receive(inboundEnvelope("cid-yield", 2, true, 1));
+    expect(harness.sentBatches).toHaveLength(1);
+    expect(harness.deliveryAcks).toEqual([]);
+    expect((await tool.invoke({ to: "peer.agent", kind: "done", body: "done", conversation_id: "cid-yield", done: true })).isError).toBeFalsy();
+
+    releaseNext();
+    await vi.waitFor(() => expect(harness.deliveryAcks).toEqual([1]));
+    expect(inputs).toEqual(["operator turn"]);
+    expect(states.at(-1)).toBe("waiting_input");
+    expect(host.activeInterAgentTurnToken()).toBeNull();
+    expect(harness.notices).toEqual([]);
+  });
+
+  it("skips one queued input without a transient ready state before its successor", async () => {
+    const states: string[] = [];
+    const inputs: string[] = [];
+    const starts: string[] = [];
+    const { queryFn, releaseNext } = makeControllableQueryFn((input) => inputs.push(String(input.message.content)));
+    const host = new AgentHost(config, {
+      onState: (envelope) => states.push(envelope.state),
+      prepareInput: (token) => token === "skip-token" ? null : undefined,
+      onTurnStart: ({ turnToken }) => {
+        starts.push(turnToken);
+        expect(states).not.toContain("waiting_input");
+      },
+      queryFn,
+      now: () => "T",
+    });
+    await host.send("stale", undefined, [], "skip-token");
+    await host.send("next", undefined, [], "next-token");
+    void host.run();
+    await vi.waitFor(() => expect(inputs).toEqual(["next"]));
+    expect(starts).toEqual(["next-token"]);
+    releaseNext();
+  });
+
   it("idle な間に届いた1件は単独 batch のまま即座に turn を起こす", async () => {
     const { queryFn, releaseNext } = makeControllableQueryFn();
     const tool = new InterAgentTool({

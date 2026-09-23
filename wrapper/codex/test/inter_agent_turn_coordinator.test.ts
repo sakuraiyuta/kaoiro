@@ -28,6 +28,32 @@ function inbound(cid: string): Envelope {
 }
 
 describe("CodexInterAgentTurnCoordinator lease ownership (issue #255)", () => {
+  it("replaces a host-queued batch with survivors at the final input boundary", () => {
+    const dispatched: DispatchedCodexInterAgentBatch[] = [];
+    const removed: string[] = [];
+    let closed = false;
+    let token = 0;
+    const coordinator = new CodexInterAgentTurnCoordinator({
+      createTurnToken: () => `turn-${++token}`,
+      reclassifyQueued: (item) => closed && item.envelope.payload.conversation_id === "closed"
+        ? "terminal" : item.mode,
+      onTerminalQueued: (item) => removed.push(String(item.envelope.payload.conversation_id)),
+      onDispatch: (batch) => dispatched.push(batch),
+    });
+    coordinator.receive(inbound("active"), "reply-owed");
+    coordinator.receive(inbound("closed"), "close-proposal");
+    coordinator.receive(inbound("survivor"), "reply-owed");
+    coordinator.settle("turn-1");
+    coordinator.dispatchNextForPeer("peer.agent");
+    expect(dispatched[1]?.conversationIds).toEqual(["closed", "survivor"]);
+    closed = true;
+    const prepared = coordinator.prepareInput("turn-2");
+    expect(prepared?.batch?.conversationIds).toEqual(["survivor"]);
+    expect(prepared?.removedConversationIds).toEqual(["closed"]);
+    expect(coordinator.settle("turn-2")?.conversationIds).toEqual(["survivor"]);
+    expect(removed).toEqual(["closed"]);
+  });
+
   it("delivery sequence belongs to the exact dispatched turn", () => {
     const coordinator = new CodexInterAgentTurnCoordinator({
       createTurnToken: () => "turn-1",

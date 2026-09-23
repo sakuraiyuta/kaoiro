@@ -348,6 +348,20 @@ export async function runAntigravityCli(
     questionBroker,
     onState: send,
     onLog: send,
+    prepareInput: (turnToken) => {
+      const prepared = interAgentTurns.prepareInput(turnToken);
+      if (prepared === undefined) return undefined;
+      for (const notice of interAgent.resolveTurnEnd(turnToken, prepared.removedConversationIds)) {
+        link?.send(notice);
+      }
+      if (prepared.batch !== null) return {
+        text: prepared.batch.text,
+        conversationIds: prepared.batch.conversationIds,
+      };
+      const settled = interAgentTurns.settle(turnToken);
+      if (settled !== undefined && !watchdogFailStopped) interAgentTurns.dispatchNextForPeer(settled.peer);
+      return null;
+    },
     onSessionId: (sessionId) => {
       link?.setSessionId(sessionId);
       // issue #352: the runner inherits this process's stdout into its own

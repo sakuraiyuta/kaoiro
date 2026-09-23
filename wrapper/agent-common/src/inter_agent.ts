@@ -826,6 +826,8 @@ export class InterAgentTool {
     this.#maxTracks = options.maxTracks ?? DEFAULT_MAX_TRACKS;
   }
 
+  /** Read-only queue classification. An unknown track or pending done acknowledgement
+   * retains the saved mode; no optimistic local-done state can discard input. */
   queuedInboundMode(envelope: Envelope, savedMode: InboundReplyMode): InboundReplyMode {
     const conversationId = (envelope.payload as Partial<InterAgentMessagePayload>).conversation_id;
     if (typeof conversationId !== "string") return savedMode;

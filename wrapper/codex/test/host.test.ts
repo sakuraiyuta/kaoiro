@@ -362,6 +362,56 @@ function makeClient(turns: ScriptedTurn[]): {
   return { client, calls };
 }
 
+describe("host-queued inter-agent input preparation (SDK backend)", () => {
+  it("skips the sole queued input and emits ready without an SDK turn", async () => {
+    const { client, calls } = makeClient([]);
+    const states: string[] = [];
+    const starts: string[] = [];
+    const host = new CodexHost(CONFIG, {
+      onState: (envelope) => states.push(envelope.state),
+      appendSystemPrompt: "p",
+      codexFactory: () => client,
+      prepareInput: () => null,
+      onTurnStart: ({ turnToken }) => starts.push(turnToken),
+    });
+    await host.send("stale", undefined, ["cid"], "stale-token");
+    const done = host.run();
+    await vi.waitFor(() => expect(states.at(-1)).toBe("waiting_input"));
+    expect(calls.inputs).toEqual([]);
+    expect(starts).toEqual([]);
+    expect(host.activeInterAgentTurnToken()).toBeNull();
+    host.close();
+    await done;
+  });
+
+  it("replaces the next queued input without an intermediate ready state", async () => {
+    const { client, calls } = makeClient([[usageEvent()]]);
+    const states: string[] = [];
+    const starts: string[] = [];
+    const host = new CodexHost(CONFIG, {
+      onState: (envelope) => states.push(envelope.state),
+      appendSystemPrompt: "p",
+      codexFactory: () => client,
+      prepareInput: (token) => token === "stale-token"
+        ? null : { text: "prepared", conversationIds: ["survivor"] },
+      onTurnStart: ({ turnToken, conversationIds }) => {
+        starts.push(turnToken);
+        expect(conversationIds).toEqual(["survivor"]);
+        expect(states).not.toContain("waiting_input");
+      },
+    });
+    await host.send("stale", undefined, ["cid"], "stale-token");
+    await host.send("old", undefined, ["old"], "next-token");
+    const done = host.run();
+    await client.waitForTurn(0);
+    expect(calls.inputs).toEqual(["prepared"]);
+    expect(starts).toEqual(["next-token"]);
+    await vi.waitFor(() => expect(host.activeInterAgentTurnToken()).toBeNull());
+    host.close();
+    await done;
+  });
+});
+
 /** Runs the host for one prompt turn, closing it after the turn settles. */
 async function runOneTurn(
   host: CodexHost,

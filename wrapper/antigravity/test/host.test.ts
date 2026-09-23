@@ -67,6 +67,8 @@ function hostHarness(options: {
   config?: WrapperConfig;
   now?: () => string;
   onTurnEnd?: AntigravityHostOptions["onTurnEnd"];
+  onTurnStart?: AntigravityHostOptions["onTurnStart"];
+  prepareInput?: AntigravityHostOptions["prepareInput"];
   onState?: AntigravityHostOptions["onState"];
   onInterruptSettled?: AntigravityHostOptions["onInterruptSettled"];
   onToolStart?: AntigravityHostOptions["onToolStart"];
@@ -108,6 +110,8 @@ function hostHarness(options: {
       turnEnds.push(info);
       options.onTurnEnd?.(info);
     },
+    ...(options.onTurnStart === undefined ? {} : { onTurnStart: options.onTurnStart }),
+    ...(options.prepareInput === undefined ? {} : { prepareInput: options.prepareInput }),
     ...(options.onToolStart === undefined ? {} : { onToolStart: options.onToolStart }),
     ...(options.onToolEnd === undefined ? {} : { onToolEnd: options.onToolEnd }),
     ...(options.permissionSyncSupported === undefined ? {} : { permissionSyncSupported: options.permissionSyncSupported }),
@@ -132,6 +136,45 @@ function hostHarness(options: {
 }
 
 describe("AntigravityHost", () => {
+  it("skips a sole queued input before stdin write and emits ready", async () => {
+    const starts: string[] = [];
+    const { host, calls, states, turnEnds } = hostHarness({
+      prepareInput: () => null,
+      onTurnStart: ({ turnToken }) => starts.push(turnToken),
+    });
+    await host.send("stale", undefined, ["cid"], "stale-token");
+    await waitFor(() => states.at(-1)?.state === "waiting_input");
+    expect(calls).toHaveLength(1);
+    expect(starts).toEqual([]);
+    expect(turnEnds).toEqual([]);
+    expect(host.activeInterAgentTurnToken()).toBeNull();
+    host.close();
+  });
+
+  it("skips an obsolete input without emitting ready before the next queued turn", async () => {
+    let releaseAdmission!: () => void;
+    const admission = new Promise<void>((resolve) => { releaseAdmission = resolve; });
+    const starts: string[] = [];
+    const { host, calls, states } = hostHarness({
+      waitForPermissionSync: () => admission,
+      prepareInput: (token) => token === "stale-token"
+        ? null : { text: "prepared", conversationIds: ["survivor"] },
+      onTurnStart: ({ turnToken, conversationIds }) => {
+        starts.push(turnToken);
+        expect(conversationIds).toEqual(["survivor"]);
+        expect(states.map((envelope) => envelope.state)).not.toContain("waiting_input");
+      },
+    });
+    await host.send("stale", undefined, ["cid"], "stale-token");
+    await host.send("old", undefined, ["old"], "next-token");
+    releaseAdmission();
+    await waitFor(() => starts.length === 1);
+    expect(starts).toEqual(["next-token"]);
+    expect(calls).toHaveLength(1);
+    expect(host.activeInterAgentTurnToken()).toBe("next-token");
+    host.close();
+  });
+
   it("starts an inter-agent turn only after the agy child is spawned and preserves its token through completion", async () => {
     const cfg = config();
     const calls: FakeAgy[] = [];
