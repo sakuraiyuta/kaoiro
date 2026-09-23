@@ -16,7 +16,7 @@ async function main(): Promise<void> {
   if (!process.stdin.isTTY) {
     process.stderr.write(
       "kaoiro-runner-setup: needs an interactive terminal" +
-        " (non-interactive setup: issue #146)\n",
+        " (interactive setup required)\n",
     );
     process.exit(78);
   }
