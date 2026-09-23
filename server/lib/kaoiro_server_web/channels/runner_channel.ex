@@ -172,7 +172,27 @@ defmodule KaoiroServerWeb.RunnerChannel do
 
       {:reply, :ok, socket}
     else
-      {:error, reason} -> {:reply, {:error, %{reason: to_string(reason)}}, socket}
+      # issue #397 self-review round-1 nit: a malformed ceiling_conflict is
+      # fail-closed here (this reply is discarded, never reaching
+      # SessionResets.resolve), so the pending reset lock just runs out its
+      # 60s timeout and the operator sees only "timeout" -- no hint that the
+      # actual cause was a malformed detail on this specific reply. Log it
+      # here, the only place that still has the raw payload; the detail
+      # itself is bounded to a handful of entries so a malicious/buggy runner
+      # cannot use this to flood the log.
+      {:error, :invalid_ceiling_conflict = reason} ->
+        Logger.warning(
+          "runner_channel: session_reset_result rejected for host=#{host_id} " <>
+            "agent_id=#{inspect(Map.get(payload, "agent_id"))}: invalid_ceiling_conflict " <>
+            "(reason=#{inspect(Map.get(payload, "reason"))}, " <>
+            "ceiling_conflict=#{inspect(Map.get(payload, "ceiling_conflict"), limit: 5)}); " <>
+            "the pending reset lock will time out with no detail reaching the operator"
+        )
+
+        {:reply, {:error, %{reason: to_string(reason)}}, socket}
+
+      {:error, reason} ->
+        {:reply, {:error, %{reason: to_string(reason)}}, socket}
     end
   end
 

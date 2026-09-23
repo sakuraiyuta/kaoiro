@@ -6743,6 +6743,192 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
                        }
     end
 
+    # issue #397 S1 (kohaku round-1 should-fix): the troubleshooting doc
+    # (antigravity-tools-permissions.md) promises that narrowing the
+    # offending axis via set_permission, then retrying the reset, actually
+    # clears a permission_ceiling_conflict refusal. Only the runner side of
+    # that chain (a narrowed resume_snapshot passes the ceiling check) was
+    # pinned before -- this exercises the SERVER side: a wrapper-reported
+    # `:applied` permission observation must narrow SessionPointers'
+    # snapshot, and that narrowed snapshot must actually ride the NEXT
+    # reset's resume_snapshot, which is the value the runner re-validates.
+    test "a narrowing applied permission observation narrows the resume_snapshot the next reset broadcasts" do
+      agent_id = "sess-reset.ceiling-narrow"
+      put_agent_with_caps(agent_id)
+      :ok = SessionPointers.record(agent_id, "sess-prev", "/w", :antigravity)
+
+      # Seed a WIDE baseline, as if a prior applied observation (or a legacy
+      # pointer) left this axis wider than some host's ceiling.
+      :ok =
+        SessionPointers.record_snapshot(agent_id, %{
+          "sandbox" => "workspace-write",
+          "network_access" => false,
+          "approval" => "never"
+        })
+
+      {:ok, _reply, wrapper_socket} =
+        KaoiroServerWeb.WrapperSocket
+        |> socket(nil, %{})
+        |> subscribe_and_join(
+          KaoiroServerWeb.WrapperChannel,
+          "wrapper:" <> agent_id,
+          %{"persona_id" => "default"}
+        )
+
+      cell = %{
+        "sandbox" => "workspace-write",
+        "network_access" => false,
+        "approval" => "local"
+      }
+
+      applied = %{
+        "revision" => 0,
+        "requested" => cell,
+        "status" => "applied",
+        "constraints" => %{"approval" => "local", "enforcement" => "advisory"},
+        "submitted" => %{"revision" => 0, "requested" => cell, "execution_id" => "e0"},
+        "effective" => %{
+          "revision" => 0,
+          "requested" => cell,
+          "execution_id" => "e0",
+          "session_id" => "sess-prev",
+          "turn_id" => "t0",
+          "permission" => %{
+            "sandbox" => "workspace-write",
+            "approval" => "local",
+            "enforcement" => "advisory"
+          },
+          "network_access" => false
+        }
+      }
+
+      envelope = %{
+        "version" => "0",
+        "agent_id" => agent_id,
+        "ts" => "2026-07-12T00:00:01Z",
+        "type" => "state_change",
+        "state" => "idle",
+        "session_id" => "sess-prev",
+        "ext" => %{
+          "engine" => "antigravity",
+          "permission_control" => applied,
+          # AgentStates keeps only the latest state_change's `ext` -- without
+          # re-asserting the reset capability here, this envelope (pushed
+          # through the real wrapper channel, unlike put_agent_with_caps'
+          # direct AgentStates.put) would silently drop it and the later
+          # session_reset push would fail with unsupported_session_reset
+          # instead of exercising the chain this test is for.
+          "session_capabilities" => %{
+            "supports_attachments" => true,
+            "supports_user_input_dialog" => true,
+            "supports_session_reset" => true,
+            "session_reset_modes" => ["new", "clear"]
+          }
+        }
+      }
+
+      envelope_ref = push(wrapper_socket, "envelope", envelope)
+      assert_reply envelope_ref, :ok
+
+      :ok =
+        wait_until(fn ->
+          SessionPointers.get(agent_id).snapshot["approval"] == "local"
+        end)
+
+      @endpoint.subscribe("runner:sess-reset")
+      operator_socket = join_as(:operator)
+
+      reset_ref =
+        push(operator_socket, "session_reset", %{"agent_id" => agent_id, "mode" => "new"})
+
+      assert_reply reset_ref, :ok
+
+      assert_broadcast "reset_session", %{
+        "agent_id" => ^agent_id,
+        "resume_snapshot" => %{"approval" => "local"}
+      }
+    end
+
+    # Negative control for the pin above: a narrowing revision that never
+    # reaches :applied (still :applying -- e.g. the wrapper has not
+    # confirmed it yet) must NOT narrow SessionPointers, so the reset still
+    # broadcasts the old, wide snapshot.
+    test "an applying (not yet applied) narrowing observation leaves the resume_snapshot wide" do
+      agent_id = "sess-reset.ceiling-nonarrow"
+      put_agent_with_caps(agent_id)
+      :ok = SessionPointers.record(agent_id, "sess-prev", "/w", :antigravity)
+
+      :ok =
+        SessionPointers.record_snapshot(agent_id, %{
+          "sandbox" => "workspace-write",
+          "network_access" => false,
+          "approval" => "never"
+        })
+
+      {:ok, _reply, wrapper_socket} =
+        KaoiroServerWeb.WrapperSocket
+        |> socket(nil, %{})
+        |> subscribe_and_join(
+          KaoiroServerWeb.WrapperChannel,
+          "wrapper:" <> agent_id,
+          %{"persona_id" => "default"}
+        )
+
+      cell = %{
+        "sandbox" => "workspace-write",
+        "network_access" => false,
+        "approval" => "local"
+      }
+
+      applying = %{
+        "revision" => 0,
+        "requested" => cell,
+        "status" => "applying",
+        "constraints" => %{"approval" => "local", "enforcement" => "advisory"},
+        "submitted" => %{"revision" => 0, "requested" => cell, "execution_id" => "e0"}
+      }
+
+      envelope = %{
+        "version" => "0",
+        "agent_id" => agent_id,
+        "ts" => "2026-07-12T00:00:01Z",
+        "type" => "state_change",
+        "state" => "idle",
+        "session_id" => "sess-prev",
+        "ext" => %{
+          "engine" => "antigravity",
+          "permission_control" => applying,
+          "session_capabilities" => %{
+            "supports_attachments" => true,
+            "supports_user_input_dialog" => true,
+            "supports_session_reset" => true,
+            "session_reset_modes" => ["new", "clear"]
+          }
+        }
+      }
+
+      envelope_ref = push(wrapper_socket, "envelope", envelope)
+      assert_reply envelope_ref, :ok
+
+      :ok =
+        wait_until(fn ->
+          match?(%{control: %{status: :applying}}, KaoiroServer.PermissionSettings.get(agent_id))
+        end)
+
+      @endpoint.subscribe("runner:sess-reset")
+      operator_socket = join_as(:operator)
+
+      reset_ref =
+        push(operator_socket, "session_reset", %{"agent_id" => agent_id, "mode" => "new"})
+
+      assert_reply reset_ref, :ok
+
+      assert_broadcast "reset_session", %{
+        "agent_id" => ^agent_id,
+        "resume_snapshot" => %{"approval" => "never"}
+      }
+    end
+
     test "SessionPointers に snapshot が無い agent の reset_session に resume_snapshot は載らない" do
       # AgentId host_id_from/1 は最後の `.<rand>` を落とすので、host_id を
       # `sess-reset` に揃えるため rand は 1 セグメントで書く。

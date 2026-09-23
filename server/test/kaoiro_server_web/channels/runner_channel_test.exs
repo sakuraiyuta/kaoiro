@@ -1,6 +1,8 @@
 defmodule KaoiroServerWeb.RunnerChannelTest do
   use KaoiroServerWeb.ChannelCase, async: false
 
+  import ExUnit.CaptureLog
+
   alias KaoiroServer.HostRegistry
   alias KaoiroServer.AgentStates
 
@@ -959,23 +961,35 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
       _ = KaoiroServer.SessionResets.delete(agent_id)
     end
 
-    test "ceiling_conflict の axis が閉集合外なら invalid_ceiling_conflict" do
+    # issue #397 self-review round-1 nit: this reply is discarded (never
+    # reaches SessionResets.resolve), so the pending reset lock simply times
+    # out and the operator only sees "timeout" -- fail-closed as designed,
+    # but a warning here is the only place the actual malformed detail is
+    # still diagnosable.
+    test "ceiling_conflict の axis が閉集合外なら invalid_ceiling_conflict、拒否理由が warning ログに残る" do
       host_id = "lab-pc-reset-ceiling-badaxis"
       socket = join_runner(host_id)
 
-      ref =
-        push(socket, "session_reset_result", %{
-          "agent_id" => "a.x",
-          "request_id" => "rs_x",
-          "mode" => "new",
-          "ok" => false,
-          "reason" => "permission_ceiling_conflict",
-          "ceiling_conflict" => [
-            %{"axis" => "permission_mode", "current" => "auto", "ceiling" => "never"}
-          ]
-        })
+      log =
+        capture_log(fn ->
+          ref =
+            push(socket, "session_reset_result", %{
+              "agent_id" => "a.x",
+              "request_id" => "rs_x",
+              "mode" => "new",
+              "ok" => false,
+              "reason" => "permission_ceiling_conflict",
+              "ceiling_conflict" => [
+                %{"axis" => "permission_mode", "current" => "auto", "ceiling" => "never"}
+              ]
+            })
 
-      assert_reply ref, :error, %{reason: "invalid_ceiling_conflict"}
+          assert_reply ref, :error, %{reason: "invalid_ceiling_conflict"}
+        end)
+
+      assert log =~ "invalid_ceiling_conflict"
+      assert log =~ "agent_id=\"a.x\""
+      assert log =~ "permission_mode"
     end
 
     test "ceiling_conflict の current/ceiling が axis の値域外なら invalid_ceiling_conflict" do
