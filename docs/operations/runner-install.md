@@ -244,6 +244,47 @@ Because systemd user units and launchd agents start with a minimal PATH,
 KAOIRO_NODE=/home/you/.nvm/versions/node/v22.20.0/bin/node
 ```
 
+To make version-managed commands available in agent tool shells, also set
+`PATH` in the same `runner.env`. The launch shim sources this file with
+`set -a` before starting Node, so the runner and newly spawned wrappers inherit
+the value. For an asdf installation, adapt this example to the host:
+
+```sh
+PATH="$HOME/.asdf/shims:$HOME/.asdf/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+```
+
+The file is sourced by `/bin/sh`, so `$HOME` expands here. Keep the standard
+system directories and the directory containing the `asdf` executable; asdf
+shims invoke `asdf` by name. Adding only the shims directory can leave the
+commands unusable. The Linux systemd path has been observed; launchd uses the
+same launch shim, but this PATH procedure has not been verified on a macOS host.
+
+Before changing the live file, use the temporary `KAOIRO_RUNNER_DIR` and
+`KAOIRO_RUNNER_ENV` procedure under [Verification](#verification) to compare
+the launch shim's `--version` behavior with and without the `PATH` line under
+a minimal inherited PATH. Check that `node`, `gh --version`, `pnpm --version`,
+and `asdf --version` actually run after sourcing the temporary file; finding
+`pnpm` with `command -v` alone does not prove it can find Node. Do not point
+the dry run at the production server or reuse its `host_id`.
+
+The operator must update the real `runner.env` and restart the service for the
+new PATH to reach wrappers. A runner restart stops active agents; schedule it
+accordingly. No systemd daemon reload is needed for an env-file edit. On
+Linux, verify only the new runner process's PATH, without printing other
+environment variables:
+
+```sh
+runner_pid=$(systemctl --user show --property=MainPID --value kaoiro-runner)
+tr '\0' '\n' < "/proc/$runner_pid/environ" | grep '^PATH='
+```
+
+Then run `gh --version`, `pnpm --version`, and `asdf --version` inside each
+newly spawned Antigravity, Claude Code, and Codex tool shell. For Codex, also
+check a non-login shell (`login:false`). The real `runner.env` contains a
+token: do not dump the file; if checking its assignment, read only its
+`PATH=` line with
+`grep '^PATH=' "${XDG_CONFIG_HOME:-$HOME/.config}/kaoiro/runner.env"`.
+
 ## Creating distribution tarballs
 
 Create a self-contained archive requiring only the Node runtime (issue #70,
