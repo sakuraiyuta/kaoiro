@@ -247,7 +247,7 @@ The four non-identical files are NOT byte-identical at the JSON-schema level;
 what makes them safe for `app_server_projection.ts` is where the diff sits,
 not its absence. The diff body is identical across all four files (only the
 line-number offsets differ, since each file embeds the same shared
-`definitions` entries at a different position) and is confined to two
+`definitions` entries at a different position) and is confined to three
 definitions neither read by, nor reachable from, the fields
 `app_server_projection.ts` actually consumes:
 
@@ -262,12 +262,18 @@ definitions neither read by, nor reachable from, the fields
   `item.arguments`, `item.result.content` (text blocks only) /
   `.structuredContent`, and `item.error.message` -- confirmed by reading that
   function; `mcpAppUi` is not among them.
+- `UserInput` gained the same discriminated-union restructuring (a `url`/
+  `fileId` union). Its exact `$ref` (verified against the raw schema, not a
+  substring match) appears only on `ThreadItem`'s `UserMessageThreadItem`
+  variant (`type: "userMessage"`). `app_server_projection.ts`'s item-type
+  `switch` (`agentMessage` / `reasoning` / `webSearch` / `commandExecution` /
+  `fileChange` / `mcpToolCall`) has no `userMessage` case and falls through
+  to `default: return null` -- confirmed by reading the switch -- so this
+  variant, and `UserInput` with it, is never mapped.
 
 A separate, unrelated diff elsewhere in the stable bundle: `ThreadEnvironment`
 (new definition) and an `originator` field on `Thread` (`ThreadStartedNotification.json`
-only); a similar discriminated-union restructuring of a user-input content
-item (also confined to a definition none of the five notifications' consumed
-fields touch). `ThreadRollbackParams`/`ThreadRollbackResponse` are absent from
+only). `ThreadRollbackParams`/`ThreadRollbackResponse` are absent from
 the 0.156.1 bundle (kaoiro's adapter does not call `thread/rollback`,
 confirmed by grep over `wrapper/codex/src/*.ts`).
 
@@ -330,18 +336,23 @@ trace=execve` on this exact run:
 ```
 
 Prompt: a single ordinary turn (`runStreamed("QUESTION_1", ...)`) against the
-loopback provider's fixed one-shot Responses SSE reply (see
-`backend_rollback.integration.test.ts` for the identical provider shape).
-Observed events (source: `@openai/codex-sdk` 0.156.1, this exact binary and
-argv above):
+loopback provider's fixed one-shot Responses SSE reply (identical shape to
+`backend_rollback.integration.test.ts`'s provider). Full, unfiltered observed
+event stream (source: `@openai/codex-sdk` 0.156.1, this exact binary and argv
+above; an earlier capture printed only the `turn.started`/`turn.completed`/
+`thread.started` subset via an explicit console filter in the throwaway
+script -- re-run once more without that filter for this record):
 
 ```
-{"type":"thread.started","thread_id":"01a0ccdb-8338-7c33-8782-c72a1cb489c7"}
+{"type":"thread.started","thread_id":"01a0cce3-bab8-7cd2-b9f2-0e848f141285"}
 {"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"ANSWER_1"}}
 {"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":1,"reasoning_output_tokens":0}}
 ```
 
-`turn.started` carries no field beyond `type` -- unchanged from the
+The provider does emit the assistant message, surfaced here as `item.completed`
+(`agent_message`), matching `backend_rollback.integration.test.ts`'s provider
+shape. `turn.started` carries no field beyond `type` -- unchanged from the
 0.153.4-scoped claim it re-confirms. `codex exec --help` on the same 0.156.1
 binary still lists no compaction option, matching the prior 0.153.4-scoped
 claim in ADR-0043 and
@@ -397,11 +408,21 @@ only `this.#modelPending` (`host.ts:1199`); turn start binds
 resolved -- the turn was attempted with `gpt-6-luna`, not the prior model.
 The `ext.model` field that drives the `state` event display is a SEPARATE
 piece of state, `this.#model`, updated only on turn settle inside
-`#finishTurn` (`this.#model = attempted.model`, `host.ts:2402`). That is why
-turn 2's `state` events show `"gpt-6-sol"` (the last CONFIRMED value) during
-`sending`/`thinking` and only flip to `"gpt-6-luna"` at `turn_end`/`done`/
-`waiting_input` -- a display lag on the confirmed-value field, not evidence
-that the wrong model executed. No child process remained after the run
+`#finishTurn` (`this.#model = attempted.model`, `host.ts:2401-2402`). That is
+why turn 2's `state` events show `"gpt-6-sol"` (the last CONFIRMED value)
+during `sending`/`thinking` and only flip to `"gpt-6-luna"` at `turn_end`/
+`done`/`waiting_input` -- a display lag on the confirmed-value field, not
+evidence that the wrong model executed. **The observed final value is
+itself direct evidence, not just an inference from reading the code**: the
+only OTHER assignment to `this.#model` (`host.ts:2493`) is the
+account-default resolution path, which always pairs with
+`model_source: "default"` (`host.ts:2494`) and only runs when
+`attempted.model` was null -- not the case here, since `setModel("gpt-6-luna")`
+had already set `#modelPending` to a non-null value before turn 2 started. So
+the observed `ext.model: "gpt-6-luna"` after turn 2 settled could only have
+come from the `attempted.model !== null` branch at `host.ts:2401-2402`,
+which means `attempted.model` -- the value turn 2 actually ran with -- was
+`gpt-6-luna`. No child process remained after the run
 (`ps aux` checked
 separately from the two long-lived production runner processes already on
 this host).
