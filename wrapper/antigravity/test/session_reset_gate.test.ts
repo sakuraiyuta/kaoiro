@@ -140,12 +140,11 @@ function resetDescriptor(rig: Rig): ToolDescriptor {
 }
 
 describe("Antigravity session-reset real lifetime semantics (issue #396)", () => {
-  // M1 (kohaku round-1 must-fix): the state_change this turn's own outcome
-  // produces (host.ts's #drainTurns finally block: #publishTerminalResult
-  // / #terminalError -> #apply -> #emitState, synchronous) must reach the
-  // link BEFORE the dispatched session_reset_request -- the #395 bug on the
-  // opposite side. Checked on both the result-success and result-with-
-  // is_error paths.
+  // The state_change this turn's own outcome produces (host.ts's
+  // #drainTurns finally block: #publishTerminalResult/#terminalError ->
+  // #apply -> #emitState, synchronous) must reach the link BEFORE the
+  // dispatched session_reset_request -- the #395 bug on the opposite side.
+  // Checked on both the result-success and result-with-is_error paths.
   it.each([
     ["result", '{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n'],
     ["is_error result", '{"event":"result","result":{"status":"ERROR","response":"boom"}}\n'],
@@ -180,11 +179,10 @@ describe("Antigravity session-reset real lifetime semantics (issue #396)", () =>
     },
   );
 
-  // S3 (should-fix): a reservation dispatches cleanly at its owning turn's
-  // authoritative end, and a later turn that gets skipped by `prepareInput`
-  // (never even reaching onTurnEnd) does not disturb that -- exercising
-  // issue #394 commit 2's `{kind: "skipped"}` outcome alongside this new
-  // code path.
+  // A reservation dispatches cleanly at its owning turn's authoritative
+  // end, and a later turn that gets skipped by `prepareInput` (never even
+  // reaching onTurnEnd) does not disturb that -- exercising issue #394
+  // commit 2's `{kind: "skipped"}` outcome alongside this new code path.
   it("a reservation dispatches at its owning turn's end and a subsequent skipped turn does not interfere", async () => {
     const rig = await makeRig({}, (token) => (token === "turn-b" ? null : undefined));
     await rig.host.send("do the thing", undefined, ["cid-a"], "turn-a");
@@ -216,12 +214,12 @@ describe("Antigravity session-reset real lifetime semantics (issue #396)", () =>
     expect(rig.turnEnds).toHaveLength(1);
   });
 
-  // V3 (from v1's verification plan): a turn that ends via close() while a
-  // reservation is pending is dropped with a cancellation notice, NOT
-  // dispatched. This is the pin `terminal` exists for -- outcome.kind ===
-  // "stale" (host.ts, close()-during-flight) reaches onTurnEnd with neither
-  // an `error` nor a `cancellation`, indistinguishable from a real result
-  // without the `terminal` field this issue adds.
+  // A turn that ends via close() while a reservation is pending is dropped
+  // with a cancellation notice, NOT dispatched. This is the pin `terminal`
+  // exists for -- outcome.kind === "stale" (host.ts, close()-during-flight)
+  // reaches onTurnEnd with neither an `error` nor a `cancellation`,
+  // indistinguishable from a real result without the `terminal` field this
+  // issue adds.
   it("drops a pending reservation, without dispatching, when its turn ends via close()", async () => {
     const rig = await makeRig();
     await rig.host.send("do the thing", undefined, ["cid-a"], "turn-a");
@@ -245,8 +243,8 @@ describe("Antigravity session-reset real lifetime semantics (issue #396)", () =>
     expect(rig.requests).toHaveLength(0);
   });
 
-  // S1 (kohaku round-1 should-fix): a watchdog fail-stop's ACTIVE-turn
-  // onTurnEnd never fires at all (see the finally block's
+  // A watchdog fail-stop's ACTIVE-turn onTurnEnd never fires at all (see
+  // the finally block's
   // `!this.#watchdogFailStopped` gate in host.ts), so a pending
   // reservation freezes ONLY when the queue is empty at fail-stop time --
   // ADR-0043 and antigravity-tools-permissions.md previously described
