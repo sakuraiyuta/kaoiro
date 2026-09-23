@@ -10,6 +10,8 @@ import {
 } from "../src/lib/settings.svelte";
 import type {
   ConversationSummary,
+  DirectoryEntry,
+  Envelope,
   KaoiroConnection,
   QuagmireSettings,
   UserSummary,
@@ -58,12 +60,16 @@ afterEach(async () => {
 async function renderDrawer(
   onClose = vi.fn(),
   connection?: KaoiroConnection,
+  identity: {
+    agents?: Record<string, Envelope>;
+    directory?: Record<string, DirectoryEntry>;
+  } = {},
 ) {
   const target = document.createElement("div");
   document.body.append(target);
   const component = mount(SettingsDrawer, {
     target,
-    props: { onClose, connection },
+    props: { onClose, connection, ...identity },
   });
   mounted.push(component);
   await tick();
@@ -325,7 +331,7 @@ describe("SettingsDrawer", () => {
 
     expect(conn.listConversations).toHaveBeenCalledTimes(1);
     const item = target.querySelector(".conv-list li")!;
-    expect(item.textContent).toContain("gp.a ⇔ gp.b");
+    expect(item.textContent?.replace(/\s+/g, " ")).toContain("gp.a ⇔ gp.b");
     expect(item.textContent).toContain("3 turns / open");
 
     // issue #276 review follow-up (ふじ B1): the row must show the
@@ -337,6 +343,102 @@ describe("SettingsDrawer", () => {
     // Locale-independent: only assert a non-empty formatted date/time
     // rendered (avoids pinning an exact locale string in CI).
     expect(item.textContent).toMatch(/\d{2}\/\d{2}.*\d{2}:\d{2}/);
+  });
+
+  it("既定では閉じた会話を隠し、toggle で turns/status を保ったまま表示する", async () => {
+    const conn = makeConnection(async () => [
+      {
+        conversationId: "closed-only",
+        participants: ["gp.a", "gp.b"],
+        turns: 8,
+        tokens: null,
+        status: "closed",
+        startedAt: null,
+      },
+    ]);
+    const { target } = await renderDrawer(vi.fn(), conn);
+    await Promise.resolve();
+    await tick();
+
+    expect(target.querySelector(".conv-list")).toBeNull();
+    expect(target.textContent).toContain("開いている会話はありません");
+    expect(target.textContent).toContain("閉じた会話 1 件を非表示");
+    const toggle = checkboxByLabel(target, "閉じた会話も表示");
+    expect(toggle.checked).toBe(false);
+
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event("change", { bubbles: true }));
+    await tick();
+
+    expect(target.querySelector(".conv-list li")?.textContent).toContain(
+      "8 turns / closed",
+    );
+    expect(target.textContent).not.toContain("閉じた会話 1 件を非表示");
+  });
+
+  it("会話一覧と確認ダイアログは persona 名と各 agent_id の tooltip を表示する", async () => {
+    const conn = makeConnection(async () => [
+      {
+        conversationId: "named-row",
+        participants: ["live.agent", "offline.agent", "unknown.agent"],
+        turns: 1,
+        tokens: 10,
+        status: "open",
+        startedAt: null,
+      },
+    ]);
+    const agents: Record<string, Envelope> = {
+      "live.agent": {
+        version: "0",
+        agent_id: "live.agent",
+        ts: "2026-09-23T00:00:00Z",
+        type: "state_change",
+        state: "waiting_input",
+        persona: { id: "momo", name: "もも", sprite_set: "momo" },
+      },
+    };
+    const directory: Record<string, DirectoryEntry> = {
+      "offline.agent": {
+        persona: { id: "ao", name: "あお", sprite_set: "ao" },
+        display_name: "あお",
+        last_seen: null,
+      },
+    };
+    const { target } = await renderDrawer(vi.fn(), conn, { agents, directory });
+    await Promise.resolve();
+    await tick();
+
+    const participantSpans = target.querySelectorAll(
+      ".conv-list .conv-participants span[title]",
+    );
+    expect(Array.from(participantSpans, (span) => span.textContent)).toEqual([
+      "もも",
+      "あお",
+      "unknown.agent",
+    ]);
+    expect(Array.from(participantSpans, (span) => span.getAttribute("title"))).toEqual([
+      "live.agent",
+      "offline.agent",
+      "unknown.agent",
+    ]);
+
+    target
+      .querySelector<HTMLButtonElement>(".conv-close")!
+      .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await tick();
+    const dialogSpans = document.querySelectorAll(
+      'dialog[aria-label="会話を閉じる確認"] .conv-participants span[title]',
+    );
+    expect(Array.from(dialogSpans, (span) => span.textContent)).toEqual([
+      "もも",
+      "あお",
+      "unknown.agent",
+    ]);
+    expect(Array.from(dialogSpans, (span) => span.getAttribute("title"))).toEqual([
+      "live.agent",
+      "offline.agent",
+      "unknown.agent",
+    ]);
   });
 
   it("started_at が null の行(サーバ未対応・欠測)は時刻を追加表示しない", async () => {
@@ -352,6 +454,9 @@ describe("SettingsDrawer", () => {
     ]);
     const { target } = await renderDrawer(vi.fn(), conn);
     await Promise.resolve();
+    await tick();
+
+    checkboxByLabel(target, "閉じた会話も表示").click();
     await tick();
 
     const meta = target.querySelector(".conv-meta")!;
@@ -746,8 +851,13 @@ describe("SettingsDrawer", () => {
       await Promise.resolve();
       await tick();
 
-      const items = target.querySelectorAll(".conv-list li");
+      let items = target.querySelectorAll(".conv-list li");
+      expect(items).toHaveLength(1);
       expect(items[0]!.querySelector(".conv-close")).not.toBeNull();
+      checkboxByLabel(target, "閉じた会話も表示").click();
+      await tick();
+      items = target.querySelectorAll(".conv-list li");
+      expect(items).toHaveLength(2);
       expect(items[1]!.querySelector(".conv-close")).toBeNull();
     });
 
@@ -818,7 +928,7 @@ describe("SettingsDrawer", () => {
       // leaves an operator with multiple same-pair conversations unable
       // to tell them apart.
       expect(dialog!.textContent).toContain("cid:c1");
-      expect(dialog!.textContent).toContain("a ⇔ b");
+      expect(dialog!.textContent?.replace(/\s+/g, " ")).toContain("a ⇔ b");
 
       // issue #277: showModal()'s spec-defined initial focus goes to the
       // first autofocus descendant -- pins that the confirm dialog's
@@ -880,7 +990,7 @@ describe("SettingsDrawer", () => {
       const dialog = document.querySelector('dialog[aria-label="会話を閉じる確認"]')!;
       expect(dialog.textContent).toContain("cid:bbbbbbbb");
       expect(dialog.textContent).not.toContain("aaaaaaaa");
-      expect(dialog.textContent).toContain("gp.a ⇔ gp.b");
+      expect(dialog.textContent?.replace(/\s+/g, " ")).toContain("gp.a ⇔ gp.b");
 
       dialog
         .querySelector<HTMLButtonElement>("button.danger")!
@@ -931,16 +1041,60 @@ describe("SettingsDrawer", () => {
       expect(conn.closeConversation).toHaveBeenCalledWith("c1");
       expect(conn.listConversations).toHaveBeenCalledTimes(2);
       expect(document.querySelector('dialog[aria-label="会話を閉じる確認"]')).toBeNull();
-      expect(target.querySelector(".conv-meta")?.textContent).toContain(
-        "closed",
-      );
+      expect(target.querySelector(".conv-list")).toBeNull();
+      expect(target.textContent).toContain("開いている会話はありません");
     });
 
-    // issue #276 review follow-up (ふじ NB1): closeConversation's own doc
-    // contract says the caller must re-fetch either way — a rejection can
-    // mean someone else already closed it (conversation_closed) or TTL
-    // beat us to it, and the row would otherwise sit stale at status=open
-    // forever. Error stays visible; the list behind it still refreshes.
+    it.each(["conversation_closed", "unknown_conversation_id"])(
+      "%s なら既に閉じた行として確認を閉じ、一覧を再取得する",
+      async (reason) => {
+        let reads = 0;
+        const conn = makeConnection(
+          async () => {
+            reads += 1;
+            return [
+              {
+                conversationId: "c1",
+                participants: ["a", "b"],
+                turns: 1,
+                tokens: reads === 1 ? 10 : null,
+                status: reads === 1 ? "open" : "closed",
+                startedAt: null,
+              },
+            ];
+          },
+          () => Promise.reject(new Error(reason)),
+        );
+        const { target } = await renderDrawer(vi.fn(), conn);
+        await Promise.resolve();
+        await tick();
+
+        target
+          .querySelector<HTMLButtonElement>(".conv-close")!
+          .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await tick();
+
+        document
+          .querySelector<HTMLButtonElement>(
+            'dialog[aria-label="会話を閉じる確認"] button.danger',
+          )!
+          .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await Promise.resolve();
+        await Promise.resolve();
+        await tick();
+
+        expect(conn.closeConversation).toHaveBeenCalledWith("c1");
+        expect(conn.listConversations).toHaveBeenCalledTimes(2);
+        expect(
+          document.querySelector('dialog[aria-label="会話を閉じる確認"]'),
+        ).toBeNull();
+        expect(target.querySelector(".conv-list")).toBeNull();
+        expect(target.textContent).toContain("開いている会話はありません");
+      },
+    );
+
+    // Other failures stay visible so the operator can act on them; the list
+    // still refreshes because a timeout may have raced with server closure.
     it("close 失敗時はダイアログにエラーを表示しつつ、一覧を再取得する", async () => {
       const conn = makeConnection(
         async () => [
@@ -953,7 +1107,7 @@ describe("SettingsDrawer", () => {
             startedAt: null,
           },
         ],
-        () => Promise.reject(new Error("conversation_closed")),
+        () => Promise.reject(new Error("timeout")),
       );
       const { target } = await renderDrawer(vi.fn(), conn);
       await Promise.resolve();
@@ -973,7 +1127,7 @@ describe("SettingsDrawer", () => {
       await tick();
 
       expect(dialog.textContent).toContain("失敗しました");
-      expect(dialog.textContent).toContain("conversation_closed");
+      expect(dialog.textContent).toContain("timeout");
       // Dialog stays open (director instruction: no accidental data-loss
       // pattern — a failed close must not silently vanish the modal).
       expect(document.querySelector('dialog[aria-label="会話を閉じる確認"]')).not.toBeNull();

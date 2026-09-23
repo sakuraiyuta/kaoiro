@@ -3,9 +3,16 @@
   // Slides in from the right; every change writes straight to localStorage
   // via updateSettings() (no separate save step, the value set is small).
   import { settings, updateSettings } from "./settings.svelte";
+  import {
+    isConversationAlreadyClosedError,
+    visibleConversationSummaries,
+  } from "./conversationList";
+  import { personaName } from "./personaName";
   import { MAX_RALLY_TURNS } from "./protocol";
   import type {
     ConversationSummary,
+    DirectoryEntry,
+    Envelope,
     KaoiroConnection,
     QuagmireSettings,
     UserSummary,
@@ -17,6 +24,8 @@
     onLogout = undefined,
     connection = undefined,
     quagmireSettings = null,
+    agents = {},
+    directory = {},
   }: {
     onClose: () => void;
     /** Logout relay (phase-31 31-7): on smartphone the header hides its
@@ -30,6 +39,8 @@
      *  through here for `isOperator` sessions) — every other row
      *  (local-only settings) works without it. */
     connection?: KaoiroConnection | undefined;
+    agents?: Record<string, Envelope>;
+    directory?: Record<string, DirectoryEntry>;
     /** Rally threshold in force (issue #307), or null before the first
      *  push. Owned by App.svelte so a change made elsewhere is reflected
      *  here without the drawer holding its own copy. */
@@ -80,6 +91,15 @@
   let conversations = $state<ConversationSummary[] | null>(null);
   let conversationsError = $state<string | null>(null);
   let conversationsIncomplete = $state(false);
+
+  // View state only; keep it out of the settings store so each drawer open hides closed rows again.
+  let showClosedConversations = $state(false);
+  const visibleConversations = $derived(
+    visibleConversationSummaries(conversations ?? [], showClosedConversations),
+  );
+  const hiddenClosedCount = $derived(
+    (conversations?.length ?? 0) - visibleConversations.length,
+  );
 
   // issue #207: same pure read-time query shape as conversations, just
   // above.
@@ -269,7 +289,12 @@
       }
     } catch (err) {
       if (generation === connectionGeneration) {
-        closeError = err instanceof Error ? err.message : "error";
+        if (isConversationAlreadyClosedError(err)) {
+          confirmCloseTarget = null;
+          closeError = null;
+        } else {
+          closeError = err instanceof Error ? err.message : "error";
+        }
       }
     } finally {
       if (generation === connectionGeneration) {
@@ -513,6 +538,15 @@
           更新
         </button>
       </div>
+      <div class="conversation-filters">
+        <label class="conversation-toggle">
+          <input type="checkbox" bind:checked={showClosedConversations} />
+          閉じた会話も表示
+        </label>
+        {#if !showClosedConversations && hiddenClosedCount > 0}
+          <span class="conv-status">閉じた会話 {hiddenClosedCount} 件を非表示</span>
+        {/if}
+      </div>
       {#if conversationsError}
         <p class="conv-status">取得に失敗しました({conversationsError})</p>
       {:else}
@@ -522,15 +556,18 @@
       {/if}
       {#if !conversationsError && conversations === null}
         <p class="conv-status">読み込み中…</p>
-      {:else if !conversationsError && conversations?.length === 0}
+      {:else if !conversationsError && conversations && visibleConversations.length === 0}
         <p class="conv-status">開いている会話はありません</p>
       {:else if !conversationsError && conversations}
         <ul class="conv-list">
-          {#each conversations as conv (conv.conversationId)}
+          {#each visibleConversations as conv (conv.conversationId)}
             <li>
-              <span class="conv-participants"
-                >{conv.participants.join(" ⇔ ")}</span
-              >
+              <span class="conv-participants">
+                {#each conv.participants as agentId, index}
+                  {#if index > 0}<span aria-hidden="true">{" ⇔ "}</span>{/if}
+                  <span title={agentId}>{personaName(agentId, agents, directory)}</span>
+                {/each}
+              </span>
               <span class="conv-cid" title={conv.conversationId}
                 >cid:{conv.conversationId.slice(0, 8)}</span
               >
@@ -651,9 +688,12 @@
         {#if confirmCloseTarget}
           <p>この会話を閉じますか?参加エージェントに通知されます。</p>
           <p class="confirm-target">
-            <span class="conv-participants"
-              >{confirmCloseTarget.participants.join(" ⇔ ")}</span
-            >
+            <span class="conv-participants">
+              {#each confirmCloseTarget.participants as agentId, index}
+                {#if index > 0}<span aria-hidden="true">{" ⇔ "}</span>{/if}
+                <span title={agentId}>{personaName(agentId, agents, directory)}</span>
+              {/each}
+            </span>
             <span class="conv-cid" title={confirmCloseTarget.conversationId}
               >cid:{confirmCloseTarget.conversationId.slice(0, 8)}</span
             >
@@ -880,6 +920,21 @@
     margin: 0;
     font-size: var(--fs-body-sm);
     color: var(--fg-dim);
+  }
+
+  .conversation-filters {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-bottom: 0.4rem;
+  }
+
+  .conversation-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: var(--fs-body-sm);
   }
 
   .refresh {

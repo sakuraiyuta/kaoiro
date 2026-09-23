@@ -1874,6 +1874,8 @@
     onClose={() => (showSettings = false)}
     onLogout={logout}
     connection={isOperator ? (connection ?? undefined) : undefined}
+    {agents}
+    {directory}
     {quagmireSettings}
   />
 {/if}
