@@ -1499,6 +1499,13 @@ export class CodexHost implements EngineAdapter {
     };
     try {
       const completion = await runtime.run({ input, hostTurnToken: turnToken }, {
+        prepareInput: () => {
+          const prepared = this.#options.prepareInput?.(turnToken);
+          if (prepared === null) return null;
+          if (prepared === undefined) return undefined;
+          conversationIds = prepared.conversationIds;
+          return prepared.text;
+        },
         snapshot: () => {
           pending = { model: this.#modelPending,
             effort: this.#effortPending ?? (this.#appFirstDispatch && !this.#effortResetPending && this.#effortSource !== "default" ? this.#effort : null),
@@ -1552,7 +1559,13 @@ export class CodexHost implements EngineAdapter {
     } catch (error) {
       endBoundary();
       if (this.#watchdogFailStopped || settled) return;
-      if (!started && error instanceof AppServerAdmissionError && this.#appFailure === null) {
+      if (!started && error instanceof AppServerAdmissionError && error.reason === "input_skipped") {
+        settled = true;
+        if (this.#queue.length === 0) {
+          this.#machine = initialMachineState("waiting_input");
+          this.#emitState("waiting_input");
+        }
+      } else if (!started && error instanceof AppServerAdmissionError && this.#appFailure === null) {
         settled = true;this.#machine = initialMachineState("waiting_input");this.#emitState("waiting_input");
         this.#options.onTurnEnd?.({ turnToken, conversationIds, error: { reason: error.reason, detail: PERMISSION_GATE_RECOVERY }, cancellation: { kind: "permission_gate", started: false } });
       } else {

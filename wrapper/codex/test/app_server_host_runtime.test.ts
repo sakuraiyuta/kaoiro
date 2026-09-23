@@ -81,6 +81,27 @@ it.each([false, true])("owns one session, opens once (resume=%s), and settles po
   f.runtime.baseline!.model = "tampered";expect(f.runtime.baseline?.model).toBe("initial");
 });
 
+it("keeps the baseline, pending settings, and rollback clear after input_skipped", async () => {
+  const f = fixture();
+  await f.runtime.run(input("initial"), f.hooks);
+  const baseline = f.runtime.baseline;
+  f.hooks.prepareInput = () => null;
+  await expect(f.runtime.run(input("skipped"), f.hooks)).rejects.toMatchObject({ reason: "input_skipped" });
+  expect(f.runtime.baseline).toEqual(baseline);
+  expect(f.sent).toHaveLength(1);
+  expect(f.session.close).not.toHaveBeenCalled();
+  expect(f.hooks.onDispatch).toHaveBeenCalledTimes(1);
+
+  delete f.hooks.prepareInput;
+  await f.runtime.run(input("ordinary"), f.hooks);
+  expect(f.sent[1]).not.toHaveProperty("model");
+  f.pending = { model: "changed", effort: "low", effortReset: false };
+  const next = await f.runtime.run(input("pending"), f.hooks);
+  expect(next.attempt.pending).toEqual(f.pending);
+  expect(f.sent[2]).toMatchObject({ model: "changed", effort: "low" });
+  expect(f.createSession).toHaveBeenCalledTimes(1);
+});
+
 it("waits for initial server sync before creating the child", async () => {
   const f = fixture(), sync = deferred();f.hooks.waitForPermissionSync = vi.fn(() => sync.promise);
   const running = f.runtime.run(input(), f.hooks);
