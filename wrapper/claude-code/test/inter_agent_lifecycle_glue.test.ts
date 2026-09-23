@@ -394,6 +394,132 @@ describe("issue #177 review M4: adapter-level lifecycle glue (claude-code)", () 
   });
 });
 
+describe("queued inbound mode is rechecked at Claude dispatch", () => {
+  function rig(sendInterAgent?: (envelope: Envelope) => Promise<InterAgentAcceptance>) {
+    const tool = new InterAgentTool({
+      config,
+      getState: () => "idle",
+      send: () => {},
+      ...(sendInterAgent === undefined ? {} : { sendInterAgent }),
+    });
+    const dispatched: Array<{ turnToken: string; text: string; cids: readonly string[]; items: readonly { envelope: Envelope; mode: string }[] }> = [];
+    const suppressed: Array<{ cid: unknown; mode: string }> = [];
+    const acknowledgements: number[] = [];
+    let retireCalls = 0;
+    let nextToken = 0;
+    const ingress = new InterAgentIngressGate();
+    const coordinator = new InterAgentTurnCoordinator({
+      createTurnToken: () => `queued-${++nextToken}`,
+      reclassifyQueued: (item) => tool.queuedInboundMode(item.envelope, item.mode),
+      onTerminalQueued: (item) => {
+        suppressed.push({ cid: item.envelope.payload.conversation_id, mode: item.mode });
+        delivery.acknowledgeDelivery(item.envelope);
+      },
+      onDispatch: (batch) => dispatched.push({
+        turnToken: batch.turnToken,
+        text: batch.text,
+        cids: batch.conversationIds,
+        items: batch.items,
+      }),
+    });
+    const delivery = createDeliveryAcknowledgementWiring(
+      (seq) => acknowledgements.push(seq), coordinator,
+    );
+    delivery.onInterAgentDeliveryStatus({ acked_seq: 0 });
+    const receive = (envelope: Envelope) => handleInterAgentMessage({
+      interAgent: tool,
+      ingress,
+      recordInboundIa: () => {},
+      send: () => {},
+      acknowledgeDelivery: delivery.acknowledgeDelivery,
+      retireDelivery: () => { retireCalls += 1; return true; },
+      inject: (inbound, mode) => coordinator.receive(inbound, mode),
+      log: () => {},
+    }, envelope);
+    const advance = () => {
+      const first = coordinator.settle(dispatched[0]!.turnToken);
+      expect(first.kind).toBe("settled");
+      if (first.kind === "settled") coordinator.dispatchNextForPeer(first.batch.peer);
+    };
+    return { tool, receive, advance, dispatched, suppressed, acknowledgements,
+      get tokensCreated() { return nextToken; },
+      get retireCalls() { return retireCalls; },
+      start: (token: string) => delivery.onTurnStart(token),
+    };
+  }
+
+  it("acks an old close proposal without another SDK turn or delivery retirement", async () => {
+    const r = rig();
+    await r.receive(inboundEnvelope("cid-close", 2, true, 1));
+    await r.receive(inboundEnvelope("cid-close", 3, true, 2));
+    expect((await r.tool.invoke({ to: "peer.agent", kind: "done", body: "done", conversation_id: "cid-close", done: true })).isError).toBeFalsy();
+    r.start(r.dispatched[0]!.turnToken);
+    r.advance();
+    expect(r.dispatched).toHaveLength(1);
+    expect(r.tokensCreated).toBe(1);
+    expect(r.suppressed).toEqual([{ cid: "cid-close", mode: "close-proposal" }]);
+    expect(r.acknowledgements).toEqual([1, 2]);
+    expect(r.retireCalls).toBe(0);
+  });
+
+  it("keeps an open close proposal actionable", async () => {
+    const r = rig();
+    await r.receive(inboundEnvelope("cid-open", 2, true));
+    await r.receive(inboundEnvelope("cid-open", 3, true));
+    r.advance();
+    expect(r.dispatched[1]?.text).toContain("the peer signalled done=true");
+    expect(r.suppressed).toEqual([]);
+  });
+
+  it("does not discard while local done is pending and later rejected", async () => {
+    let rejectSend: ((value: InterAgentAcceptance) => void) | undefined;
+    const r = rig(() => new Promise((resolve) => { rejectSend = resolve; }));
+    await r.receive(inboundEnvelope("cid-pending", 2, true));
+    await r.receive(inboundEnvelope("cid-pending", 3, true));
+    const pending = r.tool.invoke({ to: "peer.agent", kind: "done", body: "done", conversation_id: "cid-pending", done: true });
+    await vi.waitFor(() => expect(rejectSend).toBeDefined());
+    r.advance();
+    expect(r.dispatched[1]?.text).toContain("the peer signalled done=true");
+    rejectSend!({ kind: "rejected", reason: "stale_turn" });
+    expect((await pending).isError).toBe(true);
+    expect(r.suppressed).toEqual([]);
+  });
+
+  it("filters a closed item from a mixed batch while preserving the other delivery", async () => {
+    const r = rig();
+    await r.receive(inboundEnvelope("active", 1, false, 1));
+    await r.receive(inboundEnvelope("closed", 1, true, 2));
+    await r.receive(inboundEnvelope("open", 1, false, 3));
+    await r.tool.invoke({ to: "peer.agent", kind: "done", body: "done", conversation_id: "closed", done: true });
+    r.start(r.dispatched[0]!.turnToken);
+    r.advance();
+    expect(r.dispatched[1]?.cids).toEqual(["open"]);
+    expect(r.dispatched[1]?.text).toContain("conversation_id=open");
+    expect(r.dispatched[1]?.text).not.toContain("conversation_id=closed");
+    expect(r.suppressed).toEqual([{ cid: "closed", mode: "close-proposal" }]);
+    expect(r.acknowledgements).toEqual([1, 2]);
+    r.start(r.dispatched[1]!.turnToken);
+    expect(r.acknowledgements).toEqual([1, 2, 3]);
+  });
+
+  it.each(["mutual", "synthetic"] as const)("drops queued reply-owed after %s closure", async (closure) => {
+    const r = rig();
+    await r.receive(inboundEnvelope("active", 1));
+    await r.receive(inboundEnvelope("later", 1, false));
+    if (closure === "mutual") {
+      await r.tool.invoke({ to: "peer.agent", kind: "done", body: "done", conversation_id: "later", done: true });
+      await r.receive(inboundEnvelope("later", 3, true));
+    } else {
+      const synthetic = inboundEnvelope("later", 0, true);
+      synthetic.agent_id = "server";
+      await r.receive(synthetic);
+    }
+    r.advance();
+    expect(r.dispatched).toHaveLength(1);
+    expect(r.suppressed).toEqual([{ cid: "later", mode: "reply-owed" }]);
+  });
+});
+
 /** Holds the CURRENT turn's SDK "thinking" open until the test calls
  *  `releaseNext()` — the only way a test can actually exercise "busy" vs
  *  "free" the way issue #221 段階3's coalescing trigger depends on it

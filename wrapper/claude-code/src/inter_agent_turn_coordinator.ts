@@ -55,6 +55,8 @@ export type InterAgentTurnSettlement =
 export interface InterAgentTurnCoordinatorOptions {
   /** Called synchronously once a free peer's oldest batch owns a turn. */
   onDispatch: (batch: DispatchedInterAgentBatch) => void;
+  reclassifyQueued?: (item: InterAgentBatchItem) => InboundReplyMode;
+  onTerminalQueued?: (item: InterAgentBatchItem) => void;
   /** Injectable only for deterministic tests. Production uses UUIDs. */
   createTurnToken?: () => string;
 }
@@ -122,11 +124,15 @@ export class InterAgentTurnCoordinator {
    * ordinary operator turn. */
   readonly #retiredTurnTokens = new Set<string>();
   readonly #onDispatch: (batch: DispatchedInterAgentBatch) => void;
+  readonly #reclassifyQueued: ((item: InterAgentBatchItem) => InboundReplyMode) | undefined;
+  readonly #onTerminalQueued: ((item: InterAgentBatchItem) => void) | undefined;
   readonly #createTurnToken: () => string;
   #closed = false;
 
   constructor(options: InterAgentTurnCoordinatorOptions) {
     this.#onDispatch = options.onDispatch;
+    this.#reclassifyQueued = options.reclassifyQueued;
+    this.#onTerminalQueued = options.onTerminalQueued;
     this.#createTurnToken = options.createTurnToken ?? randomUUID;
   }
 
@@ -295,13 +301,26 @@ export class InterAgentTurnCoordinator {
   #dispatchNext(peer: string): void {
     if (this.#closed) return;
     if (this.#activeTokenByPeer.has(peer)) return;
-    const queue = this.#pendingBatches.get(peer);
-    const pending = queue?.shift();
-    if (pending === undefined) return;
-    if (queue!.length === 0) this.#pendingBatches.delete(peer);
+    let items: InterAgentBatchItem[];
+    while (true) {
+      const queue = this.#pendingBatches.get(peer);
+      const pending = queue?.shift();
+      if (pending === undefined) return;
+      if (queue!.length === 0) this.#pendingBatches.delete(peer);
+      items = [];
+      for (const item of pending.items) {
+        const mode = this.#reclassifyQueued?.(item) ?? item.mode;
+        if (mode === "terminal") {
+          this.#onTerminalQueued?.(item);
+        } else {
+          items.push(mode === item.mode ? item : { ...item, mode });
+        }
+      }
+      if (items.length > 0) break;
+    }
 
     const turnToken = this.#createTurnToken();
-    const conversationIds = pending.items
+    const conversationIds = items
       .map(
         (item) =>
           (item.envelope.payload as Partial<InterAgentMessagePayload>)
@@ -311,9 +330,9 @@ export class InterAgentTurnCoordinator {
     const batch: DispatchedInterAgentBatch = {
       turnToken,
       peer,
-      items: pending.items,
+      items,
       conversationIds,
-      text: formatInboundMessages(pending.items),
+      text: formatInboundMessages(items),
     };
     this.#batchByTurnToken.set(turnToken, batch);
     this.#activeTokenByPeer.set(peer, turnToken);

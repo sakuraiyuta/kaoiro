@@ -24,7 +24,8 @@ retains no payloads and does not guarantee retransmission or delivery.
 - A wrapper does not ack queue insertion or `receiveInbound` arrival. It confirms
   a contiguous prefix as `delivery_ack {delivery_seq}` when an actual SDK turn
   starts, or when intentional non-injection (consumed/terminal/stale) is fully
-  classified. Until then, a gap remains as `issued_seq > acked_seq`;
+  classified, including terminal reclassification when a queued item reaches
+  the SDK dispatch boundary. Until then, a gap remains as `issued_seq > acked_seq`;
   `pending_since` is the timestamp of the first divergence.
 - `whoami`, `list_agents` entries, and the operator dashboard's
   `snapshot.deliveries` / `delivery_status` all read the same server ledger. An

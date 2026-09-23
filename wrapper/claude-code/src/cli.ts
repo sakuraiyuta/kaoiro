@@ -345,6 +345,16 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   };
 
   interAgentTurns = new InterAgentTurnCoordinator({
+    reclassifyQueued: (item) =>
+      interAgent?.queuedInboundMode(item.envelope, item.mode) ?? item.mode,
+    onTerminalQueued: (item) => {
+      const payload = item.envelope.payload as Partial<InterAgentMessagePayload>;
+      writeRedactedStderr(
+        `[kaoiro] queued inter-agent turn skipped: conversation_id=${String(payload.conversation_id)} ` +
+        `turn_number=${String(payload.turn_number)} mode=${item.mode}->terminal\n`,
+      );
+      deliveryAcknowledgementRuntime.acknowledgeDelivery(item.envelope);
+    },
     onDispatch: (batch) => {
       writeDeliveryLifecycle("dispatch_queued", batch.turnToken);
       // Register at dispatch time, not receipt time: a same-CID next

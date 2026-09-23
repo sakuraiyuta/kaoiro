@@ -605,6 +605,14 @@ function freshTrack(nowMs: number): ConversationTrack {
   };
 }
 
+function modeForTrack(track: ConversationTrack): InboundReplyMode {
+  return track.closed
+    ? "terminal"
+    : track.remoteDone
+      ? "close-proposal"
+      : "reply-owed";
+}
+
 /** Age used to order a track for the total-count backstop
  *  (`#enforceTrackCap()`) — `closedAtMs` once closed (matching
  *  `#pruneClosedTracks()`'s own ordering), else `lastActivityMs`. */
@@ -816,6 +824,16 @@ export class InterAgentTool {
     this.#nowMs = options.nowMs ?? Date.now;
     this.#maxClosedTracks = options.maxClosedTracks ?? DEFAULT_MAX_CLOSED_TRACKS;
     this.#maxTracks = options.maxTracks ?? DEFAULT_MAX_TRACKS;
+  }
+
+  queuedInboundMode(envelope: Envelope, savedMode: InboundReplyMode): InboundReplyMode {
+    const conversationId = (envelope.payload as Partial<InterAgentMessagePayload>).conversation_id;
+    if (typeof conversationId !== "string") return savedMode;
+    const track = this.#conversations.get(conversationId);
+    // A pending done send may still be rejected. Never discard an input on
+    // the strength of its optimistic localDone/closed transition.
+    if (!track || this.#pendingDoneAcks.has(conversationId)) return savedMode;
+    return modeForTrack(track);
   }
 
   /** Returns the track for `conversationId`, creating one if absent, and
@@ -1243,11 +1261,7 @@ export class InterAgentTool {
     // early-return above: a stale/duplicate delivery is never a
     // mutation candidate at all.
     if (mutated) track.mutationGen += 1;
-    const mode: InboundReplyMode = track.closed
-      ? "terminal"
-      : track.remoteDone
-        ? "close-proposal"
-        : "reply-owed";
+    const mode = modeForTrack(track);
 
     const waiter = this.#replyWaiters.get(conversationId);
     if (waiter) {

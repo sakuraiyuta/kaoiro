@@ -453,6 +453,20 @@ describe("issue #177: conversation lifecycle (done / close-proposal / terminal /
     return env;
   }
 
+  it("reclassifies queued modes from the current track without consuming the turn again", async () => {
+    const { tool } = makeTool("self.agent");
+    const inbound = doneInbound("queued-mode", 2);
+    expect(tool.queuedInboundMode(inbound, "reply-owed")).toBe("reply-owed");
+    expect((await tool.receiveInbound(inbound)).mode).toBe("close-proposal");
+    expect(tool.queuedInboundMode(inbound, "reply-owed")).toBe("close-proposal");
+    const done = await tool.invoke({
+      to: "peer.agent", kind: "done", body: "done",
+      conversation_id: "queued-mode", done: true,
+    });
+    expect(done.isError).toBeFalsy();
+    expect(tool.queuedInboundMode(inbound, "reply-owed")).toBe("terminal");
+  });
+
   it("peer 側のみの done=true は close-proposal (AC7): 返信はまだ owed", async () => {
     const { tool } = makeTool("self.agent");
     const disposition = await tool.receiveInbound(doneInbound("cnv-close", 1));

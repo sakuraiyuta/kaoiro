@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
+import type { Envelope, InterAgentTool, WrapperConfig } from "@kaoiro/agent-common";
 import { runClaudeCli } from "../src/cli.js";
 import { AgentHost, type AgentHostOptions } from "../src/host.js";
 import type { Query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
@@ -32,6 +32,72 @@ function inboundEnvelope(deliverySeq: number, turnNumber = 1): Envelope {
 }
 
 describe("Claude CLI delivery composition (issue #247)", () => {
+  it("acks a queued terminal item without a second host turn or delivery retirement", async () => {
+    const acknowledgements: number[] = [];
+    const retire = vi.fn(() => true);
+    const sends: string[] = [];
+    let firstTurnToken = "";
+    let linkOptions!: Record<string, any>;
+    let hostOptions!: Record<string, any>;
+    let tool!: InterAgentTool;
+    let finishHost!: () => void;
+    const finished = new Promise<void>((resolve) => { finishHost = resolve; });
+    let started!: () => void;
+    const ready = new Promise<void>((resolve) => { started = resolve; });
+    const host = {
+      state: "idle",
+      statusExtSnapshot: () => ({}),
+      activeInterAgentTurnToken: () => firstTurnToken || null,
+      run: async () => { started(); await finished; },
+      send: async (text: string, _attachments: unknown, _cids: readonly string[], token: string) => {
+        sends.push(text);
+        if (firstTurnToken === "") firstTurnToken = token;
+        hostOptions.onTurnStart({ turnToken: token });
+      },
+    };
+    const running = runClaudeCli({
+      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      loadConfig: () => ({ ...config }),
+      buildMcpServer: (interAgent) => { tool = interAgent; return {} as never; },
+      createServerLink: (_url, _agentId, options) => {
+        linkOptions = options as unknown as Record<string, any>;
+        queueMicrotask(() => linkOptions.onPersonaPrompt("system prompt"));
+        return {
+          acknowledgeInterAgentDelivery: (seq: number) => acknowledgements.push(seq),
+          retireInterAgentDeliveries: retire,
+          sendInterAgent: async () => ({ kind: "accepted", stamp: null }),
+          close: () => {}, currentSessionId: () => null, send: () => {},
+          reportDisconnectIntent: async () => true,
+        } as never;
+      },
+      createHost: (_config, options) => {
+        hostOptions = options as unknown as Record<string, any>;
+        return host as never;
+      },
+    });
+    try {
+      await ready;
+      linkOptions.onInterAgentDeliveryStatus({ acked_seq: 0 });
+      const first = inboundEnvelope(1, 2);
+      first.payload.conversation_id = "queued-closed";
+      first.payload.meta = { done: true, propose_next: "" };
+      const second = inboundEnvelope(2, 3);
+      second.payload.conversation_id = "queued-closed";
+      second.payload.meta = { done: true, propose_next: "" };
+      await linkOptions.onInterAgentMessage(first);
+      await vi.waitFor(() => expect(sends).toHaveLength(1));
+      await linkOptions.onInterAgentMessage(second);
+      const done = await tool.invoke({ to: "peer.agent", kind: "done", body: "done", conversation_id: "queued-closed", done: true });
+      expect(done.isError).toBeFalsy();
+      hostOptions.onTurnEnd({ turnToken: firstTurnToken });
+      expect(retire).not.toHaveBeenCalled();
+      await vi.waitFor(() => expect(acknowledgements).toEqual([1, 2]));
+      expect(sends).toHaveLength(1);
+    } finally {
+      finishHost();
+      await running;
+    }
+  });
   it.each([false, true])(
     "acks a mid-turn arrival only when the real host yields the next input (stderr failure: %s)",
     async (stderrFails) => {

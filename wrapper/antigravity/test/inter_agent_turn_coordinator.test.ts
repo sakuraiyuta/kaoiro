@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createDeliveryAcknowledgementWiring, InterAgentTool } from "@kaoiro/agent-common";
 import type { Envelope } from "@kaoiro/agent-common";
 import {
   AntigravityInterAgentTurnCoordinator,
@@ -29,6 +30,49 @@ function inbound(cid: string, deliverySeq?: number): Envelope {
 }
 
 describe("AntigravityInterAgentTurnCoordinator", () => {
+  it("suppresses an old queued proposal through the real conversation track and acknowledges it", async () => {
+    const tool = new InterAgentTool({
+      config: {
+        agent_id: "self.agent",
+        persona: { id: "self", name: "Self", sprite_set: "self" },
+        display_name: "Self",
+        server_url: "ws://localhost:4000/wrapper",
+      },
+      getState: () => "idle",
+      send: () => {},
+    });
+    const dispatched: DispatchedAntigravityInterAgentBatch[] = [];
+    const acknowledgements: number[] = [];
+    const suppressed: Envelope[] = [];
+    let tokens = 0;
+    const coordinator = new AntigravityInterAgentTurnCoordinator({
+      createTurnToken: () => `turn-${++tokens}`,
+      reclassifyQueued: (item) => tool.queuedInboundMode(item.envelope, item.mode),
+      onTerminalQueued: (item) => {
+        suppressed.push(item.envelope);
+        delivery.acknowledgeDelivery(item.envelope);
+      },
+      onDispatch: (batch) => dispatched.push(batch),
+    });
+    const delivery = createDeliveryAcknowledgementWiring(
+      (seq) => acknowledgements.push(seq), coordinator,
+    );
+    delivery.onInterAgentDeliveryStatus({ acked_seq: 0 });
+    const active = inbound("active", 1);
+    coordinator.receive(active, (await tool.receiveInbound(active)).mode);
+    const queued = inbound("queued", 2);
+    queued.payload.meta = { done: true, propose_next: "" };
+    coordinator.receive(queued, (await tool.receiveInbound(queued)).mode);
+    await tool.invoke({ to: "peer.agent", kind: "done", body: "done", conversation_id: "queued", done: true });
+    delivery.onTurnStart(dispatched[0]!.turnToken);
+    const settled = coordinator.settle(dispatched[0]!.turnToken);
+    coordinator.dispatchNextForPeer(settled!.peer);
+    expect(dispatched).toHaveLength(1);
+    expect(tokens).toBe(1);
+    expect(suppressed).toEqual([queued]);
+    expect(acknowledgements).toEqual([1, 2]);
+  });
+
   it("binds a delivery sequence to the exact dispatched agy turn", () => {
     const coordinator = new AntigravityInterAgentTurnCoordinator({
       createTurnToken: () => "turn-1",

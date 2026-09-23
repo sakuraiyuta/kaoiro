@@ -294,6 +294,16 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   /** Production owner of Codex same-peer batching. Tests instantiate this
    * exact class instead of copying queue state into their harness. */
   const interAgentTurns = new CodexInterAgentTurnCoordinator({
+    reclassifyQueued: (item) =>
+      interAgent?.queuedInboundMode(item.envelope, item.mode) ?? item.mode,
+    onTerminalQueued: (item) => {
+      const payload = item.envelope.payload;
+      writeRedactedStderr(
+        `[kaoiro] queued inter-agent turn skipped: conversation_id=${String(payload.conversation_id)} ` +
+        `turn_number=${String(payload.turn_number)} mode=${item.mode}->terminal\n`,
+      );
+      deliveryAcknowledgementRuntime.acknowledgeDelivery(item.envelope);
+    },
     onDispatch: (batch) => {
       const range = interAgentTurns.deliverySequenceRangeForTurn(batch.turnToken);
       if (range !== undefined) {

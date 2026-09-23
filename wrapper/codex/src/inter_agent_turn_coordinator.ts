@@ -39,6 +39,8 @@ interface PendingBatch {
 export interface CodexInterAgentTurnCoordinatorOptions {
   /** Runs synchronously once a free peer receives its oldest queued batch. */
   onDispatch: (batch: DispatchedCodexInterAgentBatch) => void;
+  reclassifyQueued?: (item: CodexInterAgentBatchItem) => InboundReplyMode;
+  onTerminalQueued?: (item: CodexInterAgentBatchItem) => void;
   /** Injectable only for deterministic tests. Production uses UUIDs. */
   createTurnToken?: () => string;
 }
@@ -54,12 +56,16 @@ export class CodexInterAgentTurnCoordinator {
   readonly #batchByTurnToken = new Map<string, DispatchedCodexInterAgentBatch>();
   readonly #activeTokenByPeer = new Map<string, string>();
   readonly #onDispatch: (batch: DispatchedCodexInterAgentBatch) => void;
+  readonly #reclassifyQueued: ((item: CodexInterAgentBatchItem) => InboundReplyMode) | undefined;
+  readonly #onTerminalQueued: ((item: CodexInterAgentBatchItem) => void) | undefined;
   readonly #createTurnToken: () => string;
   #closed = false;
   #retireDiscarded: ((envelopes: readonly Envelope[]) => void) | undefined;
 
   constructor(options: CodexInterAgentTurnCoordinatorOptions) {
     this.#onDispatch = options.onDispatch;
+    this.#reclassifyQueued = options.reclassifyQueued;
+    this.#onTerminalQueued = options.onTerminalQueued;
     this.#createTurnToken = options.createTurnToken ?? randomUUID;
   }
 
@@ -186,12 +192,25 @@ export class CodexInterAgentTurnCoordinator {
   #dispatchNext(peer: string): void {
     if (this.#closed) return;
     if (this.#activeTokenByPeer.has(peer)) return;
-    const queue = this.#pendingBatches.get(peer);
-    const pending = queue?.shift();
-    if (pending === undefined) return;
-    if (queue!.length === 0) this.#pendingBatches.delete(peer);
+    let items: CodexInterAgentBatchItem[];
+    while (true) {
+      const queue = this.#pendingBatches.get(peer);
+      const pending = queue?.shift();
+      if (pending === undefined) return;
+      if (queue!.length === 0) this.#pendingBatches.delete(peer);
+      items = [];
+      for (const item of pending.items) {
+        const mode = this.#reclassifyQueued?.(item) ?? item.mode;
+        if (mode === "terminal") {
+          this.#onTerminalQueued?.(item);
+        } else {
+          items.push(mode === item.mode ? item : { ...item, mode });
+        }
+      }
+      if (items.length > 0) break;
+    }
 
-    const conversationIds = pending.items
+    const conversationIds = items
       .map(
         (item) =>
           (item.envelope.payload as Partial<InterAgentMessagePayload>)
@@ -201,9 +220,9 @@ export class CodexInterAgentTurnCoordinator {
     const batch: DispatchedCodexInterAgentBatch = {
       turnToken: this.#createTurnToken(),
       peer,
-      items: pending.items,
+      items,
       conversationIds,
-      text: formatInboundMessages(pending.items),
+      text: formatInboundMessages(items),
     };
     this.#batchByTurnToken.set(batch.turnToken, batch);
     this.#activeTokenByPeer.set(peer, batch.turnToken);

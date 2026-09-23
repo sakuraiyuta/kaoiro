@@ -31,6 +31,8 @@ interface PendingBatch {
 
 export interface AntigravityInterAgentTurnCoordinatorOptions {
   onDispatch: (batch: DispatchedAntigravityInterAgentBatch) => void;
+  reclassifyQueued?: (item: AntigravityInterAgentBatchItem) => InboundReplyMode;
+  onTerminalQueued?: (item: AntigravityInterAgentBatchItem) => void;
   createTurnToken?: () => string;
 }
 
@@ -43,12 +45,16 @@ export class AntigravityInterAgentTurnCoordinator {
   >();
   readonly #activeTokenByPeer = new Map<string, string>();
   readonly #onDispatch: (batch: DispatchedAntigravityInterAgentBatch) => void;
+  readonly #reclassifyQueued: ((item: AntigravityInterAgentBatchItem) => InboundReplyMode) | undefined;
+  readonly #onTerminalQueued: ((item: AntigravityInterAgentBatchItem) => void) | undefined;
   readonly #createTurnToken: () => string;
   #closed = false;
   #retireDiscarded: ((envelopes: readonly Envelope[]) => void) | undefined;
 
   constructor(options: AntigravityInterAgentTurnCoordinatorOptions) {
     this.#onDispatch = options.onDispatch;
+    this.#reclassifyQueued = options.reclassifyQueued;
+    this.#onTerminalQueued = options.onTerminalQueued;
     this.#createTurnToken = options.createTurnToken ?? randomUUID;
   }
 
@@ -150,11 +156,24 @@ export class AntigravityInterAgentTurnCoordinator {
 
   #dispatchNext(peer: string): void {
     if (this.#closed || this.#activeTokenByPeer.has(peer)) return;
-    const queue = this.#pendingBatches.get(peer);
-    const pending = queue?.shift();
-    if (pending === undefined) return;
-    if (queue!.length === 0) this.#pendingBatches.delete(peer);
-    const conversationIds = pending.items
+    let items: AntigravityInterAgentBatchItem[];
+    while (true) {
+      const queue = this.#pendingBatches.get(peer);
+      const pending = queue?.shift();
+      if (pending === undefined) return;
+      if (queue!.length === 0) this.#pendingBatches.delete(peer);
+      items = [];
+      for (const item of pending.items) {
+        const mode = this.#reclassifyQueued?.(item) ?? item.mode;
+        if (mode === "terminal") {
+          this.#onTerminalQueued?.(item);
+        } else {
+          items.push(mode === item.mode ? item : { ...item, mode });
+        }
+      }
+      if (items.length > 0) break;
+    }
+    const conversationIds = items
       .map(
         (item) =>
           (item.envelope.payload as Partial<InterAgentMessagePayload>).conversation_id,
@@ -163,9 +182,9 @@ export class AntigravityInterAgentTurnCoordinator {
     const batch: DispatchedAntigravityInterAgentBatch = {
       turnToken: this.#createTurnToken(),
       peer,
-      items: pending.items,
+      items,
       conversationIds,
-      text: formatInboundMessages(pending.items),
+      text: formatInboundMessages(items),
     };
     this.#batchByTurnToken.set(batch.turnToken, batch);
     this.#activeTokenByPeer.set(peer, batch.turnToken);

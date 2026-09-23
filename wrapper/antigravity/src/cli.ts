@@ -139,6 +139,15 @@ export async function runAntigravityCli(
     }) as WhoamiSnapshot,
   });
   const interAgentTurns = new AntigravityInterAgentTurnCoordinator({
+    reclassifyQueued: (item) => interAgent.queuedInboundMode(item.envelope, item.mode),
+    onTerminalQueued: (item) => {
+      const payload = item.envelope.payload;
+      writeRedactedStderr(
+        `[kaoiro] queued inter-agent turn skipped: conversation_id=${String(payload.conversation_id)} ` +
+        `turn_number=${String(payload.turn_number)} mode=${item.mode}->terminal\n`,
+      );
+      deliveryAcknowledgementRuntime.acknowledgeDelivery(item.envelope);
+    },
     onDispatch: (batch) => {
       for (const item of batch.items) {
         interAgent.notePendingInjection(item.envelope, batch.turnToken);

@@ -114,6 +114,7 @@ export function createDeliveryAcknowledgementWiring(
  * connections as one unit.  This deliberately owns the connections rather
  * than returning callbacks for an adapter fixture to wire independently. */
 export interface DeliveryAcknowledgementRuntime {
+  acknowledgeDelivery(envelope: Envelope): void;
   withServerLinkOptions<TOptions extends object>(
     options: TOptions,
   ): TOptions & {
@@ -141,6 +142,7 @@ export function createDeliveryAcknowledgementRuntime(
   const acknowledgement = new DeliveryAcknowledgement(send);
 
   return {
+    acknowledgeDelivery: acknowledgement.acknowledgeEnvelope,
     withServerLinkOptions: (options) => ({
       ...options,
       onInterAgentDeliveryStatus: (status: { acked_seq: number } | null) =>

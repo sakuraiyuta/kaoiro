@@ -162,6 +162,14 @@ The wrapper (`agent-common`) keeps corresponding local state
   a new conversation. Under issue #211 direction 1, no inbound classified as
   terminal is injected into SDK input (the old “informational only” prompt
   consumed a model turn for a no-reply notice).
+- **Recheck queued input before SDK dispatch**: A peer's inbound mode can become
+  obsolete while another turn from that peer is active. All three wrappers
+  reclassify queued items against the current conversation track when the peer
+  queue advances. A now-terminal item is acknowledged without an SDK turn;
+  surviving items use their current mode. An unconfirmed local `done=true` send
+  cannot cause a queued item to be discarded: classification retains the saved
+  mode until its acceptance is known. During that short wait, an already-sent
+  proposal can still elicit a redundant reply after the send is accepted.
 - **Serialize concurrent sends for one conversation_id** (issue #167 review
   round 2 M1): If `send_to_agent` calls for the same ID run concurrently (for
   example multiple calls in one turn), serialize numbering through application
