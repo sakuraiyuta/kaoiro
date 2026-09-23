@@ -2490,7 +2490,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
   defp warn_legacy_new_conversation_absent do
     Logger.warning(
       "inter_agent_message: client declared new_conversation (absent); " <>
-        "accepting as true (issue #262 legacy best-effort accept)"
+        "accepting as true (legacy best-effort accept)"
     )
 
     true
