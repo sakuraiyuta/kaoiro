@@ -1768,7 +1768,7 @@ export class CodexHost implements EngineAdapter {
               Promise.reject(
                 new Error(
                   this.#corruptedRolloutDetail ??
-                    `resume skipped: rollout for session ${resumeSessionId} already classified as permanently corrupted (issue #263)`,
+                    `resume skipped: rollout for session ${resumeSessionId} already classified as permanently corrupted`,
                 ),
               ),
           }
@@ -2204,7 +2204,7 @@ export class CodexHost implements EngineAdapter {
               // on a later turn `err` is this file's own synthetic
               // "resume skipped" Error, so use the remembered root cause
               // verbatim rather than re-stringifying it.
-              `codex turn failed: rollout permanently corrupted for session ${resumeSessionId} (issue #263): ${this.#corruptedRolloutDetail ?? String(terminalError)}\n`
+              `codex turn failed: rollout permanently corrupted for session ${resumeSessionId}: ${this.#corruptedRolloutDetail ?? String(terminalError)}\n`
             : `codex turn failed: ${String(terminalError)}\n`,
         );
       }
