@@ -36,6 +36,8 @@ Revised 2026-09-21 for the epoch lifetime model -- one `agy` process per
 several turns, spec-change respawn, mid-epoch permission switching,
 `epoch_ended` / `out_of_turn_event`, and the idle-epoch TTL (F2 / F3 / F4b
 / F5a, issue #377 Stage 2).
+Revised 2026-09-23 to add the agent-facing `request_session_reset` tool
+and the `onTurnEnd` `terminal` field it required (F5, issue #396).
 
 ## Context
 
@@ -603,6 +605,18 @@ the per-spawn nonce; a shell the agent runs can reach it directly, which is
 inside the agent's own privilege — the bridge rule is a convenience, not a
 security boundary, and the whole-string match is what protects the
 *auto-allow*.
+
+**`request_session_reset` (issue #396, ADR-0043 Neutral amendment).** Added
+to the same `toolDescriptors` array, wrapped in `operatorApprovalGated`
+(engine-neutral, `wrapper/agent-common/src/approval_gate.ts`) against this
+adapter's existing `PermissionBroker` — Codex parity, since this engine has
+no `canUseTool` hook either. The reservation dispatches only at its owning
+turn's AUTHORITATIVE end; `AntigravityHostOptions.onTurnEnd` gained a
+`terminal: boolean` field (true iff agy itself produced a `result` stream
+event, independent of `is_error`) because the pre-existing payload could
+not otherwise distinguish a real result from `outcome.kind === "stale"`
+(a turn ended by `close()` or a superseded generation) — both looked
+identical (no `error`, no `cancellation`) before this field existed.
 
 ### F5a — Inbound inter-agent messages are agy turns
 

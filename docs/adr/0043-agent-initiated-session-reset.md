@@ -6,7 +6,7 @@ opened: 2026-07-28
 supersedes: []
 superseded_by: null
 related_specs: [protocol, security-threat-model]
-related_adrs: [21, 22, 32, 33, 36, 44, 55]
+related_adrs: [21, 22, 32, 33, 36, 44, 55, 57]
 ---
 
 # ADR-0043 — Session reset initiated by the agent
@@ -203,6 +203,23 @@ generalize embedded compact summaries to new/clear.
     to `codex exec` compacts is unmeasured and tracked in
     [codex-lifecycle-observability](../open-questions/codex-lifecycle-observability.md);
     if it does, reusing this approval gate can be considered there.
+- Amendment (2026-09-23, issue #396): `request_session_reset` is exposed to
+  Antigravity through the same wrapper-side approval gate as Codex
+  (`operatorApprovalGated` against this adapter's own `PermissionBroker`) --
+  Antigravity has no `canUseTool`-equivalent hook either. A reservation
+  dispatches only at its owning turn's AUTHORITATIVE end, mirroring Codex's
+  SDK-declared-terminal rule, but Antigravity's `agy` CLI has no equivalent
+  SDK-side terminal type to read: `AntigravityHostOptions.onTurnEnd` gained
+  a `terminal: boolean` field (true iff agy itself produced a `result`
+  stream event, independent of `is_error`) so a real result can be told
+  apart from a turn ended by `close()` or a superseded generation -- both
+  looked identical (no `error`, no `cancellation`) in the pre-existing
+  payload. During a turn watchdog fail-stop, the ACTIVE turn's `onTurnEnd`
+  never fires at all (only queued-but-unstarted turns are settled) -- a
+  reservation made during that turn stays frozen, neither dispatched nor
+  cancelled, until operator recovery; same shape as Codex's
+  `onWatchdogFailStop`, which likewise never resolves the active
+  reservation.
 - The information boundary to viewers remains ADR-0021; do not disclose origin /
   reason to viewers.
 

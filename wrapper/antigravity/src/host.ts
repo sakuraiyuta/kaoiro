@@ -186,6 +186,19 @@ export interface AntigravityHostOptions {
     cancellation?:
       | { kind: "watchdog_fail_stop"; started: false }
       | { kind: "interrupt"; reason: "interrupted" };
+    /** issue #396: true iff agy itself produced a `result` stream event for
+     *  this turn -- NOT whether the turn succeeded. Set for a `result`
+     *  outcome even when it carries `is_error: true` or an exhausted quota;
+     *  false for `stale` / `interrupted` / `error` (wrapper-detected:
+     *  tamper, gate violation, tool_timeout, crash, no-result) outcomes,
+     *  where agy itself never confirmed anything. Same meaning as Codex's
+     *  `terminal?: "turn.completed" | "turn.failed"`
+     *  (`wrapper/codex/src/host.ts`), collapsed to a boolean because
+     *  Antigravity has no SDK-side success/failure sub-type of its own to
+     *  distinguish. A consumer that must act only on a real turn boundary
+     *  (the deferred session reset, ADR-0043 D3) reads this rather than
+     *  inferring from `error`/`cancellation` alone. */
+    terminal: boolean;
   }) => void;
   onTurnBoundary?: (info: { turnToken: string }) => void;
   onTurnProgress?: (info: { turnToken: string }) => void;
@@ -1216,6 +1229,9 @@ export class AntigravityHost implements EngineAdapter {
           conversationIds: turn.conversationIds ?? [],
           ...(error === undefined ? {} : { error }),
           ...(cancellation === undefined ? {} : { cancellation }),
+          // issue #396: agy itself produced a `result` event -- see the
+          // field's own doc comment for why this is not "succeeded".
+          terminal: outcome.kind === "result",
         });
       }
       void this.#drainTurns();
@@ -1442,6 +1458,9 @@ export class AntigravityHost implements EngineAdapter {
         conversationIds: turn.conversationIds ?? [],
         error,
         cancellation: { kind: "watchdog_fail_stop", started: false },
+        // issue #396: these turns never even started -- agy produced
+        // nothing for them.
+        terminal: false,
       });
     }
     this.#options.onWatchdogFailStop?.({

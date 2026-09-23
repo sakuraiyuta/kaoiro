@@ -219,6 +219,27 @@ node <pkg>/dist/bridge.js list                              # prints the tool li
   turn *(a 70 s tool call held the turn, measured)* — the same mechanism
   that makes `waiting_question` hold on Codex (ADR-0032 F6).
   `--print-timeout` and the hook timeout must both exceed the question wait.
+- `request_session_reset` (issue #396, ADR-0043 Neutral amendment) lets the
+  agent ask the operator to start its own session over, the same tool
+  Claude Code and Codex already register. Antigravity has no `canUseTool`
+  hook, so the wrapper asks the operator on the tool's own behalf through
+  the same `PermissionBroker` every other approval dialog uses
+  (`operatorApprovalGated`, Codex parity). The approval dialog shows the
+  SDK-shared FQN (`mcp__kaoiro__request_session_reset`), not the bridge's
+  own tool name (`request_session_reset`) — intentional, so the dialog
+  looks identical regardless of engine. Like `ask_user_question`, the wait
+  blocks the bridge and therefore the turn, so the operator must answer
+  within the turn watchdog's absolute tool deadline
+  (`KAOIRO_ANTIGRAVITY_TOOL_TIMEOUT_MS`, default 10 minutes) or the
+  watchdog ends the turn first. A reservation is bound to the turn that
+  made it (ADR-0043 D3): any other turn boundary — an interrupt, or the
+  wrapper shutting down before the turn resolves — drops the reservation
+  and tells the agent, never firing a reset for a turn that no longer
+  owns it. During a turn watchdog fail-stop specifically, the ACTIVE
+  turn's `onTurnEnd` never fires at all (only queued-but-unstarted turns
+  are settled) — a reservation made during that turn is neither
+  dispatched nor cancelled; it stays frozen, exactly like every other
+  pending state, until operator recovery.
 - PreToolUse fired for every tool step observed so far: `write_to_file`,
   `view_file`, `list_dir`, `manage_task`, `run_command`, `define_subagent`,
   `search_web` *(measured; `stepIdx` matched `step_index` in all 9 cases)*.
