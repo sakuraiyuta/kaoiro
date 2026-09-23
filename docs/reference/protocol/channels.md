@@ -1,7 +1,7 @@
 ---
 title: Channels and directional messages
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-09-23
 description: Wrapper/server/client/runner channel events by direction, and the client's Phoenix Channels transport contract.
 ---
 
@@ -88,10 +88,10 @@ The complete coverage and the permanent `attach_chunk` exception are normative i
 | client → server | `list_session_events` | `{ version, agent_id }` is an operator-only pull query for one agent's `session_lifecycle` timeline, with the same `require_operator` gate as `list_conversations` / `list_users` (phase-33, [ADR-0055](../../adr/0055-compaction-resume-and-lifecycle-log.md)). `agent_id` is format-validated only (no existence check): `delete_agent` does not purge the `session_lifecycle` store, so a deleted agent's history stays queryable for post-hoc debugging — that retention is a deliberate decision, not an oversight, made together with this query (issue #200 closing note); an unknown/never-existed `agent_id` returns `{ "events": [] }`. Replies `{ events: [{ kind, trigger, at, details? }, …], events_incomplete?: true }`; permission events retain their typed details, newest first. `events_incomplete: true` means a newest-first prefix was returned because further complete entries would exceed the transport frame budget. |
 | server → client | `session_reset_started` | `{ request_id, agent_id, mode, origin: "operator" \| "agent_self", previous_session_id?, reason? }` is operator-only; dashboard shows progress and disables Composer.  ([../adr/0021-role-information-disclosure-policy.md](../../adr/0021-role-information-disclosure-policy.md)) |
 | server → client | `session_reset_completed` | `{ request_id, agent_id, mode, previous_session_id?, to_session_id: string \| null, clear_watermark?: string }` is emitted after fresh wrapper join confirms completion. `/clear` includes a SessionStarts-derived watermark used to filter panes. |
-| server → client | `session_reset_failed` | `{ request_id, agent_id, mode, reason }` is operator-only with closed lifecycle vocabulary; dashboard displays a loud reason notice. |
-| server → wrapper | `session_reset_failed` | `{ request_id, reason }` is a private relay only to the old wrapper that reserved the matching reset; stale IDs and fresh wrappers are ignored. |
+| server → client | `session_reset_failed` | `{ request_id, agent_id, mode, reason, ceiling_conflict? }` is operator-only with closed lifecycle vocabulary; dashboard displays a loud reason notice. `ceiling_conflict` (issue #397) is a `{ axis, current, ceiling }[]` present only for `reason: "permission_ceiling_conflict"` (Antigravity only), naming which axis to narrow. |
+| server → wrapper | `session_reset_failed` | `{ request_id, reason }` is a private relay only to the old wrapper that reserved the matching reset; stale IDs and fresh wrappers are ignored. Never carries `ceiling_conflict` — the detail is operator-diagnostic only. |
 | server → runner | `reset_session` | `{ version, agent_id, mode, request_id, previous_session_id?, resume_snapshot? }` terminates the old child, then fresh-launches or rolls back. It never double-starts after timeout and uses SessionPointers to apply the resume snapshot ([ADR-0036](../../adr/0036-session-lifecycle-commands.md), [ADR-0014](../../adr/0014-session-resume-and-restore.md)). |
-| runner → server | `session_reset_result` | `{ version, host_id, agent_id, mode, request_id, ok, reason?, to_session_id?: string \| null }` reports fresh spawn/rollback after exact host binding. Success waits for wrapper join; failure broadcasts and releases the lock. |
+| runner → server | `session_reset_result` | `{ version, host_id, agent_id, mode, request_id, ok, reason?, ceiling_conflict?, to_session_id?: string \| null }` reports fresh spawn/rollback after exact host binding. Success waits for wrapper join; failure broadcasts and releases the lock. `ceiling_conflict` mirrors the `session_reset_failed` field above (issue #397). |
 
 A `session_reset_request` error reply has exactly four `reason` values: `agent_busy`,
 `session_reset_pending`, `unsupported_session_reset`, and `runner_unavailable`.

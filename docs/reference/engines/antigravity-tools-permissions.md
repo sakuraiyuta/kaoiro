@@ -2,7 +2,7 @@
 title: Antigravity tools and permissions
 description: Current hook-gate, tool-child, bridge, and permission contract for the Antigravity CLI adapter.
 status: provisional
-last_updated: 2026-09-21
+last_updated: 2026-09-23
 related: [protocol, antigravity-adapter]
 ---
 
@@ -244,3 +244,11 @@ node <pkg>/dist/bridge.js list                              # prints the tool li
   sandbox, network-access, and approval maxima. It applies an accepted
   `set_permission` at the next turn boundary and rejects an over-ceiling value
   again in the wrapper; this does not make sandbox enforcement non-advisory.
+
+- **Troubleshooting: a session reset (`/new` / `/clear`) refused with
+  `permission_ceiling_conflict`** means the agent's current live permission
+  on the named axis is wider than the immutable ceiling pinned at its launch
+  (ADR-0057 F4c Stage B0). The dashboard names the axis, its current value,
+  and the ceiling. This is not a dead end and does not require deleting and
+  respawning the agent: narrow that axis back through the normal permission
+  picker (`set_permission`), then retry the reset (issue #397).

@@ -23,6 +23,9 @@ Revised 2026-09-10 for inbound inter-agent turn delivery (F5a).
 Accepted 2026-09-18 after Stage A dogfood and F4c Stage B0 (mid-session
 approval/sandbox/network switching under a host-local launch ceiling,
 issue #359).
+Revised 2026-09-23 for F4c reset-refusal diagnosability (`permission_ceiling_conflict`
+plus a per-axis detail, issue #397); the trust-model gap it surfaced is
+tracked separately as issue #400.
 Revised 2026-09-19 for `run_command` Cwd containment (F4 addendum, issue #370).
 Revised 2026-09-19 for operator-interrupt turn settlement (F4 addendum, issue #371).
 Revised 2026-09-21 to note the close()-race `onTurnEnd` shape (F4 addendum, issue #380).
@@ -541,6 +544,34 @@ wrapper's execution ceiling still holds — on this engine the cell matrix
 `max_approval`, `max_network_access`), and both the server and the wrapper
 (fail-closed) reject a switch outside the narrowing direction from the launch
 values with `exceeds_launch_ceiling`.
+
+**Reset diagnosability, not new semantics (issue #397).** `reset_session`
+runs the same ceiling check as `switch_session` against
+`entry.permissionCeiling` — a conflict there used to collapse into the
+generic `spawn_failed`, with the offending axis visible only in the runner
+journal (`runner/src/supervisor.ts`). It now reports its own
+`SessionResetErrorReason` value, `permission_ceiling_conflict`, plus a
+structured per-axis detail (`PermissionCeilingConflictAxis[]`: axis,
+current value, ceiling value) carried through `SessionResetResult` /
+`SessionResetFailed` to the dashboard, which names the axis and the value
+to narrow. Reset semantics are unchanged: no clamp-on-reset. The escape is
+the existing `set_permission` narrowing path (accepted unconditionally,
+`clamp_advertised_axis` §agents_channel.ex), after which an ordinary reset
+passes because the pointer's snapshot is back within the ceiling.
+
+**Trust model for the reset-time comparison.** The check compares
+`resume_snapshot` — the server's `SessionPointers` pointer — against the
+immutable per-agent `permissionCeiling` pinned at spawn/restore
+(`Supervisor#start`). The pointer's sandbox / approval / network fields
+are written only from the control the server judged `:applied`
+(`record_confirmed_permission_snapshot`, `wrapper_channel.ex`), not
+necessarily from the CURRENT wrapper generation: a stale prior
+generation's `:applied` control can be re-published to the pointer across
+a restart, transiently reintroducing a snapshot wider than the ceiling —
+filed separately as issue #400 (deferred, medium priority) rather than
+folded into #397's scope. #397 leaves this trust model and #400 untouched;
+it only makes whichever refusal results diagnosable instead of a blank
+`spawn_failed`.
 
 ### F5 — kaoiro tools through a CLI bridge, not MCP
 
