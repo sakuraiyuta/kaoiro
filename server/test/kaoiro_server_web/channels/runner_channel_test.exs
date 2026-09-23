@@ -988,7 +988,7 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
         end)
 
       assert log =~ "invalid_ceiling_conflict"
-      assert log =~ "agent_id=\"a.x\""
+      assert log =~ "claimed_agent_id=\"a.x\""
       assert log =~ "permission_mode"
     end
 

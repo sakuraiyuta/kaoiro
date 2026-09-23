@@ -181,9 +181,17 @@ defmodule KaoiroServerWeb.RunnerChannel do
       # itself is bounded to a handful of entries so a malicious/buggy runner
       # cannot use this to flood the log.
       {:error, :invalid_ceiling_conflict = reason} ->
+        # Self-review round-1 SECURITY finding: this branch runs from inside
+        # parse_session_reset_result, which the `with` chain above evaluates
+        # BEFORE require_host_owns_agent -- so payload["agent_id"] here is
+        # only type-checked (is_binary), never confirmed to belong to this
+        # host. Label it `claimed_agent_id` so an operator/alert reading
+        # this line cannot mistake a runner-supplied string that merely
+        # LOOKS like another host's agent for a verified attribution.
         Logger.warning(
           "runner_channel: session_reset_result rejected for host=#{host_id} " <>
-            "agent_id=#{inspect(Map.get(payload, "agent_id"))}: invalid_ceiling_conflict " <>
+            "claimed_agent_id=#{inspect(Map.get(payload, "agent_id"))} (unverified -- " <>
+            "ownership was never checked for this rejection): invalid_ceiling_conflict " <>
             "(reason=#{inspect(Map.get(payload, "reason"))}, " <>
             "ceiling_conflict=#{inspect(Map.get(payload, "ceiling_conflict"), limit: 5)}); " <>
             "the pending reset lock will time out with no detail reaching the operator"
