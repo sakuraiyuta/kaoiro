@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Release verification (issue #229 round 2, ふじ 差し戻し must-fix 1/2/3).
+// Release verification (issue #219 round 2, ふじ 差し戻し must-fix 1/2/3).
 //
 //   verify-release.mjs <release-root> [--require-manifest] [--hash]
 //
@@ -60,7 +60,7 @@ class VerifyError extends Error {}
 /** A VerifyError whose cause is specifically a missing BUILD OUTPUT — a
  *  compiled file this release's own `pnpm build` step produces, absent
  *  from an otherwise-intact tree. Callers that need to tell the operator
- *  whether "run the build" is a plausible remedy (issue #259) branch on
+ *  whether "run the build" is a plausible remedy (issue #249) branch on
  *  this. */
 class MissingArtifactError extends VerifyError {}
 
@@ -68,7 +68,7 @@ class MissingArtifactError extends VerifyError {}
  *  — the `node_modules/@kaoiro/<pkg>` dependency-linking topology `pnpm
  *  install` creates, never touched by `pnpm build`. Distinguished from
  *  `MissingArtifactError` because the two need DIFFERENT remedies and a
- *  build does not fix this one (ふじ review round 3, issue #259: measured
+ *  build does not fix this one (ふじ review round 3, issue #249: measured
  *  directly — running the suggested build against a checkout missing this
  *  link fails with tsc's own TS2307 "cannot find module", and does not
  *  recreate the link). */
@@ -208,7 +208,7 @@ function readBuildInfoStrict(root, realRoot) {
  *    (and any intermediate ancestor of a nested leaf beneath it) is never
  *    a link in any topology this file supports, so a symlink there is
  *    anomalous on sight — confirmed by ふじ's production-path matrix
- *    (issue #259 round 5): "runner container / healthy in-bound symlink"
+ *    (issue #249 round 5): "runner container / healthy in-bound symlink"
  *    and "linked package container / healthy in-bound symlink" both
  *    expect `anomaly`, not `ok`.
  *  - `true` — RESOLVED via `realpathSync` and accepted when it stays
@@ -220,7 +220,7 @@ function readBuildInfoStrict(root, realRoot) {
  *    A dangling, out-of-bounds, or non-directory resolution is still
  *    rejected.
  *
- *  Discovered via ふじ's own matrix (issue #259 round 5): an earlier
+ *  Discovered via ふじ's own matrix (issue #249 round 5): an earlier
  *  version of this walk rejected ANY symlink ancestor unconditionally —
  *  correct for the build-output container, but it also regressed
  *  "workspace ancestor @kaoiro / healthy in-bound symlink" (expected
@@ -300,7 +300,7 @@ function walkAncestors(base, realRoot, relParts, label, onAnomaly, resolveSymlin
  *  release root itself, or an already-resolved workspace-link target from
  *  `checkWorkspaceLinkedSentinel`).
  *
- *  A missing leaf is classified as a genuine BUILD SHORTAGE (issue #259)
+ *  A missing leaf is classified as a genuine BUILD SHORTAGE (issue #249)
  *  ONLY when BOTH `leafRel`'s own containing directory (its first path
  *  segment — `dist`) AND the leaf itself are genuinely ABSENT (an ordinary
  *  `pnpm build` creates a missing `dist/` and fills in a missing file,
@@ -314,7 +314,7 @@ function walkAncestors(base, realRoot, relParts, label, onAnomaly, resolveSymlin
  *  legitimately carry a manifest entry whose containment must be checked
  *  by resolution, not rejected on sight; releaseInstall.test.ts's
  *  pre-existing "outside-the-release symlink" negative control, issue
- *  #229, depends on reaching that exact check). Only a leaf symlink that
+ *  #219, depends on reaching that exact check). Only a leaf symlink that
  *  does NOT resolve (dangling) is excluded from the build-fixable bucket —
  *  that shape is a broken reference, not "never built", and a build does
  *  not repair it. Measured directly, twice, across two review rounds:
@@ -352,12 +352,12 @@ function walkAncestors(base, realRoot, relParts, label, onAnomaly, resolveSymlin
  *  ancestor segment is checked in isolation on its OWN terms first. Every
  *  `lstatType` call here is wrapped so an unexpected errno (EACCES on an
  *  ancestor, say) becomes a classified `fail()` rather than an uncaught
- *  exception (internal review, issue #259: `checkWorkspaceLinkedSentinel`
+ *  exception (internal review, issue #249: `checkWorkspaceLinkedSentinel`
  *  already guarded its own `statSync` for the same reason; the two bare
  *  `lstatType` calls here had been missed).
  *
  *  THE RESOLVED LEAF MUST ALSO BE AN ORDINARY FILE, CHECKED EXPLICITLY
- *  (issue #259, ふじ review round 4). Everything above only proves `real`
+ *  (issue #249, ふじ review round 4). Everything above only proves `real`
  *  resolves and stays inside the tree — a DIRECTORY standing in for
  *  `dist/cli.js` resolves and stays inside just as cleanly, so it passed
  *  silently and the launch shim then spawned `node` on it. Measured
@@ -389,7 +389,7 @@ function checkBuildOutputLeaf(pkgRoot, realRoot, leafRel, label) {
   // rejected here regardless of health — it falls through to the ordinary
   // containment check below like any other resolved path, unchanged from
   // before this guard existed. That matters: releaseInstall.test.ts's own
-  // pre-existing containment negative control (issue #229, もも review)
+  // pre-existing containment negative control (issue #219, もも review)
   // stages an in-MANIFEST file replaced by a symlink to an
   // identical-content file OUTSIDE the release specifically to prove the
   // CONTAINMENT check (not a digest mismatch) is what catches it — a leaf
@@ -441,7 +441,7 @@ function checkBuildOutputLeaf(pkgRoot, realRoot, leafRel, label) {
  *  form) is a pnpm INSTALL shortage — the workspace dependency topology
  *  was never materialized — never a build shortage: `pnpm build` compiles
  *  source reached THROUGH node_modules, it does not create node_modules
- *  itself. Measured directly (ふじ review round 3, issue #259): running the
+ *  itself. Measured directly (ふじ review round 3, issue #249): running the
  *  suggested build against a checkout missing this link fails with tsc's
  *  own TS2307 "cannot find module ...", and node_modules/@kaoiro remains
  *  absent afterward.
@@ -451,7 +451,7 @@ function checkBuildOutputLeaf(pkgRoot, realRoot, leafRel, label) {
  *  round 2 and is unchanged here.
  *
  *  ANCESTORS OF THE LINK ITSELF GET THE SAME ATTENTION, NOT THE SAME
- *  VERDICT (issue #259, ふじ review round 4 then round 5). `node_modules`
+ *  VERDICT (issue #249, ふじ review round 4 then round 5). `node_modules`
  *  or `node_modules/@kaoiro` can itself be a dangling symlink — not
  *  merely absent — and the ONE `lstat` this function used to run on the
  *  full 3-segment `linkRel` follows every intermediate component, so that
@@ -493,7 +493,7 @@ function checkWorkspaceLinkedSentinel(root, realRoot, rel) {
   const linkPath = join(root, linkRel);
   // resolveSymlinks=true: unlike a build-output container, node_modules
   // and node_modules/@kaoiro CAN legitimately be a healthy symlink (see
-  // walkAncestors's own doc comment — ふじ's matrix, issue #259 round 5).
+  // walkAncestors's own doc comment — ふじ's matrix, issue #249 round 5).
   const ancestorsPresent = walkAncestors(
     root,
     realRoot,
@@ -508,7 +508,7 @@ function checkWorkspaceLinkedSentinel(root, realRoot, rel) {
     );
   }
   // Guarded like every other lstatType call in this file (internal review,
-  // issue #259): an unexpected errno here (EACCES, say) must become a
+  // issue #249): an unexpected errno here (EACCES, say) must become a
   // classified fail(), not an uncaught exception.
   let linkPathType;
   try {
@@ -533,7 +533,7 @@ function checkWorkspaceLinkedSentinel(root, realRoot, rel) {
   }
   // The link must resolve to a DIRECTORY (a package), or checkBuildOutputLeaf
   // below would itself throw an uncaught ENOTDIR trying to lstat a path
-  // INSIDE what turns out to be a file (internal review round, issue #259:
+  // INSIDE what turns out to be a file (internal review round, issue #249:
   // measured live — a plain-file `node_modules/@kaoiro/<pkg>` crashed the
   // process with a raw Node stack trace instead of a classified VerifyError).
   // Checked on `linkReal`, the already-resolved REAL path, so this also
@@ -730,7 +730,7 @@ function sha256(path) {
  *  which is never a reason to take the more permissive branch. Folding both
  *  into one bare `catch` is precisely how a release whose MANIFEST.json could
  *  not be read degraded to the four-sentinel repo-direct path and started at
- *  exit 0 (もも review, issue #229 — measured on a real tarball). */
+ *  exit 0 (もも review, issue #219 — measured on a real tarball). */
 function readOptionalFile(root, name) {
   try {
     return readFileSync(join(root, name), "utf8");
@@ -816,7 +816,7 @@ function parseSource(source) {
  *  WHY DECLARED, NOT DETECTED. The codex wrapper reaches its bridge script
  *  through `new URL("../dist/bridge.js", import.meta.url)` — a real
  *  first-party edge no `import` statement expresses, and one the closure once
- *  missed entirely (もも review, issue #229). Recognising it by matching the
+ *  missed entirely (もも review, issue #219). Recognising it by matching the
  *  TEXT of that call was tried and then abandoned: a regex cannot resolve a
  *  BINDING. `foo.require("./x.js")` is a method call on an unrelated object,
  *  and a module that defines its own `class URL {}` is not calling the global
@@ -890,7 +890,7 @@ function declaredRuntimeAssets(pkgDir, pkg, root, realRoot) {
  *  because the `/` of a division opened what the lexer read as a regex
  *  literal and blanked the rest of the line. Each fix enumerated one more
  *  non-code context and the class stayed open; the fourth instance is what
- *  ended the approach (もも division probe, issue #229). `vm.SourceTextModule`
+ *  ended the approach (もも division probe, issue #219). `vm.SourceTextModule`
  *  compiles the body with V8 and hands back `dependencySpecifiers`. It never
  *  EVALUATES, so no code from the tree under inspection runs in the verifier.
  *
@@ -988,7 +988,7 @@ function resolveFile(base) {
  *  listing cannot notice a deletion, because a deleted file is simply absent
  *  from the listing too. `dist/cli.js` still says `from "./args.js"` after
  *  args.js is removed, so the dangling reference is what makes the removal
- *  detectable (もも review, issue #229: removing the file AND its manifest
+ *  detectable (もも review, issue #219: removing the file AND its manifest
  *  entry together passed --require-manifest --hash at exit 0).
  *
  *  SCOPE: first-party only. `@kaoiro/*` bare specifiers are followed across
@@ -1172,7 +1172,7 @@ export function verifyRelease(root, opts = {}) {
     // checkout. Degrading it to the sentinel list re-opened the very
     // enumeration this file exists to close: a real release with its
     // MANIFEST.json removed passed start-up verification and reached the
-    // final exec at exit 0 (もも review, issue #229).
+    // final exec at exit 0 (もも review, issue #219).
     if (version !== null) {
       fail(
         "MANIFEST.json is missing from a built release (VERSION is present) — reinstall it; only a repo-direct checkout, which has no VERSION either, may start without one",
@@ -1215,7 +1215,7 @@ export function verifyRelease(root, opts = {}) {
   // matches what the manifest CLAIMS; it cannot notice a claim that was made
   // smaller. Removing dist/args.js together with its entry left a
   // self-consistent, undersized manifest that passed --require-manifest
-  // --hash at exit 0 (もも review, issue #229). So the strict callers derive
+  // --hash at exit 0 (もも review, issue #219). So the strict callers derive
   // the expected closure a second time, from the package graph, and reject a
   // release that is missing anything it should carry.
   //
@@ -1265,7 +1265,7 @@ function main(argv) {
   } catch (err) {
     if (err instanceof VerifyError) {
       process.stderr.write(`verify-release: ${root}: ${err.message}\n`);
-      // issue #259: exit 71/72 mark the two remediable shortages
+      // issue #249: exit 71/72 mark the two remediable shortages
       // specifically so a caller (kaoiro-runner-launch.sh) can tell them
       // apart from every other verification failure and from EACH OTHER —
       // "run the build" and "run pnpm install" are different commands, and

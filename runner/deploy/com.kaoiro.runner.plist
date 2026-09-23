@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  kaoiro runner — launchd LaunchAgent (issue #141).
+  kaoiro runner — launchd LaunchAgent (issue #136).
 
   A LaunchAgent, not a LaunchDaemon: the runner reads the login user's
   ~/.claude / ~/.codex credentials and spawns wrappers inside that user's own

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Installs a runner tarball as an immutable release (issue #229, ADR-0018).
+# Installs a runner tarball as an immutable release (issue #219, ADR-0018).
 #
 #   kaoiro-runner-install.sh <tarball> [--install-dir <dir>] [--allow-dirty]
 #
@@ -31,13 +31,13 @@
 # THAT CHECK IS A SNAPSHOT, AND ITS SCOPE IS WORTH STATING PLAINLY.
 # `.lock.install` excludes other installs and nothing else. The check below
 # and the `rm -rf` that follows it are additionally guarded by `.lock.links`
-# (issue #253) — the SAME lock kaoiro-runner-switch.sh takes around its own
+# (issue #243) — the SAME lock kaoiro-runner-switch.sh takes around its own
 # current/previous swap, and kaoiro-runner-update.sh around its own prune.
 # Held only for that narrow window, not this whole script: a switch can
 # still run before or after an install, just never with its current/previous
 # read interleaved with this check-then-delete. The window still needs
 # --allow-dirty plus a concurrent operator action to reach at all, i.e. a
-# development host (issue #229 review round 3, ARCH; closed in #253).
+# development host (issue #219 review round 3, ARCH; closed in #243).
 #
 # Prints the installed release id on stdout; everything else goes to stderr,
 # so a caller can use `id=$(kaoiro-runner-install.sh ...)`.
@@ -96,7 +96,7 @@ lock="$root/.lock.install"
 kaoiro_lock_acquire "$lock"
 
 # Shared with kaoiro-runner-switch.sh and kaoiro-runner-update.sh (issue
-# #253) — the current/previous read-then-delete a few lines below is the
+# #243) — the current/previous read-then-delete a few lines below is the
 # only place this script needs it, so links_held tracks whether THIS run
 # actually acquired it and cleanup() releases it only then. Unconditionally
 # releasing a lock this script never took would delete another run's live
@@ -194,7 +194,7 @@ if [ -e "$target" ]; then
   # the files under a running release breaks a spawn that has not happened
   # yet, and replacing the rollback target destroys the only way back.
   #
-  # .lock.links (issue #253) held from here through the `rm -rf` below: this
+  # .lock.links (issue #243) held from here through the `rm -rf` below: this
   # check is a snapshot of current/previous, and without the lock a switch
   # landing between the snapshot and the delete could activate the very
   # release this run is about to remove. Nothing else this script does needs

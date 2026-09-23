@@ -1,5 +1,5 @@
 #!/bin/sh
-# Runs the interactive runner setup wizard (issue #144), which writes
+# Runs the interactive runner setup wizard (issue #139), which writes
 # runner.config.json and runner.env into the OS user config dir.
 #
 # Companion to kaoiro-runner-launch.sh: same node resolution, but it does NOT

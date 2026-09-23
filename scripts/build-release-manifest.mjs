@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Writes MANIFEST.json for a staged release tree (issue #229 round 2, ふじ
+// Writes MANIFEST.json for a staged release tree (issue #219 round 2, ふじ
 // 差し戻し must-fix 3).
 //
 //   node scripts/build-release-manifest.mjs <release-root>

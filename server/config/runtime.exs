@@ -31,7 +31,7 @@ config :kaoiro_server, KaoiroServerWeb.Endpoint,
 # — the server never creates it. Unset falls back to
 # `priv/persona-packs/` bundled with the app dir so a fresh `mix
 # phx.server` still ships the reference 4 packs.
-# Env override guard (issue #120): only overwrite compile-time config when
+# Env override guard (issue #116): only overwrite compile-time config when
 # the corresponding env is actually set, so `config/test.exs` (loaded
 # earlier) is not silently clobbered with nil. Same pattern as the three
 # `if path = System.get_env(...)` blocks below (commit a0b49ab).
@@ -81,15 +81,15 @@ if v = System.get_env("KAOIRO_CLIENT_TOKENS") do
 end
 
 # Whether the peer directory (`directory_request`) includes the "users"
-# projection (issue #197 段階2, ADR-0021 F6-8). Config DEFAULT is
+# projection (issue #187 段階2, ADR-0021 F6-8). Config DEFAULT is
 # `true` — unset takes the default branch — because "原則見える" (issue
-# #197 制約節) is realized as a config default, not an implementation
+# #187 制約節) is realized as a config default, not an implementation
 # default. Only an explicit "false" opts out; any other malformed value
 # stays closed. `WrapperChannel`'s own read-site fallback (`false`)
 # exists only to keep that call fail-closed if this key is somehow
 # absent entirely (config not loaded), not as the everyday default —
 # see `KaoiroServer.Users.expose_to_agents_default/1`'s own doc (ふじ M1
-# レビュー指摘, issue #197 段階2: this block previously only configured
+# レビュー指摘, issue #187 段階2: this block previously only configured
 # a value when the env was SET, so unset env left the key unconfigured
 # and WrapperChannel's fallback silently closed ordinary boot).
 config :kaoiro_server,
@@ -147,7 +147,7 @@ end
 # entry there.
 #
 # Only a SET env overwrites, so config/test.exs (loaded earlier) is not
-# silently clobbered with nil (issue #120).
+# silently clobbered with nil (issue #116).
 for store <- KaoiroServer.PersistencePaths.stores() do
   if path = System.get_env(store.env) do
     config :kaoiro_server, store.config_key, path
@@ -224,7 +224,7 @@ if config_env() == :prod do
     end
 
   # A silently-wrong default here breaks URL generation and check_origin
-  # without an obvious symptom (issue #139) — fail fast like
+  # without an obvious symptom (issue #134) — fail fast like
   # SECRET_KEY_BASE above instead of falling back to "example.com".
   host =
     case System.get_env("PHX_HOST") do
@@ -244,7 +244,7 @@ if config_env() == :prod do
 
   config :kaoiro_server, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
-  # Bind IP override (issue #139). Unset keeps the default below (all
+  # Bind IP override (issue #134). Unset keeps the default below (all
   # interfaces). Accepts any IPv4/IPv6 literal :inet.parse_address/1
   # understands (e.g. "0.0.0.0", "::", "192.168.1.10"). Deliberately
   # scoped to :prod only — config/dev.exs hardcodes both loopback

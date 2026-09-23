@@ -1,9 +1,9 @@
-// #184 M4: input-latency bench. Boots a throwaway Vite dev server serving
+// #174 M4: input-latency bench. Boots a throwaway Vite dev server serving
 // bench/harness.html, drives it with Playwright/chromium, and measures the
 // gap between a composer keystroke (`input` event) and the next painted
-// frame — the #184 hypothesis (layout/style recalc over the huge transcript
+// frame — the #174 hypothesis (layout/style recalc over the huge transcript
 // DOM) shows up as a gap here. Runs the SAME measurement against two
-// variants of AgentDetail: "before" (a pinned pre-#184 baseline, materialised
+// variants of AgentDetail: "before" (a pinned pre-#174 baseline, materialised
 // on the fly below — see writeBeforeSnapshot) and "after" (the current
 // src/lib/AgentDetail.svelte). Re-run any time with:
 //
@@ -24,7 +24,7 @@ const root = path.resolve(__dirname, "..");
 // ふじ round-2 must-fix S2: a permanent AgentDetail.before.svelte committed
 // under src/lib/ reads as shipped code and drifts silently from its cited
 // baseline. Materialise it on the fly instead, pinned to the commit just
-// before the #184 window landed, and delete it when the bench finishes
+// before the #174 window landed, and delete it when the bench finishes
 // (see .gitignore — it must never be a tracked file).
 const BASELINE_SHA = "37e89a3640a02fbd4524a0f36630d8e8e0db0c38";
 const BEFORE_SNAPSHOT_PATH = path.join(
@@ -76,7 +76,7 @@ async function measure(page, baseUrl, variant, count, keystrokes, mode) {
   await textarea.click();
   for (let i = 0; i < keystrokes; i++) {
     if (mode === "slash") {
-      // Round-1 code review narrowed the #184 hypothesis: a plain keystroke
+      // Round-1 code review narrowed the #174 hypothesis: a plain keystroke
       // does not itself force a reflow of the huge transcript (Svelte 5
       // fine-grained reactivity only touches the `instruction` $state).
       // Opening the slash-command menu DOES: it inserts a <ul> sibling

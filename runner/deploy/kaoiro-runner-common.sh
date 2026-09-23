@@ -1,5 +1,5 @@
 #!/bin/sh
-# Shared helpers for the release-based deployment scripts (issue #229):
+# Shared helpers for the release-based deployment scripts (issue #219):
 # kaoiro-runner-install.sh, kaoiro-runner-switch.sh, kaoiro-runner-update.sh
 # and kaoiro-runner-launch.sh source this file. Never executed directly.
 #
@@ -19,7 +19,7 @@ kaoiro_die() {
 }
 
 # Install root: holds releases/<id>/, plus the `current` and `previous`
-# symlinks (issue #229). Distinct from the CONFIG dir resolved by
+# symlinks (issue #219). Distinct from the CONFIG dir resolved by
 # kaoiro-runner-launch.sh / setup.ts's resolveConfigDir(), because a release
 # is machine-generated multi-GB state, not operator-edited configuration.
 #

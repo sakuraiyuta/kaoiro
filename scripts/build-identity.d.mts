@@ -1,4 +1,4 @@
-// Type declaration for build-identity.mjs (issue #228 round 2 MF-2/MF-5).
+// Type declaration for build-identity.mjs (issue #218 round 2 MF-2/MF-5).
 // This repo-level script has no compiler config of its own — it's plain
 // Node ESM, imported at build time by runner/scripts/generate-build-info.mjs
 // (untyped, not part of any tsconfig `include`) and by runner's test suite

@@ -1,6 +1,6 @@
 #!/bin/sh
 # Points the `current` release symlink at another installed release, or back
-# at the previous one (issue #229, ADR-0018).
+# at the previous one (issue #219, ADR-0018).
 #
 #   kaoiro-runner-switch.sh <release-id> [--install-dir <dir>] [--allow-dirty]
 #   kaoiro-runner-switch.sh --rollback   [--install-dir <dir>]
@@ -25,7 +25,7 @@
 # whose service manager is in an unknown state.
 #
 # THIS SCRIPT IS THE ONLY WRITER OF current / previous, BUT USED TO TAKE NO
-# LOCK AT ALL (issue #229 review round 3, ARCH; closed in #253). Both
+# LOCK AT ALL (issue #219 review round 3, ARCH; closed in #243). Both
 # kaoiro-runner-install.sh (replacing a `--allow-dirty` release) and
 # kaoiro-runner-update.sh (pruning old releases) read current/previous and
 # then act on what they saw — a switch landing in that gap could leave
@@ -86,7 +86,7 @@ done
 [ -d "$root/releases" ] || kaoiro_die "no releases installed under $root" 78
 
 # Shared with kaoiro-runner-install.sh and kaoiro-runner-update.sh (issue
-# #253) — see this file's header. links_held tracks whether THIS run
+# #243) — see this file's header. links_held tracks whether THIS run
 # actually acquired it, same reasoning as the other two scripts' copy of
 # this comment: unconditionally releasing a lock this run never took would
 # delete another run's live lock dir out from under it. switch_to() and the
@@ -109,7 +109,7 @@ switch_to() {
   _id=$1
   _target="$root/releases/$_id"
 
-  # .lock.links (issue #253 round 2, もも review must-fix) from HERE —
+  # .lock.links (issue #243 round 2, もも review must-fix) from HERE —
   # before even checking `$_target` exists — through the writes below.
   # An earlier version took this lock only around the read of `current`,
   # AFTER verifying `$_target`, on the theory that verification is
@@ -121,7 +121,7 @@ switch_to() {
   # `$_target` out from under an ALREADY-VERIFIED release — activating a
   # name that no longer resolves to anything. もも reproduced this directly:
   # switch exited 0 with `current` left as a dangling symlink at the
-  # deleted target. Verified independently (issue #253 worktree, HEAD
+  # deleted target. Verified independently (issue #243 worktree, HEAD
   # 5c2cb50): a fake `mkdir` shimmed onto PATH deletes the target release
   # the instant it is asked to create `.lock.links` (standing in for a
   # concurrent install's delete landing in that exact pre-fix gap) —
@@ -167,7 +167,7 @@ switch_to() {
 if [ "$rollback" = yes ]; then
   [ -z "$id" ] || kaoiro_die "--rollback takes no release id" 64
 
-  # .lock.links (issue #253) from here through the writes below. Unlike
+  # .lock.links (issue #243) from here through the writes below. Unlike
   # switch_to(), where the release to activate comes from argv and only the
   # read of `current` needs the lock, --rollback's target comes from
   # `previous` itself — so the read that DECIDES what to verify and write

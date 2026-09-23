@@ -23,7 +23,7 @@ export type KaoiroState =
  *  call, tool_result=tool output, user=operator instruction echoed into the
  *  transcript (#31), system=session-level event the wrapper observed rather
  *  than anything either party said (context compaction, conversation reset —
- *  phase-28 A1 / #168). thinking is intentionally not relayed.
+ *  phase-28 A1 / #158). thinking is intentionally not relayed.
  *
  *  `system` is deliberately its own kind: relaying these as `assistant` would
  *  put wrapper-authored notices into the operator's "latest reply" timeline
@@ -54,13 +54,13 @@ export interface LogPayload {
 export interface ResultPayload {
   text?: string;
   is_error?: boolean;
-  /** SDK error termination subtype (issue #127). Set on error results only
+  /** SDK error termination subtype (issue #123). Set on error results only
    *  so the UI can differentiate max_turns / during_execution / max_budget /
    *  max_structured_output_retries. Wire-typed as a plain string here so
    *  this shared type stays SDK-agnostic; wrapper-side callers narrow to
    *  their ResultSubtype union. Absent on success. */
   error_subtype?: string;
-  /** SDK error termination detail (issue #127): the free-form message the
+  /** SDK error termination detail (issue #123): the free-form message the
    *  SDK returned alongside is_error (e.g. tool error text). Absent on
    *  success; may be omitted on error if the SDK provided no text. NOT
    *  masked or summarized (clipped only, protocol.md); the client should
@@ -89,14 +89,14 @@ export interface ResultPayload {
 
 /** Coarse subagent/workflow lifecycle status (ADR-0019 F3). Distinct from
  *  the wider status enum the SDK's own `task_updated` message carries
- *  (pending/running/completed/failed/killed/paused) — #180 review (実測
+ *  (pending/running/completed/failed/killed/paused) — #170 review (実測
  *  2026-08-09、SDK 0.3.220) confirmed `task_notification` is reliably
  *  emitted on every exercised termination path, so the wire-facing status
  *  stays limited to this 4-value set; a `killed` SDK-side intermediate
  *  always surfaces here as `stopped`. */
 export type TaskStatus = "running" | "completed" | "failed" | "stopped";
 
-/** One item in an agent's own todo list (issue #188, ADR-0049). The three
+/** One item in an agent's own todo list (issue #178, ADR-0049). The three
  * values mirror Claude Code's TodoWrite vocabulary. Codex has only a
  * completed boolean; its wrapper maps false to pending and true to
  * completed before constructing this wire value. */
@@ -116,7 +116,7 @@ export interface TasklistOmitted {
   completed: number;
 }
 
-/** payload of a type="task" envelope (ADR-0047 F1-F4, issue #180).
+/** payload of a type="task" envelope (ADR-0047 F1-F4, issue #170).
  *  `kind` distinguishes lifecycle events sharing this one type (ADR-0047
  *  F1); `agent_id`/`task_id`/`task_type`/`status` are required on every
  *  kind (F2); the rest are optional progress meta present only when the
@@ -182,7 +182,7 @@ export type Persona = WirePersona;
 export interface WrapperConfig {
   agent_id: string;
   persona: Persona;
-  /** Initial `display_name` (ADR-0050 D1, issue #219 D19/D20). Set by the
+  /** Initial `display_name` (ADR-0050 D1, issue #209 D19/D20). Set by the
    *  server at spawn/restore time — the spawn custom name if the operator
    *  gave one, else `persona.name`'s value at that moment (created-time
    *  persistence: the wrapper's own copy never re-derives from `persona`
@@ -201,7 +201,7 @@ export interface WrapperConfig {
    * when absent, then derives the actual token denominator from each
    * `getContextUsage().maxTokens` reading. Keeping the configured value as a
    * ratio, rather than a fixed token count, gives 1M- and 200k-token models
-   * the same "natural break" semantics (issue #264). */
+   * the same "natural break" semantics (issue #254). */
   context_work_budget_percent?: number;
   /** Initial SDK permission mode (#58). Omitted = `default`. The server may
    *  override this on join by pushing the last operator-persisted choice for
@@ -317,7 +317,7 @@ export interface WrapperConfig {
    *  against the values it is enforcing this run. */
   resume_snapshot?: ResolvedSnapshotExt;
   /** Session-transition correlation id relayed from the spawn / restore /
-   *  reset command that launched this wrapper (phase-27, #160). The wrapper
+   *  reset command that launched this wrapper (phase-27, #150). The wrapper
    *  echoes it verbatim in its channel join params so the server can tell
    *  "the connection this transition produced" from any other join — a
    *  session_id cannot, because a same-session resume reuses the old one.
@@ -823,9 +823,9 @@ export interface HistoryResetPayload {
   agent_id: string;
   preserve_inter_agent?: boolean;
   /** Pairs the reset with the `history_replay_complete` that closes the
-   *  replay window (#125). The wrapper allocates it and sends it on its own
+   *  replay window (#121). The wrapper allocates it and sends it on its own
    *  `history_reset` push; the server echoes it into this broadcast when
-   *  present. Absent keeps the pre-#125 wire shape readable. */
+   *  present. Absent keeps the pre-#121 wire shape readable. */
   replay_id?: string;
 }
 
@@ -918,7 +918,7 @@ export interface SwitchErrorExt {
 }
 
 /** Work-budget projection paired with the authoritative SDK context reading
- * in `ext.context` (issue #264). `work_budget_tokens` is the soft,
+ * in `ext.context` (issue #254). `work_budget_tokens` is the soft,
  * model-window-relative denominator; `work_budget_percentage` is the current
  * used-token share of that denominator and may exceed 100 after the soft
  * budget has been crossed. This is an extension of an already versioned
@@ -982,7 +982,7 @@ export interface Envelope {
   session_id?: string;
   persona: WirePersona;
   /** Mutable instance-scoped display name (ADR-0050 D1 `Principal.
-   *  display_name`, issue #219 D19/D23). `persona.name` above is the
+   *  display_name`, issue #209 D19/D23). `persona.name` above is the
    *  pack's canonical name and never changes for the session (ADR-0029
    *  F9, ADR-0030 D2); THIS is what an operator rename / spawn custom
    *  name actually mutates. Defaults to `persona.name` at spawn
@@ -1008,7 +1008,7 @@ export interface Envelope {
      *  after refreshCatalogFor() settles so AgentDetail can pair server
      *  ack + actual result and settle its loading spinner. */
     | "refresh_models_result"
-    /** subagent/workflow task lifecycle (issue #180, ADR-0019 F2 / ADR-0047
+    /** subagent/workflow task lifecycle (issue #170, ADR-0019 F2 / ADR-0047
      *  F1). payload.kind = "started" | "updated" | "completed"; payload
      *  carries the ADR-0047 F2 required fields (agent_id/task_id/task_type/
      *  status) plus F3's optional progress meta. `agent_id` here is the
@@ -1092,7 +1092,7 @@ export type InterAgentMessageKind =
   | "escalate-to-user"
   | "done";
 
-/** Peer-unresponsive-error attachment on an inter_agent_message (issue #131).
+/** Peer-unresponsive-error attachment on an inter_agent_message (issue #127).
  *  `code` is an intentionally open string — the initial vocabulary is
  *  `rate_limit` / `context_overflow` / `api_error` / `timeout` /
  *  `interrupted` / `disconnected`; a classifier that cannot map its input to
@@ -1116,13 +1116,13 @@ export interface InterAgentErrorPayload {
  *  is the destination agent_id used by the server for routing. `meta.done`
  *  must be true from both owner-side agents for the conversation to
  *  complete; `meta.reject_reason` is required when `kind === "reject"`.
- *  `error` (issue #131) marks this envelope as a peer-unresponsive-error
+ *  `error` (issue #127) marks this envelope as a peer-unresponsive-error
  *  notice rather than an ordinary message: `kind` stays `"inform"` (no new
  *  enum value, so older receivers degrade gracefully) and `body` repeats the
  *  human-readable reason for clients that only render `body`. `meta.done` is
  *  always `false` on an error notice — ending the conversation is left to
  *  the receiving agent's judgement.
- *  `new_conversation` (issue #262) is true only when the CALLING agent's
+ *  `new_conversation` (issue #252) is true only when the CALLING agent's
  *  `send_to_agent` omitted `conversation_id` and this wrapper allocated a
  *  fresh one — the one case where the server has never seen this id and
  *  that is expected. Every other envelope this wrapper builds (a reply
@@ -1265,9 +1265,9 @@ export interface DirectoryResult {
 // `version` is required here for every runner-bound message alike.
 //
 // ADR-0015's receiver rule is now enforced on both hops: the dashboard
-// stamps these payloads (#182), the server warns on any non-"0" it relays,
+// stamps these payloads (#172), the server warns on any non-"0" it relays,
 // and the runner re-checks every message it receives before handing it to
-// the supervisor (#181). RestartMessage is the one shape the bundled
+// the supervisor (#171). RestartMessage is the one shape the bundled
 // dashboard never sends — the server still accepts it for other clients, and
 // an unstamped one warns like any other.
 
@@ -1303,12 +1303,12 @@ export interface RunnerRegister {
    *  cascade of LaunchDialog. Sourced from each engine package's
    *  EngineCapability by the runner at register time. */
   engines?: EngineCatalogEntry[];
-  /** Build identity (issue #228) — distinct from `version` above, which is
+  /** Build identity (issue #218) — distinct from `version` above, which is
    *  the ADR-0015 WIRE PROTOCOL version (message-shape compatibility).
    *  `build_revision` is the full 40-char git SHA the running runner
    *  artifact was built from ("unknown" when undeterminable), and
    *  `build_dirty` whether that build had uncommitted changes (tracked OR
-   *  untracked). Absent = a runner build predating issue #228. Observability
+   *  untracked). Absent = a runner build predating issue #218. Observability
    *  only: a mismatch against the server's own build revision is
    *  surfaced to the operator (dashboard), never used to reject the
    *  connection — docs-only commits, backports, and rolling deploy
@@ -1341,7 +1341,7 @@ export interface SpawnMessage {
   version: "0";
   agent_id: string;
   persona: WirePersona;
-  /** Initial `display_name` (ADR-0050 D1, issue #219 D19/D20/MF-1). The
+  /** Initial `display_name` (ADR-0050 D1, issue #209 D19/D20/MF-1). The
    *  operator's spawn custom name, or `persona.name`'s value at record
    *  time when none was given. Optional on the wire for compatibility
    *  with a server that predates this field — the runner falls back to
@@ -1410,7 +1410,7 @@ export interface SpawnMessage {
    *  the resume path already runs applyResumeSnapshot. */
   apply_resume_snapshot?: boolean;
   /** Session-transition correlation id, server-allocated per spawn
-   *  (phase-27, #160). Mirrors the four-hop `request_id` discipline the
+   *  (phase-27, #150). Mirrors the four-hop `request_id` discipline the
    *  session-reset flow already uses (ADR-0036 F7): the runner relays it
    *  into the wrapper config as `transition_id` and echoes it back on
    *  `SpawnResult`, so a late result and a join from an unrelated
@@ -1436,7 +1436,7 @@ export interface RestartMessage {
    *  fires today. */
   version: "0";
   agent_id: string;
-  /** Planned-disconnect correlation id (issue #266). New servers allocate
+  /** Planned-disconnect correlation id (issue #256). New servers allocate
    *  it for each restart; new runners replace the entry's prior request id
    *  before relaunch so the wrapper echoes it as join `transition_id`.
    *  Optional for runner-first rolling deployment against an old server. */
@@ -1462,7 +1462,7 @@ export interface SwitchSessionMessage {
    *  apply helper is a no-op. */
   resume_snapshot?: ResolvedSnapshotExt;
   /** Session-transition correlation id, same semantics as
-   *  {@link SpawnMessage.request_id} (phase-27, #160). A live switch
+   *  {@link SpawnMessage.request_id} (phase-27, #150). A live switch
    *  reuses the SDK session id, so this is the only way to tell the
    *  connection this switch produced from the outgoing one. */
   request_id?: string;
@@ -1490,7 +1490,7 @@ export interface SpawnResult {
   ok: boolean;
   reason?: SpawnFailReason;
   /** Verbatim echo of {@link SpawnMessage.request_id} /
-   *  {@link SwitchSessionMessage.request_id} (phase-27, #160). The server
+   *  {@link SwitchSessionMessage.request_id} (phase-27, #150). The server
    *  aborts a pending transition only when this matches the one it is
    *  holding, so a result that arrives after the transition was superseded
    *  or garbage-collected cannot tear down its successor. Absent = legacy

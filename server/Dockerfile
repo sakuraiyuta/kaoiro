@@ -13,7 +13,7 @@
 #
 # Keep these in step with the Elixir/OTP the CI `server` job runs the suite on
 # (.gitea/workflows/ci.yml) — they diverged once, and OTP 26 turned out to be
-# unable to compile this suite's Japanese test names at all (issue #150).
+# unable to compile this suite's Japanese test names at all (issue #143).
 ARG ELIXIR_VERSION=1.20.1
 ARG OTP_VERSION=29.0.2
 ARG DEBIAN_VERSION=trixie-20260610-slim
@@ -118,7 +118,7 @@ FROM ${RUNNER_IMAGE} AS final
 # inotify-tools backs :file_system, which watches the persona pack dir for
 # live reloads. Without it the watcher fails to boot
 # (fs_inotify_bootstrap_error) and pack changes only apply on restart —
-# found on a real Linux host during issue #148's deployment check.
+# found on a real Linux host during issue #142's deployment check.
 #
 # libsctp1: OTP's esock NIF dlopen()s libsctp.so.1 during VM start and, when
 # it is missing, prints "[UNIX-ESSIO] Failed open sctp dynamic library" ON
@@ -141,7 +141,7 @@ ENV LC_ALL=en_US.UTF-8
 WORKDIR "/app"
 RUN chown nobody /app
 
-# Build identity (issue #228, round 2 MF-1/MF-2 — ふじ 差し戻し), distinct
+# Build identity (issue #218, round 2 MF-1/MF-2 — ふじ 差し戻し), distinct
 # from ADR-0015's wire protocol version (message-shape compatibility,
 # stamped "0" per-message): the full 40-char git SHA the image was built
 # from ("unknown" when the build ran outside a git checkout), whether that
@@ -152,7 +152,7 @@ RUN chown nobody /app
 # computation runner/scripts/generate-build-info.mjs uses, so the two
 # paths cannot silently diverge — MF-2).
 #
-# Baked into an IMAGE-BAKED FILE (issue #228 round 3 advisory 2, ふじ 差し
+# Baked into an IMAGE-BAKED FILE (issue #218 round 3 advisory 2, ふじ 差し
 # 戻し: "image-baked", not "immutable" — /app is nobody-owned and this
 # file is chown'd nobody:root, so it carries NO tamper-resistance against
 # a compromised process inside the running container; this is not an
@@ -181,7 +181,7 @@ LABEL org.opencontainers.image.revision=${KAOIRO_BUILD_REVISION}
 # "dirty" key exists in it), so this is a project-custom label, not an
 # OCI-defined one. Round 2 (MF-2) baked dirty into build-info.json but
 # never surfaced it here, leaving `docker inspect`-level provenance checks
-# (docs/specs/deployment.md 4.5) blind to it (issue #228 round 3 MF-1,
+# (docs/specs/deployment.md 4.5) blind to it (issue #218 round 3 MF-1,
 # ふじ 差し戻し).
 LABEL com.kaoiro.build-dirty=${KAOIRO_BUILD_DIRTY}
 

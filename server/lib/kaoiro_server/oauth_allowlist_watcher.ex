@@ -11,7 +11,7 @@ defmodule KaoiroServer.OAuthAllowlistWatcher do
   `socket.assigns[:role]`, the connect-time snapshot, for as long as
   nothing forces a reconnect. This module closes that gap by targeting
   exactly the identities whose allow-list entry changed, reusing the
-  SAME per-socket disconnect broadcast #47/#158 already send
+  SAME per-socket disconnect broadcast #47/#148 already send
   (`Endpoint.broadcast(socket_id, "disconnect", %{})`), addressed via
   `Auth.oauth_socket_id/2` computed straight from the allow-list's own
   (already-normalized) keys. No live-socket registry or enumeration is

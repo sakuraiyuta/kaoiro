@@ -7,7 +7,7 @@ config :kaoiro_server, KaoiroServerWeb.Endpoint,
   secret_key_base: "QuGyT2gNZpDdXTzHcZKPuBUNVFi4omSMAOW2apvMFd3dOx453osH4dzIL8LjwC6e",
   server: false
 
-# ふじ #120 must-fix 2: BEAM-safe run-scoped nonce (2026-07-25).
+# ふじ #116 must-fix 2: BEAM-safe run-scoped nonce (2026-07-25).
 # System.unique_integer([:positive]) は同一 BEAM 内でしか一意でなく、
 # 並行 mix test invocation (16 process 同時起動) で path が衝突すると
 # 実測された。System.pid() (OS プロセス pid) と 8 バイトの暗号乱数を
@@ -54,11 +54,11 @@ config :kaoiro_server,
          "kaoiro_test_agent_directory_#{run_nonce}.dets"
        )
 
-# Per-run throwaway DETS file for the user identity ledger (issue #197,
+# Per-run throwaway DETS file for the user identity ledger (issue #187,
 # ADR-0050 D1). Same run_nonce isolation as the store above — without
 # it, concurrent `mix test` invocations share the default
 # $TMPDIR/kaoiro-dets/users.dets file and open the same DETS table from
-# multiple BEAMs (issue #187's failure mode, reproduced by もも).
+# multiple BEAMs (issue #177's failure mode, reproduced by もも).
 config :kaoiro_server,
        :users_path,
        Path.join(
@@ -133,7 +133,7 @@ config :kaoiro_server,
          "kaoiro_test_ingress_order_#{run_nonce}.dets"
        )
 
-# Per-run throwaway DETS file for the token denylist (ふじ #120 must-fix 1,
+# Per-run throwaway DETS file for the token denylist (ふじ #116 must-fix 1,
 # 2026-07-25). 未設定時は module 側 default_path が共有 `/tmp/kaoiro-dets/token_denylist.dets`
 # に落ち、app supervisor が singleton を常時起動するため test の revocation
 # 状態が dev/prod と交錯していた。認証境界の正本なので他 DETS store と

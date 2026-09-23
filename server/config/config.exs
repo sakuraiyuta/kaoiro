@@ -12,7 +12,7 @@ config :kaoiro_server,
   # Exposed at runtime as Application.get_env(:kaoiro_server, :env) since
   # config_env() itself is a compile-time-only macro (unavailable in a
   # release). Auth.authorize_wrapper/2 and authorize_runner/2 read this to
-  # fail-closed on an unset token list in :prod only (issue #138).
+  # fail-closed on an unset token list in :prod only (issue #133).
   env: config_env(),
   # Static serving of the bundled dashboard (ADR-0007). Channels and the
   # public API stay on regardless.
@@ -20,7 +20,7 @@ config :kaoiro_server,
   # Hard limits per inter-agent conversation (protocol-inter-agent spec,
   # phase-8 Stage B). The server enforces these mechanically — quota
   # overshoot automatically terminates the conversation with a synthetic
-  # escalate-to-user broadcast. issue #221 removed the former
+  # escalate-to-user broadcast. issue #211 removed the former
   # max_wallclock_ms hard limit (it punished slow-but-legitimate
   # conversations while never catching a fast runaway ping-pong, which
   # max_turns already catches first) — max_turns / max_tokens /

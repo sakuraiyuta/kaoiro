@@ -1,4 +1,4 @@
-# kaoiro runner — systemd USER unit (issue #141).
+# kaoiro runner — systemd USER unit (issue #136).
 #
 # A user unit, never a root system service: the runner reads the host user's
 # ~/.claude / ~/.codex credentials and spawns wrapper processes inside that

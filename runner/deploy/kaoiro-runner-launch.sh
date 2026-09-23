@@ -78,7 +78,7 @@ if [ -f "$env_file" ]; then
   set +a
 fi
 
-# --version (issue #228 round 2 MF-5, ふじ 差し戻し): forwarded to the
+# --version (issue #218 round 2 MF-5, ふじ 差し戻し): forwarded to the
 # entry point BEFORE the config-existence check below. A first-run host
 # with no config yet (setup wizard not run) must still be able to answer
 # --version — cli.ts's own --version path never touches config or the
@@ -98,7 +98,7 @@ fi
 
 # A missing config is the first-run case. Point at the wizard rather than
 # launching it: this script also runs from systemd / launchd, where an
-# interactive prompt would hang with no terminal (issue #144).
+# interactive prompt would hang with no terminal (issue #139).
 config="${KAOIRO_RUNNER_CONFIG:-$conf_dir/runner.config.json}"
 if [ ! -f "$config" ]; then
   printf 'kaoiro-runner: config not found: %s\n' "$config" >&2
@@ -113,7 +113,7 @@ node_bin="${KAOIRO_NODE:-node}"
 command -v "$node_bin" >/dev/null 2>&1 ||
   die_config "node not found: $node_bin (set KAOIRO_NODE in $env_file)"
 
-# Verify, never build (issue #229). Making the service definition build would
+# Verify, never build (issue #219). Making the service definition build would
 # tie crash restart and boot to a compiler, node_modules and pnpm all
 # succeeding, keep the host down for the whole build, and leave a partial
 # `dist` behind on failure. So this checks that the artifacts a start needs
@@ -154,7 +154,7 @@ entry="$deploy_dir/../dist/cli.js"
 verify="$deploy_dir/verify-release.mjs"
 [ -f "$verify" ] ||
   die_config "incomplete install: $verify is missing (release: reinstall it)"
-# issue #259: an operator who hit a containment-boundary failure here (#229
+# issue #249: an operator who hit a containment-boundary failure here (#219
 # round 2) followed this message's build suggestion and rebuilt anyway — the
 # failure was never a build shortage, and the same failure recurred 15
 # seconds later. verify-release.mjs now exits 71 for a missing build

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Updates a runner host to a new immutable release (issue #229, ADR-0018).
+# Updates a runner host to a new immutable release (issue #219, ADR-0018).
 #
 #   kaoiro-runner-update.sh --tarball <path>   [options]
 #   kaoiro-runner-update.sh --from-repo <path> [options]
@@ -217,7 +217,7 @@ lock="$root/.lock.update"
 kaoiro_lock_acquire "$lock"
 
 # Shared with kaoiro-runner-switch.sh and kaoiro-runner-install.sh (issue
-# #253) — this script's own prune loop below is the only place it needs it,
+# #243) — this script's own prune loop below is the only place it needs it,
 # so links_held tracks whether THIS run actually acquired it and cleanup()
 # releases it only then, same reasoning as install.sh's own copy of this
 # comment.
@@ -342,7 +342,7 @@ fi
 # --- resolves the codex wrapper lazily, on the first codex spawn, so a
 # --- release still reachable as current is loaded from long after startup.
 
-# Snapshot, held under .lock.links (issue #253) — the SAME lock
+# Snapshot, held under .lock.links (issue #243) — the SAME lock
 # kaoiro-runner-switch.sh takes around its own current/previous swap, and
 # kaoiro-runner-install.sh around its own replace check. Without it, a
 # manual switch landing between this read and the deletions below could

@@ -84,7 +84,7 @@ jobs:
   #     way `docker build` sends its context — hence the tar pipe below.
   #
   # The image matches what server/Dockerfile builds the release with — issue
-  # #150 aligned the two. Keep them in step when bumping either: the previous
+  # #143 aligned the two. Keep them in step when bumping either: the previous
   # release pin (OTP 26) could not compile this suite's Japanese test names at
   # all ("argument 1: not an iolist term"), which is what surfaced the drift.
   server:
@@ -102,13 +102,13 @@ jobs:
           # copyfile metadata is separate from xattrs and unpacks as
           # AppleDouble files, which `mix format` then parses as Elixir.
           #
-          # mix runs as a non-root `ci` user (issue #192): the container
+          # mix runs as a non-root `ci` user (issue #182): the container
           # otherwise runs as root, under which the phase-29 permission-denial
           # tests (chmod-based simulations) are no-ops, since root ignores
           # permission bits — the suite passed 781/784 with the 3 permission
           # tests silently not exercising their raise/error path.
           #
-          # set -o pipefail (issue #192, ふじ M1): without it, this pipe's
+          # set -o pipefail (issue #182, ふじ M1): without it, this pipe's
           # exit status is the RIGHT side's (docker run) only, so a `tar`
           # failure that still hands docker a consumable stream would go
           # unnoticed.
@@ -135,11 +135,11 @@ jobs:
             sh -euc '
               tar -xf - -C /w
               # inotify-tools backs :file_system, which PersonaWatcher,
-              # FooterWatcher, and OAuthAllowlistWatcher (issue #170)
+              # FooterWatcher, and OAuthAllowlistWatcher (issue #160)
               # all use. Without it, PersonaWatcher/FooterWatcher fall
               # back to :ignore (no fast path) and OAuthAllowlistWatcher
               # degrades to poll-only. server/Dockerfile already
-              # installs this for the same reason (issue #148) -- this
+              # installs this for the same reason (issue #142) -- this
               # pin was missing only from the CI container, which does
               # not go through that Dockerfile. Installed as root,
               # before the su below (the ci user has no apt privileges).
@@ -228,7 +228,7 @@ jobs:
 
   # Build context is the repository root (issue #70): the Dockerfile's node
   # stage bundles the dashboard from /dashboard. Publishing waits on the
-  # registry decision (issue #145), so this only proves the image still
+  # registry decision (issue #140), so this only proves the image still
   # builds.
   server-image:
     runs-on: ubuntu-latest

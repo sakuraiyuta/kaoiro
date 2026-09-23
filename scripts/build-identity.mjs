@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Shared build-identity computation (issue #228 round 2, ふじ MF-2/MF-5
+// Shared build-identity computation (issue #218 round 2, ふじ MF-2/MF-5
 // 差し戻し). SINGLE place that computes revision/dirty from git — used by
 // BOTH runner/scripts/generate-build-info.mjs (writes dist/build-info.json,
 // the runner side) and docs/specs/deployment.md 4.3's server build step
@@ -59,20 +59,20 @@ function gitOutput(args, cwd) {
 /** Computes `{ revision, dirty, degraded, degradeReason }` from git state at
  *  `cwd` (default: repo root).
  *
- * dirty definition (issue #228, decided round 1): `git status --porcelain`
+ * dirty definition (issue #218, decided round 1): `git status --porcelain`
  * sees BOTH tracked and untracked changes, unlike `git diff --quiet` (misses
- * untracked entirely) — issue #227's own build slipped past the
+ * untracked entirely) — issue #217's own build slipped past the
  * tracked-only check via an untracked file, the concrete incident that
  * settled this.
  *
- * degrade rule (issue #228 round 2, ふじ MF-2 ruling): if `git status
+ * degrade rule (issue #218 round 2, ふじ MF-2 ruling): if `git status
  * --porcelain` cannot be read AFTER a successful `rev-parse HEAD`, the
  * WHOLE identity degrades to `{ revision: "unknown", dirty: false }` —
  * NOT just `dirty: false` with the real revision kept. A revision without a
  * trustworthy dirty read is not usable as a deploy postcondition. Explicitly
  * rejected: tri-stating dirty (unknown/true/false) instead, which would add
  * absent / unknown / dirty-unknown / dirty / clean-mismatch / clean-match
- * states and complicate issue #230's future enforcement design for no
+ * states and complicate issue #220's future enforcement design for no
  * benefit here — see docs/adr/0053-build-identity.md.
  */
 export function computeBuildIdentity(cwd = repoRoot) {
@@ -148,7 +148,7 @@ export function formatIdentityString({ revision, dirty }) {
 }
 
 /** Value domain for `built_at` — identical logic to runner/src/build_info.ts's
- *  `isValidBuiltAt` (issue #228 round 4, ふじ 差し戻し), kept as an
+ *  `isValidBuiltAt` (issue #218 round 4, ふじ 差し戻し), kept as an
  *  independently-authored duplicate for the same cross-package reason as
  *  `REVISION_RE` below. A shape-only regex matches syntactically
  *  ISO-looking but calendrically impossible strings like
@@ -162,7 +162,7 @@ function isValidBuiltAt(value) {
 }
 
 /** Value domain for a FULL build-info.json-shaped object (revision, dirty,
- *  AND built_at — issue #228 round 4, ふじ 差し戻し: round 3 validated
+ *  AND built_at — issue #218 round 4, ふじ 差し戻し: round 3 validated
  *  only revision/dirty, so a file with a valid revision/dirty but a
  *  malformed built_at still passed through here while runner's own
  *  loadBuildInfo() degraded the SAME file to unknown — the two readers
@@ -186,7 +186,7 @@ export function isValidBuildInfoShape(value) {
 /** Reads and validates a build-info.json-shaped file, degrading to
  *  `{ revision: "unknown", dirty: false }` (with a reason logged to
  *  stderr) on ANY failure — missing file, unparsable JSON, or a malformed
- *  shape (issue #228 round 4, ふじ 差し戻し). Structurally mirrors
+ *  shape (issue #218 round 4, ふじ 差し戻し). Structurally mirrors
  *  runner/src/build_info.ts's `loadBuildInfo` (same three try/catch
  *  stages, same degrade target) rather than letting a read or parse
  *  failure propagate as an uncaught exception — round 3 only handled the

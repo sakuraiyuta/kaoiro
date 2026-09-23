@@ -1,4 +1,4 @@
-// #184 M4: browser harness for the input-latency bench (see README.md in
+// #174 M4: browser harness for the input-latency bench (see README.md in
 // this directory). Not part of the shipped app — served only by
 // runBench.mjs's throwaway Vite dev server. Excluded from tsconfig's
 // `include`, so it is intentionally looser about typing than src/.
@@ -29,7 +29,7 @@ function state(agentId: string) {
 const BENCH_BASE_TS_MS = Date.parse("2026-07-01T00:00:00Z");
 
 // Text long enough to exercise the markdown renderer per entry, mirroring a
-// real assistant reply rather than a one-word stub — the #184 hypothesis is
+// real assistant reply rather than a one-word stub — the #174 hypothesis is
 // specifically about per-entry DOM (markdown HTML) weight.
 function assistantLog(agentId: string, seq: number) {
   return {
@@ -95,7 +95,7 @@ declare global {
 
 window.__latencies = [];
 // Time from the textarea's `input` event (composer keystroke) to the next
-// painted frame — the #184 hypothesis (layout/style recalc over the huge
+// painted frame — the #174 hypothesis (layout/style recalc over the huge
 // transcript DOM) shows up as a gap here, not in event-dispatch time itself.
 window.__armLatencyProbe = () => {
   const textarea = document.querySelector("textarea");

@@ -19,7 +19,7 @@ defmodule KaoiroServerWeb.AgentsChannel do
   `handle_out`'s role gate above reads `socket.assigns[:role]`, the
   role `ClientSocket.connect/3` resolved — a snapshot, not re-checked
   per envelope (the per-subscriber-per-envelope cost of doing so was
-  weighed and rejected, issue #148/#170). `join/3` re-resolves that
+  weighed and rejected, issue #148/#160). `join/3` re-resolves that
   snapshot live once, right before completing the join: an allow-list
   change landing in the connect-to-join gap can otherwise race past
   `KaoiroServer.OAuthAllowlistWatcher`'s disconnect broadcast (issue

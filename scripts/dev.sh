@@ -14,7 +14,7 @@
 # Manual equivalent is documented in server/README.md
 # ("ローカル開発(ホットリロード)").
 #
-# DETS は $root/tmp/dev-data/*.dets に per-project 隔離する (issue #121)。
+# DETS は $root/tmp/dev-data/*.dets に per-project 隔離する (issue #117)。
 # OS 共有 tmp や `mix test` の DETS と衝突しない。dogfood.sh の docker
 # named volume /var/lib/kaoiro による隔離と対称。
 set -euo pipefail
@@ -80,14 +80,14 @@ KAOIRO_RUNNER_TOKENS="$(pairing_append "${KAOIRO_RUNNER_TOKENS:-}" "$host_id" "$
 export KAOIRO_RUNNER_TOKENS
 export KAOIRO_RUNNER_TOKEN="$runner_token"
 
-# Isolate dev DETS stores under $root/tmp/dev-data/ (issue #121). Unset
+# Isolate dev DETS stores under $root/tmp/dev-data/ (issue #117). Unset
 # envs would otherwise fall through to each store's default_path (a shared
 # $TMPDIR/kaoiro-dets/*.dets), which is then read/written by both `mix test`
 # (test fixture rows leaking into the dev dashboard) and any other dev
 # instance on the same host. dogfood.sh already sits on a docker named
 # volume /var/lib/kaoiro; this is the dev.sh-side counterpart. Each var uses
 # ${VAR:-default} so an operator-set env (server/.env, direct export) still
-# overrides. KAOIRO_TOKEN_DENYLIST_PATH is included since #120 must-fix
+# overrides. KAOIRO_TOKEN_DENYLIST_PATH is included since #116 must-fix
 # wired it into runtime.exs — the authoritative revocation store deserves
 # the same dev / test / OS-tmp isolation as the other DETS ledgers.
 data_dir="$root/tmp/dev-data"
