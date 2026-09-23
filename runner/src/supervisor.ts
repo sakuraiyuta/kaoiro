@@ -10,6 +10,7 @@ import type {
   EngineModelInfo,
   ModelSource,
   PermissionAxesExt,
+  PermissionCeilingConflictAxis,
   PermissionMode,
   ResolvedSnapshotExt,
   RunnerSessions,
@@ -979,7 +980,7 @@ export class Supervisor {
         nextSnapshot,
         entry.parsed.engine,
       );
-      const conflict = this.#ceilingConflictAgainst(
+      const { conflict } = this.#ceilingConflictAgainst(
         wouldApply,
         entry.permissionCeiling,
       );
@@ -1146,8 +1147,11 @@ export class Supervisor {
     // immutable launch ceiling via a snapshot value more permissive than it.
     // On conflict, fall to a terminal reset result (no fresh spawn) and clear
     // the pending reset stashed above, leaving the old wrapper untouched.
+    // issue #397: report `permission_ceiling_conflict` (not `spawn_failed` --
+    // no spawn was ever attempted) with the offending axes, so the operator
+    // sees which one to narrow instead of a generic failure.
     if (entry.permissionCeiling !== undefined) {
-      const conflict = this.#ceilingConflictAgainst(
+      const { conflict, conflictAxes } = this.#ceilingConflictAgainst(
         applied,
         entry.permissionCeiling,
       );
@@ -1163,7 +1167,8 @@ export class Supervisor {
           mode: mode as SessionResetMode,
           request_id: requestId,
           ok: false,
-          reason: "spawn_failed",
+          reason: "permission_ceiling_conflict",
+          ceiling_conflict: conflictAxes,
         });
         return;
       }
@@ -1432,21 +1437,24 @@ export class Supervisor {
 
   /** True when `parsed`'s launch values would widen past an already-resolved,
    *  immutable ceiling (a switch / reset carrying a snapshot value more
-   *  permissive than the launch ceiling). Returns the conflict detail or null.
-   *  Reuses resolveAntigravityCeiling with the stored ceiling as the explicit
-   *  config bound. */
+   *  permissive than the launch ceiling). Returns the conflict detail
+   *  (string form for logging, structured per-axis form for `reset_session`'s
+   *  `ceiling_conflict` detail, issue #397) or nulls when there is no
+   *  conflict. Reuses resolveAntigravityCeiling with the stored ceiling as
+   *  the explicit config bound. */
   #ceilingConflictAgainst(
     parsed: ParsedSpawn,
     ceiling: AntigravityCeiling,
-  ): string | null {
-    return resolveAntigravityCeiling(
+  ): { conflict: string | null; conflictAxes: PermissionCeilingConflictAxis[] } {
+    const { conflict, conflictAxes } = resolveAntigravityCeiling(
       {
         sandbox: parsed.sandbox,
         approval: parsed.approval,
         networkAccess: parsed.networkAccess,
       },
       ceiling,
-    ).conflict;
+    );
+    return { conflict, conflictAxes };
   }
 
   #start(agentId: string, parsed: ParsedSpawn): boolean {
