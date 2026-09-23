@@ -210,9 +210,26 @@ a new row. Two consequences follow from the two-pass matching above:
 
 - A pin written as the **alias** (`opus[1m]`, `default`) keeps matching and
   silently moves to the newer model.
-- A pin written in the **canonical** spelling (`claude-opus-5[1m]`) matches
-  nothing once no row resolves to it. `#validatePersistModelAgainstCatalog()`
-  then rolls the session back to `default`, pairs `model_source` back to
-  `default`, and emits `switch_error{reason: "persist_alias_unknown"}`, which the
-  client shows as an info-tone notice. That is the designed degradation, not a
-  crash — but it means a canonical pin does not survive a generation change.
+- A pin written in the **canonical** spelling (`claude-opus-5[1m]`) also keeps
+  working, and stays on the older model. This was predicted the other way round
+  when the bump landed — that the pin would match nothing and degrade through
+  `#validatePersistModelAgainstCatalog()` — and the prediction was wrong.
+
+**Measured on the released runner, 2026-09-23** (issue #398 acceptance). The
+SDK's catalog is not a fixed list: it **appends the session's pinned model as
+its own row**. Running the probe with `options.model` set to
+`"claude-opus-5[1m]"` returns six rows — the five above plus
+`claude-opus-5[1m] -> claude-opus-5[1m]`. `#findCatalogEntries()` therefore gets
+a value-exact hit, validation does not fire, and the session keeps its pin.
+
+Observed on this host: every Claude agent resumed after the runner moved to the
+bumped SDK, `kuroe` among them with `resume_snapshot.model:
+"claude-opus-5[1m]"`. The wrapper logged
+`model=claude-opus-5[1m](source=config)` and no `persist_alias_unknown` /
+`switch_error` appeared in the runner journal. The session ran turns normally on
+Opus 5.
+
+The practical consequence is the opposite of the earlier prediction: an alias
+pin follows the generation change, a canonical pin pins the generation. Neither
+degrades. `persist_alias_unknown` still exists for a pin naming a model the
+account cannot serve at all, which is a different case.
