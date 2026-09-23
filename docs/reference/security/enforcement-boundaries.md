@@ -1,7 +1,7 @@
 ---
 title: Security enforcement boundaries
 status: accepted
-last_updated: 2026-09-18
+last_updated: 2026-09-23
 ---
 
 # Security enforcement boundaries
@@ -66,6 +66,13 @@ Related security topics: [Security boundaries](../../architecture/security-bound
   operator selection before the first exec. This is delayed application of an
   authenticated operator request, not an autonomous choice to widen. The launch
   configuration is not a rollback or revocation of that saved request.
+  On Antigravity, a `reset_session` whose resume snapshot exceeds the pinned
+  launch ceiling (`entry.permissionCeiling`) is refused outright, never
+  silently clamped or relaunched at a narrowed value: the runner reports
+  `permission_ceiling_conflict` with the offending axis (current value vs.
+  ceiling) instead (issue #397). This keeps the same invariant the ceiling
+  pin exists for — a relaunch cannot derive a wider effective permission
+  from a snapshot the pointer happens to hold.
 - MUST: Permission display and resume snapshots distinguish requested/submitted
   configuration from observed effective policy. Unknown execution outcomes do
   not establish rollback, even to a narrower value. A failure after policy
