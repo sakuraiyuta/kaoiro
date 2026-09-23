@@ -33,6 +33,7 @@
     resultOf,
     resumeDriftFrom,
     RUNNING_STATES,
+    reservedSessionResetMode,
     SELECTABLE_APPROVAL_VALUES,
     SELECTABLE_SANDBOX_VALUES,
     sessionCapabilitiesFrom,
@@ -2394,9 +2395,7 @@
     // Attachment presence is decided here (stagedFiles is the caller's
     // truth) and the helper is only asked about text + capability.
     const reservedMode: SessionResetMode | null =
-      stagedFiles.length === 0
-        ? text === "/new" ? "new" : text === "/clear" ? "clear" : null
-        : null;
+      stagedFiles.length === 0 ? reservedSessionResetMode(text) : null;
     const resetTarget =
       reservedMode === null
         ? null

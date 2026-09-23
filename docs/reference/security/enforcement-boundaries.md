@@ -117,6 +117,9 @@ boundary ([ADR-0036](../../adr/0036-session-lifecycle-commands.md)).
   it loudly as `reserved_session_command` at its start and never passes it to
   the engine (defense in depth rather than relying only on client-side
   interception).
+  The dashboard's reserved-token check is centralized in
+  `reservedSessionResetMode`; the server keeps its own check as an independent
+  enforcement boundary.
 - **SessionResets pending lock**: `check_and_acquire/5` atomically verifies
   lock existence + KaoiroState (`idle`/`waiting_input`) - dispatch-cooldown in
   one `handle_call` (the TOCTOU core of ADR-0036 F6). While a reset is pending,

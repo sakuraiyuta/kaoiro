@@ -61,6 +61,7 @@ import {
   parseSessionResetCompleted,
   parseSessionResetFailed,
   parseSessionResetStarted,
+  reservedSessionResetMode,
   sessionCapabilitiesFrom,
   sessionResetAvailability,
   shouldInterceptAsSessionReset,
@@ -2778,6 +2779,25 @@ describe("shouldInterceptAsSessionReset (ADR-0036 F1, phase-17 17-8)", () => {
     expect(
       shouldInterceptAsSessionReset("ふつうの指示です", undefined, supportedCaps),
     ).toBeNull();
+  });
+});
+
+describe("reservedSessionResetMode (issue #392)", () => {
+  it("returns the mode for exact reserved commands", () => {
+    expect(reservedSessionResetMode("/new")).toBe("new");
+    expect(reservedSessionResetMode("/clear")).toBe("clear");
+  });
+
+  it("trims surrounding whitespace before matching", () => {
+    expect(reservedSessionResetMode(" /new ")).toBe("new");
+    expect(reservedSessionResetMode("/clear\t")).toBe("clear");
+  });
+
+  it("does not match escaped, extended, argument, or empty text", () => {
+    expect(reservedSessionResetMode("\\/new")).toBeNull();
+    expect(reservedSessionResetMode("/newer")).toBeNull();
+    expect(reservedSessionResetMode("/new hello")).toBeNull();
+    expect(reservedSessionResetMode("")).toBeNull();
   });
 });
 

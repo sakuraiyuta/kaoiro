@@ -636,6 +636,16 @@ export function modelSourceFrom(envelope: Envelope): string | null {
  *  self-contained per this file's plain-TS contract. */
 export type SessionResetMode = "new" | "clear";
 
+/** Returns the reserved session-reset mode for text whose trimmed value is
+ *  exactly `/new` or `/clear`. Leading and trailing whitespace is ignored;
+ *  arguments and escaped forms remain ordinary instruction text. */
+export function reservedSessionResetMode(
+  text: string,
+): SessionResetMode | null {
+  const trimmed = text.trim();
+  return trimmed === "/new" ? "new" : trimmed === "/clear" ? "clear" : null;
+}
+
 /** Who initiated a reset (protocol.md, ADR-0043 D1). Mirrors
  *  @kaoiro/protocol's SessionResetOrigin. */
 export type SessionResetOrigin = "operator" | "agent_self";
@@ -915,9 +925,7 @@ export function shouldInterceptAsSessionReset(
   caps: SessionCapabilities | null,
 ): SessionResetMode | null {
   if (attachmentIds !== undefined && attachmentIds.length > 0) return null;
-  const trimmed = text.trim();
-  const mode: SessionResetMode | null =
-    trimmed === "/new" ? "new" : trimmed === "/clear" ? "clear" : null;
+  const mode = reservedSessionResetMode(text);
   if (mode === null) return null;
   return sessionResetAvailability(caps, mode) === "on" ? mode : null;
 }
