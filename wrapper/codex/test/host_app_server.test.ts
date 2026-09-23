@@ -139,6 +139,26 @@ it("does not emit an extra ready state when skipped input has a queued successor
   f.terminal();
 });
 
+it("does not emit ready when app-server input preparation closes the host", async () => {
+  let f!: ReturnType<typeof fixture>;
+  let readyAtClose = -1;
+  f = fixture({ prepareInput: token => {
+    if (token !== "stale") return undefined;
+    readyAtClose = f.states.filter(e => e.state === "waiting_input").length;
+    f.host.close();
+    return null;
+  } });
+  await f.host.send("active", undefined, [], "active");
+  await f.until(1);
+  await f.host.send("obsolete", undefined, ["closed"], "stale");
+  f.terminal();
+  await f.running;
+  expect(f.turns()).toHaveLength(1);
+  expect(readyAtClose).toBeGreaterThanOrEqual(0);
+  expect(f.states.filter(e => e.state === "waiting_input")).toHaveLength(readyAtClose);
+  expect(f.host.activeInterAgentTurnToken()).toBeNull();
+});
+
 it("waits for permission sync before child creation and dispatch", async () => {
   const gate = deferred(), wait = vi.fn(() => gate.promise), f = fixture({ waitForPermissionSync: wait });
   await f.host.send("A");

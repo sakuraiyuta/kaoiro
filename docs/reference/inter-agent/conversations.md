@@ -169,7 +169,10 @@ The wrapper (`agent-common`) keeps corresponding local state
   both its SDK and app-server paths, before `runStreamed` and `turn/start`
   respectively. A now-terminal item is
   acknowledged without an SDK turn; surviving items use their current mode.
-  If every item is removed, the host emits a ready state when its queue is empty.
+  If every item is removed, the host emits a ready state when its own input queue
+  is empty; a later peer batch can still arrive from the coordinator's queue.
+  Codex finalizes the skipped token locally but emits no `turn_start` or
+  `terminal` lifecycle journal entry because no engine turn started.
   Antigravity may retain an unused epoch until its normal idle timer expires.
   An unconfirmed local `done=true` send
   cannot cause a queued item to be discarded: classification retains the saved

@@ -1570,7 +1570,7 @@ export class CodexHost implements EngineAdapter {
       if (this.#watchdogFailStopped || settled) return;
       if (!started && error instanceof AppServerAdmissionError && error.reason === "input_skipped") {
         settled = true;
-        if (this.#queue.length === 0) {
+        if (this.#queue.length === 0 && !this.#closed) {
           this.#machine = initialMachineState("waiting_input");
           this.#emitState("waiting_input");
         }
@@ -1702,7 +1702,7 @@ export class CodexHost implements EngineAdapter {
     if (!retryAfterRepair) {
       const prepared = this.#options.prepareInput?.(turnToken);
       if (prepared === null) {
-        if (this.#queue.length === 0) {
+        if (this.#queue.length === 0 && !this.#closed) {
           this.#machine = initialMachineState("waiting_input");
           this.#emitState("waiting_input");
         }

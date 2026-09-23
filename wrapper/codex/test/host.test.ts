@@ -363,6 +363,22 @@ function makeClient(turns: ScriptedTurn[]): {
 }
 
 describe("host-queued inter-agent input preparation (SDK backend)", () => {
+  it("does not emit ready when input preparation closes the host before a skip", async () => {
+    const { client } = makeClient([]);
+    const states: string[] = [];
+    let host!: CodexHost;
+    host = new CodexHost(CONFIG, {
+      onState: (envelope) => states.push(envelope.state),
+      appendSystemPrompt: "p",
+      codexFactory: () => client,
+      prepareInput: () => { host.close(); return null; },
+    });
+    await host.send("obsolete", undefined, ["cid"], "skip-token");
+    await host.run();
+    expect(states).not.toContain("waiting_input");
+    expect(host.activeInterAgentTurnToken()).toBeNull();
+  });
+
   it("skips the sole queued input and emits ready without an SDK turn", async () => {
     const { client, calls } = makeClient([]);
     const states: string[] = [];
