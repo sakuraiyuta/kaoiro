@@ -82,7 +82,7 @@ defmodule KaoiroServer.Test.RelayFailureDiagnosticsFormatter do
 
   defp target_failure?(failures) do
     Enum.any?(failures, fn
-      {_kind, reason, _stacktrace} ->
+      {_kind, reason, _stacktrace} when is_exception(reason) ->
         String.contains?(Exception.message(reason), "no matching message after")
 
       _ ->
