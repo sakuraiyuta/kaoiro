@@ -2,7 +2,7 @@
 title: Claude model catalog
 description: Exact contract for Claude catalog refresh, canonical model identifiers, and two-pass catalog-row matching.
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-09-23
 related: [extensions, adapter-contract, protocol]
 ---
 
@@ -185,3 +185,34 @@ representation works.
 The Codex catalog is static and does not distinguish canonical from alias, so it
 is unchanged. A row with absent `resolved_model` behaves as it did before the
 field was added.
+
+## The model list ships inside the bundled CLI, not kaoiro (issue #398, measured 2026-09-23)
+
+kaoiro declares no Claude model of its own: the bootstrap floor is the single
+`default` row, and both catalog paths read what the Claude Code CLI bundled with
+`@anthropic-ai/claude-agent-sdk` reports. A new Anthropic model therefore reaches
+kaoiro through an SDK version bump, not a catalog edit — the same conclusion the
+Fable 5.1 rollout reached.
+
+`wrapper/claude-code/src/probe.ts` was run directly on this host, `ok: true` and
+`source: "init"` in both runs:
+
+| `value` | `resolved_model` on SDK 0.3.258 (CLI 2.1.258) | `resolved_model` on SDK 0.3.280 (CLI 2.1.280) |
+|---|---|---|
+| `default` | `claude-opus-5[1m]` | `claude-opus-5-5[1m]` |
+| `opus[1m]` | `claude-opus-5[1m]` | `claude-opus-5-5[1m]` |
+| `claude-fable-5-1[1m]` | `claude-fable-5-1` | `claude-fable-5-1` |
+| `sonnet` | `claude-sonnet-5` | `claude-sonnet-5` |
+| `haiku` | `claude-haiku-4-5-20251001` | `claude-haiku-4-5-20251001` |
+
+Claude Opus 5.5 arrives as a change of an existing alias' `resolvedModel`, not as
+a new row. Two consequences follow from the two-pass matching above:
+
+- A pin written as the **alias** (`opus[1m]`, `default`) keeps matching and
+  silently moves to the newer model.
+- A pin written in the **canonical** spelling (`claude-opus-5[1m]`) matches
+  nothing once no row resolves to it. `#validatePersistModelAgainstCatalog()`
+  then rolls the session back to `default`, pairs `model_source` back to
+  `default`, and emits `switch_error{reason: "persist_alias_unknown"}`, which the
+  client shows as an info-tone notice. That is the designed degradation, not a
+  crash — but it means a canonical pin does not survive a generation change.
