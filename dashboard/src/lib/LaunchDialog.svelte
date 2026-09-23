@@ -166,13 +166,13 @@
     if (!host) return null;
     const runnerRevision = host.build_revision;
     if (runnerRevision === undefined) {
-      return "この host は build revision 情報を報告していません(pre-#228 runner)。";
+      return "この host は build revision 情報を報告していません(古い runner)。";
     }
     if (runnerRevision === "unknown") {
       return "この host の build revision が unknown です(git 情報なしでビルドされたか、pnpm build を経ていません)。";
     }
     if (serverBuildRevision === null) {
-      return "server の build revision を取得できません(pre-#228 server、または /api/health の取得に失敗)。";
+      return "server の build revision を取得できません(古い server、または /api/health の取得に失敗)。";
     }
     if (serverBuildRevision === "unknown") {
       return "server 自身の build revision が unknown です。";
