@@ -8015,3 +8015,45 @@ describe("AgentHost — SDK-side model fallback (issue #363)", () => {
     expect(h.envs.some((e) => e.ext?.model_source === "fallback")).toBe(false);
   });
 });
+
+describe("close()'s abort-error swallowing scope (issue #391)", () => {
+  // Negative control for run()'s catch guard (host.ts): close() aborts
+  // #abort, but a real SDK/transport fault that is NOT the SDK's own
+  // AbortError must still propagate even though #closed is already true by
+  // the time it arrives -- otherwise a genuine crash would be silently
+  // reported as a clean shutdown (disconnectReason would stay "stop").
+  it("propagates a genuine SDK fault raised after close(), not just an AbortError", async () => {
+    let inputConsumed!: () => void;
+    const consumed = new Promise<void>((resolve) => {
+      inputConsumed = resolve;
+    });
+    let releaseFault!: () => void;
+    const faultReleased = new Promise<void>((resolve) => {
+      releaseFault = resolve;
+    });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn: (args) => {
+        async function* frames(): AsyncGenerator<SDKMessage, void> {
+          const input = (args.prompt as AsyncIterable<SDKUserMessage>)[
+            Symbol.asyncIterator
+          ]();
+          await input.next();
+          inputConsumed();
+          await faultReleased;
+          throw new Error("transport exploded");
+        }
+        return Object.assign(frames(), {
+          interrupt: async () => {},
+        }) as unknown as Query;
+      },
+    });
+    const running = host.run("hi");
+    await consumed;
+    // close() sets #closed=true and aborts #abort -- exactly the state the
+    // guard must NOT treat as sufficient on its own to swallow an error.
+    host.close();
+    releaseFault();
+    await expect(running).rejects.toThrow("transport exploded");
+  });
+});

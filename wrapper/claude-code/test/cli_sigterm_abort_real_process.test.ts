@@ -81,6 +81,28 @@ setInterval(() => {}, 1_000);
   return { executable, pidFile };
 }
 
+/** Real "claude" stand-in that behaves like the actual CLI: ignores stdin
+ *  (never reads it, so EOF alone does not end it) but honors SIGTERM by
+ *  exiting immediately. This is the grace-path fixture (issue #391 M1
+ *  round-1 finding): the SIGTERM-and-EOF-ignoring fixture above only ever
+ *  reaches the SDK's SIGKILL step (~7000ms), never proving the SIGTERM
+ *  step (~2000ms) actually ends a cooperating child within the runner's
+ *  reset grace (5000ms). */
+function writeSigtermCooperativeFixture(
+  root: string,
+): { executable: string; pidFile: string } {
+  const executable = join(root, "claude-fixture-cooperative.mjs");
+  const pidFile = join(root, "fixture-cooperative.pid");
+  writeFileSync(executable, `#!${process.execPath}
+import { writeFileSync } from "node:fs";
+process.on("SIGTERM", () => process.exit(0));
+writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+setInterval(() => {}, 1_000);
+`);
+  chmodSync(executable, 0o755);
+  return { executable, pidFile };
+}
+
 describe.skipIf(!isLinux)("Claude CLI SIGTERM -> abort() real-process escalation (issue #391 M1, Linux-only)", () => {
   it("SIGTERM triggers close() -> abort() -> the real child is killed (queue empty)", async () => {
     const root = mkdtempSync(join(tmpdir(), "kaoiro-claude-cli-sigterm-"));
@@ -200,4 +222,69 @@ describe.skipIf(!isLinux)("Claude CLI SIGTERM -> abort() real-process escalation
       rmSync(root, { force: true, recursive: true });
     }
   }, 15_000);
+
+  // issue #391 M1 round-1 finding: the two pins above use a fixture that
+  // ignores SIGTERM too, so they only ever measure the SDK's SIGKILL step
+  // (~7000ms, outside the runner's 5000ms reset grace -- an orphan-risk
+  // scenario, kept above as issue #401's demonstration). This pin measures
+  // the actually-common case: a child that honors SIGTERM must be ended by
+  // the SDK's SIGTERM step alone, well inside the reset grace.
+  it("SIGTERM->close()->abort() ends a SIGTERM-cooperative child within the runner's reset grace (issue #391 M1)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-claude-cli-sigterm-coop-"));
+    const { executable, pidFile } = writeSigtermCooperativeFixture(root);
+    let fixturePid: number | undefined;
+    const run = runClaudeCli({
+      parseCliArgs: () => ({ configPath: "test", prompt: "first instruction", resume: undefined }),
+      loadConfig: () => ({ ...config }),
+      createServerLink: (_url, _agentId, options) => {
+        const linkOptions = options as unknown as Record<string, any>;
+        queueMicrotask(() => {
+          linkOptions.onPersonaPrompt?.("system prompt");
+          linkOptions.onInterAgentDeliveryStatus?.({ issued_seq: 0, acked_seq: 0 });
+        });
+        return {
+          close: () => {},
+          currentSessionId: () => null,
+          setSessionId: () => {},
+          send: () => {},
+          reportSessionLifecycle: () => {},
+          acknowledgeInterAgentDelivery: () => {},
+          flushInterAgentRetirements: async () => {},
+          reportDisconnectIntent: async () => {},
+        } as never;
+      },
+      createHost: (cfg, options) =>
+        new AgentHost(cfg, {
+          ...options,
+          queryOptions: {
+            ...options.queryOptions,
+            pathToClaudeCodeExecutable: executable,
+          },
+        }),
+    });
+    void run.catch(() => {});
+    try {
+      await waitFor(() => existsSync(pidFile), 10_000);
+      fixturePid = Number(readFileSync(pidFile, "utf8").trim());
+      expect(isAlive(fixturePid)).toBe(true);
+
+      const t0 = Date.now();
+      process.emit("SIGTERM" as never);
+      await waitFor(() => !isAlive(fixturePid!), 4_500);
+      const elapsedMs = Date.now() - t0;
+      // Must actually wait for the SDK's SIGTERM step (~2000ms) -- a child
+      // that dies too fast would mean the assertion below (well under the
+      // reset grace) is vacuously true for the wrong reason (e.g. abort()
+      // not wired at all and the fixture dying from something else).
+      expect(elapsedMs).toBeGreaterThanOrEqual(1_500);
+      // Must land inside the runner's RESET_TERMINATION_GRACE_MS (5000ms) --
+      // this is the actual M1 acceptance criterion: SIGTERM-cooperative
+      // children never reach the runner's own SIGKILL, let alone the SDK's.
+      expect(elapsedMs).toBeLessThan(5_000);
+      await run;
+    } finally {
+      forceKill(fixturePid);
+      rmSync(root, { force: true, recursive: true });
+    }
+  }, 10_000);
 });
