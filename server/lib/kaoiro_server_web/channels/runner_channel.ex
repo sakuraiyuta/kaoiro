@@ -525,7 +525,7 @@ defmodule KaoiroServerWeb.RunnerChannel do
        when is_binary(agent_id) and is_binary(request_id) and is_boolean(ok?) do
     with true <- Map.get(payload, "mode", "new") in @session_reset_modes,
          {:ok, reason} <- parse_reset_reason(payload["reason"], ok?),
-         {:ok, ceiling_conflict} <- parse_ceiling_conflict(payload["ceiling_conflict"]),
+         {:ok, ceiling_conflict} <- parse_ceiling_conflict(payload["ceiling_conflict"], reason),
          {:ok, to_sid} <- parse_optional_session_id(payload["to_session_id"]) do
       {:ok, agent_id, request_id, ok?, reason, to_sid, ceiling_conflict}
     else
@@ -562,14 +562,18 @@ defmodule KaoiroServerWeb.RunnerChannel do
   # refusal. Absent (any other reason, or a legacy runner) parses to `nil`
   # rather than requiring the field -- SessionResets/broadcast simply omit
   # it downstream. Present-but-malformed is refused like the rest of this
-  # payload (the runner has to fix its own bug).
+  # payload (the runner has to fix its own bug). A non-nil `ceiling_conflict`
+  # is tied to `reason == "permission_ceiling_conflict"` -- otherwise it is
+  # refused too, mirroring how parse_reset_reason ties `reason` to `ok?`
+  # (self-review round 1 finding, QUALITY: a stray detail on an unrelated
+  # reason would render a confusing axis-narrowing hint downstream).
   @ceiling_conflict_axes ["sandbox", "approval", "network_access"]
   @ceiling_conflict_sandbox_values ["read-only", "workspace-write", "danger-full-access"]
   @ceiling_conflict_approval_values ["untrusted", "on-request", "local", "never"]
 
-  defp parse_ceiling_conflict(nil), do: {:ok, nil}
+  defp parse_ceiling_conflict(nil, _reason), do: {:ok, nil}
 
-  defp parse_ceiling_conflict(list) when is_list(list) do
+  defp parse_ceiling_conflict(list, "permission_ceiling_conflict") when is_list(list) do
     list
     |> Enum.reduce_while({:ok, []}, fn item, {:ok, acc} ->
       case parse_ceiling_conflict_axis(item) do
@@ -583,7 +587,7 @@ defmodule KaoiroServerWeb.RunnerChannel do
     end
   end
 
-  defp parse_ceiling_conflict(_), do: {:error, :invalid_ceiling_conflict}
+  defp parse_ceiling_conflict(_ceiling_conflict, _reason), do: {:error, :invalid_ceiling_conflict}
 
   defp parse_ceiling_conflict_axis(%{
          "axis" => axis,
