@@ -920,6 +920,83 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
       _ = KaoiroServer.SessionResets.delete(agent_id)
     end
 
+    # issue #397: permission_ceiling_conflict relays a structured per-axis
+    # detail (never surfaced as the generic spawn_failed) through to the
+    # session_reset_failed broadcast operators see.
+    test "ok=false + permission_ceiling_conflict は detail 付きで failed broadcast" do
+      host_id = "lab-pc-reset-ceiling"
+      agent_id = "lab-pc-reset-ceiling.a"
+      request_id = acquire_reset_lock(agent_id, "sess-old-ceiling")
+
+      @endpoint.subscribe("agents:lobby")
+      socket = join_runner(host_id)
+
+      ceiling_conflict = [
+        %{"axis" => "approval", "current" => "never", "ceiling" => "local"}
+      ]
+
+      ref =
+        push(socket, "session_reset_result", %{
+          "agent_id" => agent_id,
+          "request_id" => request_id,
+          "mode" => "new",
+          "ok" => false,
+          "reason" => "permission_ceiling_conflict",
+          "ceiling_conflict" => ceiling_conflict
+        })
+
+      assert_reply ref, :ok
+
+      assert_broadcast "session_reset_failed", %{
+        "agent_id" => ^agent_id,
+        "mode" => "new",
+        "request_id" => ^request_id,
+        "reason" => "permission_ceiling_conflict",
+        "ceiling_conflict" => ^ceiling_conflict
+      }
+
+      refute KaoiroServer.SessionResets.pending?(agent_id)
+      _ = KaoiroServer.SessionResets.delete(agent_id)
+    end
+
+    test "ceiling_conflict の axis が閉集合外なら invalid_ceiling_conflict" do
+      host_id = "lab-pc-reset-ceiling-badaxis"
+      socket = join_runner(host_id)
+
+      ref =
+        push(socket, "session_reset_result", %{
+          "agent_id" => "a.x",
+          "request_id" => "rs_x",
+          "mode" => "new",
+          "ok" => false,
+          "reason" => "permission_ceiling_conflict",
+          "ceiling_conflict" => [
+            %{"axis" => "permission_mode", "current" => "auto", "ceiling" => "never"}
+          ]
+        })
+
+      assert_reply ref, :error, %{reason: "invalid_ceiling_conflict"}
+    end
+
+    test "ceiling_conflict の current/ceiling が axis の値域外なら invalid_ceiling_conflict" do
+      host_id = "lab-pc-reset-ceiling-badvalue"
+      socket = join_runner(host_id)
+
+      ref =
+        push(socket, "session_reset_result", %{
+          "agent_id" => "a.x",
+          "request_id" => "rs_x",
+          "mode" => "new",
+          "ok" => false,
+          "reason" => "permission_ceiling_conflict",
+          "ceiling_conflict" => [
+            %{"axis" => "network_access", "current" => "true", "ceiling" => false}
+          ]
+        })
+
+      assert_reply ref, :error, %{reason: "invalid_ceiling_conflict"}
+    end
+
     test "rollback_failed は matching planned intent を閉じる" do
       host_id = "lab-pc-reset-rollback-fail"
       agent_id = host_id <> ".a"
