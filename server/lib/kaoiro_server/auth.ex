@@ -470,11 +470,11 @@ defmodule KaoiroServer.Auth do
       entity == "wrapper" ->
         "pair auth disabled; only server-minted wrapper tokens (the " <>
           "spawn path, ADR-0024) authenticate, anything else is " <>
-          "rejected (fail-closed in prod, issue #138). Set it to " <>
+          "rejected (fail-closed in prod). Set it to " <>
           "pre-register fixed wrappers."
 
       true ->
-        "#{entity} connections are rejected (fail-closed in prod, issue #138). " <>
+        "#{entity} connections are rejected (fail-closed in prod). " <>
           "Set it to allow #{entity}s to connect."
     end
   end

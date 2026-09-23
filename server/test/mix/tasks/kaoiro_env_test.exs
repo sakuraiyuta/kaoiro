@@ -154,7 +154,7 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
       body = Env.render(@answers)
 
       assert body =~ "fail-closed"
-      assert body =~ "issue #138"
+      assert body =~ "Set all three for anything network-reachable"
       assert body =~ "CLIENT token unset"
     end
 
@@ -433,7 +433,7 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
                  5. On each agent host, run the runner wizard
                     (deploy/kaoiro-runner-setup.sh) and pair its token with the
                     KAOIRO_RUNNER_TOKENS entry above.
-               Deployment details live in the runbook (issue #142).
+               Deployment details: docs/operations/server-install.md (configuration reference: docs/reference/configuration/server.md).
                """
       end)
     end
@@ -498,7 +498,7 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
                6. On each agent host, run the runner wizard
                   (deploy/kaoiro-runner-setup.sh) and pair its token with the
                   KAOIRO_RUNNER_TOKENS entry above.
-             Deployment details live in the runbook (issue #142).
+             Deployment details: docs/operations/server-install.md (configuration reference: docs/reference/configuration/server.md).
              """
     end
 
@@ -573,7 +573,7 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
                3. On each agent host, run the runner wizard
                   (deploy/kaoiro-runner-setup.sh) and pair its token with the
                   KAOIRO_RUNNER_TOKENS entry above.
-             Deployment details live in the runbook (issue #142).
+             Deployment details: docs/operations/server-install.md (configuration reference: docs/reference/configuration/server.md).
              """
     end
   end

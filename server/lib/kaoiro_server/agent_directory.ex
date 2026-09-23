@@ -350,7 +350,7 @@ defmodule KaoiroServer.AgentDirectory do
   defp load_legacy_entry(acc, agent_id, persona_id, revision, display_name)
        when byte_size(display_name) <= @max_display_name_bytes do
     Logger.warning(
-      "agent directory migration (issue #219): #{agent_id} legacy persona map " <>
+      "agent directory migration: #{agent_id} legacy persona map " <>
         "migrated to persona_id=#{inspect(persona_id)} display_name=#{inspect(display_name)}"
     )
 

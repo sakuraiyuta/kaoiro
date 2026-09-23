@@ -3829,7 +3829,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       # ログ側を検証する。accept 判定だけでは無言の legacy 受理と警告付き
       # legacy 受理を区別できない。
       assert log =~ "inter_agent_message: client declared new_conversation (absent)"
-      assert log =~ "issue #262 legacy best-effort accept"
+      assert log =~ "legacy best-effort accept"
     end
 
     test "payload.new_conversation 欠落かつ明示指定の未知 cid (旧 wrapper 相当) は " <>
