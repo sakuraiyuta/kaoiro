@@ -36,6 +36,7 @@
     InterAgentDeliveryStatus,
     HostInfo,
     KaoiroConnection,
+    PermissionCeilingConflictAxis,
     PersonaManifest,
     RunnerSessions,
     QuagmireNotice,
@@ -389,6 +390,19 @@
     spawnNotice = message;
     clearTimeout(spawnNoticeTimer);
     spawnNoticeTimer = setTimeout(() => (spawnNotice = null), 6000);
+  }
+
+  // issue #397: renders which axis to narrow, and to what, before a reset
+  // blocked by an Antigravity permission-ceiling conflict can succeed.
+  function formatCeilingConflictHint(
+    axes: PermissionCeilingConflictAxis[],
+  ): string {
+    return axes
+      .map(
+        (axis) =>
+          `${axis.axis} を ${String(axis.ceiling)} に狭めてから reset (現在: ${String(axis.current)})`,
+      )
+      .join("; ");
   }
 
   function notifySpawn(result: SpawnResult): void {
@@ -1295,8 +1309,13 @@
           const { [payload.agent_id]: _drop, ...rest } = sessionResets;
           void _drop;
           sessionResets = rest;
+          const hint =
+            payload.ceiling_conflict !== undefined &&
+            payload.ceiling_conflict.length > 0
+              ? ` — ${formatCeilingConflictHint(payload.ceiling_conflict)}`
+              : "";
           showNotice(
-            `session_reset 失敗 (${payload.mode}): ${payload.reason}`,
+            `session_reset 失敗 (${payload.mode}): ${payload.reason}${hint}`,
           );
         },
       },

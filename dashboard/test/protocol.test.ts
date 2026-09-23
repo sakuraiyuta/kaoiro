@@ -3041,6 +3041,70 @@ describe("parseSessionResetFailed (ADR-0036 F7, phase-17 17-9)", () => {
       parseSessionResetFailed({ request_id: "rs_1", agent_id: "a.1", mode: "new" }),
     ).toBeNull();
   });
+
+  // issue #397: permission_ceiling_conflict carries a structured per-axis
+  // detail so the UI can show which axis to narrow.
+  it("permission_ceiling_conflict + 有効な ceiling_conflict をそのまま透過する", () => {
+    expect(
+      parseSessionResetFailed({
+        request_id: "rs_1",
+        agent_id: "a.1",
+        mode: "new",
+        reason: "permission_ceiling_conflict",
+        ceiling_conflict: [
+          { axis: "approval", current: "never", ceiling: "local" },
+          { axis: "network_access", current: true, ceiling: false },
+        ],
+      }),
+    ).toEqual({
+      request_id: "rs_1",
+      agent_id: "a.1",
+      mode: "new",
+      reason: "permission_ceiling_conflict",
+      ceiling_conflict: [
+        { axis: "approval", current: "never", ceiling: "local" },
+        { axis: "network_access", current: true, ceiling: false },
+      ],
+    });
+  });
+
+  it("ceiling_conflict の axis が閉集合外なら payload 全体でなく detail だけ落とす", () => {
+    const result = parseSessionResetFailed({
+      request_id: "rs_1",
+      agent_id: "a.1",
+      mode: "new",
+      reason: "permission_ceiling_conflict",
+      ceiling_conflict: [
+        { axis: "permission_mode", current: "auto", ceiling: "never" },
+      ],
+    });
+    expect(result).not.toBeNull();
+    expect(result?.ceiling_conflict).toBeUndefined();
+  });
+
+  it("ceiling_conflict の値が axis の値域外なら detail を落とす", () => {
+    const result = parseSessionResetFailed({
+      request_id: "rs_1",
+      agent_id: "a.1",
+      mode: "new",
+      reason: "permission_ceiling_conflict",
+      ceiling_conflict: [
+        { axis: "sandbox", current: "hacked", ceiling: "read-only" },
+      ],
+    });
+    expect(result?.ceiling_conflict).toBeUndefined();
+  });
+
+  it("ceiling_conflict 不在の他 reason はキー自体を持たない", () => {
+    const result = parseSessionResetFailed({
+      request_id: "rs_1",
+      agent_id: "a.1",
+      mode: "new",
+      reason: "spawn_failed",
+    });
+    expect(result).not.toBeNull();
+    expect(result).not.toHaveProperty("ceiling_conflict");
+  });
 });
 
 describe("EngineCatalogResult (Option E, ADR-0039)", () => {
