@@ -84,6 +84,61 @@ it("keeps queue order, maximum active one, and every queued input successful", a
   expect(f.createSession).toHaveBeenCalledTimes(1);
 });
 
+it("skips an obsolete host-queued input before turn/start and preserves pending settings", async () => {
+  let skip = false;
+  const f = fixture({ prepareInput: token => token === "stale" && skip ? null : undefined });
+  await f.host.send("active", undefined, [], "active");
+  await f.until(1);
+  await f.host.setModel("gpt-6-astra");
+  await f.host.setEffort("low");
+  await f.host.send("obsolete", undefined, ["closed"], "stale");
+  skip = true;
+  f.terminal();
+  await vi.waitFor(() => expect(f.finals).toHaveBeenCalledTimes(2));
+  expect(f.turns()).toHaveLength(1);
+  expect(f.starts).toHaveBeenCalledTimes(1);
+  expect(f.ends).toHaveBeenCalledTimes(1);
+  expect(f.logs.filter(e => e.type === "result")).toHaveLength(1);
+  expect(f.states.at(-1)?.state).toBe("waiting_input");
+  expect(f.host.activeInterAgentTurnToken()).toBeNull();
+  expect(f.createSession).toHaveBeenCalledTimes(1);
+
+  await f.host.send("next", undefined, [], "next");
+  await f.until(2);
+  expect(f.turns()[1]?.params).toMatchObject({ model: "gpt-6-astra", effort: "low" });
+  f.terminal();
+});
+
+it("replaces host-queued app-server text and conversation IDs at the final boundary", async () => {
+  const f = fixture({ prepareInput: token => token === "queued"
+    ? { text: "prepared text", conversationIds: ["survivor"] } : undefined });
+  await f.host.send("active", undefined, [], "active");
+  await f.until(1);
+  await f.host.send("stale text", undefined, ["removed", "survivor"], "queued");
+  f.terminal();
+  await f.until(2);
+  expect((f.turns()[1]?.params as { input: Array<{ text: string }> }).input[0]?.text).toBe("prepared text");
+  expect(f.starts.mock.calls[1]?.[0]).toMatchObject({ turnToken: "queued", conversationIds: ["survivor"] });
+  f.terminal();
+  await vi.waitFor(() => expect(f.ends.mock.calls[1]?.[0]).toMatchObject({ conversationIds: ["survivor"] }));
+});
+
+it("does not emit an extra ready state when skipped input has a queued successor", async () => {
+  const f = fixture({ prepareInput: token => token === "stale" ? null : undefined });
+  await f.host.send("active", undefined, [], "active");
+  await f.until(1);
+  await f.host.send("obsolete", undefined, ["closed"], "stale");
+  await f.host.send("next", undefined, ["open"], "next");
+  const readyBefore = f.states.filter(e => e.state === "waiting_input").length;
+  f.terminal();
+  await f.until(2);
+  expect(f.starts.mock.calls.map(([info]) => info.turnToken)).toEqual(["active", "next"]);
+  expect(f.ends).toHaveBeenCalledTimes(1);
+  expect(f.states.filter(e => e.state === "waiting_input")).toHaveLength(readyBefore + 1);
+  expect(f.host.activeInterAgentTurnToken()).toBe("next");
+  f.terminal();
+});
+
 it("waits for permission sync before child creation and dispatch", async () => {
   const gate = deferred(), wait = vi.fn(() => gate.promise), f = fixture({ waitForPermissionSync: wait });
   await f.host.send("A");

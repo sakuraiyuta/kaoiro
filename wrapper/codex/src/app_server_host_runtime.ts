@@ -34,6 +34,8 @@ export interface AppServerRuntimeHooks {
   /** Wait for sync and the blocked gate. Reject admission with AppServerAdmissionError
    * (permission_gate_blocked/interrupted); other failures close the session. */
   waitForPermissionSync: () => Promise<void>;
+  /** Runs synchronously after final admission and before turn/start. */
+  prepareInput?: () => string | null | undefined;
   onDispatch: (attempt: AppServerRuntimeAttempt, identity: AppServerDispatchIdentity) => void;
   onTerminal?: (identity: AppServerTurnIdentity) => void;
   onPermission: (assessment: CodexPermissionAssessment, attempt: AppServerRuntimeAttempt) => void;
@@ -47,7 +49,7 @@ export interface AppServerRuntimeCompletion {
   settingsCommitted: boolean;
 }
 export class AppServerAdmissionError extends Error {
-  constructor(readonly reason: "interrupted" | "permission_gate_blocked") {
+  constructor(readonly reason: "interrupted" | "permission_gate_blocked" | "input_skipped") {
     super(`App-server admission cancelled: ${reason}`);
   }
 }
@@ -157,11 +159,14 @@ export class AppServerHostRuntime {
                   current.pending.effort !== pending.effort || current.pending.effortReset !== pending.effortReset) {
                 throw new AppServerPermissionSuperseded();
               }
+              const preparedInput = hooks.prepareInput?.();
+              if (preparedInput === null) throw new AppServerAdmissionError("input_skipped");
               attempt = { pending, prepared, permission: current.permission.syncSupported
                 ? captureAppServerPermission(this.#options.rolloutRoot ?? codexRolloutsRoot(), current.permission, selection, identity, this.#fresh) : null };
               active.dispatched = true;
               this.#fresh = false;
               hooks.onDispatch(attempt, identity);
+              return preparedInput;
             },
           });
           for await (const event of turn.events) {

@@ -25,8 +25,9 @@ export interface AppServerTurnInput {
   clientUserMessageId?: string;
   settings?: AppServerTurnSettings;
   beforeDispatch?: (settings: AppServerPreparedSettings) => Promise<void>;
-  /** Synchronous admission check immediately before turn/start; throwing sends no turn. */
-  onDispatch?: (identity: AppServerDispatchIdentity, settings: AppServerPreparedSettings) => void;
+  /** Synchronous admission and input preparation immediately before turn/start.
+   * Returning an input replaces the queued value; throwing sends no turn. */
+  onDispatch?: (identity: AppServerDispatchIdentity, settings: AppServerPreparedSettings) => string | void;
 }
 
 export type AppServerDispatchIdentity = Pick<AppServerTurnIdentity, "threadId" | "hostTurnToken" | "clientUserMessageId">;
@@ -127,7 +128,8 @@ export class AppServerTransport {
   async startTurn(input: AppServerTurnInput): Promise<AppServerTurn> {
     if (this.#failure) throw this.#failure;
     if (this.#active || this.#opening || this.#readingHistory) throw new Error("App-server already has an active or submitting operation");
-    const wireInput = appServerInput(input.input);
+    // Invalid images must fail before reserving an operation or initializing RPC.
+    if (typeof input.input !== "string") appServerInput(input.input);
     const dispatch: AppServerDispatchIdentity = {
       threadId: input.threadId, hostTurnToken: input.hostTurnToken,
       ...(input.clientUserMessageId === undefined ? {} : { clientUserMessageId: input.clientUserMessageId }),
@@ -146,7 +148,8 @@ export class AppServerTransport {
       });
       if (input.beforeDispatch) await this.#beforeDispatch(() => input.beforeDispatch!(prepared));
       if (this.#failure) throw this.#failure;
-      input.onDispatch?.(dispatch, prepared);
+      const preparedInput = input.onDispatch?.(dispatch, prepared);
+      const wireInput = appServerInput(preparedInput ?? input.input);
       const ticket = this.#rpc.request("turn/start", {
         ...settings, threadId: dispatch.threadId,
         input: wireInput,

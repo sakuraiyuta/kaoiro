@@ -164,9 +164,10 @@ The wrapper (`agent-common`) keeps corresponding local state
   consumed a model turn for a no-reply notice).
 - **Recheck queued input at the SDK input boundary**: A peer's inbound mode can
   become obsolete while an earlier host turn is still running. All three wrappers
-  reclassify queued items when the peer queue advances. Claude, Codex SDK, and
-  Antigravity recheck again immediately before the host hands input to the
-  engine. A now-terminal item is
+  reclassify queued items when the peer queue advances and again immediately
+  before the host hands input to the engine. Codex applies the latter check in
+  both its SDK and app-server paths, before `runStreamed` and `turn/start`
+  respectively. A now-terminal item is
   acknowledged without an SDK turn; surviving items use their current mode.
   If every item is removed, the host emits a ready state when its queue is empty.
   Antigravity may retain an unused epoch until its normal idle timer expires.
