@@ -10,19 +10,26 @@
 // shortcut is not justified here.
 //
 // This test spawns the REAL wrapper CLI as its own OS process (via tsx,
-// since the package ships TypeScript sources) with a stub ServerLink (no
-// network dependency) and a fixture `claude` binary that honors SIGTERM,
-// sends that process a real OS SIGTERM, and asserts on the child_process
-// `exit` event: `signal === null` (Node's own SIGTERM default action never
-// fired -- the registered handler ran instead) and `code === 0` (the
+// since the package ships TypeScript sources) with a REAL `ServerLink` (no
+// `createServerLink` stub -- the runner script omits the option entirely,
+// so `runClaudeCli` falls back to its own default, `new ServerLink(...)`)
+// backed by a Phoenix-loopback peer (issue #391 round2 K5, mirroring
+// Codex's `cli_sigterm_process_exit.integration.test.ts`), and a fixture
+// `claude` binary that honors SIGTERM. It sends the process a real OS
+// SIGTERM and asserts on the child_process `exit` event: `code === 0` (the
 // process ended by its event loop emptying, not by an explicit
-// `process.exit()` call racing teardown), within the runner's reset grace.
+// `process.exit()` call racing teardown) within the runner's reset grace,
+// and that the real link's `disconnect_intent` reached the wire -- proving
+// the exit path drains the link's own teardown (flushInterAgentRetirements,
+// reportDisconnectIntent, socket close), not just the SDK child.
 import { spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
+import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
 
 const isLinux = process.platform === "linux";
 const testDir = dirname(fileURLToPath(import.meta.url));
@@ -39,9 +46,13 @@ function isAlive(pid: number): boolean {
   }
 }
 
+// issue #391 round2 S2: monotonic, not wall-clock -- a WSL2 clock step (or
+// any NTP/VM-suspend adjustment) can move Date.now() by seconds without any
+// time actually elapsing, producing both a false timeout here and a false
+// pass/fail on the elapsedMs bound below.
 async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
     if (predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -72,13 +83,20 @@ setInterval(() => {}, 1_000);
   return { executable, pidFile };
 }
 
-/** Runner script driving the REAL runClaudeCli() with a stub ServerLink
- *  (no network) and the fixture claude executable, then does nothing else
- *  -- no process.exit() call anywhere in this file. If the SDK/CLI clean
+/** Runner script driving the REAL runClaudeCli() with NO `createServerLink`
+ *  override -- it falls back to `runClaudeCli`'s own default, the REAL
+ *  `ServerLink` from `@kaoiro/wrapper-core`, pointed at the Phoenix-loopback
+ *  peer via `server_url` (issue #391 round2 K5). Only the `claude`
+ *  executable is substituted, via the existing `createHost` seam. No
+ *  `process.exit()` call anywhere in this file. If the SDK/CLI/link clean
  *  up every timer and handle, Node's event loop empties on its own and the
  *  process exits with code 0 by itself; if anything leaks, this script
  *  hangs and the test's own timeout catches it. */
-function writeRunnerScript(root: string, fixtureExecutablePathEnvVar: string): string {
+function writeRunnerScript(
+  root: string,
+  fixtureExecutablePathEnvVar: string,
+  wireUrl: string,
+): string {
   const script = join(root, "runner.mts");
   writeFileSync(
     script,
@@ -90,28 +108,12 @@ const config = {
   agent_id: "self.agent",
   persona: { id: "p", name: "P", sprite_set: "p" },
   display_name: "P",
-  server_url: "ws://unused",
+  server_url: ${JSON.stringify(wireUrl)},
 };
 
 await runClaudeCli({
   parseCliArgs: () => ({ configPath: "test", prompt: "first instruction", resume: undefined }),
   loadConfig: () => config,
-  createServerLink: (_url, _agentId, options) => {
-    queueMicrotask(() => {
-      options.onPersonaPrompt?.("system prompt");
-      options.onInterAgentDeliveryStatus?.({ issued_seq: 0, acked_seq: 0 });
-    });
-    return {
-      close: () => {},
-      currentSessionId: () => null,
-      setSessionId: () => {},
-      send: () => {},
-      reportSessionLifecycle: () => {},
-      acknowledgeInterAgentDelivery: () => {},
-      flushInterAgentRetirements: async () => {},
-      reportDisconnectIntent: async () => {},
-    };
-  },
   createHost: (cfg, options) =>
     new AgentHost(cfg, {
       ...options,
@@ -124,11 +126,12 @@ await runClaudeCli({
 }
 
 describe.skipIf(!isLinux)("Claude CLI process actually exits after SIGTERM, no process.exit() (issue #391 M2, Linux-only)", () => {
-  it("the spawned wrapper process exits with code 0 and no signal, within the runner's reset grace", async () => {
+  it("the spawned wrapper process exits with code 0, within the runner's reset grace, and reports disconnect_intent to the real link", async () => {
     const root = mkdtempSync(join(tmpdir(), "kaoiro-claude-cli-m2-"));
     const { executable: fixtureExecutable, pidFile: fixturePidFile } = writeFixture(root);
     const envVar = "KAOIRO_TEST_FIXTURE_CLAUDE_EXECUTABLE";
-    const runnerScript = writeRunnerScript(root, envVar);
+    const wire = await phoenixLoopback();
+    const runnerScript = writeRunnerScript(root, envVar, wire.url);
     const child = spawn(tsxBin, [runnerScript], {
       env: { ...process.env, [envVar]: fixtureExecutable },
       stdio: ["ignore", "pipe", "pipe"],
@@ -139,12 +142,18 @@ describe.skipIf(!isLinux)("Claude CLI process actually exits after SIGTERM, no p
     });
     let fixturePid: number | undefined;
     try {
+      // host.run() -- and so the fixture `claude` spawn -- only starts once
+      // the real link's join round-trip resolves and delivers the persona
+      // prompt (see `onPersonaPrompt` in cli.ts): join, THEN push, THEN wait
+      // for the fixture pid, in that order.
+      await waitFor(() => wire.joins >= 1, 15_000);
+      wire.push("persona_prompt", { prompt: "system prompt" });
       await waitFor(() => existsSync(fixturePidFile), 15_000);
       fixturePid = Number(readFileSync(fixturePidFile, "utf8").trim());
       expect(isAlive(fixturePid)).toBe(true);
       expect(child.exitCode).toBeNull();
 
-      const t0 = Date.now();
+      const t0 = performance.now();
       // A real OS signal to a real separate process -- not process.emit().
       child.kill("SIGTERM");
       const outcome = await new Promise<{ code: number | null; signal: NodeJS.Signals | null; elapsedMs: number }>(
@@ -152,21 +161,32 @@ describe.skipIf(!isLinux)("Claude CLI process actually exits after SIGTERM, no p
           const timer = setTimeout(() => reject(new Error("wrapper process did not exit within 8000ms")), 8_000);
           child.once("exit", (code, signal) => {
             clearTimeout(timer);
-            resolve({ code, signal, elapsedMs: Date.now() - t0 });
+            resolve({ code, signal, elapsedMs: performance.now() - t0 });
           });
         },
       );
-      // signal === null means Node's own default SIGTERM action (which
-      // would report the terminating signal here) never fired -- the
-      // registered handler ran and the process ended through its own
-      // event loop emptying instead.
-      expect(outcome.signal, `stderr: ${stderr}`).toBeNull();
+      // code === 0 is the actual discriminator here: the process ended by
+      // its own event loop emptying, not an explicit process.exit() racing
+      // teardown. `signal` is NOT reliable evidence through tsx (issue #391
+      // round2 nit) -- a mutation that removed the SIGTERM handler entirely
+      // was observed to exit as {code: 143, signal: null}, because tsx's
+      // loader relays and swallows the terminating signal rather than
+      // reporting it on `child_process`'s own `signal` field. Assert code
+      // first so a future regression's failure message leads with the
+      // discriminator that actually caught it.
       expect(outcome.code, `stderr: ${stderr}`).toBe(0);
+      expect(outcome.signal, `stderr: ${stderr}`).toBeNull();
       expect(outcome.elapsedMs).toBeLessThan(5_000);
       await waitFor(() => !isAlive(fixturePid!), 2_000);
+      // The real link's own teardown ran to completion (issue #391 round2
+      // K5): cli.ts's finally block calls reportDisconnectIntent() after
+      // close() settles host.run()'s promise, which the real ServerLink
+      // pushes onto the wire -- not just the SDK child dying.
+      expect(wire.received.map((m) => m.event)).toContain("disconnect_intent");
     } finally {
       forceKill(fixturePid);
       if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      await wire.close();
       rmSync(root, { force: true, recursive: true });
     }
   }, 20_000);
