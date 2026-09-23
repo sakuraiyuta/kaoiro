@@ -5,7 +5,7 @@
 // required or handled here.
 
 import { randomUUID } from "node:crypto";
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { AbortError, query } from "@anthropic-ai/claude-agent-sdk";
 import { readClaudeTasklist } from "./tasklist.js";
 import type { TasklistReadResult } from "./tasklist.js";
 import type {
@@ -2027,15 +2027,25 @@ export class AgentHost implements EngineAdapter {
       }
     } catch (err) {
       // issue #391: close() aborts #abort, and the SDK's ProcessTransport
-      // rejects the in-flight readMessages() iteration with an "aborted by
-      // user" error as part of that same abort (measured against
-      // @anthropic-ai/claude-agent-sdk 0.3.280's waitForExit()). That
-      // rejection is an expected SIDE EFFECT of our own close(), not a
+      // rejects the in-flight readMessages() iteration with an AbortError
+      // ("Claude Code process aborted by user") as part of that same abort
+      // (measured against @anthropic-ai/claude-agent-sdk 0.3.280: the
+      // rejection's constructor is the SDK's own exported `AbortError`).
+      // That rejection is an expected SIDE EFFECT of our own close(), not a
       // failure — propagating it would make a runner-initiated SIGTERM
       // report disconnectReason="crash" and a non-zero exit code for what
-      // is an ordinary, requested shutdown. An error while NOT closed is a
-      // real fault and must still propagate.
-      if (!this.#closed) throw err;
+      // is an ordinary, requested shutdown.
+      //
+      // Narrowly scoped to avoid masking a real fault: `this.#closed` alone
+      // is not enough — #failStopForWatchdog also sets it (deliberately
+      // leaving this same loop running per its own contract), so a genuine
+      // SDK/transport error arriving after a fail-stop must still
+      // propagate. `this.#abort` is aborted ONLY inside close(), so pairing
+      // the error's type with the signal's state identifies exactly the
+      // close()-caused rejection and nothing else.
+      if (!(err instanceof AbortError) || this.#abort?.signal.aborted !== true) {
+        throw err;
+      }
     } finally {
       // A stream can end without a result (for example when its process dies),
       // and query construction/iteration can throw before a ResultMessage.
