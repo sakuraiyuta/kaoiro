@@ -20,6 +20,10 @@
   } from "./conversationTimeline";
   import PersonaFace from "./PersonaFace.svelte";
   import { formatRelativeJa } from "./relativeTime";
+  import {
+    personaForAgent,
+    personaName as resolvePersonaName,
+  } from "./personaName";
   import type { DirectoryEntry, Envelope, PersonaManifest } from "./protocol";
 
   let {
@@ -68,6 +72,10 @@
   const readTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const HOVER_READ_DELAY_MS = 300;
 
+  function personaName(agentId: string): string {
+    return resolvePersonaName(agentId, agents, directory);
+  }
+
   function canBeUnread(kind: string): boolean {
     return kind === "agent" || kind === "inter_agent";
   }
@@ -114,26 +122,8 @@
     }
   }
 
-  // Unlike agent-strip (App.svelte) / AgentCard / AgentDetail, this
-  // component resolves persona from a bare agentId string rather than
-  // being handed an already-resolved envelope, because a timeline row
-  // can reference an agent that is no longer in `agents` at all (its
-  // whole transcript is a durable past log, e.g. after a server
-  // restart). The `directory` fallback exists ONLY to cover that case —
-  // see the "directory-only IA" test in responseTimeline.integration.
-  // test.ts. It is a no-op whenever the agent is still live: `default`
-  // (unassigned) persona is always a concrete `{id:"default",...}`
-  // object (personas.md), never `undefined`, so `??` never reaches
-  // `directory` for a live agent. issue #234's dashboard/App.svelte /
-  // AgentCard.svelte / AgentDetail.svelte agree with this (verified) —
-  // do not "fix" this fallback away as part of that issue.
-  function personaName(agentId: string): string {
-    const p = agents[agentId]?.persona ?? directory?.[agentId]?.persona;
-    return p?.name ?? agentId;
-  }
-
   function personaSprite(agentId: string, state: string): string | null {
-    const p = agents[agentId]?.persona ?? directory?.[agentId]?.persona;
+    const p = personaForAgent(agentId, agents, directory);
     return spriteUrlFor(manifest, p?.sprite_set, state);
   }
 
