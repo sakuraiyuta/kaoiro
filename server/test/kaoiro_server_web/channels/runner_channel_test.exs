@@ -997,6 +997,29 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
       assert_reply ref, :error, %{reason: "invalid_ceiling_conflict"}
     end
 
+    # self-review round 1 finding (QUALITY, issue #397): ceiling_conflict must
+    # not ride along with an unrelated reason -- otherwise a misbehaving
+    # runner could pair a well-formed detail with e.g. spawn_failed and the
+    # dashboard would render a confusing axis-narrowing hint for it.
+    test "ceiling_conflict と無関係な reason の組み合わせは invalid_ceiling_conflict" do
+      host_id = "lab-pc-reset-ceiling-wrongreason"
+      socket = join_runner(host_id)
+
+      ref =
+        push(socket, "session_reset_result", %{
+          "agent_id" => "a.x",
+          "request_id" => "rs_x",
+          "mode" => "new",
+          "ok" => false,
+          "reason" => "spawn_failed",
+          "ceiling_conflict" => [
+            %{"axis" => "network_access", "current" => true, "ceiling" => false}
+          ]
+        })
+
+      assert_reply ref, :error, %{reason: "invalid_ceiling_conflict"}
+    end
+
     test "rollback_failed は matching planned intent を閉じる" do
       host_id = "lab-pc-reset-rollback-fail"
       agent_id = host_id <> ".a"
