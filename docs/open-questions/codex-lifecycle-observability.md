@@ -36,7 +36,8 @@ specification ([codex-sdk-events](../reference/engines/codex-exec-events.md)).
 
 Re-measured 2026-09-14 (issue #347): `@openai/codex-sdk` 0.153.4 ships no
 compaction symbol in `dist/` and `codex exec --help` offers no compaction
-option, so `request_compact` stays Claude-only. Unmeasured: whether a
+option, so `request_compact` stays Claude-only. Reconfirmed unchanged at
+0.156.1 (issue #399, 2026-09-23). Unmeasured: whether a
 `/compact` prompt passed to `codex exec` compacts (the Track S measurement
 exists only for Claude). If it does, reusing the Codex approval gate that now
 serves `request_session_reset` (ADR-0043 amendment) can be considered for

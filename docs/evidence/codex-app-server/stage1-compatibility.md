@@ -1,7 +1,7 @@
 ---
 title: "Codex app-server Stage 1 compatibility — 2026-09-18"
 status: recorded
-last_updated: 2026-09-18
+last_updated: 2026-09-23
 ---
 
 # Codex app-server Stage 1 compatibility — 2026-09-18
@@ -191,3 +191,88 @@ IA steering or prove that an in-flight model request was interrupted.
 {"direction":"receive","message":{"method":"item/completed","params":{"item":{"type":"agentMessage","id":"msg_5","text":"LOCAL_OK_5","phase":"final_answer","memoryCitation":null,"delivery":null,"questions":null},"threadId":"01a0b08c-d1d7-7403-831e-1ac09eeea395","turnId":"01a0b08c-e77c-7dd0-a1fe-830bcefae88c","completedAtMs":1789668419716},"emittedAtMs":1789668419720}}
 {"direction":"receive","message":{"method":"turn/completed","params":{"threadId":"01a0b08c-d1d7-7403-831e-1ac09eeea395","turn":{"id":"01a0b08c-e77c-7dd0-a1fe-830bcefae88c","items":[{"type":"agentMessage","id":"msg_5","text":"LOCAL_OK_5","phase":"final_answer","memoryCitation":null,"delivery":null,"questions":null}],"itemsView":"summary","status":"completed","error":null,"startedAt":1789668419,"completedAt":1789668419,"durationMs":278}},"emittedAtMs":1789668419735}}
 ```
+
+## Appendix D — 0.156.1 pin identity and schema parity, 2026-09-23
+
+The production pin moved from 0.153.4 to 0.156.1 on 2026-09-23 (issue #399,
+unrelated to Stage 1/2/3 work). Per ADR-0058's blocking gate, this invalidates
+Appendix C's 0.153.4-specific evidence for a Stage 1/2/3 decision going
+forward. This appendix re-establishes binary identity and schema parity for
+the new pin; it does not repeat the full start/steer/terminal probe, which
+Appendix C already covers as a separate, larger effort out of #399's scope.
+
+### 0.156.1 binary identity
+
+- Package: `@openai/codex@0.156.1`, resolved through its installed Linux x64
+  platform package (same resolution method as Appendix C).
+- Executed binary:
+  `/home/yuta/git/kaoiro/node_modules/.pnpm/@openai+codex@0.156.1-linux-x64/node_modules/@openai/codex/vendor/x86_64-unknown-linux-musl/bin/codex`.
+- Binary SHA-256:
+  `0b2e9301d6100dddda3b9d5c80ebaeaa3a2f1962388f2f36f6b96a9f08b1f33f`.
+- `--version`: `codex-cli 0.156.1` (exit 0).
+- For cross-check, the 0.153.4 binary still resolvable from this repository's
+  `.pnpm` store before the bump was independently re-hashed at
+  `56ef98ab4032d317ab26e9b5e5a175650717351edb16ed9cde0cb6d1734d62da`, matching
+  Appendix C's recorded value byte for byte -- confirming this is the same
+  binary Appendix C measured, not a different artifact under the same version
+  string.
+
+### Schema diff (offline, `generate-json-schema`, no flags)
+
+`app-server generate-json-schema --out <dir>` was run against both binaries
+(0.153.4 kept from the `.pnpm` store before the bump; 0.156.1 from the fresh
+install). File count for the stable (no-flag) bundle: 304 (0.153.4, matching
+Appendix C's recorded count) vs. 310 (0.156.1). Per-file SHA-256 for the two
+files Appendix C tracked:
+
+| File | 0.153.4 | 0.156.1 |
+| --- | --- | --- |
+| `ClientRequest.json` | `25bc001b5dfe3b35785597b8f9ad9e5aaf7e437331fa9921f041c9e0e03fc9f3` (matches Appendix C) | `8e5a1b6a7103fea63a53ef96d7ab1062decbd6571701542f5a969953e23a64f5` |
+| `ServerNotification.json` | `b3e76cf11842f3e8b3270c05e000212b56eabafb0152fc38e8f920e2ef902991` (matches Appendix C) | `df70f8f8ded90d8da63c744ccfef7018223d99e918e5e0aefa0d90856a7f67cc` |
+
+The 0.153.4 hashes reproducing Appendix C's recorded values exactly confirms
+this measurement used the same binary and the same `generate-json-schema`
+invocation; a directory-level manifest-of-manifest hash was not reproduced
+(the exact concatenation format Appendix C used for that composite value is
+not otherwise recorded, and the per-file hashes above are the load-bearing
+comparison for this appendix).
+
+Both files differ at 0.156.1. Inspecting the diff at the JSON-schema level
+(not just presence/absence), every change is confined to shared `definitions`
+entries `app_server_projection.ts` does not read: a `FunctionCallOutputContentItem`
+restructuring into a discriminated `image_url`/`file_id` union, a new
+`McpAppUi`/`McpAppDisplayMode` pair, a new `ThreadEnvironment` definition, an
+added `originator` field on `Thread`, and a similar discriminated-union
+restructuring of a user-input content item. `ThreadRollbackParams`/
+`ThreadRollbackResponse` are absent from the 0.156.1 bundle (kaoiro's adapter
+does not call `thread/rollback`, confirmed by grep over
+`wrapper/codex/src/*.ts`). The top-level shape of every notification
+`app_server_projection.ts` actually parses --
+`ItemStartedNotification`, `ItemCompletedNotification`, `TurnStartedNotification`,
+`TurnCompletedNotification`, `ContextCompactedNotification` -- is byte-identical
+between the two versions, including the nested `Turn` definition's own field
+set (`id`, `status`, `items`, `itemsView`, `error`, `startedAt`, `completedAt`,
+`durationMs` -- no permission or additional identity field either way).
+`ContextCompactedNotification.json` itself is byte-identical file-for-file.
+
+### Real-binary integration tests re-run on 0.156.1
+
+`wrapper/codex/test/app_server_transport.integration.test.ts` and
+`wrapper/codex/test/backend_rollback.integration.test.ts` both spawn the
+installed `@openai/codex` binary through the real SDK/transport (a loopback
+Responses provider, no live account) rather than a JS fixture double. Both
+pass unmodified against the 0.156.1 binary installed above
+(`app_server_transport.integration.test.ts` additionally asserts
+`transport.version` equals the installed `@openai/codex/package.json`
+version, so this run pins version negotiation too).
+
+### Separately: `codex exec` (the default backend) JSONL shape, offline
+
+Outside the app-server surface: `permission-state.md`'s claim that the plain
+`codex exec` JSONL `turn.started` event carries no turn ID or permission
+fields was re-measured against the 0.156.1 binary through the same loopback
+Responses pattern as the two integration tests above (no live account). The
+observed event was exactly `{"type":"turn.started"}` -- unchanged.
+`codex exec --help` on the same binary still lists no compaction option,
+matching the prior 0.153.4-scoped claim in ADR-0043 and
+[codex-lifecycle-observability.md](../../open-questions/codex-lifecycle-observability.md).

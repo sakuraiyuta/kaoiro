@@ -270,7 +270,9 @@ describe("helpers", () => {
   // error body VERBATIM, with no SDK-side reshaping, is what lets
   // codexExecFailureRelay (called on this same value in host.ts) run its
   // JSON extraction directly on it. Pinned against @openai/codex-sdk
-  // 0.153.4's actual source (fetched via `npm pack`), not assumed:
+  // 0.153.4's actual source (fetched via `npm pack`), not assumed;
+  // reconfirmed unchanged at 0.156.1 (dist/index.js and index.d.ts SHA-256
+  // match 0.153.4's, re-fetched 2026-09-23 -- issue #399):
   // - dist/index.d.ts: `type ThreadError = { message: string }` (no
   //   code/type/structured fields at the SDK's own type level -- any
   //   JSON structure must ride inside this one string), and
@@ -361,7 +363,10 @@ describe("parseCodexExecErrorMessage (issue #300)", () => {
   // `npm pack @openai/codex-sdk@0.153.4`), CodexExec.run()'s exit handler:
   // `const detail = signal ? \`signal ${signal}\` : \`code ${code ?? 1}\`;
   //  throw new Error(\`Codex Exec exited with ${detail}: ${stderrBuffer
-  //  .toString("utf8")}\`);` -- identical to 0.144.1's. If a future SDK
+  //  .toString("utf8")}\`);` -- identical to 0.144.1's, and reconfirmed
+  // identical at 0.156.1 (dist/index.js SHA-256
+  // d62ed107033bdba802b283c77d875e4bec3deb2704a910bb7e3f95059473b16f matches
+  // 0.153.4's, re-fetched 2026-09-23 -- issue #399). If a future SDK
   // release changes this wording, this test is the first thing to fail,
   // flagging that parseCodexExecErrorMessage's fallback-to-raw path (see
   // its own doc) is now doing the work instead of the structured split.

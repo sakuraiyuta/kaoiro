@@ -196,7 +196,10 @@ generalize embedded compact summaries to new/clear.
     was observed does not retroactively drop it.
   - `request_compact` stays Claude-only: Codex SDK 0.153.4 exposes no
     compaction entry point (`dist/` carries no such symbol; `codex exec
-    --help` offers none; measured 2026-09-14). Whether a `/compact` prompt
+    --help` offers none; measured 2026-09-14). Reconfirmed unchanged at
+    0.156.1 (`dist/` still carries no such symbol -- SHA-256 identical to
+    0.153.4; `codex exec --help` on the 0.156.1 binary still offers none;
+    issue #399, 2026-09-23). Whether a `/compact` prompt
     to `codex exec` compacts is unmeasured and tracked in
     [codex-lifecycle-observability](../open-questions/codex-lifecycle-observability.md);
     if it does, reusing this approval gate can be considered there.

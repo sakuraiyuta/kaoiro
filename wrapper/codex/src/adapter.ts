@@ -272,7 +272,10 @@ export const MAX_RELAYED_STDERR_TAIL_BYTES = 4096;
  *  codex-sdk's CodexExec.run() throws -- verified directly against
  *  @openai/codex-sdk 0.153.4's dist/index.js (`throw new Error(
  *  \`Codex Exec exited with ${detail}: ${stderrBuffer.toString("utf8")}\`)`,
- *  where `detail` is `code ${code}` or `signal ${signal}`) -- rather than
+ *  where `detail` is `code ${code}` or `signal ${signal}`); reconfirmed
+ *  unchanged at 0.156.1 (dist/index.js SHA-256
+ *  d62ed107033bdba802b283c77d875e4bec3deb2704a910bb7e3f95059473b16f matches
+ *  0.153.4's, re-fetched 2026-09-23 -- issue #399) -- rather than
  *  a generic non-greedy split, so JSON stderr content (which may itself
  *  contain ": ") cannot be mis-split. `message` should be the thrown
  *  Error's OWN `.message`, not `String(err)` (which prepends "Error: ").

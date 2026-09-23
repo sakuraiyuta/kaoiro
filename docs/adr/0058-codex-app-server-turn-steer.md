@@ -34,9 +34,11 @@ At baseline `1715de067a5701c2bbaa0c99e9be7606b8b6ccf4`,
 `#queue`. Its run loop awaits `#runTurn` before dequeuing another entry.
 `#wake` wakes an idle loop; it cannot inject into the active execution.
 The repository dependencies are pinned in `pnpm-lock.yaml` to
-`@openai/codex-sdk` 0.153.4 and `@openai/codex` 0.153.4. The existing SDK path
-uses a new `codex exec` process per execution. A transport replacement is
-required to use app-server's bidirectional input path.
+`@openai/codex-sdk` 0.156.1 and `@openai/codex` 0.156.1 (moved from 0.153.4 on
+2026-09-23, issue #399 -- see the note at the end of the Stage 1 blocking gate
+below). The existing SDK path uses a new `codex exec` process per execution. A
+transport replacement is required to use app-server's bidirectional input
+path.
 
 [ADR-0033](0033-permission-model-dual-axis.md) rejected direct app-server
 integration for approvals because of its experimental protocol and cost.
@@ -199,13 +201,27 @@ or cancellation of a tool. Emergency stop remains a separate interrupt action.
    Reproduce the event-drain regression covered by the repository SDK patch;
    the replacement must not lose buffered terminal events.
    **Blocking gate:** before Stage 1 completes, either measure app-server schema
-   and transport compatibility against the current production pin, 0.153.4, or
+   and transport compatibility against the current production pin, 0.156.1, or
    update the production pin to the selected artifact and repeat those
    measurements against that exact artifact. Record its resolved binary path,
    SHA-256, generated schema, successful start/steer/terminal trace, and negative
    controls. Appendix A satisfies the current-pin primitive measurement with
    0.153.4; the adapter parity requirements above remain implementation gates.
    A later binary/pin change invalidates this artifact-specific evidence.
+   **Pin moved 2026-09-23** (issue #399, unrelated to Stage 1/2/3 work): the
+   production pin is now 0.156.1. Appendix A's 0.153.4 artifact-specific
+   evidence does not apply to the current pin. `codex app-server
+   generate-json-schema` was re-run offline against both binaries as part of
+   #399's own verification; the diff is confined to definitions Stage 1's
+   adapter does not consume (function-call-output/user-input discriminated
+   unions, MCP app UI, `ThreadEnvironment`, an `originator` field) -- every
+   notification `app_server_projection.ts` reads (`ItemStarted/Completed`,
+   `TurnStarted/Completed`, `ContextCompacted`) is byte-identical at the top
+   level between the two versions (recorded in
+   [stage1-compatibility.md](../evidence/codex-app-server/stage1-compatibility.md#appendix-d--01561-pin-identity-and-schema-parity-2026-09-23)).
+   This closes the schema-diff half of this gate for the 0.153.4 -> 0.156.1
+   move specifically; it does not substitute for the full start/steer/terminal
+   trace this gate still requires before Stage 2/3 or a default-adapter switch.
 2. **Operator steering, follow-up implementation issue for issue #346.** Add
    the admission table, correlation, pending/accepted display, rejection
    fallback, and terminal semantics above. Keep IA queued and make that limit

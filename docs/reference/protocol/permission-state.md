@@ -138,8 +138,9 @@ An idle session retains its last confirmed policy until the next exec starts.
 For Codex, confirmation must read `sandbox_policy` and `approval_policy` from
 **this execution's** rollout `turn_context`. Capture a pre-execution file boundary
 and existing turn identity, then accept only a new correlated record. Neither
-`turn.started` (which carries no turn ID or permission fields in SDK 0.153.4)
-nor a prior tail record is confirmation. Handle delayed/partial writes and
+`turn.started` (which carries no turn ID or permission fields -- reconfirmed
+at SDK 0.156.1 via an offline loopback capture, issue #399, unchanged from
+0.153.4) nor a prior tail record is confirmation. Handle delayed/partial writes and
 session changes without promoting stale evidence. A policy mismatch is a loud
 failure with the actually observed policy, not a silent substitution. An
 approval value other than the fixed `never` is a contract violation; do not

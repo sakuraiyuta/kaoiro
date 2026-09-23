@@ -73,7 +73,14 @@ describe("initialStatusExt", () => {
     });
     expect(
       (initial.ext.models as { value: string }[]).map((m) => m.value),
-    ).toEqual(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra"]);
+    ).toEqual([
+      "gpt-6-astra",
+      "gpt-6-sol",
+      "gpt-6-luna",
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+    ]);
   });
 
   it("未申告 catalog は switch capability を fail-closed にする (#107)", () => {
@@ -106,10 +113,12 @@ describe("initialStatusExt", () => {
     expect(
       (initial.models as { value: string }[]).map((m) => m.value),
     ).toEqual([
+      "gpt-6-astra",
+      "gpt-6-sol",
+      "gpt-6-luna",
       "gpt-5.6-sol",
       "gpt-5.6-terra",
       "gpt-5.6-luna",
-      "gpt-6-astra",
       "gpt-9-nova",
     ]);
   });
@@ -484,12 +493,13 @@ describe("CodexHost", () => {
     ).not.toThrow();
   });
 
-  it("finishes a real SDK stream when command output contains U+2028", async () => {
+  it("finishes a real SDK stream when command output contains U+2028 / U+2029", async () => {
     const root = await mkdtemp(join(tmpdir(), "kaoiro-codex-sdk-line-split-"));
     const executable = join(root, "fake-codex");
     const script = [
       "#!/usr/bin/env node",
-      "const separator = String.fromCodePoint(0x2028);",
+      "const ls = String.fromCodePoint(0x2028);",
+      "const ps = String.fromCodePoint(0x2029);",
       "const write = (item) => process.stdout.write(`${JSON.stringify(item)}\\n`);",
       "write({ type: 'thread.started', thread_id: 'sdk-line-split' });",
       "write({ type: 'turn.started' });",
@@ -497,7 +507,7 @@ describe("CodexHost", () => {
       "  id: 'command',",
       "  type: 'command_execution',",
       "  command: 'echo fixture',",
-      "  aggregated_output: `before${separator}after`,",
+      "  aggregated_output: `before${ls}middle${ps}after`,",
       "  status: 'completed',",
       "  exit_code: 0,",
       "};",
@@ -630,31 +640,61 @@ describe("CodexHost", () => {
     [
       "chatgpt",
       "plus",
-      ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra"],
+      [
+        "gpt-6-astra",
+        "gpt-6-sol",
+        "gpt-6-luna",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+      ],
     ],
     [
       "chatgpt",
       "pro",
-      ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra"],
+      [
+        "gpt-6-astra",
+        "gpt-6-sol",
+        "gpt-6-luna",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+      ],
     ],
     [
       "chatgpt",
       "business",
-      ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra"],
+      [
+        "gpt-6-astra",
+        "gpt-6-sol",
+        "gpt-6-luna",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+      ],
     ],
     [
       "chatgpt",
       "enterprise",
-      ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra"],
+      [
+        "gpt-6-astra",
+        "gpt-6-sol",
+        "gpt-6-luna",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+      ],
     ],
     [
       "apikey",
       undefined,
       [
+        "gpt-6-astra",
+        "gpt-6-sol",
+        "gpt-6-luna",
         "gpt-5.6-sol",
         "gpt-5.6-terra",
         "gpt-5.6-luna",
-        "gpt-6-astra",
         "gpt-5.5",
         "gpt-5.4-mini",
       ],
@@ -763,7 +803,14 @@ describe("CodexHost", () => {
       (states.at(-1)?.ext.models as { value: string }[]).map(
         (model) => model.value,
       ),
-    ).toEqual(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra"]);
+    ).toEqual([
+      "gpt-6-astra",
+      "gpt-6-sol",
+      "gpt-6-luna",
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+    ]);
     // result envelope: 最後の agent_message が最終応答
     const result = logs.find((e) => e.type === "result");
     expect(result?.payload).toMatchObject({ text: "了解しました" });

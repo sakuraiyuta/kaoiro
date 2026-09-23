@@ -3,7 +3,9 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import type { EngineModelInfo } from "@kaoiro/protocol";
 import {
+  assertCuratedModelCompatible,
   BUNDLED_CODEX_VERSION,
+  CodexClientVersionTooOldError,
   effortLevelsForModel,
   resolveCodexCatalog,
 } from "../src/catalog.js";
@@ -39,6 +41,16 @@ describe("resolveCodexCatalog", () => {
       ["low", "medium", "high", "xhigh", "max", "ultra"],
       "low",
     ],
+    [
+      "gpt-6-sol",
+      ["low", "medium", "high", "xhigh", "max", "ultra"],
+      "medium",
+    ],
+    [
+      "gpt-6-luna",
+      ["low", "medium", "high", "xhigh", "max"],
+      "medium",
+    ],
   ] as const)(
     "%s の curated effort metadata が一次情報と一致する",
     (value, effortLevels, defaultEffort) => {
@@ -55,23 +67,27 @@ describe("resolveCodexCatalog", () => {
   });
 
   it.each(["plus", "pro", "business", "enterprise"] as const)(
-    "ChatGPT %s は Sol / Terra / Luna / Astra (issue #292)",
+    "ChatGPT %s は Astra / Sol6 / Luna6 / Sol / Terra / Luna (upstream priority順, issue #399)",
     (plan) => {
       expect(values("chatgpt", plan)).toEqual([
+        "gpt-6-astra",
+        "gpt-6-sol",
+        "gpt-6-luna",
         "gpt-5.6-sol",
         "gpt-5.6-terra",
         "gpt-5.6-luna",
-        "gpt-6-astra",
       ]);
     },
   );
 
   it("API-key auth は plan と別の curated catalog を返す", () => {
     expect(values("apikey")).toEqual([
+      "gpt-6-astra",
+      "gpt-6-sol",
+      "gpt-6-luna",
       "gpt-5.6-sol",
       "gpt-5.6-terra",
       "gpt-5.6-luna",
-      "gpt-6-astra",
       "gpt-5.5",
       "gpt-5.4-mini",
     ]);
@@ -135,12 +151,12 @@ describe("resolveCodexCatalog", () => {
     const first = resolveCodexCatalog("chatgpt", "plus");
     first[0]!.display_name = "mutated";
     expect(resolveCodexCatalog("chatgpt", "plus")[0]?.display_name).toBe(
-      "GPT-5.6-Sol",
+      "GPT-6-Astra",
     );
   });
 
   it("loads the bundled Codex CLI version through the SDK dependency", () => {
-    expect(BUNDLED_CODEX_VERSION).toBe("0.153.4");
+    expect(BUNDLED_CODEX_VERSION).toBe("0.156.1");
   });
 
   it("matches the SDK's exact Codex CLI dependency", () => {
@@ -165,6 +181,8 @@ describe("resolveCodexCatalog", () => {
     ["gpt-5.6-terra", "0.144.0"],
     ["gpt-5.6-luna", "0.144.0"],
     ["gpt-6-astra", "0.153.0"],
+    ["gpt-6-sol", "0.155.0"],
+    ["gpt-6-luna", "0.155.0"],
     ["gpt-5.5", "0.124.0"],
     ["gpt-5.4-mini", "0.98.0"],
   ])("pins curated %s minimal_client_version", (value, minimum) => {
@@ -196,6 +214,44 @@ describe("resolveCodexCatalog", () => {
     } finally {
       stderr.mockRestore();
     }
+  });
+
+  it("excludes gpt-6-sol/gpt-6-luna one patch below their minimum and warns (issue #399)", () => {
+    const stderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+    try {
+      const catalog = resolveCodexCatalog(
+        "chatgpt",
+        "plus",
+        undefined,
+        "0.154.9",
+      );
+      expect(catalog.map((model) => model.value)).not.toContain("gpt-6-sol");
+      expect(catalog.map((model) => model.value)).not.toContain("gpt-6-luna");
+      expect(stderr).toHaveBeenCalledWith(
+        expect.stringContaining("requires Codex >= 0.155.0"),
+      );
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  it("includes gpt-6-sol/gpt-6-luna exactly at their minimum (equality turn-around)", () => {
+    const catalog = resolveCodexCatalog(
+      "chatgpt",
+      "plus",
+      undefined,
+      "0.155.0",
+    );
+    expect(catalog.map((model) => model.value)).toContain("gpt-6-sol");
+    expect(catalog.map((model) => model.value)).toContain("gpt-6-luna");
+  });
+
+  it("assertCuratedModelCompatible rejects a gpt-6-sol pin below its minimum", () => {
+    expect(() =>
+      assertCuratedModelCompatible("gpt-6-sol", undefined, "0.153.4"),
+    ).toThrow(CodexClientVersionTooOldError);
   });
 
   it("filters operator models that declare an unsupported minimum version", () => {
@@ -298,7 +354,7 @@ describe("effortLevelsForModel (intersection fail-closed helper)", () => {
     ]);
   });
 
-  it("chatgpt plus (SOL+TERRA+LUNA+ASTRA) intersection = low..max (ultra は LUNA に無い)", () => {
+  it("chatgpt plus (ASTRA+SOL6+LUNA6+SOL+TERRA+LUNA) intersection = low..max (LUNA6/LUNAにultra無し)", () => {
     const catalog = resolveCodexCatalog("chatgpt", "plus");
     expect(effortLevelsForModel(catalog, null)).toEqual([
       "low",
@@ -309,7 +365,7 @@ describe("effortLevelsForModel (intersection fail-closed helper)", () => {
     ]);
   });
 
-  it("apikey (+gpt-6-astra, +gpt-5.5, +gpt-5.4-mini) intersection = low..xhigh (max/ultra 除外)", () => {
+  it("apikey (+gpt-6-astra/sol/luna, +gpt-5.5, +gpt-5.4-mini) intersection = low..xhigh (max/ultra 除外)", () => {
     const catalog = resolveCodexCatalog("apikey");
     expect(effortLevelsForModel(catalog, null)).toEqual([
       "low",

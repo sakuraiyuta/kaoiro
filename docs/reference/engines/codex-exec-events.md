@@ -21,7 +21,7 @@ log/result/lifecycle wire. App-server does not silently fall back to exec.
 ## Purpose
 
 Establishes the **actual event/callback specification** of the TypeScript Codex
-SDK used by the Codex adapter (currently `@openai/codex-sdk` 0.153.4 in
+SDK used by the Codex adapter (currently `@openai/codex-sdk` 0.156.1 in
 [`pnpm-lock.yaml`](../../../pnpm-lock.yaml))
 ([adapter contract](adapter-contract.md)), and defines its derivation to kaoiro state
 ([protocol](../../specs/protocol.md)). This specification is paired with the Claude version
@@ -34,7 +34,10 @@ implementation, bundled binary, and upstream `rust-v0.144.1` source
 dashboard with ChatGPT-plan authentication on 2026-07-11. Three points settled
 by live verification are recorded in [“Live verification notes”](../../evidence/codex/exec-contract.md#live-verification-notes-2026-07-11-chatgpt-plan-authentication).
 Those measurements and the explicitly labeled 0.144.1 type inventory retain
-their original version scope; they are not a new live verification of 0.153.4.
+their original version scope; they are not a new live verification of 0.156.1
+(the pin moved 0.153.4 -> 0.156.1 on 2026-09-23, issue #399; `@openai/codex-sdk`'s
+own `dist/index.js`/`dist/index.d.ts` are unchanged across that move -- SHA-256
+confirmed -- so this specification's SDK-level claims are unaffected).
 The current backend boundary and bridge policy are described separately below.
 
 ## Definition

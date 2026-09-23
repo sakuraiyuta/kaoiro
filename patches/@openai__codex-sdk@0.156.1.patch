@@ -1,5 +1,5 @@
 diff --git a/dist/index.js b/dist/index.js
-index 062039c2610107095bd7a254bdebd6fcf7e15fc6..343ddb329cfa631e4697d4d1a3effd09e3f105c7 100644
+index 062039c2610107095bd7a254bdebd6fcf7e15fc6..112340594531ca76694215ec2a20a030ce294536 100644
 --- a/dist/index.js
 +++ b/dist/index.js
 @@ -140,7 +140,6 @@ function normalizeInput(input) {

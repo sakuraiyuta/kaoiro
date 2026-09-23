@@ -14,14 +14,16 @@ export type ChatGptPlan =
   | "enterprise";
 
 // Snapshot from openai/codex main (2026-07-13, gpt-6-astra added from a
-// 2026-09-05 re-fetch — issue #292). openai_models.rs defines the
-// ReasoningEffort wire vocabulary and ModelInfo fields; per-model values
-// live in codex-rs/models-manager/models.json and are copied here so catalog
-// advertisement never depends on a runtime model/list probe (ADR-0035 H3).
+// 2026-09-05 re-fetch — issue #292, gpt-6-sol/gpt-6-luna added and existing
+// rows' descriptions re-synced from a 2026-09-23 re-fetch — issue #399).
+// openai_models.rs defines the ReasoningEffort wire vocabulary and ModelInfo
+// fields; per-model values live in codex-rs/models-manager/models.json and
+// are copied here so catalog advertisement never depends on a runtime
+// model/list probe (ADR-0035 H3).
 const SOL: EngineModelInfo = {
   value: "gpt-5.6-sol",
   display_name: "GPT-5.6-Sol",
-  description: "Latest frontier agentic coding model.",
+  description: "Older coding model for complex work.",
   effort_levels: ["low", "medium", "high", "xhigh", "max", "ultra"],
   default_effort: "low",
   minimal_client_version: "0.144.0",
@@ -30,7 +32,7 @@ const SOL: EngineModelInfo = {
 const TERRA: EngineModelInfo = {
   value: "gpt-5.6-terra",
   display_name: "GPT-5.6-Terra",
-  description: "Balanced agentic coding model for everyday work.",
+  description: "Older balanced model for straightforward work.",
   effort_levels: ["low", "medium", "high", "xhigh", "max", "ultra"],
   default_effort: "medium",
   minimal_client_version: "0.144.0",
@@ -39,7 +41,7 @@ const TERRA: EngineModelInfo = {
 const LUNA: EngineModelInfo = {
   value: "gpt-5.6-luna",
   display_name: "GPT-5.6-Luna",
-  description: "Fast and affordable agentic coding model.",
+  description: "Older fast and efficient model.",
   effort_levels: ["low", "medium", "high", "xhigh", "max"],
   default_effort: "medium",
   minimal_client_version: "0.144.0",
@@ -48,13 +50,35 @@ const LUNA: EngineModelInfo = {
 const ASTRA: EngineModelInfo = {
   value: "gpt-6-astra",
   display_name: "GPT-6-Astra",
-  description: "Our most capable model for complex, demanding work.",
+  description: "Frontier intelligence for the most demanding work.",
   effort_levels: ["low", "medium", "high", "xhigh", "max", "ultra"],
   default_effort: "low",
   minimal_client_version: "0.153.0",
 };
 
-const CHATGPT_PLUS_MODELS = [SOL, TERRA, LUNA, ASTRA];
+const SOL_6: EngineModelInfo = {
+  value: "gpt-6-sol",
+  display_name: "GPT-6-Sol",
+  description: "Workhorse model for coding and everyday work.",
+  effort_levels: ["low", "medium", "high", "xhigh", "max", "ultra"],
+  default_effort: "medium",
+  minimal_client_version: "0.155.0",
+};
+
+const LUNA_6: EngineModelInfo = {
+  value: "gpt-6-luna",
+  display_name: "GPT-6-Luna",
+  description: "Fast and affordable model for easier tasks.",
+  effort_levels: ["low", "medium", "high", "xhigh", "max"],
+  default_effort: "medium",
+  minimal_client_version: "0.155.0",
+};
+
+// Ordered by upstream models.json `priority` (Astra 1, Sol 2, Luna 3,
+// gpt-5.6-sol 4, gpt-5.6-terra 7, gpt-5.6-luna 8), not by addition order —
+// this file is a transcription of that source, so its own row order follows
+// it (issue #399).
+const CHATGPT_PLUS_MODELS = [ASTRA, SOL_6, LUNA_6, SOL, TERRA, LUNA];
 // Free/Go exclusions follow the Plan × available-model table in
 // docs/reference/engines/codex-model-catalog.md.
 const CHATGPT_TERRA = [TERRA];
@@ -64,7 +88,7 @@ const APIKEY_MODELS: EngineModelInfo[] = [
   {
     value: "gpt-5.5",
     display_name: "GPT-5.5",
-    description: "Frontier model for complex coding and research.",
+    description: "Legacy coding model.",
     effort_levels: ["low", "medium", "high", "xhigh"],
     default_effort: "medium",
     minimal_client_version: "0.124.0",

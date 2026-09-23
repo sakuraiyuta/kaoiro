@@ -15,7 +15,7 @@ Moved to [Codex model catalog evidence](../evidence/codex/model-catalog.md#purpo
 
 ## Plan × available model (2026-07-11, Astra column added 2026-09-05)
 
-Moved to [Codex model catalog evidence](../evidence/codex/model-catalog.md#plan--available-model-2026-07-11-astra-column-added-2026-09-05).
+Moved to [Codex model catalog evidence](../evidence/codex/model-catalog.md#plan--available-model-2026-07-11-astra-column-added-2026-09-05-sol6luna6-columns-added-2026-09-23).
 
 ## Asymmetry between the two authentication modes (F4bc background)
 

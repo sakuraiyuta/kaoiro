@@ -1,7 +1,7 @@
 ---
 title: Codex model catalog evidence
 status: accepted
-last_updated: 2026-09-18
+last_updated: 2026-09-23
 ---
 <!-- markdownlint-disable MD033 -->
 
@@ -38,33 +38,49 @@ the entitled-model set has changed in OpenAI operations (for example,
 [openai/codex#26892](https://github.com/openai/codex/issues/26892), and
 `gpt-6-astra` was added 2026-09 per a re-fetch of
 `codex-rs/models-manager/models.json`; issue #292), so this specification's
-table is a snapshot as of 2026-09-05 for the Astra row/slug and 2026-07-11 for
-everything else.
+table is a snapshot as of 2026-09-23 for the Sol6/Luna6 rows and the refreshed
+description strings, 2026-09-05 for the rest of the Astra row, and 2026-07-11
+for everything else. `gpt-6-sol` and `gpt-6-luna` were added 2026-09-23 per
+another re-fetch of the same upstream file (issue #399); that re-fetch also
+showed `gpt-5.6-sol`/`gpt-5.6-terra`/`gpt-5.6-luna`/`gpt-5.5`/`gpt-6-astra`'s
+own descriptions had drifted from the earlier snapshot (upstream now describes
+them as superseded by the GPT-6 generation), which `wrapper/codex/src/catalog.ts`
+was updated to match.
 
-## Plan × available model (2026-07-11, Astra column added 2026-09-05)
+## Plan × available model (2026-07-11, Astra column added 2026-09-05, Sol6/Luna6 columns added 2026-09-23)
 
 | Plan | Monthly price | Codex-available models | Codex default | Notes |
 |---|---|---|---|---|
-| Free | $0 | `gpt-5.6-terra` only | Terra | Sol / Luna / Astra cannot be selected |
+| Free | $0 | `gpt-5.6-terra` only | Terra | Sol / Luna / Astra / Sol6 / Luna6 cannot be selected |
 | Go | $8 | `gpt-5.6-terra` only | Terra | Tier introduced in 2026-04 |
-| Plus | $20 | Sol / Terra / Luna / Astra (effort selectable) | **Sol + medium** | Switchable in CLI/Desktop |
-| Pro | $100 or $200 | Sol / Terra / Luna / Astra + `gpt-5.3-codex-spark` | **Sol + medium** | The $200 version has a 20× five-hour window |
-| Business | $25/user | Sol / Terra / Luna / Astra | **Sol + medium** | Replaced former Team ($30) in 2026-04 |
-| Enterprise | custom | Sol / Terra / Luna / Astra (+ individual negotiation) | **Sol + medium** | Admin can change the default |
-| API-key | Usage based | Sol / Terra / Luna / Astra / 5.5 / 5.4 / 5.4-mini + some deprecated models | **Explicit selection required** | No 400/404 restriction |
+| Plus | $20 | Sol / Terra / Luna / Astra / Sol6 / Luna6 (effort selectable) | **Sol + medium** | Switchable in CLI/Desktop |
+| Pro | $100 or $200 | Sol / Terra / Luna / Astra / Sol6 / Luna6 + `gpt-5.3-codex-spark` | **Sol + medium** | The $200 version has a 20× five-hour window |
+| Business | $25/user | Sol / Terra / Luna / Astra / Sol6 / Luna6 | **Sol + medium** | Replaced former Team ($30) in 2026-04 |
+| Enterprise | custom | Sol / Terra / Luna / Astra / Sol6 / Luna6 (+ individual negotiation) | **Sol + medium** | Admin can change the default |
+| API-key | Usage based | Sol / Terra / Luna / Astra / Sol6 / Luna6 / 5.5 / 5.4 / 5.4-mini + some deprecated models | **Explicit selection required** | No 400/404 restriction |
+
+`gpt-6-sol` and `gpt-6-luna` (like Astra) list free/go among upstream
+`models.json`'s `available_in_plans`, but that combination is unverified
+against the live Free/Go experience -- kaoiro's own catalog only advertises
+them for Plus and above, same as Sol/Terra/Luna/Astra's existing tiering
+(issue #399).
 
 The distinction from kaoiro's advertised catalog and its version filter are in
 [the model catalog reference](../../reference/engines/codex-model-catalog.md#advertised-catalog).
 
 **Model slugs** (identifiers used by `--model` / `~/.codex/config.toml` /
 `-c model=`):
-`gpt-5.6-sol` / `gpt-5.6-terra` / `gpt-5.6-luna` / `gpt-6-astra` / `gpt-5.5` /
-`gpt-5.4` / `gpt-5.4-mini` / `gpt-5.3-codex-spark`.
+`gpt-5.6-sol` / `gpt-5.6-terra` / `gpt-5.6-luna` / `gpt-6-astra` / `gpt-6-sol` /
+`gpt-6-luna` / `gpt-5.5` / `gpt-5.4` / `gpt-5.4-mini` / `gpt-5.3-codex-spark`.
 
 **Reference API pricing** (per 1M tokens): Sol $5 input / $30 output,
 Terra $2.50 / $15, Luna $1 / $6, Astra $10 / $50
 ([official pricing page](https://developers.openai.com/api/docs/models/gpt-6-astra),
-2026-09-05).
+2026-09-05), Sol6 $2 / $10
+([official pricing page](https://developers.openai.com/api/docs/models/gpt-6-sol),
+2026-09-23), Luna6 $0.1 / $0.5
+([official pricing page](https://developers.openai.com/api/docs/models/gpt-6-luna),
+2026-09-23).
 
 ## Asymmetry between the two authentication modes (F4bc background)
 
