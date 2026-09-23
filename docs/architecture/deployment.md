@@ -44,13 +44,14 @@ Only deployments restricted to a VPN may use the direct, nginx-free option (1.5)
 
 ### Rollout ordering
 
-issue #256 を含む release の rollout は **runner / wrapper を先行し、server を
-後行**する。新 server は operator restart の `request_id` を wrapper の
-`transition_id` まで運べる runner と、`peer_reconnecting` / `reconnected` を
-解釈できる wrapper が配備済みであることを前提に planned window を開始する。
-逆順(server 先行)では旧 runner が token を relaunch へ運べず、当該 agent 宛 IA
-が最大 60 秒 bounce し、旧 wrapper は close notice を解釈できないため
-reconnecting 状態も解消されない。
+Rollout of a release containing issue #256 **deploys the runner / wrapper first,
+followed by the server**. The new server begins its planned window assuming that
+a runner capable of carrying the operator restart's `request_id` through to the
+wrapper's `transition_id`, and a wrapper capable of interpreting
+`peer_reconnecting` / `reconnected`, are already deployed. In reverse order
+(server first), the old runner cannot carry tokens to the relaunch, IA addressed
+to that agent bounces for up to 60 seconds, and because the old wrapper cannot
+interpret close notices, the reconnecting state is not resolved.
 
 ## Setup wizards
 
