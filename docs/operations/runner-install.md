@@ -269,8 +269,12 @@ the dry run at the production server or reuse its `host_id`.
 
 The operator must update the real `runner.env` and restart the service for the
 new PATH to reach wrappers. A runner restart stops active agents; schedule it
-accordingly. No systemd daemon reload is needed for an env-file edit. On
-Linux, verify only the new runner process's PATH, without printing other
+accordingly. Restart with `systemctl --user restart kaoiro-runner` on Linux, or
+`launchctl kickstart -k gui/"$(id -u)"/com.kaoiro.runner` on macOS. No systemd
+daemon reload is needed for an env-file edit. To roll back, remove or comment
+out the `PATH=` line in `runner.env` and restart the service again.
+
+On Linux, verify only the new runner process's PATH, without printing other
 environment variables:
 
 ```sh
@@ -278,11 +282,11 @@ runner_pid=$(systemctl --user show --property=MainPID --value kaoiro-runner)
 tr '\0' '\n' < "/proc/$runner_pid/environ" | grep '^PATH='
 ```
 
-Then run `gh --version`, `pnpm --version`, and `asdf --version` inside each
-newly spawned Antigravity, Claude Code, and Codex tool shell. For Codex, also
-check a non-login shell (`login:false`). The real `runner.env` contains a
-token: do not dump the file; if checking its assignment, read only its
-`PATH=` line with
+Then ask each newly spawned Antigravity, Claude Code, and Codex agent to run
+`gh --version`, `pnpm --version`, and `asdf --version` in its tool shell. For
+Codex, also check a non-login shell (`login:false`). The real `runner.env`
+contains a token: do not dump the file. If checking its assignment, read only
+its `PATH=` line with
 `grep '^PATH=' "${XDG_CONFIG_HOME:-$HOME/.config}/kaoiro/runner.env"`.
 
 ## Creating distribution tarballs
