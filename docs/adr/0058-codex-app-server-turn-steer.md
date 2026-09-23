@@ -209,16 +209,18 @@ or cancellation of a tool. Emergency stop remains a separate interrupt action.
    0.153.4; the adapter parity requirements above remain implementation gates.
    A later binary/pin change invalidates this artifact-specific evidence.
    **Pin moved 2026-09-23** (issue #399, unrelated to Stage 1/2/3 work): the
-   production pin is now 0.156.1. Appendix A's 0.153.4 artifact-specific
+   production pin is now 0.156.1. Appendix A and C's 0.153.4 artifact-specific
    evidence does not apply to the current pin. `codex app-server
    generate-json-schema` was re-run offline against both binaries as part of
-   #399's own verification; the diff is confined to definitions Stage 1's
-   adapter does not consume (function-call-output/user-input discriminated
-   unions, MCP app UI, `ThreadEnvironment`, an `originator` field) -- every
-   notification `app_server_projection.ts` reads (`ItemStarted/Completed`,
-   `TurnStarted/Completed`, `ContextCompacted`) is byte-identical at the top
-   level between the two versions (recorded in
-   [stage1-compatibility.md](../evidence/codex-app-server/stage1-compatibility.md#appendix-d--01561-pin-identity-and-schema-parity-2026-09-23)).
+   #399's own verification; four of the five notifications
+   `app_server_projection.ts` reads (`ItemStarted/Completed`,
+   `TurnStarted/Completed`) do have a schema-level diff at 0.156.1, but it is
+   confined to definitions that projection code does not consume
+   (function-call-output/user-input discriminated unions, MCP app UI on an
+   unread field, `ThreadEnvironment`, an `originator` field); the fifth
+   (`ContextCompacted`) is byte-identical file-for-file. Full detail
+   (definition-by-definition, with the exact fields the adapter reads) is in
+   [stage1-compatibility.md](../evidence/codex-app-server/stage1-compatibility.md#appendix-d--01561-pin-identity-and-schema-parity-2026-09-23).
    This closes the schema-diff half of this gate for the 0.153.4 -> 0.156.1
    move specifically; it does not substitute for the full start/steer/terminal
    trace this gate still requires before Stage 2/3 or a default-adapter switch.

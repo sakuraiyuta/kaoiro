@@ -24,8 +24,8 @@ it is separated into this specification.
 [ADR-0035](../../adr/0035-codex-model-catalog-and-mid-session-switch.md) restored
 the catalog. Even under ChatGPT-account authentication, the **operator declares
 `codex.chatgpt_plan` in `runner.config.json`** to statically resolve the
-entitled-model set. It presents the Sol / Terra / Luna / Astra catalog in
-LaunchDialog for Plus and above, and accepts mid-session switching (details:
+entitled-model set. It presents the Astra / Sol6 / Luna6 / Sol / Terra / Luna
+catalog in LaunchDialog for Plus and above, and accepts mid-session switching (details:
 [ADR-0035](../../adr/0035-codex-model-catalog-and-mid-session-switch.md) and
 [phase-16](../../plans/phase-16-codex-model-switch.md)). This specification
 remains a primary-information reference for why it depends on an operator
@@ -53,10 +53,10 @@ was updated to match.
 |---|---|---|---|---|
 | Free | $0 | `gpt-5.6-terra` only | Terra | Sol / Luna / Astra / Sol6 / Luna6 cannot be selected |
 | Go | $8 | `gpt-5.6-terra` only | Terra | Tier introduced in 2026-04 |
-| Plus | $20 | Sol / Terra / Luna / Astra / Sol6 / Luna6 (effort selectable) | **Sol + medium** | Switchable in CLI/Desktop |
-| Pro | $100 or $200 | Sol / Terra / Luna / Astra / Sol6 / Luna6 + `gpt-5.3-codex-spark` | **Sol + medium** | The $200 version has a 20× five-hour window |
-| Business | $25/user | Sol / Terra / Luna / Astra / Sol6 / Luna6 | **Sol + medium** | Replaced former Team ($30) in 2026-04 |
-| Enterprise | custom | Sol / Terra / Luna / Astra / Sol6 / Luna6 (+ individual negotiation) | **Sol + medium** | Admin can change the default |
+| Plus | $20 | Sol / Terra / Luna / Astra / Sol6 / Luna6 (effort selectable) | **5.6-Sol + medium** | Switchable in CLI/Desktop |
+| Pro | $100 or $200 | Sol / Terra / Luna / Astra / Sol6 / Luna6 + `gpt-5.3-codex-spark` | **5.6-Sol + medium** | The $200 version has a 20× five-hour window |
+| Business | $25/user | Sol / Terra / Luna / Astra / Sol6 / Luna6 | **5.6-Sol + medium** | Replaced former Team ($30) in 2026-04 |
+| Enterprise | custom | Sol / Terra / Luna / Astra / Sol6 / Luna6 (+ individual negotiation) | **5.6-Sol + medium** | Admin can change the default |
 | API-key | Usage based | Sol / Terra / Luna / Astra / Sol6 / Luna6 / 5.5 / 5.4 / 5.4-mini + some deprecated models | **Explicit selection required** | No 400/404 restriction |
 
 `gpt-6-sol` and `gpt-6-luna` (like Astra) list free/go among upstream
@@ -138,7 +138,7 @@ always produces undefined. Test fixtures must also match this actual shape
 **Information not returned** (the main reason F4bc's decision remains):
 
 - The **plan tier** of Master (this account) (Plus / Pro / Business / etc.)
-- The **account-default model name** (one of Sol / Terra / Luna / Astra)
+- The **account-default model name** (one of Astra / Sol6 / Luna6 / Sol / Terra / Luna)
 - The **entitled-model set** (the slugs that do not return 400/404 for this account)
 
 kaoiro can parse `codex doctor --json` through to authentication-mode

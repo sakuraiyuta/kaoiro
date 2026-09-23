@@ -237,23 +237,46 @@ invocation; a directory-level manifest-of-manifest hash was not reproduced
 not otherwise recorded, and the per-file hashes above are the load-bearing
 comparison for this appendix).
 
-Both files differ at 0.156.1. Inspecting the diff at the JSON-schema level
-(not just presence/absence), every change is confined to shared `definitions`
-entries `app_server_projection.ts` does not read: a `FunctionCallOutputContentItem`
-restructuring into a discriminated `image_url`/`file_id` union, a new
-`McpAppUi`/`McpAppDisplayMode` pair, a new `ThreadEnvironment` definition, an
-added `originator` field on `Thread`, and a similar discriminated-union
-restructuring of a user-input content item. `ThreadRollbackParams`/
-`ThreadRollbackResponse` are absent from the 0.156.1 bundle (kaoiro's adapter
-does not call `thread/rollback`, confirmed by grep over
-`wrapper/codex/src/*.ts`). The top-level shape of every notification
-`app_server_projection.ts` actually parses --
-`ItemStartedNotification`, `ItemCompletedNotification`, `TurnStartedNotification`,
-`TurnCompletedNotification`, `ContextCompactedNotification` -- is byte-identical
-between the two versions, including the nested `Turn` definition's own field
-set (`id`, `status`, `items`, `itemsView`, `error`, `startedAt`, `completedAt`,
-`durationMs` -- no permission or additional identity field either way).
-`ContextCompactedNotification.json` itself is byte-identical file-for-file.
+Both files differ at 0.156.1. `ItemStartedNotification.json`,
+`ItemCompletedNotification.json`, `TurnStartedNotification.json` and
+`TurnCompletedNotification.json` each carry a 109-line `diff` against their
+0.153.4 counterpart (measured with `diff <(python3 -m json.tool a.json)
+<(python3 -m json.tool b.json)`); `ContextCompactedNotification.json` is the
+only one of the five with a **zero-line diff (byte-identical file-for-file)**.
+The four non-identical files are NOT byte-identical at the JSON-schema level;
+what makes them safe for `app_server_projection.ts` is where the diff sits,
+not its absence. The diff body is identical across all four files (only the
+line-number offsets differ, since each file embeds the same shared
+`definitions` entries at a different position) and is confined to two
+definitions neither read by, nor reachable from, the fields
+`app_server_projection.ts` actually consumes:
+
+- `FunctionCallOutputContentItem` gained a discriminated `image_url`/`file_id`
+  union. It is referenced only by `FunctionCallOutputBody` (the body of a raw
+  Responses-API function-call-output item), not by any `ThreadItem` variant
+  `app_server_projection.ts` maps.
+- A new `McpAppUi`/`McpAppDisplayMode` pair was added as a nullable
+  `mcpAppUi` field on `ThreadItem`'s `mcpToolCall` variant
+  (`McpToolCallThreadItem`). `app_server_projection.ts:69-80`'s `mcpToolCall`
+  case reads only `item.status`, `item.server`, `item.tool`,
+  `item.arguments`, `item.result.content` (text blocks only) /
+  `.structuredContent`, and `item.error.message` -- confirmed by reading that
+  function; `mcpAppUi` is not among them.
+
+A separate, unrelated diff elsewhere in the stable bundle: `ThreadEnvironment`
+(new definition) and an `originator` field on `Thread` (`ThreadStartedNotification.json`
+only); a similar discriminated-union restructuring of a user-input content
+item (also confined to a definition none of the five notifications' consumed
+fields touch). `ThreadRollbackParams`/`ThreadRollbackResponse` are absent from
+the 0.156.1 bundle (kaoiro's adapter does not call `thread/rollback`,
+confirmed by grep over `wrapper/codex/src/*.ts`).
+
+Net effect on `app_server_projection.ts`: unaffected. Every field it reads
+from these five notifications -- including the nested `Turn` definition's
+own field set (`id`, `status`, `items`, `itemsView`, `error`, `startedAt`,
+`completedAt`, `durationMs`; no permission or additional identity field
+either way) -- is unchanged between 0.153.4 and 0.156.1; the changed
+definitions sit on branches this projection code does not read.
 
 ### Real-binary integration tests re-run on 0.156.1
 
@@ -271,8 +294,106 @@ version, so this run pins version negotiation too).
 Outside the app-server surface: `permission-state.md`'s claim that the plain
 `codex exec` JSONL `turn.started` event carries no turn ID or permission
 fields was re-measured against the 0.156.1 binary through the same loopback
-Responses pattern as the two integration tests above (no live account). The
-observed event was exactly `{"type":"turn.started"}` -- unchanged.
-`codex exec --help` on the same binary still lists no compaction option,
-matching the prior 0.153.4-scoped claim in ADR-0043 and
+Responses pattern as the two integration tests above (no live account, no
+`~/.codex/auth.json`, isolated `HOME`/`CODEX_HOME`). This used
+`@openai/codex-sdk`'s own `Codex.startThread()`/`runStreamed()` API (the same
+one `wrapper/codex/src/host.ts` drives in production for the `exec` backend),
+not a hand-invoked CLI call. The isolated `CODEX_HOME`'s `config.toml`:
+
+```toml
+model="gpt-5.6-sol"
+model_provider="local"
+approvals_reviewer="auto_review"
+[model_providers.local]
+name="Loopback"
+base_url="http://127.0.0.1:<ephemeral-port>/v1"
+wire_api="responses"
+[features]
+shell_snapshot=false
+plugins=false
+[analytics]
+enabled=false
+```
+
+The SDK-spawned child's real `execve()` argv, captured with `strace -f -e
+trace=execve` on this exact run:
+
+```
+/home/yuta/git/kaoiro/node_modules/.pnpm/@openai+codex@0.156.1-linux-x64/node_modules/@openai/codex/vendor/x86_64-unknown-linux-musl/bin/codex \
+  exec --experimental-json \
+  --config approvals_reviewer="user" \
+  --sandbox workspace-write \
+  --cd /tmp/ao-399-turnstarted-argv-OCBAaO \
+  --skip-git-repo-check \
+  --config sandbox_workspace_write.network_access=false \
+  --config approval_policy="never"
+```
+
+Prompt: a single ordinary turn (`runStreamed("QUESTION_1", ...)`) against the
+loopback provider's fixed one-shot Responses SSE reply (see
+`backend_rollback.integration.test.ts` for the identical provider shape).
+Observed events (source: `@openai/codex-sdk` 0.156.1, this exact binary and
+argv above):
+
+```
+{"type":"thread.started","thread_id":"01a0ccdb-8338-7c33-8782-c72a1cb489c7"}
+{"type":"turn.started"}
+{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":1,"reasoning_output_tokens":0}}
+```
+
+`turn.started` carries no field beyond `type` -- unchanged from the
+0.153.4-scoped claim it re-confirms. `codex exec --help` on the same 0.156.1
+binary still lists no compaction option, matching the prior 0.153.4-scoped
+claim in ADR-0043 and
 [codex-lifecycle-observability.md](../../open-questions/codex-lifecycle-observability.md).
+
+### Real spawn + mid-session switch against the production account, wrapper direct-drive
+
+The acceptance criterion "a real spawn pinned to gpt-6-sol and a mid-session
+switch to gpt-6-luna each complete a turn" was exercised against the
+**production ChatGPT account** (2 turns, the budget the operator authorized
+for this check) -- distinct from every other measurement in this appendix,
+which are all offline/loopback. **Method: `wrapper/codex/src/host.ts`'s
+`CodexHost` driven directly** (via `tsx`, importing the TS source), NOT the
+deployed kaoiro runner and NOT the dashboard -- the deployed runner
+(`~/.local/share/kaoiro/current`) still runs the pre-#399 wrapper and CLI, so
+neither the runner nor the dashboard can exercise the new catalog rows or the
+0.156.1 binary yet; confirming those two specifically is deferred to the
+runner update that lands with this issue's merge (out of this scope).
+`codexFactory` was left at its default (`new Codex(options)`), so this ran
+the real `@openai/codex-sdk` 0.156.1 against the real installed binary and
+the real `~/.codex/auth.json` (`codex_auth_mode: "chatgpt"`,
+`codex_chatgpt_plan: "pro"`), `model: "gpt-6-sol"`, `effort: "low"`,
+`sandbox: "read-only"`, cwd a disposable `/tmp` directory. Prompt (both
+turns): `"Reply with exactly: OK"`.
+
+```
+=== TURN 1: gpt-6-sol ===
+[state] "sending" "gpt-6-sol"
+[state] "thinking" "gpt-6-sol"
+[log] "log" {"kind":"assistant","text":"OK"}
+[log] "result" {"text":"OK"}
+[turn_end] {"turnToken":"0742eff0-68a4-4c76-983e-bbe1f0550261","conversationIds":[],"terminal":"turn.completed"}
+[state] "done" "gpt-6-sol"
+[state] "waiting_input" "gpt-6-sol"
+=== SWITCH: gpt-6-sol -> gpt-6-luna ===
+setModel resolved
+=== TURN 2: gpt-6-luna ===
+[state] "sending" "gpt-6-sol"
+[state] "thinking" "gpt-6-sol"
+[log] "log" {"kind":"assistant","text":"OK"}
+[log] "result" {"text":"OK"}
+[turn_end] {"turnToken":"2a8ea487-5038-43b3-8e4a-8caa40637456","conversationIds":[],"terminal":"turn.completed"}
+[state] "done" "gpt-6-luna"
+[state] "waiting_input" "gpt-6-luna"
+```
+
+Both turns completed (`terminal: "turn.completed"`) with no 400/404 --
+the failure pre-0.155 CLIs return for these two slugs. Turn 2's `state`
+events report `ext.model: "gpt-6-sol"` during `sending`/`thinking` (the
+prior value; `setModel` "applies from the next turn" per the code comment at
+`host.ts:1174-1176`, and turn 2 IS that next turn) but settle to
+`"gpt-6-luna"` by `turn_end`/`done`/`waiting_input`, consistent with that
+design. No child process remained after the run (`ps aux` checked
+separately from the two long-lived production runner processes already on
+this host).
