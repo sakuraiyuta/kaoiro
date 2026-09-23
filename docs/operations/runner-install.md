@@ -159,7 +159,7 @@ sudo loginctl enable-linger "$USER"   # Enable boot start without login
 - Logs: `journalctl --user -u kaoiro-runner -f`
 - Forgetting `enable-linger` prevents starting at boot (starts only on login).
   Furthermore, **the user systemd instance itself restarts on each SSH session,
-  restarting enabled units along with it** (verified on actual hardware in issue
+  restarting enabled units along with it** (verified on a real host in issue
   #142, 2026-07-26). The restart policy (`Restart=on-failure` /
   `RestartPreventExitStatus=78`) functions correctly within a single user systemd
   instance, but verifying over SSH on a host without `enable-linger` looks
@@ -172,7 +172,7 @@ sudo loginctl enable-linger "$USER"   # Enable boot start without login
 macOS orchestration is unverified (follow-up issue
 [#242](https://github.com/sakuraiyuta/kaoiro/issues/242)).
 The release layout and install / switch work across operating systems, but operational validation
-on physical hardware with `@@DEPLOY_DIR@@` pointing to `current/deploy` has not
+on a real host with `@@DEPLOY_DIR@@` pointing to `current/deploy` has not
 been completed.
 
 ```sh

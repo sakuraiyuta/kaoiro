@@ -151,8 +151,9 @@ wrapper releases may ignore the new field. No automatic exec fallback is used.
   ]
   ```
 - `internal_subagents` (boolean, default `true`) — whether Codex internal
-  subagents may be spawned. A positive boolean where `true` is force-enable,
-  `false` disables them, and omission yields the effective default of `true`.
+  subagents may be spawned. A strict boolean (not merely truthy) where `true` is
+  force-enable, `false` disables them, and omission yields the effective default
+  of `true`.
   The wrapper always injects the effective value as `features.multi_agent` into
   the per-run config
   ([ADR-0038](../../adr/0038-codex-internal-subagents-toggle.md)).
