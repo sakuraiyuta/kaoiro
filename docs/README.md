@@ -85,6 +85,7 @@ kaoiro documentation. The pre-taxonomy folders (specs / plans / open-questions) 
 | [0058](adr/0058-codex-app-server-turn-steer.md) | Codex app-server transport and in-flight turn steering | accepted |
 | [0059](adr/0059-launcher-owned-runner-pairing.md) | Launcher-owned runner token pairing for dev.sh and dogfood.sh | accepted |
 | [0060](adr/0060-documentation-taxonomy-and-migration.md) | Layered documentation taxonomy and the migration order for docs/ | accepted |
+| [0061](adr/0061-dashboard-operator-bulk-reset.md) | Dashboard operator bulk close + bulk session reset | accepted |
 <!-- adr-index:end -->
 
 Regenerate with the `my-docs-restructure` skill's `scripts/build-adr-index.sh docs` (the script lives in the skill, not in this repository). Do not edit inside the markers manually.

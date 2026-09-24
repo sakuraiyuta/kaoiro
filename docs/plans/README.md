@@ -54,10 +54,14 @@ Feature-local plans without a roadmap number. They contain the target feature's
 phase-0 / phase-1 as sections within the plan (independent of the project's
 phase-N).
 
-None are currently registered (the former `persona-personality-injection` was
-superseded by [ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md)
-and subsequently carried forward to
-[phase-10-persona-server-sot](phase-10-persona-server-sot.md)).
+| Plan | Status | Description |
+|------|--------|------|
+| [dashboard-bulk-reset](dashboard-bulk-reset.md) | ⏳ | Operator `SettingsDrawer` control to bulk-close all conversations and bulk-clear all agent sessions, [ADR-0061](../adr/0061-dashboard-operator-bulk-reset.md) |
+
+(The former `persona-personality-injection` was superseded by
+[ADR-0029](../adr/0029-persona-server-sot-and-pack-distribution.md) and
+subsequently carried forward to
+[phase-10-persona-server-sot](phase-10-persona-server-sot.md).)
 
 ## Future
 
