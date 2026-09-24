@@ -1,0 +1,17 @@
+{
+  "mode": "txt2img",
+  "prompt": "score_9, score_8_up, safe, 1other, solo, upper body, androgynous, very long hair, wolf cut, layered hair, hair over shoulder, blonde hair, bronze hair, golden hair, yellow eyes, white dress, long dress, loose clothes, oversized clothes, wrinkled clothes, long sleeves, dropped shoulders, gold necklace, chain necklace, tired, half-closed eyes, looking down, tugging at collar, simple background, white background, clean lineart, flat colors, an androgynous mediator with a gender-ambiguous face of soft, balanced features that read as neither clearly masculine nor feminine, very long layered gold-leaning bronze wolf-cut hair reaching the waist and falling over both shoulders and down the front of the chest, golden eyes, wearing a loose, heavily creased, oversized plain white one-piece garment in genderless unisex mode fashion with a high round neckline and dropped shoulders, a thin gold chain necklace resting over the neckline, eyes lowered, tugging at the neckline with one finger, visibly worn out, neckline still closed",
+  "negative": "worst quality, low quality, score_1, score_2, score_3, artist name, realistic, multiple views, logo, glowing, text, chibi, glasses, lipstick, makeup, beard, stubble, cleavage, open clothes, bare shoulders, off-shoulder, frills, lace, ribbon, pectorals, adam's apple, muscular, broad shoulders, breasts, short hair, medium hair, border, frame",
+  "model": "animality_ap3.safetensors",
+  "architecture": "anima",
+  "seed": 256430500098851,
+  "steps": 30,
+  "width": 1024,
+  "height": 1024,
+  "cfg": 4.0,
+  "denoise": null,
+  "generated_at": "2026-09-24T17:46:16.776976+09:00",
+  "job_id": "8a38b7eeaea348d1a1b9a00ed176bd62",
+  "source_job_id": null,
+  "postprocess": "rembg birefnet-portrait -a -af 240 -ab 10 -ae 10; isnet-anime alpha eroded 3 px filled the interior (original RGB kept); interior alpha >= 200 forced opaque; normalized to 512x512 (premultiplied LANCZOS)"
+}

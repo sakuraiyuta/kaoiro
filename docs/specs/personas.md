@@ -53,6 +53,34 @@ to “Generation record” below.
 |---|---|---|---|---|---|
 | `fuji` | fuji | Non-deformed bust-up | Wisteria purple | Woman in her early 20s; restrained wisteria vertical curls (below shoulders), white blouse + wisteria jacket + ribbon tie, book in hand | An elegant, intellectual, slightly superior young lady. Happily points out mistakes, then adds a hint. Keeps a reserved distance by using “watakushi” and “Master.” Small to medium range (does not lose elegance or composure) |
 | `kohaku` | kohaku | Non-deformed bust-up | Amber | Man in his 40s; short black hair with white streaks, thin silver-rim glasses, stubble, navy collared shirt | A CTO type who calls others Boss. Unruffled and steady, communicating more through posture and hands than expression. Small range. See the pack's personality.md for personality detail |
+| `hiiro` | hiiro | Full-body chibi | Scarlet | Man in his early 20s; scarlet hair with the forehead exposed, swept up and back with textured tips; light brown eyes; plain varsity jacket (scarlet body, white sleeves, no patches or lettering), white T-shirt, jeans, white sneakers | A junior-engineer type who calls the operator 「先輩」 and speaks with 「〜っす」. Asks candidly and reports each finding as he goes. Medium to large range |
+| `hisui` | hisui | Non-deformed bust-up | Dark jade | Male, 16–18; short, sleek, rounded dark jade hair (a mushroom-leaning bob with straight, unflared strands and a tidy short nape), long diagonal bangs covering his right eye (the viewer's left); jade eyes; thin black round-frame glasses with non-reflective lenses (the right lens sits under the bangs); black morning coat, black waistcoat, white shirt, dark jade tie | An apprentice butler who calls the operator 「ご主人」 and uses 「ぼく」. Polite speech that slips into high-school-boy casualness; meets unreasonable requests with a candid retort but still takes the work on. Medium to large range |
+| `kogane` | kogane | Non-deformed bust-up | Golden yellow | Person of unstated age and gender, with soft features balanced between masculine and feminine; very long layered wolf-cut hair in a gold-leaning bronze, reaching the waist and falling over both shoulders and down the chest; golden eyes; loose, creased, oversized white one-piece garment with a high round neckline, dropped shoulders, and full sleeves; a long thin gold chain necklace with a small pendant | A mediator who uses 「こちら」 and calls the operator 「あなた」. Lays the options side by side, grants each its merit, then always closes with one recommendation. Small to medium range |
+
+`kogane` is androgynous by design; their gender and age are never stated.
+Speech manner for `hiiro`, `hisui`, and `kogane` lives in each pack's
+personality.md.
+
+Production notes:
+
+- `hiiro` / `hisui`: the `tool_running` laptops drew an Apple-like lid logo
+  even with `logo` in the negative prompt; it was filled with the lid colour
+  in a pixel edit, since real brand marks are forbidden (Constraints).
+- `hiiro`: the red-body, white-sleeve jacket draws varsity lettering even with
+  `logo, text, emblem, patch, letter, number` in the negative prompt (2026-09-24
+  trials), so erase any chest letter by filling it with the sampled jacket red
+  in a pixel edit. As a full-body chibi, fix the colors of the bottoms and
+  shoes in tags as well.
+- `hisui`: the morning coat's cutaway tails fall outside a bust-up frame; list
+  only the visible parts (lapels, waistcoat, shirt, tie) in tags. The hidden
+  eye and the glasses both cut expression legibility at card size, so keep the
+  lenses non-reflective and carry expression through the mouth, brows, and
+  hands; `error` flips the bangs to show both eyes.
+- `kogane`: the outfit is monochrome, so the hair carries the base color; keep
+  the bronze leaning gold, or it reads as amber and blurs into kohaku (also a
+  bust-up). Keep the face and build ambiguous in gender, and add no age cues.
+  In the 2026-09-24 trials, shirt tags kept pulling the neckline wide open, so
+  the outfit became a one-piece garment.
 
 Personality is **design material for keeping expression performance consistent
 in standing-illustration prompts** and is also **consumed by runtime personality
@@ -123,16 +151,16 @@ modifier derived from context utilization, not a protocol state; its supporting
 images are generated in issue #163
 ([ADR-0054](../adr/0054-fatigue-as-orthogonal-persona-modifier.md)).
 
-| State | ao (restrained) | momo (large) | kuroe (calm) | fuji (composed superiority) | kohaku (unruffled) |
-|---|---|---|---|---|---|
-| idle | Composed blank face | Smiling | Cool composed face | Relaxed slight smile, gaze a little downward | Arms folded, looking slightly into the distance |
-| thinking | Eyes closed, thinking quietly | Tilts head with a “hmm” | Hand on chin, eyes lowered | Hand on chin, diagonal gaze, smile | Hand on chin, eyes lowered, “hmm” |
-| tool_running | Concentrates silently on hands | Rolls up sleeves enthusiastically | Tapping at a PC, concentrating | Eyes down on book/documents in hand, concentrating | Operating a desktop PC, concentrating |
-| waiting_permission | Gives a silent look | Raises hand: “okay?” | Offers a document and asks for approval | Gently extends one hand, raises one eyebrow in inquiry | Offers document and requests a seal |
-| waiting_input | Glances this way | Leans forward and waves | Holds a memo and looks quietly | Turns toward us, an expectant smile and slight head tilt | Leans forward to peer at the expression |
-| done | Small proud face | Beaming smile + fist pump | Restrained smile and light nod | Proud eyes-closed smile, small nod | Crisp slight smile in a 20-degree turned composition |
-| error | Eyes wide in upset | Teary-eyed | Apologetic expression | Hand on cheek, looks away with a troubled smile | Hides expression with hand on forehead |
-| fatigued (optional modifier) | Half-lidded eyes, shoulders slightly dropped | Dejected but retains energy | Half-lidded eyes, lowered mouth corners, quietly shows exhaustion | Eyes lowered, mouth not relaxed, unable to hide fatigue | Narrows eyes, loosens posture slightly to show fatigue |
+| State | ao (restrained) | momo (large) | kuroe (calm) | fuji (composed superiority) | kohaku (unruffled) | hiiro (candid) | hisui (prim, slipping) | kogane (unhurried) |
+|---|---|---|---|---|---|---|---|---|
+| idle | Composed blank face | Smiling | Cool composed face | Relaxed slight smile, gaze a little downward | Arms folded, looking slightly into the distance | Upright with a bright smile | Hands folded in front, prim composed face | Calm faint smile, head slightly tilted in a listening pose |
+| thinking | Eyes closed, thinking quietly | Tilts head with a “hmm” | Hand on chin, eyes lowered | Hand on chin, diagonal gaze, smile | Hand on chin, eyes lowered, “hmm” | Arms folded, head tilted in puzzlement | Pushes up the glasses' bridge with a finger, gaze diagonally down | Fingers steepled, eyes lowered |
+| tool_running | Concentrates silently on hands | Rolls up sleeves enthusiastically | Tapping at a PC, concentrating | Eyes down on book/documents in hand, concentrating | Operating a desktop PC, concentrating | Typing earnestly on a laptop held in his arms | Operates a laptop held in one arm, concentrating | Holds two documents side by side, comparing them |
+| waiting_permission | Gives a silent look | Raises hand: “okay?” | Offers a document and asks for approval | Gently extends one hand, raises one eyebrow in inquiry | Offers document and requests a seal | Palms pressed together, asking a favor | Offers a document, looking up to confirm | Both palms turned up, offering two options |
+| waiting_input | Glances this way | Leans forward and waves | Holds a memo and looks quietly | Turns toward us, an expectant smile and slight head tilt | Leans forward to peer at the expression | Leans forward with memo pad and pen ready | Tilts his head, peering at us | Tucks hair behind an ear and leans in to listen |
+| done | Small proud face | Beaming smile + fist pump | Restrained smile and light nod | Proud eyes-closed smile, small nod | Crisp slight smile in a 20-degree turned composition | Thumbs-up with a beaming smile | Bows with a hand on his chest, mouth relaxed into a proud smile | Hands lightly together before the chest, eyes narrowed in a smile |
+| error | Eyes wide in upset | Teary-eyed | Apologetic expression | Hand on cheek, looks away with a troubled smile | Hides expression with hand on forehead | Clutches his head, face gone pale | Bangs flip up to show both eyes, glasses askew, flustered | Rueful smile, brushing the hair back with one hand |
+| fatigued (optional modifier) | Half-lidded eyes, shoulders slightly dropped | Dejected but retains energy | Half-lidded eyes, lowered mouth corners, quietly shows exhaustion | Eyes lowered, mouth not relaxed, unable to hide fatigue | Narrows eyes, loosens posture slightly to show fatigue | Shoulders slumped, varsity jacket slipping off one shoulder | Glasses off, pinching the bridge of his nose, tie loosened | Eyes lowered, loosening the collar with a finger |
 
 ### Image standards
 
@@ -181,6 +209,9 @@ images are generated in issue #163
 | kuroe | `animality_ap3.safetensors` | `78243803967796` | 2026-06-11 |
 | fuji | `animality_ap3.safetensors` | `218473265094718` | 2026-07-05 |
 | kohaku | `animality_ap3.safetensors` | `87170280435203` | 2026-08-08 |
+| hisui | `animality_ap3.safetensors` | `229170725616453` | 2026-09-24 |
+| kogane | `animality_ap3.safetensors` | `256430500098851` | 2026-09-24 |
+| hiiro | `animality_ap3.safetensors` | `27833934599249` | 2026-09-24 |
 
 Work artifacts are `assets-work/dist/<sprite_set>/<state>.png` (1024x1024
 transparent PNG, background removed with rembg `birefnet-portrait`, untracked
@@ -192,8 +223,11 @@ See “Persona asset delivery” in [protocol](../reference/protocol/persona-del
 For complete reproduction parameters such as prompt text and steps, see
 `persona-packs/<id>/provenance/<state>.json` (for field definitions and import
 method, see “provenance/” in [persona-pack-format](../reference/personas/pack-format.md)).
-The five imported personas are ao / momo / kuroe / kohaku / fuji. The seven
-basic fuji states are matched uniquely through the opaque-interior RGB invariant
+The eight imported personas are ao / momo / kuroe / kohaku / fuji / hiiro /
+hisui / kogane. For hiiro / hisui / kogane, all eight states (`fatigued`
+included) come from the same Anima pipeline and match their raw PNG by sha256;
+the background-removal recipe and any pixel edits are recorded in each state's
+`postprocess` field. The seven basic fuji states are matched uniquely through the opaque-interior RGB invariant
 of archived raw PNG and final sprite. `fatigued` is a derived state generated by
 Codex; retain its provenance separately from generation provenance.
 

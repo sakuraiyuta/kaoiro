@@ -1,0 +1,17 @@
+{
+  "mode": "txt2img",
+  "prompt": "score_9, score_8_up, safe, 1boy, solo, upper body, teenage boy, youthful, dark green hair, short hair, bob cut, straight hair, swept bangs, hair over one eye, green eyes, glasses, round eyewear, black-framed eyewear, butler, black morning coat, black vest, white collared shirt, dark green necktie, adjusting eyewear, hand up, looking down, closed mouth, thinking, simple background, white background, clean lineart, flat colors, an apprentice butler around seventeen with neat, smooth, rounded short dark jade hair with sleek straight strands, long diagonal bangs sweeping across and hiding his right eye on the viewer's left side, a tidy short nape, thin black round glasses with clear non-reflective lenses, a black morning coat over a black waistcoat, white shirt and dark jade tie, pushing up the bridge of his glasses with one finger, gaze lowered diagonally in thought",
+  "negative": "worst quality, low quality, score_1, score_2, score_3, artist name, realistic, multiple views, logo, glowing, text, chibi, sunglasses, opaque glasses, ahoge, messy hair, spiked hair, long hair, medium hair, gradient hair, eyepatch",
+  "model": "animality_ap3.safetensors",
+  "architecture": "anima",
+  "seed": 229170725616453,
+  "steps": 30,
+  "width": 1024,
+  "height": 1024,
+  "cfg": 4.0,
+  "denoise": null,
+  "generated_at": "2026-09-24T16:50:17.246463+09:00",
+  "job_id": "48fe577541404964bf7a08f9dc09a053",
+  "source_job_id": null,
+  "postprocess": "rembg birefnet-portrait -a -af 240 -ab 10 -ae 10; interior alpha >= 200 forced opaque; normalized to 512x512 (premultiplied LANCZOS)"
+}

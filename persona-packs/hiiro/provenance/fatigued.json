@@ -1,0 +1,17 @@
+{
+  "mode": "txt2img",
+  "prompt": "score_9, score_8_up, safe, 1boy, solo, chibi, full body, standing, young man, red hair, scarlet hair, short hair, spiked hair, hair slicked back, forehead, brown eyes, baseball jacket, red jacket, white sleeves, open jacket, white t-shirt, blue jeans, white sneakers, tired, half-closed eyes, slouching, sweatdrop, simple background, white background, clean lineart, flat colors, a cheerful junior engineer in his early twenties with scarlet hair swept up and back off his forehead, wearing a plain scarlet baseball jacket with white sleeves and no patches or lettering, shoulders slumped, the jacket slipping off one shoulder over his T-shirt, visibly worn out",
+  "negative": "worst quality, low quality, score_1, score_2, score_3, artist name, realistic, multiple views, logo, glowing, text, emblem, patch, letter, number",
+  "model": "animality_ap3.safetensors",
+  "architecture": "anima",
+  "seed": 27833934599249,
+  "steps": 30,
+  "width": 1024,
+  "height": 1024,
+  "cfg": 4.0,
+  "denoise": null,
+  "generated_at": "2026-09-24T17:37:47.089752+09:00",
+  "job_id": "16d7f374339f41f58261c888244b1469",
+  "source_job_id": null,
+  "postprocess": "rembg birefnet-portrait -a -af 240 -ab 10 -ae 10; interior alpha >= 200 forced opaque; normalized to 512x512 (premultiplied LANCZOS)"
+}

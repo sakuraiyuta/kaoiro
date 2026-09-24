@@ -1,0 +1,12 @@
+{
+  "id": "hisui",
+  "name": "ひすい",
+  "sprite_set": "hisui",
+  "version": "1.0.0",
+  "license": "CC0-1.0",
+  "min_kaoiro_version": "0.1.0",
+  "states": ["idle", "thinking", "tool_running", "waiting_input",
+             "waiting_permission", "done", "error", "fatigued"],
+  "description": "ご主人呼びの見習い執事型ペルソナ",
+  "author": "sakurai.yuta@gmail.com"
+}
