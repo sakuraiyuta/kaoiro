@@ -2,7 +2,7 @@
 title: Inter-agent tool authorization
 description: Which engine gate decides each kaoiro inter-agent MCP tool call (send_to_agent / list_agents / whoami and the session companions), and when a send_to_agent call reaches the operator.
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-09-26
 ---
 
 # Inter-agent tool authorization
@@ -130,6 +130,15 @@ from the server for that pair**.
 
 ## Constraints (MUST)
 
-- MUST: When injecting a new in-process MCP tool into the SDK, explicitly decide
-  whether it belongs in default allowedTools (omitted = per-use approval;
-  included = unsupervised).
+- MUST (Claude Code): When injecting a new in-process MCP tool into the SDK,
+  explicitly decide whether it belongs in default allowedTools (omitted =
+  per-use approval; included = unsupervised).
+- MUST (Codex and Antigravity): When adding a descriptor to `toolDescriptors`
+  in `wrapper/codex/src/cli.ts` or `wrapper/antigravity/src/cli.ts`, explicitly
+  decide whether to wrap it in `operatorApprovalGated`
+  (`wrapper/agent-common/src/approval_gate.ts`). Neither the Codex tool-host
+  bridge nor Antigravity's `ToolHost` carries an approval axis, so an unwrapped
+  descriptor is auto-approved by construction on every call; the
+  wrapper-owned broker wait that `operatorApprovalGated` adds is the only
+  route to the operator (`request_session_reset` takes it on both engines,
+  the inter-agent tools do not).
