@@ -1,8 +1,8 @@
 ---
 title: Runner control and launch
-description: The runner:<host_id> control channel (register/spawn/stop/restart/session enumeration) and the client-facing launch-control routes that feed it.
+description: The runner:<host_id> control channel (register/spawn/stop/restart/session enumeration/session reset) and the client-facing launch-control routes that feed it.
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-09-26
 related: [protocol, architecture]
 ---
 
@@ -13,7 +13,7 @@ related: [protocol, architecture]
 The runner resident on each host ([ADR-0023](../../adr/0023-host-runner-architecture.md))
 connects to the server on the dedicated `runner:<host_id>` topic, separate from the direct
 `wrapper:<agent_id>` data path. It registers the host, reports liveness, and controls the
-wrapper lifecycle (spawn / stop / restart / session enumeration), including resume. Messages
+wrapper lifecycle (spawn / stop / restart / session enumeration / session reset), including resume. Messages
 use the existing **Channels event** mechanism; no envelope `type` is added.
 
 | Direction | Event | Payload |
@@ -27,6 +27,8 @@ use the existing **Channels event** mechanism; no envelope `type` is added.
 | server → runner | `restart` | `{ agent_id, request_id? }`. **Operator-only**. Validate host binding first. New servers assign a non-empty request ID for planned live-agent restarts; new runners map it to wrapper `transition_id` after relaunch, while omission preserves old behavior (issue #256). |
 | server → runner | `enumerate_sessions` | `{ agent_id?, cwd, engine? }`. **Operator-only**. Requests resume candidates under `cwd`, scoped to one engine (default `claude-code`, [ADR-0032](../../adr/0032-codex-adapter.md) F8). The server strips `host_id`, fills `cwd` from SessionPointers when omitted, and forwards a runner shape where `cwd` always exists; `agent_id` remains only for detail-view requests. Client must provide at least `cwd` or `agent_id`; both are accepted, with explicit `cwd` taking precedence. |
 | server → runner | `switch_session` | `{ agent_id, resume_session_id, request_id?, resume_snapshot? }`. **Operator-only**. Replaces the resume target of a live agent without changing agent_id/cwd. Runner transfers the F4 lock and restarts the wrapper, rechecking T3 and F4; failures use `spawn_result` ([ADR-0014](../../adr/0014-session-resume-and-restore.md)). `request_id` distinguishes the new connection; `resume_snapshot` carries the server's current SessionPointers snapshot (phase-15 D8). |
+| server → runner | `reset_session` | `{ version, agent_id, mode, request_id, previous_session_id?, resume_snapshot? }`. **Operator-only** (relayed from client `session_reset` or the agent-self `session_reset_request`). Same-agent fresh relaunch of the wrapper without `resume_session_id`, re-applying `resume_snapshot`; on spawn failure the runner rolls back to `previous_session_id`. Field meaning and ordering: the `reset_session` row in [Channels](channels.md#directional-message-types-v0-settled) ([ADR-0036](../../adr/0036-session-lifecycle-commands.md) F7). |
+| runner → server | `session_reset_result` | `{ version, host_id, agent_id, mode, request_id, ok, reason?, ceiling_conflict?, to_session_id?: string \| null }`. Outcome of a `reset_session`; `ok: true` means the fresh spawn succeeded and the server keeps the reset pending until the fresh wrapper joins, `ok: false` carries a closed-vocabulary `reason`. The server rejects a structurally malformed result instead of forwarding it. Field meaning: the `session_reset_result` row in [Channels](channels.md#directional-message-types-v0-settled). |
 | server → runner | `refresh_engine_catalog` | `{ engine, request_id, force? }`. **Operator-only** request to re-probe the LaunchDialog engine catalog ([ADR-0039](../../adr/0039-engine-catalog-live-probe.md) Option E). It is keyed by `(host, engine)`, not agent; `force` bypasses TTL. Only Claude currently probes live; Codex advertises statically ([ADR-0035](../../adr/0035-codex-model-catalog-and-mid-session-switch.md) F1). |
 | runner → server | `catalog_result` | `{ host_id, engine, request_id, ok, reason?, models_count? }`. Completion report for `refresh_engine_catalog`, forwarded to operators. Failure reasons are `auth_failed` / `spawn_failed` / `cli_error` / `invalid_output` / `timeout` / `unsupported_engine`; `models_count` is only a toast signal and the catalog arrives in the runner's normal `hosts` broadcast ([ADR-0039](../../adr/0039-engine-catalog-live-probe.md)). |
 
