@@ -108,13 +108,17 @@ function findDescendantByArgs(rootPid: number, needle: string): number | null {
 // issue #391 round2 S2: monotonic, not wall-clock -- a WSL2 clock step (or
 // any NTP/VM-suspend adjustment) can move Date.now() by seconds without any
 // time actually elapsing, producing a false timeout here.
-async function waitFor(predicate: () => boolean, timeoutMs: number, diagnostics = ""): Promise<void> {
+async function waitFor(
+  predicate: () => boolean,
+  timeoutMs: number,
+  diagnostics?: () => string,
+): Promise<void> {
   const deadline = performance.now() + timeoutMs;
   while (performance.now() < deadline) {
     if (predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
-  throw new Error(`timed out after ${timeoutMs}ms${diagnostics}`);
+  throw new Error(`timed out after ${timeoutMs}ms${diagnostics?.() ?? ""}`);
 }
 
 it.skipIf(!isLinux)(
@@ -158,6 +162,11 @@ it.skipIf(!isLinux)(
     let execChildPid: number | null = null;
     let sleepPid: number | null = null;
     let running: Promise<void> | undefined;
+    let timeoutDiagnosticsCalls = 0;
+    const describeTimeout = () => {
+      timeoutDiagnosticsCalls++;
+      return timeoutDiagnostics("");
+    };
     const signals = process.listeners("SIGTERM");
     try {
       await writeFile(join(home, "config.toml"), `model="gpt-5.6-sol"
@@ -192,8 +201,9 @@ enabled=false
       wire.push("persona_prompt", { prompt: "test" });
       wire.push("permission_sync", { version: "0", control: null, next: null });
 
-      await waitFor(() => (execChildPid = findCodexExecPidOnce(process.pid)) !== null, 15_000, timeoutDiagnostics(""));
-      await waitFor(() => (sleepPid = findDescendantByArgs(execChildPid!, "sleep 77")) !== null, 15_000);
+      await waitFor(() => (execChildPid = findCodexExecPidOnce(process.pid)) !== null, 15_000, describeTimeout);
+      await waitFor(() => (sleepPid = findDescendantByArgs(execChildPid!, "sleep 77")) !== null, 15_000, describeTimeout);
+      expect(timeoutDiagnosticsCalls).toBe(0);
       expect(isAlive(execChildPid!)).toBe(true);
       expect(isAlive(sleepPid!)).toBe(true);
 

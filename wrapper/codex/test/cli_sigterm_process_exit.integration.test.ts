@@ -113,13 +113,17 @@ function findCodexExecPidOnce(parentPid: number): number | null {
 // any NTP/VM-suspend adjustment) can move Date.now() by seconds without any
 // time actually elapsing, producing both a false timeout here and a false
 // pass/fail on the elapsedMs bound below.
-async function waitFor(predicate: () => boolean, timeoutMs: number, diagnostics = ""): Promise<void> {
+async function waitFor(
+  predicate: () => boolean,
+  timeoutMs: number,
+  diagnostics?: () => string,
+): Promise<void> {
   const deadline = performance.now() + timeoutMs;
   while (performance.now() < deadline) {
     if (predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
-  throw new Error(`timed out after ${timeoutMs}ms${diagnostics}`);
+  throw new Error(`timed out after ${timeoutMs}ms${diagnostics?.() ?? ""}`);
 }
 
 async function writeRunnerScript(root: string, wireUrl: string): Promise<string> {
@@ -209,6 +213,11 @@ enabled=false
 
     let execChildPid: number | null = null;
     let sleepPid: number | null = null;
+    let timeoutDiagnosticsCalls = 0;
+    const describeTimeout = () => {
+      timeoutDiagnosticsCalls++;
+      return timeoutDiagnostics(stderr);
+    };
     try {
       await waitFor(() => wire.joins >= 1, 10_000);
       wire.push("persona_prompt", { prompt: "test" });
@@ -218,11 +227,12 @@ enabled=false
         if (child.pid === undefined) return false;
         execChildPid = findCodexExecPidOnce(child.pid);
         return execChildPid !== null;
-      }, 15_000, timeoutDiagnostics(stderr));
+      }, 15_000, describeTimeout);
       await waitFor(() => {
         sleepPid = findDescendantByArgs(execChildPid!, "sleep 77");
         return sleepPid !== null;
-      }, 15_000);
+      }, 15_000, describeTimeout);
+      expect(timeoutDiagnosticsCalls).toBe(0);
       expect(isAlive(execChildPid!), `stderr: ${stderr}`).toBe(true);
       expect(isAlive(sleepPid!), `stderr: ${stderr}`).toBe(true);
 
