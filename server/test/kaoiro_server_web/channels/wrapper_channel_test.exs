@@ -2222,6 +2222,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
         })
 
       assert_reply push(socket, "envelope", stale_pending), :ok
+      _ = :sys.get_state(SessionPointers)
       assert SessionPointers.get(agent_id).snapshot == Map.put(prior_snapshot, "model", "m1")
 
       current_effective = %{
@@ -2314,6 +2315,26 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
     test "a suspended permission store times out without taking down the channel or writing a snapshot" do
       agent_id = "test.permsync-store-timeout"
+
+      previous_timeout =
+        Application.fetch_env(:kaoiro_server, :permission_observation_timeout_ms)
+
+      Application.put_env(
+        :kaoiro_server,
+        :permission_observation_timeout_ms,
+        TestTimeouts.out_of_band()
+      )
+
+      on_exit(fn ->
+        case previous_timeout do
+          {:ok, timeout} ->
+            Application.put_env(:kaoiro_server, :permission_observation_timeout_ms, timeout)
+
+          :error ->
+            Application.delete_env(:kaoiro_server, :permission_observation_timeout_ms)
+        end
+      end)
+
       seed_snapshot(agent_id, "m1")
       prior_snapshot = %{"sandbox" => "workspace-write", "network_access" => true}
       SessionPointers.record_snapshot(agent_id, prior_snapshot)
@@ -2352,8 +2373,9 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       :ok = :sys.suspend(KaoiroServer.PermissionSettings)
 
       try do
-        assert_reply push(socket, "envelope", env), :ok, %{}, 6_000
+        assert_reply push(socket, "envelope", env), :ok, %{}, TestTimeouts.slow_path()
         assert Process.alive?(socket.channel_pid)
+        _ = :sys.get_state(SessionPointers)
         assert SessionPointers.get(agent_id).snapshot == Map.put(prior_snapshot, "model", "m1")
       after
         :ok = :sys.resume(KaoiroServer.PermissionSettings)
@@ -2364,6 +2386,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
           KaoiroServer.PermissionSettings.get(agent_id).control.effective == new_effective
         end)
 
+      _ = :sys.get_state(SessionPointers)
       assert SessionPointers.get(agent_id).snapshot == Map.put(prior_snapshot, "model", "m1")
     end
   end

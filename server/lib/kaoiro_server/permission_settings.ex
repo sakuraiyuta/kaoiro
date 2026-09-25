@@ -101,6 +101,12 @@ defmodule KaoiroServer.PermissionSettings do
     GenServer.call(server, {:record_observation, agent_id, engine, permission_control})
   end
 
+  @doc "Same as `record_observation/4`, with an explicit GenServer call timeout in milliseconds."
+  def record_observation(agent_id, engine, permission_control, server, timeout)
+      when is_binary(agent_id) and is_binary(engine) and is_integer(timeout) and timeout > 0 do
+    GenServer.call(server, {:record_observation, agent_id, engine, permission_control}, timeout)
+  end
+
   @doc "The agent's current `%{engine, control, next}` record, or `nil`."
   def get(agent_id, server \\ __MODULE__) when is_binary(agent_id) do
     GenServer.call(server, {:get, agent_id})

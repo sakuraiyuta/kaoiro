@@ -1883,9 +1883,19 @@ defmodule KaoiroServerWeb.WrapperChannel do
   defp record_permission_observation(_agent_id, _envelope), do: :ok
 
   defp record_permission_observation_safely(agent_id, engine, permission_control) do
-    KaoiroServer.PermissionSettings.record_observation(agent_id, engine, permission_control)
+    timeout = Application.get_env(:kaoiro_server, :permission_observation_timeout_ms, 5_000)
+
+    KaoiroServer.PermissionSettings.record_observation(
+      agent_id,
+      engine,
+      permission_control,
+      KaoiroServer.PermissionSettings,
+      timeout
+    )
   catch
     :exit, reason ->
+      # OTP 27's GenServer.call uses a reply alias; after timeout, late replies
+      # are not delivered to this channel process.
       Logger.warning(
         "permission settings unavailable (#{inspect(reason)}); skipping permission snapshot write"
       )
