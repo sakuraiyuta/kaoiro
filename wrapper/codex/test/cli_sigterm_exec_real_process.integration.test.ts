@@ -19,12 +19,12 @@
 // Loopback Responses provider (offline, no real account usage), same shape
 // as `backend_rollback.integration.test.ts` / `cli_app_server_lifecycle.integration.test.ts`.
 import { createServer } from "node:http";
-import { execFileSync, execSync } from "node:child_process";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { performance } from "node:perf_hooks";
+import { execFileSync, execSync } from "node:child_process";
 import { redactCredentials } from "@kaoiro/agent-common";
 import { expect, it, vi } from "vitest";
 import { runCodexCli } from "../src/cli.js";
@@ -55,22 +55,13 @@ function forceKill(pid: number | undefined): void {
 
 function allProcesses(): { pid: number; ppid: number; args: string }[] {
   try {
-    return execSync(`ps -eo pid,ppid,args`, {
-      stdio: ["ignore", "pipe", "ignore"],
-    })
-      .toString()
-      .trim()
-      .split("\n")
-      .slice(1)
+    return execSync(`ps -eo pid,ppid,args`, { stdio: ["ignore", "pipe", "ignore"] })
+      .toString().trim().split("\n").slice(1)
       .map((line) => {
         const m = line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);
-        return m
-          ? { pid: Number(m[1]), ppid: Number(m[2]), args: m[3]! }
-          : null;
+        return m ? { pid: Number(m[1]), ppid: Number(m[2]), args: m[3]! } : null;
       })
-      .filter(
-        (x): x is { pid: number; ppid: number; args: string } => x !== null,
-      );
+      .filter((x): x is { pid: number; ppid: number; args: string } => x !== null);
   } catch {
     return [];
   }
@@ -291,9 +282,7 @@ function captureStderrTail(): { tail: () => string; restore: () => void } {
 }
 
 function findCodexExecPidOnce(parentPid: number): number | null {
-  const direct = allProcesses().filter(
-    (p) => p.ppid === parentPid && p.args.includes("codex exec"),
-  );
+  const direct = allProcesses().filter((p) => p.ppid === parentPid && p.args.includes("codex exec"));
   return direct[0]?.pid ?? null;
 }
 
@@ -350,57 +339,28 @@ it.skipIf(!isLinux)(
       const item =
         n === 1
           ? {
-              type: "custom_tool_call",
-              id: `answer-${n}`,
-              call_id: `call-${n}`,
-              name: "exec",
+              type: "custom_tool_call", id: `answer-${n}`, call_id: `call-${n}`, name: "exec",
               status: "completed",
-              input:
-                "await tools.exec_command({ cmd: 'sleep 77', tty: false });",
+              input: "await tools.exec_command({ cmd: 'sleep 77', tty: false });",
             }
           : {
-              id: `answer-${n}`,
-              type: "message",
-              role: "assistant",
-              status: "completed",
+              id: `answer-${n}`, type: "message", role: "assistant", status: "completed",
               phase: "final_answer",
               content: [{ type: "output_text", text: "DONE", annotations: [] }],
             };
       response.writeHead(200, { "content-type": "text/event-stream" });
       for (const event of [
-        {
-          type: "response.created",
-          response: {
-            id: `r${n}`,
-            object: "response",
-            status: "in_progress",
-            output: [],
-          },
-        },
+        { type: "response.created", response: { id: `r${n}`, object: "response", status: "in_progress", output: [] } },
         { type: "response.output_item.added", output_index: 0, item },
         { type: "response.output_item.done", output_index: 0, item },
-        {
-          type: "response.completed",
-          response: {
-            id: `r${n}`,
-            object: "response",
-            status: "completed",
-            output: [item],
-            usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-          },
-        },
-      ])
-        response.write(
-          `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
-        );
+        { type: "response.completed", response: { id: `r${n}`, object: "response", status: "completed", output: [item],
+          usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } },
+      ]) response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
       response.end();
     });
-    await new Promise<void>((resolve) =>
-      provider.listen(0, "127.0.0.1", resolve),
-    );
+    await new Promise<void>((resolve) => provider.listen(0, "127.0.0.1", resolve));
     const address = provider.address();
-    if (!address || typeof address === "string")
-      throw new Error("No provider port");
+    if (!address || typeof address === "string") throw new Error("No provider port");
 
     let execChildPid: number | null = null;
     let sleepPid: number | null = null;
@@ -416,9 +376,7 @@ it.skipIf(!isLinux)(
     };
     const signals = process.listeners("SIGTERM");
     try {
-      await writeFile(
-        join(home, "config.toml"),
-        `model="gpt-5.6-sol"
+      await writeFile(join(home, "config.toml"), `model="gpt-5.6-sol"
 model_provider="local"
 approval_policy="never"
 sandbox_mode="workspace-write"
@@ -431,34 +389,19 @@ shell_snapshot=false
 plugins=false
 [analytics]
 enabled=false
-`,
-      );
+`);
       vi.stubEnv("HOME", home);
       vi.stubEnv("CODEX_HOME", home);
       vi.stubEnv("KAOIRO_CODEX_TURN_TRACE_DIR", join(home, "turn-traces"));
-      for (const key of [
-        "OPENAI_API_KEY",
-        "CODEX_API_KEY",
-        "OPENAI_BASE_URL",
-        "OPENAI_ORG_ID",
-      ])
-        vi.stubEnv(key, undefined);
+      for (const key of ["OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL", "OPENAI_ORG_ID"]) vi.stubEnv(key, undefined);
       stderrCapture = captureStderrTail();
 
       const agentId = "cli-exec-sigterm";
       running = runCodexCli({
-        parseCliArgs: () => ({
-          configPath: "fixture",
-          prompt: "run sleep 77 via exec_command",
-          resume: undefined,
-        }),
+        parseCliArgs: () => ({ configPath: "fixture", prompt: "run sleep 77 via exec_command", resume: undefined }),
         loadConfig: () => ({
-          agent_id: agentId,
-          persona: { id: "p", name: "P", sprite_set: "p" },
-          display_name: "P",
-          server_url: wire.url,
-          model: "gpt-5.6-sol",
-          codex_backend: "exec",
+          agent_id: agentId, persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P",
+          server_url: wire.url, model: "gpt-5.6-sol", codex_backend: "exec",
         }),
       });
       void running.catch(() => {});
@@ -467,17 +410,8 @@ enabled=false
       wire.push("persona_prompt", { prompt: "test" });
       wire.push("permission_sync", { version: "0", control: null, next: null });
 
-      await waitFor(
-        () => (execChildPid = findCodexExecPidOnce(process.pid)) !== null,
-        15_000,
-        describeTimeout,
-      );
-      await waitFor(
-        () =>
-          (sleepPid = findDescendantByArgs(execChildPid!, "sleep 77")) !== null,
-        15_000,
-        describeTimeout,
-      );
+      await waitFor(() => (execChildPid = findCodexExecPidOnce(process.pid)) !== null, 15_000, describeTimeout);
+      await waitFor(() => (sleepPid = findDescendantByArgs(execChildPid!, "sleep 77")) !== null, 15_000, describeTimeout);
       expect(timeoutDiagnosticsCalls).toBe(0);
       expect(isAlive(execChildPid!)).toBe(true);
       expect(isAlive(sleepPid!)).toBe(true);
@@ -489,10 +423,7 @@ enabled=false
 
       // Measured (issue #391 measurement 2): ~50ms for both the exec parent
       // and its sandboxed grandchild. Bound generously above that.
-      await waitFor(
-        () => !isAlive(execChildPid!) && !isAlive(sleepPid!),
-        10_000,
-      );
+      await waitFor(() => !isAlive(execChildPid!) && !isAlive(sleepPid!), 10_000);
       // The CLI's own async lifecycle must complete on its own -- no
       // process.exit() needed.
       await running;
@@ -500,8 +431,7 @@ enabled=false
       forceKill(execChildPid ?? undefined);
       forceKill(sleepPid ?? undefined);
       for (const listener of process.listeners("SIGTERM")) {
-        if (!signals.includes(listener))
-          process.removeListener("SIGTERM", listener);
+        if (!signals.includes(listener)) process.removeListener("SIGTERM", listener);
       }
       stderrCapture?.restore();
       provider.closeAllConnections();
