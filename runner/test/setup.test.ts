@@ -355,6 +355,56 @@ describe("runSetup", () => {
     const config = JSON.parse(readFileSync(result.configPath, "utf8"));
     expect(config.capabilities).toEqual(["claude-code"]);
   });
+
+  it("issue #387: antigravity 選択時、agy が見つかれば path と version を info に出す", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "kaoiro-setup-"));
+    const prompt = scripted([
+      "lab-pc-1",
+      "ws://localhost:4000/runner",
+      "/tmp/work",
+      "",
+      "n", // claude-code off
+      "n", // codex off
+      "y", // antigravity on
+      "n", // no token
+      "", // node path
+    ]);
+    const infos: string[] = [];
+    prompt.info = (message) => infos.push(message);
+
+    const result = await runSetup(prompt, {
+      ...options(dir),
+      resolveAgyExecutable: () => ({ ok: true, path: "/usr/local/bin/agy" }),
+      resolveAgyVersion: async () => "agy-cli 1.2.3",
+    });
+
+    const config = JSON.parse(readFileSync(result.configPath, "utf8"));
+    expect(config.capabilities).toEqual(["antigravity"]);
+    expect(infos).toContain("  agy found at /usr/local/bin/agy (agy-cli 1.2.3)");
+  });
+
+  it("issue #387 否定対照: antigravity 選択時、agy が無ければ install hint 付きで失敗する", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "kaoiro-setup-"));
+    const prompt = scripted([
+      "lab-pc-1",
+      "ws://localhost:4000/runner",
+      "/tmp/work",
+      "",
+      "n", // claude-code off
+      "n", // codex off
+      "y", // antigravity on
+    ]);
+
+    await expect(
+      runSetup(prompt, {
+        ...options(dir),
+        resolveAgyExecutable: () => ({ ok: false, reason: "executable_missing" }),
+        resolveAgyVersion: async () => null,
+      }),
+    ).rejects.toThrow(
+      /antigravity CLI \(agy\) not found.*Install it and ensure it is on PATH/,
+    );
+  });
 });
 
 describe("nextSteps", () => {
