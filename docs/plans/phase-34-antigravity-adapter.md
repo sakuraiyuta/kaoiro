@@ -88,7 +88,7 @@ through the CLI bridge. Measured substrate:
 | B5 | context usage (per-model window table) — only if a source of truth exists — issue #388 |
 | B6 | `antigravity.extra_models` (issue #292 part A for this engine, reusing the codex helpers) — **done in #292** |
 | B7 | server test for an antigravity spawn with the `approval` key entirely absent (review advisory) — issue #389 |
-| B8 | surface the register-time `agy --version` (B4) in the `RunnerRegister` payload for server/dashboard visibility (protocol + server + dashboard) — split from #387, not yet filed |
+| B8 | surface the register-time `agy --version` (B4) in the `RunnerRegister` payload for server/dashboard visibility (protocol + server + dashboard) — issue #410, split from #387 |
 
 ### Stage C — issue #377: `run_command` background-task loss under `--print`
 
