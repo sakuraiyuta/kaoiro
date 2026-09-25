@@ -60,6 +60,8 @@ response leaves `rate_limits` absent even if catalog collection succeeds;
 catalog failure must not discard an independently valid usage result.
 Host close aborts its outstanding probe and uses the existing child-process
 SIGTERM-to-SIGKILL escalation.
+The same isolated probe also runs during a resumed Claude idle so a resumed
+agent can expose account limits before its first new turn.
 
 The first idle `state_change` remains immediate and initially omits the field.
 Start optional account probes without awaiting them, then emit a deduplicated
@@ -77,7 +79,7 @@ account limits.
 
 ## Scope
 
-Change the Codex and Claude Code fresh idle startup paths, their host snapshot
+Change the Codex fresh idle and Claude Code idle startup paths, their host snapshot
 initialization seams, and focused tests. The post-probe state update, later
 host status, and `whoami` must read the same initialized map. Preserve
 eventual refresh behavior after turns. Do not add periodic idle refresh,

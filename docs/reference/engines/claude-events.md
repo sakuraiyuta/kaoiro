@@ -52,7 +52,8 @@ Tool results are returned not as separate messages but as **`SDKUserMessage`
 
 ### Account rate limits before the first turn
 
-The wrapper emits its first idle `state_change` immediately. At fresh idle it
+The wrapper emits its first idle `state_change` immediately. At idle, including
+a resumed session, it
 starts the existing isolated catalog probe with `--usage`; the probe's SDK
 Query sends no user message and uses a private temporary cwd and minimal
 Options. Its separate `/usage` request can return the five-hour and seven-day

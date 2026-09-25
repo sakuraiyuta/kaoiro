@@ -3,6 +3,9 @@
 // 欠落時は property 自体 absent」を両方向で固定する (ADR-0037 追補)。
 
 import { describe, expect, it, vi } from "vitest";
+import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { sep } from "node:path";
 import { projectModel, runProbe } from "../src/probe.js";
 import type { query } from "@anthropic-ai/claude-agent-sdk";
 
@@ -57,6 +60,25 @@ describe("projectModel", () => {
 });
 
 describe("optional usage probe", () => {
+  it("uses an isolated cwd and minimal SDK options", async () => {
+    let options: Record<string, unknown> | undefined;
+    const fakeQuery = ((input: { options: Record<string, unknown> }) => {
+      options = input.options;
+      expect(existsSync(options.cwd as string)).toBe(true);
+      return {
+        initializationResult: async () => ({ models: [{ value: "sonnet", displayName: "Sonnet" }] }),
+        close: () => {},
+      };
+    }) as unknown as typeof query;
+    expect(await runProbe([], fakeQuery, () => {})).toBe(0);
+    expect(options?.cwd).not.toBe(process.cwd());
+    expect((options?.cwd as string).startsWith(`${tmpdir()}${sep}`)).toBe(true);
+    expect(options).toMatchObject({ mcpServers: {}, tools: [], allowedTools: [], disallowedTools: [], agents: {} });
+    for (const key of ["hooks", "systemPrompt", "canUseTool", "plugins"]) {
+      expect(options).not.toHaveProperty(key);
+    }
+  });
+
   it("keeps the runner catalog output unchanged without --usage", async () => {
     const usage = vi.fn();
     const fakeQuery = (() => ({

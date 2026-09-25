@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
+import { EventEmitter } from "node:events";
+import { PassThrough, Writable } from "node:stream";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import type { Envelope, WrapperConfig } from "@kaoiro/agent-common";
 import { CodexHost } from "../src/host.js";
 import { prepareCodexStartup } from "../src/startup.js";
+import { AppServerTransport } from "../src/app_server_transport.js";
+import { readStartupRateLimits } from "../src/startup_rate_limits.js";
 import type {
   CodexRateLimitSnapshot,
   CodexRateLimitWindow,
@@ -14,15 +19,60 @@ const config: WrapperConfig = {
   server_url: "ws://localhost:4000/wrapper",
 };
 
-describe("prepareCodexStartup (issue #251)", () => {
-  it("default host reaches the account read at fresh idle without injection", async () => {
-    const host = new CodexHost(config, { onState: () => {}, appendSystemPrompt: "p", now: () => "T" });
-    await host.probeAccountRateLimits();
-    expect(host.state).toBe("idle");
-    const windows = host.statusSnapshot().rate_limits;
-    if (windows !== undefined) {
-      expect(Object.keys(windows).every((key) => key === "five_hour" || key === "seven_day")).toBe(true);
+function rateLimitRpcChild() {
+  const child = new EventEmitter() as ChildProcessWithoutNullStreams;
+  const stdout = new PassThrough(), stderr = new PassThrough();
+  const methods: string[] = [];
+  const stdin = new Writable({ write(chunk, _encoding, done) {
+    const request = JSON.parse(String(chunk)) as { id?: number; method: string };
+    methods.push(request.method);
+    if (request.method === "initialize") {
+      stdout.write(JSON.stringify({ id: request.id, result: { userAgent: "fake/1" } }) + "\n");
+    } else if (request.method === "account/rateLimits/read") {
+      stdout.write(JSON.stringify({ id: request.id, result: { rateLimitsByLimitId: {
+        codex: { limitId: "codex", primary: { usedPercent: 23, windowDurationMins: 10080, resetsAt: 1790908233 } },
+        other: { limitId: "other", primary: { usedPercent: 90, windowDurationMins: 300, resetsAt: 1790908233 } },
+      } } }) + "\n");
     }
+    done();
+  } });
+  Object.assign(child, { stdin, stdout, stderr, exitCode: null, signalCode: null });
+  const finish = () => {
+    if (child.exitCode !== null) return;
+    Object.assign(child, { exitCode: 0 });
+    child.emit("exit", 0, null);
+    stdout.end(); stderr.end();
+    queueMicrotask(() => child.emit("close", 0, null));
+  };
+  stdin.on("finish", finish);
+  child.kill = () => { finish(); return true; };
+  return { child, methods };
+}
+
+describe("prepareCodexStartup (issue #251)", () => {
+  it("uses readStartupRateLimits as the default fresh-idle resolver", async () => {
+    const { child, methods } = rateLimitRpcChild();
+    const sent: Envelope[] = [];
+    const host = new CodexHost(config, {
+      onState: (event) => sent.push(event), appendSystemPrompt: "p", now: () => "T",
+      startupRateLimitTransportFactory: () => new AppServerTransport({ spawnChild: () => child }),
+    });
+    await prepareCodexStartup({ config, prompt: undefined, resumeSessionId: undefined, host,
+      link: { setSessionId: () => {}, send: (event) => sent.push(event) },
+      sidecar: { bind: () => {} }, printState: () => {}, now: () => "T" });
+    expect(sent[0]?.ext).not.toHaveProperty("rate_limits");
+    await vi.waitFor(() => expect(sent).toHaveLength(2));
+    expect(methods).toEqual(["initialize", "initialized", "account/rateLimits/read"]);
+    expect(host.statusSnapshot().rate_limits).toEqual({ seven_day: { utilization: 0.23, resets_at: 1790908233 } });
+    host.close();
+  });
+
+  it("converts the codex bucket from an RPC child through readStartupRateLimits", async () => {
+    const { child, methods } = rateLimitRpcChild();
+    const windows = await readStartupRateLimits(undefined,
+      () => new AppServerTransport({ spawnChild: () => child }));
+    expect(methods).toEqual(["initialize", "initialized", "account/rateLimits/read"]);
+    expect(windows).toEqual(new Map([["seven_day", { utilization: 0.23, resets_at: 1790908233 }]]));
   });
 
   it("fresh idle is immediate and the account snapshot follows before any turn", async () => {

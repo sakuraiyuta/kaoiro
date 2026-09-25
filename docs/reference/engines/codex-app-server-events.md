@@ -37,9 +37,10 @@ completion. No percentage or peer-facing context payload is inferred from those
 counts. Unsupported/malformed usage does not replace the last known value.
 
 `AppServerTransport` receives `account/rateLimits/updated` independently of any
-active turn. `AppServerSession` reads account limits once during start/resume;
-the host consumes that post-thread snapshot after its separate fresh-idle
-account probe, when both exist. The later native snapshot takes precedence.
+active turn. `AppServerSession` reads account limits once after opening or
+resuming a thread. The host treats that read as native: if it arrives before
+the separate fresh-idle probe finishes, the probe cannot replace it. If it
+arrives later, the native read replaces the startup snapshot.
 RPC errors, including unauthenticated reads, yield `readStatus=unavailable`
 without erasing notification evidence. Connection failures remain errors.
 Read responses cannot overwrite notifications received during that read or a
