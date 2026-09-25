@@ -14,6 +14,47 @@ jobs:
         working-directory: wrapper
     steps:
       - uses: actions/checkout@v4
+      # Codex's bubblewrap sandbox needs user namespaces: https://github.com/openai/codex-action/blob/main/action.yml#L290-L315
+      - name: Enable Codex sandbox user namespaces
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          configure_userns_sysctl() {
+            local key="$1"
+            local expected="$2"
+            local before after
+            before="$(sysctl -n "$key" 2>/dev/null || true)"
+            echo "$key before: ${before:-unavailable}"
+            if [ -z "$before" ]; then
+              echo "$key after: unavailable"
+              return
+            fi
+            if [ "$before" != "$expected" ]; then
+              if ! sudo sysctl -w "$key=$expected"; then
+                after="$(sysctl -n "$key" 2>/dev/null || true)"
+                echo "$key after: ${after:-unavailable}"
+                echo "::error::Could not set $key=$expected for the Codex sandbox."
+                exit 1
+              fi
+            fi
+            after="$(sysctl -n "$key" 2>/dev/null || true)"
+            echo "$key after: ${after:-unavailable}"
+            if [ "$after" != "$expected" ]; then
+              echo "::error::$key must be $expected for the Codex sandbox."
+              exit 1
+            fi
+          }
+
+          configure_userns_sysctl kernel.unprivileged_userns_clone 1
+          configure_userns_sysctl kernel.apparmor_restrict_unprivileged_userns 0
+
+          if unshare -Ur true; then
+            echo "Codex sandbox user namespace probe: passed"
+          else
+            echo "::error::Codex sandbox requires a usable unprivileged user namespace; M1/M2 were not run."
+            exit 1
+          fi
       - uses: pnpm/action-setup@v4
         with:
           version: 10.20.0
