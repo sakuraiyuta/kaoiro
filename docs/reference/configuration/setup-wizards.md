@@ -102,6 +102,13 @@ startup**.
   does not look.
 - **Generate `runner.env` at 0600** because it contains a token (issue #136).
   The launch shim `source`s it, so write its values quoted.
+- **The running runner also re-reports `agy --version`** on every
+  register/config-reload while antigravity is enabled, warning on stderr
+  when it changed since the last value this process observed. That
+  comparison is in-memory only (no on-disk state file), so a runner
+  restart loses the previous value and the first probe after restart
+  never warns even if the binary changed while the runner was down; the
+  value is not yet carried to the server/dashboard either (issue #410).
 - `runner.config.json` is the source of truth for `server_url` unless
   `KAOIRO_RUNNER_SERVER_URL` is set. The runner validates that override and
   applies it on initial load and every hot reload, so the environment value has
