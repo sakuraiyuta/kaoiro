@@ -685,8 +685,8 @@ covered the next time an epoch actually spawns on the new binary. A
 long-lived epoch keeps running its already-verified old binary until
 then -- not a gap, since that binary's gate registration was already
 confirmed before this epoch started (issue #387, director-approved design).
-Server/dashboard visibility of the reported version is a separate,
-not-yet-filed issue -- see the phase-34 plan's B4 row.
+Server/dashboard visibility of the reported version is a separate issue
+(#410) -- see the phase-34 plan's B8 row.
 
 ### F7 — Session capabilities in Stage A
 
