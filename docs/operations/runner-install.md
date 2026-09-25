@@ -2,7 +2,7 @@
 title: Runner install and distribution
 description: Build and distribute runner tarballs to agent hosts, install and switch releases, and run the runner as a systemd/launchd service.
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-09-26
 related: [deployment]
 ---
 
@@ -158,14 +158,12 @@ sudo loginctl enable-linger "$USER"   # Enable boot start without login
 - Status: `systemctl --user status kaoiro-runner`
 - Logs: `journalctl --user -u kaoiro-runner -f`
 - Forgetting `enable-linger` prevents starting at boot (starts only on login).
-  Furthermore, **the user systemd instance itself restarts on each SSH session,
-  restarting enabled units along with it** (verified on a real host in issue
-  #142, 2026-07-26). The restart policy (`Restart=on-failure` /
-  `RestartPreventExitStatus=78`) functions correctly within a single user systemd
-  instance, but verifying over SSH on a host without `enable-linger` looks
-  confusingly as if the unit restarts on every connection. When verifying "start
-  → restart on failure", complete it within a single SSH session, and do not
-  mistake timestamp changes across connections for a restart.
+- Without `enable-linger`, verify "start → restart on failure" within a
+  single SSH session: the user systemd instance restarts on every new
+  connection and restarts enabled units with it, so timestamp changes across
+  connections are not evidence of the `Restart=on-failure` /
+  `RestartPreventExitStatus=78` policy firing. Observation and its limits:
+  [runner user-systemd instance without linger](../evidence/deployment/runner-user-systemd-linger.md).
 
 ### macOS (launchd LaunchAgent)
 
