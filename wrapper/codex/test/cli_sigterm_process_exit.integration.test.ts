@@ -67,6 +67,22 @@ function allProcesses(): { pid: number; ppid: number; args: string }[] {
   }
 }
 
+function timeoutDiagnostics(stderr: string): string {
+  let version: string;
+  try {
+    version = execSync("codex --version", { stdio: ["ignore", "pipe", "pipe"] }).toString().trim();
+  } catch (error) {
+    version = `unavailable: ${String(error)}`;
+  }
+  let processes: string;
+  try {
+    processes = execSync("ps -eo pid,ppid,args", { stdio: ["ignore", "pipe", "pipe"] }).toString();
+  } catch (error) {
+    processes = `unavailable: ${String(error)}`;
+  }
+  return `\nchild stderr: ${stderr || "<empty>"}\ncodex --version: ${version}\nps snapshot:\n${processes}`;
+}
+
 function findDescendantByArgs(rootPid: number, needle: string): number | null {
   const all = allProcesses();
   const byPpid = new Map<number, typeof all>();
@@ -97,13 +113,13 @@ function findCodexExecPidOnce(parentPid: number): number | null {
 // any NTP/VM-suspend adjustment) can move Date.now() by seconds without any
 // time actually elapsing, producing both a false timeout here and a false
 // pass/fail on the elapsedMs bound below.
-async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
+async function waitFor(predicate: () => boolean, timeoutMs: number, diagnostics = ""): Promise<void> {
   const deadline = performance.now() + timeoutMs;
   while (performance.now() < deadline) {
     if (predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
-  throw new Error(`timed out after ${timeoutMs}ms`);
+  throw new Error(`timed out after ${timeoutMs}ms${diagnostics}`);
 }
 
 async function writeRunnerScript(root: string, wireUrl: string): Promise<string> {
@@ -202,7 +218,7 @@ enabled=false
         if (child.pid === undefined) return false;
         execChildPid = findCodexExecPidOnce(child.pid);
         return execChildPid !== null;
-      }, 15_000);
+      }, 15_000, timeoutDiagnostics(stderr));
       await waitFor(() => {
         sleepPid = findDescendantByArgs(execChildPid!, "sleep 77");
         return sleepPid !== null;

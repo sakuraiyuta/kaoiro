@@ -12,7 +12,7 @@ defmodule KaoiroServerWeb.PersonaControllerTest do
                json_response(conn, 200)
 
       assert version =~ ~r/^[0-9a-f]{16}$/
-      assert Map.keys(personas) |> Enum.sort() == ~w(ao fuji kohaku kuroe momo)
+      assert Map.keys(personas) |> Enum.sort() == ~w(ao fuji hiiro hisui kogane kohaku kuroe momo)
 
       assert %{"url" => "/personas/ao/idle.png?v=" <> _, "hash" => _} =
                personas["ao"]["states"]["idle"]

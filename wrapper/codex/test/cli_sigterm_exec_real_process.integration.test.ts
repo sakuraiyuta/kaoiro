@@ -62,6 +62,22 @@ function allProcesses(): { pid: number; ppid: number; args: string }[] {
   }
 }
 
+function timeoutDiagnostics(stderr: string): string {
+  let version: string;
+  try {
+    version = execSync("codex --version", { stdio: ["ignore", "pipe", "pipe"] }).toString().trim();
+  } catch (error) {
+    version = `unavailable: ${String(error)}`;
+  }
+  let processes: string;
+  try {
+    processes = execSync("ps -eo pid,ppid,args", { stdio: ["ignore", "pipe", "pipe"] }).toString();
+  } catch (error) {
+    processes = `unavailable: ${String(error)}`;
+  }
+  return `\nchild stderr: ${stderr || "<not captured by the in-process SDK>"}\ncodex --version: ${version}\nps snapshot:\n${processes}`;
+}
+
 function findCodexExecPidOnce(parentPid: number): number | null {
   const direct = allProcesses().filter((p) => p.ppid === parentPid && p.args.includes("codex exec"));
   return direct[0]?.pid ?? null;
@@ -92,13 +108,13 @@ function findDescendantByArgs(rootPid: number, needle: string): number | null {
 // issue #391 round2 S2: monotonic, not wall-clock -- a WSL2 clock step (or
 // any NTP/VM-suspend adjustment) can move Date.now() by seconds without any
 // time actually elapsing, producing a false timeout here.
-async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
+async function waitFor(predicate: () => boolean, timeoutMs: number, diagnostics = ""): Promise<void> {
   const deadline = performance.now() + timeoutMs;
   while (performance.now() < deadline) {
     if (predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
-  throw new Error(`timed out after ${timeoutMs}ms`);
+  throw new Error(`timed out after ${timeoutMs}ms${diagnostics}`);
 }
 
 it.skipIf(!isLinux)(
@@ -176,7 +192,7 @@ enabled=false
       wire.push("persona_prompt", { prompt: "test" });
       wire.push("permission_sync", { version: "0", control: null, next: null });
 
-      await waitFor(() => (execChildPid = findCodexExecPidOnce(process.pid)) !== null, 15_000);
+      await waitFor(() => (execChildPid = findCodexExecPidOnce(process.pid)) !== null, 15_000, timeoutDiagnostics(""));
       await waitFor(() => (sleepPid = findDescendantByArgs(execChildPid!, "sleep 77")) !== null, 15_000);
       expect(isAlive(execChildPid!)).toBe(true);
       expect(isAlive(sleepPid!)).toBe(true);
