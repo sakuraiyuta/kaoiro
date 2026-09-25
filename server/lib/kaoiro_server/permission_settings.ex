@@ -78,20 +78,27 @@ defmodule KaoiroServer.PermissionSettings do
   @doc """
   Field-level, revision-checked ingestion of a wrapper-reported
   `ext.permission_control` map (string-keyed, as received off the wire).
-  Fire-and-forget (matches `record_snapshot_from_ext`'s call shape) —
-  malformed shapes and stale/newer-than-known revisions are dropped
-  (logged), never raised, and always return `:ok`.
+  The observation is processed synchronously. A successful call returns one of:
+
+  - `{:confirmed, %{engine: engine, effective: effective}}` when this exact
+    observation confirms the current revision as applied after the server's
+    merge.
+  - `:not_confirmed` for malformed shapes, stale or unallocated revisions,
+    and observations that do not leave the current control applied.
 
   When no settings exist yet for `agent_id` (or the stored `engine`
   differs from this report's), this call *seeds* a fresh baseline from
   the report rather than rejecting it — this is how the wrapper's
   post-join initial `ext.permission_control` (protocol.md's revision-0
   baseline) enters the store. Seeding never touches the counter.
+
+  A caller that times out still leaves this serialized operation queued in
+  the store; it may persist after the caller has stopped waiting. Callers
+  must not infer confirmation from a later read of the stored entry.
   """
   def record_observation(agent_id, engine, permission_control, server \\ __MODULE__)
       when is_binary(agent_id) and is_binary(engine) do
-    GenServer.cast(server, {:record_observation, agent_id, engine, permission_control})
-    :ok
+    GenServer.call(server, {:record_observation, agent_id, engine, permission_control})
   end
 
   @doc "The agent's current `%{engine, control, next}` record, or `nil`."
@@ -220,19 +227,23 @@ defmodule KaoiroServer.PermissionSettings do
   end
 
   @impl true
-  def handle_cast({:record_observation, agent_id, engine, permission_control}, state) do
+  def handle_call({:record_observation, agent_id, engine, permission_control}, _from, state) do
     case State.sanitize_control(permission_control) do
       nil ->
         Logger.warning(
           "permission_control ingest rejected (agent_id=#{agent_id}, malformed shape)"
         )
 
-        {:noreply, state}
+        {:reply, :not_confirmed, state}
 
       sanitized ->
         entry = Map.get(state.settings, agent_id)
         counter = Map.get(state.counters, agent_id, 0)
-        {:noreply, apply_observation(agent_id, entry, engine, sanitized, counter, state)}
+
+        {result, next_state} =
+          apply_observation(agent_id, entry, engine, sanitized, counter, state)
+
+        {:reply, result, next_state}
     end
   end
 
@@ -292,7 +303,9 @@ defmodule KaoiroServer.PermissionSettings do
   defp apply_observation(agent_id, entry, engine, sanitized, counter, state) do
     case State.observe(entry, engine, sanitized, counter) do
       {:ok, new_entry} ->
-        write_settings(agent_id, new_entry, state)
+        next_state = write_settings(agent_id, new_entry, state)
+
+        {confirmation_result(sanitized, new_entry), next_state}
 
       {:reject, :unallocated_seed, revision, known_counter} ->
         Logger.warning(
@@ -300,7 +313,7 @@ defmodule KaoiroServer.PermissionSettings do
             "unallocated baseline revision #{revision} > known #{known_counter})"
         )
 
-        state
+        {:not_confirmed, state}
 
       {:reject, :unknown_revision, revision, known_revision} ->
         # A revision the server never allocated for this agent. Never
@@ -311,12 +324,25 @@ defmodule KaoiroServer.PermissionSettings do
             "unknown revision #{revision} > known #{known_revision})"
         )
 
-        state
+        {:not_confirmed, state}
 
       :no_change ->
-        state
+        {:not_confirmed, state}
     end
   end
+
+  defp confirmation_result(
+         %{revision: revision, status: :applied},
+         %{
+           engine: engine,
+           control: %{revision: revision, status: :applied, effective: effective}
+         }
+       )
+       when is_map(effective) do
+    {:confirmed, %{engine: engine, effective: effective}}
+  end
+
+  defp confirmation_result(_sanitized, _entry), do: :not_confirmed
 
   defp write_settings(agent_id, entry, state) do
     :ok = :dets.insert(state.table, {{:settings, agent_id}, entry})

@@ -112,13 +112,21 @@ The live wrapper's launch configuration is the explicit baseline in that case.
 Delete removes per-agent PermissionSettings (not the revision allocator or audit
 history); an engine change must not replay another engine's settings.
 
-A current confirmed permission observation updates only the relevant snapshot
-fields and preserves unrelated model/effort fields. It must still be recorded
-when model/effort is pending or failed; the model switch's whole-snapshot skip
-must not discard independently observed permissions. Conversely, generic state
-snapshots must not overwrite permission fields with pending, unknown, or stale
-values. Persisted snapshots remain last observed even while current permission
-is unknown. Intentional sandbox/network changes are excluded from resume drift;
+A permission observation updates the resume snapshot only when that exact
+observation is applied at the store's current revision after server-side merge.
+A retained applied control is not confirmation for a different or stale
+observation. If the permission store call exits or times out, skip the snapshot
+write and keep the wrapper channel alive. A timed-out store call may still finish
+and persist the observation after the caller stops waiting; that late write does
+not retroactively authorize a snapshot update.
+
+A confirmed observation updates only the relevant snapshot fields and preserves
+unrelated model/effort fields. It must still be recorded when model/effort is
+pending or failed; the model switch's whole-snapshot skip must not discard
+independently observed permissions. Conversely, generic state snapshots must
+not overwrite permission fields with pending, unknown, or stale values.
+Persisted snapshots remain last observed even while current permission is
+unknown. Intentional sandbox/network changes are excluded from resume drift;
 unintended host substitutions remain visible.
 
 **Drift comparison while observation is pending.** When permission_control is

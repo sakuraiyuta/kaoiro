@@ -48,7 +48,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
   end
 
   defp seed_baseline(server, agent_id, overrides \\ %{}) do
-    :ok =
+    _ =
       PermissionSettings.record_observation(
         agent_id,
         "codex",
@@ -57,6 +57,63 @@ defmodule KaoiroServer.PermissionSettingsTest do
       )
 
     :ok = wait_until(fn -> PermissionSettings.get(agent_id, server) != nil end)
+  end
+
+  describe "record_observation/4 confirmation" do
+    test "confirms only an applied observation for the current revision", %{server: server} do
+      agent_id = "confirm.current"
+      seed_baseline(server, agent_id)
+
+      {:ok, 1, requested} =
+        PermissionSettings.submit_request(
+          agent_id,
+          "codex",
+          %{sandbox: "workspace-write"},
+          %{kind: "user", id: "u1"},
+          "t",
+          server
+        )
+
+      current_effective = %{
+        "permission" => %{"sandbox" => requested.sandbox},
+        "network_access" => requested.network_access
+      }
+
+      assert {:confirmed, %{engine: "codex", effective: ^current_effective}} =
+               PermissionSettings.record_observation(
+                 agent_id,
+                 "codex",
+                 baseline_control(%{
+                   "revision" => 1,
+                   "requested" => %{
+                     "sandbox" => requested.sandbox,
+                     "network_access" => requested.network_access
+                   },
+                   "status" => "applied",
+                   "effective" => current_effective
+                 }),
+                 server
+               )
+
+      stale_effective = %{
+        "permission" => %{"sandbox" => "read-only"},
+        "network_access" => false
+      }
+
+      assert :not_confirmed =
+               PermissionSettings.record_observation(
+                 agent_id,
+                 "codex",
+                 baseline_control(%{
+                   "status" => "applied",
+                   "effective" => stale_effective
+                 }),
+                 server
+               )
+
+      assert %{control: %{revision: 1, status: :applied}} =
+               PermissionSettings.get(agent_id, server)
+    end
   end
 
   # ---- submit_request ---------------------------------------------------
@@ -391,7 +448,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
           server
         )
 
-      :ok =
+      _ =
         PermissionSettings.record_observation(
           "b.2",
           "claude-code",
@@ -422,7 +479,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
       seed_baseline(server, "b.3")
       before = PermissionSettings.get("b.3", server)
 
-      :ok =
+      _ =
         PermissionSettings.record_observation(
           "b.3",
           "codex",
@@ -430,11 +487,10 @@ defmodule KaoiroServer.PermissionSettingsTest do
           server
         )
 
-      :ok = PermissionSettings.record_observation("b.3", "codex", %{}, server)
+      _ = PermissionSettings.record_observation("b.3", "codex", %{}, server)
 
-      # No async op to wait on that would prove a negative; a subsequent
-      # synchronous call ordering-guarantees the casts above were
-      # processed first.
+      # Both observations are synchronous, so this read also confirms that
+      # malformed input left the stored entry unchanged.
       assert PermissionSettings.get("b.3", server) == before
     end
 
@@ -451,7 +507,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
           server
         )
 
-      :ok =
+      _ =
         PermissionSettings.record_observation(
           "b.4",
           "codex",
@@ -481,7 +537,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
 
       effective = %{"session_id" => "s1", "turn_id" => "t1", "execution_id" => "e1"}
 
-      :ok =
+      _ =
         PermissionSettings.record_observation(
           "b.5",
           "codex",
@@ -515,7 +571,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
           server
         )
 
-      :ok =
+      _ =
         PermissionSettings.record_observation(
           "b.6",
           "codex",
@@ -557,7 +613,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
 
       submitted = %{"execution_id" => "e1", "revision" => 1}
 
-      :ok =
+      _ =
         PermissionSettings.record_observation(
           "b.7",
           "codex",
@@ -573,7 +629,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
       :ok =
         wait_until(fn -> PermissionSettings.get("b.7", server).control.status == :applying end)
 
-      :ok =
+      _ =
         PermissionSettings.record_observation(
           "b.7",
           "codex",
@@ -626,7 +682,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
 
       # Revision 1's exec finally reports back after revision 2 already
       # superseded it as the current control/next.
-      :ok =
+      _ =
         PermissionSettings.record_observation(
           "b.8",
           "codex",
@@ -651,7 +707,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
 
       # A stale FAILURE (as opposed to applied) must not even update
       # last_effective.
-      :ok =
+      _ =
         PermissionSettings.record_observation(
           "b.8",
           "codex",
@@ -702,7 +758,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
       effective = %{"session_id" => "s1", "turn_id" => "t1", "execution_id" => "e1"}
       forged = %{"sandbox" => "danger-full-access", "network_access" => true}
 
-      :ok =
+      _ =
         PermissionSettings.record_observation(
           "b.9",
           "codex",
@@ -727,7 +783,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
     test "a failed control's rolled_back_to carries the approval axis (issue #359)", %{
       server: server
     } do
-      :ok =
+      _ =
         PermissionSettings.record_observation(
           "ag.rb1",
           "antigravity",
@@ -774,7 +830,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
 
     test "a rolled_back_to with a malformed approval is dropped (issue #359 negative control)",
          %{server: server} do
-      :ok =
+      _ =
         PermissionSettings.record_observation(
           "ag.rb2",
           "antigravity",
@@ -812,7 +868,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
   describe "M3 ledger" do
     test "an unallocated non-zero revision cannot seed a first-ever baseline (M3-a)",
          %{server: server} do
-      :ok =
+      _ =
         PermissionSettings.record_observation(
           "c.unallocated",
           "codex",
@@ -868,7 +924,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
         "execution_id" => "exec-1"
       }
 
-      :ok =
+      _ =
         PermissionSettings.record_observation(
           "c.mismatch",
           "codex",
@@ -945,7 +1001,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
           server
         )
 
-      :ok =
+      _ =
         PermissionSettings.record_observation(
           "c.mismatch-no-submitted",
           "codex",
@@ -984,7 +1040,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
 
       forged = %{"sandbox" => "danger-full-access", "network_access" => true}
 
-      :ok =
+      _ =
         PermissionSettings.record_observation(
           "c.mismatch-wide",
           "codex",
@@ -1035,7 +1091,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
 
       submitted = %{"revision" => 1, "requested" => %{"sandbox" => "workspace-write"}}
 
-      :ok =
+      _ =
         PermissionSettings.record_observation(
           "c.successor",
           "codex",
@@ -1099,7 +1155,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
 
       sub_a = Map.take(obs_a, ["revision", "requested", "execution_id"])
 
-      :ok =
+      _ =
         PermissionSettings.record_observation(
           "c.rollback",
           "codex",
@@ -1132,7 +1188,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
       # carries A's lingering `submitted` (protocol.md: "Retain A's
       # submission and request binding"), so `submitted == nil` alone
       # cannot signal the rollback — `rolled_back_to` does.
-      :ok =
+      _ =
         PermissionSettings.record_observation(
           "c.rollback",
           "codex",
@@ -1194,7 +1250,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
         "network_access" => false
       }
 
-      :ok =
+      _ =
         PermissionSettings.record_observation(
           "c.rollback-forged",
           "codex",
@@ -1228,7 +1284,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
       # never appears anywhere in this agent's real ledger history.
       forged_rollback = %{"sandbox" => "danger-full-access", "network_access" => true}
 
-      :ok =
+      _ =
         PermissionSettings.record_observation(
           "c.rollback-forged",
           "codex",
@@ -1303,7 +1359,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
         {:ok, ^revision, requested} =
           PermissionSettings.submit_request(id, "codex", %{sandbox: sandbox}, actor, at, server)
 
-        :ok =
+        _ =
           PermissionSettings.record_observation(
             id,
             "codex",
@@ -1407,7 +1463,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
 
       submitted = %{"execution_id" => "e1", "revision" => 1}
 
-      :ok =
+      _ =
         PermissionSettings.record_observation(
           "c.unknown-restart",
           "codex",
@@ -1495,7 +1551,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
 
       effective = %{"session_id" => "s1", "turn_id" => "t1", "execution_id" => "e1"}
 
-      :ok =
+      _ =
         PermissionSettings.record_observation(
           "c.2",
           "codex",
@@ -1534,7 +1590,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
           server
         )
 
-      :ok =
+      _ =
         PermissionSettings.record_observation(
           "c.3",
           "codex",
@@ -1587,7 +1643,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
 
       submitted = %{"execution_id" => "e1", "revision" => 1}
 
-      :ok =
+      _ =
         PermissionSettings.record_observation(
           "c.5",
           "codex",
@@ -1626,7 +1682,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
           server
         )
 
-      :ok =
+      _ =
         PermissionSettings.record_observation(
           "c.6",
           "codex",
@@ -1735,7 +1791,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
           )
         )
 
-      :ok = PermissionSettings.record_observation(id, "codex", control, server)
+      _ = PermissionSettings.record_observation(id, "codex", control, server)
       PermissionSettings.get(id, server)
     end
 
@@ -1810,7 +1866,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
       "execution_id" => "exec-1"
     }
 
-    :ok =
+    _ =
       PermissionSettings.record_observation(
         id,
         "codex",
@@ -1825,7 +1881,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
 
     :ok = wait_until(fn -> PermissionSettings.get(id, server).control.submitted == submitted end)
 
-    :ok =
+    _ =
       PermissionSettings.record_observation(
         id,
         "codex",

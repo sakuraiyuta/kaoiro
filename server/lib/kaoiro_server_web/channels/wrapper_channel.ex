@@ -1843,8 +1843,8 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # the last turn that completed without an outstanding switch (ADR-0035 F3).
   # sandbox/network_access do NOT need a carve-out here despite also living
   # in this same `effective` map: they confirm through their own independent
-  # machinery (`record_confirmed_permission_snapshot/2` below, sourced from
-  # `permission_control` rather than this `effective` map), so this guard
+  # machinery (`record_confirmed_permission_snapshot/3` below, sourced from
+  # the accepted `permission_control` result), so this guard
   # skipping the whole map on THEIR account never actually withholds them.
   defp record_snapshot_from_ext(agent_id, %{
          "ext" => %{"effective" => effective} = ext
@@ -1864,78 +1864,62 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # while a model/effort switch is pending or failed — the whole-snapshot
   # skip that guard exists for must not also discard an unrelated,
   # independently observed permission update. Malformed/absent shapes
-  # and stale/unknown revisions are `PermissionSettings.record_observation/4`'s
-  # own concern; this clause only extracts the fields.
+  # and stale/unknown revisions never return a confirmation; snapshot
+  # publication uses only that store result.
   defp record_permission_observation(agent_id, %{
          "ext" => %{"permission_control" => permission_control, "engine" => engine}
        })
        when is_map(permission_control) and
               engine in ["claude-code", "codex", "antigravity"] do
-    KaoiroServer.PermissionSettings.record_observation(agent_id, engine, permission_control)
-    record_confirmed_permission_snapshot(agent_id)
+    case record_permission_observation_safely(agent_id, engine, permission_control) do
+      {:confirmed, %{engine: confirmed_engine, effective: effective}} ->
+        record_confirmed_permission_snapshot(agent_id, confirmed_engine, effective)
+
+      :not_confirmed ->
+        :ok
+    end
   end
 
   defp record_permission_observation(_agent_id, _envelope), do: :ok
 
-  # Forwards the CONFIRMED sandbox/network_access pair into SessionPointers'
-  # resume snapshot, independent of `record_snapshot_from_ext/2`'s
-  # model/effort switch guard above (issue #305 M4, ふじ round 1): a
-  # permission observation confirms through its own machinery entirely
-  # unrelated to a model/effort switch, so a pending/failed model switch
-  # must not hide an already-applied sandbox/network_access change from the
-  # next resume. Only `status == :applied` is confirmed enough to publish
-  # here (protocol.md's state table: pending/applying/failed/unknown have
-  # no current effective permission to report). `SessionPointers.record_snapshot/3`'s
-  # field-level merge (M4) means this 2-key map only ever touches these two
-  # fields, leaving model/effort/etc. exactly as they were.
-  #
-  # Reads `PermissionSettings.get/1` — the server's OWN post-merge
-  # verdict — rather than the wrapper's raw wire status/effective
-  # (code-review-assessment finding, issue #305 round 1): `record_observation/4`
-  # just above is a `GenServer.cast`, but a `get/1` call sent right after
-  # from this same process is guaranteed to be processed after it (FIFO
-  # mailbox, same sender/target), so this always sees the JUST-merged
-  # state. This matters because `merge_current_revision/4`'s M3(b) fix
-  # can override a wrapper's self-reported "applied" to `:failed` /
-  # "policy_mismatch" when `requested` disagrees with what the server
-  # actually accepted — reading the raw wire status instead would forward
-  # a forged/buggy pair straight into the resume snapshot, which is later
-  # replayed as the agent's literal next-launch sandbox/network_access.
-  defp record_confirmed_permission_snapshot(agent_id) do
-    case KaoiroServer.PermissionSettings.get(agent_id) do
-      %{
-        engine: engine,
-        control: %{
-          status: :applied,
-          effective: %{
-            "permission" => %{"sandbox" => sandbox} = permission,
-            "network_access" => network_access
-          }
-        }
-      }
-      when is_binary(sandbox) and is_boolean(network_access) ->
-        # issue #359: approval is Antigravity's mutable axis, so a confirmed
-        # applied observation must carry it into the resume snapshot on the
-        # same independent path as sandbox/network_access — otherwise an
-        # approval switch applied while a model switch is pending never
-        # reaches SessionPointers (protocol.md field-level persistence). Only
-        # Antigravity re-applies approval on resume; Codex's approval is
-        # host-fixed and not a resume axis, so it is NOT persisted here (its
-        # snapshot stays sandbox/network only). record_snapshot validates
-        # approval against its own enum and merges field-level.
-        approval =
-          if engine == "antigravity", do: Map.get(permission, "approval"), else: nil
+  defp record_permission_observation_safely(agent_id, engine, permission_control) do
+    KaoiroServer.PermissionSettings.record_observation(agent_id, engine, permission_control)
+  catch
+    :exit, reason ->
+      Logger.warning(
+        "permission settings unavailable (#{inspect(reason)}); skipping permission snapshot write"
+      )
 
-        SessionPointers.record_snapshot(
-          agent_id,
-          %{"sandbox" => sandbox, "network_access" => network_access}
-          |> put_snapshot_approval(approval)
-        )
-
-      _other ->
-        :ok
-    end
+      :not_confirmed
   end
+
+  # PermissionSettings already decided that this exact observation survived
+  # the server-side merge as the current applied revision. A later get would
+  # see processed state because same-sender calls follow prior casts, but
+  # could not distinguish this confirmation from an older applied control
+  # retained after a stale :no_change result. The field-level snapshot merge
+  # keeps model/effort and other axes intact.
+  defp record_confirmed_permission_snapshot(
+         agent_id,
+         engine,
+         %{
+           "permission" => %{"sandbox" => sandbox} = permission,
+           "network_access" => network_access
+         }
+       )
+       when is_binary(sandbox) and is_boolean(network_access) do
+    # Antigravity's mutable approval axis is resumed; Codex approval is
+    # host-fixed and remains outside this snapshot projection.
+    approval = if engine == "antigravity", do: Map.get(permission, "approval"), else: nil
+
+    SessionPointers.record_snapshot(
+      agent_id,
+      %{"sandbox" => sandbox, "network_access" => network_access}
+      |> put_snapshot_approval(approval)
+    )
+  end
+
+  defp record_confirmed_permission_snapshot(_agent_id, _engine, _effective), do: :ok
 
   defp put_snapshot_approval(map, approval) when is_binary(approval),
     do: Map.put(map, "approval", approval)

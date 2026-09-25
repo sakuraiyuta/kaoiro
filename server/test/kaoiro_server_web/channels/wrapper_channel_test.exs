@@ -1935,7 +1935,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     end
 
     defp seed_permission_settings(agent_id, engine, overrides \\ %{}) do
-      :ok =
+      _ =
         KaoiroServer.PermissionSettings.record_observation(
           agent_id,
           engine,
@@ -2013,7 +2013,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
       effective = %{"session_id" => "s1", "turn_id" => "t1", "execution_id" => "e1"}
 
-      :ok =
+      _ =
         KaoiroServer.PermissionSettings.record_observation(
           agent_id,
           "codex",
@@ -2170,6 +2170,201 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert snap["sandbox"] == "workspace-write"
       # The model switch is still pending, so the model snapshot stays baseline.
       assert snap["model"] == "gemini"
+    end
+
+    test "stale pending baseline does not republish an earlier applied permission" do
+      agent_id = "test.permsync-stale-pending"
+      seed_snapshot(agent_id, "m1")
+      prior_snapshot = %{"sandbox" => "workspace-write", "network_access" => true}
+      SessionPointers.record_snapshot(agent_id, prior_snapshot)
+      _ = :sys.get_state(SessionPointers)
+
+      seed_permission_settings(agent_id, "codex")
+
+      {:ok, 1, requested} =
+        KaoiroServer.PermissionSettings.submit_request(
+          agent_id,
+          "codex",
+          %{sandbox: "workspace-write", network_access: false},
+          %{kind: "user", id: "u1"},
+          "t"
+        )
+
+      requested_wire = %{
+        "sandbox" => requested.sandbox,
+        "network_access" => requested.network_access
+      }
+
+      old_effective = %{
+        "permission" => %{"sandbox" => "workspace-write"},
+        "network_access" => false
+      }
+
+      _ =
+        KaoiroServer.PermissionSettings.record_observation(
+          agent_id,
+          "codex",
+          permission_control(%{
+            "revision" => 1,
+            "requested" => requested_wire,
+            "status" => "applied",
+            "effective" => old_effective
+          })
+        )
+
+      socket = join_wrapper(agent_id)
+
+      stale_pending =
+        envelope(agent_id, "idle")
+        |> Map.put("ext", %{
+          "engine" => "codex",
+          "permission_control" => permission_control()
+        })
+
+      assert_reply push(socket, "envelope", stale_pending), :ok
+      assert SessionPointers.get(agent_id).snapshot == Map.put(prior_snapshot, "model", "m1")
+
+      current_effective = %{
+        "permission" => %{"sandbox" => "workspace-write"},
+        "network_access" => false
+      }
+
+      current_applied =
+        envelope(agent_id, "idle")
+        |> Map.put("ext", %{
+          "engine" => "codex",
+          "permission_control" =>
+            permission_control(%{
+              "revision" => 1,
+              "requested" => requested_wire,
+              "status" => "applied",
+              "effective" => current_effective
+            })
+        })
+
+      assert_reply push(socket, "envelope", current_applied), :ok
+
+      :ok =
+        wait_until(fn ->
+          SessionPointers.get(agent_id).snapshot ==
+            Map.merge(prior_snapshot, %{
+              "model" => "m1",
+              "sandbox" => "workspace-write",
+              "network_access" => false
+            })
+        end)
+    end
+
+    test "an Antigravity launch-ceiling failure does not publish the stored applied value" do
+      agent_id = "test.permsync-ceiling-failed"
+      seed_snapshot(agent_id, "m1")
+
+      prior_snapshot = %{
+        "sandbox" => "workspace-write",
+        "network_access" => false,
+        "approval" => "on-request"
+      }
+
+      SessionPointers.record_snapshot(agent_id, prior_snapshot)
+      _ = :sys.get_state(SessionPointers)
+
+      over_ceiling = %{
+        "sandbox" => "danger-full-access",
+        "network_access" => true,
+        "approval" => "never"
+      }
+
+      over_effective = %{
+        "permission" => %{
+          "sandbox" => "danger-full-access",
+          "approval" => "never"
+        },
+        "network_access" => true
+      }
+
+      seed_permission_settings(agent_id, "antigravity", %{
+        "status" => "applied",
+        "requested" => over_ceiling,
+        "constraints" => %{"approval" => "never", "enforcement" => "advisory"},
+        "effective" => over_effective
+      })
+
+      socket = join_wrapper(agent_id)
+
+      failed =
+        permission_control(%{
+          "requested" => over_ceiling,
+          "status" => "failed",
+          "reason" => "exceeds_launch_ceiling",
+          "rolled_back_to" => prior_snapshot,
+          "constraints" => %{"approval" => "never", "enforcement" => "advisory"}
+        })
+
+      env =
+        envelope(agent_id, "idle")
+        |> Map.put("ext", %{"engine" => "antigravity", "permission_control" => failed})
+
+      assert_reply push(socket, "envelope", env), :ok
+
+      entry = KaoiroServer.PermissionSettings.get(agent_id)
+      assert entry.control.status == :failed
+      assert entry.control.reason == "exceeds_launch_ceiling"
+      assert SessionPointers.get(agent_id).snapshot == Map.put(prior_snapshot, "model", "m1")
+    end
+
+    test "a suspended permission store times out without taking down the channel or writing a snapshot" do
+      agent_id = "test.permsync-store-timeout"
+      seed_snapshot(agent_id, "m1")
+      prior_snapshot = %{"sandbox" => "workspace-write", "network_access" => true}
+      SessionPointers.record_snapshot(agent_id, prior_snapshot)
+      _ = :sys.get_state(SessionPointers)
+
+      old_effective = %{
+        "permission" => %{"sandbox" => "workspace-write"},
+        "network_access" => true
+      }
+
+      seed_permission_settings(agent_id, "codex", %{
+        "status" => "applied",
+        "requested" => %{"sandbox" => "workspace-write", "network_access" => true},
+        "effective" => old_effective
+      })
+
+      socket = join_wrapper(agent_id)
+
+      new_effective = %{
+        "permission" => %{"sandbox" => "read-only"},
+        "network_access" => false
+      }
+
+      env =
+        envelope(agent_id, "idle")
+        |> Map.put("ext", %{
+          "engine" => "codex",
+          "permission_control" =>
+            permission_control(%{
+              "status" => "applied",
+              "requested" => %{"sandbox" => "workspace-write", "network_access" => true},
+              "effective" => new_effective
+            })
+        })
+
+      :ok = :sys.suspend(KaoiroServer.PermissionSettings)
+
+      try do
+        assert_reply push(socket, "envelope", env), :ok, %{}, 6_000
+        assert Process.alive?(socket.channel_pid)
+        assert SessionPointers.get(agent_id).snapshot == Map.put(prior_snapshot, "model", "m1")
+      after
+        :ok = :sys.resume(KaoiroServer.PermissionSettings)
+      end
+
+      :ok =
+        wait_until(fn ->
+          KaoiroServer.PermissionSettings.get(agent_id).control.effective == new_effective
+        end)
+
+      assert SessionPointers.get(agent_id).snapshot == Map.put(prior_snapshot, "model", "m1")
     end
   end
 
@@ -2680,7 +2875,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
         "constraints" => %{"approval" => "never", "enforcement" => "os"}
       }
 
-      :ok = KaoiroServer.PermissionSettings.record_observation(agent_id, "codex", seed_control)
+      _ = KaoiroServer.PermissionSettings.record_observation(agent_id, "codex", seed_control)
 
       :ok =
         wait_until(fn -> KaoiroServer.PermissionSettings.get(agent_id) != nil end)
@@ -2720,7 +2915,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
         "constraints" => %{"approval" => "never", "enforcement" => "os"}
       }
 
-      :ok = KaoiroServer.PermissionSettings.record_observation(agent_id, "codex", seed_control)
+      _ = KaoiroServer.PermissionSettings.record_observation(agent_id, "codex", seed_control)
 
       {:ok, 1, _requested} =
         KaoiroServer.PermissionSettings.submit_request(

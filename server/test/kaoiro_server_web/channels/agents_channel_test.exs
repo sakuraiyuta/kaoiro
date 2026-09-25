@@ -1313,7 +1313,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         "constraints" => %{"approval" => "never", "enforcement" => "os"}
       }
 
-      :ok = KaoiroServer.PermissionSettings.record_observation(agent_id, engine, control)
+      _ = KaoiroServer.PermissionSettings.record_observation(agent_id, engine, control)
 
       :ok =
         wait_until_permission(fn ->
@@ -1755,7 +1755,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         "permission" => %{"sandbox" => "workspace-write", "approval" => "never"}
       }
 
-      :ok =
+      _ =
         KaoiroServer.PermissionSettings.record_observation(agent_id, "codex", %{
           "revision" => 1,
           "requested" => %{"sandbox" => "workspace-write", "network_access" => false},
@@ -1825,7 +1825,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
           "permission" => %{"sandbox" => "read-only", "approval" => "never"}
         }
 
-        :ok =
+        _ =
           KaoiroServer.PermissionSettings.record_observation(agent_id, "codex", %{
             "revision" => 0,
             "requested" => %{"sandbox" => "read-only", "network_access" => false},
