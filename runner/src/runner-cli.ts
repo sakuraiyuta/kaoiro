@@ -24,6 +24,7 @@ import { ClaudeCatalogCache } from "./claude_catalog_cache.js";
 import { makeRefreshEngineCatalogHandler } from "./engine_catalog_refresh.js";
 import { type CodexAuthMode, resolveCodexAuthMode } from "./codex-auth.js";
 import { resolveAntigravityCatalog } from "./antigravity-catalog.js";
+import { resolveAgyVersion } from "./antigravity-version.js";
 import {
   DEFAULT_AGY_PROBE_TIMEOUT_MS,
   resolveAgyExecutable,
@@ -117,6 +118,7 @@ export interface RunnerCliDependencies {
   resolveCodexAuthMode?: typeof resolveCodexAuthMode;
   resolveAgyExecutable?: typeof resolveAgyExecutable;
   resolveAntigravityCatalog?: typeof resolveAntigravityCatalog;
+  resolveAgyVersion?: typeof resolveAgyVersion;
   makeLauncher?: typeof makeLauncher;
   createSupervisor?: (options: SupervisorOptions) => Supervisor;
   createRunnerLink?: (
@@ -144,6 +146,7 @@ export async function runRunnerCli(
   const resolveCodex = dependencies.resolveCodexAuthMode ?? resolveCodexAuthMode;
   const resolveExecutable = dependencies.resolveAgyExecutable ?? resolveAgyExecutable;
   const resolveCatalog = dependencies.resolveAntigravityCatalog ?? resolveAntigravityCatalog;
+  const resolveVersion = dependencies.resolveAgyVersion ?? resolveAgyVersion;
   const createLauncher = dependencies.makeLauncher ?? makeLauncher;
   const createSupervisor = dependencies.createSupervisor ?? ((options) => new Supervisor(options));
   const createRunnerLink = dependencies.createRunnerLink
@@ -192,6 +195,27 @@ export async function runRunnerCli(
           antigravityExecutable,
           antigravityProbeTimeoutMs,
         );
+  // issue #387 Part 2(A): `agy --version` alongside the catalog probe above,
+  // reported for operator visibility only. Kept in-memory (no on-disk state
+  // file exists for runner-side probe results) — compared only across
+  // reloads of THIS process; a fresh runner process has no "last register"
+  // to diff against, which is intentional (see design decision below).
+  let antigravityVersion: string | null =
+    antigravityExecutable === undefined
+      ? null
+      : await resolveVersion(antigravityExecutable, antigravityProbeTimeoutMs);
+  if (antigravityVersion !== null) {
+    process.stderr.write(`runner: antigravity agy version ${antigravityVersion}\n`);
+  }
+  // Design decision (issue #387, director-approved): a version change is
+  // reported here as a warning ONLY — it does not re-trigger the wrapper's
+  // gate registration smoke test. That check already re-runs on every fresh
+  // `agy` process spawn regardless of cause (host.ts `#verifyGateRegistration`,
+  // called from `#spawnEpoch`, host.ts:1732; no caching, host.ts:1939-), so a
+  // version bump is covered the next time an epoch actually spawns on the new
+  // binary. A live epoch keeps running its already-verified old binary until
+  // then — not an active gap, since that binary's gate registration was
+  // already confirmed.
 
   // link is assigned just below; the supervisor only calls sendResult after a
   // spawn arrives, long after assignment (mirrors the wrapper's host/link wiring).
@@ -316,6 +340,24 @@ export async function runRunnerCli(
           antigravityExecutable,
           antigravityProbeTimeoutMs,
         );
+    // issue #387 Part 2(A): re-probe `agy --version` on every reload while
+    // enabled, mirroring the catalog probe above. Warn only on an actual
+    // change from the last value THIS process observed (both sides present
+    // and different) — an absent probe result (binary missing/broken) never
+    // by itself counts as a "change" here.
+    const nextAntigravityVersion = antigravityExecutable === undefined
+      ? null
+      : await resolveVersion(antigravityExecutable, antigravityProbeTimeoutMs);
+    if (
+      antigravityVersion !== null &&
+      nextAntigravityVersion !== null &&
+      nextAntigravityVersion !== antigravityVersion
+    ) {
+      process.stderr.write(
+        `runner: warn — antigravity agy version changed ${antigravityVersion} -> ${nextAntigravityVersion}\n`,
+      );
+    }
+    antigravityVersion = nextAntigravityVersion;
     supervisor.updateRuntimeConfig({
       cwdAllowlist: next.cwd_allowlist,
       wrapperServerUrl: wrapperUrlFrom(next.server_url),
