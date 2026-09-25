@@ -1,7 +1,7 @@
 ---
 title: "Codex app-server events and telemetry"
 status: implemented
-last_updated: 2026-09-18
+last_updated: 2026-09-26
 ---
 
 # Codex app-server events and telemetry
@@ -38,6 +38,8 @@ counts. Unsupported/malformed usage does not replace the last known value.
 
 `AppServerTransport` receives `account/rateLimits/updated` independently of any
 active turn. `AppServerSession` reads account limits once during start/resume;
+the host consumes that post-thread snapshot after its separate fresh-idle
+account probe, when both exist. The later native snapshot takes precedence.
 RPC errors, including unauthenticated reads, yield `readStatus=unavailable`
 without erasing notification evidence. Connection failures remain errors.
 Read responses cannot overwrite notifications received during that read or a

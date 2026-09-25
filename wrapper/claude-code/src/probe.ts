@@ -27,7 +27,9 @@
 //   0 files under ~/.claude/projects/).
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import type { Query } from "@anthropic-ai/claude-agent-sdk";
 import { writeRedactedStderr } from "@kaoiro/agent-common";
+import type { ProbeRateLimits } from "./probe-client.js";
 import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -60,6 +62,7 @@ interface ProbeSuccess {
   models: ProbeModel[];
   elapsed_ms: number;
   source: "init" | "supported_models";
+  rate_limits?: ProbeRateLimits;
 }
 
 interface ProbeFailure {
@@ -67,6 +70,7 @@ interface ProbeFailure {
   reason: ProbeFailReason;
   detail?: string;
   elapsed_ms: number;
+  rate_limits?: ProbeRateLimits;
 }
 
 async function* neverYields(): AsyncGenerator<never, void, void> {
@@ -75,10 +79,12 @@ async function* neverYields(): AsyncGenerator<never, void, void> {
 
 interface CliArgs {
   timeoutMs: number;
+  usage: boolean;
 }
 
 function parseArgs(argv: string[]): CliArgs {
   let timeoutMs = 30_000;
+  let usage = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--timeout-ms" && i + 1 < argv.length) {
@@ -95,15 +101,17 @@ function parseArgs(argv: string[]): CliArgs {
       }
       timeoutMs = n;
       i++;
+    } else if (arg === "--usage") {
+      usage = true;
     } else if (arg === "--help" || arg === "-h") {
       writeRedactedStderr(
-        "usage: kaoiro-claude-probe [--timeout-ms N]\n" +
+        "usage: kaoiro-claude-probe [--timeout-ms N] [--usage]\n" +
           "emits ProbeResult JSON on stdout; exit 0 on success, 1 on failure.\n",
       );
       process.exit(0);
     }
   }
-  return { timeoutMs };
+  return { timeoutMs, usage };
 }
 
 /** Map an SDK ModelInfo (structural — the SDK type may have extra optional
@@ -144,8 +152,38 @@ function emit(result: ProbeSuccess | ProbeFailure): void {
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
 
-async function main(): Promise<number> {
-  const args = parseArgs(process.argv.slice(2));
+async function readUsage(q: Query, timeoutMs: number): Promise<ProbeRateLimits | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const usage = await Promise.race([
+      q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true }).catch(() => null),
+      new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+    ]);
+    if (!usage?.rate_limits_available || usage.rate_limits === null) return undefined;
+    const { five_hour, seven_day } = usage.rate_limits;
+    if (five_hour == null && seven_day == null) return undefined;
+    return {
+      ...(five_hour === undefined ? {} : { five_hour: five_hour === null ? null : {
+        utilization: five_hour.utilization, resets_at: five_hour.resets_at,
+      } }),
+      ...(seven_day === undefined ? {} : { seven_day: seven_day === null ? null : {
+        utilization: seven_day.utilization, resets_at: seven_day.resets_at,
+      } }),
+    };
+  } catch {
+    return undefined;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+export async function runProbe(
+  argv: string[],
+  queryFn: typeof query = query,
+  output: (result: ProbeSuccess | ProbeFailure) => void = emit,
+  usageTimeoutMs = 3_000,
+): Promise<number> {
+  const args = parseArgs(argv);
   const cwd = join(tmpdir(), `kaoiro-claude-probe-${process.pid}-${Date.now()}`);
   mkdirSync(cwd, { recursive: true });
 
@@ -166,7 +204,7 @@ async function main(): Promise<number> {
   deadline.unref?.();
 
   try {
-    q = query({
+    q = queryFn({
       prompt: neverYields(),
       options: {
         cwd,
@@ -203,6 +241,7 @@ async function main(): Promise<number> {
       .filter((m): m is ProbeModel => m !== null);
 
     clearTimeout(deadline);
+    const rate_limits = args.usage ? await readUsage(q, usageTimeoutMs) : undefined;
     q.close();
 
     // Zero models is not success (藤 must-fix 4): a runner that accepted
@@ -210,20 +249,22 @@ async function main(): Promise<number> {
     // floor with nothing, leaving LaunchDialog with no options at all. Fail
     // loud instead so the runner keeps the last-known-good (or default).
     if (models.length === 0) {
-      emit({
+      output({
         ok: false,
         reason: "invalid_output",
         detail: `probe returned 0 models (source=${source})`,
         elapsed_ms: Math.round(performance.now() - t0),
+        ...(rate_limits === undefined ? {} : { rate_limits }),
       });
       return 1;
     }
 
-    emit({
+    output({
       ok: true,
       models,
       elapsed_ms: Math.round(performance.now() - t0),
       source,
+      ...(rate_limits === undefined ? {} : { rate_limits }),
     });
     return 0;
   } catch (err) {
@@ -235,7 +276,7 @@ async function main(): Promise<number> {
     const reason: ProbeFailReason = timedOut
       ? "timeout"
       : classifyError(detail);
-    emit({
+    output({
       ok: false,
       reason,
       detail: detail.slice(0, 512),
@@ -271,7 +312,7 @@ if (
   process.argv[1] !== undefined &&
   fileURLToPath(import.meta.url) === process.argv[1]
 ) {
-  main().then(
+  runProbe(process.argv.slice(2)).then(
     (code) => process.exit(code),
     (err) => {
       // Unreachable if main() catches everything, but keep a hard backstop

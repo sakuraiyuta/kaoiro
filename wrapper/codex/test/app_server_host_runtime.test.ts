@@ -81,6 +81,24 @@ it.each([false, true])("owns one session, opens once (resume=%s), and settles po
   f.runtime.baseline!.model = "tampered";expect(f.runtime.baseline?.model).toBe("initial");
 });
 
+it("publishes the post-thread account read to the host before the first turn", async () => {
+  const f = fixture();
+  const snapshot = { readStatus: "available" as const, buckets: [
+    { limitId: "codex", windows: { seven_day: { utilization: 0.22 } } },
+  ] };
+  f.session.rateLimits = snapshot;
+  const onRateLimits = vi.fn();
+  const runtime = new AppServerHostRuntime({
+    session: { turnSignal: () => null }, effortIntent: "default",
+    createSession: async () => f.session, onRateLimits,
+  });
+  runtimes.push(runtime);
+  await runtime.open();
+  expect(onRateLimits).toHaveBeenCalledTimes(1);
+  expect(onRateLimits).toHaveBeenCalledWith(snapshot);
+  expect(f.session.startProjectedTurn).not.toHaveBeenCalled();
+});
+
 it("keeps the baseline, pending settings, and rollback clear after input_skipped", async () => {
   const f = fixture();
   await f.runtime.run(input("initial"), f.hooks);

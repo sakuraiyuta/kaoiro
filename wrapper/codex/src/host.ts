@@ -11,6 +11,8 @@
 import type { AppServerHistoryJob } from "./app_server_replay.js";
 import { AppServerAdmissionError, AppServerHostRuntime, type AppServerHostRuntimeOptions } from "./app_server_host_runtime.js";
 import { AppServerConnectionError } from "./app_server_rpc.js";
+import type { AppServerRateLimits } from "./app_server_telemetry.js";
+import { codexAccountRateLimits, readStartupRateLimits } from "./startup_rate_limits.js";
 import { assessCodexPermission, type CodexPermissionAssessment } from "./app_server_permission.js";
 import { successfulResetEffort, AppServerSettingsError } from "./app_server_settings.js";
 import { BRIDGE_MCP_POLICY } from "./bridge_policy.js";
@@ -416,6 +418,7 @@ export interface CodexHostOptions {
   rateLimitResolver?: (
     sessionId: string,
   ) => Promise<Map<CodexRateLimitWindow, CodexRateLimitSnapshot>>;
+  startupRateLimitResolver?: (signal: AbortSignal) => Promise<Map<CodexRateLimitWindow, CodexRateLimitSnapshot>>;
   /** Confirms whether a resume-failure CANDIDATE is real rollout corruption
    *  (issue #253, ふじ MF-1/MF-2). Injectable so tests can point the real
    *  `verifyRolloutCorruption` at a fixture rollout root instead of
@@ -711,6 +714,8 @@ export class CodexHost implements EngineAdapter {
    *  invokes the same method as a safety net; this keeps that startup read
    *  exactly once per session. */
   #rateLimitsInitializedSessionId: string | null = null;
+  #nativeRateLimitsSeen = false;
+  readonly #startupRateLimitAbort = new AbortController();
   /** This process's private trace capture directory. It is derived without
    * filesystem I/O so a broken diagnostic path cannot prevent host startup. */
   readonly #turnTraceCaptureDir: string;
@@ -872,6 +877,30 @@ export class CodexHost implements EngineAdapter {
     }
     this.#rateLimitsInitializedSessionId = sessionId;
     await this.#refreshRateLimits();
+  }
+
+  async probeAccountRateLimits(): Promise<void> {
+    try {
+      const next = await (this.#options.startupRateLimitResolver ?? readStartupRateLimits)(this.#startupRateLimitAbort.signal);
+      if (this.#closed || this.#nativeRateLimitsSeen || next.size === 0) return;
+      if (rateLimitsDiffer(this.#rateLimits, next)) {
+        this.#rateLimits.clear();
+        for (const [window, snapshot] of next) this.#rateLimits.set(window, snapshot);
+        this.#emitState(this.#machine.state);
+      }
+    } catch {
+      // An unavailable account read is unknown, not a startup failure.
+    }
+  }
+
+  #applyAppServerRateLimits(account: AppServerRateLimits): void {
+    const next = codexAccountRateLimits(account);
+    if (next.size === 0) return;
+    this.#nativeRateLimitsSeen = true;
+    if (!rateLimitsDiffer(this.#rateLimits, next)) return;
+    this.#rateLimits.clear();
+    for (const [window, snapshot] of next) this.#rateLimits.set(window, snapshot);
+    this.#emitState(this.#machine.state);
   }
 
   /** Single engine-neutral SoT for both state_change.ext and whoami (#109). */
@@ -1062,6 +1091,7 @@ export class CodexHost implements EngineAdapter {
   ): boolean {
     this.#watchdogFailStopped = true;
     this.#closed = true;
+    this.#startupRateLimitAbort.abort();
     if (this.#gcTimer !== null) clearInterval(this.#gcTimer);
     this.#gcTimer = null;
     this.#abandonTurn("watchdog_fail_stop");
@@ -1116,6 +1146,7 @@ export class CodexHost implements EngineAdapter {
 
   close(): void {
     this.#closed = true;
+    this.#startupRateLimitAbort.abort();
     this.#lifecycleGeneration += 1;
     this.#dropPendingUploads("interrupted");
     if (this.#gcTimer !== null) clearInterval(this.#gcTimer);
@@ -1461,6 +1492,7 @@ export class CodexHost implements EngineAdapter {
       ...(this.#sessionId === null ? {} : { resumeThreadId: this.#sessionId }),
       ...(this.#options.permissionRolloutRoot === undefined ? {} : { rolloutRoot: this.#options.permissionRolloutRoot }),
       ...(this.#options.appServerSessionFactory === undefined ? {} : { createSession: this.#options.appServerSessionFactory }),
+      onRateLimits: (account) => this.#applyAppServerRateLimits(account),
     });
   }
 
@@ -2567,6 +2599,7 @@ export class CodexHost implements EngineAdapter {
         return;
       }
       if (this.#closed) return;
+      if (next.size > 0) this.#nativeRateLimitsSeen = true;
       if (!rateLimitsDiffer(this.#rateLimits, next)) return;
       this.#rateLimits.clear();
       for (const [window, snapshot] of next) {

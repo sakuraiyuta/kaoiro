@@ -22,6 +22,15 @@ const CHILD_HARD_TIMEOUT_MS = 35_000;
  *  init-timeout profile and phase-20 spike (init observed ~1.4s). */
 const PROBE_INTERNAL_TIMEOUT_MS = 30_000;
 
+export interface ProbeUsageWindow {
+  utilization: number | null;
+  resets_at: string | null;
+}
+export interface ProbeRateLimits {
+  five_hour?: ProbeUsageWindow | null;
+  seven_day?: ProbeUsageWindow | null;
+}
+
 export interface ProbeOutcome {
   ok: boolean;
   models?: EngineModelInfo[];
@@ -33,6 +42,7 @@ export interface ProbeOutcome {
    *  must NOT drive updateRegister (see ClaudeCatalogCache). Absent on
    *  wrapper-host probes. */
   source?: "init" | "supported_models" | "cache";
+  rate_limits?: ProbeRateLimits;
 }
 
 /** Resolve the probe entrypoint against this package's exports. Same
@@ -55,6 +65,8 @@ export interface ProbeSpawnDeps {
   hardTimeoutMs?: number;
   /** Grace period between SIGTERM and SIGKILL. */
   killEscalateMs?: number;
+  includeUsage?: boolean;
+  signal?: AbortSignal;
 }
 
 /** Run one short-lived probe. Never throws — a spawn failure or timeout is
@@ -65,6 +77,7 @@ export async function runClaudeProbe(
   const start = Date.now();
   const hardTimeoutMs = deps.hardTimeoutMs ?? CHILD_HARD_TIMEOUT_MS;
   const killEscalateMs = deps.killEscalateMs ?? 2_000;
+  if (deps.signal?.aborted) return { ok: false, reason: "timeout", detail: "aborted", elapsed_ms: Date.now() - start };
 
   let child: ChildProcess;
   try {
@@ -74,7 +87,7 @@ export async function runClaudeProbe(
       const probePath = resolveProbePath();
       child = spawn(
         process.execPath,
-        [probePath, "--timeout-ms", String(PROBE_INTERNAL_TIMEOUT_MS)],
+        [probePath, "--timeout-ms", String(PROBE_INTERNAL_TIMEOUT_MS), ...(deps.includeUsage ? ["--usage"] : [])],
         {
           // Inherit env so the SDK's auth resolution (keychain / OAuth /
           // ANTHROPIC_API_KEY) still works — same posture as spike.
@@ -108,10 +121,12 @@ export async function runClaudeProbe(
       if (settled) return;
       settled = true;
       clearTimeout(hardTimer);
+      deps.signal?.removeEventListener("abort", onAbort);
       resolve(outcome);
     };
 
-    const hardTimer = setTimeout(() => {
+    const terminate = (detail: string): void => {
+      if (settled) return;
       // Send SIGTERM and start the SIGKILL escalation clock. child.killed
       // is a "kill(sig) was called" flag — NOT proof the child has exited.
       // We track actual exit via the `close` event (closed=true), which is
@@ -130,11 +145,15 @@ export async function runClaudeProbe(
       finish({
         ok: false,
         reason: "timeout",
-        detail: "hard timeout",
+        detail,
         elapsed_ms: Date.now() - start,
       });
-    }, hardTimeoutMs);
+    };
+    const onAbort = (): void => terminate("aborted");
+    const hardTimer = setTimeout(() => terminate("hard timeout"), hardTimeoutMs);
     hardTimer.unref?.();
+    deps.signal?.addEventListener("abort", onAbort, { once: true });
+    if (deps.signal?.aborted) onAbort();
 
     child.once("error", (err) => {
       finish({
@@ -184,6 +203,7 @@ export function parseProbeStdout(stdout: string): ProbeOutcome | null {
   if (typeof raw !== "object" || raw === null) return null;
   const r = raw as Record<string, unknown>;
   if (r.ok === true) {
+    const rateLimits = probeRateLimits(r.rate_limits);
     const models = Array.isArray(r.models)
       ? r.models.filter(isEngineModelInfo)
       : [];
@@ -199,6 +219,7 @@ export function parseProbeStdout(stdout: string): ProbeOutcome | null {
           ? `probe reported ok=true but 0 valid model rows (raw=${r.models.length})`
           : "probe reported ok=true without a models array",
         elapsed_ms: 0,
+        ...(rateLimits === undefined ? {} : { rate_limits: rateLimits }),
       };
     }
     const source =
@@ -208,18 +229,38 @@ export function parseProbeStdout(stdout: string): ProbeOutcome | null {
       models,
       elapsed_ms: 0,
       ...(source === undefined ? {} : { source }),
+      ...(rateLimits === undefined ? {} : { rate_limits: rateLimits }),
     };
   }
   if (r.ok === false) {
+    const rateLimits = probeRateLimits(r.rate_limits);
     const reason = normalizeReason(r.reason);
     return {
       ok: false,
       reason,
       ...(typeof r.detail === "string" ? { detail: r.detail } : {}),
       elapsed_ms: 0,
+      ...(rateLimits === undefined ? {} : { rate_limits: rateLimits }),
     };
   }
   return null;
+}
+
+function probeRateLimits(value: unknown): ProbeRateLimits | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  const out: ProbeRateLimits = {};
+  for (const key of ["five_hour", "seven_day"] as const) {
+    const item = raw[key];
+    if (item === null) { out[key] = null; continue; }
+    if (typeof item !== "object" || item === null || Array.isArray(item)) continue;
+    const window = item as Record<string, unknown>;
+    if ((typeof window.utilization === "number" || window.utilization === null) &&
+        (typeof window.resets_at === "string" || window.resets_at === null)) {
+      out[key] = { utilization: window.utilization as number | null, resets_at: window.resets_at as string | null };
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 const REASON_SET: ReadonlySet<EngineCatalogFailReason> = new Set([

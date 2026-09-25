@@ -79,6 +79,7 @@ export async function cliAppFixture(permissionSync = false, backend: "exec" | "a
     parseCliArgs: () => ({ configPath: "fixture", prompt: undefined, resume: undefined }),
     loadConfig: () => ({ agent_id: agentId, persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P", server_url: wire.url, model: "gpt-5.6-sol" }),
     createHost: (config, options) => { callbacks = options;return (host = new CodexHost(config, { ...options,
+      startupRateLimitResolver: async () => new Map(),
       codexFactory: () => { spawned += 1;const thread = { runStreamed: async () => { sent.push({ method: "turn/start" });return { events: (async function* () {
         yield { type: "thread.started" as const, thread_id: "thread" };await execTerminal;
         yield { type: "turn.completed" as const, usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0, cache_write_input_tokens: 0 } };

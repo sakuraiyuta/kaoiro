@@ -1114,6 +1114,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       );
       printState(idle);
       link?.send(idle);
+      if (resumeSessionId === undefined) void host.probeRateLimits?.();
     }
     // Resume: stamp the session so both the replayed lines and the
     // subsequent live ones group under it, and point the sidecar at that

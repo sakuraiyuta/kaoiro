@@ -10,7 +10,7 @@ export interface CodexStartupContext {
   config: WrapperConfig;
   prompt: string | undefined;
   resumeSessionId: string | undefined;
-  host: Pick<CodexHost, "initializeRateLimits" | "statusExtSnapshot">;
+  host: Pick<CodexHost, "initializeRateLimits" | "statusExtSnapshot" | "probeAccountRateLimits">;
   link: {
     setSessionId: (sessionId: string) => void;
     send: (envelope: Envelope) => void;
@@ -43,5 +43,8 @@ export async function prepareCodexStartup(
     );
     context.printState(idle);
     context.link.send(idle);
+    if (context.resumeSessionId === undefined) {
+      void context.host.probeAccountRateLimits?.();
+    }
   }
 }

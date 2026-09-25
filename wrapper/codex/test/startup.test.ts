@@ -15,6 +15,88 @@ const config: WrapperConfig = {
 };
 
 describe("prepareCodexStartup (issue #251)", () => {
+  it("default host reaches the account read at fresh idle without injection", async () => {
+    const host = new CodexHost(config, { onState: () => {}, appendSystemPrompt: "p", now: () => "T" });
+    await host.probeAccountRateLimits();
+    expect(host.state).toBe("idle");
+    const windows = host.statusSnapshot().rate_limits;
+    if (windows !== undefined) {
+      expect(Object.keys(windows).every((key) => key === "five_hour" || key === "seven_day")).toBe(true);
+    }
+  });
+
+  it("fresh idle is immediate and the account snapshot follows before any turn", async () => {
+    const sent: Envelope[] = [];
+    const hostStates: Envelope[] = [];
+    let release!: (value: Map<CodexRateLimitWindow, CodexRateLimitSnapshot>) => void;
+    const pending = new Promise<Map<CodexRateLimitWindow, CodexRateLimitSnapshot>>((resolve) => { release = resolve; });
+    const resolver = vi.fn(() => pending);
+    const host = new CodexHost(config, {
+      onState: (event) => hostStates.push(event),
+      appendSystemPrompt: "p",
+      startupRateLimitResolver: resolver,
+      now: () => "T",
+    });
+    await prepareCodexStartup({
+      config, prompt: undefined, resumeSessionId: undefined, host,
+      link: { setSessionId: () => {}, send: (event) => sent.push(event) },
+      sidecar: { bind: () => {} }, printState: () => {}, now: () => "T",
+    });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.ext).not.toHaveProperty("rate_limits");
+    expect(hostStates).toHaveLength(0);
+    expect(resolver).toHaveBeenCalledTimes(1);
+    release(new Map([["seven_day", { utilization: 0.19, resets_at: 1790908233 }]]));
+    await vi.waitFor(() => expect(hostStates).toHaveLength(1));
+    expect(hostStates[0]?.ext.rate_limits).toEqual({ seven_day: { utilization: 0.19, resets_at: 1790908233 } });
+    expect(host.statusSnapshot().rate_limits).toEqual(hostStates[0]?.ext.rate_limits);
+  });
+
+  it("a source-free account probe leaves the rate limit field absent", async () => {
+    const hostStates: Envelope[] = [];
+    const host = new CodexHost(config, {
+      onState: (event) => hostStates.push(event),
+      appendSystemPrompt: "p",
+      startupRateLimitResolver: async () => new Map(),
+      now: () => "T",
+    });
+    await host.probeAccountRateLimits();
+    expect(hostStates).toEqual([]);
+    expect(host.statusSnapshot()).not.toHaveProperty("rate_limits");
+  });
+
+  it("cancels the startup read when the host closes", async () => {
+    let signal: AbortSignal | undefined;
+    const host = new CodexHost(config, {
+      onState: () => {}, appendSystemPrompt: "p",
+      startupRateLimitResolver: async (received) => {
+        signal = received;
+        return new Map();
+      },
+    });
+    await host.probeAccountRateLimits();
+    expect(signal?.aborted).toBe(false);
+    host.close();
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it("a late account probe cannot replace a native rollout snapshot", async () => {
+    let release!: (value: Map<CodexRateLimitWindow, CodexRateLimitSnapshot>) => void;
+    const pending = new Promise<Map<CodexRateLimitWindow, CodexRateLimitSnapshot>>((resolve) => { release = resolve; });
+    const host = new CodexHost(config, {
+      onState: () => {}, resumeSessionId: "native-session",
+      appendSystemPrompt: "p",
+      startupRateLimitResolver: () => pending,
+      rateLimitResolver: async () => new Map([["seven_day", { utilization: 0.31 }]]),
+      now: () => "T",
+    });
+    const probe = host.probeAccountRateLimits();
+    await host.initializeRateLimits();
+    release(new Map([["seven_day", { utilization: 0.07 }]]));
+    await probe;
+    expect(host.statusSnapshot().rate_limits).toEqual({ seven_day: { utilization: 0.31 } });
+  });
+
   it("resume bind 後、production startup は初回 idle 前に snapshot を一度だけ取得する", async () => {
     const hostStates: Envelope[] = [];
     const sent: Envelope[] = [];

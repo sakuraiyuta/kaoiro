@@ -2,8 +2,9 @@
 // resolved_model は read-only metadata なので「SDK が報告したときだけ載る /
 // 欠落時は property 自体 absent」を両方向で固定する (ADR-0037 追補)。
 
-import { describe, expect, it } from "vitest";
-import { projectModel } from "../src/probe.js";
+import { describe, expect, it, vi } from "vitest";
+import { projectModel, runProbe } from "../src/probe.js";
+import type { query } from "@anthropic-ai/claude-agent-sdk";
 
 describe("projectModel", () => {
   it("resolvedModel を resolved_model に透過する", () => {
@@ -52,5 +53,36 @@ describe("projectModel", () => {
       resolvedModel: 42,
     });
     expect("resolved_model" in out!).toBe(false);
+  });
+});
+
+describe("optional usage probe", () => {
+  it("keeps the runner catalog output unchanged without --usage", async () => {
+    const usage = vi.fn();
+    const fakeQuery = (() => ({
+      initializationResult: async () => ({ models: [{ value: "sonnet", displayName: "Sonnet" }] }),
+      usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: usage,
+      close: () => {},
+    })) as unknown as typeof query;
+    const emitted: unknown[] = [];
+    expect(await runProbe([], fakeQuery, (result) => emitted.push(result))).toBe(0);
+    expect(usage).not.toHaveBeenCalled();
+    expect(emitted).toMatchObject([{ ok: true, models: [{ value: "sonnet" }], source: "init" }]);
+    expect(emitted[0]).not.toHaveProperty("rate_limits");
+  });
+
+  it("reports the catalog when /usage times out", async () => {
+    let closed = false;
+    const fakeQuery = (() => ({
+      initializationResult: async () => ({ models: [{ value: "sonnet", displayName: "Sonnet" }] }),
+      usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: () => new Promise(() => {}),
+      close: () => { closed = true; },
+    })) as unknown as typeof query;
+    const emitted: unknown[] = [];
+    const code = await runProbe(["--usage"], fakeQuery, (result) => emitted.push(result), 5);
+    expect(code).toBe(0);
+    expect(emitted).toMatchObject([{ ok: true, models: [{ value: "sonnet" }] }]);
+    expect(emitted[0]).not.toHaveProperty("rate_limits");
+    expect(closed).toBe(true);
   });
 });

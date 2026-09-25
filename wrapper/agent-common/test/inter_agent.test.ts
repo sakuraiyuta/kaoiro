@@ -1630,6 +1630,7 @@ describe("list_agents / whoami companion tools", () => {
     // delegate heavy work to an exhausted peer.
     expect(listAgents?.description).toContain("ABSENT means unknown");
     expect(listAgents?.description).toContain("resets_at");
+    expect(listAgents?.description).toContain("before the first turn");
   });
 
   it("list_agents は requestDirectory 未配線でエラー結果を返す", async () => {
@@ -1832,7 +1833,7 @@ describe("descriptors (共通 Tool 記述層, ADR-0032 F5)", () => {
     // prose. Keep the rate-limit shape, cached-time semantics, reset hint,
     // and absent=unknown rule visible to the calling agent.
     expect(whoamiDescription).toContain("`rate_limits`");
-    expect(whoamiDescription).toContain("LAST turn");
+    expect(whoamiDescription).toContain("before your first turn");
     expect(whoamiDescription).toContain("`resets_at`");
     expect(whoamiDescription).toContain("ABSENT `rate_limits` means unknown");
     expect(
