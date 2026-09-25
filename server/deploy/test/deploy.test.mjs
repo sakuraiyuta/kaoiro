@@ -1818,7 +1818,7 @@ test("runUpdate fails closed and restores kaoiro-server:latest to the old image 
   assert.ok(caught.message.includes(".env's own line is recorded as \"declared\" for reference only"));
   assert.ok(
     caught.message.includes(
-      'KAOIRO_USERS_PATH: compose declares "/var/lib/kaoiro/users.dets" but the running container\'s effective path is "/tmp/kaoiro-dets/users.dets" (env) — this looks like a first-application migration; follow docs/specs/deployment.md 4.3 (5-b) before retrying',
+      'KAOIRO_USERS_PATH: compose declares "/var/lib/kaoiro/users.dets" but the running container\'s effective path is "/tmp/kaoiro-dets/users.dets" (env) — this looks like a first-application migration; follow docs/operations/server-update-and-rollback.md 4.3 (5-b) before retrying',
     ),
   );
   const log = existsSync(logPath) ? readFileSync(logPath, "utf8") : "";
@@ -1974,7 +1974,7 @@ test("runUpdate refuses with the 5-b message when the container's raw env is uns
   assert.ok(caught instanceof DeployError);
   assert.ok(
     caught.message.includes(
-      'KAOIRO_USERS_PATH: compose declares "/var/lib/kaoiro/users.dets" but the running container\'s effective path is "/tmp/kaoiro_users.dets" (default) — this looks like a first-application migration; follow docs/specs/deployment.md 4.3 (5-b) before retrying',
+      'KAOIRO_USERS_PATH: compose declares "/var/lib/kaoiro/users.dets" but the running container\'s effective path is "/tmp/kaoiro_users.dets" (default) — this looks like a first-application migration; follow docs/operations/server-update-and-rollback.md 4.3 (5-b) before retrying',
     ),
   );
 });

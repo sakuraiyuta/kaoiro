@@ -478,7 +478,7 @@ defmodule Mix.Tasks.Kaoiro.Env do
         "3. Register each provider's redirect URI in its console:\n" <>
           Enum.map_join(oauth.providers, "\n", fn %{provider: provider} ->
             "     #{provider}: #{redirect_uri(answers, provider)}"
-          end) <> "\n     See docs/specs/deployment.md section 1.6."
+          end) <> "\n     See docs/operations/network-and-login.md section 1.6."
       ] ++
         google_steps ++
         [

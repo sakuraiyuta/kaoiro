@@ -336,7 +336,7 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
       assert output =~ "If --path is outside server/"
       assert output =~ "github: https://kaoiro.example.com/auth/github/callback"
       assert output =~ "- #{allowlist_path}:/etc/kaoiro/oauth-allowlist.txt:ro"
-      assert output =~ "docs/specs/deployment.md section 1.6"
+      assert output =~ "docs/operations/network-and-login.md section 1.6"
       refute output =~ "Google OAuth cannot be used on a plain-HTTP deployment"
       refute output =~ "github-secret"
     end
@@ -428,7 +428,7 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
                       - ./oauth-allowlist.txt:/etc/kaoiro/oauth-allowlist.txt:ro
                  3. Register each provider's redirect URI in its console:
                     github: https://kaoiro.example.com/auth/github/callback
-                    See docs/specs/deployment.md section 1.6.
+                    See docs/operations/network-and-login.md section 1.6.
                  4. Start the stack: docker compose up -d --build
                  5. On each agent host, run the runner wizard
                     (deploy/kaoiro-runner-setup.sh) and pair its token with the
@@ -492,7 +492,7 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
                     - #{allowlist_path}:/etc/kaoiro/oauth-allowlist.txt:ro
                3. Register each provider's redirect URI in its console:
                   google: http://kaoiro.example.com:4000/auth/google/callback
-                  See docs/specs/deployment.md section 1.6.
+                  See docs/operations/network-and-login.md section 1.6.
                4. Google OAuth cannot be used on a plain-HTTP deployment (localhost is the exception).
                5. Start the stack: docker compose up -d --build
                6. On each agent host, run the runner wizard

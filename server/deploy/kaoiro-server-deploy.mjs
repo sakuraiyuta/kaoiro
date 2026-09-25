@@ -1878,7 +1878,7 @@ export function runUpdate(flags, config) {
       if (unfinished !== null) {
         fail(
           UNRESUMABLE_PHASES.has(unfinished.journal.phase)
-            ? `transaction ${unfinished.id} is unfinished (phase: ${unfinished.journal.phase}); the commit half has no resume support yet ((c3)) — follow docs/specs/deployment.md 4.4 to recover manually, or investigate ${unfinished.dir}`
+            ? `transaction ${unfinished.id} is unfinished (phase: ${unfinished.journal.phase}); the commit half has no resume support yet ((c3)) — follow docs/operations/server-update-and-rollback.md 4.4 to recover manually, or investigate ${unfinished.dir}`
             : `transaction ${unfinished.id} is unfinished (phase: ${unfinished.journal.phase}); resume it with --transaction ${unfinished.id}, or investigate ${unfinished.dir} before starting a new one`,
         );
       }
@@ -2046,7 +2046,7 @@ export function runUpdate(flags, config) {
               .map(([envName, e]) =>
                 e.compose === null
                   ? `${envName}: compose does not declare this persistence-path var at all (the #217 class — a required var missing from compose can silently escape backup)`
-                  : `${envName}: compose declares "${e.compose}" but the running container's effective path is "${e.container_effective}" (${e.container_source}) — this looks like a first-application migration; follow docs/specs/deployment.md 4.3 (5-b) before retrying`,
+                  : `${envName}: compose declares "${e.compose}" but the running container's effective path is "${e.container_effective}" (${e.container_source}) — this looks like a first-application migration; follow docs/operations/server-update-and-rollback.md 4.3 (5-b) before retrying`,
               );
             fail(
               `env_consistency check found a problem for one or more persistence-path env vars (.env's own line is recorded as "declared" for reference only — it is never compared; restored kaoiro-server:latest to the old image): ${problems.join("; ")} — full detail: ${JSON.stringify(entries)}`,
@@ -2160,7 +2160,7 @@ export function runUpdate(flags, config) {
       // start`, never `docker compose up`, while `latest` still points
       // at the new (not-yet-live) image built earlier in this run.
       fail(
-        `stop was not clean (exit=${stopExitCode}, oom=${stopOomKilled}; expected exit=${config.expected_clean_stop_exit_code}, expected oom=${config.expected_clean_stop_oom_killed}) — the server is stopped but archiving/restarting requires manual recovery (deployment.md 4.3 step 5): use 'docker start ${container}' to recover the OLD container, never 'docker compose up' while latest points at the new image; investigate before retrying`,
+        `stop was not clean (exit=${stopExitCode}, oom=${stopOomKilled}; expected exit=${config.expected_clean_stop_exit_code}, expected oom=${config.expected_clean_stop_oom_killed}) — the server is stopped but archiving/restarting requires manual recovery (docs/operations/server-update-and-rollback.md 4.3 step 5): use 'docker start ${container}' to recover the OLD container, never 'docker compose up' while latest points at the new image; investigate before retrying`,
       );
     }
 
