@@ -2,7 +2,7 @@
 title: Runner update and rollback
 description: The runner-side steps interleaved with a server update, migrating a checkout-direct host to the release profile, and subsequent release-profile updates and rollback.
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-09-26
 related: [deployment]
 ---
 
@@ -146,6 +146,16 @@ stop** and the old runner keeps running.
 `systemd-run --user --no-block`. **Always use it when running from an agent under
 the runner**; without it, stopping the runner kills the caller and later steps
 never run.
+
+**The queued unit does not inherit the caller's environment.** A transient
+unit runs with the user manager's environment, not this shell's, so `--detach`
+forwards exactly two variables to it with `--setenv`: `PATH` (always) and
+`KAOIRO_NODE` (only when set in the calling shell). Nothing else is forwarded;
+in particular `KAOIRO_RUNNER_TOKEN` never reaches the update unit. If the
+worker needs a Node or a `kaoiro-runner` binary that the user manager's default
+`PATH` does not resolve, export `PATH` / `KAOIRO_NODE` in the shell that runs
+`--detach`; a PATH that lacks them makes the detached run fail after the
+ENQUEUED line, visible only in the unit's journal below.
 
 **The isolation is by cgroup, not process group.** The `systemd.kill(5)` default
 `KillMode=control-group` kills every process in a unit's cgroup when it stops. The
