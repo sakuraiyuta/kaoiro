@@ -12,7 +12,7 @@ import type { AppServerHistoryJob } from "./app_server_replay.js";
 import { AppServerAdmissionError, AppServerHostRuntime, type AppServerHostRuntimeOptions } from "./app_server_host_runtime.js";
 import { AppServerConnectionError } from "./app_server_rpc.js";
 import type { AppServerRateLimits } from "./app_server_telemetry.js";
-import { codexAccountRateLimits, readStartupRateLimits } from "./startup_rate_limits.js";
+import { codexAccountRateLimits, readStartupRateLimits, type StartupRateLimitTransportFactory } from "./startup_rate_limits.js";
 import { assessCodexPermission, type CodexPermissionAssessment } from "./app_server_permission.js";
 import { successfulResetEffort, AppServerSettingsError } from "./app_server_settings.js";
 import { BRIDGE_MCP_POLICY } from "./bridge_policy.js";
@@ -419,6 +419,7 @@ export interface CodexHostOptions {
     sessionId: string,
   ) => Promise<Map<CodexRateLimitWindow, CodexRateLimitSnapshot>>;
   startupRateLimitResolver?: (signal: AbortSignal) => Promise<Map<CodexRateLimitWindow, CodexRateLimitSnapshot>>;
+  startupRateLimitTransportFactory?: StartupRateLimitTransportFactory;
   /** Confirms whether a resume-failure CANDIDATE is real rollout corruption
    *  (issue #253, ふじ MF-1/MF-2). Injectable so tests can point the real
    *  `verifyRolloutCorruption` at a fixture rollout root instead of
@@ -881,7 +882,9 @@ export class CodexHost implements EngineAdapter {
 
   async probeAccountRateLimits(): Promise<void> {
     try {
-      const next = await (this.#options.startupRateLimitResolver ?? readStartupRateLimits)(this.#startupRateLimitAbort.signal);
+      const next = await (this.#options.startupRateLimitResolver === undefined
+        ? readStartupRateLimits(this.#startupRateLimitAbort.signal, this.#options.startupRateLimitTransportFactory)
+        : this.#options.startupRateLimitResolver(this.#startupRateLimitAbort.signal));
       if (this.#closed || this.#nativeRateLimitsSeen || next.size === 0) return;
       if (rateLimitsDiffer(this.#rateLimits, next)) {
         this.#rateLimits.clear();

@@ -409,7 +409,7 @@ abort likewise failed its focused test (fifth red check). Restoring each line ma
 those tests pass. The usage timeout test also passed. The mutation checks
 were performed on the worktree and no mutated line remains in the source.
 
-### Final artifact check
+### First implementation artifact check
 
 After restoring the mutation checks, changing the tool descriptions, and
 adding cancellation of an outstanding Claude startup child on host close,
@@ -477,3 +477,56 @@ test 0 (371 passed); `@kaoiro/codex` typecheck 0, test 0 (805 passed);
 `@kaoiro/claude-code` typecheck 0, test 0 (512 passed). No unhandled test
 errors appeared in the three final Vitest logs. The separate server
 directory projection test exited 0 (one passed).
+
+## Implementation review round 1 follow-up
+
+The first implementation review had no must-fix findings. Before landing,
+the director required two test corrections and chose to include Claude Code
+resume idle in the account probe. `wrapper/codex/test/startup.test.ts` now
+uses an injected `AppServerTransport` factory whose RPC child is a pipe-backed
+fake. The default `CodexHost` resolver test, with no resolver injection,
+saw `initialize`, `initialized`, and `account/rateLimits/read`; it then
+received exactly one `seven_day` window with utilization 0.23. A separate
+direct `readStartupRateLimits()` test received the same fake `codex` bucket
+alongside a different meter and selected only the `codex` window. Neither
+test starts the installed Codex binary. The anonymous legacy bucket is
+deliberately excluded because it cannot establish the meter identity.
+
+`wrapper/claude-code/test/probe.test.ts` now records the actual `queryFn`
+Options: cwd existed inside `os.tmpdir()` and differed from `process.cwd()`;
+`mcpServers` was empty, `tools` was empty, and hooks, system prompt,
+`canUseTool`, and plugins were absent. The resumed-idle CLI test pins the
+probe call before any resumed turn. The built `runClaudeCli` resume path was
+also measured at zero turns on 2026-09-25 18:05 UTC: first idle had no
+window, and one follow-up had `five_hour=0.26` and `seven_day=0.07`. The
+built Codex exec CLI still emitted one zero-turn follow-up with
+`seven_day=0.25` after the default resolver change.
+
+Four negative mutations were run one at a time and restored: replacing the
+Codex default resolver with an empty map made the default-wiring test fail;
+selecting the fake RPC's other meter made the direct conversion test fail;
+adding `Read` to the Claude probe tools made the minimal-Options test fail;
+restoring the resume-only gate made the resumed-idle test fail. Each failure
+was the expected assertion. After restoration, Codex `pnpm typecheck` exit
+0 and `pnpm test` exit 0 (806 passed); Claude Code `pnpm typecheck` exit 0
+and `pnpm test` exit 0 (514 passed). Both full suites were run once and both
+were green on that run; neither reported an unhandled error. The unchanged
+`agent-common` gates from the first implementation commit remain exit 0 / 0.
+
+The follow-up build (`pnpm -C wrapper build`, exit 0) used these artifact
+SHA-256 values for the live checks above. Artifacts not listed separately
+retain the values in the preceding table.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `wrapper/codex/dist/host.js` | `c26d935f927c538f321f708bb3fabc1b42de3b0605f2afc58f68fcf80d005be8` |
+| `wrapper/codex/dist/startup_rate_limits.js` | `d98f74e5c31c41d6e8ccf149acb860d0f75b307d5f85cf71774bc19fe874dcf7` |
+| `wrapper/claude-code/dist/cli.js` | `8be335dd9f98fb0337568b7f4516107ef5cbfc7f9745588a7e603a938d5d54c9` |
+
+Focused reproduction commands from the worktree root:
+
+```sh
+pnpm --dir wrapper/codex exec vitest run test/startup.test.ts
+pnpm --dir wrapper/claude-code exec vitest run test/probe.test.ts test/cli_whoami_composition.test.ts
+pnpm -C wrapper build
+```
