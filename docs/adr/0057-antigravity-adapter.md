@@ -38,6 +38,8 @@ several turns, spec-change respawn, mid-epoch permission switching,
 / F5a, issue #377 Stage 2).
 Revised 2026-09-23 to add the agent-facing `request_session_reset` tool
 and the `onTurnEnd` `terminal` field it required (F5, issue #396).
+Revised 2026-09-26 for the setup wizard's `agy` presence check and the
+register-time `agy --version` report (F6 addendum, issue #387).
 
 ## Context
 
@@ -667,6 +669,24 @@ precedence with env `KAOIRO_ANTIGRAVITY_DEFAULT_MODEL`. No entry in
 `LIVE_PROBE_ENGINES`. Stage A advertises `supports_effort_switch: false`; a
 generic `set_effort` relay is logged and absorbed so unsupported control
 traffic cannot terminate the wrapper.
+
+The setup wizard presence-checks `agy` (via `resolveAgyExecutable`) as soon
+as antigravity is enabled, printing the resolved path and `agy --version`
+on success or failing with an install hint otherwise -- surfacing a missing
+CLI at config time instead of only at first runner startup, where this
+probe already degrades silently to the pinned snapshot. The runner also
+reports `agy --version` alongside this probe on every register/reload,
+warning when it changes since the last value THIS runner process observed
+(in-memory only; no on-disk state file). This is reporting only: it does
+NOT force a fresh `agy` epoch. F4b's gate registration smoke test already
+re-runs on every new epoch spawn regardless of cause (`#verifyGateRegistration`,
+called from `#spawnEpoch`, `host.ts`; no caching), so a version change is
+covered the next time an epoch actually spawns on the new binary. A
+long-lived epoch keeps running its already-verified old binary until
+then -- not a gap, since that binary's gate registration was already
+confirmed before this epoch started (issue #387, director-approved design).
+Server/dashboard visibility of the reported version is a separate,
+not-yet-filed issue -- see the phase-34 plan's B4 row.
 
 ### F7 — Session capabilities in Stage A
 

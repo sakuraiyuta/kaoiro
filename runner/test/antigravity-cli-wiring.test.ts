@@ -8,7 +8,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RunnerLinkOptions } from "../src/transport.js";
 import { runRunnerCli } from "../src/runner-cli.js";
 import { loadRunnerConfig } from "../src/config.js";
@@ -243,6 +243,113 @@ describe("runner CLI Antigravity config wiring", () => {
       expect(reloadedConfig.antigravity_cli_path).toBe(secondExecutable);
     } finally {
       runtime?.close();
+    }
+  });
+
+  it("issue #387 Part 2(A): agy のバージョン変更を reload 時に stderr warning として出す", async () => {
+    root = mkdtempSync(join(tmpdir(), "kaoiro-runner-agy-version-"));
+    const executable = join(root, "agy");
+    writeFileSync(executable, "#!/bin/sh\nprintf 'fixture-model\\tFixture Model\\n'\n");
+    chmodSync(executable, 0o755);
+    const configPath = join(root, "runner.config.json");
+    const config = {
+      host_id: "runner-version-fixture",
+      server_url: "ws://runner.invalid/runner",
+      cwd_allowlist: [root],
+      capabilities: ["antigravity"],
+      antigravity: { cli_path: executable },
+    };
+    writeFileSync(configPath, JSON.stringify(config));
+
+    let triggerReload: (() => void) | undefined;
+    let versionCall = 0;
+    const stderrWrites: string[] = [];
+    const stderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk: string | Uint8Array) => {
+        stderrWrites.push(String(chunk));
+        return true;
+      });
+    let runtime;
+    try {
+      runtime = await runRunnerCli(
+        {
+          resolveAgyVersion: () => {
+            versionCall += 1;
+            return Promise.resolve(versionCall === 1 ? "agy-cli 1.0.0" : "agy-cli 2.0.0");
+          },
+          createRunnerLink: (_serverUrl, _hostId, options) => new FakeRunnerLink(options),
+          watchRunnerConfig: (path, onReload) => {
+            triggerReload = () => onReload(loadRunnerConfig(path));
+            return { close: () => {} };
+          },
+          installSignalHandlers: false,
+        },
+        [configPath],
+      );
+      // Register-time probe only reports the version -- no prior value to
+      // diff against yet, so no "changed" warning.
+      expect(stderrWrites.some((line) => line.includes("agy version agy-cli 1.0.0"))).toBe(true);
+      expect(stderrWrites.some((line) => line.includes("warn — antigravity agy version changed"))).toBe(false);
+
+      triggerReload!();
+      await runtime!.waitForReloads();
+
+      expect(
+        stderrWrites.some((line) =>
+          line.includes("warn — antigravity agy version changed agy-cli 1.0.0 -> agy-cli 2.0.0"),
+        ),
+      ).toBe(true);
+    } finally {
+      runtime?.close();
+      stderrSpy.mockRestore();
+    }
+  });
+
+  it("issue #387 Part 2(A) 否定対照: agy のバージョンが変わらなければ warning を出さない", async () => {
+    root = mkdtempSync(join(tmpdir(), "kaoiro-runner-agy-version-stable-"));
+    const executable = join(root, "agy");
+    writeFileSync(executable, "#!/bin/sh\nprintf 'fixture-model\\tFixture Model\\n'\n");
+    chmodSync(executable, 0o755);
+    const configPath = join(root, "runner.config.json");
+    const config = {
+      host_id: "runner-version-stable",
+      server_url: "ws://runner.invalid/runner",
+      cwd_allowlist: [root],
+      capabilities: ["antigravity"],
+      antigravity: { cli_path: executable },
+    };
+    writeFileSync(configPath, JSON.stringify(config));
+
+    let triggerReload: (() => void) | undefined;
+    const stderrWrites: string[] = [];
+    const stderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk: string | Uint8Array) => {
+        stderrWrites.push(String(chunk));
+        return true;
+      });
+    let runtime;
+    try {
+      runtime = await runRunnerCli(
+        {
+          resolveAgyVersion: () => Promise.resolve("agy-cli 1.0.0"),
+          createRunnerLink: (_serverUrl, _hostId, options) => new FakeRunnerLink(options),
+          watchRunnerConfig: (path, onReload) => {
+            triggerReload = () => onReload(loadRunnerConfig(path));
+            return { close: () => {} };
+          },
+          installSignalHandlers: false,
+        },
+        [configPath],
+      );
+      triggerReload!();
+      await runtime!.waitForReloads();
+
+      expect(stderrWrites.some((line) => line.includes("warn — antigravity agy version changed"))).toBe(false);
+    } finally {
+      runtime?.close();
+      stderrSpy.mockRestore();
     }
   });
 });
