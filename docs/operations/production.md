@@ -3,17 +3,19 @@
 ## Purpose
 
 A step-by-step manual for an operator bringing up (or updating) a production
-kaoiro deployment, without first reading
-[docs/specs/deployment.md](../specs/deployment.md) end to end.
-**`deployment.md` is the normative reference** — it explains *why* each step
-is shaped the way it is, and covers cases this manual deliberately does not
-(nginx/VPN/OAuth configuration, the full failure-handling decision tree,
-verification tables, migrating a host to the release profile). This manual
-only says *what to run*. When something here does not match what you observe,
-`deployment.md` wins.
+kaoiro deployment, without first reading the
+[deployment documentation](../README.md#deployment-documentation) end to end.
+**Those pages are the normative reference**: the
+[deployment architecture](../architecture/deployment.md) explains *why* each
+step is shaped the way it is, and the runbooks cover cases this manual
+deliberately does not ([nginx/VPN/OAuth configuration](network-and-login.md),
+the full [failure-handling decision tree and verification
+tables](server-update-and-rollback.md), [migrating a host to the release
+profile](runner-update-and-rollback.md)). This manual only says *what to
+run*. When something here does not match what you observe, those pages win.
 
 Each stage is: **edit** (file + key) → **run** (copy-paste command,
-placeholders as `<...>`) → a one-line pointer to `deployment.md` for when
+placeholders as `<...>`) → a one-line pointer to the runbook for when
 something goes wrong.
 
 ## 0. Prerequisites
@@ -35,7 +37,8 @@ Confirm all of these before starting.
   runner tarball needs the full toolchain instead (Node + pnpm; workspace
   resolution happens at build time, not on the deploy target).
 - **A decision on how the server is reached**: the default is `127.0.0.1`
-  behind nginx (deployment.md 1.4); a direct VPN address is the alternative
+  behind nginx ([network-and-login.md](network-and-login.md#14-nginx-reverse-proxy) 1.4);
+  a direct VPN address is the alternative
   (1.5, ships its own boot-order fix — see Troubleshooting below). Pick one
   before writing `.env`.
 
@@ -60,7 +63,8 @@ omitted here.)
 
 `expected_clean_stop_exit_code`/`expected_clean_stop_oom_killed` have no
 usable default: until you measure what a normal `docker compose stop`
-produces on THIS host (deployment.md 4.3 step 5), every stop is treated as
+produces on THIS host ([server-update-and-rollback.md](server-update-and-rollback.md#43-update-procedure)
+4.3 step 5), every stop is treated as
 abnormal, which is the safe direction to fail in but means `update` will
 refuse to proceed past the stop window on its own. Measure it once (stop the
 server manually, `docker inspect <container> --format 'exit={{.State.ExitCode}}
@@ -89,8 +93,9 @@ cd ..
 Answer its prompts: `SECRET_KEY_BASE` (let it generate one), `PHX_HOST`
 (public hostname), the client/runner tokens (let it generate them — record
 what it prints, you will need the runner token for step 2). Optional:
-nginx (deployment.md 1.4), a direct VPN address instead (1.5), OAuth login
-(1.6) — none of these are covered further here; follow the linked sections.
+nginx ([network-and-login.md](network-and-login.md) 1.4), a direct VPN address
+instead (1.5), OAuth login (1.6) — none of these are covered further here;
+follow the linked sections.
 
 **Run**: bootstrap the server. `start --initialize` builds the image
 (`docker compose up -d --build`, with build identity passed directly — no
@@ -152,7 +157,8 @@ node server/deploy/kaoiro-server-deploy.mjs status
 
 Confirm `container.running` is `true` and `health` reports the target's
 `build_revision`/`build_dirty`. Then, mandatorily (`status` does not replace
-this — deployment.md 4.5):
+this — [server-update-and-rollback.md](server-update-and-rollback.md#45-verification-and-its-limits)
+4.5):
 
 1. Open the dashboard at `https://<host>/?token=<a client token>`.
 2. Confirm the runner's own log shows a sustained connection (no repeated
@@ -284,8 +290,8 @@ The release note is retained in the [Stage 6 landing record](https://github.com/
 
 ## See Also
 
-- [deployment.md](../specs/deployment.md) — the normative reference this
-  manual summarizes
+- [Deployment documentation](../README.md#deployment-documentation) — the
+  architecture page, runbooks and reference pages this manual summarizes
 - [setup-wizards.md](../reference/configuration/setup-wizards.md) — what `mix kaoiro.env` and
   `kaoiro-runner-setup.sh` ask and why
 - [Runner install and distribution](runner-install.md) — full runner install /
