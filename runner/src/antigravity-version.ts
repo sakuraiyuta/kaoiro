@@ -12,13 +12,25 @@ import {
 
 export type RunAgyVersion = (path: string, timeoutMs: number) => Promise<string>;
 
+/** issue #387 review must-fix S2: `execFile`'s own `timeout` option only
+ *  SENDS `killSignal` (default SIGTERM) when the deadline passes -- if the
+ *  child ignores it, the child process never exits, so execFile's callback
+ *  never fires and the caller hangs forever (Node docs, child_process
+ *  timeout). A watchdog independent of that callback frees the caller on
+ *  the deadline regardless of whether the child actually dies, and forces
+ *  the point with SIGKILL (which cannot be ignored) so the child does not
+ *  linger. */
 function runAgyVersion(path: string, timeoutMs: number): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile(
+    let settled = false;
+    const child = execFile(
       path,
       ["--version"],
-      { encoding: "utf8", maxBuffer: 1024 * 1024, timeout: timeoutMs },
+      { encoding: "utf8", maxBuffer: 1024 * 1024 },
       (error, stdout) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(watchdog);
         if (error !== null) {
           reject(error);
           return;
@@ -26,6 +38,12 @@ function runAgyVersion(path: string, timeoutMs: number): Promise<string> {
         resolve(stdout.trim());
       },
     );
+    const watchdog = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill("SIGKILL");
+      reject(new Error(`agy --version timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
   });
 }
 

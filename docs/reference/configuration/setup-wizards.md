@@ -78,7 +78,7 @@ startup**.
 | Host ID | `runner.config.json` `host_id` | Required | `^[A-Za-z0-9._-]+$` (used in the channel topic). |
 | Server URL | Same, `server_url` | Required | `ws://` or `wss://`. Production requires `wss://` through `force_ssl`. |
 | Launch-permitted cwd | Same, `cwd_allowlist` | Required | At least one absolute path; a blank line finishes input. |
-| Capabilities | Same, `capabilities` | Optional | Enable/disable `claude-code` / `codex` / `antigravity` independently. Fall back to `claude-code` if all are off. Enabling `antigravity` presence-checks `agy` on PATH (or `antigravity.cli_path`) right away: found prints its resolved path and `agy --version`; missing fails the wizard with an install hint (issue #387). |
+| Capabilities | Same, `capabilities` | Optional | Enable/disable `claude-code` / `codex` / `antigravity` independently. Fall back to `claude-code` if all are off. Enabling `antigravity` presence-checks `agy` on PATH right away: found prints its resolved path and `agy --version`; missing fails the wizard with an install-on-PATH hint (issue #387). The wizard does not read `antigravity.cli_path` — that field is manual-edit only (see below), applied on the next runner start, not by re-running setup. |
 | Codex auth mode | Same, `codex.auth_mode` | Optional | Only if capabilities include Codex. An explicit value avoids running `codex doctor` (phase-24). |
 | Runner token | `KAOIRO_RUNNER_TOKEN` in `runner.env` | Required when exposed | Manual entry / automatic generation. **Never write it to config JSON.** |
 | Node path | Same, `KAOIRO_NODE` | Optional | systemd user units / launchd start with a minimal PATH, so fix it to an absolute path when using a version manager. |

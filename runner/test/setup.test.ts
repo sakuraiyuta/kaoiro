@@ -6,8 +6,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { delimiter, join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConfigError } from "../src/config.js";
 import {
   type Prompt,
@@ -169,6 +169,10 @@ describe("runSetup", () => {
     env: { KAOIRO_RUNNER_DIR: dir },
     platform: "linux",
     home: "/home/unused",
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("回答から 2 ファイルを書き、env は 0600 になる", async () => {
@@ -404,6 +408,37 @@ describe("runSetup", () => {
     ).rejects.toThrow(
       /antigravity CLI \(agy\) not found.*Install it and ensure it is on PATH/,
     );
+  });
+
+  it("issue #387 should1: 既定の resolver のまま PATH 上の agy を見つけて path/version を表示する", async () => {
+    const binDir = mkdtempSync(join(tmpdir(), "kaoiro-setup-agy-bin-"));
+    const agyPath = join(binDir, "agy");
+    writeFileSync(agyPath, "#!/bin/sh\nprintf 'agy-cli 9.9.9\\n'\n");
+    chmodSync(agyPath, 0o755);
+    vi.stubEnv("PATH", `${binDir}${delimiter}${process.env.PATH ?? ""}`);
+
+    const dir = mkdtempSync(join(tmpdir(), "kaoiro-setup-"));
+    const prompt = scripted([
+      "lab-pc-1",
+      "ws://localhost:4000/runner",
+      "/tmp/work",
+      "",
+      "n", // claude-code off
+      "n", // codex off
+      "y", // antigravity on
+      "n", // no token
+      "", // node path
+    ]);
+    const infos: string[] = [];
+    prompt.info = (message) => infos.push(message);
+
+    // No resolveAgyExecutable/resolveAgyVersion override here -- this is
+    // the default-composition path (issue #387 review should1).
+    const result = await runSetup(prompt, options(dir));
+
+    const config = JSON.parse(readFileSync(result.configPath, "utf8"));
+    expect(config.capabilities).toEqual(["antigravity"]);
+    expect(infos.some((line) => line.includes(agyPath) && line.includes("agy-cli 9.9.9"))).toBe(true);
   });
 });
 

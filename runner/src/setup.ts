@@ -210,8 +210,7 @@ async function checkAntigravityPresence(
   if (!executable.ok) {
     throw new ConfigError(
       `antigravity CLI (agy) not found: ${agyFailureDetail(executable.reason)}. ` +
-        "Install it and ensure it is on PATH, or set antigravity.cli_path " +
-        "in runner.config.json to its absolute path, then re-run setup.",
+        "Install it and ensure it is on PATH, then re-run setup.",
     );
   }
   const version = await resolveVersion(executable);
