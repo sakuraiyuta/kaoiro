@@ -42,6 +42,22 @@ describe("parseProbeStdout", () => {
     expect(out?.models?.[0]?.value).toBe("sonnet");
   });
 
+  it("preserves only raw usage window fields for the host conversion", () => {
+    const out = parseProbeStdout(JSON.stringify({
+      ok: true,
+      models: [{ value: "sonnet", display_name: "Sonnet", description: "" }],
+      rate_limits: {
+        five_hour: { utilization: 17, resets_at: "2026-09-26T03:00:00Z", limit_dollars: 50 },
+        seven_day: { utilization: 6, resets_at: null },
+        extra_usage: { utilization: 99 },
+      },
+    }));
+    expect(out?.rate_limits).toEqual({
+      five_hour: { utilization: 17, resets_at: "2026-09-26T03:00:00Z" },
+      seven_day: { utilization: 6, resets_at: null },
+    });
+  });
+
   it("resolved_model を落とさず parse 結果に残す (isEngineModelInfo は行を丸ごと通す)", () => {
     const out = parseProbeStdout(
       JSON.stringify({
@@ -87,6 +103,23 @@ describe("parseProbeStdout", () => {
 });
 
 describe("runClaudeProbe (spawn injection)", () => {
+  it("host abort terminates an outstanding probe and escalates if it stays open", async () => {
+    vi.useFakeTimers();
+    try {
+      const child = fakeChild();
+      const controller = new AbortController();
+      const pending = runClaudeProbe({ spawnProbe: () => child,
+        signal: controller.signal, killEscalateMs: 20 });
+      controller.abort();
+      expect((await pending).detail).toBe("aborted");
+      expect(child.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
+      await vi.advanceTimersByTimeAsync(20);
+      expect(child.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("close event の stdout を parse して ProbeOutcome を返す", async () => {
     const child = fakeChild();
     const p = runClaudeProbe({ spawnProbe: () => child });

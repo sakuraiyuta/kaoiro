@@ -1,7 +1,7 @@
 ---
 title: Codex exec event reference
 status: accepted
-last_updated: 2026-09-23
+last_updated: 2026-09-26
 related: [protocol, plugin-model, system-overview, claude-events]
 ---
 <!-- markdownlint-disable MD033 -->
@@ -49,6 +49,17 @@ Normal launch defaults to the exec mapping below; the explicit backend selector
 described above also makes app-server available. The app-server path
 reuses its known-item adapter functions, but preserves phase-aware final text,
 all completed assistant rows, and the app-server terminal status independently.
+
+Both backends announce fresh idle immediately, then make a short-lived
+app-server `account/rateLimits/read` without opening a thread or starting a
+turn. `AppServerAccountTelemetry` parses the response; only the `codex`
+bucket's supported windows enter the host map. A changed snapshot emits a
+follow-up idle `state_change`, making it visible at zero turns. An unavailable
+read leaves `rate_limits` absent. The exec backend continues to refresh from
+its own rollout after turns. The app-server backend's read after thread open
+can replace the startup value. No value is borrowed from a different session's
+rollout. The [measurement](../../evidence/2026-09-26-pre-turn-rate-limits.md)
+records which windows the current account exposed.
 
 ### Main API and process model
 

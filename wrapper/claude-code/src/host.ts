@@ -97,7 +97,7 @@ import type {
 } from "@kaoiro/protocol";
 import { PERMISSION_MODE_AXES } from "./permission_axes.js";
 import { claudeBootstrapCatalog, type SupportedModel } from "./catalog.js";
-import { runClaudeProbe, type ProbeOutcome } from "./probe-client.js";
+import { runClaudeProbe, type ProbeOutcome, type ProbeSpawnDeps, type ProbeRateLimits } from "./probe-client.js";
 import {
   REQUEST_COMPACT_TOOL_FQN,
   validateRequestCompactInput,
@@ -555,7 +555,7 @@ export interface AgentHostOptions {
   /** Injectable short-lived catalog probe (ADR-0039 F9 v2 = 藤 review D1b).
    *  Called by `refreshCatalogFor()` when `#query` is null (fresh idle).
    *  Defaults to the real child-subprocess probe shared with runner. */
-  probeFn?: () => Promise<ProbeOutcome>;
+  probeFn?: (deps?: ProbeSpawnDeps) => Promise<ProbeOutcome>;
   /** ISO-8601 timestamp source; injectable for tests. */
   now?: () => string;
   /** Wall-clock epoch-ms source for the pending_uploads TTL GC sweep,
@@ -598,7 +598,7 @@ export class AgentHost implements EngineAdapter {
   #displayNameRevision = 0;
   readonly #options: AgentHostOptions;
   readonly #queryFn: typeof query;
-  readonly #probeFn: () => Promise<ProbeOutcome>;
+  readonly #probeFn: (deps?: ProbeSpawnDeps) => Promise<ProbeOutcome>;
   readonly #now: () => string;
   readonly #nowMs: () => number;
   readonly #readTasklist: (sessionId: string) => Promise<TasklistReadResult>;
@@ -826,6 +826,8 @@ export class AgentHost implements EngineAdapter {
     string,
     { status?: string; utilization?: number; resets_at?: number }
   >();
+  #nativeRateLimitsSeen = false;
+  readonly #startupProbeAbort = new AbortController();
   /** The SDK's in-stream rate_limit_event is deliberately sparse for an
    *  allowed subscription (it can carry just five_hour status + reset). The
    *  /usage control request is the authoritative complete snapshot, so
@@ -1302,6 +1304,7 @@ export class AgentHost implements EngineAdapter {
    *  loop alive after the session has settled. */
   close(): void {
     this.#closed = true;
+    this.#startupProbeAbort.abort();
     if (this.#gcTimer !== null) {
       clearInterval(this.#gcTimer);
       this.#gcTimer = null;
@@ -1412,6 +1415,7 @@ export class AgentHost implements EngineAdapter {
   ): boolean {
     this.#watchdogFailStopped = true;
     this.#closed = true;
+    this.#startupProbeAbort.abort();
     if (this.#gcTimer !== null) {
       clearInterval(this.#gcTimer);
       this.#gcTimer = null;
@@ -2622,6 +2626,63 @@ export class AgentHost implements EngineAdapter {
       snapshot.resets_at = nextReset;
     }
     this.#rateLimits.set(window, snapshot);
+    this.#nativeRateLimitsSeen = true;
+  }
+
+  async probeRateLimits(): Promise<void> {
+    try {
+      const outcome = await this.#probeFn({ includeUsage: true, signal: this.#startupProbeAbort.signal });
+      if (this.#closed || this.#nativeRateLimitsSeen || outcome.rate_limits === undefined) return;
+      this.#applyUsageRateLimits(outcome.rate_limits, false);
+    } catch {
+      // The isolated account probe is optional telemetry.
+    }
+  }
+
+  #applyUsageRateLimits(rateLimits: ProbeRateLimits, native: boolean): void {
+    let changed = false;
+    let usable = false;
+    const windows = [
+      ["five_hour", rateLimits.five_hour],
+      ["seven_day", rateLimits.seven_day],
+    ] as const;
+    for (const [window, reported] of windows) {
+      if (reported === null || reported === undefined) continue;
+      const utilization =
+        typeof reported.utilization === "number" &&
+        Number.isFinite(reported.utilization) &&
+        reported.utilization >= 0 &&
+        reported.utilization <= 100
+          ? reported.utilization / 100
+          : undefined;
+      const parsedReset =
+        typeof reported.resets_at === "string"
+          ? Date.parse(reported.resets_at)
+          : Number.NaN;
+      const resets_at = Number.isFinite(parsedReset)
+        ? Math.floor(parsedReset / 1000)
+        : undefined;
+      if (utilization === undefined && resets_at === undefined) continue;
+      usable = true;
+
+      const previous = this.#rateLimits.get(window);
+      const next = { ...previous } as {
+        status?: string;
+        utilization?: number;
+        resets_at?: number;
+      };
+      if (utilization !== undefined) next.utilization = utilization;
+      if (resets_at !== undefined) next.resets_at = resets_at;
+      if (
+        previous?.status === next.status &&
+        previous?.utilization === next.utilization &&
+        previous?.resets_at === next.resets_at
+      ) continue;
+      this.#rateLimits.set(window, next);
+      changed = true;
+    }
+    if (native && usable) this.#nativeRateLimitsSeen = true;
+    if (changed) this.#emitState(this.#machine.state);
   }
 
   /**
@@ -2656,54 +2717,7 @@ export class AgentHost implements EngineAdapter {
         return;
       }
 
-      let changed = false;
-      const windows = [
-        ["five_hour", usage.rate_limits.five_hour],
-        ["seven_day", usage.rate_limits.seven_day],
-      ] as const;
-      for (const [window, reported] of windows) {
-        if (reported === null || reported === undefined) continue;
-        const utilization =
-          typeof reported.utilization === "number" &&
-          Number.isFinite(reported.utilization) &&
-          reported.utilization >= 0 &&
-          reported.utilization <= 100
-            ? reported.utilization / 100
-            : undefined;
-        const parsedReset =
-          typeof reported.resets_at === "string"
-            ? Date.parse(reported.resets_at)
-            : Number.NaN;
-        // The stream event's resetsAt is whole epoch seconds. Match that
-        // precision so its partial follow-up is recognized as the same quota
-        // window instead of discarding this authoritative utilization.
-        const resets_at = Number.isFinite(parsedReset)
-          ? Math.floor(parsedReset / 1000)
-          : undefined;
-        if (utilization === undefined && resets_at === undefined) continue;
-
-        const previous = this.#rateLimits.get(window);
-        const next = { ...previous } as {
-          status?: string;
-          utilization?: number;
-          resets_at?: number;
-        };
-        if (utilization !== undefined) next.utilization = utilization;
-        if (resets_at !== undefined) next.resets_at = resets_at;
-        if (
-          previous?.status === next.status &&
-          previous?.utilization === next.utilization &&
-          previous?.resets_at === next.resets_at
-        ) {
-          continue;
-        }
-        this.#rateLimits.set(window, next);
-        changed = true;
-      }
-      // A rate_limit_event itself has no AdapterEvent / state transition. A
-      // deduped explicit emit is therefore what makes the newly fetched 5h and
-      // 7day snapshot reach the dashboard immediately, including while idle.
-      if (changed) this.#emitState(this.#machine.state);
+      this.#applyUsageRateLimits(usage.rate_limits, true);
     } catch {
       // Experimental optional telemetry must never disrupt the agent session.
     } finally {
@@ -3759,6 +3773,7 @@ export class AgentHost implements EngineAdapter {
    * dispatch fails visibly instead of being appended behind a dead stream. */
   #abortAllTurnsAtStreamEnd(error: { reason?: string; detail?: string }): void {
     this.#closed = true;
+    this.#startupProbeAbort.abort();
     this.#abortActiveTurn(error);
     const queuedTurns = this.#queue.splice(0);
     for (const turn of queuedTurns) {

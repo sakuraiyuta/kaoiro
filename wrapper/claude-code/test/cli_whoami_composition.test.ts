@@ -14,6 +14,35 @@ const config: WrapperConfig = {
 };
 
 describe("Claude CLI whoami composition (issue #254)", () => {
+  it("announces fresh idle before starting the optional account probe", async () => {
+    const order: string[] = [];
+    const link = {
+      close: () => {}, currentSessionId: () => null,
+      send: (event: { type: string; ext?: Record<string, unknown> }) => {
+        if (event.type === "state_change") {
+          order.push("idle");
+          expect(event.ext).not.toHaveProperty("rate_limits");
+        }
+      },
+    };
+    const host = {
+      state: "idle", statusExtSnapshot: () => ({}),
+      statusSnapshot: () => ({ agent_id: config.agent_id, persona: config.persona, state: "idle" as const }),
+      probeRateLimits: () => { order.push("probe"); return Promise.resolve(); },
+      run: async () => {},
+    };
+    await runClaudeCli({
+      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      loadConfig: () => ({ ...config }),
+      createServerLink: (_url, _agentId, options) => {
+        queueMicrotask(() => options.onPersonaPrompt?.("system prompt"));
+        return link as never;
+      },
+      createHost: () => host as never,
+    });
+    expect(order).toEqual(["idle", "probe"]);
+  });
+
   it("actual entrypoint gives whoami the live host rate-limit snapshot", async () => {
     let interAgent!: InterAgentTool;
     const link = {

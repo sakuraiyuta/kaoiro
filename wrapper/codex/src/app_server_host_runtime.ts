@@ -1,5 +1,6 @@
 import type { WrapperConfig } from "@kaoiro/agent-common";
 import type { AppServerHistory } from "./app_server_history.js";
+import type { AppServerRateLimits } from "./app_server_telemetry.js";
 import { AppServerSession, type AppServerSessionOptions } from "./app_server_session.js";
 import { AppServerConnectionError, AppServerRpcError } from "./app_server_rpc.js";
 import {
@@ -16,13 +17,16 @@ import type { AppServerProjection } from "./app_server_projection.js";
 import type { AppServerDispatchIdentity, AppServerTurnIdentity, AppServerTurnInput } from "./app_server_transport.js";
 
 export type AppServerHostSession = Pick<AppServerSession,
-  "readHistory" | "startThread" | "resumeThread" | "initialSettings" | "startProjectedTurn" | "interrupt" | "close">;
+  "readHistory" | "startThread" | "resumeThread" | "initialSettings" | "startProjectedTurn" | "interrupt" | "close"> & {
+    rateLimits?: AppServerRateLimits;
+  };
 export interface AppServerHostRuntimeOptions {
   session: AppServerSessionOptions;
   resumeThreadId?: string;
   effortIntent: "explicit" | "default";
   rolloutRoot?: string;
   createSession?: (options: AppServerSessionOptions) => Promise<AppServerHostSession>;
+  onRateLimits?: (snapshot: AppServerRateLimits) => void;
 }
 export interface AppServerRuntimeAttempt {
   pending: AppServerPendingSettings;
@@ -100,6 +104,7 @@ export class AppServerHostRuntime {
       if (this.#closed) throw new AppServerConnectionError("App-server runtime closed");
       const threadId = this.#options.resumeThreadId === undefined
         ? await this.#session.startThread() : await this.#session.resumeThread(this.#options.resumeThreadId);
+      if (this.#session.rateLimits !== undefined) this.#options.onRateLimits?.(this.#session.rateLimits);
       const initial = this.#session.initialSettings;
       this.#baseline = initial && { ...initial, effortIntent: this.#options.effortIntent };
       return threadId;

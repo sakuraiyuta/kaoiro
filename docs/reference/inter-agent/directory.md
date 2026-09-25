@@ -1,7 +1,7 @@
 ---
 title: Peer directory
 status: provisional
-last_updated: 2026-09-18
+last_updated: 2026-09-26
 ---
 
 # Peer directory
@@ -43,7 +43,7 @@ report peers that have been inactive for a long time.
 | `turns` | non-negative integer | response round trips in the current session | server did not observe that session start, or the join is uncorrelated |
 | `last_activity_at` | ISO8601 (UTC) | time the server last accepted an envelope | no envelope accepted yet |
 | `conversation` | `{active, peers[]}` | whether an IA conversation is active and its peers | **never omitted** (below) |
-| `rate_limits` | `{<window>: {status?, utilization?, resets_at?}}` | usage-limit snapshot at the last turn | unreported, all windows dropped in projection, or disconnected |
+| `rate_limits` | `{<window>: {status?, utilization?, resets_at?}}` | latest reported usage-limit snapshot, including an account read before the first turn | no usable source, all windows dropped in projection, or disconnected |
 | `disconnect` | `{origin, reason}` | server-observed terminal disconnect attribution using the closed pairs from protocol.md | connected, planned restart, legacy server, or malformed pair |
 | `directory_only` | boolean (`true` fixed, issue #259) | entry comes only from persistent `AgentDirectory`, with no live envelope in `AgentStates` ([ADR-0030](../../adr/0030-agent-directory-and-explicit-restore.md)) | omitted for live entries; unlike other fields, absent means live-directory origin rather than unknown |
 | `last_seen` | ISO8601 (UTC), issue #259 | memory-only hint of the last envelope accepted by `AgentDirectory` | after server restart / never touched, or for live entries (which have `last_activity_at`) |
@@ -314,13 +314,14 @@ value peers read through `list_agents`.
   uses host cache. A call that also requests `inter_agent_delivery` sends the
   independent `delivery_status_request` described above, so there is no
   “whoami never round-trips” guarantee.
-- The snapshot is from the **last turn** and is not updated while idle. Compare
-  `resets_at` (Unix seconds) with current time and stop trusting
+- A fresh Codex or Claude Code wrapper announces idle immediately, then sends
+  another `state_change` when its optional account probe returns usable windows.
+  Thus a zero-turn peer can have a snapshot. The value is not refreshed on an
+  idle timer. Compare `resets_at` (Unix seconds) with current time and stop trusting
   `utilization`/`status` after expiry, as specified by the `list_agents` tool
   description.
 - Omit each key until the engine has reported it once. **Absent = unknown**, not
-  unlimited (Claude before the first usage refresh; Codex immediately after a
-  spawn with no rollout tail).
+  unlimited (including a source-free or unavailable startup probe).
 - Antigravity reports an observed individual quota exhaustion in the canonical
   `seven_day` window: its terminal reset delay can span about 149 hours, which
   matches the weekly window, and using a canonical key keeps existing consumers

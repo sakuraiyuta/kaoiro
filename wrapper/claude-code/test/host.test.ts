@@ -133,6 +133,76 @@ describe("AgentHost whoami effective projection (#113)", () => {
     expect(host.statusSnapshot()).not.toHaveProperty("rate_limits");
   });
 
+  it("isolated pre-turn probe updates the idle snapshot with the existing conversion", async () => {
+    const envs: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: (event) => envs.push(event),
+      probeFn: async (deps) => {
+        expect(deps?.includeUsage).toBe(true);
+        return { ok: true, models: [], elapsed_ms: 1, rate_limits: {
+          five_hour: { utilization: 12, resets_at: "2026-09-26T02:00:00Z" },
+          seven_day: { utilization: 5, resets_at: null },
+        } };
+      },
+      now: () => "T",
+    });
+    expect(host.statusSnapshot()).not.toHaveProperty("rate_limits");
+    await host.probeRateLimits();
+    expect(envs).toHaveLength(1);
+    expect(envs[0]?.ext.rate_limits).toEqual({
+      five_hour: { utilization: 0.12, resets_at: 1790388000 },
+      seven_day: { utilization: 0.05 },
+    });
+    expect(host.statusSnapshot().rate_limits).toEqual(envs[0]?.ext.rate_limits);
+  });
+
+  it("a source-free pre-turn probe leaves the field absent", async () => {
+    const envs: Envelope[] = [];
+    const host = new AgentHost(config, {
+      onState: (event) => envs.push(event),
+      probeFn: async () => ({ ok: true, models: [], elapsed_ms: 1 }),
+    });
+    await host.probeRateLimits();
+    expect(envs).toEqual([]);
+    expect(host.statusSnapshot()).not.toHaveProperty("rate_limits");
+  });
+
+  it("passes host close to the optional startup probe", async () => {
+    let signal: AbortSignal | undefined;
+    const host = new AgentHost(config, {
+      onState: () => {},
+      probeFn: async (deps) => { signal = deps?.signal; return { ok: false, elapsed_ms: 0 }; },
+    });
+    await host.probeRateLimits();
+    expect(signal?.aborted).toBe(false);
+    host.close();
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it("a late probe cannot replace a native rate-limit event", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const host = new AgentHost(config, {
+      onState: () => {},
+      queryFn: makeQueryFn(() => asQuery((async function* () {
+        yield msg({ type: "rate_limit_event", rate_limit_info: {
+          status: "allowed", rateLimitType: "seven_day", utilization: 0.31,
+          resetsAt: 1790908233,
+        } });
+        await gate;
+      })())),
+      probeFn: async () => ({ ok: true, models: [], elapsed_ms: 1,
+        rate_limits: { seven_day: { utilization: 7, resets_at: "2026-10-02T02:30:33Z" } },
+      }),
+    });
+    const running = host.run();
+    await vi.waitFor(() => expect(host.statusSnapshot().rate_limits?.seven_day?.utilization).toBe(0.31));
+    await host.probeRateLimits();
+    expect(host.statusSnapshot().rate_limits?.seven_day?.utilization).toBe(0.31);
+    release();
+    await running;
+  });
+
   it("whoami の rate_limits は host が stamp する ext.rate_limits と同一値になる", () => {
     // 「同形」ではなく「同値」を固定する。両者が別経路で組み立てられるように
     // なった瞬間に、自己観測と peer 観測が食い違っても誰も気づかなくなる。

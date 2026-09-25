@@ -2,7 +2,7 @@
 title: Claude events
 description: Actual message/callback specification of the TypeScript Claude Agent SDK and its verified derivation mapping to kaoiro state.
 status: accepted
-last_updated: 2026-09-23
+last_updated: 2026-09-26
 related: [protocol, plugin-model, architecture, subagent-tasks]
 ---
 <!-- markdownlint-disable MD033 -->
@@ -49,6 +49,25 @@ type SDKMessage =
 
 Tool results are returned not as separate messages but as **`SDKUserMessage`
 (a tool_result block in content)**.
+
+### Account rate limits before the first turn
+
+The wrapper emits its first idle `state_change` immediately. At fresh idle it
+starts the existing isolated catalog probe with `--usage`; the probe's SDK
+Query sends no user message and uses a private temporary cwd and minimal
+Options. Its separate `/usage` request can return the five-hour and seven-day
+account windows before the production Query is created. A usage failure or
+timeout does not fail catalog collection. The host converts the probe's raw
+0–100 utilization and ISO reset times in `#applyUsageRateLimits`, the same
+method used after a production Query's `/usage` response, then emits a
+follow-up idle state only if a window changed. The production Query remains
+deferred until the first input. The runner's catalog probe does not request
+usage. A missing account source leaves `rate_limits` absent.
+Closing the host cancels an outstanding startup probe and terminates its
+subprocess through the probe client's existing signal escalation.
+
+The [live measurement](../../evidence/2026-09-26-pre-turn-rate-limits.md)
+records the SDK and startup results.
 
 ### Task (subagent/workflow) messages
 
