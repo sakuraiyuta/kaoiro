@@ -83,7 +83,8 @@ fi
 # with no config yet (setup wizard not run) must still be able to answer
 # --version — cli.ts's own --version path never touches config or the
 # network (see cli.ts's main(), checked before loadRunnerConfig) — so
-# gating it on config existence here made docs/specs/deployment.md's
+# gating it on config existence here made the runbook's
+# (docs/operations/runner-update-and-rollback.md 4.6.2)
 # "confirm what a tarball deploy shipped" claim false for exactly the
 # hosts that most need it: a fresh, not-yet-configured install.
 if [ "${1:-}" = "--version" ]; then

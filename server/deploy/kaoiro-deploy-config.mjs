@@ -26,7 +26,8 @@ export const DEFAULT_CONFIG = Object.freeze({
   health_poll_interval_ms: 2000,
   health_poll_timeout_ms: 60000,
   stability_window_ms: 30000,
-  // deployment.md 4.5's own provenance-verification source
+  // the provenance-verification source of
+  // docs/reference/deployment/transactions-and-identity.md
   // (`curl <server-url>/api/health`). director ruling 2026-09-06,
   // #306 (c3) review: a hardcoded 127.0.0.1:4000 default MISSES in
   // production, where KAOIRO_PUBLISH_IP publishes on a different host
@@ -36,7 +37,8 @@ export const DEFAULT_CONFIG = Object.freeze({
   // configured. An explicit override still wins.
   health_url: null,
   // Clean-stop expectation (S1 / yuta ruling 2026-09-06): "measured on a
-  // dev host, not assumed" (deployment.md 4.3 step 5). `null` here is
+  // dev host, not assumed" (docs/operations/server-update-and-rollback.md 4.3
+  // step 5). `null` here is
   // deliberate — until commit (e)'s dev-host self-test fixes a real
   // value, EVERY stop is treated as abnormal (see
   // kaoiro-server-deploy.mjs's clean-stop check), which is the safe

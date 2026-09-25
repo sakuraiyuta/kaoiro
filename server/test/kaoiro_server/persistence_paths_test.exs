@@ -4,7 +4,8 @@ defmodule KaoiroServer.PersistencePathsTest do
   alias KaoiroServer.DetsStorePath
   alias KaoiroServer.PersistencePaths
 
-  # docs/specs/deployment.md, "The contract #310 must satisfy". An element
+  # docs/operations/server-update-and-rollback.md 4.3, "The contract #310
+  # must satisfy". An element
   # that is not exactly these four keys makes the deploy CLI throw
   # DeployError — it is treated as actively wrong, not as absent — so every
   # update fails until it is fixed.

@@ -12,8 +12,9 @@
 // identifies the deployment itself (kaoiro-server-deploy.mjs derives it
 // from the compose checkout's realpath, director ruling 2026-09-07
 // option B: kept under backup_root rather than moving the lock file into
-// the git checkout, which would break deployment.md 4.2's `git status
-// --porcelain` clean-tree precondition). This module stays a generic
+// the git checkout, which would break the `git status --porcelain`
+// clean-tree precondition of docs/operations/server-update-and-rollback.md
+// 4.2). This module stays a generic
 // mkdir-lock primitive; it does not know what a "deployment" is.
 import { closeSync, fsyncSync, mkdirSync, openSync, rmdirSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";

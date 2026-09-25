@@ -2,7 +2,8 @@
 // Shared build-identity computation (issue #218 round 2, ふじ MF-2/MF-5
 // 差し戻し). SINGLE place that computes revision/dirty from git — used by
 // BOTH runner/scripts/generate-build-info.mjs (writes dist/build-info.json,
-// the runner side) and docs/specs/deployment.md 4.3's server build step
+// the runner side) and the server build step of
+// docs/operations/server-update-and-rollback.md 4.3
 // (computes the KAOIRO_BUILD_REVISION / KAOIRO_BUILD_DIRTY build args) so
 // the two paths cannot silently diverge on what "dirty" means. Round-1 had
 // the runner side compute this and the server side just take an operator-

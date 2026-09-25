@@ -27,7 +27,8 @@
 //      cgroup, independent of the caller. Measuring that needs the host's
 //      real user systemd instance — which supervises the very runner an
 //      agent running this suite lives under. It is an operator step with a
-//      disposable caller unit, written up in docs/specs/deployment.md 4.6.4.
+//      disposable caller unit, written up in
+//      docs/operations/runner-service-verification.md.
 //
 // The process-group survival test below is AUXILIARY. It shows the worker
 // completes after its caller is killed, which is necessary but not
@@ -436,7 +437,8 @@ describe("kaoiro-runner-update.sh (issue #229)", () => {
   });
 
   it("--from-repo の正常系が最後まで通る", () => {
-    // The documented primary update path (deployment.md 4.6.2). Only its
+    // The documented primary update path (docs/operations/runner-update-and-rollback.md
+    // 4.6.2). Only its
     // FAILURE case was covered before, which is how a defect that broke
     // every successful --from-repo run got through: update.sh's build
     // staging dir lived under the install root, and the install it then

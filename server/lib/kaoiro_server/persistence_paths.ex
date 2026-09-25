@@ -1,7 +1,8 @@
 defmodule KaoiroServer.PersistencePaths do
   @moduledoc """
   Canonical list of the restart-surviving DETS stores and the environment
-  variables that place them (docs/specs/deployment.md 1.2).
+  variables that place them (docs/reference/configuration/server.md, DETS
+  paths).
 
   One list, four consumers: `config/runtime.exs` walks it to apply the env
   overrides, `mix kaoiro.env` emits the sample `.env` lines from it, the
@@ -143,8 +144,8 @@ defmodule KaoiroServer.PersistencePaths do
   The store list as the deploy CLI reads it out of a built image.
 
   Each element carries EXACTLY `store`, `env`, `default_file` and
-  `default_path` (docs/specs/deployment.md, "The contract #310 must
-  satisfy"). `default_path` is the absolute path the store's own fallback
+  `default_path` (docs/operations/server-update-and-rollback.md 4.3, "The
+  contract #310 must satisfy"). `default_path` is the absolute path the store's own fallback
   resolves to when `env` is unset, which is what lets the CLI tell "this
   container never had the var set but reads where compose now declares"
   apart from "compose just moved this store". Adding a key breaks the

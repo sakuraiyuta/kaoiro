@@ -55,7 +55,7 @@ export function writeFileDurably(target, content, fsImpl = REAL_FS) {
  *  entry (directory) survives a crash the same way `writeFileDurably`'s
  *  own steps already do. Opening with `"r"` works for both a regular
  *  file and a directory on POSIX (Linux is this project's only deploy
- *  target — deployment.md's runbook is systemd/Linux throughout), which
+ *  target — the docs/operations runbooks are systemd/Linux throughout), which
  *  is why one function covers both call shapes instead of two. Every
  *  step throws on failure, same contract as `writeFileDurably`: the
  *  caller decides what a failed checkpoint means for the in-flight

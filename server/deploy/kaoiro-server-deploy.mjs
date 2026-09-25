@@ -530,7 +530,8 @@ function fetchHealth(curlBin, url) {
 
 /** Polls `url` every `intervalMs` until it reports the target build
  *  cleanly — `build_revision === targetSha` AND `build_dirty === false`
- *  — or `timeoutMs` elapses. deployment.md 4.5's own provenance table
+ *  — or `timeoutMs` elapses. The provenance table in
+ *  docs/reference/deployment/transactions-and-identity.md
  *  lists BOTH as success criteria ("build_dirty is intentional ...
  *  false for a clean build at target SHA"); checking revision alone
  *  would call a dirty build at the right SHA healthy. `GET /api/health`
@@ -606,7 +607,8 @@ const PERSISTENCE_PATHS_EVAL_EXPR = "IO.puts(Jason.encode!(KaoiroServer.Persiste
 const ENV_VAR_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 // クロエ #310 round 1 S-1: the contract says EXACTLY these keys
-// (docs/specs/deployment.md), and only this list enforced it. Sorted, and
+// (docs/operations/server-update-and-rollback.md 4.3), and only this list
+// enforced it. Sorted, and
 // compared as a whole set below: a fifth key means the image's own idea of
 // the contract has drifted from this file's, which is a shape violation
 // like any other, not something to read past.
@@ -1298,10 +1300,12 @@ function resolveBackupRoot(config) {
  *  Kept UNDER `backup_root` rather than inside the git checkout (director
  *  ruling 2026-09-07): a lock directory living inside `serverDir` would
  *  make `git status --porcelain` non-empty there, breaking
- *  deployment.md 4.2's clean-tree precondition. The residual this leaves
+ *  the clean-tree precondition of docs/operations/server-update-and-rollback.md
+ *  4.2. The residual this leaves
  *  — a host running two DIFFERENT `backup_root` values for the SAME
  *  checkout still gets two independent locks — is accepted per that same
- *  ruling; deployment.md 4.2 states the one-`backup_root`-per-host rule
+ *  ruling; docs/operations/server-update-and-rollback.md 4.2 states the
+ *  one-`backup_root`-per-host rule
  *  this residual relies on.
  *
  *  Exported so a test can compute the exact lock path a real run would,
@@ -1313,12 +1317,14 @@ export function deploymentLockKey(serverDir) {
 }
 
 /** `build`: prepares a versioned server image with no downtime — the
- *  no-downtime half of deployment.md 4.3 (1)/(2). Advances the repo
+ *  no-downtime half of docs/operations/server-update-and-rollback.md 4.3
+ *  (1)/(2). Advances the repo
  *  checkout at `--repo` to `--target` (fast-forward only), computes
  *  build identity from the result, and passes the four KAOIRO_BUILD_*
  *  values into `docker compose build`'s child environment directly
  *  (no shell `set -a && eval` — issue #306's own requirement, and the
- *  exact footgun deployment.md 4.3 (2) documents under "Do not forget
+ *  exact footgun docs/operations/server-update-and-rollback.md 4.3 (2)
+ *  documents under "Do not forget
  *  set -a"). Returns the plan/result object; does not touch the running
  *  container or write any manifest — the transaction record is the
  *  update command's job (later commit), since `build` alone has no
@@ -1416,7 +1422,7 @@ export function runBuild(flags, config) {
  *  Branch A (one stopped container): starts it directly — a plain
  *  `docker start`, not `compose up`, because `up` can pick up a `latest`
  *  tag that has moved since this container was created (the exact trap
- *  deployment.md's troubleshooting section warns about).
+ *  docs/operations/deployment-troubleshooting.md warns about).
  *  Branch B (no container, but this CLI has prior transaction state):
  *  refuses — recovering from existing state is `update`/`rollback`'s
  *  job, not a fresh bootstrap.
@@ -1720,8 +1726,9 @@ function checkCapacity(bin, container, backupRoot, config) {
  *  health-poll/retention commit itself, ending at DONE. Everything up
  *  to the gate touches nothing but the checkout and a versioned image
  *  tag — the running container is never stopped — matching
- *  deployment.md 4.3's "separate prepare (no downtime) from commit (the
- *  stop window)". `rollback`/`status` are a later commit.
+ *  the "separate prepare (no downtime) from commit (the stop window)"
+ *  of docs/operations/server-update-and-rollback.md 4.3. `rollback`/`status`
+ *  are a later commit.
  *
  *  `--dry-run` (クロエ round 1 review MF-1) performs only reads — the
  *  same `compose ps`/`inspect` requireRunningContainer already needs,
@@ -1933,7 +1940,8 @@ export function runUpdate(flags, config) {
       // about to repoint `latest` at the new image, so retagging from
       // `latest` after that point would make the rollback tag point at
       // the very image it is supposed to be an escape hatch FROM
-      // (deployment.md 4.3 (1)). Verified via a real `docker inspect`
+      // (docs/operations/server-update-and-rollback.md 4.3 (1)). Verified via
+      // a real `docker inspect`
       // read-back, not merely assumed from the `docker tag` exit code.
       rollbackTag = `kaoiro-server:rollback-${oldSha}`;
       runDocker(bin, ["tag", oldImageId, rollbackTag]);
@@ -2133,7 +2141,8 @@ export function runUpdate(flags, config) {
       validateJournalAgainstStateMachine,
     );
 
-    // "measured, not assumed" (deployment.md 4.3 step 5) — an unset
+    // "measured, not assumed" (docs/operations/server-update-and-rollback.md 4.3
+    // step 5) — an unset
     // expectation, a mismatch, or an unparsed docker field are ALL
     // abnormal. `null` from either side never matches `null` on the
     // other by design: an unmeasured expectation must never coincide
@@ -2145,7 +2154,8 @@ export function runUpdate(flags, config) {
       agrees(stopOomKilled, config.expected_clean_stop_oom_killed);
     if (!cleanStop) {
       // クロエ round 1 review N-1: names the exact runbook essentials
-      // (deployment.md 4.3 step 5) an operator investigating an abnormal
+      // (docs/operations/server-update-and-rollback.md 4.3 step 5) an operator
+      // investigating an abnormal
       // stop needs immediately — recover the container with `docker
       // start`, never `docker compose up`, while `latest` still points
       // at the new (not-yet-live) image built earlier in this run.
@@ -2201,7 +2211,8 @@ export function runUpdate(flags, config) {
     // クロエ round 1 review SF-5: `tar tvzf` (verbose), not `tar tzf`
     // (names only) — the full traversal this already needed (not `| head`,
     // whose exit status would come from the tail command and mask a
-    // corrupt archive — deployment.md 4.3 step 5-c) now ALSO produces
+    // corrupt archive — docs/operations/server-update-and-rollback.md 4.3 step
+    // 5-c) now ALSO produces
     // the required_entries this transaction records, so the recorded set
     // is provably what the archive contains, not a separately-scanned
     // guess that could disagree with it.
@@ -2293,8 +2304,9 @@ export function runUpdate(flags, config) {
 
     // (c3): bring the prepared image up, verify it is actually the target
     // (not merely "a container exists"), and confirm it survives long
-    // enough to call this update done — deployment.md 4.3 step 6 / 4.5's
-    // own "operational success" + "provenance" checks.
+    // enough to call this update done — docs/operations/server-update-and-rollback.md
+    // 4.3 step 6 and 4.5's "operational success" check, plus the
+    // "provenance" check of docs/reference/deployment/transactions-and-identity.md.
     //
     // クロエ design review F1: STARTING is checkpointed BEFORE `compose
     // up` runs (mirrors STOPPING) — a crash between this line and UP
@@ -2335,7 +2347,8 @@ export function runUpdate(flags, config) {
       validateJournalAgainstStateMachine,
     );
 
-    // "Container is stable" (deployment.md 4.5): no crash-restart over the
+    // "Container is stable" (docs/operations/server-update-and-rollback.md 4.5): no
+    // crash-restart over the
     // stability window, still `running` at the end of it. RestartCount is
     // docker's own counter for restart_policy-triggered restarts (server/
     // docker-compose.yaml: `restart: unless-stopped`) — a container stuck

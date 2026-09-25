@@ -14,8 +14,9 @@
 // status --porcelain` after a successful rev-parse degrades the WHOLE
 // identity to unknown, not just dirty — ふじ MF-2) lives in the repo-level
 // ../../scripts/build-identity.mjs, shared with the server build's
-// KAOIRO_BUILD_REVISION/KAOIRO_BUILD_DIRTY computation (docs/specs/
-// deployment.md 4.3) so the two paths cannot silently diverge on what
+// KAOIRO_BUILD_REVISION/KAOIRO_BUILD_DIRTY computation
+// (docs/operations/server-update-and-rollback.md 4.3) so the two paths
+// cannot silently diverge on what
 // "dirty" means. Safe to import here: this script only ever runs from
 // within a full monorepo checkout (`pnpm -C runner build`), never inside a
 // pnpm-deploy-pruned tarball tree.

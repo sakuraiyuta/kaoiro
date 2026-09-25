@@ -123,7 +123,8 @@ FROM ${RUNNER_IMAGE} AS final
 # libsctp1: OTP's esock NIF dlopen()s libsctp.so.1 during VM start and, when
 # it is missing, prints "[UNIX-ESSIO] Failed open sctp dynamic library" ON
 # STDOUT. That is not cosmetic here — the deploy CLI parses the whole stdout
-# of `bin/kaoiro_server eval` as JSON (docs/specs/deployment.md 4.3), and a
+# of `bin/kaoiro_server eval` as JSON (docs/operations/server-update-and-rollback.md
+# 4.3), and a
 # non-JSON prefix is treated as actively wrong, failing every update
 # (measured 2026-09-07, issue #310).
 RUN apt-get update \
@@ -148,7 +149,8 @@ RUN chown nobody /app
 # checkout was dirty, the project CalVer, and its release/dev channel. The
 # compose/CI caller is responsible for
 # actually exporting both before `docker compose build`, see
-# docs/specs/deployment.md 4.3 (uses scripts/build-identity.mjs, the SAME
+# docs/operations/server-update-and-rollback.md 4.3 (uses
+# scripts/build-identity.mjs, the SAME
 # computation runner/scripts/generate-build-info.mjs uses, so the two
 # paths cannot silently diverge — MF-2).
 #
@@ -181,7 +183,8 @@ LABEL org.opencontainers.image.revision=${KAOIRO_BUILD_REVISION}
 # "dirty" key exists in it), so this is a project-custom label, not an
 # OCI-defined one. Round 2 (MF-2) baked dirty into build-info.json but
 # never surfaced it here, leaving `docker inspect`-level provenance checks
-# (docs/specs/deployment.md 4.5) blind to it (issue #218 round 3 MF-1,
+# (docs/reference/deployment/transactions-and-identity.md) blind to it
+# (issue #218 round 3 MF-1,
 # ふじ 差し戻し).
 LABEL com.kaoiro.build-dirty=${KAOIRO_BUILD_DIRTY}
 

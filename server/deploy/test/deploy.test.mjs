@@ -2483,8 +2483,9 @@ test("runUpdate's health poll times out when the server never reports the target
 });
 
 // director ruling 2026-09-06 (#306 (c3) review): a dirty build at the
-// right SHA is not a successful deploy — deployment.md 4.5's own
-// provenance table treats build_dirty as a SEPARATE success criterion
+// right SHA is not a successful deploy — the provenance table in
+// docs/reference/deployment/transactions-and-identity.md treats build_dirty
+// as a SEPARATE success criterion
 // from build_revision, not a detail folded into it.
 test("runUpdate's health poll times out when the server reports the target revision but a dirty build", () => {
   process.env.KAOIRO_TEST_HEALTH_DIRTY = "true";
@@ -3703,7 +3704,8 @@ test("status still lists a DONE transaction (with null facts) when its manifest.
 // (container state / health provenance / unfinished phase / DONE
 // history) and does not (runner signals, 5-b's ledger migration, the
 // REASON behind a runner-side build failure) — the original overclaimed
-// full coverage of deployment.md 4.4's branches (0)/(1)/(3)/(4)/(5).
+// full coverage of the branches (0)/(1)/(3)/(4)/(5) of
+// docs/operations/server-update-and-rollback.md 4.4.
 test("status's scopeNote states what it reads and does not, without overclaiming runbook branch coverage", () => {
   const result = withScenario("running", () => runStatus({ repo: workDir }, configWithOverride()));
   assert.ok(result.scopeNote.includes("container state"));

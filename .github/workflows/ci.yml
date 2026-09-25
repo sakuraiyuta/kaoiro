@@ -269,8 +269,9 @@ jobs:
             }
           '
       # The deploy CLI reads the persistence-path manifest out of the image
-      # with exactly this command and passes NO env (docs/specs/deployment.md
-      # 4.3). Addressing by image id is the CLI's own property, not this
+      # with exactly this command and passes NO env
+      # (docs/operations/server-update-and-rollback.md 4.3). Addressing by
+      # image id is the CLI's own property, not this
       # step's: here the tag names the image the previous step just built,
       # and nothing can move it in between. Two accidents are pinned, both
       # measured 2026-09-07 and both invisible to `mix test`: runtime.exs

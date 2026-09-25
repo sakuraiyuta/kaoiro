@@ -3,7 +3,7 @@ defmodule KaoiroServerWeb.SecurityHeaders do
   Browser hardening headers on every response (issue #145).
 
   The VPN-only direct deployment (no nginx, plain HTTP — see
-  `docs/specs/deployment.md` 1.5) has no reverse proxy left to add
+  `docs/operations/network-and-login.md` 1.5) has no reverse proxy left to add
   them, so the endpoint must. This plug therefore sits BEFORE
   `Plug.Static` / `DashboardStatic` in the endpoint: `index.html` and
   the built assets are served there and never reach the router, so

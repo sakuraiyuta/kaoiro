@@ -139,7 +139,8 @@ if path = System.get_env("KAOIRO_OAUTH_ALLOWLIST_PATH") do
   config :kaoiro_server, :oauth_allowlist_path, path
 end
 
-# Restart-surviving DETS stores (docs/specs/deployment.md 1.2). Walked from
+# Restart-surviving DETS stores (docs/reference/configuration/server.md,
+# DETS paths). Walked from
 # KaoiroServer.PersistencePaths rather than written out one `if` per store:
 # the same list drives `mix kaoiro.env`, the cross-store tests and the deploy
 # CLI's manifest, so a store can no longer reach one surface and silently
@@ -194,7 +195,8 @@ end
 if config_env() == :prod do
   # `bin/kaoiro_server eval` runs this file through Config.Provider before it
   # evaluates the expression, so the deploy CLI's persistence-path probe
-  # (docs/specs/deployment.md 4.3) — run with NO env, against an image id —
+  # (docs/operations/server-update-and-rollback.md 4.3) — run with NO env,
+  # against an image id —
   # would abort on the two raises below and be recorded as "issue #310 has
   # not landed on this image" forever. `eval` serves no traffic and signs
   # nothing, so it takes obviously-invalid placeholders instead. The release

@@ -197,8 +197,9 @@ const OBSERVATION_SCHEMAS = {
     obs.container_id !== "" &&
     typeof obs.started_at === "string" &&
     obs.started_at !== "",
-  // (c3) health poll: `HEALTHY` records what deployment.md 4.5's
-  // provenance check actually observed (GET /api/health's build_revision/
+  // (c3) health poll: `HEALTHY` records what the provenance check of
+  // docs/reference/deployment/transactions-and-identity.md actually
+  // observed (GET /api/health's build_revision/
   // build_dirty), not merely "it matched" — the value itself is worth
   // keeping for a later audit even though the caller already enforced
   // `health_revision === target_sha` before advancing here.

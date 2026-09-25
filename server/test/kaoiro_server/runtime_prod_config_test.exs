@@ -30,7 +30,8 @@ defmodule KaoiroServer.RuntimeProdConfigTest do
   end
 
   # The deploy CLI probes a built image with `eval` and NO env
-  # (docs/specs/deployment.md 4.3). Before issue #310 that aborted here, and
+  # (docs/operations/server-update-and-rollback.md 4.3). Before issue #310
+  # that aborted here, and
   # the CLI recorded every image as "persistence-path manifest absent".
   test "eval reads the config without them so the deploy CLI can probe an image" do
     System.put_env("RELEASE_COMMAND", "eval")
