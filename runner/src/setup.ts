@@ -9,7 +9,9 @@ import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
-import { type RunnerConfig, parseRunnerConfig } from "./config.js";
+import { agyFailureDetail, resolveAgyExecutable } from "@kaoiro/antigravity";
+import { resolveAgyVersion } from "./antigravity-version.js";
+import { ConfigError, type RunnerConfig, parseRunnerConfig } from "./config.js";
 
 /** 32-byte hex — the spec's `openssl rand -hex 32` without the openssl
  *  dependency (the archive cannot assume it on the deployment host). */
@@ -170,10 +172,21 @@ async function askCwdAllowlist(prompt: Prompt): Promise<string[]> {
   }
 }
 
-async function askCapabilities(prompt: Prompt): Promise<string[]> {
+interface AntigravityPresenceCheck {
+  resolveExecutable: typeof resolveAgyExecutable;
+  resolveVersion: typeof resolveAgyVersion;
+}
+
+async function askCapabilities(
+  prompt: Prompt,
+  antigravityCheck: AntigravityPresenceCheck,
+): Promise<string[]> {
   const chosen: string[] = [];
   for (const capability of CAPABILITY_CHOICES) {
     if (await prompt.confirm(`Enable engine '${capability}'?`, true)) {
+      if (capability === "antigravity") {
+        await checkAntigravityPresence(prompt, antigravityCheck);
+      }
       chosen.push(capability);
     }
   }
@@ -182,6 +195,29 @@ async function askCapabilities(prompt: Prompt): Promise<string[]> {
     return ["claude-code"];
   }
   return chosen;
+}
+
+/** issue #387: presence-check `agy` before the wizard writes a config that
+ *  enables antigravity, so a missing/broken CLI surfaces here (with an
+ *  install hint) instead of silently at first runner startup, where
+ *  `resolveAntigravityCatalog` degrades to the pinned snapshot with only a
+ *  stderr warn. */
+async function checkAntigravityPresence(
+  prompt: Prompt,
+  { resolveExecutable, resolveVersion }: AntigravityPresenceCheck,
+): Promise<void> {
+  const executable = resolveExecutable(undefined);
+  if (!executable.ok) {
+    throw new ConfigError(
+      `antigravity CLI (agy) not found: ${agyFailureDetail(executable.reason)}. ` +
+        "Install it and ensure it is on PATH, or set antigravity.cli_path " +
+        "in runner.config.json to its absolute path, then re-run setup.",
+    );
+  }
+  const version = await resolveVersion(executable);
+  prompt.info(
+    `  agy found at ${executable.path}${version === null ? "" : ` (${version})`}`,
+  );
 }
 
 /** Writes `content` unless the file exists and the operator declines. */
@@ -218,6 +254,8 @@ export async function runSetup(
     env: Record<string, string | undefined>;
     platform: string;
     home?: string;
+    resolveAgyExecutable?: typeof resolveAgyExecutable;
+    resolveAgyVersion?: typeof resolveAgyVersion;
   },
 ): Promise<SetupResult> {
   const home = options.home ?? homedir();
@@ -231,7 +269,10 @@ export async function runSetup(
   const hostId = await askHostId(prompt, "");
   const serverUrl = await askServerUrl(prompt, "ws://localhost:4000/runner");
   const cwdAllowlist = await askCwdAllowlist(prompt);
-  const capabilities = await askCapabilities(prompt);
+  const capabilities = await askCapabilities(prompt, {
+    resolveExecutable: options.resolveAgyExecutable ?? resolveAgyExecutable,
+    resolveVersion: options.resolveAgyVersion ?? resolveAgyVersion,
+  });
 
   let codexAuthMode: SetupAnswers["codexAuthMode"];
   if (capabilities.includes("codex")) {
