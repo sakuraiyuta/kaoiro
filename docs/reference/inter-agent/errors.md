@@ -198,8 +198,10 @@ remains; delivery gaps outside the planned window are out of scope.
 
 `stale_reply_basis` means the body was not admitted. Local origin/ticket errors report `send_not_attempted: true`; correction does not send a peer message. See [Input-bound inter-agent replies](reply-basis.md) for the exact contract.
 
-`unbound_tool_call` identifies a call with no live wrapper input; `stale_tool_call`
+`unbound_tool_call` identifies a call with no confirmed live wrapper input or
+validated Claude SDK notification owner; `stale_tool_call`
 identifies a call whose input has ended or been cancelled. Neither is a spent
 ticket. The tool result says no message was sent and directs a new
-wrapper-delivered input. Retrying that same call, changing its conversation ID,
-or adding a ticket cannot repair an unbound origin.
+confirmed input. Retrying that same call, changing its conversation ID, or
+adding a ticket cannot repair an unbound origin. A Claude notification with
+unknown task metadata is rejected rather than assigned the latest turn.

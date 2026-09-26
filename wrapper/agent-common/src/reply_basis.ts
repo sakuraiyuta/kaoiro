@@ -42,35 +42,72 @@ export function ordinaryPeerInput(envelope: Envelope): boolean {
 /** Session-owned input provenance. Queue receipt never calls observe(). */
 export class ReplyBasis {
   readonly #delivered = new Map<string, number>();
+  readonly #completed = new Map<string, number>();
+  readonly #confirmedByToken = new Map<string, Map<string, number>>();
+  readonly #pendingInputByToken = new Map<string, readonly Envelope[]>();
   readonly #snapshots = new Map<string, Snapshot>();
   readonly #tickets = new Map<string, Ticket>();
   readonly #clock: () => number;
   constructor(clock: () => number = () => performance.now()) { this.#clock = clock; }
 
-  observe(envelopes: readonly Envelope[]): void {
+  #merge(target: Map<string, number>, envelopes: readonly Envelope[]): void {
     for (const envelope of envelopes) {
       if (!ordinaryPeerInput(envelope)) continue;
       const p = envelope.payload as unknown as InterAgentMessagePayload;
       const k = key(p.conversation_id, envelope.agent_id);
-      this.#delivered.set(k, Math.max(this.#delivered.get(k) ?? 0, p.turn_number));
+      target.set(k, Math.max(target.get(k) ?? 0, p.turn_number));
     }
   }
-  begin(token: string, envelopes: readonly Envelope[], signal?: AbortSignal): void {
+  observe(envelopes: readonly Envelope[], token?: string): void {
+    if (token !== undefined && !this.#snapshots.has(token) && !this.#confirmedByToken.has(token)) return;
+    this.#merge(this.#delivered, envelopes);
+    if (token !== undefined) {
+      const confirmed = this.#confirmedByToken.get(token);
+      if (confirmed) this.#merge(confirmed, envelopes);
+    }
+  }
+  begin(token: string, envelopes: readonly Envelope[], signal?: AbortSignal, deferInputConfirmation = false): void {
     if (this.#snapshots.has(token)) throw Error("SDK turn token reused");
-    this.observe(envelopes);
+    this.#confirmedByToken.set(token, new Map());
+    if (deferInputConfirmation) this.#pendingInputByToken.set(token, envelopes);
+    else this.observe(envelopes, token);
+    const basis = new Map(this.#delivered);
+    if (deferInputConfirmation) this.#merge(basis, envelopes);
     const controller = new AbortController();
-    this.#snapshots.set(token, { controller, basis: new Map(this.#delivered), signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal });
+    this.#snapshots.set(token, { controller, basis, signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal });
+  }
+  /** An SDK-owned turn can use only input confirmed before earlier turns ended. */
+  beginFromCompleted(token: string, signal?: AbortSignal): void {
+    if (this.#snapshots.has(token)) throw Error("SDK turn token reused");
+    this.#confirmedByToken.set(token, new Map());
+    const controller = new AbortController();
+    this.#snapshots.set(token, { controller, basis: new Map(this.#completed), signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal });
+  }
+  confirmInput(token: string): void {
+    const pending = this.#pendingInputByToken.get(token);
+    if (!pending || !this.#snapshots.has(token)) return;
+    this.#pendingInputByToken.delete(token);
+    this.observe(pending, token);
   }
   retire(token: string): void {
+    const confirmed = this.#confirmedByToken.get(token);
+    if (confirmed && this.#snapshots.has(token)) {
+      for (const [k, n] of confirmed) this.#completed.set(k, Math.max(this.#completed.get(k) ?? 0, n));
+    }
+    this.#confirmedByToken.delete(token);
+    this.#pendingInputByToken.delete(token);
     this.#snapshots.get(token)?.controller.abort();
     this.#snapshots.delete(token);
     for (const [value, ticket] of this.#tickets) if (ticket.token === token) this.#tickets.delete(value);
   }
   forget(cid: string): void {
     for (const k of this.#delivered.keys()) if ((JSON.parse(k) as string[])[0] === cid) this.#delivered.delete(k);
+    for (const k of this.#completed.keys()) if ((JSON.parse(k) as string[])[0] === cid) this.#completed.delete(k);
+    for (const confirmed of this.#confirmedByToken.values()) for (const k of confirmed.keys()) if ((JSON.parse(k) as string[])[0] === cid) confirmed.delete(k);
+    for (const [token, pending] of this.#pendingInputByToken) this.#pendingInputByToken.set(token, pending.filter(e => (e.payload as Partial<InterAgentMessagePayload>).conversation_id !== cid));
     for (const [value, ticket] of this.#tickets) if (ticket.cid === cid) this.#tickets.delete(value);
   }
-  reset(): void { for (const token of this.#snapshots.keys()) this.retire(token); this.#delivered.clear(); this.#tickets.clear(); }
+  reset(): void { for (const token of this.#snapshots.keys()) this.retire(token); this.#delivered.clear(); this.#completed.clear(); this.#confirmedByToken.clear(); this.#pendingInputByToken.clear(); this.#tickets.clear(); }
   live(origin: ReplyOrigin | undefined): string | undefined {
     if (!origin) return "unbound_tool_call";
     const snapshot = this.#snapshots.get(origin.token);

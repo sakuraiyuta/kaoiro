@@ -11,6 +11,48 @@ function inbound(n: number, cid = "c"): Envelope {
 }
 
 describe("input-bound reply tickets", () => {
+  it("carries confirmed notification handoffs forward without borrowing queued input", () => {
+    const basis = new ReplyBasis();
+    basis.begin("T", [inbound(1)]); basis.retire("T");
+    basis.beginFromCompleted("N");
+    expect(basis.capture({ token: "N" }, "c", "peer")).toMatchObject({ basis: 1 });
+    const oldTicket = basis.prepare({ token: "N" }, "c", "peer", 3)!;
+    oldTicket.activate();
+    basis.observe([inbound(3)], "N");
+    expect(basis.capture({ token: "N" }, "c", "peer")).toMatchObject({ basis: 1 });
+    basis.retire("N");
+    basis.begin("queued", [inbound(5)], undefined, true);
+    basis.beginFromCompleted("N2");
+    expect(basis.capture({ token: "N2" }, "c", "peer")).toMatchObject({ basis: 3 });
+    expect(basis.capture({ token: "N2" }, "c", "peer", 3, oldTicket.authorization.reply_ticket)).toBe("invalid_reply_ticket");
+    basis.retire("queued");
+    basis.retire("N2");
+    basis.beginFromCompleted("N3");
+    expect(basis.capture({ token: "N3" }, "c", "peer")).toMatchObject({ basis: 3 });
+  });
+  it("merges by CID and peer monotonically, and reset excludes retired handoffs", () => {
+    const basis = new ReplyBasis();
+    basis.begin("T", [inbound(3), inbound(2, "other")]); basis.retire("T");
+    basis.beginFromCompleted("N");
+    basis.observe([inbound(1), inbound(4, "other")], "N");
+    basis.retire("N");
+    basis.beginFromCompleted("N2");
+    expect(basis.capture({ token: "N2" }, "c", "peer")).toMatchObject({ basis: 3 });
+    expect(basis.capture({ token: "N2" }, "other", "peer")).toMatchObject({ basis: 4 });
+    basis.reset();
+    basis.observe([inbound(9)], "N2");
+    basis.beginFromCompleted("fresh");
+    expect(basis.capture({ token: "fresh" }, "c", "peer")).toMatchObject({ basis: 0 });
+    expect(basis.capture({ token: "fresh" }, "other", "peer")).toMatchObject({ basis: 0 });
+  });
+  it("keeps unconfirmed wrapper input out of later notification snapshots", () => {
+    const basis = new ReplyBasis();
+    basis.begin("T", [inbound(5)], undefined, true);
+    expect(basis.capture({ token: "T" }, "c", "peer")).toMatchObject({ basis: 5 });
+    basis.retire("T");
+    basis.beginFromCompleted("N");
+    expect(basis.capture({ token: "N" }, "c", "peer")).toMatchObject({ basis: 0 });
+  });
   it("freezes coalesced defaults and authorizes only after handoff, once, in the bound CID", () => {
     const basis = new ReplyBasis(); const origin = { token: "T" };
     basis.begin("T", [inbound(1), inbound(3)]);
@@ -50,6 +92,19 @@ describe("input-bound reply tickets", () => {
     expect(basis.capture(captured, "c", "peer")).toBe("stale_tool_call");
     expect(basis.capture({ token: "T2" }, "c", "peer")).toMatchObject({ basis: 0 });
   });
+  it("binds a notification call only to its prompt owner and retires it independently", async () => {
+    const origins = new ToolOrigins();
+    origins.begin("wrapper");
+    origins.beginIndependent("notification");
+    const pending = origins.resolveBound("call");
+    origins.bind("call", "notification");
+    expect((await pending)?.token).toBe("notification");
+    origins.bind("call", "wrapper");
+    expect((await origins.resolveBound("call"))?.signal?.aborted).toBe(true);
+    const neverBound = origins.resolveBound("child-call");
+    origins.retireIndependent("notification");
+    expect(await neverBound).toBeUndefined();
+  });
 });
 
 describe("actual shared send path", () => {
@@ -60,7 +115,7 @@ describe("actual shared send path", () => {
     expect(JSON.parse(result.content[0]!.text)).toEqual({
       error: "unbound_tool_call",
       send_not_attempted: true,
-      guidance: "This tool call is not bound to a live wrapper-delivered input. No message was sent. Wait for a new operator or peer input delivered by the wrapper before sending again. Retrying in this continuation, changing conversation_id, or adding a reply ticket cannot bind this call.",
+      guidance: "This tool call is not bound to a confirmed live input. No message was sent. Wait for a new confirmed input before sending again. Retrying in this continuation, changing conversation_id, or adding a reply ticket cannot bind this call.",
     });
     expect(sendInterAgent).not.toHaveBeenCalled();
   });
@@ -132,6 +187,21 @@ it("wrapper notice producers match protocol-owned canonical fixtures", () => {
     const [notice] = tool.resolveTurnEnd("T", ["c"], error);
     expect(notice!.payload).toMatchObject({ notice_type: fixture.notice_type, body: `peer error (${fixture.code}): ${fixture.message}`, error });
   }
+});
+
+it("a notification settles only recovery CIDs handed to its own token", () => {
+  const tool = new InterAgentTool({ config, getState: () => "thinking", send: () => {}, replyBasisMode: () => "v1" });
+  const notification = inbound(3, "notification-cid");
+  const wrapper = inbound(2, "wrapper-cid");
+  tool.beginNotificationReplyInput("N");
+  tool.notePendingInjection(notification, "N");
+  tool.notePendingInjection(wrapper, "W");
+  expect(tool.pendingConversationIdsForTurn("N")).toEqual(["notification-cid"]);
+  const notices = tool.resolveTurnEnd("N", tool.pendingConversationIdsForTurn("N"), classifyInterAgentError({ reason: "api_error" }));
+  expect(notices).toHaveLength(1);
+  expect((notices[0]!.payload as { conversation_id: string }).conversation_id).toBe("notification-cid");
+  expect(tool.pendingConversationIdsForTurn("W")).toEqual(["wrapper-cid"]);
+  tool.endReplyInput("N");
 });
 
 it("a queued call cannot borrow the next turn after waiting for the CID lock", async () => {

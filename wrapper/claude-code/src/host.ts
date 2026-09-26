@@ -386,7 +386,10 @@ export interface AgentHostOptions {
   onTurnStart?: (info: {
     turnToken: string;
     conversationIds: readonly string[];
+    kind?: "wrapper_input" | "sdk_notification";
   }) => void;
+  /** Confirms that a wrapper input reached the SDK's pre-model prompt hook. */
+  onPromptAdmitted?: (turnToken: string) => void;
   /** Synchronous final check before an input is yielded to the SDK. Undefined
    * keeps the queued input; null consumes it without starting a turn. */
   prepareInput?: (turnToken: string) => { text: string; conversationIds: readonly string[] } | null | undefined;
@@ -423,6 +426,7 @@ export interface AgentHostOptions {
     /** Opaque generation identity for the exact queued SDK turn. Omitted
      * only for an SDK result that arrived without a wrapper-fed input. */
     turnToken?: string;
+    kind?: "wrapper_input" | "sdk_notification";
     conversationIds: readonly string[];
     error?: { reason?: string; detail?: string };
     cancellation?: { kind: "stream_eof" | "watchdog_fail_stop"; started: boolean };
@@ -580,9 +584,47 @@ export interface AgentHostOptions {
  * "current" tag — prevents an eager SDK input pull from retagging an earlier
  * turn before its result is observed (issue #236). */
 interface QueuedTurn {
+  kind?: "wrapper_input";
   message: SDKUserMessage;
   turnToken: string;
   conversationIds: readonly string[];
+}
+
+interface NotificationTurn {
+  kind: "sdk_notification";
+  turnToken: string;
+  conversationIds: readonly [];
+  promptId: string;
+}
+
+interface NotificationCandidate {
+  sessionId: string;
+  taskId: string;
+  toolUseId?: string;
+  taskType: string;
+  status: string;
+  outputFile?: string;
+  summary: string;
+  timeout: ReturnType<typeof setTimeout> | null;
+}
+
+function parseNotificationPrompt(prompt: string): Array<{ taskId: string; toolUseId?: string; status: string; outputFile?: string; summary?: string; result?: string }> | null {
+  const blocks = [...prompt.matchAll(/<task-notification>([\s\S]*?)<\/task-notification>/g)];
+  if (blocks.length === 0 || blocks.length > 16 || prompt.replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "").trim()) return null;
+  const field = (body: string, name: string): string | undefined => {
+    const matches = [...body.matchAll(new RegExp(`<${name}>([\\s\\S]*?)<\\/${name}>`, "g"))];
+    return matches.length === 1 ? matches[0]![1] : undefined;
+  };
+  const parsed = blocks.map(([, body]) => ({
+    taskId: field(body!, "task-id"),
+    toolUseId: field(body!, "tool-use-id"),
+    status: field(body!, "status"),
+    outputFile: field(body!, "output-file"),
+    summary: field(body!, "summary"),
+    result: field(body!, "result"),
+  }));
+  if (parsed.some((item) => !item.taskId || !item.status)) return null;
+  return parsed as Array<{ taskId: string; toolUseId?: string; status: string; outputFile?: string; summary?: string; result?: string }>;
 }
 
 /**
@@ -614,7 +656,11 @@ export class AgentHost implements EngineAdapter {
   /** The one SDK input currently awaiting its terminal result or explicit
    * abort. #input() will not yield another queued input until this becomes
    * null, applying wrapper-side backpressure to the SDK's eager pull. */
-  #activeTurn: QueuedTurn | null = null;
+  #activeTurn: QueuedTurn | NotificationTurn | null = null;
+  readonly #notificationCandidates = new Map<string, NotificationCandidate>();
+  readonly #backgroundTaskIds = new Set<string>();
+  readonly #promptOwners = new Map<string, { sessionId: string; token: string; kind: "wrapper_input" | "sdk_notification"; tainted?: boolean }>();
+  readonly #retiredPromptIds = new Set<string>();
   #turnBoundaryNotify: (() => void) | null = null;
   #notify: (() => void) | null = null;
   #closed = false;
@@ -1310,6 +1356,8 @@ export class AgentHost implements EngineAdapter {
    *  loop alive after the session has settled. */
   close(): void {
     this.toolOrigins.retire();
+    if (this.#activeTurn?.kind === "sdk_notification") this.toolOrigins.retireIndependent(this.#activeTurn.turnToken);
+    this.#clearNotificationCandidates();
     this.#closed = true;
     this.#startupProbeAbort.abort();
     if (this.#gcTimer !== null) {
@@ -1358,6 +1406,8 @@ export class AgentHost implements EngineAdapter {
    *  no-op, preserving the legacy interrupt-only behaviour. */
   async interrupt(): Promise<void> {
     this.toolOrigins.retire();
+    if (this.#activeTurn?.kind === "sdk_notification") this.toolOrigins.retireIndependent(this.#activeTurn.turnToken);
+    this.#clearNotificationCandidates();
     for (const uploadId of this.#pendingUploads.keys()) {
       this.#emitAttachRejected({
         upload_id: uploadId,
@@ -1418,11 +1468,12 @@ export class AgentHost implements EngineAdapter {
   }
 
   #failStopForWatchdog(
-    activeTurn: QueuedTurn | null,
+    activeTurn: QueuedTurn | NotificationTurn | null,
     attribution: "exact" | "unattributed",
   ): boolean {
     this.#watchdogFailStopped = true;
     this.#closed = true;
+    this.#clearNotificationCandidates();
     this.#startupProbeAbort.abort();
     if (this.#gcTimer !== null) {
       clearInterval(this.#gcTimer);
@@ -1736,6 +1787,115 @@ export class AgentHost implements EngineAdapter {
     if (cwd !== null) this.#cwd = cwd;
   }
 
+  #rememberNotification(message: SDKMessage): void {
+    if (message.type !== "system" || message.subtype !== "task_notification") return;
+    if (!this.#backgroundTaskIds.delete(message.task_id)) return;
+    const task = this.#taskCache.get(message.task_id);
+    if (!task) return;
+    if (this.#notificationCandidates.size >= 16) return;
+    const taskId = message.task_id;
+    const previous = this.#notificationCandidates.get(taskId);
+    if (previous?.timeout) clearTimeout(previous.timeout);
+    const candidate: NotificationCandidate = {
+      sessionId: message.session_id,
+      taskId,
+      ...(message.tool_use_id ? { toolUseId: message.tool_use_id } : {}),
+      taskType: task.task_type,
+      status: message.status,
+      ...(message.output_file ? { outputFile: message.output_file } : {}),
+      summary: message.summary,
+      timeout: null,
+    };
+    this.#notificationCandidates.set(taskId, candidate);
+    if (this.#activeTurn === null) this.#armNotificationCandidate(candidate);
+  }
+
+  #armNotificationCandidate(candidate: NotificationCandidate): void {
+    if (candidate.timeout) return;
+    candidate.timeout = setTimeout(() => {
+      if (this.#notificationCandidates.get(candidate.taskId) !== candidate) return;
+      this.#notificationCandidates.delete(candidate.taskId);
+      this.#wakeTurnBoundary();
+    }, 10_000);
+  }
+
+  #clearNotificationCandidates(): void {
+    for (const candidate of this.#notificationCandidates.values()) if (candidate.timeout) clearTimeout(candidate.timeout);
+    this.#notificationCandidates.clear();
+    this.#backgroundTaskIds.clear();
+    this.#wakeTurnBoundary();
+  }
+
+  #admitPrompt(input: HookInput): void {
+    if (input.hook_event_name !== "UserPromptSubmit" || !input.prompt_id || input.agent_id || this.#closed ||
+        this.#retiredPromptIds.has(input.prompt_id) || this.#retiredPromptIds.size >= 8192) return;
+    const active = this.#activeTurn;
+    const owner = this.#promptOwners.get(input.prompt_id);
+    const wrapperContent = active?.kind !== "sdk_notification" ? active?.message.message.content : undefined;
+    const wrapperMatch = active !== null && active.kind !== "sdk_notification" &&
+      ((typeof wrapperContent === "string" && wrapperContent === input.prompt) ||
+        (Array.isArray(wrapperContent) && wrapperContent.some(block => block.type === "text" && block.text === input.prompt)));
+    const notifications = parseNotificationPrompt(input.prompt);
+    const candidates = notifications?.map((item) => this.#notificationCandidates.get(item.taskId));
+    const notificationMatch = notifications !== null && candidates !== undefined &&
+      new Set(notifications.map(item => item.taskId)).size === notifications.length && candidates.every((candidate, index) =>
+      candidate !== undefined && candidate.sessionId === input.session_id && candidate.toolUseId === notifications[index]!.toolUseId &&
+      candidate.status === notifications[index]!.status && (
+        candidate.taskType === "local_bash"
+          ? candidate.outputFile === notifications[index]!.outputFile && candidate.summary === notifications[index]!.summary && notifications[index]!.result === undefined
+          : candidate.taskType === "local_agent" && notifications[index]!.outputFile === undefined &&
+            candidate.summary === notifications[index]!.result && notifications[index]!.summary !== undefined
+      ));
+    if (owner) {
+      if (input.prompt.includes("<task-notification>")) {
+        if (notificationMatch && !wrapperMatch && !owner.tainted && owner.kind === "wrapper_input" &&
+            owner.token === active?.turnToken && owner.sessionId === input.session_id &&
+            this.#sessionId === input.session_id) {
+          for (const candidate of candidates!) {
+            if (candidate!.timeout) clearTimeout(candidate!.timeout);
+            this.#notificationCandidates.delete(candidate!.taskId);
+          }
+          this.#wakeTurnBoundary();
+        } else {
+          owner.tainted = true;
+        }
+      }
+      return;
+    }
+    if (wrapperMatch && !notificationMatch && input.source !== "system") {
+      this.#promptOwners.set(input.prompt_id, { sessionId: input.session_id, token: active.turnToken, kind: "wrapper_input" });
+      this.#options.onPromptAdmitted?.(active.turnToken);
+      return;
+    }
+    if (!notificationMatch || wrapperMatch || active !== null || input.source === "sdk") return;
+    for (const candidate of candidates!) {
+      if (candidate!.timeout) clearTimeout(candidate!.timeout);
+      this.#notificationCandidates.delete(candidate!.taskId);
+    }
+    const turn: NotificationTurn = { kind: "sdk_notification", turnToken: randomUUID(), conversationIds: [], promptId: input.prompt_id };
+    this.#activeTurn = turn;
+    this.#everStartedTurn = true;
+    this.toolOrigins.beginIndependent(turn.turnToken);
+    this.#promptOwners.set(input.prompt_id, { sessionId: input.session_id, token: turn.turnToken, kind: turn.kind });
+    this.#options.onTurnStart?.({ turnToken: turn.turnToken, conversationIds: [], kind: turn.kind });
+  }
+
+  #observePromptTool(input: HookInput, toolUseId: string | undefined): void {
+    if (input.hook_event_name !== "PreToolUse" || input.agent_id || input.tool_name !== INTER_AGENT_TOOL_FQN ||
+        !input.prompt_id || !toolUseId || toolUseId !== input.tool_use_id) return;
+    const owner = this.#promptOwners.get(input.prompt_id);
+    if (!owner || owner.tainted || owner.sessionId !== input.session_id || this.#activeTurn?.turnToken !== owner.token) return;
+    this.toolOrigins.bind(toolUseId, owner.token);
+  }
+
+  #observePromptStop(input: HookInput): void {
+    if ((input.hook_event_name !== "Stop" && input.hook_event_name !== "StopFailure") || !input.prompt_id || input.agent_id) return;
+    const owner = this.#promptOwners.get(input.prompt_id);
+    if (owner?.sessionId === input.session_id && owner.token === this.#activeTurn?.turnToken) {
+      this.#options.onTurnProgress?.({ turnToken: owner.token });
+    }
+  }
+
   /**
    * Start the session and consume messages until closed. With
    * `initialPrompt` the first turn starts immediately; without it the
@@ -1811,6 +1971,22 @@ export class AgentHost implements EngineAdapter {
         : {}),
       hooks: {
         ...userHooks,
+        UserPromptSubmit: [
+          ...(userHooks.UserPromptSubmit ?? []),
+          { hooks: [async (input) => { this.#admitPrompt(input); return {}; }] },
+        ],
+        PreToolUse: [
+          ...(userHooks.PreToolUse ?? []),
+          { hooks: [async (input, toolUseId) => { this.#observePromptTool(input, toolUseId); return {}; }] },
+        ],
+        Stop: [
+          ...(userHooks.Stop ?? []),
+          { hooks: [async (input) => { this.#observePromptStop(input); return {}; }] },
+        ],
+        StopFailure: [
+          ...(userHooks.StopFailure ?? []),
+          { hooks: [async (input) => { this.#observePromptStop(input); return {}; }] },
+        ],
         CwdChanged: [
           ...(userHooks.CwdChanged ?? []),
           {
@@ -1827,7 +2003,7 @@ export class AgentHost implements EngineAdapter {
       // waiting_permission.
       canUseTool: async (toolName, input, options) => {
         if (toolName === INTER_AGENT_TOOL_FQN && this.#options.queryOptions?.mcpServers?.kaoiro) {
-          const origin = await this.toolOrigins.resolve(options.toolUseID);
+          const origin = await this.toolOrigins.resolveBound(options.toolUseID);
           if (!origin?.signal || origin.signal.aborted || options.signal.aborted) return { behavior: "deny", message: "unbound or retired inter-agent tool call" };
           return this.#canUseTool(toolName, input, AbortSignal.any([origin.signal, options.signal]));
         }
@@ -1863,9 +2039,8 @@ export class AgentHost implements EngineAdapter {
       // only on change — the id is stable within a conversation (ADR-0014).
       for await (const message of session) {
         if (message.type === "assistant") {
-          for (const block of message.message.content) if (block.type === "tool_use") this.toolOrigins.observe(block.id);
+          for (const block of message.message.content) if (block.type === "tool_use" && block.name !== INTER_AGENT_TOOL_FQN) this.toolOrigins.observe(block.id);
         }
-        if (message.type === "result") this.toolOrigins.retire();
         // A received SDK frame is the watchdog's only progress signal. Do
         // not feed server instructions, permission callbacks, or local timer
         // activity here: those can continue while the SDK turn is wedged.
@@ -1876,7 +2051,12 @@ export class AgentHost implements EngineAdapter {
         const id = sdkMessageToSessionId(message);
         if (id !== null && id !== this.#sessionId) {
           const hadPriorSession = this.#sessionId !== null;
-          if (hadPriorSession) this.toolOrigins.reset();
+          if (hadPriorSession) {
+            this.#clearNotificationCandidates();
+            this.#promptOwners.clear();
+            this.#retiredPromptIds.clear();
+            this.toolOrigins.reset();
+          }
           // A result from the old conversation must never refresh the new
           // session's directory after a fork/rebind.
           this.#pendingTasklistRefreshes.clear();
@@ -1956,6 +2136,10 @@ export class AgentHost implements EngineAdapter {
         // ADR-0019 F2 requires task info to stay off the parent's own
         // KaoiroState / state_change entirely.
         const taskEvent = sdkMessageToTask(message);
+        if (message.type === "system" && message.subtype === "task_started" && message.is_backgrounded) {
+          this.#backgroundTaskIds.add(message.task_id);
+        }
+        this.#rememberNotification(message);
         if (taskEvent) {
           this.#applyTaskEvent(taskEvent);
         } else if (
@@ -2051,7 +2235,14 @@ export class AgentHost implements EngineAdapter {
           // (e.g. a plain success has no error_code to carry).
           this.#pendingAssistantErrorCode = undefined;
           this.#emitResult(result, sdkMessageToCost(message));
-          if (result.is_error) {
+          const notificationResult = (message as { origin?: { kind?: string } }).origin?.kind === "task-notification";
+          if (notificationResult && this.#activeTurn?.kind !== "sdk_notification") {
+            // A late SDK continuation must never settle a newly yielded wrapper input.
+            this.#clearNotificationCandidates();
+          } else if (!notificationResult && this.#activeTurn?.kind === "sdk_notification") {
+            this.#warn("[kaoiro] notification result lacks task-notification ownership; closing admission");
+            this.close();
+          } else if (result.is_error) {
             const terminalReason = sdkMessageToTerminalReason(message);
             this.#completeActiveTurn(
               {
@@ -3675,6 +3866,8 @@ export class AgentHost implements EngineAdapter {
   async *#input(): AsyncGenerator<SDKUserMessage> {
     while (true) {
       while (this.#queue.length > 0) {
+        await this.#waitForNotificationBoundary();
+        if (this.#closed && this.#queue.length === 0) return;
         const turn = this.#queue.shift() as QueuedTurn;
         const prepared = this.#options.prepareInput?.(turn.turnToken);
         if (prepared === null) {
@@ -3750,6 +3943,16 @@ export class AgentHost implements EngineAdapter {
     }
   }
 
+  async #waitForNotificationBoundary(): Promise<void> {
+    while (this.#notificationCandidates.size > 0 || this.#activeTurn?.kind === "sdk_notification") {
+      if (this.#closed && this.#queue.length === 0) return;
+      await new Promise<void>((resolve) => {
+        if (this.#notificationCandidates.size === 0 && this.#activeTurn?.kind !== "sdk_notification") resolve();
+        else this.#turnBoundaryNotify = resolve;
+      });
+    }
+  }
+
   /** Completes the current token and opens the next-input barrier. Result
    * messages with no wrapper-fed input preserve the legacy empty callback. */
   #completeActiveTurn(
@@ -3771,10 +3974,20 @@ export class AgentHost implements EngineAdapter {
     if (this.#abandonTurnBoundWaits(turn?.turnToken) && !this.#watchdogFailStopped) {
       this.#emitState(this.#machine.state);
     }
-    this.toolOrigins.retire(); this.#activeTurn = null;
+    if (turn?.kind === "sdk_notification") this.toolOrigins.retireIndependent(turn.turnToken);
+    else this.toolOrigins.retire();
+    if (turn !== null) {
+      for (const [promptId, owner] of this.#promptOwners) if (owner.token === turn.turnToken) {
+        this.#promptOwners.delete(promptId);
+        this.#retiredPromptIds.add(promptId);
+      }
+    }
+    this.#activeTurn = null;
+    for (const candidate of this.#notificationCandidates.values()) this.#armNotificationCandidate(candidate);
     if (turn !== null) {
       this.#options.onTurnEnd?.({
         turnToken: turn.turnToken,
+        ...(turn.kind ? { kind: turn.kind } : {}),
         conversationIds: turn.conversationIds,
         ...(error === undefined ? {} : { error }),
         ...(cancellation === undefined ? {} : { cancellation }),
@@ -3810,6 +4023,7 @@ export class AgentHost implements EngineAdapter {
    * dispatch fails visibly instead of being appended behind a dead stream. */
   #abortAllTurnsAtStreamEnd(error: { reason?: string; detail?: string }): void {
     this.#closed = true;
+    this.#clearNotificationCandidates();
     this.#startupProbeAbort.abort();
     this.#abortActiveTurn(error);
     const queuedTurns = this.#queue.splice(0);

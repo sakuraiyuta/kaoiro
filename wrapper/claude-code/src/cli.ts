@@ -326,7 +326,14 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     error?: { reason?: string; detail?: string },
     options: { dispatchNext?: boolean } = {},
   ): void => {
-    if (settlement.kind === "untracked") return;
+    if (settlement.kind === "untracked") {
+      resolveInterAgentConversationIds(
+        settlement.turnToken,
+        interAgent?.pendingConversationIdsForTurn(settlement.turnToken) ?? [],
+        error,
+      );
+      return;
+    }
     if (settlement.kind === "stale") {
       writeRedactedStderr(
         `[kaoiro] stale inter-agent turn settlement ignored: token=${settlement.turnToken}\n`,
@@ -335,7 +342,10 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     }
     resolveInterAgentConversationIds(
       settlement.batch.turnToken,
-      settlement.batch.conversationIds,
+      [...new Set([
+        ...settlement.batch.conversationIds,
+        ...(interAgent?.pendingConversationIdsForTurn(settlement.batch.turnToken) ?? []),
+      ])],
       error,
     );
     // Resolve the old generation before starting a same-CID successor:
@@ -897,10 +907,20 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     onTurnProgress: ({ turnToken }) => {
       turnWatchdog.progress(turnToken);
     },
+    onPromptAdmitted: (turnToken) => {
+      interAgent?.confirmReplyInput(turnToken);
+    },
     // issue #236: settle by the immutable opaque generation token. CIDs are
     // intentionally ignored for ownership: they remain only the payload sent
     // to resolveTurnEnd once that exact token has been found.
-    onTurnEnd: ({ turnToken, error, cancellation }) => {
+    onTurnEnd: ({ turnToken, kind, error, cancellation }) => {
+      if (kind === "sdk_notification" && turnToken !== undefined) {
+        resolveInterAgentConversationIds(turnToken, interAgent?.pendingConversationIdsForTurn(turnToken) ?? [], error);
+        interAgent?.endReplyInput(turnToken);
+        turnWatchdog.end(turnToken);
+        if (cancellation === undefined && !watchdogFailStopped) sessionReset.onTurnEnd();
+        return;
+      }
       if (turnToken) interAgent?.endReplyInput(turnToken);
       turnWatchdog.end(turnToken);
       if (turnToken !== undefined) {
@@ -1076,13 +1096,16 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
             }),
             inputShape: REQUEST_SESSION_RESET_INPUT_SHAPE,
           },
-        ], id => host.toolOrigins.resolve(id)),
+        ], id => host.toolOrigins.resolveBound(id)),
       },
       ...(resumeSessionId !== undefined ? { resume: resumeSessionId } : {}),
     },
-  }, (turnToken) => {
-    interAgent?.beginReplyInput(turnToken);
-    writeDeliveryLifecycle("turn_start", turnToken);
+  }, (turnToken, kind) => {
+    if (kind === "sdk_notification") interAgent?.beginNotificationReplyInput(turnToken);
+    else {
+      interAgent?.beginReplyInput(turnToken, undefined, true);
+      writeDeliveryLifecycle("turn_start", turnToken);
+    }
     // Dispatch may have happened long before this point; only this host
     // input-yield boundary is an actual SDK turn start (issue #238).
     turnWatchdog.start(turnToken);
