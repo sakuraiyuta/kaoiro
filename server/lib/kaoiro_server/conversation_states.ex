@@ -205,8 +205,25 @@ defmodule KaoiroServer.ConversationStates do
       when is_boolean(new_conversation?) do
     GenServer.call(
       server,
-      {:record, conversation_id, from, to, body, turn_number, done?, new_conversation?}
+      {:record, conversation_id, from, to, body, turn_number, done?, new_conversation?, :legacy}
     )
+  end
+
+  def record_bound_message(
+        cid,
+        from,
+        to,
+        body,
+        turn,
+        done?,
+        new?,
+        admission,
+        server \\ __MODULE__
+      )
+      when is_boolean(new?) and
+             (admission in [:legacy, :notice] or
+                (is_integer(admission) and admission in 0..9_007_199_254_740_991)) do
+    GenServer.call(server, {:record, cid, from, to, body, turn, done?, new?, admission})
   end
 
   @doc "Returns the current entry for inspection (test helper)."
@@ -385,7 +402,7 @@ defmodule KaoiroServer.ConversationStates do
 
   @impl true
   def handle_call(
-        {:record, cid, from, to, body, turn_number, done?, new_conversation?},
+        {:record, cid, from, to, body, turn_number, done?, new_conversation?, admission},
         _from,
         state
       ) do
@@ -409,6 +426,19 @@ defmodule KaoiroServer.ConversationStates do
       existing != nil and not MapSet.subset?(MapSet.new([from, to]), existing.agents) ->
         {:reply, {:error, :participants_mismatch}, state}
 
+      existing == nil and not new_conversation? ->
+        {:reply, {:error, :unknown_conversation_id}, state}
+
+      is_integer(admission) and admission != ordinary_turn(existing, to) ->
+        {:reply,
+         {:error,
+          %{
+            reason: "stale_reply_basis",
+            conversation_id: cid,
+            expected_peer_turn: ordinary_turn(existing, to),
+            supplied_basis: admission
+          }}, state}
+
       # issue #167 review M1: a turn_number no greater than the highest
       # already recorded for this OPEN conversation is late, duplicate, or
       # out-of-order — reject before it can corrupt turns/tokens. Checked
@@ -417,17 +447,6 @@ defmodule KaoiroServer.ConversationStates do
       # (existing is never nil here).
       existing != nil and turn_number <= existing.max_turn_number ->
         {:reply, {:error, :stale_turn}, state}
-
-      # issue #252: an explicitly-named id (new_conversation? == false) with
-      # no entry at all — open or tombstoned — is a transcription error, not
-      # a new thread. Checked before the capacity cap below: a mistyped id
-      # never should have consumed quota to begin with, so its rejection
-      # reason must not depend on how full the tracker happens to be right
-      # now. Never true for new_conversation? == true: a wrapper-allocated
-      # fresh UUID is by construction unknown to this map, and that is the
-      # ONE case where "unknown" is the expected, legitimate state.
-      existing == nil and not new_conversation? ->
-        {:reply, {:error, :unknown_conversation_id}, state}
 
       existing == nil and map_size(state.conversations) >= limits.max_conversations ->
         # Bound total in-flight conversations so a malicious wrapper streaming
@@ -444,6 +463,7 @@ defmodule KaoiroServer.ConversationStates do
               status: :open,
               turns: 0,
               max_turn_number: 0,
+              ordinary_turns: %{},
               tokens: 0,
               started_at: now,
               # Wallclock counterpart of `started_at` for operator display
@@ -461,6 +481,11 @@ defmodule KaoiroServer.ConversationStates do
           entry
           | turns: entry.turns + 1,
             max_turn_number: turn_number,
+            ordinary_turns:
+              if(admission == :notice,
+                do: entry.ordinary_turns,
+                else: Map.put(entry.ordinary_turns, from, turn_number)
+              ),
             tokens: entry.tokens + token_estimate(body),
             agents: agents,
             done_by: done_by,
@@ -801,4 +826,6 @@ defmodule KaoiroServer.ConversationStates do
   end
 
   defp token_estimate(_), do: 1
+  defp ordinary_turn(nil, _peer), do: 0
+  defp ordinary_turn(entry, peer), do: Map.get(entry.ordinary_turns, peer, 0)
 end

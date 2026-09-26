@@ -40,6 +40,46 @@ defmodule KaoiroServer.ConversationStatesTest do
     :sys.get_state(pid)
   end
 
+  test "ordinary basis is atomic, notices do not advance it, and rejection changes nothing" do
+    name = start_tracker(:cs_reply_basis)
+
+    send_bound = fn from, to, turn, basis ->
+      ConversationStates.record_bound_message(
+        "bound",
+        from,
+        to,
+        "body",
+        turn,
+        false,
+        true,
+        basis,
+        name
+      )
+    end
+
+    assert :ok = send_bound.("a", "b", 1, 0)
+    assert :ok = send_bound.("b", "a", 2, 1)
+    assert :ok = send_bound.("b", "a", 3, :notice)
+    before = ConversationStates.get("bound", name)
+
+    for basis <- [0, 1, 3, 99] do
+      assert {:error,
+              %{reason: "stale_reply_basis", expected_peer_turn: 2, supplied_basis: ^basis}} =
+               send_bound.("a", "b", 3, basis)
+
+      assert ConversationStates.get("bound", name) == before
+    end
+
+    assert {:error, :participants_mismatch} = send_bound.("third", "b", 4, 0)
+    assert :ok = send_bound.("a", "b", 4, 2)
+
+    assert :ok =
+             ConversationStates.record_message("bound", "b", "a", "legacy", 5, false, false, name)
+
+    assert {:error, %{expected_peer_turn: 5}} = send_bound.("a", "b", 6, 2)
+    assert :ok = send_bound.("a", "b", 6, 5)
+  end
+
   test "通常の record_message は :ok を返しエントリを保持する" do
     name = start_tracker(:cs_basic)
 

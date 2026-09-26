@@ -40,6 +40,7 @@ defmodule KaoiroServer.Application do
       # Live-only wrapper artifact identities. A reconnect reports its own
       # package again; disconnect cleanup is owner-fenced.
       KaoiroServer.WrapperBuildInfos,
+      KaoiroServer.InterAgentReplyBasis,
       # Flat table of active subagent/workflow tasks, keyed by task_id
       # (issue #170, ADR-0019/0047/0048 F1). Kept separate from AgentStates
       # for the same reason as AgentActivity above — a `task` envelope is
