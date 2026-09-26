@@ -133,6 +133,30 @@ For persona-name resolution and existing-peer routing, follow
   nested subcommand even when it never runs, so the fallback prompts on
   every landing (2026-09-14). If a post-fast-forward gate fails, revert the
   fast-forward as a separate, explicitly approved step.
+- A landing gate always includes the runner (`typecheck` and `test`), even
+  for a wrapper-only change: the runner checks the wrapper's runtime assets.
+  Why: issue #407's landing went red on the runner after the implementer's
+  and the reviewer's wrapper-only gates were green.
+- A gate the implementer ran on a branch forked from an older `develop` is
+  not landing evidence. Build the landing candidate yourself (the
+  cherry-picked stack on the current `develop`), push it as a branch, and
+  have the implementation reviewer gate that exact commit. The implementer
+  then fixes forward on that branch, and the landing is a fast-forward to
+  the reviewed commit. Why: issue #422's branch predated issues #386 and
+  #421; its gate counts came from a tree that would have reverted them.
+- Native (real CLI / SDK) experiments go through the production composition
+  entry point (for Claude, `runClaudeCli` with its dependency seams), not a
+  hand-built host and tool. Observation layers may only forward. Any later
+  change to the product code expires the native evidence taken before it.
+  Why: in issue #422 hand-built probes diverged from production twice (the
+  prompt input path, then the admission callback).
+- Set a performance acceptance criterion only after measuring the worst
+  case, where early exits do not help. Why: issue #386's criterion moved
+  four times because it was set before the sparse-match worst case was
+  measured.
+- A conversation that is closed, or whose full id you no longer have, is
+  not retried. Send in a new thread without `conversation_id`, and name the
+  previous thread in the body.
 - Do not impose a mechanism unavailable to a peer's engine as a completion
   criterion. Claude Code custom skills and hook pipelines (such as
   `/my-code-review-cycle`) are available only to peers with
@@ -171,6 +195,26 @@ For persona-name resolution and existing-peer routing, follow
   detection off (∞), rather than reading past banners that never clear —
   a notice nobody acts on is worth nothing. The threshold is
   deployment-wide, not per director.
+
+## Review results as files
+
+A review result travels as a file, not as a message body. Relaying a long
+review through a director costs every hop the full text, and a message is
+hard to cite by line or hash.
+
+- The reviewer writes the full result to
+  `tmp/reviews/issue-<N>/<design|impl>-r<round>-<reviewer>.md` under the
+  shared tree's root (`tmp/` is gitignored). The file names the target
+  commit and artifact hashes, the verdict, every finding with its severity
+  and location, and the reviewer's own measurements. One file per round;
+  a file is never edited after it is sent.
+- The reviewer's message goes to the director, not to the implementer. Its
+  body carries only the verdict, the finding counts, the path, and the
+  file's SHA-256.
+- The director checks the hash and forwards the path and hash to the
+  implementer, with the director's own instructions. The implementer
+  answers each finding by its identifier (`M1`, `S1`, ...).
+- The director deletes `tmp/reviews/issue-<N>/` when the issue closes.
 
 ## Round budget for review cycles
 
