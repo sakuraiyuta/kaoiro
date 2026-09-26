@@ -1139,6 +1139,7 @@ export type InterAgentMessageKind =
  *  secret-masked, length-clipped reason so the receiving agent can decide
  *  whether to retry, wait, or escalate to the operator. */
 export interface InterAgentErrorPayload {
+  reset_delay_seconds?: number;
   peer?: string;
   synthetic?: boolean;
   kind?: string;
@@ -1171,6 +1172,8 @@ export interface InterAgentErrorPayload {
  *  entry exists) as `unknown_conversation_id` instead of silently opening
  *  a fresh, context-less thread under a mistyped or stale id. */
 export interface InterAgentMessagePayload {
+  in_reply_to?: number;
+  notice_type?: "turn_failure" | "stale_delivery";
   /** Server recovery notification identity, independent of ingress sequence. */
   loss_id?: string;
   to: string;

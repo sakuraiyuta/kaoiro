@@ -1,0 +1,43 @@
+[
+  {
+    "notice_type": "turn_failure",
+    "code": "rate_limit",
+    "message": "the peer hit a rate limit"
+  },
+  {
+    "notice_type": "turn_failure",
+    "code": "context_overflow",
+    "message": "the peer's context window overflowed"
+  },
+  {
+    "notice_type": "turn_failure",
+    "code": "api_error",
+    "message": "the peer reported an unspecified error"
+  },
+  {
+    "notice_type": "turn_failure",
+    "code": "timeout",
+    "message": "the peer's turn timed out"
+  },
+  {
+    "notice_type": "turn_failure",
+    "code": "interrupted",
+    "message": "the peer's turn was interrupted"
+  },
+  {
+    "notice_type": "turn_failure",
+    "code": "permission_gate_blocked",
+    "message": "the peer stopped waiting to start an execution because permission dispatch remained blocked; the operator must reapply the same sandbox/network values to create a new revision before you resend"
+  },
+  {
+    "notice_type": "stale_delivery",
+    "code": "stale_turn",
+    "message": "the peer's local turn counter had already advanced past this message"
+  },
+  {
+    "notice_type": "turn_failure",
+    "code": "rate_limit",
+    "message": "the peer hit a rate limit; Resets in 148h49m28s",
+    "reset_delay_seconds": 535768
+  }
+]

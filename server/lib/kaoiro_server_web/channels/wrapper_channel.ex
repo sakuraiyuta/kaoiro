@@ -126,6 +126,13 @@ defmodule KaoiroServerWeb.WrapperChannel do
          :ok <- authorize_persona(persona_id),
          :ok <- reject_if_connected(agent_id) do
       delivery = bind_delivery(agent_id, params)
+
+      KaoiroServer.InterAgentReplyBasis.register(
+        agent_id,
+        self(),
+        params["inter_agent_reply_basis"] == "v1"
+      )
+
       # Drop the raw token once verified so it cannot leak via crash
       # logs / socket inspection.
       send(self(), :after_join)
@@ -140,6 +147,10 @@ defmodule KaoiroServerWeb.WrapperChannel do
 
       reply =
         %{"hydration" => hydration_verdict(agent_id)}
+        |> maybe_put_optional_field(
+          "inter_agent_reply_basis",
+          if(params["inter_agent_reply_basis"] == "v1", do: "v1")
+        )
         |> maybe_put_optional_field("delivery", delivery)
         |> maybe_put_optional_field(
           "delivery_resync",
@@ -153,6 +164,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
       {:ok, reply,
        socket
        |> assign(:agent_id, agent_id)
+       |> assign(:inter_agent_reply_basis, params["inter_agent_reply_basis"] == "v1")
        |> assign(:activity_replay_id, nil)
        |> assign(:delivery_generation, params["delivery_generation"])
        |> assign(:delivery_resync, delivery != nil and params["delivery_resync"] == "skip-v1")
@@ -514,7 +526,8 @@ defmodule KaoiroServerWeb.WrapperChannel do
     end
 
     with :ok <- validate(envelope, agent_id),
-         {:ok, inter_agent} <- preflight_inter_agent(envelope, agent_id) do
+         {:ok, inter_agent} <-
+           preflight_inter_agent(envelope, agent_id, socket.assigns[:inter_agent_reply_basis]) do
       # ふじ 検収 2 fix-round M2 (2026-07-23): advance boundary BEFORE
       # any ingress stamp is allocated. Pre-M2 this ran after store, so
       # if the first envelope of a new session was an inter_agent_message
@@ -543,6 +556,9 @@ defmodule KaoiroServerWeb.WrapperChannel do
           store_and_broadcast(envelope, agent_id, received_at, socket)
       end
     else
+      {:error, %{reason: _} = details} ->
+        {:reply, {:error, details}, socket}
+
       {:error, {:disconnected, disconnect}} ->
         {:reply, {:error, %{reason: "disconnected", disconnect: disconnect}}, socket}
 
@@ -575,6 +591,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
     {deliveries, _incomplete?} = DeliveryStates.wire_projection()
     states = AgentStates.snapshot()
     build_infos = WrapperBuildInfos.snapshot()
+    reply_modes = KaoiroServer.InterAgentReplyBasis.snapshot()
 
     live =
       Enum.map(states, fn {id, env} ->
@@ -586,6 +603,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
           Map.get(deliveries, id),
           Map.get(build_infos, id)
         )
+        |> maybe_put_optional_field("inter_agent_reply_basis", Map.get(reply_modes, id))
       end)
 
     # issue #259 仕様5: AgentStates 側を優先。同一 agent_id を重複させない。
@@ -1966,6 +1984,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
     # applies it while this channel still owns the entry, so a stale
     # terminate after a reconnect cannot clobber the new state.
     ts = DateTime.utc_now() |> DateTime.to_iso8601()
+    KaoiroServer.InterAgentReplyBasis.unregister(agent_id, self())
     build_info_clear = WrapperBuildInfos.delete(agent_id, self())
 
     if match?({:ok, _}, build_info_clear) do
@@ -2384,7 +2403,8 @@ defmodule KaoiroServerWeb.WrapperChannel do
   # not a reject.
   defp preflight_inter_agent(
          %{"type" => "inter_agent_message", "payload" => payload},
-         from
+         from,
+         protected?
        ) do
     to = payload["to"]
     cid = payload["conversation_id"]
@@ -2456,15 +2476,18 @@ defmodule KaoiroServerWeb.WrapperChannel do
                 do: {:error, {:disconnected, disconnect}},
                 else: {:error, :disconnected}
             else
-              with {:ok, reservation} <- DeliveryStates.reserve(to, self()) do
-                case ConversationStates.record_message(
+              with {:ok, admission} <-
+                     KaoiroServer.InterAgentReplyBasis.admission(payload, protected?),
+                   {:ok, reservation} <- DeliveryStates.reserve(to, self()) do
+                case ConversationStates.record_bound_message(
                        cid,
                        from,
                        to,
                        body,
                        turn_number,
                        done?,
-                       new_conversation?
+                       new_conversation?,
+                       admission
                      ) do
                   # Within limits. `:both_done` means every participating agent
                   # has now signalled done; the tracker has already closed the
@@ -2489,7 +2512,7 @@ defmodule KaoiroServerWeb.WrapperChannel do
     end
   end
 
-  defp preflight_inter_agent(_envelope, _from), do: {:ok, :not_inter_agent}
+  defp preflight_inter_agent(_envelope, _from, _protected?), do: {:ok, :not_inter_agent}
 
   # Mirrors warn_relayed_version/3 in agents_channel.ex (ADR-0015 best-effort
   # accept) for the same shape of client/server skew: a wrapper that predates
