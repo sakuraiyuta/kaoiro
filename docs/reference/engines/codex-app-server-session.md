@@ -29,6 +29,9 @@ in-flight account probe. This prevents two app-server children of one Host
 from initializing the same empty `CODEX_HOME` concurrently. It does not
 coordinate separate wrappers; deployment ordering for that case is in the
 [backend runbook](../../operations/codex-backend-switch.md).
+The probe opens no thread or bridge grandchild, so its pipes close with its
+child; the transport escalates an EOF-ignoring child to SIGKILL after five
+seconds, bounding the main session's startup wait to that shutdown interval.
 
 Both exec and app-server use `BRIDGE_MCP_POLICY`: `required = true`,
 `startup_timeout_sec = 30`, `default_tools_approval_mode = "approve"`, and a

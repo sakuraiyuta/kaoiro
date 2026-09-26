@@ -719,6 +719,7 @@ export class CodexHost implements EngineAdapter {
    *  exactly once per session. */
   #rateLimitsInitializedSessionId: string | null = null;
   #nativeRateLimitsSeen = false;
+  /** The fresh-idle account probe is one-shot; aborting it cannot be undone. */
   readonly #startupRateLimitAbort = new AbortController();
   #startupRateLimitProbe: Promise<void> | null = null;
   #imageOperation: Promise<void> = Promise.resolve();
@@ -907,6 +908,9 @@ export class CodexHost implements EngineAdapter {
     finally { if (this.#startupRateLimitProbe === probe) this.#startupRateLimitProbe = null; }
   }
 
+  /** Two app-server children can collide while initializing SQLite in one
+   * CODEX_HOME. The probe opens no thread, so no bridge grandchild can hold
+   * its pipes; AppServerRpc escalates EOF to SIGKILL after five seconds. */
   async #finishStartupRateLimitProbe(): Promise<void> {
     const probe = this.#startupRateLimitProbe;
     if (probe === null) return;

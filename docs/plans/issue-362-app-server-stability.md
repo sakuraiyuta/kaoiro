@@ -1,8 +1,13 @@
+---
+title: App-server lifecycle stability
+status: in_progress
+last_updated: 2026-09-26
+---
+
 # Issue #362: app-server lifecycle stability
 
-Status: implementation complete, pending peer review, 2026-09-26. Baseline: `develop` at `373792da`.
-Implementation review owner: Kohaku, dispatched by Kuroe. No source changes have
-been made on this branch.
+Status: implementation reviewed, pending landing, 2026-09-26. Baseline: `develop` at `373792da`.
+Implementation review owner: Kohaku, dispatched by Kuroe.
 
 ## Evidence and attribution
 
