@@ -1,16 +1,18 @@
 ---
 title: Issue 422 Claude notification admission verification
-status: verified
+status: superseded
 last_updated: 2026-09-27
 ---
 
 # Issue 422 Claude notification admission verification
 
+**Correction after implementation review:** The (a)/(b) probes below did not pass the received peer envelope to the SDK. They prepared reply basis from body A/turn 1 and body B/turn 3, but the actual SDK prompts contained only Bash instructions. The (a)/(b) rows and their "received body" wording therefore do not establish the approved native input boundary. They are historical server-comparison observations, not an admission gate. The corrected, artifact-bound measurements are in [round 2](2026-09-27-issue-422-notification-admission-round2.md).
+
 ## Artifact and method
 
 Option A source and reference documentation are commit `077b3dee78af7fdef7e1aa1ea03f1b7e266ddbd3`, built from the approved design at `690913ddeb0e9ab3cfc95cde21d64fe9c5935c6f` (design SHA-256 `c6ceffc660833eab720aa652cc82ccd6f179604a99e0775d95f626877d4671ab`). The earlier [implementation gate](2026-09-27-issue-422-implementation-gate.md) measured a fold with a synthetic repeated peer input and was blocked. The measurements below use the final source, distinct inputs, and a real joined server comparison. No server comparison or ticket rule was relaxed.
 
-The native probes used Claude Agent SDK 0.3.280, CLI 2.1.280, the actual `AgentHost`, SDK hooks and MCP callback, and model API requests. The joined-server probes used two actual `ServerLink` clients against a local Phoenix server started in this worktree with `PORT=42522 MIX_ENV=dev mix phx.server`. The Agent and held-call probes used a transport recorder to count wrapper sends. Run the retained probes from the worktree root:
+The native probes used Claude Agent SDK 0.3.280, CLI 2.1.280, the actual `AgentHost`, SDK hooks and MCP callback, and model API requests. The joined-server probes used two actual `ServerLink` clients against a local Phoenix server started in this worktree with `PORT=42522 MIX_ENV=dev mix phx.server`. The Agent and held-call probes used a transport recorder to count wrapper sends. The (a)/(b) commands below are retained only to reproduce the superseded observations; use the corrected round-2 commands for the admission gate:
 
 ```sh
 node tmp/fuji-422/probe-a-real-final-a.mjs fina
@@ -26,9 +28,9 @@ All seven commands exited 0. The five native CLI probes made 6, 6, 7, 7, and 3 m
 
 | Measured boundary | Wrapper tool attempts | Server acceptances | Peer deliveries | Evidence |
 | --- | ---: | ---: | ---: | --- |
-| (a) T1 received body A/turn 1, T2 received different body B/turn 3; a background Bash notification reused T2's confirmed prompt ID. Its root call kept T2's fixed default basis 3. | 1 `NOTIFICATION` | 1 | 1 | `a-real-fina-events.jsonl` seq 45–48; T2 ended once at seq 52. |
+| Superseded (a): the ledger prepared body A/turn 1 and body B/turn 3, while the SDK received Bash-only prompts. Its root call used externally prepared basis 3; this is not a peer-input admission gate. | 1 `NOTIFICATION` | 1 | 1 | `a-real-fina-events.jsonl` seq 45–48; T2 ended once at seq 52. |
 | Separate stale-basis control with the joined server's latest peer turn 3: direct channel push with basis 1. This is not a T2 wrapper tool attempt. | 0 | 0; `stale_reply_basis(3,1)` | 0 | `a-server-stale-final-events.jsonl`. |
-| (b) Server accepted ordinary peer turn 5 and host received it while T2 was active, before yielding it to the SDK. The folded root call kept basis 3. | 1 `NOTIFICATION` | 0; `stale_reply_basis(5,3)` | 0 | `a-real-finb-events.jsonl` seq 35, 53–55. The queued wrapper input was later cancelled on stream end. |
+| Superseded (b): server accepted ordinary peer turn 5 and host received it while T2 was active. The SDK's T1/T2 prompts were Bash-only, so this is a server-comparison observation, not a peer-input admission gate. | 1 `NOTIFICATION` | 0; `stale_reply_basis(5,3)` | 0 | `a-real-finb-events.jsonl` seq 35, 53–55. The queued wrapper input was later cancelled on stream end. |
 | (c) SDK MCP callback captured a T1 call before T1 was interrupted. It was released after T2's prompt confirmation. | 0 | 0 | 0 | `a-oldcall-bound-events.jsonl` seq 10, 16–21: `stale_tool_call`, `send_not_attempted=true`. |
 | Actual background Agent: child callback, then root completion notification with a fresh prompt ID. | 1 root `AGENT_ROOT`; 0 child | Recorder only | Recorder saw 1 root | `a-agent-bound-events.jsonl` seq 22–23 and 31–44. The child received `unbound_tool_call`. |
 | Two independent background Bash completions. First notification N used completed basis 1 and received `stale_reply_basis(3,1)`; the recovery result handed off peer turn 3. N2 then used default basis 3. | 1 N, 1 N2 | 0 N, 1 N2 | 0 N, 1 N2 | `a-real-ledgernative-events.jsonl` seq 39–48 and 52–69. Recovery committed at seq 47, handoff at seq 48; both notification tokens had separate terminal results. |
