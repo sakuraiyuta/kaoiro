@@ -1,0 +1,539 @@
+{
+  "status": "round-nine candidate; independent review and AG deployment decision pending",
+  "code_commit": "0ad2d2e41326c691fef0619511a9e509dfebb257",
+  "previous_candidate": "814dc6ed6f593e94cce70c96e9eca0c6c00d4563",
+  "scratch": "/tmp/kogane407-cross-turn.bUKHrA",
+  "source_sha256": {
+    "docs/plans/issue-407-rejoin-followup.md": "ed79bd5a13c0a19b2058a20c6de12ea1aac5d652462abd2bf831fe5b26341616",
+    "docs/reference/inter-agent/reply-basis.md": "8f375d0bab1399d573d443b29c1e7af0970750b6e667145f21922604f061dffe",
+    "protocol/fixtures/inter-agent-internal-notices.json": "721be428fa9a9b9e7652b71a4f1ac64c20f045e5b0d9acdee12f45836e24fd61",
+    "protocol/src/index.ts": "bb84698c99ce02d0a014da88fea8bd87ddf89298c7913752e1d287e0805c7d35",
+    "server/lib/kaoiro_server/application.ex": "7e8c1eae0a2c937b536ca76365735541306ea03eaa127e9ab706e99ea709a458",
+    "server/lib/kaoiro_server/conversation_states.ex": "9f869cd46a38efc16a001d33048c5c3d834606369acd48b88da02b760b8f0d42",
+    "server/lib/kaoiro_server/inter_agent_reply_basis.ex": "dcc213788db26b5bf806c355d8101a55d6a6eceec02243747d1f9f19ee788610",
+    "server/lib/kaoiro_server_web/channels/wrapper_channel.ex": "2e1c95d3c02a7cd770079d3b75a79df52801f72f12dd6a3d1440a949fce184a8",
+    "server/test/kaoiro_server/conversation_states_test.exs": "abddfeae5532d51a58154f2fdc8a68e48a5d351e86c1aafd474d1e9160a0f550",
+    "server/test/kaoiro_server/inter_agent_reply_basis_test.exs": "d17672021839151f839113c079a1670445790f72be662c7922635bb28c4c3fdd",
+    "server/test/kaoiro_server_web/channels/reply_basis_channel_test.exs": "e43f8c98fd3cc9ef4d54536a85148bcfd2e3a8c689ada8c84a6803f8ac0a3f7e",
+    "wrapper/agent-common/src/index.ts": "4ab46dfc170359b44c6f06a9d88f09600408345e4255aabff260cb9b65008427",
+    "wrapper/agent-common/src/inter_agent.ts": "0b8d95b7914076c9b8df800a5dc8f1e1a16e21ba13b89866c1013c85481a5623",
+    "wrapper/agent-common/src/reply_basis.ts": "87455ac176e8f474c0de7885d52bfa6d8a8113545c9069079be02b163f20790c",
+    "wrapper/agent-common/src/tool_origins.ts": "3d0b62d102837de8ee21c6335d5980ada11486545f93ee5b7b2e330e88d95ade",
+    "wrapper/agent-common/src/tooling.ts": "260d9f7661c0151f721267415bb1a269883d1378c3c4a409864cbcc1fe3bd88b",
+    "wrapper/agent-common/test/inter_agent.test.ts": "9a99f39cc1b314f3401736f3639664e8f3002152a818f49883268ebd616e98f6",
+    "wrapper/agent-common/test/reply_basis.test.ts": "00b89b13bf725270b0344c61ea1cea55d191b52aaf6e3bcaacbda24aad0a2015",
+    "wrapper/antigravity/src/inter_agent_message_handler.ts": "a86b9fcec81ab5075050ec0390e7068a7afe7980b201231afcc0c2fd5764bfef",
+    "wrapper/antigravity/src/inter_agent_turn_coordinator.ts": "2d69eca03f104a8f0728561a578a1be7c4954a843d441f62b08d89d56552c791",
+    "wrapper/antigravity/test/host.test.ts": "2f3a0c5fcef909efd55a4983a6d27bd6f0867baabca8ca968be78184bdbcd705",
+    "wrapper/antigravity/test/inter_agent_turn_coordinator.test.ts": "fcdf53e6cd557a24ef418b78eed09151c0c9a06a6f5b3b94de65973ff59cd7d4",
+    "wrapper/claude-code/src/cli.ts": "0ce8b7b373fee51b4cd85b20e4ad9fa009732996652e7c4bef666b4876c7a4a5",
+    "wrapper/claude-code/src/host.ts": "71dca3e030f687513500a9b23384e37fc921ebfa03670227ceffe4131bd73056",
+    "wrapper/claude-code/src/inter_agent_message_handler.ts": "27b8328bb9502fcf44446163a8381da88a2dfa9c50f053b51360ee58e83fbbe1",
+    "wrapper/claude-code/src/inter_agent_sdk.ts": "eb66881f41fc40163f00db1f97135bb49f9d33d80c3d53ac56c11653926f819a",
+    "wrapper/claude-code/src/inter_agent_turn_coordinator.ts": "086a64aa380b92f7d724f1bdb7c7e867887363c3678d55d3d73ef083ed193ab5",
+    "wrapper/claude-code/test/cli_delivery_composition.test.ts": "1e79823d6594abd2561d886f73c44b39148ab6643c641b19241542e2f1d99a6f",
+    "wrapper/claude-code/test/cli_whoami_composition.test.ts": "67a8fdbf1ec1899ed3b45e6fb4e40beed21c79a75ff0c67b1d213cdbb250374a",
+    "wrapper/claude-code/test/host.test.ts": "3b7b0bb281b2bea53419f1aea4999b2789b42122f6d1b61ef2247ab61372b78f",
+    "wrapper/claude-code/test/inter_agent_sdk_handoff.test.ts": "5a9c469e149bf1270c009cec22ff662376345695b854d42814b7a1bda5af927c",
+    "wrapper/claude-code/test/inter_agent_turn_coordinator.test.ts": "a7e485927233ec39af91ba3a6dcdd232f6353aefada2ec639262e1ca10a8adca",
+    "wrapper/codex/src/app_server_session.ts": "aa04faeb043a4592fba4521b5cb54dcec904cdb5951e0c6bde655d5950050a08",
+    "wrapper/codex/src/bridge.ts": "b629b63416cf1b20cb8158f86467af027ff8ef4cb945cd477281c4bc12c9565f",
+    "wrapper/codex/src/cli.ts": "a142bb8cd571bc256b96aab7c5650e19c1567524f4010b69bd0c21408c03c10d",
+    "wrapper/codex/src/host.ts": "95a77194e9fb7c857a0d9bd51d845262171d3e375f0cfaa0a9b5cef0282e5f8c",
+    "wrapper/codex/src/inter_agent_message_handler.ts": "2dcf0be6d204be6fa246414218fc36e3649b55d3c503a8ea2f9e617c480a8991",
+    "wrapper/codex/src/inter_agent_turn_coordinator.ts": "6369b3a10f8d61faff5dcabb9e7b32ca498791ff3a3ae9633026d47ec9c63d04",
+    "wrapper/codex/src/toolhost.ts": "1141a85cf15f5a74ba642527d5303cfbce8959acdecfe7810b885ec244417020",
+    "wrapper/codex/test/app_server_session.test.ts": "be8a835f8316ac7f521132bfe30b61c2ad3a727c3e17d3cff595e11d96c1ea25",
+    "wrapper/codex/test/cli_app_server_lifecycle.test.ts": "5f681e7ab091560e5d8df961b21c1cdbf22e807ccc8c1bc3338efc7437083a21",
+    "wrapper/codex/test/cli_delivery_composition.test.ts": "f606e906a419a937fd1bdbe9d048ce547ccee7d11fb11c51e4c890fedf801645",
+    "wrapper/codex/test/cli_permission_sync_composition.test.ts": "9ef4eaae053526ec2fd6d338e021aa6bdb72b3a4a9116fa40cf7d38c492cb3bd",
+    "wrapper/codex/test/fixtures/cli_app_server.ts": "0096fddc80dfca9abb4c54e11280fbbc08f3767fbe2e6c39e3702b72d7d5dc72",
+    "wrapper/codex/test/fixtures/phoenix_loopback.ts": "18e4a62d4626e08fc19311e980aa39c48f82a509e6ee07ee78489dd8dbac7fd5",
+    "wrapper/codex/test/inter_agent_turn_coordinator.test.ts": "f27040e7cd35d28b7f389e4580fae78bb663414f629cfcc9763cd546807e9de6",
+    "wrapper/codex/test/permission_rejoin_boundary.test.ts": "01b0300191b32651f3c015b3a574c3ad82dbe5242d94f7f5da4dbc14cf990910",
+    "wrapper/codex/test/reply_basis_lifecycle.test.ts": "3cb06be013b093d0e58b43893cf904582e25c5c67db5c5e19e218d7650e0f9f2",
+    "wrapper/codex/test/reply_basis_rejoin.test.ts": "7ca4f9549bd4a4b12d8bbff09c252d0ae9fca3916c6dcff18a55cd518553c856",
+    "wrapper/codex/test/session_reset_gate.test.ts": "296923596e33db20f46d74de92e0a910bb4cc9846eb1e184d76f362cabdb17eb",
+    "wrapper/codex/test/toolhost.test.ts": "ed665c75fa3bfa04cce93ce075b963beabb1876f92e1bd51f5b64cf36c1e3e5b",
+    "wrapper/core/src/transport.ts": "884965123b65615d616f87689dfe74bb4b740e30392c4db2ae4882880252f919",
+    "wrapper/core/test/transport.test.ts": "bf5ec50b2c299487d8d58616f1ae2a796dc6a71bc276687c65d8c91eca7866a2"
+  },
+  "built_sha256": {
+    "wrapper/agent-common/dist/index.js": "d9d58560bf571b5706b6c515e5161b2701d628439e02883b712d1a96cc260e0b",
+    "wrapper/agent-common/dist/inter_agent.js": "010d614a144cd3fb7a11148ffc8dc4b5ba73127429924103c3f7dc0343df7666",
+    "wrapper/agent-common/dist/reply_basis.js": "58d7001ac11a6417f2770acbedc12e871f9e9c174ba9899e4a834f1f61d4f7ae",
+    "wrapper/agent-common/dist/tool_origins.js": "2ef9ca01af53a6fe531a4b02c8fc848f388ef4f754c95dfd401d00867716435a",
+    "wrapper/agent-common/dist/tooling.js": "9ef74711266a21b134866f1cb7158f369acd17c5c0ec4a55fea56943fa2a07a4",
+    "wrapper/antigravity/dist/inter_agent_message_handler.js": "acc100b682b0de99b27fdca1f9efd07cbf3c6e1789ce850f15e1e669735b5936",
+    "wrapper/antigravity/dist/inter_agent_turn_coordinator.js": "fd186dc2e598d9ef6f95f7d9163fc798029d54106ad82d9b2262864bc70f5fb7",
+    "wrapper/claude-code/dist/build-info.json": "8fc27c124082eebefb2d3500e82577f1c317e5917e1471b317c79ab3e20a1687",
+    "wrapper/claude-code/dist/cli.js": "17106eb61b69cf317709f91219e7504a03b0c0108e142fd316ff4d331a2c267e",
+    "wrapper/claude-code/dist/host.js": "744a41fdecc232a0c7f7e5ba2c21fc8422f20bc08d5c0e9de2cb9eeddedb44cd",
+    "wrapper/claude-code/dist/inter_agent_message_handler.js": "82d1e3ce75a77468c1d093134f688efc5261f0dd9d5b19e2c393ca5b93210c48",
+    "wrapper/claude-code/dist/inter_agent_sdk.js": "fd29313da93fb54cec3dde732819da10a0beeb1ab236a8c1e949e3689dc0c323",
+    "wrapper/claude-code/dist/inter_agent_turn_coordinator.js": "d2cff700a1d71d2c130f51ac6bb4fe3fad369ba9195a8a21e2c64338812f2909",
+    "wrapper/codex/dist/app_server_session.js": "492478d649eefa4b748e1060325cb26925ec0801246cb0a68a5e7e65d67f724c",
+    "wrapper/codex/dist/bridge.js": "2fcf440e2c0413b089e3ff519e8fb6a21342e97da4629a7f6f9eacf98b16633b",
+    "wrapper/codex/dist/build-info.json": "9c7ba95969270f1d1457282ac41231e70c75e7524d77ad2a4a5fd5f15261261e",
+    "wrapper/codex/dist/cli.js": "45a3a4c0a45b4c96a12e7995d087f8a80283f201b6a5611010b200c711f222b7",
+    "wrapper/codex/dist/host.js": "a8d26c6b2fcfea966fb3343bd49009b371192dea78e1eef553771063d01ec6be",
+    "wrapper/codex/dist/inter_agent_message_handler.js": "378ce1c79896c261c36ac45817fc0b4f893530d20937fac8177da38dcd8a4d67",
+    "wrapper/codex/dist/inter_agent_turn_coordinator.js": "be7f04a9b11bd629547793e59e9aff3cf626b4019b0e5a83dc33be350483697f",
+    "wrapper/codex/dist/toolhost.js": "717d35b0997c7c4105066d645cfeccf3364afb2480f2c042e6c98b7e1186c5c4",
+    "wrapper/core/dist/build-info.json": "cbc6385eba315262c0204fa0a7944a5f69e607d57ad911a8ef6841ca800cc4f4",
+    "wrapper/core/dist/transport.js": "d57a93269187ca22e2853bf463f8558f9256d1d4f84b77060f5baee7715d8bb2"
+  },
+  "dependency_sha256": {
+    "wrapper/core/node_modules/phoenix/package.json": "cbce7ede764778bda3a8899f8c294e3e142b08753d609d75ff27c6dfba5425e6",
+    "wrapper/core/node_modules/phoenix/priv/static/phoenix.js": "489ef16da720ee6916c4f793d6265672dda92afe5f068657bc3a169e251aa555",
+    "wrapper/core/node_modules/phoenix/priv/static/phoenix.mjs": "6e4efa666b95257b366dcd7100ae47b26852c7e204536a7cf5c24e4511fda5f1",
+    "wrapper/claude-code/node_modules/@anthropic-ai/claude-agent-sdk/package.json": "1b088aefaa33134531f1840976e87cc1fce2383deff646a75e7a5bdd78cf18c8",
+    "wrapper/codex/node_modules/@openai/codex-sdk/package.json": "93744cad85efeecf9d2378f1b817662fc505a7eae6b3aa9e3646bae1c267f665"
+  },
+  "artifacts": {
+    "round9-before-type-annotation/round9-wrapper-full.log": {
+      "sha256": "e25575bdf4f91db132515e9a9561996496159052e9035504ebbd4aca246c8d4e",
+      "bytes": 9091
+    },
+    "round9-build-manifest.py": {
+      "sha256": "cbcceabc8d83bd6e0f201d7629dd6c705c5dd3c874dd3ad7b3d7d4c5c9849ce9",
+      "bytes": 3418
+    },
+    "round9-check-manifest.py": {
+      "sha256": "17301fa9511c89d060a63a302e2db3be3877ce6483d61dfb775d485bf68953b5",
+      "bytes": 670
+    },
+    "round9-closed-guidance-green.log": {
+      "sha256": "1da80cd58c01e397cd073ee80ead0afb8845264b8e4e5893f1f855c9248d4af6",
+      "bytes": 407
+    },
+    "round9-closed-guidance-red.log": {
+      "sha256": "7525ff1ff939a44883c94c6755f43d1227d0ae203b3226c18b7fcc4c86e925e3",
+      "bytes": 1472
+    },
+    "round9-codex-typecheck-after-fixture.log": {
+      "sha256": "fcb5c15a59400b26f574e4a1f33716e0a7826c6952c9f6cfd1e5291ae6fab6d9",
+      "bytes": 106
+    },
+    "round9-failed-notice-result-green.log": {
+      "sha256": "fca379a4151fd44e284ba0e859fdd8b8d920165003023bb39ad93a1ec0de61d1",
+      "bytes": 488
+    },
+    "round9-failed-notice-result-red.log": {
+      "sha256": "7ef9326a09bb4fdfb275517fc5ddbc6442b00c47eb4052bfa1af6b8d0afbcde6",
+      "bytes": 3054
+    },
+    "round9-failed-wait-result-green.log": {
+      "sha256": "6c5737e63fb1690730550fee55a216e2d380c3f9115c261bbbd16fd91cea55e5",
+      "bytes": 519
+    },
+    "round9-failed-wait-result-red.log": {
+      "sha256": "010e451314420cd87204fdaa8c1d6891a3370113c76817b971d258ad0ea7e4b1",
+      "bytes": 1462
+    },
+    "round9-final-native-app-server.log": {
+      "sha256": "d797632c5291c1f065287b9de820a71eab2effa76e6a7626d15f7ad0868c6193",
+      "bytes": 147
+    },
+    "round9-final-native-claude.log": {
+      "sha256": "638a247fa081ae62b47423e00cef88840176d4d6fa326419fcf605c0fdce72c1",
+      "bytes": 81
+    },
+    "round9-final-native-exec.log": {
+      "sha256": "80d4d15ed322198bb1cc74e14f643a1ab91396792db33780cd88d8c61e593cc6",
+      "bytes": 141
+    },
+    "round9-join-error-green.log": {
+      "sha256": "26309b84d8d159fb0815ff300fbf1a7e73369890cfb2cce564c2cc3562825ae2",
+      "bytes": 571
+    },
+    "round9-join-error-red.log": {
+      "sha256": "8e2c2edb0cea70e5218f8c00b867946f6616bbe9859e1d43b58b94c407406d24",
+      "bytes": 2036
+    },
+    "round9-join-timeout-green.log": {
+      "sha256": "35ae844627d4a9e99cdd75c5e1309343ff8a8a42674fb1dfd49f88855a8ac4da",
+      "bytes": 611
+    },
+    "round9-join-timeout-red.log": {
+      "sha256": "e435d7c5580f21135c563a608fed754915546f9a48c67b11f5889fe10d40a93a",
+      "bytes": 1443
+    },
+    "round9-lifecycle-expanded.log": {
+      "sha256": "851bbec564f1e1e2507fa7bb28f50c45682883dd3bee3c1ef3ff9fe7e103fecd",
+      "bytes": 3520
+    },
+    "round9-lifecycle-final.log": {
+      "sha256": "aff94d5a30a0dc1d3d3417dc2af22e6f3b963145ce9f590ee2f02f01e7f703b2",
+      "bytes": 3758
+    },
+    "round9-lifecycle.log": {
+      "sha256": "a9a071b7ddcb0f79de9b659429105626776d4630de388d6a074f4eeb20684dce",
+      "bytes": 2832
+    },
+    "round9-mutate.py": {
+      "sha256": "701c48f1fadf08cfb25043cbd704266945efa4d7d54a5b62e5d3ecdd3c0a5857",
+      "bytes": 3141
+    },
+    "round9-mutations.json": {
+      "sha256": "c1a2d1864bbbcde206f528b0b420a693a71809c385b4a58e928d0bb400547adb",
+      "bytes": 4124
+    },
+    "round9-native-app-server.log": {
+      "sha256": "d797632c5291c1f065287b9de820a71eab2effa76e6a7626d15f7ad0868c6193",
+      "bytes": 147
+    },
+    "round9-native-claude.log": {
+      "sha256": "638a247fa081ae62b47423e00cef88840176d4d6fa326419fcf605c0fdce72c1",
+      "bytes": 81
+    },
+    "round9-native-exec.log": {
+      "sha256": "80d4d15ed322198bb1cc74e14f643a1ab91396792db33780cd88d8c61e593cc6",
+      "bytes": 141
+    },
+    "round9-normal-close-green.log": {
+      "sha256": "66a8e55f86002585f1f63bef8e7eded11bda5bb7a44d4bf5bb1c7b1b4444e1c7",
+      "bytes": 417
+    },
+    "round9-normal-close-red.log": {
+      "sha256": "da088cb5f3f28d63069b869f2fecd838cb76e6fa4c1c4df15b6b6b6ed603b998",
+      "bytes": 1240
+    },
+    "round9-pending-renewal-green.log": {
+      "sha256": "2db3bf0116e5264dc4d1432114b486352d2b4cf0d90605e4604a0adb4fb20ed8",
+      "bytes": 647
+    },
+    "round9-pending-renewal-red.log": {
+      "sha256": "99c3e450d5b4fd0226e32bfdb56e8c5ba6611cceb1d1dec9183b785eeebe9820",
+      "bytes": 1482
+    },
+    "round9-phx-close-green.log": {
+      "sha256": "da0ce1de2d7bdc5857ee971477f5bb7ba977643944abaaff92debff882d83cf7",
+      "bytes": 407
+    },
+    "round9-phx-close-red.log": {
+      "sha256": "3b4025a65b2a1a78fc8532ceace566d6acb88e3145ba1c26702fe4396f2c2077",
+      "bytes": 1219
+    },
+    "round9-prior-generation-green.log": {
+      "sha256": "46065aca507626f9a3c27194bfd475d9e7bd6342cd3d009a9e8eb5dd7cbad7e5",
+      "bytes": 586
+    },
+    "round9-prior-generation-red.log": {
+      "sha256": "8866d6d26063cba41927d18ee6f4e6c56aeef78258ef398d32984e157171640b",
+      "bytes": 1815
+    },
+    "round9-server-format.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "round9-server-full.log": {
+      "sha256": "c2cb2f6a1ff16374911a77cc4dda8715e5d5893d820db2c335bc26aadebe6a6e",
+      "bytes": 81038
+    },
+    "round9-socket-fakes-restored.log": {
+      "sha256": "cc878797ee4912256a9a7fe4995c6f066a6f7a157d8d4af7b5f552d9b9dc698d",
+      "bytes": 10486
+    },
+    "round9-stderr-guard-restored.log": {
+      "sha256": "951dfaec42f520d24e6b29c00c0b9527eff2fd76e5a534f9d3be33a9c90d7a7a",
+      "bytes": 645
+    },
+    "round9-submit-native/ticket-app-server/result.json": {
+      "sha256": "282a05a1c4a9590d991e36a5ddb7ef8c002f460e5d76b5bea8a223e55c1de086",
+      "bytes": 655509
+    },
+    "round9-submit-native/ticket-claude/result.json": {
+      "sha256": "e1d4c65d15165af18655f3e1c3c2d8d4d6e95edb702d4d4271cb4ecdfbe4aca4",
+      "bytes": 1486007
+    },
+    "round9-submit-native/ticket-claude.mjs": {
+      "sha256": "9308bdc49d5098a409daa137764dd4605cbe4d54829aa562bafcd848451b3581",
+      "bytes": 7343
+    },
+    "round9-submit-native/ticket-codex.mjs": {
+      "sha256": "744b7d81cf42048392767ad33b92d0f7f916bee542b9df18c0096fd5b4b1ec3d",
+      "bytes": 6701
+    },
+    "round9-submit-native/ticket-exec/result.json": {
+      "sha256": "9013c7c3bac225f46000a5324385a0c7e9fe81a5a2c0d753c50fb000cfc2dd0b",
+      "bytes": 619907
+    },
+    "round9-submit-native-app-server.log": {
+      "sha256": "d797632c5291c1f065287b9de820a71eab2effa76e6a7626d15f7ad0868c6193",
+      "bytes": 147
+    },
+    "round9-submit-native-claude.log": {
+      "sha256": "638a247fa081ae62b47423e00cef88840176d4d6fa326419fcf605c0fdce72c1",
+      "bytes": 81
+    },
+    "round9-submit-native-exec.log": {
+      "sha256": "80d4d15ed322198bb1cc74e14f643a1ab91396792db33780cd88d8c61e593cc6",
+      "bytes": 141
+    },
+    "round9-typecheck-initial.log": {
+      "sha256": "c2929804ea9bf86bfa7224e37747ed31fa71e5389f2caf5d69a403b987dbb282",
+      "bytes": 586
+    },
+    "round9-wait-deadline-green.log": {
+      "sha256": "1f00a7da517a4310c259f4137886b3e570073edc521bb1b32613188adcff10a5",
+      "bytes": 422
+    },
+    "round9-wait-deadline-red.log": {
+      "sha256": "b82fba4f2f68c130d076fdd0124f1bfb7c63bff4e6220ee1eda66dbe29e7ac53",
+      "bytes": 1223
+    },
+    "round9-wrapper-build.log": {
+      "sha256": "7cdeb091ad83d2f12b90b4f6fcea965d0822ced6a9b4bf0571ee318970393f71",
+      "bytes": 844
+    },
+    "round9-wrapper-full-before-fake-fix.log": {
+      "sha256": "c921c26133df9f52ed3595893aae02989775459c75090cd6847698b467abaa78",
+      "bytes": 162719
+    },
+    "round9-wrapper-full.log": {
+      "sha256": "9719c733d1d0ea95651034b3862fe0304d31ddf874d693a1660b492062b67733",
+      "bytes": 153873
+    },
+    "round9-wrapper-typecheck.log": {
+      "sha256": "c2929804ea9bf86bfa7224e37747ed31fa71e5389f2caf5d69a403b987dbb282",
+      "bytes": 586
+    }
+  },
+  "gates": {
+    "wrapper_build": 0,
+    "wrapper_typecheck": 0,
+    "wrapper_full_test": 0,
+    "server_full_test": 0,
+    "server_format": 0
+  },
+  "wrapper_pass": {
+    "core": 270,
+    "agent-common": 388,
+    "antigravity": 392,
+    "claude-code": 530,
+    "codex": 851
+  },
+  "wrapper_skipped": 2,
+  "server": {
+    "full_pass": 1626,
+    "seed": 389565
+  },
+  "mutation_results": [
+    {
+      "name": "phx-close",
+      "red": 1,
+      "green": 0,
+      "file": "wrapper/core/src/transport.ts",
+      "restored_sha256": "884965123b65615d616f87689dfe74bb4b740e30392c4db2ae4882880252f919",
+      "command": [
+        "pnpm",
+        "--dir",
+        "wrapper/codex",
+        "exec",
+        "vitest",
+        "run",
+        "test/reply_basis_lifecycle.test.ts",
+        "-t",
+        "^phx_close is terminal"
+      ]
+    },
+    {
+      "name": "join-error",
+      "red": 1,
+      "green": 0,
+      "file": "wrapper/core/src/transport.ts",
+      "restored_sha256": "884965123b65615d616f87689dfe74bb4b740e30392c4db2ae4882880252f919",
+      "command": [
+        "pnpm",
+        "--dir",
+        "wrapper/codex",
+        "exec",
+        "vitest",
+        "run",
+        "test/reply_basis_lifecycle.test.ts",
+        "-t",
+        "^join-error releases"
+      ]
+    },
+    {
+      "name": "join-timeout",
+      "red": 1,
+      "green": 0,
+      "file": "wrapper/core/src/transport.ts",
+      "restored_sha256": "884965123b65615d616f87689dfe74bb4b740e30392c4db2ae4882880252f919",
+      "command": [
+        "pnpm",
+        "--dir",
+        "wrapper/codex",
+        "exec",
+        "vitest",
+        "run",
+        "test/reply_basis_lifecycle.test.ts",
+        "-t",
+        "^join-timeout releases"
+      ]
+    },
+    {
+      "name": "normal-close",
+      "red": 1,
+      "green": 0,
+      "file": "wrapper/core/src/transport.ts",
+      "restored_sha256": "884965123b65615d616f87689dfe74bb4b740e30392c4db2ae4882880252f919",
+      "command": [
+        "pnpm",
+        "--dir",
+        "wrapper/codex",
+        "exec",
+        "vitest",
+        "run",
+        "test/reply_basis_lifecycle.test.ts",
+        "-t",
+        "^normal-socket-close is terminal"
+      ]
+    },
+    {
+      "name": "wait-deadline",
+      "red": 1,
+      "green": 0,
+      "file": "wrapper/core/src/transport.ts",
+      "restored_sha256": "884965123b65615d616f87689dfe74bb4b740e30392c4db2ae4882880252f919",
+      "command": [
+        "pnpm",
+        "--dir",
+        "wrapper/codex",
+        "exec",
+        "vitest",
+        "run",
+        "test/reply_basis_lifecycle.test.ts",
+        "-t",
+        "a silent join"
+      ]
+    },
+    {
+      "name": "failed-wait-result",
+      "red": 1,
+      "green": 0,
+      "file": "wrapper/agent-common/src/inter_agent.ts",
+      "restored_sha256": "0b8d95b7914076c9b8df800a5dc8f1e1a16e21ba13b89866c1013c85481a5623",
+      "command": [
+        "pnpm",
+        "--dir",
+        "wrapper/codex",
+        "exec",
+        "vitest",
+        "run",
+        "test/reply_basis_lifecycle.test.ts",
+        "-t",
+        "a failed wait cannot borrow"
+      ]
+    },
+    {
+      "name": "failed-notice-result",
+      "red": 1,
+      "green": 0,
+      "file": "wrapper/agent-common/src/inter_agent.ts",
+      "restored_sha256": "0b8d95b7914076c9b8df800a5dc8f1e1a16e21ba13b89866c1013c85481a5623",
+      "command": [
+        "pnpm",
+        "--dir",
+        "wrapper/codex",
+        "exec",
+        "vitest",
+        "run",
+        "test/reply_basis_lifecycle.test.ts",
+        "-t",
+        "^internal notice"
+      ]
+    },
+    {
+      "name": "pending-renewal",
+      "red": 1,
+      "green": 0,
+      "file": "wrapper/agent-common/src/inter_agent.ts",
+      "restored_sha256": "0b8d95b7914076c9b8df800a5dc8f1e1a16e21ba13b89866c1013c85481a5623",
+      "command": [
+        "pnpm",
+        "--dir",
+        "wrapper/codex",
+        "exec",
+        "vitest",
+        "run",
+        "test/reply_basis_lifecycle.test.ts",
+        "-t",
+        "^join-error renews"
+      ]
+    },
+    {
+      "name": "closed-guidance",
+      "red": 1,
+      "green": 0,
+      "file": "wrapper/agent-common/src/inter_agent.ts",
+      "restored_sha256": "0b8d95b7914076c9b8df800a5dc8f1e1a16e21ba13b89866c1013c85481a5623",
+      "command": [
+        "pnpm",
+        "--dir",
+        "wrapper/codex",
+        "exec",
+        "vitest",
+        "run",
+        "test/reply_basis_lifecycle.test.ts",
+        "-t",
+        "^phx_close is terminal"
+      ]
+    },
+    {
+      "name": "prior-generation",
+      "red": 1,
+      "green": 0,
+      "file": "wrapper/core/src/transport.ts",
+      "restored_sha256": "884965123b65615d616f87689dfe74bb4b740e30392c4db2ae4882880252f919",
+      "command": [
+        "pnpm",
+        "--dir",
+        "wrapper/codex",
+        "exec",
+        "vitest",
+        "run",
+        "test/reply_basis_rejoin.test.ts",
+        "-t",
+        "channel-only"
+      ]
+    }
+  ],
+  "native_ticket_results": [
+    {
+      "engine": "claude",
+      "exit": 0,
+      "requests": 9,
+      "sink_bodies": [
+        "A",
+        "C",
+        "corrected"
+      ],
+      "C_basis": 3
+    },
+    {
+      "engine": "exec",
+      "exit": 0,
+      "requests": 10,
+      "sink_bodies": [
+        "A",
+        "C",
+        "corrected"
+      ],
+      "C_basis": 3
+    },
+    {
+      "engine": "app-server",
+      "exit": 0,
+      "requests": 10,
+      "sink_bodies": [
+        "A",
+        "C",
+        "corrected"
+      ],
+      "C_basis": 3
+    }
+  ]
+}
