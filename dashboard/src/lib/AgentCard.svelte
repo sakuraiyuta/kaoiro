@@ -167,6 +167,8 @@
     envelope.state === "waiting_permission" ||
       envelope.state === "waiting_question" ||
       envelope.state === "error" ||
+      pendingPermissionFrom(envelope) !== null ||
+      pendingQuestionFrom(envelope) !== null ||
       hasUnackedError,
   );
 
