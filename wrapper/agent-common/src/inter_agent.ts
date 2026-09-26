@@ -2483,6 +2483,10 @@ function localReplyError(code: string): InterAgentToolResult {
       ? "The server channel is closed. A new wrapper connection is required before sending again."
       : code === "invalid_reply_ticket" || code === "reply_ticket_required"
       ? "Copy both fields from the original reply_authorization; an unspent, unexpired ticket can be retried."
+      : code === "unbound_tool_call"
+      ? "This tool call is not bound to a live wrapper-delivered input. No message was sent. Wait for a new operator or peer input delivered by the wrapper before sending again. Retrying in this continuation, changing conversation_id, or adding a reply ticket cannot bind this call."
+      : code === "stale_tool_call"
+      ? "The input that owned this tool call has ended or been cancelled. No message was sent. Do not retry this call; send from a new live wrapper-delivered input."
       : "Spent or expired authorization cannot be reused; use a fresh authorization or the next input turn." }) }] };
 }
 
