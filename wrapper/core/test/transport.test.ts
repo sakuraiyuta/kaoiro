@@ -82,6 +82,7 @@ vi.mock("phoenix", () => {
     }
     disconnect(): void {}
     onClose(_callback: () => void): void {}
+    onError(_callback: () => void): void {}
   }
   return { Channel, Socket };
 });

@@ -18,7 +18,20 @@ lock for negotiation, then captures the mode and join generation. Immediately
 before pushing, ServerLink requires that generation still matches and the socket
 and channel are joined. Protected inter-agent sends never enter Phoenix's
 reconnect buffer. An already-written push may still have an unknown outcome;
-it is not automatically retried. Directory entries and `whoami` expose
+it is not automatically retried.
+
+Channel `phx_close`, normal socket close (code 1000), and `ServerLink.close()`
+are terminal: pending and future sends return local `reply_basis_closed` with
+`send_not_attempted: true`; no retry ticket is issued. Recoverable channel/socket
+errors wait for rejoin. Join error/timeout releases current waits as failed;
+every negotiation wait also has a fixed ten-second deadline. A failed wait
+returns local `reply_basis_pending`, even if rejoin succeeds before its
+continuation runs. A finite same-CID queue drains without overtaking: each call
+releases its slot after bounded negotiation or acknowledgement. Abort retires
+the call's input without changing the connection's negotiation state. See the
+[lifecycle table](../../plans/issue-407-rejoin-followup.md#channelsocket-lifecycle-contract).
+
+Directory entries and `whoami` expose
 the current mode; a missing mode is unknown, not protected.
 
 An ordinary v1 send carries `payload.in_reply_to`, an integer from zero through
@@ -80,7 +93,7 @@ requirements. Do not repeat tickets in diagnostics.
 | --- | --- |
 | Missing/mistyped/wrong-CID ticket | Local error; no send. Other valid tickets remain usable and can be copied correctly |
 | Spent or expired ticket | Local error; the same value cannot be reused |
-| Local `reply_basis_connection_changed` | No push attempted (`send_not_attempted: true`); fresh authorization for an intentional retry after rejoin |
+| Local `reply_basis_connection_changed` / `reply_basis_pending` | No push attempted (`send_not_attempted: true`); fresh authorization for an intentional retry after rejoin |
 | `peer_reconnecting_capacity` / `delivery_backlog` | Definite nonacceptance: return a fresh ticket for the same observed input, for an intentional retry |
 | `stale_reply_basis` | Only newly handed-off recovery bodies authorize a new ticket |
 | Accepted | Spent; a separately received waiter/recovery input can authorize another reply |

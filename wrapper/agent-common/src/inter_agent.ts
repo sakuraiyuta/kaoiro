@@ -730,7 +730,7 @@ interface PendingInjection {
 
 export interface InterAgentToolOptions {
   replyTicketClock?: () => number;
-  waitReplyBasisMode?: (signal?: AbortSignal) => Promise<"v1" | "legacy" | "pending">;
+  waitReplyBasisMode?: (signal?: AbortSignal) => Promise<"v1" | "legacy" | "pending" | "closed">;
   unreadCount?: () => number;
   replyBasisMode?: () => "v1" | "legacy" | "pending";
   replyBasisGeneration?: () => number | undefined;
@@ -1445,7 +1445,12 @@ export class InterAgentTool {
   sendInternalNotice(envelope: Envelope): void {
     void (async () => {
       try {
-        if (this.#options.replyBasisMode?.() === "pending") await this.#options.waitReplyBasisMode?.();
+        const waited = this.#options.replyBasisMode?.() === "pending" ? await this.#options.waitReplyBasisMode?.() : undefined;
+        if (waited === "closed" || waited === "pending") {
+          this.#options.onReplyDiagnostic?.({ event: "internal_notice_rejected", conversation_id: envelope.payload.conversation_id,
+            turn_number: envelope.payload.turn_number, disposition: "rejected", reason: `reply_basis_${waited}`, send_not_attempted: true });
+          return;
+        }
         const mode = this.#options.replyBasisMode?.() ?? "legacy";
         const generation = this.#options.replyBasisGeneration?.();
         if (mode === "pending") throw Error("reply_basis_pending");
@@ -1609,16 +1614,18 @@ export class InterAgentTool {
     const outcome = await this.#withCidLock(
       conversationId,
       async (): Promise<InvokeLockOutcome> => {
-        if (this.#options.replyBasisMode?.() === "pending") {
-          await this.#options.waitReplyBasisMode?.(captured?.origin.signal);
-        }
-        const mode = this.#options.replyBasisMode?.() ?? "legacy";
-        if (mode === "pending") return { kind: "peer-error", result: this.#localReplyError("reply_basis_pending") };
-        const generation = this.#options.replyBasisGeneration?.();
+        const waited = this.#options.replyBasisMode?.() === "pending"
+          ? await this.#options.waitReplyBasisMode?.(captured?.origin.signal) : undefined;
         if (captured) {
           const error = this.replyBasis.beforeSend(captured);
           if (error) return { kind: "peer-error", result: this.#localReplyError(error) };
         }
+        const mode = this.#options.replyBasisMode?.() ?? "legacy";
+        if (waited === "closed") return { kind: "peer-error", result: this.#localReplyError("reply_basis_closed") };
+        if (mode === "pending" || waited === "pending") return { kind: "peer-error", result: captured
+          ? this.#rejectedReply(captured, { kind: "rejected", reason: "reply_basis_pending", send_not_attempted: true }, "Negotiation did not complete before send.")
+          : this.#localReplyError("reply_basis_pending") };
+        const generation = this.#options.replyBasisGeneration?.();
         // issue #167 AC10: a conversation this wrapper already knows is
         // CLOSED is rejected locally, before any network round-trip — the
         // server would say the same via conversation_closed, but there is
