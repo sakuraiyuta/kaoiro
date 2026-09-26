@@ -97,6 +97,19 @@ They are derived separately into the dedicated `task` envelope
 ([tasks](../protocol/tasks.md); implemented — stage 1 (wrapper), stage 2
 (server), stage 3 (dashboard overhead ring)).
 
+A background Bash or Agent completion can resume the SDK without a new wrapper
+input. The host registers candidates only for `task_started.is_backgrounded`
+tasks, since a foreground Bash also emits `task_notification` without an
+autonomous continuation. The parent host correlates the candidate with the subsequent root
+`UserPromptSubmit` and `PreToolUse` hooks before authorizing an inter-agent
+call. A prompt ID shared with a confirmed live wrapper turn retains that turn's
+reply snapshot and terminal result; a fresh ID with no live owner starts an
+independent notification turn from confirmed completed input. An unknown task,
+subagent call, retired prompt ID, or unmatched result cannot borrow the newest
+wrapper turn. Notification candidates received during a live turn are retained
+until its terminal boundary; unmatched candidates release the next-input
+barrier after a bounded 10-second wait.
+
 **Observed record (task_notification terminal guarantee, issue #170)**: SDK
 `0.3.220`, captured 2026-08-09. A disposable script captured a real `query()`
 stream and verified that `task_notification` is always emitted along all four

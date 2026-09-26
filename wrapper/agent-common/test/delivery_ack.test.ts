@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DeliveryAcknowledger,
   DeliveryAcknowledgement,
+  createDeliveryAcknowledgementRuntime,
   createDeliveryAcknowledgementWiring,
 } from "../src/delivery_ack.js";
 import type { Envelope } from "../src/types.js";
@@ -72,6 +73,20 @@ describe("DeliveryAcknowledger (issue #247)", () => {
 
     wiring.onInterAgentDeliveryStatus({ acked_seq: 0 });
     wiring.onTurnStart("sdk-turn");
+    expect(sent).toEqual([1]);
+  });
+
+  it("an SDK notification turn does not acknowledge queued wrapper delivery", () => {
+    const sent: number[] = [];
+    const runtime = createDeliveryAcknowledgementRuntime(
+      (seq) => sent.push(seq),
+      { deliverySequencesForTurn: () => [1] },
+    );
+    const host = runtime.withHostOptions({});
+    runtime.withServerLinkOptions({}).onInterAgentDeliveryStatus({ acked_seq: 0 });
+    host.onTurnStart({ turnToken: "notification", kind: "sdk_notification" });
+    expect(sent).toEqual([]);
+    host.onTurnStart({ turnToken: "wrapper", kind: "wrapper_input" });
     expect(sent).toEqual([1]);
   });
 });

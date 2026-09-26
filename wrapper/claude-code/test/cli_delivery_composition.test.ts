@@ -32,6 +32,99 @@ function inboundEnvelope(deliverySeq: number, turnNumber = 1): Envelope {
 }
 
 describe("Claude CLI delivery composition (issue #247)", () => {
+  it("resolves a coordinator batch and a newly recovered CID before ending T2", async () => {
+    const notices: Envelope[] = [];
+    let hostOptions!: Record<string, any>;
+    let linkOptions!: Record<string, any>;
+    let tool!: InterAgentTool;
+    let activeToken = "";
+    let finishHost!: () => void;
+    let started!: () => void;
+    const finished = new Promise<void>(resolve => { finishHost = resolve; });
+    const ready = new Promise<void>(resolve => { started = resolve; });
+    const running = runClaudeCli({
+      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      loadConfig: () => ({ ...config }),
+      buildMcpServer: interAgent => { tool = interAgent; return {} as never; },
+      createServerLink: (_url, _agentId, options) => {
+        linkOptions = options as unknown as Record<string, any>;
+        queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
+        return {
+          sendInterAgent: async (envelope: Envelope) => { notices.push(envelope); return { kind: "accepted", stamp: null }; },
+          acknowledgeInterAgentDelivery: () => {},
+          send: () => {}, close: () => {}, currentSessionId: () => null,
+          reportDisconnectIntent: async () => true,
+        } as never;
+      },
+      createHost: (_config, options) => {
+        hostOptions = options as unknown as Record<string, any>;
+        return {
+          state: "idle", statusExtSnapshot: () => ({}),
+          run: async () => { started(); await finished; },
+          send: async (_text: string, _attachments: unknown, _cids: readonly string[], token: string) => {
+            activeToken = token;
+            hostOptions.prepareInput(token);
+            hostOptions.onTurnStart({ turnToken: token });
+          },
+        } as never;
+      },
+    });
+    try {
+      await ready;
+      await linkOptions.onInterAgentMessage(inboundEnvelope(1, 1));
+      await vi.waitFor(() => expect(activeToken).not.toBe(""));
+      tool.notePendingInjection(inboundEnvelope(2, 3), activeToken);
+      hostOptions.onTurnEnd({ turnToken: activeToken, error: { reason: "api_error" } });
+      await vi.waitFor(() => expect(notices.filter(e => e.type === "inter_agent_message")).toHaveLength(2));
+      expect(notices.filter(e => e.type === "inter_agent_message").map(e => e.payload.conversation_id).sort()).toEqual(["c-1", "c-2"]);
+      expect(tool.pendingConversationIdsForTurn(activeToken)).toEqual([]);
+    } finally { finishHost(); await running; }
+  });
+  it.each(["sdk_notification", "wrapper_input"] as const)("settles committed recovery owned by %s exactly once", async (kind) => {
+    const notices: Envelope[] = [];
+    let hostOptions!: Record<string, any>;
+    let tool!: InterAgentTool;
+    let finishHost!: () => void;
+    let started!: () => void;
+    const finished = new Promise<void>(resolve => { finishHost = resolve; });
+    const ready = new Promise<void>(resolve => { started = resolve; });
+    const running = runClaudeCli({
+      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      loadConfig: () => ({ ...config }),
+      buildMcpServer: interAgent => { tool = interAgent; return {} as never; },
+      createServerLink: (_url, _agentId, options) => {
+        queueMicrotask(() => {
+          options.onReplyBasisMode?.("v1");
+          options.onPersonaPrompt?.("system prompt");
+        });
+        return {
+          sendInterAgent: async (envelope: Envelope) => { notices.push(envelope); return { kind: "accepted", stamp: null }; },
+          send: () => {},
+          close: () => {}, currentSessionId: () => null,
+          reportDisconnectIntent: async () => true,
+        } as never;
+      },
+      createHost: (_config, options) => {
+        hostOptions = options as unknown as Record<string, any>;
+        return { state: "idle", statusExtSnapshot: () => ({}), run: async () => { started(); await finished; } } as never;
+      },
+    });
+    try {
+      await ready;
+      const token = "recovery-token";
+      hostOptions.onTurnStart({ turnToken: token, conversationIds: [], kind });
+      tool.notePendingInjection(inboundEnvelope(1, 3), token);
+      hostOptions.onTurnEnd({ turnToken: token, conversationIds: [], kind, error: { reason: "api_error" } });
+      await vi.waitFor(() => expect(notices).toHaveLength(1));
+      const failureNotices = notices.filter(envelope => envelope.type === "inter_agent_message");
+      expect(failureNotices).toHaveLength(1);
+      expect(failureNotices[0]!.payload).toMatchObject({ conversation_id: "c-1", notice_type: "turn_failure" });
+      expect(tool.pendingConversationIdsForTurn(token)).toEqual([]);
+    } finally {
+      finishHost();
+      await running;
+    }
+  });
   it("acks a queued terminal item without a second host turn or delivery retirement", async () => {
     const acknowledgements: number[] = [];
     const retire = vi.fn(() => true);

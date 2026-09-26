@@ -125,9 +125,9 @@ export interface DeliveryAcknowledgementRuntime {
   };
   withHostOptions<TOptions extends object>(
     options: TOptions,
-    afterTurnStart?: (turnToken: string) => void,
+    afterTurnStart?: (turnToken: string, kind?: "wrapper_input" | "sdk_notification") => void,
   ): TOptions & {
-    onTurnStart(info: { turnToken: string }): void;
+    onTurnStart(info: { turnToken: string; kind?: "wrapper_input" | "sdk_notification" }): void;
   };
 }
 
@@ -154,9 +154,9 @@ export function createDeliveryAcknowledgementRuntime(
     }),
     withHostOptions: (options, afterTurnStart) => ({
       ...options,
-      onTurnStart: ({ turnToken }: { turnToken: string }) => {
-        acknowledgement.acknowledgeTurnStart(turnToken, turns);
-        afterTurnStart?.(turnToken);
+      onTurnStart: ({ turnToken, kind }: { turnToken: string; kind?: "wrapper_input" | "sdk_notification" }) => {
+        if (kind !== "sdk_notification") acknowledgement.acknowledgeTurnStart(turnToken, turns);
+        afterTurnStart?.(turnToken, kind);
       },
     }),
   };

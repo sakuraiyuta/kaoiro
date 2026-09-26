@@ -817,11 +817,13 @@ export class InterAgentTool {
   readonly #preparedInputs = new Map<string, readonly Envelope[]>();
 
   prepareReplyInput(token: string, envelopes: readonly Envelope[]): void { this.#preparedInputs.set(token, envelopes); }
-  beginReplyInput(token: string, signal?: AbortSignal): void {
+  beginReplyInput(token: string, signal?: AbortSignal, deferInputConfirmation = false): void {
     const envelopes = this.#preparedInputs.get(token) ?? [];
     this.#preparedInputs.delete(token);
-    this.replyBasis.begin(token, envelopes, signal);
+    this.replyBasis.begin(token, envelopes, signal, deferInputConfirmation);
   }
+  confirmReplyInput(token: string): void { this.replyBasis.confirmInput(token); }
+  beginNotificationReplyInput(token: string, signal?: AbortSignal): void { this.replyBasis.beginFromCompleted(token, signal); }
   endReplyInput(token: string): void { this.#preparedInputs.delete(token); this.replyBasis.retire(token); }
   resetReplyInput(): void { this.#preparedInputs.clear(); this.replyBasis.reset(); }
 
@@ -1357,6 +1359,10 @@ export class InterAgentTool {
       from: envelope.agent_id,
       turnToken,
     });
+  }
+
+  pendingConversationIdsForTurn(turnToken: string): string[] {
+    return [...this.#pendingInjections].filter(([, pending]) => pending.turnToken === turnToken).map(([cid]) => cid);
   }
 
   /** Called by cli.ts once per SDK turn boundary (success or error), with the
@@ -2240,7 +2246,7 @@ export class InterAgentTool {
       live: () => !returned && this.replyBasis.live(origin) === undefined && (ticket?.valid() ?? true),
       commit: () => {
         origin.signal?.removeEventListener("abort", abort); returned = true;
-        ticket?.activate(); this.replyBasis.observe(ordinary);
+        ticket?.activate(); this.replyBasis.observe(ordinary, origin.token);
         if (lease) for (const envelope of ordinary) this.notePendingInjection(envelope, origin.token);
         lease?.commit();
         this.#options.onInputHandoff?.(envelopes);
@@ -2484,7 +2490,7 @@ function localReplyError(code: string): InterAgentToolResult {
       : code === "invalid_reply_ticket" || code === "reply_ticket_required"
       ? "Copy both fields from the original reply_authorization; an unspent, unexpired ticket can be retried."
       : code === "unbound_tool_call"
-      ? "This tool call is not bound to a live wrapper-delivered input. No message was sent. Wait for a new operator or peer input delivered by the wrapper before sending again. Retrying in this continuation, changing conversation_id, or adding a reply ticket cannot bind this call."
+      ? "This tool call is not bound to a confirmed live input. No message was sent. Wait for a new confirmed input before sending again. Retrying in this continuation, changing conversation_id, or adding a reply ticket cannot bind this call."
       : code === "stale_tool_call"
       ? "The input that owned this tool call has ended or been cancelled. No message was sent. Do not retry this call; send from a new live wrapper-delivered input."
       : "Spent or expired authorization cannot be reused; use a fresh authorization or the next input turn." }) }] };
