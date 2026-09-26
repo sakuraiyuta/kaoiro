@@ -1,3 +1,4 @@
+import { ToolOrigins } from "@kaoiro/agent-common";
 // Agent host — runs a query() session, derives state from its message stream,
 // and routes tool-permission requests through canUseTool so they surface as
 // waiting_permission. Streaming input (send) and interrupt are wired here.
@@ -959,6 +960,8 @@ export class AgentHost implements EngineAdapter {
 
   /** Opaque identity of the SDK turn currently executing, if any. The common
    * inter-agent tool uses this as a lease when a model sends a reply. */
+  readonly toolOrigins = new ToolOrigins();
+
   activeInterAgentTurnToken(): string | null {
     return this.#activeTurn?.turnToken ?? null;
   }
@@ -1306,6 +1309,7 @@ export class AgentHost implements EngineAdapter {
    *  Clears the TTL GC interval so the host does not keep the Node event
    *  loop alive after the session has settled. */
   close(): void {
+    this.toolOrigins.retire();
     this.#closed = true;
     this.#startupProbeAbort.abort();
     if (this.#gcTimer !== null) {
@@ -1353,6 +1357,7 @@ export class AgentHost implements EngineAdapter {
    *  inheriting half-staged state. With no pending uploads the loop is a
    *  no-op, preserving the legacy interrupt-only behaviour. */
   async interrupt(): Promise<void> {
+    this.toolOrigins.retire();
     for (const uploadId of this.#pendingUploads.keys()) {
       this.#emitAttachRejected({
         upload_id: uploadId,
@@ -1820,8 +1825,14 @@ export class AgentHost implements EngineAdapter {
       },
       // Set last so queryOptions can never override the hook that drives
       // waiting_permission.
-      canUseTool: (toolName, input, options) =>
-        this.#canUseTool(toolName, input, options.signal),
+      canUseTool: async (toolName, input, options) => {
+        if (toolName === INTER_AGENT_TOOL_FQN && this.#options.queryOptions?.mcpServers?.kaoiro) {
+          const origin = await this.toolOrigins.resolve(options.toolUseID);
+          if (!origin?.signal || origin.signal.aborted || options.signal.aborted) return { behavior: "deny", message: "unbound or retired inter-agent tool call" };
+          return this.#canUseTool(toolName, input, AbortSignal.any([origin.signal, options.signal]));
+        }
+        return this.#canUseTool(toolName, input, options.signal);
+      },
       // Set last, same reasoning as canUseTool above: close() depends on
       // aborting THIS controller (issue #391), so a caller-supplied
       // queryOptions.abortController must never silently replace it.
@@ -1851,6 +1862,10 @@ export class AgentHost implements EngineAdapter {
       // state so the envelopes this message produces already carry it. Forward
       // only on change — the id is stable within a conversation (ADR-0014).
       for await (const message of session) {
+        if (message.type === "assistant") {
+          for (const block of message.message.content) if (block.type === "tool_use") this.toolOrigins.observe(block.id);
+        }
+        if (message.type === "result") this.toolOrigins.retire();
         // A received SDK frame is the watchdog's only progress signal. Do
         // not feed server instructions, permission callbacks, or local timer
         // activity here: those can continue while the SDK turn is wedged.
@@ -1861,6 +1876,7 @@ export class AgentHost implements EngineAdapter {
         const id = sdkMessageToSessionId(message);
         if (id !== null && id !== this.#sessionId) {
           const hadPriorSession = this.#sessionId !== null;
+          if (hadPriorSession) this.toolOrigins.reset();
           // A result from the old conversation must never refresh the new
           // session's directory after a fork/rebind.
           this.#pendingTasklistRefreshes.clear();
@@ -3673,6 +3689,7 @@ export class AgentHost implements EngineAdapter {
           turn.conversationIds = prepared.conversationIds;
         }
         this.#activeTurn = turn;
+        this.toolOrigins.begin(turn.turnToken);
         this.#everStartedTurn = true;
         // This is the watchdog's only start point. In particular, dispatch
         // and queue insertion are not starts: an earlier SDK turn can keep a
@@ -3754,7 +3771,7 @@ export class AgentHost implements EngineAdapter {
     if (this.#abandonTurnBoundWaits(turn?.turnToken) && !this.#watchdogFailStopped) {
       this.#emitState(this.#machine.state);
     }
-    this.#activeTurn = null;
+    this.toolOrigins.retire(); this.#activeTurn = null;
     if (turn !== null) {
       this.#options.onTurnEnd?.({
         turnToken: turn.turnToken,

@@ -197,3 +197,47 @@ it("does not confuse a received frame with completion of the asynchronous inboun
     f.terminal();await vi.waitFor(() => expect(f.finalized).toHaveLength(1));
   } finally { held.release();resume();await f.close(); }
 });
+
+it.each(["v1", "legacy"] as const)("%s join hands off a legacy peer error through the waiter and permits the next reply", async mode => {
+  const f = await cliAppFixture(false, "app-server", mode);
+  try {
+    await f.inbound(1, "mixed"); await vi.waitFor(() => expect(f.turns()).toHaveLength(1));
+    const waiting = f.tool("send_to_agent", { to: "peer.agent", conversation_id: "mixed", kind: "query", body: "question", wait_for_response: true, timeout_ms: 2000 });
+    await vi.waitFor(() => expect(f.envelopes("inter_agent_message")).toHaveLength(1));
+    const outgoing = f.envelopes("inter_agent_message")[0]!;
+    expect((outgoing.payload as { in_reply_to?: number }).in_reply_to).toBe(mode === "v1" ? 1 : undefined);
+    f.wire.push("envelope", { ...outgoing, agent_id: "peer.agent", delivery_seq: 2, ingress_stamp: [1, 2], payload: {
+      to: outgoing.agent_id, conversation_id: "mixed", turn_number: 3, kind: "inform", body: "peer failed", error: { code: "api_error", message: "peer failed" },
+    } });
+    const response = await waiting;
+    const result = JSON.parse(response.result.content[0].text);
+    expect(result.peer_error.code).toBe("api_error"); expect(result.peer_error_envelope.payload.turn_number).toBe(3);
+    expect(result.reply_authorization.in_reply_to).toBe(3); await f.waitForAcks([1, 2]);
+    const reply = await f.tool("send_to_agent", { to: "peer.agent", conversation_id: "mixed", kind: "response", body: "received failure", ...result.reply_authorization });
+    expect(reply.result.isError).toBeUndefined();
+    expect((f.envelopes("inter_agent_message")[1]!.payload as { in_reply_to?: number }).in_reply_to).toBe(mode === "v1" ? 3 : undefined);
+    expect(f.turns()).toHaveLength(1);
+  } finally { await f.close(); }
+});
+
+it("stale send transfers a queued body through the real recovery response without another SDK turn", async () => {
+  const f = await cliAppFixture(false, "app-server", "v1");
+  try {
+    await f.inbound(1, "recover"); await vi.waitFor(() => expect(f.turns()).toHaveLength(1));
+    await f.inbound(2, "recover", "LATEST_PEER_BODY", "peer.agent", 3); await f.waitForAcks([1]);
+    const args = { to: "peer.agent", conversation_id: "recover", kind: "response", body: "reply" };
+    const b = await f.tool("send_to_agent", { ...args, in_reply_to: 3 });
+    expect(JSON.stringify(b)).toContain("reply_ticket_required"); expect(f.envelopes("inter_agent_message")).toHaveLength(0);
+    f.rejectNextSend({ reason: "stale_reply_basis", expected_peer_turn: 3, supplied_basis: 1, conversation_id: "recover" });
+    const a = await f.tool("send_to_agent", args);
+    expect(a.result.isError).toBe(true);
+    const recovery = JSON.parse(a.result.content[0].text);
+    expect(recovery.recovery[0].payload.body).toBe("LATEST_PEER_BODY"); expect(recovery.unread_remaining).toBe(0);
+    await f.waitForAcks([1, 2]);
+    const c = await f.tool("send_to_agent", { ...args, ...recovery.reply_authorization });
+    expect(c.result.isError).toBeUndefined();
+    expect((f.envelopes("inter_agent_message")[1]!.payload as { in_reply_to: number }).in_reply_to).toBe(3);
+    f.terminal(); await vi.waitFor(() => expect(f.finalized).toHaveLength(1)); await f.drain();
+    expect(f.turns()).toHaveLength(1); expect(f.acks()).toEqual([1, 2]);
+  } finally { await f.close(); }
+});

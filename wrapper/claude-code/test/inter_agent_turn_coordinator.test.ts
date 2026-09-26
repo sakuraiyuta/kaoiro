@@ -218,3 +218,57 @@ describe("InterAgentTurnCoordinator (issue #246)", () => {
     );
   });
 });
+
+
+describe("recovery ownership", () => {
+  const message = (cid: string) => inbound("peer.agent", cid, 1);
+  it("removes host-queued bodies before input preparation and preserves unrelated CIDs", () => {
+    let next = 0;
+    const coordinator = new InterAgentTurnCoordinator({ createTurnToken: () => `T${++next}`, onDispatch: () => {} });
+    coordinator.receive(message("first"), "reply-owed");
+    coordinator.receive(message("recover"), "reply-owed"); coordinator.receive(message("other"), "reply-owed");
+    coordinator.settle("T1"); coordinator.dispatchNextForPeer("peer.agent");
+    const lease = coordinator.claimRecovery("recover", "peer.agent", "operator-turn", () => true)!;
+    expect(lease.envelopes).toHaveLength(1); lease.commit();
+    const prepared = coordinator.prepareInput("T2")!;
+    expect(prepared.removedConversationIds).toEqual(["recover"]);
+    expect(prepared.batch?.conversationIds).toEqual(["other"]);
+    expect(prepared.batch?.text).not.toContain('conversation_id="recover"');
+    expect(coordinator.claimRecovery("other", "peer.agent", "T2", () => true)).toBeUndefined();
+  });
+  it("returns a cancelled claim to its original unstarted host batch", () => {
+    let next = 0;
+    const coordinator = new InterAgentTurnCoordinator({ createTurnToken: () => `T${++next}`, onDispatch: () => {} });
+    coordinator.receive(message("active"), "reply-owed"); coordinator.receive(message("recover"), "reply-owed"); coordinator.receive(message("other"), "reply-owed");
+    coordinator.settle("T1"); coordinator.dispatchNextForPeer("peer.agent");
+    const lease = coordinator.claimRecovery("recover", "peer.agent", "operator", () => true)!;
+    lease.rollback();
+    expect(coordinator.prepareInput("T2")?.batch?.conversationIds).toEqual(["recover", "other"]);
+    expect(coordinator.unreadCount("T2")).toBe(0);
+    expect(coordinator.claimRecovery("recover", "peer.agent", null, () => true)).toBeUndefined();
+  });
+  it.each([false, true])("restores overlapping claims without losing the other's body (reverse=%s)", reverse => {
+    let next = 0;
+    const coordinator = new InterAgentTurnCoordinator({ createTurnToken: () => `T${++next}`, onDispatch: () => {} });
+    coordinator.receive(message("active"), "reply-owed"); coordinator.receive(message("A"), "reply-owed"); coordinator.receive(message("B"), "reply-owed");
+    coordinator.settle("T1"); coordinator.dispatchNextForPeer("peer.agent");
+    const a = coordinator.claimRecovery("A", "peer.agent", "operator", () => true)!;
+    const b = coordinator.claimRecovery("B", "peer.agent", "operator", () => true)!;
+    for (const lease of reverse ? [b, a] : [a, b]) lease.rollback();
+    expect(coordinator.prepareInput("T2")?.batch?.conversationIds).toEqual(["A", "B"]);
+  });
+  it("never skips an oversized oldest body and returns cancelled ownership once", () => {
+    let next = 0;
+    const coordinator = new InterAgentTurnCoordinator({ createTurnToken: () => `T${++next}`, onDispatch: () => {} });
+    coordinator.receive(message("active"), "reply-owed");
+    const first = message("recover"), second = message("recover"); second.payload.turn_number = 3;
+    coordinator.receive(first, "reply-owed"); coordinator.receive(second, "reply-owed");
+    expect(coordinator.claimRecovery("recover", "peer.agent", "T1", () => false)?.oversizedPending).toBe(true);
+    expect(coordinator.unreadCount("T1")).toBe(2);
+    const lease = coordinator.claimRecovery("recover", "peer.agent", "T1", e => e.length <= 1)!;
+    expect(lease.envelopes).toEqual([first]); expect(coordinator.unreadCount("T1")).toBe(2);
+    lease.rollback(); lease.rollback(); expect(coordinator.unreadCount("T1")).toBe(2);
+    coordinator.settle("T1"); coordinator.dispatchNextForPeer("peer.agent");
+    expect(coordinator.prepareInput("T2")?.batch?.items[0]?.envelope).toBe(first);
+  });
+});

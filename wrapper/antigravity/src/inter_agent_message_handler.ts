@@ -20,7 +20,7 @@ export async function handleAntigravityInterAgentMessage(
     mode: "reply-owed" as const,
   };
   if (disposition.consumed) {
-    context.acknowledgeDelivery?.(envelope);
+    if (!disposition.deferAck) context.acknowledgeDelivery?.(envelope);
     context.log(`  antigravity inter_agent_message reply consumed: ${envelope.agent_id}\n`);
     return;
   }

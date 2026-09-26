@@ -1,7 +1,7 @@
 import { rm } from "node:fs/promises";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ToolDescriptor, WrapperConfig } from "@kaoiro/agent-common";
+import type { ToolDescriptor, WrapperConfig, ReplyOrigin } from "@kaoiro/agent-common";
 import { BRIDGE_MCP_POLICY, BRIDGE_THREAD_OPEN_TIMEOUT_MS } from "./bridge_policy.js";
 import { ToolHost } from "./toolhost.js";
 import {
@@ -37,13 +37,30 @@ export class AppServerSession {
   #threadId: string | undefined;
   #opening = false;
   #closing: Promise<void> | undefined;
+  readonly #turnSignal: () => AbortSignal | null;
+  #originPending: { thread: string; token: string; signal?: AbortSignal; ready: Promise<string | undefined>; resolve: (id?: string) => void; waiting: number } | undefined;
+
+  async resolveToolOrigin(metadata: unknown): Promise<ReplyOrigin | undefined> {
+    const native = (metadata as { "x-codex-turn-metadata"?: { thread_id?: unknown; turn_id?: unknown } } | undefined)?.["x-codex-turn-metadata"];
+    const pending = this.#originPending;
+    if (!pending || !native || native.thread_id !== pending.thread || typeof native.turn_id !== "string" || pending.waiting >= 64) return undefined;
+    pending.waiting++;
+    try {
+      const id = await pending.ready;
+      if (id !== native.turn_id || this.#originPending !== pending || !pending.signal || pending.signal.aborted) return undefined;
+      return { token: pending.token, signal: pending.signal };
+    } finally { pending.waiting--; }
+  }
+
 
   static async create(options: AppServerSessionOptions): Promise<AppServerSession> {
+    let session: AppServerSession | undefined;
     const host = options.tools?.length
-      ? await ToolHost.listen(options.tools, { turnSignal: options.turnSignal })
+      ? await ToolHost.listen(options.tools, { turnSignal: options.turnSignal, resolveOrigin: metadata => session?.resolveToolOrigin(metadata) })
       : null;
     try {
-      return new AppServerSession(options, host);
+      session = new AppServerSession(options, host);
+      return session;
     } catch (error) {
       host?.close();
       await removeToolHostDirectory(host);
@@ -53,6 +70,7 @@ export class AppServerSession {
 
   private constructor(options: AppServerSessionOptions, host: ToolHost | null) {
     this.#toolHost = host;
+    this.#turnSignal = options.turnSignal;
     this.#threadOptions = {
       ...options.thread,
       config: {
@@ -118,7 +136,28 @@ export class AppServerSession {
     if (this.#opening || this.#threadId === undefined || input.threadId !== this.#threadId) {
       throw new Error("App-server session thread is not ready or does not match");
     }
-    return this.#transport.startTurn({ ...input, settings: { ...(this.#threadOptions.cwd === undefined ? {} : { cwd: this.#threadOptions.cwd }), ...input.settings } });
+    let resolve!: (id?: string) => void;
+    const pending: { thread: string; token: string; signal?: AbortSignal; ready: Promise<string | undefined>; resolve: (id?: string) => void; waiting: number } = {
+      thread: input.threadId, token: input.hostTurnToken,
+      ready: new Promise<string | undefined>(r => { resolve = r; }),
+      resolve: id => resolve(id), waiting: 0,
+    };
+    this.#originPending?.resolve();
+    this.#originPending = pending;
+    try {
+      const turn = await this.#transport.startTurn({ ...input,
+        onDispatch: (identity, settings) => {
+          const result = input.onDispatch?.(identity, settings);
+          pending.signal = this.#turnSignal() ?? AbortSignal.abort();
+          pending.signal.addEventListener("abort", () => pending.resolve(), { once: true });
+          return result;
+        },
+        settings: { ...(this.#threadOptions.cwd === undefined ? {} : { cwd: this.#threadOptions.cwd }), ...input.settings },
+      });
+      pending.resolve(turn.identity.turnId);
+      return turn;
+    } catch (error) { pending.resolve(); throw error; }
+
   }
 
   interrupt(hostTurnToken: string): Promise<boolean> {
@@ -132,6 +171,7 @@ export class AppServerSession {
 
   close(): Promise<void> {
     if (!this.#closing) {
+      this.#originPending?.resolve(); this.#originPending = undefined;
       // Mark closing before abort listeners run; stop tool access synchronously,
       // without waiting for the child's bounded graceful shutdown.
       this.#closing = Promise.resolve().then(async () => {

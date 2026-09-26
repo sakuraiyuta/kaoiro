@@ -266,6 +266,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   let permissionBroker: PermissionBroker | null = null;
   let questionBroker: QuestionBroker | null = null;
   let interAgent: InterAgentTool | null = null;
+  let replyBasisMode: "v1" | "legacy" | "pending" = "pending";
   let instructionChain: Promise<void> = Promise.resolve();
   let watchdogFailStopped = false;
   // Keep the batch range through terminal drain. onTurnEnd settles the
@@ -339,7 +340,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
             batch.conversationIds,
             classified,
           ) ?? []) {
-            link?.send(notice);
+            interAgent?.sendInternalNotice(notice);
           }
           if (settled !== undefined) {
             interAgentTurns.dispatchNextForPeer(settled.peer);
@@ -508,7 +509,15 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     },
     log: (text) => writeRedactedStderr(`${text}\n`),
   });
+  let replySessionId: string | undefined;
   interAgent = new InterAgentTool({
+    replyBasisMode: () => replyBasisMode,
+    waitReplyBasisMode: signal => link?.waitForReplyBasisMode?.(signal) ?? Promise.resolve(replyBasisMode),
+    unreadCount: () => interAgentTurns.unreadCount(host.activeInterAgentTurnToken?.() ?? null),
+    returnInput: (envelope, mode) => interAgentTurns.receive(envelope, mode),
+    onReplyDiagnostic: event => writeRedactedStderr(`${JSON.stringify(event)}\n`),
+    onInputHandoff: envelopes => { for (const envelope of envelopes) deliveryAcknowledgementRuntime.acknowledgeDelivery(envelope); },
+    claimRecovery: (cid, peer, fit) => interAgentTurns.claimRecovery(cid, peer, host.activeInterAgentTurnToken?.() ?? null, fit),
     config,
     getState: () => host.state,
     getActiveInterAgentTurnToken: () =>
@@ -601,6 +610,8 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
   const serverLinkOptions = deliveryAcknowledgementRuntime.withServerLinkOptions<
     Omit<ServerLinkOptions, "onInterAgentDeliveryStatus">
   >({
+    interAgentReplyBasis: "v1",
+    onReplyBasisMode: mode => { replyBasisMode = mode; },
     personaId: config.persona.id,
     buildInfo,
     ...(config.transition_id === undefined
@@ -714,7 +725,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
         deliveryAcknowledgementRuntime.withInboundContext({
           interAgent,
           recordInboundIa,
-          send: (notice) => link?.send(notice),
+          send: (notice) => interAgent?.sendInternalNotice(notice),
           inject: (inbound, mode) => interAgentTurns.receive(inbound, mode),
           log: (line) => process.stdout.write(line),
         }),
@@ -768,9 +779,10 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       const prepared = interAgentTurns.prepareInput(turnToken);
       if (prepared === undefined) return undefined;
       for (const notice of interAgent?.resolveTurnEnd(turnToken, prepared.removedConversationIds) ?? []) {
-        link?.send(notice);
+        interAgent?.sendInternalNotice(notice);
       }
       if (prepared.batch !== null) {
+        interAgent?.prepareReplyInput(turnToken, prepared.batch.items.map(item => item.envelope));
         const range = interAgentTurns.deliverySequenceRangeForTurn(turnToken);
         if (range === undefined) lifecycleRanges.delete(turnToken);
         else lifecycleRanges.set(turnToken, { seqFirst: range.first, seqLast: range.last });
@@ -785,6 +797,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       return null;
     },
     onTurnBoundary: ({ turnToken }) => {
+      interAgent?.endReplyInput(turnToken);
       turnWatchdog.end(turnToken);
     },
     onLifecycle: (event: CodexLifecycleEvent) => {
@@ -802,6 +815,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       });
     },
     onTurnFinalized: ({ turnToken }) => {
+      interAgent?.endReplyInput(turnToken);
       lifecycleRanges.delete(turnToken);
     },
     onTurnProgress: ({ turnToken }) => {
@@ -846,7 +860,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
           conversationIds,
           classified,
         ) ?? []) {
-          link?.send(envelope);
+          interAgent?.sendInternalNotice(envelope);
         }
         const cancelled = interAgentTurns.settle(turnToken);
         if (cancelled !== undefined) {
@@ -860,7 +874,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
         conversationIds,
         classified,
       ) ?? []) {
-        link?.send(envelope);
+        interAgent?.sendInternalNotice(envelope);
       }
       // The coordinator releases its exact production batch only after the
       // pending CIDs above have resolved; a later same-CID batch can then be
@@ -898,6 +912,8 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
     onInstructionRejected: (envelope) => link?.send(envelope),
     onAttachRejected: (envelope) => link?.send(envelope),
     onSessionId: (id) => {
+      if (replySessionId !== undefined && replySessionId !== id) interAgent?.resetReplyInput();
+      replySessionId = id;
       link?.setSessionId(id);
       sidecar.bind(id);
       // issue #352 round 1 M1 (クロエ): the runner inherits this process's
@@ -955,6 +971,7 @@ export async function runCodexCli(dependencies: CodexCliDependencies = {}): Prom
       : {}),
     ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
   }, (turnToken) => {
+    interAgent?.beginReplyInput(turnToken);
     turnWatchdog.start(turnToken);
   });
   host = createHost(config, hostOptions);

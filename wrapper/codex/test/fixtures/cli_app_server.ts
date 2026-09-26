@@ -36,7 +36,7 @@ export function watchdogClock() {
 
 // Only the external app-server child and time are simulated. CLI callbacks,
 // Host/Session, Unix ToolHost, ServerLink, brokers, IA and reset coordinator run.
-export async function cliAppFixture(permissionSync = false, backend: "exec" | "app-server" = "app-server") {
+export async function cliAppFixture(permissionSync = false, backend: "exec" | "app-server" = "app-server", replyBasis: "v1" | "legacy" = "legacy") {
   const home = await mkdtemp(join(tmpdir(), "fuji-348-cli-fixture-")), agentId = `fixture-${randomUUID()}`;
   const clock = watchdogClock(), sent: RpcObject[] = [];
   const child = new EventEmitter() as ChildProcessWithoutNullStreams;
@@ -67,9 +67,13 @@ export async function cliAppFixture(permissionSync = false, backend: "exec" | "a
   Object.assign(child, { stdin, stdout, stderr, exitCode: null, signalCode: null });
   const exit = () => { if (child.exitCode !== null) return;Object.assign(child, { exitCode: 0 });child.emit("exit", 0, null);stdout.end();stderr.end();queueMicrotask(() => child.emit("close", 0, null)); };
   stdin.on("finish", exit);child.kill = () => { exit();return true; };
-  const wire = await phoenixLoopback(() => ({ permission_sync: permissionSync, delivery_resync: "skip-v1", delivery: { issued_seq: 0, acked_seq: 0, pending_since: null } }), (event, payload) =>
+  let rejection: Record<string, unknown> | undefined;
+  const wire = await phoenixLoopback(() => ({ ...(replyBasis === "v1" ? { inter_agent_reply_basis: "v1" } : {}), permission_sync: permissionSync, delivery_resync: "skip-v1", delivery: { issued_seq: 0, acked_seq: 0, pending_since: null } }), (event, payload) =>
     event === "delivery_resync" ? { request_id: payload.request_id, skipped_ranges: payload.missing_ranges, delivery: { issued_seq: payload.cutoff, acked_seq: 1, pending_since: new Date().toISOString() } } :
-    event === "session_reset_request" ? { request_id: "reset" } : { ingress_stamp: [1, 1] });
+    event === "session_reset_request" ? { request_id: "reset" } : { ingress_stamp: [1, 1] }, (event, payload) => {
+      if (event !== "envelope" || payload.type !== "inter_agent_message") return undefined;
+      const next = rejection; rejection = undefined; return next;
+    });
   const signals = process.listeners("SIGINT");
   vi.stubEnv("HOME", home);vi.stubEnv("CODEX_HOME", home);
   vi.stubEnv("KAOIRO_CODEX_TURN_WATCHDOG_INACTIVITY_MS", "60000");
@@ -110,6 +114,7 @@ export async function cliAppFixture(permissionSync = false, backend: "exec" | "a
   await vi.waitFor(() => expect(host).toBeDefined());
   const envelopes = (type: string) => wire.received.filter(e => e.event === "envelope" && e.payload.type === type).map(e => e.payload);
   return {
+    rejectNextSend: (error: Record<string, unknown>) => { rejection = error; },
     clock, wire, host, callbacks, sent, send, terminal, exit, running, envelopes, releaseExec, finalized, queued,
     get spawned() { return spawned; }, get permissionWaits() { return permissionWaits; }, get rateLimits() { return session?.rateLimits; },
     // After the application callback finishes, a round trip drains earlier
@@ -136,7 +141,7 @@ export async function cliAppFixture(permissionSync = false, backend: "exec" | "a
         const socket = createConnection(socketPath);let buffer = "";
         socket.setEncoding("utf8");socket.setTimeout(2000, () => socket.destroy(new Error("Fixture tool timeout")));
         socket.on("error", reject);socket.on("data", data => { buffer += data;if (buffer.includes("\n")) { socket.end();resolve(JSON.parse(buffer.split("\n")[0]!)); } });
-        socket.on("connect", () => socket.write(JSON.stringify({ id: 1, method: "call_tool", name, input }) + "\n"));
+        socket.on("connect", () => socket.write(JSON.stringify({ id: 1, method: "call_tool", name, input, metadata: { "x-codex-turn-metadata": { thread_id: "thread", turn_id: `turn-${turn}` } } }) + "\n"));
       });
     },
     async close() {

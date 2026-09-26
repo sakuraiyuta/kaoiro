@@ -131,6 +131,7 @@ async function main(): Promise<void> {
       method: "call_tool",
       name: request.params.name,
       input: request.params.arguments ?? {},
+      metadata: request.params._meta,
     });
     return (response.result ?? {
       content: [{ type: "text", text: "tool host returned no result" }],

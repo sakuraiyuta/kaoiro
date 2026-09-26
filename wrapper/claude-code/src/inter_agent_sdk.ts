@@ -11,6 +11,9 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import {
   SEND_TO_AGENT_INPUT_SHAPE,
+  handoffToolResult,
+  discardToolResult,
+  type ReplyOrigin,
   type InterAgentTool,
   type ToolDescriptor,
 } from "@kaoiro/agent-common";
@@ -56,6 +59,7 @@ export function kaoiroToolDescriptors(
 export function buildKaoiroMcpServer(
   interAgent: InterAgentTool,
   claudeOnly: ClaudeOnlyTool[] = [],
+  resolveOrigin?: (id: unknown) => Promise<ReplyOrigin | undefined>,
 ): McpSdkServerConfigWithInstance {
   const [send, list, whoami] = kaoiroToolDescriptors(interAgent) as [
     ToolDescriptor,
@@ -67,9 +71,18 @@ export function buildKaoiroMcpServer(
     tools: [
       // The Zod shape is the schema SSOT; the descriptor handler re-validates
       // with the same schema, so both engines enforce identical inputs.
-      tool(send.name, send.description, SEND_TO_AGENT_INPUT_SHAPE, (args) =>
-        send.handler(args),
-      ),
+      tool(send.name, send.description, SEND_TO_AGENT_INPUT_SHAPE, async (args, extra) => {
+        const call = extra as { signal?: AbortSignal; _meta?: Record<string, unknown> };
+        const origin = await resolveOrigin?.(call._meta?.["claudecode/toolUseId"]);
+        const result = await send.handler(args, {
+          ...(origin ? { origin: { ...origin, signal: AbortSignal.any([...(origin.signal ? [origin.signal] : []), ...(call.signal ? [call.signal] : [])]) } } : {}),
+          ...(call.signal ? { signal: call.signal } : {}),
+        });
+        if (call.signal?.aborted) { discardToolResult(result); return { content: [{ type: "text" as const, text: "stale_tool_call" }], isError: true }; }
+        try { JSON.stringify(result); } catch (error) { discardToolResult(result); throw error; }
+        if (!handoffToolResult(result, () => {})) return { content: [{ type: "text" as const, text: "stale_tool_call" }], isError: true };
+        return result;
+      }),
       tool(list.name, list.description, {}, () => list.handler({})),
       tool(whoami.name, whoami.description, {}, () => whoami.handler({})),
       ...claudeOnly.map((t) =>

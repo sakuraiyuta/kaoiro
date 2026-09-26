@@ -255,6 +255,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   let broker: PermissionBroker | null = null;
   let questionBroker: QuestionBroker | null = null;
   let interAgent: InterAgentTool | null = null;
+  let replyBasisMode: "v1" | "legacy" | "pending" = "pending";
   // The server's after_join pushes persona_prompt then set_permission_mode
   // (WrapperChannel.handle_info(:after_join)); both frames can be dispatched
   // by the Phoenix socket in the same event-loop tick before the
@@ -316,7 +317,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       conversationIds,
       classified,
     ) ?? []) {
-      link?.send(envelope);
+      interAgent?.sendInternalNotice(envelope);
     }
   };
 
@@ -535,7 +536,15 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     // waiting_question state_change carries it (ADR-0027).
     onPendingChange: (pending) => host?.setPendingQuestion(pending),
   });
+  let replySessionId: string | undefined;
   interAgent = new InterAgentTool({
+    replyBasisMode: () => replyBasisMode,
+    waitReplyBasisMode: signal => link?.waitForReplyBasisMode?.(signal) ?? Promise.resolve(replyBasisMode),
+    unreadCount: () => interAgentTurns.unreadCount(host.activeInterAgentTurnToken?.() ?? null),
+    returnInput: (envelope, mode) => interAgentTurns.receive(envelope, mode),
+    onReplyDiagnostic: event => writeRedactedStderr(`${JSON.stringify(event)}\n`),
+    onInputHandoff: envelopes => { for (const envelope of envelopes) deliveryAcknowledgementRuntime.acknowledgeDelivery(envelope); },
+    claimRecovery: (cid, peer, fit) => interAgentTurns.claimRecovery(cid, peer, host.activeInterAgentTurnToken?.() ?? null, fit),
     config,
     getState: () => host.state,
     getActiveInterAgentTurnToken: () =>
@@ -628,6 +637,8 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   const serverLinkOptions = deliveryAcknowledgementRuntime.withServerLinkOptions<
     Omit<ServerLinkOptions, "onInterAgentDeliveryStatus">
   >({
+    interAgentReplyBasis: "v1",
+    onReplyBasisMode: mode => { replyBasisMode = mode; },
     personaId: config.persona.id,
     buildInfo,
     ...(config.transition_id === undefined
@@ -814,7 +825,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
           ingress: interAgentIngress,
           recordInboundIa,
           retireDelivery: (envelope: Envelope) => link?.retireInterAgentDeliveries?.([envelope]) ?? false,
-          send: (notice) => link?.send(notice),
+          send: (notice) => interAgent?.sendInternalNotice(notice),
           inject: (inbound, mode) => interAgentTurns.receive(inbound, mode),
           log: (line) => process.stdout.write(line),
         }),
@@ -871,6 +882,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
       const prepared = interAgentTurns.prepareInput(turnToken);
       if (prepared === undefined) return undefined;
       resolveInterAgentConversationIds(turnToken, prepared.removedConversationIds);
+      if (prepared.batch !== null) interAgent?.prepareReplyInput(turnToken, prepared.batch.items.map(item => item.envelope));
       if (prepared.batch !== null) return {
         text: prepared.batch.text,
         conversationIds: prepared.batch.conversationIds,
@@ -888,6 +900,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     // intentionally ignored for ownership: they remain only the payload sent
     // to resolveTurnEnd once that exact token has been found.
     onTurnEnd: ({ turnToken, error, cancellation }) => {
+      if (turnToken) interAgent?.endReplyInput(turnToken);
       turnWatchdog.end(turnToken);
       if (turnToken !== undefined) {
         const settlement = interAgentTurns.settle(turnToken);
@@ -956,6 +969,8 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     onAttachRejected: (envelope) => link?.send(envelope),
     onInstructionRejected: (envelope) => link?.send(envelope),
     onSessionId: (id) => {
+      if (replySessionId !== undefined && replySessionId !== id) interAgent?.resetReplyInput();
+      replySessionId = id;
       link?.setSessionId(id);
       // Binds (or re-binds) the sidecar to this session's file, carrying
       // whatever the pending journal already holds (ADR-0051 D3-5).
@@ -1060,11 +1075,12 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
             }),
             inputShape: REQUEST_SESSION_RESET_INPUT_SHAPE,
           },
-        ]),
+        ], id => host.toolOrigins.resolve(id)),
       },
       ...(resumeSessionId !== undefined ? { resume: resumeSessionId } : {}),
     },
   }, (turnToken) => {
+    interAgent?.beginReplyInput(turnToken);
     writeDeliveryLifecycle("turn_start", turnToken);
     // Dispatch may have happened long before this point; only this host
     // input-yield boundary is an actual SDK turn start (issue #238).
