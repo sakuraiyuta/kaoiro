@@ -14,6 +14,7 @@ import {
   MIN_AGY_PROBE_TIMEOUT_MS,
 } from "@kaoiro/antigravity";
 import type { CodexAuthMode } from "./codex-auth.js";
+import { normalizeAgyCliVersion } from "./antigravity-version.js";
 import { isBuildInfoConsistent, type BuildInfo } from "./build_info.js";
 import type {
   EngineCatalogEntry,
@@ -607,9 +608,11 @@ export function effectiveCapabilities(config: RunnerConfig): string[] {
  *  (ADR-0035); Antigravity's `antigravityCatalogOverride` is the caller's
  *  `resolveAntigravityCatalog()` result (ADR-0057 F6) — absent falls back
  *  to the pinned 1.1.26 snapshot, matching how a probe failure inside that
- *  resolver already degrades. */
+ *  resolver already degrades. Every caller also supplies the current
+ *  `agy --version` result, using `undefined` when it was not observed. */
 export function buildRegister(
   config: RunnerConfig,
+  antigravityCliVersion: string | undefined,
   codexAuthMode: CodexAuthMode = "unknown",
   claudeCatalogOverride?: EngineCatalogEntry["models"],
   buildInfo?: BuildInfo,
@@ -670,6 +673,9 @@ export function buildRegister(
           channel: "dev" as const,
         }
       : buildInfo;
+  const safeAntigravityCliVersion = capabilities.includes("antigravity")
+    ? normalizeAgyCliVersion(antigravityCliVersion)
+    : undefined;
   return {
     version: "0",
     host_id: config.host_id,
@@ -695,6 +701,9 @@ export function buildRegister(
                 build_channel: safeBuildInfo.channel,
               }),
         }),
+    ...(safeAntigravityCliVersion === undefined
+      ? {}
+      : { antigravity_cli_version: safeAntigravityCliVersion }),
   };
 }
 

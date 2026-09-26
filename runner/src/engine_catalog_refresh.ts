@@ -42,6 +42,9 @@ export interface RefreshEngineCatalogDeps {
    *  Claude-only refresh does not regress Antigravity to the pinned
    *  snapshot. */
   getAntigravityCatalog: () => EngineModelInfo[] | undefined;
+  /** Current process-local `agy --version` observation; passed into every
+   *  register rebuild so catalog refresh cannot erase it. */
+  getAntigravityCliVersion: () => string | undefined;
   updateRegister: (register: RunnerRegister) => void;
   sendCatalogResult: (result: EngineCatalogResult) => void;
   /** issue #218: fixed for the process's whole lifetime (computed once at
@@ -119,6 +122,7 @@ async function handle(
       const config = deps.getCurrentConfig();
       const nextRegister = buildRegister(
         config,
+        deps.getAntigravityCliVersion(),
         deps.getCodexAuthMode(),
         outcome.models,
         deps.buildInfo,

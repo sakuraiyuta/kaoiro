@@ -13,7 +13,7 @@ import type { RunnerLinkOptions } from "../src/transport.js";
 import { runRunnerCli } from "../src/runner-cli.js";
 import { loadRunnerConfig } from "../src/config.js";
 import type { ManagedChild } from "../src/supervisor.js";
-import type { WrapperConfig } from "@kaoiro/protocol";
+import type { RunnerRegister, WrapperConfig } from "@kaoiro/protocol";
 
 class FakeChild implements ManagedChild {
   readonly #exitListeners: Array<() => void> = [];
@@ -35,9 +35,13 @@ class FakeChild implements ManagedChild {
 
 class FakeRunnerLink {
   readonly #options: RunnerLinkOptions;
+  readonly initialRegister: RunnerRegister;
+  readonly updatedRegisters: RunnerRegister[] = [];
+  readonly reconnectedRegisters: RunnerRegister[] = [];
 
   constructor(options: RunnerLinkOptions) {
     this.#options = options;
+    this.initialRegister = options.register;
   }
 
   spawn(payload: unknown): void {
@@ -53,8 +57,12 @@ class FakeRunnerLink {
   sendResetResult(): void {}
   sendStopAgent(): void {}
   sendCatalogResult(): void {}
-  updateRegister(): void {}
-  reconnect(): void {}
+  updateRegister(register: RunnerRegister): void {
+    this.updatedRegisters.push(register);
+  }
+  reconnect(_serverUrl: string, _hostId: string, register: RunnerRegister): void {
+    this.reconnectedRegisters.push(register);
+  }
   close(): void {}
 }
 
@@ -90,6 +98,162 @@ describe("runner CLI Antigravity config wiring", () => {
   afterEach(() => {
     if (root !== undefined) rmSync(root, { force: true, recursive: true });
     root = undefined;
+  });
+
+  it.each([
+    {
+      name: "normal output",
+      initial: "agy-cli 1.0.0",
+      reload: "agy-cli 1.0.1",
+      pad: false,
+      expectedInitial: "agy-cli 1.0.0",
+      expectedReload: "agy-cli 1.0.1",
+    },
+    {
+      name: "whitespace is trimmed",
+      initial: "agy-cli 1.0.0",
+      reload: "agy-cli 1.0.1",
+      pad: true,
+      expectedInitial: "agy-cli 1.0.0",
+      expectedReload: "agy-cli 1.0.1",
+    },
+    {
+      name: "empty output is omitted",
+      initial: "",
+      reload: "",
+      pad: false,
+      expectedInitial: undefined,
+      expectedReload: undefined,
+    },
+    {
+      name: "control characters are omitted",
+      initial: "agy\nversion",
+      reload: "agy\nversion",
+      pad: false,
+      expectedInitial: undefined,
+      expectedReload: undefined,
+    },
+    {
+      name: "256 UTF-8 bytes are accepted",
+      initial: `${"界".repeat(85)}a`,
+      reload: `${"界".repeat(85)}a`,
+      pad: false,
+      expectedInitial: `${"界".repeat(85)}a`,
+      expectedReload: `${"界".repeat(85)}a`,
+    },
+    {
+      name: "257 UTF-8 bytes are omitted",
+      initial: `${"界".repeat(85)}ab`,
+      reload: `${"界".repeat(85)}ab`,
+      pad: false,
+      expectedInitial: undefined,
+      expectedReload: undefined,
+    },
+    {
+      name: "probe failure is omitted",
+      initial: "__FAIL__",
+      reload: "__FAIL__",
+      pad: false,
+      expectedInitial: undefined,
+      expectedReload: undefined,
+    },
+  ])("sends the $name version on initial register and reload", async (scenario) => {
+    root = mkdtempSync(join(tmpdir(), "kaoiro-runner-agy-register-"));
+    const executable = join(root, "agy");
+    const versionFile = join(root, "version.txt");
+    writeFileSync(versionFile, `${scenario.initial}\n`);
+    writeFileSync(
+      executable,
+      `#!/bin/sh\nif [ "$1" = "--version" ]; then\n  value=$(cat "${versionFile}")\n  [ "$value" = "__FAIL__" ] && exit 7\n  ${scenario.pad ? "printf '   '" : ":"}\n  printf '%s' "$value"\n  ${scenario.pad ? "printf '   \\n'" : "printf '\\n'"}\nelse\n  printf 'fixture-model\\tFixture Model\\n'\nfi\n`,
+    );
+    chmodSync(executable, 0o755);
+    const configPath = join(root, "runner.config.json");
+    const makeConfig = (budget: number) => ({
+      host_id: "runner-register-fixture",
+      server_url: "ws://runner.invalid/runner",
+      cwd_allowlist: [root],
+      capabilities: ["antigravity"],
+      context_work_budget_percent: budget,
+      antigravity: { cli_path: executable },
+    });
+    writeFileSync(configPath, JSON.stringify(makeConfig(50)));
+
+    let link: FakeRunnerLink | undefined;
+    let triggerReload: (() => void) | undefined;
+    const runtime = await runRunnerCli(
+      {
+        resolveCodexAuthMode: async () => "unknown",
+        resolveAntigravityCatalog: async () => [],
+        createRunnerLink: (_serverUrl, _hostId, options) => {
+          link = new FakeRunnerLink(options);
+          return link;
+        },
+        watchRunnerConfig: (path, onReload) => {
+          triggerReload = () => onReload(loadRunnerConfig(path));
+          return { close: () => {} };
+        },
+        installSignalHandlers: false,
+      },
+      [configPath],
+    );
+    try {
+      writeFileSync(versionFile, `${scenario.reload}\n`);
+      writeFileSync(configPath, JSON.stringify(makeConfig(51)));
+      triggerReload!();
+      await runtime!.waitForReloads();
+
+      expect(link!.updatedRegisters).toHaveLength(1);
+      expect([
+        link!.initialRegister.antigravity_cli_version,
+        link!.updatedRegisters[0]!.antigravity_cli_version,
+      ]).toEqual([scenario.expectedInitial, scenario.expectedReload]);
+    } finally {
+      runtime?.close();
+    }
+  });
+
+  it("omits the version from initial and reloaded registers when Antigravity is disabled", async () => {
+    root = mkdtempSync(join(tmpdir(), "kaoiro-runner-agy-disabled-register-"));
+    const configPath = join(root, "runner.config.json");
+    const makeConfig = (budget: number) => ({
+      host_id: "runner-disabled-fixture",
+      server_url: "ws://runner.invalid/runner",
+      cwd_allowlist: [root],
+      capabilities: ["claude-code"],
+      context_work_budget_percent: budget,
+    });
+    writeFileSync(configPath, JSON.stringify(makeConfig(50)));
+
+    let link: FakeRunnerLink | undefined;
+    let triggerReload: (() => void) | undefined;
+    const resolveAgyVersion = vi.fn(async () => "agy-cli 1.0.0");
+    const runtime = await runRunnerCli(
+      {
+        resolveCodexAuthMode: async () => "unknown",
+        resolveAgyVersion,
+        createRunnerLink: (_serverUrl, _hostId, options) => {
+          link = new FakeRunnerLink(options);
+          return link;
+        },
+        watchRunnerConfig: (path, onReload) => {
+          triggerReload = () => onReload(loadRunnerConfig(path));
+          return { close: () => {} };
+        },
+        installSignalHandlers: false,
+      },
+      [configPath],
+    );
+    try {
+      expect(link!.initialRegister.antigravity_cli_version).toBeUndefined();
+      writeFileSync(configPath, JSON.stringify(makeConfig(51)));
+      triggerReload!();
+      await runtime!.waitForReloads();
+      expect(link!.updatedRegisters).toHaveLength(1);
+      expect(link!.updatedRegisters[0]!.antigravity_cli_version).toBeUndefined();
+      expect(resolveAgyVersion).not.toHaveBeenCalled();
+    } finally {
+      runtime?.close();
+    }
   });
 
   it("relays a config-file executable to fresh, reload, and recreated wrapper snapshots", async () => {

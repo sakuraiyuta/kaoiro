@@ -246,4 +246,25 @@ describe("LaunchDialog build revision warning (issue #228)", () => {
     );
     expect(warningText(target)).toBeNull();
   });
+
+  it("選択中の Antigravity host は CLI version または未報告状態を表示する", async () => {
+    const antigravityHost = (version?: string): HostInfo => ({
+      ...claudeHost(),
+      capabilities: ["antigravity"],
+      engines: [{ id: "antigravity", models: [] }],
+      ...(version === undefined ? {} : { antigravity_cli_version: version }),
+    });
+    const withVersion = await renderLaunch(
+      [antigravityHost("agy-cli 1.1.26")],
+      null,
+    );
+    expect(
+      withVersion.querySelector(".antigravity-cli-version")?.textContent,
+    ).toContain("agy-cli 1.1.26");
+
+    const withoutVersion = await renderLaunch([antigravityHost()], null);
+    expect(
+      withoutVersion.querySelector(".antigravity-cli-version")?.textContent,
+    ).toContain("not reported");
+  });
 });

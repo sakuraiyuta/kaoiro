@@ -69,6 +69,7 @@ function makeHarness(
     getCurrentConfig: () => CONFIG,
     getCodexAuthMode: () => codexAuthMode,
     getAntigravityCatalog,
+    getAntigravityCliVersion: () => "agy-cli 1.2.3",
     updateRegister: (r) => registers.push(r),
     sendCatalogResult: (r) => results.push(r),
     buildInfo: BUILD_INFO,
@@ -220,6 +221,7 @@ describe("makeRefreshEngineCatalogHandler", () => {
       getCurrentConfig: () => CONFIG,
       getCodexAuthMode: () => "unknown",
       getAntigravityCatalog: () => undefined,
+      getAntigravityCliVersion: () => "agy-cli 1.2.3",
       updateRegister: () => {},
       sendCatalogResult: (r) => results.push(r),
       buildInfo: BUILD_INFO,
@@ -258,11 +260,13 @@ describe("makeRefreshEngineCatalogHandler", () => {
     await new Promise((r) => setImmediate(r));
     expect(h.registers).toHaveLength(1);
     const rebuilt = h.registers[0]!;
+    expect(rebuilt.antigravity_cli_version).toBe("agy-cli 1.2.3");
 
     // Directly computed equivalent of the runner-cli.ts start-up call,
     // cross-checked against the post-refresh register's non-Claude engines.
     const expected = buildRegister(
       CONFIG,
+      "agy-cli 1.2.3",
       "unknown",
       undefined,
       BUILD_INFO,

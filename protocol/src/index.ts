@@ -1351,6 +1351,10 @@ export interface RunnerRegister {
    *  are optional as a pair for pre-#288 runner compatibility. */
   build_version?: string;
   build_channel?: "dev" | "release";
+  /** Current Antigravity CLI `agy --version` output (issue #410). Optional
+   *  for older runners, disabled Antigravity, or an unavailable/invalid
+   *  version probe; informational only. */
+  antigravity_cli_version?: string;
 }
 
 /** runner -> server liveness ping; the topic carries the host_id, but it is

@@ -273,6 +273,39 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
       assert hosts[host_id][:build_channel] == "dev"
     end
 
+    test "Antigravity CLI version は byte cap で保持し、不正値だけ落として register を通す" do
+      host_id = "lab-pc-antigravity-version"
+      @endpoint.subscribe("agents:lobby")
+      socket = join_runner(host_id)
+
+      at_limit = String.duplicate("界", 85) <> "a"
+      over_limit = String.duplicate("界", 85) <> "ab"
+      assert byte_size(at_limit) == 256
+      assert byte_size(over_limit) == 257
+
+      accepted =
+        register_payload(%{
+          "capabilities" => ["antigravity"],
+          "antigravity_cli_version" => at_limit
+        })
+
+      assert_reply push(socket, "register", accepted), :ok
+      assert_broadcast "hosts", %{"hosts" => hosts}
+      assert hosts[host_id][:antigravity_cli_version] == at_limit
+
+      for invalid <- [over_limit, "", 123, "agy\nversion"] do
+        payload =
+          register_payload(%{
+            "capabilities" => ["antigravity"],
+            "antigravity_cli_version" => invalid
+          })
+
+        assert_reply push(socket, "register", payload), :ok
+        assert_broadcast "hosts", %{"hosts" => hosts}
+        refute Map.has_key?(hosts[host_id], :antigravity_cli_version)
+      end
+    end
+
     test "build_version の型崩れは invalid_build_version" do
       host_id = "lab-pc-bad-build-version"
       socket = join_runner(host_id)
