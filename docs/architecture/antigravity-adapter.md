@@ -14,18 +14,22 @@ related: [protocol, plugin-model, claude-events, codex-exec-events]
 
 Explains why the Antigravity CLI (`agy`) is the substrate of the third engine
 `antigravity` ([ADR-0057](../adr/0057-antigravity-adapter.md)) and how the
-adapter owns its process and persona boundary. Its current event, state, and
-session contract is in [Antigravity events](../reference/engines/antigravity-events.md);
+adapter owns its process and persona boundary. Its mapping from CLI events to
+[protocol state](../specs/protocol.md) and its session contract are in
+[Antigravity events](../reference/engines/antigravity-events.md);
 the tool and permission contract is in
 [Antigravity tools and permissions](../reference/engines/antigravity-tools-permissions.md).
 Measured CLI behavior is recorded in
 [Antigravity CLI contract evidence](../evidence/antigravity/cli-contract.md).
+This architecture is paired with the
+[Claude event contract](../reference/engines/claude-events.md) and
+[Codex exec event contract](../reference/engines/codex-exec-events.md).
 
 **Status: provisional** — claims marked *(measured)* were observed on
 2026-09-04 with `agy` 1.1.26 (x86-64 Linux, OAuth personal login) on the
 development host. The CLI self-updated from 1.1.8 to 1.1.26 during the
-session, so vendor drift remains a live risk. The target, conditions, and
-unverified claims are recorded in
+session, so vendor drift remains a live risk. The target, invocation
+conditions, and unverified vendor claims are recorded in
 [Antigravity CLI contract evidence](../evidence/antigravity/cli-contract.md).
 Promote to `accepted` after the phase-34 Stage A dogfood.
 

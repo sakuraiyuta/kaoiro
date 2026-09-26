@@ -8,6 +8,13 @@ related: [antigravity-adapter]
 
 # Antigravity CLI contract evidence
 
+The measurements below were made on 2026-09-04 with `agy` 1.1.26 (x86-64
+Linux, OAuth personal login) on the development host. The binary self-updated
+from 1.1.8 during the session; probes used `--print` and
+`--output-format stream-json` in a scratch directory. Vendor changelog and
+documentation claims are unverified and must be re-measured before relying on
+them.
+
 ### Customization discovery (persona, hooks, skills)
 
 *(measured)* A directory passed with `--add-dir <dir>` is scanned as a
@@ -40,6 +47,8 @@ customization root **without** being listed in
   `hook.workspacePaths` lists both and `run_command` ran in the real cwd.
   For the adapter's required launch arguments, see
   [Antigravity events](../../reference/engines/antigravity-events.md#main-api-and-process-model).
+  The generated rules text names the working directory; the adapter's
+  operating preamble supplies that directory.
   The `Cwd` containment contract is in
   [Antigravity tools and permissions](../../reference/engines/antigravity-tools-permissions.md#run_command-cwd-containment).
 - **Environment inheritance (measured, Stage 0.3)**: a variable set on the
@@ -53,6 +62,11 @@ customization root **without** being listed in
   fail-closed on the CLI side as well.
 - `.agents/permissions.json` and `.agents/settings.json` — **not loaded** in
   headless mode *(measured)*. MCP configuration behavior is detailed below.
+- **Hook registration output (measured)**: `agy -p /hooks --add-dir <dir>
+  --output-format json` lists the registered gate's `name`, `source` path,
+  `matcher`, and `timeout_seconds` without a model turn. Without `--add-dir`,
+  the list is empty. The wrapper uses this quota-free check before the first
+  turn.
 
 ### MCP is not available in headless mode
 
