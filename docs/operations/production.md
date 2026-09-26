@@ -297,3 +297,7 @@ The release note is retained in the [Stage 6 landing record](https://github.com/
 - [Runner install and distribution](runner-install.md) — full runner install /
   service / troubleshooting reference
 - Issue #303 (this manual's own tracking issue), #306 (the server deploy CLI)
+
+## Input-bound inter-agent replies
+
+See [the reply-basis contract](../reference/inter-agent/reply-basis.md) for negotiated protection, native tool origin binding, inline recovery, and the staged rollout boundary.

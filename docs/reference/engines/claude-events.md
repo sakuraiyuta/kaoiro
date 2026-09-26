@@ -356,3 +356,7 @@ None. The common-envelope type/payload design is settled in
   [0019](../../adr/0019-subagent-workflow-entity-and-task-envelope.md)
 - Sources: code.claude.com/docs/en/agent-sdk/typescript and others (verified
   2026-06)
+
+## Input-bound inter-agent replies
+
+See [the reply-basis contract](../inter-agent/reply-basis.md) for negotiated protection, native tool origin binding, inline recovery, and the staged rollout boundary.

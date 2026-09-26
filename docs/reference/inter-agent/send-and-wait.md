@@ -121,3 +121,7 @@ wording asks the sender to retry later with the same conversation_id.
 - [Approval flow](../security/inter-agent-tool-authorization.md#approval-flow-permission_broker-integration).
 - [Companion tools](directory.md#companion-tools-wrapper-sdk-mcp).
 - [Delivery confirmation and recovery](delivery.md).
+
+## Input-bound reply contract
+
+Same-turn waiter and recovery replies copy `in_reply_to` and the single-use `reply_ticket` from `reply_authorization`. Definite transient refusal can return a fresh ticket; unknown delivery cannot. See [Input-bound inter-agent replies](reply-basis.md) for the exact contract.

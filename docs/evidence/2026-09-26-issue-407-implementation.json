@@ -1,0 +1,640 @@
+{
+  "status": "implementation candidate; AG native gate and independent implementation review pending",
+  "code_commit": "105fdd842c8048abd8ff04590938a75ee9137b6a",
+  "base": "ba696b503261db5c3af9f4806a5579b9f8f8d995",
+  "scratch": "/tmp/kogane407-cross-turn.bUKHrA",
+  "source_sha256": {
+    "protocol/fixtures/inter-agent-internal-notices.json": "721be428fa9a9b9e7652b71a4f1ac64c20f045e5b0d9acdee12f45836e24fd61",
+    "protocol/src/index.ts": "bb84698c99ce02d0a014da88fea8bd87ddf89298c7913752e1d287e0805c7d35",
+    "server/lib/kaoiro_server/application.ex": "7e8c1eae0a2c937b536ca76365735541306ea03eaa127e9ab706e99ea709a458",
+    "server/lib/kaoiro_server/conversation_states.ex": "9f869cd46a38efc16a001d33048c5c3d834606369acd48b88da02b760b8f0d42",
+    "server/lib/kaoiro_server/inter_agent_reply_basis.ex": "dcc213788db26b5bf806c355d8101a55d6a6eceec02243747d1f9f19ee788610",
+    "server/lib/kaoiro_server_web/channels/wrapper_channel.ex": "2e1c95d3c02a7cd770079d3b75a79df52801f72f12dd6a3d1440a949fce184a8",
+    "server/test/kaoiro_server/conversation_states_test.exs": "abddfeae5532d51a58154f2fdc8a68e48a5d351e86c1aafd474d1e9160a0f550",
+    "server/test/kaoiro_server/inter_agent_reply_basis_test.exs": "d17672021839151f839113c079a1670445790f72be662c7922635bb28c4c3fdd",
+    "server/test/kaoiro_server_web/channels/reply_basis_channel_test.exs": "e43f8c98fd3cc9ef4d54536a85148bcfd2e3a8c689ada8c84a6803f8ac0a3f7e",
+    "wrapper/agent-common/src/index.ts": "4ab46dfc170359b44c6f06a9d88f09600408345e4255aabff260cb9b65008427",
+    "wrapper/agent-common/src/inter_agent.ts": "f0bce2ed9819e086ec923ec0ee8f60e311e27a53b03a82d515787bfd2fa3dfb2",
+    "wrapper/agent-common/src/reply_basis.ts": "87455ac176e8f474c0de7885d52bfa6d8a8113545c9069079be02b163f20790c",
+    "wrapper/agent-common/src/tool_origins.ts": "3d0b62d102837de8ee21c6335d5980ada11486545f93ee5b7b2e330e88d95ade",
+    "wrapper/agent-common/src/tooling.ts": "260d9f7661c0151f721267415bb1a269883d1378c3c4a409864cbcc1fe3bd88b",
+    "wrapper/agent-common/test/inter_agent.test.ts": "9a99f39cc1b314f3401736f3639664e8f3002152a818f49883268ebd616e98f6",
+    "wrapper/agent-common/test/reply_basis.test.ts": "825e55024f61915a9525204eb31dcdf98243ac6bbc32d2f012665781b2256309",
+    "wrapper/antigravity/src/inter_agent_message_handler.ts": "a86b9fcec81ab5075050ec0390e7068a7afe7980b201231afcc0c2fd5764bfef",
+    "wrapper/antigravity/src/inter_agent_turn_coordinator.ts": "2d69eca03f104a8f0728561a578a1be7c4954a843d441f62b08d89d56552c791",
+    "wrapper/antigravity/test/host.test.ts": "2f3a0c5fcef909efd55a4983a6d27bd6f0867baabca8ca968be78184bdbcd705",
+    "wrapper/antigravity/test/inter_agent_turn_coordinator.test.ts": "fcdf53e6cd557a24ef418b78eed09151c0c9a06a6f5b3b94de65973ff59cd7d4",
+    "wrapper/claude-code/src/cli.ts": "97863a84abb3fce2a1afc47ab18ebc2c3110b4ad3e81dc0bb9dc717ccbc53c56",
+    "wrapper/claude-code/src/host.ts": "71dca3e030f687513500a9b23384e37fc921ebfa03670227ceffe4131bd73056",
+    "wrapper/claude-code/src/inter_agent_message_handler.ts": "27b8328bb9502fcf44446163a8381da88a2dfa9c50f053b51360ee58e83fbbe1",
+    "wrapper/claude-code/src/inter_agent_sdk.ts": "eb66881f41fc40163f00db1f97135bb49f9d33d80c3d53ac56c11653926f819a",
+    "wrapper/claude-code/src/inter_agent_turn_coordinator.ts": "086a64aa380b92f7d724f1bdb7c7e867887363c3678d55d3d73ef083ed193ab5",
+    "wrapper/claude-code/test/cli_delivery_composition.test.ts": "1e79823d6594abd2561d886f73c44b39148ab6643c641b19241542e2f1d99a6f",
+    "wrapper/claude-code/test/host.test.ts": "3b7b0bb281b2bea53419f1aea4999b2789b42122f6d1b61ef2247ab61372b78f",
+    "wrapper/claude-code/test/inter_agent_turn_coordinator.test.ts": "a7e485927233ec39af91ba3a6dcdd232f6353aefada2ec639262e1ca10a8adca",
+    "wrapper/codex/src/app_server_session.ts": "aa04faeb043a4592fba4521b5cb54dcec904cdb5951e0c6bde655d5950050a08",
+    "wrapper/codex/src/bridge.ts": "b629b63416cf1b20cb8158f86467af027ff8ef4cb945cd477281c4bc12c9565f",
+    "wrapper/codex/src/cli.ts": "f2d13606061e048d4a18b1383f97f3aeaea8e97283820996e98f458f3367a434",
+    "wrapper/codex/src/host.ts": "95a77194e9fb7c857a0d9bd51d845262171d3e375f0cfaa0a9b5cef0282e5f8c",
+    "wrapper/codex/src/inter_agent_message_handler.ts": "2dcf0be6d204be6fa246414218fc36e3649b55d3c503a8ea2f9e617c480a8991",
+    "wrapper/codex/src/inter_agent_turn_coordinator.ts": "6369b3a10f8d61faff5dcabb9e7b32ca498791ff3a3ae9633026d47ec9c63d04",
+    "wrapper/codex/src/toolhost.ts": "1141a85cf15f5a74ba642527d5303cfbce8959acdecfe7810b885ec244417020",
+    "wrapper/codex/test/cli_app_server_lifecycle.test.ts": "5f681e7ab091560e5d8df961b21c1cdbf22e807ccc8c1bc3338efc7437083a21",
+    "wrapper/codex/test/cli_delivery_composition.test.ts": "f606e906a419a937fd1bdbe9d048ce547ccee7d11fb11c51e4c890fedf801645",
+    "wrapper/codex/test/fixtures/cli_app_server.ts": "0096fddc80dfca9abb4c54e11280fbbc08f3767fbe2e6c39e3702b72d7d5dc72",
+    "wrapper/codex/test/fixtures/phoenix_loopback.ts": "2deffd9aa59ac8de925245599814bd40b80fff0b63e044bff4ba3bb5434ed921",
+    "wrapper/codex/test/inter_agent_turn_coordinator.test.ts": "f27040e7cd35d28b7f389e4580fae78bb663414f629cfcc9763cd546807e9de6",
+    "wrapper/codex/test/session_reset_gate.test.ts": "296923596e33db20f46d74de92e0a910bb4cc9846eb1e184d76f362cabdb17eb",
+    "wrapper/codex/test/toolhost.test.ts": "ed665c75fa3bfa04cce93ce075b963beabb1876f92e1bd51f5b64cf36c1e3e5b",
+    "wrapper/core/src/transport.ts": "cb591023f4b470dae3743f533e2a3e53f81f6b2de8231685a076ecc87bb9e7dd",
+    "wrapper/core/test/transport.test.ts": "50468ce3b0cb63d04405b51b387b8a42bfd5cd4111456996baa1c057966169c8"
+  },
+  "built_sha256": {
+    "wrapper/agent-common/dist/index.js": "d9d58560bf571b5706b6c515e5161b2701d628439e02883b712d1a96cc260e0b",
+    "wrapper/agent-common/dist/inter_agent.js": "2671743d71148dae84514c143e945c50d1fcf963c604b779ff26a2c2fb5d53b5",
+    "wrapper/agent-common/dist/reply_basis.js": "58d7001ac11a6417f2770acbedc12e871f9e9c174ba9899e4a834f1f61d4f7ae",
+    "wrapper/agent-common/dist/tool_origins.js": "2ef9ca01af53a6fe531a4b02c8fc848f388ef4f754c95dfd401d00867716435a",
+    "wrapper/agent-common/dist/tooling.js": "9ef74711266a21b134866f1cb7158f369acd17c5c0ec4a55fea56943fa2a07a4",
+    "wrapper/antigravity/dist/inter_agent_message_handler.js": "acc100b682b0de99b27fdca1f9efd07cbf3c6e1789ce850f15e1e669735b5936",
+    "wrapper/antigravity/dist/inter_agent_turn_coordinator.js": "fd186dc2e598d9ef6f95f7d9163fc798029d54106ad82d9b2262864bc70f5fb7",
+    "wrapper/claude-code/dist/cli.js": "2e5daa8c1f9da8c0eca2436e6c2b19ac2d7d47c80704cce2bf73a7820d9dacf0",
+    "wrapper/claude-code/dist/host.js": "744a41fdecc232a0c7f7e5ba2c21fc8422f20bc08d5c0e9de2cb9eeddedb44cd",
+    "wrapper/claude-code/dist/inter_agent_message_handler.js": "82d1e3ce75a77468c1d093134f688efc5261f0dd9d5b19e2c393ca5b93210c48",
+    "wrapper/claude-code/dist/inter_agent_sdk.js": "fd29313da93fb54cec3dde732819da10a0beeb1ab236a8c1e949e3689dc0c323",
+    "wrapper/claude-code/dist/inter_agent_turn_coordinator.js": "d2cff700a1d71d2c130f51ac6bb4fe3fad369ba9195a8a21e2c64338812f2909",
+    "wrapper/codex/dist/app_server_session.js": "492478d649eefa4b748e1060325cb26925ec0801246cb0a68a5e7e65d67f724c",
+    "wrapper/codex/dist/bridge.js": "2fcf440e2c0413b089e3ff519e8fb6a21342e97da4629a7f6f9eacf98b16633b",
+    "wrapper/codex/dist/cli.js": "58c1d3746a170ebd170582e9ca5debe207b5f133cfd821694436412afaa9a885",
+    "wrapper/codex/dist/host.js": "a8d26c6b2fcfea966fb3343bd49009b371192dea78e1eef553771063d01ec6be",
+    "wrapper/codex/dist/inter_agent_message_handler.js": "378ce1c79896c261c36ac45817fc0b4f893530d20937fac8177da38dcd8a4d67",
+    "wrapper/codex/dist/inter_agent_turn_coordinator.js": "be7f04a9b11bd629547793e59e9aff3cf626b4019b0e5a83dc33be350483697f",
+    "wrapper/codex/dist/toolhost.js": "717d35b0997c7c4105066d645cfeccf3364afb2480f2c042e6c98b7e1186c5c4",
+    "wrapper/core/dist/transport.js": "c3422451b8d95181ac223f7073aa85944d24e5ae6d3cbaa4baf8ca1653cb2c38"
+  },
+  "artifact_manifest": {
+    "app-origin-mutation-red.json": {
+      "sha256": "71e2b9a69dd7cf62736912760419b29b25f3131e7b8d3f045a99db3b6ab261b8",
+      "bytes": 164701
+    },
+    "claude-handoff-mutation-red.json": {
+      "sha256": "36fdece8df3573f914faf77cd93160d11247aa719dba5769d305b7ed48d08029",
+      "bytes": 278407
+    },
+    "mutations-shared.json": {
+      "sha256": "6caae9bee0299932b183687dd942e363e58cc60a030ac150886bd99c4abbd141",
+      "bytes": 1256
+    },
+    "mutations-server-notice.json": {
+      "sha256": "b0e63cfc420c915d96c3da8d40773acda739a4f01621e8bcd5ebf7bdc5cc0bc8",
+      "bytes": 140
+    },
+    "mutation-claude-handoff.json": {
+      "sha256": "2d15f4c43013788c1d4e573bcd2b5a5fafa7623a7ce620f3beb1591a115cb4e3",
+      "bytes": 28
+    },
+    "mutations-adapters.json": {
+      "sha256": "fd52a2538d48c87b30baea045735dffcc17b568aa2cc007d7e65ebe3001469c9",
+      "bytes": 1146
+    },
+    "mutation-app-origin.json": {
+      "sha256": "2d15f4c43013788c1d4e573bcd2b5a5fafa7623a7ce620f3beb1591a115cb4e3",
+      "bytes": 28
+    },
+    "mutations-native-ticket.json": {
+      "sha256": "64190b8e0947ae2e405e19c85f1573c2708b5ed52b8ea05f5e6e549f139e3ae7",
+      "bytes": 190
+    },
+    "native-check-controls.json": {
+      "sha256": "c3e33e438bafa017a69dbacee8b93c90564afdcc0fcee903837d5310a88f0952",
+      "bytes": 94
+    },
+    "native-final-exits.json": {
+      "sha256": "ff7b2e874af5ea6317306d23f6242a5efabecbf31ab202726da8d512553d7e33",
+      "bytes": 520
+    },
+    "app-origin-mutation-red.log": {
+      "sha256": "845504b5535b513ef46eabaa879d05922ae514fca5df9a5d4ef43d76a6016877",
+      "bytes": 261
+    },
+    "server-basis-mutation-red.log": {
+      "sha256": "93a7110cecee67de9b2246949e6ff18b501431ab69672ede14d394626f05f3c5",
+      "bytes": 19965
+    },
+    "mutation-handoff-commit-red.log": {
+      "sha256": "ce1d024de29393350e840ffc32a77bfd1b178abeea000c37339c8616a000f33d",
+      "bytes": 5087
+    },
+    "mutation-ticket-required-red.log": {
+      "sha256": "70213523cbd3659b73f9cfe8cebbcaa86f45dc3346f3ed531b3645dde1715203",
+      "bytes": 3214
+    },
+    "mutation-antigravity-recovery-ownership-red.log": {
+      "sha256": "f41135d45a1dea03419a192498fc6cd06470f67bddf1d8fab752c25de4bea070",
+      "bytes": 5029
+    },
+    "claude-handoff-mutation-red.log": {
+      "sha256": "714fcea46415c7b17dec2447573b0a58427fcd518fafaa0ed5c4ece206d0c6eb",
+      "bytes": 107
+    },
+    "mutation-ticket-binding-red.log": {
+      "sha256": "79b52f26a2bd564f9dc1866c83e517a4aee479013536da4bd105f160aeb0b11f",
+      "bytes": 2359
+    },
+    "mutation-exec-endpoint-red.log": {
+      "sha256": "1a672c10057043ce72bf8c4c8540dfd67bb4bb7e6d634f4ee2a168796fbc5fed",
+      "bytes": 1834
+    },
+    "mutation-default-snapshot-red.log": {
+      "sha256": "7c001dc110d313846313b9cddaec76e93e8181ff5c4747449931b55133c64ebf",
+      "bytes": 1732
+    },
+    "mutation-ticket-once-red.log": {
+      "sha256": "908b84021e821a7c78c61ea9ad323c05b93c40e48ff7c59f27b31626d2eba594",
+      "bytes": 3240
+    },
+    "mutation-legacy-compat-red.log": {
+      "sha256": "8f77455695037aba049c2d55fd40a876b9f0df4efb4d8805babd8c2c636abee7",
+      "bytes": 17182
+    },
+    "mutation-ticket-expiry-red.log": {
+      "sha256": "5accc2322efb675b3d4d4bd973eea32c81c7713357a972fed0018e5b40cf908c",
+      "bytes": 2301
+    },
+    "mutation-claude-code-recovery-ownership-red.log": {
+      "sha256": "f9ecc377b0cf4c25a652f3cce5b64aba947c183dac1e291d9c07eb2a9fd32a00",
+      "bytes": 5029
+    },
+    "mutation-codex-recovery-ownership-red.log": {
+      "sha256": "ce8fc019d9ba12d514f3ff1d4a60893c8fc85fd84661eae49d5f8dafa77484c7",
+      "bytes": 5016
+    },
+    "mutation-handoff-rollback-red.log": {
+      "sha256": "b56ee79dd532f2c4b9d5d2f0a29ed084431e739c2b38c2043dafb4db91bff2a5",
+      "bytes": 1536
+    },
+    "mutation-snapshot-wiring-red.log": {
+      "sha256": "2f27e12bf4a3741406a60f1f32ee8d3d0b9a3d7f522a2c8ee0fd88eacff9e21d",
+      "bytes": 31909
+    },
+    "mutation-claude-permission-red.log": {
+      "sha256": "a75a3c89c99e9fc56ec3fd6b83e418e10204c87700cfd630194e9944927bfb7e",
+      "bytes": 1767
+    },
+    "mutation-socket-handoff-red.log": {
+      "sha256": "2b2d3be7856782dc479bcd3039ef816300c584a8721c4459459f5088d01c7f8d",
+      "bytes": 1422
+    },
+    "mutation-notice-validation-red.log": {
+      "sha256": "5e5c8f122721a81061bfc7908060d5dc7ac478abe5395880017663fe691518f9",
+      "bytes": 15772
+    },
+    "mutation-send-origin-red.log": {
+      "sha256": "10e82d0da6d5a3b1fa1272ca006f62a41994636c8d753445b37b119aea9e49c6",
+      "bytes": 1160
+    },
+    "mutation-send-origin-green.log": {
+      "sha256": "4dff0fa8660527768de5084a70403773bda0d4d3628babd1a6a8d3f4b8ef9ed1",
+      "bytes": 309
+    },
+    "app-origin-mutation-green.log": {
+      "sha256": "ddbc8cc9503cc461aad38df8d889b538425ad9ef5f53494e4eae416ddbe37cc9",
+      "bytes": 207
+    },
+    "mutation-claude-code-recovery-ownership-green.log": {
+      "sha256": "e4553444ca878628348db0923dc412d5a5a2cd3b1e42bc8c79ebfa5b58c528f6",
+      "bytes": 325
+    },
+    "mutation-claude-permission-green.log": {
+      "sha256": "503795e844d143bff60a068865125d37eee3a76382a3996e9b82af1dc83d82d6",
+      "bytes": 328
+    },
+    "mutation-codex-recovery-ownership-green.log": {
+      "sha256": "9fc303ae3fa2faf6afa2e84315c240fedc6f6b2737a2c2caa979bd9fd2cfa530",
+      "bytes": 315
+    },
+    "mutation-ticket-required-green.log": {
+      "sha256": "48a21a3f19f334f8a8323a1f2372c6721cd1e3d21d930d767758871fe528bda8",
+      "bytes": 309
+    },
+    "mutation-ticket-expiry-green.log": {
+      "sha256": "9e74b04eeeee0327e9709afd9fcfb1dc8c18a422f62f472761ee2c98ac029fad",
+      "bytes": 310
+    },
+    "mutation-legacy-compat-green.log": {
+      "sha256": "4932c847716971af8556859bad7aabf2c41222f6c77122131c7b302bcc93f2f6",
+      "bytes": 1301
+    },
+    "mutation-snapshot-wiring-green.log": {
+      "sha256": "2f0e72063bb4d95a0e6dc667edcdcfed7740788c906d85b2681b0bb6442a0b2c",
+      "bytes": 30789
+    },
+    "mutation-ticket-once-green.log": {
+      "sha256": "3ae3c7a4fd1ff445cad4d83c14377dc5a9c39732221780ba349cc69900b65763",
+      "bytes": 309
+    },
+    "mutation-antigravity-recovery-ownership-green.log": {
+      "sha256": "1bc01791887f79a23c707b8614fd902f76048d69c524525c4b80df580bf6f3ce",
+      "bytes": 325
+    },
+    "mutation-handoff-rollback-green.log": {
+      "sha256": "3f5f220f427b5a7529163d5af59054a8f25a60512990357e830d3879fabfba53",
+      "bytes": 309
+    },
+    "mutation-exec-endpoint-green.log": {
+      "sha256": "96aa9dfa18128be89096143fdbeacb28ff2b89a645911013aba89537983fbf2c",
+      "bytes": 467
+    },
+    "mutation-socket-handoff-green.log": {
+      "sha256": "140b668d715702fed3107591fab14fea05df4e0a8ece60214afa1b3ca46edea3",
+      "bytes": 302
+    },
+    "mutation-notice-validation-green.log": {
+      "sha256": "2ca6b5619839d637081a3330f7edf1675ab54a8772b01f00c9cc8f0dabb6932d",
+      "bytes": 1301
+    },
+    "mutation-ticket-binding-green.log": {
+      "sha256": "b9066bda60f34a7ffd5018c2df97c19d082b6079dcec64a866bffe8d8ac616d5",
+      "bytes": 309
+    },
+    "mutation-default-snapshot-green.log": {
+      "sha256": "ec9459b711716f41435ffa5aba48af525f4458a13e9c05cd5b23aa61e2f7ee5a",
+      "bytes": 310
+    },
+    "claude-handoff-mutation-green.log": {
+      "sha256": "b1316a82da068dc0edc1a7f6977c22a1d64d0125d70b62de1bf7e9b2844bdc82",
+      "bytes": 44
+    },
+    "server-basis-mutation-green.log": {
+      "sha256": "31fae5d6272e65de986e6bbabcf8d343c34951d4c67bd485d71374f3fbddf347",
+      "bytes": 2823
+    },
+    "mutation-handoff-commit-green.log": {
+      "sha256": "6ef697868d52e14c459b695995678a8f26a44947232c48102382804e74c6fbd3",
+      "bytes": 309
+    },
+    "native-ticket-exec-red.log": {
+      "sha256": "22fdbb3d6f68da0bbd8d85438f1320fbd59d0777f37f585372c4baabca4c6ae6",
+      "bytes": 177
+    },
+    "native-ticket-app-server-red.log": {
+      "sha256": "22fdbb3d6f68da0bbd8d85438f1320fbd59d0777f37f585372c4baabca4c6ae6",
+      "bytes": 177
+    },
+    "native-ticket-claude-red.log": {
+      "sha256": "37262732d48e1205b49648a6ec78cf4ab215301be2f34e6b20410bbbc482bdf1",
+      "bytes": 117
+    },
+    "native-ticket-claude-green.log": {
+      "sha256": "638a247fa081ae62b47423e00cef88840176d4d6fa326419fcf605c0fdce72c1",
+      "bytes": 81
+    },
+    "native-ticket-app-server-green.log": {
+      "sha256": "d797632c5291c1f065287b9de820a71eab2effa76e6a7626d15f7ad0868c6193",
+      "bytes": 147
+    },
+    "native-ticket-exec-green.log": {
+      "sha256": "80d4d15ed322198bb1cc74e14f643a1ab91396792db33780cd88d8c61e593cc6",
+      "bytes": 141
+    },
+    "native-check-red.log": {
+      "sha256": "392d769bc8efecb5bb511bfd46fae43a5ce8c7cb01ac09af8a3261edacd803b5",
+      "bytes": 249
+    },
+    "native-check-green.log": {
+      "sha256": "35bb549f30e00e62d9cce0d88f5faf1c17c20a22fe603d60ec532cbe31d82701",
+      "bytes": 82
+    },
+    "wrapper-typecheck-final.log": {
+      "sha256": "c2929804ea9bf86bfa7224e37747ed31fa71e5389f2caf5d69a403b987dbb282",
+      "bytes": 586
+    },
+    "wrapper-full-final.log": {
+      "sha256": "29b6ac63ea1bbc4f38fb64e4bddb80866f113b0e56d9a1e0508544878b203730",
+      "bytes": 147158
+    },
+    "wrapper-build-final.log": {
+      "sha256": "7cdeb091ad83d2f12b90b4f6fcea965d0822ced6a9b4bf0571ee318970393f71",
+      "bytes": 844
+    },
+    "server-full-candidate2.log": {
+      "sha256": "8c0949aef465db4fea854c0e85a07b5ce8e40005eeb3c378324a6fc1df719385",
+      "bytes": 80990
+    },
+    "server-format-final.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "ticket-app-server/result.json": {
+      "sha256": "8c9f64d779222dd8481d717da3b75c071ecd82ae16c563c6da2e5f558ad38d76",
+      "bytes": 655289
+    },
+    "ticket-exec/result.json": {
+      "sha256": "4828a65451c5bdb62a124aaaf42a0b1a042ae59c97db92b5a920460765d50df3",
+      "bytes": 619687
+    },
+    "ticket-claude/result.json": {
+      "sha256": "e0aa8ca4357d5a0461573d4c58fc4d37eee339d4d83f6012c9ef8c6c46581c68",
+      "bytes": 1484873
+    },
+    "guard-app-server-interrupt/result.json": {
+      "sha256": "315ad7bf2671b50daf2d3cb1e9195f44dfde7f838c988813964da8db1cc4d0b9",
+      "bytes": 163668
+    },
+    "guard-claude-interrupt/result.json": {
+      "sha256": "04535965242221312936326223cef5c1ea255cb2d17e6d1900407a3b81b091b9",
+      "bytes": 276815
+    },
+    "guard-exec-normal/result.json": {
+      "sha256": "1ff0a696390b278e51d7e8c62fd4d302344da728e99c1ae69d39fef799287550",
+      "bytes": 223670
+    },
+    "guard-claude-normal/result.json": {
+      "sha256": "7918cf287fdee289dfc5c4413ad43752c2e2349052756a4047129f05ed1244fe",
+      "bytes": 277151
+    },
+    "guard-app-server-normal/result.json": {
+      "sha256": "79f334b160f87f66da65461c5cee1ee81d4d1cc46b9fdf762ed3b993a1fe99af",
+      "bytes": 223491
+    },
+    "guard-exec-interrupt/result.json": {
+      "sha256": "9ddc274c3fc24e0a91a017b08602d6201d36e689a07ad87dbcd384bb222c6edc",
+      "bytes": 163179
+    },
+    "guard-app-server-normal-timeout/result.json": {
+      "sha256": "a3057f65d66bc98fc3b8095a440bf146bfc097531ccb3aeafceb0d1186a6164a",
+      "bytes": 222234
+    },
+    "guard-exec-normal-timeout/result.json": {
+      "sha256": "9dec7e54663d38be808e0a9a003f5b3bd96a60bc95b52f52a668303f25c465fe",
+      "bytes": 222786
+    },
+    "handoff-claude-normal/result.json": {
+      "sha256": "c5b9623574dbbe8c99b7ed052311f10e71bcbad4aa001e000072db1fb1ee171f",
+      "bytes": 278384
+    },
+    "handoff-claude-interrupt/result.json": {
+      "sha256": "4a1214e651916f794ed812f61abc391c18f3fd4c504befc4d7681abd67a77759",
+      "bytes": 278221
+    },
+    "ticket-codex.mjs": {
+      "sha256": "744b7d81cf42048392767ad33b92d0f7f916bee542b9df18c0096fd5b4b1ec3d",
+      "bytes": 6701
+    },
+    "ticket-claude.mjs": {
+      "sha256": "9308bdc49d5098a409daa137764dd4605cbe4d54829aa562bafcd848451b3581",
+      "bytes": 7343
+    },
+    "guard-probe.mjs": {
+      "sha256": "05d28b66e411ba7401fd31621b3ff1a43b47508bcffa7d3ad518e65fde4aeb71",
+      "bytes": 10089
+    },
+    "guard-claude.mjs": {
+      "sha256": "9d5e758c5ebc1f375572f31d82d2e7b2f3fb496a6514261f69f0696eb1a77cb9",
+      "bytes": 5437
+    },
+    "handoff-claude.mjs": {
+      "sha256": "f3fea06dee53a2d8e381078fe8b1ddb086928457a366e9f35f980081a1deb86e",
+      "bytes": 6012
+    },
+    "mutate-claude-handoff.py": {
+      "sha256": "0e485f06f59d0413c1f5855de9642a4282c82188aaf18578dab87aaa17051167",
+      "bytes": 1183
+    },
+    "mutate-native-ticket.py": {
+      "sha256": "6f1a913c25c9783a7932e3f8b99fd4389f3dd6a1a86d9da20b1732d43b73d08f",
+      "bytes": 1595
+    },
+    "mutate-server-notice.py": {
+      "sha256": "c68d4bbecc52a752df56670b1409d39ee2b1b7ba5059be10b71ad2571da43449",
+      "bytes": 1206
+    },
+    "mutate-shared.py": {
+      "sha256": "0a990227ee88c83c30881bfd516155a0a080ffd948310c6fdf2586d269ccbcc5",
+      "bytes": 2141
+    },
+    "mutate-app-origin.py": {
+      "sha256": "48437a5c4b49be80e60a5b3802851133ca948f01d92d633953902148f77d097a",
+      "bytes": 1130
+    },
+    "mutate-adapters.py": {
+      "sha256": "c0f604a551793bd691832be85b6c5f9bc38ef2749aa053904046cd7e49c308e5",
+      "bytes": 2271
+    },
+    "check-native-results.py": {
+      "sha256": "3df6d6e057ee3d4d2e6c4230deac4ff85faa30f2b82fe8ea18c641e46904c305",
+      "bytes": 2005
+    },
+    "origin-app-server-normal-final.log": {
+      "sha256": "9fc0533282a8e98317844c6ef778710820d63c129abb67f4723e2dc7a13a37da",
+      "bytes": 234
+    },
+    "ticket-exec-final.log": {
+      "sha256": "80d4d15ed322198bb1cc74e14f643a1ab91396792db33780cd88d8c61e593cc6",
+      "bytes": 141
+    },
+    "origin-exec-normal-final.log": {
+      "sha256": "2427cdfca3b714c66414fe83dae2cb2a0a2cfb6a03301dcd54df6d77cc706e52",
+      "bytes": 228
+    },
+    "origin-app-server-interrupt-final.log": {
+      "sha256": "ddbc8cc9503cc461aad38df8d889b538425ad9ef5f53494e4eae416ddbe37cc9",
+      "bytes": 207
+    },
+    "guard-app-timeout-final.log": {
+      "sha256": "9550bf558222fe5baa49b88c90daf5b935d4e1e906edf138d76dda30d2665a0a",
+      "bytes": 212
+    },
+    "origin-claude-interrupt-final.log": {
+      "sha256": "19bc21a63d1c556b7ebfd6f6bbe79e5fde16de45d462fccf68a8011e2a20bc1b",
+      "bytes": 47
+    },
+    "ticket-claude-final.log": {
+      "sha256": "638a247fa081ae62b47423e00cef88840176d4d6fa326419fcf605c0fdce72c1",
+      "bytes": 81
+    },
+    "codex-composition-final.log": {
+      "sha256": "dfe7fc106a9fc8a690e8b1e50115ca56744c339ae63e682ea5dda398af2910b4",
+      "bytes": 3907
+    },
+    "origin-exec-interrupt-final.log": {
+      "sha256": "371ff95fc3af05bf47f6222a059de87cf54dc80e32f0fc31598f444b18fa9ef2",
+      "bytes": 259
+    },
+    "server-layer-final.log": {
+      "sha256": "f527be9e5b1aec427f1248fc17e6156fb5ca7632a4ca4240d2a85ece566911da",
+      "bytes": 2802
+    },
+    "origin-claude-normal-final.log": {
+      "sha256": "b1316a82da068dc0edc1a7f6977c22a1d64d0125d70b62de1bf7e9b2844bdc82",
+      "bytes": 44
+    },
+    "ticket-app-final.log": {
+      "sha256": "d797632c5291c1f065287b9de820a71eab2effa76e6a7626d15f7ad0868c6193",
+      "bytes": 147
+    },
+    "guard-exec-timeout-final.log": {
+      "sha256": "fb96988e9ee3258021ef38186cc95ee7d6f6d7f400a50a919ad185c1e4b93889",
+      "bytes": 207
+    }
+  },
+  "mutation_exits": {
+    "mutations-shared.json": [
+      {
+        "name": "ticket-required",
+        "red": 1,
+        "green": 0,
+        "source_sha256": "87455ac176e8f474c0de7885d52bfa6d8a8113545c9069079be02b163f20790c"
+      },
+      {
+        "name": "ticket-binding",
+        "red": 1,
+        "green": 0,
+        "source_sha256": "87455ac176e8f474c0de7885d52bfa6d8a8113545c9069079be02b163f20790c"
+      },
+      {
+        "name": "ticket-once",
+        "red": 1,
+        "green": 0,
+        "source_sha256": "87455ac176e8f474c0de7885d52bfa6d8a8113545c9069079be02b163f20790c"
+      },
+      {
+        "name": "ticket-expiry",
+        "red": 1,
+        "green": 0,
+        "source_sha256": "87455ac176e8f474c0de7885d52bfa6d8a8113545c9069079be02b163f20790c"
+      },
+      {
+        "name": "default-snapshot",
+        "red": 1,
+        "green": 0,
+        "source_sha256": "87455ac176e8f474c0de7885d52bfa6d8a8113545c9069079be02b163f20790c"
+      },
+      {
+        "name": "send-origin",
+        "red": 1,
+        "green": 0,
+        "source_sha256": "87455ac176e8f474c0de7885d52bfa6d8a8113545c9069079be02b163f20790c"
+      },
+      {
+        "name": "handoff-commit",
+        "red": 1,
+        "green": 0,
+        "source_sha256": "87455ac176e8f474c0de7885d52bfa6d8a8113545c9069079be02b163f20790c"
+      },
+      {
+        "name": "handoff-rollback",
+        "red": 1,
+        "green": 0,
+        "source_sha256": "87455ac176e8f474c0de7885d52bfa6d8a8113545c9069079be02b163f20790c"
+      }
+    ],
+    "mutations-adapters.json": [
+      {
+        "name": "snapshot-wiring",
+        "red": 1,
+        "green": 0,
+        "source_sha256": "f2d13606061e048d4a18b1383f97f3aeaea8e97283820996e98f458f3367a434"
+      },
+      {
+        "name": "socket-handoff",
+        "red": 1,
+        "green": 0,
+        "source_sha256": "1141a85cf15f5a74ba642527d5303cfbce8959acdecfe7810b885ec244417020"
+      },
+      {
+        "name": "exec-endpoint",
+        "red": 1,
+        "green": 0,
+        "source_sha256": "1141a85cf15f5a74ba642527d5303cfbce8959acdecfe7810b885ec244417020"
+      },
+      {
+        "name": "claude-permission",
+        "red": 1,
+        "green": 0,
+        "source_sha256": "71dca3e030f687513500a9b23384e37fc921ebfa03670227ceffe4131bd73056"
+      },
+      {
+        "name": "codex-recovery-ownership",
+        "red": 1,
+        "green": 0,
+        "source_sha256": "6369b3a10f8d61faff5dcabb9e7b32ca498791ff3a3ae9633026d47ec9c63d04"
+      },
+      {
+        "name": "claude-code-recovery-ownership",
+        "red": 1,
+        "green": 0,
+        "source_sha256": "086a64aa380b92f7d724f1bdb7c7e867887363c3678d55d3d73ef083ed193ab5"
+      },
+      {
+        "name": "antigravity-recovery-ownership",
+        "red": 1,
+        "green": 0,
+        "source_sha256": "2d69eca03f104a8f0728561a578a1be7c4954a843d441f62b08d89d56552c791"
+      }
+    ],
+    "mutations-native-ticket.json": [
+      {
+        "engine": "claude",
+        "red": 1,
+        "green": 0
+      },
+      {
+        "engine": "exec",
+        "red": 1,
+        "green": 0
+      },
+      {
+        "engine": "app-server",
+        "red": 1,
+        "green": 0
+      }
+    ],
+    "mutations-server-notice.json": [
+      {
+        "name": "notice-validation",
+        "red": 2,
+        "green": 0
+      },
+      {
+        "name": "legacy-compat",
+        "red": 2,
+        "green": 0
+      }
+    ],
+    "mutation-app-origin.json": {
+      "red": 1,
+      "green": 0
+    },
+    "mutation-claude-handoff.json": {
+      "red": 1,
+      "green": 0
+    }
+  },
+  "final_checks": {
+    "wrapper_typecheck": 0,
+    "wrapper_test": 0,
+    "wrapper_build": 0,
+    "server_mix_test": 0,
+    "server_format": 0,
+    "native_checker": 0
+  },
+  "wrapper_pass": {
+    "core": 270,
+    "agent-common": 387,
+    "claude-code": 525,
+    "codex": 825,
+    "antigravity": 392
+  },
+  "wrapper_skipped": 2,
+  "server_pass": 1626,
+  "native_checker_controls": [
+    {
+      "control": "red",
+      "exit": 1
+    },
+    {
+      "control": "green",
+      "exit": 0
+    }
+  ]
+}

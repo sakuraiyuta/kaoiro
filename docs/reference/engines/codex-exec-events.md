@@ -337,3 +337,7 @@ engines ([ADR-0032](../../adr/0032-codex-adapter.md) F3).
 ## Migration links
 
 - [Dated exec verification](../../evidence/codex/exec-contract.md)
+
+## Input-bound inter-agent replies
+
+See [the reply-basis contract](../inter-agent/reply-basis.md) for negotiated protection, native tool origin binding, inline recovery, and the staged rollout boundary.

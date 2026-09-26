@@ -102,3 +102,7 @@ disclosure, phase 2).
 - Automatic escalation when starting an `owner.kind: "agent"` conversation —
   pending Phase 3 / kaoiro issue #87.
 - [IA sidecar and display restoration](../reference/storage/inter-agent-sidecar.md).
+
+## Input-bound inter-agent replies
+
+See [the reply-basis contract](../reference/inter-agent/reply-basis.md) for negotiated protection, native tool origin binding, inline recovery, and the staged rollout boundary.
