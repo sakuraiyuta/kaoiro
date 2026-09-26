@@ -194,7 +194,10 @@ solely from the SDK's built-in classifier.
 - Process termination on `SIGTERM` (issue #391): the CLI's `SIGTERM` handler
   calls `close()` directly, never `interrupt()`. `close()` aborts an
   `AbortController` wired into `Options.abortController`, which drives the
-  SDK's own subprocess escalation. See
+  SDK's own subprocess escalation. The host also holds the direct CLI child
+  until it exits or receives `SIGKILL` four seconds after host abort, before
+  runner reset's five-second boundary. This does not contain a tool's
+  `SIGTERM`-ignoring descendants. See
   [adapter-contract.md](adapter-contract.md#sigterm-handling-and-process-termination-timing)
   for the measured timing and the runner-grace interaction.
 - Observation (message sequence) and control (input + interrupt + canUseTool)

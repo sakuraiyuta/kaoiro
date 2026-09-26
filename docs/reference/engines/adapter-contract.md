@@ -52,19 +52,18 @@ Per-engine timing (measured where noted; Linux unless stated otherwise):
 | runner `stop`/`delete`/`restart` | bare SIGTERM, no escalation | `runner/src/supervisor.ts`, `runner/src/spawn.ts` |
 | systemd service backstop | SIGKILL 30000ms after SIGTERM | `TimeoutStopSec`, service-level, not per-agent |
 | Claude Code SDK child | SIGTERM ~2000ms, SIGKILL ~7000ms after `close()` | `ProcessTransport.close()`, `@anthropic-ai/claude-agent-sdk` 0.3.280's bundle (measured) |
+| Claude Code wrapper's direct CLI child | SIGKILL 4000ms after host abort if still alive | `AgentHost`'s bounded custom spawner; the referenced timer holds the wrapper open until the child exits |
 | Codex exec child + its sandboxed grandchild | both gone ~50ms after SIGTERM | measured offline, `workspace-write` and `danger-full-access`, 2 runs each — issue #401 |
 | Codex app-server child | SIGKILL 2000ms after stdin EOF if still alive | `shutdownTimeoutMs`, wired by `CodexHost` below `RESET_TERMINATION_GRACE_MS` |
 
-Claude Code's SIGKILL bound (~7000ms) lands *outside* the runner reset
-grace (5000ms): a child that ignores both stdin EOF and SIGTERM survives a
-runner-initiated reset as an orphan. The SDK also tracks spawned children
-and sends them SIGTERM on the *wrapper process's own* `exit` event as a
-second line of defense — but that event fires only on an ordinary Node
-exit, never on a SIGKILL (measured: a SIGTERM-killed wrapper with no
-handler leaves its child orphaned, `ppid` reparented to init). Open orphan
-risks (this bound, Claude Code tool-shell grandchildren, and Codex
-grandchildren on macOS) are tracked in issue #401, out of scope for this
-contract.
+The wrapper's 4000ms direct-child deadline completes before runner reset's
+5000ms escalation. The SDK's later 7000ms escalation remains a fallback.
+The wrapper owns only the CLI child, not processes launched by Claude tools:
+a loopback Bash test found that a normal `sleep` exited after CLI `SIGTERM`
+(3/3), while a Node descendant that ignored `SIGTERM` survived (3/3).
+Codex grandchildren under macOS seatbelt remain unmeasured; Linux observations
+do not establish their behavior on macOS. See issue #401 and
+[the measurement plan](../../plans/issue-401-orphan-shutdown.md).
 
 The mechanism behind Codex exec's grandchild also terminating (whether
 `codex-linux-sandbox`'s own PDEATHSIG-style propagation, a process-group

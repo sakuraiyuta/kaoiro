@@ -1,6 +1,6 @@
 ---
 title: Bound Claude CLI shutdown before runner reset escalation
-status: approved
+status: implemented
 last_updated: 2026-09-26
 ---
 

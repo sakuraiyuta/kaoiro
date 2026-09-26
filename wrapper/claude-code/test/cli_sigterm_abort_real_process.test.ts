@@ -4,7 +4,7 @@
 // end to end through the REAL `@anthropic-ai/claude-agent-sdk` (not a fake
 // queryFn): SIGTERM -> host.close() -> #abort.abort() -> the SDK's own
 // ProcessTransport escalation (stdin EOF already ignored by the fixture,
-// then SIGTERM, then SIGKILL) actually terminates a real OS child process
+// then SIGTERM) and the wrapper's earlier SIGKILL deadline terminate a real OS child process
 // that ignores both stdin EOF and SIGTERM, and `runClaudeCli()`'s own async
 // lifecycle winds down cleanly afterward (no explicit process.exit()).
 //
@@ -14,13 +14,13 @@
 // re-prove "registering a listener suppresses Node's default kill" (settled
 // Node behavior) but DOES prove everything this repo's code owns: the
 // handler exists, calls close(), close() aborts the AbortController wired
-// into Options, and the SDK's real ProcessTransport actually kills the real
-// child that never cooperates on its own.
+// into Options, and the wrapper kills the direct child before runner reset.
 //
 // The fixture is spawned via `queryOptions.pathToClaudeCodeExecutable`, the
 // SDK's own documented seam for swapping the `claude` binary — this drives
 // the real `@anthropic-ai/claude-agent-sdk` code path, not a substitute.
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -69,10 +69,8 @@ function forceKill(pid: number | undefined): void {
   }
 }
 
-/** Real "claude" stand-in: ignores stdin (never reads it, so EOF alone
- *  proves nothing) and SIGTERM, writes its own pid once ready, and stays
- *  alive forever. Only the SDK's own SIGKILL escalation (fired by
- *  ProcessTransport.close() after AbortController.abort()) can end it. */
+/** Real "claude" stand-in: ignores stdin and SIGTERM, and records its pid.
+ *  The wrapper's direct-child deadline must end it before the SDK's SIGKILL. */
 function writeFixture(root: string): { executable: string; pidFile: string } {
   const executable = join(root, "claude-fixture.mjs");
   const pidFile = join(root, "fixture.pid");
@@ -86,13 +84,8 @@ setInterval(() => {}, 1_000);
   return { executable, pidFile };
 }
 
-/** Real "claude" stand-in that behaves like the actual CLI: ignores stdin
- *  (never reads it, so EOF alone does not end it) but honors SIGTERM by
- *  exiting immediately. This is the grace-path fixture (issue #391 M1
- *  round-1 finding): the SIGTERM-and-EOF-ignoring fixture above only ever
- *  reaches the SDK's SIGKILL step (~7000ms), never proving the SIGTERM
- *  step (~2000ms) actually ends a cooperating child within the runner's
- *  reset grace (5000ms). */
+/** Ignores stdin, but exits by the default SIGTERM action so the OS exit
+ *  signal distinguishes SDK grace from the wrapper's SIGKILL deadline. */
 function writeSigtermCooperativeFixture(
   root: string,
 ): { executable: string; pidFile: string } {
@@ -100,7 +93,6 @@ function writeSigtermCooperativeFixture(
   const pidFile = join(root, "fixture-cooperative.pid");
   writeFileSync(executable, `#!${process.execPath}
 import { writeFileSync } from "node:fs";
-process.on("SIGTERM", () => process.exit(0));
 writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
 setInterval(() => {}, 1_000);
 `);
@@ -156,13 +148,57 @@ describe.skipIf(!isLinux)("Claude CLI SIGTERM -> abort() real-process escalation
       // way the OS would deliver the signal, in-process (see file header).
       process.emit("SIGTERM" as never);
 
-      // The fixture ignores both stdin EOF and SIGTERM, so only the SDK's
-      // own ~7000ms (2000ms SIGTERM grace + 5000ms SIGKILL grace,
-      // `ProcessTransport.close()`, both `.unref()`'d) escalation can end
-      // it. Bound well above that.
+      // The fixture ignores both stdin EOF and SIGTERM; the wrapper's own
+      // four-second deadline must now finish before the SDK's seven seconds.
       await waitFor(() => !isAlive(fixturePid!), 10_000);
       // The CLI's own async lifecycle (host.run(), the outer finally, link
       // teardown) must complete on its own -- no process.exit() needed.
+      await run;
+    } finally {
+      forceKill(fixturePid);
+      rmSync(root, { force: true, recursive: true });
+    }
+  }, 15_000);
+
+  it("without the wrapper deadline, the real SDK child survives runner reset's five-second boundary", async () => {
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-claude-cli-no-deadline-"));
+    const { executable, pidFile } = writeFixture(root);
+    let fixturePid: number | undefined;
+    const run = runClaudeCli({
+      parseCliArgs: () => ({ configPath: "test", prompt: "first instruction", resume: undefined }),
+      loadConfig: () => ({ ...config }),
+      createServerLink: (_url, _agentId, options) => {
+        const linkOptions = options as unknown as Record<string, any>;
+        queueMicrotask(() => {
+          linkOptions.onPersonaPrompt?.("system prompt");
+          linkOptions.onInterAgentDeliveryStatus?.({ issued_seq: 0, acked_seq: 0 });
+        });
+        return {
+          close: () => {},
+          currentSessionId: () => null,
+          setSessionId: () => {},
+          send: () => {},
+          reportSessionLifecycle: () => {},
+          acknowledgeInterAgentDelivery: () => {},
+          flushInterAgentRetirements: async () => {},
+          reportDisconnectIntent: async () => {},
+        } as never;
+      },
+      createHost: (cfg, options) =>
+        new AgentHost(cfg, {
+          ...options,
+          childKillDeadlineMs: null,
+          queryOptions: { ...options.queryOptions, pathToClaudeCodeExecutable: executable },
+        }),
+    });
+    void run.catch(() => {});
+    try {
+      await waitFor(() => existsSync(pidFile), 10_000);
+      fixturePid = Number(readFileSync(pidFile, "utf8").trim());
+      process.emit("SIGTERM" as never);
+      await new Promise((resolve) => setTimeout(resolve, 5_200));
+      expect(isAlive(fixturePid)).toBe(true);
+      await waitFor(() => !isAlive(fixturePid!), 4_000);
       await run;
     } finally {
       forceKill(fixturePid);
@@ -228,16 +264,14 @@ describe.skipIf(!isLinux)("Claude CLI SIGTERM -> abort() real-process escalation
     }
   }, 15_000);
 
-  // issue #391 M1 round-1 finding: the two pins above use a fixture that
-  // ignores SIGTERM too, so they only ever measure the SDK's SIGKILL step
-  // (~7000ms, outside the runner's 5000ms reset grace -- an orphan-risk
-  // scenario, kept above as issue #401's demonstration). This pin measures
-  // the actually-common case: a child that honors SIGTERM must be ended by
-  // the SDK's SIGTERM step alone, well inside the reset grace.
+  // The pins above reach the wrapper's new 4-second direct-child deadline.
+  // This fixture must instead exit from the SDK's 2-second SIGTERM step.
   it("SIGTERM->close()->abort() ends a SIGTERM-cooperative child within the runner's reset grace (issue #391 M1)", async () => {
     const root = mkdtempSync(join(tmpdir(), "kaoiro-claude-cli-sigterm-coop-"));
     const { executable, pidFile } = writeSigtermCooperativeFixture(root);
     let fixturePid: number | undefined;
+    let sdkChild: ChildProcessWithoutNullStreams | undefined;
+    let forwardedSignal: AbortSignal | undefined;
     const run = runClaudeCli({
       parseCliArgs: () => ({ configPath: "test", prompt: "first instruction", resume: undefined }),
       loadConfig: () => ({ ...config }),
@@ -264,6 +298,17 @@ describe.skipIf(!isLinux)("Claude CLI SIGTERM -> abort() real-process escalation
           queryOptions: {
             ...options.queryOptions,
             pathToClaudeCodeExecutable: executable,
+            spawnClaudeCodeProcess: (spawnOptions) => {
+              forwardedSignal = spawnOptions.signal;
+              sdkChild = spawn(spawnOptions.command, spawnOptions.args, {
+                cwd: spawnOptions.cwd,
+                env: spawnOptions.env,
+                signal: spawnOptions.signal,
+                stdio: ["pipe", "pipe", "pipe"],
+              });
+              sdkChild.stderr.resume();
+              return sdkChild;
+            },
           },
         }),
     });
@@ -275,6 +320,11 @@ describe.skipIf(!isLinux)("Claude CLI SIGTERM -> abort() real-process escalation
 
       const t0 = performance.now();
       process.emit("SIGTERM" as never);
+      expect(forwardedSignal?.aborted).toBe(false);
+      await waitFor(() => forwardedSignal?.aborted === true, 4_000);
+      const forwardedAtMs = performance.now() - t0;
+      expect(forwardedAtMs).toBeGreaterThanOrEqual(1_500);
+      expect(forwardedAtMs).toBeLessThan(4_000);
       await waitFor(() => !isAlive(fixturePid!), 4_500);
       const elapsedMs = performance.now() - t0;
       // Must actually wait for the SDK's SIGTERM step (~2000ms) -- a child
@@ -285,7 +335,9 @@ describe.skipIf(!isLinux)("Claude CLI SIGTERM -> abort() real-process escalation
       // Must land inside the runner's RESET_TERMINATION_GRACE_MS (5000ms) --
       // this is the actual M1 acceptance criterion: SIGTERM-cooperative
       // children never reach the runner's own SIGKILL, let alone the SDK's.
-      expect(elapsedMs).toBeLessThan(5_000);
+      expect(elapsedMs).toBeLessThan(4_000);
+      expect(sdkChild?.signalCode).toBe("SIGTERM");
+      expect(() => sdkChild?.kill("SIGKILL")).not.toThrow();
       await run;
     } finally {
       forceKill(fixturePid);

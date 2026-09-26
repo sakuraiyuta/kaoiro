@@ -83,6 +83,19 @@ setInterval(() => {}, 1_000);
   return { executable, pidFile };
 }
 
+function writeIgnoringFixture(root: string): { executable: string; pidFile: string } {
+  const executable = join(root, "claude-ignoring-fixture.mjs");
+  const pidFile = join(root, "ignoring-fixture.pid");
+  writeFileSync(executable, `#!${process.execPath}
+import { writeFileSync } from "node:fs";
+process.on("SIGTERM", () => {});
+writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+setInterval(() => {}, 1_000);
+`);
+  chmodSync(executable, 0o755);
+  return { executable, pidFile };
+}
+
 /** Runner script driving the REAL runClaudeCli() with NO `createServerLink`
  *  override -- it falls back to `runClaudeCli`'s own default, the REAL
  *  `ServerLink` from `@kaoiro/wrapper-core`, pointed at the Phoenix-loopback
@@ -182,6 +195,48 @@ describe.skipIf(!isLinux)("Claude CLI process actually exits after SIGTERM, no p
       // K5): cli.ts's finally block calls reportDisconnectIntent() after
       // close() settles host.run()'s promise, which the real ServerLink
       // pushes onto the wire -- not just the SDK child dying.
+      expect(wire.received.map((m) => m.event)).toContain("disconnect_intent");
+    } finally {
+      forceKill(fixturePid);
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      await wire.close();
+      rmSync(root, { force: true, recursive: true });
+    }
+  }, 20_000);
+
+  it("keeps the wrapper alive until its stubborn direct child is killed before runner reset", async () => {
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-claude-cli-401-"));
+    const { executable, pidFile } = writeIgnoringFixture(root);
+    const envVar = "KAOIRO_TEST_FIXTURE_CLAUDE_EXECUTABLE";
+    const wire = await phoenixLoopback();
+    const runnerScript = writeRunnerScript(root, envVar, wire.url);
+    const child = spawn(tsxBin, [runnerScript], {
+      env: { ...process.env, [envVar]: executable },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stderr = "";
+    child.stderr?.on("data", (chunk) => { stderr += String(chunk); });
+    let fixturePid: number | undefined;
+    try {
+      await waitFor(() => wire.joins >= 1, 15_000);
+      wire.push("persona_prompt", { prompt: "system prompt" });
+      await waitFor(() => existsSync(pidFile), 15_000);
+      fixturePid = Number(readFileSync(pidFile, "utf8").trim());
+      expect(isAlive(fixturePid)).toBe(true);
+
+      const t0 = performance.now();
+      child.kill("SIGTERM");
+      const outcome = await new Promise<{ code: number | null; elapsedMs: number }>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error(`wrapper still alive: ${stderr}`)), 8_000);
+        child.once("exit", (code) => {
+          clearTimeout(timeout);
+          resolve({ code, elapsedMs: performance.now() - t0 });
+        });
+      });
+      expect(outcome.code, `stderr: ${stderr}`).toBe(0);
+      expect(outcome.elapsedMs).toBeGreaterThanOrEqual(3_500);
+      expect(outcome.elapsedMs).toBeLessThan(5_000);
+      await waitFor(() => !isAlive(fixturePid!), 1_000);
       expect(wire.received.map((m) => m.event)).toContain("disconnect_intent");
     } finally {
       forceKill(fixturePid);

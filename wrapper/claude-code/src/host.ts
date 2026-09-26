@@ -98,6 +98,7 @@ import type {
 import { PERMISSION_MODE_AXES } from "./permission_axes.js";
 import { claudeBootstrapCatalog, type SupportedModel } from "./catalog.js";
 import { runClaudeProbe, type ProbeOutcome, type ProbeSpawnDeps, type ProbeRateLimits } from "./probe-client.js";
+import { DEFAULT_CHILD_KILL_DEADLINE_MS, spawnBoundedClaudeProcess } from "./bounded_spawn.js";
 import {
   REQUEST_COMPACT_TOOL_FQN,
   validateRequestCompactInput,
@@ -552,6 +553,8 @@ export interface AgentHostOptions {
   deferQueryUntilFirstInput?: boolean;
   /** SDK query() factory; injectable for tests. Defaults to the real SDK. */
   queryFn?: typeof query;
+  /** Null disables the wrapper-owned CLI SIGKILL deadline in process tests. */
+  childKillDeadlineMs?: number | null;
   /** Injectable short-lived catalog probe (ADR-0039 F9 v2 = 藤 review D1b).
    *  Called by `refreshCatalogFor()` when `#query` is null (fresh idle).
    *  Defaults to the real child-subprocess probe shared with runner. */
@@ -1823,6 +1826,23 @@ export class AgentHost implements EngineAdapter {
       // aborting THIS controller (issue #391), so a caller-supplied
       // queryOptions.abortController must never silently replace it.
       abortController: this.#abort,
+      // The SDK's own final SIGKILL comes after runner reset's five-second
+      // grace. Hold the direct CLI handle and finish within that boundary.
+      spawnClaudeCodeProcess: (spawnOptions) =>
+        spawnBoundedClaudeProcess(spawnOptions, {
+          hostAbort: this.#abort!.signal,
+          deadlineMs:
+            this.#options.childKillDeadlineMs === undefined
+              ? DEFAULT_CHILD_KILL_DEADLINE_MS
+              : this.#options.childKillDeadlineMs,
+          ...(this.#options.queryOptions?.spawnClaudeCodeProcess === undefined
+            ? {}
+            : { spawnOverride: this.#options.queryOptions.spawnClaudeCodeProcess }),
+          ...(this.#options.queryOptions?.stderr === undefined
+            ? {}
+            : { stderr: this.#options.queryOptions.stderr }),
+          warn: this.#warn,
+        }),
     };
     try {
       const session = this.#queryFn({ prompt: this.#input(), options });
