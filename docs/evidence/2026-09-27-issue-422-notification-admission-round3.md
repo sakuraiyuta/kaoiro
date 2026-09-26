@@ -1,6 +1,6 @@
 ---
 title: Issue 422 notification admission review round 3
-status: verified
+status: superseded
 last_updated: 2026-09-27
 ---
 
@@ -30,6 +30,6 @@ The current source SHA-256 values are `4154636f930e26eda050af56e71045a5288a909c6
 
 The [Claude events reference](../reference/engines/claude-events.md#recovering-a-fail-stopped-claude-wrapper) now gives the actual operator sequence: observe `state=error` and the stderr reason, terminate the affected wrapper from its card, wait for `disconnected`, restore it, then verify an idle or waiting-input live wrapper and accepted new input. The CLI stderr includes that document path. A live `error` agent cannot be restored directly, and session reset does not accept that state. Neither server reply-basis comparison nor reset admission rules changed.
 
-No new model API call was made in this round. The round-2 actual-CLI (a)/(b) probes did not enter the fail-stop branch. The new normal-T2 control sends successfully at basis 3, while the stop branch rejects only after the ambiguous result. Prompt matching, peer-input formatting, basis selection, and server comparison code did not change; the controlled tests therefore pin the only affected branch without re-running (a)/(b) against the model API.
+At the time of this preliminary record, no new model API call had been made. The director subsequently required a real-CLI rerun on the final build because the shared send guard could affect normal notification sends. [The final native-gate record](2026-09-27-issue-422-notification-admission-round3-native.md) supersedes this paragraph's test-only inference and records the new API dispatches, actual server outcomes, and independent notification controls.
 
 The full wrapper build/typecheck/test and runner typecheck/test are run on the clean landing candidate after this evidence is committed. Exit codes, counts, and warnings are retained in `tmp/fuji-422` and reported to the director with that HEAD.
