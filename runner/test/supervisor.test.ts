@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { chmodSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import type {
   RunnerSessions,
   SessionMeta,
@@ -21,6 +23,9 @@ import {
 import type { ManagedChild } from "../src/supervisor.js";
 import type { AgyExecutableResolution } from "@kaoiro/antigravity";
 import { resolveAgyExecutable } from "@kaoiro/antigravity";
+
+const require = createRequire(import.meta.url);
+const { DatabaseSync } = require("node:sqlite") as typeof import("node:sqlite");
 
 const spawnMsg = {
   version: "0",
@@ -71,6 +76,7 @@ function harness(
     cwdAllowlist?: string[];
     sessions?: SessionMeta[] | Promise<SessionMeta[]>;
     exists?: boolean | Promise<boolean>;
+    useDefaultSessionQueries?: boolean;
     wrapperServerUrl?: string;
     now?: () => number;
     resetTerminationGraceMs?: number;
@@ -118,8 +124,12 @@ function harness(
     sendSessions: (s) => sessionsSent.push(s),
     sendResetResult: (r) => resetResults.push(r),
     sendStopAgent: (agentId) => stopIntents.push(agentId),
-    listSessions: () => opts.sessions ?? [],
-    sessionExists: () => opts.exists ?? false,
+    ...(opts.useDefaultSessionQueries
+      ? {}
+      : {
+          listSessions: () => opts.sessions ?? [],
+          sessionExists: () => opts.exists ?? false,
+        }),
     ...(opts.getClaudeEngineCatalog === undefined
       ? {}
       : { getClaudeEngineCatalog: opts.getClaudeEngineCatalog }),
@@ -761,6 +771,65 @@ describe("Supervisor resume (T3 / F4)", () => {
       ok: false,
       reason: "session_not_found",
     });
+  });
+
+  it("Antigravity の実 session index を通る T3 は既知 ID を起動し、未知 ID を拒否する", () => {
+    const root = mkdtempSync(join(tmpdir(), "kaoiro-antigravity-t3-"));
+    const previousHome = process.env.HOME;
+    const home = join(root, "home");
+    const cwd = join(root, "workspace");
+    mkdirSync(home);
+    mkdirSync(cwd);
+    process.env.HOME = home;
+    const dbPath = join(home, ".gemini", "antigravity-cli", "conversation_summaries.db");
+    mkdirSync(join(home, ".gemini", "antigravity-cli"), { recursive: true });
+    const db = new DatabaseSync(dbPath);
+    db.exec(`
+      PRAGMA user_version = 3;
+      CREATE TABLE conversation_summaries (
+        conversation_id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '',
+        last_modified_time datetime NOT NULL, workspace_uris TEXT NOT NULL,
+        nesting_depth INTEGER NOT NULL DEFAULT 0, killed numeric NOT NULL DEFAULT false
+      );
+    `);
+    const knownId = "abababab-abab-4bab-8bab-abababababab";
+    db.prepare(`
+      INSERT INTO conversation_summaries
+        (conversation_id, title, last_modified_time, workspace_uris, nesting_depth, killed)
+      VALUES (?, '', '2026-09-26 10:00:00.000000000+00:00', ?, 0, 0)
+    `).run(knownId, JSON.stringify([pathToFileURL(cwd).href]));
+    db.close();
+    try {
+      const h = harness({
+        useDefaultSessionQueries: true,
+        cwdAllowlist: [cwd],
+        antigravityExecutable: { ok: true, path: process.execPath },
+      });
+      h.sup.handleSpawn({
+        ...spawnMsg,
+        agent_id: "lab-pc-1.antigravity-t3-known",
+        cwd,
+        engine: "antigravity",
+        resume_session_id: knownId,
+      });
+      expect(h.children).toHaveLength(1);
+      expect(h.resumes).toEqual([knownId]);
+      expect(h.results[0]).toMatchObject({ ok: true });
+
+      h.sup.handleSpawn({
+        ...spawnMsg,
+        agent_id: "lab-pc-1.antigravity-t3-unknown",
+        cwd,
+        engine: "antigravity",
+        resume_session_id: "cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd",
+      });
+      expect(h.children).toHaveLength(1);
+      expect(h.results[1]).toMatchObject({ ok: false, reason: "session_not_found" });
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("Codex の async T3 中は event handler を返し、完了後に起動する (#97)", async () => {

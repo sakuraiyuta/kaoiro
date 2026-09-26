@@ -210,6 +210,18 @@ KAOIRO_RUNNER_DIR="$tmp" timeout 6 sh runner/deploy/kaoiro-runner-launch.sh
 Either replace with `gtimeout` from `brew install coreutils`, or omit `timeout` and
 stop with Ctrl-C.
 
+### Antigravity session index
+
+The runner reads Antigravity session metadata from
+`~/.gemini/antigravity-cli/conversation_summaries.db`. If the session picker is
+empty after an `agy` update, check the runner journal for an Antigravity schema
+warning and inspect the database's `user_version` before concluding that no
+sessions exist. A schema mismatch fails closed for Antigravity listing and
+resume validation. The first SQLite use in each runner process may also emit
+Node's `ExperimentalWarning` to the journal; this is harmless log noise.
+Mixed UTC offsets produce a warning that picker order may be wrong and call for
+a fresh bounded timestamp measurement.
+
 Handling of configuration errors can also be checked with the same procedure (both exit 78):
 
 ```sh

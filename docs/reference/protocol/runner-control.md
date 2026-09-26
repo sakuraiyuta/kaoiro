@@ -60,6 +60,18 @@ resume_session / stop / restart is **operator-only**. Runner T3 verifies that th
 session exists under the agent-bound cwd; `switch_session` rechecks the target in the same
 immutable cwd. The cwd is restricted to the runner `cwd_allowlist` (#22, T1).
 
+Antigravity session metadata comes from the runner user's
+`~/.gemini/antigravity-cli/conversation_summaries.db` index. The runner opens it
+read-only with a 100 ms lock timeout and fails closed (`[]` / `false`) when the
+database is missing, locked, unreadable, unsupported, or has an unknown schema.
+It matches decoded `file:` workspace URIs to the exact requested cwd. The picker
+lists top-level conversations only (`nesting_depth = 0`), retains killed rows,
+and returns at most 500 entries from the newest 10,000 candidate rows. A session
+outside that candidate window may not appear. A mixed UTC-offset warning means
+the candidate selection and display order may be incorrect until timestamp
+ordering is remeasured. Schema and bounded source measurements are recorded in
+[the Antigravity session-index evidence](../../evidence/antigravity/conversation-summaries-schema.md).
+
 **Duplicate-start prevention** uses two layers: existing server-owner fencing plus a
 runner-local lock ([ADR-0014](../../adr/0014-session-resume-and-restore.md) F4). The runner
 rejects a spawn race with `spawn_result.reason = already_running`. A wrapper join for an

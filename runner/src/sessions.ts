@@ -7,22 +7,29 @@
 //   `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl`, with the cwd
 //   recorded in the first line's session_meta (verified 2026-07-10; the
 //   internal state_5.sqlite index is deliberately not relied on)
-// - antigravity enumeration is a stub (phase-34 B3): ADR-0057 F7 names
-//   `~/.gemini/antigravity-cli/conversations/*.db` as the metadata source,
-//   but reading it is deferred to Stage B, so both functions below report
-//   "no sessions" for this engine rather than guessing the schema.
+// - antigravity reads bounded metadata from
+//   `~/.gemini/antigravity-cli/conversation_summaries.db` (issue #386).
 //
 // The runner lists these to offer resume candidates and verifies a resume
 // target actually exists under the bound cwd (threat-model T3).
 
-import { closeSync, openSync, readSync, readdirSync, statSync } from "node:fs";
+import {
+  closeSync,
+  openSync,
+  readSync,
+  readdirSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
+import { createRequire } from "node:module";
 import {
   open as openFile,
   readdir as readDirectory,
   stat as statFile,
 } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, normalize, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type { EngineKind, SessionMeta } from "@kaoiro/protocol";
 
 /** session_id rides a JSONL filename and the wrapper's `--resume` arg, so its
@@ -31,6 +38,412 @@ import type { EngineKind, SessionMeta } from "@kaoiro/protocol";
 const SESSION_ID_PATTERN = /^[A-Za-z0-9-]+$/;
 const MAX_SESSION_ID = 128;
 const JSONL = ".jsonl";
+const require = createRequire(import.meta.url);
+
+type SqliteModule = typeof import("node:sqlite");
+type WarningSink = (message: string) => void;
+
+interface AntigravityReadOptions {
+  loadSqlite?: () => SqliteModule;
+  nodeVersion?: string;
+  warn?: WarningSink;
+}
+
+const SQLITE_BUSY_TIMEOUT_MS = 100;
+const ANTIGRAVITY_SESSION_LIMIT = 500;
+const ANTIGRAVITY_CANDIDATE_LIMIT = 10_000;
+const WARNING_INTERVAL_MS = 60_000;
+const warningTimes = new Map<string, number>();
+const ANTIGRAVITY_COLUMNS = [
+  "conversation_id",
+  "title",
+  "last_modified_time",
+  "workspace_uris",
+  "nesting_depth",
+] as const;
+
+function defaultWarningSink(message: string): void {
+  process.stderr.write(
+    `runner: antigravity session index unavailable: ${message}\n`,
+  );
+}
+
+function warnAntigravity(
+  cwd: string,
+  failureClass: string,
+  detail: string,
+  sink: WarningSink,
+): void {
+  const key = `${cwd}\0${failureClass}`;
+  const now = Date.now();
+  const previous = warningTimes.get(key);
+  if (previous !== undefined && now - previous < WARNING_INTERVAL_MS) return;
+  warningTimes.set(key, now);
+  sink(`${failureClass}: ${detail.replace(/[\r\n]+/g, " ")}`);
+}
+
+function clearAntigravityWarnings(cwd: string): void {
+  const prefix = `${cwd}\0`;
+  for (const key of warningTimes.keys()) {
+    if (key.startsWith(prefix)) warningTimes.delete(key);
+  }
+}
+
+function nodeSupportsSqlite(version: string): boolean {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
+  if (match === null) return false;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  return major > 24 || major === 24 || (major === 22 && minor >= 16);
+}
+
+function antigravityDatabasePath(): string {
+  return join(
+    homedir(),
+    ".gemini",
+    "antigravity-cli",
+    "conversation_summaries.db",
+  );
+}
+
+function normalizedCwd(cwd: string): string {
+  try {
+    return normalize(realpathSync(cwd));
+  } catch {
+    return normalize(resolve(cwd));
+  }
+}
+
+function workspaceMatches(
+  workspaceValue: unknown,
+  requestedCwd: string,
+  requestedCwdUri: string,
+  warn: (failureClass: string, detail: string) => void,
+): boolean {
+  if (typeof workspaceValue !== "string") {
+    warn("invalid_workspace", "workspace_uris is not text");
+    return false;
+  }
+  if (workspaceValue === "") return false;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(workspaceValue);
+  } catch {
+    warn("invalid_workspace", "workspace_uris is not valid JSON");
+    return false;
+  }
+  if (
+    !Array.isArray(parsed) ||
+    !parsed.every((value) => typeof value === "string")
+  ) {
+    warn("invalid_workspace", "workspace_uris is not an array of strings");
+    return false;
+  }
+
+  let matched = false;
+  for (const value of parsed) {
+    if (value === requestedCwdUri) {
+      matched = true;
+      continue;
+    }
+    let url: URL;
+    try {
+      url = new URL(value);
+    } catch {
+      warn("invalid_workspace", "workspace_uris contains a malformed URI");
+      return false;
+    }
+    if (url.protocol !== "file:") continue;
+    if (url.host !== "") {
+      warn(
+        "invalid_workspace",
+        "workspace_uris contains a file URI with an authority",
+      );
+      return false;
+    }
+    if (matched) {
+      try {
+        if (url.search !== "" || url.hash !== "" || /%(?![0-9a-f]{2})/i.test(url.pathname)) {
+          throw new TypeError("malformed file URI");
+        }
+        if (/%(?:2f|5c)/i.test(url.pathname)) {
+          throw new TypeError("encoded path separator");
+        }
+        decodeURIComponent(url.pathname);
+      } catch {
+        warn("invalid_workspace", "workspace_uris contains an invalid file URI");
+        return false;
+      }
+      continue;
+    }
+    try {
+      if (normalize(fileURLToPath(url)) === requestedCwd) matched = true;
+    } catch {
+      warn("invalid_workspace", "workspace_uris contains an invalid file URI");
+      return false;
+    }
+  }
+  return matched;
+}
+
+function validateAntigravitySchema(
+  db: import("node:sqlite").DatabaseSync,
+): string | undefined {
+  const versionRow = db.prepare("PRAGMA user_version").get() as
+    | { user_version?: unknown }
+    | undefined;
+  const version = versionRow?.user_version;
+  const columns = db
+    .prepare("PRAGMA table_info(conversation_summaries)")
+    .all() as { name?: unknown }[];
+  const names = new Set(
+    columns.flatMap((column) =>
+      typeof column.name === "string" ? [column.name] : [],
+    ),
+  );
+  const missing = ANTIGRAVITY_COLUMNS.filter((column) => !names.has(column));
+  if (version !== 3 || missing.length > 0) {
+    return `user_version=${String(version)}; missing columns=${missing.join(",") || "none"}`;
+  }
+  return undefined;
+}
+
+function openAntigravityDatabase(
+  dbPath: string,
+  cwd: string,
+  options: AntigravityReadOptions,
+): import("node:sqlite").DatabaseSync | undefined {
+  const warn = options.warn ?? defaultWarningSink;
+  const nodeVersion = options.nodeVersion ?? process.versions.node;
+  if (!nodeSupportsSqlite(nodeVersion)) {
+    warnAntigravity(cwd, "unsupported_runtime", `node=${nodeVersion}`, warn);
+    return undefined;
+  }
+
+  let sqlite: SqliteModule;
+  try {
+    sqlite = (options.loadSqlite ?? (() => require("node:sqlite") as SqliteModule))();
+  } catch {
+    warnAntigravity(cwd, "sqlite_unavailable", "node:sqlite could not be loaded", warn);
+    return undefined;
+  }
+
+  try {
+    const db = new sqlite.DatabaseSync(dbPath, {
+      readOnly: true,
+      timeout: SQLITE_BUSY_TIMEOUT_MS,
+    });
+    if (typeof db.function !== "function") {
+      db.close();
+      warnAntigravity(
+        cwd,
+        "sqlite_unavailable",
+        "required SQLite function API is unavailable",
+        warn,
+      );
+      return undefined;
+    }
+    const schemaProblem = validateAntigravitySchema(db);
+    if (schemaProblem !== undefined) {
+      db.close();
+      warnAntigravity(cwd, "schema_mismatch", schemaProblem, warn);
+      return undefined;
+    }
+    return db;
+  } catch {
+    warnAntigravity(cwd, "database_read_failed", "database open or schema query failed", warn);
+    return undefined;
+  }
+}
+
+function parseAgyTimestamp(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const match =
+    /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})\.(\d{9})([+-])(\d{2}):(\d{2})$/.exec(
+      value,
+    );
+  if (match === null) return undefined;
+  const [
+    ,
+    yearText,
+    monthText,
+    dayText,
+    hourText,
+    minuteText,
+    secondText,
+    fractionText,
+    sign,
+    offsetHourText,
+    offsetMinuteText,
+  ] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const second = Number(secondText);
+  const offsetHour = Number(offsetHourText);
+  const offsetMinute = Number(offsetMinuteText);
+  if (
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    hour > 23 ||
+    minute > 59 ||
+    second > 59 ||
+    offsetHour > 23 ||
+    offsetMinute > 59
+  ) {
+    return undefined;
+  }
+
+  const local = new Date(0);
+  local.setUTCFullYear(year, month - 1, day);
+  local.setUTCHours(hour, minute, second, 0);
+  if (
+    local.getUTCFullYear() !== year ||
+    local.getUTCMonth() !== month - 1 ||
+    local.getUTCDate() !== day
+  ) {
+    return undefined;
+  }
+
+  const fractionMs = Math.floor((Number(fractionText) + 500_000) / 1_000_000);
+  const offsetMs =
+    (offsetHour * 60 + offsetMinute) * 60_000 * (sign === "+" ? 1 : -1);
+  return new Date(local.getTime() + fractionMs - offsetMs).toISOString();
+}
+
+function registerWorkspaceMatcher(
+  db: import("node:sqlite").DatabaseSync,
+  cwd: string,
+  warn: (failureClass: string, detail: string) => void,
+): void {
+  const requestedCwdUri = pathToFileURL(cwd).href;
+  db.function(
+    "kaoiro_workspace_matches",
+    { deterministic: true },
+    (workspaceValue) =>
+      workspaceMatches(workspaceValue, cwd, requestedCwdUri, warn) ? 1 : 0,
+  );
+}
+
+/** Lists Antigravity sessions from its bounded summary index. */
+export function listAntigravitySessionsFrom(
+  dbPath: string,
+  cwd: string,
+  options: AntigravityReadOptions = {},
+): SessionMeta[] {
+  const db = openAntigravityDatabase(dbPath, cwd, options);
+  if (db === undefined) return [];
+  const sink = options.warn ?? defaultWarningSink;
+  let hadWarning = false;
+  const warn = (failureClass: string, detail: string): void => {
+    hadWarning = true;
+    warnAntigravity(cwd, failureClass, detail, sink);
+  };
+  try {
+    const canonicalCwd = normalizedCwd(cwd);
+    registerWorkspaceMatcher(db, canonicalCwd, warn);
+    const rows = db.prepare(`
+      WITH candidates AS MATERIALIZED (
+        SELECT conversation_id, title, last_modified_time, workspace_uris, nesting_depth
+        FROM conversation_summaries
+        WHERE nesting_depth = 0
+        ORDER BY last_modified_time DESC
+        LIMIT ${ANTIGRAVITY_CANDIDATE_LIMIT}
+      ), offset_summary AS MATERIALIZED (
+        SELECT COUNT(DISTINCT substr(last_modified_time, -6)) AS offset_count
+        FROM candidates
+      )
+      SELECT candidates.conversation_id, candidates.title,
+        candidates.last_modified_time, offset_summary.offset_count
+      FROM offset_summary LEFT JOIN candidates
+        ON kaoiro_workspace_matches(workspace_uris) = 1
+      ORDER BY candidates.last_modified_time DESC
+      LIMIT ${ANTIGRAVITY_SESSION_LIMIT}
+    `).all() as {
+      conversation_id?: unknown;
+      title?: unknown;
+      last_modified_time?: unknown;
+      offset_count?: unknown;
+    }[];
+    if (rows.length > 0 && Number(rows[0]?.offset_count) > 1) {
+      warn("mixed_offsets", "mixed UTC offsets; picker order may be wrong");
+    }
+    const sessions: SessionMeta[] = [];
+    for (const row of rows) {
+      if (
+        typeof row.conversation_id !== "string" ||
+        !isValidSessionId(row.conversation_id)
+      ) {
+        continue;
+      }
+      const mtime = parseAgyTimestamp(row.last_modified_time);
+      if (mtime === undefined) continue;
+      const meta: SessionMeta = { session_id: row.conversation_id, mtime };
+      if (typeof row.title === "string" && row.title.trim() !== "") {
+        meta.summary = toSummaryLabel(row.title);
+      }
+      sessions.push(meta);
+    }
+    if (!hadWarning) clearAntigravityWarnings(cwd);
+    return sessions;
+  } catch {
+    warn("database_read_failed", "session listing query failed");
+    return [];
+  } finally {
+    try {
+      db.close();
+    } catch {
+      /* Keep session reads fail-closed. */
+    }
+  }
+}
+
+/** Checks an Antigravity ID against the exact row and bound workspace. */
+export function antigravitySessionExistsIn(
+  dbPath: string,
+  cwd: string,
+  sessionId: string,
+  options: AntigravityReadOptions = {},
+): boolean {
+  if (!isValidSessionId(sessionId)) return false;
+  const db = openAntigravityDatabase(dbPath, cwd, options);
+  if (db === undefined) return false;
+  const sink = options.warn ?? defaultWarningSink;
+  let hadWarning = false;
+  const warn = (failureClass: string, detail: string): void => {
+    hadWarning = true;
+    warnAntigravity(cwd, failureClass, detail, sink);
+  };
+  try {
+    const canonicalCwd = normalizedCwd(cwd);
+    const row = db.prepare(`
+      SELECT workspace_uris
+      FROM conversation_summaries
+      WHERE conversation_id = ?
+    `).get(sessionId) as { workspace_uris?: unknown } | undefined;
+    const exists = row !== undefined && workspaceMatches(
+      row.workspace_uris,
+      canonicalCwd,
+      pathToFileURL(canonicalCwd).href,
+      warn,
+    );
+    if (!hadWarning) clearAntigravityWarnings(cwd);
+    return exists;
+  } catch {
+    warn("database_read_failed", "session existence query failed");
+    return false;
+  } finally {
+    try {
+      db.close();
+    } catch {
+      /* Keep session reads fail-closed. */
+    }
+  }
+}
 
 export function isValidSessionId(sessionId: string): boolean {
   return (
@@ -347,23 +760,24 @@ export function listSessions(
   cwd: string,
   engine: EngineKind = "claude-code",
 ): SessionMeta[] | Promise<SessionMeta[]> {
-  if (engine === "antigravity") return [];
+  if (engine === "antigravity") {
+    return listAntigravitySessionsFrom(antigravityDatabasePath(), cwd);
+  }
   return engine === "codex"
     ? listCodexSessionsIn(codexSessionsRoot(), cwd)
     : listSessionsIn(projectsDir(cwd));
 }
 
 /** The T3 existence check: session_id is valid AND exists in the engine's
- *  session store under the bound cwd, gating a resume to that cwd.
- *  antigravity is a stub always reporting no match (phase-34 B3 TODO, see
- *  `listSessions`) — a resume request against this engine fails T3 rather
- *  than resuming an unverified session_id. */
+ *  session store under the bound cwd, gating a resume to that cwd. */
 export function sessionExists(
   cwd: string,
   sessionId: string,
   engine: EngineKind = "claude-code",
 ): boolean | Promise<boolean> {
-  if (engine === "antigravity") return false;
+  if (engine === "antigravity") {
+    return antigravitySessionExistsIn(antigravityDatabasePath(), cwd, sessionId);
+  }
   return engine === "codex"
     ? codexSessionExistsIn(codexSessionsRoot(), cwd, sessionId)
     : sessionExistsIn(projectsDir(cwd), sessionId);
