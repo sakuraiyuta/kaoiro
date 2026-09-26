@@ -1,6 +1,6 @@
 ---
 title: Documentation deduplication plan for issue 372
-status: proposed
+status: done
 last_updated: 2026-09-26
 description: Canonical-page and pointer map for the five in-scope documentation deduplication units.
 ---
