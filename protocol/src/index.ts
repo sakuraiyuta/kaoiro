@@ -1244,6 +1244,7 @@ export interface InterAgentDeliveryStatus {
  * because an old or not-yet-initialized wrapper may not have stamped them.
  * Omitted situational fields mean unknown, never zero or fine. */
 export interface DirectoryEntry {
+  inter_agent_reply_basis?: "v1" | "legacy";
   agent_id: string;
   persona: { id?: string; name?: string; sprite_set?: string };
   /** Mutable, instance-scoped name; persona metadata remains the canonical

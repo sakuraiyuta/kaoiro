@@ -20,9 +20,7 @@ defmodule KaoiroServerWeb.ReplyBasisChannelTest do
     socket
   end
 
-  # ADR-0051 D2: the join reply carries the hydration verdict, so tests that
-  # exercise the handshake need it rather than just the socket.
-  defp join_wrapper_with_reply(agent_id, persona_id \\ "default", params \\ %{}) do
+  defp join_wrapper_with_reply(agent_id, persona_id, params) do
     {:ok, reply, socket} =
       KaoiroServerWeb.WrapperSocket
       |> socket(nil, %{})
@@ -42,26 +40,15 @@ defmodule KaoiroServerWeb.ReplyBasisChannelTest do
 
     payload = %{
       "to" => to,
-      # Unique per call so the supervised ConversationStates (one instance
-      # for the whole describe block) cannot leak state between tests via a
-      # shared cid — that would surface as a false participants_mismatch.
       "conversation_id" => opts[:cid] || "cnv-#{System.unique_integer([:positive])}",
       "turn_number" => opts[:turn] || 1,
       "kind" => opts[:kind] || "inform",
       "body" => opts[:body] || "hi",
       "meta" => meta,
       "owner" => opts[:owner] || %{"kind" => "user", "id" => "operator"},
-      # issue #262. Defaults true (matches ConversationStates.record_
-      # message/8's own default): this describe block's cids are either
-      # freshly minted here or a 2nd+ call reusing one this SAME helper
-      # already created, so `existing` is never nil on a false-flagged
-      # send by construction and the flag is moot for every pre-#262
-      # test. Tests written FOR #262 pass `new_conversation: false`
-      # explicitly to exercise the reject path.
       "new_conversation" => Keyword.get(opts, :new_conversation, true)
     }
 
-    # 応答不能エラー通知 (#131) は optional。指定時のみ payload に載せる。
     payload =
       if opts[:error], do: Map.put(payload, "error", opts[:error]), else: payload
 
@@ -77,8 +64,6 @@ defmodule KaoiroServerWeb.ReplyBasisChannelTest do
     }
   end
 
-  # 受信側エージェント(to)が known? に通るよう、まず state_change を投入して
-  # AgentStates に登録しておく。
   defp seed_known(agent_id) do
     socket = join_wrapper(agent_id)
     ref = push(socket, "envelope", envelope(agent_id, "idle"))
@@ -98,6 +83,12 @@ defmodule KaoiroServerWeb.ReplyBasisChannelTest do
     assert reply["inter_agent_reply_basis"] == "v1"
     ref = push(sender, "envelope", envelope(a, "idle"))
     assert_reply ref, :ok
+    directory = push(sender, "directory_request", %{"version" => "0"})
+    assert_reply directory, :ok, %{"agents" => agents}
+    assert Enum.find(agents, &(&1["agent_id"] == b))["inter_agent_reply_basis"] == "legacy"
+    directory = push(peer, "directory_request", %{"version" => "0"})
+    assert_reply directory, :ok, %{"agents" => agents}
+    assert Enum.find(agents, &(&1["agent_id"] == a))["inter_agent_reply_basis"] == "v1"
     first = inter_envelope(a, b) |> put_in(["payload", "in_reply_to"], 0)
     cid = first["payload"]["conversation_id"]
     ref = push(sender, "envelope", first)
