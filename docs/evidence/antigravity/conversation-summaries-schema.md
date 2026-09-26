@@ -224,32 +224,63 @@ shim: a process-wide filter could hide unrelated experimental APIs. The
 operator runbook will identify the one-time SQLite warning in the runner
 journal as harmless log noise.
 
-For the synchronous scan budget, a synthetic database used the measured
-`workspace_uris` shape and ten thousand newest candidate rows. Parsing each row
-in JavaScript took p50 44.91 ms, p95 51.45 ms, and max 109.64 ms over 30 runs,
-so that design is rejected. A bounded CTE plus a SQLite function that decodes
-each `file:` URI and compares the normalized path returned at most 500 rows;
-in 30 runs it took p50 6.82 ms, p95 8.72 ms, and max 9.95 ms on Node v24.3.0.
-The isolated bounded CTE measurement above is query-only and is not the full
-helper cost. The complete helper, including database open, schema validation,
-workspace matching, and result mapping, was measured with a 10,000-row
-candidate window on Node v24.3.0 over 30 runs: p50 14.37 ms, p95 15.98 ms,
-and max 16.04 ms. The accepted limit is p95 at or below 20 ms at this worst
-case; the operator decision keeps the 10,000-row window because this helper is
-operator-triggered, the measured database main file was 86,016 bytes, and a
-5,000-row window would hide more older sessions. A separate 100 ms busy
-timeout bounds lock waiting. During bulk restore, `sessionExists` performs N
-sequential primary-key checks; if each meets a continuously locked database,
-the waits can accumulate to roughly `100 ms × N`, with each check failing
-closed. A lock released near timeout can add query time.
+### Synchronous scan measurements
+
+The earlier JavaScript scan benchmark took p50 44.91 ms, p95 51.45 ms, and
+max 109.64 ms over 30 runs. A query-only bounded CTE benchmark took p50
+6.82 ms, p95 8.72 ms, and max 9.95 ms on Node v24.3.0; neither measures the
+complete helper for sparse workspaces. The earlier unqualified full-helper
+result (p50 14.37 ms, p95 15.98 ms, max 16.04 ms) used a dense workspace and
+is superseded by the density-controlled measurements below.
+
+The committed [benchmark harness](benchmark-session-index.mjs) imports the
+built `runner/dist/sessions.js`. Reproduce it from the repository root after
+`pnpm -C runner build`:
+
+```sh
+for density in 2 10 100 1000000000; do
+  MATCH_EVERY="$density" node docs/evidence/antigravity/benchmark-session-index.mjs
+done
+```
+
+The synthetic WAL database has 12,000 top-level rows and 500 nested rows, so
+the 10,000-row candidate window is full. Each top-level row has two `file:`
+URIs: the requested cwd for every `MATCH_EVERY`th row, otherwise a different
+workspace, plus a unique customization path. Timestamps use one fixed UTC
+offset. Each density is warmed once, then the complete helper runs 30 timed
+list calls. Matcher calls are counted separately over the same ordered
+candidate window, stopping at 500 matches. `MATCH_EVERY=1000000000` produces
+zero matches inside the candidate window. The measured results on Node v24.3.0
+were:
+
+| Candidate match density | Candidate matches | Matcher calls | Returned | p50 ms | p95 ms | Max ms |
+|---|---:|---:|---:|---:|---:|---:|
+| 1/2 | 5,000 | 1,023 | 500 | 20.42 | 22.50 | 23.68 |
+| 1/10 | 999 | 5,023 | 500 | 32.67 | 36.81 | 37.63 |
+| 1/100 | 98 | 10,000 | 98 | 48.20 | 55.18 | 57.25 |
+| 0 | 0 | 10,000 | 0 | 49.82 | 56.57 | 57.95 |
+
+The last row meets the acceptance limit set by director (kuroe): p95 at or
+below 60 ms for a 10,000-row window with zero workspace matches. A repeated
+zero-match run measured p50 48.72 ms, p95 55.07 ms, and max 56.81 ms. The
+10,000-row window remains because picker and restore work is operator-triggered
+and infrequent, while reducing it would hide older sessions. A SQL prefilter
+was not adopted: percent-encoding differences could hide a match, and it
+would change which malformed rows produce warnings. The approximate 55 ms
+synchronous pause is accepted by director (kuroe). The measured main database
+was 86,016 bytes. During bulk restore, `sessionExists` performs N sequential
+primary-key checks; if each encounters a continuously locked database, the
+100 ms busy timeout can accumulate to roughly `100 ms × N`, with each check
+failing closed. A lock released near timeout can add query time.
 
 A separate in-memory mixed-offset fixture confirmed that SQLite
 `unixepoch(last_modified_time, 'subsec')` sorts timestamps with different
 offsets chronologically, but on 10,000 rows this query took p50 29.91 ms,
-p95 34.33 ms, and max 34.34 ms over 30 runs. That exceeds the 20 ms
-per-helper acceptance limit. The bounded copied sample had one offset across
-all ten timestamp values, so the design keeps the indexed text order for the
-measured encoding. Whether older, unsampled rows use another offset is
-unknown. The implementation retains text ordering, counts distinct offset
-suffixes in each candidate window, and warns when a query finds a mixture; an
-operator can then remeasure the stored encoding and revisit ordering.
+p95 34.33 ms, and max 34.34 ms over 30 runs. This is below the 60 ms
+per-helper acceptance limit but slower than indexed text ordering for the
+measured fixed-offset encoding. The bounded copied sample had one offset across
+all ten timestamp values, so the design keeps indexed text order. Whether
+older, unsampled rows use another offset is unknown. The implementation
+retains text ordering, counts distinct offset suffixes in each candidate
+window, and warns when a query finds a mixture; an operator can then remeasure
+the stored encoding and revisit ordering.

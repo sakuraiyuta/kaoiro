@@ -117,16 +117,17 @@ newest 10,000 candidate rows for its workspace will not appear in the picker.
 Subagent conversations (`nesting_depth > 0`) are excluded. Keep rows with
 `killed=true` and do not filter by `status`, as decided by the director.
 
-The synchronous scan acceptance limit is p95 at or below 20 ms for the
-worst-case 10,000-row candidate window. The complete helper measured p50
-14.37 ms, p95 15.98 ms, and max 16.04 ms across 30 runs. Keep the 10,000-row
-window: this path runs only for operator-triggered picker and restore/resume
-existence requests, so a roughly 16 ms event-loop pause is negligible beside
-the 30-second Phoenix heartbeat; the 10,000 rows are a worst-case bound and
-the measured database main file was only 86,016 bytes; reducing the window to
-5,000 would hide a larger range of older sessions. Bulk restore performs N
-sequential existence checks; if each encounters a continuously locked database,
-the 100 ms busy timeout can accumulate to roughly `100 ms × N`.
+The synchronous scan acceptance limit, set by director (kuroe), is p95 at or
+below 60 ms for a 10,000-row candidate window with zero workspace matches.
+Measured timings by workspace-match density and a runnable harness are in
+[the performance evidence](../evidence/antigravity/conversation-summaries-schema.md#synchronous-scan-measurements).
+Keep the 10,000-row window: picker and restore requests are operator-triggered
+and infrequent, a roughly 55 ms event-loop pause is acceptable, and reducing
+the window would hide older sessions. A SQL prefilter was rejected because
+percent-encoding differences could hide a real match and it would change which
+malformed rows produce warnings. Bulk restore performs N sequential existence
+checks; if each encounters a continuously locked database, the 100 ms busy
+timeout can accumulate to roughly `100 ms × N`.
 
 For `sessionExists(cwd, id, "antigravity")`, validate the ID, query the exact
 primary key, and run the same workspace matcher. Unknown, malformed, missing,
@@ -152,7 +153,8 @@ picker contents only.
   `last_updated` to the landing date.
 - Add `docs/evidence/antigravity/conversation-summaries-schema.md` with the
   schema, bounded row encoding measurement, copy hashes/mtimes, Node API and
-  sidecar findings, and performance figures.
+  sidecar findings, and performance figures. Its committed benchmark harness
+  is `docs/evidence/antigravity/benchmark-session-index.mjs`.
 - Add operator notes to `docs/operations/runner-install.md`: after an agy
   update, an empty picker should prompt checking the runner's schema warning
   and the database `user_version` before treating it as no sessions; the
@@ -185,6 +187,9 @@ runtime dependency is planned.
   cover a different cwd; a missing cwd that only matches its identical
   literal path; malformed/unknown IDs; malformed URI values; nested rows
   omitted from listing; and IDs from another workspace.
+- Pin that `file:` workspace members with `?query` or `#fragment` are rejected
+  consistently whether they appear before or after the matching cwd URI. A
+  mutation that skips this validation must make that test fail.
 - The existing default-host epoch-args test in
   `wrapper/antigravity/test/host.test.ts` must assert that actual spawn args
   contain `--add-dir <agent cwd>`. Mutate the wrapper args to omit the cwd
@@ -194,6 +199,9 @@ runtime dependency is planned.
   listing/existence remain available when offsets are mixed. Mutation
   control: bypass the offset-count warning branch and confirm its positive
   test fails, then restore and confirm it passes.
+- Run the committed performance harness for match densities 1/2, 1/10, 1/100,
+  and zero matches after building the runner. Report p50, p95, and maximum;
+  acceptance is p95 <=60 ms for the zero-match 10,000-row window.
 - Exercise the default database path with a temporary home directory and no
   injected path/loader until the first meaningful list and existence calls.
   Assert that a missing database returns `[]` / `false` and is not created.
@@ -234,7 +242,8 @@ runtime dependency is planned.
 - `docs/plans/phase-34-antigravity-adapter.md` — mark Stage B3 complete.
 - `docs/evidence/antigravity/conversation-summaries-schema.md` — measured
   schema and bounded row encoding, supported Node window, sidecar behavior,
-  and synchronous scan timing.
+  and synchronous scan timing. `docs/evidence/antigravity/benchmark-session-index.mjs`
+  reproduces the workspace-density measurement.
 - `docs/operations/runner-install.md` — diagnose an empty picker after an agy
   update by checking the schema warning and `user_version`.
 - Issue [#381](https://github.com/sakuraiyuta/kaoiro/issues/381) — report the

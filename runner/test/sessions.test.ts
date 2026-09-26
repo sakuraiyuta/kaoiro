@@ -142,7 +142,52 @@ describe("antigravity conversation summary index (issue #386)", () => {
       .some((session) => session.session_id === trailingSlashId)).toBe(false);
     expect(listAntigravitySessionsFrom(dbPath, cwd, { warn: (warning) => warnings.push(warning) })
       .some((session) => session.session_id === schemeId)).toBe(true);
-    expect(warnings.some((warning) => warning.includes("authority"))).toBe(true);
+    expect(
+      warnings.some((warning) => warning.startsWith("invalid_workspace:")),
+    ).toBe(true);
+  });
+
+  it("rejects query and fragment file URIs regardless of member order", () => {
+    const dbPath = join(root, "uri-order.db");
+    const uriCwd = join(root, "uri-order-workspace");
+    mkdirSync(uriCwd);
+    const cwdUri = pathToFileURL(uriCwd).href;
+    const queryUri = "file:///x?y=1";
+    const fragmentUri = "file:///x#fragment";
+    const writer = new DatabaseSync(dbPath);
+    writer.exec(`
+      PRAGMA user_version = 3;
+      CREATE TABLE conversation_summaries (
+        conversation_id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '',
+        last_modified_time datetime NOT NULL, workspace_uris TEXT NOT NULL,
+        nesting_depth INTEGER NOT NULL DEFAULT 0, killed numeric NOT NULL DEFAULT false
+      );
+    `);
+    const insert = writer.prepare(`
+      INSERT INTO conversation_summaries
+        (conversation_id, title, last_modified_time, workspace_uris, nesting_depth, killed)
+      VALUES (?, '', '2026-09-26 16:00:00.000000000+00:00', ?, 0, 0)
+    `);
+    const cases = [
+      { id: "13131313-1313-4131-8131-131313131313", members: [cwdUri, queryUri] },
+      { id: "14141414-1414-4141-8141-141414141414", members: [queryUri, cwdUri] },
+      { id: "15151515-1515-4151-8151-151515151515", members: [cwdUri, fragmentUri] },
+      { id: "16161616-1616-4161-8161-161616161616", members: [fragmentUri, cwdUri] },
+    ];
+    for (const { id, members } of cases) {
+      insert.run(id, JSON.stringify(members));
+    }
+    writer.close();
+
+    const warnings: string[] = [];
+    const exists = cases.map(({ id }) =>
+      antigravitySessionExistsIn(dbPath, uriCwd, id, {
+        warn: (warning) => warnings.push(warning),
+      }),
+    );
+    expect(exists).toEqual([false, false, false, false]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/^invalid_workspace:/);
   });
 
   it("warns on mixed UTC offsets without failing listing or existence", () => {

@@ -29,7 +29,7 @@ import {
 } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, normalize, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import type { EngineKind, SessionMeta } from "@kaoiro/protocol";
 
 /** session_id rides a JSONL filename and the wrapper's `--resume` arg, so its
@@ -114,10 +114,49 @@ function normalizedCwd(cwd: string): string {
   }
 }
 
+type DecodedWorkspaceUri =
+  | { kind: "non_file" }
+  | { kind: "path"; path: string }
+  | { kind: "invalid"; reason: string };
+
+function decodeWorkspaceUri(value: string): DecodedWorkspaceUri {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return {
+      kind: "invalid",
+      reason: "workspace_uris contains a malformed URI",
+    };
+  }
+  if (url.protocol !== "file:") return { kind: "non_file" };
+  if (url.host !== "") {
+    return {
+      kind: "invalid",
+      reason: "workspace_uris contains a file URI with an authority",
+    };
+  }
+  try {
+    if (
+      url.search !== "" ||
+      url.hash !== "" ||
+      /%(?![0-9a-f]{2})/i.test(url.pathname) ||
+      /%(?:2f|5c)/i.test(url.pathname)
+    ) {
+      throw new TypeError("malformed file URI");
+    }
+    return { kind: "path", path: normalize(fileURLToPath(url)) };
+  } catch {
+    return {
+      kind: "invalid",
+      reason: "workspace_uris contains an invalid file URI",
+    };
+  }
+}
+
 function workspaceMatches(
   workspaceValue: unknown,
   requestedCwd: string,
-  requestedCwdUri: string,
   warn: (failureClass: string, detail: string) => void,
 ): boolean {
   if (typeof workspaceValue !== "string") {
@@ -143,46 +182,12 @@ function workspaceMatches(
 
   let matched = false;
   for (const value of parsed) {
-    if (value === requestedCwdUri) {
-      matched = true;
-      continue;
-    }
-    let url: URL;
-    try {
-      url = new URL(value);
-    } catch {
-      warn("invalid_workspace", "workspace_uris contains a malformed URI");
+    const decoded = decodeWorkspaceUri(value);
+    if (decoded.kind === "invalid") {
+      warn("invalid_workspace", decoded.reason);
       return false;
     }
-    if (url.protocol !== "file:") continue;
-    if (url.host !== "") {
-      warn(
-        "invalid_workspace",
-        "workspace_uris contains a file URI with an authority",
-      );
-      return false;
-    }
-    if (matched) {
-      try {
-        if (url.search !== "" || url.hash !== "" || /%(?![0-9a-f]{2})/i.test(url.pathname)) {
-          throw new TypeError("malformed file URI");
-        }
-        if (/%(?:2f|5c)/i.test(url.pathname)) {
-          throw new TypeError("encoded path separator");
-        }
-        decodeURIComponent(url.pathname);
-      } catch {
-        warn("invalid_workspace", "workspace_uris contains an invalid file URI");
-        return false;
-      }
-      continue;
-    }
-    try {
-      if (normalize(fileURLToPath(url)) === requestedCwd) matched = true;
-    } catch {
-      warn("invalid_workspace", "workspace_uris contains an invalid file URI");
-      return false;
-    }
+    if (decoded.kind === "path" && decoded.path === requestedCwd) matched = true;
   }
   return matched;
 }
@@ -320,12 +325,11 @@ function registerWorkspaceMatcher(
   cwd: string,
   warn: (failureClass: string, detail: string) => void,
 ): void {
-  const requestedCwdUri = pathToFileURL(cwd).href;
   db.function(
     "kaoiro_workspace_matches",
     { deterministic: true },
     (workspaceValue) =>
-      workspaceMatches(workspaceValue, cwd, requestedCwdUri, warn) ? 1 : 0,
+      workspaceMatches(workspaceValue, cwd, warn) ? 1 : 0,
   );
 }
 
@@ -428,7 +432,6 @@ export function antigravitySessionExistsIn(
     const exists = row !== undefined && workspaceMatches(
       row.workspace_uris,
       canonicalCwd,
-      pathToFileURL(canonicalCwd).href,
       warn,
     );
     if (!hadWarning) clearAntigravityWarnings(cwd);
