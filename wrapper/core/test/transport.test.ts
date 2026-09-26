@@ -2488,3 +2488,25 @@ it("captures a read-only replay fence invalidated by disconnection, channel loss
   expect(first()).toBe(false);expect(link.captureHistoryReplayFence()()).toBe(true);
   expect(beforeJoin()).toBe(false);expect(mock.pushes).toEqual(pushes);
 });
+
+describe("reply-basis negotiation", () => {
+  it("advertises v1, waits for the echo, and reports a legacy rejoin", async () => {
+    const modes: string[] = [];
+    const link = new ServerLink("ws://test", "self", { personaId: "p", interAgentReplyBasis: "v1", onReplyBasisMode: mode => modes.push(mode) });
+    try {
+      expect(mock.lastChannelParams).toMatchObject({ inter_agent_reply_basis: "v1" });
+      let resolved = false;
+      const waiting = link.waitForReplyBasisMode().then(mode => { resolved = true; return mode; });
+      await Promise.resolve(); expect(resolved).toBe(false);
+      mock.joinReceivers.get("ok")?.({ inter_agent_reply_basis: "v1" });
+      expect(await waiting).toBe("v1");
+      mock.joinReceivers.get("ok")?.({}); expect(await link.waitForReplyBasisMode()).toBe("legacy");
+      expect(modes).toEqual(["v1", "legacy"]);
+    } finally { link.close(); }
+  });
+  it("cancels a pending negotiation without authorizing a send", async () => {
+    const link = new ServerLink("ws://test", "self", { personaId: "p", interAgentReplyBasis: "v1" });
+    try { const abort = new AbortController(); const waiting = link.waitForReplyBasisMode(abort.signal); abort.abort(); expect(await waiting).toBe("pending"); }
+    finally { link.close(); }
+  });
+});

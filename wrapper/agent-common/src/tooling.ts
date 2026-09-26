@@ -26,6 +26,7 @@ export interface ToolResult {
 /** Per-call context an engine adapter MAY hand to a handler. Absent on
  *  adapters that do not track it (the Claude SDK server, antigravity). */
 export interface ToolHandlerContext {
+  origin?: import("./reply_basis.js").ReplyOrigin;
   /** Aborts once the call can no longer deliver its result to the model
    *  or act on its behalf — the owning engine turn ended or was
    *  interrupted, the bridge connection closed, or the host shut down. A

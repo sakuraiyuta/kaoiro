@@ -1320,6 +1320,7 @@ describe("classifyInterAgentError (issue #131)", () => {
     })).toEqual({
       code: "rate_limit",
       message: "the peer hit a rate limit; Resets in 148h49m28s",
+      reset_delay_seconds: 535_768,
     });
   });
 

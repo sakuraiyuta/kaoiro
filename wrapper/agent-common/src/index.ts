@@ -172,3 +172,8 @@ export type {
   WirePersona,
   WrapperConfig,
 } from "./types.js";
+
+export { ReplyBasis, ordinaryPeerInput, bindToolResultHandoff, handoffToolResult, discardToolResult } from "./reply_basis.js";
+export type { ReplyOrigin, ReplyAttempt, ReplyAuthorization } from "./reply_basis.js";
+
+export { ToolOrigins } from "./tool_origins.js";
