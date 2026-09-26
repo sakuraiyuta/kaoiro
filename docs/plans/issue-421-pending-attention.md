@@ -1,6 +1,6 @@
 ---
 title: Keep attention indicators visible while approval is pending
-status: proposed
+status: implemented
 last_updated: 2026-09-27
 ---
 
