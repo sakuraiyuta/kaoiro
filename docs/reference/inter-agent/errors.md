@@ -193,3 +193,7 @@ remains; delivery gaps outside the planned window are out of scope.
 - For asynchronous next-turn injection, include `error.code` in the injected
   text (SHOULD), preferably as `error=<code>` on the existing metadata line.
   The originating agent must be able to choose an action from the code.
+
+## Input-bound reply contract
+
+`stale_reply_basis` means the body was not admitted. Local origin/ticket errors report `send_not_attempted: true`; correction does not send a peer message. See [Input-bound inter-agent replies](reply-basis.md) for the exact contract.

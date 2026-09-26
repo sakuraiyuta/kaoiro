@@ -319,3 +319,7 @@ Therefore:
 - [Send and wait](send-and-wait.md).
 - [Coordination monitoring and display](coordination-monitoring.md).
 - [Peer directory and companion tools](directory.md).
+
+## Input-bound reply contract
+
+Ordinary peer history is distinct from transport turn numbering. The server atomically compares the reply basis before advancing history. See [Input-bound inter-agent replies](reply-basis.md) for the exact contract.

@@ -348,3 +348,7 @@ value peers read through `list_agents`.
 - [Delivery ledger](delivery.md).
 - [Peer-routing rules](../../contributing/peer-routing.md).
 - [Approval flow](../security/inter-agent-tool-authorization.md#approval-flow-permission_broker-integration).
+
+## Input-bound reply contract
+
+`inter_agent_reply_basis` exposes negotiated `v1` or `legacy`. Missing data is unknown. The mode does not prove native-engine measurement coverage. See [Input-bound inter-agent replies](reply-basis.md) for the exact contract.

@@ -82,3 +82,7 @@ cannot represent.
 - [Runner control and launch](runner-control.md).
 - [Task and tasklist envelopes](tasks.md).
 - [Persona delivery](persona-delivery.md).
+
+## Input-bound inter-agent replies
+
+See [the reply-basis contract](../inter-agent/reply-basis.md) for negotiated protection, native tool origin binding, inline recovery, and the staged rollout boundary.

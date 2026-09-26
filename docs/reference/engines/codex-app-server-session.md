@@ -54,3 +54,7 @@ Shutdown stops new tool connections and aborts existing handlers synchronously
 before waiting for the child. The Host supplies its active turn scope; interrupt,
 terminal and shutdown abort that signal. Coordinator/lease composition is
 covered by the CLI tests below.
+
+## Input-bound inter-agent replies
+
+See [the reply-basis contract](../inter-agent/reply-basis.md) for negotiated protection, native tool origin binding, inline recovery, and the staged rollout boundary.

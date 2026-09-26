@@ -122,3 +122,7 @@ Add `inter_agent_message` to the type list in [protocol.md](../../specs/protocol
 - [Send and wait](send-and-wait.md).
 - [Coordination monitoring and display](coordination-monitoring.md).
 - [Peer directory and companion tools](directory.md).
+
+## Input-bound reply contract
+
+Ordinary negotiated-v1 messages carry `in_reply_to`; internal notices use a closed `notice_type` contract. See [Input-bound inter-agent replies](reply-basis.md) for the exact contract.

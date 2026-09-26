@@ -150,3 +150,7 @@ and diagnostic write failures do not change turn or acknowledgement control.
 - [Approval flow](../security/inter-agent-tool-authorization.md#approval-flow-permission_broker-integration).
 - [Companion tools](directory.md#companion-tools-wrapper-sdk-mcp).
 - [Send and wait](send-and-wait.md).
+
+## Input-bound reply contract
+
+Recovery and waiter results acknowledge complete envelopes only at the real tool-result handoff. Queue receipt and dispatch acknowledgement do not update the current SDK input snapshot. See [Input-bound inter-agent replies](reply-basis.md) for the exact contract.
