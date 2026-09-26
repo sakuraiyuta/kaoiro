@@ -1,7 +1,7 @@
 ---
 title: Issue 407 operational baseline — candidate and source inventory
 description: Pre-change cohort candidates, preserved sources, and data availability for the issue 407 before/after measurement.
-status: capturing
+status: frozen
 last_updated: 2026-09-26
 issue: 407
 ---
@@ -35,6 +35,11 @@ reported 1 mismatch.
 |---|---|---|---|
 | `20260926T072706Z` | 45 IA sidecars modified since 2026-09-19 and their engine transcripts (86 files, 832 MB uncompressed) | `83683d5162b046d9f1a62fc6154fda3b574cb0cb0b86880645da38076f36e402` | `f4eb4978a6223737dccc3c7b1558d29113529d0942c4d5e23644d26cd34f8545` |
 | `20260926T072849Z` | 22 Codex rollouts modified since 2026-09-19 that have no sidecar of their own, plus 70 Antigravity conversation stores (`~/.gemini/antigravity-cli/conversations/*.db`) (92 files) | `8bafa98ec57257ba9870d394471f1633d6be5ea1753952ffb8182698f029f451` | `464f4c251aa7427f76d09157da38de5e62c18be1dd68630d70a8c9ecf2805e51` |
+| `20260926T122027Z` (freeze) | Every IA sidecar modified since 2026-09-19 (46), its Claude transcript or Codex rollout, every Codex rollout modified since 2026-09-19, and the 70 Antigravity conversation stores (180 files, 1,169,868,064 bytes uncompressed) | `c3f6a3d80526a1f2ff95a035da828d5e0463ab7acd2fe26d49393a809f28f337` | `dfed3019e1cf340a32622e4548ddac1074c33b22f9cb4198c7d581b9a9418f7c` |
+
+The freeze snapshot was checked by streaming the archive and hashing every
+member against the manifest: 180 matched, 0 mismatched, 0 missing. Negative
+control: a corrupted manifest hash reported 1 mismatch.
 
 Sessions that were still live at capture time (the director's session and the
 current issue 407 participants) keep growing. Before the server switch, take a
@@ -80,6 +85,11 @@ director sidecar.
 
 | Completed (JST) | Issue | Implementer / reviewer | Landing |
 |---|---|---|---|
+| 2026-09-26 | #372 (five of six items) | momo / ao | develop `989863c0` |
+| 2026-09-26 | #413 | hiiro / ao | develop `263feaa7` |
+| 2026-09-26 | #403 (group 2) | momo / ao | develop `5a806f54` |
+| 2026-09-26 | #414 | kohaku / ao | develop `ef2f6161` |
+| 2026-09-26 | #405 | hiiro / kohaku | develop `6afbfb32` |
 | 2026-09-26 | #365 | momo / kohaku | develop `ba696b50` |
 | 2026-09-26 | #410 | hisui (codex) / ao | develop `1c55d38f` |
 | 2026-09-26 | #401 | fuji / kohaku | develop `ebb099f6` |
@@ -149,6 +159,27 @@ It is marked "ambiguous" when the session changed agent_id or held multi-party r
 | `~/.kaoiro/ia-pending/yuta-win.FyxoWgDHHHw___at_7xDFh151hwQqfDcNu0gpvg.ia.jsonl` | kuroe / `yuta-win.Di3ukgEkjfFc` | 2026-09-26T02:10 | 2026-09-26T05:08 | 25 | 11 | 3 |
 | `~/.codex/sessions/2026/09/26/01a0db0c-fa4b-71d3-a761-ca88ae775d83.ia.jsonl` | kogane / `yuta-win.bNz1ECEcmgpH` | 2026-09-26T02:10 | 2026-09-26T07:26 | 71 | 37 | 8 |
 | `~/.claude/projects/-home-yuta-git-kaoiro/5a38a507-e9f2-4474-8677-dd87c43cedb6.ia.jsonl` | ao / `yuta-win.GiV31jVsTGia` | 2026-09-26T02:24 | 2026-09-26T03:24 | 11 | 5 | 2 |
+
+## Cohort freeze (2026-09-26, before the first server switch)
+
+Frozen by kuroe before any outcome was counted. The inputs are:
+
+- the freeze snapshot `20260926T122027Z`
+- the candidate table above, extended with the completions up to the freeze
+- the data-availability matrix above, unchanged
+- the selection rule above, unchanged
+
+Issue #407 itself is not eligible, because it is the intervention being
+measured. With the switch expected on 2026-09-26, the selection rule yields
+the five most recent eligible completions:
+
+1. #372
+2. #413
+3. #403 group 2
+4. #414
+5. #405
+
+Step 3 records the actual `T_server` and the per-assignment details.
 
 ## Freeze procedure (before the first server switch)
 
