@@ -19,9 +19,17 @@ The uncommitted option-A candidate **did not pass** its required actual-CLI queu
 | Background Bash, no competing wrapper input | Root notification acquired a new token and sent `BACKGROUND` once | 5 |
 | Background Agent, first two attempts | Child sent zero; root notification did not match the initially assumed Bash markup and sent zero | 7 + 7 |
 | Background Agent, corrected candidate matching | Child sent zero with `unbound_tool_call`; root notification acquired a new token and sent `AGENT_ROOT` once | 7 |
-| Background Bash with the next wrapper input already active | **Unsafe:** notification send used the wrapper token and sent `NOTIFICATION` once | 7 |
+| Background Bash with the next wrapper input already active | Notification content joined the wrapper turn; its call used the wrapper token and sent `NOTIFICATION` once | 7 |
 
 These five runs made **33** model API dispatches, counted from `[dispatch] sent anthropic-dispatch-id=` lines within each run's start/finish timestamps. The corrected Agent probe observed that an Agent notification includes `output_file` in the SDK frame, but its hook omits `<output-file>` and puts the frame's `summary` under `<result>`. The child callback carried `agent_id`; the root notification callback did not.
+
+SHA-256 of each probe, event log, and SDK debug log (the Agent debug log contains all three Agent attempts):
+
+| Probe | Program | Event log | Debug log |
+| --- | --- | --- | --- |
+| Bash | `6716363007c0459a5ed03dd4e842eb5e4675baa681b1d3cccd2a7b3b3d000466` | `fd4d962131029dc034c4bd3eea7e73833845a02cc24437bd2afa4c2d2c8a14f8` | `15ac808b90f6e6d31cf08c581a39344371960f63516e295a957a5544e767d2cb` |
+| Agent | `20d63b6c388ea252553eaef25a1c5d7ba54c253f3e42c783f8042513574adca6` | `60004f8bd221825af87f21552e602b105d4c4b1f3f5526c279bfdd893d382f6e` | `6bab96eaaa8bb1e2691b33c4887131c43e8e1ad4eb2f7d22e4b1b2701f702371` |
+| Race | `f0a0a5e494426f8b870a240c7b75f0c32bc56e8b57d28982b58e057ffa399f0f` | `8f1ddec2471760d039f49464e7ff320ae1fa0d4d2e823ede989417ace798d27c` | `1034e83c21260bd0ad5665cd29b7a0ea4ca83696910959cdfd8c62bd95cc1d12` |
 
 ## Failing race trace
 
@@ -34,6 +42,6 @@ The race probe launched a background Bash task, allowed its wrapper turn T1 to f
 | 35–37 | The notification's `send_to_agent` `PreToolUse` also carried that prompt ID. The MCP resolver returned T2's token, and the recorder accepted one send with body `NOTIFICATION` and `in_reply_to=1`. |
 | 42–43 | One ordinary result completed T2 with `result=SECOND_DONE`; `origin.kind` was absent. There was no separate notification result to attribute. |
 
-This is a measured same-prompt fold, not an independent notification turn. Rejecting a candidate when T2 is active does not protect T2's already registered prompt ID. A model call generated after the notification can borrow T2's reply basis. The approved plan's gate requires unambiguous hook-to-tool-to-result ownership under this competition; therefore option-A admission remains disabled pending a new direction decision.
+This is a measured same-prompt fold, not an independent notification turn. Rejecting a candidate when T2 is active does not prevent a subsequent call from using T2's already registered prompt ID. T2's own input passed `UserPromptSubmit`, so this trace alone does **not** prove that its reply basis was invalid. It does disprove the approved plan's assumed independent notification lifecycle under competition. That plan requires rejecting an ambiguous notification prompt; the candidate code instead allowed a send through T2's owner. Option-A admission remains disabled pending a decision on whether to treat this fold as part of T2 or invalidate T2's origin after the notification.
 
-The standalone Bash and corrected Agent event logs have SHA-256 `fd4d962131029dc034c4bd3eea7e73833845a02cc24437bd2afa4c2d2c8a14f8` and `60004f8bd221825af87f21552e602b105d4c4b1f3f5526c279bfdd893d382f6e`, respectively. The raw logs and exact probe programs remain in `tmp/fuji-422` for director review; this scratch is retained only while the direction decision is pending.
+The raw logs and exact probe programs remain in `tmp/fuji-422` for director review; this scratch is retained only while the direction decision is pending.
