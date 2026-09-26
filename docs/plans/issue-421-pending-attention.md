@@ -116,13 +116,17 @@ Use one owner-aware permission-wait projection in `AntigravityHost`. Wrap the
 bridge `operatorApprovalGated` decision promise in a bridge wait lease; keep
 `PermissionBroker.onPendingChange` responsible for stamping/clearing
 `ext.pending_permission`. The native `gate.ts` callbacks acquire/release their
-own lease. The shared state transition emits only on the first active lease
-and final release, so broker metadata updates for a native wait do not create
-a second wait transition. Each lease is bound to the current turn token and
-releases idempotently. A release from an owner that is no longer active may
-clear only its own pending data; it must not emit `permission_resolved` or
-restore an old state over the new owner. If terminal state arrives before the
-lease release, the later release must leave that terminal state untouched.
+own lease. Store active leases as a set keyed by unique lease ID, each carrying
+its turn token and source; decide whether any wait remains by querying the
+current set after every add or removal. Do not use an increment/decrement
+counter: a stale release must remove only its own ID and leave every other
+owner entry unchanged. Transition into `waiting_permission` only when the set
+changes from empty to non-empty, and back to the captured pre-wait state only
+when it becomes empty. Broker metadata updates for a native wait do not create
+a second wait lease. A release from an owner whose turn is no longer active
+must not emit `permission_resolved` or restore an old state over the new owner.
+If terminal state arrives before the lease release, the later release must
+leave that terminal state untouched.
 
 The base state before `request_session_reset` is `tool_running` in the measured
 ToolHost path, as it is for the native hook's tool call. Assert this precondition
@@ -184,6 +188,8 @@ Out of scope:
 | Epoch/socket restart or death | Cancel the old wait; restore only while its owning turn remains active, then the old turn follows existing epoch-death error settlement; fresh epoch starts from its normal initialization state | Socket-close/broker-close path clears the old owner before a new turn can own the epoch | Close fake gate socket / end fake child while pending; assert no pending leak into new epoch |
 | Delayed settle after ownership moves | No transition for the old owner; preserve the new owner's or resting state | Old request IDs are removed by `PendingRegistry.closeAll`; also reject a host callback whose owner token is no longer active | Resolve old request after interrupt/new-owner setup; assert no stale `permission_resolved` or state resurrection |
 | Native hook gate | Existing `tool_running -> waiting_permission -> tool_running` sequence remains exactly one entry and one exit | `gate.ts` owns the native wait; broker callback only stamps/clears ext for that same wait through idempotent owner coalescing | Fake native hook allow/deny; assert unchanged state-event sequence and no duplicate transitions |
+| Concurrent waits, bridge then native | Bridge acquire: `tool_running -> waiting_permission`; native acquire: no state event; bridge release: still `waiting_permission`; native release: `waiting_permission -> tool_running` | Set contains both unique lease IDs; each release removes only its own ID; only empty/non-empty edges drive state | Acquire bridge then native leases; assert exact state sequence and owner set after each action. Removing the set-based empty check must make this pin fail |
+| Concurrent waits, native then bridge | Native acquire: `tool_running -> waiting_permission`; bridge acquire: no state event; native release: still `waiting_permission`; bridge release: `waiting_permission -> tool_running` | Same set rule in reverse source order; source order must not affect state edges | Acquire native then bridge leases; assert exact state sequence and owner set after each action. Removing the set-based empty check must make this pin fail |
 
 The adapter's generic `permission_resolved` transition returns to
 `tool_running` (`agent-common/src/state.ts:115-127`), matching the Codex
@@ -209,8 +215,13 @@ Codex transitions.
   details.
 - Cover every row in the wrapper transition table. Mutate the bridge entry
   transition, clear/restore transition, owner guard, and native-gate
-  de-duplication independently; each corresponding test must fail, then pass
-  after restoring the implementation.
+  de-duplication independently; both concurrent-wait order tests must also go
+  red if the set-based empty check is removed. Restore each mutation and
+  require its corresponding test to pass.
+- In the stale-owner test, hold one current lease and deliver release for a
+  different stale lease ID. Assert the stale ID alone is removed, the current
+  owner's set entry remains, and no state transition occurs until that current
+  owner releases.
 - Regression controls: Claude `canUseTool`, Codex bridge/app-server, and
   Antigravity native hook state sequences remain unchanged. Keep the existing
   `tool_running` envelope without pending data as the dashboard negative case.
