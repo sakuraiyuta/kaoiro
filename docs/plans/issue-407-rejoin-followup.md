@@ -98,3 +98,7 @@ Socket error injection uses the real WebSocket EventTarget, not a replacement
 Phoenix implementation. Server kick tests reproduce its verified `phx_close`
 wire outcome, not a second Elixir integration suite. Mutations at least remove
 terminal close and join-error waiter release, then require red/restored green.
+
+The permanent matrix is `wrapper/codex/test/reply_basis_lifecycle.test.ts`.
+It also checks ticket renewal at result handoff, failed-wait continuations,
+internal-notice diagnostics, and written-push unknown outcomes.
