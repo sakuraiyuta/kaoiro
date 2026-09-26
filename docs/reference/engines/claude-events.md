@@ -111,8 +111,21 @@ until its terminal boundary; unmatched candidates release the next-input
 barrier after a bounded 10-second wait.
 If a different notification prompt is rejected while a wrapper turn is live,
 an originless result cannot prove which prompt ended. The host stops admission
-and keeps the wrapper owner until stream teardown; operator-controlled restore
-is required before new work is accepted.
+and revokes inter-agent send authority while keeping the wrapper owner until
+stream teardown. The wrapper reports `state=error` and stderr contains
+`notification result ownership ambiguous` and `notification result fail-stop`.
+
+### Recovering a fail-stopped Claude wrapper
+
+The operator uses the dashboard's **終了** action on the affected agent card to
+terminate its wrapper. Wait until the card shows `disconnected`; the server
+rejects restore while that wrapper is still live. Then use the card's **復帰**
+action. Confirm that the agent reconnects and reports `idle` or
+`waiting_input` with a new live wrapper, and that new input can be accepted.
+The old wrapper's unresolved owner is settled on stream teardown, once, before
+the new wrapper starts. A session reset cannot recover the live `error` state:
+the reset endpoint accepts only `idle` or `waiting_input`. The server's reply
+basis comparison remains in force after restore.
 
 **Observed record (task_notification terminal guarantee, issue #170)**: SDK
 `0.3.220`, captured 2026-08-09. A disposable script captured a real `query()`

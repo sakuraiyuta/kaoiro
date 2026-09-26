@@ -548,6 +548,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   let replySessionId: string | undefined;
   interAgent = new InterAgentTool({
     replyBasisMode: () => replyBasisMode,
+    canSendInterAgent: () => !admissionFailStopped,
     replyBasisGeneration: () => link?.replyBasisGeneration?.(),
     waitReplyBasisMode: signal => link?.waitForReplyBasisMode?.(signal) ?? Promise.resolve(replyBasisMode),
     unreadCount: () => interAgentTurns.unreadCount(host.activeInterAgentTurnToken?.() ?? null),
@@ -890,7 +891,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
         `attribution=${attribution}; ` +
         `closed ingress=${pendingIngress}, discarded unstarted ` +
         `dispatched=${frozen.droppedDispatched}, pending=${frozen.droppedPending}. ` +
-        "Do not reuse this host; operator-controlled restore is required.\n",
+        "Do not reuse this host. In the dashboard, terminate this wrapper, wait for disconnected, then restore it; see docs/reference/engines/claude-events.md#recovering-a-fail-stopped-claude-wrapper.\n",
     );
   };
 

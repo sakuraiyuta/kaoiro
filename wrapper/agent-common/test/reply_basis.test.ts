@@ -11,6 +11,20 @@ function inbound(n: number, cid = "c"): Envelope {
 }
 
 describe("input-bound reply tickets", () => {
+  it("freezes captured and independent call origins without rearming on session reset", async () => {
+    const origins = new ToolOrigins();
+    origins.begin("T"); origins.bind("captured", "T");
+    origins.beginIndependent("N"); origins.bind("independent", "N");
+    const captured = await origins.resolveBound("captured");
+    const independent = await origins.resolveBound("independent");
+    origins.freeze();
+    expect(captured?.signal?.aborted).toBe(true);
+    expect(independent?.signal?.aborted).toBe(true);
+    origins.bind("late", "T");
+    expect(await origins.resolveBound("late")).toBeUndefined();
+    origins.reset(); origins.begin("T2"); origins.bind("after-reset", "T2");
+    expect(await origins.resolveBound("after-reset")).toBeUndefined();
+  });
   it("carries confirmed notification handoffs forward without borrowing queued input", () => {
     const basis = new ReplyBasis();
     basis.begin("T", [inbound(1)]); basis.retire("T");
@@ -105,6 +119,46 @@ describe("input-bound reply tickets", () => {
     origins.retireIndependent("notification");
     expect(await neverBound).toBeUndefined();
   });
+});
+
+it("checks host send admission for wrapper and independent notification tokens", async () => {
+  let allowed = true;
+  const sink = vi.fn(async () => ({ kind: "accepted" as const, stamp: null }));
+  const tool = new InterAgentTool({ config, getState: () => "thinking", send: () => {}, replyBasisMode: () => "v1",
+    canSendInterAgent: () => allowed, sendInterAgent: sink });
+  tool.prepareReplyInput("T", [inbound(3)]); tool.beginReplyInput("T");
+  tool.beginNotificationReplyInput("N");
+  const args = { to: "peer", conversation_id: "c", kind: "response" as const, body: "reply" };
+  expect((await tool.invoke(args, { origin: { token: "T" } })).isError).toBeUndefined();
+  expect((await tool.invoke(args, { origin: { token: "N" } })).isError).toBeUndefined();
+  allowed = false;
+  for (const token of ["T", "N"]) {
+    const result = await tool.invoke(args, { origin: { token } });
+    expect(JSON.parse(result.content[0]!.text)).toMatchObject({ error: "admission_fail_stop", send_not_attempted: true });
+  }
+  expect(sink).toHaveBeenCalledTimes(2);
+});
+
+it("rechecks host send admission after a call waits behind the CID lock", async () => {
+  let allowed = true;
+  let release!: () => void;
+  let calls = 0;
+  const sink = vi.fn(async () => {
+    if (++calls === 1) await new Promise<void>(resolve => { release = resolve; });
+    return { kind: "accepted" as const, stamp: null };
+  });
+  const tool = new InterAgentTool({ config, getState: () => "thinking", send: () => {}, replyBasisMode: () => "v1",
+    canSendInterAgent: () => allowed, sendInterAgent: sink });
+  tool.prepareReplyInput("T", [inbound(3)]); tool.beginReplyInput("T");
+  const args = { to: "peer", conversation_id: "c", kind: "response" as const, body: "reply" };
+  const first = tool.invoke(args, { origin: { token: "T" } });
+  await vi.waitFor(() => expect(sink).toHaveBeenCalledOnce());
+  const second = tool.invoke(args, { origin: { token: "T" } });
+  allowed = false; release(); await first;
+  const result = await second;
+  expect(result.isError).toBe(true);
+  expect(JSON.parse(result.content[0]!.text)).toMatchObject({ error: "admission_fail_stop", send_not_attempted: true });
+  expect(sink).toHaveBeenCalledOnce();
 });
 
 describe("actual shared send path", () => {

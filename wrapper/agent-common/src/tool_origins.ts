@@ -7,10 +7,13 @@ export class ToolOrigins {
   #current: { token: string; controller: AbortController } | undefined;
   readonly #independent = new Map<string, AbortController>();
   #full = false;
+  #frozen = false;
   begin(token: string): void {
+    if (this.#frozen) return;
     this.retire(); this.#current = { token, controller: new AbortController() };
   }
   beginIndependent(token: string): void {
+    if (this.#frozen) return;
     if (this.#independent.has(token) || this.#current?.token === token) throw Error("SDK turn token reused");
     this.#independent.set(token, new AbortController());
   }
@@ -20,7 +23,7 @@ export class ToolOrigins {
     this.#settlePending();
   }
   bind(id: string, token: string): void {
-    if (!id || this.#full) return;
+    if (!id || this.#full || this.#frozen) return;
     const controller = this.#current?.token === token ? this.#current.controller : this.#independent.get(token);
     if (!controller || controller.signal.aborted) return;
     const previous = this.#observed.get(id);
@@ -47,10 +50,16 @@ export class ToolOrigins {
     this.#current?.controller.abort(); this.#current = undefined;
     this.#settlePending();
   }
+  freeze(): void {
+    this.#frozen = true;
+    this.retire();
+    for (const controller of this.#independent.values()) controller.abort();
+    this.#independent.clear();
+  }
   reset(): void { this.retire(); for (const controller of this.#independent.values()) controller.abort(); this.#independent.clear(); this.#observed.clear(); this.#full = false; }
   observe(id: string): void {
     const current = this.#current;
-    if (!current || this.#full) return;
+    if (!current || this.#full || this.#frozen) return;
     const previous = this.#observed.get(id);
     if (previous && previous.token !== current.token) {
       this.#observed.set(id, { token: previous.token, signal: AbortSignal.abort() });
@@ -72,6 +81,7 @@ export class ToolOrigins {
     if (typeof id !== "string" || !id || this.#full) return Promise.resolve(undefined);
     const found = this.#observed.get(id);
     if (found) return Promise.resolve(found);
+    if (this.#frozen) return Promise.resolve(undefined);
     if (!this.#current || [...this.#pending.values()].reduce((count, callbacks) => count + callbacks.size, 0) >= 64) return Promise.resolve(undefined);
     return new Promise(resolve => {
       let callbacks = this.#pending.get(id);
@@ -83,6 +93,7 @@ export class ToolOrigins {
     if (typeof id !== "string" || !id || this.#full) return Promise.resolve(undefined);
     const found = this.#observed.get(id);
     if (found) return Promise.resolve(found);
+    if (this.#frozen) return Promise.resolve(undefined);
     if ([...this.#pending.values()].reduce((count, callbacks) => count + callbacks.size, 0) >= 64) return Promise.resolve(undefined);
     return new Promise(resolve => {
       let callbacks = this.#pending.get(id);

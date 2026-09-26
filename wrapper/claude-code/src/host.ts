@@ -1506,6 +1506,8 @@ export class AgentHost implements EngineAdapter {
   ): boolean {
     this.#admissionFailStopped = true;
     this.#closed = true;
+    // The terminal owner remains unresolved, but its send authority must end now.
+    this.toolOrigins.freeze();
     this.#clearNotificationCandidates();
     this.#startupProbeAbort.abort();
     if (this.#gcTimer !== null) {
@@ -1908,7 +1910,7 @@ export class AgentHost implements EngineAdapter {
   }
 
   #observePromptTool(input: HookInput, toolUseId: string | undefined): void {
-    if (input.hook_event_name !== "PreToolUse" || input.agent_id || input.tool_name !== INTER_AGENT_TOOL_FQN ||
+    if (this.#admissionFailStopped || input.hook_event_name !== "PreToolUse" || input.agent_id || input.tool_name !== INTER_AGENT_TOOL_FQN ||
         !input.prompt_id || !toolUseId || toolUseId !== input.tool_use_id) return;
     const owner = this.#promptOwners.get(input.prompt_id);
     if (!owner || owner.tainted || owner.sessionId !== input.session_id || this.#activeTurn?.turnToken !== owner.token) return;

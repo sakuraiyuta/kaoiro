@@ -733,6 +733,8 @@ export interface InterAgentToolOptions {
   waitReplyBasisMode?: (signal?: AbortSignal) => Promise<"v1" | "legacy" | "pending" | "closed">;
   unreadCount?: () => number;
   replyBasisMode?: () => "v1" | "legacy" | "pending";
+  /** A host fail-stop revokes model-initiated sends independently of turn snapshots. */
+  canSendInterAgent?: () => boolean;
   replyBasisGeneration?: () => number | undefined;
   onInputHandoff?: (envelopes: readonly Envelope[]) => void;
   returnInput?: (envelope: Envelope, mode: InboundReplyMode) => void;
@@ -1576,6 +1578,7 @@ export class InterAgentTool {
     args: z.infer<typeof SEND_TO_AGENT_SCHEMA>,
     context?: ToolHandlerContext,
   ): Promise<InterAgentToolResult> {
+    if (this.#options.canSendInterAgent?.() === false) return this.#localReplyError("admission_fail_stop");
     if (args.to === this.#options.config.agent_id) {
       return errorResult(
         "send_to_agent failed: cannot send to self (payload.to == agent_id)",
@@ -1872,7 +1875,9 @@ export class InterAgentTool {
           // the model its delegation had landed when no peer would ever
           // see it — ADR-0051 D3-2 requires reject and timeout to surface
           // here.
-          const originError = captured && this.replyBasis.beforeSend(captured);
+          const originError = this.#options.canSendInterAgent?.() === false
+            ? "admission_fail_stop"
+            : captured && this.replyBasis.beforeSend(captured);
           const acceptance: InterAgentAcceptance = originError
             ? { kind: "rejected", reason: originError }
             : await this.#dispatch(envelope, generation);
@@ -2493,6 +2498,8 @@ function localReplyError(code: string): InterAgentToolResult {
       ? "This tool call is not bound to a confirmed live input. No message was sent. Wait for a new confirmed input before sending again. Retrying in this continuation, changing conversation_id, or adding a reply ticket cannot bind this call."
       : code === "stale_tool_call"
       ? "The input that owned this tool call has ended or been cancelled. No message was sent. Do not retry this call; send from a new live wrapper-delivered input."
+      : code === "admission_fail_stop"
+      ? "The host stopped admission after an ambiguous SDK result. No message was sent. Ask the operator to terminate the wrapper and restore it after disconnection."
       : "Spent or expired authorization cannot be reused; use a fresh authorization or the next input turn." }) }] };
 }
 

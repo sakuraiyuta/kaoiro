@@ -34,6 +34,8 @@ function inboundEnvelope(deliverySeq: number, turnNumber = 1): Envelope {
 describe("Claude CLI delivery composition (issue #247)", () => {
   it("freezes later peer dispatch after an unattributable notification result", async () => {
     const sentTokens: string[] = [];
+    const outbound: Envelope[] = [];
+    let tool!: InterAgentTool;
     let hostOptions!: Record<string, any>;
     let linkOptions!: Record<string, any>;
     let finishHost!: () => void;
@@ -43,10 +45,12 @@ describe("Claude CLI delivery composition (issue #247)", () => {
     const running = runClaudeCli({
       parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
       loadConfig: () => ({ ...config }),
+      buildMcpServer: interAgent => { tool = interAgent; return {} as never; },
       createServerLink: (_url, _agentId, options) => {
         linkOptions = options as unknown as Record<string, any>;
         queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
         return {
+          sendInterAgent: async (envelope: Envelope) => { outbound.push(envelope); return { kind: "accepted", stamp: null }; },
           send: () => {}, close: () => {}, currentSessionId: () => null,
           acknowledgeInterAgentDelivery: () => {},
           retireInterAgentDeliveries: () => true,
@@ -70,7 +74,17 @@ describe("Claude CLI delivery composition (issue #247)", () => {
       await ready;
       await linkOptions.onInterAgentMessage(inboundEnvelope(1, 1));
       await vi.waitFor(() => expect(sentTokens).toHaveLength(1));
+      const args = { to: "peer.agent", conversation_id: "c-1", kind: "response" as const, body: "before freeze" };
+      expect((await tool.invoke(args, { origin: { token: sentTokens[0]! } })).isError).toBeUndefined();
       hostOptions.onAdmissionFailStop({ turnToken: sentTokens[0], conversationIds: ["c-1"] });
+      const after = await tool.invoke({ ...args, body: "after freeze" }, { origin: { token: sentTokens[0]! } });
+      expect(after.isError).toBe(true);
+      expect(JSON.parse(after.content[0]!.text)).toMatchObject({ error: "admission_fail_stop", send_not_attempted: true });
+      tool.beginNotificationReplyInput("independent");
+      const independent = await tool.invoke({ ...args, body: "independent" }, { origin: { token: "independent" } });
+      expect(independent.isError).toBe(true);
+      expect(JSON.parse(independent.content[0]!.text)).toMatchObject({ error: "admission_fail_stop", send_not_attempted: true });
+      expect(outbound.map(envelope => envelope.payload.body)).toEqual(["before freeze"]);
       await linkOptions.onInterAgentMessage(inboundEnvelope(2, 3));
       hostOptions.onTurnEnd({ turnToken: sentTokens[0], error: { reason: "stream_eof" } });
       await new Promise(resolve => setTimeout(resolve, 30));
