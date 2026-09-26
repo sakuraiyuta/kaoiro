@@ -7,6 +7,8 @@
 // skeleton only; the inter-agent tools and ask_user_question move onto it
 // in phase-14 (14-6 / 14-7).
 
+import type { ReplyOrigin } from "./reply_basis.js";
+
 /** One content part of a tool result, MCP-shaped (text only for now —
  *  every current kaoiro tool returns text). */
 export interface ToolResultContent {
@@ -26,7 +28,7 @@ export interface ToolResult {
 /** Per-call context an engine adapter MAY hand to a handler. Absent on
  *  adapters that do not track it (the Claude SDK server, antigravity). */
 export interface ToolHandlerContext {
-  origin?: import("./reply_basis.js").ReplyOrigin;
+  origin?: ReplyOrigin;
   /** Aborts once the call can no longer deliver its result to the model
    *  or act on its behalf — the owning engine turn ended or was
    *  interrupted, the bridge connection closed, or the host shut down. A
