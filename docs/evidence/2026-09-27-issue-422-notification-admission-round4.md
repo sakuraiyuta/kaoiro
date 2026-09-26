@@ -31,7 +31,7 @@ The final product source is commit `9c66c59eccd1bb0be8103c4e7bc9837b18a843af` on
 | `pnpm --dir runner test` | 0 | 774 passed; no Vitest unhandled error |
 | Unchanged Kogane round-2 controlled test, SHA-256 `6df6a1dc5b8b3e10c9c1ef6b0d729298856478b390c5243cae979eefff6a3f4d` | 0 | 2 passed: normal sends 2 at basis 3; ambiguous-result stop aborts captured authority and makes 0 sends |
 
-The wrapper test output includes model-catalog and SDK warnings; runner test output includes fixture/Node warnings. These are in the raw logs. Build and typecheck did not warn. The final built files were regenerated after the last mutation was restored; `host.js` SHA-256 is `d91b139b1f6932b94c2fcc18c7713078b513b8ee9db597a36fdd2ffdcb861`, `cli.js` is `00daf7dca9da209c99a0dfd64458b3bf1fb3b5ca5c22a6835e33ba245576ba5c`, and common `inter_agent.js` is `035db29fceec8cd14b06e5dce7c9c4cd9548796e1545f25f16370eaef6179aa7`.
+The wrapper test output includes model-catalog and SDK warnings; runner test output includes fixture/Node warnings. These are in the raw logs. Build and typecheck did not warn. The final built files were regenerated after the last mutation was restored; `host.js` SHA-256 is `d91b139b1f6932b94c2fcc18c7713078b513b8ee9db597a36cdfdde2ffdcb861`, `cli.js` is `00daf7dca9da209c99a0dfd64458b3bf1fb3b5ca5c22a6835e33ba245576ba5c`, and common `inter_agent.js` is `035db29fceec8cd14b06e5dce7c9c4cd9548796e1545f25f16370eaef6179aa7`.
 
 ## Final native observations
 
