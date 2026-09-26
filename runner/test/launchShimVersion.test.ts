@@ -1,4 +1,4 @@
-// runner/deploy/kaoiro-runner-launch.sh (issue #228 round 2 MF-5, ふじ 差
+// runner/deploy/kaoiro-runner-launch.sh (issue #218 round 2 MF-5, ふじ 差
 // し戻し): --version must be forwarded to the entry point BEFORE the
 // config-existence check, so a first-run host with no config yet can
 // still answer it. This exercises the REAL, unmodified shim script bytes
@@ -66,7 +66,7 @@ function buildFixture(dir: string, buildInfo: BuildInfo): void {
   writeFileSync(join(distDir, "build-info.json"), JSON.stringify(buildInfo));
 }
 
-describe("kaoiro-runner-launch.sh --version (issue #228 round 2 MF-5)", () => {
+describe("kaoiro-runner-launch.sh --version (issue #218 round 2 MF-5)", () => {
   let tmpDir: string | undefined;
 
   afterEach(() => {

@@ -1,7 +1,7 @@
 defmodule KaoiroServer.TestTeardown do
   @moduledoc """
   Stops the isolated GenServer a store test started, absorbing only the
-  benign end-of-test race (#171). Test-only — `test/support` is compiled
+  benign end-of-test race (#161). Test-only — `test/support` is compiled
   in `:test` alone.
 
   ## The race
@@ -18,7 +18,7 @@ defmodule KaoiroServer.TestTeardown do
   ## What is absorbed, and what is not
 
   ふじ first observed the flake on 2026-07-23 (4th review, advisory 3);
-  #169 cushioned it with a blanket `catch :exit, _ -> :ok`, which also
+  #159 cushioned it with a blanket `catch :exit, _ -> :ok`, which also
   swallowed genuine teardown regressions — a crash in `terminate/2`, a
   brutal kill, a call timing out inside `terminate/2` (ふじ 2026-07-28
   advisory 3). `stop_quietly/1` narrows the cushion to the reasons that
@@ -51,7 +51,7 @@ defmodule KaoiroServer.TestTeardown do
       is skipped without being stopped, and its original exit reason is
       not recoverable from here — so a brutal kill that landed that early
       goes unnoticed. Catching that would need a monitor installed back
-      at `start_link` time, which #171 does not attempt.
+      at `start_link` time, which #161 does not attempt.
 
   `stop_quietly/1` keeps `GenServer.stop/1`'s default `:infinity` on
   purpose, so a `terminate/2` that never returns surfaces as ExUnit's own

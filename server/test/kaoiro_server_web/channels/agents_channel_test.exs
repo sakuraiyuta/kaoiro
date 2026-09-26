@@ -60,7 +60,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       )
   end
 
-  # The operator gate re-resolves the role from the credential (#158), so
+  # The operator gate re-resolves the role from the credential (#148), so
   # a test socket carries the same three assigns ClientSocket.connect/3
   # stamps: role snapshot, credential, and the credential-derived id the
   # force-disconnect broadcast targets.
@@ -592,9 +592,9 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     assert %{"qt1" => true, "qt2" => true, "qt3" => false} = verdicts
   end
 
-  # connect 時の role は snapshot にすぎない (#158)。許可リスト/トークン
+  # connect 時の role は snapshot にすぎない (#148)。許可リスト/トークン
   # 側の降格が、接続しっぱなしの socket に効くことを pin する。
-  describe "operator gate の role 再解決 (#158)" do
+  describe "operator gate の role 再解決 (#148)" do
     test "降格した operator の操作は forbidden になり socket が切られる" do
       agent_id = "test.demote-1"
       put_agent(agent_id)
@@ -693,7 +693,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}
     end
 
-    # issue #170 must-fix 2 (ふじ): connect と join の間で許可リストが
+    # issue #160 must-fix 2 (ふじ): connect と join の間で許可リストが
     # 変わった socket は、一度も operator 操作をしなくても join 時点で
     # 弾かれる。OAuthAllowlistWatcher の disconnect は connect 直後の
     # transport-subscribe race を取りこぼしうるので(watcher の
@@ -2023,7 +2023,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       {:ok, socket} = connect(KaoiroServerWeb.ClientSocket, %{"token" => "tok-rotating"})
 
       # Join WHILE the token is still valid (join/3 also re-resolves the
-      # role live, issue #170 — rotating before join would be rejected
+      # role live, issue #160 — rotating before join would be rejected
       # there instead of exercising the LATER re-resolution this test
       # targets).
       {:ok, _reply, joined} =
@@ -2156,7 +2156,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       # PermissionModes.record は cast なので poll
       _ = KaoiroServer.PermissionModes.all()
       assert KaoiroServer.PermissionModes.get(agent_id) == nil
-      # issue #109: ClearWatermarks も一緒に purge される (agent が消えた後に
+      # issue #106: ClearWatermarks も一緒に purge される (agent が消えた後に
       # 同名 agent_id で再 spawn されても過去の hide-past filter を引きずらない)。
       _ = ClearWatermarks.all()
       assert ClearWatermarks.get(agent_id) == nil
@@ -2595,7 +2595,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
   end
 
-  describe "rename_agent (issue #197 段階3, D12)" do
+  describe "rename_agent (issue #187 段階3, D12)" do
     test "live agent を rename でき、AgentDirectory が更新され wrapper へ persona_sync が relay される" do
       agent_id = "test.rename-1"
       put_agent(agent_id)
@@ -2607,15 +2607,15 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "rename_agent", %{"agent_id" => agent_id, "name" => "あお(改名)"})
 
-      # issue #219 D23: reply vocabulary is display_name, no persona key.
+      # issue #209 D23: reply vocabulary is display_name, no persona key.
       # revision 2 (not 1): AgentDirectory.record/4's baseline is
-      # @initial_revision = 1 (issue #219 MF-2), so the first rename bumps
+      # @initial_revision = 1 (issue #209 MF-2), so the first rename bumps
       # a freshly-recorded entry from 1 to 2.
       assert_reply ref, :ok, %{"display_name" => "あお(改名)", "revision" => 2}
 
-      # issue #219 D22: DUAL-emit at the same revision — legacy
+      # issue #209 D22: DUAL-emit at the same revision — legacy
       # `persona_sync` (old wrapper builds) and new `display_name_sync`
-      # (new wrapper builds), both version-stamped (ADR-0015, issue #197
+      # (new wrapper builds), both version-stamped (ADR-0015, issue #187
       # 段階3 ふじ MF-1 レビュー指摘).
       assert_broadcast "persona_sync", %{"version" => "0", "name" => "あお(改名)", "revision" => 2}
 
@@ -2665,7 +2665,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       ref = push(socket, "rename_agent", %{"agent_id" => agent_id, "name" => "オフライン改名"})
 
-      # revision 2: baseline is @initial_revision = 1 (issue #219 MF-2).
+      # revision 2: baseline is @initial_revision = 1 (issue #209 MF-2).
       assert_reply ref, :ok, %{"revision" => 2}
       assert %{display_name: "オフライン改名"} = AgentDirectory.get(agent_id)
     end
@@ -2677,7 +2677,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       socket = join_as(:operator)
       assert_push "snapshot", %{"agents" => _}
 
-      # baseline @initial_revision = 1 (issue #219 MF-2), so 2 renames land
+      # baseline @initial_revision = 1 (issue #209 MF-2), so 2 renames land
       # at 2 then 3, not 1 then 2.
       ref1 = push(socket, "rename_agent", %{"agent_id" => agent_id, "name" => "一回目"})
       assert_reply ref1, :ok, %{"revision" => 2}
@@ -2698,7 +2698,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       ref = push(socket, "rename_agent", %{"agent_id" => agent_id, "name" => "乗っ取り"})
 
       assert_reply ref, :error, %{reason: "forbidden"}
-      # revision 1: fresh-record baseline @initial_revision (issue #219
+      # revision 1: fresh-record baseline @initial_revision (issue #209
       # MF-2), unchanged since the rejected rename never mutates it.
       assert %{display_name: "あお", revision: 1} = AgentDirectory.get(agent_id)
     end
@@ -2711,7 +2711,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_reply ref, :error, %{reason: "unknown_agent"}
     end
 
-    # ADR-0015 (issue #197 段階3, ふじ MF-1 レビュー指摘): rename_agent は
+    # ADR-0015 (issue #187 段階3, ふじ MF-1 レビュー指摘): rename_agent は
     # runner へ中継されないが、client -> server のあらゆる message が
     # version を要求される点は変わらない (`launch_defaults` と同じ
     # "accepting" action)。一致は無音、欠落/不一致は警告した上で処理は
@@ -2732,7 +2732,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
               "version" => "99"
             })
 
-          # revision 2: baseline is @initial_revision = 1 (issue #219 MF-2).
+          # revision 2: baseline is @initial_revision = 1 (issue #209 MF-2).
           assert_reply ref, :ok, %{"revision" => 2}
         end)
 
@@ -2750,7 +2750,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       log =
         capture_log(fn ->
           ref = push(socket, "rename_agent", %{"agent_id" => agent_id, "name" => "改名済み"})
-          # revision 2: baseline is @initial_revision = 1 (issue #219 MF-2).
+          # revision 2: baseline is @initial_revision = 1 (issue #209 MF-2).
           assert_reply ref, :ok, %{"revision" => 2}
         end)
 
@@ -2773,7 +2773,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
               "version" => "0"
             })
 
-          # revision 2: baseline is @initial_revision = 1 (issue #219 MF-2).
+          # revision 2: baseline is @initial_revision = 1 (issue #209 MF-2).
           assert_reply ref, :ok, %{"revision" => 2}
         end)
 
@@ -2792,12 +2792,12 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         assert_reply ref, :error, %{reason: "invalid_name"}
       end
 
-      # revision 1: fresh-record baseline @initial_revision (issue #219
+      # revision 1: fresh-record baseline @initial_revision (issue #209
       # MF-2), unchanged since every rename in the loop was rejected.
       assert %{display_name: "あお", revision: 1} = AgentDirectory.get(agent_id)
     end
 
-    # issue #219 MF-3 (クロエ実測検証, rename 経路): 単独 null / null +
+    # issue #209 MF-3 (クロエ実測検証, rename 経路): 単独 null / null +
     # valid sibling の両方が invalid_name として拒否され、AgentDirectory
     # が無変化のままであることを spawn 経路と対で pin する (spawn 側の
     # 同種テストは spawn describe ブロックにある)。
@@ -2859,7 +2859,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
   end
 
-  describe "rename_user (issue #197 段階3, D13)" do
+  describe "rename_user (issue #187 段階3, D13)" do
     test "operator は既存 user を rename でき、更新後の public entry を返す" do
       {:ok, user} = KaoiroServer.Users.get_or_create({:oauth, "github", "rename-1"}, "user", "R")
       socket = join_as(:operator)
@@ -2945,7 +2945,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_reply ref, :error, %{reason: "invalid_user_id"}
     end
 
-    # ADR-0015 (issue #197 段階3, ふじ MF-1 レビュー指摘): rename_agent と
+    # ADR-0015 (issue #187 段階3, ふじ MF-1 レビュー指摘): rename_agent と
     # 同じ "accepting" action の version 検証。
     test "version 不一致は警告してから処理を継続する (ADR-0015)" do
       {:ok, user} =
@@ -3325,7 +3325,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
   # 実際にその一歩手前まで行った (`require_operator/1` に admin を足しても、
   # `role == :operator` の直接比較が別に 8 箇所残っていた)。inbound 側と
   # outbound 側の両方を、同じ describe で並べて pin する。
-  describe "admin は operator 経路を inbound / outbound とも通る (issue #198)" do
+  describe "admin は operator 経路を inbound / outbound とも通る (issue #188)" do
     test "operator 限定 inbound を admin が通せる" do
       agent_id = "test.admin-inbound"
       put_agent(agent_id)
@@ -3373,7 +3373,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
     # 未知 role の fail-closed はここでは測れない: `parse_role/1` が 3 語
     # 以外を nil にするため、未知の role atom が `require_operator/1` へ
-    # 到達する経路が無い。assigns へ直接入れると #158 の role 再解決の
+    # 到達する経路が無い。assigns へ直接入れると #148 の role 再解決の
     # 不一致経路を測ることになり、意図と別のものが通ってしまう。綴り違い
     # の fail-closed は auth_test 側で pin してある。
   end
@@ -3664,8 +3664,8 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
         "agent_id" => agent_id,
         "ts" => "2026-06-11T00:00:00Z",
         # A hypothetical future type not yet listed in the viewer allow-list.
-        # issue #180: "task" WAS this placeholder until it became a real
-        # type — see the "task 型 (issue #180, ADR-0021)" describe block
+        # issue #170: "task" WAS this placeholder until it became a real
+        # type — see the "task 型 (issue #170, ADR-0021)" describe block
         # below for its actual, now-real allow-list behavior.
         "type" => "hypothetical_future_type",
         "state" => "thinking",
@@ -3765,11 +3765,11 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
   end
 
-  # issue #180 (ADR-0019/0047/0048): task envelope の実際の role gating。
+  # issue #170 (ADR-0019/0047/0048): task envelope の実際の role gating。
   # sanitize_envelope_for/2 に "task" 専用の clause は追加していない —
   # 既存の :operator 素通し句と :viewer fail-closed 句(catch-all)が
   # そのまま正しく機能する設計(こはく決定 2026-08-09: task はoperator限定)。
-  describe "task 型の role gating (issue #180, ADR-0021)" do
+  describe "task 型の role gating (issue #170, ADR-0021)" do
     defp task_envelope(agent_id, task_id, kind \\ "started") do
       %{
         "version" => "0",
@@ -4176,7 +4176,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert agents[agent_id] == [ia]
     end
 
-    test "clear watermark より古い ingress order の durable IA は sender pane から drop (issue #109 M6)" do
+    test "clear watermark より古い ingress order の durable IA は sender pane から drop (issue #106 M6)" do
       agent_id = "test.hist-wm"
       peer_id = "test.hist-wm-peer"
       old = durable_inter_agent_envelope(agent_id, peer_id, 1)
@@ -4849,7 +4849,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       refute Map.has_key?(payload, "server_url")
     end
 
-    # issue #219 D22: `AgentDirectory.record/4` は spawn broadcast より前に
+    # issue #209 D22: `AgentDirectory.record/4` は spawn broadcast より前に
     # 同期的に完了する(record/4 自体が GenServer.call へ改訂された) —
     # これにより、runner が spawn broadcast を受けて実際に wrapper process
     # を起動し join してくる頃には、AgentDirectory に必ず entry が
@@ -4861,7 +4861,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     # 時点で AgentDirectory の書き込みが既に観測できることを直接 pin する
     # — broadcast 後に spawn を担当した caller プロセス自身が読んでも
     # 見える、という形で「commit → broadcast」の順序を検証する。
-    test "operator の spawn: spawn broadcast が届く時点で AgentDirectory への record は既に commit 済み (issue #219 D22 race 対策)" do
+    test "operator の spawn: spawn broadcast が届く時点で AgentDirectory への record は既に commit 済み (issue #209 D22 race 対策)" do
       host_id = "lab-pc-1-race"
       register_host(host_id)
       @endpoint.subscribe("runner:" <> host_id)
@@ -5117,7 +5117,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_broadcast "spawn", %{"initial_prompt" => "最初の指示"}
     end
 
-    test "operator の spawn: 任意 name は display_name のみに反映され persona は不変 (#22, revised issue #219 D19)" do
+    test "operator の spawn: 任意 name は display_name のみに反映され persona は不変 (#22, revised issue #209 D19)" do
       host_id = "lab-pc-1c"
       register_host(host_id)
       @endpoint.subscribe("runner:" <> host_id)
@@ -5133,7 +5133,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       assert_reply ref, :ok
       # name は trim され display_name (新規 top-level field) のみに反映
-      # される; persona (canonical) は issue #219 D19 のとおり不変。
+      # される; persona (canonical) は issue #209 D19 のとおり不変。
       assert_broadcast "spawn", %{"persona" => persona, "display_name" => "レビュー担当"}
       assert persona == %{"id" => "ao", "name" => "あお", "sprite_set" => "ao"}
     end
@@ -5156,7 +5156,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_broadcast "spawn", payload
       assert payload["persona"] == @ao
       # 未指定/空白は persona 自身の canonical name が display_name の
-      # 既定値になる (issue #219 D20 — created-time persistence)。
+      # 既定値になる (issue #209 D20 — created-time persistence)。
       assert payload["display_name"] == @ao["name"]
     end
 
@@ -5217,7 +5217,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       refute_broadcast "spawn", %{}
     end
 
-    # issue #219 MF-3 (クロエ実測検証): a JSON `null` for `display_name`
+    # issue #209 MF-3 (クロエ実測検証): a JSON `null` for `display_name`
     # is a PRESENT key, not an absent one — `Map.get/2` alone cannot tell
     # the two apart (both read as `nil`), which previously let a lone
     # `{"display_name" => null}` fall through to the canonical-fallback
@@ -5427,7 +5427,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert payload["version"] == "0"
     end
 
-    # #182 で dashboard が version を stamp するようになったので、absent の
+    # #172 で dashboard が version を stamp するようになったので、absent の
     # 無警告受理 (carve-out) を廃止した。欠落は「まだ版を送らない client」
     # ではなく検知したい状態そのもの。
     test "version 省略も警告する (stamp は従来どおり)" do
@@ -5661,10 +5661,10 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       refute_broadcast "spawn", %{}
     end
 
-    # issue #219 D21 acceptance pin: restore は既存どおり unknown persona
+    # issue #209 D21 acceptance pin: restore は既存どおり unknown persona
     # で fail-closed。persona_id が pack で解決できない agent の restore
     # を「推測で埋めて通す」ことはしない — 消えた pack の agent_id での
-    # spawn は不可 (ADR-0029 F3) という既存規範を issue #219 後も保つ。
+    # spawn は不可 (ADR-0029 F3) という既存規範を issue #209 後も保つ。
     test "persona_id が pack で解決できない agent の restore は unknown_persona で拒否される" do
       host_id = "lab-pc-pack-gone"
       agent_id = host_id <> ".rev"
@@ -6204,7 +6204,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       _operator = join_as(:operator)
       assert_push "snapshot", %{"agents" => _}
       assert_push "directory", %{"entries" => entries}
-      # issue #219 D19/spec-gate: wire shape is the JOINED entry —
+      # issue #209 D19/spec-gate: wire shape is the JOINED entry —
       # canonical `persona` (fresh-joined against PersonaAssets, not a
       # stored snapshot) plus `display_name`, both string-keyed (the
       # join-time push and the live `handle_out("directory", ...)`
@@ -6276,13 +6276,13 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       assert_production_push_frame_fits("wrapper_build_info", payload)
     end
 
-    # issue #219 D21/D27 acceptance pin: pack が消えた (persona_id が
+    # issue #209 D21/D27 acceptance pin: pack が消えた (persona_id が
     # PersonaAssets で解決不能な) entry は canonical を非開示 ("typed
     # unresolved" — `persona` は `{"id" => ...}` のみ、`name`/`sprite_set`
     # を OMIT、sentinel 文字列は使わない) にしつつ、`display_name` は
     # そのまま維持して開示する。canonical と display_name が食い違う
     # (というより canonical 側が丸ごと欠ける) 状態を直接 pin する。
-    test "join 時 operator の directory push: persona_id が pack で解決できない entry は canonical を省略し display_name のみ開示する (issue #219 D21 typed unresolved)" do
+    test "join 時 operator の directory push: persona_id が pack で解決できない entry は canonical を省略し display_name のみ開示する (issue #209 D21 typed unresolved)" do
       agent_id = "lab-pc-1.dir-pack-gone"
       :ok = AgentDirectory.record(agent_id, "nonexistent-pack-xyz", "消えたパックの通称")
 
@@ -7260,7 +7260,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       _ = KaoiroServer.SessionResets.delete(agent_id)
     end
 
-    test "pending 中は admin の instruction も reject される (issue #198)" do
+    test "pending 中は admin の instruction も reject される (issue #188)" do
       # admin は operator の上位だが、この guard は権限ではなく順序の
       # 不変条件なので免除しない。免除すると race が戻る (ふじ should 1)。
       agent_id = "gp.instr-admin"
@@ -7355,7 +7355,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
       _ = KaoiroServer.SessionResets.delete(agent_id)
     end
 
-    # ふじ must-fix B (#158): guard と relay が同じ live role を見ることを
+    # ふじ must-fix B (#148): guard と relay が同じ live role を見ることを
     # pin する。connect 時の snapshot を guard が見ていた頃は、この 2 本が
     # どちらも逆側へ倒れていた。
     test "昇格した socket も reset-pending guard を通る (snapshot 素通り防止)" do
@@ -7688,7 +7688,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
   end
 
-  describe "list_session_events 経路 (issue #200, ADR-0055, require_operator ゲート)" do
+  describe "list_session_events 経路 (issue #190, ADR-0055, require_operator ゲート)" do
     # `SessionLifecycleEvents.append/4` casts, so it returns before the
     # store necessarily processed it. `:sys.get_state/1` forces a
     # synchronous round trip through the SAME mailbox, so any append
@@ -7855,7 +7855,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
       assert_reply ref, :ok, %{}
 
-      # deliver_conversation_closed (issue #221 の GC 経路と同じ関数) が
+      # deliver_conversation_closed (issue #211 の GC 経路と同じ関数) が
       # 各 participant の wrapper トピックへ synth envelope を broadcast
       # する — kind=done / meta.done=true が wrapper 側の "server 発
       # closed" 判定 (agent-common receiveInbound) の契約 (SynthEnvelope
@@ -7982,13 +7982,13 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
   end
 
-  # ADR-0015 の受信側規則を server -> wrapper 経路で pin する (issue #218)。
+  # ADR-0015 の受信側規則を server -> wrapper 経路で pin する (issue #208)。
   #
-  # runner 経路 (relay_to_runner/4) は #182 で閉じていたが、wrapper 経路は
-  # 「client が付けていないので届かない」状態のまま残っていた。#218 で
+  # runner 経路 (relay_to_runner/4) は #172 で閉じていたが、wrapper 経路は
+  # 「client が付けていないので届かない」状態のまま残っていた。#208 で
   # relay/5 が version を stamp するようになり、受信側の warn は
   # require_operator/4 に溶接された。ここで pin するのはその 2 点。
-  describe "server -> wrapper の version stamp と受信側検査 (issue #218, ADR-0015)" do
+  describe "server -> wrapper の version stamp と受信側検査 (issue #208, ADR-0015)" do
     # relay/5 経路の代表として set_model を使う。instruction / interrupt /
     # permission_decision / question_response / set_effort / refresh_models /
     # set_permission_mode は同じ relay/5 を通るので helper 単位で 1 本。
@@ -8061,7 +8061,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
 
     # relay されない (server が直接応答する) event でも同じ検査が走ること。
-    # #88 / #197 段階3 で二度 must-fix になった誤読 —「runner に中継され
+    # #88 / #187 段階3 で二度 must-fix になった誤読 —「runner に中継され
     # ないから version 不要」— が再発しない側の pin。
     test "relay されない event (clear_history) でも version を検査する" do
       agent_id = "test.v218-direct"
@@ -8137,13 +8137,13 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
   end
 
-  # ふじ #218 レビュー MF-1: scalar payload での crash regression。
+  # ふじ #208 レビュー MF-1: scalar payload での crash regression。
   #
   # 親 74a545c では `Map.delete/2` が全 shape check の後に走っていたが、
-  # #218 で normalize を `with` の手前へ hoist した結果、raw websocket から
+  # #208 で normalize を `with` の手前へ hoist した結果、raw websocket から
   # の非 map payload が role 解決前に BadMapError で落ちるようになった。
   # relay/5 経路も同じ helper を通るので、attach_* だけの問題ではない。
-  describe "非 map payload の防御 (issue #218 ふじ MF-1)" do
+  describe "非 map payload の防御 (issue #208 ふじ MF-1)" do
     @non_map_events ["attach_open", "attach_close", "instruction", "set_model"]
 
     test "operator の scalar payload は crash せず missing_agent_id を返す" do
@@ -8158,7 +8158,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
 
     # shape gate は role 解決より前に走るので、viewer にも `forbidden` では
     # なく shape 判定が返る。これは意図した優先順位で、role を gate 内で
-    # 解決すると #158 が閉じた「1 メッセージ 1 回だけ解決する」性質が壊れる
+    # 解決すると #148 が閉じた「1 メッセージ 1 回だけ解決する」性質が壊れる
     # (2 回目の解決の間に role 変更が挟まると disconnect broadcast が二重に
     # 出る)。malformed payload への shape 判定は viewer 自身の入力について
     # の verdict でしかなく、サーバ側の状態を一切開示しない。
@@ -8193,7 +8193,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
   end
 
-  # ふじ #218 レビュー MF-3: 「全 inbound handler が version 検査付き gate を
+  # ふじ #208 レビュー MF-3: 「全 inbound handler が version 検査付き gate を
   # 通る」という protocol.md の主張が構造として pin されていなかった。
   # `delete_agent` の `require_operator/4` を `require_operator_role/1` へ
   # 差し替えても全 1147 件が green のままだった (実測)。
@@ -8205,7 +8205,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
   # 検査は構文ではなく**挙動**で行う: operator として不正 version を push し、
   # gate の warn が出ることを確かめる。role gate だけ残して version 検査を
   # 外す (= ふじの mutation) と warn が消えるので red になる。
-  describe "inbound gate の網羅性 (issue #218 ふじ MF-3)" do
+  describe "inbound gate の網羅性 (issue #208 ふじ MF-3)" do
     @channel_source "lib/kaoiro_server_web/channels/agents_channel.ex"
 
     # ADR-0015 の恒久 carve-out。binary frame は version キーを置く JSON
@@ -8276,7 +8276,7 @@ defmodule KaoiroServerWeb.AgentsChannelTest do
     end
   end
 
-  describe "ADR-0015 stage 2 server -> client egress funnel (issue #270)" do
+  describe "ADR-0015 stage 2 server -> client egress funnel (issue #260)" do
     test "T4-1: join-time の6種は version を stamp する" do
       _socket = join_as(:operator)
 

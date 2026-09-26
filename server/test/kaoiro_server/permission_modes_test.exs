@@ -13,7 +13,7 @@ defmodule KaoiroServer.PermissionModesTest do
     {:ok, pid} = PermissionModes.start_link(name: name, path: path)
 
     on_exit(fn ->
-      # #169 / #171: ExUnit のリンク死と stop が競合して teardown だけが
+      # #159 / #161: ExUnit のリンク死と stop が競合して teardown だけが
       # 落ちる。良性の exit だけ吸収する (KaoiroServer.TestTeardown)。
       stop_quietly(pid)
 

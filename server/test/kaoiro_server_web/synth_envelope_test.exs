@@ -1,6 +1,6 @@
 defmodule KaoiroServerWeb.SynthEnvelopeTest do
   # Builds + delivers server-synthesized `inter_agent_message` envelopes
-  # (issue #221). Shares `@endpoint` via ChannelCase purely for
+  # (issue #211). Shares `@endpoint` via ChannelCase purely for
   # `subscribe/1` — this module under test is a plain function module, not
   # a channel, so no join/push machinery is needed.
   use KaoiroServerWeb.ChannelCase, async: false
@@ -8,10 +8,10 @@ defmodule KaoiroServerWeb.SynthEnvelopeTest do
   alias KaoiroServerWeb.SynthEnvelope
 
   # Mirrors `protocol/src/index.ts`'s `Envelope` interface's REQUIRED (no
-  # `?`) fields as of issue #221 (protocol/src/index.ts:552-591): version,
+  # `?`) fields as of issue #211 (protocol/src/index.ts:552-591): version,
   # agent_id, persona, display_name, ts, type, state, payload, ext.
   # session_id / seq are optional and deliberately excluded. This list is
-  # the explicit assert クロエ asked for (issue #221 direction 4 follow-up,
+  # the explicit assert クロエ asked for (issue #211 direction 4 follow-up,
   # condition 3): it does not, and cannot, auto-track the TS source — a
   # future required field added there must ALSO be added here, and only
   # then does this test protect `build/2` from omitting it again the way
@@ -27,7 +27,7 @@ defmodule KaoiroServerWeb.SynthEnvelopeTest do
       end
     end
 
-    test "display_name and persona both carry the server sentinel (issue #221 direction 4)" do
+    test "display_name and persona both carry the server sentinel (issue #211 direction 4)" do
       envelope = SynthEnvelope.build(%{"to" => "peer.a"}, "2026-01-01T00:00:00Z")
 
       assert envelope["display_name"] == "server"
@@ -113,7 +113,7 @@ defmodule KaoiroServerWeb.SynthEnvelopeTest do
       assert_received %Phoenix.Socket.Broadcast{topic: "agents:lobby", event: "envelope"}
     end
 
-    test "never uses escalate-to-user (issue #221: that kind invited a pointless new-thread continuation)" do
+    test "never uses escalate-to-user (issue #211: that kind invited a pointless new-thread continuation)" do
       a = "test.synth-closed-not-escalate"
       cid = "cnv-synth-closed-kind-#{System.unique_integer([:positive])}"
 

@@ -213,7 +213,7 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
       assert body =~ "# One entry per line: provider:identifier[:role]"
       assert body =~ "# role: viewer | operator | admin (optional; defaults to viewer)"
       # bootstrap surface なので、admin を宣言せよという注意と、
-      # zero-admin からの復旧経路まで出す (issue #198、ふじ must-fix 2)。
+      # zero-admin からの復旧経路まで出す (issue #188、ふじ must-fix 2)。
       assert body =~ "Declare at least one."
       assert body =~ "only recovery"
       assert body =~ "google:master@example.com:operator"
@@ -232,7 +232,7 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
       :ok
     end
 
-    # issue #198 / ふじ must-fix 2。admin は config からしか付与できない
+    # issue #188 / ふじ must-fix 2。admin は config からしか付与できない
     # ので、この wizard が admin を出さなければ生成される .env は必ず
     # admin 不在になる。private helper を公開せず、Env.run/1 越しに
     # 「admin を選べて実際に書き出される」ことを end-to-end で測る。
@@ -310,7 +310,7 @@ defmodule Mix.Tasks.Kaoiro.EnvTest do
         "github-id",
         "github-secret",
         "n",
-        # admin を含む行を通す (issue #198、ふじ must-fix 2)。private な
+        # admin を含む行を通す (issue #188、ふじ must-fix 2)。private な
         # normalize_allowlist_entry/1 を公開せず、Env.run/1 越しに
         # 「admin 行が受理されて実際に生成される」ことを end-to-end で測る。
         "github:ao:admin",

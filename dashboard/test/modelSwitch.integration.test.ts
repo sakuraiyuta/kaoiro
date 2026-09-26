@@ -210,7 +210,7 @@ describe("phase-16 dashboard model switch integration", () => {
     }));
   });
 
-  it("LaunchDialog offers the Claude bootstrap catalog before spawn (#110)", async () => {
+  it("LaunchDialog offers the Claude bootstrap catalog before spawn (#107)", async () => {
     const conn = connection();
     const { target } = await renderLaunch(claudeBootstrap, conn, "claude-code");
     const model = selectFor(target, "モデル");
@@ -236,7 +236,7 @@ describe("phase-16 dashboard model switch integration", () => {
     }));
   });
 
-  it("fresh idle keeps model/effort/ctx rows stable and switchable (#110)", async () => {
+  it("fresh idle keeps model/effort/ctx rows stable and switchable (#107)", async () => {
     // ADR-0040 phase-21: supports_context_usage を stamp した Claude 相当
     // envelope で ctx 行が capability-driven に「取得中」placeholder を出す
     // ことを確認。旧固定文言「初回応答後に取得」はここで撤回される。
@@ -262,7 +262,7 @@ describe("phase-16 dashboard model switch integration", () => {
     expect(target.querySelector('[title="effort を切替"]')).not.toBeNull();
   });
 
-  it("permission switch uses the shrink-safe specialized class (#110)", async () => {
+  it("permission switch uses the shrink-safe specialized class (#107)", async () => {
     // issue #305: the picker is capability-gated now, and the two-axis
     // hint only renders for a mode that was actually reported — the
     // fixture therefore stamps what the Claude adapter really sends
@@ -361,7 +361,7 @@ describe("phase-16 dashboard model switch integration", () => {
     expect(choices).not.toContain("medium");
   });
 
-  it("supports_effort_switch=false でも effective.effort があれば read-only 表示する (#113)", async () => {
+  it("supports_effort_switch=false でも effective.effort があれば read-only 表示する (#109)", async () => {
     const { target } = await renderDetail({
       engine: "codex",
       model: "gpt-terra",
@@ -384,7 +384,7 @@ describe("phase-16 dashboard model switch integration", () => {
     expect(target.querySelector('[title="effort を切替"]')).toBeNull();
   });
 
-  it("viewer + supports_effort_switch=false + effective 無しでは effort 行を隠す (#113)", async () => {
+  it("viewer + supports_effort_switch=false + effective 無しでは effort 行を隠す (#109)", async () => {
     const { target } = await renderDetail(
       {
         engine: "codex",

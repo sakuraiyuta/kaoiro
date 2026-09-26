@@ -12,7 +12,7 @@ defmodule KaoiroServer.SessionStartsTest do
     {:ok, _pid} = SessionStarts.start_link(name: name, path: path)
 
     on_exit(fn ->
-      # #169 / #171: ExUnit のリンク死と stop が競合して teardown だけが
+      # #159 / #161: ExUnit のリンク死と stop が競合して teardown だけが
       # 落ちる (full run の負荷下でのみ出る)。良性の exit だけ吸収する
       # — テスト本体は完了済みで、DETS は書き込みごとに sync 済み、
       # owner 死亡時に閉じられる (詳細は KaoiroServer.TestTeardown)。

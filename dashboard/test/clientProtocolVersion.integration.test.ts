@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
-// ADR-0015 coverage for the client -> server hop (issue #218, extending
-// issue #182): EVERY message this client pushes carries a flat `version`
+// ADR-0015 coverage for the client -> server hop (issue #208, extending
+// issue #172): EVERY message this client pushes carries a flat `version`
 // frame key, not just the subset the server relays on to the runner.
 //
 // This file used to be `runnerControlVersion.integration.test.ts` and pinned
 // the opposite: it asserted `restore` had NO version, as a deliberate scope
 // marker for the runner-relay subset. That pin encoded the exact misreading
-// #218 exists to remove — ADR-0015 covers all three parties and draws no
+// #208 exists to remove — ADR-0015 covers all three parties and draws no
 // runner-relay exception — so the case is inverted here rather than deleted.
 //
 // Drives the REAL phoenix client (only the WebSocket transport is a fake),
@@ -382,7 +382,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("client -> server messages carry version (issue #218, ADR-0015)", () => {
+describe("client -> server messages carry version (issue #208, ADR-0015)", () => {
   // Every case fires the push first, then advances fake timers with
   // settleSocket() so the auto-ack reply (a fake `setTimeout`) can run
   // before the returned promise is awaited — under vi.useFakeTimers() a
@@ -400,7 +400,7 @@ describe("client -> server messages carry version (issue #218, ADR-0015)", () =>
       // nothing must not read as compliant).
       expect(frames.map((f) => f.event)).toContain(event);
       // EVERY frame the call produced carries the stamp — not merely the
-      // first one matching `event` (ふじ #218 レビュー MF-2). `uploadFile`
+      // first one matching `event` (ふじ #208 レビュー MF-2). `uploadFile`
       // is why: it is a three-leg composite (attach_open -> attach_chunk ->
       // attach_close), and asserting only the open leg let the close leg
       // lose its stamp with the suite still green. Reported as event names
@@ -414,7 +414,7 @@ describe("client -> server messages carry version (issue #218, ADR-0015)", () =>
 
   // The one documented exception (protocol.md 「version」節). A binary frame
   // carries a fixed length-prefixed header plus raw bytes; stamping a
-  // `version` key would need a wire change, which #218 rules out of scope.
+  // `version` key would need a wire change, which #208 rules out of scope.
   // Pinned positively — the chunk must still reach the socket — so a future
   // change that quietly stops sending chunks does not read as "compliant".
   it("attach_chunk は binary frame なので version を持たない (恒久 carve-out)", async () => {
@@ -425,7 +425,7 @@ describe("client -> server messages carry version (issue #218, ADR-0015)", () =>
     expect(ws.sent.some((f) => f.event === "attach_chunk")).toBe(false);
   });
 
-  // Structural pin (issue #218, こはく D4 追加要請): the per-case list above
+  // Structural pin (issue #208, こはく D4 追加要請): the per-case list above
   // only proves what it enumerates. This asserts the enumeration itself is
   // complete, so adding a push method to `KaoiroConnection` without adding
   // it to PUSH_CASES fails here instead of silently going uncovered.
@@ -439,7 +439,7 @@ describe("client -> server messages carry version (issue #218, ADR-0015)", () =>
   });
 });
 
-describe("server -> dashboard event bindings carry version checks (issue #270)", () => {
+describe("server -> dashboard event bindings carry version checks (issue #260)", () => {
   const events = (): Array<keyof typeof CLIENT_EVENT_VERSION_POLICY> =>
     Object.keys(CLIENT_EVENT_VERSION_POLICY).sort() as Array<keyof typeof CLIENT_EVENT_VERSION_POLICY>;
 

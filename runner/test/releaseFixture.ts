@@ -1,5 +1,5 @@
 // Shared fixtures for the release install / switch / update tests (issue
-// #229). Not a test file itself — vitest only collects `test/**/*.test.ts`.
+// #219). Not a test file itself — vitest only collects `test/**/*.test.ts`.
 //
 // Every fixture ships the REAL deploy/*.sh bytes, copied verbatim rather
 // than reimplemented, so the tests exercise the scripts an operator runs.
@@ -57,7 +57,7 @@ import { join } from "node:path";
 // A REAL module dependency, not decoration. The previous stub imported
 // nothing, so removing a module from the tree left it running perfectly and
 // the "one missing module is caught before exec" property could not be
-// measured at all (issue #229 round 2, ふじ 差し戻し must-fix 3). Importing a
+// measured at all (issue #219 round 2, ふじ 差し戻し must-fix 3). Importing a
 // sibling makes the negative control possible: delete dist/stub_dep.js and
 // this exits non-zero on its own.
 import dep from "./stub_dep.js";
@@ -210,7 +210,7 @@ export function writeReleaseTree(
   // @kaoiro/agent-common have in a real release. That transitive layer is
   // what the manifest generator's hand-written list of three dist directories
   // used to miss entirely: removing a file from it verified clean and then
-  // failed at import, on a real tarball (issue #229, 2026-08-16). A fixture
+  // failed at import, on a real tarball (issue #219, 2026-08-16). A fixture
   // with no dependency edges could not measure the difference.
   for (const wrapper of ["claude-code", "codex", "antigravity"]) {
     // The codex wrapper locates its bridge through `new URL(...,
@@ -257,7 +257,7 @@ export function writeReleaseTree(
     // A REAL cross-package import edge. verify-release.mjs derives the
     // expected closure by following the specifiers written inside each
     // module, so a wrapper stub that imported nothing would leave that walk
-    // with nothing to walk (issue #229, もも review must-fix 2).
+    // with nothing to walk (issue #219, もも review must-fix 2).
     // The `new URL` lines below stay because the REAL wrappers have them:
     // they are what proves the verifier no longer reads edges out of call
     // text.
@@ -362,7 +362,7 @@ export function writeReleaseTree(
 }
 
 /** Writes a checkout shaped like the REAL pnpm workspace this repo builds
- *  from (issue #259) — not the built-release shape `writeReleaseTree` alone
+ *  from (issue #249) — not the built-release shape `writeReleaseTree` alone
  *  produces. The runner tree lands at `<ws>/runner`; the wrapper packages
  *  are SIBLING workspace members at `<ws>/wrapper/<name>`; and
  *  `<ws>/runner/node_modules/@kaoiro/<name>` reaches them through the same

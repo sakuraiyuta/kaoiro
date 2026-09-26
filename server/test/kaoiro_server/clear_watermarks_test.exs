@@ -12,7 +12,7 @@ defmodule KaoiroServer.ClearWatermarksTest do
     {:ok, pid} = ClearWatermarks.start_link(name: name, path: path)
 
     on_exit(fn ->
-      # #169 / #171: ExUnit のリンク死と stop が競合して teardown だけが
+      # #159 / #161: ExUnit のリンク死と stop が競合して teardown だけが
       # 落ちる。良性の exit だけ吸収する (KaoiroServer.TestTeardown)。
       stop_quietly(pid)
 
@@ -117,7 +117,7 @@ defmodule KaoiroServer.ClearWatermarksTest do
     assert ClearWatermarks.delete("a.none", server) == :ok
   end
 
-  # M7-a regression pin (ふじ #109 must-fix): record must be synchronous
+  # M7-a regression pin (ふじ #106 must-fix): record must be synchronous
   # and fsync-gated so an operator's `history_cleared` broadcast can
   # never fire before disk persistence lands. `record/4` returning `:ok`
   # is the pin — a cast implementation would have returned `:ok` before

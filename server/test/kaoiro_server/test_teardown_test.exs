@@ -137,7 +137,7 @@ defmodule KaoiroServer.TestTeardownTest do
       # stop の {:system, _, {:terminate, _}} を mailbox に積ませ、処理される
       # 前に :shutdown を届けると :gen の monitor が先に発火し、
       # {:sys, :terminate, _} 層が reason に残る。OTP がこの層を畳むように
-      # 変わったらここが落ちる (ふじ #171-S2)。
+      # 変わったらここが落ちる (ふじ #161-S2)。
       {:ok, pid} = GenServer.start(Busy, self())
       send(pid, :block)
       assert_receive {:blocking, ^pid}, TestTimeouts.slow_path()

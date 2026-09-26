@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-// AgentCard の engine・model・effort / ctx・5h・7day 追加表示 (issue #193)。
-// agent_id 行は #193 以前からの既存表示でこのトグルの対象外(常時表示) —
+// AgentCard の engine・model・effort / ctx・5h・7day 追加表示 (issue #183)。
+// agent_id 行は #183 以前からの既存表示でこのトグルの対象外(常時表示) —
 // 別途固定する。ext は viewer に配信されない (ADR-0021) ので、"ext があれば
 // 出す" だけで operator 限定要件を満たす — ext 有無・値欠落・resets_at 過去/
 // 未来・設定トグルの各ケースを固定する。
@@ -56,7 +56,7 @@ function statRow(target: Element, label: string): Element | null {
   return dt?.parentElement ?? null;
 }
 
-describe("AgentCard stats (issue #193)", () => {
+describe("AgentCard stats (issue #183)", () => {
   it("ext が無ければ (viewer 相当) 追加行を一切描画しない", async () => {
     const target = await render(undefined);
     expect(target.querySelector(".stats")).toBeNull();
@@ -106,7 +106,7 @@ describe("AgentCard stats (issue #193)", () => {
     expect(sevenDayVal).not.toMatch(/:/);
   });
 
-  it("context_budget があれば raw 生窓と作業予算を token 分母付きで並べる (#264)", async () => {
+  it("context_budget があれば raw 生窓と作業予算を token 分母付きで並べる (#254)", async () => {
     const target = await render({
       context: {
         used_tokens: 150000,
@@ -132,7 +132,7 @@ describe("AgentCard stats (issue #193)", () => {
     );
   });
 
-  it("作業予算 0% を欠落扱いせず token 分母付きで表示する (#264)", async () => {
+  it("作業予算 0% を欠落扱いせず token 分母付きで表示する (#254)", async () => {
     const target = await render({
       context: {
         used_tokens: 0,
@@ -153,7 +153,7 @@ describe("AgentCard stats (issue #193)", () => {
     );
   });
 
-  it("旧 wrapper の生窓だけを表示し、作業予算を推測しない (#264)", async () => {
+  it("旧 wrapper の生窓だけを表示し、作業予算を推測しない (#254)", async () => {
     const target = await render({
       context: {
         used_tokens: 5000,
@@ -165,7 +165,7 @@ describe("AgentCard stats (issue #193)", () => {
     expect(statRow(target, "作業予算")).toBeNull();
   });
 
-  it("不正な作業予算分母は card でも隠し、生窓を残す (#264)", async () => {
+  it("不正な作業予算分母は card でも隠し、生窓を残す (#254)", async () => {
     const target = await render({
       context: {
         used_tokens: 5000,
@@ -282,7 +282,7 @@ describe("AgentCard stats (issue #193)", () => {
     expect(target.querySelector(".stats")).toBeNull();
   });
 
-  it("agent_id 行は #193 以前からの既存表示でトグル対象外 — 設定に関わらず常に表示する", async () => {
+  it("agent_id 行は #183 以前からの既存表示でトグル対象外 — 設定に関わらず常に表示する", async () => {
     updateSettings({ agentCardStatsEnabled: false });
     const target = await render({ engine: "claude-code" });
     expect(target.querySelector(".id")?.textContent?.trim()).toBe("host-a.p");

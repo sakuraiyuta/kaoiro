@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// issue #118: Codex 固有の ext.effective.network_access (true|false) を
+// issue #114: Codex 固有の ext.effective.network_access (true|false) を
 // AgentDetail 左ペインに表示することを検証する。gate は
 // permissionModeSwitchable (ext.permission.enforcement が "mode" かどうか)
 // と typeof boolean の二重防御 — false を落とさず、launch-fixed でない
@@ -106,7 +106,7 @@ function claudePermission() {
   };
 }
 
-describe("AgentDetail network_access row (issue #118)", () => {
+describe("AgentDetail network_access row (issue #114)", () => {
   it("codex + effective.network_access=true → 行を出し値 'true' を表示", async () => {
     const target = await render({
       engine: "codex",

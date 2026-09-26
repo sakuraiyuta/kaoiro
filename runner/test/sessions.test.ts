@@ -205,7 +205,7 @@ describe("codex rollouts (ADR-0032 F8)", () => {
   });
 });
 
-describe("codex rollouts — 同一 session_id が複数 rollout に分散 (#104)", () => {
+describe("codex rollouts — 同一 session_id が複数 rollout に分散 (#101)", () => {
   // resume で新規 rollout が作られると同一 UUID が別日 dir に並ぶ。走査順で
   // 先頭が cwd 不一致だと codexSessionExistsIn が list 側と非対称に false
   // 決着していた回帰を固定する。

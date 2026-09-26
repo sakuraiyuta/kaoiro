@@ -5,14 +5,14 @@ defmodule KaoiroServer.AgentDirectoryTest do
 
   alias KaoiroServer.AgentDirectory
 
-  # Mirrors `AgentDirectory`'s private `@max_safe_revision` (issue #197
+  # Mirrors `AgentDirectory`'s private `@max_safe_revision` (issue #187
   # 段階3, ふじ MF-5 レビュー指摘) — the module attribute is not
   # accessible from the test, so the boundary is duplicated here
   # deliberately, matching the pattern of testing a private contract via
   # its public behavior.
   @max_safe_revision 9_007_199_254_740_991
 
-  # Mirrors `AgentDirectory`'s private `@initial_revision` (issue #219
+  # Mirrors `AgentDirectory`'s private `@initial_revision` (issue #209
   # MF-2, クロエ実測検証) — same duplication rationale as
   # `@max_safe_revision` above. A fresh `record/4` entry, and any
   # persisted revision loaded below this floor (including a legitimate
@@ -27,7 +27,7 @@ defmodule KaoiroServer.AgentDirectoryTest do
     {:ok, pid} = AgentDirectory.start_link(name: name, path: path)
 
     on_exit(fn ->
-      # #169 / #171: ExUnit のリンク死と stop が競合して teardown だけが
+      # #159 / #161: ExUnit のリンク死と stop が競合して teardown だけが
       # 落ちる。良性の exit だけ吸収する (KaoiroServer.TestTeardown)。
       stop_quietly(pid)
 
@@ -37,8 +37,8 @@ defmodule KaoiroServer.AgentDirectoryTest do
     %{server: name, path: path}
   end
 
-  # issue #219 D19: `persona` in a legacy-DETS fixture (a full map, the
-  # pre-#219 shape) vs `persona_id` (the string reference the new record/
+  # issue #209 D19: `persona` in a legacy-DETS fixture (a full map, the
+  # pre-#209 shape) vs `persona_id` (the string reference the new record/
   # rename API takes). Both helpers build the SAME underlying pack id.
   defp persona(id, name \\ nil) do
     %{"id" => id, "name" => name || id, "sprite_set" => id}
@@ -80,13 +80,13 @@ defmodule KaoiroServer.AgentDirectoryTest do
     assert AgentDirectory.get("a.none", server) == nil
   end
 
-  # record/4 は create-only (issue #197 段階3、ふじ MF-2 レビュー指摘、
-  # issue #219 で persona_id/display_name 引数へ改訂): 既存 agent_id へ
+  # record/4 は create-only (issue #187 段階3、ふじ MF-2 レビュー指摘、
+  # issue #209 で persona_id/display_name 引数へ改訂): 既存 agent_id へ
   # の再 record は persona_id/display_name/revision とも一切変更しない
   # (異なる値が来ても無視)。以前は「異なる persona が来ても無視」だった
   # が、これは rename/3 との revision 競合を招き (遅延 record が rename
   # を高い revision で巻き戻し得た)、逆効果だった。
-  test "再 record は既存 entry を一切変更しない (create-only、issue #197 段階3 MF-2)", %{
+  test "再 record は既存 entry を一切変更しない (create-only、issue #187 段階3 MF-2)", %{
     server: server
   } do
     AgentDirectory.record("a.2", "ao", "青", server)
@@ -256,10 +256,10 @@ defmodule KaoiroServer.AgentDirectoryTest do
     assert AgentDirectory.delete("a.none", server) == :ok
   end
 
-  # issue #197 段階3 (D12), 改訂 issue #219 D19: 稼働中 rename の永続化
+  # issue #187 段階3 (D12), 改訂 issue #209 D19: 稼働中 rename の永続化
   # ターゲットは `display_name` のみ — `persona_id` (canonical への
   # stable reference) は rename で一切変わらない。
-  describe "rename/3 (issue #197 段階3, revised issue #219)" do
+  describe "rename/3 (issue #187 段階3, revised issue #209)" do
     test "display_name を書き換え、revision を 1 進めて返す。persona_id は不変", %{
       server: server
     } do
@@ -267,10 +267,10 @@ defmodule KaoiroServer.AgentDirectoryTest do
 
       assert {:ok, entry} = AgentDirectory.rename("a.8", "あお(改名)", server)
       assert entry.display_name == "あお(改名)"
-      # baseline @initial_revision(1) + 1 = 2 (issue #219 MF-2).
+      # baseline @initial_revision(1) + 1 = 2 (issue #209 MF-2).
       assert entry.revision == 2
       # persona_id (canonical への stable reference) は rename で不変
-      # (issue #219 D19 — ADR-0030 D2 改訂)
+      # (issue #209 D19 — ADR-0030 D2 改訂)
       assert entry.persona_id == "ao"
 
       assert AgentDirectory.get("a.8", server) == entry
@@ -279,7 +279,7 @@ defmodule KaoiroServer.AgentDirectoryTest do
     test "2 回 rename すると revision が単調に進む", %{server: server} do
       AgentDirectory.record("a.9", "momo", "momo", server)
 
-      # baseline @initial_revision = 1 (issue #219 MF-2), so 2 renames land
+      # baseline @initial_revision = 1 (issue #209 MF-2), so 2 renames land
       # at 2 then 3.
       assert {:ok, %{revision: 2}} = AgentDirectory.rename("a.9", "もも(1)", server)
       assert {:ok, %{revision: 3}} = AgentDirectory.rename("a.9", "もも(2)", server)
@@ -308,7 +308,7 @@ defmodule KaoiroServer.AgentDirectoryTest do
         ]
         |> Enum.map(&Task.await/1)
 
-      # baseline @initial_revision = 1 (issue #219 MF-2), so the 2
+      # baseline @initial_revision = 1 (issue #209 MF-2), so the 2
       # concurrent renames land at 2 and 3.
       revisions = Enum.map(results, fn {:ok, %{revision: r}} -> r end) |> Enum.sort()
       assert revisions == [2, 3]
@@ -330,8 +330,8 @@ defmodule KaoiroServer.AgentDirectoryTest do
     # 昇順(非減少)であることを確認する — MF-3 前の実装 (呼び出し元での
     # 分離 read+broadcast) へ戻すと、稀にこの順序が崩れる。broadcast
     # payload は persona_id/display_name の生の entries であり (issue
-    # #219 D19)、canonical join を含まない — この test はそこを見ない。
-    test "concurrent rename の directory broadcast は revision 逆転無く届く (issue #197 段階3 MF-3)",
+    # #209 D19)、canonical join を含まない — この test はそこを見ない。
+    test "concurrent rename の directory broadcast は revision 逆転無く届く (issue #187 段階3 MF-3)",
          %{server: server} do
       AgentDirectory.record("a.12", "ao", "ao", server)
       :ok = Phoenix.PubSub.subscribe(KaoiroServer.PubSub, "agents:lobby")
@@ -349,7 +349,7 @@ defmodule KaoiroServer.AgentDirectoryTest do
 
     test "rename 後の再起動で新しい display_name と revision が残る", %{server: server, path: path} do
       AgentDirectory.record("a.10", "kuroe", "kuroe", server)
-      # baseline @initial_revision(1) + 1 = 2 (issue #219 MF-2).
+      # baseline @initial_revision(1) + 1 = 2 (issue #209 MF-2).
       assert {:ok, %{revision: 2}} = AgentDirectory.rename("a.10", "くろえ(改)", server)
       :ok = GenServer.stop(server)
 
@@ -417,13 +417,13 @@ defmodule KaoiroServer.AgentDirectoryTest do
     end
   end
 
-  # issue #219 D21: 段階3 以前に書かれた DETS ファイル (revision の無い
+  # issue #209 D21: 段階3 以前に書かれた DETS ファイル (revision の無い
   # bare 2-tuple、または revision 付き 3-tuple、いずれも persona MAP を
   # 埋め込んだ旧形式) を新コードが読んでもクラッシュしない後方互換パス。
   # 移行は無条件 (推測しない) — 旧 persona["name"] は無条件に
   # display_name へコピーされ、canonical (name/sprite_set) は一切migrate
   # されない (persona_id だけが stable reference として引き継がれる)。
-  describe "旧形式 DETS (issue #197 段階3以前、persona map 埋め込み) からの読み込み — issue #219 D21 unconditional migration" do
+  describe "旧形式 DETS (issue #187 段階3以前、persona map 埋め込み) からの読み込み — issue #209 D21 unconditional migration" do
     test "2-tuple (revision 無し): persona_id/display_name へ無条件migrationされ、revision: @initial_revision になる" do
       # 共有 setup の path とは独立の、このテスト専用の DETS ファイル
       # (setup 側の AgentDirectory が同じ path を既に開いているため、
@@ -450,7 +450,7 @@ defmodule KaoiroServer.AgentDirectoryTest do
                revision: @initial_revision
              }
 
-      # baseline @initial_revision(1) + 1 = 2 (issue #219 MF-2).
+      # baseline @initial_revision(1) + 1 = 2 (issue #209 MF-2).
       assert {:ok, %{revision: 2, display_name: "藤(改)", persona_id: "fuji"}} =
                AgentDirectory.rename("a.legacy", "藤(改)", name)
 
@@ -465,7 +465,7 @@ defmodule KaoiroServer.AgentDirectoryTest do
 
       {:ok, ^table_name} = :dets.open_file(table_name, file: String.to_charlist(path))
       # 段階3 の apply_custom_name/rename がすでに persona["name"] を
-      # 書き換え済み ("藤(通称)") という、issue #219 が問題視する状態
+      # 書き換え済み ("藤(通称)") という、issue #209 が問題視する状態
       # そのものを fixture 化する。
       :ok = :dets.insert(table_name, {"a.legacy3", persona("fuji", "藤(通称)"), 3})
       :ok = :dets.close(table_name)
@@ -484,9 +484,9 @@ defmodule KaoiroServer.AgentDirectoryTest do
       File.rm(path)
     end
 
-    # MF-4/MF-5 (ふじ レビュー指摘、issue #219 でも維持): 3-tuple 形式
+    # MF-4/MF-5 (ふじ レビュー指摘、issue #209 でも維持): 3-tuple 形式
     # でも revision が @initial_revision..@max_safe_revision の integer
-    # domain 外なら @initial_revision(issue #219 MF-2)へフォールバックし、
+    # domain 外なら @initial_revision(issue #209 MF-2)へフォールバックし、
     # クラッシュも unsafe な値の持ち越しもしない。
     test "revision が破損している (負数/非整数/上限超過) 3-tuple は revision: @initial_revision へフォールバックする" do
       for bad_revision <- [-1, "1", 1.5, nil, @max_safe_revision + 1] do
@@ -510,7 +510,7 @@ defmodule KaoiroServer.AgentDirectoryTest do
       end
     end
 
-    # issue #219 MF-2 acceptance pin (クロエ実測検証): a persisted
+    # issue #209 MF-2 acceptance pin (クロエ実測検証): a persisted
     # revision of exactly 0 — the legitimate PRE-MF-2 baseline, not a
     # corrupted value — must ALSO be lifted to @initial_revision on load,
     # not just clamped when out-of-domain. This is what closes the
@@ -541,7 +541,7 @@ defmodule KaoiroServer.AgentDirectoryTest do
       File.rm(path)
     end
 
-    # issue #219 MF-5 (クロエ実測検証): a legacy persona map with `"id"`
+    # issue #209 MF-5 (クロエ実測検証): a legacy persona map with `"id"`
     # but no usable `"name"` must NOT invent a display_name from
     # `persona_id` — that is exactly the guessing D21 already rejected
     # for the canonical join, just relocated to this migration path. Such
@@ -590,9 +590,9 @@ defmodule KaoiroServer.AgentDirectoryTest do
     end
   end
 
-  # クロエ実測検証 must-fix (issue #219): 段階3 まで 2-tuple/3-tuple 節が
+  # クロエ実測検証 must-fix (issue #209): 段階3 まで 2-tuple/3-tuple 節が
   # 無 guard だったため、壊れた/認識できないレコードでも読めていた。issue
-  # #219 D21 でその 2 節に `is_binary` guard を付けたことで、guard を通ら
+  # #209 D21 でその 2 節に `is_binary` guard を付けたことで、guard を通ら
   # ない形の record は `:dets.foldl` 内で `FunctionClauseError` を起こし
   # かねない — catch-all 節がそれを防ぎ、破損レコード 1 件が台帳全体の
   # 起動失敗(再起動ループ)に波及しないことを pin する。
@@ -635,20 +635,20 @@ defmodule KaoiroServer.AgentDirectoryTest do
     end
   end
 
-  # issue #219 MF-6 (ふじ最終レビュー指摘, クロエ実測検証): round 1 の
+  # issue #209 MF-6 (ふじ最終レビュー指摘, クロエ実測検証): round 1 の
   # catch-all は persona_id/display_name/revision の shape mismatch しか
   # 見ておらず、agent_id 自体は 3 節すべてで無条件に受理していた —
   # 特に legacy 節 (3-tuple/2-tuple) は `Logger.warning` 内で
   # `#{agent_id}` を直接補間するため、non-binary な agent_id (壊れた
   # map/atom 等) は catch-all へ落ちる前に `Protocol.UndefinedError` で
   # `:dets.foldl` ごと落ち、`AgentDirectory.init/1` を crash させる —
-  # `bddbcec` (issue #219 以前) の `load_fold` は agent_id を一切補間
-  # しておらず、この失敗モードが無かった (issue #219 が持ち込んだ回帰)。
+  # `bddbcec` (issue #209 以前) の `load_fold` は agent_id を一切補間
+  # しておらず、この失敗モードが無かった (issue #209 が持ち込んだ回帰)。
   # current 4-tuple 節は補間こそ無いが、guard 無しでは non-binary な
   # agent_id がそのまま `entries` map のキーとして残り、directory
   # broadcast / JSON projection まで破損を持ち越す。3 形式それぞれで
   # 「起動する・破損行だけ skip・正常行は残る」を pin する。
-  describe "agent_id が non-binary な DETS レコード (issue #219 MF-6)" do
+  describe "agent_id が non-binary な DETS レコード (issue #209 MF-6)" do
     test "current 4-tuple: 破損行は skip され、正常な隣接行は読み込まれる" do
       table_name = :"ad_badid4_raw_#{System.unique_integer([:positive])}"
       path = Path.join([System.tmp_dir!(), "kaoiro_test_dets", "#{table_name}.dets"])
@@ -735,12 +735,12 @@ defmodule KaoiroServer.AgentDirectoryTest do
     end
   end
 
-  # issue #219 D19: 新形式 (4-tuple, persona_id/display_name/revision の
+  # issue #209 D19: 新形式 (4-tuple, persona_id/display_name/revision の
   # みで canonical 無し) からの読み込みが正しく丸めて復元されることを
   # pin する。旧形式との判別は tuple の要素数で行われる (persona map で
   # はなく binary な persona_id かどうかで区別する 2 clause 目のガード
   # 節がある) — この test はその新形式 clause 自体を直接 exercise する。
-  describe "新形式 DETS (issue #219, persona_id 参照のみ) からの読み込み" do
+  describe "新形式 DETS (issue #209, persona_id 参照のみ) からの読み込み" do
     test "4-tuple はそのまま復元される" do
       table_name = :"ad_new_raw_#{System.unique_integer([:positive])}"
       path = Path.join([System.tmp_dir!(), "kaoiro_test_dets", "#{table_name}.dets"])

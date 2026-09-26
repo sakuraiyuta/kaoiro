@@ -3,7 +3,7 @@
 // there (vitest gives each test FILE its own module graph, but a shared
 // file would apply the mock to every test in it).
 //
-// Pins the issue #228 round 2 MF-2 ruling (ふじ 差し戻し): if
+// Pins the issue #218 round 2 MF-2 ruling (ふじ 差し戻し): if
 // `git status --porcelain` fails AFTER a successful `git rev-parse HEAD`,
 // the WHOLE identity must degrade to unknown/false — not just `dirty`
 // while keeping the real revision. This is the actual bug round 1 shipped
@@ -19,7 +19,7 @@ vi.mock("node:child_process", () => ({
   execFileSync: (...args: unknown[]) => execFileSyncMock(...args),
 }));
 
-describe("computeBuildIdentity degrade rule (issue #228 round 2 MF-2)", () => {
+describe("computeBuildIdentity degrade rule (issue #218 round 2 MF-2)", () => {
   it("git status --porcelain の失敗時、identity 全体が unknown/false へ degrade する", async () => {
     execFileSyncMock.mockImplementation((cmd: string, args: string[]) => {
       if (cmd === "git" && args[0] === "rev-parse") {

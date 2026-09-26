@@ -388,7 +388,7 @@ defmodule KaoiroServer.AgentStatesTest do
       assert List.last(history)["payload"]["text"] == "m205"
     end
 
-    # ADR-0051 D6 reverses the #105 cap exemption: IA no longer rides the
+    # ADR-0051 D6 reverses the #102 cap exemption: IA no longer rides the
     # transcript list at all, so the list caps like any other and the
     # "IA survives past the cap" behaviour is gone by construction.
     test "IA は history に入らず、history は cap で切られる (ADR-0051 D6)", %{store: store} do
@@ -581,7 +581,7 @@ defmodule KaoiroServer.AgentStatesTest do
       assert AgentStates.snapshot(store)["a"]["state"] == "thinking"
     end
 
-    # ADR-0051 D3-3 reverses the #105 retention: the wrapper's sidecar
+    # ADR-0051 D3-3 reverses the #102 retention: the wrapper's sidecar
     # re-projects IA through `replay_ia` inside the same replay window, so
     # anything kept here would be a duplicate of what is about to arrive.
     test "IA pane も含めて表示投影を全消去する (ADR-0051 D3-3)", %{store: store} do

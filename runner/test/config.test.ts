@@ -886,7 +886,7 @@ describe("buildRegister", () => {
     expect(register.engines?.map((e) => e.id)).toEqual(["claude-code"]);
   });
 
-  // issue #228: build_revision/build_dirty は buildInfo が渡されたときだけ
+  // issue #218: build_revision/build_dirty は buildInfo が渡されたときだけ
   // 載る。渡されなければ既存呼び出し (register/reload の3箇所すべてが
   // buildInfo を渡すよう更新済みだが、テストの後方互換のため) と同じ
   // 形のまま — フィールド自体が現れない。
@@ -970,7 +970,7 @@ describe("wrapperUrlFrom", () => {
   });
 });
 
-describe("applyServerUrlOverride (issue #140)", () => {
+describe("applyServerUrlOverride (issue #135)", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });

@@ -6,7 +6,7 @@ defmodule KaoiroServer.TeardownConventionTest do
   # `:shutdown` without waiting for it to die, so a teardown that stops the
   # store races the link signal and fails on its own even though the test
   # body passed. KaoiroServer.TestTeardown.stop_quietly/1 absorbs exactly
-  # that race and re-raises everything else (issue #171). 22 teardown sites
+  # that race and re-raises everything else (issue #161). 22 teardown sites
   # already went through it and one never adopted it, which is what #318 was;
   # this keeps the 23rd from being written raw.
   #

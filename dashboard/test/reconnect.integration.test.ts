@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Regression tests for issue #123 round 3 (macOS sleep resume auto-reconnect).
+// Regression tests for issue #119 round 3 (macOS sleep resume auto-reconnect).
 // Runs against the REAL phoenix client — only the WebSocket transport is
 // swapped for a stuck fake, and Phoenix's heartbeat interval is shortened
 // so heartbeatTimeout paths fit in bounded wall-clock. ふじ再レビュー
@@ -66,7 +66,7 @@ class FakeWebSocket {
 
   close(_code?: number, _reason?: string): void {
     this.readyState = FakeWebSocket.CLOSED;
-    // Note: onclose is NOT invoked. issue #123 のシナリオは close event が
+    // Note: onclose is NOT invoked. issue #119 のシナリオは close event が
     // 届かない (stuck transport) ケースを模擬する。
   }
 }
@@ -99,7 +99,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("Phoenix Socket internal API existence (issue #123 round 3)", () => {
+describe("Phoenix Socket internal API existence (issue #119 round 3)", () => {
   it("(C) Socket prototype に clearHeartbeats / reconnectTimer.reset が存在する", () => {
     // ふじ条件: Phoenix 内部 API 直触りは silent に壊れず明示的に検知でき
     // るよう typeof チェックを test で pin する。Phoenix upgrade で消え
@@ -115,7 +115,7 @@ describe("Phoenix Socket internal API existence (issue #123 round 3)", () => {
   });
 });
 
-describe("connectKaoiro reconnect against real Phoenix (issue #123 round 3+4)", () => {
+describe("connectKaoiro reconnect against real Phoenix (issue #119 round 3+4)", () => {
   it("期限切れ ticket を明示 reconnect 前に更新し、新しい ticket で WS を張る", async () => {
     const handlers = makeHandlers();
     const refreshTicket = vi.fn().mockResolvedValue({
@@ -141,10 +141,10 @@ describe("connectKaoiro reconnect against real Phoenix (issue #123 round 3+4)", 
     await vi.advanceTimersByTimeAsync(500);
   });
 
-  it("(issue #129 回帰) ticket max_age(30s) 超過後の reconnect も新規 mint した ticket を使い、初期 ticket を使い回さない", async () => {
-    // issue #129 は「connectKaoiro が初期 ticket を reconnect 間で保持し
+  it("(issue #125 回帰) ticket max_age(30s) 超過後の reconnect も新規 mint した ticket を使い、初期 ticket を使い回さない", async () => {
+    // issue #125 は「connectKaoiro が初期 ticket を reconnect 間で保持し
     // 続け、30 秒超の再接続で再認証できない」という懸念だったが、
-    // c4a807a/dc492fd (issue #123) の fresh-ticket 機構により
+    // c4a807a/dc492fd (issue #119) の fresh-ticket 機構により
     // requireFreshTicket() が close/error/reconnect() の全経路で無条件に
     // ticketRefreshRequired を立てるため、構造的に発生し得ない。このテスト
     // はその構造を pin し、将来の変更で退行したら最初に落ちるようにする。
@@ -427,7 +427,7 @@ describe("connectKaoiro reconnect against real Phoenix (issue #123 round 3+4)", 
     await vi.advanceTimersByTimeAsync(500);
   });
 
-  it("(issue #162 advisory 1/2) 旧: notifyOnline 直後の reconnect は開始直後の mint を abort して余分に mint する", async () => {
+  it("(issue #152 advisory 1/2) 旧: notifyOnline 直後の reconnect は開始直後の mint を abort して余分に mint する", async () => {
     // Documents the bug dispatchOnlineWake below fixes: the OLD App.svelte
     // wakeHandler called notifyOnline() unconditionally, then reconnect()
     // when disconnected — both from the SAME browser `online` event.
@@ -459,7 +459,7 @@ describe("connectKaoiro reconnect against real Phoenix (issue #123 round 3+4)", 
     await vi.advanceTimersByTimeAsync(30_000);
   });
 
-  it("(issue #162 advisory 1/2) 新: dispatchOnlineWake は同一 online イベントで mint を1本に収める", async () => {
+  it("(issue #152 advisory 1/2) 新: dispatchOnlineWake は同一 online イベントで mint を1本に収める", async () => {
     const handlers = makeHandlers();
     const refreshTicket = vi.fn().mockRejectedValue(new Error("offline"));
     const conn = connectKaoiro("ws://test/client", handlers, {
@@ -928,7 +928,7 @@ describe("connectKaoiro reconnect against real Phoenix (issue #123 round 3+4)", 
   });
 });
 
-describe("decideWakeAction (issue #123 round 3, must-fix 2)", () => {
+describe("decideWakeAction (issue #119 round 3, must-fix 2)", () => {
   it("(a) online + disconnected → reconnect", () => {
     expect(decideWakeAction("online", "disconnected", null, 0)).toBe("reconnect");
   });
@@ -975,7 +975,7 @@ describe("decideWakeAction (issue #123 round 3, must-fix 2)", () => {
   });
 });
 
-describe("dispatchOnlineWake (issue #162 advisory 2)", () => {
+describe("dispatchOnlineWake (issue #152 advisory 2)", () => {
   function makeConnection() {
     return { notifyOnline: vi.fn(), reconnect: vi.fn() };
   }
@@ -1013,7 +1013,7 @@ describe("dispatchOnlineWake (issue #162 advisory 2)", () => {
   });
 });
 
-describe("shouldForceReconnectOnVisible boundary (issue #123)", () => {
+describe("shouldForceReconnectOnVisible boundary (issue #119)", () => {
   it("hiddenAt が null なら false (未 hidden で visible)", () => {
     expect(shouldForceReconnectOnVisible(null, 100_000)).toBe(false);
   });

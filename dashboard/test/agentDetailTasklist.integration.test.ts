@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// AgentDetail の todo float (issue #188 / ADR-0049): current tasklist state
+// AgentDetail の todo float (issue #178 / ADR-0049): current tasklist state
 // is deliberately separate from the append-only transcript and from the
 // child-task activity ring. These tests mount the production detail rather
 // than only exercising the aggregate helper, pinning the operator-visible
@@ -53,7 +53,7 @@ async function render(tasklist: TasklistSnapshot | null): Promise<HTMLElement> {
   return target;
 }
 
-describe("AgentDetail tasklist float (issue #188)", () => {
+describe("AgentDetail tasklist float (issue #178)", () => {
   it("tasklist が無い、または空なら 0/0 float を表示しない", async () => {
     const absent = await render(null);
     expect(absent.querySelector(".tasklist-float")).toBeNull();

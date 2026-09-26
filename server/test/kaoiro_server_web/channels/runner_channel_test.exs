@@ -194,7 +194,7 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
       assert_reply ref, :error, %{reason: "invalid_engines"}
     end
 
-    test "build_revision/build_dirty (issue #228) が保持される" do
+    test "build_revision/build_dirty (issue #218) が保持される" do
       host_id = "lab-pc-build-info"
       socket = join_runner(host_id)
 
@@ -366,7 +366,7 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
       assert_reply ref, :error, %{reason: "incomplete_build_info"}
     end
 
-    test "build_revision/build_dirty 未指定なら nil のまま (pre-#228 runner との互換)" do
+    test "build_revision/build_dirty 未指定なら nil のまま (pre-#218 runner との互換)" do
       host_id = "lab-pc-no-build-info"
       socket = join_runner(host_id)
 
@@ -384,7 +384,7 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
 
       # build_dirty must be present too (a valid, well-typed value) so this
       # payload exercises the TYPE-check branch, not the pair-completeness
-      # branch below (issue #228 round 2 MF-3, ふじ 差し戻し — a payload
+      # branch below (issue #218 round 2 MF-3, ふじ 差し戻し — a payload
       # with only one of the two keys present is its own distinct
       # incomplete_build_info rejection, tested separately).
       ref =
@@ -414,7 +414,7 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
       assert_reply ref, :error, %{reason: "invalid_build_dirty"}
     end
 
-    # issue #228 round 2 MF-3 (ふじ 差し戻し): 型は string でも値域外
+    # issue #218 round 2 MF-3 (ふじ 差し戻し): 型は string でも値域外
     # (40 桁 hex でも "unknown" でもない) は invalid_build_revision —
     # round 1 は is_binary だけを見ており、空文字・短すぎ・16進以外の
     # 文字が素通りしていた。
@@ -435,7 +435,7 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
       assert_reply ref, :error, %{reason: "invalid_build_revision"}
     end
 
-    # issue #228 round 2 MF-3: build_revision/build_dirty は「両方省略」
+    # issue #218 round 2 MF-3: build_revision/build_dirty は「両方省略」
     # または「両方提示」のみが正で、片方だけの提示は register 全体を
     # reject する — round 1 は各フィールドを独立に optional 扱いしており、
     # 非対称な半端な組み合わせを黙って受理していた。
@@ -945,7 +945,7 @@ defmodule KaoiroServerWeb.RunnerChannelTest do
       refute KaoiroServer.SessionResets.pending?(agent_id)
       # spawn_failed means the rollback wrapper DID launch. The reset failure
       # is terminal, but peer connectivity stays pending until that wrapper
-      # proves the same request_id on join (issue #258).
+      # proves the same request_id on join (issue #248).
       assert %{
                transition_id: ^request_id,
                kind: :reset,

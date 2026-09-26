@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// #184: AgentDetail render-windows the transcript to LOG_WINDOW_SIZE (200)
+// #174: AgentDetail render-windows the transcript to LOG_WINDOW_SIZE (200)
 // entries by default instead of DOM'ing the full history. ふじ round-1 review
 // (must-fix M1/M2/M3, S1) required these cases because the original diff
 // shipped with zero tests for the new behaviour; round-2 review found the
@@ -226,7 +226,7 @@ async function renderReactive(props: Parameters<typeof makeReactiveTimelineDetai
   return { target, props: reactiveProps };
 }
 
-describe("AgentDetail log render window (#184)", () => {
+describe("AgentDetail log render window (#174)", () => {
   it(`既定では直近 ${LOG_WINDOW_SIZE} 件のみ描画する (200+ 件相当)`, async () => {
     const logs = buildLogs("agent-a", 250);
     const { target } = await renderReactive({
@@ -377,7 +377,7 @@ describe("AgentDetail log render window (#184)", () => {
     // 250*30 = 7500, clientHeight 400 -> bottom = 7100). Unlike the explicit
     // "show all" case above, a reading-freeze must revert to tail once the
     // operator returns to the bottom — otherwise a long mid-read session
-    // slowly regrows the exact unbounded render #184 was meant to remove.
+    // slowly regrows the exact unbounded render #174 was meant to remove.
     scrollLogTo(logEl, 7100);
     await tick();
     expect(target.querySelectorAll(".transcript-entry").length).toBe(200);
@@ -635,7 +635,7 @@ describe("AgentDetail log render window (#184)", () => {
     ];
     // Several rounds of tick+rAF (same pattern and rationale as the
     // sibling "同一 agent を表示したままの shrink" test below, and as issue
-    // #237 round 3's ownership-generation check added to the scroll
+    // #227 round 3's ownership-generation check added to the scroll
     // $effect's continuation): this test has ALSO triggered four effect
     // runs in quick succession (mount, switch to B, switch back to
     // shrunk A, append) by this point, and their tick()->mermaid->
@@ -705,7 +705,7 @@ describe("AgentDetail log render window (#184)", () => {
     expect(logEl.scrollTop).toBe(80 * ROW_PX - 400);
   });
 
-  it("window 外の timeline target (#122) は window を拡張して描画し、mermaid を 1 回だけ実行する (round-4 S2)", async () => {
+  it("window 外の timeline target (#118) は window を拡張して描画し、mermaid を 1 回だけ実行する (round-4 S2)", async () => {
     stubScrollTo();
     const logs = buildLogs("agent-a", 250);
     const targetKey = conversationEntryKey(logs[10]);
@@ -806,7 +806,7 @@ describe("AgentDetail log render window (#184)", () => {
     await new Promise((r) => requestAnimationFrame(r));
     await new Promise((r) => requestAnimationFrame(r));
 
-    // A "keep last N" reset on switch (the pre-#184-fix behaviour) would
+    // A "keep last N" reset on switch (the pre-#174-fix behaviour) would
     // show 200 rows here — scrollHeight 6000, max scrollTop 5600 — and
     // clamp the restored 6800 down to 5600. Restoring the full 250-row
     // window BEFORE scrollTop is applied is what keeps this exact.

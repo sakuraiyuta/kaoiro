@@ -43,7 +43,7 @@ defmodule KaoiroServerWeb.HealthControllerTest do
       assert %{"status" => "ok", "protocol_version" => "0"} = json_response(conn, 200)
     end
 
-    # issue #228 (director's steer): RELEASE_ROOT 未設定 (bare
+    # issue #218 (director's steer): RELEASE_ROOT 未設定 (bare
     # `mix phx.server` dev — Mix release の生成する bin/server ランチャの
     # みが export する) を "unknown"/false へ fall back させる — runner 側
     # の build_revision fallback 規約 (これも "unknown") と揃える。
@@ -99,7 +99,7 @@ defmodule KaoiroServerWeb.HealthControllerTest do
              } = json_response(conn, 200)
     end
 
-    # issue #228 round 2 MF-1 (ふじ 差し戻し): round 1 read
+    # issue #218 round 2 MF-1 (ふじ 差し戻し): round 1 read
     # System.get_env("KAOIRO_BUILD_REVISION") directly, which a
     # `docker run -e` or docker-compose's `env_file: .env` could override
     # at container-RUN time — the exact "identity that can drift from the
@@ -153,7 +153,7 @@ defmodule KaoiroServerWeb.HealthControllerTest do
              } = json_response(conn, 200)
     end
 
-    # issue #228 round 2 MF-3 (ふじ 差し戻し): 値域外の revision (40 桁 hex
+    # issue #218 round 2 MF-3 (ふじ 差し戻し): 値域外の revision (40 桁 hex
     # でも "unknown" でもない) は型が string でも unknown へ degrade する。
     test "revision が値域外なら unknown/false へ fail-soft する", %{conn: conn} do
       dir = tmp_release_root!()

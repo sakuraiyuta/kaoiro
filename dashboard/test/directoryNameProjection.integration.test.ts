@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// issue #197 段階3 unit B, ふじ MF-3 レビュー指摘: a live-disconnected
+// issue #187 段階3 unit B, ふじ MF-3 レビュー指摘: a live-disconnected
 // agent has no wrapper to re-emit `state_change` after a rename, so its
 // stale AgentStates envelope would otherwise show the pre-rename name
 // forever even after AgentDirectory (and the operator's own rename
@@ -104,7 +104,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-describe("AgentDirectory name projection onto a live-disconnected agent (issue #197 段階3 ふじ MF-3 レビュー指摘)", () => {
+describe("AgentDirectory name projection onto a live-disconnected agent (issue #187 段階3 ふじ MF-3 レビュー指摘)", () => {
   it("offline tile と selected detail の両方が directory の新しい name へ追随する", async () => {
     const h = await mountApp();
     h.onHosts?.([]); // operator signal
@@ -115,7 +115,7 @@ describe("AgentDirectory name projection onto a live-disconnected agent (issue #
     // wrapper is there to re-emit `state_change`.
     h.onDirectory?.({
       "agent-a": {
-        // persona (canonical) is UNCHANGED by rename (issue #219 D19) —
+        // persona (canonical) is UNCHANGED by rename (issue #209 D19) —
         // only display_name diverges from the stale AgentStates envelope.
         persona: { id: "agent-a", name: "あお", sprite_set: "agent-a" },
         display_name: "あお(改名)",

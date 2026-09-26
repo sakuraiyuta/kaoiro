@@ -8,7 +8,7 @@ import {
   loadBuildInfo,
 } from "../src/build_info.js";
 
-describe("loadBuildInfo (issue #228)", () => {
+describe("loadBuildInfo (issue #218)", () => {
   let tmpDir: string | undefined;
 
   afterEach(() => {
@@ -160,7 +160,7 @@ describe("loadBuildInfo (issue #228)", () => {
     expect(info).toEqual({ revision: "unknown", dirty: false, built_at: "unknown" });
   });
 
-  // issue #228 round 2 MF-3 (ふじ 差し戻し): revision は string 型だけで
+  // issue #218 round 2 MF-3 (ふじ 差し戻し): revision は string 型だけで
   // なく値域 (40 桁 lowercase hex または "unknown") も検証する — round 1
   // は typeof のみで、"abc" のような短すぎる/16進以外の文字列も
   // BuildInfo として受理していた。
@@ -192,7 +192,7 @@ describe("loadBuildInfo (issue #228)", () => {
     expect(info).toEqual({ revision: "unknown", dirty: false, built_at: "unknown" });
   });
 
-  // issue #228 round 3 MF-4 (ふじ 差し戻し): built_at is diagnostic-only,
+  // issue #218 round 3 MF-4 (ふじ 差し戻し): built_at is diagnostic-only,
   // but "diagnostic" does not mean "any string" — round 2 checked only
   // typeof === "string", letting "tomorrow" or "" through as a valid
   // built_at.
@@ -242,7 +242,7 @@ describe("loadBuildInfo (issue #228)", () => {
     });
   });
 
-  // issue #228 round 4 (ふじ 差し戻し): a shape-only regex checks DIGIT
+  // issue #218 round 4 (ふじ 差し戻し): a shape-only regex checks DIGIT
   // POSITIONS, not whether the date is calendrically real — "2026-99-99T
   // 99:99:99.999Z" matches `/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/`
   // syntactically but is not a value `toISOString()` could ever produce.
@@ -263,7 +263,7 @@ describe("loadBuildInfo (issue #228)", () => {
   });
 });
 
-describe("formatBuildRevision (issue #228)", () => {
+describe("formatBuildRevision (issue #218)", () => {
   it("clean な build はそのまま SHA を返す", () => {
     expect(
       formatBuildRevision({

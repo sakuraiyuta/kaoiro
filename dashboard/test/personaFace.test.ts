@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// PersonaFace.svelte (issue #245): shared sprite-or-CSS-face renderer
+// PersonaFace.svelte (issue #235): shared sprite-or-CSS-face renderer
 // extracted from 4 manual copies (App.svelte's agent-strip, AgentCard,
 // AgentDetail, ResponseTimeline). This is the direct contract test for
 // the shared component itself — the acceptance criterion "changing one

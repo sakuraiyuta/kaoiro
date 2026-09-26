@@ -225,7 +225,7 @@ describe("conversationEntries (実機検収 3)", () => {
     expect(entries).toHaveLength(2);
   });
 
-  it("行 identity は session を含み、server synthetic IA は recipient と conversation_id も含む (#132)", () => {
+  it("行 identity は session を含み、server synthetic IA は recipient と conversation_id も含む (#128)", () => {
     const env = {
       ...assistant("agent-a", "2026-07-23T14:00:00Z", "a"),
       seq: 7,
@@ -238,7 +238,7 @@ describe("conversationEntries (実機検収 3)", () => {
     const second = { ...first, payload: { ...first.payload!, to: "agent-b" } };
     expect(conversationEntryKey(first)).not.toBe(conversationEntryKey(second));
 
-    // #132: 同一 recipient のまま conversation_id だけ異なる場合(同一
+    // #128: 同一 recipient のまま conversation_id だけ異なる場合(同一
     // ペアが並行 conversation 中に片方が切断する実際のシナリオ)も、
     // recipient だけでは区別できないため conversation_id で区別する。
     const third = {

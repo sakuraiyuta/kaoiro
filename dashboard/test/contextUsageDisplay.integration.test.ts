@@ -119,7 +119,7 @@ describe("AgentDetail ctx row (ADR-0040 phase-21)", () => {
     expect(dd?.textContent).not.toContain("未対応");
   });
 
-  it("作業予算があれば token 分母と 100%超の予算比を併記する (#264)", async () => {
+  it("作業予算があれば token 分母と 100%超の予算比を併記する (#254)", async () => {
     const target = await render({
       session_capabilities: {
         supports_attachments: true,
@@ -146,7 +146,7 @@ describe("AgentDetail ctx row (ADR-0040 phase-21)", () => {
     expect(dd?.textContent).toContain("(150k/100k)");
   });
 
-  it("作業予算 0% を欠落扱いせず token 分母付きで表示する (#264)", async () => {
+  it("作業予算 0% を欠落扱いせず token 分母付きで表示する (#254)", async () => {
     const target = await render({
       session_capabilities: {
         supports_attachments: true,
@@ -168,7 +168,7 @@ describe("AgentDetail ctx row (ADR-0040 phase-21)", () => {
     expect(dd?.textContent).toContain("(0/120k)");
   });
 
-  it("不正な作業予算分母は隠し、生窓表示を壊さない (#264)", async () => {
+  it("不正な作業予算分母は隠し、生窓表示を壊さない (#254)", async () => {
     const target = await render({
       session_capabilities: {
         supports_attachments: true,

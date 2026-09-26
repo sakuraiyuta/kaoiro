@@ -1,4 +1,4 @@
-// scripts/build-identity.mjs (issue #228 round 2, ふじ MF-2/MF-5 差し戻し):
+// scripts/build-identity.mjs (issue #218 round 2, ふじ MF-2/MF-5 差し戻し):
 // the repo-level shared revision/dirty computation used by BOTH
 // runner/scripts/generate-build-info.mjs and the server build's
 // KAOIRO_BUILD_REVISION/KAOIRO_BUILD_DIRTY args. Exercised here against a
@@ -40,7 +40,7 @@ function createTaggedMainRepo(root: string, tag = "v2026.9.0"): void {
   git(["tag", tag], root);
 }
 
-describe("computeBuildIdentity (issue #228 round 2)", () => {
+describe("computeBuildIdentity (issue #218 round 2)", () => {
   let tmpDir: string | undefined;
 
   afterEach(() => {
@@ -134,9 +134,9 @@ describe("computeBuildIdentity (issue #228 round 2)", () => {
     expect(computeBuildIdentity(tmpDir).dirty).toBe(true);
   });
 
-  // issue #227 の実際の作業で untracked ファイルが tracked-only の dirty
+  // issue #217 の実際の作業で untracked ファイルが tracked-only の dirty
   // 判定をすり抜けた実例が、この untracked-counts-as-dirty 規約の根拠。
-  it("untracked ファイルも dirty: true として検出する (issue #227 の実例)", () => {
+  it("untracked ファイルも dirty: true として検出する (issue #217 の実例)", () => {
     tmpDir = mkdtempSync(join(tmpdir(), "kaoiro-build-identity-"));
     git(["init", "--quiet", "-b", "main"], tmpDir);
     writeFileSync(join(tmpDir, "VERSION"), "2026.9.0\n");
@@ -166,7 +166,7 @@ describe("computeBuildIdentity (issue #228 round 2)", () => {
   });
 });
 
-describe("formatIdentityString (issue #228 round 2)", () => {
+describe("formatIdentityString (issue #218 round 2)", () => {
   it("clean なら revision をそのまま返す", () => {
     expect(
       formatIdentityString({ revision: "0123456789abcdef0123456789abcdef01234567", dirty: false }),
@@ -191,7 +191,7 @@ describe("build-identity.mjs default CLI (issue #288)", () => {
   });
 });
 
-describe("build-identity.mjs --format <file> CLI (issue #228 round 2 MF-5)", () => {
+describe("build-identity.mjs --format <file> CLI (issue #218 round 2 MF-5)", () => {
   let tmpDir: string | undefined;
 
   afterEach(() => {
@@ -225,7 +225,7 @@ describe("build-identity.mjs --format <file> CLI (issue #228 round 2 MF-5)", () 
     expect(out.trim()).toBe("0123456789abcdef0123456789abcdef01234567-dirty");
   });
 
-  // issue #228 round 3 MF-3 (ふじ 差し戻し): round 2's --format skipped
+  // issue #218 round 3 MF-3 (ふじ 差し戻し): round 2's --format skipped
   // value-domain validation entirely. Reproduces the exact bug found —
   // `dirty` given as the STRING "false" (not the boolean) is truthy in JS,
   // so a naive `dirty ? ... : ...` appends "-dirty" even though the value
@@ -268,7 +268,7 @@ describe("build-identity.mjs --format <file> CLI (issue #228 round 2 MF-5)", () 
     expect(out.trim()).toBe("unknown");
   });
 
-  // issue #228 round 4 (ふじ 差し戻し): round 3 closed the revision/dirty
+  // issue #218 round 4 (ふじ 差し戻し): round 3 closed the revision/dirty
   // validation gap in --format but left built_at unvalidated — a file with
   // a VALID revision/dirty and a malformed built_at still passed straight
   // through, while the runner's own loadBuildInfo() (which validates the
@@ -293,7 +293,7 @@ describe("build-identity.mjs --format <file> CLI (issue #228 round 2 MF-5)", () 
     expect(out.trim()).toBe("unknown");
   });
 
-  // issue #228 round 4: round 3 wrapped the SHAPE check but left
+  // issue #218 round 4: round 3 wrapped the SHAPE check but left
   // `readFileSync`/`JSON.parse` uncaught — a missing file or corrupt JSON
   // crashed this CLI with a raw stack trace (exit 1) instead of degrading
   // like loadBuildInfo() does for the identical failure.
@@ -326,7 +326,7 @@ describe("build-identity.mjs --format <file> CLI (issue #228 round 2 MF-5)", () 
   // formatBuildRevision(loadBuildInfo(dir)) computes for the identical
   // file/directory — the two readers of the same build-info.json must
   // never disagree, whether the file is well-formed, partially malformed,
-  // corrupt, or missing (issue #228 round 4, ふじ 差し戻し: extends the
+  // corrupt, or missing (issue #218 round 4, ふじ 差し戻し: extends the
   // round-3 well-formed-only version of this pin to the 3 failure modes
   // she reproduced independently).
   describe.each([

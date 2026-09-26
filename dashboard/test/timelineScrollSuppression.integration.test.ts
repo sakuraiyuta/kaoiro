@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-// issue #237 review round 1 must-fix 1+2: `suppressBottomRevert`
+// issue #227 review round 1 must-fix 1+2: `suppressBottomRevert`
 // (AgentDetail.svelte) masks the ONE spurious "at the bottom" scroll event
 // CSS scroll anchoring produces right after ensureIndexVisible expands the
-// #184 render window for a pending timeline jump. This file pins the
+// #174 render window for a pending timeline jump. This file pins the
 // suppression CONTROLLER's timing/ownership contract with fake timers and
 // a controllable renderMermaidIn — deterministic, real-browser-independent
 // coverage for the class of races real CSS scroll anchoring is not needed
@@ -300,7 +300,7 @@ function installControllableRaf(): {
   };
 }
 
-describe("issue #237 review: suppressBottomRevert ownership (must-fix 1+2)", () => {
+describe("issue #227 review: suppressBottomRevert ownership (must-fix 1+2)", () => {
   it("must-fix 1: 先行 jump の failsafe が後続 jump(同一 agent 内)の保護を解除しない", async () => {
     stubScrollTo();
     installScrollGeometry();
@@ -742,7 +742,7 @@ describe("issue #237 review: suppressBottomRevert ownership (must-fix 1+2)", () 
     const logEl = target.querySelector(".log") as HTMLElement;
 
     // Jump on agent A (stickToBottom defaults true — the operator was
-    // pinned to the tail, the common starting state per issue #237's own
+    // pinned to the tail, the common starting state per issue #227's own
     // root-cause analysis). renderMermaidIn held pending.
     props.scrollToEntryKey = targetA;
     await tick();

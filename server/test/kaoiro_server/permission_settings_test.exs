@@ -8,7 +8,7 @@ defmodule KaoiroServer.PermissionSettingsTest do
 
   # Mirrors SessionPointers' isolation setup: a cross-BEAM-unique path so
   # concurrent `mix test` invocations never race the same DETS file
-  # (issue #187), plus a fresh table name per test.
+  # (issue #177), plus a fresh table name per test.
   setup do
     name = :"ps_#{System.unique_integer([:positive])}"
 

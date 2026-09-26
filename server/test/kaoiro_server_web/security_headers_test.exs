@@ -3,7 +3,7 @@ defmodule KaoiroServerWeb.SecurityHeadersTest do
 
   alias KaoiroServerWeb.SecurityHeaders
 
-  describe "レスポンスヘッダ (#155)" do
+  describe "レスポンスヘッダ (#145)" do
     test "静的配信にも 4 ヘッダが付く", %{conn: conn} do
       # favicon は Plug.Static が router より前で halt する経路。SPA の
       # index.html と同じ位置づけで、:browser pipeline には到達しない。
@@ -58,7 +58,7 @@ defmodule KaoiroServerWeb.SecurityHeadersTest do
     end
   end
 
-  # ふじ 2nd review must-fix (#155): TLS reverse proxy 配備では
+  # ふじ 2nd review must-fix (#145): TLS reverse proxy 配備では
   # rewrite_on: [:x_forwarded_proto] が scheme だけを書き換えるため、
   # conn は内部 port を持ったままになる。既存の connect_src/3 テストは
   # 正規化済み文字列を直接渡していて、この形を通していなかった。
@@ -147,7 +147,7 @@ defmodule KaoiroServerWeb.SecurityHeadersTest do
     ]
 
     test "リクエスト元と一致する 1 件だけを ws へ写す" do
-      # ふじ advisory (#155): check_origin は「socket を開いてよい発信元」、
+      # ふじ advisory (#145): check_origin は「socket を開いてよい発信元」、
       # connect-src は「このページが繋いでよい宛先」。全件写すと外部 host
       # 向けのページに ws://localhost:4000 が載る。
       assert SecurityHeaders.connect_src(

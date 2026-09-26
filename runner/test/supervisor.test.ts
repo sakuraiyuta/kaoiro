@@ -192,7 +192,7 @@ describe("parseSpawn / resolveWrapperConfig", () => {
       agent_id: "lab-pc-1.claude-a",
       persona: spawnMsg.persona,
       // spawnMsg omits display_name (legacy-server fixture) — falls back
-      // to persona.name (issue #219 MF-1 migration fallback).
+      // to persona.name (issue #209 MF-1 migration fallback).
       display_name: spawnMsg.persona.name,
       server_url: spawnMsg.server_url,
       server_token: "tok",
@@ -216,11 +216,11 @@ describe("parseSpawn / resolveWrapperConfig", () => {
     ).toMatchObject({ context_work_budget_percent: 60 });
   });
 
-  // issue #219 MF-1: display_name was dropped between server and wrapper —
+  // issue #209 MF-1: display_name was dropped between server and wrapper —
   // SpawnMessage/ParsedSpawn/parseSpawn/resolveWrapperConfig now carry it
   // through, with a one-time migration fallback for a legacy server that
   // predates the field.
-  describe("display_name (issue #219 MF-1)", () => {
+  describe("display_name (issue #209 MF-1)", () => {
     it("spawn の display_name を parseSpawn / resolveWrapperConfig で貫通する", () => {
       const parsed = parseSpawn({
         ...spawnMsg,
@@ -233,7 +233,7 @@ describe("parseSpawn / resolveWrapperConfig", () => {
         "ws://localhost:4000/wrapper",
       );
       // 意図的に canonical persona.name ("澪") と異なる値にした食い違い
-      // fixture (issue #219 D27方針) — display_name を persona.name に
+      // fixture (issue #209 D27方針) — display_name を persona.name に
       // つぶす conflation バグを検出できる。
       expect(config.display_name).toBe("澪(改名後)");
       expect(config.persona.name).toBe("澪");
@@ -763,7 +763,7 @@ describe("Supervisor resume (T3 / F4)", () => {
     });
   });
 
-  it("Codex の async T3 中は event handler を返し、完了後に起動する (#100)", async () => {
+  it("Codex の async T3 中は event handler を返し、完了後に起動する (#97)", async () => {
     const check = deferred<boolean>();
     const h = harness({ exists: check.promise });
 
@@ -943,7 +943,7 @@ describe("Supervisor.handleEnumerate", () => {
     expect(h.sessionsSent[0]).toMatchObject({ cwd: "/etc", sessions: [] });
   });
 
-  it("Codex の async 列挙は完了後に sessions を送る (#100)", async () => {
+  it("Codex の async 列挙は完了後に sessions を送る (#97)", async () => {
     const listing = deferred<SessionMeta[]>();
     const h = harness({ sessions: listing.promise });
 
@@ -1171,7 +1171,7 @@ describe("Supervisor.handleSwitchSession", () => {
     expect(h.configs.at(-1)!.max_approval).toBe("local");
   });
 
-  it("Codex の async T3 完了までは live child を止めず、成功後に切替える (#100)", async () => {
+  it("Codex の async T3 完了までは live child を止めず、成功後に切替える (#97)", async () => {
     let exists: boolean | Promise<boolean> = true;
     const children: FakeChild[] = [];
     const sup = new Supervisor({
@@ -1461,7 +1461,7 @@ describe("Supervisor.handleResetSession (ADR-0036 F2, phase-17 17-5)", () => {
     });
   });
 
-  it("SIGTERM に応答しない旧 wrapper は SIGKILL 後の exit だけで fresh を 1 回起動する (#258)", () => {
+  it("SIGTERM に応答しない旧 wrapper は SIGKILL 後の exit だけで fresh を 1 回起動する (#248)", () => {
     vi.useFakeTimers();
     const h = harness({ resetTerminationGraceMs: 25 });
     h.sup.handleSpawn(spawnMsg);
@@ -1482,7 +1482,7 @@ describe("Supervisor.handleResetSession (ADR-0036 F2, phase-17 17-5)", () => {
     ]);
   });
 
-  it("kill=false で exit callback を失った child は microtask で fresh 経路へ進める (#258)", async () => {
+  it("kill=false で exit callback を失った child は microtask で fresh 経路へ進める (#248)", async () => {
     const h = harness();
     h.sup.handleSpawn(spawnMsg);
     h.children[0]!.onKill = () => false;
@@ -1497,7 +1497,7 @@ describe("Supervisor.handleResetSession (ADR-0036 F2, phase-17 17-5)", () => {
     ]);
   });
 
-  it("SIGKILL 後も exit が来なければ fresh を二重起動せず timeout を返す (#258)", () => {
+  it("SIGKILL 後も exit が来なければ fresh を二重起動せず timeout を返す (#248)", () => {
     vi.useFakeTimers();
     const h = harness({ resetTerminationGraceMs: 25 });
     h.sup.handleSpawn(spawnMsg);
@@ -1516,7 +1516,7 @@ describe("Supervisor.handleResetSession (ADR-0036 F2, phase-17 17-5)", () => {
     ]);
   });
 
-  it("termination timeout 後の遅い旧 child exit は reset 前の resume を保って通常再起動する (#258)", () => {
+  it("termination timeout 後の遅い旧 child exit は reset 前の resume を保って通常再起動する (#248)", () => {
     vi.useFakeTimers();
     const h = harness({ exists: true, resetTerminationGraceMs: 25 });
     h.sup.handleSpawn({ ...spawnMsg, resume_session_id: "sess-old-xyz" });
@@ -2843,12 +2843,12 @@ describe("Supervisor P1 pair-aware apply integration (phase-23)", () => {
   });
 });
 
-// phase-27 (#160): the session-transition correlation id must survive every
+// phase-27 (#150): the session-transition correlation id must survive every
 // hop the runner owns — into the wrapper config, back out on spawn_result,
 // and across a switch's relaunch. The server matches a wrapper's join
 // against this id, so a dropped or stale value silently costs the agent its
 // activity metadata.
-describe("Supervisor — session transition 相関子 (#160)", () => {
+describe("Supervisor — session transition 相関子 (#150)", () => {
   const withId = { ...spawnMsg, request_id: "tr-spawn-1" };
 
   it("spawn 成功の result に request_id を echo する", () => {
@@ -2966,11 +2966,11 @@ describe("Supervisor — session transition 相関子 (#160)", () => {
   });
 });
 
-// phase-27 (#160) MF-R3: the fresh session a reset creates belongs to THAT
+// phase-27 (#150) MF-R3: the fresh session a reset creates belongs to THAT
 // reset, so its relaunch must carry the reset's request_id — the server
 // matches the fresh wrapper's join against the reset lock it holds, and an
 // inherited spawn id would read as a mismatch and suppress the metadata.
-describe("Supervisor.handleResetSession — transition 相関子 (#160)", () => {
+describe("Supervisor.handleResetSession — transition 相関子 (#150)", () => {
   it("fresh relaunch は reset の request_id を transition_id として運ぶ", () => {
     const h = harness();
     h.sup.handleSpawn({ ...spawnMsg, request_id: "tr-spawn-1" });

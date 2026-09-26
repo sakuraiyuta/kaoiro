@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// issue #245 fix-round (ふじ round1 must-fix, confidence 0.99): the
+// issue #235 fix-round (ふじ round1 must-fix, confidence 0.99): the
 // PersonaFace unit fixture (personaFace.test.ts) supplies all 6 props
 // itself, so it cannot catch a production caller wiring the WRONG preset
 // -- e.g. AgentCard.svelte passing size="timeline" instead of "card" is
@@ -8,7 +8,7 @@
 // PRODUCTION components (AgentCard / AgentDetail / ResponseTimeline) and
 // pins the actual props each one hands PersonaFace, via the resulting DOM
 // (`data-size` attribute + alt/role/aria-label matrix). Expected values
-// are the drift matrix recorded on issue #245
+// are the drift matrix recorded on issue #235
 // (https://github.com/sakuraiyuta/kaoiro/issues/235#issuecomment-5384491233).
 // App.svelte's agent-strip (size="chip") is covered separately in
 // appAgentStripPresetWiring.integration.test.ts (needs the connectKaoiro

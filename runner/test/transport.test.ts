@@ -11,7 +11,7 @@ import {
 
 const CHANNEL_TOPIC = "runner:dev-host";
 
-describe("受信 version の不一致検査 (ADR-0015 / issue #181)", () => {
+describe("受信 version の不一致検査 (ADR-0015 / issue #171)", () => {
   function capture(payload: unknown, event = "spawn"): string[] {
     const lines: string[] = [];
     warnOnVersionMismatch(event, payload, (line) => lines.push(line));
@@ -70,7 +70,7 @@ describe("受信 version の不一致検査 (ADR-0015 / issue #181)", () => {
 });
 
 describe("CONTROL_EVENT_BY_CALLBACK", () => {
-  // issue #181 の要求は「runner が受け取る全メッセージ」。checkが漏れる
+  // issue #171 の要求は「runner が受け取る全メッセージ」。checkが漏れる
   // 経路が生まれないよう、対応表そのものを固定する。
   it("server → runner の 7 コマンドを漏れなく対応づける", () => {
     expect(CONTROL_EVENT_BY_CALLBACK).toEqual({
@@ -193,7 +193,7 @@ describe("bindControlEvents", () => {
 
   // bindControlEvents 単体をいくら検証しても、受信口 (RunnerLink.#wire) が
   // それを通ることは担保されない。#wire に生の channel.on が 1 本増えれば
-  // その event は検査を素通りし、しかも全テストは緑のまま — issue #181 が
+  // その event は検査を素通りし、しかも全テストは緑のまま — issue #171 が
   // 潰そうとした形そのものが復活する。RunnerLink は constructor で
   // `new Socket` を直に組むので注入点が無く、代わりにソースを読んで
   // 「生 bind が無いこと」を固定する。変数名を変えられるとすり抜ける弱い

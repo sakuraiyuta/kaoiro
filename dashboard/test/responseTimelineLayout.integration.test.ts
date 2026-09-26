@@ -144,7 +144,7 @@ describe("response-timeline layout gate (operator-only, ADR-0012)", () => {
     expect(target.querySelector(".who-name")?.textContent).toContain("あお");
     expect(target.querySelector(".receiver")?.textContent).toContain("もも");
     // manifest: null なので spriteUrlFor は常に null → sprite-less
-    // fallback。issue #244 でこの fallback は絵文字から他3箇所と同じ
+    // fallback。issue #234 でこの fallback は絵文字から他3箇所と同じ
     // state 依存 CSS 顔 (.face) に変わった。
     expect(target.querySelector(".portrait-fallback")).toBeNull();
     expect(target.querySelector(".portrait .face")).not.toBeNull();
