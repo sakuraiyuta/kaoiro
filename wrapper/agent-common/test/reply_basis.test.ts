@@ -125,13 +125,13 @@ it("a queued call cannot borrow the next turn after waiting for the CID lock", a
   expect(sink).toHaveBeenCalledOnce();
 });
 
-it.each(["peer_reconnecting_capacity", "delivery_backlog", "unknown"])("waiter input can retry only a definite transient rejection: %s", async reason => {
+it.each(["peer_reconnecting_capacity", "delivery_backlog", "reply_basis_connection_changed", "unknown"])("waiter input can retry only a definite transient rejection: %s", async reason => {
   let count = 0;
   let tool!: InterAgentTool;
   tool = new InterAgentTool({ config, getState: () => "thinking", send: () => {}, replyBasisMode: () => "v1",
     sendInterAgent: async () => {
       if (++count === 1) { queueMicrotask(() => { void tool.receiveInbound(inbound(3)); }); return { kind: "accepted", stamp: null }; }
-      if (count === 2) return reason === "unknown" ? { kind: "unknown", reason: "ack_timeout" } : { kind: "rejected", reason };
+      if (count === 2) return reason === "unknown" ? { kind: "unknown", reason: "ack_timeout" } : { kind: "rejected", reason, ...(reason === "reply_basis_connection_changed" ? { send_not_attempted: true as const } : {}) };
       return { kind: "accepted", stamp: null };
     },
   });
@@ -143,6 +143,7 @@ it.each(["peer_reconnecting_capacity", "delivery_backlog", "unknown"])("waiter i
   const authorization = JSON.parse(first.content[0]!.text).reply_authorization;
   const rejected = await tool.invoke({ ...args, ...authorization }, context);
   if (reason === "unknown") { expect(JSON.stringify(rejected)).not.toContain("reply_authorization"); expect(count).toBe(2); return; }
+  expect(JSON.parse(rejected.content[0]!.text).send_not_attempted).toBe(reason === "reply_basis_connection_changed");
   const next = JSON.parse(rejected.content[0]!.text).reply_authorization;
   expect(next.reply_ticket).not.toBe(authorization.reply_ticket); handoffToolResult(rejected, () => {});
   expect((await tool.invoke({ ...args, ...next }, context)).isError).toBeUndefined(); expect(count).toBe(3);

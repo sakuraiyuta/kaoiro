@@ -539,6 +539,7 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
   let replySessionId: string | undefined;
   interAgent = new InterAgentTool({
     replyBasisMode: () => replyBasisMode,
+    replyBasisGeneration: () => link?.replyBasisGeneration?.(),
     waitReplyBasisMode: signal => link?.waitForReplyBasisMode?.(signal) ?? Promise.resolve(replyBasisMode),
     unreadCount: () => interAgentTurns.unreadCount(host.activeInterAgentTurnToken?.() ?? null),
     returnInput: (envelope, mode) => interAgentTurns.receive(envelope, mode),
@@ -552,8 +553,8 @@ export async function runClaudeCli(dependencies: ClaudeCliDependencies = {}): Pr
     send: (envelope) => link?.send(envelope),
     // ADR-0051 D3-2: `send_to_agent`'s result is the server's acceptance
     // ack, not the local push. No link yet means no server took it.
-    sendInterAgent: (envelope) =>
-      link?.sendInterAgent(envelope) ??
+    sendInterAgent: (envelope, generation) =>
+      link?.sendInterAgent(envelope, generation) ??
       Promise.resolve({ kind: "unknown" as const, reason: "not_connected" }),
     // Wired below once host + link are constructed; until then the tools
     // return error/fallback results, which is correct because the SDK

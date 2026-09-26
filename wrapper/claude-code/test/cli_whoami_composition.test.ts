@@ -160,3 +160,31 @@ describe("Claude CLI whoami composition (issue #254)", () => {
     expect(linkOptions.buildInfo).toEqual(buildInfo);
   });
 });
+
+it("actual Claude CLI forwards the live join generation to the acceptance sink", async () => {
+  let interAgent!: import("@kaoiro/agent-common").InterAgentTool;
+  let generation = 7;
+  const seen: Array<number | undefined> = [];
+  await runClaudeCli({
+    parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+    loadConfig: () => ({ ...config }),
+    createServerLink: (_url, _id, options) => {
+      queueMicrotask(() => { options.onReplyBasisMode?.("v1"); options.onPersonaPrompt?.("system prompt"); });
+      return { send() {}, close() {}, currentSessionId: () => null,
+        replyBasisGeneration: () => generation,
+        sendInterAgent: async (_envelope: unknown, bound?: number) => {
+          seen.push(bound); return { kind: "accepted", stamp: null };
+        },
+      } as never;
+    },
+    createHost: () => ({ state: "idle", statusExtSnapshot: () => ({}), run: async () => {} }) as never,
+    buildMcpServer: (actual, extras) => { interAgent = actual; return buildKaoiroMcpServer(actual, extras); },
+  });
+  interAgent.beginReplyInput("T");
+  const send = () => interAgent.invoke({ to: "peer", conversation_id: "cid", kind: "response", body: "reply" }, { origin: { token: "T" } });
+  expect((await send()).isError).toBeUndefined();
+  generation = 11;
+  expect((await send()).isError).toBeUndefined();
+  expect(seen).toEqual([7, 11]);
+  interAgent.endReplyInput("T");
+});

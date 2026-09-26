@@ -259,3 +259,37 @@ it("fences history before binding and after close, and rejects turns during a pe
   await rejected;
   await expect(read()).rejects.toThrow("closed");
 });
+
+it("real session resolver and ToolHost reject absent or old native turn IDs before a send sink", async () => {
+  const fixture = childFixture(); const listen = vi.spyOn(ToolHost, "listen");
+  const controller = new AbortController(); const sink = vi.fn();
+  const { InterAgentTool } = await import("@kaoiro/agent-common");
+  const ia = new InterAgentTool({ config: { agent_id: "self", persona: { id: "p", name: "P", sprite_set: "p" }, display_name: "P", server_url: "ws://localhost" },
+    getState: () => "thinking", send: sink, replyBasisMode: () => "v1" });
+  ia.beginReplyInput("T2", controller.signal);
+  const session = await AppServerSession.create({ tools: ia.descriptors(), turnSignal: () => controller.signal,
+    transport: { spawnChild: () => fixture.child } }); sessions.push(session);
+  await session.startThread();
+  await session.startTurn({ threadId: "thread", hostTurnToken: "T2", input: "new input" });
+  const host = await listen.mock.results[0]!.value as ToolHost;
+  const call = async (metadata: unknown) => {
+    const socket = createConnection(host.socketPath); socket.setEncoding("utf8");
+    try {
+      await once(socket, "connect");
+      const response = once(socket, "data");
+      socket.write(JSON.stringify({ id: 1, method: "call_tool", name: "send_to_agent", metadata,
+        input: { to: "peer", conversation_id: "cid", kind: "response", body: "reply" } }) + "\n");
+      return JSON.parse(String((await response)[0]));
+    } finally { socket.destroy(); }
+  };
+  const meta = (turn_id: string, thread_id = "thread") => ({ "x-codex-turn-metadata": { thread_id, turn_id } });
+  for (const metadata of [undefined, meta("old-T"), meta("turn", "foreign")]) {
+    expect(JSON.stringify(await call(metadata))).toContain("unbound_tool_call");
+    expect(sink).not.toHaveBeenCalled();
+  }
+  expect(JSON.stringify(await call(meta("turn")))).toContain("sent"); expect(sink).toHaveBeenCalledTimes(1);
+  controller.abort();
+  expect(JSON.stringify(await call(meta("turn")))).toMatch(/stale_tool_call|unbound_tool_call/);
+  expect(sink).toHaveBeenCalledTimes(1);
+  ia.endReplyInput("T2");
+});
