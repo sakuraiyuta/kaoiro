@@ -1,7 +1,7 @@
 ---
 title: Issue 405 — Compare Antigravity reset ceilings using effective network access
 description: Resolve false permission-ceiling refusals when an Antigravity sandbox determines effective network access, and make the recovery hint actionable.
-status: in_progress
+status: implemented
 last_updated: 2026-09-26
 issue: 405
 must_fix_rounds_used: 0
