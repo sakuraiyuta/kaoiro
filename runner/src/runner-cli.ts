@@ -267,6 +267,7 @@ export async function runRunnerCli(
     // Claude-only refresh's rebuilt register, so it does not regress to the
     // pinned snapshot.
     getAntigravityCatalog: () => antigravityCatalog,
+    getAntigravityCliVersion: () => antigravityVersion ?? undefined,
     updateRegister: (register) => link.updateRegister(register),
     sendCatalogResult: (result) => link.sendCatalogResult(result),
     buildInfo,
@@ -276,6 +277,7 @@ export async function runRunnerCli(
     ...(token === undefined || token === "" ? {} : { token }),
     register: buildRegister(
       config,
+      antigravityVersion ?? undefined,
       codexAuthMode,
       undefined,
       buildInfo,
@@ -378,6 +380,7 @@ export async function runRunnerCli(
     const claudeOverride = claudeCatalog.getStale() ?? undefined;
     const nextRegister = buildRegister(
       next,
+      nextAntigravityVersion ?? undefined,
       codexAuthMode,
       claudeOverride,
       buildInfo,

@@ -1729,6 +1729,35 @@ describe("parseHosts (#22)", () => {
     ]);
   });
 
+  it("Antigravity CLI version は UTF-8 byte cap 内だけ保持する", () => {
+    const atLimit = "界".repeat(85) + "a";
+    const overLimit = "界".repeat(85) + "ab";
+    expect(new TextEncoder().encode(atLimit).byteLength).toBe(256);
+    expect(new TextEncoder().encode(overLimit).byteLength).toBe(257);
+
+    const hosts = parseHosts({
+      accepted: {
+        personas: [mio],
+        cwd_allowlist: ["/p"],
+        antigravity_cli_version: atLimit,
+      },
+      over_limit: {
+        personas: [mio],
+        cwd_allowlist: ["/p"],
+        antigravity_cli_version: overLimit,
+      },
+      malformed: {
+        personas: [mio],
+        cwd_allowlist: ["/p"],
+        antigravity_cli_version: "agy\nversion",
+      },
+    });
+
+    expect(hosts[0]?.antigravity_cli_version).toBe(atLimit);
+    expect("antigravity_cli_version" in hosts[1]!).toBe(false);
+    expect("antigravity_cli_version" in hosts[2]!).toBe(false);
+  });
+
   it("personas / cwd_allowlist が欠けるエントリは捨てる", () => {
     expect(
       parseHosts({

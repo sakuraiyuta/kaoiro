@@ -572,6 +572,12 @@
         </select>
       </label>
 
+      {#if host?.capabilities?.includes("antigravity")}
+        <p class="antigravity-cli-version" role="status">
+          Antigravity CLI version: {host.antigravity_cli_version ?? "not reported"}
+        </p>
+      {/if}
+
       {#if buildRevisionWarning}
         <p class="build-revision-warning" role="status">
           ⚠ {buildRevisionWarning}

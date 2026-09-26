@@ -126,6 +126,7 @@ defmodule KaoiroServer.HostRegistry do
         build_dirty: Map.get(attrs, :build_dirty),
         build_version: Map.get(attrs, :build_version),
         build_channel: Map.get(attrs, :build_channel),
+        antigravity_cli_version: Map.get(attrs, :antigravity_cli_version),
         runner_pid: runner_pid,
         registered_at: now,
         last_heartbeat: now
@@ -193,9 +194,15 @@ defmodule KaoiroServer.HostRegistry do
   # `:personas` list is what operators see, and Jason cannot encode a
   # tuple, so leaking `:policy` here crashes the `hosts` channel push.
   defp public_entry(entry, pool) do
-    entry
-    |> Map.drop([:runner_pid, :policy])
-    |> Map.put(:personas, apply_policy(entry.policy, pool))
+    public =
+      entry
+      |> Map.drop([:runner_pid, :policy, :antigravity_cli_version])
+      |> Map.put(:personas, apply_policy(entry.policy, pool))
+
+    case entry.antigravity_cli_version do
+      version when is_binary(version) -> Map.put(public, :antigravity_cli_version, version)
+      _ -> public
+    end
   end
 
   # Reduce the server-authoritative persona pool to the set the host's

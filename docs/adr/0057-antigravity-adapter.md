@@ -685,8 +685,14 @@ covered the next time an epoch actually spawns on the new binary. A
 long-lived epoch keeps running its already-verified old binary until
 then -- not a gap, since that binary's gate registration was already
 confirmed before this epoch started (issue #387, director-approved design).
-Server/dashboard visibility of the reported version is a separate issue
-(#410) -- see the phase-34 plan's B8 row.
+Issue #410 carries the validated `agy --version` value as the optional
+`antigravity_cli_version` field on runner `register`, including register
+updates after config reload and catalog refresh. The server keeps it with the
+live host entry and includes it in the operator-only `hosts` snapshot; it is
+not persisted across server restarts. The dashboard validates the UTF-8 byte
+limit and shows the selected Antigravity host's value or “not reported”.
+Invalid optional values are dropped without rejecting an otherwise valid
+register.
 
 ### F7 — Session capabilities in Stage A
 

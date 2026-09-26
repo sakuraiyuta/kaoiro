@@ -41,6 +41,8 @@ defmodule KaoiroServerWeb.RunnerChannel do
   @max_engine_id_bytes 64
   @max_engine_model_value_bytes 256
   @max_engine_model_display_name_bytes 256
+  @max_antigravity_cli_version_bytes 256
+  @antigravity_cli_version_control_chars ~r/[\x00-\x1F\x7F]/u
 
   @impl true
   def join("runner:" <> host_id, _params, socket) do
@@ -244,12 +246,31 @@ defmodule KaoiroServerWeb.RunnerChannel do
         %{policy: policy, cwd_allowlist: cwd_allowlist}
         |> Map.merge(capabilities)
         |> Map.merge(build_info)
+        |> Map.merge(antigravity_cli_version_attrs(payload))
 
       {:ok, attrs}
     end
   end
 
   defp parse_register(_payload), do: {:error, :invalid_register}
+
+  defp antigravity_cli_version_attrs(payload) do
+    case Map.fetch(payload, "antigravity_cli_version") do
+      {:ok, version} when is_binary(version) ->
+        if valid_antigravity_cli_version?(version),
+          do: %{antigravity_cli_version: version},
+          else: %{}
+
+      _ ->
+        %{}
+    end
+  end
+
+  defp valid_antigravity_cli_version?(version) do
+    byte_size(version) in 1..@max_antigravity_cli_version_bytes and
+      String.valid?(version) and
+      not Regex.match?(@antigravity_cli_version_control_chars, version)
+  end
 
   # ADR-0031: exactly one of `allowed_personas` (allowlist by id) or
   # `blocked_personas` (blocklist by id) may be set; absent = accept-all.

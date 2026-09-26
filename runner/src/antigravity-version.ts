@@ -12,6 +12,22 @@ import {
 
 export type RunAgyVersion = (path: string, timeoutMs: number) => Promise<string>;
 
+const MAX_AGY_VERSION_BYTES = 256;
+const AGY_VERSION_CONTROL_CHARS = /[\u0000-\u001f\u007f]/u;
+
+export function normalizeAgyCliVersion(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const version = value.trim();
+  if (
+    version === "" ||
+    AGY_VERSION_CONTROL_CHARS.test(version) ||
+    new TextEncoder().encode(version).byteLength > MAX_AGY_VERSION_BYTES
+  ) {
+    return undefined;
+  }
+  return version;
+}
+
 /** issue #387 review must-fix S2: `execFile`'s own `timeout` option only
  *  SENDS `killSignal` (default SIGTERM) when the deadline passes -- if the
  *  child ignores it, the child process never exits, so execFile's callback

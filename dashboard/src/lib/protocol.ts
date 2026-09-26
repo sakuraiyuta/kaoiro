@@ -2264,6 +2264,15 @@ function isValidBuildChannel(value: unknown): value is "dev" | "release" {
   return value === "dev" || value === "release";
 }
 
+function isValidAntigravityCliVersion(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value !== "" &&
+    !/[\u0000-\u001f\u007f]/u.test(value) &&
+    new TextEncoder().encode(value).byteLength <= 256
+  );
+}
+
 function isConsistentBuildIdentity(
   revision: string,
   dirty: boolean,
@@ -2378,6 +2387,9 @@ export interface HostInfo {
    *  Optional as a pair for pre-#288 runner compatibility. */
   build_version?: string;
   build_channel?: "dev" | "release";
+  /** Current `agy --version` output; absent for older runners or failed
+   *  probes. Informational only. */
+  antigravity_cli_version?: string;
 }
 
 /** Operator launch request (案A, ADR-0024). The client sends only these; the
@@ -3054,6 +3066,9 @@ export function parseHosts(value: unknown): HostInfo[] {
         isValidBuildRevision(e.build_revision) && typeof e.build_dirty === "boolean";
       const validVersionPair =
         isValidBuildVersion(e.build_version) && isValidBuildChannel(e.build_channel);
+      const validAntigravityCliVersion = isValidAntigravityCliVersion(
+        e.antigravity_cli_version,
+      );
       const validCompleteIdentity =
         validRevisionPair &&
         validVersionPair &&
@@ -3101,6 +3116,9 @@ export function parseHosts(value: unknown): HostInfo[] {
               build_version: e.build_version,
               build_channel: e.build_channel,
             }
+          : {}),
+        ...(validAntigravityCliVersion
+          ? { antigravity_cli_version: e.antigravity_cli_version }
           : {}),
       });
     }

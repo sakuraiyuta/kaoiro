@@ -96,7 +96,7 @@ describe("parseRunnerConfig", () => {
         description: "",
       },
     ];
-    const reg = buildRegister(cfg, "unknown", override);
+    const reg = buildRegister(cfg, undefined, "unknown", override);
     const claude = reg.engines?.find((e) => e.id === "claude-code");
     expect(claude?.models).toEqual(override);
   });
@@ -106,14 +106,14 @@ describe("parseRunnerConfig", () => {
       ...valid,
       capabilities: ["claude-code"],
     });
-    const reg = buildRegister(cfg, "unknown");
+    const reg = buildRegister(cfg, undefined, "unknown");
     const claude = reg.engines?.find((e) => e.id === "claude-code");
     // ADR-0037 F1 で BOOTSTRAP は default 1 エントリのみ
     expect(claude?.models.map((m) => m.value)).toEqual(["default"]);
   });
 
   it("buildRegister default composition stays within register field caps", () => {
-    const register = buildRegister(parseRunnerConfig(valid));
+    const register = buildRegister(parseRunnerConfig(valid), undefined);
 
     expectRegisterFieldsWithinProtocolCaps(register);
   });
@@ -123,7 +123,7 @@ describe("parseRunnerConfig", () => {
       ...valid,
       codex: { auth_mode: "apikey" },
     });
-    const register = buildRegister(config, "apikey");
+    const register = buildRegister(config, undefined, "apikey");
     const codex = register.engines?.find((engine) => engine.id === "codex");
 
     expect(codex).toBeDefined();
@@ -378,7 +378,7 @@ describe("parseRunnerConfig", () => {
           ],
         },
       });
-      const register = buildRegister(config, "apikey");
+      const register = buildRegister(config, undefined, "apikey");
       const codex = register.engines?.find((engine) => engine.id === "codex");
       expect(codex?.models.map((model) => model.value)).not.toContain(
         "requires-newer-codex",
@@ -403,7 +403,7 @@ describe("parseRunnerConfig", () => {
           extra_models: [{ value: "operator-responsibility-model" }],
         },
       });
-      const register = buildRegister(config, "apikey");
+      const register = buildRegister(config, undefined, "apikey");
       const codex = register.engines?.find((engine) => engine.id === "codex");
       expect(codex?.models.map((model) => model.value)).toContain(
         "operator-responsibility-model",
@@ -715,7 +715,7 @@ describe("parseRunnerConfig", () => {
 
 describe("buildRegister", () => {
   it("accept-all の config はどのポリシー欄も含めず、既定 capabilities/engines を持つ", () => {
-    const register = buildRegister(parseRunnerConfig(valid));
+    const register = buildRegister(parseRunnerConfig(valid), undefined);
     expect(register).toMatchObject({
       version: "0",
       host_id: "lab-pc-1",
@@ -764,7 +764,7 @@ describe("buildRegister", () => {
       ...valid,
       allowed_personas: ["ao", "kuroe"],
     });
-    expect(buildRegister(config).allowed_personas).toEqual(["ao", "kuroe"]);
+    expect(buildRegister(config, undefined).allowed_personas).toEqual(["ao", "kuroe"]);
   });
 
   it("検出auth modeと申告planからCodex catalogを解決する", () => {
@@ -772,7 +772,7 @@ describe("buildRegister", () => {
       ...valid,
       codex: { chatgpt_plan: "plus" },
     });
-    const codex = buildRegister(config, "chatgpt").engines?.find(
+    const codex = buildRegister(config, undefined, "chatgpt").engines?.find(
       (engine) => engine.id === "codex",
     );
     expect(codex?.models.map((model) => model.value)).toEqual([
@@ -798,7 +798,7 @@ describe("buildRegister", () => {
         ],
       },
     });
-    const codex = buildRegister(config, "chatgpt").engines?.find(
+    const codex = buildRegister(config, undefined, "chatgpt").engines?.find(
       (engine) => engine.id === "codex",
     );
     expect(codex?.models.map((model) => model.value)).toEqual([
@@ -828,7 +828,7 @@ describe("buildRegister", () => {
         ],
       },
     });
-    const antigravity = buildRegister(config).engines?.find(
+    const antigravity = buildRegister(config, undefined).engines?.find(
       (engine) => engine.id === "antigravity",
     );
     expect(antigravity?.models.map((model) => model.value)).toEqual([
@@ -858,6 +858,7 @@ describe("buildRegister", () => {
     });
     const antigravity = buildRegister(
       config,
+      undefined,
       "unknown",
       undefined,
       undefined,
@@ -874,12 +875,12 @@ describe("buildRegister", () => {
       ...valid,
       blocked_personas: ["fuji"],
     });
-    expect(buildRegister(config).blocked_personas).toEqual(["fuji"]);
+    expect(buildRegister(config, undefined).blocked_personas).toEqual(["fuji"]);
   });
 
   it("capabilities があれば含める (旧値 claude は claude-code に正規化)", () => {
     const config = parseRunnerConfig({ ...valid, capabilities: ["claude"] });
-    const register = buildRegister(config);
+    const register = buildRegister(config, undefined);
     expect(register.capabilities).toEqual(["claude-code"]);
     // codex を宣言しない host の engines に codex は載らない
     expect(register.engines?.map((e) => e.id)).toEqual(["claude-code"]);
@@ -891,7 +892,7 @@ describe("buildRegister", () => {
   // 形のまま — フィールド自体が現れない。
   it("buildInfo を渡すと build_revision/build_dirty が register に載る", () => {
     const config = parseRunnerConfig(valid);
-    const register = buildRegister(config, "unknown", undefined, {
+    const register = buildRegister(config, undefined, "unknown", undefined, {
       revision: "abc123def456",
       dirty: false,
       built_at: "2026-08-12T00:00:00.000Z",
@@ -902,7 +903,7 @@ describe("buildRegister", () => {
 
   it("buildInfo の version/channel も register に載る", () => {
     const config = parseRunnerConfig(valid);
-    const register = buildRegister(config, "unknown", undefined, {
+    const register = buildRegister(config, undefined, "unknown", undefined, {
       revision: "0123456789abcdef0123456789abcdef01234567",
       dirty: false,
       built_at: "2026-08-12T00:00:00.000Z",
@@ -915,7 +916,7 @@ describe("buildRegister", () => {
 
   it("release の矛盾した buildInfo は unknown/dev に fail-soft する", () => {
     const config = parseRunnerConfig(valid);
-    const register = buildRegister(config, "unknown", undefined, {
+    const register = buildRegister(config, undefined, "unknown", undefined, {
       revision: "unknown",
       dirty: true,
       built_at: "2026-08-12T00:00:00.000Z",
@@ -930,7 +931,7 @@ describe("buildRegister", () => {
 
   it("dirty な buildInfo は build_dirty=true として載る", () => {
     const config = parseRunnerConfig(valid);
-    const register = buildRegister(config, "unknown", undefined, {
+    const register = buildRegister(config, undefined, "unknown", undefined, {
       revision: "abc123def456",
       dirty: true,
       built_at: "2026-08-12T00:00:00.000Z",
@@ -940,7 +941,7 @@ describe("buildRegister", () => {
 
   it("buildInfo を渡さなければ build_revision/build_dirty は現れない", () => {
     const config = parseRunnerConfig(valid);
-    const register = buildRegister(config);
+    const register = buildRegister(config, undefined);
     expect(register.build_revision).toBeUndefined();
     expect(register.build_dirty).toBeUndefined();
     expect("build_revision" in register).toBe(false);
