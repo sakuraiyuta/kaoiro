@@ -76,15 +76,33 @@ function spawnPayload(agentId: string): Record<string, unknown> {
   };
 }
 
-async function wrapperConfigPath(agentId: string): Promise<string> {
+async function wrapperConfigPath(
+  agentId: string,
+  searchRoot = tmpdir(),
+  beforeCandidateRead?: (base: string) => void,
+  readCandidate: (base: string) => string[] = (base) => readdirSync(base),
+): Promise<string> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    for (const dir of readdirSync(tmpdir(), { withFileTypes: true })) {
+    for (const dir of readdirSync(searchRoot, { withFileTypes: true })) {
       if (!dir.isDirectory() || !dir.name.startsWith("kaoiro-runner-"))
         continue;
-      const base = join(tmpdir(), dir.name);
-      const filename = readdirSync(base).find(
-        (name) => name.startsWith(`${agentId}-`) && name.endsWith(".json"),
-      );
+      const base = join(searchRoot, dir.name);
+      let filename: string | undefined;
+      try {
+        beforeCandidateRead?.(base);
+        filename = readCandidate(base).find(
+          (name) => name.startsWith(`${agentId}-`) && name.endsWith(".json"),
+        );
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          "code" in error &&
+          error.code === "ENOENT"
+        ) {
+          continue;
+        }
+        throw error;
+      }
       if (filename !== undefined) return join(base, filename);
     }
     await new Promise((resolve) => setTimeout(resolve, 5));
@@ -343,6 +361,59 @@ describe("runner CLI Antigravity config wiring", () => {
       antigravity_cli_path: secondExecutable,
     });
     runtime!.close();
+  });
+
+  it("finds a wrapper config in a stable test-owned scan root", async () => {
+    root = mkdtempSync(join(tmpdir(), "hiiro413-wrapper-scan-"));
+    const agentId = "runner-fixture.antigravity-stable";
+    const candidate = mkdtempSync(join(root, "kaoiro-runner-stable-"));
+    const configPath = join(candidate, `${agentId}-0.json`);
+    writeFileSync(configPath, "{}");
+
+    await expect(wrapperConfigPath(agentId, root)).resolves.toBe(configPath);
+  });
+
+  it("skips a wrapper temp dir removed after listing it", async () => {
+    root = mkdtempSync(join(tmpdir(), "hiiro413-wrapper-scan-"));
+    const agentId = "runner-fixture.antigravity-race";
+    const candidates = [
+      mkdtempSync(join(root, "kaoiro-runner-first-")),
+      mkdtempSync(join(root, "kaoiro-runner-second-")),
+    ];
+    const filename = `${agentId}-0.json`;
+    for (const candidate of candidates) {
+      writeFileSync(join(candidate, filename), "{}");
+    }
+
+    let removed: string | undefined;
+    const configPath = await wrapperConfigPath(agentId, root, (candidate) => {
+      if (removed !== undefined) return;
+      removed = candidate;
+      rmSync(candidate, { recursive: true });
+    });
+
+    const surviving = candidates.find((candidate) => candidate !== removed);
+    expect(removed).toBeDefined();
+    expect(configPath).toBe(join(surviving!, filename));
+  });
+
+  it("propagates non-ENOENT wrapper config read errors", async () => {
+    root = mkdtempSync(join(tmpdir(), "hiiro413-wrapper-scan-"));
+    mkdtempSync(join(root, "kaoiro-runner-error-"));
+    const readError = Object.assign(new Error("permission denied"), {
+      code: "EACCES",
+    });
+
+    await expect(
+      wrapperConfigPath(
+        "runner-fixture.antigravity-error",
+        root,
+        undefined,
+        () => {
+          throw readError;
+        },
+      ),
+    ).rejects.toBe(readError);
   });
 
   it("writes the initial and reloaded config-file selections through the default launcher", async () => {
