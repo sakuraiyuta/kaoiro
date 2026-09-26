@@ -2479,7 +2479,9 @@ function peerErrorResult(
 
 function localReplyError(code: string): InterAgentToolResult {
   return { isError: true, content: [{ type: "text", text: JSON.stringify({ error: code, send_not_attempted: true,
-    guidance: code === "invalid_reply_ticket" || code === "reply_ticket_required"
+    guidance: code === "reply_basis_closed"
+      ? "The server channel is closed. A new wrapper connection is required before sending again."
+      : code === "invalid_reply_ticket" || code === "reply_ticket_required"
       ? "Copy both fields from the original reply_authorization; an unspent, unexpired ticket can be retried."
       : "Spent or expired authorization cannot be reused; use a fresh authorization or the next input turn." }) }] };
 }

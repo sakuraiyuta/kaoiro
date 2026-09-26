@@ -49,6 +49,7 @@ async function noSend(w: ReturnType<typeof waiting>, code: string) {
   for (const result of [await w.first, await w.queued]) {
     const body = JSON.parse(result.content[0]!.text);
     expect(body).toMatchObject({ error: code, send_not_attempted: true });
+    if (code === "reply_basis_closed") expect(body.guidance).toContain("A new wrapper connection is required");
   }
 }
 
