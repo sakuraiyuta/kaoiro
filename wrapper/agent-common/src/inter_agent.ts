@@ -2499,7 +2499,7 @@ function localReplyError(code: string): InterAgentToolResult {
       : code === "stale_tool_call"
       ? "The input that owned this tool call has ended or been cancelled. No message was sent. Do not retry this call; send from a new live wrapper-delivered input."
       : code === "admission_fail_stop"
-      ? "The host stopped admission after an ambiguous SDK result. No message was sent. Ask the operator to terminate the wrapper and restore it after disconnection."
+      ? "The host stopped admission. No message was sent. Ask the operator to terminate the wrapper and restore it after disconnection."
       : "Spent or expired authorization cannot be reused; use a fresh authorization or the next input turn." }) }] };
 }
 

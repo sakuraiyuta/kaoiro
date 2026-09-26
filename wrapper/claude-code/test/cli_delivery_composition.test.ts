@@ -32,6 +32,52 @@ function inboundEnvelope(deliverySeq: number, turnNumber = 1): Envelope {
 }
 
 describe("Claude CLI delivery composition (issue #247)", () => {
+  it("connects a real Host watchdog fail-stop to the CLI send decision", async () => {
+    const outbound: Envelope[] = [];
+    const states: string[] = [];
+    let tool!: InterAgentTool;
+    let host!: AgentHost;
+    let linkOptions!: Record<string, any>;
+    const running = runClaudeCli({
+      parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
+      loadConfig: () => ({ ...config }),
+      buildMcpServer: interAgent => { tool = interAgent; return {} as never; },
+      createServerLink: (_url, _agentId, options) => {
+        linkOptions = options as unknown as Record<string, any>;
+        queueMicrotask(() => { linkOptions.onReplyBasisMode("v1"); linkOptions.onPersonaPrompt("system prompt"); });
+        return {
+          sendInterAgent: async (envelope: Envelope) => { outbound.push(envelope); return { kind: "accepted", stamp: null }; },
+          send: (envelope: Envelope) => { if (envelope.type === "state_change") states.push(envelope.state); },
+          close: () => {}, currentSessionId: () => null,
+          acknowledgeInterAgentDelivery: () => {},
+          retireInterAgentDeliveries: () => true,
+          flushInterAgentRetirements: async () => {},
+          reportDisconnectIntent: async () => true,
+        } as never;
+      },
+      createHost: (cfg, options) => {
+        host = new AgentHost(cfg, options);
+        host.probeRateLimits = async () => {};
+        return host;
+      },
+    });
+    try {
+      await vi.waitFor(() => expect(host).toBeDefined());
+      tool.beginReplyInput("valid-token", undefined, true);
+      const args = { to: "peer.agent", kind: "request" as const, body: "before stop" };
+      expect((await tool.invoke(args, { origin: { token: "valid-token" } })).isError).toBeUndefined();
+      expect(host.failStopForWatchdogAttributionUnknown()).toBe(true);
+      expect(host.state).toBe("error");
+      const after = await tool.invoke({ ...args, body: "after stop" }, { origin: { token: "valid-token" } });
+      expect(JSON.parse(after.content[0]!.text)).toMatchObject({ error: "admission_fail_stop", send_not_attempted: true });
+      expect(outbound).toHaveLength(1);
+      expect(states).toContain("error");
+    } finally {
+      host?.close();
+      await running;
+    }
+  });
+
   it("freezes later peer dispatch after an unattributable notification result", async () => {
     const sentTokens: string[] = [];
     const outbound: Envelope[] = [];

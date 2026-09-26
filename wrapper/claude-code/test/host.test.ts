@@ -4710,6 +4710,47 @@ describe("AgentHost — SDK notification reply origin", () => {
     expect(await childOrigin).toBeUndefined();
   });
 
+  it.each([
+    { shape: "omitted", outputFile: "", admitted: true },
+    { shape: "exact", outputFile: "<output-file>/tmp/task-1</output-file>", admitted: true },
+    { shape: "different path", outputFile: "<output-file>/tmp/other</output-file>", admitted: false },
+    { shape: "empty", outputFile: "<output-file></output-file>", admitted: false },
+    { shape: "duplicate", outputFile: "<output-file>/tmp/task-1</output-file><output-file>/tmp/task-1</output-file>", admitted: false },
+    { shape: "malformed", outputFile: "<output-file>/tmp/task-1", admitted: false },
+    { shape: "missing SDK path", outputFile: "", frameOutputFile: "", admitted: false },
+    { shape: "different session", outputFile: "", hookSession: "s2", admitted: false },
+    { shape: "different parent tool", outputFile: "", hookToolUseId: "other", admitted: false },
+  ])("matches Agent notification output-file shape: $shape", async ({ outputFile, frameOutputFile, hookSession, hookToolUseId, admitted }) => {
+    const starts: string[] = [];
+    let bound: Promise<unknown> | undefined;
+    const signal = { signal: new AbortController().signal };
+    const queryFn = makeQueryFn(({ prompt, options }) => {
+      async function* gen(): AsyncGenerator<SDKMessage, void> {
+        await prompt[Symbol.asyncIterator]().next();
+        yield msg({ type: "system", subtype: "init", session_id: "s1" });
+        yield msg({ type: "system", subtype: "task_started", session_id: "s1", task_id: "task-1", task_type: "local_agent", is_backgrounded: true });
+        yield result("success", { result: "WAITING" });
+        yield msg({ type: "system", subtype: "task_notification", session_id: "s1", task_id: "task-1", tool_use_id: "parent-1", status: "completed", output_file: frameOutputFile ?? "/tmp/task-1", summary: "done" });
+        await options.hooks!.UserPromptSubmit!.at(-1)!.hooks[0]!({
+          hook_event_name: "UserPromptSubmit", session_id: hookSession ?? "s1", prompt_id: "notification",
+          prompt: `<task-notification><task-id>task-1</task-id><tool-use-id>${hookToolUseId ?? "parent-1"}</tool-use-id>${outputFile}<status>completed</status><summary>Agent finished</summary><result>done</result></task-notification>`,
+        } as never, undefined, signal);
+        await options.hooks!.PreToolUse!.at(-1)!.hooks[0]!({
+          hook_event_name: "PreToolUse", session_id: hookSession ?? "s1", prompt_id: "notification",
+          tool_name: INTER_AGENT_TOOL_FQN, tool_use_id: "root-call",
+        } as never, "root-call", signal);
+        bound = host.toolOrigins.resolveBound("root-call");
+        yield result("success", { result: "done", origin: { kind: "task-notification" } });
+      }
+      return asQuery(gen());
+    });
+    const host = new AgentHost(config, { onState: () => {}, queryFn, onTurnStart: ({ turnToken }) => starts.push(turnToken) });
+    await host.run("launch");
+    host.close();
+    expect(starts).toHaveLength(admitted ? 2 : 1);
+    expect((await bound as { token?: string } | undefined)?.token).toBe(admitted ? starts[1] : undefined);
+  });
+
   it("does not let a late notification result retire an already yielded wrapper input", async () => {
     const starts: string[] = [];
     const ends: string[] = [];

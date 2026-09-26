@@ -81,7 +81,7 @@ into subagent/workflow notifications ([tasks](../protocol/tasks.md),
 |---|---|
 | task_started | task_id, description, subagent_type, task_type, workflow_name, tool_use_id, skip_transcript, **prompt** (undocumented; unwired) |
 | task_progress | subagent_type, usage{total_tokens,tool_uses,duration_ms}, last_tool_name, summary |
-| task_notification | status(completed/failed/stopped), summary, usage, **output_file** (undocumented; unwired) |
+| task_notification | status(completed/failed/stopped), summary, usage, **output_file** (undocumented; used for origin correlation, not emitted on the task envelope) |
 | task_updated (**undocumented; out of scope**) | task_id, status(pending/running/completed/failed/killed/paused — broader than F3's four values) |
 
 `task_started.prompt` (the complete instruction to the started subagent) and
@@ -109,6 +109,11 @@ subagent call, retired prompt ID, or unmatched result cannot borrow the newest
 wrapper turn. Notification candidates received during a live turn are retained
 until its terminal boundary; unmatched candidates release the next-input
 barrier after a bounded 10-second wait.
+For an Agent notification, the hook may strictly omit `<output-file>` or carry
+the exact path from its SDK `task_notification` frame. Either form requires the
+known one-use background-task candidate, matching session, task and parent tool
+IDs, status, and SDK summary in `<result>`. A present but empty, duplicated,
+malformed, or mismatched path is rejected; it is never treated as omission.
 If a different notification prompt is rejected while a wrapper turn is live,
 an originless result cannot prove which prompt ended. The host stops admission
 and revokes inter-agent send authority while keeping the wrapper owner until

@@ -611,23 +611,42 @@ interface NotificationCandidate {
   timeout: ReturnType<typeof setTimeout> | null;
 }
 
-function parseNotificationPrompt(prompt: string): Array<{ taskId: string; toolUseId?: string; status: string; outputFile?: string; summary?: string; result?: string }> | null {
+interface ParsedNotification {
+  taskId: string;
+  toolUseId?: string;
+  status: string;
+  outputFile?: string;
+  outputFilePresent: boolean;
+  summary?: string;
+  result?: string;
+}
+
+function parseNotificationPrompt(prompt: string): ParsedNotification[] | null {
   const blocks = [...prompt.matchAll(/<task-notification>([\s\S]*?)<\/task-notification>/g)];
   if (blocks.length === 0 || blocks.length > 16 || prompt.replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "").trim()) return null;
   const field = (body: string, name: string): string | undefined => {
     const matches = [...body.matchAll(new RegExp(`<${name}>([\\s\\S]*?)<\\/${name}>`, "g"))];
     return matches.length === 1 ? matches[0]![1] : undefined;
   };
-  const parsed = blocks.map(([, body]) => ({
-    taskId: field(body!, "task-id"),
-    toolUseId: field(body!, "tool-use-id"),
-    status: field(body!, "status"),
-    outputFile: field(body!, "output-file"),
-    summary: field(body!, "summary"),
-    result: field(body!, "result"),
-  }));
-  if (parsed.some((item) => !item.taskId || !item.status)) return null;
-  return parsed as Array<{ taskId: string; toolUseId?: string; status: string; outputFile?: string; summary?: string; result?: string }>;
+  const parsed = blocks.map(([, body]) => {
+    const outputFileTags = [...body!.matchAll(/<\s*\/?\s*output-file\b/gi)];
+    const outputFileMatches = [...body!.matchAll(/<output-file>([\s\S]*?)<\/output-file>/g)];
+    const outputFilePresent = outputFileTags.length > 0;
+    const outputFileValid = !outputFilePresent ||
+      (outputFileTags.length === 2 && outputFileMatches.length === 1 && !!outputFileMatches[0]![1]);
+    return {
+      taskId: field(body!, "task-id"),
+      toolUseId: field(body!, "tool-use-id"),
+      status: field(body!, "status"),
+      outputFile: outputFileMatches[0]?.[1],
+      outputFilePresent,
+      outputFileValid,
+      summary: field(body!, "summary"),
+      result: field(body!, "result"),
+    };
+  });
+  if (parsed.some((item) => !item.taskId || !item.status || !item.outputFileValid)) return null;
+  return parsed as ParsedNotification[];
 }
 
 /**
@@ -1868,8 +1887,10 @@ export class AgentHost implements EngineAdapter {
       candidate !== undefined && candidate.sessionId === input.session_id && candidate.toolUseId === notifications[index]!.toolUseId &&
       candidate.status === notifications[index]!.status && (
         candidate.taskType === "local_bash"
-          ? candidate.outputFile === notifications[index]!.outputFile && candidate.summary === notifications[index]!.summary && notifications[index]!.result === undefined
-          : candidate.taskType === "local_agent" && notifications[index]!.outputFile === undefined &&
+          ? notifications[index]!.outputFilePresent && candidate.outputFile !== undefined &&
+            candidate.outputFile === notifications[index]!.outputFile && candidate.summary === notifications[index]!.summary && notifications[index]!.result === undefined
+          : candidate.taskType === "local_agent" && candidate.outputFile !== undefined &&
+            (!notifications[index]!.outputFilePresent || candidate.outputFile === notifications[index]!.outputFile) &&
             candidate.summary === notifications[index]!.result && notifications[index]!.summary !== undefined
       ));
     if (owner) {
