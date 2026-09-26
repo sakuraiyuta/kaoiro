@@ -18,7 +18,7 @@ for the SDK's **settled message/callback contract and derivation mapping**.
 | `sending` | Instruction sent, waiting for response | Wrapper-derived on instruction acceptance (outside SDK, #32) | Sent |
 | `thinking` | Model is generating | `SDKAssistantMessage` (text/thinking) | Thinking |
 | `tool_running` | Tool is running | `SDKAssistantMessage` (tool_use) → `SDKUserMessage` (tool_result) | Focused |
-| `waiting_permission` | Waiting for tool permission | `canUseTool` call with Promise pending | Waiting for operator |
+| `waiting_permission` | Waiting for tool permission | Engine permission callback or wrapper-owned bridge approval wait with its decision pending | Waiting for operator |
 | `waiting_question` | Waiting for AskUserQuestion answer | `canUseTool` (`toolName === "AskUserQuestion"`) with Promise pending, [ADR-0027](../../adr/0027-askuserquestion-envelope.md) | Offering choices |
 | `waiting_input` | Turn complete, waiting for next instruction | After `SDKResultMessage`, waiting for streaming input | Waiting |
 | `done` | Instant of turn completion | `SDKResultMessage` (success) | Happy (→ `waiting_input`) |
