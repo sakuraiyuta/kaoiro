@@ -8139,7 +8139,7 @@ it.each([false, true])("binds permission-before-assistant observation to the sam
       const check = args.options.canUseTool!(INTER_AGENT_TOOL_FQN, { to: "peer", body: "reply" }, { toolUseID: "early-native-call", signal: new AbortController().signal } as never);
       expect(entered).toBe(false);
       yield assistant([{ type: "tool_use", id: "early-native-call", name: INTER_AGENT_TOOL_FQN, input: {} }]);
-      verdict = (await check).behavior;
+      verdict = (await check)?.behavior;
       yield result("success", { result: "finished" });
     })())),
   });
