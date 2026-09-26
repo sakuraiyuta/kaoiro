@@ -52,7 +52,7 @@ Per-engine timing (measured where noted; Linux unless stated otherwise):
 | runner `stop`/`delete`/`restart` | bare SIGTERM, no escalation | `runner/src/supervisor.ts`, `runner/src/spawn.ts` |
 | systemd service backstop | SIGKILL 30000ms after SIGTERM | `TimeoutStopSec`, service-level, not per-agent |
 | Claude Code SDK child | SIGTERM ~2000ms, SIGKILL ~7000ms after `close()` | `ProcessTransport.close()`, `@anthropic-ai/claude-agent-sdk` 0.3.280's bundle (measured) |
-| Claude Code wrapper's direct CLI child | SIGKILL 4000ms after host abort if still alive | `AgentHost`'s bounded custom spawner; the referenced timer holds the wrapper open until the child exits |
+| Claude Code wrapper's direct CLI child | SIGKILL 4000ms after host abort if still alive | `AgentHost`'s bounded custom spawner; the child's piped stdio currently keeps the wrapper alive, while the referenced timer protects against a future SDK change that closes those pipes |
 | Codex exec child + its sandboxed grandchild | both gone ~50ms after SIGTERM | measured offline, `workspace-write` and `danger-full-access`, 2 runs each — issue #401 |
 | Codex app-server child | SIGKILL 2000ms after stdin EOF if still alive | `shutdownTimeoutMs`, wired by `CodexHost` below `RESET_TERMINATION_GRACE_MS` |
 
