@@ -2,7 +2,7 @@
 title: Multi-host deployment architecture
 description: Why deployment is shaped as one server plus any number of runner hosts behind nginx, and the stop-boundary constraint an in-place build imposes on checkout-direct hosts.
 status: accepted
-last_updated: 2026-09-19
+last_updated: 2026-09-26
 related: [deployment]
 ---
 
@@ -40,7 +40,7 @@ Only deployments restricted to a VPN may use the direct, nginx-free option (1.5)
 
 | Limit | Details | Resolving issue |
 |---|---|---|
-| **In-place build** (checkout-direct hosts only) | Overwrites `dist` in the active checkout. Each wrapper spawn resolves on-disk `dist` (`resolveWrapperLaunch()` in `runner/src/spawn.ts`), so a spawn during build can capture a mixed old/new artifact. Even if the procedure says “build while stopped,” **one ordering mistake reproduces the failure** | #219 (implemented; **remains until the host moves to the release profile** — 4.6) |
+| **In-place build** (checkout-direct hosts only) | Overwrites `dist` in the active checkout. Each wrapper spawn resolves on-disk `dist` (`resolveWrapperLaunch()` in `runner/src/spawn.ts`), so a spawn during build can capture a mixed old/new artifact. Even if the procedure says “build while stopped,” **one ordering mistake reproduces the failure**. By contrast, release-profile builds and extraction stay isolated under `releases/<rev>/` and never touch a running release. Codex backend selection resolves lazily until the first spawn. | #219 (implemented; **remains until the host moves to the release profile** — 4.6) |
 
 ### Rollout ordering
 

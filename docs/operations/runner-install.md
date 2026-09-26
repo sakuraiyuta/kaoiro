@@ -129,12 +129,9 @@ determined by what is set in `@@DEPLOY_DIR@@`.
 | **Local-build release** | `<install-root>/current/deploy` | **Production**. Build tarball in repo and install as release |
 | **Gitea release** | `<install-root>/current/deploy` | **Production**. Install distributed tarball as release |
 
-**Production hosts must use the release profile**. Keeping a checkout-direct service resident
-overwrites `dist` in the active checkout on every update, so the runner can capture a mixed
-old/new wrapper (the runner resolves on-disk artifacts each time it spawns a wrapper, and
-codex resolves lazily until the first spawn). Under the release profile, building and
-extraction are completely self-contained within `releases/<rev>/`, never touching a running
-release.
+Production hosts use the release profile. The in-place-build risk and its
+release-profile boundary are documented in
+[Build and restart boundaries](../architecture/deployment.md#build-and-restart-boundaries).
 
 [docs/operations/runner-update-and-rollback.md](runner-update-and-rollback.md)
 is canonical for migration, update procedures, and rollback.
