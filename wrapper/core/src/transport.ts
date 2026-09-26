@@ -1127,15 +1127,34 @@ export class ServerLink {
   #replyBasisGeneration = 0;
   readonly #protectReplyBasis: boolean;
   replyBasisGeneration(): number { return this.#replyBasisGeneration; }
-  readonly #replyBasisWaiters = new Set<() => void>();
-  async waitForReplyBasisMode(signal?: AbortSignal): Promise<"v1" | "legacy" | "pending"> {
-    if (this.#replyBasisMode !== "pending" || signal?.aborted) return this.#replyBasisMode;
+  #replyBasisTerminal = false;
+  readonly #onReplyBasisMode: ServerLinkOptions["onReplyBasisMode"];
+  readonly #replyBasisWaiters = new Set<(mode: "v1" | "legacy" | "pending" | "closed") => void>();
+  async waitForReplyBasisMode(signal?: AbortSignal): Promise<"v1" | "legacy" | "pending" | "closed"> {
+    if (this.#replyBasisTerminal) return "closed";
+    if (signal?.aborted) return "pending";
+    if (this.#replyBasisMode !== "pending") return this.#replyBasisMode;
     if (this.#replyBasisWaiters.size >= 256) return "pending";
-    await new Promise<void>(resolve => {
-      const release = () => { this.#replyBasisWaiters.delete(release); signal?.removeEventListener("abort", release); resolve(); };
-      this.#replyBasisWaiters.add(release); signal?.addEventListener("abort", release, { once: true });
+    return new Promise(resolve => {
+      const release = (mode: "v1" | "legacy" | "pending" | "closed") => {
+        clearTimeout(timer); this.#replyBasisWaiters.delete(release);
+        signal?.removeEventListener("abort", abort); resolve(mode);
+      };
+      const abort = () => release("pending");
+      // Recovery may never produce a join (clean socket close, repeated
+      // authentication failure, or a silent peer). This deadline never slides.
+      const timer = setTimeout(abort, 10_000);
+      this.#replyBasisWaiters.add(release); signal?.addEventListener("abort", abort, { once: true });
     });
-    return this.#replyBasisMode;
+  }
+  #failReplyBasis(terminal: boolean, releaseWaiters: boolean): void {
+    this.#replyBasisGeneration++;
+    this.#replyBasisMode = "pending";
+    this.#replyBasisTerminal ||= terminal;
+    this.#onReplyBasisMode?.("pending");
+    if (releaseWaiters || this.#replyBasisTerminal) {
+      for (const release of this.#replyBasisWaiters) release(this.#replyBasisTerminal ? "closed" : "pending");
+    }
   }
   readonly #deliveryGeneration = randomUUID();
   readonly #deliveryRecovery: DeliveryRecovery;
@@ -1189,6 +1208,7 @@ export class ServerLink {
     socketFactory: ServerSocketFactory = (url, socketOptions) =>
       new Socket(url, socketOptions),
   ) {
+    this.#onReplyBasisMode = options.onReplyBasisMode;
     this.#deliveryRecovery = new DeliveryRecovery({
       request: (request) => this.requestInterAgentDeliveryResync(request),
       resolved: ({ delivery, skipped_ranges }) => options.onInterAgentDeliveryStatus?.({ ...delivery, skipped_ranges }),
@@ -1480,15 +1500,18 @@ export class ServerLink {
     // both caches are empty (no-op); on reconnects pushes are buffered by the
     // client until the channel rejoins. send() stamps a fresh seq.
     this.#protectReplyBasis = options.interAgentReplyBasis === "v1";
-    const invalidateReplyBasis = () => {
-      this.#replyBasisGeneration++;
-      this.#replyBasisMode = "pending";
-      options.onReplyBasisMode?.("pending");
+    const invalidateReplyBasis = (terminal = false, releaseWaiters = false) => {
+      this.#failReplyBasis(terminal, releaseWaiters);
     };
-    this.#bindServerEvent("phx_error", invalidateReplyBasis);
-    this.#bindServerEvent("phx_close", invalidateReplyBasis);
-    this.#socket.onClose(() => { this.#deliveryRecovery.disconnected(); invalidateReplyBasis(); });
+    this.#bindServerEvent("phx_error", () => invalidateReplyBasis());
+    this.#bindServerEvent("phx_close", () => invalidateReplyBasis(true, true));
+    this.#socket.onError(() => invalidateReplyBasis());
+    this.#socket.onClose((event?: { code?: number }) => {
+      this.#deliveryRecovery.disconnected();
+      invalidateReplyBasis(event?.code === 1000);
+    });
     this.#socket.onOpen(() => {
+      if (this.#replyBasisTerminal) return;
       this.#beginPermissionSyncBarrier();
       if (this.#lastEnvelope) this.send(this.#lastEnvelope);
       for (const task of [...this.#activeTasks.values()]) this.send(task.envelope);
@@ -1503,11 +1526,12 @@ export class ServerLink {
     this.#channel
       .join()
       .receive("ok", (reply: unknown) => {
+        if (this.#replyBasisTerminal) return;
         this.#acceptPermissionSyncJoin(reply);
         this.#replyBasisGeneration++;
         this.#replyBasisMode = isObject(reply) && reply.inter_agent_reply_basis === "v1" ? "v1" : "legacy";
         options.onReplyBasisMode?.(this.#replyBasisMode);
-        for (const release of this.#replyBasisWaiters) release();
+        for (const release of this.#replyBasisWaiters) release(this.#replyBasisMode);
         if (options.interAgentReplyBasis && this.#replyBasisMode === "legacy") writeRedactedStderr("inter-agent reply basis: legacy (server protection unavailable)\n");
         if (options.buildInfo !== undefined) {
           const buildInfo = normalizeWrapperBuildInfo(options.buildInfo);
@@ -1525,11 +1549,13 @@ export class ServerLink {
         this.#deliveryRecovery.join(isObject(reply) && reply.delivery_resync === "skip-v1", delivery);
       })
       .receive("error", (reason: unknown) => {
+        invalidateReplyBasis(false, true);
         writeRedactedStderr(
           `ServerLink join error: ${JSON.stringify(reason)}\n`,
         );
       })
       .receive("timeout", () => {
+        invalidateReplyBasis(false, true);
         writeRedactedStderr("ServerLink join timeout\n");
       });
   }
@@ -2031,9 +2057,7 @@ export class ServerLink {
 
   /** Leaves the channel and closes the socket. */
   close(): void {
-    this.#replyBasisGeneration++;
-    this.#replyBasisMode = "pending";
-    for (const release of this.#replyBasisWaiters) release();
+    this.#failReplyBasis(true, true);
     this.#deliveryRecovery.dispose();
     this.#channel.leave();
     this.#socket.disconnect();
