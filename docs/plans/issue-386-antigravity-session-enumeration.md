@@ -118,11 +118,14 @@ Subagent conversations (`nesting_depth > 0`) are excluded. Keep rows with
 `killed=true` and do not filter by `status`, as decided by the director.
 
 The synchronous scan acceptance limit, set by director (kuroe), is p95 at or
-below 60 ms for a 10,000-row candidate window with zero workspace matches.
-Measured timings by workspace-match density and a runnable harness are in
+below 100 ms for a 10,000-row candidate window with zero workspace matches.
+Measure with Node v24.3.0 on the shared Linux host (24 logical CPUs), one
+warm-up and 30 timed runs; record the 1-minute load average immediately before
+and after each run, but do not require an idle host. Measured timings by
+workspace-match density and the runnable harness are in
 [the performance evidence](../evidence/antigravity/conversation-summaries-schema.md#synchronous-scan-measurements).
 Keep the 10,000-row window: picker and restore requests are operator-triggered
-and infrequent, a roughly 55 ms event-loop pause is acceptable, and reducing
+and infrequent, a roughly 55–70 ms event-loop pause is acceptable, and reducing
 the window would hide older sessions. A SQL prefilter was rejected because
 percent-encoding differences could hide a real match and it would change which
 malformed rows produce warnings. Bulk restore performs N sequential existence
@@ -190,6 +193,10 @@ runtime dependency is planned.
 - Pin that `file:` workspace members with `?query` or `#fragment` are rejected
   consistently whether they appear before or after the matching cwd URI. A
   mutation that skips this validation must make that test fail.
+- In a dedicated database, pin that `file://host/path` is rejected before and
+  after the cwd URI and that the rate-limited warning names the authority.
+  Mutate the `url.host !== ""` guard away and verify this test fails, then
+  restore it and confirm it passes.
 - The existing default-host epoch-args test in
   `wrapper/antigravity/test/host.test.ts` must assert that actual spawn args
   contain `--add-dir <agent cwd>`. Mutate the wrapper args to omit the cwd
@@ -201,7 +208,9 @@ runtime dependency is planned.
   test fails, then restore and confirm it passes.
 - Run the committed performance harness for match densities 1/2, 1/10, 1/100,
   and zero matches after building the runner. Report p50, p95, and maximum;
-  acceptance is p95 <=60 ms for the zero-match 10,000-row window.
+  include Node version, host type, load average before/after, one warm-up and
+  30 timed runs; acceptance is p95 <=100 ms for the zero-match 10,000-row
+  window.
 - Exercise the default database path with a temporary home directory and no
   injected path/loader until the first meaningful list and existence calls.
   Assert that a missing database returns `[]` / `false` and is not created.

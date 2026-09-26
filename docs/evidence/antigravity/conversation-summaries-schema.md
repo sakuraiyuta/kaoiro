@@ -229,9 +229,10 @@ journal as harmless log noise.
 The earlier JavaScript scan benchmark took p50 44.91 ms, p95 51.45 ms, and
 max 109.64 ms over 30 runs. A query-only bounded CTE benchmark took p50
 6.82 ms, p95 8.72 ms, and max 9.95 ms on Node v24.3.0; neither measures the
-complete helper for sparse workspaces. The earlier unqualified full-helper
-result (p50 14.37 ms, p95 15.98 ms, max 16.04 ms) used a dense workspace and
-is superseded by the density-controlled measurements below.
+complete helper for sparse workspaces. Kohaku identified that the earlier
+unqualified full-helper result (p50 14.37 ms, p95 15.98 ms, max 16.04 ms) used
+a dense workspace; it is superseded by the density-controlled measurements
+below.
 
 The committed [benchmark harness](benchmark-session-index.mjs) imports the
 built `runner/dist/sessions.js`. Reproduce it from the repository root after
@@ -250,33 +251,48 @@ workspace, plus a unique customization path. Timestamps use one fixed UTC
 offset. Each density is warmed once, then the complete helper runs 30 timed
 list calls. Matcher calls are counted separately over the same ordered
 candidate window, stopping at 500 matches. `MATCH_EVERY=1000000000` produces
-zero matches inside the candidate window. The measured results on Node v24.3.0
-were:
+zero matches inside the candidate window. The timed harness records Node
+version, host type, logical CPU count, and one-minute load average immediately
+before and after the 30 runs. The host was a shared Linux system with 24
+logical CPUs; load average is reported as run context, not a condition for
+acceptance. The measurements were:
 
-| Candidate match density | Candidate matches | Matcher calls | Returned | p50 ms | p95 ms | Max ms |
-|---|---:|---:|---:|---:|---:|---:|
-| 1/2 | 5,000 | 1,023 | 500 | 20.42 | 22.50 | 23.68 |
-| 1/10 | 999 | 5,023 | 500 | 32.67 | 36.81 | 37.63 |
-| 1/100 | 98 | 10,000 | 98 | 48.20 | 55.18 | 57.25 |
-| 0 | 0 | 10,000 | 0 | 49.82 | 56.57 | 57.95 |
+| Candidate match density | Candidate matches | Matcher calls | Returned | Load avg 1m before → after | p50 ms | p95 ms | Max ms |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 1/2 | 5,000 | 1,023 | 500 | 0.07 → 0.07 | 19.60 | 23.94 | 24.63 |
+| 1/10 | 999 | 5,023 | 500 | 0.07 → 0.30 | 32.92 | 37.01 | 37.01 |
+| 1/100 | 98 | 10,000 | 98 | 0.30 → 0.30 | 54.01 | 61.68 | 65.00 |
+| 0 | 0 | 10,000 | 0 | 0.30 → 0.30 | 53.73 | 67.87 | 70.58 |
 
-The last row meets the acceptance limit set by director (kuroe): p95 at or
-below 60 ms for a 10,000-row window with zero workspace matches. A repeated
-zero-match run measured p50 48.72 ms, p95 55.07 ms, and max 56.81 ms. The
+The zero-match result meets the acceptance limit set by director (kuroe): p95
+at or below 100 ms for a 10,000-row window with zero workspace matches. The
+limit is intentionally above observed timing variation so shared-host load
+does not determine pass or fail; its purpose is to catch structural regressions
+such as parsing the entire window in JavaScript or expanding the window. The
 10,000-row window remains because picker and restore work is operator-triggered
 and infrequent, while reducing it would hide older sessions. A SQL prefilter
 was not adopted: percent-encoding differences could hide a match, and it
-would change which malformed rows produce warnings. The approximate 55 ms
-synchronous pause is accepted by director (kuroe). The measured main database
-was 86,016 bytes. During bulk restore, `sessionExists` performs N sequential
-primary-key checks; if each encounters a continuously locked database, the
-100 ms busy timeout can accumulate to roughly `100 ms × N`, with each check
-failing closed. A lock released near timeout can add query time.
+would change which malformed rows produce warnings. Director (kuroe) accepts
+the observed synchronous pause. The measured main database was 86,016 bytes.
+During bulk restore, `sessionExists` performs N sequential primary-key checks;
+if each encounters a continuously locked database, the 100 ms busy timeout can
+accumulate to roughly `100 ms × N`, with each check failing closed. A lock
+released near timeout can add query time.
+
+The following load-varying measurements are reported by Kohaku in the second
+implementation review and were not independently repeated in those load
+states: with wrapper tests running (1-minute load average 7.49), p95 was 23.11,
+37.17, 57.19, and 60.81 ms for 1/2, 1/10, 1/100, and zero matches; after that
+suite, with peer agents active (load average 4.65 to 4.36), p95 was 66.84 ms
+for 1/100 and 64.67 ms then 60.73 ms on a zero-match rerun. In an idle
+measurement (load average 0.60), the corresponding p95 values were 29.90,
+42.21, 50.82, and 54.10 ms. These observations show why load is recorded but
+not used as an acceptance condition.
 
 A separate in-memory mixed-offset fixture confirmed that SQLite
 `unixepoch(last_modified_time, 'subsec')` sorts timestamps with different
 offsets chronologically, but on 10,000 rows this query took p50 29.91 ms,
-p95 34.33 ms, and max 34.34 ms over 30 runs. This is below the 60 ms
+p95 34.33 ms, and max 34.34 ms over 30 runs. This is below the 100 ms
 per-helper acceptance limit but slower than indexed text ordering for the
 measured fixed-offset encoding. The bounded copied sample had one offset across
 all ten timestamp values, so the design keeps indexed text order. Whether

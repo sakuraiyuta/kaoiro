@@ -190,6 +190,46 @@ describe("antigravity conversation summary index (issue #386)", () => {
     expect(warnings[0]).toMatch(/^invalid_workspace:/);
   });
 
+  it("rejects file URI authorities regardless of member order", () => {
+    const dbPath = join(root, "authority-order.db");
+    const authorityCwd = join(root, "authority-order-workspace");
+    mkdirSync(authorityCwd);
+    const cwdUri = pathToFileURL(authorityCwd).href;
+    const authorityUri = "file://host/path";
+    const writer = new DatabaseSync(dbPath);
+    writer.exec(`
+      PRAGMA user_version = 3;
+      CREATE TABLE conversation_summaries (
+        conversation_id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '',
+        last_modified_time datetime NOT NULL, workspace_uris TEXT NOT NULL,
+        nesting_depth INTEGER NOT NULL DEFAULT 0, killed numeric NOT NULL DEFAULT false
+      );
+    `);
+    const insert = writer.prepare(`
+      INSERT INTO conversation_summaries
+        (conversation_id, title, last_modified_time, workspace_uris, nesting_depth, killed)
+      VALUES (?, '', '2026-09-26 16:00:00.000000000+00:00', ?, 0, 0)
+    `);
+    const cases = [
+      { id: "17171717-1717-4171-8171-171717171717", members: [authorityUri, cwdUri] },
+      { id: "18181818-1818-4181-8181-181818181818", members: [cwdUri, authorityUri] },
+    ];
+    for (const { id, members } of cases) {
+      insert.run(id, JSON.stringify(members));
+    }
+    writer.close();
+
+    const warnings: string[] = [];
+    const exists = cases.map(({ id }) =>
+      antigravitySessionExistsIn(dbPath, authorityCwd, id, {
+        warn: (warning) => warnings.push(warning),
+      }),
+    );
+    expect(exists).toEqual([false, false]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("authority");
+  });
+
   it("warns on mixed UTC offsets without failing listing or existence", () => {
     const singlePath = join(root, "single-offset.db");
     const single = new DatabaseSync(singlePath);

@@ -1,6 +1,6 @@
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
+import { cpus, loadavg, platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
@@ -102,6 +102,7 @@ try {
     if (candidateMatches >= 500) break;
   }
   const samples = [];
+  const loadAverage1mBefore = loadavg()[0];
   for (let i = 0; i < runCount; i += 1) {
     const started = performance.now();
     listAntigravitySessionsFrom(dbPath, cwd, { warn: () => {} });
@@ -109,10 +110,16 @@ try {
   }
   process.stdout.write(`${JSON.stringify({
     node: process.version,
+    host_type: platform(),
+    logical_cpu_count: cpus().length,
+    load_average_1m_before: loadAverage1mBefore,
+    load_average_1m_after: loadavg()[0],
     candidate_window: 10_000,
     fixture_top_level_rows: totalRows,
     fixture_nested_rows: nestedRows,
     match_every: matchEvery,
+    warmup_runs: 1,
+    timed_runs: runCount,
     candidate_matches: candidates.filter((row) => JSON.parse(row.workspace_uris).includes(cwdUri)).length,
     matcher_calls_until_limit: matcherCalls,
     returned_rows: first.length,
