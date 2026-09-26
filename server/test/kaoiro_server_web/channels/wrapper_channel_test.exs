@@ -4593,6 +4593,18 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
   end
 
   describe "directory_request (protocol-inter-agent コンパニオンツール)" do
+    # issue #414: the directory-only projection is capped at 32 entries
+    # (issue #269 S6) over the suite-wide AgentDirectory (a single global
+    # GenServer). Entries left behind by other describes (issue #269 T10
+    # records 34) flow into that cap depending on the seed order and can
+    # push this block's own directory-only fixture out of the reply. Same
+    # describe-scoped isolation as the #269 and #270 blocks: only data from
+    # tests that already finished is removed (async: false, serial).
+    setup do
+      for {id, _entry} <- AgentDirectory.all(), do: AgentDirectory.delete(id)
+      :ok
+    end
+
     test "live peers get only the validated nested build identity and 32 entries fit the frame budget" do
       self_id = "test.directory-build-self"
       self_socket = join_wrapper(self_id)
