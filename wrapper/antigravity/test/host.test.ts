@@ -77,6 +77,7 @@ function hostHarness(options: {
   waitForPermissionSync?: () => Promise<void>;
   toolHostListen?: AntigravityHostOptions["toolHostListen"];
   gateServerListen?: AntigravityHostOptions["gateServerListen"];
+  permissionBroker?: PermissionBroker;
 } = {}) {
   const states: Envelope[] = [];
   const logs: Envelope[] = [];
@@ -89,7 +90,7 @@ function hostHarness(options: {
   const outOfTurnEvents: Array<Parameters<NonNullable<AntigravityHostOptions["onOutOfTurnEvent"]>>[0]> = [];
   const epochEnded: Array<Parameters<NonNullable<AntigravityHostOptions["onEpochEnded"]>>[0]> = [];
   const cfg = options.config ?? config();
-  const broker = new PermissionBroker({ config: cfg, send: () => {} });
+  const broker = options.permissionBroker ?? new PermissionBroker({ config: cfg, send: () => {} });
   const host = new AntigravityHost(cfg, {
     cwd: process.cwd(),
     appendSystemPrompt: "persona",
@@ -136,6 +137,141 @@ function hostHarness(options: {
 }
 
 describe("AntigravityHost", () => {
+  it.each([
+    ["bridge", "native"],
+    ["native", "bridge"],
+  ] as const)("coalesces overlapping permission waits in %s then %s order", async (first, second) => {
+    const { host, calls, states } = hostHarness();
+    await host.send("hello", undefined, ["cid"], "turn-lease");
+    await waitFor(() => calls.length === 1);
+    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"run_command"}}\n');
+    await waitFor(() => states.at(-1)?.state === "tool_running");
+
+    const firstLease = host.beginPermissionWaitLease("turn-lease", first);
+    expect(firstLease).not.toBeNull();
+    const afterFirst = states.filter((envelope) => envelope.state === "waiting_permission").length;
+    const secondLease = host.beginPermissionWaitLease("turn-lease", second);
+    expect(secondLease).not.toBeNull();
+    expect(states.filter((envelope) => envelope.state === "waiting_permission")).toHaveLength(afterFirst);
+
+    host.endPermissionWaitLease(firstLease!);
+    expect(states.at(-1)?.state).toBe("waiting_permission");
+    host.endPermissionWaitLease(secondLease!);
+    expect(states.at(-1)?.state).toBe("tool_running");
+
+    calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
+    calls[0]!.child.finish();
+    await waitFor(() => states.at(-1)?.state === "waiting_input");
+    host.close();
+  });
+
+  it("a stale lease release removes only its owner while another wait remains", async () => {
+    const { host, calls, states } = hostHarness();
+    await host.send("hello", undefined, ["cid"], "turn-lease");
+    await waitFor(() => calls.length === 1);
+    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"run_command"}}\n');
+    await waitFor(() => states.at(-1)?.state === "tool_running");
+    const staleLease = host.beginPermissionWaitLease("turn-lease", "native")!;
+    const currentLease = host.beginPermissionWaitLease("turn-lease", "bridge")!;
+    host.endPermissionWaitLease(staleLease);
+    expect(states.at(-1)?.state).toBe("waiting_permission");
+    host.endPermissionWaitLease(currentLease);
+    expect(states.at(-1)?.state).toBe("tool_running");
+    calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
+    calls[0]!.child.finish();
+    await waitFor(() => states.at(-1)?.state === "waiting_input");
+    host.close();
+  });
+
+  it("native hook approval still emits one entry and one exit despite broker pending metadata", async () => {
+    const cfg = config({ approval: "on-request" });
+    const permissionRequests: Envelope[] = [];
+    let testHost: AntigravityHost | undefined;
+    const broker = new PermissionBroker({
+      config: cfg,
+      send: (envelope) => permissionRequests.push(envelope),
+      onPendingChange: (pending) => testHost?.setPendingPermission(pending),
+    });
+    let activeGate: AntigravityGate | null = null;
+    const { host, calls, states } = hostHarness({
+      config: cfg,
+      permissionBroker: broker,
+      gateServerListen: async ({ gate }) => {
+        activeGate = gate;
+        return {
+          socketPath: "/tmp/permission-wait-test.sock",
+          nonce: "test-nonce",
+          setGate: (next: AntigravityGate) => { activeGate = next; },
+          observeCompletedTool: () => true,
+          close: () => {},
+        } as unknown as GateServer;
+      },
+    });
+    testHost = host;
+    await host.send("hello", undefined, ["cid"], "native-turn");
+    await waitFor(() => calls.length === 1 && activeGate !== null);
+    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"run_command"}}\n');
+    await waitFor(() => states.at(-1)?.state === "tool_running");
+
+    const decision = activeGate!.decide({ name: "run_command", args: { CommandLine: "pwd", Cwd: process.cwd() } });
+    await waitFor(() => permissionRequests.length === 1);
+    const requestId = (permissionRequests[0]!.payload as { request_id: string }).request_id;
+    const transitions = states.map((envelope) => envelope.state).filter((state, index, all) => index === 0 || state !== all[index - 1]);
+    expect(transitions.filter((state) => state === "waiting_permission")).toHaveLength(1);
+    broker.resolve({ request_id: requestId, allow: true });
+    await expect(decision).resolves.toEqual({ decision: "allow" });
+    expect(states.filter((envelope) => envelope.state === "tool_running")).toHaveLength(2);
+
+    calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
+    calls[0]!.child.finish();
+    await waitFor(() => states.at(-1)?.state === "waiting_input");
+    host.close();
+  });
+
+  it("a normal turn end stays terminal when its wait owner settles late", async () => {
+    const { host, calls, states, turnEnds } = hostHarness();
+    await host.send("hello", undefined, ["cid"], "turn-end");
+    await waitFor(() => calls.length === 1);
+    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"run_command"}}\n');
+    await waitFor(() => states.at(-1)?.state === "tool_running");
+    const lease = host.beginPermissionWaitLease("turn-end", "bridge")!;
+    calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
+    calls[0]!.child.finish();
+    await waitFor(() => turnEnds.length === 1);
+    const terminalIndex = states.findIndex((envelope) => envelope.state === "waiting_input");
+    host.endPermissionWaitLease(lease);
+    expect(states.at(-1)?.state).toBe("waiting_input");
+    expect(states.slice(terminalIndex + 1).some((envelope) => envelope.state === "tool_running")).toBe(false);
+    host.close();
+  });
+
+  it("interrupt retires its lease before terminal settlement and delayed release cannot resurrect state", async () => {
+    const { host, calls, states, turnEnds } = hostHarness();
+    await host.send("first", undefined, ["cid-1"], "old-turn");
+    await waitFor(() => calls.length === 1);
+    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"run_command"}}\n');
+    await waitFor(() => states.at(-1)?.state === "tool_running");
+    const oldLease = host.beginPermissionWaitLease("old-turn", "native")!;
+    await host.interrupt();
+    expect(host.beginPermissionWaitLease("old-turn", "bridge")).toBeNull();
+    calls[0]!.child.finish();
+    await waitFor(() => turnEnds.length === 1);
+
+    await host.send("second", undefined, ["cid-2"], "new-turn");
+    await waitFor(() => calls.length === 2);
+    calls[1]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"run_command"}}\n');
+    await waitFor(() => states.at(-1)?.state === "tool_running");
+    const currentLease = host.beginPermissionWaitLease("new-turn", "bridge")!;
+    host.endPermissionWaitLease(oldLease);
+    expect(states.at(-1)?.state).toBe("waiting_permission");
+    host.endPermissionWaitLease(currentLease);
+    expect(states.at(-1)?.state).toBe("tool_running");
+    calls[1]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
+    calls[1]!.child.finish();
+    await waitFor(() => turnEnds.length === 2);
+    host.close();
+  });
+
   it("skips a sole queued input before stdin write and emits ready", async () => {
     const starts: string[] = [];
     const { host, calls, states, turnEnds } = hostHarness({

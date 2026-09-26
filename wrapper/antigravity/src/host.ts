@@ -469,6 +469,8 @@ export class AntigravityHost implements EngineAdapter {
   }> = [];
   #customization: CustomizationDir | null = null;
   #pendingPermission: PendingPermissionExt | null = null;
+  #permissionWaitLeases = new Map<string, { turnToken: string; source: "bridge" | "native" }>();
+  #permissionWaitBaseState: KaoiroState | null = null;
   #pendingQuestion: PendingQuestionExt | null = null;
   #lastRevision = 0;
   #gateBroken = false;
@@ -652,6 +654,47 @@ export class AntigravityHost implements EngineAdapter {
   /** The capability supplied to inter-agent tools only while this agy turn runs. */
   activeInterAgentTurnToken(): string | null {
     return this.#activeTurnToken;
+  }
+
+  beginPermissionWaitLease(
+    turnToken: string,
+    source: "bridge" | "native",
+  ): string | null {
+    if (
+      this.#closed ||
+      this.#watchdogFailStopped ||
+      this.#interruptRecord?.turnToken === turnToken ||
+      this.#activeTurnToken !== turnToken
+    ) return null;
+    if (this.#permissionWaitLeases.size === 0) {
+      if (this.#machine.state !== "tool_running") {
+        throw new Error(`permission wait requires tool_running, got ${this.#machine.state}`);
+      }
+      this.#permissionWaitBaseState = this.#machine.state;
+    } else if (this.#machine.state !== "waiting_permission") {
+      throw new Error(`overlapping permission wait requires waiting_permission, got ${this.#machine.state}`);
+    }
+    const leaseId = randomUUID();
+    const wasEmpty = this.#permissionWaitLeases.size === 0;
+    this.#permissionWaitLeases.set(leaseId, { turnToken, source });
+    if (wasEmpty) this.#apply({ kind: "permission_request" });
+    return leaseId;
+  }
+
+  endPermissionWaitLease(leaseId: string): void {
+    const owner = this.#permissionWaitLeases.get(leaseId);
+    if (owner === undefined) return;
+    this.#permissionWaitLeases.delete(leaseId);
+    if (this.#permissionWaitLeases.size !== 0) return;
+    const baseState = this.#permissionWaitBaseState;
+    this.#permissionWaitBaseState = null;
+    if (
+      baseState === "tool_running" &&
+      this.#activeTurnToken === owner.turnToken &&
+      this.#machine.state === "waiting_permission"
+    ) {
+      this.#apply({ kind: "permission_resolved" });
+    }
   }
 
   async interrupt(): Promise<void> {
@@ -1158,6 +1201,10 @@ export class AntigravityHost implements EngineAdapter {
           requestedAt: this.#interruptRecord.at,
         };
       }
+      for (const [leaseId, owner] of this.#permissionWaitLeases) {
+        if (owner.turnToken === turnToken) this.#permissionWaitLeases.delete(leaseId);
+      }
+      if (this.#permissionWaitLeases.size === 0) this.#permissionWaitBaseState = null;
       // issue #371: identity cleanup runs BEFORE every external callback
       // this turn's settlement can reach (onState/onLog via
       // `#terminalError`/`#publishTerminalResult`, onInterruptSettled,
@@ -1325,6 +1372,7 @@ export class AntigravityHost implements EngineAdapter {
       // never mutated mid-turn -- so a step ACTIVE before the swap still
       // resolves against the same `GateServer`-owned ledger once it goes
       // DONE after it (Stage 1 M3).
+      let nativePermissionLease: string | null = null;
       const gate = new AntigravityGate({
         config: this.#config,
         cwd: this.#options.cwd,
@@ -1333,8 +1381,14 @@ export class AntigravityHost implements EngineAdapter {
         bridgePath: BRIDGE_SCRIPT,
         toolNames: () => epoch.toolHost.toolNames(),
         broker: this.#options.permissionBroker,
-        onPermissionRequest: () => this.#apply({ kind: "permission_request" }),
-        onPermissionResolved: () => this.#apply({ kind: "permission_resolved" }),
+        onPermissionRequest: () => {
+          const token = this.#activeTurnToken;
+          nativePermissionLease = token === null ? null : this.beginPermissionWaitLease(token, "native");
+        },
+        onPermissionResolved: () => {
+          if (nativePermissionLease !== null) this.endPermissionWaitLease(nativePermissionLease);
+          nativePermissionLease = null;
+        },
         ...(this.#options.warn === undefined ? {} : { warn: this.#options.warn }),
       });
       epoch.gateServer.setGate(gate);
@@ -1483,8 +1537,7 @@ export class AntigravityHost implements EngineAdapter {
   #clearPendingPermission(): void {
     if (this.#pendingPermission !== null) {
       this.#pendingPermission = null;
-      if (this.#machine.state === "waiting_permission") this.#apply({ kind: "permission_resolved" });
-      else this.#emitState(this.#machine.state);
+      this.#emitState(this.#machine.state);
     }
   }
 
@@ -1715,8 +1768,8 @@ export class AntigravityHost implements EngineAdapter {
         bridgePath: BRIDGE_SCRIPT,
         toolNames: () => toolHost!.toolNames(),
         broker: this.#options.permissionBroker,
-        onPermissionRequest: () => this.#apply({ kind: "permission_request" }),
-        onPermissionResolved: () => this.#apply({ kind: "permission_resolved" }),
+        onPermissionRequest: () => {},
+        onPermissionResolved: () => {},
         ...(this.#options.warn === undefined ? {} : { warn: this.#options.warn }),
       });
       gateServer = await (this.#options.gateServerListen ?? GateServer.listen)({

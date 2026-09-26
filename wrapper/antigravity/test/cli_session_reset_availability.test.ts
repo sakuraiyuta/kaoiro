@@ -40,6 +40,8 @@ async function compose(
     setPendingPermission: (record: unknown) => pending.push(record),
     setPendingQuestion: () => {},
     activeInterAgentTurnToken: () => "turn-1",
+    beginPermissionWaitLease: () => null,
+    endPermissionWaitLease: () => {},
   };
 
   await runAntigravityCli({

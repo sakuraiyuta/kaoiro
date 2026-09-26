@@ -139,7 +139,74 @@ function resetDescriptor(rig: Rig): ToolDescriptor {
   return descriptors.find((d) => d.name === "request_session_reset")!;
 }
 
+async function markToolRunning(rig: Rig): Promise<void> {
+  rig.agyChildren[0]!.stdout.write('{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"call_mcp_tool"}}\n');
+  await vi.waitFor(() => expect(rig.sent.filter((e) => e.type === "state_change").at(-1)?.state).toBe("tool_running"));
+}
+
 describe("Antigravity session-reset real lifetime semantics (issue #396)", () => {
+  it("keeps the bridge approval at waiting_permission until the decision settles", async () => {
+    const rig = await makeRig();
+    await rig.host.send("do the thing", undefined, ["cid-a"], "turn-a");
+    await vi.waitFor(() => expect(rig.agyChildren).toHaveLength(1));
+    await markToolRunning(rig);
+
+    const call = resetDescriptor(rig).handler({ mode: "new" });
+    await vi.waitFor(() => expect(rig.sent.some((e) => e.type === "permission_request")).toBe(true));
+    const statesWhilePending = rig.sent.filter((e) => e.type === "state_change").map((e) => e.state);
+    expect(statesWhilePending.at(-1)).toBe("waiting_permission");
+    expect(statesWhilePending.slice(statesWhilePending.indexOf("waiting_permission"))).not.toContain("tool_running");
+
+    const request = rig.sent.filter((e) => e.type === "permission_request").at(-1)!;
+    const requestId = (request.payload as { request_id: string }).request_id;
+    rig.linkOptions.onPermissionDecision({ request_id: requestId, allow: true });
+    await call;
+    expect(rig.sent.filter((e) => e.type === "state_change").at(-1)?.state).toBe("tool_running");
+
+    rig.agyChildren[0]!.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
+    rig.agyChildren[0]!.finish();
+    await vi.waitFor(() => expect(rig.turnEnds).toHaveLength(1));
+    rig.host.close();
+  });
+
+  it("returns to tool_running after a denied bridge approval without reserving a reset", async () => {
+    const rig = await makeRig();
+    await rig.host.send("do the thing", undefined, ["cid-a"], "turn-deny");
+    await vi.waitFor(() => expect(rig.agyChildren).toHaveLength(1));
+    await markToolRunning(rig);
+
+    const call = resetDescriptor(rig).handler({ mode: "new" });
+    await vi.waitFor(() => expect(rig.sent.some((e) => e.type === "permission_request")).toBe(true));
+    const request = rig.sent.filter((e) => e.type === "permission_request").at(-1)!;
+    const requestId = (request.payload as { request_id: string }).request_id;
+    rig.linkOptions.onPermissionDecision({ request_id: requestId, allow: false, message: "denied" });
+    await expect(call).resolves.toMatchObject({ isError: true });
+    expect(rig.sent.filter((e) => e.type === "state_change").at(-1)?.state).toBe("tool_running");
+    expect(rig.requests).toHaveLength(0);
+
+    rig.agyChildren[0]!.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
+    rig.agyChildren[0]!.finish();
+    await vi.waitFor(() => expect(rig.turnEnds).toHaveLength(1));
+    rig.host.close();
+  });
+
+  it("returns to tool_running after a timed-out bridge approval", async () => {
+    const rig = await makeRig({ permission_timeout_ms: 10 });
+    await rig.host.send("do the thing", undefined, ["cid-a"], "turn-timeout");
+    await vi.waitFor(() => expect(rig.agyChildren).toHaveLength(1));
+    await markToolRunning(rig);
+
+    const result = await resetDescriptor(rig).handler({ mode: "new" });
+    expect(result).toMatchObject({ isError: true });
+    expect(rig.sent.filter((e) => e.type === "state_change").at(-1)?.state).toBe("tool_running");
+    expect(rig.requests).toHaveLength(0);
+
+    rig.agyChildren[0]!.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
+    rig.agyChildren[0]!.finish();
+    await vi.waitFor(() => expect(rig.turnEnds).toHaveLength(1));
+    rig.host.close();
+  });
+
   // The state_change this turn's own outcome produces (host.ts's
   // #drainTurns finally block: #publishTerminalResult/#terminalError ->
   // #apply -> #emitState, synchronous) must reach the link BEFORE the
@@ -154,6 +221,7 @@ describe("Antigravity session-reset real lifetime semantics (issue #396)", () =>
       const rig = await makeRig();
       await rig.host.send("do the thing", undefined, ["cid-a"], "turn-a");
       await vi.waitFor(() => expect(rig.agyChildren).toHaveLength(1));
+      await markToolRunning(rig);
 
       const reset = resetDescriptor(rig);
       const requestsSoFar = rig.sent.filter((e) => e.type === "permission_request").length;
@@ -187,6 +255,7 @@ describe("Antigravity session-reset real lifetime semantics (issue #396)", () =>
     const rig = await makeRig({}, (token) => (token === "turn-b" ? null : undefined));
     await rig.host.send("do the thing", undefined, ["cid-a"], "turn-a");
     await vi.waitFor(() => expect(rig.agyChildren).toHaveLength(1));
+    await markToolRunning(rig);
 
     const reset = resetDescriptor(rig);
     const call = reset.handler({ mode: "clear" });
@@ -224,6 +293,7 @@ describe("Antigravity session-reset real lifetime semantics (issue #396)", () =>
     const rig = await makeRig();
     await rig.host.send("do the thing", undefined, ["cid-a"], "turn-a");
     await vi.waitFor(() => expect(rig.agyChildren).toHaveLength(1));
+    await markToolRunning(rig);
 
     const reset = resetDescriptor(rig);
     const call = reset.handler({ mode: "new" });
@@ -264,6 +334,7 @@ describe("Antigravity session-reset real lifetime semantics (issue #396)", () =>
     const rig = await makeRig();
     await rig.host.send("do the thing", undefined, ["cid-a"], "turn-a");
     await vi.waitFor(() => expect(rig.agyChildren).toHaveLength(1));
+    await markToolRunning(rig);
 
     const reset = resetDescriptor(rig);
     const call = reset.handler({ mode: "new" });

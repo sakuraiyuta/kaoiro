@@ -539,8 +539,18 @@ export async function runAntigravityCli(
           offerCompact: false,
         }),
         {
-          decide: (toolName, input, signal) =>
-            permissionBroker.decide(toolName, input, signal),
+          decide: async (toolName, input, signal) => {
+            const permissionHost = host;
+            const turnToken = permissionHost?.activeInterAgentTurnToken();
+            const lease = permissionHost === undefined || turnToken === null || turnToken === undefined
+              ? null
+              : permissionHost.beginPermissionWaitLease(turnToken, "bridge");
+            try {
+              return await permissionBroker.decide(toolName, input, signal);
+            } finally {
+              if (lease !== null) permissionHost?.endPermissionWaitLease(lease);
+            }
+          },
           // Matches Codex: the approval dialog shows the SDK-side FQN
           // (`mcp__kaoiro__request_session_reset`), which differs from the
           // bridge's own tool name (`request_session_reset`,
