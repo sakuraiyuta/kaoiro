@@ -31,6 +31,8 @@ import type {
 } from "@kaoiro/protocol";
 import type { InterAgentAcceptance } from "@kaoiro/wrapper-core";
 import { makeInterAgentMessage } from "./state.js";
+import { ReplyBasis, ordinaryPeerInput, bindToolResultHandoff, type ReplyAttempt, type ReplyOrigin } from "./reply_basis.js";
+import type { ToolHandlerContext } from "./tooling.js";
 import type { ToolDescriptor, ToolResult } from "./tooling.js";
 import type {
   Envelope,
@@ -314,7 +316,7 @@ export function classifyInterAgentError(
   }
   if (reason !== undefined) {
     if (RATE_LIMIT_REASONS.has(reason)) {
-      return { code: "rate_limit", message: rateLimitMessage(input.rateLimitResetSeconds) };
+      return { code: "rate_limit", message: rateLimitMessage(input.rateLimitResetSeconds), ...rateReset(input.rateLimitResetSeconds) };
     }
     if (CONTEXT_OVERFLOW_REASONS.has(reason)) {
       return { code: "context_overflow", message: messageForCode("context_overflow") };
@@ -334,6 +336,7 @@ export function classifyInterAgentError(
     if (byKeyword !== null) {
       return {
         code: byKeyword,
+        ...(byKeyword === "rate_limit" ? rateReset(input.rateLimitResetSeconds) : {}),
         message: byKeyword === "rate_limit"
           ? rateLimitMessage(input.rateLimitResetSeconds)
           : messageForCode(byKeyword),
@@ -397,6 +400,8 @@ export function canAddToCoalescedBatch(
  *  hands to the SDK's `tool()` helper and from which the JSON Schema for
  *  the codex bridge is derived (z.toJSONSchema). */
 export const SEND_TO_AGENT_INPUT_SHAPE = {
+  in_reply_to: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional().describe("For an intentional same-turn reply, copy in_reply_to and reply_ticket together from reply_authorization."),
+  reply_ticket: z.string().max(256).optional().describe("One-use authorization copied from a tool result; never predict or reuse it."),
   to: z
     .string()
     .min(1)
@@ -469,7 +474,7 @@ const EMPTY_OBJECT_SCHEMA: Record<string, unknown> = {
 };
 
 const TOOL_DESCRIPTION =
-  `Send a structured message to another kaoiro agent (consult, delegate, propose, accept, reject, or end the conversation). This IS the reply mechanism for inter-agent conversations — when you have a message for another agent, call this directly. Pass \`conversation_id\` back on replies to keep turns grouped; omit it to start a new conversation. The wrapper assigns turn_number automatically. Set wait_for_response=true only when the current turn needs the peer's next reply: its full envelope is returned by this same tool call; timeout returns a non-destructive reply_pending acknowledgement. If the peer became unresponsive instead of replying (rate limit, context overflow, API error, timeout, interrupt, or disconnect), the result carries \`peer_error: {code, message, from}\` instead of \`reply\` — recommended action by code: ${ERROR_CODE_GUIDANCE_SUMMARY}. The same \`peer_error\` can also arrive asynchronously as an inbound inform message when you were not waiting. A \`peer_reconnecting_capacity\` server rejection is different: the message was not accepted, no reconnected notice will follow for that attempt, and the result tells you to retry later with the same conversation_id. A \`delivery_backlog\` rejection means the recipient ledger is full: wait for recipient drain and do not resend automatically. The \`to\` field MUST be an exact agent_id — if you only know a peer by their display name, call \`list_agents\` first to resolve it; when several peers share a name, ask the operator which one to address. If no peer matches a requested name, report that — do not spawn a same-named agent as a substitute, and do not claim a collaboration/investigation happened until send_to_agent has actually delivered and a reply returned.`;
+  `For an intentional same-turn reply, copy in_reply_to and its single-use reply_ticket from the recovery or waiter result in this SDK turn. Send a structured message to another kaoiro agent (consult, delegate, propose, accept, reject, or end the conversation). This IS the reply mechanism for inter-agent conversations — when you have a message for another agent, call this directly. Pass \`conversation_id\` back on replies to keep turns grouped; omit it to start a new conversation. The wrapper assigns turn_number automatically. Set wait_for_response=true only when the current turn needs the peer's next reply: its full envelope is returned by this same tool call; timeout returns a non-destructive reply_pending acknowledgement. If the peer became unresponsive instead of replying (rate limit, context overflow, API error, timeout, interrupt, or disconnect), the result carries \`peer_error: {code, message, from}\` instead of \`reply\` — recommended action by code: ${ERROR_CODE_GUIDANCE_SUMMARY}. The same \`peer_error\` can also arrive asynchronously as an inbound inform message when you were not waiting. A \`peer_reconnecting_capacity\` server rejection is different: the message was not accepted, no reconnected notice will follow for that attempt, and the result tells you to retry later with the same conversation_id. A \`delivery_backlog\` rejection means the recipient ledger is full: wait for recipient drain and do not resend automatically. The \`to\` field MUST be an exact agent_id — if you only know a peer by their display name, call \`list_agents\` first to resolve it; when several peers share a name, ask the operator which one to address. If no peer matches a requested name, report that — do not spawn a same-named agent as a substitute, and do not claim a collaboration/investigation happened until send_to_agent has actually delivered and a reply returned.`;
 
 const LIST_AGENTS_DESCRIPTION =
   "List other kaoiro agents currently known to the server. Negotiated inter_agent_delivery includes issued_seq, acked_seq, lost_count and last_loss; with skip-v1, equal watermarks mean no unresolved deliveries, not proof of dispatch. Returns each peer's agent_id, persona (id/name/sprite_set), current state (idle / thinking / tool_running / waiting_permission / waiting_input / done / error / disconnected), and engine/model/effort when reported. Use this to resolve a peer's display name and execution traits before calling send_to_agent. The calling agent is NOT included — call whoami for self-info. When multiple peers share a display name, ask the operator which one to address. A proper-name collaboration request refers to an existing kaoiro peer — resolve it here first: 1 match → send_to_agent, several → ask the operator, 0 matches → report the persona is absent and never spawn a same-named internal sub-agent as a substitute.\n\nEach peer may also carry status fields for deciding WHO to delegate to: `context` ({used_tokens, max_tokens, used_percentage}) — avoid handing heavy work to a peer whose context is nearly full; `rate_limits` ({<window>: {status?, utilization?, resets_at?}}, windows `five_hour` / `seven_day`) — a peer near its limit will fail or stall, so prefer another or wait; `conversation` ({active, peers}) — a peer already in an active conversation is mid-collaboration, so avoid interrupting unless your message belongs to that work; `session_started_at` / `turns` / `last_activity_at` — a long-idle `last_activity_at` suggests the peer is stalled or done, worth reporting rather than delegating to.\n\nTwo rules when reading these: (1) `rate_limits` is the latest reported snapshot; Codex and Claude Code may report an account read before the first turn, but do not refresh it on an idle timer — compare `resets_at` (Unix seconds) against the current time yourself, and once it has passed, treat that window as reset and stop trusting its `utilization` / `status`; use `last_activity_at` to judge how stale the snapshot is. (2) A field that is ABSENT means unknown, never zero and never fine — an omitted `turns` does not mean no turns, an omitted `context` does not mean plenty of room, and an omitted `rate_limits` does not mean unlimited. Ask the operator instead of assuming when an absent field would change your decision.\n\nAn entry carrying `directory_only: true` is an agent that EXISTED in the past and is currently unreachable: the server still holds its identity in the persistent directory, but no live session. Read it as evidence of who is down, not as a destination — `send_to_agent` cannot deliver to it, and retrying will not help. If you need that agent back, escalate to the operator, who can restore or delete it. Such an entry carries only identity (`agent_id` / `persona` / `display_name`), `state: \"disconnected\"`, `conversation`, and `last_seen` (the last time the server accepted an envelope from it; absent means the server no longer knows, typically after a server restart — never \"it was never active\"). `engine` / `model` / `effort` / `context` / `rate_limits` / `session_started_at` / `turns` / `last_activity_at` are always absent on these entries. Note that `directory_only` itself is the ONE field where an absent value is not \"unknown\": the server sets it only when true, so its absence means the entry came from the live directory.\n\nThe reply also carries `users`: the kaoiro human users (operator/viewer) currently REGISTERED and authorized, each with id/kind/display_name/role — 'kind' is always the literal \"user\" here, distinguishing them from `agents`. `users` are NOT valid `send_to_agent` destinations — that tool only ever delivers to an agent_id from the `agents` list. This is a registry, not an online-presence list: it includes every currently-authorized user whether or not they are actively connected right now, and it does NOT currently identify who issued any particular instruction or inter-agent message — that attribution is not wired yet, so do not infer it from this list. Read it only to know which users exist and what role each holds; never pass a user's id as `send_to_agent`'s `to`. This array can be empty even when users exist — the operator can opt out of this disclosure server-side (default is disclosed). Live peers may also include `build` ({revision, dirty, version, channel}); absent means unreported, while a present `unknown` value means reported but indeterminate.";
@@ -671,6 +676,7 @@ export type InboundNoticeSkipReason =
 export type InboundDisposition =
   | {
       consumed: true;
+      deferAck?: boolean;
       inject: false;
       mode: InboundReplyMode;
       notice?: never;
@@ -723,6 +729,14 @@ interface PendingInjection {
 }
 
 export interface InterAgentToolOptions {
+  replyTicketClock?: () => number;
+  waitReplyBasisMode?: (signal?: AbortSignal) => Promise<"v1" | "legacy" | "pending">;
+  unreadCount?: () => number;
+  replyBasisMode?: () => "v1" | "legacy" | "pending";
+  onInputHandoff?: (envelopes: readonly Envelope[]) => void;
+  returnInput?: (envelope: Envelope, mode: InboundReplyMode) => void;
+  onReplyDiagnostic?: (event: Record<string, unknown>) => void;
+  claimRecovery?: (cid: string, peer: string, fit: (envelopes: readonly Envelope[]) => boolean) => { envelopes: readonly Envelope[]; oversizedPending?: boolean; commit: () => void; rollback: () => void } | undefined;
   config: WrapperConfig;
   /** Current wrapper state — stamped onto the outer envelope frame. */
   getState: () => KaoiroState;
@@ -797,6 +811,19 @@ type InvokeLockOutcome =
  * (single-threaded JS event loop, no internal awaits between read+write).
  */
 export class InterAgentTool {
+  readonly replyBasis: ReplyBasis;
+  readonly #handoffUnreadAdjustment = new WeakMap<InterAgentToolResult, number>();
+  readonly #preparedInputs = new Map<string, readonly Envelope[]>();
+
+  prepareReplyInput(token: string, envelopes: readonly Envelope[]): void { this.#preparedInputs.set(token, envelopes); }
+  beginReplyInput(token: string, signal?: AbortSignal): void {
+    const envelopes = this.#preparedInputs.get(token) ?? [];
+    this.#preparedInputs.delete(token);
+    this.replyBasis.begin(token, envelopes, signal);
+  }
+  endReplyInput(token: string): void { this.#preparedInputs.delete(token); this.replyBasis.retire(token); }
+  resetReplyInput(): void { this.#preparedInputs.clear(); this.replyBasis.reset(); }
+
   readonly #seenLossIds = new Set<string>();
   readonly #options: InterAgentToolOptions;
   readonly #now: () => string;
@@ -829,6 +856,7 @@ export class InterAgentTool {
   readonly #pendingDoneAcks = new Map<string, Promise<void>>();
 
   constructor(options: InterAgentToolOptions) {
+    this.replyBasis = new ReplyBasis(options.replyTicketClock);
     this.#options = options;
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#newId = options.newId ?? randomUUID;
@@ -929,7 +957,7 @@ export class InterAgentTool {
     for (const [id, track] of this.#conversations) {
       if (track.closed && track.closedAtMs !== undefined) {
         if (now - track.closedAtMs > CLOSED_TRACK_TTL_MS) {
-          this.#conversations.delete(id);
+          this.#conversations.delete(id); this.replyBasis.forget(id);
         } else {
           closed.push([id, track]);
         }
@@ -939,7 +967,7 @@ export class InterAgentTool {
     if (excess > 0) {
       closed.sort(([, a], [, b]) => (a.closedAtMs ?? 0) - (b.closedAtMs ?? 0));
       for (let i = 0; i < excess; i++) {
-        this.#conversations.delete(closed[i]![0]);
+        this.#conversations.delete(closed[i]![0]); this.replyBasis.forget(closed[i]![0]);
       }
     }
   }
@@ -951,7 +979,7 @@ export class InterAgentTool {
     const now = this.#nowMs();
     for (const [id, track] of this.#conversations) {
       if (!track.closed && now - track.lastActivityMs > OPEN_TRACK_TTL_MS) {
-        this.#conversations.delete(id);
+        this.#conversations.delete(id); this.replyBasis.forget(id);
       }
     }
   }
@@ -967,7 +995,7 @@ export class InterAgentTool {
       ([, a], [, b]) => trackAge(a) - trackAge(b),
     );
     for (let i = 0; i < excess; i++) {
-      this.#conversations.delete(byAge[i]![0]);
+      this.#conversations.delete(byAge[i]![0]); this.replyBasis.forget(byAge[i]![0]);
     }
   }
 
@@ -1211,6 +1239,7 @@ export class InterAgentTool {
           // A stale_turn notice always replies within a conversation this
           // wrapper just observed an inbound turn on — never a fresh id.
           new_conversation: false,
+          ...(this.#options.replyBasisMode?.() === "v1" ? { notice_type: "stale_delivery" as const } : {}),
           error,
         };
         const notice = makeInterAgentMessage(
@@ -1265,6 +1294,7 @@ export class InterAgentTool {
     ) {
       track.closed = true;
       track.closedAtMs = this.#nowMs();
+      this.replyBasis.forget(payload.conversation_id);
       mutated = true;
     }
     // issue #165 review round 3 (ふじ M3); round 4 (ふじ 条件 C): bumped
@@ -1281,7 +1311,7 @@ export class InterAgentTool {
       this.#replyWaiters.delete(conversationId);
       clearTimeout(waiter.timeout);
       waiter.resolve(envelope);
-      return { consumed: true, inject: false, mode };
+      return { consumed: true, inject: false, mode, ...(this.#options.replyBasisMode?.() === "v1" ? { deferAck: true } : {}) };
     }
 
     // issue #211 direction 1: a `terminal` envelope (mutual done, or a
@@ -1391,6 +1421,7 @@ export class InterAgentTool {
         // A turn-failure notice always replies within a conversation this
         // wrapper already holds a pending injection for — never a fresh id.
         new_conversation: false,
+        ...(this.#options.replyBasisMode?.() === "v1" ? { notice_type: "turn_failure" as const } : {}),
         error,
       };
       notices.push(
@@ -1403,6 +1434,28 @@ export class InterAgentTool {
       );
     }
     return notices;
+  }
+
+  #withReplyAdvice(result: InterAgentToolResult, reserve = false): InterAgentToolResult {
+    if (this.#options.replyBasisMode) result.content.push({ type: "text", text: JSON.stringify({ inter_agent_reply_basis: reserve ? "pending" : this.#options.replyBasisMode(), unread_count: reserve ? Number.MAX_SAFE_INTEGER : Math.max(0, (this.#options.unreadCount?.() ?? 0) - (this.#handoffUnreadAdjustment.get(result) ?? 0)), advisory: "Unread count is advice, not a send guard." }) });
+    return result;
+  }
+
+  sendInternalNotice(envelope: Envelope): void {
+    void (async () => {
+      try {
+        let mode = this.#options.replyBasisMode?.() ?? "legacy";
+        if (mode === "pending") mode = await this.#options.waitReplyBasisMode?.() ?? "pending";
+        if (mode === "pending") throw Error("reply_basis_pending");
+        const payload = { ...envelope.payload };
+        if (mode === "v1") payload.notice_type = (payload.error as { code?: string } | undefined)?.code === "stale_turn" ? "stale_delivery" : "turn_failure";
+        else delete payload.notice_type;
+        const result = await this.#dispatch({ ...envelope, payload });
+        if (result.kind !== "accepted") this.#options.onReplyDiagnostic?.({ event: "internal_notice_rejected", conversation_id: payload.conversation_id, turn_number: payload.turn_number, disposition: result.kind, reason: result.reason });
+      } catch {
+        this.#options.onReplyDiagnostic?.({ event: "internal_notice_rejected", conversation_id: envelope.payload.conversation_id, turn_number: envelope.payload.turn_number, disposition: "unknown" });
+      }
+    })();
   }
 
   /** The engine-agnostic descriptors of the three tools (ADR-0032 F5):
@@ -1418,27 +1471,27 @@ export class InterAgentTool {
         name: "send_to_agent",
         description: TOOL_DESCRIPTION,
         inputSchema: z.toJSONSchema(SEND_TO_AGENT_SCHEMA, { io: "input" }),
-        handler: async (input) => {
+        handler: async (input, context) => {
           const parsed = SEND_TO_AGENT_SCHEMA.safeParse(input);
           if (!parsed.success) {
             return errorResult(
               `send_to_agent failed: invalid input: ${parsed.error.message}`,
             );
           }
-          return this.invoke(parsed.data);
+          return this.#withReplyAdvice(await this.invoke(parsed.data, context));
         },
       },
       {
         name: "list_agents",
         description: LIST_AGENTS_DESCRIPTION,
         inputSchema: EMPTY_OBJECT_SCHEMA,
-        handler: async () => this.listAgents(),
+        handler: async () => this.#withReplyAdvice(await this.listAgents()),
       },
       {
         name: "whoami",
         description: WHOAMI_DESCRIPTION,
         inputSchema: EMPTY_OBJECT_SCHEMA,
-        handler: async () => this.whoami(),
+        handler: async () => this.#withReplyAdvice(await this.whoami()),
       },
     ];
   }
@@ -1494,6 +1547,7 @@ export class InterAgentTool {
     const withBuild = {
       ...observed,
       build: observed.build ?? UNKNOWN_WRAPPER_BUILD_IDENTITY,
+      ...(this.#options.replyBasisMode ? { inter_agent_reply_basis: this.#options.replyBasisMode() } : {}),
     };
     return {
       content: [{ type: "text", text: JSON.stringify(withBuild, null, 2) }],
@@ -1507,6 +1561,7 @@ export class InterAgentTool {
    *  model as the tool result. */
   async invoke(
     args: z.infer<typeof SEND_TO_AGENT_SCHEMA>,
+    context?: ToolHandlerContext,
   ): Promise<InterAgentToolResult> {
     if (args.to === this.#options.config.agent_id) {
       return errorResult(
@@ -1529,6 +1584,15 @@ export class InterAgentTool {
     const isNewConversation = args.conversation_id === undefined;
     const conversationId = args.conversation_id ?? this.#newId();
     const waitForResponse = args.wait_for_response === true;
+    let mode = this.#options.replyBasisMode?.() ?? "legacy";
+    if ((args.in_reply_to !== undefined || args.reply_ticket !== undefined) && isNewConversation) return this.#localReplyError("reply_ticket_requires_conversation");
+    const captured = this.#options.replyBasisMode !== undefined
+      ? this.replyBasis.capture(context?.origin, conversationId, args.to, args.in_reply_to, args.reply_ticket)
+      : undefined;
+    if (typeof captured === "string") return this.#localReplyError(captured);
+    if (mode === "pending") mode = await this.#options.waitReplyBasisMode?.(context?.origin?.signal) ?? "pending";
+    if (mode === "pending") return this.#localReplyError("reply_basis_pending");
+
 
     // issue #167 review M1: the turn-allocation-through-acceptance-handling
     // segment below is serialized per conversation_id via #withCidLock —
@@ -1546,6 +1610,10 @@ export class InterAgentTool {
     const outcome = await this.#withCidLock(
       conversationId,
       async (): Promise<InvokeLockOutcome> => {
+        if (captured) {
+          const error = this.replyBasis.beforeSend(captured);
+          if (error) return { kind: "peer-error", result: this.#localReplyError(error) };
+        }
         // issue #167 AC10: a conversation this wrapper already knows is
         // CLOSED is rejected locally, before any network round-trip — the
         // server would say the same via conversation_closed, but there is
@@ -1685,6 +1753,7 @@ export class InterAgentTool {
           meta,
           owner: { kind: "user", id: "operator" },
           new_conversation: isNewConversation,
+          ...(captured && mode === "v1" ? { in_reply_to: captured.basis } : {}),
         };
 
         const envelope = makeInterAgentMessage(
@@ -1785,7 +1854,10 @@ export class InterAgentTool {
           // the model its delegation had landed when no peer would ever
           // see it — ADR-0051 D3-2 requires reject and timeout to surface
           // here.
-          const acceptance = await this.#dispatch(envelope);
+          const originError = captured && this.replyBasis.beforeSend(captured);
+          const acceptance: InterAgentAcceptance = originError
+            ? { kind: "rejected", reason: originError }
+            : await this.#dispatch(envelope);
 
           // issue #127 / ふじ 30-10 R2: this wrapper stops owing an error
           // notice for the inbound it was injected to answer only once
@@ -1795,7 +1867,7 @@ export class InterAgentTool {
           // still clears it: the message may well have been delivered,
           // and layering an error notice on top of a delivered reply
           // would read to the peer as two contradictory answers.
-          const activeTurnToken =
+          const activeTurnToken = captured?.origin.token ??
             this.#options.getActiveInterAgentTurnToken?.() ?? null;
           const pending = this.#pendingInjections.get(conversationId);
           if (
@@ -1819,6 +1891,7 @@ export class InterAgentTool {
           // delivery is still unconfirmed auto-allow every later send to
           // that peer.
           if (acceptance.kind === "accepted") {
+            if (track.closed) this.replyBasis.forget(conversationId);
             track.autoAllowedPeer = args.to;
           }
 
@@ -1885,6 +1958,7 @@ export class InterAgentTool {
               track.turnNumber -= 1;
             }
             if (acceptance.reason === "conversation_closed") {
+              this.replyBasis.forget(conversationId);
               // issue #167 review M2: the server is authoritative that
               // this CID is done — closed forever, whether or not THIS
               // wrapper ever locally observed it (e.g. after a restart,
@@ -2010,6 +2084,10 @@ export class InterAgentTool {
                   "(this can also mean the server restarted since this " +
                   "conversation began, which drops all of its state)."
                 : `send_to_agent failed: server rejected the message (${acceptance.reason})`;
+            if (captured) {
+              if (originError) return { kind: "peer-error", result: this.#localReplyError(originError) };
+              return { kind: "peer-error", result: this.#rejectedReply(captured, acceptance, message) };
+            }
             return { kind: "rejected", message };
           }
 
@@ -2100,7 +2178,7 @@ export class InterAgentTool {
     // both otherwise share the same wait_for_response=true return path.
     if (inboundPayload.error) {
       const disconnect = disconnectErrorFrom(inboundPayload.error);
-      return {
+      const result: InterAgentToolResult = {
         content: [
           {
             type: "text",
@@ -2120,16 +2198,74 @@ export class InterAgentTool {
           },
         ],
       };
+      return captured
+        ? this.#inputResult(captured.origin, conversationId, args.to, { sent: sentAck, peer_error: (JSON.parse(result.content[0]!.text) as { peer_error: Record<string, unknown> }).peer_error, ...(ordinaryPeerInput(inbound) ? { peer_error_envelope: inbound } : {}) }, [inbound])
+        : result;
     }
 
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({ sent: sentAck, reply: inbound }, null, 2),
-        },
-      ],
+    if (captured) return this.#inputResult(captured.origin, conversationId, args.to, { sent: sentAck, reply: inbound }, [inbound]);
+    return { content: [{ type: "text", text: JSON.stringify({ sent: sentAck, reply: inbound }, null, 2) }] };
+  }
+
+  #inputResult(origin: ReplyOrigin, cid: string, peer: string, fields: Record<string, unknown>, envelopes: readonly Envelope[], lease?: { commit: () => void; rollback: () => void }): InterAgentToolResult {
+    let returned = false;
+    const release = () => {
+      if (returned) return; returned = true;
+      if (lease) lease.rollback();
+      else for (const envelope of envelopes) this.#options.returnInput?.(envelope, this.queuedInboundMode(envelope, "reply-owed"));
     };
+    const ordinary = envelopes.filter(ordinaryPeerInput);
+    const basis = this.#conversations.get(cid)?.closed ? 0 : Math.max(0, ...ordinary.map(e => (e.payload as unknown as InterAgentMessagePayload).turn_number));
+    let ticket: ReturnType<ReplyBasis["prepare"]>;
+    try { ticket = basis > 0 ? this.replyBasis.prepare(origin, cid, peer, basis) : undefined; }
+    catch { release(); return this.#localReplyError("reply_authorization_unavailable"); }
+    if (basis > 0 && !ticket) { release(); return this.#localReplyError("reply_authorization_unavailable"); }
+    const result = { ...(fields.error ? { isError: true } : {}), content: [{ type: "text" as const, text: JSON.stringify({ ...fields, ...(ticket ? { reply_authorization: ticket.authorization } : {}) }) }] };
+    if (lease) this.#handoffUnreadAdjustment.set(result, envelopes.length);
+    const abort = () => { ticket?.discard(); release(); };
+    origin.signal?.addEventListener("abort", abort, { once: true });
+    return bindToolResultHandoff(result, {
+      live: () => !returned && this.replyBasis.live(origin) === undefined && (ticket?.valid() ?? true),
+      commit: () => {
+        origin.signal?.removeEventListener("abort", abort); returned = true;
+        ticket?.activate(); this.replyBasis.observe(ordinary);
+        if (lease) for (const envelope of ordinary) this.notePendingInjection(envelope, origin.token);
+        lease?.commit();
+        this.#options.onInputHandoff?.(envelopes);
+      },
+      rollback: () => { origin.signal?.removeEventListener("abort", abort); abort(); },
+    });
+  }
+
+  #localReplyError(code: string): InterAgentToolResult {
+    this.#options.onReplyDiagnostic?.({ event: "reply_local_rejection", code, send_not_attempted: true });
+    return localReplyError(code);
+  }
+
+  #rejectedReply(attempt: ReplyAttempt, acceptance: Extract<InterAgentAcceptance, { kind: "rejected" }>, message: string): InterAgentToolResult {
+    this.#options.onReplyDiagnostic?.({ event: "reply_server_rejection", reason: acceptance.reason.slice(0, 128), conversation_id: attempt.cid, supplied_basis: attempt.basis, ...acceptance.details });
+    const fields = { error: acceptance.reason.slice(0, 128), message: message.slice(0, 512), send_not_attempted: false, ...acceptance.details };
+    if (acceptance.reason === "stale_reply_basis") {
+      const recoveryFields = { ...fields, unread_remaining: Number.MAX_SAFE_INTEGER, more_pending: false };
+      const fit = (envelopes: readonly Envelope[]) => envelopes.length <= 10 && Buffer.byteLength(JSON.stringify(this.#withReplyAdvice({ isError: true, content: [{ type: "text", text: JSON.stringify({ ...recoveryFields, recovery: envelopes, reply_authorization: { in_reply_to: Number.MAX_SAFE_INTEGER, reply_ticket: "x".repeat(43), expires_in_ms: 300000 } }) }] }, true)), "utf8") <= 16384;
+      const lease = this.#options.claimRecovery?.(attempt.cid, attempt.peer, fit);
+      const unread = Math.max(0, (this.#options.unreadCount?.() ?? 0) - (lease?.envelopes.length ?? 0));
+      if (lease?.envelopes.length) return this.#inputResult(attempt.origin, attempt.cid, attempt.peer, { ...fields, unread_remaining: unread, more_pending: unread > 0, recovery: lease.envelopes }, lease.envelopes, lease);
+      lease?.rollback();
+      return { isError: true, content: [{ type: "text", text: JSON.stringify({ ...fields, recovery: [], unread_remaining: unread, more_pending: unread > 0,
+        ...(lease?.oversizedPending ? { oversized_pending: true } : { awaiting_delivery: true }) }) }] };
+    }
+    if (attempt.ticket && ["peer_reconnecting_capacity", "delivery_backlog"].includes(acceptance.reason)) {
+      let ticket: ReturnType<ReplyBasis["prepare"]>;
+      try { ticket = this.replyBasis.prepare(attempt.origin, attempt.cid, attempt.peer, attempt.basis, true); } catch { /* Preserve the definite server outcome if entropy is unavailable. */ }
+      if (ticket) {
+        const authorization = ticket;
+        const result = { isError: true, content: [{ type: "text" as const, text: JSON.stringify({ ...fields, reply_authorization: ticket.authorization }) }] };
+        return bindToolResultHandoff(result, { live: () => this.replyBasis.live(attempt.origin) === undefined && authorization.valid(),
+          commit: () => { authorization.activate(); }, rollback: authorization.discard });
+      }
+    }
+    return { isError: true, content: [{ type: "text", text: JSON.stringify(fields) }] };
   }
 
   /** Pushes through the acceptance-aware sink when one is wired, else falls
@@ -2327,4 +2463,15 @@ function peerErrorResult(
       },
     ],
   };
+}
+
+function localReplyError(code: string): InterAgentToolResult {
+  return { isError: true, content: [{ type: "text", text: JSON.stringify({ error: code, send_not_attempted: true,
+    guidance: code === "invalid_reply_ticket" || code === "reply_ticket_required"
+      ? "Copy both fields from the original reply_authorization; an unspent, unexpired ticket can be retried."
+      : "Spent or expired authorization cannot be reused; use a fresh authorization or the next input turn." }) }] };
+}
+
+function rateReset(seconds: number | undefined): { reset_delay_seconds?: number } {
+  return seconds !== undefined && Number.isSafeInteger(seconds) && seconds >= 0 ? { reset_delay_seconds: seconds } : {};
 }

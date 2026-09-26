@@ -107,7 +107,7 @@ export interface ReplayIaItem {
  *  present it as a failure the model can safely retry. */
 export type InterAgentAcceptance =
   | { kind: "accepted"; stamp: [number, number] | null }
-  | { kind: "rejected"; reason: string; disconnect?: DisconnectExt }
+  | { kind: "rejected"; reason: string; disconnect?: DisconnectExt; details?: { conversation_id: string; expected_peer_turn: number; supplied_basis: number } }
   | { kind: "unknown"; reason: string };
 
 /** Byte budget for ONE `replay_ia` push.
@@ -277,6 +277,8 @@ export function chunkReplayIaItems(
 }
 
 export interface ServerLinkOptions {
+  interAgentReplyBasis?: "v1";
+  onReplyBasisMode?: (mode: "v1" | "legacy" | "pending") => void;
   /** persona.id declared to the server at join time (ADR-0029 F3).
    *  The server rejects the join when this id is not in its pack manifest
    *  (or the reserved `default`); the wrapper then never opens its SDK
@@ -1103,17 +1105,32 @@ function ingressStampFrom(reply: unknown): [number, number] | null {
 /** Closed-vocabulary reason from a rejected push reply. The channel always
  *  answers `{reason: "..."}`; anything else is normalised rather than
  *  interpolated into the tool result verbatim. */
-function pushRejection(reply: unknown): { reason: string; disconnect?: DisconnectExt } {
+function pushRejection(reply: unknown): Omit<Extract<InterAgentAcceptance, { kind: "rejected" }>, "kind"> {
   if (!isObject(reply)) return { reason: "unknown" };
   const reason = (reply as { reason?: unknown }).reason;
-  const result = {
+  const result: Omit<Extract<InterAgentAcceptance, { kind: "rejected" }>, "kind"> = {
     reason: typeof reason === "string" && reason !== "" ? reason : "unknown",
   };
+  if (reason === "stale_reply_basis" && typeof reply.conversation_id === "string" &&
+      Number.isSafeInteger(reply.expected_peer_turn) && Number.isSafeInteger(reply.supplied_basis)) {
+    result.details = { conversation_id: reply.conversation_id, expected_peer_turn: reply.expected_peer_turn as number, supplied_basis: reply.supplied_basis as number };
+  }
   const disconnect = disconnectFrom((reply as { disconnect?: unknown }).disconnect);
   return disconnect === undefined ? result : { ...result, disconnect };
 }
 
 export class ServerLink {
+  #replyBasisMode: "v1" | "legacy" | "pending" = "pending";
+  readonly #replyBasisWaiters = new Set<() => void>();
+  async waitForReplyBasisMode(signal?: AbortSignal): Promise<"v1" | "legacy" | "pending"> {
+    if (this.#replyBasisMode !== "pending" || signal?.aborted) return this.#replyBasisMode;
+    if (this.#replyBasisWaiters.size >= 256) return "pending";
+    await new Promise<void>(resolve => {
+      const release = () => { this.#replyBasisWaiters.delete(release); signal?.removeEventListener("abort", release); resolve(); };
+      this.#replyBasisWaiters.add(release); signal?.addEventListener("abort", release, { once: true });
+    });
+    return this.#replyBasisMode;
+  }
   readonly #deliveryGeneration = randomUUID();
   readonly #deliveryRecovery: DeliveryRecovery;
 
@@ -1192,6 +1209,7 @@ export class ServerLink {
     this.#channel = this.#socket.channel(`wrapper:${agentId}`, {
       persona_id: options.personaId,
       inter_agent_delivery_ack: "dispatch-v1",
+      ...(options.interAgentReplyBasis ? { inter_agent_reply_basis: options.interAgentReplyBasis } : {}),
       delivery_generation: this.#deliveryGeneration,
       delivery_resync: "skip-v1",
       ...(this.#permissionSync === undefined
@@ -1455,7 +1473,7 @@ export class ServerLink {
     // snapshot dedupe must not prevent this restoration. On the first open
     // both caches are empty (no-op); on reconnects pushes are buffered by the
     // client until the channel rejoins. send() stamps a fresh seq.
-    this.#socket.onClose(() => this.#deliveryRecovery.disconnected());
+    this.#socket.onClose(() => { this.#deliveryRecovery.disconnected(); this.#replyBasisMode = "pending"; options.onReplyBasisMode?.("pending"); });
     this.#socket.onOpen(() => {
       this.#beginPermissionSyncBarrier();
       if (this.#lastEnvelope) this.send(this.#lastEnvelope);
@@ -1472,6 +1490,10 @@ export class ServerLink {
       .join()
       .receive("ok", (reply: unknown) => {
         this.#acceptPermissionSyncJoin(reply);
+        this.#replyBasisMode = isObject(reply) && reply.inter_agent_reply_basis === "v1" ? "v1" : "legacy";
+        options.onReplyBasisMode?.(this.#replyBasisMode);
+        for (const release of this.#replyBasisWaiters) release();
+        if (options.interAgentReplyBasis && this.#replyBasisMode === "legacy") writeRedactedStderr("inter-agent reply basis: legacy (server protection unavailable)\n");
         if (options.buildInfo !== undefined) {
           const buildInfo = normalizeWrapperBuildInfo(options.buildInfo);
           this.#pushVersioned("wrapper_build_info", {
@@ -1983,6 +2005,7 @@ export class ServerLink {
 
   /** Leaves the channel and closes the socket. */
   close(): void {
+    for (const release of this.#replyBasisWaiters) release();
     this.#deliveryRecovery.dispose();
     this.#channel.leave();
     this.#socket.disconnect();
