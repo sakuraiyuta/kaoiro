@@ -3,7 +3,7 @@ defmodule KaoiroServerWeb.EndpointTest do
 
   alias KaoiroServer.TransportLimits
 
-  describe "socket max_frame_size (#154 M2)" do
+  describe "socket max_frame_size (M2)" do
     test "3 ソケットすべてが TransportLimits の実 frame 上限を使う" do
       # A socket without an explicit cap falls back to Phoenix's
       # :infinity default, letting an unauthenticated peer park an

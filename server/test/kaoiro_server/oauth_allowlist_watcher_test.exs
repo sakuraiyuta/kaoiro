@@ -1,6 +1,6 @@
 defmodule KaoiroServer.OAuthAllowlistWatcherTest do
   # Mutates :oauth_allowlist_path and the shared :persistent_term
-  # checkpoint (issue #170) — both process-independent global state.
+  # checkpoint (issue #160) — both process-independent global state.
   use ExUnit.Case, async: false
 
   import KaoiroServer.OAuthAllowlistFixture
@@ -56,7 +56,7 @@ defmodule KaoiroServer.OAuthAllowlistWatcherTest do
   end
 
   # Exercises the SAME handle_info clause a real file_system event would
-  # (issue #170 must-fix 1's debounce logic), without depending on an
+  # (issue #160 must-fix 1's debounce logic), without depending on an
   # actual inotify/FSEvents backend being available in the test
   # environment — `state.watcher` is whatever start_watching/1 resolved
   # (a real fs pid, or nil if the backend didn't start), and the pattern

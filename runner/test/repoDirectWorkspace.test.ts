@@ -61,7 +61,7 @@ describe("repo-direct な workspace checkout の起動検証", () => {
     dir = mkdtempSync(join(tmpdir(), "kaoiro-repo-direct-"));
     ws = join(dir, "workspace");
     mkdirSync(ws, { recursive: true });
-    // writeWorkspaceCheckout (issue #259) stages the REAL pnpm workspace link
+    // writeWorkspaceCheckout (issue #249) stages the REAL pnpm workspace link
     // topology this file's tests actually need — the runner tree in
     // `runner/`, wrapper packages as sibling members, and
     // runner/node_modules/@kaoiro reaching them by relative links out of the
@@ -120,7 +120,7 @@ describe("repo-direct な workspace checkout の起動検証", () => {
     expect(result.status).toBe(78);
     expect(result.stderr).toContain("resolves outside the release");
     expect(result.stdout).not.toContain("stub cli.js started");
-    // issue #259: this exact failure class (a containment-boundary
+    // issue #249: this exact failure class (a containment-boundary
     // violation) is the incident the launch shim's OLD unconditional "run
     // pnpm build" guidance misled an operator with — the artifacts were all
     // present and current, a rebuild changed nothing, and the same failure
@@ -345,7 +345,7 @@ describe("repo-direct な workspace checkout の起動検証", () => {
 
     expect(result.status).toBe(78);
     expect(result.stdout).not.toContain("stub cli.js started");
-    // ふじ round5 の matrix (issue #259) 発見: workspace 祖先の symlink は
+    // ふじ round5 の matrix (issue #249) 発見: workspace 祖先の symlink は
     // dist container と違い RESOLVE される(健全な in-bound symlink は
     // ok — 別テスト参照)。dangling はその resolve 自体が失敗するので、
     // メッセージは「型が違う」ではなく「到達不能」になる。
@@ -376,7 +376,7 @@ describe("repo-direct な workspace checkout の起動検証", () => {
   });
 
   it("workspace ancestor (node_modules/@kaoiro) が release 内を指す健全な symlink なら通常どおり起動する (ふじ round5 matrix、positive control)", () => {
-    // ふじ round5 の matrix (issue #259) が発見した回帰: 上の dangling
+    // ふじ round5 の matrix (issue #249) が発見した回帰: 上の dangling
     // ケース向けに追加した walkAncestors の祖先チェックが、最初の実装で
     // ANY symlink (健全含む) を無条件拒否していたため、この健全なケース
     // まで exit 78 に倒していた。dist などの build-output container とは
@@ -513,7 +513,7 @@ describe("repo-direct な workspace checkout の起動検証", () => {
     expect(result.status).toBe(78);
     expect(result.stderr).toContain("resolves outside the release");
     expect(result.stdout).not.toContain("stub cli.js started");
-    // issue #259: same failure class as the previous test — not build-fixable.
+    // issue #249: same failure class as the previous test — not build-fixable.
     expect(result.stderr).not.toContain("pnpm -C wrapper build");
   });
 

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Component-level coverage for the rename UI (issue #197 段階3 unit B).
+// Component-level coverage for the rename UI (issue #187 段階3 unit B).
 // Pins the 4 points ふじ specified as sufficient for the UI side of the
 // acceptance seam: operator/viewer DOM presence, single-call submit,
 // error surfacing through the shared actionError path, and envelope-
@@ -41,7 +41,7 @@ function envelopeFor(name: string, ext?: Record<string, unknown>): Envelope {
     state: "idle",
     payload: {},
     persona: { id: "ao", name, sprite_set: "ao" },
-    // issue #219 D19: display_name is what the UI actually shows — this
+    // issue #209 D19: display_name is what the UI actually shows — this
     // helper's `name` param seeds both, matching every EXISTING caller's
     // intent ("the shown name"); a test that needs canonical/display_name
     // to DIVERGE builds its own fixture (D27 acceptance pin) rather than
@@ -84,7 +84,7 @@ async function renderDetail(
   return target;
 }
 
-describe("AgentDetail rename UI (issue #197 段階3 unit B, ふじ判定 4 点)", () => {
+describe("AgentDetail rename UI (issue #187 段階3 unit B, ふじ判定 4 点)", () => {
   it("(1) operator (onRename あり) には rename control が見え、viewer (onRename 無し) には DOM 自体が無い", async () => {
     const operatorTarget = await renderDetail(
       envelopeFor("あお"),
@@ -96,7 +96,7 @@ describe("AgentDetail rename UI (issue #197 段階3 unit B, ふじ判定 4 点)"
     expect(renameButton(viewerTarget)).toBeNull();
   });
 
-  // issue #197 段階3 ふじ MF-2 レビュー指摘: 以前は `onRename` が
+  // issue #187 段階3 ふじ MF-2 レビュー指摘: 以前は `onRename` が
   // `(name) => Promise<void>` のみで、agent_id は呼び出し元
   // (App.svelte) の closure に依存していた — その closure を
   // "wrong.id" のような別 agent へ変異させても、この component test も
@@ -153,7 +153,7 @@ describe("AgentDetail rename UI (issue #197 段階3 unit B, ふじ判定 4 点)"
     expect(target.querySelector(".rename-form")).not.toBeNull();
   });
 
-  // issue #197 段階3 ふじ MF-4 レビュー指摘: 以前は blank (trim 後空文字)
+  // issue #187 段階3 ふじ MF-4 レビュー指摘: 以前は blank (trim 後空文字)
   // を `trimmed === "" || trimmed === name` の early-return で、server
   // へ送らず error surface も出さずに閉じていた — これは D5 (server-
   // authority-only validation) の合意に反する undocumented な
@@ -213,14 +213,14 @@ describe("AgentDetail rename UI (issue #197 段階3 unit B, ふじ判定 4 点)"
 
     // Reopening the popover must seed the draft from the NEW name, not a
     // stale local cache of the old one — the failure mode this point
-    // guards against (issue #197 段階3 ふじ 判定, UI 側 (4)).
+    // guards against (issue #187 段階3 ふじ 判定, UI 側 (4)).
     renameButton(target)!.click();
     await tick();
     const input = target.querySelector(".rename-form input") as HTMLInputElement;
     expect(input.value).toBe("あお(改名)");
   });
 
-  // 内部レビュー Workflow 指摘 (issue #197 段階3 unit B, medium severity):
+  // 内部レビュー Workflow 指摘 (issue #187 段階3 unit B, medium severity):
   // toggleModelMenu/toggleEffortMenu/togglePermMenu は互いの popover を
   // 閉じるが、新設した rename popover (renameMenuOpen) だけリセットし
   // 忘れていた (非対称)。逆方向 (toggleRenameMenu が他 3 つを閉じる) は

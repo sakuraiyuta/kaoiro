@@ -135,7 +135,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     end
   end
 
-  # issue #271 (ふじ #269 レビュー should-fix): tie (同着) fixture の決定
+  # issue #261 (ふじ #259 レビュー should-fix): tie (同着) fixture の決定
   # 論化。`AgentDirectory.touch/1` は `System.system_time(:second)` を使う
   # ため、グループ内の touch が秒境界をちょうど跨ぐと last_seen が割れ、
   # tie-break (agent_id 昇順) を検証するテストが極低確率で flake し得た。
@@ -335,13 +335,13 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     on_exit(fn -> WrapperBuildInfos.delete(agent_id, socket.channel_pid) end)
   end
 
-  describe "ADR-0015 stage 2 wrapper inbound funnel (issue #270)" do
+  describe "ADR-0015 stage 2 wrapper inbound funnel (issue #260)" do
     # T2-3 は「version 一致なら警告ゼロ」を log == "" で検証するが、7 種の
     # push には directory_request が含まれ、その directory-only 射影は
     # suite 共有の AgentDirectory (グローバル GenServer) が 32 件を超えて
-    # いると cap warn を出す (issue #269 S6)。他 describe (T10 等) が蓄積
+    # いると cap warn を出す (issue #259 S6)。他 describe (T10 等) が蓄積
     # した entry が実行順序次第で流れ込み seed 依存で flake するため、
-    # issue #269 の T10 describe と同じ隔離 setup で汚染を断つ。setup は
+    # issue #259 の T10 describe と同じ隔離 setup で汚染を断つ。setup は
     # describe スコープに閉じ、suite は async: false の直列実行。
     setup do
       for {id, _entry} <- AgentDirectory.all(), do: AgentDirectory.delete(id)
@@ -651,8 +651,8 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
              SessionLifecycleEvents.list_for_agent(agent_id)
   end
 
-  describe "persona_sync push on join (issue #197 段階3, D14 acceptance 1, revised issue #219 D22)" do
-    # issue #219 MF-2 acceptance pin (クロエ実測検証, wrapper 側半分):
+  describe "persona_sync push on join (issue #187 段階3, D14 acceptance 1, revised issue #209 D22)" do
+    # issue #209 MF-2 acceptance pin (クロエ実測検証, wrapper 側半分):
     # revision は @initial_revision = 1 から始まる (0 ではない) — a legacy
     # wrapper build's own sync guard is `if (revision <= this.#personaRevision)
     # return;` starting at `#personaRevision = 0`, so a fresh-spawn push
@@ -672,7 +672,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     test "rename 後に reconnect すると新しい display_name/revision が push される (再同期)" do
       agent_id = "test.persona-sync-reconnect"
       AgentDirectory.record(agent_id, "ao", "あお")
-      # baseline @initial_revision(1) + 1 = 2 (issue #219 MF-2).
+      # baseline @initial_revision(1) + 1 = 2 (issue #209 MF-2).
       assert {:ok, %{revision: 2}} = AgentDirectory.rename(agent_id, "あお(改名)")
 
       _socket = join_wrapper(agent_id)
@@ -690,10 +690,10 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       refute_push "display_name_sync", %{}
     end
 
-    # ADR-0015 (issue #197 段階3, ふじ MF-1 レビュー指摘): after-join push
+    # ADR-0015 (issue #187 段階3, ふじ MF-1 レビュー指摘): after-join push
     # にも version stamp が要る。上の 2 テストは %{"name" => ..., "revision"
     # => ...} という部分一致で version の有無を検証できないため、ここで
-    # 直接 pin する。issue #219 D22: 両 event とも同じ version stamp。
+    # 直接 pin する。issue #209 D22: 両 event とも同じ version stamp。
     test "push には両 event とも version スタンプが乗る (ADR-0015)" do
       agent_id = "test.persona-sync-version"
       AgentDirectory.record(agent_id, "ao", "あお")
@@ -837,7 +837,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
                join_with_token("test.unlisted", "tok-1")
     end
 
-    test "認証拒否 socket の terminate は agent_id 未assign を正常系として扱う (issue #196)" do
+    test "認証拒否 socket の terminate は agent_id 未assign を正常系として扱う (issue #186)" do
       socket = %Phoenix.Socket{
         assigns: %{wrapper_token: "wrong"},
         channel: WrapperChannel
@@ -1009,7 +1009,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       refute Map.has_key?(AgentStates.histories(), agent_id)
     end
 
-    # issue #180 (ADR-0019/0047/0048): task envelope は AgentStates ではなく
+    # issue #170 (ADR-0019/0047/0048): task envelope は AgentStates ではなく
     # TaskStates の flat table へ行く — 親の state_change スロットを一切
     # 上書きしない(refresh_models_result と同型の「中継するが latest slot
     # は触らない」要件だが、task は TaskStates 側に実体を残す点が異なる)。
@@ -1054,7 +1054,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert stored["payload"]["task_id"] == "t1"
     end
 
-    # code-review (issue #180, round 1): payload.agent_id はトピックの
+    # code-review (issue #170, round 1): payload.agent_id はトピックの
     # agent_id と別フィールドとして届く (ADR-0047 F2、self-contained のため
     # payload にも複製される)。ここが未検証だと、他 agent_id を騙る payload
     # が TaskStates へ誤帰属し、terminate/2 の discard_for_agent(実 agent_id
@@ -1091,7 +1091,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     # correspondence) are validated at the frame boundary, so a malformed
     # task envelope is rejected outright — never reaches
     # store_and_broadcast (no live broadcast, no TaskStates entry).
-    # trusted-wrapper leniency is deliberately not applied (#175 lesson).
+    # trusted-wrapper leniency is deliberately not applied (#165 lesson).
     test "task の必須 field 欠落・kind/status 不整合は reject する (S1 fix-round)" do
       agent_id = "test.task-s1"
       socket = join_wrapper(agent_id)
@@ -1143,7 +1143,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert TaskStates.snapshot() == %{}
     end
 
-    # issue #188 / ADR-0049 F4: tasklist は child task と同じ `task` wire を
+    # issue #178 / ADR-0049 F4: tasklist は child task と同じ `task` wire を
     # 通るが、task_id/task_type の固定された単一 entity。予約を片方向だけに
     # すると、child が task_id=tasklist を名乗って parent の todo snapshot を
     # 上書きできてしまうため、両方向の拒否を frame boundary で固定する。
@@ -1457,7 +1457,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     end
   end
 
-  # #109: session transitions record SessionStarts only. They must not
+  # #106: session transitions record SessionStarts only. They must not
   # change ClearWatermarks visibility or broadcast a client filter event.
   # SessionResets confirm_connection (Trigger 1) と外部 switch_session
   # (Trigger 2) の 2 経路でのみ前進する。以下 4 pin はクロエ 追加条件:
@@ -1465,7 +1465,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
   #     session 復帰後の durable IA 表示が壊れないこと)
   #   - 条件 2: 未発話 agent の初回 sid 報告で境界を前進させない
   #     (fresh spawn 直後の IA が誤って hidden 化しないこと)
-  describe "session start 記録 trigger (#109)" do
+  describe "session start 記録 trigger (#106)" do
     alias KaoiroServer.ClearWatermarks
     alias KaoiroServer.SessionStarts
     alias KaoiroServer.SessionPointers, as: SP
@@ -2408,17 +2408,17 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
         "body" => opts[:body] || "hi",
         "meta" => meta,
         "owner" => opts[:owner] || %{"kind" => "user", "id" => "operator"},
-        # issue #262. Defaults true (matches ConversationStates.record_
+        # issue #252. Defaults true (matches ConversationStates.record_
         # message/8's own default): this describe block's cids are either
         # freshly minted here or a 2nd+ call reusing one this SAME helper
         # already created, so `existing` is never nil on a false-flagged
-        # send by construction and the flag is moot for every pre-#262
-        # test. Tests written FOR #262 pass `new_conversation: false`
+        # send by construction and the flag is moot for every pre-#252
+        # test. Tests written FOR #252 pass `new_conversation: false`
         # explicitly to exercise the reject path.
         "new_conversation" => Keyword.get(opts, :new_conversation, true)
       }
 
-      # 応答不能エラー通知 (#131) は optional。指定時のみ payload に載せる。
+      # 応答不能エラー通知 (#127) は optional。指定時のみ payload に載せる。
       payload =
         if opts[:error], do: Map.put(payload, "error", opts[:error]), else: payload
 
@@ -3939,7 +3939,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       from_socket = seed_known(from_id)
 
       # to を先に切断させておく。会話がまだ無いので claim_unreachable_targets
-      # の disconnect トリガー (#131) は発火しない — issue #257 が問題にして
+      # の disconnect トリガー (#127) は発火しない — issue #257 が問題にして
       # いた、事前チェックが無ければ record_message まで素通りしてしまう経路
       # そのもの。
       :ok = close(to_socket)
@@ -4005,7 +4005,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert_panes_empty([from_id, to_id])
     end
 
-    test "turn_number が 0 以下だと live ingress で構造的に拒否する (#177 review M1)" do
+    test "turn_number が 0 以下だと live ingress で構造的に拒否する (#167 review M1)" do
       from_id = "test.iam-turn0-from"
       to_id = "test.iam-turn0-to"
       _ = seed_known(to_id)
@@ -4023,7 +4023,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert_panes_empty([from_id, to_id])
     end
 
-    test "payload.new_conversation 欠落 (issue #262 より前の wrapper 相当) は拒否せず " <>
+    test "payload.new_conversation 欠落 (issue #252 より前の wrapper 相当) は拒否せず " <>
            "true とみなして新規 conversation として通す (レビュー、クロエ M1)" do
       # ADR-0015 のベストエフォート受理と同じ理由: Phoenix client は
       # reconnect/heartbeat を自前で持つため、server だけ再デプロイしても
@@ -4043,7 +4043,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
           assert_reply ref, :ok
         end)
 
-      # こはくの裁定 (issue #262): 「欠落は警告ログ付きで従来どおり受理」の
+      # こはくの裁定 (issue #252): 「欠落は警告ログ付きで従来どおり受理」の
       # ログ側を検証する。accept 判定だけでは無言の legacy 受理と警告付き
       # legacy 受理を区別できない。
       assert log =~ "inter_agent_message: client declared new_conversation (absent)"
@@ -4052,7 +4052,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
     test "payload.new_conversation 欠落かつ明示指定の未知 cid (旧 wrapper 相当) は " <>
            "移行期間中 unknown_conversation_id にならず新規として受理される " <>
-           "(意図的な残余、issue #262 delta)" do
+           "(意図的な残余、issue #252 delta)" do
       # trivial-review advisory: server の視点では上の「欠落は true とみなす」
       # テストとコード経路は同一 — 「省略による新規」と「タイポによる未知」を
       # 区別する情報は payload 上に無く (new_conversation が唯一の判断材料で、
@@ -4075,7 +4075,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert_reply ref, :ok
     end
 
-    test "payload.new_conversation が bool でなければ拒否する (issue #262)" do
+    test "payload.new_conversation が bool でなければ拒否する (issue #252)" do
       from_id = "test.iam-newconv-badtype-from"
       to_id = "test.iam-newconv-badtype-to"
       _ = seed_known(to_id)
@@ -4089,7 +4089,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     end
 
     test "明示指定された未知の conversation_id は unknown_conversation_id で拒否し " <>
-           "relay も store もしない (issue #262)" do
+           "relay も store もしない (issue #252)" do
       from_id = "test.iam-unkcid-from"
       to_id = "test.iam-unkcid-to"
       to_socket = seed_known(to_id)
@@ -4111,7 +4111,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     end
 
     test "既存 conversation への明示応答 (new_conversation: false) は通常どおり通す " <>
-           "(issue #262)" do
+           "(issue #252)" do
       from_id = "test.iam-newconv-reply-from"
       to_id = "test.iam-newconv-reply-to"
       cid = "cnv-newconv-reply-#{System.unique_integer([:positive])}"
@@ -4129,7 +4129,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert_reply ref, :ok
 
       # 応答側: 相手から受け取った id を明示指定 -> new_conversation: false
-      # だが既存なので #262 のチェックには触れず通常どおり通る。
+      # だが既存なので #252 のチェックには触れず通常どおり通る。
       ref2 =
         push(
           to_socket,
@@ -4141,7 +4141,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     end
 
     test "既知の max_turn_number 以下の再送は stale_turn で拒否し relay も store もしない " <>
-           "(#177 review M1)" do
+           "(#167 review M1)" do
       from_id = "test.iam-staleturn-from"
       to_id = "test.iam-staleturn-to"
       cid = "cnv-staleturn-#{System.unique_integer([:positive])}"
@@ -4227,7 +4227,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       }
     end
 
-    test "payload.error 付き envelope をそのまま宛先へ中継する (#131)" do
+    test "payload.error 付き envelope をそのまま宛先へ中継する (#127)" do
       from_id = "test.iam-err-from"
       to_id = "test.iam-err-to"
       _ = seed_known(to_id)
@@ -4254,7 +4254,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
                      TestTimeouts.out_of_band()
     end
 
-    test "payload.error の構造不正を拒否する (#131)" do
+    test "payload.error の構造不正を拒否する (#127)" do
       from_id = "test.iam-badErr-from"
       to_id = "test.iam-badErr-to"
       _ = seed_known(to_id)
@@ -4269,7 +4269,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert_reply ref2, :error, %{reason: "invalid value: payload.error"}
     end
 
-    test "wrapper 切断で会話相手へ error.code=disconnected を合成 push する (#131)" do
+    test "wrapper 切断で会話相手へ error.code=disconnected を合成 push する (#127)" do
       # ChannelCase は channel process を test process と link するので、
       # close/1 の {:shutdown, :closed} exit を trap して吸収する。
       Process.flag(:trap_exit, true)
@@ -4477,7 +4477,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       on_exit(fn -> AgentStates.delete(to_id) end)
     end
 
-    test "stale terminate (再接続で entry を失った側) では合成しない (#131)" do
+    test "stale terminate (再接続で entry を失った側) では合成しない (#127)" do
       Process.flag(:trap_exit, true)
 
       from_id = "test.iam-stale-from"
@@ -4557,12 +4557,12 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert length(AgentStates.ia_projection()[b_id]) == 1
     end
 
-    # issue #177 / こはく合意の Stage 3 回帰: server-synth した
+    # issue #167 / こはく合意の Stage 3 回帰: server-synth した
     # {:error, :conversation_closed} が preflight_inter_agent の汎用
     # reject 経路 (unknown_agent / self_routing / participants_mismatch と
     # 同じ分岐) を実コードで最後まで通ることを確認する。既存 reason の
     # 通過実績からの推定に留めない (こはく条件1)。
-    test "両 owner-side done 後の同一 cid 送信は conversation_closed で拒否する (#177)" do
+    test "両 owner-side done 後の同一 cid 送信は conversation_closed で拒否する (#167)" do
       a_id = "test.iam-closed-a"
       b_id = "test.iam-closed-b"
       cid = "cnv-closed-#{System.unique_integer([:positive])}"
@@ -4758,7 +4758,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
       # 自分を除外して peer のみが返る
       assert Enum.any?(agents, fn a ->
-               # issue #219 D19/D26: envelope に display_name が無ければ
+               # issue #209 D19/D26: envelope に display_name が無ければ
                # entry からも省略される — 他の未 stamp optional field と
                # 同じ discipline。
                a["agent_id"] == peer_id and
@@ -4773,7 +4773,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       refute Enum.any?(agents, fn a -> a["agent_id"] == self_id end)
     end
 
-    # issue #219 D19/D26 (ADR-0021 F6-3): envelope の display_name top-level
+    # issue #209 D19/D26 (ADR-0021 F6-3): envelope の display_name top-level
     # field が peer directory entry へそのまま乗る。persona (canonical) は
     # 別 field のまま — 両方が同時に開示され、どちらかがどちらかを置き換
     # えないことを pin する。
@@ -4805,7 +4805,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
              end)
     end
 
-    # advisory (issue #219, クロエ実測検証): `directory_entry/1`'s
+    # advisory (issue #209, クロエ実測検証): `directory_entry/1`'s
     # `display_name` now applies `valid_display_name/1` (same 1-64-grapheme
     # / no-control-char bound `user_entry/1` already applies), not a bare
     # `is_binary/1` check. An out-of-bound value from a compromised/buggy
@@ -4894,7 +4894,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
                "effort" => "high"
              }
 
-      # #102の3 field以外のoperator-grade情報は引き続き含まれない。
+      # #99の3 field以外のoperator-grade情報は引き続き含まれない。
       refute Map.has_key?(entry, "ext")
       refute Map.has_key?(entry, "cwd")
       refute Map.has_key?(entry, "model_source")
@@ -5440,7 +5440,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     end
   end
 
-  describe "directory_request の directory-only 合流 (issue #269)" do
+  describe "directory_request の directory-only 合流 (issue #259)" do
     # T10 (S6) は AgentDirectory 全体の件数に依存する bound (N=32) を検証
     # する。AgentDirectory はテストスイート全体で共有される単一 GenServer
     # (グローバル名) で、他のテストが record した entry がそのまま蓄積
@@ -5453,7 +5453,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       :ok
     end
 
-    # issue #269 T1: 完了条件1の server 側 — AgentStates に envelope を
+    # issue #259 T1: 完了条件1の server 側 — AgentStates に envelope を
     # 持たない AgentDirectory エントリが disconnected + directory_only=true
     # で合流する。
     test "AgentStates に無く AgentDirectory にのみある agent が state=disconnected + directory_only=true で返る" do
@@ -5472,7 +5472,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert entry["directory_only"] == true
     end
 
-    # issue #269 T2 (仕様5): AgentStates 側を優先し、同一 agent_id を
+    # issue #259 T2 (仕様5): AgentStates 側を優先し、同一 agent_id を
     # 重複させない。
     test "同一 agent_id が AgentStates と AgentDirectory の両方にある場合、entry は 1 件だけで directory_only を持たない" do
       peer_id = "test.dir-only-dup"
@@ -5493,7 +5493,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       refute Map.has_key?(hd(matches), "directory_only")
     end
 
-    # issue #269 T3: persona_id が PersonaAssets に解決する場合の canonical join。
+    # issue #259 T3: persona_id が PersonaAssets に解決する場合の canonical join。
     test "persona_id が PersonaAssets に解決する場合 persona に id/name/sprite_set が載る" do
       peer_id = "test.dir-only-persona-known"
       AgentDirectory.record(peer_id, "ao", "あお")
@@ -5509,7 +5509,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert entry["persona"] == %{"id" => "ao", "name" => "あお", "sprite_set" => "ao"}
     end
 
-    # issue #269 T4 (S1 の再発防止): persona は未解決でも typed unresolved
+    # issue #259 T4 (S1 の再発防止): persona は未解決でも typed unresolved
     # として persona キー自体は必ず present。ここが緩むと wrapper 側の
     # narrow (persona を必須 field として扱う) で entry が丸ごと消える。
     test "persona_id が未解決の場合 persona は %{id => persona_id} で、persona キー自体は present" do
@@ -5529,7 +5529,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert entry["persona"]["id"] == "no-such-pack-zzz"
     end
 
-    # issue #269 T5 (仕様5): requester 除外は合流後の1箇所で、directory-only
+    # issue #259 T5 (仕様5): requester 除外は合流後の1箇所で、directory-only
     # 側の self にも効く。
     #
     # ふじ MF-1/MF-2: self が AgentStates 未登録(envelope 未 push)で
@@ -5559,7 +5559,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       assert length(agents) == 32
     end
 
-    # issue #269 T6 (仕様3): last_seen は touch 済みのみ ISO8601 UTC で載り、
+    # issue #259 T6 (仕様3): last_seen は touch 済みのみ ISO8601 UTC で載り、
     # 未 touch (memory-only hint 未取得) は field ごと省略する。
     test "touch 済みなら last_seen が ISO8601 で載り、未 touch なら field ごと省略" do
       touched_id = "test.dir-only-touched"
@@ -5587,7 +5587,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       refute Map.has_key?(untouched_entry, "last_seen")
     end
 
-    # issue #269 T7 (仕様4 / 開示境界。ADR-0021 F6-7 の covering): directory-
+    # issue #259 T7 (仕様4 / 開示境界。ADR-0021 F6-7 の covering): directory-
     # only entry には live 専用 field が一切載らない。absent = unknown。
     test "directory-only entry には engine/model/effort/context/rate_limits/session_started_at/turns/last_activity_at が無い" do
       peer_id = "test.dir-only-absent-fields"
@@ -5608,7 +5608,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       end
     end
 
-    # issue #269 T8 (S10): display_name が検証に落ちても entry ごとは
+    # issue #259 T8 (S10): display_name が検証に落ちても entry ごとは
     # 落とさず、display_name field だけ省略する (live entry と同じ discipline)。
     test "display_name が検証に落ちる値でも entry は残り display_name だけ省略される" do
       peer_id = "test.dir-only-bad-display-name"
@@ -5629,7 +5629,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       refute Map.has_key?(entry, "display_name")
     end
 
-    # issue #269 T9 (S7): AgentDirectory の DETS ロードは is_binary(agent_id)
+    # issue #259 T9 (S7): AgentDirectory の DETS ロードは is_binary(agent_id)
     # しか見ていないため、この経路が AgentId.valid?/1 を通す最初の関門になる。
     test "charset 不正な agent_id の directory エントリは entry ごと drop される" do
       bad_id = "bad id with spaces!"
@@ -5645,7 +5645,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       refute Enum.any?(agents, &(&1["agent_id"] == bad_id))
     end
 
-    # issue #269 T10 (S6): directory-only 分は N=32 に切り、last_seen 降順
+    # issue #259 T10 (S6): directory-only 分は N=32 に切り、last_seen 降順
     # (unknown は最後尾、同着は agent_id 昇順) で残す。超過時は
     # agent/request 単位で 1 行 warn する。
     #
@@ -5671,7 +5671,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       # older を先に touch し、1 秒空けて newest を touch する —
       # last_seen は unix 秒精度なので、2 グループ間の順序を確実に
       # 分けるにはこの間隔が要る。同一グループ内の 2 件は
-      # touch_until_tied で同一秒に揃え (issue #271)、agent_id 昇順の
+      # touch_until_tied で同一秒に揃え (issue #261)、agent_id 昇順の
       # tie-break を決定論的に pin する。
       touch_until_tied(older_ids)
       Process.sleep(1100)
@@ -5709,7 +5709,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
     end
   end
 
-  describe "directory_request の users projection (issue #197 段階2, ADR-0021 F6-8)" do
+  describe "directory_request の users projection (issue #187 段階2, ADR-0021 F6-8)" do
     setup do
       on_exit(fn ->
         Application.delete_env(:kaoiro_server, :expose_users_to_agents)
@@ -5748,7 +5748,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
              end)
     end
 
-    test "admin の user は role \"admin\" のまま届く (issue #198)" do
+    test "admin の user は role \"admin\" のまま届く (issue #188)" do
       # producer 側の `role_string(:admin)` を固定する (ふじ should 1)。
       # これが無いと catch-all の nil で entry ごと落ち、admin だけが
       # users から消える。auth 側の hash-role map テストと wrapper/core の
@@ -5772,7 +5772,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
              end)
     end
 
-    test "display_name が 64 文字超・制御文字混入の user は entry ごと省略される (issue #197 段階2 ふじ M5 レビュー指摘)" do
+    test "display_name が 64 文字超・制御文字混入の user は entry ごと省略される (issue #187 段階2 ふじ M5 レビュー指摘)" do
       Application.put_env(:kaoiro_server, :expose_users_to_agents, true)
 
       put_allowlist(
@@ -5929,7 +5929,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       refute Enum.any?(after_revoke, &(&1["id"] == user.id))
     end
 
-    test "同一 wrapper socket のまま allow-list が unreadable/欠落 → user 省略 → 復旧後に再出現する (issue #197 段階2, ふじ 追加必須テスト)" do
+    test "同一 wrapper socket のまま allow-list が unreadable/欠落 → user 省略 → 復旧後に再出現する (issue #187 段階2, ふじ 追加必須テスト)" do
       # 既存テストは (a) 同一 socket での role 変更、(b) 別 request での
       # revoke、(c) Users 単体の復旧を別々に確認していたが、file-read
       # fail-closed + pull recovery を「同一 socket のまま」で一本に
@@ -5989,7 +5989,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
 
       # 2 user (oauth 由来 "B" / token 由来 "T") がどちらも role 解決できて
       # いることをまず確認する — さもないと以下の refute 群が vacuous に
-      # 通ってしまう (issue #197 段階2 review 指摘、あお review turn-1)。
+      # 通ってしまう (issue #187 段階2 review 指摘、あお review turn-1)。
       assert length(users) == 2
 
       raw = Jason.encode!(users)
@@ -6230,7 +6230,7 @@ defmodule KaoiroServerWeb.WrapperChannelTest do
       refute Map.has_key?(WrapperBuildInfos.snapshot(), agent_id)
     end
 
-    # issue #180, ADR-0048 F1: 親エージェントの切断でその task を破棄する。
+    # issue #170, ADR-0048 F1: 親エージェントの切断でその task を破棄する。
     # AgentStates.disconnect/3 の owner-check 成功に相乗りするので、この
     # テストで「切断で消える」ことと「切断していないと消えない」ことの両方
     # を確認する。

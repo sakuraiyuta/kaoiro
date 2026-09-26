@@ -51,7 +51,7 @@ function stateEnv(agentId: string, name: string): Envelope {
   };
 }
 
-// issue #244: デフォルト(未割り当て)ペルソナ envelope。sprite_set: "default"
+// issue #234: デフォルト(未割り当て)ペルソナ envelope。sprite_set: "default"
 // は予約値で PersonaAssets manifest に登録されない (personas.md) ので
 // spriteUrlFor は常に null を返す — フォールバック表示の分岐だけを
 // 確認したいテスト用に state を差し替え可能にしてある。
@@ -442,7 +442,7 @@ describe("ResponseTimeline (#25 実機検収 3 仕様変更版)", () => {
     );
   });
 
-  // issue #244 ふじ must-1: 実際の再現条件は (a) manifest は利用可能
+  // issue #234 ふじ must-1: 実際の再現条件は (a) manifest は利用可能
   // だが予約 sprite_set "default" だけ未登録 (personas.md) — manifest:
   // null では default も ao も等しく null になり、この点を測れない —
   // (b) live envelope の persona (default, concrete object) が `??`
@@ -456,7 +456,7 @@ describe("ResponseTimeline (#25 実機検収 3 仕様変更版)", () => {
   // agent-strip は eye/mouth 形状を state 非依存に保っており
   // (App.svelte の `.chip .face` コメント参照)、`.chip` と AgentDetail
   // の `.detail` には `waiting_question` の tone rule が無い。統一は
-  // issue #245 の仕事。
+  // issue #235 の仕事。
   //
   // agent-strip / AgentCard / AgentDetail は sprite 無しを state 依存
   // CSS 顔 (.face + .eye + .mouth) で表示するのに対し、ResponseTimeline
@@ -490,7 +490,7 @@ describe("ResponseTimeline (#25 実機検収 3 仕様変更版)", () => {
     },
   });
 
-  it("persona 未割り当て (sprite_set: default、manifest 未登録) は directory の ao sprite ではなく CSS 顔を表示する (issue #244, ふじ must-1)", async () => {
+  it("persona 未割り当て (sprite_set: default、manifest 未登録) は directory の ao sprite ではなく CSS 顔を表示する (issue #234, ふじ must-1)", async () => {
     const target = await renderTimeline({
       agents: { "lab-pc.a": defaultPersonaEnv("lab-pc.a", "thinking") },
       directory: AO_DIRECTORY_FOR("lab-pc.a"),
@@ -507,7 +507,7 @@ describe("ResponseTimeline (#25 実機検収 3 仕様変更版)", () => {
     expect(portrait?.querySelector(".mouth")).not.toBeNull();
   });
 
-  it("agent の state が変わると未割り当てペルソナの CSS 顔の data-state も追随する (idle と error で見た目が変わる、issue #244)", async () => {
+  it("agent の state が変わると未割り当てペルソナの CSS 顔の data-state も追随する (idle と error で見た目が変わる、issue #234)", async () => {
     const idleTarget = await renderTimeline({
       agents: { "lab-pc.a": defaultPersonaEnv("lab-pc.a", "idle") },
       directory: AO_DIRECTORY_FOR("lab-pc.a"),

@@ -1,4 +1,4 @@
-// runner/deploy/kaoiro-runner-update.sh (issue #229).
+// runner/deploy/kaoiro-runner-update.sh (issue #219).
 //
 // WHAT IS AND IS NOT MEASURED HERE. The acceptance criterion is "stopping
 // the caller's runner does not stop the update", and the mechanism that
@@ -76,7 +76,7 @@ interface SystemctlStubOptions {
   onStart?: string;
 }
 
-describe("kaoiro-runner-update.sh (issue #229)", () => {
+describe("kaoiro-runner-update.sh (issue #219)", () => {
   let dir: string;
   let root: string;
   let work: string;
@@ -688,13 +688,13 @@ describe("kaoiro-runner-update.sh (issue #229)", () => {
     expect(remaining).not.toContain(old2);
   });
 
-  it(".lock.links (issue #253) が保持されていれば prune を止め、活性化済みの current はそのまま残す", () => {
+  it(".lock.links (issue #243) が保持されていれば prune を止め、活性化済みの current はそのまま残す", () => {
     // The prune snapshot-and-delete below takes the SAME .lock.links
     // kaoiro-runner-switch.sh takes around its own current/previous swap.
     // `onStart` fires after stop/switch/start have all already succeeded --
     // simulating an external switch or install grabbing the lock in the
     // instant this run turns from activating a release to pruning old
-    // ones, which is exactly the window issue #253 closes. update.sh's own
+    // ones, which is exactly the window issue #243 closes. update.sh's own
     // NESTED install call (earlier in this same run) never contends here:
     // it acquires and releases this same lock around its own narrow
     // window, and that call has long since returned by the time `start`

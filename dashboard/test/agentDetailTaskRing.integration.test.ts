@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// AgentDetail の 頭上リング (issue #180 follow-up, 2026-08-10): AgentCard
+// AgentDetail の 頭上リング (issue #170 follow-up, 2026-08-10): AgentCard
 // と同じ表示契約 (activeTaskCount > 0 のときだけ .task-ring を描画、数値
 // は出さない) を AgentDetail 側でも固定する。マスター指摘: 32-3 実装時は
 // AgentCard のみに実装され AgentDetail には無かった (phase-32 プラン
@@ -74,7 +74,7 @@ async function render(
   return target;
 }
 
-describe("AgentDetail 頭上リング (issue #180 follow-up)", () => {
+describe("AgentDetail 頭上リング (issue #170 follow-up)", () => {
   it("activeTaskCount 省略時 (既定 0) はリングを描画しない", async () => {
     const target = await render(undefined);
     expect(target.querySelector(".task-ring")).toBeNull();

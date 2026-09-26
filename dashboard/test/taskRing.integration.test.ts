@@ -85,7 +85,7 @@ describe("TaskRing (issue #233)", () => {
 
   // count=1 must reproduce the pre-#233 single-dot geometry bit-for-bit:
   // theta=-90deg (12 o'clock) -> dot-x=0, dot-y=-1, zero phase delay.
-  it("count=1 は既存 (issue #180) の単一ドット幾何と一致する (dot-x=0, dot-y=-1, delay=0)", async () => {
+  it("count=1 は既存 (issue #170) の単一ドット幾何と一致する (dot-x=0, dot-y=-1, delay=0)", async () => {
     const target = await render(1);
     const ring = target.querySelector(".task-ring")!;
     expect(cssVarNumber(ring, "--dot-x")).toBeCloseTo(0, 10);

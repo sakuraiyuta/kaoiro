@@ -98,7 +98,7 @@ async function render(selected: Envelope) {
   return target;
 }
 
-describe("inter-agent restored history rendering (#105)", () => {
+describe("inter-agent restored history rendering (#102)", () => {
   it("sender detail に outgoing bubble を描画する", async () => {
     const target = await render(state("agent-a", "A"));
     const bubble = target.querySelector(".inter-agent.outgoing");

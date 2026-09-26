@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// issue #245 fix-round (ふじ round1 must-fix, confidence 0.99): pins
+// issue #235 fix-round (ふじ round1 must-fix, confidence 0.99): pins
 // App.svelte's agent-strip (`.chip`) wiring to PersonaFace's size="chip"
 // preset, mirroring personaFacePresetWiring.integration.test.ts for the
 // other 3 sites. Split into its own file because it needs the
@@ -158,7 +158,7 @@ describe("App.svelte agent-strip -> PersonaFace preset wiring", () => {
     expect(img?.getAttribute("alt")).toBe("");
   });
 
-  // issue #276 実機確認: chip は #172 設計時に scope 外とされたが、こはく
+  // issue #265 実機確認: chip は #162 設計時に scope 外とされたが、こはく
   // 裁定で撤回され配線された。閾値以上 + capability 宣言ありの agent の
   // chip が fatigued sprite を指すことと、閾値未満は通常 sprite のままで
   // あることを両方向で pin する (片方向だけだと配線を外しても green)。

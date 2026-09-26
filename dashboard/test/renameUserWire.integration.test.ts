@@ -7,7 +7,7 @@
 // pushes the exact `"rename_user"` event / `{ version, user_id,
 // display_name }` payload shape the server's
 // handle_in("rename_user", ...) accepts (pinned server-side in
-// agents_channel_test.exs' `rename_user` describe block, issue #197
+// agents_channel_test.exs' `rename_user` describe block, issue #187
 // 段階3).
 //
 // Runs against the REAL phoenix client with only the WebSocket swapped --

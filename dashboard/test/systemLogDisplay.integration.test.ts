@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// phase-28 A1 (#168): log kind="system" — session-level events the wrapper
+// phase-28 A1 (#158): log kind="system" — session-level events the wrapper
 // observed (context compaction, conversation reset), which are neither party
 // speaking. Pins that AgentDetail renders them as their own line, not as an
 // assistant/user bubble.
@@ -67,7 +67,7 @@ async function render(logs: Envelope[]) {
   return target;
 }
 
-describe("log kind=system rendering (phase-28 A1 / #168)", () => {
+describe("log kind=system rendering (phase-28 A1 / #158)", () => {
   it("compact 通知を 1 行として描画する", async () => {
     const target = await render([systemLog]);
     const line = target.querySelector(".sysline");

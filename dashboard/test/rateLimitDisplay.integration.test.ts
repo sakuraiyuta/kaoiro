@@ -75,7 +75,7 @@ function fmtResetLike(resetsAtSeconds: number): string {
   });
 }
 
-describe("AgentDetail rate-limit snapshot freshness (#164)", () => {
+describe("AgentDetail rate-limit snapshot freshness (#154)", () => {
   it("reset が現在より過去なら stale utilization/status を捨てて窓明け表示にする", async () => {
     const target = await render(Date.parse("2026-07-28T09:59:59Z") / 1000);
     expect(rateValue(target, "5h")).toBe("リセット済み");
@@ -114,7 +114,7 @@ describe("AgentDetail rate-limit snapshot freshness (#164)", () => {
     expect(rateValue(target, "5h")).toBe("83%");
   });
 
-  it("#164 で pct が常時入るようになっても reset 時刻を併記する(排他フォールバック回帰の防止)", async () => {
+  it("#154 で pct が常時入るようになっても reset 時刻を併記する(排他フォールバック回帰の防止)", async () => {
     const target = await render(Date.parse("2026-07-28T10:00:01Z") / 1000);
     const value = rateValue(target, "5h");
     expect(value).toContain("83%");

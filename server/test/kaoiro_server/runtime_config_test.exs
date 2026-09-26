@@ -3,7 +3,7 @@ defmodule KaoiroServer.RuntimeConfigTest do
 
   alias KaoiroServer.PersistencePaths
 
-  # issue #120 横断: 全 DETS path 系 config が (a) test.exs で per-run 名で
+  # issue #116 横断: 全 DETS path 系 config が (a) test.exs で per-run 名で
   # 設定され、(b) runtime.exs の env 上書きで nil に潰されないこと。対象は
   # KaoiroServer.PersistencePaths から派生する (issue #310)。手書きの一覧は
   # 「全」を名乗りながら permission_settings_path を落としていた —
@@ -21,11 +21,11 @@ defmodule KaoiroServer.RuntimeConfigTest do
     end
   end
 
-  # ふじ #120 must-fix 1 追加検証 (2026-07-25): 全 path が互いに衝突しない
+  # ふじ #116 must-fix 1 追加検証 (2026-07-25): 全 path が互いに衝突しない
   # ことの smoke test。真の nonce 共有 (unique_integer への per-store 退行
   # 検出) は捕まえられない — 各 basename の prefix (kaoiro_test_<store>_) が
   # store ごとに一意なのでこの assert は退行しても pass する。suffix を
-  # normalize して比較する形へ retrofit するのは将来の候補 (クロエ #120
+  # normalize して比較する形へ retrofit するのは将来の候補 (クロエ #116
   # 再レビュー 2026-07-25 advisory 1)。
   test "全 DETS path は互いに一意 (basename 全体で衝突しない smoke test)" do
     paths =

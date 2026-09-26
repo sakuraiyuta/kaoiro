@@ -23,7 +23,7 @@ defmodule KaoiroServer.PersonaRebuildLockTest do
   defp restore_env(key, nil), do: Application.delete_env(:kaoiro_server, key)
   defp restore_env(key, value), do: Application.put_env(:kaoiro_server, key, value)
 
-  describe "issue #195 round-3: boot ownership (warm init)" do
+  describe "issue #185 round-3: boot ownership (warm init)" do
     @tag :tmp_dir
     test "warm child の起動時 rebuild 失敗は Supervisor.start_link を即座に失敗させ、" <>
            "retry loop へ入らない (must-1)",
@@ -76,7 +76,7 @@ defmodule KaoiroServer.PersonaRebuildLockTest do
     end
   end
 
-  describe "issue #195 round-3: public runtime path goes through the lock" do
+  describe "issue #185 round-3: public runtime path goes through the lock" do
     @tag :tmp_dir
     test ":sys.suspend(PersonaRebuildLock) 中は PersonaAssets.rebuild/0 が完了せず、" <>
            "resume 後に完了する (must-1)",

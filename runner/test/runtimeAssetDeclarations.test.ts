@@ -1,4 +1,4 @@
-// Keeps `kaoiro.runtimeAssets` honest (issue #229, director 裁定 2026-08-16).
+// Keeps `kaoiro.runtimeAssets` honest (issue #219, director 裁定 2026-08-16).
 //
 // verify-release.mjs no longer reads runtime module edges out of the text of a
 // call. It cannot: a pattern match resolves no BINDING, so `foo.require(...)`
@@ -190,7 +190,7 @@ function declarationsOf(pkgDir: string): string[] {
   return pkg.kaoiro?.runtimeAssets ?? [];
 }
 
-describe("kaoiro.runtimeAssets (issue #229)", () => {
+describe("kaoiro.runtimeAssets (issue #219)", () => {
   it.each(PACKAGES)("%s: 実行時参照がすべて宣言されている", (pkg) => {
     const pkgDir = join(repoRoot, pkg);
     const declared = declarationsOf(pkgDir);

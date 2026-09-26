@@ -13,12 +13,12 @@ defmodule KaoiroServer.AuthTest do
     Application.delete_env(:kaoiro_server, :runner_tokens)
     Application.delete_env(:kaoiro_server, :client_tokens)
 
-    # issue #198 admin tests put an allow-list file and OAuth credentials in
+    # issue #188 admin tests put an allow-list file and OAuth credentials in
     # place. `OAuthAllowlistFixture` states the CALLER clears the path, and
     # without it a deleted tmp path (and live credentials) leak into every
     # later module through global Application env — the fixture file is gone
     # by then, so the leak reads as "allow-list unreadable" rather than as
-    # this module's doing (ふじ should 2, issue #198).
+    # this module's doing (ふじ should 2, issue #188).
     oauth_keys = [
       :oauth_allowlist_path,
       :oauth_google_client_id,
@@ -42,7 +42,7 @@ defmodule KaoiroServer.AuthTest do
         end
       end)
 
-      # issue #138 tests flip :env to :prod; restore it so later tests keep
+      # issue #133 tests flip :env to :prod; restore it so later tests keep
       # exercising the ordinary :test dev-convenience path.
       Application.put_env(:kaoiro_server, :env, original_env)
     end)
@@ -118,7 +118,7 @@ defmodule KaoiroServer.AuthTest do
       assert {:error, :unauthorized} = Auth.authorize_wrapper(agent_id, token)
     end
 
-    test ":prod では未設定でも fail-closed になる (issue #138)" do
+    test ":prod では未設定でも fail-closed になる (issue #133)" do
       Application.put_env(:kaoiro_server, :env, :prod)
 
       assert {:error, :unauthorized} = Auth.authorize_wrapper("any-agent", nil)
@@ -136,7 +136,7 @@ defmodule KaoiroServer.AuthTest do
       assert {:error, :unauthorized} = Auth.authorize_wrapper("lab.other", token)
     end
 
-    test ":prod でも登録済みトークンでの認証は通る (issue #138)" do
+    test ":prod でも登録済みトークンでの認証は通る (issue #133)" do
       Application.put_env(:kaoiro_server, :env, :prod)
 
       Application.put_env(
@@ -197,7 +197,7 @@ defmodule KaoiroServer.AuthTest do
       assert {:error, :unauthorized} = Auth.authorize_runner("unknown", "tok-1")
     end
 
-    test ":prod では未設定でも fail-closed になる (issue #138)" do
+    test ":prod では未設定でも fail-closed になる (issue #133)" do
       Application.put_env(:kaoiro_server, :env, :prod)
 
       assert {:error, :unauthorized} = Auth.authorize_runner("any-host", nil)
@@ -225,7 +225,7 @@ defmodule KaoiroServer.AuthTest do
     end
 
     test "未知 role のエントリは拒否される" do
-      # `admin` was this fixture's unknown-role word until issue #198 made
+      # `admin` was this fixture's unknown-role word until issue #188 made
       # it real; `root` is deliberately a word no role table defines, so
       # the case still tests rejection rather than a stale spelling.
       Application.put_env(:kaoiro_server, :client_tokens, "tok-x:root")
@@ -233,13 +233,13 @@ defmodule KaoiroServer.AuthTest do
       assert {:error, :unauthorized} = Auth.client_role("tok-x")
     end
 
-    test "admin role のトークンは admin に解決する (issue #198)" do
+    test "admin role のトークンは admin に解決する (issue #188)" do
       Application.put_env(:kaoiro_server, :client_tokens, "tok-admin:admin")
 
       assert {:ok, :admin} = Auth.client_role("tok-admin")
     end
 
-    test "role 語の綴り違いは viewer へ降格せず拒否される (issue #198)" do
+    test "role 語の綴り違いは viewer へ降格せず拒否される (issue #188)" do
       # The bootstrap path is config text, so a typo must fail closed
       # rather than silently authenticate at the weakest role.
       Application.put_env(:kaoiro_server, :client_tokens, "tok-typo:admn")
@@ -247,14 +247,14 @@ defmodule KaoiroServer.AuthTest do
       assert {:error, :unauthorized} = Auth.client_role("tok-typo")
     end
 
-    test "name 付きエントリでも role 解決は変わらない (issue #197)" do
+    test "name 付きエントリでも role 解決は変わらない (issue #187)" do
       Application.put_env(:kaoiro_server, :client_tokens, "tok-op:operator:CI bot")
 
       assert {:ok, :operator} = Auth.client_role("tok-op")
     end
   end
 
-  describe "client_token_display_name/1 (issue #197 マスター決裁 2026-08-09 #1)" do
+  describe "client_token_display_name/1 (issue #187 マスター決裁 2026-08-09 #1)" do
     test "token:role:name エントリは設定名を返す" do
       Application.put_env(:kaoiro_server, :client_tokens, "tok-op:operator:CI bot")
 
@@ -275,7 +275,7 @@ defmodule KaoiroServer.AuthTest do
     end
   end
 
-  describe "client_token_hash/1 (issue #197)" do
+  describe "client_token_hash/1 (issue #187)" do
     test "同じ token は同じ hash、異なる token は別の hash" do
       assert Auth.client_token_hash("tok-a") == Auth.client_token_hash("tok-a")
       refute Auth.client_token_hash("tok-a") == Auth.client_token_hash("tok-b")
@@ -308,7 +308,7 @@ defmodule KaoiroServer.AuthTest do
     end
   end
 
-  describe "client_token_hash_role_map/0 (issue #197 段階2, director D10 改訂)" do
+  describe "client_token_hash_role_map/0 (issue #187 段階2, director D10 改訂)" do
     test "map は client_token_hash/1 の値で引ける" do
       Application.put_env(:kaoiro_server, :client_tokens, "tok-op:operator,tok-view:viewer")
 
@@ -319,7 +319,7 @@ defmodule KaoiroServer.AuthTest do
       assert map_size(map) == 2
     end
 
-    test "admin も map に残る (issue #198)" do
+    test "admin も map に残る (issue #188)" do
       # この map は `Users.all_with_role/1` の role join 元。admin が
       # 落ちると token 経路の admin が user directory から消え、ADR-0050
       # D2 の「admin は隠蔽できない」に反する (ふじ should 1)。
@@ -387,7 +387,7 @@ defmodule KaoiroServer.AuthTest do
       refute log =~ "KAOIRO_RUNNER_TOKENS unset"
     end
 
-    test ":prod では wrapper/runner 未設定を fail-closed 文言で警告する (issue #138)" do
+    test ":prod では wrapper/runner 未設定を fail-closed 文言で警告する (issue #133)" do
       Application.put_env(:kaoiro_server, :env, :prod)
 
       log = capture_log(fn -> assert :ok = Auth.warn_token_config() end)
@@ -399,7 +399,7 @@ defmodule KaoiroServer.AuthTest do
     end
   end
 
-  describe "admin 不在の起動警告 (issue #198, ADR-0050 D2)" do
+  describe "admin 不在の起動警告 (issue #188, ADR-0050 D2)" do
     import ExUnit.CaptureLog
 
     test "どちらの経路にも admin が居なければ警告する" do

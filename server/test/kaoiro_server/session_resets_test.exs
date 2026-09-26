@@ -23,7 +23,7 @@ defmodule KaoiroServer.SessionResetsTest do
     {:ok, sr_pid} = SessionResets.start_link(name: resets_name)
 
     on_exit(fn ->
-      # #169 / #171: ExUnit のリンク死と stop が競合して teardown だけが
+      # #159 / #161: ExUnit のリンク死と stop が競合して teardown だけが
       # 落ちる。良性の exit だけ吸収する (KaoiroServer.TestTeardown)。
       Enum.each([sr_pid, sp_pid], &stop_quietly/1)
 
@@ -406,7 +406,7 @@ defmodule KaoiroServer.SessionResetsTest do
       sr = :"sr_timeout_#{System.unique_integer([:positive])}"
       {:ok, pid} = SessionResets.start_link(name: sr, timeout_ms: 20)
       # setup と同じ teardown race に晒されるので同じ扱いにする
-      # (#169 はこの 1 箇所を取りこぼしていた)。
+      # (#159 はこの 1 箇所を取りこぼしていた)。
       on_exit(fn -> stop_quietly(pid) end)
       agent_id = "a.timeout-waiter-#{System.unique_integer([:positive])}"
       KaoiroServerWeb.Endpoint.subscribe("agents:lobby")

@@ -137,9 +137,9 @@ defmodule KaoiroServerWeb.ClientSocketTest do
     end
   end
 
-  # ふじ must-fix A (#158): 稼働中 socket の role 再解決のために raw token を
+  # ふじ must-fix A (#148): 稼働中 socket の role 再解決のために raw token を
   # 抱えると、crash report / heap dump へ secret が戻る回帰になる。
-  describe "credential の再解決可能形 (#158)" do
+  describe "credential の再解決可能形 (#148)" do
     test "socket assigns に raw token を残さない" do
       Application.put_env(:kaoiro_server, :client_tokens, "tok-secret:operator")
 

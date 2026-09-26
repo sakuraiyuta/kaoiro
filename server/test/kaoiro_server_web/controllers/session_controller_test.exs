@@ -63,7 +63,7 @@ defmodule KaoiroServerWeb.SessionControllerTest do
     assert conn.status == 400
   end
 
-  test "create: token login で user が解決され、繰り返しログインで同じ user になる (issue #197)",
+  test "create: token login で user が解決され、繰り返しログインで同じ user になる (issue #187)",
        %{conn: conn} do
     token = "tok-op-#{System.unique_integer([:positive])}"
     Application.put_env(:kaoiro_server, :client_tokens, "#{token}:operator:CI Runner")

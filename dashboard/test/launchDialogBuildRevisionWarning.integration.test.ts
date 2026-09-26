@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// issue #228: LaunchDialog's build-revision mismatch warning. Component
+// issue #218: LaunchDialog's build-revision mismatch warning. Component
 // coverage is needed here (not just the pure-function unit level) because
 // the warning is a $derived.by over `host` (resolved from `hostId` +
 // `hosts`) and `serverBuildRevision`, both of which only exist once the
@@ -108,7 +108,7 @@ function warningText(target: Element): string | null {
   return target.querySelector(".build-revision-warning")?.textContent?.trim() ?? null;
 }
 
-describe("LaunchDialog build revision warning (issue #228)", () => {
+describe("LaunchDialog build revision warning (issue #218)", () => {
   it("revision が server と一致すれば警告なし", async () => {
     const sha = "0123456789abcdef0123456789abcdef01234567";
     const target = await renderLaunch(
@@ -158,10 +158,10 @@ describe("LaunchDialog build revision warning (issue #228)", () => {
     expect(text).toContain("server");
   });
 
-  // issue #228 round 2 MF-4 (ふじ 差し戻し): round 1 silently showed
+  // issue #218 round 2 MF-4 (ふじ 差し戻し): round 1 silently showed
   // nothing for "no runner signal at all" — indistinguishable from a
   // confirmed match. Round 2 surfaces this as its own message.
-  it("pre-#228 runner (build_revision 無し) はその旨を警告する", async () => {
+  it("pre-#218 runner (build_revision 無し) はその旨を警告する", async () => {
     const target = await renderLaunch(
       [claudeHost()],
       "2222222222222222222222222222222222222222",
@@ -171,12 +171,12 @@ describe("LaunchDialog build revision warning (issue #228)", () => {
     expect(text).toContain("報告していません");
   });
 
-  // issue #228 round 2 MF-4: round 1 treated a null serverBuildRevision
-  // (pre-#228 server OR a failed /api/health fetch) the same as "nothing
+  // issue #218 round 2 MF-4: round 1 treated a null serverBuildRevision
+  // (pre-#218 server OR a failed /api/health fetch) the same as "nothing
   // to compare" and stayed silent. Round 2 surfaces this too — an
   // operator must be able to tell "confirmed matching" apart from
   // "no server signal at all".
-  it("serverBuildRevision が null (pre-#228 server / fetch 失敗) ならその旨を警告する", async () => {
+  it("serverBuildRevision が null (pre-#218 server / fetch 失敗) ならその旨を警告する", async () => {
     const target = await renderLaunch(
       [
         claudeHost({
@@ -191,7 +191,7 @@ describe("LaunchDialog build revision warning (issue #228)", () => {
     expect(text).toContain("取得できません");
   });
 
-  // issue #228 round 2 MF-4: dirty was computed but never surfaced by
+  // issue #218 round 2 MF-4: dirty was computed but never surfaced by
   // round 1's derived function at all — a match on a dirty checkout looked
   // identical to a match on a clean one.
   it("revision が一致していても runner が dirty なら警告する (runner 側と明示)", async () => {
@@ -207,7 +207,7 @@ describe("LaunchDialog build revision warning (issue #228)", () => {
     expect(text).toContain("runner 側");
   });
 
-  // issue #228 round 3 MF-1 (ふじ 差し戻し): round 2 only checked the
+  // issue #218 round 3 MF-1 (ふじ 差し戻し): round 2 only checked the
   // RUNNER's build_dirty here — a dirty SERVER with a clean, matching
   // runner silently passed as "nothing to warn about", contradicting the
   // "only a clean match stays silent" rule this same round established.

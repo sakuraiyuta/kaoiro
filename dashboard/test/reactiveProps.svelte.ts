@@ -24,7 +24,7 @@ export interface ReactiveAgentDetailProps {
   envelope: Envelope;
   connection: KaoiroConnection;
   onClose: () => void;
-  /** issue #197 段階3 unit B: optional so existing callers (model/effort
+  /** issue #187 段階3 unit B: optional so existing callers (model/effort
    *  switch harness) are unaffected. */
   onRename?: (name: string) => Promise<void>;
 }
@@ -36,7 +36,7 @@ export function makeReactiveAgentDetailProps(
   return state;
 }
 
-/** Test-only reactive props for #122 scroll-target lifecycle checks. */
+/** Test-only reactive props for #118 scroll-target lifecycle checks. */
 export interface ReactiveTimelineDetailProps {
   envelope: Envelope;
   logs: Envelope[];

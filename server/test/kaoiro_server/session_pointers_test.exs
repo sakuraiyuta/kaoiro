@@ -9,7 +9,7 @@ defmodule KaoiroServer.SessionPointersTest do
     # Isolated DETS file + table name per test so cases don't share state.
     #
     # `path` also has to be unique ACROSS separate `mix test` invocations,
-    # not just within this BEAM (issue #187): `System.tmp_dir!()` is a
+    # not just within this BEAM (issue #177): `System.tmp_dir!()` is a
     # shared OS-level directory, and `System.unique_integer/1` alone only
     # guarantees uniqueness within the calling BEAM — two concurrent
     # `mix test` processes each start their own counter from a BEAM-
@@ -33,7 +33,7 @@ defmodule KaoiroServer.SessionPointersTest do
     {:ok, pid} = SessionPointers.start_link(name: name, path: path)
 
     on_exit(fn ->
-      # #169 / #171: ExUnit のリンク死と stop が競合して teardown だけが
+      # #159 / #161: ExUnit のリンク死と stop が競合して teardown だけが
       # 落ちる。良性の exit だけ吸収する (KaoiroServer.TestTeardown)。
       stop_quietly(pid)
 

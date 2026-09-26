@@ -1,4 +1,4 @@
-// runner/deploy/kaoiro-runner-switch.sh (issue #229): moving `current`
+// runner/deploy/kaoiro-runner-switch.sh (issue #219): moving `current`
 // between installed releases, and back again.
 //
 // The acceptance criterion these serve is "if the switch fails, the previous
@@ -29,7 +29,7 @@ const switchScript = fileURLToPath(
   new URL("../deploy/kaoiro-runner-switch.sh", import.meta.url),
 );
 
-describe("kaoiro-runner-switch.sh (issue #229)", () => {
+describe("kaoiro-runner-switch.sh (issue #219)", () => {
   let root: string;
   const A = revisionOf("release-a");
   const B = revisionOf("release-b");
@@ -264,12 +264,12 @@ describe("kaoiro-runner-switch.sh (issue #229)", () => {
     expect(existsSync(join(root, "previous"))).toBe(false);
   });
 
-  it(".lock.links (issue #253) が他所で保持されていれば switch は current を変えない", () => {
+  it(".lock.links (issue #243) が他所で保持されていれば switch は current を変えない", () => {
     // The SAME lock kaoiro-runner-install.sh takes around its own
     // current/previous check-then-delete, and kaoiro-runner-update.sh
     // around its own prune loop. Pre-holding it here stands in for either
     // one being mid-flight; a switch landing on top of it is exactly the
-    // race issue #253 closes.
+    // race issue #243 closes.
     seed(A);
     seed(B);
     symlinkSync(`releases/${A}`, join(root, "current"));
@@ -298,7 +298,7 @@ describe("kaoiro-runner-switch.sh (issue #229)", () => {
     expect(readlinkSync(join(root, "previous"))).toBe(`releases/${A}`);
   });
 
-  it("verify と .lock.links の間で target が消えても current は dangling にならない (issue #253 round2、もも review must-fix)", () => {
+  it("verify と .lock.links の間で target が消えても current は dangling にならない (issue #243 round2、もも review must-fix)", () => {
     // もも round1 review: switch_to() は当初、target の verify を
     // .lock.links 取得より前に行っていた。verify は release の中身だけを
     // 読む read-only 操作なので lock は要らない、という判断だったが、

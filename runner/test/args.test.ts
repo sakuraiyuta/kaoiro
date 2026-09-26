@@ -16,7 +16,7 @@ describe("parseRunnerArgs", () => {
     });
   });
 
-  // issue #228: --version は configPath の有無に関わらず検出できる —
+  // issue #218: --version は configPath の有無に関わらず検出できる —
   // main() 側がこれを config 読み込みより前でチェックする前提を支える。
   it("--version フラグを検出する", () => {
     expect(parseRunnerArgs(["--version"])).toEqual({

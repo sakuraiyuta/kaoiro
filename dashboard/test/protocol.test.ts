@@ -93,7 +93,7 @@ describe("ADR-0015 stage 2 server -> client version check", () => {
   });
 });
 
-describe("parseDeliveryStatus (issue #247)", () => {
+describe("parseDeliveryStatus (issue #237)", () => {
   it("confirmed watermark と pending gap だけを受理する", () => {
     expect(
       parseDeliveryStatus({
@@ -247,7 +247,7 @@ describe("fetchAuthMethods (issue #65 / ADR-0042)", () => {
   });
 });
 
-describe("fetchServerHealth (issue #228)", () => {
+describe("fetchServerHealth (issue #218)", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("health JSON を返す (no-store でフェッチする)", async () => {
@@ -265,13 +265,13 @@ describe("fetchServerHealth (issue #228)", () => {
     );
 
     expect(await fetchServerHealth()).toEqual(health);
-    // issue #228 round 2 MF-4 (ふじ 差し戻し): LaunchDialog open / channel
+    // issue #218 round 2 MF-4 (ふじ 差し戻し): LaunchDialog open / channel
     // rejoin ごとに再取得するので、キャッシュされた古い応答を返してはい
     // けない。
     expect(fetch).toHaveBeenCalledWith("/api/health", { cache: "no-store" });
   });
 
-  it("404 は null(#228 以前の server へのフォールバック用)", async () => {
+  it("404 は null(#218 以前の server へのフォールバック用)", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 404 })));
     expect(await fetchServerHealth()).toBeNull();
   });
@@ -284,7 +284,7 @@ describe("fetchServerHealth (issue #228)", () => {
     expect(await fetchServerHealth()).toBeNull();
   });
 
-  // issue #228 round 2 MF-3 (ふじ 差し戻し): build_dirty 欠落は型崩れと
+  // issue #218 round 2 MF-3 (ふじ 差し戻し): build_dirty 欠落は型崩れと
   // 同じ扱いで null に落ちる — round 1 は build_dirty を検証していな
   // かった。
   it("build_dirty が欠けたレスポンスは null", async () => {
@@ -304,7 +304,7 @@ describe("fetchServerHealth (issue #228)", () => {
     expect(await fetchServerHealth()).toBeNull();
   });
 
-  // issue #228 round 2 MF-3: build_revision が値域外 (40 桁 hex でも
+  // issue #218 round 2 MF-3: build_revision が値域外 (40 桁 hex でも
   // "unknown" でもない) なら型が string でも null に落ちる。
   it("build_revision が値域外の文字列なら null", async () => {
     vi.stubGlobal(
@@ -666,7 +666,7 @@ describe("logOf / resultOf / isReplyEnvelope", () => {
   });
 });
 
-describe("taskOf / parseTasks (ADR-0019/0047/0048, issue #180)", () => {
+describe("taskOf / parseTasks (ADR-0019/0047/0048, issue #170)", () => {
   const base: Envelope = {
     version: "0",
     agent_id: "host-a.p",
@@ -779,7 +779,7 @@ describe("taskOf / parseTasks (ADR-0019/0047/0048, issue #180)", () => {
     expect(parseTasks("nope")).toEqual({});
   });
 
-  // Security review (issue #180 fix-round, 2026-08-09): agent_id/task_id
+  // Security review (issue #170 fix-round, 2026-08-09): agent_id/task_id
   // の wire charset は "__proto__" を禁止していない — 素の {} への bracket
   // 代入だと Object.prototype の __proto__ アクセサ経由で対象オブジェクトの
   // [[Prototype]] を書き換えてしまう(prototype pollution)。fix 後は
@@ -901,7 +901,7 @@ describe("taskOf / parseTasks (ADR-0019/0047/0048, issue #180)", () => {
       expect(afterCompleteA).toEqual({ "host-b.p": { t1: agentB } });
     });
 
-    // Security review round 2 (issue #180, 2026-08-09): round 1 のコメント
+    // Security review round 2 (issue #170, 2026-08-09): round 1 のコメント
     // は「agentTasks が truthy になるのは先行する safe な upsert 経由の
     // みで、それが __proto__ アクセサを既に shadow している」と主張して
     // いたが、これは誤りだった — round 2 レビューが指摘し実測で反証: 素の
@@ -972,7 +972,7 @@ describe("taskOf / parseTasks (ADR-0019/0047/0048, issue #180)", () => {
     });
   });
 
-  // M3/クロエ M1 fix-round (2026-08-09, issue #180): client 側の disconnect
+  // M3/クロエ M1 fix-round (2026-08-09, issue #170): client 側の disconnect
   // purge 契約。App.svelte の onEnvelope が state_change disconnected 受信
   // 時に呼ぶ。
   describe("purgeTasksForAgent", () => {
@@ -996,7 +996,7 @@ describe("taskOf / parseTasks (ADR-0019/0047/0048, issue #180)", () => {
       expect(purgeTasksForAgent(tasks, "host-never-seen.p")).toBe(tasks);
     });
 
-    // Security review round 2 (issue #180, 2026-08-09): 同じ hasOwnProperty
+    // Security review round 2 (issue #170, 2026-08-09): 同じ hasOwnProperty
     // ガードが purgeTasksForAgent 側にも要る — `in` はプロトタイプ
     // チェーンを辿るため、素の {} でも "toString" 等は真になる。
     it("agent_id が Object.prototype のメンバ名と衝突しても同一参照を返す (round2 fix-round)", () => {
@@ -1035,7 +1035,7 @@ describe("taskOf / parseTasks (ADR-0019/0047/0048, issue #180)", () => {
       expect(computeActiveTaskCountByAgent({})).toEqual({});
     });
 
-    it("親自身の tasklist は child activity に数えず、通常 task だけを数える (issue #188)", () => {
+    it("親自身の tasklist は child activity に数えず、通常 task だけを数える (issue #178)", () => {
       const child = { ...base, payload: validPayload };
       const tasklist = {
         ...base,
@@ -1073,7 +1073,7 @@ describe("taskOf / parseTasks (ADR-0019/0047/0048, issue #180)", () => {
     });
   });
 
-  describe("tasklistForAgent (issue #188)", () => {
+  describe("tasklistForAgent (issue #178)", () => {
     it("LWW tasklist を items/omitted とともに取り出す", () => {
       const tasklist = {
         ...base,
@@ -1174,7 +1174,7 @@ describe("taskOf / parseTasks (ADR-0019/0047/0048, issue #180)", () => {
     });
   });
 
-  // issue #180 follow-up (2026-08-10, マスター指摘): AgentDetail 用の
+  // issue #170 follow-up (2026-08-10, マスター指摘): AgentDetail 用の
   // ガード付き活性タスク数。disconnected な envelope
   // (`directoryEnvelope()` の合成 envelope も state: "disconnected" を
   // 共有する) では stale な activeTaskCountByAgent を素通ししない
@@ -1260,7 +1260,7 @@ describe("interAgentMessageOf (protocol-inter-agent, phase-8)", () => {
   });
 });
 
-describe("inter-agent history replay (#105)", () => {
+describe("inter-agent history replay (#102)", () => {
   const message: Envelope = {
     version: "0",
     agent_id: "agent-a",
@@ -1353,15 +1353,15 @@ describe("inter-agent history replay (#105)", () => {
     expect(mergeTranscriptEntries([], [first, second])).toEqual([first, second]);
   });
 
-  // issue #132: 同一ペアが 2 本以上の conversation を並行中に片方が
+  // issue #128: 同一ペアが 2 本以上の conversation を並行中に片方が
   // 切断すると、server は各 conversation ごとに disconnected 通知を
   // 合成する (docs/specs/protocol-inter-agent.md 「server 合成
   // (disconnected) の規則」) — agent_id="server" / ts / payload.to は
   // 全て同一 (同じ受信者への通知が複数本届く)、conversation_id だけが
-  // 異なる。上のテストが pin する recipient 分岐 (#131) は「同一
+  // 異なる。上のテストが pin する recipient 分岐 (#127) は「同一
   // conversation・複数 recipient」用で、これは逆に「同一 recipient・
   // 複数 conversation」なので recipient だけでは区別できない。
-  it("transcriptEntryKey は同一 recipient・異なる conversation_id の server synthetic IA を区別する (#132)", () => {
+  it("transcriptEntryKey は同一 recipient・異なる conversation_id の server synthetic IA を区別する (#128)", () => {
     const first: Envelope = {
       ...message,
       agent_id: "server",
@@ -1384,7 +1384,7 @@ describe("inter-agent history replay (#105)", () => {
   });
 
   it("conversation_id を持たない envelope 同士は従来どおり key が同一になる (inter_agent_message 以外は元々 conversation_id を持たない)", () => {
-    // #132 の修正は synthetic server IA の分岐にだけ conversation_id を
+    // #128 の修正は synthetic server IA の分岐にだけ conversation_id を
     // 足す。log 等の他 type は元から conversation_id を持たないので、
     // 追加後も key の末尾セグメントは常に空文字のまま — 新しい衝突源には
     // ならないことを確認する (あお注意点4)。
@@ -1774,7 +1774,7 @@ describe("parseHosts (#22)", () => {
     expect(parseHosts(undefined)).toEqual([]);
   });
 
-  it("build_revision/build_dirty (issue #228) を保持する", () => {
+  it("build_revision/build_dirty (issue #218) を保持する", () => {
     expect(
       parseHosts({
         "lab-pc-1": {
@@ -1795,7 +1795,7 @@ describe("parseHosts (#22)", () => {
     ]);
   });
 
-  it("pre-#228 runner (build_revision/build_dirty 無し) はそのフィールド自体を持たない", () => {
+  it("pre-#218 runner (build_revision/build_dirty 無し) はそのフィールド自体を持たない", () => {
     const [host] = parseHosts({
       "lab-pc-1": { personas: [mio], cwd_allowlist: ["/p"] },
     });
@@ -1818,10 +1818,10 @@ describe("parseHosts (#22)", () => {
     expect("build_dirty" in host!).toBe(false);
   });
 
-  // issue #228 round 2 MF-3 (ふじ 差し戻し): typeof だけでは弾けない値域外
+  // issue #218 round 2 MF-3 (ふじ 差し戻し): typeof だけでは弾けない値域外
   // 文字列 (40 桁 hex でも "unknown" でもない) — round 1 は string である
   // ことしか見ておらず、任意の文字列を revision として通していた。
-  // issue #228 round 3 MF-2 (ふじ 差し戻し): revision/dirty は一対の
+  // issue #218 round 3 MF-2 (ふじ 差し戻し): revision/dirty は一対の
   // narrow — round 2 はここで build_dirty が「道連れで落ちずに残る」こと
   // を意図として pin していたが、それ自体が fail-open な spoofing 経路
   // だった(malformed revision + 有効な dirty:false が生き残ると、
@@ -1975,7 +1975,7 @@ describe("parseWrapperBuildInfo (#288)", () => {
   });
 });
 
-describe("parseDirectory (ADR-0030, revised issue #219 D19/D21)", () => {
+describe("parseDirectory (ADR-0030, revised issue #209 D19/D21)", () => {
   const mio = { id: "mio", name: "澪", sprite_set: "mio" };
 
   it("directory マップを DirectoryEntry の Record へ変換する (display_name 込み)", () => {
@@ -2014,7 +2014,7 @@ describe("parseDirectory (ADR-0030, revised issue #219 D19/D21)", () => {
     });
   });
 
-  // issue #219 D21: pack が消えた entry は persona.name / sprite_set を
+  // issue #209 D21: pack が消えた entry は persona.name / sprite_set を
   // OMIT した "typed unresolved" として届く — sentinel 文字列ではなく、
   // フィールド自体が無い。id だけの persona でも display_name さえあれば
   // entry は保持される(捨てない)。
@@ -2150,7 +2150,7 @@ describe("formatAgentLabel (name(id) helper)", () => {
     expect(formatAgentLabel(agents, id)).toBe(id);
   });
 
-  // issue #219 D23 追撃 (クロエ実測検証 must-fix): canonical persona.name
+  // issue #209 D23 追撃 (クロエ実測検証 must-fix): canonical persona.name
   // と display_name をわざと違う文字列にする食い違い fixture (D27 方針) —
   // 同じ文字列を両方に送る fixture では canonical/display_name の取り違え
   // バグを検出できない。
@@ -3202,7 +3202,7 @@ describe("resolveLaunchDefaultEffort (issue #88)", () => {
   });
 });
 
-describe("errorSubtypeLabel (issue #127)", () => {
+describe("errorSubtypeLabel (issue #123)", () => {
   it("既知の 4 subtype を日本語ラベルに変換", () => {
     expect(errorSubtypeLabel("error_max_turns")).toBe("最大ターン数到達");
     expect(errorSubtypeLabel("error_during_execution")).toBe("実行中エラー");
@@ -3212,7 +3212,7 @@ describe("errorSubtypeLabel (issue #127)", () => {
     );
   });
 
-  it("Codex アダプタ独自の rollout 破損 subtype を日本語ラベルに変換 (issue #263)", () => {
+  it("Codex アダプタ独自の rollout 破損 subtype を日本語ラベルに変換 (issue #253)", () => {
     expect(errorSubtypeLabel("error_rollout_corrupted")).toBe(
       "セッション破損 (再開不可)",
     );
@@ -3225,7 +3225,7 @@ describe("errorSubtypeLabel (issue #127)", () => {
   });
 });
 
-describe("findPrecedingUserPrompt (issue #128)", () => {
+describe("findPrecedingUserPrompt (issue #124)", () => {
   function userLog(seq: number, text: string): Envelope {
     return {
       version: "0",

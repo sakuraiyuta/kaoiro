@@ -207,7 +207,7 @@ describe("runSetup", () => {
 
     const env = readFileSync(result.envPath, "utf8");
     expect(env).toContain("KAOIRO_RUNNER_TOKEN='manual-token'");
-    // The token lives here, so the mode matters (issue #141).
+    // The token lives here, so the mode matters (issue #136).
     expect(statSync(result.envPath).mode & 0o777).toBe(0o600);
   });
 

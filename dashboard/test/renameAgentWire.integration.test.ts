@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Wire-contract pin (issue #197 段階3 unit B, ふじ判定 — dashboard wire
+// Wire-contract pin (issue #187 段階3 unit B, ふじ判定 — dashboard wire
 // test). A component test alone only proves "the UI calls
 // connection.renameAgent(...)"; a server channel test alone only proves
 // "the server accepts rename_agent". Neither closes the seam BETWEEN
@@ -77,7 +77,7 @@ class ReplyingWebSocket {
   /** Answers the LATEST `rename_agent` push with an ok/error phx_reply,
    *  mirroring the server's actual reply shapes (agents_channel.ex's
    *  `{:reply, {:ok, %{"display_name" => ..., "revision" => ...}}}` —
-   *  issue #219 D23, no `persona` key — /
+   *  issue #209 D23, no `persona` key — /
    *  `{:reply, {:error, %{reason: ...}}}`). */
   replyToLatestRename(outcome: { ok: true } | { ok: false; reason: string }): void {
     const frame = this.parsedFrames()
@@ -108,7 +108,7 @@ function makeHandlers() {
   };
 }
 
-describe("rename_agent wire contract (issue #197 段階3 unit B, ふじ判定)", () => {
+describe("rename_agent wire contract (issue #187 段階3 unit B, ふじ判定)", () => {
   beforeEach(() => {
     ReplyingWebSocket.instances.length = 0;
     vi.useFakeTimers();
@@ -143,9 +143,9 @@ describe("rename_agent wire contract (issue #197 段階3 unit B, ふじ判定)",
     // Exact shape — no extra keys, no partial match. A future refactor
     // that renames `agent_id` or nests the payload differently must fail
     // THIS test, not silently drift from the server's accepted shape.
-    // `version` (ADR-0015, issue #197 段階3 ふじ MF-1 レビュー指摘): this
+    // `version` (ADR-0015, issue #187 段階3 ふじ MF-1 レビュー指摘): this
     // event never reaches the runner, but every client -> server message
-    // still needs the flat version stamp. `display_name` (issue #219
+    // still needs the flat version stamp. `display_name` (issue #209
     // D23): the wire vocabulary moved off `name` alongside the
     // canonical/display_name field split — the server still accepts the
     // legacy `name` key during the compatibility window, but this client
@@ -174,7 +174,7 @@ describe("rename_agent wire contract (issue #197 段階3 unit B, ふじ判定)",
     await expect(pending).rejects.toThrow("invalid_name");
   });
 
-  it("error reply の reason がそのまま Error.message へ届く (revision_exhausted, issue #197 段階3 ふじ MF-5)", async () => {
+  it("error reply の reason がそのまま Error.message へ届く (revision_exhausted, issue #187 段階3 ふじ MF-5)", async () => {
     const { conn, ws } = await connect();
     const pending = conn.renameAgent("host-a.ao", "改名後");
     ws.replyToLatestRename({ ok: false, reason: "revision_exhausted" });

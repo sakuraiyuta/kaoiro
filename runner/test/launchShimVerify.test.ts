@@ -1,4 +1,4 @@
-// runner/deploy/kaoiro-runner-launch.sh (issue #229): the shim verifies, it
+// runner/deploy/kaoiro-runner-launch.sh (issue #219): the shim verifies, it
 // never builds.
 //
 // "It does not build" is not observable from a passing start, so it is
@@ -56,7 +56,7 @@ const REQUIRED_ARTIFACTS = [
  *  supposed to exec the entry point with it. */
 const BUILD_TOOLS = ["pnpm", "npm", "yarn", "tsc", "make"];
 
-describe("kaoiro-runner-launch.sh の verify-only 起動 (issue #229)", () => {
+describe("kaoiro-runner-launch.sh の verify-only 起動 (issue #219)", () => {
   let dir: string;
   let tree: string;
   let confDir: string;
@@ -101,7 +101,7 @@ describe("kaoiro-runner-launch.sh の verify-only 起動 (issue #229)", () => {
       expect(result.stderr).toContain("release verification failed");
       expect(result.stderr).toContain(artifact);
       expect(result.stdout).not.toContain("stub cli.js started");
-      // issue #259: a genuinely MISSING artifact (verify-release.mjs exit 71)
+      // issue #249: a genuinely MISSING artifact (verify-release.mjs exit 71)
       // is the one case where "run the build" is a real remedy, so this
       // branch of the guidance is the one place it still appears.
       expect(result.stderr).toContain("a build artifact is missing");
@@ -116,7 +116,7 @@ describe("kaoiro-runner-launch.sh の verify-only 起動 (issue #229)", () => {
   });
 
   it("MANIFEST.json を失った release (VERSION あり) は exit 78 で起動しない", () => {
-    // もも review (issue #229): readManifest() folded EVERY read error into
+    // もも review (issue #219): readManifest() folded EVERY read error into
     // "no manifest", and the shim treated that as the repo-direct checkout
     // case. A real release with its MANIFEST.json removed therefore fell back
     // to the four sentinels and reached the final exec at exit 0 — the same
@@ -129,7 +129,7 @@ describe("kaoiro-runner-launch.sh の verify-only 起動 (issue #229)", () => {
     expect(result.status).toBe(78);
     expect(result.stderr).toContain("MANIFEST.json is missing from a built release");
     expect(result.stdout).not.toContain("stub cli.js started");
-    // issue #259: a released install that lost its MANIFEST.json cannot be
+    // issue #249: a released install that lost its MANIFEST.json cannot be
     // fixed by building in place — a rebuild does not restore it. This is
     // NOT verify-release.mjs's build-shortage exit (71); the shim's guidance
     // must not suggest building.
@@ -138,7 +138,7 @@ describe("kaoiro-runner-launch.sh の verify-only 起動 (issue #229)", () => {
   });
 
   it("VERSION も MANIFEST も無ければ repo-direct として起動する", () => {
-    // issue #259: this test used to just delete MANIFEST.json/VERSION from
+    // issue #249: this test used to just delete MANIFEST.json/VERSION from
     // the `tree` shared beforeEach fixture builds — the BUILT-RELEASE shape,
     // where node_modules/@kaoiro/* are real directories inside the release
     // root. That shape is the one thing a repo-direct checkout is NOT: pnpm
@@ -184,7 +184,7 @@ describe("kaoiro-runner-launch.sh の verify-only 起動 (issue #229)", () => {
 
     expect(result.status).toBe(78);
     expect(result.stderr).toContain("present but unreadable");
-    // issue #259: a directory sitting where MANIFEST.json belongs is not a
+    // issue #249: a directory sitting where MANIFEST.json belongs is not a
     // missing build (the file IS there, in the wrong shape) — a rebuild
     // would not remove it.
     expect(result.stderr).not.toContain("pnpm -C wrapper build");
@@ -204,7 +204,7 @@ describe("kaoiro-runner-launch.sh の verify-only 起動 (issue #229)", () => {
 
     expect(result.status).toBe(78);
     expect(result.stdout).not.toContain("stub cli.js started");
-    // issue #259: a malformed (but present) build-info.json is not simply
+    // issue #249: a malformed (but present) build-info.json is not simply
     // absent — a rebuild MIGHT happen to fix it, but so might tampering or a
     // half-written file, so the shim does not stake a build claim on it.
     expect(result.stderr).not.toContain("pnpm -C wrapper build");
@@ -448,7 +448,7 @@ describe("kaoiro-runner-launch.sh の verify-only 起動 (issue #229)", () => {
   });
 
   // The `--version` shortcut still runs BEFORE any of this, so a first-run
-  // host with no config and no node_modules can answer it (issue #228 round
+  // host with no config and no node_modules can answer it (issue #218 round
   // 2 MF-5). That ordering is pinned by launchShimVersion.test.ts, whose
   // fixture deliberately has neither.
 });

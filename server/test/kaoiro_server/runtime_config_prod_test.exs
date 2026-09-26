@@ -1,7 +1,7 @@
 defmodule KaoiroServer.RuntimeConfigProdTest do
   # Evaluates config/runtime.exs directly via Config.Reader against a
   # :prod env, so it exercises the same fail-fast raises a real release
-  # boot hits (issue #139) without building one. Mutates process-wide
+  # boot hits (issue #134) without building one. Mutates process-wide
   # System env vars (PHX_HOST / SECRET_KEY_BASE / KAOIRO_BIND_IP) that no
   # other test reads, but keep this file async: false to avoid any
   # cross-test interleaving of that global state.
@@ -21,7 +21,7 @@ defmodule KaoiroServer.RuntimeConfigProdTest do
     end)
   end
 
-  describe "PHX_HOST (issue #139)" do
+  describe "PHX_HOST (issue #134)" do
     test "未設定なら fail-fast する" do
       System.put_env("SECRET_KEY_BASE", @valid_secret)
       System.delete_env("PHX_HOST")
@@ -42,7 +42,7 @@ defmodule KaoiroServer.RuntimeConfigProdTest do
     end
   end
 
-  describe "KAOIRO_BIND_IP (issue #139)" do
+  describe "KAOIRO_BIND_IP (issue #134)" do
     setup do
       System.put_env("SECRET_KEY_BASE", @valid_secret)
       System.put_env("PHX_HOST", "example.org")
@@ -84,7 +84,7 @@ defmodule KaoiroServer.RuntimeConfigProdTest do
       end
     end
 
-    test ":dev では効かない (issue #139 review must-fix: dev.exs の loopback + " <>
+    test ":dev では効かない (issue #134 review must-fix: dev.exs の loopback + " <>
            "既知の secret_key_base を KAOIRO_BIND_IP で誤って公開しないため)" do
       System.put_env("KAOIRO_BIND_IP", "0.0.0.0")
 
@@ -151,7 +151,7 @@ defmodule KaoiroServer.RuntimeConfigProdTest do
     end
   end
 
-  describe "check_origin (#154 M1: scheme/port を含めた origin 固定)" do
+  describe "check_origin (M1: scheme/port を含めた origin 固定)" do
     setup do
       System.put_env("SECRET_KEY_BASE", @valid_secret)
       System.put_env("PHX_HOST", "example.org")

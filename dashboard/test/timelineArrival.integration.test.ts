@@ -25,7 +25,7 @@ function assistant(seq: number, text: string): Envelope {
   };
 }
 
-describe("timeline replay/live arrival integration (#125)", () => {
+describe("timeline replay/live arrival integration (#121)", () => {
   it("history_reset → replayed assistant → complete → live assistant で replay だけ pulse しない", () => {
     let active = beginTimelineReplay({}, "agent-a", "replay-1", 1);
     let pulseKeys = new Set<string>();
@@ -82,7 +82,7 @@ describe("retainTimelineReplaysOfGeneration (ふじ 30-10 M1)", () => {
   });
 });
 
-describe("computeStaleTimelineKeys (ふじ #122 再レビュー must-fix 2026-07-25)", () => {
+describe("computeStaleTimelineKeys (ふじ #118 再レビュー must-fix 2026-07-25)", () => {
   function ia(seq: number, to: string): Envelope {
     return {
       version: "0",

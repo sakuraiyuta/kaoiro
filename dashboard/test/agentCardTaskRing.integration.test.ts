@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// AgentCard の 頭上リング (issue #180, ADR-0019/0047/0048): activeTaskCount
+// AgentCard の 頭上リング (issue #170, ADR-0019/0047/0048): activeTaskCount
 // > 0 のときだけ .task-ring を描画する。数値そのものはテキストとして表示
 // しない (こはく scoping: 数値表示は対象外) — activeTaskCount の値に応じた
 // dot 数の生成自体は issue #233、TaskRing.svelte 自身のテストが担当する。
@@ -62,7 +62,7 @@ async function render(
   return target;
 }
 
-describe("AgentCard 頭上リング (issue #180)", () => {
+describe("AgentCard 頭上リング (issue #170)", () => {
   it("activeTaskCount 省略時 (既定 0) はリングを描画しない", async () => {
     const target = await render(undefined);
     expect(target.querySelector(".task-ring")).toBeNull();
@@ -73,7 +73,7 @@ describe("AgentCard 頭上リング (issue #180)", () => {
     expect(target.querySelector(".task-ring")).toBeNull();
   });
 
-  it("production task 集計では親自身の tasklist だけで AgentCard のリングを出さない (issue #188)", async () => {
+  it("production task 集計では親自身の tasklist だけで AgentCard のリングを出さない (issue #178)", async () => {
     const parent = envelope();
     const tasklist = {
       ...parent,

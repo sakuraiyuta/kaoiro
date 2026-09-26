@@ -7,14 +7,14 @@ defmodule KaoiroServer.PersonaAssetsTest do
   alias KaoiroServer.FooterAssets
   alias KaoiroServer.PersonaAssets
 
-  # issue #187: ExUnit's own `tmp_dir` tag path
+  # issue #177: ExUnit's own `tmp_dir` tag path
   # (`tmp/<module>/<test>-<hash>/`, see ex_unit/runner.ex
   # `create_tmp_dir!/3`) is a DETERMINISTIC hash of the module + test
   # name — no BEAM-specific entropy. That is fine for concurrency
   # WITHIN one BEAM (ExUnit's own docs promise exactly that: a given
   # test runs at most once per BEAM), but it collides across SEPARATE
   # `mix test` invocations sharing this checkout — measured directly
-  # (issue #187): running 4 concurrent `mix test` processes with a
+  # (issue #177): running 4 concurrent `mix test` processes with a
   # fixed `--seed` reliably reproduced `File.Error: could not remove
   # files ... file already exists` from `File.rm_rf!/1` racing another
   # BEAM's `File.mkdir_p!/1` on the exact same path, plus assertions
@@ -467,10 +467,10 @@ defmodule KaoiroServer.PersonaAssetsTest do
     assert Map.keys(personas) == ["ok"]
   end
 
-  # issue #219 MF-4 (クロエ実測検証): manifest.name の前後空白は silently
+  # issue #209 MF-4 (クロエ実測検証): manifest.name の前後空白は silently
   # trim せず ingest 拒否する — trim すると pack 作者が書いた値と、
   # spawn 時に display_name へコピーされる値 (untrimmed のまま流れる、
-  # issue #219 D20) が黙って食い違い、issue #219 が消そうとしている
+  # issue #209 D20) が黙って食い違い、issue #209 が消そうとしている
   # canonical/display_name の混同そのものになる。全角空白ではなく
   # 半角スペースであることに注意 — `string?/1` の non-empty チェックだけ
   # では全空白 "   " も通ってしまうため、trim 一致チェックで両方を落とす。
@@ -640,7 +640,7 @@ defmodule KaoiroServer.PersonaAssetsTest do
     assert PersonaAssets.known_persona?("default")
   end
 
-  # --- extraction cache の外出し (ADR-0046 / #183) ---
+  # --- extraction cache の外出し (ADR-0046 / #173) ---
 
   test "ingest dir へは一切書き込まない (:ro でも rebuild が通る)", %{tmp_dir: tmp} do
     ingest = Path.join(tmp, "packs")
@@ -1533,7 +1533,7 @@ defmodule KaoiroServer.PersonaAssetsTest do
     assert Map.keys(PersonaAssets.manifest()["personas"]) == ["lkg"]
   end
 
-  # ---- 展開上限 (#189, ADR-0046 F8) ----
+  # ---- 展開上限 (#179, ADR-0046 F8) ----
   #
   # 上限は「アーカイブが申告するサイズ」では張れない。申告は攻撃者が書ける
   # フィールドで、`:zip.unzip/2` はそれを一切参照しない (OTP 29.0.2 実測:
@@ -1795,7 +1795,7 @@ defmodule KaoiroServer.PersonaAssetsTest do
     File.write!(over, multi_entry_zip(for i <- 1..4097, do: {"f#{i}", ""}))
     assert {:error, msg} = PersonaAssets.verify_archive(over)
 
-    # #194 以降、超過は列挙前の EOCD 先読みで弾かれる ("declares")。列挙後の
+    # #184 以降、超過は列挙前の EOCD 先読みで弾かれる ("declares")。列挙後の
     # `verify_entry_count/1` ("holds") は、OTP の列挙件数が申告値と一致しなく
     # なった場合にだけ発火する backstop として残してある — その一致自体は
     # 下の premise assertion で固定している。
@@ -1831,7 +1831,7 @@ defmodule KaoiroServer.PersonaAssetsTest do
     assert length(name) == 4096
   end
 
-  # #194 本体。申告 entry 数は実体と切り離して弾けること — このアーカイブは
+  # #184 本体。申告 entry 数は実体と切り離して弾けること — このアーカイブは
   # 200 byte 程度しかなく、列挙コストでは弾きようがない。
   test "申告 entry 数が上限超なら列挙前に弾く", %{tmp_dir: tmp} do
     path = Path.join(tmp, "declared.zip")
@@ -1972,9 +1972,9 @@ defmodule KaoiroServer.PersonaAssetsTest do
   # `(4+8+4)` = 16 で、locator の物理サイズ 20 byte と一致しない。探索窓の上限は
   # `0xffff + 22 + 16` = 65573 になる。ここに 20 を書くと窓が 4 byte 広くなり、
   # OTP が決して見ない位置に置いた decoy を先読みだけが採る — 3 本の bound が
-  # すべて decoy から計算されるので全部素通りし、#194 の欠陥がそのまま戻る
+  # すべて decoy から計算されるので全部素通りし、#184 の欠陥がそのまま戻る
   # (実機再現済み)。境界を両側から張り、同じテストで OTP 側も premise として
-  # 固定する。仕様上の幅ではなく実装の定数を写す、という #189 の教訓の再適用。
+  # 固定する。仕様上の幅ではなく実装の定数を写す、という #179 の教訓の再適用。
   test "EOCD 探索窓は OTP と同じ 65573 byte で切れる", %{tmp_dir: tmp} do
     inside = Path.join(tmp, "in.zip")
     File.write!(inside, window_zip(65_573))
@@ -2041,7 +2041,7 @@ defmodule KaoiroServer.PersonaAssetsTest do
     assert msg =~ "no end of central directory record"
   end
 
-  # #194 の bound 検査用。EOCD の申告値 (entry 数 / central offset) と ZIP64
+  # #184 の bound 検査用。EOCD の申告値 (entry 数 / central offset) と ZIP64
   # 経路を個別に張れる最小 zip。実体の central record 数と申告値を独立に
   # 指定できるのが要点 — 「申告値で弾く」ことを実体と切り離して測る。
   defp bounds_zip(opts) do
@@ -2349,7 +2349,7 @@ defmodule KaoiroServer.PersonaAssetsTest do
     local <> central <> eocd
   end
 
-  # issue #195 テスト共通ヘルパー群 (ふじ 2026-08-05 spec)。
+  # issue #185 テスト共通ヘルパー群 (ふじ 2026-08-05 spec)。
 
   defp sha256_hex(path) do
     path |> File.read!() |> then(&:crypto.hash(:sha256, &1)) |> Base.encode16(case: :lower)
@@ -2366,7 +2366,7 @@ defmodule KaoiroServer.PersonaAssetsTest do
            "cache root に .stage-* が残っている: #{inspect(entries)}"
   end
 
-  describe "issue #195: staging (TOCTOU 対策)" do
+  describe "issue #185: staging (TOCTOU 対策)" do
     test "stage_archive/3: exact limit は受理、limit+1 は明示 oversize で拒否 (must-2)", %{
       tmp_dir: tmp
     } do

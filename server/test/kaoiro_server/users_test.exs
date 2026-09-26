@@ -1,6 +1,6 @@
 defmodule KaoiroServer.UsersTest do
   # all_with_role/1 tests mutate :client_tokens / :oauth_allowlist_path
-  # (issue #197 段階2), mirroring auth_test.exs / session_controller_test.exs.
+  # (issue #187 段階2), mirroring auth_test.exs / session_controller_test.exs.
   use ExUnit.Case, async: false
 
   import KaoiroServer.OAuthAllowlistFixture
@@ -120,7 +120,7 @@ defmodule KaoiroServer.UsersTest do
     GenServer.stop(name2)
   end
 
-  describe "rename/3 (issue #197 段階3)" do
+  describe "rename/3 (issue #187 段階3)" do
     test "display_name を書き換え、更新後の public entry を返す", %{server: server} do
       {:ok, user} = Users.get_or_create({:oauth, "github", "ao"}, "user", "Ao", server)
 
@@ -170,7 +170,7 @@ defmodule KaoiroServer.UsersTest do
     end
   end
 
-  describe "all_with_role/1 (issue #197 段階2)" do
+  describe "all_with_role/1 (issue #187 段階2)" do
     setup do
       on_exit(fn -> Application.delete_env(:kaoiro_server, :client_tokens) end)
       :ok
@@ -249,7 +249,7 @@ defmodule KaoiroServer.UsersTest do
     end
   end
 
-  describe "expose_to_agents_default/1 (issue #197 段階2, ふじ M1 レビュー指摘)" do
+  describe "expose_to_agents_default/1 (issue #187 段階2, ふじ M1 レビュー指摘)" do
     test "env 未設定 (nil) は config default = true" do
       # 実測確認 (2026-08-11): fresh BEAM で config/runtime.exs を実際に
       # 評価し、env 未設定時に Application.get_env(:kaoiro_server,

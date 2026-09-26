@@ -1,4 +1,4 @@
-// runner/deploy/kaoiro-runner-install.sh (issue #229): a release is
+// runner/deploy/kaoiro-runner-install.sh (issue #219): a release is
 // installed as an immutable tree under releases/<id>, and installing one
 // while the runner is up must not disturb what the running process resolves
 // from disk.
@@ -39,7 +39,7 @@ const installScript = fileURLToPath(
   new URL("../deploy/kaoiro-runner-install.sh", import.meta.url),
 );
 
-describe("kaoiro-runner-install.sh (issue #229)", () => {
+describe("kaoiro-runner-install.sh (issue #219)", () => {
   let dir: string;
   let root: string;
   let work: string;
@@ -151,7 +151,7 @@ describe("kaoiro-runner-install.sh (issue #229)", () => {
     // sibling would otherwise become a mandatory module and reject a complete
     // tree at exit 70 — install AND switch both. Inventing a dependency is
     // strictly worse than missing one, so the parser must err the other way
-    // (issue #229 レビューサイクル round 1).
+    // (issue #219 レビューサイクル round 1).
     const revision = revisionOf("prose-specifier");
     const stage = join(work, "prose-stage");
     const name = `kaoiro-runner-${revision}-linux-x64`;
@@ -160,7 +160,7 @@ describe("kaoiro-runner-install.sh (issue #229)", () => {
     const cli = join(tree, "dist", "cli.js");
     writeFileSync(
       cli,
-      `// helper() used to be exported from "./legacy-helper.js" before #229.\n/* and a block comment mentioning require("./gone.js") too */\n${readFileSync(cli, "utf8")}`,
+      `// helper() used to be exported from "./legacy-helper.js" before #219.\n/* and a block comment mentioning require("./gone.js") too */\n${readFileSync(cli, "utf8")}`,
     );
     execFileSync(process.execPath, [
       fileURLToPath(new URL("../../scripts/build-release-manifest.mjs", import.meta.url)),
@@ -182,7 +182,7 @@ describe("kaoiro-runner-install.sh (issue #229)", () => {
   ])("回帰: %s 内の specifier で健全 release を拒否しない", (_label, line) => {
     // Three negative controls, one mechanism. Blanking comments alone left
     // the string and template forms rejecting a complete tree at exit 70 —
-    // the same false positive one context over (もも review, issue #229).
+    // the same false positive one context over (もも review, issue #219).
     const revision = revisionOf(`non-code-${_label}`);
     const stage = join(work, `nc-${_label}`);
     const name = `kaoiro-runner-${revision}-linux-x64`;
@@ -235,7 +235,7 @@ describe("kaoiro-runner-install.sh (issue #229)", () => {
 
   it("回帰: 除算と同じ行に置かれた specifier を見落とさない", () => {
     // The FOURTH instance of one defect, and the one that ended the approach
-    // (もも division probe, issue #229). The hand-written lexer this scanner
+    // (もも division probe, issue #219). The hand-written lexer this scanner
     // replaced treated every `/` that was not `//` or `/*` as the start of a
     // regex literal and blanked to end of line, so a real specifier sharing
     // its line with a division simply vanished. That is a FALSE NEGATIVE —
@@ -294,7 +294,7 @@ describe("kaoiro-runner-install.sh (issue #229)", () => {
     // BINDING, so it read a method named `require` on an unrelated object, and
     // a module that defines its OWN `class URL` calling it with
     // `import.meta.url`, as real module edges — and rejected complete releases
-    // at exit 70 (もも, issue #229; the URL case passes `node --check` and a
+    // at exit 70 (もも, issue #219; the URL case passes `node --check` and a
     // real `--version` run). The inference is gone: runtime edges are declared
     // now, so every line below is inert to the verifier.
     const archive = makeReleaseTarball(work, revisionOf("no-text-inference"), {
@@ -470,7 +470,7 @@ describe("kaoiro-runner-install.sh (issue #229)", () => {
     // realpathSync succeeds on a DIRECTORY, so without an isFile() test the
     // bare candidate wins and a directory lands in the reachable set — where
     // the next readFileSync throws EISDIR and rejects a complete tree. The
-    // index.js spelling would also be unreachable (issue #229 レビュー
+    // index.js spelling would also be unreachable (issue #219 レビュー
     // サイクル round 1). A package whose `main` names a directory is the shape
     // that still reaches that code once specifiers come from the ES import
     // graph, which has no directory resolution of its own.
@@ -582,14 +582,14 @@ describe("kaoiro-runner-install.sh (issue #229)", () => {
     expect(existsSync(join(root, "releases", id, "dist", "cli.js"))).toBe(true);
   });
 
-  it("--allow-dirty の置き換えは .lock.links (issue #253) で switch と直列化される", () => {
+  it("--allow-dirty の置き換えは .lock.links (issue #243) で switch と直列化される", () => {
     // The current/previous check above and the rm -rf that follows it
     // (verified NOT to point at the target, so this is a DIFFERENT dirty
     // release than the one above) are the exact window kaoiro-runner-switch.sh
     // could otherwise land in: switch takes the SAME .lock.links around its
     // own current/previous swap, so pre-holding it here simulates a switch
     // that is mid-flight right now. If this install proceeded anyway, the
-    // check-then-delete race issue #253 exists to close would still be open.
+    // check-then-delete race issue #243 exists to close would still be open.
     const revision = revisionOf("locked-replace");
     const archive = makeReleaseTarball(work, revision, { dirty: true });
     expect(install(archive).status).toBe(0);
@@ -603,7 +603,7 @@ describe("kaoiro-runner-install.sh (issue #229)", () => {
     expect(forced.status).toBe(75);
     expect(forced.stderr).toContain("another run holds");
     // Not merely "install failed" -- the release was never touched, which is
-    // the actual property issue #253 requires.
+    // the actual property issue #243 requires.
     expect(existsSync(marker)).toBe(true);
     // .lock.install (this run's own lock) is released even though
     // .lock.links (pre-held by the test, standing in for a live switch) is
