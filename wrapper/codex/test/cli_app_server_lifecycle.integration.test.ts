@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { ServerLink } from "@kaoiro/wrapper-core";
+import { AppServerRpc } from "../src/app_server_rpc.js";
+import { AppServerSession } from "../src/app_server_session.js";
 import { runCodexCli } from "../src/cli.js";
 import { phoenixLoopback } from "./fixtures/phoenix_loopback.js";
 import { watchdogClock } from "./fixtures/cli_app_server.js";
@@ -14,12 +16,37 @@ type Input = { type?: string; role?: string; output?: unknown; content?: { text?
 // IA coordinator/lease/ack, and watchdog clock all use their production defaults.
 // The pinned CLI can contact update services; model/auth stay on loopback.
 it.each([false, true])("runs CLI components through MCP IA wait, mid-turn batching and dispatch-only acknowledgement (watchdog interrupt=%s)", async interrupt => {
+  const begun = performance.now();
+  const stages: Array<{ elapsedMs: number; stage: string; detail?: string }> = [];
+  const mark = (stage: string, detail?: string) => stages.push({ elapsedMs: Math.round(performance.now() - begun), stage,
+    ...(detail === undefined ? {} : { detail }) });
+  const rpcIds = new WeakMap<AppServerRpc, number>(), rpcInstances: AppServerRpc[] = [];
+  const sessions: AppServerSession[] = [];
+  const originalRequest = AppServerRpc.prototype.request;
+  const requestSpy = vi.spyOn(AppServerRpc.prototype, "request").mockImplementation(function (this: AppServerRpc, method, params, timeout) {
+    let id = rpcIds.get(this);
+    if (id === undefined) { id = rpcInstances.push(this);rpcIds.set(this, id); }
+    mark("rpc_request", `${id}:${method}`);
+    const ticket = originalRequest.call(this, method, params, timeout);
+    void ticket.result.then(() => mark("rpc_ok", `${id}:${method}`), error => mark("rpc_error", `${id}:${method}:${String(error)}`));
+    return ticket;
+  });
+  const originalCreate = AppServerSession.create.bind(AppServerSession);
+  const createSpy = vi.spyOn(AppServerSession, "create").mockImplementation(async options => {
+    const session = await originalCreate(options);sessions.push(session);mark("session_created");return session;
+  });
   const clock = watchdogClock();
   const home = await mkdtemp(join(tmpdir(), "fuji-348-cli-ia-"));
   const agentId = `cli-${randomUUID()}`, peer = "peer.agent";
   const wire = await phoenixLoopback(() => ({}), (event) => event === "directory_request"
     ? { agents: [{ agent_id: peer, persona: { id: "p", name: "Peer", sprite_set: "p" }, state: "waiting_input" }], users: [] }
     : { ingress_stamp: [1, 1] });
+  const originalPush = wire.received.push.bind(wire.received);
+  wire.received.push = (...events) => {
+    for (const event of events) if (event.event === "envelope" && event.payload.type === "inter_agent_message" &&
+      (event.payload.payload as { body?: string }).body === "WAITING") mark("waiting_received");
+    return originalPush(...events);
+  };
   let release!: () => void;
   const blocked = new Promise<void>(resolve => { release = resolve; });
   const requests: Input[][] = [], toolOutputs: unknown[] = [], userTurns: string[] = [];
@@ -38,6 +65,7 @@ it.each([false, true])("runs CLI components through MCP IA wait, mid-turn batchi
     response.end();
   };
   const provider = createServer(async (request, response) => {
+    mark("provider_request");
     let body = "";for await (const chunk of request) body += chunk;
     const input = (JSON.parse(body) as { input: Input[] }).input;requests.push(input);
     const text = input.filter(i => i.role === "user").at(-1)?.content?.map(c => c.text ?? "").join("\n") ?? "";
@@ -56,6 +84,11 @@ it.each([false, true])("runs CLI components through MCP IA wait, mid-turn batchi
   const signals = process.listeners("SIGINT");
   const output = vi.spyOn(process.stdout, "write");
   const ackSent = vi.spyOn(ServerLink.prototype, "acknowledgeInterAgentDelivery");
+  const originalSend = ServerLink.prototype.send;
+  const sendSpy = vi.spyOn(ServerLink.prototype, "send").mockImplementation(function (this: ServerLink, envelope) {
+    if (envelope.type === "inter_agent_message" && (envelope.payload as { body?: string }).body === "WAITING") mark("waiting_send");
+    return originalSend.call(this, envelope);
+  });
   let running: Promise<void> | undefined;
   const outbound = () => wire.received.filter(e => e.event === "envelope" && e.payload.type === "inter_agent_message");
   const results = () => wire.received.filter(e => e.event === "envelope" && e.payload.type === "result");
@@ -65,6 +98,7 @@ it.each([false, true])("runs CLI components through MCP IA wait, mid-turn batchi
     ts: new Date().toISOString(), type: "inter_agent_message", state: "tool_running", delivery_seq: seq,
     ingress_stamp: [1, seq], payload: { to: agentId, conversation_id: cid, turn_number: turn, kind: "inform", body },
   });
+  let failure: unknown;
   try {
     await writeFile(join(home, "config.toml"), `model = "gpt-5.6-sol"\nmodel_provider = "local"\n[model_providers.local]\nname = "Lifecycle test"\nbase_url = "http://127.0.0.1:${address.port}/v1"\nwire_api = "responses"\n[features]\nshell_snapshot = false\nplugins = false\n[analytics]\nenabled = false\n`);
     vi.stubEnv("HOME", home);vi.stubEnv("CODEX_HOME", home);
@@ -77,6 +111,8 @@ it.each([false, true])("runs CLI components through MCP IA wait, mid-turn batchi
     await vi.waitFor(() => expect(wire.joins).toBe(1));wire.push("persona_prompt", { prompt: "Lifecycle test" });
     await vi.waitFor(() => expect(wire.received.some(e => e.event === "envelope" && e.payload.type === "state_change")).toBe(true));
     inbound(1, "c1", "FIRST");
+    // The 35-second wait equals the production bridge thread-open deadline.
+    // Child-stage evidence distinguishes a slow stage from a missing outbound event.
     await vi.waitFor(() => expect(outbound().some(e => (e.payload.payload as { body?: string }).body === "WAITING")).toBe(true), { timeout: 35_000 });
     expect(acks()).toEqual([1]);expect(wire.received.some(e => e.event === "directory_request")).toBe(true);
     inbound(2, "c2", "SECOND");inbound(3, "c3", "THIRD");inbound(4, "c4", "OTHER", "other.peer");
@@ -105,11 +141,20 @@ it.each([false, true])("runs CLI components through MCP IA wait, mid-turn batchi
     expect(userTurns.filter(text => text.includes("REPLY"))).toHaveLength(0);
     expect(acks().at(-1)).toBe(interrupt ? 4 : 5);
     if (!interrupt) expect(outbound().filter(e => (e.payload.payload as { meta?: { peer_error?: unknown } }).meta?.peer_error)).toHaveLength(0);
+  } catch (error) {
+    failure = error;
+    throw error;
   } finally {
+    if (failure !== undefined) console.error("CODEX_LIFECYCLE_STAGES", JSON.stringify({ interrupt, stages,
+      rpcStderrTails: rpcInstances.map((rpc, index) => ({ id: index + 1, tail: rpc.stderrTail.slice(-2000) })),
+      sessionStderrTails: sessions.map(session => session.stderrTail.slice(-2000)),
+      failure: String(failure),
+    }));
     release();
     // Invoke only the handler installed by this CLI lifetime, never unrelated listeners.
     for (const listener of process.listeners("SIGINT")) if (!signals.includes(listener)) { listener("SIGINT");process.removeListener("SIGINT", listener); }
     await running;output.mockRestore();ackSent.mockRestore();await wire.close();provider.closeAllConnections();
     await new Promise<void>(resolve => provider.close(() => resolve()));vi.unstubAllEnvs();await rm(home, { recursive: true, force: true });
+    requestSpy.mockRestore();createSpy.mockRestore();sendSpy.mockRestore();
   }
 }, 90_000);

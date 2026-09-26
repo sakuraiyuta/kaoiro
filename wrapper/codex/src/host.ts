@@ -10,6 +10,7 @@
 
 import type { AppServerHistoryJob } from "./app_server_replay.js";
 import { AppServerAdmissionError, AppServerHostRuntime, type AppServerHostRuntimeOptions } from "./app_server_host_runtime.js";
+import { AppServerSession } from "./app_server_session.js";
 import { AppServerConnectionError } from "./app_server_rpc.js";
 import type { AppServerRateLimits } from "./app_server_telemetry.js";
 import { codexAccountRateLimits, readStartupRateLimits, type StartupRateLimitTransportFactory } from "./startup_rate_limits.js";
@@ -458,6 +459,8 @@ export interface CodexHostOptions {
     uploads: PendingUpload[],
     lifecycle: MaterializeLifecycle,
   ) => Promise<{ dir: string; paths: string[] }>;
+  /** Test seam for ordering the startup sweep against image materialization. */
+  sweepImages?: typeof sweepOrphanLocalImages;
   /** Local directory for failure-only Codex turn traces. Production defaults
    * to ~/.kaoiro/codex-turn-traces; tests inject a temporary directory. */
   turnTraceDir?: string;
@@ -717,6 +720,8 @@ export class CodexHost implements EngineAdapter {
   #rateLimitsInitializedSessionId: string | null = null;
   #nativeRateLimitsSeen = false;
   readonly #startupRateLimitAbort = new AbortController();
+  #startupRateLimitProbe: Promise<void> | null = null;
+  #imageOperation: Promise<void> = Promise.resolve();
   /** This process's private trace capture directory. It is derived without
    * filesystem I/O so a broken diagnostic path cannot prevent host startup. */
   readonly #turnTraceCaptureDir: string;
@@ -881,19 +886,38 @@ export class CodexHost implements EngineAdapter {
   }
 
   async probeAccountRateLimits(): Promise<void> {
-    try {
-      const next = await (this.#options.startupRateLimitResolver === undefined
-        ? readStartupRateLimits(this.#startupRateLimitAbort.signal, this.#options.startupRateLimitTransportFactory)
-        : this.#options.startupRateLimitResolver(this.#startupRateLimitAbort.signal));
-      if (this.#closed || this.#nativeRateLimitsSeen || next.size === 0) return;
-      if (rateLimitsDiffer(this.#rateLimits, next)) {
-        this.#rateLimits.clear();
-        for (const [window, snapshot] of next) this.#rateLimits.set(window, snapshot);
-        this.#emitState(this.#machine.state);
+    if (this.#startupRateLimitProbe !== null) return this.#startupRateLimitProbe;
+    const probe = (async () => {
+      try {
+        const next = await (this.#options.startupRateLimitResolver === undefined
+          ? readStartupRateLimits(this.#startupRateLimitAbort.signal, this.#options.startupRateLimitTransportFactory)
+          : this.#options.startupRateLimitResolver(this.#startupRateLimitAbort.signal));
+        if (this.#closed || this.#startupRateLimitAbort.signal.aborted || this.#nativeRateLimitsSeen || next.size === 0) return;
+        if (rateLimitsDiffer(this.#rateLimits, next)) {
+          this.#rateLimits.clear();
+          for (const [window, snapshot] of next) this.#rateLimits.set(window, snapshot);
+          this.#emitState(this.#machine.state);
+        }
+      } catch {
+        // An unavailable account read is unknown, not a startup failure.
       }
-    } catch {
-      // An unavailable account read is unknown, not a startup failure.
-    }
+    })();
+    this.#startupRateLimitProbe = probe;
+    try { await probe; }
+    finally { if (this.#startupRateLimitProbe === probe) this.#startupRateLimitProbe = null; }
+  }
+
+  async #finishStartupRateLimitProbe(): Promise<void> {
+    const probe = this.#startupRateLimitProbe;
+    if (probe === null) return;
+    this.#startupRateLimitAbort.abort();
+    await probe;
+  }
+
+  #serializeImageOperation<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.#imageOperation.then(operation);
+    this.#imageOperation = result.then(() => {}, () => {});
+    return result;
   }
 
   #applyAppServerRateLimits(account: AppServerRateLimits): void {
@@ -976,8 +1000,11 @@ export class CodexHost implements EngineAdapter {
       };
       try {
         const materialize = this.#options.materializeImages ?? materializeLocalImages;
-        const materialized = await materialize(this.#config.agent_id, uploads, lifecycle);
-        this.#activeTempDirs.add(materialized.dir);
+        const materialized = await this.#serializeImageOperation(async () => {
+          const result = await materialize(this.#config.agent_id, uploads, lifecycle);
+          this.#activeTempDirs.add(result.dir);
+          return result;
+        });
         if (lifecycle.cancelled()) {
           await this.#cleanupTempDir(materialized.dir);
           return;
@@ -1431,11 +1458,12 @@ export class CodexHost implements EngineAdapter {
       this.#queue.push({ input: initialPrompt });
     }
 
-    await sweepOrphanLocalImages(
-      this.#config.agent_id,
-      this.#warn,
-      () => this.#activeTempDirs,
-    );
+    await this.#serializeImageOperation(() =>
+      (this.#options.sweepImages ?? sweepOrphanLocalImages)(
+        this.#config.agent_id,
+        this.#warn,
+        () => this.#activeTempDirs,
+      ));
     this.#gcTimer = setInterval(() => this.tickGC(), PENDING_UPLOAD_GC_INTERVAL_MS);
 
     try {
@@ -1494,7 +1522,11 @@ export class CodexHost implements EngineAdapter {
       effortIntent: this.#effort !== null && this.#effortSource !== "default" ? "explicit" : "default",
       ...(this.#sessionId === null ? {} : { resumeThreadId: this.#sessionId }),
       ...(this.#options.permissionRolloutRoot === undefined ? {} : { rolloutRoot: this.#options.permissionRolloutRoot }),
-      ...(this.#options.appServerSessionFactory === undefined ? {} : { createSession: this.#options.appServerSessionFactory }),
+      createSession: async options => {
+        await this.#finishStartupRateLimitProbe();
+        if (this.#closed) throw new AppServerConnectionError("Codex host closed");
+        return (this.#options.appServerSessionFactory ?? AppServerSession.create)(options);
+      },
       onRateLimits: (account) => this.#applyAppServerRateLimits(account),
     });
   }
@@ -1726,6 +1758,7 @@ export class CodexHost implements EngineAdapter {
       // Match persistFailure's non-interference rule for the capture window.
       writeRedactedStderr(`codex turn trace failed: ${String(error)}\n`);
     }
+    await this.#finishStartupRateLimitProbe();
     // A rejoin can replace the transport barrier while diagnostics performs
     // I/O. Recheck immediately before capture; no callback can interleave
     // between this await and the synchronous SDK construction below.

@@ -1,7 +1,7 @@
 ---
 title: "Codex backend switching and rollback"
 status: implemented
-last_updated: 2026-09-18
+last_updated: 2026-09-26
 ---
 
 # Codex backend switching and rollback
@@ -40,3 +40,7 @@ This changes backend selection, not the installed release. App-server startup
 failure remains an operator-visible error and closes admission; there is no
 implicit exec fallback. Unexpected wrapper exits retain the Supervisor's
 bounded restart policy. A deliberate stop does not restart.
+After updating Codex, start one Codex agent and let its local state initialize
+before a bulk spawn or reset of agents sharing an empty `CODEX_HOME`. Separate
+wrappers can otherwise race while creating the new `state_N.sqlite` schema;
+the per-Host startup probe gate does not coordinate those processes.

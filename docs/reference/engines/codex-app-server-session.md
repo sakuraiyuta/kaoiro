@@ -1,7 +1,7 @@
 ---
 title: "Codex app-server session and bridge"
 status: implemented
-last_updated: 2026-09-18
+last_updated: 2026-09-26
 ---
 
 # Codex app-server session and bridge
@@ -20,6 +20,15 @@ rejected. Relative image paths are rejected before turn admission or RPC,
 avoiding ambiguity between the child process and thread working directories.
 Caller-owned image files are neither copied nor removed by the session. The Host
 supplies materialized absolute image paths and removes its turn directory after completion.
+The Host serializes its startup orphan sweep with image materialization through
+directory registration, including when an instruction arrives before `run`.
+The sweep's duration can grow with the number of matching entries under `/tmp`.
+Both backends preserve the materialized image until its turn consumes it.
+Before the main app-server session starts, the Host aborts and awaits any
+in-flight account probe. This prevents two app-server children of one Host
+from initializing the same empty `CODEX_HOME` concurrently. It does not
+coordinate separate wrappers; deployment ordering for that case is in the
+[backend runbook](../../operations/codex-backend-switch.md).
 
 Both exec and app-server use `BRIDGE_MCP_POLICY`: `required = true`,
 `startup_timeout_sec = 30`, `default_tools_approval_mode = "approve"`, and a

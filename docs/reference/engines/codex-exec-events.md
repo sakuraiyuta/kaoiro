@@ -60,6 +60,9 @@ its own rollout after turns. The app-server backend's read after thread open
 can replace the startup value. No value is borrowed from a different session's
 rollout. The [measurement](../../evidence/2026-09-26-pre-turn-rate-limits.md)
 records which windows the current account exposed.
+If a turn arrives while the account read is still running, the Host closes that
+probe before starting either backend's main child; the interrupted probe may
+leave `rate_limits` absent until a later native read.
 
 ### Main API and process model
 
