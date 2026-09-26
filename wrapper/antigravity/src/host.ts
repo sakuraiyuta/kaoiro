@@ -681,11 +681,11 @@ export class AntigravityHost implements EngineAdapter {
     return leaseId;
   }
 
-  endPermissionWaitLease(leaseId: string): void {
+  endPermissionWaitLease(leaseId: string): boolean {
     const owner = this.#permissionWaitLeases.get(leaseId);
-    if (owner === undefined) return;
+    if (owner === undefined) return false;
     this.#permissionWaitLeases.delete(leaseId);
-    if (this.#permissionWaitLeases.size !== 0) return;
+    if (this.#permissionWaitLeases.size !== 0) return true;
     const baseState = this.#permissionWaitBaseState;
     this.#permissionWaitBaseState = null;
     if (
@@ -695,6 +695,7 @@ export class AntigravityHost implements EngineAdapter {
     ) {
       this.#apply({ kind: "permission_resolved" });
     }
+    return true;
   }
 
   async interrupt(): Promise<void> {

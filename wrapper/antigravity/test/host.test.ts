@@ -183,6 +183,73 @@ describe("AntigravityHost", () => {
     host.close();
   });
 
+  it("a duplicate lease release is a no-op while another owner still waits", async () => {
+    const { host, calls, states } = hostHarness();
+    await host.send("hello", undefined, ["cid"], "duplicate-release");
+    await waitFor(() => calls.length === 1);
+    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"run_command"}}\n');
+    await waitFor(() => states.at(-1)?.state === "tool_running");
+
+    const released = host.beginPermissionWaitLease("duplicate-release", "native")!;
+    const remaining = host.beginPermissionWaitLease("duplicate-release", "bridge")!;
+    expect(host.endPermissionWaitLease(released)).toBe(true);
+    expect(states.at(-1)?.state).toBe("waiting_permission");
+    expect(host.endPermissionWaitLease(released)).toBe(false);
+    expect(states.at(-1)?.state).toBe("waiting_permission");
+    expect(host.endPermissionWaitLease(remaining)).toBe(true);
+    expect(states.at(-1)?.state).toBe("tool_running");
+
+    calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
+    calls[0]!.child.finish();
+    await waitFor(() => states.at(-1)?.state === "waiting_input");
+    host.close();
+  });
+
+  it("a closed pending hook socket releases its native permission wait", async () => {
+    const cfg = config({ approval: "on-request" });
+    const requests: Envelope[] = [];
+    let testHost: AntigravityHost | undefined;
+    let activeGate: AntigravityGate | null = null;
+    let closePendingSocket: (() => void) | undefined;
+    const broker = new PermissionBroker({
+      config: cfg,
+      send: (envelope) => requests.push(envelope),
+      onPendingChange: (pending) => testHost?.setPendingPermission(pending),
+    });
+    const { host, calls, states } = hostHarness({
+      config: cfg,
+      permissionBroker: broker,
+      gateServerListen: async (options) => {
+        activeGate = options.gate;
+        closePendingSocket = options.onSocketClose;
+        return {
+          socketPath: "/tmp/pending-hook-socket.sock",
+          nonce: "pending-hook",
+          setGate: (gate: AntigravityGate) => { activeGate = gate; },
+          observeCompletedTool: () => true,
+          close: () => {},
+        } as unknown as GateServer;
+      },
+    });
+    testHost = host;
+    await host.send("hello", undefined, ["cid"], "socket-close");
+    await waitFor(() => calls.length === 1 && activeGate !== null);
+    calls[0]!.child.stdout.write('{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"run_command"}}\n');
+    await waitFor(() => states.at(-1)?.state === "tool_running");
+
+    const decision = activeGate!.decide({ name: "run_command", args: { CommandLine: "pwd", Cwd: process.cwd() } });
+    await waitFor(() => requests.length === 1);
+    expect(states.at(-1)?.state).toBe("waiting_permission");
+    closePendingSocket!();
+    await expect(decision).resolves.toMatchObject({ decision: "deny" });
+    expect(states.at(-1)?.state).toBe("tool_running");
+
+    calls[0]!.child.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
+    calls[0]!.child.finish();
+    await waitFor(() => states.at(-1)?.state === "waiting_input");
+    host.close();
+  });
+
   it("native hook approval still emits one entry and one exit despite broker pending metadata", async () => {
     const cfg = config({ approval: "on-request" });
     const permissionRequests: Envelope[] = [];

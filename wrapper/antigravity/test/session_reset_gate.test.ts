@@ -8,6 +8,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import type { Envelope, ToolDescriptor, WrapperConfig } from "@kaoiro/agent-common";
+import type { DirectoryEntry } from "@kaoiro/protocol";
 import { runAntigravityCli } from "../src/cli.js";
 import { AntigravityHost, type AntigravityHostOptions, type SpawnedAgy } from "../src/host.js";
 
@@ -52,6 +53,7 @@ interface Rig {
   hostOptions: Record<string, any>;
   host: AntigravityHost;
   agyChildren: FakeAgy[];
+  directoryAgents: DirectoryEntry[];
   done: Promise<void>;
 }
 
@@ -65,6 +67,7 @@ async function makeRig(
   const turnEnds: Rig["turnEnds"] = [];
   const sendRejections: Rig["sendRejections"] = [];
   const agyChildren: FakeAgy[] = [];
+  const directoryAgents: DirectoryEntry[] = [];
   let linkOptions!: Record<string, any>;
   let hostOptions!: Record<string, any>;
   let host!: AntigravityHost;
@@ -79,6 +82,7 @@ async function makeRig(
       requests.push({ mode, ...(reason !== undefined ? { reason } : {}) });
       return { requestId: "r-1" };
     },
+    requestDirectory: async () => ({ agents: directoryAgents, users: [] }),
   };
   const done = runAntigravityCli({
     parseCliArgs: () => ({ configPath: "test", prompt: undefined, resume: undefined }),
@@ -130,6 +134,7 @@ async function makeRig(
       return host;
     },
     agyChildren,
+    directoryAgents,
     done,
   };
 }
@@ -141,6 +146,11 @@ function resetDescriptor(rig: Rig): ToolDescriptor {
 
 async function markToolRunning(rig: Rig): Promise<void> {
   rig.agyChildren[0]!.stdout.write('{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"call_mcp_tool"}}\n');
+  await vi.waitFor(() => expect(rig.sent.filter((e) => e.type === "state_change").at(-1)?.state).toBe("tool_running"));
+}
+
+async function markChildToolRunning(rig: Rig, childIndex: number): Promise<void> {
+  rig.agyChildren[childIndex]!.stdout.write('{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"call_mcp_tool"}}\n');
   await vi.waitFor(() => expect(rig.sent.filter((e) => e.type === "state_change").at(-1)?.state).toBe("tool_running"));
 }
 
@@ -166,6 +176,70 @@ describe("Antigravity session-reset real lifetime semantics (issue #396)", () =>
     rig.agyChildren[0]!.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
     rig.agyChildren[0]!.finish();
     await vi.waitFor(() => expect(rig.turnEnds).toHaveLength(1));
+    rig.host.close();
+  });
+
+  it("list_agents descriptor serializes waiting_permission during a bridge approval", async () => {
+    const rig = await makeRig();
+    await rig.host.send("do the thing", undefined, ["cid-a"], "turn-list-agents");
+    await vi.waitFor(() => expect(rig.agyChildren).toHaveLength(1));
+    await markToolRunning(rig);
+
+    const call = resetDescriptor(rig).handler({ mode: "new" });
+    await vi.waitFor(() => expect(rig.sent.some((e) => e.type === "permission_request")).toBe(true));
+    rig.directoryAgents.push({
+      agent_id: CONFIG.agent_id,
+      persona: CONFIG.persona,
+      state: rig.host.state,
+    });
+    const listAgents = (rig.hostOptions.toolDescriptors as ToolDescriptor[]).find((d) => d.name === "list_agents")!;
+    const result = await listAgents.handler({});
+    const parsed = JSON.parse(result.content[0]!.text) as { agents: DirectoryEntry[] };
+    expect(parsed.agents.find((agent) => agent.agent_id === CONFIG.agent_id)?.state).toBe("waiting_permission");
+
+    const request = rig.sent.filter((e) => e.type === "permission_request").at(-1)!;
+    const requestId = (request.payload as { request_id: string }).request_id;
+    rig.linkOptions.onPermissionDecision({ request_id: requestId, allow: true });
+    await call;
+    rig.agyChildren[0]!.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
+    rig.agyChildren[0]!.finish();
+    await vi.waitFor(() => expect(rig.turnEnds).toHaveLength(1));
+    rig.host.close();
+  });
+
+  it("retires a bridge wait lease when its child dies before the approval settles", async () => {
+    const rig = await makeRig();
+    await rig.host.send("do the thing", undefined, ["cid-a"], "turn-dead-child-a");
+    await vi.waitFor(() => expect(rig.agyChildren).toHaveLength(1));
+    await markToolRunning(rig);
+
+    const firstCall = resetDescriptor(rig).handler({ mode: "new" });
+    await vi.waitFor(() => expect(rig.sent.filter((e) => e.type === "permission_request")).toHaveLength(1));
+    rig.agyChildren[0]!.stdout.write('{"event":"result","result":{"status":"ERROR","response":"child ended"}}\n');
+    rig.agyChildren[0]!.finish();
+    await vi.waitFor(() => expect(rig.turnEnds).toHaveLength(1));
+    expect(rig.sent.filter((e) => e.type === "state_change").at(-1)?.state).not.toBe("waiting_permission");
+
+    await rig.host.send("next turn", undefined, ["cid-b"], "turn-dead-child-b");
+    await vi.waitFor(() => expect(rig.agyChildren).toHaveLength(2));
+    await markChildToolRunning(rig, 1);
+    const secondCall = resetDescriptor(rig).handler({ mode: "new" });
+    await vi.waitFor(() => expect(rig.sent.filter((e) => e.type === "permission_request")).toHaveLength(2));
+    expect(rig.sent.filter((e) => e.type === "state_change").at(-1)?.state).toBe("waiting_permission");
+
+    const requests = rig.sent.filter((e) => e.type === "permission_request");
+    const firstRequestId = (requests[0]!.payload as { request_id: string }).request_id;
+    const secondRequestId = (requests[1]!.payload as { request_id: string }).request_id;
+    rig.linkOptions.onPermissionDecision({ request_id: firstRequestId, allow: true });
+    await firstCall;
+    expect(rig.sent.filter((e) => e.type === "state_change").at(-1)?.state).toBe("waiting_permission");
+    rig.linkOptions.onPermissionDecision({ request_id: secondRequestId, allow: true });
+    await secondCall;
+    expect(rig.sent.filter((e) => e.type === "state_change").at(-1)?.state).toBe("tool_running");
+
+    rig.agyChildren[1]!.stdout.write('{"event":"result","result":{"status":"SUCCESS","response":"done"}}\n');
+    rig.agyChildren[1]!.finish();
+    await vi.waitFor(() => expect(rig.turnEnds).toHaveLength(2));
     rig.host.close();
   });
 
