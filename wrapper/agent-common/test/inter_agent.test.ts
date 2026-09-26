@@ -1752,6 +1752,29 @@ describe("list_agents / whoami companion tools", () => {
     expect(JSON.parse(result.content[0]!.text)).toEqual(snapshot);
   });
 
+  it("whoami は build のない getWhoami snapshot に unknown identity を補う", async () => {
+    const tool = new InterAgentTool({
+      config: configFor("self.agent"),
+      getState: () => "idle",
+      send: () => {},
+      getWhoami: () => ({
+        agent_id: "self.agent",
+        persona: PERSONA,
+        state: "idle",
+      }),
+    });
+
+    const result = await tool.whoami();
+    const parsed = JSON.parse(result.content[0]!.text) as WhoamiSnapshot;
+
+    expect(parsed.build).toEqual({
+      revision: "unknown",
+      dirty: false,
+      version: "unknown",
+      channel: "dev",
+    });
+  });
+
   it("whoami は getWhoami 未配線で wrapper config からのフォールバックを返す", async () => {
     const tool = new InterAgentTool({
       config: configFor("self.agent"),

@@ -1,7 +1,7 @@
 ---
 title: Issue 365 — Expose wrapper build identity through inter-agent tools
 description: Add the wrapper artifact identity to list_agents and whoami while preserving the peer-directory and viewer disclosure boundaries.
-status: approved
+status: implemented
 issue: 365
 base: 148a469a66dae48ae2ea155f5fd54d4c7ae9ad52
 last_updated: 2026-09-26
