@@ -1,7 +1,7 @@
 ---
 title: Issue 386 — Enumerate and verify Antigravity sessions
 description: Read Antigravity session metadata from conversation_summaries.db for the picker and resume validation.
-status: in_progress
+status: implemented
 last_updated: 2026-09-26
 issue: 386
 must_fix_rounds_used: 0
