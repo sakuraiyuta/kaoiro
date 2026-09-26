@@ -1496,7 +1496,7 @@ export class InterAgentTool {
       build: observed.build ?? UNKNOWN_WRAPPER_BUILD_IDENTITY,
     };
     return {
-      content: [{ type: "text", text: JSON.stringify(observed, null, 2) }],
+      content: [{ type: "text", text: JSON.stringify(withBuild, null, 2) }],
     };
   }
 
