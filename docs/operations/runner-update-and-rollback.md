@@ -47,9 +47,9 @@ pnpm install --frozen-lockfile
 pnpm -C wrapper build && pnpm -C runner build
 ```
 
-**On failure, go to 4.4 (2).** The server-side transaction from (1)/(2) is
-untouched — it is still sitting at `env_consistency_checked`, waiting for
-`--maintenance-approved`.
+**On failure, follow the server-side [failure handling](server-update-and-rollback.md#44-failure-handling), item (2).**
+The server-side transaction from (1)/(2) is untouched — it is still sitting
+at `env_consistency_checked`, waiting for `--maintenance-approved`.
 
 **(7) Start the runner**
 
@@ -60,10 +60,14 @@ in (3)/(4).
 systemctl --user start kaoiro-runner
 ```
 
-**(2) Runner build failed** (4.3 step 4)
+**(2) Runner build failed** (the server-side
+[update procedure](server-update-and-rollback.md#43-update-procedure), step 4)
 
 The server has not switched — the old container is still running. **Still
-check (0)**: if the server's own prepare (4.3 (1)/(2)) already succeeded,
+check [failure handling item (0)](server-update-and-rollback.md#44-failure-handling)**:
+if the server's own prepare in the
+[update procedure](server-update-and-rollback.md#43-update-procedure), steps
+(1)/(2), already succeeded,
 `latest` points at the new server image regardless of what the runner build
 did. The server-side transaction itself is untouched and still waiting at
 `env_consistency_checked`; fix the runner build and retry, or abandon this
