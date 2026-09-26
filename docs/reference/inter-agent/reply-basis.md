@@ -13,7 +13,12 @@ related: [messages, conversations, delivery, send-and-wait]
 A wrapper requests `inter_agent_reply_basis: "v1"` in its channel join. The server
 must echo `"v1"` before protected sends start. Without that echo, the wrapper
 reports `legacy`; legacy sends remain accepted and are outside server basis
-protection. Reconnection negotiates again. Directory entries and `whoami` expose
+protection. Reconnection negotiates again. A queued send waits inside its CID
+lock for negotiation, then captures the mode and join generation. Immediately
+before pushing, ServerLink requires that generation still matches and the socket
+and channel are joined. Protected inter-agent sends never enter Phoenix's
+reconnect buffer. An already-written push may still have an unknown outcome;
+it is not automatically retried. Directory entries and `whoami` expose
 the current mode; a missing mode is unknown, not protected.
 
 An ordinary v1 send carries `payload.in_reply_to`, an integer from zero through
@@ -75,6 +80,7 @@ requirements. Do not repeat tickets in diagnostics.
 | --- | --- |
 | Missing/mistyped/wrong-CID ticket | Local error; no send. Other valid tickets remain usable and can be copied correctly |
 | Spent or expired ticket | Local error; the same value cannot be reused |
+| Local `reply_basis_connection_changed` | No push attempted (`send_not_attempted: true`); fresh authorization for an intentional retry after rejoin |
 | `peer_reconnecting_capacity` / `delivery_backlog` | Definite nonacceptance: return a fresh ticket for the same observed input, for an intentional retry |
 | `stale_reply_basis` | Only newly handed-off recovery bodies authorize a new ticket |
 | Accepted | Spent; a separately received waiter/recovery input can authorize another reply |

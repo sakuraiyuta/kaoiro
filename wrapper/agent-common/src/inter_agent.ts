@@ -733,6 +733,7 @@ export interface InterAgentToolOptions {
   waitReplyBasisMode?: (signal?: AbortSignal) => Promise<"v1" | "legacy" | "pending">;
   unreadCount?: () => number;
   replyBasisMode?: () => "v1" | "legacy" | "pending";
+  replyBasisGeneration?: () => number | undefined;
   onInputHandoff?: (envelopes: readonly Envelope[]) => void;
   returnInput?: (envelope: Envelope, mode: InboundReplyMode) => void;
   onReplyDiagnostic?: (event: Record<string, unknown>) => void;
@@ -753,7 +754,7 @@ export interface InterAgentToolOptions {
    *  server took the message — the pre-ADR-0051 behaviour, kept only so
    *  unit tests that exercise payload construction need not model a
    *  transport. */
-  sendInterAgent?: (envelope: Envelope) => Promise<InterAgentAcceptance>;
+  sendInterAgent?: (envelope: Envelope, replyBasisGeneration?: number) => Promise<InterAgentAcceptance>;
   /** Peer directory provider, normally `ServerLink#requestDirectory` bound
    *  to the wrapper's channel. Omitting it (unit tests only — production
    *  always supplies it under ADR-0029 F10) makes `list_agents` return
@@ -1444,13 +1445,14 @@ export class InterAgentTool {
   sendInternalNotice(envelope: Envelope): void {
     void (async () => {
       try {
-        let mode = this.#options.replyBasisMode?.() ?? "legacy";
-        if (mode === "pending") mode = await this.#options.waitReplyBasisMode?.() ?? "pending";
+        if (this.#options.replyBasisMode?.() === "pending") await this.#options.waitReplyBasisMode?.();
+        const mode = this.#options.replyBasisMode?.() ?? "legacy";
+        const generation = this.#options.replyBasisGeneration?.();
         if (mode === "pending") throw Error("reply_basis_pending");
         const payload = { ...envelope.payload };
         if (mode === "v1") payload.notice_type = (payload.error as { code?: string } | undefined)?.code === "stale_turn" ? "stale_delivery" : "turn_failure";
         else delete payload.notice_type;
-        const result = await this.#dispatch({ ...envelope, payload });
+        const result = await this.#dispatch({ ...envelope, payload }, generation);
         if (result.kind !== "accepted") this.#options.onReplyDiagnostic?.({ event: "internal_notice_rejected", conversation_id: payload.conversation_id, turn_number: payload.turn_number, disposition: result.kind, reason: result.reason });
       } catch {
         this.#options.onReplyDiagnostic?.({ event: "internal_notice_rejected", conversation_id: envelope.payload.conversation_id, turn_number: envelope.payload.turn_number, disposition: "unknown" });
@@ -1584,14 +1586,11 @@ export class InterAgentTool {
     const isNewConversation = args.conversation_id === undefined;
     const conversationId = args.conversation_id ?? this.#newId();
     const waitForResponse = args.wait_for_response === true;
-    let mode = this.#options.replyBasisMode?.() ?? "legacy";
     if ((args.in_reply_to !== undefined || args.reply_ticket !== undefined) && isNewConversation) return this.#localReplyError("reply_ticket_requires_conversation");
     const captured = this.#options.replyBasisMode !== undefined
       ? this.replyBasis.capture(context?.origin, conversationId, args.to, args.in_reply_to, args.reply_ticket)
       : undefined;
     if (typeof captured === "string") return this.#localReplyError(captured);
-    if (mode === "pending") mode = await this.#options.waitReplyBasisMode?.(context?.origin?.signal) ?? "pending";
-    if (mode === "pending") return this.#localReplyError("reply_basis_pending");
 
 
     // issue #167 review M1: the turn-allocation-through-acceptance-handling
@@ -1610,6 +1609,12 @@ export class InterAgentTool {
     const outcome = await this.#withCidLock(
       conversationId,
       async (): Promise<InvokeLockOutcome> => {
+        if (this.#options.replyBasisMode?.() === "pending") {
+          await this.#options.waitReplyBasisMode?.(captured?.origin.signal);
+        }
+        const mode = this.#options.replyBasisMode?.() ?? "legacy";
+        if (mode === "pending") return { kind: "peer-error", result: this.#localReplyError("reply_basis_pending") };
+        const generation = this.#options.replyBasisGeneration?.();
         if (captured) {
           const error = this.replyBasis.beforeSend(captured);
           if (error) return { kind: "peer-error", result: this.#localReplyError(error) };
@@ -1857,7 +1862,7 @@ export class InterAgentTool {
           const originError = captured && this.replyBasis.beforeSend(captured);
           const acceptance: InterAgentAcceptance = originError
             ? { kind: "rejected", reason: originError }
-            : await this.#dispatch(envelope);
+            : await this.#dispatch(envelope, generation);
 
           // issue #127 / ふじ 30-10 R2: this wrapper stops owing an error
           // notice for the inbound it was injected to answer only once
@@ -2243,8 +2248,8 @@ export class InterAgentTool {
   }
 
   #rejectedReply(attempt: ReplyAttempt, acceptance: Extract<InterAgentAcceptance, { kind: "rejected" }>, message: string): InterAgentToolResult {
-    this.#options.onReplyDiagnostic?.({ event: "reply_server_rejection", reason: acceptance.reason.slice(0, 128), conversation_id: attempt.cid, supplied_basis: attempt.basis, ...acceptance.details });
-    const fields = { error: acceptance.reason.slice(0, 128), message: message.slice(0, 512), send_not_attempted: false, ...acceptance.details };
+    this.#options.onReplyDiagnostic?.({ event: acceptance.send_not_attempted ? "reply_local_rejection" : "reply_server_rejection", reason: acceptance.reason.slice(0, 128), conversation_id: attempt.cid, supplied_basis: attempt.basis, ...acceptance.details });
+    const fields = { error: acceptance.reason.slice(0, 128), message: acceptance.send_not_attempted ? "Connection changed before send; retry intentionally after rejoin." : message.slice(0, 512), send_not_attempted: acceptance.send_not_attempted === true, ...acceptance.details };
     if (acceptance.reason === "stale_reply_basis") {
       const recoveryFields = { ...fields, unread_remaining: Number.MAX_SAFE_INTEGER, more_pending: false };
       const fit = (envelopes: readonly Envelope[]) => envelopes.length <= 10 && Buffer.byteLength(JSON.stringify(this.#withReplyAdvice({ isError: true, content: [{ type: "text", text: JSON.stringify({ ...recoveryFields, recovery: envelopes, reply_authorization: { in_reply_to: Number.MAX_SAFE_INTEGER, reply_ticket: "x".repeat(43), expires_in_ms: 300000 } }) }] }, true)), "utf8") <= 16384;
@@ -2255,7 +2260,7 @@ export class InterAgentTool {
       return { isError: true, content: [{ type: "text", text: JSON.stringify({ ...fields, recovery: [], unread_remaining: unread, more_pending: unread > 0,
         ...(lease?.oversizedPending ? { oversized_pending: true } : { awaiting_delivery: true }) }) }] };
     }
-    if (attempt.ticket && ["peer_reconnecting_capacity", "delivery_backlog"].includes(acceptance.reason)) {
+    if (attempt.ticket && (acceptance.send_not_attempted || ["peer_reconnecting_capacity", "delivery_backlog"].includes(acceptance.reason))) {
       let ticket: ReturnType<ReplyBasis["prepare"]>;
       try { ticket = this.replyBasis.prepare(attempt.origin, attempt.cid, attempt.peer, attempt.basis, true); } catch { /* Preserve the definite server outcome if entropy is unavailable. */ }
       if (ticket) {
@@ -2271,13 +2276,13 @@ export class InterAgentTool {
   /** Pushes through the acceptance-aware sink when one is wired, else falls
    *  back to the fire-and-forget sink and assumes acceptance (see
    *  `sendInterAgent` in the options). */
-  #dispatch(envelope: Envelope): Promise<InterAgentAcceptance> {
+  #dispatch(envelope: Envelope, replyBasisGeneration?: number): Promise<InterAgentAcceptance> {
     const sink = this.#options.sendInterAgent;
     if (sink === undefined) {
       this.#options.send(envelope);
       return Promise.resolve({ kind: "accepted", stamp: null });
     }
-    return sink(envelope);
+    return sink(envelope, replyBasisGeneration);
   }
 
   /** Settles a pending `wait_for_response` waiter as "no reply" without

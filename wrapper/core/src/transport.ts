@@ -107,7 +107,7 @@ export interface ReplayIaItem {
  *  present it as a failure the model can safely retry. */
 export type InterAgentAcceptance =
   | { kind: "accepted"; stamp: [number, number] | null }
-  | { kind: "rejected"; reason: string; disconnect?: DisconnectExt; details?: { conversation_id: string; expected_peer_turn: number; supplied_basis: number } }
+  | { kind: "rejected"; reason: string; disconnect?: DisconnectExt; send_not_attempted?: true; details?: { conversation_id: string; expected_peer_turn: number; supplied_basis: number } }
   | { kind: "unknown"; reason: string };
 
 /** Byte budget for ONE `replay_ia` push.
@@ -193,6 +193,9 @@ function warnOnVersionMismatch(event: string, version: unknown): void {
  *  loop; the wrapper needs a table because these handlers' payload shapes
  *  differ too much to share one callback signature. */
 export const SERVER_EVENT_VERSION_POLICY = {
+  // Phoenix lifecycle events carry no application protocol version.
+  phx_error: "phoenixControl",
+  phx_close: "phoenixControl",
   persona_prompt: "checked",
   instruction: "checked",
   permission_decision: "checked",
@@ -212,7 +215,7 @@ export const SERVER_EVENT_VERSION_POLICY = {
   envelope: "checked",
   delivery_status: "checked",
   session_reset_failed: "checked",
-} as const satisfies Record<string, "checked" | "binaryFrame">;
+} as const satisfies Record<string, "checked" | "binaryFrame" | "phoenixControl">;
 
 export type ServerEventName = keyof typeof SERVER_EVENT_VERSION_POLICY;
 
@@ -1121,6 +1124,9 @@ function pushRejection(reply: unknown): Omit<Extract<InterAgentAcceptance, { kin
 
 export class ServerLink {
   #replyBasisMode: "v1" | "legacy" | "pending" = "pending";
+  #replyBasisGeneration = 0;
+  readonly #protectReplyBasis: boolean;
+  replyBasisGeneration(): number { return this.#replyBasisGeneration; }
   readonly #replyBasisWaiters = new Set<() => void>();
   async waitForReplyBasisMode(signal?: AbortSignal): Promise<"v1" | "legacy" | "pending"> {
     if (this.#replyBasisMode !== "pending" || signal?.aborted) return this.#replyBasisMode;
@@ -1473,7 +1479,15 @@ export class ServerLink {
     // snapshot dedupe must not prevent this restoration. On the first open
     // both caches are empty (no-op); on reconnects pushes are buffered by the
     // client until the channel rejoins. send() stamps a fresh seq.
-    this.#socket.onClose(() => { this.#deliveryRecovery.disconnected(); this.#replyBasisMode = "pending"; options.onReplyBasisMode?.("pending"); });
+    this.#protectReplyBasis = options.interAgentReplyBasis === "v1";
+    const invalidateReplyBasis = () => {
+      this.#replyBasisGeneration++;
+      this.#replyBasisMode = "pending";
+      options.onReplyBasisMode?.("pending");
+    };
+    this.#bindServerEvent("phx_error", invalidateReplyBasis);
+    this.#bindServerEvent("phx_close", invalidateReplyBasis);
+    this.#socket.onClose(() => { this.#deliveryRecovery.disconnected(); invalidateReplyBasis(); });
     this.#socket.onOpen(() => {
       this.#beginPermissionSyncBarrier();
       if (this.#lastEnvelope) this.send(this.#lastEnvelope);
@@ -1490,6 +1504,7 @@ export class ServerLink {
       .join()
       .receive("ok", (reply: unknown) => {
         this.#acceptPermissionSyncJoin(reply);
+        this.#replyBasisGeneration++;
         this.#replyBasisMode = isObject(reply) && reply.inter_agent_reply_basis === "v1" ? "v1" : "legacy";
         options.onReplyBasisMode?.(this.#replyBasisMode);
         for (const release of this.#replyBasisWaiters) release();
@@ -1700,6 +1715,11 @@ export class ServerLink {
 
   /** Pushes one envelope with the next seq; buffered while disconnected. */
   send(envelope: Envelope): void {
+    if (this.#protectReplyBasis && envelope.type === "inter_agent_message") {
+      // Unbound fire-and-forget callers must not enter Phoenix's rejoin buffer.
+      void this.sendInterAgent(envelope);
+      return;
+    }
     const { wire, push } = this.#pushEnvelope(envelope);
     // ADR-0051 D3-2: only an inter-agent send has an ack worth reading —
     // the server replies with the ingress stamp it allocated, which is the
@@ -1721,7 +1741,13 @@ export class ServerLink {
    *  unchanged and stays on the ack — recording is about durability, this
    *  Promise is about the tool result, and they settle at the same moment
    *  only in the accepted case. */
-  sendInterAgent(envelope: Envelope): Promise<InterAgentAcceptance> {
+  sendInterAgent(envelope: Envelope, replyBasisGeneration?: number): Promise<InterAgentAcceptance> {
+    // Keep this check and push synchronous: Phoenix otherwise buffers an old
+    // wire representation and flushes it before the next join callback runs.
+    if (this.#protectReplyBasis && (replyBasisGeneration !== this.#replyBasisGeneration ||
+        this.#replyBasisMode === "pending" || !this.#socket.isConnected() || this.#channel.state !== "joined")) {
+      return Promise.resolve({ kind: "rejected", reason: "reply_basis_connection_changed", send_not_attempted: true });
+    }
     const { wire, push } = this.#pushEnvelope(envelope);
     return new Promise((resolve) => {
       push
@@ -2005,6 +2031,8 @@ export class ServerLink {
 
   /** Leaves the channel and closes the socket. */
   close(): void {
+    this.#replyBasisGeneration++;
+    this.#replyBasisMode = "pending";
     for (const release of this.#replyBasisWaiters) release();
     this.#deliveryRecovery.dispose();
     this.#channel.leave();

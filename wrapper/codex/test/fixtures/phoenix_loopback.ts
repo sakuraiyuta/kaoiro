@@ -4,8 +4,8 @@ import type { Duplex } from "node:stream";
 
 // Test-only Phoenix JSON wire peer. ServerLink and its WebSocket transport stay real.
 export async function phoenixLoopback(
-  joinReply: (joins: number) => Record<string, unknown> = () => ({ permission_sync: true }),
-  reply: (event: string, payload: Record<string, unknown>) => Record<string, unknown> = () => ({}),
+  joinReply: (joins: number) => Record<string, unknown> | Promise<Record<string, unknown>> = () => ({ permission_sync: true }),
+  reply: (event: string, payload: Record<string, unknown>) => Record<string, unknown> | Promise<Record<string, unknown>> = () => ({}),
   reject?: (event: string, payload: Record<string, unknown>) => Record<string, unknown> | undefined,
 ) {
   const server = createServer();
@@ -41,7 +41,9 @@ export async function phoenixLoopback(
         received.push({ event, payload });
         if (event === "phx_join") { joins += 1;joined = { socket, ref: joinRef, topic }; }
         const error = reject?.(event, payload);
-        frame(socket, [joinRef, ref, topic, "phx_reply", { status: error ? "error" : "ok", response: error ?? (event === "phx_join" ? joinReply(joins) : reply(event, payload)) }]);
+        void Promise.resolve(error ?? (event === "phx_join" ? joinReply(joins) : reply(event, payload))).then(response => {
+          if (!socket.destroyed) frame(socket, [joinRef, ref, topic, "phx_reply", { status: error ? "error" : "ok", response }]);
+        });
       }
     });
   });
